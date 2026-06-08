@@ -13,10 +13,16 @@ import (
 // controls payload mix: 1 = every row contains the "01FA" token (worst case),
 // 2 = every other row matches (the rest carry an unrelated path), etc. This
 // lets benches measure the scan over a realistic mix, not just all-matching.
-func benchReachDB(b *testing.B, nObs, matchEvery int) *DB {
+func benchReachDB(b *testing.B, nObs, matchEvery int, lowerHops bool) *DB {
 	b.Helper()
 	if matchEvery < 1 {
 		matchEvery = 1
+	}
+	matchPath, fillerPath := `["AA","01FA","BB"]`, `["AA","CC","BB"]`
+	if lowerHops {
+		// Lowercase hops force parsePathTokens' ToUpper to allocate (production
+		// path_json is uppercase; this measures the worst case Carmack flagged).
+		matchPath, fillerPath = `["aa","01fa","bb"]`, `["aa","cc","bb"]`
 	}
 	conn, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -45,9 +51,9 @@ func benchReachDB(b *testing.B, nObs, matchEvery int) *DB {
 			i, fmt.Sprintf("h%d", i), "2026-06-07T00:00:00Z"); err != nil {
 			b.Fatal(err)
 		}
-		path := `["AA","CC","BB"]` // non-matching filler
+		path := fillerPath // non-matching filler
 		if i%matchEvery == 0 {
-			path = `["AA","01FA","BB"]`
+			path = matchPath
 		}
 		if _, err := tx.Exec(`INSERT INTO observations (id, transmission_id, observer_idx, snr, path_json, timestamp) VALUES (?,?,1,-7.0,?,?)`,
 			i, i, path, 1000); err != nil {
@@ -66,7 +72,7 @@ func BenchmarkNodeReachScan(b *testing.B) {
 	tokens := map[string]bool{"01FA": true}
 	for _, n := range []int{1000, 10000, 100000} {
 		b.Run(fmt.Sprintf("rows=%d", n), func(b *testing.B) {
-			db := benchReachDB(b, n, 1)
+			db := benchReachDB(b, n, 1, false)
 			srv := &Server{db: db}
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -84,7 +90,25 @@ func BenchmarkNodeReachScan(b *testing.B) {
 // rows actually contain the token — closer to production path mixes.
 func BenchmarkNodeReachScanMixed(b *testing.B) {
 	tokens := map[string]bool{"01FA": true}
-	db := benchReachDB(b, 100000, 2)
+	db := benchReachDB(b, 100000, 2, false)
+	srv := &Server{db: db}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		rows := srv.scanReachRows(context.Background(), tokens, 0)
+		if len(rows) == 0 {
+			b.Fatal("expected rows")
+		}
+	}
+}
+
+// BenchmarkNodeReachScanLowerCase measures the worst case for path decoding:
+// lowercase hops force parsePathTokens' ToUpper to allocate a new string per
+// hop (production path_json is uppercase, where ToUpper is a no-op). Publishing
+// this alongside the all-uppercase numbers keeps the perf claims honest.
+func BenchmarkNodeReachScanLowerCase(b *testing.B) {
+	tokens := map[string]bool{"01FA": true}
+	db := benchReachDB(b, 100000, 1, true)
 	srv := &Server{db: db}
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -101,7 +125,7 @@ func BenchmarkNodeReachScanMixed(b *testing.B) {
 // from DB I/O.
 func BenchmarkNodeReachAttribute(b *testing.B) {
 	tokens := map[string]bool{"01FA": true}
-	db := benchReachDB(b, 100000, 1)
+	db := benchReachDB(b, 100000, 1, false)
 	srv := &Server{db: db}
 	rows := srv.scanReachRows(context.Background(), tokens, 0)
 	if len(rows) == 0 {

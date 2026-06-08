@@ -7,13 +7,17 @@
   var qmap = null;       // map controller from NodeReachMap.render (built once per load)
   var current = null;
   var loadGen = 0;       // bumped per load + on destroy; guards against in-flight races
+  var DEFAULT_DAYS = 7;  // single JS source for the default window (mirrors the server default)
 
   // Single source of the bottleneck tiers: colour + threshold + colour-blind
-  // glyph/label. The map legend and the table both read from this.
+  // glyph + legend text. The map legend and the table both read from this.
+  // A one-way link has bottleneck 0 (one direction is 0) — its own tier so it
+  // reads as "no two-way", not as a poor two-way (which would be red/weak).
   var TIERS = [
-    { min: 300, label: 'strong', varName: '--link-strong', glyph: '●●●' },
-    { min: 100, label: 'medium', varName: '--link-medium', glyph: '●●' },
-    { min: 0, label: 'weak', varName: '--link-weak', glyph: '●' }
+    { min: 300, label: 'strong', varName: '--link-strong', glyph: '●●●', legend: 'strong (≥300)' },
+    { min: 100, label: 'medium', varName: '--link-medium', glyph: '●●', legend: 'medium (100–299)' },
+    { min: 1, label: 'weak', varName: '--link-weak', glyph: '●', legend: 'weak (<100)' },
+    { min: 0, label: 'one-way', varName: '--link-oneway', glyph: '○', legend: 'one-way (no two-way)' }
   ];
   function tierOf(b) {
     for (var i = 0; i < TIERS.length; i++) {
@@ -81,12 +85,16 @@
       mapEl.style.width = pw;
       qmap.map.invalidateSize();
       try { qmap.map.fitBounds(qmap.bounds, { padding: [20, 20] }); } catch (e) {}
-      setTimeout(function () {
-        window.print();
-        mapEl.style.width = '';
-        qmap.map.invalidateSize();
-        try { qmap.map.fitBounds(qmap.bounds, { padding: [30, 30] }); } catch (e) {}
-      }, 350);
+      // Wait for layout to settle (two animation frames) instead of a fixed
+      // sleep that races the browser reflow.
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          window.print();
+          mapEl.style.width = '';
+          qmap.map.invalidateSize();
+          try { qmap.map.fitBounds(qmap.bounds, { padding: [30, 30] }); } catch (e) {}
+        });
+      });
     } else {
       window.print();
     }
@@ -212,7 +220,7 @@
       container.innerHTML = '<div class="nq-load">Invalid reach URL</div>';
       return;
     }
-    load(container, routeParam.slice(0, -'/reach'.length), 7, true);
+    load(container, routeParam.slice(0, -'/reach'.length), DEFAULT_DAYS, true);
   }
 
   function destroy() {

@@ -25,10 +25,27 @@ func serveReach(srv *Server, path string) *httptest.ResponseRecorder {
 // pk64 pads a short hex stem to a full 64-char lowercase pubkey.
 func pk64(stem string) string { return stem + strings.Repeat("0", 64-len(stem)) }
 
+// resetReachState clears the package-level reach caches so test order cannot
+// leak observable state between handler tests (and restores after the test).
+func resetReachState(t *testing.T) {
+	t.Helper()
+	clear := func() {
+		reachCacheMu.Lock()
+		reachCache = map[string]reachCacheEntry{}
+		reachCacheMu.Unlock()
+		reachDegreeMu.Lock()
+		reachDegreeSnap = nil
+		reachDegreeMu.Unlock()
+	}
+	clear()
+	t.Cleanup(clear)
+}
+
 // newReachIntegrationDB builds a complete observer_idx-schema DB with a target
-// node N, two neighbours A/B, and one observation for the path A→N→B so the
-// HTTP handler exercises real directional attribution.
-func newReachIntegrationDB(t *testing.T) (*DB, string) {
+// node N, two neighbours A/B, and one observation on obsPath so the HTTP handler
+// exercises real directional attribution. Pass a path that omits N's token to
+// build the zero-reach case (identifiable node, no matching observations).
+func newReachIntegrationDB(t *testing.T, obsPath string) (*DB, string) {
 	t.Helper()
 	conn, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -59,7 +76,7 @@ func newReachIntegrationDB(t *testing.T) (*DB, string) {
 		{`INSERT INTO nodes VALUES (?, 'B', 'repeater', 51.1, 5.6, ?, '2026-06-01T00:00:00Z', 1)`, []interface{}{b, "2026-06-07T00:00:00Z"}},
 		{`INSERT INTO observers (id) VALUES ('OBS1')`, nil},
 		{`INSERT INTO transmissions (id, from_pubkey, payload_type) VALUES (1, '', 5)`, nil},
-		{`INSERT INTO observations (id, transmission_id, observer_idx, snr, path_json, timestamp) VALUES (1,1,1,-7.0,'["AABB","01FA","CCDD"]',?)`, []interface{}{now}},
+		{`INSERT INTO observations (id, transmission_id, observer_idx, snr, path_json, timestamp) VALUES (1,1,1,-7.0,?,?)`, []interface{}{obsPath, now}},
 	}
 	for _, in := range ins {
 		if _, err := conn.Exec(in.q, in.args...); err != nil {
@@ -97,6 +114,7 @@ func TestNodeReach_InvalidPubkey(t *testing.T) {
 }
 
 func TestNodeReach_ValidPubkeyNotInNodes(t *testing.T) {
+	resetReachState(t)
 	db := setupTestDBv2(t)
 	cfg := &Config{}
 	srv := &Server{store: newTestStoreWithDB(t, db, cfg), db: db, cfg: cfg, perfStats: NewPerfStats()}
@@ -118,7 +136,8 @@ func TestNodeReach_BlacklistedReturns404(t *testing.T) {
 }
 
 func TestNodeReach_AttributionAndCacheHit(t *testing.T) {
-	db, n := newReachIntegrationDB(t)
+	resetReachState(t)
+	db, n := newReachIntegrationDB(t, `["AABB","01FA","CCDD"]`)
 	defer db.conn.Close()
 	cfg := &Config{}
 	srv := &Server{store: newTestStoreWithDB(t, db, cfg), db: db, cfg: cfg, perfStats: NewPerfStats()}
@@ -160,7 +179,36 @@ func TestNodeReach_AttributionAndCacheHit(t *testing.T) {
 	}
 }
 
+// Zero-reach happy path: a node that IS identifiable (has reliable tokens) but
+// whose observations contain none of its tokens must return 200 with empty
+// arrays — NOT 404. A wrong implementation that 404s here passes every other
+// test. (docs/api-spec.md contract.)
+func TestNodeReach_ZeroReach(t *testing.T) {
+	resetReachState(t)
+	db, n := newReachIntegrationDB(t, `["AABB","CCDD"]`) // path omits N's "01FA" token
+	defer db.conn.Close()
+	cfg := &Config{}
+	srv := &Server{store: newTestStoreWithDB(t, db, cfg), db: db, cfg: cfg, perfStats: NewPerfStats()}
+
+	rr := serveReach(srv, "/api/nodes/"+n+"/reach?days=30")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("zero-reach must be 200 not 404, got %d (body=%s)", rr.Code, rr.Body.String())
+	}
+	var resp NodeReachResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("bad json: %v", err)
+	}
+	if len(resp.ReliableTokens) == 0 {
+		t.Fatalf("node should still be identifiable (reliable tokens present)")
+	}
+	if len(resp.Links) != 0 || len(resp.DirectObservers) != 0 || resp.Importance.RelayObservations != 0 {
+		t.Fatalf("expected empty reach, got links=%d obs=%d relay=%d",
+			len(resp.Links), len(resp.DirectObservers), resp.Importance.RelayObservations)
+	}
+}
+
 func TestNodeReach_ShapeAndClamp(t *testing.T) {
+	resetReachState(t)
 	db := setupTestDBv2(t)
 	const pk = "01fa326b475800a31105abcb9e4cac000b3e5d9e2b5ba0739981ce8d5f3a6754"
 	mustExecDB(t, db, `INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)

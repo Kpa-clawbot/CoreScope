@@ -24,8 +24,9 @@
 .nq-nogps { margin:0 0 8px; font-size:11px; color:var(--text-muted); }
 .nq-map { height:420px; border:1px solid var(--border); border-radius:6px; margin-bottom:12px; }
 
-/* In-map legend (decodes the colour tiers + thresholds). */
-.nq-legend { background:var(--surface-0, #fff); color:var(--text-muted); border:1px solid var(--border); border-radius:6px; padding:6px 8px; font-size:11px; line-height:1.5; box-shadow:0 1px 3px rgba(0,0,0,.18); }
+/* In-map legend (decodes the colour tiers + thresholds). No hex fallback and no
+   decorative shadow — the 1px border already separates it from the tiles. */
+.nq-legend { background:var(--surface-0); color:var(--text-muted); border:1px solid var(--border); border-radius:6px; padding:6px 8px; font-size:11px; line-height:1.5; }
 .nq-legend .nq-sw { display:inline-block; width:18px; height:3px; vertical-align:middle; margin-right:6px; border-radius:2px; }
 
 /* Table: horizontal rules only — erase the non-data grid ink (Tufte). */

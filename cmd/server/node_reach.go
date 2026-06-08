@@ -23,16 +23,20 @@ import (
 // filter is unavoidably a text scan of path_json over the timestamp-narrowed
 // window — an indexed path-token column would need an ingestor-side schema
 // migration (the server is read-only by invariant), so it's a follow-up.
-const reachScanRowLimit = 200000
+// var (not const) so tests can lower the cap to exercise the truncation path
+// without inserting 200k rows.
+var reachScanRowLimit = 200000
 
 // pathRow is one observation fed to attributeDirections. path tokens are
-// uppercase hex hop prefixes (as stored in observations.path_json).
+// uppercase hex hop prefixes (as stored in observations.path_json). SNR is a
+// value + validity flag (not *float64) to avoid a heap escape per row.
 type pathRow struct {
 	observerPK  string // lowercase pubkey of the observer (may be "")
 	fromPubkey  string // lowercase originator pubkey (may be "")
 	payloadType int
 	path        []string
-	snr         *float64
+	snr         float64
+	snrValid    bool
 }
 
 type obsAgg struct {
@@ -44,7 +48,7 @@ type obsAgg struct {
 type dirCounts struct {
 	we    map[string]int
 	they  map[string]int
-	obs   map[string]*obsAgg
+	obs   map[string]obsAgg // value map — no per-observer heap alloc
 	relay int
 }
 
@@ -59,7 +63,7 @@ func attributeDirections(rows []pathRow, ourTokens map[string]bool, ourPK string
 	d := dirCounts{
 		we:   make(map[string]int, hint),
 		they: make(map[string]int, hint),
-		obs:  make(map[string]*obsAgg, hint),
+		obs:  make(map[string]obsAgg, hint),
 	}
 	for _, r := range rows {
 		n := len(r.path)
@@ -87,16 +91,13 @@ func attributeDirections(rows []pathRow, ourTokens map[string]bool, ourPK string
 				}
 			} else if r.observerPK != "" && r.observerPK != ourPK {
 				d.they[r.observerPK]++
-				a := d.obs[r.observerPK]
-				if a == nil {
-					a = &obsAgg{}
-					d.obs[r.observerPK] = a
-				}
+				a := d.obs[r.observerPK] // value copy; read-modify-write
 				a.count++
-				if r.snr != nil {
-					a.snrSum += *r.snr
+				if r.snrValid {
+					a.snrSum += r.snr
 					a.snrN++
 				}
+				d.obs[r.observerPK] = a
 			}
 		}
 		if hit {
@@ -107,8 +108,11 @@ func attributeDirections(rows []pathRow, ourTokens map[string]bool, ourPK string
 }
 
 // reliableTokens returns the uppercase hex prefixes (1, 2, 3 byte) of pubkey
-// that are UNIQUE among relay-capable nodes in pm. 1-byte prefixes almost always
-// collide and are excluded; only unique prefixes can identify a node in a path.
+// that are UNIQUE among relay-capable nodes in pm AND resolve to pubkey itself.
+// 1-byte prefixes almost always collide and are excluded. The self-check matters
+// for non-relay targets (companion/sensor): pm only holds path-capable roles, so
+// a companion's prefix could otherwise be "unique" while pointing at an unrelated
+// relay — which would then credit that relay's traffic to the companion.
 func reliableTokens(pubkey string, pm *prefixMap) map[string]bool {
 	out := map[string]bool{}
 	lpk := strings.ToLower(pubkey)
@@ -117,7 +121,7 @@ func reliableTokens(pubkey string, pm *prefixMap) map[string]bool {
 			continue
 		}
 		p := lpk[:l]
-		if pm != nil && len(pm.m[p]) == 1 {
+		if pm != nil && len(pm.m[p]) == 1 && strings.EqualFold(pm.m[p][0].PublicKey, pubkey) {
 			out[strings.ToUpper(p)] = true
 		}
 	}
@@ -232,9 +236,9 @@ type NodeReachResponse struct {
 
 func fptr(v float64) *float64 { return &v }
 
-// gpsPtrs returns (lat,lon) pointers, nil when the node has no GPS (0,0).
-func gpsPtrs(info nodeInfo, ok bool) (*float64, *float64) {
-	if !ok || !info.HasGPS {
+// gpsPtrs returns (lat,lon) pointers, nil when the node has no GPS.
+func gpsPtrs(info nodeInfo) (*float64, *float64) {
+	if !info.HasGPS {
 		return nil, nil
 	}
 	return fptr(info.Lat), fptr(info.Lon)
@@ -419,7 +423,7 @@ func (s *Server) computeNodeReach(ctx context.Context, pubkey string, days int) 
 		rows := s.scanReachRows(ctx, tokens, sinceEpoch)
 		d = attributeDirections(rows, tokens, pubkey, newResolver(pm))
 	} else {
-		d = dirCounts{we: map[string]int{}, they: map[string]int{}, obs: map[string]*obsAgg{}}
+		d = dirCounts{we: map[string]int{}, they: map[string]int{}, obs: map[string]obsAgg{}}
 	}
 
 	// importance: neighbor_edges degree + rank (all-time). Served from a
@@ -449,7 +453,7 @@ func (s *Server) computeNodeReach(ctx context.Context, pubkey string, days int) 
 	for pk := range seen {
 		we, they := d.we[pk], d.they[pk]
 		info := nodeMap[pk]
-		lat, lon := gpsPtrs(info, true)
+		lat, lon := gpsPtrs(info)
 		var dist *float64
 		if self.HasGPS && info.HasGPS {
 			dist = fptr(haversineKm(self.Lat, self.Lon, info.Lat, info.Lon))
@@ -477,7 +481,7 @@ func (s *Server) computeNodeReach(ctx context.Context, pubkey string, days int) 
 	directObs := make([]NodeReachObserver, 0, len(d.obs))
 	for pk, a := range d.obs {
 		info := nodeMap[pk]
-		lat, lon := gpsPtrs(info, true)
+		lat, lon := gpsPtrs(info)
 		var avg, dist *float64
 		if a.snrN > 0 {
 			avg = fptr(a.snrSum / float64(a.snrN))
@@ -497,7 +501,7 @@ func (s *Server) computeNodeReach(ctx context.Context, pubkey string, days int) 
 	}
 	sort.Strings(toks)
 
-	selfLat, selfLon := gpsPtrs(self, true)
+	selfLat, selfLon := gpsPtrs(self)
 	return NodeReachResponse{
 		Node: NodeReachInfo{Pubkey: pubkey, Name: self.Name, Role: self.Role,
 			Lat: selfLat, Lon: selfLon, FirstSeen: firstSeen.String},
@@ -536,6 +540,11 @@ func (s *Server) reachDegreeRank(ctx context.Context, pubkey string) (degree, ra
 		return 0, 0, 0
 	}
 	degree = snap.deg[pubkey]
+	if degree == 0 {
+		// No edges → not ranked. rank=0 is the documented "off-the-list" value;
+		// avoids the nonsensical "#N+1 / N" the binary search would produce.
+		return 0, 0, snap.total
+	}
 	// rank = 1 + (number of nodes with strictly higher degree). sortedDesc is
 	// descending, so the count of entries > degree is the first index whose
 	// value is <= degree.
@@ -544,11 +553,19 @@ func (s *Server) reachDegreeRank(ctx context.Context, pubkey string) (degree, ra
 }
 
 func (s *Server) getDegreeSnapshot(ctx context.Context) *degreeSnapshot {
+	// Fast path: serve a fresh snapshot under a short lock.
 	reachDegreeMu.Lock()
-	defer reachDegreeMu.Unlock()
 	if reachDegreeSnap != nil && time.Since(reachDegreeSnap.at) < reachDegreeTTL {
-		return reachDegreeSnap
+		snap := reachDegreeSnap
+		reachDegreeMu.Unlock()
+		return snap
 	}
+	stale := reachDegreeSnap
+	reachDegreeMu.Unlock()
+
+	// Rebuild WITHOUT holding the lock so concurrent reach requests aren't
+	// serialized behind the aggregate query. A brief cold-start herd may run a
+	// few redundant queries; the last writer wins.
 	rows, err := s.db.conn.QueryContext(ctx, `
 		SELECT pk, COUNT(*) neigh FROM (
 			SELECT node_a pk FROM neighbor_edges
@@ -556,7 +573,7 @@ func (s *Server) getDegreeSnapshot(ctx context.Context) *degreeSnapshot {
 		) GROUP BY pk`)
 	if err != nil {
 		log.Printf("[reach] degree snapshot query failed: %v (serving stale)", err)
-		return reachDegreeSnap // serve stale on error rather than zeroing
+		return stale // serve stale on error rather than zeroing
 	}
 	defer rows.Close()
 	deg := make(map[string]int)
@@ -571,8 +588,11 @@ func (s *Server) getDegreeSnapshot(ctx context.Context) *degreeSnapshot {
 		sortedDesc = append(sortedDesc, neigh)
 	}
 	sort.Sort(sort.Reverse(sort.IntSlice(sortedDesc)))
-	reachDegreeSnap = &degreeSnapshot{at: time.Now(), total: len(deg), deg: deg, sortedDesc: sortedDesc}
-	return reachDegreeSnap
+	snap := &degreeSnapshot{at: time.Now(), total: len(deg), deg: deg, sortedDesc: sortedDesc}
+	reachDegreeMu.Lock()
+	reachDegreeSnap = snap
+	reachDegreeMu.Unlock()
+	return snap
 }
 
 // scanReachRows reads windowed observations whose path contains any reliable
@@ -581,6 +601,9 @@ func (s *Server) getDegreeSnapshot(ctx context.Context) *degreeSnapshot {
 // is uppercased in place (no second allocation), and the result is hard-capped
 // at reachScanRowLimit.
 func (s *Server) scanReachRows(ctx context.Context, tokens map[string]bool, sinceEpoch int64) []pathRow {
+	if len(tokens) == 0 {
+		return nil // defensive: an empty LIKE chain would render `AND ()` (SQL error)
+	}
 	likes := make([]string, 0, len(tokens))
 	args := []interface{}{sinceEpoch}
 	for tok := range tokens {
@@ -596,6 +619,7 @@ func (s *Server) scanReachRows(ctx context.Context, tokens map[string]bool, sinc
 	args = append(args, reachScanRowLimit)
 	rows, err := s.db.conn.QueryContext(ctx, q, args...)
 	if err != nil {
+		log.Printf("[reach] scan query failed: %v", err)
 		return nil
 	}
 	defer rows.Close()
@@ -618,8 +642,8 @@ func (s *Server) scanReachRows(ctx context.Context, tokens map[string]bool, sinc
 		}
 		pr := pathRow{observerPK: oid, fromPubkey: fpk, payloadType: pt, path: path}
 		if snr.Valid {
-			v := snr.Float64
-			pr.snr = &v
+			pr.snr = snr.Float64
+			pr.snrValid = true
 		}
 		out = append(out, pr)
 	}

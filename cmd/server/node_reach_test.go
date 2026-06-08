@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"strconv"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -91,19 +92,18 @@ func TestAttributeDirections_PredecessorAndSuccessor(t *testing.T) {
 }
 
 func TestAttributeDirections_LastHopObserverAndAdvertFirstHop(t *testing.T) {
-	snr := 4.0
 	rows := []pathRow{
 		// N is last hop → observer heard us directly (+snr).
-		{observerPK: "obsx", payloadType: 5, path: []string{"AA", "01FA"}, snr: &snr},
+		{observerPK: "obsx", payloadType: 5, path: []string{"AA", "01FA"}, snr: 4.0, snrValid: true},
 		// N is first hop of an ADVERT (type 4) → we heard the originator.
 		{observerPK: "obsy", payloadType: 4, fromPubkey: "origin1", path: []string{"01FA", "CC"}},
 	}
 	d := attributeDirections(rows, map[string]bool{"01FA": true}, "01fa326b",
 		testResolver(map[string]string{"CC": "cc00"}))
-	if d.obs["obsx"] == nil || d.obs["obsx"].count != 1 {
+	if a, ok := d.obs["obsx"]; !ok || a.count != 1 {
 		t.Fatalf("observer obsx not counted")
 	}
-	if d.obs["obsx"].snrN != 1 || d.obs["obsx"].snrSum != 4.0 {
+	if a := d.obs["obsx"]; a.snrN != 1 || a.snrSum != 4.0 {
 		t.Fatalf("observer snr not aggregated")
 	}
 	if d.they["obsx"] != 1 {
@@ -135,7 +135,7 @@ func TestAttributeDirections_LastHopWithObserverCountsObserver(t *testing.T) {
 	rows := []pathRow{{observerPK: "obs1", payloadType: 5, path: []string{"ZZ", "01FA"}}}
 	d := attributeDirections(rows, map[string]bool{"01FA": true}, "01fa326b",
 		testResolver(map[string]string{}))
-	if d.they["obs1"] != 1 || d.obs["obs1"] == nil || d.obs["obs1"].count != 1 {
+	if a, ok := d.obs["obs1"]; d.they["obs1"] != 1 || !ok || a.count != 1 {
 		t.Fatalf("last-hop observer should be counted, got they=%v", d.they)
 	}
 }
@@ -153,6 +153,49 @@ func TestReliableTokens(t *testing.T) {
 	}
 	if toks["01"] {
 		t.Fatalf("1-byte 01 must be excluded (collision), got %v", toks)
+	}
+}
+
+func TestReliableTokens_CompanionNotMisattributed(t *testing.T) {
+	// pm holds only path-capable relays. A companion target (not in pm) whose
+	// prefix uniquely matches an UNRELATED relay must yield NO reliable tokens —
+	// otherwise that relay's traffic would be credited to the companion.
+	relay := nodeInfo{PublicKey: "aa11000000000000", Role: "repeater"}
+	pm := buildPrefixMap([]nodeInfo{relay})
+	companion := "aa11ffff00000000" // shares 2-byte "aa11" with the relay, differs at byte 3
+	toks := reliableTokens(companion, pm)
+	if len(toks) != 0 {
+		t.Fatalf("companion must get no reliable tokens (prefix points at a relay), got %v", toks)
+	}
+	// Sanity: the relay itself still resolves to its own prefix.
+	if !reliableTokens(relay.PublicKey, pm)["AA11"] {
+		t.Fatalf("relay should keep its own AA11 token")
+	}
+}
+
+func TestScanReachRows_CapTruncates(t *testing.T) {
+	defer func(orig int) { reachScanRowLimit = orig }(reachScanRowLimit)
+	reachScanRowLimit = 1 // newReachScanTestDB has 2 matching rows
+	db := newReachScanTestDB(t)
+	defer db.conn.Close()
+	srv := &Server{db: db}
+	rows := srv.scanReachRows(context.Background(), map[string]bool{"01FA": true}, 0)
+	if len(rows) != 1 {
+		t.Fatalf("scan must hard-cap at reachScanRowLimit (1), got %d rows", len(rows))
+	}
+}
+
+func TestReachCacheEviction_BoundedNotWiped(t *testing.T) {
+	resetReachState(t)
+	for i := 0; i < reachCacheMax+50; i++ {
+		reachCachePut("k"+strconv.Itoa(i), []byte("x"))
+	}
+	reachCacheMu.RLock()
+	n := len(reachCache)
+	reachCacheMu.RUnlock()
+	// Bounded at the cap and NOT a full wipe (the old crude reset would leave 1).
+	if n != reachCacheMax {
+		t.Fatalf("cache size after overflow = %d, want %d (bounded, evict-oldest not full-wipe)", n, reachCacheMax)
 	}
 }
 
@@ -199,14 +242,13 @@ func TestAttributeDirections_NonAdvertFirstHopNotCredited(t *testing.T) {
 func TestAttributeDirections_ObserverAggregatesAcrossRows(t *testing.T) {
 	// Same observer on the last hop across multiple rows: count and SNR must
 	// accumulate, not overwrite.
-	s1, s2 := 2.0, 6.0
 	rows := []pathRow{
-		{observerPK: "obs1", payloadType: 5, path: []string{"AA", "01FA"}, snr: &s1},
-		{observerPK: "obs1", payloadType: 5, path: []string{"BB", "01FA"}, snr: &s2},
+		{observerPK: "obs1", payloadType: 5, path: []string{"AA", "01FA"}, snr: 2.0, snrValid: true},
+		{observerPK: "obs1", payloadType: 5, path: []string{"BB", "01FA"}, snr: 6.0, snrValid: true},
 	}
 	d := attributeDirections(rows, map[string]bool{"01FA": true}, "01fa326b", testResolver(nil))
-	a := d.obs["obs1"]
-	if a == nil || a.count != 2 {
+	a, ok := d.obs["obs1"]
+	if !ok || a.count != 2 {
 		t.Fatalf("observer count should aggregate to 2, got %+v", a)
 	}
 	if a.snrN != 2 || a.snrSum != 8.0 {
@@ -242,7 +284,7 @@ func TestScanReachRows_DecodesRows(t *testing.T) {
 	if len(got.path) != 3 || got.path[1] != "01FA" {
 		t.Fatalf("path not parsed/uppercased: %v", got.path)
 	}
-	if got.snr == nil || *got.snr != -7.0 {
-		t.Fatalf("snr not decoded: %v", got.snr)
+	if !got.snrValid || got.snr != -7.0 {
+		t.Fatalf("snr not decoded: valid=%v val=%v", got.snrValid, got.snr)
 	}
 }

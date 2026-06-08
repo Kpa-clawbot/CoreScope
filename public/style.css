@@ -67,6 +67,7 @@
   --link-strong: #1a7f37;
   --link-medium: #bf8700;
   --link-weak: #cf222e;
+  --link-oneway: #8c959f;  /* one-way (no two-way link) — distinct from weak red */
   /* --- Fluid spacing scale ---------------------------------
    * Targets at 1440px viewport: 4 / 8 / 16 / 24 / 32 / 48 px.
    * Min/max clamps keep small viewports usable and prevent
@@ -247,6 +248,7 @@
   --link-strong: #3fb950;
   --link-medium: #d29922;
   --link-weak: #f85149;
+  --link-oneway: #768390;
   --status-green: #22c55e;
   --status-yellow: #eab308;
   --status-red: #ef4444;
