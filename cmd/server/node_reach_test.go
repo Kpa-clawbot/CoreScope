@@ -12,6 +12,32 @@ func testResolver(unique map[string]string) func(string) string {
 	}
 }
 
+func TestParsePathTokens(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{`["AA","01FA","BB"]`, []string{"AA", "01FA", "BB"}},
+		{`["aa","01fa"]`, []string{"AA", "01FA"}}, // uppercased
+		{`["EFEF"]`, []string{"EFEF"}},
+		{`[]`, nil},
+		{``, nil},
+		{`null`, nil},
+		{`["49A985"]`, []string{"49A985"}}, // 3-byte hop preserved
+	}
+	for _, c := range cases {
+		got := parsePathTokens(c.in)
+		if len(got) != len(c.want) {
+			t.Fatalf("parsePathTokens(%q) = %v, want %v", c.in, got, c.want)
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("parsePathTokens(%q)[%d] = %q, want %q", c.in, i, got[i], c.want[i])
+			}
+		}
+	}
+}
+
 func TestAttributeDirections_PredecessorAndSuccessor(t *testing.T) {
 	// path A(aa) -> N(01fa) -> B(bb): we hear A, B hears us.
 	unique := map[string]string{"AA": "aa00", "BB": "bb00"}
