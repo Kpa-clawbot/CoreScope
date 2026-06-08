@@ -23,7 +23,6 @@
 - [GET /api/nodes/:pubkey/health](#get-apinodespubkeyhealth)
 - [GET /api/nodes/:pubkey/paths](#get-apinodespubkeypaths)
 - [GET /api/nodes/:pubkey/analytics](#get-apinodespubkeyanalytics)
-- [GET /api/nodes/:pubkey/reach](#get-apinodespubkeyreach)
 - [GET /api/packets](#get-apipackets)
 - [GET /api/packets/timestamps](#get-apipacketstimestamps)
 - [GET /api/packets/:id](#get-apipacketsid)
@@ -664,63 +663,6 @@ Per-node analytics over a time range.
   }
 }
 ```
-
-### Response `404`
-
-```json
-{ "error": "Not found" }
-```
-
----
-
-## GET /api/nodes/:pubkey/reach
-
-Per-node RF reach report (two-way link quality). Computes **directional** link counts from raw
-path adjacency (a flood path is recorded origin→observer, so in `[A,B]` B received
-A directly). A link is **bidirectional** when both directions have observations;
-the **bottleneck** (weaker direction) rates two-way stability. Read-only; bounded
-to a recent window. Identifies nodes only by **unique 2–3 byte** path prefixes
-(1-byte prefixes collide and are excluded).
-
-### Query Parameters
-
-| Param  | Type   | Default | Description                          |
-|--------|--------|---------|--------------------------------------|
-| `days` | number | `7`     | Lookback window, clamped 1–30        |
-
-### Response `200`
-
-```jsonc
-{
-  "node": { "pubkey": string, "name": string, "role": string,
-            "lat": number | null, "lon": number | null, "first_seen": string (ISO) },
-  "window": { "days": number, "since": string (ISO) },
-  "reliable_tokens": [string],          // uppercase hex prefixes unique to this node ([] if unidentifiable)
-  "importance": {
-    "neighbor_degree":    number,        // all-time, from neighbor_edges
-    "degree_rank":        number,        // 1-based rank among nodes with edges
-    "nodes_with_edges":   number,
-    "relay_observations": number,        // windowed obs with this node anywhere in path
-    "bidirectional_links":number,
-    "direct_observers":   number
-  },
-  "direct_observers": [
-    { "pubkey": string, "name": string, "count": number,
-      "avg_snr": number | null, "lat": number | null, "lon": number | null,
-      "distance_km": number | null }
-  ],
-  "links": [
-    { "pubkey": string, "name": string, "role": string,
-      "lat": number | null, "lon": number | null,
-      "we_hear": number, "they_hear": number,
-      "bottleneck": number, "bidir": boolean,
-      "distance_km": number | null }
-  ]
-}
-```
-
-`reliable_tokens: []` means the node has no unique 1–3 byte prefix and cannot be
-reliably identified in paths; `links`/`direct_observers` will be empty.
 
 ### Response `404`
 

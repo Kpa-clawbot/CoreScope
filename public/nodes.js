@@ -106,9 +106,6 @@
     } catch (_e) {}
     return layer;
   }
-  // Exposed so the node-reach link-map (node-reach-map.js) reuses the user's
-  // configured tile provider instead of hardcoding OSM.
-  window._applyTilesToNodeMap = _applyTilesToNodeMap;
 
 
   // ROLE_COLORS loaded from shared roles.js
@@ -565,11 +562,10 @@
           <div style="margin:4px 0 6px">${renderNodeBadges(n, roleColor)}</div>
           ${renderHashInconsistencyWarning(n)}
           <div class="node-detail-key mono" style="font-size:11px;word-break:break-all;margin-bottom:6px">${n.public_key}</div>
-          <div style="display:flex;flex-wrap:wrap;gap:6px">
-            <button class="btn-primary" id="copyUrlBtn" style="flex:0 0 auto;font-size:12px;padding:4px 10px">📋 Copy URL</button>
-            <button class="btn-primary" id="copyShortUrlBtn" title="Short URL using an 8-char pubkey prefix — easier to send over the mesh (issue #772)" style="flex:0 0 auto;font-size:12px;padding:4px 10px">📡 Copy short URL</button>
-            <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="flex:0 0 auto;text-decoration:none;font-size:12px;padding:4px 10px">📊 Analytics</a>
-            <a href="#/nodes/${encodeURIComponent(n.public_key)}/reach" class="btn-primary" style="flex:0 0 auto;text-decoration:none;font-size:12px;padding:4px 10px">📡 Reach</a>
+          <div>
+            <button class="btn-primary" id="copyUrlBtn" style="font-size:12px;padding:4px 10px">📋 Copy URL</button>
+            <button class="btn-primary" id="copyShortUrlBtn" title="Short URL using an 8-char pubkey prefix — easier to send over the mesh (issue #772)" style="font-size:12px;padding:4px 10px;margin-left:6px">📡 Copy short URL</button>
+            <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="display:inline-block;margin-left:6px;text-decoration:none;font-size:12px;padding:4px 10px">📊 Analytics</a>
           </div>
         </div>
 
@@ -1352,8 +1348,8 @@
       if (link) {
         e.preventDefault();
         var href = link.getAttribute('href');
-        if (href.indexOf('/analytics') !== -1 || href.indexOf('/reach') !== -1) {
-          // Analytics/Reach link — different page, force hashchange via replaceState + assign
+        if (href.indexOf('/analytics') !== -1) {
+          // Analytics link — different page, force hashchange via replaceState + assign
           history.replaceState(null, '', '#/');
           location.hash = href.substring(1);
         }
@@ -1549,7 +1545,6 @@
         <div class="node-detail-role">${renderNodeBadges(n, roleColor)}
           <button class="btn-primary node-detail-btn" data-pubkey="${encodeURIComponent(n.public_key)}" aria-label="View details for ${escapeHtml(n.name || n.public_key)}" style="font-size:11px;padding:2px 8px;margin-left:8px;cursor:pointer">🔍 Details</button>
           <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="display:inline-block;margin-left:4px;text-decoration:none;font-size:11px;padding:2px 8px">📊 Analytics</a>
-          <a href="#/nodes/${encodeURIComponent(n.public_key)}/reach" class="btn-primary" style="display:inline-block;margin-left:4px;text-decoration:none;font-size:11px;padding:2px 8px">📡 Reach</a>
         </div>
         ${renderStatusExplanation(n)}
 

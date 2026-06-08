@@ -238,7 +238,6 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/nodes/{pubkey}/clock-skew", s.handleNodeClockSkew).Methods("GET")
 	r.HandleFunc("/api/observers/clock-skew", s.handleObserverClockSkew).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/neighbors", s.handleNodeNeighbors).Methods("GET")
-	r.HandleFunc("/api/nodes/{pubkey}/reach", s.handleNodeReach).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}", s.handleNodeDetail).Methods("GET")
 	r.HandleFunc("/api/nodes", s.handleNodes).Methods("GET")
 
