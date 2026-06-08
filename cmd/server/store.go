@@ -6121,6 +6121,28 @@ func (s *PacketStore) getAllNodes() []nodeInfo {
 
 type prefixMap struct {
 	m map[string][]nodeInfo
+	// nonRelay holds lowercase pubkeys of observer-known nodes that have
+	// advertised `repeat:off` in their MQTT /status message (issue #1290).
+	// Such nodes are pure listeners and must never be selected as a
+	// path-hop candidate by resolveWithContext, since by firmware
+	// contract they do not forward packets. nil/empty preserves the
+	// pre-#1290 behavior (every prefix-matching node is a candidate).
+	nonRelay map[string]struct{}
+}
+
+// markNonRelay registers a set of lowercase pubkeys as listener-only.
+// Called by the server when wiring the prefix map after reading the
+// observers table's can_relay column. Issue #1290.
+func (pm *prefixMap) markNonRelay(pubkeys []string) {
+	if pm == nil {
+		return
+	}
+	if pm.nonRelay == nil {
+		pm.nonRelay = make(map[string]struct{}, len(pubkeys))
+	}
+	for _, pk := range pubkeys {
+		pm.nonRelay[strings.ToLower(pk)] = struct{}{}
+	}
 }
 
 // maxPrefixLen caps prefix map entries. MeshCore path hops use 2–6 char
