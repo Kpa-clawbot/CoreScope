@@ -96,8 +96,11 @@
     var twoWay = d.links.filter(function (l) { return l.bidir; });
 
     if (!d.reliable_tokens || d.reliable_tokens.length === 0) {
-      container.innerHTML = headerHtml(n, nodeName, days) +
+      // nodeName is already escaped above; build the fragment then assign
+      // (same build-then-assign pattern as statsHtml below).
+      var emptyHtml = headerHtml(n, nodeName, days) +
         '<div style="max-width:1000px;margin:0 auto;padding:0 16px;color:var(--text-muted)">This node has no unique 1–3 byte prefix, so it cannot be reliably identified in paths — no link data available.</div>';
+      container.innerHTML = emptyHtml;
       wireTimeRange(container, pubkey);
       return;
     }
