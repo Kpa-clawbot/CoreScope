@@ -179,7 +179,9 @@ test('observers.js renderRow: observer name cell escapes o.name', () => {
   // Capture just the <td class="mono">${ ... o.name || o.id ... }${chip}</td>.
   const html = evalTemplate(
     'public/observers.js',
-    /(<td class="mono">\$\{[^}]*o\.name[^}]*\}\$\{window\.ObserversNaiveChip\.render\(o\)\}<\/td>)/,
+    // Allow optional trailing content (e.g. listener/repeater badge added by #1290)
+    // between the naive chip and the closing </td>.
+    /(<td class="mono">\$\{[^}]*o\.name[^}]*\}\$\{window\.ObserversNaiveChip\.render\(o\)\}[^`]*?<\/td>)/,
     { o: { name: TAG_PAYLOAD + ATTR_PAYLOAD, id: 'obs-1' },
       window: { ObserversNaiveChip: { render: () => '' } } }
   );

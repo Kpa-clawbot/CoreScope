@@ -909,6 +909,11 @@ type ObserverResp struct {
 	ClockSkewSeconds  interface{} `json:"clock_skew_seconds"`
 	ClockSkewCount24h int         `json:"clock_skew_count_24h"`
 	ClockLastNaiveAt  interface{} `json:"clock_last_naive_at"`
+	// Issue #1290: firmware 1.16 `repeat` flag — true=repeater,
+	// false=listener-only, nil=unknown (legacy observer never sent the
+	// field). UI tri-state badge renders nothing when nil so legacy
+	// rows don't masquerade as confirmed repeaters (PR #1624 MAJOR-2).
+	CanRelay *bool `json:"can_relay,omitempty"`
 }
 
 type ObserverListResponse struct {

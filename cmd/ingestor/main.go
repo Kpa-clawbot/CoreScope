@@ -1124,6 +1124,37 @@ func extractObserverMeta(msg map[string]interface{}) *ObserverMeta {
 		}
 	}
 
+	// Issue #1290: firmware 1.16 publishes a `repeat` flag at the top
+	// level of the /status JSON (MQTTMessageBuilder.cpp:58 — see
+	// agessaman/MeshCore mqtt-bridge-implementation-flex). Accept
+	// either a boolean or a case-insensitive `on|off|true|false|1|0`
+	// string. Missing field → leave CanRelay nil; the writer preserves
+	// the prior column value (default 1, back-compat).
+	if v, ok := msg["repeat"]; ok && v != nil {
+		switch t := v.(type) {
+		case bool:
+			b := t
+			meta.CanRelay = &b
+			hasData = true
+		case string:
+			s := strings.ToLower(strings.TrimSpace(t))
+			switch s {
+			case "on", "true", "1", "yes":
+				b := true
+				meta.CanRelay = &b
+				hasData = true
+			case "off", "false", "0", "no":
+				b := false
+				meta.CanRelay = &b
+				hasData = true
+			}
+		case float64:
+			b := t != 0
+			meta.CanRelay = &b
+			hasData = true
+		}
+	}
+
 	if !hasData {
 		return nil
 	}

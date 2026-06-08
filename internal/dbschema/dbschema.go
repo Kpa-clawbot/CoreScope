@@ -82,6 +82,12 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensureObserverNaiveClockColumns(rw, logf); err != nil {
 		return fmt.Errorf("ensure observers naive-clock columns: %w", err)
 	}
+	if err := ensureObserverCanRelayColumn(rw, logf); err != nil {
+		return fmt.Errorf("ensure observers.can_relay: %w", err)
+	}
+	if err := ensureObserverCanRelaySeenColumn(rw, logf); err != nil {
+		return fmt.Errorf("ensure observers.can_relay_seen: %w", err)
+	}
 	return nil
 }
 
@@ -138,6 +144,19 @@ func AssertReady(ro *sql.DB) error {
 	mustCol("observers", "clock_skew_seconds")
 	mustCol("observers", "clock_skew_count_24h")
 	mustCol("observers", "clock_last_naive_at")
+	// Issue #1290: firmware 1.16 publishes a `repeat: on|off` flag in
+	// the MQTT /status JSON. Ingestor persists it as can_relay; server
+	// reads it to filter listener-only observers out of the path-hop
+	// disambiguator candidate set. Default 1 preserves prior behavior
+	// for legacy observers that never sent the field.
+	mustCol("observers", "can_relay")
+	// Issue #1290 follow-up (PR #1624 MAJOR-2): tri-state badge. The
+	// can_relay column defaults to 1 at INSERT, so we cannot distinguish
+	// "firmware confirmed repeater" from "legacy observer that never
+	// sent a repeat field". can_relay_seen=1 means the ingestor wrote
+	// an explicit value; can_relay_seen=0 means leave the UI badge
+	// unset (unknown state).
+	mustCol("observers", "can_relay_seen")
 
 	if len(missing) > 0 {
 		return fmt.Errorf("schema not migrated by ingestor; restart ingestor first. missing: %s",
@@ -520,5 +539,50 @@ func ensureObserverNaiveClockColumns(rw *sql.DB, logf Logger) error {
 		}
 		logf("[dbschema] added %s column to observers", c.name)
 	}
+	return nil
+}
+
+// ensureObserverCanRelayColumn adds the can_relay column to observers.
+// Firmware 1.16 publishes a `repeat: on|off` flag in the MQTT /status
+// JSON (#1290); the ingestor parses it and writes 0/1 here. The server's
+// path-hop disambiguator (cmd/server/store.go pm.resolveWithContext)
+// excludes observers with can_relay=0 from the candidate set. Default 1
+// preserves prior behavior for legacy observers (no repeat field).
+func ensureObserverCanRelayColumn(rw *sql.DB, logf Logger) error {
+	has, err := TableHasColumn(rw, "observers", "can_relay")
+	if err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+	// PREFLIGHT: async=true reason="single-column ALTER on observers (low-cardinality, ~1k rows in prod); DEFAULT 1 is a constant so SQLite does the rewrite as a metadata-only schema update, no row scan"
+	if _, err := rw.Exec("ALTER TABLE observers ADD COLUMN can_relay INTEGER DEFAULT 1"); err != nil {
+		return err
+	}
+	logf("[dbschema] added can_relay column to observers")
+	return nil
+}
+
+// ensureObserverCanRelaySeenColumn adds the can_relay_seen tracking column.
+// Issue #1290 follow-up (PR #1624 MAJOR-2): can_relay defaults to 1 at
+// INSERT, which conflates "confirmed repeater" with "legacy observer
+// that never sent the repeat field". can_relay_seen=1 is written by
+// the ingestor whenever the firmware actually provided the field; the
+// server's read layer returns CanRelay=nil whenever seen=0 so the UI
+// can render the tri-state badge (no badge for unknown).
+func ensureObserverCanRelaySeenColumn(rw *sql.DB, logf Logger) error {
+	has, err := TableHasColumn(rw, "observers", "can_relay_seen")
+	if err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+	// PREFLIGHT: async=true reason="single-column ALTER on observers (low-cardinality, ~1k rows in prod); DEFAULT 0 is a constant so SQLite does the rewrite as a metadata-only schema update, no row scan"
+	if _, err := rw.Exec("ALTER TABLE observers ADD COLUMN can_relay_seen INTEGER DEFAULT 0"); err != nil {
+		return err
+	}
+	logf("[dbschema] added can_relay_seen column to observers")
 	return nil
 }
