@@ -33,17 +33,26 @@ func benchReachDB(b *testing.B, nObs, matchEvery int) *DB {
 			b.Fatal(err)
 		}
 	}
-	tx, _ := conn.Begin()
-	tx.Exec(`INSERT INTO observers (id, name) VALUES ('OBS', 'o')`)
+	tx, err := conn.Begin()
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := tx.Exec(`INSERT INTO observers (id, name) VALUES ('OBS', 'o')`); err != nil {
+		b.Fatal(err)
+	}
 	for i := 0; i < nObs; i++ {
-		tx.Exec(`INSERT INTO transmissions (id, hash, first_seen, payload_type, from_pubkey) VALUES (?,?,?,5,'')`,
-			i, fmt.Sprintf("h%d", i), "2026-06-07T00:00:00Z")
+		if _, err := tx.Exec(`INSERT INTO transmissions (id, hash, first_seen, payload_type, from_pubkey) VALUES (?,?,?,5,'')`,
+			i, fmt.Sprintf("h%d", i), "2026-06-07T00:00:00Z"); err != nil {
+			b.Fatal(err)
+		}
 		path := `["AA","CC","BB"]` // non-matching filler
 		if i%matchEvery == 0 {
 			path = `["AA","01FA","BB"]`
 		}
-		tx.Exec(`INSERT INTO observations (id, transmission_id, observer_idx, snr, path_json, timestamp) VALUES (?,?,1,-7.0,?,?)`,
-			i, i, path, 1000)
+		if _, err := tx.Exec(`INSERT INTO observations (id, transmission_id, observer_idx, snr, path_json, timestamp) VALUES (?,?,1,-7.0,?,?)`,
+			i, i, path, 1000); err != nil {
+			b.Fatal(err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		b.Fatal(err)

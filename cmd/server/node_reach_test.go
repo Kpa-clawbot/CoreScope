@@ -1,6 +1,39 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"database/sql"
+	"testing"
+
+	_ "modernc.org/sqlite"
+)
+
+// newReachScanTestDB builds a minimal observer_idx-schema DB with two rows whose
+// path contains "01FA" and one that does not, for scanReachRows coverage.
+func newReachScanTestDB(t *testing.T) *DB {
+	t.Helper()
+	conn, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmts := []string{
+		`CREATE TABLE transmissions (id INTEGER PRIMARY KEY, from_pubkey TEXT, payload_type INTEGER)`,
+		`CREATE TABLE observers (id TEXT)`,
+		`CREATE TABLE observations (id INTEGER PRIMARY KEY, transmission_id INTEGER, observer_idx INTEGER, snr REAL, path_json TEXT, timestamp INTEGER)`,
+		`INSERT INTO observers (id) VALUES ('OBS1')`, // rowid 1
+		`INSERT INTO transmissions (id, from_pubkey, payload_type) VALUES (1,'FF00',4),(2,'',5),(3,'',5)`,
+		`INSERT INTO observations (id, transmission_id, observer_idx, snr, path_json, timestamp) VALUES
+			(1,1,1,-7.0,'["AA","01FA","BB"]',1000),
+			(2,2,1,NULL,'["01FA","CC"]',1000),
+			(3,3,1,-5.0,'["AA","CC"]',1000)`, // no 01FA → excluded
+	}
+	for _, s := range stmts {
+		if _, err := conn.Exec(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return &DB{conn: conn}
+}
 
 // resolver that only resolves the exact tokens it's told are unique.
 func testResolver(unique map[string]string) func(string) string {
@@ -120,5 +153,96 @@ func TestReliableTokens(t *testing.T) {
 	}
 	if toks["01"] {
 		t.Fatalf("1-byte 01 must be excluded (collision), got %v", toks)
+	}
+}
+
+func TestReliableTokens_ThreeByteBranch(t *testing.T) {
+	// Two nodes share the 2-byte prefix "01fa" but diverge at byte 3, so the
+	// 3-byte (6-hex) prefix is the shortest unique token. Exercises the l=6
+	// branch that the 1-/2-byte test does not.
+	nodes := []nodeInfo{
+		{PublicKey: "01fa32000000", Role: "repeater"},
+		{PublicKey: "01fa99000000", Role: "repeater"},
+	}
+	pm := buildPrefixMap(nodes)
+	toks := reliableTokens("01fa32000000", pm)
+	if toks["01FA"] {
+		t.Fatalf("2-byte 01FA collides here and must be excluded, got %v", toks)
+	}
+	if !toks["01FA32"] {
+		t.Fatalf("expected 3-byte 01FA32 reliable token, got %v", toks)
+	}
+}
+
+func TestAttributeDirections_NonAdvertFirstHopNotCredited(t *testing.T) {
+	// Our token is the FIRST hop but payloadType is NOT an advert. The
+	// fromPubkey must NOT be credited as we_hear (only adverts carry a
+	// trustworthy originator → first-hop relationship). Guards the
+	// `payloadType == PayloadADVERT` condition on the first-hop branch.
+	rows := []pathRow{{
+		observerPK: "obs1", payloadType: 5, fromPubkey: "origin1",
+		path: []string{"01FA", "BB"},
+	}}
+	d := attributeDirections(rows, map[string]bool{"01FA": true}, "01fa326b",
+		testResolver(map[string]string{"BB": "bb00"}))
+	if d.we["origin1"] != 0 {
+		t.Fatalf("non-advert first hop must not credit we_hear[origin1], got %d", d.we["origin1"])
+	}
+	if len(d.we) != 0 {
+		t.Fatalf("expected no we_hear edges, got %v", d.we)
+	}
+	if d.they["bb00"] != 1 { // successor still counts
+		t.Fatalf("they_hear[bb00]=%d want 1", d.they["bb00"])
+	}
+}
+
+func TestAttributeDirections_ObserverAggregatesAcrossRows(t *testing.T) {
+	// Same observer on the last hop across multiple rows: count and SNR must
+	// accumulate, not overwrite.
+	s1, s2 := 2.0, 6.0
+	rows := []pathRow{
+		{observerPK: "obs1", payloadType: 5, path: []string{"AA", "01FA"}, snr: &s1},
+		{observerPK: "obs1", payloadType: 5, path: []string{"BB", "01FA"}, snr: &s2},
+	}
+	d := attributeDirections(rows, map[string]bool{"01FA": true}, "01fa326b", testResolver(nil))
+	a := d.obs["obs1"]
+	if a == nil || a.count != 2 {
+		t.Fatalf("observer count should aggregate to 2, got %+v", a)
+	}
+	if a.snrN != 2 || a.snrSum != 8.0 {
+		t.Fatalf("snr should aggregate (n=2,sum=8), got n=%d sum=%v", a.snrN, a.snrSum)
+	}
+	if d.they["obs1"] != 2 {
+		t.Fatalf("they_hear[obs1]=%d want 2", d.they["obs1"])
+	}
+}
+
+func TestScanReachRows_DecodesRows(t *testing.T) {
+	db := newReachScanTestDB(t)
+	defer db.conn.Close()
+	srv := &Server{db: db}
+	rows := srv.scanReachRows(context.Background(), map[string]bool{"01FA": true}, 0)
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 matching rows (non-matching path excluded), got %d", len(rows))
+	}
+	// Find the advert row (order is not guaranteed without ORDER BY).
+	var got *pathRow
+	for i := range rows {
+		if rows[i].payloadType == 4 {
+			got = &rows[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("advert row not returned: %+v", rows)
+	}
+	// Fields are decoded + normalized: lowercase observer/from, uppercase path.
+	if got.observerPK != "obs1" || got.fromPubkey != "ff00" {
+		t.Fatalf("decoded fields wrong: %+v", *got)
+	}
+	if len(got.path) != 3 || got.path[1] != "01FA" {
+		t.Fatalf("path not parsed/uppercased: %v", got.path)
+	}
+	if got.snr == nil || *got.snr != -7.0 {
+		t.Fatalf("snr not decoded: %v", got.snr)
 	}
 }

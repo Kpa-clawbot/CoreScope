@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -14,10 +15,6 @@ import (
 	"github.com/gorilla/mux"
 	"golang.org/x/sync/singleflight"
 )
-
-// advertPayloadType mirrors MeshCore ADVERT (0x04). Local const so this file
-// stays independent of decoder internals.
-const advertPayloadType = 4
 
 // reachScanRowLimit hard-caps the windowed observation scan so a hot relay node
 // with weeks of traffic can't pull an unbounded result set into memory. A node
@@ -80,7 +77,7 @@ func attributeDirections(rows []pathRow, ourTokens map[string]bool, ourPK string
 				if pk := resolve(r.path[i-1]); pk != "" && pk != ourPK {
 					d.we[pk]++
 				}
-			} else if r.payloadType == advertPayloadType && r.fromPubkey != "" && r.fromPubkey != ourPK {
+			} else if r.payloadType == PayloadADVERT && r.fromPubkey != "" && r.fromPubkey != ourPK {
 				d.we[r.fromPubkey]++
 			}
 			// successor → it heard us; or if we're the last hop, the observer did
@@ -243,13 +240,6 @@ func gpsPtrs(info nodeInfo, ok bool) (*float64, *float64) {
 	return fptr(info.Lat), fptr(info.Lon)
 }
 
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // clampDays bounds the lookback window to [1,30]; default callers pass 7.
 func clampDays(d int) int {
 	if d < 1 {
@@ -285,6 +275,9 @@ var (
 	reachSF singleflight.Group
 )
 
+// reachCacheGet returns the cached marshalled JSON for key. The returned slice
+// is shared (not copied): it is treated as immutable — only ever handed to
+// w.Write — so callers MUST NOT mutate it.
 func reachCacheGet(key string) ([]byte, bool) {
 	reachCacheMu.RLock()
 	defer reachCacheMu.RUnlock()
@@ -293,6 +286,21 @@ func reachCacheGet(key string) ([]byte, bool) {
 		return nil, false
 	}
 	return e.raw, true
+}
+
+// isHexPubkey reports whether s is a full 64-char lowercase-hex public key.
+// The handler lowercases input first, so we only accept [0-9a-f].
+func isHexPubkey(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func reachCachePut(key string, raw []byte) {
@@ -332,6 +340,12 @@ func evictReachLocked() {
 
 func (s *Server) handleNodeReach(w http.ResponseWriter, r *http.Request) {
 	pubkey := strings.ToLower(mux.Vars(r)["pubkey"])
+	// Reject malformed pubkeys up front (cheap defense against cache-key
+	// pollution + wasted work on bogus IDs).
+	if !isHexPubkey(pubkey) {
+		writeError(w, 400, "invalid pubkey: expected 64 hex chars")
+		return
+	}
 	if s.cfg != nil && s.cfg.IsBlacklisted(pubkey) {
 		writeError(w, 404, "Not found")
 		return
@@ -363,7 +377,11 @@ func (s *Server) handleNodeReach(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return []byte(nil), nil
 		}
-		raw, _ := json.Marshal(resp)
+		raw, mErr := json.Marshal(resp)
+		if mErr != nil {
+			log.Printf("[reach] marshal failed for %s: %v", cacheKey, mErr)
+			return nil, mErr
+		}
 		reachCachePut(cacheKey, raw)
 		return raw, nil
 	})
@@ -410,8 +428,13 @@ func (s *Server) computeNodeReach(ctx context.Context, pubkey string, days int) 
 	degree, rank, nodesWithEdges := s.reachDegreeRank(ctx, pubkey)
 
 	// node first_seen (nodeInfo only carries last_seen; the contract wants it).
+	// pubkey is already lowercased + validated, so match the column directly to
+	// keep the public_key index usable. A missing row → empty first_seen (the
+	// node may be observer-only); only log unexpected errors.
 	var firstSeen sql.NullString
-	s.db.conn.QueryRowContext(ctx, `SELECT first_seen FROM nodes WHERE LOWER(public_key)=?`, pubkey).Scan(&firstSeen)
+	if err := s.db.conn.QueryRowContext(ctx, `SELECT first_seen FROM nodes WHERE public_key=?`, pubkey).Scan(&firstSeen); err != nil && err != sql.ErrNoRows {
+		log.Printf("[reach] first_seen query failed for %s: %v", pubkey, err)
+	}
 
 	// assemble links
 	links := make([]NodeReachLink, 0, len(d.we)+len(d.they))
@@ -437,7 +460,7 @@ func (s *Server) computeNodeReach(ctx context.Context, pubkey string, days int) 
 		}
 		links = append(links, NodeReachLink{
 			Pubkey: pk, Name: info.Name, Role: info.Role, Lat: lat, Lon: lon,
-			WeHear: we, TheyHear: they, Bottleneck: minInt(we, they), Bidir: b, DistanceKm: dist,
+			WeHear: we, TheyHear: they, Bottleneck: min(we, they), Bidir: b, DistanceKm: dist,
 		})
 	}
 	sort.Slice(links, func(i, j int) bool {
@@ -532,6 +555,7 @@ func (s *Server) getDegreeSnapshot(ctx context.Context) *degreeSnapshot {
 			UNION ALL SELECT node_b FROM neighbor_edges
 		) GROUP BY pk`)
 	if err != nil {
+		log.Printf("[reach] degree snapshot query failed: %v (serving stale)", err)
 		return reachDegreeSnap // serve stale on error rather than zeroing
 	}
 	defer rows.Close()
@@ -578,15 +602,18 @@ func (s *Server) scanReachRows(ctx context.Context, tokens map[string]bool, sinc
 	// Modest preallocation: most nodes return far fewer than the cap, so seed a
 	// reasonable capacity rather than reserving reachScanRowLimit up front.
 	out := make([]pathRow, 0, 2048)
+	var skipped int // malformed/empty rows discarded — surfaced below so ingest bugs aren't silent
 	for rows.Next() {
 		var oid, fpk, pj string
 		var pt int
 		var snr sql.NullFloat64
 		if err := rows.Scan(&oid, &fpk, &pt, &pj, &snr); err != nil {
+			skipped++
 			continue
 		}
 		path := parsePathTokens(pj)
 		if len(path) == 0 {
+			skipped++
 			continue
 		}
 		pr := pathRow{observerPK: oid, fromPubkey: fpk, payloadType: pt, path: path}
@@ -595,6 +622,9 @@ func (s *Server) scanReachRows(ctx context.Context, tokens map[string]bool, sinc
 			pr.snr = &v
 		}
 		out = append(out, pr)
+	}
+	if skipped > 0 {
+		log.Printf("[reach] scan discarded %d malformed/empty rows (kept %d)", skipped, len(out))
 	}
 	return out
 }
