@@ -722,7 +722,26 @@ to a recent window. Identifies nodes only by **unique 2–3 byte** path prefixes
 `reliable_tokens: []` means the node has no unique 1–3 byte prefix and cannot be
 reliably identified in paths; `links`/`direct_observers` will be empty.
 
+### Caching & limits
+
+- **Response cache:** computed responses are cached for **5 minutes** per
+  `pubkey|days`. Polling faster than that returns an identical body — clients
+  should not expect sub-5-minute freshness.
+- **Scan cap:** the windowed path scan is hard-capped at **200,000** rows. A node
+  with more matching observations in the window is truncated (counts become a
+  representative sample rather than exhaustive).
+
+### Response `400`
+
+Returned when `:pubkey` is not a 64-char hex string.
+
+```json
+{ "error": "invalid pubkey: expected 64 hex chars" }
+```
+
 ### Response `404`
+
+Returned when the node is unknown or blacklisted.
 
 ```json
 { "error": "Not found" }

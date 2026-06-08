@@ -1,24 +1,54 @@
 /* Node reach page — reuses .analytics-stats/.analytics-stat-card/.analytics-time-range
-   from the analytics page; these are the reach-specific bits. */
-.nq-group-h { font-size:11px; font-weight:600; color:var(--text-muted, #57606a); text-transform:uppercase; letter-spacing:.3px; margin:14px 0 6px; }
-.nq-actions { display:flex; align-items:center; gap:14px; margin:10px 0; font-size:12px; }
-.nq-count { color:var(--text-muted, #57606a); }
-.nq-empty { color:var(--text-muted, #57606a); font-size:13px; padding:18px 12px; border:1px dashed var(--border, #d0d7de); border-radius:6px; margin:6px 0 24px; }
-.nq-note { margin:6px 0 0; padding:6px 10px; font-size:11px; line-height:1.4; color:var(--text-muted, #57606a); background:var(--section-bg, #f6f8fa); border:1px solid var(--border, #d0d7de); border-radius:6px; }
-.nq-map { height:420px; border:1px solid var(--border, #d0d7de); border-radius:6px; margin-bottom:12px; }
+   from the analytics page; these are the reach-specific bits.
+   --text-muted / --border / --section-bg are defined globally; no inline hex
+   fallbacks here (single source of truth). */
+:root { --nq-print-width: 680px; }
 
+.nq-head { max-width:1000px; margin:0 auto; padding:12px 16px; }
+.nq-back { color:var(--accent); text-decoration:none; font-size:12px; }
+.nq-title { margin:4px 0 2px; font-size:18px; }
+.nq-sub { color:var(--text-muted); font-size:11px; }
+.nq-body { max-width:1000px; margin:0 auto; padding:0 16px; }
+.nq-msg { max-width:1000px; margin:0 auto; padding:0 16px; color:var(--text-muted); }
+.nq-load { padding:40px; text-align:center; color:var(--text-muted); }
+.nq-error { padding:40px; text-align:center; color:var(--status-red); }
+
+.nq-group-h { font-size:11px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:.3px; margin:14px 0 6px; }
+.nq-actions { display:flex; flex-wrap:wrap; align-items:center; gap:14px; margin:10px 0; font-size:12px; }
+.nq-filter { border:0; padding:0; margin:0; display:flex; flex-wrap:wrap; align-items:center; gap:12px; }
+.nq-filter legend { font-size:11px; color:var(--text-muted); padding:0; margin-right:4px; }
+.nq-print-btn { margin-left:auto; }
+.nq-count { color:var(--text-muted); }
+.nq-empty { color:var(--text-muted); font-size:13px; padding:18px 12px; border:1px dashed var(--border); border-radius:6px; margin:6px 0 24px; }
+.nq-note { margin:6px 0 0; padding:6px 10px; font-size:11px; line-height:1.4; color:var(--text-muted); background:var(--section-bg); border:1px solid var(--border); border-radius:6px; }
+.nq-nogps { margin:0 0 8px; font-size:11px; color:var(--text-muted); }
+.nq-map { height:420px; border:1px solid var(--border); border-radius:6px; margin-bottom:12px; }
+
+/* In-map legend (decodes the colour tiers + thresholds). */
+.nq-legend { background:var(--surface-0, #fff); color:var(--text-muted); border:1px solid var(--border); border-radius:6px; padding:6px 8px; font-size:11px; line-height:1.5; box-shadow:0 1px 3px rgba(0,0,0,.18); }
+.nq-legend .nq-sw { display:inline-block; width:18px; height:3px; vertical-align:middle; margin-right:6px; border-radius:2px; }
+
+/* Table: horizontal rules only — erase the non-data grid ink (Tufte). */
 .nq-table { border-collapse:collapse; width:100%; font-size:12px; margin-bottom:24px; }
-.nq-table th, .nq-table td { border:1px solid var(--border, #d0d7de); padding:3px 7px; }
-.nq-table th { background:var(--section-bg, #f6f8fa); font-size:10px; text-transform:uppercase; }
+.nq-table th, .nq-table td { border:0; border-bottom:1px solid var(--border); padding:4px 8px; }
+.nq-table thead th { border-bottom:2px solid var(--border); background:none; font-size:12px; font-weight:600; text-transform:none; text-align:left; }
 .nq-n { text-align:right; font-variant-numeric:tabular-nums; }
-.nq-num { text-align:right; color:var(--text-muted, #8c959f); width:26px; }
+.nq-num { text-align:right; color:var(--text-muted); width:26px; }
 .nq-link { color:var(--accent); text-decoration:none; font-weight:600; }
 .nq-link:hover { text-decoration:underline; }
-.nq-oneway { color:var(--text-muted, #8c959f); }
-.nq-dir { font-size:10px; color:var(--text-muted, #8c959f); }
+.nq-oneway { color:var(--text-muted); }
+.nq-dir { font-size:10px; color:var(--text-muted); }
+/* Bottleneck tier: colour + glyph so the encoding survives colour-blindness. */
+.nq-tier { font-weight:700; }
+.nq-tier-glyph { font-size:10px; margin-left:4px; letter-spacing:1px; }
 
 @media print {
+  /* Scope the print to the report only — the SPA shell (nav/header/sidebar)
+     must not bleed onto the page. */
+  body * { visibility:hidden; }
+  #nq-report, #nq-report * { visibility:visible; }
+  #nq-report { position:absolute; left:0; top:0; width:100%; }
   .nq-noprint { display:none !important; }
-  .nq-map { width:680px !important; height:300px; }
+  .nq-map { width:var(--nq-print-width) !important; height:300px; }
   .nq-table { font-size:10px; }
 }

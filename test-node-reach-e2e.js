@@ -3,12 +3,18 @@
 const { chromium } = require('playwright');
 const BASE = process.env.BASE_URL || 'http://localhost:3000';
 
+async function getJson(page, url) {
+  const resp = await page.request.get(url);
+  if (!resp.ok()) throw new Error('GET ' + url + ' → HTTP ' + resp.status());
+  return resp.json();
+}
+
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage();
 
   // A repeater is most likely to have reach data (it relays).
-  const nodes = await (await page.request.get(BASE + '/api/nodes?role=repeater&limit=1')).json();
+  const nodes = await getJson(page, BASE + '/api/nodes?role=repeater&limit=1');
   if (!nodes.nodes || !nodes.nodes.length) {
     console.log('node-reach E2E SKIP (no repeater in dataset)');
     await browser.close();
@@ -17,7 +23,7 @@ const BASE = process.env.BASE_URL || 'http://localhost:3000';
   const pk = nodes.nodes[0].public_key;
 
   // 1. The endpoint returns the documented shape.
-  const reach = await (await page.request.get(BASE + '/api/nodes/' + pk + '/reach?days=7')).json();
+  const reach = await getJson(page, BASE + '/api/nodes/' + pk + '/reach?days=7');
   for (const k of ['node', 'window', 'reliable_tokens', 'importance', 'links', 'direct_observers']) {
     if (!(k in reach)) throw new Error('reach response missing key: ' + k);
   }
@@ -35,13 +41,23 @@ const BASE = process.env.BASE_URL || 'http://localhost:3000';
     await page.waitForSelector('#nqIncoming');
     await page.waitForSelector('#nqOutgoing');
 
-    const twoWay = await page.locator('#nqRows tr').count();
+    // Derive the EXACT expected row counts from the API so the toggles are
+    // verified, not just "didn't shrink" (tautology). Base shows two-way only;
+    // incoming adds we-only links; +outgoing adds the rest (= all links).
+    const twoWayExp = reach.links.filter(l => l.bidir).length;
+    const weOnlyExp = reach.links.filter(l => !l.bidir && l.we_hear > 0 && l.they_hear === 0).length;
+    const allExp = reach.links.length;
+
+    const base = await page.locator('#nqRows tr').count();
+    if (base !== twoWayExp) throw new Error(`base rows ${base} != two-way ${twoWayExp}`);
     await page.check('#nqIncoming');
     const withIncoming = await page.locator('#nqRows tr').count();
-    if (withIncoming < twoWay) throw new Error('incoming toggle reduced rows');
+    if (withIncoming !== twoWayExp + weOnlyExp) {
+      throw new Error(`incoming rows ${withIncoming} != two-way+we-only ${twoWayExp + weOnlyExp}`);
+    }
     await page.check('#nqOutgoing');
     const withBoth = await page.locator('#nqRows tr').count();
-    if (withBoth < withIncoming) throw new Error('outgoing toggle reduced rows');
+    if (withBoth !== allExp) throw new Error(`both-toggles rows ${withBoth} != all links ${allExp}`);
 
     // Neighbour rows link to a node detail page.
     if (await page.locator('#nqRows a.nq-link').count()) {
@@ -49,8 +65,10 @@ const BASE = process.env.BASE_URL || 'http://localhost:3000';
       if (!href || !href.startsWith('#/nodes/')) throw new Error('neighbour link malformed: ' + href);
     }
 
-    // Map renders (node has GPS for a repeater fixture).
-    await page.waitForSelector('#nqMap .leaflet-container', { timeout: 10000 }).catch(() => {});
+    // Map must render whenever at least one link has GPS (no swallowed failure).
+    if (reach.links.some(l => l.lat != null && l.lon != null)) {
+      await page.waitForSelector('#nqMap .leaflet-container', { timeout: 10000 });
+    }
   }
 
   console.log('node-reach E2E OK');
