@@ -909,6 +909,10 @@ type ObserverResp struct {
 	ClockSkewSeconds  interface{} `json:"clock_skew_seconds"`
 	ClockSkewCount24h int         `json:"clock_skew_count_24h"`
 	ClockLastNaiveAt  interface{} `json:"clock_last_naive_at"`
+	// Issue #1290: firmware 1.16 `repeat` flag — true=repeater,
+	// false=listener-only. Drives the UI badge on observers list +
+	// node detail page. Defaults to true for legacy observers.
+	CanRelay bool `json:"can_relay"`
 }
 
 type ObserverListResponse struct {

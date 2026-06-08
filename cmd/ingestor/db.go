@@ -197,7 +197,8 @@ func applySchema(db *sql.DB) error {
 			last_packet_at TEXT DEFAULT NULL,
 			clock_skew_seconds INTEGER DEFAULT NULL,
 			clock_skew_count_24h INTEGER DEFAULT 0,
-			clock_last_naive_at TEXT DEFAULT NULL
+			clock_last_naive_at TEXT DEFAULT NULL,
+			can_relay INTEGER DEFAULT 1
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_nodes_last_seen ON nodes(last_seen);
@@ -727,8 +728,8 @@ func (s *Store) prepareStatements() error {
 	}
 
 	s.stmtUpsertObserver, err = s.db.Prepare(`
-		INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor)
-		VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, can_relay)
+		VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 1))
 		ON CONFLICT(id) DO UPDATE SET
 			name = COALESCE(?, name),
 			iata = COALESCE(?, iata),
@@ -740,7 +741,8 @@ func (s *Store) prepareStatements() error {
 			radio = COALESCE(?, radio),
 			battery_mv = COALESCE(?, battery_mv),
 			uptime_secs = COALESCE(?, uptime_secs),
-			noise_floor = COALESCE(?, noise_floor)
+			noise_floor = COALESCE(?, noise_floor),
+			can_relay = COALESCE(?, can_relay)
 	`)
 	if err != nil {
 		return err
@@ -973,6 +975,13 @@ type ObserverMeta struct {
 	RecvErrors    *int     // cumulative CRC/decode failures since boot
 	PacketsSent   *int     // cumulative packets sent since boot
 	PacketsRecv   *int     // cumulative packets received since boot
+	// CanRelay reflects the firmware 1.16 /status `repeat` flag (#1290).
+	// nil means the firmware did not send the field — caller must
+	// preserve the existing observers.can_relay value (default 1).
+	// true → relay-capable (`repeat:on`); false → listener-only
+	// (`repeat:off`), which causes the server-side disambiguator to
+	// exclude this observer's pubkey from path-hop candidate sets.
+	CanRelay *bool
 }
 
 // UpsertObserver inserts or updates an observer using the current wall-clock
@@ -995,7 +1004,7 @@ func (s *Store) UpsertObserverAt(id, name, iata string, meta *ObserverMeta, last
 	normalizedIATA := strings.TrimSpace(strings.ToUpper(iata))
 
 	var model, firmware, clientVersion, radio interface{}
-	var batteryMv, uptimeSecs, noiseFloor interface{}
+	var batteryMv, uptimeSecs, noiseFloor, canRelay interface{}
 	if meta != nil {
 		if meta.Model != nil {
 			model = *meta.Model
@@ -1018,11 +1027,22 @@ func (s *Store) UpsertObserverAt(id, name, iata string, meta *ObserverMeta, last
 		if meta.NoiseFloor != nil {
 			noiseFloor = *meta.NoiseFloor
 		}
+		// Issue #1290: nil → leave DB column unchanged (COALESCE in
+		// the prepared stmt); 0/1 written when firmware provided
+		// the `repeat` field. INSERT branch defaults to 1 via the
+		// COALESCE in the VALUES clause.
+		if meta.CanRelay != nil {
+			if *meta.CanRelay {
+				canRelay = 1
+			} else {
+				canRelay = 0
+			}
+		}
 	}
 
 	_, err := s.stmtUpsertObserver.Exec(
-		id, name, normalizedIATA, lastSeen, lastSeen, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor,
-		name, normalizedIATA, ingestNow, lastSeen, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor,
+		id, name, normalizedIATA, lastSeen, lastSeen, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor, canRelay,
+		name, normalizedIATA, ingestNow, lastSeen, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor, canRelay,
 	)
 	if err != nil {
 		s.Stats.WriteErrors.Add(1)

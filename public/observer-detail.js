@@ -181,6 +181,10 @@ window.ObserverDetailNaiveBanner = {
           <div class="stat-value"><span class="health-dot ${statusCls}">●</span> ${statusLabel}</div>
         </div>
         <div class="stat-card">
+          <div class="stat-label">Relay</div>
+          <div class="stat-value">${obs.can_relay === false ? '<span class="badge-listener" title="Firmware reported repeat:off — excluded from path-hop disambiguator (#1290)">listener</span>' : '<span class="badge-repeater" title="Firmware reported repeat:on (or unknown) — eligible as a path hop">repeater</span>'}</div>
+        </div>
+        <div class="stat-card">
           <div class="stat-label">Region</div>
           <div class="stat-value">${obs.iata ? '<span class="badge-region">' + escapeHtml(obs.iata) + '</span>' : '—'}</div>
         </div>

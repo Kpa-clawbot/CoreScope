@@ -1146,6 +1146,24 @@ body.scroll-locked { overflow: hidden; }
   font-size: 10px; font-weight: 700; font-family: var(--mono);
   background: var(--nav-bg); color: var(--nav-text); letter-spacing: .5px;
 }
+/* Issue #1290: listener vs repeater badge on observers list + detail.
+ * Driven by ObserverResp.can_relay (false = firmware reported repeat:off).
+ * Server-side disambiguator excludes listener observers from path-hop
+ * candidates; this badge surfaces the same hint to operators. Colors use
+ * existing theme vars so the badge tracks the active palette. */
+.badge-listener,
+.badge-repeater {
+  display: inline-block; padding: 1px 5px; border-radius: 4px;
+  font-size: 10px; font-weight: 700; font-family: var(--mono);
+  letter-spacing: .5px; margin-left: 4px; vertical-align: middle;
+}
+.badge-listener {
+  background: var(--transport-badge-bg, #f59e0b20);
+  color: var(--transport-badge-fg, #d97706);
+}
+.badge-repeater {
+  background: var(--nav-bg); color: var(--nav-text);
+}
 /* Observer IATA pill rendered inline next to observer name on packets (#1188).
  * Visually similar to .badge-region but distinct so the row badge and the
  * inline-with-observer badge can be styled independently in future themes. */

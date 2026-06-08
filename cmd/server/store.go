@@ -6194,6 +6194,17 @@ func (s *PacketStore) getCachedNodesAndPM() ([]nodeInfo, *prefixMap) {
 
 	nodes := s.getAllNodes()
 	pm := buildPrefixMap(nodes)
+	// Issue #1290: exclude observers that advertised `repeat:off` from
+	// the path-hop candidate set. Failure is non-fatal — we log via the
+	// schema-degradation channel and proceed with an empty filter (i.e.
+	// pre-#1290 behavior).
+	if s.db != nil && s.db.conn != nil {
+		if pks, err := s.db.GetNonRelayObserverPubkeys(); err == nil {
+			pm.markNonRelay(pks)
+		} else {
+			s.logSchemaDegradationOnce("observers.can_relay read failed; path-hop disambiguator will not filter listener-only observers: " + err.Error())
+		}
+	}
 
 	s.cacheMu.Lock()
 	s.nodeCache = nodes
@@ -6257,6 +6268,25 @@ func (pm *prefixMap) resolve(hop string) *nodeInfo {
 func (pm *prefixMap) resolveWithContext(hop string, contextPubkeys []string, graph *NeighborGraph) (*nodeInfo, string, float64) {
 	h := strings.ToLower(hop)
 	candidates := pm.m[h]
+	// Issue #1290: drop observer-known listener-only nodes from the
+	// candidate set. By firmware contract a node that advertises
+	// `repeat:off` in its MQTT /status will never relay a packet, so it
+	// cannot legitimately be a hop in someone else's path. Filtering
+	// here shrinks ambiguous candidate sets without affecting any
+	// upstream caller (the returned shape and confidence labels are
+	// preserved; only no_match becomes more likely when the only
+	// matching prefix belonged to a listener). Empty pm.nonRelay
+	// preserves the pre-#1290 behavior exactly (back-compat).
+	if len(pm.nonRelay) > 0 && len(candidates) > 0 {
+		filtered := candidates[:0:0]
+		for i := range candidates {
+			if _, isListener := pm.nonRelay[strings.ToLower(candidates[i].PublicKey)]; isListener {
+				continue
+			}
+			filtered = append(filtered, candidates[i])
+		}
+		candidates = filtered
+	}
 	if len(candidates) == 0 {
 		return nil, "no_match", 0
 	}
@@ -8870,6 +8900,18 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 	}
 
 	observerRows := make([]map[string]interface{}, 0)
+	// Issue #1290: surface listener/repeater hint on node detail by
+	// looking up can_relay for each observer that heard this node.
+	// One-shot fetch of the non-relay set keeps this O(observers) on
+	// rare events; nil on error degrades to "neither badge" client-side.
+	nonRelaySet := map[string]struct{}{}
+	if s.db != nil && s.db.conn != nil {
+		if pks, err := s.db.GetNonRelayObserverPubkeys(); err == nil {
+			for _, pk := range pks {
+				nonRelaySet[strings.ToUpper(pk)] = struct{}{}
+			}
+		}
+	}
 	for id, o := range observerStats {
 		var avgSnr, avgRssi interface{}
 		if o.snrCount > 0 {
@@ -8878,9 +8920,14 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 		if o.rssiCount > 0 {
 			avgRssi = o.rssiSum / float64(o.rssiCount)
 		}
+		canRelay := true
+		if _, isListener := nonRelaySet[strings.ToUpper(id)]; isListener {
+			canRelay = false
+		}
 		observerRows = append(observerRows, map[string]interface{}{
 			"observer_id": id, "observer_name": o.name,
 			"avgSnr": avgSnr, "avgRssi": avgRssi, "packetCount": o.count,
+			"can_relay": canRelay,
 		})
 	}
 	sort.Slice(observerRows, func(i, j int) bool {

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/meshcore-analyzer/dbschema"
 	"github.com/meshcore-analyzer/geofilter"
 	_ "modernc.org/sqlite"
 )
@@ -251,6 +252,11 @@ type Observer struct {
 	ClockSkewSeconds  *int64  `json:"clock_skew_seconds"`
 	ClockSkewCount24h int     `json:"clock_skew_count_24h"`
 	ClockLastNaiveAt  *string `json:"clock_last_naive_at"`
+	// Issue #1290: firmware 1.16 `repeat: on|off` flag persisted by the
+	// ingestor. true = relay-capable (default for legacy observers).
+	// false = listener-only; cmd/server/store.go pm.resolveWithContext
+	// excludes these from path-hop candidate sets.
+	CanRelay bool `json:"can_relay"`
 }
 
 // Transmission represents a row from the transmissions table.
@@ -1148,9 +1154,17 @@ func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]
 
 // GetObservers returns active observers (not soft-deleted) sorted by last_seen DESC.
 func (db *DB) GetObservers() ([]Observer, error) {
+	// Issue #1290: can_relay is read via COALESCE(can_relay, 1). The
+	// column is added by internal/dbschema; older test fixtures and
+	// pre-migration DBs may lack it, so we probe and fall back.
+	canRelayClause := "COALESCE(can_relay, 1)"
+	if hasCol, _ := dbschema.TableHasColumn(db.conn, "observers", "can_relay"); !hasCol {
+		canRelayClause = "1"
+	}
 	rows, err := db.conn.Query(`SELECT id, name, iata, last_seen, first_seen, packet_count,
 		model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, last_packet_at,
-		clock_skew_seconds, clock_skew_count_24h, clock_last_naive_at
+		clock_skew_seconds, clock_skew_count_24h, clock_last_naive_at,
+		` + canRelayClause + `
 		FROM observers WHERE inactive IS NULL OR inactive = 0 ORDER BY last_seen DESC`)
 	if err != nil {
 		return nil, err
@@ -1163,11 +1177,13 @@ func (db *DB) GetObservers() ([]Observer, error) {
 		var batteryMv, uptimeSecs, clockSkewSec sql.NullInt64
 		var clockSkewCount sql.NullInt64
 		var noiseFloor sql.NullFloat64
+		var canRelay int
 		if err := rows.Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount,
 			&o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor, &o.LastPacketAt,
-			&clockSkewSec, &clockSkewCount, &o.ClockLastNaiveAt); err != nil {
+			&clockSkewSec, &clockSkewCount, &o.ClockLastNaiveAt, &canRelay); err != nil {
 			continue
 		}
+		o.CanRelay = canRelay != 0
 		if batteryMv.Valid {
 			v := int(batteryMv.Int64)
 			o.BatteryMv = &v
@@ -1190,22 +1206,58 @@ func (db *DB) GetObservers() ([]Observer, error) {
 	return observers, nil
 }
 
+// GetNonRelayObserverPubkeys returns the lowercase observer.id pubkeys
+// for observers that have advertised `repeat:off` (#1290). The server's
+// path-hop disambiguator consumes this to exclude listener-only nodes
+// from the candidate set. Inactive observers are excluded for
+// consistency with GetObservers; reactivation flips can_relay only on
+// the next status message.
+func (db *DB) GetNonRelayObserverPubkeys() ([]string, error) {
+	// Graceful no-op when can_relay column is absent (legacy DB / older
+	// test fixture). Avoids noisy schema-degradation log spam.
+	if hasCol, _ := dbschema.TableHasColumn(db.conn, "observers", "can_relay"); !hasCol {
+		return nil, nil
+	}
+	rows, err := db.conn.Query(`SELECT LOWER(id) FROM observers
+		WHERE COALESCE(can_relay, 1) = 0
+		  AND (inactive IS NULL OR inactive = 0)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var pk string
+		if err := rows.Scan(&pk); err == nil && pk != "" {
+			out = append(out, pk)
+		}
+	}
+	return out, rows.Err()
+}
+
 // GetObserverByID returns a single observer.
 func (db *DB) GetObserverByID(id string) (*Observer, error) {
 	var o Observer
 	var batteryMv, uptimeSecs, clockSkewSec sql.NullInt64
 	var clockSkewCount sql.NullInt64
 	var noiseFloor sql.NullFloat64
+	var canRelay int
+	canRelayClause := "COALESCE(can_relay, 1)"
+	if hasCol, _ := dbschema.TableHasColumn(db.conn, "observers", "can_relay"); !hasCol {
+		canRelayClause = "1"
+	}
 	err := db.conn.QueryRow(`SELECT id, name, iata, last_seen, first_seen, packet_count,
 		model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, last_packet_at,
-		clock_skew_seconds, clock_skew_count_24h, clock_last_naive_at
+		clock_skew_seconds, clock_skew_count_24h, clock_last_naive_at,
+		`+canRelayClause+`
 		FROM observers WHERE id = ?`, id).
 		Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount,
 			&o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor, &o.LastPacketAt,
-			&clockSkewSec, &clockSkewCount, &o.ClockLastNaiveAt)
+			&clockSkewSec, &clockSkewCount, &o.ClockLastNaiveAt, &canRelay)
 	if err != nil {
 		return nil, err
 	}
+	o.CanRelay = canRelay != 0
 	if batteryMv.Valid {
 		v := int(batteryMv.Int64)
 		o.BatteryMv = &v

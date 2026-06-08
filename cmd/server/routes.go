@@ -2534,6 +2534,7 @@ func (s *Server) buildObserversDefaultResponse() (ObserverListResponse, error) {
 			LastPacketAt:    o.LastPacketAt,
 			PacketsLastHour: plh,
 			Lat:             lat, Lon: lon, NodeRole: nodeRole,
+			CanRelay: o.CanRelay,
 		}
 		applyObserverNaiveClock(&resp, o, nowTime)
 		result = append(result, resp)
@@ -2578,6 +2579,7 @@ func (s *Server) handleObserverDetail(w http.ResponseWriter, r *http.Request) {
 			NoiseFloor:      obs.NoiseFloor,
 			LastPacketAt:    obs.LastPacketAt,
 			PacketsLastHour: plh,
+			CanRelay:        obs.CanRelay,
 		}
 		applyObserverNaiveClock(&resp, obs, time.Now().UTC())
 		return resp
