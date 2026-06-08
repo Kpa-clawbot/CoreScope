@@ -8904,11 +8904,17 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 	// looking up can_relay for each observer that heard this node.
 	// One-shot fetch of the non-relay set keeps this O(observers) on
 	// rare events; nil on error degrades to "neither badge" client-side.
+	// Issue #1290: keep this set lowercase to match the convention used
+	// by the resolver (cmd/server/store.go pm.nonRelay) and by
+	// GetNonRelayObserverPubkeys (which already returns LOWER(id)).
+	// Two case conventions on the same upstream string would be a
+	// latent regression waiting for any refactor that touches the
+	// observer-id normalization layer.
 	nonRelaySet := map[string]struct{}{}
 	if s.db != nil && s.db.conn != nil {
 		if pks, err := s.db.GetNonRelayObserverPubkeys(); err == nil {
 			for _, pk := range pks {
-				nonRelaySet[strings.ToUpper(pk)] = struct{}{}
+				nonRelaySet[strings.ToLower(pk)] = struct{}{}
 			}
 		}
 	}
@@ -8921,7 +8927,7 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 			avgRssi = o.rssiSum / float64(o.rssiCount)
 		}
 		canRelay := true
-		if _, isListener := nonRelaySet[strings.ToUpper(id)]; isListener {
+		if _, isListener := nonRelaySet[strings.ToLower(id)]; isListener {
 			canRelay = false
 		}
 		observerRows = append(observerRows, map[string]interface{}{
