@@ -597,3 +597,51 @@ func TestBuildNodeInfoMap_FirstSeenIsCached(t *testing.T) {
 			first1, first2)
 	}
 }
+
+// TestGetAllNodes_FirstSeenSchemaFallback exercises the schema-probe rung that
+// fires when nodes.first_seen is missing. The richest SELECT errors out, the
+// loop falls through to the next-richest query, and the resulting nodeInfo
+// values must have empty FirstSeen with no panic. Regression coverage for the
+// existing fallback branch (#1632 review loop 1).
+func TestGetAllNodes_FirstSeenSchemaFallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := tmpDir + "/test.db"
+
+	// Seed a nodes table WITHOUT first_seen (advert_count + last_seen present).
+	rw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rw.Close()
+	for _, stmt := range []string{
+		"CREATE TABLE nodes (public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL, last_seen TEXT, advert_count INTEGER)",
+		"CREATE TABLE observers (id TEXT, name TEXT, iata TEXT)",
+		"INSERT INTO nodes VALUES ('BBBB2222', 'Repeater-2', 'repeater', 0, 0, '2024-02-02T00:00:00Z', 3)",
+	} {
+		if _, err := rw.Exec(stmt); err != nil {
+			t.Fatalf("seed exec %q: %v", stmt, err)
+		}
+	}
+
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.conn.Close()
+
+	store := NewPacketStore(db, nil)
+	nodes := store.getAllNodes()
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 row from fallback rung, got %d", len(nodes))
+	}
+	n := nodes[0]
+	if n.PublicKey != "BBBB2222" {
+		t.Errorf("PublicKey mismatch: got %q", n.PublicKey)
+	}
+	if n.FirstSeen != "" {
+		t.Errorf("FirstSeen should be empty when nodes.first_seen column is missing, got %q", n.FirstSeen)
+	}
+	if n.ObservationCount != 3 {
+		t.Errorf("ObservationCount should still populate from advert_count fallback, got %d", n.ObservationCount)
+	}
+}
