@@ -432,6 +432,9 @@ func (s *Server) buildNodeInfoMap() map[string]nodeInfo {
 	nodes, _ := s.store.getCachedNodesAndPM()
 	m := make(map[string]nodeInfo, len(nodes))
 	for _, n := range nodes {
+		// FirstSeen is folded into getAllNodes (and therefore into the 30s
+		// node cache) so callers like /api/nodes/{pk}/reach get the field
+		// without a per-request SELECT — fixes #1627 r3 regression.
 		m[strings.ToLower(n.PublicKey)] = n
 	}
 
@@ -449,28 +452,6 @@ func (s *Server) buildNodeInfoMap() map[string]nodeInfo {
 				key := strings.ToLower(id)
 				if _, exists := m[key]; !exists {
 					m[key] = nodeInfo{PublicKey: id, Name: name, Role: "observer"}
-				}
-			}
-		}
-
-		// Fold in nodes.first_seen so callers (e.g. /api/nodes/{pk}/reach)
-		// don't need a per-request single-row SELECT. One bulk scan amortises
-		// across the whole map; missing/NULL rows are silently skipped (the
-		// node may be observer-only or pre-first_seen-schema).
-		fsRows, err := s.db.conn.Query("SELECT LOWER(public_key), COALESCE(first_seen,'') FROM nodes")
-		if err == nil {
-			defer fsRows.Close()
-			for fsRows.Next() {
-				var pk, fs string
-				if fsRows.Scan(&pk, &fs) != nil {
-					continue
-				}
-				if fs == "" {
-					continue
-				}
-				if entry, ok := m[pk]; ok {
-					entry.FirstSeen = fs
-					m[pk] = entry
 				}
 			}
 		}
