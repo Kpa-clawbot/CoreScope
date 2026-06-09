@@ -452,6 +452,28 @@ func (s *Server) buildNodeInfoMap() map[string]nodeInfo {
 				}
 			}
 		}
+
+		// Fold in nodes.first_seen so callers (e.g. /api/nodes/{pk}/reach)
+		// don't need a per-request single-row SELECT. One bulk scan amortises
+		// across the whole map; missing/NULL rows are silently skipped (the
+		// node may be observer-only or pre-first_seen-schema).
+		fsRows, err := s.db.conn.Query("SELECT LOWER(public_key), COALESCE(first_seen,'') FROM nodes")
+		if err == nil {
+			defer fsRows.Close()
+			for fsRows.Next() {
+				var pk, fs string
+				if fsRows.Scan(&pk, &fs) != nil {
+					continue
+				}
+				if fs == "" {
+					continue
+				}
+				if entry, ok := m[pk]; ok {
+					entry.FirstSeen = fs
+					m[pk] = entry
+				}
+			}
+		}
 	}
 
 	return m

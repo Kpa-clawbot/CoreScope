@@ -83,6 +83,12 @@ type Server struct {
 	// bypass branch was exercised without standing up a full DB/store.
 	// Production code MUST leave this nil. #1483 follow-up.
 	computeNeighborGraphResponseFn func(minCount int, minScore float64, region, role string) NeighborGraphResponse
+
+	// Per-server state for /api/nodes/{pk}/reach: TTL cache + singleflight
+	// + cached neighbor_edges degree snapshot. Lives on *Server (not as
+	// package globals) so multiple instances don't share observable
+	// state. Initialised lazily on first use; see node_reach.go.
+	reach reachState
 }
 
 // PerfStats tracks request performance.
@@ -238,6 +244,10 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/nodes/{pubkey}/clock-skew", s.handleNodeClockSkew).Methods("GET")
 	r.HandleFunc("/api/observers/clock-skew", s.handleObserverClockSkew).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/neighbors", s.handleNodeNeighbors).Methods("GET")
+	// Keep specific sub-routes (…/reach) registered BEFORE the catch-all
+	// /api/nodes/{pubkey} — mux matches in registration order, so reordering
+	// this below the catch-all would shadow it and break the route.
+	r.HandleFunc("/api/nodes/{pubkey}/reach", s.handleNodeReach).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}", s.handleNodeDetail).Methods("GET")
 	r.HandleFunc("/api/nodes", s.handleNodes).Methods("GET")
 
