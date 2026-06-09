@@ -373,7 +373,16 @@ func (s *Server) handleNodeReach(w http.ResponseWriter, r *http.Request) {
 	}
 	days = clampDays(days)
 
-	cacheKey := pubkey + "|" + strconv.Itoa(days)
+	// cacheKey includes the blacklist generation so any mutation via
+	// SetNodeBlacklist invalidates all prior reach cache entries on the
+	// next request (#1629). Without the generation suffix a node added
+	// to the blacklist post-warm would keep being served the cached
+	// non-blacklisted response until the TTL expires.
+	var gen uint64
+	if s.cfg != nil {
+		gen = s.cfg.BlacklistGeneration()
+	}
+	cacheKey := pubkey + "|" + strconv.Itoa(days) + "|g" + strconv.FormatUint(gen, 10)
 	if raw, ok := s.reachCacheGet(cacheKey); ok {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(raw)

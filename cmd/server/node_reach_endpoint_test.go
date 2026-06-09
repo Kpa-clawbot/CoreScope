@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -178,9 +179,11 @@ func TestNodeReach_AttributionAndCacheHit(t *testing.T) {
 		t.Errorf("expected they_hear≥1 for neighbour B, links=%+v", resp.Links)
 	}
 
-	// Cache hit: the key must now be populated and a second request must 200.
-	if _, ok := srv.reachCacheGet(n + "|30"); !ok {
-		t.Fatalf("expected reach response to be cached under %q", n+"|30")
+	// Cache hit: the key (now generation-suffixed, #1629) must be populated
+	// and a second request must 200.
+	wantKey := n + "|30|g" + strconv.FormatUint(srv.cfg.BlacklistGeneration(), 10)
+	if _, ok := srv.reachCacheGet(wantKey); !ok {
+		t.Fatalf("expected reach response to be cached under %q", wantKey)
 	}
 	rr2 := serveReach(srv, "/api/nodes/"+n+"/reach?days=30")
 	if rr2.Code != http.StatusOK || rr2.Body.String() != rr.Body.String() {
