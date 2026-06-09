@@ -300,6 +300,14 @@ func (s *Server) reachCacheGet(key string) ([]byte, bool) {
 	return e.raw, true
 }
 
+// reachCacheLen returns the current entry count in the reach response cache.
+// Test helper — exposes the size without leaking the internal mutex/map.
+func (s *Server) reachCacheLen() int {
+	s.reach.cacheMu.RLock()
+	defer s.reach.cacheMu.RUnlock()
+	return len(s.reach.cache)
+}
+
 // isHexPubkey reports whether s is a full 64-char lowercase-hex public key.
 // The handler lowercases input first, so we only accept [0-9a-f].
 func isHexPubkey(s string) bool {
