@@ -6064,19 +6064,19 @@ func (s *PacketStore) logSchemaDegradationOnce(msg string) {
 }
 
 func (s *PacketStore) getAllNodes() []nodeInfo {
-	// Schema probe: try richest → leanest. Logs a one-shot warning when we
-	// fall back to a thinner schema so operators see that a column is
-	// missing and the new tiebreak features are degraded. See #1197
-	// (adversarial r1 #10).
-	// Try richest → leanest. first_seen was added (#1627 r3) so callers like
-	// /api/nodes/{pk}/reach can avoid a per-request single-row SELECT; we
-	// fold it into the cached load (see getCachedNodesAndPM, 30s TTL) so
+	// Schema probe: try richest → leanest. Logs a one-shot warning at each
+	// rung when we fall back to a thinner schema so operators see that a
+	// column is missing and the new tiebreak features are degraded. See
+	// #1197 (adversarial r1 #10). first_seen was added (#1627 r3) so callers
+	// like /api/nodes/{pk}/reach can avoid a per-request single-row SELECT;
+	// we fold it into the cached load (see getCachedNodesAndPM, 30s TTL) so
 	// the 4 buildNodeInfoMap call sites don't each pay for a fresh scan.
 	rows, err := s.db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen, COALESCE(advert_count, 0), COALESCE(first_seen, '') FROM nodes")
 	hasLastSeen := true
 	hasAdvertCount := true
 	hasFirstSeen := true
 	if err != nil {
+		s.logSchemaDegradationOnce("nodes.first_seen missing — buildNodeInfoMap will not populate FirstSeen for /api/nodes/{pk}/reach and friends")
 		hasFirstSeen = false
 		rows, err = s.db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen, COALESCE(advert_count, 0) FROM nodes")
 		if err != nil {
