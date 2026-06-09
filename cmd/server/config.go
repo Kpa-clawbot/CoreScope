@@ -655,6 +655,19 @@ func (c *Config) blacklistSet() map[string]bool {
 	return c.blacklistSetCached
 }
 
+// SetNodeBlacklist replaces the in-memory NodeBlacklist with pks.
+//
+// STUB (#1629 red commit): assigns the slice but does NOT reset the
+// sync.Once-cached set or bump any generation, so IsBlacklisted will keep
+// returning the pre-mutation answer and the reach response cache will keep
+// serving stale entries. Real implementation in the follow-up green commit.
+func (c *Config) SetNodeBlacklist(pks []string) {
+	if c == nil {
+		return
+	}
+	c.NodeBlacklist = pks
+}
+
 // IsBlacklisted returns true if the given public key is in the nodeBlacklist.
 func (c *Config) IsBlacklisted(pubkey string) bool {
 	if c == nil || len(c.NodeBlacklist) == 0 {
