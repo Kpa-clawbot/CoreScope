@@ -525,3 +525,77 @@ func TestBuildNodeInfoMap_ObserverEnrichment(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildNodeInfoMap_FirstSeenIsCached asserts the regression introduced by
+// #1627 r3 stays fixed: the per-pubkey first_seen field MUST come from the
+// already-30s-cached getCachedNodesAndPM path, not from a fresh uncached
+// `SELECT … FROM nodes` scan on every call.
+//
+// Method (no DB-driver wrapper needed): mutate the underlying SQLite file's
+// first_seen via a separate rw connection between two consecutive calls to
+// buildNodeInfoMap(). If first_seen is read fresh on every call (the
+// regression), the second call sees the new value. If folded into the
+// existing 30s node cache, both calls return the original value — same as
+// every other nodeInfo field that comes from getAllNodes().
+func TestBuildNodeInfoMap_FirstSeenIsCached(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := tmpDir + "/test.db"
+
+	// Seed via rw connection.
+	rw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		"CREATE TABLE nodes (public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL, last_seen TEXT, first_seen TEXT, advert_count INTEGER)",
+		"CREATE TABLE observers (id TEXT, name TEXT, iata TEXT)",
+		"INSERT INTO nodes VALUES ('AAAA1111', 'Repeater-1', 'repeater', 0, 0, '', '2024-01-01T00:00:00Z', 0)",
+	} {
+		if _, err := rw.Exec(stmt); err != nil {
+			t.Fatalf("seed exec %q: %v", stmt, err)
+		}
+	}
+
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.conn.Close()
+
+	store := NewPacketStore(db, nil)
+	store.Load()
+
+	srv := &Server{
+		db:        db,
+		store:     store,
+		perfStats: NewPerfStats(),
+	}
+
+	// Call 1: warm cache and record observed first_seen.
+	m1 := srv.buildNodeInfoMap()
+	first1 := m1["aaaa1111"].FirstSeen
+	if first1 != "2024-01-01T00:00:00Z" {
+		t.Fatalf("setup: expected first_seen=2024-01-01T00:00:00Z, got %q", first1)
+	}
+
+	// Mutate first_seen out-of-band via the rw connection. Any code path
+	// that re-reads first_seen from disk (uncached) will see this new
+	// value; a path that folds first_seen into the 30s node cache will
+	// not, because the cache is well under 30s old.
+	if _, err := rw.Exec("UPDATE nodes SET first_seen='2099-12-31T23:59:59Z' WHERE public_key='AAAA1111'"); err != nil {
+		t.Fatalf("mutate: %v", err)
+	}
+	if err := rw.Close(); err != nil {
+		t.Fatalf("close rw: %v", err)
+	}
+
+	// Call 2: should match call 1 if first_seen is cached.
+	m2 := srv.buildNodeInfoMap()
+	first2 := m2["aaaa1111"].FirstSeen
+	if first2 != first1 {
+		t.Errorf("buildNodeInfoMap re-scanned nodes.first_seen uncached (#1627 r3 regression): "+
+			"call 1 saw %q, call 2 saw %q after out-of-band UPDATE; expected both calls to return "+
+			"the cached value because getCachedNodesAndPM has a 30s TTL",
+			first1, first2)
+	}
+}
