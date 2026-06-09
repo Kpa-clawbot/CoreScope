@@ -1,17 +1,17 @@
 /**
- * E2E: the Map view must paginate /api/nodes past the server's 500-row cap.
+ * E2E: the Map view must paginate /api/nodes past the server's per-request cap.
  *
  * Bug (this PR): map.js issued a single `/api/nodes?limit=10000` fetch. The
- * server (v3.8.3 / PR #1540 DoS guard) clamps ?limit to 500 and orders by
- * last_seen DESC, so on >500-node meshes the map silently dropped every node
- * whose last self-advert fell outside the top 500 — even ones relaying
- * constantly. The node still appeared in the (paginated, #1606) Nodes list but
- * vanished from the map.
+ * server clamps ?limit to listLimits.nodesMax (default 2000; originally 500 in
+ * PR #1540) and orders by last_seen DESC, so on a mesh larger than the cap the
+ * map silently dropped every node whose last self-advert fell outside the top
+ * window — even ones relaying constantly. The node still appeared in the
+ * (paginated, #1606) Nodes list but vanished from the map.
  *
- * This test mocks /api/nodes with a 500-per-page server cap and a 501st node
- * ("PAGE2 RP") reachable only on the second page. After the map loads, the
- * app's node set (window.__mc_nodes, populated by map.js loadNodes() →
- * fetchAllNodes()) must contain all 501 nodes including the page-2 node, and a
+ * This test mocks /api/nodes with a 500-per-page cap (the client page size) and
+ * a 501st node ("PAGE2 RP") reachable only on the second page. After the map
+ * loads, the app's node set (window.__mc_nodes, populated by map.js loadNodes()
+ * → fetchAllNodes()) must contain all 501 nodes including the page-2 node, and a
  * marker for it must exist on the map. Pre-fix, __mc_nodes would hold 500 and
  * the page-2 node would be absent.
  *
@@ -25,7 +25,7 @@
 const { chromium } = require('playwright');
 
 const BASE = process.env.BASE_URL || 'http://localhost:13581';
-const PAGE_CAP = 500;          // mirrors the real server's ?limit clamp
+const PAGE_CAP = 500;          // client page size; a node sits past it on page 2
 const PAGE2_KEY = 'page2deadbeef00000000000000000000000000000000000000000000000beef02';
 const PAGE2_NAME = 'PAGE2 RP';
 
@@ -95,7 +95,7 @@ function buildFixture() {
         contentType: 'application/json',
         body: JSON.stringify({
           nodes: slice,
-          total: slice.length, // server emits a clamped/unreliable total
+          total: slice.length, // deliberately wrong per-page total; the helper must ignore it
           counts: { repeaters: fixture.length, rooms: 0, companions: 0, sensors: 0 },
         }),
       });

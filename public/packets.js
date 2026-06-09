@@ -911,7 +911,11 @@
           observers: obsData.observers || obsData || [],
           iataCoords: coordData.coords || {},
         });
-      } catch {}
+      } catch (e) {
+        // Non-fatal: hops will render as unresolved hex prefixes until a later
+        // call succeeds. Log so a paginated /api/nodes failure isn't silent.
+        console.warn('[packets] HopResolver init failed:', e);
+      }
     }
   }
 

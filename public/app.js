@@ -131,18 +131,24 @@ async function api(path, { ttl = 0, bust = false } = {}) {
 }
 
 // Fetch the COMPLETE /api/nodes set, transparently paging around the server's
-// 500-row per-request cap (the v3.8.3 / PR #1540 DoS guard). A single ?limit=N
-// fetch silently truncates to the top 500 rows by last_seen DESC, so on
-// deployments with >500 nodes every node-list consumer (map, live, analytics,
-// packets, area-map) loses the older-advert tail — a node that relays
-// constantly but last self-advertised hours ago drops off the map even though
-// it is plainly alive. #1606 fixed this for the Nodes page; this helper
-// generalizes the same loop for all callers.
+// per-request row cap. /api/nodes clamps ?limit to `listLimits.nodesMax`
+// (default 2000, operator-configurable; originally a hard 500 in PR #1540,
+// raised/made configurable in PR #1589). A single ?limit=N fetch therefore
+// silently truncates to the top nodesMax rows by last_seen DESC, so on a mesh
+// with more nodes than that cap every node-list consumer (map, live,
+// analytics, packets, area-map) loses the older-advert tail — a node that
+// relays constantly but last self-advertised hours ago drops off the map even
+// though it is plainly alive. #1606 fixed this for the Nodes page; this helper
+// generalizes the same loop for all callers, using a fixed client page size
+// well under the server cap.
 //
 // extraQuery: query fragment appended after the paged limit/offset, each piece
 //   already '&'-prefixed exactly as callers build it today
 //   (e.g. '&lastHeard=30d&area=x', '&sortBy=lastSeen&region=y'); pass '' for none.
-// Returns { nodes, counts, total } with counts/total taken from the first page.
+// safetyCap: hard ceiling on BOTH pages fetched and nodes returned — the result
+//   is sliced to it (callers like live.js pass their render ceiling here).
+// Returns { nodes, counts, total }: counts is from the first page; total is the
+//   real deduped/capped node count (NOT the server's per-query `total`).
 async function fetchAllNodes(extraQuery = '', { ttl = 0, pageSize = 500, safetyCap = 10000 } = {}) {
   const accumulated = [];
   let counts = {};
@@ -152,21 +158,24 @@ async function fetchAllNodes(extraQuery = '', { ttl = 0, pageSize = 500, safetyC
       : (Array.isArray(data) ? data : []);
     accumulated.push.apply(accumulated, page);
     if (offset === 0) counts = (data && data.counts) || {};
-    // Canonical stop: a short page is the end. The server's `total` is
-    // unreliable — it is clamped to the page size and overwritten with the
-    // filtered length under area/region filters — so we never loop on it,
-    // nor surface it. See #1606.
+    // Canonical stop: a short page is the end. The server's `total` is a real
+    // COUNT(*) for the query, but the handler overwrites it with the filtered
+    // length under area/geo/blacklist filtering — so we never loop on it, nor
+    // surface it; a short page is the reliable end-of-data signal. See #1606.
     if (page.length < pageSize) break;
   }
-  // Dedup by public_key: concurrent ingest can shift the last_seen DESC window
-  // between pages, repeating a row across a page boundary.
+  // Dedup by public_key: the sort window (last_seen DESC by default) can shift
+  // under concurrent ingest, repeating a row across a page boundary. Rows
+  // missing a public_key get a unique synthetic key so they are NOT collapsed.
   const seen = new Map();
   for (let i = 0; i < accumulated.length; i++) {
-    seen.set(accumulated[i].public_key, accumulated[i]);
+    const n = accumulated[i];
+    seen.set((n && n.public_key) || ('__nokey' + i), n);
   }
-  const nodes = Array.from(seen.values());
-  // `total` is the real, deduped node count — NOT the server's clamped
-  // per-page total (consumers like analytics.js display it as "N nodes").
+  // Enforce safetyCap as a real node-count ceiling (the page loop only bounds
+  // it to the next pageSize multiple), so e.g. live.js's LIVE_MAP_MAX_NODES is
+  // honored exactly rather than overshooting by up to pageSize-1.
+  const nodes = Array.from(seen.values()).slice(0, safetyCap);
   return { nodes, counts, total: nodes.length };
 }
 

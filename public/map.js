@@ -1216,8 +1216,9 @@
       try { REGION_NAMES = await api('/config/regions', { ttl: 3600 }); } catch {}
 
       const aqs = AreaFilter.areaQueryString();
-      // Paginate past the server's 500-row /api/nodes cap so actively-relaying
-      // repeaters that last advertised hours ago still appear (#1606 class).
+      // Paginate past the server's per-request node cap (listLimits.nodesMax)
+      // so actively-relaying repeaters that last advertised hours ago still
+      // appear instead of being truncated by the top-N window. See fetchAllNodes.
       const data = await fetchAllNodes(`&lastHeard=${filters.lastHeard}${aqs}`, { ttl: CLIENT_TTL.nodeList });
       nodes = data.nodes || [];
 

@@ -2587,9 +2587,10 @@
         nodeMarkers = {};
         nodeData = {};
       }
-      // Paginate past the server's 500-row /api/nodes cap (#1606 class) while
-      // still honoring the configured LIVE_MAP_MAX_NODES ceiling so the live
-      // map doesn't unboundedly render markers on large meshes.
+      // Paginate past the server's per-request node cap (listLimits.nodesMax)
+      // so the live map isn't truncated to the top-N by advert. LIVE_MAP_MAX_NODES
+      // is passed as safetyCap, which fetchAllNodes enforces as a hard ceiling on
+      // returned nodes — so the live map never renders more than the configured max.
       const { nodes: list } = await fetchAllNodes(`${beforeQs}${aqs}${rqs}`, {
         safetyCap: window.LIVE_MAP_MAX_NODES || 10000,
       });

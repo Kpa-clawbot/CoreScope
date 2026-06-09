@@ -224,21 +224,24 @@ function escapeHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-// Paginate past the server's 500-row /api/nodes cap (#1606 class). This page is
-// embeddable cross-origin via baseUrl, so it can't use app.js's fetchAllNodes;
-// the loop is inlined. extra: query fragment '&'-prefixed (e.g. '&area=x').
+// Paginate past the server's per-request node cap (listLimits.nodesMax) so the
+// full node set is surfaced. This page is embeddable cross-origin via baseUrl,
+// so it can't use app.js's fetchAllNodes; the loop is inlined. extra: query
+// fragment '&'-prefixed (e.g. '&area=x'). Throws on a non-OK response so callers
+// surface the error instead of silently rendering a truncated, complete-looking set.
 async function fetchAllNodesPaged(extra) {
   const PAGE = 500, CAP = 10000, out = [];
   for (let off = 0; off < CAP; off += PAGE) {
     const r = await fetch(`${baseUrl}/api/nodes?limit=${PAGE}&offset=${off}${extra}`);
-    if (!r.ok) break;
+    if (!r.ok) throw new Error(`/api/nodes ${r.status} at offset ${off}`);
     const d = await r.json();
     const page = Array.isArray(d) ? d : (d.nodes || []);
     out.push.apply(out, page);
     if (page.length < PAGE) break;
   }
+  // Dedup by public_key; rows missing one get a unique key so they aren't collapsed.
   const seen = new Map();
-  out.forEach(n => seen.set(n.public_key, n));
+  out.forEach((n, i) => seen.set((n && n.public_key) || ('__nokey' + i), n));
   return Array.from(seen.values());
 }
 
@@ -252,7 +255,7 @@ async function loadAreaNodes(areaKey, color, group) {
         ${escapeHtml(n.public_key?.slice(0,16) || '')}…<br>GPS: ${n.lat.toFixed(5)}, ${n.lon.toFixed(5)}<br><em>${escapeHtml(areaKey)}</em></div>`);
       group.addLayer(m);
     });
-  } catch(_) {}
+  } catch (e) { console.error('loadAreaNodes failed for', areaKey, e); }
 }
 
 function buildNodeLayer() {
