@@ -546,6 +546,7 @@ func TestBuildNodeInfoMap_FirstSeenIsCached(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer rw.Close()
 	for _, stmt := range []string{
 		"CREATE TABLE nodes (public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL, last_seen TEXT, first_seen TEXT, advert_count INTEGER)",
 		"CREATE TABLE observers (id TEXT, name TEXT, iata TEXT)",
@@ -584,9 +585,6 @@ func TestBuildNodeInfoMap_FirstSeenIsCached(t *testing.T) {
 	// not, because the cache is well under 30s old.
 	if _, err := rw.Exec("UPDATE nodes SET first_seen='2099-12-31T23:59:59Z' WHERE public_key='AAAA1111'"); err != nil {
 		t.Fatalf("mutate: %v", err)
-	}
-	if err := rw.Close(); err != nil {
-		t.Fatalf("close rw: %v", err)
 	}
 
 	// Call 2: should match call 1 if first_seen is cached.

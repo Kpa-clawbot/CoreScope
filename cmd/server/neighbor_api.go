@@ -429,12 +429,12 @@ func (s *Server) buildNodeInfoMap() map[string]nodeInfo {
 	if s.store == nil {
 		return nil
 	}
+	// FirstSeen is folded into getAllNodes (and therefore into the 30s
+	// node cache) so callers like /api/nodes/{pk}/reach get the field
+	// without a per-request SELECT — fixes #1627 r3 regression.
 	nodes, _ := s.store.getCachedNodesAndPM()
 	m := make(map[string]nodeInfo, len(nodes))
 	for _, n := range nodes {
-		// FirstSeen is folded into getAllNodes (and therefore into the 30s
-		// node cache) so callers like /api/nodes/{pk}/reach get the field
-		// without a per-request SELECT — fixes #1627 r3 regression.
 		m[strings.ToLower(n.PublicKey)] = n
 	}
 
