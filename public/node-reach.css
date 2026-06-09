@@ -53,3 +53,22 @@
   .nq-map { width:var(--nq-print-width) !important; height:300px; }
   .nq-table { font-size:10px; }
 }
+
+/* #1630 — narrow-viewport (phone) layout.
+   At ≤480px the 420px map dominates and the 6-col link table h-scrolls.
+   Shrink the map to 280px so stats land above the fold, and collapse the
+   two lowest-signal columns (`they hear us` and `distance (km)`) — the
+   `we hear` value plus the colour-coded `bottleneck` tier preserve the
+   asymmetry signal. Desktop layout (≥481px) is untouched. */
+@media (max-width: 480px) {
+  .nq-map { height:280px; }
+  /* col 4 = `they hear us`, col 6 = `distance (km)` (see node-reach.js
+     thead/tbody emit order). Hide on phones to fit a 360–393px viewport
+     without horizontal scroll. */
+  .nq-table th:nth-child(4),
+  .nq-table td:nth-child(4),
+  .nq-table th:nth-child(6),
+  .nq-table td:nth-child(6) { display:none; }
+  /* Tighter cell padding so the remaining four columns breathe. */
+  .nq-table th, .nq-table td { padding:4px 6px; }
+}

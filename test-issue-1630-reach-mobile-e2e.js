@@ -77,7 +77,7 @@ async function measure(page) {
 }
 
 async function run() {
-  const launchOpts = { args: ['--no-sandbox'] };
+  const launchOpts = { args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'] };
   if (process.env.CHROMIUM_PATH) launchOpts.executablePath = process.env.CHROMIUM_PATH;
   let browser;
   try {
