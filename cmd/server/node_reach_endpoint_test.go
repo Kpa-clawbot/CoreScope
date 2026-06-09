@@ -222,6 +222,21 @@ func TestNodeReach_ShapeAndClamp(t *testing.T) {
 	const pk = "01fa326b475800a31105abcb9e4cac000b3e5d9e2b5ba0739981ce8d5f3a6754"
 	mustExecDB(t, db, `INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
 		VALUES ('`+pk+`', 'BE-Test', 'repeater', 50.9, 5.4, '2026-06-07T00:00:00Z', '2026-06-01T00:00:00Z', 3)`)
+	// scanReachRows joins observations on observer_idx; the v2 schema's
+	// observations table lacks that column. Previously the scan error was
+	// swallowed (issue #1631) and the test still saw empty arrays. With the
+	// fix that returns 500, we rebuild observations to the observer_idx
+	// shape (empty — no rows needed for shape/clamp assertions).
+	mustExecDB(t, db, `DROP TABLE observations`)
+	// PREFLIGHT: async=true reason="test-only in-memory schema rebuild; not a production migration"
+	mustExecDB(t, db, `CREATE TABLE observations (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		transmission_id INTEGER,
+		observer_idx INTEGER,
+		snr REAL,
+		path_json TEXT,
+		timestamp INTEGER
+	)`)
 
 	cfg := &Config{}
 	srv := &Server{store: newTestStoreWithDB(t, db, cfg), db: db, cfg: cfg, perfStats: NewPerfStats()}

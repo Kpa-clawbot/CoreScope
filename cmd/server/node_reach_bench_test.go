@@ -77,7 +77,7 @@ func BenchmarkNodeReachScan(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				rows := srv.scanReachRows(context.Background(), tokens, 0)
+				rows, _ := srv.scanReachRows(context.Background(), tokens, 0)
 				if len(rows) == 0 {
 					b.Fatal("expected rows")
 				}
@@ -95,7 +95,7 @@ func BenchmarkNodeReachScanMixed(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		rows := srv.scanReachRows(context.Background(), tokens, 0)
+		rows, _ := srv.scanReachRows(context.Background(), tokens, 0)
 		if len(rows) == 0 {
 			b.Fatal("expected rows")
 		}
@@ -113,7 +113,7 @@ func BenchmarkNodeReachScanLowerCase(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		rows := srv.scanReachRows(context.Background(), tokens, 0)
+		rows, _ := srv.scanReachRows(context.Background(), tokens, 0)
 		if len(rows) == 0 {
 			b.Fatal("expected rows")
 		}
@@ -127,7 +127,7 @@ func BenchmarkNodeReachAttribute(b *testing.B) {
 	tokens := map[string]bool{"01FA": true}
 	db := benchReachDB(b, 100000, 1, false)
 	srv := &Server{db: db}
-	rows := srv.scanReachRows(context.Background(), tokens, 0)
+	rows, _ := srv.scanReachRows(context.Background(), tokens, 0)
 	if len(rows) == 0 {
 		b.Fatal("expected rows")
 	}
@@ -147,5 +147,29 @@ func BenchmarkNodeReachAttribute(b *testing.B) {
 		if d.relay == 0 {
 			b.Fatal("expected relay hits")
 		}
+	}
+}
+
+// TestScanReachRows_ErrorReturn anchors the new ([]pathRow, error) signature
+// at the unit-level (issue #1631). Passing a Server whose db.conn is closed
+// must surface an error, not a swallowed nil. Lives in this file because
+// the bench callers in the same file rely on the same signature.
+func TestScanReachRows_ErrorReturn(t *testing.T) {
+	conn, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	// PREFLIGHT: async=true reason="test-only in-memory scratch schema, immediately closed"
+	if _, err := conn.Exec(`CREATE TABLE observations (id INTEGER); CREATE TABLE transmissions (id INTEGER); CREATE TABLE observers (rowid INTEGER, id TEXT)`); err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+	conn.Close() // force QueryContext to fail
+	srv := &Server{db: &DB{conn: conn}}
+	rows, err := srv.scanReachRows(context.Background(), map[string]bool{"01FA": true}, 0)
+	if err == nil {
+		t.Fatalf("expected error from closed DB, got nil (rows=%d)", len(rows))
+	}
+	if rows != nil {
+		t.Fatalf("expected nil rows on error, got %d", len(rows))
 	}
 }

@@ -179,7 +179,7 @@ func TestScanReachRows_CapTruncates(t *testing.T) {
 	db := newReachScanTestDB(t)
 	defer db.conn.Close()
 	srv := &Server{db: db}
-	rows := srv.scanReachRows(context.Background(), map[string]bool{"01FA": true}, 0)
+	rows, _ := srv.scanReachRows(context.Background(), map[string]bool{"01FA": true}, 0)
 	if len(rows) != 1 {
 		t.Fatalf("scan must hard-cap at reachScanRowLimit (1), got %d rows", len(rows))
 	}
@@ -264,7 +264,7 @@ func TestScanReachRows_DecodesRows(t *testing.T) {
 	db := newReachScanTestDB(t)
 	defer db.conn.Close()
 	srv := &Server{db: db}
-	rows := srv.scanReachRows(context.Background(), map[string]bool{"01FA": true}, 0)
+	rows, _ := srv.scanReachRows(context.Background(), map[string]bool{"01FA": true}, 0)
 	if len(rows) != 2 {
 		t.Fatalf("expected 2 matching rows (non-matching path excluded), got %d", len(rows))
 	}

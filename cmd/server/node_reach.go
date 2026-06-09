@@ -388,7 +388,13 @@ func (s *Server) handleNodeReach(w http.ResponseWriter, r *http.Request) {
 		if raw, ok := s.reachCacheGet(cacheKey); ok {
 			return raw, nil
 		}
-		resp, ok := s.computeNodeReach(r.Context(), pubkey, days)
+		resp, ok, cErr := s.computeNodeReach(r.Context(), pubkey, days)
+		if cErr != nil {
+			// Real backend failure (e.g. DB scan exploded) — propagate so the
+			// caller renders 500 instead of the misleading empty-reach
+			// response. Do NOT cache. (#1631)
+			return nil, cErr
+		}
 		if !ok {
 			return []byte(nil), nil
 		}
@@ -413,15 +419,18 @@ func (s *Server) handleNodeReach(w http.ResponseWriter, r *http.Request) {
 	w.Write(raw)
 }
 
-// computeNodeReach does the read-only scan + assembly. ok=false → 404.
-func (s *Server) computeNodeReach(ctx context.Context, pubkey string, days int) (NodeReachResponse, bool) {
+// computeNodeReach does the read-only scan + assembly. ok=false → 404
+// (target node not present / inputs unavailable). A non-nil error signals a
+// real backend failure (e.g. DB scan exploded) — caller should render 500,
+// not 404 (issue #1631).
+func (s *Server) computeNodeReach(ctx context.Context, pubkey string, days int) (NodeReachResponse, bool, error) {
 	if s.store == nil || s.db == nil || s.db.conn == nil {
-		return NodeReachResponse{}, false
+		return NodeReachResponse{}, false, nil
 	}
 	nodeMap := s.buildNodeInfoMap()
 	self, found := nodeMap[pubkey]
 	if !found {
-		return NodeReachResponse{}, false
+		return NodeReachResponse{}, false, nil
 	}
 	_, pm := s.store.getCachedNodesAndPM()
 	tokens := reliableTokens(pubkey, pm)
@@ -431,7 +440,10 @@ func (s *Server) computeNodeReach(ctx context.Context, pubkey string, days int) 
 
 	var d dirCounts
 	if len(tokens) > 0 {
-		rows := s.scanReachRows(ctx, tokens, sinceEpoch)
+		rows, err := s.scanReachRows(ctx, tokens, sinceEpoch)
+		if err != nil {
+			return NodeReachResponse{}, false, err
+		}
 		d = attributeDirections(rows, tokens, pubkey, newResolver(pm))
 	} else {
 		d = dirCounts{we: map[string]int{}, they: map[string]int{}, obs: map[string]obsAgg{}}
@@ -520,7 +532,7 @@ func (s *Server) computeNodeReach(ctx context.Context, pubkey string, days int) 
 		},
 		DirectObservers: directObs,
 		Links:           links,
-	}, true
+	}, true, nil
 }
 
 // --- neighbor-degree snapshot ---------------------------------------------
@@ -602,9 +614,14 @@ func (s *Server) getDegreeSnapshot(ctx context.Context) *degreeSnapshot {
 // id and originator pubkey are lowercased in SQL (not per row), the path slice
 // is uppercased in place (no second allocation), and the result is hard-capped
 // at reachScanRowLimit.
-func (s *Server) scanReachRows(ctx context.Context, tokens map[string]bool, sinceEpoch int64) []pathRow {
+//
+// Returns a non-nil error if the underlying QueryContext or rows.Err() fails;
+// callers MUST treat that as a 500 (issue #1631 — previously the error was
+// swallowed, surfacing a transient DB failure as a misleading 404 / empty
+// reach to operators).
+func (s *Server) scanReachRows(ctx context.Context, tokens map[string]bool, sinceEpoch int64) ([]pathRow, error) {
 	if len(tokens) == 0 {
-		return nil // defensive: an empty LIKE chain would render `AND ()` (SQL error)
+		return nil, nil // defensive: an empty LIKE chain would render `AND ()` (SQL error)
 	}
 	likes := make([]string, 0, len(tokens))
 	args := []interface{}{sinceEpoch}
@@ -630,7 +647,7 @@ func (s *Server) scanReachRows(ctx context.Context, tokens map[string]bool, sinc
 	rows, err := s.db.conn.QueryContext(ctx, q, args...)
 	if err != nil {
 		log.Printf("[reach] scan query failed: %v", err)
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
 	// Modest preallocation: most nodes return far fewer than the cap, so seed a
@@ -660,5 +677,9 @@ func (s *Server) scanReachRows(ctx context.Context, tokens map[string]bool, sinc
 	if skipped > 0 {
 		log.Printf("[reach] scan discarded %d malformed/empty rows (kept %d)", skipped, len(out))
 	}
-	return out
+	if err := rows.Err(); err != nil {
+		log.Printf("[reach] scan rows iteration failed: %v", err)
+		return nil, err
+	}
+	return out, nil
 }
