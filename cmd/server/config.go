@@ -48,19 +48,18 @@ type Config struct {
 	// operator refuses to fix.
 	NodeBlacklist []string `json:"nodeBlacklist"`
 
-	// blacklistSetCached is the lazily-built set version of NodeBlacklist.
-	blacklistSetCached map[string]bool
-	blacklistOnce      sync.Once
-	// blacklistMu guards NodeBlacklist + blacklistSetCached on writes via
-	// SetNodeBlacklist. Read path uses the sync.Once-cached map directly.
-	blacklistMu sync.RWMutex
+	// blacklistSetPtr holds the active lookup set as an atomic pointer.
+	// Read path is a single atomic load — no mutex, no sync.Once. Writers
+	// always replace the whole map; readers see either the old or the new
+	// map as a single value, never a partially-built one.
+	blacklistSetPtr atomic.Pointer[map[string]bool]
 
 	// blacklistGen is a monotonic generation counter bumped every time the
 	// blacklist mutates via SetNodeBlacklist. Callers that cache responses
 	// keyed by pubkey (e.g. /api/nodes/{pubkey}/reach, #1629) include this
 	// generation in their cache key so any blacklist change naturally
-	// invalidates prior entries on the next request. Reads use atomic.LoadUint64.
-	blacklistGen uint64
+	// invalidates prior entries on the next request.
+	blacklistGen atomic.Uint64
 
 	Branding   map[string]interface{} `json:"branding"`
 	Theme      map[string]interface{} `json:"theme"`
@@ -647,38 +646,24 @@ func (c *Config) LiveMapMaxNodes() int {
 	return v
 }
 
-// blacklistSet lazily builds and caches the nodeBlacklist as a set for O(1) lookups.
-// Uses sync.Once for the FIRST build (lock-free fast path on the hot read
-// path). SetNodeBlacklist resets the Once + cache under the same mutex so
-// subsequent mutations are visible (#1629).
-func (c *Config) blacklistSet() map[string]bool {
-	c.blacklistOnce.Do(func() {
-		c.rebuildBlacklistSetLocked()
-	})
-	c.blacklistMu.RLock()
-	m := c.blacklistSetCached
-	c.blacklistMu.RUnlock()
-	return m
-}
-
-// rebuildBlacklistSetLocked recomputes blacklistSetCached from NodeBlacklist.
-// Holds blacklistMu for write; safe to call from sync.Once first-build path
-// and from SetNodeBlacklist on mutation.
-func (c *Config) rebuildBlacklistSetLocked() {
-	c.blacklistMu.Lock()
-	defer c.blacklistMu.Unlock()
-	if len(c.NodeBlacklist) == 0 {
-		c.blacklistSetCached = nil
-		return
+// buildBlacklistSet recomputes the lookup set from pks and returns it.
+// Empty/whitespace-only entries are skipped. Keys are lowercased + trimmed.
+// Returns nil for an empty effective set so callers can `len(m) == 0` short-circuit.
+func buildBlacklistSet(pks []string) map[string]bool {
+	if len(pks) == 0 {
+		return nil
 	}
-	m := make(map[string]bool, len(c.NodeBlacklist))
-	for _, pk := range c.NodeBlacklist {
+	m := make(map[string]bool, len(pks))
+	for _, pk := range pks {
 		trimmed := strings.ToLower(strings.TrimSpace(pk))
 		if trimmed != "" {
 			m[trimmed] = true
 		}
 	}
-	c.blacklistSetCached = m
+	if len(m) == 0 {
+		return nil
+	}
+	return m
 }
 
 // SetNodeBlacklist atomically replaces NodeBlacklist with pks, rebuilds the
@@ -692,11 +677,10 @@ func (c *Config) SetNodeBlacklist(pks []string) {
 	// Copy so callers can mutate their slice without affecting us.
 	cp := make([]string, len(pks))
 	copy(cp, pks)
-	c.blacklistMu.Lock()
 	c.NodeBlacklist = cp
-	c.blacklistMu.Unlock()
-	c.rebuildBlacklistSetLocked()
-	atomic.AddUint64(&c.blacklistGen, 1)
+	m := buildBlacklistSet(cp)
+	c.blacklistSetPtr.Store(&m)
+	c.blacklistGen.Add(1)
 }
 
 // BlacklistGeneration returns a monotonic counter that increments on every
@@ -707,19 +691,33 @@ func (c *Config) BlacklistGeneration() uint64 {
 	if c == nil {
 		return 0
 	}
-	return atomic.LoadUint64(&c.blacklistGen)
+	return c.blacklistGen.Load()
 }
 
 // IsBlacklisted returns true if the given public key is in the nodeBlacklist.
+// Hot read path: a single atomic pointer load + map lookup. No locks, no
+// sync.Once. The in-memory set is populated either via SetNodeBlacklist or
+// lazily on first read from c.NodeBlacklist (covering the JSON-load path
+// where the setter was never called).
 func (c *Config) IsBlacklisted(pubkey string) bool {
 	if c == nil {
 		return false
 	}
-	m := c.blacklistSet()
-	if len(m) == 0 {
+	mp := c.blacklistSetPtr.Load()
+	if mp == nil {
+		// Lazy first-read materialisation from the JSON-loaded slice.
+		// CAS-style: if another goroutine wins the race, drop ours.
+		built := buildBlacklistSet(c.NodeBlacklist)
+		if c.blacklistSetPtr.CompareAndSwap(nil, &built) {
+			mp = &built
+		} else {
+			mp = c.blacklistSetPtr.Load()
+		}
+	}
+	if mp == nil || len(*mp) == 0 {
 		return false
 	}
-	return m[strings.ToLower(strings.TrimSpace(pubkey))]
+	return (*mp)[strings.ToLower(strings.TrimSpace(pubkey))]
 }
 
 // SaveGeoFilter writes the geo_filter section back to config.json on disk.
