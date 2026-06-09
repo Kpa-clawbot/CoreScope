@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -283,6 +284,13 @@ type reachState struct {
 	// simultaneous callers run the scan + attribution once, not N times.
 	sf singleflight.Group
 
+	// lastSeenBlacklistGen is the BlacklistGeneration() value that the cache
+	// was last reconciled with. When the live generation moves past this
+	// value, the cache is purged wholesale on the next request to prevent
+	// prior-gen entries from accumulating until their TTL expires (#1629
+	// round-2, adversarial #5).
+	lastSeenBlacklistGen atomic.Uint64
+
 	degreeMu   sync.Mutex
 	degreeSnap *degreeSnapshot
 }
@@ -306,6 +314,25 @@ func (s *Server) reachCacheLen() int {
 	s.reach.cacheMu.RLock()
 	defer s.reach.cacheMu.RUnlock()
 	return len(s.reach.cache)
+}
+
+// reachPurgeIfBlacklistGenChanged drops every cached entry when the live
+// blacklist generation has advanced past the cache's last-seen value. CAS
+// gates the purge so concurrent callers only do the work once per gen bump
+// (#1629 round-2, adversarial #5).
+func (s *Server) reachPurgeIfBlacklistGenChanged(gen uint64) {
+	seen := s.reach.lastSeenBlacklistGen.Load()
+	if gen == seen {
+		return
+	}
+	// CAS gates the actual purge to a single winner on a given gen bump.
+	if !s.reach.lastSeenBlacklistGen.CompareAndSwap(seen, gen) {
+		// Another goroutine already advanced (and purged). Done.
+		return
+	}
+	s.reach.cacheMu.Lock()
+	s.reach.cache = nil
+	s.reach.cacheMu.Unlock()
 }
 
 // isHexPubkey reports whether s is a full 64-char lowercase-hex public key.
@@ -390,6 +417,11 @@ func (s *Server) handleNodeReach(w http.ResponseWriter, r *http.Request) {
 	if s.cfg != nil {
 		gen = s.cfg.BlacklistGeneration()
 	}
+	// Purge prior-gen entries wholesale when the generation advances so a
+	// steady stream of operator blacklist edits cannot leak cache entries
+	// up to the TTL. Cheap: one map reset under the cache mutex, only when
+	// the gen actually moved (#1629 round-2, adversarial #5).
+	s.reachPurgeIfBlacklistGenChanged(gen)
 	cacheKey := pubkey + "|" + strconv.Itoa(days) + "|g" + strconv.FormatUint(gen, 10)
 	if raw, ok := s.reachCacheGet(cacheKey); ok {
 		w.Header().Set("Content-Type", "application/json")
