@@ -186,13 +186,14 @@ func TestScanReachRows_CapTruncates(t *testing.T) {
 }
 
 func TestReachCacheEviction_BoundedNotWiped(t *testing.T) {
-	resetReachState(t)
+	srv := &Server{}
+	resetReachState(t, srv)
 	for i := 0; i < reachCacheMax+50; i++ {
-		reachCachePut("k"+strconv.Itoa(i), []byte("x"))
+		srv.reachCachePut("k"+strconv.Itoa(i), []byte("x"))
 	}
-	reachCacheMu.RLock()
-	n := len(reachCache)
-	reachCacheMu.RUnlock()
+	srv.reach.cacheMu.RLock()
+	n := len(srv.reach.cache)
+	srv.reach.cacheMu.RUnlock()
 	// Bounded at the cap and NOT a full wipe (the old crude reset would leave 1).
 	if n != reachCacheMax {
 		t.Fatalf("cache size after overflow = %d, want %d (bounded, evict-oldest not full-wipe)", n, reachCacheMax)

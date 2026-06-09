@@ -6049,7 +6049,8 @@ type nodeInfo struct {
 	Lon              float64
 	HasGPS           bool
 	LastSeen         time.Time
-	ObservationCount int // count of advertisements/observations; used for tier-3 tiebreak in resolveWithContext
+	FirstSeen        string // RFC3339; populated by buildNodeInfoMap for callers that need it (e.g. /api/nodes/{pk}/reach)
+	ObservationCount int    // count of advertisements/observations; used for tier-3 tiebreak in resolveWithContext
 }
 
 // schemaDegradationLogged is now a PacketStore field (see type definition) so

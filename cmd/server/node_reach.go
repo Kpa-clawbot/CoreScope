@@ -57,9 +57,11 @@ type dirCounts struct {
 // token → a unique relay pubkey ("" when ambiguous/unknown → skipped). ourPK is
 // the target's own pubkey (lowercase) so self-edges are ignored.
 func attributeDirections(rows []pathRow, ourTokens map[string]bool, ourPK string, resolve func(string) string) dirCounts {
-	// Size hints: neighbour fan-out is a fraction of the row count; a /8 hint
-	// avoids most map-growth rehashing without over-allocating for small scans.
-	hint := len(rows)/8 + 1
+	// Size hint: a small constant covers typical neighbour fan-out (dozens)
+	// without over-allocating ~12.5k buckets on a 100k-row scan. Independent
+	// r2 #4: the old `len(rows)/8+1` was ~250× too large for relays with
+	// modest fan-out.
+	const hint = 64
 	d := dirCounts{
 		we:   make(map[string]int, hint),
 		they: make(map[string]int, hint),
@@ -271,21 +273,27 @@ type reachCacheEntry struct {
 	raw []byte
 }
 
-var (
-	reachCacheMu sync.RWMutex
-	reachCache   = map[string]reachCacheEntry{}
-	// reachSF dedups concurrent cold-cache requests for the same key so N
+// reachState bundles per-server reach caches. Was a set of package-level
+// globals — moved onto *Server so two Server instances (tests, future
+// per-listener) don't share observable state (Independent r2 #2).
+type reachState struct {
+	cacheMu sync.RWMutex
+	cache   map[string]reachCacheEntry
+	// sf dedups concurrent cold-cache requests for the same key so N
 	// simultaneous callers run the scan + attribution once, not N times.
-	reachSF singleflight.Group
-)
+	sf singleflight.Group
+
+	degreeMu   sync.Mutex
+	degreeSnap *degreeSnapshot
+}
 
 // reachCacheGet returns the cached marshalled JSON for key. The returned slice
 // is shared (not copied): it is treated as immutable — only ever handed to
 // w.Write — so callers MUST NOT mutate it.
-func reachCacheGet(key string) ([]byte, bool) {
-	reachCacheMu.RLock()
-	defer reachCacheMu.RUnlock()
-	e, ok := reachCache[key]
+func (s *Server) reachCacheGet(key string) ([]byte, bool) {
+	s.reach.cacheMu.RLock()
+	defer s.reach.cacheMu.RUnlock()
+	e, ok := s.reach.cache[key]
 	if !ok || time.Since(e.at) > reachCacheTTL {
 		return nil, false
 	}
@@ -307,38 +315,41 @@ func isHexPubkey(s string) bool {
 	return true
 }
 
-func reachCachePut(key string, raw []byte) {
-	reachCacheMu.Lock()
-	defer reachCacheMu.Unlock()
-	if _, exists := reachCache[key]; !exists && len(reachCache) >= reachCacheMax {
-		evictReachLocked()
+func (s *Server) reachCachePut(key string, raw []byte) {
+	s.reach.cacheMu.Lock()
+	defer s.reach.cacheMu.Unlock()
+	if s.reach.cache == nil {
+		s.reach.cache = map[string]reachCacheEntry{}
 	}
-	reachCache[key] = reachCacheEntry{at: time.Now(), raw: raw}
+	if _, exists := s.reach.cache[key]; !exists && len(s.reach.cache) >= reachCacheMax {
+		s.evictReachLocked()
+	}
+	s.reach.cache[key] = reachCacheEntry{at: time.Now(), raw: raw}
 }
 
 // evictReachLocked drops expired entries first; if still at the cap it evicts
 // the single oldest entry. Avoids the full-map wipe that thrashed every cached
-// key once the cap was reached. Caller holds reachCacheMu (write).
-func evictReachLocked() {
+// key once the cap was reached. Caller holds s.reach.cacheMu (write).
+func (s *Server) evictReachLocked() {
 	now := time.Now()
-	for k, e := range reachCache {
+	for k, e := range s.reach.cache {
 		if now.Sub(e.at) > reachCacheTTL {
-			delete(reachCache, k)
+			delete(s.reach.cache, k)
 		}
 	}
-	if len(reachCache) < reachCacheMax {
+	if len(s.reach.cache) < reachCacheMax {
 		return
 	}
 	var oldestKey string
 	var oldestAt time.Time
 	first := true
-	for k, e := range reachCache {
+	for k, e := range s.reach.cache {
 		if first || e.at.Before(oldestAt) {
 			oldestKey, oldestAt, first = k, e.at, false
 		}
 	}
 	if !first {
-		delete(reachCache, oldestKey)
+		delete(s.reach.cache, oldestKey)
 	}
 }
 
@@ -363,7 +374,7 @@ func (s *Server) handleNodeReach(w http.ResponseWriter, r *http.Request) {
 	days = clampDays(days)
 
 	cacheKey := pubkey + "|" + strconv.Itoa(days)
-	if raw, ok := reachCacheGet(cacheKey); ok {
+	if raw, ok := s.reachCacheGet(cacheKey); ok {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(raw)
 		return
@@ -373,8 +384,8 @@ func (s *Server) handleNodeReach(w http.ResponseWriter, r *http.Request) {
 	// shared computation uses the triggering request's context; a disconnect
 	// there can cancel the in-flight scan for all waiters (acceptable — the
 	// next request recomputes).
-	v, err, _ := reachSF.Do(cacheKey, func() (interface{}, error) {
-		if raw, ok := reachCacheGet(cacheKey); ok {
+	v, err, _ := s.reach.sf.Do(cacheKey, func() (interface{}, error) {
+		if raw, ok := s.reachCacheGet(cacheKey); ok {
 			return raw, nil
 		}
 		resp, ok := s.computeNodeReach(r.Context(), pubkey, days)
@@ -386,7 +397,7 @@ func (s *Server) handleNodeReach(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[reach] marshal failed for %s: %v", cacheKey, mErr)
 			return nil, mErr
 		}
-		reachCachePut(cacheKey, raw)
+		s.reachCachePut(cacheKey, raw)
 		return raw, nil
 	})
 	if err != nil {
@@ -431,14 +442,10 @@ func (s *Server) computeNodeReach(ctx context.Context, pubkey string, days int) 
 	// once per snapshotTTL, not on every cache miss.
 	degree, rank, nodesWithEdges := s.reachDegreeRank(ctx, pubkey)
 
-	// node first_seen (nodeInfo only carries last_seen; the contract wants it).
-	// pubkey is already lowercased + validated, so match the column directly to
-	// keep the public_key index usable. A missing row → empty first_seen (the
-	// node may be observer-only); only log unexpected errors.
-	var firstSeen sql.NullString
-	if err := s.db.conn.QueryRowContext(ctx, `SELECT first_seen FROM nodes WHERE public_key=?`, pubkey).Scan(&firstSeen); err != nil && err != sql.ErrNoRows {
-		log.Printf("[reach] first_seen query failed for %s: %v", pubkey, err)
-	}
+	// node first_seen comes from nodeInfo (buildNodeInfoMap folds it in via a
+	// single bulk SELECT). Missing → empty string (the node may be
+	// observer-only or pre-first_seen-schema).
+	firstSeen := self.FirstSeen
 
 	// assemble links
 	links := make([]NodeReachLink, 0, len(d.we)+len(d.they))
@@ -504,7 +511,7 @@ func (s *Server) computeNodeReach(ctx context.Context, pubkey string, days int) 
 	selfLat, selfLon := gpsPtrs(self)
 	return NodeReachResponse{
 		Node: NodeReachInfo{Pubkey: pubkey, Name: self.Name, Role: self.Role,
-			Lat: selfLat, Lon: selfLon, FirstSeen: firstSeen.String},
+			Lat: selfLat, Lon: selfLon, FirstSeen: firstSeen},
 		Window:         NodeReachWindow{Days: days, Since: since.Format(time.RFC3339)},
 		ReliableTokens: toks,
 		Importance: NodeReachImportance{
@@ -529,11 +536,6 @@ type degreeSnapshot struct {
 	sortedDesc []int          // degrees sorted descending, for rank
 }
 
-var (
-	reachDegreeMu   sync.Mutex
-	reachDegreeSnap *degreeSnapshot
-)
-
 func (s *Server) reachDegreeRank(ctx context.Context, pubkey string) (degree, rank, total int) {
 	snap := s.getDegreeSnapshot(ctx)
 	if snap == nil {
@@ -554,14 +556,14 @@ func (s *Server) reachDegreeRank(ctx context.Context, pubkey string) (degree, ra
 
 func (s *Server) getDegreeSnapshot(ctx context.Context) *degreeSnapshot {
 	// Fast path: serve a fresh snapshot under a short lock.
-	reachDegreeMu.Lock()
-	if reachDegreeSnap != nil && time.Since(reachDegreeSnap.at) < reachDegreeTTL {
-		snap := reachDegreeSnap
-		reachDegreeMu.Unlock()
+	s.reach.degreeMu.Lock()
+	if s.reach.degreeSnap != nil && time.Since(s.reach.degreeSnap.at) < reachDegreeTTL {
+		snap := s.reach.degreeSnap
+		s.reach.degreeMu.Unlock()
 		return snap
 	}
-	stale := reachDegreeSnap
-	reachDegreeMu.Unlock()
+	stale := s.reach.degreeSnap
+	s.reach.degreeMu.Unlock()
 
 	// Rebuild WITHOUT holding the lock so concurrent reach requests aren't
 	// serialized behind the aggregate query. A brief cold-start herd may run a
@@ -589,9 +591,9 @@ func (s *Server) getDegreeSnapshot(ctx context.Context) *degreeSnapshot {
 	}
 	sort.Sort(sort.Reverse(sort.IntSlice(sortedDesc)))
 	snap := &degreeSnapshot{at: time.Now(), total: len(deg), deg: deg, sortedDesc: sortedDesc}
-	reachDegreeMu.Lock()
-	reachDegreeSnap = snap
-	reachDegreeMu.Unlock()
+	s.reach.degreeMu.Lock()
+	s.reach.degreeSnap = snap
+	s.reach.degreeMu.Unlock()
 	return snap
 }
 
@@ -606,7 +608,15 @@ func (s *Server) scanReachRows(ctx context.Context, tokens map[string]bool, sinc
 	}
 	likes := make([]string, 0, len(tokens))
 	args := []interface{}{sinceEpoch}
+	// Sort tokens so the generated SQL text is byte-stable across requests
+	// with the same token set — preserves the driver's prepared-statement
+	// cache and keeps query plans reproducible (Independent r2 #3).
+	toks := make([]string, 0, len(tokens))
 	for tok := range tokens {
+		toks = append(toks, tok)
+	}
+	sort.Strings(toks)
+	for _, tok := range toks {
 		likes = append(likes, "o.path_json LIKE ?")
 		args = append(args, "%\""+tok+"\"%")
 	}

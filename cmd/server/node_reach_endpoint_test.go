@@ -25,17 +25,26 @@ func serveReach(srv *Server, path string) *httptest.ResponseRecorder {
 // pk64 pads a short hex stem to a full 64-char lowercase pubkey.
 func pk64(stem string) string { return stem + strings.Repeat("0", 64-len(stem)) }
 
-// resetReachState clears the package-level reach caches so test order cannot
+// resetReachState clears the per-server reach caches so test order cannot
 // leak observable state between handler tests (and restores after the test).
-func resetReachState(t *testing.T) {
+// Now operates on *Server (was package globals — Independent r2 #2); accepts
+// a variadic *Server so existing call sites that didn't pass one still
+// compile but the reset is a no-op (used by tests that build the Server
+// fresh and don't need state cleared).
+func resetReachState(t *testing.T, servers ...*Server) {
 	t.Helper()
 	clear := func() {
-		reachCacheMu.Lock()
-		reachCache = map[string]reachCacheEntry{}
-		reachCacheMu.Unlock()
-		reachDegreeMu.Lock()
-		reachDegreeSnap = nil
-		reachDegreeMu.Unlock()
+		for _, s := range servers {
+			if s == nil {
+				continue
+			}
+			s.reach.cacheMu.Lock()
+			s.reach.cache = map[string]reachCacheEntry{}
+			s.reach.cacheMu.Unlock()
+			s.reach.degreeMu.Lock()
+			s.reach.degreeSnap = nil
+			s.reach.degreeMu.Unlock()
+		}
 	}
 	clear()
 	t.Cleanup(clear)
@@ -170,7 +179,7 @@ func TestNodeReach_AttributionAndCacheHit(t *testing.T) {
 	}
 
 	// Cache hit: the key must now be populated and a second request must 200.
-	if _, ok := reachCacheGet(n + "|30"); !ok {
+	if _, ok := srv.reachCacheGet(n + "|30"); !ok {
 		t.Fatalf("expected reach response to be cached under %q", n+"|30")
 	}
 	rr2 := serveReach(srv, "/api/nodes/"+n+"/reach?days=30")
