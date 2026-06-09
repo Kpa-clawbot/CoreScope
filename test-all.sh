@@ -14,6 +14,7 @@ node test-packet-filter-ux.js
 node test-aging.js
 node test-issue-1065-gesture-hints-gates.js
 node test-frontend-helpers.js
+node test-fetch-all-nodes-pagination.js
 node test-url-state.js
 node test-perf-go-runtime.js
 node test-channel-psk-ux.js

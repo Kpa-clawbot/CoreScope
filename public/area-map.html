@@ -152,16 +152,11 @@ async function load() {
   document.getElementById('show-nodes').checked = false;
 
   try {
-    const [areasResp, nodesResp] = await Promise.all([
-      fetch(`${baseUrl}/api/config/areas/polygons`),
-      fetch(`${baseUrl}/api/nodes?limit=9999`)
-    ]);
+    const areasResp = await fetch(`${baseUrl}/api/config/areas/polygons`);
     if (!areasResp.ok) throw new Error(`areas/polygons: ${areasResp.status}`);
-    if (!nodesResp.ok) throw new Error(`nodes: ${nodesResp.status}`);
 
     areas = await areasResp.json();
-    const nodesData = await nodesResp.json();
-    allNodes = nodesData.nodes || nodesData || [];
+    allNodes = await fetchAllNodesPaged('');
 
     buildSidebar();
     buildNodeLayer();
@@ -229,12 +224,28 @@ function escapeHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+// Paginate past the server's 500-row /api/nodes cap (#1606 class). This page is
+// embeddable cross-origin via baseUrl, so it can't use app.js's fetchAllNodes;
+// the loop is inlined. extra: query fragment '&'-prefixed (e.g. '&area=x').
+async function fetchAllNodesPaged(extra) {
+  const PAGE = 500, CAP = 10000, out = [];
+  for (let off = 0; off < CAP; off += PAGE) {
+    const r = await fetch(`${baseUrl}/api/nodes?limit=${PAGE}&offset=${off}${extra}`);
+    if (!r.ok) break;
+    const d = await r.json();
+    const page = Array.isArray(d) ? d : (d.nodes || []);
+    out.push.apply(out, page);
+    if (page.length < PAGE) break;
+  }
+  const seen = new Map();
+  out.forEach(n => seen.set(n.public_key, n));
+  return Array.from(seen.values());
+}
+
 async function loadAreaNodes(areaKey, color, group) {
   try {
-    const resp = await fetch(`${baseUrl}/api/nodes?area=${encodeURIComponent(areaKey)}&limit=9999`);
-    if (!resp.ok) return;
-    const data = await resp.json();
-    (data.nodes || data || []).forEach(n => {
+    const list = await fetchAllNodesPaged(`&area=${encodeURIComponent(areaKey)}`);
+    list.forEach(n => {
       if (!n.lat || !n.lon) return;
       const m = L.circleMarker([n.lat, n.lon], { radius: 7, color, fillColor: color, fillOpacity: 0.85, weight: 2 });
       m.bindPopup(`<div class="node-popup"><strong>${escapeHtml(n.name || n.public_key?.slice(0,8) || '?')}</strong><br>

@@ -130,6 +130,46 @@ async function api(path, { ttl = 0, bust = false } = {}) {
   return promise;
 }
 
+// Fetch the COMPLETE /api/nodes set, transparently paging around the server's
+// 500-row per-request cap (the v3.8.3 / PR #1540 DoS guard). A single ?limit=N
+// fetch silently truncates to the top 500 rows by last_seen DESC, so on
+// deployments with >500 nodes every node-list consumer (map, live, analytics,
+// packets, area-map) loses the older-advert tail — a node that relays
+// constantly but last self-advertised hours ago drops off the map even though
+// it is plainly alive. #1606 fixed this for the Nodes page; this helper
+// generalizes the same loop for all callers.
+//
+// extraQuery: query fragment appended after the paged limit/offset, each piece
+//   already '&'-prefixed exactly as callers build it today
+//   (e.g. '&lastHeard=30d&area=x', '&sortBy=lastSeen&region=y'); pass '' for none.
+// Returns { nodes, counts, total } with counts/total taken from the first page.
+async function fetchAllNodes(extraQuery = '', { ttl = 0, pageSize = 500, safetyCap = 10000 } = {}) {
+  const accumulated = [];
+  let counts = {};
+  for (let offset = 0; offset < safetyCap; offset += pageSize) {
+    const data = await api(`/nodes?limit=${pageSize}&offset=${offset}${extraQuery}`, { ttl });
+    const page = data && Array.isArray(data.nodes) ? data.nodes
+      : (Array.isArray(data) ? data : []);
+    accumulated.push.apply(accumulated, page);
+    if (offset === 0) counts = (data && data.counts) || {};
+    // Canonical stop: a short page is the end. The server's `total` is
+    // unreliable — it is clamped to the page size and overwritten with the
+    // filtered length under area/region filters — so we never loop on it,
+    // nor surface it. See #1606.
+    if (page.length < pageSize) break;
+  }
+  // Dedup by public_key: concurrent ingest can shift the last_seen DESC window
+  // between pages, repeating a row across a page boundary.
+  const seen = new Map();
+  for (let i = 0; i < accumulated.length; i++) {
+    seen.set(accumulated[i].public_key, accumulated[i]);
+  }
+  const nodes = Array.from(seen.values());
+  // `total` is the real, deduped node count — NOT the server's clamped
+  // per-page total (consumers like analytics.js display it as "N nodes").
+  return { nodes, counts, total: nodes.length };
+}
+
 function invalidateApiCache(prefix) {
   for (const key of _apiCache.keys()) {
     if (key.startsWith(prefix || '')) _apiCache.delete(key);

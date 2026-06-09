@@ -209,6 +209,7 @@
     "escapeHtml": "readonly",
     "exports": "readonly",
     "favStar": "readonly",
+    "fetchAllNodes": "readonly",
     "filterPacketsByRoute": "readonly",
     "formatAbsoluteTimestamp": "readonly",
     "formatChartAxisLabel": "readonly",

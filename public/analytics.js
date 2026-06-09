@@ -2148,7 +2148,7 @@
     try {
       const rq = RegionFilter.regionQueryString() + AreaFilter.areaQueryString();
       const [nodesResp, bulkHealth] = await Promise.all([
-        api('/nodes?limit=10000&sortBy=lastSeen' + rq, { ttl: CLIENT_TTL.nodeList }),
+        fetchAllNodes('&sortBy=lastSeen' + rq, { ttl: CLIENT_TTL.nodeList }),
         api('/nodes/bulk-health?limit=50' + rq, { ttl: CLIENT_TTL.analyticsRF })
       ]);
       const nodes = nodesResp.nodes || nodesResp;
@@ -2885,7 +2885,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
     let nodesResp, hashSizesResp;
     try {
       [nodesResp, hashSizesResp] = await Promise.all([
-        api('/nodes?limit=10000&sortBy=lastSeen' + rq, { ttl: CLIENT_TTL.nodeList }),
+        fetchAllNodes('&sortBy=lastSeen' + rq, { ttl: CLIENT_TTL.nodeList }),
         // #1270: fetch CONFIGURED-hash-size counts so the Network Overview
         // tells the operational story (matching Hash Stats "By Repeaters"),
         // not just a math-only count of unique pubkey slices.

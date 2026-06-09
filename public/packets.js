@@ -903,7 +903,7 @@
     if (!HopResolver.ready()) {
       try {
         const [nodeData, obsData, coordData] = await Promise.all([
-          api('/nodes?limit=2000', { ttl: 60000 }),
+          fetchAllNodes('', { ttl: 60000 }),
           api('/observers', { ttl: 60000 }),
           api('/iata-coords', { ttl: 300000 }).catch(() => ({ coords: {} })),
         ]);
