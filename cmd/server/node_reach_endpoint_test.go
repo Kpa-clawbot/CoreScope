@@ -248,6 +248,42 @@ func TestNodeReach_ShapeAndClamp(t *testing.T) {
 	}
 }
 
+// Issue #1631: a DB failure inside scanReachRows must surface as 500, not
+// as a misleading "no reach" 200 or 404. We warm the integration DB, drop
+// the observations table so the next reach scan query fails inside
+// QueryContext, then assert the handler returns 500 (not 200 with empty
+// arrays, which is the buggy current behavior — scanReachRows swallows the
+// error and returns nil).
+func TestNodeReach_ScanDBErrorReturns500(t *testing.T) {
+	resetReachState(t)
+	db, n := newReachIntegrationDB(t, `["AABB","01FA","CCDD"]`)
+	defer db.conn.Close()
+	cfg := &Config{}
+	srv := &Server{store: newTestStoreWithDB(t, db, cfg), db: db, cfg: cfg, perfStats: NewPerfStats()}
+
+	// Warm the store's node cache (so buildNodeInfoMap on the failing call
+	// still finds the target node). One healthy call also primes the
+	// reach response cache — clear it below so the next call recomputes.
+	if rr := serveReach(srv, "/api/nodes/"+n+"/reach?days=30"); rr.Code != http.StatusOK {
+		t.Fatalf("warm-up call: status=%d want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+	srv.reach.cacheMu.Lock()
+	srv.reach.cache = map[string]reachCacheEntry{}
+	srv.reach.cacheMu.Unlock()
+
+	// Break the table that scanReachRows reads from. nodes / observers /
+	// neighbor_edges remain intact so the failure is isolated to the
+	// scanReachRows QueryContext path.
+	if _, err := db.conn.Exec("DROP TABLE observations"); err != nil {
+		t.Fatalf("drop observations: %v", err)
+	}
+
+	rr := serveReach(srv, "/api/nodes/"+n+"/reach?days=30")
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 on DB error inside scanReachRows, got %d (body=%s)", rr.Code, rr.Body.String())
+	}
+}
+
 func contains(s []string, v string) bool {
 	for _, x := range s {
 		if x == v {
