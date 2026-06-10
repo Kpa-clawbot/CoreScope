@@ -3,9 +3,19 @@
  *
  * Same fix-pattern as #679 (nodes table) — wire TableSort with
  * numeric / time column hints. Clicking a column header MUST reorder
- * tbody rows; this asserts row-swap behavior on the "Total Packets"
- * column (data-sort-key="packet_count", data-type="numeric",
- * data-sort-default="desc").
+ * tbody rows.
+ *
+ * Round-1 test additions (PR #1641):
+ *   - last_packet_at column reorder (regression guard for the round-0
+ *     data-type=date → numeric fix; without this the one-line fix is
+ *     unguarded).
+ *   - strict monotonic non-increasing assertion (no more .some(changed),
+ *     which silently passes even when order is mostly wrong).
+ *   - toggle (second-click ascending) on packet_count.
+ *   - second-column string sort (Name) to exercise localeCompare.
+ *   - cells are addressed via data-testid (added in observers.js for
+ *     testability) — finding #8 dropped the broader data-col-key on
+ *     <td>s, and data-testid is the less-invasive replacement.
  *
  * Usage: BASE_URL=http://localhost:13581 node test-issue-1639-observers-sort-e2e.js
  */
@@ -27,6 +37,51 @@ function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'Assertion failed');
 }
 
+// finding #5: strict monotonic non-increasing across ALL rows
+function assertNonIncreasing(arr, label) {
+  for (let i = 0; i < arr.length - 1; i++) {
+    // NaN slots are sorted last by the comparator — accept them at the tail.
+    const a = arr[i], b = arr[i + 1];
+    if (!Number.isFinite(a)) continue; // NaN tail
+    if (!Number.isFinite(b)) continue;
+    if (!(a >= b)) {
+      throw new Error(`${label}: not non-increasing at idx ${i}: ${a} < ${b}; full=${JSON.stringify(arr)}`);
+    }
+  }
+}
+
+function assertNonDecreasing(arr, label) {
+  for (let i = 0; i < arr.length - 1; i++) {
+    const a = arr[i], b = arr[i + 1];
+    if (!Number.isFinite(a)) continue;
+    if (!Number.isFinite(b)) continue;
+    if (!(a <= b)) {
+      throw new Error(`${label}: not non-decreasing at idx ${i}: ${a} > ${b}; full=${JSON.stringify(arr)}`);
+    }
+  }
+}
+
+async function gotoObservers(page) {
+  await page.goto(`${BASE}/#/observers`, { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => { try { localStorage.removeItem('meshcore-observers-sort'); } catch (_) {} });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('#obsTable', { timeout: 10000 });
+  await page.waitForSelector('#obsTable tbody tr', { timeout: 10000 });
+}
+
+async function readNumeric(page, testid) {
+  return await page.$$eval(`#obsTable tbody tr td[data-testid="${testid}"]`, (tds) => tds.map((td) => {
+    const dv = td.getAttribute('data-value');
+    const raw = dv != null && dv !== '' ? dv : td.textContent.replace(/[^0-9.-]/g, '');
+    return Number(raw);
+  }));
+}
+
+async function readStrings(page, testid) {
+  return await page.$$eval(`#obsTable tbody tr td[data-testid="${testid}"]`, (tds) =>
+    tds.map((td) => td.getAttribute('data-value') || ''));
+}
+
 async function run() {
   const browser = await chromium.launch({
     headless: true,
@@ -40,14 +95,7 @@ async function run() {
   console.log(`\nRunning #1639 observers-sort E2E tests against ${BASE}\n`);
 
   await test('observers thead has data-sort-key + data-type on numeric columns', async () => {
-    await page.goto(`${BASE}/#/observers`, { waitUntil: 'domcontentloaded' });
-    // Clear persisted sort so each run starts from the documented default
-    // (last_seen desc) — avoids flakiness from a previously-clicked column.
-    await page.evaluate(() => { try { localStorage.removeItem('meshcore-observers-sort'); } catch (_) {} });
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('#obsTable', { timeout: 10000 });
-    await page.waitForSelector('#obsTable tbody tr', { timeout: 10000 });
-
+    await gotoObservers(page);
     const totalPktsTh = await page.$('#obsTable thead th[data-sort-key="packet_count"]');
     assert(totalPktsTh, 'Total Packets <th> must carry data-sort-key="packet_count"');
     const type = await totalPktsTh.getAttribute('data-type');
@@ -56,50 +104,64 @@ async function run() {
   });
 
   await test('clicking Total Packets header reorders rows numerically (desc)', async () => {
-    await page.goto(`${BASE}/#/observers`, { waitUntil: 'domcontentloaded' });
-    await page.evaluate(() => { try { localStorage.removeItem('meshcore-observers-sort'); } catch (_) {} });
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('#obsTable', { timeout: 10000 });
-    await page.waitForSelector('#obsTable tbody tr', { timeout: 10000 });
-
-    // Read numeric packet_count values from each row's Total Packets <td>
-    // (data-value attr if present, else parse the rendered text).
-    async function readPacketCounts() {
-      return await page.$$eval('#obsTable tbody tr', (rows) => rows.map((r) => {
-        const td = r.querySelector('td[data-col-key="packet_count"], td:nth-child(7)');
-        if (!td) return NaN;
-        const dv = td.getAttribute('data-value');
-        const raw = dv != null ? dv : td.textContent.replace(/[^0-9.-]/g, '');
-        return Number(raw);
-      }));
-    }
-
-    const before = await readPacketCounts();
+    await gotoObservers(page);
+    const before = await readNumeric(page, 'obs-cell-packet-count');
     assert(before.length >= 2, `need >=2 rows, got ${before.length}`);
 
-    // Click the Total Packets header (data-sort-key=packet_count, default desc).
     const th = await page.$('#obsTable thead th[data-sort-key="packet_count"]');
-    assert(th, 'Total Packets <th> with data-sort-key="packet_count" not found');
+    assert(th, 'Total Packets <th> not found');
     await th.click();
     await page.waitForTimeout(300);
 
-    const after = await readPacketCounts();
-    assert(after.length === before.length,
-      `row count changed: ${before.length} -> ${after.length}`);
+    const after = await readNumeric(page, 'obs-cell-packet-count');
+    assert(after.length === before.length, `row count changed`);
+    // finding #5: strict non-increasing across ALL rows, not just first/last
+    assertNonIncreasing(after, 'packet_count desc');
+  });
 
-    // After one click on a numeric column with default desc, the first row
-    // must have a packet_count >= the last row's. The original order is NOT
-    // sorted by packet_count, so this must produce a different order.
-    const first = after[0], last = after[after.length - 1];
-    assert(Number.isFinite(first) && Number.isFinite(last),
-      `non-numeric packet_count: first=${first} last=${last}`);
-    assert(first >= last,
-      `desc sort failed: first row packet_count=${first}, last row=${last}`);
+  // finding #13: toggle (second click on the same header → ascending)
+  await test('second click on Total Packets header toggles to ascending', async () => {
+    await gotoObservers(page);
+    const th = await page.$('#obsTable thead th[data-sort-key="packet_count"]');
+    await th.click(); // desc
+    await page.waitForTimeout(200);
+    await th.click(); // asc
+    await page.waitForTimeout(300);
+    const after = await readNumeric(page, 'obs-cell-packet-count');
+    assert(after.length >= 2, 'need >=2 rows');
+    assertNonDecreasing(after, 'packet_count asc (after toggle)');
+  });
 
-    // Stronger: order strictly decreased somewhere relative to original,
-    // i.e. clicking actually did something.
-    const changed = after.some((v, i) => v !== before[i]);
-    assert(changed, 'clicking Total Packets header did not change row order');
+  // finding #4: regression guard for round-0 data-type=date → numeric fix
+  await test('clicking Last Packet header reorders rows by timestamp (desc)', async () => {
+    await gotoObservers(page);
+    const th = await page.$('#obsTable thead th[data-sort-key="last_packet_at"]');
+    assert(th, 'Last Packet <th> not found');
+    const type = await th.getAttribute('data-type');
+    assert(type === 'numeric',
+      `Last Packet <th> must have data-type="numeric" (round-0 fix), got "${type}"`);
+    await th.click();
+    await page.waitForTimeout(300);
+    const after = await readNumeric(page, 'obs-cell-last-packet');
+    assert(after.length >= 2, `need >=2 rows`);
+    assertNonIncreasing(after, 'last_packet_at desc');
+  });
+
+  // finding #13: second-column test — Name string sort via localeCompare
+  await test('clicking Name header sorts alphabetically (string localeCompare)', async () => {
+    await gotoObservers(page);
+    const th = await page.$('#obsTable thead th[data-sort-key="name"]');
+    assert(th, 'Name <th> not found');
+    await th.click();
+    await page.waitForTimeout(300);
+    const after = await readStrings(page, 'obs-cell-name');
+    assert(after.length >= 2, `need >=2 rows`);
+    // Default direction for text columns is asc — sorted A→Z
+    for (let i = 0; i < after.length - 1; i++) {
+      if (after[i] === '' || after[i + 1] === '') continue;
+      assert(after[i].localeCompare(after[i + 1]) <= 0,
+        `Name asc broken at idx ${i}: ${JSON.stringify(after[i])} > ${JSON.stringify(after[i + 1])}`);
+    }
   });
 
   await browser.close();
