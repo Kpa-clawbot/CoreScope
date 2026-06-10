@@ -327,17 +327,17 @@ if (typeof window !== 'undefined') {
         // eye to do mental subtraction.
         '<section class="compare-strip" aria-label="Packet overlap summary">' +
           '<div class="compare-strip-row">' +
-            '<div class="compare-strip-side" data-view="onlyA">' +
+            '<div class="compare-strip-side" data-view="onlyA" role="button" tabindex="0" aria-label="Show only ' + nameA + ' packets">' +
               '<div class="compare-strip-name">' + nameA + '</div>' +
               '<div class="compare-strip-count">' + stats.totalA.toLocaleString() + '</div>' +
               '<div class="compare-strip-sub">' + r.onlyA.length.toLocaleString() + ' only here (' + pctA + '%)</div>' +
             '</div>' +
-            '<div class="compare-strip-mid" data-view="both">' +
+            '<div class="compare-strip-mid" data-view="both" role="button" tabindex="0" aria-label="Show shared packets">' +
               '<div class="compare-strip-mid-label">shared</div>' +
               '<div class="compare-strip-mid-count">' + r.both.length.toLocaleString() + '</div>' +
               '<div class="compare-strip-sub">' + pctBoth + '% of all unique</div>' +
             '</div>' +
-            '<div class="compare-strip-side compare-strip-side-b" data-view="onlyB">' +
+            '<div class="compare-strip-side compare-strip-side-b" data-view="onlyB" role="button" tabindex="0" aria-label="Show only ' + nameB + ' packets">' +
               '<div class="compare-strip-name">' + nameB + '</div>' +
               '<div class="compare-strip-count">' + stats.totalB.toLocaleString() + '</div>' +
               '<div class="compare-strip-sub">' + r.onlyB.length.toLocaleString() + ' only here (' + pctB + '%)</div>' +
@@ -380,32 +380,72 @@ if (typeof window !== 'undefined') {
 
         // Detail tabs
         '<div class="compare-tabs" role="tablist">' +
-          '<button class="tab-btn' + (currentView === 'summary' ? ' active' : '') + '" data-cview="summary" role="tab">Summary</button>' +
-          '<button class="tab-btn' + (currentView === 'both' ? ' active' : '') + '" data-cview="both" role="tab">Both (' + r.both.length + ')</button>' +
-          '<button class="tab-btn' + (currentView === 'onlyA' ? ' active' : '') + '" data-cview="onlyA" role="tab">Only ' + nameA + ' (' + r.onlyA.length + ')</button>' +
-          '<button class="tab-btn' + (currentView === 'onlyB' ? ' active' : '') + '" data-cview="onlyB" role="tab">Only ' + nameB + ' (' + r.onlyB.length + ')</button>' +
+          '<button class="tab-btn' + (currentView === 'summary' ? ' active' : '') + '" data-cview="summary" role="tab" aria-controls="compareDetail" aria-selected="' + (currentView === 'summary' ? 'true' : 'false') + '" tabindex="' + (currentView === 'summary' ? '0' : '-1') + '">Summary</button>' +
+          '<button class="tab-btn' + (currentView === 'both' ? ' active' : '') + '" data-cview="both" role="tab" aria-controls="compareDetail" aria-selected="' + (currentView === 'both' ? 'true' : 'false') + '" tabindex="' + (currentView === 'both' ? '0' : '-1') + '">Both (' + r.both.length + ')</button>' +
+          '<button class="tab-btn' + (currentView === 'onlyA' ? ' active' : '') + '" data-cview="onlyA" role="tab" aria-controls="compareDetail" aria-selected="' + (currentView === 'onlyA' ? 'true' : 'false') + '" tabindex="' + (currentView === 'onlyA' ? '0' : '-1') + '">Only ' + nameA + ' (' + r.onlyA.length + ')</button>' +
+          '<button class="tab-btn' + (currentView === 'onlyB' ? ' active' : '') + '" data-cview="onlyB" role="tab" aria-controls="compareDetail" aria-selected="' + (currentView === 'onlyB' ? 'true' : 'false') + '" tabindex="' + (currentView === 'onlyB' ? '0' : '-1') + '">Only ' + nameB + ' (' + r.onlyB.length + ')</button>' +
         '</div>' +
         '<div id="compareDetail"></div>' +
       '</div>';
 
-    // Bind tab clicks
-    content.addEventListener('click', function handler(e) {
-      var btn = e.target.closest('[data-cview]');
-      if (btn) {
-        currentView = btn.dataset.cview;
-        content.querySelectorAll('.tab-btn').forEach(function (b) { b.classList.remove('active'); });
-        btn.classList.add('active');
-        renderDetail();
+    // Sync the tablist's active/aria-selected/tabindex to currentView.
+    function syncTabState() {
+      content.querySelectorAll('.tab-btn').forEach(function (b) {
+        var on = b.dataset.cview === currentView;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+        b.setAttribute('tabindex', on ? '0' : '-1');
+      });
+    }
+
+    // Activate a [data-view] strip segment OR a [data-cview] tab.
+    function activate(el) {
+      if (!el) return;
+      if (el.dataset.cview) {
+        currentView = el.dataset.cview;
+      } else if (el.dataset.view) {
+        currentView = el.dataset.view;
+      } else {
         return;
       }
-      // Clickable strip segments
+      syncTabState();
+      renderDetail();
+    }
+
+    // Bind tab clicks + strip clicks
+    content.addEventListener('click', function handler(e) {
+      var btn = e.target.closest('[data-cview]');
+      if (btn) { activate(btn); return; }
       var seg = e.target.closest('[data-view]');
-      if (seg) {
-        currentView = seg.dataset.view;
-        content.querySelectorAll('.tab-btn').forEach(function (b) {
-          b.classList.toggle('active', b.dataset.cview === currentView);
-        });
-        renderDetail();
+      if (seg) { activate(seg); }
+    });
+
+    // Keyboard activation for tabs (arrow nav) + strip segments (Enter/Space).
+    content.addEventListener('keydown', function (e) {
+      var tab = e.target.closest('[data-cview]');
+      if (tab) {
+        if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+          e.preventDefault();
+          var tabs = Array.prototype.slice.call(content.querySelectorAll('.tab-btn'));
+          var idx = tabs.indexOf(tab);
+          if (idx < 0) return;
+          var next = e.key === 'ArrowRight'
+            ? tabs[(idx + 1) % tabs.length]
+            : tabs[(idx - 1 + tabs.length) % tabs.length];
+          activate(next);
+          next.focus();
+          return;
+        }
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          activate(tab);
+          return;
+        }
+      }
+      var seg = e.target.closest('[data-view]');
+      if (seg && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
+        activate(seg);
       }
     });
 

@@ -3482,7 +3482,7 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
   align-items: baseline;
   margin-bottom: 8px;
 }
-.compare-strip-side { display: flex; flex-direction: column; gap: 2px; }
+.compare-strip-side { display: flex; flex-direction: column; gap: 2px; cursor: pointer; }
 .compare-strip-side-b { text-align: right; }
 .compare-strip-name {
   font-size: var(--fs-sm); font-weight: 700; color: var(--text);
@@ -3499,6 +3499,7 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
   border-left: 1px dashed var(--border);
   border-right: 1px dashed var(--border);
   padding: 0 var(--space-md);
+  cursor: pointer;
 }
 .compare-strip-mid-count {
   font-family: var(--mono);
