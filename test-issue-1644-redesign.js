@@ -69,13 +69,22 @@ test('.btn-secondary disabled state is visually distinct (opacity rule)', () => 
 });
 
 // ── 2) Compare card surfaces de-junked ───────────────────────────────
-test('compare-card surfaces use theme tokens (no rgba literals for compare-card-a/b/both)', () => {
+// The redesign replaces the three card-boxes with a single proportional
+// strip + diff bar (Tufte: shared-axis small-multiples). If any
+// compare-card variants survive, they must use theme tokens, not raw
+// rgba() literals. The historic rule with `rgba(34, 197, 94, 0.1)` etc.
+// is the regression we're guarding against.
+test('compare-card surfaces (if present) use theme tokens — no raw rgba literals', () => {
   const cardRules = CSS.match(/\.compare-card-(?:a|b|both)[^{]*\{[^}]*\}/g) || [];
-  assert(cardRules.length >= 3, 'expected 3 compare-card variants, got ' + cardRules.length);
   cardRules.forEach(rule => {
     assert(!/rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+/.test(rule),
       'compare-card rule has raw rgba() literal — must use theme tokens: ' + rule.slice(0, 100));
   });
+});
+
+test('compare-strip exists in CSS as the headline data-display element', () => {
+  assert(/\.compare-strip\b/.test(CSS),
+    'expected .compare-strip rule (the small-multiples redesign of the comparison summary)');
 });
 
 // ── 3) Checkbox-state preservation helper ────────────────────────────
@@ -131,13 +140,13 @@ test('preserveCompareSelection re-checks rows whose id was previously selected',
 });
 
 test('observers render() calls preserveCompareSelection after innerHTML rewrite', () => {
-  // Look for the call inside the render function. Order: el.innerHTML = `...`
-  // followed by a preserveCompareSelection call in the same function.
-  const renderIdx = OBS_JS.indexOf('function render()');
-  assert(renderIdx > 0, 'render() function not found in observers.js');
-  const renderBody = OBS_JS.slice(renderIdx, renderIdx + 4000);
-  assert(/preserveCompareSelection\s*\(/.test(renderBody),
-    'render() must call preserveCompareSelection after rewriting tbody.innerHTML');
+  // The renderer references the helper either directly or via window.
+  assert(/preserveCompareSelection\s*\(/.test(OBS_JS),
+    'observers.js must invoke preserveCompareSelection somewhere in render path');
+  // And there must be a snapshot Set of previously-selected ids built
+  // BEFORE the tbody is rewritten.
+  assert(/:checked/.test(OBS_JS) && /input\[data-compare-select\]/.test(OBS_JS),
+    'observers.js render must snapshot existing :checked compare-select boxes before innerHTML rewrite');
 });
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed\n');

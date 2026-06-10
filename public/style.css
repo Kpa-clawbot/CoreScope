@@ -3326,109 +3326,373 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
 .packet-filter-input.filter-error { border-color: var(--status-red); }
 .packet-filter-input.filter-active { border-color: var(--status-green); }
 
-/* === Observer Comparison (#/compare) === */
-.compare-controls { margin-bottom: 20px; }
-.compare-selector {
-  display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap;
+/* ============================================================
+ * Generic themed button vocabulary (#1644).
+ * ------------------------------------------------------------
+ * PR #1642 introduced markup like <button class="btn-secondary"> in
+ * observers.js / observer-detail.js but never shipped a top-level
+ * `.btn-secondary` rule — only `.ch-modal-btn-secondary`. The buttons
+ * fell back to the browser default (white/gray) and looked broken
+ * against the themed UI.
+ *
+ * The fix is a small, three-tier vocabulary built out of existing
+ * surface/border/text tokens — NO new top-level color tokens, no
+ * gradient/shadow chartjunk. Companion to `.btn-primary` (#3329 above):
+ *
+ *   .btn-primary    — high-emphasis, accent-filled
+ *   .btn-secondary  — low-emphasis, themed neutral on surface
+ *   .btn-ghost      — minimal, transparent until hover
+ *
+ * Sized 32-px tall by default; the global 48-px touch-target rule
+ * lifts the hit area on touch devices without breaking desktop
+ * proportions. Sibling `.btn-icon` (already defined above) keeps
+ * its existing semantics.
+ * ============================================================ */
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms, color 120ms;
 }
-.compare-select-group { display: flex; flex-direction: column; gap: 4px; }
+.btn-secondary:hover:not([disabled]):not(:disabled) {
+  background: var(--row-hover);
+  border-color: var(--accent);
+  color: var(--text);
+}
+.btn-secondary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.btn-secondary[disabled],
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+.btn-ghost:hover:not([disabled]):not(:disabled) {
+  background: var(--hover-bg);
+  color: var(--text);
+  border-color: var(--border);
+}
+.btn-ghost[disabled],
+.btn-ghost:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* === Observer Comparison (#/compare) — Tufte redesign (#1644) ===
+ * Design rationale: the old layout was three card-boxes side-by-side
+ * (heavy borders, decorative rgba tints, three nearly-identical
+ * 28px counts) forcing the eye to do mental subtraction. The
+ * redesign borrows the route-view v2 vocabulary (surface tokens,
+ * small-multiples, ctx pills, sparing accent) so the comparison
+ * page belongs in the same product. A single proportional
+ * diff-strip (Tufte's "show the data") makes the asymmetry
+ * legible at a glance; the textual cards are demoted to subtext.
+ */
+.compare-page { padding: var(--space-md); max-width: 1200px; margin: 0 auto; }
+.compare-page .page-header {
+  display: flex; align-items: center; justify-content: flex-start;
+  gap: var(--space-sm); margin-bottom: var(--space-sm);
+}
+.compare-page .page-header h2 { font-size: var(--fs-lg); margin: 0; }
+
+.compare-breadcrumbs {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  margin: 0 0 var(--space-md);
+}
+.compare-breadcrumbs a { color: var(--accent); text-decoration: none; }
+.compare-breadcrumbs a:hover { text-decoration: underline; }
+
+.compare-controls {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  margin-bottom: var(--space-md);
+}
+.compare-selector {
+  display: flex; align-items: flex-end; gap: var(--space-sm); flex-wrap: wrap;
+}
+.compare-select-group { display: flex; flex-direction: column; gap: 2px; min-width: 180px; }
 .compare-select-group label {
-  font-size: 12px; font-weight: 600; text-transform: uppercase;
-  letter-spacing: 0.3px; color: var(--text-muted);
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.6px; color: var(--text-muted);
 }
 .compare-select {
-  padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px;
-  background: var(--input-bg); color: var(--text); font-size: 14px;
-  min-width: 220px; cursor: pointer;
+  padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--input-bg); color: var(--text); font-size: var(--fs-sm);
+  cursor: pointer;
 }
 .compare-select:focus { border-color: var(--accent); outline: none; }
 .compare-vs {
-  font-size: 18px; font-weight: 700; color: var(--text-muted);
-  padding-bottom: 6px;
+  font-size: 12px; font-weight: 700; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 1px;
+  padding: 0 4px 8px;
 }
+/* Compare-now action — primary accent button, reuses .btn-primary visuals
+ * but lives inside the controls strip with consistent height. */
 .compare-btn {
-  padding: 8px 20px; border: none; border-radius: 6px;
-  background: var(--accent); color: #fff; font-size: 14px; font-weight: 600;
-  cursor: pointer; transition: background 0.15s;
+  padding: 6px 14px; border: 1px solid var(--accent); border-radius: var(--radius-sm);
+  background: var(--accent); color: #fff; font-size: var(--fs-sm); font-weight: 700;
+  cursor: pointer; transition: background 120ms, opacity 120ms;
 }
-.compare-btn:hover:not(:disabled) { background: var(--accent-hover); }
-.compare-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.compare-btn:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.compare-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.compare-results { margin-top: 16px; }
+.compare-results { margin-top: var(--space-md); }
 
-.compare-summary {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px; margin-bottom: 16px;
+/* ── Headline strip — the only large number on the page ───────────
+ * Three counts above a single proportional bar (small multiples on
+ * a shared axis: one strip, not three boxes). Eye sees the whole
+ * comparison in one fixation. */
+.compare-strip {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md) var(--space-md);
+  margin-bottom: var(--space-md);
 }
-.compare-card {
-  padding: 16px; border-radius: 8px; text-align: center; cursor: pointer;
-  border: 2px solid transparent; transition: border-color 0.15s, transform 0.1s;
+.compare-strip-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: var(--space-md);
+  align-items: baseline;
+  margin-bottom: 8px;
 }
-.compare-card:hover { transform: translateY(-2px); }
-.compare-card-count { font-size: 28px; font-weight: 700; }
-.compare-card-label { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
-.compare-card-pct { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
-
-.compare-card-both {
-  background: rgba(34, 197, 94, 0.1); border-color: rgba(34, 197, 94, 0.3);
+.compare-strip-side { display: flex; flex-direction: column; gap: 2px; }
+.compare-strip-side-b { text-align: right; }
+.compare-strip-name {
+  font-size: var(--fs-sm); font-weight: 700; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.compare-card-both .compare-card-count { color: var(--status-green); }
-
-.compare-card-a {
-  background: rgba(74, 158, 255, 0.1); border-color: rgba(74, 158, 255, 0.3);
+.compare-strip-count {
+  font-family: var(--mono);
+  font-size: var(--fs-xl); font-weight: 700;
+  color: var(--text); font-variant-numeric: tabular-nums;
 }
-.compare-card-a .compare-card-count { color: var(--accent); }
-
-.compare-card-b {
-  background: rgba(255, 107, 107, 0.1); border-color: rgba(255, 107, 107, 0.3);
+.compare-strip-sub { font-size: 11px; color: var(--text-muted); }
+.compare-strip-mid {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  border-left: 1px dashed var(--border);
+  border-right: 1px dashed var(--border);
+  padding: 0 var(--space-md);
 }
-.compare-card-b .compare-card-count { color: var(--status-red); }
-
-/* Comparison bar */
-.compare-bar-container { margin-bottom: 16px; }
-.compare-bar {
-  display: flex; height: 24px; border-radius: 6px; overflow: hidden;
-  background: var(--border);
+.compare-strip-mid-count {
+  font-family: var(--mono);
+  font-size: var(--fs-xl); font-weight: 700;
+  color: var(--accent); font-variant-numeric: tabular-nums;
 }
-.compare-bar-seg { transition: width 0.3s ease; }
-.compare-bar-a { background: var(--accent); }
-.compare-bar-both { background: var(--status-green); }
-.compare-bar-b { background: var(--status-red); }
-
-.compare-bar-legend {
-  display: flex; gap: 16px; margin-top: 8px; font-size: 12px;
+.compare-strip-mid-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px;
   color: var(--text-muted);
 }
-.compare-legend-item { display: flex; align-items: center; gap: 4px; }
-.compare-dot {
-  width: 10px; height: 10px; border-radius: 50%; display: inline-block;
-}
-.compare-dot-a { background: var(--accent); }
-.compare-dot-both { background: var(--status-green); }
-.compare-dot-b { background: var(--status-red); }
 
+/* The diff bar — one row, three colored segments, shared axis. */
+.compare-bar-container { margin-top: 4px; }
+.compare-bar {
+  display: flex; height: 10px; border-radius: 5px; overflow: hidden;
+  background: var(--surface-2);
+}
+.compare-bar-seg { transition: width 240ms ease; }
+.compare-bar-a    { background: var(--accent); }
+.compare-bar-both { background: var(--status-green); }
+.compare-bar-b    { background: var(--status-amber); }
+/* Tick marks on the diff bar showing where the proportions land */
+.compare-bar-legend {
+  display: flex; gap: var(--space-md); margin-top: 6px;
+  font-size: 11px; color: var(--text-muted);
+  flex-wrap: wrap;
+}
+.compare-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.compare-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.compare-dot-a    { background: var(--accent); }
+.compare-dot-both { background: var(--status-green); }
+.compare-dot-b    { background: var(--status-amber); }
+
+/* ── Asymmetric reach sentences ───────────────────────────────────
+ * Two compact lines telling the directional story without three
+ * cards or two big numbers. Mono-numeric for at-a-glance compare. */
+.compare-asym {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+.compare-asym-line {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding: var(--space-sm) var(--space-md);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+.compare-asym-line b { color: var(--text); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.compare-asym-line .compare-asym-pct {
+  font-family: var(--mono); font-size: var(--fs-lg); font-weight: 700;
+  color: var(--text); font-variant-numeric: tabular-nums;
+  display: block; margin-bottom: 2px;
+}
+
+/* ── Type breakdown — packet-context ctx pills (route-view vocab) ─ */
 .compare-type-summary {
-  margin-bottom: 16px; font-size: 13px; color: var(--text);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--status-green);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding: var(--space-sm) var(--space-md);
+  margin-bottom: var(--space-md);
+  font-size: var(--fs-sm); color: var(--text);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+}
+.compare-type-summary-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px;
+  color: var(--text-muted); font-weight: 700;
+  margin-right: 4px;
 }
 .compare-type-badge {
-  display: inline-block; padding: 2px 8px; margin: 2px;
-  border-radius: var(--badge-radius); background: var(--surface-0);
-  font-size: 12px; color: var(--text-muted);
+  display: inline-flex; align-items: baseline; gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--badge-radius);
+  background: var(--surface-2);
+  font-size: 11px;
+  color: var(--text);
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+}
+.compare-type-badge b { color: var(--accent); font-weight: 700; }
+
+/* ── Tabs (Summary / Both / Only A / Only B) ──────────────────── */
+.compare-tabs {
+  display: flex; gap: 0; margin-bottom: var(--space-sm);
+  border-bottom: 1px solid var(--border); flex-wrap: wrap;
+}
+.compare-tabs .tab-btn {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  padding: 6px 14px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 120ms, border-color 120ms;
+  margin-bottom: -1px;
+}
+.compare-tabs .tab-btn:hover { color: var(--text); }
+.compare-tabs .tab-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
 }
 
-.compare-tabs { display: flex; gap: 4px; margin-bottom: 12px; flex-wrap: wrap; }
-
-.compare-summary-text { padding: 12px 0; font-size: 14px; line-height: 1.6; }
+.compare-summary-text { padding: 4px 0 var(--space-sm); font-size: var(--fs-sm); line-height: 1.6; color: var(--text-muted); }
 .compare-summary-text p { margin: 0 0 8px; }
-.compare-warning { color: var(--status-yellow); font-weight: 600; }
-.compare-good { color: var(--status-green); font-weight: 600; }
+.compare-summary-text p b,
+.compare-summary-text p strong { color: var(--text); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.compare-warning {
+  color: var(--status-amber-text); background: var(--status-amber-light);
+  border: 1px solid var(--status-amber); padding: 6px 10px; border-radius: var(--radius-sm);
+  font-weight: 600;
+}
+.compare-good {
+  color: var(--status-green);
+  border: 1px solid var(--status-green); padding: 6px 10px; border-radius: var(--radius-sm);
+  font-weight: 600;
+}
 
-.compare-table { font-size: 13px; }
+.compare-table { font-size: var(--fs-sm); }
 
 @media (max-width: 640px) {
   .compare-selector { flex-direction: column; align-items: stretch; }
+  .compare-select-group { min-width: 0; }
   .compare-select { min-width: auto; width: 100%; }
-  .compare-summary { grid-template-columns: 1fr; }
+  .compare-vs { display: none; }
+  .compare-strip-row { grid-template-columns: 1fr; gap: var(--space-sm); }
+  .compare-strip-side-b { text-align: left; }
+  .compare-strip-mid { border-left: none; border-right: none;
+    border-top: 1px dashed var(--border); border-bottom: 1px dashed var(--border);
+    padding: var(--space-sm) 0; flex-direction: row; gap: 6px; align-items: baseline; }
+  .compare-asym { grid-template-columns: 1fr; }
+}
+
+/* ── Observers page — compare-selection column + button hints ─── */
+.col-compare-select {
+  width: 36px; text-align: center;
+  /* Tufte: this column is administrative chrome, NOT data.
+     Shrink it; use the muted text so it doesn't compete. */
+  color: var(--text-muted);
+}
+/* The checkbox itself: theme-aware accent + minimum tap target
+ * provided by the surrounding cell, not the input. */
+.col-compare-select input[type="checkbox"] {
+  width: 16px; height: 16px; min-height: 16px;
+  accent-color: var(--accent); cursor: pointer;
+  /* When at least one row is selected, we add .has-compare-selection
+   * to the table so the column highlight makes it obvious WHICH rows
+   * are in the selection. */
+}
+.obs-table.has-compare-selection .col-compare-select { color: var(--text); }
+.obs-table tbody tr:has(input[data-compare-select]:checked) {
+  background: var(--selected-bg);
+}
+/* Compact "Compare selected (0)" button: when nothing selected, fade
+ * to background so it doesn't compete with the primary "Compare
+ * observers" CTA. The disabled rule above already gives 0.5 opacity. */
+.observers-page .page-header {
+  display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap;
+  margin-bottom: var(--space-sm);
+}
+.observers-page .page-header h2 { font-size: var(--fs-lg); margin: 0 var(--space-sm) 0 0; }
+.observers-page .page-header [data-action="compare-observers"],
+.observers-page .page-header [data-action="compare-selected"] {
+  /* Reuse .btn-secondary — these rules just tighten spacing.
+   * No new color tokens. */
+}
+.observers-page .page-header .obs-refresh-spacer { margin-left: auto; }
+
+/* Observer-detail header: the Compare-with picker + Compare button
+ * should sit together visually. Reuses the same .btn-secondary. */
+.observer-detail-page .compare-with-group {
+  display: inline-flex; align-items: stretch; gap: 0;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface-1); overflow: hidden;
+}
+.observer-detail-page .compare-with-group select.time-range-select {
+  border: none; background: transparent; color: var(--text);
+  font-size: var(--fs-sm); padding: 6px 10px;
+  border-right: 1px solid var(--border);
+  min-height: 0;
+}
+.observer-detail-page .compare-with-group select.time-range-select:focus { outline: none; }
+.observer-detail-page .compare-with-group button[data-action="compare-with-go"] {
+  border: none; border-radius: 0; background: var(--surface-2);
+}
+.observer-detail-page .compare-with-group button[data-action="compare-with-go"]:hover:not(:disabled) {
+  background: var(--row-hover); color: var(--text);
 }
 
 /* Neighbor graph canvas focus indicator for keyboard navigation */

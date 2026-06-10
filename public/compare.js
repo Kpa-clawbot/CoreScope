@@ -100,12 +100,12 @@ if (typeof window !== 'undefined') {
     currentView = 'summary';
     routeFilter = 'all';
 
-    app.innerHTML = '<div class="compare-page" style="padding:16px">' +
-      '<div class="page-header" style="display:flex;align-items:center;gap:12px;margin-bottom:8px">' +
+    app.innerHTML = '<div class="compare-page">' +
+      '<div class="page-header">' +
         '<a href="#/observers" class="btn-icon" title="Back to Observers" aria-label="Back">\u2190</a>' +
-        '<h2 style="margin:0">\uD83D\uDD0D Observer Comparison</h2>' +
+        '<h2>\uD83D\uDD0D Observer Comparison</h2>' +
       '</div>' +
-      '<nav data-role="compare-breadcrumbs" aria-label="Compare breadcrumbs" class="compare-breadcrumbs" style="margin:0 0 12px 0;font-size:0.9em;color:var(--text-muted)"></nav>' +
+      '<nav data-role="compare-breadcrumbs" aria-label="Compare breadcrumbs" class="compare-breadcrumbs"></nav>' +
       '<div id="compareControls" class="compare-controls"><div class="text-center text-muted" style="padding:20px">Loading observers\u2026</div></div>' +
       '<div id="compareContent"></div>' +
     '</div>';
@@ -313,54 +313,77 @@ if (typeof window !== 'undefined') {
 
     var typeHtml = Object.keys(typeBreakdown).map(function (t) {
       return '<span class="compare-type-badge">' +
-        escapeHtml(PAYLOAD_LABELS[t] || 'Type ' + t) + ': ' + typeBreakdown[t] +
+        escapeHtml(PAYLOAD_LABELS[t] || 'Type ' + t) + ' <b>' + typeBreakdown[t] + '</b>' +
       '</span>';
-    }).join(' ');
+    }).join('');
+
+    var stats = computeOverlapStats(r);
 
     content.innerHTML =
       '<div class="compare-results">' +
-        // Summary cards
-        '<div class="compare-summary">' +
-          '<div class="compare-card compare-card-both" data-view="both">' +
-            '<div class="compare-card-count">' + r.both.length.toLocaleString() + '</div>' +
-            '<div class="compare-card-label">Seen by both</div>' +
-            '<div class="compare-card-pct">' + pctBoth + '%</div>' +
+        // Headline strip — A | shared | B above a single proportional bar.
+        // One row of large numbers + one shared-axis bar = the comparison
+        // in a single glance. Replaces three card-boxes that forced the
+        // eye to do mental subtraction.
+        '<section class="compare-strip" aria-label="Packet overlap summary">' +
+          '<div class="compare-strip-row">' +
+            '<div class="compare-strip-side" data-view="onlyA">' +
+              '<div class="compare-strip-name">' + nameA + '</div>' +
+              '<div class="compare-strip-count">' + stats.totalA.toLocaleString() + '</div>' +
+              '<div class="compare-strip-sub">' + r.onlyA.length.toLocaleString() + ' only here (' + pctA + '%)</div>' +
+            '</div>' +
+            '<div class="compare-strip-mid" data-view="both">' +
+              '<div class="compare-strip-mid-label">shared</div>' +
+              '<div class="compare-strip-mid-count">' + r.both.length.toLocaleString() + '</div>' +
+              '<div class="compare-strip-sub">' + pctBoth + '% of all unique</div>' +
+            '</div>' +
+            '<div class="compare-strip-side compare-strip-side-b" data-view="onlyB">' +
+              '<div class="compare-strip-name">' + nameB + '</div>' +
+              '<div class="compare-strip-count">' + stats.totalB.toLocaleString() + '</div>' +
+              '<div class="compare-strip-sub">' + r.onlyB.length.toLocaleString() + ' only here (' + pctB + '%)</div>' +
+            '</div>' +
           '</div>' +
-          '<div class="compare-card compare-card-a" data-view="onlyA">' +
-            '<div class="compare-card-count">' + r.onlyA.length.toLocaleString() + '</div>' +
-            '<div class="compare-card-label">Only ' + nameA + '</div>' +
-            '<div class="compare-card-pct">' + pctA + '%</div>' +
+          // Single shared-axis diff bar. Width is exact proportion.
+          '<div class="compare-bar-container">' +
+            '<div class="compare-bar" role="img"' +
+                ' aria-label="' + nameA + ' only ' + pctA + '%, both ' + pctBoth + '%, ' + nameB + ' only ' + pctB + '%">' +
+              (pctA > 0 ? '<div class="compare-bar-seg compare-bar-a" style="width:' + pctA + '%" title="Only ' + nameA + ': ' + r.onlyA.length + '"></div>' : '') +
+              (pctBoth > 0 ? '<div class="compare-bar-seg compare-bar-both" style="width:' + pctBoth + '%" title="Both: ' + r.both.length + '"></div>' : '') +
+              (pctB > 0 ? '<div class="compare-bar-seg compare-bar-b" style="width:' + pctB + '%" title="Only ' + nameB + ': ' + r.onlyB.length + '"></div>' : '') +
+            '</div>' +
+            '<div class="compare-bar-legend">' +
+              '<span class="compare-legend-item"><span class="compare-dot compare-dot-a"></span> ' + nameA + ' only</span>' +
+              '<span class="compare-legend-item"><span class="compare-dot compare-dot-both"></span> Both</span>' +
+              '<span class="compare-legend-item"><span class="compare-dot compare-dot-b"></span> ' + nameB + ' only</span>' +
+            '</div>' +
           '</div>' +
-          '<div class="compare-card compare-card-b" data-view="onlyB">' +
-            '<div class="compare-card-count">' + r.onlyB.length.toLocaleString() + '</div>' +
-            '<div class="compare-card-label">Only ' + nameB + '</div>' +
-            '<div class="compare-card-pct">' + pctB + '%</div>' +
-          '</div>' +
-        '</div>' +
+        '</section>' +
 
-        // Visual bar
-        '<div class="compare-bar-container">' +
-          '<div class="compare-bar">' +
-            (pctA > 0 ? '<div class="compare-bar-seg compare-bar-a" style="width:' + pctA + '%" title="Only ' + nameA + ': ' + r.onlyA.length + '"></div>' : '') +
-            (pctBoth > 0 ? '<div class="compare-bar-seg compare-bar-both" style="width:' + pctBoth + '%" title="Both: ' + r.both.length + '"></div>' : '') +
-            (pctB > 0 ? '<div class="compare-bar-seg compare-bar-b" style="width:' + pctB + '%" title="Only ' + nameB + ': ' + r.onlyB.length + '"></div>' : '') +
+        // Asymmetric reach — two compact sentences instead of two big cards
+        '<section class="compare-asym" aria-label="Directional reach">' +
+          '<div class="compare-asym-line">' +
+            '<span class="compare-asym-pct">' + stats.aSeesOfB.toFixed(1) + '%</span>' +
+            nameA + ' saw <b>' + stats.shared.toLocaleString() + '</b> of ' + nameB +
+            '\u2019s <b>' + stats.totalB.toLocaleString() + '</b> packets' +
           '</div>' +
-          '<div class="compare-bar-legend">' +
-            '<span class="compare-legend-item"><span class="compare-dot compare-dot-a"></span> ' + nameA + ' only</span>' +
-            '<span class="compare-legend-item"><span class="compare-dot compare-dot-both"></span> Both</span>' +
-            '<span class="compare-legend-item"><span class="compare-dot compare-dot-b"></span> ' + nameB + ' only</span>' +
+          '<div class="compare-asym-line">' +
+            '<span class="compare-asym-pct">' + stats.bSeesOfA.toFixed(1) + '%</span>' +
+            nameB + ' saw <b>' + stats.shared.toLocaleString() + '</b> of ' + nameA +
+            '\u2019s <b>' + stats.totalA.toLocaleString() + '</b> packets' +
           '</div>' +
-        '</div>' +
+        '</section>' +
 
-        // Type breakdown for shared packets
-        (typeHtml ? '<div class="compare-type-summary"><strong>Shared packet types:</strong> ' + typeHtml + '</div>' : '') +
+        // Shared packet types — pills, mono-numeric
+        (typeHtml ? '<section class="compare-type-summary" aria-label="Shared packet types">' +
+            '<span class="compare-type-summary-label">Shared types</span>' + typeHtml +
+          '</section>' : '') +
 
         // Detail tabs
-        '<div class="compare-tabs">' +
-          '<button class="tab-btn' + (currentView === 'summary' ? ' active' : '') + '" data-cview="summary">Summary</button>' +
-          '<button class="tab-btn' + (currentView === 'both' ? ' active' : '') + '" data-cview="both">Both (' + r.both.length + ')</button>' +
-          '<button class="tab-btn' + (currentView === 'onlyA' ? ' active' : '') + '" data-cview="onlyA">Only ' + nameA + ' (' + r.onlyA.length + ')</button>' +
-          '<button class="tab-btn' + (currentView === 'onlyB' ? ' active' : '') + '" data-cview="onlyB">Only ' + nameB + ' (' + r.onlyB.length + ')</button>' +
+        '<div class="compare-tabs" role="tablist">' +
+          '<button class="tab-btn' + (currentView === 'summary' ? ' active' : '') + '" data-cview="summary" role="tab">Summary</button>' +
+          '<button class="tab-btn' + (currentView === 'both' ? ' active' : '') + '" data-cview="both" role="tab">Both (' + r.both.length + ')</button>' +
+          '<button class="tab-btn' + (currentView === 'onlyA' ? ' active' : '') + '" data-cview="onlyA" role="tab">Only ' + nameA + ' (' + r.onlyA.length + ')</button>' +
+          '<button class="tab-btn' + (currentView === 'onlyB' ? ' active' : '') + '" data-cview="onlyB" role="tab">Only ' + nameB + ' (' + r.onlyB.length + ')</button>' +
         '</div>' +
         '<div id="compareDetail"></div>' +
       '</div>';
@@ -375,10 +398,10 @@ if (typeof window !== 'undefined') {
         renderDetail();
         return;
       }
-      // Clickable summary cards
-      var card = e.target.closest('[data-view]');
-      if (card) {
-        currentView = card.dataset.view;
+      // Clickable strip segments
+      var seg = e.target.closest('[data-view]');
+      if (seg) {
+        currentView = seg.dataset.view;
         content.querySelectorAll('.tab-btn').forEach(function (b) {
           b.classList.toggle('active', b.dataset.cview === currentView);
         });
@@ -397,28 +420,18 @@ if (typeof window !== 'undefined') {
     var nameB = escapeHtml(obsName(selB));
 
     if (currentView === 'summary') {
-      // Textual summary
-      var stats = computeOverlapStats(r);
+      // Textual summary — the headline strip + asym lines already cover
+      // the quantitative story; this paragraph adds context and surfaces
+      // edge cases (no shared packets, perfect overlap).
       var total = r.onlyA.length + r.onlyB.length + r.both.length;
       var overlap = total > 0 ? (r.both.length / total * 100).toFixed(1) : '0.0';
       el.innerHTML =
         '<div class="compare-summary-text">' +
-          '<p>In the last 24 hours, <strong>' + nameA + '</strong> saw <strong>' + stats.totalA.toLocaleString() + '</strong> unique packets ' +
-          'and <strong>' + nameB + '</strong> saw <strong>' + stats.totalB.toLocaleString() + '</strong> unique packets.</p>' +
-          // #671 — asymmetric reference-observer comparison
-          '<div class="compare-asymmetric" style="display:flex;gap:12px;flex-wrap:wrap;margin:12px 0">' +
-            '<div class="compare-asym-card" style="flex:1;min-width:240px;padding:12px;border:1px solid var(--border, #333);border-radius:6px">' +
-              '<div style="font-size:1.6em;font-weight:bold">' + stats.aSeesOfB.toFixed(1) + '%</div>' +
-              '<div class="text-muted">' + nameA + ' saw <strong>' + stats.shared.toLocaleString() + '</strong> of ' + nameB + '\u2019s ' + stats.totalB.toLocaleString() + ' packets</div>' +
-            '</div>' +
-            '<div class="compare-asym-card" style="flex:1;min-width:240px;padding:12px;border:1px solid var(--border, #333);border-radius:6px">' +
-              '<div style="font-size:1.6em;font-weight:bold">' + stats.bSeesOfA.toFixed(1) + '%</div>' +
-              '<div class="text-muted">' + nameB + ' saw <strong>' + stats.shared.toLocaleString() + '</strong> of ' + nameA + '\u2019s ' + stats.totalA.toLocaleString() + ' packets</div>' +
-            '</div>' +
-          '</div>' +
-          '<p><strong>' + r.both.length.toLocaleString() + '</strong> packets (' + overlap + '%) were seen by both observers. ' +
-          '<strong>' + r.onlyA.length.toLocaleString() + '</strong> were exclusive to ' + nameA + ' and ' +
-          '<strong>' + r.onlyB.length.toLocaleString() + '</strong> were exclusive to ' + nameB + '.</p>' +
+          '<p>In the last 24 hours, <strong>' + nameA + '</strong> saw <strong>' +
+            (r.onlyA.length + r.both.length).toLocaleString() + '</strong> unique packets ' +
+          'and <strong>' + nameB + '</strong> saw <strong>' +
+            (r.onlyB.length + r.both.length).toLocaleString() + '</strong> unique packets. ' +
+          '<strong>' + r.both.length.toLocaleString() + '</strong> (' + overlap + '%) were seen by both observers.</p>' +
           (r.both.length === 0 && total > 0 ? '<p class="compare-warning">\u26A0\uFE0F These observers share no packets \u2014 they may be on different frequencies or too far apart.</p>' : '') +
           (r.onlyA.length === 0 && r.onlyB.length === 0 && r.both.length > 0 ? '<p class="compare-good">\u2705 Perfect overlap \u2014 both observers see the same packets.</p>' : '') +
         '</div>';
