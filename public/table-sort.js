@@ -114,7 +114,12 @@ window.TableSort = (function() {
             state.direction = state.direction === 'asc' ? 'desc' : 'asc';
           } else {
             state.column = key;
-            state.direction = options.defaultDirection || 'asc';
+            // #1639/#1641: switching to a new column picks a sensible default
+            // direction per type — text columns default to ascending (A→Z),
+            // numeric/date/dbm default to descending (largest/newest first).
+            // options.defaultDirection only seeds the INITIAL load.
+            var thType = th.getAttribute('data-type');
+            state.direction = (!thType || thType === 'text') ? 'asc' : 'desc';
           }
           doSort();
         };
