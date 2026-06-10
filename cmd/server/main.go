@@ -198,6 +198,23 @@ func main() {
 	// In-memory packet store
 	store := NewPacketStore(database, cfg.PacketStore, cfg.CacheTTL)
 	store.config = cfg
+
+	// Load the persisted neighbor graph BEFORE the packet load so the
+	// chunked loader can resolve relay-hop pubkeys from path_json. Since
+	// #1287 the ingestor persists relay data only as aggregate
+	// neighbor_edges — observations.resolved_path is never written — so
+	// without an available graph at load time a relay node's analytics
+	// history would rebuild only from post-restart live traffic (the
+	// "timeline empty after every restart" bug). neighbor_edges is small,
+	// so this adds negligible latency before the HTTP listener binds. The
+	// fresh-DB branch (no snapshot) still builds in-memory AFTER the load
+	// below, because BuildFromStore needs the loaded packets.
+	neighborEdgesPersisted := neighborEdgesTableExists(database.conn)
+	if neighborEdgesPersisted {
+		store.graph.Store(loadNeighborEdgesFromDB(database.conn))
+		log.Printf("[neighbor] loaded persisted neighbor graph")
+	}
+
 	// #1009: chunked Load with early HTTP readiness. LoadChunked runs
 	// asynchronously and signals FirstChunkReady after the first chunk
 	// is merged so the HTTP listener can bind without waiting for the
@@ -228,9 +245,9 @@ func main() {
 		go store.loadBackgroundChunks()
 	}
 
-	// Initialize persisted neighbor graph.
-	// Per #1287, schema migrations all live in the ingestor (see
-	// dbschema.Apply). The server merely loads the snapshot here and
+	// Neighbor graph: the persisted snapshot (if present) was already
+	// loaded above, before the packet load. Per #1287 schema migrations
+	// all live in the ingestor; the server only reads the snapshot and
 	// then refreshes it via the recompNeighborGraph slot every 60s.
 	dbPath = database.path
 	database.hasResolvedPath = true // dbschema.AssertReady above already verified observations.resolved_path exists
@@ -238,11 +255,7 @@ func main() {
 	// WaitGroup for background init steps that gate /api/healthz readiness.
 	var initWg sync.WaitGroup
 
-	// Load or build neighbor graph
-	if neighborEdgesTableExists(database.conn) {
-		store.graph.Store(loadNeighborEdgesFromDB(database.conn))
-		log.Printf("[neighbor] loaded persisted neighbor graph")
-	} else {
+	if !neighborEdgesPersisted {
 		// No persisted snapshot yet (e.g. fresh DB before the ingestor
 		// has run its first edge-build cycle). Build an in-memory graph
 		// from the packets we already have so reads aren't empty. We

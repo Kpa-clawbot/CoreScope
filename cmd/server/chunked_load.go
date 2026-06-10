@@ -193,6 +193,16 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 	// that semantic by starting one below SQLite's minimum rowid (-1).
 	var cursorID int64 = -1
 
+	// Relay-hop fallback inputs, fetched ONCE before the chunk-query loop.
+	// getCachedNodesAndPM issues its own DB query, so calling it while a
+	// chunk cursor is open would deadlock on a single-connection SQLite
+	// pool. resolved_path is never persisted post-#1287, so scanAndMergeChunk
+	// re-resolves relay hops from path_json using these snapshots.
+	s.mu.RLock()
+	_, relayPM := s.getCachedNodesAndPM()
+	s.mu.RUnlock()
+	relayGraph := s.graph.Load()
+
 	for {
 		conds := append([]string{}, loadConditions...)
 		conds = append(conds, fmt.Sprintf("t2.id > %d", cursorID))
@@ -233,7 +243,7 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 			return fmt.Errorf("chunk %d: query: %w", chunkIdx, err)
 		}
 
-		chunkTxCount, lastID, err := s.scanAndMergeChunk(rows)
+		chunkTxCount, lastID, err := s.scanAndMergeChunk(rows, relayPM, relayGraph)
 		rows.Close()
 		if err != nil {
 			return fmt.Errorf("chunk %d: scan: %w", chunkIdx, err)
@@ -312,7 +322,7 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 // scanAndMergeChunk consumes one chunk's rows under s.mu.Lock and
 // returns the number of distinct transmissions seen + the max
 // transmission id (cursor for the next chunk).
-func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows) (int, int64, error) {
+func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, relayGraph *NeighborGraph) (int, int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -411,6 +421,19 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows) (int, int64, error) {
 				rp := unmarshalResolvedPath(rpStr)
 				pks := extractResolvedPubkeys(rp)
 				s.indexResolvedPathHops(tx, pks, hopsSeen)
+			} else if relayPM != nil && obsPJ != "" && obsPJ != "[]" {
+				// resolved_path is NULL on live (since #1287 relay data is
+				// persisted as neighbor_edges, not per-observation). Re-resolve
+				// relay-hop attribution from path_json so relay nodes keep their
+				// analytics history across a restart instead of rebuilding only
+				// from post-restart live traffic. relayPM/relayGraph are passed
+				// in from LoadChunked (fetched before any chunk cursor opened).
+				// byNode ONLY — see the Load() counterpart for why the
+				// resolved_path/path-hop indexes must NOT be populated here.
+				rp := resolvePathForObs(obsPJ, obsIDStr, tx, relayPM, relayGraph)
+				for _, pk := range extractResolvedPubkeys(rp) {
+					s.addToByNode(tx, pk)
+				}
 			}
 
 			tx.Observations = append(tx.Observations, obs)

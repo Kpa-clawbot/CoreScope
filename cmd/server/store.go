@@ -728,6 +728,16 @@ func (s *PacketStore) Load() error {
 			ORDER BY t.first_seen ASC, o.timestamp DESC`
 	}
 
+	// Relay-hop fallback inputs. When resolved_path is empty (always, on
+	// live, since #1287 the ingestor persists relay data as neighbor_edges
+	// instead) we re-resolve relay hops from path_json using the prefix map
+	// + neighbor graph. Fetched BEFORE opening the rows cursor below:
+	// getCachedNodesAndPM issues its own DB query, which would deadlock
+	// against the still-open cursor on a single-connection SQLite pool.
+	// Load holds s.mu.Lock(), so calling getCachedNodesAndPM directly is safe.
+	_, relayPM := s.getCachedNodesAndPM()
+	relayGraph := s.graph.Load()
+
 	rows, err := s.db.conn.Query(loadSQL)
 	if err != nil {
 		return err
@@ -825,6 +835,19 @@ func (s *PacketStore) Load() error {
 				pks := extractResolvedPubkeys(rp)
 				// Single point of truth — see indexResolvedPathHops doc + #1558.
 				s.indexResolvedPathHops(tx, pks, hopsSeen)
+			} else if relayPM != nil && obsPJ != "" && obsPJ != "[]" {
+				// resolved_path not persisted — reconstruct relay hops from
+				// path_json so relay-node analytics history survives a restart.
+				// Index into byNode ONLY: the resolved_path / path-hop indexes
+				// (indexResolvedPathHops) are cross-checked by handleNodePaths
+				// against the persisted resolved_path column, which is NULL
+				// here — populating them would make that SQL confirmation fail
+				// and wrongly drop the tx from paths-through (#1352). byNode is
+				// what the node-analytics activity timeline reads.
+				rp := resolvePathForObs(obsPJ, obsIDStr, tx, relayPM, relayGraph)
+				for _, pk := range extractResolvedPubkeys(rp) {
+					s.addToByNode(tx, pk)
+				}
 			}
 
 			tx.Observations = append(tx.Observations, obs)
@@ -919,6 +942,28 @@ func (s *PacketStore) Load() error {
 // byPayloadType is updated here incrementally. byPathHop, spIndex, and
 // distHops are NOT updated here — the caller (loadBackgroundChunks) rebuilds
 // those once after all chunks are merged.
+
+// accumulateDedup appends pks to byTx[txID], deduplicating per-tx via the
+// parallel seenByTx set. Used by loadChunk to build the per-tx relay-hop
+// pubkey unions outside the merge critical section.
+func accumulateDedup(byTx map[int][]string, seenByTx map[int]map[string]bool, txID int, pks []string) {
+	if len(pks) == 0 {
+		return
+	}
+	seen := seenByTx[txID]
+	if seen == nil {
+		seen = make(map[string]bool, len(pks))
+		seenByTx[txID] = seen
+	}
+	for _, pk := range pks {
+		if seen[pk] {
+			continue
+		}
+		seen[pk] = true
+		byTx[txID] = append(byTx[txID], pk)
+	}
+}
+
 func (s *PacketStore) loadChunk(from, to time.Time) error {
 	fromStr := from.UTC().Format(time.RFC3339)
 	toStr := to.UTC().Format(time.RFC3339)
@@ -955,6 +1000,21 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 			ORDER BY t.first_seen ASC, o.timestamp DESC`
 	}
 
+	// Relay-hop fallback inputs. observations.resolved_path is NULL on
+	// every live deployment (since #1287 the ingestor persists relay data
+	// as aggregate neighbor_edges, not per-observation resolved_path), so
+	// for this background-loaded older window we re-resolve relay hops from
+	// the persisted path_json using the prefix map + neighbor graph — the
+	// same compute the live ingest path runs. Fetched BEFORE opening the
+	// rows cursor below: getCachedNodesAndPM issues its own DB query, which
+	// would deadlock against the open cursor on a single-connection SQLite
+	// pool. Both snapshots are immutable once published (the recomputer
+	// atomic-swaps a fresh graph), so the lock-free scan reads them safely.
+	s.mu.RLock()
+	_, relayPM := s.getCachedNodesAndPM()
+	s.mu.RUnlock()
+	relayGraph := s.graph.Load()
+
 	rows, err := s.db.conn.Query(chunkSQL, fromStr, toStr)
 	if err != nil {
 		return err
@@ -973,6 +1033,11 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 	// the rest of loadChunk's "build local, merge under lock" shape.
 	localResolvedPKsByTx := make(map[int][]string)
 	localResolvedSeenByTx := make(map[int]map[string]bool)
+	// Path_json fallback pubkeys (resolved_path NULL): indexed into byNode
+	// ONLY at merge, kept separate from localResolvedPKsByTx because they must
+	// NOT enter the resolved_path/path-hop indexes (see the per-row comment).
+	localByNodePKsByTx := make(map[int][]string)
+	localByNodeSeenByTx := make(map[int]map[string]bool)
 	var localTotalObs int
 	var localTrackedBytes int64
 	var localMaxTxID int
@@ -1083,20 +1148,19 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 			if rpStr != "" {
 				rp := unmarshalResolvedPath(rpStr)
 				pks := extractResolvedPubkeys(rp)
-				if len(pks) > 0 {
-					seen := localResolvedSeenByTx[txID]
-					if seen == nil {
-						seen = make(map[string]bool, len(pks))
-						localResolvedSeenByTx[txID] = seen
-					}
-					for _, pk := range pks {
-						if seen[pk] {
-							continue
-						}
-						seen[pk] = true
-						localResolvedPKsByTx[txID] = append(localResolvedPKsByTx[txID], pk)
-					}
-				}
+				accumulateDedup(localResolvedPKsByTx, localResolvedSeenByTx, txID, pks)
+			} else if relayPM != nil && obsPJ != "" && obsPJ != "[]" {
+				// resolved_path not persisted — reconstruct relay hops from
+				// path_json so the older retention window keeps relay-node
+				// history across a restart (mirrors the hot-window fix in
+				// scanAndMergeChunk and the live ingest path). These go into a
+				// SEPARATE accumulator indexed into byNode ONLY at merge — they
+				// must not enter the resolved_path/path-hop indexes, which
+				// handleNodePaths cross-checks against the NULL resolved_path
+				// column (#1352).
+				rp := resolvePathForObs(obsPJ, obsIDStr, tx, relayPM, relayGraph)
+				pks := extractResolvedPubkeys(rp)
+				accumulateDedup(localByNodePKsByTx, localByNodeSeenByTx, txID, pks)
 			}
 		}
 	}
@@ -1206,6 +1270,12 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 			// pubkey union was pre-built outside the lock above.
 			if pks := localResolvedPKsByTx[tx.ID]; len(pks) > 0 {
 				s.indexResolvedPathHops(tx, pks, hopsSeen)
+			}
+			// path_json fallback (resolved_path NULL): byNode ONLY, so relay
+			// nodes keep their analytics history across a restart without
+			// polluting the resolved_path/path-hop indexes (#1352).
+			for _, pk := range localByNodePKsByTx[tx.ID] {
+				s.addToByNode(tx, pk)
 			}
 		}
 		s.mu.Unlock()
