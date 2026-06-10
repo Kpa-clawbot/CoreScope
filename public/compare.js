@@ -101,10 +101,11 @@ if (typeof window !== 'undefined') {
     routeFilter = 'all';
 
     app.innerHTML = '<div class="compare-page" style="padding:16px">' +
-      '<div class="page-header" style="display:flex;align-items:center;gap:12px;margin-bottom:16px">' +
+      '<div class="page-header" style="display:flex;align-items:center;gap:12px;margin-bottom:8px">' +
         '<a href="#/observers" class="btn-icon" title="Back to Observers" aria-label="Back">\u2190</a>' +
         '<h2 style="margin:0">\uD83D\uDD0D Observer Comparison</h2>' +
       '</div>' +
+      '<nav data-role="compare-breadcrumbs" aria-label="Compare breadcrumbs" class="compare-breadcrumbs" style="margin:0 0 12px 0;font-size:0.9em;color:var(--text-muted)"></nav>' +
       '<div id="compareControls" class="compare-controls"><div class="text-center text-muted" style="padding:20px">Loading observers\u2026</div></div>' +
       '<div id="compareContent"></div>' +
     '</div>';
@@ -196,11 +197,40 @@ if (typeof window !== 'undefined') {
       selA = ddA.value || null;
       selB = ddB.value || null;
       btn.disabled = !selA || !selB || selA === selB;
+      renderBreadcrumbs();
     }
     ddA.addEventListener('change', updateBtn);
     ddB.addEventListener('change', updateBtn);
     btn.addEventListener('click', function () { runComparison(); });
     updateBtn();
+  }
+
+  // #1640 — render breadcrumbs linking back to each observer's detail page.
+  // Hidden when neither observer is picked; otherwise:
+  //   "Observers › <A name> ⇆ <B name>"
+  // The "&lrm;" entities keep punctuation LTR in RTL contexts.
+  function renderBreadcrumbs() {
+    var el = document.querySelector('[data-role="compare-breadcrumbs"]');
+    if (!el) return;
+    function linkFor(id) {
+      if (!id) return null;
+      var match = null;
+      for (var i = 0; i < observers.length; i++) {
+        if (String(observers[i].id) === String(id)) { match = observers[i]; break; }
+      }
+      var label = match ? (match.name || match.id) : id;
+      return '<a href="#/observers/' + encodeURIComponent(id) + '">' + escapeHtml(label) + '</a>';
+    }
+    var parts = ['<a href="#/observers">Observers</a>'];
+    var aLink = linkFor(selA);
+    var bLink = linkFor(selB);
+    if (aLink || bLink) {
+      var pair = [];
+      if (aLink) pair.push(aLink);
+      if (bLink) pair.push(bLink);
+      parts.push(pair.join(' <span aria-hidden="true">\u21C6</span> '));
+    }
+    el.innerHTML = parts.join(' <span aria-hidden="true">\u203A</span> ');
   }
 
   function sinceISO(hours) {

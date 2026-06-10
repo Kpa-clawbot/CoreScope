@@ -123,7 +123,19 @@ window.ObserversSummary = (function () {
       <div class="observers-page">
         <div class="page-header">
           <h2>Observer Status</h2>
-          <a href="#/compare" class="btn-icon" title="Compare observers" aria-label="Compare observers" style="text-decoration:none">🔍</a>
+          <button type="button" class="btn-secondary" data-action="compare-observers"
+                  title="Compare two observers side-by-side"
+                  aria-label="Compare observers"
+                  style="display:inline-flex;align-items:center;gap:6px">
+            <span aria-hidden="true">🔍</span><span>Compare observers</span>
+          </button>
+          <button type="button" class="btn-secondary" data-action="compare-selected"
+                  title="Select exactly two rows to compare"
+                  aria-label="Compare selected observers"
+                  aria-disabled="true" disabled
+                  style="display:inline-flex;align-items:center;gap:6px">
+            <span aria-hidden="true">⚖️</span><span>Compare selected (<span data-role="compare-count">0</span>)</span>
+          </button>
           <button class="btn-icon" data-action="obs-refresh" title="Refresh" aria-label="Refresh observers">🔄</button>
         </div>
         <div id="obsRegionFilter" class="region-filter-container"></div>
@@ -136,6 +148,23 @@ window.ObserversSummary = (function () {
     app.addEventListener('click', function (e) {
       var btn = e.target.closest('[data-action]');
       if (btn && btn.dataset.action === 'obs-refresh') loadObservers({ bust: true });
+      if (btn && btn.dataset.action === 'compare-observers') {
+        location.hash = '#/compare';
+        return;
+      }
+      if (btn && btn.dataset.action === 'compare-selected') {
+        var picked = collectSelectedIds();
+        if (picked.length === 2) {
+          location.hash = '#/compare?a=' + encodeURIComponent(picked[0]) + '&b=' + encodeURIComponent(picked[1]);
+        }
+        return;
+      }
+      // #1640 — per-row checkbox: toggle, update compare-selected button state.
+      var cb = e.target.closest('input[data-compare-select]');
+      if (cb) {
+        updateCompareSelectedState();
+        return;
+      }
       var row = e.target.closest('tr[data-action="navigate"]');
       if (row) {
         // #1056 AC#4: at narrow widths, open detail in slide-over instead of
@@ -296,6 +325,7 @@ window.ObserversSummary = (function () {
         <thead><tr>
           <th scope="col" data-priority="1" data-sort-key="status" data-type="numeric">Status</th><th scope="col" data-priority="1" data-sort-key="name">Name</th><th scope="col" data-priority="3" data-sort-key="region">Region</th><th scope="col" data-priority="2" data-sort-key="last_seen" data-type="numeric">Last Status</th><th scope="col" data-priority="2" data-sort-key="last_packet_at" data-type="numeric">Last Packet</th>
           <th scope="col" data-priority="3" data-sort-key="packet_health" data-type="numeric">Packet Health</th><th scope="col" data-priority="4" data-sort-key="packet_count" data-type="numeric">Total Packets</th><th scope="col" data-priority="3" data-sort-key="packets_hour" data-type="numeric">Packets/Hour</th><th scope="col" data-priority="4" data-sort-key="clock_offset" data-type="numeric">Clock Offset</th><th scope="col" data-priority="4" data-sort-key="uptime" data-type="numeric">Uptime</th>
+          <th scope="col" data-priority="1" class="col-compare-select" style="width:32px"><span class="sr-only">Select for compare</span></th>
         </tr></thead>
         <tbody>${filtered.map(o => {
           const h = healthStatus(o.last_seen);
@@ -316,7 +346,7 @@ window.ObserversSummary = (function () {
           const _healthRank = h.cls === 'health-green' ? 2 : (h.cls === 'health-yellow' ? 1 : 0);
           const _packetCount = (o.packet_count != null) ? o.packet_count : '';
           const _packetsHour = (o.packetsLastHour != null) ? o.packetsLastHour : '';
-          return `<tr style="cursor:pointer" tabindex="0" role="row" data-action="navigate" data-value="#/observers/${encodeURIComponent(o.id)}" onclick="location.hash='#/observers/${encodeURIComponent(o.id)}'">
+          return `<tr style="cursor:pointer" tabindex="0" role="row" data-action="navigate" data-value="#/observers/${encodeURIComponent(o.id)}" data-observer-id="${escapeHtml(o.id)}" onclick="location.hash='#/observers/${encodeURIComponent(o.id)}'">
             <td data-value="${_healthRank}"><span class="health-dot ${h.cls}" title="${h.label}">${shape}</span> ${h.label}</td>
             <td data-testid="obs-cell-name" data-value="${escapeHtml(String(o.name || o.id))}" class="mono">${escapeHtml(o.name || o.id)}${window.ObserversNaiveChip.render(o)}${o.can_relay === false ? ' <span class="badge-listener" title="Firmware reported repeat:off — listener-only; excluded from path-hop disambiguator (issue #1290)">listener</span>' : (o.can_relay === true ? ' <span class="badge-repeater" title="Firmware reported repeat:on — eligible as a path hop">repeater</span>' : '')}</td>
             <td data-value="${escapeHtml(o.iata || '')}">${o.iata ? `<span class="badge-region">${o.iata}</span>` : '—'}</td>
@@ -332,6 +362,11 @@ window.ObserversSummary = (function () {
               return renderSkewBadge(sev, sk.offsetSec) + ' <span class="text-muted" title="Computed from ' + sk.samples + ' multi-observer packets. Positive = observer ahead of consensus.">(' + sk.samples + ')</span>';
             })()}</td>
             <td data-value="${_uptimeMs}">${uptimeStr(o.first_seen)}</td>
+            <td class="col-compare-select" onclick="event.stopPropagation()" style="text-align:center">
+              <input type="checkbox" data-compare-select value="${escapeHtml(o.id)}"
+                     aria-label="Select ${escapeHtml(o.name || o.id)} for comparison"
+                     onclick="event.stopPropagation()" />
+            </td>
           </tr>`;
         }).join('')}</tbody>
       </table></div>`;
@@ -364,6 +399,34 @@ window.ObserversSummary = (function () {
 
 
   registerPage('observers', { init, destroy });
+
+  // #1640 — multi-select compare wiring.
+  function collectSelectedIds() {
+    var boxes = document.querySelectorAll('#obsTable tbody input[data-compare-select]:checked');
+    var ids = [];
+    for (var i = 0; i < boxes.length; i++) ids.push(boxes[i].value);
+    return ids;
+  }
+  function updateCompareSelectedState() {
+    var btn = document.querySelector('[data-action="compare-selected"]');
+    if (!btn) return;
+    var ids = collectSelectedIds();
+    var countEl = btn.querySelector('[data-role="compare-count"]');
+    if (countEl) countEl.textContent = String(ids.length);
+    var enabled = ids.length === 2;
+    btn.disabled = !enabled;
+    btn.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+    btn.title = enabled
+      ? 'Compare the two selected observers'
+      : 'Select exactly two observers to enable (currently ' + ids.length + ')';
+  }
+  // Wire change events globally so the state updates even when checkbox
+  // toggles by keyboard (space) rather than mouse click.
+  document.addEventListener('change', function (e) {
+    if (e.target && e.target.matches && e.target.matches('input[data-compare-select]')) {
+      updateCompareSelectedState();
+    }
+  });
 
   // #1056 AC#4: row-detail slide-over (narrow viewports). Renders a compact
   // summary from the in-memory observer + a link to the full page.

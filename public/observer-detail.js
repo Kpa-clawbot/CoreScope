@@ -86,7 +86,19 @@ window.ObserverDetailNaiveBanner = {
         <div class="page-header" style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
           <a href="#/observers" class="btn-icon" title="Back to Observers" aria-label="Back">←</a>
           <h2 style="margin:0" id="obsTitle">Observer Detail</h2>
-          <div style="margin-left:auto;display:flex;gap:8px">
+          <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <label class="sr-only" for="obsCompareWithPicker">Compare with another observer</label>
+            <select id="obsCompareWithPicker" data-action="compare-with-picker"
+                    aria-label="Compare with another observer"
+                    title="Pick another observer to compare against"
+                    class="time-range-select">
+              <option value="">Compare with…</option>
+            </select>
+            <button type="button" data-action="compare-with-go" class="btn-secondary" disabled aria-disabled="true"
+                    title="Open side-by-side comparison"
+                    style="display:inline-flex;align-items:center;gap:6px">
+              <span aria-hidden="true">🔍</span><span>Compare</span>
+            </button>
             <select id="obsDaysSelect" class="time-range-select" aria-label="Time range">
               <option value="1">24 Hours</option>
               <option value="3">3 Days</option>
@@ -102,6 +114,25 @@ window.ObserverDetailNaiveBanner = {
       currentDays = parseInt(e.target.value);
       loadDetail();
     });
+
+    // #1640 — "Compare with…" picker. Fetches the observer list once,
+    // populates options excluding the current observer, enables the
+    // Compare button only when a target is selected.
+    populateCompareWithPicker(currentId);
+    var picker = document.getElementById('obsCompareWithPicker');
+    var goBtn = document.querySelector('[data-action="compare-with-go"]');
+    if (picker && goBtn) {
+      picker.addEventListener('change', function () {
+        var enabled = !!picker.value;
+        goBtn.disabled = !enabled;
+        goBtn.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+      });
+      goBtn.addEventListener('click', function () {
+        if (!picker.value || !currentId) return;
+        location.hash = '#/compare?a=' + encodeURIComponent(currentId) +
+                        '&b=' + encodeURIComponent(picker.value);
+      });
+    }
 
     loadDetail();
   }
@@ -438,6 +469,30 @@ window.ObserverDetailNaiveBanner = {
       e.preventDefault();
       location.hash = row.dataset.value;
     });
+  }
+
+  // #1640 — populate the "Compare with…" dropdown with all other observers.
+  // Uses the same /observers list endpoint the observers page already caches,
+  // so this should hit the in-memory cache in the common case.
+  async function populateCompareWithPicker(thisId) {
+    var picker = document.getElementById('obsCompareWithPicker');
+    if (!picker) return;
+    try {
+      var data = await api('/observers', { ttl: (window.CLIENT_TTL && window.CLIENT_TTL.observers) || 120000 });
+      var list = (data && data.observers ? data.observers : [])
+        .filter(function (o) { return String(o.id) !== String(thisId); })
+        .sort(function (a, b) { return (a.name || a.id).localeCompare(b.name || b.id); });
+      var opts = ['<option value="">Compare with\u2026</option>'];
+      for (var i = 0; i < list.length; i++) {
+        var o = list[i];
+        var label = (o.name || o.id) + (o.iata ? ' (' + o.iata + ')' : '');
+        opts.push('<option value="' + escapeHtml(o.id) + '">' + escapeHtml(label) + '</option>');
+      }
+      picker.innerHTML = opts.join('');
+    } catch (e) {
+      // Leave the placeholder option in place; user can still navigate via
+      // the observers page Compare button.
+    }
   }
 
   registerPage('observer-detail', { init, destroy });
