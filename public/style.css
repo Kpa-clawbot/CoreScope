@@ -3668,11 +3668,6 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
   margin-bottom: var(--space-sm);
 }
 .observers-page .page-header h2 { font-size: var(--fs-lg); margin: 0 var(--space-sm) 0 0; }
-.observers-page .page-header [data-action="compare-observers"],
-.observers-page .page-header [data-action="compare-selected"] {
-  /* Reuse .btn-secondary — these rules just tighten spacing.
-   * No new color tokens. */
-}
 .observers-page .page-header .obs-refresh-spacer { margin-left: auto; }
 
 /* Observer-detail header: the Compare-with picker + Compare button
