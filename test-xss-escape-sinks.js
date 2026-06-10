@@ -179,9 +179,14 @@ test('observers.js renderRow: observer name cell escapes o.name', () => {
   // Capture just the <td class="mono">${ ... o.name || o.id ... }${chip}</td>.
   const html = evalTemplate(
     'public/observers.js',
-    // Allow optional trailing content (e.g. listener/repeater badge added by #1290)
-    // between the naive chip and the closing </td>.
-    /(<td class="mono">\$\{[^}]*o\.name[^}]*\}\$\{window\.ObserversNaiveChip\.render\(o\)\}[^`]*?<\/td>)/,
+    // Allow optional <td> attributes before class="mono" (e.g. data-testid /
+    // data-value added by #1639 for sortable-column tests) AND optional trailing
+    // content (e.g. listener/repeater badge added by #1290) between the naive
+    // chip and the closing </td>. Capturing any data-value="${...}" attr makes
+    // this assertion STRICTER, not weaker: the eval now also renders those attr
+    // interpolations, so dropping escapeHtml() on either the attr OR the cell
+    // text trips assertNoXss (raw <img / attr-breakout markers).
+    /(<td\b[^>]*\bclass="mono"[^>]*>\$\{[^}]*o\.name[^}]*\}\$\{window\.ObserversNaiveChip\.render\(o\)\}[^`]*?<\/td>)/,
     { o: { name: TAG_PAYLOAD + ATTR_PAYLOAD, id: 'obs-1' },
       window: { ObserversNaiveChip: { render: () => '' } } }
   );
