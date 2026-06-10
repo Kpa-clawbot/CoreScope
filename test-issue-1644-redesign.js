@@ -140,12 +140,17 @@ test('preserveCompareSelection re-checks rows whose id was previously selected',
 });
 
 test('observers render() calls preserveCompareSelection after innerHTML rewrite', () => {
-  // The renderer references the helper either directly or via window.
-  assert(/preserveCompareSelection\s*\(/.test(OBS_JS),
-    'observers.js must invoke preserveCompareSelection somewhere in render path');
+  // Strip block + line comments first so we're not satisfied by the
+  // JSDoc/`// See window.preserveCompareSelection above.` references —
+  // we want a REAL invocation, in the code path.
+  const code = OBS_JS
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+  assert(/preserveCompareSelection\s*\(/.test(code),
+    'observers.js must INVOKE preserveCompareSelection in code (not just mention in a comment)');
   // And there must be a snapshot Set of previously-selected ids built
   // BEFORE the tbody is rewritten.
-  assert(/:checked/.test(OBS_JS) && /input\[data-compare-select\]/.test(OBS_JS),
+  assert(/:checked/.test(code) && /input\[data-compare-select\]/.test(code),
     'observers.js render must snapshot existing :checked compare-select boxes before innerHTML rewrite');
 });
 
