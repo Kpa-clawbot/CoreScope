@@ -25,6 +25,7 @@ const vm = require('vm');
 
 const CSS = fs.readFileSync(path.join(__dirname, 'public/style.css'), 'utf8');
 const OBS_JS = fs.readFileSync(path.join(__dirname, 'public/observers.js'), 'utf8');
+const COMPARE_JS = fs.readFileSync(path.join(__dirname, 'public/compare.js'), 'utf8');
 
 let passed = 0, failed = 0;
 function test(name, fn) {
@@ -152,6 +153,59 @@ test('observers render() calls preserveCompareSelection after innerHTML rewrite'
   // BEFORE the tbody is rewritten.
   assert(/:checked/.test(code) && /input\[data-compare-select\]/.test(code),
     'observers.js render must snapshot existing :checked compare-select boxes before innerHTML rewrite');
+});
+
+// ── 4) a11y — tablist + clickable strip semantics (#1644 round-1) ────
+test('compare tab buttons declare aria-selected (synced with .active)', () => {
+  // Tab markup is built as a string in compare.js. Each `<button class="tab-btn"
+  // ... role="tab">` MUST also emit aria-selected so screen readers know which
+  // tab is current. We grep for `aria-selected=` co-located with `role="tab"`.
+  // A passing implementation will emit something like:
+  //   aria-selected="' + (currentView === 'both' ? 'true' : 'false') + '"
+  const tabButtonBlocks = COMPARE_JS.match(/'<button class="tab-btn[^']*'[\s\S]{0,400}?role="tab"[^']*'/g) || [];
+  assert(tabButtonBlocks.length >= 3, 'expected >=3 tab-btn strings with role="tab"');
+  tabButtonBlocks.forEach((blk, i) => {
+    assert(/aria-selected\s*=/.test(blk),
+      'tab-btn block #' + i + ' missing aria-selected: ' + blk.slice(0, 120));
+  });
+});
+
+test('compare tab buttons declare aria-controls="compareDetail"', () => {
+  const tabButtonBlocks = COMPARE_JS.match(/'<button class="tab-btn[^']*'[\s\S]{0,400}?role="tab"[^']*'/g) || [];
+  tabButtonBlocks.forEach((blk, i) => {
+    assert(/aria-controls=\\?"compareDetail\\?"/.test(blk),
+      'tab-btn block #' + i + ' missing aria-controls="compareDetail"');
+  });
+});
+
+test('clickable compare-strip segments expose role="button" + tabindex', () => {
+  // The strip rows carry data-view and are clicked via closest('[data-view]').
+  // Without role=button and tabindex, keyboard/AT users can't activate them.
+  // Find the three strip block strings (compare-strip-side, -mid, -side-b).
+  const stripBlocks = COMPARE_JS.match(/'<div class="compare-strip-(?:side|mid)[^']*data-view[^']*'/g) || [];
+  assert(stripBlocks.length >= 3, 'expected >=3 data-view strip blocks, got ' + stripBlocks.length);
+  stripBlocks.forEach((blk, i) => {
+    assert(/role=\\?"button\\?"/.test(blk),
+      'strip block #' + i + ' must have role="button": ' + blk.slice(0, 120));
+    assert(/tabindex=\\?"0\\?"/.test(blk),
+      'strip block #' + i + ' must have tabindex="0": ' + blk.slice(0, 120));
+  });
+});
+
+test('compare.js binds keydown for Enter/Space activation of strip segments', () => {
+  // We need a keydown handler that activates a [data-view] segment.
+  assert(/addEventListener\(\s*['"]keydown['"]/.test(COMPARE_JS),
+    'compare.js must bind a keydown handler for keyboard activation of strip segments');
+});
+
+test('.compare-strip-side and .compare-strip-mid declare cursor:pointer in CSS', () => {
+  // Tufte review noted only .compare-card had cursor:pointer; the strip
+  // segments are now the clickable surface and need the same affordance.
+  const sideRules = CSS.match(/\.compare-strip-side\b[^{]*\{[^}]*\}/g) || [];
+  const midRules  = CSS.match(/\.compare-strip-mid\b[^{]*\{[^}]*\}/g) || [];
+  const all = sideRules.concat(midRules).join('\n');
+  assert(/cursor\s*:\s*pointer/.test(all),
+    '.compare-strip-side / .compare-strip-mid need cursor:pointer to signal clickability');
 });
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed\n');
