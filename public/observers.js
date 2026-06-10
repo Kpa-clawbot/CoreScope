@@ -289,7 +289,7 @@ window.ObserversSummary = (function () {
       <div class="obs-table-scroll table-fluid-wrap"><table class="data-table obs-table" id="obsTable">
         <caption class="sr-only">Observer status and statistics</caption>
         <thead><tr>
-          <th scope="col" data-priority="1" data-sort-key="status">Status</th><th scope="col" data-priority="1" data-sort-key="name">Name</th><th scope="col" data-priority="3" data-sort-key="region">Region</th><th scope="col" data-priority="2" data-sort-key="last_seen" data-type="date" data-sort-default="desc">Last Status</th><th scope="col" data-priority="2" data-sort-key="last_packet_at" data-type="date" data-sort-default="desc">Last Packet</th>
+          <th scope="col" data-priority="1" data-sort-key="status">Status</th><th scope="col" data-priority="1" data-sort-key="name">Name</th><th scope="col" data-priority="3" data-sort-key="region">Region</th><th scope="col" data-priority="2" data-sort-key="last_seen" data-type="numeric" data-sort-default="desc">Last Status</th><th scope="col" data-priority="2" data-sort-key="last_packet_at" data-type="numeric" data-sort-default="desc">Last Packet</th>
           <th scope="col" data-priority="3" data-sort-key="packet_health" data-type="numeric" data-sort-default="desc">Packet Health</th><th scope="col" data-priority="4" data-sort-key="packet_count" data-type="numeric" data-sort-default="desc">Total Packets</th><th scope="col" data-priority="3" data-sort-key="packets_hour" data-type="numeric" data-sort-default="desc">Packets/Hour</th><th scope="col" data-priority="4" data-sort-key="clock_offset" data-type="numeric" data-sort-default="desc">Clock Offset</th><th scope="col" data-priority="4" data-sort-key="uptime" data-type="numeric" data-sort-default="desc">Uptime</th>
         </tr></thead>
         <tbody>${filtered.map(o => {
@@ -332,13 +332,13 @@ window.ObserversSummary = (function () {
     }
     // #1639 — wire TableSort AFTER tbody is in the DOM (avoid the #679 init
     // race). Re-init on every render so the controller binds to the new
-    // header instance, and persist sort state under mc-observers-sort.
+    // header instance, and persist sort state under meshcore-observers-sort.
     var _obsTbl2 = document.getElementById('obsTable');
     if (_obsTbl2 && window.TableSort) {
       TableSort.init(_obsTbl2, {
         defaultColumn: 'last_seen',
         defaultDirection: 'desc',
-        storageKey: 'mc-observers-sort'
+        storageKey: 'meshcore-observers-sort'
       });
     }
   }

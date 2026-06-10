@@ -41,6 +41,10 @@ async function run() {
 
   await test('observers thead has data-sort-key + data-type on numeric columns', async () => {
     await page.goto(`${BASE}/#/observers`, { waitUntil: 'domcontentloaded' });
+    // Clear persisted sort so each run starts from the documented default
+    // (last_seen desc) — avoids flakiness from a previously-clicked column.
+    await page.evaluate(() => { try { localStorage.removeItem('meshcore-observers-sort'); } catch (_) {} });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#obsTable', { timeout: 10000 });
     await page.waitForSelector('#obsTable tbody tr', { timeout: 10000 });
 
@@ -53,6 +57,8 @@ async function run() {
 
   await test('clicking Total Packets header reorders rows numerically (desc)', async () => {
     await page.goto(`${BASE}/#/observers`, { waitUntil: 'domcontentloaded' });
+    await page.evaluate(() => { try { localStorage.removeItem('meshcore-observers-sort'); } catch (_) {} });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#obsTable', { timeout: 10000 });
     await page.waitForSelector('#obsTable tbody tr', { timeout: 10000 });
 
