@@ -48,6 +48,15 @@ type Config struct {
 	// operator refuses to fix.
 	NodeBlacklist []string `json:"nodeBlacklist"`
 
+	// HiddenNamePrefixes is a list of name prefixes that mark a node as
+	// hidden from API responses (issue #1181). The default `["🚫"]` mirrors
+	// a convention used by other MeshCore map dashboards: operators who
+	// rename their node with the prefix get hidden from the map without
+	// waiting for normal retention to clear stale data. DB rows are
+	// preserved — the filter is applied at the API layer only, so the
+	// underlying observation history remains intact.
+	HiddenNamePrefixes []string `json:"hiddenNamePrefixes"`
+
 	// blacklistSetPtr holds the active lookup set as an atomic pointer.
 	// Read path is a single atomic load — no mutex, no sync.Once. Writers
 	// always replace the whole map; readers see either the old or the new
