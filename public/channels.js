@@ -1821,11 +1821,10 @@
   function loadKnownChannels() {
     if (__knownChannelsLoading || __knownChannels !== null) return;
     __knownChannelsLoading = true;
-    var url = '/api/known-channels';
-    var rp = RegionFilter.getRegionParam && RegionFilter.getRegionParam();
     // Note: region filter intentionally NOT applied — catalogue is small
     // and the user may want to browse other regions even if they're
     // viewing one. Future work: per-section region selector.
+    var url = '/api/known-channels';
     fetch(url).then(function (r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
       .then(function (snap) {
         __knownChannels = (snap && Array.isArray(snap.entries)) ? snap.entries : [];
