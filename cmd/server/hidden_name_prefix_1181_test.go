@@ -95,3 +95,45 @@ func TestHiddenNamePrefix_1181_Search(t *testing.T) {
 		}
 	}
 }
+
+// TestHiddenNamePrefix_1181_Detail ensures /api/nodes/{pubkey} returns 404
+// for a node whose name starts with a hidden prefix — mirroring the
+// blacklist behaviour so callers learn nothing about whether the row exists.
+func TestHiddenNamePrefix_1181_Detail(t *testing.T) {
+	srv, router := setupTestServer(t)
+
+	pk := "deadbeef00001183"
+	if _, err := srv.db.conn.Exec(`INSERT INTO nodes
+		(public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
+		VALUES (?, ?, ?, 0, 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 1)`,
+		pk, "🚫 detail me", "companion"); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	get := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "/api/nodes/"+pk, nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w
+	}
+
+	// Empty prefix list: detail MUST be reachable (200 with the name).
+	srv.cfg.HiddenNamePrefixes = nil
+	w := get()
+	if w.Code != http.StatusOK {
+		t.Fatalf("baseline: expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "detail me") {
+		t.Fatalf("baseline: response missing node name; body=%s", w.Body.String())
+	}
+
+	// Configured 🚫 prefix: detail MUST 404 — no name, no fields, nothing.
+	srv.cfg.HiddenNamePrefixes = []string{"🚫"}
+	w = get()
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("hidden: expected 404, got %d body=%s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "detail me") {
+		t.Fatalf("hidden: name leaked in 404 body: %s", w.Body.String())
+	}
+}
