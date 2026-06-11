@@ -1033,7 +1033,11 @@
         if (!rows.length) continue;
         parts.push(
           '<tr class="ch-section-row"><td colspan="6" class="ch-section-header">' +
-          esc(sections[si].label) + ' <span class="text-muted">(' + rows.length + ')</span>' +
+          // sections[].label is a hardcoded sprite-bearing string (no user
+          // input) — must be inserted raw so the <svg> renders. esc() here
+          // HTML-escaped the angle brackets and surfaced literal "<svg…>"
+          // text in the table (#1657).
+          sections[si].label + ' <span class="text-muted">(' + rows.length + ')</span>' +
           '</td></tr>'
         );
         for (var ri = 0; ri < rows.length; ri++) parts.push(channelRowHtml(rows[ri]));
