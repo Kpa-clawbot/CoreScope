@@ -238,6 +238,16 @@ test('.compare-bar-seg has a min-width so non-zero segments stay visible', () =>
   const reAny = /\.compare-bar-seg[^{}]*\{[^}]*min-width\s*:/m;
   assert(reAny.test(CSS),
     '.compare-bar-seg must declare min-width so a 2% segment is still readable on mobile');
+  // #1646 round-2 review: the floor must be a *presence* floor only,
+  // not a magnitude-flattening floor. 6px collapses 1% and 5% slices
+  // to identical width, lying about magnitude. Cap at 2px — visible
+  // pip without falsely equating sizes.
+  const segBlockRe = /\.compare-bar-seg[^{}]*\{[^}]*min-width\s*:\s*(\d+)px/m;
+  const m = CSS.match(segBlockRe);
+  assert(m, '.compare-bar-seg min-width must be expressed in px so we can bound it');
+  const px = parseInt(m[1], 10);
+  assert(px <= 2,
+    `.compare-bar-seg min-width must be <= 2px (presence floor only, not magnitude-equivalent); got ${px}px`);
 });
 
 // ── 11) asym sentence reflows cleanly on mobile ───────────────────────
