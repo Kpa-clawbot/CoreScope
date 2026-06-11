@@ -19,9 +19,14 @@ import (
 	"time"
 )
 
-// DefaultKnownChannelsURL is the pinned upstream catalogue (channels-by-country.json).
-// Pinning to a specific filename avoids surprise schema changes from a moving redirect.
-const DefaultKnownChannelsURL = "https://raw.githubusercontent.com/marcelverdult/meshcore-channels/main/channels-by-country.json"
+// DefaultKnownChannelsURL is the suggested upstream catalogue, pinned to a
+// specific commit SHA so a hostile or compromised future commit on the
+// community repo cannot be silently fetched by deployments that opt in.
+// Operators should periodically bump this pin (see config.example.json).
+// NOTE: this constant is only used by tests and as documentation — the
+// feature is OPT-IN: an empty cfg.KnownChannelsURL leaves the cache
+// disabled (no background fetch, /api/known-channels serves empty).
+const DefaultKnownChannelsURL = "https://raw.githubusercontent.com/marcelverdult/meshcore-channels/072bc25b6fc983aa2aa7e9d399a97a5f4899ea71/channels-by-country.json"
 
 // DefaultKnownChannelsRefresh is the default refresh interval (24h).
 const DefaultKnownChannelsRefresh = 24 * time.Hour

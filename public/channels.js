@@ -1818,8 +1818,23 @@
   var __knownChannels = null;         // null = not fetched; [] = fetched empty
   var __knownChannelsLoading = false; // single-flight guard
   var __knownChannelsError = null;
+  var __knownChannelsErrorAt = 0;     // ms timestamp of last error (for backoff)
+  var KNOWN_CHANNELS_ERROR_BACKOFF_MS = 60000;
   function loadKnownChannels() {
-    if (__knownChannelsLoading || __knownChannels !== null) return;
+    if (__knownChannelsLoading) return;
+    // If we already have a snapshot (success or empty), don't refetch.
+    if (__knownChannels !== null && !__knownChannelsError) return;
+    // Sticky-error backoff: once an error has been recorded, wait
+    // KNOWN_CHANNELS_ERROR_BACKOFF_MS before allowing another attempt.
+    // This lets transient upstream failures recover without forcing a
+    // full page reload.
+    if (__knownChannelsError) {
+      var now = Date.now();
+      if (now - __knownChannelsErrorAt < KNOWN_CHANNELS_ERROR_BACKOFF_MS) return;
+      // Clear and retry.
+      __knownChannelsError = null;
+      __knownChannels = null;
+    }
     __knownChannelsLoading = true;
     // Note: region filter intentionally NOT applied — catalogue is small
     // and the user may want to browse other regions even if they're
@@ -1828,11 +1843,14 @@
     fetch(url).then(function (r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
       .then(function (snap) {
         __knownChannels = (snap && Array.isArray(snap.entries)) ? snap.entries : [];
+        __knownChannelsError = null;
+        __knownChannelsErrorAt = 0;
         __knownChannelsLoading = false;
         renderChannelList();
       })
       .catch(function (err) {
         __knownChannelsError = String(err && err.message || err);
+        __knownChannelsErrorAt = Date.now();
         __knownChannels = [];
         __knownChannelsLoading = false;
         renderChannelList();
@@ -1840,19 +1858,14 @@
   }
   function renderKnownChannelsSection() {
     var collapsed = localStorage.getItem('ch-known-collapsed') !== 'false';
-    var bodyHtml;
-    if (__knownChannels === null) {
-      // Kick off the fetch on first render; show placeholder.
-      setTimeout(loadKnownChannels, 0);
-      bodyHtml = '<div class="ch-section-empty">Loading catalogue…</div>';
-    } else if (__knownChannelsError) {
-      bodyHtml = '<div class="ch-section-empty">Catalogue unavailable</div>';
-    } else if (__knownChannels.length === 0) {
-      bodyHtml = '<div class="ch-section-empty">No catalogue entries</div>';
-    } else {
-      bodyHtml = __knownChannels.map(renderKnownChannelRow).join('');
-    }
     var count = (__knownChannels && Array.isArray(__knownChannels)) ? __knownChannels.length : 0;
+    // Lazy-render: if collapsed, emit an empty body — the rows are only
+    // built when the user expands (toggle handler populates in place).
+    // Avoids burning DOM for a 1000+ entry catalogue that's never seen.
+    var bodyInner = '';
+    if (!collapsed) {
+      bodyInner = renderKnownChannelsBodyInner();
+    }
     return '' +
       '<div class="ch-section ch-section-catalogue" data-section="catalogue">' +
         '<button type="button" class="ch-section-header ch-section-toggle" id="chCatalogueToggle" aria-expanded="' + (collapsed ? 'false' : 'true') + '" aria-controls="chCatalogueBody">' +
@@ -1860,9 +1873,24 @@
           ' Known channels (catalogue)' + (count ? ' (' + count + ')' : '') +
         '</button>' +
         '<div class="ch-section-body" id="chCatalogueBody"' + (collapsed ? ' hidden' : '') + '>' +
-          bodyHtml +
+          bodyInner +
         '</div>' +
       '</div>';
+  }
+  // Renders the inner HTML for the catalogue body (rows or placeholder).
+  // Kicks off the fetch on first access. Pure HTML string — no DOM writes.
+  function renderKnownChannelsBodyInner() {
+    if (__knownChannels === null) {
+      setTimeout(loadKnownChannels, 0);
+      return '<div class="ch-section-empty">Loading catalogue…</div>';
+    }
+    if (__knownChannelsError) {
+      return '<div class="ch-section-empty">Catalogue unavailable</div>';
+    }
+    if (__knownChannels.length === 0) {
+      return '<div class="ch-section-empty">No catalogue entries</div>';
+    }
+    return __knownChannels.map(renderKnownChannelRow).join('');
   }
   function renderKnownChannelRow(entry) {
     // entry: {channel, description, region, regionName, key?}
@@ -1880,19 +1908,41 @@
       '</div>';
   }
   // Delegated click handler for catalogue "+ Add" buttons + toggle.
-  // Attached lazily (once) at first renderChannelList call.
-  var __knownChannelsHandlersBound = false;
+  // Bound per-#chList-element (marker stored on the DOM node itself) so a
+  // future #chList recreation re-binds automatically instead of leaving a
+  // dead listener pinned to a destroyed node.
   function bindKnownChannelsHandlers() {
-    if (__knownChannelsHandlersBound) return;
     var list = document.getElementById('chList');
     if (!list) return;
+    if (list.dataset.knownChannelsBound === '1') return;
     list.addEventListener('click', function (e) {
       var t = e.target;
       if (!t) return;
       if (t.id === 'chCatalogueToggle' || (t.closest && t.closest('#chCatalogueToggle'))) {
+        // Toggle in place: flip the body's hidden attr and caret, no
+        // full renderChannelList() rebuild. On first expand, populate
+        // the body lazily so collapsed catalogues never pay DOM cost.
         var wasCollapsed = localStorage.getItem('ch-known-collapsed') !== 'false';
-        try { localStorage.setItem('ch-known-collapsed', wasCollapsed ? 'false' : 'true'); } catch (er) {}
-        renderChannelList();
+        var nowCollapsed = !wasCollapsed;
+        try { localStorage.setItem('ch-known-collapsed', nowCollapsed ? 'true' : 'false'); } catch (er) {}
+        var body = document.getElementById('chCatalogueBody');
+        var btn = document.getElementById('chCatalogueToggle');
+        if (body) {
+          if (nowCollapsed) {
+            body.setAttribute('hidden', '');
+          } else {
+            body.removeAttribute('hidden');
+            // Populate if empty (lazy first-expand).
+            if (!body.firstChild || body.innerHTML === '') {
+              body.innerHTML = renderKnownChannelsBodyInner();
+            }
+          }
+        }
+        if (btn) {
+          btn.setAttribute('aria-expanded', nowCollapsed ? 'false' : 'true');
+          var caret = btn.querySelector('.ch-section-caret');
+          if (caret) caret.textContent = nowCollapsed ? '▸' : '▾';
+        }
         return;
       }
       var addBtn = (t.dataset && t.dataset.action === 'ch-known-add') ? t : (t.closest && t.closest('[data-action="ch-known-add"]'));
@@ -1904,7 +1954,7 @@
         }
       }
     });
-    __knownChannelsHandlersBound = true;
+    list.dataset.knownChannelsBound = '1';
   }
 
   function renderChannelList() {

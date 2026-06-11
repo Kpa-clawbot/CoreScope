@@ -146,3 +146,91 @@ func TestKnownChannelsFailSoftOn500(t *testing.T) {
 		t.Errorf("failCount = %d, want >=1", c.failCount.Load())
 	}
 }
+
+// (d) Malformed JSON returns an error AND increments failCount via
+// fetchOnce (the parse path lives inside fetchOnce so the metric is
+// the cache-level signal operators see, not just the parser's return).
+func TestKnownChannelsParseError(t *testing.T) {
+	// parser-level: garbage in, error out.
+	if _, err := parseKnownChannelsJSON([]byte("{not json"), "fixture://bad", time.Now()); err == nil {
+		t.Fatal("parseKnownChannelsJSON: expected error on malformed JSON")
+	}
+	// cache-level: a 200 with malformed body must bump failCount and
+	// leave any prior snapshot in place.
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("{not json"))
+	}))
+	defer bad.Close()
+	c := newKnownChannelsCache(bad.URL, time.Hour)
+	before := c.failCount.Load()
+	if err := c.fetchOnce(context.Background()); err == nil {
+		t.Fatal("fetchOnce: expected parse error to surface")
+	}
+	if c.failCount.Load() <= before {
+		t.Errorf("failCount did not increment: before=%d after=%d", before, c.failCount.Load())
+	}
+	if c.fetchCount.Load() != 0 {
+		t.Errorf("fetchCount = %d, want 0 (parse failed)", c.fetchCount.Load())
+	}
+}
+
+// (e) The handler tolerates a nil cache (the startup-window fail-soft
+// guarantee): server still serves 200 + an empty entries snapshot
+// rather than 500. Mirrors the production code path where the route
+// is registered before — or independently of — knownChannels being
+// instantiated (the OPT-IN gating leaves it nil entirely when disabled).
+func TestKnownChannelsHandlerNilCache(t *testing.T) {
+	srv := &Server{} // knownChannels intentionally nil
+	r := mux.NewRouter()
+	r.HandleFunc("/api/known-channels", srv.handleKnownChannels).Methods("GET")
+	req := httptest.NewRequest(http.MethodGet, "/api/known-channels", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (nil cache must fail-soft); body=%s", w.Code, w.Body.String())
+	}
+	var resp KnownChannelsSnapshot
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, w.Body.String())
+	}
+	if resp.Entries == nil {
+		t.Fatal("Entries is nil, want non-nil empty slice (JSON [] not null)")
+	}
+	if len(resp.Entries) != 0 {
+		t.Errorf("Entries len = %d, want 0", len(resp.Entries))
+	}
+	if cc := w.Header().Get("Cache-Control"); cc == "" {
+		t.Errorf("Cache-Control header missing on nil-cache response")
+	}
+}
+
+// (f) An empty region query param ("?region=") must pass through as if
+// no filter was supplied — i.e. the full snapshot is returned, NOT an
+// empty list. Guards against an off-by-one in the trim+filter path.
+func TestKnownChannelsRegionEmptyPassthrough(t *testing.T) {
+	snap, err := parseKnownChannelsJSON([]byte(knownChannelsFixture), "fixture://test", time.Now())
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	srv := &Server{knownChannels: &knownChannelsCache{}}
+	srv.knownChannels.ptr.Store(snap)
+	r := mux.NewRouter()
+	r.HandleFunc("/api/known-channels", srv.handleKnownChannels).Methods("GET")
+	req := httptest.NewRequest(http.MethodGet, "/api/known-channels?region=", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp KnownChannelsSnapshot
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, w.Body.String())
+	}
+	if got, want := len(resp.Entries), len(snap.Entries); got != want {
+		t.Fatalf("empty region must return unfiltered snapshot: got %d entries, want %d", got, want)
+	}
+	if cc := w.Header().Get("Cache-Control"); cc == "" {
+		t.Errorf("Cache-Control header missing on populated response")
+	}
+}

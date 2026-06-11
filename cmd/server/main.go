@@ -367,22 +367,25 @@ func main() {
 	defer close(stopNeighborGraphCache)
 	log.Printf("[neighbor-graph-cache] background recompute enabled (interval=%s)", ngInterval)
 
-	// Known-channels catalogue cache (issue #1323). Background fetch with
-	// fail-soft cache. Empty URL leaves srv.knownChannels nil and the
-	// /api/known-channels endpoint serves an empty snapshot.
-	kcURL := cfg.KnownChannelsURL
-	if kcURL == "" {
-		kcURL = DefaultKnownChannelsURL
+	// Known-channels catalogue cache (issue #1323). OPT-IN: an empty
+	// cfg.KnownChannelsURL leaves srv.knownChannels nil and starts no
+	// background fetch. The /api/known-channels endpoint then serves an
+	// empty snapshot. Operators who want the community catalogue must
+	// set knownChannelsUrl explicitly in config.json (see
+	// config.example.json for the pinned-SHA recommendation).
+	if cfg.KnownChannelsURL != "" {
+		kcRefresh := DefaultKnownChannelsRefresh
+		if cfg.KnownChannelsRefreshMs > 0 {
+			kcRefresh = time.Duration(cfg.KnownChannelsRefreshMs) * time.Millisecond
+		}
+		srv.knownChannels = newKnownChannelsCache(cfg.KnownChannelsURL, kcRefresh)
+		kcCtx, stopKnownChannels := context.WithCancel(context.Background())
+		srv.knownChannels.run(kcCtx)
+		defer stopKnownChannels()
+		log.Printf("[known-channels] background fetch enabled (url=%s, refresh=%s)", cfg.KnownChannelsURL, kcRefresh)
+	} else {
+		log.Printf("[known-channels] disabled (knownChannelsUrl unset in config)")
 	}
-	kcRefresh := DefaultKnownChannelsRefresh
-	if cfg.KnownChannelsRefreshMs > 0 {
-		kcRefresh = time.Duration(cfg.KnownChannelsRefreshMs) * time.Millisecond
-	}
-	srv.knownChannels = newKnownChannelsCache(kcURL, kcRefresh)
-	kcCtx, stopKnownChannels := context.WithCancel(context.Background())
-	srv.knownChannels.run(kcCtx)
-	defer stopKnownChannels()
-	log.Printf("[known-channels] background fetch enabled (url=%s, refresh=%s)", kcURL, kcRefresh)
 
 	// Steady-state repeater-enrichment recomputer (issue #1262).
 	// Prewarms the bulk caches feeding handleNodes so the very first
