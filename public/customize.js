@@ -77,21 +77,27 @@
     home: {
       heroTitle: 'CoreScope',
       heroSubtitle: 'Find your nodes to start monitoring them.',
+      // #1648 M5: default step "emoji" values are now Phosphor sprite tokens
+      // ('ph:<icon-name>'). The render path (renderConfigGlyph) ALSO accepts
+      // raw emoji strings for back-compat with operators who saved emoji
+      // values to their existing config — see EMOJI-OK-LEGACY-RENDER below.
       steps: [
-        { emoji: '💬', title: 'Join the Bay Area MeshCore Discord', description: 'The community Discord is the best place to get help and find local mesh enthusiasts.' },
-        { emoji: '🔵', title: 'Connect via Bluetooth', description: 'Flash BLE companion firmware and pair with your device.' },
-        { emoji: '📻', title: 'Set the right frequency preset', description: 'Match the frequency preset used by your local mesh community.' },
-        { emoji: '📡', title: 'Advertise yourself', description: 'Send an ADVERT so repeaters and observers can see you.' },
-        { emoji: '🔁', title: 'Check "Heard N repeats"', description: 'Verify your node is being relayed through the mesh.' },
-        { emoji: '📍', title: 'Repeaters near you?', description: 'Check the map for nearby repeaters and coverage.' }
+        { emoji: 'ph:chat-circle', title: 'Join the Bay Area MeshCore Discord', description: 'The community Discord is the best place to get help and find local mesh enthusiasts.' },
+        { emoji: 'ph:bluetooth', title: 'Connect via Bluetooth', description: 'Flash BLE companion firmware and pair with your device.' },
+        { emoji: 'ph:radio', title: 'Set the right frequency preset', description: 'Match the frequency preset used by your local mesh community.' },
+        { emoji: 'ph:broadcast', title: 'Advertise yourself', description: 'Send an ADVERT so repeaters and observers can see you.' },
+        { emoji: 'ph:repeat', title: 'Check "Heard N repeats"', description: 'Verify your node is being relayed through the mesh.' },
+        { emoji: 'ph:map-pin', title: 'Repeaters near you?', description: 'Check the map for nearby repeaters and coverage.' }
       ],
       checklist: [],
+      // #1648 M5: defaults use 'ph:<name>' tokens. _renderFooterLinkLabel()
+      // accepts either 'ph:<name> Text' or legacy 'emoji Text' for back-compat.
       footerLinks: [
-        { label: '📦 Packets', url: '#/packets' },
-        { label: '🗺️ Network Map', url: '#/map' },
-        { label: '🔴 Live', url: '#/live' },
-        { label: '📡 All Nodes', url: '#/nodes' },
-        { label: '💬 Channels', url: '#/channels' }
+        { label: 'ph:package Packets', url: '#/packets' },
+        { label: 'ph:map-trifold Network Map', url: '#/map' },
+        { label: 'ph:broadcast Live', url: '#/live' },
+        { label: 'ph:broadcast All Nodes', url: '#/nodes' },
+        { label: 'ph:chats Channels', url: '#/channels' }
       ]
     },
     ui: {
@@ -445,7 +451,10 @@
     observer: 'MQTT observer stations — map markers (purple stars), observer list, packet headers'
   };
 
-  const NODE_EMOJI = { repeater: '◆', companion: '●', room: '■', sensor: '▲', observer: '★' };
+  // #1648 M5: glyph tokens for role/type/step DEFAULTS. Format: 'ph:<name>'
+  // → renders as Phosphor sprite. Legacy emoji strings remain readable via
+  // renderConfigGlyph() for operators with stored config (back-compat).
+  const NODE_EMOJI = { repeater: 'ph:diamond', companion: 'ph:circle-fill', room: 'ph:square-fill', sensor: 'ph:triangle', observer: 'ph:star-fill' };
 
   const TYPE_LABELS = {
     ADVERT: 'Advertisement', GRP_TXT: 'Channel Message', TXT_MSG: 'Direct Message', ACK: 'Acknowledgment',
@@ -463,9 +472,34 @@
     PATH: 'Path packets — packet list',
     ANON_REQ: 'Encrypted anonymous requests — sender identity hidden via ephemeral key'
   };
+  // #1648 M5: defaults are ph:<name>; renderConfigGlyph handles legacy emoji.
   const TYPE_EMOJI = {
-    ADVERT: '📡', GRP_TXT: '💬', TXT_MSG: '✉️', ACK: '✓', REQUEST: '❓', RESPONSE: '📨', TRACE: '🔍', PATH: '🛤️', ANON_REQ: '🕵️'
+    ADVERT: 'ph:broadcast', GRP_TXT: 'ph:chat-circle', TXT_MSG: 'ph:envelope', ACK: 'ph:check', REQUEST: 'ph:question', RESPONSE: 'ph:envelope-simple', TRACE: 'ph:magnifying-glass', PATH: 'ph:path', ANON_REQ: 'ph:lock'
   };
+
+  // renderConfigGlyph(value): given an operator-customizable config string,
+  // returns HTML — a Phosphor sprite <svg> when value starts with 'ph:<name>',
+  // otherwise the raw string escaped (back-compat: operator-stored emoji or
+  // any plain text is rendered as-is). #1648 design call #1.
+  function renderConfigGlyph(value) {
+    if (value == null) return '';
+    var s = String(value);
+    var m = s.match(/^ph:([a-z][a-z0-9-]+)$/);
+    if (m) {
+      return '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-' + m[1] + '"/></svg>';
+    }
+    return esc(s); // EMOJI-OK-LEGACY-RENDER — operator-stored emoji/text path
+  }
+  // Footer-link / step labels can be either 'ph:<name> Text' OR 'emoji Text'
+  // OR plain text. Split the first token; if it's a ph token render sprite +
+  // remainder; otherwise render the whole label as text (back-compat).
+  function renderConfigLabel(label) {
+    if (label == null) return '';
+    var s = String(label);
+    var m = s.match(/^(ph:[a-z][a-z0-9-]+)\s+(.*)$/);
+    if (m) return renderConfigGlyph(m[1]) + ' ' + esc(m[2]);
+    return esc(s); // EMOJI-OK-LEGACY-RENDER
+  }
 
   // Current state
   let state = {};
@@ -695,16 +729,16 @@
 
   function renderTabs() {
     var tabs = [
-      { id: 'branding', label: '🏷️', title: 'Branding' },
-      { id: 'theme', label: '🎨', title: 'Theme Colors' },
-      { id: 'nodes', label: '🎯', title: 'Colors' },
-      { id: 'home', label: '🏠', title: 'Home Page' },
-      { id: 'display', label: '🖥️', title: 'Display' },
-      { id: 'export', label: '📤', title: 'Export / Save' }
+      { id: 'branding', glyph: 'ph:tag', title: 'Branding' },
+      { id: 'theme', glyph: 'ph:palette', title: 'Theme Colors' },
+      { id: 'nodes', glyph: 'ph:target', title: 'Colors' },
+      { id: 'home', glyph: 'ph:house', title: 'Home Page' },
+      { id: 'display', glyph: 'ph:monitor', title: 'Display' },
+      { id: 'export', glyph: 'ph:download-simple', title: 'Export / Save' }
     ];
     return '<div class="cust-tabs">' +
       tabs.map(function (t) {
-        return '<button class="cust-tab' + (t.id === activeTab ? ' active' : '') + '" data-tab="' + t.id + '" title="' + t.title + '">' + t.label + ' <span class="cust-tab-text">' + t.title + '</span></button>';
+        return '<button class="cust-tab' + (t.id === activeTab ? ' active' : '') + '" data-tab="' + t.id + '" title="' + t.title + '">' + renderConfigGlyph(t.glyph) + ' <span class="cust-tab-text">' + t.title + '</span></button>';
       }).join('') + '</div>';
   }
 
@@ -775,7 +809,7 @@
 
   function renderTheme() {
     var dark = isDarkMode();
-    var modeLabel = dark ? '🌙 Dark Mode' : '☀️ Light Mode';
+    var modeLabel = dark ? (renderConfigGlyph('ph:moon') + ' Dark Mode') : (renderConfigGlyph('ph:sun') + ' Light Mode');
     var defs = activeDefaults();
     var current = activeTheme();
 
@@ -800,7 +834,7 @@
     return '<div class="cust-panel' + (activeTab === 'theme' ? ' active' : '') + '" data-panel="theme">' +
       renderPresets() +
       '<p class="cust-section-title">' + modeLabel + '</p>' +
-      '<p style="font-size:11px;color:var(--text-muted);margin:0 0 10px">Toggle ☀️/🌙 in nav to edit the other mode.</p>' +
+      '<p style="font-size:11px;color:var(--text-muted);margin:0 0 10px">Toggle ' + renderConfigGlyph('ph:sun') + '/' + renderConfigGlyph('ph:moon') + ' in nav to edit the other mode.</p>' +
       basicRows +
       '<details class="cust-advanced"><summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--text-muted);margin:12px 0 8px">Advanced (' + ADVANCED_KEYS.length + ' options)</summary>' +
       advancedRows +
@@ -818,7 +852,7 @@
       var val = state.nodeColors[key];
       var def = DEFAULTS.nodeColors[key];
       rows += '<div class="cust-color-row">' +
-        '<div><label for="cust-node-' + key + '">' + NODE_EMOJI[key] + ' ' + NODE_LABELS[key] + '</label>' +
+        '<div><label for="cust-node-' + key + '">' + renderConfigGlyph(NODE_EMOJI[key]) + ' ' + NODE_LABELS[key] + '</label>' +
         '<div class="cust-hint">' + (NODE_HINTS[key] || '') + '</div></div>' +
         '<input type="color" id="cust-node-' + key + '" data-node="' + key + '" value="' + val + '">' +
         '<span class="cust-node-dot" style="background:' + val + '" data-dot="' + key + '"></span>' +
@@ -831,7 +865,7 @@
       var tval = state.typeColors[tkey];
       var tdef = DEFAULTS.typeColors[tkey];
       typeRows += '<div class="cust-color-row">' +
-        '<div><label for="cust-type-' + tkey + '">' + (TYPE_EMOJI[tkey] || '') + ' ' + TYPE_LABELS[tkey] + '</label>' +
+        '<div><label for="cust-type-' + tkey + '">' + renderConfigGlyph(TYPE_EMOJI[tkey] || '') + ' ' + TYPE_LABELS[tkey] + '</label>' +
         '<div class="cust-hint">' + (TYPE_HINTS[tkey] || '') + '</div></div>' +
         '<input type="color" id="cust-type-' + tkey + '" data-type-color="' + tkey + '" value="' + tval + '">' +
         '<span class="cust-node-dot" style="background:' + tval + '" data-tdot="' + tkey + '"></span>' +
@@ -852,13 +886,13 @@
       '<hr style="border:none;border-top:1px solid var(--border);margin:16px 0">' +
       '<p class="cust-section-title">Heatmap Opacity</p>' +
       '<div class="cust-color-row">' +
-        '<div><label for="custHeatOpacity">🗺️ Nodes Map</label>' +
+        '<div><label for="custHeatOpacity"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> Nodes Map</label>' +
         '<div class="cust-hint">Heatmap overlay on the Nodes → Map page (0–100%)</div></div>' +
         '<input type="range" id="custHeatOpacity" min="0" max="100" value="' + heatPct + '" style="width:120px;cursor:pointer">' +
         '<span id="custHeatOpacityVal" style="font-family:var(--mono);font-size:12px;color:var(--text-muted);min-width:36px">' + heatPct + '%</span>' +
       '</div>' +
       '<div class="cust-color-row">' +
-        '<div><label for="custLiveHeatOpacity">📡 Live Map</label>' +
+        '<div><label for="custLiveHeatOpacity"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Live Map</label>' +
         '<div class="cust-hint">Heatmap overlay on the Live page (0–100%)</div></div>' +
         '<input type="range" id="custLiveHeatOpacity" min="0" max="100" value="' + liveHeatPct + '" style="width:120px;cursor:pointer">' +
         '<span id="custLiveHeatOpacityVal" style="font-family:var(--mono);font-size:12px;color:var(--text-muted);min-width:36px">' + liveHeatPct + '%</span>' +
@@ -871,11 +905,16 @@
     var stepsHtml = h.steps.map(function (s, i) {
       return '<div class="cust-list-item" data-step="' + i + '">' +
         '<div class="cust-list-row">' +
-          '<input class="cust-emoji-input" data-step-field="emoji" data-idx="' + i + '" value="' + escAttr(s.emoji) + '" placeholder="📡" aria-label="Step ' + (i + 1) + ' emoji">' +
+          // Glyph input: accepts a 'ph:<name>' token OR a legacy emoji/text
+          // string. Preview rendered alongside via renderConfigGlyph(); the
+          // input field itself stays a plain text input so operators can
+          // type either form. EMOJI-OK-LEGACY-RENDER.
+          '<span class="cust-emoji-preview" aria-hidden="true" style="min-width:1em;display:inline-block">' + renderConfigGlyph(s.emoji) + '</span>' +
+          '<input class="cust-emoji-input" data-step-field="emoji" data-idx="' + i + '" value="' + escAttr(s.emoji) + '" placeholder="ph:broadcast" aria-label="Step ' + (i + 1) + ' glyph (ph:name or emoji)">' +
           '<input data-step-field="title" data-idx="' + i + '" value="' + escAttr(s.title) + '" placeholder="Title" aria-label="Step ' + (i + 1) + ' title">' +
-          '<button class="cust-list-btn" data-move-step="' + i + '" data-dir="up" title="Move up">↑</button>' +
-          '<button class="cust-list-btn" data-move-step="' + i + '" data-dir="down" title="Move down">↓</button>' +
-          '<button class="cust-list-btn danger" data-rm-step="' + i + '" title="Remove">✕</button>' +
+          '<button class="cust-list-btn" data-move-step="' + i + '" data-dir="up" title="Move up"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-up"/></svg></button>' +
+          '<button class="cust-list-btn" data-move-step="' + i + '" data-dir="down" title="Move down"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-down"/></svg></button>' +
+          '<button class="cust-list-btn danger" data-rm-step="' + i + '" title="Remove"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>' +
         '</div>' +
         '<textarea data-step-field="description" data-idx="' + i + '" placeholder="Description" rows="2" aria-label="Step ' + (i + 1) + ' description">' + esc(s.description) + '</textarea>' +
         '<div class="cust-md-hint">Markdown: <code>**bold**</code> <code>*italic*</code> <code>`code`</code> <code>[text](url)</code> <code>- list</code></div>' +
@@ -886,7 +925,7 @@
       return '<div class="cust-list-item" data-check="' + i + '">' +
         '<div class="cust-list-row">' +
           '<input data-check-field="question" data-idx="' + i + '" value="' + escAttr(c.question) + '" placeholder="Question" aria-label="Checklist item ' + (i + 1) + ' question">' +
-          '<button class="cust-list-btn danger" data-rm-check="' + i + '" title="Remove">✕</button>' +
+          '<button class="cust-list-btn danger" data-rm-check="' + i + '" title="Remove"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>' +
         '</div>' +
         '<textarea data-check-field="answer" data-idx="' + i + '" placeholder="Answer" rows="2" aria-label="Checklist item ' + (i + 1) + ' answer">' + esc(c.answer) + '</textarea>' +
         '<div class="cust-md-hint">Markdown: <code>**bold**</code> <code>*italic*</code> <code>`code`</code> <code>[text](url)</code> <code>- list</code></div>' +
@@ -896,8 +935,8 @@
     var linksHtml = h.footerLinks.map(function (l, i) {
       return '<div class="cust-list-item" data-link="' + i + '">' +
         '<div class="cust-list-row">' +
-          '<input data-link-field="label" data-idx="' + i + '" value="' + escAttr(l.label) + '" placeholder="Label" aria-label="Footer link ' + (i + 1) + ' label">' +
-          '<button class="cust-list-btn danger" data-rm-link="' + i + '" title="Remove">✕</button>' +
+          '<input data-link-field="label" data-idx="' + i + '" value="' + escAttr(l.label) + '" placeholder="Label (e.g. ph:package Packets)" aria-label="Footer link ' + (i + 1) + ' label">' +
+          '<button class="cust-list-btn danger" data-rm-link="' + i + '" title="Remove"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>' +
         '</div>' +
         '<input data-link-field="url" data-idx="' + i + '" value="' + escAttr(l.url) + '" placeholder="URL" aria-label="Footer link ' + (i + 1) + ' URL">' +
       '</div>';
@@ -979,17 +1018,17 @@
       '<p class="cust-section-title">My Preferences</p>' +
       '<p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Save these colors just for you — stored in your browser, works on any instance.</p>' +
       '<div class="cust-export-btns" style="margin-bottom:16px">' +
-        '<button class="cust-save-user" id="custSaveUser">💾 Save as my theme</button>' +
-        (hasUserTheme ? '<button class="cust-reset-user" id="custResetUser">🗑️ Reset my theme</button>' : '') +
+        '<button class="cust-save-user" id="custSaveUser"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-floppy-disk"/></svg> Save as my theme</button>' +
+        (hasUserTheme ? '<button class="cust-reset-user" id="custResetUser"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trash"/></svg> Reset my theme</button>' : '') +
       '</div>' +
       '<hr style="border:none;border-top:1px solid var(--border);margin:16px 0">' +
       '<p class="cust-section-title">Admin</p>' +
       '<p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Download or import a theme file. Admins place it as <code>theme.json</code> next to the server.</p>' +
       '<div class="cust-export-btns" style="margin-bottom:12px">' +
-        '<button class="cust-dl-btn" id="custDownload">💾 Download theme.json</button>' +
-        '<button class="cust-dl-btn" id="custImportFile">📂 Import File</button>' +
+        '<button class="cust-dl-btn" id="custDownload"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-floppy-disk"/></svg> Download theme.json</button>' +
+        '<button class="cust-dl-btn" id="custImportFile"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-folder-open"/></svg> Import File</button>' +
         '<input type="file" id="custImportInput" accept=".json,application/json" style="display:none" aria-label="Import theme file">' +
-        '<button class="cust-copy-btn" id="custCopy">📋 Copy</button>' +
+        '<button class="cust-copy-btn" id="custCopy"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clipboard-text"/></svg> Copy</button>' +
       '</div>' +
       '<details style="margin-top:8px"><summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--text-muted)">Raw JSON</summary>' +
       '<textarea class="cust-export-area" id="custExportJson" style="margin-top:8px" aria-label="Theme JSON data">' + esc(json) + '</textarea>' +
@@ -1054,7 +1093,7 @@
           var iconEl = document.querySelector('.brand-icon');
           if (iconEl) {
             if (inp.value) { iconEl.innerHTML = '<img src="' + inp.value + '" style="height:24px" onerror="this.style.display=\'none\'">'; }
-            else { iconEl.textContent = '📡'; }
+            else { iconEl.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg>'; }
           }
         }
         if (inp.dataset.key === 'branding.faviconUrl') {
@@ -1262,7 +1301,7 @@
     });
     var addStepBtn = document.getElementById('addStep');
     if (addStepBtn) addStepBtn.addEventListener('click', function () {
-      state.home.steps.push({ emoji: '📌', title: '', description: '' });
+      state.home.steps.push({ emoji: 'ph:push-pin', title: '', description: '' });
       render(container); autoSave();
     });
 
@@ -1310,8 +1349,8 @@
       var ta = document.getElementById('custExportJson');
       if (ta) {
         window.copyToClipboard(ta.value, function () {
-          copyBtn.textContent = '✓ Copied!';
-          setTimeout(function () { copyBtn.textContent = '📋 Copy to Clipboard'; }, 2000);
+          copyBtn.textContent = 'Copied!';
+          setTimeout(function () { copyBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clipboard-text"/></svg> Copy to Clipboard'; }, 2000);
         });
       }
     });
@@ -1333,8 +1372,8 @@
     if (saveUserBtn) saveUserBtn.addEventListener('click', function () {
       var exportData = buildExport();
       localStorage.setItem('meshcore-user-theme', JSON.stringify(exportData));
-      saveUserBtn.textContent = '✓ Saved!';
-      setTimeout(function () { saveUserBtn.textContent = '💾 Save as my theme'; }, 2000);
+      saveUserBtn.textContent = 'Saved!';
+      setTimeout(function () { saveUserBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-floppy-disk"/></svg> Save as my theme'; }, 2000);
     });
 
     // Reset user theme
@@ -1387,11 +1426,11 @@
             autoSave();
             window.dispatchEvent(new CustomEvent('theme-changed'));
             render(container);
-            importBtn.textContent = '✓ Imported!';
-            setTimeout(function () { importBtn.textContent = '📂 Import File'; }, 2000);
+            importBtn.textContent = 'Imported!';
+            setTimeout(function () { importBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-folder-open"/></svg> Import File'; }, 2000);
           } catch (e) {
-            importBtn.textContent = '✕ Invalid JSON';
-            setTimeout(function () { importBtn.textContent = '📂 Import File'; }, 3000);
+            importBtn.textContent = 'Invalid JSON';
+            setTimeout(function () { importBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-folder-open"/></svg> Import File'; }, 3000);
           }
         };
         reader.readAsText(file);
@@ -1415,8 +1454,8 @@
     panelEl.className = 'cust-overlay';
     panelEl.innerHTML =
       '<div class="cust-header">' +
-        '<h2>🎨 Customize</h2>' +
-        '<button class="cust-close" title="Close">✕</button>' +
+        '<h2><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-palette"/></svg> Customize</h2>' +
+        '<button class="cust-close" title="Close"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>' +
       '</div>' +
       '<div class="cust-inner"></div>';
     document.body.appendChild(panelEl);

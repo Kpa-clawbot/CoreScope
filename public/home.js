@@ -7,6 +7,26 @@
   let searchAbort = null; // AbortController for document-level listeners
   let _themeRefreshHandler = null;
 
+  // #1648 M5: home steps + footerLinks may store either a 'ph:<name>' sprite
+  // token (new defaults) or a legacy emoji/text string (operator config).
+  // Return safe HTML — sprite for ph tokens, escaped text for everything
+  // else. EMOJI-OK-LEGACY-RENDER below preserves operator-stored emoji.
+  function _renderHomeGlyph(value) {
+    if (value == null) return '';
+    const s = String(value);
+    const m = s.match(/^ph:([a-z][a-z0-9-]+)$/);
+    if (m) return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-${m[1]}"/></svg>`;
+    return _escHtml(s); // EMOJI-OK-LEGACY-RENDER
+  }
+  function _renderHomeLabel(label) {
+    if (label == null) return '';
+    const s = String(label);
+    const m = s.match(/^(ph:[a-z][a-z0-9-]+)\s+(.*)$/);
+    if (m) return _renderHomeGlyph(m[1]) + ' ' + _escHtml(m[2]);
+    return _escHtml(s); // EMOJI-OK-LEGACY-RENDER
+  }
+  function _escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
   const PREF_KEY = 'meshcore-user-level';
   const MY_NODES_KEY = 'meshcore-my-nodes'; // [{pubkey, name, addedAt}]
 
@@ -119,7 +139,7 @@
 
       <section class="home-footer">
         <div class="home-footer-links">
-          ${homeCfg?.footerLinks ? homeCfg.footerLinks.map(l => `<a href="${escapeAttr(l.url)}" class="home-footer-link" target="_blank" rel="noopener">${escapeHtml(l.label)}</a>`).join('') : `
+          ${homeCfg?.footerLinks ? homeCfg.footerLinks.map(l => `<a href="${escapeAttr(l.url)}" class="home-footer-link" target="_blank" rel="noopener">${_renderHomeLabel(l.label)}</a>`).join('') : `
           <a href="#/packets" class="home-footer-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg> Packets</a>
           <a href="#/map" class="home-footer-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> Network Map</a>
           <a href="#/live" class="home-footer-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Live</a>
@@ -540,7 +560,7 @@
     var html = '';
     // Render steps (getting started guide)
     if (homeCfg?.steps?.length) {
-      html += homeCfg.steps.map(s => `<div class="checklist-item"><div class="checklist-q" role="button" tabindex="0" aria-expanded="false">${escapeHtml(s.emoji || '')} ${escapeHtml(s.title)}</div><div class="checklist-a">${window.miniMarkdown ? miniMarkdown(s.description) : escapeHtml(s.description)}</div></div>`).join('');
+      html += homeCfg.steps.map(s => `<div class="checklist-item"><div class="checklist-q" role="button" tabindex="0" aria-expanded="false">${_renderHomeGlyph(s.emoji || '')} ${escapeHtml(s.title)}</div><div class="checklist-a">${window.miniMarkdown ? miniMarkdown(s.description) : escapeHtml(s.description)}</div></div>`).join('');
     }
     // Render FAQ/checklist (additional Q&A)
     if (homeCfg?.checklist?.length) {

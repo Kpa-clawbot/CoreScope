@@ -8,6 +8,8 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  /* #1648 M5: Phosphor sprite glyph — inherits currentColor, sized to font. */
+  .ph-icon { width: 1em; height: 1em; fill: currentColor; vertical-align: -0.125em; }
   body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; }
   header { padding: 12px 16px; background: #0f0f23; border-bottom: 1px solid #333; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
   header h1 { font-size: 1rem; font-weight: 600; color: #4a9eff; white-space: nowrap; }
@@ -49,10 +51,10 @@
   <a href="/" id="back-link">← CoreScope</a>
   <h1>GeoFilter Builder</h1>
   <div class="controls">
-    <button id="btnUndo">↩ Undo</button>
-    <button id="btnClear">✕ Clear</button>
-    <button id="btnSaveDraft">💾 Save Draft</button>
-    <button id="btnLoadDraft">📂 Load Draft</button>
+    <button id="btnUndo"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-arrow-u-up-left"/></svg> Undo</button>
+    <button id="btnClear"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg> Clear</button>
+    <button id="btnSaveDraft"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-floppy-disk"/></svg> Save Draft</button>
+    <button id="btnLoadDraft"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-folder-open"/></svg> Load Draft</button>
   </div>
   <div class="bufferRow">
     <label for="bufferKm">Buffer km:</label>
@@ -182,8 +184,8 @@ document.getElementById('btnSaveDraft').addEventListener('click', function() {
   const bufferKm = parseFloat(document.getElementById('bufferKm').value) || 0;
   GeofilterDraft.saveDraft(points, bufferKm);
   const btn = document.getElementById('btnSaveDraft');
-  btn.textContent = '✓ Saved';
-  setTimeout(() => { btn.textContent = '💾 Save Draft'; }, 2000);
+  btn.textContent = 'Saved';
+  setTimeout(() => { btn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-floppy-disk"/></svg> Save Draft'; }, 2000);
 });
 
 document.getElementById('btnLoadDraft').addEventListener('click', function() {

@@ -105,7 +105,8 @@ function assertCustomizeDefaultsUsePhTokens() {
 function assertRoutesGoUsesPhTokens() {
   const txt = fs.readFileSync(path.join(ROOT, 'cmd/server/routes.go'), 'utf8');
   // Onboarding home defaults must echo Phosphor tokens, not raw emoji.
-  const phTokens = (txt.match(/"ph:[a-z-]+"/g) || []).length;
+  // 4 steps × 1 token + 2 footerLinks × 1 token = 6 occurrences minimum.
+  const phTokens = (txt.match(/ph:[a-z-]+/g) || []).length;
   assert.ok(phTokens >= 6,
     `cmd/server/routes.go must echo ≥6 'ph:<name>' tokens in home defaults (got ${phTokens})`);
 }

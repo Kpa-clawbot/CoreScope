@@ -150,7 +150,7 @@
       '<ul>',
       '<li>Right-click any cell in the packet table to add a clause for that value.</li>',
       '<li>Type a partial field name to autocomplete; Tab/Enter accepts, Esc dismisses.</li>',
-      '<li>Save commonly-used expressions via the ★ Save button — they appear in the Saved dropdown.</li>',
+      '<li>Save commonly-used expressions via the <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star"/></svg> Save button — they appear in the Saved dropdown.</li>',
       '</ul>',
     ].join('');
   }
@@ -169,7 +169,7 @@
     var pop = _h('div', { id: 'filterHelpPopover', class: 'modal fux-popover', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Filter syntax help' });
     pop.innerHTML =
       '<div class="fux-popover-header"><strong>Filter syntax</strong>' +
-      '<button type="button" class="fux-popover-close" aria-label="Close">✕</button></div>' +
+      '<button type="button" class="fux-popover-close" aria-label="Close"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button></div>' +
       '<div class="fux-popover-body">' + _buildHelpHtml() + '</div>';
     overlay.appendChild(pop);
     document.body.appendChild(overlay);
@@ -362,7 +362,7 @@
       var list = SavedFilters.list();
       var rows = list.map(function(f, i) {
         var del = f.builtin ? '' :
-          '<button type="button" class="fux-saved-del" data-name="' + _esc(f.name) + '" title="Delete">✕</button>';
+          '<button type="button" class="fux-saved-del" data-name="' + _esc(f.name) + '" title="Delete"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>';
         return '<div class="fux-saved-item" data-idx="' + i + '">' +
           '<span class="fux-saved-name">' + _esc(f.name) + '</span>' +
           '<span class="fux-saved-expr fux-mono">' + _esc(f.expr) + '</span>' +

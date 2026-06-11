@@ -191,7 +191,7 @@
     _overlayShown = true;
     const overlay = document.createElement('div');
     overlay.className = 'audio-unlock-overlay';
-    overlay.innerHTML = '<div class="audio-unlock-prompt">🔊 Tap to enable audio</div>';
+    overlay.innerHTML = '<div class="audio-unlock-prompt"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-speaker-high"/></svg> Tap to enable audio</div>';
     overlay.addEventListener('click', () => {
       if (audioCtx) audioCtx.resume();
       overlay.remove();

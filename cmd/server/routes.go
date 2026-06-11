@@ -564,14 +564,19 @@ func (s *Server) handleConfigTheme(w http.ResponseWriter, r *http.Request) {
 		"heroTitle":    "CoreScope",
 		"heroSubtitle": "Real-time MeshCore LoRa mesh network analyzer",
 		"steps": []interface{}{
-			map[string]interface{}{"emoji": "🔵", "title": "Connect via Bluetooth", "description": "Flash **BLE companion** firmware from [MeshCore Flasher](https://flasher.meshcore.io/).\n- Screenless devices: default PIN `123456`\n- Screen devices: random PIN shown on display\n- If pairing fails: forget device, reboot, re-pair"},
-			map[string]interface{}{"emoji": "📻", "title": "Set the right frequency preset", "description": "**US Recommended:**\n`910.525 MHz · BW 62.5 kHz · SF 7 · CR 5`\nSelect **\"US Recommended\"** in the app or flasher."},
-			map[string]interface{}{"emoji": "📡", "title": "Advertise yourself", "description": "Tap the signal icon → **Flood** to broadcast your node to the mesh. Companions only advert when you trigger it manually."},
-			map[string]interface{}{"emoji": "🔁", "title": "Check \"Heard N repeats\"", "description": "- **\"Sent\"** = transmitted, no confirmation\n- **\"Heard 0 repeats\"** = no repeater picked it up\n- **\"Heard 1+ repeats\"** = you're on the mesh!"},
+			// #1648 M5: defaults use 'ph:<name>' Phosphor sprite tokens.
+			// The frontend render path (home.js _renderHomeGlyph, customize-v2.js
+			// renderConfigGlyph) ALSO accepts legacy emoji strings, so any
+			// operator config.json that still stores raw emoji values continues
+			// to render as-is — this changes ONLY the built-in default set.
+			map[string]interface{}{"emoji": "ph:bluetooth", "title": "Connect via Bluetooth", "description": "Flash **BLE companion** firmware from [MeshCore Flasher](https://flasher.meshcore.io/).\n- Screenless devices: default PIN `123456`\n- Screen devices: random PIN shown on display\n- If pairing fails: forget device, reboot, re-pair"},
+			map[string]interface{}{"emoji": "ph:radio", "title": "Set the right frequency preset", "description": "**US Recommended:**\n`910.525 MHz · BW 62.5 kHz · SF 7 · CR 5`\nSelect **\"US Recommended\"** in the app or flasher."},
+			map[string]interface{}{"emoji": "ph:broadcast", "title": "Advertise yourself", "description": "Tap the signal icon → **Flood** to broadcast your node to the mesh. Companions only advert when you trigger it manually."},
+			map[string]interface{}{"emoji": "ph:repeat", "title": "Check \"Heard N repeats\"", "description": "- **\"Sent\"** = transmitted, no confirmation\n- **\"Heard 0 repeats\"** = no repeater picked it up\n- **\"Heard 1+ repeats\"** = you're on the mesh!"},
 		},
 		"footerLinks": []interface{}{
-			map[string]interface{}{"label": "📦 Packets", "url": "#/packets"},
-			map[string]interface{}{"label": "🗺️ Network Map", "url": "#/map"},
+			map[string]interface{}{"label": "ph:package Packets", "url": "#/packets"},
+			map[string]interface{}{"label": "ph:map-trifold Network Map", "url": "#/map"},
 		},
 	}
 	home := mergeMap(defaultHome, s.cfg.Home, theme.Home)
