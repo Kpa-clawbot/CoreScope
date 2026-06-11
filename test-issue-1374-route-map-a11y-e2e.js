@@ -109,12 +109,21 @@ async function runViewport(browser, width, height, label) {
   await step(label + ': sequence-number badge present beside each marker (not in label text)', async () => {
     const data = await page.evaluate(() => {
       const badges = Array.from(document.querySelectorAll('.mc-route-seq-badge'));
-      return badges.map(b => b.textContent.trim());
+      return badges.map(b => ({
+        text: b.textContent.trim(),
+        // #1648 M4: origin/dest badges now contain a Phosphor sprite
+        // (<use href="…#ph-play"/> or "#ph-flag") instead of a glyph char.
+        spriteId: (b.querySelector('use') || {}).getAttribute &&
+          (b.querySelector('use').getAttribute('href') || '').replace(/^.*#/, ''),
+      }));
     });
     assert(data.length >= 5, 'expected >=5 sequence badges, got ' + data.length);
-    // Badges should be numeric or numbered glyphs.
+    // Badges should be numeric, a numbered glyph, OR a Phosphor sprite ref
+    // (ph-play for origin, ph-flag for destination).
     for (const b of data) {
-      assert(/^[\d①②③④⑤⑥⑦⑧⑨⑩▶⚑]+$/.test(b), 'badge "' + b + '" not numeric/glyph');
+      if (b.text && /^[\d①②③④⑤⑥⑦⑧⑨⑩▶⚑]+$/.test(b.text)) continue;
+      if (b.spriteId && /^ph-(play|flag)$/.test(b.spriteId)) continue;
+      assert(false, 'badge "' + JSON.stringify(b) + '" not numeric/glyph/sprite');
     }
   });
 
