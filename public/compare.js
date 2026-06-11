@@ -132,6 +132,13 @@ if (typeof window !== 'undefined') {
     routeFilter = 'all';
   }
 
+  // #1646 round-2 — single shared "should we run a comparison?" predicate
+  // used by every auto-run call site so guards cannot drift apart.
+  // URL-prepopulated ?a=X&b=X (same observer in both slots) returns false.
+  function isComparisonReady() {
+    return !!(selA && selB && selA !== selB);
+  }
+
   async function loadObservers() {
     try {
       var data = await api('/observers', { ttl: CLIENT_TTL.observers });
@@ -139,7 +146,7 @@ if (typeof window !== 'undefined') {
         return (a.name || a.id).localeCompare(b.name || b.id);
       });
       renderControls();
-      if (selA && selB) runComparison();
+      if (isComparisonReady()) runComparison();
     } catch (e) {
       document.getElementById('compareControls').innerHTML =
         '<div class="text-muted" style="padding:20px">Error loading observers: ' + escapeHtml(e.message) + '</div>';
@@ -201,7 +208,7 @@ if (typeof window !== 'undefined') {
       selA = ddA.value || null;
       selB = ddB.value || null;
       var wrap = document.getElementById('compareControls');
-      var ready = !!(selA && selB && selA !== selB);
+      var ready = isComparisonReady();
       if (wrap) wrap.classList.toggle('is-collapsed', ready);
       renderBreadcrumbs();
     }
@@ -209,7 +216,7 @@ if (typeof window !== 'undefined') {
       updateBtn();
       // change events only fire when value actually changes, so any
       // ready transition that lands here came from a real user action.
-      if (selA && selB && selA !== selB) runComparison();
+      if (isComparisonReady()) runComparison();
     }
     ddA.addEventListener('change', onChange);
     ddB.addEventListener('change', onChange);
