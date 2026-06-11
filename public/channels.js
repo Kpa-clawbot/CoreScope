@@ -1808,6 +1808,106 @@
   }
 
   // #1034 PR1: sectioned sidebar — My Channels / Network / Encrypted (N).
+  // #1323: Known-channels (catalogue) section — community-maintained
+  // hashtag-channels list fetched from /api/known-channels. Lazy: the
+  // first render shows a "Loading…" placeholder and kicks off the fetch;
+  // when it completes the section is re-rendered with the entries. The
+  // section is collapsed by default (persisted via localStorage). Click
+  // "+ Add" on a row to invoke the existing addUserChannel() path, which
+  // saves the key + decrypts.
+  var __knownChannels = null;         // null = not fetched; [] = fetched empty
+  var __knownChannelsLoading = false; // single-flight guard
+  var __knownChannelsError = null;
+  function loadKnownChannels() {
+    if (__knownChannelsLoading || __knownChannels !== null) return;
+    __knownChannelsLoading = true;
+    var url = '/api/known-channels';
+    var rp = RegionFilter.getRegionParam && RegionFilter.getRegionParam();
+    // Note: region filter intentionally NOT applied — catalogue is small
+    // and the user may want to browse other regions even if they're
+    // viewing one. Future work: per-section region selector.
+    fetch(url).then(function (r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
+      .then(function (snap) {
+        __knownChannels = (snap && Array.isArray(snap.entries)) ? snap.entries : [];
+        __knownChannelsLoading = false;
+        renderChannelList();
+      })
+      .catch(function (err) {
+        __knownChannelsError = String(err && err.message || err);
+        __knownChannels = [];
+        __knownChannelsLoading = false;
+        renderChannelList();
+      });
+  }
+  function renderKnownChannelsSection() {
+    var collapsed = localStorage.getItem('ch-known-collapsed') !== 'false';
+    var bodyHtml;
+    if (__knownChannels === null) {
+      // Kick off the fetch on first render; show placeholder.
+      setTimeout(loadKnownChannels, 0);
+      bodyHtml = '<div class="ch-section-empty">Loading catalogue…</div>';
+    } else if (__knownChannelsError) {
+      bodyHtml = '<div class="ch-section-empty">Catalogue unavailable</div>';
+    } else if (__knownChannels.length === 0) {
+      bodyHtml = '<div class="ch-section-empty">No catalogue entries</div>';
+    } else {
+      bodyHtml = __knownChannels.map(renderKnownChannelRow).join('');
+    }
+    var count = (__knownChannels && Array.isArray(__knownChannels)) ? __knownChannels.length : 0;
+    return '' +
+      '<div class="ch-section ch-section-catalogue" data-section="catalogue">' +
+        '<button type="button" class="ch-section-header ch-section-toggle" id="chCatalogueToggle" aria-expanded="' + (collapsed ? 'false' : 'true') + '" aria-controls="chCatalogueBody">' +
+          '<span class="ch-section-caret" aria-hidden="true">' + (collapsed ? '▸' : '▾') + '</span>' +
+          ' Known channels (catalogue)' + (count ? ' (' + count + ')' : '') +
+        '</button>' +
+        '<div class="ch-section-body" id="chCatalogueBody"' + (collapsed ? ' hidden' : '') + '>' +
+          bodyHtml +
+        '</div>' +
+      '</div>';
+  }
+  function renderKnownChannelRow(entry) {
+    // entry: {channel, description, region, regionName, key?}
+    var chName = String(entry.channel || '').toLowerCase();
+    var safeName = chName.replace(/[<>&"]/g, function (c) { return ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'})[c]; });
+    var desc = String(entry.description || '').replace(/[<>&"]/g, function (c) { return ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'})[c]; });
+    var region = String(entry.region || '').toUpperCase();
+    return '' +
+      '<div class="ch-channel ch-channel-catalogue" data-known-channel="' + safeName + '">' +
+        '<div class="ch-channel-info">' +
+          '<div class="ch-channel-name">' + safeName + '</div>' +
+          '<div class="ch-channel-sub">' + region + (desc ? ' · ' + desc : '') + '</div>' +
+        '</div>' +
+        '<button type="button" class="ch-known-add-btn" data-action="ch-known-add" data-channel="' + safeName + '" title="Add to my channels">+ Add</button>' +
+      '</div>';
+  }
+  // Delegated click handler for catalogue "+ Add" buttons + toggle.
+  // Attached lazily (once) at first renderChannelList call.
+  var __knownChannelsHandlersBound = false;
+  function bindKnownChannelsHandlers() {
+    if (__knownChannelsHandlersBound) return;
+    var list = document.getElementById('chList');
+    if (!list) return;
+    list.addEventListener('click', function (e) {
+      var t = e.target;
+      if (!t) return;
+      if (t.id === 'chCatalogueToggle' || (t.closest && t.closest('#chCatalogueToggle'))) {
+        var wasCollapsed = localStorage.getItem('ch-known-collapsed') !== 'false';
+        try { localStorage.setItem('ch-known-collapsed', wasCollapsed ? 'false' : 'true'); } catch (er) {}
+        renderChannelList();
+        return;
+      }
+      var addBtn = (t.dataset && t.dataset.action === 'ch-known-add') ? t : (t.closest && t.closest('[data-action="ch-known-add"]'));
+      if (addBtn) {
+        e.preventDefault();
+        var name = addBtn.getAttribute('data-channel');
+        if (name && typeof addUserChannel === 'function') {
+          addUserChannel(name, '');
+        }
+      }
+    });
+    __knownChannelsHandlersBound = true;
+  }
+
   function renderChannelList() {
     const el = document.getElementById('chList');
     if (!el) return;
@@ -1857,7 +1957,13 @@
         </div>
       </div>`
     );
+
+    // #1323: Known channels (catalogue) section — community-maintained
+    // hashtag list, fetched once per page-load from /api/known-channels
+    // and rendered with a one-click "Add to my channels" button.
+    sections.push(renderKnownChannelsSection());
     el.innerHTML = sections.join('');
+    bindKnownChannelsHandlers();
 
     // Toggle expand/collapse for the Encrypted section.
     const toggle = document.getElementById('chEncryptedToggle');

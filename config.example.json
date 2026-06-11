@@ -330,6 +330,9 @@
     "ttlSeconds": 30,
     "_comment": "TTL for the default-shape /api/observers response cache (#1481 P0-3). Default 30s. Lower = fresher data, more SQL pressure on the 1.9M-row observations table. TTL-boundary refills are collapsed via singleflight so concurrent requests cause exactly one SQL fill. Issue #1483."
   },
+  "knownChannelsUrl": "https://raw.githubusercontent.com/marcelverdult/meshcore-channels/main/channels-by-country.json",
+  "knownChannelsRefreshMs": 86400000,
+  "_comment_knownChannels": "Issue #1323. URL of a community-maintained hashtag-channels catalogue (channels-by-country.json shape: {generated_at, license, countries:{cc:[{channel,description,key?}]}}). Fetched in the background every knownChannelsRefreshMs (default 86400000 = 24h). Stored in-memory only — no DB, no disk cache. Surfaced over GET /api/known-channels?region=XX. Empty URL disables (the endpoint serves an empty snapshot). Cache is fail-soft: a failed refresh keeps the last-known snapshot in place. No credentials are sent.",
   "batteryThresholds": {
     "lowMv": 3300,
     "criticalMv": 3000,

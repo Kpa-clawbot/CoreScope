@@ -367,6 +367,23 @@ func main() {
 	defer close(stopNeighborGraphCache)
 	log.Printf("[neighbor-graph-cache] background recompute enabled (interval=%s)", ngInterval)
 
+	// Known-channels catalogue cache (issue #1323). Background fetch with
+	// fail-soft cache. Empty URL leaves srv.knownChannels nil and the
+	// /api/known-channels endpoint serves an empty snapshot.
+	kcURL := cfg.KnownChannelsURL
+	if kcURL == "" {
+		kcURL = DefaultKnownChannelsURL
+	}
+	kcRefresh := DefaultKnownChannelsRefresh
+	if cfg.KnownChannelsRefreshMs > 0 {
+		kcRefresh = time.Duration(cfg.KnownChannelsRefreshMs) * time.Millisecond
+	}
+	srv.knownChannels = newKnownChannelsCache(kcURL, kcRefresh)
+	kcCtx, stopKnownChannels := context.WithCancel(context.Background())
+	srv.knownChannels.run(kcCtx)
+	defer stopKnownChannels()
+	log.Printf("[known-channels] background fetch enabled (url=%s, refresh=%s)", kcURL, kcRefresh)
+
 	// Steady-state repeater-enrichment recomputer (issue #1262).
 	// Prewarms the bulk caches feeding handleNodes so the very first
 	// /api/nodes?limit=2000 from live.js's SPA bootstrap hits a
