@@ -57,6 +57,19 @@ type Config struct {
 	// underlying observation history remains intact.
 	HiddenNamePrefixes []string `json:"hiddenNamePrefixes"`
 
+	// hiddenPrefixesPtr holds the active prefix slice as an atomic pointer.
+	// Read path (IsNameHidden) is a single atomic load — no mutex, no
+	// sync.Once. Writers always replace the whole slice; readers see either
+	// the old or the new slice as a single value, never a partial state.
+	// Mirrors blacklistSetPtr.
+	hiddenPrefixesPtr atomic.Pointer[[]string]
+
+	// hiddenPrefixesGen is a monotonic counter bumped every time the
+	// hidden-prefix list mutates via SetHiddenNamePrefixes. Cache wiring
+	// is left for follow-up; the counter is the prerequisite primitive
+	// callers will key on (mirrors blacklistGen / #1629).
+	hiddenPrefixesGen atomic.Uint64
+
 	// blacklistSetPtr holds the active lookup set as an atomic pointer.
 	// Read path is a single atomic load — no mutex, no sync.Once. Writers
 	// always replace the whole map; readers see either the old or the new
@@ -741,11 +754,32 @@ func (c *Config) IsBlacklisted(pubkey string) bool {
 // prefixes are ignored. Used to drop nodes from /api/nodes, /api/nodes/search
 // and /api/nodes/{pubkey} without deleting the underlying DB row, so observer
 // history stays intact even after the operator hides the node.
+//
+// Hot read path: a single atomic pointer load. No locks, no sync.Once.
+// Writers always replace the whole slice; readers see either the old or
+// the new slice as a single value, never a partially-built one. Mirrors
+// IsBlacklisted's CAS-style lazy first-read materialisation for the
+// JSON-load path where SetHiddenNamePrefixes was never called.
 func (c *Config) IsNameHidden(name string) bool {
-	if c == nil || len(c.HiddenNamePrefixes) == 0 {
+	if c == nil {
 		return false
 	}
-	for _, p := range c.HiddenNamePrefixes {
+	pp := c.hiddenPrefixesPtr.Load()
+	if pp == nil {
+		// Lazy first-read materialisation from the JSON-loaded slice.
+		// CAS-style: if another goroutine wins the race, drop ours.
+		built := make([]string, len(c.HiddenNamePrefixes))
+		copy(built, c.HiddenNamePrefixes)
+		if c.hiddenPrefixesPtr.CompareAndSwap(nil, &built) {
+			pp = &built
+		} else {
+			pp = c.hiddenPrefixesPtr.Load()
+		}
+	}
+	if pp == nil || len(*pp) == 0 {
+		return false
+	}
+	for _, p := range *pp {
 		if p == "" {
 			continue
 		}
@@ -756,9 +790,10 @@ func (c *Config) IsNameHidden(name string) bool {
 	return false
 }
 
-// SetHiddenNamePrefixes is a stub for the upcoming atomic.Pointer wrapper.
-// Currently just assigns the slice (NOT yet race-safe). Bumps the
-// generation counter. Wired up properly in the GREEN commit.
+// SetHiddenNamePrefixes atomically replaces HiddenNamePrefixes with the
+// given slice and bumps the generation counter. Safe for concurrent use
+// with IsNameHidden / HiddenNamePrefixesGeneration. Mirrors
+// SetNodeBlacklist (#1629).
 func (c *Config) SetHiddenNamePrefixes(prefixes []string) {
 	if c == nil {
 		return
@@ -766,16 +801,19 @@ func (c *Config) SetHiddenNamePrefixes(prefixes []string) {
 	cp := make([]string, len(prefixes))
 	copy(cp, prefixes)
 	c.HiddenNamePrefixes = cp
-	// TODO(GREEN): bump c.hiddenNamePrefixesGen + atomic.Store
+	c.hiddenPrefixesPtr.Store(&cp)
+	c.hiddenPrefixesGen.Add(1)
 }
 
-// HiddenNamePrefixesGeneration is a stub returning 0. GREEN commit returns
-// the live atomic counter.
+// HiddenNamePrefixesGeneration returns a monotonic counter that increments
+// on every SetHiddenNamePrefixes call. Response caches keyed per-pubkey can
+// embed this value in their cache key so any prefix mutation invalidates
+// prior entries on the next request — same pattern as BlacklistGeneration.
 func (c *Config) HiddenNamePrefixesGeneration() uint64 {
 	if c == nil {
 		return 0
 	}
-	return 0
+	return c.hiddenPrefixesGen.Load()
 }
 
 // SaveGeoFilter writes the geo_filter section back to config.json on disk.

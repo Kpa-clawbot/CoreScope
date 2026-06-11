@@ -51,13 +51,13 @@ func TestHiddenNamePrefix_1181_NodesList(t *testing.T) {
 	}
 
 	// Empty prefix list: node MUST be present.
-	srv.cfg.HiddenNamePrefixes = nil
+	srv.cfg.SetHiddenNamePrefixes(nil)
 	if !hasName(get(), "ban me") {
 		t.Fatalf("with empty HiddenNamePrefixes, node should be present in /api/nodes")
 	}
 
 	// Configured 🚫 prefix: node MUST be omitted.
-	srv.cfg.HiddenNamePrefixes = []string{"🚫"}
+	srv.cfg.SetHiddenNamePrefixes([]string{"🚫"})
 	if hasName(get(), "ban me") {
 		t.Fatalf("with HiddenNamePrefixes=[\"🚫\"], node 🚫 ban me should be hidden from /api/nodes")
 	}
@@ -75,7 +75,7 @@ func TestHiddenNamePrefix_1181_Search(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	srv.cfg.HiddenNamePrefixes = []string{"🚫"}
+	srv.cfg.SetHiddenNamePrefixes([]string{"🚫"})
 
 	req := httptest.NewRequest("GET", "/api/nodes/search?q=search", nil)
 	w := httptest.NewRecorder()
@@ -118,7 +118,7 @@ func TestHiddenNamePrefix_1181_Detail(t *testing.T) {
 	}
 
 	// Empty prefix list: detail MUST be reachable (200 with the name).
-	srv.cfg.HiddenNamePrefixes = nil
+	srv.cfg.SetHiddenNamePrefixes(nil)
 	w := get()
 	if w.Code != http.StatusOK {
 		t.Fatalf("baseline: expected 200, got %d body=%s", w.Code, w.Body.String())
@@ -128,7 +128,7 @@ func TestHiddenNamePrefix_1181_Detail(t *testing.T) {
 	}
 
 	// Configured 🚫 prefix: detail MUST 404 — no name, no fields, nothing.
-	srv.cfg.HiddenNamePrefixes = []string{"🚫"}
+	srv.cfg.SetHiddenNamePrefixes([]string{"🚫"})
 	w = get()
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("hidden: expected 404, got %d body=%s", w.Code, w.Body.String())

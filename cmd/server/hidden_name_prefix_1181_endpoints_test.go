@@ -35,7 +35,7 @@ func TestHiddenNamePrefix_1181_NodeHealth(t *testing.T) {
 		return w
 	}
 
-	srv.cfg.HiddenNamePrefixes = []string{"🚫"}
+	srv.cfg.SetHiddenNamePrefixes([]string{"🚫"})
 	w := get()
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("hidden: expected 404 from /api/nodes/%s/health, got %d body=%s", pk, w.Code, w.Body.String())
@@ -62,7 +62,7 @@ func TestHiddenNamePrefix_1181_BulkHealth(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	srv.cfg.HiddenNamePrefixes = []string{"🚫"}
+	srv.cfg.SetHiddenNamePrefixes([]string{"🚫"})
 	srv.cfg.NodeBlacklist = []string{"force-filter-branch"} // force the existing blacklist branch on so results-array path is taken
 	srv.cfg.SetNodeBlacklist(srv.cfg.NodeBlacklist)
 
@@ -96,7 +96,7 @@ func TestHiddenNamePrefix_1181_Paths(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	srv.cfg.HiddenNamePrefixes = []string{"🚫"}
+	srv.cfg.SetHiddenNamePrefixes([]string{"🚫"})
 	req := httptest.NewRequest("GET", "/api/nodes/"+pk+"/paths", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -118,7 +118,7 @@ func TestHiddenNamePrefix_1181_Analytics(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	srv.cfg.HiddenNamePrefixes = []string{"🚫"}
+	srv.cfg.SetHiddenNamePrefixes([]string{"🚫"})
 	req := httptest.NewRequest("GET", "/api/nodes/"+pk+"/analytics", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)

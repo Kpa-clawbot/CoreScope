@@ -104,6 +104,10 @@ func (s *Server) handleNodeNeighbors(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "Not found")
 		return
 	}
+	if s.isPubkeyHidden(pubkey) {
+		writeError(w, 404, "Not found")
+		return
+	}
 
 	minCount := 1
 	if v := r.URL.Query().Get("min_count"); v != "" {
@@ -332,6 +336,10 @@ func (s *Server) computeNeighborGraphResponse(minCount int, minScore float64, re
 
 		// Filter blacklisted nodes from graph.
 		if s.cfg != nil && (s.cfg.IsBlacklisted(e.NodeA) || s.cfg.IsBlacklisted(e.NodeB)) {
+			continue
+		}
+		// #1181: also drop edges touching a hidden-prefix node.
+		if s.isPubkeyHidden(e.NodeA) || s.isPubkeyHidden(e.NodeB) {
 			continue
 		}
 
