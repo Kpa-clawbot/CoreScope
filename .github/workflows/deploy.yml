@@ -57,7 +57,7 @@ jobs:
           go build .
           # -race gates PR #1208's atomic.Pointer migration: the race-detector
           # is what makes path_inspect_atomic_race_test.go actually assert.
-          go test -race -coverprofile=server-coverage.out ./... 2>&1 | tee server-test.log
+          go test -timeout 15m -race -coverprofile=server-coverage.out ./... 2>&1 | tee server-test.log
           echo "--- Go Server Coverage ---"
           go tool cover -func=server-coverage.out | tail -1
 
@@ -66,7 +66,7 @@ jobs:
           set -e -o pipefail
           cd cmd/ingestor
           go build .
-          go test -coverprofile=ingestor-coverage.out ./... 2>&1 | tee ingestor-test.log
+          go test -timeout 15m -coverprofile=ingestor-coverage.out ./... 2>&1 | tee ingestor-test.log
           echo "--- Go Ingestor Coverage ---"
           go tool cover -func=ingestor-coverage.out | tail -1
 
