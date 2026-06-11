@@ -877,17 +877,18 @@ async function run() {
     assert(options.length >= 2, `Need >=2 observers, got ${options.length}`);
     await page.selectOption('#compareObsA', options[0]);
     await page.selectOption('#compareObsB', options[1]);
-    await page.waitForFunction(() => {
-      const btn = document.getElementById('compareBtn');
-      return btn && !btn.disabled;
-    }, { timeout: 3000 });
-    await page.click('#compareBtn');
+    // #1647 — comparison auto-runs once both observers are chosen; the
+    // legacy explicit Compare button is ghost-styled and hidden when the
+    // picker collapses (Tufte #1646), so we no longer click it.
     await page.waitForFunction(() => {
       const c = document.getElementById('compareContent');
       return c && c.textContent.trim().length > 20;
     }, { timeout: 15000 });
     const hasResults = await page.$eval('#compareContent', el => el.textContent.trim().length > 0);
     assert(hasResults, 'Comparison should produce results');
+    // And the picker should have collapsed (data-collapsed=true).
+    const collapsed = await page.$eval('#compareControls', el => el.getAttribute('data-collapsed'));
+    assert(collapsed === 'true', `Picker should collapse once both observers chosen (got data-collapsed="${collapsed}")`);
   });
 
   // Test: Compare results show shared/unique breakdown (#129)

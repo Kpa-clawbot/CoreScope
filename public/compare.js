@@ -193,7 +193,9 @@ if (typeof window !== 'undefined') {
       if (comparisonResult) runComparison();
     });
 
-    function updateBtn() {
+    function updateBtn(opts) {
+      var prevA = selA;
+      var prevB = selB;
       selA = ddA.value || null;
       selB = ddB.value || null;
       btn.disabled = !selA || !selB || selA === selB;
@@ -201,18 +203,26 @@ if (typeof window !== 'undefined') {
       // headline strip below it carries the answer; the picker only
       // needs to be reachable for swapping A/B, not the page's
       // headline element. Toggle .is-collapsed on the wrapper so CSS
-      // can shrink it (the expanded form is reachable via the "Edit"
-      // affordance the CSS reveals on hover/focus).
+      // can shrink it.
       var wrap = document.getElementById('compareControls');
+      var ready = !!(selA && selB && selA !== selB);
       if (wrap) {
-        var collapsed = !!(selA && selB && selA !== selB);
-        wrap.classList.toggle('is-collapsed', collapsed);
-        wrap.setAttribute('data-collapsed', collapsed ? 'true' : 'false');
+        wrap.classList.toggle('is-collapsed', ready);
+        wrap.setAttribute('data-collapsed', ready ? 'true' : 'false');
       }
       renderBreadcrumbs();
+      // #1647 — auto-run comparison when both observers chosen. The
+      // legacy explicit Compare button is now ghost-styled and hidden
+      // when the picker collapses, so without auto-run the user is
+      // stranded. Only fire when a real selection change happened (not
+      // on initial render with prior selA/selB already set, which the
+      // caller handles), and only when both values are now valid.
+      if (ready && opts && opts.fromChange && (selA !== prevA || selB !== prevB)) {
+        runComparison();
+      }
     }
-    ddA.addEventListener('change', updateBtn);
-    ddB.addEventListener('change', updateBtn);
+    ddA.addEventListener('change', function () { updateBtn({ fromChange: true }); });
+    ddB.addEventListener('change', function () { updateBtn({ fromChange: true }); });
     btn.addEventListener('click', function () { runComparison(); });
     updateBtn();
   }
