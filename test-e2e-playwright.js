@@ -877,18 +877,21 @@ async function run() {
     assert(options.length >= 2, `Need >=2 observers, got ${options.length}`);
     await page.selectOption('#compareObsA', options[0]);
     await page.selectOption('#compareObsB', options[1]);
-    // #1647 — comparison auto-runs once both observers are chosen; the
-    // legacy explicit Compare button is ghost-styled and hidden when the
-    // picker collapses (Tufte #1646), so we no longer click it.
+    // #1646 — comparison auto-runs once both observers are chosen; the
+    // legacy explicit Compare button has been removed entirely. The
+    // picker collapses (.is-collapsed) once the run kicks off.
     await page.waitForFunction(() => {
       const c = document.getElementById('compareContent');
       return c && c.textContent.trim().length > 20;
     }, { timeout: 15000 });
     const hasResults = await page.$eval('#compareContent', el => el.textContent.trim().length > 0);
     assert(hasResults, 'Comparison should produce results');
-    // And the picker should have collapsed (data-collapsed=true).
-    const collapsed = await page.$eval('#compareControls', el => el.getAttribute('data-collapsed'));
-    assert(collapsed === 'true', `Picker should collapse once both observers chosen (got data-collapsed="${collapsed}")`);
+    // And the picker should have collapsed (.is-collapsed class).
+    const collapsed = await page.$eval('#compareControls', el => el.classList.contains('is-collapsed'));
+    assert(collapsed, 'Picker should collapse once both observers chosen (.is-collapsed missing)');
+    // The legacy Compare button must NOT exist in the DOM (#1646).
+    const btnExists = await page.$('#compareBtn');
+    assert(btnExists === null, 'Legacy #compareBtn must be removed — auto-run replaces it');
   });
 
   // Test: Compare results show shared/unique breakdown (#129)
@@ -901,16 +904,19 @@ async function run() {
     assert(stripMid, 'Should have "shared" strip middle (.compare-strip-mid)');
     const sides = await page.$$('.compare-strip-side');
     assert(sides.length >= 2, `Should have >=2 side strips (A-only + B-only), got ${sides.length}`);
-    // Counts: 2 side counts + 1 mid count = 3 total outcome-group counts.
-    const sideCounts = await page.$$eval('.compare-strip-count', els => els.map(e => e.textContent.trim()));
-    // #1647 — the mid count is `<num> shared`, but the numeric span carries
-    // its own class for both styling and clean test extraction.
-    const midCount = await page.$eval('.compare-strip-mid-count-num', el => el.textContent.trim());
-    const counts = sideCounts.concat([midCount]);
-    assert(counts.length >= 3, `Expected >=3 outcome-group counts, got ${counts.length}`);
-    counts.forEach((c, i) => {
-      assert(/^[\d,]+$/.test(c), `Count ${i} should be a number but got "${c}"`);
+    // All three cells now lead with a percentage (#1646 Tufte): two
+    // .compare-strip-side-pct on the sides + one .compare-strip-mid-pct
+    // in the middle. The raw shared count still hangs underneath.
+    const sidePcts = await page.$$eval('.compare-strip-side-pct', els => els.map(e => e.textContent.trim()));
+    const midPct = await page.$eval('.compare-strip-mid-pct', el => el.textContent.trim());
+    assert(sidePcts.length >= 2, `Expected >=2 side pct cells, got ${sidePcts.length}`);
+    assert(/\d+%/.test(midPct), `Mid pct should look like a percentage, got "${midPct}"`);
+    sidePcts.concat([midPct]).forEach((c, i) => {
+      assert(/\d+\s*%/.test(c), `Pct ${i} should contain a % value but got "${c}"`);
     });
+    // The raw shared count exists and is purely numeric (no embedded label).
+    const midCount = await page.$eval('.compare-strip-mid-count-num', el => el.textContent.trim());
+    assert(/^[\d,]+$/.test(midCount), `Shared count should be a bare number, got "${midCount}"`);
     // Verify tab buttons exist for both/onlyA/onlyB
     const tabs = await page.$$eval('[data-cview]', els => els.map(e => e.getAttribute('data-cview')));
     assert(tabs.includes('both'), 'Should have "both" tab');

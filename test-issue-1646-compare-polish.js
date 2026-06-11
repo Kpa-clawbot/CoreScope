@@ -9,27 +9,23 @@
  *
  *   1) `input[type=checkbox]` has a GLOBAL `accent-color: var(--accent)`
  *      rule (not only the per-page `.col-compare-select` rule that misses
- *      the rest of the surface). Both light + dark must theme.
- *   2) The dark theme block sets `color-scheme: dark` so UA-native widgets
- *      (checkboxes, scrollbars, native selects) render in dark mode.
- *   3) `.compare-vs` font-size is smaller than `.compare-select` font-size
- *      (the parent finding #3: the "vs" label was at parity with the
- *      surrounding dropdowns).
- *   4) `.compare-strip-mid-count` (the SHARED tally count) is NOT the
- *      largest text in the mid cell. A new `.compare-strip-mid-pct`
- *      class is the largest element and uses var(--fs-xl); the count
- *      uses a smaller scale (var(--fs-lg)); the label stays at 10px.
- *   5) The "Compare" CTA inside `.compare-selector` is rendered with the
- *      `.btn-ghost` class — not `.compare-btn` / `.btn-primary` heavy
- *      visual weight (parent finding #2). Markup in compare.js.
- *   6) `.compare-asym-line` no longer paints a decorative left accent
- *      border (chartjunk encoding nothing). Tufte finding.
- *   7) `.compare-type-summary` no longer paints a decorative left green
- *      border (chartjunk encoding nothing). Tufte finding.
- *   8) compare.js renders a `.compare-controls` element with an
- *      `data-collapsed` attribute / `is-collapsed` class once both
- *      observers are selected. Parent finding #5: the strip must
- *      yield "look here first" attention to the headline strip.
+ *      the rest of the surface). Both light + dark must theme. AND no
+ *      later override drops accent-color back to a non-token value.
+ *   2) BOTH dark-theme blocks (auto via prefers-color-scheme + manual via
+ *      [data-theme="dark"]) declare `color-scheme: dark` so UA-native
+ *      widgets render dark.
+ *   3) `.compare-vs` font-size is smaller than `.compare-select` font-size.
+ *   4) `.compare-strip-mid-pct` uses var(--fs-xl) and is the largest text
+ *      in the mid cell.
+ *   5) `.compare-strip-mid-count` is strictly smaller than
+ *      `.compare-strip-mid-pct` (token-rank comparison, not "not --fs-xl").
+ *   6) `.compare-asym-line` and `.compare-type-summary` explicitly declare
+ *      `border-left: none` AND no `border:` shorthand resolves to a left
+ *      edge (Kent Beck: "absence of declaration" is too permissive).
+ *   7) compare.js drives the collapse via the actual call
+ *      `wrap.classList.toggle('is-collapsed', ready)` — grepping comments
+ *      for the literal string is a tautology.
+ *   8) The legacy Compare button has been removed from the DOM in compare.js.
  */
 'use strict';
 const fs = require('fs');
@@ -37,6 +33,22 @@ const path = require('path');
 
 const CSS = fs.readFileSync(path.join(__dirname, 'public/style.css'), 'utf8');
 const COMPARE_JS = fs.readFileSync(path.join(__dirname, 'public/compare.js'), 'utf8');
+
+// Token-rank used by font-size comparisons. Comments-only mirror of the
+// scale; if --fs-xl ever moves, only the relative order matters and that
+// is what we assert.
+const TOKEN_RANK = {
+  'var(--fs-xs)': 1, 'var(--fs-sm)': 2, 'var(--fs-md)': 3,
+  'var(--fs-lg)': 4, 'var(--fs-xl)': 5,
+};
+function fsRank(decl) {
+  if (!decl) return null;
+  const v = decl.trim();
+  if (TOKEN_RANK[v] != null) return TOKEN_RANK[v];
+  const num = v.match(/^(\d+(?:\.\d+)?)px$/);
+  if (num) return parseFloat(num[1]) / 4; // crude px-to-rank fallback
+  return null;
+}
 
 let passed = 0, failed = 0;
 function test(name, fn) {
@@ -51,24 +63,38 @@ function ruleBlock(css, selectorRegex) {
   const m = css.match(re);
   return m ? m[2] : null;
 }
+function fsOf(block) {
+  if (!block) return null;
+  const m = block.match(/font-size\s*:\s*([^;]+);/);
+  return m ? m[1].trim() : null;
+}
 
 console.log('\n#1646 compare-polish — behavioral assertions\n');
 
 // ── 1) global checkbox accent-color ───────────────────────────────────
-test('global input[type=checkbox] accent-color rule uses var(--accent)', () => {
-  // Match any top-level rule whose selector list includes input[type=checkbox]
-  // (not scoped under .col-compare-select etc.) AND declares accent-color.
+test('global input[type=checkbox] accent-color rule uses var(--accent) and no later rule overrides it to a non-token value', () => {
   const re = /(?:^|})\s*input\[type=["']?checkbox["']?\][^{]*\{[^}]*accent-color\s*:\s*var\(--accent\)/m;
   assert(re.test(CSS),
     'missing top-level `input[type=checkbox] { accent-color: var(--accent); }`');
+  // Find every accent-color decl on a checkbox selector (single-line scan)
+  // and assert each uses var(--accent ...) — no white/colored hardcodes.
+  const ruleRe = /input\[type=["']?checkbox["']?\][^{]*\{([^}]*)\}/g;
+  let m;
+  while ((m = ruleRe.exec(CSS))) {
+    const decl = m[1].match(/accent-color\s*:\s*([^;]+);/);
+    if (!decl) continue;
+    const val = decl[1].trim();
+    assert(/^var\(--/.test(val),
+      `checkbox accent-color override must use a CSS var, got "${val}"`);
+  }
 });
 
-// ── 2) color-scheme on dark theme ─────────────────────────────────────
-test('dark theme sets color-scheme so UA widgets render dark', () => {
-  // Look for any rule selecting the dark theme that declares color-scheme.
-  const re = /(?:\.theme-dark|data-theme=["']dark["']|prefers-color-scheme:\s*dark)[^{]*\{[^}]*color-scheme\s*:\s*dark/m;
-  assert(re.test(CSS),
-    'missing color-scheme: dark on dark-theme rule (UA checkbox stays light otherwise)');
+// ── 2) color-scheme on BOTH dark theme blocks ─────────────────────────
+test('both dark-theme rules (prefers-color-scheme + [data-theme="dark"]) declare color-scheme: dark', () => {
+  const auto = /@media[^{]*prefers-color-scheme:\s*dark[^{]*\{\s*[^{]*\{[^}]*color-scheme\s*:\s*dark/m;
+  const manual = /\[data-theme=["']dark["']\][^{]*\{[^}]*color-scheme\s*:\s*dark/m;
+  assert(auto.test(CSS), 'missing color-scheme: dark inside @media(prefers-color-scheme: dark)');
+  assert(manual.test(CSS), 'missing color-scheme: dark inside [data-theme="dark"] block');
 });
 
 // ── 3) .compare-vs smaller than .compare-select ───────────────────────
@@ -77,13 +103,9 @@ test('.compare-vs font-size < .compare-select font-size', () => {
   const selBlock = ruleBlock(CSS, /\.compare-select(?![a-zA-Z-])/);
   assert(vsBlock, '.compare-vs block missing');
   assert(selBlock, '.compare-select block missing');
-  // extract font-size values
-  // Comparable rank scale (px-equivalent at smallest viewport):
-  //   --fs-xs ≈ 11, --fs-sm ≈ 12, --fs-md ≈ 14, --fs-lg ≈ 15, --fs-xl ≈ 18
   function px(block) {
-    const m = block.match(/font-size\s*:\s*([^;]+);/);
-    if (!m) return null;
-    const v = m[1].trim();
+    const v = fsOf(block);
+    if (!v) return null;
     const tokenMap = {
       'var(--fs-xs)': 11, 'var(--fs-sm)': 12, 'var(--fs-md)': 14,
       'var(--fs-lg)': 15, 'var(--fs-xl)': 18,
@@ -106,62 +128,82 @@ test('.compare-strip-mid-pct exists and is var(--fs-xl)', () => {
     '.compare-strip-mid-pct must be var(--fs-xl) (the largest)');
 });
 
-test('.compare-strip-mid-count is smaller than .compare-strip-mid-pct', () => {
-  const countBlock = ruleBlock(CSS, /\.compare-strip-mid-count/);
+test('.compare-strip-mid-count is strictly smaller than .compare-strip-mid-pct (token-rank)', () => {
+  const countBlock = ruleBlock(CSS, /\.compare-strip-mid-count(?!-)/);
+  const pctBlock = ruleBlock(CSS, /\.compare-strip-mid-pct(?!-)/);
   assert(countBlock, '.compare-strip-mid-count rule missing');
-  // must NOT be --fs-xl any more
-  assert(!/font-size\s*:\s*var\(--fs-xl\)/.test(countBlock),
-    '.compare-strip-mid-count must not be --fs-xl after hierarchy inversion');
+  assert(pctBlock, '.compare-strip-mid-pct rule missing');
+  const cRank = fsRank(fsOf(countBlock));
+  const pRank = fsRank(fsOf(pctBlock));
+  assert(cRank != null && pRank != null, `could not parse font-sizes (count=${fsOf(countBlock)}, pct=${fsOf(pctBlock)})`);
+  assert(cRank < pRank,
+    `.compare-strip-mid-count rank (${cRank}) must be < .compare-strip-mid-pct rank (${pRank})`);
 });
 
-// ── 5) Compare CTA uses btn-ghost ─────────────────────────────────────
-test('compare.js renders #compareBtn with class containing btn-ghost (not compare-btn primary)', () => {
-  // Loose: button id=compareBtn with btn-ghost in the class attr.
-  const re = /id=["']compareBtn["'][^>]*class=["'][^"']*btn-ghost/;
-  assert(re.test(COMPARE_JS),
-    '#compareBtn must use .btn-ghost (low-emphasis) instead of .compare-btn / .btn-primary');
+// ── 5) Compare CTA dead — button removed from DOM ─────────────────────
+test('legacy #compareBtn is no longer emitted by compare.js (auto-run replaces it)', () => {
+  // Behavioral: the markup string for an explicit Compare button must
+  // be gone from the rendered HTML. A render path that conditionally
+  // hides a still-present button would let an enabled-but-hidden state
+  // exist; deleting the markup makes that impossible.
+  const re = /id=["']compareBtn["']/;
+  assert(!re.test(COMPARE_JS),
+    'compare.js still renders #compareBtn — must be removed (auto-run on selection change)');
+  // And no .compare-btn-ghost / .compare-btn class lingers.
+  assert(!/compare-btn-ghost/.test(COMPARE_JS),
+    'dead .compare-btn-ghost class still emitted');
 });
 
-// ── 6) decorative asym-line border-left removed ───────────────────────
-test('.compare-asym-line no longer paints a decorative left accent bar', () => {
+// ── 6) decorative asym-line border-left explicitly removed ────────────
+test('.compare-asym-line declares border-left: none AFTER any border-shorthand (cascade-safe)', () => {
   const block = ruleBlock(CSS, /\.compare-asym-line(?!-)/);
   assert(block, '.compare-asym-line rule missing');
-  // Either no border-left declared, or border-left: none / 0
-  const m = block.match(/border-left\s*:\s*([^;]+);/);
-  if (m) {
-    const v = m[1].trim();
-    assert(/^(none|0|unset|initial)\b/.test(v),
-      '.compare-asym-line still paints border-left: ' + v);
+  // Tightened (Kent Beck must-fix #3): require explicit border-left: none,
+  // not just absence of a border-left: declaration. If a border: shorthand
+  // exists, border-left: none must come AFTER it so the cascade kills the
+  // left edge.
+  const blIdx = block.search(/border-left\s*:\s*none\b/);
+  assert(blIdx >= 0,
+    '.compare-asym-line must explicitly declare `border-left: none` (a future `border:` shorthand could re-add the bar)');
+  const shortIdx = block.search(/(?:^|[;{\s])border\s*:\s*(?!none\b)[^;]*\b\d/);
+  if (shortIdx >= 0) {
+    assert(blIdx > shortIdx,
+      '.compare-asym-line `border-left: none` must come AFTER `border:` shorthand or shorthand wins');
   }
 });
 
-// ── 7) decorative type-summary border-left removed ────────────────────
-test('.compare-type-summary no longer paints a decorative left green bar', () => {
+// ── 7) decorative type-summary border-left explicitly removed ─────────
+test('.compare-type-summary declares border-left: none AFTER any border-shorthand (cascade-safe)', () => {
   const block = ruleBlock(CSS, /\.compare-type-summary(?!-)/);
   assert(block, '.compare-type-summary rule missing');
-  const m = block.match(/border-left\s*:\s*([^;]+);/);
-  if (m) {
-    const v = m[1].trim();
-    assert(/^(none|0|unset|initial)\b/.test(v),
-      '.compare-type-summary still paints border-left: ' + v);
+  const blIdx = block.search(/border-left\s*:\s*none\b/);
+  assert(blIdx >= 0,
+    '.compare-type-summary must explicitly declare `border-left: none`');
+  const shortIdx = block.search(/(?:^|[;{\s])border\s*:\s*(?!none\b)[^;]*\b\d/);
+  if (shortIdx >= 0) {
+    assert(blIdx > shortIdx,
+      '.compare-type-summary `border-left: none` must come AFTER `border:` shorthand');
   }
 });
 
-// ── 8) controls collapse when both observers picked ───────────────────
-test('compare.js toggles a collapsed state on the controls when both observers selected', () => {
-  // Implementation freedom: either an `is-collapsed` class or
-  // `data-collapsed="true"` attribute on #compareControls / .compare-controls.
-  const hasMarker = /(is-collapsed|data-collapsed)/i.test(COMPARE_JS);
-  assert(hasMarker,
-    'compare.js must mark #compareControls with `is-collapsed` class or `data-collapsed` attr');
-  // And there must be CSS that responds to it
-  const hasCss = /(\.is-collapsed|\[data-collapsed\b)/i.test(CSS);
-  assert(hasCss,
-    'style.css must define a rule keyed to .is-collapsed / [data-collapsed]');
+// ── 8) controls collapse — assert the actual DOM call, not comment text ──
+test('compare.js makes the actual classList.toggle("is-collapsed", ready) call AND CSS keys on it', () => {
+  // Tightened (Kent Beck must-fix #1, Adversarial #6, #8): assert the
+  // behavioral call, not just a string match against comments. The PR
+  // also dropped the redundant data-collapsed setAttribute path, so any
+  // re-introduction is a regression.
+  const callRe = /classList\.toggle\(\s*['"]is-collapsed['"]\s*,/;
+  assert(callRe.test(COMPARE_JS),
+    'compare.js must call classList.toggle("is-collapsed", <bool>) on #compareControls');
+  assert(!/setAttribute\(\s*['"]data-collapsed['"]/.test(COMPARE_JS),
+    'compare.js must NOT also setAttribute("data-collapsed", ...) — pick one source of truth (the class)');
+  // CSS rule keying on the class must exist (without a stale [data-collapsed] selector).
+  assert(/\.compare-controls\.is-collapsed/.test(CSS),
+    'style.css must define a rule on .compare-controls.is-collapsed');
 });
 
 // ════════════════════════════════════════════════════════════════════
-// #1647 — Mobile follow-ups (Tufte review).
+// #1646 — Mobile follow-ups (Tufte review).
 // At ≤768px the page sits above a fixed bottom-nav (56px + safe-area)
 // reserved via --bottom-nav-reserve. The headline diff bar has segments
 // that go invisible at narrow widths when their share is ~2%, and the

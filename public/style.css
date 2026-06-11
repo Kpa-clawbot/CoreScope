@@ -401,7 +401,6 @@ button.ch-item {
 .ch-scroll-btn,
 .chooser-btn,
 .clock-filter-btn,
-.compare-btn,
 .copy-link-btn,
 .alab-btn {
   min-height: 48px;
@@ -423,7 +422,6 @@ button.ch-item {
 .ch-scroll-btn:active,
 .chooser-btn:active,
 .clock-filter-btn:active,
-.compare-btn:active,
 .copy-link-btn:active,
 .alab-btn:active {
   background: var(--row-hover);
@@ -3451,18 +3449,18 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
   border-radius: var(--radius-md);
   padding: var(--space-sm) var(--space-md);
   margin-bottom: var(--space-md);
-  transition: padding 160ms ease;
 }
 /* Once both observers are picked, the headline strip below is the
- * answer. Demote the picker: tighter padding, smaller labels,
- * muted Compare CTA. Operators can still swap A/B without leaving
- * the page. Tufte / parent finding #5 (#1646). */
+ * answer. Demote the picker: tighter padding, smaller labels.
+ * Operators can still swap A/B without leaving the page. The "A"/"B"
+ * referent stays visible (issue #1646 Tufte: erase labels, not
+ * referents). */
 .compare-controls.is-collapsed {
   padding: 4px var(--space-md);
 }
 .compare-controls.is-collapsed .compare-select-group label { display: none; }
 .compare-controls.is-collapsed .compare-select { font-size: var(--fs-sm); padding: 4px 8px; }
-.compare-controls.is-collapsed #compareBtn { display: none; }
+.compare-controls.is-collapsed .compare-select-id { display: inline-block; }
 .compare-selector {
   display: flex; align-items: flex-end; gap: var(--space-sm); flex-wrap: wrap;
 }
@@ -3470,6 +3468,14 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
 .compare-select-group label {
   font-size: 10px; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.6px; color: var(--text-muted);
+}
+/* The "A" / "B" badge is hidden when the labels are visible (expanded
+ * state) and revealed when collapsed, so the dropdown row never loses
+ * its A/B referent. */
+.compare-select-id {
+  display: none;
+  font-size: 10px; font-weight: 700; color: var(--text-muted);
+  letter-spacing: 0.6px; padding: 2px 0;
 }
 .compare-select {
   padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
@@ -3480,14 +3486,14 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
 .compare-vs {
   font-size: 10px; font-weight: 700; color: var(--text-muted);
   text-transform: uppercase; letter-spacing: 1.2px;
-  padding: 0 4px 10px;
+  padding: 0 4px;
   align-self: center;
   opacity: 0.7;
 }
-/* Compare-now action moved to .btn-ghost (#1646). The legacy
- * .compare-btn class is retained only in the touch-target list
- * above to avoid disturbing the shared 48-px-min-tap rule; no
- * element uses .compare-btn standalone any more. */
+/* The Compare CTA was removed in #1646 — comparison auto-runs when
+ * both observers are chosen. The legacy .compare-btn touch-target
+ * declaration was deleted with it; surrounding form controls already
+ * carry their own 48px-min-height rule. */
 
 .compare-results { margin-top: var(--space-md); }
 
@@ -3515,10 +3521,16 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
   font-size: var(--fs-sm); font-weight: 700; color: var(--text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.compare-strip-count {
+/* The side cells lead with the percentage, matching the middle cell
+ * (one unit across the row, no design variation — issue #1646). */
+.compare-strip-side-pct {
   font-family: var(--mono);
   font-size: var(--fs-xl); font-weight: 700;
   color: var(--text); font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.compare-strip-side-pct-unit {
+  font-size: 0.6em; margin-left: 1px;
 }
 .compare-strip-sub { font-size: 11px; color: var(--text-muted); }
 .compare-strip-mid {
@@ -3534,17 +3546,9 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
   color: var(--text); font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-/* #1647 — the count node now wraps the numeric span + " shared" label
- * in their own elements so the label can drop a notch in weight + take
- * the muted color. The number stays mono+bold to scan in a glance. */
-.compare-strip-mid-count-num { color: var(--text); font-weight: 600; }
-.compare-strip-mid-count-label {
-  color: var(--text-muted); font-weight: 400;
-  text-transform: lowercase; letter-spacing: 0.2px;
-}
 /* The 79% gets the largest type — it IS the answer to "how much
  * overlap?". The raw count and the label demote underneath. (Tufte:
- * the most important number gets the most ink.) */
+ * the most important number gets the most ink. Issue #1646.) */
 .compare-strip-mid-pct {
   font-family: var(--mono);
   font-size: var(--fs-xl); font-weight: 700;
@@ -3552,8 +3556,7 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
   line-height: 1;
 }
 .compare-strip-mid-pct-unit {
-  font-size: 0.6em; font-weight: 600; margin-left: 1px;
-  color: var(--accent);
+  font-size: 0.6em; margin-left: 1px;
 }
 .compare-strip-mid-label {
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px;
