@@ -37,12 +37,22 @@ public/CHANGELOG.md
 README.md
 
 # --- arrows used as inline text content (typography, not icons) ---
-# ←, →, ↑, ↓, ↗, ↘, ↖, ↙, ⇆, ⇅, ↩, ↪, ↺, ↻, ⌃, ⌐
+# ←, →, ↑, ↓, ↗, ↘, ↖, ↙, ⇆, ⇅, ↩, ↪, ↺, ↻, ⌃, ⌐, ↔, ↳, ⇒
 # These render as text labels ("View packets →", "Back ←"), markdown
 # arrows inside descriptions, sort indicators in headers, gesture hints,
-# inline "next/prev" cues. They are NOT iconography (cannot be themed via
-# currentColor as an SVG, but they are text glyphs in flowing text).
-/[←→↑↓↗↘↖↙⇆⇅↺↻↪↩⌃]/
+# inline "next/prev" cues, undirected-edge labels (A ↔ B), and code
+# comments. They are NOT iconography (cannot be themed via currentColor
+# as an SVG, but they are text glyphs in flowing text).
+/[←→↑↓↗↘↖↙⇆⇅↺↻↪↩⌃↔↳⇒⇔]/
+
+# --- cb-presets.js: pass/fail glyphs are inline WCAG contrast annotations ---
+# Comments + value-table entries marking which color pairings pass/fail
+# AA contrast (e.g. "#117733 vs #fff = 5.66:1 ✓"). These are author
+# notes embedded in code, not user-facing iconography.
+public/cb-presets.js                    # ✓/✗ inline contrast-ratio annotations
+
+# --- channel-qr.js: comment references prior glyphs after swap ---
+public/channel-qr.js:133                # comment references 📋/✓ (now Phosphor)
 
 # --- text-affordance dropdown caret used in button labels ---
 # "Filters ▾", "More ▾", "All Observers ▾", etc. The caret is part of the

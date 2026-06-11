@@ -1063,7 +1063,7 @@
         bimodalWarning = '<div style="font-size:12px;color:var(--status-amber-text);margin-top:4px">' + summary + badList + '</div>';
       }
       container.innerHTML =
-        '<h4 style="margin:0 0 6px">⏰ Clock Skew</h4>' +
+        '<h4 style="margin:0 0 6px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clock"/></svg> Clock Skew</h4>' +
         '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">' +
           skewDisplay +
           renderSkewBadge(cs.severity, skewVal, cs) +

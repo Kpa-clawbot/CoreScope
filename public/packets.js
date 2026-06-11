@@ -1469,7 +1469,7 @@
         <h2>Latest Packets <span class="count">(${totalCount})</span></h2>
         <div>
           <button class="btn-icon" data-action="pkt-refresh" title="Refresh" aria-label="Refresh"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-arrow-clockwise"/></svg></button>
-          <button class="btn-icon" id="pktPauseBtn" data-action="pkt-pause" title="Pause live updates">⏸</button>
+          <button class="btn-icon" id="pktPauseBtn" data-action="pkt-pause" title="Pause live updates" aria-label="Pause live updates"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-pause"/></svg></button>
           <button class="btn-icon" data-action="pkt-byop" title="Bring Your Own Packet" aria-label="Bring Your Own Packet - paste raw packet hex for analysis" aria-haspopup="dialog"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg> BYOP</button>
         </div>
       </div>

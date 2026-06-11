@@ -2430,6 +2430,16 @@
           arr[parseInt(path[1])][path[2]] = inp.value;
           setOverride('home', path[0], arr);
         }
+        // #1648 M6 (M5 CDP carry-forward): live re-render of the glyph
+        // preview when an operator types a new `ph:<name>` token or
+        // legacy emoji into a steps.N.emoji input. Without this, the
+        // .cust-emoji-preview swatch only updated on Save+reload.
+        if (inp.classList.contains('cust-emoji-input')) {
+          var preview = inp.previousElementSibling;
+          if (preview && preview.classList && preview.classList.contains('cust-emoji-preview')) {
+            preview.innerHTML = renderConfigGlyph(inp.value);
+          }
+        }
       });
     });
 

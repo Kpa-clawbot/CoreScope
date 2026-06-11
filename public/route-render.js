@@ -336,7 +336,13 @@
     positions.forEach(function (p, i) {
       if (p.lat == null || p.lon == null) return;
       var unresolved = (p.resolved === false);
-      var color = unresolved ? '#9ca3af' : ((window.ROLE_COLORS && window.ROLE_COLORS[p.role]) || '#3b82f6');
+      // #1648 M6 (M4 CDP carry-forward): hop fallback color now reads
+      // --status-info from CSS so dark theme picks up the brighter
+      // #60a5fa variant instead of the baked-in #3b82f6.
+      var fallbackColor = (typeof window !== 'undefined' && window.getComputedStyle)
+        ? (getComputedStyle(document.documentElement).getPropertyValue('--status-info').trim() || '#3b82f6')
+        : '#3b82f6';
+      var color = unresolved ? '#9ca3af' : ((window.ROLE_COLORS && window.ROLE_COLORS[p.role]) || fallbackColor);
       var size = (p.isOrigin || p.isDest) ? 24 : 18;
       var built = buildHopSVG(p, { color: color, size: size, isOrigin: p.isOrigin, isDest: p.isDest, unresolved: unresolved });
       var badge = buildBadge(i + 1, total, { isOrigin: p.isOrigin, isDest: p.isDest });

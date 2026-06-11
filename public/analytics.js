@@ -2100,7 +2100,7 @@
         </div>
 
         <div class="subpath-section">
-          <h5>⏱️ Timeline</h5>
+          <h5><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clock"/></svg> Timeline</h5>
           <div>First seen: ${data.firstSeen ? (typeof formatAbsoluteTimestamp === 'function' ? formatAbsoluteTimestamp(data.firstSeen) : new Date(data.firstSeen).toLocaleString()) : '—'}</div>
           <div>Last seen: ${data.lastSeen ? (typeof formatAbsoluteTimestamp === 'function' ? formatAbsoluteTimestamp(data.lastSeen) : new Date(data.lastSeen).toLocaleString()) : '—'}</div>
         </div>
@@ -2222,7 +2222,7 @@
             }).join('')}
           </div>
 
-          ${myKeys.size ? `<h3>⭐ My Claimed Nodes</h3>
+          ${myKeys.size ? `<h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg> My Claimed Nodes</h3>
           <table class="analytics-table" style="margin-bottom:24px">
             <thead><tr><th scope="col">Node</th><th scope="col">Role</th><th scope="col">Packets</th><th scope="col">Avg SNR</th><th scope="col">Observers</th><th scope="col">Last Heard</th></tr></thead>
             <tbody>
@@ -2285,7 +2285,7 @@
             </tbody>
           </table>
 
-          <h3>⏰ Recently Active</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clock"/></svg> Recently Active</h3>
           <table class="analytics-table" style="margin-bottom:24px">
             <thead><tr><th scope="col">Node</th><th scope="col">Role</th><th scope="col">Last Heard</th><th scope="col">Packets Today</th><th scope="col">Analytics</th></tr></thead>
             <tbody>
@@ -4077,7 +4077,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
             '</tr>';
         }).join('');
 
-        el.innerHTML = '<h3 style="margin:0 0 10px">⏰ Clock Health</h3>' +
+        el.innerHTML = '<h3 style="margin:0 0 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clock"/></svg> Clock Health</h3>' +
           filterHtml +
           '<table class="data-table analytics-table" id="clock-health-table">' +
           '<thead><tr>' +

@@ -130,14 +130,17 @@
     const copyBtn = document.createElement('button');
     copyBtn.type = 'button';
     copyBtn.className = 'channel-qr-copy';
-    copyBtn.textContent = '📋 Copy Key';
+    // #1648 M6: Phosphor sprite for copy/copied state (was 📋 / ✓).
+    const ICON_COPY = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clipboard-text"/></svg>';
+    const ICON_CHECK = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg>';
+    copyBtn.innerHTML = ICON_COPY + ' Copy Key';
     copyBtn.style.cssText = 'margin-top:6px;';
     copyBtn.addEventListener('click', function () {
       const text = secretHex;
       const done = function () {
-        const orig = copyBtn.textContent;
-        copyBtn.textContent = '✓ Copied';
-        setTimeout(function () { copyBtn.textContent = orig; }, 1200);
+        const orig = copyBtn.innerHTML;
+        copyBtn.innerHTML = ICON_CHECK + ' Copied';
+        setTimeout(function () { copyBtn.innerHTML = orig; }, 1200);
       };
       if (root.navigator && root.navigator.clipboard && root.navigator.clipboard.writeText) {
         root.navigator.clipboard.writeText(text).then(done, function () {

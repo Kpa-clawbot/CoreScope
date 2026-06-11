@@ -151,7 +151,7 @@
     if (sheet.querySelector('[data-mpa-mirror]')) return;  // already injected
 
     const mirrors = [
-      { id: 'favToggle',       icon: '⭐', label: 'Favorites' },
+      { id: 'favToggle',       ph: 'star-fill',        label: 'Favorites' },
       { id: 'searchToggle',    ph: 'magnifying-glass', label: 'Search' },
       { id: 'customizeToggle', ph: 'palette',          label: 'Customize' },
     ];
