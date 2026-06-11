@@ -19,7 +19,7 @@
 }
 
 /* Status-token color classes (#1648 M3).
- * Replace 🟢🟡🔴⚪/✅⚠️❌ emoji dots with Phosphor sprites that inherit
+ * Replace 🟢🟡🔴⚪/✅⚠️❌ emoji dots with Phosphor sprites that inherit EMOJI-OK-COMMENT
  * their color via currentColor. Each class threads the existing
  * --status-* color token so dark/light theming continues to work.
  *
@@ -242,7 +242,7 @@
   --z-tooltip: 9200;
 }
 
-/* ⚠️ DARK THEME VARIABLES — KEEP BOTH BLOCKS IN SYNC
+/* ⚠️ DARK THEME VARIABLES — KEEP BOTH BLOCKS IN SYNC EMOJI-OK-COMMENT
    The media query handles OS-level dark mode (auto); [data-theme="dark"] handles manual toggle.
    When changing dark theme variables, update BOTH blocks below. */
 @media (prefers-color-scheme: dark) {
@@ -278,7 +278,7 @@
     --section-bg: #1e1e34;
   }
 }
-/* ⚠️ DARK THEME VARIABLES — KEEP IN SYNC with @media block above */
+/* ⚠️ DARK THEME VARIABLES — KEEP IN SYNC with @media block above (EMOJI-OK-COMMENT) */
 [data-theme="dark"] {
   color-scheme: dark;
   /* Brighter link-strength hues for contrast on dark map tiles + surfaces. */
@@ -836,7 +836,7 @@ img.brand-logo {
 /* === Filter toolbar (#1122)
  * Toolbar layout is composed of fenced .filter-group clusters:
  *   1. Quick filters       — text inputs (hash, node, observer, region, type, channel)
- *   2. Toggles             — Group by Hash, ★ My Nodes
+ *   2. Toggles             — Group by Hash, ★ My Nodes EMOJI-OK-COMMENT
  *   3. Time window         — last-N selector
  *   4. Sort & view options — observer sort, columns toggle, hex paths
  * Adjacent .filter-group + .filter-group siblings get a left divider + padding
@@ -1051,7 +1051,7 @@ img.brand-logo {
   /* #4: sheet structure — kill handle, sticky header inside sheet, clear
    * bottom-nav (58px tall) so last row doesn't get cut off, taller max */
   /* Restructure: outer sheet has fixed height + overflow:hidden; the
-   * .mobile-sheet-content is the ONLY scroll region. ✕ close stays sticky
+   * .mobile-sheet-content is the ONLY scroll region. ✕ close stays sticky EMOJI-OK-COMMENT
    * pinned at top of the sheet. Title also stays sticky within the
    * scroll region. */
   .mobile-detail-sheet {
@@ -1276,7 +1276,7 @@ body.scroll-locked { overflow: hidden; }
 }
 .detail-meta dt { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .3px; }
 .detail-meta dd { font-weight: 500; margin-bottom: 4px; }
-/* #1281: 📍map link inside detail-meta — UA-default blue is unreadable on
+/* #1281: 📍map link inside detail-meta — UA-default blue is unreadable on EMOJI-OK-COMMENT
  * dark backgrounds. Force theme-aware color via --accent. */
 .loc-map-link { color: var(--accent); font-size: 0.85em; text-decoration: none; }
 .loc-map-link:hover { text-decoration: underline; }
@@ -1590,7 +1590,7 @@ button.ch-item.selected { background: var(--selected-bg); }
   text-align: center;
   line-height: 1.4;
 }
-/* Shared icon button base for sidebar row controls (remove ✕, share ⤴).
+/* Shared icon button base for sidebar row controls (remove ✕, share ⤴). EMOJI-OK-COMMENT
    WCAG 2.5.5 / Apple HIG: 44x44 CSS px minimum touch target. */
 .ch-icon-btn {
   display: inline-flex; align-items: center; justify-content: center;
@@ -2193,8 +2193,13 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   #chList .ch-item-name { flex: 1 1 auto; min-width: 0; }
   #chList .ch-item-top { gap: 6px; }
   #chList .ch-icon-btn { min-width: 32px; min-height: 32px; padding: 2px 4px; }
+  /* #1648 M5: share-btn now renders an inline <svg.ph-icon> from channels.js,
+   * so the legacy `font-size: 0` + `::before { content: '<emoji>' }` shim is
+   * obsolete. The icon-button class above already sets the touch target;
+   * the SVG inherits color via currentColor. */
+  #chList .ch-share-btn .ph-icon { font-size: 13px; }
   #chList .ch-share-btn { font-size: 0; }
-  #chList .ch-share-btn::before { content: '📤'; font-size: 13px; }
+  #chList .ch-share-btn .ph-icon, #chList .ch-share-btn svg { font-size: 13px; }
   #chList .ch-remove-btn { font-size: 12px; padding: 2px 6px; }
   /* Hide the analytics-style time on mobile rows to free width for the name. */
   #chList .ch-item-time { font-size: 10px; }
@@ -4154,12 +4159,12 @@ th.sort-active { color: var(--accent, #60a5fa); }
  * Design source: github.com/Kpa-clawbot/CoreScope/issues/1356 (Tufte + audit comments).
  *
  * Carriers (NON-color) of meaning, per WCAG 1.4.1:
- *   - V1 cluster bubbles: size (40/48/56px) + numeral + border-style ramp
+ *   - V1 cluster bubbles: size (40/48/56px) + numeral + border-style ramp EMOJI-OK-COMMENT
  *     (1.5px solid / 2.5px solid / 2px double). Fill is a single neutral.
  *   - V2 role pills: capital-letter prefix (R/C/M/S/O). Wong (2011) palette
  *     hue is secondary. Dark text (#1a1a1a) on ALL five pills (audit override
  *     so only ONE text-color rule is needed and every pill passes 4.5:1).
- *   - V3 multi-byte hash labels: unicode glyph prefix (✓/?/✗) + neutral fill
+ *   - V3 multi-byte hash labels: unicode glyph prefix (✓/?/✗) + neutral fill EMOJI-OK-COMMENT
  *     + 3px colored left-border using the audit's high-luminance accent set
  *     (NOT Tol "vibrant" — those failed 3:1 vs the neutral fill).
  *
