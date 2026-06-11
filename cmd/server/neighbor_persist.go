@@ -131,6 +131,63 @@ func resolvePathForObs(pathJSON, observerID string, tx *StoreTx, pm *prefixMap, 
 	return resolved
 }
 
+// resolvePathForObsColdLoad is the cold-load (Load / loadChunk / scanAndMergeChunk)
+// variant of resolvePathForObs that gates hop resolution on `unique_prefix`
+// only. Live ingest uses the affinity/observation-count tiebreak via
+// resolvePathForObs because it has roughly-current state. Cold load runs
+// against observations up to retentionHours (168h) old, where today's
+// affinity winner ≠ historical affinity winner for that prefix — silently
+// mis-attributing the relay (PR #1643 R1 munger #1, "time-travel attribution
+// gate").
+//
+// Behavior: hops whose prefix maps to exactly one repeater resolve as
+// usual; hops whose prefix maps to multiple candidates return nil and
+// increment skipped (caller-owned counter for observability — a single
+// summary log line at the end of Load surfaces the total).
+//
+// Under-attribute > mis-attribute (reviewer consensus on PR #1643).
+func resolvePathForObsColdLoad(pathJSON, observerID string, tx *StoreTx, pm *prefixMap, skipped *int) []*string {
+	hops := parsePathJSON(pathJSON)
+	if len(hops) == 0 {
+		return nil
+	}
+	resolved := make([]*string, len(hops))
+	for i, hop := range hops {
+		// unique_prefix iff the prefix maps to exactly one candidate
+		// after the observer-known nonRelay filter. Mirrors the
+		// `len(candidates) == 1 → "unique_prefix"` arm of
+		// resolveWithContext (store.go ~6380). Calling resolveWithContext
+		// with a nil graph and empty context skips the affinity/
+		// observation-count tiers entirely — but tier-4
+		// observation_count_fallback would still pick a winner for
+		// ambiguous prefixes, which is exactly what we must NOT do.
+		// Hence the explicit candidate-count check here.
+		h := strings.ToLower(hop)
+		candidates := pm.m[h]
+		if len(pm.nonRelay) > 0 && len(candidates) > 0 {
+			filtered := candidates[:0:0]
+			for j := range candidates {
+				if _, isListener := pm.nonRelay[strings.ToLower(candidates[j].PublicKey)]; isListener {
+					continue
+				}
+				filtered = append(filtered, candidates[j])
+			}
+			candidates = filtered
+		}
+		if len(candidates) == 1 {
+			pk := strings.ToLower(candidates[0].PublicKey)
+			resolved[i] = &pk
+			continue
+		}
+		// Ambiguous (len > 1) or no_match (len == 0). Under-attribute.
+		if len(candidates) > 1 && skipped != nil {
+			*skipped++
+		}
+		// resolved[i] stays nil; extractResolvedPubkeys filters it out.
+	}
+	return resolved
+}
+
 // marshalResolvedPath converts []*string to JSON for in-memory caching.
 func marshalResolvedPath(rp []*string) string {
 	if len(rp) == 0 {

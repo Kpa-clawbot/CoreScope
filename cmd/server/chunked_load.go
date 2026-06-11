@@ -124,6 +124,13 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 	if chunkSize <= 0 {
 		chunkSize = 10000
 	}
+	// Startup-ordering invariant (PR #1643 R1 munger #2). Mirror the
+	// guard in Load() so the production async path also fast-fails when
+	// neighbor_edges has rows but the graph is missing. See Load() for
+	// the full rationale.
+	if neighborEdgesTableExists(s.db.conn) && s.graph.Load() == nil {
+		panic("packet store LoadChunked(): neighbor_edges table has rows but s.graph is nil — graph must be loaded before packet load (see main.go #1643 invariant)")
+	}
 	s.chunkedLoadInit()
 	// Reset state for repeat calls in tests.
 	s.loadComplete.Store(false)
@@ -198,10 +205,13 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 	// chunk cursor is open would deadlock on a single-connection SQLite
 	// pool. resolved_path is never persisted post-#1287, so scanAndMergeChunk
 	// re-resolves relay hops from path_json using these snapshots.
+	// PR #1643 R1 munger #1: cold load uses unique_prefix-only gate, so
+	// the neighbor graph is no longer consulted here (affinity-tier
+	// resolution against ≤168h-old observations would silently mis-attribute).
 	s.mu.RLock()
 	_, relayPM := s.getCachedNodesAndPM()
 	s.mu.RUnlock()
-	relayGraph := s.graph.Load()
+	var coldLoadAmbiguousHopsSkipped int
 
 	for {
 		conds := append([]string{}, loadConditions...)
@@ -243,7 +253,7 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 			return fmt.Errorf("chunk %d: query: %w", chunkIdx, err)
 		}
 
-		chunkTxCount, lastID, err := s.scanAndMergeChunk(rows, relayPM, relayGraph)
+		chunkTxCount, lastID, err := s.scanAndMergeChunk(rows, relayPM, &coldLoadAmbiguousHopsSkipped)
 		rows.Close()
 		if err != nil {
 			return fmt.Errorf("chunk %d: scan: %w", chunkIdx, err)
@@ -310,6 +320,10 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 	elapsed := time.Since(t0)
 	log.Printf("[store] LoadChunked: %d transmissions (%d observations) across %d chunk(s) in %v (chunkSize=%d, DB total=%d)",
 		totalLoaded, s.totalObs, chunkIdx, elapsed, chunkSize, totalInDB)
+	if coldLoadAmbiguousHopsSkipped > 0 {
+		log.Printf("[store] LoadChunked: skipped %d ambiguous-prefix relay hops (unique_prefix gate, PR #1643 R1)",
+			coldLoadAmbiguousHopsSkipped)
+	}
 	s.loadMultibyteCapFromDB()
 	// Mark complete on the success path only — see the function-level
 	// defer above for why this is NOT in a deferred call. Probes that
@@ -322,7 +336,7 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 // scanAndMergeChunk consumes one chunk's rows under s.mu.Lock and
 // returns the number of distinct transmissions seen + the max
 // transmission id (cursor for the next chunk).
-func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, relayGraph *NeighborGraph) (int, int64, error) {
+func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, coldLoadAmbiguousHopsSkipped *int) (int, int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -426,11 +440,12 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, rela
 				// persisted as neighbor_edges, not per-observation). Re-resolve
 				// relay-hop attribution from path_json so relay nodes keep their
 				// analytics history across a restart instead of rebuilding only
-				// from post-restart live traffic. relayPM/relayGraph are passed
-				// in from LoadChunked (fetched before any chunk cursor opened).
+				// from post-restart live traffic. relayPM is passed in from
+				// LoadChunked (fetched before any chunk cursor opened).
 				// byNode ONLY — see the Load() counterpart for why the
 				// resolved_path/path-hop indexes must NOT be populated here.
-				rp := resolvePathForObs(obsPJ, obsIDStr, tx, relayPM, relayGraph)
+				// PR #1643 R1 munger #1: unique_prefix-only gate.
+				rp := resolvePathForObsColdLoad(obsPJ, obsIDStr, tx, relayPM, coldLoadAmbiguousHopsSkipped)
 				for _, pk := range extractResolvedPubkeys(rp) {
 					s.addToByNode(tx, pk)
 				}

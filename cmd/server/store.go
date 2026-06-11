@@ -649,6 +649,18 @@ func (s *PacketStore) Load() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Startup-ordering invariant (PR #1643 R1 munger #2). Graph-load-
+	// before-packet-load is the entire premise of the relay-history
+	// cold-load fix: without an in-memory neighbor graph, the path_json
+	// fallback below cannot disambiguate relay hops, so relay-node
+	// analytics history silently collapses on every restart. main.go
+	// loads neighbor_edges → s.graph BEFORE invoking Load/LoadChunked;
+	// fast-fail here so a future refactor that swaps that ordering trips
+	// the panic at startup instead of regressing the bug silently.
+	if neighborEdgesTableExists(s.db.conn) && s.graph.Load() == nil {
+		panic("packet store Load(): neighbor_edges table has rows but s.graph is nil — graph must be loaded before packet load (see main.go #1643 invariant)")
+	}
+
 	t0 := time.Now()
 
 	// Count total transmissions for logging.
@@ -730,13 +742,16 @@ func (s *PacketStore) Load() error {
 
 	// Relay-hop fallback inputs. When resolved_path is empty (always, on
 	// live, since #1287 the ingestor persists relay data as neighbor_edges
-	// instead) we re-resolve relay hops from path_json using the prefix map
-	// + neighbor graph. Fetched BEFORE opening the rows cursor below:
-	// getCachedNodesAndPM issues its own DB query, which would deadlock
-	// against the still-open cursor on a single-connection SQLite pool.
-	// Load holds s.mu.Lock(), so calling getCachedNodesAndPM directly is safe.
+	// instead) we re-resolve relay hops from path_json using the prefix
+	// map. PR #1643 R1 munger #1: cold load resolves ONLY when the prefix
+	// is unique (no affinity tiebreak against ≤168h-old observations,
+	// which would silently mis-attribute hops). Fetched BEFORE opening
+	// the rows cursor below: getCachedNodesAndPM issues its own DB query,
+	// which would deadlock against the still-open cursor on a single-
+	// connection SQLite pool. Load holds s.mu.Lock(), so calling
+	// getCachedNodesAndPM directly is safe.
 	_, relayPM := s.getCachedNodesAndPM()
-	relayGraph := s.graph.Load()
+	var coldLoadAmbiguousHopsSkipped int
 
 	rows, err := s.db.conn.Query(loadSQL)
 	if err != nil {
@@ -844,7 +859,9 @@ func (s *PacketStore) Load() error {
 				// here — populating them would make that SQL confirmation fail
 				// and wrongly drop the tx from paths-through (#1352). byNode is
 				// what the node-analytics activity timeline reads.
-				rp := resolvePathForObs(obsPJ, obsIDStr, tx, relayPM, relayGraph)
+				// PR #1643 R1 munger #1: gate on unique_prefix only — ambiguous
+				// hops are silently dropped (skipped counter logged at end).
+				rp := resolvePathForObsColdLoad(obsPJ, obsIDStr, tx, relayPM, &coldLoadAmbiguousHopsSkipped)
 				for _, pk := range extractResolvedPubkeys(rp) {
 					s.addToByNode(tx, pk)
 				}
@@ -923,6 +940,10 @@ func (s *PacketStore) Load() error {
 			len(s.packets), s.totalObs, elapsed, s.trackedMemoryMB(), s.estimatedMemoryMB())
 	}
 	s.loadMultibyteCapFromDB()
+	if coldLoadAmbiguousHopsSkipped > 0 {
+		log.Printf("[store] cold load: skipped %d ambiguous-prefix relay hops (unique_prefix gate, PR #1643 R1)",
+			coldLoadAmbiguousHopsSkipped)
+	}
 	// Kick off background subpath + path-hop index builds (#1008).
 	// The goroutine acquires s.mu.Lock() and so will block until Load's
 	// deferred Unlock fires when this function returns. HTTP handlers
@@ -1003,17 +1024,18 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 	// Relay-hop fallback inputs. observations.resolved_path is NULL on
 	// every live deployment (since #1287 the ingestor persists relay data
 	// as aggregate neighbor_edges, not per-observation resolved_path), so
-	// for this background-loaded older window we re-resolve relay hops from
-	// the persisted path_json using the prefix map + neighbor graph — the
-	// same compute the live ingest path runs. Fetched BEFORE opening the
-	// rows cursor below: getCachedNodesAndPM issues its own DB query, which
+	// for this background-loaded older window we re-resolve relay hops
+	// from the persisted path_json using the prefix map. PR #1643 R1
+	// munger #1: cold load resolves ONLY when the prefix is unique
+	// (affinity-tier resolution against ≤168h-old observations would
+	// silently mis-attribute hops). Fetched BEFORE opening the rows
+	// cursor below: getCachedNodesAndPM issues its own DB query, which
 	// would deadlock against the open cursor on a single-connection SQLite
-	// pool. Both snapshots are immutable once published (the recomputer
-	// atomic-swaps a fresh graph), so the lock-free scan reads them safely.
+	// pool.
 	s.mu.RLock()
 	_, relayPM := s.getCachedNodesAndPM()
 	s.mu.RUnlock()
-	relayGraph := s.graph.Load()
+	var coldLoadAmbiguousHopsSkipped int
 
 	rows, err := s.db.conn.Query(chunkSQL, fromStr, toStr)
 	if err != nil {
@@ -1158,7 +1180,8 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 				// must not enter the resolved_path/path-hop indexes, which
 				// handleNodePaths cross-checks against the NULL resolved_path
 				// column (#1352).
-				rp := resolvePathForObs(obsPJ, obsIDStr, tx, relayPM, relayGraph)
+				// PR #1643 R1 munger #1: unique_prefix-only gate.
+				rp := resolvePathForObsColdLoad(obsPJ, obsIDStr, tx, relayPM, &coldLoadAmbiguousHopsSkipped)
 				pks := extractResolvedPubkeys(rp)
 				accumulateDedup(localByNodePKsByTx, localByNodeSeenByTx, txID, pks)
 			}
@@ -1299,6 +1322,10 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 	s.mu.Unlock()
 
 	log.Printf("[store] background chunk [%s, %s) merged: %d tx, %d obs", fromStr, toStr, len(localPackets), localTotalObs)
+	if coldLoadAmbiguousHopsSkipped > 0 {
+		log.Printf("[store] background chunk: skipped %d ambiguous-prefix relay hops (unique_prefix gate, PR #1643 R1)",
+			coldLoadAmbiguousHopsSkipped)
+	}
 	return nil
 }
 
