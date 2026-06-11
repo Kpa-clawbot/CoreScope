@@ -903,7 +903,9 @@ async function run() {
     assert(sides.length >= 2, `Should have >=2 side strips (A-only + B-only), got ${sides.length}`);
     // Counts: 2 side counts + 1 mid count = 3 total outcome-group counts.
     const sideCounts = await page.$$eval('.compare-strip-count', els => els.map(e => e.textContent.trim()));
-    const midCount = await page.$eval('.compare-strip-mid-count', el => el.textContent.trim());
+    // #1647 — the mid count is `<num> shared`, but the numeric span carries
+    // its own class for both styling and clean test extraction.
+    const midCount = await page.$eval('.compare-strip-mid-count-num', el => el.textContent.trim());
     const counts = sideCounts.concat([midCount]);
     assert(counts.length >= 3, `Expected >=3 outcome-group counts, got ${counts.length}`);
     counts.forEach((c, i) => {

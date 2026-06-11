@@ -356,7 +356,7 @@ if (typeof window !== 'undefined') {
             '</div>' +
             '<div class="compare-strip-mid" data-view="both" role="button" tabindex="0" aria-label="Show shared packets">' +
               '<div class="compare-strip-mid-pct">' + pctBoth + '<span class="compare-strip-mid-pct-unit">%</span></div>' +
-              '<div class="compare-strip-mid-count">' + r.both.length.toLocaleString() + ' shared</div>' +
+              '<div class="compare-strip-mid-count"><span class="compare-strip-mid-count-num">' + r.both.length.toLocaleString() + '</span> <span class="compare-strip-mid-count-label">shared</span></div>' +
               '<div class="compare-strip-mid-label">of all unique</div>' +
             '</div>' +
             '<div class="compare-strip-side compare-strip-side-b" data-view="onlyB" role="button" tabindex="0" aria-label="Show only ' + nameB + ' packets">' +

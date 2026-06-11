@@ -3527,6 +3527,14 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
   color: var(--text); font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+/* #1647 — the count node now wraps the numeric span + " shared" label
+ * in their own elements so the label can drop a notch in weight + take
+ * the muted color. The number stays mono+bold to scan in a glance. */
+.compare-strip-mid-count-num { color: var(--text); font-weight: 600; }
+.compare-strip-mid-count-label {
+  color: var(--text-muted); font-weight: 400;
+  text-transform: lowercase; letter-spacing: 0.2px;
+}
 /* The 79% gets the largest type — it IS the answer to "how much
  * overlap?". The raw count and the label demote underneath. (Tufte:
  * the most important number gets the most ink.) */
