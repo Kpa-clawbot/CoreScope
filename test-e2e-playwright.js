@@ -915,7 +915,7 @@ async function run() {
       assert(/\d+\s*%/.test(c), `Pct ${i} should contain a % value but got "${c}"`);
     });
     // The raw shared count exists and is purely numeric (no embedded label).
-    const midCount = await page.$eval('.compare-strip-mid-count-num', el => el.textContent.trim());
+    const midCount = await page.$eval('.compare-strip-mid-count', el => el.textContent.trim());
     assert(/^[\d,]+$/.test(midCount), `Shared count should be a bare number, got "${midCount}"`);
     // Verify tab buttons exist for both/onlyA/onlyB
     const tabs = await page.$$eval('[data-cview]', els => els.map(e => e.getAttribute('data-cview')));
