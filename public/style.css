@@ -3423,7 +3423,14 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
  * diff-strip (Tufte's "show the data") makes the asymmetry
  * legible at a glance; the textual cards are demoted to subtext.
  */
-.compare-page { padding: var(--space-md); max-width: 1200px; margin: 0 auto; }
+.compare-page { padding: var(--space-md); max-width: 1200px; margin: 0 auto;
+  /* #1647 mobile: reserve space below the floating bottom-nav at ≤768px.
+   * --bottom-nav-reserve is 0px on desktop, 56px + safe-area on mobile,
+   * so this rule is a no-op for desktop and adds the exact clearance
+   * needed on phones — the Shared-Types pill row + tabs were getting
+   * eaten by the nav. (Tufte: don't reserve space we don't need.) */
+  padding-bottom: calc(var(--space-md) + var(--bottom-nav-reserve, 0px));
+}
 .compare-page .page-header {
   display: flex; align-items: center; justify-content: flex-start;
   gap: var(--space-sm); margin-bottom: var(--space-sm);
