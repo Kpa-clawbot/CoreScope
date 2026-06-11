@@ -39,7 +39,7 @@ step.skip = function (name, reason, fn) {
 function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
 
 const PAGES = [
-  { hash: '#/packets',   tableSel: '#pktTable',    rowSel: '#pktTable tbody tr[data-id]',                       name: 'packets'   },
+  { hash: '#/packets',   tableSel: '#pktTable',    rowSel: '#pktTable tbody tr[data-hash]',                     name: 'packets'   },
   { hash: '#/nodes',     tableSel: '#nodesTable',  rowSel: '#nodesTable tbody tr[data-value]',                  name: 'nodes'     },
   { hash: '#/observers', tableSel: '#obsTable',    rowSel: '#obsTable tbody tr[data-action="navigate"]',        name: 'observers' },
 ];
@@ -64,13 +64,13 @@ const PAGES = [
 
     await step(`${tag}: page renders + first row exists`, async () => {
       await page.goto(BASE + '/' + p.hash, { waitUntil: 'domcontentloaded' });
-      await page.waitForSelector(p.tableSel, { timeout: 15000 });
+      await page.waitForSelector(p.tableSel, { timeout: 8000 });
       // Wait for at least one real data row (per the page-specific rowSel).
       // Using p.rowSel here — not a bare `tbody tr` — avoids the
       // virtual-scroll spacer race on the packets page (#1662).
       await page.waitForFunction((rowSel) => {
         return document.querySelector(rowSel) !== null;
-      }, p.rowSel, { timeout: 30000 });
+      }, p.rowSel, { timeout: 8000 });
     });
 
     await step(`${tag}: clicking row opens slide-over with backdrop`, async () => {

@@ -25,14 +25,16 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
 
 console.log('\n=== #1662 strict row-selector pin ===');
 
-check('packets PAGES entry uses strict #pktTable tbody tr[data-id] (no bare fallback)', () => {
+check('packets PAGES entry uses strict attribute-based row selector (no bare fallback)', () => {
   // Find the packets entry line.
   const m = src.match(/{\s*hash:\s*'#\/packets'[^}]*}/);
   assert(m, 'could not find packets PAGES entry');
   const entry = m[0];
-  // Must include the strict selector.
-  assert(/rowSel:\s*'#pktTable tbody tr\[data-id\]'/.test(entry),
-    'packets rowSel is not the strict `#pktTable tbody tr[data-id]` string; got: ' + entry);
+  // Must include a strict attribute-based selector under #pktTable tbody —
+  // e.g. tr[data-hash] or tr[data-id]. The specific attribute may evolve;
+  // what matters is that it's an attribute selector, not a bare `tr`.
+  assert(/rowSel:\s*'#pktTable tbody tr\[data-[a-z-]+\]'/.test(entry),
+    'packets rowSel is not a strict `#pktTable tbody tr[data-...]` selector; got: ' + entry);
   // Must NOT include any bare `tbody tr` fallback (no attribute).
   assert(!/#pktTable tbody tr\s*['",]/.test(entry),
     'packets rowSel still has a bare-`tr` fallback (no attribute selector)');
