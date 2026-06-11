@@ -46,10 +46,15 @@ async function main() {
     process.exit(0);
   }
 
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  // Viewport 1920px keeps every top-nav link inline (per nav-priority-1311
+  // spec: ≥1920px → all 11 high-pri links visible, More menu empty). At 1280
+  // Perf/Audio-Lab collapse into the More dropdown (hidden parent → 0×0
+  // child icon), and #hamburger is mobile-only (display:none on desktop),
+  // so those surfaces are asserted at the appropriate viewport below.
+  const ctx = await browser.newContext({ viewport: { width: 1920, height: 900 } });
   const page = await ctx.newPage();
 
-  // ── (a) top-nav: Live, Perf, Audio-Lab, Search toggle, Customize, theme, hamburger ──
+  // ── (a) top-nav: Live, Perf, Audio-Lab, Search toggle, Customize, theme ──
   await page.goto(`${BASE}/#/`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('.top-nav', { timeout: 5000 });
 
@@ -60,7 +65,6 @@ async function main() {
       ['Audio-Lab',  '.top-nav a[data-route="audio-lab"]'],
       ['Search btn', '#searchToggle'],
       ['Custom btn', '#customizeToggle'],
-      ['Hamburger',  '#hamburger'],
     ];
     return sels.map(([label, sel]) => {
       const el = document.querySelector(sel);
@@ -91,6 +95,28 @@ async function main() {
   const m = await ctxMobile.newPage();
   await m.goto(`${BASE}/#/`, { waitUntil: 'domcontentloaded' });
   await m.waitForSelector('[data-bottom-nav]', { timeout: 5000 });
+
+  // Hamburger element exists in the DOM but is rendered display:none at
+  // all widths (≥768px: style.css ".hamburger { display:none }"; ≤768px:
+  // bottom-nav.css "#hamburger { display:none !important }" — replaced by
+  // the bottom-nav "More" tab per #1174). So we can't assert getBBox size,
+  // but we MUST still assert (i) it has a .ph-icon child and (ii) zero
+  // emoji codepoints in its text — that catches a revert of the M1 swap.
+  const hamCheck = await m.evaluate(() => {
+    const el = document.querySelector('#hamburger');
+    if (!el) return { found: false };
+    const ph = el.querySelector('svg.ph-icon, .ph-icon');
+    return {
+      found: true,
+      hasPhIcon: !!ph,
+      text: el.textContent || '',
+    };
+  });
+  if (!hamCheck.found) fail('(a) Hamburger: selector #hamburger not found');
+  else if (!hamCheck.hasPhIcon) fail(`(a) Hamburger: no .ph-icon child (text="${hamCheck.text.slice(0,40)}")`);
+  else pass('(a) Hamburger: .ph-icon child present (element is display:none by design)');
+  if (EMOJI_RE.test(hamCheck.text)) fail('(a) Hamburger: still contains emoji codepoint in text');
+
   const bn = await m.evaluate(() => {
     const tabs = ['home','packets','live','map','channels','more'];
     return tabs.map(route => {
@@ -120,8 +146,11 @@ async function main() {
   // Give the page a moment to render observers list.
   await m.waitForTimeout(1500);
   const obs = await m.evaluate(() => {
-    // Compare observers heading: span containing "Compare" near top of /observers
-    const headings = Array.from(document.querySelectorAll('h2, h3, .observers-compare-heading, [data-role="compare-heading"]'));
+    // Compare observers entry-point: M1 made this a <button data-action="compare-observers">
+    // with a Phosphor ph-magnifying-glass child (was an h2/h3 emoji header pre-M1).
+    const headings = Array.from(document.querySelectorAll(
+      'h2, h3, .observers-compare-heading, [data-role="compare-heading"], [data-action="compare-observers"]'
+    ));
     const compareHeading = headings.find(h => /Compare\s+observers/i.test(h.textContent || ''));
     const compareBtn = document.querySelector('[data-action="compare"], button[data-role="compare-btn"], .compare-selected-btn')
       || Array.from(document.querySelectorAll('button')).find(b => /Compare\s+selected/i.test(b.textContent || ''));
