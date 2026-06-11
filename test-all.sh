@@ -29,6 +29,7 @@ node test-issue-1409-no-encrypted-flood.js
 node test-analytics-channels-integration.js
 node test-observers-headings.js
 node test-issue-1648-m1-emoji-scan.js
+node test-issue-1648-m2-emoji-scan.js
 node test-traces.js
 
 # #1418 — route-view v2 (Tufte) coverage
