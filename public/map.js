@@ -170,7 +170,7 @@
       <div id="map-wrap" style="position:relative;width:100%;height:100%;display:flex;">
         <div id="leaflet-map" style="flex:1 1 0%;height:100%;"></div>
         <div class="map-side-pane" id="mapSidePane">
-          <div class="pane-toggle" id="mapPaneToggle" title="Path Inspector">◀</div>
+          <div class="pane-toggle" id="mapPaneToggle" title="Path Inspector"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-left"/></svg></div>
           <div class="pane-content">
             <h3 style="margin:0 0 8px 0;font-size:14px;">Path Inspector</h3>
             <p style="font-size:11px;color:var(--text-muted);margin:0 0 8px 0;">Hex prefixes (1-3 bytes), comma or space separated.</p>
@@ -1760,7 +1760,9 @@
 
     toggle.addEventListener('click', function () {
       pane.classList.toggle('expanded');
-      toggle.textContent = pane.classList.contains('expanded') ? '▶' : '◀';
+      // #1648 M4: Phosphor sprite glyph for pane toggle (was ▶/◀). // EMOJI-OK: comment
+      toggle.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#' +
+        (pane.classList.contains('expanded') ? 'ph-caret-right' : 'ph-caret-left') + '"/></svg>';
       // Invalidate map size after transition.
       setTimeout(function () { if (map) map.invalidateSize(); }, 220);
     });
@@ -1777,7 +1779,7 @@
     var prefixParam = params.get('prefixes');
     if (prefixParam && input) {
       pane.classList.add('expanded');
-      toggle.textContent = '▶';
+      toggle.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-right"/></svg>';
       input.value = prefixParam;
       setTimeout(function () { if (map) map.invalidateSize(); }, 220);
       mapPiSubmit(prefixParam);

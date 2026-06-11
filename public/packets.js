@@ -1107,7 +1107,9 @@
         packetsPaused = !packetsPaused;
         const pauseBtn = document.getElementById('pktPauseBtn');
         if (pauseBtn) {
-          pauseBtn.textContent = packetsPaused ? '▶' : '⏸';
+          // #1648 M4: Phosphor sprite glyph for play/pause (was ▶/⏸). // EMOJI-OK: comment
+          pauseBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#' +
+            (packetsPaused ? 'ph-play' : 'ph-pause') + '"/></svg>';
           pauseBtn.title = packetsPaused ? 'Resume live updates' : 'Pause live updates';
           pauseBtn.classList.toggle('active', packetsPaused);
         }
@@ -1155,7 +1157,7 @@
         pauseBuffer.push(...msgs);
         if (pauseBuffer.length > 2000) pauseBuffer = pauseBuffer.slice(-2000);
         const btn = document.getElementById('pktPauseBtn');
-        if (btn) btn.textContent = '▶ ' + pauseBuffer.length;
+        if (btn) btn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-play"/></svg> ' + pauseBuffer.length;
         return;
       }
       const newPkts = msgs
@@ -3112,7 +3114,7 @@
         <button class="copy-link-btn" data-packet-hash="${pkt.hash || ''}" data-packet-id="${pkt.id}" title="Copy link to this packet"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-link"/></svg> Copy Link</button>
         ${pathHops.length ? `<button class="detail-map-link" id="viewRouteBtn"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> View route on map</button>` : ''}
         ${pkt.hash ? `<a href="#/traces/${pkt.hash}" class="detail-map-link" style="text-decoration:none"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Trace</a>` : ''}
-        <button class="replay-live-btn" title="Replay this packet on the live map">▶ Replay</button>
+        <button class="replay-live-btn" title="Replay this packet on the live map"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-play"/></svg> Replay</button>
       </div>
 
       ${(hasRawHex || Object.keys(decoded).length) ? `<details class="detail-technical"${(typeof window !== 'undefined' && window.innerWidth > 480) ? ' open' : ''}>

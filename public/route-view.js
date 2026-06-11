@@ -355,6 +355,7 @@
         '</li>';
       }).join('');
       pathPicker = '<details class="mc-rt-paths" open><summary class="mc-rt-paths-header">' +
+        '<svg class="ph-icon mc-rt-paths-chevron" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-down"/></svg>' +
         uniquePathsCount + ' unique paths · click to isolate' +
         '<button type="button" class="mc-rt-path-clear" aria-label="Show all paths">All</button>' +
         '</summary><ul class="mc-rt-path-list">' + pickerRows + '</ul></details>';
@@ -448,7 +449,7 @@
     sidebar.innerHTML =
       // Desktop: resize handle on the right edge + collapse button.
       '<div class="mc-rt-resize-handle" role="separator" aria-label="Resize route panel" aria-orientation="vertical" tabindex="0"></div>' +
-      '<button type="button" class="mc-rt-collapse-btn" aria-label="Collapse route panel" title="Collapse route panel">◀</button>' +
+      '<button type="button" class="mc-rt-collapse-btn" aria-label="Collapse route panel" title="Collapse route panel"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-left"/></svg></button>' +
       '<div class="mc-rt-collapsed-label" aria-hidden="true">ROUTE</div>' +
       // Mobile: bottom-sheet header (summary + chevron). No drag-grip —
       // conflicted with browser pull-to-refresh and CoreScope's own pull-to-
@@ -466,7 +467,10 @@
         var collapsed = sidebar.classList.toggle('mc-rt-collapsed');
         collapseBtn.setAttribute('aria-label', collapsed ? 'Expand route panel' : 'Collapse route panel');
         collapseBtn.setAttribute('title', collapsed ? 'Expand route panel' : 'Collapse route panel');
-        collapseBtn.textContent = collapsed ? '▶' : '◀';
+        // #1648 M4: swap Phosphor sprite glyph (caret-right when collapsed,
+        // caret-left when expanded). Replaces prior ▶/◀ Misc-Symbols chars. // EMOJI-OK: comment
+        collapseBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#' +
+          (collapsed ? 'ph-caret-right' : 'ph-caret-left') + '"/></svg>';
         setTimeout(function () { if (mapRef && mapRef.invalidateSize) mapRef.invalidateSize(); }, 280);
       });
     }
@@ -478,7 +482,7 @@
           sidebar.classList.remove('mc-rt-collapsed');
           if (collapseBtn) {
             collapseBtn.setAttribute('aria-label', 'Collapse route panel');
-            collapseBtn.textContent = '◀';
+            collapseBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-left"/></svg>';
           }
           setTimeout(function () { if (mapRef && mapRef.invalidateSize) mapRef.invalidateSize(); }, 280);
         }

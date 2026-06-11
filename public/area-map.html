@@ -60,6 +60,8 @@
   #map { flex: 1; }
   .node-popup { font-size: 0.8rem; line-height: 1.5; }
   .node-popup strong { color: #1a6abf; }
+  /* Phosphor icon helper (mirrors style.css .ph-icon — area-map.html is standalone) */
+  .ph-icon { width: 1em; height: 1em; fill: currentColor; vertical-align: -0.125em; display: inline-block; }
 </style>
 </head>
 <body>
@@ -98,8 +100,8 @@
       </div>
       <div id="builder-controls">
         <button id="btn-draw">Draw</button>
-        <button id="btn-undo">↩ Undo</button>
-        <button id="btn-clear-draw">✕ Clear</button>
+        <button id="btn-undo"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-arrow-u-up-left"/></svg> Undo</button>
+        <button id="btn-clear-draw"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg> Clear</button>
       </div>
       <div id="draw-hint">0 points — need ≥ 3</div>
       <div id="builder-output" class="empty">Fill key + label, then draw polygon points…</div>

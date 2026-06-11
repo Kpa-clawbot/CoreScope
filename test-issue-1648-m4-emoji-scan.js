@@ -44,7 +44,9 @@ const MIN_USE_REFS = {
   'route-view.js': 5,
   'route-view-utils.js': 6,
   'route-view.css': 0,    // CSS uses content with <svg> not feasible; rely on JS
-  'route-render.js': 2,
+  // route-render.js uses dynamic href concat (ph-play/ph-flag chosen at runtime);
+  // sprite refs are functional but not a literal-substring grep target. Floor 0.
+  'route-render.js': 0,
 };
 
 const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u;
@@ -88,10 +90,24 @@ function assertSpriteHasM4Icons() {
   const txt = fs.readFileSync(sp, 'utf8');
   const need = [
     'ph-caret-left', 'ph-caret-right', 'ph-play',
-    'ph-flag', 'ph-arrow-u-up-left',
+    'ph-flag', 'ph-arrow-u-up-left', 'ph-pause',
   ];
   const missing = need.filter(id => !txt.includes(`id="${id}"`));
   if (missing.length) throw new Error(`sprite missing M4 symbols: ${missing.join(', ')}`);
+}
+
+// Route-render.js builds its sprite href with runtime concat. Verify the
+// sprite IDs and the sprite path prefix both appear in source.
+function assertRouteRenderSpriteRefs() {
+  const txt = fs.readFileSync(path.join(ROOT, 'route-render.js'), 'utf8');
+  for (const id of ['ph-play', 'ph-flag']) {
+    if (!txt.includes("'" + id + "'") && !txt.includes('"' + id + '"')) {
+      throw new Error(`route-render.js must reference sprite id ${id}`);
+    }
+  }
+  if (!txt.includes('/icons/phosphor-sprite.svg#')) {
+    throw new Error('route-render.js must reference the Phosphor sprite path');
+  }
 }
 
 function main() {
@@ -101,6 +117,14 @@ function main() {
   try {
     assertSpriteHasM4Icons();
     console.log('  ✓ sprite has required M4 symbols');
+  } catch (e) {
+    console.error(`  ✗ ${e.message}`);
+    failed++;
+  }
+
+  try {
+    assertRouteRenderSpriteRefs();
+    console.log('  ✓ route-render.js threads ph-play / ph-flag sprite refs');
   } catch (e) {
     console.error(`  ✗ ${e.message}`);
     failed++;

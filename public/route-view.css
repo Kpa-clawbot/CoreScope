@@ -115,13 +115,14 @@ body.mc-route-active .leaflet-overlay-pane svg path:not(.mc-rt-edge) { display: 
   font-weight: 600;
 }
 .mc-rt-paths-header::-webkit-details-marker { display: none; }
-.mc-rt-paths-header::before {
-  content: '▾';
+/* #1648 M4: chevron is now an inline Phosphor sprite (ph-caret-down) injected
+   by route-view.js. CSS only handles the rotation when the <details> is
+   closed. Replaces prior ::before content with a Misc-Symbols char. */
+.mc-rt-paths-chevron {
   margin-right: 4px;
-  font-size: 9px;
   transition: transform 120ms;
 }
-.mc-rt-paths:not([open]) .mc-rt-paths-header::before { transform: rotate(-90deg); }
+.mc-rt-paths:not([open]) .mc-rt-paths-chevron { transform: rotate(-90deg); }
 .mc-rt-path-clear {
   background: transparent;
   border: 1px solid var(--border, #444);

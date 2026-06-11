@@ -3026,7 +3026,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
     el.innerHTML = `
       <div class="analytics-card" id="ptOverview">
         <div style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none" id="ptOverviewToggle">
-          <span id="ptOverviewChevron" style="font-size:0.75em;color:var(--text-muted);transition:transform 0.2s">▶</span>
+          <span id="ptOverviewChevron" class="pt-overview-chevron" style="color:var(--text-muted);transition:transform 0.2s;display:inline-flex;align-items:center"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-right"/></svg></span>
           <h3 style="margin:0">Network Overview</h3>
         </div>
         <div id="ptOverviewBody" style="display:none">

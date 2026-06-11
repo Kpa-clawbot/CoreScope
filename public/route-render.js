@@ -58,8 +58,9 @@
 
   /**
    * Build the role-aware marker SVG for a hop. Origin and destination get a
-   * larger outline + a glyph (▶ / ⚑) layered on the standard role shape so
-   * the role information remains visible.
+   * larger outline + a Phosphor sprite glyph (play/flag) layered on the
+   * standard role shape so the role information remains visible.
+   * #1648 M4: prior glyphs were inline <text> chars (\u25B6 / \u2691). // EMOJI-OK: comment
    */
   function buildHopSVG(p, opts) {
     var size = opts.size || 22;
@@ -78,13 +79,18 @@
     var ringDash = opts.unresolved ? '4 3' : 'none';
     var ringFill = opts.unresolved ? 'rgba(150,150,150,0.15)' : 'none';
 
+    // Phosphor sprite <use> overlaid on the role marker. Sized to ~55% of
+    // outer ring, centered on the marker. fill="#0f172a" preserves the
+    // dark-on-light glyph contrast of the prior <text> implementation.
     var glyph = '';
-    if (opts.isOrigin) {
-      glyph = '<text x="' + (outerSize / 2) + '" y="' + (outerSize / 2 + 4) +
-        '" text-anchor="middle" font-size="11" font-weight="700" fill="#0f172a" aria-hidden="true">\u25B6</text>';
-    } else if (opts.isDest) {
-      glyph = '<text x="' + (outerSize / 2) + '" y="' + (outerSize / 2 + 4) +
-        '" text-anchor="middle" font-size="12" font-weight="700" fill="#0f172a" aria-hidden="true">\u2691</text>';
+    if (opts.isOrigin || opts.isDest) {
+      var gid = opts.isOrigin ? 'ph-play' : 'ph-flag';
+      var gSize = Math.round(outerSize * 0.55);
+      var gOff = (outerSize - gSize) / 2;
+      glyph = '<svg x="' + gOff + '" y="' + gOff + '" width="' + gSize +
+        '" height="' + gSize + '" viewBox="0 0 256 256" fill="#0f172a"' +
+        ' aria-hidden="true"><use href="/icons/phosphor-sprite.svg#' + gid +
+        '"/></svg>';
     }
 
     // Strip outer <svg> from inner SVG, re-wrap with outer ring + glyph
@@ -103,11 +109,15 @@
   }
 
   function buildBadge(idx, total, opts) {
-    var txt;
-    if (opts.isOrigin) txt = '\u25B6';        // ▶
-    else if (opts.isDest) txt = '\u2691';     // ⚑
-    else txt = String(idx);                    // intermediate hop number
-    return '<span class="mc-route-seq-badge" aria-hidden="true">' + txt + '</span>';
+    // Intermediate hops render the hop number; origin/destination render a
+    // Phosphor sprite glyph (play/flag) in place of the prior \u25B6 / \u2691. // EMOJI-OK: comment
+    if (opts.isOrigin || opts.isDest) {
+      var gid = opts.isOrigin ? 'ph-play' : 'ph-flag';
+      return '<span class="mc-route-seq-badge" aria-hidden="true">' +
+        '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#' +
+        gid + '"/></svg></span>';
+    }
+    return '<span class="mc-route-seq-badge" aria-hidden="true">' + String(idx) + '</span>';
   }
 
   function buildPopupHtml(p, hopNum, total) {
