@@ -1,7 +1,7 @@
 /* === CoreScope — observers.js === */
 'use strict';
 
-// Issue #1478 — naive-clock ⚠️ chip.
+// Issue #1478 — naive-clock warning chip.
 // Exposed as a window global so the renderer (and a jsdom-style test) can
 // call it without depending on the IIFE-scoped helpers below. Returns the
 // chip HTML when the observer's clock is currently flagged naive, or "" when
@@ -151,16 +151,16 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
           <button type="button" class="btn-secondary" data-action="compare-observers"
                   title="Compare two observers side-by-side"
                   aria-label="Compare observers">
-            <span aria-hidden="true">🔍</span><span>Compare observers</span>
+            <svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"></use></svg><span>Compare observers</span>
           </button>
           <button type="button" class="btn-secondary" data-action="compare-selected"
                   title="Select exactly two rows to compare"
                   aria-label="Compare selected observers"
                   aria-disabled="true" disabled>
-            <span aria-hidden="true">⚖️</span><span>Compare selected (<span data-role="compare-count">0</span>)</span>
+            <svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-scales"></use></svg><span>Compare selected (<span data-role="compare-count">0</span>)</span>
           </button>
           <span class="obs-refresh-spacer"></span>
-          <button class="btn-icon" data-action="obs-refresh" title="Refresh" aria-label="Refresh observers">🔄</button>
+          <button class="btn-icon" data-action="obs-refresh" title="Refresh" aria-label="Refresh observers"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-arrow-clockwise"></use></svg></button>
         </div>
         <div id="obsRegionFilter" class="region-filter-container"></div>
         <div id="obsContent"><div class="text-center text-muted" style="padding:40px">Loading…</div></div>
@@ -294,12 +294,14 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
   window.observerHealthStatus = healthStatus;
 
   function packetBadge(o) {
-    if (!o.last_packet_at) return '<span title="No packets ever observed">📡⚠ never</span>';
+    const warnIcon = '<svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-warning"></use></svg>';
+    const broadcastIcon = '<svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-broadcast"></use></svg>';
+    if (!o.last_packet_at) return '<span title="No packets ever observed">' + broadcastIcon + warnIcon + ' never</span>';
     const pktAgo = Date.now() - new Date(o.last_packet_at).getTime();
     const statusAgo = o.last_seen ? Date.now() - new Date(o.last_seen).getTime() : Infinity;
     const gap = pktAgo - statusAgo;
     if (gap > 600000) {
-      return `<span title="Last packet ${timeAgo(o.last_packet_at)} — status is newer by ${Math.round(gap/60000)}min. Observer may be alive but not forwarding packets.">📡⚠ ${timeAgo(o.last_packet_at)}</span>`;
+      return `<span title="Last packet ${timeAgo(o.last_packet_at)} — status is newer by ${Math.round(gap/60000)}min. Observer may be alive but not forwarding packets.">${broadcastIcon}${warnIcon} ${timeAgo(o.last_packet_at)}</span>`;
     }
     return timeAgo(o.last_packet_at);
   }
@@ -363,7 +365,11 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
         </tr></thead>
         <tbody>${filtered.map(o => {
           const h = healthStatus(o.last_seen);
-          const shape = h.cls === 'health-green' ? '●' : h.cls === 'health-yellow' ? '▲' : '✕';
+          const shapeIcon = h.cls === 'health-green'
+            ? '<svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"></use></svg>'
+            : h.cls === 'health-yellow'
+            ? '<svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-triangle"></use></svg>'
+            : '<svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-x"></use></svg>';
           // TableSort reads NaN-sortable raw values from each cell's
           // data-value attr (table-sort.js comparators.numeric/time sort
           // NaN last). Empty string ⇒ NaN ⇒ missing-sorts-last.
@@ -381,7 +387,7 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
           const _packetCount = (o.packet_count != null) ? o.packet_count : '';
           const _packetsHour = (o.packetsLastHour != null) ? o.packetsLastHour : '';
           return `<tr style="cursor:pointer" tabindex="0" role="row" data-action="navigate" data-value="#/observers/${encodeURIComponent(o.id)}" data-observer-id="${escapeHtml(o.id)}" onclick="location.hash='#/observers/${encodeURIComponent(o.id)}'">
-            <td data-value="${_healthRank}"><span class="health-dot ${h.cls}" title="${h.label}">${shape}</span> ${h.label}</td>
+            <td data-value="${_healthRank}"><span class="health-dot ${h.cls}" title="${h.label}">${shapeIcon}</span> ${h.label}</td>
             <td data-testid="obs-cell-name" data-value="${escapeHtml(String(o.name || o.id))}" class="mono">${escapeHtml(o.name || o.id)}${window.ObserversNaiveChip.render(o)}${o.can_relay === false ? ' <span class="badge-listener" title="Firmware reported repeat:off — listener-only; excluded from path-hop disambiguator (issue #1290)">listener</span>' : (o.can_relay === true ? ' <span class="badge-repeater" title="Firmware reported repeat:on — eligible as a path hop">repeater</span>' : '')}</td>
             <td data-value="${escapeHtml(o.iata || '')}">${o.iata ? `<span class="badge-region">${o.iata}</span>` : '—'}</td>
             <td data-value="${_lastSeenMs}">${timeAgo(o.last_seen)}</td>
@@ -493,7 +499,7 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
     content.innerHTML =
       (naiveChipHTML ? '<div style="margin-bottom:10px">' + naiveChipHTML + ' <span class="text-muted">Clock is naive — per-packet timing clamped to ingest time.</span></div>' : '') +
       '<dl class="slide-over-dl" style="margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:13px">' +
-        '<dt>Status</dt><dd><span class="health-dot ' + h.cls + '">●</span> ' + h.label + '</dd>' +
+        '<dt>Status</dt><dd><span class="health-dot ' + h.cls + '"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"></use></svg></span> ' + h.label + '</dd>' +
         '<dt>Region</dt><dd>' + (o.iata ? '<span class="badge-region">' + o.iata + '</span>' : '—') + '</dd>' +
         '<dt>Last status</dt><dd>' + timeAgo(o.last_seen) + '</dd>' +
         '<dt>Last packet</dt><dd>' + (o.last_packet_at ? timeAgo(o.last_packet_at) : '—') + '</dd>' +

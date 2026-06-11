@@ -54,15 +54,21 @@
   var prevFocus = null;
 
   // Long-tail routes mirror PR #1174 / bottom-nav.js MORE_ROUTES exactly.
-  // ⚠️ Keep in sync with public/bottom-nav.js MORE_ROUTES.
+  // !! Keep in sync with public/bottom-nav.js MORE_ROUTES.
+  // `ph` is the Phosphor icon id (no "ph-" prefix); see public/icons/phosphor-sprite.svg.
   var ROUTES = [
-    { route: 'nodes',     hash: '#/nodes',     label: 'Nodes',     icon: '🖥️' },
-    { route: 'tools',     hash: '#/tools',     label: 'Tools',     icon: '🛠️' },
-    { route: 'observers', hash: '#/observers', label: 'Observers', icon: '👁️' },
-    { route: 'analytics', hash: '#/analytics', label: 'Analytics', icon: '📊' },
-    { route: 'perf',      hash: '#/perf',      label: 'Perf',      icon: '⚡' },
-    { route: 'audio-lab', hash: '#/audio-lab', label: 'Audio Lab', icon: '🎵' },
+    { route: 'nodes',     hash: '#/nodes',     label: 'Nodes',     ph: 'monitor' },
+    { route: 'tools',     hash: '#/tools',     label: 'Tools',     ph: 'wrench' },
+    { route: 'observers', hash: '#/observers', label: 'Observers', ph: 'eye' },
+    { route: 'analytics', hash: '#/analytics', label: 'Analytics', ph: 'chart-bar' },
+    { route: 'perf',      hash: '#/perf',      label: 'Perf',      ph: 'lightning' },
+    { route: 'audio-lab', hash: '#/audio-lab', label: 'Audio Lab', ph: 'music-note' },
   ];
+
+  function phIconHTML(name) {
+    return '<svg class="ph-icon" aria-hidden="true" focusable="false">' +
+           '<use href="/icons/phosphor-sprite.svg#ph-' + name + '"></use></svg>';
+  }
 
   var EDGE_PX = 44;          // pointerdown must start within left N px (drawer trigger zone)
   var EDGE_MIN_PX = 24;      // first N px reserved for iOS Safari back-swipe (do not claim)
@@ -130,7 +136,7 @@
       var ic = document.createElement('span');
       ic.className = 'nav-drawer-icon';
       ic.setAttribute('aria-hidden', 'true');
-      ic.textContent = r.icon;
+      ic.innerHTML = phIconHTML(r.ph);
 
       var lb = document.createElement('span');
       lb.className = 'nav-drawer-label';

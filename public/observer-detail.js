@@ -97,7 +97,7 @@ window.ObserverDetailNaiveBanner = {
               </select>
               <button type="button" data-action="compare-with-go" class="btn-secondary" disabled aria-disabled="true"
                       title="Open side-by-side comparison">
-                <span aria-hidden="true">🔍</span><span>Compare</span>
+                <svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"></use></svg><span>Compare</span>
               </button>
             </span>
             <select id="obsDaysSelect" class="time-range-select" aria-label="Time range">
@@ -210,7 +210,7 @@ window.ObserverDetailNaiveBanner = {
       <div class="obs-info-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px">
         <div class="stat-card">
           <div class="stat-label">Status</div>
-          <div class="stat-value"><span class="health-dot ${statusCls}">●</span> ${statusLabel}</div>
+          <div class="stat-value"><span class="health-dot ${statusCls}"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"></use></svg></span> ${statusLabel}</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Relay</div>

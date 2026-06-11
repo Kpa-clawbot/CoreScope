@@ -41,35 +41,44 @@
 
   if (typeof document === 'undefined') return;
 
-  // 5 primary tabs + the More toggle. Each entry: { route, hash, label, icon }.
-  // For More, hash is null (not a route).
+  // Phosphor sprite ref helper (#1648 M1).
+  // Returns an inline SVG that uses the bundled sprite at /icons/phosphor-sprite.svg.
+  // Inherits color via currentColor and size via the surrounding font-size.
+  function phIconHTML(name) {
+    return '<svg class="ph-icon" aria-hidden="true" focusable="false">' +
+           '<use href="/icons/phosphor-sprite.svg#ph-' + name + '"></use></svg>';
+  }
+
+  // 5 primary tabs + the More toggle. Each entry: { route, hash, label, ph }.
+  // For More, hash is null (not a route). `ph` is the Phosphor icon id
+  // (no "ph-" prefix) — see public/icons/phosphor-sprite.svg.
   var TABS = [
-    { route: 'home',     hash: '#/home',     label: 'Home',     icon: '🏠' },
-    { route: 'packets',  hash: '#/packets',  label: 'Packets',  icon: '📦' },
-    { route: 'live',     hash: '#/live',     label: 'Live',     icon: '🔴' },
-    { route: 'map',      hash: '#/map',      label: 'Map',      icon: '🗺️' },
-    { route: 'channels', hash: '#/channels', label: 'Channels', icon: '💬' },
-    { route: 'more',     hash: null,         label: 'More',     icon: '☰' },
+    { route: 'home',     hash: '#/home',     label: 'Home',     ph: 'house' },
+    { route: 'packets',  hash: '#/packets',  label: 'Packets',  ph: 'package' },
+    { route: 'live',     hash: '#/live',     label: 'Live',     ph: 'broadcast' },
+    { route: 'map',      hash: '#/map',      label: 'Map',      ph: 'map-trifold' },
+    { route: 'channels', hash: '#/channels', label: 'Channels', ph: 'chat-circle' },
+    { route: 'more',     hash: null,         label: 'More',     ph: 'list' },
   ];
 
   // Long-tail routes surfaced in the More sheet. Mirrors data-route values
   // from the existing top-nav (public/index.html). Order matches what
   // operators expect from the desktop top-nav.
   //
-  // ⚠️ MANUAL SYNC REQUIRED ⚠️
+  // !! MANUAL SYNC REQUIRED !!
   // This list is intentionally hardcoded (not generated from
   // `.top-nav .nav-link[data-route]`) because the top-nav HTML is in
   // mid-rewrite and not a reliable single-source-of-truth. If you add a
   // new top-nav route (e.g. a future "Lab" page), you MUST also append
-  // it here, or it will be unreachable on phones at ≤768px (the
-  // hamburger is hidden at that breakpoint — see bottom-nav.css).
+  // it here, or it will be unreachable on phones at <=768px (the
+  // hamburger is hidden at that breakpoint -- see bottom-nav.css).
   var MORE_ROUTES = [
-    { route: 'nodes',     hash: '#/nodes',     label: 'Nodes',     icon: '🖥️' },
-    { route: 'tools',     hash: '#/tools',     label: 'Tools',     icon: '🛠️' },
-    { route: 'observers', hash: '#/observers', label: 'Observers', icon: '👁️' },
-    { route: 'analytics', hash: '#/analytics', label: 'Analytics', icon: '📊' },
-    { route: 'perf',      hash: '#/perf',      label: 'Perf',      icon: '⚡' },
-    { route: 'audio-lab', hash: '#/audio-lab', label: 'Audio Lab', icon: '🎵' },
+    { route: 'nodes',     hash: '#/nodes',     label: 'Nodes',     ph: 'monitor' },
+    { route: 'tools',     hash: '#/tools',     label: 'Tools',     ph: 'wrench' },
+    { route: 'observers', hash: '#/observers', label: 'Observers', ph: 'eye' },
+    { route: 'analytics', hash: '#/analytics', label: 'Analytics', ph: 'chart-bar' },
+    { route: 'perf',      hash: '#/perf',      label: 'Perf',      ph: 'lightning' },
+    { route: 'audio-lab', hash: '#/audio-lab', label: 'Audio Lab', ph: 'music-note' },
   ];
 
   var SHEET_ID = 'bottomNavMoreSheet';
@@ -115,7 +124,7 @@
       var ic = document.createElement('span');
       ic.className = 'bottom-nav-icon';
       ic.setAttribute('aria-hidden', 'true');
-      ic.textContent = t.icon;
+      ic.innerHTML = phIconHTML(t.ph);
 
       var lb = document.createElement('span');
       lb.className = 'bottom-nav-label';
@@ -202,7 +211,7 @@
       var ic = document.createElement('span');
       ic.className = 'bottom-nav-sheet-icon';
       ic.setAttribute('aria-hidden', 'true');
-      ic.textContent = r.icon;
+      ic.innerHTML = phIconHTML(r.ph);
 
       var lb = document.createElement('span');
       lb.className = 'bottom-nav-sheet-label';
@@ -262,7 +271,7 @@
     var btn = document.querySelector('[data-bottom-nav-dark-toggle]');
     if (!btn) return;
     var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-    btn.querySelector('.bottom-nav-sheet-icon').textContent = isDark ? '🌙' : '☀️';
+    btn.querySelector('.bottom-nav-sheet-icon').innerHTML = phIconHTML(isDark ? 'moon' : 'sun');
     btn.querySelector('.bottom-nav-sheet-label').textContent = isDark ? 'Light mode' : 'Dark mode';
   }
 

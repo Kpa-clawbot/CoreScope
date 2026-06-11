@@ -152,8 +152,8 @@
 
     const mirrors = [
       { id: 'favToggle',       icon: '⭐', label: 'Favorites' },
-      { id: 'searchToggle',    icon: '🔍', label: 'Search' },
-      { id: 'customizeToggle', icon: '🎨', label: 'Customize' },
+      { id: 'searchToggle',    ph: 'magnifying-glass', label: 'Search' },
+      { id: 'customizeToggle', ph: 'palette',          label: 'Customize' },
     ];
 
     const sep = sheet.querySelector('.bottom-nav-sheet-sep');
@@ -169,7 +169,14 @@
       const ic = document.createElement('span');
       ic.className = 'bottom-nav-sheet-icon';
       ic.setAttribute('aria-hidden', 'true');
-      ic.textContent = m.icon;
+      if (m.ph) {
+        // #1648 M1 — Phosphor sprite ref.
+        ic.innerHTML =
+          '<svg class="ph-icon" aria-hidden="true" focusable="false">' +
+          '<use href="/icons/phosphor-sprite.svg#ph-' + m.ph + '"></use></svg>';
+      } else {
+        ic.textContent = m.icon;
+      }
 
       const lb = document.createElement('span');
       lb.className = 'bottom-nav-sheet-label';

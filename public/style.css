@@ -1,5 +1,17 @@
 /* === CoreScope — style.css === */
 
+/* Phosphor icon sprite helper (#1648 M1).
+ * Icons live in public/icons/phosphor-sprite.svg as <symbol id="ph-NAME">.
+ * Reference with: <svg class="ph-icon"><use href="/icons/phosphor-sprite.svg#ph-NAME"/></svg>
+ * Inherits color via currentColor; sized to 1em so it scales with surrounding text. */
+.ph-icon {
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.125em;
+  fill: currentColor;
+  flex-shrink: 0;
+}
+
 /* Aldrich webfont — used by the navbar logo SVG (issue #1137 follow-up).
  * Self-hosted woff2 (latin subset from Google Fonts, ~16KB). Only weight
  * available is 400; the SVG's font-weight="700" synthesizes bold. */
