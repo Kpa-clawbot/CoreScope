@@ -1789,12 +1789,14 @@
       preview = ch.messageCount + ' messages';
     }
     const abbr = avatarTextForChannel(ch);
+    // abbr may be a Phosphor sprite (HTML) or plain text — detect & emit raw vs escaped.
+    const isHtmlAbbr = typeof abbr === 'string' && abbr.startsWith('<svg');
     const sel = selectedHash === ch.hash ? ' selected' : '';
     return '<button type="button" class="ch-row' + sel + '" data-hash="' + escapeHtml(ch.hash) +
       '" role="option" aria-selected="' + (selectedHash === ch.hash ? 'true' : 'false') +
       '" aria-label="' + escapeHtml(name) + '">' +
       '<div class="ch-avatar ch-row-avatar" style="background:' + color +
-      '" aria-hidden="true">' + escapeHtml(abbr) + '</div>' +
+      '" aria-hidden="true">' + (isHtmlAbbr ? abbr : escapeHtml(abbr)) + '</div>' +
       '<div class="ch-row-body">' +
         '<div class="ch-row-line1">' +
           '<span class="ch-row-name">' + escapeHtml(name) + '</span>' +
