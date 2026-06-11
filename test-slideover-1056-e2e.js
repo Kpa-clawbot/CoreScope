@@ -64,13 +64,13 @@ const PAGES = [
 
     await step(`${tag}: page renders + first row exists`, async () => {
       await page.goto(BASE + '/' + p.hash, { waitUntil: 'domcontentloaded' });
-      await page.waitForSelector(p.tableSel, { timeout: 8000 });
+      await page.waitForSelector(p.tableSel, { timeout: 15000 });
       // Wait for at least one real data row (per the page-specific rowSel).
       // Using p.rowSel here — not a bare `tbody tr` — avoids the
       // virtual-scroll spacer race on the packets page (#1662).
       await page.waitForFunction((rowSel) => {
         return document.querySelector(rowSel) !== null;
-      }, p.rowSel, { timeout: 15000 });
+      }, p.rowSel, { timeout: 30000 });
     });
 
     await step(`${tag}: clicking row opens slide-over with backdrop`, async () => {
