@@ -54,7 +54,7 @@
       <div style="max-width:1000px;margin:0 auto;padding:12px 16px">
         <div style="margin-bottom:12px">
           <a href="#/nodes/${encodeURIComponent(n.public_key)}" style="color:var(--accent);text-decoration:none;font-size:12px">← Back to ${nodeName}</a>
-          <h2 style="margin:4px 0 2px;font-size:18px">📊 ${nodeName} — Analytics</h2>
+          <h2 style="margin:4px 0 2px;font-size:18px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> ${nodeName} — Analytics</h2>
           <div style="color:var(--text-muted);font-size:11px">${n.role || 'Unknown role'} · ${s.totalTransmissions || s.totalPackets} packets in ${days}d window</div>
         </div>
 
@@ -313,9 +313,9 @@
 
     if (badge) {
       const STATUS_COLOR = { ok: '#51cf66', low: '#fcc419', critical: '#ff6b6b', unknown: 'var(--text-muted)' };
-      const label = data && data.status === 'ok' ? '🔋 OK'
-        : data && data.status === 'low' ? '⚠️ Low'
-        : data && data.status === 'critical' ? '🪫 Critical'
+      const label = data && data.status === 'ok' ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-battery-high"/></svg> OK'
+        : data && data.status === 'low' ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> Low'
+        : data && data.status === 'critical' ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-battery-low"/></svg> Critical'
         : 'No data';
       const mv = data && data.latest_mv ? ' · ' + data.latest_mv + ' mV' : '';
       badge.textContent = label + mv;

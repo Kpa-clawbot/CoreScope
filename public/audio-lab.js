@@ -200,7 +200,7 @@
 
     document.getElementById('alabDetail').innerHTML = `
       <div class="alab-section">
-        <h3>📦 Packet Data</h3>
+        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg> Packet Data</h3>
         <div class="alab-grid">
           <div class="alab-stat"><span class="label">Type</span><br><span class="value" style="color:${m.color}">${m.typeName}</span></div>
           <div class="alab-stat"><span class="label">Total Size</span><br><span class="value">${m.totalSize} bytes</span></div>
@@ -215,7 +215,7 @@
       </div>
 
       <div class="alab-section">
-        <h3>🎵 Sound Mapping</h3>
+        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-music-note"/></svg> Sound Mapping</h3>
         <table class="alab-map-table">
           <tr>
             <td class="map-param">Instrument</td>
@@ -261,7 +261,7 @@
       </div>
 
       <div class="alab-section">
-        <h3>🎹 Note Sequence</h3>
+        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-piano-keys"/></svg> Note Sequence</h3>
         <table class="alab-note-table">
           <tr><th scope="col"></th><th scope="col">#</th><th scope="col">Payload Index</th><th scope="col">Byte</th><th scope="col">→ MIDI</th><th scope="col">→ Freq</th><th scope="col">Duration (why)</th><th scope="col">Gap (why)</th></tr>
           ${m.notes.map((n, i) => {
@@ -283,7 +283,7 @@
       </div>
 
       <div class="alab-section">
-        <h3>📊 Byte Visualizer</h3>
+        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Byte Visualizer</h3>
         <div class="alab-byte-viz" id="alabByteViz"></div>
       </div>
     `;
@@ -437,7 +437,7 @@
         <div class="alab-main">
           <div class="alab-controls" id="alabControls">
             <button class="alab-btn" id="alabPlay" title="Play selected packet">▶ Play</button>
-            <button class="alab-btn" id="alabLoop" title="Loop playback">🔁 Loop</button>
+            <button class="alab-btn" id="alabLoop" title="Loop playback"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-repeat"/></svg> Loop</button>
             <span style="font-size:12px;color:var(--text-muted)">Speed:</span>
             <button class="alab-speed" data-speed="0.25">0.25x</button>
             <button class="alab-speed active" data-speed="1">1x</button>

@@ -73,7 +73,7 @@
   function setObserverIataMap(m) { observerIataMap = m || {}; }
 
   // #1189 R2 mesh-operator fix: live feed must show the observer's IATA pill
-  // alongside the existing 👁 N badge so operators on /live can tell SAME-
+  // alongside the existing observation-count badge so operators on /live can tell SAME-
   // region from CROSS-region reception at a glance (same affordance as the
   // /packets table). Mirrors `obsIataBadge` in public/packets.js — kept as a
   // local helper for now (live.js and packets.js are separate IIFEs with no
@@ -153,8 +153,8 @@
   };
 
   const PAYLOAD_ICONS = {
-    ADVERT: '📡', GRP_TXT: '💬', TXT_MSG: '✉️', ACK: '✓',
-    REQUEST: '❓', RESPONSE: '📨', TRACE: '🔍', PATH: '🛤️'
+    ADVERT: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg>', GRP_TXT: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chat-circle"/></svg>', TXT_MSG: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-envelope"/></svg>', ACK: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg>',
+    REQUEST: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg>', RESPONSE: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-envelope"/></svg>', TRACE: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg>', PATH: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-path"/></svg>'
   };
 
   /* ---- Panel Corner Positioning (#608 M0) ---- */
@@ -264,7 +264,7 @@
     const iso = d && isFinite(d.getTime()) ? d.toISOString() : null;
     const f = formatTimestampWithTooltip(iso, getTimestampMode());
     const warn = f.isFuture
-      ? ' <span class="timestamp-future-icon" title="Timestamp is in the future — node clock may be skewed">⚠️</span>'
+      ? ' <span class="timestamp-future-icon" title="Timestamp is in the future — node clock may be skewed"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span>'
       : '';
     return `<span class="timestamp-text" title="${escapeHtml(f.tooltip)}">${escapeHtml(f.text)}</span>${warn}`;
   }
@@ -1083,7 +1083,7 @@
           </div>
           <button class="live-header-toggle" data-live-header-toggle id="liveHeaderToggle"
                   aria-expanded="false" aria-controls="liveHeaderBody"
-                  aria-label="Show live stats">📊</button>
+                  aria-label="Show live stats"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg></button>
 
         <!-- #1205: settings toggles are children of the MESH LIVE panel
              (#liveHeader), not a free-floating .live-overlay. PR #1180
@@ -1103,7 +1103,7 @@
             <span id="matrixDesc" class="sr-only">Animate packet hex bytes flowing along paths like the Matrix</span>
             <label><input type="checkbox" id="liveMatrixRainToggle" aria-describedby="rainDesc"> Rain</label>
             <span id="rainDesc" class="sr-only">Matrix rain overlay — packets fall as hex columns</span>
-            <label><input type="checkbox" id="liveAudioToggle" aria-describedby="audioDesc"> 🎵 Audio</label>
+            <label><input type="checkbox" id="liveAudioToggle" aria-describedby="audioDesc"> <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-music-note"/></svg> Audio</label>
             <span id="audioDesc" class="sr-only">Sonify packets — turn raw bytes into generative music</span>
             <label><input type="checkbox" id="liveFavoritesToggle" aria-describedby="favDesc"> ⭐ Favorites</label>
             <span id="favDesc" class="sr-only">Show only favorited and claimed nodes</span>
@@ -1132,22 +1132,22 @@
         <div class="live-overlay live-feed" id="liveFeed">
           <div class="panel-header">
             <button class="panel-corner-btn" data-panel="liveFeed" title="Move panel to next corner" aria-label="Move panel to next corner">◫</button>
-            <button class="feed-hide-btn" id="feedHideBtn" title="Hide feed">✕</button>
+            <button class="feed-hide-btn" id="feedHideBtn" title="Hide feed" aria-label="Hide feed"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
           </div>
           <div class="panel-content" aria-live="polite" aria-relevant="additions" role="log">
             <div class="live-feed-empty" aria-hidden="true">Waiting for packets…</div>
           </div>
         </div>
-        <button class="feed-show-btn hidden" id="feedShowBtn" title="Show feed">📋</button>
+        <button class="feed-show-btn hidden" id="feedShowBtn" title="Show feed" aria-label="Show feed"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clipboard-text"/></svg></button>
         <div id="nodeDetailBackdrop" class="node-detail-backdrop"></div>
         <div class="live-overlay live-node-detail hidden" id="liveNodeDetail">
           <div class="panel-header">
             <button class="panel-corner-btn" data-panel="liveNodeDetail" title="Move panel to next corner" aria-label="Move panel to next corner">◫</button>
-            <button class="feed-hide-btn" id="nodeDetailClose" title="Close">✕</button>
+            <button class="feed-hide-btn" id="nodeDetailClose" title="Close" aria-label="Close"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
           </div>
           <div class="panel-content" id="nodeDetailContent"></div>
         </div>
-        <button class="legend-toggle-btn" id="legendToggleBtn" aria-label="Show legend" title="Show legend">🎨</button>
+        <button class="legend-toggle-btn" id="legendToggleBtn" aria-label="Show legend" title="Show legend"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-palette"/></svg></button>
         <div class="live-overlay live-legend" id="liveLegend" role="region" aria-label="Map legend">
           <div class="panel-header">
             <button class="panel-corner-btn" data-panel="liveLegend" title="Move panel to next corner" aria-label="Move panel to next corner">◫</button>
@@ -1424,7 +1424,7 @@
         const container = L.DomUtil.create('div', 'leaflet-bar leaflet-control live-leaflet-toggle');
         const btn = L.DomUtil.create('a', '', container);
         btn.href = 'javascript:void(0)';
-        btn.innerHTML = '⛶';
+        btn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-arrows-out"/></svg>';
         btn.id = 'liveFullscreenToggle';
         btn.title = 'Fullscreen (F)';
         btn.setAttribute('aria-label', 'Toggle fullscreen');
@@ -1443,7 +1443,7 @@
         const container = L.DomUtil.create('div', 'leaflet-bar leaflet-control live-leaflet-toggle');
         const btn = L.DomUtil.create('a', 'live-controls-toggle', container);
         btn.href = 'javascript:void(0)';
-        btn.innerHTML = '⚙';
+        btn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-gear"/></svg>';
         btn.id = 'liveControlsToggle';
         btn.setAttribute('data-live-controls-toggle', '');
         btn.title = 'Settings';
@@ -2015,7 +2015,7 @@
     // Adds `body.live-fullscreen` which CSS uses to hide header body,
     // controls body, VCR controls, and bottom-nav while leaving
     // .live-stats-row pinned top-right. Triggered by:
-    //   • clicking #liveFullscreenToggle (⛶ button next to ⚙)
+    //   * clicking #liveFullscreenToggle (fullscreen button next to gear)
     //   • pressing the `F` key (when focus is not in an input/textarea)
     // State persists across reloads via localStorage('live-fullscreen').
     (function wireLiveFullscreenToggle() {
@@ -2026,7 +2026,7 @@
         document.body.classList.toggle('live-fullscreen', !!on);
         if (btn) {
           btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-          btn.textContent = on ? '⛶' : '⛶';
+          btn.innerHTML = on ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-arrows-out"/></svg>' : '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-arrows-out"/></svg>';
           btn.setAttribute('aria-label', on
             ? 'Exit fullscreen (F)'
             : 'Toggle fullscreen (F) — hide chrome, keep stats');
@@ -2087,13 +2087,13 @@
         if (localStorage.getItem('live-legend-hidden') === 'true') {
           legendEl.classList.add('hidden');
           legendToggleBtn.setAttribute('aria-label', 'Show legend');
-          legendToggleBtn.textContent = '🎨';
+          legendToggleBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-palette"/></svg>';
         }
       } catch (_) { /* private browsing / storage disabled */ }
       legendToggleBtn.addEventListener('click', () => {
         const nowHidden = legendEl.classList.toggle('hidden');
         legendToggleBtn.setAttribute('aria-label', nowHidden ? 'Show legend' : 'Hide legend');
-        legendToggleBtn.textContent = nowHidden ? '🎨' : '✕';
+        legendToggleBtn.innerHTML = nowHidden ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-palette"/></svg>' : '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg>';
         try { localStorage.setItem('live-legend-hidden', String(nowHidden)); } catch (_) { /* ignore */ }
       });
     }
@@ -2389,7 +2389,7 @@
       pinBtn.className = 'nav-pin-btn';
       pinBtn.setAttribute('aria-label', 'Pin navigation open');
       pinBtn.setAttribute('title', 'Pin navigation open');
-      pinBtn.textContent = '📌';
+      pinBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-push-pin"/></svg>';
       pinBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         _navCleanup.pinned = !_navCleanup.pinned;
@@ -2482,7 +2482,7 @@
       let html = `
         <div style="padding:16px;">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
-            <span class="${statusDot}" style="font-size:18px" aria-hidden="true">●</span>
+            <span class="${statusDot}" style="font-size:18px" aria-hidden="true"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span>
             <h3 style="margin:0;font-size:16px;font-weight:700;">${escapeHtml(n.name || 'Unknown')}</h3>
           </div>
           <div style="margin-bottom:12px;">
@@ -2517,7 +2517,7 @@
         html += `<h4 style="font-size:12px;margin:12px 0 6px;color:var(--text-muted);">Recent Packets</h4>
           <div style="font-size:11px;max-height:200px;overflow-y:auto;">` +
           recent.slice(0, 10).map(p => `<div style="padding:2px 0;display:flex;justify-content:space-between;">
-            <a href="#/packets/${encodeURIComponent(p.hash || '')}" style="color:var(--accent);text-decoration:none;">${escapeHtml(p.payload_type || '?')}${transportBadge(p.route_type)}${p.observation_count > 1 ? ' <span class="badge badge-obs" style="font-size:9px">👁 ' + p.observation_count + '</span>' : ''}</a>
+            <a href="#/packets/${encodeURIComponent(p.hash || '')}" style="color:var(--accent);text-decoration:none;">${escapeHtml(p.payload_type || '?')}${transportBadge(p.route_type)}${p.observation_count > 1 ? ' <span class="badge badge-obs" style="font-size:9px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> ' + p.observation_count + '</span>' : ''}</a>
             <span style="color:var(--text-muted)">${formatLiveTimestampHtml(p.timestamp)}</span>
           </div>`).join('') +
           '</div>';
@@ -2527,7 +2527,7 @@
 
       html += `<div style="margin-top:12px;display:flex;gap:8px;">
         <a href="#/nodes/${encodeURIComponent(n.public_key)}" style="font-size:12px;color:var(--accent);">Full Detail →</a>
-        <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" style="font-size:12px;color:var(--accent);">📊 Analytics</a>
+        <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" style="font-size:12px;color:var(--accent);"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Analytics</a>
       </div></div>`;
 
       content.innerHTML = html;
@@ -2760,7 +2760,7 @@
       const header = decoded.header || {};
       const payload = decoded.payload || {};
       const typeName = header.payloadTypeName || 'UNKNOWN';
-      const icon = PAYLOAD_ICONS[typeName] || '📦';
+      const icon = PAYLOAD_ICONS[typeName] || '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg>';
       const color = TYPE_COLORS[typeName] || '#6b7280';
 
       // Find longest path across all observations for display
@@ -2779,7 +2779,7 @@
       const text = payload.text || payload.name || '';
       const preview = text ? ' ' + (text.length > 35 ? text.slice(0, 35) + '…' : text) : '';
       const hopStr = longestHops.length ? `<span class="feed-hops">${longestHops.length}⇢</span>` : '';
-      const obsBadge = group.count > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px">👁 ${group.count}</span>` : '';
+      const obsBadge = group.count > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> ${group.count}</span>` : '';
       const iataBadge = obsIataBadgeHtml(pkt);
 
       var _ccPayload = (pkt.decoded || {}).payload || {};
@@ -3120,7 +3120,7 @@
     const header = decoded.header || {};
     const payload = decoded.payload || {};
     const typeName = header.payloadTypeName || 'UNKNOWN';
-    const icon = PAYLOAD_ICONS[typeName] || '📦';
+    const icon = PAYLOAD_ICONS[typeName] || '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg>';
     const color = TYPE_COLORS[typeName] || '#6b7280';
     const obsCount = packets.length;
 
@@ -3623,7 +3623,7 @@
         container.dataset.matrixPrevTheme = currentTheme || 'light';
         document.documentElement.setAttribute('data-theme', 'dark');
         const dt = document.getElementById('darkModeToggle');
-        if (dt) { dt.textContent = '🌙'; dt.disabled = true; }
+        if (dt) { dt.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-moon"/></svg>'; dt.disabled = true; }
       } else {
         const dt = document.getElementById('darkModeToggle');
         if (dt) dt.disabled = true;
@@ -3650,7 +3650,7 @@
         document.documentElement.setAttribute('data-theme', prevTheme);
         localStorage.setItem('meshcore-theme', prevTheme);
         const dt = document.getElementById('darkModeToggle');
-        if (dt) { dt.textContent = prevTheme === 'dark' ? '🌙' : '☀️'; dt.disabled = false; }
+        if (dt) { dt.innerHTML = prevTheme === 'dark' ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-moon"/></svg>' : '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-sun"/></svg>'; dt.disabled = false; }
         delete container.dataset.matrixPrevTheme;
       } else {
         const dt = document.getElementById('darkModeToggle');
@@ -4124,9 +4124,9 @@
     const text = payload.text || payload.name || '';
     const preview = text ? ' ' + (text.length > 35 ? text.slice(0, 35) + '…' : text) : '';
     const hopStr = hops.length ? `<span class="feed-hops">${hops.length}⇢</span>` : '';
-    const obsBadge = pkt.observation_count > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px">👁 ${pkt.observation_count}</span>` : '';
+    const obsBadge = pkt.observation_count > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> ${pkt.observation_count}</span>` : '';
     const iataBadge = obsIataBadgeHtml(pkt);
-    const anomalyIcon = (pkt.decoded && pkt.decoded.anomaly) ? '<span title="Anomaly detected" style="margin-left:4px">⚠️</span>' : '';
+    const anomalyIcon = (pkt.decoded && pkt.decoded.anomaly) ? '<span title="Anomaly detected" style="margin-left:4px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span>' : '';
     var _ccPayload2 = (pkt.decoded || {}).payload || {};
     var _ccChan = (typeName === 'GRP_TXT' || typeName === 'CHAN') ? (_ccPayload2.channel || null) : null;
     var dotHtml = _ccChan ? _feedColorDot(_ccChan) : '';
@@ -4185,7 +4185,7 @@
           const ref = entry.element.querySelector('.feed-hops') || entry.element.querySelector('.feed-type');
           if (ref) ref.after(badge); else entry.element.appendChild(badge);
         }
-        badge.textContent = '👁 ' + entry.count;
+        badge.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> ' + entry.count;
         // Flash + move to top
         entry.element.classList.remove('live-feed-enter');
         void entry.element.offsetWidth; // force reflow
@@ -4211,7 +4211,7 @@
     const text = payload.text || payload.name || '';
     const preview = text ? ' ' + (text.length > 35 ? text.slice(0, 35) + '…' : text) : '';
     const hopStr = hops.length ? `<span class="feed-hops">${hops.length}⇢</span>` : '';
-    const obsBadge = incomingObs > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px">👁 ${incomingObs}</span>` : '';
+    const obsBadge = incomingObs > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> ${incomingObs}</span>` : '';
     const iataBadge = obsIataBadgeHtml(pkt);
     var _ccPayload3 = (pkt.decoded || {}).payload || {};
     var _ccChan3 = (typeName === 'GRP_TXT' || typeName === 'CHAN') ? (_ccPayload3.channel || null) : null;
@@ -4281,15 +4281,15 @@
       <div class="panel-header" style="border-left:3px solid ${color}">
         <strong>${typeName}</strong>
         ${sender ? `<span class="fdc-sender">${escapeHtml(sender)}</span>` : ''}
-        <button class="fdc-close">✕</button>
+        <button class="fdc-close" aria-label="Close"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
       </div>
       ${text ? `<div class="fdc-text">${escapeHtml(text.length > 120 ? text.slice(0, 120) + '…' : text)}</div>` : ''}
       <div class="fdc-meta">
-        ${channel ? `<span>📻 ${escapeHtml(channel)}</span>` : ''}
-        ${hops.length ? `<span>🔀 ${hops.length} hops</span>` : ''}
-        ${snr != null ? `<span>📶 ${Number(snr).toFixed(1)} dB</span>` : ''}
-        ${rssi != null ? `<span>📡 ${rssi} dBm</span>` : ''}
-        ${observer ? `<span>👁 ${escapeHtml(observer)}</span>` : ''}
+        ${channel ? `<span><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-radio"/></svg> ${escapeHtml(channel)}</span>` : ''}
+        ${hops.length ? `<span><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-shuffle"/></svg> ${hops.length} hops</span>` : ''}
+        ${snr != null ? `<span><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-cell-signal-high"/></svg> ${Number(snr).toFixed(1)} dB</span>` : ''}
+        ${rssi != null ? `<span><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> ${rssi} dBm</span>` : ''}
+        ${observer ? `<span><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> ${escapeHtml(observer)}</span>` : ''}
       </div>
       ${pkt.hash ? `<a class="fdc-link" href="#/packets/${pkt.hash.toLowerCase()}">View in packets →</a>` : ''}
       <button class="fdc-replay">↻ Replay</button>

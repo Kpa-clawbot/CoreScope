@@ -44,9 +44,9 @@
   };
   // MB_GLYPHS prefix the hash text with a non-color status carrier.
   var MB_GLYPHS = {
-    confirmed: '\u2713', // ✓
+    confirmed: '\u2713', // check
     suspected: '?',
-    unknown:   '\u2717', // ✗
+    unknown:   '\u2717', // x-mark
   };
   // Per-status CSS class (drives the colored 3px left-border in style.css).
   var MB_STATUS_CLASS = {
@@ -149,7 +149,7 @@
                             : ('repeater hash ' + shortHash);
     // Observer indicator stays a star — it is an orthogonal signal, not a status color.
     var obsIndicator = isAlsoObserver
-      ? ' <span aria-hidden="true" style="color:' + (ROLE_COLORS.observer || '#f1c40f') + ';font-size:13px;line-height:1;" title="Also an observer">★</span>'
+      ? ' <span aria-hidden="true" style="color:' + (ROLE_COLORS.observer || '#f1c40f') + ';font-size:13px;line-height:1;" title="Also an observer"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg></span>'
       : '';
     // Glyph + thin-space (U+2009) + hash. Visible content is aria-hidden so AT
     // reads the aria-label only (avoids "check mark 3 E" literal announcements).
@@ -182,9 +182,9 @@
             <div id="mapPiResults"></div>
           </div>
         </div>
-        <button class="map-controls-toggle" id="mapControlsToggle" aria-label="Toggle map controls" aria-expanded="true">⚙️</button>
+        <button class="map-controls-toggle" id="mapControlsToggle" aria-label="Toggle map controls" aria-expanded="true"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-gear"/></svg></button>
         <div class="map-controls" id="mapControls" role="region" aria-label="Map controls">
-          <h3>🗺️ Map Controls</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> Map Controls</h3>
           <fieldset class="mc-section">
             <legend class="mc-label">Node Types</legend>
             <div id="mcRoleChecks"></div>
@@ -220,7 +220,7 @@
             <label for="mcNeighbors"><input type="checkbox" id="mcNeighbors"> Show direct neighbors</label>
             <div id="mcNeighborRef" style="display:none;font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:20px;">Ref: <span id="mcNeighborRefName">—</span></div>
             <div id="mcNeighborHint" style="display:none;font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:20px;">Click a node marker to set the reference node</div>
-            <label id="mcAffinityDebugLabel" for="mcAffinityDebug" style="display:none"><input type="checkbox" id="mcAffinityDebug"> 🔍 Affinity Debug</label>
+            <label id="mcAffinityDebugLabel" for="mcAffinityDebug" style="display:none"><input type="checkbox" id="mcAffinityDebug"> <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Affinity Debug</label>
           </fieldset>
           <fieldset class="mc-section">
             <legend class="mc-label">Last Heard</legend>
@@ -637,7 +637,7 @@
     const closeBtn = L.control({ position: 'topright' });
     closeBtn.onAdd = function () {
       const div = L.DomUtil.create('div', 'leaflet-bar');
-      div.innerHTML = '<a href="#" title="Close route" style="font-size:18px;font-weight:bold;text-decoration:none;display:block;width:36px;height:36px;line-height:36px;text-align:center;background:var(--input-bg,#1e293b);color:var(--text,#e2e8f0);border-radius:4px">✕</a>';
+      div.innerHTML = '<a href="#" title="Close route" style="font-size:18px;font-weight:bold;text-decoration:none;display:block;width:36px;height:36px;line-height:36px;text-align:center;background:var(--input-bg,#1e293b);color:var(--text,#e2e8f0);border-radius:4px" aria-label="Close route"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></a>';
       L.DomEvent.on(div, 'click', function (e) {
         L.DomEvent.preventDefault(e);
         routeLayer.clearLayers();
@@ -667,7 +667,7 @@
     // the hop wasn't in the server response. When a node MATCHES by
     // prefix/pubkey but has no GPS coords, we still want its name/role/pubkey
     // for the sidebar — flag it as {resolved:false, gpsless:true} so the
-    // renderer can label it "📍 no GPS" instead of "unresolved prefix".
+    // renderer can label it "no GPS" instead of "unresolved prefix".
     const raw = hopKeys.map(hop => {
       const hopLower = String(hop).toLowerCase();
       // Try server resolution first
@@ -1297,7 +1297,7 @@
     const nodePubkeys = new Set(nodes.map(n => (n.public_key || '').toLowerCase()));
     const obsCount = observers.filter(o => o.lat && o.lon && !(o.id && nodePubkeys.has(o.id.toLowerCase()))).length;
     const roles = ['repeater', 'companion', 'room', 'sensor', 'observer'];
-    const shapeMap = { repeater: '◆', companion: '●', room: '■', sensor: '▲', observer: '★' };
+    const shapeMap = { repeater: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-diamond"/></svg>', companion: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg>', room: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-square-fill"/></svg>', sensor: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-triangle"/></svg>', observer: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg>' };
 
     // Count active/stale per role from loaded nodes
     const roleCounts = {};
@@ -1316,7 +1316,7 @@
       const cbId = 'mcRole_' + role;
       const lbl = document.createElement('label');
       lbl.setAttribute('for', cbId);
-      const shape = shapeMap[role] || '●';
+      const shape = shapeMap[role] || '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg>';
       let countStr;
       if (role === 'observer') {
         countStr = `(${obsCount})`;
@@ -1710,7 +1710,7 @@
     // Multi-byte support indicator for repeaters
     var mbRow = '';
     if (node.role === 'repeater' && node.multi_byte_status) {
-      var mbLabel = { confirmed: '✅ Confirmed', suspected: '⚠️ Suspected', unknown: '❌ Unknown' }[node.multi_byte_status] || node.multi_byte_status;
+      var mbLabel = { confirmed: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> Confirmed', suspected: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> Suspected', unknown: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x-circle"/></svg> Unknown' }[node.multi_byte_status] || node.multi_byte_status;
       var mbEvidence = node.multi_byte_evidence ? ' (' + node.multi_byte_evidence + ')' : '';
       mbRow = '<dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Multi-byte</dt>' +
         '<dd style="margin-left:88px;padding:2px 0;font-size:12px;">' + mbLabel + mbEvidence + '</dd>';
@@ -1823,9 +1823,9 @@
       var rowClass = c.speculative ? 'speculative-row' : '';
       html += '<tr class="' + rowClass + '">';
       html += '<td>' + (i + 1) + '</td>';
-      html += '<td class="' + (c.speculative ? 'speculative-warning' : '') + '">' + c.score.toFixed(2) + (c.speculative ? ' ⚠' : '') + '</td>';
+      html += '<td class="' + (c.speculative ? 'speculative-warning' : '') + '">' + c.score.toFixed(2) + (c.speculative ? ' <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' : '') + '</td>';
       html += '<td title="' + safeEsc(c.names.join(' → ')) + '">' + safeEsc(c.names.slice(0, 3).join('→')) + (c.names.length > 3 ? '…' : '') + '</td>';
-      html += '<td><button class="btn btn-sm" data-idx="' + i + '" title="Show on Map">📍</button></td>';
+      html += '<td><button class="btn btn-sm" data-idx="' + i + '" title="Show on Map" aria-label="Show on Map"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-pin"/></svg></button></td>';
       html += '</tr>';
       // Per-hop evidence (collapsed).
       html += '<tr class="evidence-row collapsed" data-evidence="' + i + '"><td colspan="4"><div class="evidence-detail" style="font-size:10px;">';
@@ -1962,11 +1962,11 @@
 
       if (!posA) return;
 
-      // Unresolved prefix — show ❓ marker near nodeA
+      // Unresolved prefix - show question marker near nodeA
       if (e.unresolved || (!posB && e.ambiguous)) {
         if (posA) {
           var marker = L.marker([posA[0] + 0.001, posA[1] + 0.001], {
-            icon: L.divIcon({ html: '❓', className: 'affinity-unresolved', iconSize: [20, 20] })
+            icon: L.divIcon({ html: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg>', className: 'affinity-unresolved', iconSize: [20, 20] })
           });
           marker.bindPopup('<b>Unresolved prefix:</b> ' + escapeHtml(e.prefix) + '<br>Observations: ' + e.weight);
           affinityLayer.addLayer(marker);

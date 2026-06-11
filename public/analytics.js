@@ -98,7 +98,7 @@
     app.innerHTML = `
       <div class="analytics-page">
         <div class="analytics-header">
-          <h2>📊 Mesh Analytics</h2>
+          <h2><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Mesh Analytics</h2>
           <p class="text-muted">Deep dive into your mesh network data</p>
           <div class="analytics-filters">
             <div id="analyticsRegionFilter" class="region-filter-container"></div>
@@ -369,7 +369,7 @@
 
       <div class="analytics-row">
         <div class="analytics-card flex-1">
-          <h3>📈 Packets / Hour</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trend-up"/></svg> Packets / Hour</h3>
           ${(() => {
             const pph = rf.packetsPerHour;
             const counts = pph.map(h => h.count);
@@ -394,18 +394,18 @@
 
       <div class="analytics-row">
         <div class="analytics-card flex-1">
-          <h3>📦 Payload Type Mix</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg> Payload Type Mix</h3>
           ${renderPayloadPie(rf.payloadTypes)}
         </div>
         <div class="analytics-card flex-1">
-          <h3>🔗 Hop Count Distribution</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-link"/></svg> Hop Count Distribution</h3>
           ${barChart(topo.hopDistribution.map(h=>h.count), topo.hopDistribution.map(h=>h.hops), ['#3b82f6'])}
         </div>
       </div>
 
       <div class="analytics-row">
         <div class="analytics-card flex-1">
-          <h3>📡 Relay Airtime Share</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Relay Airtime Share</h3>
           <p class="text-muted" style="margin-top:-4px;font-size:12px">Score = payload bytes × distinct repeaters that forwarded the packet. Counts relay re-transmissions; originator TX excluded. Not comparable across meshes.</p>
           ${renderRelayAirtimeDumbbell(d.airtimeData)}
         </div>
@@ -427,7 +427,7 @@
           var widget = document.createElement('div');
           widget.className = 'analytics-row';
           widget.innerHTML = '<div class="analytics-card flex-1">' +
-            '<h3>🔍 Neighbor Affinity Graph</h3>' +
+            '<h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Neighbor Affinity Graph</h3>' +
             '<div class="stats-grid">' +
             '<div class="stat-card"><div class="stat-value">' + s.totalEdges + '</div><div class="stat-label">Total Edges</div></div>' +
             '<div class="stat-card"><div class="stat-value">' + s.totalNodes + '</div><div class="stat-label">Total Nodes</div></div>' +
@@ -525,7 +525,7 @@
     el.innerHTML = `
       <div class="analytics-row">
         <div class="analytics-card flex-1">
-          <h3>📶 SNR Distribution</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-cell-signal-high"/></svg> SNR Distribution</h3>
           <p class="text-muted">Signal-to-Noise Ratio (higher = cleaner signal)</p>
           ${snrHist.svg}
           <div class="rf-stats">
@@ -537,7 +537,7 @@
           </div>
         </div>
         <div class="analytics-card flex-1">
-          <h3>📡 RSSI Distribution</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> RSSI Distribution</h3>
           <p class="text-muted">Received Signal Strength (closer to 0 = stronger)</p>
           ${rssiHist.svg}
           <div class="rf-stats">
@@ -552,7 +552,7 @@
 
       <div class="analytics-row">
         <div class="analytics-card flex-1">
-          <h3>🎯 SNR vs RSSI Scatter</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-target"/></svg> SNR vs RSSI Scatter</h3>
           <p class="text-muted">Each dot = one packet. Cluster position reveals link quality.</p>
           ${renderScatter(rf.scatterData)}
         </div>
@@ -560,17 +560,17 @@
 
       <div class="analytics-row">
         <div class="analytics-card flex-1">
-          <h3>📊 SNR by Payload Type</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> SNR by Payload Type</h3>
           ${renderSNRByType(rf.snrByType)}
         </div>
         <div class="analytics-card flex-1">
-          <h3>📈 Signal Quality Over Time</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trend-up"/></svg> Signal Quality Over Time</h3>
           ${renderSignalTimeline(rf.signalOverTime)}
         </div>
       </div>
 
       <div class="analytics-card">
-        <h3>📏 Packet Size Distribution</h3>
+        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-ruler"/></svg> Packet Size Distribution</h3>
         <p class="text-muted">Raw packet length in bytes</p>
         ${histogram(rf.packetSizes, 25, '#8b5cf6').svg}
         <div class="rf-stats">
@@ -693,7 +693,7 @@
     el.innerHTML = `
       <div class="analytics-row">
         <div class="analytics-card flex-1">
-          <h3>🔗 Hop Count Distribution</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-link"/></svg> Hop Count Distribution</h3>
           <p class="text-muted">Number of repeater hops per packet</p>
           ${barChart(topo.hopDistribution.map(h=>h.count), topo.hopDistribution.map(h=>h.hops), ['#3b82f6'])}
           <div class="rf-stats">
@@ -704,7 +704,7 @@
           </div>
         </div>
         <div class="analytics-card flex-1">
-          <h3>🕸️ Top Repeaters</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-graph"/></svg> Top Repeaters</h3>
           <p class="text-muted">Nodes appearing most in packet paths</p>
           ${renderRepeaterTable(topo.topRepeaters)}
         </div>
@@ -712,25 +712,25 @@
 
       <div class="analytics-row">
         <div class="analytics-card flex-1">
-          <h3>🤝 Repeater Pair Heatmap</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-handshake"/></svg> Repeater Pair Heatmap</h3>
           <p class="text-muted">Which repeaters frequently appear together in paths</p>
           ${renderPairTable(topo.topPairs)}
         </div>
         <div class="analytics-card flex-1">
-          <h3>📊 Hops vs SNR</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Hops vs SNR</h3>
           <p class="text-muted">Does more hops = worse signal?</p>
           ${renderHopsSNR(topo.hopsVsSnr)}
         </div>
       </div>
 
       <div class="analytics-card">
-        <h3>🏆 Best Path to Each Node</h3>
+        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trophy"/></svg> Best Path to Each Node</h3>
         <p class="text-muted">Shortest hop distance seen across all observers</p>
         ${renderBestPath(topo.bestPathList)}
       </div>
 
       <div class="analytics-card">
-        <h3>🌐 Per-Observer Reachability</h3>
+        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-globe"/></svg> Per-Observer Reachability</h3>
         <p class="text-muted">Nodes at each hop distance, from each observer's perspective</p>
         ${topo.observers.length > 1 ? `<div class="observer-selector" id="obsSelector">
           ${topo.observers.map((o, i) => `<button class="tab-btn ${i === 0 ? 'active' : ''}" data-obs="${o.id}">${esc(o.name)}</button>`).join('')}
@@ -740,7 +740,7 @@
       </div>
 
       ${topo.multiObsNodes.length ? `<div class="analytics-card">
-        <h3>🔀 Cross-Observer Comparison</h3>
+        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-shuffle"/></svg> Cross-Observer Comparison</h3>
         <p class="text-muted">Nodes seen by multiple observers — hop distance varies by vantage point</p>
         ${renderCrossObserver(topo.multiObsNodes)}
       </div>` : ''}
@@ -832,7 +832,7 @@
   function renderAllObserversReach(perObserverReach) {
     let html = '';
     for (const [obsId, data] of Object.entries(perObserverReach)) {
-      html += `<h4 style="margin:12px 0 6px">📡 ${esc(data.observer_name)}</h4>`;
+      html += `<h4 style="margin:12px 0 6px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> ${esc(data.observer_name)}</h4>`;
       html += renderPerObserverReach(perObserverReach, obsId);
     }
     return html || '<div class="text-muted">No data</div>';
@@ -947,7 +947,7 @@
       '<td>' + c.messages + '</td>' +
       '<td>' + c.senders + '</td>' +
       '<td>' + timeAgo(c.lastActivity) + '</td>' +
-      '<td>' + (c.encrypted ? (c.group === 'mine' ? '🔑' : '🔒') : '✅') + '</td>' +
+      '<td>' + (c.encrypted ? (c.group === 'mine' ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-key"/></svg>' : '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg>') : '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg>') + '</td>' +
     '</tr>';
   }
 
@@ -975,8 +975,8 @@
           // Empty-name encrypted rows would otherwise leak through with an
           // empty <strong> in the row; force the placeholder rendering.
           copy.displayName = !isNaN(hashNum)
-            ? '🔒 Encrypted (0x' + hashNum.toString(16).toUpperCase().padStart(2, '0') + ')'
-            : '🔒 Encrypted';
+            ? '🔒 Encrypted (0x' + hashNum.toString(16).toUpperCase().padStart(2, '0') + ')' // EMOJI-OK: displayName data field consumed by tests
+            : '🔒 Encrypted'; // EMOJI-OK: displayName data field consumed by tests
           copy.group = 'encrypted';
         } else {
           // Server gave us a real name (rainbow table hit) for an encrypted ch.
@@ -1024,9 +1024,9 @@
         (groups[g] || (groups[g] = [])).push(sorted[gi]);
       }
       var sections = [
-        { key: 'mine', label: '🔑 My Channels' },
-        { key: 'network', label: '📻 Network' },
-        { key: 'encrypted', label: '🔒 Encrypted' },
+        { key: 'mine', label: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-key"/></svg> My Channels' },
+        { key: 'network', label: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-radio"/></svg> Network' },
+        { key: 'encrypted', label: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> Encrypted' },
       ];
       for (var si = 0; si < sections.length; si++) {
         var rows = groups[sections[si].key] || [];
@@ -1111,7 +1111,7 @@
 
     el.innerHTML =
       '<div class="analytics-card">' +
-        '<h3>📻 Channel Activity</h3>' +
+        '<h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-radio"/></svg> Channel Activity</h3>' +
         '<p class="text-muted">' + ch.activeChannels + ' active channels, ' + ch.decryptable + ' decryptable</p>' +
         '<table class="analytics-table" id="channelsTable">' +
           channelTheadHtml(_channelSortState.col, _channelSortState.dir) +
@@ -1122,16 +1122,16 @@
       '</div>' +
       '<div class="analytics-row">' +
         '<div class="analytics-card flex-1">' +
-          '<h3>💬 Messages / Hour by Channel</h3>' +
+          '<h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chat-circle"/></svg> Messages / Hour by Channel</h3>' +
           timelineHtml +
         '</div>' +
         '<div class="analytics-card flex-1">' +
-          '<h3>🗣️ Top Senders</h3>' +
+          '<h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-megaphone"/></svg> Top Senders</h3>' +
           topSendersHtml +
         '</div>' +
       '</div>' +
       '<div class="analytics-card">' +
-        '<h3>📊 Message Length Distribution</h3>' +
+        '<h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Message Length Distribution</h3>' +
         histoHtml +
       '</div>';
 
@@ -1275,7 +1275,7 @@
           })() : ''}
         </div>
         <div class="analytics-card flex-1">
-          <h3>📈 Hash Size Over Time</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trend-up"/></svg> Hash Size Over Time</h3>
           ${renderHashTimeline(data.hourly)}
         </div>
       </div>
@@ -1309,7 +1309,7 @@
     var capByPubkey = {};
     (caps || []).forEach(function(c) { capByPubkey[c.pubkey] = c; });
 
-    var statusIcon = { confirmed: '✅', suspected: '⚠️', unknown: '❓' };
+    var statusIcon = { confirmed: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg>', suspected: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>', unknown: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg>' };
     var statusLabel = { confirmed: 'Confirmed', suspected: 'Suspected', unknown: 'Unknown' };
     var statusColor = { confirmed: 'var(--success, #22c55e)', suspected: 'var(--warning, #eab308)', unknown: 'var(--text-muted, #888)' };
 
@@ -1345,7 +1345,7 @@
                 '<td><strong>' + esc(r.name) + '</strong></td>' +
                 '<td><span class="badge" style="background:' + roleColor + '20;color:' + roleColor + '">' + esc(r.role || 'unknown') + '</span></td>' +
                 '<td><span style="color:' + (statusColor[r.status] || statusColor.unknown) + '">' +
-                  (statusIcon[r.status] || '❓') + ' ' + (statusLabel[r.status] || 'Unknown') + '</span></td>' +
+                  (statusIcon[r.status] || '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg>') + ' ' + (statusLabel[r.status] || 'Unknown') + '</span></td>' +
                 '<td><span class="badge badge-hash-' + r.hashSize + '">' + r.hashSize + '-byte</span></td>' +
                 '<td>' + r.packets + '</td>' +
                 '<td>' + (r.lastSeen ? timeAgo(r.lastSeen) : '—') + '</td>' +
@@ -1370,9 +1370,9 @@
         '</div>' +
         '<div style="display:flex;gap:4px;flex-wrap:wrap" id="mbCapFilters">' +
           '<button class="tab-btn active" data-mb-filter="all">All (' + rows.length + ')</button>' +
-          '<button class="tab-btn" data-mb-filter="confirmed" style="--filter-color:var(--success, #22c55e)">✅ Confirmed (' + counts.confirmed + ')</button>' +
-          '<button class="tab-btn" data-mb-filter="suspected" style="--filter-color:var(--warning, #eab308)">⚠️ Suspected (' + counts.suspected + ')</button>' +
-          '<button class="tab-btn" data-mb-filter="unknown" style="--filter-color:var(--text-muted, #888)">❓ Unknown (' + counts.unknown + ')</button>' +
+          '<button class="tab-btn" data-mb-filter="confirmed" style="--filter-color:var(--success, #22c55e)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> Confirmed (' + counts.confirmed + ')</button>' +
+          '<button class="tab-btn" data-mb-filter="suspected" style="--filter-color:var(--warning, #eab308)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> Suspected (' + counts.suspected + ')</button>' +
+          '<button class="tab-btn" data-mb-filter="unknown" style="--filter-color:var(--text-muted, #888)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg> Unknown (' + counts.unknown + ')</button>' +
         '</div>' +
       '</div>' +
       '<div id="mbAdoptersTableWrap">' + buildTableContent(rows, 'all') + '</div>' +
@@ -1437,25 +1437,25 @@
   async function renderCollisionTab(el, data, collisionData) {
     el.innerHTML = `
       <nav id="hashIssuesToc" style="display:flex;gap:12px;margin-bottom:12px;font-size:13px;flex-wrap:wrap">
-        <a href="#/analytics?tab=collisions&section=inconsistentHashSection" style="color:var(--accent)">⚠️ Inconsistent Sizes</a>
+        <a href="#/analytics?tab=collisions&section=inconsistentHashSection" style="color:var(--accent)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> Inconsistent Sizes</a>
         <span style="color:var(--border)">|</span>
-        <a href="#/analytics?tab=collisions&section=hashMatrixSection" style="color:var(--accent)">🔢 Hash Matrix</a>
+        <a href="#/analytics?tab=collisions&section=hashMatrixSection" style="color:var(--accent)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-list-numbers"/></svg> Hash Matrix</a>
         <span style="color:var(--border)">|</span>
-        <a href="#/analytics?tab=collisions&section=collisionRiskSection" style="color:var(--accent)">💥 Collision Risk</a>
+        <a href="#/analytics?tab=collisions&section=collisionRiskSection" style="color:var(--accent)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-bomb"/></svg> Collision Risk</a>
         <span style="color:var(--border)">|</span>
-        <a href="#/analytics?tab=prefix-tool" style="color:var(--accent)">🔎 Check a prefix →</a>
+        <a href="#/analytics?tab=prefix-tool" style="color:var(--accent)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Check a prefix →</a>
       </nav>
       <p class="text-muted" style="margin:0 0 12px;font-size:0.78em">Collisions <strong>actually observed in packet traffic</strong> — among <strong>repeaters</strong> grouped by their configured hash size. For <em>theoretical</em> address conflicts that <em>would</em> occur if all repeaters used a given hash size, see the <a href="#/analytics?tab=prefix-tool" style="color:var(--accent)">Prefix Tool</a> tab.</p>
 
       <div class="analytics-card" id="inconsistentHashSection">
-        <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">⚠️ Inconsistent Hash Sizes</h3><a href="#/analytics?tab=collisions" style="font-size:11px;color:var(--text-muted)">↑ top</a></div>
+        <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> Inconsistent Hash Sizes</h3><a href="#/analytics?tab=collisions" style="font-size:11px;color:var(--text-muted)">↑ top</a></div>
         <p class="text-muted" style="margin:4px 0 8px;font-size:0.8em">Repeaters and room servers sending adverts with varying hash sizes in the last 7 days. Originally caused by a <a href="https://github.com/meshcore-dev/MeshCore/commit/fcfdc5f" target="_blank" style="color:var(--accent)">firmware bug</a> where automatic adverts ignored the configured multibyte path setting, fixed in <a href="https://github.com/meshcore-dev/MeshCore/releases/tag/repeater-v1.14.1" target="_blank" style="color:var(--accent)">repeater v1.14.1</a>. Companion nodes are excluded.</p>
         <div id="inconsistentHashList"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading…</div></div>
       </div>
 
       <div class="analytics-card" id="hashMatrixSection">
         <div style="display:flex;justify-content:space-between;align-items:center">
-          <h3 style="margin:0" id="hashMatrixTitle">🔢 Hash Usage Matrix</h3>
+          <h3 style="margin:0" id="hashMatrixTitle"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-list-numbers"/></svg> Hash Usage Matrix</h3>
           <a href="#/analytics?tab=collisions" style="font-size:11px;color:var(--text-muted)">↑ top</a>
         </div>
         <div style="display:flex;align-items:center;gap:16px;margin:8px 0">
@@ -1470,7 +1470,7 @@
       </div>
 
       <div class="analytics-card" id="collisionRiskSection">
-        <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0" id="collisionRiskTitle">💥 Collision Risk</h3><a href="#/analytics?tab=collisions" style="font-size:11px;color:var(--text-muted)">↑ top</a></div>
+        <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0" id="collisionRiskTitle"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-bomb"/></svg> Collision Risk</h3><a href="#/analytics?tab=collisions" style="font-size:11px;color:var(--text-muted)">↑ top</a></div>
         <div id="collisionList"><div class="text-muted" style="padding:8px">Loading…</div></div>
       </div>
     `;
@@ -1480,7 +1480,7 @@
     const ihEl = document.getElementById('inconsistentHashList');
     if (ihEl) {
       if (!inconsistent.length) {
-        ihEl.innerHTML = '<div class="text-muted" style="padding:4px">✅ No inconsistencies detected — all nodes are reporting consistent hash sizes.</div>';
+        ihEl.innerHTML = '<div class="text-muted" style="padding:4px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> No inconsistencies detected — all nodes are reporting consistent hash sizes.</div>';
       } else {
         ihEl.innerHTML = `<table class="analytics-table" style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;overflow:hidden">
           <thead><tr><th scope="col">Node</th><th scope="col">Role</th><th scope="col">Current Hash</th><th scope="col">Sizes Seen</th></tr></thead>
@@ -1519,8 +1519,8 @@
       const matrixTitle = document.getElementById('hashMatrixTitle');
       const matrixDesc = document.getElementById('hashMatrixDesc');
       const riskTitle = document.getElementById('collisionRiskTitle');
-      if (matrixTitle) matrixTitle.textContent = bytes === 3 ? '🔢 Hash Usage Matrix' : `🔢 ${bytes}-Byte Hash Usage Matrix`;
-      if (riskTitle) riskTitle.textContent = `💥 ${bytes}-Byte Collision Risk`;
+      if (matrixTitle) matrixTitle.innerHTML = bytes === 3 ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-list-numbers"/></svg> Hash Usage Matrix' : `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-list-numbers"/></svg> ${bytes}-Byte Hash Usage Matrix`;
+      if (riskTitle) riskTitle.innerHTML = `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-bomb"/></svg> ${bytes}-Byte Collision Risk`;
       if (matrixDesc) {
         if (bytes === 1) matrixDesc.textContent = 'Cells include the first byte of all repeaters — including those using 2- or 3-byte prefixes — so this reflects real conflicts in the 1-byte hash space. Click a cell to see the nodes.';
         else if (bytes === 2) matrixDesc.textContent = 'Each cell = first-byte group. Color shows worst 2-byte collision within. Click a cell to see the breakdown.';
@@ -1663,7 +1663,7 @@
       </div>
       <div class="analytics-stat-card" style="flex:1;min-width:110px;border-color:${collisionCount > 0 ? 'var(--status-red)' : 'var(--border)'}${collisionCount > 0 ? ';cursor:pointer' : ''}" ${collisionCount > 0 ? 'onclick="document.getElementById(\'collisionRiskSection\')?.scrollIntoView({behavior:\'smooth\',block:\'start\'})"' : ''} ${collisionCount > 0 ? 'title="Click to see collision details"' : ''}>
         <div class="analytics-stat-label">Prefix collisions</div>
-        <div class="analytics-stat-value" style="color:${collisionCount > 0 ? 'var(--status-red)' : 'var(--status-green)'}">${collisionCount}${collisionCount > 0 ? ' <span style="font-size:11px;opacity:0.7">▼</span>' : ''}</div>
+        <div class="analytics-stat-value" style="color:${collisionCount > 0 ? 'var(--status-red)' : 'var(--status-green)'}">${collisionCount}${collisionCount > 0 ? ' <span style="font-size:11px;opacity:0.7"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-down"/></svg></span>' : ''}</div>
       </div>
     </div>`;
   }
@@ -1855,7 +1855,7 @@
           const groupNodes = info.group_nodes || [];
           let dhtml = `<strong class="mono" style="font-size:1.1em">0x${hex}__</strong> — ${groupNodes.length} node${groupNodes.length !== 1 ? 's' : ''} in group`;
           if ((info.collision_count || 0) === 0) {
-            dhtml += `<div class="text-muted" style="margin-top:6px;font-size:0.85em">✅ No 2-byte collisions in this group</div>`;
+            dhtml += `<div class="text-muted" style="margin-top:6px;font-size:0.85em"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> No 2-byte collisions in this group</div>`;
             dhtml += `<div style="margin-top:8px">${groupNodes.map(m => {
               const prefix = m.public_key.slice(0,4).toUpperCase();
               return `<div style="padding:2px 0"><code class="mono" style="font-size:0.85em">${prefix}</code> <a href="#/nodes/${encodeURIComponent(m.public_key)}" class="analytics-link">${esc(m.name || m.public_key.slice(0,12))}</a></div>`;
@@ -1884,8 +1884,8 @@
 
     if (!collisions.length) {
       const cleanMsg = bytes === 3
-        ? '✅ No 3-byte prefix collisions detected — all repeaters have unique 3-byte prefixes.'
-        : `✅ No ${bytes}-byte collisions detected`;
+        ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> No 3-byte prefix collisions detected — all repeaters have unique 3-byte prefixes.'
+        : `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> No ${bytes}-byte collisions detected`;
       el.innerHTML = `<div class="text-muted" style="padding:8px">${cleanMsg}</div>`;
       return;
     }
@@ -1904,16 +1904,16 @@
       <tbody>${collisions.map(c => {
         let badge, tooltip;
         if (c.classification === 'local') {
-          badge = `<span class="badge" style="background:var(--status-green);color:#fff" title="All nodes within ${t50} — likely true collision, same RF neighborhood">🏘️ Local</span>`;
+          badge = `<span class="badge" style="background:var(--status-green);color:#fff" title="All nodes within ${t50} — likely true collision, same RF neighborhood"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-buildings"/></svg> Local</span>`;
           tooltip = 'Nodes close enough for direct RF — probably genuine prefix collision';
         } else if (c.classification === 'regional') {
-          badge = `<span class="badge" style="background:var(--status-yellow);color:#fff" title="Nodes ${t50}–${t200} apart — edge of LoRa range, could be atmospheric">⚡ Regional</span>`;
+          badge = `<span class="badge" style="background:var(--status-yellow);color:#fff" title="Nodes ${t50}–${t200} apart — edge of LoRa range, could be atmospheric"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lightning"/></svg> Regional</span>`;
           tooltip = 'At edge of 915MHz range — could indicate atmospheric ducting or hilltop-to-hilltop links';
         } else if (c.classification === 'distant') {
-          badge = `<span class="badge" style="background:var(--status-red);color:#fff" title="Nodes >${t200} apart — beyond typical 915MHz range">🌐 Distant</span>`;
+          badge = `<span class="badge" style="background:var(--status-red);color:#fff" title="Nodes >${t200} apart — beyond typical 915MHz range"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-globe"/></svg> Distant</span>`;
           tooltip = 'Beyond typical LoRa range — likely internet bridging, MQTT gateway, or separate mesh networks sharing prefix';
         } else {
-          badge = '<span class="badge" style="background:#6b7280;color:#fff">❓ Unknown</span>';
+          badge = '<span class="badge" style="background:#6b7280;color:#fff"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg> Unknown</span>';
           tooltip = 'Not enough coordinate data to classify';
         }
         const nodes = c.nodes || [];
@@ -1933,9 +1933,9 @@
       }).join('')}</tbody>
     </table>
     <div class="text-muted" style="padding:8px;font-size:0.8em">
-      <strong>🏘️ Local</strong> &lt;${t50}: true prefix collision, same mesh area &nbsp;
-      <strong>⚡ Regional</strong> ${t50}–${t200}: edge of LoRa range, possible atmospheric propagation &nbsp;
-      <strong>🌐 Distant</strong> &gt;${t200}: beyond 915MHz range — internet bridge, MQTT gateway, or separate networks
+      <strong><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-buildings"/></svg> Local</strong> &lt;${t50}: true prefix collision, same mesh area &nbsp;
+      <strong><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lightning"/></svg> Regional</strong> ${t50}–${t200}: edge of LoRa range, possible atmospheric propagation &nbsp;
+      <strong><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-globe"/></svg> Distant</strong> &gt;${t200}: beyond 915MHz range — internet bridge, MQTT gateway, or separate networks
     </div>`;
   }
     async function renderSubpaths(el) {
@@ -1967,7 +1967,7 @@
             const prefixDisplay = rawHops.join(' → ');
             return `<tr data-hops="${esc(rawHops.join(','))}" ${hasSelfLoop ? 'class="subpath-selfloop"' : ''} style="cursor:pointer">
               <td>${i + 1}</td>
-              <td>${routeDisplay}${hasSelfLoop ? ' <span title="Contains self-loop — likely 1-byte prefix collision" style="cursor:help">🔄</span>' : ''}<br><span class="hop-prefix mono">${esc(prefixDisplay)}</span></td>
+              <td>${routeDisplay}${hasSelfLoop ? ' <span title="Contains self-loop — likely 1-byte prefix collision" style="cursor:help"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-arrow-clockwise"/></svg></span>' : ''}<br><span class="hop-prefix mono">${esc(prefixDisplay)}</span></td>
               <td>${s.count.toLocaleString()}</td>
               <td>${s.pct}%</td>
               <td><div style="background:${hasSelfLoop ? 'var(--status-yellow)' : 'var(--accent)'};height:14px;border-radius:3px;width:${barW}%;opacity:0.7"></div></td>
@@ -1979,7 +1979,7 @@
       el.innerHTML = `
         <div class="subpath-layout">
           <div class="subpath-list" id="subpathList">
-            <h3>🛤️ Route Pattern Analysis</h3>
+            <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-path"/></svg> Route Pattern Analysis</h3>
             <p>Click a route to see details. Most common subpaths — reveals backbone routes, bottlenecks, and preferred relay chains.</p>
             <label style="display:inline-flex;align-items:center;gap:6px;margin-bottom:12px;cursor:pointer;font-size:0.9em">
               <input type="checkbox" id="hideCollisions" aria-label="Hide likely prefix collisions" ${localStorage.getItem('subpath-hide-collisions') === '1' ? 'checked' : ''}> Hide likely prefix collisions (self-loops)
@@ -2059,7 +2059,7 @@
         </div>
 
         ${nodesWithLoc.length >= 2 ? `<div class="subpath-section">
-          <h5>📏 Hop Distances</h5>
+          <h5><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-ruler"/></svg> Hop Distances</h5>
           ${(() => {
             const dists = [];
             let total = 0;
@@ -2084,7 +2084,7 @@
         ${hasMap ? '<div id="subpathMap" style="height:200px;border-radius:8px;margin:12px 0;border:1px solid var(--border,#e5e7eb)"></div>' : ''}
 
         <div class="subpath-section">
-          <h5>📡 Observer Receive Signal</h5>
+          <h5><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Observer Receive Signal</h5>
           <p class="text-muted" style="font-size:0.8em;margin:0 0 4px">Last hop → observer only, not between nodes in the route</p>
           ${data.signal.avgSnr != null
             ? `<div>Avg SNR: <strong>${data.signal.avgSnr} dB</strong> · Avg RSSI: <strong>${data.signal.avgRssi} dBm</strong> · ${data.signal.samples} samples</div>`
@@ -2092,7 +2092,7 @@
         </div>
 
         <div class="subpath-section">
-          <h5>🕐 Activity by Hour (UTC)</h5>
+          <h5><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clock"/></svg> Activity by Hour (UTC)</h5>
           <div class="hour-chart">
             ${data.hourDistribution.map((c, h) => `<div class="hour-bar" title="${h}:00 UTC — ${c} packets" style="height:${Math.max(2, c / maxHour * 100)}%"></div>`).join('')}
           </div>
@@ -2107,13 +2107,13 @@
 
         ${data.observers.length ? `
         <div class="subpath-section">
-          <h5>👁️ Observers</h5>
+          <h5><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> Observers</h5>
           ${data.observers.map(o => `<div>${esc(o.name)}: ${o.count}</div>`).join('')}
         </div>` : ''}
 
         ${data.parentPaths.length ? `
         <div class="subpath-section">
-          <h5>🔗 Full Paths Containing This Route</h5>
+          <h5><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-link"/></svg> Full Paths Containing This Route</h5>
           <div class="parent-paths">
             ${data.parentPaths.map(p => `<div class="parent-path"><span class="mono" style="font-size:0.85em">${esc(p.path)}</span> <span class="text-muted">×${p.count}</span></div>`).join('')}
           </div>
@@ -2187,26 +2187,26 @@
         return `<a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link">${esc(n.name || n.public_key.slice(0, 12))}</a>`;
       }
       function claimedBadge(n) {
-        return myKeys.has(n.public_key) ? ' <span style="color:var(--accent);font-size:10px">★ MINE</span>' : '';
+        return myKeys.has(n.public_key) ? ' <span style="color:var(--accent);font-size:10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg> MINE</span>' : '';
       }
 
       // ROLE_COLORS from shared roles.js
 
       el.innerHTML = `
         <div class="analytics-section">
-          <h3>🔍 Network Status</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Network Status</h3>
           <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px">
             <div class="analytics-stat-card" style="flex:1;min-width:120px;text-align:center;padding:16px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px">
               <div style="font-size:28px;font-weight:700;color:var(--status-green)">${active}</div>
-              <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted)">🟢 Active</div>
+              <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted)"><span style="color:var(--status-green)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> Active</div>
             </div>
             <div class="analytics-stat-card" style="flex:1;min-width:120px;text-align:center;padding:16px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px">
               <div style="font-size:28px;font-weight:700;color:var(--status-yellow)">${degraded}</div>
-              <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted)">🟡 Degraded</div>
+              <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted)"><span style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> Degraded</div>
             </div>
             <div class="analytics-stat-card" style="flex:1;min-width:120px;text-align:center;padding:16px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px">
               <div style="font-size:28px;font-weight:700;color:var(--status-red)">${silent}</div>
-              <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted)">🔴 Silent</div>
+              <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted)"><span style="color:var(--status-red)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> Silent</div>
             </div>
             <div class="analytics-stat-card" style="flex:1;min-width:120px;text-align:center;padding:16px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px">
               <div style="font-size:28px;font-weight:700">${totalNodes}</div>
@@ -2214,7 +2214,7 @@
             </div>
           </div>
 
-          <h3>📊 Role Breakdown</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Role Breakdown</h3>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:24px">
             ${Object.entries(roleCounts).sort((a,b) => b[1]-a[1]).map(([role, count]) => {
               const c = ROLE_COLORS[role] || '#6b7280';
@@ -2240,7 +2240,7 @@
             </tbody>
           </table>` : ''}
 
-          <h3>🏆 Most Active Nodes</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trophy"/></svg> Most Active Nodes</h3>
           <table class="analytics-table" style="margin-bottom:24px">
             <thead><tr><th scope="col">#</th><th scope="col">Node</th><th scope="col">Role</th><th scope="col">Total Packets</th><th scope="col">Packets Today</th><th scope="col">Analytics</th></tr></thead>
             <tbody>
@@ -2250,12 +2250,12 @@
                 <td><span class="badge" style="background:${(ROLE_COLORS[n.role]||'#6b7280')}20;color:${ROLE_COLORS[n.role]||'#6b7280'}">${n.role}</span></td>
                 <td>${n.health.stats.totalTransmissions || n.health.stats.totalPackets || 0}</td>
                 <td>${n.health.stats.packetsToday || 0}</td>
-                <td><a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link">📊</a></td>
+                <td><a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link" aria-label="Per-node analytics"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg></a></td>
               </tr>`).join('')}
             </tbody>
           </table>
 
-          <h3>📶 Best Signal Quality</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-cell-signal-high"/></svg> Best Signal Quality</h3>
           <table class="analytics-table" style="margin-bottom:24px">
             <thead><tr><th scope="col">#</th><th scope="col">Node</th><th scope="col">Role</th><th scope="col">Avg SNR</th><th scope="col">Observers</th><th scope="col">Analytics</th></tr></thead>
             <tbody>
@@ -2265,12 +2265,12 @@
                 <td><span class="badge" style="background:${(ROLE_COLORS[n.role]||'#6b7280')}20;color:${ROLE_COLORS[n.role]||'#6b7280'}">${n.role}</span></td>
                 <td>${n.health.stats.avgSnr.toFixed(1)} dB</td>
                 <td>${n.health.observers?.length || 0}</td>
-                <td><a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link">📊</a></td>
+                <td><a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link" aria-label="Per-node analytics"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg></a></td>
               </tr>`).join('')}
             </tbody>
           </table>
 
-          <h3>👀 Most Observed Nodes</h3>
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> Most Observed Nodes</h3>
           <table class="analytics-table" style="margin-bottom:24px">
             <thead><tr><th scope="col">#</th><th scope="col">Node</th><th scope="col">Role</th><th scope="col">Observers</th><th scope="col">Avg SNR</th><th scope="col">Analytics</th></tr></thead>
             <tbody>
@@ -2280,7 +2280,7 @@
                 <td><span class="badge" style="background:${(ROLE_COLORS[n.role]||'#6b7280')}20;color:${ROLE_COLORS[n.role]||'#6b7280'}">${n.role}</span></td>
                 <td>${n.health.observers?.length || 0}</td>
                 <td>${n.health.stats.avgSnr != null ? n.health.stats.avgSnr.toFixed(1) + ' dB' : '—'}</td>
-                <td><a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link">📊</a></td>
+                <td><a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link" aria-label="Per-node analytics"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg></a></td>
               </tr>`).join('')}
             </tbody>
           </table>
@@ -2294,7 +2294,7 @@
                 <td><span class="badge" style="background:${(ROLE_COLORS[n.role]||'#6b7280')}20;color:${ROLE_COLORS[n.role]||'#6b7280'}">${n.role}</span></td>
                 <td>${timeAgo(n.health.stats.lastHeard)}</td>
                 <td>${n.health.stats.packetsToday || 0}</td>
-                <td><a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link">📊</a></td>
+                <td><a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link" aria-label="Per-node analytics"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg></a></td>
               </tr>`).join('')}
             </tbody>
           </table>
@@ -2340,7 +2340,7 @@
       }
 
       // Top hops leaderboard
-      html += `<div class="analytics-section"><h3>🏆 Top 20 Longest Hops</h3><table class="data-table"><thead><tr><th scope="col">#</th><th scope="col">From</th><th scope="col">To</th><th scope="col">Distance (${distUnitLabel})</th><th scope="col">Type</th><th scope="col">Obs</th><th scope="col">Best SNR</th><th scope="col">Median SNR</th><th scope="col">Packet</th><th scope="col"></th></tr></thead><tbody>`;
+      html += `<div class="analytics-section"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trophy"/></svg> Top 20 Longest Hops</h3><table class="data-table"><thead><tr><th scope="col">#</th><th scope="col">From</th><th scope="col">To</th><th scope="col">Distance (${distUnitLabel})</th><th scope="col">Type</th><th scope="col">Obs</th><th scope="col">Best SNR</th><th scope="col">Median SNR</th><th scope="col">Packet</th><th scope="col"></th></tr></thead><tbody>`;
       const top20 = data.topHops.slice(0, 20);
       top20.forEach((h, i) => {
         const fromLink = h.fromPk ? `<a href="#/nodes/${encodeURIComponent(h.fromPk)}" class="analytics-link">${esc(h.fromName)}</a>` : esc(h.fromName || '?');
@@ -2349,7 +2349,7 @@
         const medianSnr = h.medianSnr != null ? Number(h.medianSnr).toFixed(1) + ' dB' : '<span class="text-muted">—</span>';
         const obs = h.obsCount != null ? h.obsCount : 1;
         const pktLink = h.hash ? `<a href="#/packet/${encodeURIComponent(h.hash)}" class="analytics-link mono" style="font-size:0.85em">${esc(h.hash.slice(0, 12))}…</a>` : '—';
-        const mapBtn = h.fromPk && h.toPk ? `<button class="btn-icon dist-map-hop" data-from="${esc(h.fromPk)}" data-to="${esc(h.toPk)}" title="View on map">🗺️</button>` : '';
+        const mapBtn = h.fromPk && h.toPk ? `<button class="btn-icon dist-map-hop" data-from="${esc(h.fromPk)}" data-to="${esc(h.toPk)}" title="View on map" aria-label="View on map"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg></button>` : '';
         const tsTitle = h.timestamp ? `Best observation: ${h.timestamp}` : '';
         html += `<tr title="${esc(tsTitle)}"><td>${i+1}</td><td>${fromLink}</td><td>${toLink}</td><td><strong>${formatDistance(h.dist)}</strong></td><td>${esc(h.type)}</td><td>${obs}</td><td>${bestSnr}</td><td>${medianSnr}</td><td>${pktLink}</td><td>${mapBtn}</td></tr>`;
       });
@@ -2357,7 +2357,7 @@
 
       // Top paths
       if (data.topPaths.length) {
-        html += `<div class="analytics-section"><h3>🛤️ Top 10 Longest Multi-Hop Paths</h3><table class="data-table"><thead><tr><th scope="col">#</th><th scope="col">Total Distance (${distUnitLabel})</th><th scope="col">Hops</th><th scope="col">Route</th><th scope="col">Packet</th><th scope="col"></th></tr></thead><tbody>`;
+        html += `<div class="analytics-section"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-path"/></svg> Top 10 Longest Multi-Hop Paths</h3><table class="data-table"><thead><tr><th scope="col">#</th><th scope="col">Total Distance (${distUnitLabel})</th><th scope="col">Hops</th><th scope="col">Route</th><th scope="col">Packet</th><th scope="col"></th></tr></thead><tbody>`;
         data.topPaths.slice(0, 10).forEach((p, i) => {
           const route = p.hops.map(h => esc(h.fromName)).concat(esc(p.hops[p.hops.length-1].toName)).join(' → ');
           const pktLink = p.hash ? `<a href="#/packet/${encodeURIComponent(p.hash)}" class="analytics-link mono" style="font-size:0.85em">${esc(p.hash.slice(0, 12))}…</a>` : '—';
@@ -2365,7 +2365,7 @@
           const pathPks = [];
           p.hops.forEach(h => { if (h.fromPk && !pathPks.includes(h.fromPk)) pathPks.push(h.fromPk); });
           if (p.hops.length && p.hops[p.hops.length-1].toPk) { const last = p.hops[p.hops.length-1].toPk; if (!pathPks.includes(last)) pathPks.push(last); }
-          const mapBtn = pathPks.length >= 2 ? `<button class="btn-icon dist-map-path" data-hops='${JSON.stringify(pathPks)}' title="View on map">🗺️</button>` : '';
+          const mapBtn = pathPks.length >= 2 ? `<button class="btn-icon dist-map-path" data-hops='${JSON.stringify(pathPks)}' title="View on map" aria-label="View on map"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg></button>` : '';
           html += `<tr><td>${i+1}</td><td><strong>${formatDistance(p.totalDist)}</strong></td><td>${p.hopCount}</td><td style="font-size:0.9em">${route}</td><td>${pktLink}</td><td>${mapBtn}</td></tr>`;
         });
         html += `</tbody></table></div>`;
@@ -2418,7 +2418,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
   async function renderNeighborGraphTab(el) {
     el.innerHTML = `
       <div class="analytics-card" id="ngCard">
-        <h3>🕸️ Neighbor Graph</h3>
+        <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-graph"/></svg> Neighbor Graph</h3>
         <div id="ngFilters" class="ng-filters" style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
           <label style="font-size:13px">Roles:
             <span id="ngRoleChecks" style="margin-left:4px"></span>
@@ -2440,7 +2440,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
           <div id="ngTooltip" style="position:absolute;display:none;background:var(--bg-secondary);border:1px solid var(--border);border-radius:4px;padding:6px 10px;font-size:12px;pointer-events:none;z-index:10;box-shadow:0 2px 8px rgba(0,0,0,0.2)"></div>
         </div>
         <details id="ngAccessibleList" style="margin-top:12px">
-          <summary style="cursor:pointer;font-size:13px;color:var(--text-secondary)">📋 Text-based neighbor list (accessible alternative)</summary>
+          <summary style="cursor:pointer;font-size:13px;color:var(--text-secondary)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clipboard-text"/></svg> Text-based neighbor list (accessible alternative)</summary>
           <div id="ngTextList" style="font-size:12px;max-height:300px;overflow-y:auto;padding:8px;background:var(--bg-secondary);border-radius:4px;margin-top:4px"></div>
         </details>
       </div>`;
@@ -2596,13 +2596,13 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
       var neighbors = (adj[n.pubkey] || []).map(function(nb) {
         var peer = nodeMap[nb.pk];
         var name = peer ? (peer.name || nb.pk.slice(0, 8)) : nb.pk.slice(0, 8);
-        var conf = nb.ambiguous ? ' ⚠' : (nb.score >= 0.5 ? ' ●' : ' ○');
+        var conf = nb.ambiguous ? ' ' + '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' : (nb.score >= 0.5 ? ' ' + '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg>' : ' ' + '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle"/></svg>');
         return esc(name) + conf;
       }).join(', ');
       html += '<tr><td style="padding:4px;border-bottom:1px solid var(--border)">' + esc(n.name || n.pubkey.slice(0, 12)) + '</td><td style="padding:4px;border-bottom:1px solid var(--border)">' + esc(n.role || 'unknown') + '</td><td style="padding:4px;border-bottom:1px solid var(--border)">' + (neighbors || '<em>none</em>') + '</td></tr>';
     });
     html += '</tbody></table>';
-    html += '<p style="margin-top:8px;font-size:11px;color:var(--text-secondary)">● = high confidence (score ≥ 0.5), ○ = low confidence, ⚠ = ambiguous/unresolved</p>';
+    html += '<p style="margin-top:8px;font-size:11px;color:var(--text-secondary)">' + '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg>' + ' = high confidence (score ≥ 0.5), ' + '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle"/></svg>' + ' = low confidence, ' + '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' + ' = ambiguous/unresolved</p>';
     listEl.innerHTML = html;
   }
 
@@ -3052,8 +3052,8 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
               // distinguish theoretical/would-collide-if-used from packet-
               // traffic-observed collisions shown on the Hash Issues tab.
               const opLine = opC === 0
-                ? `<span style="color:var(--status-green)">✅ No address conflicts among configured repeaters</span>`
-                : `<span style="color:var(--status-red)">⚠️ ${opC} address conflict${opC !== 1 ? 's' : ''} among configured repeaters (would-collide-if-used)</span>`;
+                ? `<span style="color:var(--status-green)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> No address conflicts among configured repeaters</span>`
+                : `<span style="color:var(--status-red)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ${opC} address conflict${opC !== 1 ? 's' : ''} among configured repeaters (would-collide-if-used)</span>`;
               // #1306: expandable WHICH-collides toggles (op + theoretical)
               const opEntries = collEntries.operational[b];
               const theoEntries = collEntries.theoretical[b];
@@ -3130,7 +3130,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
         <h3 style="margin-top:0">Generate Available Prefix</h3>
         <p class="text-muted" style="margin-top:0;font-size:0.9em">Find a prefix with zero current collisions.</p>
         <p class="text-muted" style="margin:4px 0 10px;font-size:0.82em">
-          <span aria-hidden="true">🚫</span>
+          <span aria-hidden="true"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-prohibit"/></svg></span>
           <strong>0x00 and 0xFF excluded</strong> as a first byte — the MeshCore firmware keygen routine re-rolls identities whose <code>pub_key[0]</code> is <code>00</code> or <code>FF</code>, so by convention you should not see those prefixes on real nodes (see
           <a href="https://github.com/meshcore-dev/MeshCore/blob/8ede7641/examples/simple_repeater/main.cpp#L83"
              target="_blank" rel="noopener noreferrer" style="color:var(--accent)">simple_repeater/main.cpp:83</a>).
@@ -3150,7 +3150,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
         </div>
         <div id="ptGenResult"></div>
         <div style="margin-top:14px;padding:10px 14px;border:1px solid var(--accent);border-radius:6px;background:var(--bg-secondary,var(--bg));font-size:0.88em">
-          📖 <strong>New to multi-byte prefixes?</strong>
+          <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-book-open"/></svg> <strong>New to multi-byte prefixes?</strong>
           <a href="https://github.com/meshcore-dev/MeshCore/blob/main/docs/faq.md#39-q-what-is-multi-byte-support--what-do-1-byte-2-byte-3-byte-adverts-and-messages-mean"
             target="_blank" rel="noopener noreferrer" style="color:var(--accent);margin-left:4px">
             Read the MeshCore FAQ on multi-byte support →
@@ -3168,9 +3168,9 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
     }
 
     function severityBadge(count) {
-      if (count === 0) return '<span style="color:var(--status-green)">✅ Unique</span>';
-      if (count <= 2) return `<span style="color:var(--status-yellow)">⚠️ ${count} collision${count !== 1 ? 's' : ''}</span>`;
-      return `<span style="color:var(--status-red)">🔴 ${count} collisions</span>`;
+      if (count === 0) return '<span style="color:var(--status-green)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> Unique</span>';
+      if (count <= 2) return `<span style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ${count} collision${count !== 1 ? 's' : ''}</span>`;
+      return `<span style="color:var(--status-red)"><span style="color:var(--status-red)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> ${count} collisions</span>`;
     }
 
     // --- Checker ---
@@ -3202,7 +3202,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
       if (typeof PrefixReserved !== 'undefined' && PrefixReserved &&
           PrefixReserved.isReservedPrefix(input)) {
         html += `<div role="alert" style="margin-bottom:10px;padding:10px 14px;border:1px solid var(--status-yellow);border-radius:6px;background:var(--bg-secondary,var(--bg))">
-          <strong style="color:var(--status-yellow)">⚠️ Firmware avoids this first byte</strong>
+          <strong style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> Firmware avoids this first byte</strong>
           <div class="text-muted" style="font-size:0.85em;margin-top:4px">
             <code class="mono">${input.slice(0,2)}</code> as the first byte of a node pubkey is avoided by the MeshCore firmware keygen convention (the standard repeater re-rolls identities whose <code class="mono">pub_key[0]</code> is <code class="mono">00</code> or <code class="mono">FF</code>). You generally shouldn't see this on real nodes.
           </div>
@@ -3298,7 +3298,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
         <div style="padding:12px 16px;border:1px solid var(--status-green);border-radius:6px;background:var(--bg-secondary,var(--bg))">
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <code class="mono" style="font-size:1.3em;font-weight:700;color:var(--status-green)">${prefix}</code>
-            <span style="color:var(--status-green)">✅ No existing nodes use this prefix</span>
+            <span style="color:var(--status-green)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> No existing nodes use this prefix</span>
           </div>
           <div class="text-muted" style="font-size:0.85em;margin-top:6px">${available.toLocaleString()} of ${totalSpace.toLocaleString()} ${b}-byte prefixes are available.</div>
           <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
@@ -3627,7 +3627,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
       container.innerHTML = `
         <div class="rf-detail-header">
           <h3>${esc(name)}</h3>
-          <button class="rf-detail-close" aria-label="Close detail" title="Close">✕</button>
+          <button class="rf-detail-close" aria-label="Close detail" title="Close"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
         </div>
         <div class="rf-detail-charts">
           <div class="rf-detail-chart" id="rfDetailNFChart"></div>

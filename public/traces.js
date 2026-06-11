@@ -18,7 +18,7 @@
     app.innerHTML = `
       <div class="traces-page">
         <div class="page-header">
-          <h2>🔍 Packet Trace</h2>
+          <h2><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Packet Trace</h2>
         </div>
         <div class="trace-search">
           <input type="text" id="traceHashInput" placeholder="Enter packet hash…" value="${escapeHtml(urlHash)}" aria-label="Packet hash to trace">

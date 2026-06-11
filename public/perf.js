@@ -88,7 +88,7 @@ function renderVersionCard(health) {
   let interval = null;
 
   async function render(app) {
-    app.innerHTML = '<div id="perfWrapper" style="padding:16px 24px;"><h2>⚡ Performance Dashboard</h2><div id="perfContent">Loading...</div></div>';
+    app.innerHTML = '<div id="perfWrapper" style="padding:16px 24px;"><h2><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lightning"/></svg> Performance Dashboard</h2><div id="perfContent">Loading...</div></div>';
     await refresh();
   }
 
@@ -124,7 +124,7 @@ function renderVersionCard(health) {
         if (isGo && server.goRuntime) {
           const gr = server.goRuntime;
           const gcColor = gr.lastPauseMs > 5 ? 'var(--status-red)' : gr.lastPauseMs > 1 ? 'var(--status-yellow)' : 'var(--status-green)';
-          html += `<h3>🔧 Go Runtime</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
+          html += `<h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-wrench"/></svg> Go Runtime</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
             <div class="perf-card"><div class="perf-num">${gr.goroutines}</div><div class="perf-label">Goroutines</div></div>
             <div class="perf-card"><div class="perf-num">${gr.numGC}</div><div class="perf-label">GC Collections</div></div>
             <div class="perf-card"><div class="perf-num" style="color:${gcColor}">${(+gr.pauseTotalMs).toFixed(1)}ms</div><div class="perf-label">GC Pause Total</div></div>
@@ -158,11 +158,11 @@ function renderVersionCard(health) {
           if (bps >= 1024) return (bps / 1024).toFixed(1) + ' KB/s';
           return Math.round(bps) + ' B/s';
         };
-        const writeWarn = ioStats.writeBytesPerSec > 10 * 1048576 ? ' ⚠️' : '';
+        const writeWarn = ioStats.writeBytesPerSec > 10 * 1048576 ? ' <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' : '';
         const cancelled = ioStats.cancelledWriteBytesPerSec || 0;
         // Cancelled writes warn at >1 MB/s — sustained cancellation usually
         // means truncate/unlink racing with active writers (#1119-shaped bug).
-        const cancelledWarn = cancelled > 1048576 ? ' ⚠️' : '';
+        const cancelledWarn = cancelled > 1048576 ? ' <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' : '';
         html += `<h3>Disk I/O (server process)</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
           <div class="perf-card"><div class="perf-num">${fmtRate(ioStats.readBytesPerSec || 0)}</div><div class="perf-label">Read</div></div>
           <div class="perf-card"><div class="perf-num">${fmtRate(ioStats.writeBytesPerSec || 0)}${writeWarn}</div><div class="perf-label">Write</div></div>
@@ -175,9 +175,9 @@ function renderVersionCard(health) {
         // surfaced via the stats file (#1120: "Both ingestor and server").
         if (ioStats.ingestor) {
           const ing = ioStats.ingestor;
-          const ingWriteWarn = (ing.writeBytesPerSec || 0) > 10 * 1048576 ? ' ⚠️' : '';
+          const ingWriteWarn = (ing.writeBytesPerSec || 0) > 10 * 1048576 ? ' <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' : '';
           const ingCancelled = ing.cancelledWriteBytesPerSec || 0;
-          const ingCancelledWarn = ingCancelled > 1048576 ? ' ⚠️' : '';
+          const ingCancelledWarn = ingCancelled > 1048576 ? ' <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' : '';
           html += `<h3>Disk I/O (Ingestor process)</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
             <div class="perf-card"><div class="perf-num">${fmtRate(ing.readBytesPerSec || 0)}</div><div class="perf-label">Read</div></div>
             <div class="perf-card"><div class="perf-num">${fmtRate(ing.writeBytesPerSec || 0)}${ingWriteWarn}</div><div class="perf-label">Write</div></div>
@@ -215,7 +215,7 @@ function renderVersionCard(health) {
             const v = src[k] || 0;
             const rate = anom.rates[k];
             const base = anom.baselineRates[k];
-            const flag = anom.flags[k] ? ' ⚠️' : '';
+            const flag = anom.flags[k] ? ' <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' : '';
             const rateStr = (rate != null && isFinite(rate)) ? rate.toFixed(2) : '—';
             const baseStr = (base != null && isFinite(base)) ? base.toFixed(2) : '—';
             html += `<tr><td><code>${k}</code></td><td>${v.toLocaleString()}</td><td>${rateStr}</td><td>${baseStr}</td><td>${flag}</td></tr>`;
@@ -230,9 +230,9 @@ function renderVersionCard(health) {
       // SQLite perf (separate from existing SQLite block — focused on WAL + cache hit) (#1120)
       if (sqliteStats) {
         const walMB = sqliteStats.walSizeMB || 0;
-        const walFlag = walMB > 100 ? ' ⚠️' : '';
+        const walFlag = walMB > 100 ? ' <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' : '';
         const hitRate = (sqliteStats.cacheHitRate || 0) * 100;
-        const hitFlag = hitRate > 0 && hitRate < 90 ? ' ⚠️' : '';
+        const hitFlag = hitRate > 0 && hitRate < 90 ? ' <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' : '';
         html += `<h3>SQLite (WAL + Cache Hit)</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
           <div class="perf-card"><div class="perf-num">${walMB.toFixed(1)}MB${walFlag}</div><div class="perf-label">WAL Size</div></div>
           <div class="perf-card"><div class="perf-num">${(sqliteStats.pageCount || 0).toLocaleString()}</div><div class="perf-label">Page Count</div></div>
