@@ -756,6 +756,28 @@ func (c *Config) IsNameHidden(name string) bool {
 	return false
 }
 
+// SetHiddenNamePrefixes is a stub for the upcoming atomic.Pointer wrapper.
+// Currently just assigns the slice (NOT yet race-safe). Bumps the
+// generation counter. Wired up properly in the GREEN commit.
+func (c *Config) SetHiddenNamePrefixes(prefixes []string) {
+	if c == nil {
+		return
+	}
+	cp := make([]string, len(prefixes))
+	copy(cp, prefixes)
+	c.HiddenNamePrefixes = cp
+	// TODO(GREEN): bump c.hiddenNamePrefixesGen + atomic.Store
+}
+
+// HiddenNamePrefixesGeneration is a stub returning 0. GREEN commit returns
+// the live atomic counter.
+func (c *Config) HiddenNamePrefixesGeneration() uint64 {
+	if c == nil {
+		return 0
+	}
+	return 0
+}
+
 // SaveGeoFilter writes the geo_filter section back to config.json on disk.
 // Pass gf=nil to remove the filter. The rest of config.json is preserved as-is.
 func SaveGeoFilter(configDir string, gf *GeoFilterConfig) error {
