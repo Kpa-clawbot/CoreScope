@@ -274,5 +274,34 @@ test('mobile .compare-tabs .tab-btn shrinks/wraps so all four tabs fit', () => {
     'mobile .compare-tabs .tab-btn must declare min-width:0 / flex / overflow-wrap so all four tab labels fit at 375px');
 });
 
-console.log(`\n  ${passed} passed, ${failed} failed\n`);
+// ── 13) compare.js auto-run guards are consistent (#1646 round-2) ─────
+// Round-2 review found two run-comparison call sites with *different*
+// guards: loadObservers used `selA && selB` (no inequality check) while
+// onChange used `selA && selB && selA !== selB`. URL-prepopulated
+// ?a=X&b=X (same observer in both slots) would launch a comparison via
+// the loadObservers path and not the change path. Both call sites must
+// gate on the same predicate.
+test('compare.js — both runComparison() guards include selA !== selB', () => {
+  // Find every line that calls runComparison() and check the guard
+  // immediately preceding it on the same line is identical.
+  // Only inspect guards that reference the selA/selB / ready predicate
+  // (not the route-filter re-run path which conditions on comparisonResult).
+  const guardLines = COMPARE_JS
+    .split('\n')
+    .filter(l => /\brunComparison\s*\(/.test(l) && /\bif\s*\(/.test(l))
+    .filter(l => /selA|selB|[Rr]eady\b|canCompare\b/.test(l));
+  assert(guardLines.length >= 2,
+    `expected at least 2 selA/selB-guarded runComparison() call sites, found ${guardLines.length}`);
+  // Every such line must check selA !== selB (or the equivalent
+  // ready predicate factored into a helper). The forbidden pattern is
+  // a guard that ONLY checks `selA && selB` without the inequality.
+  guardLines.forEach((line, i) => {
+    const trimmed = line.trim();
+    const hasInequality = /selA\s*!==\s*selB|selB\s*!==\s*selA|[Rr]eady\b|canCompare\b/.test(trimmed);
+    assert(hasInequality,
+      `runComparison() guard #${i + 1} missing selA !== selB / ready predicate: ${trimmed}`);
+  });
+});
+
+
 process.exit(failed === 0 ? 0 : 1);
