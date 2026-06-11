@@ -3566,7 +3566,15 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
   display: flex; height: 10px; border-radius: 5px; overflow: hidden;
   background: var(--surface-2);
 }
-.compare-bar-seg { transition: width 240ms ease; }
+.compare-bar-seg {
+  transition: width 240ms ease;
+  /* #1647: Tufte/honesty — a 1–2% segment must still be visible or
+   * the chart is lying about presence. Floor each non-zero segment
+   * at 6px (the proportional encoding stays correct above ~3% and
+   * degrades gracefully below). The bar is height:10px so 6px wide
+   * reads as a square pip the eye can see. */
+  min-width: 6px;
+}
 .compare-bar-a    { background: var(--accent); }
 .compare-bar-both { background: var(--status-green); }
 .compare-bar-b    { background: var(--status-amber); }
@@ -3687,6 +3695,32 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
     border-top: 1px dashed var(--border); border-bottom: 1px dashed var(--border);
     padding: var(--space-sm) 0; flex-direction: row; gap: 6px; align-items: baseline; }
   .compare-asym { grid-template-columns: 1fr; }
+  /* #1647 mobile reflow: the asym sentence wraps mid-phrase at narrow
+   * widths ("3,262 of GY889 Repeater's 3,347 packets" splitting after
+   * "Repeater's"). text-wrap:pretty rebalances trailing words to
+   * avoid orphan-style breaks; overflow-wrap:anywhere lets very long
+   * node names yield instead of pushing the column. The percentage
+   * already lives on its own line (display:block), so the body is
+   * free to breathe. */
+  .compare-asym-line {
+    text-wrap: pretty;
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+  /* #1647 mobile tabs: "Only N6IJ Repeater (675)" overruns the row at
+   * 375px; without min-width:0 a flex item can't shrink past its
+   * intrinsic content width. Allow each tab to shrink and ellipsis
+   * its label so all four fit. The count parenthetical stays
+   * visible because it's at the tail of the string. */
+  .compare-tabs .tab-btn {
+    min-width: 0;
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 50%;
+    padding: 6px 10px;
+  }
 }
 
 /* ── Observers page — compare-selection column + button hints ─── */
