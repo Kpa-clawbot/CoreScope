@@ -3942,7 +3942,9 @@ console.log('\n=== nodes.js: toggleSort / sortNodes / sortArrow ===');
     const ctx = makeNodesSandbox();
     ctx.window._nodesSetSortState({ column: 'name', direction: 'asc' });
     const html = ctx.window._nodesSortArrow('name');
-    assert.ok(html.includes('▲'));
+    // #1648 M2 — Phosphor sprite caret-up replaces ▲.
+    assert.ok(html.includes('#ph-caret-up') || html.includes('▲'),
+      'should contain ascending arrow (▲ or ph-caret-up)');
     assert.ok(html.includes('sort-arrow'));
   });
 
@@ -3950,7 +3952,9 @@ console.log('\n=== nodes.js: toggleSort / sortNodes / sortArrow ===');
     const ctx = makeNodesSandbox();
     ctx.window._nodesSetSortState({ column: 'name', direction: 'desc' });
     const html = ctx.window._nodesSortArrow('name');
-    assert.ok(html.includes('▼'));
+    // #1648 M2 — Phosphor sprite caret-down replaces ▼.
+    assert.ok(html.includes('#ph-caret-down') || html.includes('▼'),
+      'should contain descending arrow (▼ or ph-caret-down)');
   });
 
   test('sortArrow returns empty for inactive column', () => {
@@ -5237,21 +5241,21 @@ console.log('\n=== analytics.js: renderMultiByteCapability ===');
 
     test('renders confirmed status with green indicator', () => {
       const html = render([{ pubkey: 'aabb', name: 'RepA', role: 'repeater', status: 'confirmed', evidence: 'advert', maxHashSize: 2, lastSeen: '' }]);
-      assert.ok(html.includes('✅'), 'should contain confirmed icon');
+      assert.ok(html.includes('#ph-check-circle') || html.includes('✅'), 'should contain confirmed icon (✅ or ph-check-circle)');
       assert.ok(html.includes('Confirmed'), 'should contain Confirmed label');
       assert.ok(html.includes('--success'), 'should use --success CSS var for green');
     });
 
     test('renders suspected status with yellow indicator', () => {
       const html = render([{ pubkey: 'ccdd', name: 'RepB', role: 'repeater', status: 'suspected', evidence: 'path', maxHashSize: 2, lastSeen: '' }]);
-      assert.ok(html.includes('⚠️'), 'should contain suspected icon');
+      assert.ok(html.includes('#ph-warning') || html.includes('⚠️'), 'should contain suspected icon (⚠️ or ph-warning)');
       assert.ok(html.includes('Suspected'), 'should contain Suspected label');
       assert.ok(html.includes('--warning'), 'should use --warning CSS var for yellow');
     });
 
     test('renders unknown status with gray indicator', () => {
       const html = render([{ pubkey: 'eeff', name: 'RepC', role: 'repeater', status: 'unknown', evidence: '', maxHashSize: 1, lastSeen: '' }]);
-      assert.ok(html.includes('❓'), 'should contain unknown icon');
+      assert.ok(html.includes('#ph-question') || html.includes('❓'), 'should contain unknown icon (❓ or ph-question)');
       assert.ok(html.includes('Unknown'), 'should contain Unknown label');
       assert.ok(html.includes('--text-muted'), 'should use --text-muted CSS var for gray');
     });
@@ -5339,7 +5343,7 @@ console.log('\n=== analytics.js: renderMultiByteAdopters ===');
         { pubkey: 'aa11', name: 'NodeA', role: 'repeater', status: 'confirmed', evidence: 'advert', maxHashSize: 2, lastSeen: '' },
       ];
       const html = renderAdopters(nodes, caps);
-      assert.ok(html.includes('✅'), 'should show confirmed icon');
+      assert.ok(html.includes('#ph-check-circle') || html.includes('✅'), 'should show confirmed icon');
       assert.ok(html.includes('Confirmed'), 'should show Confirmed label');
       assert.ok(html.includes('2-byte'), 'should show hash size badge');
     });
@@ -5365,7 +5369,7 @@ console.log('\n=== analytics.js: renderMultiByteAdopters ===');
         { name: 'Orphan', pubkey: 'zz99', role: 'repeater', hashSize: 2, packets: 1, lastSeen: '' },
       ];
       const html = renderAdopters(nodes, []); // no caps
-      assert.ok(html.includes('❓'), 'should show unknown icon');
+      assert.ok(html.includes('#ph-question') || html.includes('❓'), 'should show unknown icon');
       assert.ok(html.includes('Unknown'), 'should show Unknown label');
     });
 
@@ -5818,7 +5822,7 @@ console.log('\n=== analytics.js: hashStatCardsHtml collision details ===');
     assert.ok(html.includes('onclick='), 'should have onclick when collisions > 0');
     assert.ok(html.includes('collisionRiskSection'), 'should scroll to collisionRiskSection');
     assert.ok(html.includes('cursor:pointer'), 'should show pointer cursor');
-    assert.ok(html.includes('▼'), 'should show expand indicator');
+    assert.ok(html.includes('#ph-caret-down') || html.includes('▼'), 'should show expand indicator');
   });
 
   test('collision count 0 renders non-clickable card', () => {

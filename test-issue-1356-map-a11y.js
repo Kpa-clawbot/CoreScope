@@ -160,8 +160,9 @@ console.log('\n=== #1356 Round-1 coverage adds: dual-marker star, null mbStatus,
 //   makeRepeaterLabelIcon's obsIndicator branch MUST carry aria-hidden="true",
 //   otherwise the AT announcement is polluted with "black star" / "star" on
 //   top of the meaningful aria-label. Round-1 (Kent + adversarial) flagged.
-//   Match the exact obsIndicator construction shape: `isAlsoObserver ? ' <span aria-hidden="true" ... ★`.
-assert(/isAlsoObserver[\s\S]{0,40}\?\s*['"][^'"]*<span\s+aria-hidden="true"[^>]*>[^<]*★/.test(mapSrc),
+//   Match either the legacy `★` glyph form OR the Phosphor SVG form
+//   (issue #1648 M2 swap) — both rendered inside an aria-hidden="true" span.
+assert(/isAlsoObserver[\s\S]{0,40}\?\s*['"][^'"]*<span\s+aria-hidden="true"[^>]*>[^<]*(?:★|<svg[^>]*class="ph-icon"[^>]*>[\s\S]{0,200}?#ph-star)/.test(mapSrc),
   'observer-also-repeater star span carries aria-hidden="true" (no AT pollution)');
 
 // COV-2 — makeRepeaterLabelIcon with no multi_byte_status field must NOT emit
