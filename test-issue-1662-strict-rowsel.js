@@ -49,8 +49,8 @@ const packetsEntry = src.match(/\{\s*hash:\s*'#\/packets'[^}]*\}/);
 check('packets PAGES entry exists', !!packetsEntry);
 if (packetsEntry) {
   check(
-    "packets rowSel includes `tr[data-id]`",
-    /tr\[data-id\]/.test(packetsEntry[0]),
+    "packets rowSel includes a strict `tr[data-*]` selector",
+    /tr\[data-(id|hash)\]/.test(packetsEntry[0]),
     packetsEntry[0]
   );
   check(
@@ -80,7 +80,7 @@ check('waitForFunction predicate found', !!waitFn);
 if (waitFn) {
   check(
     'wait predicate uses a strict `data-*` row selector',
-    /data-(id|value|action)/.test(waitFn[0]),
+    /data-(id|hash|value|action)/.test(waitFn[0]),
     waitFn[0].slice(0, 200)
   );
 }
