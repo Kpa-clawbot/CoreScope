@@ -25,6 +25,13 @@ if [ -d public/fonts ]; then
   mkdir -p public-instrumented/fonts
   cp -r public/fonts/. public-instrumented/fonts/
 fi
+# Copy Phosphor icon sprite (#1648 M1). Same SPA-fallback gotcha as /img —
+# without this, GET /icons/phosphor-sprite.svg returns index.html and every
+# <use href="/icons/phosphor-sprite.svg#ph-…"> shows a broken icon.
+if [ -d public/icons ]; then
+  mkdir -p public-instrumented/icons
+  cp -r public/icons/. public-instrumented/icons/
+fi
 # Copy vendored libraries unmodified — `nyc instrument` skips subdirectories
 # without a package.json, so vendor/qrcode.js, vendor/jsqr.min.js, etc. are
 # never emitted into public-instrumented/. Without them the SPA fallback

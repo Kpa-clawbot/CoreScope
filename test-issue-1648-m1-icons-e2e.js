@@ -19,6 +19,7 @@
 'use strict';
 
 const { chromium } = require('playwright');
+const assert = require('assert');
 
 const BASE = process.env.BASE_URL || 'http://localhost:13581';
 const EMOJI_RE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}◆●■▲★☆○✓✗⚠✉]/u;
@@ -170,7 +171,10 @@ async function main() {
 
   await browser.close();
   console.log(`\ntest-issue-1648-m1-icons-e2e.js: ${passes} passed, ${failures} failed`);
-  process.exit(failures > 0 ? 1 : 0);
+  // Hard assertion so the run exit code is gated on a real assertion call,
+  // not just a process.exit branch.
+  assert.strictEqual(failures, 0, `${failures} M1 icon-render assertions failed`);
+  process.exit(0);
 }
 
 main().catch((err) => {

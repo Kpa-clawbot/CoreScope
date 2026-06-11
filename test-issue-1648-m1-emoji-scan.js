@@ -20,6 +20,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const assert = require('assert');
 
 const ROOT = path.resolve(__dirname, 'public');
 
@@ -123,6 +124,9 @@ function main() {
       for (const h of hits) console.error(`      ${h.file}:${h.line} [${h.kind}] ${h.text}`);
       failed++;
     }
+    // Behavioral assertion (separate from logging) — scanned region MUST be empty.
+    assert.strictEqual(hits.length, 0,
+      `${rel} must contain zero emoji/misc-icon iconography (got ${hits.length} hit(s))`);
   }
 
   if (failed) {
