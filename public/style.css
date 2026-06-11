@@ -3422,7 +3422,7 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
  * legible at a glance; the textual cards are demoted to subtext.
  */
 .compare-page { padding: var(--space-md); max-width: 1200px; margin: 0 auto;
-  /* #1647 mobile: reserve space below the floating bottom-nav at ≤768px.
+  /* #1646 mobile: reserve space below the floating bottom-nav at ≤768px.
    * --bottom-nav-reserve is 0px on desktop, 56px + safe-area on mobile,
    * so this rule is a no-op for desktop and adds the exact clearance
    * needed on phones — the Shared-Types pill row + tabs were getting
@@ -3571,7 +3571,7 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
 }
 .compare-bar-seg {
   transition: width 240ms ease;
-  /* #1647: Tufte/honesty — a 1–2% segment must still be visible or
+  /* #1646: Tufte/honesty — a 1–2% segment must still be visible or
    * the chart is lying about presence. Floor each non-zero segment
    * at 6px (the proportional encoding stays correct above ~3% and
    * degrades gracefully below). The bar is height:10px so 6px wide
@@ -3698,7 +3698,7 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
     border-top: 1px dashed var(--border); border-bottom: 1px dashed var(--border);
     padding: var(--space-sm) 0; flex-direction: row; gap: 6px; align-items: baseline; }
   .compare-asym { grid-template-columns: 1fr; }
-  /* #1647 mobile reflow: the asym sentence wraps mid-phrase at narrow
+  /* #1646 mobile reflow: the asym sentence wraps mid-phrase at narrow
    * widths ("3,262 of GY889 Repeater's 3,347 packets" splitting after
    * "Repeater's"). text-wrap:pretty rebalances trailing words to
    * avoid orphan-style breaks; overflow-wrap:anywhere lets very long
@@ -3710,7 +3710,7 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
     overflow-wrap: anywhere;
     word-break: normal;
   }
-  /* #1647 mobile tabs: "Only N6IJ Repeater (675)" overruns the row at
+  /* #1646 mobile tabs: "Only N6IJ Repeater (675)" overruns the row at
    * 375px; without min-width:0 a flex item can't shrink past its
    * intrinsic content width. Allow each tab to shrink and ellipsis
    * its label so all four fit. The count parenthetical stays
