@@ -333,9 +333,9 @@ if (typeof window !== 'undefined') {
               '<div class="compare-strip-sub">' + r.onlyA.length.toLocaleString() + ' only here (' + pctA + '%)</div>' +
             '</div>' +
             '<div class="compare-strip-mid" data-view="both" role="button" tabindex="0" aria-label="Show shared packets">' +
-              '<div class="compare-strip-mid-label">shared</div>' +
-              '<div class="compare-strip-mid-count">' + r.both.length.toLocaleString() + '</div>' +
-              '<div class="compare-strip-sub">' + pctBoth + '% of all unique</div>' +
+              '<div class="compare-strip-mid-pct">' + pctBoth + '<span class="compare-strip-mid-pct-unit">%</span></div>' +
+              '<div class="compare-strip-mid-count">' + r.both.length.toLocaleString() + ' shared</div>' +
+              '<div class="compare-strip-mid-label">of all unique</div>' +
             '</div>' +
             '<div class="compare-strip-side compare-strip-side-b" data-view="onlyB" role="button" tabindex="0" aria-label="Show only ' + nameB + ' packets">' +
               '<div class="compare-strip-name">' + nameB + '</div>' +

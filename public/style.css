@@ -3460,9 +3460,11 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
 }
 .compare-select:focus { border-color: var(--accent); outline: none; }
 .compare-vs {
-  font-size: 12px; font-weight: 700; color: var(--text-muted);
-  text-transform: uppercase; letter-spacing: 1px;
-  padding: 0 4px 8px;
+  font-size: 10px; font-weight: 700; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 1.2px;
+  padding: 0 4px 10px;
+  align-self: center;
+  opacity: 0.7;
 }
 /* Compare-now action — primary accent button, reuses .btn-primary visuals
  * but lives inside the controls strip with consistent height. */
@@ -3515,8 +3517,22 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
 }
 .compare-strip-mid-count {
   font-family: var(--mono);
+  font-size: var(--fs-sm); font-weight: 600;
+  color: var(--text); font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* The 79% gets the largest type — it IS the answer to "how much
+ * overlap?". The raw count and the label demote underneath. (Tufte:
+ * the most important number gets the most ink.) */
+.compare-strip-mid-pct {
+  font-family: var(--mono);
   font-size: var(--fs-xl); font-weight: 700;
   color: var(--accent); font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.compare-strip-mid-pct-unit {
+  font-size: 0.6em; font-weight: 600; margin-left: 1px;
+  color: var(--accent);
 }
 .compare-strip-mid-label {
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px;
@@ -3557,8 +3573,8 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
 .compare-asym-line {
   background: var(--surface-1);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  border-left: none;
+  border-radius: var(--radius-sm);
   padding: var(--space-sm) var(--space-md);
   font-size: var(--fs-sm);
   color: var(--text-muted);
@@ -3575,8 +3591,8 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
 .compare-type-summary {
   background: var(--surface-1);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--status-green);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  border-left: none;
+  border-radius: var(--radius-sm);
   padding: var(--space-sm) var(--space-md);
   margin-bottom: var(--space-md);
   font-size: var(--fs-sm); color: var(--text);
