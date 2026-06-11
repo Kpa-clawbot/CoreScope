@@ -134,7 +134,7 @@
         var titleTxt = node.multi_byte_status === 'suspected'
           ? 'Conflicting evidence about this node\u2019s hash-prefix size (multi-byte not confirmed)'
           : 'No advert sample yet to confirm hash-prefix size';
-        suspectedWarn = '<span class="mc-rt-detail-warn" title="' + escapeHtml(titleTxt) + '">⚠ ' + lbl + '</span>';
+        suspectedWarn = '<span class="mc-rt-detail-warn status-warn" title="' + escapeHtml(titleTxt) + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ' + lbl + '</span>';
       }
       var rel = node.last_seen ? relativeTime(node.last_seen) : '–';
       var snr = buildSnrSparkline(ana.snrTrend || []);
@@ -218,7 +218,13 @@
   }
 
   function roleGlyph(role) {
-    return ({repeater:'●', companion:'■', room:'⬢', sensor:'▲', observer:'◆'})[role] || '○';
+    // #1648 M3: role shape glyphs → Phosphor sprite refs.
+    // Map preserves prior visual intent (●→circle-fill, ■→square-fill, // EMOJI-OK: comment
+    // ⬢→hexagon, ▲→triangle, ◆→diamond) and falls back to a hollow circle. // EMOJI-OK: comment
+    var name = ({ repeater: 'ph-circle-fill', companion: 'ph-square-fill',
+                  room: 'ph-hexagon', sensor: 'ph-triangle',
+                  observer: 'ph-diamond' })[role] || 'ph-circle';
+    return '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#' + name + '"/></svg>';
   }
 
   function buildSidebar(positions, mapRef, layer, edges, markers, opts) {
@@ -266,14 +272,14 @@
       var glyph = roleGlyph(p.role);
       var name = escapeHtml(p.name || (p.pubkey ? String(p.pubkey).slice(0,8) : '?'));
       // Show a status badge for unresolved hops:
-      //  - gpsless: node identified but missing GPS → "📍 no GPS"
-      //  - else:    couldn't resolve prefix       → "🔍 unknown"
+      //  - gpsless: node identified but missing GPS → no-GPS pin chip
+      //  - else:    couldn't resolve prefix       → unknown chip
       var statusBadge = '';
       if (p.resolved === false) {
         if (p.gpsless) {
-          statusBadge = ' <span class="mc-rt-status-chip mc-rt-status-nogps" title="Node identified but has no GPS coordinates">📍 no GPS</span>';
+          statusBadge = ' <span class="mc-rt-status-chip mc-rt-status-nogps" title="Node identified but has no GPS coordinates"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-pin"/></svg> no GPS</span>';
         } else {
-          statusBadge = ' <span class="mc-rt-status-chip mc-rt-status-unknown" title="Could not resolve this hop prefix to a known node">🔍 unknown</span>';
+          statusBadge = ' <span class="mc-rt-status-chip mc-rt-status-unknown" title="Could not resolve this hop prefix to a known node"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> unknown</span>';
         }
       }
       // hops derived from the packet's PAYLOAD (sender/recipient
@@ -387,7 +393,7 @@
         multiPathChip +
         pathPicker +
         '<div class="mc-rt-spark-wrap">' + spark + '</div>' +
-        '<button class="mc-rt-close" aria-label="Close route view" type="button">✕</button>' +
+        '<button class="mc-rt-close" aria-label="Close route view" type="button"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>' +
       '</div>';
 
     // origin row pinned at top, dest at bottom; middle scrollable

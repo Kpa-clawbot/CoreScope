@@ -82,10 +82,10 @@ window.HopDisplay = (function() {
     const badgeCount = regionalConflicts.length > 0 ? regionalConflicts.length : (globalFallback ? conflicts.length : 0);
     const conflictData = escapeHtml(JSON.stringify({ h, conflicts, globalFallback }));
     const conflictBadge = badgeCount > 1
-      ? ` <button class="hop-conflict-btn" data-conflict='${conflictData}' onclick="event.preventDefault();event.stopPropagation();HopDisplay._showFromBtn(this)" title="${badgeCount} candidates — click for details">⚠${badgeCount}</button>`
+      ? ` <button class="hop-conflict-btn status-warn" data-conflict='${conflictData}' onclick="event.preventDefault();event.stopPropagation();HopDisplay._showFromBtn(this)" title="${badgeCount} candidates — click for details"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>${badgeCount}</button>`
       : '';
     const unreliableBadge = unreliable
-      ? ' <button class="hop-unreliable-btn" aria-label="Unreliable name resolution" title="Unreliable name resolution — this hash\u2192name match is geographically inconsistent with the surrounding path hops. The repeater itself may be fine; this specific hop assignment is uncertain.">⚠️</button>'
+      ? ' <button class="hop-unreliable-btn status-warn" aria-label="Unreliable name resolution" title="Unreliable name resolution — this hash\u2192name match is geographically inconsistent with the surrounding path hops. The repeater itself may be fine; this specific hop assignment is uncertain."><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></button>'
       : '';
     const warnBadge = conflictBadge + unreliableBadge;
 
@@ -123,20 +123,24 @@ window.HopDisplay = (function() {
 
   // #1504 — Path symbols legend (shared by Packets + Nodes pages).
   // Tufte: integrate words and graphics — small, on-data, dismissible.
-  // Glyph strings here MUST match exactly what hop-display.js emits in renderHop()
-  // (the yellow ⚠N button + the bare ⚠ unreliable button + dashed-underline class).
+  // PATH_SYMBOLS_LEGEND mirrors what renderHop() emits (yellow warning+N
+  // button, bare warning button, dashed-underline class). Glyphs are
+  // pre-rendered Phosphor sprite HTML so the legend visually matches the
+  // actual hop chrome (#1648 M3).
+  const WARN_PH = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>';
   const PATH_SYMBOLS_LEGEND = [
-    { glyph: '⚠N',
+    { glyphHtml: '<span class="status-warn">' + WARN_PH + 'N</span>',
       description: 'Yellow button next to a hop — N regional candidates share this hop\u2019s prefix. Click for the candidate list.' },
-    { glyph: '⚠',
+    { glyphHtml: '<span class="status-warn">' + WARN_PH + '</span>',
       description: 'Warning icon alone (no number) — unreliable name resolution: the best-guess pubkey couldn\u2019t be confirmed against surrounding path hops.' },
-    { glyph: 'dashed underline',
+    { glyphHtml: 'dashed underline',
       description: 'Ambiguous or global-fallback resolution — the name matched outside the current region.' },
   ];
 
   function renderPathSymbolsLegend() {
     const items = PATH_SYMBOLS_LEGEND.map(function(e) {
-      return '<li><span class="path-legend-glyph">' + escapeHtml(e.glyph) + '</span> — ' + escapeHtml(e.description) + '</li>';
+      // glyphHtml is trusted (constant strings above), description is escaped.
+      return '<li><span class="path-legend-glyph">' + e.glyphHtml + '</span> — ' + escapeHtml(e.description) + '</li>';
     }).join('');
     return '<details class="path-symbols-legend"><summary>Path symbols</summary>' +
            '<ul class="path-legend-list">' + items + '</ul></details>';
