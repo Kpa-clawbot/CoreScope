@@ -154,6 +154,13 @@ type Config struct {
 	// Customizer controls operator-side knobs for the in-app customizer modal
 	// (theme/branding/etc.). See CustomizerConfig and issue #1508.
 	Customizer *CustomizerConfig `json:"customizer,omitempty"`
+
+	// Known-channels catalogue integration (issue #1323).
+	// URL of a JSON catalogue file (channels-by-country shape) fetched
+	// periodically and exposed via /api/known-channels. Empty disables.
+	KnownChannelsURL string `json:"knownChannelsUrl,omitempty"`
+	// Refresh interval in milliseconds. 0/missing => default 24h.
+	KnownChannelsRefreshMs int64 `json:"knownChannelsRefreshMs,omitempty"`
 }
 
 // CustomizerConfig holds operator-side knobs for the in-app customizer modal.

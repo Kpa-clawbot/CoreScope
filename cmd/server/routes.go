@@ -89,6 +89,10 @@ type Server struct {
 	// package globals) so multiple instances don't share observable
 	// state. Initialised lazily on first use; see node_reach.go.
 	reach reachState
+
+	// Known-channels catalogue cache (issue #1323). Nil until configured;
+	// when nil the /api/known-channels endpoint returns an empty snapshot.
+	knownChannels *knownChannelsCache
 }
 
 // PerfStats tracks request performance.
@@ -269,6 +273,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/resolve-hops", s.handleResolveHops).Methods("GET")
 	r.HandleFunc("/api/channels/{hash}/messages", s.handleChannelMessages).Methods("GET")
 	r.HandleFunc("/api/channels", s.handleChannels).Methods("GET")
+	r.HandleFunc("/api/known-channels", s.handleKnownChannels).Methods("GET")
 	r.HandleFunc("/api/observers/metrics/summary", s.handleMetricsSummary).Methods("GET")
 	r.HandleFunc("/api/observers/{id}/metrics", s.handleObserverMetrics).Methods("GET")
 	r.HandleFunc("/api/observers/{id}/analytics", s.handleObserverAnalytics).Methods("GET")
