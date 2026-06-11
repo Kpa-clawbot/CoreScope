@@ -737,11 +737,11 @@ function _showPullToast(msg, ok) {
 }
 
 function pullReconnect() {
-  // If WS is connected (readyState OPEN), give a brief "Connected ✓"
+  // If WS is connected (readyState OPEN), give a brief "Connected"
   // confirmation but still cycle so the user sees fresh data.
   const wasOpen = ws && ws.readyState === 1;
   if (wasOpen) {
-    _showPullToast('Connected ✓', true);
+    _showPullToast('Connected', true);
     // Fast cycle: close and let onclose reconnect immediately
     try { ws.close(); } catch (e) {}
   } else {
@@ -903,8 +903,8 @@ registerPage('tools-landing', {
       '<div class="tools-landing">' +
         '<h2>Tools</h2>' +
         '<div class="tools-menu">' +
-          '<a href="#/tools/path-inspector" class="tools-card"><h3>🔍 Path Inspector</h3><p>Resolve prefix paths to candidate full-pubkey routes with confidence scoring.</p></a>' +
-          '<a href="#/tools/trace/" class="tools-card"><h3>📡 Trace Viewer</h3><p>View detailed packet traces by hash.</p></a>' +
+          '<a href="#/tools/path-inspector" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Path Inspector</h3><p>Resolve prefix paths to candidate full-pubkey routes with confidence scoring.</p></a>' +
+          '<a href="#/tools/trace/" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Trace Viewer</h3><p>View detailed packet traces by hash.</p></a>' +
         '</div>' +
       '</div>';
   },
@@ -1375,7 +1375,7 @@ window.addEventListener('DOMContentLoaded', () => {
       }
       // #1139 Bug B: floor the More menu at >=2 items. The greedy
       // fits() loop above is happy to stop after pushing exactly ONE
-      // link into overflow (commonly "🎵 Lab" at ~1600px viewports),
+      // link into overflow (commonly "🎵 Lab" at ~1600px viewports), // EMOJI-OK: comment referencing prior nav label
       // producing a degenerate single-item dropdown. If exactly one
       // link overflowed, promote one more from the queue so the user
       // sees a useful menu instead of a one-item fragment. Skip when
@@ -1493,7 +1493,7 @@ window.addEventListener('DOMContentLoaded', () => {
   async function renderFavDropdown() {
     const favs = getFavorites();
     if (!favs.length) {
-      favDropdown.innerHTML = '<div class="fav-dd-empty">No favorites yet.<br><small>Click ☆ on any node to add it.</small></div>';
+      favDropdown.innerHTML = '<div class="fav-dd-empty">No favorites yet.<br><small>Click the star on any node to add it.</small></div>';
       return;
     }
     favDropdown.innerHTML = '<div class="fav-dd-loading">Loading...</div>';
@@ -1501,16 +1501,17 @@ window.addEventListener('DOMContentLoaded', () => {
       try {
         const h = await api('/nodes/' + pk + '/health', { ttl: CLIENT_TTL.nodeHealth });
         const age = h.stats.lastHeard ? Date.now() - new Date(h.stats.lastHeard).getTime() : null;
-        const status = age === null ? '🔴' : age < HEALTH_THRESHOLDS.nodeDegradedMs ? '🟢' : age < HEALTH_THRESHOLDS.nodeSilentMs ? '🟡' : '🔴';
+        const statusCls = age === null ? 'status-err' : age < HEALTH_THRESHOLDS.nodeDegradedMs ? 'status-ok' : age < HEALTH_THRESHOLDS.nodeSilentMs ? 'status-warn' : 'status-err';
+        const statusLabel = age === null ? 'unknown' : age < HEALTH_THRESHOLDS.nodeDegradedMs ? 'healthy' : age < HEALTH_THRESHOLDS.nodeSilentMs ? 'degraded' : 'silent';
         return '<a href="#/nodes/' + pk + '" class="fav-dd-item" data-key="' + pk + '">'
-          + '<span class="fav-dd-status">' + status + '</span>'
+          + '<span class="fav-dd-status ' + statusCls + '" title="' + statusLabel + '" aria-label="' + statusLabel + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span>'
           + '<span class="fav-dd-name">' + (h.node.name || truncate(pk, 12)) + '</span>'
           + '<span class="fav-dd-meta">' + (h.stats.lastHeard ? timeAgo(h.stats.lastHeard) : 'never') + '</span>'
           + favStar(pk, 'fav-dd-star')
           + '</a>';
       } catch {
         return '<a href="#/nodes/' + pk + '" class="fav-dd-item" data-key="' + pk + '">'
-          + '<span class="fav-dd-status">❓</span>'
+          + '<span class="fav-dd-status status-muted" title="not found" aria-label="not found"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg></span>'
           + '<span class="fav-dd-name">' + truncate(pk, 16) + '</span>'
           + '<span class="fav-dd-meta">not found</span>'
           + favStar(pk, 'fav-dd-star')

@@ -174,7 +174,7 @@
     tip.className = 'ch-node-tooltip';
     tip.setAttribute('role', 'tooltip');
     const roleKey = node.role || (node.is_repeater ? 'repeater' : node.is_room ? 'room' : node.is_sensor ? 'sensor' : 'companion');
-    const role = (ROLE_EMOJI[roleKey] || '●') + ' ' + (ROLE_LABELS[roleKey] || roleKey);
+    const role = (ROLE_EMOJI[roleKey] || '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg>') + ' ' + (ROLE_LABELS[roleKey] || roleKey);
     const lastActivity = node.last_heard || node.last_seen;
     const lastSeen = lastActivity ? timeAgo(lastActivity) : 'unknown';
     tip.innerHTML = `<div class="ch-tooltip-name">${escapeHtml(node.name)}</div>
@@ -237,7 +237,7 @@
     if (!node) {
       panel.innerHTML = `<div class="ch-node-panel-header">
           <strong>${escapeHtml(name)}</strong>
-          <button class="ch-node-close" data-action="ch-close-node" aria-label="Close">✕</button>
+          <button class="ch-node-close" data-action="ch-close-node" aria-label="Close"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
         </div>
         <div class="ch-node-panel-body">
           <div class="ch-node-field" style="color:var(--text-muted)">No node record found — this sender has only been seen in channel messages, not via adverts.</div>
@@ -252,13 +252,13 @@
       const n = detail.node;
       const adverts = detail.recentAdverts || [];
       const roleKey = n.role || (n.is_repeater ? 'repeater' : n.is_room ? 'room' : n.is_sensor ? 'sensor' : 'companion');
-      const role = (ROLE_EMOJI[roleKey] || '●') + ' ' + (ROLE_LABELS[roleKey] || roleKey);
+      const role = (ROLE_EMOJI[roleKey] || '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg>') + ' ' + (ROLE_LABELS[roleKey] || roleKey);
       const lastActivity = n.last_heard || n.last_seen;
       const lastSeen = lastActivity ? timeAgo(lastActivity) : 'unknown';
 
       panel.innerHTML = `<div class="ch-node-panel-header">
           <strong>${escapeHtml(n.name || 'Unknown')}</strong>
-          <button class="ch-node-close" data-action="ch-close-node" aria-label="Close">✕</button>
+          <button class="ch-node-close" data-action="ch-close-node" aria-label="Close"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
         </div>
         <div class="ch-node-panel-body">
           <div class="ch-node-field"><span class="ch-node-label">Role</span> ${role}</div>
@@ -274,7 +274,7 @@
       _focusTrapCleanup = trapFocus(panel);
       panel.querySelector('.ch-node-close')?.focus();
     } catch (e) {
-      panel.innerHTML = `<div class="ch-node-panel-header"><strong>${escapeHtml(name)}</strong><button class="ch-node-close" data-action="ch-close-node">✕</button></div><div class="ch-node-panel-body ch-empty">Failed to load</div>`;
+      panel.innerHTML = `<div class="ch-node-panel-header"><strong>${escapeHtml(name)}</strong><button class="ch-node-close" data-action="ch-close-node"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button></div><div class="ch-node-panel-body ch-empty">Failed to load</div>`;
       _focusTrapCleanup = trapFocus(panel);
       panel.querySelector('.ch-node-close')?.focus();
     }
@@ -495,7 +495,7 @@
 
   // Merge user-stored keys into the channel list.
   // If a stored key matches a server-known channel, mark that channel as
-  // userAdded so the ✕ button appears — otherwise the user has no way to
+  // userAdded so the close button appears // EMOJI-OK: prior glyph reference — otherwise the user has no way to
   // remove a key they added but that the server already knows about.
   function mergeUserChannels() {
     var keys = ChannelDecrypt.getStoredKeys();
@@ -721,7 +721,7 @@
     app.innerHTML = `<div class="ch-layout">
       <div class="ch-sidebar" aria-label="Channel list">
         <div class="ch-sidebar-header">
-          <div class="ch-sidebar-title"><span class="ch-icon">💬</span> Channels</div>
+          <div class="ch-sidebar-title"><span class="ch-icon"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chats"/></svg></span> Channels</div>
           <div id="chRegionFilter" class="region-filter-container ch-header-region"></div>
           <button type="button" id="chAddChannelBtn" class="ch-add-channel-btn"
                   aria-label="Add channel" title="Add a channel — generate, paste a key, or monitor a hashtag">+ Add</button>
@@ -735,10 +735,10 @@
       <!-- #1034 PR1: Add Channel modal -->
       <div id="chAddChannelModal" class="modal-overlay ch-modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="chModalTitle" hidden>
         <div class="modal ch-modal" role="document">
-          <button type="button" class="modal-close ch-modal-close" id="chModalClose" data-action="ch-modal-close" aria-label="Close">✕</button>
+          <button type="button" class="modal-close ch-modal-close" id="chModalClose" data-action="ch-modal-close" aria-label="Close"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
           <h3 id="chModalTitle">Add Channel</h3>
           <div class="ch-modal-callout" role="note">
-            ⚠️ Channels are saved to <strong>THIS browser only</strong>. They won't appear on other devices or browsers, and clearing browser data will remove them.
+            <span class="status-warn"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span> Channels are saved to <strong>THIS browser only</strong>. They won't appear on other devices or browsers, and clearing browser data will remove them.
           </div>
 
           <section class="ch-modal-section" aria-labelledby="chSecGenTitle">
@@ -760,7 +760,7 @@
                      pattern="[0-9a-fA-F]{32}"
                      maxlength="32"
                      aria-label="32-character hex PSK key" spellcheck="false" autocomplete="off">
-              <button type="button" id="scan-qr-btn" class="ch-modal-btn-secondary" title="Scan a meshcore:// channel QR with your camera">📷 Scan QR</button>
+              <button type="button" id="scan-qr-btn" class="ch-modal-btn-secondary" title="Scan a meshcore:// channel QR with your camera"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-camera"/></svg> Scan QR</button>
             </div>
             <div class="ch-modal-row">
               <input type="text" id="chPskName" class="ch-modal-input" placeholder="Display name (optional)" aria-label="Optional display name" spellcheck="false">
@@ -779,11 +779,11 @@
                      aria-label="Hashtag channel name (without #)" spellcheck="false" autocomplete="off">
               <button type="button" id="chHashtagBtn" class="btn-primary">Monitor</button>
             </div>
-            <div class="ch-modal-warn">⚠ Case-sensitive — <code>#meshcore</code> ≠ <code>#MeshCore</code></div>
+            <div class="ch-modal-warn"><span class="status-warn"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span> Case-sensitive — <code>#meshcore</code> ≠ <code>#MeshCore</code></div>
           </section>
 
           <div class="ch-modal-footer">
-            🔒 Keys stay in your browser — CoreScope is a passive observer that monitors and decrypts traffic but cannot transmit over RF. Use ✕ to remove individual channels.
+            <span class=""><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg></span> Keys stay in your browser — CoreScope is a passive observer that monitors and decrypts traffic but cannot transmit over RF. Use the close button to remove individual channels.
           </div>
         </div>
       </div>
@@ -795,7 +795,7 @@
            QR section bleed into the Add submit flow. -->
       <div id="chShareModal" class="modal-overlay ch-modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="chShareModalTitle" hidden>
         <div class="modal ch-modal ch-share-modal" role="document">
-          <button type="button" class="modal-close ch-modal-close" id="chShareModalClose" data-action="ch-share-modal-close" aria-label="Close">✕</button>
+          <button type="button" class="modal-close ch-modal-close" id="chShareModalClose" data-action="ch-share-modal-close" aria-label="Close"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
           <h3 id="chShareModalTitle" class="ch-share-modal-title">Share Channel</h3>
           <div class="ch-share-modal-body">
             <div id="chShareQr" class="ch-share-qr" aria-live="polite"></div>
@@ -803,11 +803,11 @@
               <label class="ch-share-label" for="chShareKey">Hex Key</label>
               <div class="ch-share-row">
                 <input type="text" id="chShareKey" data-share-field="key" class="ch-modal-input ch-modal-input--mono" readonly aria-label="Channel hex key">
-                <button type="button" class="ch-modal-btn-secondary" data-share-copy="key" aria-label="Copy hex key">📋 Copy</button>
+                <button type="button" class="ch-modal-btn-secondary" data-share-copy="key" aria-label="Copy hex key"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-clipboard-text"/></svg> Copy</button>
               </div>
             </div>
             <div class="ch-modal-warn" role="note">
-              ⚠ Privacy: only share with trusted people. Anyone with this key can read all messages on this channel.
+              <span class="status-warn"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span> Privacy: only share with trusted people. Anyone with this key can read all messages on this channel.
             </div>
           </div>
         </div>
@@ -997,7 +997,7 @@
             try { src.select(); } catch (e2) {}
             var doneCopy = function () {
               var orig = copyBtn.textContent;
-              copyBtn.textContent = '✓ Copied';
+              copyBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg> Copied';
               setTimeout(function () { copyBtn.textContent = orig; }, 1200);
             };
             if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -1254,7 +1254,7 @@
           }
         } else if (ch) {
           // Server-known channel: keep the row, just unmark as user-added so
-          // the ✕ disappears until they re-add a key.
+          // the close button disappears until they re-add a key. // EMOJI-OK: prior glyph reference
           ch.userAdded = false;
           // If this was the selected channel, clear decrypted messages since
           // the key is gone — they can't be re-decrypted without re-adding it.
@@ -1707,7 +1707,7 @@
     const encClass = isUserAdded
       ? ' ch-user-added'
       : (isEncrypted ? ' ch-encrypted' : '');
-    const badgeIcon = isUserAdded ? '🔓' : (isEncrypted ? '🔒' : null);
+    const badgeIcon = isUserAdded ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock-open"/></svg>' : (isEncrypted ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg>' : null);
     const abbr = badgeIcon || (name.startsWith('#') ? name.slice(0, 3) : name.slice(0, 2).toUpperCase());
     const chColor = window.ChannelColors ? window.ChannelColors.get(ch.hash) : null;
     const dotStyle = chColor ? ` style="background:${chColor}"` : '';
@@ -1727,14 +1727,14 @@
         + ' aria-label="' + ariaVerb + ' ' + escapeHtml(name) + '">' + glyph + '</span>';
     }
     const removeBtn = isUserAdded
-      ? iconBtn('ch-remove-btn', 'data-remove-channel', ch.hash, name, '✕',
+      ? iconBtn('ch-remove-btn', 'data-remove-channel', ch.hash, name, '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg>',
                 'Remove channel and clear saved key', 'Remove', '')
       : '';
     const shareBtn = isUserAdded
-      ? iconBtn('ch-share-btn', 'data-share-channel', ch.hash, name, '📤 Share',
+      ? iconBtn('ch-share-btn', 'data-share-channel', ch.hash, name, '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-share-network"/></svg> Share',
                 'Share channel key (QR + URL)', 'Share', ' aria-haspopup="dialog"')
       : '';
-    const userBadge = isUserAdded ? ' <span class="ch-user-badge" title="You added this key" aria-label="Your key">🔑</span>' : '';
+    const userBadge = isUserAdded ? ' <span class="ch-user-badge" title="You added this key" aria-label="Your key"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-key"/></svg></span>' : '';
     const unreadBadge = (ch.unread && ch.unread > 0)
       ? ' <span class="ch-unread-badge" data-unread-channel="' + escapeHtml(ch.hash) + '" title="' + ch.unread + ' new" aria-label="' + ch.unread + ' unread">' + (ch.unread > 99 ? '99+' : ch.unread) + '</span>'
       : '';
@@ -1744,7 +1744,7 @@
       <div class="ch-item-body">
         <div class="ch-item-top">
           <span class="ch-item-name">${escapeHtml(name)}</span>${userBadge}${unreadBadge}
-          <span class="ch-color-dot" data-channel="${escapeHtml(ch.hash)}"${dotStyle} title="Change channel color" aria-label="Change color for ${escapeHtml(name)}"></span>${chColor ? '<span class="ch-color-clear" data-channel="' + escapeHtml(ch.hash) + '" title="Clear color" aria-label="Clear color for ' + escapeHtml(name) + '">✕</span>' : ''}
+          <span class="ch-color-dot" data-channel="${escapeHtml(ch.hash)}"${dotStyle} title="Change channel color" aria-label="Change color for ${escapeHtml(name)}"></span>${chColor ? '<span class="ch-color-clear" data-channel="' + escapeHtml(ch.hash) + '" title="Clear color" aria-label="Clear color for ' + escapeHtml(name) + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></span>' : ''}
           <span class="ch-item-time" data-channel-hash="${ch.hash}">${time}</span>${shareBtn}${removeBtn}
         </div>
         <div class="ch-item-preview">${escapeHtml(preview)}</div>
@@ -1762,8 +1762,8 @@
   function avatarTextForChannel(ch) {
     const name = ch && ch.name ? String(ch.name) : '';
     if (name.charAt(0) === '#') return name.slice(0, 3); // "#wa"
-    if (ch && ch.encrypted && !ch.userAdded) return '🔒';
-    if (ch && ch.userAdded) return '🔑';
+    if (ch && ch.encrypted && !ch.userAdded) return '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg>';
+    if (ch && ch.userAdded) return '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-key"/></svg>';
     // Fallback: 2-char uppercase abbreviation.
     return name.replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() ||
       String(ch && ch.hash || '?').slice(0, 2).toUpperCase();
@@ -1789,12 +1789,14 @@
       preview = ch.messageCount + ' messages';
     }
     const abbr = avatarTextForChannel(ch);
+    // abbr may be a Phosphor sprite (HTML) or plain text — detect & emit raw vs escaped.
+    const isHtmlAbbr = typeof abbr === 'string' && abbr.startsWith('<svg');
     const sel = selectedHash === ch.hash ? ' selected' : '';
     return '<button type="button" class="ch-row' + sel + '" data-hash="' + escapeHtml(ch.hash) +
       '" role="option" aria-selected="' + (selectedHash === ch.hash ? 'true' : 'false') +
       '" aria-label="' + escapeHtml(name) + '">' +
       '<div class="ch-avatar ch-row-avatar" style="background:' + color +
-      '" aria-hidden="true">' + escapeHtml(abbr) + '</div>' +
+      '" aria-hidden="true">' + (isHtmlAbbr ? abbr : escapeHtml(abbr)) + '</div>' +
       '<div class="ch-row-body">' +
         '<div class="ch-row-line1">' +
           '<span class="ch-row-name">' + escapeHtml(name) + '</span>' +
@@ -1833,7 +1835,7 @@
     if (mine.length > 0) {
       sections.push(
         `<div class="ch-section ch-section-mychannels" data-section="mychannels">
-        <div class="ch-section-header">My Channels <span class="ch-section-locality" title="Saved only in this browser on this device">🖥️ (this browser)</span></div>
+        <div class="ch-section-header">My Channels <span class="ch-section-locality" title="Saved only in this browser on this device"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-monitor"/></svg> (this browser)</span></div>
         ${mine.map(renderChannelRow).join('')}
       </div>`
       );
@@ -1914,7 +1916,7 @@
       });
       if (isStaleMessageRequest(request)) return { stale: true };
       if (result.wrongKey) {
-        msgEl.innerHTML = '<div class="ch-empty ch-wrong-key">🔒 Key does not match — no messages could be decrypted</div>';
+        msgEl.innerHTML = '<div class="ch-empty ch-wrong-key"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> Key does not match — no messages could be decrypted</div>';
         return { wrongKey: true, messageCount: 0 };
       }
       if (result.error) {
@@ -1963,7 +1965,7 @@
         }
       }
       // #781: No matching key found — show lock message instead of fetching gibberish
-      msgEl.innerHTML = '<div class="ch-empty">🔒 This channel is encrypted and no decryption key is configured</div>';
+      msgEl.innerHTML = '<div class="ch-empty"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> This channel is encrypted and no decryption key is configured</div>';
       return;
     }
 
@@ -1992,7 +1994,7 @@
         if (isStaleMessageRequest(request)) return;
         var foundCh = (allCh.channels || []).find(function (c) { return c.hash === hash; });
         if (foundCh && foundCh.encrypted === true) {
-          msgEl.innerHTML = '<div class="ch-empty">🔒 This channel is encrypted and no decryption key is configured</div>';
+          msgEl.innerHTML = '<div class="ch-empty"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> This channel is encrypted and no decryption key is configured</div>';
           return;
         }
         // Unencrypted (or unknown) — fall through to the REST fetch below.

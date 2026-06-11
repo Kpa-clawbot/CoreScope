@@ -2868,7 +2868,7 @@ console.log('\n=== channels.js: encrypted channel without key shows lock message
 
     // Should show lock message, NOT fetch messages API
     const msgEl = dom['chMessages'];
-    assert.ok(msgEl.innerHTML.includes('🔒'), 'should show lock emoji for encrypted channel without key');
+    assert.ok(msgEl.innerHTML.includes('#ph-lock'), 'should show lock sprite for encrypted channel without key'); // #1648 M3
     assert.ok(msgEl.innerHTML.includes('no decryption key'), 'should mention no decryption key');
     const messageApiFetched = apiCallPaths.some(p => p.indexOf('/messages') !== -1);
     assert.ok(!messageApiFetched, 'should NOT fetch messages API for encrypted channel without key');
@@ -2967,7 +2967,7 @@ console.log('\n=== channels.js: encrypted channel without key shows lock message
       includeEncryptedChannels: [{ hash: '#test', name: '#test', messageCount: 3, lastActivity: null, encrypted: null }],
       storedKey: null,
     });
-    assert.ok(!r.msgHtml.includes('🔒'), 'unencrypted #channel must NOT show lock affordance');
+    assert.ok(!r.msgHtml.includes('#ph-lock'), 'unencrypted #channel must NOT show lock affordance'); // #1648 M3
     const messageApiFetched = r.apiCallPaths.some(p => p.indexOf('/messages') !== -1);
     assert.ok(messageApiFetched, 'unencrypted #channel must fetch messages REST endpoint');
   });
@@ -2978,7 +2978,7 @@ console.log('\n=== channels.js: encrypted channel without key shows lock message
       includeEncryptedChannels: [{ hash: '#private', name: '#private', messageCount: 5, lastActivity: null, encrypted: true }],
       storedKey: null,
     });
-    assert.ok(r.msgHtml.includes('🔒'), 'encrypted #channel without key must show lock affordance');
+    assert.ok(r.msgHtml.includes('#ph-lock'), 'encrypted #channel without key must show lock affordance'); // #1648 M3
     assert.ok(r.msgHtml.includes('no decryption key'), 'lock should mention no decryption key');
     const messageApiFetched = r.apiCallPaths.some(p => p.indexOf('/messages') !== -1);
     assert.ok(!messageApiFetched, 'must NOT fetch /messages REST for encrypted channel without key');
@@ -6295,7 +6295,7 @@ console.log('\n=== analytics.js: renderCollisionsFromServer collision table ==='
     }, {});
     // Must contain unreliable warning badge button
     assert.ok(html.includes('hop-unreliable-btn'), 'should have unreliable badge button');
-    assert.ok(html.includes('⚠️'), 'should have ⚠️ icon');
+    assert.ok(html.includes('#ph-warning'), 'should have ph-warning sprite icon'); // #1648 M3
     assert.ok(html.includes('Unreliable name resolution'), 'should have tooltip text');
     // Must NOT contain line-through in inline style (CSS class no longer has it)
     assert.ok(!html.includes('line-through'), 'should not contain line-through');
@@ -6440,7 +6440,9 @@ console.log('\n=== roles.js: Map Tile Config Parsing ===');
 
   test('#1504: each legend entry has glyph + description', () => {
     HD.PATH_SYMBOLS_LEGEND.forEach((e, i) => {
-      assert.ok(e && typeof e.glyph === 'string' && e.glyph.length > 0, 'entry ' + i + ' needs non-empty glyph');
+      // #1648 M3: glyph → glyphHtml (Phosphor sprite markup), text fallback OK
+      const g = (e && (e.glyphHtml || e.glyph)) || '';
+      assert.ok(typeof g === 'string' && g.length > 0, 'entry ' + i + ' needs non-empty glyph/glyphHtml');
       assert.ok(typeof e.description === 'string' && e.description.length > 0, 'entry ' + i + ' needs non-empty description');
     });
   });
@@ -6454,7 +6456,7 @@ console.log('\n=== roles.js: Map Tile Config Parsing ===');
     const html = HD.renderPathSymbolsLegend();
     assert.ok(html.includes('<details'), 'must render a <details> element');
     assert.ok(html.includes('<summary>Path symbols</summary>'), 'must have summary text "Path symbols"');
-    assert.ok(html.includes('⚠'), 'must contain warning glyph');
+    assert.ok(html.includes('#ph-warning') || html.includes('⚠'), 'must contain warning glyph (sprite or unicode)'); // #1648 M3
     assert.ok(/dashed/i.test(html), 'must describe the dashed underline convention');
   });
 
@@ -6502,24 +6504,24 @@ console.log('\n=== roles.js: Map Tile Config Parsing ===');
   test('#1504: legend glyphs match what hop-display.js actually renders (no documented-but-missing glyphs)', () => {
     const hopSrc = fs.readFileSync(__dirname + '/public/hop-display.js', 'utf8');
     HD.PATH_SYMBOLS_LEGEND.forEach(entry => {
-      const g = entry.glyph;
+      // #1648 M3: glyphs are now sprite HTML (glyphHtml); the legend uses
+      // ph-warning sprite refs which appear inline in hop-display.js too.
+      const g = entry.glyphHtml || entry.glyph || '';
       if (g === 'dashed underline') {
-        // documented as a CSS convention; class hop-ambiguous uses border-bottom: dashed
         assert.ok(/hop-ambiguous|hop-global-fallback/.test(hopSrc),
           'legend mentions "dashed underline" but hop-display.js has no ambiguous/global-fallback class');
         return;
       }
-      if (g === '⚠N') {
-        // Real template literal in hop-display.js: ⚠${badgeCount}
-        assert.ok(hopSrc.includes('⚠${badgeCount}') || hopSrc.includes('\u26a0${badgeCount}'),
-          'legend documents ⚠N but hop-display.js does not emit ⚠${badgeCount}');
+      // Sprite legend entries reference ph-warning; hop-display.js must
+      // also reference ph-warning (it's what renderHop emits).
+      if (/ph-warning/.test(g)) {
+        assert.ok(/ph-warning/.test(hopSrc),
+          'legend uses ph-warning sprite but hop-display.js does not reference it');
         return;
       }
       // Otherwise the literal glyph must appear in the file
       assert.ok(hopSrc.includes(g),
-        'legend glyph ' + JSON.stringify(g) + ' (codepoints ' +
-          [...g].map(c => 'U+' + c.codePointAt(0).toString(16).toUpperCase()).join(',') +
-          ') not found in hop-display.js');
+        'legend glyph ' + JSON.stringify(g.slice(0, 60)) + ' not found in hop-display.js');
     });
   });
 

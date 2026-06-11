@@ -49,12 +49,12 @@
         <p>How familiar are you with MeshCore?</p>
         <div class="chooser-options">
           <button class="chooser-btn new" id="chooseNew">
-            <span class="chooser-icon">🌱</span>
+            <span class="chooser-icon" aria-hidden="true"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-plant"/></svg></span>
             <strong>I\u2019m new</strong>
             <span>Show me setup guides and tips</span>
           </button>
           <button class="chooser-btn exp" id="chooseExp">
-            <span class="chooser-icon">⚡</span>
+            <span class="chooser-icon" aria-hidden="true"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lightning"/></svg></span>
             <strong>I know what I\u2019m doing</strong>
             <span>Just the analyzer, skip the guides</span>
           </button>
@@ -98,7 +98,7 @@
 
       ${!hasNodes ? `
         <div class="onboarding-prompt">
-          <div class="onboard-icon">📡</div>
+          <div class="onboard-icon" aria-hidden="true"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg></div>
           <h2>Claim your first node</h2>
           <p>Search for your node above, or paste your public key. Once claimed, you'll see live status, signal quality, and who's hearing you.</p>
         </div>
@@ -113,18 +113,18 @@
 
       ${exp ? '' : `
       <section class="home-checklist">
-        <h2>🚀 Getting on the mesh${homeCfg?.steps ? '' : ' — SF Bay Area'}</h2>
+        <h2><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-rocket"/></svg> Getting on the mesh${homeCfg?.steps ? '' : ' — SF Bay Area'}</h2>
         ${checklist(homeCfg)}
       </section>`}
 
       <section class="home-footer">
         <div class="home-footer-links">
           ${homeCfg?.footerLinks ? homeCfg.footerLinks.map(l => `<a href="${escapeAttr(l.url)}" class="home-footer-link" target="_blank" rel="noopener">${escapeHtml(l.label)}</a>`).join('') : `
-          <a href="#/packets" class="home-footer-link">📦 Packets</a>
-          <a href="#/map" class="home-footer-link">🗺️ Network Map</a>
-          <a href="#/live" class="home-footer-link">🔴 Live</a>
-          <a href="#/nodes" class="home-footer-link">📡 All Nodes</a>
-          <a href="#/channels" class="home-footer-link">💬 Channels</a>`}
+          <a href="#/packets" class="home-footer-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg> Packets</a>
+          <a href="#/map" class="home-footer-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> Network Map</a>
+          <a href="#/live" class="home-footer-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Live</a>
+          <a href="#/nodes" class="home-footer-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> All Nodes</a>
+          <a href="#/channels" class="home-footer-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chats"/></svg> Channels</a>`}
         </div>
         <div class="home-level-toggle">
           <small>${exp ? 'Want setup guides? ' : 'Already know MeshCore? '}
@@ -183,7 +183,7 @@
                 <div class="suggest-actions">
                   <span class="suggest-role badge-${n.role || 'unknown'}">${n.role || '?'}</span>
                   <button class="suggest-claim ${claimed ? 'claimed' : ''}" data-key="${n.public_key}" data-name="${escapeAttr(n.name || '')}" title="${claimed ? 'Remove from My Mesh' : 'Add to My Mesh'}">
-                    ${claimed ? '✓ Mine' : '+ Claim'}
+                    ${claimed ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg> Mine' : '+ Claim'}
                   </button>
                 </div>
               </div>`;
@@ -202,11 +202,11 @@
               if (isMyNode(pk)) {
                 removeMyNode(pk);
                 btn.classList.remove('claimed');
-                btn.textContent = '+ Claim';
+                btn.innerHTML = '+ Claim';
               } else {
                 addMyNode(pk, nm);
                 btn.classList.add('claimed');
-                btn.textContent = '✓ Mine';
+                btn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg> Mine';
               }
               loadMyNodes();
             });
@@ -277,7 +277,8 @@
 
         const age = stats.lastHeard ? Date.now() - new Date(stats.lastHeard).getTime() : null;
         const status = age === null ? 'silent' : age < HEALTH_THRESHOLDS.nodeDegradedMs ? 'healthy' : age < HEALTH_THRESHOLDS.nodeSilentMs ? 'degraded' : 'silent';
-        const statusDot = status === 'healthy' ? '🟢' : status === 'degraded' ? '🟡' : '🔴';
+        const statusCls = status === 'healthy' ? 'status-ok' : status === 'degraded' ? 'status-warn' : 'status-err';
+        const statusDot = '<span class="' + statusCls + '" aria-label="' + status + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span>';
         const statusText = status === 'healthy' ? 'Active' : status === 'degraded' ? 'Degraded' : 'Silent';
         const name = node.name || mn.name || truncate(mn.pubkey, 12);
 
@@ -294,7 +295,7 @@
             <div class="mnc-status">${statusDot}</div>
             <div class="mnc-name">${escapeHtml(name)}</div>
             <div class="mnc-role">${node.role || '?'}</div>
-            <button class="mnc-remove" data-key="${mn.pubkey}" title="Remove from My Mesh" aria-label="Remove ${escapeAttr(name)} from My Mesh">✕</button>
+            <button class="mnc-remove" data-key="${mn.pubkey}" title="Remove from My Mesh" aria-label="Remove ${escapeAttr(name)} from My Mesh"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
           </div>
           <div class="mnc-status-text">${statusText}${stats.lastHeard ? ' · ' + timeAgo(stats.lastHeard) : ''}</div>
           <div class="mnc-metrics">
@@ -324,7 +325,7 @@
         </div>`;
       } catch (err) {
         const is404 = err && err.message && err.message.includes('404');
-        const statusIcon = is404 ? '📡' : '❓';
+        const statusIcon = is404 ? '<span class="status-warn"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg></span>' : '<span class="status-muted"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg></span>';
         const statusMsg = is404
           ? 'Waiting for first advert — this node has been seen in channel messages but hasn\u2019t advertised yet'
           : 'Could not load data';
@@ -332,7 +333,7 @@
           <div class="mnc-header">
             <div class="mnc-status">${statusIcon}</div>
             <div class="mnc-name">${escapeHtml(mn.name || truncate(mn.pubkey, 12))}</div>
-            <button class="mnc-remove" data-key="${mn.pubkey}" title="Remove" aria-label="Remove ${escapeAttr(mn.name || truncate(mn.pubkey, 12))} from My Mesh">✕</button>
+            <button class="mnc-remove" data-key="${mn.pubkey}" title="Remove" aria-label="Remove ${escapeAttr(mn.name || truncate(mn.pubkey, 12))} from My Mesh"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
           </div>
           <div class="mnc-status-text">${statusMsg}</div>
         </div>`;
@@ -441,7 +442,7 @@
 
       card.innerHTML = `
         <div class="health-banner ${color}">
-          <span>${status === 'healthy' ? '✅' : status === 'degraded' ? '⚠️' : '❌'}</span>
+          <span class="${status === 'healthy' ? 'status-ok' : status === 'degraded' ? 'status-warn' : 'status-err'}" aria-label="${status}">${status === 'healthy' ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg>' : status === 'degraded' ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' : '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x-circle"/></svg>'}</span>
           <span><strong>${escapeHtml(node.name || truncate(pubkey, 16))}</strong> — ${statusMsg}</span>
           ${!claimed ? `<button class="health-claim" data-key="${pubkey}" data-name="${escapeAttr(node.name || '')}">+ Add to My Mesh</button>` : ''}
         </div>
@@ -543,23 +544,23 @@
     }
     // Render FAQ/checklist (additional Q&A)
     if (homeCfg?.checklist?.length) {
-      if (html) html += '<h3 style="margin:24px 0 12px;font-size:16px">❓ FAQ</h3>';
+      if (html) html += '<h3 style="margin:24px 0 12px;font-size:16px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg> FAQ</h3>';
       html += homeCfg.checklist.map(i => `<div class="checklist-item"><div class="checklist-q" role="button" tabindex="0" aria-expanded="false">${escapeHtml(i.question)}</div><div class="checklist-a">${window.miniMarkdown ? miniMarkdown(i.answer) : escapeHtml(i.answer)}</div></div>`).join('');
     }
     // Fallback: Bay Area defaults when no config at all
     if (!html) {
       const items = [
-        { q: '💬 First: Join the Bay Area MeshCore Discord',
+        { q: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chats"/></svg> First: Join the Bay Area MeshCore Discord',
           a: '<p>The community Discord is the best place to get help and find local mesh enthusiasts.</p><p><a href="https://discord.gg/q59JzsYTst" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600">Join the Discord ↗</a></p><p>Start with <strong>#intro-to-meshcore</strong> — it has detailed setup instructions.</p>' },
-        { q: '🔵 Step 1: Connect via Bluetooth',
+        { q: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-bluetooth"/></svg> Step 1: Connect via Bluetooth',
           a: '<p>Flash <strong>BLE companion</strong> firmware from <a href="https://flasher.meshcore.io/" target="_blank" rel="noopener" style="color:var(--accent)">MeshCore Flasher</a>.</p><ul><li>Screenless devices: default PIN <code>123456</code></li><li>Screen devices: random PIN shown on display</li><li>If pairing fails: forget device, reboot, re-pair</li></ul>' },
-        { q: '📻 Step 2: Set the right frequency preset',
+        { q: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-radio"/></svg> Step 2: Set the right frequency preset',
           a: '<p><strong>US Recommended:</strong></p><div style="margin:8px 0;padding:8px 12px;background:var(--surface-1);border-radius:6px;font-family:var(--mono);font-size:.85rem">910.525 MHz · BW 62.5 kHz · SF 7 · CR 5</div><p>Select <strong>"US Recommended"</strong> in the app or flasher.</p>' },
-        { q: '📡 Step 3: Advertise yourself',
+        { q: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Step 3: Advertise yourself',
           a: '<p>Tap the signal icon → <strong>Flood</strong> to broadcast your node to the mesh. Companions only advert when you trigger it manually.</p>' },
-        { q: '🔁 Step 4: Check "Heard N repeats"',
+        { q: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-repeat"/></svg> Step 4: Check "Heard N repeats"',
           a: '<ul><li><strong>"Sent"</strong> = transmitted, no confirmation</li><li><strong>"Heard 0 repeats"</strong> = no repeater picked it up</li><li><strong>"Heard 1+ repeats"</strong> = you\'re on the mesh!</li></ul>' },
-        { q: '📍 Repeaters near you?',
+        { q: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-pin"/></svg> Repeaters near you?',
           a: '<p><a href="#/map" style="color:var(--accent)">Check the network map</a> to see active repeaters.</p>' }
       ];
       html = items.map(i => `<div class="checklist-item"><div class="checklist-q" role="button" tabindex="0" aria-expanded="false">${i.q}</div><div class="checklist-a">${i.a}</div></div>`).join('');
