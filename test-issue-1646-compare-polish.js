@@ -160,5 +160,67 @@ test('compare.js toggles a collapsed state on the controls when both observers s
     'style.css must define a rule keyed to .is-collapsed / [data-collapsed]');
 });
 
+// ════════════════════════════════════════════════════════════════════
+// #1647 — Mobile follow-ups (Tufte review).
+// At ≤768px the page sits above a fixed bottom-nav (56px + safe-area)
+// reserved via --bottom-nav-reserve. The headline diff bar has segments
+// that go invisible at narrow widths when their share is ~2%, and the
+// asymmetric-reach sentences wrap mid-phrase. These are behavioral
+// guards so the polish doesn't quietly regress.
+// ════════════════════════════════════════════════════════════════════
+
+// helper: pull the body of the FIRST @media (max-width: <=768px) block
+function mobileBlock(css) {
+  const re = /@media[^{]*\(max-width:\s*(640|768)px\)\s*\{([\s\S]*?)\n\}\s*\n/g;
+  let combined = '';
+  let m;
+  while ((m = re.exec(css))) combined += m[2] + '\n';
+  return combined;
+}
+const MOBILE_CSS = mobileBlock(CSS);
+
+// ── 9) compare-page reserves room for the bottom-nav at mobile ────────
+test('mobile .compare-page reserves padding-bottom for the bottom-nav', () => {
+  // Either the rule lives inside a mobile @media block, OR an
+  // unconditional rule references var(--bottom-nav-reserve).
+  const inMobile = /\.compare-page[^{]*\{[^}]*padding-bottom[^;]*--bottom-nav-reserve/m.test(MOBILE_CSS);
+  const unconditional = /\.compare-page[^{]*\{[^}]*padding-bottom[^;]*--bottom-nav-reserve/m.test(CSS);
+  assert(inMobile || unconditional,
+    '.compare-page must add padding-bottom tied to var(--bottom-nav-reserve) so the last row is not eaten by the bottom-nav');
+});
+
+// ── 10) diff-bar segments stay visible at narrow widths ───────────────
+test('.compare-bar-seg has a min-width so non-zero segments stay visible', () => {
+  // We accept either a global min-width on .compare-bar-seg, or a
+  // mobile-scoped one. Visibility is what matters.
+  const reAny = /\.compare-bar-seg[^{}]*\{[^}]*min-width\s*:/m;
+  assert(reAny.test(CSS),
+    '.compare-bar-seg must declare min-width so a 2% segment is still readable on mobile');
+});
+
+// ── 11) asym sentence reflows cleanly on mobile ───────────────────────
+test('mobile .compare-asym-line uses text-wrap balance/pretty (or overflow-wrap) to avoid mid-phrase breaks', () => {
+  // Look inside any mobile @media block for the rule. We accept
+  // text-wrap: balance | pretty, or word-break/overflow-wrap as
+  // alternative reflow strategies.
+  const ok = /\.compare-asym-line[^{}]*\{[^}]*(text-wrap\s*:\s*(balance|pretty)|overflow-wrap\s*:\s*anywhere|word-break\s*:\s*break-word)/m.test(MOBILE_CSS);
+  assert(ok,
+    'mobile .compare-asym-line needs a wrap rule (text-wrap: balance/pretty or overflow-wrap) so the sentence does not break mid-phrase');
+});
+
+// ── 12) tabs row stays usable on narrow widths ────────────────────────
+test('mobile .compare-tabs .tab-btn shrinks/wraps so all four tabs fit', () => {
+  // We need EITHER tabs to allow wrap (flex-wrap: wrap on .compare-tabs
+  // — already present at desktop) AND a per-button rule that lets the
+  // long "Only <name> (NNN)" labels truncate or shrink.
+  // Accept: (a) a mobile rule on .tab-btn with min-width:0 + text-overflow,
+  //         (b) a flex: 1 1 0 / flex-shrink, or
+  //         (c) overflow-wrap on the tab.
+  const ok = /\.compare-tabs[^{}]*\.tab-btn[^{}]*\{[^}]*(min-width\s*:\s*0|flex\s*:\s*1|flex-shrink|overflow-wrap)/m.test(MOBILE_CSS) ||
+             /\.compare-tabs\s+\.tab-btn[^{}]*\{[^}]*(min-width\s*:\s*0|flex\s*:\s*1|flex-shrink|overflow-wrap)/m.test(MOBILE_CSS);
+  assert(ok,
+    'mobile .compare-tabs .tab-btn must declare min-width:0 / flex / overflow-wrap so all four tab labels fit at 375px');
+});
+
 console.log(`\n  ${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);
