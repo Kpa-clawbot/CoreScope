@@ -87,18 +87,19 @@ window.ObserverDetailNaiveBanner = {
           <a href="#/observers" class="btn-icon" title="Back to Observers" aria-label="Back">←</a>
           <h2 style="margin:0" id="obsTitle">Observer Detail</h2>
           <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <label class="sr-only" for="obsCompareWithPicker">Compare with another observer</label>
-            <select id="obsCompareWithPicker" data-action="compare-with-picker"
-                    aria-label="Compare with another observer"
-                    title="Pick another observer to compare against"
-                    class="time-range-select">
-              <option value="">Compare with…</option>
-            </select>
-            <button type="button" data-action="compare-with-go" class="btn-secondary" disabled aria-disabled="true"
-                    title="Open side-by-side comparison"
-                    style="display:inline-flex;align-items:center;gap:6px">
-              <span aria-hidden="true">🔍</span><span>Compare</span>
-            </button>
+            <span class="compare-with-group">
+              <label class="sr-only" for="obsCompareWithPicker">Compare with another observer</label>
+              <select id="obsCompareWithPicker" data-action="compare-with-picker"
+                      aria-label="Compare with another observer"
+                      title="Pick another observer to compare against"
+                      class="time-range-select">
+                <option value="">Compare with…</option>
+              </select>
+              <button type="button" data-action="compare-with-go" class="btn-secondary" disabled aria-disabled="true"
+                      title="Open side-by-side comparison">
+                <span aria-hidden="true">🔍</span><span>Compare</span>
+              </button>
+            </span>
             <select id="obsDaysSelect" class="time-range-select" aria-label="Time range">
               <option value="1">24 Hours</option>
               <option value="3">3 Days</option>

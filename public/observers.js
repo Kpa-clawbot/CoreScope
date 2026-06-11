@@ -108,6 +108,31 @@ window.ObserversSummary = (function () {
   return { computeCounts: computeCounts, renderHeader: renderHeader };
 })();
 
+// #1644 — preserveCompareSelection
+//
+// Why: renderObservers() rewrites <tbody>.innerHTML on every 30s
+// refresh (and on every WS-driven repaint), which destroys every
+// `<input data-compare-select>` node along with its checked state.
+// That manifested as "checkboxes randomly uncheck each other" — it
+// wasn't sibling interference, it was the whole tbody being replaced
+// underneath an active selection.
+//
+// The fix is surgical: snapshot the set of ids that were checked
+// BEFORE we touch the DOM, then walk the new boxes after `innerHTML=`
+// and re-set .checked on any whose `value` (observer id) was in the
+// snapshot. O(n) over visible rows.
+//
+// Pure helper so it's testable in jsdom-less Node (see
+// test-issue-1644-redesign.js). DO NOT inline this in render() —
+// the unit test introspects the global by name.
+window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbody) {
+  if (!tbody || !prevIds || typeof tbody.querySelectorAll !== 'function') return;
+  var boxes = tbody.querySelectorAll('input[data-compare-select]');
+  for (var i = 0; i < boxes.length; i++) {
+    if (prevIds.has(boxes[i].value)) boxes[i].checked = true;
+  }
+};
+
 (function () {
   let observers = [];
   let _fetchedAt = 0; // #1562: ms epoch when the current `observers` payload was received
@@ -125,17 +150,16 @@ window.ObserversSummary = (function () {
           <h2>Observer Status</h2>
           <button type="button" class="btn-secondary" data-action="compare-observers"
                   title="Compare two observers side-by-side"
-                  aria-label="Compare observers"
-                  style="display:inline-flex;align-items:center;gap:6px">
+                  aria-label="Compare observers">
             <span aria-hidden="true">🔍</span><span>Compare observers</span>
           </button>
           <button type="button" class="btn-secondary" data-action="compare-selected"
                   title="Select exactly two rows to compare"
                   aria-label="Compare selected observers"
-                  aria-disabled="true" disabled
-                  style="display:inline-flex;align-items:center;gap:6px">
+                  aria-disabled="true" disabled>
             <span aria-hidden="true">⚖️</span><span>Compare selected (<span data-role="compare-count">0</span>)</span>
           </button>
+          <span class="obs-refresh-spacer"></span>
           <button class="btn-icon" data-action="obs-refresh" title="Refresh" aria-label="Refresh observers">🔄</button>
         </div>
         <div id="obsRegionFilter" class="region-filter-container"></div>
@@ -300,6 +324,16 @@ window.ObserversSummary = (function () {
     const el = document.getElementById('obsContent');
     if (!el) return;
 
+    // #1644 — snapshot compare-selection BEFORE we rewrite tbody.innerHTML.
+    // The 30s auto-refresh (and any WS-driven repaint) destroys every
+    // checkbox node; without this snapshot the user's selection silently
+    // vanished. See window.preserveCompareSelection above.
+    var _prevSelected = new Set();
+    var _prevBoxes = document.querySelectorAll(
+      '#obsTable tbody input[data-compare-select]:checked'
+    );
+    for (var _i = 0; _i < _prevBoxes.length; _i++) _prevSelected.add(_prevBoxes[_i].value);
+
     // Apply region filter
     const selectedRegions = RegionFilter.getSelected();
     const filtered = selectedRegions
@@ -372,6 +406,14 @@ window.ObserversSummary = (function () {
       </table></div>`;
     makeColumnsResizable('#obsTable', 'meshcore-obs-col-widths');
     const obsTbl = document.getElementById('obsTable');
+    // #1644 — restore previously-checked compare-select boxes.
+    if (obsTbl && _prevSelected.size > 0) {
+      var _tbody = obsTbl.querySelector('tbody');
+      if (_tbody) window.preserveCompareSelection(_prevSelected, _tbody);
+    }
+    // Refresh the disabled/enabled state of "Compare selected (N)" against
+    // the post-restore reality.
+    updateCompareSelectedState();
     // #1056: fluid columns + +N hidden pill
     if (obsTbl && window.TableResponsive) {
       window.TableResponsive.register(obsTbl);
@@ -409,8 +451,13 @@ window.ObserversSummary = (function () {
   }
   function updateCompareSelectedState() {
     var btn = document.querySelector('[data-action="compare-selected"]');
-    if (!btn) return;
     var ids = collectSelectedIds();
+    // #1644 — toggle a table-level marker so CSS can highlight the
+    // checkbox column only when something is actually selected. Avoids
+    // the column dominating the eye when nothing is picked.
+    var tbl = document.getElementById('obsTable');
+    if (tbl) tbl.classList.toggle('has-compare-selection', ids.length > 0);
+    if (!btn) return;
     var countEl = btn.querySelector('[data-role="compare-count"]');
     if (countEl) countEl.textContent = String(ids.length);
     var enabled = ids.length === 2;

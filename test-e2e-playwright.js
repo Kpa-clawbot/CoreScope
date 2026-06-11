@@ -892,16 +892,19 @@ async function run() {
 
   // Test: Compare results show shared/unique breakdown (#129)
   await test('Compare results show shared/unique cards', async () => {
-    // Results should be visible from previous test
-    const cardBoth = await page.$('.compare-card-both');
-    assert(cardBoth, 'Should have "shared" card (.compare-card-both)');
-    const cardA = await page.$('.compare-card-a');
-    assert(cardA, 'Should have "only A" card (.compare-card-a)');
-    const cardB = await page.$('.compare-card-b');
-    assert(cardB, 'Should have "only B" card (.compare-card-b)');
-    // Verify counts are rendered (may be locale-formatted with commas)
-    const counts = await page.$$eval('.compare-card-count', els => els.map(e => e.textContent.trim()));
-    assert(counts.length >= 3, `Expected >=3 summary counts, got ${counts.length}`);
+    // Results should be visible from previous test.
+    // Redesign (#1644) replaced the 3-card layout with a proportional strip
+    // (shared-axis small-multiples): two side segments (A-only / B-only)
+    // flanking a middle segment (shared).
+    const stripMid = await page.$('.compare-strip-mid');
+    assert(stripMid, 'Should have "shared" strip middle (.compare-strip-mid)');
+    const sides = await page.$$('.compare-strip-side');
+    assert(sides.length >= 2, `Should have >=2 side strips (A-only + B-only), got ${sides.length}`);
+    // Counts: 2 side counts + 1 mid count = 3 total outcome-group counts.
+    const sideCounts = await page.$$eval('.compare-strip-count', els => els.map(e => e.textContent.trim()));
+    const midCount = await page.$eval('.compare-strip-mid-count', el => el.textContent.trim());
+    const counts = sideCounts.concat([midCount]);
+    assert(counts.length >= 3, `Expected >=3 outcome-group counts, got ${counts.length}`);
     counts.forEach((c, i) => {
       assert(/^[\d,]+$/.test(c), `Count ${i} should be a number but got "${c}"`);
     });
