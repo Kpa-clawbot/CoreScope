@@ -1,0 +1,89 @@
+# Emoji allowlist for the M6 lint gate (issue #1648).
+#
+# Format: one entry per line, three forms accepted:
+#   1. Bare path/glob: matches any line in the file(s)
+#        public/foo.js
+#        public/bar*.html
+#   2. file:line          (exact line skip)
+#        public/foo.js:42
+#   3. file:line:codepoint (exact line + codepoint skip, most precise)
+#        public/foo.js:42:U+2764
+#   4. /regex/            (line content regex match — applied to ALL files)
+#        /EMOJI-OK/
+#        /EMOJI-OK-COMMENT/
+#
+# Blank lines and lines starting with `#` are comments.
+#
+# Add a NEW entry only when:
+#   * the codepoint is user-visible text content (not iconography), OR
+#   * it is a code comment / log-line / test fixture referencing a prior
+#     glyph, OR
+#   * it is a deliberate design choice (e.g. ▾ caret in "More ▾"
+#     dropdown text labels — text-affordance, not an icon)
+#
+# Each entry should include a trailing `# why` reason where it's
+# non-obvious. Iconography swaps belong in the Phosphor sprite — they do
+# NOT get added here.
+
+# --- generic markers used in source comments / inline opt-outs ---
+/EMOJI-OK/
+/EMOJI-OK-COMMENT/
+/EMOJI-OK-LEGACY-RENDER/
+
+# --- documentation pages (geofilter docs, ICONS readme etc) ---
+public/geofilter-docs.html              # prose docs describe historical button glyphs
+public/icons/README.md                  # describes the sprite — emoji in prose
+public/CHANGELOG.md
+README.md
+
+# --- arrows used as inline text content (typography, not icons) ---
+# ←, →, ↑, ↓, ↗, ↘, ↖, ↙, ⇆, ⇅, ↩, ↪, ↺, ↻, ⌃, ⌐
+# These render as text labels ("View packets →", "Back ←"), markdown
+# arrows inside descriptions, sort indicators in headers, gesture hints,
+# inline "next/prev" cues. They are NOT iconography (cannot be themed via
+# currentColor as an SVG, but they are text glyphs in flowing text).
+/[←→↑↓↗↘↖↙⇆⇅↺↻↪↩⌃]/
+
+# --- text-affordance dropdown caret used in button labels ---
+# "Filters ▾", "More ▾", "All Observers ▾", etc. The caret is part of the
+# text label that communicates "this is a dropdown". Replacing with an SVG
+# would mean re-architecting every dropdown button — out of scope and
+# arguably worse UX (the caret reads naturally inside the text).
+/[▾▴▸▶▼]/
+
+# --- multi-strength glyphs (●●●, ●●, ●, ○) used as inline legend keys ---
+# node-reach legend glyphs convey signal strength; they ride alongside the
+# label text and theme via CSS color. Out of scope for the Phosphor swap.
+public/node-reach.js
+public/roles.js                         # NODE_SHAPES legacy text shapes (kept as text per #1648 design call 3)
+
+# --- VCR / media control buttons (▶ ⏸ ⏪ ⏭ ⏱ ⏰ ⌚) ---
+# Audio Lab + Live page VCR controls. These pre-date the migration and the
+# UX explicitly uses universal media-control glyphs for screen-reader
+# compatibility with aria-label. Audio-lab `▶ Play` button is the
+# canonical example. Keeping these aligned with platform conventions.
+public/live.js                          # VCR controls + corner-position toggles
+public/audio-lab.js                     # play/pause + map-why arrows
+public/mobile-page-actions.js           # mobile sticky-action ⏸ mirror
+
+# --- channel sidebar legacy carets and arrows ---
+public/channels.js                      # ▸/▾ collapse caret + ↓ scroll-to-new chevron
+
+# --- analytics tab badges that are user-visible text content ---
+# "🔒 Encrypted (0x__)" displayName field is consumed by tests + screen
+# readers. Locked icon is part of the data column, not chrome.
+public/analytics.js:978:U+1F512          # 🔒 Encrypted displayName
+public/analytics.js:979:U+1F512          # 🔒 Encrypted displayName
+
+# --- cmd/server, cmd/ingestor, cmd/decrypt ---
+# Server-side Go: all hits are log lines (with → arrows), code comments,
+# or SQL-style identifiers. NO server-rendered iconography. The one
+# server-rendered icon — onboarding step "emoji" field in routes.go — is
+# now a `ph:*` token, not a raw codepoint (verified by post-merge smoke).
+cmd/server/*.go                          # log lines + code comments + struct tags
+cmd/ingestor/*.go                        # log lines + code comments
+cmd/decrypt/*.go                          # standalone decrypt CLI HTML template (▲/▼ sort)
+
+# --- live.css / style.css inline comments referencing prior glyphs ---
+public/live.css                          # comments describing ⚙/⚠/✕/◫ legacy chrome
+public/style.css                         # CSS comments + ▾/▸ group-header caret pseudo
