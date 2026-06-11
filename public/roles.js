@@ -771,7 +771,7 @@
     if (!severity) return '';
     var cls = 'skew-badge skew-badge--' + severity;
     if (severity === 'no_clock') {
-      return '<span class="' + cls + '" title="Uninitialized RTC — no valid clock">🚫 No Clock</span>';
+      return '<span class="' + cls + '" title="Uninitialized RTC — no valid clock"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-prohibit"/></svg> No Clock</span>';
     }
     if (severity === 'bimodal_clock' && cs) {
       var badPct = cs.goodFraction != null ? Math.round((1 - cs.goodFraction) * 100) : '?';

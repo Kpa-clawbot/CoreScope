@@ -424,9 +424,13 @@ function toggleFavorite(pubkey) {
   localStorage.setItem(FAV_KEY, JSON.stringify(favs));
   return idx < 0; // true if now favorited
 }
+function favStarIconHtml(on) {
+  var id = on ? 'ph-star-fill' : 'ph-star';
+  return '<svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#' + id + '"/></svg>';
+}
 function favStar(pubkey, cls) {
   const on = isFavorite(pubkey);
-  return '<button class="fav-star ' + (cls || '') + (on ? ' on' : '') + '" data-fav="' + pubkey + '" title="' + (on ? 'Remove from favorites' : 'Add to favorites') + '">' + (on ? '★' : '☆') + '</button>';
+  return '<button class="fav-star ' + (cls || '') + (on ? ' on' : '') + '" data-fav="' + pubkey + '" aria-label="Toggle favorite" aria-pressed="' + (on ? 'true' : 'false') + '" title="' + (on ? 'Remove from favorites' : 'Add to favorites') + '">' + favStarIconHtml(on) + '</button>';
 }
 function bindFavStars(container, onToggle) {
   container.querySelectorAll('.fav-star').forEach(btn => {
@@ -434,8 +438,9 @@ function bindFavStars(container, onToggle) {
       e.stopPropagation();
       const pk = btn.dataset.fav;
       const nowOn = toggleFavorite(pk);
-      btn.textContent = nowOn ? '★' : '☆';
+      btn.innerHTML = favStarIconHtml(nowOn);
       btn.classList.toggle('on', nowOn);
+      btn.setAttribute('aria-pressed', nowOn ? 'true' : 'false');
       btn.title = nowOn ? 'Remove from favorites' : 'Add to favorites';
       if (onToggle) onToggle(pk, nowOn);
     });

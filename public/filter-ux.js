@@ -351,7 +351,9 @@
 
   // ── Saved filters dropdown ─────────────────────────────────────────────
   function _renderSavedDropdown(container, input) {
-    var btn = _h('button', { type: 'button', class: 'fux-saved-trigger', id: 'filterSavedTrigger', title: 'Saved filters' }, '★ Saved ▾');
+    var savedIconHtml = '<svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg>';
+    var caretIconHtml = '<svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-caret-down"/></svg>';
+    var btn = _h('button', { type: 'button', class: 'fux-saved-trigger', id: 'filterSavedTrigger', title: 'Saved filters' }, savedIconHtml + ' Saved ' + caretIconHtml);
     var menu = _h('div', { class: 'fux-saved-menu hidden', id: 'filterSavedMenu', role: 'menu' });
     container.appendChild(btn);
     container.appendChild(menu);

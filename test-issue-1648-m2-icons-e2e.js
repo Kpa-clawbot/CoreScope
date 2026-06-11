@@ -239,6 +239,79 @@ async function main() {
   else if (undef.missing && undef.missing.length) fail(`(i) ${undef.missing.length} sprite ref(s) not resolved: ${undef.missing.slice(0,5).join(', ')}`);
   else pass(`(i) all ${undef.count} sprite refs resolve to one of ${undef.ids} defined symbols`);
 
+  // (j) /nodes — favorite-toggle button: aria-label + ≥44×44 hit area + ph-star sprite (not ☆ text)
+  await page.goto(`${BASE}/#/nodes`, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => !!document.querySelector('.fav-star'),
+    null, { timeout: 8000 }).catch(() => {});
+  const favProbe = await page.evaluate(() => {
+    const btn = document.querySelector('.fav-star');
+    if (!btn) return { found: false };
+    const r = btn.getBoundingClientRect();
+    return {
+      found: true,
+      aria: btn.getAttribute('aria-label') || '',
+      w: Math.round(r.width), h: Math.round(r.height),
+      hasPh: !!btn.querySelector('svg.ph-icon use'),
+      hasStarText: /[★☆]/.test(btn.textContent || ''),
+      ariaPressed: btn.getAttribute('aria-pressed'),
+    };
+  });
+  if (!favProbe.found) fail('(j) /nodes: no .fav-star rendered (need fixture data)');
+  else {
+    if (favProbe.aria !== 'Toggle favorite') fail(`(j) /nodes fav-star: aria-label missing/wrong (got "${favProbe.aria}")`);
+    else pass('(j) /nodes fav-star has aria-label="Toggle favorite"');
+    if (favProbe.w < 44 || favProbe.h < 44) fail(`(j) /nodes fav-star bbox ${favProbe.w}x${favProbe.h} < 44x44 (WCAG 2.5.5)`);
+    else pass(`(j) /nodes fav-star bbox ${favProbe.w}x${favProbe.h} ≥ 44x44`);
+    if (!favProbe.hasPh) fail('(j) /nodes fav-star missing ph-icon sprite');
+    else pass('(j) /nodes fav-star uses ph-icon sprite');
+    if (favProbe.hasStarText) fail('(j) /nodes fav-star still contains ★ or ☆ text');
+  }
+
+  // (k) /nodes — No-Clock skew badge uses ph-prohibit (not 🚫 emoji)
+  // Probe by injecting via window.renderSkewBadge directly (no fixture dep).
+  const noClock = await page.evaluate(() => {
+    if (typeof window.renderSkewBadge !== 'function') return { fnFound: false };
+    const html = window.renderSkewBadge('no_clock', 0, null);
+    return {
+      fnFound: true,
+      html: html,
+      usesProhibit: /#ph-prohibit/.test(html),
+      hasProhibitEmoji: /🚫/.test(html),
+    };
+  });
+  if (!noClock.fnFound) fail('(k) /nodes: window.renderSkewBadge not found');
+  else {
+    if (!noClock.usesProhibit) fail(`(k) No-Clock badge missing ph-prohibit (html=${noClock.html.slice(0,200)})`);
+    else pass('(k) No-Clock badge uses #ph-prohibit sprite');
+    if (noClock.hasProhibitEmoji) fail('(k) No-Clock badge still contains 🚫 emoji');
+  }
+
+  // (l) /packets — "Saved" filter chip uses separate ph-star-fill + ph-caret-down (no ★ ▾ text)
+  await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('#filterSavedTrigger', { timeout: 8000 }).catch(() => {});
+  const saved = await page.evaluate(() => {
+    const el = document.querySelector('#filterSavedTrigger');
+    if (!el) return { found: false };
+    const uses = Array.from(el.querySelectorAll('svg.ph-icon use'))
+      .map(u => (u.getAttribute('href') || '').replace(/^.*#/, ''));
+    return {
+      found: true,
+      uses,
+      text: el.textContent || '',
+      hasStarText: /[★☆]/.test(el.textContent || ''),
+      hasCaretText: /[▾▴]/.test(el.textContent || ''),
+    };
+  });
+  if (!saved.found) fail('(l) /packets: #filterSavedTrigger not rendered');
+  else {
+    if (!saved.uses.includes('ph-star-fill')) fail(`(l) Saved chip missing ph-star-fill (uses=${saved.uses.join(',')})`);
+    else pass('(l) Saved chip has ph-star-fill');
+    if (!saved.uses.includes('ph-caret-down')) fail(`(l) Saved chip missing ph-caret-down (uses=${saved.uses.join(',')})`);
+    else pass('(l) Saved chip has ph-caret-down');
+    if (saved.hasStarText) fail('(l) Saved chip still has ★/☆ unicode text');
+    if (saved.hasCaretText) fail('(l) Saved chip still has ▾/▴ unicode text');
+  }
+
   await browser.close();
   console.log(`\ntest-issue-1648-m2-icons-e2e.js: ${passes} passed, ${failures} failed`);
   assert.strictEqual(failures, 0, `${failures} M2 icon-render assertions failed`);
