@@ -152,6 +152,24 @@ func (s *Server) getMemStats() runtime.MemStats {
 
 // getGeoFilter returns a pointer to the current geo_filter config under read lock.
 // Callers MUST NOT mutate the returned struct.
+// isPubkeyHidden returns true if the node with the given pubkey has a name
+// matching an operator-configured hidden prefix (#1181). Mirrors the
+// IsBlacklisted check used at the top of per-pubkey handlers: per-pubkey
+// endpoints should 404 on hidden nodes so callers learn nothing about
+// whether the row exists. Returns false on DB error / missing row (the
+// downstream handler's own 404 covers those).
+func (s *Server) isPubkeyHidden(pubkey string) bool {
+	if s == nil || s.cfg == nil || len(s.cfg.HiddenNamePrefixes) == 0 {
+		return false
+	}
+	node, err := s.db.GetNodeByPubkey(pubkey)
+	if err != nil || node == nil {
+		return false
+	}
+	name, _ := node["name"].(string)
+	return s.cfg.IsNameHidden(name)
+}
+
 func (s *Server) getGeoFilter() *GeoFilterConfig {
 	s.cfgMu.RLock()
 	defer s.cfgMu.RUnlock()
@@ -1353,6 +1371,20 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		total = len(filtered)
 		nodes = filtered
 	}
+	// Filter nodes whose name starts with a hidden prefix (#1181). DB rows
+	// are preserved — this only drops them from the API surface so observer
+	// history (paths, hops, distances) remains intact for analytics.
+	if len(s.cfg.HiddenNamePrefixes) > 0 {
+		filtered := nodes[:0]
+		for _, node := range nodes {
+			name, _ := node["name"].(string)
+			if !s.cfg.IsNameHidden(name) {
+				filtered = append(filtered, node)
+			}
+		}
+		total = len(filtered)
+		nodes = filtered
+	}
 	// Filter by area
 	if area := q.Get("area"); area != "" {
 		var areaNodes map[string]bool
@@ -1405,6 +1437,17 @@ func (s *Server) handleNodeSearch(w http.ResponseWriter, r *http.Request) {
 		}
 		nodes = filtered
 	}
+	// Drop hidden-prefix nodes from search results (#1181).
+	if len(s.cfg.HiddenNamePrefixes) > 0 {
+		filtered := make([]map[string]interface{}, 0, len(nodes))
+		for _, node := range nodes {
+			name, _ := node["name"].(string)
+			if !s.cfg.IsNameHidden(name) {
+				filtered = append(filtered, node)
+			}
+		}
+		nodes = filtered
+	}
 	writeJSON(w, NodeSearchResponse{Nodes: nodes})
 }
 
@@ -1443,7 +1486,13 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "Not found")
 		return
 	}
-	// From here on use the canonical pubkey for downstream lookups.
+	// Hide the node when its name matches an operator-configured prefix
+	// (#1181). 404 mirrors the blacklist behaviour above — callers learn
+	// nothing about whether the row exists.
+	if name, _ := node["name"].(string); s.cfg.IsNameHidden(name) {
+		writeError(w, 404, "Not found")
+		return
+	}
 	if pk, _ := node["public_key"].(string); pk != "" {
 		pubkey = pk
 	}
@@ -1488,6 +1537,10 @@ func (s *Server) handleNodeHealth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "Not found")
 		return
 	}
+	if s.isPubkeyHidden(pubkey) {
+		writeError(w, 404, "Not found")
+		return
+	}
 	if s.store != nil {
 		result, err := s.store.GetNodeHealth(pubkey)
 		if err != nil || result == nil {
@@ -1507,13 +1560,22 @@ func (s *Server) handleBulkHealth(w http.ResponseWriter, r *http.Request) {
 		region := r.URL.Query().Get("region")
 		area := r.URL.Query().Get("area")
 		results := s.store.GetBulkHealth(lim, region, area)
-		// Filter blacklisted nodes
-		if len(s.cfg.NodeBlacklist) > 0 {
+		// Filter blacklisted nodes + hidden-prefix nodes (#1181).
+		needsBlacklist := len(s.cfg.NodeBlacklist) > 0
+		needsHidden := len(s.cfg.HiddenNamePrefixes) > 0
+		if needsBlacklist || needsHidden {
 			filtered := make([]map[string]interface{}, 0, len(results))
 			for _, entry := range results {
-				if pk, ok := entry["public_key"].(string); !ok || !s.cfg.IsBlacklisted(pk) {
-					filtered = append(filtered, entry)
+				if pk, ok := entry["public_key"].(string); ok && needsBlacklist && s.cfg.IsBlacklisted(pk) {
+					continue
 				}
+				if needsHidden {
+					name, _ := entry["name"].(string)
+					if s.cfg.IsNameHidden(name) {
+						continue
+					}
+				}
+				filtered = append(filtered, entry)
 			}
 			writeJSON(w, filtered)
 			return
@@ -1538,6 +1600,10 @@ func (s *Server) handleNetworkStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	pubkey := mux.Vars(r)["pubkey"]
 	if s.cfg.IsBlacklisted(pubkey) {
+		writeError(w, 404, "Not found")
+		return
+	}
+	if s.isPubkeyHidden(pubkey) {
 		writeError(w, 404, "Not found")
 		return
 	}
@@ -1923,6 +1989,10 @@ func (s *Server) handleNodeAnalytics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "Not found")
 		return
 	}
+	if s.isPubkeyHidden(pubkey) {
+		writeError(w, 404, "Not found")
+		return
+	}
 	days := queryInt(r, "days", 7)
 	if days < 1 {
 		days = 1
@@ -2226,10 +2296,10 @@ func (s *Server) handleAnalyticsSubpathDetail(w http.ResponseWriter, r *http.Req
 		writeJSON(w, ErrorResp{Error: "Need at least 2 hops"})
 		return
 	}
-	// Reject if any hop is a blacklisted node.
-	if s.cfg != nil && len(s.cfg.NodeBlacklist) > 0 {
+	// Reject if any hop is a blacklisted or hidden-prefix node (#1181).
+	if s.cfg != nil && (len(s.cfg.NodeBlacklist) > 0 || len(s.cfg.HiddenNamePrefixes) > 0) {
 		for _, hop := range rawHops {
-			if s.cfg.IsBlacklisted(hop) {
+			if s.cfg.IsBlacklisted(hop) || s.isPubkeyHidden(hop) {
 				writeError(w, 404, "Not found")
 				return
 			}
@@ -2308,6 +2378,11 @@ func (s *Server) handleResolveHops(w http.ResponseWriter, r *http.Request) {
 					if s.cfg != nil && s.cfg.IsBlacklisted(ni.PublicKey) {
 						continue
 					}
+					// #1181: skip hidden-prefix nodes too. We have the
+					// name on ni so no extra DB lookup is needed.
+					if s.cfg != nil && s.cfg.IsNameHidden(ni.Name) {
+						continue
+					}
 					c := HopCandidate{Pubkey: ni.PublicKey}
 					if ni.Name != "" {
 						c.Name = ni.Name
@@ -2376,8 +2451,9 @@ func (s *Server) handleResolveHops(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// Use the resolved node as the default (best-effort pick).
-			// Skip if the best pick is a blacklisted node.
-			if best != nil && !(s.cfg != nil && s.cfg.IsBlacklisted(best.PublicKey)) {
+			// Skip if the best pick is blacklisted or has a hidden-prefix
+			// name (#1181).
+			if best != nil && !(s.cfg != nil && (s.cfg.IsBlacklisted(best.PublicKey) || s.cfg.IsNameHidden(best.Name))) {
 				hr.Name = best.Name
 				hr.Pubkey = best.PublicKey
 			}
@@ -3158,8 +3234,9 @@ func constantTimeEqual(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
-// filterBlacklistedFromTopology removes blacklisted node references from the
-// topology analytics response (TopRepeaters, TopPairs, BestPathList, MultiObsNodes, PerObserverReach).
+// filterBlacklistedFromTopology removes blacklisted + hidden-prefix node
+// references (#1181) from the topology analytics response (TopRepeaters,
+// TopPairs, BestPathList, MultiObsNodes, PerObserverReach).
 func (s *Server) filterBlacklistedFromTopology(data map[string]interface{}) map[string]interface{} {
 	// Filter TopRepeaters
 	if repeaters, ok := data["topRepeaters"]; ok {
@@ -3167,6 +3244,9 @@ func (s *Server) filterBlacklistedFromTopology(data map[string]interface{}) map[
 			var filtered []TopRepeater
 			for _, r := range arr {
 				if pk, ok := r.Pubkey.(string); ok && s.cfg.IsBlacklisted(pk) {
+					continue
+				}
+				if name, ok := r.Name.(string); ok && s.cfg.IsNameHidden(name) {
 					continue
 				}
 				filtered = append(filtered, r)
@@ -3186,6 +3266,12 @@ func (s *Server) filterBlacklistedFromTopology(data map[string]interface{}) map[
 				if pkB, ok := p.PubkeyB.(string); ok && s.cfg.IsBlacklisted(pkB) {
 					continue
 				}
+				if nameA, ok := p.NameA.(string); ok && s.cfg.IsNameHidden(nameA) {
+					continue
+				}
+				if nameB, ok := p.NameB.(string); ok && s.cfg.IsNameHidden(nameB) {
+					continue
+				}
 				filtered = append(filtered, p)
 			}
 			data["topPairs"] = filtered
@@ -3198,6 +3284,9 @@ func (s *Server) filterBlacklistedFromTopology(data map[string]interface{}) map[
 			var filtered []BestPathEntry
 			for _, p := range arr {
 				if pk, ok := p.Pubkey.(string); ok && s.cfg.IsBlacklisted(pk) {
+					continue
+				}
+				if pk, ok := p.Pubkey.(string); ok && s.isPubkeyHidden(pk) {
 					continue
 				}
 				filtered = append(filtered, p)
@@ -3214,6 +3303,9 @@ func (s *Server) filterBlacklistedFromTopology(data map[string]interface{}) map[
 				if pk, ok := n.Pubkey.(string); ok && s.cfg.IsBlacklisted(pk) {
 					continue
 				}
+				if name, ok := n.Name.(string); ok && s.cfg.IsNameHidden(name) {
+					continue
+				}
 				filtered = append(filtered, n)
 			}
 			data["multiObsNodes"] = filtered
@@ -3228,6 +3320,9 @@ func (s *Server) filterBlacklistedFromTopology(data map[string]interface{}) map[
 					var filteredNodes []ReachNode
 					for _, rn := range v.Rings[ri].Nodes {
 						if pk, ok := rn.Pubkey.(string); ok && s.cfg.IsBlacklisted(pk) {
+							continue
+						}
+						if name, ok := rn.Name.(string); ok && s.cfg.IsNameHidden(name) {
 							continue
 						}
 						filteredNodes = append(filteredNodes, rn)
@@ -3253,7 +3348,7 @@ func (s *Server) filterBlacklistedFromSubpaths(data map[string]interface{}) map[
 					if hops, ok := m["hops"].([]interface{}); ok {
 						skip := false
 						for _, h := range hops {
-							if hp, ok := h.(string); ok && s.cfg.IsBlacklisted(hp) {
+							if hp, ok := h.(string); ok && (s.cfg.IsBlacklisted(hp) || s.isPubkeyHidden(hp)) {
 								skip = true
 								break
 							}

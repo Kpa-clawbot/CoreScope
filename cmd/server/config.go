@@ -48,6 +48,28 @@ type Config struct {
 	// operator refuses to fix.
 	NodeBlacklist []string `json:"nodeBlacklist"`
 
+	// HiddenNamePrefixes is a list of name prefixes that mark a node as
+	// hidden from API responses (issue #1181). The default `["🚫"]` mirrors
+	// a convention used by other MeshCore map dashboards: operators who
+	// rename their node with the prefix get hidden from the map without
+	// waiting for normal retention to clear stale data. DB rows are
+	// preserved — the filter is applied at the API layer only, so the
+	// underlying observation history remains intact.
+	HiddenNamePrefixes []string `json:"hiddenNamePrefixes"`
+
+	// hiddenPrefixesPtr holds the active prefix slice as an atomic pointer.
+	// Read path (IsNameHidden) is a single atomic load — no mutex, no
+	// sync.Once. Writers always replace the whole slice; readers see either
+	// the old or the new slice as a single value, never a partial state.
+	// Mirrors blacklistSetPtr.
+	hiddenPrefixesPtr atomic.Pointer[[]string]
+
+	// hiddenPrefixesGen is a monotonic counter bumped every time the
+	// hidden-prefix list mutates via SetHiddenNamePrefixes. Cache wiring
+	// is left for follow-up; the counter is the prerequisite primitive
+	// callers will key on (mirrors blacklistGen / #1629).
+	hiddenPrefixesGen atomic.Uint64
+
 	// blacklistSetPtr holds the active lookup set as an atomic pointer.
 	// Read path is a single atomic load — no mutex, no sync.Once. Writers
 	// always replace the whole map; readers see either the old or the new
@@ -725,6 +747,73 @@ func (c *Config) IsBlacklisted(pubkey string) bool {
 		return false
 	}
 	return (*mp)[strings.ToLower(strings.TrimSpace(pubkey))]
+}
+
+// IsNameHidden returns true if the given node name starts with any of the
+// operator-configured HiddenNamePrefixes (issue #1181). Empty/whitespace
+// prefixes are ignored. Used to drop nodes from /api/nodes, /api/nodes/search
+// and /api/nodes/{pubkey} without deleting the underlying DB row, so observer
+// history stays intact even after the operator hides the node.
+//
+// Hot read path: a single atomic pointer load. No locks, no sync.Once.
+// Writers always replace the whole slice; readers see either the old or
+// the new slice as a single value, never a partially-built one. Mirrors
+// IsBlacklisted's CAS-style lazy first-read materialisation for the
+// JSON-load path where SetHiddenNamePrefixes was never called.
+func (c *Config) IsNameHidden(name string) bool {
+	if c == nil {
+		return false
+	}
+	pp := c.hiddenPrefixesPtr.Load()
+	if pp == nil {
+		// Lazy first-read materialisation from the JSON-loaded slice.
+		// CAS-style: if another goroutine wins the race, drop ours.
+		built := make([]string, len(c.HiddenNamePrefixes))
+		copy(built, c.HiddenNamePrefixes)
+		if c.hiddenPrefixesPtr.CompareAndSwap(nil, &built) {
+			pp = &built
+		} else {
+			pp = c.hiddenPrefixesPtr.Load()
+		}
+	}
+	if pp == nil || len(*pp) == 0 {
+		return false
+	}
+	for _, p := range *pp {
+		if p == "" {
+			continue
+		}
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// SetHiddenNamePrefixes atomically replaces HiddenNamePrefixes with the
+// given slice and bumps the generation counter. Safe for concurrent use
+// with IsNameHidden / HiddenNamePrefixesGeneration. Mirrors
+// SetNodeBlacklist (#1629).
+func (c *Config) SetHiddenNamePrefixes(prefixes []string) {
+	if c == nil {
+		return
+	}
+	cp := make([]string, len(prefixes))
+	copy(cp, prefixes)
+	c.HiddenNamePrefixes = cp
+	c.hiddenPrefixesPtr.Store(&cp)
+	c.hiddenPrefixesGen.Add(1)
+}
+
+// HiddenNamePrefixesGeneration returns a monotonic counter that increments
+// on every SetHiddenNamePrefixes call. Response caches keyed per-pubkey can
+// embed this value in their cache key so any prefix mutation invalidates
+// prior entries on the next request — same pattern as BlacklistGeneration.
+func (c *Config) HiddenNamePrefixesGeneration() uint64 {
+	if c == nil {
+		return 0
+	}
+	return c.hiddenPrefixesGen.Load()
 }
 
 // SaveGeoFilter writes the geo_filter section back to config.json on disk.

@@ -3,6 +3,8 @@
   "apiKey": "your-secret-api-key-here",
   "nodeBlacklist": [],
   "_comment_nodeBlacklist": "Public keys of nodes to hide from all API responses. Use for trolls, offensive names, or nodes reporting false data that operators refuse to fix.",
+  "hiddenNamePrefixes": ["🚫"],
+  "_comment_hiddenNamePrefixes": "Node name prefixes that mark a node as hidden from this dashboard (#1181). Mirrors a convention used by other MeshCore map dashboards: an operator who wants their node hidden renames it to start with one of these prefixes and sends an advert; the next advert is dropped from /api/nodes, /api/nodes/search and /api/nodes/{pubkey}. DB rows are preserved so observation history (paths, hops, distances) stays intact for analytics. The node is NOT hidden from the mesh itself — only from this dashboard. Set to [] to disable. Default: [\"🚫\"].",
   "observerIATAWhitelist": [],
   "_comment_observerIATAWhitelist": "Global IATA region whitelist. When non-empty, only observers whose IATA code (from MQTT topic) matches are processed. Case-insensitive. Empty = allow all. Unlike per-source iataFilter, this applies across all MQTT sources.",
   "retention": {
