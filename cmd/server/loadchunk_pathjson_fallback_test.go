@@ -37,6 +37,7 @@ func createTestDBPathJSONNoResolvedPath(t *testing.T, relayPubkey, hopPrefix, fi
 		}
 	}
 
+	// PREFLIGHT: async=true reason="test fixture: in-memory t.TempDir SQLite, never touches a real DB. Tables are CREATE-from-empty in a one-shot OpenDB call, not a schema migration over existing data."
 	exec(`CREATE TABLE transmissions (
 		id INTEGER PRIMARY KEY,
 		raw_hex TEXT, hash TEXT, first_seen TEXT,
@@ -44,6 +45,7 @@ func createTestDBPathJSONNoResolvedPath(t *testing.T, relayPubkey, hopPrefix, fi
 		decoded_json TEXT
 	)`)
 	// resolved_path column present (matches live schema) but left NULL.
+	// PREFLIGHT: async=true reason="test fixture, in-memory tmpdir DB"
 	exec(`CREATE TABLE observations (
 		id INTEGER PRIMARY KEY,
 		transmission_id INTEGER,
@@ -53,15 +55,19 @@ func createTestDBPathJSONNoResolvedPath(t *testing.T, relayPubkey, hopPrefix, fi
 		raw_hex TEXT,
 		resolved_path TEXT
 	)`)
+	// PREFLIGHT: async=true reason="test fixture, in-memory tmpdir DB"
 	exec(`CREATE TABLE observers (rowid INTEGER PRIMARY KEY, id TEXT, name TEXT, iata TEXT)`)
 	// Production nodes schema uses public_key (not pubkey) — getAllNodes /
 	// buildPrefixMap reads public_key, role, advert_count, first_seen.
+	// PREFLIGHT: async=true reason="test fixture, in-memory tmpdir DB"
 	exec(`CREATE TABLE nodes (
 		public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL,
 		last_seen TEXT, first_seen TEXT, advert_count INTEGER DEFAULT 0
 	)`)
+	// PREFLIGHT: async=true reason="test fixture, in-memory tmpdir DB"
 	exec(`CREATE TABLE schema_version (version INTEGER)`)
 	exec(`INSERT INTO schema_version (version) VALUES (1)`)
+	// PREFLIGHT: async=true reason="test fixture, in-memory tmpdir DB"
 	exec(`CREATE INDEX idx_tx_first_seen ON transmissions(first_seen)`)
 
 	// Repeater node so canAppearInPath() admits it to the prefix map.
