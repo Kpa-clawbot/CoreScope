@@ -87,8 +87,9 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
       !document.getElementById('chEncryptedBody').hasAttribute('hidden'));
     const lockBadge = await page.$('.ch-section-encrypted .ch-badge');
     assert(lockBadge, 'encrypted section should render badges');
-    const txt = await page.textContent('.ch-section-encrypted .ch-badge');
-    assert(/🔒/.test(txt), 'encrypted badge should show lock glyph: ' + txt);
+    // #1648 M3: lock badge is a Phosphor sprite ref (was 🔒 emoji)
+    const html = await page.$eval('.ch-section-encrypted .ch-badge', el => el.innerHTML);
+    assert(/#ph-lock/.test(html), 'encrypted badge should reference ph-lock sprite: ' + html);
   });
 
   await step('Network row preview shows last sender:message', async () => {
