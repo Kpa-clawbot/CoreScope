@@ -212,6 +212,7 @@
    When changing dark theme variables, update BOTH blocks below. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --status-green: #22c55e;
     --status-yellow: #eab308;
     --status-red: #ef4444;
@@ -244,6 +245,7 @@
 }
 /* ⚠️ DARK THEME VARIABLES — KEEP IN SYNC with @media block above */
 [data-theme="dark"] {
+  color-scheme: dark;
   /* Brighter link-strength hues for contrast on dark map tiles + surfaces. */
   --link-strong: #3fb950;
   --link-medium: #d29922;
@@ -448,6 +450,16 @@ input[type="week"] {
   min-height: 48px;
   box-sizing: border-box;
   touch-action: manipulation;
+}
+
+/* Theme the UA-native checkbox + radio so they pick up the page accent
+ * instead of rendering as bare white squares against the dark theme.
+ * Pairs with `color-scheme: dark` on the dark-theme rule so the box
+ * surround also re-skins. (Tufte #1646 — bare native widgets are
+ * chartjunk-by-omission: they advertise the chrome, not the data.) */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--accent);
 }
 
 /* Visible :active states — touch devices have no hover, so :active is the
