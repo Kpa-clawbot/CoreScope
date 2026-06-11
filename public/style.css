@@ -3572,11 +3572,12 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
 .compare-bar-seg {
   transition: width 240ms ease;
   /* #1646: Tufte/honesty — a 1–2% segment must still be visible or
-   * the chart is lying about presence. Floor each non-zero segment
-   * at 6px (the proportional encoding stays correct above ~3% and
-   * degrades gracefully below). The bar is height:10px so 6px wide
-   * reads as a square pip the eye can see. */
-  min-width: 6px;
+   * the chart is lying about presence. This is a *presence floor only*,
+   * not a perception-equivalent floor: 2px is the smallest pip the
+   * eye can reliably register on a 10px-tall bar without falsely
+   * equating a 1% and a 5% slice (which a 6px floor would do).
+   * Above ~2% the proportional encoding remains accurate. */
+  min-width: 2px;
 }
 .compare-bar-a    { background: var(--accent); }
 .compare-bar-both { background: var(--status-green); }
