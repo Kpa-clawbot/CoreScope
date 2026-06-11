@@ -3444,7 +3444,18 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
   border-radius: var(--radius-md);
   padding: var(--space-sm) var(--space-md);
   margin-bottom: var(--space-md);
+  transition: padding 160ms ease;
 }
+/* Once both observers are picked, the headline strip below is the
+ * answer. Demote the picker: tighter padding, smaller labels,
+ * muted Compare CTA. Operators can still swap A/B without leaving
+ * the page. Tufte / parent finding #5 (#1646). */
+.compare-controls.is-collapsed {
+  padding: 4px var(--space-md);
+}
+.compare-controls.is-collapsed .compare-select-group label { display: none; }
+.compare-controls.is-collapsed .compare-select { font-size: var(--fs-sm); padding: 4px 8px; }
+.compare-controls.is-collapsed #compareBtn { display: none; }
 .compare-selector {
   display: flex; align-items: flex-end; gap: var(--space-sm); flex-wrap: wrap;
 }
@@ -3466,15 +3477,10 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
   align-self: center;
   opacity: 0.7;
 }
-/* Compare-now action — primary accent button, reuses .btn-primary visuals
- * but lives inside the controls strip with consistent height. */
-.compare-btn {
-  padding: 6px 14px; border: 1px solid var(--accent); border-radius: var(--radius-sm);
-  background: var(--accent); color: #fff; font-size: var(--fs-sm); font-weight: 700;
-  cursor: pointer; transition: background 120ms, opacity 120ms;
-}
-.compare-btn:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
-.compare-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+/* Compare-now action moved to .btn-ghost (#1646). The legacy
+ * .compare-btn class is retained only in the touch-target list
+ * above to avoid disturbing the shared 48-px-min-tap rule; no
+ * element uses .compare-btn standalone any more. */
 
 .compare-results { margin-top: var(--space-md); }
 

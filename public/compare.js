@@ -168,7 +168,7 @@ if (typeof window !== 'undefined') {
           '<label for="compareObsB">Observer B</label>' +
           '<select id="compareObsB" class="compare-select">' + optionsHtml + '</select>' +
         '</div>' +
-        '<button id="compareBtn" class="compare-btn" disabled>Compare</button>' +
+        '<button id="compareBtn" class="btn-ghost compare-btn-ghost" disabled>Compare</button>' +
         '<div class="compare-select-group">' +
           '<label for="compareRouteFilter">Packet Type</label>' +
           '<select id="compareRouteFilter" class="compare-select">' +
@@ -197,6 +197,18 @@ if (typeof window !== 'undefined') {
       selA = ddA.value || null;
       selB = ddB.value || null;
       btn.disabled = !selA || !selB || selA === selB;
+      // #1646 — once both observers are chosen, demote the picker. The
+      // headline strip below it carries the answer; the picker only
+      // needs to be reachable for swapping A/B, not the page's
+      // headline element. Toggle .is-collapsed on the wrapper so CSS
+      // can shrink it (the expanded form is reachable via the "Edit"
+      // affordance the CSS reveals on hover/focus).
+      var wrap = document.getElementById('compareControls');
+      if (wrap) {
+        var collapsed = !!(selA && selB && selA !== selB);
+        wrap.classList.toggle('is-collapsed', collapsed);
+        wrap.setAttribute('data-collapsed', collapsed ? 'true' : 'false');
+      }
       renderBreadcrumbs();
     }
     ddA.addEventListener('change', updateBtn);
