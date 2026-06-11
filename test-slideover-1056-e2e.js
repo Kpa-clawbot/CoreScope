@@ -17,6 +17,15 @@ const { chromium } = require('playwright');
 
 const BASE = process.env.BASE_URL || 'http://localhost:13581';
 
+// #1662 round-1 fix (carmack): the first-row wait now awaits the strict
+// `tr[data-id]` selector for packets, which only appears AFTER the async
+// data fetch resolves. The old 8000ms ceiling matched a loose `tbody tr`
+// gate that returned ~instantly on the spacer row; the strict gate can
+// genuinely take longer under load (the slide-over wait below already uses
+// 15000ms acknowledging the same async data path). Use one constant so the
+// two stay aligned.
+const DATA_LOAD_TIMEOUT_MS = 15000;
+
 let passed = 0, failed = 0;
 async function step(name, fn) {
   try { await fn(); passed++; console.log('  ✓ ' + name); }
@@ -78,7 +87,7 @@ const PAGES = [
       await page.waitForFunction(({ tableSel, waitSel }) => {
         const t = document.querySelector(tableSel);
         return !!(t && t.querySelector(waitSel));
-      }, { tableSel: p.tableSel, waitSel: p.waitSel }, { timeout: 8000 });
+      }, { tableSel: p.tableSel, waitSel: p.waitSel }, { timeout: DATA_LOAD_TIMEOUT_MS });
     });
 
     await step(`${tag}: clicking row opens slide-over with backdrop`, async () => {
@@ -92,8 +101,15 @@ const PAGES = [
         // is a spacer with no data-* attrs and no click handler. Skip those:
         // pick the first row that actually carries a delegated action.
         const candidates = Array.from(rows);
+        // #1662 round-1 fix: match the strictness of the wait predicate.
+        // Packets rows carry `data-id` (not data-action/data-value); without
+        // a `data-id` branch the picker falls through to `children.length>0`,
+        // which could still pick the virtual-scroll spacer if it ever renders
+        // a child cell. Order: data-action → data-value → data-id → (last
+        // resort) any row with children.
         const row = candidates.find(r => r.hasAttribute('data-action'))
                 || candidates.find(r => r.hasAttribute('data-value'))
+                || candidates.find(r => r.hasAttribute('data-id'))
                 || candidates.find(r => r.children.length > 0);
         if (!row) return { ok: false, why: 'no row', rowCount: rows.length };
         // Click a real cell (avoid empty/loading rows)
@@ -235,8 +251,10 @@ const PAGES = [
         const t = document.querySelector(sel);
         if (!t) return;
         const rows = Array.from(t.querySelectorAll('tbody tr'));
+        // #1662 round-1 fix: include `data-id` branch to match wait strictness.
         const row = rows.find(r => r.hasAttribute('data-action'))
                 || rows.find(r => r.hasAttribute('data-value'))
+                || rows.find(r => r.hasAttribute('data-id'))
                 || rows.find(r => r.children.length > 0);
         if (!row) return;
         const td = row.querySelector('td:not(:empty)') || row;
@@ -268,8 +286,10 @@ const PAGES = [
         const t = document.querySelector(sel);
         if (!t) return;
         const rows = Array.from(t.querySelectorAll('tbody tr'));
+        // #1662 round-1 fix: include `data-id` branch to match wait strictness.
         const row = rows.find(r => r.hasAttribute('data-action'))
                 || rows.find(r => r.hasAttribute('data-value'))
+                || rows.find(r => r.hasAttribute('data-id'))
                 || rows.find(r => r.children.length > 0);
         if (!row) return;
         const td = row.querySelector('td:not(:empty)') || row;
