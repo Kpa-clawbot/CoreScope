@@ -97,10 +97,10 @@ window.ObserversSummary = (function () {
     }
     return ''
       + '<div class="obs-summary">'
-      +   '<span class="obs-stat"><span class="health-dot health-green">\u25CF</span> ' + c.online + ' Online</span>'
-      +   '<span class="obs-stat"><span class="health-dot health-yellow">\u25B2</span> ' + c.stale + ' Stale</span>'
-      +   '<span class="obs-stat"><span class="health-dot health-red">\u2715</span> ' + c.offline + ' Offline</span>'
-      +   '<span class="obs-stat">\uD83D\uDCE1 ' + c.total + ' Total</span>'
+      +   '<span class="obs-stat"><span class="health-dot health-green"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"></use></svg></span> ' + c.online + ' Online</span>'
+      +   '<span class="obs-stat"><span class="health-dot health-yellow"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-triangle"></use></svg></span> ' + c.stale + ' Stale</span>'
+      +   '<span class="obs-stat"><span class="health-dot health-red"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-x"></use></svg></span> ' + c.offline + ' Offline</span>'
+      +   '<span class="obs-stat"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-broadcast"></use></svg> ' + c.total + ' Total</span>'
       +   updatedHtml
       + '</div>';
   }
