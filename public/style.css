@@ -7,6 +7,12 @@
 .ph-icon {
   width: 1em;
   height: 1em;
+  /* #1648 M1 follow-up: icons are 1em-sized so they scale with the
+   * surrounding text — but several nav surfaces use a smaller font-size
+   * (top-nav text is ~12.8px), which dropped the rendered icon below the
+   * intended 16px floor. Pin .ph-icon's own font-size to 16px so the
+   * icon scales independently of the parent's text size. */
+  font-size: 16px;
   vertical-align: -0.125em;
   fill: currentColor;
   flex-shrink: 0;
