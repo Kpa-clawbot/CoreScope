@@ -1353,6 +1353,20 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		total = len(filtered)
 		nodes = filtered
 	}
+	// Filter nodes whose name starts with a hidden prefix (#1181). DB rows
+	// are preserved — this only drops them from the API surface so observer
+	// history (paths, hops, distances) remains intact for analytics.
+	if len(s.cfg.HiddenNamePrefixes) > 0 {
+		filtered := nodes[:0]
+		for _, node := range nodes {
+			name, _ := node["name"].(string)
+			if !s.cfg.IsNameHidden(name) {
+				filtered = append(filtered, node)
+			}
+		}
+		total = len(filtered)
+		nodes = filtered
+	}
 	// Filter by area
 	if area := q.Get("area"); area != "" {
 		var areaNodes map[string]bool
@@ -1405,6 +1419,17 @@ func (s *Server) handleNodeSearch(w http.ResponseWriter, r *http.Request) {
 		}
 		nodes = filtered
 	}
+	// Drop hidden-prefix nodes from search results (#1181).
+	if len(s.cfg.HiddenNamePrefixes) > 0 {
+		filtered := make([]map[string]interface{}, 0, len(nodes))
+		for _, node := range nodes {
+			name, _ := node["name"].(string)
+			if !s.cfg.IsNameHidden(name) {
+				filtered = append(filtered, node)
+			}
+		}
+		nodes = filtered
+	}
 	writeJSON(w, NodeSearchResponse{Nodes: nodes})
 }
 
@@ -1443,7 +1468,13 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "Not found")
 		return
 	}
-	// From here on use the canonical pubkey for downstream lookups.
+	// Hide the node when its name matches an operator-configured prefix
+	// (#1181). 404 mirrors the blacklist behaviour above — callers learn
+	// nothing about whether the row exists.
+	if name, _ := node["name"].(string); s.cfg.IsNameHidden(name) {
+		writeError(w, 404, "Not found")
+		return
+	}
 	if pk, _ := node["public_key"].(string); pk != "" {
 		pubkey = pk
 	}

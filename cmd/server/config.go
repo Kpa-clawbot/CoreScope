@@ -736,6 +736,26 @@ func (c *Config) IsBlacklisted(pubkey string) bool {
 	return (*mp)[strings.ToLower(strings.TrimSpace(pubkey))]
 }
 
+// IsNameHidden returns true if the given node name starts with any of the
+// operator-configured HiddenNamePrefixes (issue #1181). Empty/whitespace
+// prefixes are ignored. Used to drop nodes from /api/nodes, /api/nodes/search
+// and /api/nodes/{pubkey} without deleting the underlying DB row, so observer
+// history stays intact even after the operator hides the node.
+func (c *Config) IsNameHidden(name string) bool {
+	if c == nil || len(c.HiddenNamePrefixes) == 0 {
+		return false
+	}
+	for _, p := range c.HiddenNamePrefixes {
+		if p == "" {
+			continue
+		}
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // SaveGeoFilter writes the geo_filter section back to config.json on disk.
 // Pass gf=nil to remove the filter. The rest of config.json is preserved as-is.
 func SaveGeoFilter(configDir string, gf *GeoFilterConfig) error {
