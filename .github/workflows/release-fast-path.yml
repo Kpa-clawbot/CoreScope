@@ -1,0 +1,111 @@
+name: Release Fast-Path
+
+# Issue #1677: re-tag :edge as :vX.Y.Z when the tag SHA matches :edge's
+# org.opencontainers.image.revision label. Skips ~30 min of Go test +
+# Playwright + Docker rebuild because the bytes are identical — only the
+# manifest name changes. Falls back to deploy.yml when SHAs differ so
+# tags on older commits still go through full validation.
+#
+# This workflow is the SOLE consumer of push.tags. deploy.yml's tag
+# trigger has been removed to prevent double-fire.
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: release-fast-path-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  retag-or-fallback:
+    name: "🏷️ Re-tag :edge → :vX.Y.Z (fast) or dispatch deploy.yml (fallback)"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install crane
+        uses: imjasonh/setup-crane@v0.4
+
+      - name: Parse semver from tag
+        id: semver
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+          # Expect vMAJOR.MINOR.PATCH (workflow trigger already enforces this).
+          if [[ ! "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "Tag $TAG does not match vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          MAJOR="${BASH_REMATCH[1]}"
+          MINOR="${BASH_REMATCH[2]}"
+          {
+            echo "tag=$TAG"
+            echo "vMajor=v$MAJOR"
+            echo "vMajorMinor=v$MAJOR.$MINOR"
+          } >> "$GITHUB_OUTPUT"
+          echo "Parsed: $TAG → v$MAJOR / v$MAJOR.$MINOR / $TAG"
+
+      - name: Inspect :edge revision label
+        id: edge
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/kpa-clawbot/corescope"
+          EDGE_REF="${IMAGE}:edge"
+          # crane config returns the OCI image config JSON; the revision label
+          # is set by docker/metadata-action on the master-edge build.
+          # If :edge doesn't exist yet (first run on a fresh registry), fall
+          # through to the slow path.
+          if ! CONFIG="$(crane config "$EDGE_REF" 2>/dev/null)"; then
+            echo "edge_revision=" >> "$GITHUB_OUTPUT"
+            echo "no_edge=true"   >> "$GITHUB_OUTPUT"
+            echo ":edge not found in registry — will use fallback path"
+            exit 0
+          fi
+          REV="$(echo "$CONFIG" | jq -r '.config.Labels["org.opencontainers.image.revision"] // ""')"
+          echo "edge_revision=$REV" >> "$GITHUB_OUTPUT"
+          echo "no_edge=false"      >> "$GITHUB_OUTPUT"
+          echo ":edge org.opencontainers.image.revision = $REV"
+          echo "tag SHA (github.sha)               = ${{ github.sha }}"
+
+      # ─────────── FAST PATH: SHAs match, metadata-only retag ───────────
+      - name: Re-tag :edge → :vX.Y.Z + :vX.Y + :vX + :latest (fast path)
+        if: steps.edge.outputs.no_edge == 'false' && steps.edge.outputs.edge_revision == github.sha
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/kpa-clawbot/corescope"
+          SRC="${IMAGE}:edge"
+          echo "SHA match — fast-path re-tag from $SRC"
+          for NEW_TAG in \
+              "${{ steps.semver.outputs.tag }}" \
+              "${{ steps.semver.outputs.vMajorMinor }}" \
+              "${{ steps.semver.outputs.vMajor }}" \
+              "latest"; do
+            echo "  crane tag $SRC $NEW_TAG"
+            crane tag "$SRC" "$NEW_TAG"
+          done
+          echo "Fast-path complete — all tags point at the :edge manifest digest."
+
+      # ─────────── FALLBACK: SHAs differ, run the full pipeline ───────────
+      - name: Dispatch full deploy.yml pipeline (fallback)
+        if: steps.edge.outputs.no_edge == 'true' || steps.edge.outputs.edge_revision != github.sha
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "SHA mismatch (or no :edge) — falling back to full pipeline"
+          echo "  :edge revision = '${{ steps.edge.outputs.edge_revision }}'"
+          echo "  tag SHA        = '${{ github.sha }}'"
+          gh workflow run deploy.yml \
+            --repo "${{ github.repository }}" \
+            --ref "${{ github.ref }}"
+          echo "Dispatched deploy.yml against ${{ github.ref }}"
