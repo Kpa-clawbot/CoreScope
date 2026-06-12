@@ -62,7 +62,7 @@
       var lastUnix = Number(info.lastReceiptUnix);
       if (!lastUnix || !isFinite(lastUnix)) continue;
       var ageMs = nowMs - lastUnix * 1000;
-      if (ageMs > STALE_INGEST_MS) {
+      if (ageMs >= STALE_INGEST_MS) {
         var ageMin = Math.floor(ageMs / 60000);
         msgs.push('No packets from ' + src + ' in ' + ageMin + ' min.');
       }
