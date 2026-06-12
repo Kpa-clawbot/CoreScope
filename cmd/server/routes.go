@@ -230,6 +230,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/perf/io", s.handlePerfIO).Methods("GET")
 	r.HandleFunc("/api/perf/sqlite", s.handlePerfSqlite).Methods("GET")
 	r.HandleFunc("/api/perf/write-sources", s.handlePerfWriteSources).Methods("GET")
+	r.HandleFunc("/api/mqtt/status", s.handleMqttStatus).Methods("GET")
 	r.Handle("/api/perf/reset", s.requireAPIKey(http.HandlerFunc(s.handlePerfReset))).Methods("POST")
 	// /api/admin/prune removed in #1283 — pruning is owned by the
 	// ingestor process (scheduled tickers + startup pass). Operators
