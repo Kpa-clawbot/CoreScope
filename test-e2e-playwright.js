@@ -3404,28 +3404,29 @@ async function run() {
     }
   });
 
-  await test('#1528 .vcr-scope-btn.active background tracks --accent-bg (token swap, not blue literal)', async () => {
+  await test('#1528 .vcr-scope-btn.active background tracks --accent-strong (token swap, not blue literal)', async () => {
+    // M4 #1668 swapped this rule from --accent-bg → --accent-strong to clear an
+    // AA contrast BLOCKER (2.98:1 on the wash). Both background and border now
+    // consume --accent-strong, so the test overrides that single token and
+    // asserts both properties follow it. Intent is unchanged: prove the rule
+    // tracks a token, not a hardcoded rgba(59,130,246,...) literal.
     await page.goto(`${BASE}/#/live`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.vcr-scope-btn.active', { timeout: 8000 });
     const result = await page.evaluate(() => {
       const el = document.querySelector('.vcr-scope-btn.active');
-      // Override --accent-bg with a clearly non-blue sentinel so we can detect
-      // whether the rule actually consumes the token (good) or a hardcoded
-      // rgba(59,130,246,...) literal (bad — the theming illusion this fix targets).
-      // Use !important so we beat any customizer-injected :root override.
-      document.documentElement.style.setProperty('--accent-bg', 'rgb(255, 0, 0)', 'important');
-      document.documentElement.style.setProperty('--accent-border', 'rgb(0, 200, 0)', 'important');
+      // Override --accent-strong with a clearly non-blue sentinel. Use !important
+      // so we beat any customizer-injected :root override.
+      document.documentElement.style.setProperty('--accent-strong', 'rgb(255, 0, 0)', 'important');
       const bg = window.getComputedStyle(el).backgroundColor;
       const border = window.getComputedStyle(el).borderColor;
-      document.documentElement.style.removeProperty('--accent-bg');
-      document.documentElement.style.removeProperty('--accent-border');
+      document.documentElement.style.removeProperty('--accent-strong');
       return { bg, border };
     });
-    // Background should reflect our sentinel red, not blue.
+    // Both background and border should reflect our sentinel red, not blue.
     assert(/^rgb\(255,\s*0,\s*0\)/.test(result.bg),
-      `.vcr-scope-btn.active bg should track --accent-bg, got ${result.bg}`);
-    assert(/^rgb\(0,\s*200,\s*0\)/.test(result.border),
-      `.vcr-scope-btn.active border should track --accent-border, got ${result.border}`);
+      `.vcr-scope-btn.active bg should track --accent-strong, got ${result.bg}`);
+    assert(/^rgb\(255,\s*0,\s*0\)/.test(result.border),
+      `.vcr-scope-btn.active border should track --accent-strong, got ${result.border}`);
   });
 
   await browser.close();
