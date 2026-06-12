@@ -1737,7 +1737,7 @@
     const linesAttr = (spec.lines && spec.lines.length)
       ? ' data-tip-lines="' + esc(spec.lines.join('\u001f')) + '"'
       : '';
-    return `<td class="hash-cell ${cls}${count ? ' hash-active' : ''}" data-hex="${hex}"${hexAttr}${statusAttr}${linesAttr} style="width:${cellSize}px;height:${cellSize}px;text-align:center;${bg}border:1px solid var(--border);cursor:${count ? 'pointer' : 'default'};font-size:11px;font-weight:${fontWeight}">${hex}</td>`;
+    return `<td class="hash-cell ${cls}${count ? ' hash-active' : ''}" data-hex="${hex}"${hexAttr}${statusAttr}${linesAttr} style="width:${cellSize}px;height:${cellSize}px;text-align:center;${bg}border:1px solid var(--border);cursor:${count ? 'pointer' : 'default'};font-size:12px;font-weight:${fontWeight}">${hex}</td>`;
   }
 
   // hashTooltipSpec — returns a plain-data tooltip descriptor consumed by

@@ -188,93 +188,106 @@ while ((mm = entryRe.exec(tcMatch[1])) !== null) {
   typeColors[mm[1]] = mm[2];
 }
 
-// Inspect what syncBadgeColors emits. Two valid patterns satisfy M4:
-//   (a) "color: #fff" — only safe if every TYPE_COLOR has lum<0.45 (white-on-color AA)
-//   (b) "color: readableFg(color)" / luminance-driven pick — preferred
-// We require AT LEAST one of these patterns to be present AND every emitted
-// (fg,bg) pair to clear WCAG AA for normal text (>=4.5).
-//
-// We simulate the emit by running syncBadgeColors's logic in a JS-ish way:
-// extract the css = ... assignment body and look at what color/background
-// strings will be written for each TYPE.
+// Anti-tautology: actually EXECUTE syncBadgeColors in a sandbox and read
+// the emitted CSS, rather than pattern-matching the source. The contract
+// is: for every TYPE in TYPE_BADGE_MAP, the emitted `.badge-${cls}` rule
+// must produce a (fg,bg) pair that clears WCAG AA (>=4.5:1).
 
-const syncFnMatch = rolesJs.match(/syncBadgeColors\s*=\s*function[\s\S]*?\n\s*\};/);
-assert.ok(syncFnMatch, 'syncBadgeColors not found in roles.js');
-const syncBody = syncFnMatch[0];
+const vm = require('vm');
 
-// Find what fg-emit pattern is used. Recognised:
-//   color: ' + color + '          -> fg = bg color (M1/M2 -> always FAIL)
-//   color: #fff                   -> fg always white
-//   color: readableFg(color)      -> luminance pick (preferred)
-const usesColorEqBg = /color:\s*'\s*\+\s*color/.test(syncBody);
-const usesFixedWhite = /color:\s*#fff/i.test(syncBody);
-const usesReadable = /readableFg\s*\(/.test(syncBody);
+// Minimal DOM stub — syncBadgeColors only touches document.getElementById
+// / createElement / head.appendChild and sets textContent on the <style>.
+let emittedCss = '';
+const styleStub = { set textContent(v) { emittedCss = v; }, get textContent() { return emittedCss; } };
+const sandbox = {
+  window: { TYPE_COLORS: { ...typeColors } },
+  document: {
+    getElementById: () => null,
+    createElement: () => styleStub,
+    head: { appendChild: () => {} },
+    readyState: 'complete',
+    addEventListener: () => {},
+  },
+  Object,
+  console,
+};
+sandbox.window.document = sandbox.document;
 
-let badgeFails = 0;
-const badgeRows = [];
+// Wrap roles.js in a function scope so its top-level IIFE / var decls
+// resolve against our sandbox `window`. The file has an outer
+// `(function(){ ... })();` wrapper — running it in the sandbox is enough.
+vm.createContext(sandbox);
+try {
+  vm.runInContext(rolesJs, sandbox, { filename: 'public/roles.js', timeout: 5000 });
+} catch (e) {
+  // Some references (URL, Proxy on DOM) may throw — we only need
+  // syncBadgeColors to exist. Re-eval just the syncBadgeColors block if
+  // the full file blew up.
+  console.warn('roles.js sandbox load warning:', e.message);
+}
 
-function computeFgForBg(bgHex) {
-  if (usesReadable) {
-    const [r, g, b] = hexToRgb(bgHex);
-    const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-    return lum > 0.55 ? [26, 26, 46] : [255, 255, 255]; // #1a1a2e dark text or white
+assert.ok(typeof sandbox.window.syncBadgeColors === 'function', 'syncBadgeColors not exposed on window after sandbox load');
+
+// Trigger emission.
+emittedCss = '';
+sandbox.window.syncBadgeColors();
+assert.ok(emittedCss.length > 0, 'syncBadgeColors emitted no CSS');
+
+function parseRgbFromCss(token) {
+  token = token.trim();
+  let m = token.match(/^#([0-9a-f]{6})$/i);
+  if (m) {
+    return [parseInt(m[1].slice(0,2),16), parseInt(m[1].slice(2,4),16), parseInt(m[1].slice(4,6),16)];
   }
-  if (usesColorEqBg) {
-    // simulate fg === bg over light card-bg (#fff)
-    return hexToRgb(bgHex);
-  }
-  if (usesFixedWhite) return [255, 255, 255];
+  m = token.match(/^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/);
+  if (m) return [+m[1], +m[2], +m[3]];
   return null;
 }
 
-function simulatedBg(bgHex) {
-  if (usesColorEqBg) {
-    // background: ${color}20  ≈ rgba(color, 0.125) on white → blend
-    const [r, g, b] = hexToRgb(bgHex);
-    const a = 0.125;
-    return [Math.round(255 * (1 - a) + r * a), Math.round(255 * (1 - a) + g * a), Math.round(255 * (1 - a) + b * a)];
-  }
-  // solid color background (M4 fix)
-  return hexToRgb(bgHex);
-}
+const TYPE_BADGE_MAP_LOCAL = {
+  ADVERT: 'advert', GRP_TXT: 'grp-txt', GRP_DATA: 'grp-data', TXT_MSG: 'txt-msg', ACK: 'ack',
+  REQUEST: 'req', RESPONSE: 'response', TRACE: 'trace', PATH: 'path',
+  ANON_REQ: 'anon-req', MULTIPART: 'multipart', CONTROL: 'control', RAW_CUSTOM: 'raw-custom',
+  UNKNOWN: 'unknown',
+};
 
-for (const [type, color] of Object.entries(typeColors)) {
-  const fg = computeFgForBg(color);
-  const bg = simulatedBg(color);
-  if (!fg) {
-    badgeRows.push({ type, color, ratio: NaN, ok: false });
+let badgeFails = 0;
+const badgeRows = [];
+for (const type of Object.keys(typeColors)) {
+  const cls = TYPE_BADGE_MAP_LOCAL[type] || type.toLowerCase();
+  const ruleRe = new RegExp(`\\.badge-${cls.replace(/[-]/g,'\\-')}\\s*\\{([^}]+)\\}`, 'i');
+  const m = emittedCss.match(ruleRe);
+  if (!m) {
+    badgeRows.push({ type, cls, ratio: NaN, ok: false, reason: 'rule not emitted' });
+    badgeFails++;
+    continue;
+  }
+  const body = m[1];
+  const bgRaw = (body.match(/background(?:-color)?\s*:\s*([^;]+)/i) || [, ''])[1].trim();
+  const fgRaw = (body.match(/(?:^|;|\s)color\s*:\s*([^;]+)/i) || [, ''])[1].trim();
+  const bg = parseRgbFromCss(bgRaw);
+  const fg = parseRgbFromCss(fgRaw);
+  if (!bg || !fg) {
+    badgeRows.push({ type, cls, ratio: NaN, ok: false, reason: `unparsed fg=${fgRaw} bg=${bgRaw}` });
     badgeFails++;
     continue;
   }
   const ratio = +contrast(fg, bg).toFixed(2);
   const ok = ratio >= 4.5;
-  badgeRows.push({ type, color, fg: `rgb(${fg.join(',')})`, ratio, ok });
+  badgeRows.push({ type, cls, ratio, ok, fg: `rgb(${fg.join(',')})`, bg: `rgb(${bg.join(',')})` });
   if (!ok) badgeFails++;
 }
 
-console.log('\nM4 badge contrast (TYPE_COLORS emitted by syncBadgeColors):');
+console.log('\nM4 badge contrast (live-executed syncBadgeColors output):');
 console.log('--------------------------------------------------');
-console.log(
-  `  syncBadgeColors emit-pattern detected: ${
-    usesReadable ? 'readableFg(luminance)' : usesFixedWhite ? 'fixed #fff' : 'color===bg (M1 default)'
-  }`
-);
 for (const r of badgeRows) {
   console.log(
-    `  [${r.ok ? 'PASS' : 'FAIL'}] badge-${type_to_cls(r.type).padEnd(12)} bg=${r.color}  fg=${r.fg || '?'}  ratio=${r.ratio}`
+    `  [${r.ok ? 'PASS' : 'FAIL'}] badge-${r.cls.padEnd(12)} bg=${r.bg || '?'}  fg=${r.fg || '?'}  ratio=${r.ratio}${r.reason ? ' '+r.reason : ''}`
   );
 }
 console.log('--------------------------------------------------');
 
-function type_to_cls(t) {
-  const map = {
-    ADVERT: 'advert', GRP_TXT: 'grp-txt', GRP_DATA: 'grp-data', TXT_MSG: 'txt-msg', ACK: 'ack',
-    REQUEST: 'req', RESPONSE: 'response', TRACE: 'trace', PATH: 'path',
-    ANON_REQ: 'anon-req', MULTIPART: 'multipart', CONTROL: 'control', RAW_CUSTOM: 'raw-custom',
-    UNKNOWN: 'unknown',
-  };
-  return map[t] || t.toLowerCase();
-}
+function type_to_cls(t) { return t; } // (unused — kept for log compatibility)
 
 // --- 3) hash-cell carve-out — collision / taken / possible must keep distinct bg
 

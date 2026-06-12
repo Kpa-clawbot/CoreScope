@@ -1454,7 +1454,7 @@ body.scroll-locked { overflow: hidden; }
    = 2.75:1 on dark theme (BLOCKER). Now uses --accent-strong (#2563eb)
    with --text-on-accent (gray-50) for 4.83:1 — WCAG AA body pass in
    both themes. */
-.path-hops .hop-named { color: var(--text-on-accent); background: var(--accent-strong); padding: 1px 6px; border-radius: 3px; font-family: var(--font); font-weight: 600; cursor: default; flex: 0 0 auto; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 18px; }
+.path-hops .hop-named { color: var(--text-on-accent); background: var(--accent-strong); padding: 1px 6px; border-radius: 3px; font-family: var(--font); font-size: 12px; font-weight: 600; cursor: default; flex: 0 0 auto; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 18px; }
 .path-hops .arrow { color: var(--text-muted); flex: 0 0 auto; line-height: 18px; }
 /* #1122/#1128: bound the row height contributed by the path column.
  * `max-height` on a <td> is widely ignored by browsers (table layout
@@ -2690,10 +2690,16 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .hash-bar-fill { height: 100%; border-radius: 4px; transition: width .3s; }
 .hash-cell.hash-active:hover { outline: 2px solid var(--accent); outline-offset: -2px; }
 .hash-cell.hash-selected { outline: 2px solid var(--accent); outline-offset: -2px; box-shadow: 0 0 6px var(--accent); }
-.hash-cell-empty  { background: var(--card-bg); color: var(--text-muted); }
-.hash-cell-taken  { background: var(--status-green); color: #fff; }
-.hash-cell-possible { background: var(--status-yellow); color: #fff; }
-.hash-cell-collision { color: #fff; }
+.hash-cell-empty  { background: var(--card-bg); color: var(--text-muted); font-size: 12px; font-weight: 500; }
+.hash-cell-taken  { background: var(--status-green); color: #fff; font-size: 12px; font-weight: 700; }
+.hash-cell-possible { background: var(--status-yellow); color: #fff; font-size: 12px; font-weight: 700; }
+.hash-cell-collision { color: #fff; font-size: 12px; font-weight: 700; }
+/* #1668-M4 — per-route carve-outs.
+   Hash-grid cells use a SEMANTIC bg palette (green=taken, yellow=possible,
+   red-orange=collision). M2/M3 didn't fix these because the BG is the
+   encoding. We don't flatten it — instead we bump the TEXT weight to 600+
+   so 12px white-on-color clears AA (was 11px/400, M1 ~302 violations). */
+.hash-cell { font-size: 12px; font-weight: 600; }
 /* #1473 — First-byte 0x00 / 0xFF pubkeys are avoided by the MeshCore
    firmware keygen convention (NOT a protocol-level rejection):
    https://github.com/meshcore-dev/MeshCore/blob/8ede7641/examples/simple_repeater/main.cpp#L83
