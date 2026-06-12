@@ -104,6 +104,12 @@ func (r *analyticsRecomputer) runOnce() {
 	r.computeRuns.Add(1)
 	if result != nil {
 		r.cache.Store(result)
+		// Issue #1659: mark the first-pass clock so the warmup gate
+		// in GetAnalyticsRFWithWindow / Topology / Channels handlers
+		// can flip from 503-Retry-After to serving the cache. Only
+		// the first successful compute sets the timestamp; subsequent
+		// passes are no-ops.
+		r.markFirstPassDone_1659()
 	}
 }
 

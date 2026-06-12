@@ -113,21 +113,65 @@ async function api(path, { ttl = 0, bust = false } = {}) {
   // Deduplicate in-flight requests
   if (_inflight.has(path)) return _inflight.get(path);
   const promise = (async () => {
-    const res = await fetch('/api' + path);
-    if (!res.ok) throw new Error(`API ${res.status}: ${path}`);
-    const data = await res.json();
-    const ms = performance.now() - t0;
-    _apiPerf.calls++;
-    _apiPerf.totalMs += ms;
-    _apiPerf.log.push({ path, ms: Math.round(ms), time: Date.now() });
-    if (_apiPerf.log.length > 200) _apiPerf.log.shift();
-    if (ms > 500) console.warn(`[SLOW API] ${path} took ${Math.round(ms)}ms`);
-    if (ttl > 0) _apiCache.set(path, { data, expires: Date.now() + ttl });
-    return data;
+    // Issue #1659: 503 with Retry-After indicates server-side warm-up
+    // (analytics recomputer first-pass, index build, etc.). Retry with
+    // exponential backoff capped at 30s, up to 6 attempts (~63s total),
+    // so the analytics cards never display the stale post-restart slice.
+    let attempt = 0;
+    let delay = 1000;
+    const maxAttempts = 6;
+    while (true) {
+      const res = await fetch('/api' + path);
+      if (res.status === 503 && attempt < maxAttempts) {
+        const ra = parseInt(res.headers.get('Retry-After'), 10);
+        const wait = isFinite(ra) && ra > 0 ? ra * 1000 : delay;
+        _warmupNotify_1659(true);
+        await new Promise(r => setTimeout(r, Math.min(wait, 30000)));
+        delay = Math.min(delay * 2, 30000);
+        attempt++;
+        continue;
+      }
+      if (!res.ok) throw new Error(`API ${res.status}: ${path}`);
+      if (attempt > 0) _warmupNotify_1659(false);
+      const data = await res.json();
+      const ms = performance.now() - t0;
+      _apiPerf.calls++;
+      _apiPerf.totalMs += ms;
+      _apiPerf.log.push({ path, ms: Math.round(ms), time: Date.now() });
+      if (_apiPerf.log.length > 200) _apiPerf.log.shift();
+      if (ms > 500) console.warn(`[SLOW API] ${path} took ${Math.round(ms)}ms`);
+      if (ttl > 0) _apiCache.set(path, { data, expires: Date.now() + ttl });
+      return data;
+    }
   })();
   _inflight.set(path, promise);
   promise.finally(() => _inflight.delete(path));
   return promise;
+}
+
+// Issue #1659: minimal "Computing…" indicator while an analytics
+// endpoint is serving 503-warmup. We expose a small fixed banner; if a
+// page later wants to wire its own indicator it can override
+// window.onWarmup_1659 to receive the boolean state.
+let _warmupBannerEl_1659 = null;
+let _warmupInflight_1659 = 0;
+function _warmupNotify_1659(active) {
+  if (active) _warmupInflight_1659++;
+  else _warmupInflight_1659 = Math.max(0, _warmupInflight_1659 - 1);
+  const visible = _warmupInflight_1659 > 0;
+  if (typeof window !== 'undefined' && typeof window.onWarmup_1659 === 'function') {
+    try { window.onWarmup_1659(visible); } catch (_) { /* ignore */ }
+  }
+  if (typeof document === 'undefined') return;
+  if (!_warmupBannerEl_1659) {
+    const el = document.createElement('div');
+    el.id = 'cs-warmup-banner-1659';
+    el.style.cssText = 'position:fixed;top:8px;right:8px;z-index:9999;padding:6px 10px;background:var(--bg-elev,#222);color:var(--fg,#eee);border:1px solid var(--border,#444);border-radius:4px;font-size:12px;font-family:sans-serif;display:none;';
+    el.textContent = 'Computing analytics…';
+    if (document.body) document.body.appendChild(el);
+    _warmupBannerEl_1659 = el;
+  }
+  _warmupBannerEl_1659.style.display = visible ? 'block' : 'none';
 }
 
 // Fetch the COMPLETE /api/nodes set, transparently paging around the server's
