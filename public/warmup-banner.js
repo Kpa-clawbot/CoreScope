@@ -46,7 +46,10 @@
     if (backfill && backfill.done === false) {
       var processed = Number(backfill.processed) || 0;
       var total = Number(backfill.total) || 0;
-      var pct = total > 0 ? Math.floor((processed / total) * 100) : 0;
+      // Clamp pct: total=0 → 0%; processed>total (race) → 100%.
+      // Never NaN, never >100%.
+      var rawPct = total > 0 ? Math.floor((processed / total) * 100) : 0;
+      var pct = Math.max(0, Math.min(100, rawPct));
       msgs.push('Backfilling pubkey index: ' + fmtNum(processed) +
         ' / ' + fmtNum(total) + ' (' + pct + '%)');
     }
@@ -187,9 +190,13 @@
 
   function installFetchInterceptor() {
     if (typeof window === 'undefined' || typeof window.fetch !== 'function') return;
-    if (window.__warmupBannerFetchPatched) return;
+    // Double-install guard: check both the module flag AND a marker stamped
+    // onto the wrapper itself. Prevents nested wrap if window.fetch was
+    // reassigned externally between installs.
+    if (window.__warmupBannerFetchPatched && window.fetch.__warmupWrapped) return;
+    if (window.fetch.__warmupWrapped) { window.__warmupBannerFetchPatched = true; return; }
     var orig = window.fetch.bind(window);
-    window.fetch = function () {
+    var wrapped = function () {
       var p = orig.apply(null, arguments);
       try {
         p.then(function (resp) {
@@ -200,6 +207,8 @@
       } catch (e) { /* ignore */ }
       return p;
     };
+    wrapped.__warmupWrapped = true;
+    window.fetch = wrapped;
     window.__warmupBannerFetchPatched = true;
   }
 
@@ -231,6 +240,7 @@
     // Test hooks
     _state: state,
     _pollOnce: pollOnce,
+    _installFetchInterceptor: installFetchInterceptor,
   };
 
   if (typeof window !== 'undefined') {

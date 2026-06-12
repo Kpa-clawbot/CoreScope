@@ -199,6 +199,95 @@ function bootDomSandbox(initialHealthz, initialHeader) {
       'banner should be hidden after steady state');
   });
 
+  // -------- kb #3: staleness boundary (> vs >=) ---------------------------
+  await test('staleness boundary: age == STALE_INGEST_MS is NOT stale (uses >)', () => {
+    const STALE = api.STALE_INGEST_MS;
+    const h = { ready: true,
+      from_pubkey_backfill: { done: true, processed: 1, total: 1 },
+      ingest_liveness: {
+        'mqtt-eu': { lastReceiptUnix: (NOW - STALE) / 1000 } } };
+    const msgs = api.getWarmupMessages(h, 'ready', NOW);
+    assert.ok(!msgs.some(m => /No packets from mqtt-eu/.test(m)),
+      'at exactly STALE_INGEST_MS the source must NOT be reported stale; got: ' + JSON.stringify(msgs));
+  });
+
+  await test('staleness boundary: age == STALE_INGEST_MS + 1ms IS stale', () => {
+    const STALE = api.STALE_INGEST_MS;
+    const h = { ready: true,
+      from_pubkey_backfill: { done: true, processed: 1, total: 1 },
+      ingest_liveness: {
+        'mqtt-eu': { lastReceiptUnix: (NOW - (STALE + 1)) / 1000 } } };
+    const msgs = api.getWarmupMessages(h, 'ready', NOW);
+    assert.ok(msgs.some(m => /No packets from mqtt-eu/.test(m)),
+      'at STALE_INGEST_MS+1ms the source must be reported stale; got: ' + JSON.stringify(msgs));
+  });
+
+  // -------- kb #4: backfill formatter edge cases --------------------------
+  await test('backfill total=0 → no NaN%, no divide-by-zero (pct=0)', () => {
+    const h = { ready: false,
+      from_pubkey_backfill: { done: false, processed: 0, total: 0 },
+      ingest_liveness: {} };
+    const msgs = api.getWarmupMessages(h, 'loading', NOW);
+    const backfillMsg = msgs.find(m => /Backfilling pubkey index/.test(m));
+    assert.ok(backfillMsg, 'expected backfill message present, got: ' + JSON.stringify(msgs));
+    assert.ok(!/NaN/.test(backfillMsg),
+      'backfill msg must not contain NaN; got: ' + backfillMsg);
+    assert.ok(/\(0%\)/.test(backfillMsg),
+      'total=0 must render as 0%; got: ' + backfillMsg);
+  });
+
+  await test('backfill processed>total (race) → clamps at 100%, no overshoot', () => {
+    const h = { ready: false,
+      from_pubkey_backfill: { done: false, processed: 1500, total: 1000 },
+      ingest_liveness: {} };
+    const msgs = api.getWarmupMessages(h, 'loading', NOW);
+    const backfillMsg = msgs.find(m => /Backfilling pubkey index/.test(m));
+    assert.ok(backfillMsg, 'expected backfill message');
+    assert.ok(/\(100%\)/.test(backfillMsg),
+      'processed>total must clamp at 100%; got: ' + backfillMsg);
+    assert.ok(!/15\d%|1\d\d%(?!00)/.test(backfillMsg.replace('100%', '')),
+      'no >100% should appear; got: ' + backfillMsg);
+  });
+
+  // -------- kb #5: fetch-wrapper double-install ---------------------------
+  await test('fetch interceptor: double-install does not nest wrappers', () => {
+    let callCount = 0;
+    const baseFetch = function () {
+      callCount++;
+      return Promise.resolve({
+        ok: true,
+        headers: { get: () => null },
+        json: () => Promise.resolve({ ready: true }),
+      });
+    };
+    const ctx = {
+      window: {}, document: undefined, console, Date, Math, Number, Object, String, JSON, isFinite,
+      setTimeout: () => 0, clearTimeout: () => {},
+      setInterval: () => 1, clearInterval: () => {},
+      Promise, module: { exports: {} },
+    };
+    ctx.window.fetch = baseFetch;
+    vm.createContext(ctx);
+    const src = fs.readFileSync(path.join(__dirname, 'public', 'warmup-banner.js'), 'utf8');
+    vm.runInContext(src, ctx);
+    const a = ctx.window.__warmupBanner;
+    // First install
+    a._installFetchInterceptor.call(ctx);
+    const f1 = ctx.window.fetch;
+    assert.strictEqual(f1.__warmupWrapped, true, 'wrapper must mark window.fetch.__warmupWrapped');
+    // Second install — must be a no-op
+    a._installFetchInterceptor.call(ctx);
+    const f2 = ctx.window.fetch;
+    assert.strictEqual(f2, f1, 'second install must not replace the wrapper (no nesting)');
+    // Verify underlying call chain didn't grow: one call should invoke baseFetch exactly once
+    return f2().then(() => {
+      assert.strictEqual(callCount, 1,
+        'one fetch() must invoke baseFetch exactly once (nested wrap would call >1 or 0)');
+    });
+  });
+
+
+
   console.log('');
   console.log('passed=' + passed + ' failed=' + failed);
   process.exit(failed > 0 ? 1 : 0);
