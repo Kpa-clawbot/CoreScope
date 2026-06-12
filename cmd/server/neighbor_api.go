@@ -26,6 +26,10 @@ type NeighborEntry struct {
 	Name        *string          `json:"name"`
 	Role        *string          `json:"role"`
 	Count       int              `json:"count"`
+	// CountsByMode breaks Count down by observation hash-prefix mode in bytes
+	// (1, 2, 4, 6). Lets the frontend weight confidence by ambiguity rather
+	// than treating every sighting as equal evidence. Issue #1638.
+	CountsByMode map[int]int     `json:"counts_by_mode,omitempty"`
 	Score       float64          `json:"score"`
 	FirstSeen   string           `json:"first_seen"`
 	LastSeen    string           `json:"last_seen"`
@@ -160,13 +164,14 @@ func (s *Server) handleNodeNeighbors(w http.ResponseWriter, r *http.Request) {
 		}
 
 		entry := NeighborEntry{
-			Prefix:    e.Prefix,
-			Count:     e.Count,
-			Score:     score,
-			FirstSeen: e.FirstSeen.UTC().Format(time.RFC3339),
-			LastSeen:  e.LastSeen.UTC().Format(time.RFC3339),
-			Ambiguous: e.Ambiguous,
-			Observers: observerList(e.Observers),
+			Prefix:       e.Prefix,
+			Count:        e.Count,
+			CountsByMode: copyCountsByMode(e.CountsByMode),
+			Score:        score,
+			FirstSeen:    e.FirstSeen.UTC().Format(time.RFC3339),
+			LastSeen:     e.LastSeen.UTC().Format(time.RFC3339),
+			Ambiguous:    e.Ambiguous,
+			Observers:    observerList(e.Observers),
 		}
 
 		if e.SNRCount > 0 {
@@ -420,6 +425,20 @@ func (s *Server) computeNeighborGraphResponse(minCount int, minScore float64, re
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
+// copyCountsByMode returns a shallow copy of the per-mode count map so the
+// API response doesn't share state with the live in-memory edge. Returns
+// nil for empty/nil input so omitempty drops the field from legacy payloads.
+func copyCountsByMode(m map[int]int) map[int]int {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[int]int, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
 func observerList(m map[string]bool) []string {
 	if len(m) == 0 {
 		return []string{}
@@ -508,6 +527,14 @@ func dedupPrefixEntries(entries []NeighborEntry) []NeighborEntry {
 
 		// Merge counts from unresolved into resolved.
 		entries[j].Count += entries[i].Count
+		if entries[i].CountsByMode != nil {
+			if entries[j].CountsByMode == nil {
+				entries[j].CountsByMode = make(map[int]int)
+			}
+			for m, c := range entries[i].CountsByMode {
+				entries[j].CountsByMode[m] += c
+			}
+		}
 
 		// Preserve higher LastSeen.
 		if entries[i].LastSeen > entries[j].LastSeen {

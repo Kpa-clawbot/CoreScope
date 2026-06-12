@@ -112,6 +112,24 @@ func (e *NeighborEdge) AvgSNR() float64 {
 	return e.SNRSum / float64(e.SNRCount)
 }
 
+// incCountsByMode bumps the per-hash-mode tally on the edge based on the
+// observed prefix length (hex chars / 2 = bytes). MeshCore path hashes are
+// 1, 2, 4 or 6 bytes; anything else falls into a special bucket (0) so we
+// don't lose the observation entirely. Issue #1638.
+func incCountsByMode(e *NeighborEdge, prefix string) {
+	if e.CountsByMode == nil {
+		e.CountsByMode = make(map[int]int)
+	}
+	bytes := len(prefix) / 2
+	switch bytes {
+	case 1, 2, 4, 6:
+		// known mode
+	default:
+		bytes = 0
+	}
+	e.CountsByMode[bytes]++
+}
+
 // ─── NeighborGraph ─────────────────────────────────────────────────────────────
 
 // NeighborGraph is a cached, in-memory first-hop neighbor affinity graph.
@@ -364,12 +382,13 @@ func (g *NeighborGraph) upsertEdge(pubkeyA, pubkeyB, prefix, observer string, sn
 	e, exists := g.edges[key]
 	if !exists {
 		e = &NeighborEdge{
-			NodeA:     key.A,
-			NodeB:     key.B,
-			Prefix:    prefix,
-			Observers: make(map[string]bool),
-			FirstSeen: ts,
-			LastSeen:  ts,
+			NodeA:        key.A,
+			NodeB:        key.B,
+			Prefix:       prefix,
+			Observers:    make(map[string]bool),
+			FirstSeen:    ts,
+			LastSeen:     ts,
+			CountsByMode: make(map[int]int),
 		}
 		g.edges[key] = e
 		g.byNode[key.A] = append(g.byNode[key.A], e)
@@ -377,6 +396,7 @@ func (g *NeighborGraph) upsertEdge(pubkeyA, pubkeyB, prefix, observer string, sn
 	}
 
 	e.Count++
+	incCountsByMode(e, prefix)
 	if ts.After(e.LastSeen) {
 		e.LastSeen = ts
 	}
@@ -427,20 +447,22 @@ func (g *NeighborGraph) upsertEdgeWithCandidates(knownPK, prefix string, candida
 	e, exists := g.edges[key]
 	if !exists {
 		e = &NeighborEdge{
-			NodeA:      key.A,
-			NodeB:      "",
-			Prefix:     prefix,
-			Observers:  make(map[string]bool),
-			Ambiguous:  true,
-			Candidates: filtered,
-			FirstSeen:  ts,
-			LastSeen:   ts,
+			NodeA:        key.A,
+			NodeB:        "",
+			Prefix:       prefix,
+			Observers:    make(map[string]bool),
+			Ambiguous:    true,
+			Candidates:   filtered,
+			FirstSeen:    ts,
+			LastSeen:     ts,
+			CountsByMode: make(map[int]int),
 		}
 		g.edges[key] = e
 		g.byNode[knownPK] = append(g.byNode[knownPK], e)
 	}
 
 	e.Count++
+	incCountsByMode(e, prefix)
 	if ts.After(e.LastSeen) {
 		e.LastSeen = ts
 	}
@@ -658,6 +680,12 @@ func (g *NeighborGraph) resolveEdge(oldKey edgeKey, e *NeighborEdge, knownNode, 
 		existing.SNRCount += e.SNRCount
 		for obs := range e.Observers {
 			existing.Observers[obs] = true
+		}
+		if existing.CountsByMode == nil {
+			existing.CountsByMode = make(map[int]int)
+		}
+		for m, c := range e.CountsByMode {
+			existing.CountsByMode[m] += c
 		}
 		return
 	}

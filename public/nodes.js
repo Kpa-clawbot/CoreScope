@@ -250,8 +250,34 @@
 
   function getConfidenceIndicator(entry) {
     if (entry.ambiguous) return { icon: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>', label: 'AMBIGUOUS', cls: 'confidence-ambiguous' };
-    if (entry.count <= 1) return { icon: '<span style="color:var(--status-red)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span>', label: 'LOW', cls: 'confidence-low' };
-    if (entry.score >= 0.5 && entry.count >= 3) return { icon: '<span style="color:var(--status-green)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span>', label: 'HIGH', cls: 'confidence-high' };
+    // Issue #1638: weight observations by hash-prefix mode. 1-byte prefixes
+    // collide ~8-way across a typical mesh (low ambiguity-resistance), 2-byte
+    // is moderate, 4/6-byte is effectively unambiguous. The weighted count
+    // approximates "number of effectively unambiguous sightings" — a single
+    // 6-byte observation is worth ~8 raw 1-byte observations.
+    var modeWeight = { 1: 0.125, 2: 0.5, 4: 1.0, 6: 1.0 };
+    var cbm = entry.counts_by_mode || null;
+    var weighted;
+    if (cbm) {
+      weighted = 0;
+      for (var k in cbm) {
+        if (Object.prototype.hasOwnProperty.call(cbm, k)) {
+          var w = modeWeight[k] != null ? modeWeight[k] : 0.5; // unknown mode → moderate
+          weighted += w * (cbm[k] || 0);
+        }
+      }
+    } else {
+      // Back-compat: no per-mode breakdown → treat all sightings as 2-byte.
+      weighted = (entry.count || 0) * 0.5;
+    }
+    if ((entry.count || 0) <= 1 && weighted < 1) {
+      return { icon: '<span style="color:var(--status-red)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span>', label: 'LOW', cls: 'confidence-low' };
+    }
+    // HIGH when EITHER the legacy heuristic clears OR ≥3 unambiguous-equivalent
+    // sightings have accumulated (weighted ≥ 3).
+    if ((entry.score >= 0.5 && entry.count >= 3) || weighted >= 3) {
+      return { icon: '<span style="color:var(--status-green)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span>', label: 'HIGH', cls: 'confidence-high' };
+    }
     return { icon: '<span style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span>', label: 'MEDIUM', cls: 'confidence-medium' };
   }
 
@@ -271,6 +297,13 @@
         ? '<span class="badge" style="background:' + (ROLE_COLORS[nb.role] || 'var(--surface-2)') + ';color:#fff;font-size:10px">' + escapeHtml(role) + '</span>'
         : '<span class="text-muted">—</span>';
       var scoreTitle = 'Observations: ' + nb.count;
+      if (nb.counts_by_mode) {
+        var parts = [];
+        [1, 2, 4, 6].forEach(function(m) {
+          if (nb.counts_by_mode[m]) parts.push(m + '-byte: ' + nb.counts_by_mode[m]);
+        });
+        if (parts.length) scoreTitle += ' (' + parts.join(', ') + ')';
+      }
       if (nb.avg_snr != null) scoreTitle += ' · Avg SNR: ' + Number(nb.avg_snr).toFixed(1) + ' dB';
       var distanceCell = nb.distance_km != null
         ? formatDistance(Number(nb.distance_km))

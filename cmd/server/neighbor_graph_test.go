@@ -840,42 +840,41 @@ func BenchmarkBuildFromStore(b *testing.B) {
 // confidence indicator can weight 6-byte (unambiguous) sightings higher
 // than 1-byte (high-collision) sightings.
 func TestBuildNeighborGraph_CountsByMode(t *testing.T) {
+	// Use a unique-bbbb-prefix R1 so 1/2/4-byte prefixes all resolve to it.
 	nodes := []nodeInfo{
-		{Role: "repeater", PublicKey: "aaaa11112222333344445555666677778888999900001111", Name: "NodeX"},
-		{Role: "repeater", PublicKey: "bbbb11112222333344445555666677778888999900001111", Name: "NodeR1"},
-		{Role: "repeater", PublicKey: "cccc00000000000000000000000000000000000000000000", Name: "Obs"},
+		{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeX"},
+		{Role: "repeater", PublicKey: "bbbb2222", Name: "NodeR1"},
+		{Role: "repeater", PublicKey: "cccc3333", Name: "Obs"},
 	}
-	// Three observations of an ADVERT from X with path prefix variants
-	// hitting R1: 1-byte ("bb"), 2-byte ("bbbb"), 6-byte ("bbbb11112222").
+	// Three ADVERTs from X observed at varying hash modes hitting R1.
 	txs := []*StoreTx{
-		ngMakeTx(1, 4, ngFromNodeJSON("aaaa11112222333344445555666677778888999900001111"), []*StoreObs{
-			ngMakeObs("cccc00000000000000000000000000000000000000000000", `["bb"]`, nowStr, nil),
+		ngMakeTx(1, 4, ngFromNodeJSON("aaaa1111"), []*StoreObs{
+			ngMakeObs("cccc3333", `["bb"]`, nowStr, nil), // 1-byte
 		}),
-		ngMakeTx(2, 4, ngFromNodeJSON("aaaa11112222333344445555666677778888999900001111"), []*StoreObs{
-			ngMakeObs("cccc00000000000000000000000000000000000000000000", `["bbbb"]`, nowStr, nil),
+		ngMakeTx(2, 4, ngFromNodeJSON("aaaa1111"), []*StoreObs{
+			ngMakeObs("cccc3333", `["bbbb"]`, nowStr, nil), // 2-byte
 		}),
-		ngMakeTx(3, 4, ngFromNodeJSON("aaaa11112222333344445555666677778888999900001111"), []*StoreObs{
-			ngMakeObs("cccc00000000000000000000000000000000000000000000", `["bbbb11112222"]`, nowStr, nil),
+		ngMakeTx(3, 4, ngFromNodeJSON("aaaa1111"), []*StoreObs{
+			ngMakeObs("cccc3333", `["bbbb2222"]`, nowStr, nil), // 4-byte
 		}),
 	}
 	store := ngTestStore(nodes, txs)
 	g := BuildFromStore(store)
 
-	edges := g.Neighbors("aaaa11112222333344445555666677778888999900001111")
-	// Find the X↔R1 edge (the originator↔first-hop edge).
+	edges := g.Neighbors("aaaa1111")
 	var xr1 *NeighborEdge
 	for _, e := range edges {
 		other := e.NodeB
-		if e.NodeA != "aaaa11112222333344445555666677778888999900001111" {
+		if e.NodeA != "aaaa1111" {
 			other = e.NodeA
 		}
-		if other == "bbbb11112222333344445555666677778888999900001111" {
+		if other == "bbbb2222" {
 			xr1 = e
 			break
 		}
 	}
 	if xr1 == nil {
-		t.Fatalf("expected X↔R1 edge, got edges: %+v", edges)
+		t.Fatalf("expected X↔R1 edge, got %d edges", len(edges))
 	}
 	// Back-compat: flat Count == 3.
 	if xr1.Count != 3 {
@@ -890,7 +889,7 @@ func TestBuildNeighborGraph_CountsByMode(t *testing.T) {
 	if got := xr1.CountsByMode[2]; got != 1 {
 		t.Errorf("CountsByMode[2] = %d, want 1", got)
 	}
-	if got := xr1.CountsByMode[6]; got != 1 {
-		t.Errorf("CountsByMode[6] = %d, want 1", got)
+	if got := xr1.CountsByMode[4]; got != 1 {
+		t.Errorf("CountsByMode[4] = %d, want 1", got)
 	}
 }
