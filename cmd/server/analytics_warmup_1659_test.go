@@ -149,7 +149,7 @@ func TestAnalyticsRF_WindowedRequestNotGated(t *testing.T) {
 	srv.RegisterRoutes(router)
 
 	// Explicit window — should bypass warmup gate.
-	req := httptest.NewRequest("GET", "/api/analytics/rf?since=1h", nil)
+	req := httptest.NewRequest("GET", "/api/analytics/rf?window=1h", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
