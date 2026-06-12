@@ -2,9 +2,9 @@
 
 ## [Unreleased]
 
-## [3.8.4] — 2026-06-12
+## [3.9.0] — 2026-06-12
 
-See [docs/release-notes/v3.8.4.md](docs/release-notes/v3.8.4.md) for the full notes. 257 commits since v3.8.3 (72 substantive + 185 coverage bumps).
+See [docs/release-notes/v3.9.0.md](docs/release-notes/v3.9.0.md) for the full notes. 257 commits since v3.8.3 (72 substantive + 185 coverage bumps).
 
 ### ✨ Highlights
 - **Relay timelines survive an ingestor restart** (#1643) — relay-hop attribution is rebuilt from `path_json` on cold load.
