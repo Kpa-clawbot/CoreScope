@@ -231,6 +231,12 @@ type PerfPacketStoreStats struct {
 	BackgroundLoadComplete   bool               `json:"backgroundLoadComplete"`
 	BackgroundLoadFailed     bool               `json:"backgroundLoadFailed"`
 	BackgroundLoadProgress   int64              `json:"backgroundLoadProgress"`
+	BackgroundLoadError      string             `json:"backgroundLoadError,omitempty"`
+	// #1690: surface retention + coverage so operators can see how much
+	// of the on-disk DB the in-memory store currently reflects.
+	RetentionHours    float64 `json:"retentionHours"`
+	OldestLoaded      string  `json:"oldestLoaded"`
+	LoadCoverageRatio float64 `json:"loadCoverageRatio"`
 }
 
 type WalPages struct {

@@ -719,12 +719,25 @@ func (s *PacketStore) Load() error {
 	}
 	var hotCutoffStr string
 	if hotCutoffHours > 0 {
-		hotCutoffStr = time.Now().UTC().Add(-time.Duration(hotCutoffHours * float64(time.Hour))).Format(time.RFC3339)
-		loadConditions = append(loadConditions, fmt.Sprintf("t.first_seen >= '%s'", hotCutoffStr))
+		hotCutoffT := time.Now().UTC().Add(-time.Duration(hotCutoffHours * float64(time.Hour)))
+		hotCutoffStr = hotCutoffT.Format(time.RFC3339)
+		// #1690: window on the denormalized last_seen so long-lived hashes
+		// with recent traffic load on cold start. See chunked_load.go for
+		// the full rationale + test-fixture fallback.
+		if s.db.hasLastSeen {
+			loadConditions = append(loadConditions, fmt.Sprintf("t.last_seen >= %d", hotCutoffT.Unix()))
+		} else {
+			loadConditions = append(loadConditions, fmt.Sprintf("t.first_seen >= '%s'", hotCutoffStr))
+		}
 	}
 	if maxPackets > 0 {
-		loadConditions = append(loadConditions, fmt.Sprintf(
-			"t.id IN (SELECT id FROM transmissions ORDER BY first_seen DESC LIMIT %d)", maxPackets))
+		if s.db.hasLastSeen {
+			loadConditions = append(loadConditions, fmt.Sprintf(
+				"t.id IN (SELECT id FROM transmissions ORDER BY last_seen DESC LIMIT %d)", maxPackets))
+		} else {
+			loadConditions = append(loadConditions, fmt.Sprintf(
+				"t.id IN (SELECT id FROM transmissions ORDER BY first_seen DESC LIMIT %d)", maxPackets))
+		}
 	}
 	filterClause := ""
 	if len(loadConditions) > 0 {
@@ -999,6 +1012,10 @@ func accumulateDedup(byTx map[int][]string, seenByTx map[int]map[string]bool, tx
 func (s *PacketStore) loadChunk(from, to time.Time) error {
 	fromStr := from.UTC().Format(time.RFC3339)
 	toStr := to.UTC().Format(time.RFC3339)
+	fromUnix := from.UTC().Unix()
+	toUnix := to.UTC().Unix()
+	_ = fromStr
+	_ = toStr
 
 	// Build the same SQL as Load() but with a [from, to) window.
 	rpCol := ""
@@ -1010,7 +1027,18 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 		obsRawHexCol = ", o.raw_hex"
 	}
 
-	const filterClause = "\n\t\t\tWHERE t.first_seen >= ? AND t.first_seen < ?"
+	// #1690: window on the denormalized last_seen (effective recency)
+	// rather than first_seen. See chunked_load.go for the full rationale.
+	// Test/legacy DBs without the column fall back to first_seen.
+	var filterClause string
+	var qArgs []interface{}
+	if s.db.hasLastSeen {
+		filterClause = "\n\t\t\tWHERE t.last_seen >= ? AND t.last_seen < ?"
+		qArgs = []interface{}{fromUnix, toUnix}
+	} else {
+		filterClause = "\n\t\t\tWHERE t.first_seen >= ? AND t.first_seen < ?"
+		qArgs = []interface{}{fromStr, toStr}
+	}
 
 	var chunkSQL string
 	if s.db.isV3 {
@@ -1048,7 +1076,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 	s.mu.RUnlock()
 	var coldLoadAmbiguousHopsSkipped int
 
-	rows, err := s.db.conn.Query(chunkSQL, fromStr, toStr)
+	rows, err := s.db.conn.Query(chunkSQL, qArgs...)
 	if err != nil {
 		return err
 	}
@@ -1351,15 +1379,37 @@ func (s *PacketStore) loadBackgroundChunks() {
 	}
 
 	target := time.Now().UTC().Add(-time.Duration(s.retentionHours * float64(time.Hour)))
-	totalHours := s.retentionHours - s.hotStartupHours
-	if totalHours <= 0 {
-		s.backgroundLoadDone.Store(true)
-		return
+	// #1690: drop the `retentionHours - hotStartupHours <= 0` short-circuit.
+	// Prod runs with both at 12h, which flipped backgroundLoadDone=true
+	// immediately without ever walking the DB. We now always evaluate
+	// coverage against actual rows in the retention window (see end of
+	// function).
+	retentionFloor := target.Unix()
+	retentionFloorStr := target.Format(time.RFC3339)
+	var totalInDB int64
+	var countQuery string
+	var countArg interface{}
+	if s.db.hasLastSeen {
+		countQuery = `SELECT COUNT(*) FROM transmissions WHERE last_seen >= ?`
+		countArg = retentionFloor
+	} else {
+		countQuery = `SELECT COUNT(*) FROM transmissions WHERE first_seen >= ?`
+		countArg = retentionFloorStr
+	}
+	if err := s.db.conn.QueryRow(countQuery, countArg).Scan(&totalInDB); err != nil {
+		totalInDB = -1
 	}
 
 	var chunksLoaded float64
 	var chunkErrors int
-	totalChunks := math.Ceil(totalHours / 24)
+	totalHoursGap := s.retentionHours - s.hotStartupHours
+	if totalHoursGap < 0 {
+		totalHoursGap = 0
+	}
+	totalChunks := math.Ceil(totalHoursGap / 24)
+	if totalChunks < 1 {
+		totalChunks = 1
+	}
 
 	for {
 		s.mu.RLock()
@@ -1435,9 +1485,43 @@ func (s *PacketStore) loadBackgroundChunks() {
 	// loader could be the first writer.
 	s.markIndexesReadySync()
 
-	s.backgroundLoadDone.Store(true)
-	if chunkErrors > 0 {
+	// #1690: compute actual coverage ratio and gate backgroundLoadDone
+	// on it. The legacy code flipped done=true after walking the
+	// chunk loop regardless of whether the in-memory store actually
+	// reflected the on-disk DB; prod woke up at 0.3% loaded with
+	// "complete". Threshold 0.90 mirrors the issue's acceptance
+	// criterion.
+	s.mu.RLock()
+	loadedCount := int64(len(s.packets))
+	s.mu.RUnlock()
+
+	var ratio float64
+	if totalInDB > 0 {
+		ratio = float64(loadedCount) / float64(totalInDB)
+	} else if totalInDB == 0 {
+		// Empty DB: nothing to load, treat as complete.
+		ratio = 1.0
+	}
+	s.bgErrMu.Lock()
+	s.loadCoverageRatio = ratio
+	if totalInDB > 0 && ratio < 0.90 {
 		s.backgroundLoadFailed.Store(true)
+		s.backgroundLoadErr = fmt.Sprintf("loaded %.1f%% of %d rows (%d in memory)",
+			ratio*100, totalInDB, loadedCount)
+	} else if chunkErrors > 0 {
+		s.backgroundLoadFailed.Store(true)
+		s.backgroundLoadErr = fmt.Sprintf("%d chunk error(s) during background load", chunkErrors)
+	} else {
+		s.backgroundLoadErr = ""
+	}
+	bgErr := s.backgroundLoadErr
+	s.bgErrMu.Unlock()
+
+	// Only flip done=true when the store truly reflects the DB. Operators
+	// (and the analytics warm-up gate, #1659) read this as "no more rows
+	// to load" — making it lie was the cascading failure.
+	if !s.backgroundLoadFailed.Load() {
+		s.backgroundLoadDone.Store(true)
 	}
 	s.backgroundLoadProgress.Store(100)
 
@@ -1445,10 +1529,11 @@ func (s *PacketStore) loadBackgroundChunks() {
 	totalPkts := len(s.packets)
 	oldest := s.oldestLoaded
 	s.mu.RUnlock()
-	if chunkErrors > 0 {
-		log.Printf("[store] background load done with %d chunk error(s): %d packets in memory, oldestLoaded=%s", chunkErrors, totalPkts, oldest)
+	if bgErr != "" {
+		log.Printf("[store] background load FAILED (%s): %d packets in memory, oldestLoaded=%s", bgErr, totalPkts, oldest)
 	} else {
-		log.Printf("[store] background load complete: %d packets in memory, oldestLoaded=%s", totalPkts, oldest)
+		log.Printf("[store] background load complete: %d/%d packets in memory (coverage=%.1f%%), oldestLoaded=%s",
+			totalPkts, totalInDB, ratio*100, oldest)
 	}
 }
 
@@ -2134,9 +2219,16 @@ func (s *PacketStore) GetPerfStoreStatsTyped() PerfPacketStoreStats {
 	hashIdx := len(s.byHash)
 	observerIdx := len(s.byObserver)
 	nodeIdx := len(s.byNode)
+	oldestLoaded := s.oldestLoaded
+	retentionHours := s.retentionHours
 
 	advertByObsCount := len(s.advertPubkeys)
 	s.mu.RUnlock()
+
+	s.bgErrMu.RLock()
+	loadCov := s.loadCoverageRatio
+	bgErr := s.backgroundLoadErr
+	s.bgErrMu.RUnlock()
 
 	estimatedMB := math.Round(s.estimatedMemoryMB()*10) / 10
 	trackedMB := math.Round(s.trackedMemoryMB()*10) / 10
@@ -2169,6 +2261,10 @@ func (s *PacketStore) GetPerfStoreStatsTyped() PerfPacketStoreStats {
 		BackgroundLoadComplete: s.backgroundLoadDone.Load(),
 		BackgroundLoadFailed:   s.backgroundLoadFailed.Load(),
 		BackgroundLoadProgress: s.backgroundLoadProgress.Load(),
+		BackgroundLoadError:    bgErr,
+		RetentionHours:         retentionHours,
+		OldestLoaded:           oldestLoaded,
+		LoadCoverageRatio:      loadCov,
 	}
 }
 
@@ -10026,4 +10122,13 @@ func (s *PacketStore) BackgroundLoadError() string {
 	s.bgErrMu.RLock()
 	defer s.bgErrMu.RUnlock()
 	return s.backgroundLoadErr
+}
+
+// LoadCoverageRatio returns the most recent totalLoaded / totalInDB ratio
+// computed by loadBackgroundChunks. 0.0 until the background loader has
+// run at least once. See #1690.
+func (s *PacketStore) LoadCoverageRatio() float64 {
+	s.bgErrMu.RLock()
+	defer s.bgErrMu.RUnlock()
+	return s.loadCoverageRatio
 }

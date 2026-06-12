@@ -298,8 +298,15 @@ func TestHotStartup_ChunkErrorRecovery(t *testing.T) {
 		t.Fatal("loadBackgroundChunks hung after DB close")
 	}
 
-	if !store.backgroundLoadDone.Load() {
-		t.Error("backgroundLoadDone must be set even when all chunks fail")
+	// #1690: backgroundLoadFailed must be true (chunk errors AND coverage
+	// fell short); backgroundLoadDone stays false because the in-memory
+	// store does NOT reflect the on-disk DB. Pre-#1690 the test asserted
+	// Done=true on errors — that was the very lie the issue documents.
+	if !store.backgroundLoadFailed.Load() {
+		t.Error("backgroundLoadFailed must be true after all chunks fail (#1690)")
+	}
+	if store.backgroundLoadDone.Load() {
+		t.Error("backgroundLoadDone must remain false when the store does not reflect the DB (#1690)")
 	}
 }
 

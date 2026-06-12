@@ -155,9 +155,28 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 		hotCutoffHours = s.hotStartupHours
 	}
 	var hotCutoffStr string
+	var hotCutoffUnix int64
 	if hotCutoffHours > 0 {
-		hotCutoffStr = time.Now().UTC().Add(-time.Duration(hotCutoffHours * float64(time.Hour))).Format(time.RFC3339)
-		loadConditions = append(loadConditions, fmt.Sprintf("t2.first_seen >= '%s'", hotCutoffStr))
+		hotCutoffT := time.Now().UTC().Add(-time.Duration(hotCutoffHours * float64(time.Hour)))
+		hotCutoffStr = hotCutoffT.Format(time.RFC3339)
+		hotCutoffUnix = hotCutoffT.Unix()
+		_ = hotCutoffUnix
+		// #1690: filter on the denormalized last_seen (effective recency)
+		// rather than first_seen, so long-lived hashes with recent traffic
+		// load on cold-start. first_seen is set once and never updated, so
+		// the prior `t2.first_seen >= cutoff` query loaded only hashes
+		// first-inserted within the window (0.3% of DB on prod).
+		//
+		// Test/legacy DBs without the column (PRAGMA-detected as
+		// hasLastSeen=false) fall back to the legacy first_seen axis to
+		// keep existing fixtures green. Production goes through
+		// dbschema.AssertReady which fail-fasts when the column is
+		// missing — so the fallback is only ever hit in tests.
+		if s.db.hasLastSeen {
+			loadConditions = append(loadConditions, fmt.Sprintf("t2.last_seen >= %d", hotCutoffUnix))
+		} else {
+			loadConditions = append(loadConditions, fmt.Sprintf("t2.first_seen >= '%s'", hotCutoffStr))
+		}
 	}
 
 	// COUNT honours the same retention/hot-startup filter the chunk

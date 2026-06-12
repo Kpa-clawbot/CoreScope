@@ -31,6 +31,7 @@ type DB struct {
 	hasScopeName        bool   // transmissions.scope_name column exists (#899)
 	hasDefaultScope     bool   // nodes.default_scope column exists (#899)
 	hasMultibyteSupCols bool   // nodes/inactive_nodes have multibyte_sup/multibyte_evidence (#903)
+	hasLastSeen         bool   // transmissions.last_seen column exists (#1690)
 
 	// Channel list cache (60s TTL) — avoids repeated GROUP BY scans (#762)
 	channelsCacheMu  sync.Mutex
@@ -107,6 +108,9 @@ func (db *DB) detectSchema() {
 		if txRows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil {
 			if colName == "scope_name" {
 				db.hasScopeName = true
+			}
+			if colName == "last_seen" {
+				db.hasLastSeen = true
 			}
 		}
 	}

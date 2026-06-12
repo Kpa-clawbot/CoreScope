@@ -142,7 +142,9 @@ func Test1690_BackgroundLoadHonesty(t *testing.T) {
 	dbPath := filepath.Join(dir, "test.db")
 
 	nowSec := time.Now().UTC().Unix()
-	// 5000 rows + 1MB budget → maxPackets ≈ 1048 → only ~21% loaded.
+	// 5000 rows; chunkSize=500 + maxMemoryMB=1 (→ maxPackets ≈ 1000) so
+	// the load breaks at the end of the chunk that crosses the cap and
+	// totalLoaded ≪ 5000.
 	createTestDBWithLastSeen(t, dbPath, 5000, 1, nowSec,
 		30*time.Minute, 30*time.Minute)
 
@@ -157,7 +159,7 @@ func Test1690_BackgroundLoadHonesty(t *testing.T) {
 		HotStartupHours: 1,
 		MaxMemoryMB:     1, // forces bounded load ≪ 5000 rows
 	})
-	if err := store.LoadChunked(0); err != nil {
+	if err := store.LoadChunked(500); err != nil {
 		t.Fatalf("LoadChunked: %v", err)
 	}
 	store.loadBackgroundChunks()

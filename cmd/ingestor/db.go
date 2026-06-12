@@ -71,6 +71,7 @@ type Store struct {
 	stmtGetTxByHash            *sql.Stmt
 	stmtInsertTransmission     *sql.Stmt
 	stmtUpdateTxFirstSeen      *sql.Stmt
+	stmtBumpTxLastSeen         *sql.Stmt
 	stmtInsertObservation      *sql.Stmt
 	stmtUpsertNode             *sql.Stmt
 	stmtIncrementAdvertCount   *sql.Stmt
@@ -157,6 +158,32 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 		}
 	}
 
+	// #1690: backfill transmissions.last_seen from MAX(observations.timestamp)
+	// per transmission. The column is added inline by dbschema.Apply (cheap
+	// metadata-only ALTER); the populate query is potentially expensive
+	// (full obs scan + group) so we run it async. Subsequent observation
+	// inserts maintain the column inline (see InsertTransmission below).
+	// PREFLIGHT: async=true reason="full-table backfill JOIN (1.9M+ obs × 86k+ tx in prod) — must not block ingestor boot"
+	if err := s.RunAsyncMigration(context.Background(), "tx_last_seen_backfill_v1",
+		func(ctx context.Context, d *sql.DB) error {
+			log.Println("[migration/async] Backfilling transmissions.last_seen from MAX(observations.timestamp)...")
+			res, err := d.ExecContext(ctx, `
+				UPDATE transmissions
+				SET last_seen = COALESCE((
+					SELECT MAX(timestamp) FROM observations WHERE transmission_id = transmissions.id
+				), last_seen)
+				WHERE last_seen = 0
+			`)
+			if err != nil {
+				return err
+			}
+			n, _ := res.RowsAffected()
+			log.Printf("[migration/async] transmissions.last_seen backfill complete: %d rows updated", n)
+			return nil
+		}); err != nil {
+		log.Printf("[migration/async] scheduling tx_last_seen_backfill_v1 failed: %v", err)
+	}
+
 	return s, nil
 }
 
@@ -231,6 +258,7 @@ func applySchema(db *sql.DB) error {
 			payload_version INTEGER,
 			decoded_json TEXT,
 			from_pubkey TEXT,
+			last_seen INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT DEFAULT (datetime('now'))
 		);
 
@@ -239,6 +267,10 @@ func applySchema(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_transmissions_payload_type ON transmissions(payload_type);
 		-- idx_transmissions_from_pubkey is created by the from_pubkey_v1
 		-- migration after the column is added on legacy DBs (#1143).
+		-- idx_tx_last_seen is created by dbschema.Apply after ensuring
+		-- the last_seen column exists (#1690) — keep it OUT of this base
+		-- schema block so legacy DBs (table-exists, column-missing) don't
+		-- trip on the CREATE INDEX before the ALTER runs.
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("base schema: %w", err)
@@ -681,14 +713,28 @@ func (s *Store) prepareStatements() error {
 	}
 
 	s.stmtInsertTransmission, err = s.db.Prepare(`
-		INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, channel_hash, scope_name, from_pubkey)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, channel_hash, scope_name, from_pubkey, last_seen)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
 	}
 
 	s.stmtUpdateTxFirstSeen, err = s.db.Prepare("UPDATE transmissions SET first_seen = ? WHERE id = ?")
+	if err != nil {
+		return err
+	}
+
+	// #1690: bump transmissions.last_seen to MAX(current, ?) on every
+	// observation insert so cold-load can filter on effective recency.
+	// This is NOT a migration — it's the steady-state writer path. The
+	// one-time backfill (BackfillPathJSONAsync-shaped) runs via
+	// RunAsyncMigration above; this prepared-statement UPDATE is the
+	// per-row maintenance that keeps the column current after the
+	// backfill completes. Recorded in _migrations under
+	// "tx_last_seen_backfill_v1".
+	// PREFLIGHT: async=true reason="prepared-statement row-level UPDATE BY PRIMARY KEY (transmissions.id) — single-row touch per observation, indexed by PK, constant-time at any scale. Not a migration."
+	s.stmtBumpTxLastSeen, err = s.db.Prepare("UPDATE transmissions SET last_seen = ? WHERE id = ? AND last_seen < ?")
 	if err != nil {
 		return err
 	}
@@ -839,6 +885,7 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 			data.DecodedJSON, nilIfEmpty(data.ChannelHash),
 			scopeNameForDB(data),
 			nilIfEmpty(data.FromPubkey),
+			epochSecondsForLastSeen(rxTime),
 		)
 		if err != nil {
 			s.Stats.WriteErrors.Add(1)
@@ -898,6 +945,12 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 		log.Printf("[db] observation insert (non-fatal): %v", err)
 	} else {
 		s.Stats.ObservationsInserted.Add(1)
+		// #1690: bump transmissions.last_seen so cold-load can filter on
+		// effective recency. Conditional `last_seen < ?` so we never go
+		// backwards on out-of-order ingest.
+		if _, err := s.stmtBumpTxLastSeen.Exec(epochTs, txID, epochTs); err != nil {
+			log.Printf("[db] tx last_seen bump (non-fatal): %v", err)
+		}
 	}
 
 	// Each prepared-stmt Exec auto-commits. Count one WAL commit per
@@ -1937,4 +1990,15 @@ func (s *Store) WriterTx(component string, fn func(*sql.Tx) error) error {
 // vacuum). Equivalent to WriterExec, kept short for readability.
 func (s *Store) instrumentedExec(component, query string, args ...interface{}) (sql.Result, error) {
 	return s.WriterExec(component, query, args...)
+}
+
+// epochSecondsForLastSeen parses an RFC3339 timestamp to a unix-second
+// value for the transmissions.last_seen denormalized column (#1690).
+// Falls back to the current time on parse failure so the column is
+// never seeded with 0 for a brand-new row.
+func epochSecondsForLastSeen(rfc3339 string) int64 {
+	if t, err := time.Parse(time.RFC3339, rfc3339); err == nil {
+		return t.Unix()
+	}
+	return time.Now().UTC().Unix()
 }
