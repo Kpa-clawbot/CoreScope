@@ -32,6 +32,7 @@ node test-issue-1648-m1-emoji-scan.js
 node test-issue-1648-m2-emoji-scan.js
 node test-issue-1648-m3-emoji-scan.js
 node test-issue-1648-m6-final-sweep.js
+node test-issue-1668-m2-contrast.js
 node test-issue-1648-m6-lint-self.js
 node test-traces.js
 
