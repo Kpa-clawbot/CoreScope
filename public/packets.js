@@ -178,22 +178,25 @@
         ro.observe(wrap);
       }
     }
-    // #1693 r2: re-apply on tbody mutations. Incremental renderTableRows()
-    // calls (observer-decorated re-render, HopResolver re-render, etc.) add
-    // fresh <td>s after register() ran. Without re-running apply() those new
-    // cells miss the `col-hidden` class until the next resize/window event,
-    // which made the mobile E2E flake (`td.col-observer` visible at 375px).
-    // Debounce ~100ms to coalesce bursts; idempotent because apply() rebuilds
-    // hidden state from scratch each call.
+    // #1693 r3: re-apply on tbody mutations SYNCHRONOUSLY. Incremental
+    // renderTableRows() calls (observer-decorated re-render, HopResolver
+    // re-render, etc.) add fresh <td>s after register() ran. Without
+    // re-running apply() those new cells miss the `col-hidden` class until
+    // the next resize/window event, which made the mobile E2E flake
+    // (`td.col-observer` visible at 375px).
+    //
+    // r2 used a 100ms setTimeout debounce; the mobile E2E test
+    // (test-observer-iata-1188) reads `td.col-observer` display IMMEDIATELY
+    // after waitForSelector(first row) — the debounce hadn't fired yet, so
+    // the test still saw the unhidden column. Run apply() synchronously on
+    // each mutation: apply() is cheap (single pass over header + cells,
+    // toggling a class) and idempotent, so consecutive mutations in a
+    // render burst just re-run the same cheap loop.
     const tbody = table.querySelector('tbody');
     if (tbody && typeof MutationObserver !== 'undefined') {
-      let _moTimer = null;
       const mo = new MutationObserver(() => {
-        clearTimeout(_moTimer);
-        _moTimer = setTimeout(() => {
-          if (!table.isConnected) return;
-          apply(table);
-        }, 100);
+        if (!table.isConnected) return;
+        apply(table);
       });
       mo.observe(tbody, { childList: true });
       wiredMO.set(table, mo);
