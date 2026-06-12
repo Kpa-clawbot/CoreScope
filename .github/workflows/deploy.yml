@@ -147,6 +147,7 @@ jobs:
           node test-issue-1668-m3-typography.js
           node test-mqtt-status-panel.js
           node test-warmup-banner.js
+          node test-issue-1633-hide-1byte-hops.js
 
       - name: 🛡️ Preflight XSS gate — actual --diff check (PR only)
         # The fixture self-test above (test-preflight-xss-gate.js) only
