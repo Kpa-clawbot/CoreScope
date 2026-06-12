@@ -250,25 +250,39 @@
 
   function getConfidenceIndicator(entry) {
     if (entry.ambiguous) return { icon: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>', label: 'AMBIGUOUS', cls: 'confidence-ambiguous' };
-    // Issue #1638: weight observations by hash-prefix mode. 1-byte prefixes
-    // collide ~8-way across a typical mesh (low ambiguity-resistance), 2-byte
-    // is moderate, 4/6-byte is effectively unambiguous. The weighted count
-    // approximates "number of effectively unambiguous sightings" — a single
-    // 6-byte observation is worth ~8 raw 1-byte observations.
-    var modeWeight = { 1: 0.125, 2: 0.5, 4: 1.0, 6: 1.0 };
+    // Issue #1638: weight observations by hash-prefix mode. Per firmware
+    // (firmware/src/Packet.cpp:13-18) valid wire hash modes are 1/2/3-byte
+    // (hash_size==4 is reserved). 1-byte prefixes collide ~8-way across a
+    // typical mesh (low ambiguity-resistance); 2-byte ~256-way reduces
+    // collision sharply; 3-byte (~16M) is effectively unambiguous. Bucket 0
+    // is the legacy/unknown bucket used for edges loaded from the persisted
+    // snapshot (no per-mode breakdown stored) — weight is conservative 0.5.
+    var modeWeight = { 0: 0.5, 1: 0.125, 2: 0.875, 3: 1.0 };
     var cbm = entry.counts_by_mode || null;
     var weighted;
     if (cbm) {
       weighted = 0;
+      var summed = 0;
       for (var k in cbm) {
         if (Object.prototype.hasOwnProperty.call(cbm, k)) {
-          var w = modeWeight[k] != null ? modeWeight[k] : 0.5; // unknown mode → moderate
-          weighted += w * (cbm[k] || 0);
+          var w = modeWeight[k] != null ? modeWeight[k] : 0.5; // unknown mode → conservative
+          var c = cbm[k] || 0;
+          weighted += w * c;
+          summed += c;
         }
       }
+      // If the flat Count exceeds the sum of the per-mode breakdown (e.g.
+      // partial breakdown after merging a legacy-snapshot edge with new
+      // sightings), apportion the delta to the legacy/unknown bucket so
+      // we honestly count every observation without inflating its weight.
+      var total = entry.count || 0;
+      if (total > summed) {
+        weighted += modeWeight[0] * (total - summed);
+      }
     } else {
-      // Back-compat: no per-mode breakdown → treat all sightings as 2-byte.
-      weighted = (entry.count || 0) * 0.5;
+      // Back-compat: no per-mode breakdown at all → treat all sightings as
+      // legacy/unknown bucket (conservative weight).
+      weighted = (entry.count || 0) * modeWeight[0];
     }
     if ((entry.count || 0) <= 1 && weighted < 1) {
       return { icon: '<span style="color:var(--status-red)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span>', label: 'LOW', cls: 'confidence-low' };

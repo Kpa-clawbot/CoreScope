@@ -837,10 +837,11 @@ func BenchmarkBuildFromStore(b *testing.B) {
 
 // TestBuildNeighborGraph_CountsByMode (issue #1638): verify per-hash-mode
 // edge counts are tracked separately from the flat Count, so the frontend
-// confidence indicator can weight 6-byte (unambiguous) sightings higher
-// than 1-byte (high-collision) sightings.
+// confidence indicator can weight 3-byte (effectively unambiguous) sightings
+// higher than 1-byte (high-collision) sightings. Modes track firmware-valid
+// hash sizes 1/2/3 per Packet.cpp:13-18.
 func TestBuildNeighborGraph_CountsByMode(t *testing.T) {
-	// Use a unique-bbbb-prefix R1 so 1/2/4-byte prefixes all resolve to it.
+	// Use a unique-bbbb-prefix R1 so 1/2/3-byte prefixes all resolve to it.
 	nodes := []nodeInfo{
 		{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeX"},
 		{Role: "repeater", PublicKey: "bbbb2222", Name: "NodeR1"},
@@ -855,7 +856,7 @@ func TestBuildNeighborGraph_CountsByMode(t *testing.T) {
 			ngMakeObs("cccc3333", `["bbbb"]`, nowStr, nil), // 2-byte
 		}),
 		ngMakeTx(3, 4, ngFromNodeJSON("aaaa1111"), []*StoreObs{
-			ngMakeObs("cccc3333", `["bbbb2222"]`, nowStr, nil), // 4-byte
+			ngMakeObs("cccc3333", `["bbbb22"]`, nowStr, nil), // 3-byte
 		}),
 	}
 	store := ngTestStore(nodes, txs)
@@ -889,7 +890,7 @@ func TestBuildNeighborGraph_CountsByMode(t *testing.T) {
 	if got := xr1.CountsByMode[2]; got != 1 {
 		t.Errorf("CountsByMode[2] = %d, want 1", got)
 	}
-	if got := xr1.CountsByMode[4]; got != 1 {
-		t.Errorf("CountsByMode[4] = %d, want 1", got)
+	if got := xr1.CountsByMode[3]; got != 1 {
+		t.Errorf("CountsByMode[3] = %d, want 1", got)
 	}
 }

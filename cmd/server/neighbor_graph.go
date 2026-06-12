@@ -63,10 +63,14 @@ type NeighborEdge struct {
 	Candidates []string          // candidate pubkeys when ambiguous
 	Resolved   bool              // true if auto-resolved via Jaccard
 	// CountsByMode tallies sightings broken down by hash-prefix mode in bytes
-	// (1, 2, 4, or 6). 1-byte prefixes collide ~8-way; 6-byte are effectively
-	// unambiguous. Sum of values == Count. Issue #1638 — lets the frontend
-	// weight confidence by ambiguity rather than treating every observation
-	// as equal evidence.
+	// (1, 2, or 3). Firmware path-byte encoding (Packet.cpp:13-18) sets
+	// hash_size = (pathByte>>6)+1 with values 1/2/3 valid and 4 reserved.
+	// 1-byte prefixes collide ~8-way across a typical mesh; 3-byte are
+	// effectively unambiguous. Bucket 0 is the legacy/unknown bucket used
+	// for edges loaded from the persisted neighbor_edges snapshot (which
+	// stores only the flat Count). Sum of values == Count by construction.
+	// Issue #1638 — lets the frontend weight confidence by ambiguity rather
+	// than treating every observation as equal evidence.
 	CountsByMode map[int]int
 }
 
@@ -113,17 +117,19 @@ func (e *NeighborEdge) AvgSNR() float64 {
 }
 
 // incCountsByMode bumps the per-hash-mode tally on the edge based on the
-// observed prefix length (hex chars / 2 = bytes). MeshCore path hashes are
-// 1, 2, 4 or 6 bytes; anything else falls into a special bucket (0) so we
-// don't lose the observation entirely. Issue #1638.
+// observed prefix length (hex chars / 2 = bytes). Per firmware
+// firmware/src/Packet.cpp:13-18 (hash_size = (pathByte>>6)+1), valid wire
+// modes are 1, 2 or 3 bytes; hash_size==4 is reserved. Anything outside
+// 1/2/3 falls into the legacy/unknown bucket (0) so we don't lose the
+// observation entirely. Issue #1638.
 func incCountsByMode(e *NeighborEdge, prefix string) {
 	if e.CountsByMode == nil {
 		e.CountsByMode = make(map[int]int)
 	}
 	bytes := len(prefix) / 2
 	switch bytes {
-	case 1, 2, 4, 6:
-		// known mode
+	case 1, 2, 3:
+		// known firmware hash mode
 	default:
 		bytes = 0
 	}

@@ -54,19 +54,35 @@ func loadNeighborEdgesFromDB(conn *sql.DB) *NeighborGraph {
 		g.mu.Lock()
 		e, exists := g.edges[key]
 		if !exists {
+			// Persisted snapshot stores only the flat Count — no per-mode
+			// breakdown. Synthesize CountsByMode by attributing all Count
+			// to the legacy/unknown bucket (0) so the invariant
+			// sum(CountsByMode) == Count holds for downstream consumers.
+			// Issue #1638 adv-#1: legacy-edge invariant.
+			cbm := make(map[int]int)
+			if cnt > 0 {
+				cbm[0] = cnt
+			}
 			e = &NeighborEdge{
-				NodeA:     key.A,
-				NodeB:     key.B,
-				Observers: make(map[string]bool),
-				FirstSeen: ts,
-				LastSeen:  ts,
-				Count:     cnt,
+				NodeA:        key.A,
+				NodeB:        key.B,
+				Observers:    make(map[string]bool),
+				FirstSeen:    ts,
+				LastSeen:     ts,
+				Count:        cnt,
+				CountsByMode: cbm,
 			}
 			g.edges[key] = e
 			g.byNode[key.A] = append(g.byNode[key.A], e)
 			g.byNode[key.B] = append(g.byNode[key.B], e)
 		} else {
 			e.Count += cnt
+			if e.CountsByMode == nil {
+				e.CountsByMode = make(map[int]int)
+			}
+			if cnt > 0 {
+				e.CountsByMode[0] += cnt
+			}
 			if ts.After(e.LastSeen) {
 				e.LastSeen = ts
 			}
