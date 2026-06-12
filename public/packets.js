@@ -683,6 +683,10 @@
   let pauseBuffer = [];
   let observers = [];
   let observerMap = new Map(); // id → observer for O(1) lookups (#383)
+  // #1693 — hook set by renderLeft() so loadObservers() can refresh the
+  // observer-filter dropdown when observers resolve after the filter UI is
+  // already built (decouples observer fetch from row render).
+  let _rebuildObserverMenu = null;
   let regionMap = {};
   const TYPE_NAMES = { 0:'Request', 1:'Response', 2:'Direct Msg', 3:'ACK', 4:'Advert', 5:'Channel Msg', 6:'Group Data', 7:'Anon Req', 8:'Path', 9:'Trace', 10:'Multipart', 11:'Control', 15:'Raw Custom' };
   function typeName(t) { return TYPE_NAMES[t] ?? `Type ${t}`; }
@@ -1313,6 +1317,13 @@
       const data = await api('/observers', { ttl: CLIENT_TTL.observers });
       observers = data.observers || [];
       observerMap = new Map(observers.map(o => [o.id, o]));
+      // #1693 — observers now resolve asynchronously relative to row render.
+      // If the filter UI was already built with an empty observer list,
+      // re-populate the observer-multi-select dropdown so the filter is
+      // usable as soon as observers arrive.
+      if (typeof _rebuildObserverMenu === 'function') {
+        try { _rebuildObserverMenu(); } catch {}
+      }
     } catch {}
   }
 
@@ -1387,31 +1398,32 @@
         totalCount = flat.length;
       }
 
-      // Pre-resolve from server-side resolved_path (preferred, no client-side disambiguation needed)
-      await cacheResolvedPaths(packets);
-
-      // Pre-resolve all path hops to node names (fallback for packets without resolved_path)
-      const allHops = new Set();
-      for (const p of packets) {
-        try { getParsedPath(p).forEach(h => allHops.add(h)); } catch {}
-      }
-      if (allHops.size) await resolveHops([...allHops]);
-
-      // Per-observer batch resolve for ambiguous hops (context-aware disambiguation)
-      const hopsByObserver = {};
-      for (const p of packets) {
-        if (!p.observer_id) continue;
+      // #1693 — hop resolution is OFF the critical path. Previously
+      // cacheResolvedPaths() + resolveHops() each chained through
+      // ensureHopResolver(), which calls api('/observers'). Under the
+      // packets-init race (#1692) the observers fetch is still in-flight
+      // (parallelised but slow), and the api() in-flight dedupe maps the
+      // hop-resolver's /observers call onto the same pending promise.
+      // Result: rows can't render until observers resolves, defeating the
+      // #1692 parallelisation. Hop *names* are a presentation enhancement
+      // (paths render as hex prefixes until names arrive), so resolve them
+      // in the background and re-render rows when done.
+      const hopJob = (async () => {
         try {
-          const path = getParsedPath(p);
-          const ambiguous = path.filter(h => hopNameCache[h]?.ambiguous);
-          if (ambiguous.length) {
-            if (!hopsByObserver[p.observer_id]) hopsByObserver[p.observer_id] = new Set();
-            ambiguous.forEach(h => hopsByObserver[p.observer_id].add(h));
+          await cacheResolvedPaths(packets);
+          const allHops = new Set();
+          for (const p of packets) {
+            try { getParsedPath(p).forEach(h => allHops.add(h)); } catch {}
           }
-        } catch {}
-      }
-      // Ambiguous hops are already resolved by HopResolver client-side
-      // No need for per-observer server API calls
+          if (allHops.size) await resolveHops([...allHops]);
+          // Re-render rows so resolved hop names replace hex prefixes.
+          if (filtersBuilt) renderTableRows();
+        } catch (e) {
+          console.warn('[packets] background hop resolution failed:', e);
+        }
+      })();
+      // Don't await — let rows render with hex hops, then upgrade in place.
+      void hopJob;
 
       // Restore expanded group children (parallel fetch, Map lookup)
       if (groupByHash && expandedHashes.size > 0) {
@@ -1638,12 +1650,21 @@
     function buildObserverMenu() {
       const allChecked = selectedObservers.size === 0;
       let html = `<label class="multi-select-item"><input type="checkbox" data-obs-id="__all__" ${allChecked ? 'checked' : ''}> All Observers</label>`;
-      for (const o of observers) {
-        const checked = selectedObservers.has(String(o.id)) ? 'checked' : '';
-        html += `<label class="multi-select-item"><input type="checkbox" data-obs-id="${o.id}" ${checked}> ${escapeHtml(o.name || o.id)}</label>`;
+      if (observers.length === 0) {
+        // #1693 — observers fetch may still be in flight (decoupled from
+        // packet row render). Show a disabled placeholder until loadObservers
+        // resolves and calls _rebuildObserverMenu().
+        html += `<label class="multi-select-item" style="opacity:0.6"><input type="checkbox" disabled> Loading observers…</label>`;
+      } else {
+        for (const o of observers) {
+          const checked = selectedObservers.has(String(o.id)) ? 'checked' : '';
+          html += `<label class="multi-select-item"><input type="checkbox" data-obs-id="${o.id}" ${checked}> ${escapeHtml(o.name || o.id)}</label>`;
+        }
       }
       obsMenu.innerHTML = html;
     }
+    // #1693 — expose for loadObservers() to refresh on resolve.
+    _rebuildObserverMenu = () => { buildObserverMenu(); updateObsTrigger(); };
     function updateObsTrigger() {
       if (selectedObservers.size === 0 || selectedObservers.size === observers.length) {
         obsTrigger.textContent = 'All Observers ▾';
