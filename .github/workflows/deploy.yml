@@ -141,6 +141,7 @@ jobs:
           node test-preflight-xss-gate.js
           node test-traces.js
           node test-issue-1648-m4-emoji-scan.js
+          node test-issue-1668-m3-typography.js
 
       - name: 🛡️ Preflight XSS gate — actual --diff check (PR only)
         # The fixture self-test above (test-preflight-xss-gate.js) only

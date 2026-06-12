@@ -44,7 +44,7 @@
         border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
       .alab-type-hdr:hover { opacity: 0.8; }
       .alab-type-list { padding: 0; }
-      .alab-pkt { padding: 5px 8px 5px 16px; font-size: 12px; font-family: var(--mono);
+      .alab-pkt { padding: 5px 8px 5px 16px; font-size: 12px; font-weight: 500; font-family: var(--mono);
         cursor: pointer; border-radius: 4px; color: var(--text-muted); }
       .alab-pkt:hover { background: var(--hover-bg); }
       .alab-pkt.selected { background: var(--selected-bg); color: var(--text); font-weight: 600; }
