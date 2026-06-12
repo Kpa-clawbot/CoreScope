@@ -300,9 +300,15 @@
   /* #1206: track --vcr-bar-height (set by JS ResizeObserver on .vcr-bar)
    * the same way .live-feed does — hard-coded bottom offsets get
    * occluded by the bar on mobile two-row + safe-area-inset layouts.
+   *
+   * #1107: panel was oversized relative to its content (>60% whitespace
+   * around a sparse legend). Drive height by content and cap width so
+   * the PACKET TYPES legend stops dominating the map.
    */
   bottom: calc(var(--vcr-bar-height, 58px) + 10px);
   right: 12px;
+  height: max-content;
+  max-width: 260px;
   background: color-mix(in srgb, var(--surface-1) 92%, transparent);
   backdrop-filter: blur(12px);
   padding: 10px 14px;
@@ -888,7 +894,13 @@ body.live-fullscreen #liveFullscreenToggle:hover,
 .feed-hide-btn:hover { opacity: 1; color: #fff; background: rgba(239,68,68,0.6); }
 
 .feed-show-btn {
-  position: absolute; bottom: 12px; left: 12px; z-index: 500;
+  /* #1107: pin fixed bottom-right (stacked above legend toggle) so the
+   * activate/hide button group docks together as a tidy cluster. */
+  position: fixed; bottom: 1rem; right: 1rem; z-index: 500;
+  /* Stack above .legend-toggle-btn (~46px tall + 10px gap) instead of
+   * overlapping. Done with margin-bottom so the `right: 1rem` invariant
+   * (and bottom-right anchor) stays consistent across both buttons. */
+  margin-bottom: 56px;
   background: color-mix(in srgb, var(--surface-1) 92%, transparent); backdrop-filter: blur(8px);
   border: 1px solid var(--border); border-radius: 8px;
   color: var(--text-muted); font-size: 18px; padding: 8px 10px;
@@ -1280,11 +1292,14 @@ input.live-node-filter-input:focus {
   border: 0;
 }
 
-/* Legend toggle button — visible at all sizes (#60, #279) */
+/* Legend toggle button — visible at all sizes (#60, #279).
+ * #1107: pinned fixed bottom-right so the activate/hide button group
+ * docks consistently (with .feed-show-btn) instead of floating loose
+ * inside the map container. */
 .legend-toggle-btn {
-  position: absolute;
-  bottom: 82px;
-  right: 12px;
+  position: fixed;
+  bottom: 1rem;
+  right: 1rem;
   z-index: 500;
   background: color-mix(in srgb, var(--surface-1) 92%, transparent);
   backdrop-filter: blur(8px);
