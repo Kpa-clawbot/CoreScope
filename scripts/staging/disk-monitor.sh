@@ -56,14 +56,17 @@ classify_threshold() {
 }
 
 # severity_priority <severity>
-# Echoes the syslog-ish priority for `logger -p`:
-#   ok=info warn=warning error=err alert=crit
+# Echoes the syslog priority for `logger -p`. Maps to the canonical
+# syslog severity ladder (RFC 5424): alert=1, crit=2, err=3, warning=4,
+# info=6. We deliberately use `alert` (not `crit`) for the >=95% case so
+# downstream `journalctl -p alert` filters fire at the highest level.
+#   ok=info warn=warning error=err alert=alert
 severity_priority() {
     case "$1" in
         ok)    echo user.info ;;
         warn)  echo user.warning ;;
         error) echo user.err ;;
-        alert) echo user.crit ;;
+        alert) echo user.alert ;;
         *)     return 1 ;;
     esac
 }

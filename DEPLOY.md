@@ -209,8 +209,9 @@ systemctl list-timers | grep corescope-disk
 ```
 
 `logger` priorities map: `ok→info`, `warn→warning`, `error→err`,
-`alert→crit`. Wire `journalctl -p crit ...` to whatever ops channel
-the operator prefers.
+`alert→alert` (syslog severity 1, the highest level). Wire
+`journalctl -p alert ...` to whatever ops channel the operator
+prefers; use `-p err` to also catch the `error` tier.
 
 ### Notes on `staging-snap.db` root cause (#1684 phase 3)
 

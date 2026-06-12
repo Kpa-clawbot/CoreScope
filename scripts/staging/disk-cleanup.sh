@@ -36,7 +36,6 @@ cleanup_tmp() {
     local find_args=(
         /tmp -mindepth 1 -maxdepth 2 -mtime +7
         \(
-          -name '*.db' -o
           -name 'staging-snap.*' -o
           -name 'cs-*' -o
           -name 'node-compile-cache'
