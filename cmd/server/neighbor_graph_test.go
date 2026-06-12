@@ -834,3 +834,63 @@ func BenchmarkBuildFromStore(b *testing.B) {
 		BuildFromStore(store)
 	}
 }
+
+// TestBuildNeighborGraph_CountsByMode (issue #1638): verify per-hash-mode
+// edge counts are tracked separately from the flat Count, so the frontend
+// confidence indicator can weight 6-byte (unambiguous) sightings higher
+// than 1-byte (high-collision) sightings.
+func TestBuildNeighborGraph_CountsByMode(t *testing.T) {
+	nodes := []nodeInfo{
+		{Role: "repeater", PublicKey: "aaaa11112222333344445555666677778888999900001111", Name: "NodeX"},
+		{Role: "repeater", PublicKey: "bbbb11112222333344445555666677778888999900001111", Name: "NodeR1"},
+		{Role: "repeater", PublicKey: "cccc00000000000000000000000000000000000000000000", Name: "Obs"},
+	}
+	// Three observations of an ADVERT from X with path prefix variants
+	// hitting R1: 1-byte ("bb"), 2-byte ("bbbb"), 6-byte ("bbbb11112222").
+	txs := []*StoreTx{
+		ngMakeTx(1, 4, ngFromNodeJSON("aaaa11112222333344445555666677778888999900001111"), []*StoreObs{
+			ngMakeObs("cccc00000000000000000000000000000000000000000000", `["bb"]`, nowStr, nil),
+		}),
+		ngMakeTx(2, 4, ngFromNodeJSON("aaaa11112222333344445555666677778888999900001111"), []*StoreObs{
+			ngMakeObs("cccc00000000000000000000000000000000000000000000", `["bbbb"]`, nowStr, nil),
+		}),
+		ngMakeTx(3, 4, ngFromNodeJSON("aaaa11112222333344445555666677778888999900001111"), []*StoreObs{
+			ngMakeObs("cccc00000000000000000000000000000000000000000000", `["bbbb11112222"]`, nowStr, nil),
+		}),
+	}
+	store := ngTestStore(nodes, txs)
+	g := BuildFromStore(store)
+
+	edges := g.Neighbors("aaaa11112222333344445555666677778888999900001111")
+	// Find the X↔R1 edge (the originator↔first-hop edge).
+	var xr1 *NeighborEdge
+	for _, e := range edges {
+		other := e.NodeB
+		if e.NodeA != "aaaa11112222333344445555666677778888999900001111" {
+			other = e.NodeA
+		}
+		if other == "bbbb11112222333344445555666677778888999900001111" {
+			xr1 = e
+			break
+		}
+	}
+	if xr1 == nil {
+		t.Fatalf("expected X↔R1 edge, got edges: %+v", edges)
+	}
+	// Back-compat: flat Count == 3.
+	if xr1.Count != 3 {
+		t.Errorf("expected Count=3, got %d", xr1.Count)
+	}
+	if xr1.CountsByMode == nil {
+		t.Fatalf("expected CountsByMode populated, got nil")
+	}
+	if got := xr1.CountsByMode[1]; got != 1 {
+		t.Errorf("CountsByMode[1] = %d, want 1", got)
+	}
+	if got := xr1.CountsByMode[2]; got != 1 {
+		t.Errorf("CountsByMode[2] = %d, want 1", got)
+	}
+	if got := xr1.CountsByMode[6]; got != 1 {
+		t.Errorf("CountsByMode[6] = %d, want 1", got)
+	}
+}

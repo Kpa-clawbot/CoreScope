@@ -62,6 +62,12 @@ type NeighborEdge struct {
 	Ambiguous  bool              // multiple candidates or zero candidates
 	Candidates []string          // candidate pubkeys when ambiguous
 	Resolved   bool              // true if auto-resolved via Jaccard
+	// CountsByMode tallies sightings broken down by hash-prefix mode in bytes
+	// (1, 2, 4, or 6). 1-byte prefixes collide ~8-way; 6-byte are effectively
+	// unambiguous. Sum of values == Count. Issue #1638 — lets the frontend
+	// weight confidence by ambiguity rather than treating every observation
+	// as equal evidence.
+	CountsByMode map[int]int
 }
 
 // Score computes the affinity score at query time with time decay.
