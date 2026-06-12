@@ -27,7 +27,9 @@ window.ObserversNaiveChip = {
       + '. Fix: set the host clock to UTC, or emit Z-suffixed/offset-aware timestamps.';
     return '<span class="obs-clock-naive-chip" title="' + tip.replace(/"/g, '&quot;')
       + '" aria-label="' + tip.replace(/"/g, '&quot;')
-      + '" style="margin-left:6px;cursor:help">\u26A0\uFE0F</span>';
+      + '" style="margin-left:6px;cursor:help">'
+      + '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>'
+      + '</span>';
   },
 };
 

@@ -940,9 +940,17 @@
   }
 
   function channelRowHtml(c) {
-    var name = c.displayName || c.name || 'Unknown';
+    // displayNameHtml: app-controlled raw HTML (e.g. the encrypted
+    // placeholder which carries a Phosphor sprite — set by
+    // decorateAnalyticsChannels for unknown encrypted rows). Same pattern
+    // as the section-header row: sprite-bearing labels must NOT be
+    // HTML-escaped (#1657 class of bug). For any other input we still
+    // go through esc() — never trust c.name / c.displayName as HTML.
+    var nameHtml = c.displayNameHtml
+      ? c.displayNameHtml
+      : esc(c.displayName || c.name || 'Unknown');
     return '<tr class="clickable-row" data-action="navigate" data-value="#/channels?ch=' + c.hash + '" tabindex="0" role="row">' +
-      '<td><strong>' + esc(name) + '</strong></td>' +
+      '<td><strong>' + nameHtml + '</strong></td>' +
       '<td class="mono">' + (typeof c.hash === 'number' ? '0x' + c.hash.toString(16).toUpperCase().padStart(2, '0') : c.hash) + '</td>' +
       '<td>' + c.messages + '</td>' +
       '<td>' + c.senders + '</td>' +
@@ -974,9 +982,18 @@
           // Placeholder ("chNNN") or empty name → render as opaque encrypted.
           // Empty-name encrypted rows would otherwise leak through with an
           // empty <strong> in the row; force the placeholder rendering.
-          copy.displayName = !isNaN(hashNum)
-            ? '🔒 Encrypted (0x' + hashNum.toString(16).toUpperCase().padStart(2, '0') + ')' // EMOJI-OK: displayName data field consumed by tests
-            : '🔒 Encrypted'; // EMOJI-OK: displayName data field consumed by tests
+          //
+          // displayName carries a clean text label (no emoji, no markup) for
+          // screen readers / sort comparison / tests. displayNameHtml carries
+          // the rendered HTML with a Phosphor ph-lock sprite — consumed by
+          // channelRowHtml(). Two fields, one source of truth, no escaping
+          // surprises (v384-12.18 follow-up to #1648/#1657).
+          var hex = !isNaN(hashNum)
+            ? ' (0x' + hashNum.toString(16).toUpperCase().padStart(2, '0') + ')'
+            : '';
+          copy.displayName = 'Encrypted' + hex;
+          copy.displayNameHtml =
+            '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> Encrypted' + hex;
           copy.group = 'encrypted';
         } else {
           // Server gave us a real name (rainbow table hit) for an encrypted ch.

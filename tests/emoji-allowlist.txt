@@ -80,10 +80,9 @@ public/mobile-page-actions.js           # mobile sticky-action ⏸ mirror
 public/channels.js                      # ▸/▾ collapse caret + ↓ scroll-to-new chevron
 
 # --- analytics tab badges that are user-visible text content ---
-# "🔒 Encrypted (0x__)" displayName field is consumed by tests + screen
-# readers. Locked icon is part of the data column, not chrome.
-public/analytics.js:978:U+1F512          # 🔒 Encrypted displayName
-public/analytics.js:979:U+1F512          # 🔒 Encrypted displayName
+# (formerly: "🔒 Encrypted (0x__)" displayName field — REMOVED in the
+# v3.8.4 follow-up: encrypted placeholder now renders the Phosphor
+# ph-lock sprite via displayNameHtml; displayName is plain text.)
 
 # --- cmd/server, cmd/ingestor, cmd/decrypt ---
 # Server-side Go: all hits are log lines (with → arrows), code comments,
