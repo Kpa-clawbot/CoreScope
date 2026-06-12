@@ -35,7 +35,13 @@ const knownGapsFile = "openapi_known_gaps.json"
 
 // collectHandlerRoutes walks every non-_test .go file in cmd/server/ and
 // returns the set of string-literal first args to any `*.HandleFunc(...)`
-// call whose value starts with "/api/".
+// or `*.Handle(...)` call whose value starts with "/api/".
+//
+// Both forms are used in cmd/server/routes.go: bare handlers use
+// `r.HandleFunc("/api/...", fn)`, while handlers wrapped in auth
+// middleware use `r.Handle("/api/...", wrapped).Methods("...")`. The
+// completeness gate MUST consider both — anything less lets the
+// gorilla-style chained routes slip past the ratchet.
 func collectHandlerRoutes(t *testing.T) map[string]string {
 	t.Helper()
 	out := map[string]string{} // route -> "file:line"
@@ -62,7 +68,10 @@ func collectHandlerRoutes(t *testing.T) map[string]string {
 				return true
 			}
 			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel == nil || sel.Sel.Name != "HandleFunc" {
+			if !ok || sel.Sel == nil {
+				return true
+			}
+			if sel.Sel.Name != "HandleFunc" && sel.Sel.Name != "Handle" {
 				return true
 			}
 			if len(call.Args) < 1 {
