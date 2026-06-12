@@ -400,6 +400,17 @@ type PacketStore struct {
 	backgroundLoadFailed   atomic.Bool
 	backgroundLoadProgress atomic.Int64 // 0–100 percent complete
 
+	// #1690: backgroundLoadError captures the human-readable reason when
+	// backgroundLoadFailed flips true (e.g. "loaded 12.3% of 1000 rows").
+	// Guarded by bgErrMu so the perf endpoint can read it without
+	// synchronising on s.mu (held by chunk-merge writers).
+	bgErrMu            sync.RWMutex
+	backgroundLoadErr  string
+	// loadCoverageRatio: totalLoaded / totalInDB (0.0–1.0). Updated by
+	// loadBackgroundChunks after the chunk walk; surfaced via the typed
+	// perf payload for prod observability.
+	loadCoverageRatio  float64
+
 	// Async hash migration state: set after migrateContentHashesAsync completes.
 	hashMigrationComplete atomic.Bool
 
@@ -10005,4 +10016,14 @@ func (s *PacketStore) GetSubpathDetail(rawHops []string) map[string]interface{} 
 		"parentPaths":      topParents,
 		"observers":        topObs,
 	}
+}
+
+// BackgroundLoadError returns the human-readable reason captured the last
+// time backgroundLoadFailed flipped true. Empty string when no error has
+// been recorded (either load is still running, succeeded, or has not run).
+// See #1690 for the failure modes this surfaces.
+func (s *PacketStore) BackgroundLoadError() string {
+	s.bgErrMu.RLock()
+	defer s.bgErrMu.RUnlock()
+	return s.backgroundLoadErr
 }
