@@ -1,0 +1,24 @@
+{
+  "_comment": "Allowlist of /api/ routes registered via HandleFunc in cmd/server/ that are NOT yet documented in cmd/server/openapi.go. This is the 'ratchet' baseline for issue #1670 Phase 1: the TestOpenAPICompleteness gate fails when a NEW handler is added without either documenting it in openapi.go OR appending it here. Phase 2 (the actual backfill of these routes into openapi.go) is tracked in a separate issue per the #1670 triage. Entries should be REMOVED as Phase 2 lands docs for each route — the gate also fails if an entry here is already covered by openapi.go (stale allowlist).",
+  "_issue": "https://github.com/Kpa-clawbot/CoreScope/issues/1670",
+  "routes": [
+    "/api/analytics/relay-airtime-share",
+    "/api/analytics/roles",
+    "/api/config/areas",
+    "/api/config/areas/polygons",
+    "/api/docs",
+    "/api/healthz",
+    "/api/known-channels",
+    "/api/nodes/clock-skew",
+    "/api/nodes/{pubkey}/battery",
+    "/api/nodes/{pubkey}/clock-skew",
+    "/api/nodes/{pubkey}/reach",
+    "/api/observers/clock-skew",
+    "/api/paths/inspect",
+    "/api/perf/io",
+    "/api/perf/sqlite",
+    "/api/perf/write-sources",
+    "/api/scope-stats",
+    "/api/spec"
+  ]
+}
