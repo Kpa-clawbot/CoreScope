@@ -42,6 +42,7 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/health":     {Summary: "Health check", Description: "Returns server health, uptime, and memory stats.", Tag: "admin"},
 		"GET /api/stats":      {Summary: "Network statistics", Description: "Returns aggregate stats (node counts, packet counts, observer counts). Cached for 10s.", Tag: "admin"},
 		"GET /api/perf":       {Summary: "Performance statistics", Description: "Returns per-endpoint request timing and slow query log.", Tag: "admin"},
+		"GET /api/mqtt/status": {Summary: "MQTT source status", Description: "Returns per-MQTT-source connection state and counters (lastConnectUnix, lastPacketUnix, packetsTotal, etc.). Broker URL passwords are masked. Sourced from the ingestor stats file; empty list when unavailable. (#1043)", Tag: "admin"},
 		"POST /api/perf/reset": {Summary: "Reset performance stats", Tag: "admin", Auth: true},
 		// "POST /api/admin/prune" removed in #1283 (ingestor owns prune).
 		"GET /api/debug/affinity": {Summary: "Debug neighbor affinity scores", Tag: "admin", Auth: true},

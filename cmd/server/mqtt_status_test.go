@@ -103,8 +103,33 @@ func TestMqttStatus_EmptyWhenNoStatsFile(t *testing.T) {
 
 // TestMaskBrokerURL_Patterns is a unit table-driven test for the masking
 // helper. Kept separate from the handler test so a regression in the
-// regex localizes immediately. NOTE: the helper does not yet exist in
-// the red commit (handler uses inline passthrough); this test fails to
-// compile until the green commit introduces maskBrokerURL.
-// To keep the red commit assertion-fail (not compile-fail), this test is
-// added in the GREEN commit alongside the helper.
+// regex localizes immediately.
+func TestMaskBrokerURL_Patterns(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{"plain mqtt no creds", "mqtt://broker.example.com:1883", "mqtt://broker.example.com:1883"},
+		{"mqtt with creds", "mqtt://u:secret@broker.example.com:1883", "mqtt://u:****@broker.example.com:1883"},
+		{"mqtts with creds", "mqtts://u:secret@broker.example.com:8883", "mqtts://u:****@broker.example.com:8883"},
+		{"tcp with creds", "tcp://u:p@host:1883", "tcp://u:****@host:1883"},
+		{"ssl with creds", "ssl://u:p@host:8883", "ssl://u:****@host:8883"},
+		{"ws with creds", "ws://u:p@host:8080/mqtt", "ws://u:****@host:8080/mqtt"},
+		{"wss with creds", "wss://u:p@host:443/mqtt", "wss://u:****@host:443/mqtt"},
+		{"uppercase scheme", "MQTT://u:p@host:1883", "MQTT://u:****@host:1883"},
+		{"empty", "", ""},
+		{"long password", "mqtt://obsuser:hunter2supersecretXYZ123@host:1883", "mqtt://obsuser:****@host:1883"},
+		{"no scheme bare host", "host:1883", "host:1883"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := maskBrokerURL(c.in)
+			if got != c.want {
+				t.Errorf("maskBrokerURL(%q) = %q, want %q", c.in, got, c.want)
+			}
+			// Inline secret must never survive.
+			if c.in != c.want && strings.Contains(got, "secret") {
+				t.Errorf("output still contains 'secret': %q", got)
+			}
+		})
+	}
+}
