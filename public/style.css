@@ -1461,6 +1461,12 @@ body.scroll-locked { overflow: hidden; }
  * overrides it), so use `height` — table cells respect `height` as
  * min-height, locking the row to a single line of chip content
  * regardless of hop count. */
+/* #1668 M3 r1 (tufte #4): preserve PATH column width after the table body
+ * font bump (12 -> 13) widened sibling columns and squeezed PATH chips
+ * from 7-9 visible chars down to 3-4. Reserve enough room for two
+ * abbreviated 7-char chips + arrow. .path-hops already uses 11px font, so
+ * no chip-level font change is needed here. */
+.data-table td.col-path, .data-table th.col-path { min-width: 140px; }
 .data-table td.col-path { height: 28px; line-height: 22px; overflow: hidden; }
 
 /* === Modal === */
@@ -1737,7 +1743,7 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 .ch-icon-btn:hover, .ch-icon-btn:focus { opacity: 1 !important; outline: none; }
 .ch-remove-btn:hover, .ch-remove-btn:focus { background: #8b3838; color: white; }
 .ch-share-btn:hover,  .ch-share-btn:focus  { color: var(--accent, #3b82f6); }
-.ch-user-badge { font-size: 12px; margin-left: 2px; opacity: 0.85; flex-shrink: 0; }
+.ch-user-badge { font-size: 12px; font-weight: var(--fw-medium); margin-left: 2px; opacity: 0.85; flex-shrink: 0; } /* #1668 M3 r1 — chip floor, mirror row chips (adv #2) */
 .ch-item-preview { font-size: 13px; font-weight: var(--fw-medium); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } /* #1668 M3 — was 12px/400 */
 
 .ch-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
@@ -2749,7 +2755,7 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .stat-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; text-align: center; }
 .stat-value { font-size: 24px; font-weight: 700; color: var(--text); }
 .stat-label { font-size: 12px; font-weight: var(--fw-medium); color: var(--text-muted); margin-top: 2px; } /* #1668 M3 — added 500 weight */
-.stat-detail { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.stat-detail { font-size: 12px; font-weight: var(--fw-medium); color: var(--text-muted); margin-top: 2px; } /* #1668 M3 r1 — was 11px/400, below chip floor (adv #3) */
 .stat-spark { margin-top: 6px; display: flex; justify-content: center; }
 /* #1058 — Analytics rows: fluid + auto-stacking via CSS Grid `auto-fit`.
    Cards stack automatically when the row can't fit two columns at the
@@ -2768,7 +2774,7 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .payload-bars { display: flex; flex-direction: column; gap: 6px; }
 .payload-bar-row { display: flex; align-items: center; gap: 8px; }
 .payload-bar-label { min-width: 100px; font-size: 12px; font-weight: var(--fw-medium); display: flex; align-items: center; gap: 4px; } /* #1668 M3 — added 500 weight */
-.payload-bar-value { min-width: 100px; text-align: right; font-size: 12px; }
+.payload-bar-value { min-width: 100px; text-align: right; font-size: 12px; font-weight: var(--fw-medium); } /* #1668 M3 r1 — match .payload-bar-label weight (adv #1) */
 .repeater-list { display: flex; flex-direction: column; gap: 4px; }
 .repeater-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
 .repeater-name { min-width: 140px; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
