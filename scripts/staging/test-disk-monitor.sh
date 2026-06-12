@@ -75,7 +75,34 @@ assert_eq "pipe 100->alert" "alert" "$(classify_threshold "$(parse_df_percent "$
 assert_eq "prio ok"    "user.info"    "$(severity_priority ok)"
 assert_eq "prio warn"  "user.warning" "$(severity_priority warn)"
 assert_eq "prio error" "user.err"     "$(severity_priority error)"
-assert_eq "prio alert" "user.crit"    "$(severity_priority alert)"
+# alert maps to syslog `alert` (severity 1), NOT `crit` (severity 2).
+# Regression guard for PR #1686 r1 adv #1: previously mapped to user.crit,
+# which silently downgraded the highest-severity tier.
+assert_eq "prio alert" "user.alert"   "$(severity_priority alert)"
+
+# ----- disk-cleanup.sh /tmp pattern safety ----------------------------------
+# Regression guard for PR #1686 r1 adv #2: cleanup must NOT match a bare
+# `*.db` pattern in /tmp — that would nuke unrelated SQLite session files,
+# sqlite-pkg test outputs, and any debugging artifacts. Only named prefixes
+# (`staging-snap.*`, `cs-*`, `node-compile-cache`) are allowed.
+CLEANUP_SH="$SCRIPT_DIR/disk-cleanup.sh"
+if [ -f "$CLEANUP_SH" ]; then
+    if grep -Eq "^[[:space:]]*-name[[:space:]]+'\*\.db'" "$CLEANUP_SH"; then
+        FAIL=$((FAIL + 1))
+        echo "FAIL: disk-cleanup.sh contains bare -name '*.db' (data-loss footgun)" >&2
+    else
+        PASS=$((PASS + 1))
+    fi
+    # Sanity: the named-prefix patterns we DO want must still be present.
+    for pat in "staging-snap.\*" "cs-\*" "node-compile-cache"; do
+        if grep -Eq "\-name[[:space:]]+'${pat}'" "$CLEANUP_SH"; then
+            PASS=$((PASS + 1))
+        else
+            FAIL=$((FAIL + 1))
+            echo "FAIL: disk-cleanup.sh missing expected -name '${pat}' pattern" >&2
+        fi
+    done
+fi
 
 echo "----"
 echo "PASS=$PASS FAIL=$FAIL"
