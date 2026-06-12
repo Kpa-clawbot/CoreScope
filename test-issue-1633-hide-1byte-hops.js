@@ -179,5 +179,161 @@ test('Analytics: route-pattern aggregation key drops 1-byte hops when ON', () =>
     'all three rows collapse to one pattern with 3 hits');
 });
 
+// ─────────────────────────────────────────────────────────────────────
+// #1689 r1 — additional regressions surfaced by adversarial + Kent Beck
+// review on the original PR.
+// ─────────────────────────────────────────────────────────────────────
+
+console.log('\n=== #1689 r1: review fix-ups (adv + kb findings) ===');
+
+test('[kb #3] MC_filterPathHops handles null/undefined/empty without throwing', () => {
+  const ctx = freshSandbox();
+  const f = ctx.window.MC_filterPathHops;
+  assert.deepStrictEqual(Array.from(f([])), [], 'empty in → empty out');
+  // null/undefined inputs should NOT throw. The contract is "return a
+  // safe empty-ish array". Either [] or the input back is acceptable;
+  // we assert non-throwing + array-shape.
+  const a = f(null);
+  const b = f(undefined);
+  assert.ok(Array.isArray(a) || a == null, 'null → null/array');
+  assert.ok(Array.isArray(b) || b == null, 'undefined → null/array');
+  assert.deepStrictEqual(Array.from(f([], { hide1ByteHops: true })), [], 'empty in + ON → empty');
+});
+
+test('[kb #3] MC_isVisibleHop(null) is safe (does not throw; null treated as 0-byte → visible)', () => {
+  const ctx = freshSandbox();
+  const v = ctx.window.MC_isVisibleHop;
+  // null/undefined hops have byteLen 0, !== 1, so they are visible
+  // regardless of the toggle (origin/dest sentinels rely on this).
+  assert.strictEqual(v(null, { hide1ByteHops: true }), true,  'null hop must be visible');
+  assert.strictEqual(v(undefined, { hide1ByteHops: true }), true, 'undefined must be visible');
+  assert.strictEqual(v('', { hide1ByteHops: true }), true,    'empty string must be visible');
+});
+
+test('[adv #1] route-view.js: all-1-byte paths do NOT collide on empty key', () => {
+  // The bug: route-view aggregated `seen[hops.join('-')]`. When the filter
+  // produced an empty array, every distinct all-1-byte path collapsed onto
+  // key "". Distinct routes vanished into one bucket. Fix uses a sentinel
+  // prefixed with the rawHops signature so the buckets stay distinct.
+  //
+  // We assert the EXACT inline aggregation logic now used in route-view.js
+  // by replaying its key derivation on representative inputs.
+  const ctx = freshSandbox();
+  const aggregate = (paths) => {
+    const seen = {};
+    paths.forEach((p) => {
+      const rawHops = p.path || [];
+      const hops = ctx.window.MC_filterPathHops(rawHops);
+      const key = hops.length ? hops.join('-') : ('__all1byte__::' + rawHops.join('-'));
+      seen[key] = true;
+    });
+    return Object.keys(seen).length;
+  };
+  // Toggle ON
+  ctx.window.MC_setHide1ByteHops(true);
+  const distinct = aggregate([
+    { path: ['AB', 'CD'] },   // all 1-byte route A
+    { path: ['EF', 'GH'] },   // all 1-byte route B — must NOT collide with A
+    { path: ['AB', 'CD'] }    // duplicate of A — must collide with A
+  ]);
+  assert.strictEqual(distinct, 2,
+    'two distinct all-1-byte routes + one dup must produce 2 buckets, not 1');
+});
+
+test('[adv #1] route-view.js source: key derivation uses sentinel for all-1-byte buckets', () => {
+  // Source-grep guard: if a future refactor reverts to `hops.join("-")`
+  // bare aggregation, this test catches it.
+  const src = fs.readFileSync(path.join(__dirname, 'public/route-view.js'), 'utf8');
+  assert.ok(src.indexOf('__all1byte__::') !== -1 || src.indexOf('⟨all-1byte⟩::') !== -1,
+    'route-view.js must include a sentinel for all-1-byte aggregation buckets');
+});
+
+test('[adv #2] map.js source: drawPacketRoute propagates hopsHiddenCount to renderer', () => {
+  // Source-grep guard: the polyline MUST carry the redacted-count down
+  // to the renderer so it can dash + badge. A revert that drops the
+  // `hopsHiddenCount` option from the render call regresses operator UX.
+  const src = fs.readFileSync(path.join(__dirname, 'public/map.js'), 'utf8');
+  assert.ok(/hopsHiddenCount\s*:\s*hopsHiddenCount/.test(src),
+    'map.js must pass hopsHiddenCount into the route renderer opts');
+  assert.ok(/var\s+hopsHiddenCount\s*=\s*0/.test(src) || /let\s+hopsHiddenCount\s*=\s*0/.test(src),
+    'map.js must compute hopsHiddenCount before filtering positions');
+});
+
+test('[adv #2] route-render.js: redacted edges use dashed + reduced opacity + emit badge', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'public/route-render.js'), 'utf8');
+  assert.ok(src.indexOf('mc-route-edge-redacted') !== -1,
+    'route-render.js must add a .mc-route-edge-redacted className when hopsHiddenCount > 0');
+  assert.ok(src.indexOf('mc-route-redacted-badge') !== -1,
+    'route-render.js must emit a midpoint badge when hopsHiddenCount > 0');
+  assert.ok(/opacity:\s*redacted\s*\?/.test(src),
+    'route-render.js must lower opacity when redacted');
+});
+
+test('[adv #3] observer-detail.js source: hop count honors MC_filterPathHops', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'public/observer-detail.js'), 'utf8');
+  assert.ok(src.indexOf('MC_filterPathHops') !== -1,
+    'observer-detail.js renderRecentPackets must call MC_filterPathHops');
+});
+
+test('[adv #3] live.js source: feedHops AND paths-through-node AND node-filter honor MC_filterPathHops', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'public/live.js'), 'utf8');
+  // Three distinct sites should now call into the filter API.
+  const count = (src.match(/MC_filterPathHops|MC_isVisibleHop|MC_getHide1ByteHops/g) || []).length;
+  assert.ok(count >= 4,
+    'live.js must reference the filter API at >=4 sites (feedHops + paths-through + node-filter + helper); found ' + count);
+});
+
+test('[adv #4] customize-v2.js still dispatches mc-hide-1byte-hops-changed', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'public/customize-v2.js'), 'utf8');
+  assert.ok(src.indexOf('mc-hide-1byte-hops-changed') !== -1,
+    'customizer must continue to dispatch the event');
+});
+
+test('[adv #4] map.js + packets.js subscribe to mc-hide-1byte-hops-changed', () => {
+  const mapSrc = fs.readFileSync(path.join(__dirname, 'public/map.js'), 'utf8');
+  const pktSrc = fs.readFileSync(path.join(__dirname, 'public/packets.js'), 'utf8');
+  assert.ok(/addEventListener\(['"]mc-hide-1byte-hops-changed['"]/.test(mapSrc),
+    'map.js must subscribe to mc-hide-1byte-hops-changed');
+  assert.ok(/addEventListener\(['"]mc-hide-1byte-hops-changed['"]/.test(pktSrc),
+    'packets.js must subscribe to mc-hide-1byte-hops-changed');
+});
+
+test('[adv #4] hop-filter dispatches the event when toggled', () => {
+  const ctx = freshSandbox();
+  let saw = null;
+  ctx.window.dispatchEvent = function (ev) { saw = ev; };
+  ctx.window.MC_setHide1ByteHops(true);
+  assert.ok(saw, 'must dispatch CustomEvent on setHide1ByteHops');
+  assert.strictEqual(saw.type, 'mc-hide-1byte-hops-changed');
+  assert.strictEqual(saw.detail && saw.detail.value, true);
+});
+
+test('[kb #2] (1-byte filtered) chip text is emitted by every render boundary', () => {
+  // PR body promised the chip. Assert the literal text exists in every
+  // consumer file that renders a path. If a future refactor strips it,
+  // operators lose the only signal that the route was redacted.
+  const files = [
+    'public/packets.js',
+    'public/route-view.js'
+  ];
+  for (const f of files) {
+    const src = fs.readFileSync(path.join(__dirname, f), 'utf8');
+    assert.ok(src.indexOf('1-byte filtered') !== -1,
+      f + ' must render the literal "(1-byte filtered)" chip text');
+  }
+});
+
+test('[kb #1] anti-tautology: tests reference the actual production files (not inline copies)', () => {
+  // This file is allowed ONLY a single inline filter recreation (the
+  // route-view aggregation guard). Every other consumer assertion must
+  // source-grep the production file, NOT re-implement the filter.
+  const selfSrc = fs.readFileSync(__filename, 'utf8');
+  // Ensure the test file does NOT define its own filterPathHops.
+  assert.strictEqual(
+    /function\s+filterPathHops\s*\(/.test(selfSrc), false,
+    'test file must not re-implement filterPathHops (tautology guard)'
+  );
+});
+
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed > 0 ? 1 : 0);

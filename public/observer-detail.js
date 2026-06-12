@@ -439,7 +439,14 @@ window.ObserverDetailNaiveBanner = {
       <thead><tr><th scope="col">Time</th><th scope="col">Type</th><th scope="col">Hash</th><th scope="col">SNR</th><th scope="col">RSSI</th><th scope="col">Hops</th></tr></thead>
       <tbody>${packets.map(p => {
         const decoded = typeof p.decoded_json === 'string' ? JSON.parse(p.decoded_json) : (p.decoded_json || {});
-        const hops = typeof p.path_json === 'string' ? JSON.parse(p.path_json) : (p.path_json || []);
+        const rawHops = typeof p.path_json === 'string' ? JSON.parse(p.path_json) : (p.path_json || []);
+        // #1689 r1 (adv #3): honor the customizer "hide 1-byte path hops"
+        // toggle for the hops-count column. Counting raw hops here was
+        // missed by the original PR; operators expect the count to match
+        // what's displayed everywhere else when the toggle is ON.
+        const hops = (typeof window !== 'undefined' && window.MC_filterPathHops)
+          ? window.MC_filterPathHops(rawHops)
+          : rawHops;
         const typeName = PAYLOAD_LABELS[p.payload_type] || 'Type ' + p.payload_type;
         return `<tr style="cursor:pointer" tabindex="0" role="row" data-action="navigate" data-value="#/packets/${p.hash || p.id}">
           <td>${timeAgo(p.timestamp)}</td>

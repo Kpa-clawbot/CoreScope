@@ -1575,8 +1575,10 @@
   // ── #1633 Hide 1-byte path hops toggle ──
   // Writes localStorage["meshcore-hide-1byte-hops"]. Default OFF: key is
   // removed (not "false") so MC_getHide1ByteHops cleanly returns false.
-  // Fires `mc-hide-1byte-hops-changed`; render sites that observe live
-  // (analytics route patterns, packets path columns) re-render on the event.
+  // Fires `mc-hide-1byte-hops-changed`; map.js + packets.js subscribe and
+  // re-render in place (PR #1689 r1 adv #4). Analytics + route-view rebuild
+  // on next navigation — they don't need live wiring because they re-render
+  // on tab activation.
   function _renderHide1ByteHopsToggle() {
     var on = false;
     try { on = localStorage.getItem('meshcore-hide-1byte-hops') === 'true'; } catch (_e) {}

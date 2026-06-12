@@ -341,6 +341,26 @@
       _syncDarkTiles(dark);
     });
 
+    // #1689 r1 (adv #4): live re-render when the customizer "hide 1-byte
+    // path hops" toggle flips. Before this listener the toggle only took
+    // effect on the next navigation despite an inline comment claiming
+    // "live update". Re-issue the most recent drawPacketRoute(Multi) call
+    // so the polyline + redacted badge update in place.
+    if (typeof window !== 'undefined' && !window.__mc_map_hide1byte_wired) {
+      window.__mc_map_hide1byte_wired = true;
+      window.addEventListener('mc-hide-1byte-hops-changed', function () {
+        try {
+          const last = window.__mc_lastRouteDraw;
+          if (!last) return;
+          if (last.kind === 'multi' && typeof window.drawPacketRouteMulti === 'function') {
+            window.drawPacketRouteMulti(last.paths, last.origin, last.opts);
+          } else if (last.kind === 'single' && typeof window.drawPacketRoute === 'function') {
+            window.drawPacketRoute(last.hopKeys, last.origin, last.opts);
+          }
+        } catch (e) { console.warn('[map] hide-1byte re-render failed', e); }
+      });
+    }
+
     // Save position on move
     map.on('moveend', () => {
       const c = map.getCenter();
@@ -611,6 +631,9 @@
       origin = { pubkey: origin };
     }
     opts = opts || {};
+    // #1689 r1 (adv #4): remember the last route-draw inputs so the
+    // mc-hide-1byte-hops-changed listener can re-render in place.
+    try { window.__mc_lastRouteDraw = { kind: 'single', hopKeys: hopKeys, origin: origin, opts: opts }; } catch (_e) {}
     // #1422: use the backend's /api/resolve-hops for proper disambiguation
     // (unique_prefix vs multi-byte vs gps_preference vs affinity scoring).
     // Falls back to naive nodes.filter() scan if the API is unreachable.
@@ -771,11 +794,23 @@
     // positions are added without _hopHex (they came from the payload, not the
     // outer path bytes) and therefore always survive. Intermediate hops with a
     // 1-byte _hopHex are dropped when the customizer toggle is ON.
+    //
+    // #1689 r1 (adv #2): if the filter drops every intermediate hop the result
+    // is a 2-point origin→dest polyline that is visually identical to a
+    // "direct delivery, no hops" route. Operators misread that as ground-truth
+    // direct path. To make the redaction LEGIBLE we tag the surviving
+    // positions with `_hopsHiddenCount` so the renderer can draw the polyline
+    // in a different style (dashed/lighter) and add a midpoint badge that
+    // reads "N hops hidden (1-byte)".
+    var hopsHiddenCount = 0;
     if (window.MC_isVisibleHop && window.MC_getHide1ByteHops && window.MC_getHide1ByteHops()) {
       var beforeCount = positions.length;
+      var beforeIntermediate = positions.filter(function (p) { return !!p._hopHex; }).length;
       positions = positions.filter(function (p) {
         return !p._hopHex || window.MC_isVisibleHop(p._hopHex);
       });
+      var afterIntermediate = positions.filter(function (p) { return !!p._hopHex; }).length;
+      hopsHiddenCount = beforeIntermediate - afterIntermediate;
       if (positions.length < beforeCount && positions.length >= 1) {
         // Re-mark last surviving hop as destination if the original got dropped.
         positions[positions.length - 1].isDest = true;
@@ -791,13 +826,17 @@
         timestamp: opts.timestamp || Date.now(),
         packetHash: opts.packetHash || null,
         observationId: opts.observationId || null,
-        packetContext: opts.packetContext || null
+        packetContext: opts.packetContext || null,
+        // #1689 r1 (adv #2): tell the renderer how many intermediate hops
+        // the 1-byte filter dropped so it can style the polyline as redacted.
+        hopsHiddenCount: hopsHiddenCount
       });
       return;
     }
     if (window.MeshRoute && typeof window.MeshRoute.render === 'function') {
       window.MeshRoute.render(map, routeLayer, positions, {
-        timestamp: opts.timestamp || Date.now()
+        timestamp: opts.timestamp || Date.now(),
+        hopsHiddenCount: hopsHiddenCount
       });
       return;
     }
@@ -805,7 +844,10 @@
     // ── Legacy fallback (kept tiny — should never run in production) ─────
     const coords = positions.filter(p => p.lat != null).map(p => [p.lat, p.lon]);
     if (coords.length >= 2) {
-      L.polyline(coords, { color: '#f59e0b', weight: 3, opacity: 0.8, dashArray: '8 4' }).addTo(routeLayer);
+      L.polyline(coords, {
+        color: '#f59e0b', weight: 3, opacity: hopsHiddenCount > 0 ? 0.55 : 0.8,
+        dashArray: hopsHiddenCount > 0 ? '4 6' : '8 4'
+      }).addTo(routeLayer);
       map.fitBounds(L.latLngBounds(coords).pad(0.3));
     } else if (coords.length === 1) {
       map.setView(coords[0], 13);
@@ -825,6 +867,9 @@
     opts = opts || {};
     if (typeof origin === 'string') origin = { pubkey: origin };
     if (!Array.isArray(paths) || paths.length === 0) return;
+    // #1689 r1 (adv #4): remember last multi-path draw for live re-render
+    // when the hide-1-byte-hops toggle changes.
+    try { window.__mc_lastRouteDraw = { kind: 'multi', paths: paths, origin: origin, opts: opts }; } catch (_e) {}
     if (paths.length === 1) {
       return drawPacketRoute(paths[0].path || [], origin, opts);
     }

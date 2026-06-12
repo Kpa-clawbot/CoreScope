@@ -2541,9 +2541,24 @@
           return;
         }
         const COLLAPSE = 5;
+        // #1689 r1 (adv #3): respect the customizer "hide 1-byte path hops"
+        // toggle in the live-pane "Paths Through" widget. /api/.../paths
+        // returns hops as objects {prefix,pubkey,name}; the byte-length is
+        // derived from the hex prefix.
+        function _filterHopObjs(hopObjs) {
+          if (typeof window === 'undefined' || !window.MC_isVisibleHop) return hopObjs;
+          if (!window.MC_getHide1ByteHops || !window.MC_getHide1ByteHops()) return hopObjs;
+          return (hopObjs || []).filter(function (h) {
+            return window.MC_isVisibleHop(h && h.prefix ? String(h.prefix) : '');
+          });
+        }
         function renderPathList(paths) {
           return paths.map(p => {
-            const chain = p.hops.map(h => {
+            const filteredHops = _filterHopObjs(p.hops || []);
+            if (!filteredHops.length) {
+              return `<div style="padding:3px 0;font-size:11px;line-height:1.4;color:var(--text-muted)">— (1-byte filtered) <span style="color:var(--text-muted)">(${p.count}×)</span></div>`;
+            }
+            const chain = filteredHops.map(h => {
               const isThis = h.pubkey === n.public_key || (h.prefix && n.public_key.toLowerCase().startsWith(h.prefix.toLowerCase()));
               const name = escapeHtml(h.name || h.prefix);
               if (isThis) return `<strong style="color:var(--accent)">${name}</strong>`;
@@ -2680,7 +2695,19 @@
 
   function packetInvolvesFilterNode(pkt, filterKeys) {
     if (!filterKeys.length) return true;
-    const hops = (pkt.decoded?.path?.hops) || [];
+    let hops = (pkt.decoded?.path?.hops) || [];
+    // #1689 r1 (adv #3): when the customizer "hide 1-byte path hops" toggle
+    // is ON, a packet whose only mention of the filter-node is via a 1-byte
+    // hop should not count as "involves the node" — the hop is hidden from
+    // the user's view, so matching on it is a phantom positive.
+    if (typeof window !== 'undefined' && window.MC_getHide1ByteHops && window.MC_getHide1ByteHops() && window.MC_isVisibleHop) {
+      hops = hops.filter(function (h) {
+        const tok = (h && h.prefix) ? String(h.prefix)
+                   : (h && h.id)    ? String(h.id)
+                   : (typeof h === 'string') ? h : '';
+        return window.MC_isVisibleHop(tok);
+      });
+    }
     for (const hop of hops) {
       const h = (hop.id || hop.public_key || hop).toString().toLowerCase();
       if (filterKeys.some(f => f.toLowerCase().startsWith(h) || h.startsWith(f.toLowerCase()))) return true;
@@ -3186,6 +3213,20 @@
           fpHops = fp.decoded.path.hops;
         }
         if (fpHops.length > feedHops.length) feedHops = fpHops;
+      }
+      // #1689 r1 (adv #3): apply the customizer "hide 1-byte path hops"
+      // toggle to the feed-item hop count + chip rendering. feedHops here
+      // is an array of raw hex tokens (from path_json) or hop-objects (from
+      // decoded.path.hops) — MC_filterPathHops only knows about hex strings
+      // so we branch on shape.
+      if (typeof window !== 'undefined' && window.MC_getHide1ByteHops && window.MC_getHide1ByteHops()) {
+        if (feedHops.length && typeof feedHops[0] === 'string') {
+          feedHops = window.MC_filterPathHops(feedHops);
+        } else if (feedHops.length && window.MC_isVisibleHop) {
+          feedHops = feedHops.filter(function (h) {
+            return window.MC_isVisibleHop(h && h.prefix ? String(h.prefix) : (h && h.id ? String(h.id) : ''));
+          });
+        }
       }
       addFeedItem(icon, typeName, payload, feedHops, color, consolidated);
       // Store all observation packets in dedup entry for replay tree

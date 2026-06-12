@@ -300,20 +300,44 @@
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
     // ── Edges ───────────────────────────────────────────────────────
+    // #1689 r1 (adv #2): when the 1-byte hop filter dropped hops, draw the
+    // edges as dashed + lighter so operators don't misread the resulting
+    // origin→dest polyline as "direct delivery, no hops in path".
+    var hopsHiddenCount = (opts && typeof opts.hopsHiddenCount === 'number') ? opts.hopsHiddenCount : 0;
+    var redacted = hopsHiddenCount > 0;
     for (var i = 0; i < total - 1; i++) {
       var a = positions[i], b = positions[i + 1];
       if (a.lat == null || a.lon == null || b.lat == null || b.lon == null) continue;
       var color = seqColor(i, total - 1);
       var dist = haversineKm(a, b);
       var ariaLabel = 'Hop ' + (i + 1) + ' \u2192 ' + (i + 2) +
-        (dist != null ? ', ~' + dist + 'km' : '');
+        (dist != null ? ', ~' + dist + 'km' : '') +
+        (redacted ? ' (' + hopsHiddenCount + ' 1-byte hop(s) hidden)' : '');
+      var edgeDash = (a.resolved === false || b.resolved === false)
+        ? '6 4'
+        : (redacted ? '4 6' : null);
       var poly = L.polyline([[a.lat, a.lon], [b.lat, b.lon]], {
         color: color,
         weight: 3.5,
-        opacity: 0.92,
-        dashArray: (a.resolved === false || b.resolved === false) ? '6 4' : null,
-        className: 'mc-route-edge'
+        opacity: redacted ? 0.6 : 0.92,
+        dashArray: edgeDash,
+        className: 'mc-route-edge' + (redacted ? ' mc-route-edge-redacted' : '')
       }).addTo(layer);
+
+      // Midpoint badge — only on the first redacted edge — that reads
+      // "N hops hidden (1-byte)". Reuses Leaflet's divIcon so it picks up
+      // the theme tokens via .mc-route-redacted-badge in CSS.
+      if (redacted && i === 0) {
+        var mid = [(a.lat + b.lat) / 2, (a.lon + b.lon) / 2];
+        var badgeHtml = '<span class="mc-route-redacted-badge" title="Hidden by customizer: 1-byte path hops are filtered. Toggle off in Customize to see the full path.">' +
+          hopsHiddenCount + ' hop' + (hopsHiddenCount === 1 ? '' : 's') + ' hidden (1-byte)' +
+          '</span>';
+        L.marker(mid, {
+          icon: L.divIcon({ className: 'mc-route-redacted-badge-wrap', html: badgeHtml, iconSize: [120, 18], iconAnchor: [60, 9] }),
+          interactive: true,
+          keyboard: false
+        }).addTo(layer);
+      }
 
       // Patch the rendered <path> element to add aria-label + marker-end.
       // Leaflet builds it on the next animation frame, so defer.

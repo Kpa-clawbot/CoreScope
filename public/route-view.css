@@ -726,3 +726,27 @@ body.mc-route-active:has(.mc-rt-sidebar.mc-rt-collapsed) #leaflet-map {
   .mc-rt-sidebar.mc-rt-mobile-expanded .mc-rt-ctx { margin: 4px 0 2px; padding: 4px 6px; font-size: 11px; }
   .mc-rt-sidebar.mc-rt-mobile-expanded .mc-rt-row { padding: 3px 10px 3px 0; font-size: 11px; }
 }
+
+/* #1689 r1 (adv #2) — redacted-route badge shown at the midpoint of a
+ * polyline whose intermediate hops were filtered out by the customizer
+ * "Hide 1-byte path hops" toggle. Operators must not mistake the
+ * straight origin→dest line for a "no hops, direct delivery" route. */
+.mc-route-redacted-badge-wrap {
+  pointer-events: auto;
+}
+.mc-route-redacted-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--bg-muted, #1f2937);
+  color: var(--text-muted, #d1d5db);
+  border: 1px dashed var(--accent, #f59e0b);
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+  font-family: var(--font-sans, system-ui, sans-serif);
+}
+.mc-route-edge-redacted {
+  /* dashArray is set per-edge in route-render.js; this hook is for
+   * customizer overrides + tests to assert the redacted-state class. */
+}
