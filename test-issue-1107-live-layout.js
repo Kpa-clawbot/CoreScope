@@ -30,18 +30,35 @@ const liveCss = fs.readFileSync(path.join(__dirname, 'public', 'live.css'), 'utf
 // Extract the .live-legend base block (first occurrence, not the media
 // queries, not the .matrix-theme override, not .live-legend.hidden).
 function ruleBlock(css, selector) {
-  // Match selector at start of a rule, capture the {...} body. Selector
-  // may be on its own line or grouped — anchor with a punctuation-safe
-  // negative lookbehind via a regex compiled per-selector.
+  // Match the LARGEST rule block for the given selector (multiple may
+  // exist: a base rule + media-query overrides). We pick the largest body
+  // because it is the canonical declaration with full property set.
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // Require the selector to appear NOT immediately preceded by another
-  // selector char (so `.live-legend.hidden` doesn't match `.live-legend`).
   const re = new RegExp(
     '(?:^|[\\n,}])\\s*' + escaped + '\\s*\\{([^}]*)\\}',
-    'm'
+    'gm'
   );
-  const m = css.match(re);
-  return m ? m[1] : null;
+  let m, best = null;
+  while ((m = re.exec(css)) !== null) {
+    if (best == null || m[1].length > best.length) best = m[1];
+  }
+  return best;
+}
+
+function allRuleBlocks(css, selector) {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(
+    '(?:^|[\\n,}])\\s*' + escaped + '\\s*\\{([^}]*)\\}',
+    'gm'
+  );
+  const out = [];
+  let m;
+  while ((m = re.exec(css)) !== null) out.push(m[1]);
+  return out;
+}
+
+function anyBlockMatches(css, selector, pattern) {
+  return allRuleBlocks(css, selector).some(b => pattern.test(b));
 }
 
 // ─────────────────────────────────────────────────────────────────────
