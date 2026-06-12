@@ -83,6 +83,9 @@ jobs:
       - name: Verify Dockerfile COPY invariants (issue #1316)
         run: bash scripts/check-dockerfile-internal-pkgs.sh
 
+      - name: Staging disk-monitor unit tests (issue #1684)
+        run: bash scripts/staging/test-disk-monitor.sh
+
       - name: Lint CSS variables (issue #1128)
         run: |
           set -e
