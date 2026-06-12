@@ -5319,3 +5319,43 @@ body.embed #app.app-fixed {
   min-width: 1.6em;
   font-weight: 600;
 }
+
+/* ============================================================
+ * warmup-banner.js (#1660) — global server warm-up status pill.
+ * a11y: role="status" live region in JS; CSS makes it visible.
+ * All colors via CSS variables — customizer-safe.
+ * ============================================================ */
+.warmup-banner {
+  position: sticky;
+  top: 0;
+  z-index: 9000;
+  background: var(--warn-bg, #fef3c7);
+  color: var(--warn-text, #92400e);
+  border-bottom: 1px solid var(--warning, #eab308);
+  font-size: 0.9rem;
+  line-height: 1.4;
+  transition: opacity 0.4s ease, max-height 0.4s ease;
+  opacity: 1;
+  max-height: 240px;
+  overflow: hidden;
+}
+.warmup-banner--hidden {
+  opacity: 0;
+  max-height: 0;
+  border-bottom-width: 0;
+  pointer-events: none;
+}
+.warmup-banner__inner {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0.4rem 1rem;
+}
+.warmup-banner__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.warmup-banner__item {
+  margin: 0;
+  padding: 0.1rem 0;
+}
