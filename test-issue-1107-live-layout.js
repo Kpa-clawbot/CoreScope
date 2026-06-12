@@ -108,8 +108,8 @@ if (feedShowBtn) {
     '.feed-show-btn uses position: fixed (pinned to viewport)'
   );
   assert(
-    /bottom\s*:\s*1rem/.test(feedShowBtn),
-    '.feed-show-btn pinned at bottom: 1rem (grouped with legend toggle)'
+    /bottom\s*:\s*(1rem|max\(1rem)/.test(feedShowBtn),
+    '.feed-show-btn pinned at bottom: 1rem or max(1rem,...) (grouped with legend toggle)'
   );
   assert(
     /right\s*:\s*1rem/.test(feedShowBtn),

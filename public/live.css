@@ -895,12 +895,15 @@ body.live-fullscreen #liveFullscreenToggle:hover,
 
 .feed-show-btn {
   /* #1107: pin fixed bottom-right (stacked above legend toggle) so the
-   * activate/hide button group docks together as a tidy cluster. */
-  position: fixed; bottom: 1rem; right: 1rem; z-index: 500;
-  /* Stack above .legend-toggle-btn (~46px tall + 10px gap) instead of
-   * overlapping. Done with margin-bottom so the `right: 1rem` invariant
-   * (and bottom-right anchor) stays consistent across both buttons. */
-  margin-bottom: 56px;
+   * activate/hide button group docks together as a tidy cluster.
+   * bottom uses max() to clear the VCR bar when present (#1206). */
+  --legend-toggle-stack: calc(var(--legend-toggle-h, 46px) + 10px); /* gap above legend-toggle */
+  position: fixed;
+  bottom: max(1rem, calc(var(--vcr-bar-height, 0px) + 10px + var(--legend-toggle-stack)));
+  right: 1rem; z-index: 500;
+  /* Stack above .legend-toggle-btn using margin-bottom so the `right: 1rem`
+   * invariant (and bottom-right anchor) stays consistent across both buttons. */
+  margin-bottom: var(--legend-toggle-stack);
   background: color-mix(in srgb, var(--surface-1) 92%, transparent); backdrop-filter: blur(8px);
   border: 1px solid var(--border); border-radius: 8px;
   color: var(--text-muted); font-size: 18px; padding: 8px 10px;
@@ -1192,7 +1195,6 @@ input.live-node-filter-input:focus {
  * how tall it grows (mobile two-row layout, safe-area-inset, etc.).
  */
 .live-feed { bottom: calc(var(--vcr-bar-height, 58px) + 10px); }
-.feed-show-btn { bottom: calc(var(--vcr-bar-height, 58px) + 10px) !important; }
 /* Cap the feed's height so its scrollable content never extends below the
  * VCR bar top edge, even when the feed is pinned to a bottom corner.
  */
