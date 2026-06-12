@@ -132,8 +132,14 @@ func main() {
 			Broker: source.Broker,
 		}
 
+		// #1043: per-source status registry. Idempotent — repeated
+		// registration across reconnects returns the same state so
+		// counters accumulate across the process lifetime.
+		status := RegisterSourceStatus(tag, source.Broker)
+
 		opts.SetOnConnectHandler(func(c mqtt.Client) {
 			log.Printf("MQTT [%s] connected to %s", tag, source.Broker)
+			status.MarkConnect(time.Now())
 			// PR #1216 r1 item 2: clear the stale LastMessageUnix from
 			// before the outage so the watchdog doesn't immediately scream
 			// "stalled for 2h". Also restarts the cold-start grace window
@@ -156,6 +162,7 @@ func main() {
 
 		opts.SetConnectionLostHandler(func(c mqtt.Client, err error) {
 			log.Printf("MQTT [%s] disconnected from %s: %v", tag, source.Broker, err)
+			status.MarkDisconnect(time.Now(), err)
 		})
 
 		opts.SetReconnectingHandler(func(c mqtt.Client, options *mqtt.ClientOptions) {
@@ -171,6 +178,7 @@ func main() {
 			// report "fresh" while the writer was stalled and the
 			// buffer was filling.
 			markReceiptForTag(tag, time.Now())
+			status.MarkPacket(time.Now())
 			ingestBuffer.Submit(func() {
 				handleMessage(store, tag, src, m, channelKeys, regionKeys, cfg)
 			})

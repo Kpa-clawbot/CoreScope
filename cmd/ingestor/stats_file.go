@@ -58,6 +58,10 @@ type IngestorStatsSnapshot struct {
 	// stale). Additive: omitempty so older server builds ignore it
 	// gracefully.
 	SourceLiveness map[string]SourceLivenessSnapshot `json:"source_liveness,omitempty"`
+	// SourceStatuses (#1043) is the per-MQTT-source connection state and
+	// counter view consumed by cmd/server's /api/mqtt/status handler.
+	// Additive; omitempty so older server builds ignore it.
+	SourceStatuses []SourceStatusSnapshot `json:"source_statuses,omitempty"`
 }
 
 // SourceLivenessSnapshot is the per-source two-clock view exposed for
@@ -247,6 +251,7 @@ func StartStatsFileWriter(s *Store, interval time.Duration) {
 				ProcIO:             ioRate,
 				WriterPerf:         s.WriterStatsSnapshot(),
 				SourceLiveness:     SnapshotLivenessClocks(),
+				SourceStatuses:     SnapshotSourceStatuses(tickAt),
 			}
 			buf.Reset()
 			if err := enc.Encode(&snap); err != nil {
