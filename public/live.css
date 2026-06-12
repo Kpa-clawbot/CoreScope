@@ -1023,13 +1023,16 @@ input.live-node-filter-input:focus {
 }
 
 .vcr-live-btn {
-  background: var(--status-red); /* #1668-M4 — solid bg + #fff fg for 5.25:1 AA (was 20% wash + status-red fg = 1:1 BLOCKER) */
+  /* #1668-M4 r1: --status-red (#ef4444) vs #fff = 3.76:1 — fails AA. Carve-out to red-700
+     (#b91c1c, 6.47:1 vs #fff) on this single surface to avoid touching --status-red token
+     which is consumed by other surfaces (dots, borders, etc) where it's used as fg/accent. */
+  background: #b91c1c;
   color: #fff;
   font-weight: 700;
   font-size: 12px; /* #1668-M4 — 0.7rem (~11.2px) is below floor; lock to 12px+700 */
   letter-spacing: 0.05em;
 }
-.vcr-live-btn:hover { background: color-mix(in srgb, var(--status-red) 85%, #000); }
+.vcr-live-btn:hover { background: color-mix(in srgb, #b91c1c 85%, #000); }
 
 .vcr-mode {
   font-size: 0.75rem;

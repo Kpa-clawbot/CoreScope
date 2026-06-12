@@ -289,7 +289,10 @@ console.log('--------------------------------------------------');
 
 function type_to_cls(t) { return t; } // (unused — kept for log compatibility)
 
-// --- 3) hash-cell carve-out — collision / taken / possible must keep distinct bg
+// --- 3) hash-cell carve-out — collision / taken / possible must keep distinct
+//        bgs AND each must clear WCAG AA (>=4.5:1) against the #fff fg they
+//        ship with. (#1681 r1 adv-#5: prior version only asserted bgTak≠bgPos,
+//        which let 2.28:1 / 1.92:1 / 3.96:1 BLOCKERs through.)
 
 const colMatch = css.match(/\.hash-cell-collision\s*\{([^}]+)\}/);
 const takMatch = css.match(/\.hash-cell-taken\s*\{([^}]+)\}/);
@@ -305,11 +308,119 @@ function bgOf(body) {
 const bgCol = bgOf(colMatch[1]);
 const bgTak = bgOf(takMatch[1]);
 const bgPos = bgOf(posMatch[1]);
-// hash-cell-collision background is dynamic (set inline by analytics.js
-// gradient). The base CSS rule may not declare a static bg — that's OK as
-// long as inline encoding stays distinct. We just assert taken≠possible to
-// ensure semantic encoding hasn't been flattened.
+
+// Encoding preservation: taken and possible must remain visually distinct.
 assert.notStrictEqual(bgTak, bgPos, 'hash-cell taken/possible bgs collapsed — semantic encoding lost');
+
+// Color-value parsing — accept #hex or rgb()/rgba() literal. Reject var()
+// indirection here: M4 r1 requires that hash-cell bgs are an own carve-out,
+// because the --status-{green,yellow} tokens are too light vs #fff.
+function parseColor(val) {
+  if (!val) return null;
+  const v = val.trim();
+  let m = v.match(/^#([0-9a-fA-F]{6})$/);
+  if (m) return hexToRgb('#' + m[1]);
+  m = v.match(/^#([0-9a-fA-F]{3})$/);
+  if (m) {
+    const s = m[1];
+    return hexToRgb('#' + s[0]+s[0]+s[1]+s[1]+s[2]+s[2]);
+  }
+  m = v.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+  if (m) return [parseInt(m[1],10), parseInt(m[2],10), parseInt(m[3],10)];
+  return null;
+}
+
+const WHITE = [255,255,255];
+const AA = 4.5;
+
+// taken — base CSS rule must declare the bg
+const takRgb = parseColor(bgTak);
+assert.ok(takRgb, `hash-cell-taken bg "${bgTak}" must be a #hex or rgb() literal (var() not allowed — needs own contrast budget vs #fff)`);
+const takRatio = contrast(WHITE, takRgb);
+assert.ok(takRatio >= AA, `hash-cell-taken bg ${bgTak} vs #fff = ${takRatio.toFixed(2)}:1 < ${AA}:1 AA`);
+
+// possible
+const posRgb = parseColor(bgPos);
+assert.ok(posRgb, `hash-cell-possible bg "${bgPos}" must be a #hex or rgb() literal (var() not allowed)`);
+const posRatio = contrast(WHITE, posRgb);
+assert.ok(posRatio >= AA, `hash-cell-possible bg ${bgPos} vs #fff = ${posRatio.toFixed(2)}:1 < ${AA}:1 AA`);
+
+// collision — bg is dynamic via classifyHashCell() gradient in analytics.js.
+// Parse the gradient endpoints and verify BOTH ends clear AA against #fff.
+// We extract the function body and `eval` it at t=0 and t=1 by walking the
+// arithmetic — supports either shape: explicit `const cX = Math.round(A+B*t)`
+// or inline `rgb(${Math.round(...)},${Math.round(...)},${Math.round(...)})`.
+const analyticsJsPath = path.join(repoRoot, 'public', 'analytics.js');
+const analyticsJs = fs.readFileSync(analyticsJsPath, 'utf8');
+const classifyMatch = analyticsJs.match(/function\s+classifyHashCell[\s\S]*?\n\s{2}\}/);
+assert.ok(classifyMatch, 'classifyHashCell function not found in analytics.js');
+const classifyBody = classifyMatch[0];
+assert.ok(/hash-cell-collision/.test(classifyBody), 'classifyHashCell missing hash-cell-collision branch');
+
+// Pull the rgb(...) template inside the collision branch. The expression
+// uses Math.round(...) which has nested parens, so a lazy regex won't work;
+// scan forward and track paren depth from the opening `rgb(`.
+const rgbStart = classifyBody.indexOf('background:rgb(');
+assert.ok(rgbStart !== -1, 'classifyHashCell collision: background:rgb( not found');
+let depth = 0;
+let rgbEnd = -1;
+for (let i = rgbStart + 'background:rgb('.length - 1; i < classifyBody.length; i++) {
+  const ch = classifyBody[i];
+  if (ch === '(') depth++;
+  else if (ch === ')') { depth--; if (depth === 0) { rgbEnd = i; break; } }
+}
+assert.ok(rgbEnd !== -1, 'classifyHashCell collision: unbalanced rgb() parens');
+const rgbExpr = classifyBody.slice(rgbStart + 'background:rgb('.length, rgbEnd); // e.g. "${cr},${cg},${cb}"
+
+// Build an evaluator. If the template references cr/cg/cb, parse the
+// `const cX = Math.round(A + (B)*t)` declarations above. Otherwise the
+// template itself contains the arithmetic and we sandbox-eval it directly.
+function evalRgbAt(t) {
+  let exprWithT = rgbExpr.replace(/\$\{([^}]+)\}/g, (_, e) => '(' + e + ')');
+  // Substitute cr/cg/cb if referenced.
+  if (/\bc[rgb]\b/.test(exprWithT)) {
+    for (const name of ['cr','cg','cb']) {
+      const re = new RegExp('const\\s+' + name + '\\s*=\\s*([^;]+);');
+      const m = classifyBody.match(re);
+      if (!m) return null;
+      exprWithT = exprWithT.replace(new RegExp('\\b' + name + '\\b', 'g'), '(' + m[1].trim() + ')');
+    }
+  }
+  // Sandbox eval. Only allow Math, the loop var t, and arithmetic.
+  // eslint-disable-next-line no-new-func
+  const fn = new Function('t', 'Math', 'return [' + exprWithT + ']');
+  return fn(t, Math);
+}
+
+const endpoints = [0, 1].map((t) => evalRgbAt(t));
+assert.ok(endpoints[0] && endpoints[0].length === 3, 'collision gradient: failed to evaluate at t=0');
+assert.ok(endpoints[1] && endpoints[1].length === 3, 'collision gradient: failed to evaluate at t=1');
+const colRatios = endpoints.map((rgb) => contrast(WHITE, rgb));
+assert.ok(colRatios[0] >= AA,
+  `hash-cell-collision gradient t=0 rgb(${endpoints[0].join(',')}) vs #fff = ${colRatios[0].toFixed(2)}:1 < ${AA}:1 AA`);
+assert.ok(colRatios[1] >= AA,
+  `hash-cell-collision gradient t=1 rgb(${endpoints[1].join(',')}) vs #fff = ${colRatios[1].toFixed(2)}:1 < ${AA}:1 AA`);
+
+console.log('\nM4 hash-cell semantic bg contrast (vs #fff):');
+console.log('--------------------------------------------------');
+console.log(`  [${takRatio>=AA?'PASS':'FAIL'}] hash-cell-taken     bg=${bgTak} ratio=${takRatio.toFixed(2)}:1`);
+console.log(`  [${posRatio>=AA?'PASS':'FAIL'}] hash-cell-possible  bg=${bgPos} ratio=${posRatio.toFixed(2)}:1`);
+console.log(`  [${colRatios[0]>=AA?'PASS':'FAIL'}] hash-cell-collision t=0 rgb(${endpoints[0].join(',')}) ratio=${colRatios[0].toFixed(2)}:1`);
+console.log(`  [${colRatios[1]>=AA?'PASS':'FAIL'}] hash-cell-collision t=1 rgb(${endpoints[1].join(',')}) ratio=${colRatios[1].toFixed(2)}:1`);
+console.log('--------------------------------------------------');
+
+// --- 3b) /live VCR LIVE button — solid bg + #fff must clear AA -----------
+// (#1681 r1 adv-#4: prior bg was --status-red = #ef4444 → 3.76:1 BLOCKER.
+// Carve-out to red-700 (#b91c1c) achieves 6.47:1.)
+const vcrLiveMatch = liveCss.match(/\.vcr-live-btn\s*\{([^}]+)\}/);
+assert.ok(vcrLiveMatch, '.vcr-live-btn rule missing in live.css');
+const vcrBg = bgOf(vcrLiveMatch[1]);
+const vcrBgRgb = parseColor(vcrBg);
+assert.ok(vcrBgRgb, `.vcr-live-btn bg "${vcrBg}" must be a #hex or rgb() literal (var() not allowed — needs own contrast budget vs #fff)`);
+const vcrRatio = contrast(WHITE, vcrBgRgb);
+assert.ok(vcrRatio >= AA, `.vcr-live-btn bg ${vcrBg} vs #fff = ${vcrRatio.toFixed(2)}:1 < ${AA}:1 AA`);
+console.log(`  [${vcrRatio>=AA?'PASS':'FAIL'}] vcr-live-btn        bg=${vcrBg} ratio=${vcrRatio.toFixed(2)}:1`);
+console.log('--------------------------------------------------');
 
 // --- 4) final gate ---------------------------------------------------------
 
