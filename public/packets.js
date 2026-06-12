@@ -139,6 +139,10 @@
   // columns and removing the pill mutate layout and re-trigger ResizeObserver,
   // which would otherwise immediately stomp on the reveal the user just asked for.
   const lastWrapW = new WeakMap();
+  // Parallel map of tbody MutationObservers per wired table. Separate from
+  // `wired` (which stores the ResizeObserver) so the existing sweep/dispose
+  // contract on `wired` stays unchanged for callers reading its shape.
+  const wiredMO = new WeakMap();
   // Sweep tables that have been detached from the DOM (e.g. SPA destroyed
   // their page) and release their ResizeObserver. Called opportunistically on
   // every register() — cheap O(n) over wired tables, n is tiny in practice.
@@ -146,6 +150,8 @@
     wired.forEach((ro, t) => {
       if (!t || !t.isConnected) {
         if (ro) { try { ro.disconnect(); } catch (_) {} }
+        const mo = wiredMO.get(t);
+        if (mo) { try { mo.disconnect(); } catch (_) {} wiredMO.delete(t); }
         wired.delete(t);
       }
     });
@@ -171,6 +177,26 @@
         });
         ro.observe(wrap);
       }
+    }
+    // #1693 r2: re-apply on tbody mutations. Incremental renderTableRows()
+    // calls (observer-decorated re-render, HopResolver re-render, etc.) add
+    // fresh <td>s after register() ran. Without re-running apply() those new
+    // cells miss the `col-hidden` class until the next resize/window event,
+    // which made the mobile E2E flake (`td.col-observer` visible at 375px).
+    // Debounce ~100ms to coalesce bursts; idempotent because apply() rebuilds
+    // hidden state from scratch each call.
+    const tbody = table.querySelector('tbody');
+    if (tbody && typeof MutationObserver !== 'undefined') {
+      let _moTimer = null;
+      const mo = new MutationObserver(() => {
+        clearTimeout(_moTimer);
+        _moTimer = setTimeout(() => {
+          if (!table.isConnected) return;
+          apply(table);
+        }, 100);
+      });
+      mo.observe(tbody, { childList: true });
+      wiredMO.set(table, mo);
     }
     wired.set(table, ro);
     apply(table);
