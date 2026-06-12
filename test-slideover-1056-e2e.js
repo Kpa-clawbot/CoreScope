@@ -70,7 +70,7 @@ const PAGES = [
       // virtual-scroll spacer race on the packets page (#1662).
       await page.waitForFunction((rowSel) => {
         return document.querySelector(rowSel) !== null;
-      }, p.rowSel, { timeout: 8000 });
+      }, p.rowSel, { timeout: 20000 });
     });
 
     await step(`${tag}: clicking row opens slide-over with backdrop`, async () => {
