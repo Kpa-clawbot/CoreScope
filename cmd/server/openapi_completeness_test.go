@@ -25,8 +25,8 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -81,7 +81,7 @@ func collectHandlerRoutes(t *testing.T) map[string]string {
 			if !ok || lit.Kind != token.STRING {
 				return true
 			}
-			v, err := strconvUnquote(lit.Value)
+			v, err := strconv.Unquote(lit.Value)
 			if err != nil {
 				return true
 			}
@@ -206,7 +206,3 @@ func TestOpenAPICompleteness(t *testing.T) {
 	}
 }
 
-// _ ensures filepath stays imported in case future variants resolve paths
-// outside the working dir. Cheaper than maintaining import diffs across
-// red and green commits.
-var _ = filepath.Join
