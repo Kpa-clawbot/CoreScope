@@ -324,7 +324,14 @@
     var contextBlock = buildPacketContextBlock(pktCtx);
     var uniquePathsCount = (opts && opts.allPaths) ? (function () {
       var seen = {};
-      opts.allPaths.forEach(function (p) { seen[(p.path || []).join('-')] = true; });
+      opts.allPaths.forEach(function (p) {
+        // #1633 — collapse paths whose only difference is 1-byte hops when
+        // the customizer toggle is ON. Aggregation uses the FILTERED hop
+        // list so the picker count reflects the surviving distinct routes.
+        var hops = (p.path || []);
+        if (typeof window !== 'undefined' && window.MC_filterPathHops) hops = window.MC_filterPathHops(hops);
+        seen[hops.join('-')] = true;
+      });
       return Object.keys(seen).length;
     })() : 1;
     var multiPathChip = '';
@@ -338,7 +345,12 @@
       // paths, each with the observer-count and a click-to-isolate affordance.
       var pathGroups = {};
       (opts.allPaths || []).forEach(function (p) {
-        var k = (p.path || []).join('→');
+        var rawHops = p.path || [];
+        // #1633 — same render-time filter as the count above.
+        var hops = (typeof window !== 'undefined' && window.MC_filterPathHops)
+          ? window.MC_filterPathHops(rawHops)
+          : rawHops;
+        var k = hops.join('→');
         if (!pathGroups[k]) pathGroups[k] = { key: k, observers: [], count: 0 };
         pathGroups[k].observers.push(p.observer || '?');
         pathGroups[k].count++;

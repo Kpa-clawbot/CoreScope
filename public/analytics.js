@@ -1973,13 +1973,27 @@
 
       function renderTable(data, title) {
         if (!data.subpaths.length) return `<h4>${title}</h4><div class="text-muted">No data</div>`;
-        const maxCount = data.subpaths[0]?.count || 1;
+        // #1633 — when "Hide 1-byte path hops" is ON, filter route patterns
+        // whose underlying rawHops contain any 1-byte hex token. We filter
+        // INPUT (not just CSS-hide) so the displayed % and ordering reflect
+        // the surviving population.
+        const _hide1 = !!(typeof window !== 'undefined' && window.MC_getHide1ByteHops && window.MC_getHide1ByteHops());
+        const _hop1 = function (h) { return String(h || '').length === 2; };
+        const subpaths = _hide1
+          ? data.subpaths.filter(function (s) {
+              var rh = s.rawHops || [];
+              for (var k = 0; k < rh.length; k++) if (_hop1(rh[k])) return false;
+              return true;
+            })
+          : data.subpaths;
+        if (!subpaths.length) return `<h4>${title}</h4><div class="text-muted">No data (all matching routes contained 1-byte hops — toggle off in customizer to see)</div>`;
+        const maxCount = subpaths[0]?.count || 1;
         return `<h4>${title}</h4>
-          <p class="text-muted" style="margin:4px 0 8px">From ${data.totalPaths.toLocaleString()} paths with 2+ hops</p>
+          <p class="text-muted" style="margin:4px 0 8px">From ${data.totalPaths.toLocaleString()} paths with 2+ hops${_hide1 ? ` · showing ${subpaths.length} of ${data.subpaths.length} (1-byte filtered)` : ''}</p>
           <table class="analytics-table"><thead><tr>
             <th scope="col">#</th><th scope="col">Route</th><th scope="col">Occurrences</th><th scope="col">% of paths</th><th scope="col">Frequency</th>
           </tr></thead><tbody>
-          ${data.subpaths.map((s, i) => {
+          ${subpaths.map((s, i) => {
             const barW = Math.max(2, Math.round(s.count / maxCount * 100));
             const hops = s.path.split(' → ');
             const rawHops = s.rawHops || [];

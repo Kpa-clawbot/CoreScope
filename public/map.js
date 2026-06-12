@@ -670,15 +670,20 @@
     // renderer can label it "no GPS" instead of "unresolved prefix".
     const raw = hopKeys.map(hop => {
       const hopLower = String(hop).toLowerCase();
+      // #1633 — tag the original hex token so MC_isVisibleHop can filter
+      // 1-byte hops out of the polyline/sidebar when the customizer toggle
+      // is ON. The hop value stays in place upstream (resolve, fitBounds
+      // ordering) — only the polyline render iterator drops it.
+      const _hopHex = String(hop);
       // Try server resolution first
       const srv = serverResolved && (serverResolved[hop] || serverResolved[hopLower] || serverResolved[hop.toUpperCase()]);
       if (srv && srv.pubkey) {
         const c = srv.candidates && srv.candidates[0];
         if (c && c.lat != null && c.lon != null && !(c.lat === 0 && c.lon === 0)) {
-          return { lat: c.lat, lon: c.lon, name: srv.name || c.name || hop.slice(0,8), pubkey: srv.pubkey, role: c.role, resolved: true };
+          return { lat: c.lat, lon: c.lon, name: srv.name || c.name || hop.slice(0,8), pubkey: srv.pubkey, role: c.role, resolved: true, _hopHex };
         }
         // Server resolved but node has no usable GPS
-        return { name: srv.name || hop.slice(0,8), pubkey: srv.pubkey, role: (c && c.role) || null, resolved: false, gpsless: true };
+        return { name: srv.name || hop.slice(0,8), pubkey: srv.pubkey, role: (c && c.role) || null, resolved: false, gpsless: true, _hopHex };
       }
       // Fallback: naive local scan (kept for resilience when API is down).
       const allMatches = nodes.filter(n => {
@@ -688,14 +693,14 @@
       const withGps = allMatches.filter(n => n.lat != null && n.lon != null && !(n.lat === 0 && n.lon === 0));
       if (withGps.length === 1) {
         const c = withGps[0];
-        return { lat: c.lat, lon: c.lon, name: c.name || hop.slice(0,8), pubkey: c.public_key, role: c.role, resolved: true };
+        return { lat: c.lat, lon: c.lon, name: c.name || hop.slice(0,8), pubkey: c.public_key, role: c.role, resolved: true, _hopHex };
       } else if (withGps.length > 1) {
-        return { name: hop.slice(0,8), pubkey: hop, resolved: false, candidates: withGps };
+        return { name: hop.slice(0,8), pubkey: hop, resolved: false, candidates: withGps, _hopHex };
       } else if (allMatches.length >= 1) {
         const c = allMatches[0];
-        return { name: c.name || hop.slice(0,8), pubkey: c.public_key, role: c.role, resolved: false, gpsless: true };
+        return { name: c.name || hop.slice(0,8), pubkey: c.public_key, role: c.role, resolved: false, gpsless: true, _hopHex };
       }
-      return { name: String(hop).slice(0, 8), pubkey: hop, resolved: false };
+      return { name: String(hop).slice(0, 8), pubkey: hop, resolved: false, _hopHex };
     });
 
     // Disambiguate: pick candidate closest to center of already-resolved hops
@@ -716,7 +721,7 @@
       }
     }
 
-    const positions = raw.filter(h => h != null);
+    let positions = raw.filter(h => h != null);
 
     // Resolve and prepend origin node
     if (origin) {
@@ -761,6 +766,22 @@
     if (positions.length < 1) return;
     // Mark final hop as destination so the renderer applies the dest glyph.
     positions[positions.length - 1].isDest = true;
+
+    // #1633 — render-time 1-byte hop filter (default OFF). Origin / destination
+    // positions are added without _hopHex (they came from the payload, not the
+    // outer path bytes) and therefore always survive. Intermediate hops with a
+    // 1-byte _hopHex are dropped when the customizer toggle is ON.
+    if (window.MC_isVisibleHop && window.MC_getHide1ByteHops && window.MC_getHide1ByteHops()) {
+      var beforeCount = positions.length;
+      positions = positions.filter(function (p) {
+        return !p._hopHex || window.MC_isVisibleHop(p._hopHex);
+      });
+      if (positions.length < beforeCount && positions.length >= 1) {
+        // Re-mark last surviving hop as destination if the original got dropped.
+        positions[positions.length - 1].isDest = true;
+      }
+      if (positions.length < 1) return;
+    }
 
     // Hand off to sequence-primary sequence-primary renderer (#1418), falling
     // back to the legacy role-aware MeshRoute (#1374), then to the minimal

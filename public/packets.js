@@ -963,7 +963,14 @@
 
   function renderPath(hops, observerId) {
     if (!hops || !hops.length) return '—';
-    return hops.map(h => renderHop(h, observerId)).join('<span class="arrow">→</span>');
+    // #1633 — render-time filter (default OFF). Applies at every consumer
+    // because every site funnels through this function (group header, child
+    // observation, packet detail dt/dd, byop overlay).
+    var filtered = (typeof window !== 'undefined' && window.MC_filterPathHops)
+      ? window.MC_filterPathHops(hops)
+      : hops;
+    if (!filtered.length) return '— <span class="text-muted" title="All path hops were 1-byte and are hidden by the customizer toggle">(1-byte filtered)</span>';
+    return filtered.map(h => renderHop(h, observerId)).join('<span class="arrow">→</span>');
   }
 
   let directPacketId = null;

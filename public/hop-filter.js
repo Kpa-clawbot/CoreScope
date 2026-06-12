@@ -40,15 +40,35 @@
     return s.length >> 1;
   }
 
-  // STUB (RED): returns true for everything regardless of opts.
-  // GREEN commit replaces this with the real filter.
+  // Render-time predicate. opts may be omitted — if so, falls back to the
+  // current localStorage value. The hop is hidden only when:
+  //   - opts.hide1ByteHops === true AND
+  //   - the hop hex encodes exactly 1 byte (length === 2)
+  // Anything else (origin/destination payload hops, multi-byte path hops,
+  // null/undefined sentinels) stays visible — those callers already
+  // bypass the filter when they pass undefined/falsey tokens.
   function isVisibleHop(hop, opts) {
-    return true;
+    var enabled = (opts && typeof opts.hide1ByteHops === 'boolean')
+      ? opts.hide1ByteHops
+      : getHide1ByteHops();
+    if (!enabled) return true;
+    return hopByteLen(hop) !== 1;
   }
 
-  // STUB (RED): returns input unchanged.
+  // Filter a path hop array. Returns a NEW array; never mutates the input
+  // (callers depend on the original path_json staying intact for downstream
+  // consumers like hash-size detection / raw-hex rendering).
   function filterPathHops(hops, opts) {
-    return hops || [];
+    if (!hops || !hops.length) return hops || [];
+    var enabled = (opts && typeof opts.hide1ByteHops === 'boolean')
+      ? opts.hide1ByteHops
+      : getHide1ByteHops();
+    if (!enabled) return hops;
+    var out = [];
+    for (var i = 0; i < hops.length; i++) {
+      if (hopByteLen(hops[i]) !== 1) out.push(hops[i]);
+    }
+    return out;
   }
 
   if (typeof window !== 'undefined') {
