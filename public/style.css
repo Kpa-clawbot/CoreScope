@@ -187,6 +187,15 @@
   --fs-xl:  clamp(18px, 0.50vw + 16px, 28px);
   --fs-2xl: clamp(22px, 0.75vw + 20px, 36px);
 
+  /* --- Typography weight tokens — #1668 M3 ----------------
+   * Chip / badge / meta rule (M3): font-size >= 14px OR
+   * (font-size >= 12px AND font-weight >= 500). Use --fw-medium
+   * on anything that stays at 12-13px to keep it readable. */
+  --fw-normal:   400;
+  --fw-medium:   500;
+  --fw-semibold: 600;
+  --fw-bold:     700;
+
   /* --- Fluid radii ----------------------------------------- */
   --radius-sm: clamp(3px, 0.1vw + 2px, 6px);
   --radius-md: clamp(6px, 0.2vw + 5px, 12px);
@@ -764,6 +773,7 @@ img.brand-logo {
 .nav-link {
   color: var(--nav-text-muted); text-decoration: none;
   padding: 14px clamp(8px, 0.6vw + 4px, 14px); font-size: var(--fs-sm);
+  font-weight: var(--fw-medium); /* #1668 M3 — 12-14px fluid + 500 floor */
   border-bottom: 2px solid transparent; transition: all .15s;
   background: none; border-top: none; border-left: none; border-right: none;
   cursor: pointer; font-family: var(--font);
@@ -950,7 +960,7 @@ img.brand-logo {
 /* #1124 (MAJOR-3): each grouped cluster wraps as a single unit at narrow
  * widths instead of letting individual controls reflow across categories. */
 .filter-bar .filter-group { flex-wrap: nowrap; }
-.filter-group .btn { padding: 4px 10px; font-size: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--input-bg); color: var(--text); cursor: pointer; transition: background 0.15s, color 0.15s; height: 34px; min-height: 34px; box-sizing: border-box; line-height: 1; }
+.filter-group .btn { padding: 4px 10px; font-size: 12px; font-weight: var(--fw-medium); border-radius: 12px; border: 1px solid var(--border); background: var(--input-bg); color: var(--text); cursor: pointer; transition: background 0.15s, color 0.15s; height: 34px; min-height: 34px; box-sizing: border-box; line-height: 1; } /* #1668 M3 — added 500 weight on chip */
 .filter-group .btn.active { background: var(--accent-strong); color: var(--text-on-accent); border-color: var(--accent-strong); }
 .filter-group .btn:hover:not(.active) { background: var(--surface-2); }
 .filter-group + .filter-group { border-left: 1px solid var(--border); padding-left: 12px; margin-left: 6px; }
@@ -982,9 +992,9 @@ img.brand-logo {
  *    pill rendered inside thead (clickable to reveal)
  */
 .data-table {
-  width: 100%; border-collapse: collapse; font-size: 12px;
+  width: 100%; border-collapse: collapse; font-size: 13px; font-weight: var(--fw-medium);
   table-layout: auto;
-}
+} /* #1668 M3 — was 12px/400, now 13px paired with 500 weight */
 .data-table th {
   text-align: left; padding: 4px 6px; font-weight: 600; font-size: 11px;
   text-transform: uppercase; letter-spacing: .3px; color: var(--text-muted);
@@ -1201,7 +1211,7 @@ img.brand-logo {
   padding: 1px 7px; border-radius: 999px;
   background: var(--accent-bg, rgba(96,165,250,0.18));
   color: var(--accent, #60a5fa);
-  font-size: 10px; font-weight: 700; letter-spacing: .3px;
+  font-size: 12px; font-weight: var(--fw-bold); letter-spacing: .3px; /* #1668 M3 — was 10px */
   cursor: pointer; user-select: none; vertical-align: middle;
   border: 1px solid var(--accent, #60a5fa);
   text-transform: none;
@@ -1341,7 +1351,14 @@ body.scroll-locked { overflow: hidden; }
   font-family:var(--mono)
 }
 /* === Monospace === */
-.mono { font-family: var(--mono); font-size: 12px; }
+.mono { font-family: var(--mono); font-size: 13px; font-weight: var(--fw-medium); } /* #1668 M3 — was 12px/inherit */
+
+/* #1668 M3 — explicit floor for "Xs/Xm/Xd ago" timestamps used on every row
+ * of /packets, /nodes, /live. Was inheriting 12px/400 (thin-small). */
+.timestamp-text {
+  font-size: 13px;
+  font-weight: var(--fw-medium);
+}
 
 /* === Detail Panel === */
 .detail-title {
@@ -1682,7 +1699,7 @@ button.ch-item.selected { background: var(--selected-bg); }
 .ch-item-body { flex: 1; min-width: 0; }
 .ch-item-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 2px; }
 .ch-item-name { font-weight: 600; font-size: 14px; }
-.ch-item-time { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.ch-item-time { font-size: 12px; font-weight: var(--fw-medium); color: var(--text-muted); white-space: nowrap; } /* #1668 M3 — was 11px/400 */
 .ch-unread-badge {
   display: inline-block;
   min-width: 18px;
@@ -1721,7 +1738,7 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 .ch-remove-btn:hover, .ch-remove-btn:focus { background: #8b3838; color: white; }
 .ch-share-btn:hover,  .ch-share-btn:focus  { color: var(--accent, #3b82f6); }
 .ch-user-badge { font-size: 12px; margin-left: 2px; opacity: 0.85; flex-shrink: 0; }
-.ch-item-preview { font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ch-item-preview { font-size: 13px; font-weight: var(--fw-medium); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } /* #1668 M3 — was 12px/400 */
 
 .ch-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
 
@@ -2307,14 +2324,14 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   #chList .ch-share-btn { font-size: 0; }
   #chList .ch-share-btn .ph-icon, #chList .ch-share-btn svg { font-size: 13px; }
   #chList .ch-remove-btn { font-size: 12px; padding: 2px 6px; }
-  /* Hide the analytics-style time on mobile rows to free width for the name. */
-  #chList .ch-item-time { font-size: 10px; }
+  /* Mobile-narrow timestamp — #1668 M3 chip floor (12px+500 carries from base) */
+  #chList .ch-item-time { font-size: 12px; }
 
   /* Empty state must not dominate. */
   .ch-empty { padding: 12px; font-size: 13px; max-height: 30vh; }
 
-  /* Tables: smaller text for mobile */
-  .data-table { font-size: 11px; min-width: 0; }
+  /* Tables: smaller text for mobile — #1668 M3 chip floor (12px+500) */
+  .data-table { font-size: 12px; min-width: 0; }
   .data-table td { padding: 5px 4px; max-width: 100px; }
   .data-table th { padding: 5px 4px; font-size: 10px; }
   .data-table .col-time { min-width: 64px; }
@@ -2724,14 +2741,14 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 
 /* Analytics v2 */
 .analytics-tabs { display: flex; gap: 4px; margin-top: 12px; flex-wrap: wrap; }
-.tab-btn { padding: 6px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--card-bg); color: var(--text); cursor: pointer; font-size: 13px; transition: all .15s; }
+.tab-btn { padding: 6px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--card-bg); color: var(--text); cursor: pointer; font-size: 13px; font-weight: var(--fw-medium); transition: all .15s; } /* #1668 M3 — 13px + 500 floor */
 .tab-btn:hover { background: var(--hover-bg, rgba(0,0,0,.04)); }
 /* #1668 M2 — active tab was #fff on --accent (2.75:1 BLOCKER). */
 .tab-btn.active { background: var(--accent-strong); color: var(--text-on-accent); border-color: var(--accent-strong); }
 .stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 240px)); gap: 12px; margin-bottom: 16px; }
 .stat-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; text-align: center; }
 .stat-value { font-size: 24px; font-weight: 700; color: var(--text); }
-.stat-label { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.stat-label { font-size: 12px; font-weight: var(--fw-medium); color: var(--text-muted); margin-top: 2px; } /* #1668 M3 — added 500 weight */
 .stat-detail { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 .stat-spark { margin-top: 6px; display: flex; justify-content: center; }
 /* #1058 — Analytics rows: fluid + auto-stacking via CSS Grid `auto-fit`.
@@ -2750,7 +2767,7 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .rf-stats { display: flex; gap: 16px; flex-wrap: wrap; padding-top: 8px; font-size: 13px; }
 .payload-bars { display: flex; flex-direction: column; gap: 6px; }
 .payload-bar-row { display: flex; align-items: center; gap: 8px; }
-.payload-bar-label { min-width: 100px; font-size: 12px; display: flex; align-items: center; gap: 4px; }
+.payload-bar-label { min-width: 100px; font-size: 12px; font-weight: var(--fw-medium); display: flex; align-items: center; gap: 4px; } /* #1668 M3 — added 500 weight */
 .payload-bar-value { min-width: 100px; text-align: right; font-size: 12px; }
 .repeater-list { display: flex; flex-direction: column; gap: 4px; }
 .repeater-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
@@ -4198,7 +4215,7 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .sort-arrow { font-size: 0.75em; opacity: 0.8; }
 
 /* #690 — Clock Skew badges & fleet table */
-.skew-badge { display: inline-block; font-size: 10px; padding: 1px 5px; border-radius: 3px; margin-left: 4px; font-weight: 600; white-space: nowrap; }
+.skew-badge { display: inline-block; font-size: 12px; padding: 1px 6px; border-radius: 3px; margin-left: 4px; font-weight: var(--fw-semibold); white-space: nowrap; } /* #1668 M3 — was 10px */
 .skew-badge--ok { background: var(--status-green); color: #fff; }
 .skew-badge--warning { background: var(--status-yellow); color: #000; }
 .skew-badge--critical { background: var(--status-orange); color: #fff; }

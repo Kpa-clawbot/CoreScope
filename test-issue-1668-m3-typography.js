@@ -170,6 +170,9 @@ const TARGETS = [
   ['.col-hidden-pill', css, 'nodes hidden-columns pill — 10px/700 on master'],
   ['.skew-badge', css, 'nodes clock-skew badge — 10px/600 on master'],
   ['.filter-group .btn', css, 'filter chips — 12px/400 on master'],
+  // High-volume body-text offenders (593 + 1380+ M1 violations combined)
+  ['.timestamp-text', css, 'every row timestamp — inherited 12px/400 on master'],
+  ['.data-table', css, 'baseline for td / td.mono / td.col-pubkey — 12px/400 on master'],
 ];
 
 // --- run --------------------------------------------------------------------
