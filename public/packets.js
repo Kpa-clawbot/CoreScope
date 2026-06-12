@@ -1067,8 +1067,13 @@
     document.getElementById('pktRight').addEventListener('click', function(e) {
       if (e.target.closest('.panel-close-btn')) closeDetailPanel();
     });
-    await loadObservers();
-    loadPackets();
+    // #1692 — parallelize loadObservers + loadPackets. Both hit independent
+    // API endpoints (/api/observers, /api/packets) and have no data
+    // dependency between the two fetches; only the post-fetch renderLeft()
+    // code reads `observers` (for the observer filter dropdown), so awaiting
+    // them together rather than in series halves worst-case time-to-first-row
+    // on slow links / loaded CI runners without changing render contracts.
+    await Promise.all([loadObservers(), loadPackets()]);
 
     // Auto-select packet detail when arriving via hash URL
     if (directPacketHash) {
