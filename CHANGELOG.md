@@ -2,7 +2,22 @@
 
 ## [Unreleased]
 
-### 📝 Documentation Corrections
+## [3.8.4] — 2026-06-12
+
+See [docs/release-notes/v3.8.4.md](docs/release-notes/v3.8.4.md) for the full notes. 257 commits since v3.8.3 (72 substantive + 185 coverage bumps).
+
+### ✨ Highlights
+- **Relay timelines survive an ingestor restart** (#1643) — relay-hop attribution is rebuilt from `path_json` on cold load.
+- **Observer Compare is first-class** (#1642, #1645, #1647) — three new entry points + Tufte-grade compare page with state-preserving multi-select.
+- **Emoji → Phosphor icon migration** (#1648, #1649–#1654) — every UI emoji replaced with theme-tinted Phosphor sprites, lint-gated.
+- **Per-node Reach page + API** (#1627) — `GET /api/nodes/{pubkey}/reach` with cache invalidation on blacklist changes (#1636).
+- **Hashtag channels catalogue integration** (#1656) — public hashtag channels appear without manual config.
+- **Operator-customizable name-prefix hiding** (#1655) — new `hiddenNamePrefixes` config (default `["🚫"]`).
+
+### ⚙️ Config
+- New: `hiddenNamePrefixes`, `liveMap.maxNodes`, `runtime.maxMemoryMB`, configurable observer-health thresholds, `branding.homeUrl`, customizer disabled-tabs.
+
+### 📝 Documentation Corrections (carried from prior [Unreleased])
 - **PR #1324 historical record correction** (#1387) — the merged PR #1324 body referenced four tests that do NOT exist in master: `TestMultibyteCapPersistRoundTrip`, `TestMultibyteCapPersistSkipsUnknown`, `TestMaybePersistCoalesces`, and a `TryLock` coalescing test. The actual tests that landed are `TestRunMultibyteCapPersist_AppliesSnapshot` and `TestRunMultibyteCapPersist_NoSnapshot_NoOp`. See issue #1386 for the corrective test additions (round-trip, unknown-key skip, coalescing).
 
 ## [3.7.2] — 2026-05-06
