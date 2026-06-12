@@ -144,6 +144,7 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
   let refreshTimer = null;
   let regionChangeHandler = null;
   let _obsSortCtl = null; // #1641 r1 finding #6: tracked TableSort controller for destroy-before-reinit
+  let _mqttPanelTeardown = null; // #1043: teardown fn for the MQTT status panel timer
 
   function init(app) {
     app.innerHTML = `
@@ -165,9 +166,16 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
           <button class="btn-icon" data-action="obs-refresh" title="Refresh" aria-label="Refresh observers"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-arrow-clockwise"></use></svg></button>
         </div>
         <div id="obsRegionFilter" class="region-filter-container"></div>
+        <div id="mqttStatusPanel" class="mqtt-status-panel-container"></div>
         <div id="obsContent"><div class="text-center text-muted" style="padding:40px">Loading…</div></div>
       </div>`;
     RegionFilter.init(document.getElementById('obsRegionFilter'));
+    // #1043: mount the MQTT source status panel above the observers
+    // table. Self-refreshes every 10s; tear down in destroy() so the
+    // SPA route change doesn't leak the timer.
+    if (typeof window !== 'undefined' && window.MqttStatusPanel) {
+      _mqttPanelTeardown = window.MqttStatusPanel.mount(document.getElementById('mqttStatusPanel'));
+    }
     regionChangeHandler = RegionFilter.onChange(function () { render(); });
     loadObservers();
     // Event delegation for data-action buttons
@@ -241,6 +249,10 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
       try { _obsSortCtl.destroy(); } catch (_) { /* ignore */ }
     }
     _obsSortCtl = null;
+    if (typeof _mqttPanelTeardown === 'function') {
+      try { _mqttPanelTeardown(); } catch (_) { /* ignore */ }
+    }
+    _mqttPanelTeardown = null;
     observers = [];
     obsSkewMap = {};
   }
