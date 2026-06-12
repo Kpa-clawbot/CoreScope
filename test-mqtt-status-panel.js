@@ -89,6 +89,17 @@ test('renderPanel emits one <tr> per source with the masked broker URL', () => {
   // Counts rendered.
   assert.ok(html.includes('999'), 'packetsTotal must be rendered');
   assert.ok(html.includes('42'), 'packetsLast5m must be rendered');
+
+  // Status dots must use CSS variables, not hardcoded hex (#1682 adversarial r1).
+  // Regression: hex literals (#3fbf3f / #e4a800 / #e04848) bypass theming.
+  assert.ok(html.includes('background:var(--status-green)') || html.includes('background: var(--status-green)'),
+    'green dot must use var(--status-green): ' + html);
+  assert.ok(html.includes('background:var(--status-yellow)') || html.includes('background: var(--status-yellow)'),
+    'yellow dot must use var(--status-yellow): ' + html);
+  assert.ok(html.includes('background:var(--status-red)') || html.includes('background: var(--status-red)'),
+    'red dot must use var(--status-red): ' + html);
+  assert.ok(!/#3fbf3f|#e4a800|#e04848/i.test(html),
+    'panel must not emit hardcoded hex colors for status dots: ' + html);
 });
 
 test('renderPanel never echoes a plaintext password (defense-in-depth)', () => {

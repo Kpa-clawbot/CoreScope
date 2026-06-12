@@ -119,6 +119,13 @@ func TestMaskBrokerURL_Patterns(t *testing.T) {
 		{"empty", "", ""},
 		{"long password", "mqtt://obsuser:hunter2supersecretXYZ123@host:1883", "mqtt://obsuser:****@host:1883"},
 		{"no scheme bare host", "host:1883", "host:1883"},
+		// Adversarial r1 review (#1682): password contains @. The previous
+		// regex-only impl matched only up to the FIRST @, exposing "ss" as
+		// part of the path: "mqtt://user:****@ss@host". url.Parse handles
+		// this correctly because Go interprets the LAST @ as the userinfo
+		// boundary.
+		{"password with single @", "mqtt://user:p@ss@host:1883", "mqtt://user:****@host:1883"},
+		{"password with multiple @", "mqtt://user:p@ss@wo@host:1883", "mqtt://user:****@host:1883"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

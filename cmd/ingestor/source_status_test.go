@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -83,5 +84,33 @@ func TestSnapshotSourceStatuses_ReturnsAll(t *testing.T) {
 	snaps := SnapshotSourceStatuses(time.Now())
 	if len(snaps) != 2 {
 		t.Errorf("len(snaps) = %d, want 2", len(snaps))
+	}
+}
+
+// TestSourceStatus_MarkConnectClearsLastError asserts MarkConnect wipes
+// any prior sticky error (#1682 munger r1 review). Otherwise the UI sees
+// connected=true alongside a stale "connection refused" string.
+func TestSourceStatus_MarkConnectClearsLastError(t *testing.T) {
+	resetSourceStatusRegistry()
+	defer resetSourceStatusRegistry()
+
+	s := RegisterSourceStatus("sticky", "mqtt://x:1883")
+	now := time.Unix(1_700_000_200, 0)
+	s.MarkConnect(now)
+	s.MarkDisconnect(now.Add(time.Second), errors.New("connection refused"))
+
+	snap := s.snapshot(now.Add(2 * time.Second))
+	if snap.LastError == "" {
+		t.Fatalf("precondition: expected lastError after MarkDisconnect, got empty")
+	}
+
+	// Reconnect — lastError must clear.
+	s.MarkConnect(now.Add(3 * time.Second))
+	snap = s.snapshot(now.Add(4 * time.Second))
+	if snap.LastError != "" {
+		t.Errorf("snapshot.LastError = %q after MarkConnect, want empty (sticky-error regression)", snap.LastError)
+	}
+	if !snap.Connected {
+		t.Errorf("snapshot.Connected = false after MarkConnect, want true")
 	}
 }

@@ -3,30 +3,85 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
+	"strings"
 )
 
-// mqttPasswordRe matches `scheme://user:password@host` for broker URL
-// schemes used by paho/MQTT (mqtt://, mqtts://, tcp://, ssl://, ws://,
-// wss://) and captures everything before the password so the password
-// itself can be substituted with a redaction marker.
+// mqttBrokerSchemes is the set of broker URL schemes whose embedded
+// `user:pass@host` credentials we want to redact. We URL-parse for these
+// (defense vs. passwords containing `@`); other strings fall through to
+// the legacy regex pass for embedded user:pass occurrences in free-form
+// error strings.
+var mqttBrokerSchemes = map[string]bool{
+	"mqtt": true, "mqtts": true, "tcp": true, "ssl": true, "ws": true, "wss": true,
+}
+
+// mqttBrokerURLRe locates a broker URL (with credentials) embedded inside
+// a larger free-form string — e.g. an error message that quotes the
+// failing broker. Each match is fed through url.Parse + redaction. We
+// match greedily up through the LAST `@` followed by a host-shaped token
+// so passwords containing `@` are not truncated (#1682 adversarial r1).
 //
-// Intentionally narrow: only matches the inline user:pass@ form. A bare
-// password embedded elsewhere (e.g. as a JSON value) is the ingestor's
-// responsibility to keep out of the broker URL; this regex is a
-// defense-in-depth at the serving boundary, not a sweep of all source
-// fields.
-var mqttPasswordRe = regexp.MustCompile(`(?i)((?:mqtt|mqtts|tcp|ssl|ws|wss)://[^:/@\s]+):[^@\s]+@`)
+// Go's RE2 has no lookahead; we capture the host tail and emit it
+// unchanged in the replacement.
+var mqttBrokerURLRe = regexp.MustCompile(`(?i)(?:mqtt|mqtts|tcp|ssl|ws|wss)://[^\s]*`)
 
 // maskBrokerURL returns the broker URL with any inline password redacted.
 // `mqtt://user:secret@host:1883` -> `mqtt://user:****@host:1883`.
+// `mqtt://user:p@ss@host` -> `mqtt://user:****@host` (password with `@`).
 // URLs without inline credentials are returned unchanged.
+//
+// Primary strategy: url.Parse — handles passwords with `@`, `:`, etc.
+// Fallback: regex sweep for free-form strings (e.g. error messages that
+// quote a URL fragment but aren't standalone-parseable).
 func maskBrokerURL(s string) string {
 	if s == "" {
 		return s
 	}
-	return mqttPasswordRe.ReplaceAllString(s, `$1:****@`)
+	// Fast path: the whole string is the broker URL.
+	if masked, ok := redactBrokerURL(s); ok {
+		return masked
+	}
+	// Fallback: free-form string (e.g. error message) containing a URL.
+	// Find embedded broker URLs and redact each in-place.
+	return mqttBrokerURLRe.ReplaceAllStringFunc(s, func(m string) string {
+		if out, ok := redactBrokerURL(m); ok {
+			return out
+		}
+		return m
+	})
+}
+
+// redactBrokerURL parses s as a URL and, if it has an mqtt-family scheme
+// with userinfo containing a password, returns the URL with the password
+// replaced by `****`. Returns ok=false when s is not such a URL.
+func redactBrokerURL(s string) (string, bool) {
+	u, err := url.Parse(s)
+	if err != nil || u.Scheme == "" || u.User == nil {
+		return s, false
+	}
+	if !mqttBrokerSchemes[strings.ToLower(u.Scheme)] {
+		return s, false
+	}
+	if _, hasPass := u.User.Password(); !hasPass {
+		return s, false
+	}
+	// Re-assemble manually rather than via url.UserPassword + u.String()
+	// because the latter percent-encodes the `*` mask token into `%2A`,
+	// defeating the user-visible redaction marker. We only need to swap
+	// the userinfo segment of the original string.
+	hostAndAfter := s
+	if idx := strings.LastIndex(s, "@"); idx >= 0 {
+		hostAndAfter = s[idx+1:]
+	}
+	// Preserve original scheme casing (url.Parse lowercases u.Scheme).
+	schemeEnd := strings.Index(s, "://")
+	if schemeEnd < 0 {
+		return s, false
+	}
+	return s[:schemeEnd] + "://" + u.User.Username() + ":****@" + hostAndAfter, true
 }
 
 // MqttSourceStatus is the per-MQTT-source status row surfaced via

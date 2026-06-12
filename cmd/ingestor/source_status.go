@@ -60,10 +60,16 @@ type sourceStatusState struct {
 }
 
 // MarkConnect records a successful (re)connection to the broker.
+// Clears any stale lastError from a prior disconnect — otherwise the UI
+// shows "connected=true, lastError='connection refused'" after a successful
+// reconnect, which is a lie (#1682 munger review r1).
 func (s *sourceStatusState) MarkConnect(now time.Time) {
 	s.connected.Store(true)
 	s.lastConnectUnix.Store(now.Unix())
 	s.connectCount.Add(1)
+	s.errMu.Lock()
+	s.lastError = ""
+	s.errMu.Unlock()
 }
 
 // MarkDisconnect records the broker dropping the connection.

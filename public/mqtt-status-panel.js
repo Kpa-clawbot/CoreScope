@@ -62,9 +62,9 @@
       var state = classifySource(s, now);
       var dot;
       switch (state) {
-        case 'green': dot = '#3fbf3f'; break;
-        case 'yellow': dot = '#e4a800'; break;
-        default: dot = '#e04848';
+        case 'green': dot = 'var(--status-green)'; break;
+        case 'yellow': dot = 'var(--status-yellow)'; break;
+        default: dot = 'var(--status-red)';
       }
       return ''
         + '<tr data-source-name="' + escapeHTML(s.name) + '" data-state="' + state + '">'
