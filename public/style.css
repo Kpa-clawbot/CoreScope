@@ -96,6 +96,67 @@
  * further below — DO NOT add component CSS in this region.
  * ============================================================ */
 
+/* ============================================================
+ * TIER-1 PALETTE — raw colour stops. Theme-independent.
+ * Issue #1671 / #1668 M2. Single source of truth for every hex
+ * value that ships in this file. Outside this block, no rule
+ * may use a raw `#hex` or `rgb(...)` literal — use a token.
+ * Source: Tailwind CSS v3 default palette (MIT licensed,
+ * battle-tested for WCAG-graded luminance steps).
+ *   gray  ×9   blue  ×9   green ×5
+ *   amber ×5   red   ×5   purple ×5
+ * Total palette tokens: 38.
+ * ============================================================ */
+:root {
+  /* Grays — 9 stops, low → high luminance */
+  --palette-gray-50:  #f9fafb;
+  --palette-gray-100: #f3f4f6;
+  --palette-gray-200: #e5e7eb;
+  --palette-gray-300: #d1d5db;
+  --palette-gray-400: #9ca3af;
+  --palette-gray-500: #6b7280;
+  --palette-gray-600: #4b5563;
+  --palette-gray-700: #374151;
+  --palette-gray-800: #1f2937;
+  --palette-gray-900: #111827;
+
+  /* Blues — accent / info family */
+  --palette-blue-100: #dbeafe;
+  --palette-blue-200: #bfdbfe;
+  --palette-blue-300: #93c5fd;
+  --palette-blue-400: #60a5fa;
+  --palette-blue-500: #3b82f6;
+  --palette-blue-600: #2563eb;
+  --palette-blue-700: #1d4ed8;
+  --palette-blue-800: #1e40af;
+  --palette-blue-900: #1e3a8a;
+
+  /* Greens / ambers / reds / purples — status families */
+  --palette-green-300: #86efac;
+  --palette-green-400: #4ade80;
+  --palette-green-500: #22c55e;
+  --palette-green-600: #16a34a;
+  --palette-green-700: #15803d;
+
+  --palette-amber-300: #fcd34d;
+  --palette-amber-400: #fbbf24;
+  --palette-amber-500: #f59e0b;
+  --palette-amber-600: #d97706;
+  --palette-amber-700: #b45309;
+
+  --palette-red-300: #fca5a5;
+  --palette-red-400: #f87171;
+  --palette-red-500: #ef4444;
+  --palette-red-600: #dc2626;
+  --palette-red-700: #b91c1c;
+
+  --palette-purple-300: #c4b5fd;
+  --palette-purple-400: #a78bfa;
+  --palette-purple-500: #8b5cf6;
+  --palette-purple-600: #7c3aed;
+  --palette-purple-700: #6d28d9;
+}
+
 :root {
   /* Node-quality link strength colours (bottleneck tiers). Dark-theme
      overrides live in the [data-theme="dark"] block below (brighter hues). */
@@ -145,6 +206,14 @@
   --nav-text-muted: #cbd5e1;
   --nav-active-bg: rgba(74, 158, 255, 0.15);
   --accent: #4a9eff;
+  /* #1668 M2 — accessible accent for chips/badges/active buttons that put
+     white text on a blue surface. The legacy --accent (#4a9eff) yields
+     #fff/#4a9eff = 2.75:1 (BLOCKER per M1 audit). --accent-strong drops
+     two stops to palette-blue-600 = #2563eb (#fff on it = 4.83:1, AA pass)
+     and is the surface for: .skip-link, .btn.active, .hop-link.hop-named,
+     .nav-link.active background, .fGroup.active. */
+  --accent-strong: var(--palette-blue-600);
+  --text-on-accent: var(--palette-gray-50);
   --accent-bg: rgba(59, 130, 246, 0.12);
   --accent-border: rgba(59, 130, 246, 0.25);
   --geo-filter-color: #3b82f6;
@@ -164,7 +233,11 @@
   --role-observer: #8b5cf6;
   --accent-hover: #6db3ff;
   --text: #1a1a2e;
-  --text-muted: #5b6370;
+  /* #1668 M2 — bumped from #5b6370 (~5.7:1 on white) to palette-gray-700
+     #374151 (~10.3:1 on white, ~9.9:1 on surface-0 #f4f5f7). Light theme
+     muted text was a MAJOR/borderline case; this clears the buffer. */
+  --text-muted: var(--palette-gray-700);
+  --text-subtle: var(--palette-gray-600);
   --border: #e2e5ea;
   --row-stripe: #f9fafb;
   --row-hover: #eef2ff;
@@ -270,7 +343,12 @@
     --content-bg: var(--surface-0);
     --card-bg: var(--surface-2);
     --text: #e2e8f0;
-    --text-muted: #a8b8cc;
+    /* #1668 M2 — text-muted bumped from #a8b8cc to palette-gray-300
+       (#d1d5db); ~8.7:1 on surface-0, ~7.6:1 on card-bg (was ~7.5:1).
+       Clears `span.text-muted` BLOCKERs flagged on translucent surfaces
+       (where the legacy value dropped below 4.5 once alpha-stacked). */
+    --text-muted: var(--palette-gray-300);
+    --text-subtle: var(--palette-gray-400);
     --border: #334155;
     --row-stripe: #1e1e34;
     --row-hover: #2d2d50;
@@ -308,7 +386,9 @@
   --content-bg: var(--surface-0);
   --card-bg: var(--surface-2);
   --text: #e2e8f0;
-  --text-muted: #a8b8cc;
+  /* #1668 M2 — see :root[data-theme="dark"] media block for rationale */
+  --text-muted: var(--palette-gray-300);
+  --text-subtle: var(--palette-gray-400);
   --border: #334155;
   --row-stripe: #1e1e34;
   --row-hover: #2d2d50;
@@ -331,7 +411,10 @@ html, body { height: 100%; font-family: var(--font); font-size: var(--fs-md); ba
  * ============================================================ */
 
 /* === Skip Link === */
-.skip-link { position: absolute; top: -100%; left: 16px; padding: 8px 16px; background: var(--accent); color: #fff; border-radius: 6px; z-index: 999; font-weight: 600; text-decoration: none; }
+/* #1668 M2 — was background:var(--accent) (#4a9eff) with white text =
+   2.75:1 BLOCKER. Bumped to --accent-strong / --text-on-accent for
+   4.83:1 AA pass (both themes). */
+.skip-link { position: absolute; top: -100%; left: 16px; padding: 8px 16px; background: var(--accent-strong); color: var(--text-on-accent); border-radius: 6px; z-index: 999; font-weight: 600; text-decoration: none; }
 .skip-link:focus { top: 8px; }
 
 /* === Focus Indicators === */
@@ -868,7 +951,7 @@ img.brand-logo {
  * widths instead of letting individual controls reflow across categories. */
 .filter-bar .filter-group { flex-wrap: nowrap; }
 .filter-group .btn { padding: 4px 10px; font-size: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--input-bg); color: var(--text); cursor: pointer; transition: background 0.15s, color 0.15s; height: 34px; min-height: 34px; box-sizing: border-box; line-height: 1; }
-.filter-group .btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.filter-group .btn.active { background: var(--accent-strong); color: var(--text-on-accent); border-color: var(--accent-strong); }
 .filter-group .btn:hover:not(.active) { background: var(--surface-2); }
 .filter-group + .filter-group { border-left: 1px solid var(--border); padding-left: 12px; margin-left: 6px; }
 .sort-help { cursor: help; font-size: 14px; color: var(--text-muted, #888); position: relative; display: inline-block; }
@@ -881,7 +964,7 @@ img.brand-logo {
 }
 .sort-help:hover .sort-help-tip { display: block; }
 .filter-bar .btn:hover { background: var(--row-hover); }
-.filter-bar .btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.filter-bar .btn.active { background: var(--accent-strong); color: var(--text-on-accent); border-color: var(--accent-strong); }
 .filter-bar .col-toggle-btn { height: 34px; min-height: 34px; }
 
 .btn-icon {
@@ -1350,7 +1433,11 @@ body.scroll-locked { overflow: hidden; }
   vertical-align: middle;
 }
 .path-hops .hop { color: var(--accent); line-height: 18px; }
-.path-hops .hop-named { color: #fff; background: var(--accent); padding: 1px 6px; border-radius: 3px; font-family: var(--font); font-weight: 600; cursor: default; flex: 0 0 auto; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 18px; }
+/* #1668 M2 / operator-flagged chip: was `color:#fff; background:var(--accent)`
+   = 2.75:1 on dark theme (BLOCKER). Now uses --accent-strong (#2563eb)
+   with --text-on-accent (gray-50) for 4.83:1 — WCAG AA body pass in
+   both themes. */
+.path-hops .hop-named { color: var(--text-on-accent); background: var(--accent-strong); padding: 1px 6px; border-radius: 3px; font-family: var(--font); font-weight: 600; cursor: default; flex: 0 0 auto; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 18px; }
 .path-hops .arrow { color: var(--text-muted); flex: 0 0 auto; line-height: 18px; }
 /* #1122/#1128: bound the row height contributed by the path column.
  * `max-height` on a <td> is widely ignored by browsers (table layout
@@ -1940,7 +2027,7 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 [data-theme="dark"] .trace-search input,
 [data-theme="dark"] .mc-jump-btn,
 [data-theme="dark"] .filter-bar .btn { background: var(--input-bg); color: var(--text); border-color: var(--border); }
-[data-theme="dark"] .filter-bar .btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+[data-theme="dark"] .filter-bar .btn.active { background: var(--accent-strong); color: var(--text-on-accent); border-color: var(--accent-strong); }
 [data-theme="dark"] .ch-item.selected,
 [data-theme="dark"] .data-table tbody tr.selected { background: var(--selected-bg); }
 [data-theme="dark"] .tl-bar-container { background: #334155; }
@@ -2639,7 +2726,8 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .analytics-tabs { display: flex; gap: 4px; margin-top: 12px; flex-wrap: wrap; }
 .tab-btn { padding: 6px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--card-bg); color: var(--text); cursor: pointer; font-size: 13px; transition: all .15s; }
 .tab-btn:hover { background: var(--hover-bg, rgba(0,0,0,.04)); }
-.tab-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+/* #1668 M2 — active tab was #fff on --accent (2.75:1 BLOCKER). */
+.tab-btn.active { background: var(--accent-strong); color: var(--text-on-accent); border-color: var(--accent-strong); }
 .stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 240px)); gap: 12px; margin-bottom: 16px; }
 .stat-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; text-align: center; }
 .stat-value { font-size: 24px; font-weight: 700; color: var(--text); }

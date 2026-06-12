@@ -21,14 +21,19 @@ const css = fs.readFileSync(CSS_PATH, 'utf8');
 
 // ── Token extraction ──────────────────────────────────────────────────────
 function extractBlockTokens(blockRegex) {
-  const m = css.match(blockRegex);
-  if (!m) return {};
-  const body = m[1];
   const tokens = {};
-  const re = /^\s*(--[a-z0-9-]+)\s*:\s*([^;]+);/gim;
-  let mm;
-  while ((mm = re.exec(body)) !== null) {
-    tokens[mm[1]] = mm[2].trim();
+  // Use a /g regex; same selector may appear in multiple blocks (e.g. two
+  // `:root { ... }` blocks: palette + semantic). Later definitions win,
+  // mirroring CSS cascade order.
+  const flagged = new RegExp(blockRegex.source, blockRegex.flags.includes('g') ? blockRegex.flags : blockRegex.flags + 'g');
+  let m;
+  while ((m = flagged.exec(css)) !== null) {
+    const body = m[1];
+    const re = /^\s*(--[a-z0-9-]+)\s*:\s*([^;]+);/gim;
+    let mm;
+    while ((mm = re.exec(body)) !== null) {
+      tokens[mm[1]] = mm[2].trim();
+    }
   }
   return tokens;
 }
