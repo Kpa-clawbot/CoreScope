@@ -1588,7 +1588,7 @@
         '<input type="checkbox" id="cv2-hide-1byte-hops" data-cv2-hide-1byte-hops' +
           (on ? ' checked' : '') +
           ' style="width:16px;height:16px;cursor:pointer">' +
-        '<label for="cv2-hide-1byte-hops" style="cursor:pointer;margin:0">Hide 1-byte path hops</label>' +
+        '<label for="cv2-hide-1byte-hops" style="cursor:pointer;margin:0">Hide short (1-byte) path-hash hops</label>' +
       '</div>';
   }
 

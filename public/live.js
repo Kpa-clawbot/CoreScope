@@ -2695,19 +2695,14 @@
 
   function packetInvolvesFilterNode(pkt, filterKeys) {
     if (!filterKeys.length) return true;
-    let hops = (pkt.decoded?.path?.hops) || [];
-    // #1689 r1 (adv #3): when the customizer "hide 1-byte path hops" toggle
-    // is ON, a packet whose only mention of the filter-node is via a 1-byte
-    // hop should not count as "involves the node" — the hop is hidden from
-    // the user's view, so matching on it is a phantom positive.
-    if (typeof window !== 'undefined' && window.MC_getHide1ByteHops && window.MC_getHide1ByteHops() && window.MC_isVisibleHop) {
-      hops = hops.filter(function (h) {
-        const tok = (h && h.prefix) ? String(h.prefix)
-                   : (h && h.id)    ? String(h.id)
-                   : (typeof h === 'string') ? h : '';
-        return window.MC_isVisibleHop(tok);
-      });
-    }
+    // #1689 r2 MAJOR: node-filter search semantics MUST be independent of
+    // the customizer's hide-1-byte-hops display preference. Letting the
+    // display toggle change search results silently fails the principle
+    // of least astonishment (operator searches for a node, hides 1-byte
+    // hops for chart readability, suddenly matches disappear). Chip
+    // rendering filters hops separately via MC_filterPathHops at the
+    // render boundary — see feedHops below.
+    const hops = (pkt.decoded?.path?.hops) || [];
     for (const hop of hops) {
       const h = (hop.id || hop.public_key || hop).toString().toLowerCase();
       if (filterKeys.some(f => f.toLowerCase().startsWith(h) || h.startsWith(f.toLowerCase()))) return true;
