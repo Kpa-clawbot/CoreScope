@@ -111,8 +111,8 @@ assert(mine30 && mine30.displayName === 'Garage',
 assert(mine30 && mine30.group === 'mine', 'hash 30 grouped as "mine"');
 
 const ch64 = find(64, 'ch64');
-assert(ch64 && ch64.displayName === '🔒 Encrypted (0x40)',
-  'unknown encrypted ch64 → "🔒 Encrypted (0x40)" (no nonsense "ch64")');
+assert(ch64 && ch64.displayName === 'Encrypted (0x40)',
+  'unknown encrypted ch64 → "Encrypted (0x40)" (no nonsense "ch64")');
 assert(ch64 && ch64.group === 'encrypted', 'unknown encrypted grouped as "encrypted"');
 
 const pub = find(17, 'public');
@@ -134,7 +134,7 @@ assert(rainbow && rainbow.group === 'network',
 
 // Empty-name encrypted: must NOT leak through with displayName = ''.
 const empty = find(200, '');
-assert(empty && empty.displayName === '🔒 Encrypted (0xC8)',
+assert(empty && empty.displayName === 'Encrypted (0xC8)',
   'encrypted with empty name → render as opaque encrypted placeholder');
 assert(empty && empty.group === 'encrypted',
   'encrypted with empty name → group = "encrypted"');
