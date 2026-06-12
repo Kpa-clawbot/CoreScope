@@ -1355,9 +1355,12 @@ body.scroll-locked { overflow: hidden; }
 
 /* #1668 M3 — explicit floor for "Xs/Xm/Xd ago" timestamps used on every row
  * of /packets, /nodes, /live. Was inheriting 12px/400 (thin-small). */
+/* #1668 M3 r1 (kent-beck #6): TEMP REVERT — proves the CI gate added in
+ * the previous commit actually fails when the floor is broken. The next
+ * commit re-applies the bump. DO NOT LEAVE THIS IN MASTER. */
 .timestamp-text {
-  font-size: 13px;
-  font-weight: var(--fw-medium);
+  font-size: 12px;
+  font-weight: 400;
 }
 
 /* === Detail Panel === */
