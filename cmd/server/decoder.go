@@ -91,6 +91,11 @@ type Payload struct {
 	MAC             string       `json:"mac,omitempty"`
 	EncryptedData   string       `json:"encryptedData,omitempty"`
 	ExtraHash       string       `json:"extraHash,omitempty"`
+	// Extended ACK fields per firmware 1.16.0 (issue #1610) — populated by
+	// decodeAck once the server-side re-decoder is upgraded (issue #1694).
+	AckLen     *int `json:"ackLen,omitempty"`
+	AckAttempt *int `json:"ackAttempt,omitempty"`
+	AckRand    *int `json:"ackRand,omitempty"`
 	PubKey          string       `json:"pubKey,omitempty"`
 	Timestamp       uint32       `json:"timestamp,omitempty"`
 	TimestampISO    string       `json:"timestampISO,omitempty"`
@@ -124,6 +129,11 @@ type Payload struct {
 	InnerType     *int   `json:"innerType,omitempty"`
 	InnerTypeName string `json:"innerTypeName,omitempty"`
 	InnerAckCrc   string `json:"innerAckCrc,omitempty"`
+	// Extended ACK inner fields (issue #1610 / #1694) — populated by
+	// decodeMultipart once ACK parity is ported from the ingestor.
+	InnerAckLen     *int   `json:"innerAckLen,omitempty"`
+	InnerAckAttempt *int   `json:"innerAckAttempt,omitempty"`
+	InnerAckRand    *int   `json:"innerAckRand,omitempty"`
 	InnerPayload  string `json:"innerPayload,omitempty"`
 	// CONTROL (PAYLOAD_TYPE_CONTROL=0x0B) byte0 flags, per
 	// firmware/src/Mesh.cpp:69 — high-bit = zero-hop direct subset.
