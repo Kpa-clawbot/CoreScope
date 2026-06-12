@@ -77,7 +77,36 @@ function parseDecl(body, prop) {
   return m ? m[1].trim() : null;
 }
 
+function stripMediaQueries(cssText) {
+  // Remove @media blocks (viewport-scoped overrides). M4 typography floor
+  // asserts the BASE/desktop rule; per-viewport overrides (e.g. .vcr-btn
+  // mobile carve-out at max-width:640px, see #1668-M4 r3 / #1221) are out
+  // of scope for the desktop-base contrast/typography gate. Strip CSS
+  // comments first so '@media' text in comments doesn't confuse matching.
+  cssText = cssText.replace(/\/\*[\s\S]*?\*\//g, '');
+  let out = '';
+  let i = 0;
+  while (i < cssText.length) {
+    const idx = cssText.indexOf('@media', i);
+    if (idx === -1) { out += cssText.slice(i); break; }
+    out += cssText.slice(i, idx);
+    const open = cssText.indexOf('{', idx);
+    if (open === -1) { out += cssText.slice(idx); break; }
+    let depth = 1;
+    let j = open + 1;
+    while (j < cssText.length && depth > 0) {
+      const c = cssText[j];
+      if (c === '{') depth++;
+      else if (c === '}') depth--;
+      j++;
+    }
+    i = j;
+  }
+  return out;
+}
+
 function effective(selector, cssText) {
+  cssText = stripMediaQueries(cssText);
   const re = /([^{}]*)\{([^}]*)\}/g;
   let fsRaw = null;
   let fwRaw = null;
