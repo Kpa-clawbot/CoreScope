@@ -1718,7 +1718,13 @@
     if (!isConfirmedCollision && !isPossibleConflict) return { cls: 'hash-cell-taken', bg: '' };
     if (isPossibleConflict) return { cls: 'hash-cell-possible', bg: '' };
     const t = Math.min((count - 2) / 4, 1);
-    return { cls: 'hash-cell-collision', bg: `background:rgb(${Math.round(220+35*t)},${Math.round(120*(1-t))},30);` };
+    // #1668-M4 r1: gradient endpoints darkened from orange-500→red-500 (3.11:1/3.96:1 vs #fff)
+    // to orange-800→red-800 (7.31:1→8.31:1 vs #fff) — passes WCAG AA across the whole range.
+    // Encoding stays distinguishable from green-700 (taken) and yellow-800 (possible).
+    const cr = Math.round(154 + (-1) * t);   // 154 → 153
+    const cg = Math.round(52  + (-25) * t);  // 52  → 27
+    const cb = Math.round(18  + 9 * t);      // 18  → 27
+    return { cls: 'hash-cell-collision', bg: `background:rgb(${cr},${cg},${cb});` };
   }
 
   // hashCellTd — emits a hash-matrix <td>. Tooltip data rides as separate
@@ -1737,7 +1743,7 @@
     const linesAttr = (spec.lines && spec.lines.length)
       ? ' data-tip-lines="' + esc(spec.lines.join('\u001f')) + '"'
       : '';
-    return `<td class="hash-cell ${cls}${count ? ' hash-active' : ''}" data-hex="${hex}"${hexAttr}${statusAttr}${linesAttr} style="width:${cellSize}px;height:${cellSize}px;text-align:center;${bg}border:1px solid var(--border);cursor:${count ? 'pointer' : 'default'};font-size:11px;font-weight:${fontWeight}">${hex}</td>`;
+    return `<td class="hash-cell ${cls}${count ? ' hash-active' : ''}" data-hex="${hex}"${hexAttr}${statusAttr}${linesAttr} style="width:${cellSize}px;height:${cellSize}px;text-align:center;${bg}border:1px solid var(--border);cursor:${count ? 'pointer' : 'default'};font-size:12px;font-weight:${fontWeight}">${hex}</td>`;
   }
 
   // hashTooltipSpec — returns a plain-data tooltip descriptor consumed by
@@ -1819,7 +1825,7 @@
           {cls: 'hash-cell-empty', style: 'border:1px solid var(--border)', text: 'Available'},
           {cls: 'hash-cell-taken', text: 'One node'},
           {cls: 'hash-cell-possible', text: 'Possible conflict'},
-          {cls: 'hash-cell-collision', style: 'background:rgb(220,80,30)', text: 'Collision'}
+          {cls: 'hash-cell-collision', style: 'background:rgb(154,40,22)', text: 'Collision'}
         ],
         (td) => {
           const hex = td.dataset.hex.toUpperCase();
@@ -1866,7 +1872,7 @@
           {cls: 'hash-cell-empty', style: 'border:1px solid var(--border)', text: 'No nodes in group'},
           {cls: 'hash-cell-taken', text: 'Nodes present, no collision'},
           {cls: 'hash-cell-possible', text: 'Possible conflict'},
-          {cls: 'hash-cell-collision', style: 'background:rgb(220,80,30)', text: 'Collision'}
+          {cls: 'hash-cell-collision', style: 'background:rgb(154,40,22)', text: 'Collision'}
         ],
         (td) => {
           const hex = td.dataset.hex.toUpperCase();

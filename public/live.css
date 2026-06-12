@@ -57,6 +57,7 @@
 .live-feed-empty {
   color: var(--text-muted);
   font-size: 12px;
+  font-weight: 500; /* #1668-M4 — 12px must pair with >=500 weight per M3 floor */
   padding: 12px 8px;
   text-align: center;
 }
@@ -961,7 +962,8 @@ body.live-fullscreen #liveFullscreenToggle:hover,
   color: var(--text);
   border-radius: 6px;
   padding: 6px 14px;
-  font-size: 0.9rem;
+  font-size: 14px; /* #1668-M4 — was 0.9rem (~14.4px) but with 400 weight; lock to 14px floor */
+  font-weight: 500;
   cursor: pointer;
   transition: background 0.15s;
 }
@@ -1021,13 +1023,16 @@ input.live-node-filter-input:focus {
 }
 
 .vcr-live-btn {
-  background: rgba(239, 68, 68, 0.2);
-  color: var(--status-red);
+  /* #1668-M4 r1: --status-red (#ef4444) vs #fff = 3.76:1 — fails AA. Carve-out to red-700
+     (#b91c1c, 6.47:1 vs #fff) on this single surface to avoid touching --status-red token
+     which is consumed by other surfaces (dots, borders, etc) where it's used as fg/accent. */
+  background: #b91c1c;
+  color: #fff;
   font-weight: 700;
-  font-size: 0.7rem;
+  font-size: 12px; /* #1668-M4 — 0.7rem (~11.2px) is below floor; lock to 12px+700 */
   letter-spacing: 0.05em;
 }
-.vcr-live-btn:hover { background: rgba(239, 68, 68, 0.35); }
+.vcr-live-btn:hover { background: color-mix(in srgb, #b91c1c 85%, #000); }
 
 .vcr-mode {
   font-size: 0.75rem;
@@ -1119,7 +1124,8 @@ input.live-node-filter-input:focus {
   background: none;
   border: 1px solid var(--border);
   color: var(--text-muted);
-  font-size: 0.75rem;
+  font-size: 12px; /* #1668-M4 — was 0.75rem (~12px) but with 400 weight (thin-small); lock 12px+500 */
+  font-weight: 500;
   padding: 4px 10px;
   border-radius: 4px;
   cursor: pointer;
@@ -1134,9 +1140,10 @@ input.live-node-filter-input:focus {
   transition: color 0.15s, transform 0.15s;
 }
 .vcr-scope-btn.active {
-  background: var(--accent-bg, rgba(59,130,246,0.2));
-  color: var(--text);
-  border-color: var(--accent-border, rgba(59,130,246,0.3));
+  background: var(--accent-strong); /* #1668-M4 — was --accent-bg wash (2.98:1 BLOCKER); --accent-strong + on-accent locks AA */
+  color: var(--text-on-accent);
+  border-color: var(--accent-strong);
+  font-weight: 600;
 }
 
 .vcr-timeline-container {
@@ -1259,6 +1266,9 @@ input.live-node-filter-input:focus {
    * Level AAA recommends 44px but Level AA accepts 24px; here we keep
    * 32px which still meets AA on mobile while letting all controls
    * occupy one row at the 375px breakpoint called out in #1244. */
+  /* #1668-M4 r3 (#1221 regression): r0–r2 attempts to bump VCR label fs to 12px on mobile
+   * (with padding tightening) all clipped the LCD at vw=375. Reverted to pre-PR mobile
+   * values; desktop M4 typography wins (above this @media block) remain. */
   .vcr-btn { padding: 4px 6px; font-size: 0.7rem; min-height: 32px; min-width: 32px; }
   .vcr-scope-btn { font-size: 0.6rem; padding: 2px 5px; min-height: 32px; min-width: 0; }
   .vcr-prompt { order: 5; width: 100%; font-size: 0.7rem; }

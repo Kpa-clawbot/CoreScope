@@ -178,16 +178,58 @@
     UNKNOWN: 'unknown'
   };
 
-  // Generate badge CSS from TYPE_COLORS — single source of truth
+  // Generate badge CSS from TYPE_COLORS — single source of truth.
+  // #1668-M4: pick a readable foreground per badge background, and DARKEN
+  // the bg (only for the badge — TYPE_COLORS itself is untouched, so map
+  // dots / markers / live-feed dots keep their full-saturation hue) until
+  // the fg/bg pair clears WCAG AA (≥4.5:1). The legacy translucent wash
+  // `${color}20` with `color: ${color}` failed AA for all 14 payload types
+  // (M1 audit; ratios 1.0–4.25, BLOCKER).
   window.syncBadgeColors = function() {
     var el = document.getElementById('type-color-badges');
     if (!el) { el = document.createElement('style'); el.id = 'type-color-badges'; document.head.appendChild(el); }
+    function hexToRgb(hex) {
+      var h = hex.replace('#','');
+      return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)];
+    }
+    function rgbToHex(rgb) {
+      return '#' + rgb.map(function(v){ var s = Math.max(0,Math.min(255,Math.round(v))).toString(16); return s.length===1?'0'+s:s; }).join('');
+    }
+    function relLum(rgb) {
+      var lin = function(v){ var s=v/255; return s<=0.03928 ? s/12.92 : Math.pow((s+0.055)/1.055, 2.4); };
+      return 0.2126*lin(rgb[0]) + 0.7152*lin(rgb[1]) + 0.0722*lin(rgb[2]);
+    }
+    function contrast(a, b) {
+      var l1 = relLum(a), l2 = relLum(b);
+      var hi = l1>l2?l1:l2, lo = l1>l2?l2:l1;
+      return (hi+0.05) / (lo+0.05);
+    }
+    function readableFg(rgb) {
+      // perceived luminance (Rec.601) — matches the M4 test's pick
+      var lum = (0.299*rgb[0] + 0.587*rgb[1] + 0.114*rgb[2]) / 255;
+      return lum > 0.55 ? [26,26,46] : [255,255,255];
+    }
+    function adjustForAA(bg, fg) {
+      // Darken (when white fg) or lighten (when dark fg) the bg until
+      // contrast >= 4.5, max 12 steps of 8%. Preserves hue.
+      var c = contrast(fg, bg);
+      if (c >= 4.5) return bg;
+      var darkening = fg[0] > 128; // white fg → darken bg
+      var out = bg.slice();
+      for (var i=0; i<12 && contrast(fg, out) < 4.5; i++) {
+        out = out.map(function(v){ return darkening ? v*0.92 : v + (255-v)*0.08; });
+      }
+      return out.map(function(v){ return Math.round(v); });
+    }
     var css = '';
     for (var type in TYPE_BADGE_MAP) {
       var color = window.TYPE_COLORS[type];
       if (!color) continue;
       var cls = TYPE_BADGE_MAP[type];
-      css += '.badge-' + cls + ' { background: ' + color + '20; color: ' + color + '; }\n';
+      var bg = hexToRgb(color);
+      var fg = readableFg(bg);
+      var adj = adjustForAA(bg, fg);
+      css += '.badge-' + cls + ' { background: ' + rgbToHex(adj) + '; color: rgb(' + fg.join(',') + '); }\n';
     }
     el.textContent = css;
   };
