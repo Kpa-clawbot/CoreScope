@@ -1266,8 +1266,13 @@ input.live-node-filter-input:focus {
    * Level AAA recommends 44px but Level AA accepts 24px; here we keep
    * 32px which still meets AA on mobile while letting all controls
    * occupy one row at the 375px breakpoint called out in #1244. */
-  .vcr-btn { padding: 4px 6px; font-size: 12px; font-weight: 600; min-height: 32px; min-width: 32px; }
-  .vcr-scope-btn { font-size: 12px; font-weight: 600; padding: 2px 5px; min-height: 32px; min-width: 0; }
+  /* #1668-M4 r2 (#1221 regression): cumulative font-size bumps in r0 (0.7rem→12px on
+   * .vcr-btn / .vcr-scope-btn) widened the VCR row by ~20px at vw=375, clipping the LCD
+   * (right=395). Tighten horizontal padding here to reclaim that width without lowering
+   * font-size (M3 typography floor requires fs≥12 + fw≥500) and without touching the
+   * .vcr-live-btn #b91c1c bg / 6.47:1 contrast carve-out. min-height:32 still maintained. */
+  .vcr-btn { padding: 4px 3px; font-size: 12px; font-weight: 600; min-height: 32px; min-width: 32px; }
+  .vcr-scope-btn { font-size: 12px; font-weight: 600; padding: 2px 4px; min-height: 32px; min-width: 0; }
   .vcr-prompt { order: 5; width: 100%; font-size: 0.7rem; }
 }
 
