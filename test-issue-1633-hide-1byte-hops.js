@@ -72,6 +72,94 @@ function freshSandbox() {
   return ctx;
 }
 
+// === Heavier sandbox that loads live.js (mirrors test-live.js pattern) ===
+function makeLiveSandbox() {
+  const ctx = {
+    window: {
+      addEventListener: () => {}, dispatchEvent: () => {}, devicePixelRatio: 1,
+      CustomEvent: function (n, d) { this.type = n; this.detail = (d && d.detail) || null; },
+    },
+    document: {
+      readyState: 'complete',
+      createElement: () => ({
+        tagName: '', id: '', textContent: '', innerHTML: '', style: {}, dataset: {},
+        classList: { add(){}, remove(){}, contains(){return false;} },
+        setAttribute(){}, getAttribute(){return null;},
+        addEventListener(){}, focus(){},
+        getContext: () => ({ clearRect(){}, fillRect(){}, beginPath(){}, arc(){}, fill(){}, scale(){}, fillStyle: '', font: '', fillText(){} }),
+        offsetWidth: 200, offsetHeight: 40, width: 0, height: 0,
+      }),
+      head: { appendChild: () => {} },
+      body: { appendChild: () => {}, removeChild: () => {}, contains: () => false },
+      getElementById: () => null,
+      addEventListener: () => {},
+      querySelectorAll: () => [],
+      querySelector: () => null,
+      createElementNS: () => ({ tagName: 'svg', setAttribute(){}, getAttribute(){return null;}, style: {} }),
+      documentElement: { getAttribute: () => null, setAttribute: () => {}, dataset: {} },
+      hidden: false,
+    },
+    console, Date, Infinity, Math, Array, Object, String, Number, JSON, RegExp,
+    Error, TypeError, Map, Set, Promise, URLSearchParams,
+    parseInt, parseFloat, isNaN, isFinite,
+    encodeURIComponent, decodeURIComponent,
+    setTimeout: () => 0, clearTimeout: () => {},
+    setInterval: () => 0, clearInterval: () => {},
+    fetch: () => Promise.resolve({ json: () => Promise.resolve({}) }),
+    performance: { now: () => Date.now() },
+    requestAnimationFrame: (cb) => 0,
+    cancelAnimationFrame: () => {},
+    localStorage: (() => {
+      const store = {};
+      return {
+        getItem: k => (k in store ? store[k] : null),
+        setItem: (k, v) => { store[k] = String(v); },
+        removeItem: k => { delete store[k]; },
+      };
+    })(),
+    location: { hash: '', protocol: 'https:', host: 'localhost' },
+    addEventListener: () => {},
+    dispatchEvent: () => {},
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    matchMedia: () => ({ matches: false, addEventListener: () => {} }),
+    navigator: {},
+    L: {
+      circleMarker: () => ({ addTo(){return this;}, bindTooltip(){return this;}, on(){return this;}, setRadius(){}, setStyle(){}, setLatLng(){}, getLatLng(){return {lat:0,lng:0};}, remove(){} }),
+      polyline: () => ({ addTo(){return this;}, setStyle(){}, remove(){} }),
+      polygon: () => ({ addTo(){return this;}, remove(){} }),
+      map: () => ({ setView(){return this;}, addLayer(){return this;}, on(){return this;}, getZoom(){return 11;}, getCenter(){return {lat:37,lng:-122};}, getBounds(){return {contains:()=>true};}, fitBounds(){return this;}, invalidateSize(){}, remove(){}, hasLayer(){return false;}, removeLayer(){} }),
+      layerGroup: () => ({ addTo(){return this;}, addLayer(){}, removeLayer(){}, clearLayers(){}, hasLayer(){return true;}, eachLayer(){} }),
+      tileLayer: () => ({ addTo(){return this;} }),
+      control: { attribution: () => ({ addTo(){} }) },
+      DomUtil: { addClass(){}, removeClass(){} },
+    },
+    registerPage: () => {}, onWS: () => {}, offWS: () => {}, connectWS: () => {},
+    api: () => Promise.resolve([]), invalidateApiCache: () => {},
+    favStar: () => '', bindFavStars: () => {},
+    getFavorites: () => [], isFavorite: () => false,
+    HopResolver: { init(){}, resolve: () => ({}), ready: () => false },
+    MeshAudio: null,
+    RegionFilter: { init(){}, getSelected: () => null, onRegionChange: () => {} },
+    CustomEvent: function (n, d) { this.type = n; this.detail = (d && d.detail) || null; },
+    module: { exports: {} }, exports: {},
+  };
+  ctx.window.localStorage = ctx.localStorage;
+  vm.createContext(ctx);
+  // Load filter helpers first so live.js sees window.MC_* on import.
+  load(ctx, 'public/hop-filter.js');
+  // Mirror window.* onto top-level for files that reference bare names.
+  for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
+  // packet-helpers / roles are required by live.js for getParsedPath etc.
+  try { load(ctx, 'public/roles.js'); } catch (_e) {}
+  try { load(ctx, 'public/packet-helpers.js'); } catch (_e) {}
+  for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
+  try { load(ctx, 'public/live.js'); } catch (e) {
+    console.error('live.js load error:', e.message);
+  }
+  for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
+  return ctx;
+}
+
 console.log('=== #1633: hide 1-byte path hops everywhere ===');
 
 test('default is OFF (back-compat)', () => {
@@ -275,12 +363,32 @@ test('[adv #3] observer-detail.js source: hop count honors MC_filterPathHops', (
     'observer-detail.js renderRecentPackets must call MC_filterPathHops');
 });
 
-test('[adv #3] live.js source: feedHops AND paths-through-node AND node-filter honor MC_filterPathHops', () => {
-  const src = fs.readFileSync(path.join(__dirname, 'public/live.js'), 'utf8');
-  // Three distinct sites should now call into the filter API.
-  const count = (src.match(/MC_filterPathHops|MC_isVisibleHop|MC_getHide1ByteHops/g) || []).length;
-  assert.ok(count >= 4,
-    'live.js must reference the filter API at >=4 sites (feedHops + paths-through + node-filter + helper); found ' + count);
+test('[r2 MAJOR] live.js packetInvolvesFilterNode: node-filter search is INDEPENDENT of hide-1byte toggle', () => {
+  // r2 reviewer (option 1): drop the 1-byte hop filter from
+  // packetInvolvesFilterNode entirely. The node-filter search box must
+  // return the same matches regardless of the display preference; the
+  // chip rendering already has separate filtering via feedHops.
+  //
+  // Behavioral assertion via vm-sandbox load of live.js (replaces the
+  // prior source-grep tautology for this consumer).
+  const ctx = makeLiveSandbox();
+  const fn = ctx.window._livePacketInvolvesFilterNode;
+  assert.ok(fn, '_livePacketInvolvesFilterNode must be exposed');
+
+  // Filter-node appears ONLY in a 1-byte hop.
+  const pkt = { decoded: { path: { hops: ['ab'] }, payload: {} } };
+  const filterKeys = ['abcd1234567890ab'];
+
+  // Toggle OFF — must match (baseline).
+  ctx.window.MC_setHide1ByteHops(false);
+  assert.strictEqual(fn(pkt, filterKeys), true,
+    'baseline: match a filter-key whose prefix overlaps a 1-byte hop');
+
+  // Toggle ON — MUST STILL match. The node-filter search box is
+  // semantically independent of the display preference.
+  ctx.window.MC_setHide1ByteHops(true);
+  assert.strictEqual(fn(pkt, filterKeys), true,
+    'node-filter search must be independent of hide-1byte display toggle');
 });
 
 test('[adv #4] customize-v2.js still dispatches mc-hide-1byte-hops-changed', () => {
