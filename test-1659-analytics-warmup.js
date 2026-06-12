@@ -121,6 +121,97 @@ function makeCtx(fetchImpl) {
     assert.strictEqual(calls, 1, 'should not retry on non-503 errors');
   });
 
+  // === PR #1688 r1 — banner counter leak fixes (adv #1 + munger #4) ===
+  // The banner state must end HIDDEN after BOTH a retry-then-success
+  // path and a retry-exhausted-throw path. Previously the in-flight
+  // counter leaked, leaving the banner stuck visible.
+  //
+  // We can't read the internal `let _warmupInflight_1659` from outside
+  // the vm (let is not attached to globalThis). Instead we hook
+  // window.onWarmup_1659 which fires whenever banner state changes,
+  // and assert the LAST state is `false` (hidden) — equivalent to
+  // counter == 0.
+
+  function withBannerHook(fetchImpl) {
+    const ctx = makeCtx(fetchImpl);
+    const events = [];
+    ctx.window.onWarmup_1659 = (visible) => { events.push(visible); };
+    return { ctx, events };
+  }
+
+  await test('banner hidden after retry-then-success (no leak)', async () => {
+    let calls = 0;
+    const { ctx, events } = withBannerHook(async (url) => {
+      if (!/analytics/.test(url || '')) {
+        return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({}) };
+      }
+      calls++;
+      if (calls < 4) {
+        return { ok: false, status: 503, headers: { get: () => '1' }, json: async () => ({}) };
+      }
+      return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ ok: 1 }) };
+    });
+    await ctx.api('/analytics/rf');
+    assert.ok(events.length > 0, 'expected at least one banner state change');
+    assert.strictEqual(events[events.length - 1], false,
+      'banner must end hidden after success (events=' + JSON.stringify(events) + ')');
+  });
+
+  await test('banner hidden after retry-exhausted throw (no leak)', async () => {
+    const { ctx, events } = withBannerHook(async (url) => {
+      if (!/analytics/.test(url || '')) {
+        return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({}) };
+      }
+      return { ok: false, status: 503, headers: { get: () => '1' }, json: async () => ({}) };
+    });
+    let thrown = null;
+    try { await ctx.api('/analytics/rf'); } catch (e) { thrown = e; }
+    assert.ok(thrown, 'expected throw after retries exhausted');
+    assert.ok(events.length > 0, 'expected at least one banner state change');
+    assert.strictEqual(events[events.length - 1], false,
+      'banner must end hidden after retry-exhausted throw (events=' + JSON.stringify(events) + ')');
+  });
+
+  await test('banner hidden after three parallel analytics endpoints', async () => {
+    let calls = 0;
+    const { ctx, events } = withBannerHook(async (url) => {
+      if (!/analytics/.test(url || '')) {
+        return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({}) };
+      }
+      calls++;
+      // Each endpoint takes one 503 then succeeds.
+      if (calls % 2 === 1) {
+        return { ok: false, status: 503, headers: { get: () => '1' }, json: async () => ({}) };
+      }
+      return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({}) };
+    });
+    await Promise.all([
+      ctx.api('/analytics/rf'),
+      ctx.api('/analytics/topology'),
+      ctx.api('/analytics/channels'),
+    ]);
+    assert.strictEqual(events[events.length - 1], false,
+      'banner must end hidden after three parallel calls (events=' + JSON.stringify(events) + ')');
+  });
+
+  await test('banner visible DURING retries (not just at the end)', async () => {
+    let calls = 0;
+    const { ctx, events } = withBannerHook(async (url) => {
+      if (!/analytics/.test(url || '')) {
+        return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({}) };
+      }
+      calls++;
+      if (calls < 3) {
+        return { ok: false, status: 503, headers: { get: () => '1' }, json: async () => ({}) };
+      }
+      return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({}) };
+    });
+    await ctx.api('/analytics/rf');
+    assert.ok(events.includes(true),
+      'banner must have been visible during retries (events=' + JSON.stringify(events) + ')');
+    assert.strictEqual(events[events.length - 1], false, 'banner must end hidden');
+  });
+
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   if (failed > 0) process.exit(1);
 })();

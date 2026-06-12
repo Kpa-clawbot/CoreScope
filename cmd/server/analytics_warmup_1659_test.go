@@ -82,6 +82,11 @@ func TestAnalyticsRF_AfterFirstPassReturns200(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	store := NewPacketStore(db, nil)
+	// #1688 r1: the warmup gate now ALSO requires LoadComplete() to be
+	// true before first-pass-done flips (munger #5). Tests that don't
+	// exercise the chunked loader must flip it manually to model a
+	// production server that has finished cold-loading.
+	store.loadComplete.Store(true)
 
 	stop := store.StartAnalyticsRecomputers(50 * time.Millisecond)
 	defer stop()
@@ -155,5 +160,171 @@ func TestAnalyticsRF_WindowedRequestNotGated(t *testing.T) {
 
 	if w.Code == http.StatusServiceUnavailable {
 		t.Fatalf("windowed request must NOT be gated by warmup (got 503)")
+	}
+}
+
+// === PR #1688 r1 — new test cases ===
+
+// TestAnalyticsTopology_WarmupReturns503 — kent-beck #1: topology
+// gate is symmetric with RF; assert the same 503 contract.
+func TestAnalyticsTopology_WarmupReturns503(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	store := NewPacketStore(db, nil)
+	block := make(chan struct{})
+	defer close(block)
+	store.installWarmupBlocker_1659(block)
+
+	cfg := &Config{Port: 3000}
+	hub := NewHub()
+	srv := NewServer(db, cfg, hub)
+	srv.store = store
+	router := mux.NewRouter()
+	srv.RegisterRoutes(router)
+
+	req := httptest.NewRequest("GET", "/api/analytics/topology", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("topology: expected 503 during warmup, got %d", w.Code)
+	}
+	if got := w.Header().Get("Retry-After"); got != "5" {
+		t.Fatalf("topology: expected Retry-After: 5, got %q", got)
+	}
+}
+
+// TestAnalyticsChannels_WarmupReturns503 — kent-beck #1: channels
+// gate is symmetric with RF; assert the same 503 contract.
+func TestAnalyticsChannels_WarmupReturns503(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	store := NewPacketStore(db, nil)
+	block := make(chan struct{})
+	defer close(block)
+	store.installWarmupBlocker_1659(block)
+
+	cfg := &Config{Port: 3000}
+	hub := NewHub()
+	srv := NewServer(db, cfg, hub)
+	srv.store = store
+	router := mux.NewRouter()
+	srv.RegisterRoutes(router)
+
+	req := httptest.NewRequest("GET", "/api/analytics/channels", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("channels: expected 503 during warmup, got %d", w.Code)
+	}
+	if got := w.Header().Get("Retry-After"); got != "5" {
+		t.Fatalf("channels: expected Retry-After: 5, got %q", got)
+	}
+}
+
+// TestWarmup_GateBlockedUntilLoadComplete — munger #5 correctness:
+// the chunked loader readiness MUST gate first-pass-done. A recomputer
+// pass that completes while LoadComplete() is false must NOT lift the
+// gate; a SUBSEQUENT pass after LoadComplete() flips true must lift it.
+func TestWarmup_GateBlockedUntilLoadComplete(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	store := NewPacketStore(db, nil)
+	// LoadComplete starts false — chunked loader still running.
+
+	called := make(chan struct{}, 16)
+	rc := newAnalyticsRecomputer("test-rf", time.Hour, func() interface{} {
+		called <- struct{}{}
+		return map[string]int{"x": 1}
+	})
+	rc.setWarmupReadyGate_1659(store.LoadComplete)
+	rc.Start()
+	defer rc.Stop()
+
+	// First pass already ran synchronously in Start(). Gate must still
+	// be warming up because LoadComplete() is false.
+	<-called
+	if !rc.IsWarmingUp_1659() {
+		t.Fatalf("expected IsWarmingUp_1659=true while LoadComplete()=false (munger #5 bug)")
+	}
+	if !rc.FirstPassDoneAt_1659().IsZero() {
+		t.Fatalf("expected FirstPassDoneAt zero while LoadComplete()=false")
+	}
+
+	// Now flip the loader and trigger another pass.
+	store.loadComplete.Store(true)
+	rc.runOnce()
+	if rc.IsWarmingUp_1659() {
+		t.Fatalf("expected gate to lift after LoadComplete()=true + another pass")
+	}
+}
+
+// TestWarmup_NilResultStillLiftsGate — munger #2 / kent-beck #2:
+// a compute that returns nil but doesn't panic must still flip the
+// gate (the cache stays empty but the banner does NOT get stuck).
+func TestWarmup_NilResultStillLiftsGate(t *testing.T) {
+	rc := newAnalyticsRecomputer("test-nil", time.Hour, func() interface{} {
+		return nil
+	})
+	rc.Start()
+	defer rc.Stop()
+
+	if rc.IsWarmingUp_1659() {
+		t.Fatalf("nil-result compute must still lift warmup gate after first pass")
+	}
+}
+
+// TestWarmup_PanicEventuallyLiftsGate — munger #2 / kent-beck #2:
+// a compute that ALWAYS panics must not leave the gate stuck forever.
+// The fallback timeout (warmupForceTimeout) is the safety net.
+func TestWarmup_PanicEventuallyLiftsGate(t *testing.T) {
+	prev := warmupForceTimeout
+	warmupForceTimeout = 50 * time.Millisecond
+	defer func() { warmupForceTimeout = prev }()
+
+	rc := newAnalyticsRecomputer("test-panic", time.Hour, func() interface{} {
+		panic("compute boom")
+	})
+	rc.Start()
+	defer rc.Stop()
+
+	// Panic was recovered inside runOnce; firstPassDoneNs is still 0.
+	if rc.FirstPassDoneAt_1659().IsZero() == false {
+		t.Fatalf("panicking compute should not have set firstPassDoneNs")
+	}
+	// But after warmupForceTimeout elapses, the gate must lift.
+	time.Sleep(80 * time.Millisecond)
+	if rc.IsWarmingUp_1659() {
+		t.Fatalf("expected fallback timeout to lift gate after warmupForceTimeout (got still-warming)")
+	}
+}
+
+// TestWarmup_TimeoutLiftsHangingCompute — munger #2 / kent-beck #2:
+// hung compute (blocks indefinitely on a channel) must not result in
+// permanent 503. Fallback timeout lifts it.
+func TestWarmup_TimeoutLiftsHangingCompute(t *testing.T) {
+	prev := warmupForceTimeout
+	warmupForceTimeout = 50 * time.Millisecond
+	defer func() { warmupForceTimeout = prev }()
+
+	block := make(chan struct{})
+	defer close(block)
+	rc := newAnalyticsRecomputer("test-hang", time.Hour, func() interface{} {
+		<-block
+		return nil
+	})
+	// Don't call Start (would block forever on synchronous initial
+	// compute). Just simulate "we noted warmup start, compute is
+	// hanging in another goroutine".
+	rc.noteWarmupStart_1659()
+	go rc.runOnce()
+
+	if !rc.IsWarmingUp_1659() {
+		t.Fatalf("expected initial state to be warming-up")
+	}
+	time.Sleep(80 * time.Millisecond)
+	if rc.IsWarmingUp_1659() {
+		t.Fatalf("expected fallback timeout to lift hung-compute warmup")
 	}
 }

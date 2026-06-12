@@ -44,6 +44,14 @@ type analyticsRecomputer struct {
 	// Stats (atomic).
 	computeRuns   atomic.Int64
 	lastComputeNs atomic.Int64 // duration of last compute in nanoseconds
+
+	// Issue #1659 (PR #1688 r1) — warmup gate state, inlined here so
+	// hot-path readers (IsWarmingUp_1659) do lock-free atomic loads
+	// only (replaces the r0 package-level map + chanLock). See
+	// analytics_warmup_1659.go for full design notes.
+	firstPassDoneNs atomic.Int64
+	warmupStartedNs atomic.Int64
+	warmupReadyGate atomic.Value // *func() bool — gate must return true for markFirstPassDone to take effect
 }
 
 // newAnalyticsRecomputer constructs an unstarted recomputer.
@@ -68,6 +76,11 @@ func newAnalyticsRecomputer(name string, interval time.Duration, compute func() 
 // Calling Start multiple times is a no-op after the first call.
 func (r *analyticsRecomputer) Start() {
 	r.startOnce.Do(func() {
+		// Issue #1659 (#1688 munger #2): record warmup-start before
+		// the first compute, so IsWarmingUp_1659's fallback timeout
+		// is measured from "recomputer started" — not "first pass
+		// returned", which never happens if compute() hangs.
+		r.noteWarmupStart_1659()
 		// Initial synchronous compute — first read must NOT see empty
 		// or uninitialized data (acceptance criterion #1240).
 		r.runOnce()
@@ -95,7 +108,10 @@ func (r *analyticsRecomputer) runOnce() {
 	}
 	defer func() {
 		// Don't let a compute panic kill the background goroutine.
-		// The previous snapshot remains valid.
+		// The previous snapshot remains valid. Even on panic, we
+		// still want IsWarmingUp_1659's fallback timeout to be the
+		// safety net (a perpetually panicking compute would never
+		// reach markFirstPassDone otherwise).
 		_ = recover()
 	}()
 	t0 := time.Now()
@@ -104,13 +120,17 @@ func (r *analyticsRecomputer) runOnce() {
 	r.computeRuns.Add(1)
 	if result != nil {
 		r.cache.Store(result)
-		// Issue #1659: mark the first-pass clock so the warmup gate
-		// in GetAnalyticsRFWithWindow / Topology / Channels handlers
-		// can flip from 503-Retry-After to serving the cache. Only
-		// the first successful compute sets the timestamp; subsequent
-		// passes are no-ops.
-		r.markFirstPassDone_1659()
 	}
+	// Issue #1659: mark the first-pass clock so the warmup gate
+	// in GetAnalyticsRFWithWindow / Topology / Channels handlers
+	// can flip from 503-Retry-After to serving the cache.
+	//
+	// PR #1688 r1: called on EVERY successful pass (even nil
+	// result) so a compute that returns nil but doesn't panic
+	// still lifts the gate — banner-stuck-forever fix (munger #2).
+	// The markFirstPassDone helper is idempotent and additionally
+	// consults the chunked-loader readiness gate (munger #5).
+	r.markFirstPassDone_1659()
 }
 
 // Load returns the most recently computed snapshot, or nil if Start
@@ -247,6 +267,19 @@ func (s *PacketStore) StartAnalyticsRecomputers(defaultInterval time.Duration, o
 		s.recompObserversClockSkew, s.recompNodesClockSkew,
 	}
 	s.analyticsRecomputerMu.Unlock()
+
+	// Issue #1659 (PR #1688 r1, munger #5): wire the chunked-loader
+	// readiness gate on the three warmup-gated recomputers (RF,
+	// Topology, Channels). markFirstPassDone_1659 will refuse to
+	// flip first-pass-done until s.LoadComplete() reports true —
+	// i.e. the cold-load has populated all observations. Otherwise
+	// the FIRST recomputer pass runs against the post-restart in-RAM
+	// slice and the gate opens on partial data (the original #1659
+	// bug class).
+	loadCompleteGate := s.LoadComplete
+	s.recompRF.setWarmupReadyGate_1659(loadCompleteGate)
+	s.recompTopology.setWarmupReadyGate_1659(loadCompleteGate)
+	s.recompChannels.setWarmupReadyGate_1659(loadCompleteGate)
 
 	for _, rc := range all {
 		rc.Start()

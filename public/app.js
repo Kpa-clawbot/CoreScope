@@ -117,31 +117,46 @@ async function api(path, { ttl = 0, bust = false } = {}) {
     // (analytics recomputer first-pass, index build, etc.). Retry with
     // exponential backoff capped at 30s, up to 6 attempts (~63s total),
     // so the analytics cards never display the stale post-restart slice.
+    //
+    // PR #1688 r1 (adv #1 + munger #4): use a single `notified` flag
+    // per outer call + `try / finally` so the in-flight banner counter
+    // is decremented exactly once regardless of retry count or
+    // exception path (success, retry-exhausted throw, network throw).
+    // Previously, multi-attempt retries leaked the counter (incremented
+    // per attempt, decremented at most once) and exhausted-retries
+    // threw without decrementing at all — banner stuck across three
+    // analytics endpoints, multiplied.
     let attempt = 0;
     let delay = 1000;
     const maxAttempts = 6;
-    while (true) {
-      const res = await fetch('/api' + path);
-      if (res.status === 503 && attempt < maxAttempts) {
-        const ra = parseInt(res.headers.get('Retry-After'), 10);
-        const wait = isFinite(ra) && ra > 0 ? ra * 1000 : delay;
-        _warmupNotify_1659(true);
-        await new Promise(r => setTimeout(r, Math.min(wait, 30000)));
-        delay = Math.min(delay * 2, 30000);
-        attempt++;
-        continue;
+    let notified = false;
+    try {
+      while (true) {
+        const res = await fetch('/api' + path);
+        if (res.status === 503 && attempt < maxAttempts) {
+          const ra = parseInt(res.headers.get('Retry-After'), 10);
+          const wait = isFinite(ra) && ra > 0 ? ra * 1000 : delay;
+          if (!notified) { _warmupNotify_1659(true); notified = true; }
+          await new Promise(r => setTimeout(r, Math.min(wait, 30000)));
+          delay = Math.min(delay * 2, 30000);
+          attempt++;
+          continue;
+        }
+        if (!res.ok) throw new Error(`API ${res.status}: ${path}`);
+        const data = await res.json();
+        const ms = performance.now() - t0;
+        _apiPerf.calls++;
+        _apiPerf.totalMs += ms;
+        _apiPerf.log.push({ path, ms: Math.round(ms), time: Date.now() });
+        if (_apiPerf.log.length > 200) _apiPerf.log.shift();
+        if (ms > 500) console.warn(`[SLOW API] ${path} took ${Math.round(ms)}ms`);
+        if (ttl > 0) _apiCache.set(path, { data, expires: Date.now() + ttl });
+        return data;
       }
-      if (!res.ok) throw new Error(`API ${res.status}: ${path}`);
-      if (attempt > 0) _warmupNotify_1659(false);
-      const data = await res.json();
-      const ms = performance.now() - t0;
-      _apiPerf.calls++;
-      _apiPerf.totalMs += ms;
-      _apiPerf.log.push({ path, ms: Math.round(ms), time: Date.now() });
-      if (_apiPerf.log.length > 200) _apiPerf.log.shift();
-      if (ms > 500) console.warn(`[SLOW API] ${path} took ${Math.round(ms)}ms`);
-      if (ttl > 0) _apiCache.set(path, { data, expires: Date.now() + ttl });
-      return data;
+    } finally {
+      // Decrement exactly once iff we incremented. Runs on return,
+      // throw, or retry-exhausted throw — counter is balanced.
+      if (notified) _warmupNotify_1659(false);
     }
   })();
   _inflight.set(path, promise);
