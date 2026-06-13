@@ -4356,7 +4356,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
           '<span title="Warning (5min – 1h)" style="color:var(--color-warning,#e80)">' + (r.warningCount || 0) + '</span> / ' +
           '<span title="Critical (1h – 30d)" style="color:var(--color-error,#c00)">' + (r.criticalCount || 0) + '</span> / ' +
           '<span title="Absurd (&gt; 30d)" style="color:#a0a">' + (r.absurdCount || 0) + '</span> / ' +
-          '<span title="No clock (&gt; 365d)" style="color:#888">' + (r.noClockCount || 0) + '</span>';
+          '<span title="No clock (&gt; 365d)" style="color:var(--text-muted)">' + (r.noClockCount || 0) + '</span>';
         return '' +
           '<tr data-role="' + esc(r.role) + '">' +
             '<td>' + _rolesEmoji(r.role) + ' <strong>' + esc(r.role) + '</strong></td>' +
@@ -4375,7 +4375,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
       }).join('');
       el.innerHTML =
         '<p class="text-muted" style="margin:0 0 12px 0">Distribution of node roles across the mesh, with per-role clock-skew posture.</p>' +
-        '<div class="roles-summary" style="margin-bottom:12px;color:var(--color-text-muted,#666)">' +
+        '<div class="roles-summary" style="margin-bottom:12px;color:var(--text-muted)">' +
           '<strong>' + total + '</strong> nodes across <strong>' + roles.length + '</strong> roles' +
         '</div>' +
         '<table id="rolesTable" class="data-table analytics-table" style="width:100%">' +

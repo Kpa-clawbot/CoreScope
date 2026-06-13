@@ -1242,8 +1242,13 @@ img.brand-logo {
 .col-hidden-pill {
   display: inline-block; margin-left: 6px;
   padding: 1px 7px; border-radius: 999px;
-  background: var(--accent-bg, rgba(96,165,250,0.18));
-  color: var(--accent, #60a5fa);
+  /* #1668 M5 — was bg:--accent-bg (rgba blue tint) + color:--accent
+     = ~2.4:1 on light theme. Swap the tint for solid --accent-strong
+     (palette-blue-600 #2563eb) and use --text-on-accent (gray-50) so
+     the pill matches the M2 .skip-link / .filter-bar .btn.active
+     pattern: 4.83:1 AA both themes, no per-theme branching. */
+  background: var(--accent-strong);
+  color: var(--text-on-accent);
   font-size: 12px; font-weight: var(--fw-bold); letter-spacing: .3px; /* #1668 M3 — was 10px */
   cursor: pointer; user-select: none; vertical-align: middle;
   border: 1px solid var(--accent, #60a5fa);
@@ -1775,7 +1780,7 @@ button.ch-item.selected { background: var(--selected-bg); }
 button.ch-item:hover .ch-icon-btn { opacity: 1; }
 .ch-icon-btn:hover, .ch-icon-btn:focus { opacity: 1 !important; outline: none; }
 .ch-remove-btn:hover, .ch-remove-btn:focus { background: #8b3838; color: white; }
-.ch-share-btn:hover,  .ch-share-btn:focus  { color: var(--accent, #3b82f6); }
+.ch-share-btn:hover,  .ch-share-btn:focus  { color: var(--link-color, #3b82f6); }
 .ch-user-badge { font-size: 12px; font-weight: var(--fw-medium); margin-left: 2px; opacity: 0.85; flex-shrink: 0; } /* #1668 M3 r1 — chip floor, mirror row chips (adv #2) */
 .ch-item-preview { font-size: 13px; font-weight: var(--fw-medium); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } /* #1668 M3 — was 12px/400 */
 
@@ -2596,7 +2601,7 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .ch-key-input:focus {
   outline: 2px solid var(--accent, #3b82f6);
   outline-offset: -1px;
-  border-color: var(--accent, #3b82f6);
+  border-color: var(--link-color, #3b82f6);
 }
 .ch-key-input::placeholder { color: var(--text-muted); }
 .ch-key-input-wrap { margin-bottom: 4px; }
@@ -2903,7 +2908,7 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 
 /* Clickable hop links */
 .hop-link {
-  color: var(--accent, #3b82f6);
+  color: var(--link-color, #3b82f6);
   text-decoration: none;
   cursor: pointer;
   transition: color 0.15s;
@@ -2965,7 +2970,12 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .hop-conflict-name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hop-conflict-dist { font-size: 11px; color: var(--text-muted); font-family: var(--mono); white-space: nowrap; }
 .hop-conflict-pk { font-size: 10px; color: var(--text-muted); font-family: var(--mono); }
-.hop-unreliable { opacity: 0.85; }
+/* #1668 M5 — was opacity:0.85; dropped fg #f9fafb on accent-strong
+   #2563eb to 4.45:1 (BLOCKER). The adjacent .hop-unreliable-btn (status
+   yellow warning glyph) is the redundant non-color signal that this hop
+   is dubious — opacity haze was over-encoding it. Remove the haze; the
+   warning icon stays as the visual marker. */
+.hop-unreliable { font-style: italic; }
 .hop-unreliable-btn { background: none; border: none; color: var(--status-yellow, #f59e0b); font-size: 13px;
   cursor: help; vertical-align: middle; margin-left: 2px; padding: 0 2px; line-height: 1; }
 .hop-global-fallback { border-bottom: 1px dashed var(--status-red); }
@@ -3666,7 +3676,7 @@ button.region-pill-active:hover { opacity: 0.85; color: var(--text-on-accent); }
   color: var(--text-muted);
   margin: 0 0 var(--space-md);
 }
-.compare-breadcrumbs a { color: var(--accent); text-decoration: none; }
+.compare-breadcrumbs a { color: var(--link-color); text-decoration: none; }
 .compare-breadcrumbs a:hover { text-decoration: underline; }
 
 .compare-controls {
@@ -3710,11 +3720,14 @@ button.region-pill-active:hover { opacity: 0.85; color: var(--text-on-accent); }
 }
 .compare-select:focus { border-color: var(--accent); outline: none; }
 .compare-vs {
-  font-size: 10px; font-weight: 700; color: var(--text-muted);
+  /* #1668 M5 — was font-size:10px+color:var(--text-muted)+opacity:0.7
+     → composite color #8c929b on white = 3.13:1 (BLOCKER). Removed the
+     opacity haze AND bumped from text-muted to text (full theme color)
+     so the 'vs' lives in the same readable band as adjacent labels. */
+  font-size: 10px; font-weight: 700; color: var(--text);
   text-transform: uppercase; letter-spacing: 1.2px;
   padding: 0 4px;
   align-self: center;
-  opacity: 0.7;
 }
 /* The Compare CTA was removed in #1646 — comparison auto-runs when
  * both observers are chosen. The legacy .compare-btn touch-target
