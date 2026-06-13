@@ -231,6 +231,17 @@
      Use --link-color for any "text rendered ON the page surface that
      should look like a link / interactive accent" — NOT for backgrounds.
      Backgrounds carrying white text continue to use --accent-strong. */
+  /* #1668 M5 — accessible semantic status colors. The legacy fallbacks
+     baked into JS (var(--success, #22c55e)) used the bright palette-500
+     hues which fail AA against white surfaces (#22c55e/white = 2.27:1,
+     #ef4444/white = 3.76:1). New theme-aware tokens use palette-700 on
+     light surfaces (5.0-6.5:1 vs white) and palette-400/500 on dark
+     (6+:1 vs surface-0/1). All callers should now read --success /
+     --warning / --danger WITHOUT a hex fallback (kept as legacy support
+     only). */
+  --success: var(--palette-green-700, #15803d);
+  --warning: #b45309;
+  --danger: var(--palette-red-600, #dc2626);
   --link-color: var(--palette-blue-600);
   --accent-bg: rgba(59, 130, 246, 0.12);
   --accent-border: rgba(59, 130, 246, 0.25);
@@ -357,6 +368,10 @@
        was OK but borderline on card-bg; #60a5fa = palette-blue-400 ≈
        7.8:1 on surface-0, 5.4:1 on card-bg, AA pass either way). */
     --link-color: var(--palette-blue-400);
+    /* #1668 M5 — bright -400/-500 hues for AA against dark surfaces */
+    --success: var(--palette-green-400, #4ade80);
+    --warning: #fcd34d;
+    --danger:  var(--palette-red-400, #f87171);
     --surface-0: #0f0f23;
     --surface-1: #1a1a2e;
     --surface-2: #232340;
@@ -402,6 +417,9 @@
   --status-info: #60a5fa;
   /* #1668 M5 — see :root[data-theme="dark"] media block above for rationale */
   --link-color: var(--palette-blue-400);
+  --success: var(--palette-green-400, #4ade80);
+  --warning: #fcd34d;
+  --danger:  var(--palette-red-400, #f87171);
   --surface-0: #0f0f23;
   --surface-1: #1a1a2e;
   --surface-2: #232340;

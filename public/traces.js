@@ -107,7 +107,7 @@
 
       renderResults(results, allPaths, allPathsRaw, decoded);
     } catch (e) {
-      results.innerHTML = `<div class="trace-empty" style="color:#ef4444">Error: ${e.message}</div>`;
+      results.innerHTML = `<div class="trace-empty" style="color:var(--danger)">Error: ${e.message}</div>`;
     }
   }
 

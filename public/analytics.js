@@ -502,7 +502,7 @@
         '<div class="dumbbell-values" style="text-align:right;color:var(--text-muted);font-variant-numeric:tabular-nums">' +
           '<span style="color:var(--text-muted)">cnt ' + cpct.toFixed(1) + '%</span>' +
           ' &nbsp;·&nbsp; ' +
-          '<span style="color:' + color + ';font-weight:600">air ' + apct.toFixed(1) + '%</span>' +
+          '<span style="display:inline-flex;align-items:center;gap:4px;color:var(--text);font-weight:600"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + color + '" aria-hidden="true"></span>air ' + apct.toFixed(1) + '%</span>' +
         '</div>' +
       '</div>';
     });
@@ -1892,7 +1892,7 @@
             for (const [twoHex, nodes] of Object.entries(info.two_byte_map || {}).sort()) {
               const isCollision = nodes.length > 1;
               dhtml += `<div style="margin-bottom:6px;padding:4px 6px;border-radius:4px;background:${isCollision ? 'rgba(220,50,30,0.1)' : 'transparent'};border:1px solid ${isCollision ? 'rgba(220,50,30,0.3)' : 'transparent'}">`;
-              dhtml += `<code class="mono" style="font-size:0.9em;font-weight:${isCollision?'700':'400'}">${twoHex}</code>${isCollision ? ' <span style="color:#dc2626;font-size:0.75em;font-weight:700">COLLISION</span>' : ''} `;
+              dhtml += `<code class="mono" style="font-size:0.9em;font-weight:${isCollision?'700':'400'}">${twoHex}</code>${isCollision ? ' <span style="color:var(--danger);font-size:0.75em;font-weight:700">COLLISION</span>' : ''} `;
               dhtml += nodes.map(m => `<a href="#/nodes/${encodeURIComponent(m.public_key)}" class="analytics-link" style="font-size:0.85em">${esc(m.name || m.public_key.slice(0,12))}</a>`).join(', ');
               dhtml += `</div>`;
             }
