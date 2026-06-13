@@ -253,6 +253,7 @@
     "pad2": "readonly",
     "pad3": "readonly",
     "pages": "readonly",
+    "parseViewportHash": "readonly",
     "payloadTypeColor": "readonly",
     "payloadTypeName": "readonly",
     "process": "readonly",
