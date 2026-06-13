@@ -56,7 +56,7 @@
       .alab-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
       .alab-speed { padding: 4px 8px; font-size: 12px; border-radius: 4px; border: 1px solid var(--border);
         background: var(--surface-1); color: var(--text-muted); cursor: pointer; }
-      .alab-speed.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+      .alab-speed.active { background: var(--accent-strong); color: var(--text-on-accent); border-color: var(--accent-strong); }
       .alab-section { background: var(--surface-1); border: 1px solid var(--border);
         border-radius: 8px; padding: 16px; margin-bottom: 16px; }
       .alab-section h3 { margin: 0 0 12px 0; font-size: 14px; color: var(--text-muted); font-weight: 600; }

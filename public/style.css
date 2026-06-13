@@ -799,7 +799,7 @@ img.brand-logo {
 .dropdown-item {
   display: block; padding: 8px 16px; color: var(--text-muted); text-decoration: none; font-size: 13px;
 }
-.dropdown-item:hover { background: var(--accent); color: #fff; }
+.dropdown-item:hover { background: var(--accent-strong); color: var(--text-on-accent); }
 
 .nav-right { display: flex; align-items: center; gap: var(--space-sm); flex-shrink: 0; }
 .nav-btn {
@@ -1494,10 +1494,10 @@ body.scroll-locked { overflow: hidden; }
   resize: vertical; margin-bottom: 12px;
 }
 .modal .btn-primary {
-  background: var(--accent); color: #fff; border: none; padding: 8px 20px;
+  background: var(--accent-strong); color: var(--text-on-accent); border: none; padding: 8px 20px;
   border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600;
 }
-.modal .btn-primary:hover { background: var(--accent-hover); }
+.modal .btn-primary:hover { background: var(--palette-blue-700, #1d4ed8); }
 .modal .btn-close {
   background: none; border: 1px solid var(--border); padding: 8px 16px;
   border-radius: 6px; cursor: pointer; margin-left: 8px; font-size: 14px;
@@ -2738,7 +2738,7 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .hash-byte-selector { display: flex; gap: 4px; }
 .hash-byte-btn { padding: 4px 12px; border-radius: 20px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text-muted); font-size: 12px; font-weight: 600; cursor: pointer; transition: background .15s, color .15s; }
 .hash-byte-btn:hover { background: var(--border); color: var(--text); }
-.hash-byte-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.hash-byte-btn.active { background: var(--accent-strong); color: var(--text-on-accent); border-color: var(--accent-strong); }
 .hash-bar-value { min-width: 120px; text-align: right; font-size: 13px; font-weight: 600; }
 .badge-hash-1 { background: #ef444420; color: var(--status-red); }
 .badge-hash-2 { background: #22c55e20; color: var(--status-green); }
@@ -3300,10 +3300,13 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
   flex-shrink: 0;
 }
 .region-pill:hover { border-color: var(--accent); color: var(--accent); }
+/* #1668 M5 — was bg:var(--accent)(#4a9eff) + #fff = 2.75:1 BLOCKER on both themes.
+   Bumped to --accent-strong (#2563eb) + --text-on-accent for 4.83:1 AA pass.
+   Same M2 token pair used for .skip-link / .hop-named / .filter-bar .btn.active. */
 button.region-pill-active {
-  background: var(--accent); color: #fff; border-color: var(--accent);
+  background: var(--accent-strong); color: var(--text-on-accent); border-color: var(--accent-strong);
 }
-button.region-pill-active:hover { opacity: 0.85; color: #fff; }
+button.region-pill-active:hover { opacity: 0.85; color: var(--text-on-accent); }
 .region-filter-label {
   font-size: 12px; font-weight: 600; color: var(--text-muted); align-self: center;
   margin-right: 2px; user-select: none; white-space: nowrap; flex-shrink: 0;
@@ -3371,7 +3374,7 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
 }
 .multi-select-item:hover { background: var(--row-hover, #f5f5f5); }
 
-.chan-tag { background: var(--accent, #3b82f6); color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; font-weight: 600; }
+.chan-tag { background: var(--accent-strong, #2563eb); color: var(--text-on-accent, #f9fafb); padding: 2px 8px; border-radius: 4px; font-size: 0.9em; font-weight: 600; }
 
 /* Matrix mode hex animation */
 .matrix-char { background: none !important; border: none !important; }
@@ -4539,10 +4542,10 @@ body[data-cb-preset="achromat"] {
 
 /* === #1034 PR1: Channel Add modal + sectioned sidebar === */
 .ch-add-channel-btn {
-  background: var(--accent, #2563eb); color: #fff; border: none;
+  background: var(--accent-strong, #2563eb); color: var(--text-on-accent, #f9fafb); border: none;
   padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;
 }
-.ch-add-channel-btn:hover { background: var(--accent-hover, #1d4ed8); }
+.ch-add-channel-btn:hover { background: var(--palette-blue-700, #1d4ed8); }
 
 .ch-modal-overlay { z-index: 1100; }
 .ch-modal-overlay.hidden { display: none; }
