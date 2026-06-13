@@ -56,6 +56,19 @@ for (const r of ['/', '/packets', '/nodes', '/live', '/map', '/analytics?tab=col
   assert.ok(mod.ROUTES.includes(r), `ROUTES missing ${r}`);
 }
 
+// #1706: ROUTES must cover ALL analytics tabs registered in REGISTERED_ANALYTICS_TABS.
+// The gate previously covered 7 of 14 analytics tabs (overview, rf, topology,
+// channels, hashsizes, collisions, roles) — the other 7 plus prefix-tool could
+// regress on contrast/aria without CI noticing. This assertion enforces full
+// coverage so any new tab added to analytics.js forces a ROUTES entry too.
+for (const tab of mod.REGISTERED_ANALYTICS_TABS) {
+  const route = `/analytics?tab=${tab}`;
+  assert.ok(
+    mod.ROUTES.includes(route),
+    `#1706: ROUTES missing analytics tab coverage for "${route}" — every REGISTERED_ANALYTICS_TABS entry must be gated`
+  );
+}
+
 // ---- ROUTES reciprocity vs registered pages / analytics tabs ----------------
 // Forces a build break if someone adds a route without covering it, OR removes
 // a registered page/tab without dropping it from ROUTES (silent skip).
