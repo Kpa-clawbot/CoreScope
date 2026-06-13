@@ -32,11 +32,18 @@ const CSS_PATH = 'public/style.css';
 const css = fs.readFileSync(CSS_PATH, 'utf8');
 
 // ── Token extraction (mirrors test-issue-1668-m2-contrast.js) ─────────────
-function extractBlockTokens(blockRegex) {
+// MF5 (review r1): throw loudly when the block regex does not match the
+// scoped `selector { ... \n}` shape — silent {} previously let the test
+// pass falsely if `style.css` were minified or its closing brace style
+// changed. Callers must pass a human-readable `selectorLabel` for the
+// error message.
+function extractBlockTokens(blockRegex, selectorLabel) {
   const tokens = {};
   const flagged = new RegExp(blockRegex.source, blockRegex.flags.includes('g') ? blockRegex.flags : blockRegex.flags + 'g');
   let m;
+  let matched = false;
   while ((m = flagged.exec(css)) !== null) {
+    matched = true;
     const body = m[1];
     const re = /^\s*(--[a-z0-9-]+)\s*:\s*([^;]+);/gim;
     let mm;
@@ -44,11 +51,28 @@ function extractBlockTokens(blockRegex) {
       tokens[mm[1]] = mm[2].trim();
     }
   }
+  if (!matched) {
+    throw new Error(
+      `extractBlockTokens: no closing brace found for selector ${selectorLabel || blockRegex.source} ` +
+      `(parser expects \`<selector> { ... \\n}\` shape; if style.css was minified or restructured, fix the parser).`
+    );
+  }
   return tokens;
 }
 
-const lightTokens = extractBlockTokens(/:root\s*\{([\s\S]*?)\n\}/);
-const darkTokens  = extractBlockTokens(/\[data-theme="dark"\]\s*\{([\s\S]*?)\n\}/);
+const lightTokens = extractBlockTokens(/:root\s*\{([\s\S]*?)\n\}/, ':root');
+const darkTokens  = extractBlockTokens(/\[data-theme="dark"\]\s*\{([\s\S]*?)\n\}/, '[data-theme="dark"]');
+
+// MF5 defensive assertion — if the CSS structure regresses to a shape
+// the parser can't read, fail at the top rather than silently emitting
+// "all colors look fine" because every token resolved to undefined.
+for (const tok of ['--accent', '--accent-strong', '--text-on-accent']) {
+  assert.ok(
+    lightTokens[tok],
+    `extractBlockTokens regression: expected :root to declare ${tok} but parser found none. ` +
+    `Either the CSS structure changed or extractBlockTokens needs updating.`
+  );
+}
 
 function resolveToken(name, theme) {
   const map = theme === 'dark' ? { ...lightTokens, ...darkTokens } : lightTokens;
@@ -114,28 +138,50 @@ function contrast(fg, bg) {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-// ── Extract the rules under test ──────────────────────────────────────────
 // `.subpath-selected { background: <X>; color: <Y>; ... }`
 // `.subpath-selected .hop-prefix { color: <Z>; ... }`
-// The first declaration in each rule is what cascades for our purposes.
-function extractDecl(selectorRegex, prop) {
+// MF7 (review r1): collect ALL matches for the property across every rule
+// whose selector matches `selectorRegex` and fail loudly if more than one
+// declaration is found, so a higher-specificity / later-in-cascade
+// override doesn't silently win over (or under) the one we're auditing.
+// The simplified parser here cannot model real CSS specificity; throwing
+// is the correct discipline — a human resolves which one is the
+// intended ground truth.
+function extractDecl(selectorRegex, prop, selectorLabel) {
   const re = new RegExp(selectorRegex.source + '\\s*\\{([^}]*)\\}', 'g');
-  let m, last = null;
+  const matches = [];
+  let m;
   while ((m = re.exec(css)) !== null) {
     const body = m[1];
     const propRe = new RegExp('(?:^|[;\\s])' + prop + '\\s*:\\s*([^;]+?)\\s*(?:!important)?\\s*;', 'i');
     const mm = body.match(propRe);
-    if (mm) last = mm[1].trim();
+    if (mm) matches.push({ rule: m[0].slice(0, 80).replace(/\s+/g, ' '), value: mm[1].trim() });
   }
-  return last;
+  if (matches.length === 0) return null;
+  if (matches.length > 1) {
+    // Different values across rules → ambiguous cascade. Identical values
+    // are still suspicious but not load-bearing for this audit.
+    const distinct = new Set(matches.map(x => x.value));
+    if (distinct.size > 1) {
+      throw new Error(
+        `extractDecl: multiple distinct \`${prop}\` declarations matched selector ${selectorLabel || selectorRegex.source} — ` +
+        `parser cannot resolve CSS specificity. Matches:\n` +
+        matches.map(x => `    ${x.value}  (in: ${x.rule}...)`).join('\n') +
+        `\nResolve by collapsing rules in CSS or by adding a Playwright getComputedStyle assertion.`
+      );
+    }
+    // Same value across N rules — warn but proceed.
+    console.warn(`  ⚠ extractDecl: ${matches.length} rules declare \`${prop}\` = ${matches[0].value} for ${selectorLabel || selectorRegex.source} (identical, OK).`);
+  }
+  return matches[matches.length - 1].value;
 }
 
 // The parent selector — `\\.subpath-selected` matches both
 // `.subpath-selected { ... }` and the qualified child rule, so anchor by
 // boundary on the closing of the class token.
-const parentBg     = extractDecl(/(?:^|[\s>+~,])\.subpath-selected(?=\s*\{)/, 'background');
-const parentColor  = extractDecl(/(?:^|[\s>+~,])\.subpath-selected(?=\s*\{)/, 'color');
-const childColor   = extractDecl(/\.subpath-selected\s+\.hop-prefix(?=\s*\{)/, 'color');
+const parentBg     = extractDecl(/(?:^|[\s>+~,])\.subpath-selected(?=\s*\{)/, 'background', '.subpath-selected');
+const parentColor  = extractDecl(/(?:^|[\s>+~,])\.subpath-selected(?=\s*\{)/, 'color', '.subpath-selected');
+const childColor   = extractDecl(/\.subpath-selected\s+\.hop-prefix(?=\s*\{)/, 'color', '.subpath-selected .hop-prefix');
 
 assert.ok(parentBg, '`.subpath-selected { background: ... }` not found in CSS');
 assert.ok(childColor, '`.subpath-selected .hop-prefix { color: ... }` not found in CSS');
@@ -166,11 +212,27 @@ for (const theme of THEMES) {
   assert.ok(bg, `[${theme}] could not parse parent background "${bgRaw}"`);
 
   // Child color may be `inherit`, in which case fall back to the parent's
-  // declared color (or white if the parent didn't set one — matches the
-  // browser cascade for `color`).
+  // declared color. MF6 (review r1): do NOT default to white — that
+  // historically hid a regression where the parent's color drifted from
+  // #fff to something else and the test still saw white-on-blue and
+  // passed. Walk the declared cascade: child → parent → throw if neither
+  // declares a color. If the user wants browser-cascade semantics,
+  // they can use the Playwright variant (test-issue-1705-subpath-contrast-e2e.js).
   let childRaw = resolveCssValue(childColor, theme);
   if (/^inherit$/i.test(childRaw)) {
-    childRaw = parentColor ? resolveCssValue(parentColor, theme) : '#ffffff';
+    if (!parentColor) {
+      throw new Error(
+        `[${theme}] child .hop-prefix color is \`inherit\` but no parent .subpath-selected color is declared in CSS. ` +
+        `Parser cannot walk past one level — either declare a color on .subpath-selected, ` +
+        `or replace this parser test with the Playwright variant which uses real getComputedStyle.`
+      );
+    }
+    childRaw = resolveCssValue(parentColor, theme);
+    if (!childRaw) {
+      throw new Error(
+        `[${theme}] could not resolve parent color "${parentColor}" while expanding child \`inherit\` in ${theme} theme.`
+      );
+    }
   }
   const fgDeclared = parseColor(childRaw);
   assert.ok(fgDeclared, `[${theme}] could not parse child color "${childRaw}"`);
