@@ -53,7 +53,7 @@
       .alab-btn { padding: 6px 14px; border: 1px solid var(--border); border-radius: 6px;
         background: var(--surface-1); color: var(--text); cursor: pointer; font-size: 13px; }
       .alab-btn:hover { background: var(--hover-bg); }
-      .alab-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+      .alab-btn.active { background: var(--accent-strong); color: var(--text-on-accent); border-color: var(--accent-strong); }
       .alab-speed { padding: 4px 8px; font-size: 12px; border-radius: 4px; border: 1px solid var(--border);
         background: var(--surface-1); color: var(--text-muted); cursor: pointer; }
       .alab-speed.active { background: var(--accent-strong); color: var(--text-on-accent); border-color: var(--accent-strong); }
@@ -86,7 +86,7 @@
       .map-why-inline { display: block; font-size: 10px; color: var(--text-muted); font-family: var(--mono); margin-top: 2px; }
       .alab-note-play { background: none; border: 1px solid var(--border); border-radius: 4px; cursor: pointer;
         font-size: 10px; padding: 2px 6px; color: var(--text-muted); }
-      .alab-note-play:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+      .alab-note-play:hover { background: var(--accent-strong); color: var(--text-on-accent); border-color: var(--accent-strong); }
       .alab-note-clickable { cursor: pointer; }
       .alab-note-clickable:hover { background: var(--hover-bg); }
       .alab-empty { text-align: center; padding: 60px 20px; color: var(--text-muted); font-size: 15px; }

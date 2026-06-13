@@ -1123,7 +1123,7 @@
       '.cust-tab{padding:8px 10px;cursor:pointer;border:none;background:none;color:var(--text-muted);font-size:12px;font-weight:500;border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap;flex:1;text-align:center}',
       '.cust-tab-text{font-size:10px;display:block}',
       '.cust-tab:hover{color:var(--text)}',
-      '.cust-tab.active{color:var(--accent);border-bottom-color:var(--accent)}',
+      '.cust-tab.active{color:var(--link-color);border-bottom-color:var(--accent)}',
       '.cust-tab .cv2-tab-badge{font-size:9px;background:var(--accent);color:#fff;border-radius:8px;padding:0 4px;margin-left:2px}',
       '.cust-panel{display:none;padding:12px 16px}',
       '.cust-panel.active{display:block}',
@@ -1137,7 +1137,7 @@
       '.cust-hint{font-size:10px;color:var(--text-muted);margin-top:1px;line-height:1.2}',
       '.cust-color-row input[type="color"]{width:40px;height:32px;border:1px solid var(--border);border-radius:6px;cursor:pointer;padding:2px;background:var(--input-bg)}',
       '.cust-color-row .cust-hex{font-family:var(--mono);font-size:12px;color:var(--text-muted);min-width:70px}',
-      '.cv2-override-dot{color:var(--accent);cursor:pointer;font-size:10px;margin-left:4px;vertical-align:middle;title:"Reset to server default"}',
+      '.cv2-override-dot{color:var(--link-color);cursor:pointer;font-size:10px;margin-left:4px;vertical-align:middle;title:"Reset to server default"}',
       '.cv2-override-dot:hover{color:var(--status-red)}',
       '.cust-node-dot{display:inline-block;width:16px;height:16px;border-radius:50%;vertical-align:middle}',
       '.cust-preview-img{max-width:200px;max-height:60px;margin-top:6px;border-radius:6px;border:1px solid var(--border)}',
@@ -1153,7 +1153,7 @@
       '.cust-list-btn:hover{background:var(--surface-3)}',
       '.cust-list-btn.danger{color:#ef4444}',
       '.cust-list-btn.danger:hover{background:#fef2f2}',
-      '.cust-add-btn{display:inline-flex;align-items:center;gap:4px;padding:6px 14px;border:1px dashed var(--border);border-radius:6px;background:none;color:var(--accent);cursor:pointer;font-size:13px;margin-top:4px}',
+      '.cust-add-btn{display:inline-flex;align-items:center;gap:4px;padding:6px 14px;border:1px dashed var(--border);border-radius:6px;background:none;color:var(--link-color);cursor:pointer;font-size:13px;margin-top:4px}',
       '.cust-add-btn:hover{background:var(--hover-bg)}',
       '.cust-export-btns{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}',
       '.cust-export-btns button{padding:6px 14px;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:500}',
@@ -2105,7 +2105,7 @@
       '</details>' +
       '<p class="cust-section-title" style="margin-top:20px">Tools</p>' +
       '<p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">Server-side configuration helpers.</p>' +
-      '<a href="/geofilter-builder.html" target="_blank" style="display:inline-block;padding:7px 14px;background:var(--surface-1);border:1px solid var(--border);border-radius:6px;color:var(--accent);font-size:13px;text-decoration:none;font-weight:500"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> GeoFilter Builder →</a>' +
+      '<a href="/geofilter-builder.html" target="_blank" style="display:inline-block;padding:7px 14px;background:var(--surface-1);border:1px solid var(--border);border-radius:6px;color:var(--link-color);font-size:13px;text-decoration:none;font-weight:500"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> GeoFilter Builder →</a>' +
       '<p style="font-size:11px;color:var(--text-muted);margin-top:6px">Draw a polygon on the map to generate a <code style="font-family:var(--mono)">geo_filter</code> block for <code style="font-family:var(--mono)">config.json</code>.</p>' +
     '</div>';
   }

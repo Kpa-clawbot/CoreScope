@@ -223,6 +223,15 @@
      .nav-link.active background, .fGroup.active. */
   --accent-strong: var(--palette-blue-600);
   --text-on-accent: var(--palette-gray-50);
+  /* #1668 M5 — accessible link/text color. The legacy --accent (#4a9eff)
+     used for text-on-light backgrounds was 2.52:1 on white (BLOCKER per
+     M5 axe gate, 219 hits across .analytics-link / .sort-active / .ch-*).
+     Dark theme override below bumps to palette-blue-400 (#60a5fa) so
+     links stay readable on surface-0 (#0f0f23 ≈ 8.4:1, AA pass).
+     Use --link-color for any "text rendered ON the page surface that
+     should look like a link / interactive accent" — NOT for backgrounds.
+     Backgrounds carrying white text continue to use --accent-strong. */
+  --link-color: var(--palette-blue-600);
   --accent-bg: rgba(59, 130, 246, 0.12);
   --accent-border: rgba(59, 130, 246, 0.25);
   --geo-filter-color: #3b82f6;
@@ -344,6 +353,10 @@
     --status-amber-text: #fcd34d;
     --path-inspector-speculative: #f59e0b;
     --status-info: #60a5fa;
+    /* #1668 M5 — bump link text up two stops on dark surfaces (4a9eff
+       was OK but borderline on card-bg; #60a5fa = palette-blue-400 ≈
+       7.8:1 on surface-0, 5.4:1 on card-bg, AA pass either way). */
+    --link-color: var(--palette-blue-400);
     --surface-0: #0f0f23;
     --surface-1: #1a1a2e;
     --surface-2: #232340;
@@ -387,6 +400,8 @@
   --status-amber-light: #422006;
   --status-amber-text: #fcd34d;
   --status-info: #60a5fa;
+  /* #1668 M5 — see :root[data-theme="dark"] media block above for rationale */
+  --link-color: var(--palette-blue-400);
   --surface-0: #0f0f23;
   --surface-1: #1a1a2e;
   --surface-2: #232340;
@@ -877,7 +892,7 @@ img.brand-logo {
   font-family: var(--mono); margin-right: 4px; white-space: nowrap;
 }
 .nav-stats .stat-val { color: var(--nav-text); font-weight: 600; transition: color 0.3s ease; }
-.nav-stats .stat-val.updated { color: var(--accent); }
+.nav-stats .stat-val.updated { color: var(--link-color); }
 
 /* === Layout === */
 /* Default: body-scroll mode — content pushes beyond viewport, iOS status-bar
@@ -1002,7 +1017,7 @@ img.brand-logo {
   position: sticky; top: 0; z-index: 1;
 }
 .data-table th.sortable { cursor: pointer; }
-.data-table th.sortable:hover { color: var(--accent); }
+.data-table th.sortable:hover { color: var(--link-color); }
 .data-table td {
   padding: 3px 6px; border-bottom: 1px solid var(--border);
   vertical-align: middle; white-space: nowrap;
@@ -1384,7 +1399,7 @@ body.scroll-locked { overflow: hidden; }
 .detail-meta dd { font-weight: 500; margin-bottom: 4px; }
 /* #1281: 📍map link inside detail-meta — UA-default blue is unreadable on EMOJI-OK-COMMENT
  * dark backgrounds. Force theme-aware color via --accent. */
-.loc-map-link { color: var(--accent); font-size: 0.85em; text-decoration: none; }
+.loc-map-link { color: var(--link-color); font-size: 0.85em; text-decoration: none; }
 .loc-map-link:hover { text-decoration: underline; }
 .observation-current { background: var(--accent-bg, rgba(0,122,255,0.1)); font-weight: 600; }
 .detail-obs-row:hover { background: var(--hover-bg, rgba(255,255,255,0.05)); }
@@ -1449,7 +1464,7 @@ body.scroll-locked { overflow: hidden; }
   overflow: hidden;
   vertical-align: middle;
 }
-.path-hops .hop { color: var(--accent); line-height: 18px; }
+.path-hops .hop { color: var(--link-color); line-height: 18px; }
 /* #1668 M2 / operator-flagged chip: was `color:#fff; background:var(--accent)`
    = 2.75:1 on dark theme (BLOCKER). Now uses --accent-strong (#2563eb)
    with --text-on-accent (gray-50) for 4.83:1 — WCAG AA body pass in
@@ -1788,10 +1803,10 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   font-size: 14px; line-height: 1.5; word-break: break-word; display: inline-block; max-width: 100%;
   border: 1px solid var(--border);
 }
-.ch-mention { color: var(--accent); font-weight: 600; }
+.ch-mention { color: var(--link-color); font-weight: 600; }
 .ch-encrypted-text { font-size: 11px; color: var(--text-muted); }
 .ch-msg-meta { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
-.ch-analyze-link { color: var(--accent); text-decoration: none; margin-left: 8px; }
+.ch-analyze-link { color: var(--link-color); text-decoration: none; margin-left: 8px; }
 .ch-analyze-link:hover { text-decoration: underline; }
 .ch-scroll-btn {
   position: absolute; bottom: 16px; right: 24px; background: var(--accent); color: #fff;
@@ -1842,7 +1857,7 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 .ch-node-label { display: block; font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .3px; margin-bottom: 2px; }
 .ch-node-adverts { margin-top: 12px; }
 .ch-node-advert { font-size: 12px; color: var(--text-muted); padding: 4px 0; border-bottom: 1px solid var(--border); }
-.ch-node-link { display: inline-block; margin-top: 12px; color: var(--accent); text-decoration: none; font-size: 13px; }
+.ch-node-link { display: inline-block; margin-top: 12px; color: var(--link-color); text-decoration: none; font-size: 13px; }
 .ch-node-link:hover { text-decoration: underline; }
 
 /* === Nodes Page === */
@@ -1945,7 +1960,7 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 }
 /* #829: explicit color so text stays readable when inherited color matches card-bg */
 .advert-info { font-size: 12px; line-height: 1.5; color: var(--text); }
-.advert-info a { color: var(--accent); }
+.advert-info a { color: var(--link-color); }
 
 /* === Traces Page === */
 .traces-page { padding: 16px; max-width: var(--trace-max-width, 95vw); margin: 0 auto; }
@@ -2080,7 +2095,7 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   border-bottom: 1px solid var(--border); transition: background .1s;
 }
 .search-result-item:hover { background: var(--row-hover); }
-.search-result-type { font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--accent); margin-right: 8px; }
+.search-result-type { font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--link-color); margin-right: 8px; }
 .search-no-results { padding: 20px; text-align: center; color: var(--text-muted); font-size: 14px; }
 
 /* === Loading States & Transitions (M16) === */
@@ -2117,8 +2132,8 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 .data-table tbody tr.new-row { animation: row-flash 800ms ease-out; }
 
 .data-table th.sortable { cursor: pointer; user-select: none; }
-.data-table th.sortable:hover { color: var(--accent); }
-.data-table th.sort-active { color: var(--accent); }
+.data-table th.sortable:hover { color: var(--link-color); }
+.data-table th.sort-active { color: var(--link-color); }
 .data-table th .sort-arrow { font-size: 10px; margin-left: 4px; opacity: 0.7; }
 .data-table tbody tr { border-left: 3px solid transparent; transition: border-color 0.15s, background 0.15s; }
 .data-table tbody tr:hover { border-left-color: var(--accent); }
@@ -2416,7 +2431,7 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 
 /* === Grouped Packet Rows === */
 .group-header { cursor: pointer; font-weight: 600; }
-.group-header td:first-child::before { content: '▶ '; font-size: 10px; color: var(--accent); transition: transform 0.15s; display: inline-block; }
+.group-header td:first-child::before { content: '▶ '; font-size: 10px; color: var(--link-color); transition: transform 0.15s; display: inline-block; }
 .group-header.expanded td:first-child::before { content: '▼ '; }
 .group-header:hover { background: var(--row-hover); }
 .group-child { font-size: 12px; }
@@ -2595,7 +2610,7 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
   border-radius: 6px;
   flex: 0 0 auto;
 }
-.ch-analytics-link:hover { color: var(--accent); }
+.ch-analytics-link:hover { color: var(--link-color); }
 .ch-add-status--loading { color: var(--text-muted); }
 .ch-add-status--success { color: var(--success, #22c55e); }
 .ch-add-status--warn { color: var(--warning, #eab308); }
@@ -2667,8 +2682,8 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .analytics-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .analytics-table th { text-align: left; padding: 8px; border-bottom: 2px solid var(--border); font-size: 12px; text-transform: uppercase; color: var(--text-muted); }
 .analytics-table th.sortable { cursor: pointer; user-select: none; }
-.analytics-table th.sortable:hover { color: var(--accent); }
-.analytics-table th.sort-active { color: var(--accent); }
+.analytics-table th.sortable:hover { color: var(--link-color); }
+.analytics-table th.sort-active { color: var(--link-color); }
 .analytics-table th .sort-arrow { font-size: 10px; margin-left: 4px; opacity: 0.7; }
 .analytics-table td { padding: 8px; border-bottom: 1px solid var(--border); }
 .analytics-table .ch-section-row { background: var(--card-bg); }
@@ -2732,7 +2747,7 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
   border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.25); padding: 8px 12px;
   font-size: 12px; min-width: 160px; max-width: 260px; pointer-events: none;
 }
-.hash-matrix-tooltip-hex { font-family: var(--mono); font-size: 13px; font-weight: 700; margin-bottom: 4px; color: var(--accent); }
+.hash-matrix-tooltip-hex { font-family: var(--mono); font-size: 13px; font-weight: 700; margin-bottom: 4px; color: var(--link-color); }
 .hash-matrix-tooltip-status { color: var(--text-muted); font-size: 11px; }
 .hash-matrix-tooltip-nodes { margin-top: 6px; display: flex; flex-direction: column; gap: 2px; }
 .hash-byte-selector { display: flex; gap: 4px; }
@@ -2755,7 +2770,7 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 }
 .clickable-row { cursor: pointer; }
 .clickable-row:hover { background: var(--hover-bg, rgba(0,0,0,.04)); }
-.analytics-link { color: var(--accent); text-decoration: none; font-weight: 600; }
+.analytics-link { color: var(--link-color); text-decoration: none; font-weight: 600; }
 .analytics-link:hover { text-decoration: underline; }
 
 /* Analytics v2 */
@@ -2932,7 +2947,7 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .hop-unreliable-btn { background: none; border: none; color: var(--status-yellow, #f59e0b); font-size: 13px;
   cursor: help; vertical-align: middle; margin-left: 2px; padding: 0 2px; line-height: 1; }
 .hop-global-fallback { border-bottom: 1px dashed var(--status-red); }
-.hop-current { font-weight: 700 !important; color: var(--accent) !important; }
+.hop-current { font-weight: 700 !important; color: var(--link-color) !important; }
 
 /* Self-loop subpath rows */
 .subpath-selfloop { opacity: 0.6; }

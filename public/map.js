@@ -1702,7 +1702,7 @@
           <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Packets</dt>
           <dd style="margin-left:88px;padding:2px 0;">${packets}</dd>
         </dl>
-        <a href="#/observers/${encodeURIComponent(obs.id || obs.observer_id)}" style="display:block;margin-top:8px;font-size:12px;color:var(--accent);">View Detail →</a>
+        <a href="#/observers/${encodeURIComponent(obs.id || obs.observer_id)}" style="display:block;margin-top:8px;font-size:12px;color:var(--link-color);">View Detail →</a>
       </div>`;
   }
 
@@ -1799,8 +1799,8 @@
           <dd style="margin-left:88px;padding:2px 0;">${node.advert_count || 0}</dd>
         </dl>
         <div style="margin-top:8px;clear:both;">
-          <a href="#/nodes/${node.public_key}" style="color:var(--accent);font-size:12px;">View Node →</a>
-          ${node.public_key ? ` · <a href="javascript:void(0)" role="button" data-show-neighbors data-pubkey="${escapeHtml(node.public_key)}" data-name="${escapeHtml(node.name || 'Unknown')}" style="color:var(--accent);font-size:12px;cursor:pointer;">Show Neighbors</a>` : ''}
+          <a href="#/nodes/${node.public_key}" style="color:var(--link-color);font-size:12px;">View Node →</a>
+          ${node.public_key ? ` · <a href="javascript:void(0)" role="button" data-show-neighbors data-pubkey="${escapeHtml(node.public_key)}" data-name="${escapeHtml(node.name || 'Unknown')}" style="color:var(--link-color);font-size:12px;cursor:pointer;">Show Neighbors</a>` : ''}
         </div>
       </div>`;
   }

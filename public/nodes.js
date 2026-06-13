@@ -240,7 +240,7 @@
   function renderHashInconsistencyWarning(n) {
     if (!n.hash_size_inconsistent) return '';
     const sizes = Array.isArray(n.hash_sizes_seen) ? n.hash_sizes_seen : [];
-    return `<div style="font-size:11px;color:var(--text-muted);margin:-2px 0 6px;padding:6px 10px;background:var(--surface-2);border-radius:4px;border-left:3px solid var(--status-yellow)">Adverts show varying hash sizes (<strong>${sizes.join('-byte, ')}-byte</strong>). This is a <a href="https://github.com/meshcore-dev/MeshCore/commit/fcfdc5f" target="_blank" style="color:var(--accent)">known bug</a> where automatic adverts ignore the configured multibyte path setting. Fixed in <a href="https://github.com/meshcore-dev/MeshCore/releases/tag/repeater-v1.14.1" target="_blank" style="color:var(--accent)">repeater v1.14.1</a>.</div>`;
+    return `<div style="font-size:11px;color:var(--text-muted);margin:-2px 0 6px;padding:6px 10px;background:var(--surface-2);border-radius:4px;border-left:3px solid var(--status-yellow)">Adverts show varying hash sizes (<strong>${sizes.join('-byte, ')}-byte</strong>). This is a <a href="https://github.com/meshcore-dev/MeshCore/commit/fcfdc5f" target="_blank" style="color:var(--link-color)">known bug</a> where automatic adverts ignore the configured multibyte path setting. Fixed in <a href="https://github.com/meshcore-dev/MeshCore/releases/tag/repeater-v1.14.1" target="_blank" style="color:var(--link-color)">repeater v1.14.1</a>.</div>`;
   }
 
   // ─── Neighbor section helpers ───────────────────────────────────────────────
@@ -397,10 +397,10 @@
     }
     var html = renderNeighborTable(data.neighbors, limit);
     if (limit && data.neighbors.length > limit) {
-      html += '<div style="margin-top:6px;text-align:right"><button class="btn-link show-all-neighbors-btn" style="font-size:12px;cursor:pointer;background:none;border:none;color:var(--accent);padding:0">Show all ' + data.neighbors.length + ' neighbors <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-down"/></svg></button></div>';
+      html += '<div style="margin-top:6px;text-align:right"><button class="btn-link show-all-neighbors-btn" style="font-size:12px;cursor:pointer;background:none;border:none;color:var(--link-color);padding:0">Show all ' + data.neighbors.length + ' neighbors <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-down"/></svg></button></div>';
     } else if (!limit && data.neighbors.length > 5) {
       // Collapse toggle when expanded (#855)
-      html += '<div style="margin-top:6px;text-align:right"><button class="btn-link collapse-neighbors-btn" style="font-size:12px;cursor:pointer;background:none;border:none;color:var(--accent);padding:0">Show fewer <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-up"/></svg></button></div>';
+      html += '<div style="margin-top:6px;text-align:right"><button class="btn-link collapse-neighbors-btn" style="font-size:12px;cursor:pointer;background:none;border:none;color:var(--link-color);padding:0">Show fewer <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-up"/></svg></button></div>';
     }
     el.innerHTML = html;
 
@@ -944,7 +944,7 @@
                 return isThis ? html.replace('class="', 'class="hop-current ') : html;
               }
               const name = escapeHtml(h.name || h.prefix);
-              const link = h.pubkey ? `<a href="#/nodes/${encodeURIComponent(h.pubkey)}" style="${isThis ? 'font-weight:700;color:var(--accent, #3b82f6)' : ''}">${name}</a>` : `<span>${name}</span>`;
+              const link = h.pubkey ? `<a href="#/nodes/${encodeURIComponent(h.pubkey)}" style="${isThis ? 'font-weight:700;color:var(--link-color, #3b82f6)' : ''}">${name}</a>` : `<span>${name}</span>`;
               return link;
             }).join(' → ');
             return `<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">
@@ -1753,7 +1753,7 @@
           const chain = p.hops.map(h => {
             const isThis = h.pubkey === n.public_key;
             const name = escapeHtml(h.name || h.prefix);
-            const link = h.pubkey ? `<a href="#/nodes/${encodeURIComponent(h.pubkey)}" style="${isThis ? 'font-weight:700;color:var(--accent, #3b82f6)' : ''}">${name}</a>` : `<span>${name}</span>`;
+            const link = h.pubkey ? `<a href="#/nodes/${encodeURIComponent(h.pubkey)}" style="${isThis ? 'font-weight:700;color:var(--link-color, #3b82f6)' : ''}">${name}</a>` : `<span>${name}</span>`;
             return link;
           }).join(' → ');
           return `<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">

@@ -653,7 +653,7 @@
         font-size: 12px; font-weight: 500; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; flex: 1; text-align: center; }
       .cust-tab-text { font-size: 10px; display: block; }
       .cust-tab:hover { color: var(--text); }
-      .cust-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+      .cust-tab.active { color: var(--link-color); border-bottom-color: var(--accent); }
       .cust-panel { display: none; padding: 12px 16px; }
       .cust-panel.active { display: block; }
       .cust-field { margin-bottom: 12px; }
@@ -690,7 +690,7 @@
       .cust-list-btn.danger { color: #ef4444; }
       .cust-list-btn.danger:hover { background: #fef2f2; }
       .cust-add-btn { display: inline-flex; align-items: center; gap: 4px; padding: 6px 14px; border: 1px dashed var(--border);
-        border-radius: 6px; background: none; color: var(--accent); cursor: pointer; font-size: 13px; margin-top: 4px; }
+        border-radius: 6px; background: none; color: var(--link-color); cursor: pointer; font-size: 13px; margin-top: 4px; }
       .cust-add-btn:hover { background: var(--hover-bg); }
       .cust-export-area { width: 100%; min-height: 300px; font-family: var(--mono); font-size: 12px;
         background: var(--surface-1); border: 1px solid var(--border); border-radius: 6px; padding: 12px;
