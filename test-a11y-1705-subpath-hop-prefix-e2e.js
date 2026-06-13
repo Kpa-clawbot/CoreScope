@@ -202,6 +202,18 @@ function extractTokensFromCss(css) {
     throw new Error('a11y-1705: .subpath-selected has no background declaration');
   })();
 
+  // .subpath-selected { color: ...; } — primary row text. Asserted separately
+  // from the .hop-prefix child rule so a future token swap on either the
+  // parent OR the child trips this gate (parent regression slipped past
+  // earlier audits because only the child was probed).
+  const primaryColorRaw = (() => {
+    for (const b of selBlocks) {
+      const m = b.match(/(?:^|[^-\w])color\s*:\s*([^;]+);/);
+      if (m) return m[1].trim();
+    }
+    throw new Error('a11y-1705: .subpath-selected has no color declaration');
+  })();
+
   // .subpath-selected .hop-prefix { color: ...; }
   const prefixBlocks = extractBlocks(css, '\\.subpath-selected\\s+\\.hop-prefix');
   if (prefixBlocks.length === 0) throw new Error('a11y-1705: .subpath-selected .hop-prefix rule missing');
@@ -217,12 +229,14 @@ function extractTokensFromCss(css) {
     light: {
       bg: resolveValue(bgRaw, []),                  // light → only :root
       text: resolveValue(colorRaw, []),
-      bgRaw, colorRaw,
+      primaryText: resolveValue(primaryColorRaw, []),
+      bgRaw, colorRaw, primaryColorRaw,
     },
     dark: {
       bg: resolveValue(bgRaw, darkBlocks),
       text: resolveValue(colorRaw, darkBlocks),
-      bgRaw, colorRaw,
+      primaryText: resolveValue(primaryColorRaw, darkBlocks),
+      bgRaw, colorRaw, primaryColorRaw,
     },
   };
 }
@@ -237,25 +251,39 @@ async function main() {
   let failures = 0;
 
   for (const theme of THEMES) {
-    const { bg: bgStr, text: textStr } = tokens[theme];
+    const { bg: bgStr, text: textStr, primaryText: primaryStr } = tokens[theme];
     const bg = parseColor(bgStr);
     const text = parseColor(textStr);
+    const primary = parseColor(primaryStr);
     if (!bg) throw new Error(`a11y-1705: unparsable bg "${bgStr}" for theme=${theme}`);
     if (!text) throw new Error(`a11y-1705: unparsable text "${textStr}" for theme=${theme}`);
+    if (!primary) throw new Error(`a11y-1705: unparsable primary "${primaryStr}" for theme=${theme}`);
+
+    // 1. .subpath-selected .hop-prefix (the original BLOCKER surface).
     const ratio = compositeContrast(text, bg);
     const ok = ratio >= 4.5;
-    const verdict = ok ? 'PASS' : 'FAIL';
     console.log(
-      `  ${verdict} theme=${theme} bg=${bgStr} text=${textStr} composite=${JSON.stringify(text.a < 1 ? composite(text, bg) : text)} ratio=${ratio.toFixed(2)}:1 (need ≥4.5:1)`
+      `  ${ok ? 'PASS' : 'FAIL'} theme=${theme} [hop-prefix] bg=${bgStr} text=${textStr} composite=${JSON.stringify(text.a < 1 ? composite(text, bg) : text)} ratio=${ratio.toFixed(2)}:1 (need ≥4.5:1)`
     );
     if (!ok) failures++;
+
+    // 2. .subpath-selected primary row text — guards against the parent
+    //    rule regressing independently of the child (e.g. someone swaps
+    //    `color: var(--text-on-accent)` back to `#fff` without touching
+    //    the .hop-prefix line). #1705 review-r1 must-fix.
+    const ratioPrimary = compositeContrast(primary, bg);
+    const okPrimary = ratioPrimary >= 4.5;
+    console.log(
+      `  ${okPrimary ? 'PASS' : 'FAIL'} theme=${theme} [primary]    bg=${bgStr} text=${primaryStr} composite=${JSON.stringify(primary.a < 1 ? composite(primary, bg) : primary)} ratio=${ratioPrimary.toFixed(2)}:1 (need ≥4.5:1)`
+    );
+    if (!okPrimary) failures++;
   }
 
   if (failures > 0) {
-    console.error(`\nFAIL: .subpath-selected .hop-prefix violates WCAG AA color-contrast in ${failures} theme(s) (issue #1705)`);
+    console.error(`\nFAIL: .subpath-selected text violates WCAG AA color-contrast in ${failures} probe(s) (issue #1705)`);
     process.exit(1);
   }
-  console.log(`\nPASS: .subpath-selected .hop-prefix is ≥4.5:1 in dark + light themes (issue #1705)`);
+  console.log(`\nPASS: .subpath-selected primary + .hop-prefix ≥4.5:1 in dark + light themes (issue #1705)`);
 }
 
 if (require.main === module) {

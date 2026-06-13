@@ -3001,10 +3001,14 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
    the muted hop-prefix line at rgba(255,255,255,0.6) composited over that
    accent to 1.87:1 (hard BLOCKER). Pin the row to --accent-strong
    (#2563eb, palette-blue-600) with --text-on-accent (#f9fafb): primary
-   text 8.59:1, hop-prefix at --text-on-accent (full alpha) on the same
-   bg = 8.59:1 — comfortably WCAG AA. The hop-prefix used to be visually
-   "muted" via 60% alpha white; we drop the alpha-muting because no other
-   token in either theme composites to ≥4.5:1 on this background. */
+   text 4.95:1, hop-prefix at --text-on-accent (full alpha) on the same
+   bg = 4.95:1 — clears WCAG AA (≥4.5:1). The hop-prefix used to be
+   visually "muted" via 60% alpha white; we drop the alpha-muting because
+   no other token in either theme composites to ≥4.5:1 on this background.
+   Trade-off accepted: the prefix and primary line are now equal-weight
+   visually — the previous secondary styling was itself the source of the
+   1.87:1 BLOCKER, so visual hierarchy here is recovered via type/weight,
+   not color. */
 .subpath-selected { background: var(--accent-strong) !important; color: var(--text-on-accent); }
 .subpath-selected .hop-prefix { color: var(--text-on-accent); }
 tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
