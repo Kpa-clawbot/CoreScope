@@ -242,10 +242,10 @@
   --role-observer: #8b5cf6;
   --accent-hover: #6db3ff;
   --text: #1a1a2e;
-  /* #1668 M2 — bumped from #5b6370 (~5.7:1 on white) to palette-gray-700
-     #374151 (~10.3:1 on white, ~9.9:1 on surface-0 #f4f5f7). Light theme
-     muted text was a MAJOR/borderline case; this clears the buffer. */
-  --text-muted: var(--palette-gray-700);
+  /* #1668 M5 RED PROOF — deliberate contrast regression to prove the
+     axe gate fails on bad color tokens. WILL BE REVERTED in the
+     immediately-following GREEN commit. DO NOT MERGE THIS COMMIT. */
+  --text-muted: #9ca3af;
   --text-subtle: var(--palette-gray-600);
   --border: #e2e5ea;
   --row-stripe: #f9fafb;

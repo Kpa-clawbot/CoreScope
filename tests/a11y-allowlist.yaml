@@ -1,0 +1,20 @@
+# a11y allowlist — operator-flagged false-positives or temporary suppressions.
+#
+# Each entry MUST cite a GH issue # that tracks the eventual fix.
+# Format (YAML list of objects):
+#
+#   - route: '/some/route'           # exact hash route, e.g. '/' or '/analytics?tab=channels'
+#     selector: '.some-css-selector' # axe-core "target" string for the violation node
+#     rule: color-contrast           # axe rule id (M5 = only color-contrast)
+#     issue: 1234                    # GH issue tracking the fix
+#     expires_at: 2026-09-01         # YYYY-MM-DD; after this date the suppression
+#                                    # is refused and the test fails again — forces a revisit
+#
+# Rules:
+#   - Suppression matches when route + rule + (any of) selector strings all match.
+#   - Missing issue or expires_at = refused (treated as no allowlist match).
+#   - Expired expires_at = warning logged, suppression refused.
+#
+# M5 baseline: 0 entries. Every entry added in the future must have a tracking issue.
+
+[]

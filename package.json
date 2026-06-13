@@ -20,6 +20,8 @@
     "ws": "^8.19.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.11.3",
+    "axe-core": "^4.12.1",
     "nyc": "^18.0.0",
     "playwright": "^1.58.2",
     "supertest": "^7.2.2"

@@ -150,6 +150,7 @@ jobs:
           node test-warmup-banner.js
           node test-issue-1633-hide-1byte-hops.js
           node test-issue-1668-m4-per-route.js
+          node test-a11y-axe-1668-selftest.js
 
       - name: 🛡️ Preflight XSS gate — actual --diff check (PR only)
         # The fixture self-test above (test-preflight-xss-gate.js) only
@@ -361,6 +362,11 @@ jobs:
       - name: Run Playwright E2E tests (fail-fast)
         run: |
           BASE_URL=http://localhost:13581 node test-e2e-playwright.js 2>&1 | tee e2e-output.txt
+          # M5 of #1668 — axe-core CI gate (color-contrast AA).
+          # Real browser run; fails on any net violation (raw − allowlist).
+          # Allowlist: tests/a11y-allowlist.yaml (0 entries at M5 baseline).
+          BASE_URL=http://localhost:13581 AXE_SCREENSHOT_DIR=/tmp/axe-1668 \
+            node test-a11y-axe-1668.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-filter-ux-e2e.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-channel-issue-1087-e2e.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-channel-issue-1111-e2e.js 2>&1 | tee -a e2e-output.txt
