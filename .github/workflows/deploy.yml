@@ -147,6 +147,7 @@ jobs:
           node test-issue-1648-m4-emoji-scan.js
           node test-issue-1668-m3-typography.js
           node test-mqtt-status-panel.js
+          node test-issue-1697-mqtt-mobile-e2e.js
           node test-warmup-banner.js
           node test-issue-1633-hide-1byte-hops.js
           node test-issue-1668-m4-per-route.js
