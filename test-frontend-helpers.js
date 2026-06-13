@@ -6545,6 +6545,111 @@ console.log('\n=== roles.js: Map Tile Config Parsing ===');
   });
 }
 
+// ===== app.js: parseViewportHash (#1709) =====
+console.log('\n=== app.js: parseViewportHash (#1709) ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const parseViewportHash = ctx.parseViewportHash;
+
+  test('parseViewportHash: valid lat/lon/zoom', () => {
+    const r = parseViewportHash('#/live?lat=43.0731&lon=-89.4012&zoom=12');
+    assert.deepStrictEqual(r, { lat: 43.0731, lon: -89.4012, zoom: 12 });
+  });
+
+  test('parseViewportHash: valid lat/lon with missing zoom → defaults to 12', () => {
+    const r = parseViewportHash('#/live?lat=43.0731&lon=-89.4012');
+    assert.ok(r && r.lat === 43.0731 && r.lon === -89.4012 && r.zoom === 12);
+  });
+
+  test('parseViewportHash: invalid latitude (out of range) → null', () => {
+    assert.strictEqual(parseViewportHash('#/live?lat=95&lon=0&zoom=10'), null);
+  });
+
+  test('parseViewportHash: invalid longitude (out of range) → null', () => {
+    assert.strictEqual(parseViewportHash('#/live?lat=0&lon=181&zoom=10'), null);
+  });
+
+  test('parseViewportHash: invalid zoom (non-numeric) → null', () => {
+    assert.strictEqual(parseViewportHash('#/live?lat=0&lon=0&zoom=abc'), null);
+  });
+
+  test('parseViewportHash: missing lat → null (no partial center)', () => {
+    assert.strictEqual(parseViewportHash('#/live?lon=10&zoom=8'), null);
+  });
+
+  test('parseViewportHash: missing lon → null (no partial center)', () => {
+    assert.strictEqual(parseViewportHash('#/live?lat=10&zoom=8'), null);
+  });
+
+  test('parseViewportHash: node + viewport combo → viewport parsed', () => {
+    const r = parseViewportHash('#/live?node=ABC123&lat=43.0731&lon=-89.4012&zoom=12');
+    assert.deepStrictEqual(r, { lat: 43.0731, lon: -89.4012, zoom: 12 });
+  });
+
+  test('parseViewportHash: zoom clamped to maxZoom from opts', () => {
+    const r = parseViewportHash('#/live?lat=0&lon=0&zoom=99', { maxZoom: 19 });
+    assert.ok(r && r.zoom === 19);
+  });
+
+  test('parseViewportHash: zoom clamped to minZoom from opts', () => {
+    const r = parseViewportHash('#/live?lat=0&lon=0&zoom=0', { minZoom: 1 });
+    assert.ok(r && r.zoom === 1);
+  });
+
+  test('parseViewportHash: empty/null input → null', () => {
+    assert.strictEqual(parseViewportHash(''), null);
+    assert.strictEqual(parseViewportHash(null), null);
+    assert.strictEqual(parseViewportHash(undefined), null);
+  });
+
+  test('parseViewportHash: accepts bare query string (no hash prefix)', () => {
+    const r = parseViewportHash('lat=1.5&lon=2.5&zoom=8');
+    assert.deepStrictEqual(r, { lat: 1.5, lon: 2.5, zoom: 8 });
+  });
+
+  test('parseViewportHash: lat at boundary 90 is accepted', () => {
+    const r = parseViewportHash('lat=90&lon=180&zoom=5');
+    assert.ok(r && r.lat === 90 && r.lon === 180);
+  });
+
+  test('parseViewportHash: lat at boundary -90 is accepted', () => {
+    const r = parseViewportHash('lat=-90&lon=-180&zoom=5');
+    assert.ok(r && r.lat === -90 && r.lon === -180);
+  });
+}
+
+// #1709: live.js node-filter URL update must preserve unrelated viewport params
+console.log('\n=== live.js: node-filter URL update preserves lat/lon/zoom (#1709) ===');
+{
+  const fs = require('fs');
+  const liveSrc = fs.readFileSync('public/live.js', 'utf8');
+
+  test('node-filter URL update does not unconditionally drop lat/lon/zoom', () => {
+    // The two history.replaceState call sites in the node-filter flow must
+    // either (a) build params from getHashParams() so unrelated keys survive,
+    // or (b) explicitly re-add lat/lon/zoom. We assert (a): both sites must
+    // seed `params` from getHashParams() rather than a fresh URLSearchParams.
+    // Grep for the two blocks; both must contain getHashParams within ~6 lines
+    // before a history.replaceState call that mutates the `node` key.
+    const idx = liveSrc.indexOf("params.set('node'");
+    assert.ok(idx >= 0, "expected params.set('node', val) in live.js node-filter logic");
+    // Scan 200 chars before to find a getHashParams() seeding
+    const before = liveSrc.slice(Math.max(0, idx - 400), idx);
+    assert.ok(/getHashParams\s*\(/.test(before),
+      'node-filter URL update must seed params from getHashParams() to preserve lat/lon/zoom');
+  });
+
+  test('node-filter URL update has no fresh URLSearchParams() with only node key (would clobber viewport)', () => {
+    // Anti-pattern: `const params = new URLSearchParams(); params.set('node', ...)`
+    // would silently drop lat/lon/zoom from the URL. Forbid that exact shape.
+    const bad = /const\s+params\s*=\s*new\s+URLSearchParams\s*\(\s*\)\s*;\s*[^\n]*params\.set\(['"]node['"]/;
+    assert.ok(!bad.test(liveSrc),
+      'node-filter URL update must not start with empty URLSearchParams (would clobber viewport)');
+  });
+}
+
 // ===== SUMMARY =====
 Promise.allSettled(pendingTests).then(() => {
   console.log(`\n${'═'.repeat(40)}`);

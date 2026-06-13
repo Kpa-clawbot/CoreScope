@@ -283,6 +283,11 @@ function getHashParams() {
   return new URLSearchParams(location.hash.split('?')[1] || '');
 }
 
+// parseViewportHash — issue #1709. Stub: always returns null.
+// Real implementation lands in the green commit.
+function parseViewportHash(hashOrSearch, opts) { return null; }
+if (typeof window !== 'undefined') { window.parseViewportHash = parseViewportHash; }
+
 // shouldEmbedRoute — issue #1369. Returns true when the SPA should render in
 // "embed" mode (chrome suppressed: no top-nav, no bottom-nav, no side drawer,
 // content full-bleed). Triggered by ?embed=1 in the hash query string.
