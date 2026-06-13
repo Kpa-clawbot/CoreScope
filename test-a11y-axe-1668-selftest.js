@@ -386,7 +386,11 @@ const allowPath = path.join(__dirname, 'tests', 'a11y-allowlist.yaml');
 assert.ok(fs.existsSync(allowPath), `tests/a11y-allowlist.yaml missing at ${allowPath}`);
 const entries = mod.loadAllowlist();
 for (const e of entries) {
-  assert.ok(e.route && e.selector && e.rule && e.issue && e.expires_at,
+  assert.ok(e.route && (e.selector || e.selector_pattern) && e.rule && e.issue && e.expires_at,
     `allowlist entry missing required field: ${JSON.stringify(e)}`);
+  if (e.selector_pattern) {
+    assert.ok(typeof e.count_max === 'number' && e.count_max > 0,
+      `selector_pattern entry missing count_max: ${JSON.stringify(e)}`);
+  }
 }
 console.log(`PASS: a11y-axe-1668 selftest — routes=${mod.ROUTES.length} themes=${mod.THEMES.length} allowlist=${entries.length}`);
