@@ -1226,6 +1226,16 @@
       if (typeof mapCfg.zoom === 'number') mapZoom = mapCfg.zoom;
     } catch { }
 
+    // #1709: URL hash lat/lon/zoom is the highest-precedence viewport source.
+    // Applied here so the very first setView() lands at the requested viewport
+    // (avoids a visible recenter from default → URL after init).
+    const initVp = (typeof parseViewportHash === 'function')
+      ? parseViewportHash(location.hash) : null;
+    if (initVp) {
+      mapCenter = [initVp.lat, initVp.lon];
+      mapZoom = initVp.zoom;
+    }
+
     map = L.map('liveMap', {
       zoomControl: false,
       attributionControl: false,
@@ -2193,10 +2203,17 @@
       localStorage.setItem('live-feed-width', parseInt(feedEl.style.width));
     });
 
-    // Save/restore map view
-    const savedView = localStorage.getItem('live-map-view');
-    if (savedView) {
-      try { const v = JSON.parse(savedView); map.setView([v.lat, v.lng], v.zoom); } catch {}
+    // Save/restore map view. #1709: URL hash lat/lon/zoom overrides
+    // localStorage. Validated via shared parseViewportHash helper.
+    const urlVp = (typeof parseViewportHash === 'function')
+      ? parseViewportHash(location.hash) : null;
+    if (urlVp) {
+      map.setView([urlVp.lat, urlVp.lon], urlVp.zoom);
+    } else {
+      const savedView = localStorage.getItem('live-map-view');
+      if (savedView) {
+        try { const v = JSON.parse(savedView); map.setView([v.lat, v.lng], v.zoom); } catch {}
+      }
     }
     map.on('moveend', () => {
       const c = map.getCenter();

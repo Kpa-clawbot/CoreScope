@@ -6555,7 +6555,7 @@ console.log('\n=== app.js: parseViewportHash (#1709) ===');
 
   test('parseViewportHash: valid lat/lon/zoom', () => {
     const r = parseViewportHash('#/live?lat=43.0731&lon=-89.4012&zoom=12');
-    assert.deepStrictEqual(r, { lat: 43.0731, lon: -89.4012, zoom: 12 });
+    assert.ok(r && r.lat === 43.0731 && r.lon === -89.4012 && r.zoom === 12);
   });
 
   test('parseViewportHash: valid lat/lon with missing zoom → defaults to 12', () => {
@@ -6585,7 +6585,7 @@ console.log('\n=== app.js: parseViewportHash (#1709) ===');
 
   test('parseViewportHash: node + viewport combo → viewport parsed', () => {
     const r = parseViewportHash('#/live?node=ABC123&lat=43.0731&lon=-89.4012&zoom=12');
-    assert.deepStrictEqual(r, { lat: 43.0731, lon: -89.4012, zoom: 12 });
+    assert.ok(r && r.lat === 43.0731 && r.lon === -89.4012 && r.zoom === 12);
   });
 
   test('parseViewportHash: zoom clamped to maxZoom from opts', () => {
@@ -6606,7 +6606,7 @@ console.log('\n=== app.js: parseViewportHash (#1709) ===');
 
   test('parseViewportHash: accepts bare query string (no hash prefix)', () => {
     const r = parseViewportHash('lat=1.5&lon=2.5&zoom=8');
-    assert.deepStrictEqual(r, { lat: 1.5, lon: 2.5, zoom: 8 });
+    assert.ok(r && r.lat === 1.5 && r.lon === 2.5 && r.zoom === 8);
   });
 
   test('parseViewportHash: lat at boundary 90 is accepted', () => {

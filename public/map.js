@@ -250,11 +250,14 @@
     } catch {}
     let initCenter = defaultCenter;
     let initZoom = defaultZoom;
-    // Check URL query params first (from packet detail links)
+    // Check URL query params first (from packet detail links). #1709: shared
+    // parseViewportHash helper validates lat/lon together + clamps zoom.
     const urlParams = new URLSearchParams(location.hash.split('?')[1] || '');
-    if (urlParams.get('lat') && urlParams.get('lon')) {
-      initCenter = [parseFloat(urlParams.get('lat')), parseFloat(urlParams.get('lon'))];
-      initZoom = parseInt(urlParams.get('zoom')) || 12;
+    const vp = (typeof parseViewportHash === 'function')
+      ? parseViewportHash(location.hash) : null;
+    if (vp) {
+      initCenter = [vp.lat, vp.lon];
+      initZoom = vp.zoom;
     } else {
       const savedView = localStorage.getItem('map-view');
       if (savedView) {

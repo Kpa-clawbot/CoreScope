@@ -283,9 +283,52 @@ function getHashParams() {
   return new URLSearchParams(location.hash.split('?')[1] || '');
 }
 
-// parseViewportHash — issue #1709. Stub: always returns null.
-// Real implementation lands in the green commit.
-function parseViewportHash(hashOrSearch, opts) { return null; }
+// parseViewportHash — issue #1709. Parses lat/lon/zoom viewport params from a
+// hash query string and returns {lat, lon, zoom} if BOTH lat and lon are valid
+// (and zoom, if present, is numeric), otherwise null. Partial lat-only or
+// lon-only inputs are intentionally rejected (the issue explicitly forbids
+// partial application of a center). When zoom is missing, defaults to 12. When
+// zoom is out of the [minZoom, maxZoom] range it is clamped to that range.
+//
+// `hashOrSearch` may be either a full `location.hash` (e.g. `#/live?lat=...`)
+// or a bare query string (e.g. `lat=...&lon=...`). Either is accepted.
+//
+// Bounds: lat ∈ [-90, 90], lon ∈ [-180, 180]; zoom defaults clamp to [1, 20]
+// when bounds not supplied (sensible Leaflet fallback when tile-provider
+// minZoom/maxZoom is unknown).
+function parseViewportHash(hashOrSearch, opts) {
+  if (hashOrSearch == null) return null;
+  var s = String(hashOrSearch);
+  if (s === '') return null;
+  // Strip leading '#...?' if present so callers can pass raw location.hash.
+  var qIdx = s.indexOf('?');
+  if (qIdx >= 0) s = s.slice(qIdx + 1);
+  // Also tolerate a leading '?' on a bare search string.
+  if (s.charAt(0) === '?') s = s.slice(1);
+  var params;
+  try { params = new URLSearchParams(s); } catch (_) { return null; }
+  var latStr = params.get('lat');
+  var lonStr = params.get('lon');
+  if (latStr == null || lonStr == null || latStr === '' || lonStr === '') return null;
+  var lat = parseFloat(latStr);
+  var lon = parseFloat(lonStr);
+  if (!isFinite(lat) || !isFinite(lon)) return null;
+  if (lat < -90 || lat > 90) return null;
+  if (lon < -180 || lon > 180) return null;
+  var minZ = (opts && typeof opts.minZoom === 'number') ? opts.minZoom : 1;
+  var maxZ = (opts && typeof opts.maxZoom === 'number') ? opts.maxZoom : 20;
+  var zoomStr = params.get('zoom');
+  var zoom;
+  if (zoomStr == null || zoomStr === '') {
+    zoom = (opts && typeof opts.defaultZoom === 'number') ? opts.defaultZoom : 12;
+  } else {
+    zoom = parseFloat(zoomStr);
+    if (!isFinite(zoom)) return null;
+  }
+  if (zoom < minZ) zoom = minZ;
+  if (zoom > maxZ) zoom = maxZ;
+  return { lat: lat, lon: lon, zoom: zoom };
+}
 if (typeof window !== 'undefined') { window.parseViewportHash = parseViewportHash; }
 
 // shouldEmbedRoute — issue #1369. Returns true when the SPA should render in
