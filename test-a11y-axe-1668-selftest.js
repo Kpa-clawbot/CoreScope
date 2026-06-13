@@ -272,6 +272,13 @@ assert.throws(
   'today must be YYYY-MM-DD'
 );
 
+// ---- #1706 finding 2: analyticsTabOf helper --------------------------------
+assert.strictEqual(mod.analyticsTabOf('/analytics?tab=subpaths'), 'subpaths');
+assert.strictEqual(mod.analyticsTabOf('/analytics?tab=neighbor-graph&section=foo'), 'neighbor-graph');
+assert.strictEqual(mod.analyticsTabOf('/analytics'), null);
+assert.strictEqual(mod.analyticsTabOf('/packets'), null);
+assert.strictEqual(mod.analyticsTabOf('/'), null);
+
 // ---- repo allowlist file: shape sanity --------------------------------------
 const allowPath = path.join(__dirname, 'tests', 'a11y-allowlist.yaml');
 assert.ok(fs.existsSync(allowPath), `tests/a11y-allowlist.yaml missing at ${allowPath}`);

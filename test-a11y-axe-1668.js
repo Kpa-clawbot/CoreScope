@@ -234,6 +234,53 @@ async function setTheme(page, theme) {
   }, theme);
 }
 
+// #1706 finding 2: extract the expected analytics tab from a route string,
+// or null for non-analytics routes. Pure helper so selftest can exercise it
+// without a browser.
+function analyticsTabOf(route) {
+  if (!route.startsWith('/analytics')) return null;
+  const q = route.split('?')[1];
+  if (!q) return null;
+  const m = q.match(/(?:^|&)tab=([^&]+)/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+// #1706 finding 2: assert the SPA actually rendered the requested route.
+// Before this guard, a failed mount (component 404, JS error, hash typo)
+// produced an empty container and axe returned 0 violations → false-clean
+// CI green. We now throw a loud error so a non-mounted tab fails the route
+// instead of silently passing.
+async function assertRouteMounted(page, route) {
+  const expectedTab = analyticsTabOf(route);
+  const mounted = await page.evaluate((expectedTab) => {
+    const hash = window.location.hash || '';
+    const container = document.querySelector('#appRoot, main, #app, [role="main"]')
+      || document.body;
+    const hasContent = !!container && (container.children.length > 0
+      || (container.innerText || '').trim().length > 0);
+    let tabActive = true;
+    if (expectedTab) {
+      const btn = document.querySelector(`.tab-btn[data-tab="${expectedTab}"]`);
+      tabActive = !!btn && btn.classList.contains('active');
+    }
+    return { hash, hasContent, tabActive,
+             containerChildren: container ? container.children.length : 0 };
+  }, expectedTab);
+
+  // Hash must reference the requested route (allow trailing query/hash diffs
+  // that the SPA may append, e.g. &section=...).
+  const hashHasRoute = mounted.hash.includes(route.split('?')[0]);
+  if (!hashHasRoute) {
+    throw new Error(`tab=${route} did not mount; URL hash "${mounted.hash}" missing "${route.split('?')[0]}" — axe scan would have been false-clean`);
+  }
+  if (!mounted.hasContent) {
+    throw new Error(`tab=${route} did not mount; main container empty (children=${mounted.containerChildren}) — axe scan would have been false-clean`);
+  }
+  if (expectedTab && !mounted.tabActive) {
+    throw new Error(`tab=${route} did not mount; analytics tab "${expectedTab}" did not become active — axe scan would have been false-clean`);
+  }
+}
+
 async function runRoute(page, route, theme, rules, AxeBuilder) {
   const url = `${BASE}/#${route}`;
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -248,6 +295,9 @@ async function runRoute(page, route, theme, rules, AxeBuilder) {
     await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme);
     await page.waitForTimeout(200);
   }
+
+  // #1706 finding 2: mount assertion BEFORE axe to prevent false-clean.
+  await assertRouteMounted(page, route);
 
   const axe = new AxeBuilder({ page }).withRules(rules);
   const result = await axe.analyze();
@@ -378,6 +428,7 @@ module.exports = {
   loadAllowlist,
   filterAllowlist,
   violationAllowed,
+  analyticsTabOf,
   ROUTES,
   THEMES,
   VIEWPORTS,
