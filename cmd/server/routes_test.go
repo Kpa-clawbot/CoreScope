@@ -4718,3 +4718,69 @@ func TestListLimitsConfigurable(t *testing.T) {
 		t.Errorf("expected limit to be capped at 1234, got %v", limit)
 	}
 }
+
+// TestPostPacketPersistsV3Schema is the round-trip regression for #1196.
+// POST /api/packets must write the observation row using the v3 schema
+// (observer_idx INTEGER, timestamp INTEGER) and surface insert errors.
+// The pre-fix handler writes v2 columns (observer_id, observer_name,
+// RFC3339 timestamp) and silently swallows the obs insert error.
+func TestPostPacketPersistsV3Schema(t *testing.T) {
+	const apiKey = "test-secret-key-strong-enough"
+	srv, router := setupTestServerWithAPIKey(t, apiKey)
+
+	// FLOOD/ADVERT hex (header 0x11, path byte 0x00, payload bytes).
+	// Mirrors TestDecodePacket_FloodHasNoCodes.
+	const rawHex = "110011223344556677889900AABBCCDD"
+	bodyJSON := `{"hex":"` + rawHex + `","observer":"obs1","snr":5.5,"rssi":-72}`
+
+	req := httptest.NewRequest("POST", "/api/packets",
+		bytes.NewReader([]byte(bodyJSON)))
+	req.Header.Set("X-API-Key", apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/packets: expected 200, got %d (body: %s)",
+			w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	idF, _ := resp["id"].(float64)
+	txID := int64(idF)
+	if txID <= 0 {
+		t.Fatalf("expected transmission id > 0, got %v (body: %s)",
+			resp["id"], w.Body.String())
+	}
+
+	// Resolve expected observer_idx from the seeded observers table.
+	var wantIdx int64
+	if err := srv.db.conn.QueryRow(
+		"SELECT rowid FROM observers WHERE id = ?", "obs1",
+	).Scan(&wantIdx); err != nil {
+		t.Fatalf("lookup observer rowid: %v", err)
+	}
+
+	// Assert the observation row was written with v3 columns.
+	var (
+		gotIdx int64
+		gotTS  int64
+	)
+	err := srv.db.conn.QueryRow(
+		"SELECT observer_idx, timestamp FROM observations WHERE transmission_id = ?",
+		txID,
+	).Scan(&gotIdx, &gotTS)
+	if err != nil {
+		t.Fatalf("observation row missing for tx %d: %v (handler swallowed insert error?)", txID, err)
+	}
+	if gotIdx != wantIdx {
+		t.Errorf("observer_idx: want %d, got %d", wantIdx, gotIdx)
+	}
+	nowSec := time.Now().Unix()
+	if gotTS < nowSec-60 || gotTS > nowSec+60 {
+		t.Errorf("timestamp: want unix int near %d, got %d", nowSec, gotTS)
+	}
+}
