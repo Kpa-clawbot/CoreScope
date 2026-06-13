@@ -67,7 +67,9 @@ const ROUTES = [
   '/analytics?tab=hashsizes',
   '/analytics?tab=collisions',
   '/analytics?tab=roles',
-  // #1706: expand axe coverage to the remaining 7 analytics tabs plus prefix-tool.
+  // #1706: remaining analytics tabs — every `data-tab=` button in
+  // public/analytics.js must be gated. test-a11y-axe-routes-coverage.js
+  // enforces this; do not remove entries without dropping the tab too.
   '/analytics?tab=subpaths',
   '/analytics?tab=nodes',
   '/analytics?tab=distance',
