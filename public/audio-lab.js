@@ -514,7 +514,7 @@
       let html = '';
       for (const [type, pkts] of Object.entries(data.buckets)) {
         const color = TYPE_COLORS[type] || TYPE_COLORS.UNKNOWN;
-        html += `<div class="alab-type-hdr" style="background:${color}22;color:${color}" data-type="${type}">
+        html += `<div class="alab-type-hdr" style="${(window.aaBadgeStyle && window.aaBadgeStyle(color)) || (`background:${color};color:#fff`)}" data-type="${type}">
           <span>${type}</span><span style="font-size:11px;opacity:0.7">${pkts.length}</span></div>`;
         html += `<div class="alab-type-list" data-type-list="${type}">`;
         pkts.forEach((p, i) => {

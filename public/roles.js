@@ -234,6 +234,51 @@
     el.textContent = css;
   };
 
+  // #1668 M5 — public helper for callers that render a badge INLINE
+  // (analytics.js / nodes.js role badges where the color isn't known at
+  // CSS-author time, e.g. role colors come from server config). Returns
+  // "background:#xxx;color:#xxx" with AA-safe pairing — same algorithm
+  // as syncBadgeColors above. Avoids the legacy 20%-alpha-on-tinted-bg
+  // pattern that fails AA (M5 axe gate caught 90+ instances).
+  window.aaBadgeStyle = function(color) {
+    if (!color) return '';
+    function hexToRgb(hex) {
+      var h = String(hex).replace('#','');
+      if (h.length !== 6) return [128,128,128];
+      return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)];
+    }
+    function rgbToHex(rgb) {
+      return '#' + rgb.map(function(v){ var s = Math.max(0,Math.min(255,Math.round(v))).toString(16); return s.length===1?'0'+s:s; }).join('');
+    }
+    function relLum(rgb) {
+      var lin = function(v){ var s=v/255; return s<=0.03928 ? s/12.92 : Math.pow((s+0.055)/1.055, 2.4); };
+      return 0.2126*lin(rgb[0]) + 0.7152*lin(rgb[1]) + 0.0722*lin(rgb[2]);
+    }
+    function contrast(a, b) {
+      var l1 = relLum(a), l2 = relLum(b);
+      var hi = l1>l2?l1:l2, lo = l1>l2?l2:l1;
+      return (hi+0.05) / (lo+0.05);
+    }
+    function readableFg(rgb) {
+      var lum = (0.299*rgb[0] + 0.587*rgb[1] + 0.114*rgb[2]) / 255;
+      return lum > 0.55 ? [26,26,46] : [255,255,255];
+    }
+    function adjustForAA(bg, fg) {
+      var c = contrast(fg, bg);
+      if (c >= 4.5) return bg;
+      var darkening = fg[0] > 128;
+      var out = bg.slice();
+      for (var i=0; i<12 && contrast(fg, out) < 4.5; i++) {
+        out = out.map(function(v){ return darkening ? v*0.92 : v + (255-v)*0.08; });
+      }
+      return out.map(function(v){ return Math.round(v); });
+    }
+    var bg = hexToRgb(color);
+    var fg = readableFg(bg);
+    var adj = adjustForAA(bg, fg);
+    return 'background:' + rgbToHex(adj) + ';color:rgb(' + fg.join(',') + ')';
+  };
+
   // Auto-sync on load
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', window.syncBadgeColors);

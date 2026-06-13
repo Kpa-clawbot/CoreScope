@@ -2755,11 +2755,15 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .hash-byte-btn:hover { background: var(--border); color: var(--text); }
 .hash-byte-btn.active { background: var(--accent-strong); color: var(--text-on-accent); border-color: var(--accent-strong); }
 .hash-bar-value { min-width: 120px; text-align: right; font-size: 13px; font-weight: 600; }
-.badge-hash-1 { background: #ef444420; color: var(--status-red); }
-.badge-hash-2 { background: #22c55e20; color: var(--status-green); }
-.badge-success { background: #22c55e20; color: var(--status-green); }
-.badge-danger { background: #ef444420; color: var(--status-red); }
-.badge-hash-3 { background: #3b82f620; color: var(--accent); }
+/* #1668 M5 — was translucent-fg-on-tinted-bg (e.g. #ef4444 on #ef444420
+   stacked over surface ≈ 2-4:1, BLOCKER). Solid -700 hue with white text
+   preserves semantic encoding (red/green/blue) AND clears AA both themes:
+   #fff/#b91c1c=6.47, #fff/#15803d=5.02, #fff/#1d4ed8=6.70. */
+.badge-hash-1 { background: var(--palette-red-700, #b91c1c); color: var(--palette-gray-50, #f9fafb); }
+.badge-hash-2 { background: var(--palette-green-700, #15803d); color: var(--palette-gray-50, #f9fafb); }
+.badge-success { background: var(--palette-green-700, #15803d); color: var(--palette-gray-50, #f9fafb); }
+.badge-danger { background: var(--palette-red-700, #b91c1c); color: var(--palette-gray-50, #f9fafb); }
+.badge-hash-3 { background: var(--palette-blue-700, #1d4ed8); color: var(--palette-gray-50, #f9fafb); }
 .timeline-legend { display: flex; gap: 16px; justify-content: center; margin-top: 8px; font-size: 12px; }
 .legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
 .timeline-chart svg { display: block; }

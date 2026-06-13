@@ -214,7 +214,7 @@
   function renderNodeBadges(n, roleColor) {
     // Returns HTML for: role badge, hash prefix badge, hash inconsistency link, status label
     const info = getStatusInfo(n);
-    let html = `<span class="badge" style="background:${roleColor}20;color:${roleColor}">${n.role}</span>`;
+    let html = `<span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(roleColor)) || ('background:'+roleColor+';color:#fff')}">${n.role}</span>`;
     if (n.hash_size) {
       html += ` <span class="badge pubkey-prefix-badge">${n.public_key.slice(0, n.hash_size * 2).toUpperCase()}</span>`;
     }
@@ -1465,7 +1465,7 @@
       return `<tr data-key="${n.public_key}" data-action="select" data-value="${n.public_key}" tabindex="0" role="row" class="${selectedKey === n.public_key ? 'selected' : ''}${isClaimed ? ' claimed-row' : ''}">
         <td>${favStar(n.public_key, 'node-fav')}${isClaimed ? '<span class="claimed-badge" title="My Mesh"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg></span> ' : ''}<strong>${escapeHtml(n.name || '(unnamed)')}</strong>${dupNameBadge(n.name, n.public_key, dupMap)}${skewBadgeHtml}</td>
         <td class="mono col-pubkey">${truncate(n.public_key, 16)}</td>
-        <td><span class="badge" style="background:${roleColor}20;color:${roleColor}">${n.role}</span></td>
+        <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(roleColor)) || ('background:'+roleColor+';color:#fff')}">${n.role}</span></td>
         <td style="font-family:var(--mono);font-size:12px">${n.default_scope ? escapeHtml(n.default_scope) : ''}</td>
         <td class="${lastSeenClass}">${renderNodeTimestampHtml(n.last_heard || n.last_seen)}</td>
         <td>${n.first_seen ? renderNodeTimestampHtml(n.first_seen) : '<span class="text-muted">—</span>'}</td>

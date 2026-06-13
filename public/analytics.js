@@ -1364,7 +1364,7 @@
               var roleColor = (window.ROLE_COLORS || {})[r.role] || '#6b7280';
               return '<tr class="clickable-row" data-action="navigate" data-value="#/nodes/' + encodeURIComponent(r.pubkey) + '" tabindex="0" role="row">' +
                 '<td><strong>' + esc(r.name) + '</strong></td>' +
-                '<td><span class="badge" style="background:' + roleColor + '20;color:' + roleColor + '">' + esc(r.role || 'unknown') + '</span></td>' +
+                '<td><span class="badge" style="' + (window.aaBadgeStyle ? window.aaBadgeStyle(roleColor) : 'background:' + roleColor + ';color:#fff') + '">' + esc(r.role || 'unknown') + '</span></td>' +
                 '<td><span style="color:' + (statusColor[r.status] || statusColor.unknown) + '">' +
                   (statusIcon[r.status] || '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg>') + ' ' + (statusLabel[r.status] || 'Unknown') + '</span></td>' +
                 '<td><span class="badge badge-hash-' + r.hashSize + '">' + r.hashSize + '-byte</span></td>' +
@@ -1516,7 +1516,7 @@
             const stripe = i % 2 === 1 ? 'background:var(--row-stripe)' : '';
             return `<tr style="${stripe}">
               <td><a href="#/nodes/${encodeURIComponent(n.public_key)}?section=node-packets" style="font-weight:600;color:var(--link-color)">${esc(n.name || n.public_key.slice(0, 12))}</a></td>
-              <td><span class="badge" style="background:${roleColor}20;color:${roleColor}">${n.role}</span></td>
+              <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(roleColor)) || ('background:'+roleColor+';color:#fff')}">${n.role}</span></td>
               <td><code style="font-family:var(--mono);font-weight:700">${prefix}</code> <span class="text-muted">(${n.hash_size || '?'}B)</span></td>
               <td>${sizeBadges}</td>
             </tr>`;
@@ -2259,7 +2259,7 @@
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:24px">
             ${Object.entries(roleCounts).sort((a,b) => b[1]-a[1]).map(([role, count]) => {
               const c = ROLE_COLORS[role] || '#6b7280';
-              return `<span class="badge" style="background:${c}20;color:${c};padding:6px 12px;font-size:13px">${role}: ${count}</span>`;
+              return `<span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(c)) || ('background:'+c+';color:#fff')};padding:6px 12px;font-size:13px">${role}: ${count}</span>`;
             }).join('')}
           </div>
 
@@ -2271,7 +2271,7 @@
                 const s = n.health.stats;
                 return `<tr>
                   <td>${nodeLink(n)}</td>
-                  <td><span class="badge" style="background:${(ROLE_COLORS[n.role]||'#6b7280')}20;color:${ROLE_COLORS[n.role]||'#6b7280'}">${n.role}</span></td>
+                  <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(ROLE_COLORS[n.role]||'#6b7280')) || ('background:'+(ROLE_COLORS[n.role]||'#6b7280')+';color:#fff')}">${n.role}</span></td>
                   <td>${s.totalTransmissions || s.totalPackets || 0}</td>
                   <td>${s.avgSnr != null ? s.avgSnr.toFixed(1) + ' dB' : '—'}</td>
                   <td>${n.health.observers?.length || 0}</td>
@@ -2288,7 +2288,7 @@
               ${byPackets.slice(0, 15).map((n, i) => `<tr>
                 <td>${i + 1}</td>
                 <td>${nodeLink(n)}${claimedBadge(n)}</td>
-                <td><span class="badge" style="background:${(ROLE_COLORS[n.role]||'#6b7280')}20;color:${ROLE_COLORS[n.role]||'#6b7280'}">${n.role}</span></td>
+                <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(ROLE_COLORS[n.role]||'#6b7280')) || ('background:'+(ROLE_COLORS[n.role]||'#6b7280')+';color:#fff')}">${n.role}</span></td>
                 <td>${n.health.stats.totalTransmissions || n.health.stats.totalPackets || 0}</td>
                 <td>${n.health.stats.packetsToday || 0}</td>
                 <td><a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link" aria-label="Per-node analytics"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg></a></td>
@@ -2303,7 +2303,7 @@
               ${bySnr.slice(0, 15).map((n, i) => `<tr>
                 <td>${i + 1}</td>
                 <td>${nodeLink(n)}${claimedBadge(n)}</td>
-                <td><span class="badge" style="background:${(ROLE_COLORS[n.role]||'#6b7280')}20;color:${ROLE_COLORS[n.role]||'#6b7280'}">${n.role}</span></td>
+                <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(ROLE_COLORS[n.role]||'#6b7280')) || ('background:'+(ROLE_COLORS[n.role]||'#6b7280')+';color:#fff')}">${n.role}</span></td>
                 <td>${n.health.stats.avgSnr.toFixed(1)} dB</td>
                 <td>${n.health.observers?.length || 0}</td>
                 <td><a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link" aria-label="Per-node analytics"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg></a></td>
@@ -2318,7 +2318,7 @@
               ${byObservers.slice(0, 15).map((n, i) => `<tr>
                 <td>${i + 1}</td>
                 <td>${nodeLink(n)}${claimedBadge(n)}</td>
-                <td><span class="badge" style="background:${(ROLE_COLORS[n.role]||'#6b7280')}20;color:${ROLE_COLORS[n.role]||'#6b7280'}">${n.role}</span></td>
+                <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(ROLE_COLORS[n.role]||'#6b7280')) || ('background:'+(ROLE_COLORS[n.role]||'#6b7280')+';color:#fff')}">${n.role}</span></td>
                 <td>${n.health.observers?.length || 0}</td>
                 <td>${n.health.stats.avgSnr != null ? n.health.stats.avgSnr.toFixed(1) + ' dB' : '—'}</td>
                 <td><a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link" aria-label="Per-node analytics"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg></a></td>
@@ -2332,7 +2332,7 @@
             <tbody>
               ${byRecent.slice(0, 15).map(n => `<tr>
                 <td>${nodeLink(n)}${claimedBadge(n)}</td>
-                <td><span class="badge" style="background:${(ROLE_COLORS[n.role]||'#6b7280')}20;color:${ROLE_COLORS[n.role]||'#6b7280'}">${n.role}</span></td>
+                <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(ROLE_COLORS[n.role]||'#6b7280')) || ('background:'+(ROLE_COLORS[n.role]||'#6b7280')+';color:#fff')}">${n.role}</span></td>
                 <td>${timeAgo(n.health.stats.lastHeard)}</td>
                 <td>${n.health.stats.packetsToday || 0}</td>
                 <td><a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link" aria-label="Per-node analytics"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg></a></td>
