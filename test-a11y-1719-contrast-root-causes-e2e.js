@@ -50,6 +50,9 @@ const CUSTOMIZE_JS = path.join(ROOT, 'public', 'customize.js');
 function parseColor(s) {
   if (!s) return null;
   s = String(s).trim();
+  // Minimal CSS named-color set we expect on active-button surfaces.
+  const NAMED = { white: '#ffffff', black: '#000000', transparent: 'rgba(0,0,0,0)' };
+  if (NAMED[s.toLowerCase()]) s = NAMED[s.toLowerCase()];
   let m = s.match(/^#([0-9a-f]{3})$/i);
   if (m) { const h = m[1]; return { r: parseInt(h[0]+h[0],16), g: parseInt(h[1]+h[1],16), b: parseInt(h[2]+h[2],16), a: 1 }; }
   m = s.match(/^#([0-9a-f]{6})$/i);
@@ -123,6 +126,11 @@ function probeP1_activeButton(css, rootBlocks, darkBlocks) {
     '\\.clock-filter-btn\\.active',
     '\\.subpath-jump-nav a',          // sp-pairs/triples/quads/long jump pills
     '\\.btn-active-accent',           // shared class introduced by this fix
+    // Round-1 polish: three additional surfaces still emitting #fff on
+    // var(--accent) (=2.75:1). Added to the consolidated selector group.
+    '\\.node-filter-option\\.node-filter-active',
+    '\\.subpath-selected',
+    '\\.analytics-time-range button\\.active',
   ];
   const probes = [];
   for (const sel of selectors) {
@@ -225,6 +233,43 @@ function probeP4_statusGreenText(css, rootBlocks, darkBlocks) {
 
 // -------------------- Main --------------------
 
+function probeP5_themeMapHasStatusGreenText() {
+  // Round-1 polish MAJOR 2: customize.js THEME_CSS_MAP must include
+  // status-green-text so operators can override the new token from the
+  // customize panel and themed previews track it. Pure structural assertion
+  // on the JS source — no execution.
+  const js = fs.readFileSync(CUSTOMIZE_JS, 'utf8');
+  const m = js.match(/THEME_CSS_MAP\s*=\s*\{([\s\S]*?)\n\s*\};/);
+  if (!m) throw new Error('a11y-1719 P5: THEME_CSS_MAP block not found in customize.js');
+  const body = m[1];
+  const ok = /['"]?--status-green-text['"]?/.test(body) || /statusGreenText\s*:\s*['"]--status-green-text['"]/.test(body);
+  return [{ pattern: 'P5', sel: 'THEME_CSS_MAP entry for --status-green-text', theme: 'n/a', fg: '-', bg: '-', ratio: ok ? 999 : 0, _structural: true }];
+}
+
+function probeP6_btnActiveAccentClassApplied() {
+  // Round-1 polish MAJOR 3: ensure #ptCheckBtn and #ptGenBtn carry the
+  // shared `btn-active-accent` class wherever they are emitted in
+  // public/*.js (analytics.js is the current owner). Future refactors
+  // that drop the class will be caught here.
+  const ANALYTICS_JS = path.join(ROOT, 'public', 'analytics.js');
+  const src = fs.readFileSync(ANALYTICS_JS, 'utf8');
+  const results = [];
+  for (const id of ['ptCheckBtn', 'ptGenBtn']) {
+    // Find any <button ... id="ID" ...> emission and verify the class attr
+    // includes btn-active-accent.
+    const re = new RegExp(`<button\\b[^>]*\\bid=["']${id}["'][^>]*>`, 'g');
+    let m, found = 0, withClass = 0;
+    while ((m = re.exec(src))) {
+      found++;
+      if (/\bclass=["'][^"']*\bbtn-active-accent\b/.test(m[0])) withClass++;
+    }
+    if (found === 0) throw new Error(`a11y-1719 P6: no <button id="${id}"> emission found in public/analytics.js`);
+    const ok = found === withClass;
+    results.push({ pattern: 'P6', sel: `<button id="${id}"> has class="btn-active-accent"`, theme: 'n/a', fg: '-', bg: '-', ratio: ok ? 999 : 0, _structural: true, _detail: `${withClass}/${found} emissions` });
+  }
+  return results;
+}
+
 function main() {
   const css = fs.readFileSync(STYLE_CSS, 'utf8');
   const rootBlocks = extractBlocks(css, ':root');
@@ -237,10 +282,19 @@ function main() {
     .concat(probeP1_activeButton(css, rootBlocks, darkBlocks))
     .concat(probeP2_skewBadge(css, rootBlocks, darkBlocks))
     .concat(probeP3_roleSwatches())
-    .concat(probeP4_statusGreenText(css, rootBlocks, darkBlocks));
+    .concat(probeP4_statusGreenText(css, rootBlocks, darkBlocks))
+    .concat(probeP5_themeMapHasStatusGreenText())
+    .concat(probeP6_btnActiveAccentClassApplied());
 
   let failures = 0;
   for (const r of all) {
+    if (r._structural) {
+      const ok = r.ratio >= 999;
+      const tag = ok ? 'PASS' : 'FAIL';
+      console.log(`  ${tag} [${r.pattern}] ${r.sel}${r._detail ? '  ' + r._detail : ''}`);
+      if (!ok) failures++;
+      continue;
+    }
     // Small text (≥body) → AA needs 4.5:1.
     const ok = r.ratio >= 4.5;
     const tag = ok ? 'PASS' : 'FAIL';
