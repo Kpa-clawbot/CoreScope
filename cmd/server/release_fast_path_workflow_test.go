@@ -38,8 +38,10 @@ func TestReleaseFastPathWorkflowExists(t *testing.T) {
 		t.Errorf("release-fast-path.yml: missing required push.tags trigger 'v[0-9]+.[0-9]+.[0-9]+'")
 	}
 
-	// Permissions: needs packages:write to re-tag in GHCR, contents:read for checkout.
-	for _, perm := range []string{"packages: write", "contents: read"} {
+	// Permissions: needs packages:write to re-tag in GHCR, contents:read for
+	// checkout, and actions:write so the fallback `gh workflow run deploy.yml`
+	// dispatch is allowed (issue #1702 — fallback returned 403 without it).
+	for _, perm := range []string{"packages: write", "contents: read", "actions: write"} {
 		if !strings.Contains(src, perm) {
 			t.Errorf("release-fast-path.yml: missing required permission %q", perm)
 		}
