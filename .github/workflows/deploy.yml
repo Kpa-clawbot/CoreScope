@@ -152,6 +152,7 @@ jobs:
           node test-issue-1633-hide-1byte-hops.js
           node test-issue-1668-m4-per-route.js
           node test-a11y-axe-1668-selftest.js
+          node test-issue-1705-subpath-contrast.js
 
       - name: 🛡️ Preflight XSS gate — actual --diff check (PR only)
         # The fixture self-test above (test-preflight-xss-gate.js) only
