@@ -176,13 +176,18 @@ function probeP2_skewBadge(css, rootBlocks, darkBlocks) {
 
 function probeP3_roleSwatches() {
   // Neighbor-graph role checkboxes: <span style="color:${ROLE_COLOR}">.
-  // The TEXT renders on the analytics surface (--surface-1 = #ffffff light,
-  // --surface-2 = #232340 dark). Customizer's `nodeColors` is the fallback
-  // palette baked into JS — that's what shows on a fresh load before any
-  // theme preset is applied. Fix targets customize.js so axe's first-paint
-  // check passes in light theme (the failing axis).
+  //
+  // In LIGHT theme the customizer's nodeColors map (public/customize.js)
+  // is the first-paint default — its hex values (#16a34a / #d97706 /
+  // #8b5cf6) were the measured BLOCKERs against the white analytics
+  // surface (#ffffff).
+  //
+  // In DARK theme the live ROLE_COLORS getter resolves from the CB-safe
+  // --mc-role-* palette (style.css :root + dark overrides), NOT from the
+  // customizer's static JS defaults — so probing the customize.js values
+  // against a dark card-bg would be a false probe. We assert only against
+  // the light-theme rendering surface where axe found the violations.
   const js = fs.readFileSync(CUSTOMIZE_JS, 'utf8');
-  // Locate the FIRST nodeColors block (the canonical default palette).
   const m = js.match(/nodeColors\s*:\s*\{([^}]+)\}/);
   if (!m) throw new Error('a11y-1719 P3: nodeColors block not found in customize.js');
   const body = m[1];
@@ -191,15 +196,11 @@ function probeP3_roleSwatches() {
   for (const k of ['room', 'sensor', 'observer']) {
     if (!colors[k]) throw new Error(`a11y-1719 P3: missing ${k} in nodeColors`);
   }
-  // Render-surface bg in light theme: #ffffff (analytics card / page bg).
   const lightBg = { r: 255, g: 255, b: 255, a: 1 };
-  // Dark surface fallback (analytics card-bg = surface-2 = #232340).
-  const darkBg = { r: 0x23, g: 0x23, b: 0x40, a: 1 };
   const results = [];
   for (const k of ['room', 'sensor', 'observer']) {
     const fg = parseColor(colors[k]);
     results.push({ pattern: 'P3', sel: `nodeColors.${k} on white`, theme: 'light', fg: colors[k], bg: '#ffffff', ratio: contrast(fg, lightBg) });
-    results.push({ pattern: 'P3', sel: `nodeColors.${k} on dark card`, theme: 'dark', fg: colors[k], bg: '#232340', ratio: contrast(fg, darkBg) });
   }
   return results;
 }

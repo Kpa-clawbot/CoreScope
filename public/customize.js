@@ -65,9 +65,13 @@
     nodeColors: {
       repeater: '#dc2626',
       companion: '#2563eb',
-      room: '#16a34a',
-      sensor: '#d97706',
-      observer: '#8b5cf6'
+      // #1719 — bumped from #16a34a (3.30:1) → #15803d (5.36:1 on white).
+      room: '#15803d',
+      // #1719 — bumped from #d97706 (3.19:1) → #b45309 (5.39:1 on white).
+      sensor: '#b45309',
+      // #1719 — bumped from #8b5cf6 (4.23:1) → #7c3aed (5.59:1 on white,
+      // 4.62:1 on dark card-bg #232340) so it clears AA in BOTH themes.
+      observer: '#7c3aed'
     },
     typeColors: {
       ADVERT: '#22c55e', GRP_TXT: '#3b82f6', TXT_MSG: '#f59e0b', ACK: '#6b7280',

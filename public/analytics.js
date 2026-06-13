@@ -2111,7 +2111,7 @@
                   ? window.HopResolver.haversineKm(a.lat, a.lon, b.lat, b.lon)
                   : (() => { const R=6371, dLat=(b.lat-a.lat)*Math.PI/180, dLon=(b.lon-a.lon)*Math.PI/180, h=Math.sin(dLat/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLon/2)**2; return R*2*Math.atan2(Math.sqrt(h),Math.sqrt(1-h)); })();
                 total += km;
-                const cls = km > 200 ? 'color:var(--status-red);font-weight:bold' : km > 50 ? 'color:var(--status-yellow)' : 'color:var(--status-green)';
+                const cls = km > 200 ? 'color:var(--status-red);font-weight:bold' : km > 50 ? 'color:var(--status-yellow)' : 'color:var(--status-green-text)';
                 dists.push(`<div style="padding:2px 0"><span style="${cls}">${formatDistance(km)}</span> <span class="text-muted">${esc(a.name)} → ${esc(b.name)}</span></div>`);
               } else {
                 dists.push(`<div style="padding:2px 0"><span class="text-muted">? ${esc(a.name)} → ${esc(b.name)} (no coords)</span></div>`);
@@ -2238,8 +2238,8 @@
           <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Network Status</h3>
           <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px">
             <div class="analytics-stat-card" style="flex:1;min-width:120px;text-align:center;padding:16px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px">
-              <div style="font-size:28px;font-weight:700;color:var(--status-green)">${active}</div>
-              <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted)"><span style="color:var(--status-green)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> Active</div>
+              <div style="font-size:28px;font-weight:700;color:var(--status-green-text)">${active}</div>
+              <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted)"><span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> Active</div>
             </div>
             <div class="analytics-stat-card" style="flex:1;min-width:120px;text-align:center;padding:16px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px">
               <div style="font-size:28px;font-weight:700;color:var(--status-yellow)">${degraded}</div>
@@ -3093,7 +3093,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
               // distinguish theoretical/would-collide-if-used from packet-
               // traffic-observed collisions shown on the Hash Issues tab.
               const opLine = opC === 0
-                ? `<span style="color:var(--status-green)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> No address conflicts among configured repeaters</span>`
+                ? `<span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> No address conflicts among configured repeaters</span>`
                 : `<span style="color:var(--status-red)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ${opC} address conflict${opC !== 1 ? 's' : ''} among configured repeaters (would-collide-if-used)</span>`;
               // #1306: expandable WHICH-collides toggles (op + theoretical)
               const opEntries = collEntries.operational[b];
@@ -3162,7 +3162,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
           <input id="ptPrefixInput" type="text" placeholder="e.g. A3F1" maxlength="64"
             style="font-family:var(--mono);font-size:1em;padding:6px 10px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;min-width:180px;flex:1"
             value="${esc(initPrefix)}">
-          <button id="ptCheckBtn" style="padding:6px 16px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.95em">Check</button>
+          <button id="ptCheckBtn" class="btn-active-accent" style="padding:6px 16px;border:none;border-radius:4px;cursor:pointer;font-size:0.95em">Check</button>
         </div>
         <div id="ptCheckerResults" style="margin-top:14px"></div>
       </div>
@@ -3187,7 +3187,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
             <input type="radio" name="ptGenSize" value="3" ${initGenerate === '3' ? 'checked' : ''}> 3-byte
           </label>
-          <button id="ptGenBtn" style="padding:6px 16px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.95em">Generate</button>
+          <button id="ptGenBtn" class="btn-active-accent" style="padding:6px 16px;border:none;border-radius:4px;cursor:pointer;font-size:0.95em">Generate</button>
         </div>
         <div id="ptGenResult"></div>
         <div style="margin-top:14px;padding:10px 14px;border:1px solid var(--accent);border-radius:6px;background:var(--bg-secondary,var(--bg));font-size:0.88em">
@@ -3209,7 +3209,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
     }
 
     function severityBadge(count) {
-      if (count === 0) return '<span style="color:var(--status-green)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> Unique</span>';
+      if (count === 0) return '<span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> Unique</span>';
       if (count <= 2) return `<span style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ${count} collision${count !== 1 ? 's' : ''}</span>`;
       return `<span style="color:var(--status-red)"><span style="color:var(--status-red)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> ${count} collisions</span>`;
     }
@@ -3338,8 +3338,8 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
       genResultEl.innerHTML = `
         <div style="padding:12px 16px;border:1px solid var(--status-green);border-radius:6px;background:var(--bg-secondary,var(--bg))">
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-            <code class="mono" style="font-size:1.3em;font-weight:700;color:var(--status-green)">${prefix}</code>
-            <span style="color:var(--status-green)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> No existing nodes use this prefix</span>
+            <code class="mono" style="font-size:1.3em;font-weight:700;color:var(--status-green-text)">${prefix}</code>
+            <span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> No existing nodes use this prefix</span>
           </div>
           <div class="text-muted" style="font-size:0.85em;margin-top:6px">${available.toLocaleString()} of ${totalSpace.toLocaleString()} ${b}-byte prefixes are available.</div>
           <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">

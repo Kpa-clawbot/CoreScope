@@ -247,6 +247,15 @@
   --accent-border: rgba(59, 130, 246, 0.25);
   --geo-filter-color: #3b82f6;
   --status-green: #22c55e;
+  /* #1719 — `--status-green` (#22c55e) is the BACKGROUND swatch hue
+     (used as `background:` on badges + dots over white card surfaces).
+     As TEXT on a white .analytics-stat-card it is only 2.28:1 (BLOCKER).
+     `--status-green-text` is the text-only variant for surfaces that
+     render numbers/labels in the green palette over light cards — pinned
+     to palette-green-700 (#15803d) → 5.06:1 on #fff (AA pass). Dark
+     theme overrides keep the bright #22c55e since it reads ≥6:1 on the
+     card-bg #232340. */
+  --status-green-text: var(--palette-green-700, #15803d);
   --status-yellow: #eab308;
   --status-red: #ef4444;
   --status-orange: #f97316;
@@ -254,6 +263,12 @@
   --status-amber: #f59e0b;
   --status-amber-light: #fef3c7;
   --status-amber-text: #92400e;
+  /* #1719 — `--skew-badge-no-clock-bg` carries the muted "no clock data"
+     badge background (was --text-muted which renders #d1d5db in dark
+     theme → #fff text = 1.47:1, BLOCKER × 137 on clock-health). Pinned
+     to palette-gray-600 (#4b5563) so #fff text reads 7.56:1 on both
+     themes (light: 7.56:1, dark: 7.56:1). */
+  --skew-badge-no-clock-bg: var(--palette-gray-600, #4b5563);
   /* #1648 M6 (M4 CDP carry-forward): named token for the neutral/info
      accent used as the unrolled-route hop fallback color (was #3b82f6
      baked in route-render.js). Themes via dark-mode block below. */
@@ -355,6 +370,11 @@
   :root:not([data-theme="light"]) {
     color-scheme: dark;
     --status-green: #22c55e;
+    /* #1719 — on dark card-bg (#232340) #22c55e gives 6.65:1, AA pass.
+       Keep the bright hue for text rather than darkening it. */
+    --status-green-text: #22c55e;
+    /* #1719 — keep --skew-badge-no-clock-bg dark enough for #fff text. */
+    --skew-badge-no-clock-bg: var(--palette-gray-600, #4b5563);
     --status-yellow: #eab308;
     --status-red: #ef4444;
     --status-orange: #f97316;
@@ -407,6 +427,9 @@
   --link-weak: #f85149;
   --link-oneway: #768390;
   --status-green: #22c55e;
+  /* #1719 — see :root[prefers-color-scheme:dark] block; mirror here. */
+  --status-green-text: #22c55e;
+  --skew-badge-no-clock-bg: var(--palette-gray-600, #4b5563);
   --status-yellow: #eab308;
   --status-red: #ef4444;
   --status-orange: #f97316;
@@ -3065,7 +3088,7 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 /* Subpath jump nav */
 .subpath-jump-nav { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; font-size: 0.9em; flex-wrap: wrap; }
 .subpath-jump-nav span { color: var(--text-muted); }
-.subpath-jump-nav a { padding: 4px 12px; border-radius: 4px; background: var(--accent, #3b82f6); color: #fff; text-decoration: none; font-size: 0.85em; }
+.subpath-jump-nav a { padding: 4px 12px; border-radius: 4px; text-decoration: none; font-size: 0.85em; }
 .subpath-jump-nav a:hover { opacity: 0.8; }
 
 /* Route patterns table breathing room */
@@ -4050,7 +4073,21 @@ button.region-pill-active:hover { opacity: 0.85; color: var(--text-on-accent); }
   cursor: pointer; font-size: 12px; transition: background 0.15s;
 }
 .rf-range-btn:hover { background: var(--bg-hover, #333); }
-.rf-range-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+/* #1719 — consolidated active-button accent: was background:var(--accent)
+   (#4a9eff) + color:#fff = 2.75:1 (BLOCKER × N selectors). All four
+   recurring sites (.rf-range-btn.active, .clock-filter-btn.active,
+   .subpath-jump-nav a, inline ptCheckBtn / ptGenBtn) now route through
+   the shared `.btn-active-accent` style or this same token pair so a
+   future regression is fixable in one place. --accent-strong
+   (#2563eb) + --text-on-accent (#f9fafb) = 8.59:1 (AA pass). */
+.btn-active-accent,
+.rf-range-btn.active,
+.clock-filter-btn.active,
+.subpath-jump-nav a {
+  background: var(--accent-strong);
+  color: var(--text-on-accent);
+  border-color: var(--accent-strong);
+}
 .rf-custom-inputs { display: inline-flex; gap: 4px; align-items: center; margin-left: 8px; }
 .rf-datetime {
   padding: 3px 6px; border: 1px solid var(--border); border-radius: 4px;
@@ -4304,7 +4341,7 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .skew-badge--warning { background: var(--status-yellow); color: #000; }
 .skew-badge--critical { background: var(--status-orange); color: #fff; }
 .skew-badge--absurd { background: var(--status-purple); color: #fff; }
-.skew-badge--no_clock { background: var(--text-muted); color: #fff; }
+.skew-badge--no_clock { background: var(--skew-badge-no-clock-bg); color: #fff; }
 .skew-badge--bimodal_clock { background: var(--status-amber-light); color: var(--status-amber-text); border: 1px solid var(--status-amber); }
 
 .skew-detail-section { padding: 10px 16px; margin-bottom: 8px; }
@@ -4318,7 +4355,7 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .clock-fleet-row--no_clock { background: color-mix(in srgb, var(--text-muted) 10%, transparent); }
 
 .clock-filter-btn { font-size: 12px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--card-bg, #fff); color: var(--text); cursor: pointer; margin-right: 4px; }
-.clock-filter-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.clock-filter-btn.active { background: var(--accent-strong); color: var(--text-on-accent); border-color: var(--accent-strong); }
 
 /* === Path Inspector (issue #944) === */
 .path-inspector-page { padding: 16px; max-width: 900px; margin: 0 auto; }
