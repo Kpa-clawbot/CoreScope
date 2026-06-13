@@ -1238,11 +1238,8 @@ func (s *Server) handlePostPacket(w http.ResponseWriter, r *http.Request) {
 	}
 	decodedJSON := PayloadJSON(&decoded.Payload)
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	nowEpoch := time.Now().Unix()
 
-	var obsID, obsName interface{}
-	if body.Observer != nil {
-		obsID = *body.Observer
-	}
 	var snr, rssi interface{}
 	if body.Snr != nil {
 		snr = *body.Snr
@@ -1251,17 +1248,46 @@ func (s *Server) handlePostPacket(w http.ResponseWriter, r *http.Request) {
 		rssi = *body.Rssi
 	}
 
-	res, dbErr := s.db.conn.Exec(`INSERT INTO transmissions (hash, raw_hex, route_type, payload_type, payload_version, path_json, decoded_json, first_seen)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+	// v3 schema (cmd/ingestor/db.go:251-303): transmissions no longer carries
+	// path_json (it lives on observations now), observations uses observer_idx
+	// INTEGER (FK observers.rowid) and timestamp INTEGER (unix epoch).
+	// Fix for #1196 — pre-fix code wrote v2 column names and silently
+	// swallowed the observations insert error.
+	res, dbErr := s.db.conn.Exec(`INSERT INTO transmissions (hash, raw_hex, route_type, payload_type, payload_version, decoded_json, first_seen)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		contentHash, strings.ToUpper(hexStr), decoded.Header.RouteType, decoded.Header.PayloadType,
-		decoded.Header.PayloadVersion, pathJSON, decodedJSON, now)
+		decoded.Header.PayloadVersion, decodedJSON, now)
+	if dbErr != nil {
+		writeError(w, 500, "transmission insert: "+dbErr.Error())
+		return
+	}
+	insertedID, _ := res.LastInsertId()
 
-	var insertedID int64
-	if dbErr == nil {
-		insertedID, _ = res.LastInsertId()
-		s.db.conn.Exec(`INSERT INTO observations (transmission_id, observer_id, observer_name, snr, rssi, timestamp)
+	// Resolve observer string → observers.rowid. INSERT OR IGNORE then SELECT
+	// mirrors the ingestor's resolver (cmd/ingestor/db.go:778,799,906).
+	var observerIdx interface{}
+	if body.Observer != nil && *body.Observer != "" {
+		obsID := *body.Observer
+		if _, err := s.db.conn.Exec(
+			`INSERT OR IGNORE INTO observers (id, name, last_seen, first_seen) VALUES (?, ?, ?, ?)`,
+			obsID, obsID, now, now); err != nil {
+			writeError(w, 500, "observer upsert: "+err.Error())
+			return
+		}
+		var rowid int64
+		if err := s.db.conn.QueryRow(`SELECT rowid FROM observers WHERE id = ?`, obsID).Scan(&rowid); err != nil {
+			writeError(w, 500, "observer lookup: "+err.Error())
+			return
+		}
+		observerIdx = rowid
+	}
+
+	if _, obsErr := s.db.conn.Exec(
+		`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 			VALUES (?, ?, ?, ?, ?, ?)`,
-			insertedID, obsID, obsName, snr, rssi, now)
+		insertedID, observerIdx, snr, rssi, pathJSON, nowEpoch); obsErr != nil {
+		writeError(w, 500, "observation insert: "+obsErr.Error())
+		return
 	}
 
 	writeJSON(w, PacketIngestResponse{
