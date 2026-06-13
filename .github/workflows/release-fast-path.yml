@@ -16,6 +16,7 @@ on:
 permissions:
   contents: read
   packages: write
+  actions: write   # issue #1702: required so the fallback `gh workflow run deploy.yml` dispatch is allowed
 
 concurrency:
   group: release-fast-path-${{ github.ref }}
