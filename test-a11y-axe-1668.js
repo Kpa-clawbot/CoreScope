@@ -67,6 +67,15 @@ const ROUTES = [
   '/analytics?tab=hashsizes',
   '/analytics?tab=collisions',
   '/analytics?tab=roles',
+  // #1706: expand axe coverage to the remaining 7 analytics tabs plus prefix-tool.
+  '/analytics?tab=subpaths',
+  '/analytics?tab=nodes',
+  '/analytics?tab=distance',
+  '/analytics?tab=neighbor-graph',
+  '/analytics?tab=rf-health',
+  '/analytics?tab=clock-health',
+  '/analytics?tab=scopes',
+  '/analytics?tab=prefix-tool',
   '/audio-lab',
 ];
 
