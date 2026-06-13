@@ -445,12 +445,12 @@
             <button class="alab-speed" data-speed="4">4x</button>
             <div class="alab-slider-group">
               <span>BPM</span>
-              <input type="range" id="alabBPM" min="30" max="300" value="${baseBPM}">
+              <input type="range" id="alabBPM" aria-label="Playback BPM" min="30" max="300" value="${baseBPM}">
               <span id="alabBPMVal">${baseBPM}</span>
             </div>
             <div class="alab-slider-group">
               <span>Vol</span>
-              <input type="range" id="alabVol" min="0" max="100" value="${MeshAudio && MeshAudio.getVolume ? Math.round(MeshAudio.getVolume() * 100) : 30}">
+              <input type="range" id="alabVol" aria-label="Playback volume" min="0" max="100" value="${MeshAudio && MeshAudio.getVolume ? Math.round(MeshAudio.getVolume() * 100) : 30}">
               <span id="alabVolVal">${MeshAudio && MeshAudio.getVolume ? Math.round(MeshAudio.getVolume() * 100) : 30}%</span>
             </div>
             <div class="alab-slider-group">
