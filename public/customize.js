@@ -121,6 +121,7 @@
     background: '--surface-0',
     text: '--text',
     statusGreen: '--status-green',
+    statusGreenText: '--status-green-text',
     statusYellow: '--status-yellow',
     statusRed: '--status-red',
     // Advanced (derived from basic by default)

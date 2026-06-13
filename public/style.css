@@ -2922,7 +2922,8 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
   transition: background 0.1s;
 }
 .node-filter-option:hover { background: var(--surface-2, rgba(255,255,255,0.08)); }
-.node-filter-option.node-filter-active { background: var(--accent); color: #fff; }
+/* .node-filter-option.node-filter-active — #1719 round-1 polish: bg/color
+   consolidated into the .btn-active-accent rule. */
 
 /* Hide low-value columns on mobile */
 @media (max-width: 640px) {
@@ -3031,8 +3032,10 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
    Trade-off accepted: the prefix and primary line are now equal-weight
    visually — the previous secondary styling was itself the source of the
    1.87:1 BLOCKER, so visual hierarchy here is recovered via type/weight,
-   not color. */
-.subpath-selected { background: var(--accent-strong) !important; color: var(--text-on-accent); }
+   not color.
+   #1719 polish r1: !important on color also, to consolidate with
+   .btn-active-accent override pattern. */
+.subpath-selected { background: var(--accent-strong) !important; color: var(--text-on-accent) !important; }
 .subpath-selected .hop-prefix { color: var(--text-on-accent); }
 tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 
@@ -3307,7 +3310,8 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .analytics-heatmap-label { font-size: 10px; color: var(--text-muted); display: flex; align-items: center; }
 .analytics-time-range { display: flex; gap: 8px; margin-bottom: 16px; }
 .analytics-time-range button { padding: 4px 12px; border-radius: 4px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text); cursor: pointer; font-size: 12px; }
-.analytics-time-range button.active { background: var(--accent); color: white; border-color: var(--accent); }
+/* .analytics-time-range button.active — #1719 round-1 polish: bg/color
+   consolidated into the .btn-active-accent rule. */
 .analytics-peer-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .analytics-peer-table th { text-align: left; padding: 6px 8px; border-bottom: 2px solid var(--border); color: var(--text-muted); font-size: 11px; text-transform: uppercase; }
 .analytics-peer-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
@@ -4083,7 +4087,13 @@ button.region-pill-active:hover { opacity: 0.85; color: var(--text-on-accent); }
 .btn-active-accent,
 .rf-range-btn.active,
 .clock-filter-btn.active,
-.subpath-jump-nav a {
+.subpath-jump-nav a,
+/* #1719 round-1 polish: three additional active-state surfaces
+   consolidated here. Their inline `background:var(--accent); color:#fff`
+   rules (2.75:1) are removed below — they now inherit this token pair. */
+.node-filter-option.node-filter-active,
+.subpath-selected,
+.analytics-time-range button.active {
   background: var(--accent-strong);
   color: var(--text-on-accent);
   border-color: var(--accent-strong);
