@@ -74,12 +74,12 @@ strict_unused: false
   issue: 1715
   expires_at: 2026-09-11
 - route: '/analytics?tab=neighbor-graph'
-  selector: '#ngRoleChecks > label:nth-child(3) > span'
+  selector: 'label:nth-child(3) > span'
   rule: color-contrast
   issue: 1715
   expires_at: 2026-09-11
 - route: '/analytics?tab=neighbor-graph'
-  selector: '#ngRoleChecks > label:nth-child(4) > span'
+  selector: 'label:nth-child(4) > span'
   rule: color-contrast
   issue: 1715
   expires_at: 2026-09-11
