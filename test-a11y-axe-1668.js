@@ -1,14 +1,19 @@
 /**
- * test-a11y-axe-1668.js — Milestone 5 of #1668
+ * test-a11y-axe-1668.js — Milestones 5 + 6 of #1668
  *
  * axe-core CI gate. Loads every major CoreScope route in dark + light theme,
- * injects axe-core, runs the `color-contrast` rule, and asserts zero
+ * injects axe-core, runs the configured ruleset, and asserts zero
  * violations (modulo `tests/a11y-allowlist.yaml`).
  *
- * Scope per M5 brief:
- *   - Rules:    color-contrast ONLY (M6 owns the expanded ruleset)
- *   - Themes:   dark + light
- *   - Viewport: 1200x900 desktop (mobile = M6)
+ * Scope:
+ *   - M5: color-contrast on desktop dark+light at 1200x900.
+ *   - M6: expanded ruleset (image-alt, label, aria-required-attr,
+ *     aria-valid-attr, aria-valid-attr-value, landmark-one-main, region,
+ *     button-name, link-name, document-title, html-has-lang, duplicate-id)
+ *     applied across BOTH viewports, PLUS color-contrast at 375x812 mobile.
+ *
+ *   Themes:    dark + light
+ *   Viewports: desktop 1200x900, mobile 375x812 (M6 adds mobile)
  *
  * Allowlist (`tests/a11y-allowlist.yaml`):
  *   Operator-flagged false-positives. Each entry MUST cite an issue # AND
@@ -80,6 +85,32 @@ const REGISTERED_ANALYTICS_TABS = [
 ];
 
 const THEMES = ['dark', 'light'];
+
+// M6: ruleset per viewport. Both viewports share the expanded ruleset;
+// color-contrast also runs on both (M5 baseline desktop + M6 mobile gate).
+// All rules in these arrays MUST be 0 violations against the CI fixture
+// (no allowlist seeding — same hard policy as M5).
+const RULES_DESKTOP = [
+  'color-contrast',
+  'image-alt',
+  'label',
+  'aria-required-attr',
+  'aria-valid-attr',
+  'aria-valid-attr-value',
+  'landmark-one-main',
+  'region',
+  'button-name',
+  'link-name',
+  'document-title',
+  'html-has-lang',
+  'duplicate-id',
+];
+const RULES_MOBILE = RULES_DESKTOP.slice(); // identical at M6; split arrays let
+                                            // a future PR diverge cleanly.
+const VIEWPORTS = [
+  { name: 'desktop', w: 1200, h: 900, rules: RULES_DESKTOP },
+  { name: 'mobile',  w: 375,  h: 812, rules: RULES_MOBILE  },
+];
 
 // ---- tiny YAML loader (flow `[]` or block list of `key: value` maps) -------
 //
@@ -194,7 +225,7 @@ async function setTheme(page, theme) {
   }, theme);
 }
 
-async function runRoute(page, route, theme, AxeBuilder) {
+async function runRoute(page, route, theme, rules, AxeBuilder) {
   const url = `${BASE}/#${route}`;
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
   // Give the SPA a moment to render. We deliberately do NOT
@@ -209,8 +240,7 @@ async function runRoute(page, route, theme, AxeBuilder) {
     await page.waitForTimeout(200);
   }
 
-  const axe = new AxeBuilder({ page })
-    .withRules(['color-contrast']);
+  const axe = new AxeBuilder({ page }).withRules(rules);
   const result = await axe.analyze();
   return result;
 }
@@ -223,7 +253,7 @@ async function main() {
   console.log(`a11y-axe-1668: BASE=${BASE} allowlist=${allowlist.length} entries`);
 
   const routesToRun = ROUTES_FILTER.length ? ROUTES.filter(r => ROUTES_FILTER.includes(r)) : ROUTES;
-  console.log(`a11y-axe-1668: routes=${routesToRun.length} themes=${THEMES.length} cells=${routesToRun.length * THEMES.length}`);
+  console.log(`a11y-axe-1668: routes=${routesToRun.length} themes=${THEMES.length} viewports=${VIEWPORTS.length} cells=${routesToRun.length * THEMES.length * VIEWPORTS.length}`);
 
   const browser = await chromium.launch({
     headless: true,
@@ -231,67 +261,77 @@ async function main() {
     args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
   });
 
-  const summary = []; // { route, theme, raw, suppressed, net }
+  const summary = []; // { vp, route, theme, raw, suppressed, net }
   let totalNet = 0;
+  // Per-viewport tallies for the summary footer.
+  const vpTotals = {};
+  for (const vp of VIEWPORTS) vpTotals[vp.name] = { raw: 0, suppressed: 0, net: 0 };
 
   try {
-    for (const theme of THEMES) {
-      // One context per theme — keeps the init-script localStorage stable.
-      const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
-      await context.addInitScript((t) => {
-        try {
-          localStorage.setItem('meshcore-theme', t);
-          localStorage.setItem('live-controls-expanded', 'true');
-          localStorage.setItem('meshcore-time-window', '525600');
-          document.documentElement.setAttribute('data-theme', t);
-        } catch (_) {}
-      }, theme);
+    for (const vp of VIEWPORTS) {
+      console.log(`\n--- viewport ${vp.name} ${vp.w}x${vp.h} rules=${vp.rules.length} ---`);
+      for (const theme of THEMES) {
+        // One context per (viewport, theme) — keeps init-script localStorage stable.
+        const context = await browser.newContext({ viewport: { width: vp.w, height: vp.h } });
+        await context.addInitScript((t) => {
+          try {
+            localStorage.setItem('meshcore-theme', t);
+            localStorage.setItem('live-controls-expanded', 'true');
+            localStorage.setItem('meshcore-time-window', '525600');
+            document.documentElement.setAttribute('data-theme', t);
+          } catch (_) {}
+        }, theme);
 
-      for (const route of routesToRun) {
-        const page = await context.newPage();
-        let raw = 0, suppressed = 0, net = 0;
-        const violationsDetail = [];
-        try {
-          const result = await runRoute(page, route, theme, AxeBuilder);
-          for (const v of result.violations) {
-            if (v.id !== 'color-contrast') continue; // narrow safeguard
-            for (const node of v.nodes) {
-              raw++;
-              if (violationAllowed(route, v.id, node, allowlist)) {
-                suppressed++;
-              } else {
-                net++;
-                violationsDetail.push({
-                  selector: node.target,
-                  html: node.html && node.html.slice(0, 200),
-                  message: node.failureSummary,
-                });
+        for (const route of routesToRun) {
+          const page = await context.newPage();
+          let raw = 0, suppressed = 0, net = 0;
+          const violationsDetail = [];
+          try {
+            const result = await runRoute(page, route, theme, vp.rules, AxeBuilder);
+            for (const v of result.violations) {
+              if (!vp.rules.includes(v.id)) continue; // narrow safeguard
+              for (const node of v.nodes) {
+                raw++;
+                if (violationAllowed(route, v.id, node, allowlist)) {
+                  suppressed++;
+                } else {
+                  net++;
+                  violationsDetail.push({
+                    rule: v.id,
+                    selector: node.target,
+                    html: node.html && node.html.slice(0, 200),
+                    message: node.failureSummary,
+                  });
+                }
               }
             }
+          } catch (err) {
+            // Probe errors should NOT silently pass — treat as a hard failure
+            // so route regressions (server 500, hash route 404, JS crash) surface.
+            net = 1;
+            violationsDetail.push({ probeError: err.message });
           }
-        } catch (err) {
-          // Probe errors should NOT silently pass — treat as a hard failure
-          // so route regressions (server 500, hash route 404, JS crash) surface.
-          net = 1;
-          violationsDetail.push({ probeError: err.message });
-        }
 
-        const cell = { route, theme, raw, suppressed, net };
-        summary.push(cell);
-        totalNet += net;
-        const verdict = net === 0 ? '✅' : '❌';
-        console.log(`  ${verdict} ${theme.padEnd(5)} ${route.padEnd(34)} raw=${raw} suppressed=${suppressed} net=${net}`);
-        if (net > 0) {
-          for (const d of violationsDetail) {
-            console.log(`     - ${JSON.stringify(d).slice(0, 500)}`);
+          const cell = { vp: vp.name, route, theme, raw, suppressed, net };
+          summary.push(cell);
+          totalNet += net;
+          vpTotals[vp.name].raw += raw;
+          vpTotals[vp.name].suppressed += suppressed;
+          vpTotals[vp.name].net += net;
+          const verdict = net === 0 ? '✅' : '❌';
+          console.log(`  ${verdict} ${vp.name.padEnd(7)} ${theme.padEnd(5)} ${route.padEnd(34)} raw=${raw} suppressed=${suppressed} net=${net}`);
+          if (net > 0) {
+            for (const d of violationsDetail) {
+              console.log(`     - ${JSON.stringify(d).slice(0, 500)}`);
+            }
+            const safe = `${vp.name}_${theme}_${route.replace(/[^a-z0-9]+/gi, '_')}`;
+            const shot = path.join(SHOT_DIR, `${safe}.png`);
+            try { await page.screenshot({ path: shot, fullPage: false }); } catch (_) {}
           }
-          const safe = `${theme}_${route.replace(/[^a-z0-9]+/gi, '_')}`;
-          const shot = path.join(SHOT_DIR, `${safe}.png`);
-          try { await page.screenshot({ path: shot, fullPage: false }); } catch (_) {}
+          await page.close();
         }
-        await page.close();
+        await context.close();
       }
-      await context.close();
     }
   } finally {
     await browser.close();
@@ -299,16 +339,20 @@ async function main() {
 
   console.log('');
   console.log(`a11y-axe-1668: SUMMARY net=${totalNet} cells=${summary.length}`);
+  for (const vp of VIEWPORTS) {
+    const t = vpTotals[vp.name];
+    console.log(`  viewport ${vp.name}: raw=${t.raw} suppressed=${t.suppressed} net=${t.net} (${vp.rules.length} rules)`);
+  }
   for (const c of summary) {
     if (c.net > 0) {
-      console.log(`  FAIL ${c.theme} ${c.route} net=${c.net}`);
+      console.log(`  FAIL ${c.vp} ${c.theme} ${c.route} net=${c.net}`);
     }
   }
   if (totalNet > 0) {
-    console.error(`\nFAIL: ${totalNet} color-contrast violation(s) above allowlist`);
+    console.error(`\nFAIL: ${totalNet} a11y violation(s) above allowlist`);
     process.exit(1);
   }
-  console.log(`\nPASS: zero color-contrast violations across ${summary.length} cells`);
+  console.log(`\nPASS: zero violations across ${summary.length} cells (${VIEWPORTS.length} viewports × ${THEMES.length} themes × ${routesToRun.length} routes)`);
 }
 
 if (require.main === module) {
@@ -327,6 +371,9 @@ module.exports = {
   violationAllowed,
   ROUTES,
   THEMES,
+  VIEWPORTS,
+  RULES_DESKTOP,
+  RULES_MOBILE,
   REGISTERED_PAGES,
   REGISTERED_ANALYTICS_TABS,
 };

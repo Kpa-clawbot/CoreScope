@@ -24,6 +24,33 @@ assert.ok(Array.isArray(mod.ROUTES), 'ROUTES must be an array');
 assert.ok(mod.ROUTES.length >= 14, `ROUTES too small: ${mod.ROUTES.length}`);
 assert.deepStrictEqual(mod.THEMES, ['dark', 'light'], 'THEMES must be [dark,light]');
 
+// ---- M6: viewports + per-viewport rulesets ---------------------------------
+assert.ok(Array.isArray(mod.VIEWPORTS), 'VIEWPORTS must be an array');
+assert.strictEqual(mod.VIEWPORTS.length, 2, 'M6: VIEWPORTS must have desktop + mobile');
+const vpDesktop = mod.VIEWPORTS.find(v => v.name === 'desktop');
+const vpMobile  = mod.VIEWPORTS.find(v => v.name === 'mobile');
+assert.ok(vpDesktop, 'VIEWPORTS missing desktop');
+assert.ok(vpMobile,  'VIEWPORTS missing mobile');
+assert.strictEqual(vpDesktop.w, 1200, 'desktop width must be 1200');
+assert.strictEqual(vpDesktop.h, 900,  'desktop height must be 900');
+assert.strictEqual(vpMobile.w,  375,  'mobile width must be 375');
+assert.strictEqual(vpMobile.h,  812,  'mobile height must be 812');
+assert.ok(Array.isArray(vpDesktop.rules) && vpDesktop.rules.length > 0, 'desktop.rules must be a non-empty array');
+assert.ok(Array.isArray(vpMobile.rules)  && vpMobile.rules.length  > 0, 'mobile.rules must be a non-empty array');
+// M6: every gated viewport MUST include color-contrast (mobile color-contrast is
+// the M6 promise) and the new rules must be present on both.
+for (const vp of mod.VIEWPORTS) {
+  for (const required of ['color-contrast', 'image-alt', 'label',
+                          'aria-required-attr', 'region']) {
+    assert.ok(vp.rules.includes(required),
+      `viewport ${vp.name} must include rule "${required}"`);
+  }
+}
+// And both viewports' rule arrays must match the exported RULES_* constants
+// (anti-drift: prevents someone hand-editing one but not the other).
+assert.deepStrictEqual(vpDesktop.rules, mod.RULES_DESKTOP, 'desktop.rules drift vs RULES_DESKTOP');
+assert.deepStrictEqual(vpMobile.rules,  mod.RULES_MOBILE,  'mobile.rules drift vs RULES_MOBILE');
+
 // Spot-check key routes from the M1 audit baseline
 for (const r of ['/', '/packets', '/nodes', '/live', '/map', '/analytics?tab=collisions', '/audio-lab']) {
   assert.ok(mod.ROUTES.includes(r), `ROUTES missing ${r}`);

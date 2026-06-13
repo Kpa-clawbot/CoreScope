@@ -363,9 +363,15 @@ jobs:
       - name: Run Playwright E2E tests (fail-fast)
         run: |
           BASE_URL=http://localhost:13581 node test-e2e-playwright.js 2>&1 | tee e2e-output.txt
-          # M5 of #1668 — axe-core CI gate (color-contrast AA).
-          # Real browser run; fails on any net violation (raw − allowlist).
-          # Allowlist: tests/a11y-allowlist.yaml (0 entries at M5 baseline).
+          # M5+M6 of #1668 — axe-core CI gate.
+          # M5: color-contrast on desktop dark+light.
+          # M6: expanded ruleset (image-alt, label, aria-required-attr,
+          #     aria-valid-attr, aria-valid-attr-value, landmark-one-main,
+          #     region, button-name, link-name, document-title, html-has-lang,
+          #     duplicate-id) AND adds 375x812 mobile viewport (with
+          #     color-contrast on mobile too).
+          # Allowlist: tests/a11y-allowlist.yaml (0 entries — hard pass policy).
+          # Per-viewport summary printed at the end; any net>0 fails the build.
           BASE_URL=http://localhost:13581 AXE_SCREENSHOT_DIR=/tmp/axe-1668 \
             node test-a11y-axe-1668.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-filter-ux-e2e.js 2>&1 | tee -a e2e-output.txt
