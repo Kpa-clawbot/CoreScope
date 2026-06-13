@@ -95,19 +95,17 @@ async function main() {
 
   // Reproduce the DOM rendered by public/analytics.js (renderTable +
   // click handler that adds `.subpath-selected` to a <tr data-hops>).
-  // The .subpaths-table class is mirrored from the section structure in
-  // analytics.js (the table itself uses .analytics-table but the
-  // class-name regression class is identical: any future rule scoped to
-  // either selector is exercised).
-  const cssHref = 'file://' + CSS_PATH;
+  // The production table uses `.analytics-table` (see analytics.js
+  // renderSubpathsTable: `<table class="analytics-table">`), so the
+  // fixture below mirrors that exact class to exercise any rule scoped
+  // to `.analytics-table tr.subpath-selected .hop-prefix`.
   const html = `<!doctype html>
 <html><head>
   <meta charset="utf-8">
-  <link rel="stylesheet" href="${cssHref}">
   <title>1705 e2e</title>
 </head>
 <body>
-  <table class="analytics-table subpaths-table">
+  <table class="analytics-table">
     <thead><tr><th>#</th><th>Route</th><th>Count</th></tr></thead>
     <tbody>
       <tr data-hops="aa,bb" class="subpath-selected">
