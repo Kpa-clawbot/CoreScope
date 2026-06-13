@@ -127,58 +127,108 @@ const VIEWPORTS = [
 // Supports:
 //   - empty list ([])
 //   - block list of inline `- key: value` items continued with `  key: value` lines
+//   - top-level scalar keys (e.g. `strict_unused: true`) before/after the list
 //   - quoted strings ('...' or "...")
-//   - integers and YYYY-MM-DD dates
+//   - integers, booleans, and YYYY-MM-DD dates
+//
+// Return shape:
+//   - legacy: an Array of entry objects (back-compat for callers expecting
+//     parseAllowlistYaml(...) to be array-iterable)
+//   - new:    when top-level keys are present, returns
+//     Array.prototype-extended array PLUS .topLevel and .entries properties.
 function parseAllowlistYaml(src) {
   // strip BOM, comments, normalize line endings
   const lines = src.replace(/^\uFEFF/, '').split(/\r?\n/)
     .map(l => l.replace(/(^|\s)#.*$/, '').replace(/\s+$/, ''))
     .filter(l => l.trim().length > 0);
 
-  if (lines.length === 0) return [];
-  if (lines.length === 1 && lines[0].trim() === '[]') return [];
+  if (lines.length === 0) {
+    const out = [];
+    out.topLevel = {};
+    out.entries = out;
+    return out;
+  }
+  if (lines.length === 1 && lines[0].trim() === '[]') {
+    const out = [];
+    out.topLevel = {};
+    out.entries = out;
+    return out;
+  }
 
   const entries = [];
+  const topLevel = {};
   let current = null;
   for (const raw of lines) {
     const m = raw.match(/^(\s*)(-?)\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$/);
     if (!m) {
       throw new Error(`a11y-allowlist.yaml: cannot parse line: ${raw}`);
     }
-    const [, , dash, key, valRaw] = m;
+    const [, indent, dash, key, valRaw] = m;
     if (dash === '-') {
       if (current) entries.push(current);
       current = {};
+    }
+    if (!current && dash !== '-') {
+      // Top-level key (e.g. `strict_unused: true`) — before any list item.
+      if (indent.length === 0) {
+        topLevel[key] = coerce(valRaw.trim());
+        continue;
+      }
+      throw new Error(`a11y-allowlist.yaml: indented key "${key}" outside list item`);
     }
     if (!current) throw new Error(`a11y-allowlist.yaml: key "${key}" outside list item`);
     current[key] = coerce(valRaw.trim());
   }
   if (current) entries.push(current);
+  entries.topLevel = topLevel;
+  entries.entries = entries;
   return entries;
 }
 
 function coerce(v) {
   if (v === '' || v === '~' || v === 'null') return null;
+  if (v === 'true') return true;
+  if (v === 'false') return false;
   if (/^-?\d+$/.test(v)) return parseInt(v, 10);
   if (/^'.*'$/.test(v) || /^".*"$/.test(v)) return v.slice(1, -1);
   return v;
 }
 
+// #1706 finding 4: top-level YAML config (e.g. `strict_unused: true`) parsed
+// alongside entries. Captured from the most-recent loadAllowlist() / parse call
+// so callers can read it via getAllowlistConfig() without re-parsing.
+let _lastTopLevel = {};
+
 function loadAllowlist() {
-  if (!fs.existsSync(ALLOWLIST_PATH)) return [];
+  if (!fs.existsSync(ALLOWLIST_PATH)) {
+    _lastTopLevel = {};
+    return [];
+  }
   const raw = fs.readFileSync(ALLOWLIST_PATH, 'utf8');
   // parseAllowlistYaml THROWS on malformed input (don't silently swallow → []).
   // A swallowed parse error would let a typo-mangled allowlist suppress nothing
   // and ship a green gate that no longer reflects operator intent. Loud failure.
-  const entries = parseAllowlistYaml(raw);
+  const parsed = parseAllowlistYaml(raw);
+  _lastTopLevel = parsed.topLevel || {};
   const today = new Date().toISOString().slice(0, 10);
-  return filterAllowlist(entries, today);
+  return filterAllowlist(parsed.entries || parsed, today);
+}
+
+// #1706 finding 4: read parsed top-level config. Env override
+// A11Y_STRICT_UNUSED=1 promotes stale-entry WARN → FAIL regardless of YAML.
+function getAllowlistConfig() {
+  const cfg = { strict_unused: false, ..._lastTopLevel };
+  if (process.env.A11Y_STRICT_UNUSED === '1') cfg.strict_unused = true;
+  return cfg;
 }
 
 // Pure function: filter a parsed allowlist against `today` (YYYY-MM-DD string).
 // THROWS on:
-//   - any entry missing a required field (route/selector/rule/issue/expires_at)
+//   - any entry missing a required field (route/rule/issue/expires_at AND
+//     either `selector` or `selector_pattern` + `count_max`)
 //   - any entry whose expires_at <= today (today inclusive — boundary fails)
+//   - any selector_pattern that fails to compile as a regex (precompiled here
+//     onto the entry for runtime hot-path match)
 // Returning a soft-filtered subset would let stale suppressions persist; this
 // matches PR policy that expired entries are refused as a HARD failure.
 function filterAllowlist(entries, today) {
@@ -188,32 +238,88 @@ function filterAllowlist(entries, today) {
   }
   const valid = [];
   for (const e of entries) {
-    if (!e || !e.route || !e.selector || !e.rule || !e.issue || !e.expires_at) {
+    if (!e || !e.route || !e.rule || !e.issue || !e.expires_at) {
       throw new Error(`a11y-allowlist.yaml: REFUSED (missing required field): ${JSON.stringify(e)}`);
     }
-    if (String(e.expires_at) <= today) {
-      throw new Error(`a11y-allowlist.yaml: REFUSED (expired ${e.expires_at} <= today ${today}, issue #${e.issue}): ${e.route} ${e.selector}`);
+    // #1706 finding 1: pattern form requires `count_max` so unbounded growth
+    // re-trips the gate. Exactly one of selector / selector_pattern.
+    const hasSelector = typeof e.selector === 'string' && e.selector.length > 0;
+    const hasPattern  = typeof e.selector_pattern === 'string' && e.selector_pattern.length > 0;
+    if (!hasSelector && !hasPattern) {
+      throw new Error(`a11y-allowlist.yaml: REFUSED (need selector OR selector_pattern): ${JSON.stringify(e)}`);
     }
+    if (hasSelector && hasPattern) {
+      throw new Error(`a11y-allowlist.yaml: REFUSED (selector and selector_pattern are mutually exclusive): ${JSON.stringify(e)}`);
+    }
+    if (hasPattern) {
+      if (typeof e.count_max !== 'number' || e.count_max <= 0) {
+        throw new Error(`a11y-allowlist.yaml: REFUSED (selector_pattern requires count_max > 0): ${JSON.stringify(e)}`);
+      }
+      try {
+        e._patternRe = new RegExp(e.selector_pattern);
+      } catch (re) {
+        throw new Error(`a11y-allowlist.yaml: REFUSED (selector_pattern invalid regex /${e.selector_pattern}/: ${re.message})`);
+      }
+    }
+    // #1706 finding 6: expires_at hard-gates CI. boundary == today is REFUSED.
+    // (Pre-existing in the loader, but now explicitly cited so future edits
+    // know it's load-bearing for the M4 "sed forward" pressure mitigation.)
+    if (String(e.expires_at) <= today) {
+      throw new Error(`a11y-allowlist.yaml: REFUSED (expired ${e.expires_at} <= today ${today}, issue #${e.issue}): ${e.route} ${e.selector || e.selector_pattern}`);
+    }
+    // #1706 finding 4: zero out the per-run match counter (mutated by
+    // violationAllowed during the CI sweep, read by reportStaleAllowlist).
+    e._matchCount = 0;
     valid.push(e);
   }
   return valid;
 }
 
-function violationAllowed(route, rule, node, allowlist) {
-  // axe node.target is an array of selector arrays (per-frame). Match if any
-  // listed selector is STRICTLY EQUAL to the allowlist selector. We deliberately
-  // do NOT substring-match: `.btn` must not suppress `.btn-primary` violations,
-  // and `body` must not suppress every node in the document.
+// #1706 finding 1+4: match a violation node against the allowlist.
+// Returns { allowed, overflow } — when an entry uses selector_pattern and
+// its match count exceeds count_max, overflow=true so the caller can FAIL
+// the gate (this is the "unbounded growth re-trips CI" guarantee).
+function matchViolation(route, rule, node, allowlist) {
   const targets = (node.target || []).flat ? node.target.flat() : [].concat(...(node.target || []));
   for (const entry of allowlist) {
     if (entry.route !== route) continue;
     if (entry.rule !== rule) continue;
     for (const t of targets) {
       if (typeof t !== 'string') continue;
-      if (t === entry.selector) return true;
+      let hit = false;
+      if (entry.selector && t === entry.selector) hit = true;
+      else if (entry._patternRe && entry._patternRe.test(t)) hit = true;
+      if (hit) {
+        entry._matchCount = (entry._matchCount || 0) + 1;
+        const overflow = !!(entry.count_max && entry._matchCount > entry.count_max);
+        return { allowed: true, overflow, entry };
+      }
     }
   }
-  return false;
+  return { allowed: false, overflow: false, entry: null };
+}
+
+// Back-compat thin wrapper — older selftest blocks and external readers
+// (e.g. ad-hoc CLI debugging) expect the boolean signature.
+function violationAllowed(route, rule, node, allowlist) {
+  return matchViolation(route, rule, node, allowlist).allowed;
+}
+
+// #1706 finding 4: emit a STALE ALLOWLIST report listing entries that
+// were never matched during a CI run. WARN by default; if cfg.strict_unused
+// is true, return { fail: true } so the caller can hard-fail the gate.
+function reportStaleAllowlist(allowlist, cfg) {
+  const stale = allowlist.filter(e => !e._matchCount);
+  if (stale.length === 0) return { stale: [], fail: false };
+  const verdict = cfg && cfg.strict_unused ? 'FAIL' : 'WARN';
+  console.log(`\n[${verdict}] STALE ALLOWLIST: ${stale.length} entr${stale.length === 1 ? 'y' : 'ies'} matched nothing this run`);
+  for (const e of stale) {
+    const desc = e.selector_pattern
+      ? `pattern=${e.selector_pattern} count_max=${e.count_max}`
+      : `selector=${e.selector}`;
+    console.log(`  - route=${e.route} rule=${e.rule} ${desc} issue=#${e.issue} expires=${e.expires_at}`);
+  }
+  return { stale, fail: !!(cfg && cfg.strict_unused) };
 }
 
 // ---------------------------------------------------------------------------
@@ -309,7 +415,8 @@ async function main() {
   const { AxeBuilder } = require('@axe-core/playwright');
   if (!fs.existsSync(SHOT_DIR)) fs.mkdirSync(SHOT_DIR, { recursive: true });
   const allowlist = loadAllowlist();
-  console.log(`a11y-axe-1668: BASE=${BASE} allowlist=${allowlist.length} entries`);
+  const cfg = getAllowlistConfig();
+  console.log(`a11y-axe-1668: BASE=${BASE} allowlist=${allowlist.length} entries strict_unused=${cfg.strict_unused}`);
 
   const routesToRun = ROUTES_FILTER.length ? ROUTES.filter(r => ROUTES_FILTER.includes(r)) : ROUTES;
   console.log(`a11y-axe-1668: routes=${routesToRun.length} themes=${THEMES.length} viewports=${VIEWPORTS.length} cells=${routesToRun.length * THEMES.length * VIEWPORTS.length}`);
@@ -351,8 +458,18 @@ async function main() {
               if (!vp.rules.includes(v.id)) continue; // narrow safeguard
               for (const node of v.nodes) {
                 raw++;
-                if (violationAllowed(route, v.id, node, allowlist)) {
+                const m = matchViolation(route, v.id, node, allowlist);
+                if (m.allowed && !m.overflow) {
                   suppressed++;
+                } else if (m.allowed && m.overflow) {
+                  // #1706 finding 1: count_max breached → unbounded growth.
+                  // Fail the gate so the allowlist re-trips CI for a human review.
+                  net++;
+                  violationsDetail.push({
+                    rule: v.id,
+                    selector: node.target,
+                    overflow: `count_max=${m.entry.count_max} exceeded (matched=${m.entry._matchCount}) for pattern=${m.entry.selector_pattern} issue=#${m.entry.issue}`,
+                  });
                 } else {
                   net++;
                   violationsDetail.push({
@@ -407,8 +524,16 @@ async function main() {
       console.log(`  FAIL ${c.vp} ${c.theme} ${c.route} net=${c.net}`);
     }
   }
+  // #1706 finding 4: stale-allowlist audit (WARN by default, FAIL when
+  // strict_unused=true). Caller (CI) can flip the env flag during cleanup
+  // sweeps without re-editing the YAML.
+  const staleReport = reportStaleAllowlist(allowlist, cfg);
   if (totalNet > 0) {
     console.error(`\nFAIL: ${totalNet} a11y violation(s) above allowlist`);
+    process.exit(1);
+  }
+  if (staleReport.fail) {
+    console.error(`\nFAIL: ${staleReport.stale.length} stale allowlist entr${staleReport.stale.length === 1 ? 'y' : 'ies'} (strict_unused=true)`);
     process.exit(1);
   }
   console.log(`\nPASS: zero violations across ${summary.length} cells (${VIEWPORTS.length} viewports × ${THEMES.length} themes × ${routesToRun.length} routes)`);
@@ -426,8 +551,11 @@ if (require.main === module) {
 module.exports = {
   parseAllowlistYaml,
   loadAllowlist,
+  getAllowlistConfig,
   filterAllowlist,
   violationAllowed,
+  matchViolation,
+  reportStaleAllowlist,
   analyticsTabOf,
   ROUTES,
   THEMES,
