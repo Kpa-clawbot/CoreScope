@@ -11,8 +11,9 @@
  * Asserts:
  *   1. Some non-ADVERT packet detail does NOT contain <dt>Location</dt>.
  *   2. Some ADVERT packet detail DOES contain <dt>Location</dt> with coords.
- *   3. The 📍map link uses class="loc-map-link" with color = --accent
- *      (NOT the default UA blue rgb(0,0,238)).
+ *   3. The 📍map link uses class="loc-map-link" with a themed link color
+ *      (was --accent pre-M5; now --link-color after #1668/PR #1696 AA-contrast
+ *      fix). The hard guarantee is: NOT the default UA blue rgb(0,0,238).
  *
  * Usage: BASE_URL=http://localhost:13581 node test-issue-1281-location-row-e2e.js
  */
@@ -115,23 +116,31 @@ async function findPacketDetailByType(page, predicate, maxRows = 40) {
       `ADVERT Location should contain GPS coords, got: "${meta.locationText}"`);
   });
 
-  await step('📍map link uses class="loc-map-link" with color = var(--accent)', async () => {
+  await step('📍map link uses class="loc-map-link" with themed link color (not UA default blue)', async () => {
     // Reuse the ADVERT detail pane left open from the previous step.
+    //
+    // History: original #1281 asserted color === var(--accent) (rgb(74,158,255)).
+    // M5 axe/WCAG-AA fixes (#1668, PR #1696) rewired link text away from --accent
+    // because --accent (#4a9eff) fails AA contrast for body-text links on most
+    // surfaces. .loc-map-link now resolves via --link-color (= --palette-blue-600
+    // = #2563eb), which passes AA. Test author intent ("links use a token, not
+    // raw UA blue") is satisfied by either token; we now track --link-color to
+    // match the CSS rule and preserve the "not UA default blue" guard.
     const result = await page.evaluate(() => {
       const link = document.querySelector('dl.detail-meta a.loc-map-link');
       if (!link) return { missing: true };
       const cs = getComputedStyle(link);
-      const accentRaw = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
-      // Resolve --accent value to its computed rgb() via a probe element.
+      const linkColorRaw = getComputedStyle(document.documentElement).getPropertyValue('--link-color').trim();
+      // Resolve --link-color value to its computed rgb() via a probe element.
       const probe = document.createElement('span');
-      probe.style.color = `var(--accent)`;
+      probe.style.color = `var(--link-color)`;
       document.body.appendChild(probe);
-      const accentRgb = getComputedStyle(probe).color;
+      const linkColorRgb = getComputedStyle(probe).color;
       probe.remove();
       return {
         linkColor: cs.color,
-        accentRgb,
-        accentRaw,
+        tokenRgb: linkColorRgb,
+        tokenRaw: linkColorRaw,
         href: link.getAttribute('href'),
         text: link.textContent.trim(),
       };
@@ -139,10 +148,10 @@ async function findPacketDetailByType(page, predicate, maxRows = 40) {
     assert(!result.missing,
       '<a class="loc-map-link"> not found in detail pane — implementation must apply the class');
     const link = normRgb(result.linkColor);
-    const accent = normRgb(result.accentRgb);
-    console.log(`    link.color=${result.linkColor}  --accent→${result.accentRgb} (raw "${result.accentRaw}")`);
-    assert(link === accent,
-      `📍map link color ${result.linkColor} must equal --accent (${result.accentRgb}); ` +
+    const token = normRgb(result.tokenRgb);
+    console.log(`    link.color=${result.linkColor}  --link-color→${result.tokenRgb} (raw "${result.tokenRaw}")`);
+    assert(link === token,
+      `📍map link color ${result.linkColor} must equal var(--link-color) (${result.tokenRgb}); ` +
       `default UA blue (rgb(0, 0, 238)) is not acceptable`);
     assert(link !== 'rgb(0, 0, 238)',
       'Link color is UA-default blue — class is missing or CSS rule does not match');
