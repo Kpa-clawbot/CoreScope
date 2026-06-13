@@ -14,18 +14,90 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const mod = require('./test-a11y-axe-1668.js');
 
 // ---- routes / themes --------------------------------------------------------
 assert.ok(Array.isArray(mod.ROUTES), 'ROUTES must be an array');
-assert.ok(mod.ROUTES.length >= 18, `ROUTES too small: ${mod.ROUTES.length}`);
+assert.ok(mod.ROUTES.length >= 14, `ROUTES too small: ${mod.ROUTES.length}`);
 assert.deepStrictEqual(mod.THEMES, ['dark', 'light'], 'THEMES must be [dark,light]');
 
 // Spot-check key routes from the M1 audit baseline
 for (const r of ['/', '/packets', '/nodes', '/live', '/map', '/analytics?tab=collisions', '/audio-lab']) {
   assert.ok(mod.ROUTES.includes(r), `ROUTES missing ${r}`);
+}
+
+// ---- ROUTES reciprocity vs registered pages / analytics tabs ----------------
+// Forces a build break if someone adds a route without covering it, OR removes
+// a registered page/tab without dropping it from ROUTES (silent skip).
+function basePageOf(route) {
+  // '/' → '' (SPA default = packets, but '/' is fine as a registered alias)
+  // '/analytics?tab=rf' → 'analytics'
+  // '/audio-lab'        → 'audio-lab'
+  const stripped = route.replace(/^\//, '').split('?')[0];
+  return stripped;
+}
+function tabOf(route) {
+  const q = route.split('?')[1];
+  if (!q) return null;
+  const m = q.match(/(?:^|&)tab=([^&]+)/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+for (const r of mod.ROUTES) {
+  const base = basePageOf(r);
+  if (base === '') continue; // '/' = SPA default, no registerPage needed
+  assert.ok(
+    mod.REGISTERED_PAGES.includes(base),
+    `ROUTES contains "${r}" but base page "${base}" is NOT in REGISTERED_PAGES — drop it or register it`
+  );
+  const tab = tabOf(r);
+  if (tab !== null) {
+    assert.ok(
+      mod.REGISTERED_ANALYTICS_TABS.includes(tab),
+      `ROUTES contains "${r}" but analytics tab "${tab}" is NOT in REGISTERED_ANALYTICS_TABS — drop it or add the case`
+    );
+  }
+}
+
+// Cross-check REGISTERED_* against actual source code so the constant cannot
+// drift silently from `registerPage()` calls or analytics tab `case` arms.
+const repoRoot = __dirname;
+const publicDir = path.join(repoRoot, 'public');
+if (fs.existsSync(publicDir)) {
+  const files = fs.readdirSync(publicDir).filter(f => f.endsWith('.js'));
+  const registeredFromSource = new Set();
+  for (const f of files) {
+    const src = fs.readFileSync(path.join(publicDir, f), 'utf8');
+    const re = /registerPage\(\s*['"]([^'"]+)['"]/g;
+    let m;
+    while ((m = re.exec(src)) !== null) registeredFromSource.add(m[1]);
+  }
+  // REGISTERED_PAGES MUST be a subset of what the source actually registers.
+  for (const p of mod.REGISTERED_PAGES) {
+    assert.ok(
+      registeredFromSource.has(p),
+      `REGISTERED_PAGES has "${p}" but no registerPage('${p}', ...) call found in public/*.js`
+    );
+  }
+  // Analytics tabs: grep `case 'X':` arms from analytics.js
+  const analyticsSrc = fs.readFileSync(path.join(publicDir, 'analytics.js'), 'utf8');
+  const tabsFromSource = new Set();
+  const caseRe = /case\s+['"]([a-z][a-z0-9-]*)['"]\s*:/g;
+  // Constrain to the dispatch block to avoid grabbing unrelated `case` strings
+  // (sorting comparators, key events). Match against the rendering switch only.
+  const dispatch = analyticsSrc.match(/switch\s*\(\s*[a-zA-Z_$][\w$]*\s*\)\s*\{[\s\S]*?\n\s*\}/);
+  if (dispatch) {
+    let m;
+    while ((m = caseRe.exec(dispatch[0])) !== null) tabsFromSource.add(m[1]);
+    for (const t of mod.REGISTERED_ANALYTICS_TABS) {
+      assert.ok(
+        tabsFromSource.has(t),
+        `REGISTERED_ANALYTICS_TABS has "${t}" but no \`case '${t}':\` arm found in analytics.js dispatch`
+      );
+    }
+  }
 }
 
 // ---- parser: empty + flow ---------------------------------------------------
@@ -54,7 +126,28 @@ assert.strictEqual(parsed[0].selector, '.some-stale');
 assert.strictEqual(parsed[1].route, '/packets');
 assert.strictEqual(parsed[1].issue, 5678);
 
-// ---- violationAllowed: simple match + miss ----------------------------------
+// ---- parser: malformed YAML THROWS (must not silently return []) -----------
+// Anti-tautology: reverting parseAllowlistYaml to return [] on parse error
+// MUST cause this block to fail. Verified by manual revert during dev.
+assert.throws(
+  () => mod.parseAllowlistYaml('this is : not : valid : yaml : at : all\n  no list dash'),
+  /cannot parse line/i,
+  'malformed inline YAML must throw'
+);
+// And loadAllowlist must propagate the throw end-to-end via a tmpfile.
+const tmpMalformed = path.join(os.tmpdir(), `a11y-malformed-${process.pid}.yaml`);
+fs.writeFileSync(tmpMalformed, 'this :: is :: garbage\n!!! no\n');
+const ALLOWLIST_PATH_ORIG = require.resolve('./test-a11y-axe-1668.js');
+// We can't easily redirect ALLOWLIST_PATH without re-requiring; instead call
+// parseAllowlistYaml directly on the tmpfile content for end-to-end coverage.
+assert.throws(
+  () => mod.parseAllowlistYaml(fs.readFileSync(tmpMalformed, 'utf8')),
+  /a11y-allowlist\.yaml:/i,
+  'malformed YAML from tmpfile must throw via parser'
+);
+fs.unlinkSync(tmpMalformed);
+
+// ---- violationAllowed: strict equality (no substring) ----------------------
 const al = [{ route: '/a', rule: 'color-contrast', selector: '.x' }];
 assert.strictEqual(
   mod.violationAllowed('/a', 'color-contrast', { target: ['.x'] }, al),
@@ -75,6 +168,68 @@ assert.strictEqual(
   mod.violationAllowed('/a', 'image-alt', { target: ['.x'] }, al),
   false,
   'rule mismatch must not suppress'
+);
+// Substring rejection: `.btn` MUST NOT suppress `.btn-primary` violations.
+const btnAllow = [{ route: '/p', rule: 'color-contrast', selector: '.btn' }];
+assert.strictEqual(
+  mod.violationAllowed('/p', 'color-contrast', { target: ['.btn-primary'] }, btnAllow),
+  false,
+  'substring leak: .btn must NOT match .btn-primary'
+);
+assert.strictEqual(
+  mod.violationAllowed('/p', 'color-contrast', { target: ['div > .btn'] }, btnAllow),
+  false,
+  'substring leak: .btn must NOT match `div > .btn` (different selector string)'
+);
+assert.strictEqual(
+  mod.violationAllowed('/p', 'color-contrast', { target: ['.btn'] }, btnAllow),
+  true,
+  'exact `.btn` still suppresses `.btn`'
+);
+
+// ---- filterAllowlist: boundary + expiry + missing-field --------------------
+const TODAY = '2026-06-12';
+// Tomorrow accepted
+assert.deepStrictEqual(
+  mod.filterAllowlist(
+    [{ route: '/x', selector: '.s', rule: 'color-contrast', issue: 1, expires_at: '2026-06-13' }],
+    TODAY
+  ).length,
+  1,
+  'expires_at tomorrow must be accepted'
+);
+// Today (boundary) refused
+assert.throws(
+  () => mod.filterAllowlist(
+    [{ route: '/x', selector: '.s', rule: 'color-contrast', issue: 1, expires_at: TODAY }],
+    TODAY
+  ),
+  /REFUSED \(expired/,
+  'expires_at == today must throw (boundary)'
+);
+// Past refused
+assert.throws(
+  () => mod.filterAllowlist(
+    [{ route: '/x', selector: '.s', rule: 'color-contrast', issue: 1, expires_at: '2026-06-11' }],
+    TODAY
+  ),
+  /REFUSED \(expired/,
+  'expires_at in past must throw'
+);
+// Missing field refused
+assert.throws(
+  () => mod.filterAllowlist(
+    [{ route: '/x', selector: '.s', rule: 'color-contrast', issue: 1 /* no expires_at */ }],
+    TODAY
+  ),
+  /missing required field/,
+  'missing required field must throw'
+);
+// Bad today shape refused
+assert.throws(
+  () => mod.filterAllowlist([], '06/12/2026'),
+  /YYYY-MM-DD/,
+  'today must be YYYY-MM-DD'
 );
 
 // ---- repo allowlist file: shape sanity --------------------------------------

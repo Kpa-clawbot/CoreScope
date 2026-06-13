@@ -40,8 +40,14 @@ const ALLOWLIST_PATH = path.join(__dirname, 'tests', 'a11y-allowlist.yaml');
 
 // Routes: M1 audit baseline (already proven coverage).
 // Hash routes — CoreScope is a SPA, server returns the same shell for any path.
+//
+// HARD INVARIANT: every entry below MUST resolve to a `registerPage()` page
+// in `public/*.js` (or — for `/analytics?tab=X` — to a real `case 'X':` arm
+// of the tab dispatch in `public/analytics.js`). The selftest enforces this
+// via REGISTERED_PAGES / REGISTERED_ANALYTICS_TABS reciprocity so a removed
+// route forces a build break instead of the gate silently skipping coverage.
 const ROUTES = [
-  '/',
+  '/',                              // SPA default → packets
   '/packets',
   '/nodes',
   '/channels',
@@ -56,10 +62,21 @@ const ROUTES = [
   '/analytics?tab=hashsizes',
   '/analytics?tab=collisions',
   '/analytics?tab=roles',
-  '/analytics?tab=airtime',
   '/audio-lab',
-  '/customize',
-  '/replay',
+];
+
+// Source-of-truth for ROUTES reciprocity. Keep these in sync with the
+// `registerPage(...)` calls under `public/` and the `case 'X':` arms in
+// `public/analytics.js`. The selftest greps the source to confirm.
+const REGISTERED_PAGES = [
+  'home', 'packets', 'packet-detail', 'nodes', 'node-analytics', 'node-reach',
+  'channels', 'live', 'map', 'observers', 'observer-detail', 'compare',
+  'analytics', 'audio-lab', 'perf', 'traces', 'path-inspector', 'tools-landing',
+];
+const REGISTERED_ANALYTICS_TABS = [
+  'overview', 'rf', 'topology', 'channels', 'hashsizes', 'collisions',
+  'subpaths', 'nodes', 'distance', 'neighbor-graph', 'rf-health',
+  'clock-health', 'roles', 'prefix-tool', 'scopes',
 ];
 
 const THEMES = ['dark', 'light'];
@@ -110,17 +127,32 @@ function coerce(v) {
 function loadAllowlist() {
   if (!fs.existsSync(ALLOWLIST_PATH)) return [];
   const raw = fs.readFileSync(ALLOWLIST_PATH, 'utf8');
+  // parseAllowlistYaml THROWS on malformed input (don't silently swallow → []).
+  // A swallowed parse error would let a typo-mangled allowlist suppress nothing
+  // and ship a green gate that no longer reflects operator intent. Loud failure.
   const entries = parseAllowlistYaml(raw);
   const today = new Date().toISOString().slice(0, 10);
+  return filterAllowlist(entries, today);
+}
+
+// Pure function: filter a parsed allowlist against `today` (YYYY-MM-DD string).
+// THROWS on:
+//   - any entry missing a required field (route/selector/rule/issue/expires_at)
+//   - any entry whose expires_at <= today (today inclusive — boundary fails)
+// Returning a soft-filtered subset would let stale suppressions persist; this
+// matches PR policy that expired entries are refused as a HARD failure.
+function filterAllowlist(entries, today) {
+  if (!Array.isArray(entries)) throw new Error('filterAllowlist: entries must be an array');
+  if (typeof today !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(today)) {
+    throw new Error(`filterAllowlist: today must be YYYY-MM-DD, got ${today}`);
+  }
   const valid = [];
   for (const e of entries) {
-    if (!e.route || !e.selector || !e.rule || !e.issue || !e.expires_at) {
-      console.warn(`[allowlist] REFUSED (missing required field): ${JSON.stringify(e)}`);
-      continue;
+    if (!e || !e.route || !e.selector || !e.rule || !e.issue || !e.expires_at) {
+      throw new Error(`a11y-allowlist.yaml: REFUSED (missing required field): ${JSON.stringify(e)}`);
     }
-    if (String(e.expires_at) < today) {
-      console.warn(`[allowlist] REFUSED (expired ${e.expires_at}, issue #${e.issue}): ${e.route} ${e.selector}`);
-      continue;
+    if (String(e.expires_at) <= today) {
+      throw new Error(`a11y-allowlist.yaml: REFUSED (expired ${e.expires_at} <= today ${today}, issue #${e.issue}): ${e.route} ${e.selector}`);
     }
     valid.push(e);
   }
@@ -129,14 +161,16 @@ function loadAllowlist() {
 
 function violationAllowed(route, rule, node, allowlist) {
   // axe node.target is an array of selector arrays (per-frame). Match if any
-  // listed selector starts-with or equals the allowlist selector.
+  // listed selector is STRICTLY EQUAL to the allowlist selector. We deliberately
+  // do NOT substring-match: `.btn` must not suppress `.btn-primary` violations,
+  // and `body` must not suppress every node in the document.
   const targets = (node.target || []).flat ? node.target.flat() : [].concat(...(node.target || []));
   for (const entry of allowlist) {
     if (entry.route !== route) continue;
     if (entry.rule !== rule) continue;
     for (const t of targets) {
       if (typeof t !== 'string') continue;
-      if (t === entry.selector || t.includes(entry.selector)) return true;
+      if (t === entry.selector) return true;
     }
   }
   return false;
@@ -289,7 +323,10 @@ if (require.main === module) {
 module.exports = {
   parseAllowlistYaml,
   loadAllowlist,
+  filterAllowlist,
   violationAllowed,
   ROUTES,
   THEMES,
+  REGISTERED_PAGES,
+  REGISTERED_ANALYTICS_TABS,
 };
