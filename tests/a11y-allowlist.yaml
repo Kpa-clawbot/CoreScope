@@ -88,17 +88,6 @@ strict_unused: false
   rule: color-contrast
   issue: 1716
   expires_at: 2026-09-11
-- route: '/analytics?tab=clock-health'
-  selector: 'button[data-filter="all"]'
-  rule: color-contrast
-  issue: 1717
-  expires_at: 2026-09-11
-- route: '/analytics?tab=clock-health'
-  selector_pattern: '^\.clock-fleet-row--no_clock:nth-child\(\d+\) > td:nth-child\(3\) > \.skew-badge\.skew-badge--no_clock$'
-  count_max: 300
-  rule: color-contrast
-  issue: 1717
-  expires_at: 2026-10-09
 - route: '/analytics?tab=prefix-tool'
   selector: '#ptCheckBtn'
   rule: color-contrast
