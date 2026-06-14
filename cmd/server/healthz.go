@@ -52,6 +52,20 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 			"done":      bfDone,
 		},
 	}
+	// #1724: surface ingestor-side async migration progress so the
+	// warm-up banner (#1660) keeps showing while tx_last_seen_backfill_v1
+	// runs and operators don't see "ready" while the writer is still
+	// pinned. Embedded as a top-level field; banner JS treats any
+	// running migration as a reason to keep the banner up.
+	var asyncMigrations []AsyncMigrationInfo
+	if s.db != nil {
+		asyncMigrations = readAsyncMigrations(s.db.conn)
+	}
+	asyncRunning := anyAsyncMigrationRunning(asyncMigrations)
+	if asyncMigrations != nil {
+		resp["async_migrations"] = asyncMigrations
+	}
+	resp["async_migrations_running"] = asyncRunning
 	// PR #1609 M1: surface per-MQTT-source receipt vs write-path
 	// liveness so operators can distinguish "broker alive, write
 	// path stuck" (lastReceiptUnix recent, lastMessageUnix stale)

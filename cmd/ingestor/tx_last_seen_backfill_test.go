@@ -29,6 +29,12 @@ func TestIssue1724_TxLastSeenBackfillIsChunked(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
+	// The OpenStore-scheduled tx_last_seen_backfill_v1 fires against the
+	// empty DB; wait for it to complete before seeding so the goroutine
+	// doesn't race our INSERTs and consume rows from under the manual
+	// backfill call below.
+	s.WaitForAsyncMigrations()
+
 	const seedN = 12000
 	const batchSize = 1000
 

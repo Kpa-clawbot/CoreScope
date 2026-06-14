@@ -163,21 +163,23 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 	// metadata-only ALTER); the populate query is potentially expensive
 	// (full obs scan + group) so we run it async. Subsequent observation
 	// inserts maintain the column inline (see InsertTransmission below).
+	//
+	// #1724: the populate MUST chunk (LIMIT N + sleep between batches) —
+	// the original full-table correlated UPDATE pinned the SQLite writer
+	// 10-15 min on prod-sized DBs, starving every reader. See
+	// tx_last_seen_backfill.go for the chunking rationale + defaults.
 	// PREFLIGHT: async=true reason="full-table backfill JOIN (1.9M+ obs × 86k+ tx in prod) — must not block ingestor boot"
 	if err := s.RunAsyncMigration(context.Background(), "tx_last_seen_backfill_v1",
 		func(ctx context.Context, d *sql.DB) error {
-			log.Println("[migration/async] Backfilling transmissions.last_seen from MAX(observations.timestamp)...")
-			res, err := d.ExecContext(ctx, `
-				UPDATE transmissions
-				SET last_seen = COALESCE((
-					SELECT MAX(timestamp) FROM observations WHERE transmission_id = transmissions.id
-				), last_seen)
-				WHERE last_seen = 0
-			`)
+			log.Println("[migration/async] Backfilling transmissions.last_seen from MAX(observations.timestamp) (chunked, #1724)...")
+			n, err := runTxLastSeenBackfillChunked(ctx, d, TxLastSeenBackfillOpts{
+				Progress: func(p TxLastSeenBackfillProgress) {
+					s.recordAsyncMigrationProgress("tx_last_seen_backfill_v1", p)
+				},
+			})
 			if err != nil {
 				return err
 			}
-			n, _ := res.RowsAffected()
 			log.Printf("[migration/async] transmissions.last_seen backfill complete: %d rows updated", n)
 			return nil
 		}); err != nil {

@@ -38,8 +38,12 @@ import (
 
 // ensureAsyncMigrationsTable creates the bookkeeping table used by
 // RunAsyncMigration / AsyncMigrationStatus. Idempotent.
+//
+// #1724: rows_processed/rows_total/last_update_at columns let long-running
+// migrations stream progress to the server's /api/perf endpoint without
+// holding shared in-process state across the ingestor/server boundary.
 func ensureAsyncMigrationsTable(db *sql.DB) error {
-	_, err := db.Exec(`
+	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS _async_migrations (
 			name       TEXT PRIMARY KEY,
 			status     TEXT NOT NULL,             -- pending_async | done | failed
@@ -47,8 +51,20 @@ func ensureAsyncMigrationsTable(db *sql.DB) error {
 			ended_at   TEXT,
 			error      TEXT
 		)
-	`)
-	return err
+	`); err != nil {
+		return err
+	}
+	// Best-effort additive columns for progress reporting (#1724).
+	// IF NOT EXISTS isn't supported for ADD COLUMN until SQLite 3.35; the
+	// errors are ignored when the column already exists.
+	for _, sql := range []string{
+		`ALTER TABLE _async_migrations ADD COLUMN rows_processed INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE _async_migrations ADD COLUMN rows_total     INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE _async_migrations ADD COLUMN last_update_at TEXT`,
+	} {
+		_, _ = db.Exec(sql)
+	}
+	return nil
 }
 
 // RunAsyncMigration registers `name` as a pending async migration and
@@ -138,6 +154,19 @@ func (s *Store) AsyncMigrationStatus(name string) (string, error) {
 	var status string
 	err := s.db.QueryRow(`SELECT status FROM _async_migrations WHERE name = ?`, name).Scan(&status)
 	return status, err
+}
+
+// recordAsyncMigrationProgress writes the latest progress snapshot for the
+// named migration to the _async_migrations bookkeeping row so the server's
+// /api/perf can surface mid-flight state to operators (#1724). Best-effort:
+// failures are logged but never propagated to the migration body.
+func (s *Store) recordAsyncMigrationProgress(name string, p TxLastSeenBackfillProgress) {
+	if _, err := s.db.Exec(`
+		UPDATE _async_migrations
+		SET rows_processed = ?, rows_total = ?, last_update_at = datetime('now')
+		WHERE name = ?`, p.RowsProcessed, p.RowsTotal, name); err != nil {
+		log.Printf("[async-migration] failed to record progress for %q: %v", name, err)
+	}
 }
 
 // WaitForAsyncMigrations blocks until all currently-scheduled async migrations

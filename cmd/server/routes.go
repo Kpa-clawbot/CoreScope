@@ -904,6 +904,15 @@ func (s *Server) handlePerf(w http.ResponseWriter, r *http.Request) {
 		sqliteStats = &ss
 	}
 
+	// #1724: expose ingestor-side async migration progress so /api/perf
+	// surfaces backfill state to operators in real time. Read-only DB
+	// query against _async_migrations; returns nil on missing table
+	// (legacy DB / no migrations yet).
+	var asyncMigrations []AsyncMigrationInfo
+	if s.db != nil {
+		asyncMigrations = readAsyncMigrations(s.db.conn)
+	}
+
 	writeJSON(w, PerfResponse{
 		Uptime:        uptimeSec,
 		TotalRequests: totalRequests,
@@ -913,6 +922,7 @@ func (s *Server) handlePerf(w http.ResponseWriter, r *http.Request) {
 		Cache:         perfCS,
 		PacketStore:   pktStoreStats,
 		Sqlite:        sqliteStats,
+		AsyncMigrations: asyncMigrations,
 		GoRuntime: func() *GoRuntimeStats {
 			ms := s.getMemStats()
 			return &GoRuntimeStats{

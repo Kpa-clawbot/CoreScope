@@ -54,6 +54,23 @@
         ' / ' + fmtNum(total) + ' (' + pct + '%)');
     }
 
+    // #1724: surface ingestor-side async migrations (e.g.
+    // tx_last_seen_backfill_v1). Each running migration gets its own
+    // human-readable line with rows-processed / rows-total + ETA.
+    var asyncMigs = Array.isArray(h.async_migrations) ? h.async_migrations : [];
+    for (var ai = 0; ai < asyncMigs.length; ai++) {
+      var m = asyncMigs[ai] || {};
+      if (m.status !== 'running') continue;
+      var mProcessed = Number(m.rowsProcessed) || 0;
+      var mTotal = Number(m.rowsTotal) || 0;
+      var mRawPct = mTotal > 0 ? Math.floor((mProcessed / mTotal) * 100) : 0;
+      var mPct = Math.max(0, Math.min(100, mRawPct));
+      var eta = Number(m.etaSeconds) || 0;
+      var etaStr = eta > 0 ? ' \u2014 ~' + Math.ceil(eta) + 's remaining' : '';
+      msgs.push('Running migration ' + (m.name || '(unknown)') + ': ' +
+        fmtNum(mProcessed) + ' / ' + fmtNum(mTotal) + ' (' + mPct + '%)' + etaStr);
+    }
+
     var liveness = h.ingest_liveness || {};
     var srcs = Object.keys(liveness).sort();
     for (var i = 0; i < srcs.length; i++) {
@@ -76,7 +93,8 @@
   }
 
   /**
-   * Steady-state predicate: ready=true AND from_pubkey_backfill.done=true.
+   * Steady-state predicate: ready=true AND from_pubkey_backfill.done=true
+   * AND no async migrations running (#1724).
    * Once true, banner is dismissed and polling is torn down.
    */
   function isSteadyState(healthz) {
@@ -84,6 +102,7 @@
     if (healthz.ready !== true) return false;
     var bf = healthz.from_pubkey_backfill;
     if (bf && bf.done === false) return false;
+    if (healthz.async_migrations_running === true) return false;
     return true;
   }
 

@@ -270,6 +270,11 @@ type PerfResponse struct {
 	PacketStore   *PerfPacketStoreStats         `json:"packetStore"`
 	Sqlite        *SqliteStats                  `json:"sqlite"`
 	GoRuntime     *GoRuntimeStats               `json:"goRuntime,omitempty"`
+	// AsyncMigrations surfaces ingestor-side async migration progress so
+	// operators can distinguish "backfill running" from "real bug" while
+	// the warm-up banner is up (#1724). Empty slice when no migrations
+	// have been registered (fresh DB / pre-v3.9.2 ingestor).
+	AsyncMigrations []AsyncMigrationInfo `json:"asyncMigrations"`
 }
 
 // GoRuntimeStats holds Go runtime metrics for the perf endpoint.
