@@ -7,6 +7,15 @@ const BASE = process.env.BASE_URL || 'http://localhost:3000';
   const browser = await chromium.launch();
   const page = await browser.newPage();
 
+  // Coverage is opt-in (config flag, default off). Skip when the deployment under
+  // test hasn't enabled it — the endpoints 404 and the UI toggle is absent by design.
+  const clientCfg = await (await page.request.get(BASE + '/api/config/client')).json();
+  if (clientCfg.clientRxCoverage !== true) {
+    console.log('node-reach-coverage E2E SKIP (clientRxCoverage disabled on this deployment)');
+    await browser.close();
+    return;
+  }
+
   const nodes = await (await page.request.get(BASE + '/api/nodes?role=repeater&limit=1')).json();
   if (!nodes.nodes || !nodes.nodes.length) {
     console.log('node-reach-coverage E2E SKIP (no repeater in dataset)');
