@@ -8,6 +8,16 @@
   var current = null;
   var loadGen = 0;       // bumped per load + on destroy; guards against in-flight races
   var DEFAULT_DAYS = 7;  // single JS source for the default window (mirrors the server default)
+  var coverageOn = false; // mobile-client RX coverage hex layer (deep-linked ?coverage=1)
+  var covHandle = null;   // handle from NodeReachCoverage.addLayer (off() to remove)
+
+  // setCoverageHash reflects the coverage toggle in the URL hash without
+  // re-triggering the router (history.replaceState, not location.hash =).
+  function setCoverageHash(on) {
+    var h = location.hash.replace(/([?&])coverage=1/, '$1').replace(/[?&]$/, '');
+    if (on) { h += (h.indexOf('?') >= 0 ? '&' : '?') + 'coverage=1'; }
+    try { history.replaceState(null, '', h || location.pathname + location.search); } catch (e) {}
+  }
 
   // Single source of the bottleneck tiers: colour + threshold + colour-blind
   // glyph + legend text. The map legend and the table both read from this.
@@ -105,6 +115,8 @@
   async function load(container, pubkey, days, isInitial) {
     var myGen = ++loadGen;
     current = { pubkey: pubkey, days: days };
+    coverageOn = window.MC_CLIENT_RX_COVERAGE === true && (typeof getHashParams === 'function' && getHashParams().get('coverage') === '1');
+    if (covHandle) { try { covHandle.off(); } catch (e) {} covHandle = null; }
     if (qmap) { qmap.destroy(); qmap = null; }
     if (isInitial) {
       container.innerHTML = '<div class="nq-load">Loading reach…</div>';
@@ -172,9 +184,16 @@
       '<label for="nqIncoming"><input type="checkbox" id="nqIncoming"> incoming <span class="nq-dir">(we hear them)</span></label>' +
       '<label for="nqOutgoing"><input type="checkbox" id="nqOutgoing"> outgoing <span class="nq-dir">(they hear us)</span></label>' +
       '</fieldset>' +
+      (window.MC_CLIENT_RX_COVERAGE ? '<label for="nqCoverage"><input type="checkbox" id="nqCoverage"' + (coverageOn ? ' checked' : '') + '> coverage <span class="nq-dir">(where clients heard it)</span></label>' : '') +
       '<span id="nqCount" class="nq-count" aria-live="polite"></span>' +
       '<button id="nqPrintBtn" class="btn-primary nq-print-btn">Print / PDF</button>' +
       '</div>' +
+      (window.MC_CLIENT_RX_COVERAGE ? '<div class="nq-cov-legend nq-noprint" id="nqCovLegend" style="display:' + (coverageOn ? 'flex' : 'none') + '">' +
+      '<span><i style="background:var(--nq-cov-strong)"></i>strong</span>' +
+      '<span><i style="background:var(--nq-cov-mid)"></i>medium</span>' +
+      '<span><i style="background:var(--nq-cov-weak)"></i>weak</span>' +
+      '<span><i style="background:var(--nq-cov-grey)"></i>no signal</span>' +
+      '</div>' : '') +
       '<div id="nqNoGps" class="nq-nogps"></div>' +
       '<div id="nqMap" class="nq-map"></div>' +
       '<table class="nq-table"><thead><tr><th>#</th><th>Neighbour</th><th>we hear</th>' +
@@ -187,6 +206,7 @@
       qmap = window.NodeReachMap.render('nqMap', n, TIERS);
     }
 
+    var lastList = []; // most recent filtered link list (so the coverage toggle can restore lines)
     // Two-way links are always shown; the two checkboxes add the asymmetric ones.
     function paint() {
       var inc = document.getElementById('nqIncoming').checked;
@@ -205,12 +225,34 @@
       var noGps = list.filter(function (l) { return l.lat == null || l.lon == null; }).length;
       document.getElementById('nqNoGps').textContent =
         noGps ? noGps + ' link' + (noGps === 1 ? '' : 's') + ' have no location and are not drawn on the map.' : '';
-      if (qmap) qmap.setLinks(list);
+      lastList = list;
+      if (qmap) qmap.setLinks(coverageOn ? [] : list);
     }
     paint();
     document.getElementById('nqIncoming').addEventListener('change', paint);
     document.getElementById('nqOutgoing').addEventListener('change', paint);
     document.getElementById('nqPrintBtn').addEventListener('click', printReport);
+
+    // Coverage overlay (fork): toggles the mobile-client RX hex layer in place and
+    // hides the link lines under it (declutter) — the table still lists every link.
+    var covLegend = document.getElementById('nqCovLegend');
+    function applyCoverage() {
+      if (covLegend) covLegend.style.display = coverageOn ? 'flex' : 'none';
+      if (coverageOn) {
+        if (qmap && window.NodeReachCoverage && !covHandle) covHandle = window.NodeReachCoverage.addLayer(qmap.map, pubkey);
+      } else if (covHandle) {
+        try { covHandle.off(); } catch (e) {}
+        covHandle = null;
+      }
+      if (qmap) qmap.setLinks(coverageOn ? [] : lastList);
+    }
+    var covCb = document.getElementById('nqCoverage');
+    if (covCb) covCb.addEventListener('change', function (e) {
+      coverageOn = e.target.checked;
+      setCoverageHash(coverageOn);
+      applyCoverage();
+    });
+    if (coverageOn) applyCoverage(); // deep-linked ?coverage=1: add layer + hide lines now
 
     wireTimeRange(container, pubkey);
   }
@@ -225,6 +267,7 @@
 
   function destroy() {
     loadGen++; // invalidate any in-flight load so it won't mutate a foreign container
+    if (covHandle) { try { covHandle.off(); } catch (e) {} covHandle = null; }
     if (qmap) { qmap.destroy(); qmap = null; }
     current = null;
   }

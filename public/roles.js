@@ -533,6 +533,11 @@
 
   // ─── Fetch server overrides ───
   window.MeshConfigReady = fetch('/api/config/client').then(function (r) { return r.json(); }).then(function (cfg) {
+    window.MC_CLIENT_RX_COVERAGE = cfg.clientRxCoverage === true;
+    if (!window.MC_CLIENT_RX_COVERAGE) {
+      var covNav = document.querySelector('[data-route="rx-coverage"]');
+      if (covNav) covNav.style.display = 'none';
+    }
     if (cfg.roles) {
       if (cfg.roles.colors) {
         // #1407 — ROLE_COLORS is now a live getter; merge into the override map.
