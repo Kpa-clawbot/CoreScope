@@ -33,11 +33,6 @@
 
 strict_unused: false
 
-- route: '/analytics?tab=nodes'
-  selector: '.analytics-stat-card:nth-child(1) > div:nth-child(1)'
-  rule: color-contrast
-  issue: 1714
-  expires_at: 2026-09-11
 - route: '/analytics?tab=neighbor-graph'
   selector: '#ngRoleChecks > label:nth-child(1) > span'
   rule: color-contrast
