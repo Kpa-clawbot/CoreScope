@@ -267,10 +267,17 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/nodes/{pubkey}/clock-skew", s.handleNodeClockSkew).Methods("GET")
 	r.HandleFunc("/api/observers/clock-skew", s.handleObserverClockSkew).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/neighbors", s.handleNodeNeighbors).Methods("GET")
-	// Keep specific sub-routes (…/reach) registered BEFORE the catch-all
-	// /api/nodes/{pubkey} — mux matches in registration order, so reordering
-	// this below the catch-all would shadow it and break the route.
+	// Keep specific sub-routes (…/reach, …/rx-coverage) registered BEFORE the
+	// catch-all /api/nodes/{pubkey} — mux matches in registration order, so
+	// reordering these below the catch-all would shadow them and break the route.
 	r.HandleFunc("/api/nodes/{pubkey}/reach", s.handleNodeReach).Methods("GET")
+	// Coverage routes are always registered; each handler 404s when the opt-in
+	// clientRxCoverage flag is off (a clean 404 rather than the SPA fallback that
+	// an unregistered /api route would hit). See requireClientRxCoverage.
+	r.HandleFunc("/api/nodes/{pubkey}/rx-coverage", s.handleNodeRxCoverage).Methods("GET")
+	r.HandleFunc("/api/nodes/resolve", s.handleResolvePrefix).Methods("GET")
+	r.HandleFunc("/api/rx-coverage", s.handleRxCoverage).Methods("GET")
+	r.HandleFunc("/api/rx-leaderboard", s.handleRxLeaderboard).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}", s.handleNodeDetail).Methods("GET")
 	r.HandleFunc("/api/nodes", s.handleNodes).Methods("GET")
 
@@ -445,6 +452,7 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 		MapDarkTileProvider: s.cfg.MapDarkTileProvider,
 		Tiles:               s.cfg.Tiles,
 		Customizer:          CustomizerClientConfig{DisabledTabs: disabledTabs},
+		ClientRxCoverage:    s.cfg.ClientRxCoverageEnabled(),
 	})
 }
 
