@@ -535,6 +535,14 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		return
 	}
 
+	// Mobile client RX coverage: dedicated topic meshcore/client/{PUBLIC_KEY}/packets.
+	// A roaming companion reports where it directly heard a node; handled in isolation
+	// from the observer/observations path. EMQX ACL binds parts[2] to the client's own key.
+	if cfg.ClientRxCoverageEnabled() && len(parts) >= 4 && parts[1] == "client" && parts[3] == "packets" {
+		handleClientPacket(store, tag, parts[2], msg, channelKeys)
+		return
+	}
+
 	// Skip status/connection topics
 	if topic == "meshcore/status" || topic == "meshcore/events/connection" {
 		return

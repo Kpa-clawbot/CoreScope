@@ -43,21 +43,22 @@ type MQTTLegacy struct {
 
 // Config holds the ingestor configuration, compatible with the Node.js config.json format.
 type Config struct {
-	DBPath          string            `json:"dbPath"`
-	MQTT            *MQTTLegacy       `json:"mqtt,omitempty"`
-	MQTTSources     []MQTTSource      `json:"mqttSources,omitempty"`
-	LogLevel        string            `json:"logLevel,omitempty"`
-	ChannelKeysPath string            `json:"channelKeysPath,omitempty"`
-	ChannelKeys     map[string]string `json:"channelKeys,omitempty"`
-	HashChannels    []string          `json:"hashChannels,omitempty"`
-	HashRegions     []string          `json:"hashRegions,omitempty"`
-	Retention       *RetentionConfig  `json:"retention,omitempty"`
-	Metrics         *MetricsConfig    `json:"metrics,omitempty"`
-	Runtime         *RuntimeConfig    `json:"runtime,omitempty"`
-	GeoFilter            *GeoFilterConfig     `json:"geo_filter,omitempty"`
-	ForeignAdverts       *ForeignAdvertConfig `json:"foreignAdverts,omitempty"`
-	ValidateSignatures   *bool             `json:"validateSignatures,omitempty"`
-	DB                   *DBConfig         `json:"db,omitempty"`
+	DBPath             string                  `json:"dbPath"`
+	MQTT               *MQTTLegacy             `json:"mqtt,omitempty"`
+	MQTTSources        []MQTTSource            `json:"mqttSources,omitempty"`
+	LogLevel           string                  `json:"logLevel,omitempty"`
+	ChannelKeysPath    string                  `json:"channelKeysPath,omitempty"`
+	ChannelKeys        map[string]string       `json:"channelKeys,omitempty"`
+	HashChannels       []string                `json:"hashChannels,omitempty"`
+	HashRegions        []string                `json:"hashRegions,omitempty"`
+	Retention          *RetentionConfig        `json:"retention,omitempty"`
+	Metrics            *MetricsConfig          `json:"metrics,omitempty"`
+	Runtime            *RuntimeConfig          `json:"runtime,omitempty"`
+	ClientRxCoverage   *ClientRxCoverageConfig `json:"clientRxCoverage,omitempty"`
+	GeoFilter          *GeoFilterConfig        `json:"geo_filter,omitempty"`
+	ForeignAdverts     *ForeignAdvertConfig    `json:"foreignAdverts,omitempty"`
+	ValidateSignatures *bool                   `json:"validateSignatures,omitempty"`
+	DB                 *DBConfig               `json:"db,omitempty"`
 
 	// ObserverIATAWhitelist restricts which observer IATA regions are processed.
 	// When non-empty, only observers whose IATA code (from the MQTT topic) matches
@@ -126,6 +127,17 @@ func (f *ForeignAdvertConfig) IsDropMode() bool {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(f.Mode), "drop")
+}
+
+// ClientRxCoverageConfig controls the opt-in mobile client-RX coverage feature.
+type ClientRxCoverageConfig struct {
+	Enabled bool `json:"enabled"`
+}
+
+// ClientRxCoverageEnabled reports whether the opt-in mobile client-RX coverage
+// feature is on. Absent/nil ⇒ off (the safe default).
+func (c *Config) ClientRxCoverageEnabled() bool {
+	return c.ClientRxCoverage != nil && c.ClientRxCoverage.Enabled
 }
 
 // RetentionConfig controls how long stale nodes are kept before being moved to inactive_nodes.
