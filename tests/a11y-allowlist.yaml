@@ -63,11 +63,6 @@ strict_unused: false
   rule: color-contrast
   issue: 1715
   expires_at: 2026-09-11
-- route: '/analytics?tab=rf-health'
-  selector: 'button[data-range="24h"]'
-  rule: color-contrast
-  issue: 1716
-  expires_at: 2026-09-11
 - route: '/analytics?tab=prefix-tool'
   selector: '#ptCheckBtn'
   rule: color-contrast
