@@ -138,6 +138,8 @@ jobs:
           node test-issue-1509-nav-active-bg.js
           node test-issue-1509-detect-preset.js
           node test-live.js
+          node test-coverage-gate.js
+          node test-node-reach-coverage.js
           node test-issue-1107-live-layout.js
           node test-issue-1532-live-fullscreen.js
           node test-issue-1619-feed-detail-card-draggable.js
@@ -463,6 +465,7 @@ jobs:
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-channels-ws-race-1498-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-issue-1487-byop-modal-layout-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-issue-1630-reach-mobile-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-node-reach-coverage-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-issue-1640-compare-discovery-e2e.js 2>&1 | tee -a e2e-output.txt
 
       # #1616: slide-over focus-restore flake-gate. Runs the slide-over
