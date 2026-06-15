@@ -13,14 +13,18 @@
     "/api/healthz",
     "/api/known-channels",
     "/api/nodes/clock-skew",
+    "/api/nodes/resolve",
     "/api/nodes/{pubkey}/battery",
     "/api/nodes/{pubkey}/clock-skew",
     "/api/nodes/{pubkey}/reach",
+    "/api/nodes/{pubkey}/rx-coverage",
     "/api/observers/clock-skew",
     "/api/paths/inspect",
     "/api/perf/io",
     "/api/perf/sqlite",
     "/api/perf/write-sources",
+    "/api/rx-coverage",
+    "/api/rx-leaderboard",
     "/api/scope-stats",
     "/api/spec"
   ]
