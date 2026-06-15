@@ -271,6 +271,36 @@ func applySchema(db *sql.DB) error {
 		-- the last_seen column exists (#1690) — keep it OUT of this base
 		-- schema block so legacy DBs (table-exists, column-missing) don't
 		-- trip on the CREATE INDEX before the ALTER runs.
+
+		-- Mobile client RX coverage: a roaming companion = a mobile observer
+		-- with a moving GPS position, so it gets its own table rather than
+		-- observations (which assumes a fixed observer/location).
+		CREATE TABLE IF NOT EXISTS client_receptions (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			rx_pubkey     TEXT NOT NULL,
+			heard_key     TEXT NOT NULL,
+			heard_keylen  INTEGER NOT NULL,
+			rssi          INTEGER,
+			snr           REAL,
+			lat           REAL NOT NULL,
+			lon           REAL NOT NULL,
+			pos_acc_m     REAL,
+			rx_at         TEXT NOT NULL,
+			ingested_at   TEXT NOT NULL,
+			src           TEXT NOT NULL,
+			UNIQUE(rx_pubkey, heard_key, rx_at)
+		);
+		CREATE INDEX IF NOT EXISTS idx_client_recept_heard ON client_receptions(heard_key);
+		CREATE INDEX IF NOT EXISTS idx_client_recept_rxpk ON client_receptions(rx_pubkey);
+
+		-- Self-reported name of each mobile client (companion), from the SELF_INFO
+		-- name the app sends as "origin". Lets the leaderboard show a name even
+		-- when the companion never advertised (so it isn't in the nodes table).
+		CREATE TABLE IF NOT EXISTS client_observers (
+			pubkey    TEXT PRIMARY KEY,
+			name      TEXT,
+			last_seen TEXT
+		);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("base schema: %w", err)
@@ -1702,7 +1732,6 @@ func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID,
 
 	return pd
 }
-
 
 // ─── Writer-lock instrumentation (issue #1340) ────────────────────────────
 //
