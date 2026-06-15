@@ -534,9 +534,20 @@
   // ─── Fetch server overrides ───
   window.MeshConfigReady = fetch('/api/config/client').then(function (r) { return r.json(); }).then(function (cfg) {
     window.MC_CLIENT_RX_COVERAGE = cfg.clientRxCoverage === true;
-    if (!window.MC_CLIENT_RX_COVERAGE) {
-      var covNav = document.querySelector('[data-route="rx-coverage"]');
-      if (covNav) covNav.style.display = 'none';
+    // Coverage is opt-in: the nav link is NOT in static HTML (so the default-off
+    // nav matches upstream and the nav-overflow tests). Inject it after Analytics
+    // only when enabled, then nudge applyNavPriority (it re-runs on 'resize').
+    if (window.MC_CLIENT_RX_COVERAGE && !document.querySelector('.nav-links [data-route="rx-coverage"]')) {
+      var navAnchor = document.querySelector('.nav-links [data-route="analytics"]');
+      if (navAnchor) {
+        var covLink = document.createElement('a');
+        covLink.href = '#/rx-coverage';
+        covLink.className = 'nav-link';
+        covLink.setAttribute('data-route', 'rx-coverage');
+        covLink.innerHTML = '<svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-broadcast"></use></svg> Coverage';
+        navAnchor.insertAdjacentElement('afterend', covLink);
+        window.dispatchEvent(new Event('resize'));
+      }
     }
     if (cfg.roles) {
       if (cfg.roles.colors) {
