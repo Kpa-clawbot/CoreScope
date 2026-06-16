@@ -12,6 +12,9 @@
   --nq-cov-grey: #95a5a6;   /* heard, no SNR metric */
 }
 .nq-cov-legend { display:flex; gap:12px; align-items:center; font-size:11px; color:var(--text-muted, #57606a); margin:4px 0 10px; }
+/* Toggled by node-reach.js applyCoverage via class, not inline style, so CSS
+   (print rules, themes) can still override visibility (#19). */
+.nq-cov-legend.is-hidden { display:none !important; }
 .nq-cov-legend i { width:12px; height:12px; border-radius:2px; display:inline-block; margin-right:4px; vertical-align:middle; }
 
 /* Mobile RX coverage hub — leaderboard */

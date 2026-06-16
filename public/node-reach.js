@@ -188,7 +188,7 @@
       '<span id="nqCount" class="nq-count" aria-live="polite"></span>' +
       '<button id="nqPrintBtn" class="btn-primary nq-print-btn">Print / PDF</button>' +
       '</div>' +
-      (window.MC_CLIENT_RX_COVERAGE ? '<div class="nq-cov-legend nq-noprint" id="nqCovLegend" style="display:' + (coverageOn ? 'flex' : 'none') + '">' +
+      (window.MC_CLIENT_RX_COVERAGE ? '<div class="nq-cov-legend nq-noprint' + (coverageOn ? '' : ' is-hidden') + '" id="nqCovLegend">' +
       '<span><i style="background:var(--nq-cov-strong)"></i>strong</span>' +
       '<span><i style="background:var(--nq-cov-mid)"></i>medium</span>' +
       '<span><i style="background:var(--nq-cov-weak)"></i>weak</span>' +
@@ -237,7 +237,7 @@
     // hides the link lines under it (declutter) — the table still lists every link.
     var covLegend = document.getElementById('nqCovLegend');
     function applyCoverage() {
-      if (covLegend) covLegend.style.display = coverageOn ? 'flex' : 'none';
+      if (covLegend) covLegend.classList.toggle('is-hidden', !coverageOn);
       if (coverageOn) {
         if (qmap && window.NodeReachCoverage && !covHandle) covHandle = window.NodeReachCoverage.addLayer(qmap.map, pubkey);
       } else if (covHandle) {

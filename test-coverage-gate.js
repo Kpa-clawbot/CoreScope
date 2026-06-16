@@ -50,6 +50,14 @@ assert.ok(on.includes('id="nqCoverage"'),
 assert.ok(on.includes('id="nqCovLegend"'),
   'flag true: actions HTML MUST contain id="nqCovLegend"');
 
+// #19: the legend visibility is class-driven (.is-hidden), not an inline
+// style="display:..." that CSS can't override. coverageOn is false in this
+// sandbox, so the legend must carry is-hidden and no inline display style.
+assert.ok(/class="nq-cov-legend[^"]*\bis-hidden\b/.test(on),
+  'flag true + coverage off: legend must use the is-hidden class');
+assert.ok(!on.includes('style="display:'),
+  'legend must not use an inline display style (#19)');
+
 // Sanity: the non-gated controls render regardless of the flag.
 assert.ok(off.includes('id="nqIncoming"') && on.includes('id="nqIncoming"'),
   'incoming filter must render irrespective of the coverage flag');
