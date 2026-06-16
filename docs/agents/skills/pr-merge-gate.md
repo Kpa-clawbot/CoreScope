@@ -97,4 +97,4 @@ FAIL if neither red→green pattern nor exemption justification exists.
 4. "CHANGES_REQUESTED but the changes were made" — verify the requestor's resolution, not just the existence of follow-up commits
 
 ## Pattern that earned this skill
-PR #926 was called "MERGE-READY" by a push-to-merge subagent because gh said `MERGEABLE`. Two BLOCKERs sat in review threads from @efiten + the prior bot review, unaddressed. the user caught it: "Open issues from 926 have not been addressed so it's extremely misleading to call it mergeable." Required PR #970 to actually fix. This skill runs the check the subagent skipped.
+PR #926 was called "MERGE-READY" by a push-to-merge subagent because gh said `MERGEABLE`. Two BLOCKERs sat in review threads from an external reviewer + the prior bot review, unaddressed. The maintainer caught it and flagged that open issues from #926 had not been addressed, making "mergeable" extremely misleading. Required PR #970 to actually fix. This skill runs the check the subagent skipped.

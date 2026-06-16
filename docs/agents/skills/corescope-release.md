@@ -16,7 +16,7 @@ End-to-end release for `Kpa-clawbot/CoreScope`. Read every step. Skip none.
 | `v3.8.4` tag name burned by failed `gh release create` (immutable-releases reserved name) (2026-06-12) | §4 |
 | Slideover test flaked all day, treated as noise, blocked release (2026-06-11/12) | §1.5 |
 | Test fix pushed direct-to-master, sat red on master post-release (2026-06-12) | §1.4 |
-| Acks listed from memory missed @EldoonNemar (4 PRs) (2026-06-12) | §2 |
+| Acks listed from memory missed an external contributor (4 PRs) (2026-06-12) | §2 |
 | Earlier tags created by `mc-bot`/`openclaw-bot`; current Kpa-clawbot token couldn't tag without immutability disabled (2026-06-12) | §3.2 |
 
 ## Inputs
