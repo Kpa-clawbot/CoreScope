@@ -2,7 +2,7 @@
 
 A "skill" is a markdown recipe an agent loads on demand for a specialized task. Each file in this directory is a copy of a `SKILL.md` from our local skills library, sanitized of operator-private info.
 
-> **Note:** Some skills below are general-purpose / non-CoreScope (media tools, personal-project helpers). They're listed for completeness — they're available in the same skills library but won't fire on CoreScope work. Skills are agent-stack-agnostic in concept; the specific commands assume an OpenClaw-style runtime, translate as needed.
+Skills are agent-stack-agnostic in concept; the specific commands assume an OpenClaw-style runtime, translate as needed.
 
 ## Core CoreScope pipeline skills
 
@@ -38,18 +38,3 @@ A "skill" is a markdown recipe an agent loads on demand for a specialized task. 
 | Skill | When to use |
 |---|---|
 | [subagent-brief-template](subagent-brief-template.md) | The standard task-brief template — required reading before any sub-agent spawn. See [SUBAGENT-BRIEF-TEMPLATE.md](../SUBAGENT-BRIEF-TEMPLATE.md) at top level for the same content. |
-
-## General-purpose / non-CoreScope (available in the library)
-
-These are unrelated to CoreScope but ship in the same skills library. Listed for completeness:
-
-| Skill | What it does |
-|---|---|
-| [instagram-reel](instagram-reel.md) | Download an Instagram reel/post by URL via yt-dlp. |
-| [instagram-reels-coach](instagram-reels-coach.md) | Evidence-based advice for Instagram Reels strategy. |
-| [photo-slideshow](photo-slideshow.md) | Build a photo slideshow video with music + transitions. |
-| [project-planner](project-planner.md) | Spec/refine a personal project portfolio + budgeting tool. |
-| [softball-scout](softball-scout.md) | Evaluate a softball player against NCSA recruiting benchmarks. |
-| [srt-calibrate](srt-calibrate.md) | Sync/calibrate SRT subtitle timing using Whisper as reference. |
-| [usenet-movie](usenet-movie.md) | End-to-end movie download via NZBgeek + SABnzbd + GDrive. |
-| [video-subtitle](video-subtitle.md) | Add translated subtitles to video clips with optional logo overlay. |
