@@ -2,9 +2,32 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
+
+// TestRequireClientRxCoverageNilSafe verifies the #4 fix: coverage routes are
+// registered unconditionally, so a nil server cfg (or nil *Config receiver)
+// must 404 rather than panic.
+func TestRequireClientRxCoverageNilSafe(t *testing.T) {
+	var nilCfg *Config
+	if nilCfg.ClientRxCoverageEnabled() {
+		t.Fatal("nil *Config must report disabled")
+	}
+	req := func(srv *Server) int {
+		rr := httptest.NewRecorder()
+		srv.handleRxCoverage(rr, httptest.NewRequest("GET", "/api/rx-coverage?bbox=50,3,52,4", nil))
+		return rr.Code
+	}
+	if code := req(&Server{}); code != http.StatusNotFound { // cfg nil → would panic without the guard
+		t.Fatalf("nil cfg: want 404, got %d", code)
+	}
+	if code := req(&Server{cfg: &Config{}}); code != http.StatusNotFound { // feature disabled
+		t.Fatalf("disabled: want 404, got %d", code)
+	}
+}
 
 func insRx(t *testing.T, db *DB, rx, hk, at string, lat, lon float64) {
 	mustExecDB(t, db, fmt.Sprintf(

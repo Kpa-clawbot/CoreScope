@@ -262,9 +262,9 @@ type ClientRxCoverageConfig struct {
 }
 
 // ClientRxCoverageEnabled reports whether the opt-in mobile client-RX coverage
-// feature is on. Absent/nil ⇒ off (the safe default).
+// feature is on. Nil config or absent/nil section ⇒ off (the safe default).
 func (c *Config) ClientRxCoverageEnabled() bool {
-	return c.ClientRxCoverage != nil && c.ClientRxCoverage.Enabled
+	return c != nil && c.ClientRxCoverage != nil && c.ClientRxCoverage.Enabled
 }
 
 // WSCompressionEnabled returns true when WebSocket permessage-deflate is explicitly enabled.

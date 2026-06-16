@@ -114,7 +114,10 @@ func (s *Server) queryCoverageFiltered(node, rx string, days int, b bbox) ([]cov
 // client-RX coverage feature is disabled, so the coverage endpoints read as
 // "not found" instead of serving data on deployments that haven't enabled it.
 func (s *Server) requireClientRxCoverage(w http.ResponseWriter, r *http.Request) bool {
-	if !s.cfg.ClientRxCoverageEnabled() {
+	// Routes are registered unconditionally, so guard against a nil server/cfg
+	// (e.g. handlers exercised in isolation) rather than panicking (#4).
+	// ClientRxCoverageEnabled is itself nil-receiver-safe.
+	if s == nil || s.cfg == nil || !s.cfg.ClientRxCoverageEnabled() {
 		http.NotFound(w, r)
 		return false
 	}
