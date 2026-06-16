@@ -2,6 +2,10 @@ package main
 
 import "testing"
 
+// testCompanionPK is a valid lowercase-hex companion pubkey for coverage tests.
+// The topic segment must be hex (clientPubkeyRe) or handleClientPacket drops it.
+const testCompanionPK = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
+
 // clientCoverageMsg builds a valid mobile client-RX coverage message on the
 // dedicated topic meshcore/client/<pubkey>/packets. The raw hex is a relayed
 // advert with GPS, so handleClientPacket would write exactly one
@@ -10,7 +14,7 @@ import "testing"
 func clientCoverageMsg() *mockMessage {
 	advertHex := "11451000D818206D3AAC152C8A91F89957E6D30CA51F36E28790228971C473B755F244F718754CF5EE4A2FD58D944466E42CDED140C66D0CC590183E32BAF40F112BE8F3F2BDF6012B4B2793C52F1D36F69EE054D9A05593286F78453E56C0EC4A3EB95DDA2A7543FCCC00B939CACC009278603902FC12BCF84B706120526F6F6620536F6C6172"
 	payload := []byte(`{"raw":"` + advertHex + `","direction":"rx","timestamp":"2026-06-09T12:00:00Z","origin":"MyMob","SNR":-7.0,"RSSI":-92.0,"gps":{"lat":51.05,"lon":3.72,"acc_m":8.0}}`)
-	return &mockMessage{topic: "meshcore/client/companionpk/packets", payload: payload}
+	return &mockMessage{topic: "meshcore/client/" + testCompanionPK + "/packets", payload: payload}
 }
 
 func clientReceptionCount(t *testing.T, s *Store) int {

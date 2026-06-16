@@ -110,10 +110,10 @@ func TestHandleClientPacketAdvertWritesReception(t *testing.T) {
 		"RSSI":      -92.0,
 		"gps":       map[string]interface{}{"lat": 51.05, "lon": 3.72, "acc_m": 8.0},
 	}
-	handleClientPacket(s, "test", "companionpk", msg, nil)
+	handleClientPacket(s, "test", testCompanionPK, msg, nil)
 
 	var obsName string
-	s.db.QueryRow(`SELECT name FROM client_observers WHERE pubkey='companionpk'`).Scan(&obsName)
+	s.db.QueryRow(`SELECT name FROM client_observers WHERE pubkey=?`, testCompanionPK).Scan(&obsName)
 	if obsName != "MyMob" {
 		t.Fatalf("expected client_observers name 'MyMob', got %q", obsName)
 	}
@@ -123,7 +123,7 @@ func TestHandleClientPacketAdvertWritesReception(t *testing.T) {
 	// The 0-hop advert→full-pubkey branch is covered by TestDeriveHeardKey.
 	var n, keylen int
 	var src string
-	if err := s.db.QueryRow(`SELECT COUNT(*), COALESCE(MAX(heard_keylen),0), COALESCE(MAX(src),'') FROM client_receptions WHERE rx_pubkey='companionpk'`).Scan(&n, &keylen, &src); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*), COALESCE(MAX(heard_keylen),0), COALESCE(MAX(src),'') FROM client_receptions WHERE rx_pubkey=?`, testCompanionPK).Scan(&n, &keylen, &src); err != nil {
 		t.Fatal(err)
 	}
 	if n != 1 || keylen < 2 || src != "rxlog" {
@@ -131,10 +131,34 @@ func TestHandleClientPacketAdvertWritesReception(t *testing.T) {
 	}
 
 	// No GPS → no row.
-	handleClientPacket(s, "test", "companion2", map[string]interface{}{"raw": advertHex, "direction": "rx"}, nil)
+	const companion2 = "b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3"
+	handleClientPacket(s, "test", companion2, map[string]interface{}{"raw": advertHex, "direction": "rx"}, nil)
 	var n2 int
-	s.db.QueryRow(`SELECT COUNT(*) FROM client_receptions WHERE rx_pubkey='companion2'`).Scan(&n2)
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_receptions WHERE rx_pubkey=?`, companion2).Scan(&n2)
 	if n2 != 0 {
 		t.Fatalf("packet without gps must be dropped, got %d rows", n2)
+	}
+}
+
+// TestHandleClientPacketRejectsNonHexPubkey verifies the #2 fix: a companion
+// pubkey from the topic that isn't lowercase hex (a no-ACL broker could publish
+// meshcore/client/!@#$/packets) writes nothing to either coverage table. Without
+// the clientPubkeyRe guard this fixture would insert a polluting row.
+func TestHandleClientPacketRejectsNonHexPubkey(t *testing.T) {
+	s := newTestStore(t)
+	advertHex := "11451000D818206D3AAC152C8A91F89957E6D30CA51F36E28790228971C473B755F244F718754CF5EE4A2FD58D944466E42CDED140C66D0CC590183E32BAF40F112BE8F3F2BDF6012B4B2793C52F1D36F69EE054D9A05593286F78453E56C0EC4A3EB95DDA2A7543FCCC00B939CACC009278603902FC12BCF84B706120526F6F6620536F6C6172"
+	for _, bad := range []string{"!@#$", "companionpk", "", "g0g0", "xyz"} {
+		msg := map[string]interface{}{
+			"raw": advertHex, "direction": "rx", "timestamp": "2026-06-09T12:00:00Z",
+			"origin": "Spoof", "SNR": -7.0, "RSSI": -92.0,
+			"gps": map[string]interface{}{"lat": 51.05, "lon": 3.72, "acc_m": 8.0},
+		}
+		handleClientPacket(s, "test", bad, msg, nil)
+	}
+	var nRecept, nObs int
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_receptions`).Scan(&nRecept)
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_observers`).Scan(&nObs)
+	if nRecept != 0 || nObs != 0 {
+		t.Fatalf("non-hex pubkey must write nothing, got %d receptions, %d observers", nRecept, nObs)
 	}
 }

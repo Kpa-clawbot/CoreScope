@@ -2,11 +2,19 @@ package main
 
 import (
 	"log"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/meshcore-analyzer/packetpath"
 )
+
+// clientPubkeyRe validates the companion pubkey taken from the MQTT topic
+// (meshcore/client/<PUBLIC_KEY>/packets). A no-ACL broker would let a client
+// publish under an arbitrary topic segment (e.g. "!@#$"), so we reject anything
+// that is not lowercase hex before it reaches client_receptions/client_observers.
+// Mirrors the server-side hexPrefixRe (cmd/server/node_resolve.go).
+var clientPubkeyRe = regexp.MustCompile(`^[0-9a-f]{2,64}$`)
 
 // handleClientPacket processes a packet from the mobile client RX topic
 // (meshcore/client/{PUBLIC_KEY}/packets). Unlike observer packets, a roaming
@@ -14,6 +22,15 @@ import (
 // client_receptions row and never touch the observers/observations tables.
 // rxPubkey is the companion pubkey from the topic (ACL-bound by the broker).
 func handleClientPacket(store *Store, tag, rxPubkey string, msg map[string]interface{}, channelKeys map[string]string) {
+	// The companion identity IS the (ACL-bound) topic pubkey. Reject non-hex
+	// topic segments so a no-ACL broker can't pollute the coverage tables, and
+	// never fall back to a payload-supplied id (that would defeat the ACL trust
+	// model — see docs/client-rx-coverage.md).
+	rxPubkey = strings.ToLower(strings.TrimSpace(rxPubkey))
+	if !clientPubkeyRe.MatchString(rxPubkey) {
+		log.Printf("MQTT [%s] client: invalid pubkey %.8q, dropping", tag, rxPubkey)
+		return
+	}
 	rawHex, _ := msg["raw"].(string)
 	if rawHex == "" {
 		return
@@ -59,7 +76,7 @@ func handleClientPacket(store *Store, tag, rxPubkey string, msg map[string]inter
 	isAdvert := decoded.Header.PayloadTypeName == "ADVERT"
 
 	rec, ok := buildClientReception(
-		firstNonEmpty(rxPubkey, stringField(msg, "origin_id")),
+		rxPubkey,
 		direction, decoded.Header.RouteType, decoded.Path.Hops, decoded.Payload.PubKey, isAdvert,
 		snrPtr, rssiPtr, lat, lon, accPtr, rxAt, time.Now().UTC().Format(time.RFC3339),
 	)
