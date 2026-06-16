@@ -74,6 +74,11 @@ func TestRxCoverageEndpointGeoJSON(t *testing.T) {
 	if fc.Type != "FeatureCollection" || len(fc.Features) != 1 {
 		t.Fatalf("unexpected fc: %+v", fc)
 	}
+	// #3: the per-node response carries the node-wide mobile totals (wired in
+	// from mobileRxStats). One reception from one companion → 1/1.
+	if fc.MobileReceptions != 1 || fc.MobileClients != 1 {
+		t.Fatalf("want mobile_receptions=1 mobile_clients=1, got %d/%d", fc.MobileReceptions, fc.MobileClients)
+	}
 	if serveRxCoverage(srv, "/api/nodes/aabbcc/rx-coverage").Code != 400 {
 		t.Fatal("missing bbox should be 400")
 	}

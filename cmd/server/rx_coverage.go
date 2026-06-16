@@ -36,6 +36,11 @@ type CoverageFeatureCollection struct {
 	Type      string            `json:"type"` // "FeatureCollection"
 	Features  []CoverageFeature `json:"features"`
 	Truncated bool              `json:"truncated,omitempty"`
+	// Per-node summary (set only by the per-node endpoint): total mobile-client
+	// receptions of this node and how many distinct companions heard it. Foreign
+	// members, omitempty so the global endpoint's payload is unchanged (#3).
+	MobileReceptions int `json:"mobile_receptions,omitempty"`
+	MobileClients    int `json:"mobile_clients,omitempty"`
 }
 type CoverageFeature struct {
 	Type       string             `json:"type"` // "Feature"
@@ -303,6 +308,10 @@ func (s *Server) handleNodeRxCoverage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fc := aggregateCoverage(rows, zoomToHexRes(z), s.heardKeyResolver())
+	// Attach the node-wide reception/contributor totals (#3): the bbox limits the
+	// hex features to the current view, but these summarise all of this node's
+	// mobile coverage so the UI can show "heard by N clients" regardless of pan.
+	fc.MobileReceptions, fc.MobileClients = s.mobileRxStats(pubkey)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(fc)
 }
