@@ -34,55 +34,115 @@ func scanCoverageRows(rows *sql.Rows) ([]coverageRow, error) {
 	return out, rows.Err()
 }
 
-// heardKeyResolver returns a request-scoped, memoized nodeResolver. It maps a heard_key
-// to (pubkey, name) on a unique match — so the same node heard under different prefix
-// lengths collapses into one entry — and to (heardKey, "") when unknown or ambiguous.
-func (s *Server) heardKeyResolver() nodeResolver {
+// heardKeyResolverFor builds a nodeResolver for exactly the distinct heard_keys
+// present in rows, resolving them all in one batched query instead of one query
+// per key (the previous per-key resolver was N+1 on the read connection). Maps a
+// heard_key to (pubkey, name) on a unique, non-hidden match; to (heardKey, "")
+// otherwise. nil when there's no DB.
+func (s *Server) heardKeyResolverFor(rows []coverageRow) nodeResolver {
 	if s.db == nil || s.db.conn == nil {
 		return nil
 	}
-	type kv struct{ key, name string }
-	cache := map[string]kv{}
-	return func(heardKey string) (string, string) {
-		if v, ok := cache[heardKey]; ok {
-			return v.key, v.name
+	keys := make([]string, 0, len(rows))
+	seen := map[string]bool{}
+	for _, r := range rows {
+		if r.HeardKey != "" && !seen[r.HeardKey] {
+			seen[r.HeardKey] = true
+			keys = append(keys, r.HeardKey)
 		}
-		key, name := s.resolveHeardKey(heardKey)
-		cache[heardKey] = kv{key, name}
-		return key, name
+	}
+	resolved := s.batchResolveHeardKeys(keys)
+	return func(heardKey string) (string, string) {
+		if v, ok := resolved[heardKey]; ok {
+			return v[0], v[1]
+		}
+		return heardKey, ""
 	}
 }
 
-// resolveHeardKey resolves a heard_key (2-3 byte prefix or full pubkey) to a canonical
-// (pubkey, name) on a unique match. Unknown or ambiguous (>1 match) keys return the
-// heard_key itself with an empty name. LIMIT 2 is enough to tell unique from ambiguous.
+// batchResolveHeardKeys resolves many heard_keys (2-3 byte prefixes or full
+// pubkeys) to their canonical (pubkey, name) in a single round-trip per chunk: a
+// UNION ALL of one LIMIT-2 prefix lookup each, so per-key work stays bounded
+// (2 rows) and the whole set costs one query, not N. A unique match returns
+// [pubkey, name]; unknown / ambiguous / blacklisted / hidden-prefix keys (#15,
+// #1181) return [heardKey, ""].
+func (s *Server) batchResolveHeardKeys(keys []string) map[string][2]string {
+	res := make(map[string][2]string, len(keys))
+	valid := make([]string, 0, len(keys))
+	seen := map[string]bool{}
+	for _, k := range keys {
+		if k == "" || seen[k] {
+			continue
+		}
+		seen[k] = true
+		if !hexPrefixRe.MatchString(k) {
+			res[k] = [2]string{k, ""}
+			continue
+		}
+		valid = append(valid, k)
+	}
+	// SQLITE_MAX_COMPOUND_SELECT is 500 by default; chunk well under it.
+	const chunk = 200
+	for i := 0; i < len(valid); i += chunk {
+		end := i + chunk
+		if end > len(valid) {
+			end = len(valid)
+		}
+		batch := valid[i:end]
+		parts := make([]string, len(batch))
+		for j, k := range batch {
+			// k is hexPrefixRe-validated ([0-9a-f] only), so literal interpolation
+			// is injection-safe. The per-prefix LIMIT 2 lives in a subquery because
+			// a bare LIMIT on a UNION ALL term is a SQLite syntax error.
+			parts[j] = "SELECT * FROM (SELECT '" + k + "' AS pfx, public_key, COALESCE(name,'') AS nm FROM nodes WHERE public_key LIKE '" + k + "%' LIMIT 2)"
+		}
+		rows, err := s.db.conn.Query(strings.Join(parts, " UNION ALL "))
+		if err != nil {
+			for _, k := range batch {
+				res[k] = [2]string{k, ""}
+			}
+			continue
+		}
+		type agg struct {
+			pk, name string
+			cnt      int
+		}
+		acc := map[string]*agg{}
+		for rows.Next() {
+			var pfx, pk, nm string
+			if err := rows.Scan(&pfx, &pk, &nm); err != nil {
+				continue
+			}
+			a := acc[pfx]
+			if a == nil {
+				a = &agg{}
+				acc[pfx] = a
+			}
+			a.cnt++
+			a.pk, a.name = pk, nm
+		}
+		rows.Close()
+		for _, k := range batch {
+			a := acc[k]
+			if a != nil && a.cnt == 1 && !s.cfg.IsBlacklisted(a.pk) && !s.cfg.IsNameHidden(a.name) {
+				res[k] = [2]string{a.pk, a.name}
+			} else {
+				res[k] = [2]string{k, ""}
+			}
+		}
+	}
+	return res
+}
+
+// resolveHeardKey resolves a single heard_key (2-3 byte prefix or full pubkey)
+// to its canonical (pubkey, name), or (heardKey, "") when unknown / ambiguous /
+// hidden. Thin wrapper over batchResolveHeardKeys so there is one code path.
 func (s *Server) resolveHeardKey(heardKey string) (string, string) {
-	if heardKey == "" || !hexPrefixRe.MatchString(heardKey) {
-		return heardKey, ""
+	v := s.batchResolveHeardKeys([]string{heardKey})[heardKey]
+	if v[0] == "" && v[1] == "" {
+		return heardKey, "" // empty/unresolved → echo the key
 	}
-	rows, err := s.db.conn.Query(`SELECT public_key, COALESCE(name,'') FROM nodes WHERE public_key LIKE ? LIMIT 2`, heardKey+"%")
-	if err != nil {
-		return heardKey, ""
-	}
-	defer rows.Close()
-	var pks, names []string
-	for rows.Next() {
-		var pk, n string
-		if err := rows.Scan(&pk, &n); err != nil {
-			return heardKey, ""
-		}
-		pks = append(pks, pk)
-		names = append(names, n)
-	}
-	if len(pks) == 1 {
-		// Same identity-hiding parity as /api/nodes/resolve (#15, #1181): don't
-		// surface a blacklisted or hidden-prefix node's name in coverage tooltips.
-		if s.cfg.IsBlacklisted(pks[0]) || s.cfg.IsNameHidden(names[0]) {
-			return heardKey, ""
-		}
-		return pks[0], names[0]
-	}
-	return heardKey, ""
+	return v[0], v[1]
 }
 
 // queryCoverageFiltered returns coverage rows within a bbox, optionally filtered
@@ -153,7 +213,7 @@ func (s *Server) handleRxCoverage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
 	}
-	fc := aggregateCoverage(rows, zoomToHexRes(z), s.heardKeyResolver())
+	fc := aggregateCoverage(rows, zoomToHexRes(z), s.heardKeyResolverFor(rows))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(fc)
 }

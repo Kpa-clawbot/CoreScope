@@ -90,6 +90,30 @@ func TestRxLeaderboard(t *testing.T) {
 	}
 }
 
+// TestBatchResolveHeardKeys verifies the N+1 fix: many heard_keys resolve in one
+// batched call with the same unique/ambiguous/unknown/hidden semantics as the
+// single-key path.
+func TestBatchResolveHeardKeys(t *testing.T) {
+	db := setupTestDBv2(t)
+	mustExecDB(t, db, `INSERT INTO nodes (public_key,name,role) VALUES ('aabbccdd11223344','Alice','repeater')`)
+	mustExecDB(t, db, `INSERT INTO nodes (public_key,name,role) VALUES ('aabbcc99887766aa','Bob','repeater')`)
+	mustExecDB(t, db, `INSERT INTO nodes (public_key,name,role) VALUES ('ddee110000000000','🚫Hidden','repeater')`)
+	srv := &Server{db: db, cfg: &Config{HiddenNamePrefixes: []string{"🚫"}}}
+
+	got := srv.batchResolveHeardKeys([]string{"aabbccdd", "aabbcc", "ffff", "ddee11", "aabbccdd"})
+	cases := map[string][2]string{
+		"aabbccdd": {"aabbccdd11223344", "Alice"}, // unique
+		"aabbcc":   {"aabbcc", ""},                // ambiguous (Alice + Bob)
+		"ffff":     {"ffff", ""},                  // unknown
+		"ddee11":   {"ddee11", ""},                // unique but hidden-prefix → not surfaced
+	}
+	for k, want := range cases {
+		if got[k] != want {
+			t.Errorf("batchResolveHeardKeys[%q] = %v, want %v", k, got[k], want)
+		}
+	}
+}
+
 // TestRxLeaderboardHidesBlacklistedAndHidden verifies #1727 r2 must-fix #2: the
 // leaderboard must drop observer-blacklisted contributors and blank the name of
 // node-blacklisted or hidden-prefix identities (pre-PR / post-blacklist rows).

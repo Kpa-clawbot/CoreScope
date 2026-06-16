@@ -360,7 +360,7 @@ func (s *Server) handleNodeRxCoverage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
 	}
-	fc := aggregateCoverage(rows, zoomToHexRes(z), s.heardKeyResolver())
+	fc := aggregateCoverage(rows, zoomToHexRes(z), s.heardKeyResolverFor(rows))
 	// Attach the node-wide reception/contributor totals (#3): the bbox limits the
 	// hex features to the current view, but these summarise all of this node's
 	// mobile coverage so the UI can show "heard by N clients" regardless of pan.
