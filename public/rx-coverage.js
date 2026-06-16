@@ -84,8 +84,8 @@
     if (!el) return;
     if (!boardCache.length) { el.innerHTML = '<div class="muted" style="color:var(--text-muted);font-size:13px">No mobile observers in this window yet.</div>'; return; }
     var rows = boardCache.map(function (o, i) {
-      var nm = o.name ? escapeHtml(o.name) : (o.pubkey.slice(0, 10) + '…');
-      return '<div class="rxb-row' + (o.pubkey === selectedRx ? ' sel' : '') + '" data-rx="' + o.pubkey + '" data-name="' + escapeHtml(o.name || '') + '">' +
+      var nm = o.name ? escapeHtml(o.name) : (escapeHtml(o.pubkey.slice(0, 10)) + '…');
+      return '<div class="rxb-row' + (o.pubkey === selectedRx ? ' sel' : '') + '" data-rx="' + escapeHtml(o.pubkey) + '" data-name="' + escapeHtml(o.name || '') + '">' +
         '<span class="rxb-rank">' + (i + 1) + '</span><span class="rxb-name">' + nm + '</span>' +
         '<span class="rxb-rec">' + o.receptions + '</span><span class="rxb-nodes">' + o.nodes + '</span></div>';
     }).join('');
