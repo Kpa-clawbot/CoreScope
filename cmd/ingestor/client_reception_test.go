@@ -36,6 +36,39 @@ func TestClientReceptionsTableExists(t *testing.T) {
 func crF(f float64) *float64 { return &f }
 func crI(i int) *int         { return &i }
 
+// TestClientReceptionsCoverageQueryUsesIndex verifies #5/#18: the dominant
+// coverage query (bbox + full-key/prefix match) is served by an index rather
+// than a full table scan. Without idx_client_recept_latlon / _heard_geo the plan
+// is "SCAN client_receptions".
+func TestClientReceptionsCoverageQueryUsesIndex(t *testing.T) {
+	s := newTestStore(t)
+	q := `EXPLAIN QUERY PLAN SELECT lat, lon, snr, rssi, heard_key, rx_at
+		FROM client_receptions
+		WHERE lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?
+		  AND ( (heard_keylen = 32 AND heard_key = ?)
+		     OR (heard_keylen IN (2,3) AND substr(?, 1, heard_keylen*2) = heard_key) )`
+	rows, err := s.db.Query(q, 50.0, 52.0, 3.0, 4.0, "aabb", "aabb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	plan := ""
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan += detail + "\n"
+	}
+	if !strings.Contains(plan, "USING INDEX idx_client_recept") {
+		t.Fatalf("coverage query should use a client_recept index, plan was:\n%s", plan)
+	}
+	if strings.Contains(plan, "SCAN client_receptions") {
+		t.Fatalf("coverage query should not full-scan, plan was:\n%s", plan)
+	}
+}
+
 func TestDeriveHeardKey(t *testing.T) {
 	full := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 	k, l, src, ok := deriveHeardKey("rx", packetpath.RouteFlood, nil, strings.ToUpper(full), true)

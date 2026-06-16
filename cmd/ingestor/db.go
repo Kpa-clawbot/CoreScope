@@ -290,7 +290,14 @@ func applySchema(db *sql.DB) error {
 			src           TEXT NOT NULL,
 			UNIQUE(rx_pubkey, heard_key, rx_at)
 		);
-		CREATE INDEX IF NOT EXISTS idx_client_recept_heard ON client_receptions(heard_key);
+		-- Coverage queries filter by bbox AND match the heard node either by full
+		-- key (heard_keylen=32 AND heard_key=?) or by 2-3 byte prefix. The composite
+		-- (heard_key, heard_keylen, lat, lon) serves the heard_key-equality seek and
+		-- carries lat/lon so the bbox range is satisfied from the index; it also
+		-- supersedes the old single-column heard_key index. idx_client_recept_latlon
+		-- lets the planner instead drive from a selective bbox. (#5, #18)
+		CREATE INDEX IF NOT EXISTS idx_client_recept_heard_geo ON client_receptions(heard_key, heard_keylen, lat, lon);
+		CREATE INDEX IF NOT EXISTS idx_client_recept_latlon ON client_receptions(lat, lon);
 		CREATE INDEX IF NOT EXISTS idx_client_recept_rxpk ON client_receptions(rx_pubkey);
 
 		-- Self-reported name of each mobile client (companion), from the SELF_INFO
