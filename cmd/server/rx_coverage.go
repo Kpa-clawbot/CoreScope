@@ -58,13 +58,16 @@ type covAgg struct {
 
 // covNodeAgg tracks, per directly-heard node within a cell, its reception count and
 // the SNR of its most recent reception (by rx_at). name/prefix are the resolved node
-// name (when known) and a display prefix fallback.
+// name (when known) and a display prefix fallback. nameKeyLen records the heard_key
+// length that set the current name, so the chosen identity is the most specific one
+// regardless of row order (#20).
 type covNodeAgg struct {
-	count     int
-	latestAt  string
-	latestSNR *float64
-	name      string
-	prefix    string
+	count      int
+	latestAt   string
+	latestSNR  *float64
+	name       string
+	nameKeyLen int
+	prefix     string
 }
 
 // nodeResolver maps a heard_key (2-3 byte prefix or full pubkey) to a canonical
@@ -105,11 +108,23 @@ func aggregateCoverage(rows []coverageRow, res int, resolve nodeResolver) Covera
 			}
 			na := a.nodes[key]
 			if na == nil {
-				na = &covNodeAgg{prefix: row.HeardKey, name: name}
+				na = &covNodeAgg{prefix: row.HeardKey}
 				a.nodes[key] = na
 			}
-			if name != "" {
+			// Lock the display identity to the MOST SPECIFIC (longest) heard_key
+			// that resolved to a non-empty name, tie-broken lexicographically, so
+			// the name no longer flaps with row/map order (#20). A full-pubkey
+			// reception thus outranks a short-prefix one for the same node.
+			if name != "" && (na.name == "" || len(row.HeardKey) > na.nameKeyLen ||
+				(len(row.HeardKey) == na.nameKeyLen && name < na.name)) {
 				na.name = name
+				na.nameKeyLen = len(row.HeardKey)
+			}
+			// Display-prefix fallback (shown when name is empty): same precedence so
+			// it is also order-independent.
+			if len(row.HeardKey) > len(na.prefix) ||
+				(len(row.HeardKey) == len(na.prefix) && row.HeardKey < na.prefix) {
+				na.prefix = row.HeardKey
 			}
 			na.count++
 			// rx_at is RFC3339, so lexical >= is chronological; keep the latest SNR.
@@ -134,6 +149,11 @@ func aggregateCoverage(rows []coverageRow, res int, resolve nodeResolver) Covera
 			},
 		})
 	}
+	// Map iteration is randomized, so sort features by cell for a deterministic
+	// payload — stable ETag/caching and a non-flaky "first feature" in e2e (#8).
+	sort.Slice(fc.Features, func(i, j int) bool {
+		return fc.Features[i].Properties.Cell < fc.Features[j].Properties.Cell
+	})
 	return fc
 }
 

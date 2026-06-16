@@ -113,6 +113,54 @@ func TestAggregateCoverageMergesResolvedNodes(t *testing.T) {
 	}
 }
 
+// TestAggregateCoverageDeterministicFeatureOrder verifies #8: features come out
+// sorted by cell regardless of Go's randomized map iteration, so the GeoJSON is
+// stable (cacheable / non-flaky e2e).
+func TestAggregateCoverageDeterministicFeatureOrder(t *testing.T) {
+	rows := []coverageRow{
+		{Lat: 51.0, Lon: 3.0, SNR: covF(-5)},
+		{Lat: 48.0, Lon: 2.0, SNR: covF(-5)},
+		{Lat: 52.0, Lon: 4.0, SNR: covF(-5)},
+		{Lat: 40.0, Lon: -3.0, SNR: covF(-5)},
+	}
+	fc := aggregateCoverage(rows, 9, nil)
+	if len(fc.Features) < 2 {
+		t.Fatalf("expected multiple cells, got %d", len(fc.Features))
+	}
+	for i := 1; i < len(fc.Features); i++ {
+		if fc.Features[i-1].Properties.Cell > fc.Features[i].Properties.Cell {
+			t.Fatalf("features not sorted by cell at %d: %q > %q", i,
+				fc.Features[i-1].Properties.Cell, fc.Features[i].Properties.Cell)
+		}
+	}
+}
+
+// TestAggregateCoverageNamePrecedenceOrderIndependent verifies #20: when two
+// heard_keys resolve to the same node but the resolver returns different display
+// names, the most specific (longest) heard_key wins regardless of row order, so
+// the name no longer depends on map/row iteration.
+func TestAggregateCoverageNamePrecedenceOrderIndependent(t *testing.T) {
+	resolve := func(hk string) (string, string) {
+		if hk == "aabbccdd11223344" {
+			return "aabbccdd11223344", "Alice"
+		}
+		return "aabbccdd11223344", "AliceShortPrefix"
+	}
+	full := coverageRow{Lat: 51.05, Lon: 3.72, SNR: covF(-5), HeardKey: "aabbccdd11223344", RxAt: "2026-06-01T10:00:00Z"}
+	prefix := coverageRow{Lat: 51.05, Lon: 3.72, SNR: covF(-6), HeardKey: "aabbcc", RxAt: "2026-06-02T10:00:00Z"}
+
+	for _, order := range [][]coverageRow{{full, prefix}, {prefix, full}} {
+		fc := aggregateCoverage(order, 9, resolve)
+		nodes := fc.Features[0].Properties.Nodes
+		if len(nodes) != 1 {
+			t.Fatalf("expected 1 merged node, got %d (%+v)", len(nodes), nodes)
+		}
+		if nodes[0].Name != "Alice" {
+			t.Fatalf("name precedence flapped with row order: got %q, want Alice", nodes[0].Name)
+		}
+	}
+}
+
 func TestZoomToHexRes(t *testing.T) {
 	// Resolution tracks zoom 1:1 within [3,18], clamped at the edges (z=0 is the
 	// missing-param case).
