@@ -11,7 +11,8 @@
     "nodeDays": 7,
     "observerDays": 14,
     "packetDays": 30,
-    "_comment": "nodeDays: nodes not seen in N days moved to inactive_nodes (default 7). observerDays: observers not sending data in N days are removed (-1 = keep forever, default 14). packetDays: transmissions older than N days are deleted (0 = disabled). NOTE (#1283): all four retention fields are consumed by the INGESTOR process. The server is read-only and never prunes."
+    "clientRxDays": 30,
+    "_comment": "nodeDays: nodes not seen in N days moved to inactive_nodes (default 7). observerDays: observers not sending data in N days are removed (-1 = keep forever, default 14). packetDays: transmissions older than N days are deleted (0 = disabled). clientRxDays: mobile client-RX coverage rows (client_receptions/client_observers) older than N days are deleted (0 = disabled) — bounds the opt-in coverage tables (#1727). NOTE (#1283): all retention fields are consumed by the INGESTOR process. The server is read-only and never prunes."
   },
   "db": {
     "vacuumOnStartup": false,

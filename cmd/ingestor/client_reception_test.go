@@ -4,9 +4,46 @@ import (
 	"database/sql"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/meshcore-analyzer/packetpath"
 )
+
+// TestPruneOldClientReceptions verifies the retention reaper bounds the coverage
+// tables: rows older than the window (and stale companion names) are deleted,
+// recent ones kept, and days=0 disables it.
+func TestPruneOldClientReceptions(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now().UTC()
+	recent := now.AddDate(0, 0, -1).Format(time.RFC3339)
+	old := now.AddDate(0, 0, -40).Format(time.RFC3339)
+	const companion2 = "b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3"
+
+	s.InsertClientReception(&ClientReception{RxPubkey: testCompanionPK, HeardKey: "aabbcc", HeardKeyLen: 3, Lat: 51, Lon: 3.7, RxAt: recent, IngestedAt: "x", Src: "rxlog"})
+	s.InsertClientReception(&ClientReception{RxPubkey: testCompanionPK, HeardKey: "aabbcc", HeardKeyLen: 3, Lat: 51, Lon: 3.7, RxAt: old, IngestedAt: "x", Src: "rxlog"})
+	s.UpsertClientObserver(testCompanionPK, "Fresh", recent)
+	s.UpsertClientObserver(companion2, "Stale", old)
+
+	if n, _ := s.PruneOldClientReceptions(0); n != 0 {
+		t.Fatalf("days=0 must be a no-op, got %d", n)
+	}
+	n, err := s.PruneOldClientReceptions(7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 old reception pruned, got %d", n)
+	}
+	var recN, obsN int
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_receptions`).Scan(&recN)
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_observers`).Scan(&obsN)
+	if recN != 1 {
+		t.Fatalf("expected 1 reception remaining (recent), got %d", recN)
+	}
+	if obsN != 1 {
+		t.Fatalf("expected 1 observer remaining (fresh), got %d", obsN)
+	}
+}
 
 func TestClientReceptionsTableExists(t *testing.T) {
 	s := newTestStore(t)

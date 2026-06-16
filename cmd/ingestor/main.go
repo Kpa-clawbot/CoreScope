@@ -273,6 +273,18 @@ func main() {
 		}
 	}
 
+	// Client-RX coverage retention: bound the opt-in coverage tables (#1727).
+	// Independent of the feature flag, so data persists are reaped even after
+	// the feature is turned off. 0 = disabled.
+	clientRxDays := cfg.ClientRxDaysOrZero()
+	if clientRxDays > 0 {
+		if n, err := store.PruneOldClientReceptions(clientRxDays); err != nil {
+			log.Printf("[prune] error: %v", err)
+		} else if n > 0 {
+			log.Printf("[prune] startup pruned %d client_receptions older than %d days", n, clientRxDays)
+		}
+	}
+
 	vacuumPages := cfg.IncrementalVacuumPages()
 	store.RunIncrementalVacuum(vacuumPages)
 
@@ -333,6 +345,21 @@ func main() {
 			}
 		}()
 		log.Printf("[prune] auto-prune enabled: packets older than %d days will be removed daily", packetDays)
+	}
+
+	// Daily ticker for client-RX coverage retention (#1727).
+	if clientRxDays > 0 {
+		clientRxRetentionTicker := time.NewTicker(24 * time.Hour)
+		go func() {
+			for range clientRxRetentionTicker.C {
+				if n, err := store.PruneOldClientReceptions(clientRxDays); err != nil {
+					log.Printf("[prune] error: %v", err)
+				} else if n > 0 {
+					store.RunIncrementalVacuum(vacuumPages)
+				}
+			}
+		}()
+		log.Printf("[prune] auto-prune enabled: client_receptions older than %d days will be removed daily", clientRxDays)
 	}
 
 	// Hourly WAL checkpoint to prevent unbounded WAL growth.
