@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"strings"
 	"testing"
 
@@ -98,7 +99,7 @@ func TestInsertClientReceptionRoundTripAndIdempotent(t *testing.T) {
 	}
 }
 
-func TestHandleClientPacketAdvertWritesReception(t *testing.T) {
+func TestHandleClientPacketRelayedAdvertWritesReception(t *testing.T) {
 	s := newTestStore(t)
 	advertHex := "11451000D818206D3AAC152C8A91F89957E6D30CA51F36E28790228971C473B755F244F718754CF5EE4A2FD58D944466E42CDED140C66D0CC590183E32BAF40F112BE8F3F2BDF6012B4B2793C52F1D36F69EE054D9A05593286F78453E56C0EC4A3EB95DDA2A7543FCCC00B939CACC009278603902FC12BCF84B706120526F6F6620536F6C6172"
 	msg := map[string]interface{}{
@@ -137,6 +138,43 @@ func TestHandleClientPacketAdvertWritesReception(t *testing.T) {
 	s.db.QueryRow(`SELECT COUNT(*) FROM client_receptions WHERE rx_pubkey=?`, companion2).Scan(&n2)
 	if n2 != 0 {
 		t.Fatalf("packet without gps must be dropped, got %d rows", n2)
+	}
+}
+
+// TestHandleClientPacketZeroHopAdvertWritesReception covers the #9 gap: the
+// advert fixture used above is a RELAYED advert (non-empty path), so it exercises
+// the rxlog last-hop branch, not the 0-hop src='advert' branch. Here we rebuild
+// the same advert with zero hops — header (FLOOD ADVERT) + "00" (0 hops) + the
+// same advert payload — so handleClientPacket stores the advertiser by its full
+// pubkey with src='advert', and we assert gps/snr were captured too.
+func TestHandleClientPacketZeroHopAdvertWritesReception(t *testing.T) {
+	s := newTestStore(t)
+	relayed := "11451000D818206D3AAC152C8A91F89957E6D30CA51F36E28790228971C473B755F244F718754CF5EE4A2FD58D944466E42CDED140C66D0CC590183E32BAF40F112BE8F3F2BDF6012B4B2793C52F1D36F69EE054D9A05593286F78453E56C0EC4A3EB95DDA2A7543FCCC00B939CACC009278603902FC12BCF84B706120526F6F6620536F6C6172"
+	// relayed = header(2) + path-descriptor(2) + 5*2-byte hops(20) + payload.
+	payload := relayed[24:]
+	zeroHop := "1100" + payload
+	advertPubkey := strings.ToLower(payload[:64]) // advert payload starts with the 32-byte pubkey
+
+	msg := map[string]interface{}{
+		"raw": zeroHop, "direction": "rx", "timestamp": "2026-06-09T12:00:00Z",
+		"origin": "MyMob", "SNR": -7.0, "RSSI": -92.0,
+		"gps": map[string]interface{}{"lat": 51.05, "lon": 3.72, "acc_m": 8.0},
+	}
+	handleClientPacket(s, "test", testCompanionPK, msg, nil)
+
+	var heardKey, src string
+	var keylen int
+	var snr sql.NullFloat64
+	var lat, lon float64
+	if err := s.db.QueryRow(`SELECT heard_key, heard_keylen, src, snr, lat, lon FROM client_receptions WHERE rx_pubkey=?`, testCompanionPK).
+		Scan(&heardKey, &keylen, &src, &snr, &lat, &lon); err != nil {
+		t.Fatalf("expected a 0-hop advert reception: %v", err)
+	}
+	if src != "advert" || keylen != 32 || heardKey != advertPubkey {
+		t.Fatalf("0-hop advert: want advert/32/%s, got %s/%d/%s", advertPubkey, src, keylen, heardKey)
+	}
+	if !snr.Valid || snr.Float64 != -7 || lat != 51.05 || lon != 3.72 {
+		t.Fatalf("gps/snr not captured: snr=%v lat=%f lon=%f", snr, lat, lon)
 	}
 }
 
