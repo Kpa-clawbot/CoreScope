@@ -93,10 +93,20 @@ func runTxLastSeenBackfillChunked(ctx context.Context, db *sql.DB, opts TxLastSe
 	// backfillWg. New rows are already maintained inline by
 	// InsertTransmission's last_seen bumper (#1690 writer path), so
 	// the backfill explicitly does NOT need to catch them.
+	//
+	// Errors here must propagate: silently swallowing them sets maxID=0,
+	// which makes the WHERE `id <= ?` match nothing and the loop returns
+	// "0 rows processed, success" without ever running — a real
+	// backfill failure would look identical to a clean DB and the
+	// migration would be marked done.
 	var maxID int64
-	_ = db.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM transmissions`).Scan(&maxID)
+	if err := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM transmissions`).Scan(&maxID); err != nil {
+		return 0, err
+	}
 	var total int64
-	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM transmissions WHERE last_seen = 0 AND id <= ?`, maxID).Scan(&total)
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM transmissions WHERE last_seen = 0 AND id <= ?`, maxID).Scan(&total); err != nil {
+		return 0, err
+	}
 
 	start := time.Now()
 	var processed int64
