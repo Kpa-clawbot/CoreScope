@@ -29,7 +29,8 @@ Coverage is **off by default**. To turn it on:
    [Storage](#storage--client_receptions-ingestor-owned)).
 4. Point your users at [corescope-rx](https://github.com/efiten/corescope-rx) and they start
    contributing. Results show on each node's Reach page (coverage toggle) and the `#/rx-coverage`
-   dashboard.
+   dashboard. **Warn them first that their contribution is world-readable and a per-observer view can
+   reconstruct their movements — see [Privacy](#privacy--contributor-location-is-public).**
 
 The rest of this document is the MQTT payload contract the companion app implements.
 
@@ -176,6 +177,29 @@ Server/ingestor-side defense-in-depth (these reduce blast radius but do **not** 
 - The frontend HTML-escapes the pubkey it renders, so a junk pubkey can't inject markup (#14).
 - `/api/nodes/resolve` and coverage tooltips never reveal blacklisted or hidden-prefix node identities
   (#15).
+
+## Privacy — contributor location is public
+
+⚠️ **Enabling coverage publishes contributors' GPS-tagged receptions, and the per-observer view can
+reconstruct a contributor's movements.** The hex map is read without authentication. The leaderboard
+exposes each companion's pubkey, and clicking one filters the map to that single companion
+(`/api/rx-coverage?rx=<pubkey>`); at high zoom over the retention window this is effectively a public
+movement trail (home / work / commute) of whoever carries that companion. **A pseudonymous companion
+name does not mitigate this** — the *locations themselves* are identifying (overnight clustering = home),
+and all of one contributor's points are linked by the pubkey.
+
+This is an accepted tradeoff of the feature, not a bug: fine resolution is what makes the aggregate
+coverage map useful, the feature is opt-in and OFF by default, and contributors choose to run the
+companion. But the consent must be **informed**:
+
+- **Operators:** tell your users, before they contribute, that their coverage (including a per-observer
+  view of their own track) is world-readable for as long as `retention.clientRxDays` keeps it.
+- **Contributors:** do not contribute from a device you carry on your person if a public record of where
+  you have been is a concern. Use a dedicated/stationary node, or accept that the trail is public.
+
+Operators who want to harden this further can lower `retention.clientRxDays`, run the dashboard behind
+their own auth/proxy, or (future hardening) coarsen stored coordinates / apply a k-anonymity threshold
+to the per-observer view.
 
 Optional future hardening: have the companion sign a broker-issued token (the firmware exposes
 on-device signing) — not required for the MVP, tracked as a follow-up.
