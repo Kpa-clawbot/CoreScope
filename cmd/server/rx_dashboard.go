@@ -196,7 +196,24 @@ func (s *Server) rxLeaderboard(days, limit int) ([]LeaderObserver, error) {
 		}
 		out = append(out, o)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Identity hiding parity (#1727 r2): pre-PR rows / blacklist-after-ingest /
+	// config-reload lag could otherwise surface a hidden operator here. Drop
+	// observer-blacklisted contributors entirely, and blank the name of a
+	// node-blacklisted or hidden-prefix identity. nil cfg ⇒ all no-ops.
+	filtered := out[:0]
+	for _, o := range out {
+		if s.cfg.IsObserverBlacklisted(o.Pubkey) {
+			continue
+		}
+		if s.cfg.IsBlacklisted(o.Pubkey) || s.cfg.IsNameHidden(o.Name) {
+			o.Name = ""
+		}
+		filtered = append(filtered, o)
+	}
+	return filtered, nil
 }
 
 func (s *Server) handleRxLeaderboard(w http.ResponseWriter, r *http.Request) {

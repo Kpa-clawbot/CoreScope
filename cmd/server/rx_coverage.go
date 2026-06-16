@@ -331,6 +331,18 @@ func (s *Server) handleNodeRxCoverage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pubkey := strings.ToLower(mux.Vars(r)["pubkey"])
+	// Mirror handleNodeReach's gate at this same {pubkey}: reject malformed keys,
+	// and 404 blacklisted / hidden-prefix nodes. Hiding only the node *name* (via
+	// heardKeyResolver) still leaked the GPS hex bins and mobile_receptions /
+	// mobile_clients counts for a node the rest of the API hides (#1727 r2).
+	if !isHexPubkey(pubkey) {
+		http.Error(w, "invalid pubkey: expected 64 hex chars", http.StatusBadRequest)
+		return
+	}
+	if (s.cfg != nil && s.cfg.IsBlacklisted(pubkey)) || s.isPubkeyHidden(pubkey) {
+		http.NotFound(w, r)
+		return
+	}
 	b, ok := parseBBox(r.URL.Query().Get("bbox"))
 	if !ok {
 		http.Error(w, "bbox required as minLat,minLon,maxLat,maxLon", http.StatusBadRequest)

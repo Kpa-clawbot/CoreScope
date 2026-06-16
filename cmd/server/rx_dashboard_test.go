@@ -89,3 +89,44 @@ func TestRxLeaderboard(t *testing.T) {
 		t.Fatalf("compb should have no name: %+v", byPk["compb"])
 	}
 }
+
+// TestRxLeaderboardHidesBlacklistedAndHidden verifies #1727 r2 must-fix #2: the
+// leaderboard must drop observer-blacklisted contributors and blank the name of
+// node-blacklisted or hidden-prefix identities (pre-PR / post-blacklist rows).
+func TestRxLeaderboardHidesBlacklistedAndHidden(t *testing.T) {
+	db := seedCoverageDB(t)
+	recent := time.Now().UTC().Format(time.RFC3339)
+	mustExecDB(t, db, `INSERT INTO nodes (public_key, name, role, last_seen, first_seen, advert_count) VALUES ('aa01','GoodGuy','companion','t','t',1)`)
+	mustExecDB(t, db, `INSERT INTO nodes (public_key, name, role, last_seen, first_seen, advert_count) VALUES ('cc03','BadNode','companion','t','t',1)`)
+	mustExecDB(t, db, `INSERT INTO nodes (public_key, name, role, last_seen, first_seen, advert_count) VALUES ('dd04','🚫Hidden','companion','t','t',1)`)
+	insRx(t, db, "aa01", "aabb01", recent, 51.05, 3.72) // normal → kept with name
+	insRx(t, db, "bb02", "aabb02", recent, 51.05, 3.72) // observer-blacklisted → dropped
+	insRx(t, db, "cc03", "aabb03", recent, 51.05, 3.72) // node-blacklisted → name blanked
+	insRx(t, db, "dd04", "aabb04", recent, 51.05, 3.72) // hidden prefix → name blanked
+	srv := &Server{db: db, cfg: &Config{
+		ObserverBlacklist:  []string{"bb02"},
+		NodeBlacklist:      []string{"cc03"},
+		HiddenNamePrefixes: []string{"🚫"},
+	}}
+
+	obs, err := srv.rxLeaderboard(7, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPk := map[string]LeaderObserver{}
+	for _, o := range obs {
+		byPk[o.Pubkey] = o
+	}
+	if _, ok := byPk["bb02"]; ok {
+		t.Fatalf("observer-blacklisted contributor must be dropped, got %+v", byPk["bb02"])
+	}
+	if byPk["aa01"].Name != "GoodGuy" {
+		t.Fatalf("normal contributor name should be kept: %+v", byPk["aa01"])
+	}
+	if _, ok := byPk["cc03"]; !ok || byPk["cc03"].Name != "" {
+		t.Fatalf("node-blacklisted contributor should remain with a blanked name: %+v", byPk["cc03"])
+	}
+	if _, ok := byPk["dd04"]; !ok || byPk["dd04"].Name != "" {
+		t.Fatalf("hidden-prefix contributor should remain with a blanked name: %+v", byPk["dd04"])
+	}
+}

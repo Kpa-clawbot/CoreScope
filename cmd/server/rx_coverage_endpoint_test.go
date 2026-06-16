@@ -57,13 +57,16 @@ func serveRxCoverage(srv *Server, path string) *httptest.ResponseRecorder {
 	return rr
 }
 
+// nodePK is a full 64-hex pubkey whose 3-byte prefix is the seeded heard_key.
+const nodePK = "aabbcc0000000000000000000000000000000000000000000000000000000000"
+
 func TestRxCoverageEndpointGeoJSON(t *testing.T) {
 	db := seedCoverageDB(t)
 	mustExecDB(t, db, `INSERT INTO client_receptions (rx_pubkey,heard_key,heard_keylen,snr,lat,lon,rx_at,ingested_at,src)
 		VALUES ('comp','aabbcc',3,-6,51.05,3.72,'t','t','rxlog')`)
 	srv := &Server{db: db, cfg: &Config{ClientRxCoverage: &ClientRxCoverageConfig{Enabled: true}}}
 
-	rr := serveRxCoverage(srv, "/api/nodes/aabbccddeeff00112233/rx-coverage?bbox=50,3,52,4&z=12")
+	rr := serveRxCoverage(srv, "/api/nodes/"+nodePK+"/rx-coverage?bbox=50,3,52,4&z=12")
 	if rr.Code != 200 {
 		t.Fatalf("status %d body %s", rr.Code, rr.Body.String())
 	}
@@ -79,7 +82,35 @@ func TestRxCoverageEndpointGeoJSON(t *testing.T) {
 	if fc.MobileReceptions != 1 || fc.MobileClients != 1 {
 		t.Fatalf("want mobile_receptions=1 mobile_clients=1, got %d/%d", fc.MobileReceptions, fc.MobileClients)
 	}
-	if serveRxCoverage(srv, "/api/nodes/aabbcc/rx-coverage").Code != 400 {
+	if serveRxCoverage(srv, "/api/nodes/"+nodePK+"/rx-coverage").Code != 400 {
 		t.Fatal("missing bbox should be 400")
+	}
+	// Non-hex pubkey is rejected up front (parity with handleNodeReach).
+	if serveRxCoverage(srv, "/api/nodes/nothex/rx-coverage?bbox=50,3,52,4").Code != 400 {
+		t.Fatal("non-hex pubkey should be 400")
+	}
+}
+
+// TestNodeRxCoverageHidesBlacklistedAndHidden verifies #1727 r2 must-fix #1: the
+// per-node coverage endpoint must 404 for blacklisted or hidden-prefix nodes, so
+// their GPS hex bins / counts aren't retrievable at a pubkey the rest of the API
+// hides — not just the node name.
+func TestNodeRxCoverageHidesBlacklistedAndHidden(t *testing.T) {
+	const hidPK = "ddee110000000000000000000000000000000000000000000000000000000000"
+	db := seedCoverageDB(t)
+	mustExecDB(t, db, `INSERT INTO client_receptions (rx_pubkey,heard_key,heard_keylen,snr,lat,lon,rx_at,ingested_at,src)
+		VALUES ('comp','aabbcc',3,-6,51.05,3.72,'t','t','rxlog')`)
+	mustExecDB(t, db, `INSERT INTO nodes (public_key,name,role,last_seen,first_seen,advert_count) VALUES ('`+hidPK+`','🚫Secret','repeater','t','t',1)`)
+	srv := &Server{db: db, cfg: &Config{
+		ClientRxCoverage:   &ClientRxCoverageConfig{Enabled: true},
+		NodeBlacklist:      []string{nodePK},
+		HiddenNamePrefixes: []string{"🚫"},
+	}}
+
+	if code := serveRxCoverage(srv, "/api/nodes/"+nodePK+"/rx-coverage?bbox=50,3,52,4").Code; code != 404 {
+		t.Fatalf("blacklisted node coverage should be 404, got %d", code)
+	}
+	if code := serveRxCoverage(srv, "/api/nodes/"+hidPK+"/rx-coverage?bbox=50,3,52,4").Code; code != 404 {
+		t.Fatalf("hidden-prefix node coverage should be 404, got %d", code)
 	}
 }
