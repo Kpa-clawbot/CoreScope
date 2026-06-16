@@ -114,6 +114,11 @@
   // pass false so the current report stays on screen until the swap (no flash).
   async function load(container, pubkey, days, isInitial) {
     var myGen = ++loadGen;
+    // Wait for server config so the coverage flag (read just below and in the
+    // actions bar markup) is populated even on a direct land on this route — a
+    // race that otherwise hides the coverage toggle (#13).
+    try { await window.MeshConfigReady; } catch (e) {}
+    if (myGen !== loadGen) return; // superseded by a newer load while waiting
     current = { pubkey: pubkey, days: days };
     coverageOn = window.MC_CLIENT_RX_COVERAGE === true && (typeof getHashParams === 'function' && getHashParams().get('coverage') === '1');
     if (covHandle) { try { covHandle.off(); } catch (e) {} covHandle = null; }

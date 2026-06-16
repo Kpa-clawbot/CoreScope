@@ -146,11 +146,21 @@
   }
 
   function init(container) {
+    destroyed = false;
+    // A direct land on #/rx-coverage can run before MeshConfigReady resolves, at
+    // which point MC_CLIENT_RX_COVERAGE is still undefined and the page would
+    // wrongly show "not enabled". Defer until server config is loaded (#13).
+    Promise.resolve(window.MeshConfigReady).then(function () {
+      if (!destroyed) start(container);
+    });
+  }
+
+  function start(container) {
     if (!window.MC_CLIENT_RX_COVERAGE) {
       container.innerHTML = '<div class="nq-msg">Coverage is not enabled on this deployment.</div>';
       return;
     }
-    destroyed = false; selectedRx = ''; selectedName = ''; days = 7; boardCache = [];
+    selectedRx = ''; selectedName = ''; days = 7; boardCache = [];
     try {
       var p = (typeof getHashParams === 'function') ? getHashParams() : null;
       if (p) { var dd = parseInt(p.get('days'), 10); if ([1, 7, 14, 30].indexOf(dd) >= 0) days = dd; selectedRx = (p.get('rx') || '').toLowerCase(); }
