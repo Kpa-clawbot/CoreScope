@@ -539,6 +539,13 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 	// A roaming companion reports where it directly heard a node; handled in isolation
 	// from the observer/observations path. EMQX ACL binds parts[2] to the client's own key.
 	if cfg.ClientRxCoverageEnabled() && len(parts) >= 4 && parts[1] == "client" && parts[3] == "packets" {
+		// The observer blacklist (checked below) only runs on the observer path,
+		// so a blacklisted operator could otherwise skirt it via the client topic
+		// (#1). Enforce it here before any coverage write.
+		if cfg.IsObserverBlacklisted(parts[2]) {
+			log.Printf("MQTT [%s] client %.8s blacklisted, dropping", tag, parts[2])
+			return
+		}
 		handleClientPacket(store, tag, parts[2], msg, channelKeys)
 		return
 	}

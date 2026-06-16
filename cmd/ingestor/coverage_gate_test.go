@@ -67,3 +67,22 @@ func TestClientRxCoverageGateOn(t *testing.T) {
 		t.Fatalf("feature ON: expected 1 client_receptions row, got %d", n)
 	}
 }
+
+// TestClientRxCoverageBlacklistedDropped verifies the #1 fix: a blacklisted
+// operator cannot skirt the observer blacklist via the client topic. With the
+// feature ON but the companion pubkey blacklisted, no row is written. Without
+// the gate the client dispatch runs before the blacklist check and inserts.
+func TestClientRxCoverageBlacklistedDropped(t *testing.T) {
+	store := newTestStore(t)
+	source := MQTTSource{Name: "test"}
+	cfg := &Config{
+		ClientRxCoverage:  &ClientRxCoverageConfig{Enabled: true},
+		ObserverBlacklist: []string{testCompanionPK},
+	}
+
+	handleMessage(store, "test", source, clientCoverageMsg(), nil, nil, cfg)
+
+	if n := clientReceptionCount(t, store); n != 0 {
+		t.Fatalf("blacklisted companion: expected 0 client_receptions rows, got %d", n)
+	}
+}
