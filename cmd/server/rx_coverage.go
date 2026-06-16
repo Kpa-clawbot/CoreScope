@@ -19,10 +19,23 @@ type coverageRow struct {
 	RxAt     string // reception time (RFC3339); used to pick the latest SNR per node
 }
 
+// coverageFeatureCap bounds the number of hex cells returned in one response.
+// A wide bbox at high zoom over the 30-day window could otherwise emit multi-MB
+// GeoJSON; when more cells exist the densest are kept and Truncated is set (#12).
+const coverageFeatureCap = 5000
+
+// coverageCellNodeCap bounds the per-cell node breakdown shipped on the wire
+// (the client only renders the top ~10). NodesTruncated flags that more were
+// heard than returned (#11).
+const coverageCellNodeCap = 25
+
 // GeoJSON output (named structs, no map[string]interface{} — AGENTS.md).
+// Truncated is a non-standard foreign member (ignored by GeoJSON consumers like
+// Leaflet) that signals the cell list was capped at coverageFeatureCap.
 type CoverageFeatureCollection struct {
-	Type     string            `json:"type"` // "FeatureCollection"
-	Features []CoverageFeature `json:"features"`
+	Type      string            `json:"type"` // "FeatureCollection"
+	Features  []CoverageFeature `json:"features"`
+	Truncated bool              `json:"truncated,omitempty"`
 }
 type CoverageFeature struct {
 	Type       string             `json:"type"` // "Feature"
@@ -34,11 +47,12 @@ type CoveragePolygon struct {
 	Coordinates [][][2]float64 `json:"coordinates"` // one ring: [ [ [lon,lat], ... ] ]
 }
 type CoverageProperties struct {
-	Cell    string         `json:"cell"`
-	Count   int            `json:"count"`
-	BestSNR *float64       `json:"best_snr"`
-	HasSig  bool           `json:"has_sig"` // false → render grey (no signal metric)
-	Nodes   []CoverageNode `json:"nodes"`   // per-node breakdown, strongest latest-SNR first
+	Cell           string         `json:"cell"`
+	Count          int            `json:"count"`
+	BestSNR        *float64       `json:"best_snr"`
+	HasSig         bool           `json:"has_sig"`                   // false → render grey (no signal metric)
+	Nodes          []CoverageNode `json:"nodes"`                     // per-node breakdown, strongest latest-SNR first
+	NodesTruncated bool           `json:"nodes_truncated,omitempty"` // true → more nodes heard than returned (#11)
 }
 
 // CoverageNode is one directly-heard node within a cell, with its latest SNR.
@@ -140,14 +154,29 @@ func aggregateCoverage(rows []coverageRow, res int, resolve nodeResolver) Covera
 		if ring == nil {
 			continue
 		}
+		nodes, nodesTrunc := sortedCoverageNodes(a.nodes)
 		fc.Features = append(fc.Features, CoverageFeature{
 			Type:     "Feature",
 			Geometry: CoveragePolygon{Type: "Polygon", Coordinates: [][][2]float64{ring}},
 			Properties: CoverageProperties{
 				Cell: cell, Count: a.count, BestSNR: a.bestSNR, HasSig: a.hasSig,
-				Nodes: sortedCoverageNodes(a.nodes),
+				Nodes: nodes, NodesTruncated: nodesTrunc,
 			},
 		})
+	}
+	// Bound the response: when more cells exist than coverageFeatureCap, keep the
+	// densest (highest count) and flag the truncation, so a wide/zoomed-out query
+	// can't emit unbounded multi-MB GeoJSON (#12).
+	if len(fc.Features) > coverageFeatureCap {
+		sort.Slice(fc.Features, func(i, j int) bool {
+			ci, cj := fc.Features[i].Properties.Count, fc.Features[j].Properties.Count
+			if ci != cj {
+				return ci > cj // densest first
+			}
+			return fc.Features[i].Properties.Cell < fc.Features[j].Properties.Cell // deterministic tie-break
+		})
+		fc.Features = fc.Features[:coverageFeatureCap]
+		fc.Truncated = true
 	}
 	// Map iteration is randomized, so sort features by cell for a deterministic
 	// payload — stable ETag/caching and a non-flaky "first feature" in e2e (#8).
@@ -159,8 +188,9 @@ func aggregateCoverage(rows []coverageRow, res int, resolve nodeResolver) Covera
 
 // sortedCoverageNodes flattens the per-node aggregates into a slice sorted by latest
 // SNR descending (nodes heard without a signal sort last), tie-broken by count then
-// prefix for a stable order.
-func sortedCoverageNodes(m map[string]*covNodeAgg) []CoverageNode {
+// prefix for a stable order. The slice is capped at coverageCellNodeCap; truncated
+// reports whether more nodes were heard in the cell than returned (#11).
+func sortedCoverageNodes(m map[string]*covNodeAgg) (nodes []CoverageNode, truncated bool) {
 	out := make([]CoverageNode, 0, len(m))
 	for _, na := range m {
 		out = append(out, CoverageNode{Prefix: na.prefix, Name: na.name, SNR: na.latestSNR, Count: na.count})
@@ -178,7 +208,10 @@ func sortedCoverageNodes(m map[string]*covNodeAgg) []CoverageNode {
 		}
 		return out[i].Prefix < out[j].Prefix
 	})
-	return out
+	if len(out) > coverageCellNodeCap {
+		return out[:coverageCellNodeCap], true
+	}
+	return out, false
 }
 
 type bbox struct{ MinLat, MinLon, MaxLat, MaxLon float64 }

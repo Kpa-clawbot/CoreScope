@@ -2,9 +2,59 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"testing"
 )
+
+// TestAggregateCoverageCapsNodesPerCell verifies #11: a cell that heard more than
+// coverageCellNodeCap distinct nodes ships at most that many, with NodesTruncated set.
+func TestAggregateCoverageCapsNodesPerCell(t *testing.T) {
+	rows := make([]coverageRow, 0, coverageCellNodeCap+5)
+	for i := 0; i < coverageCellNodeCap+5; i++ {
+		rows = append(rows, coverageRow{
+			Lat: 51.05, Lon: 3.72, SNR: covF(float64(-i)),
+			HeardKey: fmt.Sprintf("aa%06x", i), RxAt: "2026-06-01T10:00:00Z",
+		})
+	}
+	fc := aggregateCoverage(rows, 9, nil)
+	if len(fc.Features) != 1 {
+		t.Fatalf("expected 1 cell, got %d", len(fc.Features))
+	}
+	p := fc.Features[0].Properties
+	if len(p.Nodes) != coverageCellNodeCap || !p.NodesTruncated {
+		t.Fatalf("want %d nodes + truncated, got %d nodes truncated=%v", coverageCellNodeCap, len(p.Nodes), p.NodesTruncated)
+	}
+}
+
+// TestAggregateCoverageCapsFeatures verifies #12: a query spanning more than
+// coverageFeatureCap cells is bounded to that many features with Truncated set,
+// and a smaller query is not truncated.
+func TestAggregateCoverageCapsFeatures(t *testing.T) {
+	// 0.1° spacing >> a res-9 cell (~4 km), so each point lands in its own cell.
+	rows := make([]coverageRow, 0, coverageFeatureCap+200)
+	side := 75 // 75*75 = 5625 > 5000
+	for i := 0; i < side*side; i++ {
+		lat := 10.0 + float64(i/side)*0.1
+		lon := 10.0 + float64(i%side)*0.1
+		rows = append(rows, coverageRow{Lat: lat, Lon: lon, SNR: covF(-5)})
+	}
+	fc := aggregateCoverage(rows, 9, nil)
+	if len(fc.Features) != coverageFeatureCap || !fc.Truncated {
+		t.Fatalf("want %d features + truncated, got %d truncated=%v", coverageFeatureCap, len(fc.Features), fc.Truncated)
+	}
+	// Still sorted by cell after truncation.
+	for i := 1; i < len(fc.Features); i++ {
+		if fc.Features[i-1].Properties.Cell > fc.Features[i].Properties.Cell {
+			t.Fatalf("truncated features not sorted by cell at %d", i)
+		}
+	}
+	// A small query is not truncated.
+	small := aggregateCoverage(rows[:10], 9, nil)
+	if small.Truncated {
+		t.Fatalf("small query should not be truncated")
+	}
+}
 
 func covF(f float64) *float64 { return &f }
 
