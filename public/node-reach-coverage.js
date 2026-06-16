@@ -40,13 +40,19 @@
             .bindTooltip('n=' + f.properties.count +
               (f.properties.best_snr != null ? ' · SNR ' + f.properties.best_snr : ' · no signal'));
         });
-      }).catch(function () { /* leave layer empty on error; never crash the reach page */ });
+      }).catch(function (e) {
+        // Leave the layer empty on error; never crash the reach page.
+        console.warn('node-reach-coverage: coverage fetch failed', e);
+      });
     }
-    map.on('moveend zoomend', refresh);
+    // Debounce pan/zoom redraws so dragging doesn't storm the coverage endpoint
+    // (#6). Keep the reference so off() can unbind the same handler.
+    var debouncedRefresh = (typeof debounce === 'function') ? debounce(refresh, 200) : refresh;
+    map.on('moveend zoomend', debouncedRefresh);
     refresh();
     return {
       off: function () {
-        map.off('moveend zoomend', refresh);
+        map.off('moveend zoomend', debouncedRefresh);
         try { map.removeLayer(group); } catch (e) {}
       }
     };

@@ -76,7 +76,7 @@
         L.polygon(ring, { color: col, weight: 1, fillColor: col, fillOpacity: 0.45 }).addTo(covLayer)
           .bindTooltip(coverageNodesHtml(f.properties));
       });
-    }).catch(function () {});
+    }).catch(function (e) { console.warn('rx-coverage: coverage fetch failed', e); });
   }
 
   function renderBoard() {
@@ -120,12 +120,17 @@
       if (!any) { drawCoverage(); return; } // observer has no data in window → keep view
       map.fitBounds([[minLat, minLon], [maxLat, maxLon]], { padding: [30, 30], maxZoom: 15 });
       drawCoverage(); // fitBounds may not fire moveend if the view is unchanged
-    }).catch(function () { drawCoverage(); });
+    }).catch(function (e) { console.warn('rx-coverage: observer extent fetch failed', e); drawCoverage(); });
   }
 
   function loadBoard() {
     fetch('/api/rx-leaderboard?days=' + days + '&limit=25').then(function (r) { return r.json(); })
-      .then(function (d) { if (destroyed) return; boardCache = d.observers || []; renderBoard(); }).catch(function () {});
+      .then(function (d) { if (destroyed) return; boardCache = d.observers || []; renderBoard(); })
+      .catch(function (e) {
+        console.warn('rx-coverage: leaderboard fetch failed', e);
+        var el = document.getElementById('rxBoard');
+        if (el) el.innerHTML = '<div class="muted" style="color:var(--text-muted);font-size:13px">Could not load mobile observers.</div>';
+      });
   }
 
   function setDays(d) {
@@ -155,7 +160,9 @@
     if (typeof window._applyTilesToNodeMap === 'function') window._applyTilesToNodeMap(map);
     else L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
     covLayer = L.layerGroup().addTo(map);
-    map.on('moveend zoomend', drawCoverage);
+    // Debounce pan/zoom redraws so dragging the map doesn't fire a storm of
+    // /api/rx-coverage requests (#6). Direct calls (setDays, fit) stay immediate.
+    map.on('moveend zoomend', debounce(drawCoverage, 200));
     var bar = document.getElementById('rxDays');
     if (bar) bar.addEventListener('click', function (e) { var b = e.target.closest('button[data-days]'); if (b) setDays(+b.dataset.days); });
     setTimeout(function () { if (!destroyed && map) { map.invalidateSize(); if (selectedRx) fitToObserver(); else drawCoverage(); } }, 150);
