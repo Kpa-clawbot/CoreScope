@@ -72,11 +72,11 @@ func readAsyncMigrations(db *sql.DB) []AsyncMigrationInfo {
 	now := time.Now()
 	for rows.Next() {
 		var (
-			info        AsyncMigrationInfo
-			startedAt   string
-			endedAt     string
-			errMsg      string
-			rawStatus   string
+			info      AsyncMigrationInfo
+			startedAt string
+			endedAt   string
+			errMsg    string
+			rawStatus string
 		)
 		if err := rows.Scan(&info.Name, &rawStatus, &info.RowsProcessed, &info.RowsTotal, &startedAt, &endedAt, &errMsg); err != nil {
 			continue

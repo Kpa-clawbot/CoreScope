@@ -914,14 +914,14 @@ func (s *Server) handlePerf(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, PerfResponse{
-		Uptime:        uptimeSec,
-		TotalRequests: totalRequests,
-		AvgMs:         safeAvg(totalMs, float64(totalRequests)),
-		Endpoints:     summary,
-		SlowQueries:   slowQueries,
-		Cache:         perfCS,
-		PacketStore:   pktStoreStats,
-		Sqlite:        sqliteStats,
+		Uptime:          uptimeSec,
+		TotalRequests:   totalRequests,
+		AvgMs:           safeAvg(totalMs, float64(totalRequests)),
+		Endpoints:       summary,
+		SlowQueries:     slowQueries,
+		Cache:           perfCS,
+		PacketStore:     pktStoreStats,
+		Sqlite:          sqliteStats,
 		AsyncMigrations: asyncMigrations,
 		GoRuntime: func() *GoRuntimeStats {
 			ms := s.getMemStats()
