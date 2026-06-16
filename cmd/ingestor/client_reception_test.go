@@ -37,17 +37,16 @@ func crF(f float64) *float64 { return &f }
 func crI(i int) *int         { return &i }
 
 // TestClientReceptionsCoverageQueryUsesIndex verifies #5/#18: the dominant
-// coverage query (bbox + full-key/prefix match) is served by an index rather
-// than a full table scan. Without idx_client_recept_latlon / _heard_geo the plan
+// per-node coverage query (sargable heard_key IN-list + bbox, mirroring
+// cmd/server coverageHeardKeyCandidates) seeks the heard_key composite index
+// rather than scanning the table. Without idx_client_recept_heard_geo the plan
 // is "SCAN client_receptions".
 func TestClientReceptionsCoverageQueryUsesIndex(t *testing.T) {
 	s := newTestStore(t)
 	q := `EXPLAIN QUERY PLAN SELECT lat, lon, snr, rssi, heard_key, rx_at
 		FROM client_receptions
-		WHERE lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?
-		  AND ( (heard_keylen = 32 AND heard_key = ?)
-		     OR (heard_keylen IN (2,3) AND substr(?, 1, heard_keylen*2) = heard_key) )`
-	rows, err := s.db.Query(q, 50.0, 52.0, 3.0, 4.0, "aabb", "aabb")
+		WHERE heard_key IN (?,?,?) AND lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?`
+	rows, err := s.db.Query(q, "aabbccddeeff00112233", "aabbcc", "aabb", 50.0, 52.0, 3.0, 4.0)
 	if err != nil {
 		t.Fatal(err)
 	}

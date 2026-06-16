@@ -221,18 +221,55 @@ func sortedCoverageNodes(m map[string]*covNodeAgg) (nodes []CoverageNode, trunca
 
 type bbox struct{ MinLat, MinLon, MaxLat, MaxLon float64 }
 
+// coverageHeardKeyCandidates returns the exact heard_key values that identify a
+// node: its full pubkey (stored with heard_keylen 32) and the 2-byte (4 hex) and
+// 3-byte (6 hex) prefixes a relay logs. Matching heard_key IN (these) is
+// equivalent to the old "heard_keylen=32 AND heard_key=? OR heard_keylen IN (2,3)
+// AND substr(?,1,keylen*2)=heard_key", but sargable — so the (heard_key, …)
+// composite index seeks the few matching rows instead of scanning the bbox (#5).
+func coverageHeardKeyCandidates(pubkey string) []string {
+	pk := strings.ToLower(pubkey)
+	seen := map[string]bool{}
+	out := make([]string, 0, 3)
+	for _, c := range []string{pk, prefixOrEmpty(pk, 6), prefixOrEmpty(pk, 4)} {
+		if c != "" && !seen[c] {
+			seen[c] = true
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func prefixOrEmpty(s string, n int) string {
+	if len(s) >= n {
+		return s[:n]
+	}
+	return ""
+}
+
+// sqlPlaceholders returns "?,?,…" with n placeholders (n >= 1).
+func sqlPlaceholders(n int) string {
+	if n <= 1 {
+		return "?"
+	}
+	return strings.Repeat("?,", n-1) + "?"
+}
+
 // queryCoverageRows returns raw coverage rows where the directly-heard node
 // matches the target pubkey by its 2-3 byte prefix (or full pubkey), within the
 // bbox. Read-only (server RO connection).
 func (s *Server) queryCoverageRows(pubkey string, b bbox) ([]coverageRow, error) {
-	pk := strings.ToLower(pubkey)
+	cands := coverageHeardKeyCandidates(pubkey)
+	args := make([]interface{}, 0, len(cands)+4)
+	for _, c := range cands {
+		args = append(args, c)
+	}
+	args = append(args, b.MinLat, b.MaxLat, b.MinLon, b.MaxLon)
 	rows, err := s.db.conn.Query(`
 		SELECT lat, lon, snr, rssi, heard_key, rx_at
 		FROM client_receptions
-		WHERE lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?
-		  AND ( (heard_keylen = 32 AND heard_key = ?)
-		     OR (heard_keylen IN (2,3) AND substr(?, 1, heard_keylen*2) = heard_key) )`,
-		b.MinLat, b.MaxLat, b.MinLon, b.MaxLon, pk, pk)
+		WHERE heard_key IN (`+sqlPlaceholders(len(cands))+`)
+		  AND lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -246,12 +283,14 @@ func (s *Server) mobileRxStats(pubkey string) (count, clients int) {
 	if s.db == nil || s.db.conn == nil {
 		return 0, 0
 	}
-	pk := strings.ToLower(pubkey)
+	cands := coverageHeardKeyCandidates(pubkey)
+	args := make([]interface{}, len(cands))
+	for i, c := range cands {
+		args[i] = c
+	}
 	s.db.conn.QueryRow(`
 		SELECT COUNT(*), COUNT(DISTINCT rx_pubkey) FROM client_receptions
-		WHERE (heard_keylen = 32 AND heard_key = ?)
-		   OR (heard_keylen IN (2,3) AND substr(?, 1, heard_keylen*2) = heard_key)`,
-		pk, pk).Scan(&count, &clients)
+		WHERE heard_key IN (`+sqlPlaceholders(len(cands))+`)`, args...).Scan(&count, &clients)
 	return count, clients
 }
 

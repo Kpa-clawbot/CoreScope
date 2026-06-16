@@ -92,9 +92,13 @@ func (s *Server) queryCoverageFiltered(node, rx string, days int, b bbox) ([]cov
 	where := []string{"lat BETWEEN ? AND ?", "lon BETWEEN ? AND ?"}
 	args := []interface{}{b.MinLat, b.MaxLat, b.MinLon, b.MaxLon}
 	if node != "" {
-		pk := strings.ToLower(node)
-		where = append(where, "((heard_keylen = 32 AND heard_key = ?) OR (heard_keylen IN (2,3) AND substr(?, 1, heard_keylen*2) = heard_key))")
-		args = append(args, pk, pk)
+		// Sargable heard_key IN-list (see coverageHeardKeyCandidates) so the
+		// (heard_key, …) composite index is used instead of a substr() scan (#5).
+		cands := coverageHeardKeyCandidates(node)
+		where = append(where, "heard_key IN ("+sqlPlaceholders(len(cands))+")")
+		for _, c := range cands {
+			args = append(args, c)
+		}
 	}
 	if rx != "" {
 		where = append(where, "rx_pubkey = ?")
