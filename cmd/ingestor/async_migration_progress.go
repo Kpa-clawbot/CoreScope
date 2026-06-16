@@ -24,16 +24,61 @@ import (
 )
 
 // progressGate throttles per-migration progress writes.
+//
+// #1735 finding #9 (Group D): we deliberately do NOT use sync.Once to
+// suppress repeated runtime warn logs. Sync.Once silences ALL future
+// errors — losing observability of an ongoing problem. Instead, we
+// rate-limit the warn log to ~1/min using a wall-clock timestamp so
+// every error is visible but doesn't flood the log.
 var (
-	progressGateMu        sync.Mutex
-	progressLastWriteAt   = map[string]time.Time{}
-	progressSchemaWarnOnce sync.Once
+	progressGateMu      sync.Mutex
+	progressLastWriteAt = map[string]time.Time{}
+
+	// schemaWarnMu guards schemaWarnLastAt. Per-process rate-limiter
+	// (NOT per-DB) — the warn is a log-only side effect, not a
+	// correctness-affecting cache, so package-level scope is fine.
+	schemaWarnMu     sync.Mutex
+	schemaWarnLastAt time.Time
+
+	// ensureColumnsOnce guards the per-process ALTER TABLE storm. The
+	// migration progress columns only need to be added once per
+	// process lifetime; subsequent RunAsyncMigration calls don't need
+	// to re-run three ALTER TABLEs every time.
+	ensureColumnsOnce sync.Once
+	ensureColumnsErr  error
 )
+
+// resetSchemaWarnRateLimiterForTest is exported for tests that need to
+// re-trigger the warn log on a second failure. Production code never
+// calls this.
+func resetSchemaWarnRateLimiterForTest() {
+	schemaWarnMu.Lock()
+	schemaWarnLastAt = time.Time{}
+	schemaWarnMu.Unlock()
+}
+
+// resetEnsureColumnsOnceForTest lets a test exercise the per-process
+// "add columns once" path repeatedly. Production code never calls this.
+func resetEnsureColumnsOnceForTest() {
+	ensureColumnsOnce = sync.Once{}
+	ensureColumnsErr = nil
+}
 
 // ensureAsyncMigrationProgressColumns adds rows_processed / rows_total /
 // last_update_at to _async_migrations on legacy DBs. Idempotent. Only the
 // "duplicate column" SQLite error is swallowed.
+//
+// #1735 finding #9 (Group D): guarded by sync.Once so a process running
+// many async migrations doesn't re-run 3 ALTER TABLE statements per call.
+// The column set is fixed at build time so once-per-process is safe.
 func ensureAsyncMigrationProgressColumns(db *sql.DB) error {
+	ensureColumnsOnce.Do(func() {
+		ensureColumnsErr = ensureAsyncMigrationProgressColumnsRaw(db)
+	})
+	return ensureColumnsErr
+}
+
+func ensureAsyncMigrationProgressColumnsRaw(db *sql.DB) error {
 	// Make sure the base table exists first (fresh-install path covered).
 	if err := ensureAsyncMigrationsTable(db); err != nil {
 		return err
@@ -54,6 +99,21 @@ func ensureAsyncMigrationProgressColumns(db *sql.DB) error {
 	return nil
 }
 
+// isDuplicateColumnErr matches the SQLite ADD COLUMN duplicate-column
+// error.
+//
+// #1735 finding #8 (Group D): the modernc.org/sqlite driver does NOT
+// expose a typed sentinel for "duplicate column". The error path goes
+// through *sqlite.Error with Code()=SQLITE_ERROR (1), which is generic
+// — every prepare/exec error returns SQLITE_ERROR with the message
+// distinguishing the specific failure. So we must match on the message
+// text. The current driver (v1.34.5) emits the literal string
+// "duplicate column name: <name>" (origin: SQLite's
+// sqlite3AddColumn() in src/build.c). The test
+// TestIsDuplicateColumnErr_DriverStringPinned in
+// async_migration_progress_test.go pins this string so a driver
+// upgrade that changes the wording fails the test instead of silently
+// breaking idempotency.
 func isDuplicateColumnErr(err error) bool {
 	if err == nil {
 		return false
@@ -93,10 +153,17 @@ func recordAsyncMigrationProgressEx(db *sql.DB, name string, processed, total in
 		processed, total, now.UTC().Format(time.RFC3339), name)
 	if err != nil {
 		// Most likely schema-missing on a legacy DB that didn't run
-		// ensureAsyncMigrationProgressColumns. Log once, never per batch.
-		progressSchemaWarnOnce.Do(func() {
-			log.Printf("[async-migration] progress write failed (likely missing columns; further such errors suppressed): %v", err)
-		})
+		// ensureAsyncMigrationProgressColumns. #1735 finding #9:
+		// rate-limit the warn log to ~1/min so every error stays
+		// observable (sync.Once silenced all future errors — that
+		// hides ongoing problems).
+		now := time.Now()
+		schemaWarnMu.Lock()
+		if schemaWarnLastAt.IsZero() || now.Sub(schemaWarnLastAt) > time.Minute {
+			schemaWarnLastAt = now
+			log.Printf("[async-migration] progress write failed (rate-limited 1/min): %v", err)
+		}
+		schemaWarnMu.Unlock()
 		return err
 	}
 	// #1735 finding #7: a UPDATE that affects 0 rows means the migration

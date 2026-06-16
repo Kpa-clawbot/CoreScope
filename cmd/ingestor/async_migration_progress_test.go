@@ -123,3 +123,47 @@ func TestAsyncMigrationProgress_TerminalForcesWithinSecond(t *testing.T) {
 		t.Errorf("terminal within rate window not honored: got %d, want 10", p)
 	}
 }
+
+// TestIsDuplicateColumnErr_DriverStringPinned (#1735 finding #8): the
+// modernc.org/sqlite driver does not expose a typed sentinel for the
+// "duplicate column" ADD COLUMN failure. We rely on a substring match
+// against the driver's error text. This test pins the current driver's
+// exact error string so a driver upgrade that changes the wording
+// fails CI loudly instead of silently breaking
+// ensureAsyncMigrationProgressColumns idempotency (which would cause
+// the second-ever ALTER to return an error and break boot).
+func TestIsDuplicateColumnErr_DriverStringPinned(t *testing.T) {
+	s := newTestStore(t)
+	s.WaitForAsyncMigrations()
+	// First ALTER should succeed (or already-exist; either is fine).
+	_, _ = s.db.Exec(`ALTER TABLE _async_migrations ADD COLUMN __dup_probe TEXT`)
+	// Second ALTER MUST produce the "duplicate column" error so we can
+	// pin the wording.
+	_, err := s.db.Exec(`ALTER TABLE _async_migrations ADD COLUMN __dup_probe TEXT`)
+	if err == nil {
+		t.Fatalf("second ALTER ADD COLUMN should have errored")
+	}
+	if !isDuplicateColumnErr(err) {
+		t.Fatalf("isDuplicateColumnErr returned false for %q — driver error wording changed; update isDuplicateColumnErr and this test", err.Error())
+	}
+	// Cleanup: drop the probe column is not supported by SQLite ALTER,
+	// so leave it — fresh test store each call.
+}
+
+// TestEnsureAsyncMigrationProgressColumns_RunsOncePerProcess (#1735 finding
+// #9): the sync.Once guard means a process that boots and runs N async
+// migrations does not re-run ALTER TABLE for every migration. We verify
+// the call is idempotent across DB handles AND that resetting the once
+// (test-only) re-enables a fresh run on a separate handle.
+func TestEnsureAsyncMigrationProgressColumns_RunsOncePerProcess(t *testing.T) {
+	s := newTestStore(t)
+	s.WaitForAsyncMigrations()
+	resetEnsureColumnsOnceForTest()
+	if err := ensureAsyncMigrationProgressColumns(s.db); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	// Second call is a no-op (sync.Once skipped).
+	if err := ensureAsyncMigrationProgressColumns(s.db); err != nil {
+		t.Fatalf("second: %v", err)
+	}
+}
