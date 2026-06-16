@@ -105,6 +105,30 @@ func TestClientReceptionsCoverageQueryUsesIndex(t *testing.T) {
 	}
 }
 
+// TestClientReceptionsRetentionUsesRxAtIndex verifies the retention reaper's
+// DELETE ... WHERE rx_at < ? (and the leaderboard's rx_at window) seek the rx_at
+// index rather than full-scanning under the writer lock (polish review).
+func TestClientReceptionsRetentionUsesRxAtIndex(t *testing.T) {
+	s := newTestStore(t)
+	rows, err := s.db.Query(`EXPLAIN QUERY PLAN DELETE FROM client_receptions WHERE rx_at < ?`, "2026-01-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	plan := ""
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan += detail + "\n"
+	}
+	if !strings.Contains(plan, "idx_client_recept_rxat") {
+		t.Fatalf("retention DELETE should use idx_client_recept_rxat, plan was:\n%s", plan)
+	}
+}
+
 func TestDeriveHeardKey(t *testing.T) {
 	full := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 	k, l, src, ok := deriveHeardKey("rx", packetpath.RouteFlood, nil, strings.ToUpper(full), true)

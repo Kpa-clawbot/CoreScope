@@ -146,8 +146,10 @@ func aggregateCoverage(rows []coverageRow, res int, resolve nodeResolver) Covera
 				na.prefix = row.HeardKey
 			}
 			na.count++
-			// rx_at is RFC3339, so lexical >= is chronological; keep the latest SNR.
-			if na.count == 1 || row.RxAt >= na.latestAt {
+			// rx_at is RFC3339, so lexical >= is chronological; keep the latest
+			// SNR. The first row always wins (latestAt starts "", and any value
+			// >= ""), so no separate count==1 guard is needed.
+			if row.RxAt >= na.latestAt {
 				na.latestAt = row.RxAt
 				na.latestSNR = row.SNR
 			}

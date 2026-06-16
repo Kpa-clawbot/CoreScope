@@ -298,7 +298,13 @@ func applySchema(db *sql.DB) error {
 		-- lets the planner instead drive from a selective bbox. (#5, #18)
 		CREATE INDEX IF NOT EXISTS idx_client_recept_heard_geo ON client_receptions(heard_key, heard_keylen, lat, lon);
 		CREATE INDEX IF NOT EXISTS idx_client_recept_latlon ON client_receptions(lat, lon);
-		CREATE INDEX IF NOT EXISTS idx_client_recept_rxpk ON client_receptions(rx_pubkey);
+		-- rx_at backs the retention reaper (DELETE WHERE rx_at < ?) and the
+		-- leaderboard window (WHERE rx_at >= ?); without it both full-scan under
+		-- the writer lock. A dedicated rx_pubkey index is redundant — the
+		-- UNIQUE(rx_pubkey, heard_key, rx_at) constraint already provides an
+		-- rx_pubkey-leading index for the ?rx= filter / leaderboard GROUP BY.
+		CREATE INDEX IF NOT EXISTS idx_client_recept_rxat ON client_receptions(rx_at);
+		DROP INDEX IF EXISTS idx_client_recept_rxpk;
 
 		-- Self-reported name of each mobile client (companion), from the SELF_INFO
 		-- name the app sends as "origin". Lets the leaderboard show a name even
