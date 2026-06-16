@@ -58,13 +58,3 @@ strict_unused: false
   rule: color-contrast
   issue: 1715
   expires_at: 2026-09-11
-- route: '/analytics?tab=prefix-tool'
-  selector: '#ptCheckBtn'
-  rule: color-contrast
-  issue: 1718
-  expires_at: 2026-09-11
-- route: '/analytics?tab=prefix-tool'
-  selector: '#ptGenBtn'
-  rule: color-contrast
-  issue: 1718
-  expires_at: 2026-09-11
