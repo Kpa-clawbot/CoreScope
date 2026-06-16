@@ -322,3 +322,103 @@ func TestChunkedBackfill_ErrorPropagation_BadDB(t *testing.T) {
 		t.Fatalf("sanity: live store backfill should succeed, got %v", err)
 	}
 }
+
+// TestChunkedBackfill_TerminalSuppressedWhenRedundant (#1735 finding #10):
+// when the last in-loop batch is exactly batchSize-sized, the next
+// iteration breaks with n=0 and the OLD code fired a terminal progress
+// callback with the same counts already reported in the last in-loop
+// fire. Operators saw duplicate progress events. The fix is to suppress
+// the terminal fire when (processed,total) equals the last reported pair.
+func TestChunkedBackfill_TerminalSuppressedWhenRedundant(t *testing.T) {
+	s := newTestStore(t)
+	// Seed exactly 4 transmissions. batchSize=4 → last in-loop fire is
+	// (4,4); the next chunk returns n=0; terminal would re-fire (4,4).
+	seedTransmissions(t, s, 4)
+
+	type fire struct{ p, total int64 }
+	var fires []fire
+	progress := func(p, total int64) {
+		fires = append(fires, fire{p, total})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	processed, total, err := chunkedTxLastSeenBackfill(ctx, s.db, 4, 5*time.Millisecond, progress)
+	if err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if processed != 4 || total != 4 {
+		t.Fatalf("counts: got (%d,%d), want (4,4)", processed, total)
+	}
+	// Must be exactly 1 fire: the in-loop fire of (4,4). No redundant
+	// terminal fire of the same counts.
+	if len(fires) != 1 {
+		t.Errorf("got %d fires, want 1 (terminal must be suppressed when redundant): %+v", len(fires), fires)
+	}
+	if fires[0].p != 4 || fires[0].total != 4 {
+		t.Errorf("fire[0]=%+v, want {4,4}", fires[0])
+	}
+}
+
+// TestChunkedBackfill_PanicInCallbackRecovered (#1735 finding #14, kent-beck
+// MAJOR): a panicking progress callback MUST NOT crash the ingestor. The
+// recovered panic is converted to an error and returned so RunAsyncMigration
+// can mark the migration failed with the panic message in ErrorMessage.
+func TestChunkedBackfill_PanicInCallbackRecovered(t *testing.T) {
+	s := newTestStore(t)
+	seedTransmissions(t, s, 100)
+	progress := func(p, total int64) {
+		panic("operator-supplied callback exploded")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, _, err := chunkedTxLastSeenBackfill(ctx, s.db, 25, 0, progress)
+	if err == nil {
+		t.Fatalf("expected error from panicking callback, got nil")
+	}
+	if !contains(err.Error(), "progress callback panic") || !contains(err.Error(), "operator-supplied callback exploded") {
+		t.Fatalf("error should mention recovered panic + message, got: %v", err)
+	}
+}
+
+// TestChunkedBackfill_PanicViaRunAsyncMigrationMarksFailed (#1735 finding
+// #14): end-to-end coverage via RunAsyncMigration — the panicking
+// callback path must leave the migration in 'failed' state, NOT crash
+// the ingestor process.
+func TestChunkedBackfill_PanicViaRunAsyncMigrationMarksFailed(t *testing.T) {
+	s := newTestStore(t)
+	s.WaitForAsyncMigrations()
+	seedTransmissions(t, s, 50)
+	name := "tx_last_seen_panic_test"
+	err := s.RunAsyncMigration(context.Background(), name, func(ctx context.Context, d *sql.DB) error {
+		_, _, e := chunkedTxLastSeenBackfill(ctx, d, 10, 0, func(p, total int64) {
+			panic("boom")
+		})
+		return e
+	})
+	if err != nil {
+		t.Fatalf("RunAsyncMigration scheduling: %v", err)
+	}
+	s.WaitForAsyncMigrations()
+	status, err := s.AsyncMigrationStatus(name)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if status != "failed" {
+		t.Errorf("status=%q, want 'failed'", status)
+	}
+	var emsg sql.NullString
+	_ = s.db.QueryRow(`SELECT error FROM _async_migrations WHERE name=?`, name).Scan(&emsg)
+	if !emsg.Valid || !contains(emsg.String, "boom") {
+		t.Errorf("error column missing recovered panic msg, got %q", emsg.String)
+	}
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}

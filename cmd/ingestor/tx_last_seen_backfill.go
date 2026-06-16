@@ -59,7 +59,14 @@ type txBackfillProgressFn func(processed, total int64)
 //     context.Canceled (or ctx.Err()) with the partial-progress counts —
 //     it does NOT mark the migration done.
 //   - All errors propagate (snapshot maxID, count total, UPDATE, RowsAffected).
-//   - Progress callback fires per non-empty batch + once terminal with final counts.
+//   - Progress callback fires per non-empty batch + once terminal with final
+//     counts. #1735 finding #10: the terminal fire is SUPPRESSED when the
+//     last in-loop fire already reported the same (processed,total) — happens
+//     when the final batch is exactly batchSize-sized and we then break on
+//     the next n=0 chunk. Avoids duplicate progress events to listeners.
+//   - #1735 finding #14: the progress callback runs inside defer-recover so
+//     a panicking callback does NOT crash the ingestor. A recovered panic
+//     is converted to an error and returned.
 //   - Concurrent INSERTs (id > maxID) are intentionally skipped — they're
 //     handled inline by stmtBumpTxLastSeen on the writer fast-path.
 //   - Orphan transmissions (no observations) are skipped via EXISTS so the
@@ -76,6 +83,33 @@ func chunkedTxLastSeenBackfill(
 	}
 	if yieldDelay < 0 {
 		return 0, 0, fmt.Errorf("chunkedTxLastSeenBackfill: yieldDelay must be >= 0 (got %v)", yieldDelay)
+	}
+
+	// #1735 finding #14 (Group E): wrap the progress callback so a
+	// panic inside operator-supplied code (or a buggy bookkeeping
+	// write) returns as an error instead of crashing the ingestor
+	// goroutine. We also remember the last reported counts so the
+	// terminal fire can be suppressed when redundant (finding #10).
+	var (
+		lastFiredAt  bool
+		lastFiredP   int64
+		lastFiredT   int64
+		callbackErr  error
+	)
+	safeProgress := func(p, t int64) {
+		if progress == nil {
+			lastFiredAt = true
+			lastFiredP, lastFiredT = p, t
+			return
+		}
+		defer func() {
+			if r := recover(); r != nil {
+				callbackErr = fmt.Errorf("progress callback panic: %v", r)
+			}
+		}()
+		progress(p, t)
+		lastFiredAt = true
+		lastFiredP, lastFiredT = p, t
 	}
 
 	var maxID int64
@@ -96,16 +130,18 @@ func chunkedTxLastSeenBackfill(
 	}
 
 	if total == 0 {
-		if progress != nil {
-			progress(0, 0)
+		safeProgress(0, 0)
+		if callbackErr != nil {
+			return 0, 0, callbackErr
 		}
 		return 0, 0, nil
 	}
 
 	for {
 		if cerr := ctx.Err(); cerr != nil {
-			if progress != nil {
-				progress(processed, total)
+			safeProgress(processed, total)
+			if callbackErr != nil {
+				return processed, total, callbackErr
 			}
 			return processed, total, cerr
 		}
@@ -143,8 +179,9 @@ func chunkedTxLastSeenBackfill(
 			break
 		}
 		processed += n
-		if progress != nil {
-			progress(processed, total)
+		safeProgress(processed, total)
+		if callbackErr != nil {
+			return processed, total, callbackErr
 		}
 
 		if yieldDelay > 0 {
@@ -154,8 +191,9 @@ func chunkedTxLastSeenBackfill(
 				if !t.Stop() {
 					<-t.C
 				}
-				if progress != nil {
-					progress(processed, total)
+				safeProgress(processed, total)
+				if callbackErr != nil {
+					return processed, total, callbackErr
 				}
 				return processed, total, ctx.Err()
 			case <-t.C:
@@ -164,9 +202,15 @@ func chunkedTxLastSeenBackfill(
 		}
 	}
 
-	// Terminal callback: single fire with final stable counts.
-	if progress != nil {
-		progress(processed, total)
+	// Terminal callback: only fire if counts differ from the last
+	// in-loop fire (#1735 finding #10). When the last batch is exactly
+	// batchSize-sized, the in-loop fire already reported the final
+	// (processed,total) — a second identical fire is redundant noise.
+	if !lastFiredAt || lastFiredP != processed || lastFiredT != total {
+		safeProgress(processed, total)
+		if callbackErr != nil {
+			return processed, total, callbackErr
+		}
 	}
 	return processed, total, nil
 }
