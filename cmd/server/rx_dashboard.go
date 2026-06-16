@@ -75,6 +75,11 @@ func (s *Server) resolveHeardKey(heardKey string) (string, string) {
 		names = append(names, n)
 	}
 	if len(pks) == 1 {
+		// Same identity-hiding parity as /api/nodes/resolve (#15, #1181): don't
+		// surface a blacklisted or hidden-prefix node's name in coverage tooltips.
+		if s.cfg.IsBlacklisted(pks[0]) || s.cfg.IsNameHidden(names[0]) {
+			return heardKey, ""
+		}
 		return pks[0], names[0]
 	}
 	return heardKey, ""
