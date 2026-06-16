@@ -44,8 +44,21 @@ func hexSizeForRes(res int) float64 {
 	return (hexTargetPx / 2) * mercUPPZ0 / math.Pow(2, float64(res))
 }
 
-// hexCellAt returns a stable cell id ("res:q:r") for the lat/lon at res.
+// hexMaxLat is the Web Mercator latitude limit. The projection (hexMercator)
+// diverges toward ±90° — tan(π/4 + lat·π/360) → ∞ — so points beyond this would
+// produce NaN cell rings via hexInvMercator. Coverage is therefore only defined
+// within ±hexMaxLat; polar submissions are clamped to the edge (#17).
+const hexMaxLat = 85.05112878
+
+// hexCellAt returns a stable cell id ("res:q:r") for the lat/lon at res. Latitude
+// is clamped to ±hexMaxLat so near-polar points bin to the edge instead of
+// producing NaN geometry.
 func hexCellAt(lat, lon float64, res int) string {
+	if lat > hexMaxLat {
+		lat = hexMaxLat
+	} else if lat < -hexMaxLat {
+		lat = -hexMaxLat
+	}
 	size := hexSizeForRes(res)
 	x, y := hexMercator(lat, lon)
 	q := (math.Sqrt(3)/3*x - 1.0/3*y) / size
