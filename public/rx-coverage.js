@@ -22,7 +22,7 @@
     return '--nq-cov-weak';
   }
 
-  function dayBtn(d) { return '<button data-days="' + d + '"' + (d === days ? ' class="active"' : '') + '>' + (d === 1 ? '24h' : d + 'd') + '</button>'; }
+  function dayBtn(d) { return '<button data-days="' + d + '"' + (d === days ? ' class="active"' : '') + ' aria-pressed="' + (d === days ? 'true' : 'false') + '">' + (d === 1 ? '24h' : d + 'd') + '</button>'; }
 
   function pageHtml() {
     return '<div style="max-width:1100px;margin:0 auto;padding:12px 16px">' +
@@ -62,6 +62,18 @@
     return head + '<div style="min-width:180px">' + rows + '</div>' + more;
   }
 
+  // fillOpacityFor adds a redundant, non-hue cue to the SNR tier so the map is
+  // distinguishable for colour-blind users (orange vs red): stronger signal =
+  // more opaque. Pairs with the hue and the per-cell SNR in the tooltip (#a11y).
+  function fillOpacityFor(p) {
+    switch (colorVar(p)) {
+      case '--nq-cov-strong': return 0.6;
+      case '--nq-cov-mid': return 0.48;
+      case '--nq-cov-weak': return 0.34;
+      default: return 0.22;
+    }
+  }
+
   function drawCoverage() {
     if (!map || destroyed) return;
     var b = map.getBounds();
@@ -73,7 +85,7 @@
       (fc.features || []).forEach(function (f) {
         var ring = (f.geometry.coordinates[0] || []).map(function (c) { return [c[1], c[0]]; });
         var col = cssColor(colorVar(f.properties));
-        L.polygon(ring, { color: col, weight: 1, fillColor: col, fillOpacity: 0.45 }).addTo(covLayer)
+        L.polygon(ring, { color: col, weight: 1, fillColor: col, fillOpacity: fillOpacityFor(f.properties) }).addTo(covLayer)
           .bindTooltip(coverageNodesHtml(f.properties));
       });
     }).catch(function (e) { console.warn('rx-coverage: coverage fetch failed', e); });
@@ -85,16 +97,22 @@
     if (!boardCache.length) { el.innerHTML = '<div class="muted" style="color:var(--text-muted);font-size:13px">No mobile observers in this window yet.</div>'; return; }
     var rows = boardCache.map(function (o, i) {
       var nm = o.name ? escapeHtml(o.name) : (escapeHtml(o.pubkey.slice(0, 10)) + '…');
-      return '<div class="rxb-row' + (o.pubkey === selectedRx ? ' sel' : '') + '" data-rx="' + escapeHtml(o.pubkey) + '" data-name="' + escapeHtml(o.name || '') + '">' +
+      return '<div class="rxb-row' + (o.pubkey === selectedRx ? ' sel' : '') + '" data-rx="' + escapeHtml(o.pubkey) + '" data-name="' + escapeHtml(o.name || '') + '"' +
+        ' role="button" tabindex="0" aria-pressed="' + (o.pubkey === selectedRx ? 'true' : 'false') + '" aria-label="Show coverage for ' + escapeHtml(o.name || o.pubkey.slice(0, 10)) + '">' +
         '<span class="rxb-rank">' + (i + 1) + '</span><span class="rxb-name">' + nm + '</span>' +
         '<span class="rxb-rec">' + o.receptions + '</span><span class="rxb-nodes">' + o.nodes + '</span></div>';
     }).join('');
     el.innerHTML = (selectedRx ? '<button id="rxAll" class="btn-primary" style="margin:0 0 8px">← Show all observers</button>' : '') +
       '<div class="rxb-row rxb-head"><span class="rxb-rank">#</span><span class="rxb-name">Observer (companion)</span><span class="rxb-rec">pkts</span><span class="rxb-nodes">nodes</span></div>' + rows;
     el.querySelectorAll('.rxb-row[data-rx]').forEach(function (r) {
-      r.addEventListener('click', function () {
+      function activate() {
         selectedRx = r.dataset.rx; selectedName = r.dataset.name || '';
         renderBoard(); fitToObserver(); syncHash();
+      }
+      r.addEventListener('click', activate);
+      // Keyboard parity: Enter/Space activate the row like a button (#a11y).
+      r.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); activate(); }
       });
     });
     var all = document.getElementById('rxAll');

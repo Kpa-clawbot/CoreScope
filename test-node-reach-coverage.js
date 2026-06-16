@@ -25,4 +25,14 @@ assert.strictEqual(coverageColorVar({ has_sig: true, best_snr: -10 }), '--nq-cov
 assert.strictEqual(coverageColorVar({ has_sig: true, best_snr: -18 }), '--nq-cov-weak', 'weak');
 assert.strictEqual(coverageColorVar(null), '--nq-cov-grey', 'null props → grey');
 
-console.log('node-reach-coverage color buckets OK');
+// #a11y: fill opacity is a redundant, monotonic non-hue cue for the SNR tier so
+// colour-blind users can tell tiers apart. Must strictly decrease strong→grey.
+const { coverageFillOpacity } = sandbox.window.NodeReachCoverage;
+const oStrong = coverageFillOpacity({ has_sig: true, best_snr: -3 });
+const oMid = coverageFillOpacity({ has_sig: true, best_snr: -6 });
+const oWeak = coverageFillOpacity({ has_sig: true, best_snr: -10 });
+const oGrey = coverageFillOpacity({ has_sig: false });
+assert.ok(oStrong > oMid && oMid > oWeak && oWeak > oGrey,
+  'opacity must ramp strong>mid>weak>grey, got ' + [oStrong, oMid, oWeak, oGrey].join(','));
+
+console.log('node-reach-coverage color buckets + opacity ramp OK');

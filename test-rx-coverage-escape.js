@@ -52,4 +52,10 @@ assert.ok(row1.indexOf('&lt;img') !== -1 || row1.indexOf('&quot;&gt;') !== -1, '
 const row2 = renderRow({ pubkey: evil, name: 'Mob', receptions: 2, nodes: 3 });
 assert.ok(row2.indexOf('<img') === -1, 'raw <img must not appear in row (named): ' + row2);
 
-console.log('rx-coverage pubkey escaping OK');
+// #a11y: the clickable row must be keyboard-operable (role/tabindex) and expose
+// pressed state, so it isn't a mouse-only <div>.
+assert.ok(/role="button"/.test(row2), 'row must have role="button"');
+assert.ok(/tabindex="0"/.test(row2), 'row must be focusable (tabindex)');
+assert.ok(/aria-pressed="(true|false)"/.test(row2), 'row must expose aria-pressed');
+
+console.log('rx-coverage pubkey escaping + row a11y OK');

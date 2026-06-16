@@ -11,6 +11,14 @@
   --nq-cov-weak: #e74c3c;   /* SF8: < −9 dB      (poor, packet loss likely) */
   --nq-cov-grey: #95a5a6;   /* heard, no SNR metric */
 }
+/* Dark-theme variants: the saturated mid-luminance defaults glare on dark
+   basemaps. Mirrors the rest of the dashboard's theme-aware tokens (#polish). */
+[data-theme="dark"] {
+  --nq-cov-strong: #3fb950;
+  --nq-cov-mid: #d29922;
+  --nq-cov-weak: #f85149;
+  --nq-cov-grey: #8b949e;
+}
 .nq-cov-legend { display:flex; gap:12px; align-items:center; font-size:11px; color:var(--text-muted, #57606a); margin:4px 0 10px; }
 /* Toggled by node-reach.js applyCoverage via class, not inline style, so CSS
    (print rules, themes) can still override visibility (#19). */
@@ -22,6 +30,8 @@
 .rxb-row { display:flex; align-items:center; gap:10px; padding:7px 10px; background:var(--section-bg, #f6f8fa); border:1px solid var(--border, #d0d7de); border-radius:6px; font-size:13px; cursor:pointer; }
 .rxb-row.rxb-head { font-size:10px; text-transform:uppercase; color:var(--text-muted, #57606a); cursor:default; }
 .rxb-row.sel { outline:2px solid var(--accent, #2ecc71); }
+/* Visible keyboard focus for the now-focusable (#polish) leaderboard rows. */
+.rxb-row[data-rx]:focus-visible { outline:2px solid var(--link, #0969da); outline-offset:1px; }
 .rxb-rank { width:24px; text-align:right; color:var(--text-muted, #57606a); }
 .rxb-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .rxb-rec, .rxb-nodes { width:50px; text-align:right; font-variant-numeric:tabular-nums; }
