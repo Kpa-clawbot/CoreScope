@@ -129,6 +129,45 @@ func TestClientReceptionsRetentionUsesRxAtIndex(t *testing.T) {
 	}
 }
 
+// TestRxLeaderboardQueryIsIndexBacked pins the planner choice for the leaderboard
+// SELECT (the rx_at-windowed, rx_pubkey-grouped query in cmd/server/rx_dashboard.go).
+// SQLite serves it from the UNIQUE(rx_pubkey,heard_key,rx_at) constraint index as a
+// COVERING scan (not idx_client_recept_rxat, and not a table-heap scan). The table
+// is retention-bounded, so a covering scan is acceptable; this test guards against a
+// silent regression to a bare table scan under the writer lock when the schema is
+// next tweaked. Representative form (no JOINs — they don't change whether `cr` is
+// index-backed).
+func TestRxLeaderboardQueryIsIndexBacked(t *testing.T) {
+	s := newTestStore(t)
+	rows, err := s.db.Query(`EXPLAIN QUERY PLAN
+		SELECT cr.rx_pubkey, COUNT(*), COUNT(DISTINCT cr.heard_key)
+		FROM client_receptions cr
+		WHERE cr.rx_at >= ?
+		GROUP BY cr.rx_pubkey
+		ORDER BY COUNT(*) DESC
+		LIMIT ?`, "2026-01-01T00:00:00Z", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	plan := ""
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan += detail + "\n"
+	}
+	t.Logf("leaderboard plan:\n%s", plan)
+	// The concern is a bare table-heap scan, not which specific index wins. The
+	// plan must stay index-backed (covering or search) — a regression to a bare
+	// "SCAN cr" without an index fails here.
+	if !strings.Contains(plan, "INDEX") {
+		t.Fatalf("leaderboard SELECT must stay index-backed (no full table-heap scan), plan was:\n%s", plan)
+	}
+}
+
 func TestDeriveHeardKey(t *testing.T) {
 	full := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 	k, l, src, ok := deriveHeardKey("rx", packetpath.RouteFlood, nil, strings.ToUpper(full), true)
