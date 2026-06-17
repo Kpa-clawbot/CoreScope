@@ -154,3 +154,44 @@ func TestRxLeaderboardHidesBlacklistedAndHidden(t *testing.T) {
 		t.Fatalf("hidden-prefix contributor should remain with a blanked name: %+v", byPk["dd04"])
 	}
 }
+
+// TestRxLeaderboardLimitSurvivesBlacklistDrop verifies #1727 r2 must-fix #2: the
+// SQL LIMIT runs before the Go-side observer-blacklist drop, so the leaderboard
+// must over-fetch and still return `limit` non-blacklisted rows even when the
+// top contributors are blacklisted (not limit-minus-dropped).
+func TestRxLeaderboardLimitSurvivesBlacklistDrop(t *testing.T) {
+	db := seedCoverageDB(t)
+	recent := time.Now().UTC().Format(time.RFC3339)
+	// Reception counts strictly descending so ORDER BY COUNT(*) DESC is deterministic:
+	// the two blacklisted observers are the top two, then five good ones.
+	counts := []struct {
+		pk string
+		n  int
+	}{
+		{"bk1", 10}, {"bk2", 9}, // observer-blacklisted (top of the board)
+		{"g1", 8}, {"g2", 7}, {"g3", 6}, {"g4", 5}, {"g5", 4},
+	}
+	for _, c := range counts {
+		for i := 0; i < c.n; i++ {
+			insRx(t, db, c.pk, fmt.Sprintf("%s%04d", c.pk, i), recent, 51.05, 3.72)
+		}
+	}
+	srv := &Server{db: db, cfg: &Config{ObserverBlacklist: []string{"bk1", "bk2"}}}
+
+	obs, err := srv.rxLeaderboard(7, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(obs) != 3 {
+		t.Fatalf("expected exactly 3 rows after dropping 2 blacklisted from the top, got %d: %+v", len(obs), obs)
+	}
+	want := []string{"g1", "g2", "g3"}
+	for i, o := range obs {
+		if o.Pubkey == "bk1" || o.Pubkey == "bk2" {
+			t.Fatalf("blacklisted observer %q leaked into the leaderboard", o.Pubkey)
+		}
+		if o.Pubkey != want[i] {
+			t.Fatalf("row %d = %q, want %q (top-3 non-blacklisted by count)", i, o.Pubkey, want[i])
+		}
+	}
+}

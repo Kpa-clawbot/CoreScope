@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -90,14 +91,20 @@ func (s *Server) batchResolveHeardKeys(keys []string) map[string][2]string {
 		}
 		batch := valid[i:end]
 		parts := make([]string, len(batch))
+		args := make([]interface{}, 0, len(batch)*2)
 		for j, k := range batch {
-			// k is hexPrefixRe-validated ([0-9a-f] only), so literal interpolation
-			// is injection-safe. The per-prefix LIMIT 2 lives in a subquery because
-			// a bare LIMIT on a UNION ALL term is a SQLite syntax error.
-			parts[j] = "SELECT * FROM (SELECT '" + k + "' AS pfx, public_key, COALESCE(name,'') AS nm FROM nodes WHERE public_key LIKE '" + k + "%' LIMIT 2)"
+			// Parameterized: the prefix flows in as bound args, never interpolated,
+			// so this stays injection-safe regardless of how hexPrefixRe later
+			// evolves. The per-prefix LIMIT 2 lives in a subquery because a bare
+			// LIMIT on a UNION ALL term is a SQLite syntax error.
+			parts[j] = "SELECT * FROM (SELECT ? AS pfx, public_key, COALESCE(name,'') AS nm FROM nodes WHERE public_key LIKE ? LIMIT 2)"
+			args = append(args, k, k+"%")
 		}
-		rows, err := s.db.conn.Query(strings.Join(parts, " UNION ALL "))
+		rows, err := s.db.conn.Query(strings.Join(parts, " UNION ALL "), args...)
 		if err != nil {
+			// Don't fail the request, but don't fail silently either: a swallowed
+			// error here presents as "every name is ambiguous" with no signal.
+			log.Printf("WARN batchResolveHeardKeys: %v", err)
 			for _, k := range batch {
 				res[k] = [2]string{k, ""}
 			}
@@ -233,6 +240,15 @@ type RxLeaderboardResp struct {
 
 func (s *Server) rxLeaderboard(days, limit int) ([]LeaderObserver, error) {
 	since := time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339)
+	// Over-fetch by the observer-blacklist size: the SQL LIMIT is applied before
+	// the Go-side blacklist drop below, so a blacklisted top contributor would
+	// otherwise shrink the public leaderboard under `limit`. At most
+	// len(observerBlacklist) rows are dropped, so limit+that guarantees >= limit
+	// survivors; we re-cap to limit after filtering.
+	sqlLimit := limit
+	if s.cfg != nil {
+		sqlLimit += len(s.cfg.ObserverBlacklist)
+	}
 	// Name preference: the node's advertised name, else the companion's
 	// self-reported name (client_observers), else empty (UI shows the prefix).
 	rows, err := s.db.conn.Query(`
@@ -243,7 +259,7 @@ func (s *Server) rxLeaderboard(days, limit int) ([]LeaderObserver, error) {
 		WHERE cr.rx_at >= ?
 		GROUP BY cr.rx_pubkey
 		ORDER BY COUNT(*) DESC
-		LIMIT ?`, since, limit)
+		LIMIT ?`, since, sqlLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -272,6 +288,9 @@ func (s *Server) rxLeaderboard(days, limit int) ([]LeaderObserver, error) {
 			o.Name = ""
 		}
 		filtered = append(filtered, o)
+		if len(filtered) >= limit {
+			break
+		}
 	}
 	return filtered, nil
 }
