@@ -34,4 +34,8 @@
 .rxb-row[data-rx]:focus-visible { outline:2px solid var(--link, #0969da); outline-offset:1px; }
 .rxb-rank { width:24px; text-align:right; color:var(--text-muted, #57606a); }
 .rxb-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.rxb-rec, .rxb-nodes { width:50px; text-align:right; font-variant-numeric:tabular-nums; }
+.rxb-rec, .rxb-nodes, .rxb-cells, .rxb-score { width:56px; text-align:right; font-variant-numeric:tabular-nums; }
+/* Sortable column headers in the leaderboard head row. */
+.rxb-head .rxb-sort { cursor:pointer; user-select:none; }
+.rxb-head .rxb-sort:hover { color:var(--link, #0969da); }
+.rxb-head .rxb-sort:focus-visible { outline:2px solid var(--link, #0969da); outline-offset:1px; }
