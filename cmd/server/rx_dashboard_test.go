@@ -195,3 +195,52 @@ func TestRxLeaderboardLimitSurvivesBlacklistDrop(t *testing.T) {
 		}
 	}
 }
+
+// TestRxLeaderboardFrontierScore verifies the leaderboard ranks by frontier-
+// weighted cell coverage, not raw reception count: a roaming observer with FEWER
+// receptions but MORE distinct cells outranks a stationary spammer, a cell only
+// one observer covers weighs 1.0, and a cell shared by N observers weighs 1/N.
+func TestRxLeaderboardFrontierScore(t *testing.T) {
+	db := seedCoverageDB(t)
+	recent := time.Now().UTC().Format(time.RFC3339)
+	// "park": 5 receptions all at ONE spot → 1 cell (stationary spammer).
+	for i := 0; i < 5; i++ {
+		insRx(t, db, "park", fmt.Sprintf("pk%04d", i), recent, 51.05, 3.72)
+	}
+	// "roam": 3 receptions at 3 far-apart spots → 3 distinct cells. The first
+	// coincides with park's cell, so that cell is shared by 2 observers.
+	insRx(t, db, "roam", "rm0001", recent, 51.05, 3.72) // shared with park
+	insRx(t, db, "roam", "rm0002", recent, 51.06, 3.72) // unique to roam
+	insRx(t, db, "roam", "rm0003", recent, 51.07, 3.72) // unique to roam
+	srv := &Server{db: db}
+
+	obs, err := srv.rxLeaderboard(7, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(obs) != 2 {
+		t.Fatalf("want 2 observers, got %d: %+v", len(obs), obs)
+	}
+	// Roamer outranks the parked spammer despite fewer receptions.
+	if obs[0].Pubkey != "roam" || obs[1].Pubkey != "park" {
+		t.Fatalf("ranking: want [roam park], got [%s %s]", obs[0].Pubkey, obs[1].Pubkey)
+	}
+	byPk := map[string]LeaderObserver{}
+	for _, o := range obs {
+		byPk[o.Pubkey] = o
+	}
+	// park: 1 cell shared with roam → score 0.5; 5 receptions retained.
+	if byPk["park"].Cells != 1 || byPk["park"].Receptions != 5 {
+		t.Fatalf("park: %+v", byPk["park"])
+	}
+	if d := byPk["park"].Score - 0.5; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("park score: want 0.5, got %v", byPk["park"].Score)
+	}
+	// roam: shared cell (0.5) + 2 unique cells (1.0 each) = 2.5; 3 cells.
+	if byPk["roam"].Cells != 3 {
+		t.Fatalf("roam cells: want 3, got %d", byPk["roam"].Cells)
+	}
+	if d := byPk["roam"].Score - 2.5; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("roam score: want 2.5, got %v", byPk["roam"].Score)
+	}
+}

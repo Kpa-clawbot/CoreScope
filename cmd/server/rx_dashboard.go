@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -228,58 +229,114 @@ func (s *Server) handleRxCoverage(w http.ResponseWriter, r *http.Request) {
 // --- Leaderboard (top mobile observers) ---
 
 type LeaderObserver struct {
-	Pubkey     string `json:"pubkey"`
-	Name       string `json:"name"`
-	Receptions int    `json:"receptions"`
-	Nodes      int    `json:"nodes"`
+	Pubkey     string  `json:"pubkey"`
+	Name       string  `json:"name"`
+	Receptions int     `json:"receptions"`
+	Nodes      int     `json:"nodes"`
+	Cells      int     `json:"cells"` // distinct fixed-res hex cells covered
+	Score      float64 `json:"score"` // frontier-weighted coverage score
 }
 type RxLeaderboardResp struct {
 	Days      int              `json:"days"`
 	Observers []LeaderObserver `json:"observers"`
 }
 
+// leaderboardHexRes is the fixed hex resolution used to bucket receptions into
+// "cells visited" for the frontier-weighted score. ~150 m ground cells at our
+// latitude: coarse enough that a parked node's GPS jitter stays in one cell,
+// fine enough that real driving paints many. Independent of the coverage map's
+// zoom-dependent render resolution so the ranking is stable across views.
+const leaderboardHexRes = 13
+
+// rxLeaderboard ranks mobile observers by frontier-weighted cell coverage over
+// the time window. Each distinct cell an observer covers contributes
+// 1/(observers covering that cell): a cell only they reached weighs 1.0, a cell
+// shared by N observers weighs 1/N. This rewards expanding the map's edge and is
+// spam-proof — a stationary node covers exactly one cell regardless of how many
+// receptions it logs. Bucketing + the rarity weight can't be expressed in SQL,
+// so we aggregate the window's rows in Go (a few thousand — cheap).
 func (s *Server) rxLeaderboard(days, limit int) ([]LeaderObserver, error) {
 	since := time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339)
-	// Over-fetch by the observer-blacklist size: the SQL LIMIT is applied before
-	// the Go-side blacklist drop below, so a blacklisted top contributor would
-	// otherwise shrink the public leaderboard under `limit`. At most
-	// len(observerBlacklist) rows are dropped, so limit+that guarantees >= limit
-	// survivors; we re-cap to limit after filtering.
-	sqlLimit := limit
-	if s.cfg != nil {
-		sqlLimit += len(s.cfg.ObserverBlacklist)
-	}
 	// Name preference: the node's advertised name, else the companion's
 	// self-reported name (client_observers), else empty (UI shows the prefix).
 	rows, err := s.db.conn.Query(`
-		SELECT cr.rx_pubkey, COALESCE(NULLIF(n.name,''), NULLIF(co.name,''), ''), COUNT(*), COUNT(DISTINCT cr.heard_key)
+		SELECT cr.rx_pubkey, COALESCE(NULLIF(n.name,''), NULLIF(co.name,''), ''),
+		       cr.lat, cr.lon, cr.heard_key
 		FROM client_receptions cr
 		LEFT JOIN nodes n ON n.public_key = cr.rx_pubkey
 		LEFT JOIN client_observers co ON co.pubkey = cr.rx_pubkey
-		WHERE cr.rx_at >= ?
-		GROUP BY cr.rx_pubkey
-		ORDER BY COUNT(*) DESC
-		LIMIT ?`, since, sqlLimit)
+		WHERE cr.rx_at >= ?`, since)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []LeaderObserver{}
+
+	type agg struct {
+		name       string
+		receptions int
+		cells      map[string]struct{}
+		nodes      map[string]struct{}
+	}
+	obsAgg := map[string]*agg{}
+	cellObservers := map[string]map[string]struct{}{} // cell -> set of rx_pubkey
+
 	for rows.Next() {
-		var o LeaderObserver
-		if err := rows.Scan(&o.Pubkey, &o.Name, &o.Receptions, &o.Nodes); err != nil {
+		var pk, name, heardKey string
+		var lat, lon float64
+		if err := rows.Scan(&pk, &name, &lat, &lon, &heardKey); err != nil {
 			return nil, err
 		}
-		out = append(out, o)
+		a := obsAgg[pk]
+		if a == nil {
+			a = &agg{name: name, cells: map[string]struct{}{}, nodes: map[string]struct{}{}}
+			obsAgg[pk] = a
+		}
+		a.receptions++
+		a.nodes[heardKey] = struct{}{}
+		cell := hexCellAt(lat, lon, leaderboardHexRes)
+		a.cells[cell] = struct{}{}
+		set := cellObservers[cell]
+		if set == nil {
+			set = map[string]struct{}{}
+			cellObservers[cell] = set
+		}
+		set[pk] = struct{}{}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// Identity hiding parity (#1727 r2): pre-PR rows / blacklist-after-ingest /
-	// config-reload lag could otherwise surface a hidden operator here. Drop
-	// observer-blacklisted contributors entirely, and blank the name of a
-	// node-blacklisted or hidden-prefix identity. nil cfg ⇒ all no-ops.
-	filtered := out[:0]
+
+	out := make([]LeaderObserver, 0, len(obsAgg))
+	for pk, a := range obsAgg {
+		var score float64
+		for cell := range a.cells {
+			score += 1.0 / float64(len(cellObservers[cell]))
+		}
+		out = append(out, LeaderObserver{
+			Pubkey:     pk,
+			Name:       a.name,
+			Receptions: a.receptions,
+			Nodes:      len(a.nodes),
+			Cells:      len(a.cells),
+			Score:      score,
+		})
+	}
+
+	// Rank by frontier score; ties broken by raw receptions then pubkey so the
+	// order is deterministic (keeps same-location fixtures stable).
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Score != out[j].Score {
+			return out[i].Score > out[j].Score
+		}
+		if out[i].Receptions != out[j].Receptions {
+			return out[i].Receptions > out[j].Receptions
+		}
+		return out[i].Pubkey < out[j].Pubkey
+	})
+
+	// Identity hiding parity (#1727 r2): drop observer-blacklisted contributors,
+	// blank node-blacklisted / hidden-prefix names, cap at limit. nil cfg ⇒ no-ops.
+	filtered := make([]LeaderObserver, 0, limit)
 	for _, o := range out {
 		if s.cfg.IsObserverBlacklisted(o.Pubkey) {
 			continue
