@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"log"
@@ -248,24 +249,35 @@ type RxLeaderboardResp struct {
 // zoom-dependent render resolution so the ranking is stable across views.
 const leaderboardHexRes = 13
 
+// leaderboardScanCap bounds how many rows the leaderboard aggregates in memory.
+// The endpoint is unauthenticated (only requireClientRxCoverage), and the Go-side
+// rarity weighting can't push the GROUP BY into SQLite, so without a cap a wide
+// window on a busy network would stream the whole table into maps. At the cap we
+// log and return a partial (best-effort) ranking rather than OOM (#review r2).
+const leaderboardScanCap = 500000
+
 // rxLeaderboard ranks mobile observers by frontier-weighted cell coverage over
 // the time window. Each distinct cell an observer covers contributes
 // 1/(observers covering that cell): a cell only they reached weighs 1.0, a cell
 // shared by N observers weighs 1/N. This rewards expanding the map's edge and is
 // spam-proof — a stationary node covers exactly one cell regardless of how many
 // receptions it logs. Bucketing + the rarity weight can't be expressed in SQL,
-// so we aggregate the window's rows in Go (a few thousand — cheap).
-func (s *Server) rxLeaderboard(days, limit int) ([]LeaderObserver, error) {
+// so we aggregate the window's rows in Go (bounded by leaderboardScanCap).
+func (s *Server) rxLeaderboard(ctx context.Context, days, limit int) ([]LeaderObserver, error) {
 	since := time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339)
 	// Name preference: the node's advertised name, else the companion's
 	// self-reported name (client_observers), else empty (UI shows the prefix).
-	rows, err := s.db.conn.Query(`
+	// Hard LIMIT bounds memory; ORDER BY rx_at DESC so a truncated window keeps
+	// the most recent receptions.
+	rows, err := s.db.conn.QueryContext(ctx, `
 		SELECT cr.rx_pubkey, COALESCE(NULLIF(n.name,''), NULLIF(co.name,''), ''),
 		       cr.lat, cr.lon, cr.heard_key
 		FROM client_receptions cr
 		LEFT JOIN nodes n ON n.public_key = cr.rx_pubkey
 		LEFT JOIN client_observers co ON co.pubkey = cr.rx_pubkey
-		WHERE cr.rx_at >= ?`, since)
+		WHERE cr.rx_at >= ?
+		ORDER BY cr.rx_at DESC
+		LIMIT ?`, since, leaderboardScanCap)
 	if err != nil {
 		return nil, err
 	}
@@ -280,12 +292,19 @@ func (s *Server) rxLeaderboard(days, limit int) ([]LeaderObserver, error) {
 	obsAgg := map[string]*agg{}
 	cellObservers := map[string]map[string]struct{}{} // cell -> set of rx_pubkey
 
+	scanned := 0
 	for rows.Next() {
+		// Honour client cancellation/timeout on the long scan (checked in batches
+		// to avoid a per-row context mutex on up to 500k rows).
+		if scanned&2047 == 0 && ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		var pk, name, heardKey string
 		var lat, lon float64
 		if err := rows.Scan(&pk, &name, &lat, &lon, &heardKey); err != nil {
 			return nil, err
 		}
+		scanned++
 		a := obsAgg[pk]
 		if a == nil {
 			a = &agg{name: name, cells: map[string]struct{}{}, nodes: map[string]struct{}{}}
@@ -305,12 +324,32 @@ func (s *Server) rxLeaderboard(days, limit int) ([]LeaderObserver, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	if scanned >= leaderboardScanCap {
+		log.Printf("[rx-leaderboard] scan hit cap %d over %dd window; ranking is partial (most-recent rows)", leaderboardScanCap, days)
+	}
+
+	// Per-cell observer counts EXCLUDING blacklisted contributors, so an operator
+	// of a blacklisted node parked in a cell can't silently dilute everyone else's
+	// frontier weight (#review r2). Name-hidden (not blacklisted) observers are
+	// legitimate contributors and still count.
+	cellCount := make(map[string]int, len(cellObservers))
+	for cell, set := range cellObservers {
+		n := 0
+		for pk := range set {
+			if !s.cfg.IsObserverBlacklisted(pk) && !s.cfg.IsBlacklisted(pk) {
+				n++
+			}
+		}
+		cellCount[cell] = n
+	}
 
 	out := make([]LeaderObserver, 0, len(obsAgg))
 	for pk, a := range obsAgg {
 		var score float64
 		for cell := range a.cells {
-			score += 1.0 / float64(len(cellObservers[cell]))
+			if c := cellCount[cell]; c > 0 {
+				score += 1.0 / float64(c)
+			}
 		}
 		out = append(out, LeaderObserver{
 			Pubkey:     pk,
@@ -365,7 +404,7 @@ func (s *Server) handleRxLeaderboard(w http.ResponseWriter, r *http.Request) {
 	if limit < 1 || limit > 100 {
 		limit = 20
 	}
-	obs, err := s.rxLeaderboard(days, limit)
+	obs, err := s.rxLeaderboard(r.Context(), days, limit)
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return

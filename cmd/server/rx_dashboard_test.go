@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -71,7 +72,7 @@ func TestRxLeaderboard(t *testing.T) {
 	insRx(t, db, "compb", "aabbcc", recent, 51.05, 3.72) // no name anywhere
 	srv := &Server{db: db}
 
-	obs, err := srv.rxLeaderboard(7, 10)
+	obs, err := srv.rxLeaderboard(context.Background(), 7, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +134,7 @@ func TestRxLeaderboardHidesBlacklistedAndHidden(t *testing.T) {
 		HiddenNamePrefixes: []string{"🚫"},
 	}}
 
-	obs, err := srv.rxLeaderboard(7, 100)
+	obs, err := srv.rxLeaderboard(context.Background(), 7, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +179,7 @@ func TestRxLeaderboardLimitSurvivesBlacklistDrop(t *testing.T) {
 	}
 	srv := &Server{db: db, cfg: &Config{ObserverBlacklist: []string{"bk1", "bk2"}}}
 
-	obs, err := srv.rxLeaderboard(7, 3)
+	obs, err := srv.rxLeaderboard(context.Background(), 7, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +215,7 @@ func TestRxLeaderboardFrontierScore(t *testing.T) {
 	insRx(t, db, "roam", "rm0003", recent, 51.07, 3.72) // unique to roam
 	srv := &Server{db: db}
 
-	obs, err := srv.rxLeaderboard(7, 10)
+	obs, err := srv.rxLeaderboard(context.Background(), 7, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,5 +243,33 @@ func TestRxLeaderboardFrontierScore(t *testing.T) {
 	}
 	if d := byPk["roam"].Score - 2.5; d > 1e-9 || d < -1e-9 {
 		t.Fatalf("roam score: want 2.5, got %v", byPk["roam"].Score)
+	}
+}
+
+// TestRxLeaderboardScoreNotDilutedByBlacklisted verifies the #review-r2 fix: a
+// blacklisted observer sharing a cell must NOT dilute a legitimate observer's
+// frontier score. Without excluding blacklisted pubkeys from the per-cell count,
+// the legit observer's only cell would weigh 1/2 = 0.5 instead of 1.0.
+func TestRxLeaderboardScoreNotDilutedByBlacklisted(t *testing.T) {
+	db := seedCoverageDB(t)
+	recent := time.Now().UTC().Format(time.RFC3339)
+	// Legit "good" and blacklisted "bad" both cover the same ~150 m cell.
+	insRx(t, db, "good", "aabb01", recent, 51.05, 3.72)
+	insRx(t, db, "bad", "aabb02", recent, 51.05, 3.72)
+	srv := &Server{db: db, cfg: &Config{ObserverBlacklist: []string{"bad"}}}
+
+	obs, err := srv.rxLeaderboard(context.Background(), 7, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPk := map[string]LeaderObserver{}
+	for _, o := range obs {
+		byPk[o.Pubkey] = o
+	}
+	if _, leaked := byPk["bad"]; leaked {
+		t.Fatalf("blacklisted observer must not appear: %+v", byPk["bad"])
+	}
+	if d := byPk["good"].Score - 1.0; d > 1e-9 || d < -1e-9 {
+		t.Fatalf("blacklisted observer diluted the score: got %v, want 1.0", byPk["good"].Score)
 	}
 }
