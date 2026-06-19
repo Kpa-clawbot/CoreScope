@@ -37,6 +37,10 @@ type StoreTx struct {
 	RouteType        *int
 	PayloadType      *int
 	DecodedJSON      string
+	// ScopeName is the transmission's region scope name (transmissions.scope_name,
+	// #899). Empty on schemas without the column (db.hasScopeName=false). Used to
+	// surface the set of region scopes a repeater has transported (#1751).
+	ScopeName        string
 	Observations     []*StoreObs
 	ObservationCount int
 	// Display fields from longest-path observation
@@ -704,6 +708,12 @@ func (s *PacketStore) Load() error {
 	if s.db.hasObsRawHex {
 		obsRawHexCol = ", o.raw_hex"
 	}
+	// #1751: scope_name is on the transmission row; append as the last
+	// selected column so the observation fan-out doesn't affect its position.
+	scopeNameCol := ""
+	if s.db.hasScopeName {
+		scopeNameCol = ", t.scope_name"
+	}
 
 	// Build WHERE conditions: retention cutoff (mirrors Evict logic) + optional memory-cap limit.
 	// When hotStartupHours > 0, use it as the initial cutoff (smaller window = fast startup).
@@ -748,7 +758,7 @@ func (s *PacketStore) Load() error {
 		loadSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
 				o.id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,
-				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRawHexCol + rpCol + `
+				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRawHexCol + rpCol + scopeNameCol + `
 			FROM transmissions t
 			LEFT JOIN observations o ON o.transmission_id = t.id
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx` + filterClause + `
@@ -757,7 +767,7 @@ func (s *PacketStore) Load() error {
 		loadSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
 				o.id, o.observer_id, o.observer_name, COALESCE(obs.iata, ''), o.direction,
-				o.snr, o.rssi, o.score, o.path_json, o.timestamp` + obsRawHexCol + rpCol + `
+				o.snr, o.rssi, o.score, o.path_json, o.timestamp` + obsRawHexCol + rpCol + scopeNameCol + `
 			FROM transmissions t
 			LEFT JOIN observations o ON o.transmission_id = t.id
 			LEFT JOIN observers obs ON obs.id = o.observer_id` + filterClause + `
@@ -795,6 +805,7 @@ func (s *PacketStore) Load() error {
 		var score sql.NullInt64
 		var obsRawHex sql.NullString
 		var resolvedPathStr sql.NullString
+		var scopeName sql.NullString
 
 		scanArgs := []interface{}{&txID, &rawHex, &hash, &firstSeen, &routeType, &payloadType,
 			&payloadVersion, &decodedJSON,
@@ -805,6 +816,9 @@ func (s *PacketStore) Load() error {
 		}
 		if s.db.hasResolvedPath {
 			scanArgs = append(scanArgs, &resolvedPathStr)
+		}
+		if s.db.hasScopeName {
+			scanArgs = append(scanArgs, &scopeName)
 		}
 		if err := rows.Scan(scanArgs...); err != nil {
 			log.Printf("[store] scan error: %v", err)
@@ -823,6 +837,7 @@ func (s *PacketStore) Load() error {
 				RouteType:   nullIntPtr(routeType),
 				PayloadType: nullIntPtr(payloadType),
 				DecodedJSON: nullStrVal(decodedJSON),
+				ScopeName:   nullStrVal(scopeName),
 				obsKeys:     make(map[string]bool),
 				observerSet: make(map[string]bool),
 			}
@@ -1026,6 +1041,11 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 	if s.db.hasObsRawHex {
 		obsRawHexCol = ", o.raw_hex"
 	}
+	// #1751: scope_name is on the transmission row; append as the last column.
+	scopeNameCol := ""
+	if s.db.hasScopeName {
+		scopeNameCol = ", t.scope_name"
+	}
 
 	// #1690: window on the denormalized last_seen (effective recency)
 	// rather than first_seen. See chunked_load.go for the full rationale.
@@ -1045,7 +1065,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 		chunkSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
 				o.id, obs.id, obs.name, o.direction,
-				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRawHexCol + rpCol + `
+				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRawHexCol + rpCol + scopeNameCol + `
 			FROM transmissions t
 			LEFT JOIN observations o ON o.transmission_id = t.id
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx` + filterClause + `
@@ -1054,7 +1074,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 		chunkSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
 				o.id, o.observer_id, o.observer_name, o.direction,
-				o.snr, o.rssi, o.score, o.path_json, o.timestamp` + obsRawHexCol + rpCol + `
+				o.snr, o.rssi, o.score, o.path_json, o.timestamp` + obsRawHexCol + rpCol + scopeNameCol + `
 			FROM transmissions t
 			LEFT JOIN observations o ON o.transmission_id = t.id` + filterClause + `
 			ORDER BY t.first_seen ASC, o.timestamp DESC`
@@ -1114,6 +1134,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 		var score sql.NullInt64
 		var obsRawHex sql.NullString
 		var resolvedPathStr sql.NullString
+		var scopeName sql.NullString
 
 		scanArgs := []interface{}{&txID, &rawHex, &hash, &firstSeen, &routeType, &payloadType,
 			&payloadVersion, &decodedJSON,
@@ -1124,6 +1145,9 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 		}
 		if s.db.hasResolvedPath {
 			scanArgs = append(scanArgs, &resolvedPathStr)
+		}
+		if s.db.hasScopeName {
+			scanArgs = append(scanArgs, &scopeName)
 		}
 		if err := rows.Scan(scanArgs...); err != nil {
 			log.Printf("[store] loadChunk scan error: %v", err)
@@ -1142,6 +1166,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 				RouteType:   nullIntPtr(routeType),
 				PayloadType: nullIntPtr(payloadType),
 				DecodedJSON: nullStrVal(decodedJSON),
+				ScopeName:   nullStrVal(scopeName),
 				obsKeys:     make(map[string]bool),
 				observerSet: make(map[string]bool),
 			}
@@ -2427,11 +2452,16 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 	if s.db.hasObsRawHex {
 		obsRHCol = ", o.raw_hex"
 	}
+	// #1751: scope_name is on the transmission row; append as the last column.
+	scopeNameCol := ""
+	if s.db.hasScopeName {
+		scopeNameCol = ", t.scope_name"
+	}
 	if s.db.isV3 {
 		querySQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
 				o.id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,
-				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRHCol + `
+				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRHCol + scopeNameCol + `
 			FROM transmissions t
 			LEFT JOIN observations o ON o.transmission_id = t.id
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
@@ -2441,7 +2471,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		querySQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
 				o.id, o.observer_id, o.observer_name, COALESCE(obs.iata, ''), o.direction,
-				o.snr, o.rssi, o.score, o.path_json, o.timestamp` + obsRHCol + `
+				o.snr, o.rssi, o.score, o.path_json, o.timestamp` + obsRHCol + scopeNameCol + `
 			FROM transmissions t
 			LEFT JOIN observations o ON o.transmission_id = t.id
 			LEFT JOIN observers obs ON obs.id = o.observer_id
@@ -2464,6 +2494,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		obsID                                                              *int
 		observerID, observerName, observerIATA, direction, pathJSON, obsTS string
 		obsRawHex                                                          string
+		scopeName                                                          string
 		snr, rssi                                                          *float64
 		score                                                              *int
 	}
@@ -2481,6 +2512,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		var snrVal, rssiVal sql.NullFloat64
 		var scoreVal sql.NullInt64
 		var obsRawHex sql.NullString
+		var scopeName sql.NullString
 
 		scanArgs2 := []interface{}{&txID, &rawHex, &hash, &firstSeen, &routeType, &payloadType,
 			&payloadVersion, &decodedJSON,
@@ -2488,6 +2520,9 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			&snrVal, &rssiVal, &scoreVal, &pathJSON, &obsTimestamp}
 		if s.db.hasObsRawHex {
 			scanArgs2 = append(scanArgs2, &obsRawHex)
+		}
+		if s.db.hasScopeName {
+			scanArgs2 = append(scanArgs2, &scopeName)
 		}
 		if err := rows.Scan(scanArgs2...); err != nil {
 			continue
@@ -2516,6 +2551,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			pathJSON:     nullStrVal(pathJSON),
 			obsTS:        nullStrVal(obsTimestamp),
 			obsRawHex:    nullStrVal(obsRawHex),
+			scopeName:    nullStrVal(scopeName),
 			snr:          nullFloatPtr(snrVal),
 			rssi:         nullFloatPtr(rssiVal),
 			score:        nullIntPtr(scoreVal),
@@ -2570,6 +2606,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				RouteType:   r.routeType,
 				PayloadType: r.payloadType,
 				DecodedJSON: r.decodedJSON,
+				ScopeName:   r.scopeName,
 				obsKeys:     make(map[string]bool),
 				observerSet: make(map[string]bool),
 			}

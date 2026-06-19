@@ -1353,6 +1353,12 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 					node["relay_active"] = info.RelayActive
 					node["relay_count_1h"] = info.RelayCount1h
 					node["relay_count_24h"] = info.RelayCount24h
+					// #1751: region scopes this repeater has transported.
+					// Set only when non-empty so the field is absent for
+					// nodes without scopes / on older schemas.
+					if len(info.TransportedScopes) > 0 {
+						node["transported_scopes"] = info.TransportedScopes
+					}
 					// usefulness_score retained for API compat; new
 					// consumers should read traffic_share_score
 					// (issue #1456). When the #672 composite ships
@@ -1539,6 +1545,11 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 			node["relay_window_hours"] = info.WindowHours
 			node["relay_count_1h"] = info.RelayCount1h
 			node["relay_count_24h"] = info.RelayCount24h
+			// #1751: region scopes this repeater has transported. Set only
+			// when non-empty (absent for no-scope nodes / older schemas).
+			if len(info.TransportedScopes) > 0 {
+				node["transported_scopes"] = info.TransportedScopes
+			}
 			// usefulness_score retained for API compat; new
 			// consumers should read traffic_share_score (#1456).
 			us := s.store.GetRepeaterUsefulnessScore(pubkey)
