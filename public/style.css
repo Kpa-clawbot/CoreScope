@@ -274,7 +274,20 @@
      baked in route-render.js). Themes via dark-mode block below. */
   --status-info: #3b82f6;
   --path-inspector-speculative: #d97706;
-  --role-observer: #8b5cf6;
+  /* #1715 — neighbor-graph role swatches (`#ngRoleChecks` labels) read
+   * these tokens via the `.role-swatch--{role}` class (public/analytics.js).
+   * Light-theme values are palette-700 shades that clear WCAG AA ≥4.5:1
+   * against the white analytics surface (#ffffff). Dark-theme overrides
+   * live in the [data-theme="dark"] block further down and use palette-400
+   * shades that clear AA against the dark card-bg (#1a1a2e). Keeping the
+   * swatch palette as CSS custom properties is what kept #1715 from
+   * regressing — never reintroduce inline `style="color:#..."` on these
+   * spans. */
+  --role-repeater:  #dc2626;  /* 4.83:1 on #fff */
+  --role-companion: #2563eb;  /* 5.17:1 on #fff */
+  --role-room:      #15803d;  /* 5.02:1 on #fff */
+  --role-sensor:    #b45309;  /* 5.02:1 on #fff */
+  --role-observer:  #7c3aed;  /* 5.70:1 on #fff */
   --accent-hover: #6db3ff;
   --text: #1a1a2e;
   /* #1668 M2 — bumped from #5b6370 (~5.7:1 on white) to palette-gray-700
@@ -383,6 +396,15 @@
     --status-amber-light: #422006;
     --status-amber-text: #fcd34d;
     --path-inspector-speculative: #f59e0b;
+    /* #1715 — dark-theme role swatch overrides. Light values (palette-700)
+     * fail 4.5:1 on the dark analytics card-bg #1a1a2e (e.g. #dc2626 →
+     * 3.53:1). Palette-400/500 shades clear AA on dark. Mirror these in
+     * the [data-theme="dark"] block below. */
+    --role-repeater:  #ef4444;  /* 4.53:1 on #1a1a2e */
+    --role-companion: #3b82f6;  /* 4.64:1 on #1a1a2e */
+    --role-room:      #16a34a;  /* 5.18:1 on #1a1a2e */
+    --role-sensor:    #d97706;  /* 5.35:1 on #1a1a2e */
+    --role-observer:  #a78bfa;  /* 6.27:1 on #1a1a2e */
     --status-info: #60a5fa;
     /* #1668 M5 — bump link text up two stops on dark surfaces (4a9eff
        was OK but borderline on card-bg; #60a5fa = palette-blue-400 ≈
@@ -438,6 +460,13 @@
   --status-amber-light: #422006;
   --status-amber-text: #fcd34d;
   --status-info: #60a5fa;
+  /* #1715 — dark-theme role swatch overrides (mirrors the media-query
+   * block above). Palette-400/500 shades clear WCAG AA on #1a1a2e. */
+  --role-repeater:  #ef4444;  /* 4.53:1 on #1a1a2e */
+  --role-companion: #3b82f6;  /* 4.64:1 on #1a1a2e */
+  --role-room:      #16a34a;  /* 5.18:1 on #1a1a2e */
+  --role-sensor:    #d97706;  /* 5.35:1 on #1a1a2e */
+  --role-observer:  #a78bfa;  /* 6.27:1 on #1a1a2e */
   /* #1668 M5 — see :root[data-theme="dark"] media block above for rationale */
   --link-color: var(--palette-blue-400);
   --success: var(--palette-green-400, #4ade80);
@@ -5483,3 +5512,20 @@ body.embed #app.app-fixed {
   margin: 0;
   padding: 0.1rem 0;
 }
+
+/* ============================================================
+ * #1715 — Neighbor-graph role swatches (`#ngRoleChecks` labels).
+ *
+ * Replaces inline `style="color:#..."` spans (which bypassed the
+ * theme tokens entirely and produced different contrast results
+ * on light vs dark) with class-based DOM. The `--role-*` tokens
+ * are defined per-theme in :root + [data-theme="dark"] above and
+ * clear WCAG AA ≥4.5:1 against #ffffff (light) and #1a1a2e (dark).
+ * Never reintroduce inline color hex on these swatches.
+ * ============================================================ */
+.role-swatch        { color: var(--text, inherit); }
+.role-swatch--repeater  { color: var(--role-repeater); }
+.role-swatch--companion { color: var(--role-companion); }
+.role-swatch--room      { color: var(--role-room); }
+.role-swatch--sensor    { color: var(--role-sensor); }
+.role-swatch--observer  { color: var(--role-observer); }

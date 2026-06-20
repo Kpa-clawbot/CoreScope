@@ -2487,16 +2487,19 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
       </div>`;
 
     // Role checkboxes
+    // #1715 — swatches use `.role-swatch--{role}` classes that read the
+    // per-theme `--role-*` CSS tokens (public/style.css). The previous
+    // inline `style="color:${ROLE_COLORS[r]}"` bypassed dark-theme
+    // overrides and failed WCAG AA on #1a1a2e. Do NOT reintroduce inline
+    // color hex here.
     const roles = ['repeater','companion','room','sensor'];
     const rcEl = document.getElementById('ngRoleChecks');
     roles.forEach(r => {
-      const color = (window.ROLE_COLORS || {})[r] || '#888';
-      rcEl.innerHTML += `<label style="font-size:12px;margin-right:8px"><input type="checkbox" data-role="${r}" checked> <span style="color:${esc(color)}">${esc(r)}</span></label>`;
+      rcEl.innerHTML += `<label style="font-size:12px;margin-right:8px"><input type="checkbox" data-role="${r}" checked> <span class="role-swatch role-swatch--${r}">${esc(r)}</span></label>`;
     });
     // Observer checkbox — unchecked by default (observers create hub-and-spoke noise)
     {
-      const color = (window.ROLE_COLORS || {}).observer || '#8b5cf6';
-      rcEl.innerHTML += `<label style="font-size:12px;margin-right:8px"><input type="checkbox" data-role="observer"> <span style="color:${esc(color)}">observer</span></label>`;
+      rcEl.innerHTML += `<label style="font-size:12px;margin-right:8px"><input type="checkbox" data-role="observer"> <span class="role-swatch role-swatch--observer">observer</span></label>`;
     }
 
     // Load data
