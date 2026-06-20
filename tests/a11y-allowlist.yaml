@@ -33,28 +33,5 @@
 
 strict_unused: false
 
-- route: '/analytics?tab=neighbor-graph'
-  selector: '#ngRoleChecks > label:nth-child(1) > span'
-  rule: color-contrast
-  issue: 1715
-  expires_at: 2026-09-11
-- route: '/analytics?tab=neighbor-graph'
-  selector: '#ngRoleChecks > label:nth-child(2) > span'
-  rule: color-contrast
-  issue: 1715
-  expires_at: 2026-09-11
-- route: '/analytics?tab=neighbor-graph'
-  selector: '#ngRoleChecks > label:nth-child(5) > span'
-  rule: color-contrast
-  issue: 1715
-  expires_at: 2026-09-11
-- route: '/analytics?tab=neighbor-graph'
-  selector: 'label:nth-child(3) > span'
-  rule: color-contrast
-  issue: 1715
-  expires_at: 2026-09-11
-- route: '/analytics?tab=neighbor-graph'
-  selector: 'label:nth-child(4) > span'
-  rule: color-contrast
-  issue: 1715
-  expires_at: 2026-09-11
+# (issue #1715 entries removed by the dark-theme role-swatch fix — see
+#  test-a11y-1715-dark-role-swatches.js for the CSS-driven regression gate)
