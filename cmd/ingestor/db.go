@@ -267,10 +267,11 @@ func applySchema(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_transmissions_payload_type ON transmissions(payload_type);
 		-- idx_transmissions_from_pubkey is created by the from_pubkey_v1
 		-- migration after the column is added on legacy DBs (#1143).
-		-- idx_tx_last_seen is created by dbschema.Apply after ensuring
-		-- the last_seen column exists (#1690) — keep it OUT of this base
-		-- schema block so legacy DBs (table-exists, column-missing) don't
-		-- trip on the CREATE INDEX before the ALTER runs.
+		-- idx_tx_last_seen_zero (partial, WHERE last_seen=0) is created by
+		-- dbschema.Apply after ensuring the last_seen column exists (#1690,
+		-- partial-index swap #1740) — keep it OUT of this base schema block
+		-- so legacy DBs (table-exists, column-missing) don't trip on the
+		-- CREATE INDEX before the ALTER runs.
 
 		-- Mobile client RX coverage: a roaming companion = a mobile observer
 		-- with a moving GPS position, so it gets its own table rather than

@@ -626,9 +626,22 @@ func ensureTransmissionsLastSeenColumn(rw *sql.DB, logf Logger) error {
 		}
 		logf("[dbschema] added last_seen column to transmissions (#1690)")
 	}
-	// PREFLIGHT: async=true reason="CREATE INDEX on a single INTEGER column; SQLite scales linearly with row count (~5s for 1.9M rows on prod hardware) and we want the index live before cold-load reads"
-	if _, err := rw.Exec(`CREATE INDEX IF NOT EXISTS idx_tx_last_seen ON transmissions(last_seen)`); err != nil {
-		return fmt.Errorf("create idx_tx_last_seen: %w", err)
+	// #1740 step (a): create the PARTIAL index first. Scans only rows with
+	// last_seen=0 — i.e. the un-backfilled hot subset the chunked backfill
+	// MAX(id) lookup walks. Degenerates to near-empty once the backfill
+	// converges, so it stops competing for page cache.
+	//
+	// PREFLIGHT: async=false reason="partial index on `WHERE last_seen=0`; subset is bounded by un-backfilled rows (≤0 in steady state, ≤ingest-rate during ops) — cheap at any scale even on a 1.9M-row prod table"
+	if _, err := rw.Exec(`CREATE INDEX IF NOT EXISTS idx_tx_last_seen_zero ON transmissions(id) WHERE last_seen=0`); err != nil {
+		return fmt.Errorf("create idx_tx_last_seen_zero: %w", err)
+	}
+	// #1740 step (b): gated DROP of the legacy full index. Only runs AFTER
+	// step (a) succeeded (sequential — we're past the CREATE above). The
+	// DROP is a metadata-only schema rewrite in SQLite; no row scan.
+	//
+	// PREFLIGHT: async=false reason="DROP INDEX is metadata-only in SQLite (no row scan, no rewrite); safe inline at any DB size"
+	if _, err := rw.Exec(`DROP INDEX IF EXISTS idx_tx_last_seen`); err != nil {
+		return fmt.Errorf("drop legacy idx_tx_last_seen: %w", err)
 	}
 	return nil
 }
