@@ -20,6 +20,7 @@
     "/api/nodes/{pubkey}/rx-coverage",
     "/api/observers/clock-skew",
     "/api/paths/inspect",
+    "/api/perf/async-migrations",
     "/api/perf/io",
     "/api/perf/sqlite",
     "/api/perf/write-sources",

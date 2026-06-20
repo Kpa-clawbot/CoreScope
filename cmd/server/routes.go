@@ -230,6 +230,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/perf/io", s.handlePerfIO).Methods("GET")
 	r.HandleFunc("/api/perf/sqlite", s.handlePerfSqlite).Methods("GET")
 	r.HandleFunc("/api/perf/write-sources", s.handlePerfWriteSources).Methods("GET")
+	r.HandleFunc("/api/perf/async-migrations", s.handlePerfAsyncMigrations).Methods("GET")
 	r.HandleFunc("/api/mqtt/status", s.handleMqttStatus).Methods("GET")
 	r.Handle("/api/perf/reset", s.requireAPIKey(http.HandlerFunc(s.handlePerfReset))).Methods("POST")
 	// /api/admin/prune removed in #1283 — pruning is owned by the
@@ -921,6 +922,27 @@ func (s *Server) handlePerf(w http.ResponseWriter, r *http.Request) {
 		Cache:         perfCS,
 		PacketStore:   pktStoreStats,
 		Sqlite:        sqliteStats,
+		AsyncMigrations: func() []AsyncMigrationInfo {
+			if s.db == nil {
+				return []AsyncMigrationInfo{}
+			}
+			// #1735 finding #1 (Group A): on error, log + return
+			// empty BUT also set a header so operators have a
+			// signal. We can't 500 here because the rest of the
+			// /api/perf payload is still useful; the dedicated
+			// /api/perf/async-migrations endpoint DOES 500 (see
+			// handlePerfAsyncMigrations).
+			infos, err := readAsyncMigrations(s.db.conn)
+			if err != nil {
+				log.Printf("[perf] readAsyncMigrations failed: %v", err)
+				w.Header().Set("X-Async-Migrations-Error", err.Error())
+				return []AsyncMigrationInfo{}
+			}
+			if infos == nil {
+				return []AsyncMigrationInfo{}
+			}
+			return infos
+		}(),
 		GoRuntime: func() *GoRuntimeStats {
 			ms := s.getMemStats()
 			return &GoRuntimeStats{

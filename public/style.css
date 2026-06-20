@@ -5483,3 +5483,24 @@ body.embed #app.app-fixed {
   margin: 0;
   padding: 0.1rem 0;
 }
+
+/* #1735 finding #2 (Group B): failed-migration dismiss affordance. */
+.warmup-banner__item--failed {
+  color: var(--banner-failed-fg, #b00);
+}
+
+.warmup-banner__dismiss {
+  margin-left: 0.5rem;
+  padding: 0 0.4rem;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  color: inherit;
+  cursor: pointer;
+  font-size: inherit;
+  line-height: 1;
+}
+.warmup-banner__dismiss:hover,
+.warmup-banner__dismiss:focus {
+  background: var(--banner-dismiss-hover-bg, rgba(0,0,0,0.06));
+}

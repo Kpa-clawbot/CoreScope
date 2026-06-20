@@ -261,15 +261,16 @@ type SqliteStats struct {
 }
 
 type PerfResponse struct {
-	Uptime        int                           `json:"uptime"`
-	TotalRequests int64                         `json:"totalRequests"`
-	AvgMs         float64                       `json:"avgMs"`
-	Endpoints     map[string]*EndpointStatsResp `json:"endpoints"`
-	SlowQueries   []SlowQuery                   `json:"slowQueries"`
-	Cache         PerfCacheStats                `json:"cache"`
-	PacketStore   *PerfPacketStoreStats         `json:"packetStore"`
-	Sqlite        *SqliteStats                  `json:"sqlite"`
-	GoRuntime     *GoRuntimeStats               `json:"goRuntime,omitempty"`
+	Uptime          int                           `json:"uptime"`
+	TotalRequests   int64                         `json:"totalRequests"`
+	AvgMs           float64                       `json:"avgMs"`
+	Endpoints       map[string]*EndpointStatsResp `json:"endpoints"`
+	SlowQueries     []SlowQuery                   `json:"slowQueries"`
+	Cache           PerfCacheStats                `json:"cache"`
+	PacketStore     *PerfPacketStoreStats         `json:"packetStore"`
+	Sqlite          *SqliteStats                  `json:"sqlite"`
+	GoRuntime       *GoRuntimeStats               `json:"goRuntime,omitempty"`
+	AsyncMigrations []AsyncMigrationInfo          `json:"asyncMigrations"`
 }
 
 // GoRuntimeStats holds Go runtime metrics for the perf endpoint.

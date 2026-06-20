@@ -41,11 +41,14 @@ import (
 func ensureAsyncMigrationsTable(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS _async_migrations (
-			name       TEXT PRIMARY KEY,
-			status     TEXT NOT NULL,             -- pending_async | done | failed
-			started_at TEXT NOT NULL DEFAULT (datetime('now')),
-			ended_at   TEXT,
-			error      TEXT
+			name           TEXT PRIMARY KEY,
+			status         TEXT NOT NULL,             -- pending_async | done | failed
+			started_at     TEXT NOT NULL DEFAULT (datetime('now')),
+			ended_at       TEXT,
+			error          TEXT,
+			rows_processed INTEGER NOT NULL DEFAULT 0,
+			rows_total     INTEGER NOT NULL DEFAULT 0,
+			last_update_at TEXT
 		)
 	`)
 	return err
@@ -68,6 +71,9 @@ func (s *Store) RunAsyncMigration(ctx context.Context, name string, fn func(cont
 	if err := ensureAsyncMigrationsTable(s.db); err != nil {
 		return fmt.Errorf("ensure _async_migrations: %w", err)
 	}
+	if err := ensureAsyncMigrationProgressColumns(s.db); err != nil {
+		return fmt.Errorf("ensure _async_migrations progress columns: %w", err)
+	}
 
 	var existing string
 	row := s.db.QueryRow(`SELECT status FROM _async_migrations WHERE name = ?`, name)
@@ -76,13 +82,20 @@ func (s *Store) RunAsyncMigration(ctx context.Context, name string, fn func(cont
 		if existing == "done" {
 			return nil // already complete, nothing to do
 		}
-		// pending_async or failed → reset and retry.
+		// pending_async or failed → reset and retry. Wipe per-row progress
+		// so a fresh denominator/processed pair lands on the next callback.
 		if _, err := s.db.Exec(`
 			UPDATE _async_migrations
-			SET status = 'pending_async', started_at = datetime('now'), ended_at = NULL, error = NULL
+			SET status = 'pending_async', started_at = datetime('now'), ended_at = NULL,
+			    error = NULL, rows_processed = 0, rows_total = 0, last_update_at = NULL
 			WHERE name = ?`, name); err != nil {
 			return fmt.Errorf("reset async migration %q: %w", name, err)
 		}
+		// Also clear the in-memory rate-limit cache so the first new
+		// progress write isn't suppressed.
+		progressGateMu.Lock()
+		delete(progressLastWriteAt, name)
+		progressGateMu.Unlock()
 	case sql.ErrNoRows:
 		if _, err := s.db.Exec(`
 			INSERT INTO _async_migrations (name, status) VALUES (?, 'pending_async')`,
