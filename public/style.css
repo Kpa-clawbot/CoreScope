@@ -275,7 +275,7 @@
   --status-info: #3b82f6;
   --path-inspector-speculative: #d97706;
   /* #1715 — neighbor-graph role swatches (`#ngRoleChecks` labels) read
-   * these tokens via the `.role-swatch--{role}` class (public/analytics.js).
+   * these tokens via the role-suffixed `.role-swatch--ROLE` class (analytics.js).
    * Light-theme values are palette-700 shades that clear WCAG AA ≥4.5:1
    * against the white analytics surface (#ffffff). Dark-theme overrides
    * live in the [data-theme="dark"] block further down and use palette-400
