@@ -769,7 +769,7 @@
       }
 
       // Copy URL
-      const nodeUrl = location.origin + '#/nodes/' + encodeURIComponent(n.public_key);
+      const nodeUrl = location.origin + '/#/nodes/' + encodeURIComponent(n.public_key);
       document.getElementById('copyUrlBtn')?.addEventListener('click', () => {
         const btn = document.getElementById('copyUrlBtn');
         window.copyToClipboard(nodeUrl, () => {
@@ -780,7 +780,7 @@
 
       // Copy short URL — issue #772. Uses an 8-char pubkey prefix; the
       // backend resolves it to the canonical pubkey when unambiguous.
-      const shortUrl = location.origin + '#/nodes/' + n.public_key.slice(0, 8);
+      const shortUrl = location.origin + '/#/nodes/' + n.public_key.slice(0, 8);
       document.getElementById('copyShortUrlBtn')?.addEventListener('click', () => {
         const btn = document.getElementById('copyShortUrlBtn');
         window.copyToClipboard(shortUrl, () => {
@@ -1577,7 +1577,7 @@
     const observers = h.observers || [];
     const recent = h.recentPackets || [];
     const hasLoc = n.lat != null && n.lon != null;
-    const nodeUrl = location.origin + '#/nodes/' + encodeURIComponent(n.public_key);
+    const nodeUrl = location.origin + '/#/nodes/' + encodeURIComponent(n.public_key);
 
     // Status calculation via shared helper
     const lastHeard = stats.lastHeard;
