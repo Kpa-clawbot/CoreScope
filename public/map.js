@@ -17,6 +17,10 @@
   let geoFilterLayer = null;
   let affinityLayer = null;
   let affinityData = null;
+  let topRoutesLayer = null;
+  let topRoutesEdges = null; // cached neighbor-graph edges for the Important Links overlay
+  let topRoutesRenderTimer = null; // debounce for the Top-N slider
+  let topRoutesAccentCache = ''; // cached --accent, invalidated on theme-refresh
   let userHasMoved = false;
   let controlsCollapsed = false;
 
@@ -221,6 +225,23 @@
             <div id="mcNeighborRef" style="display:none;font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:20px;">Ref: <span id="mcNeighborRefName">—</span></div>
             <div id="mcNeighborHint" style="display:none;font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:20px;">Click a node marker to set the reference node</div>
             <label id="mcAffinityDebugLabel" for="mcAffinityDebug" style="display:none"><input type="checkbox" id="mcAffinityDebug"> <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Affinity Debug</label>
+          </fieldset>
+          <fieldset class="mc-section">
+            <legend class="mc-label">Important Links</legend>
+            <label for="mcTopRoutes"><input type="checkbox" id="mcTopRoutes"> <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-graph"/></svg> Show important links</label>
+            <div id="mcTopRoutesOpts" style="display:none;padding-left:20px;margin-top:4px">
+              <label for="mcTopRoutesRankBy" style="font-size:11px;color:var(--text-muted)">Rank by</label>
+              <select id="mcTopRoutesRankBy" style="width:100%;margin:2px 0 6px">
+                <option value="usefulness">Usefulness (composite)</option>
+                <option value="bridge">Bridge</option>
+                <option value="redundancy">Redundancy</option>
+                <option value="traffic">Traffic share</option>
+                <option value="affinity">Affinity only</option>
+              </select>
+              <label for="mcTopRoutesN" style="font-size:11px;color:var(--text-muted)">Top <span id="mcTopRoutesNVal">50</span> links</label>
+              <input type="range" id="mcTopRoutesN" min="10" max="200" step="10" value="50" style="width:100%">
+              <div id="mcTopRoutesHint" style="display:none;font-size:11px;color:var(--text-muted);margin-top:4px">No links to show — endpoints may lack GPS, or the chosen axis has no scores yet (the #672 scores need a server that ships them).</div>
+            </div>
           </fieldset>
           <fieldset class="mc-section">
             <legend class="mc-label">Last Heard</legend>
@@ -503,6 +524,38 @@
           loadAffinityDebugOverlay();
         } else {
           clearAffinityOverlay();
+        }
+      });
+    })();
+
+    // Important Links overlay (#672 / D) — public, B-weighted top routes.
+    (function initTopRoutes() {
+      const cb = document.getElementById('mcTopRoutes');
+      if (!cb) return;
+      const opts = document.getElementById('mcTopRoutesOpts');
+      const rankBy = document.getElementById('mcTopRoutesRankBy');
+      const nSlider = document.getElementById('mcTopRoutesN');
+      const nVal = document.getElementById('mcTopRoutesNVal');
+      const savedAxis = localStorage.getItem('meshcore-top-routes-axis');
+      if (savedAxis && rankBy) rankBy.value = savedAxis;
+      const savedN = localStorage.getItem('meshcore-top-routes-n');
+      if (savedN && nSlider) { nSlider.value = savedN; if (nVal) nVal.textContent = savedN; }
+      cb.addEventListener('change', e => {
+        if (opts) opts.style.display = e.target.checked ? '' : 'none';
+        if (e.target.checked) loadTopRoutes(); else clearTopRoutes();
+      });
+      if (rankBy) rankBy.addEventListener('change', e => {
+        localStorage.setItem('meshcore-top-routes-axis', e.target.value);
+        if (cb.checked) renderTopRoutes();
+      });
+      if (nSlider) nSlider.addEventListener('input', e => {
+        if (nVal) nVal.textContent = e.target.value;
+        localStorage.setItem('meshcore-top-routes-n', e.target.value);
+        // Debounce: dragging the slider fires 'input' rapidly; redraw at most
+        // ~every 80ms so a large top-N doesn't lag the map.
+        if (cb.checked) {
+          clearTimeout(topRoutesRenderTimer);
+          topRoutesRenderTimer = setTimeout(renderTopRoutes, 80);
         }
       });
     })();
@@ -1300,6 +1353,11 @@
 
       renderMarkers();
 
+      // Keep the Important Links overlay in sync on a full node reload: re-fetch
+      // the neighbor-graph edges (not just re-render the stale cache) so the
+      // overlay tracks the current graph + scores.
+      if (topRoutesEdges && document.getElementById('mcTopRoutes')?.checked) loadTopRoutes();
+
       // Restore heatmap if previously enabled
       if (localStorage.getItem('meshcore-map-heatmap') === 'true') {
         toggleHeatmap(true);
@@ -2079,9 +2137,123 @@
   }
   // ─── End Affinity Debug ────────────────────────────────────────────────────
 
+  // ─── Important Links (B-weighted top-routes overlay, issue #672 / D) ─────────
+  // A public, user-facing overlay (NOT the API-key-gated Affinity Debug above)
+  // that draws the most IMPORTANT affinity links on the map, weighted by the
+  // #672 repeater-usefulness axes. It joins the loaded `nodes` array (coords +
+  // per-node usefulness/bridge/redundancy/traffic scores from /api/nodes) with
+  // the public neighbor-graph edges, ranks by a chosen axis, and draws the
+  // top-N as weighted polylines so terrain-level chokepoints (the sole link
+  // across a valley) stand out geographically.
+  const TOP_ROUTES_AXES = {
+    usefulness: 'usefulness_score',
+    bridge: 'bridge_score',
+    redundancy: 'redundancy_score',
+    traffic: 'traffic_share_score',
+  };
+
+  // computeTopRouteEdges is the pure ranking core (no DOM/Leaflet): join edges
+  // with node coords + the chosen axis score, compute per-edge importance, and
+  // return the top-N drawable edges (both endpoints geo-located). Importance =
+  // edge affinity × the mean of the two endpoints' axis score; for axis
+  // 'affinity' it is the raw edge affinity. Edges with a missing endpoint coord,
+  // or zero importance (e.g. a non-repeater endpoint with no axis score), are
+  // dropped. Exported shape kept simple for behavioral testing.
+  function computeTopRouteEdges(edges, nodeList, axis, topN) {
+    const pos = {}, score = {};
+    const scoreField = TOP_ROUTES_AXES[axis]; // undefined for 'affinity'
+    (nodeList || []).forEach(n => {
+      if (!n || !n.public_key) return;
+      const k = n.public_key.toLowerCase();
+      if (n.lat != null && n.lon != null && !(n.lat === 0 && n.lon === 0)) pos[k] = [n.lat, n.lon];
+      if (scoreField) score[k] = (n[scoreField] != null ? n[scoreField] : 0);
+    });
+    const scored = [];
+    (edges || []).forEach(e => {
+      const a = (e.source || '').toLowerCase();
+      const b = (e.target || '').toLowerCase();
+      const pa = pos[a], pb = pos[b];
+      if (!pa || !pb) return; // need both endpoints on the map
+      const edgeStrength = e.score != null ? e.score : 0;
+      const importance = scoreField
+        ? edgeStrength * (((score[a] || 0) + (score[b] || 0)) / 2)
+        : edgeStrength;
+      if (!(importance > 0)) return;
+      scored.push({ a, b, pa, pb, importance, edge: e });
+    });
+    scored.sort((x, y) => y.importance - x.importance);
+    return scored.slice(0, Math.max(0, Math.floor(Number(topN) || 0)));
+  }
+
+  function clearTopRoutes() {
+    if (topRoutesLayer) { map.removeLayer(topRoutesLayer); topRoutesLayer = null; }
+  }
+
+  async function loadTopRoutes() {
+    try {
+      const data = await api('/analytics/neighbor-graph?min_count=1&min_score=0', { ttl: CLIENT_TTL.analyticsRF });
+      topRoutesEdges = (data && data.edges) || [];
+      renderTopRoutes();
+    } catch (err) {
+      console.warn('[top-routes] failed to load neighbor graph:', err);
+      const cb = document.getElementById('mcTopRoutes');
+      if (cb) cb.checked = false;
+    }
+  }
+
+  // topRoutesAccent caches --accent (read once, invalidated on theme-refresh)
+  // so the slider re-render loop doesn't hit getComputedStyle every frame.
+  function topRoutesAccent() {
+    if (!topRoutesAccentCache) {
+      topRoutesAccentCache = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#4a9eff';
+    }
+    return topRoutesAccentCache;
+  }
+
+  function renderTopRoutes() {
+    if (!map || !topRoutesEdges) return;
+    clearTopRoutes();
+    const axis = (document.getElementById('mcTopRoutesRankBy') || {}).value || 'usefulness';
+    const topN = parseInt((document.getElementById('mcTopRoutesN') || {}).value, 10) || 50;
+    const top = computeTopRouteEdges(topRoutesEdges, nodes, axis, topN);
+    // Empty-state hint: the toggle is on but nothing rendered (no geo-located
+    // endpoints, or the chosen axis has no scores yet).
+    const hint = document.getElementById('mcTopRoutesHint');
+    if (hint) hint.style.display = top.length ? 'none' : '';
+    topRoutesLayer = L.layerGroup();
+    if (top.length) {
+      const maxImp = top[0].importance || 1;
+      const nameByPk = {};
+      nodes.forEach(n => { if (n && n.public_key) nameByPk[n.public_key.toLowerCase()] = n.name || n.public_key.slice(0, 8); });
+      const accent = topRoutesAccent();
+      top.forEach(t => {
+        const rel = maxImp > 0 ? t.importance / maxImp : 0;
+        const line = L.polyline([t.pa, t.pb], {
+          color: accent,
+          weight: 1 + rel * 6,      // 1–7px ∝ importance
+          opacity: 0.25 + rel * 0.55 // 0.25–0.8 ∝ importance
+        });
+        const e = t.edge;
+        line.bindPopup('<b>Important link</b><br>' +
+          escapeHtml(nameByPk[t.a] || t.a.slice(0, 8)) + ' ↔ ' + escapeHtml(nameByPk[t.b] || t.b.slice(0, 8)) + '<br>' +
+          'Importance (' + escapeHtml(axis) + '): ' + t.importance.toFixed(3) + '<br>' +
+          'Affinity: ' + (e.score != null ? e.score.toFixed(3) : '—') +
+          (e.avg_snr != null ? '<br>Avg SNR: ' + e.avg_snr.toFixed(1) + ' dB' : ''));
+        topRoutesLayer.addLayer(line);
+      });
+    }
+    topRoutesLayer.addTo(map);
+  }
+  // ─── End Important Links ─────────────────────────────────────────────────────
+
   registerPage('map', {
     init: function(app, routeParam) {
-      _themeRefreshHandler = () => { if (markerLayer) renderMarkers(); };
+      _themeRefreshHandler = () => {
+        if (markerLayer) renderMarkers();
+        // Re-read --accent on theme change; redraw the overlay if it's on.
+        topRoutesAccentCache = '';
+        if (topRoutesEdges && document.getElementById('mcTopRoutes')?.checked) renderTopRoutes();
+      };
       window.addEventListener('theme-refresh', _themeRefreshHandler);
       return init(app, routeParam);
     },

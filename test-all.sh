@@ -17,6 +17,7 @@ node test-frontend-helpers.js
 node test-fetch-all-nodes-pagination.js
 node test-my-repeaters-dashboard.js
 node test-repeater-metric-scatter.js
+node test-top-routes-overlay.js
 node test-url-state.js
 node test-perf-go-runtime.js
 node test-channel-psk-ux.js
