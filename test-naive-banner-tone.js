@@ -57,5 +57,13 @@ test('single compact container (no big heading)', () => {
   assert.ok(!html.includes('font-weight:600'), 'no bold heading');
 });
 
+test('details section suggests upgrading observer software', () => {
+  const detailsMatch = html.match(/<details[\s\S]*?<\/details>/i);
+  assert.ok(detailsMatch, 'details section must exist');
+  const detailsHtml = detailsMatch[0];
+  assert.ok(/upgrad|newer.+observer|latest.+observer/i.test(detailsHtml),
+    'details should mention upgrading observer software/firmware');
+});
+
 if (failed > 0) { console.log(`\n${failed} FAILED`); process.exit(1); }
 console.log(`\nAll ${passed} passed`);
