@@ -32,6 +32,8 @@ window.ObserverDetailNaiveBanner = {
       + '<span style="display:block;margin-top:4px">'
       + 'Set the observer host clock to UTC, or emit Z-suffixed '
       + '(<code>datetime.now(timezone.utc).isoformat()</code>) or offset-aware timestamps. '
+      + 'If your observer build is older, upgrading to the latest release usually fixes this — '
+      + 'newer builds emit offset-aware timestamps by default. '
       + 'This notice clears automatically after 24 hours with no new events.'
       + '</span></details>'
       + '</div>';
