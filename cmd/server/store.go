@@ -863,7 +863,6 @@ func (s *PacketStore) Load() error {
 				RSSI:           nullFloatPtr(rssi),
 				Score:          nullIntPtr(score),
 				PathJSON:       obsPJ,
-				RawHex:         nullStrVal(obsRawHex),
 				Timestamp:      normalizeTimestamp(nullStrVal(obsTimestamp)),
 			}
 
@@ -1174,7 +1173,6 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 				RSSI:           nullFloatPtr(rssi),
 				Score:          nullIntPtr(score),
 				PathJSON:       obsPJ,
-				RawHex:         nullStrVal(obsRawHex),
 				Timestamp:      normalizeTimestamp(nullStrVal(obsTimestamp)),
 			}
 
@@ -2268,6 +2266,77 @@ func (s *PacketStore) GetPerfStoreStatsTyped() PerfPacketStoreStats {
 	}
 }
 
+// GetStoreMemoryBreakdown walks the whole store ONCE (under RLock) and returns
+// the flood-forward (route_type 0/1) share of stored transmissions plus a
+// per-component breakdown of the string bytes held in memory. O(tx + obs) — it
+// touches every observation, so it is opt-in (/api/perf?mem=1) and must not be
+// on the hot path.
+//
+// LOCK CONTENTION: this holds s.mu.RLock for the entire scan of the store. On a
+// large store (millions of observations) the walk takes long enough to stall
+// concurrent writers (ingest/eviction take the write lock) for the duration.
+// Operators should poll this infrequently (e.g. on demand, not on a tight
+// dashboard refresh) — do not wire it into a high-frequency scrape.
+//
+// The per-component *MB figures count string CONTENT plus one Go string header
+// per field. For fields that are inline struct members (RawHex, DecodedJSON,
+// PathJSON, observer strings) that header is ALSO part of storeTxBaseBytes /
+// storeObsBaseBytes, so the per-component totals are a deliberate UPPER BOUND,
+// not additive with TotalTxEstimatedMB. struct/index/map overhead, the neighbor
+// graph and analytics caches are excluded entirely — which is why the total
+// here sits below goHeapInuseMB.
+func (s *PacketStore) GetStoreMemoryBreakdown() *StoreMemoryBreakdown {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := &StoreMemoryBreakdown{}
+	var txRawHex, txDecodedJSON, txPathJSON int64
+	var obsPathJSON, obsStrings int64
+	var floodTxBytes, totalTxBytes int64
+
+	for _, tx := range s.packets {
+		if tx == nil {
+			continue
+		}
+		out.TotalTx++
+		isFlood := tx.RouteType != nil && (*tx.RouteType == 0 || *tx.RouteType == 1)
+		if isFlood {
+			out.FloodTx++
+		}
+		txRawHex += int64(len(tx.RawHex) + strHdr)
+		txDecodedJSON += int64(len(tx.DecodedJSON) + strHdr)
+		txPathJSON += int64(len(tx.PathJSON) + strHdr)
+		b := estimateStoreTxBytes(tx)
+		totalTxBytes += b
+		if isFlood {
+			floodTxBytes += b
+		}
+		for _, o := range tx.Observations {
+			if o == nil {
+				continue
+			}
+			out.Observations++
+			obsPathJSON += int64(len(o.PathJSON) + strHdr)
+			obsStrings += int64(len(o.ObserverID)+len(o.ObserverName)+len(o.ObserverIATA)+len(o.Direction)+len(o.Timestamp)) + 5*strHdr
+		}
+	}
+
+	// 2 decimal places so sub-0.1MB components don't round away to 0.
+	mb := func(b int64) float64 { return math.Round(float64(b)/1048576*100) / 100 }
+	out.TxRawHexMB = mb(txRawHex)
+	out.TxDecodedJsonMB = mb(txDecodedJSON)
+	out.TxPathJsonMB = mb(txPathJSON)
+	out.ObsPathJsonMB = mb(obsPathJSON)
+	out.ObsStringsMB = mb(obsStrings)
+	out.FloodTxEstimatedMB = mb(floodTxBytes)
+	out.TotalTxEstimatedMB = mb(totalTxBytes)
+	if out.TotalTx > 0 {
+		out.FloodTxSharePct = math.Round(float64(out.FloodTx)/float64(out.TotalTx)*1000) / 10
+		out.ObsPerTx = math.Round(float64(out.Observations)/float64(out.TotalTx)*10) / 10
+	}
+	return out
+}
+
 // GetTransmissionByID returns a transmission by its DB ID, formatted as a map.
 func (s *PacketStore) GetTransmissionByID(id int) map[string]interface{} {
 	s.mu.RLock()
@@ -2620,7 +2689,6 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				RSSI:           r.rssi,
 				Score:          r.score,
 				PathJSON:       r.pathJSON,
-				RawHex:         r.obsRawHex,
 				Timestamp:      normalizeTimestamp(r.obsTS),
 			}
 
@@ -2952,8 +3020,10 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 			RSSI:           r.rssi,
 			Score:          r.score,
 			PathJSON:       r.pathJSON,
-			RawHex:         r.rawHex,
-			Timestamp:      normalizeTimestamp(r.timestamp),
+			// obs.RawHex deliberately NOT stored: it duplicates the parent
+			// tx.RawHex and enrichObs falls back to tx.RawHex when obs.RawHex
+			// == "". Live-polled observations must not re-introduce the dup.
+			Timestamp: normalizeTimestamp(r.timestamp),
 		}
 
 		// Resolve path at ingest time for late-arriving observations (review item #2).
@@ -3618,7 +3688,11 @@ func (s *PacketStore) enrichObs(obs *StoreObs) map[string]interface{} {
 
 	if tx != nil {
 		m["hash"] = strOrNil(tx.Hash)
-		// Prefer per-observation raw_hex; fall back to transmission-level (#881)
+		// raw_hex comes from the transmission (#881). obs.RawHex is no longer
+		// retained when loading/ingesting the store — it duplicated this exact
+		// value (same content hash ⇒ same frame) and at ~10.6 observations/tx
+		// wasted ~98MB on a live ~1.7M-observation store. The obs.RawHex branch
+		// stays for callers that build a StoreObs from a response map.
 		if obs.RawHex != "" {
 			m["raw_hex"] = obs.RawHex
 		} else {
@@ -4214,6 +4288,7 @@ func (s *PacketStore) buildDistanceIndex() {
 const (
 	storeTxBaseBytes  = 384 // StoreTx struct fields + map headers + sync.Once + string headers
 	storeObsBaseBytes = 192 // StoreObs struct fields + string headers
+	strHdr            = 16  // Go string header (ptr + len) on a 64-bit build; used by GetStoreMemoryBreakdown
 	indexEntryBytes   = 48  // average cost of one index map entry (key + pointer + bucket overhead)
 	numIndexesPerTx   = 5   // byHash, byTxID, byNode, byPayloadType, nodeHashes entries
 	numIndexesPerObs  = 2   // byObsID, byObserver entries

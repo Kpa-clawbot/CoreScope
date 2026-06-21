@@ -270,6 +270,32 @@ type PerfResponse struct {
 	PacketStore   *PerfPacketStoreStats         `json:"packetStore"`
 	Sqlite        *SqliteStats                  `json:"sqlite"`
 	GoRuntime     *GoRuntimeStats               `json:"goRuntime,omitempty"`
+	// MemoryBreakdown is populated only for /api/perf?mem=1 (an O(tx+obs)
+	// walk, opt-in so the normal hot endpoint stays cheap). It sizes the
+	// flood-forward multiplication (store memory diagnostics) and where the
+	// store's string bytes go.
+	MemoryBreakdown *StoreMemoryBreakdown `json:"memoryBreakdown,omitempty"`
+	// MemoryBreakdownNote documents the accounting scope of MemoryBreakdown.
+	// It lives here (one occurrence) rather than repeating in every breakdown.
+	MemoryBreakdownNote string `json:"memoryBreakdownNote,omitempty"`
+}
+
+// StoreMemoryBreakdown is the opt-in /api/perf?mem=1 diagnostic: the
+// flood-forward (route_type 0/1) share of stored transmissions and a
+// per-component breakdown of the string bytes held in the packet store.
+type StoreMemoryBreakdown struct {
+	TotalTx            int     `json:"totalTx"`
+	FloodTx            int     `json:"floodTx"`         // route_type 0 or 1
+	FloodTxSharePct    float64 `json:"floodTxSharePct"` // flood share of stored tx
+	Observations       int     `json:"observations"`
+	ObsPerTx           float64 `json:"obsPerTx"`
+	TxRawHexMB         float64 `json:"txRawHexMB"`
+	TxDecodedJsonMB    float64 `json:"txDecodedJsonMB"`
+	TxPathJsonMB       float64 `json:"txPathJsonMB"`
+	ObsPathJsonMB      float64 `json:"obsPathJsonMB"`
+	ObsStringsMB       float64 `json:"obsStringsMB"` // observerID/name/iata/direction/timestamp
+	FloodTxEstimatedMB float64 `json:"floodTxEstimatedMB"`
+	TotalTxEstimatedMB float64 `json:"totalTxEstimatedMB"`
 }
 
 // GoRuntimeStats holds Go runtime metrics for the perf endpoint.

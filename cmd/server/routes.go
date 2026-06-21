@@ -22,6 +22,10 @@ import (
 	"github.com/meshcore-analyzer/prunequeue"
 )
 
+// memBreakdownNote is the static accounting caveat attached to the opt-in
+// /api/perf?mem=1 store memory breakdown (PerfResponse.MemoryBreakdownNote).
+const memBreakdownNote = "Per-component *MB count string content + one Go string header each and are a deliberate upper bound (the header is also in the *EstimatedMB base figures). struct/index/map overhead, the neighbor graph and analytics caches are excluded, so the totals sit below goHeapInuseMB. floodTxSharePct sizes the flood-forward multiplication: each flood hop is stored as its own transmission."
+
 // Server holds shared state for route handlers.
 type Server struct {
 	db        *DB
@@ -897,6 +901,15 @@ func (s *Server) handlePerf(w http.ResponseWriter, r *http.Request) {
 		pktStoreStats = &ps
 	}
 
+	// Opt-in store memory diagnostic: an O(tx+obs) walk, only when explicitly
+	// requested so the hot /api/perf path stays cheap.
+	var memBreakdown *StoreMemoryBreakdown
+	var breakdownNote string
+	if s.store != nil && r.URL.Query().Get("mem") == "1" {
+		memBreakdown = s.store.GetStoreMemoryBreakdown()
+		breakdownNote = memBreakdownNote
+	}
+
 	// SQLite stats
 	var sqliteStats *SqliteStats
 	if s.db != nil {
@@ -905,14 +918,16 @@ func (s *Server) handlePerf(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, PerfResponse{
-		Uptime:        uptimeSec,
-		TotalRequests: totalRequests,
-		AvgMs:         safeAvg(totalMs, float64(totalRequests)),
-		Endpoints:     summary,
-		SlowQueries:   slowQueries,
-		Cache:         perfCS,
-		PacketStore:   pktStoreStats,
-		Sqlite:        sqliteStats,
+		Uptime:              uptimeSec,
+		TotalRequests:       totalRequests,
+		AvgMs:               safeAvg(totalMs, float64(totalRequests)),
+		Endpoints:           summary,
+		SlowQueries:         slowQueries,
+		Cache:               perfCS,
+		PacketStore:         pktStoreStats,
+		Sqlite:              sqliteStats,
+		MemoryBreakdown:     memBreakdown,
+		MemoryBreakdownNote: breakdownNote,
 		GoRuntime: func() *GoRuntimeStats {
 			ms := s.getMemStats()
 			return &GoRuntimeStats{
