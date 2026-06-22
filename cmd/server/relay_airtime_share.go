@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"sort"
 	"time"
 
@@ -42,6 +43,16 @@ func defaultLoRaPreset() lora.Preset {
 
 // resolveLoRaPreset returns the effective preset, falling back to
 // defaults for any unset / zero / out-of-range field.
+//
+// Out-of-range SF / CR are NOT silently clamped on a per-field basis
+// (the prior behaviour produced a confusing hybrid preset, partially
+// operator-supplied and partially defaulted). Instead we keep the
+// default for the offending field AND log a single WARN at resolve time
+// naming the field plus the actual vs. effective value. There is no
+// startup-time analytics-config validation gate today, so refusal-to-
+// start is not an option — the WARN is the gate. Zero / unset fields
+// fall back silently as before (the operator opted out of overriding
+// that param).
 func (s *PacketStore) resolveLoRaPreset() lora.Preset {
 	p := defaultLoRaPreset()
 	if s == nil || s.config == nil || s.config.Analytics == nil || s.config.Analytics.LoRaPreset == nil {
@@ -54,27 +65,43 @@ func (s *PacketStore) resolveLoRaPreset() lora.Preset {
 	if cfg.BWkHz > 0 {
 		p.BWkHz = cfg.BWkHz
 	}
-	if cfg.SF >= 6 && cfg.SF <= 12 {
-		p.SF = cfg.SF
-		p.Preamble = lora.PreambleForSF(cfg.SF)
+	if cfg.SF != 0 {
+		if cfg.SF >= 6 && cfg.SF <= 12 {
+			p.SF = cfg.SF
+			p.Preamble = lora.PreambleForSF(cfg.SF)
+		} else {
+			log.Printf("[analytics.loraPreset] WARN: sf=%d out of range [6,12], using default sf=%d", cfg.SF, p.SF)
+		}
 	}
-	if cfg.CR >= 5 && cfg.CR <= 8 {
-		p.CR = cfg.CR
+	if cfg.CR != 0 {
+		if cfg.CR >= 5 && cfg.CR <= 8 {
+			p.CR = cfg.CR
+		} else {
+			log.Printf("[analytics.loraPreset] WARN: cr=%d out of range [5,8], using default cr=%d", cfg.CR, p.CR)
+		}
 	}
 	return p
 }
 
-// presetJSON shapes the preset for the API response and the
+// presetResponse shapes the preset for the API response and the
 // analytics caption (issue #1768 — operators can't interpret an
 // "Airtime %" headline without knowing what PHY assumptions it bakes
 // in). All four free params plus the derived preamble are surfaced.
-func presetJSON(p lora.Preset) map[string]interface{} {
-	return map[string]interface{}{
-		"freq_hz":  p.FreqHz,
-		"bw_khz":   p.BWkHz,
-		"sf":       p.SF,
-		"cr":       p.CR,
-		"preamble": p.Preamble,
+type presetResponse struct {
+	FreqHz   float64 `json:"freq_hz"`
+	BWkHz    float64 `json:"bw_khz"`
+	SF       int     `json:"sf"`
+	CR       int     `json:"cr"`
+	Preamble int     `json:"preamble"`
+}
+
+func presetJSON(p lora.Preset) presetResponse {
+	return presetResponse{
+		FreqHz:   p.FreqHz,
+		BWkHz:    p.BWkHz,
+		SF:       p.SF,
+		CR:       p.CR,
+		Preamble: p.Preamble,
 	}
 }
 
@@ -101,7 +128,7 @@ func (s *PacketStore) distinctRelayCount(tx *StoreTx) int {
 //	{
 //	  "rows":        [{payload_type, type, count, count_pct, score, airtime_pct}, ...] sorted by airtime_pct desc,
 //	  "total_count": int,
-//	  "total_score": int,
+//	  "total_score": int64 (nanoseconds of LoRa Time-on-Air × repeater-count, summed across packets),
 //	  "window":      window label,
 //	  "cached":      false (overwritten by cached wrapper),
 //	}

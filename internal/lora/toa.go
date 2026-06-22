@@ -98,8 +98,12 @@ func TimeOnAir(payloadBytes int, preset Preset) time.Duration {
 	}
 	var symbolsPayload float64
 	if num <= 0 {
-		// Closed-form clamps to 8-symbol minimum payload header
-		// (matches RadioLib for tiny payloads).
+		// AN1200.13 §4.1.1.6: the inner ceil() argument can go negative
+		// for very small payloads (the −4·SF + 28 + 16·CRC terms dominate
+		// 8·PL). The reference formula clamps that ceil() to ≥ 0, so
+		// symbolsPayload collapses to the fixed 8-symbol header term
+		// when num ≤ 0. This is a max(., 0) clamp on the payload-symbol
+		// count, NOT a separate header-floor rule.
 		symbolsPayload = 8
 	} else {
 		ceilTerm := math.Ceil(float64(num) / float64(den))
