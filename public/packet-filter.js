@@ -459,6 +459,8 @@
     { name: 'payload.flags.repeater',    desc: 'Decoded payload: advert flag (repeater role)' },
     { name: 'payload.flags.room',        desc: 'Decoded payload: advert flag (room server)' },
     { name: 'payload.flags.hasLocation', desc: 'Decoded payload: advert has location' },
+    { name: 'payload.destHash',     desc: 'Decoded payload: destination hash byte (1B hex, REQ/RESPONSE/TXT_MSG/PATH/ANON_REQ)' },
+    { name: 'payload.srcHash',      desc: 'Decoded payload: source hash byte (1B hex, REQ/RESPONSE/TXT_MSG/PATH/ANON_REQ)' },
     { name: 'code1',                desc: 'Transport route Code1 (hex, e.g. AABB) — present on TRANSPORT_FLOOD/DIRECT' },
     { name: 'code2',                desc: 'Transport route Code2 (hex, e.g. CCDD) — present on TRANSPORT_FLOOD/DIRECT' },
   ];
