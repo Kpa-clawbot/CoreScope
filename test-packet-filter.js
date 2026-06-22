@@ -232,5 +232,28 @@ test('observer_iata and iata appear in suggest field list', () => {
   assert(names.indexOf('iata') !== -1, 'iata in FIELDS');
 });
 
+// --- Issue #1774: payload.destHash / payload.srcHash filterable + in suggestions ---
+const reqPkt = {
+  route_type: 1, payload_type: 0, // REQ
+  hash: 'deadbeef', raw_hex: '0000',
+  decoded_json: JSON.stringify({ destHash: '2f', srcHash: '0b' }),
+};
+test('#1774: payload.destHash filters REQ by destination hash byte', () => {
+  assert(PF.compile('payload.destHash == "2f"').filter(reqPkt));
+  assert(!PF.compile('payload.destHash == "ff"').filter(reqPkt));
+});
+test('#1774: payload.srcHash filters REQ by source hash byte', () => {
+  assert(PF.compile('payload.srcHash == "0b"').filter(reqPkt));
+  assert(!PF.compile('payload.srcHash == "ff"').filter(reqPkt));
+});
+test('#1774: payload.destHash listed in FIELDS suggestions', () => {
+  const names = PF.FIELDS.map(f => f.name);
+  assert(names.indexOf('payload.destHash') !== -1, 'payload.destHash missing from FIELDS');
+});
+test('#1774: payload.srcHash listed in FIELDS suggestions', () => {
+  const names = PF.FIELDS.map(f => f.name);
+  assert(names.indexOf('payload.srcHash') !== -1, 'payload.srcHash missing from FIELDS');
+});
+
 console.log(`\n=== Results: ${pass} passed, ${fail} failed ===`);
 process.exit(fail > 0 ? 1 : 0);
