@@ -47,13 +47,13 @@ func TestTimeOnAir_DefaultEUPreset(t *testing.T) {
 	}
 }
 
-// SF11/BW125 → T_sym = 16.384 ms ≥ 16ms → DE = 1; preamble = 16.
-// PL=8: num = 64 - 44 + 44 = 76 ... actually:
+// SF11/BW125 → T_sym = 2048/125000 = 16.384 ms ≥ 16ms → DE = 1; preamble = 16.
+// PL=8:
 //   num = 8*8 - 4*11 + 28 + 16 = 64 - 44 + 44 = 64
-//   den = 4*(11 - 2) = 36; ceil(64/36) = 2
+//   den = 4*(11 - 2*1) = 36; ceil(64/36) = 2
 //   symbols_payload = 8 + 2*5 = 18
 //   preamble_symbols = 16 + 4.25 = 20.25
-//   total = 38.25 * 16.384 ≈ 626.688 ms
+//   total = (20.25 + 18) * 16.384 = 38.25 * 16.384 ≈ 626.688 ms
 func TestTimeOnAir_DERangeSF11(t *testing.T) {
 	preset := Preset{
 		BWkHz:    125,
