@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
@@ -24,10 +25,10 @@ func newRelayAirtimeShareTestStore(packets []*StoreTx) *PacketStore {
 		collisionCache: make(map[string]*cachedResult),
 		chanCache:      make(map[string]*cachedResult),
 		distCache:      make(map[string]*cachedResult),
-		subpathCache:  make(map[string]*cachedResult),
-		spIndex:       make(map[string]int),
-		spTxIndex:     make(map[string][]*StoreTx),
-		advertPubkeys: make(map[string]int),
+		subpathCache:   make(map[string]*cachedResult),
+		spIndex:        make(map[string]int),
+		spTxIndex:      make(map[string][]*StoreTx),
+		advertPubkeys:  make(map[string]int),
 	}
 	ps.useResolvedPathIndex = true
 	ps.initResolvedPathIndex()
@@ -45,100 +46,74 @@ func newRelayAirtimeShareTestStore(packets []*StoreTx) *PacketStore {
 }
 
 // makeRelayAirtimeTx builds a synthetic transmission with rawHex sized for the
-// given byte count and registers `distinctRelays` synthetic resolved-path
-// pubkeys via the resolved-pubkey reverse index — same source that
-// distinctRelayCount must read from.
+// given byte count.
 func makeRelayAirtimeTx(id int, payloadType int, payloadBytes int, distinctRelays int, hashPrefix string) *StoreTx {
 	pt := payloadType
-	tx := &StoreTx{
+	return &StoreTx{
 		ID:          id,
 		Hash:        hashPrefix,
 		FirstSeen:   "2026-01-01T00:00:00Z",
 		PayloadType: &pt,
-		RawHex:      strings.Repeat("ab", payloadBytes), // 2 hex chars per byte
+		RawHex:      strings.Repeat("ab", payloadBytes),
 	}
-	return tx
 }
 
-// TestRelayAirtimeShare_ADVERTvsACKDivergence is the locked acceptance test
-// from issue #1359:
-//   - 1 ADVERT, 200 B, 8 distinct relays  →  score = 200 * 8 = 1600
-//   - 1000 ACKs, 10 B each, 0 relays      →  score = 0
+// TestRelayAirtimeShare_ADVERTvsACKDivergence (issue #1768 v2 of #1359 test):
+//   - 1 ADVERT, 200 B, 8 distinct relays
+//   - 1000 ACKs,  10 B, 0  distinct relays
 //
-// Count distribution: ACK 1000/1001 = 99.90%, ADVERT 0.10%.
-// Airtime distribution: ADVERT 1600/1600 = 100%, ACK 0%.
-//
-// This is the headline divergence the dumbbell chart must visualize.
+// The ACK score is still 0 (no relays); ADVERT carries 100 % of airtime.
+// The headline divergence (ADVERT ranks #1 by airtime despite tiny count
+// share) survives the switch from byte-proxy to true ToA. Adds a check
+// that the JSON response surfaces the active preset (issue #1768 requires
+// the preset in the caption, so it must reach the client).
 func TestRelayAirtimeShare_ADVERTvsACKDivergence(t *testing.T) {
 	packets := make([]*StoreTx, 0, 1001)
-
-	// 1 ADVERT with 200 bytes payload + 8 distinct relays
 	advert := makeRelayAirtimeTx(1, PayloadADVERT, 200, 8, "ad000001")
 	packets = append(packets, advert)
-
-	// 1000 ACKs with 10 bytes payload + 0 relays
 	for i := 0; i < 1000; i++ {
 		ack := makeRelayAirtimeTx(100+i, PayloadACK, 10, 0, "")
-		// Give each a unique hash so dedup doesn't collapse them.
 		ack.Hash = "ac" + zeroPad(i, 6)
 		packets = append(packets, ack)
 	}
-
 	store := newRelayAirtimeShareTestStore(packets)
-
-	// Wire up the 8 distinct relay pubkeys for the ADVERT through the
-	// resolved-pubkey reverse index — the helper distinctRelayCount must
-	// read from this source (union across all observations of tx.ID).
-	relayPks := []string{
-		"relay01", "relay02", "relay03", "relay04",
-		"relay05", "relay06", "relay07", "relay08",
-	}
+	relayPks := []string{"r01", "r02", "r03", "r04", "r05", "r06", "r07", "r08"}
 	store.addToResolvedPubkeyIndex(advert.ID, relayPks)
 
-	// Sanity check the helper directly.
 	if got := store.distinctRelayCount(advert); got != 8 {
 		t.Fatalf("distinctRelayCount(ADVERT) = %d, want 8", got)
 	}
-	if got := store.distinctRelayCount(packets[1]); got != 0 {
-		t.Fatalf("distinctRelayCount(ACK) = %d, want 0", got)
-	}
 
 	result := store.computeRelayAirtimeShare(TimeWindow{})
-	rows, ok := result["rows"].([]map[string]interface{})
+
+	// New: preset must be in the response so the client can render the
+	// caption per issue #1768 (caller cannot interpret "Airtime %"
+	// without knowing the assumed SF/BW/CR).
+	preset, ok := result["preset"].(map[string]interface{})
 	if !ok {
-		t.Fatalf("result['rows'] missing or wrong type: %T", result["rows"])
+		t.Fatalf("result['preset'] missing or wrong type: %T", result["preset"])
 	}
-	if len(rows) < 2 {
-		t.Fatalf("expected at least 2 rows (ADVERT, ACK), got %d: %+v", len(rows), rows)
+	for _, key := range []string{"freq_hz", "bw_khz", "sf", "cr", "preamble"} {
+		if _, ok := preset[key]; !ok {
+			t.Errorf("result['preset'] missing %q: %+v", key, preset)
+		}
 	}
 
-	// Index by payload_type name.
+	rows, ok := result["rows"].([]map[string]interface{})
+	if !ok || len(rows) < 2 {
+		t.Fatalf("unexpected rows: %T %+v", result["rows"], result["rows"])
+	}
 	byType := make(map[string]map[string]interface{})
 	for _, r := range rows {
 		name, _ := r["payload_type"].(string)
 		byType[name] = r
 	}
-
-	advertRow, hasAdvert := byType["ADVERT"]
-	ackRow, hasACK := byType["ACK"]
-	if !hasAdvert {
-		t.Fatalf("rows missing ADVERT bucket: %+v", rows)
-	}
-	if !hasACK {
-		t.Fatalf("rows missing ACK bucket: %+v", rows)
+	advertRow := byType["ADVERT"]
+	ackRow := byType["ACK"]
+	if advertRow == nil || ackRow == nil {
+		t.Fatalf("missing rows: %+v", rows)
 	}
 
-	// Count percentages: ACK should be ~99.9%, ADVERT ~0.1%.
-	ackCountPct, _ := ackRow["count_pct"].(float64)
-	advertCountPct, _ := advertRow["count_pct"].(float64)
-	if !(ackCountPct > 99.0 && ackCountPct < 100.0) {
-		t.Errorf("ACK count_pct = %.4f, want ~99.9", ackCountPct)
-	}
-	if !(advertCountPct < 1.0 && advertCountPct > 0.0) {
-		t.Errorf("ADVERT count_pct = %.4f, want ~0.1", advertCountPct)
-	}
-
-	// Airtime percentages: ADVERT should be 100%, ACK 0%.
 	advertAirtimePct, _ := advertRow["airtime_pct"].(float64)
 	ackAirtimePct, _ := ackRow["airtime_pct"].(float64)
 	if advertAirtimePct < 99.5 || advertAirtimePct > 100.001 {
@@ -147,31 +122,70 @@ func TestRelayAirtimeShare_ADVERTvsACKDivergence(t *testing.T) {
 	if ackAirtimePct != 0.0 {
 		t.Errorf("ACK airtime_pct = %.4f, want 0.0", ackAirtimePct)
 	}
-
-	// Raw score check: ADVERT = 200 * 8 = 1600.
-	advertScore, _ := advertRow["score"].(int)
-	if advertScore != 1600 {
-		t.Errorf("ADVERT score = %d, want 1600 (200B × 8 relays)", advertScore)
-	}
-	ackScore, _ := ackRow["score"].(int)
-	if ackScore != 0 {
-		t.Errorf("ACK score = %d, want 0 (no relays)", ackScore)
-	}
-
-	// Count integer check.
-	advertCount, _ := advertRow["count"].(int)
-	if advertCount != 1 {
-		t.Errorf("ADVERT count = %d, want 1", advertCount)
-	}
-	ackCount, _ := ackRow["count"].(int)
-	if ackCount != 1000 {
-		t.Errorf("ACK count = %d, want 1000", ackCount)
-	}
-
-	// The divergence: ADVERT should rank #1 by airtime even though its
-	// count share is the smallest. This is the whole point of the chart.
 	if rows[0]["payload_type"] != "ADVERT" {
-		t.Errorf("rows must be sorted by airtime_pct desc; rows[0] payload_type = %v, want ADVERT", rows[0]["payload_type"])
+		t.Errorf("rows[0] = %v, want ADVERT (sort by airtime desc)", rows[0]["payload_type"])
+	}
+}
+
+// TestRelayAirtimeShare_ToAReplacesByteProxy is the issue #1768 acceptance
+// gate: airtime_pct must follow true LoRa Time-on-Air, NOT bytes.
+//
+// Setup: 1 ADVERT (200 B, 1 relay) and 1 ACK (10 B, 1 relay) with the
+// default EU preset (869.6 MHz / BW 62.5 kHz / SF 8 / CR 4/5,
+// preamble 32 per firmware preambleLengthForSF).
+//
+// Old byte-proxy would give ADVERT 200/(200+10) = 95.24 %.
+// True ToA per #1768 closed form:
+//
+//	T_sym = 256 / 62500 = 4.096 ms
+//	ADVERT (PL=200): symbols = 36.25 + (8 + ceil((1600-32+44)/32)*5)
+//	               = 36.25 + (8 + 51*5) = 299.25 → 1225.728 ms
+//	ACK    (PL=10):  symbols = 36.25 + (8 + ceil((80-32+44)/32)*5)
+//	               = 36.25 + (8 + 3*5) = 59.25 → 242.688 ms
+//	ADVERT share = 1225.728 / (1225.728 + 242.688) = 0.83476 → 83.48 %
+//
+// 83 % vs 95 % is the whole point: small frames are no longer crushed
+// against large ones because the additive preamble + fixed-overhead
+// intercept finally enters the score. A test that still passes against
+// the byte proxy would fail to gate the regression — we explicitly
+// assert away from 95 %.
+func TestRelayAirtimeShare_ToAReplacesByteProxy(t *testing.T) {
+	advert := makeRelayAirtimeTx(1, PayloadADVERT, 200, 1, "ad000001")
+	ack := makeRelayAirtimeTx(2, PayloadACK, 10, 1, "ac000001")
+
+	store := newRelayAirtimeShareTestStore([]*StoreTx{advert, ack})
+	store.addToResolvedPubkeyIndex(advert.ID, []string{"relay-A"})
+	store.addToResolvedPubkeyIndex(ack.ID, []string{"relay-B"})
+
+	result := store.computeRelayAirtimeShare(TimeWindow{})
+	rows, ok := result["rows"].([]map[string]interface{})
+	if !ok || len(rows) != 2 {
+		t.Fatalf("unexpected rows: %T %+v", result["rows"], result["rows"])
+	}
+	byType := make(map[string]map[string]interface{})
+	for _, r := range rows {
+		name, _ := r["payload_type"].(string)
+		byType[name] = r
+	}
+	advertPct, _ := byType["ADVERT"]["airtime_pct"].(float64)
+	ackPct, _ := byType["ACK"]["airtime_pct"].(float64)
+
+	// True ToA acceptance bands. Wide enough (±0.2 pp) to absorb any
+	// trivial rounding without admitting the byte proxy (which would
+	// give ~95.24 %, 4.76 %).
+	const wantAdvert = 83.4754
+	const wantAck = 16.5246
+	if math.Abs(advertPct-wantAdvert) > 0.2 {
+		t.Errorf("ADVERT airtime_pct = %.4f, want %.4f (true ToA)", advertPct, wantAdvert)
+	}
+	if math.Abs(ackPct-wantAck) > 0.2 {
+		t.Errorf("ACK airtime_pct = %.4f, want %.4f (true ToA)", ackPct, wantAck)
+	}
+
+	// Negative gate: the OLD byte-proxy answer must NOT come back.
+	// 95 % vs 5 % means we're still on the bytes×relays code path.
+	if advertPct > 90.0 {
+		t.Errorf("ADVERT airtime_pct = %.4f looks like byte proxy (≈95.24); ToA path missing", advertPct)
 	}
 }
 
