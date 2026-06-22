@@ -406,7 +406,7 @@
       <div class="analytics-row">
         <div class="analytics-card flex-1">
           <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Relay Airtime Share</h3>
-          <p class="text-muted" style="margin-top:-4px;font-size:12px">Score = payload bytes × distinct repeaters that forwarded the packet. Counts relay re-transmissions; originator TX excluded. Not comparable across meshes.</p>
+          <p class="text-muted" style="margin-top:-4px;font-size:12px">Score = LoRa Time-on-Air × distinct repeaters that forwarded the packet (issue #1768). Counts relay re-transmissions; originator TX excluded. Not comparable across meshes — see preset caption below.</p>
           ${renderRelayAirtimeDumbbell(d.airtimeData)}
         </div>
       </div>
@@ -476,19 +476,25 @@
     }
     // Issue #1768 — surface the LoRa preset baked into the ToA score. Share
     // numbers are only meaningful relative to one PHY preset; operators must
-    // know what was assumed.
+    // know what was assumed. All fields are run through esc() defensively
+    // (preset.sf/cr/preamble/bw_khz/freq_hz arrive from the server JSON,
+    // which the operator can configure — never inject untrusted text raw).
+    // BW formatted consistent with home.js / customize-v2.js presets
+    // (e.g. `62.5 kHz`, `125 kHz`) — strip trailing `.0` for integer kHz.
     var preset = data && data.preset;
     var presetCaption = '';
     if (preset && typeof preset === 'object') {
       var freqMHz = Number(preset.freq_hz || 0) / 1e6;
+      var bwKhz = Number(preset.bw_khz || 0);
+      var bwStr = bwKhz ? bwKhz.toFixed(1).replace(/\.0$/, '') : '0';
       presetCaption =
         '<div class="dumbbell-preset text-muted" style="font-size:11px;padding:0 4px 6px 4px">' +
         'Assumed LoRa preset: ' +
-        (freqMHz ? freqMHz.toFixed(3) + ' MHz / ' : '') +
-        'BW ' + Number(preset.bw_khz || 0) + ' kHz / ' +
-        'SF ' + Number(preset.sf || 0) + ' / ' +
-        'CR 4/' + Number(preset.cr || 0) +
-        ' (preamble ' + Number(preset.preamble || 0) + ' sym)' +
+        (freqMHz ? esc(freqMHz.toFixed(3)) + ' MHz / ' : '') +
+        'BW ' + esc(bwStr) + ' kHz / ' +
+        'SF ' + esc(String(Number(preset.sf || 0))) + ' / ' +
+        'CR 4/' + esc(String(Number(preset.cr || 0))) +
+        ' (preamble ' + esc(String(Number(preset.preamble || 0))) + ' sym)' +
         '</div>';
     }
     // Layout: per row → label | track 0..100% | values
@@ -505,10 +511,17 @@
       var loPct = Math.min(cpct, apct);
       var hiPct = Math.max(cpct, apct);
       // Tooltip per row — payload_type, count %, count N, airtime %, raw score, caveat.
+      // Score is summed (ToA in ns) × distinct repeaters across packets of
+      // this type; converted to ms for human-readable display per #1768
+      // round-1 review.
+      var scoreMs = score / 1e6;
+      var scoreStr = scoreMs >= 1000
+        ? (scoreMs / 1000).toFixed(2) + ' s'
+        : scoreMs.toFixed(2) + ' ms';
       var tip =
         name + '\n' +
         'Count: ' + cnt.toLocaleString() + ' (' + cpct.toFixed(2) + '%)\n' +
-        'Airtime: ' + apct.toFixed(2) + '% (score ' + score.toLocaleString() + ')\n' +
+        'Airtime: ' + apct.toFixed(2) + '% (score ' + scoreStr + ' · airtime × repeaters)\n' +
         'Score = LoRa Time-on-Air × distinct repeaters. Within-mesh only.';
       html += '<div class="dumbbell-row" title="' + esc(tip) + '" style="display:grid;grid-template-columns:80px 1fr 180px;align-items:center;gap:10px;font-size:12px">' +
         '<div class="dumbbell-label" style="font-weight:600;color:var(--text)">' + esc(name) + '</div>' +
