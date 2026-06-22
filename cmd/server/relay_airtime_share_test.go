@@ -4,6 +4,8 @@ import (
 	"math"
 	"strings"
 	"testing"
+
+	"github.com/meshcore-analyzer/lora"
 )
 
 // newRelayAirtimeShareTestStore builds a minimal PacketStore for testing
@@ -88,15 +90,15 @@ func TestRelayAirtimeShare_ADVERTvsACKDivergence(t *testing.T) {
 
 	// New: preset must be in the response so the client can render the
 	// caption per issue #1768 (caller cannot interpret "Airtime %"
-	// without knowing the assumed SF/BW/CR).
-	preset, ok := result["preset"].(map[string]interface{})
+	// without knowing the assumed SF/BW/CR). The shape is a typed
+	// presetResponse struct (PR #1776 review round-1: no
+	// map[string]interface{} in API surfaces).
+	preset, ok := result["preset"].(presetResponse)
 	if !ok {
 		t.Fatalf("result['preset'] missing or wrong type: %T", result["preset"])
 	}
-	for _, key := range []string{"freq_hz", "bw_khz", "sf", "cr", "preamble"} {
-		if _, ok := preset[key]; !ok {
-			t.Errorf("result['preset'] missing %q: %+v", key, preset)
-		}
+	if preset.SF == 0 || preset.BWkHz == 0 || preset.CR == 0 || preset.Preamble == 0 || preset.FreqHz == 0 {
+		t.Errorf("result['preset'] has zero fields: %+v", preset)
 	}
 
 	rows, ok := result["rows"].([]map[string]interface{})
@@ -121,6 +123,33 @@ func TestRelayAirtimeShare_ADVERTvsACKDivergence(t *testing.T) {
 	}
 	if ackAirtimePct != 0.0 {
 		t.Errorf("ACK airtime_pct = %.4f, want 0.0", ackAirtimePct)
+	}
+
+	// Count-side assertions prove the divergence story: ACK dominates
+	// by raw packet count (≈99.9%) but ADVERT dominates by airtime
+	// (100%). Without these the test only proves half the chart.
+	advertCount, _ := advertRow["count"].(int)
+	ackCount, _ := ackRow["count"].(int)
+	if advertCount != 1 {
+		t.Errorf("ADVERT count = %d, want 1", advertCount)
+	}
+	if ackCount != 1000 {
+		t.Errorf("ACK count = %d, want 1000", ackCount)
+	}
+	advertCountPct, _ := advertRow["count_pct"].(float64)
+	ackCountPct, _ := ackRow["count_pct"].(float64)
+	// 1 of 1001 = 0.0999 %; 1000 of 1001 = 99.9001 %.
+	if math.Abs(advertCountPct-(1.0/1001.0*100.0)) > 0.001 {
+		t.Errorf("ADVERT count_pct = %.4f, want %.4f", advertCountPct, 1.0/1001.0*100.0)
+	}
+	if math.Abs(ackCountPct-(1000.0/1001.0*100.0)) > 0.001 {
+		t.Errorf("ACK count_pct = %.4f, want %.4f", ackCountPct, 1000.0/1001.0*100.0)
+	}
+	// The headline: ACK is ≫ ADVERT by count but 0 by airtime. That
+	// inversion is the whole reason the dumbbell exists.
+	if !(ackCountPct > advertCountPct && advertAirtimePct > ackAirtimePct) {
+		t.Errorf("expected count/airtime inversion: ackCountPct=%.4f advertCountPct=%.4f advertAirtimePct=%.4f ackAirtimePct=%.4f",
+			ackCountPct, advertCountPct, advertAirtimePct, ackAirtimePct)
 	}
 	if rows[0]["payload_type"] != "ADVERT" {
 		t.Errorf("rows[0] = %v, want ADVERT (sort by airtime desc)", rows[0]["payload_type"])
@@ -170,11 +199,27 @@ func TestRelayAirtimeShare_ToAReplacesByteProxy(t *testing.T) {
 	advertPct, _ := byType["ADVERT"]["airtime_pct"].(float64)
 	ackPct, _ := byType["ACK"]["airtime_pct"].(float64)
 
-	// True ToA acceptance bands. Wide enough (±0.2 pp) to absorb any
-	// trivial rounding without admitting the byte proxy (which would
-	// give ~95.24 %, 4.76 %).
-	const wantAdvert = 83.4754
-	const wantAck = 16.5246
+	// True ToA acceptance bands derived INDEPENDENTLY from the
+	// implementation under test, by computing each row's ToA via
+	// lora.TimeOnAir on the same preset and forming the share by hand.
+	// (The prior `wantAck = 16.5246` constant was just `100 - wantAdvert`
+	// — a tautology that would silently pass if shares stopped summing
+	// to 100. Driving from lora.TimeOnAir means a regression there
+	// surfaces here.)
+	preset := defaultLoRaPreset()
+	advertToA := float64(lora.TimeOnAir(200, preset))
+	ackToA := float64(lora.TimeOnAir(10, preset))
+	wantAdvert := advertToA / (advertToA + ackToA) * 100.0
+	wantAck := ackToA / (advertToA + ackToA) * 100.0
+	// Sanity guards on the independent calculation. Tolerances ±0.05 pp
+	// around the AN1200.13 hand-computed values keep this honest if the
+	// upstream lora package ever drifts.
+	if math.Abs(wantAdvert-83.4754) > 0.05 {
+		t.Fatalf("independent ADVERT ToA share drifted: got %.4f want ~83.4754", wantAdvert)
+	}
+	if math.Abs(wantAck-16.5246) > 0.05 {
+		t.Fatalf("independent ACK ToA share drifted: got %.4f want ~16.5246", wantAck)
+	}
 	if math.Abs(advertPct-wantAdvert) > 0.2 {
 		t.Errorf("ADVERT airtime_pct = %.4f, want %.4f (true ToA)", advertPct, wantAdvert)
 	}
