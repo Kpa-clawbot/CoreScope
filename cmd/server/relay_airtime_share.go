@@ -3,25 +3,80 @@ package main
 import (
 	"sort"
 	"time"
+
+	"github.com/meshcore-analyzer/lora"
 )
 
-// relay_airtime_share.go — issue #1359
+// relay_airtime_share.go — issues #1359 + #1768
 //
 // Implements the "Relay Airtime Share" analytics metric:
-//   score(packet) = payload_bytes × COUNT(DISTINCT repeater_pubkey
-//                                         across all observations of that packet)
+//   score(packet) = TimeOnAir(payload_bytes, preset)
+//                   × COUNT(DISTINCT repeater_pubkey across observations)
+//
+// #1768 swapped the original byte-only proxy (`bytes × relays`) for
+// closed-form LoRa Time-on-Air. The byte proxy underweighted small
+// frames by ~3-4× because the additive preamble + fixed-symbol
+// intercept does NOT cancel under per-type normalization. ToA fixes
+// the headline divergence the dumbbell chart is supposed to show.
+//
+// The PHY preset is config-driven (analytics.loraPreset in
+// config.example.json); defaults match the actual deployment
+// preset 869.6 MHz / BW 62.5 kHz / SF 8 / CR 4/5, with the
+// SF-dependent preamble pulled from internal/lora.PreambleForSF.
 //
 // Aggregated by payload_type. Originator TX is deliberately excluded — a
 // never-relayed direct message scores 0, which is the correct framing for a
-// "relay amplification" metric.
-//
-// In-memory only; no SQL, no new index, no schema change. The resolved-pubkey
-// reverse index (populated under s.mu via addToResolvedPubkeyIndex from every
-// observation's resolved_path) is the source of distinct relays per
-// transmission — len(resolvedPubkeyReverse[tx.ID]) IS the union of distinct
-// repeater pubkeys, deduplicated cross-observation. Critical: this is NOT the
-// length of any single observation's resolved_path (the bug-trap from
-// #1358's follow-up SQL hint).
+// "relay amplification" metric. In-memory only; no SQL, no new index.
+
+// defaultLoRaPreset is the canonical fallback when config is absent.
+// Matches the reporter's `get radio` output `869.6179809, 62.5, 8, 5`.
+func defaultLoRaPreset() lora.Preset {
+	return lora.Preset{
+		FreqHz:   869.6e6,
+		BWkHz:    62.5,
+		SF:       8,
+		CR:       5,
+		Preamble: lora.PreambleForSF(8),
+	}
+}
+
+// resolveLoRaPreset returns the effective preset, falling back to
+// defaults for any unset / zero / out-of-range field.
+func (s *PacketStore) resolveLoRaPreset() lora.Preset {
+	p := defaultLoRaPreset()
+	if s == nil || s.config == nil || s.config.Analytics == nil || s.config.Analytics.LoRaPreset == nil {
+		return p
+	}
+	cfg := s.config.Analytics.LoRaPreset
+	if cfg.FreqHz > 0 {
+		p.FreqHz = cfg.FreqHz
+	}
+	if cfg.BWkHz > 0 {
+		p.BWkHz = cfg.BWkHz
+	}
+	if cfg.SF >= 6 && cfg.SF <= 12 {
+		p.SF = cfg.SF
+		p.Preamble = lora.PreambleForSF(cfg.SF)
+	}
+	if cfg.CR >= 5 && cfg.CR <= 8 {
+		p.CR = cfg.CR
+	}
+	return p
+}
+
+// presetJSON shapes the preset for the API response and the
+// analytics caption (issue #1768 — operators can't interpret an
+// "Airtime %" headline without knowing what PHY assumptions it bakes
+// in). All four free params plus the derived preamble are surfaced.
+func presetJSON(p lora.Preset) map[string]interface{} {
+	return map[string]interface{}{
+		"freq_hz":  p.FreqHz,
+		"bw_khz":   p.BWkHz,
+		"sf":       p.SF,
+		"cr":       p.CR,
+		"preamble": p.Preamble,
+	}
+}
 
 // distinctRelayCount returns the number of distinct repeater pubkeys that
 // forwarded `tx`, unioned across ALL observations of that transmission_id.
@@ -55,15 +110,16 @@ func (s *PacketStore) computeRelayAirtimeShare(window TimeWindow) map[string]int
 	defer s.mu.RUnlock()
 
 	ptNames := payloadTypeNames
+	preset := s.resolveLoRaPreset()
 
 	type bucket struct {
 		count int
-		score int
+		score int64 // sum of ToA(payload) × relays, in nanoseconds
 	}
 	buckets := make(map[int]*bucket)
 	seenHash := make(map[string]bool, len(s.packets))
 	totalCount := 0
-	totalScore := 0
+	var totalScore int64
 
 	for _, tx := range s.packets {
 		if tx == nil || tx.PayloadType == nil {
@@ -90,10 +146,13 @@ func (s *PacketStore) computeRelayAirtimeShare(window TimeWindow) map[string]int
 		b.count++
 		totalCount++
 
-		// payload bytes from RawHex (2 hex chars per byte).
+		// payload bytes from RawHex (2 hex chars per byte). Score is
+		// LoRa Time-on-Air (nanoseconds) × distinct relays — see
+		// resolveLoRaPreset for the assumed PHY block (issue #1768).
 		payloadBytes := len(tx.RawHex) / 2
 		relays := s.distinctRelayCount(tx)
-		score := payloadBytes * relays
+		toa := lora.TimeOnAir(payloadBytes, preset)
+		score := int64(toa) * int64(relays)
 		b.score += score
 		totalScore += score
 	}
@@ -147,6 +206,7 @@ func (s *PacketStore) computeRelayAirtimeShare(window TimeWindow) map[string]int
 		"rows":        rows,
 		"total_count": totalCount,
 		"total_score": totalScore,
+		"preset":      presetJSON(preset),
 		"window":      label,
 		"cached":      false,
 	}

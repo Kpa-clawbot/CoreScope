@@ -474,9 +474,27 @@
     if (totalScore <= 0) {
       return '<div class="text-muted" style="padding:20px">No relay activity observed in this window (all packets direct).</div>';
     }
+    // Issue #1768 — surface the LoRa preset baked into the ToA score. Share
+    // numbers are only meaningful relative to one PHY preset; operators must
+    // know what was assumed.
+    var preset = data && data.preset;
+    var presetCaption = '';
+    if (preset && typeof preset === 'object') {
+      var freqMHz = Number(preset.freq_hz || 0) / 1e6;
+      presetCaption =
+        '<div class="dumbbell-preset text-muted" style="font-size:11px;padding:0 4px 6px 4px">' +
+        'Assumed LoRa preset: ' +
+        (freqMHz ? freqMHz.toFixed(3) + ' MHz / ' : '') +
+        'BW ' + Number(preset.bw_khz || 0) + ' kHz / ' +
+        'SF ' + Number(preset.sf || 0) + ' / ' +
+        'CR 4/' + Number(preset.cr || 0) +
+        ' (preamble ' + Number(preset.preamble || 0) + ' sym)' +
+        '</div>';
+    }
     // Layout: per row → label | track 0..100% | values
     var palette = ['#ef4444','#f59e0b','#22c55e','#3b82f6','#8b5cf6','#ec4899','#14b8a6','#64748b','#f97316','#06b6d4','#84cc16'];
     var html = '<div class="dumbbell-chart" style="display:flex;flex-direction:column;gap:8px;padding:8px 4px">';
+    if (presetCaption) html += presetCaption;
     rows.forEach(function (r, i) {
       var name = r.payload_type || 'UNK';
       var cnt = Number(r.count || 0);
@@ -491,7 +509,7 @@
         name + '\n' +
         'Count: ' + cnt.toLocaleString() + ' (' + cpct.toFixed(2) + '%)\n' +
         'Airtime: ' + apct.toFixed(2) + '% (score ' + score.toLocaleString() + ')\n' +
-        'Score = bytes × distinct repeaters. Within-mesh only.';
+        'Score = LoRa Time-on-Air × distinct repeaters. Within-mesh only.';
       html += '<div class="dumbbell-row" title="' + esc(tip) + '" style="display:grid;grid-template-columns:80px 1fr 180px;align-items:center;gap:10px;font-size:12px">' +
         '<div class="dumbbell-label" style="font-weight:600;color:var(--text)">' + esc(name) + '</div>' +
         '<div class="dumbbell-track" style="position:relative;height:18px;background:var(--bg-elev,rgba(127,127,127,0.12));border-radius:9px">' +

@@ -929,6 +929,21 @@ func (c *Config) IsObserverBlacklisted(id string) bool {
 type AnalyticsConfig struct {
 	DefaultIntervalSeconds   int            `json:"defaultIntervalSeconds,omitempty"`
 	RecomputeIntervalSeconds map[string]int `json:"recomputeIntervalSeconds,omitempty"`
+	// LoRaPreset is the assumed PHY preset used by the relay-airtime-share
+	// metric to compute true Time-on-Air (issue #1768). Defaults to the
+	// EU MeshCore deployment: 869.6 MHz / BW 62.5 kHz / SF 8 / CR 4/5.
+	// freq is informational only and surfaces in the analytics caption.
+	LoRaPreset *LoRaPresetConfig `json:"loraPreset,omitempty"`
+}
+
+// LoRaPresetConfig is the user-facing PHY preset for ToA scoring.
+// Only the four free params live here; CRC/IH/DE are firmware-fixed
+// in internal/lora and intentionally not surfaced as config.
+type LoRaPresetConfig struct {
+	FreqHz float64 `json:"freq,omitempty"` // e.g. 869.6e6
+	BWkHz  float64 `json:"bw,omitempty"`   // e.g. 62.5
+	SF     int     `json:"sf,omitempty"`   // e.g. 8
+	CR     int     `json:"cr,omitempty"`   // 5..8 (denominator suffix of 4/5..4/8)
 }
 
 // AnalyticsDefaultRecomputeInterval returns the configured default

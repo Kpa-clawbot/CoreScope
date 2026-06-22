@@ -383,6 +383,13 @@
       "roles": 300,
       "observersClockSkew": 300,
       "nodesClockSkew": 300
+    },
+    "loraPreset": {
+      "freq": 869600000,
+      "bw": 62.5,
+      "sf": 8,
+      "cr": 5,
+      "_comment_": "Issue #1768. LoRa PHY preset assumed by the Relay Airtime Share metric to compute true Time-on-Air. Share numbers are only meaningful relative to one preset, so operators MUST set this to match their mesh — freq is informational (surfaces in the chart caption) and does not affect ToA; bw is bandwidth in kHz (e.g. 62.5, 125, 250); sf is spreading factor (6..12); cr is the denominator of the 4/N coding rate (5 ⇒ 4/5 … 8 ⇒ 4/8). Defaults reproduce the typical EU MeshCore deployment 869.6 MHz / BW 62.5 kHz / SF 8 / CR 4/5. CRC=1, IH=0, DE (T_sym ≥ 16 ms), and preamble (32 for SF≤8, 16 otherwise, per firmware preambleLengthForSF) are firmware-fixed and intentionally not exposed as config."
     }
   },
   "_comment_analytics": "Issue #1240 + #1256 + #1265. Each analytics endpoint (topology, rf, distance, channels, hashCollisions, hashSizes, roles, observersClockSkew, nodesClockSkew) is recomputed in the background on the configured interval and served from an atomic-pointer cache. Reads never block on compute. Default 300s (5 min) per endpoint reflects the operator principle: serving slightly stale data quickly beats real-time data slowly. Lower values = fresher data at higher CPU cost. Only the default query (no region/window) is precomputed; region- and window-filtered requests fall back to the legacy on-request compute + 60s TTL cache.",
