@@ -34,6 +34,7 @@ node test-issue-1648-m3-emoji-scan.js
 node test-issue-1648-m6-final-sweep.js
 node test-issue-1648-m6-lint-self.js
 node test-traces.js
+node test-live-multibyte-filter.js
 
 # #1418 — route-view v2 (Tufte) coverage
 node test-issue-1418-raw-hex-extraction.js
