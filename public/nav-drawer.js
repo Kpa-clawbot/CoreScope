@@ -65,6 +65,20 @@
     { route: 'audio-lab', hash: '#/audio-lab', label: 'Audio Lab', ph: 'music-note' },
   ];
 
+  // Coverage is opt-in (config `clientRxCoverage`). roles.js injects its link
+  // into the desktop top-nav only, so add it here too or it is unreachable via
+  // the drawer on touch tablets (>768px). Evaluated at lazy build time, by which
+  // point MeshConfigReady has resolved window.MC_CLIENT_RX_COVERAGE.
+  var COVERAGE_ROUTE = { route: 'rx-coverage', hash: '#/rx-coverage', label: 'Coverage', ph: 'broadcast' };
+
+  function routes() {
+    if (!window.MC_CLIENT_RX_COVERAGE) return ROUTES;
+    var out = ROUTES.slice();
+    var after = out.findIndex(function (r) { return r.route === 'analytics'; }) + 1;
+    out.splice(after, 0, COVERAGE_ROUTE);
+    return out;
+  }
+
   function phIconHTML(name) {
     return '<svg class="ph-icon" aria-hidden="true" focusable="false">' +
            '<use href="/icons/phosphor-sprite.svg#ph-' + name + '"></use></svg>';
@@ -126,7 +140,7 @@
 
     var list = document.createElement('nav');
     list.className = 'nav-drawer-list';
-    ROUTES.forEach(function (r) {
+    routes().forEach(function (r) {
       var a = document.createElement('a');
       a.className = 'nav-drawer-item';
       a.setAttribute('href', r.hash);
