@@ -39,6 +39,7 @@
   let showGhostHops = localStorage.getItem('live-ghost-hops') !== 'false';
   let realisticPropagation = localStorage.getItem('live-realistic-propagation') === 'true';
   let showOnlyFavorites = localStorage.getItem('live-favorites-only') === 'true';
+  let multibyteOnly = localStorage.getItem('live-multibyte-only') === 'true';
   let matrixMode = localStorage.getItem('live-matrix-mode') === 'true';
   let matrixRain = localStorage.getItem('live-matrix-rain') === 'true';
   let colorByHash = localStorage.getItem('meshcore-color-packets-by-hash') !== 'false';
@@ -1107,6 +1108,8 @@
             <span id="audioDesc" class="sr-only">Sonify packets — turn raw bytes into generative music</span>
             <label><input type="checkbox" id="liveFavoritesToggle" aria-describedby="favDesc"> ⭐ Favorites</label>
             <span id="favDesc" class="sr-only">Show only favorited and claimed nodes</span>
+            <label><input type="checkbox" id="liveMultibyteToggle" aria-describedby="multibyteDesc"> Multibyte only</label>
+            <span id="multibyteDesc" class="sr-only">Show only multibyte (≥2-byte path-hash) packets; hide unreliable single-byte traffic</span>
             <label id="liveGeoFilterLabel" style="display:none"><input type="checkbox" id="liveGeoFilterToggle"> Mesh live area</label>
             </div>
             <div class="live-toggles">
@@ -1571,6 +1574,14 @@
       showOnlyFavorites = e.target.checked;
       localStorage.setItem('live-favorites-only', showOnlyFavorites);
       applyFavoritesFilter();
+    });
+
+    const multibyteToggle = document.getElementById('liveMultibyteToggle');
+    multibyteToggle.checked = multibyteOnly;
+    multibyteToggle.addEventListener('change', (e) => {
+      multibyteOnly = e.target.checked;
+      localStorage.setItem('live-multibyte-only', multibyteOnly);
+      rebuildFeedList();
     });
 
     // Region filter (#1045): dropdown of observer IATA regions
@@ -2794,6 +2805,7 @@
     const sorted = [...byHash.values()].sort((a, b) => b.latestTs - a.latestTs).slice(0, 25);
 
     for (const group of sorted) {
+      if (multibyteOnly && !groupIsMultibyte(group.packets)) continue;
       const pkt = Object.assign({}, group.latestPkt, { observation_count: group.count });
       const decoded = pkt.decoded || {};
       const header = decoded.header || {};
@@ -3149,11 +3161,31 @@
     ws.onerror = () => {};
   }
 
+  // A packet group is multibyte when its path hash size is >= 2 bytes.
+  // All observations of one packet share the same hash size; use the first
+  // observation with a resolvable raw_hex. Unresolvable => treated as single
+  // (excluded when the "Multibyte only" filter is on).
+  function groupIsMultibyte(packets) {
+    if (!packets || !packets.length) return false;
+    for (var i = 0; i < packets.length; i++) {
+      var p = packets[i];
+      var size = window.MC_packetHashSize
+        ? window.MC_packetHashSize(p.raw_hex, p.route_type)
+        : 0;
+      if (size > 0) return size >= 2;
+    }
+    return false;
+  }
+
   // === UNIFIED PACKET RENDERER ===
   // ONE function for all rendering: WS arrival, DB load, replay button, VCR playback.
   // Takes an array of observations (same hash) and renders the complete path tree.
   function renderPacketTree(packets, isReplay) {
     if (!packets || !packets.length) return;
+    // "Multibyte only" filter: drop single-byte / unresolvable packets from the
+    // entire live view (feed, map, rain, counter — live AND replay). Placed
+    // above the counter so livePktCount reflects multibyte-only traffic.
+    if (multibyteOnly && !groupIsMultibyte(packets)) return;
     const first = packets[0];
     const decoded = first.decoded || {};
     const header = decoded.header || {};
