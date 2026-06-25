@@ -35,8 +35,10 @@ func hashAdvertTx(pk string, hs int, firstSeen string) *StoreTx {
 	}
 }
 
+// ts formats a relative timestamp the way the ingestor writes first_seen
+// (time.RFC3339, no fractional seconds).
 func ts(d time.Duration) string {
-	return time.Now().UTC().Add(d).Format("2006-01-02T15:04:05.000Z")
+	return time.Now().UTC().Add(d).Format(time.RFC3339)
 }
 
 func TestIssue1726_SettledNodeNotInconsistent(t *testing.T) {
@@ -85,6 +87,47 @@ func TestIssue1726_HashSizeUsesChronologicallyLatest(t *testing.T) {
 	}
 	if ni.HashSize != 2 {
 		t.Errorf("HashSize = %d, want 2 (chronologically-latest advert)", ni.HashSize)
+	}
+}
+
+// Chronological ordering must be robust to FirstSeen format differences:
+// the ingestor writes RFC3339 with no fractional seconds, but a fractional
+// (".000Z") form must still order correctly relative to it. A naive string
+// compare would sort the no-fraction "...05Z" after a same-second "...05.000Z"
+// (because 'Z' > '.'), picking the wrong "latest" advert.
+func TestIssue1726_OrderingRobustToTimestampFormat(t *testing.T) {
+	ps := NewPacketStore(nil, nil)
+	pk := "1234000056780000abcd0000ef120000345600007890000012340000567800ab"
+
+	// Same wall-clock second, sub-second apart: the older advert in the
+	// no-fraction form, the newer 1ms later in the fractional form. A string
+	// compare sorts "...05Z" AFTER "...05.001Z" ('Z' > '.'), so it would treat
+	// the older 1-byte advert as latest; chronological parsing must not.
+	base := time.Now().UTC().Truncate(time.Second).Add(-3 * 24 * time.Hour)
+	older := base.Format(time.RFC3339)                                         // "...05Z"
+	newer := base.Add(1 * time.Millisecond).Format("2006-01-02T15:04:05.000Z") // "...05.001Z"
+
+	pt := 4
+	mk := func(pathByte, firstSeen string) *StoreTx {
+		return &StoreTx{
+			RawHex:      "11" + pathByte + "aabb",
+			FirstSeen:   firstSeen,
+			PayloadType: &pt,
+			DecodedJSON: `{"pubKey":"` + pk + `","type":"ADVERT"}`,
+		}
+	}
+	ps.byPayloadType[4] = []*StoreTx{
+		mk("41", newer), // 2-byte, newest, appended first
+		mk("01", older), // 1-byte, oldest
+	}
+
+	info := ps.GetNodeHashSizeInfo()
+	ni := info[pk]
+	if ni == nil {
+		t.Fatalf("expected hash size info for %s", pk)
+	}
+	if ni.HashSize != 2 {
+		t.Errorf("HashSize = %d, want 2 (newest advert, despite mixed timestamp formats)", ni.HashSize)
 	}
 }
 
