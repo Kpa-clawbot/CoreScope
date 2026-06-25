@@ -2909,6 +2909,8 @@ var iataCoords = map[string]IataCoord{
 	"LAX": {Lat: 33.9425, Lon: -118.4081},
 	"SAN": {Lat: 32.7338, Lon: -117.1933},
 	"SMF": {Lat: 38.6954, Lon: -121.5908},
+	"APC": {Lat: 38.2132, Lon: -122.2807}, // Napa County
+	"STS": {Lat: 38.509, Lon: -122.8128},  // Charles M. Schulz–Sonoma County
 	"MRY": {Lat: 36.587, Lon: -121.843},
 	"EUG": {Lat: 44.1246, Lon: -123.2119},
 	"RDD": {Lat: 40.509, Lon: -122.2934},

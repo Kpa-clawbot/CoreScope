@@ -1874,6 +1874,29 @@ func TestConfigRegionsWithCustomRegions(t *testing.T) {
 	}
 }
 
+func TestIataCoordsIncludesNapaAndSonoma(t *testing.T) {
+	// Issue #1786: observers tagged APC (Napa County) or STS (Charles M.
+	// Schulz–Sonoma County) rendered without lat/lon and did not pin on the map
+	// because iataCoords lacked entries for them.
+	cases := []struct {
+		code     string
+		lat, lon float64
+	}{
+		{"APC", 38.2132, -122.2807},
+		{"STS", 38.509, -122.8128},
+	}
+	for _, c := range cases {
+		coord, ok := iataCoords[c.code]
+		if !ok {
+			t.Errorf("iataCoords missing %q", c.code)
+			continue
+		}
+		if coord.Lat != c.lat || coord.Lon != c.lon {
+			t.Errorf("%s = {%v, %v}, want {%v, %v}", c.code, coord.Lat, coord.Lon, c.lat, c.lon)
+		}
+	}
+}
+
 func TestConfigMapWithCustomDefaults(t *testing.T) {
 	db := setupTestDB(t)
 	seedTestData(t, db)
