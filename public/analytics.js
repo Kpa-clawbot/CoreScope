@@ -2526,10 +2526,14 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
       applyNGFilters();
     }
 
+    var ngScoreDebounce;
     document.getElementById('ngMinScore').addEventListener('input', function() {
       document.getElementById('ngMinScoreVal').textContent = (this.value / 100).toFixed(2);
       localStorage.setItem('ng-min-score', this.value);
-      applyNGFilters();
+      // Debounce the O(N+E) refilter so dragging the slider doesn't rebuild the
+      // node set on every pixel (review of #1758).
+      clearTimeout(ngScoreDebounce);
+      ngScoreDebounce = setTimeout(applyNGFilters, 50);
     });
     document.getElementById('ngConfidence').addEventListener('change', applyNGFilters);
     rcEl.addEventListener('change', applyNGFilters);
@@ -2788,6 +2792,11 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
       cancelAnimationFrame(_ngState.animId);
       _ngState.animId = null;
     }
+    // Re-entrancy epoch: a just-cancelled in-flight tick() (or one re-entered
+    // from a microtask) must not schedule a second loop. Each run bumps the
+    // epoch; tick() captures its own and early-returns once a newer run starts.
+    _ngState._runEpoch = (_ngState._runEpoch || 0) + 1;
+    var myEpoch = _ngState._runEpoch;
 
     const canvas = document.getElementById('ngCanvas');
     if (!canvas) return;
@@ -2807,7 +2816,16 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
         skipMsg.className = 'analytics-card';
         canvas.parentNode.insertBefore(skipMsg, canvas);
       }
-      skipMsg.innerHTML = '<p class="text-muted">Graph has ' + _ngState.nodes.length + ' nodes (limit: ' + NODE_LIMIT + '). Force simulation skipped for performance. Use the filters above to reduce the node count.</p>';
+      // Build via textContent (never innerHTML) per the project's XSS rule —
+      // these are Numbers today, but a future coercion bug must not inject. Show
+      // filtered-of-total so the operator sees the rest were filtered out, not
+      // lost (review of #1758).
+      var ngTotal = (_ngState.allNodes || _ngState.nodes).length;
+      skipMsg.textContent = '';
+      var skipP = document.createElement('p');
+      skipP.className = 'text-muted';
+      skipP.textContent = _ngState.nodes.length + ' of ' + ngTotal + ' nodes match the current filters (limit: ' + NODE_LIMIT + '). Force simulation skipped for performance — tighten the filters to render.';
+      skipMsg.appendChild(skipP);
       return;
     }
     if (skipMsg) skipMsg.remove();
@@ -2836,6 +2854,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
     // Performance: 500 nodes brute-force repulsion: avg ~4ms/frame = 250fps headroom (measured Chrome 120, M1)
     var _perfFrameTimes = [], _perfLastTime = 0;
     function tick() {
+      if (_ngState._runEpoch !== myEpoch) { return; } // a newer startGraphRenderer run superseded this loop
       if (!document.getElementById('ngCanvas')) { _ngState.animId = null; return; }
       var now = performance.now();
       if (_perfLastTime) _perfFrameTimes.push(now - _perfLastTime);

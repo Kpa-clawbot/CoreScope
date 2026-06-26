@@ -22,7 +22,7 @@
  * Usage:
  *   BASE_URL=http://localhost:13581 \
  *   CHROMIUM_PATH=/path/to/chromium \
- *   node test-issue-1758-ng-filter-rerenders.js
+ *   node test-issue-1758-ng-filter-rerenders-e2e.js
  */
 'use strict';
 const { chromium } = require('playwright');
@@ -168,6 +168,34 @@ function buildFixture() {
     fail(`after re-checking companion: expected #ngCanvas display 'none', got '${restored.canvasDisplay}'`);
   }
   console.log('  ✓ re-widened: #ngSkipMsg restored and #ngCanvas hidden');
+
+  // --- Skip message must report filtered-of-total, not just the filtered count.
+  const restoredSkipText = await page.evaluate(
+    () => (document.getElementById('ngSkipMsg') || {}).textContent || '');
+  if (!/\bof\b/.test(restoredSkipText) || !/nodes/.test(restoredSkipText)) {
+    fail(`skip message should report "N of M nodes", got: ${JSON.stringify(restoredSkipText)}`);
+  }
+  console.log('  ✓ skip message reports filtered-of-total node count');
+
+  // --- Filter down AGAIN: the small→oversized→small lifecycle must keep working
+  // (the re-entrancy epoch guard + bind-once interaction listeners survive
+  // repeated re-renders, not just one down→up cycle).
+  await page.evaluate(() => {
+    const cb = document.querySelector('#ngRoleChecks input[data-role="companion"]');
+    cb.checked = false;
+    cb.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await page.waitForFunction(() => !document.getElementById('ngSkipMsg'), { timeout: 15000 });
+  const reFiltered = await page.evaluate(() => {
+    const canvas = document.getElementById('ngCanvas');
+    return {
+      hasSkip: !!document.getElementById('ngSkipMsg'),
+      canvasDisplay: canvas ? getComputedStyle(canvas).display : '(no canvas)',
+    };
+  });
+  if (reFiltered.hasSkip) fail('second filter-down: expected #ngSkipMsg gone again');
+  if (reFiltered.canvasDisplay === 'none') fail('second filter-down: expected #ngCanvas visible again');
+  console.log('  ✓ second filter-down: render restored across repeated cycles');
 
   await browser.close();
 
