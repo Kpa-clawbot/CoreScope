@@ -2829,6 +2829,23 @@
       const statusLabel = decoded.decryptionStatus === 'no_key' ? 'no key' : 'decryption failed';
       return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> Ch 0x${hashHex} <span class="muted">(${statusLabel})</span>`;
     }
+    // Group data (binary datagrams over channels) — #1792.
+    // Envelope: channel_hash + MAC + ciphertext. When decrypted, inner is
+    // data_type(uint16 LE) + data_len(1) + blob (firmware BaseChatMesh.cpp:382-385).
+    if (decoded.type === 'GRP_DATA' && decoded.channelHash != null) {
+      const hashHex = decoded.channelHashHex || decoded.channelHash.toString(16).padStart(2, '0').toUpperCase();
+      if (decoded.decryptionStatus === 'decrypted' && decoded.dataType != null) {
+        const dt = Number(decoded.dataType).toString(16).padStart(4, '0').toUpperCase();
+        const dl = decoded.dataLen != null ? Number(decoded.dataLen) : 0;
+        const blob = decoded.decryptedBlob || '';
+        const blobShort = blob.length > 32 ? blob.slice(0, 32) + '…' : blob;
+        return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-database"/></svg> Ch 0x${hashHex} <span class="muted">type=0x${dt} len=${dl}</span> <code>${escapeHtml(blobShort)}</code>`;
+      }
+      const statusLabel = decoded.decryptionStatus === 'no_key' ? 'no key'
+        : decoded.decryptionStatus === 'decryption_failed' ? 'decryption failed'
+        : 'encrypted';
+      return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-database"/></svg> Ch 0x${hashHex} <span class="muted">(${statusLabel})</span>`;
+    }
     // Direct messages
     if (decoded.type === 'TXT_MSG') return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-envelope"/></svg> ${decoded.srcHash?.slice(0,8) || '?'} → ${decoded.destHash?.slice(0,8) || '?'}`;
     // Path updates
