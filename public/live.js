@@ -421,8 +421,13 @@
     var gen = VCR.replayGen;
     vcrSetMode('REPLAY');
 
-    // Reload map nodes to match the replay time
-    clearNodeMarkers();
+    // Refresh map nodes to match the replay time. Don't tear every dot down
+    // (clearNodeMarkers) — that re-renders the whole node layer and flickers on
+    // each scrub. Clear only the transient animation/path layers; loadNodes()
+    // reconciles the node set in place (keeps shared dots, removes only nodes
+    // absent at the target time, adds genuinely new ones).
+    if (animLayer) animLayer.clearLayers();
+    if (pathsLayer) pathsLayer.clearLayers();
     loadNodes(targetTs);
 
     // Fetch packets from scrub point forward (ASC order, no limit clipping from the wrong end)
@@ -2646,6 +2651,38 @@
         safetyCap: window.LIVE_MAP_MAX_NODES || 10000,
       });
       var now = Date.now();
+      // Time-scoped reload (VCR scrub/replay): reconcile against the existing
+      // markers instead of tearing the layer down. addNodeMarker() already
+      // no-ops keys that are still present, so unchanged dots stay put (no
+      // flicker) — we only rebuild what actually differs at the target time.
+      if (beforeTs) {
+        const valid = list.filter(n => n.lat != null && n.lon != null && !(n.lat === 0 && n.lon === 0));
+        const nextKeys = new Set(valid.map(n => n.public_key));
+        // Drop markers for nodes that didn't exist at the target time.
+        for (const key in nodeMarkers) {
+          if (!nextKeys.has(key)) {
+            const stale = nodeMarkers[key];
+            if (stale && nodesLayer) { try { nodesLayer.removeLayer(stale); } catch (e) {} }
+            delete nodeMarkers[key];
+            delete nodeData[key];
+            delete nodeActivity[key];
+          }
+        }
+        // Refresh survivors whose geometry/role/name differs at the target
+        // time. addNodeMarker() no-ops existing keys, so without this a kept
+        // marker would keep showing current values rather than the time-scoped
+        // ones — drop the changed marker here so it's rebuilt by the loop below
+        // (nodeData still holds the prior values until that loop overwrites it).
+        for (const n of valid) {
+          const existing = nodeMarkers[n.public_key];
+          const prev = nodeData[n.public_key];
+          if (existing && prev && (prev.lat !== n.lat || prev.lon !== n.lon ||
+              prev.role !== n.role || (prev.name || '') !== (n.name || ''))) {
+            if (nodesLayer) { try { nodesLayer.removeLayer(existing); } catch (e) {} }
+            delete nodeMarkers[n.public_key];
+          }
+        }
+      }
       list.forEach(n => {
         if (n.lat != null && n.lon != null && !(n.lat === 0 && n.lon === 0)) {
           n._fromAPI = true;
