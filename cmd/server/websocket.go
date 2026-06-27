@@ -13,9 +13,19 @@ import (
 
 // Hub manages WebSocket clients and broadcasts.
 type Hub struct {
-	mu       sync.RWMutex
-	clients  map[*Client]bool
-	upgrader websocket.Upgrader
+	mu             sync.RWMutex
+	clients        map[*Client]bool
+	upgrader       websocket.Upgrader
+	allowedOrigins []string // exact-match allowlist for /ws CheckOrigin (see SetAllowedOrigins)
+}
+
+// SetAllowedOrigins configures the exact-match origin allowlist consulted by
+// the WebSocket upgrader's CheckOrigin. STUB: not yet enforced — see follow-up
+// commit for the real allowlist enforcement.
+func (h *Hub) SetAllowedOrigins(origins []string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.allowedOrigins = append(h.allowedOrigins[:0], origins...)
 }
 
 // Client is a single WebSocket connection.
