@@ -280,6 +280,54 @@ console.log('\n=== packets.js: getDetailPreview ===');
     assert(result.includes('0xFF'));
   });
 
+  // #1792: GRP_DATA detail preview parity with GRP_TXT.
+  test('getDetailPreview handles GRP_DATA with channelHash (no_key)', () => {
+    const result = api.getDetailPreview({
+      type: 'GRP_DATA', channelHash: 0xAB, channelHashHex: 'AB', decryptionStatus: 'no_key'
+    });
+    assert(result.includes('0xAB'), 'should render channel hash hex');
+    assert(result.includes('no key'), 'should render no key status');
+  });
+
+  test('getDetailPreview handles GRP_DATA decryption_failed', () => {
+    const result = api.getDetailPreview({
+      type: 'GRP_DATA', channelHash: 5, channelHashHex: '05', decryptionStatus: 'decryption_failed'
+    });
+    assert(result.includes('0x05'), 'should render channel hash hex');
+    assert(result.includes('decryption failed'), 'should render failure status');
+  });
+
+  test('getDetailPreview handles GRP_DATA decrypted with data_type and blob', () => {
+    const result = api.getDetailPreview({
+      type: 'GRP_DATA',
+      channelHash: 0x12,
+      channelHashHex: '12',
+      decryptionStatus: 'decrypted',
+      dataType: 0x0001,
+      dataLen: 4,
+      decryptedBlob: 'deadbeef'
+    });
+    assert(result.includes('0x12'), 'should render channel hash hex');
+    assert(result.includes('0x0001'), 'should render data_type as hex');
+    assert(result.includes('4'), 'should render data_len');
+    assert(result.includes('deadbeef'), 'should render blob hex');
+  });
+
+  test('getDetailPreview handles GRP_DATA decrypted truncates long blob', () => {
+    const longBlob = 'ab'.repeat(64); // 128 hex chars = 64 bytes
+    const result = api.getDetailPreview({
+      type: 'GRP_DATA',
+      channelHash: 0x12,
+      channelHashHex: '12',
+      decryptionStatus: 'decrypted',
+      dataType: 0,
+      dataLen: 64,
+      decryptedBlob: longBlob
+    });
+    assert(result.includes('…'), 'should truncate long blob with ellipsis');
+    assert(!result.includes(longBlob), 'should not render full long blob');
+  });
+
   test('getDetailPreview handles TXT_MSG', () => {
     const result = api.getDetailPreview({
       type: 'TXT_MSG', srcHash: 'abcdef01', destHash: '12345678'
