@@ -513,6 +513,56 @@ async function run() {
     assert(rowsAfter.length > 0, 'No packets after filtering');
   });
 
+  // Test (#1791): "Group Data" (payload_type=6) appears in the message-type
+  // filter checklist and selecting it narrows the table to type-6 rows only.
+  await test('Packets type filter includes Group Data (#1791)', async () => {
+    // Wide time window so the seeded GRP_DATA fixture row is included.
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
+    await page.evaluate(() => {
+      localStorage.setItem('meshcore-time-window', '525600');
+      localStorage.removeItem('meshcore-type-filter');
+    });
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
+    await page.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
+
+    // Open the type multi-select menu.
+    const typeTrigger = await page.$('#typeTrigger');
+    assert(typeTrigger, 'Type filter trigger (#typeTrigger) not found');
+    await typeTrigger.click();
+    await page.waitForSelector('#typeMenu.open', { timeout: 5000 });
+
+    // Assert the Grp Data checkbox exists (regression: was missing in #1791).
+    const grpDataCheckbox = await page.$('#typeMenu input[data-type-id="6"]');
+    assert(grpDataCheckbox, '#1791: "Grp Data" (data-type-id="6") checkbox missing from type filter menu');
+    const grpDataLabel = await page.$eval('#typeMenu input[data-type-id="6"]', el => (el.parentElement && el.parentElement.textContent || '').trim());
+    assert(/Grp Data/i.test(grpDataLabel), `#1791: checkbox for type 6 should be labeled "Grp Data", got "${grpDataLabel}"`);
+
+    // Select only Group Data and verify the table narrows to type-6 rows.
+    await grpDataCheckbox.click();
+    // Filter is applied via renderTableRows synchronously; allow a frame for DOM swap.
+    await page.waitForFunction(() => {
+      const rows = document.querySelectorAll('#pktBody tr:not([id^=vscroll])');
+      if (rows.length === 0) return false;
+      // Every visible row should show the Group Data badge.
+      return Array.from(rows).every(r => {
+        const badge = r.querySelector('.col-type .badge');
+        return badge && /Group Data/i.test(badge.textContent || '');
+      });
+    }, { timeout: 5000 });
+
+    const badgeTexts = await page.$$eval('#pktBody tr:not([id^=vscroll]) .col-type .badge', els => els.map(e => e.textContent.trim()));
+    assert(badgeTexts.length > 0, '#1791: expected at least one Group Data row after filter');
+    const nonGrp = badgeTexts.filter(t => !/Group Data/i.test(t));
+    assert(nonGrp.length === 0, `#1791: type filter should yield only Group Data rows, found other types: ${nonGrp.join(',')}`);
+
+    // Cleanup: clear filter so subsequent tests start unfiltered.
+    await page.evaluate(() => {
+      localStorage.removeItem('meshcore-type-filter');
+    });
+  });
+
   await test('Packets initial fetch honors persisted time window', async () => {
     // Set persisted time window to 60 min and reload so the IIFE reads it
     await page.evaluate(() => localStorage.setItem('meshcore-time-window', '60'));

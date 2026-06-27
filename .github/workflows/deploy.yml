@@ -337,6 +337,14 @@ jobs:
             (0,1,'rx',5.0,-95,0,'["AA"]',CAST(strftime('%s','2026-05-15T00:00:00Z') AS INTEGER),'["aa00000000000000000000000000000000000000000000000000000000000000"]'),
             (0,2,'rx',5.5,-92,0,'["BB"]',CAST(strftime('%s','2026-05-15T00:00:00Z') AS INTEGER),'["bb00000000000000000000000000000000000000000000000000000000000000"]'),
             (0,3,'rx',6.0,-90,0,'["CC"]',CAST(strftime('%s','2026-05-15T00:00:00Z') AS INTEGER),'["cc00000000000000000000000000000000000000000000000000000000000000"]');
+          -- #1791 fixture: a single GRP_DATA (payload_type=6) packet so the
+          -- E2E "Grp Data filter" test has at least one row to filter on.
+          -- Use an obs timestamp within the default UI window so the row
+          -- appears with no time-window override.
+          INSERT INTO transmissions(id,raw_hex,hash,first_seen,route_type,payload_type,payload_version,decoded_json,channel_hash,from_pubkey)
+            VALUES (-1,'16000102030405060708090a0b0c0d0e0f','17910000deadbeef',strftime('%Y-%m-%dT%H:%M:%SZ','now'),1,6,0,'{"type":"GRP_DATA","channel":"#test","raw":"deadbeef"}',NULL,NULL);
+          INSERT INTO observations(transmission_id,observer_idx,direction,snr,rssi,score,path_json,timestamp,resolved_path) VALUES
+            (-1,1,'rx',7.0,-88,0,'["AA"]',CAST(strftime('%s','now') AS INTEGER),'["aa00000000000000000000000000000000000000000000000000000000000000"]');
           SQL
 
       - name: Migrate fixture DB to current schema (#1287)
