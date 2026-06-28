@@ -371,9 +371,46 @@ console.log('\n=== packets.js: getDetailPreview ===');
       dataLen: 64,
       decryptedBlob: longBlob
     });
-    // Pin 32-hex-char cutoff: first 32 chars + ellipsis.
-    assert(result.includes('ab'.repeat(16) + '…'), 'should truncate blob at 32 hex chars + ellipsis');
-    assert(!result.includes(longBlob), 'should not render full long blob');
+    // Adversarial #3: assert EXACT rendered <code> content via regex, not substring.
+    // Substring match would still pass at cutoff 40/48 because 'ab'.repeat(16)+'…'
+    // is a prefix of any longer rendered blob. Pin: exactly 32 hex chars + ellipsis,
+    // and nothing else inside the <code> tag.
+    const codeMatch = result.match(/<code>([^<]*)<\/code>/);
+    assert(codeMatch, 'should render a <code> block');
+    assert.strictEqual(codeMatch[1], 'ab'.repeat(16) + '…',
+      `<code> content must be exactly 32 hex chars + ellipsis, got: ${JSON.stringify(codeMatch[1])}`);
+  });
+
+  // Boundary: blob with EXACTLY 32 hex chars renders WITHOUT ellipsis (.length > 32 is strict).
+  test('getDetailPreview renders GRP_DATA blob of exactly 32 hex chars without ellipsis', () => {
+    const exactBlob = 'cd'.repeat(16); // 32 hex chars
+    const result = api.getDetailPreview({
+      type: 'GRP_DATA',
+      channelHash: 0x12,
+      channelHashHex: '12',
+      decryptionStatus: 'decrypted',
+      dataType: 0,
+      dataLen: 16,
+      decryptedBlob: exactBlob
+    });
+    const codeMatch = result.match(/<code>([^<]*)<\/code>/);
+    assert(codeMatch, 'should render a <code> block at the 32-char boundary');
+    assert.strictEqual(codeMatch[1], exactBlob,
+      'exactly-32-char blob must render verbatim, no ellipsis');
+    assert(!result.includes('…'), 'must NOT append ellipsis at the boundary');
+  });
+
+  // Item 6: channelHash=0 — confirms the `!= null` gate (not truthy check) so falsy 0
+  // still enters the GRP_DATA branch and renders `Ch 0x00`.
+  test('getDetailPreview handles GRP_DATA channelHash=0 (falsy but valid)', () => {
+    const result = api.getDetailPreview({
+      type: 'GRP_DATA',
+      channelHash: 0,
+      decryptionStatus: 'no_key'
+    });
+    assert(result.includes('Ch 0x00'),
+      'channelHash=0 must render Ch 0x00 (falsy 0 passes `!= null` gate)');
+    assert(result.includes('no key'), 'should render no key status');
   });
 
   test('getDetailPreview handles TXT_MSG', () => {
