@@ -540,7 +540,7 @@ async function run() {
     assert(grpDataCheckbox, '#1791: "Group Data" (data-type-id="6") checkbox missing from type filter menu');
     const grpDataLabel = await page.$eval(TYPE_6_CHECKBOX_SEL, el => (el.parentElement && el.parentElement.textContent || '').trim());
     // Strict equality: the rendered label must be exactly "Group Data"
-    // (no casing/whitespace drift). Tightens kent-beck nit on #1797.
+    // (no casing/whitespace drift) to guard against silent renames.
     assert(grpDataLabel === 'Group Data', `#1791: checkbox for type 6 should be labeled exactly "Group Data", got "${grpDataLabel}"`);
 
     // Select only Group Data and verify the table narrows to type-6 rows.
