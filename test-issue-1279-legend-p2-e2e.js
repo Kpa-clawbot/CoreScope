@@ -1,7 +1,7 @@
 /**
  * E2E for #1279 P2 #2 — Live legend covers all remaining named payload types.
  * After PR #1276 the legend already lists Advert/Message/Direct/Request/
- * Response/Trace/Path/Ack; this PR adds Anon Req, Grp Data, Multipart,
+ * Response/Trace/Path/Ack; this PR adds Anon Req, Group Data, Multipart,
  * Control and Raw Custom.
  *
  * Run: BASE_URL=http://localhost:13581 node test-issue-1279-legend-p2-e2e.js
@@ -60,7 +60,7 @@ async function legendText(page) {
 
   // Types already covered by #1274/#1276: Advert/Message/Direct/Request/
   // Response/Trace/Path/Ack. New ones added by #1279 P2:
-  const newRows = ['anon req', 'grp data', 'multipart', 'control', 'raw custom'];
+  const newRows = ['anon req', 'group data', 'multipart', 'control', 'raw custom'];
   for (const label of newRows) {
     await step(`legend lists "${label}"`, async () => {
       const t = await legendText(page);
