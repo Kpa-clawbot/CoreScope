@@ -2433,6 +2433,19 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   .data-table .col-time { min-width: 64px; }
   .panel-left { overflow-x: auto; }
 
+  /* #1770: packets-view virtual-scroller assumes constant row height
+     (VSCROLL_ROW_HEIGHT). The base rule at ~L1097 sets
+     `.data-table td.col-details { white-space: normal; word-break: break-word }`
+     which lets the "Details" cell wrap on narrow viewports, producing
+     variable row heights → visible jitter when scrolling past ~900px on
+     iOS. Quick-fix (S path): clamp the cell to a single line on mobile.
+     The proper L-path fix (per-row measurement) tracks separately. */
+  .data-table td.col-details {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   /* Filters: collapse on mobile */
   .filter-bar { flex-direction: row; flex-wrap: wrap; gap: 4px; }
   .filter-toggle-btn { display: inline-flex !important; }
