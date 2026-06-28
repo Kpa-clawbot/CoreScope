@@ -34,6 +34,10 @@
   let packetCount = 0;
   let activeAnims = 0;
   const MAX_CONCURRENT_ANIMS = 20;
+  // Perf caps for the animation overlay (see updateAnimCanvas / renderAnimations).
+  const ANIM_MAX_DPR = 1.5;       // cap backing-store pixels on hi-DPI displays
+  const ANIM_MIN_FRAME_MS = 15;   // don't redraw faster than ~60fps (high-refresh guard)
+  let _lastAnimFrame = 0;
   let nodeActivity = {};
   let recentPaths = [];
   let showGhostHops = localStorage.getItem('live-ghost-hops') !== 'false';
@@ -417,8 +421,13 @@
     var gen = VCR.replayGen;
     vcrSetMode('REPLAY');
 
-    // Reload map nodes to match the replay time
-    clearNodeMarkers();
+    // Refresh map nodes to match the replay time. Don't tear every dot down
+    // (clearNodeMarkers) — that re-renders the whole node layer and flickers on
+    // each scrub. Clear only the transient animation/path layers; loadNodes()
+    // reconciles the node set in place (keeps shared dots, removes only nodes
+    // absent at the target time, adds genuinely new ones).
+    if (animLayer) animLayer.clearLayers();
+    if (pathsLayer) pathsLayer.clearLayers();
     loadNodes(targetTs);
 
     // Fetch packets from scrub point forward (ASC order, no limit clipping from the wrong end)
@@ -1166,7 +1175,7 @@
             <li><span class="live-dot" style="background:${TYPE_COLORS.TRACE}" aria-hidden="true"></span> Trace — Route trace</li>
             <li><span class="live-dot" style="background:${TYPE_COLORS.PATH}" aria-hidden="true"></span> Path — Path discovery</li>
             <li><span class="live-dot" style="background:${TYPE_COLORS.ANON_REQ}" aria-hidden="true"></span> Anon Req — Anonymous request</li>
-            <li><span class="live-dot" style="background:${TYPE_COLORS.GRP_DATA}" aria-hidden="true"></span> Grp Data — Group datagram</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.GRP_DATA}" aria-hidden="true"></span> Group Data — Group datagram</li>
             <li><span class="live-dot" style="background:${TYPE_COLORS.MULTIPART}" aria-hidden="true"></span> Multipart — Multi-fragment payload</li>
             <li><span class="live-dot" style="background:${TYPE_COLORS.CONTROL}" aria-hidden="true"></span> Control — Control plane</li>
             <li><span class="live-dot" style="background:${TYPE_COLORS.RAW_CUSTOM}" aria-hidden="true"></span> Raw Custom — Application-defined payload</li>
@@ -1294,7 +1303,11 @@
       const w = size.x + padX * 2;
       const h = size.y + padY * 2;
 
-    const dpr = window.devicePixelRatio || 1;
+    // Cap the backing-store DPR. The animation canvas is ~1.4x the screen area
+    // (20% pad per side); at native devicePixelRatio 2-3 that means clearing and
+    // redrawing 5-12x the screen's pixels every frame. Capping at 1.5 keeps lines
+    // crisp while cutting per-frame fill cost by up to ~4x on hi-DPI displays.
+    const dpr = Math.min(window.devicePixelRatio || 1, ANIM_MAX_DPR);
 
       // Updating width/height automatically clears the canvas
       animCanvas.width = w * dpr;
@@ -2638,6 +2651,38 @@
         safetyCap: window.LIVE_MAP_MAX_NODES || 10000,
       });
       var now = Date.now();
+      // Time-scoped reload (VCR scrub/replay): reconcile against the existing
+      // markers instead of tearing the layer down. addNodeMarker() already
+      // no-ops keys that are still present, so unchanged dots stay put (no
+      // flicker) — we only rebuild what actually differs at the target time.
+      if (beforeTs) {
+        const valid = list.filter(n => n.lat != null && n.lon != null && !(n.lat === 0 && n.lon === 0));
+        const nextKeys = new Set(valid.map(n => n.public_key));
+        // Drop markers for nodes that didn't exist at the target time.
+        for (const key in nodeMarkers) {
+          if (!nextKeys.has(key)) {
+            const stale = nodeMarkers[key];
+            if (stale && nodesLayer) { try { nodesLayer.removeLayer(stale); } catch (e) {} }
+            delete nodeMarkers[key];
+            delete nodeData[key];
+            delete nodeActivity[key];
+          }
+        }
+        // Refresh survivors whose geometry/role/name differs at the target
+        // time. addNodeMarker() no-ops existing keys, so without this a kept
+        // marker would keep showing current values rather than the time-scoped
+        // ones — drop the changed marker here so it's rebuilt by the loop below
+        // (nodeData still holds the prior values until that loop overwrites it).
+        for (const n of valid) {
+          const existing = nodeMarkers[n.public_key];
+          const prev = nodeData[n.public_key];
+          if (existing && prev && (prev.lat !== n.lat || prev.lon !== n.lon ||
+              prev.role !== n.role || (prev.name || '') !== (n.name || ''))) {
+            if (nodesLayer) { try { nodesLayer.removeLayer(existing); } catch (e) {} }
+            delete nodeMarkers[n.public_key];
+          }
+        }
+      }
       list.forEach(n => {
         if (n.lat != null && n.lon != null && !(n.lat === 0 && n.lon === 0)) {
           n._fromAPI = true;
@@ -3886,6 +3931,17 @@
     }
 
     const isPaused = VCR.mode === 'PAUSED' || VCR.speed === 0;
+
+    // High-refresh guard: cap redraw at ~60fps. Progress is time-based
+    // (tickDt reads each object's own elapsed delta, itself capped at 32ms),
+    // so skipping a frame preserves motion exactly — this only stops 120/144Hz
+    // displays from doing 2-2.4x the per-frame work for no visible benefit.
+    // Skip only while running; paused frames fall through to the sleep path below.
+    if (!isPaused && now - _lastAnimFrame < ANIM_MIN_FRAME_MS) {
+      requestAnimationFrame(renderAnimations);
+      return;
+    }
+    _lastAnimFrame = now;
 
     // Clear the canvas for this frame
     animCtx.clearRect(0, 0, animCanvas.clientWidth, animCanvas.clientHeight);

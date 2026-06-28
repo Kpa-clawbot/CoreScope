@@ -255,5 +255,48 @@ test('#1774: payload.srcHash listed in FIELDS suggestions', () => {
   assert(names.indexOf('payload.srcHash') !== -1, 'payload.srcHash missing from FIELDS');
 });
 
+// --- Issue #1800: routed_through field + path desc + hex lexer error ---
+const routedPkt = {
+  ...pkt,
+  resolved_path: '["2f0b001247a047cabcdef0123456789a","aabbccddeeff00112233445566778899"]',
+};
+const routedArrPkt = {
+  ...pkt,
+  resolved_path: ['2f0b001247a047cabcdef0123456789a', 'aabbccddeeff00112233445566778899'],
+};
+test('#1800: routed_through starts_with prefix matches', () => {
+  assert(PF.compile('routed_through starts_with "2f0b00"').filter(routedPkt));
+});
+test('#1800: routed_through starts_with prefix matches (array form)', () => {
+  assert(PF.compile('routed_through starts_with "2f0b00"').filter(routedArrPkt));
+});
+test('#1800: routed_through == full pubkey matches', () => {
+  assert(PF.compile('routed_through contains "2f0b001247a047cabcdef0123456789a"').filter(routedPkt));
+});
+test('#1800: routed_through contains "2f0b" matches', () => {
+  assert(PF.compile('routed_through contains "2f0b"').filter(routedPkt));
+});
+test('#1800: routed_through does not match unrelated prefix', () => {
+  assert(!PF.compile('routed_through starts_with "deadbe"').filter(routedPkt));
+});
+test('#1800: bare hex value after path → "Hex value must be quoted" error', () => {
+  const c = PF.compile('path 2f0b001247a047ca');
+  assert(c.error !== null, 'should have parse/lex error');
+  assert(c.error.indexOf('Hex value must be quoted') !== -1,
+    'error must mention Hex value must be quoted, got: ' + c.error);
+});
+test('#1800 regression: path contains "a3" still matches existing prefix list', () => {
+  const prefixPkt = { ...pkt, path_json: '["a3","7f"]' };
+  assert(PF.compile('path contains "a3"').filter(prefixPkt));
+});
+test('#1800: routed_through listed in FIELDS suggestions', () => {
+  const names = PF.FIELDS.map(f => f.name);
+  assert(names.indexOf('routed_through') !== -1, 'routed_through missing from FIELDS');
+});
+test('#1800: path_prefixes alias resolves like path', () => {
+  const prefixPkt = { ...pkt, path_json: '["a3","7f"]' };
+  assert(PF.compile('path_prefixes contains "a3"').filter(prefixPkt));
+});
+
 console.log(`\n=== Results: ${pass} passed, ${fail} failed ===`);
 process.exit(fail > 0 ? 1 : 0);
