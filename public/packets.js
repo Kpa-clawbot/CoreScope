@@ -2874,6 +2874,45 @@
     if (decoded.type === 'REQ' || decoded.type === 'RESPONSE') return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> ${decoded.srcHash?.slice(0,8) || '?'} → ${decoded.destHash?.slice(0,8) || '?'}`;
     // Anonymous requests
     if (decoded.type === 'ANON_REQ') return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> anon → ${decoded.destHash?.slice(0,8) || '?'}`;
+    // CONTROL packets (#1802) — DISCOVER_REQ / DISCOVER_RESP body fields,
+    // decoded by cmd/ingestor/decoder.go decodeControl(). Wire format:
+    //   firmware/src/Mesh.cpp:69
+    //   firmware/examples/simple_repeater/MyMesh.cpp:773-820
+    // Subtype enum on byte0 high nibble; body fields are length-gated and
+    // may be absent on truncated packets, so each is rendered only when set.
+    if (decoded.type === 'CONTROL') {
+      const subtype = decoded.ctrlSubtype || 'CONTROL';
+      const icon = `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg>`;
+      const parts = [];
+      if (subtype === 'DISCOVER_REQ') {
+        if (decoded.ctrlFilter != null) {
+          parts.push(`filter=0x${Number(decoded.ctrlFilter).toString(16).padStart(2, '0')}`);
+        }
+        if (decoded.ctrlTag != null) {
+          parts.push(`tag=0x${(Number(decoded.ctrlTag) >>> 0).toString(16).padStart(8, '0')}`);
+        }
+        if (decoded.ctrlSince != null) {
+          parts.push(`since=${Number(decoded.ctrlSince) >>> 0}`);
+        }
+      } else if (subtype === 'DISCOVER_RESP') {
+        if (decoded.ctrlNodeType != null) {
+          parts.push(`type=${Number(decoded.ctrlNodeType)}`);
+        }
+        if (decoded.ctrlSNR != null) {
+          parts.push(`snr=${Number(decoded.ctrlSNR)}`);
+        }
+        if (decoded.ctrlTag != null) {
+          parts.push(`tag=0x${(Number(decoded.ctrlTag) >>> 0).toString(16).padStart(8, '0')}`);
+        }
+        if (decoded.ctrlPubKey) {
+          parts.push(`pubkey=${escapeHtml(decoded.ctrlPubKey)}`);
+        }
+      } else if (decoded.ctrlFlags) {
+        parts.push(`flags=0x${escapeHtml(decoded.ctrlFlags)}`);
+      }
+      const tail = parts.length ? ` <span class="muted">${parts.join(' ')}</span>` : '';
+      return `${icon} ${escapeHtml(subtype)}${tail}`;
+    }
     // Companion bridge text
     if (decoded.text) return escapeHtml(decoded.text.length > 80 ? decoded.text.slice(0, 80) + '…' : decoded.text);
     // Bare adverts with just pubkey
