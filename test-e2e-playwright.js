@@ -537,7 +537,7 @@ async function run() {
     const grpDataCheckbox = await page.$('#typeMenu input[data-type-id="6"]');
     assert(grpDataCheckbox, '#1791: "Grp Data" (data-type-id="6") checkbox missing from type filter menu');
     const grpDataLabel = await page.$eval('#typeMenu input[data-type-id="6"]', el => (el.parentElement && el.parentElement.textContent || '').trim());
-    assert(/Grp Data/i.test(grpDataLabel), `#1791: checkbox for type 6 should be labeled "Grp Data", got "${grpDataLabel}"`);
+    assert(/Group Data/i.test(grpDataLabel), `#1791: checkbox for type 6 should be labeled "Group Data", got "${grpDataLabel}"`);
 
     // Select only Group Data and verify the table narrows to type-6 rows.
     await grpDataCheckbox.click();
