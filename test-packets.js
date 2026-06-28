@@ -321,6 +321,34 @@ console.log('\n=== packets.js: getDetailPreview ===');
     assert(!result.includes('encrypted'), 'must NOT mislabel decrypted packet as encrypted');
   });
 
+  // #1796 r1 adversarial — pin the `!decoded.error` guard on the happy-path branch
+  // (public/packets.js:2841). Backend cmd/ingestor/decoder.go:619-654 sets BOTH
+  // DataType=0xNN AND Error='data_len exceeds buffer' for the malformed inner case
+  // where data_len > available_len. Without the `!decoded.error` guard, this row
+  // would mis-render as `type=0x0001 len=0` (a confident-looking happy-path label)
+  // instead of falling through to the explicit `(decrypted, malformed)` branch.
+  // Regression pin: if a future refactor drops the `!decoded.error` clause, this
+  // test fails. (Verified locally: removing `&& !decoded.error` makes this fail.)
+  test('getDetailPreview routes decrypted+dataType+error through malformed branch (#1796 r1 adv)', () => {
+    const result = api.getDetailPreview({
+      type: 'GRP_DATA',
+      channelHash: 0x12,
+      channelHashHex: '12',
+      decryptionStatus: 'decrypted',
+      dataType: 0x0001,
+      dataLen: 0,
+      error: 'data_len exceeds buffer'
+      // decryptedBlob absent (omitempty); backend Error field set.
+    });
+    assert(result.includes('Ch 0x12'), 'should still render channel hash hex');
+    assert(result.includes('malformed'),
+      'must label as malformed when Error is set, NOT confidently render type=0xNN');
+    assert(!result.includes('type=0x0001'),
+      'must NOT show a happy-path type=0xNN header when inner parse errored');
+    assert(!result.includes('len=0'),
+      'must NOT show a happy-path len=N header when inner parse errored');
+  });
+
   // #1796 r1 regression — data_len=0 is a LEGITIMATE empty datagram per firmware
   // (BaseChatMesh.cpp:387: `data_len > available_len` is the only reject; 0 is allowed).
   // Backend cmd/ingestor/decoder.go:142 marshals DecryptedBlob with `omitempty`, so a
