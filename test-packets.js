@@ -285,7 +285,7 @@ console.log('\n=== packets.js: getDetailPreview ===');
     const result = api.getDetailPreview({
       type: 'GRP_DATA', channelHash: 0xAB, channelHashHex: 'AB', decryptionStatus: 'no_key'
     });
-    assert(result.includes('0xAB'), 'should render channel hash hex');
+    assert(result.includes('Ch 0xAB'), 'should render channel hash hex with Ch prefix');
     assert(result.includes('no key'), 'should render no key status');
   });
 
@@ -293,8 +293,32 @@ console.log('\n=== packets.js: getDetailPreview ===');
     const result = api.getDetailPreview({
       type: 'GRP_DATA', channelHash: 5, channelHashHex: '05', decryptionStatus: 'decryption_failed'
     });
-    assert(result.includes('0x05'), 'should render channel hash hex');
+    assert(result.includes('Ch 0x05'), 'should render channel hash hex with Ch prefix');
     assert(result.includes('decryption failed'), 'should render failure status');
+  });
+
+  // #1796 polish: explicit 'encrypted' fallback when decryptionStatus is absent/pending.
+  test('getDetailPreview handles GRP_DATA encrypted fallback (no decryptionStatus)', () => {
+    const result = api.getDetailPreview({
+      type: 'GRP_DATA', channelHash: 0xAB, channelHashHex: 'AB'
+    });
+    assert(result.includes('Ch 0xAB'), 'should render channel hash hex with Ch prefix');
+    assert(result.includes('encrypted'), 'should render encrypted fallback label');
+  });
+
+  // #1796 polish: decrypted-but-malformed — status is 'decrypted' but dataType is null
+  // because inner payload was too short to parse (cmd/ingestor/decoder.go:619-654).
+  test('getDetailPreview handles GRP_DATA decrypted-but-malformed (dataType null)', () => {
+    const result = api.getDetailPreview({
+      type: 'GRP_DATA',
+      channelHash: 0xAB,
+      channelHashHex: 'AB',
+      decryptionStatus: 'decrypted',
+      dataType: null
+    });
+    assert(result.includes('Ch 0xAB'), 'should render channel hash hex with Ch prefix');
+    assert(result.includes('malformed'), 'should label decrypted-but-malformed inner explicitly');
+    assert(!result.includes('encrypted'), 'must NOT mislabel decrypted packet as encrypted');
   });
 
   test('getDetailPreview handles GRP_DATA decrypted with data_type and blob', () => {
@@ -309,7 +333,7 @@ console.log('\n=== packets.js: getDetailPreview ===');
     });
     assert(result.includes('0x12'), 'should render channel hash hex');
     assert(result.includes('0x0001'), 'should render data_type as hex');
-    assert(result.includes('4'), 'should render data_len');
+    assert(result.includes('len=4'), 'should render data_len with len= label');
     assert(result.includes('deadbeef'), 'should render blob hex');
   });
 
@@ -324,7 +348,8 @@ console.log('\n=== packets.js: getDetailPreview ===');
       dataLen: 64,
       decryptedBlob: longBlob
     });
-    assert(result.includes('…'), 'should truncate long blob with ellipsis');
+    // Pin 32-hex-char cutoff: first 32 chars + ellipsis.
+    assert(result.includes('ab'.repeat(16) + '…'), 'should truncate blob at 32 hex chars + ellipsis');
     assert(!result.includes(longBlob), 'should not render full long blob');
   });
 
