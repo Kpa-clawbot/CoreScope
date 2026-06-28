@@ -499,6 +499,46 @@ console.log('\n=== packets.js: getDetailPreview ===');
   test('getDetailPreview returns empty for empty decoded', () => {
     assert.strictEqual(api.getDetailPreview({}), '');
   });
+
+  // #1802 — CONTROL DISCOVER_REQ / DISCOVER_RESP should be rendered (not just
+  // hex). Backend cmd/ingestor/decoder.go decodeControl() emits ctrlSubtype +
+  // body fields; the detail preview must surface them.
+  test('getDetailPreview handles CONTROL DISCOVER_REQ', () => {
+    const result = api.getDetailPreview({
+      type: 'CONTROL',
+      ctrlSubtype: 'DISCOVER_REQ',
+      ctrlFilter: 2,
+      ctrlTag: 0xDEADBEEF,
+      ctrlSince: 0x11223344,
+    });
+    assert(result.includes('DISCOVER_REQ'), 'should label subtype');
+    assert(result.includes('filter'), 'should render filter field');
+    assert(result.includes('tag'), 'should render tag field');
+  });
+
+  test('getDetailPreview handles CONTROL DISCOVER_RESP', () => {
+    const result = api.getDetailPreview({
+      type: 'CONTROL',
+      ctrlSubtype: 'DISCOVER_RESP',
+      ctrlNodeType: 2,
+      ctrlSNR: 16,
+      ctrlTag: 0x11223344,
+      ctrlPubKey: '0001020304050607',
+    });
+    assert(result.includes('DISCOVER_RESP'), 'should label subtype');
+    assert(result.includes('snr') || result.includes('SNR'), 'should render snr');
+    assert(result.includes('0001020304050607'), 'should render pubkey hex');
+  });
+
+  test('getDetailPreview handles CONTROL UNKNOWN subtype', () => {
+    const result = api.getDetailPreview({
+      type: 'CONTROL',
+      ctrlSubtype: 'UNKNOWN',
+      ctrlFlags: 'a0',
+    });
+    assert(result.includes('UNKNOWN') || result.includes('CONTROL'),
+      'should at least label the unknown subtype');
+  });
 }
 
 console.log('\n=== packets.js: getPathHopCount ===');
