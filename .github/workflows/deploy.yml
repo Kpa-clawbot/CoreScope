@@ -341,10 +341,18 @@ jobs:
           -- E2E "Grp Data filter" test has at least one row to filter on.
           -- Use an obs timestamp within the default UI window so the row
           -- appears with no time-window override.
+          --
+          -- raw_hex header byte 0x19 = bits 5-2 (payload)=0110=6 (GRP_DATA),
+          --                            bits 1-0 (route)=01=1 (FLOOD).
+          -- path_len byte 0x00 = hash_size=1, hash_count=0 (zero-hop on-wire,
+          -- typical GRP_DATA going FLOOD). path_json/resolved_path are kept
+          -- EMPTY so the rendered hop-row count matches the hex-path byte
+          -- count (#1797: previously path_json=["AA"] but raw_hex path_len=0
+          -- broke the "hex strip Path range matches hop row count" E2E).
           INSERT INTO transmissions(id,raw_hex,hash,first_seen,route_type,payload_type,payload_version,decoded_json,channel_hash,from_pubkey)
-            VALUES (-1,'16000102030405060708090a0b0c0d0e0f','17910000deadbeef',strftime('%Y-%m-%dT%H:%M:%SZ','now'),1,6,0,'{"type":"GRP_DATA","channel":"#test","raw":"deadbeef"}',NULL,NULL);
+            VALUES (-1,'19000102030405060708090a0b0c0d0e0f','17910000deadbeef',strftime('%Y-%m-%dT%H:%M:%SZ','now'),1,6,0,'{"type":"GRP_DATA","channel":"#test","raw":"deadbeef"}',NULL,NULL);
           INSERT INTO observations(transmission_id,observer_idx,direction,snr,rssi,score,path_json,timestamp,resolved_path) VALUES
-            (-1,1,'rx',7.0,-88,0,'["AA"]',CAST(strftime('%s','now') AS INTEGER),'["aa00000000000000000000000000000000000000000000000000000000000000"]');
+            (-1,1,'rx',7.0,-88,0,'[]',CAST(strftime('%s','now') AS INTEGER),'[]');
           SQL
 
       - name: Migrate fixture DB to current schema (#1287)
