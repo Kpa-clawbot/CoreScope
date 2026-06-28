@@ -1,12 +1,12 @@
 /**
  * E2E for #1799 — canonical payload label vocabulary across surfaces.
  *
- * Asserts that the human-readable label for at least three firmware payload
- * types (TXT_MSG, GRP_TXT, GRP_DATA) is identical across:
- *   - the Live page legend (public/live.js)
- *   - the Packets page type filter (public/packets.js)
- *   - the canonical map (public/payload-labels.js, exposed as
- *     window.PayloadLabels)
+ * After PR #1804 round-1 review:
+ *   - Item 12: literal pinned expected labels (not derived from the same
+ *     map being tested) + inline-fallback drift gate.
+ *   - Item 13: explicit TYPE_ALIASES coverage through PacketFilter.
+ *   - Item 14: every key in the canonical map is exercised against pinned
+ *     literals — not just the original 3 enums.
  *
  * Run: BASE_URL=http://localhost:13581 node test-issue-1799-label-vocab-e2e.js
  */
@@ -22,12 +22,31 @@ async function step(name, fn) {
 }
 function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
 
-// (enum name, numeric id) pairs we cross-check.
-const ENUMS = [
-  { name: 'TXT_MSG',  id: 2 },
-  { name: 'GRP_TXT',  id: 5 },
-  { name: 'GRP_DATA', id: 6 },
-];
+// PINNED expected literals — these MUST match public/payload-labels.js by
+// hand. The whole point of pinning (round-1 review item 12) is that if
+// either side drifts, the test fails — NOT because both sides derive from
+// the same object.
+const EXPECTED_SHORT = {
+  REQ:        'Request',
+  RESPONSE:   'Response',
+  TXT_MSG:    'Direct Msg',
+  ACK:        'ACK',
+  ADVERT:     'Advert',
+  GRP_TXT:    'Channel Msg',
+  GRP_DATA:   'Group Data',
+  ANON_REQ:   'Anon Req',
+  PATH:       'Path',
+  TRACE:      'Trace',
+  MULTIPART:  'Multipart',
+  CONTROL:    'Control',
+  RAW_CUSTOM: 'Raw Custom'
+};
+const EXPECTED_ID = {
+  REQ: 0, RESPONSE: 1, TXT_MSG: 2, ACK: 3, ADVERT: 4, GRP_TXT: 5,
+  GRP_DATA: 6, ANON_REQ: 7, PATH: 8, TRACE: 9, MULTIPART: 10,
+  CONTROL: 11, RAW_CUSTOM: 15
+};
+const ALL_ENUMS = Object.keys(EXPECTED_SHORT);
 
 async function gotoLive(page) {
   await page.goto(BASE + '/#/live', { waitUntil: 'domcontentloaded' });
@@ -40,8 +59,9 @@ async function gotoLive(page) {
   await page.waitForTimeout(300);
 }
 
-// Pull "short" label from a legend row like "Group Data — Group datagram"
-// by taking everything before the em-dash separator (with surrounding spaces).
+// Pull "short" label from each legend row. Build the color→enum reverse
+// map from TYPE_COLORS so we can identify rows by enum without trusting
+// the rendered text.
 async function legendShortLabels(page) {
   return page.evaluate(() => {
     const out = {};
@@ -49,22 +69,20 @@ async function legendShortLabels(page) {
     if (!el) return out;
     const lis = el.querySelectorAll('.legend-list li');
     const TYPE_COLORS = window.TYPE_COLORS || {};
-    // Build reverse map color -> enum name
     const colorToEnum = {};
     for (const k of Object.keys(TYPE_COLORS)) colorToEnum[String(TYPE_COLORS[k]).toLowerCase()] = k;
     for (const li of lis) {
       const dot = li.querySelector('.live-dot');
       if (!dot) continue;
-      const bg = (dot.style.background || dot.style.backgroundColor || '').toLowerCase();
-      // background may be parsed as "rgb(...)" — extract hex from the inline style attribute instead.
       const styleAttr = dot.getAttribute('style') || '';
       const mhex = styleAttr.match(/#([0-9a-f]{3,8})/i);
-      let color = mhex ? ('#' + mhex[1].toLowerCase()) : bg;
+      const color = mhex ? ('#' + mhex[1].toLowerCase()) : '';
       const enumName = colorToEnum[color];
       if (!enumName) continue;
       const txt = (li.textContent || '').trim();
-      // Strip leading whitespace and split on em-dash.
-      const parts = txt.split(/\s+\u2014\s+/);
+      // Take the prefix before the first em-dash OR slash (ACK has a
+      // "Short / Other — long" shape; everything else uses "Short — long").
+      const parts = txt.split(/\s+(?:\u2014|\/)\s+/);
       out[enumName] = parts[0].trim();
     }
     return out;
@@ -81,7 +99,6 @@ async function gotoPackets(page) {
   await page.goto(BASE + '/#/packets', { waitUntil: 'domcontentloaded' });
   await page.reload({ waitUntil: 'load' });
   await page.waitForSelector('#typeTrigger', { timeout: 15000 });
-  // Open the type menu so its items are rendered.
   await page.click('#typeTrigger');
   await page.waitForSelector('#typeMenu .multi-select-item', { timeout: 5000 });
 }
@@ -121,13 +138,85 @@ async function packetsTypeLabels(page) {
   await step('canonical map exposed as window.PayloadLabels on /live', async () => {
     const pl = await page.evaluate(() => window.PayloadLabels || null);
     assert(pl && typeof pl === 'object', 'window.PayloadLabels missing');
-    for (const e of ENUMS) {
-      assert(pl[e.name] && typeof pl[e.name].short === 'string',
-        `PayloadLabels.${e.name}.short missing`);
-      assert(typeof pl[e.name].long === 'string',
-        `PayloadLabels.${e.name}.long missing`);
-      assert(pl[e.name].enumId === e.id,
-        `PayloadLabels.${e.name}.enumId expected ${e.id}, got ${pl[e.name].enumId}`);
+    // Pinned-literal check, NOT a self-derived comparison (round-1 item 12).
+    for (const name of ALL_ENUMS) {
+      assert(pl[name], `PayloadLabels.${name} missing`);
+      assert(pl[name].short === EXPECTED_SHORT[name],
+        `PayloadLabels.${name}.short: expected "${EXPECTED_SHORT[name]}", got "${pl[name].short}"`);
+      assert(pl[name].enumId === EXPECTED_ID[name],
+        `PayloadLabels.${name}.enumId: expected ${EXPECTED_ID[name]}, got ${pl[name].enumId}`);
+      assert(pl[name].enumName === name,
+        `PayloadLabels.${name}.enumName: expected "${name}", got "${pl[name].enumName}"`);
+    }
+  });
+
+  await step('every legend row matches the pinned canonical short label', async () => {
+    // Round-1 item 14: cover ALL 13 enums, not just 3.
+    for (const name of ALL_ENUMS) {
+      const got = legend[name];
+      assert(got === EXPECTED_SHORT[name],
+        `legend[${name}]: expected "${EXPECTED_SHORT[name]}", got "${got}" (full legend: ${JSON.stringify(legend)})`);
+    }
+  });
+
+  await step('inline fallback maps in packets.js / packet-filter.js / live.js are byte-identical to canonical (drift gate)', async () => {
+    // Round-1 item 12 (drift gate): if payload-labels.js is missing at
+    // runtime, each consumer falls back to an inline literal. Fetch the
+    // sources and assert the fallback maps STILL match the canonical map.
+    const sources = await page.evaluate(async () => {
+      async function fetchText(url) { const r = await fetch(url); return r.text(); }
+      return {
+        canonical: await fetchText('/payload-labels.js'),
+        packets:   await fetchText('/packets.js'),
+        liveJs:    await fetchText('/live.js'),
+        filterJs:  await fetchText('/packet-filter.js')
+      };
+    });
+
+    // Extract enumId → enum-name mapping from canonical so we can compare
+    // canonical to each fallback regardless of declaration shape.
+    const canonShort = {};
+    const reEntry = /(\w+):\s*\{\s*enumName:\s*'(\w+)',\s*short:\s*'([^']+)',\s*long:[^}]+enumId:\s*(\d+)/g;
+    let m;
+    while ((m = reEntry.exec(sources.canonical)) !== null) {
+      canonShort[m[4]] = m[3]; // id → short
+    }
+    assert(Object.keys(canonShort).length === ALL_ENUMS.length,
+      `canonical parse: expected ${ALL_ENUMS.length} entries, got ${Object.keys(canonShort).length}`);
+
+    // packets.js DEFAULT_TYPE_NAMES (id → short).
+    const pktBlock = sources.packets.match(/DEFAULT_TYPE_NAMES\s*=\s*\{([\s\S]*?)\};/);
+    assert(pktBlock, 'packets.js DEFAULT_TYPE_NAMES block not found');
+    const pktMap = {};
+    const rePkt = /(\d+):\s*'([^']+)'/g;
+    while ((m = rePkt.exec(pktBlock[1])) !== null) pktMap[m[1]] = m[2];
+    for (const id of Object.keys(canonShort)) {
+      assert(pktMap[id] === canonShort[id],
+        `packets.js DEFAULT_TYPE_NAMES[${id}] drift: canonical="${canonShort[id]}", fallback="${pktMap[id]}"`);
+    }
+
+    // packet-filter.js _FALLBACK_FW (id → enumName).
+    const pfBlock = sources.filterJs.match(/_FALLBACK_FW\s*=\s*\{([^}]+)\}/);
+    assert(pfBlock, 'packet-filter.js _FALLBACK_FW block not found');
+    const canonEnum = {};
+    const reCanonEnum = /enumName:\s*'(\w+)',\s*short:\s*'[^']+',\s*long:[^}]+enumId:\s*(\d+)/g;
+    while ((m = reCanonEnum.exec(sources.canonical)) !== null) canonEnum[m[2]] = m[1];
+    const pfMap = {};
+    while ((m = rePkt.exec(pfBlock[1])) !== null) pfMap[m[1]] = m[2];
+    for (const id of Object.keys(canonEnum)) {
+      assert(pfMap[id] === canonEnum[id],
+        `packet-filter.js _FALLBACK_FW[${id}] drift: canonical="${canonEnum[id]}", fallback="${pfMap[id]}"`);
+    }
+
+    // live.js INLINE_LABELS (enumName → short).
+    const liveBlock = sources.liveJs.match(/INLINE_LABELS\s*=\s*\{([\s\S]*?)\n\s+\};/);
+    assert(liveBlock, 'live.js INLINE_LABELS block not found');
+    const reLive = /(\w+):\s*\{\s*short:\s*'([^']+)'/g;
+    const liveMap = {};
+    while ((m = reLive.exec(liveBlock[1])) !== null) liveMap[m[1]] = m[2];
+    for (const name of ALL_ENUMS) {
+      assert(liveMap[name] === EXPECTED_SHORT[name],
+        `live.js INLINE_LABELS[${name}] drift: expected="${EXPECTED_SHORT[name]}", fallback="${liveMap[name]}"`);
     }
   });
 
@@ -139,38 +228,60 @@ async function packetsTypeLabels(page) {
     assert(pl && typeof pl === 'object', 'window.PayloadLabels missing on /packets');
   });
 
-  const canonical = await page.evaluate(() => window.PayloadLabels || {});
+  await step('every packets type-filter row matches the pinned canonical short label', async () => {
+    // Round-1 item 14: cover ALL enums on the packets page too.
+    for (const name of ALL_ENUMS) {
+      const id = String(EXPECTED_ID[name]);
+      const got = packetsLabels[id];
+      assert(got === EXPECTED_SHORT[name],
+        `packets type-menu[id=${id} (${name})]: expected "${EXPECTED_SHORT[name]}", got "${got}"`);
+    }
+  });
 
-  for (const e of ENUMS) {
-    await step(`label equality for ${e.name}: legend == packets-filter == canonical.short`, async () => {
-      const canon = canonical[e.name] && canonical[e.name].short;
-      const fromLegend = legend[e.name];
-      const fromPackets = packetsLabels[String(e.id)];
-      assert(canon, `canonical short missing for ${e.name}`);
-      assert(fromLegend, `legend label missing for ${e.name} (got: ${JSON.stringify(legend)})`);
-      assert(fromPackets, `packets type-menu label missing for id=${e.id} (got: ${JSON.stringify(packetsLabels)})`);
-      assert(fromLegend === canon,
-        `legend label "${fromLegend}" != canonical "${canon}" for ${e.name}`);
-      assert(fromPackets === canon,
-        `packets label "${fromPackets}" != canonical "${canon}" for ${e.name}`);
-    });
-  }
-
-  await step('packet-filter FW_PAYLOAD_TYPES still maps numeric ids to enum names', async () => {
-    const pf = await page.evaluate(() => {
-      // packet-filter doesn't expose FW_PAYLOAD_TYPES directly; compile a
-      // round-trip to verify enum name is recognised.
+  await step('PacketFilter recognises every enum name (round-trip)', async () => {
+    const pf = await page.evaluate((enums) => {
       const pf = window.PacketFilter; if (!pf) return null;
       const out = {};
-      for (const [name, id] of [['TXT_MSG',2],['GRP_TXT',5],['GRP_DATA',6]]) {
-        const c = pf.compile('type == ' + name);
-        out[name] = !c.error && c.filter({ payload_type: id }) === true;
+      for (const e of enums) {
+        const c = pf.compile('type == ' + e.name);
+        out[e.name] = !c.error && c.filter({ payload_type: e.id }) === true;
       }
       return out;
-    });
+    }, ALL_ENUMS.map(n => ({ name: n, id: EXPECTED_ID[n] })));
     assert(pf, 'window.PacketFilter missing');
-    for (const e of ENUMS) {
-      assert(pf[e.name], `packet-filter does not recognise ${e.name}`);
+    for (const name of ALL_ENUMS) {
+      assert(pf[name], `packet-filter does not recognise enum name "${name}"`);
+    }
+  });
+
+  await step('PacketFilter resolves TYPE_ALIASES through PacketFilter.compile (round-1 item 13)', async () => {
+    // Map of alias → expected enumId. Each must resolve via the filter
+    // language (quoted alias values use the same alias table). Covers the
+    // path that round-1 item 13 flagged as untested.
+    const ALIAS_CASES = [
+      { alias: 'channel msg', id: 5 },
+      { alias: 'dm',          id: 2 },
+      { alias: 'direct msg',  id: 2 },
+      { alias: 'group data',  id: 6 },
+      { alias: 'raw custom',  id: 15 },
+      { alias: 'anon req',    id: 7 },
+      { alias: 'request',     id: 0 }
+    ];
+    const got = await page.evaluate((cases) => {
+      const pf = window.PacketFilter; if (!pf) return null;
+      return cases.map(c => {
+        const compiled = pf.compile('type == "' + c.alias + '"');
+        return {
+          alias: c.alias,
+          id: c.id,
+          ok: !compiled.error && compiled.filter({ payload_type: c.id }) === true,
+          err: compiled.error || null
+        };
+      });
+    }, ALIAS_CASES);
+    assert(got, 'window.PacketFilter missing');
+    for (const r of got) {
+      assert(r.ok, `alias "${r.alias}" → payload_type=${r.id} failed (err=${r.err})`);
     }
   });
 
