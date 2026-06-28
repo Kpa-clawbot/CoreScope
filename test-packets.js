@@ -321,6 +321,29 @@ console.log('\n=== packets.js: getDetailPreview ===');
     assert(!result.includes('encrypted'), 'must NOT mislabel decrypted packet as encrypted');
   });
 
+  // #1796 r1 regression — data_len=0 is a LEGITIMATE empty datagram per firmware
+  // (BaseChatMesh.cpp:387: `data_len > available_len` is the only reject; 0 is allowed).
+  // Backend cmd/ingestor/decoder.go:142 marshals DecryptedBlob with `omitempty`, so a
+  // valid data_len=0 packet arrives with an empty/absent blob and no error. Frontend
+  // must render the header (type=...len=0) WITHOUT a <code> block and MUST NOT label
+  // it 'malformed'. (Same assertion covers the round-0 'tightened gate' regression.)
+  test('getDetailPreview renders GRP_DATA data_len=0 empty datagram (no code block, not malformed)', () => {
+    const result = api.getDetailPreview({
+      type: 'GRP_DATA',
+      channelHash: 0x12,
+      channelHashHex: '12',
+      decryptionStatus: 'decrypted',
+      dataType: 0x0001,
+      dataLen: 0
+      // decryptedBlob absent (backend `omitempty`); no error.
+    });
+    assert(result.includes('Ch 0x12'), 'should render channel hash hex');
+    assert(result.includes('type=0x0001'), 'should render data_type as hex');
+    assert(result.includes('len=0'), 'should render data_len=0');
+    assert(!result.includes('<code>'), 'must NOT render any <code> block when blob is empty');
+    assert(!result.includes('malformed'), 'data_len=0 is a legitimate empty datagram, NOT malformed');
+  });
+
   test('getDetailPreview handles GRP_DATA decrypted with data_type and blob', () => {
     const result = api.getDetailPreview({
       type: 'GRP_DATA',
