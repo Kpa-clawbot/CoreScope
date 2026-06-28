@@ -169,6 +169,18 @@ type Payload struct {
 	CtrlFlags     string  `json:"ctrlFlags,omitempty"`
 	CtrlZeroHop   *bool   `json:"ctrlZeroHop,omitempty"`
 	CtrlLength    *int    `json:"ctrlLength,omitempty"`
+	// CONTROL DISCOVER_REQ / DISCOVER_RESP body fields (#1802). Subtype is
+	// "DISCOVER_REQ" | "DISCOVER_RESP" | "UNKNOWN". For REQ: filter, tag, and
+	// optional since. For RESP: node_type (low nibble of byte0), snr, tag, and
+	// pubkey (hex; 32 bytes or 8 bytes when prefix_only). All optional —
+	// emitted only when the body length is sufficient.
+	CtrlSubtype  string  `json:"ctrlSubtype,omitempty"`
+	CtrlFilter   *int    `json:"ctrlFilter,omitempty"`
+	CtrlTag      *uint32 `json:"ctrlTag,omitempty"`
+	CtrlSince    *uint32 `json:"ctrlSince,omitempty"`
+	CtrlNodeType *int    `json:"ctrlNodeType,omitempty"`
+	CtrlSNR      *int    `json:"ctrlSNR,omitempty"`
+	CtrlPubKey   string  `json:"ctrlPubKey,omitempty"`
 	// RAW_CUSTOM (PAYLOAD_TYPE_RAW_CUSTOM=0x0F) — application-defined per
 	// firmware/src/Mesh.cpp:577 (createRawData). Exposes the bare envelope
 	// shape (length + leading tag) so consumers can triage by app id.
