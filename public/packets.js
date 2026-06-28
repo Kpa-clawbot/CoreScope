@@ -2834,18 +2834,26 @@
     // data_type(uint16 LE) + data_len(1) + blob (firmware BaseChatMesh.cpp:382-385).
     if (decoded.type === 'GRP_DATA' && decoded.channelHash != null) {
       const hashHex = decoded.channelHashHex || decoded.channelHash.toString(16).padStart(2, '0').toUpperCase();
-      if (decoded.decryptionStatus === 'decrypted' && decoded.dataType != null) {
+      // Happy path: decrypted with a parsed inner header (dataType present, no parse error).
+      // Per firmware/src/helpers/BaseChatMesh.cpp:387 a data_len of 0 is a LEGITIMATE
+      // empty datagram (the firmware only drops data_len > available_len). Backend
+      // cmd/ingestor/decoder.go:142 marshals DecryptedBlob with `omitempty`, so an
+      // empty blob is normal — render the <code> block ONLY when blob is a non-empty
+      // string. The 'data_len exceeds buffer' malformed branch sets decoded.error,
+      // which falls through to the explicit malformed label below.
+      if (decoded.decryptionStatus === 'decrypted' && decoded.dataType != null && !decoded.error) {
         const dt = Number(decoded.dataType).toString(16).padStart(4, '0').toUpperCase();
         const dl = decoded.dataLen != null ? Number(decoded.dataLen) : 0;
         const blob = decoded.decryptedBlob || '';
-        const blobShort = blob.length > 32 ? blob.slice(0, 32) + '…' : blob;
-        return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-database"/></svg> Ch 0x${hashHex} <span class="muted">type=0x${dt} len=${dl}</span> <code>${escapeHtml(blobShort)}</code>`;
+        const blobBlock = blob ? ` <code>${escapeHtml(blob.length > 32 ? blob.slice(0, 32) + '…' : blob)}</code>` : '';
+        return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-database"/></svg> Ch 0x${hashHex} <span class="muted">type=0x${dt} len=${dl}</span>${blobBlock}`;
       }
-      // #1796 polish: decrypted-but-malformed branch. Backend
-      // (cmd/ingestor/decoder.go:619-654) leaves status='decrypted' but
-      // DataType=nil when the inner payload is too short to parse. Without
-      // this explicit branch we would fall through to 'encrypted' and lie
-      // about a packet that decrypted successfully but had bad inner bytes.
+      // #1796 polish: decrypted-but-malformed branch. Backend leaves
+      // status='decrypted' for two failure modes (decoder.go:619-654):
+      //   (a) inner too short → DataType=nil
+      //   (b) inner data_len exceeds buffer → DataType set, blob empty, Error set
+      // Without this explicit branch we would either lie ('encrypted') or
+      // render a misleading "type=0xNN len=N" header with an empty <code></code>.
       if (decoded.decryptionStatus === 'decrypted') {
         return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-database"/></svg> Ch 0x${hashHex} <span class="muted">(decrypted, malformed)</span>`;
       }
