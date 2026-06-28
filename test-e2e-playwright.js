@@ -516,6 +516,8 @@ async function run() {
   // Test (#1791): "Group Data" (payload_type=6) appears in the message-type
   // filter checklist and selecting it narrows the table to type-6 rows only.
   await test('Packets type filter includes Group Data (#1791)', async () => {
+    // Selector shared across assertion + interaction; keep in one place.
+    const TYPE_6_CHECKBOX_SEL = '#typeMenu input[data-type-id="6"]';
     // Wide time window so the seeded GRP_DATA fixture row is included.
     await page.setViewportSize({ width: 1280, height: 720 });
     await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
@@ -533,11 +535,13 @@ async function run() {
     await typeTrigger.click();
     await page.waitForSelector('#typeMenu.open', { timeout: 5000 });
 
-    // Assert the Grp Data checkbox exists (regression: was missing in #1791).
-    const grpDataCheckbox = await page.$('#typeMenu input[data-type-id="6"]');
-    assert(grpDataCheckbox, '#1791: "Grp Data" (data-type-id="6") checkbox missing from type filter menu');
-    const grpDataLabel = await page.$eval('#typeMenu input[data-type-id="6"]', el => (el.parentElement && el.parentElement.textContent || '').trim());
-    assert(/Group Data/i.test(grpDataLabel), `#1791: checkbox for type 6 should be labeled "Group Data", got "${grpDataLabel}"`);
+    // Assert the Group Data checkbox exists (regression: was missing in #1791).
+    const grpDataCheckbox = await page.$(TYPE_6_CHECKBOX_SEL);
+    assert(grpDataCheckbox, '#1791: "Group Data" (data-type-id="6") checkbox missing from type filter menu');
+    const grpDataLabel = await page.$eval(TYPE_6_CHECKBOX_SEL, el => (el.parentElement && el.parentElement.textContent || '').trim());
+    // Strict equality: the rendered label must be exactly "Group Data"
+    // (no casing/whitespace drift). Tightens kent-beck nit on #1797.
+    assert(grpDataLabel === 'Group Data', `#1791: checkbox for type 6 should be labeled exactly "Group Data", got "${grpDataLabel}"`);
 
     // Select only Group Data and verify the table narrows to type-6 rows.
     await grpDataCheckbox.click();
@@ -557,10 +561,16 @@ async function run() {
     const nonGrp = badgeTexts.filter(t => !/Group Data/i.test(t));
     assert(nonGrp.length === 0, `#1791: type filter should yield only Group Data rows, found other types: ${nonGrp.join(',')}`);
 
-    // Cleanup: clear filter so subsequent tests start unfiltered.
+    // Cleanup: close the open #typeMenu, clear all localStorage keys this
+    // test set, and reload so the in-memory `selectedTypes` Set is reset
+    // for subsequent tests (clearing localStorage alone leaks state).
+    await typeTrigger.click();
+    await page.waitForSelector('#typeMenu:not(.open)', { timeout: 5000 }).catch(() => {});
     await page.evaluate(() => {
       localStorage.removeItem('meshcore-type-filter');
+      localStorage.removeItem('meshcore-time-window');
     });
+    await page.reload({ waitUntil: 'load' });
   });
 
   await test('Packets initial fetch honors persisted time window', async () => {
