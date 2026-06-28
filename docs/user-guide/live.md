@@ -67,6 +67,7 @@ Each packet type has a color and icon:
 ## Controls
 
 - **Favorites only** — show only packets from your claimed nodes
+- **Multibyte only** — show only multibyte (≥2-byte path-hash) packets and hide single-byte traffic. Single-byte path hashes collide heavily at scale, so their paths are unreliable; enable this for a cleaner, more trustworthy live picture. Off by default; the choice is remembered.
 - **Matrix mode** — visual effect overlay (just for fun)
 
 ## Tips

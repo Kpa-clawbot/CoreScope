@@ -280,6 +280,167 @@ console.log('\n=== packets.js: getDetailPreview ===');
     assert(result.includes('0xFF'));
   });
 
+  // #1792: GRP_DATA detail preview parity with GRP_TXT.
+  test('getDetailPreview handles GRP_DATA with channelHash (no_key)', () => {
+    const result = api.getDetailPreview({
+      type: 'GRP_DATA', channelHash: 0xAB, channelHashHex: 'AB', decryptionStatus: 'no_key'
+    });
+    assert(result.includes('Ch 0xAB'), 'should render channel hash hex with Ch prefix');
+    assert(result.includes('no key'), 'should render no key status');
+  });
+
+  test('getDetailPreview handles GRP_DATA decryption_failed', () => {
+    const result = api.getDetailPreview({
+      type: 'GRP_DATA', channelHash: 5, channelHashHex: '05', decryptionStatus: 'decryption_failed'
+    });
+    assert(result.includes('Ch 0x05'), 'should render channel hash hex with Ch prefix');
+    assert(result.includes('decryption failed'), 'should render failure status');
+  });
+
+  // #1796 polish: explicit 'encrypted' fallback when decryptionStatus is absent/pending.
+  test('getDetailPreview handles GRP_DATA encrypted fallback (no decryptionStatus)', () => {
+    const result = api.getDetailPreview({
+      type: 'GRP_DATA', channelHash: 0xAB, channelHashHex: 'AB'
+    });
+    assert(result.includes('Ch 0xAB'), 'should render channel hash hex with Ch prefix');
+    assert(result.includes('encrypted'), 'should render encrypted fallback label');
+  });
+
+  // #1796 polish: decrypted-but-malformed — status is 'decrypted' but dataType is null
+  // because inner payload was too short to parse (cmd/ingestor/decoder.go:619-654).
+  test('getDetailPreview handles GRP_DATA decrypted-but-malformed (dataType null)', () => {
+    const result = api.getDetailPreview({
+      type: 'GRP_DATA',
+      channelHash: 0xAB,
+      channelHashHex: 'AB',
+      decryptionStatus: 'decrypted',
+      dataType: null
+    });
+    assert(result.includes('Ch 0xAB'), 'should render channel hash hex with Ch prefix');
+    assert(result.includes('malformed'), 'should label decrypted-but-malformed inner explicitly');
+    assert(!result.includes('encrypted'), 'must NOT mislabel decrypted packet as encrypted');
+  });
+
+  // #1796 r1 adversarial — pin the `!decoded.error` guard on the happy-path branch
+  // (public/packets.js:2841). Backend cmd/ingestor/decoder.go:619-654 sets BOTH
+  // DataType=0xNN AND Error='data_len exceeds buffer' for the malformed inner case
+  // where data_len > available_len. Without the `!decoded.error` guard, this row
+  // would mis-render as `type=0x0001 len=0` (a confident-looking happy-path label)
+  // instead of falling through to the explicit `(decrypted, malformed)` branch.
+  // Regression pin: if a future refactor drops the `!decoded.error` clause, this
+  // test fails. (Verified locally: removing `&& !decoded.error` makes this fail.)
+  test('getDetailPreview routes decrypted+dataType+error through malformed branch (#1796 r1 adv)', () => {
+    const result = api.getDetailPreview({
+      type: 'GRP_DATA',
+      channelHash: 0x12,
+      channelHashHex: '12',
+      decryptionStatus: 'decrypted',
+      dataType: 0x0001,
+      dataLen: 0,
+      error: 'data_len exceeds buffer'
+      // decryptedBlob absent (omitempty); backend Error field set.
+    });
+    assert(result.includes('Ch 0x12'), 'should still render channel hash hex');
+    assert(result.includes('malformed'),
+      'must label as malformed when Error is set, NOT confidently render type=0xNN');
+    assert(!result.includes('type=0x0001'),
+      'must NOT show a happy-path type=0xNN header when inner parse errored');
+    assert(!result.includes('len=0'),
+      'must NOT show a happy-path len=N header when inner parse errored');
+  });
+
+  // #1796 r1 regression — data_len=0 is a LEGITIMATE empty datagram per firmware
+  // (BaseChatMesh.cpp:387: `data_len > available_len` is the only reject; 0 is allowed).
+  // Backend cmd/ingestor/decoder.go:142 marshals DecryptedBlob with `omitempty`, so a
+  // valid data_len=0 packet arrives with an empty/absent blob and no error. Frontend
+  // must render the header (type=...len=0) WITHOUT a <code> block and MUST NOT label
+  // it 'malformed'. (Same assertion covers the round-0 'tightened gate' regression.)
+  test('getDetailPreview renders GRP_DATA data_len=0 empty datagram (no code block, not malformed)', () => {
+    const result = api.getDetailPreview({
+      type: 'GRP_DATA',
+      channelHash: 0x12,
+      channelHashHex: '12',
+      decryptionStatus: 'decrypted',
+      dataType: 0x0001,
+      dataLen: 0
+      // decryptedBlob absent (backend `omitempty`); no error.
+    });
+    assert(result.includes('Ch 0x12'), 'should render channel hash hex');
+    assert(result.includes('type=0x0001'), 'should render data_type as hex');
+    assert(result.includes('len=0'), 'should render data_len=0');
+    assert(!result.includes('<code>'), 'must NOT render any <code> block when blob is empty');
+    assert(!result.includes('malformed'), 'data_len=0 is a legitimate empty datagram, NOT malformed');
+  });
+
+  test('getDetailPreview handles GRP_DATA decrypted with data_type and blob', () => {
+    const result = api.getDetailPreview({
+      type: 'GRP_DATA',
+      channelHash: 0x12,
+      channelHashHex: '12',
+      decryptionStatus: 'decrypted',
+      dataType: 0x0001,
+      dataLen: 4,
+      decryptedBlob: 'deadbeef'
+    });
+    assert(result.includes('0x12'), 'should render channel hash hex');
+    assert(result.includes('0x0001'), 'should render data_type as hex');
+    assert(result.includes('len=4'), 'should render data_len with len= label');
+    assert(result.includes('deadbeef'), 'should render blob hex');
+  });
+
+  test('getDetailPreview handles GRP_DATA decrypted truncates long blob', () => {
+    const longBlob = 'ab'.repeat(64); // 128 hex chars = 64 bytes
+    const result = api.getDetailPreview({
+      type: 'GRP_DATA',
+      channelHash: 0x12,
+      channelHashHex: '12',
+      decryptionStatus: 'decrypted',
+      dataType: 0,
+      dataLen: 64,
+      decryptedBlob: longBlob
+    });
+    // Adversarial #3: assert EXACT rendered <code> content via regex, not substring.
+    // Substring match would still pass at cutoff 40/48 because 'ab'.repeat(16)+'…'
+    // is a prefix of any longer rendered blob. Pin: exactly 32 hex chars + ellipsis,
+    // and nothing else inside the <code> tag.
+    const codeMatch = result.match(/<code>([^<]*)<\/code>/);
+    assert(codeMatch, 'should render a <code> block');
+    assert.strictEqual(codeMatch[1], 'ab'.repeat(16) + '…',
+      `<code> content must be exactly 32 hex chars + ellipsis, got: ${JSON.stringify(codeMatch[1])}`);
+  });
+
+  // Boundary: blob with EXACTLY 32 hex chars renders WITHOUT ellipsis (.length > 32 is strict).
+  test('getDetailPreview renders GRP_DATA blob of exactly 32 hex chars without ellipsis', () => {
+    const exactBlob = 'cd'.repeat(16); // 32 hex chars
+    const result = api.getDetailPreview({
+      type: 'GRP_DATA',
+      channelHash: 0x12,
+      channelHashHex: '12',
+      decryptionStatus: 'decrypted',
+      dataType: 0,
+      dataLen: 16,
+      decryptedBlob: exactBlob
+    });
+    const codeMatch = result.match(/<code>([^<]*)<\/code>/);
+    assert(codeMatch, 'should render a <code> block at the 32-char boundary');
+    assert.strictEqual(codeMatch[1], exactBlob,
+      'exactly-32-char blob must render verbatim, no ellipsis');
+    assert(!result.includes('…'), 'must NOT append ellipsis at the boundary');
+  });
+
+  // Item 6: channelHash=0 — confirms the `!= null` gate (not truthy check) so falsy 0
+  // still enters the GRP_DATA branch and renders `Ch 0x00`.
+  test('getDetailPreview handles GRP_DATA channelHash=0 (falsy but valid)', () => {
+    const result = api.getDetailPreview({
+      type: 'GRP_DATA',
+      channelHash: 0,
+      decryptionStatus: 'no_key'
+    });
+    assert(result.includes('Ch 0x00'),
+      'channelHash=0 must render Ch 0x00 (falsy 0 passes `!= null` gate)');
+    assert(result.includes('no key'), 'should render no key status');
+  });
+
   test('getDetailPreview handles TXT_MSG', () => {
     const result = api.getDetailPreview({
       type: 'TXT_MSG', srcHash: 'abcdef01', destHash: '12345678'
@@ -337,6 +498,46 @@ console.log('\n=== packets.js: getDetailPreview ===');
 
   test('getDetailPreview returns empty for empty decoded', () => {
     assert.strictEqual(api.getDetailPreview({}), '');
+  });
+
+  // #1802 — CONTROL DISCOVER_REQ / DISCOVER_RESP should be rendered (not just
+  // hex). Backend cmd/ingestor/decoder.go decodeControl() emits ctrlSubtype +
+  // body fields; the detail preview must surface them.
+  test('getDetailPreview handles CONTROL DISCOVER_REQ', () => {
+    const result = api.getDetailPreview({
+      type: 'CONTROL',
+      ctrlSubtype: 'DISCOVER_REQ',
+      ctrlFilter: 2,
+      ctrlTag: 0xDEADBEEF,
+      ctrlSince: 0x11223344,
+    });
+    assert(result.includes('DISCOVER_REQ'), 'should label subtype');
+    assert(result.includes('filter'), 'should render filter field');
+    assert(result.includes('tag'), 'should render tag field');
+  });
+
+  test('getDetailPreview handles CONTROL DISCOVER_RESP', () => {
+    const result = api.getDetailPreview({
+      type: 'CONTROL',
+      ctrlSubtype: 'DISCOVER_RESP',
+      ctrlNodeType: 2,
+      ctrlSNR: 16,
+      ctrlTag: 0x11223344,
+      ctrlPubKey: '0001020304050607',
+    });
+    assert(result.includes('DISCOVER_RESP'), 'should label subtype');
+    assert(result.includes('snr') || result.includes('SNR'), 'should render snr');
+    assert(result.includes('0001020304050607'), 'should render pubkey hex');
+  });
+
+  test('getDetailPreview handles CONTROL UNKNOWN subtype', () => {
+    const result = api.getDetailPreview({
+      type: 'CONTROL',
+      ctrlSubtype: 'UNKNOWN',
+      ctrlFlags: 'a0',
+    });
+    assert(result.includes('UNKNOWN') || result.includes('CONTROL'),
+      'should at least label the unknown subtype');
   });
 }
 

@@ -133,7 +133,7 @@ type Config struct {
 	// Currently exposes runtime.maxMemoryMB which sets a soft memory limit
 	// (GOMEMLIMIT) via runtime/debug.SetMemoryLimit at startup. The
 	// GOMEMLIMIT environment variable, when set, takes precedence.
-	Runtime *RuntimeConfig `json:"runtime,omitempty"`
+	Runtime   *RuntimeConfig   `json:"runtime,omitempty"`
 	GeoFilter *GeoFilterConfig `json:"geo_filter,omitempty"`
 
 	Areas map[string]AreaEntry `json:"areas,omitempty"`
@@ -160,7 +160,13 @@ type Config struct {
 	obsBlacklistSetCached map[string]bool
 	obsBlacklistOnce      sync.Once
 
-	Compression   *CompressionConfig   `json:"compression,omitempty"`
+	Compression *CompressionConfig `json:"compression,omitempty"`
+
+	// ClientRxCoverage gates the opt-in mobile client-RX coverage feature
+	// (corescope-rx companions publishing GPS-tagged receptions). Absent/nil
+	// ⇒ off; see ClientRxCoverageEnabled.
+	ClientRxCoverage *ClientRxCoverageConfig `json:"clientRxCoverage,omitempty"`
+
 	ResolvedPath  *ResolvedPathConfig  `json:"resolvedPath,omitempty"`
 	NeighborGraph *NeighborGraphConfig `json:"neighborGraph,omitempty"`
 
@@ -250,6 +256,17 @@ func (c *Config) GZipEnabled() bool {
 	return c.Compression != nil && c.Compression.GZip
 }
 
+// ClientRxCoverageConfig gates the opt-in mobile client-RX coverage feature.
+type ClientRxCoverageConfig struct {
+	Enabled bool `json:"enabled"`
+}
+
+// ClientRxCoverageEnabled reports whether the opt-in mobile client-RX coverage
+// feature is on. Nil config or absent/nil section ⇒ off (the safe default).
+func (c *Config) ClientRxCoverageEnabled() bool {
+	return c != nil && c.ClientRxCoverage != nil && c.ClientRxCoverage.Enabled
+}
+
 // WSCompressionEnabled returns true when WebSocket permessage-deflate is explicitly enabled.
 func (c *Config) WSCompressionEnabled() bool {
 	return c.Compression != nil && c.Compression.Websocket
@@ -303,10 +320,10 @@ type RuntimeConfig struct {
 }
 
 type RetentionConfig struct {
-	NodeDays      int `json:"nodeDays"`
-	ObserverDays  int `json:"observerDays"`
-	PacketDays    int `json:"packetDays"`
-	MetricsDays   int `json:"metricsDays"`
+	NodeDays     int `json:"nodeDays"`
+	ObserverDays int `json:"observerDays"`
+	PacketDays   int `json:"packetDays"`
+	MetricsDays  int `json:"metricsDays"`
 }
 
 // DBConfig is the shared SQLite vacuum/maintenance config (#919, #921).
@@ -600,7 +617,6 @@ func (c *Config) ResolveDBPath(baseDir string) string {
 	}
 	return filepath.Join(baseDir, "data", "meshcore.db")
 }
-
 
 func (c *Config) NormalizeTimestampConfig() {
 	defaults := defaultTimestampConfig()
@@ -908,10 +924,26 @@ func (c *Config) IsObserverBlacklisted(id string) bool {
 // data slowly." Lower values give fresher data at higher CPU cost.
 //
 // RecomputeIntervalSeconds keys (all optional):
-//   topology, rf, distance, channels, hashCollisions, hashSizes, roles, observersClockSkew, nodesClockSkew
+//
+//	topology, rf, distance, channels, hashCollisions, hashSizes, roles, observersClockSkew, nodesClockSkew
 type AnalyticsConfig struct {
-	DefaultIntervalSeconds    int            `json:"defaultIntervalSeconds,omitempty"`
-	RecomputeIntervalSeconds  map[string]int `json:"recomputeIntervalSeconds,omitempty"`
+	DefaultIntervalSeconds   int            `json:"defaultIntervalSeconds,omitempty"`
+	RecomputeIntervalSeconds map[string]int `json:"recomputeIntervalSeconds,omitempty"`
+	// LoRaPreset is the assumed PHY preset used by the relay-airtime-share
+	// metric to compute true Time-on-Air (issue #1768). Defaults to the
+	// EU MeshCore deployment: 869.6 MHz / BW 62.5 kHz / SF 8 / CR 4/5.
+	// freq is informational only and surfaces in the analytics caption.
+	LoRaPreset *LoRaPresetConfig `json:"loraPreset,omitempty"`
+}
+
+// LoRaPresetConfig is the user-facing PHY preset for ToA scoring.
+// Only the four free params live here; CRC/IH/DE are firmware-fixed
+// in internal/lora and intentionally not surfaced as config.
+type LoRaPresetConfig struct {
+	FreqHz float64 `json:"freq,omitempty"` // e.g. 869.6e6
+	BWkHz  float64 `json:"bw,omitempty"`   // e.g. 62.5
+	SF     int     `json:"sf,omitempty"`   // e.g. 8
+	CR     int     `json:"cr,omitempty"`   // 5..8 (denominator suffix of 4/5..4/8)
 }
 
 // AnalyticsDefaultRecomputeInterval returns the configured default

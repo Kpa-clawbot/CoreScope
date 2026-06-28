@@ -81,6 +81,20 @@
     { route: 'audio-lab', hash: '#/audio-lab', label: 'Audio Lab', ph: 'music-note' },
   ];
 
+  // The Coverage route is opt-in (config `clientRxCoverage`). roles.js injects
+  // its link into the desktop top-nav only, so it must be added here too or it
+  // is unreachable on phones. Evaluated at lazy build time (first sheet open),
+  // by which point MeshConfigReady has resolved window.MC_CLIENT_RX_COVERAGE.
+  var COVERAGE_ROUTE = { route: 'rx-coverage', hash: '#/rx-coverage', label: 'Coverage', ph: 'broadcast' };
+
+  function moreRoutes() {
+    if (!window.MC_CLIENT_RX_COVERAGE) return MORE_ROUTES;
+    var out = MORE_ROUTES.slice();
+    var after = out.findIndex(function (r) { return r.route === 'analytics'; }) + 1;
+    out.splice(after, 0, COVERAGE_ROUTE);
+    return out;
+  }
+
   var SHEET_ID = 'bottomNavMoreSheet';
 
   function currentRoute() {
@@ -200,7 +214,7 @@
     sheet.setAttribute('aria-label', 'More navigation');
     sheet.hidden = true;
 
-    MORE_ROUTES.forEach(function (r) {
+    moreRoutes().forEach(function (r) {
       var a = document.createElement('a');
       a.className = 'bottom-nav-sheet-item';
       a.setAttribute('href', r.hash);

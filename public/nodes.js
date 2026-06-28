@@ -672,6 +672,7 @@
             const btooltip = "Normalized betweenness centrality (0..1). How often this node sits on the shortest path between other pairs of nodes in the affinity graph. 1.0 = the most structurally critical node on the mesh. High Bridge + low Traffic share = a quiet but irreplaceable chokepoint.";
             return `<tr id="row-bridge-score" data-bridge-score="${b.toFixed(4)}"><td title="${btooltip}">Bridge score <span style="color:var(--text-muted);cursor:help" aria-label="help">ⓘ</span></td><td><span style="display:inline-block;vertical-align:middle;width:80px;height:8px;background:var(--bg-secondary,#333);border-radius:4px;overflow:hidden;margin-right:6px"><span style="display:block;width:${bbarWidth}%;height:100%;background:${bcolor}"></span></span><span style="color:${bcolor};font-weight:600">${bpct}%</span> <span style="color:var(--text-muted);font-size:11px;margin-left:4px">${blabel}</span></td></tr>`;
           })() : ''}
+          ${(n.role === 'repeater' || n.role === 'room') && Array.isArray(n.transported_scopes) && n.transported_scopes.length ? `<tr id="row-transported-scopes"><td title="Distinct region scopes (transmissions.scope_name) of all non-advert packets in which this repeater appears as a path hop. Shows which regions' traffic this repeater has carried (#1751).">Transported scopes</td><td><span style="display:inline-flex;flex-wrap:wrap;gap:3px;vertical-align:middle">${n.transported_scopes.map(sc => '<span class="badge">' + escapeHtml(String(sc)) + '</span>').join('')}</span></td></tr>` : ''}
           <tr><td>First Seen</td><td>${renderNodeTimestampHtml(n.first_seen)}</td></tr>
           <tr><td>Total Packets</td><td>${stats.totalTransmissions || stats.totalPackets || n.advert_count || 0}${stats.totalObservations && stats.totalObservations !== (stats.totalTransmissions || stats.totalPackets) ? ' <span class="text-muted" style="font-size:0.85em">(seen ' + stats.totalObservations + '×)</span>' : ''}</td></tr>
           <tr><td>Packets Today</td><td>${stats.packetsToday || 0}</td></tr>
@@ -769,7 +770,7 @@
       }
 
       // Copy URL
-      const nodeUrl = location.origin + '#/nodes/' + encodeURIComponent(n.public_key);
+      const nodeUrl = location.origin + '/#/nodes/' + encodeURIComponent(n.public_key);
       document.getElementById('copyUrlBtn')?.addEventListener('click', () => {
         const btn = document.getElementById('copyUrlBtn');
         window.copyToClipboard(nodeUrl, () => {
@@ -780,7 +781,7 @@
 
       // Copy short URL — issue #772. Uses an 8-char pubkey prefix; the
       // backend resolves it to the canonical pubkey when unambiguous.
-      const shortUrl = location.origin + '#/nodes/' + n.public_key.slice(0, 8);
+      const shortUrl = location.origin + '/#/nodes/' + n.public_key.slice(0, 8);
       document.getElementById('copyShortUrlBtn')?.addEventListener('click', () => {
         const btn = document.getElementById('copyShortUrlBtn');
         window.copyToClipboard(shortUrl, () => {
@@ -1577,7 +1578,7 @@
     const observers = h.observers || [];
     const recent = h.recentPackets || [];
     const hasLoc = n.lat != null && n.lon != null;
-    const nodeUrl = location.origin + '#/nodes/' + encodeURIComponent(n.public_key);
+    const nodeUrl = location.origin + '/#/nodes/' + encodeURIComponent(n.public_key);
 
     // Status calculation via shared helper
     const lastHeard = stats.lastHeard;

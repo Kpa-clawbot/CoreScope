@@ -267,10 +267,17 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/nodes/{pubkey}/clock-skew", s.handleNodeClockSkew).Methods("GET")
 	r.HandleFunc("/api/observers/clock-skew", s.handleObserverClockSkew).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/neighbors", s.handleNodeNeighbors).Methods("GET")
-	// Keep specific sub-routes (…/reach) registered BEFORE the catch-all
-	// /api/nodes/{pubkey} — mux matches in registration order, so reordering
-	// this below the catch-all would shadow it and break the route.
+	// Keep specific sub-routes (…/reach, …/rx-coverage) registered BEFORE the
+	// catch-all /api/nodes/{pubkey} — mux matches in registration order, so
+	// reordering these below the catch-all would shadow them and break the route.
 	r.HandleFunc("/api/nodes/{pubkey}/reach", s.handleNodeReach).Methods("GET")
+	// Coverage routes are always registered; each handler 404s when the opt-in
+	// clientRxCoverage flag is off (a clean 404 rather than the SPA fallback that
+	// an unregistered /api route would hit). See requireClientRxCoverage.
+	r.HandleFunc("/api/nodes/{pubkey}/rx-coverage", s.handleNodeRxCoverage).Methods("GET")
+	r.HandleFunc("/api/nodes/resolve", s.handleResolvePrefix).Methods("GET")
+	r.HandleFunc("/api/rx-coverage", s.handleRxCoverage).Methods("GET")
+	r.HandleFunc("/api/rx-leaderboard", s.handleRxLeaderboard).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}", s.handleNodeDetail).Methods("GET")
 	r.HandleFunc("/api/nodes", s.handleNodes).Methods("GET")
 
@@ -445,6 +452,7 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 		MapDarkTileProvider: s.cfg.MapDarkTileProvider,
 		Tiles:               s.cfg.Tiles,
 		Customizer:          CustomizerClientConfig{DisabledTabs: disabledTabs},
+		ClientRxCoverage:    s.cfg.ClientRxCoverageEnabled(),
 	})
 }
 
@@ -1339,6 +1347,18 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		// — safe to call regardless of needsRelay, and we want the
 		// score on repeater rows specifically.
 		bridgeMap := s.store.GetBridgeScoreMap()
+		// Coverage + Redundancy axes (#672 axes 3 & 4). Atomic snapshots,
+		// same discipline as the bridge map.
+		coverageMap := s.store.GetCoverageScoreMap()
+		redundancyMap := s.store.GetRedundancyScoreMap()
+		// Whether the structural-axis recomputer has produced a snapshot yet:
+		// distinguishes a genuinely isolated repeater (real "F") from cold
+		// start (grade withheld) for the all-zero node (#1762 MAJOR-4).
+		axesComputed := s.store.UsefulnessAxesComputed()
+		// Population max of the raw Traffic axis, used to max-normalize
+		// traffic into the composite (the other three axes are already
+		// max-normalized; #1762 review).
+		maxUseful := maxFloat(usefulMap)
 		for _, node := range nodes {
 			if pk, ok := node["public_key"].(string); ok {
 				EnrichNodeWithHashSize(node, hashInfo[pk])
@@ -1353,16 +1373,27 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 					node["relay_active"] = info.RelayActive
 					node["relay_count_1h"] = info.RelayCount1h
 					node["relay_count_24h"] = info.RelayCount24h
-					// usefulness_score retained for API compat; new
-					// consumers should read traffic_share_score
-					// (issue #1456). When the #672 composite ships
-					// usefulness_score will become the composite
-					// and traffic_share_score will keep the
-					// per-axis value.
-					us := lookupUsefulnessScore(usefulMap, pk)
-					node["usefulness_score"] = us
-					node["traffic_share_score"] = us
-					node["bridge_score"] = lookupUsefulnessScore(bridgeMap, pk)
+					// #1751: region scopes this repeater has transported.
+					// Set only when non-empty so the field is absent for
+					// nodes without scopes / on older schemas.
+					if len(info.TransportedScopes) > 0 {
+						node["transported_scopes"] = info.TransportedScopes
+					}
+					// #672 4-axis usefulness. traffic_share_score keeps the
+					// raw per-axis Traffic value (#1456); the structural axes
+					// are surfaced individually; the composite uses the
+					// max-normalized traffic so its 0.20 weight is real.
+					trafficRaw := lookupUsefulnessScore(usefulMap, pk)
+					trafficNorm := 0.0
+					if maxUseful > 0 {
+						trafficNorm = trafficRaw / maxUseful
+					}
+					enrichNodeUsefulness(node, trafficRaw, usefulnessAxes{
+						Traffic:    trafficNorm,
+						Bridge:     lookupUsefulnessScore(bridgeMap, pk),
+						Coverage:   lookupUsefulnessScore(coverageMap, pk),
+						Redundancy: lookupUsefulnessScore(redundancyMap, pk),
+					}, axesComputed)
 				}
 			}
 		}
@@ -1539,12 +1570,27 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 			node["relay_window_hours"] = info.WindowHours
 			node["relay_count_1h"] = info.RelayCount1h
 			node["relay_count_24h"] = info.RelayCount24h
-			// usefulness_score retained for API compat; new
-			// consumers should read traffic_share_score (#1456).
-			us := s.store.GetRepeaterUsefulnessScore(pubkey)
-			node["usefulness_score"] = us
-			node["traffic_share_score"] = us
-			node["bridge_score"] = s.store.GetBridgeScore(pubkey)
+			// #1751: region scopes this repeater has transported. Set only
+			// when non-empty (absent for no-scope nodes / older schemas).
+			if len(info.TransportedScopes) > 0 {
+				node["transported_scopes"] = info.TransportedScopes
+			}
+			// #672 4-axis usefulness (see handleNodes for the field
+			// contract). traffic_share_score keeps the raw per-axis
+			// Traffic value (#1456); the composite uses the
+			// population-max-normalized traffic (#1762 review).
+			usefulMap := s.store.GetRepeaterUsefulnessScoreMap()
+			trafficRaw := lookupUsefulnessScore(usefulMap, pubkey)
+			trafficNorm := 0.0
+			if mx := maxFloat(usefulMap); mx > 0 {
+				trafficNorm = trafficRaw / mx
+			}
+			enrichNodeUsefulness(node, trafficRaw, usefulnessAxes{
+				Traffic:    trafficNorm,
+				Bridge:     s.store.GetBridgeScore(pubkey),
+				Coverage:   s.store.GetCoverageScore(pubkey),
+				Redundancy: s.store.GetRedundancyScore(pubkey),
+			}, s.store.UsefulnessAxesComputed())
 		}
 	}
 
@@ -2901,6 +2947,8 @@ var iataCoords = map[string]IataCoord{
 	"LAX": {Lat: 33.9425, Lon: -118.4081},
 	"SAN": {Lat: 32.7338, Lon: -117.1933},
 	"SMF": {Lat: 38.6954, Lon: -121.5908},
+	"APC": {Lat: 38.2132, Lon: -122.2807}, // Napa County
+	"STS": {Lat: 38.509, Lon: -122.8128},  // Charles M. Schulz–Sonoma County
 	"MRY": {Lat: 36.587, Lon: -121.843},
 	"EUG": {Lat: 44.1246, Lon: -123.2119},
 	"RDD": {Lat: 40.509, Lon: -122.2934},
