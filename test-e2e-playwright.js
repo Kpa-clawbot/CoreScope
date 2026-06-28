@@ -573,6 +573,54 @@ async function run() {
     await page.reload({ waitUntil: 'load' });
   });
 
+  // Test (#1798): The Packets-page type checklist must include the three
+  // firmware payload types currently missing from `typeMap` in `public/packets.js`:
+  //   10 — Multipart
+  //   11 — Control
+  //   15 — Raw Custom
+  // Other surfaces (`packet-filter.js`, `live.js`, `map.js`) already know about
+  // these three types; only the Packets checklist UI omits them. This regression
+  // test renders the checklist and asserts each new `data-type-id` checkbox is
+  // present with the expected label.
+  await test('Packets type filter includes Multipart/Control/Raw Custom (#1798)', async () => {
+    const EXPECTED = [
+      { id: '10', label: 'Multipart' },
+      { id: '11', label: 'Control' },
+      { id: '15', label: 'Raw Custom' },
+    ];
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
+    await page.evaluate(() => {
+      localStorage.setItem('meshcore-time-window', '525600');
+      localStorage.removeItem('meshcore-type-filter');
+    });
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
+
+    // Open the type multi-select menu.
+    const typeTrigger = await page.$('#typeTrigger');
+    assert(typeTrigger, 'Type filter trigger (#typeTrigger) not found');
+    await typeTrigger.click();
+    await page.waitForSelector('#typeMenu.open', { timeout: 5000 });
+
+    for (const { id, label } of EXPECTED) {
+      const sel = `#typeMenu input[data-type-id="${id}"]`;
+      const cb = await page.$(sel);
+      assert(cb, `#1798: checkbox for data-type-id="${id}" (${label}) missing from type filter menu`);
+      const rendered = await page.$eval(sel, el => (el.parentElement && el.parentElement.textContent || '').trim());
+      assert(rendered === label, `#1798: checkbox for type ${id} should be labeled exactly "${label}", got "${rendered}"`);
+    }
+
+    // Cleanup: close menu and reset state for subsequent tests.
+    await typeTrigger.click();
+    await page.waitForSelector('#typeMenu:not(.open)', { timeout: 5000 }).catch(() => {});
+    await page.evaluate(() => {
+      localStorage.removeItem('meshcore-type-filter');
+      localStorage.removeItem('meshcore-time-window');
+    });
+    await page.reload({ waitUntil: 'load' });
+  });
+
   await test('Packets initial fetch honors persisted time window', async () => {
     // Set persisted time window to 60 min and reload so the IIFE reads it
     await page.evaluate(() => localStorage.setItem('meshcore-time-window', '60'));
