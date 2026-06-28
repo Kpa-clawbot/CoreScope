@@ -63,6 +63,7 @@ node test-issue-1532-live-fullscreen.js
 node test-naive-banner-tone.js
 node test-issue-1473-reserved-prefixes.js
 node test-issue-1473-prefix-generator.js
+node test-issue-1770-mobile-row-clamp.js
 
 echo ""
 echo "═══════════════════════════════════════"

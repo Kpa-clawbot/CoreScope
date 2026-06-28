@@ -157,6 +157,7 @@ jobs:
           node test-a11y-axe-1668-selftest.js
           node test-a11y-1716-rf-range-btn-active.js
           node test-issue-1705-subpath-contrast.js
+          node test-issue-1770-mobile-row-clamp.js
           node test-a11y-axe-routes-coverage.js
 
       - name: 🛡️ Preflight XSS gate — actual --diff check (PR only)
