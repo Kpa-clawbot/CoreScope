@@ -629,6 +629,12 @@
   // to load — emit console.error so script-load bugs are loud (#1799 r1
   // item 4), then use this fallback. The E2E asserts it stays
   // byte-identical to canonical (drift gate).
+  //
+  // The `istanbul ignore next` pragma keeps `nyc instrument` from wrapping
+  // the object literal in a `(cov().s[N]++, {...})` coverage hit, which
+  // would break the E2E's `DEFAULT_TYPE_NAMES\s*=\s*\{` regex anchor when
+  // running against `public-instrumented/` in CI.
+  /* istanbul ignore next */
   const DEFAULT_TYPE_NAMES = {
     0: 'Request', 1: 'Response', 2: 'Direct Msg', 3: 'ACK', 4: 'Advert',
     5: 'Channel Msg', 6: 'Group Data', 7: 'Anon Req', 8: 'Path',

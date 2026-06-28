@@ -28,6 +28,11 @@
   // Inline browser-only fallback. MUST stay byte-identical to the canonical
   // FW_PAYLOAD_TYPES / TYPE_ALIASES exposed by public/payload-labels.js.
   // The E2E (test-issue-1799-label-vocab-e2e.js) asserts equality.
+  //
+  // `istanbul ignore next` keeps `nyc instrument` from wrapping the
+  // literal in `(cov().s[N]++, {...})`, which would break the E2E's
+  // `_FALLBACK_FW\s*=\s*\{` regex anchor in the instrumented CI build.
+  /* istanbul ignore next */
   var _FALLBACK_FW = { 0: 'REQ', 1: 'RESPONSE', 2: 'TXT_MSG', 3: 'ACK', 4: 'ADVERT', 5: 'GRP_TXT', 6: 'GRP_DATA', 7: 'ANON_REQ', 8: 'PATH', 9: 'TRACE', 10: 'MULTIPART', 11: 'CONTROL', 15: 'RAW_CUSTOM' };
   var _FALLBACK_ALIASES = { 'request': 'REQ', 'response': 'RESPONSE', 'direct msg': 'TXT_MSG', 'dm': 'TXT_MSG', 'ack': 'ACK', 'advert': 'ADVERT', 'channel msg': 'GRP_TXT', 'channel': 'GRP_TXT', 'group data': 'GRP_DATA', 'anon req': 'ANON_REQ', 'path': 'PATH', 'trace': 'TRACE', 'multipart': 'MULTIPART', 'control': 'CONTROL', 'raw': 'RAW_CUSTOM', 'custom': 'RAW_CUSTOM', 'raw custom': 'RAW_CUSTOM' };
   var FW_PAYLOAD_TYPES = (_PL && _PL.FW_PAYLOAD_TYPES) || _FALLBACK_FW;

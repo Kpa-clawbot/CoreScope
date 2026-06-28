@@ -163,11 +163,18 @@
     value: _roleOverrides, writable: false, enumerable: false, configurable: false
   });
 
+  // NOTE: UNKNOWN deliberately precedes ACK so that ACK is the LAST writer
+  // for the shared `#6b7280` slot in any reverse color→enum lookup (e.g.
+  // the canonical-label E2E #1799). ACK is the legend's "Other /
+  // Acknowledgment or unknown" bucket — the rendered ACK row must own
+  // that color, not the unlisted UNKNOWN sentinel. Do not reorder without
+  // updating test-issue-1799-label-vocab-e2e.js.
   window.TYPE_COLORS = {
-    ADVERT: '#22c55e', GRP_TXT: '#3b82f6', GRP_DATA: '#8b5cf6', TXT_MSG: '#f59e0b', ACK: '#6b7280',
+    ADVERT: '#22c55e', GRP_TXT: '#3b82f6', GRP_DATA: '#8b5cf6', TXT_MSG: '#f59e0b',
     REQ: '#a855f7', RESPONSE: '#06b6d4', TRACE: '#ec4899', PATH: '#14b8a6',
     ANON_REQ: '#f43f5e', MULTIPART: '#0d9488', CONTROL: '#b45309', RAW_CUSTOM: '#c026d3',
-    UNKNOWN: '#6b7280'
+    UNKNOWN: '#6b7280',
+    ACK: '#6b7280'
   };
 
   // Badge CSS class name mapping

@@ -1179,6 +1179,11 @@
               }
               // r1 item 5: ORDER comes from canonical, not hardcoded.
               var INLINE_ORDER = ['ADVERT','GRP_TXT','TXT_MSG','REQ','RESPONSE','TRACE','PATH','ANON_REQ','GRP_DATA','MULTIPART','CONTROL','RAW_CUSTOM','ACK'];
+              // /* istanbul ignore next */ keeps `nyc instrument` from
+              // wrapping the literal in `(cov().s[N]++, {...})`, which
+              // would break the E2E's `INLINE_LABELS\s*=\s*\{` regex
+              // anchor in the instrumented CI build.
+              /* istanbul ignore next */
               var INLINE_LABELS = {
                 REQ:        { short: 'Request',     long: 'Data request' },
                 RESPONSE:   { short: 'Response',    long: 'Data response' },
