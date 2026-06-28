@@ -1745,7 +1745,7 @@
     // --- Type multi-select ---
     const typeMenu = document.getElementById('typeMenu');
     const typeTrigger = document.getElementById('typeTrigger');
-    const typeMap = {0:'Request',1:'Response',2:'Direct Msg',3:'ACK',4:'Advert',5:'Channel Msg',6:'Group Data',7:'Anon Req',8:'Path',9:'Trace'};
+    const typeMap = {0:'Request',1:'Response',2:'Direct Msg',3:'ACK',4:'Advert',5:'Channel Msg',6:'Group Data',7:'Anon Req',8:'Path',9:'Trace',10:'Multipart',11:'Control',15:'Raw Custom'};
     const selectedTypes = new Set(filters.type ? String(filters.type).split(',') : []);
     function buildTypeMenu() {
       const allChecked = selectedTypes.size === 0;
