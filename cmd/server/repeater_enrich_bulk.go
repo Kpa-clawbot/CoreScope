@@ -111,6 +111,12 @@ func (s *PacketStore) computeRepeaterRelayInfoMap(windowHours float64) map[strin
 	out := make(map[string]RepeaterRelayInfo, len(snap))
 	for key, list := range snap {
 		info := RepeaterRelayInfo{WindowHours: windowHours}
+		// #1751: accumulate the set of region scope names carried by this
+		// hop key across every non-advert path-hop tx (NOT time-windowed).
+		// Captured by the visit closure below — lazily allocated on the first
+		// scope hit so hosts without scope_name pay nothing per key; converted
+		// to a sorted, capped slice before this key's info is stored.
+		var scopeSet map[string]struct{}
 		// When key looks like a full pubkey (>= 2 hex chars), also fold
 		// in the matching 1-byte raw-prefix bucket to mirror
 		// GetRepeaterRelayInfo's behavior. We dedup by tx ID.
@@ -141,6 +147,17 @@ func (s *PacketStore) computeRepeaterRelayInfoMap(windowHours float64) map[strin
 				if p.pt == payloadTypeAdvert {
 					continue
 				}
+				// #1751: scope accumulation is intentionally NOT gated on
+				// p.ok (timestamp parseability) — a packet with an
+				// unparseable first_seen still proves the repeater
+				// transported that scope. RelayCount/LastRelayed below
+				// remain timestamp-gated.
+				if tx.ScopeName != "" {
+					if scopeSet == nil {
+						scopeSet = map[string]struct{}{}
+					}
+					scopeSet[tx.ScopeName] = struct{}{}
+				}
 				if !p.ok {
 					continue
 				}
@@ -167,6 +184,7 @@ func (s *PacketStore) computeRepeaterRelayInfoMap(windowHours float64) map[strin
 				visit(snap[prefix])
 			}
 		}
+		info.TransportedScopes = sortedCappedScopes(scopeSet)
 		out[key] = info
 	}
 	return out

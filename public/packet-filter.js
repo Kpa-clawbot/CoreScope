@@ -78,6 +78,18 @@
           while (i < len && /[a-zA-Z]/.test(input[i])) i++;
           var unit = input.slice(unitStart, i);
           if (!DURATION_UNITS[unit]) {
+            // Issue #1800: when the user typed a bare hex token (e.g.
+            // `path 2f0b001247a047ca`), the number/duration tokenizer eats
+            // only the leading "2f". Extend the scan to capture any further
+            // [0-9a-fA-F] chars; if the combined slice is pure hex of
+            // length >= 4, emit a targeted error rather than the cryptic
+            // duration-unit message.
+            var probe = i;
+            while (probe < len && /[0-9a-fA-F]/.test(input[probe])) probe++;
+            var fullSlice = input.slice(start, probe);
+            if (/^[0-9a-fA-F]+$/.test(fullSlice) && fullSlice.length >= 4) {
+              return { tokens: null, error: "Hex value must be quoted: try 'field == \"<hex>\"' or use the starts_with/contains operator" };
+            }
             return { tokens: null, error: "Invalid duration unit '" + unit + "' at position " + unitStart + " (expected s/m/h/d/w)" };
           }
           tokens.push({ type: TK.DURATION, value: parseFloat(numStr) * DURATION_UNITS[unit], raw: numStr + unit });
@@ -274,8 +286,25 @@
       if (isNaN(ms2)) return null;
       return Math.max(0, (Date.now() - ms2) / 1000);
     }
-    if (field === 'path') {
+    if (field === 'path' || field === 'path_prefixes') {
       try { return JSON.parse(packet.path_json || '[]').join(' → '); } catch(e) { return ''; }
+    }
+    // Issue #1800: routed_through matches against resolved_path full pubkeys.
+    // resolved_path may arrive as a JSON string OR as an already-parsed array
+    // (depends on which API surface produced the packet). Handles both.
+    if (field === 'routed_through') {
+      var rp = packet.resolved_path;
+      if (rp == null) return '';
+      var arr;
+      if (typeof rp === 'string') {
+        try { arr = JSON.parse(rp); } catch (e) { return ''; }
+      } else if (Array.isArray(rp)) {
+        arr = rp;
+      } else {
+        return '';
+      }
+      if (!Array.isArray(arr)) return '';
+      return arr.map(function(h) { return String(h || '').toLowerCase(); }).join(' ');
     }
     if (field === 'payload_bytes') {
       return packet.raw_hex ? Math.max(0, packet.raw_hex.length / 2 - 2) : 0;
@@ -444,7 +473,9 @@
     { name: 'observer_iata', desc: 'Observer IATA region code (e.g. SJC, SFO)' },
     { name: 'iata',          desc: 'Alias of observer_iata' },
     { name: 'observations',  desc: 'Number of observations of this packet' },
-    { name: 'path',          desc: 'Hop path (joined with arrows)' },
+    { name: 'path',          desc: 'Hop path as 1-byte prefixes joined (e.g. a3→7f). For pubkey search use routed_through.' },
+    { name: 'path_prefixes', desc: 'Alias of path (1-byte hop prefixes joined with arrows)' },
+    { name: 'routed_through', desc: 'Match packets routed through a node by pubkey (full or prefix)' },
     { name: 'payload_bytes', desc: 'Payload size in bytes (size - 2 header bytes)' },
     { name: 'payload_hex',   desc: 'Payload bytes as hex (raw without header)' },
     { name: 'time',          desc: 'Packet timestamp (epoch ms)' },

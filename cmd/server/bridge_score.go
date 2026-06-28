@@ -21,8 +21,11 @@
 // build time (#1230) so we don't have to re-filter here.
 //
 // For Dijkstra we need a DISTANCE (lower = better) not an affinity
-// (higher = better), so we convert: cost = 1 / max(epsilon, weight).
-// epsilon avoids divide-by-zero on a degenerate zero-weight edge.
+// (higher = better): cost = 1/weight. That conversion (plus the
+// epsilon/non-finite-weight filtering and self-loop/dedup handling) now lives
+// in the shared weightedDistanceAdjacency helper (graph_weighted.go), used by
+// both this axis and Coverage so they see byte-identical graph structure;
+// ComputeBridgeScores no longer builds the adjacency by hand.
 //
 // (1) Brandes, "A Faster Algorithm for Betweenness Centrality" (2001).
 package main
@@ -30,7 +33,6 @@ package main
 import (
 	"container/heap"
 	"math"
-	"strings"
 )
 
 // BridgeEdge is the algorithm-facing edge tuple consumed by
@@ -65,32 +67,9 @@ const bridgeMinWeightEpsilon = 1e-9
 // Pure (no global state, no locks); safe to call concurrently.
 // Cost: O(V · (E + V log V)).
 func ComputeBridgeScores(edges []BridgeEdge) map[string]float64 {
-	// 1. Build adjacency list with distance = 1/weight.
-	adj := make(map[string]map[string]float64)
-	addOrMerge := func(a, b string, dist float64) {
-		m, ok := adj[a]
-		if !ok {
-			m = make(map[string]float64)
-			adj[a] = m
-		}
-		if existing, has := m[b]; !has || dist < existing {
-			m[b] = dist
-		}
-	}
-	for _, e := range edges {
-		a := strings.ToLower(strings.TrimSpace(e.A))
-		b := strings.ToLower(strings.TrimSpace(e.B))
-		if a == "" || b == "" || a == b {
-			continue
-		}
-		w := e.Weight
-		if w < bridgeMinWeightEpsilon {
-			continue
-		}
-		dist := 1.0 / w
-		addOrMerge(a, b, dist)
-		addOrMerge(b, a, dist)
-	}
+	// 1. Build the distance adjacency (cost = 1/weight) — shared with the
+	//    Coverage axis (graph_weighted.go) so both see identical structure.
+	adj := weightedDistanceAdjacency(edges)
 	if len(adj) == 0 {
 		return map[string]float64{}
 	}

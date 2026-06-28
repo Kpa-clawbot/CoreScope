@@ -320,6 +320,16 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
     return timeAgo(o.last_packet_at);
   }
 
+  // #1789 — Firmware strings can be long, e.g.
+  // "v1.16.0-07a3ca9 Build: 2025-..."; truncate the "Build:" suffix for the
+  // display string, keeping the full value in the cell's title= attr.
+  function truncateBuildSuffix(s) {
+    if (!s) return '';
+    const idx = s.indexOf('Build:');
+    if (idx < 0) return s;
+    return s.slice(0, idx).replace(/[\s,;-]+$/, '');
+  }
+
   function uptimeStr(firstSeen) {
     if (!firstSeen) return '—';
     const ms = Date.now() - new Date(firstSeen).getTime();
@@ -374,7 +384,7 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
         <caption class="sr-only">Observer status and statistics</caption>
         <thead><tr>
           <th scope="col" data-priority="1" data-sort-key="status" data-type="numeric">Status</th><th scope="col" data-priority="1" data-sort-key="name">Name</th><th scope="col" data-priority="3" data-sort-key="region">Region</th><th scope="col" data-priority="2" data-sort-key="last_seen" data-type="numeric">Last Status</th><th scope="col" data-priority="2" data-sort-key="last_packet_at" data-type="numeric">Last Packet</th>
-          <th scope="col" data-priority="3" data-sort-key="packet_health" data-type="numeric">Packet Health</th><th scope="col" data-priority="4" data-sort-key="packet_count" data-type="numeric">Total Packets</th><th scope="col" data-priority="3" data-sort-key="packets_hour" data-type="numeric">Packets/Hour</th><th scope="col" data-priority="4" data-sort-key="clock_offset" data-type="numeric">Clock Offset</th><th scope="col" data-priority="4" data-sort-key="uptime" data-type="numeric">Uptime</th>
+          <th scope="col" data-priority="3" data-sort-key="packet_health" data-type="numeric">Packet Health</th><th scope="col" data-priority="4" data-sort-key="packet_count" data-type="numeric">Total Packets</th><th scope="col" data-priority="3" data-sort-key="packets_hour" data-type="numeric">Packets/Hour</th><th scope="col" data-priority="4" data-sort-key="clock_offset" data-type="numeric">Clock Offset</th><th scope="col" data-priority="4" data-sort-key="uptime" data-type="numeric">Uptime</th><th scope="col" data-priority="4" data-sort-key="firmware">Firmware</th><th scope="col" data-priority="4" data-sort-key="client_version">Client</th>
           <th scope="col" data-priority="1" class="col-compare-select" style="width:32px"><span class="sr-only">Select for compare</span></th>
         </tr></thead>
         <tbody>${filtered.map(o => {
@@ -416,6 +426,8 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
               return renderSkewBadge(sev, sk.offsetSec) + ' <span class="text-muted" title="Computed from ' + sk.samples + ' multi-observer packets. Positive = observer ahead of consensus.">(' + sk.samples + ')</span>';
             })()}</td>
             <td data-value="${_uptimeMs}">${uptimeStr(o.first_seen)}</td>
+            <td data-testid="obs-cell-firmware" data-value="${escapeHtml(String(o.firmware || ''))}" class="mono"${o.firmware ? ` title="${escapeHtml(String(o.firmware))}"` : ''}>${o.firmware ? escapeHtml(truncateBuildSuffix(String(o.firmware))) : '<span class="text-muted">—</span>'}</td>
+            <td data-testid="obs-cell-client-version" data-value="${escapeHtml(String(o.client_version || ''))}" class="mono"${o.client_version ? ` title="${escapeHtml(String(o.client_version))}"` : ''}>${o.client_version ? escapeHtml(String(o.client_version)) : '<span class="text-muted">—</span>'}</td>
             <td class="col-compare-select" onclick="event.stopPropagation()" style="text-align:center">
               <input type="checkbox" data-compare-select value="${escapeHtml(o.id)}"
                      aria-label="Select ${escapeHtml(o.name || o.id)} for comparison"
