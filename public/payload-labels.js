@@ -7,60 +7,70 @@
  * everywhere the operator sees it.
  *
  * Keyed by the firmware enum name; values carry:
- *   short  — compact label used in dropdowns, table cells, legend titles
- *   long   — descriptive label used in tooltips and legend sub-text
- *   enumId — numeric firmware payload_type value (the wire byte)
+ *   enumName   — firmware enum name (mirrors the key; #1799 r1 item 9)
+ *   short      — compact label used in dropdowns, table cells, legend titles
+ *   long       — descriptive label used in tooltips and legend sub-text
+ *   enumId     — numeric firmware payload_type value (the wire byte)
+ *   legendNote — optional sub-string appended to legend text (#1799 r1 item 7)
  *
  * Refs #1799.
  */
 (function () {
   'use strict';
 
+  // PAYLOAD_LABELS — every entry carries enumName for shape uniformity with
+  // BY_ID (#1799 r1 item 9).
   var PAYLOAD_LABELS = {
-    REQ:        { short: 'Request',     long: 'Data request',                enumId: 0 },
-    RESPONSE:   { short: 'Response',    long: 'Data response',               enumId: 1 },
-    TXT_MSG:    { short: 'Direct Msg',  long: 'Direct message',              enumId: 2 },
-    ACK:        { short: 'ACK',         long: 'Acknowledgment',              enumId: 3 },
-    ADVERT:     { short: 'Advert',      long: 'Node advertisement',          enumId: 4 },
-    GRP_TXT:    { short: 'Channel Msg', long: 'Group text',                  enumId: 5 },
-    GRP_DATA:   { short: 'Group Data',  long: 'Group datagram',              enumId: 6 },
-    ANON_REQ:   { short: 'Anon Req',    long: 'Anonymous request',           enumId: 7 },
-    PATH:       { short: 'Path',        long: 'Path discovery',              enumId: 8 },
-    TRACE:      { short: 'Trace',       long: 'Route trace',                 enumId: 9 },
-    MULTIPART:  { short: 'Multipart',   long: 'Multi-fragment payload',      enumId: 10 },
-    CONTROL:    { short: 'Control',     long: 'Control plane',               enumId: 11 },
-    RAW_CUSTOM: { short: 'Raw Custom',  long: 'Application-defined payload', enumId: 15 }
+    REQ:        { enumName: 'REQ',        short: 'Request',     long: 'Data request',                enumId: 0  },
+    RESPONSE:   { enumName: 'RESPONSE',   short: 'Response',    long: 'Data response',               enumId: 1  },
+    TXT_MSG:    { enumName: 'TXT_MSG',    short: 'Direct Msg',  long: 'Direct message',              enumId: 2  },
+    ACK:        { enumName: 'ACK',        short: 'ACK',         long: 'Acknowledgment',              enumId: 3,
+                  legendNote: 'Other \u2014 Acknowledgment or unknown type' },
+    ADVERT:     { enumName: 'ADVERT',     short: 'Advert',      long: 'Node advertisement',          enumId: 4  },
+    GRP_TXT:    { enumName: 'GRP_TXT',    short: 'Channel Msg', long: 'Group text',                  enumId: 5  },
+    GRP_DATA:   { enumName: 'GRP_DATA',   short: 'Group Data',  long: 'Group datagram',              enumId: 6  },
+    ANON_REQ:   { enumName: 'ANON_REQ',   short: 'Anon Req',    long: 'Anonymous request',           enumId: 7  },
+    PATH:       { enumName: 'PATH',       short: 'Path',        long: 'Path discovery',              enumId: 8  },
+    TRACE:      { enumName: 'TRACE',      short: 'Trace',       long: 'Route trace',                 enumId: 9  },
+    MULTIPART:  { enumName: 'MULTIPART',  short: 'Multipart',   long: 'Multi-fragment payload',      enumId: 10 },
+    CONTROL:    { enumName: 'CONTROL',    short: 'Control',     long: 'Control plane',               enumId: 11 },
+    RAW_CUSTOM: { enumName: 'RAW_CUSTOM', short: 'Raw Custom',  long: 'Application-defined payload', enumId: 15 }
   };
 
-  // Reverse lookup: numeric enumId → entry. Lazily built from PAYLOAD_LABELS.
-  var BY_ID = (function () {
-    var m = {};
-    for (var k in PAYLOAD_LABELS) {
-      if (Object.prototype.hasOwnProperty.call(PAYLOAD_LABELS, k)) {
-        m[PAYLOAD_LABELS[k].enumId] = Object.assign({ enumName: k }, PAYLOAD_LABELS[k]);
-      }
-    }
-    return m;
-  })();
+  // Legend display order (#1799 r1 item 5) — keeps Advert/GRP_TXT/TXT_MSG up
+  // top per the historical Live legend layout.
+  var ORDER = [
+    'ADVERT', 'GRP_TXT', 'TXT_MSG', 'REQ', 'RESPONSE', 'TRACE', 'PATH',
+    'ANON_REQ', 'GRP_DATA', 'MULTIPART', 'CONTROL', 'RAW_CUSTOM', 'ACK'
+  ];
+
+  // Reverse lookup: numeric enumId → entry. Built from PAYLOAD_LABELS.
+  // Single `Object.entries` loop pattern across the module (#1799 r1 item 8).
+  var BY_ID = {};
+  Object.entries(PAYLOAD_LABELS).forEach(function (kv) {
+    BY_ID[kv[1].enumId] = kv[1];
+  });
 
   // Numeric id → firmware enum name. Mirrors what packet-filter.js used to
   // hand-roll as FW_PAYLOAD_TYPES.
-  var FW_PAYLOAD_TYPES = (function () {
-    var m = {};
-    for (var id in BY_ID) m[id] = BY_ID[id].enumName;
-    return m;
-  })();
+  var FW_PAYLOAD_TYPES = {};
+  Object.entries(BY_ID).forEach(function (kv) {
+    FW_PAYLOAD_TYPES[kv[0]] = kv[1].enumName;
+  });
 
   // Numeric id → short prose label. Replaces packets.js typeMap/TYPE_NAMES.
-  var SHORT_BY_ID = (function () {
-    var m = {};
-    for (var id in BY_ID) m[id] = BY_ID[id].short;
-    return m;
-  })();
+  var SHORT_BY_ID = {};
+  Object.entries(BY_ID).forEach(function (kv) {
+    SHORT_BY_ID[kv[0]] = kv[1].short;
+  });
 
   // User-input alias map (lowercased short label & legacy aliases) → enum.
   // Replaces packet-filter.js TYPE_ALIASES while staying backward-compatible
   // with the legacy free-text inputs operators have memorised.
+  //
+  // NOTE: 'raw custom' is intentionally listed alongside 'raw'/'custom' so
+  // the documented filter syntax mirrors the rendered short label
+  // ("Raw Custom"). (#1799 r1 item 11.)
   var TYPE_ALIASES = {
     'request': 'REQ',
     'response': 'RESPONSE',
@@ -81,8 +91,13 @@
     'raw custom': 'RAW_CUSTOM'
   };
 
+  // Public API — ONE global (#1799 r1 item 10). The map is exposed as
+  // `LABELS` and legacy direct-access (`PayloadLabels.GRP_DATA.short`) still
+  // works because every map entry hangs off the same object as a named
+  // property below.
   var api = {
-    PAYLOAD_LABELS: PAYLOAD_LABELS,
+    LABELS: PAYLOAD_LABELS,
+    ORDER: ORDER,
     BY_ID: BY_ID,
     FW_PAYLOAD_TYPES: FW_PAYLOAD_TYPES,
     SHORT_BY_ID: SHORT_BY_ID,
@@ -91,12 +106,15 @@
     longById: function (id) { return (BY_ID[id] && BY_ID[id].long) || ''; },
     enumNameById: function (id) { return FW_PAYLOAD_TYPES[id]; }
   };
+  // Make every enum entry directly addressable on the API object so the
+  // legacy `window.PayloadLabels.GRP_DATA.short` shape keeps working without
+  // a second global.
+  Object.entries(PAYLOAD_LABELS).forEach(function (kv) {
+    api[kv[0]] = kv[1];
+  });
 
   if (typeof window !== 'undefined') {
-    // Backwards-friendly globals so legacy code that reads
-    // `window.PayloadLabels.GRP_DATA.short` works.
-    window.PayloadLabels = PAYLOAD_LABELS;
-    window.PayloadLabelsApi = api;
+    window.PayloadLabels = api;
   }
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = api;
