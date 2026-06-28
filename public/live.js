@@ -152,14 +152,14 @@
 
   const TYPE_COLORS = window.TYPE_COLORS || {
     ADVERT: '#22c55e', GRP_TXT: '#3b82f6', TXT_MSG: '#f59e0b', ACK: '#6b7280',
-    REQUEST: '#a855f7', RESPONSE: '#06b6d4', TRACE: '#ec4899', PATH: '#14b8a6',
+    REQ: '#a855f7', RESPONSE: '#06b6d4', TRACE: '#ec4899', PATH: '#14b8a6',
     ANON_REQ: '#f43f5e', GRP_DATA: '#8b5cf6', MULTIPART: '#0d9488',
     CONTROL: '#b45309', RAW_CUSTOM: '#c026d3'
   };
 
   const PAYLOAD_ICONS = {
     ADVERT: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg>', GRP_TXT: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chat-circle"/></svg>', TXT_MSG: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-envelope"/></svg>', ACK: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg>',
-    REQUEST: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg>', RESPONSE: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-envelope"/></svg>', TRACE: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg>', PATH: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-path"/></svg>'
+    REQ: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg>', RESPONSE: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-envelope"/></svg>', TRACE: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg>', PATH: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-path"/></svg>'
   };
 
   /* ---- Panel Corner Positioning (#608 M0) ---- */
@@ -1169,17 +1169,44 @@
           <ul class="legend-list">
             ${(function () {
               // #1799 — legend labels sourced from canonical PayloadLabels.
-              var PL = (window.PayloadLabels) || {};
-              // Render order matches the historical legend; keeps Advert/GRP_TXT/TXT_MSG up top.
-              var order = ['ADVERT','GRP_TXT','TXT_MSG','REQ','RESPONSE','TRACE','PATH','ANON_REQ','GRP_DATA','MULTIPART','CONTROL','RAW_CUSTOM','ACK'];
+              // r1 item 2: live.js now uses the SAME fallback policy as
+              // packets.js / packet-filter.js (loud console.error + inline
+              // fallback). The inline fallback is asserted-equal to canon
+              // by the E2E (drift gate).
+              var PL = window.PayloadLabels || null;
+              if (!PL) {
+                console.error('live.js: window.PayloadLabels missing — payload-labels.js failed to load. Using inline fallback.');
+              }
+              // r1 item 5: ORDER comes from canonical, not hardcoded.
+              var INLINE_ORDER = ['ADVERT','GRP_TXT','TXT_MSG','REQ','RESPONSE','TRACE','PATH','ANON_REQ','GRP_DATA','MULTIPART','CONTROL','RAW_CUSTOM','ACK'];
+              var INLINE_LABELS = {
+                REQ:        { short: 'Request',     long: 'Data request' },
+                RESPONSE:   { short: 'Response',    long: 'Data response' },
+                TXT_MSG:    { short: 'Direct Msg',  long: 'Direct message' },
+                ACK:        { short: 'ACK',         long: 'Acknowledgment',
+                              legendNote: 'Other \u2014 Acknowledgment or unknown type' },
+                ADVERT:     { short: 'Advert',      long: 'Node advertisement' },
+                GRP_TXT:    { short: 'Channel Msg', long: 'Group text' },
+                GRP_DATA:   { short: 'Group Data',  long: 'Group datagram' },
+                ANON_REQ:   { short: 'Anon Req',    long: 'Anonymous request' },
+                PATH:       { short: 'Path',        long: 'Path discovery' },
+                TRACE:      { short: 'Trace',       long: 'Route trace' },
+                MULTIPART:  { short: 'Multipart',   long: 'Multi-fragment payload' },
+                CONTROL:    { short: 'Control',     long: 'Control plane' },
+                RAW_CUSTOM: { short: 'Raw Custom',  long: 'Application-defined payload' }
+              };
+              var order = (PL && PL.ORDER) || INLINE_ORDER;
               return order.map(function (k) {
-                var e = PL[k];
+                var e = (PL && PL[k] && PL[k].short) ? PL[k] : INLINE_LABELS[k];
                 if (!e) return '';
-                // packet-filter / live used 'REQUEST' as a legacy color key; map to canonical 'REQ' for color lookup.
-                var colorKey = (k === 'REQ' && !TYPE_COLORS.REQ && TYPE_COLORS.REQUEST) ? 'REQUEST' : k;
-                var color = TYPE_COLORS[colorKey] || '#888';
-                var label = (k === 'ACK')
-                  ? (e.short + ' / Other \u2014 ' + e.long + ' or unknown type')
+                // r1 item 6: TYPE_COLORS uses the canonical 'REQ' key
+                // (REQUEST→REQ rename). Lookup is direct; no ternary
+                // band-aid.
+                var color = TYPE_COLORS[k] || '#888';
+                // r1 item 7: ACK 'Other — …' copy lives on the canonical
+                // entry as `legendNote`, not hardcoded here.
+                var label = e.legendNote
+                  ? (e.short + ' / ' + e.legendNote)
                   : (e.short + ' \u2014 ' + e.long);
                 return '<li><span class="live-dot" style="background:' + color + '" aria-hidden="true"></span> ' + label + '</li>';
               }).join('');

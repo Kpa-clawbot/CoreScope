@@ -623,6 +623,25 @@
   let packets = [];
   let hashIndex = new Map(); // hash → packet group for O(1) dedup
 
+  // Single fallback literal for SHORT_BY_ID. Hoisted (#1799 r1 item 1) so
+  // the same map isn't duplicated at line 720 and 1749. Browser-only
+  // consumer: if `window.PayloadLabels` is missing, payload-labels.js failed
+  // to load — emit console.error so script-load bugs are loud (#1799 r1
+  // item 4), then use this fallback. The E2E asserts it stays
+  // byte-identical to canonical (drift gate).
+  const DEFAULT_TYPE_NAMES = {
+    0: 'Request', 1: 'Response', 2: 'Direct Msg', 3: 'ACK', 4: 'Advert',
+    5: 'Channel Msg', 6: 'Group Data', 7: 'Anon Req', 8: 'Path',
+    9: 'Trace', 10: 'Multipart', 11: 'Control', 15: 'Raw Custom'
+  };
+  const SHORT_BY_ID = (function () {
+    if (window.PayloadLabels && window.PayloadLabels.SHORT_BY_ID) {
+      return window.PayloadLabels.SHORT_BY_ID;
+    }
+    console.error('packets.js: window.PayloadLabels missing — payload-labels.js failed to load. Using inline fallback.');
+    return DEFAULT_TYPE_NAMES;
+  })();
+
   // Resolve observer_id to friendly name from loaded observers list
   function obsName(id) {
     if (!id) return '—';
@@ -717,8 +736,7 @@
   // already built (decouples observer fetch from row render).
   let _rebuildObserverMenu = null;
   let regionMap = {};
-  const TYPE_NAMES = (window.PayloadLabelsApi && window.PayloadLabelsApi.SHORT_BY_ID)
-    || { 0:'Request', 1:'Response', 2:'Direct Msg', 3:'ACK', 4:'Advert', 5:'Channel Msg', 6:'Group Data', 7:'Anon Req', 8:'Path', 9:'Trace', 10:'Multipart', 11:'Control', 15:'Raw Custom' };
+  const TYPE_NAMES = SHORT_BY_ID;
   function typeName(t) { return TYPE_NAMES[t] ?? `Type ${t}`; }
   const isMobile = window.innerWidth <= 1024;
   const PACKET_LIMIT = isMobile ? 1000 : 50000;
@@ -1746,8 +1764,7 @@
     // --- Type multi-select ---
     const typeMenu = document.getElementById('typeMenu');
     const typeTrigger = document.getElementById('typeTrigger');
-    const typeMap = (window.PayloadLabelsApi && window.PayloadLabelsApi.SHORT_BY_ID)
-      || {0:'Request',1:'Response',2:'Direct Msg',3:'ACK',4:'Advert',5:'Channel Msg',6:'Group Data',7:'Anon Req',8:'Path',9:'Trace',10:'Multipart',11:'Control',15:'Raw Custom'};
+    const typeMap = SHORT_BY_ID;
     const selectedTypes = new Set(filters.type ? String(filters.type).split(',') : []);
     function buildTypeMenu() {
       const allChecked = selectedTypes.size === 0;
