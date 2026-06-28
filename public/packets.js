@@ -2841,6 +2841,14 @@
         const blobShort = blob.length > 32 ? blob.slice(0, 32) + '…' : blob;
         return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-database"/></svg> Ch 0x${hashHex} <span class="muted">type=0x${dt} len=${dl}</span> <code>${escapeHtml(blobShort)}</code>`;
       }
+      // #1796 polish: decrypted-but-malformed branch. Backend
+      // (cmd/ingestor/decoder.go:619-654) leaves status='decrypted' but
+      // DataType=nil when the inner payload is too short to parse. Without
+      // this explicit branch we would fall through to 'encrypted' and lie
+      // about a packet that decrypted successfully but had bad inner bytes.
+      if (decoded.decryptionStatus === 'decrypted') {
+        return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-database"/></svg> Ch 0x${hashHex} <span class="muted">(decrypted, malformed)</span>`;
+      }
       const statusLabel = decoded.decryptionStatus === 'no_key' ? 'no key'
         : decoded.decryptionStatus === 'decryption_failed' ? 'decryption failed'
         : 'encrypted';
