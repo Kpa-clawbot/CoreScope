@@ -1167,19 +1167,23 @@
           <div class="panel-content">
           <h3 class="legend-title">PACKET TYPES</h3>
           <ul class="legend-list">
-            <li><span class="live-dot" style="background:${TYPE_COLORS.ADVERT}" aria-hidden="true"></span> Advert — Node advertisement</li>
-            <li><span class="live-dot" style="background:${TYPE_COLORS.GRP_TXT}" aria-hidden="true"></span> Message — Group text</li>
-            <li><span class="live-dot" style="background:${TYPE_COLORS.TXT_MSG}" aria-hidden="true"></span> Direct — Direct message</li>
-            <li><span class="live-dot" style="background:${TYPE_COLORS.REQUEST}" aria-hidden="true"></span> Request — Data request</li>
-            <li><span class="live-dot" style="background:${TYPE_COLORS.RESPONSE}" aria-hidden="true"></span> Response — Data response</li>
-            <li><span class="live-dot" style="background:${TYPE_COLORS.TRACE}" aria-hidden="true"></span> Trace — Route trace</li>
-            <li><span class="live-dot" style="background:${TYPE_COLORS.PATH}" aria-hidden="true"></span> Path — Path discovery</li>
-            <li><span class="live-dot" style="background:${TYPE_COLORS.ANON_REQ}" aria-hidden="true"></span> Anon Req — Anonymous request</li>
-            <li><span class="live-dot" style="background:${TYPE_COLORS.GRP_DATA}" aria-hidden="true"></span> Group Data — Group datagram</li>
-            <li><span class="live-dot" style="background:${TYPE_COLORS.MULTIPART}" aria-hidden="true"></span> Multipart — Multi-fragment payload</li>
-            <li><span class="live-dot" style="background:${TYPE_COLORS.CONTROL}" aria-hidden="true"></span> Control — Control plane</li>
-            <li><span class="live-dot" style="background:${TYPE_COLORS.RAW_CUSTOM}" aria-hidden="true"></span> Raw Custom — Application-defined payload</li>
-            <li><span class="live-dot" style="background:${TYPE_COLORS.ACK}" aria-hidden="true"></span> Ack / Other — Acknowledgment or unknown type</li>
+            ${(function () {
+              // #1799 — legend labels sourced from canonical PayloadLabels.
+              var PL = (window.PayloadLabels) || {};
+              // Render order matches the historical legend; keeps Advert/GRP_TXT/TXT_MSG up top.
+              var order = ['ADVERT','GRP_TXT','TXT_MSG','REQ','RESPONSE','TRACE','PATH','ANON_REQ','GRP_DATA','MULTIPART','CONTROL','RAW_CUSTOM','ACK'];
+              return order.map(function (k) {
+                var e = PL[k];
+                if (!e) return '';
+                // packet-filter / live used 'REQUEST' as a legacy color key; map to canonical 'REQ' for color lookup.
+                var colorKey = (k === 'REQ' && !TYPE_COLORS.REQ && TYPE_COLORS.REQUEST) ? 'REQUEST' : k;
+                var color = TYPE_COLORS[colorKey] || '#888';
+                var label = (k === 'ACK')
+                  ? (e.short + ' / Other \u2014 ' + e.long + ' or unknown type')
+                  : (e.short + ' \u2014 ' + e.long);
+                return '<li><span class="live-dot" style="background:' + color + '" aria-hidden="true"></span> ' + label + '</li>';
+              }).join('');
+            })()}
           </ul>
           <h3 class="legend-title" style="margin-top:8px">NODE ROLES</h3>
           <ul class="legend-list" id="roleLegendList"></ul>

@@ -717,7 +717,8 @@
   // already built (decouples observer fetch from row render).
   let _rebuildObserverMenu = null;
   let regionMap = {};
-  const TYPE_NAMES = { 0:'Request', 1:'Response', 2:'Direct Msg', 3:'ACK', 4:'Advert', 5:'Channel Msg', 6:'Group Data', 7:'Anon Req', 8:'Path', 9:'Trace', 10:'Multipart', 11:'Control', 15:'Raw Custom' };
+  const TYPE_NAMES = (window.PayloadLabelsApi && window.PayloadLabelsApi.SHORT_BY_ID)
+    || { 0:'Request', 1:'Response', 2:'Direct Msg', 3:'ACK', 4:'Advert', 5:'Channel Msg', 6:'Group Data', 7:'Anon Req', 8:'Path', 9:'Trace', 10:'Multipart', 11:'Control', 15:'Raw Custom' };
   function typeName(t) { return TYPE_NAMES[t] ?? `Type ${t}`; }
   const isMobile = window.innerWidth <= 1024;
   const PACKET_LIMIT = isMobile ? 1000 : 50000;
@@ -1745,7 +1746,8 @@
     // --- Type multi-select ---
     const typeMenu = document.getElementById('typeMenu');
     const typeTrigger = document.getElementById('typeTrigger');
-    const typeMap = {0:'Request',1:'Response',2:'Direct Msg',3:'ACK',4:'Advert',5:'Channel Msg',6:'Group Data',7:'Anon Req',8:'Path',9:'Trace',10:'Multipart',11:'Control',15:'Raw Custom'};
+    const typeMap = (window.PayloadLabelsApi && window.PayloadLabelsApi.SHORT_BY_ID)
+      || {0:'Request',1:'Response',2:'Direct Msg',3:'ACK',4:'Advert',5:'Channel Msg',6:'Group Data',7:'Anon Req',8:'Path',9:'Trace',10:'Multipart',11:'Control',15:'Raw Custom'};
     const selectedTypes = new Set(filters.type ? String(filters.type).split(',') : []);
     function buildTypeMenu() {
       const allChecked = selectedTypes.size === 0;
