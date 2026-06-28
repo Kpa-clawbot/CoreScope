@@ -2252,7 +2252,7 @@
           <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(headerObserverId) || '')}">${isSingle ? escapeHtml(truncate(obsNameOnly(headerObserverId), 16)) + obsIataBadge(p) : escapeHtml(truncate(obsNameOnly(headerObserverId), 10)) + groupedObserverIataBadgesHtml(p)}</td>
           <td class="col-path"><span class="path-hops">${groupPathStr}</span></td>
           <td class="col-rpt">${p.observation_count > 1 ? '<span class="badge badge-obs" title="Seen ' + p.observation_count + ' times"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> ' + p.observation_count + '</span>' : (isSingle ? '' : p.count)}</td>
-          <td class="col-details">${getDetailPreview(getParsedDecoded(p))}</td>
+          <td class="col-details"><span class="col-details-clip">${getDetailPreview(getParsedDecoded(p))}</span></td>
         </tr>`;
     if (isExpanded && p._children) {
       let visibleChildren = p._children;
@@ -2281,7 +2281,7 @@
               <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(c.observer_id) || '')}">${escapeHtml(truncate(obsNameOnly(c.observer_id), 16))}${obsIataBadge(c)}</td>
               <td class="col-path"><span class="path-hops">${childPathStr}</span></td>
               <td class="col-rpt"></td>
-              <td class="col-details">${getDetailPreview(getParsedDecoded(c))}</td>
+              <td class="col-details"><span class="col-details-clip">${getDetailPreview(getParsedDecoded(c))}</span></td>
             </tr>`;
       }
     }
@@ -2314,7 +2314,7 @@
         <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(p.observer_id) || '')}">${escapeHtml(truncate(obsNameOnly(p.observer_id), 16))}${obsIataBadge(p)}</td>
         <td class="col-path"><span class="path-hops">${pathStr}</span></td>
         <td class="col-rpt"></td>
-        <td class="col-details">${detail}</td>
+        <td class="col-details"><span class="col-details-clip">${detail}</span></td>
       </tr>`;
   }
 

@@ -65,7 +65,10 @@ assert(mobileBlocks.length > 0, '`@media (max-width: 640px)` block(s) found in s
 if (mobileBlocks.length > 0) {
   // Find the .col-details rule body inside any mobile block. Accepts any
   // selector that includes `.col-details` (e.g. `.col-details { ... }` or
-  // `.data-table td.col-details { ... }`).
+  // `.data-table td.col-details { ... }` or — post-#1805 — an inner
+  // `.col-details > .col-details-clip` wrapper). The clamp invariant is
+  // what matters; the selector scope was tightened in #1805 to avoid
+  // blowing past `max-width` and breaking row-action gestures (#1062).
   const ruleRe = /([^{}]*\.col-details\b[^{}]*)\{([^{}]*)\}/g;
   let clampBody = null;
   for (const block of mobileBlocks) {
