@@ -729,21 +729,71 @@ func decodeMultipart(buf []byte) Payload {
 	return p
 }
 
-// decodeControl decodes PAYLOAD_TYPE_CONTROL (0x0B) byte0 flags per
-// firmware/src/Mesh.cpp:69 (high-bit set ⇒ zero-hop direct subset).
+// decodeControl decodes PAYLOAD_TYPE_CONTROL (0x0B).
+//
+// byte0 high nibble is the control subtype (per firmware/src/Mesh.cpp:69
+// and firmware/examples/simple_repeater/MyMesh.cpp:773-820):
+//   0x80 = CTL_TYPE_NODE_DISCOVER_REQ  — body: filter:u8 | tag:u32 LE | since:u32 LE (optional)
+//   0x90 = CTL_TYPE_NODE_DISCOVER_RESP — body: snr:i8 | tag:u32 LE | pubkey (32B full, or 8B prefix)
+//                                        low nibble of byte0 is node_type
+//
+// The legacy CtrlZeroHop bool (bit7 of byte0) is retained for backwards
+// compatibility — it is misleading (bit7 is also set for DISCOVER_RESP)
+// and is flagged for follow-up renaming. Length checks gate every field
+// extraction; short/truncated bodies emit the subtype only and never panic.
 func decodeControl(buf []byte) Payload {
 	if len(buf) < 1 {
 		return Payload{Type: "CONTROL", Error: "too short", RawHex: hex.EncodeToString(buf)}
 	}
 	zeroHop := buf[0]&0x80 != 0
 	length := len(buf)
-	return Payload{
+	p := Payload{
 		Type:        "CONTROL",
 		CtrlFlags:   fmt.Sprintf("%02x", buf[0]),
 		CtrlZeroHop: &zeroHop,
 		CtrlLength:  &length,
 		RawHex:      hex.EncodeToString(buf),
 	}
+
+	switch buf[0] & 0xF0 {
+	case 0x80:
+		p.CtrlSubtype = "DISCOVER_REQ"
+		// REQ body: filter:u8 | tag:u32 LE | since:u32 LE (optional).
+		// Total body (incl. byte0) >= 6 = 1 + 1 + 4.
+		if len(buf) >= 6 {
+			filter := int(buf[1])
+			p.CtrlFilter = &filter
+			tag := binary.LittleEndian.Uint32(buf[2:6])
+			p.CtrlTag = &tag
+			if len(buf) >= 10 {
+				since := binary.LittleEndian.Uint32(buf[6:10])
+				p.CtrlSince = &since
+			}
+		}
+	case 0x90:
+		p.CtrlSubtype = "DISCOVER_RESP"
+		nodeType := int(buf[0] & 0x0F)
+		p.CtrlNodeType = &nodeType
+		// RESP body: snr:i8 | tag:u32 LE | pubkey. Header is 6 bytes
+		// (byte0 + snr + 4B tag). Pubkey is 32B full or 8B prefix.
+		if len(buf) >= 6 {
+			snr := int(int8(buf[1]))
+			p.CtrlSNR = &snr
+			tag := binary.LittleEndian.Uint32(buf[2:6])
+			p.CtrlTag = &tag
+			remaining := len(buf) - 6
+			if remaining >= 32 {
+				p.CtrlPubKey = hex.EncodeToString(buf[6:38])
+			} else if remaining >= 8 && remaining < 32 {
+				p.CtrlPubKey = hex.EncodeToString(buf[6:14])
+			}
+			// Other lengths (e.g. 4B): omit pubkey rather than emit a
+			// partial/ambiguous value.
+		}
+	default:
+		p.CtrlSubtype = "UNKNOWN"
+	}
+	return p
 }
 
 // decodeRawCustom decodes PAYLOAD_TYPE_RAW_CUSTOM (0x0F). Application-defined
