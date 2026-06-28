@@ -513,6 +513,114 @@ async function run() {
     assert(rowsAfter.length > 0, 'No packets after filtering');
   });
 
+  // Test (#1791): "Group Data" (payload_type=6) appears in the message-type
+  // filter checklist and selecting it narrows the table to type-6 rows only.
+  await test('Packets type filter includes Group Data (#1791)', async () => {
+    // Selector shared across assertion + interaction; keep in one place.
+    const TYPE_6_CHECKBOX_SEL = '#typeMenu input[data-type-id="6"]';
+    // Wide time window so the seeded GRP_DATA fixture row is included.
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
+    await page.evaluate(() => {
+      localStorage.setItem('meshcore-time-window', '525600');
+      localStorage.removeItem('meshcore-type-filter');
+    });
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
+    await page.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
+
+    // Open the type multi-select menu.
+    const typeTrigger = await page.$('#typeTrigger');
+    assert(typeTrigger, 'Type filter trigger (#typeTrigger) not found');
+    await typeTrigger.click();
+    await page.waitForSelector('#typeMenu.open', { timeout: 5000 });
+
+    // Assert the Group Data checkbox exists (regression: was missing in #1791).
+    const grpDataCheckbox = await page.$(TYPE_6_CHECKBOX_SEL);
+    assert(grpDataCheckbox, '#1791: "Group Data" (data-type-id="6") checkbox missing from type filter menu');
+    const grpDataLabel = await page.$eval(TYPE_6_CHECKBOX_SEL, el => (el.parentElement && el.parentElement.textContent || '').trim());
+    // Strict equality: the rendered label must be exactly "Group Data"
+    // (no casing/whitespace drift) to guard against silent renames.
+    assert(grpDataLabel === 'Group Data', `#1791: checkbox for type 6 should be labeled exactly "Group Data", got "${grpDataLabel}"`);
+
+    // Select only Group Data and verify the table narrows to type-6 rows.
+    await grpDataCheckbox.click();
+    // Filter is applied via renderTableRows synchronously; allow a frame for DOM swap.
+    await page.waitForFunction(() => {
+      const rows = document.querySelectorAll('#pktBody tr:not([id^=vscroll])');
+      if (rows.length === 0) return false;
+      // Every visible row should show the Group Data badge.
+      return Array.from(rows).every(r => {
+        const badge = r.querySelector('.col-type .badge');
+        return badge && /Group Data/i.test(badge.textContent || '');
+      });
+    }, { timeout: 5000 });
+
+    const badgeTexts = await page.$$eval('#pktBody tr:not([id^=vscroll]) .col-type .badge', els => els.map(e => e.textContent.trim()));
+    assert(badgeTexts.length > 0, '#1791: expected at least one Group Data row after filter');
+    const nonGrp = badgeTexts.filter(t => !/Group Data/i.test(t));
+    assert(nonGrp.length === 0, `#1791: type filter should yield only Group Data rows, found other types: ${nonGrp.join(',')}`);
+
+    // Cleanup: close the open #typeMenu, clear all localStorage keys this
+    // test set, and reload so the in-memory `selectedTypes` Set is reset
+    // for subsequent tests (clearing localStorage alone leaks state).
+    await typeTrigger.click();
+    await page.waitForSelector('#typeMenu:not(.open)', { timeout: 5000 }).catch(() => {});
+    await page.evaluate(() => {
+      localStorage.removeItem('meshcore-type-filter');
+      localStorage.removeItem('meshcore-time-window');
+    });
+    await page.reload({ waitUntil: 'load' });
+  });
+
+  // Test (#1798): The Packets-page type checklist must include the three
+  // firmware payload types currently missing from `typeMap` in `public/packets.js`:
+  //   10 — Multipart
+  //   11 — Control
+  //   15 — Raw Custom
+  // Other surfaces (`packet-filter.js`, `live.js`, `map.js`) already know about
+  // these three types; only the Packets checklist UI omits them. This regression
+  // test renders the checklist and asserts each new `data-type-id` checkbox is
+  // present with the expected label.
+  await test('Packets type filter includes Multipart/Control/Raw Custom (#1798)', async () => {
+    const EXPECTED = [
+      { id: '10', label: 'Multipart' },
+      { id: '11', label: 'Control' },
+      { id: '15', label: 'Raw Custom' },
+    ];
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
+    await page.evaluate(() => {
+      localStorage.setItem('meshcore-time-window', '525600');
+      localStorage.removeItem('meshcore-type-filter');
+    });
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
+
+    // Open the type multi-select menu.
+    const typeTrigger = await page.$('#typeTrigger');
+    assert(typeTrigger, 'Type filter trigger (#typeTrigger) not found');
+    await typeTrigger.click();
+    await page.waitForSelector('#typeMenu.open', { timeout: 5000 });
+
+    for (const { id, label } of EXPECTED) {
+      const sel = `#typeMenu input[data-type-id="${id}"]`;
+      const cb = await page.$(sel);
+      assert(cb, `#1798: checkbox for data-type-id="${id}" (${label}) missing from type filter menu`);
+      const rendered = await page.$eval(sel, el => (el.parentElement && el.parentElement.textContent || '').trim());
+      assert(rendered === label, `#1798: checkbox for type ${id} should be labeled exactly "${label}", got "${rendered}"`);
+    }
+
+    // Cleanup: close menu and reset state for subsequent tests.
+    await typeTrigger.click();
+    await page.waitForSelector('#typeMenu:not(.open)', { timeout: 5000 }).catch(() => {});
+    await page.evaluate(() => {
+      localStorage.removeItem('meshcore-type-filter');
+      localStorage.removeItem('meshcore-time-window');
+    });
+    await page.reload({ waitUntil: 'load' });
+  });
+
   await test('Packets initial fetch honors persisted time window', async () => {
     // Set persisted time window to 60 min and reload so the IIFE reads it
     await page.evaluate(() => localStorage.setItem('meshcore-time-window', '60'));

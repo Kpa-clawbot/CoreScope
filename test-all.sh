@@ -28,12 +28,14 @@ node test-channel-issue-1087.js
 node test-issue-1409-no-encrypted-flood.js
 node test-analytics-channels-integration.js
 node test-observers-headings.js
+node test-issue-1789-observer-firmware-cols.js
 node test-issue-1648-m1-emoji-scan.js
 node test-issue-1648-m2-emoji-scan.js
 node test-issue-1648-m3-emoji-scan.js
 node test-issue-1648-m6-final-sweep.js
 node test-issue-1648-m6-lint-self.js
 node test-traces.js
+node test-live-multibyte-filter.js
 
 # #1418 — route-view v2 (Tufte) coverage
 node test-issue-1418-raw-hex-extraction.js
@@ -58,8 +60,10 @@ node test-issue-1461-mobile-page-actions.js
 node test-issue-1470-node-tile-helper.js
 node test-issue-1485-live-anim-z.js
 node test-issue-1532-live-fullscreen.js
+node test-naive-banner-tone.js
 node test-issue-1473-reserved-prefixes.js
 node test-issue-1473-prefix-generator.js
+node test-issue-1770-mobile-row-clamp.js
 
 echo ""
 echo "═══════════════════════════════════════"

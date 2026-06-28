@@ -267,10 +267,55 @@ func applySchema(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_transmissions_payload_type ON transmissions(payload_type);
 		-- idx_transmissions_from_pubkey is created by the from_pubkey_v1
 		-- migration after the column is added on legacy DBs (#1143).
-		-- idx_tx_last_seen is created by dbschema.Apply after ensuring
-		-- the last_seen column exists (#1690) — keep it OUT of this base
-		-- schema block so legacy DBs (table-exists, column-missing) don't
-		-- trip on the CREATE INDEX before the ALTER runs.
+		-- idx_tx_last_seen_zero (partial, WHERE last_seen=0) is created by
+		-- dbschema.Apply after ensuring the last_seen column exists (#1690,
+		-- partial-index swap #1740) — keep it OUT of this base schema block
+		-- so legacy DBs (table-exists, column-missing) don't trip on the
+		-- CREATE INDEX before the ALTER runs.
+
+		-- Mobile client RX coverage: a roaming companion = a mobile observer
+		-- with a moving GPS position, so it gets its own table rather than
+		-- observations (which assumes a fixed observer/location).
+		CREATE TABLE IF NOT EXISTS client_receptions (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			rx_pubkey     TEXT NOT NULL,
+			heard_key     TEXT NOT NULL,
+			heard_keylen  INTEGER NOT NULL,
+			rssi          INTEGER,
+			snr           REAL,
+			lat           REAL NOT NULL,
+			lon           REAL NOT NULL,
+			pos_acc_m     REAL,
+			rx_at         TEXT NOT NULL,
+			ingested_at   TEXT NOT NULL,
+			src           TEXT NOT NULL,
+			UNIQUE(rx_pubkey, heard_key, rx_at)
+		);
+		-- Coverage queries filter by bbox AND match the heard node either by full
+		-- key (heard_keylen=32 AND heard_key=?) or by 2-3 byte prefix. The composite
+		-- (heard_key, heard_keylen, lat, lon) serves the heard_key-equality seek and
+		-- carries lat/lon so the bbox range is satisfied from the index; it also
+		-- supersedes the old single-column heard_key index. idx_client_recept_latlon
+		-- lets the planner instead drive from a selective bbox. (#5, #18)
+		CREATE INDEX IF NOT EXISTS idx_client_recept_heard_geo ON client_receptions(heard_key, heard_keylen, lat, lon);
+		CREATE INDEX IF NOT EXISTS idx_client_recept_latlon ON client_receptions(lat, lon);
+		-- rx_at backs both the retention reaper (DELETE WHERE rx_at < ?) and the
+		-- leaderboard, which range-scans WHERE rx_at >= ? and aggregates per
+		-- rx_pubkey in Go (see rxLeaderboard's frontier-weighted scoring). Without
+		-- this index either would full-scan the table under the writer lock
+		-- (verified by an EXPLAIN test). A dedicated rx_pubkey index stays
+		-- redundant — the leaderboard no longer groups by rx_pubkey in SQL.
+		CREATE INDEX IF NOT EXISTS idx_client_recept_rxat ON client_receptions(rx_at);
+		DROP INDEX IF EXISTS idx_client_recept_rxpk;
+
+		-- Self-reported name of each mobile client (companion), from the SELF_INFO
+		-- name the app sends as "origin". Lets the leaderboard show a name even
+		-- when the companion never advertised (so it isn't in the nodes table).
+		CREATE TABLE IF NOT EXISTS client_observers (
+			pubkey    TEXT PRIMARY KEY,
+			name      TEXT,
+			last_seen TEXT
+		);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("base schema: %w", err)
@@ -1702,7 +1747,6 @@ func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID,
 
 	return pd
 }
-
 
 // ─── Writer-lock instrumentation (issue #1340) ────────────────────────────
 //

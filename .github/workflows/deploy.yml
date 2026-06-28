@@ -56,7 +56,7 @@ jobs:
           go build .
           # -race gates PR #1208's atomic.Pointer migration: the race-detector
           # is what makes path_inspect_atomic_race_test.go actually assert.
-          go test -timeout 15m -race -coverprofile=server-coverage.out ./... 2>&1 | tee server-test.log
+          go test -timeout 20m -race -coverprofile=server-coverage.out ./... 2>&1 | tee server-test.log
           echo "--- Go Server Coverage ---"
           go tool cover -func=server-coverage.out | tail -1
 
@@ -65,7 +65,7 @@ jobs:
           set -e -o pipefail
           cd cmd/ingestor
           go build .
-          go test -timeout 15m -coverprofile=ingestor-coverage.out ./... 2>&1 | tee ingestor-test.log
+          go test -timeout 20m -coverprofile=ingestor-coverage.out ./... 2>&1 | tee ingestor-test.log
           echo "--- Go Ingestor Coverage ---"
           go tool cover -func=ingestor-coverage.out | tail -1
 
@@ -138,6 +138,8 @@ jobs:
           node test-issue-1509-nav-active-bg.js
           node test-issue-1509-detect-preset.js
           node test-live.js
+          node test-coverage-gate.js
+          node test-node-reach-coverage.js
           node test-issue-1107-live-layout.js
           node test-issue-1532-live-fullscreen.js
           node test-issue-1619-feed-detail-card-draggable.js
@@ -145,6 +147,7 @@ jobs:
           node test-preflight-xss-gate.js
           node test-traces.js
           node test-issue-1648-m4-emoji-scan.js
+          node test-issue-1753-copy-url-slash.js
           node test-issue-1668-m3-typography.js
           node test-mqtt-status-panel.js
           node test-issue-1697-mqtt-mobile-e2e.js
@@ -154,6 +157,7 @@ jobs:
           node test-a11y-axe-1668-selftest.js
           node test-a11y-1716-rf-range-btn-active.js
           node test-issue-1705-subpath-contrast.js
+          node test-issue-1770-mobile-row-clamp.js
           node test-a11y-axe-routes-coverage.js
 
       - name: 🛡️ Preflight XSS gate — actual --diff check (PR only)
@@ -334,6 +338,27 @@ jobs:
             (0,1,'rx',5.0,-95,0,'["AA"]',CAST(strftime('%s','2026-05-15T00:00:00Z') AS INTEGER),'["aa00000000000000000000000000000000000000000000000000000000000000"]'),
             (0,2,'rx',5.5,-92,0,'["BB"]',CAST(strftime('%s','2026-05-15T00:00:00Z') AS INTEGER),'["bb00000000000000000000000000000000000000000000000000000000000000"]'),
             (0,3,'rx',6.0,-90,0,'["CC"]',CAST(strftime('%s','2026-05-15T00:00:00Z') AS INTEGER),'["cc00000000000000000000000000000000000000000000000000000000000000"]');
+          -- #1791 fixture: a single GRP_DATA (payload_type=6) packet so the
+          -- E2E "Group Data filter" test has at least one row to filter on.
+          -- Use an obs timestamp within the default UI window so the row
+          -- appears with no time-window override.
+          --
+          -- raw_hex header byte 0x19 = bits 5-2 (payload)=0110=6 (GRP_DATA),
+          --                            bits 1-0 (route)=01=1 (FLOOD).
+          -- path_len byte 0x00 = hash_size=1, hash_count=0 (zero-hop on-wire,
+          -- typical GRP_DATA going FLOOD). path_json/resolved_path are kept
+          -- EMPTY so the rendered hop-row count matches the hex-path byte
+          -- count (a prior fixture used path_json=["AA"] but raw_hex
+          -- path_len=0, which broke the "hex strip Path range matches hop
+          -- row count" E2E).
+          --
+          -- Note: id=-1000000 is a deliberately out-of-band sentinel id so
+          -- this synthetic fixture row cannot collide with real ingested
+          -- transmissions (real ids are positive autoincrement values).
+          INSERT INTO transmissions(id,raw_hex,hash,first_seen,route_type,payload_type,payload_version,decoded_json,channel_hash,from_pubkey)
+            VALUES (-1000000,'19000102030405060708090a0b0c0d0e0f','17910000deadbeef',strftime('%Y-%m-%dT%H:%M:%SZ','now'),1,6,0,'{"type":"GRP_DATA","channel":"#test","raw":"deadbeef"}',NULL,NULL);
+          INSERT INTO observations(transmission_id,observer_idx,direction,snr,rssi,score,path_json,timestamp,resolved_path) VALUES
+            (-1000000,1,'rx',7.0,-88,0,'[]',CAST(strftime('%s','now') AS INTEGER),'[]');
           SQL
 
       - name: Migrate fixture DB to current schema (#1287)
@@ -408,6 +433,7 @@ jobs:
           BASE_URL=http://localhost:13581 node test-issue-1128-packets-layout-e2e.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-issue-1128-multi-viewport-e2e.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-issue-1136-live-region-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-live-multibyte-only-e2e.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-issue-1150-404-state-e2e.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-issue-1146-path-link-contrast-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 node test-issue-1705-subpath-contrast-e2e.js 2>&1 | tee -a e2e-output.txt
@@ -465,6 +491,7 @@ jobs:
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-channels-ws-race-1498-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-issue-1487-byop-modal-layout-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-issue-1630-reach-mobile-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-node-reach-coverage-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-issue-1640-compare-discovery-e2e.js 2>&1 | tee -a e2e-output.txt
 
       # #1616: slide-over focus-restore flake-gate. Runs the slide-over

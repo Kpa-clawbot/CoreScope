@@ -273,6 +273,18 @@ func main() {
 		}
 	}
 
+	// Client-RX coverage retention: bound the opt-in coverage tables (#1727).
+	// Independent of the feature flag, so data persists are reaped even after
+	// the feature is turned off. 0 = disabled.
+	clientRxDays := cfg.ClientRxDaysOrZero()
+	if clientRxDays > 0 {
+		if n, err := store.PruneOldClientReceptions(clientRxDays); err != nil {
+			log.Printf("[prune] error: %v", err)
+		} else if n > 0 {
+			log.Printf("[prune] startup pruned %d client_receptions older than %d days", n, clientRxDays)
+		}
+	}
+
 	vacuumPages := cfg.IncrementalVacuumPages()
 	store.RunIncrementalVacuum(vacuumPages)
 
@@ -333,6 +345,21 @@ func main() {
 			}
 		}()
 		log.Printf("[prune] auto-prune enabled: packets older than %d days will be removed daily", packetDays)
+	}
+
+	// Daily ticker for client-RX coverage retention (#1727).
+	if clientRxDays > 0 {
+		clientRxRetentionTicker := time.NewTicker(24 * time.Hour)
+		go func() {
+			for range clientRxRetentionTicker.C {
+				if n, err := store.PruneOldClientReceptions(clientRxDays); err != nil {
+					log.Printf("[prune] error: %v", err)
+				} else if n > 0 {
+					store.RunIncrementalVacuum(vacuumPages)
+				}
+			}
+		}()
+		log.Printf("[prune] auto-prune enabled: client_receptions older than %d days will be removed daily", clientRxDays)
 	}
 
 	// Hourly WAL checkpoint to prevent unbounded WAL growth.
@@ -532,6 +559,21 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 
 	var msg map[string]interface{}
 	if err := json.Unmarshal(m.Payload(), &msg); err != nil {
+		return
+	}
+
+	// Mobile client RX coverage: dedicated topic meshcore/client/{PUBLIC_KEY}/packets.
+	// A roaming companion reports where it directly heard a node; handled in isolation
+	// from the observer/observations path. EMQX ACL binds parts[2] to the client's own key.
+	if cfg.ClientRxCoverageEnabled() && len(parts) >= 4 && parts[1] == "client" && parts[3] == "packets" {
+		// The observer blacklist (checked below) only runs on the observer path,
+		// so a blacklisted operator could otherwise skirt it via the client topic
+		// (#1). Enforce it here before any coverage write.
+		if cfg.IsObserverBlacklisted(parts[2]) {
+			log.Printf("MQTT [%s] client %.8s blacklisted, dropping", tag, parts[2])
+			return
+		}
+		handleClientPacket(store, tag, parts[2], msg, channelKeys)
 		return
 	}
 

@@ -426,6 +426,17 @@ func main() {
 	log.Printf("[bridge-recompute] background recompute enabled (interval=%s)",
 		cfg.AnalyticsDefaultRecomputeInterval())
 
+	// Steady-state coverage + redundancy recomputer (issue #672 axes 3 & 4).
+	// Computes harmonic-reach coverage and articulation-point redundancy over
+	// the same neighbor graph as the bridge axis, storing both per-pubkey
+	// maps atomically. Read by handleNodes via single atomic loads.
+	stopUsefulnessAxesRecomp := store.StartUsefulnessAxesRecomputer(
+		cfg.AnalyticsDefaultRecomputeInterval(),
+	)
+	defer stopUsefulnessAxesRecomp()
+	log.Printf("[usefulness-axes-recompute] background recompute enabled (interval=%s)",
+		cfg.AnalyticsDefaultRecomputeInterval())
+
 	// Steady-state neighbor-graph snapshot recomputer (issue #1287).
 	// Per Option 4: the ingestor owns neighbor_edges; the server
 	// READS the snapshot every 60s and atomic-swaps it into s.graph.

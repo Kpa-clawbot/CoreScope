@@ -23,7 +23,18 @@ UPDATE transmissions SET first_seen = strftime('%Y-%m-%dT%H:%M:%SZ', first_seen,
   (SELECT printf('+%d seconds', CAST((julianday('now') - julianday(MAX(first_seen))) * 86400 AS INTEGER)) FROM transmissions)
 ) WHERE first_seen IS NOT NULL;
 
--- Sync observations.timestamp (Unix seconds) to match their transmission's freshened first_seen.
+-- Shift all real (non-zero) observation timestamps (Unix seconds) forward so the
+-- newest is ~now, preserving relative ordering — same approach as the columns
+-- above. Per-node reach (/api/nodes/{pk}/reach?days=N) filters on
+-- observations.timestamp >= sinceEpoch, so without this the fixture's observations
+-- age out of the window ~N days after capture and reach returns no links (the
+-- #1630 reach-mobile e2e then can't find a repeater with reach and fails). The
+-- subquery is uncorrelated, so SQLite evaluates MAX once on the pre-update state.
+UPDATE observations SET timestamp = timestamp +
+  (SELECT CAST(strftime('%s', 'now') AS INTEGER) - MAX(timestamp) FROM observations WHERE timestamp > 0)
+WHERE timestamp > 0;
+
+-- Sync observations.timestamp to match their transmission's freshened first_seen.
 -- Observations with timestamp=0 break the SQL since-filter in buildTransmissionWhere.
 UPDATE observations SET timestamp = CAST(strftime('%s',
   (SELECT first_seen FROM transmissions WHERE id = transmission_id)

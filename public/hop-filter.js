@@ -40,6 +40,23 @@
     return s.length >> 1;
   }
 
+  // Packet-level path-hash size (1|2|3), or 0 when unresolvable.
+  // Reads the path-length byte from raw_hex; its top two bits encode
+  // hashSize-1. Offset is 5 for transport routes (route_type 0/3, which
+  // carry 4 next/last-hop code bytes before path-length) else 1 — mirrors
+  // getPathLenOffset()/computeBreakdownRanges() in public/app.js. Reading
+  // from raw_hex (not path hops) is correct even for zero-hop packets.
+  function packetHashSize(rawHex, routeType) {
+    if (!rawHex || typeof rawHex !== 'string') return 0;
+    var clean = rawHex.replace(/\s+/g, '');
+    var bytes = clean.length >> 1;
+    var offset = (routeType === 0 || routeType === 3) ? 5 : 1;
+    if (bytes < offset + 1) return 0;
+    var pathByte = parseInt(clean.slice(offset * 2, offset * 2 + 2), 16);
+    if (isNaN(pathByte)) return 0;
+    return (pathByte >> 6) + 1;
+  }
+
   // Render-time predicate. opts may be omitted — if so, falls back to the
   // current localStorage value. The hop is hidden only when:
   //   - opts.hide1ByteHops === true AND
@@ -77,6 +94,7 @@
     window.MC_isVisibleHop = isVisibleHop;
     window.MC_filterPathHops = filterPathHops;
     window.MC_hopByteLen = hopByteLen;
+    window.MC_packetHashSize = packetHashSize;
   }
 
   if (typeof module !== 'undefined' && module.exports) {
@@ -86,6 +104,7 @@
       isVisibleHop: isVisibleHop,
       filterPathHops: filterPathHops,
       hopByteLen: hopByteLen,
+      packetHashSize: packetHashSize,
       _STORAGE_KEY: STORAGE_KEY
     };
   }

@@ -48,6 +48,39 @@ func (s *Store) PruneOldPackets(days int) (int64, error) {
 	return n, nil
 }
 
+// PruneOldClientReceptions deletes mobile client-RX coverage rows older than
+// `days` (by rx_at), and client_observers (companion names) whose last_seen has
+// aged out. This bounds the otherwise-unbounded client_receptions table the
+// opt-in coverage feature feeds. 0 disables. Owned by the ingestor writer
+// (#1283). Returns the number of client_receptions rows deleted.
+func (s *Store) PruneOldClientReceptions(days int) (int64, error) {
+	if days <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339)
+
+	var n int64
+	err := s.WriterTx("prune_client_receptions", func(tx *sql.Tx) error {
+		res, err := tx.Exec(`DELETE FROM client_receptions WHERE rx_at < ?`, cutoff)
+		if err != nil {
+			return fmt.Errorf("prune client_receptions: %w", err)
+		}
+		n, _ = res.RowsAffected()
+		// Drop companion name rows not refreshed within the window.
+		if _, err := tx.Exec(`DELETE FROM client_observers WHERE last_seen < ?`, cutoff); err != nil {
+			return fmt.Errorf("prune client_observers: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	if n > 0 {
+		log.Printf("[prune] deleted %d client_receptions older than %d days", n, days)
+	}
+	return n, nil
+}
+
 // SoftDeleteBlacklistedObservers marks observers in the blacklist as
 // inactive=1 so they are hidden from API responses. Owned by ingestor
 // per #1287. Runs once at startup.

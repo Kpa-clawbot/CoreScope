@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sort"
 	"strings"
 	"time"
 )
@@ -26,6 +27,40 @@ type RepeaterRelayInfo struct {
 	// RelayCount24h is the count of distinct non-advert packets where this
 	// pubkey appeared as a relay hop in the last 24 hours.
 	RelayCount24h int `json:"relayCount24h"`
+	// TransportedScopes is the deduplicated, sorted set of region scope
+	// names (transmissions.scope_name) across ALL non-advert packets in
+	// which this pubkey appears as a path hop. Unlike RelayCount1h/24h this
+	// is NOT time-windowed — it answers "which region scopes has this
+	// repeater carried traffic for, ever (within the in-memory window)".
+	// Empty/absent on schemas without scope_name (#1751).
+	TransportedScopes []string `json:"transportedScopes,omitempty"`
+}
+
+// maxTransportedScopes bounds the per-node TransportedScopes list so a
+// misbehaving sender flooding distinct scope_name values through a single
+// repeater cannot inflate the node JSON unboundedly (#1751 review follow-up).
+// Real region-scope counts are small; this is a defensive ceiling. When the
+// set exceeds the cap the lexicographically-first names are kept, so the
+// result stays deterministic.
+const maxTransportedScopes = 32
+
+// sortedCappedScopes converts a scope set into a sorted, length-capped slice,
+// or nil when the set is empty/nil — so routes.go omits the JSON field via
+// `omitempty`. Shared by the bulk (computeRepeaterRelayInfoMap) and per-node
+// (computeRelayInfoFromEntries) paths to keep them in exact parity.
+func sortedCappedScopes(set map[string]struct{}) []string {
+	if len(set) == 0 {
+		return nil
+	}
+	scopes := make([]string, 0, len(set))
+	for s := range set {
+		scopes = append(scopes, s)
+	}
+	sort.Strings(scopes)
+	if len(scopes) > maxTransportedScopes {
+		scopes = scopes[:maxTransportedScopes]
+	}
+	return scopes
 }
 
 // payloadTypeAdvert is the MeshCore payload type for ADVERT packets.
@@ -62,6 +97,9 @@ func parseRelayTS(ts string) (time.Time, bool) {
 type relayEntry struct {
 	ts string
 	pt int
+	// scope is the tx's region scope name (transmissions.scope_name).
+	// Empty when absent / on older schemas. Used for TransportedScopes (#1751).
+	scope string
 }
 
 // collectRelayEntriesLocked returns deduplicated relayEntry snapshots for
@@ -105,7 +143,7 @@ func (s *PacketStore) collectRelayEntriesLocked(key string) []relayEntry {
 			if tx.PayloadType != nil {
 				pt = *tx.PayloadType
 			}
-			entries = append(entries, relayEntry{ts: tx.FirstSeen, pt: pt})
+			entries = append(entries, relayEntry{ts: tx.FirstSeen, pt: pt, scope: tx.ScopeName})
 		}
 	}
 	collect(txList)
@@ -124,10 +162,20 @@ func computeRelayInfoFromEntries(entries []relayEntry, windowHours float64) Repe
 
 	var latest time.Time
 	var latestRaw string
+	var scopeSet map[string]struct{}
 	for _, e := range entries {
 		// Self-originated adverts are not relay activity.
 		if e.pt == payloadTypeAdvert {
 			continue
+		}
+		// #1751: accumulate transported scopes BEFORE the timestamp gate —
+		// a non-advert path-hop tx proves scope transport even if its
+		// first_seen is unparseable. Mirrors the bulk path.
+		if e.scope != "" {
+			if scopeSet == nil {
+				scopeSet = map[string]struct{}{}
+			}
+			scopeSet[e.scope] = struct{}{}
 		}
 		t, ok := parseRelayTS(e.ts)
 		if !ok {
@@ -144,6 +192,9 @@ func computeRelayInfoFromEntries(entries []relayEntry, windowHours float64) Repe
 			}
 		}
 	}
+	// #1751: emit transported scopes regardless of whether any timestamp
+	// parsed, and before the latestRaw early-return below.
+	info.TransportedScopes = sortedCappedScopes(scopeSet)
 	if latestRaw == "" {
 		return info
 	}

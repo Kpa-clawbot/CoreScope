@@ -3,6 +3,7 @@ package dbschema
 import (
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -159,4 +160,96 @@ func contains(haystack, needle string) bool {
 		}
 	}
 	return false
+}
+
+// TestPartialIdxTxLastSeenZero_BackfillMaxUsesPartialIndex pins the planner
+// choice for issue #1740: the backfill MAX lookup
+//
+//	SELECT MAX(id) FROM transmissions WHERE last_seen = 0
+//
+// (and the chunked-backfill scan that walks WHERE last_seen=0 in id order)
+// MUST use the partial index `idx_tx_last_seen_zero` introduced in #1740.
+// The pre-fix full `idx_tx_last_seen` covers ALL rows (including the long
+// tail where last_seen != 0 after backfill converges), so it grows with
+// every transmission ever ingested. The partial index degenerates to the
+// "unprocessed" hot subset and stays out of the page cache in steady state.
+//
+// Failure mode this test guards against:
+//   - regressing to a full-table SCAN (no index)
+//   - keeping the legacy full `idx_tx_last_seen` and letting the planner
+//     reach for it instead of the partial
+func TestPartialIdxTxLastSeenZero_BackfillMaxUsesPartialIndex(t *testing.T) {
+	db := minimalDB(t)
+	defer db.Close()
+
+	if err := Apply(db, nil); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	// Insert a handful of rows so the planner has something to weigh —
+	// SQLite's planner short-circuits empty tables to "SCAN CONSTANT ROW"
+	// which would mask a missing/wrong index.
+	for i := 0; i < 16; i++ {
+		_, err := db.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, last_seen)
+			VALUES (?, ?, '2026-01-01T00:00:00Z', ?)`,
+			"00", "h"+string(rune('a'+i)), int64(i%2)) // half last_seen=0, half last_seen=1
+		if err != nil {
+			t.Fatalf("seed insert: %v", err)
+		}
+	}
+	if _, err := db.Exec(`ANALYZE`); err != nil {
+		t.Fatalf("ANALYZE: %v", err)
+	}
+
+	// The backfill-MAX lookup — the exact shape the chunked backfill uses
+	// to find the next batch of unprocessed ids.
+	rows, err := db.Query(`EXPLAIN QUERY PLAN SELECT MAX(id) FROM transmissions WHERE last_seen = 0`)
+	if err != nil {
+		t.Fatalf("EXPLAIN QUERY PLAN: %v", err)
+	}
+	defer rows.Close()
+	plan := ""
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatalf("scan plan: %v", err)
+		}
+		plan += detail + "\n"
+	}
+	t.Logf("backfill MAX plan:\n%s", plan)
+
+	if !strings.Contains(plan, "idx_tx_last_seen_zero") {
+		t.Fatalf("backfill MAX lookup must use partial index idx_tx_last_seen_zero (#1740); plan was:\n%s", plan)
+	}
+	// Defense-in-depth: the legacy full index must NOT be the one used,
+	// and ideally must not even exist post-migration (the gated DROP
+	// covers that — see TestPartialIdxTxLastSeenZero_FullIndexDropped).
+	if strings.Contains(plan, "idx_tx_last_seen ") || strings.HasSuffix(strings.TrimSpace(plan), "idx_tx_last_seen") {
+		t.Fatalf("backfill MAX lookup should NOT use legacy full idx_tx_last_seen (#1740); plan was:\n%s", plan)
+	}
+}
+
+// TestPartialIdxTxLastSeenZero_FullIndexDropped asserts the gated DROP
+// migration ran after the partial index was created (#1740 step b).
+func TestPartialIdxTxLastSeenZero_FullIndexDropped(t *testing.T) {
+	db := minimalDB(t)
+	defer db.Close()
+	if err := Apply(db, nil); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	// Confirm the partial exists (precondition for the DROP gate).
+	var partialName string
+	err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='index' AND name='idx_tx_last_seen_zero'`).Scan(&partialName)
+	if err != nil {
+		t.Fatalf("idx_tx_last_seen_zero must exist after Apply (#1740): %v", err)
+	}
+
+	// Legacy full index must be gone after Apply (gated DROP).
+	var legacyName string
+	err = db.QueryRow(`SELECT name FROM sqlite_master WHERE type='index' AND name='idx_tx_last_seen'`).Scan(&legacyName)
+	if err == nil {
+		t.Fatalf("legacy idx_tx_last_seen must be dropped after partial index is in place (#1740); still present as %q", legacyName)
+	}
 }

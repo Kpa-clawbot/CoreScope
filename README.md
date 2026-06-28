@@ -270,4 +270,4 @@ Contributions welcome. Please read [AGENTS.md](AGENTS.md) for coding conventions
 
 ## License
 
-MIT
+GPL-3.0-or-later

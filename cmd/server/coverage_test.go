@@ -30,7 +30,7 @@ func setupTestDBv2(t *testing.T) *DB {
 		CREATE TABLE nodes (
 			public_key TEXT PRIMARY KEY, name TEXT, role TEXT,
 			lat REAL, lon REAL, last_seen TEXT, first_seen TEXT, advert_count INTEGER DEFAULT 0,
-			battery_mv INTEGER, temperature_c REAL
+			battery_mv INTEGER, temperature_c REAL, foreign_advert INTEGER DEFAULT 0
 		);
 		CREATE TABLE observers (
 			id TEXT PRIMARY KEY, name TEXT, iata TEXT, last_seen TEXT, first_seen TEXT,

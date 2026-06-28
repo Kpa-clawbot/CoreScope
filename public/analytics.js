@@ -406,7 +406,7 @@
       <div class="analytics-row">
         <div class="analytics-card flex-1">
           <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Relay Airtime Share</h3>
-          <p class="text-muted" style="margin-top:-4px;font-size:12px">Score = payload bytes × distinct repeaters that forwarded the packet. Counts relay re-transmissions; originator TX excluded. Not comparable across meshes.</p>
+          <p class="text-muted" style="margin-top:-4px;font-size:12px">Score = LoRa Time-on-Air × distinct repeaters that forwarded the packet (issue #1768). Counts relay re-transmissions; originator TX excluded. Not comparable across meshes — see preset caption below.</p>
           ${renderRelayAirtimeDumbbell(d.airtimeData)}
         </div>
       </div>
@@ -474,9 +474,33 @@
     if (totalScore <= 0) {
       return '<div class="text-muted" style="padding:20px">No relay activity observed in this window (all packets direct).</div>';
     }
+    // Issue #1768 — surface the LoRa preset baked into the ToA score. Share
+    // numbers are only meaningful relative to one PHY preset; operators must
+    // know what was assumed. All fields are run through esc() defensively
+    // (preset.sf/cr/preamble/bw_khz/freq_hz arrive from the server JSON,
+    // which the operator can configure — never inject untrusted text raw).
+    // BW formatted consistent with home.js / customize-v2.js presets
+    // (e.g. `62.5 kHz`, `125 kHz`) — strip trailing `.0` for integer kHz.
+    var preset = data && data.preset;
+    var presetCaption = '';
+    if (preset && typeof preset === 'object') {
+      var freqMHz = Number(preset.freq_hz || 0) / 1e6;
+      var bwKhz = Number(preset.bw_khz || 0);
+      var bwStr = bwKhz ? bwKhz.toFixed(1).replace(/\.0$/, '') : '0';
+      presetCaption =
+        '<div class="dumbbell-preset text-muted" style="font-size:11px;padding:0 4px 6px 4px">' +
+        'Assumed LoRa preset: ' +
+        (freqMHz ? esc(freqMHz.toFixed(3)) + ' MHz / ' : '') +
+        'BW ' + esc(bwStr) + ' kHz / ' +
+        'SF ' + esc(String(Number(preset.sf || 0))) + ' / ' +
+        'CR 4/' + esc(String(Number(preset.cr || 0))) +
+        ' (preamble ' + esc(String(Number(preset.preamble || 0))) + ' sym)' +
+        '</div>';
+    }
     // Layout: per row → label | track 0..100% | values
     var palette = ['#ef4444','#f59e0b','#22c55e','#3b82f6','#8b5cf6','#ec4899','#14b8a6','#64748b','#f97316','#06b6d4','#84cc16'];
     var html = '<div class="dumbbell-chart" style="display:flex;flex-direction:column;gap:8px;padding:8px 4px">';
+    if (presetCaption) html += presetCaption;
     rows.forEach(function (r, i) {
       var name = r.payload_type || 'UNK';
       var cnt = Number(r.count || 0);
@@ -487,11 +511,18 @@
       var loPct = Math.min(cpct, apct);
       var hiPct = Math.max(cpct, apct);
       // Tooltip per row — payload_type, count %, count N, airtime %, raw score, caveat.
+      // Score is summed (ToA in ns) × distinct repeaters across packets of
+      // this type; converted to ms for human-readable display per #1768
+      // round-1 review.
+      var scoreMs = score / 1e6;
+      var scoreStr = scoreMs >= 1000
+        ? (scoreMs / 1000).toFixed(2) + ' s'
+        : scoreMs.toFixed(2) + ' ms';
       var tip =
         name + '\n' +
         'Count: ' + cnt.toLocaleString() + ' (' + cpct.toFixed(2) + '%)\n' +
-        'Airtime: ' + apct.toFixed(2) + '% (score ' + score.toLocaleString() + ')\n' +
-        'Score = bytes × distinct repeaters. Within-mesh only.';
+        'Airtime: ' + apct.toFixed(2) + '% (score ' + scoreStr + ' · airtime × repeaters)\n' +
+        'Score = LoRa Time-on-Air × distinct repeaters. Within-mesh only.';
       html += '<div class="dumbbell-row" title="' + esc(tip) + '" style="display:grid;grid-template-columns:80px 1fr 180px;align-items:center;gap:10px;font-size:12px">' +
         '<div class="dumbbell-label" style="font-weight:600;color:var(--text)">' + esc(name) + '</div>' +
         '<div class="dumbbell-track" style="position:relative;height:18px;background:var(--bg-elev,rgba(127,127,127,0.12));border-radius:9px">' +
@@ -2487,16 +2518,19 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
       </div>`;
 
     // Role checkboxes
+    // #1715 — swatches use `.role-swatch--{role}` classes that read the
+    // per-theme `--role-*` CSS tokens (public/style.css). The previous
+    // inline `style="color:${ROLE_COLORS[r]}"` bypassed dark-theme
+    // overrides and failed WCAG AA on #1a1a2e. Do NOT reintroduce inline
+    // color hex here.
     const roles = ['repeater','companion','room','sensor'];
     const rcEl = document.getElementById('ngRoleChecks');
     roles.forEach(r => {
-      const color = (window.ROLE_COLORS || {})[r] || '#888';
-      rcEl.innerHTML += `<label style="font-size:12px;margin-right:8px"><input type="checkbox" data-role="${r}" checked> <span style="color:${esc(color)}">${esc(r)}</span></label>`;
+      rcEl.innerHTML += `<label style="font-size:12px;margin-right:8px"><input type="checkbox" data-role="${r}" checked> <span class="role-swatch role-swatch--${r}">${esc(r)}</span></label>`;
     });
     // Observer checkbox — unchecked by default (observers create hub-and-spoke noise)
     {
-      const color = (window.ROLE_COLORS || {}).observer || '#8b5cf6';
-      rcEl.innerHTML += `<label style="font-size:12px;margin-right:8px"><input type="checkbox" data-role="observer"> <span style="color:${esc(color)}">observer</span></label>`;
+      rcEl.innerHTML += `<label style="font-size:12px;margin-right:8px"><input type="checkbox" data-role="observer"> <span class="role-swatch role-swatch--observer">observer</span></label>`;
     }
 
     // Load data

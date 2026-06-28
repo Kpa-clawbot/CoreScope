@@ -30,6 +30,10 @@ require github.com/meshcore-analyzer/dbschema v0.0.0
 
 replace github.com/meshcore-analyzer/dbschema => ../../internal/dbschema
 
+require github.com/meshcore-analyzer/lora v0.0.0
+
+replace github.com/meshcore-analyzer/lora => ../../internal/lora
+
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
