@@ -2834,6 +2834,10 @@
     // data_type(uint16 LE) + data_len(1) + blob (firmware BaseChatMesh.cpp:382-385).
     if (decoded.type === 'GRP_DATA' && decoded.channelHash != null) {
       const hashHex = decoded.channelHashHex || decoded.channelHash.toString(16).padStart(2, '0').toUpperCase();
+      // #1796 r1 DRY: all three GRP_DATA branches below share the same
+      // database-icon + `Ch 0x${hashHex}` prefix. Extract once; behavior is
+      // byte-identical with the prior inline form.
+      const prefix = `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-database"/></svg> Ch 0x${hashHex}`;
       // Happy path: decrypted with a parsed inner header (dataType present, no parse error).
       // Per firmware/src/helpers/BaseChatMesh.cpp:387 a data_len of 0 is a LEGITIMATE
       // empty datagram (the firmware only drops data_len > available_len). Backend
@@ -2846,7 +2850,7 @@
         const dl = decoded.dataLen != null ? Number(decoded.dataLen) : 0;
         const blob = decoded.decryptedBlob || '';
         const blobBlock = blob ? ` <code>${escapeHtml(blob.length > 32 ? blob.slice(0, 32) + '…' : blob)}</code>` : '';
-        return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-database"/></svg> Ch 0x${hashHex} <span class="muted">type=0x${dt} len=${dl}</span>${blobBlock}`;
+        return `${prefix} <span class="muted">type=0x${dt} len=${dl}</span>${blobBlock}`;
       }
       // #1796 polish: decrypted-but-malformed branch. Backend leaves
       // status='decrypted' for two failure modes (decoder.go:619-654):
@@ -2855,12 +2859,12 @@
       // Without this explicit branch we would either lie ('encrypted') or
       // render a misleading "type=0xNN len=N" header with an empty <code></code>.
       if (decoded.decryptionStatus === 'decrypted') {
-        return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-database"/></svg> Ch 0x${hashHex} <span class="muted">(decrypted, malformed)</span>`;
+        return `${prefix} <span class="muted">(decrypted, malformed)</span>`;
       }
       const statusLabel = decoded.decryptionStatus === 'no_key' ? 'no key'
         : decoded.decryptionStatus === 'decryption_failed' ? 'decryption failed'
         : 'encrypted';
-      return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-database"/></svg> Ch 0x${hashHex} <span class="muted">(${statusLabel})</span>`;
+      return `${prefix} <span class="muted">(${statusLabel})</span>`;
     }
     // Direct messages
     if (decoded.type === 'TXT_MSG') return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-envelope"/></svg> ${decoded.srcHash?.slice(0,8) || '?'} → ${decoded.destHash?.slice(0,8) || '?'}`;
