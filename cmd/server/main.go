@@ -321,6 +321,7 @@ func main() {
 
 	// WebSocket hub
 	hub := NewHub()
+	hub.SetAllowedOrigins(cfg.CORSAllowedOrigins)
 	hub.upgrader.EnableCompression = cfg.WSCompressionEnabled()
 
 	// HTTP server
