@@ -456,8 +456,11 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 				RSSI:           nullFloatPtr(rssi),
 				Score:          nullIntPtr(score),
 				PathJSON:       obsPJ,
-				RawHex:         nullStrVal(obsRawHex),
-				Timestamp:      normalizeTimestamp(nullStrVal(obsTimestamp)),
+				// obs.RawHex deliberately NOT stored: it duplicates the parent
+				// tx.RawHex (same content hash ⇒ same frame) and enrichObs falls
+				// back to tx.RawHex when obs.RawHex == "". obsRawHex is still
+				// scanned to keep scanArgs aligned with the o.raw_hex column.
+				Timestamp: normalizeTimestamp(nullStrVal(obsTimestamp)),
 			}
 
 			rpStr := nullStrVal(resolvedPathStr)
