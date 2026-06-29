@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -13,9 +14,63 @@ import (
 
 // Hub manages WebSocket clients and broadcasts.
 type Hub struct {
-	mu       sync.RWMutex
-	clients  map[*Client]bool
-	upgrader websocket.Upgrader
+	mu             sync.RWMutex
+	clients        map[*Client]bool
+	upgrader       websocket.Upgrader
+	allowedOrigins []string // exact-match allowlist for /ws CheckOrigin (see SetAllowedOrigins)
+}
+
+// SetAllowedOrigins configures the exact-match origin allowlist consulted by
+// the WebSocket upgrader's CheckOrigin. The "*" wildcard is deliberately NOT
+// honored here (it IS honored by the HTTP CORS middleware): OWASP's
+// WebSocket Security Cheat Sheet recommends an explicit allowlist for CSWSH
+// defense. If "*" appears in the slice, it is ignored and a startup WARN is
+// logged once per call.
+//
+// See: https://cheatsheetseries.owasp.org/cheatsheets/WebSocket_Security_Cheat_Sheet.html
+func (h *Hub) SetAllowedOrigins(origins []string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.allowedOrigins = append(h.allowedOrigins[:0], origins...)
+	for _, o := range origins {
+		if o == "*" {
+			log.Println(`[ws] WARNING: CORSAllowedOrigins contains "*" — CORS allows any origin for XHR, but /ws upgrade enforces explicit allowlist only (OWASP CSWSH guidance). Add specific origins to allow cross-origin WebSocket clients.`)
+			break
+		}
+	}
+}
+
+// checkOrigin is the gorilla/websocket Upgrader.CheckOrigin hook. Rules:
+//   - empty Origin header → allow (non-browser client; rate-limit / IP gate
+//     is handled separately, see #1794).
+//   - Origin host == request Host (same-origin) → allow.
+//   - Origin in allowedOrigins by exact case-insensitive match → allow.
+//   - "*" in allowedOrigins is ignored (see SetAllowedOrigins).
+//   - anything else → reject (gorilla returns 403).
+func (h *Hub) checkOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	if strings.EqualFold(u.Host, r.Host) {
+		return true
+	}
+	h.mu.RLock()
+	allowed := h.allowedOrigins
+	h.mu.RUnlock()
+	for _, o := range allowed {
+		if o == "*" {
+			continue // deliberately not honored — see SetAllowedOrigins
+		}
+		if strings.EqualFold(o, origin) {
+			return true
+		}
+	}
+	return false
 }
 
 // Client is a single WebSocket connection.
@@ -26,14 +81,15 @@ type Client struct {
 }
 
 func NewHub() *Hub {
-	return &Hub{
+	h := &Hub{
 		clients: make(map[*Client]bool),
-		upgrader: websocket.Upgrader{
-			ReadBufferSize:  1024,
-			WriteBufferSize: 4096,
-			CheckOrigin:     func(r *http.Request) bool { return true },
-		},
 	}
+	h.upgrader = websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 4096,
+		CheckOrigin:     h.checkOrigin,
+	}
+	return h
 }
 
 func (h *Hub) ClientCount() int {
