@@ -6,6 +6,22 @@
  * live.js legend) consume this map so the same payload reads identically
  * everywhere the operator sees it.
  *
+ * ABBREVIATION POLICY (#1799 PR #1804 r1 item 5):
+ *   - `short` is the compact label that appears in dropdowns, table cells,
+ *     legend titles, badges. Policy is <=12 characters, Title Case, with
+ *     ONE documented exception: 'ACK' (wire-protocol acronym). Abbreviate
+ *     only when the un-abbreviated form would exceed the cap or would be
+ *     ambiguous (e.g. 'Direct Msg' for 'Direct Message'). Apply the same
+ *     contraction rule across all entries — do not mix 'Direct Msg' with
+ *     'Channel Message'.
+ *   - `long` is the descriptive sentence used in tooltips and legend
+ *     sub-text. It MUST describe the packet's purpose/behaviour, NOT
+ *     echo the short label. Reviewers reject `Path — Path discovery`-
+ *     shaped tautologies.
+ *   - When adding a new enum: pick a short that obeys the policy, then
+ *     write a long that a new operator could read aloud and learn what
+ *     the packet is for.
+ *
  * Keyed by the firmware enum name; values carry:
  *   enumName   — firmware enum name (mirrors the key; #1799 r1 item 9)
  *   short      — compact label used in dropdowns, table cells, legend titles
@@ -19,22 +35,24 @@
   'use strict';
 
   // PAYLOAD_LABELS — every entry carries enumName for shape uniformity with
-  // BY_ID (#1799 r1 item 9).
+  // BY_ID (#1799 r1 item 9). `long` values are behavioural descriptions
+  // (PR #1804 r1 item 2 / tufte2). Source for semantics: cmd/server/
+  // decoder.go + cmd/ingestor/decoder.go + firmware Packet.h enum.
   var PAYLOAD_LABELS = {
-    REQ:        { enumName: 'REQ',        short: 'Request',     long: 'Data request',                enumId: 0  },
-    RESPONSE:   { enumName: 'RESPONSE',   short: 'Response',    long: 'Data response',               enumId: 1  },
-    TXT_MSG:    { enumName: 'TXT_MSG',    short: 'Direct Msg',  long: 'Direct message',              enumId: 2  },
-    ACK:        { enumName: 'ACK',        short: 'ACK',         long: 'Acknowledgment',              enumId: 3,
+    REQ:        { enumName: 'REQ',        short: 'Request',     long: 'Encrypted data request to a remote node',               enumId: 0  },
+    RESPONSE:   { enumName: 'RESPONSE',   short: 'Response',    long: 'Encrypted data response from a remote node',            enumId: 1  },
+    TXT_MSG:    { enumName: 'TXT_MSG',    short: 'Direct Msg',  long: 'Encrypted point-to-point text message',                 enumId: 2  },
+    ACK:        { enumName: 'ACK',        short: 'ACK',         long: 'Acknowledgment of a prior message or request',          enumId: 3,
                   legendNote: 'Other \u2014 Acknowledgment or unknown type' },
-    ADVERT:     { enumName: 'ADVERT',     short: 'Advert',      long: 'Node advertisement',          enumId: 4  },
-    GRP_TXT:    { enumName: 'GRP_TXT',    short: 'Channel Msg', long: 'Group text',                  enumId: 5  },
-    GRP_DATA:   { enumName: 'GRP_DATA',   short: 'Group Data',  long: 'Group datagram',              enumId: 6  },
-    ANON_REQ:   { enumName: 'ANON_REQ',   short: 'Anon Req',    long: 'Anonymous request',           enumId: 7  },
-    PATH:       { enumName: 'PATH',       short: 'Path',        long: 'Path discovery',              enumId: 8  },
-    TRACE:      { enumName: 'TRACE',      short: 'Trace',       long: 'Route trace',                 enumId: 9  },
-    MULTIPART:  { enumName: 'MULTIPART',  short: 'Multipart',   long: 'Multi-fragment payload',      enumId: 10 },
-    CONTROL:    { enumName: 'CONTROL',    short: 'Control',     long: 'Control plane',               enumId: 11 },
-    RAW_CUSTOM: { enumName: 'RAW_CUSTOM', short: 'Raw Custom',  long: 'Application-defined payload', enumId: 15 }
+    ADVERT:     { enumName: 'ADVERT',     short: 'Advert',      long: 'Node identity / capability advertisement',              enumId: 4  },
+    GRP_TXT:    { enumName: 'GRP_TXT',    short: 'Channel Msg', long: 'Channel-scoped group text message',                     enumId: 5  },
+    GRP_DATA:   { enumName: 'GRP_DATA',   short: 'Group Data',  long: 'Channel-scoped group datagram (non-text payload)',      enumId: 6  },
+    ANON_REQ:   { enumName: 'ANON_REQ',   short: 'Anon Req',    long: 'Anonymous encrypted request via ephemeral key',         enumId: 7  },
+    PATH:       { enumName: 'PATH',       short: 'Path',        long: 'Network path discovery / return-path advertisement',    enumId: 8  },
+    TRACE:      { enumName: 'TRACE',      short: 'Trace',       long: 'Per-hop route trace with SNR samples',                  enumId: 9  },
+    MULTIPART:  { enumName: 'MULTIPART',  short: 'Multipart',   long: 'Fragmented payload reassembled across multiple packets', enumId: 10 },
+    CONTROL:    { enumName: 'CONTROL',    short: 'Control',     long: 'Mesh control-plane signalling (e.g. zero-hop direct)',  enumId: 11 },
+    RAW_CUSTOM: { enumName: 'RAW_CUSTOM', short: 'Raw Custom',  long: 'Application-defined raw payload, no firmware envelope', enumId: 15 }
   };
 
   // Legend display order (#1799 r1 item 5) — keeps Advert/GRP_TXT/TXT_MSG up

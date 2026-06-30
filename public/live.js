@@ -1185,20 +1185,20 @@
               // anchor in the instrumented CI build.
               /* istanbul ignore next */
               var INLINE_LABELS = {
-                REQ:        { short: 'Request',     long: 'Data request' },
-                RESPONSE:   { short: 'Response',    long: 'Data response' },
-                TXT_MSG:    { short: 'Direct Msg',  long: 'Direct message' },
-                ACK:        { short: 'ACK',         long: 'Acknowledgment',
+                REQ:        { short: 'Request',     long: 'Encrypted data request to a remote node' },
+                RESPONSE:   { short: 'Response',    long: 'Encrypted data response from a remote node' },
+                TXT_MSG:    { short: 'Direct Msg',  long: 'Encrypted point-to-point text message' },
+                ACK:        { short: 'ACK',         long: 'Acknowledgment of a prior message or request',
                               legendNote: 'Other \u2014 Acknowledgment or unknown type' },
-                ADVERT:     { short: 'Advert',      long: 'Node advertisement' },
-                GRP_TXT:    { short: 'Channel Msg', long: 'Group text' },
-                GRP_DATA:   { short: 'Group Data',  long: 'Group datagram' },
-                ANON_REQ:   { short: 'Anon Req',    long: 'Anonymous request' },
-                PATH:       { short: 'Path',        long: 'Path discovery' },
-                TRACE:      { short: 'Trace',       long: 'Route trace' },
-                MULTIPART:  { short: 'Multipart',   long: 'Multi-fragment payload' },
-                CONTROL:    { short: 'Control',     long: 'Control plane' },
-                RAW_CUSTOM: { short: 'Raw Custom',  long: 'Application-defined payload' }
+                ADVERT:     { short: 'Advert',      long: 'Node identity / capability advertisement' },
+                GRP_TXT:    { short: 'Channel Msg', long: 'Channel-scoped group text message' },
+                GRP_DATA:   { short: 'Group Data',  long: 'Channel-scoped group datagram (non-text payload)' },
+                ANON_REQ:   { short: 'Anon Req',    long: 'Anonymous encrypted request via ephemeral key' },
+                PATH:       { short: 'Path',        long: 'Network path discovery / return-path advertisement' },
+                TRACE:      { short: 'Trace',       long: 'Per-hop route trace with SNR samples' },
+                MULTIPART:  { short: 'Multipart',   long: 'Fragmented payload reassembled across multiple packets' },
+                CONTROL:    { short: 'Control',     long: 'Mesh control-plane signalling (e.g. zero-hop direct)' },
+                RAW_CUSTOM: { short: 'Raw Custom',  long: 'Application-defined raw payload, no firmware envelope' }
               };
               var order = (PL && PL.ORDER) || INLINE_ORDER;
               return order.map(function (k) {
