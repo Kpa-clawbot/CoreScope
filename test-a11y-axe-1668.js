@@ -78,6 +78,7 @@ const ROUTES = [
   '/analytics?tab=clock-health',
   '/analytics?tab=scopes',
   '/analytics?tab=prefix-tool',
+  '/analytics?tab=repeater-metrics',
   '/audio-lab',
 ];
 
@@ -92,7 +93,7 @@ const REGISTERED_PAGES = [
 const REGISTERED_ANALYTICS_TABS = [
   'overview', 'rf', 'topology', 'channels', 'hashsizes', 'collisions',
   'subpaths', 'nodes', 'distance', 'neighbor-graph', 'rf-health',
-  'clock-health', 'roles', 'prefix-tool', 'scopes',
+  'clock-health', 'roles', 'prefix-tool', 'scopes', 'repeater-metrics',
 ];
 
 const THEMES = ['dark', 'light'];
