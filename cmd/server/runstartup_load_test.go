@@ -20,6 +20,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -58,8 +59,11 @@ func TestRunStartupLoad_HotStartupHoursZero_SetsDoneImmediately(t *testing.T) {
 }
 
 // TestRunStartupLoad_LoadChunkedError_SetsFailedTerminal covers B2:
-// when LoadChunked errors, the steady state must be terminal
-// (failed=true) — not the pre-fix (done=false, failed=false).
+// when LoadChunked errors, the steady state must be terminal — both
+// done=true (LoadChunked contract: done is the primary observable
+// signal, see store.go contract block) AND failed=true. The pre-#1811
+// implementation left done=false, leaving healthz wedged on the
+// failure path (dij #1 / adv #7).
 func TestRunStartupLoad_LoadChunkedError_SetsFailedTerminal(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
@@ -88,8 +92,8 @@ func TestRunStartupLoad_LoadChunkedError_SetsFailedTerminal(t *testing.T) {
 	if !store.backgroundLoadFailed.Load() {
 		t.Fatalf("backgroundLoadFailed must be true after LoadChunked error (terminal state)")
 	}
-	if store.backgroundLoadDone.Load() {
-		t.Fatalf("backgroundLoadDone must remain false on LoadChunked error")
+	if !store.backgroundLoadDone.Load() {
+		t.Fatalf("backgroundLoadDone must be true on LoadChunked error (LoadChunked contract: done observable, qualified by failed)")
 	}
 	if store.BackgroundLoadError() == "" {
 		t.Fatalf("BackgroundLoadError must be non-empty after LoadChunked failure")
@@ -208,14 +212,29 @@ func TestLoadBackgroundChunks_PanicsOnOldestLoadedEmpty_Invariant(t *testing.T) 
 	store.oldestLoaded = ""
 	store.mu.Unlock()
 
+	// Override invariantViolation so the test can recover() and
+	// assert the message without log.Fatalf killing the runner
+	// (adv #6: prod uses log.Fatalf for a clean shutdown). Restore on
+	// exit so other tests are unaffected.
+	prev := invariantViolation
+	defer func() { invariantViolation = prev }()
+	invariantViolation = func(msg string) { panic(msg) }
+
 	defer func() {
 		r := recover()
 		if r == nil {
-			t.Fatalf("loadBackgroundChunks must panic when oldestLoaded=\"\" with packets in store (#1809 invariant)")
+			t.Fatalf("loadBackgroundChunks must trip invariantViolation when oldestLoaded=\"\" with packets in store (#1809 invariant)")
 		}
 		msg := fmt.Sprintf("%v", r)
-		if msg == "" {
-			t.Fatalf("panic message must be non-empty")
+		// adv #4: tighten the tripwire — assert the specific invariant
+		// message contains the issue tag so a future refactor that
+		// reuses the panic path for a different bug doesn't silently
+		// satisfy this test.
+		if !strings.Contains(msg, "#1809") {
+			t.Fatalf("invariant message must reference #1809 to gate future regressions; got %q", msg)
+		}
+		if !strings.Contains(msg, "oldestLoaded") {
+			t.Fatalf("invariant message must mention oldestLoaded; got %q", msg)
 		}
 	}()
 	store.loadBackgroundChunks()
