@@ -19,7 +19,13 @@ services:
       - "host.docker.internal:host-gateway"
     ports:
       - "${STAGING_GO_HTTP_PORT:-80}:80"
-      - "${STAGING_GO_MQTT_PORT:-1883}:1883"
+      # Note: host port 1883 is intentionally NOT published here. The
+      # standalone mqtt-broker container (managed out-of-band on the
+      # staging VM) owns MQTT and is reachable to staging-go via the
+      # external "meshcore-net" docker network below. Operators who
+      # need the legacy in-container mosquitto can re-enable it by
+      # setting DISABLE_MOSQUITTO=false in the env, but they should
+      # also add back the host port mapping themselves.
       - "6060:6060"   # pprof server
       - "6061:6061"   # pprof ingestor
     volumes:
@@ -28,14 +34,32 @@ services:
     environment:
       - NODE_ENV=staging
       - ENABLE_PPROF=true
-      - DISABLE_MOSQUITTO=${DISABLE_MOSQUITTO:-false}
+      # Default OFF: the standalone mqtt-broker container owns MQTT on
+      # the staging VM. Override to false only if you intend to run
+      # the legacy in-container mosquitto instead.
+      - DISABLE_MOSQUITTO=${DISABLE_MOSQUITTO:-true}
       - DISABLE_CADDY=${DISABLE_CADDY:-false}
+    networks:
+      # Default compose network for intra-stack DNS (unchanged).
+      default: {}
+      # External network owned by the standalone mqtt-broker container.
+      # Joining it lets staging-go's ingestor resolve "mqtt-broker:1883"
+      # via docker DNS without going through the host.
+      meshcore-net: {}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/stats"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 60s
+
+networks:
+  # Pre-existing external network created and owned by the operator-
+  # managed mqtt-broker container. Declared external so this compose
+  # file never tries to create or destroy it.
+  meshcore-net:
+    external: true
+    name: meshcore-net
 
 volumes:
   # Named volume for Caddy TLS certificates (not user data — managed by Caddy internally)

@@ -94,7 +94,7 @@ func TestStagingCompose_DisableMosquittoDefaultsTrue(t *testing.T) {
 	// Acceptable shapes:
 	//   - DISABLE_MOSQUITTO=${DISABLE_MOSQUITTO:-true}
 	//   - DISABLE_MOSQUITTO=true
-	re := regexp.MustCompile(`DISABLE_MOSQUITTO=(\$\{DISABLE_MOSQUITTO:-true\}|true)\b`)
+	re := regexp.MustCompile(`DISABLE_MOSQUITTO=(\$\{DISABLE_MOSQUITTO:-true\}|true)(?:\s|$)`)
 	if !re.MatchString(block) {
 		t.Fatalf("staging-go DISABLE_MOSQUITTO must default to true (standalone broker is authoritative on staging); block:\n%s", block)
 	}
@@ -104,7 +104,7 @@ func TestStagingCompose_MeshcoreNetExternalDeclared(t *testing.T) {
 	yaml := readStagingCompose(t)
 	// Top-level networks: section must declare meshcore-net as external.
 	// We look for the network name + external: true within a small window.
-	netRe := regexp.MustCompile(`(?s)^networks:\s*\n(?:.*?\n)?\s+meshcore-net:\s*\n(?:\s+.+\n){1,6}`)
+	netRe := regexp.MustCompile(`(?ms)^networks:\s*\n(?:(?:[ \t]+#.*|\s*)\n)*[ \t]+meshcore-net:\s*\n(?:[ \t]+.+\n){1,6}`)
 	m := netRe.FindString(yaml)
 	if m == "" {
 		t.Fatalf("top-level networks: must declare meshcore-net; yaml had no such block")
