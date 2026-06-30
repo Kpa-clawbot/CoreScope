@@ -27,7 +27,6 @@
  *   short      — compact label used in dropdowns, table cells, legend titles
  *   long       — descriptive label used in tooltips and legend sub-text
  *   enumId     — numeric firmware payload_type value (the wire byte)
- *   legendNote — optional sub-string appended to legend text (#1799 r1 item 7)
  *
  * Refs #1799.
  */
@@ -42,8 +41,7 @@
     REQ:        { enumName: 'REQ',        short: 'Request',     long: 'Encrypted data request to a remote node',               enumId: 0  },
     RESPONSE:   { enumName: 'RESPONSE',   short: 'Response',    long: 'Encrypted data response from a remote node',            enumId: 1  },
     TXT_MSG:    { enumName: 'TXT_MSG',    short: 'Direct Msg',  long: 'Encrypted point-to-point text message',                 enumId: 2  },
-    ACK:        { enumName: 'ACK',        short: 'ACK',         long: 'Acknowledgment of a prior message or request',          enumId: 3,
-                  legendNote: 'Other \u2014 Acknowledgment or unknown type' },
+    ACK:        { enumName: 'ACK',        short: 'ACK',         long: 'Acknowledgment of a prior message or request',          enumId: 3  },
     ADVERT:     { enumName: 'ADVERT',     short: 'Advert',      long: 'Node identity / capability advertisement',              enumId: 4  },
     GRP_TXT:    { enumName: 'GRP_TXT',    short: 'Channel Msg', long: 'Channel-scoped group text message',                     enumId: 5  },
     GRP_DATA:   { enumName: 'GRP_DATA',   short: 'Group Data',  long: 'Channel-scoped group datagram (non-text payload)',      enumId: 6  },

@@ -461,11 +461,27 @@
   // renderConfigGlyph() for operators with stored config (back-compat).
   const NODE_EMOJI = { repeater: 'ph:diamond', companion: 'ph:circle-fill', room: 'ph:square-fill', sensor: 'ph:triangle', observer: 'ph:star-fill' };
 
-  const TYPE_LABELS = {
-    ADVERT: 'Advertisement', GRP_TXT: 'Channel Message', TXT_MSG: 'Direct Message', ACK: 'Acknowledgment',
-    REQ: 'Request', RESPONSE: 'Response', TRACE: 'Traceroute', PATH: 'Path',
-    ANON_REQ: 'Anonymous Request'
-  };
+  // PR #1804 r1 item 3 (tufte3): TYPE_LABELS now consumes the canonical
+  // PayloadLabels short labels so the customizer matches every other
+  // surface. Defensive literal fallback mirrors the policy used in
+  // packets.js — drift gate keeps these byte-equal to canonical.
+  const TYPE_LABELS = (function () {
+    const FALLBACK = {
+      ADVERT: 'Advert', GRP_TXT: 'Channel Msg', TXT_MSG: 'Direct Msg', ACK: 'ACK',
+      REQ: 'Request', RESPONSE: 'Response', TRACE: 'Trace', PATH: 'Path',
+      ANON_REQ: 'Anon Req'
+    };
+    const PL = window.PayloadLabels;
+    if (!PL || !PL.SHORT_BY_ID) {
+      console.error('customize.js: window.PayloadLabels missing — using inline TYPE_LABELS fallback.');
+      return FALLBACK;
+    }
+    const out = {};
+    for (const k of Object.keys(FALLBACK)) {
+      out[k] = (PL[k] && PL[k].short) || FALLBACK[k];
+    }
+    return out;
+  })();
   const TYPE_HINTS = {
     ADVERT: 'Node advertisements — map, feed, packet list',
     GRP_TXT: 'Group/channel messages — map, feed, channels',

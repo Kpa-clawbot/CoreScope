@@ -275,7 +275,7 @@ function parseRgbFromCss(token) {
 
 const TYPE_BADGE_MAP_LOCAL = {
   ADVERT: 'advert', GRP_TXT: 'grp-txt', GRP_DATA: 'grp-data', TXT_MSG: 'txt-msg', ACK: 'ack',
-  REQUEST: 'req', RESPONSE: 'response', TRACE: 'trace', PATH: 'path',
+  REQ: 'req', RESPONSE: 'response', TRACE: 'trace', PATH: 'path',
   ANON_REQ: 'anon-req', MULTIPART: 'multipart', CONTROL: 'control', RAW_CUSTOM: 'raw-custom',
   UNKNOWN: 'unknown',
 };

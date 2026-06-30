@@ -328,10 +328,26 @@
   };
   var NODE_EMOJI = { repeater: 'ph:diamond', companion: 'ph:circle-fill', room: 'ph:square-fill', sensor: 'ph:triangle', observer: 'ph:star-fill' };
 
-  var TYPE_LABELS = {
-    ADVERT: 'Advertisement', GRP_TXT: 'Channel Message', TXT_MSG: 'Direct Message', ACK: 'Acknowledgment',
-    REQ: 'Request', RESPONSE: 'Response', TRACE: 'Traceroute', PATH: 'Path', ANON_REQ: 'Anonymous Request'
-  };
+  // PR #1804 r1 item 3 (tufte3): consume canonical PayloadLabels shorts so
+  // the v2 customizer matches every other surface. Defensive literal
+  // fallback mirrors packets.js.
+  var TYPE_LABELS = (function () {
+    var FALLBACK = {
+      ADVERT: 'Advert', GRP_TXT: 'Channel Msg', TXT_MSG: 'Direct Msg', ACK: 'ACK',
+      REQ: 'Request', RESPONSE: 'Response', TRACE: 'Trace', PATH: 'Path',
+      ANON_REQ: 'Anon Req'
+    };
+    var PL = window.PayloadLabels;
+    if (!PL || !PL.SHORT_BY_ID) {
+      console.error('customize-v2.js: window.PayloadLabels missing — using inline TYPE_LABELS fallback.');
+      return FALLBACK;
+    }
+    var out = {};
+    for (var k in FALLBACK) {
+      out[k] = (PL[k] && PL[k].short) || FALLBACK[k];
+    }
+    return out;
+  })();
   var TYPE_HINTS = {
     ADVERT: 'Node advertisements', GRP_TXT: 'Group/channel messages', TXT_MSG: 'Direct messages',
     ACK: 'Acknowledgments', REQ: 'Requests', RESPONSE: 'Responses',

@@ -69,7 +69,9 @@
       case 'RESPONSE':
       case 'ANON_REQ':
         var typeGlyphNames = { 'TXT_MSG': 'ph-envelope', 'REQ': 'ph-lock', 'RESPONSE': 'ph-lock-open', 'ANON_REQ': 'ph-lock' };
-        var typeLabels = { 'TXT_MSG': 'DM', 'REQ': 'REQUEST', 'RESPONSE': 'RESPONSE', 'ANON_REQ': 'ANON REQ' };
+        // PR #1804 r1 item 10: REQ label uses the canonical short
+        // ('Request') instead of the legacy 'REQUEST' caps string.
+        var typeLabels = { 'TXT_MSG': 'DM', 'REQ': 'Request', 'RESPONSE': 'Response', 'ANON_REQ': 'Anon Req' };
         glyph = (typeGlyphNames[t] ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#' + typeGlyphNames[t] + '"/></svg>' : '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle"/></svg>');
         label = typeLabels[t] || t;
         var src = pktCtx.srcResolvedName || (d.srcHash ? 'unknown (hash ' + d.srcHash + ')' : (t === 'ANON_REQ' ? 'anon' : '?'));

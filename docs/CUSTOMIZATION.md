@@ -137,7 +137,7 @@ Affects map markers, packet path badges, node lists, and legends.
     "GRP_TXT": "#3b82f6",
     "TXT_MSG": "#f59e0b",
     "ACK": "#6b7280",
-    "REQUEST": "#a855f7",
+    "REQ": "#a855f7",
     "RESPONSE": "#06b6d4",
     "TRACE": "#ec4899",
     "PATH": "#14b8a6",

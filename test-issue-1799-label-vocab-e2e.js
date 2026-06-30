@@ -90,17 +90,27 @@ async function legendShortLabels(page) {
     const colorToEnum = {};
     for (const k of Object.keys(TYPE_COLORS)) colorToEnum[String(TYPE_COLORS[k]).toLowerCase()] = k;
     for (const li of lis) {
+      // PR #1804 r1 item 4 (tufte4+adv5): rows now carry data-enum, so we
+      // identify by enum directly instead of reverse-mapping via the
+      // shared #6b7280 color (which forced an insertion-order workaround
+      // in roles.js). Fall back to the color path only if data-enum is
+      // missing, for robustness while the change rolls out.
+      const enumAttr = li.getAttribute('data-enum');
       const dot = li.querySelector('.live-dot');
-      if (!dot) continue;
-      const styleAttr = dot.getAttribute('style') || '';
-      const mhex = styleAttr.match(/#([0-9a-f]{3,8})/i);
-      const color = mhex ? ('#' + mhex[1].toLowerCase()) : '';
-      const enumName = colorToEnum[color];
-      if (!enumName) continue;
+      let enumName = enumAttr || '';
+      if (!enumName) {
+        if (!dot) continue;
+        const styleAttr = dot.getAttribute('style') || '';
+        const mhex = styleAttr.match(/#([0-9a-f]{3,8})/i);
+        const color = mhex ? ('#' + mhex[1].toLowerCase()) : '';
+        enumName = colorToEnum[color];
+        if (!enumName) continue;
+      }
       const txt = (li.textContent || '').trim();
-      // Take the prefix before the first em-dash OR slash (ACK has a
-      // "Short / Other — long" shape; everything else uses "Short — long").
-      const parts = txt.split(/\s+(?:\u2014|\/)\s+/);
+      // PR #1804 r1 item 1 (tufte1+adv1): all rows render with the same
+      // em-dash separator now (no slash special-case for ACK), so a
+      // single split rule applies.
+      const parts = txt.split(/\s+\u2014\s+/);
       out[enumName] = parts[0].trim();
     }
     return out;
@@ -178,6 +188,45 @@ async function packetsTypeLabels(page) {
       const got = legend[name];
       assert(got === EXPECTED_SHORT[name],
         `legend[${name}]: expected "${EXPECTED_SHORT[name]}", got "${got}" (full legend: ${JSON.stringify(legend)})`);
+    }
+  });
+
+  await step('every legend row carries data-enum=<ENUM_NAME> (PR #1804 r1 item 4)', async () => {
+    // tufte4+adv5: rows must be identifiable by enum, not by reverse-
+    // mapping the shared #6b7280 color.
+    const rows = await page.evaluate(() => {
+      const el = document.getElementById('liveLegend');
+      if (!el) return [];
+      return Array.from(el.querySelectorAll('.legend-list li')).map(li => ({
+        en: li.getAttribute('data-enum'),
+        text: (li.textContent || '').trim()
+      }));
+    });
+    const enumsSeen = new Set();
+    for (const r of rows) {
+      // Only legend rows with a live-dot are payload-type rows. Other
+      // <li>s (e.g. role legend, ring legend) may not carry data-enum.
+      if (!r.en) continue;
+      enumsSeen.add(r.en);
+    }
+    for (const name of ALL_ENUMS) {
+      assert(enumsSeen.has(name),
+        `data-enum="${name}" missing on legend row (rows=${JSON.stringify(rows)})`);
+    }
+  });
+
+  await step('all legend rows render with the uniform em-dash separator (PR #1804 r1 item 1)', async () => {
+    // tufte1+adv1: ACK row used to render with a slash + 'Other —'
+    // wrapper. Now every row is `SHORT — LONG`.
+    const rows = await page.evaluate(() => {
+      const el = document.getElementById('liveLegend');
+      if (!el) return [];
+      return Array.from(el.querySelectorAll('.legend-list li[data-enum]'))
+        .map(li => (li.textContent || '').trim());
+    });
+    for (const t of rows) {
+      assert(t.indexOf('\u2014') !== -1, `legend row missing em-dash: "${t}"`);
+      assert(t.indexOf(' / ') === -1, `legend row uses slash separator: "${t}"`);
     }
   });
 

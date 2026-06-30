@@ -1188,8 +1188,7 @@
                 REQ:        { short: 'Request',     long: 'Encrypted data request to a remote node' },
                 RESPONSE:   { short: 'Response',    long: 'Encrypted data response from a remote node' },
                 TXT_MSG:    { short: 'Direct Msg',  long: 'Encrypted point-to-point text message' },
-                ACK:        { short: 'ACK',         long: 'Acknowledgment of a prior message or request',
-                              legendNote: 'Other \u2014 Acknowledgment or unknown type' },
+                ACK:        { short: 'ACK',         long: 'Acknowledgment of a prior message or request' },
                 ADVERT:     { short: 'Advert',      long: 'Node identity / capability advertisement' },
                 GRP_TXT:    { short: 'Channel Msg', long: 'Channel-scoped group text message' },
                 GRP_DATA:   { short: 'Group Data',  long: 'Channel-scoped group datagram (non-text payload)' },
@@ -1208,12 +1207,16 @@
                 // (REQUEST→REQ rename). Lookup is direct; no ternary
                 // band-aid.
                 var color = TYPE_COLORS[k] || '#888';
-                // r1 item 7: ACK 'Other — …' copy lives on the canonical
-                // entry as `legendNote`, not hardcoded here.
-                var label = e.legendNote
-                  ? (e.short + ' / ' + e.legendNote)
-                  : (e.short + ' \u2014 ' + e.long);
-                return '<li><span class="live-dot" style="background:' + color + '" aria-hidden="true"></span> ' + label + '</li>';
+                // PR #1804 r1 item 1 (tufte1+adv1): uniform typography
+                // across every legend row — `SHORT — LONG`. Drop the
+                // ACK slash special-case; legendNote is no longer
+                // consulted here. The canonical short ('ACK') and the
+                // behavioural long carry the meaning on their own.
+                var label = e.short + ' \u2014 ' + e.long;
+                // PR #1804 r1 item 4 (tufte4+adv5): emit data-enum so
+                // consumers (E2E, roles.js) can identify the row by
+                // enum without reverse-mapping the shared color.
+                return '<li data-enum="' + k + '"><span class="live-dot" style="background:' + color + '" aria-hidden="true"></span> ' + label + '</li>';
               }).join('');
             })()}
           </ul>

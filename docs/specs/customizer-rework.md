@@ -119,7 +119,7 @@ The user override delta is a sparse object — it only contains fields the user 
     "GRP_TXT": "string — CSS color",
     "TXT_MSG": "string — CSS color",
     "ACK": "string — CSS color",
-    "REQUEST": "string — CSS color",
+    "REQ": "string — CSS color",
     "RESPONSE": "string — CSS color",
     "TRACE": "string — CSS color",
     "PATH": "string — CSS color",
