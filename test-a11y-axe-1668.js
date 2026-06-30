@@ -93,7 +93,7 @@ const REGISTERED_PAGES = [
 const REGISTERED_ANALYTICS_TABS = [
   'overview', 'rf', 'topology', 'channels', 'hashsizes', 'collisions',
   'subpaths', 'nodes', 'distance', 'neighbor-graph', 'rf-health',
-  'clock-health', 'roles', 'prefix-tool', 'scopes',
+  'clock-health', 'roles', 'prefix-tool', 'scopes', 'my-repeaters',
 ];
 
 const THEMES = ['dark', 'light'];
