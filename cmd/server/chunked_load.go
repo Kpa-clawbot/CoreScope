@@ -141,10 +141,6 @@ func (s *PacketStore) RunStartupLoad(chunkSize int) error {
 }
 
 // LoadChunked streams transmissions + observations from SQLite into
-
-// LoadChunked streams transmissions + observations from SQLite into
-
-// LoadChunked streams transmissions + observations from SQLite into
 // the in-memory store in id-ordered chunks of `chunkSize` rows. Pass
 // 0 to use the default (10000).
 //
