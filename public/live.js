@@ -157,6 +157,48 @@
     CONTROL: '#b45309', RAW_CUSTOM: '#c026d3'
   };
 
+  // #1804 r1 item 7 (adv3): legend builder extracted from the live-overlay
+  // template IIFE so it is testable in isolation. See
+  // test-live-legend-helper.js. Emits one <li data-enum="<ENUM>">…</li>
+  // per entry in ORDER, each row formatted as `SHORT — LONG`.
+  //
+  // Inline fallback policy mirrors packets.js / packet-filter.js: if
+  // window.PayloadLabels failed to load we log loud + fall back to a
+  // map that is byte-equal to the canonical one (drift gate in E2E).
+  function buildLegendHtml(PL) {
+    var INLINE_ORDER = ['ADVERT','GRP_TXT','TXT_MSG','REQ','RESPONSE','TRACE','PATH','ANON_REQ','GRP_DATA','MULTIPART','CONTROL','RAW_CUSTOM','ACK'];
+    /* istanbul ignore next */
+    var INLINE_LABELS = {
+      REQ:        { short: 'Request',     long: 'Encrypted data request to a remote node' },
+      RESPONSE:   { short: 'Response',    long: 'Encrypted data response from a remote node' },
+      TXT_MSG:    { short: 'Direct Msg',  long: 'Encrypted point-to-point text message' },
+      ACK:        { short: 'ACK',         long: 'Acknowledgment of a prior message or request' },
+      ADVERT:     { short: 'Advert',      long: 'Node identity / capability advertisement' },
+      GRP_TXT:    { short: 'Channel Msg', long: 'Channel-scoped group text message' },
+      GRP_DATA:   { short: 'Group Data',  long: 'Channel-scoped group datagram (non-text payload)' },
+      ANON_REQ:   { short: 'Anon Req',    long: 'Anonymous encrypted request via ephemeral key' },
+      PATH:       { short: 'Path',        long: 'Network path discovery / return-path advertisement' },
+      TRACE:      { short: 'Trace',       long: 'Per-hop route trace with SNR samples' },
+      MULTIPART:  { short: 'Multipart',   long: 'Fragmented payload reassembled across multiple packets' },
+      CONTROL:    { short: 'Control',     long: 'Mesh control-plane signalling (e.g. zero-hop direct)' },
+      RAW_CUSTOM: { short: 'Raw Custom',  long: 'Application-defined raw payload, no firmware envelope' }
+    };
+    if (!PL) {
+      console.error('live.js buildLegendHtml: window.PayloadLabels missing — payload-labels.js failed to load. Using inline fallback.');
+    }
+    var order = (PL && PL.ORDER) || INLINE_ORDER;
+    return order.map(function (k) {
+      var e = (PL && PL[k] && PL[k].short) ? PL[k] : INLINE_LABELS[k];
+      if (!e) return '';
+      var color = TYPE_COLORS[k] || '#888';
+      var label = e.short + ' \u2014 ' + e.long;
+      return '<li data-enum="' + k + '"><span class="live-dot" style="background:' + color + '" aria-hidden="true"></span> ' + label + '</li>';
+    }).join('');
+  }
+  // Expose for tests + downstream consumers. The unit test reads this
+  // via vm; in-page consumers can pull it off window for debugging.
+  if (typeof window !== 'undefined') { window.buildLegendHtml = buildLegendHtml; }
+
   const PAYLOAD_ICONS = {
     ADVERT: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg>', GRP_TXT: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chat-circle"/></svg>', TXT_MSG: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-envelope"/></svg>', ACK: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg>',
     REQ: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg>', RESPONSE: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-envelope"/></svg>', TRACE: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg>', PATH: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-path"/></svg>'
@@ -1167,58 +1209,7 @@
           <div class="panel-content">
           <h3 class="legend-title">PACKET TYPES</h3>
           <ul class="legend-list">
-            ${(function () {
-              // #1799 — legend labels sourced from canonical PayloadLabels.
-              // r1 item 2: live.js now uses the SAME fallback policy as
-              // packets.js / packet-filter.js (loud console.error + inline
-              // fallback). The inline fallback is asserted-equal to canon
-              // by the E2E (drift gate).
-              var PL = window.PayloadLabels || null;
-              if (!PL) {
-                console.error('live.js: window.PayloadLabels missing — payload-labels.js failed to load. Using inline fallback.');
-              }
-              // r1 item 5: ORDER comes from canonical, not hardcoded.
-              var INLINE_ORDER = ['ADVERT','GRP_TXT','TXT_MSG','REQ','RESPONSE','TRACE','PATH','ANON_REQ','GRP_DATA','MULTIPART','CONTROL','RAW_CUSTOM','ACK'];
-              // /* istanbul ignore next */ keeps `nyc instrument` from
-              // wrapping the literal in `(cov().s[N]++, {...})`, which
-              // would break the E2E's `INLINE_LABELS\s*=\s*\{` regex
-              // anchor in the instrumented CI build.
-              /* istanbul ignore next */
-              var INLINE_LABELS = {
-                REQ:        { short: 'Request',     long: 'Encrypted data request to a remote node' },
-                RESPONSE:   { short: 'Response',    long: 'Encrypted data response from a remote node' },
-                TXT_MSG:    { short: 'Direct Msg',  long: 'Encrypted point-to-point text message' },
-                ACK:        { short: 'ACK',         long: 'Acknowledgment of a prior message or request' },
-                ADVERT:     { short: 'Advert',      long: 'Node identity / capability advertisement' },
-                GRP_TXT:    { short: 'Channel Msg', long: 'Channel-scoped group text message' },
-                GRP_DATA:   { short: 'Group Data',  long: 'Channel-scoped group datagram (non-text payload)' },
-                ANON_REQ:   { short: 'Anon Req',    long: 'Anonymous encrypted request via ephemeral key' },
-                PATH:       { short: 'Path',        long: 'Network path discovery / return-path advertisement' },
-                TRACE:      { short: 'Trace',       long: 'Per-hop route trace with SNR samples' },
-                MULTIPART:  { short: 'Multipart',   long: 'Fragmented payload reassembled across multiple packets' },
-                CONTROL:    { short: 'Control',     long: 'Mesh control-plane signalling (e.g. zero-hop direct)' },
-                RAW_CUSTOM: { short: 'Raw Custom',  long: 'Application-defined raw payload, no firmware envelope' }
-              };
-              var order = (PL && PL.ORDER) || INLINE_ORDER;
-              return order.map(function (k) {
-                var e = (PL && PL[k] && PL[k].short) ? PL[k] : INLINE_LABELS[k];
-                if (!e) return '';
-                // r1 item 6: TYPE_COLORS uses the canonical 'REQ' key
-                // (REQUEST→REQ rename). Lookup is direct; no ternary
-                // band-aid.
-                var color = TYPE_COLORS[k] || '#888';
-                // PR #1804 r1 item 1 (tufte1+adv1): uniform typography
-                // across every legend row — `SHORT — LONG`. Drop the
-                // ACK slash special-case; legendNote is no longer
-                // consulted here. The canonical short ('ACK') and the
-                // behavioural long carry the meaning on their own.
-                var label = e.short + ' \u2014 ' + e.long;
-                // PR #1804 r1 item 4 (tufte4+adv5): emit data-enum so
-                // consumers (E2E, roles.js) can identify the row by
-                // enum without reverse-mapping the shared color.
-                return '<li data-enum="' + k + '"><span class="live-dot" style="background:' + color + '" aria-hidden="true"></span> ' + label + '</li>';
-              }).join('');
-            })()}
+            ${buildLegendHtml(window.PayloadLabels || null)}
           </ul>
           <h3 class="legend-title" style="margin-top:8px">NODE ROLES</h3>
           <ul class="legend-list" id="roleLegendList"></ul>

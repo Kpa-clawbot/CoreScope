@@ -28,17 +28,31 @@ vm.createContext(ctx);
 vm.runInContext(labelsSrc, ctx);
 
 // live.js is a huge file with many module-scope side effects (router,
-// websocket, etc). We only need buildLegendHtml. Extract it by regex
-// and eval in isolation against the canonical PayloadLabels.
-const helperMatch = liveSrc.match(/\/\/ #1804 r1 item 7[\s\S]*?function buildLegendHtml[\s\S]*?\n\s*\}\s*\n/);
-if (!helperMatch) {
+// websocket, etc). We only need buildLegendHtml. Extract it by locating
+// `function buildLegendHtml(...)` and brace-counting to the matching '}'.
+function extractHelper(src) {
+  const startMarker = 'function buildLegendHtml';
+  const idx = src.indexOf(startMarker);
+  if (idx === -1) return null;
+  // find the '{' opening the body
+  let i = src.indexOf('{', idx);
+  if (i === -1) return null;
+  let depth = 0;
+  for (; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}') { depth--; if (depth === 0) { return src.slice(idx, i + 1); } }
+  }
+  return null;
+}
+const helperSrc = extractHelper(liveSrc);
+if (!helperSrc) {
   // Helper hasn't been extracted yet — that's the RED state.
   console.log('  ✗ buildLegendHtml helper not found in public/live.js — extract it (PR #1804 r1 item 7)');
   console.log('=== 0 passed, 1 failed ===');
   process.exit(1);
 }
 vm.runInContext('var TYPE_COLORS = { ADVERT: "#22c55e", GRP_TXT: "#3b82f6", GRP_DATA: "#8b5cf6", TXT_MSG: "#f59e0b", ACK: "#6b7280", REQ: "#a855f7", RESPONSE: "#06b6d4", TRACE: "#ec4899", PATH: "#14b8a6", ANON_REQ: "#f43f5e", MULTIPART: "#0d9488", CONTROL: "#b45309", RAW_CUSTOM: "#c026d3" };', ctx);
-vm.runInContext(helperMatch[0], ctx);
+vm.runInContext(helperSrc, ctx);
 const buildLegendHtml = ctx.buildLegendHtml;
 
 let pass = 0, fail = 0;
@@ -76,8 +90,16 @@ test('every row uses the em-dash separator (uniform typography, item 1)', () => 
   }
 });
 
-test('no slash separator survives', () => {
-  assert(html.indexOf(' / ') === -1, 'unexpected " / " separator in legend html');
+test('no row uses " / " as the SHORT/LONG separator (uniform typography)', () => {
+  // Slashes are fine inside long descriptions (e.g. "path discovery /
+  // return-path advertisement"). Forbid only the legacy `SHORT / Other —`
+  // structure that used to render ACK differently.
+  for (const k of ctx.window.PayloadLabels.ORDER) {
+    const entry = ctx.window.PayloadLabels[k];
+    const badSnippet = entry.short + ' / ';
+    assert(html.indexOf(badSnippet) === -1,
+      k + ': legacy slash-after-short separator survived ("' + badSnippet + '")');
+  }
 });
 
 console.log('=== ' + pass + ' passed, ' + fail + ' failed ===');
