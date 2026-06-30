@@ -105,6 +105,32 @@ func (s *PacketStore) fireChunkCallbacks(rowsThisChunk, totalRows int) {
 	}
 }
 
+// RunStartupLoad orchestrates the startup load sequence:
+//  1. start LoadChunked (async)
+//  2. wait for FirstChunkReady (caller's HTTP listener may bind)
+//  3. spawn the background fill loader (only AFTER LoadChunked completes
+//     and oldestLoaded is set; see issue #1809)
+//
+// chunkSize=0 uses the LoadChunked default. Returns the LoadChunked
+// error (if any).
+//
+// NOTE: this is the PRE-FIX stub. It reproduces issue #1809 by running
+// loadBackgroundChunks before LoadChunked has set s.oldestLoaded. The
+// bg loader then reads oldestLoaded="" and bails immediately → coverage
+// gate trips → backgroundLoadFailed=true. The fix moves bg loader
+// invocation to after LoadChunked completes.
+func (s *PacketStore) RunStartupLoad(chunkSize int) error {
+	// BUG #1809: bg loader runs first, observing oldestLoaded="".
+	if s.hotStartupHours > 0 {
+		s.loadBackgroundChunks()
+	}
+	return s.LoadChunked(chunkSize)
+}
+
+// LoadChunked streams transmissions + observations from SQLite into
+
+// LoadChunked streams transmissions + observations from SQLite into
+
 // LoadChunked streams transmissions + observations from SQLite into
 // the in-memory store in id-ordered chunks of `chunkSize` rows. Pass
 // 0 to use the default (10000).
