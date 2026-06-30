@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"hash/fnv"
 	"log"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,10 +41,27 @@ const disconnectedReconnectMultiplier = 5
 // indicates the watchdog itself is dead.
 var watchdogLastTickUnix atomic.Int64
 
+// watchdogPanicCount (#1810 round-1, Taleb #3) counts recovered panics
+// inside the per-source watchdog work IIFE. A loop that panic-loops
+// every tick currently looks healthy by WatchdogLastTickUnix alone —
+// the tick stamp lands BEFORE the per-source work, so a panic on every
+// source still advances the clock. This counter, surfaced via
+// /api/mqtt/status and the stats snapshot, lets external monitoring
+// alarm on a rapidly-growing value (= the loop is alive but the work
+// is broken).
+var watchdogPanicCount atomic.Int64
+
 // WatchdogLastTickUnix returns the unix-seconds timestamp of the most
 // recent watchdog tick. Returns 0 if the watchdog has never ticked.
 func WatchdogLastTickUnix() int64 {
 	return watchdogLastTickUnix.Load()
+}
+
+// WatchdogPanicCount returns the running total of recovered panics
+// inside the watchdog per-source work IIFE (#1810). Monotonic across
+// the process lifetime; never decreases.
+func WatchdogPanicCount() int64 {
+	return watchdogPanicCount.Load()
 }
 
 // LivenessKind enumerates the watchdog verdicts for a source. Edge-triggered
@@ -163,6 +182,14 @@ func (s *SourceLivenessState) MarkReconnected(now time.Time) {
 	atomic.StoreInt64(&s.LastMessageUnix, 0)
 	atomic.StoreInt64(&s.StartedAt, now.Unix())
 	atomic.StoreInt64(&s.LastAlertUnix, 0)
+	// #1810 round-1 (Taleb #5): clear DisconnectedSinceUnix so the
+	// next LivenessDisconnected observation is treated as a NEW outage
+	// and starts its escalation timer from scratch. Without this, a
+	// post-recovery disconnect immediately satisfies (now -
+	// DisconnectedSinceUnix > multiplier × threshold) and force-
+	// reconnects on the first tick — making the escalation a
+	// trigger-on-flap instead of trigger-on-persistent-failure.
+	atomic.StoreInt64(&s.DisconnectedSinceUnix, 0)
 }
 
 // checkSourceLiveness returns (message, kind) describing the source's
@@ -383,7 +410,20 @@ func runLivenessWatchdogLoop(tick <-chan time.Time, done <-chan struct{}, thresh
 				func(state *SourceLivenessState, k LivenessKind, m string) {
 					defer func() {
 						if r := recover(); r != nil {
-							log.Printf("[ingestor] WATCHDOG RECOVERED panic processing source %q: %v", state.Tag, r)
+							// #1810 round-1 (Taleb #2 + #3):
+							// (a) Write to os.Stderr DIRECTLY rather than via
+							// log.Printf. The original log sink is the prime
+							// suspect for a panic in emit (blocked stderr pipe,
+							// full Docker JSON-file driver) — using the same
+							// sink to report the recovery risks a second
+							// panic-on-recover that kills the goroutine the
+							// recover was meant to save. os.Stderr.Write is a
+							// raw syscall and bypasses log's own mutex.
+							// (b) Increment watchdogPanicCount so a panic-per-
+							// tick loop is visible to external monitoring even
+							// though WatchdogLastTickUnix continues to advance.
+							watchdogPanicCount.Add(1)
+							fmt.Fprintf(os.Stderr, "[ingestor] WATCHDOG RECOVERED panic processing source %q: %v\n", state.Tag, r)
 						}
 					}()
 					maybeEscalateDisconnected(state, k, threshold, now, emit)
@@ -421,6 +461,27 @@ func runLivenessWatchdogLoop(tick <-chan time.Time, done <-chan struct{}, thresh
 //
 // emit is wrapped in defer/recover by the caller — a panic here does
 // not kill the loop.
+// disconnectedEscalationGap returns the gap (now - DisconnectedSinceUnix)
+// at which the watchdog escalates a persistent LivenessDisconnected
+// observation into a forced reconnect. Hoisted out of
+// maybeEscalateDisconnected (#1810 round-1, adv #6) so it is computed
+// once per call site rather than per-source-per-tick. The result
+// includes a per-source jitter offset (#1810 round-1, Taleb #4) so
+// that a shared-broker outage across N sources does NOT cause a
+// synchronized thundering-herd reconnect at the multiplier × threshold
+// boundary. Jitter range: 0..forceReconnectThrottle, deterministic per
+// tag (hash-based, no RNG state) so retries do not phase-walk.
+func disconnectedEscalationGap(tag string, threshold time.Duration) time.Duration {
+	base := disconnectedReconnectMultiplier * threshold
+	if forceReconnectThrottle <= 0 {
+		return base
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(tag))
+	jitter := time.Duration(h.Sum32()%uint32(forceReconnectThrottle/time.Millisecond)) * time.Millisecond
+	return base + jitter
+}
+
 func maybeEscalateDisconnected(s *SourceLivenessState, kind LivenessKind, threshold time.Duration, now time.Time, emit func(...any)) {
 	if kind != LivenessDisconnected {
 		atomic.StoreInt64(&s.DisconnectedSinceUnix, 0)
@@ -432,8 +493,20 @@ func maybeEscalateDisconnected(s *SourceLivenessState, kind LivenessKind, thresh
 		return
 	}
 	gap := now.Sub(time.Unix(disconnectedSince, 0))
-	escalateAt := time.Duration(disconnectedReconnectMultiplier) * threshold
+	escalateAt := disconnectedEscalationGap(s.Tag, threshold)
 	if gap < escalateAt {
+		return
+	}
+	// #1810 round-1 (adv #2 + Taleb #1): only emit the ESCALATION WARN
+	// when we are actually going to issue a force-reconnect. Without
+	// this throttle, every tick past the boundary re-emits the WARN
+	// — for a 1m scan interval and a 1h outage, that's 55+ duplicate
+	// alert lines. maybeForceReconnect already enforces
+	// forceReconnectThrottle and writes its own "forcing reconnect"
+	// telemetry, so the operator-visible log surface is still
+	// complete; we just no longer drown them in pre-amble.
+	lastForce := atomic.LoadInt64(&s.LastForceReconnectUnix)
+	if lastForce != 0 && now.Sub(time.Unix(lastForce, 0)) < forceReconnectThrottle {
 		return
 	}
 	emit(fmt.Sprintf("MQTT [%s] WATCHDOG ESCALATION: paho disconnected for %s (>%d×threshold=%s) with no auto-reconnect — forcing reconnect (#1749)",

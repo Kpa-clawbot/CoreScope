@@ -71,6 +71,16 @@ type IngestorStatsSnapshot struct {
 	// (e.g. cold start before the first scan). Additive — omitempty
 	// so older server builds ignore it.
 	WatchdogLastTickUnix int64 `json:"watchdogLastTickUnix,omitempty"`
+	// WatchdogPanicCount (#1810 round-1) is the running total of
+	// recovered panics inside the watchdog per-source work IIFE.
+	// Exposed alongside WatchdogLastTickUnix because the tick clock is
+	// stamped BEFORE the per-source work — a loop that panics on every
+	// source still advances WatchdogLastTickUnix and looks healthy by
+	// that signal alone. A rapidly-growing WatchdogPanicCount means
+	// the loop is alive but per-source processing is broken (typically
+	// a panic in emit / log sink). Monotonic; 0 means no recovered
+	// panics yet. Additive — omitempty so older server builds ignore.
+	WatchdogPanicCount int64 `json:"watchdogPanicCount,omitempty"`
 }
 
 // SourceLivenessSnapshot is the per-source two-clock view exposed for
@@ -262,6 +272,7 @@ func StartStatsFileWriter(s *Store, interval time.Duration) {
 				SourceLiveness:       SnapshotLivenessClocks(),
 				SourceStatuses:       SnapshotSourceStatuses(tickAt),
 				WatchdogLastTickUnix: WatchdogLastTickUnix(),
+				WatchdogPanicCount:   WatchdogPanicCount(),
 			}
 			buf.Reset()
 			if err := enc.Encode(&snap); err != nil {
