@@ -8,6 +8,12 @@ package main
 //     first chunk is merged into the store, FirstChunkReady is closed.
 //     main.go binds the HTTP listener on that signal and serves
 //     partial data while remaining chunks stream in the background.
+//   * RunStartupLoad is the orchestrator: it runs LoadChunked
+//     synchronously, then on success runs loadBackgroundChunks
+//     synchronously so s.oldestLoaded is guaranteed set before the
+//     background loader reads it (#1809). main.go typically invokes
+//     RunStartupLoad inside its own goroutine and waits on
+//     FirstChunkReady() in parallel to bind the HTTP listener.
 //   * loadStatusMiddleware stamps X-CoreScope-Load-Status on every
 //     response: "loading; progress=<rows>" until LoadComplete()
 //     reports true, then "ready". Dashboards and probes can read the
