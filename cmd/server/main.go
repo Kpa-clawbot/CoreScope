@@ -242,8 +242,10 @@ func main() {
 		log.Printf("[store] RunStartupLoad completed before first-chunk signal (empty DB?)")
 	}
 	if store.hotStartupHours > 0 {
-		log.Printf("[store] background load will start after LoadChunked completes: filling retentionHours=%gh from hotStartupHours=%gh",
-			store.retentionHours, store.hotStartupHours)
+		log.Printf("[store] hot-startup window configured: hotStartupHours=%gh, retentionHours=%gh (background fill loader runs after LoadChunked succeeds — see RunStartupLoad)",
+			store.hotStartupHours, store.retentionHours)
+	} else {
+		log.Printf("[store] hot-startup disabled (hotStartupHours=0) — no background fill loader will run")
 	}
 	go func() {
 		if err := <-loadErrCh; err != nil {

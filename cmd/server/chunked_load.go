@@ -106,37 +106,59 @@ func (s *PacketStore) fireChunkCallbacks(rowsThisChunk, totalRows int) {
 }
 
 // RunStartupLoad orchestrates the startup load sequence:
-//  1. start LoadChunked (async)
-//  2. caller waits for FirstChunkReady to bind the HTTP listener
-//  3. spawn the background fill loader AFTER LoadChunked completes,
-//     so s.oldestLoaded is set before the bg loader reads it (#1809)
+//  1. run LoadChunked synchronously (FirstChunkReady is signaled
+//     internally so callers waiting on it in parallel can bind HTTP)
+//  2. on success, run loadBackgroundChunks synchronously so
+//     s.oldestLoaded is guaranteed set before the bg loader reads
+//     it (#1809).
 //
-// chunkSize=0 uses the LoadChunked default. Blocks until LoadChunked
-// AND any background loader have finished. Callers that want to bind
-// the HTTP listener at FirstChunkReady should run this in a goroutine
-// and wait on FirstChunkReady() themselves.
+// chunkSize=0 uses the LoadChunked default. The function blocks until
+// LoadChunked AND any background loader have finished. Callers that
+// want to bind the HTTP listener at FirstChunkReady should run this
+// in a goroutine and wait on FirstChunkReady() themselves.
+//
+// Steady-state contracts post-return:
+//   - LoadChunked error: backgroundLoadFailed=true, backgroundLoadDone
+//     stays false, backgroundLoadErr non-empty. Returns the error.
+//   - hotStartupHours == 0: backgroundLoadDone=true, failed=false
+//     (no background work was needed).
+//   - hotStartupHours > 0 success: terminal state is whatever
+//     loadBackgroundChunks set (done=true on full coverage,
+//     failed=true on partial / chunk errors — see #1690).
 //
 // Issue #1809 root cause: previously main.go spawned loadBackgroundChunks
 // at FirstChunkReady while LoadChunked was still merging the remainder
 // of the hot window. s.oldestLoaded is only assigned at the end of
-// LoadChunked (chunked_load.go:330), so the bg loader read "" and
-// bailed → coverage gate trips → backgroundLoadFailed=true. Gating the
-// bg loader on LoadChunked completion preserves the FirstChunkReady
-// HTTP-bind parallelism while ensuring oldestLoaded has a valid floor
-// when the bg loader starts.
+// LoadChunked, so the bg loader read "" and bailed → coverage gate
+// trips → backgroundLoadFailed=true. Running the bg loader after
+// LoadChunked returns preserves the FirstChunkReady HTTP-bind
+// parallelism while ensuring oldestLoaded has a valid floor when the
+// bg loader starts.
 func (s *PacketStore) RunStartupLoad(chunkSize int) error {
-	loadErrCh := make(chan error, 1)
-	go func() {
-		loadErrCh <- s.LoadChunked(chunkSize)
-	}()
-	// Block until LoadChunked returns. Callers that want to bind their
-	// HTTP listener earlier can wait on FirstChunkReady() in parallel.
-	if err := <-loadErrCh; err != nil {
+	if err := s.LoadChunked(chunkSize); err != nil {
+		// Pick a terminal state on the error path so /api/healthz +
+		// backgroundLoadComplete don't stay undefined (done=false,
+		// failed=false) forever.
+		s.bgErrMu.Lock()
+		s.backgroundLoadErr = fmt.Sprintf("LoadChunked failed: %v", err)
+		s.bgErrMu.Unlock()
+		s.backgroundLoadFailed.Store(true)
 		return err
 	}
-	if s.hotStartupHours > 0 {
-		s.loadBackgroundChunks()
+	if s.hotStartupHours <= 0 {
+		// No bg work required → terminal steady state is done=true,
+		// failed=false. Without this the healthz probe would see
+		// backgroundLoadComplete=false indefinitely.
+		s.backgroundLoadDone.Store(true)
+		s.backgroundLoadProgress.Store(100)
+		return nil
 	}
+	// INFO signal between LoadChunked completion and the bg loader
+	// kick-off. The post-mortem of #1809 needed exactly this line to
+	// confirm the bg loader actually started after oldestLoaded was set.
+	log.Printf("[store] LoadChunked complete (oldestLoaded=%q) — starting background fill loader (retentionHours=%gh, hotStartupHours=%gh)",
+		s.oldestLoaded, s.retentionHours, s.hotStartupHours)
+	s.loadBackgroundChunks()
 	return nil
 }
 

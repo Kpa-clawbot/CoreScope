@@ -421,6 +421,13 @@ type PacketStore struct {
 	//     Read order MUST be: load backgroundLoadDone first; only if true
 	//     is backgroundLoadFailed meaningful.
 	// 0 = disabled (current behavior). Background loader fills the rest.
+	//
+	// IMMUTABILITY: hotStartupHours is set ONCE in NewPacketStore (with
+	// optional clamp against retentionHours) and is NEVER mutated
+	// afterward. Readers (LoadChunked, RunStartupLoad,
+	// loadBackgroundChunks, GetPerfStoreStats) intentionally read it
+	// without s.mu. Do not add a write path without also adding the
+	// lock to every reader — see #1809 / #1811.
 	hotStartupHours        float64
 	backgroundLoadDone     atomic.Bool
 	backgroundLoadFailed   atomic.Bool
@@ -1418,6 +1425,22 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 // chunks are merged it rebuilds analytics indexes once. Chunk errors are
 // handled by advancing past the failed window so the loop always terminates.
 func (s *PacketStore) loadBackgroundChunks() {
+	// #1809 invariant: oldestLoaded MUST be set before the bg loader
+	// runs whenever the in-memory store has packets. The original bug
+	// was a parallel spawn that read oldestLoaded="" and silently
+	// bailed → coverage gate trips → backgroundLoadFailed=true. Encode
+	// the precondition here so a future refactor that re-introduces
+	// the race fails loudly instead of silently shipping the same
+	// regression. Empty store + empty oldestLoaded is the legitimate
+	// "empty DB" path and is allowed.
+	s.mu.RLock()
+	oldestAtEntry := s.oldestLoaded
+	packetCountAtEntry := len(s.packets)
+	s.mu.RUnlock()
+	if oldestAtEntry == "" && packetCountAtEntry > 0 {
+		panic(fmt.Sprintf("loadBackgroundChunks: oldestLoaded=\"\" with %d packets in store — LoadChunked must run to completion first (#1809)", packetCountAtEntry))
+	}
+
 	if s.retentionHours <= 0 {
 		s.backgroundLoadDone.Store(true)
 		return
