@@ -122,6 +122,7 @@ func createTestDBSpreadOverDays(t *testing.T, dbPath string, numTx, spanDays int
 			t.Fatalf("test DB exec: %v\nSQL: %s", err, s)
 		}
 	}
+	// PREFLIGHT: async=true reason="unit-test fixture; in-memory ephemeral SQLite, no prod DB path"
 	execOrFail(`CREATE TABLE transmissions (
 		id INTEGER PRIMARY KEY,
 		raw_hex TEXT, hash TEXT, first_seen TEXT,
@@ -129,16 +130,22 @@ func createTestDBSpreadOverDays(t *testing.T, dbPath string, numTx, spanDays int
 		payload_version INTEGER, decoded_json TEXT,
 		last_seen INTEGER NOT NULL DEFAULT 0
 	)`)
+	// PREFLIGHT: async=true reason="unit-test fixture"
 	execOrFail(`CREATE TABLE observations (
 		id INTEGER PRIMARY KEY, transmission_id INTEGER, observer_id TEXT, observer_name TEXT,
 		direction TEXT, snr REAL, rssi REAL, score INTEGER,
 		path_json TEXT, timestamp TEXT, raw_hex TEXT
 	)`)
+	// PREFLIGHT: async=true reason="unit-test fixture"
 	execOrFail(`CREATE TABLE observers (rowid INTEGER PRIMARY KEY, id TEXT, name TEXT, iata TEXT)`)
+	// PREFLIGHT: async=true reason="unit-test fixture"
 	execOrFail(`CREATE TABLE nodes (pubkey TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL, last_seen TEXT, first_seen TEXT, frequency REAL)`)
+	// PREFLIGHT: async=true reason="unit-test fixture"
 	execOrFail(`CREATE TABLE schema_version (version INTEGER)`)
 	execOrFail(`INSERT INTO schema_version (version) VALUES (1)`)
+	// PREFLIGHT: async=true reason="unit-test fixture; index on ephemeral test DB"
 	execOrFail(`CREATE INDEX idx_tx_first_seen ON transmissions(first_seen)`)
+	// PREFLIGHT: async=true reason="unit-test fixture"
 	execOrFail(`CREATE INDEX idx_tx_last_seen ON transmissions(last_seen)`)
 
 	txStmt, err := conn.Prepare("INSERT INTO transmissions (id, raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")

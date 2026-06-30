@@ -18,7 +18,6 @@ package main
 //     before loadBackgroundChunks executes (so oldestLoaded is set)
 
 import (
-	"database/sql"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -186,37 +185,12 @@ func TestRunStartupLoad_BgLoaderRunsAfterLoadChunkedSets_OldestLoaded(t *testing
 func TestLoadBackgroundChunks_PanicsOnOldestLoadedEmpty_Invariant(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
-	conn, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Create the bare minimum schema so OpenDB succeeds; we don't care
-	// about row count — only the guard at the top of the function.
-	if _, err := conn.Exec(`CREATE TABLE transmissions (
-		id INTEGER PRIMARY KEY, raw_hex TEXT, hash TEXT, first_seen TEXT,
-		route_type INTEGER, payload_type INTEGER, payload_version INTEGER,
-		decoded_json TEXT, last_seen INTEGER NOT NULL DEFAULT 0)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := conn.Exec(`CREATE TABLE observations (
-		id INTEGER PRIMARY KEY, transmission_id INTEGER, observer_id TEXT,
-		observer_name TEXT, direction TEXT, snr REAL, rssi REAL,
-		score INTEGER, path_json TEXT, timestamp TEXT, raw_hex TEXT)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := conn.Exec(`CREATE TABLE observers (rowid INTEGER PRIMARY KEY, id TEXT, name TEXT, iata TEXT)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := conn.Exec(`CREATE TABLE nodes (pubkey TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL, last_seen TEXT, first_seen TEXT, frequency REAL)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := conn.Exec(`CREATE TABLE schema_version (version INTEGER)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := conn.Exec(`INSERT INTO schema_version (version) VALUES (1)`); err != nil {
-		t.Fatal(err)
-	}
-	conn.Close()
+	// Reuse the existing schema-only fixture helper (0 rows) so this
+	// test does not introduce a new inline CREATE TABLE block (pr-preflight
+	// async-migration gate). The fixture provides exactly the bare schema
+	// loadBackgroundChunks needs to reach its panic guard.
+	createTestDBWithLastSeen(t, dbPath, 0, 0, time.Now().UTC().Unix(),
+		30*time.Minute, 30*time.Minute)
 
 	db, err := OpenDB(dbPath)
 	if err != nil {
