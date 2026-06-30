@@ -373,18 +373,20 @@ func runLivenessWatchdogLoop(tick <-chan time.Time, done <-chan struct{}, thresh
 				// own auto-reconnect machinery has clearly failed
 				// (multiplier × threshold without recovery).
 				msg, kind := checkSourceLiveness(s, threshold, now)
-				maybeEscalateDisconnected(s, kind, threshold, now, emit)
 				// #1749: a panic in emit (blocked log pipe, full
 				// Docker JSON-file driver, etc.) MUST NOT kill the
 				// watchdog goroutine. Recover per-source so one bad
 				// source — or one bad log call — does not silence
-				// all monitoring across all sources.
+				// all monitoring across all sources. Both
+				// maybeEscalateDisconnected and processLivenessTransition
+				// call emit, so both must be inside the recover scope.
 				func(state *SourceLivenessState, k LivenessKind, m string) {
 					defer func() {
 						if r := recover(); r != nil {
 							log.Printf("[ingestor] WATCHDOG RECOVERED panic processing source %q: %v", state.Tag, r)
 						}
 					}()
+					maybeEscalateDisconnected(state, k, threshold, now, emit)
 					processLivenessTransition(state, k, m, now, emit)
 				}(s, kind, msg)
 			}
