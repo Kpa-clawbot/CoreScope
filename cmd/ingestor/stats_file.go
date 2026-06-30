@@ -62,6 +62,15 @@ type IngestorStatsSnapshot struct {
 	// counter view consumed by cmd/server's /api/mqtt/status handler.
 	// Additive; omitempty so older server builds ignore it.
 	SourceStatuses []SourceStatusSnapshot `json:"source_statuses,omitempty"`
+	// WatchdogLastTickUnix (#1749) is the unix-seconds timestamp of the
+	// most recent runLivenessWatchdogLoop tick. Surfaced via
+	// /api/mqtt/status so external monitoring can assert the watchdog
+	// goroutine is still alive — a value older than ~2× the watchdog
+	// scan interval (typically 60s) indicates the watchdog itself has
+	// wedged or panicked. 0 means the watchdog has never ticked
+	// (e.g. cold start before the first scan). Additive — omitempty
+	// so older server builds ignore it.
+	WatchdogLastTickUnix int64 `json:"watchdogLastTickUnix,omitempty"`
 }
 
 // SourceLivenessSnapshot is the per-source two-clock view exposed for
@@ -252,6 +261,7 @@ func StartStatsFileWriter(s *Store, interval time.Duration) {
 				WriterPerf:         s.WriterStatsSnapshot(),
 				SourceLiveness:     SnapshotLivenessClocks(),
 				SourceStatuses:     SnapshotSourceStatuses(tickAt),
+				WatchdogLastTickUnix: WatchdogLastTickUnix(),
 			}
 			buf.Reset()
 			if err := enc.Encode(&snap); err != nil {
