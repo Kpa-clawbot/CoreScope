@@ -120,12 +120,16 @@ func TestMQTTStallWatchdog_DisconnectedEscalationThrottled_1749(t *testing.T) {
 	go runLivenessWatchdogLoop(tick, done, threshold, func(args ...any) {})
 
 	base := time.Now()
+	// Pre-stamp DisconnectedSinceUnix so that the first tick is
+	// already past the multiplier×threshold escalation boundary.
+	// Without this we'd just observe the FIRST tick stamping the
+	// timestamp and subsequent ticks would be only seconds past it.
+	atomic.StoreInt64(&s.DisconnectedSinceUnix, base.Add(-time.Duration(disconnectedReconnectMultiplier+1)*threshold).Unix())
 	// Cross the escalation boundary multiple times within a single
 	// throttle window — expect ONE reconnect, not many.
 	for i := 0; i < 10; i++ {
-		offset := time.Duration(disconnectedReconnectMultiplier+1)*threshold + time.Duration(i)*time.Second
 		select {
-		case tick <- base.Add(offset):
+		case tick <- base.Add(time.Duration(i) * time.Second):
 		case <-time.After(time.Second):
 			t.Fatal("tick blocked")
 		}
@@ -169,7 +173,6 @@ func TestMQTTStallWatchdog_LoopRecoversFromPanicInEmit_1749(t *testing.T) {
 
 	tick := make(chan time.Time)
 	done := make(chan struct{})
-	defer close(done)
 
 	// Wrap the loop spawn with our own recover so that an unrecovered
 	// panic in the loop (the bug on master) does NOT crash the test
