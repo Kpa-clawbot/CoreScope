@@ -41,6 +41,24 @@ const EXPECTED_SHORT = {
   CONTROL:    'Control',
   RAW_CUSTOM: 'Raw Custom'
 };
+// PR #1804 r1 item 2 (tufte2): every `long` must DESCRIBE the packet's
+// behaviour, not echo the short label. Pinned literals — drift here
+// fails the E2E.
+const EXPECTED_LONG = {
+  REQ:        'Encrypted data request to a remote node',
+  RESPONSE:   'Encrypted data response from a remote node',
+  TXT_MSG:    'Encrypted point-to-point text message',
+  ACK:        'Acknowledgment of a prior message or request',
+  ADVERT:     'Node identity / capability advertisement',
+  GRP_TXT:    'Channel-scoped group text message',
+  GRP_DATA:   'Channel-scoped group datagram (non-text payload)',
+  ANON_REQ:   'Anonymous encrypted request via ephemeral key',
+  PATH:       'Network path discovery / return-path advertisement',
+  TRACE:      'Per-hop route trace with SNR samples',
+  MULTIPART:  'Fragmented payload reassembled across multiple packets',
+  CONTROL:    'Mesh control-plane signalling (e.g. zero-hop direct)',
+  RAW_CUSTOM: 'Application-defined raw payload, no firmware envelope'
+};
 const EXPECTED_ID = {
   REQ: 0, RESPONSE: 1, TXT_MSG: 2, ACK: 3, ADVERT: 4, GRP_TXT: 5,
   GRP_DATA: 6, ANON_REQ: 7, PATH: 8, TRACE: 9, MULTIPART: 10,
@@ -147,6 +165,10 @@ async function packetsTypeLabels(page) {
         `PayloadLabels.${name}.enumId: expected ${EXPECTED_ID[name]}, got ${pl[name].enumId}`);
       assert(pl[name].enumName === name,
         `PayloadLabels.${name}.enumName: expected "${name}", got "${pl[name].enumName}"`);
+      // PR #1804 r1 item 2: long must be the behavioural description, not
+      // a tautological echo of short. Pinned literals.
+      assert(pl[name].long === EXPECTED_LONG[name],
+        `PayloadLabels.${name}.long: expected "${EXPECTED_LONG[name]}", got "${pl[name].long}"`);
     }
   });
 
