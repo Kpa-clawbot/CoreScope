@@ -89,14 +89,8 @@ func TestWatchdog_PanicRecoverWritesToStderrNotLog_1810(t *testing.T) {
 	}
 
 	stderrOut, logOut := captureStderrAndLog(t, func() {
-		tick := make(chan time.Time)
-		done := make(chan struct{})
-		exited := make(chan struct{})
-		go func() {
-			defer func() { _ = recover(); close(exited) }()
-			runLivenessWatchdogLoop(tick, done, threshold, emit)
-		}()
-		tick <- time.Now()
+		tick, done, exited := setupWatchdogTestLoop(t, threshold, emit)
+		sendTickOrFail(t, tick, time.Now(), time.Second, "panic-sink tick")
 		time.Sleep(150 * time.Millisecond)
 		close(done)
 		<-exited
@@ -133,14 +127,8 @@ func TestWatchdog_PanicCountIncrementsOnRecover_1810(t *testing.T) {
 
 	// Suppress stderr output during the recover so test output stays clean.
 	_, _ = captureStderrAndLog(t, func() {
-		tick := make(chan time.Time)
-		done := make(chan struct{})
-		exited := make(chan struct{})
-		go func() {
-			defer func() { _ = recover(); close(exited) }()
-			runLivenessWatchdogLoop(tick, done, threshold, emit)
-		}()
-		tick <- time.Now()
+		tick, done, exited := setupWatchdogTestLoop(t, threshold, emit)
+		sendTickOrFail(t, tick, time.Now(), time.Second, "panic-count tick")
 		time.Sleep(150 * time.Millisecond)
 		close(done)
 		<-exited

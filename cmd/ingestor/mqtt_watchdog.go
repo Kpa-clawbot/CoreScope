@@ -39,6 +39,16 @@ const disconnectedReconnectMultiplier = 5
 // /api/mqtt/status lets external monitoring assert that the watchdog
 // is still ticking — a stale value (e.g. > 2× the scan interval)
 // indicates the watchdog itself is dead.
+//
+// Style note (#1810 round-1, adv #5): new package-level counters in
+// this file use atomic.Int64 (typed, method-based) while per-source
+// state on SourceLivenessState uses plain int64 + atomic.StoreInt64.
+// The struct fields stay int64 because they are accessed through
+// pointer receivers all over the codebase and atomic.Int64 inside a
+// struct breaks the "noCopy" semantics expected of value receivers
+// in a few callsites; package-level vars have no such constraint and
+// the typed form catches misuse at compile time. Kept-both is
+// intentional, not drift.
 var watchdogLastTickUnix atomic.Int64
 
 // watchdogPanicCount (#1810 round-1, Taleb #3) counts recovered panics

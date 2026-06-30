@@ -251,6 +251,13 @@ func TestMQTTStallWatchdog_LastTickUnixExposed_1749(t *testing.T) {
 	// same package may have ticked the loop, so just record the value
 	// and assert it ADVANCES.
 	before := WatchdogLastTickUnix()
+	// #1810 round-1 (adv #7): this test stamps a 48h-future value into
+	// the package-level watchdogLastTickUnix. Restore the prior value
+	// so a downstream test that asserts "tick advanced past 'before'"
+	// is not fooled by our leak.
+	t.Cleanup(func() {
+		watchdogLastTickUnix.Store(before)
+	})
 
 	tick := make(chan time.Time)
 	done := make(chan struct{})
@@ -278,11 +285,11 @@ func TestMQTTStallWatchdog_LastTickUnixExposed_1749(t *testing.T) {
 }
 
 // TestMQTTStallWatchdog_LoopRecoversFromPanicInEmit_EscalationPath_1749
-// (RED on current branch): a panic inside emit on the ESCALATION path
-// (maybeEscalateDisconnected → emit) must NOT kill the watchdog loop.
-// Currently maybeEscalateDisconnected runs OUTSIDE the per-source IIFE
-// that has defer/recover, so a panic in emit on that path kills the
-// goroutine.
+// (RED on the prior commit): a panic inside emit on the ESCALATION
+// path (maybeEscalateDisconnected → emit) must NOT kill the watchdog
+// loop. The fix in b3c75ca3 moved maybeEscalateDisconnected INSIDE the
+// per-source IIFE that has defer/recover, so a panic on this path is
+// recovered alongside panics on the processLivenessTransition path.
 func TestMQTTStallWatchdog_LoopRecoversFromPanicInEmit_EscalationPath_1749(t *testing.T) {
 	defer snapshotAndResetRegistry(t)()
 
