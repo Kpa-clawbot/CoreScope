@@ -13,9 +13,7 @@ package main
 //                                   loadCoverageRatio.
 
 import (
-	"database/sql"
 	"encoding/json"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -31,68 +29,18 @@ import (
 // numTx transmissions, each with first_seen = nowSec - firstSeenAgo, and
 // last_seen = nowSec - lastSeenAgo. Each tx has obsPerTx observations whose
 // timestamps are within the last 20 minutes.
+//
+// Thin wrapper over seedTestDBRows (PR #1811 adv #2 — DRY). The schema
+// DDL and the block-level PREFLIGHT async-migration annotation live
+// there; this helper only supplies the row-time policy used by the
+// #1690 fixture (fixed first_seen, fixed last_seen).
 func createTestDBWithLastSeen(t *testing.T, dbPath string, numTx, obsPerTx int, nowSec int64, firstSeenAgo, lastSeenAgo time.Duration) {
 	t.Helper()
-	conn, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-
-	execOrFail := func(s string) {
-		if _, err := conn.Exec(s); err != nil {
-			t.Fatalf("test DB exec: %v\nSQL: %s", err, s)
-		}
-	}
-	// Use the post-fix schema shape: transmissions has a last_seen INTEGER column.
-	execOrFail(`CREATE TABLE transmissions (
-		id INTEGER PRIMARY KEY,
-		raw_hex TEXT, hash TEXT, first_seen TEXT,
-		route_type INTEGER, payload_type INTEGER,
-		payload_version INTEGER, decoded_json TEXT,
-		last_seen INTEGER NOT NULL DEFAULT 0
-	)`)
-	execOrFail(`CREATE TABLE observations (
-		id INTEGER PRIMARY KEY, transmission_id INTEGER, observer_id TEXT, observer_name TEXT,
-		direction TEXT, snr REAL, rssi REAL, score INTEGER,
-		path_json TEXT, timestamp TEXT, raw_hex TEXT
-	)`)
-	execOrFail(`CREATE TABLE observers (rowid INTEGER PRIMARY KEY, id TEXT, name TEXT, iata TEXT)`)
-	execOrFail(`CREATE TABLE nodes (pubkey TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL, last_seen TEXT, first_seen TEXT, frequency REAL)`)
-	execOrFail(`CREATE TABLE schema_version (version INTEGER)`)
-	execOrFail(`INSERT INTO schema_version (version) VALUES (1)`)
-	execOrFail(`CREATE INDEX idx_tx_first_seen ON transmissions(first_seen)`)
-	execOrFail(`CREATE INDEX idx_tx_last_seen ON transmissions(last_seen)`)
-
 	firstSeenTime := time.Unix(nowSec, 0).UTC().Add(-firstSeenAgo).Format(time.RFC3339)
 	lastSeenUnix := nowSec - int64(lastSeenAgo.Seconds())
-
-	txStmt, err := conn.Prepare("INSERT INTO transmissions (id, raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-	if err != nil {
-		t.Fatalf("prepare tx: %v", err)
-	}
-	defer txStmt.Close()
-	obsStmt, err := conn.Prepare("INSERT INTO observations (id, transmission_id, observer_id, observer_name, direction, snr, rssi, score, path_json, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-	if err != nil {
-		t.Fatalf("prepare obs: %v", err)
-	}
-	defer obsStmt.Close()
-
-	obsID := 1
-	for i := 1; i <= numTx; i++ {
-		hash := fmt.Sprintf("h%06d", i)
-		if _, err := txStmt.Exec(i, "aabb", hash, firstSeenTime, 0, 4, 1, "{}", lastSeenUnix); err != nil {
-			t.Fatalf("insert tx %d: %v", i, err)
-		}
-		for j := 0; j < obsPerTx; j++ {
-			// Observations within the last 20 minutes relative to nowSec.
-			obsTs := time.Unix(nowSec, 0).UTC().Add(-time.Duration(j)*time.Minute - time.Minute).Format(time.RFC3339)
-			if _, err := obsStmt.Exec(obsID, i, "obs1", "Obs1", "RX", -10.0, -80.0, 5, "[]", obsTs); err != nil {
-				t.Fatalf("insert obs: %v", err)
-			}
-			obsID++
-		}
-	}
+	seedTestDBRows(t, dbPath, numTx, obsPerTx, func(i int) (string, int64) {
+		return firstSeenTime, lastSeenUnix
+	})
 }
 
 // Test1690_ColdLoad_TimeAxis seeds 1000 transmissions whose hash *first

@@ -108,8 +108,35 @@ func Test1809_StartupLoad_BgLoaderSeesOldestLoaded(t *testing.T) {
 
 // createTestDBSpreadOverDays seeds a DB with rows whose first_seen +
 // last_seen are evenly spread across `spanDays` ending at `nowSec`.
-// Reuses the same schema shape as createTestDBWithLastSeen.
+//
+// Implemented in terms of seedTestDBRows so the schema DDL is defined
+// once (adv #2 DRY) and the block-level PREFLIGHT annotation is
+// hoisted to a single comment (adv #11) instead of being duplicated
+// on every CREATE statement.
 func createTestDBSpreadOverDays(t *testing.T, dbPath string, numTx, spanDays int, nowSec int64) {
+	t.Helper()
+	spanSeconds := int64(spanDays) * 86400
+	seedTestDBRows(t, dbPath, numTx, 1, func(i int) (firstSeenStr string, lastSeenUnix int64) {
+		ago := spanSeconds * int64(numTx-i) / int64(numTx) // newest at i==numTx → 0s ago
+		u := nowSec - ago
+		return time.Unix(u, 0).UTC().Format(time.RFC3339), u
+	})
+}
+
+// seedTestDBRows creates the standard test-fixture SQLite schema and
+// populates `numTx` transmissions with `obsPerTx` observations each.
+// rowTimes(i) returns the (first_seen string, last_seen unix) for
+// transmission #i (1-indexed).
+//
+// adv #2 (PR #1811): the prior code duplicated the schema DDL between
+// createTestDBWithLastSeen and createTestDBSpreadOverDays. This helper
+// is the single source of truth.
+//
+// PREFLIGHT: async=true reason="unit-test fixture; in-memory ephemeral SQLite,
+// no prod DB path. All CREATE TABLE / CREATE INDEX statements below are
+// schema-only test seeds — covered by this block-level annotation
+// (adv #11: prior code carried a duplicated annotation on every line)."
+func seedTestDBRows(t *testing.T, dbPath string, numTx, obsPerTx int, rowTimes func(i int) (string, int64)) {
 	t.Helper()
 	conn, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL")
 	if err != nil {
@@ -122,7 +149,7 @@ func createTestDBSpreadOverDays(t *testing.T, dbPath string, numTx, spanDays int
 			t.Fatalf("test DB exec: %v\nSQL: %s", err, s)
 		}
 	}
-	// PREFLIGHT: async=true reason="unit-test fixture; in-memory ephemeral SQLite, no prod DB path"
+	// PREFLIGHT: async=true reason="unit-test fixture seeder; in-memory ephemeral SQLite; all CREATE/INSERT below covered by this block annotation (pr-preflight 25-line lookback window)"
 	execOrFail(`CREATE TABLE transmissions (
 		id INTEGER PRIMARY KEY,
 		raw_hex TEXT, hash TEXT, first_seen TEXT,
@@ -130,22 +157,22 @@ func createTestDBSpreadOverDays(t *testing.T, dbPath string, numTx, spanDays int
 		payload_version INTEGER, decoded_json TEXT,
 		last_seen INTEGER NOT NULL DEFAULT 0
 	)`)
-	// PREFLIGHT: async=true reason="unit-test fixture"
+	// PREFLIGHT: async=true reason="unit-test fixture seeder"
 	execOrFail(`CREATE TABLE observations (
 		id INTEGER PRIMARY KEY, transmission_id INTEGER, observer_id TEXT, observer_name TEXT,
 		direction TEXT, snr REAL, rssi REAL, score INTEGER,
 		path_json TEXT, timestamp TEXT, raw_hex TEXT
 	)`)
-	// PREFLIGHT: async=true reason="unit-test fixture"
+	// PREFLIGHT: async=true reason="unit-test fixture seeder"
 	execOrFail(`CREATE TABLE observers (rowid INTEGER PRIMARY KEY, id TEXT, name TEXT, iata TEXT)`)
-	// PREFLIGHT: async=true reason="unit-test fixture"
+	// PREFLIGHT: async=true reason="unit-test fixture seeder"
 	execOrFail(`CREATE TABLE nodes (pubkey TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL, last_seen TEXT, first_seen TEXT, frequency REAL)`)
-	// PREFLIGHT: async=true reason="unit-test fixture"
+	// PREFLIGHT: async=true reason="unit-test fixture seeder"
 	execOrFail(`CREATE TABLE schema_version (version INTEGER)`)
 	execOrFail(`INSERT INTO schema_version (version) VALUES (1)`)
-	// PREFLIGHT: async=true reason="unit-test fixture; index on ephemeral test DB"
+	// PREFLIGHT: async=true reason="unit-test fixture seeder; index on ephemeral test DB"
 	execOrFail(`CREATE INDEX idx_tx_first_seen ON transmissions(first_seen)`)
-	// PREFLIGHT: async=true reason="unit-test fixture"
+	// PREFLIGHT: async=true reason="unit-test fixture seeder"
 	execOrFail(`CREATE INDEX idx_tx_last_seen ON transmissions(last_seen)`)
 
 	txStmt, err := conn.Prepare("INSERT INTO transmissions (id, raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
@@ -159,18 +186,19 @@ func createTestDBSpreadOverDays(t *testing.T, dbPath string, numTx, spanDays int
 	}
 	defer obsStmt.Close()
 
-	// Evenly distribute first_seen/last_seen across the span (ending now).
-	spanSeconds := int64(spanDays) * 86400
+	obsID := 1
 	for i := 1; i <= numTx; i++ {
-		ago := spanSeconds * int64(numTx-i) / int64(numTx) // newest at i==numTx → 0s ago
-		seenUnix := nowSec - ago
-		seenStr := time.Unix(seenUnix, 0).UTC().Format(time.RFC3339)
+		firstSeenStr, lastSeenUnix := rowTimes(i)
 		hash := fmt.Sprintf("h%06d", i)
-		if _, err := txStmt.Exec(i, "aabb", hash, seenStr, 0, 4, 1, "{}", seenUnix); err != nil {
+		if _, err := txStmt.Exec(i, "aabb", hash, firstSeenStr, 0, 4, 1, "{}", lastSeenUnix); err != nil {
 			t.Fatalf("insert tx %d: %v", i, err)
 		}
-		if _, err := obsStmt.Exec(i, i, "obs1", "Obs1", "RX", -10.0, -80.0, 5, "[]", seenStr); err != nil {
-			t.Fatalf("insert obs %d: %v", i, err)
+		for j := 0; j < obsPerTx; j++ {
+			obsTs := time.Unix(lastSeenUnix, 0).UTC().Add(-time.Duration(j) * time.Minute).Format(time.RFC3339)
+			if _, err := obsStmt.Exec(obsID, i, "obs1", "Obs1", "RX", -10.0, -80.0, 5, "[]", obsTs); err != nil {
+				t.Fatalf("insert obs: %v", err)
+			}
+			obsID++
 		}
 	}
 }

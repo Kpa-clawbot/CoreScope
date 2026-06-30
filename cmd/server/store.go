@@ -487,6 +487,12 @@ type PacketStore struct {
 	statsCacheTime time.Time
 	statsLastHour  int
 	statsLast24h   int
+
+	// Test-only hook fired at the very start of loadBackgroundChunks
+	// (after the #1809 invariant check). Nil in production. Used by
+	// ordering tests to capture the bg-loader entry timestamp/signal
+	// without polling. See runstartup_load_test.go.
+	bgLoaderEntryHook func()
 }
 
 // Precomputed distance records for fast analytics aggregation.
@@ -1461,6 +1467,12 @@ func (s *PacketStore) loadBackgroundChunks() {
 		// the #1809 race) is preserved regardless of the handler.
 		invariantViolation(fmt.Sprintf("loadBackgroundChunks: oldestLoaded=\"\" with %d packets in store — LoadChunked must run to completion first (#1809)", packetCountAtEntry))
 		return
+	}
+
+	// Test-only entry hook. Production stores leave bgLoaderEntryHook
+	// nil and pay the nil-check cost only.
+	if s.bgLoaderEntryHook != nil {
+		s.bgLoaderEntryHook()
 	}
 
 	if s.retentionHours <= 0 {

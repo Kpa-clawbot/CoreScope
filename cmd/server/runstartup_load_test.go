@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -134,14 +136,21 @@ func TestRunStartupLoad_EmptyDB_SetsDoneTerminal(t *testing.T) {
 }
 
 // TestRunStartupLoad_BgLoaderRunsAfterLoadChunkedSets_OldestLoaded
-// covers B5/B6: assert the in-process call ordering inside
-// RunStartupLoad. The OnChunkLoaded hook fires from LoadChunked; the
-// loadBackgroundChunks panic guard fires only if oldestLoaded=="" at
-// entry. So observing the chunk callback strictly before the bg loader
-// (which is exercised via the loop continuing without panic) is the
-// minimum guarantee. If a future refactor re-introduces the parallel
-// spawn pattern, the runtime assertion in loadBackgroundChunks will
-// trip and this test will fail.
+// covers B5/B6 (dij #3, adv #3): assert the in-process call ordering
+// inside RunStartupLoad — bg loader entry MUST happen-after the final
+// OnChunkLoaded callback (which is the last write to s.oldestLoaded
+// inside LoadChunked).
+//
+// The previous version only asserted that OnChunkLoaded fired and
+// that oldestLoaded was non-empty after RunStartupLoad returned —
+// which proves existence but not ordering (a future refactor could
+// re-introduce the parallel-spawn race and the test would still
+// pass because both signals are observable post-hoc).
+//
+// This version captures timestamps from each side (chunk callback,
+// bg-loader entry) via a test-only hook and asserts
+// tBgEntry >= tLastChunk monotonically. The runtime invariant in
+// loadBackgroundChunks remains as the deterministic backstop.
 func TestRunStartupLoad_BgLoaderRunsAfterLoadChunkedSets_OldestLoaded(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
@@ -160,24 +169,98 @@ func TestRunStartupLoad_BgLoaderRunsAfterLoadChunkedSets_OldestLoaded(t *testing
 		HotStartupHours: 1,
 	})
 
-	// Hook: LoadChunked fires OnChunkLoaded after each chunk merge.
-	// We record whether it fired before RunStartupLoad returned. The
-	// runtime assertion in loadBackgroundChunks ensures the bg loader
-	// observes a non-empty oldestLoaded; if a future refactor parallels
-	// the bg-loader spawn with LoadChunked, that assertion panics.
-	chunkSeen := false
+	var (
+		mu              sync.Mutex
+		lastChunkAt     time.Time
+		bgEntryAt       time.Time
+		chunkSawOldest  string
+	)
 	store.OnChunkLoaded(func(rowsThisChunk, totalRows int) {
-		chunkSeen = true
+		mu.Lock()
+		lastChunkAt = time.Now()
+		// LoadChunked sets oldestLoaded under s.mu AFTER the last
+		// fireChunkCallbacks call returns, so this read may be empty
+		// on the last chunk — record whatever is visible.
+		store.mu.RLock()
+		chunkSawOldest = store.oldestLoaded
+		store.mu.RUnlock()
+		mu.Unlock()
 	})
+	store.bgLoaderEntryHook = func() {
+		mu.Lock()
+		bgEntryAt = time.Now()
+		mu.Unlock()
+	}
 
 	if err := store.RunStartupLoad(500); err != nil {
 		t.Fatalf("RunStartupLoad: %v", err)
 	}
-	if !chunkSeen {
-		t.Fatalf("LoadChunked OnChunkLoaded did not fire — chunk loop did not execute before bg loader")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if lastChunkAt.IsZero() {
+		t.Fatalf("OnChunkLoaded never fired — LoadChunked did not process any chunks")
+	}
+	if bgEntryAt.IsZero() {
+		t.Fatalf("bgLoaderEntryHook never fired — loadBackgroundChunks did not enter")
+	}
+	if !bgEntryAt.After(lastChunkAt) && !bgEntryAt.Equal(lastChunkAt) {
+		t.Fatalf("ordering violation: bg loader entered at %s BEFORE last chunk callback at %s — #1809 race re-introduced",
+			bgEntryAt.Format(time.RFC3339Nano), lastChunkAt.Format(time.RFC3339Nano))
 	}
 	if store.oldestLoaded == "" {
 		t.Fatalf("oldestLoaded is empty after RunStartupLoad — bg loader would have read \"\" and bailed")
+	}
+	_ = chunkSawOldest // diagnostic only; kept to make race future-debug easier
+}
+
+// TestRunStartupLoad_LoadChunkedError_MidLoad covers dij #6 / adv #5:
+// the existing TestRunStartupLoad_LoadChunkedError_SetsFailedTerminal
+// closes the conn BEFORE LoadChunked starts, so the error surfaces on
+// chunk 0's first query. That's a degenerate path — it does not prove
+// mid-load failure behavior. This test fires OnChunkLoaded once,
+// closes the DB conn from the callback, and asserts the chunk-N query
+// fails and the terminal state is still failed=true,done=true with a
+// non-empty error.
+func TestRunStartupLoad_LoadChunkedError_MidLoad(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	nowSec := time.Now().UTC().Unix()
+	// Seed enough rows so a small chunk size yields >1 chunk.
+	createTestDBWithLastSeen(t, dbPath, 200, 1, nowSec,
+		30*time.Minute, 30*time.Minute)
+
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+
+	store := NewPacketStore(db, &PacketStoreConfig{
+		RetentionHours:  168,
+		HotStartupHours: 1,
+	})
+
+	// Close the underlying conn from inside the chunk callback so the
+	// NEXT chunk's query fails mid-load instead of on the first query.
+	var closed atomic.Bool
+	store.OnChunkLoaded(func(rowsThisChunk, totalRows int) {
+		if closed.CompareAndSwap(false, true) {
+			_ = db.conn.Close()
+		}
+	})
+
+	loadErr := store.RunStartupLoad(50)
+	if loadErr == nil {
+		t.Fatalf("RunStartupLoad must error when conn closes mid-load")
+	}
+	if !store.backgroundLoadFailed.Load() {
+		t.Fatalf("backgroundLoadFailed must be true after mid-load error")
+	}
+	if !store.backgroundLoadDone.Load() {
+		t.Fatalf("backgroundLoadDone must be true after mid-load error (terminal contract)")
+	}
+	if !strings.Contains(store.BackgroundLoadError(), "LoadChunked failed") {
+		t.Fatalf("BackgroundLoadError must mention LoadChunked failure; got %q", store.BackgroundLoadError())
 	}
 }
 
