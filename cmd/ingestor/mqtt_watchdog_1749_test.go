@@ -276,3 +276,127 @@ func TestMQTTStallWatchdog_LastTickUnixExposed_1749(t *testing.T) {
 	t.Fatalf("WatchdogLastTickUnix() did not advance to tick timestamp (#1749); before=%d after=%d want≥%d",
 		before, got, stamp.Unix())
 }
+
+// TestMQTTStallWatchdog_LoopRecoversFromPanicInEmit_EscalationPath_1749
+// (RED on current branch): a panic inside emit on the ESCALATION path
+// (maybeEscalateDisconnected → emit) must NOT kill the watchdog loop.
+// Currently maybeEscalateDisconnected runs OUTSIDE the per-source IIFE
+// that has defer/recover, so a panic in emit on that path kills the
+// goroutine.
+func TestMQTTStallWatchdog_LoopRecoversFromPanicInEmit_EscalationPath_1749(t *testing.T) {
+	defer snapshotAndResetRegistry(t)()
+
+	threshold := 1 * time.Minute
+
+	var reconnectCalls int32
+
+	s := &SourceLivenessState{
+		Tag:           "panic-escalation",
+		Broker:        "tcp://x:1883",
+		IsConnectedFn: func() bool { return false }, // disconnected
+		ForceReconnectFn: func() {
+			atomic.AddInt32(&reconnectCalls, 1)
+		},
+	}
+	// Pre-stamp DisconnectedSinceUnix past the escalation threshold
+	// (disconnectedReconnectMultiplier × threshold = 5 × 1min = 5min).
+	// Set it 10 minutes in the past so escalation fires immediately.
+	atomic.StoreInt64(&s.DisconnectedSinceUnix, time.Now().Add(-10*time.Minute).Unix())
+	atomic.StoreInt64(&s.StartedAt, time.Now().Add(-20*time.Minute).Unix())
+	if err := registerLivenessState(s); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	// Track which tick we're on to control panic timing.
+	var tickNum int32
+	var mu sync.Mutex
+	var emitCalls int
+	emit := func(args ...any) {
+		mu.Lock()
+		emitCalls++
+		mu.Unlock()
+		// Tick 1 (tickNum==1): all emits succeed → ForceReconnectFn fires.
+		// Tick 2 (tickNum==2): panic on first emit in escalation path.
+		// Tick 3: proves loop survived.
+		if atomic.LoadInt32(&tickNum) == 2 {
+			panic("synthetic emit panic on ESCALATION path (#1749 round-1 finding)")
+		}
+	}
+
+	tick := make(chan time.Time)
+	done := make(chan struct{})
+
+	exited := make(chan struct{})
+	go func() {
+		defer func() {
+			_ = recover()
+			close(exited)
+		}()
+		runLivenessWatchdogLoop(tick, done, threshold, emit)
+	}()
+
+	base := time.Now()
+
+	// Tick 1: escalation fires, ForceReconnectFn is invoked, no panic.
+	atomic.StoreInt32(&tickNum, 1)
+	select {
+	case tick <- base:
+	case <-time.After(time.Second):
+		t.Fatal("tick 1 blocked")
+	}
+	time.Sleep(150 * time.Millisecond) // let goroutine with ForceReconnectFn run
+
+	if rc := atomic.LoadInt32(&reconnectCalls); rc < 1 {
+		t.Fatalf("ForceReconnectFn must be invoked ≥1 time after tick 1 (got %d)", rc)
+	}
+
+	// Reset state so tick 2 also triggers escalation.
+	atomic.StoreInt64(&s.DisconnectedSinceUnix, base.Add(-10*time.Minute).Unix())
+	atomic.StoreInt64(&s.LastForceReconnectUnix, 0)
+
+	// Tick 2: emit panics on escalation path. On unfixed code this
+	// kills the loop because maybeEscalateDisconnected is outside IIFE.
+	atomic.StoreInt32(&tickNum, 2)
+	select {
+	case tick <- base.Add(time.Second):
+	case <-time.After(time.Second):
+		t.Fatal("tick 2 blocked")
+	}
+	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-exited:
+		t.Fatal("watchdog loop died from panic in emit on ESCALATION path (#1749 round-1) — maybeEscalateDisconnected is not panic-protected")
+	default:
+	}
+
+	// Tick 3: proves loop survived the panic on tick 2.
+	atomic.StoreInt32(&tickNum, 3)
+	atomic.StoreInt64(&s.DisconnectedSinceUnix, base.Add(-10*time.Minute).Unix())
+	atomic.StoreInt64(&s.LastForceReconnectUnix, 0)
+	select {
+	case tick <- base.Add(2 * time.Second):
+	case <-exited:
+		t.Fatal("watchdog loop died; tick 3 cannot be delivered")
+	case <-time.After(time.Second):
+		t.Fatal("tick 3 blocked — loop dead")
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	mu.Lock()
+	got := emitCalls
+	mu.Unlock()
+	// Tick 1: 2 emits (escalation + "forcing reconnect") + 1 from goroutine = 3
+	// Tick 2: 1 emit (panic) = partial
+	// Tick 3: ≥1 emit
+	// Total should be ≥4 if loop survived
+	if got < 4 {
+		t.Fatalf("emit must be called ≥4 times across 3 ticks (got %d) — loop did not survive escalation panic", got)
+	}
+
+	close(done)
+	select {
+	case <-exited:
+	case <-time.After(time.Second):
+		t.Fatal("loop did not exit after done signal")
+	}
+}
