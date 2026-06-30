@@ -3,9 +3,14 @@
 const vm = require('vm');
 const fs = require('fs');
 
+const labelsCode = fs.readFileSync('public/payload-labels.js', 'utf8');
 const code = fs.readFileSync('public/packet-filter.js', 'utf8');
 const ctx = { window: {}, console };
 vm.createContext(ctx);
+// PR #1804 r1 item 9: packet-filter.js hard-fails if window.PayloadLabels
+// is missing. Pre-load the canonical module so the test exercises the
+// production code path.
+vm.runInContext(labelsCode, ctx);
 vm.runInContext(code, ctx);
 const PF = ctx.window.PacketFilter;
 
