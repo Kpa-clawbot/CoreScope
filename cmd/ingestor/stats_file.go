@@ -246,21 +246,21 @@ func StartStatsFileWriter(s *Store, interval time.Duration) {
 			ioRate := procIORate(prevIO, curIO, stamp)
 			prevIO = curIO
 			snap := IngestorStatsSnapshot{
-				SampledAt:          stamp,
-				TxInserted:         s.Stats.TransmissionsInserted.Load(),
-				ObsInserted:        s.Stats.ObservationsInserted.Load(),
-				DuplicateTx:        s.Stats.DuplicateTransmissions.Load(),
-				NodeUpserts:        s.Stats.NodeUpserts.Load(),
-				ObserverUpserts:    s.Stats.ObserverUpserts.Load(),
-				WriteErrors:        s.Stats.WriteErrors.Load(),
-				SignatureDrops:     s.Stats.SignatureDrops.Load(),
-				WALCommits:         s.Stats.WALCommits.Load(),
-				GroupCommitFlushes: 0, // group commit reverted (refs #1129)
-				BackfillUpdates:    s.Stats.SnapshotBackfills(),
-				ProcIO:             ioRate,
-				WriterPerf:         s.WriterStatsSnapshot(),
-				SourceLiveness:     SnapshotLivenessClocks(),
-				SourceStatuses:     SnapshotSourceStatuses(tickAt),
+				SampledAt:            stamp,
+				TxInserted:           s.Stats.TransmissionsInserted.Load(),
+				ObsInserted:          s.Stats.ObservationsInserted.Load(),
+				DuplicateTx:          s.Stats.DuplicateTransmissions.Load(),
+				NodeUpserts:          s.Stats.NodeUpserts.Load(),
+				ObserverUpserts:      s.Stats.ObserverUpserts.Load(),
+				WriteErrors:          s.Stats.WriteErrors.Load(),
+				SignatureDrops:       s.Stats.SignatureDrops.Load(),
+				WALCommits:           s.Stats.WALCommits.Load(),
+				GroupCommitFlushes:   0, // group commit reverted (refs #1129)
+				BackfillUpdates:      s.Stats.SnapshotBackfills(),
+				ProcIO:               ioRate,
+				WriterPerf:           s.WriterStatsSnapshot(),
+				SourceLiveness:       SnapshotLivenessClocks(),
+				SourceStatuses:       SnapshotSourceStatuses(tickAt),
 				WatchdogLastTickUnix: WatchdogLastTickUnix(),
 			}
 			buf.Reset()

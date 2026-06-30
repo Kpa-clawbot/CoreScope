@@ -82,8 +82,8 @@ const (
 //     window. r1's StartedAt-as-grace-clock conflated transient-stall
 //     suppression with cold-start grace; r2 separates them.
 type SourceLivenessState struct {
-	Tag    string
-	Broker string
+	Tag             string
+	Broker          string
 	LastMessageUnix int64 // atomic; unix seconds of last successfully WRITTEN MQTT message (handleMessage post-write)
 	// LastReceiptUnix (PR #1609 M1) is stamped at MQTT receipt time —
 	// BEFORE the message is handed to the buffer/writer. STUB: unused
@@ -519,4 +519,3 @@ func maybeForceReconnect(s *SourceLivenessState, now time.Time, emit func(...any
 		emit(fmt.Sprintf("MQTT [%s] WATCHDOG reconnect attempt issued", s.Tag))
 	}()
 }
-
