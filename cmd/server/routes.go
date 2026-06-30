@@ -579,6 +579,13 @@ func (s *Server) handleConfigTheme(w http.ResponseWriter, r *http.Request) {
 		"surface3":     "#2d2d50",
 		"sectionBg":    "#1e1e34",
 	}, s.cfg.ThemeDark, theme.ThemeDark)
+	// #1799 PR #1804 r1 item 6: REQUEST→REQ rename is a BREAKING change to
+	// the /api/config/theme shape. Compat policy for >=1 release cycle:
+	//   - INCOMING: if an operator's config.json / theme.json carries the
+	//     legacy "REQUEST" key, normalise it to "REQ" before mergeMap so
+	//     the override wins the canonical slot.
+	//   - OUTGOING: dual-emit REQ AND REQUEST in the GET response so any
+	//     consumer still reading the legacy key keeps working.
 	typeColors := mergeMap(map[string]interface{}{
 		"ADVERT":   "#22c55e",
 		"GRP_TXT":  "#3b82f6",
@@ -590,7 +597,11 @@ func (s *Server) handleConfigTheme(w http.ResponseWriter, r *http.Request) {
 		"PATH":     "#14b8a6",
 		"ANON_REQ": "#f43f5e",
 		"UNKNOWN":  "#6b7280",
-	}, s.cfg.TypeColors, theme.TypeColors)
+	}, normaliseTypeColorsLegacyKeys(s.cfg.TypeColors), normaliseTypeColorsLegacyKeys(theme.TypeColors))
+	// Dual-emit REQUEST = REQ for back-compat (drop after >=1 release cycle).
+	if v, ok := typeColors["REQ"]; ok {
+		typeColors["REQUEST"] = v
+	}
 
 	defaultHome := map[string]interface{}{
 		"heroTitle":    "CoreScope",
@@ -3084,6 +3095,29 @@ func queryInt(r *http.Request, key string, def int) int {
 		return def
 	}
 	return n
+}
+
+// normaliseTypeColorsLegacyKeys returns a copy of `m` with the legacy
+// "REQUEST" key renamed to the canonical "REQ". If both keys are present
+// the canonical wins (caller already chose the new name explicitly).
+// #1799 PR #1804 r1 item 6: keeps stale operator config.json working
+// after the REQUEST→REQ rename for >=1 release cycle. Returns nil for
+// a nil input so mergeMap's nil-skip continues to work.
+func normaliseTypeColorsLegacyKeys(m map[string]interface{}) map[string]interface{} {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]interface{}, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	if legacy, ok := out["REQUEST"]; ok {
+		if _, hasCanon := out["REQ"]; !hasCanon {
+			out["REQ"] = legacy
+		}
+		delete(out, "REQUEST")
+	}
+	return out
 }
 
 func mergeMap(base map[string]interface{}, overlays ...map[string]interface{}) map[string]interface{} {
