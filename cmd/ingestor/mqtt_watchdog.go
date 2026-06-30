@@ -18,6 +18,33 @@ const livenessHeartbeatInterval = time.Hour
 // reconnects on the SAME source. See processLivenessTransition.
 const forceReconnectThrottle = 60 * time.Second
 
+// disconnectedReconnectMultiplier (#1749) governs how long a source may
+// stay in LivenessDisconnected before the watchdog escalates with a
+// forced reconnect. paho's SetAutoReconnect(true) normally recovers a
+// dropped connection; in production we have observed paho's reconnect
+// machinery silently dying for a single source while another source on
+// the same binary reconnects fine (prod 2026-06-30: connectCount=1,
+// disconnectCount=1, lastError="EOF", zero retries for 18h). When the
+// source stays !IsConnected for more than `multiplier × threshold`,
+// the watchdog forces a reconnect rather than trusting paho to recover.
+const disconnectedReconnectMultiplier = 5
+
+// watchdogLastTickUnix (#1749) is the wall-clock unix-seconds timestamp
+// of the most recent runLivenessWatchdogLoop tick. The watchdog
+// goroutine has itself gone silent in production (#1749: 3 sources
+// stalled simultaneously for 75 min with zero WATCHDOG log lines),
+// suggesting goroutine-level failure. Exposing this clock via
+// /api/mqtt/status lets external monitoring assert that the watchdog
+// is still ticking — a stale value (e.g. > 2× the scan interval)
+// indicates the watchdog itself is dead.
+var watchdogLastTickUnix atomic.Int64
+
+// WatchdogLastTickUnix returns the unix-seconds timestamp of the most
+// recent watchdog tick. Returns 0 if the watchdog has never ticked.
+func WatchdogLastTickUnix() int64 {
+	return watchdogLastTickUnix.Load()
+}
+
 // LivenessKind enumerates the watchdog verdicts for a source. Edge-triggered
 // transitions use this to decide whether to emit (and what severity).
 type LivenessKind int
@@ -88,6 +115,15 @@ type SourceLivenessState struct {
 	// recent forced reconnect for this source; the watchdog reads it
 	// to enforce forceReconnectThrottle. atomic.
 	LastForceReconnectUnix int64
+	// DisconnectedSinceUnix (#1749) is the unix-seconds timestamp of
+	// the FIRST tick on which the watchdog observed this source in
+	// LivenessDisconnected (paho reports !IsConnected). Cleared back
+	// to 0 on any tick where the source is NOT disconnected. When the
+	// gap (now - DisconnectedSinceUnix) exceeds
+	// disconnectedReconnectMultiplier × threshold, the watchdog
+	// escalates with a forced reconnect on the assumption that paho's
+	// own auto-reconnect machinery has silently died. atomic.
+	DisconnectedSinceUnix int64
 	// AttemptCount is incremented on every TCP/TLS connection attempt. Used
 	// by ConnectionAttemptHandler to log attempt # independent of paho's
 	// internal reconnect-loop state. atomic.
