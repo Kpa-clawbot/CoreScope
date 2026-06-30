@@ -81,8 +81,8 @@ test('packets.js: DEFAULT_TYPE_NAMES inline fallback is gone', () => {
 
 test('packets.js: hard guard for missing PayloadLabels', () => {
   // Must throw, not silently fall back.
-  assert(/if\s*\(!\s*window\.PayloadLabels\s*\)\s*\{?\s*throw/.test(packetsSrc),
-    'packets.js missing `if (!window.PayloadLabels) throw …` guard');
+  assert(/!\s*window\.PayloadLabels[\s\S]{0,80}throw/.test(packetsSrc),
+    'packets.js missing `!window.PayloadLabels → throw` guard');
 });
 
 test('packet-filter.js: _FALLBACK_FW + _FALLBACK_ALIASES gone', () => {
@@ -93,7 +93,7 @@ test('packet-filter.js: _FALLBACK_FW + _FALLBACK_ALIASES gone', () => {
 });
 
 test('packet-filter.js: hard guard for missing PayloadLabels', () => {
-  assert(/if\s*\(!\s*window\.PayloadLabels\s*\)\s*\{?\s*throw/.test(filterSrc),
+  assert(/!\s*window\.PayloadLabels[\s\S]{0,120}throw/.test(filterSrc),
     'packet-filter.js missing throw-guard');
 });
 
@@ -103,7 +103,7 @@ test('live.js buildLegendHtml: INLINE_LABELS fallback is gone', () => {
 });
 
 test('live.js: hard guard for missing PayloadLabels at top of file', () => {
-  assert(/if\s*\(!\s*window\.PayloadLabels\s*\)\s*\{?\s*throw/.test(liveSrc),
+  assert(/!\s*window\.PayloadLabels[\s\S]{0,120}throw/.test(liveSrc),
     'live.js missing throw-guard');
 });
 

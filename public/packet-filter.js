@@ -6,37 +6,24 @@
 
   // Canonical payload-label module is the single source of truth (#1799).
   //
-  // Fallback-literal policy (#1799 r1 — chosen across all consumers):
-  //   - Node:    require('./payload-labels.js'). No literal fallback; if
-  //              the require fails, that's a packaging bug and the test
-  //              SHOULD crash loud rather than mask it.
-  //   - Browser: window.PayloadLabels (canonical) is loaded before any
-  //              consumer in index.html. If it's missing at runtime we
-  //              log console.error AND fall back to an INLINE map that is
-  //              asserted-equal to canonical by the E2E (drift gate).
+  // #1799 PR #1804 r1 item 9 (adv6): inline fallbacks dropped. In the
+  // browser, payload-labels.js is loaded synchronously before this
+  // script in index.html — a missing module is a packaging bug that
+  // should crash loud, not silently mask itself as stale labels.
   var _PL;
   if (typeof window !== 'undefined') {
-    _PL = window.PayloadLabels || null;
-    if (!_PL) {
-      console.error('packet-filter.js: window.PayloadLabels missing — payload-labels.js failed to load. Using inline fallback.');
+    if (!window.PayloadLabels) {
+      throw new Error('packet-filter.js: window.PayloadLabels missing — payload-labels.js failed to load');
     }
+    _PL = window.PayloadLabels;
   } else {
-    // Node — canonical must load. No silent fallback.
     _PL = require('./payload-labels.js');
   }
-
-  // Inline browser-only fallback. MUST stay byte-identical to the canonical
-  // FW_PAYLOAD_TYPES / TYPE_ALIASES exposed by public/payload-labels.js.
-  // The E2E (test-issue-1799-label-vocab-e2e.js) asserts equality.
-  //
-  // `istanbul ignore next` keeps `nyc instrument` from wrapping the
-  // literal in `(cov().s[N]++, {...})`, which would break the E2E's
-  // `_FALLBACK_FW\s*=\s*\{` regex anchor in the instrumented CI build.
-  /* istanbul ignore next */
-  var _FALLBACK_FW = { 0: 'REQ', 1: 'RESPONSE', 2: 'TXT_MSG', 3: 'ACK', 4: 'ADVERT', 5: 'GRP_TXT', 6: 'GRP_DATA', 7: 'ANON_REQ', 8: 'PATH', 9: 'TRACE', 10: 'MULTIPART', 11: 'CONTROL', 15: 'RAW_CUSTOM' };
-  var _FALLBACK_ALIASES = { 'request': 'REQ', 'response': 'RESPONSE', 'direct msg': 'TXT_MSG', 'dm': 'TXT_MSG', 'ack': 'ACK', 'advert': 'ADVERT', 'channel msg': 'GRP_TXT', 'channel': 'GRP_TXT', 'group data': 'GRP_DATA', 'anon req': 'ANON_REQ', 'path': 'PATH', 'trace': 'TRACE', 'multipart': 'MULTIPART', 'control': 'CONTROL', 'raw': 'RAW_CUSTOM', 'custom': 'RAW_CUSTOM', 'raw custom': 'RAW_CUSTOM' };
-  var FW_PAYLOAD_TYPES = (_PL && _PL.FW_PAYLOAD_TYPES) || _FALLBACK_FW;
-  var TYPE_ALIASES     = (_PL && _PL.TYPE_ALIASES)     || _FALLBACK_ALIASES;
+  // Prefer the .api namespace introduced in PR #1804 r1 item 8; legacy
+  // root-level properties remain as a fall-through for older callers.
+  var _src = _PL.api || _PL;
+  var FW_PAYLOAD_TYPES = _src.FW_PAYLOAD_TYPES;
+  var TYPE_ALIASES     = _src.TYPE_ALIASES;
   var ROUTE_TYPES = { 0: 'TRANSPORT_FLOOD', 1: 'FLOOD', 2: 'DIRECT', 3: 'TRANSPORT_DIRECT' };
   // Aliases: shorthand → canonical route name (issue #339)
   var ROUTE_ALIASES = { 't_flood': 'TRANSPORT_FLOOD', 't_direct': 'TRANSPORT_DIRECT' };

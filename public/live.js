@@ -1,6 +1,14 @@
 (function() {
   'use strict';
 
+  // #1799 PR #1804 r1 item 9 (adv6): payload-labels.js is loaded
+  // synchronously before this script in index.html. Missing module is
+  // a packaging bug — crash loud rather than render with stale inline
+  // fallback data.
+  if (!window.PayloadLabels) {
+    throw new Error('live.js: window.PayloadLabels missing — payload-labels.js failed to load');
+  }
+
   // getParsedPath / getParsedDecoded are in shared packet-helpers.js (loaded before this file)
   var getParsedPath = window.getParsedPath;
   var getParsedDecoded = window.getParsedDecoded;
@@ -162,33 +170,15 @@
   // test-live-legend-helper.js. Emits one <li data-enum="<ENUM>">…</li>
   // per entry in ORDER, each row formatted as `SHORT — LONG`.
   //
-  // Inline fallback policy mirrors packets.js / packet-filter.js: if
-  // window.PayloadLabels failed to load we log loud + fall back to a
-  // map that is byte-equal to the canonical one (drift gate in E2E).
+  // #1804 r1 item 9 (adv6): inline fallback dropped. The top-of-file
+  // guard already crashed if PayloadLabels was missing, so by the time
+  // we reach here the canonical map is guaranteed to be there.
   function buildLegendHtml(PL) {
-    var INLINE_ORDER = ['ADVERT','GRP_TXT','TXT_MSG','REQ','RESPONSE','TRACE','PATH','ANON_REQ','GRP_DATA','MULTIPART','CONTROL','RAW_CUSTOM','ACK'];
-    /* istanbul ignore next */
-    var INLINE_LABELS = {
-      REQ:        { short: 'Request',     long: 'Encrypted data request to a remote node' },
-      RESPONSE:   { short: 'Response',    long: 'Encrypted data response from a remote node' },
-      TXT_MSG:    { short: 'Direct Msg',  long: 'Encrypted point-to-point text message' },
-      ACK:        { short: 'ACK',         long: 'Acknowledgment of a prior message or request' },
-      ADVERT:     { short: 'Advert',      long: 'Node identity / capability advertisement' },
-      GRP_TXT:    { short: 'Channel Msg', long: 'Channel-scoped group text message' },
-      GRP_DATA:   { short: 'Group Data',  long: 'Channel-scoped group datagram (non-text payload)' },
-      ANON_REQ:   { short: 'Anon Req',    long: 'Anonymous encrypted request via ephemeral key' },
-      PATH:       { short: 'Path',        long: 'Network path discovery / return-path advertisement' },
-      TRACE:      { short: 'Trace',       long: 'Per-hop route trace with SNR samples' },
-      MULTIPART:  { short: 'Multipart',   long: 'Fragmented payload reassembled across multiple packets' },
-      CONTROL:    { short: 'Control',     long: 'Mesh control-plane signalling (e.g. zero-hop direct)' },
-      RAW_CUSTOM: { short: 'Raw Custom',  long: 'Application-defined raw payload, no firmware envelope' }
-    };
-    if (!PL) {
-      console.error('live.js buildLegendHtml: window.PayloadLabels missing — payload-labels.js failed to load. Using inline fallback.');
-    }
-    var order = (PL && PL.ORDER) || INLINE_ORDER;
+    var src = (PL && PL.api) ? PL.api : PL;
+    var enums = (PL && PL.enums) ? PL.enums : PL;
+    var order = src.ORDER;
     return order.map(function (k) {
-      var e = (PL && PL[k] && PL[k].short) ? PL[k] : INLINE_LABELS[k];
+      var e = enums[k];
       if (!e) return '';
       var color = TYPE_COLORS[k] || '#888';
       var label = e.short + ' \u2014 ' + e.long;

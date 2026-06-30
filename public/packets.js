@@ -623,30 +623,15 @@
   let packets = [];
   let hashIndex = new Map(); // hash → packet group for O(1) dedup
 
-  // Single fallback literal for SHORT_BY_ID. Hoisted (#1799 r1 item 1) so
-  // the same map isn't duplicated at line 720 and 1749. Browser-only
-  // consumer: if `window.PayloadLabels` is missing, payload-labels.js failed
-  // to load — emit console.error so script-load bugs are loud (#1799 r1
-  // item 4), then use this fallback. The E2E asserts it stays
-  // byte-identical to canonical (drift gate).
-  //
-  // The `istanbul ignore next` pragma keeps `nyc instrument` from wrapping
-  // the object literal in a `(cov().s[N]++, {...})` coverage hit, which
-  // would break the E2E's `DEFAULT_TYPE_NAMES\s*=\s*\{` regex anchor when
-  // running against `public-instrumented/` in CI.
-  /* istanbul ignore next */
-  const DEFAULT_TYPE_NAMES = {
-    0: 'Request', 1: 'Response', 2: 'Direct Msg', 3: 'ACK', 4: 'Advert',
-    5: 'Channel Msg', 6: 'Group Data', 7: 'Anon Req', 8: 'Path',
-    9: 'Trace', 10: 'Multipart', 11: 'Control', 15: 'Raw Custom'
-  };
-  const SHORT_BY_ID = (function () {
-    if (window.PayloadLabels && window.PayloadLabels.SHORT_BY_ID) {
-      return window.PayloadLabels.SHORT_BY_ID;
-    }
-    console.error('packets.js: window.PayloadLabels missing — payload-labels.js failed to load. Using inline fallback.');
-    return DEFAULT_TYPE_NAMES;
-  })();
+  // #1799 PR #1804 r1 item 9 (adv6): payload-labels.js is loaded
+  // synchronously before this script in index.html. A missing module
+  // is a packaging bug, not a runtime degradation — fail loud.
+  if (typeof window !== 'undefined' && !window.PayloadLabels) {
+    throw new Error('packets.js: window.PayloadLabels missing — payload-labels.js failed to load');
+  }
+  const SHORT_BY_ID = window.PayloadLabels.api
+    ? window.PayloadLabels.api.SHORT_BY_ID
+    : window.PayloadLabels.SHORT_BY_ID;
 
   // Resolve observer_id to friendly name from loaded observers list
   function obsName(id) {

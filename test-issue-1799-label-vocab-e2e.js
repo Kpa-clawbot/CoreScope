@@ -230,65 +230,17 @@ async function packetsTypeLabels(page) {
     }
   });
 
-  await step('inline fallback maps in packets.js / packet-filter.js / live.js are byte-identical to canonical (drift gate)', async () => {
-    // Round-1 item 12 (drift gate): if payload-labels.js is missing at
-    // runtime, each consumer falls back to an inline literal. Fetch the
-    // sources and assert the fallback maps STILL match the canonical map.
-    const sources = await page.evaluate(async () => {
-      async function fetchText(url) { const r = await fetch(url); return r.text(); }
-      return {
-        canonical: await fetchText('/payload-labels.js'),
-        packets:   await fetchText('/packets.js'),
-        liveJs:    await fetchText('/live.js'),
-        filterJs:  await fetchText('/packet-filter.js')
-      };
-    });
-
-    // Extract enumId → enum-name mapping from canonical so we can compare
-    // canonical to each fallback regardless of declaration shape.
-    const canonShort = {};
-    const reEntry = /(\w+):\s*\{\s*enumName:\s*'(\w+)',\s*short:\s*'([^']+)',\s*long:[^}]+enumId:\s*(\d+)/g;
-    let m;
-    while ((m = reEntry.exec(sources.canonical)) !== null) {
-      canonShort[m[4]] = m[3]; // id → short
-    }
-    assert(Object.keys(canonShort).length === ALL_ENUMS.length,
-      `canonical parse: expected ${ALL_ENUMS.length} entries, got ${Object.keys(canonShort).length}`);
-
-    // packets.js DEFAULT_TYPE_NAMES (id → short).
-    const pktBlock = sources.packets.match(/DEFAULT_TYPE_NAMES\s*=\s*\{([\s\S]*?)\};/);
-    assert(pktBlock, 'packets.js DEFAULT_TYPE_NAMES block not found');
-    const pktMap = {};
-    const rePkt = /(\d+):\s*'([^']+)'/g;
-    while ((m = rePkt.exec(pktBlock[1])) !== null) pktMap[m[1]] = m[2];
-    for (const id of Object.keys(canonShort)) {
-      assert(pktMap[id] === canonShort[id],
-        `packets.js DEFAULT_TYPE_NAMES[${id}] drift: canonical="${canonShort[id]}", fallback="${pktMap[id]}"`);
-    }
-
-    // packet-filter.js _FALLBACK_FW (id → enumName).
-    const pfBlock = sources.filterJs.match(/_FALLBACK_FW\s*=\s*\{([^}]+)\}/);
-    assert(pfBlock, 'packet-filter.js _FALLBACK_FW block not found');
-    const canonEnum = {};
-    const reCanonEnum = /enumName:\s*'(\w+)',\s*short:\s*'[^']+',\s*long:[^}]+enumId:\s*(\d+)/g;
-    while ((m = reCanonEnum.exec(sources.canonical)) !== null) canonEnum[m[2]] = m[1];
-    const pfMap = {};
-    while ((m = rePkt.exec(pfBlock[1])) !== null) pfMap[m[1]] = m[2];
-    for (const id of Object.keys(canonEnum)) {
-      assert(pfMap[id] === canonEnum[id],
-        `packet-filter.js _FALLBACK_FW[${id}] drift: canonical="${canonEnum[id]}", fallback="${pfMap[id]}"`);
-    }
-
-    // live.js INLINE_LABELS (enumName → short).
-    const liveBlock = sources.liveJs.match(/INLINE_LABELS\s*=\s*\{([\s\S]*?)\n\s+\};/);
-    assert(liveBlock, 'live.js INLINE_LABELS block not found');
-    const reLive = /(\w+):\s*\{\s*short:\s*'([^']+)'/g;
-    const liveMap = {};
-    while ((m = reLive.exec(liveBlock[1])) !== null) liveMap[m[1]] = m[2];
-    for (const name of ALL_ENUMS) {
-      assert(liveMap[name] === EXPECTED_SHORT[name],
-        `live.js INLINE_LABELS[${name}] drift: expected="${EXPECTED_SHORT[name]}", fallback="${liveMap[name]}"`);
-    }
+  await step('canonical map exposed at window.PayloadLabels.enums (PR #1804 r1 item 8)', async () => {
+    const ok = await page.evaluate((enums) => {
+      const PL = window.PayloadLabels;
+      if (!PL || !PL.enums || !PL.api) return { ok: false, why: 'missing PL/enums/api' };
+      for (const k of enums) {
+        if (!PL.enums[k]) return { ok: false, why: 'PL.enums.' + k + ' missing' };
+        if (!PL.api.SHORT_BY_ID) return { ok: false, why: 'PL.api.SHORT_BY_ID missing' };
+      }
+      return { ok: true };
+    }, ALL_ENUMS);
+    assert(ok.ok, 'namespace check: ' + (ok.why || 'unknown'));
   });
 
   await step('navigate to /packets and open type filter', async () => { await gotoPackets(page); });

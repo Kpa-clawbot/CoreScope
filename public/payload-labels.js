@@ -107,10 +107,18 @@
     'raw custom': 'RAW_CUSTOM'
   };
 
-  // Public API — ONE global (#1799 r1 item 10). The map is exposed as
-  // `LABELS` and legacy direct-access (`PayloadLabels.GRP_DATA.short`) still
-  // works because every map entry hangs off the same object as a named
-  // property below.
+  // Public namespace (#1799 PR #1804 r1 item 8 / adv4): separate the
+  // CANONICAL ENUM MAP from the HELPERS/DERIVED collections.
+  //   window.PayloadLabels.enums[ENUM]  → entry { enumName, short, long, enumId }
+  //   window.PayloadLabels.api          → helpers + derived (SHORT_BY_ID,
+  //                                       ORDER, TYPE_ALIASES, shortById(), …)
+  // A future enum named 'BY_ID' or 'ORDER' is now impossible to confuse
+  // with a helper key.
+  //
+  // BACK-COMPAT: every legacy access shape still works because we also
+  // hang the enums + helpers at the root of the same object — direct
+  // `PayloadLabels.GRP_TXT.short` and `PayloadLabels.SHORT_BY_ID`
+  // continue to resolve. Removed in a future cycle.
   var api = {
     LABELS: PAYLOAD_LABELS,
     ORDER: ORDER,
@@ -122,17 +130,34 @@
     longById: function (id) { return (BY_ID[id] && BY_ID[id].long) || ''; },
     enumNameById: function (id) { return FW_PAYLOAD_TYPES[id]; }
   };
-  // Make every enum entry directly addressable on the API object so the
-  // legacy `window.PayloadLabels.GRP_DATA.short` shape keeps working without
-  // a second global.
+  var ns = {
+    enums: PAYLOAD_LABELS,
+    api: api,
+    // Legacy root-level helpers — kept for callers that haven't migrated
+    // to .api yet. Same object references, so a new enum can't shadow
+    // them at runtime (collisions still possible structurally, but the
+    // .enums/.api split is the safe path).
+    LABELS: PAYLOAD_LABELS,
+    ORDER: ORDER,
+    BY_ID: BY_ID,
+    FW_PAYLOAD_TYPES: FW_PAYLOAD_TYPES,
+    SHORT_BY_ID: SHORT_BY_ID,
+    TYPE_ALIASES: TYPE_ALIASES,
+    shortById: api.shortById,
+    longById: api.longById,
+    enumNameById: api.enumNameById
+  };
+  // Mirror each enum at the root for legacy direct-prop access
+  // (`window.PayloadLabels.GRP_TXT.short`). New code should read
+  // `.enums[GRP_TXT].short` and let this mirror retire.
   Object.entries(PAYLOAD_LABELS).forEach(function (kv) {
-    api[kv[0]] = kv[1];
+    ns[kv[0]] = kv[1];
   });
 
   if (typeof window !== 'undefined') {
-    window.PayloadLabels = api;
+    window.PayloadLabels = ns;
   }
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = api;
+    module.exports = ns;
   }
 })();
