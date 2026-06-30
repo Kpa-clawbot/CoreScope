@@ -4807,3 +4807,49 @@ func TestPostPacketPersistsV3Schema(t *testing.T) {
 		t.Errorf("timestamp: want unix int near %d, got %d", nowSec, gotTS)
 	}
 }
+
+// TestConfigThemeTypeColorsLegacyRequestKey verifies the REQUEST→REQ rename
+// (#1799 PR #1804 r1 item 6) doesn't break operators whose config.json still
+// carries the legacy `typeColors.REQUEST` key. The GET response must:
+//   - accept a config that supplies "REQUEST" and have that value win the
+//     mergeMap precedence for the corresponding logical slot
+//   - emit BOTH "REQ" and "REQUEST" in typeColors for ≥1 release cycle so
+//     downstream consumers reading the legacy key keep working
+func TestConfigThemeTypeColorsLegacyRequestKey(t *testing.T) {
+	db := setupTestDB(t)
+	seedTestData(t, db)
+	cfg := &Config{
+		Port: 3000,
+		TypeColors: map[string]interface{}{
+			// Operator's stale config — legacy key only.
+			"REQUEST": "#deadbe",
+		},
+	}
+	hub := NewHub()
+	srv := NewServer(db, cfg, hub)
+	router := mux.NewRouter()
+	srv.RegisterRoutes(router)
+
+	req := httptest.NewRequest("GET", "/api/config/theme", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	tc, ok := body["typeColors"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("typeColors missing or wrong shape: %v", body["typeColors"])
+	}
+	// Legacy operator override must propagate to the canonical REQ slot.
+	if tc["REQ"] != "#deadbe" {
+		t.Errorf("typeColors.REQ: want #deadbe (from legacy REQUEST override), got %v", tc["REQ"])
+	}
+	// Back-compat emission: REQUEST also present, equal to REQ.
+	if tc["REQUEST"] != "#deadbe" {
+		t.Errorf("typeColors.REQUEST: want #deadbe (back-compat dual-emit), got %v", tc["REQUEST"])
+	}
+}
