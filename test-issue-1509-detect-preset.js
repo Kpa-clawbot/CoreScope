@@ -87,8 +87,10 @@ function makeSandbox(opts) {
 
 function loadCustomizer(opts) {
   const { ctx, cssProps } = makeSandbox(opts);
+  const labelsCode = fs.readFileSync('public/payload-labels.js', 'utf8');
   const code = fs.readFileSync('public/customize-v2.js', 'utf8');
   vm.createContext(ctx);
+  vm.runInContext(labelsCode, ctx, { filename: 'payload-labels.js' });
   vm.runInContext(code, ctx, { filename: 'customize-v2.js' });
   return { api: ctx.window._customizerV2, cssProps, ls: ctx.localStorage };
 }

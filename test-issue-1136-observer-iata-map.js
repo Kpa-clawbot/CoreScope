@@ -84,6 +84,7 @@ function load(ctx, file) {
 
 console.log('\n=== live.js: /api/observers parse (#1136) ===');
 const ctx = makeSandbox();
+load(ctx, 'public/payload-labels.js');
 load(ctx, 'public/roles.js');
 load(ctx, 'public/live.js');
 

@@ -28,6 +28,7 @@ function assert(cond, msg) {
 
 const indexSrc  = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
 const customSrc = fs.readFileSync(path.join(__dirname, 'public', 'customize-v2.js'), 'utf8');
+const labelsSrc = fs.readFileSync(path.join(__dirname, 'public', 'payload-labels.js'), 'utf8');
 
 console.log('\n=== #1380 A: index.html has inline SVG filters for the 4 sim classes ===');
 ['cb-deut', 'cb-prot', 'cb-trit', 'cb-achromat'].forEach(function (id) {
@@ -137,6 +138,7 @@ let envOK = false, env, exposed;
 try {
   env = makeSandbox();
   vm.createContext(env.sandbox);
+  vm.runInContext(labelsSrc, env.sandbox, { filename: 'payload-labels.js' });
   vm.runInContext(customSrc, env.sandbox, { filename: 'customize-v2.js' });
   exposed = env.sandbox.window._customizerV2;
   envOK = !!exposed;

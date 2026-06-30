@@ -89,6 +89,13 @@ function makeSandbox() {
 }
 
 function loadInCtx(ctx, file) {
+  // PR #1804 r1 item 9: live.js / packets.js / customize-v2.js / packet-filter.js
+  // now hard-fail if window.PayloadLabels is missing. Auto-preload payload-labels.js
+  // (idempotent) before any drift-gated file so tests exercise the prod path.
+  if (!ctx.__payloadLabelsLoaded && file !== 'public/payload-labels.js') {
+    ctx.__payloadLabelsLoaded = true;
+    vm.runInContext(fs.readFileSync('public/payload-labels.js', 'utf8'), ctx);
+  }
   vm.runInContext(fs.readFileSync(file, 'utf8'), ctx);
   // Copy window.* to global context so bare references work
   for (const k of Object.keys(ctx.window)) {

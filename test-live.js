@@ -157,6 +157,7 @@ function makeLiveSandbox({ withAppJs = false } = {}) {
   const ctx = makeSandbox();
   addLiveGlobals(ctx);
 
+  loadInCtx(ctx, 'public/payload-labels.js');
   loadInCtx(ctx, 'public/roles.js');
   loadInCtx(ctx, 'public/packet-helpers.js');
   if (withAppJs) loadInCtx(ctx, 'public/app.js');
@@ -288,6 +289,7 @@ console.log('\n=== live.js: expandToBufferEntriesAsync ===');
   // Build a sandbox with packet-helpers loaded so expandToBufferEntries can call dbPacketToLive
   const ctx = makeSandbox();
   addLiveGlobals(ctx);
+  loadInCtx(ctx, 'public/payload-labels.js');
   loadInCtx(ctx, 'public/roles.js');
   loadInCtx(ctx, 'public/packet-helpers.js');
   try { loadInCtx(ctx, 'public/live.js'); } catch (e) {

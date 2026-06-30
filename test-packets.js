@@ -105,6 +105,7 @@ function loadInCtx(ctx, file) {
 function loadPacketsSandbox() {
   const ctx = makeSandbox();
   // Load dependencies first
+  loadInCtx(ctx, 'public/payload-labels.js');
   loadInCtx(ctx, 'public/roles.js');
   loadInCtx(ctx, 'public/app.js');
   loadInCtx(ctx, 'public/packet-helpers.js');
@@ -1165,6 +1166,7 @@ console.log('\n=== packets.js: scroll position preserved across renderTableRows 
     return null;
   };
 
+  loadInCtx(ctx, 'public/payload-labels.js');
   loadInCtx(ctx, 'public/roles.js');
   loadInCtx(ctx, 'public/app.js');
   loadInCtx(ctx, 'public/packet-helpers.js');

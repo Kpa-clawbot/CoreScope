@@ -83,6 +83,7 @@ function load(ctx, file) {
 
 console.log('\n=== live.js: region filter (#1045) ===');
 const ctx = makeSandbox();
+load(ctx, 'public/payload-labels.js');
 load(ctx, 'public/roles.js');
 load(ctx, 'public/live.js');
 

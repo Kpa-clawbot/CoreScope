@@ -146,6 +146,7 @@ function makeLiveSandbox() {
   ctx.window.localStorage = ctx.localStorage;
   vm.createContext(ctx);
   // Load filter helpers first so live.js sees window.MC_* on import.
+  load(ctx, 'public/payload-labels.js');
   load(ctx, 'public/hop-filter.js');
   // Mirror window.* onto top-level for files that reference bare names.
   for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];

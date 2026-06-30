@@ -35,7 +35,7 @@ function test(name, fn) {
 function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
 
 const ctx = makeCtx();
-loadInCtx(['public/packet-filter.js', 'public/filter-ux.js'], ctx);
+loadInCtx(['public/payload-labels.js', 'public/packet-filter.js', 'public/filter-ux.js'], ctx);
 const PF = ctx.window.PacketFilter;
 const UX = ctx.window.FilterUX;
 

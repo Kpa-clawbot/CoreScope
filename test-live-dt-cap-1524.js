@@ -61,6 +61,7 @@ const ctx = {
 };
 vm.createContext(ctx);
 
+vm.runInContext(fs.readFileSync('public/payload-labels.js', 'utf8'), ctx);
 const src = fs.readFileSync('public/live.js', 'utf8');
 vm.runInContext(src, ctx);
 
