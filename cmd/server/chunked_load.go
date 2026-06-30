@@ -107,24 +107,37 @@ func (s *PacketStore) fireChunkCallbacks(rowsThisChunk, totalRows int) {
 
 // RunStartupLoad orchestrates the startup load sequence:
 //  1. start LoadChunked (async)
-//  2. wait for FirstChunkReady (caller's HTTP listener may bind)
-//  3. spawn the background fill loader (only AFTER LoadChunked completes
-//     and oldestLoaded is set; see issue #1809)
+//  2. caller waits for FirstChunkReady to bind the HTTP listener
+//  3. spawn the background fill loader AFTER LoadChunked completes,
+//     so s.oldestLoaded is set before the bg loader reads it (#1809)
 //
-// chunkSize=0 uses the LoadChunked default. Returns the LoadChunked
-// error (if any).
+// chunkSize=0 uses the LoadChunked default. Blocks until LoadChunked
+// AND any background loader have finished. Callers that want to bind
+// the HTTP listener at FirstChunkReady should run this in a goroutine
+// and wait on FirstChunkReady() themselves.
 //
-// NOTE: this is the PRE-FIX stub. It reproduces issue #1809 by running
-// loadBackgroundChunks before LoadChunked has set s.oldestLoaded. The
-// bg loader then reads oldestLoaded="" and bails immediately → coverage
-// gate trips → backgroundLoadFailed=true. The fix moves bg loader
-// invocation to after LoadChunked completes.
+// Issue #1809 root cause: previously main.go spawned loadBackgroundChunks
+// at FirstChunkReady while LoadChunked was still merging the remainder
+// of the hot window. s.oldestLoaded is only assigned at the end of
+// LoadChunked (chunked_load.go:330), so the bg loader read "" and
+// bailed → coverage gate trips → backgroundLoadFailed=true. Gating the
+// bg loader on LoadChunked completion preserves the FirstChunkReady
+// HTTP-bind parallelism while ensuring oldestLoaded has a valid floor
+// when the bg loader starts.
 func (s *PacketStore) RunStartupLoad(chunkSize int) error {
-	// BUG #1809: bg loader runs first, observing oldestLoaded="".
+	loadErrCh := make(chan error, 1)
+	go func() {
+		loadErrCh <- s.LoadChunked(chunkSize)
+	}()
+	// Block until LoadChunked returns. Callers that want to bind their
+	// HTTP listener earlier can wait on FirstChunkReady() in parallel.
+	if err := <-loadErrCh; err != nil {
+		return err
+	}
 	if s.hotStartupHours > 0 {
 		s.loadBackgroundChunks()
 	}
-	return s.LoadChunked(chunkSize)
+	return nil
 }
 
 // LoadChunked streams transmissions + observations from SQLite into

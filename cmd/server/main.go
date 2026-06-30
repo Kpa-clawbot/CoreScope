@@ -215,35 +215,41 @@ func main() {
 		log.Printf("[neighbor] loaded persisted neighbor graph")
 	}
 
-	// #1009: chunked Load with early HTTP readiness. LoadChunked runs
+	// #1009: chunked Load with early HTTP readiness. RunStartupLoad runs
 	// asynchronously and signals FirstChunkReady after the first chunk
 	// is merged so the HTTP listener can bind without waiting for the
 	// full multi-minute scan to finish. loadStatusMiddleware (wired
 	// below) advertises loading|ready via X-CoreScope-Load-Status.
+	//
+	// #1809: the background fill loader (loadBackgroundChunks) used to
+	// be spawned here at FirstChunkReady, but at that point LoadChunked
+	// has not yet set s.oldestLoaded → bg loader read "" and bailed →
+	// coverage gate trips. RunStartupLoad now gates the bg loader on
+	// LoadChunked completion, preserving FirstChunkReady's parallelism
+	// for the HTTP listener bind.
 	chunkSize := cfg.DBLoadChunkSize()
 	loadErrCh := make(chan error, 1)
 	go func() {
-		loadErrCh <- store.LoadChunked(chunkSize)
+		loadErrCh <- store.RunStartupLoad(chunkSize)
 	}()
 	select {
 	case <-store.FirstChunkReady():
 		log.Printf("[store] first chunk ready (chunkSize=%d) — HTTP listener may bind", chunkSize)
 	case err := <-loadErrCh:
 		if err != nil {
-			log.Fatalf("[store] LoadChunked failed before first chunk: %v", err)
+			log.Fatalf("[store] RunStartupLoad failed before first chunk: %v", err)
 		}
-		log.Printf("[store] LoadChunked completed before first-chunk signal (empty DB?)")
+		log.Printf("[store] RunStartupLoad completed before first-chunk signal (empty DB?)")
+	}
+	if store.hotStartupHours > 0 {
+		log.Printf("[store] background load will start after LoadChunked completes: filling retentionHours=%gh from hotStartupHours=%gh",
+			store.retentionHours, store.hotStartupHours)
 	}
 	go func() {
 		if err := <-loadErrCh; err != nil {
-			log.Printf("[store] LoadChunked background error: %v", err)
+			log.Printf("[store] RunStartupLoad background error: %v", err)
 		}
 	}()
-	if store.hotStartupHours > 0 {
-		log.Printf("[store] starting background load: filling retentionHours=%gh from hotStartupHours=%gh",
-			store.retentionHours, store.hotStartupHours)
-		go store.loadBackgroundChunks()
-	}
 
 	// Neighbor graph: the persisted snapshot (if present) was already
 	// loaded above, before the packet load. Per #1287 schema migrations
