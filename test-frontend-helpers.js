@@ -1124,11 +1124,11 @@ console.log('\n=== live.js: pruneStaleNodes ===');
     const markers = ctx.window._liveNodeMarkers();
     const data = ctx.window._liveNodeData();
 
-    // A repeater seen 48h ago should NOT be pruned (infraSilentMs = 72h)
+    // A repeater seen 48h ago should NOT be pruned or dimmed (infraSilentMs = 72h)
     markers['rpt1'] = { _glowMarker: null };
     data['rpt1'] = { public_key: 'rpt1', role: 'repeater', _liveSeen: Date.now() - 48 * 3600000 };
 
-    // A repeater seen 96h ago SHOULD be pruned
+    // #1598: a repeater seen 96h ago is stale, but infra is DIMMED, never deleted
     markers['rpt2'] = { _glowMarker: null };
     data['rpt2'] = { public_key: 'rpt2', role: 'repeater', _liveSeen: Date.now() - 96 * 3600000 };
 
@@ -1136,8 +1136,30 @@ console.log('\n=== live.js: pruneStaleNodes ===');
 
     assert.ok(markers['rpt1'], 'repeater at 48h should remain (under 72h threshold)');
     assert.ok(data['rpt1'], 'repeater data at 48h should remain');
-    assert.ok(!markers['rpt2'], 'repeater at 96h should be pruned (over 72h threshold)');
-    assert.ok(!data['rpt2'], 'repeater data at 96h should be pruned');
+    assert.ok(!markers['rpt1']._staleDimmed, 'repeater at 48h should not be dimmed');
+    assert.ok(markers['rpt2'], 'repeater at 96h should remain (#1598: dim, not delete)');
+    assert.ok(data['rpt2'], 'repeater data at 96h should remain (#1598)');
+    assert.ok(markers['rpt2']._staleDimmed === true, 'repeater at 96h should be dimmed');
+  });
+
+  test('pruneStaleNodes: relay-aware — advert-silent repeater with fresh last_relayed stays active (#1598)', () => {
+    const { ctx } = makeLiveSandbox();
+    const prune = ctx.window._livePruneStaleNodes;
+    const markers = ctx.window._liveNodeMarkers();
+    const data = ctx.window._liveNodeData();
+
+    // Backbone fixture: advert 96h stale, relayed 5 minutes ago → active, undimmed
+    markers['bb1'] = { _glowMarker: null };
+    data['bb1'] = {
+      public_key: 'bb1', role: 'repeater',
+      _liveSeen: Date.now() - 96 * 3600000,
+      last_relayed: new Date(Date.now() - 5 * 60000).toISOString()
+    };
+
+    prune();
+
+    assert.ok(markers['bb1'], 'relaying repeater should remain');
+    assert.ok(!markers['bb1']._staleDimmed, 'relaying repeater should not be dimmed');
   });
 
   test('node count does not grow unbounded with repeated ADVERTs', () => {
