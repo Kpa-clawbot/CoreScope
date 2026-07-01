@@ -1,4 +1,16 @@
-# CoreScope — simple deployment using pre-built image from GHCR
+# CoreScope — simple single-container deployment using the pre-built
+# image from GHCR.
+#
+# AUDIENCE: third-party operators running a self-hosted CoreScope on
+# ONE host. Ships with the built-in Mosquitto broker DISABLED by
+# default (DISABLE_MOSQUITTO defaults to `false` here, meaning
+# mosquitto RUNS in-container — the historical shape); flip to `true`
+# if you already have an external MQTT broker to point CoreScope at.
+#
+# For the CoreScope maintainers' internal staging deployment (with a
+# standalone `mqtt-broker` container on external network
+# `meshcore-net`), see `docker-compose.staging.yml`.
+#
 # Usage: docker compose -f docker-compose.example.yml up -d
 # Docs:  https://github.com/Kpa-clawbot/CoreScope/blob/master/DEPLOY.md
 

@@ -1,3 +1,17 @@
+# docker-compose.staging.no-mosquitto.yml — legacy staging override.
+#
+# AUDIENCE: kept for historical parity with pre-v3.7 staging shape and
+# for local reproduction of "staging without an external broker". In
+# most cases you want `docker-compose.staging.yml` instead — it is the
+# CoreScope maintainers' actual staging deploy shape, and it already
+# defaults `DISABLE_MOSQUITTO=true` (external broker on `meshcore-net`).
+#
+# Use this file ONLY if you are explicitly reproducing the legacy
+# in-container-mosquitto staging shape (e.g. debugging a broker
+# regression). Third-party single-host deploys should use
+# `docker-compose.example.yml` (or `docker-compose.no-mosquitto.yml`
+# for a prod-flavoured variant with an external broker).
+
 services:
   staging-go:
     build:
