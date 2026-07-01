@@ -1,3 +1,18 @@
+# docker-compose.no-mosquitto.yml — prod-flavoured deploy with an
+# external MQTT broker.
+#
+# AUDIENCE: operators running CoreScope in production alongside their
+# own MQTT broker (or a broker managed by another stack). This variant
+# skips the built-in mosquitto (`DISABLE_MOSQUITTO=true`) and expects
+# you to configure the ingestor's upstream MQTT source separately
+# (via `config.json` or env).
+#
+# For the CoreScope maintainers' staging deploy (standalone
+# `mqtt-broker` container on external network `meshcore-net`), see
+# `docker-compose.staging.yml`. For a simple single-host self-hosted
+# deploy that keeps the built-in broker, see
+# `docker-compose.example.yml`.
+
 services:
   prod:
     build:
