@@ -444,11 +444,41 @@
     };
   };
 
-  // Simplified two-state helper: returns 'active' or 'stale'
-  window.getNodeStatus = function (role, lastSeenMs) {
-    var isInfra = role === 'repeater' || role === 'room';
+  // Simplified two-state helper: returns 'active' or 'stale'.
+  // Accepts either a full node object (preferred) or legacy (role, lastSeenMs).
+  //
+  // #1598: for infra roles (repeater/room), freshness is the max of the
+  // ADVERT-based timestamp and last_relayed (resolved path participation).
+  // Operators increasingly run long or disabled advert intervals (firmware
+  // default trajectory is 47h flood adverts), so an actively-relaying
+  // backbone repeater must not be marked stale just because its last
+  // ADVERT is old.
+  window.getNodeStatus = function (roleOrNode, lastSeenMs) {
+    var role, effectiveMs;
+    if (roleOrNode && typeof roleOrNode === 'object') {
+      var n = roleOrNode;
+      role = n.role || 'companion';
+      // Freshness precedence mirrors the existing call sites:
+      // _liveSeen (live view, ms) > _lastHeard (health API) >
+      // last_heard (in-memory packets) > last_seen (DB, ADVERT).
+      var seenTime = n._lastHeard || n.last_heard || n.last_seen;
+      effectiveMs = (typeof n._liveSeen === 'number' && n._liveSeen) ||
+                    (seenTime ? new Date(seenTime).getTime() : NaN);
+      var infra = String(role).toLowerCase() === 'repeater' ||
+                  String(role).toLowerCase() === 'room';
+      if (infra && n.last_relayed) {
+        var relayedMs = new Date(n.last_relayed).getTime();
+        if (!(effectiveMs >= relayedMs)) effectiveMs = relayedMs;
+      }
+      if (isNaN(effectiveMs)) effectiveMs = undefined;
+    } else {
+      role = roleOrNode;
+      effectiveMs = lastSeenMs;
+    }
+    var isInfra = String(role || '').toLowerCase() === 'repeater' ||
+                  String(role || '').toLowerCase() === 'room';
     var staleMs = isInfra ? HEALTH_THRESHOLDS.infraSilentMs : HEALTH_THRESHOLDS.nodeSilentMs;
-    var age = typeof lastSeenMs === 'number' ? (Date.now() - lastSeenMs) : Infinity;
+    var age = typeof effectiveMs === 'number' ? (Date.now() - effectiveMs) : Infinity;
     return age < staleMs ? 'active' : 'stale';
   };
 

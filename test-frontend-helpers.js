@@ -840,6 +840,68 @@ console.log('\n=== pickByAffinity neighbor-graph scoring (#874) ===');
   });
 }
 
+// ===== ROLES.JS: getNodeStatus (#1598 relay-aware staleness) =====
+console.log('\n=== roles.js: getNodeStatus (#1598) ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  const getNodeStatus = ctx.getNodeStatus;
+  const iso = (msAgo) => new Date(Date.now() - msAgo).toISOString();
+  const H = 3600000;
+
+  // Legacy (role, lastSeenMs) signature — unchanged behavior
+  test('legacy: repeater seen 1h ago is active', () =>
+    assert.strictEqual(getNodeStatus('repeater', Date.now() - 1 * H), 'active'));
+  test('legacy: repeater seen 80h ago is stale (infraSilentMs=72h)', () =>
+    assert.strictEqual(getNodeStatus('repeater', Date.now() - 80 * H), 'stale'));
+  test('legacy: companion seen 25h ago is stale (nodeSilentMs=24h)', () =>
+    assert.strictEqual(getNodeStatus('companion', Date.now() - 25 * H), 'stale'));
+  test('legacy: non-number lastSeenMs is stale', () =>
+    assert.strictEqual(getNodeStatus('repeater', undefined), 'stale'));
+
+  // Node-object signature
+  test('node: backbone-repeater fixture — last_seen 25h, last_relayed 5min → active', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'repeater', last_seen: iso(25 * H), last_relayed: iso(5 * 60000)
+    }), 'active'));
+  test('node: repeater advert-silent 151h but relayed 2min ago → active', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'repeater', last_seen: iso(151 * H), last_relayed: iso(2 * 60000)
+    }), 'active'));
+  test('node: repeater with BOTH last_seen and last_relayed past 72h → stale', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'repeater', last_seen: iso(100 * H), last_relayed: iso(80 * H)
+    }), 'stale'));
+  test('node: room honors last_relayed like repeater', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'room', last_seen: iso(90 * H), last_relayed: iso(10 * 60000)
+    }), 'active'));
+  test('node: companion does NOT get relay-based freshness', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'companion', last_seen: iso(30 * H), last_relayed: iso(5 * 60000)
+    }), 'stale'));
+  test('node: repeater with no last_relayed falls back to advert freshness (stale at 80h)', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'repeater', last_seen: iso(80 * H)
+    }), 'stale'));
+  test('node: repeater with fresh advert and no last_relayed → active', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'repeater', last_seen: iso(1 * H)
+    }), 'active'));
+  test('node: _liveSeen (ms) takes precedence over stale last_seen', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'companion', _liveSeen: Date.now() - 5 * 60000, last_seen: iso(48 * H)
+    }), 'active'));
+  test('node: _lastHeard preferred over last_seen', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'companion', _lastHeard: iso(10 * 60000), last_seen: iso(48 * H)
+    }), 'active'));
+  test('node: missing role defaults to companion thresholds', () =>
+    assert.strictEqual(getNodeStatus({ last_seen: iso(25 * H) }), 'stale'));
+  test('node: no timestamps at all → stale', () =>
+    assert.strictEqual(getNodeStatus({ role: 'repeater' }), 'stale'));
+}
+
 // ===== ROLES.JS: copyToClipboard =====
 console.log('\n=== roles.js: copyToClipboard ===');
 {
