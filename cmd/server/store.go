@@ -5644,12 +5644,13 @@ func (s *PacketStore) computeAnalyticsChannels(region, area string, window TimeW
 	}
 
 	type decodedGrp struct {
-		Type         string      `json:"type"`
-		Channel      string      `json:"channel"`
-		ChannelHash  interface{} `json:"channelHash"`
-		ChannelHash2 string      `json:"channel_hash"`
-		Text         string      `json:"text"`
-		Sender       string      `json:"sender"`
+		Type             string      `json:"type"`
+		Channel          string      `json:"channel"`
+		ChannelHash      interface{} `json:"channelHash"`
+		ChannelHash2     string      `json:"channel_hash"`
+		Text             string      `json:"text"`
+		Sender           string      `json:"sender"`
+		DecryptionStatus string      `json:"decryptionStatus,omitempty"`
 	}
 
 	// Convert channelHash (number or string in JSON) to string
@@ -5727,9 +5728,17 @@ func (s *PacketStore) computeAnalyticsChannels(region, area string, window TimeW
 		}
 		encrypted := decoded.Text == "" && decoded.Sender == ""
 
-		// Bug #978 fix: validate channel name against hash to reject rainbow-table mismatches.
-		// If the claimed channel name doesn't hash to the observed channelHash byte, discard it.
-		if name != "" && name != "ch"+hash && !channelNameMatchesHash(name, hash) {
+		// Bug #978 fix: validate channel name against hash to reject rainbow-table
+		// mismatches. If the claimed channel name doesn't hash to the observed
+		// channelHash byte, discard it — UNLESS the ingestor marked the packet
+		// `decryptionStatus:"decrypted"`. That flag means the name came from a
+		// successful key-based (PSK) decryption, not a rainbow-table lookup, so
+		// it is trustworthy regardless of the hashtag-derived hash check. This
+		// keeps the firmware-default Public channel (0x11, key-derived hash
+		// SHA256(key)[0]=17, not the hashtag scheme's 186) from being wrongly
+		// discarded and rendered as "Encrypted (0x11)". See #1729.
+		ingestorDecrypted := decoded.DecryptionStatus == "decrypted"
+		if name != "" && name != "ch"+hash && !ingestorDecrypted && !channelNameMatchesHash(name, hash) {
 			name = "ch" + hash
 			encrypted = true
 		}

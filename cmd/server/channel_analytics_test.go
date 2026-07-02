@@ -38,12 +38,23 @@ func newChannelTestStore(packets []*StoreTx) *PacketStore {
 }
 
 func makeGrpTx(channelHash int, channel, text, sender string) *StoreTx {
+	return makeGrpTxWithStatus(channelHash, channel, text, sender, "")
+}
+
+// makeGrpTxWithStatus is like makeGrpTx but lets the caller set the ingestor's
+// decryptionStatus ("decrypted" / "no_key" / "decryption_failed" / ""), which
+// computeAnalyticsChannels consults to decide whether a channel name is
+// trustworthy (see #1729).
+func makeGrpTxWithStatus(channelHash int, channel, text, sender, decryptionStatus string) *StoreTx {
 	decoded := map[string]interface{}{
 		"type":        "CHAN",
 		"channelHash": float64(channelHash),
 		"channel":     channel,
 		"text":        text,
 		"sender":      sender,
+	}
+	if decryptionStatus != "" {
+		decoded["decryptionStatus"] = decryptionStatus
 	}
 	b, _ := json.Marshal(decoded)
 	pt := 5
@@ -164,5 +175,65 @@ func TestIsPlaceholderName(t *testing.T) {
 	}
 	if isPlaceholderName("Public") {
 		t.Error("Public should NOT be placeholder")
+	}
+}
+
+// TestComputeAnalyticsChannels_PublicChannelPreserved is the regression test for
+// #1729: the firmware-default "Public" channel (channel-hash byte 0x11 = 17,
+// key-derived via SHA256(key)[0], NOT the hashtag scheme's 186) was being
+// discarded by the #978 rainbow-table validation and rendered as
+// "Encrypted (0x11)". The ingestor decrypts Public packets with the builtin
+// well-known key and marks them decryptionStatus:"decrypted"; the server must
+// trust that name instead of re-applying the hashtag hash check.
+func TestComputeAnalyticsChannels_PublicChannelPreserved(t *testing.T) {
+	packets := []*StoreTx{
+		makeGrpTxWithStatus(17, "Public", "hello net", "alice", "decrypted"),
+		makeGrpTxWithStatus(17, "Public", "morning", "bob", "decrypted"),
+	}
+
+	store := newChannelTestStore(packets)
+	result := store.computeAnalyticsChannels("", "", TimeWindow{})
+
+	channels := result["channels"].([]map[string]interface{})
+	if len(channels) != 1 {
+		t.Fatalf("expected 1 channel bucket, got %d: %+v", len(channels), channels)
+	}
+	ch := channels[0]
+	if ch["name"] != "Public" {
+		t.Errorf("expected name 'Public' preserved, got %q (must not be downgraded to ch17)", ch["name"])
+	}
+	if ch["encrypted"] != false {
+		t.Errorf("expected encrypted=false for decrypted Public channel, got %v", ch["encrypted"])
+	}
+	if ch["hash"] != "17" {
+		t.Errorf("expected hash '17', got %v", ch["hash"])
+	}
+}
+
+// TestComputeAnalyticsChannels_UndecryptedNameStillValidated ensures the #1729
+// fix does not weaken #978: when the ingestor did NOT mark the packet
+// "decrypted" (no_key / decryption_failed / absent), a channel name that fails
+// the hashtag hash check is still discarded to "chNN", even if text/sender
+// happen to be present (e.g. a stale/foreign rainbow-table hit).
+func TestComputeAnalyticsChannels_UndecryptedNameStillValidated(t *testing.T) {
+	// Hash 17 is NOT the hashtag hash of #Public (that is 186). Without a
+	// "decrypted" status, the name must be rejected.
+	packets := []*StoreTx{
+		makeGrpTxWithStatus(17, "#Public", "leaked", "eve", ""),
+	}
+
+	store := newChannelTestStore(packets)
+	result := store.computeAnalyticsChannels("", "", TimeWindow{})
+
+	channels := result["channels"].([]map[string]interface{})
+	if len(channels) != 1 {
+		t.Fatalf("expected 1 channel bucket, got %d: %+v", len(channels), channels)
+	}
+	ch := channels[0]
+	if ch["name"] != "ch17" {
+		t.Errorf("expected undecrypted mismatch downgraded to 'ch17', got %q", ch["name"])
+	}
+	if ch["encrypted"] != true {
+		t.Errorf("expected encrypted=true for rejected rainbow-table name, got %v", ch["encrypted"])
 	}
 }
