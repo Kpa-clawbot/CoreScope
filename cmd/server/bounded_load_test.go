@@ -170,6 +170,13 @@ func createTestDBWithAgedPackets(t *testing.T, numRecent, numOld int) string {
 
 	now := time.Now().UTC()
 	id := 1
+	// Single transaction for all inserts — see createTestDBAt for the rationale
+	// (modernc.org/sqlite auto-commit per Exec fsyncs per row). numOld+numRecent
+	// is small here today, but wrapping keeps the fixture robust if callers scale
+	// it up, and is consistent with the other builders.
+	if _, err := conn.Exec("BEGIN"); err != nil {
+		t.Fatalf("test DB BEGIN: %v", err)
+	}
 	// Insert old packets (48 hours ago)
 	for i := 0; i < numOld; i++ {
 		oldT := now.Add(-48 * time.Hour).Add(time.Duration(i) * time.Second)
@@ -187,6 +194,9 @@ func createTestDBWithAgedPackets(t *testing.T, numRecent, numOld int) string {
 		conn.Exec("INSERT INTO transmissions VALUES (?,?,?,?,0,4,1,?)", id, "bb", fmt.Sprintf("new%d", i), ts, `{}`)
 		conn.Exec("INSERT INTO observations VALUES (?,?,?,?,?,?,?,?,?,?,?)", id, id, "obs1", "Obs1", "RX", -10.0, -80.0, 5, `[]`, newT.Unix(), "")
 		id++
+	}
+	if _, err := conn.Exec("COMMIT"); err != nil {
+		t.Fatalf("test DB COMMIT: %v", err)
 	}
 	return dbPath
 }
@@ -342,11 +352,27 @@ func createTestDBAt(tb testing.TB, dbPath string, numTx int) {
 	defer obsStmt.Close()
 
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	// Wrap the inserts in a single transaction. Without this, modernc.org/sqlite
+	// (pure-Go driver) auto-commits every Exec → one fsync per row → ~2N fsyncs
+	// for N transmissions (tx + obs). At numTx=5000 that is ~10k fsyncs and the
+	// fixture blows past the test timeout (the #1741 hang). A single
+	// BEGIN/COMMIT makes the whole build one commit, finishing in well under a
+	// second regardless of numTx.
+	if _, err := conn.Exec("BEGIN"); err != nil {
+		tb.Fatalf("test DB BEGIN: %v", err)
+	}
 	for i := 1; i <= numTx; i++ {
 		ts := base.Add(time.Duration(i) * time.Minute).Format(time.RFC3339)
 		hash := fmt.Sprintf("h%04d", i)
-		txStmt.Exec(i, "aabb", hash, ts, 0, 4, 1, fmt.Sprintf(`{"pubKey":"pk%04d"}`, i))
-		obsStmt.Exec(i, i, "obs1", "Obs1", "RX", -10.0, -80.0, 5, `["aa","bb"]`, ts)
+		if _, err := txStmt.Exec(i, "aabb", hash, ts, 0, 4, 1, fmt.Sprintf(`{"pubKey":"pk%04d"}`, i)); err != nil {
+			tb.Fatalf("test DB insert transmission %d: %v", i, err)
+		}
+		if _, err := obsStmt.Exec(i, i, "obs1", "Obs1", "RX", -10.0, -80.0, 5, `["aa","bb"]`, ts); err != nil {
+			tb.Fatalf("test DB insert observation %d: %v", i, err)
+		}
+	}
+	if _, err := conn.Exec("COMMIT"); err != nil {
+		tb.Fatalf("test DB COMMIT: %v", err)
 	}
 }
 
@@ -396,16 +422,29 @@ func createTestDBWithObs(tb testing.TB, dbPath string, numTx int) {
 	obsNames := []string{"Alpha", "Bravo", "Charlie", "Delta", "Echo"}
 	obsID := 1
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	// Single transaction for all inserts — see createTestDBAt for the rationale
+	// (modernc.org/sqlite auto-commit per Exec would fsync per row; at numTx=30000
+	// the benchmarks would otherwise stall for minutes). One BEGIN/COMMIT.
+	if _, err := conn.Exec("BEGIN"); err != nil {
+		tb.Fatalf("test DB BEGIN: %v", err)
+	}
 	for i := 1; i <= numTx; i++ {
 		ts := base.Add(time.Duration(i) * time.Minute).Format(time.RFC3339)
 		hash := fmt.Sprintf("h%06d", i)
-		txStmt.Exec(i, "aabb", hash, ts, 0, 4, 1, fmt.Sprintf(`{"pubKey":"pk%06d"}`, i))
+		if _, err := txStmt.Exec(i, "aabb", hash, ts, 0, 4, 1, fmt.Sprintf(`{"pubKey":"pk%06d"}`, i)); err != nil {
+			tb.Fatalf("test DB insert transmission %d: %v", i, err)
+		}
 		nObs := (i % 5) + 1 // 1–5 observations per transmission
 		for j := 0; j < nObs; j++ {
 			snr := -5.0 + float64(j)*2.5
 			rssi := -90.0 + float64(j)*5.0
-			obsStmt.Exec(obsID, i, observers[j], obsNames[j], "RX", snr, rssi, 5-j, `["aa","bb"]`, ts)
+			if _, err := obsStmt.Exec(obsID, i, observers[j], obsNames[j], "RX", snr, rssi, 5-j, `["aa","bb"]`, ts); err != nil {
+				tb.Fatalf("test DB insert observation %d: %v", obsID, err)
+			}
 			obsID++
 		}
+	}
+	if _, err := conn.Exec("COMMIT"); err != nil {
+		tb.Fatalf("test DB COMMIT: %v", err)
 	}
 }
