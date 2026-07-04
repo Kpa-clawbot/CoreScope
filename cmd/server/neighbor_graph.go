@@ -355,19 +355,30 @@ func BuildFromStoreWithOptions(store *PacketStore, opts BuildOptions) *NeighborG
 }
 
 // extractFromNode pulls the originator pubkey from a StoreTx's DecodedJSON.
-// ADVERTs use "pubKey", ANON_REQ uses "ephemeralPubKey" (#1777 — both are
-// full Ed25519 pubkeys carried by the packet, unlike the 1-byte truncated
-// hashes in REQ/RESP/PATH/TXT), other packets may use "from_node" or "from".
+// ADVERTs use "pubKey"; other packets may use "from_node" or "from".
 // Uses the cached ParsedDecoded() accessor to avoid repeated json.Unmarshal.
 func extractFromNode(tx *StoreTx) string {
 	decoded := tx.ParsedDecoded()
 	if decoded == nil {
 		return ""
 	}
-	// Check all four so we never miss the originator. "ephemeralPubKey" only
-	// appears in ANON_REQ's decoded_json (omitempty on the shared Payload
-	// struct), so including it unconditionally here is safe for other types.
-	for _, field := range []string{"pubKey", "ephemeralPubKey", "from_node", "from"} {
+	// ANON_REQ carries the originator's full Ed25519 pubkey as
+	// "ephemeralPubKey" (#1777) — the same trust level as ADVERT's "pubKey",
+	// unlike the 1-byte truncated src/dst hashes on REQ/RESP/PATH/TXT.
+	// Gated on the actual payload type (rather than just checking whether
+	// the JSON key happens to be present) so this stays correct even if a
+	// future decoder change reuses the "ephemeralPubKey" name for a
+	// different, non-originator field on some other payload type — the
+	// field name alone would no longer be a safe signal, but the payload
+	// type check still is.
+	if tx.PayloadType != nil && *tx.PayloadType == PayloadANON_REQ {
+		if v, ok := decoded["ephemeralPubKey"]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				return s
+			}
+		}
+	}
+	for _, field := range []string{"pubKey", "from_node", "from"} {
 		if v, ok := decoded[field]; ok {
 			if s, ok := v.(string); ok && s != "" {
 				return s
