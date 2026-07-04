@@ -252,3 +252,22 @@ func extractPubkeyFromAdvertJSON(s string) string {
 	}
 	return ""
 }
+
+// extractPubkeyFromAnonReqJSON parses an ANON_REQ decoded_json blob and
+// returns the ephemeralPubKey field, or "" if absent/invalid (#1777).
+// ANON_REQ carries the sender's full Ed25519 ephemeral pubkey — the same
+// trust level as ADVERT's pubKey — unlike REQ/RESP/PATH/TXT, which only
+// carry a 1-byte truncated hash of the originator.
+func extractPubkeyFromAnonReqJSON(s string) string {
+	if s == "" {
+		return ""
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		return ""
+	}
+	if v, ok := m["ephemeralPubKey"].(string); ok {
+		return v
+	}
+	return ""
+}
