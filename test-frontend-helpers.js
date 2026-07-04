@@ -3171,6 +3171,93 @@ console.log('\n=== packets.js: savedTimeWindowMin defaults ===');
   });
 }
 
+// ===== Packets page: observer filter in grouped mode (issue #1748) =====
+{
+  console.log('\n--- Observer filter — grouped vs. flat mode (#1748) ---');
+
+  // Mirrors the client-side observer filter in packets.js renderTableRows()
+  // after the #1748 fix: in grouped mode the server-side EXISTS filter
+  // (buildTransmissionWhere, cmd/server/db.go) is authoritative — every row
+  // it returns was observed by at least one selected observer, even though
+  // each row's `observer_id` is only a *representative* observer (the one
+  // with the longest observed path) that may not itself be in the filter
+  // set. Re-filtering client-side against that single representative is
+  // both redundant and wrong when `_children` (the other observers) hasn't
+  // been fetched yet, which is the default on initial page load.
+  function filterByObserver(packets, obsIdsCsv, groupByHash) {
+    const obsIds = new Set(obsIdsCsv.split(','));
+    if (!groupByHash) {
+      return packets.filter(p => {
+        if (obsIds.has(p.observer_id)) return true;
+        if (p._children) return p._children.some(c => obsIds.has(String(c.observer_id)));
+        return false;
+      });
+    }
+    return packets; // server EXISTS filter already guarantees correctness
+  }
+
+  // A transmission the server correctly returned for observer "B" (it was
+  // one of several observers of this hash) but whose displayed
+  // "representative" observer is "A" (longest path) — exactly the shape
+  // QueryGroupedPackets returns. `_children` is undefined, matching the
+  // state on initial load (only fetched lazily on expand/obs-sort-change).
+  const groupedRowRepresentativeNotFiltered = {
+    hash: 'hash1', observer_id: 'A', observer_count: 3, _children: undefined,
+  };
+  // A single-observer transmission whose only observer is NOT in the filter —
+  // must still be excluded (it genuinely wasn't observed by the filtered
+  // observer; the server wouldn't have returned it in the first place, but
+  // the client function must not accidentally let everything through).
+  const groupedRowGenuinelyExcludedByServer = {
+    hash: 'hash2', observer_id: 'C', observer_count: 1, _children: undefined,
+  };
+  // A flat/expanded-mode row: single observation, own observer_id.
+  const flatRowMatching = { hash: 'hash3', observer_id: 'B' };
+  const flatRowNonMatching = { hash: 'hash4', observer_id: 'A' };
+  // A flat/expanded-mode row with already-loaded children, only one of
+  // which matches — the pre-existing children-aware fallback path.
+  const flatRowWithMatchingChild = {
+    hash: 'hash5', observer_id: 'A',
+    _children: [{ observer_id: 'A' }, { observer_id: 'B' }],
+  };
+
+  test('grouped mode: keeps a multi-observer row whose representative is not the filtered observer (#1748 core bug)', () => {
+    const result = filterByObserver([groupedRowRepresentativeNotFiltered], 'B', true);
+    assert.strictEqual(result.length, 1, 'server already guaranteed observer B saw this transmission');
+  });
+
+  test('grouped mode: does not need _children to keep a valid server-filtered row', () => {
+    // The defining regression: _children is undefined (not yet fetched),
+    // and observer_id (the representative) does not match — pre-fix this
+    // returned zero rows.
+    const result = filterByObserver([groupedRowRepresentativeNotFiltered], 'B', true);
+    assert.strictEqual(result.length, 1);
+  });
+
+  test('grouped mode: passes through rows unfiltered (server EXISTS filter is authoritative)', () => {
+    // The client no longer second-guesses the server in grouped mode at all —
+    // this row would never have been returned by the server if observer C
+    // weren't a match, so the client trusts it.
+    const result = filterByObserver([groupedRowGenuinelyExcludedByServer], 'B', true);
+    assert.strictEqual(result.length, 1, 'grouped mode does not re-filter; server already applied the correct filter');
+  });
+
+  test('flat mode: keeps a row whose own observer_id matches', () => {
+    const result = filterByObserver([flatRowMatching], 'B', false);
+    assert.strictEqual(result.length, 1);
+  });
+
+  test('flat mode: excludes a row whose own observer_id does not match and has no children', () => {
+    const result = filterByObserver([flatRowNonMatching], 'B', false);
+    assert.strictEqual(result.length, 0);
+  });
+
+  test('flat mode: falls back to matching children when representative does not match', () => {
+    const result = filterByObserver([flatRowWithMatchingChild], 'B', false);
+    assert.strictEqual(result.length, 1, 'observer B is among the already-loaded children');
+  });
+}
+
 // ===== Packets page: virtual scroll infrastructure =====
 {
   console.log('\nPackets page — virtual scroll:');
