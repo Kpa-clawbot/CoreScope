@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/meshcore-analyzer/packetpath"
 )
 
 func TestLoadConfigValidJSON(t *testing.T) {
@@ -494,5 +496,31 @@ func TestIngestBufferSizeOrDefault(t *testing.T) {
 	}
 	if got := (&Config{IngestBufferSize: -5}).IngestBufferSizeOrDefault(); got != 50000 {
 		t.Fatalf("invalid negative should fall back to default, got %d", got)
+	}
+}
+
+// ─── #1784: GetPathTrust ────────────────────────────────────────────────────
+
+func TestGetPathTrustDefaults(t *testing.T) {
+	cfg := &Config{}
+	pt := cfg.GetPathTrust()
+	if pt.MinHashBytesForMapping != packetpath.DefaultMinHashBytesForMapping {
+		t.Errorf("expected default %d, got %d", packetpath.DefaultMinHashBytesForMapping, pt.MinHashBytesForMapping)
+	}
+}
+
+func TestGetPathTrustCustom(t *testing.T) {
+	cfg := &Config{PathTrust: &PathTrustConfig{MinHashBytesForMapping: 3}}
+	pt := cfg.GetPathTrust()
+	if pt.MinHashBytesForMapping != 3 {
+		t.Errorf("expected 3, got %d", pt.MinHashBytesForMapping)
+	}
+}
+
+func TestGetPathTrustNilConfig(t *testing.T) {
+	var cfg *Config
+	pt := cfg.GetPathTrust()
+	if pt.MinHashBytesForMapping != packetpath.DefaultMinHashBytesForMapping {
+		t.Errorf("expected default %d for nil *Config, got %d", packetpath.DefaultMinHashBytesForMapping, pt.MinHashBytesForMapping)
 	}
 }

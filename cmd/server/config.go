@@ -13,6 +13,7 @@ import (
 
 	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/geofilter"
+	"github.com/meshcore-analyzer/packetpath"
 )
 
 // AreaEntry defines a geographic area by polygon or bounding box.
@@ -105,16 +106,20 @@ type Config struct {
 
 	Roles            map[string]interface{} `json:"roles"`
 	HealthThresholds *HealthThresholds      `json:"healthThresholds"`
-	Map              map[string]interface{} `json:"map"`
-	Tiles            map[string]interface{} `json:"tiles"` // deprecated
-	SnrThresholds    map[string]interface{} `json:"snrThresholds"`
-	DistThresholds   map[string]interface{} `json:"distThresholds"`
-	MaxHopDist       *float64               `json:"maxHopDist"`
-	Limits           map[string]interface{} `json:"limits"`
-	PerfSlowMs       *int                   `json:"perfSlowMs"`
-	WsReconnectMs    *int                   `json:"wsReconnectMs"`
-	CacheInvalidMs   *int                   `json:"cacheInvalidateMs"`
-	ExternalUrls     map[string]interface{} `json:"externalUrls"`
+	// PathTrust configures the minimum path-hash prefix length trusted as
+	// mapping/topology evidence (issue #1784). Config + helper only for
+	// now — no consumer reads this yet (see packetpath.MeetsPathTrust doc).
+	PathTrust      *PathTrustConfig       `json:"pathTrust,omitempty"`
+	Map            map[string]interface{} `json:"map"`
+	Tiles          map[string]interface{} `json:"tiles"` // deprecated
+	SnrThresholds  map[string]interface{} `json:"snrThresholds"`
+	DistThresholds map[string]interface{} `json:"distThresholds"`
+	MaxHopDist     *float64               `json:"maxHopDist"`
+	Limits         map[string]interface{} `json:"limits"`
+	PerfSlowMs     *int                   `json:"perfSlowMs"`
+	WsReconnectMs  *int                   `json:"wsReconnectMs"`
+	CacheInvalidMs *int                   `json:"cacheInvalidateMs"`
+	ExternalUrls   map[string]interface{} `json:"externalUrls"`
 
 	LiveMap struct {
 		PropagationBufferMs int `json:"propagationBufferMs"`
@@ -308,6 +313,10 @@ type PacketStoreConfig struct {
 
 // GeoFilterConfig is an alias for the shared geofilter.Config type.
 type GeoFilterConfig = geofilter.Config
+
+// PathTrustConfig is an alias for the shared packetpath.TrustConfig type
+// (issue #1784). See packetpath.TrustConfig for the full doc comment.
+type PathTrustConfig = packetpath.TrustConfig
 
 // RuntimeConfig holds Go runtime tuning knobs (#1010).
 type RuntimeConfig struct {
@@ -583,6 +592,15 @@ func (c *Config) GetHealthThresholds() HealthThresholds {
 		h.ObserverStaleMinutes = 1440
 	}
 	return h
+}
+
+// GetPathTrust returns the effective path-trust config, applying
+// DefaultMinHashBytesForMapping when unset (issue #1784).
+func (c *Config) GetPathTrust() PathTrustConfig {
+	if c != nil && c.PathTrust != nil {
+		return *c.PathTrust
+	}
+	return PathTrustConfig{MinHashBytesForMapping: packetpath.DefaultMinHashBytesForMapping}
 }
 
 // GetHealthMs returns degraded/silent thresholds in ms for a given role.
