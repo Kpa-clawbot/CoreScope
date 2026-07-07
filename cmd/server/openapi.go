@@ -172,6 +172,7 @@ func componentSchemas() map[string]interface{} {
 				"relay_active":        map[string]interface{}{"type": "boolean", "description": "Repeater/room only: relayed traffic within the active window."},
 				"relay_count_1h":      map[string]interface{}{"type": "integer", "description": "Repeater/room only: relay-hop appearances in the last hour."},
 				"relay_count_24h":     map[string]interface{}{"type": "integer", "description": "Repeater/room only: relay-hop appearances in the last 24 hours."},
+				"unscoped_relay_count_24h": map[string]interface{}{"type": "integer", "description": "Repeater/room only: subset of relay_count_24h that were unscoped floods (route_type FLOOD). A well-configured repeater sets flood.max.unscoped 0, so a non-trivial count flags a base-config problem."},
 				"last_relayed":        str("Repeater/room only: RFC3339 time this node last appeared as a relay hop."),
 				"relay_window_hours":  map[string]interface{}{"type": "integer", "description": "Repeater/room only, /api/nodes/{pubkey} detail endpoint only: width (hours) of the relay-activity window the relay_count_* values cover."},
 				"traffic_share_score": score01("#672 Traffic axis: share of non-advert traffic relayed through this repeater. Repeater/room only."),

@@ -75,7 +75,7 @@ func TestOpenAPINodeSchema_Metrics(t *testing.T) {
 	}
 
 	// Relay-activity fields are documented too.
-	for _, field := range []string{"relay_active", "relay_count_1h", "relay_count_24h", "last_relayed"} {
+	for _, field := range []string{"relay_active", "relay_count_1h", "relay_count_24h", "unscoped_relay_count_24h", "last_relayed"} {
 		if _, ok := props[field]; !ok {
 			t.Errorf("Node.properties.%s missing", field)
 		}
