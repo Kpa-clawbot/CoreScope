@@ -1031,8 +1031,43 @@ func TestObserverAnalytics(t *testing.T) {
 		if body["recentPackets"] == nil {
 			t.Error("expected recentPackets")
 		}
-		if recent, ok := body["recentPackets"].([]interface{}); !ok || len(recent) == 0 {
+		recent, ok := body["recentPackets"].([]interface{})
+		if !ok || len(recent) == 0 {
 			t.Errorf("expected non-empty recentPackets, got %v", body["recentPackets"])
+		}
+
+		// #1827: packetTypes must still reflect the real per-transmission
+		// payload_type after switching the hot loop from enrichObs() to a
+		// direct s.store.byTxID read. seedTestData gives obs1 three
+		// observations: tx1 (payload_type=4), tx2 (payload_type=5), tx3
+		// (payload_type=4) — i.e. counts {"4":2, "5":1}.
+		pt, ok := body["packetTypes"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("expected packetTypes to be an object, got %T", body["packetTypes"])
+		}
+		if pt["4"] != float64(2) {
+			t.Errorf("expected packetTypes[4]=2, got %v", pt["4"])
+		}
+		if pt["5"] != float64(1) {
+			t.Errorf("expected packetTypes[5]=1, got %v", pt["5"])
+		}
+
+		// recentPackets is still built via the unchanged enrichObs() path
+		// and should retain resolved_path for observations that have one
+		// (tx1's first observation, resolved via obs1).
+		foundResolved := false
+		for _, rp := range recent {
+			m, ok := rp.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if m["resolved_path"] != nil {
+				foundResolved = true
+				break
+			}
+		}
+		if !foundResolved {
+			t.Error("expected at least one recentPackets entry to carry resolved_path")
 		}
 	})
 
