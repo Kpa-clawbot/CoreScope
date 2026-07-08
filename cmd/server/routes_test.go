@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1090,6 +1091,67 @@ func TestObserverAnalytics(t *testing.T) {
 			t.Fatalf("expected 200, got %d", w.Code)
 		}
 	})
+}
+
+// TestObserverAnalytics_ConcurrentByTxIDMutation_1830 is the -race
+// regression requested in #1830: handleObserverAnalytics reads
+// s.store.byTxID (directly, and via enrichObsWithTx) for every observation
+// in the window. Before the #1830 fix those reads happened after the
+// snapshot RLock was released, racing with concurrent ingest/eviction
+// writers to that same map. This test hammers the endpoint concurrently
+// with goroutines that mutate byTxID exactly like ingest/eviction would,
+// and must pass under `go test -race`.
+func TestObserverAnalytics_ConcurrentByTxIDMutation_1830(t *testing.T) {
+	srv, router := setupTestServer(t)
+
+	stop := make(chan struct{})
+	var writers sync.WaitGroup
+	var readers sync.WaitGroup
+
+	// Writer goroutines: mutate byTxID under s.store.mu, like ingest
+	// (adds) and eviction (deletes) do in production. They run until
+	// stop is closed, which happens once all readers are done below.
+	for w := 0; w < 4; w++ {
+		writers.Add(1)
+		go func(base int) {
+			defer writers.Done()
+			n := 0
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				srv.store.mu.Lock()
+				id := base*100000 + n
+				srv.store.byTxID[id] = &StoreTx{ID: id, PayloadType: intPtr(4)}
+				delete(srv.store.byTxID, id-1)
+				srv.store.mu.Unlock()
+				n++
+			}
+		}(w)
+	}
+
+	// Reader goroutines: repeatedly hit the endpoint under test.
+	for r := 0; r < 8; r++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for i := 0; i < 50; i++ {
+				req := httptest.NewRequest("GET", "/api/observers/obs1/analytics", nil)
+				w := httptest.NewRecorder()
+				router.ServeHTTP(w, req)
+				if w.Code != 200 {
+					t.Errorf("expected 200, got %d", w.Code)
+					return
+				}
+			}
+		}()
+	}
+
+	readers.Wait()
+	close(stop)
+	writers.Wait()
 }
 
 func TestChannelMessages(t *testing.T) {
