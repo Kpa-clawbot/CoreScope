@@ -43,13 +43,28 @@ func countFloodAdverts(entries []floodAdvertEntry, now time.Time, windowHours fl
 // CountFloodAdvertsForNode returns how many distinct FLOOD adverts pubkey
 // originated in the last windowHours - the mesh-wide-airtime kind. Zero-hop
 // adverts (route_type DIRECT) are excluded, so a nearby observer hearing a
-// node's cheap local adverts does not inflate the number. Reads at most the
-// 2000 most recent advert rows per node, far beyond any sane advert rate for
-// the 7-day window this backs.
-func (db *DB) CountFloodAdvertsForNode(pubkey string, windowHours float64) (int, error) {
+// node's cheap local adverts does not inflate the number.
+//
+// route_type is filtered in SQL so an advert-spamming node cannot truncate
+// the flood count (review feedback on the earlier LIMIT approach). The time
+// floor is a DATE-ONLY string with one day of slack: a date prefix compares
+// lexically the same across every first_seen format parseRelayTS accepts
+// ('T' and ' ' separators alike); the exact window check stays in Go.
+//
+// The row cap is a pure safety valve on per-request allocation: it applies to
+// flood adverts inside the floor window only, and 50000 in ~8 days is ~4 per
+// minute - any node past it is unambiguously a spammer whether the count
+// saturates or not. (An exact COUNT cannot move into SQL because the precise
+// window check needs parseRelayTS over the mixed first_seen formats.)
+// floodAdvertRowCap is the production row cap; tests pass a smaller cap
+// directly, so there is no mutable package state to race on.
+const floodAdvertRowCap = 50000
+
+func (db *DB) CountFloodAdvertsForNode(pubkey string, windowHours float64, rowCap int) (int, error) {
+	floor := time.Now().UTC().Add(-time.Duration(windowHours*float64(time.Hour))).AddDate(0, 0, -1).Format("2006-01-02")
 	rows, err := db.conn.Query(
-		"SELECT COALESCE(first_seen, ''), COALESCE(route_type, -1), COALESCE(hash, '') FROM transmissions WHERE from_pubkey = ? AND payload_type = ? ORDER BY id DESC LIMIT 2000",
-		pubkey, payloadTypeAdvert)
+		"SELECT COALESCE(first_seen, ''), COALESCE(route_type, -1), COALESCE(hash, '') FROM transmissions WHERE from_pubkey = ? AND payload_type = ? AND route_type = ? AND first_seen >= ? ORDER BY id DESC LIMIT ?",
+		pubkey, payloadTypeAdvert, advertRouteTypeFlood, floor, rowCap)
 	if err != nil {
 		return 0, err
 	}

@@ -1630,8 +1630,10 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 	// separated from zero-hop adverts so a nearby observer hearing a node's
 	// cheap local adverts does not inflate the number. Consumed by the ArcScope
 	// repeater advisor to rate advert hygiene.
-	if n, err := s.db.CountFloodAdvertsForNode(pubkey, 7*24); err == nil {
+	if n, err := s.db.CountFloodAdvertsForNode(pubkey, 7*24, floodAdvertRowCap); err == nil {
 		node["flood_advert_count_7d"] = n
+	} else {
+		log.Printf("WARN CountFloodAdvertsForNode(%s): %v", pubkey, err)
 	}
 
 	writeJSON(w, NodeDetailResponse{
