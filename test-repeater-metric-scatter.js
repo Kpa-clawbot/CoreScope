@@ -79,6 +79,8 @@ assert(mapped.length === 5 && !mapped.some(p => p.role === 'companion'),
   'non-repeater/room roles are filtered out');
 assert(mapped[0].traffic === 0.5 && mapped[0].fav === true,
   'traffic_share_score is preferred and favorites are flagged');
+assert(mapped[0].bridge === 0.2 && mapped[0].relay1h === 1 && mapped[0].relay24h === 2 && mapped[0].adverts === 3,
+  'bridge/relay/advert counts map onto their renamed point fields (advert_count → adverts)');
 assert(mapped[1].traffic === 0.07 && mapped[1].fav === false,
   'missing traffic_share_score falls back to usefulness_score');
 assert(mapped[2].traffic === null && mapped[2].bridge === null && mapped[2].relay1h === null,
