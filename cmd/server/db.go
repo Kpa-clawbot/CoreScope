@@ -17,9 +17,18 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// routeTypeTransport covers FLOOD (0) and DIRECT (3) route types — packets
-// that carry transport-level scoping via Code1.
+// routeTypeTransport covers TRANSPORT_FLOOD (0) and TRANSPORT_DIRECT (3) —
+// the only route types that carry transport_code_1 (transport-level scope).
+// Per firmware/docs/packet_format.md § Route Types:
+//   0 = TRANSPORT_FLOOD, 1 = FLOOD, 2 = DIRECT, 3 = TRANSPORT_DIRECT.
+// Routes 1 (FLOOD) and 2 (DIRECT) never carry a scope by protocol — they are
+// inherently unscoped and are counted separately in GetScopeStats (#1838).
 const routeTypeTransportSQL = "route_type IN (0, 3)"
+
+// routeTypeNonTransportSQL matches FLOOD (1) and DIRECT (2) — non-transport
+// routes that carry no transport_code_1 and are therefore inherently unscoped
+// per MeshCore protocol (#1838).
+const routeTypeNonTransportSQL = "route_type IN (1, 2)"
 
 // DB wraps a read-only connection to the MeshCore SQLite database.
 type DB struct {
@@ -2789,6 +2798,19 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 	); err != nil {
 		return nil, fmt.Errorf("scope summary query: %w", err)
 	}
+
+	// #1838: non-transport routes (FLOOD=1, DIRECT=2) never carry
+	// transport_code_1 per MeshCore protocol, so they are inherently unscoped.
+	// Fold their count into Summary.Unscoped so the analytics denominator
+	// reflects total-observed-transmissions rather than only transport-eligible.
+	var nonTransportUnscoped int
+	if err := db.conn.QueryRow(`
+		SELECT COUNT(*) FROM transmissions
+		WHERE `+routeTypeNonTransportSQL+` AND first_seen >= ?
+	`, since).Scan(&nonTransportUnscoped); err != nil {
+		return nil, fmt.Errorf("scope non-transport count query: %w", err)
+	}
+	resp.Summary.Unscoped += nonTransportUnscoped
 
 	// Per-region counts (named regions only)
 	rows, err := db.conn.Query(`
