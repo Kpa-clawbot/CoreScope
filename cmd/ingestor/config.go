@@ -11,6 +11,7 @@ import (
 
 	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/geofilter"
+	"github.com/meshcore-analyzer/packetpath"
 )
 
 // MQTTSource represents a single MQTT broker connection.
@@ -56,6 +57,7 @@ type Config struct {
 	Runtime            *RuntimeConfig          `json:"runtime,omitempty"`
 	ClientRxCoverage   *ClientRxCoverageConfig `json:"clientRxCoverage,omitempty"`
 	GeoFilter          *GeoFilterConfig        `json:"geo_filter,omitempty"`
+	PathTrust          *PathTrustConfig        `json:"pathTrust,omitempty"`
 	ForeignAdverts     *ForeignAdvertConfig    `json:"foreignAdverts,omitempty"`
 	ValidateSignatures *bool                   `json:"validateSignatures,omitempty"`
 	DB                 *DBConfig               `json:"db,omitempty"`
@@ -111,6 +113,10 @@ func (c *Config) IngestBufferSizeOrDefault() int {
 
 // GeoFilterConfig is an alias for the shared geofilter.Config type.
 type GeoFilterConfig = geofilter.Config
+
+// PathTrustConfig is an alias for the shared packetpath.TrustConfig type
+// (issue #1784). See packetpath.TrustConfig for the full doc comment.
+type PathTrustConfig = packetpath.TrustConfig
 
 // ForeignAdvertConfig controls how the ingestor handles ADVERTs whose GPS lies
 // outside the configured geofilter polygon (#730). Modes:
@@ -236,6 +242,15 @@ func (c *Config) ObserverDaysOrDefault() int {
 		return c.Retention.ObserverDays
 	}
 	return 14
+}
+
+// GetPathTrust returns the effective path-trust config, applying
+// DefaultMinHashBytesForMapping when unset (issue #1784).
+func (c *Config) GetPathTrust() PathTrustConfig {
+	if c != nil && c.PathTrust != nil {
+		return *c.PathTrust
+	}
+	return PathTrustConfig{MinHashBytesForMapping: packetpath.DefaultMinHashBytesForMapping}
 }
 
 // IsObserverBlacklisted returns true if the given observer ID is in the observerBlacklist.

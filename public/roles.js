@@ -604,6 +604,11 @@
       : { disabledTabs: [] };
     // #1574 — operator-configurable cap on /live map node count.
     if (cfg.liveMapMaxNodes != null) window.LIVE_MAP_MAX_NODES = cfg.liveMapMaxNodes;
+    // #1784 — path trust threshold: minimum hash bytes for mapping evidence.
+    // Default 2 means 1-byte observations are excluded from topology/mapping.
+    window.PATH_TRUST = cfg.pathTrust && cfg.pathTrust.minHashBytesForMapping
+      ? cfg.pathTrust.minHashBytesForMapping
+      : 1; // DefaultMinHashBytesForMapping — trust-all (backward-compatible)
     // Sync ROLE_STYLE colors with ROLE_COLORS
     // #1407 — both are now live getters; no manual sync needed. Kept as no-op for clarity.
   }).catch(function () { /* use defaults */ });
