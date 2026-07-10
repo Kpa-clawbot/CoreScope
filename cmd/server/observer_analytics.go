@@ -8,8 +8,17 @@
 // The `filtered` argument is the time-window-filtered, timestamp-desc sorted
 // slice of *StoreObs produced by the handler after snapshotting under RLock
 // (see #1481 P0-2). Helpers do NOT touch store.mu — the handler owns lock
-// scoping; helpers only read PacketStore.byTxID which is safe because we
-// operate on the snapshot produced under the RLock.
+// scoping.
+//
+// Concurrency note (#1839 MINOR): the RLock snapshot only covers the
+// *StoreObs pointer slice; reads of store.byTxID inside buildPacketTypes /
+// buildNodesTimeline are unsynchronized concurrent-map reads (pre-existing
+// behavior — enrichObs did the same). Not introduced by this refactor.
+//
+// Perf note (#1839 MINOR): dropping enrichObs on the histogram / nodes-
+// timeline paths also eliminates N fetchResolvedPathForObs SQL calls per
+// /analytics request (store.go:fetchResolvedPathForObs), not just the alloc/
+// boxing win — /analytics SQL-load drops materially.
 package main
 
 import (

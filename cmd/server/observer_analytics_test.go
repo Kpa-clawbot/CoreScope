@@ -70,7 +70,7 @@ func TestBuildPacketTypesDirectRead(t *testing.T) {
 	store.byTxID[3] = &StoreTx{ID: 3, PayloadType: nil} // no type → skip
 	// tx=4 not in map → skip
 
-	now := time.Now().UTC()
+	now := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
 	filtered := []*StoreObs{
 		buildObsForTest(1, now, nil, "[]"),
 		buildObsForTest(1, now, nil, "[]"),
@@ -115,7 +115,7 @@ func TestBuildTimelineBuckets(t *testing.T) {
 // TestBuildSnrDistribution asserts 2-unit floor bucketing over SNR values.
 func TestBuildSnrDistribution(t *testing.T) {
 	f := func(v float64) *float64 { return &v }
-	now := time.Now().UTC()
+	now := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
 	filtered := []*StoreObs{
 		buildObsForTest(1, now, f(12.5), "[]"), // bucket 12
 		buildObsForTest(1, now, f(13.9), "[]"), // bucket 12
