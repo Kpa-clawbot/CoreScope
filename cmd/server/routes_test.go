@@ -4180,6 +4180,11 @@ func TestHandleScopeStats(t *testing.T) {
 	}
 	srv.db.hasScopeName = true
 
+	// Clear seed transmissions so this test isolates scope-stats math.
+	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
+		t.Fatalf("clear transmissions: %v", err)
+	}
+
 	now := time.Now().UTC().Format(time.RFC3339)
 	// 2 scoped (known region), 1 unknown-scoped (empty string), 1 unscoped (NULL)
 	rows := []struct {
