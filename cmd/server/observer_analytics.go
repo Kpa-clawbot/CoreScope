@@ -166,16 +166,33 @@ func buildSnrDistribution(filtered []*StoreObs) []SnrDistributionEntry {
 // buildRecentPackets builds the "first N enriched observations" list. This is
 // the only aggregate that needs the full enrichObs map — recentPackets is a
 // UI-facing payload and the extra fields matter here.
+//
+// Legacy parity (#1839): the pre-#1828 routes.go loop was
+//
+//	for i, obs := range filtered {
+//	    if _, ok := obs.ParsedTime(); !ok { continue }
+//	    ...
+//	    if i < limit { recentPackets = append(..., enriched) }
+//	}
+//
+// The `i` in the gate is the RAW slice index — a bad-ts obs at position k<limit
+// consumed its slot (via `continue`) and could not be replaced by a later
+// good-ts obs. Result can be <limit when bad-ts obs sit in the head of
+// `filtered`. We reproduce that exact semantic here to keep output byte-
+// identical.
 func buildRecentPackets(store *PacketStore, filtered []*StoreObs, limit int) []map[string]interface{} {
 	if limit <= 0 {
 		return []map[string]interface{}{}
 	}
-	if len(filtered) < limit {
-		limit = len(filtered)
-	}
 	out := make([]map[string]interface{}, 0, limit)
-	for i := 0; i < limit; i++ {
-		out = append(out, store.enrichObs(filtered[i]))
+	for i, obs := range filtered {
+		if i >= limit {
+			break
+		}
+		if _, ok := obs.ParsedTime(); !ok {
+			continue
+		}
+		out = append(out, store.enrichObs(obs))
 	}
 	return out
 }
