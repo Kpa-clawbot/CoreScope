@@ -810,7 +810,7 @@
           const qr = qrcode(0, 'M');
           qr.addData(meshcoreUrl);
           qr.make();
-          qrFullEl.innerHTML = qr.createSvgTag(3, 0);
+          qrFullEl.innerHTML = qr.createSvgTag(3, 12);
           const svg = qrFullEl.querySelector('svg');
           if (svg) { svg.style.display = 'block'; svg.style.margin = '0 auto'; }
         } catch {}
@@ -1702,7 +1702,7 @@
         qr.addData(meshcoreUrl);
         qr.make();
         const isOverlay = !!qrEl.closest('.node-map-qr-overlay');
-        qrEl.innerHTML = qr.createSvgTag(3, 0);
+        qrEl.innerHTML = qr.createSvgTag(3, 12);
         const svg = qrEl.querySelector('svg');
         if (svg) {
           svg.style.display = 'block'; svg.style.margin = '0 auto';
