@@ -390,7 +390,7 @@
           // #1784 — trust threshold: append a speculative annotation when any
           // hop is below the configured minimum hash bytes for mapping.
           if (g.belowTrust) {
-            var _tt = (typeof window !== 'undefined' && window.MC_getPathTrustThreshold) ? window.MC_getPathTrustThreshold() : 2;
+            var _tt = (typeof window !== 'undefined' && window.MC_getPathTrustThreshold) ? window.MC_getPathTrustThreshold() : 1;
             hopsHtml += ' <span class="text-muted" style="font-size:0.85em" title="One or more hops in this path have a shorter prefix than the configured ' + _tt + '-byte trust threshold. These observations count as speculative — raise pathTrust.minHashBytesForMapping in config.json for stricter evidence.">(speculative, <' + _tt + '-byte hops)</span>';
           }
         }

@@ -2631,7 +2631,7 @@
               // "all below trust threshold" for the fallback message.
               var _msg = '1-byte filtered';
               if (_pathHopsBelowTrust(p.hops || [])) {
-                var _tt = (window.MC_getPathTrustThreshold ? window.MC_getPathTrustThreshold() : 2);
+                var _tt = (window.MC_getPathTrustThreshold ? window.MC_getPathTrustThreshold() : 1);
                 _msg = _tt + '-byte trust threshold (pathTrust.minHashBytesForMapping: ' + _tt + ')';
               }
               return `<div style="padding:3px 0;font-size:11px;line-height:1.4;color:var(--text-muted)">— (${_msg}) <span style="color:var(--text-muted)">(${p.count}×)</span></div>`;

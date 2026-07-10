@@ -264,7 +264,6 @@
     var modeWeight = { 0: 0.5, 1: 0.125, 2: 0.875, 3: 1.0 };
     if (_tt >= 2) {
       for (var _m = 0; _m < _tt; _m++) modeWeight[_m] = 0;
-      if (_tt >= 2) modeWeight[0] = 0; // bucket-0 excluded when threshold >= 2 (#1784)
     }
     var cbm = entry.counts_by_mode || null;
     var weighted;

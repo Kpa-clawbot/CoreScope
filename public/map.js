@@ -643,13 +643,13 @@
     // derived topology display. Operators can lower the threshold via
     // pathTrust.minHashBytesForMapping in config.json.
     if (window.MC_pathBelowTrust && window.MC_pathBelowTrust(hopKeys)) {
-      var _t = window.MC_getPathTrustThreshold ? window.MC_getPathTrustThreshold() : 2;
+      var _t = window.MC_getPathTrustThreshold ? window.MC_getPathTrustThreshold() : 1;
       var _hb = hopKeys && hopKeys.length ? window.MC_hopByteLen(hopKeys[0]) : 1;
       routeLayer.clearLayers();
       var _trustMsg = L.control({ position: 'topright' });
       _trustMsg.onAdd = function () {
         var d = L.DomUtil.create('div', 'leaflet-bar');
-        d.style.cssText = 'background:var(--input-bg,#1e293b);color:var(--text,#e2e8f0);padding:10px 14px;border-radius:6px;font-size:13px;max-width:320px;box-shadow:0 2px 8px rgba(0,0,0,0.3)';
+        d.style.cssText = 'background:var(--input-bg);color:var(--text);padding:10px 14px;border-radius:6px;font-size:13px;max-width:320px;box-shadow:0 2px 8px rgba(0,0,0,0.3)';
         d.innerHTML = '<strong>Route not displayed</strong><br><span style="color:var(--text-muted)">Packet uses ' + _hb + '-byte path hashes, below configured trust threshold (' + _t + '-byte minimum). Raw hops remain visible in packet detail views. Set <code>pathTrust.minHashBytesForMapping</code> in config.json to trust shorter prefixes.</span>';
         return d;
       };
