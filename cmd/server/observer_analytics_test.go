@@ -141,14 +141,54 @@ func TestBuildRecentPacketsLimit(t *testing.T) {
 	store := newStoreForAnalyticsTest()
 	pt := 3
 	store.byTxID[1] = &StoreTx{ID: 1, PayloadType: &pt}
-	now := time.Now().UTC()
+	base := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
 	filtered := make([]*StoreObs, 0, 25)
 	for i := 0; i < 25; i++ {
-		filtered = append(filtered, buildObsForTest(1, now.Add(-time.Duration(i)*time.Minute), nil, "[]"))
+		filtered = append(filtered, buildObsForTest(1, base.Add(-time.Duration(i)*time.Minute), nil, "[]"))
 	}
 	got := buildRecentPackets(store, filtered, 20)
 	if len(got) != 20 {
 		t.Errorf("recentPackets len = %d, want 20", len(got))
+	}
+}
+
+// TestBuildRecentPacketsSkipsUnparseableTimestamp asserts obs with an
+// unparseable Timestamp are dropped BEFORE the top-N slice — matching the
+// legacy pre-refactor loop (routes.go pre-#1828: `if !ok { continue }` sits
+// above the `i < 20` gate). Regression guard for #1839 MAJOR.
+func TestBuildRecentPacketsSkipsUnparseableTimestamp(t *testing.T) {
+	store := newStoreForAnalyticsTest()
+	pt := 3
+	store.byTxID[1] = &StoreTx{ID: 1, PayloadType: &pt}
+	base := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
+
+	filtered := make([]*StoreObs, 0, 23)
+	// 3 head observations with an unparseable timestamp — legacy skipped them
+	// before the index-gate, so they must NOT consume slots in the top-20.
+	for i := 0; i < 3; i++ {
+		filtered = append(filtered, &StoreObs{
+			TransmissionID: 1,
+			Timestamp:      "not-a-timestamp",
+			PathJSON:       "[]",
+		})
+	}
+	// 20 good observations after them.
+	for i := 0; i < 20; i++ {
+		filtered = append(filtered, buildObsForTest(1, base.Add(-time.Duration(i)*time.Minute), nil, "[]"))
+	}
+
+	got := buildRecentPackets(store, filtered, 20)
+
+	// Legacy loop: index 0-2 skipped (bad ts), index 3-19 appended under the
+	// i<20 gate (17 entries), index 20-22 dropped (i>=20). Result len = 17.
+	if len(got) != 17 {
+		t.Errorf("recentPackets len = %d, want 17 (unparseable-ts obs at head must be skipped before top-N gate)", len(got))
+	}
+	// Sanity: no entry should carry the bad Timestamp string.
+	for i, e := range got {
+		if ts, _ := e["timestamp"].(string); ts == "not-a-timestamp" {
+			t.Errorf("recentPackets[%d] contains unparseable-ts obs (timestamp=%q)", i, ts)
+		}
 	}
 }
 
