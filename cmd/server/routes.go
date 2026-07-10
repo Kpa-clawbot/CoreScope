@@ -2840,11 +2840,12 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// #1828 Phase A: aggregate builders extracted into observer_analytics.go.
+	// Single snapshot under RLock (#1481 P0-2), then five composable helpers
+	// off the snapshot. No behavior change; JSON output is byte-identical.
 	since := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
 	s.store.mu.RLock()
 	obsList := s.store.byObserver[id]
-	// #1481 P0-2: snapshot pointer slice and release RLock immediately —
-	// don't iterate + json-decode + time-parse under the lock.
 	obsSnapshot := make([]*StoreObs, len(obsList))
 	copy(obsSnapshot, obsList)
 	s.store.mu.RUnlock()
@@ -2860,109 +2861,12 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 	}
 	sort.Slice(filtered, func(i, j int) bool { return filtered[i].Timestamp > filtered[j].Timestamp })
 
-	bucketDur := 24 * time.Hour
-	if days <= 1 {
-		bucketDur = time.Hour
-	} else if days <= 7 {
-		bucketDur = 4 * time.Hour
-	}
-	formatLabel := func(t time.Time) string {
-		if days <= 1 {
-			return t.UTC().Format("15:04")
-		}
-		if days <= 7 {
-			return t.UTC().Format("Mon 15:04")
-		}
-		return t.UTC().Format("Jan 02")
-	}
-
-	packetTypes := map[string]int{}
-	timelineCounts := map[int64]int{}
-	nodeBucketSets := map[int64]map[string]struct{}{}
-	snrBuckets := map[int]*SnrDistributionEntry{}
-	recentPackets := make([]map[string]interface{}, 0, 20)
-
-	for i, obs := range filtered {
-		ts, ok := obs.ParsedTime()
-		if !ok {
-			continue
-		}
-		bucketStart := ts.UTC().Truncate(bucketDur).Unix()
-		timelineCounts[bucketStart]++
-		if nodeBucketSets[bucketStart] == nil {
-			nodeBucketSets[bucketStart] = map[string]struct{}{}
-		}
-
-		enriched := s.store.enrichObs(obs)
-		if pt, ok := enriched["payload_type"].(int); ok {
-			packetTypes[strconv.Itoa(pt)]++
-		}
-		if decodedRaw, ok := enriched["decoded_json"].(string); ok && decodedRaw != "" {
-			var decoded map[string]interface{}
-			if json.Unmarshal([]byte(decodedRaw), &decoded) == nil {
-				for _, k := range []string{"pubKey", "srcHash", "destHash"} {
-					if v, ok := decoded[k].(string); ok && v != "" {
-						nodeBucketSets[bucketStart][v] = struct{}{}
-					}
-				}
-			}
-		}
-		for _, hop := range parsePathJSON(obs.PathJSON) {
-			if hop != "" {
-				nodeBucketSets[bucketStart][hop] = struct{}{}
-			}
-		}
-		if obs.SNR != nil {
-			bucket := int(*obs.SNR) / 2 * 2
-			if *obs.SNR < 0 && int(*obs.SNR) != bucket {
-				bucket -= 2
-			}
-			if snrBuckets[bucket] == nil {
-				snrBuckets[bucket] = &SnrDistributionEntry{Range: fmt.Sprintf("%d to %d", bucket, bucket+2)}
-			}
-			snrBuckets[bucket].Count++
-		}
-		if i < 20 {
-			recentPackets = append(recentPackets, enriched)
-		}
-	}
-	// #1481 P0-2: RLock was released earlier after snapshotting the
-	// observation pointer slice; no Unlock needed here.
-
-	buildTimeline := func(counts map[int64]int) []TimeBucket {
-		keys := make([]int64, 0, len(counts))
-		for k := range counts {
-			keys = append(keys, k)
-		}
-		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
-		out := make([]TimeBucket, 0, len(keys))
-		for _, k := range keys {
-			lbl := formatLabel(time.Unix(k, 0))
-			out = append(out, TimeBucket{Label: &lbl, Count: counts[k]})
-		}
-		return out
-	}
-
-	nodeCounts := make(map[int64]int, len(nodeBucketSets))
-	for k, nodes := range nodeBucketSets {
-		nodeCounts[k] = len(nodes)
-	}
-	snrKeys := make([]int, 0, len(snrBuckets))
-	for k := range snrBuckets {
-		snrKeys = append(snrKeys, k)
-	}
-	sort.Ints(snrKeys)
-	snrDistribution := make([]SnrDistributionEntry, 0, len(snrKeys))
-	for _, k := range snrKeys {
-		snrDistribution = append(snrDistribution, *snrBuckets[k])
-	}
-
 	writeJSON(w, ObserverAnalyticsResponse{
-		Timeline:        buildTimeline(timelineCounts),
-		PacketTypes:     packetTypes,
-		NodesTimeline:   buildTimeline(nodeCounts),
-		SnrDistribution: snrDistribution,
-		RecentPackets:   recentPackets,
+		Timeline:        buildTimeline(filtered, days),
+		PacketTypes:     buildPacketTypes(s.store, filtered),
+		NodesTimeline:   buildNodesTimeline(s.store, filtered, days),
+		SnrDistribution: buildSnrDistribution(filtered),
+		RecentPackets:   buildRecentPackets(s.store, filtered, 20),
 	})
 }
 
