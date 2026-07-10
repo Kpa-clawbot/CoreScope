@@ -20,7 +20,7 @@ type TrustConfig struct {
 	MinHashBytesForMapping int `json:"minHashBytesForMapping,omitempty"`
 }
 
-const DefaultMinHashBytesForMapping = 1
+const DefaultMinHashBytesForMapping = 2
 
 const MaxHashBytes = 3
 

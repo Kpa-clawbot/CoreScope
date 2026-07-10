@@ -48,13 +48,15 @@
   }
 
   // #1784 — server-side path trust threshold (minHashBytesForMapping).
-  // Falls back to 1 (trust-all, backward-compatible default) until
-  // MeshConfigReady resolves.
+  // Falls back to DefaultMinHashBytesForMapping (2) until MeshConfigReady
+  // resolves. Default 2 excludes 1-byte prefixes (256-value collision
+  // space) from mapping evidence — operator-confirmed to reduce false
+  // positives on denser meshes.
   function getPathTrustThreshold() {
     if (typeof window !== 'undefined' && typeof window.PATH_TRUST === 'number') {
       return window.PATH_TRUST;
     }
-    return 1; // DefaultMinHashBytesForMapping — trust-all
+    return 2;
   }
 
   // #1784 — whether a hop meets the server-side path trust threshold.

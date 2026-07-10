@@ -1606,10 +1606,9 @@
       ? window.MC_getPathTrustThreshold()
       : 1;
     var trustDesc = trustThreshold >= 2
-      ? '1-byte path observations are NOT trusted for topology/mapping (minHashBytesForMapping: ' + trustThreshold + '). Routes below this threshold show as speculative or hidden. Change via pathTrust.minHashBytesForMapping in config.json.'
-      : 'All path-hash byte lengths (1\u20133) are trusted for topology/mapping (default, backward-compatible). Set pathTrust.minHashBytesForMapping in config.json to 2 or 3 for stricter evidence requirements.';
+      ? '1-byte path-hash prefixes collide ~8-way at ~2k relays and are excluded from topology/mapping evidence (minHashBytesForMapping: ' + trustThreshold + '). Routes below this threshold show as speculative or are excluded. Change via pathTrust.minHashBytesForMapping in config.json.'
+      : '1-byte path-hash prefixes collide ~8-way at ~2k relays — many polylines and rows they produce are visual noise. Hide them here without changing what\'s stored. Set pathTrust.minHashBytesForMapping in config.json to 2 or 3 for stricter server-side evidence requirements.';
     return '<p class="cust-section-title" style="font-size:14px;margin:16px 0 8px">Path Display</p>' +
-      '<p class="cust-hint" style="font-size:12px;color:var(--text-muted);margin-bottom:8px">1-byte path-hash prefixes (firmware default) collide ~8-way at ~2k relays — many polylines and route-pattern rows they produce are visual noise. Hide them globally without changing what\'s stored.</p>' +
       '<div class="cust-field" style="display:flex;align-items:center;gap:8px">' +
         '<input type="checkbox" id="cv2-hide-1byte-hops" data-cv2-hide-1byte-hops' +
           (on ? ' checked' : '') +

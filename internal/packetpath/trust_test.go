@@ -3,13 +3,13 @@ package packetpath
 import "testing"
 
 func TestMeetsPathTrust_DefaultThreshold(t *testing.T) {
-	// nil cfg → DefaultMinHashBytesForMapping (1): trust-all, backward-compatible.
+	// nil cfg → DefaultMinHashBytesForMapping (2): 0-byte and 1-byte excluded.
 	cases := []struct {
 		prefixBytes int
 		want        bool
 	}{
-		{0, true},
-		{1, true},
+		{0, false},
+		{1, false},
 		{2, true},
 		{3, true},
 	}
@@ -49,14 +49,17 @@ func TestMeetsPathTrust_Exclude1Byte(t *testing.T) {
 }
 
 func TestMeetsPathTrust_ZeroValueOptIn(t *testing.T) {
-	// A zero-value MinHashBytesForMapping (unset) must fall back to default (1),
-	// so bucket-0 and 1-byte prefixes pass.
+	// A zero-value MinHashBytesForMapping (unset) must fall back to default (2),
+	// so bucket-0 and 1-byte prefixes fail; 2-byte and above pass.
 	cfg := &TrustConfig{}
-	if !MeetsPathTrust(1, cfg) {
-		t.Errorf("MeetsPathTrust(1, %+v) = false, want true (unset uses default=1, trust-all)", cfg)
+	if MeetsPathTrust(1, cfg) {
+		t.Errorf("MeetsPathTrust(1, %+v) = true, want false (unset uses default=2, 1-byte excluded)", cfg)
 	}
-	if !MeetsPathTrust(0, cfg) {
-		t.Errorf("MeetsPathTrust(0, %+v) = false, want true (bucket-0 passes at default threshold)", cfg)
+	if MeetsPathTrust(0, cfg) {
+		t.Errorf("MeetsPathTrust(0, %+v) = true, want false (bucket-0 excluded at default threshold)", cfg)
+	}
+	if !MeetsPathTrust(2, cfg) {
+		t.Errorf("MeetsPathTrust(2, %+v) = false, want true (2-byte passes at default threshold)", cfg)
 	}
 }
 

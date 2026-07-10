@@ -450,12 +450,12 @@ test('[kb #1] anti-tautology: tests reference the actual production files (not i
 
 console.log('\n=== #1784: path trust threshold ===');
 
-test('#1784: MC_getPathTrustThreshold default is 1 (backward-compatible)', () => {
+test('#1784: MC_getPathTrustThreshold default is 2 (operator-confirmed)', () => {
   const ctx = makeSandbox();
   load(ctx, 'public/hop-filter.js');
   delete ctx.window.PATH_TRUST;
-  assert.strictEqual(ctx.window.MC_getPathTrustThreshold(), 1,
-    'default path trust threshold must be 1 (trust-all)');
+  assert.strictEqual(ctx.window.MC_getPathTrustThreshold(), 2,
+    'default path trust threshold must be 2 (operator-confirmed, excludes 1-byte)');
 });
 
 test('#1784: MC_getPathTrustThreshold reads window.PATH_TRUST', () => {

@@ -225,7 +225,8 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			prefix := req.Prefixes[hi]
-			trusted := packetpath.MeetsPathTrust(len(prefix)/2, s.cfg.PathTrust)
+				pt := s.cfg.GetPathTrust()
+			trusted := packetpath.MeetsPathTrust(len(prefix)/2, &pt)
 			if !trusted {
 				allHopsTrusted = false
 			}
@@ -266,6 +267,7 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	elapsed := time.Since(start).Milliseconds()
+	statsMinBytes := s.cfg.GetPathTrust()
 	resp := pathInspectResponse{
 		Candidates: candidates,
 		Stale:      stale,
@@ -277,7 +279,7 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 			"beamWidth":              beamWidth,
 			"expansionsRun":          len(req.Prefixes) * beamWidth,
 			"elapsedMs":              elapsed,
-			"minHashBytesForMapping": s.cfg.GetPathTrust().MinHashBytesOrDefault(),
+			"minHashBytesForMapping": statsMinBytes.MinHashBytesOrDefault(),
 		},
 	}
 
