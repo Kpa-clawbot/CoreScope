@@ -644,7 +644,12 @@
     // pathTrust.minHashBytesForMapping in config.json.
     if (window.MC_pathBelowTrust && window.MC_pathBelowTrust(hopKeys)) {
       var _t = window.MC_getPathTrustThreshold ? window.MC_getPathTrustThreshold() : 1;
-      var _hb = hopKeys && hopKeys.length ? window.MC_hopByteLen(hopKeys[0]) : 1;
+      var _hb = 0;
+      if (hopKeys && hopKeys.length) {
+        for (var _hi = 0; _hi < hopKeys.length; _hi++) {
+          _hb = Math.max(_hb, window.MC_hopByteLen(hopKeys[_hi]));
+        }
+      }
       routeLayer.clearLayers();
       var _trustMsg = L.control({ position: 'topright' });
       _trustMsg.onAdd = function () {

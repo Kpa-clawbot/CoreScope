@@ -2019,7 +2019,7 @@
         const _hide1 = !!(typeof window !== 'undefined' && window.MC_getHide1ByteHops && window.MC_getHide1ByteHops());
         // #1784 — path trust threshold: filter patterns whose hops are below
         // the configured minimum hash bytes for mapping. Operators set this
-        // via pathTrust.minHashBytesForMapping in config.json (default 1).
+        // via pathTrust.minHashBytesForMapping in config.json (default 2).
         const _trustTT = (typeof window !== 'undefined' && window.MC_getPathTrustThreshold) ? window.MC_getPathTrustThreshold() : 1;
         const _hop1 = function (h) { return String(h || '').length === 2; };
         const _meetsTrust = function (h) {
