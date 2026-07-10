@@ -445,6 +445,7 @@ test('[kb #1] anti-tautology: tests reference the actual production files (not i
 });
 
 // ─────────────────────────────────────────────────────────────────────
+
 // #1784 path trust threshold — configurable minimum hash bytes for mapping
 // ─────────────────────────────────────────────────────────────────────
 
@@ -524,17 +525,80 @@ test('#1784: empty/null hops are not below trust', () => {
   const ctx = makeSandbox();
   load(ctx, 'public/hop-filter.js');
   ctx.window.PATH_TRUST = 2;
-  assert.strictEqual(ctx.window.MC_pathBelowTrust(null), false, 'null → not below trust');
-  assert.strictEqual(ctx.window.MC_pathBelowTrust([]), false, 'empty → not below trust');
+  assert.strictEqual(ctx.window.MC_pathBelowTrust(null), false, 'null is not below trust');
+  assert.strictEqual(ctx.window.MC_pathBelowTrust([]), false, 'empty is not below trust');
 });
 
 test('#1784: MC_meetsPathTrust handles null/undefined safely', () => {
   const ctx = makeSandbox();
   load(ctx, 'public/hop-filter.js');
   ctx.window.PATH_TRUST = 2;
-  assert.strictEqual(ctx.window.MC_meetsPathTrust(null), false, 'null → false (byteLen 0 < 2)');
-  assert.strictEqual(ctx.window.MC_meetsPathTrust(undefined), false, 'undefined → false');
-  assert.strictEqual(ctx.window.MC_meetsPathTrust(''), false, 'empty string → false');
+  assert.strictEqual(ctx.window.MC_meetsPathTrust(null), false, 'null must not meet trust');
+  assert.strictEqual(ctx.window.MC_meetsPathTrust(undefined), false, 'undefined must not meet trust');
+});
+
+// #1784 consumer wiring — source-grep guards for trust threshold wiring
+// ─────────────────────────────────────────────────────────────────────
+
+console.log('\n=== #1784: consumer wiring guards ===');
+
+test('#1784: map.js references MC_pathBelowTrust for trust-gated route display', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'public/map.js'), 'utf8');
+  assert.ok(src.indexOf('MC_pathBelowTrust') !== -1,
+    'map.js must call MC_pathBelowTrust to gate route drawing on trust threshold');
+  assert.ok(src.indexOf('Route not displayed') !== -1,
+    'map.js must show a clear message when route is below trust threshold');
+});
+
+test('#1784: analytics.js references MC_meetsPathTrust for subpath filtering', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'public/analytics.js'), 'utf8');
+  assert.ok(src.indexOf('MC_meetsPathTrust') !== -1,
+    'analytics.js must call MC_meetsPathTrust to filter subpaths by trust');
+  assert.ok(src.indexOf('MC_getPathTrustThreshold') !== -1,
+    'analytics.js must read the trust threshold');
+  assert.ok(src.indexOf('trust threshold') !== -1,
+    'analytics.js must mention trust threshold in filter messages');
+});
+
+test('#1784: route-view.js references MC_meetsPathTrust for speculative annotation', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'public/route-view.js'), 'utf8');
+  assert.ok(src.indexOf('MC_meetsPathTrust') !== -1,
+    'route-view.js must call MC_meetsPathTrust to mark paths as speculative');
+  assert.ok(src.indexOf('belowTrust') !== -1,
+    'route-view.js must track belowTrust flag');
+  assert.ok(src.indexOf('speculative') !== -1,
+    'route-view.js must show speculative annotation for paths below trust');
+});
+
+test('#1784: live.js references MC_meetsPathTrust for Paths Through widget', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'public/live.js'), 'utf8');
+  assert.ok(src.indexOf('MC_meetsPathTrust') !== -1,
+    'live.js must call MC_meetsPathTrust in the Paths Through widget');
+  assert.ok(src.indexOf('pathTrust.minHashBytesForMapping') !== -1,
+    'live.js must mention the config key in trust messages');
+});
+
+test('#1784: nodes.js references MC_getPathTrustThreshold for confidence weights', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'public/nodes.js'), 'utf8');
+  assert.ok(src.indexOf('MC_getPathTrustThreshold') !== -1,
+    'nodes.js must read trust threshold for confidence weight adjustment');
+});
+
+test('#1784: anti-tautology — MC_pathBelowTrust returns correct boolean for given hops (not a stub)', () => {
+  const ctx = makeSandbox();
+  load(ctx, 'public/hop-filter.js');
+  ctx.window.PATH_TRUST = 2;
+  assert.strictEqual(ctx.window.MC_pathBelowTrust(['aabb']), false,
+    'single 2-byte hop must NOT be below trust at threshold=2');
+  assert.strictEqual(ctx.window.MC_pathBelowTrust(['aa']), true,
+    'single 1-byte hop must be below trust at threshold=2');
+  assert.strictEqual(ctx.window.MC_pathBelowTrust(['aa', 'bbcc', 'dd']), false,
+    'mixed path with one 2-byte hop must NOT be below trust');
+  assert.strictEqual(ctx.window.MC_pathBelowTrust(['aa', 'bb', 'cc']), true,
+    'all-1-byte path must be below trust at threshold=2');
+  ctx.window.PATH_TRUST = 1;
+  assert.strictEqual(ctx.window.MC_pathBelowTrust(['aa', 'bb']), false,
+    'all-1-byte path must NOT be below trust at threshold=1');
 });
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');

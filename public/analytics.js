@@ -2017,18 +2017,38 @@
         // INPUT (not just CSS-hide) so the displayed % and ordering reflect
         // the surviving population.
         const _hide1 = !!(typeof window !== 'undefined' && window.MC_getHide1ByteHops && window.MC_getHide1ByteHops());
+        // #1784 — path trust threshold: filter patterns whose hops are below
+        // the configured minimum hash bytes for mapping. Operators set this
+        // via pathTrust.minHashBytesForMapping in config.json (default 1).
+        const _trustTT = (typeof window !== 'undefined' && window.MC_getPathTrustThreshold) ? window.MC_getPathTrustThreshold() : 1;
         const _hop1 = function (h) { return String(h || '').length === 2; };
-        const subpaths = _hide1
+        const _meetsTrust = function (h) {
+          if (_trustTT <= 1) return true;
+          return window.MC_meetsPathTrust ? window.MC_meetsPathTrust(h) : true;
+        };
+        const subpaths = (_hide1 || _trustTT >= 2)
           ? data.subpaths.filter(function (s) {
               var rh = s.rawHops || [];
-              for (var k = 0; k < rh.length; k++) if (_hop1(rh[k])) return false;
+              for (var k = 0; k < rh.length; k++) {
+                if (_hide1 && _hop1(rh[k])) return false;
+                if (_trustTT >= 2 && !_meetsTrust(rh[k])) return false;
+              }
               return true;
             })
           : data.subpaths;
-        if (!subpaths.length) return `<h4>${title}</h4><div class="text-muted">No data (all matching routes contained 1-byte hops — toggle off in customizer to see)</div>`;
+        if (!subpaths.length) {
+          var _reason = [];
+          if (_hide1) _reason.push('1-byte hide toggle');
+          if (_trustTT >= 2) _reason.push(_trustTT + '-byte trust threshold');
+          return `<h4>${title}</h4><div class="text-muted">No data (all matching routes filtered: ${_reason.join(' + ')} — adjust in customizer or config.json)</div>`;
+        }
         const maxCount = subpaths[0]?.count || 1;
+        var _filterNote = '';
+        if (_hide1 && _trustTT >= 2) _filterNote = ` · showing ${subpaths.length} of ${data.subpaths.length} (1-byte hide + ${_trustTT}-byte trust)`;
+        else if (_hide1) _filterNote = ` · showing ${subpaths.length} of ${data.subpaths.length} (1-byte filtered)`;
+        else if (_trustTT >= 2) _filterNote = ` · showing ${subpaths.length} of ${data.subpaths.length} (${_trustTT}-byte trust threshold applied)`;
         return `<h4>${title}</h4>
-          <p class="text-muted" style="margin:4px 0 8px">From ${data.totalPaths.toLocaleString()} paths with 2+ hops${_hide1 ? ` · showing ${subpaths.length} of ${data.subpaths.length} (1-byte filtered)` : ''}</p>
+          <p class="text-muted" style="margin:4px 0 8px">From ${data.totalPaths.toLocaleString()} paths with 2+ hops${_filterNote}</p>
           <table class="analytics-table"><thead><tr>
             <th scope="col">#</th><th scope="col">Route</th><th scope="col">Occurrences</th><th scope="col">% of paths</th><th scope="col">Frequency</th>
           </tr></thead><tbody>
