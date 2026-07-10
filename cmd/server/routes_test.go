@@ -4191,6 +4191,8 @@ func TestHandleScopeStats(t *testing.T) {
 		{"h2", "#belgium", 3},
 		{"h3", "", 0},      // transport-scoped, no region match
 		{"h4_null", "", 0}, // will be inserted with NULL scope_name
+		{"h5_nt1", "", 1},  // non-transport FLOOD — inherently unscoped (#1838)
+		{"h6_nt2", "", 2},  // non-transport DIRECT — inherently unscoped (#1838)
 	}
 	for i, r := range rows {
 		var scopeArg interface{} = r.scope
@@ -4225,8 +4227,8 @@ func TestHandleScopeStats(t *testing.T) {
 	if resp.Summary.Scoped != 3 { // 2 named + 1 unknown-scoped (empty string, non-NULL)
 		t.Errorf("scoped = %d, want 3", resp.Summary.Scoped)
 	}
-	if resp.Summary.Unscoped != 1 {
-		t.Errorf("unscoped = %d, want 1", resp.Summary.Unscoped)
+	if resp.Summary.Unscoped != 3 { // 1 transport-null + 2 non-transport routes 1,2 (#1838)
+		t.Errorf("unscoped = %d, want 3", resp.Summary.Unscoped)
 	}
 	if resp.Summary.UnknownScope != 1 {
 		t.Errorf("unknownScope = %d, want 1", resp.Summary.UnknownScope)
