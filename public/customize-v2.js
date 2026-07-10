@@ -1604,7 +1604,7 @@
     try { on = localStorage.getItem('meshcore-hide-1byte-hops') === 'true'; } catch (_e) {}
     var trustThreshold = (typeof window.MC_getPathTrustThreshold === 'function')
       ? window.MC_getPathTrustThreshold()
-      : 1;
+      : 2;
     var trustDesc = trustThreshold >= 2
       ? '1-byte path-hash prefixes collide ~8-way at ~2k relays and are excluded from topology/mapping evidence (minHashBytesForMapping: ' + trustThreshold + '). Routes below this threshold show as speculative or are excluded. Change via pathTrust.minHashBytesForMapping in config.json.'
       : '1-byte path-hash prefixes collide ~8-way at ~2k relays — many polylines and rows they produce are visual noise. Hide them here without changing what\'s stored. Set pathTrust.minHashBytesForMapping in config.json to 2 or 3 for stricter server-side evidence requirements.';

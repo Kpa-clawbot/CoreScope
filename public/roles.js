@@ -608,7 +608,7 @@
     // Default 2 means 1-byte observations are excluded from topology/mapping.
     window.PATH_TRUST = cfg.pathTrust && cfg.pathTrust.minHashBytesForMapping
       ? cfg.pathTrust.minHashBytesForMapping
-      : 1; // DefaultMinHashBytesForMapping — trust-all (backward-compatible)
+      : 2;
     // Sync ROLE_STYLE colors with ROLE_COLORS
     // #1407 — both are now live getters; no manual sync needed. Kept as no-op for clarity.
   }).catch(function () { /* use defaults */ });

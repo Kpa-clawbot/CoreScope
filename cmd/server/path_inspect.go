@@ -220,12 +220,12 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 		evidence := make([]hopEvidence, len(entry.evidence))
 		copy(evidence, entry.evidence)
 		allHopsTrusted := true
+		pt := s.cfg.GetPathTrust()
 		for hi, ev := range evidence {
 			if hi >= len(req.Prefixes) {
 				break
 			}
 			prefix := req.Prefixes[hi]
-				pt := s.cfg.GetPathTrust()
 			trusted := packetpath.MeetsPathTrust(len(prefix)/2, &pt)
 			if !trusted {
 				allHopsTrusted = false

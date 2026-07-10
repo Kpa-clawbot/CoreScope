@@ -837,8 +837,6 @@ func BenchmarkBuildFromStore(b *testing.B) {
 	}
 }
 
-// TestBuildNeighborGraph_CountsByMode (issue #1638): verify per-hash-mode
-// edge counts are tracked separately from the flat Count, so the frontend
 // TestBuildNeighborGraph_PathTrustExcludes1ByteHops verifies that
 // BuildFromStoreWithOptions respects the PathTrust threshold. When
 // MinHashBytesForMapping=2, 1-byte prefix observations are excluded
