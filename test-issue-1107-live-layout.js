@@ -90,8 +90,8 @@ if (legendBtn) {
     '.legend-toggle-btn uses position: fixed (pinned to viewport)'
   );
   assert(
-    /bottom\s*:\s*1rem/.test(legendBtn),
-    '.legend-toggle-btn pinned at bottom: 1rem'
+    /bottom\s*:\s*(1rem|max\(1rem|calc\(\s*var\(--vcr-bar-height)/.test(legendBtn),
+    '.legend-toggle-btn pinned at bottom: 1rem / max(1rem,...) / calc(var(--vcr-bar-height,...)+...) (VCR-bar-aware, #1833)'
   );
   assert(
     /right\s*:\s*1rem/.test(legendBtn),

@@ -2110,7 +2110,7 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 /* === Observers Page === */
-.observers-page { padding: 20px; max-width: 1200px; margin: 0 auto; }
+.observers-page { padding: 20px; margin: 0 auto; }
 .obs-summary { display: flex; gap: 20px; margin-bottom: 16px; flex-wrap: wrap; }
 .obs-stat { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--text-muted); }
 /* #1562 — "Last updated: X ago" pill on the observers-page header.

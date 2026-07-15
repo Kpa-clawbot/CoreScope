@@ -163,6 +163,9 @@ func (s *PacketStore) computeRepeaterRelayInfoMap(windowHours float64) map[strin
 				}
 				if p.t.After(cutoff24h) {
 					info.RelayCount24h++
+					if tx.RouteType != nil && *tx.RouteType == routeTypeFlood {
+						info.UnscopedRelayCount24h++
+					}
 					if p.t.After(cutoff1h) {
 						info.RelayCount1h++
 					}

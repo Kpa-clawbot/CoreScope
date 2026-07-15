@@ -617,6 +617,7 @@
             <button class="btn-primary" id="copyShortUrlBtn" title="Short URL using an 8-char pubkey prefix — easier to send over the mesh (issue #772)" style="flex:0 0 auto;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Copy short URL</button>
             <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="flex:0 0 auto;text-decoration:none;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Analytics</a>
             <a href="#/nodes/${encodeURIComponent(n.public_key)}/reach" class="btn-primary" style="flex:0 0 auto;text-decoration:none;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Reach</a>
+            <a href="#/observers/${encodeURIComponent(n.public_key.toUpperCase())}" class="btn-primary" title="View this pubkey as an observer" style="flex:0 0 auto;text-decoration:none;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> Observer →</a>
           </div>
         </div>
 
@@ -809,7 +810,7 @@
           const qr = qrcode(0, 'M');
           qr.addData(meshcoreUrl);
           qr.make();
-          qrFullEl.innerHTML = qr.createSvgTag(3, 0);
+          qrFullEl.innerHTML = qr.createSvgTag(3, 12);
           const svg = qrFullEl.querySelector('svg');
           if (svg) { svg.style.display = 'block'; svg.style.margin = '0 auto'; }
         } catch {}
@@ -1701,7 +1702,7 @@
         qr.addData(meshcoreUrl);
         qr.make();
         const isOverlay = !!qrEl.closest('.node-map-qr-overlay');
-        qrEl.innerHTML = qr.createSvgTag(3, 0);
+        qrEl.innerHTML = qr.createSvgTag(3, 12);
         const svg = qrEl.querySelector('svg');
         if (svg) {
           svg.style.display = 'block'; svg.style.margin = '0 auto';

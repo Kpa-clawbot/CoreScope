@@ -134,6 +134,7 @@ jobs:
           node test-issue-1420-tile-providers.js
           node test-issue-1614-tile-url-function.js
           node test-issue-1438-marker-css-vars.js
+          node test-issue-1846-observers-width.js
           node test-issue-1562-observers-summary.js
           node test-issue-1509-nav-active-bg.js
           node test-issue-1509-detect-preset.js
