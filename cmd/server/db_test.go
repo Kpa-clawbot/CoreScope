@@ -2254,21 +2254,26 @@ func TestGetScopeStats(t *testing.T) {
 	db.conn.Exec(`INSERT INTO transmissions (hash, first_seen, route_type, scope_name) VALUES ('b', ?, 0, '')`, now)
 	// Transport unscoped (NULL)
 	db.conn.Exec(`INSERT INTO transmissions (hash, first_seen, route_type, scope_name) VALUES ('c', ?, 0, NULL)`, now)
-	// Non-transport (should not count)
+	// Non-transport FLOOD (route_type=1) — inherently unscoped per MeshCore protocol (#1838)
 	db.conn.Exec(`INSERT INTO transmissions (hash, first_seen, route_type, scope_name) VALUES ('d', ?, 1, NULL)`, now)
+	// Non-transport DIRECT (route_type=2) — inherently unscoped per MeshCore protocol (#1838)
+	db.conn.Exec(`INSERT INTO transmissions (hash, first_seen, route_type, scope_name) VALUES ('e', ?, 2, NULL)`, now)
 
 	stats, err := db.GetScopeStats("24h")
 	if err != nil {
 		t.Fatalf("GetScopeStats: %v", err)
 	}
+	// TransportTotal still counts only routes 0+3 (transport-code-carrying).
 	if stats.Summary.TransportTotal != 3 {
 		t.Errorf("TransportTotal = %d, want 3", stats.Summary.TransportTotal)
 	}
 	if stats.Summary.Scoped != 2 {
 		t.Errorf("Scoped = %d, want 2", stats.Summary.Scoped)
 	}
-	if stats.Summary.Unscoped != 1 {
-		t.Errorf("Unscoped = %d, want 1", stats.Summary.Unscoped)
+	// Unscoped now folds in non-transport (routes 1+2) — see #1838.
+	// 1 transport-NULL + 2 non-transport (routes 1 and 2) = 3.
+	if stats.Summary.Unscoped != 3 {
+		t.Errorf("Unscoped = %d, want 3 (1 transport-null + 2 non-transport)", stats.Summary.Unscoped)
 	}
 	if stats.Summary.UnknownScope != 1 {
 		t.Errorf("UnknownScope = %d, want 1", stats.Summary.UnknownScope)

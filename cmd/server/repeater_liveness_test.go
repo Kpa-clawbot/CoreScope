@@ -52,26 +52,25 @@ func TestRepeaterRelayActivity_Active(t *testing.T) {
 	}
 }
 
-// TestRepeaterUnscopedRelayCount verifies that UnscopedRelayCount24h counts only
-// route_type==FLOOD (unscoped) relay hops, as a subset of RelayCount24h.
-func TestRepeaterUnscopedRelayCount(t *testing.T) {
+// seedUnscopedRelayFixture builds a store in which pubkey appears as a relay
+// hop on one FLOOD (unscoped) and one DIRECT tx - the shared fixture for the
+// per-node and bulk UnscopedRelayCount24h tests, so the seeding pattern cannot
+// drift between the two. hashPrefix keeps the packet hashes distinguishable.
+func seedUnscopedRelayFixture(t *testing.T, hashPrefix string) (*PacketStore, string, func()) {
+	t.Helper()
 	db := setupCapabilityTestDB(t)
-	defer db.conn.Close()
-
 	pubkey := "aabbccdd11223344"
 	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
 		pubkey, "RepUnscoped", "repeater", recentTS(1))
-
 	store := NewPacketStore(db, nil)
-
 	pt := 1 // non-advert (TXT_MSG)
 	flood := routeTypeFlood
-	direct := 2 // ROUTE_TYPE_DIRECT — scoped/directed, must NOT count as unscoped
+	direct := 2 // ROUTE_TYPE_DIRECT - scoped/directed, must NOT count as unscoped
 	mk := func(hash string, rt int) *StoreTx {
 		return &StoreTx{RawHex: "0100", PayloadType: &pt, RouteType: &rt, PathJSON: `["aa"]`, FirstSeen: recentTS(2), Hash: hash}
 	}
 	store.mu.Lock()
-	for _, tx := range []*StoreTx{mk("unscoped-1", flood), mk("direct-1", direct)} {
+	for _, tx := range []*StoreTx{mk(hashPrefix+"unscoped-1", flood), mk(hashPrefix+"direct-1", direct)} {
 		tx.ID = len(store.packets) + 1
 		store.packets = append(store.packets, tx)
 		store.byHash[tx.Hash] = tx
@@ -79,14 +78,27 @@ func TestRepeaterUnscopedRelayCount(t *testing.T) {
 		store.byPathHop[pubkey] = append(store.byPathHop[pubkey], tx)
 	}
 	store.mu.Unlock()
+	return store, pubkey, func() { db.conn.Close() }
+}
 
-	info := store.GetRepeaterRelayInfo(pubkey, 24)
+// assertUnscopedCounts pins the contract both lookups share: FLOOD hops count
+// as unscoped, DIRECT hops only as plain relays.
+func assertUnscopedCounts(t *testing.T, info RepeaterRelayInfo) {
+	t.Helper()
 	if info.RelayCount24h != 2 {
 		t.Errorf("expected RelayCount24h=2 (both hops), got %d", info.RelayCount24h)
 	}
 	if info.UnscopedRelayCount24h != 1 {
 		t.Errorf("expected UnscopedRelayCount24h=1 (only the FLOOD hop), got %d", info.UnscopedRelayCount24h)
 	}
+}
+
+// TestRepeaterUnscopedRelayCount verifies that UnscopedRelayCount24h counts only
+// route_type==FLOOD (unscoped) relay hops, as a subset of RelayCount24h.
+func TestRepeaterUnscopedRelayCount(t *testing.T) {
+	store, pubkey, done := seedUnscopedRelayFixture(t, "")
+	defer done()
+	assertUnscopedCounts(t, store.GetRepeaterRelayInfo(pubkey, 24))
 }
 
 // TestRepeaterRelayActivity_Idle verifies that a repeater whose pubkey
@@ -303,36 +315,7 @@ func TestRepeaterRelayActivity_DedupAcrossPrefixAndFullKey(t *testing.T) {
 // (computeRepeaterRelayInfoMap) counts unscoped floods identically to the
 // per-node path: only route_type==FLOOD hops, as a subset of RelayCount24h.
 func TestRepeaterUnscopedRelayCount_Bulk(t *testing.T) {
-	db := setupCapabilityTestDB(t)
-	defer db.conn.Close()
-
-	pubkey := "aabbccdd11223344"
-	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
-		pubkey, "RepUnscopedBulk", "repeater", recentTS(1))
-
-	store := NewPacketStore(db, nil)
-
-	pt := 1 // non-advert
-	flood := routeTypeFlood
-	direct := 2 // ROUTE_TYPE_DIRECT — must NOT count as unscoped
-	mk := func(hash string, rt int) *StoreTx {
-		return &StoreTx{RawHex: "0100", PayloadType: &pt, RouteType: &rt, PathJSON: `["aa"]`, FirstSeen: recentTS(2), Hash: hash}
-	}
-	store.mu.Lock()
-	for _, tx := range []*StoreTx{mk("bulk-unscoped-1", flood), mk("bulk-direct-1", direct)} {
-		tx.ID = len(store.packets) + 1
-		store.packets = append(store.packets, tx)
-		store.byHash[tx.Hash] = tx
-		store.byTxID[tx.ID] = tx
-		store.byPathHop[pubkey] = append(store.byPathHop[pubkey], tx)
-	}
-	store.mu.Unlock()
-
-	info := store.computeRepeaterRelayInfoMap(24)[pubkey]
-	if info.RelayCount24h != 2 {
-		t.Errorf("expected RelayCount24h=2 (both hops), got %d", info.RelayCount24h)
-	}
-	if info.UnscopedRelayCount24h != 1 {
-		t.Errorf("expected UnscopedRelayCount24h=1 (only the FLOOD hop), got %d", info.UnscopedRelayCount24h)
-	}
+	store, pubkey, done := seedUnscopedRelayFixture(t, "bulk-")
+	defer done()
+	assertUnscopedCounts(t, store.computeRepeaterRelayInfoMap(24)[pubkey])
 }

@@ -4474,7 +4474,10 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
     // Fix 5: write static frame only once
     if (!el.querySelector('#scopes-cards')) {
       el.innerHTML =
-        '<h3 style="margin:0 0 12px">Scope Statistics</h3>' +
+        '<h3 style="margin:0 0 4px">Scope Statistics</h3>' +
+        '<p class="text-muted" style="margin:0 0 12px;font-size:0.85em">' +
+          'Denominator is all observed transmissions. Only TRANSPORT_FLOOD (0) and TRANSPORT_DIRECT (3) routes carry a scope; FLOOD (1) and DIRECT (2) are inherently unscoped per MeshCore protocol.' +
+        '</p>' +
         '<div style="margin-bottom:12px">' +
           ['1h', '24h', '7d'].map(function(v) {
             return '<button class="tab-btn' + (selectedWindow === v ? ' active' : '') + '" data-win="' + v + '">' + v + '</button>';
@@ -4526,15 +4529,19 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
 
     function updateData(d, w) {
       var s = d.summary;
+      // #1838: denominator = transport-carrying transmissions (route_type 0,3).
+      // Unscoped now includes non-transport routes (1,2) which are inherently
+      // unscoped by MeshCore protocol, so unscoped can exceed transportTotal.
       var total = s.transportTotal || 0;
+      var overall = (s.scoped || 0) + (s.unscoped || 0);
 
       // Summary cards
       var cardsEl = document.getElementById('scopes-cards');
       if (cardsEl) {
         cardsEl.innerHTML = [
-          { label: 'Transport Total', value: total.toLocaleString(), note: '' },
-          { label: 'Scoped', value: s.scoped.toLocaleString(), note: pct(s.scoped, total) },
-          { label: 'Unscoped', value: s.unscoped.toLocaleString(), note: pct(s.unscoped, total) },
+          { label: 'Transport Total', value: total.toLocaleString(), note: 'routes 0,3 (carry scope)' },
+          { label: 'Scoped', value: s.scoped.toLocaleString(), note: pct(s.scoped, overall) + ' of all traffic' },
+          { label: 'Unscoped', value: s.unscoped.toLocaleString(), note: pct(s.unscoped, overall) + ' of all traffic' },
           { label: 'Unknown Scope', value: s.unknownScope.toLocaleString(), note: pct(s.unknownScope, s.scoped) + ' of scoped' },
         ].map(function(c) {
           return '<div class="stat-card"><div class="stat-value">' + c.value + '</div>' +
