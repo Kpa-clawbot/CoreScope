@@ -2244,7 +2244,12 @@
     const groupTypeClass = payloadTypeColor(p.payload_type);
     const groupSize = p.raw_hex ? Math.floor(p.raw_hex.length / 2) : 0;
     const _grpPlOff = getPathLenOffset(p.route_type);
-    const groupHashBytes = ((parseInt(p.raw_hex?.slice(_grpPlOff * 2, _grpPlOff * 2 + 2), 16) || 0) >> 6) + 1;
+    // #1849: TRACE (payload_type=9) header path bytes are per-hop SNR readings,
+    // not truncated hop hashes (see internal/packetpath/route.go PathBytesAreHops).
+    // The (>>6)+1 derivation is meaningless for TRACE — render — with a tooltip.
+    const _grpIsTrace = p.payload_type === 9;
+    const groupHashBytes = _grpIsTrace ? '—' : (((parseInt(p.raw_hex?.slice(_grpPlOff * 2, _grpPlOff * 2 + 2), 16) || 0) >> 6) + 1);
+    const _grpHashSizeTitle = _grpIsTrace ? ' title="TRACE path bytes are SNR readings, not hash prefixes — see sidebar decoder for actual hop count"' : '';
     const isSingle = p.count <= 1;
     // Channel color highlighting (#271)
     const _grpDecoded = getParsedDecoded(p) || {};
@@ -2257,7 +2262,7 @@
           <td class="col-time">${renderTimestampCell(p.latest)}</td>
           <td class="mono col-hash" data-filter-field="hash" data-filter-value="${escapeHtml(p.hash || '')}">${truncate(p.hash || '—', 8)}</td>
           <td class="col-size" data-filter-field="size" data-filter-value="${groupSize || ''}">${groupSize ? groupSize + 'B' : '—'}</td>
-          <td class="col-hashsize mono">${groupHashBytes}</td>
+          <td class="col-hashsize mono"${_grpHashSizeTitle}>${groupHashBytes}</td>
           <td class="col-type" data-filter-field="type" data-filter-value="${escapeHtml(groupTypeName || '')}">${p.payload_type != null ? `<span class="badge badge-${groupTypeClass}">${groupTypeName}</span>${transportBadge(p.route_type)}` : '—'}</td>
           <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(headerObserverId) || '')}">${isSingle ? escapeHtml(truncate(obsNameOnly(headerObserverId), 16)) + obsIataBadge(p) : escapeHtml(truncate(obsNameOnly(headerObserverId), 10)) + groupedObserverIataBadgesHtml(p)}</td>
           <td class="col-path"><span class="path-hops">${groupPathStr}</span></td>
@@ -2275,9 +2280,14 @@
         const size = c.raw_hex ? Math.floor(c.raw_hex.length / 2) : 0;
         const childPath = getParsedPath(c);
         const _cPlOff = getPathLenOffset(p.route_type);
-        const childHashBytes = c.raw_hex
-          ? (((parseInt(c.raw_hex.slice(_cPlOff * 2, _cPlOff * 2 + 2), 16) || 0) >> 6) + 1)
-          : (childPath.length > 0 ? childPath[0].length / 2 : 0);
+        // #1849: TRACE header path bytes are SNR readings, not hop hashes.
+        const _cIsTrace = c.payload_type === 9;
+        const childHashBytes = _cIsTrace
+          ? '—'
+          : (c.raw_hex
+            ? (((parseInt(c.raw_hex.slice(_cPlOff * 2, _cPlOff * 2 + 2), 16) || 0) >> 6) + 1)
+            : (childPath.length > 0 ? childPath[0].length / 2 : 0));
+        const _cHashSizeTitle = _cIsTrace ? ' title="TRACE path bytes are SNR readings, not hash prefixes — see sidebar decoder for actual hop count"' : '';
         const childRegion = c.observer_id ? (observerMap.get(c.observer_id)?.iata || '') : '';
         const childPathStr = renderPath(childPath, c.observer_id);
         const _childHashStripe = _hashStripeStyle(c.hash || p.hash);
@@ -2286,7 +2296,7 @@
               <td class="col-time">${renderTimestampCell(c.timestamp)}</td>
               <td class="mono col-hash" data-filter-field="hash" data-filter-value="${escapeHtml(c.hash || '')}">${truncate(c.hash || '', 8)}</td>
               <td class="col-size" data-filter-field="size" data-filter-value="${size || ''}">${size}B</td>
-              <td class="col-hashsize mono">${childHashBytes}</td>
+              <td class="col-hashsize mono"${_cHashSizeTitle}>${childHashBytes}</td>
               <td class="col-type" data-filter-field="type" data-filter-value="${escapeHtml(typeName || '')}"><span class="badge badge-${typeClass}">${typeName}</span>${transportBadge(c.route_type)}</td>
               <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(c.observer_id) || '')}">${escapeHtml(truncate(obsNameOnly(c.observer_id), 16))}${obsIataBadge(c)}</td>
               <td class="col-path"><span class="path-hops">${childPathStr}</span></td>
@@ -2309,7 +2319,10 @@
     const _chanStyle = window.ChannelColors ? window.ChannelColors.getRowStyle(decoded.type || typeName, decoded.channel) : '';
     const size = p.raw_hex ? Math.floor(p.raw_hex.length / 2) : 0;
     const _flatPlOff = getPathLenOffset(p.route_type);
-    const hashBytes = ((parseInt(p.raw_hex?.slice(_flatPlOff * 2, _flatPlOff * 2 + 2), 16) || 0) >> 6) + 1;
+    // #1849: TRACE path bytes = SNR readings, not hop hashes.
+    const _flatIsTrace = p.payload_type === 9;
+    const hashBytes = _flatIsTrace ? '—' : (((parseInt(p.raw_hex?.slice(_flatPlOff * 2, _flatPlOff * 2 + 2), 16) || 0) >> 6) + 1);
+    const _flatHashSizeTitle = _flatIsTrace ? ' title="TRACE path bytes are SNR readings, not hash prefixes — see sidebar decoder for actual hop count"' : '';
     const pathStr = renderPath(pathHops, p.observer_id);
     const detail = getDetailPreview(decoded);
     const _flatHashStripe = _hashStripeStyle(p.hash);
@@ -2319,7 +2332,7 @@
         <td class="col-time">${renderTimestampCell(p.timestamp)}</td>
         <td class="mono col-hash" data-filter-field="hash" data-filter-value="${escapeHtml(p.hash || '')}">${truncate(p.hash || String(p.id), 8)}</td>
         <td class="col-size" data-filter-field="size" data-filter-value="${size || ''}">${size}B</td>
-        <td class="col-hashsize mono">${hashBytes}</td>
+        <td class="col-hashsize mono"${_flatHashSizeTitle}>${hashBytes}</td>
         <td class="col-type" data-filter-field="type" data-filter-value="${escapeHtml(typeName || '')}"><span class="badge badge-${typeClass}">${typeName}</span>${transportBadge(p.route_type)}</td>
         <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(p.observer_id) || '')}">${escapeHtml(truncate(obsNameOnly(p.observer_id), 16))}${obsIataBadge(p)}</td>
         <td class="col-path"><span class="path-hops">${pathStr}</span></td>
