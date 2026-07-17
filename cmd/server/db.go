@@ -1863,7 +1863,7 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 	var obsSQL string
 	if db.isV3 {
 		obsSQL = `SELECT o.id, t.id, t.hash, t.decoded_json, t.first_seen,
-				obs.id, obs.name, o.snr, o.path_json, o.timestamp` + scopeCol + `
+				obs.id, obs.name, o.snr, o.path_json, o.timestamp, t.route_type` + scopeCol + `
 			FROM observations o
 			JOIN transmissions t ON t.id = o.transmission_id
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
@@ -1871,7 +1871,7 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 			ORDER BY o.id ASC`
 	} else {
 		obsSQL = `SELECT o.id, t.id, t.hash, t.decoded_json, t.first_seen,
-				o.observer_id, o.observer_name, o.snr, o.path_json, o.timestamp` + scopeCol + `
+				o.observer_id, o.observer_name, o.snr, o.path_json, o.timestamp, t.route_type` + scopeCol + `
 			FROM observations o
 			JOIN transmissions t ON t.id = o.transmission_id
 			WHERE t.id IN (` + strings.Join(idPlaceholders, ",") + `)
@@ -1896,8 +1896,9 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 		var pktHash, dj, fs, obsID, obsName, pathJSON sql.NullString
 		var snr sql.NullFloat64
 		var obsTs sql.NullInt64
+		var routeType sql.NullInt64
 		var scopeName sql.NullString
-		scanArgs := []interface{}{&pktID, &txID, &pktHash, &dj, &fs, &obsID, &obsName, &snr, &pathJSON, &obsTs}
+		scanArgs := []interface{}{&pktID, &txID, &pktHash, &dj, &fs, &obsID, &obsName, &snr, &pathJSON, &obsTs, &routeType}
 		if db.hasScopeName {
 			scanArgs = append(scanArgs, &scopeName)
 		}
@@ -1953,6 +1954,7 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 				"hops":             hops,
 				"snr":              nullFloat(snr),
 				"scope":            nullStr(scopeName),
+				"routeType":        nullInt(routeType),
 			},
 			Repeats: 1,
 		}

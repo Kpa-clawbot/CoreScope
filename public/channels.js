@@ -664,6 +664,7 @@
           hops: d.path_len || 0, snr: c.packet.snr || null,
           observers: c.packet.observer_name ? [c.packet.observer_name] : [],
           scope: c.packet.scope_name || null,
+          routeType: c.packet.route_type ?? null,
           repeats: 1
         });
         continue;
@@ -681,6 +682,7 @@
           hops: 0, snr: c.packet.snr || null,
           observers: c.packet.observer_name ? [c.packet.observer_name] : [],
           scope: c.packet.scope_name || null,
+          routeType: c.packet.route_type ?? null,
           repeats: 1
         });
       } else {
@@ -1420,6 +1422,7 @@
         var snr = m.data?.snr ?? m.data?.packet?.snr ?? payload.SNR ?? null;
         var observer = m.data?.packet?.observer_name || m.data?.observer || null;
         var scope = m.data?.scope_name || m.data?.packet?.scope_name || null;
+        var routeType = m.data?.route_type ?? m.data?.packet?.route_type ?? null;
 
         // Update channel list entry — only once per unique packet hash
         var isFirstObservation = pktHash && !seenHashes.has(pktHash + ':' + channelKey);
@@ -1472,6 +1475,7 @@
               hops: payload.path_len || 0,
               snr: snr,
               scope: scope,
+              routeType: routeType,
               // #1498: mark as WS-pushed so a later REST replacement
               // (selectChannel / refreshMessages) can merge instead of
               // stomp. Without this flag the REST response wipes any
@@ -2262,7 +2266,15 @@
       if (msg.observers?.length > 1) meta.push(`${msg.observers.length} observers`);
       if (msg.hops > 0) meta.push(`${msg.hops} hops`);
       if (msg.snr !== null && msg.snr !== undefined) meta.push(`SNR ${msg.snr}`);
+      // Scope only applies to TRANSPORT_FLOOD(0)/TRANSPORT_DIRECT(3) routes.
+      // Plain FLOOD(1)/DIRECT(2) never carry a scope — show nothing for those.
+      // A transport-eligible message with an empty scope means the region
+      // couldn't be determined (no configured region matched, or an
+      // HMAC collision made the match ambiguous) — show it as unknown
+      // rather than silently omitting the tag.
+      const isTransportRoute = msg.routeType === 0 || msg.routeType === 3;
       if (msg.scope) meta.push(`Scope: ${escapeHtml(msg.scope)}`);
+      else if (isTransportRoute) meta.push('Scope: unknown');
 
       const safeId = btoa(encodeURIComponent(sender));
       // #1367: emit BOTH the new chat-app class names (.ch-message /

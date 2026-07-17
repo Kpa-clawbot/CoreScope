@@ -906,6 +906,7 @@ type ChannelMessageResp struct {
 	Hops            int         `json:"hops"`
 	SNR             interface{} `json:"snr"`
 	Scope           interface{} `json:"scope"`
+	RouteType       interface{} `json:"routeType"`
 }
 
 type ChannelMessagesResponse struct {
