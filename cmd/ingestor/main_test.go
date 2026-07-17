@@ -880,6 +880,43 @@ func TestMatchScope(t *testing.T) {
 	}
 }
 
+// TestMatchScope_AmbiguousCollisionReturnsUnknown is a real-world regression
+// vector captured on stg.meshview.dk (1098 configured hashRegions): a single
+// GRP_TXT packet (payloadType=5, code1=C417) whose HMAC coincidentally
+// matched BOTH "#dk" (the sender's true region) and "#dk1906" (an unrelated
+// region that happened to collide in the 16-bit code1 space). Before this
+// fix, matchScope returned whichever name Go's randomized map iteration
+// visited first — the same ambiguous packet could resolve to either name
+// across restarts. It must now report unknown-scoped ("") instead of
+// guessing when more than one region matches.
+func TestMatchScope_AmbiguousCollisionReturnsUnknown(t *testing.T) {
+	dkKey, _ := hex.DecodeString("4a447e7539b0418bd14cf28aa8241529")
+	dk1906Key, _ := hex.DecodeString("dd24ec5e2aa5221030147ebec77ebd7c")
+	regionKeys := map[string][]byte{"#dk": dkKey, "#dk1906": dk1906Key}
+
+	payloadRaw, err := hex.DecodeString("D9A740B10D5BA91A9E5D5156DB534888AD454D")
+	if err != nil {
+		t.Fatalf("decode payloadRaw: %v", err)
+	}
+
+	// Sanity: each key matches C417 individually (proves the vector is a
+	// real collision, not a bug in the test itself).
+	if got := matchScope(map[string][]byte{"#dk": dkKey}, 5, payloadRaw, "C417"); got != "#dk" {
+		t.Fatalf("precondition: #dk alone should match C417, got %q", got)
+	}
+	if got := matchScope(map[string][]byte{"#dk1906": dk1906Key}, 5, payloadRaw, "C417"); got != "#dk1906" {
+		t.Fatalf("precondition: #dk1906 alone should match C417, got %q", got)
+	}
+
+	// With both configured, the collision must resolve to unknown ("")
+	// rather than nondeterministically picking one.
+	for i := 0; i < 20; i++ {
+		if got := matchScope(regionKeys, 5, payloadRaw, "C417"); got != "" {
+			t.Errorf("ambiguous match: matchScope = %q, want empty (unknown-scoped)", got)
+		}
+	}
+}
+
 func TestBuildPacketDataScopeMatching(t *testing.T) {
 	// Fixed known-answer packet: TRANSPORT_FLOOD, payloadType=5, payload="hello",
 	// Code1=2AB5 (pre-computed for region "#test").
