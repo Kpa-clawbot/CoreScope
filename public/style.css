@@ -1425,6 +1425,12 @@ body.scroll-locked { overflow: hidden; }
   background: var(--transport-badge-bg, #f59e0b20); color: var(--transport-badge-fg, #d97706);
   letter-spacing: .5px; vertical-align: middle;
 }
+/* Transport-scoped but the region couldn't be resolved (no configured
+   region matched, or an HMAC collision made the match ambiguous) —
+   muted instead of the confident amber so it reads as "unresolved". */
+.badge-transport-unknown {
+  background: var(--text-muted-bg, #6b728020); color: var(--text-muted, #6b7280);
+}
 .badge-obs {
   display: inline-block; padding: 1px 6px; border-radius: 10px;
   font-size: 10px; font-weight: 600;

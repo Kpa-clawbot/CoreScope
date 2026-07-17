@@ -584,6 +584,10 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 	// codes across all observers of the transmission, with empty/NULL IATAs
 	// excluded. Frontend needs this on the DEFAULT COLLAPSED VIEW (where
 	// p._children is empty), so we compute it server-side.
+	groupedScopeCol := ""
+	if db.hasScopeName {
+		groupedScopeCol = ", t.scope_name"
+	}
 	var querySQL string
 	if db.isV3 {
 		querySQL = fmt.Sprintf(`SELECT t.hash, t.first_seen, t.raw_hex, t.decoded_json, t.payload_type, t.route_type,
@@ -592,7 +596,7 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 			COALESCE((SELECT MAX(strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', oi.timestamp, 'unixepoch')) FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen) AS latest,
 			obs.id AS observer_id, obs.name AS observer_name, COALESCE(obs.iata, '') AS observer_iata,
 			o.snr, o.rssi, o.path_json,
-			COALESCE((SELECT GROUP_CONCAT(DISTINCT obi.iata) FROM observations oi JOIN observers obi ON obi.rowid = oi.observer_idx WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas
+			COALESCE((SELECT GROUP_CONCAT(DISTINCT obi.iata) FROM observations oi JOIN observers obi ON obi.rowid = oi.observer_idx WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas` + groupedScopeCol + `
 		FROM transmissions t
 		LEFT JOIN observations o ON o.id = (
 			SELECT id FROM observations WHERE transmission_id = t.id
@@ -607,7 +611,7 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 			COALESCE((SELECT MAX(oi.timestamp) FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen) AS latest,
 			o.observer_id, o.observer_name, COALESCE(obs2.iata, '') AS observer_iata,
 			o.snr, o.rssi, o.path_json,
-			COALESCE((SELECT GROUP_CONCAT(DISTINCT obi.iata) FROM observations oi JOIN observers obi ON obi.id = oi.observer_id WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas
+			COALESCE((SELECT GROUP_CONCAT(DISTINCT obi.iata) FROM observations oi JOIN observers obi ON obi.id = oi.observer_id WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas` + groupedScopeCol + `
 		FROM transmissions t
 		LEFT JOIN observations o ON o.id = (
 			SELECT id FROM observations WHERE transmission_id = t.id
@@ -633,10 +637,15 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 		var payloadType, routeType sql.NullInt64
 		var count, observerCount int
 		var snr, rssi sql.NullFloat64
+		var scopeName sql.NullString
 
-		if err := rows.Scan(&hash, &firstSeen, &rawHex, &decodedJSON, &payloadType, &routeType,
+		scanArgs := []interface{}{&hash, &firstSeen, &rawHex, &decodedJSON, &payloadType, &routeType,
 			&count, &observerCount, &latest,
-			&observerID, &observerName, &observerIATA, &snr, &rssi, &pathJSON, &distinctIatasCSV); err != nil {
+			&observerID, &observerName, &observerIATA, &snr, &rssi, &pathJSON, &distinctIatasCSV}
+		if db.hasScopeName {
+			scanArgs = append(scanArgs, &scopeName)
+		}
+		if err := rows.Scan(scanArgs...); err != nil {
 			continue
 		}
 
@@ -658,6 +667,7 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 			"decoded_json":      nullStr(decodedJSON),
 			"snr":               nullFloat(snr),
 			"rssi":              nullFloat(rssi),
+			"scope_name":        nullStr(scopeName),
 		})
 	}
 

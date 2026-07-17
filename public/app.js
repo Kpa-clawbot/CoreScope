@@ -12,7 +12,31 @@ function payloadTypeColor(n) { return PAYLOAD_COLORS[n] || 'unknown'; }
 function isTransportRoute(rt) { return rt === 0 || rt === 3; }
 /** Byte offset of path_len in raw_hex: 5 for transport routes (4 bytes of next/last hop codes precede it), 1 otherwise. */
 function getPathLenOffset(routeType) { return isTransportRoute(routeType) ? 5 : 1; }
-function transportBadge(rt) { return isTransportRoute(rt) ? ' <span class="badge badge-transport" title="' + routeTypeName(rt) + '">T</span>' : ''; }
+/**
+ * scopeName is optional (callers that don't pass it get the original
+ * unscoped "T" badge). Pass a packet's scope_name to also surface the
+ * region-scope state: a non-empty string shows the region name in the
+ * tooltip, an empty string (transport-eligible but no region matched, or
+ * an HMAC collision made the match ambiguous) is flagged as "unknown"
+ * with a distinct badge style so it's visually distinguishable from a
+ * confidently-resolved scope.
+ */
+function transportBadge(rt, scopeName) {
+  if (!isTransportRoute(rt)) return '';
+  var title = routeTypeName(rt);
+  var cls = 'badge-transport';
+  var label = 'T';
+  if (scopeName !== undefined) {
+    if (scopeName) {
+      title += ' · Scope: ' + scopeName;
+    } else {
+      title += ' · Scope: unknown';
+      cls += ' badge-transport-unknown';
+      label = 'T?';
+    }
+  }
+  return ' <span class="badge ' + cls + '" title="' + escapeHtml(title) + '">' + escapeHtml(label) + '</span>';
+}
 
 /**
  * Compute breakdown byte ranges from raw_hex on the client.
