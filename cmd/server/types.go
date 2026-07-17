@@ -125,6 +125,24 @@ type ScopeStatsResponse struct {
 	// Omitted (both zero-value) when the server config has no hashRegions.
 	ConfiguredRegions int      `json:"configuredRegions,omitempty"`
 	UnusedRegions     []string `json:"unusedRegions,omitempty"`
+	// RepeatersByRegion is all-time (not window-scoped), like
+	// UnusedRegions: for each region that has ever matched a transmission,
+	// which distinct repeaters/rooms have relayed traffic carrying that
+	// scope (nodes.go transported_scopes, #1751), sourced from the same
+	// 5-minute-cached bulk relay-info map the Nodes page uses. Omitted
+	// when the in-memory store isn't available (DB-only mode).
+	RepeatersByRegion []ScopeRegionRepeaters `json:"repeatersByRegion,omitempty"`
+}
+
+type RepeaterRef struct {
+	Name      string `json:"name"`
+	PublicKey string `json:"publicKey"`
+}
+
+type ScopeRegionRepeaters struct {
+	Region    string        `json:"region"`
+	Count     int           `json:"count"`
+	Repeaters []RepeaterRef `json:"repeaters"`
 }
 
 // ─── Health ────────────────────────────────────────────────────────────────────

@@ -3519,6 +3519,48 @@ func (s *Server) handleScopeStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if s.store != nil {
+		// windowHours is irrelevant to TransportedScopes (explicitly
+		// not time-windowed — see RepeaterRelayInfo doc comment) and the
+		// map is served from the 5-min background-recomputed cache
+		// regardless of the value passed once warm, so reusing whatever
+		// handleNodes uses costs nothing extra here.
+		relayWindow := s.cfg.GetHealthThresholds().RelayActiveHours
+		relayMap := s.store.GetRepeaterRelayInfoMap(relayWindow)
+
+		byRegion := make(map[string][]string) // region -> pubkeys
+		pubkeySet := make(map[string]bool)
+		for pk, info := range relayMap {
+			for _, region := range info.TransportedScopes {
+				byRegion[region] = append(byRegion[region], pk)
+				pubkeySet[pk] = true
+			}
+		}
+		if len(pubkeySet) > 0 {
+			pubkeys := make([]string, 0, len(pubkeySet))
+			for pk := range pubkeySet {
+				pubkeys = append(pubkeys, pk)
+			}
+			names := s.db.GetNodeNamesByKeys(pubkeys)
+
+			repeaters := make([]ScopeRegionRepeaters, 0, len(byRegion))
+			for region, pks := range byRegion {
+				refs := make([]RepeaterRef, 0, len(pks))
+				for _, pk := range pks {
+					name := names[pk]
+					if name == "" {
+						name = pk
+					}
+					refs = append(refs, RepeaterRef{Name: name, PublicKey: pk})
+				}
+				sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
+				repeaters = append(repeaters, ScopeRegionRepeaters{Region: region, Count: len(refs), Repeaters: refs})
+			}
+			sort.Slice(repeaters, func(i, j int) bool { return repeaters[i].Count > repeaters[j].Count })
+			resp.RepeatersByRegion = repeaters
+		}
+	}
+
 	s.scopeStatsMu.Lock()
 	if s.scopeStatsCache == nil {
 		s.scopeStatsCache = make(map[string]*ScopeStatsResponse)

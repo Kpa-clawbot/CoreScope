@@ -2155,6 +2155,39 @@ func (db *DB) GetNodeLocationsByKeys(keys []string) map[string]map[string]interf
 	return result
 }
 
+// GetNodeNamesByKeys batch-resolves pubkey -> display name for the given
+// keys. Missing/unnamed nodes are simply absent from the result map — the
+// caller falls back to a truncated pubkey. Used to label repeaters in the
+// scope-stats "repeaters by region" breakdown without pulling full node
+// rows for a set that's typically small (repeaters that have transported
+// at least one scoped packet).
+func (db *DB) GetNodeNamesByKeys(keys []string) map[string]string {
+	result := make(map[string]string)
+	if len(keys) == 0 {
+		return result
+	}
+	placeholders := make([]string, len(keys))
+	args := make([]interface{}, len(keys))
+	for i, k := range keys {
+		placeholders[i] = "?"
+		args[i] = strings.ToLower(k)
+	}
+	query := "SELECT public_key, name FROM nodes WHERE public_key IN (" + strings.Join(placeholders, ",") + ")"
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return result
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var pk string
+		var name sql.NullString
+		if rows.Scan(&pk, &name) == nil && name.Valid && name.String != "" {
+			result[strings.ToLower(pk)] = name.String
+		}
+	}
+	return result
+}
+
 // QueryMultiNodePackets returns transmissions referencing any of the given pubkeys.
 func (db *DB) QueryMultiNodePackets(pubkeys []string, limit, offset int, order, since, until string) (*PacketResult, error) {
 	if len(pubkeys) == 0 {

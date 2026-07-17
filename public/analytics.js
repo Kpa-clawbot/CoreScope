@@ -4490,7 +4490,8 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
           '<tbody id="scopes-tbody"></tbody>' +
         '</table>' +
         '<div id="scopes-chart"></div>' +
-        '<div id="scopes-utilization" style="margin-top:16px"></div>';
+        '<div id="scopes-utilization" style="margin-top:16px"></div>' +
+        '<div id="scopes-repeaters" style="margin-top:16px"></div>';
 
       // Attach window-button click listeners (once)
       el.querySelectorAll('[data-win]').forEach(function(btn) {
@@ -4647,6 +4648,34 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
               : '');
         } else {
           utilEl.innerHTML = '';
+        }
+      }
+
+      // Repeaters by region: all-time (not window-scoped), which repeaters
+      // have relayed traffic carrying each scope. Sourced from the same
+      // 5-min-cached bulk relay-info map the Nodes page uses, so this is
+      // cheap — no new per-request computation.
+      var repEl = document.getElementById('scopes-repeaters');
+      if (repEl) {
+        var byRegion = d.repeatersByRegion || [];
+        if (byRegion.length > 0) {
+          var rows = byRegion.map(function(rbr) {
+            var links = rbr.repeaters.map(function(rp) {
+              return '<a href="#/nodes/' + encodeURIComponent(rp.publicKey) + '">' + esc(rp.name) + '</a>';
+            }).join(', ');
+            return '<details style="margin-bottom:6px">' +
+              '<summary style="cursor:pointer"><code>' + esc(rbr.region) + '</code> — ' + rbr.count.toLocaleString() + ' repeater' + (rbr.count === 1 ? '' : 's') + '</summary>' +
+              '<div class="text-muted" style="font-size:11px;margin-top:6px;margin-left:12px;max-height:200px;overflow-y:auto;line-height:1.8">' + links + '</div>' +
+              '</details>';
+          }).join('');
+          repEl.innerHTML =
+            '<h4 style="margin:0 0 4px">Repeaters by Region</h4>' +
+            '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">' +
+              'All-time, not limited to the window above — which repeaters have relayed traffic carrying each region scope. A region carried by only 1 repeater is a single point of failure for that area.' +
+            '</p>' +
+            rows;
+        } else {
+          repEl.innerHTML = '';
         }
       }
     }

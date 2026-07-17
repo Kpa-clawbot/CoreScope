@@ -4297,6 +4297,58 @@ func TestHandleScopeStats_UnusedRegions(t *testing.T) {
 	}
 }
 
+// TestHandleScopeStats_RepeatersByRegion verifies the "which repeaters
+// transported this region" breakdown, sourced from the same bulk relay-info
+// cache the Nodes page uses (GetRepeaterRelayInfoMap / TransportedScopes,
+// #1751) and cross-referenced against nodes.name for display.
+func TestHandleScopeStats_RepeatersByRegion(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+		t.Fatalf("add scope_name column: %v", err)
+	}
+	srv.db.hasScopeName = true
+
+	if _, err := srv.db.conn.Exec(
+		`INSERT INTO nodes (public_key, name) VALUES ('aabbccdd0011', 'TestRepeater1')`,
+	); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	pt5 := 5 // GRP_TXT — non-advert, so it counts toward TransportedScopes
+	tx := &StoreTx{
+		ID:          1,
+		Hash:        "txhash1",
+		FirstSeen:   time.Now().UTC().Add(-5 * time.Minute).Format(time.RFC3339Nano),
+		PayloadType: &pt5,
+		ScopeName:   "#belgium",
+	}
+	srv.store = &PacketStore{
+		byPathHop: map[string][]*StoreTx{"aabbccdd0011": {tx}},
+	}
+
+	req := httptest.NewRequest("GET", "/api/scope-stats?window=24h", nil)
+	w := httptest.NewRecorder()
+	srv.handleScopeStats(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	var resp ScopeStatsResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.RepeatersByRegion) != 1 {
+		t.Fatalf("repeatersByRegion = %v, want 1 entry", resp.RepeatersByRegion)
+	}
+	rbr := resp.RepeatersByRegion[0]
+	if rbr.Region != "#belgium" || rbr.Count != 1 {
+		t.Errorf("repeatersByRegion[0] = %+v, want region=#belgium count=1", rbr)
+	}
+	if len(rbr.Repeaters) != 1 || rbr.Repeaters[0].Name != "TestRepeater1" || rbr.Repeaters[0].PublicKey != "aabbccdd0011" {
+		t.Errorf("repeaters = %+v, want [{TestRepeater1 aabbccdd0011}]", rbr.Repeaters)
+	}
+}
+
 func TestHandleScopeStatsInvalidWindow(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
