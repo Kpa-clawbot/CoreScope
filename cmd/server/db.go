@@ -1856,10 +1856,14 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 		idPlaceholders[i] = "?"
 		obsArgs[i] = id
 	}
+	scopeCol := ""
+	if db.hasScopeName {
+		scopeCol = ", t.scope_name"
+	}
 	var obsSQL string
 	if db.isV3 {
 		obsSQL = `SELECT o.id, t.id, t.hash, t.decoded_json, t.first_seen,
-				obs.id, obs.name, o.snr, o.path_json, o.timestamp
+				obs.id, obs.name, o.snr, o.path_json, o.timestamp` + scopeCol + `
 			FROM observations o
 			JOIN transmissions t ON t.id = o.transmission_id
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
@@ -1867,7 +1871,7 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 			ORDER BY o.id ASC`
 	} else {
 		obsSQL = `SELECT o.id, t.id, t.hash, t.decoded_json, t.first_seen,
-				o.observer_id, o.observer_name, o.snr, o.path_json, o.timestamp
+				o.observer_id, o.observer_name, o.snr, o.path_json, o.timestamp` + scopeCol + `
 			FROM observations o
 			JOIN transmissions t ON t.id = o.transmission_id
 			WHERE t.id IN (` + strings.Join(idPlaceholders, ",") + `)
@@ -1892,7 +1896,12 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 		var pktHash, dj, fs, obsID, obsName, pathJSON sql.NullString
 		var snr sql.NullFloat64
 		var obsTs sql.NullInt64
-		rows.Scan(&pktID, &txID, &pktHash, &dj, &fs, &obsID, &obsName, &snr, &pathJSON, &obsTs)
+		var scopeName sql.NullString
+		scanArgs := []interface{}{&pktID, &txID, &pktHash, &dj, &fs, &obsID, &obsName, &snr, &pathJSON, &obsTs}
+		if db.hasScopeName {
+			scanArgs = append(scanArgs, &scopeName)
+		}
+		rows.Scan(scanArgs...)
 		if !dj.Valid {
 			continue
 		}
@@ -1943,6 +1952,7 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 				"observers":        []string{},
 				"hops":             hops,
 				"snr":              nullFloat(snr),
+				"scope":            nullStr(scopeName),
 			},
 			Repeats: 1,
 		}

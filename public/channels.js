@@ -663,6 +663,7 @@
           packetHash: c.packet.hash, packetId: c.packet.id,
           hops: d.path_len || 0, snr: c.packet.snr || null,
           observers: c.packet.observer_name ? [c.packet.observer_name] : [],
+          scope: c.packet.scope_name || null,
           repeats: 1
         });
         continue;
@@ -679,6 +680,7 @@
           packetHash: c.packet.hash, packetId: c.packet.id,
           hops: 0, snr: c.packet.snr || null,
           observers: c.packet.observer_name ? [c.packet.observer_name] : [],
+          scope: c.packet.scope_name || null,
           repeats: 1
         });
       } else {
@@ -2258,6 +2260,7 @@
       if (msg.observers?.length > 1) meta.push(`${msg.observers.length} observers`);
       if (msg.hops > 0) meta.push(`${msg.hops} hops`);
       if (msg.snr !== null && msg.snr !== undefined) meta.push(`SNR ${msg.snr}`);
+      if (msg.scope) meta.push(`Scope: ${escapeHtml(msg.scope)}`);
 
       const safeId = btoa(encodeURIComponent(sender));
       // #1367: emit BOTH the new chat-app class names (.ch-message /

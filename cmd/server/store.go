@@ -3843,6 +3843,7 @@ func txToMap(tx *StoreTx, includeObservations ...bool) map[string]interface{} {
 		"rssi":              floatPtrOrNil(tx.RSSI),
 		"path_json":         strOrNil(tx.PathJSON),
 		"direction":         strOrNil(tx.Direction),
+		"scope_name":        strOrNil(tx.ScopeName),
 	}
 	// Include parsed path array to match Node.js output shape
 	if hops := txGetParsedPath(tx); len(hops) > 0 {
@@ -5515,6 +5516,7 @@ func (s *PacketStore) GetChannelMessages(channelHash string, limit, offset int, 
 					"observers":        observers,
 					"hops":             hops,
 					"snr":              snrVal,
+					"scope":            strOrNil(tx.ScopeName),
 				},
 				Repeats:   1,
 				Observers: observers,
