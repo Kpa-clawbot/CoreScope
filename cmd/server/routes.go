@@ -3541,17 +3541,27 @@ func (s *Server) handleScopeStats(w http.ResponseWriter, r *http.Request) {
 			for pk := range pubkeySet {
 				pubkeys = append(pubkeys, pk)
 			}
-			names := s.db.GetNodeNamesByKeys(pubkeys)
+			// byPathHop mixes full pubkeys with short hex-prefix bucket
+			// keys (ambiguous-hop resolution fallback) — the role-filtered
+			// lookup only returns entries for keys that are actually a
+			// repeater/room node, so it doubles as the existence filter.
+			// Any key NOT in `names` is a bucket key, not a real repeater,
+			// and must be excluded below rather than falling back to
+			// showing the raw key as a fake "repeater".
+			names := s.db.GetRepeaterNamesByKeys(pubkeys)
 
 			repeaters := make([]ScopeRegionRepeaters, 0, len(byRegion))
 			for region, pks := range byRegion {
 				refs := make([]RepeaterRef, 0, len(pks))
 				for _, pk := range pks {
-					name := names[pk]
-					if name == "" {
-						name = pk
+					name, ok := names[pk]
+					if !ok {
+						continue
 					}
 					refs = append(refs, RepeaterRef{Name: name, PublicKey: pk})
+				}
+				if len(refs) == 0 {
+					continue
 				}
 				sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
 				repeaters = append(repeaters, ScopeRegionRepeaters{Region: region, Count: len(refs), Repeaters: refs})

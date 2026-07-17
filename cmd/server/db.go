@@ -2155,13 +2155,15 @@ func (db *DB) GetNodeLocationsByKeys(keys []string) map[string]map[string]interf
 	return result
 }
 
-// GetNodeNamesByKeys batch-resolves pubkey -> display name for the given
-// keys. Missing/unnamed nodes are simply absent from the result map — the
-// caller falls back to a truncated pubkey. Used to label repeaters in the
-// scope-stats "repeaters by region" breakdown without pulling full node
-// rows for a set that's typically small (repeaters that have transported
-// at least one scoped packet).
-func (db *DB) GetNodeNamesByKeys(keys []string) map[string]string {
+// GetRepeaterNamesByKeys batch-resolves pubkey -> display name, restricted
+// to role IN ('repeater','room'). The candidate key set (e.g. from
+// PacketStore.byPathHop) mixes full pubkeys with short hex-prefix bucket
+// keys used internally for ambiguous-hop resolution (#1751 follow-up) —
+// those never match a real nodes.public_key row, so the role-filtered IN
+// query doubles as the "is this actually a distinct node" existence check.
+// A matched pubkey with an empty/unset name falls back to itself so a
+// real repeater is never silently dropped just because it has no name yet.
+func (db *DB) GetRepeaterNamesByKeys(keys []string) map[string]string {
 	result := make(map[string]string)
 	if len(keys) == 0 {
 		return result
@@ -2172,7 +2174,7 @@ func (db *DB) GetNodeNamesByKeys(keys []string) map[string]string {
 		placeholders[i] = "?"
 		args[i] = strings.ToLower(k)
 	}
-	query := "SELECT public_key, name FROM nodes WHERE public_key IN (" + strings.Join(placeholders, ",") + ")"
+	query := "SELECT public_key, name FROM nodes WHERE role IN ('repeater','room') AND public_key IN (" + strings.Join(placeholders, ",") + ")"
 	rows, err := db.conn.Query(query, args...)
 	if err != nil {
 		return result
@@ -2181,8 +2183,14 @@ func (db *DB) GetNodeNamesByKeys(keys []string) map[string]string {
 	for rows.Next() {
 		var pk string
 		var name sql.NullString
-		if rows.Scan(&pk, &name) == nil && name.Valid && name.String != "" {
-			result[strings.ToLower(pk)] = name.String
+		if rows.Scan(&pk, &name) != nil {
+			continue
+		}
+		pk = strings.ToLower(pk)
+		if name.Valid && name.String != "" {
+			result[pk] = name.String
+		} else {
+			result[pk] = pk
 		}
 	}
 	return result

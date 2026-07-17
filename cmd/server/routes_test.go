@@ -4309,7 +4309,7 @@ func TestHandleScopeStats_RepeatersByRegion(t *testing.T) {
 	srv.db.hasScopeName = true
 
 	if _, err := srv.db.conn.Exec(
-		`INSERT INTO nodes (public_key, name) VALUES ('aabbccdd0011', 'TestRepeater1')`,
+		`INSERT INTO nodes (public_key, name, role) VALUES ('aabbccdd0011', 'TestRepeater1', 'repeater')`,
 	); err != nil {
 		t.Fatalf("seed node: %v", err)
 	}
@@ -4322,8 +4322,22 @@ func TestHandleScopeStats_RepeatersByRegion(t *testing.T) {
 		PayloadType: &pt5,
 		ScopeName:   "#belgium",
 	}
+	// #1751 follow-up regression: byPathHop also indexes short hex-prefix
+	// "bucket" keys (ambiguous-hop resolution fallback) alongside full
+	// pubkeys — "aabb" here mimics that. It must NOT be surfaced as a
+	// distinct "repeater" since it never matches a real nodes.public_key.
+	bucketTx := &StoreTx{
+		ID:          2,
+		Hash:        "txhash2",
+		FirstSeen:   time.Now().UTC().Add(-5 * time.Minute).Format(time.RFC3339Nano),
+		PayloadType: &pt5,
+		ScopeName:   "#belgium",
+	}
 	srv.store = &PacketStore{
-		byPathHop: map[string][]*StoreTx{"aabbccdd0011": {tx}},
+		byPathHop: map[string][]*StoreTx{
+			"aabbccdd0011": {tx},
+			"aabb":         {bucketTx},
+		},
 	}
 
 	req := httptest.NewRequest("GET", "/api/scope-stats?window=24h", nil)
