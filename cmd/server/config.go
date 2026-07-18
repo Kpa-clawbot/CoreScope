@@ -142,6 +142,14 @@ type Config struct {
 	// GOMEMLIMIT environment variable, when set, takes precedence.
 	Runtime   *RuntimeConfig   `json:"runtime,omitempty"`
 	GeoFilter *GeoFilterConfig `json:"geo_filter,omitempty"`
+	// GeoFilterAppliesToNodeList restores the pre-opt-in behavior where
+	// configuring geo_filter alone made GET /api/nodes exclude out-of-
+	// polygon nodes by default (no ?geoFilter=1 needed). Off by default —
+	// deployments that already relied on the old always-on filtering
+	// (added under #730) can set this to keep it; new deployments get the
+	// non-surprising default of geo_filter not silently changing what the
+	// node list/map returns.
+	GeoFilterAppliesToNodeList bool `json:"geoFilterAppliesToNodeList,omitempty"`
 
 	Areas map[string]AreaEntry `json:"areas,omitempty"`
 

@@ -1426,16 +1426,21 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// Opt-in only (?geoFilter=1): configuring geo_filter alone must not
-	// change what /api/nodes (and therefore the live map, which lists
-	// straight off this endpoint) returns by default. It used to — any node
-	// outside the polygon and not YET foreign_advert-tagged (which only
-	// happens on that node's next ADVERT after geo_filter was configured)
-	// would silently vanish from every view the moment geo_filter was set,
-	// with no per-request way to see them anyway. geo_filter's own
-	// ingestor-side tagging (and the explicit prune-geo-filter admin flow)
-	// are unaffected by this — this only gates the passive declutter view.
-	if s.cfg.GeoFilter != nil && q.Get("geoFilter") == "1" {
+	// Opt-in by default (?geoFilter=1), unless the deployment has
+	// GeoFilterAppliesToNodeList set to restore the pre-existing always-on
+	// behavior. Configuring geo_filter alone must not, by default, change
+	// what /api/nodes (and therefore the live map, which lists straight off
+	// this endpoint) returns — any node outside the polygon and not YET
+	// foreign_advert-tagged (which only happens on that node's next ADVERT
+	// after geo_filter was configured) would otherwise silently vanish from
+	// every view the moment geo_filter was set, with no per-request way to
+	// see them anyway. A deployment that intentionally relies on the old
+	// #730 declutter behavior can set GeoFilterAppliesToNodeList to keep
+	// it. geo_filter's own ingestor-side tagging (and the explicit
+	// prune-geo-filter admin flow) are unaffected either way — this only
+	// gates the passive declutter view.
+	applyGeoFilter := s.cfg.GeoFilterAppliesToNodeList || q.Get("geoFilter") == "1"
+	if s.cfg.GeoFilter != nil && applyGeoFilter {
 		filtered := nodes[:0]
 		for _, node := range nodes {
 			// Foreign-flagged nodes (#730) are kept even when their GPS lies

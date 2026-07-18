@@ -74,6 +74,28 @@ func TestHandleNodes_GeoFilterExcludedByDefault(t *testing.T) {
 			t.Error("expected OutsideUntagged (outside polygon, not yet foreign-tagged) to be excluded when geoFilter=1")
 		}
 	})
+
+	t.Run("GeoFilterAppliesToNodeList=true restores the pre-opt-in always-on behavior without needing ?geoFilter=1", func(t *testing.T) {
+		srv.cfg.GeoFilterAppliesToNodeList = true
+		defer func() { srv.cfg.GeoFilterAppliesToNodeList = false }()
+
+		req := httptest.NewRequest("GET", "/api/nodes?limit=50", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		got := names(w)
+		if !got["InsideNode"] {
+			t.Error("expected InsideNode (within polygon) to be present")
+		}
+		if !got["OutsideTagged"] {
+			t.Error("expected OutsideTagged (foreign_advert=1) to be present even though it's outside the polygon — #730")
+		}
+		if got["OutsideUntagged"] {
+			t.Error("expected OutsideUntagged to be excluded by default when GeoFilterAppliesToNodeList=true, without needing ?geoFilter=1")
+		}
+	})
 }
 
 func floatPtr(f float64) *float64 { return &f }
