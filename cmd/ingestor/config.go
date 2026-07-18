@@ -11,6 +11,7 @@ import (
 
 	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/geofilter"
+	"github.com/meshcore-analyzer/packetpath"
 )
 
 // MQTTSource represents a single MQTT broker connection.
@@ -43,22 +44,26 @@ type MQTTLegacy struct {
 
 // Config holds the ingestor configuration, compatible with the Node.js config.json format.
 type Config struct {
-	DBPath             string                  `json:"dbPath"`
-	MQTT               *MQTTLegacy             `json:"mqtt,omitempty"`
-	MQTTSources        []MQTTSource            `json:"mqttSources,omitempty"`
-	LogLevel           string                  `json:"logLevel,omitempty"`
-	ChannelKeysPath    string                  `json:"channelKeysPath,omitempty"`
-	ChannelKeys        map[string]string       `json:"channelKeys,omitempty"`
-	HashChannels       []string                `json:"hashChannels,omitempty"`
-	HashRegions        []string                `json:"hashRegions,omitempty"`
-	Retention          *RetentionConfig        `json:"retention,omitempty"`
-	Metrics            *MetricsConfig          `json:"metrics,omitempty"`
-	Runtime            *RuntimeConfig          `json:"runtime,omitempty"`
-	ClientRxCoverage   *ClientRxCoverageConfig `json:"clientRxCoverage,omitempty"`
-	GeoFilter          *GeoFilterConfig        `json:"geo_filter,omitempty"`
-	ForeignAdverts     *ForeignAdvertConfig    `json:"foreignAdverts,omitempty"`
-	ValidateSignatures *bool                   `json:"validateSignatures,omitempty"`
-	DB                 *DBConfig               `json:"db,omitempty"`
+	DBPath           string                  `json:"dbPath"`
+	MQTT             *MQTTLegacy             `json:"mqtt,omitempty"`
+	MQTTSources      []MQTTSource            `json:"mqttSources,omitempty"`
+	LogLevel         string                  `json:"logLevel,omitempty"`
+	ChannelKeysPath  string                  `json:"channelKeysPath,omitempty"`
+	ChannelKeys      map[string]string       `json:"channelKeys,omitempty"`
+	HashChannels     []string                `json:"hashChannels,omitempty"`
+	HashRegions      []string                `json:"hashRegions,omitempty"`
+	Retention        *RetentionConfig        `json:"retention,omitempty"`
+	Metrics          *MetricsConfig          `json:"metrics,omitempty"`
+	Runtime          *RuntimeConfig          `json:"runtime,omitempty"`
+	ClientRxCoverage *ClientRxCoverageConfig `json:"clientRxCoverage,omitempty"`
+	GeoFilter        *GeoFilterConfig        `json:"geo_filter,omitempty"`
+	// PathTrust configures the minimum path-hash prefix length trusted as
+	// mapping/topology evidence (issue #1784). Config + helper only for
+	// now — no consumer reads this yet (see packetpath.MeetsPathTrust doc).
+	PathTrust          *PathTrustConfig     `json:"pathTrust,omitempty"`
+	ForeignAdverts     *ForeignAdvertConfig `json:"foreignAdverts,omitempty"`
+	ValidateSignatures *bool                `json:"validateSignatures,omitempty"`
+	DB                 *DBConfig            `json:"db,omitempty"`
 
 	// ObserverIATAWhitelist restricts which observer IATA regions are processed.
 	// When non-empty, only observers whose IATA code (from the MQTT topic) matches
@@ -111,6 +116,10 @@ func (c *Config) IngestBufferSizeOrDefault() int {
 
 // GeoFilterConfig is an alias for the shared geofilter.Config type.
 type GeoFilterConfig = geofilter.Config
+
+// PathTrustConfig is an alias for the shared packetpath.TrustConfig type
+// (issue #1784). See packetpath.TrustConfig for the full doc comment.
+type PathTrustConfig = packetpath.TrustConfig
 
 // ForeignAdvertConfig controls how the ingestor handles ADVERTs whose GPS lies
 // outside the configured geofilter polygon (#730). Modes:
@@ -236,6 +245,15 @@ func (c *Config) ObserverDaysOrDefault() int {
 		return c.Retention.ObserverDays
 	}
 	return 14
+}
+
+// GetPathTrust returns the effective path-trust config, applying
+// DefaultMinHashBytesForMapping when unset (issue #1784).
+func (c *Config) GetPathTrust() PathTrustConfig {
+	if c != nil && c.PathTrust != nil {
+		return *c.PathTrust
+	}
+	return PathTrustConfig{MinHashBytesForMapping: packetpath.DefaultMinHashBytesForMapping}
 }
 
 // IsObserverBlacklisted returns true if the given observer ID is in the observerBlacklist.
