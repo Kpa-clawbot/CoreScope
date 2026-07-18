@@ -3781,9 +3781,25 @@ func (s *PacketStore) computeNodeHomeRegions() map[string]string {
 }
 
 // enrichObs returns a map with observation fields + transmission fields.
+// Looks up the transmission in s.byTxID itself — safe only when the caller
+// already holds s.mu (directly, or via a defer'd RLock spanning the call).
+// Callers that snapshot observations under RLock and then release it before
+// iterating (e.g. handleObserverAnalytics, #1830) must use enrichObsWithTx
+// with a tx pointer resolved during that same snapshot instead.
 func (s *PacketStore) enrichObs(obs *StoreObs) map[string]interface{} {
-	tx := s.byTxID[obs.TransmissionID]
+	return s.enrichObsWithTx(obs, s.byTxID[obs.TransmissionID])
+}
 
+// enrichObsWithTx is enrichObs with the transmission pointer already
+// resolved by the caller, instead of looking it up in s.byTxID here. #1830:
+// s.byTxID is guarded by s.mu (writes from ingest/eviction); reading it
+// without holding at least RLock races with those writers — Go maps can
+// panic with "concurrent map read and map write" during a rehash, not just
+// fail under -race. Callers that need to read byTxID after releasing their
+// RLock (to keep JSON decode / enrichment off the hot lock, per #1481)
+// should resolve the *StoreTx for each observation during their RLock-held
+// snapshot and pass it in here.
+func (s *PacketStore) enrichObsWithTx(obs *StoreObs, tx *StoreTx) map[string]interface{} {
 	m := map[string]interface{}{
 		"id":            obs.ID,
 		"timestamp":     strOrNil(obs.Timestamp),

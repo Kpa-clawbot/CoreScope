@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1031,8 +1032,43 @@ func TestObserverAnalytics(t *testing.T) {
 		if body["recentPackets"] == nil {
 			t.Error("expected recentPackets")
 		}
-		if recent, ok := body["recentPackets"].([]interface{}); !ok || len(recent) == 0 {
+		recent, ok := body["recentPackets"].([]interface{})
+		if !ok || len(recent) == 0 {
 			t.Errorf("expected non-empty recentPackets, got %v", body["recentPackets"])
+		}
+
+		// #1827: packetTypes must still reflect the real per-transmission
+		// payload_type after switching the hot loop from enrichObs() to a
+		// direct s.store.byTxID read. seedTestData gives obs1 three
+		// observations: tx1 (payload_type=4), tx2 (payload_type=5), tx3
+		// (payload_type=4) — i.e. counts {"4":2, "5":1}.
+		pt, ok := body["packetTypes"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("expected packetTypes to be an object, got %T", body["packetTypes"])
+		}
+		if pt["4"] != float64(2) {
+			t.Errorf("expected packetTypes[4]=2, got %v", pt["4"])
+		}
+		if pt["5"] != float64(1) {
+			t.Errorf("expected packetTypes[5]=1, got %v", pt["5"])
+		}
+
+		// recentPackets is still built via the unchanged enrichObs() path
+		// and should retain resolved_path for observations that have one
+		// (tx1's first observation, resolved via obs1).
+		foundResolved := false
+		for _, rp := range recent {
+			m, ok := rp.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if m["resolved_path"] != nil {
+				foundResolved = true
+				break
+			}
+		}
+		if !foundResolved {
+			t.Error("expected at least one recentPackets entry to carry resolved_path")
 		}
 	})
 
@@ -1055,6 +1091,67 @@ func TestObserverAnalytics(t *testing.T) {
 			t.Fatalf("expected 200, got %d", w.Code)
 		}
 	})
+}
+
+// TestObserverAnalytics_ConcurrentByTxIDMutation_1830 is the -race
+// regression requested in #1830: handleObserverAnalytics reads
+// s.store.byTxID (directly, and via enrichObsWithTx) for every observation
+// in the window. Before the #1830 fix those reads happened after the
+// snapshot RLock was released, racing with concurrent ingest/eviction
+// writers to that same map. This test hammers the endpoint concurrently
+// with goroutines that mutate byTxID exactly like ingest/eviction would,
+// and must pass under `go test -race`.
+func TestObserverAnalytics_ConcurrentByTxIDMutation_1830(t *testing.T) {
+	srv, router := setupTestServer(t)
+
+	stop := make(chan struct{})
+	var writers sync.WaitGroup
+	var readers sync.WaitGroup
+
+	// Writer goroutines: mutate byTxID under s.store.mu, like ingest
+	// (adds) and eviction (deletes) do in production. They run until
+	// stop is closed, which happens once all readers are done below.
+	for w := 0; w < 4; w++ {
+		writers.Add(1)
+		go func(base int) {
+			defer writers.Done()
+			n := 0
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				srv.store.mu.Lock()
+				id := base*100000 + n
+				srv.store.byTxID[id] = &StoreTx{ID: id, PayloadType: intPtr(4)}
+				delete(srv.store.byTxID, id-1)
+				srv.store.mu.Unlock()
+				n++
+			}
+		}(w)
+	}
+
+	// Reader goroutines: repeatedly hit the endpoint under test.
+	for r := 0; r < 8; r++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for i := 0; i < 50; i++ {
+				req := httptest.NewRequest("GET", "/api/observers/obs1/analytics", nil)
+				w := httptest.NewRecorder()
+				router.ServeHTTP(w, req)
+				if w.Code != 200 {
+					t.Errorf("expected 200, got %d", w.Code)
+					return
+				}
+			}
+		}()
+	}
+
+	readers.Wait()
+	close(stop)
+	writers.Wait()
 }
 
 func TestChannelMessages(t *testing.T) {
