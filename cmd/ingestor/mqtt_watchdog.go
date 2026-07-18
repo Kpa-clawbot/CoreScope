@@ -74,6 +74,64 @@ func WatchdogPanicCount() int64 {
 	return watchdogPanicCount.Load()
 }
 
+// logQueueCapacity (#1749 root-cause fix) bounds the async emit queue
+// (see newAsyncEmit). Sized generously above any plausible per-scan
+// emit volume (a handful of sources x a couple of log lines each) so
+// legitimate bursts never spuriously drop, while still being small
+// enough that a permanently stuck writer fills it -- and starts
+// dropping -- within seconds rather than leaking memory unbounded.
+const logQueueCapacity = 256
+
+// watchdogLogDropCount (#1749 root-cause fix) counts emit() calls
+// dropped because the async log queue (see newAsyncEmit) was
+// saturated -- i.e. the background writer goroutine has not drained a
+// message in a while, almost certainly because its underlying write()
+// is itself blocked (Docker JSON-file log driver backpressure, full
+// stderr pipe, etc. -- the exact production shape from #1749: 3 MQTT
+// sources silent simultaneously, zero WATCHDOG log lines for 75+
+// minutes, container otherwise healthy, only a restart recovered).
+// Monotonic; 0 means the writer has never fallen behind.
+var watchdogLogDropCount atomic.Int64
+
+// WatchdogLogDropCount returns the running total of log lines dropped
+// by the async emit queue because the background writer could not
+// keep up (#1749 root-cause fix). Surfaced alongside
+// WatchdogLastTickUnix / WatchdogPanicCount so external monitoring can
+// distinguish "watchdog dead" (stale tick) from "watchdog alive, but
+// its log sink is stuck" (ticking normally, drop count climbing).
+//
+// Observability note: this is a raw monotonic counter, not a rate. A
+// dashboard alerting on "value > 0" will fire once and then stay
+// permanently red after the first drop, ever. A dashboard alerting on
+// "value == some threshold" will never fire again after crossing it.
+// The actionable signal is the counter's RATE OF INCREASE (e.g.
+// deriv() / increase() over a window in Prometheus terms) -- a
+// handful of drops during a brief legitimate burst is not the same
+// incident as hundreds of drops per minute because the writer has
+// been stuck for an hour. This function intentionally exposes only
+// the raw counter; rate-based alerting is a monitoring-stack
+// concern, not something this package should encode.
+func WatchdogLogDropCount() int64 {
+	return watchdogLogDropCount.Load()
+}
+
+// newAsyncEmit will decouple "the watchdog decided to log something"
+// from "a log line was actually written" -- see the follow-up commit
+// in this PR for the motivating production incident (#1749) and the
+// real implementation. This commit only introduces the API shape
+// (and a non-fixing stub body) so the regression tests below compile
+// and run RED against the still-present bug.
+func newAsyncEmit(realEmit func(...any)) (emit func(...any), stop func()) {
+	// STUB (red commit): direct synchronous passthrough. This
+	// intentionally does NOT yet decouple emit from realEmit -- it
+	// exists only so the package compiles against the tests added in
+	// this commit. logQueueCapacity and watchdogLogDropCount are
+	// therefore unused by this stub; the real queue-based
+	// implementation lands in the next commit.
+	_ = logQueueCapacity
+	return realEmit, func() {}
+}
+
 // LivenessKind enumerates the watchdog verdicts for a source. Edge-triggered
 // transitions use this to decide whether to emit (and what severity).
 type LivenessKind int
@@ -358,10 +416,15 @@ func SnapshotLivenessClocks() map[string]SourceLivenessSnapshot {
 func runLivenessWatchdog(interval, threshold time.Duration) (stop func()) {
 	t := time.NewTicker(interval)
 	done := make(chan struct{})
-	go runLivenessWatchdogLoop(t.C, done, threshold, log.Print)
+	// #1749 root-cause fix (red commit): wire through newAsyncEmit's
+	// stub for now -- see newAsyncEmit's doc comment for the intended
+	// final behavior, landing in the next commit.
+	emit, stopEmit := newAsyncEmit(log.Print)
+	go runLivenessWatchdogLoop(t.C, done, threshold, emit)
 	return func() {
 		t.Stop()
 		close(done)
+		stopEmit()
 	}
 }
 
