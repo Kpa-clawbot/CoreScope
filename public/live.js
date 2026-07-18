@@ -2613,11 +2613,28 @@
             return window.MC_isVisibleHop(h && h.prefix ? String(h.prefix) : '');
           });
         }
+        // #1784 — path trust threshold: check whether ALL hops in a path
+        // are below the configured minimum hash bytes for mapping.
+        function _pathHopsBelowTrust(hops) {
+          if (typeof window === 'undefined' || !window.MC_meetsPathTrust) return false;
+          if (!hops || !hops.length) return false;
+          for (var i = 0; i < hops.length; i++) {
+            if (window.MC_meetsPathTrust(hops[i] && hops[i].prefix ? String(hops[i].prefix) : '')) return false;
+          }
+          return true;
+        }
         function renderPathList(paths) {
           return paths.map(p => {
             const filteredHops = _filterHopObjs(p.hops || []);
             if (!filteredHops.length) {
-              return `<div style="padding:3px 0;font-size:11px;line-height:1.4;color:var(--text-muted)">— (1-byte filtered) <span style="color:var(--text-muted)">(${p.count}×)</span></div>`;
+              // #1784 — distinguish between "all 1-byte filtered" and
+              // "all below trust threshold" for the fallback message.
+              var _msg = '1-byte filtered';
+              if (_pathHopsBelowTrust(p.hops || [])) {
+                var _tt = (window.MC_getPathTrustThreshold ? window.MC_getPathTrustThreshold() : 1);
+                _msg = _tt + '-byte trust threshold (pathTrust.minHashBytesForMapping: ' + _tt + ')';
+              }
+              return `<div style="padding:3px 0;font-size:11px;line-height:1.4;color:var(--text-muted)">— (${_msg}) <span style="color:var(--text-muted)">(${p.count}×)</span></div>`;
             }
             const chain = filteredHops.map(h => {
               const isThis = h.pubkey === n.public_key || (h.prefix && n.public_key.toLowerCase().startsWith(h.prefix.toLowerCase()));

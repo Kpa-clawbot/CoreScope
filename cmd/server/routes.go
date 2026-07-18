@@ -457,6 +457,7 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 		Tiles:               s.cfg.Tiles,
 		Customizer:          CustomizerClientConfig{DisabledTabs: disabledTabs},
 		ClientRxCoverage:    s.cfg.ClientRxCoverageEnabled(),
+		PathTrust:           func() *PathTrustConfig { pt := s.cfg.GetPathTrust(); return &pt }(),
 	})
 }
 

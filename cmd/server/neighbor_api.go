@@ -91,6 +91,7 @@ func (s *Server) getNeighborGraph() *NeighborGraph {
 			if s.cfg != nil {
 				opts.EnableLog = s.cfg.DebugAffinity
 				opts.MaxEdgeKm = s.cfg.NeighborMaxEdgeKm()
+				opts.PathTrust = s.cfg.PathTrust
 			}
 			s.neighborGraph = BuildFromStoreWithOptions(s.store, opts)
 		} else {

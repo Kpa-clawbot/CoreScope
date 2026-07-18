@@ -257,7 +257,14 @@
     // collision sharply; 3-byte (~16M) is effectively unambiguous. Bucket 0
     // is the legacy/unknown bucket used for edges loaded from the persisted
     // snapshot (no per-mode breakdown stored) — weight is conservative 0.5.
+    // #1784 — path trust threshold: if the configured minimum hash bytes
+    // for mapping is >= 2, observations below it get zero weight in the
+    // confidence computation (they're excluded from trusted evidence).
+    var _tt = (typeof window !== 'undefined' && window.MC_getPathTrustThreshold) ? window.MC_getPathTrustThreshold() : 1;
     var modeWeight = { 0: 0.5, 1: 0.125, 2: 0.875, 3: 1.0 };
+    if (_tt >= 2) {
+      for (var _m = 0; _m < _tt; _m++) modeWeight[_m] = 0;
+    }
     var cbm = entry.counts_by_mode || null;
     var weighted;
     if (cbm) {

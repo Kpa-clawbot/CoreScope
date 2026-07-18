@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/meshcore-analyzer/packetpath"
 )
 
 // ─── Path Inspector ────────────────────────────────────────────────────────────
@@ -45,6 +47,7 @@ type hopEvidence struct {
 	CandidatesConsidered int              `json:"candidatesConsidered"`
 	Chosen               string           `json:"chosen"`
 	EdgeWeight           float64          `json:"edgeWeight"`
+	Trusted              bool             `json:"trusted"`
 	Alternatives         []hopAlternative `json:"alternatives,omitempty"`
 }
 
@@ -216,18 +219,23 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 		// Populate per-hop alternatives: other candidates at each hop that weren't chosen.
 		evidence := make([]hopEvidence, len(entry.evidence))
 		copy(evidence, entry.evidence)
+		allHopsTrusted := true
+		pt := s.cfg.GetPathTrust()
 		for hi, ev := range evidence {
 			if hi >= len(req.Prefixes) {
 				break
 			}
 			prefix := req.Prefixes[hi]
+			trusted := packetpath.MeetsPathTrust(len(prefix)/2, &pt)
+			if !trusted {
+				allHopsTrusted = false
+			}
 			allCands := pm.m[prefix]
 			var alts []hopAlternative
 			for _, c := range allCands {
 				if !canAppearInPath(c.Role) || c.PublicKey == ev.Chosen {
 					continue
 				}
-				// Score this alternative in context of the partial path up to this hop.
 				var partialEntry beamEntry
 				if hi > 0 {
 					partialEntry = beamEntry{pubkeys: entry.pubkeys[:hi], names: entry.names[:hi], score: 1.0}
@@ -235,7 +243,6 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 				altScore := s.store.scoreHop(partialEntry, c, ev.CandidatesConsidered, graph, nodeByPK, now, hi)
 				alts = append(alts, hopAlternative{PublicKey: c.PublicKey, Name: c.Name, Score: math.Round(altScore*1000) / 1000})
 			}
-			// Sort alts by score desc, cap at 5.
 			sort.Slice(alts, func(i, j int) bool { return alts[i].Score > alts[j].Score })
 			if len(alts) > 5 {
 				alts = alts[:5]
@@ -245,6 +252,7 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 				CandidatesConsidered: ev.CandidatesConsidered,
 				Chosen:               ev.Chosen,
 				EdgeWeight:           ev.EdgeWeight,
+				Trusted:              trusted,
 				Alternatives:         alts,
 			}
 		}
@@ -253,12 +261,13 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 			Path:        entry.pubkeys,
 			Names:       entry.names,
 			Score:       math.Round(score*1000) / 1000,
-			Speculative: score < speculativeThreshold,
+			Speculative: score < speculativeThreshold || !allHopsTrusted,
 			Evidence:    pathEvidence{PerHop: evidence},
 		})
 	}
 
 	elapsed := time.Since(start).Milliseconds()
+	statsMinBytes := s.cfg.GetPathTrust()
 	resp := pathInspectResponse{
 		Candidates: candidates,
 		Stale:      stale,
@@ -267,9 +276,10 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 			"hops":     len(req.Prefixes),
 		},
 		Stats: map[string]interface{}{
-			"beamWidth":     beamWidth,
-			"expansionsRun": len(req.Prefixes) * beamWidth,
-			"elapsedMs":     elapsed,
+			"beamWidth":              beamWidth,
+			"expansionsRun":          len(req.Prefixes) * beamWidth,
+			"elapsedMs":              elapsed,
+			"minHashBytesForMapping": statsMinBytes.MinHashBytesOrDefault(),
 		},
 	}
 
