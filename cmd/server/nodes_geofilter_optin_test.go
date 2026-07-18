@@ -6,12 +6,14 @@ import (
 	"testing"
 )
 
-// Regression test: configuring geo_filter alone must not change what
-// GET /api/nodes returns. Before this fix, setting geo_filter silently
-// hid every node outside the polygon that hadn't yet been re-tagged
-// foreign_advert=1 by the ingestor (which only happens on that node's
-// next ADVERT) — including the live map, which lists straight off this
-// endpoint. The filter is now opt-in via ?geoFilter=1.
+// Regression test: geo_filter's node-list-declutter behavior (#730) is
+// preserved by default for every deployment that already had geo_filter
+// configured — GeoFilterExemptNodeList (default false) only lets a NEW
+// adopter of geo_filter (using it purely for foreign_advert classification/
+// analytics) opt OUT of also hiding out-of-polygon nodes from
+// GET /api/nodes (and therefore the live map, which lists straight off
+// this endpoint). Per-request ?geoFilter=0/1 overrides either default for
+// a single call.
 func TestHandleNodes_GeoFilterExcludedByDefault(t *testing.T) {
 	apiKey := "a-strong-api-key-for-testing"
 	srv, router, _ := setupGeoFilterServer(t, apiKey)
@@ -40,30 +42,19 @@ func TestHandleNodes_GeoFilterExcludedByDefault(t *testing.T) {
 		}
 		return out
 	}
-
-	t.Run("default request returns every node regardless of geo_filter", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/api/nodes?limit=50", nil)
+	get := func(qs string) map[string]bool {
+		t.Helper()
+		req := httptest.NewRequest("GET", "/api/nodes?limit=50"+qs, nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 		if w.Code != 200 {
 			t.Fatalf("expected 200, got %d", w.Code)
 		}
-		got := names(w)
-		for _, want := range []string{"InsideNode", "OutsideUntagged", "OutsideTagged"} {
-			if !got[want] {
-				t.Errorf("expected %s in default (unfiltered) response, got %v", want, got)
-			}
-		}
-	})
+		return names(w)
+	}
 
-	t.Run("geoFilter=1 excludes untagged out-of-polygon nodes but keeps foreign-tagged ones", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/api/nodes?limit=50&geoFilter=1", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-		if w.Code != 200 {
-			t.Fatalf("expected 200, got %d", w.Code)
-		}
-		got := names(w)
+	t.Run("default request preserves the long-standing #730 filtering (deployments predating this field see no change)", func(t *testing.T) {
+		got := get("")
 		if !got["InsideNode"] {
 			t.Error("expected InsideNode (within polygon) to be present")
 		}
@@ -71,29 +62,44 @@ func TestHandleNodes_GeoFilterExcludedByDefault(t *testing.T) {
 			t.Error("expected OutsideTagged (foreign_advert=1) to be present even though it's outside the polygon — #730")
 		}
 		if got["OutsideUntagged"] {
-			t.Error("expected OutsideUntagged (outside polygon, not yet foreign-tagged) to be excluded when geoFilter=1")
+			t.Error("expected OutsideUntagged (outside polygon, not foreign-tagged) to be excluded by default, matching the pre-existing #730 behavior")
 		}
 	})
 
-	t.Run("GeoFilterAppliesToNodeList=true restores the pre-opt-in always-on behavior without needing ?geoFilter=1", func(t *testing.T) {
-		srv.cfg.GeoFilterAppliesToNodeList = true
-		defer func() { srv.cfg.GeoFilterAppliesToNodeList = false }()
+	t.Run("geoFilter=0 forces the filter off for a single request", func(t *testing.T) {
+		got := get("&geoFilter=0")
+		if !got["OutsideUntagged"] {
+			t.Error("expected OutsideUntagged to be present when explicitly overriding with geoFilter=0")
+		}
+	})
 
-		req := httptest.NewRequest("GET", "/api/nodes?limit=50", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-		if w.Code != 200 {
-			t.Fatalf("expected 200, got %d", w.Code)
-		}
-		got := names(w)
-		if !got["InsideNode"] {
-			t.Error("expected InsideNode (within polygon) to be present")
-		}
-		if !got["OutsideTagged"] {
-			t.Error("expected OutsideTagged (foreign_advert=1) to be present even though it's outside the polygon — #730")
+	t.Run("geoFilter=1 is a no-op restating the default (still excludes untagged, keeps foreign-tagged)", func(t *testing.T) {
+		got := get("&geoFilter=1")
+		if !got["InsideNode"] || !got["OutsideTagged"] {
+			t.Error("expected InsideNode and OutsideTagged to remain present")
 		}
 		if got["OutsideUntagged"] {
-			t.Error("expected OutsideUntagged to be excluded by default when GeoFilterAppliesToNodeList=true, without needing ?geoFilter=1")
+			t.Error("expected OutsideUntagged to still be excluded with geoFilter=1")
+		}
+	})
+
+	t.Run("GeoFilterExemptNodeList=true makes the default request return everything, without needing ?geoFilter=0", func(t *testing.T) {
+		srv.cfg.GeoFilterExemptNodeList = true
+		defer func() { srv.cfg.GeoFilterExemptNodeList = false }()
+
+		got := get("")
+		if !got["InsideNode"] || !got["OutsideTagged"] || !got["OutsideUntagged"] {
+			t.Errorf("expected every node present when GeoFilterExemptNodeList=true, got %v", got)
+		}
+	})
+
+	t.Run("geoFilter=1 still overrides GeoFilterExemptNodeList=true for a single request", func(t *testing.T) {
+		srv.cfg.GeoFilterExemptNodeList = true
+		defer func() { srv.cfg.GeoFilterExemptNodeList = false }()
+
+		got := get("&geoFilter=1")
+		if got["OutsideUntagged"] {
+			t.Error("expected OutsideUntagged to be excluded when geoFilter=1 overrides an exempt deployment")
 		}
 	})
 }

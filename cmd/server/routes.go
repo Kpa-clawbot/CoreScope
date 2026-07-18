@@ -1426,20 +1426,23 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// Opt-in by default (?geoFilter=1), unless the deployment has
-	// GeoFilterAppliesToNodeList set to restore the pre-existing always-on
-	// behavior. Configuring geo_filter alone must not, by default, change
-	// what /api/nodes (and therefore the live map, which lists straight off
-	// this endpoint) returns — any node outside the polygon and not YET
-	// foreign_advert-tagged (which only happens on that node's next ADVERT
-	// after geo_filter was configured) would otherwise silently vanish from
-	// every view the moment geo_filter was set, with no per-request way to
-	// see them anyway. A deployment that intentionally relies on the old
-	// #730 declutter behavior can set GeoFilterAppliesToNodeList to keep
-	// it. geo_filter's own ingestor-side tagging (and the explicit
-	// prune-geo-filter admin flow) are unaffected either way — this only
-	// gates the passive declutter view.
-	applyGeoFilter := s.cfg.GeoFilterAppliesToNodeList || q.Get("geoFilter") == "1"
+	// geo_filter applies to the node list (and therefore the live map,
+	// which lists straight off this endpoint) BY DEFAULT when configured —
+	// the long-standing #730 declutter behavior. Every deployment that
+	// already had geo_filter set before GeoFilterExemptNodeList existed
+	// keeps getting exactly that, unchanged: the field is absent from
+	// their config.json, which decodes to false, which preserves the
+	// default. A deployment that wants geo_filter purely for
+	// foreign_advert classification/analytics — without also hiding
+	// out-of-polygon nodes from the map — opts out via
+	// GeoFilterExemptNodeList. ?geoFilter=0 / ?geoFilter=1 overrides
+	// either default for a single request. geo_filter's own ingestor-side
+	// tagging (and the explicit prune-geo-filter admin flow) are
+	// unaffected either way — this only gates the passive declutter view.
+	applyGeoFilter := !s.cfg.GeoFilterExemptNodeList
+	if v := q.Get("geoFilter"); v != "" {
+		applyGeoFilter = v == "1"
+	}
 	if s.cfg.GeoFilter != nil && applyGeoFilter {
 		filtered := nodes[:0]
 		for _, node := range nodes {
