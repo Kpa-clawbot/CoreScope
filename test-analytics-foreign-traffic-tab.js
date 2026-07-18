@@ -162,6 +162,33 @@ function fakeEl() {
     assert.ok(el.innerHTML.includes('no foreign-origin node has advertised'), 'should show the zero-foreign fallback message');
   });
 
+  await testAsync('foreign-flagged nodes list renders every foreign node, sorted newest-heard first', async () => {
+    const ctx = makeAnalyticsSandbox([
+      { public_key: 'pkA', name: 'RepeaterA', role: 'repeater', unscoped_relay_count_24h: 5, relay_count_24h: 5, foreign: false },
+      { public_key: 'pkOld', name: 'OldForeign', role: 'companion', lat: 44.4, lon: 26.1, first_seen: '2026-07-01T00:00:00Z', last_seen: '2026-07-01T00:00:00Z', foreign: true },
+      { public_key: 'pkNew', name: 'NewForeign', role: 'client', lat: 52.4, lon: 10.8, first_seen: '2026-07-18T00:00:00Z', last_seen: '2026-07-18T12:00:00Z', foreign: true },
+    ]);
+    const el = fakeEl();
+    await ctx.window._analyticsRenderForeignTrafficTab(el);
+    assert.ok(el.innerHTML.includes('Foreign-Flagged Nodes (2)'), 'heading should show the correct count');
+    const foreignSectionHtml = el.innerHTML.slice(el.innerHTML.indexOf('Foreign-Flagged Nodes'));
+    assert.ok(!foreignSectionHtml.includes('RepeaterA'), 'a non-foreign node must not appear in the foreign-nodes section');
+    const idxNew = el.innerHTML.indexOf('NewForeign');
+    const idxOld = el.innerHTML.indexOf('OldForeign');
+    assert.ok(idxNew > -1 && idxOld > -1, 'both foreign nodes should be listed');
+    assert.ok(idxNew < idxOld, 'more recently heard foreign node should be listed first');
+  });
+
+  await testAsync('foreign-flagged nodes list shows a placeholder when none are flagged yet', async () => {
+    const ctx = makeAnalyticsSandbox([
+      { public_key: 'pkA', name: 'RepeaterA', role: 'repeater', unscoped_relay_count_24h: 5, relay_count_24h: 5, foreign: false },
+    ]);
+    const el = fakeEl();
+    await ctx.window._analyticsRenderForeignTrafficTab(el);
+    assert.ok(el.innerHTML.includes('Foreign-Flagged Nodes (0)'), 'heading should show a zero count');
+    assert.ok(el.innerHTML.includes('None yet'), 'placeholder message should be shown when no node is foreign-flagged');
+  });
+
   await testAsync('a stop-refresh hook is exported and safe to call repeatedly (idempotent)', async () => {
     const ctx = makeAnalyticsSandbox([]);
     const stop = ctx.window._analyticsStopForeignTrafficRefresh;

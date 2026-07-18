@@ -4905,6 +4905,34 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           ? foreignCount.toLocaleString() + ' node(s) so far carry an advertised GPS position outside the configured geo_filter — cross-referencing which rows below actually trace back to those is a planned follow-up once more accumulates.'
           : 'geo_filter is configured, but no foreign-origin node has advertised since — check back once traffic accumulates to cross-reference which of the unscoped relays below trace back to a foreign sender.';
 
+        // Foreign-flagged nodes so far (#730 foreign_advert), newest-heard
+        // first. Only set going forward from when geo_filter was
+        // configured — this list grows as nodes send their next ADVERT.
+        const foreignNodes = allNodes.filter(function(n) { return n.foreign; });
+        foreignNodes.sort(function(a, b) {
+          return new Date(b.last_seen || 0) - new Date(a.last_seen || 0);
+        });
+        let foreignNodesBody;
+        if (foreignNodes.length > 0) {
+          const foreignRows = foreignNodes.map(function(n) {
+            const lat = typeof n.lat === 'number' ? n.lat.toFixed(3) : '—';
+            const lon = typeof n.lon === 'number' ? n.lon.toFixed(3) : '—';
+            return '<tr>' +
+              '<td><a href="#/nodes/' + encodeURIComponent(n.public_key) + '">' + esc(n.name || n.public_key) + '</a></td>' +
+              '<td>' + esc(n.role || '—') + '</td>' +
+              '<td>' + lat + ', ' + lon + '</td>' +
+              '<td>' + timeAgo(n.first_seen) + '</td>' +
+              '<td>' + timeAgo(n.last_seen) + '</td>' +
+              '</tr>';
+          }).join('');
+          foreignNodesBody = '<table class="data-table analytics-table">' +
+            '<thead><tr><th>Node</th><th>Role</th><th>Lat, Lon</th><th>First Seen</th><th>Last Seen</th></tr></thead>' +
+            '<tbody>' + foreignRows + '</tbody>' +
+            '</table>';
+        } else {
+          foreignNodesBody = '<p class="text-muted" style="font-size:0.85em">None yet — a node is only listed here after it advertises with a GPS position outside the configured geo_filter.</p>';
+        }
+
         el.innerHTML =
           '<h3 style="margin:0 0 4px">Foreign Traffic</h3>' +
           '<p class="text-muted" style="margin:0 0 16px;font-size:0.85em">' +
@@ -4912,7 +4940,10 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
             'A small amount of unscoped traffic is normal — <code>flood.max.unscoped</code> caps it rather than blocking it outright. Disproportionate volume or % here is what\'s worth investigating on that specific node. ' +
             foreignNote +
           '</p>' +
-          body;
+          body +
+          '<h3 style="margin:24px 0 4px">Foreign-Flagged Nodes (' + foreignNodes.length.toLocaleString() + ')</h3>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Nodes whose most recent advertised GPS position fell outside the configured geo_filter.</p>' +
+          foreignNodesBody;
       } catch (e) {
         el.innerHTML = '<p class="text-muted">Failed to load repeater relay stats.</p>';
       }
