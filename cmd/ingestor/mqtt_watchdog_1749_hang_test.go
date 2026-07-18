@@ -198,3 +198,80 @@ func TestIngestorStatsSnapshot_WatchdogLogDropCountRoundTrip_1749(t *testing.T) 
 		t.Fatalf("round-trip mismatch: got %d, want 413", back.WatchdogLogDropCount)
 	}
 }
+
+// TestRunLivenessWatchdog_StopDoesNotRaceQueueClose_1749 is a targeted
+// regression for a review finding on this PR: runLivenessWatchdog's
+// stop() used to call close(done) followed immediately by stopEmit()
+// (which closes the async queue) WITHOUT waiting for the loop
+// goroutine to actually return. done being closed only makes the loop
+// exit on its NEXT select check -- it does not abort in-flight
+// per-source work already past that check. If the loop was mid
+// processLivenessTransition -> emit() (i.e. actively sending on the
+// queue) at the exact moment stopEmit() closed it, that send raced a
+// closed channel and panicked ("send on closed channel").
+//
+// To have any chance of hitting that window, a source must be
+// actively triggering emit() on essentially every tick (LivenessOK
+// never emits) and stop() must be called as close as possible to a
+// tick firing. This drives many rapid start/stop cycles against a
+// fast ticker with an always-stalled source and asserts no panic
+// escapes -- run with -race for the strongest signal, but the panic
+// itself does not require -race to reproduce.
+func TestRunLivenessWatchdog_StopDoesNotRaceQueueClose_1749(t *testing.T) {
+	defer snapshotAndResetRegistry(t)()
+
+	s := &SourceLivenessState{
+		Tag:           "src-race-1749",
+		Broker:        "tcp://src-race-1749:1883",
+		IsConnectedFn: func() bool { return true },
+	}
+	// Stalled from the start and re-armed every iteration below so
+	// every single tick has real emit-triggering work to do.
+	atomic.StoreInt64(&s.LastMessageUnix, time.Now().Add(-time.Hour).Unix())
+	atomic.StoreInt64(&s.StartedAt, time.Now().Add(-2*time.Hour).Unix())
+	if err := registerLivenessState(s); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	panicsBefore := WatchdogPanicCount()
+
+	const iterations = 100
+	for i := 0; i < iterations; i++ {
+		// Re-arm: force LivenessStalled again (clear the edge-trigger
+		// cooldown) so this iteration's ticks have emit() work to do,
+		// same as production would after MarkReconnected.
+		atomic.StoreInt64(&s.LastAlertUnix, 0)
+		atomic.StoreInt64(&s.LastMessageUnix, time.Now().Add(-time.Hour).Unix())
+
+		stop := runLivenessWatchdog(time.Microsecond, time.Nanosecond)
+		// stop() is called essentially back-to-back with start,
+		// maximizing the chance the loop goroutine is caught mid
+		// per-source work (including an in-flight emit()) when
+		// shutdown begins -- exactly the window the fix must close.
+		// The 1ms pacing sleep is NOT part of the race window (it
+		// happens after stop() has already returned); it exists only
+		// to spread this test's goroutine churn out over ~200ms of
+		// wall time instead of a sub-millisecond burst, so it does
+		// not perturb the real-time throttle assertions in
+		// neighboring tests via OS scheduler pressure.
+		stop()
+		time.Sleep(3 * time.Millisecond)
+	}
+
+	// The per-source defer/recover from #1810 means a "send on closed
+	// channel" panic here does NOT crash the test binary -- it gets
+	// silently caught, logged, and counted. A bare "did not crash"
+	// assertion would therefore pass on the OLD, racy stop()
+	// implementation too (verified: the race reproduces reliably
+	// under this exact test with 2+ recovered panics per run on the
+	// pre-fix code). The real assertion is that WatchdogPanicCount
+	// must NOT have moved: ordinary, correctly-sequenced shutdown
+	// should never panic in the first place, recovered or not.
+	if got := WatchdogPanicCount(); got != panicsBefore {
+		t.Fatalf("WatchdogPanicCount advanced from %d to %d across %d start/stop cycles -- "+
+			"stop() is racing the async emit queue close against an in-flight emit() "+
+			"(send on closed channel, recovered by the #1810 per-source defer/recover "+
+			"but should never happen on a correctly sequenced shutdown)",
+			panicsBefore, got, iterations)
+	}
+}
