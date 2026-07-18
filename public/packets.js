@@ -2025,7 +2025,15 @@
     try {
       visibleCols = JSON.parse(localStorage.getItem('packets-visible-cols'));
     } catch {}
-    if (!visibleCols) visibleCols = COL_DEFS.map(c => c.key).filter(k => !defaultHidden.includes(k));
+    if (!visibleCols) {
+      visibleCols = COL_DEFS.map(c => c.key).filter(k => !defaultHidden.includes(k));
+    } else {
+      // A saved preference predates a since-added column (e.g. "scope") —
+      // default new columns to visible instead of silently hiding them.
+      for (const c of COL_DEFS) {
+        if (!visibleCols.includes(c.key) && !defaultHidden.includes(c.key)) visibleCols.push(c.key);
+      }
+    }
     const colMenu = document.getElementById('colToggleMenu');
     const pktTable = document.getElementById('pktTable');
     function applyColVisibility() {
