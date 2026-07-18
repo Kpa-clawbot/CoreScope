@@ -99,37 +99,66 @@ var watchdogLogDropCount atomic.Int64
 // WatchdogLastTickUnix / WatchdogPanicCount so external monitoring can
 // distinguish "watchdog dead" (stale tick) from "watchdog alive, but
 // its log sink is stuck" (ticking normally, drop count climbing).
-//
-// Observability note: this is a raw monotonic counter, not a rate. A
-// dashboard alerting on "value > 0" will fire once and then stay
-// permanently red after the first drop, ever. A dashboard alerting on
-// "value == some threshold" will never fire again after crossing it.
-// The actionable signal is the counter's RATE OF INCREASE (e.g.
-// deriv() / increase() over a window in Prometheus terms) -- a
-// handful of drops during a brief legitimate burst is not the same
-// incident as hundreds of drops per minute because the writer has
-// been stuck for an hour. This function intentionally exposes only
-// the raw counter; rate-based alerting is a monitoring-stack
-// concern, not something this package should encode.
 func WatchdogLogDropCount() int64 {
 	return watchdogLogDropCount.Load()
 }
 
-// newAsyncEmit will decouple "the watchdog decided to log something"
-// from "a log line was actually written" -- see the follow-up commit
-// in this PR for the motivating production incident (#1749) and the
-// real implementation. This commit only introduces the API shape
-// (and a non-fixing stub body) so the regression tests below compile
-// and run RED against the still-present bug.
+// newAsyncEmit (#1749 root-cause fix) decouples "the watchdog decided
+// to log something" from "a log line was actually written".
+//
+// Background: PR #1810 added defer/recover around the per-source
+// watchdog work so a PANIC inside emit cannot kill the loop. That
+// does not cover the actual production failure mode: realEmit is
+// log.Print in production, and log.Print's underlying write() can
+// BLOCK -- rather than panic -- if the sink is backpressured (Docker's
+// JSON-file log driver falling behind under load, a full stderr
+// pipe, journald hiccups, etc.). A blocked syscall is not a panic;
+// recover() does nothing for it. Because emit was called
+// SYNCHRONOUSLY inside the per-source work, a single stuck write()
+// froze the entire tick loop forever -- no further source ever got
+// checked and no further tick was ever processed again. That is
+// exactly the #1749 incident shape: 3 independent MQTT sources going
+// silent within ~60s of each other (one shared dependency -- the
+// watchdog goroutine itself -- died, not 3 independent paho clients),
+// zero WATCHDOG log lines for the rest of the 75-minute window,
+// every OTHER goroutine in the process continuing to run fine (no
+// crash, no panic -- a hang), and only a full container restart
+// (which spawns a fresh watchdog goroutine) recovering it.
+//
+// The returned emit function performs a non-blocking channel send
+// and never waits on the real writer. A single background goroutine
+// drains the channel calling realEmit; if THAT goroutine itself gets
+// stuck on a slow/blocked write, the bounded channel simply fills up
+// and further sends fall through to the `default` branch -- counted
+// via watchdogLogDropCount -- instead of blocking. The watchdog tick
+// loop can therefore never be wedged by a stuck log sink, no matter
+// how long the sink stays stuck; worst case under a persistent
+// backpressure event is lost log lines (visible and counted), not a
+// silently dead watchdog (invisible and undetectable -- the actual
+// #1749 failure).
+//
+// stop() closes the queue, asking the writer goroutine to drain and
+// exit; it does NOT wait for the writer to finish (a stuck realEmit
+// mid-drain must not make shutdown hang either).
 func newAsyncEmit(realEmit func(...any)) (emit func(...any), stop func()) {
-	// STUB (red commit): direct synchronous passthrough. This
-	// intentionally does NOT yet decouple emit from realEmit -- it
-	// exists only so the package compiles against the tests added in
-	// this commit. logQueueCapacity and watchdogLogDropCount are
-	// therefore unused by this stub; the real queue-based
-	// implementation lands in the next commit.
-	_ = logQueueCapacity
-	return realEmit, func() {}
+	queue := make(chan string, logQueueCapacity)
+	go func() {
+		for msg := range queue {
+			realEmit(msg)
+		}
+	}()
+	emit = func(args ...any) {
+		msg := fmt.Sprint(args...)
+		select {
+		case queue <- msg:
+		default:
+			watchdogLogDropCount.Add(1)
+		}
+	}
+	stop = func() {
+		close(queue)
+	}
+	return emit, stop
 }
 
 // LivenessKind enumerates the watchdog verdicts for a source. Edge-triggered
@@ -416,9 +445,11 @@ func SnapshotLivenessClocks() map[string]SourceLivenessSnapshot {
 func runLivenessWatchdog(interval, threshold time.Duration) (stop func()) {
 	t := time.NewTicker(interval)
 	done := make(chan struct{})
-	// #1749 root-cause fix (red commit): wire through newAsyncEmit's
-	// stub for now -- see newAsyncEmit's doc comment for the intended
-	// final behavior, landing in the next commit.
+	// #1749 root-cause fix: wrap log.Print via newAsyncEmit rather than
+	// passing it directly. See newAsyncEmit's doc comment -- a
+	// synchronous log.Print can block forever on a stuck writer, and
+	// that used to wedge this entire goroutine (the production
+	// incident this fix addresses).
 	emit, stopEmit := newAsyncEmit(log.Print)
 	go runLivenessWatchdogLoop(t.C, done, threshold, emit)
 	return func() {
