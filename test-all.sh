@@ -28,6 +28,7 @@ node test-channel-qr-wiring.js
 node test-channel-issue-1087.js
 node test-issue-1409-no-encrypted-flood.js
 node test-analytics-channels-integration.js
+node test-analytics-foreign-traffic-tab.js
 node test-observers-headings.js
 node test-issue-1789-observer-firmware-cols.js
 node test-issue-1648-m1-emoji-scan.js

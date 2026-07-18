@@ -31,6 +31,10 @@
   function _stopScopesRefresh() {
     if (_scopesRefreshTimer) { clearInterval(_scopesRefreshTimer); _scopesRefreshTimer = null; }
   }
+  var _foreignTrafficRefreshTimer = null;
+  function _stopForeignTrafficRefresh() {
+    if (_foreignTrafficRefreshTimer) { clearInterval(_foreignTrafficRefreshTimer); _foreignTrafficRefreshTimer = null; }
+  }
 
   // --- Status color helpers (read from CSS variables for theme support) ---
   function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
@@ -178,6 +182,7 @@
       // #1085 — Roles tab owns its own 60s auto-refresh; stop it on switch.
       if (_currentTab !== 'roles') _stopRolesRefresh();
       if (_currentTab !== 'scopes') _stopScopesRefresh();
+      if (_currentTab !== 'foreign-traffic') _stopForeignTrafficRefresh();
       _updateAnalyticsUrl();
       renderTab(_currentTab);
     });
@@ -2686,7 +2691,7 @@
     }
   }
 
-function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
+function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTrafficRefresh(); _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
 
   // Expose for testing
   if (typeof window !== 'undefined') {
@@ -2701,6 +2706,8 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
     window._analyticsRenderMultiByteAdopters = renderMultiByteAdopters;
     window._analyticsHashStatCardsHtml = hashStatCardsHtml;
     window._analyticsRenderCollisionsFromServer = renderCollisionsFromServer;
+    window._analyticsRenderForeignTrafficTab = renderForeignTrafficTab;
+    window._analyticsStopForeignTrafficRefresh = _stopForeignTrafficRefresh;
   }
 
   // ─── Neighbor Graph Tab ─────────────────────────────────────────────────────
@@ -4857,56 +4864,69 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
   // accumulate first, since it's only set going forward from when geo_filter
   // was configured — not backfilled for existing history.
   async function renderForeignTrafficTab(el) {
-    el.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading repeater relay stats…</div>';
     function pct(n, total) {
       if (!total) return '—';
       return (n / total * 100).toFixed(1) + '%';
     }
-    try {
-      const nodesResp = await fetchAllNodes('', { ttl: CLIENT_TTL.nodeList });
-      const allNodes = nodesResp.nodes || nodesResp;
-      const relays = allNodes.filter(function(n) {
-        return (n.role === 'repeater' || n.role === 'room') && (n.unscoped_relay_count_24h || 0) > 0;
-      });
-      relays.sort(function(a, b) { return (b.unscoped_relay_count_24h || 0) - (a.unscoped_relay_count_24h || 0); });
-      const foreignCount = allNodes.filter(function(n) { return n.foreign; }).length;
+    async function load() {
+      try {
+        const nodesResp = await fetchAllNodes('', { ttl: CLIENT_TTL.nodeList });
+        const allNodes = nodesResp.nodes || nodesResp;
+        const relays = allNodes.filter(function(n) {
+          return (n.role === 'repeater' || n.role === 'room') && (n.unscoped_relay_count_24h || 0) > 0;
+        });
+        relays.sort(function(a, b) { return (b.unscoped_relay_count_24h || 0) - (a.unscoped_relay_count_24h || 0); });
+        const foreignCount = allNodes.filter(function(n) { return n.foreign; }).length;
 
-      let body;
-      if (relays.length > 0) {
-        const rows = relays.map(function(n) {
-          const total = n.relay_count_24h || 0;
-          const unscoped = n.unscoped_relay_count_24h || 0;
-          return '<tr>' +
-            '<td><a href="#/nodes/' + encodeURIComponent(n.public_key) + '">' + esc(n.name || n.public_key) + '</a></td>' +
-            '<td>' + esc(n.role) + '</td>' +
-            '<td>' + unscoped.toLocaleString() + '</td>' +
-            '<td>' + total.toLocaleString() + '</td>' +
-            '<td>' + pct(unscoped, total) + '</td>' +
-            '</tr>';
-        }).join('');
-        body = '<table class="data-table analytics-table">' +
-          '<thead><tr><th>Repeater</th><th>Role</th><th>Unscoped Relays (24h)</th><th>Total Relays (24h)</th><th>% Unscoped</th></tr></thead>' +
-          '<tbody>' + rows + '</tbody>' +
-          '</table>';
-      } else {
-        body = '<p class="text-muted" style="font-size:0.85em">No repeater has relayed an unscoped flood packet in the last 24 hours.</p>';
+        let body;
+        if (relays.length > 0) {
+          const rows = relays.map(function(n) {
+            const total = n.relay_count_24h || 0;
+            const unscoped = n.unscoped_relay_count_24h || 0;
+            return '<tr>' +
+              '<td><a href="#/nodes/' + encodeURIComponent(n.public_key) + '">' + esc(n.name || n.public_key) + '</a></td>' +
+              '<td>' + esc(n.role) + '</td>' +
+              '<td>' + unscoped.toLocaleString() + '</td>' +
+              '<td>' + total.toLocaleString() + '</td>' +
+              '<td>' + pct(unscoped, total) + '</td>' +
+              '</tr>';
+          }).join('');
+          body = '<table class="data-table analytics-table">' +
+            '<thead><tr><th>Repeater</th><th>Role</th><th>Unscoped Relays (24h)</th><th>Total Relays (24h)</th><th>% Unscoped</th></tr></thead>' +
+            '<tbody>' + rows + '</tbody>' +
+            '</table>';
+        } else {
+          body = '<p class="text-muted" style="font-size:0.85em">No repeater has relayed an unscoped flood packet in the last 24 hours.</p>';
+        }
+
+        const foreignNote = foreignCount > 0
+          ? foreignCount.toLocaleString() + ' node(s) so far carry an advertised GPS position outside the configured geo_filter — cross-referencing which rows below actually trace back to those is a planned follow-up once more accumulates.'
+          : 'geo_filter is configured, but no foreign-origin node has advertised since — check back once traffic accumulates to cross-reference which of the unscoped relays below trace back to a foreign sender.';
+
+        el.innerHTML =
+          '<h3 style="margin:0 0 4px">Foreign Traffic</h3>' +
+          '<p class="text-muted" style="margin:0 0 16px;font-size:0.85em">' +
+            'Repeaters relaying unscoped (route_type FLOOD) packets in the last 24 hours, sorted by volume. ' +
+            'A well-configured repeater sets <code>flood.max.unscoped 0</code> — a non-trivial count here flags a base-config problem worth investigating on that specific node. ' +
+            foreignNote +
+          '</p>' +
+          body;
+      } catch (e) {
+        el.innerHTML = '<p class="text-muted">Failed to load repeater relay stats.</p>';
       }
-
-      const foreignNote = foreignCount > 0
-        ? foreignCount.toLocaleString() + ' node(s) so far carry an advertised GPS position outside the configured geo_filter — cross-referencing which rows below actually trace back to those is a planned follow-up once more accumulates.'
-        : 'geo_filter is configured, but no foreign-origin node has advertised since — check back once traffic accumulates to cross-reference which of the unscoped relays below trace back to a foreign sender.';
-
-      el.innerHTML =
-        '<h3 style="margin:0 0 4px">Foreign Traffic</h3>' +
-        '<p class="text-muted" style="margin:0 0 16px;font-size:0.85em">' +
-          'Repeaters relaying unscoped (route_type FLOOD) packets in the last 24 hours, sorted by volume. ' +
-          'A well-configured repeater sets <code>flood.max.unscoped 0</code> — a non-trivial count here flags a base-config problem worth investigating on that specific node. ' +
-          foreignNote +
-        '</p>' +
-        body;
-    } catch (e) {
-      el.innerHTML = '<p class="text-muted">Failed to load repeater relay stats.</p>';
     }
+
+    el.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading repeater relay stats…</div>';
+    await load();
+
+    // Auto-refresh every 60s while this tab is active (matches Roles/Scopes).
+    _stopForeignTrafficRefresh();
+    _foreignTrafficRefreshTimer = setInterval(function() {
+      if (_currentTab !== 'foreign-traffic') { _stopForeignTrafficRefresh(); return; }
+      var cur = document.getElementById('analyticsContent');
+      if (!cur) { _stopForeignTrafficRefresh(); return; }
+      load();
+    }, 60000);
   }
 
   // #1085 — Roles tab (folded in from former /#/roles page).
