@@ -4856,9 +4856,11 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
 
   // Repeaters relaying unscoped (route_type FLOOD) traffic, sorted by volume
   // — a quick, no-new-backend-work way to surface an existing but previously
-  // unsurfaced metric (unscoped_relay_count_24h, see openapi.go) that flags
-  // repeaters whose flood.max.unscoped isn't set to 0. Phase 1 of the
-  // "foreign traffic" investigation: cross-referencing which of this
+  // unsurfaced metric (unscoped_relay_count_24h, see openapi.go). A little
+  // unscoped traffic is normal and expected (flood.max.unscoped 0 isn't
+  // realistic in practice) — this view is for spotting disproportionate
+  // volume, not for zero-tolerance. Phase 1 of the "foreign traffic"
+  // investigation: cross-referencing which of this
   // unscoped volume actually traces back to a foreign-origin sender (via the
   // geo_filter-derived `foreign` flag on nodes) needs foreign_advert data to
   // accumulate first, since it's only set going forward from when geo_filter
@@ -4907,7 +4909,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           '<h3 style="margin:0 0 4px">Foreign Traffic</h3>' +
           '<p class="text-muted" style="margin:0 0 16px;font-size:0.85em">' +
             'Repeaters relaying unscoped (route_type FLOOD) packets in the last 24 hours, sorted by volume. ' +
-            'A well-configured repeater sets <code>flood.max.unscoped 0</code> — a non-trivial count here flags a base-config problem worth investigating on that specific node. ' +
+            'A small amount of unscoped traffic is normal — <code>flood.max.unscoped</code> caps it rather than blocking it outright. Disproportionate volume or % here is what\'s worth investigating on that specific node. ' +
             foreignNote +
           '</p>' +
           body;
