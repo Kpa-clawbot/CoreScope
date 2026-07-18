@@ -5,6 +5,8 @@ import (
 	"math"
 	"testing"
 	"time"
+
+	"github.com/meshcore-analyzer/packetpath"
 )
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -835,8 +837,46 @@ func BenchmarkBuildFromStore(b *testing.B) {
 	}
 }
 
-// TestBuildNeighborGraph_CountsByMode (issue #1638): verify per-hash-mode
-// edge counts are tracked separately from the flat Count, so the frontend
+// TestBuildNeighborGraph_PathTrustExcludes1ByteHops verifies that
+// BuildFromStoreWithOptions respects the PathTrust threshold. When
+// MinHashBytesForMapping=2, 1-byte prefix observations are excluded
+// from neighbor-edge building. At threshold=1 (trust-all) they are
+// included — backward-compatible. Kent Beck review: consumer wiring must
+// be tested, not just the pure helper.
+func TestBuildNeighborGraph_PathTrustExcludes1ByteHops(t *testing.T) {
+	nodes := []nodeInfo{
+		{Role: "repeater", PublicKey: "ccc0000100000000000000000000000000000000000000000000000000000001", Name: "NodeC-1"},
+		{Role: "repeater", PublicKey: "ccc0000200000000000000000000000000000000000000000000000000000002", Name: "NodeC-2"},
+		{Role: "repeater", PublicKey: "aaa0000100000000000000000000000000000000000000000000000000000003", Name: "Originator"},
+		{Role: "repeater", PublicKey: "obs00001000000000000000000000000000000000000000000000000000000004", Name: "Observer"},
+	}
+	// ADVERT with 1-byte path hop "cc" (hex length 2 = 1 byte).
+	tx := ngMakeTx(1, 4, ngPubKeyJSON("aaa0000100000000000000000000000000000000000000000000000000000003"), []*StoreObs{
+		ngMakeObs("obs00001000000000000000000000000000000000000000000000000000000004", `["cc"]`, nowStr, ngFloatPtr(-12)),
+	})
+	store := ngTestStore(nodes, []*StoreTx{tx})
+
+	// Threshold=2: 1-byte "cc" prefix excluded → no edges.
+	g := BuildFromStoreWithOptions(store, BuildOptions{
+		PathTrust: &packetpath.TrustConfig{MinHashBytesForMapping: 2},
+		MaxEdgeKm: DefaultMaxEdgeKm,
+	})
+	if edges := g.AllEdges(); len(edges) > 0 {
+		for _, e := range edges {
+			t.Errorf("expected no edges with pathTrust=2 + 1-byte prefix, got prefix=%q", e.Prefix)
+		}
+	}
+
+	// Threshold=1: 1-byte prefix included (trust-all, backward-compatible).
+	g1 := BuildFromStoreWithOptions(store, BuildOptions{
+		PathTrust: &packetpath.TrustConfig{MinHashBytesForMapping: 1},
+		MaxEdgeKm: DefaultMaxEdgeKm,
+	})
+	if edges1 := g1.AllEdges(); len(edges1) == 0 {
+		t.Fatal("expected edges with pathTrust=1 (trust-all), got 0")
+	}
+}
+
 // confidence indicator can weight 3-byte (effectively unambiguous) sightings
 // higher than 1-byte (high-collision) sightings. Modes track firmware-valid
 // hash sizes 1/2/3 per Packet.cpp:13-18.

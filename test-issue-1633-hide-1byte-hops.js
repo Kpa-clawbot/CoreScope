@@ -444,5 +444,98 @@ test('[kb #1] anti-tautology: tests reference the actual production files (not i
   );
 });
 
+// ─────────────────────────────────────────────────────────────────────
+// #1784 path trust threshold — configurable minimum hash bytes for mapping
+// ─────────────────────────────────────────────────────────────────────
+
+console.log('\n=== #1784: path trust threshold ===');
+
+test('#1784: MC_getPathTrustThreshold default is 2 (operator-confirmed)', () => {
+  const ctx = makeSandbox();
+  load(ctx, 'public/hop-filter.js');
+  delete ctx.window.PATH_TRUST;
+  assert.strictEqual(ctx.window.MC_getPathTrustThreshold(), 2,
+    'default path trust threshold must be 2 (operator-confirmed, excludes 1-byte)');
+});
+
+test('#1784: MC_getPathTrustThreshold reads window.PATH_TRUST', () => {
+  const ctx = makeSandbox();
+  load(ctx, 'public/hop-filter.js');
+  ctx.window.PATH_TRUST = 2;
+  assert.strictEqual(ctx.window.MC_getPathTrustThreshold(), 2,
+    'must return configured PATH_TRUST');
+  ctx.window.PATH_TRUST = 3;
+  assert.strictEqual(ctx.window.MC_getPathTrustThreshold(), 3,
+    'must return configured PATH_TRUST=3');
+});
+
+test('#1784: MC_meetsPathTrust with threshold 1 (trust-all)', () => {
+  const ctx = makeSandbox();
+  load(ctx, 'public/hop-filter.js');
+  ctx.window.PATH_TRUST = 1;
+  assert.strictEqual(ctx.window.MC_meetsPathTrust('AB'), true, '1-byte hop meets threshold 1');
+  assert.strictEqual(ctx.window.MC_meetsPathTrust('ABCD'), true, '2-byte hop meets threshold 1');
+  assert.strictEqual(ctx.window.MC_meetsPathTrust('ABCDEF'), true, '3-byte hop meets threshold 1');
+});
+
+test('#1784: MC_meetsPathTrust with threshold 2 (exclude 1-byte)', () => {
+  const ctx = makeSandbox();
+  load(ctx, 'public/hop-filter.js');
+  ctx.window.PATH_TRUST = 2;
+  assert.strictEqual(ctx.window.MC_meetsPathTrust('AB'), false, '1-byte hop excluded');
+  assert.strictEqual(ctx.window.MC_meetsPathTrust('ABCD'), true, '2-byte hop trusted');
+  assert.strictEqual(ctx.window.MC_meetsPathTrust('ABCDEF'), true, '3-byte hop trusted');
+});
+
+test('#1784: MC_meetsPathTrust with threshold 3 (strictest)', () => {
+  const ctx = makeSandbox();
+  load(ctx, 'public/hop-filter.js');
+  ctx.window.PATH_TRUST = 3;
+  assert.strictEqual(ctx.window.MC_meetsPathTrust('AB'), false, '1-byte excluded');
+  assert.strictEqual(ctx.window.MC_meetsPathTrust('ABCD'), false, '2-byte excluded');
+  assert.strictEqual(ctx.window.MC_meetsPathTrust('ABCDEF'), true, '3-byte trusted');
+});
+
+test('#1784: MC_pathBelowTrust all-1-byte path at threshold 2', () => {
+  const ctx = makeSandbox();
+  load(ctx, 'public/hop-filter.js');
+  ctx.window.PATH_TRUST = 2;
+  assert.strictEqual(ctx.window.MC_pathBelowTrust(['AB', '12']), true,
+    'all-1-byte path must be below trust');
+});
+
+test('#1784: MC_pathBelowTrust mixed path at threshold 2', () => {
+  const ctx = makeSandbox();
+  load(ctx, 'public/hop-filter.js');
+  ctx.window.PATH_TRUST = 2;
+  assert.strictEqual(ctx.window.MC_pathBelowTrust(['AB', 'CDEF']), false,
+    'mixed 1-byte/2-byte path must NOT be below trust');
+});
+
+test('#1784: MC_pathBelowTrust at threshold 1 (trust-all)', () => {
+  const ctx = makeSandbox();
+  load(ctx, 'public/hop-filter.js');
+  ctx.window.PATH_TRUST = 1;
+  assert.strictEqual(ctx.window.MC_pathBelowTrust(['AB']), false,
+    'no path below trust at threshold 1');
+});
+
+test('#1784: empty/null hops are not below trust', () => {
+  const ctx = makeSandbox();
+  load(ctx, 'public/hop-filter.js');
+  ctx.window.PATH_TRUST = 2;
+  assert.strictEqual(ctx.window.MC_pathBelowTrust(null), false, 'null → not below trust');
+  assert.strictEqual(ctx.window.MC_pathBelowTrust([]), false, 'empty → not below trust');
+});
+
+test('#1784: MC_meetsPathTrust handles null/undefined safely', () => {
+  const ctx = makeSandbox();
+  load(ctx, 'public/hop-filter.js');
+  ctx.window.PATH_TRUST = 2;
+  assert.strictEqual(ctx.window.MC_meetsPathTrust(null), false, 'null → false (byteLen 0 < 2)');
+  assert.strictEqual(ctx.window.MC_meetsPathTrust(undefined), false, 'undefined → false');
+  assert.strictEqual(ctx.window.MC_meetsPathTrust(''), false, 'empty string → false');
+});
+
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed > 0 ? 1 : 0);

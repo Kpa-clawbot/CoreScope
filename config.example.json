@@ -222,6 +222,10 @@
     "_comment": "How long (hours) before nodes show as degraded/silent. 'infra' = repeaters & rooms, 'node' = companions & others. relayActiveHours: a repeater is shown as 'actively relaying' if its pubkey appeared as a path hop in a non-advert packet within this window (issue #662).",
     "_comment_observerThresholds": "Observer health classification. Online: last_seen < observerOnlineMinutes ago. Stale: between Online and observerStaleMinutes. Offline: beyond observerStaleMinutes. Defaults 60 / 1440 (1h / 24h) match the node thresholds for consistency and eliminate flap on low-traffic / CDN-fronted instances (#1552). Operators who want the old aggressive 10-min Online threshold can set observerOnlineMinutes: 10."
   },
+  "pathTrust": {
+    "minHashBytesForMapping": 2,
+    "_comment_pathTrust": "Minimum path-hash prefix length, in bytes, trusted as mapping/topology evidence (issue #1784). MeshCore path hops are hashed pubkey prefixes of 1, 2, or 3 bytes (firmware hash_size = (pathByte>>6)+1); valid range is 1-3. Default 2 excludes 1-byte prefixes (256-value collision space) from mapping evidence — operator-confirmed to reduce false positives on denser meshes. Set to 1 for backward-compatible trust-all behavior. Set to 3 for the strictest mode (only 3-byte evidence trusted). This does not affect raw storage — packets/paths are always stored as received."
+  },
   "defaultRegion": "SJC",
   "mapDefaults": {
     "center": [
