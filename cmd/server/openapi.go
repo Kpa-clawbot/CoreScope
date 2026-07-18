@@ -80,7 +80,7 @@ func routeDescriptions() map[string]routeMeta {
 			QueryParams: []paramMeta{
 				{Name: "role", Description: "Filter by node role", Type: "string"},
 				{Name: "status", Description: "Filter by status (active/stale/offline)", Type: "string"},
-				{Name: "geoFilter", Description: "Overrides the deployment's geo_filter node-list default for this one request: \"1\" excludes nodes outside the configured geo_filter (unless foreign_advert-tagged), \"0\" returns every node regardless. Omitting it uses the deployment default — geo_filter applies to the node list unless config.json sets geoFilterExemptNodeList=true.", Type: "string"},
+				{Name: "geoFilter", Description: "Overrides the deployment's geo_filter node-list default for this one request: \"1\"/\"true\" excludes nodes outside the configured geo_filter (unless foreign_advert-tagged), \"0\"/\"false\" returns every node regardless. Any other value (including omitting it) uses the deployment default — geo_filter applies to the node list unless config.json sets geoFilterExemptNodeList=true.", Type: "string"},
 			}},
 		"GET /api/nodes/search":             {Summary: "Search nodes", Description: "Search nodes by name or public key prefix.", Tag: "nodes", QueryParams: []paramMeta{{Name: "q", Description: "Search query", Type: "string", Required: true}}},
 		"GET /api/nodes/bulk-health":        {Summary: "Bulk node health", Description: "Returns health status for all nodes in one call.", Tag: "nodes"},

@@ -4877,7 +4877,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         const relays = allNodes.filter(function(n) {
           return (n.role === 'repeater' || n.role === 'room') && (n.unscoped_relay_count_24h || 0) > 0;
         });
-        relays.sort(function(a, b) { return (b.unscoped_relay_count_24h || 0) - (a.unscoped_relay_count_24h || 0); });
+        relays.sort(function(a, b) { return Number(b.unscoped_relay_count_24h || 0) - Number(a.unscoped_relay_count_24h || 0); });
         const foreignCount = allNodes.filter(function(n) { return n.foreign; }).length;
 
         let body;
@@ -4909,9 +4909,13 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         // first. Only set going forward from when geo_filter was
         // configured — this list grows as nodes send their next ADVERT.
         const foreignNodes = allNodes.filter(function(n) { return n.foreign; });
-        foreignNodes.sort(function(a, b) {
-          return new Date(b.last_seen || 0) - new Date(a.last_seen || 0);
-        });
+        // Parse last_seen once per node (decorate-sort-undecorate) instead
+        // of twice per comparator call — cheap either way at this list
+        // size, but avoids the repeated Date() allocations on principle.
+        foreignNodes
+          .map(function(n) { return { n: n, t: new Date(n.last_seen || 0).getTime() }; })
+          .sort(function(a, b) { return b.t - a.t; })
+          .forEach(function(entry, i) { foreignNodes[i] = entry.n; });
         let foreignNodesBody;
         if (foreignNodes.length > 0) {
           const foreignRows = foreignNodes.map(function(n) {

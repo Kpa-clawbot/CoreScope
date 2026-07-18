@@ -1440,8 +1440,12 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	// tagging (and the explicit prune-geo-filter admin flow) are
 	// unaffected either way — this only gates the passive declutter view.
 	applyGeoFilter := !s.cfg.GeoFilterExemptNodeList
-	if v := q.Get("geoFilter"); v != "" {
-		applyGeoFilter = v == "1"
+	switch q.Get("geoFilter") {
+	case "1", "true":
+		applyGeoFilter = true
+	case "0", "false":
+		applyGeoFilter = false
+		// Any other value (including absent) falls through to the deployment default.
 	}
 	if s.cfg.GeoFilter != nil && applyGeoFilter {
 		filtered := nodes[:0]

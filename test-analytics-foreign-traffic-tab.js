@@ -47,7 +47,7 @@ function makeSandbox() {
     console, Date, Infinity, Math, Array, Object, String, Number, JSON, RegExp,
     Error, TypeError, parseInt, parseFloat, isNaN, isFinite,
     encodeURIComponent, decodeURIComponent,
-    setTimeout: () => {}, clearTimeout: () => {}, setInterval: () => {}, clearInterval: () => {},
+    setTimeout: () => {}, clearTimeout: () => {},
     fetch: () => Promise.resolve({ json: () => Promise.resolve({}) }),
     performance: { now: () => Date.now() },
     localStorage: (() => { const s = {}; return { getItem: k => s[k] || null, setItem: (k, v) => { s[k] = String(v); }, removeItem: k => { delete s[k]; } }; })(),
@@ -58,6 +58,26 @@ function makeSandbox() {
     addEventListener: () => {},
     dispatchEvent: () => {},
     requestAnimationFrame: (cb) => setTimeout(cb, 0),
+  };
+  // Spies (not just no-ops) so tests can verify a timer that was really
+  // registered gets really cleared, instead of only asserting stop()
+  // doesn't throw — a `function stop(){}` no-op would pass that alone.
+  // Defined as closures (not object methods) so they work under the
+  // sandboxed code's 'use strict', where a bare `setInterval(...)` call
+  // has `this === undefined`.
+  let nextIntervalId = 1;
+  const liveIntervalIds = new Set();
+  const clearedIntervalIds = [];
+  ctx.__liveIntervalIds = liveIntervalIds;
+  ctx.__clearedIntervalIds = clearedIntervalIds;
+  ctx.setInterval = function () {
+    const id = nextIntervalId++;
+    liveIntervalIds.add(id);
+    return id;
+  };
+  ctx.clearInterval = function (id) {
+    liveIntervalIds.delete(id);
+    clearedIntervalIds.push(id);
   };
   vm.createContext(ctx);
   return ctx;
@@ -191,15 +211,26 @@ function fakeEl() {
     assert.ok(el.innerHTML.includes('None yet'), 'placeholder message should be shown when no node is foreign-flagged');
   });
 
-  await testAsync('a stop-refresh hook is exported and safe to call repeatedly (idempotent)', async () => {
+  await testAsync('rendering registers a real interval, and stop() actually clears it (not a no-op)', async () => {
     const ctx = makeAnalyticsSandbox([]);
     const stop = ctx.window._analyticsStopForeignTrafficRefresh;
     assert.strictEqual(typeof stop, 'function', '_stopForeignTrafficRefresh must be exported for testing/cleanup');
-    // Before any render, and after — must not throw either way.
+
+    // Calling stop() before any render must not throw (no timer registered yet).
     stop();
+    assert.strictEqual(ctx.__clearedIntervalIds.length, 0, 'stop() before any render should not call clearInterval at all');
+
     await ctx.window._analyticsRenderForeignTrafficTab(fakeEl());
+    assert.strictEqual(ctx.__liveIntervalIds.size, 1, 'render should register exactly one live interval');
+    const [registeredId] = ctx.__liveIntervalIds;
+
     stop();
+    assert.strictEqual(ctx.__liveIntervalIds.size, 0, 'stop() should leave zero live intervals');
+    assert.deepStrictEqual(ctx.__clearedIntervalIds, [registeredId], 'stop() should call clearInterval with the exact id that render registered');
+
+    // Idempotent: calling stop() again with nothing live must not clear anything a second time.
     stop();
+    assert.deepStrictEqual(ctx.__clearedIntervalIds, [registeredId], 'a second stop() call must not clear anything again — the timer reference should already be null');
   });
 
   console.log('\n════════════════════════════════════════');

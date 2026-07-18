@@ -83,6 +83,22 @@ func TestHandleNodes_GeoFilterExcludedByDefault(t *testing.T) {
 		}
 	})
 
+	t.Run("geoFilter=true/false are accepted synonyms for 1/0", func(t *testing.T) {
+		if !get("&geoFilter=false")["OutsideUntagged"] {
+			t.Error("expected OutsideUntagged to be present with geoFilter=false")
+		}
+		if get("&geoFilter=true")["OutsideUntagged"] {
+			t.Error("expected OutsideUntagged to be excluded with geoFilter=true")
+		}
+	})
+
+	t.Run("an unrecognized geoFilter value falls back to the deployment default instead of silently disabling", func(t *testing.T) {
+		got := get("&geoFilter=yes")
+		if got["OutsideUntagged"] {
+			t.Error("expected geoFilter=yes (not a recognized value) to fall back to the default (filtered), not silently disable filtering")
+		}
+	})
+
 	t.Run("GeoFilterExemptNodeList=true makes the default request return everything, without needing ?geoFilter=0", func(t *testing.T) {
 		srv.cfg.GeoFilterExemptNodeList = true
 		defer func() { srv.cfg.GeoFilterExemptNodeList = false }()
