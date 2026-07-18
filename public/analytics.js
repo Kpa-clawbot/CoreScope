@@ -4484,6 +4484,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
           }).join('') +
         '</div>' +
         '<div id="scopes-cards" class="stats-grid" style="margin-bottom:16px"></div>' +
+        '<div id="scopes-channel-messages" style="margin-bottom:16px"></div>' +
         '<div class="text-center text-muted" id="scopes-loading" style="padding:20px">Loading scope stats…</div>' +
         '<table class="data-table analytics-table" style="margin-bottom:8px">' +
           '<thead><tr><th>Region</th><th>Messages</th><th>% of Scoped</th></tr></thead>' +
@@ -4552,6 +4553,36 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
             (c.note ? '<div class="stat-note text-muted" style="font-size:11px">' + c.note + '</div>' : '') +
             '</div>';
         }).join('');
+      }
+
+      // Channel-messages-only breakdown: same scoped/unscoped/unknown
+      // question as the cards above, but restricted to payload_type=5
+      // (channel chat) — most channel traffic is plain FLOOD, so this can
+      // read very differently from the all-traffic numbers above.
+      var chanEl = document.getElementById('scopes-channel-messages');
+      if (chanEl) {
+        var cm = d.channelMessages;
+        if (cm && cm.totalMessages > 0) {
+          var cmOverall = cm.scoped + cm.unscoped;
+          chanEl.innerHTML =
+            '<h4 style="margin:0 0 4px">Channel Messages</h4>' +
+            '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Same scoped/unscoped/unknown breakdown, restricted to channel chat messages only.</p>' +
+            '<div class="stats-grid">' +
+            [
+              { label: 'Total Messages', value: cm.totalMessages.toLocaleString(), note: null },
+              { label: 'Scoped', value: cm.scoped.toLocaleString(), note: pct(cm.scoped, cmOverall) + ' of channel messages' },
+              { label: 'Unscoped', value: cm.unscoped.toLocaleString(), note: pct(cm.unscoped, cmOverall) + ' of channel messages' },
+              { label: 'Unknown Scope', value: cm.unknownScope.toLocaleString(), note: pct(cm.unknownScope, cm.scoped) + ' of scoped' },
+            ].map(function(c) {
+              return '<div class="stat-card"><div class="stat-value">' + c.value + '</div>' +
+                '<div class="stat-label">' + c.label + '</div>' +
+                (c.note ? '<div class="stat-note text-muted" style="font-size:11px">' + c.note + '</div>' : '') +
+                '</div>';
+            }).join('') +
+            '</div>';
+        } else {
+          chanEl.innerHTML = '';
+        }
       }
 
       // Per-region table

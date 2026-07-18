@@ -102,6 +102,19 @@ type ScopeStatsSummary struct {
 	UnknownScope   int `json:"unknownScope"`
 }
 
+// ChannelScopeStats answers a narrower question than ScopeStatsSummary:
+// of channel chat messages specifically (payload_type=5 / GRP_TXT), how
+// many actually carry a resolvable region scope vs none vs unresolved.
+// TotalMessages covers ALL route types (unlike ScopeStatsSummary's
+// TransportTotal, which only counts route_type 0/3) since most channel
+// chat is plain FLOOD, not transport-scoped.
+type ChannelScopeStats struct {
+	TotalMessages int `json:"totalMessages"`
+	Scoped        int `json:"scoped"`
+	Unscoped      int `json:"unscoped"`
+	UnknownScope  int `json:"unknownScope"`
+}
+
 type ScopeRegionCount struct {
 	Name  string `json:"name"`
 	Count int    `json:"count"`
@@ -137,6 +150,10 @@ type ScopeStatsResponse struct {
 	// running that region themselves, not just relaying someone else's
 	// scoped traffic. All-time, like RepeatersByRegion.
 	OriginatingNodesByRegion []ScopeRegionRepeaters `json:"originatingNodesByRegion,omitempty"`
+	// ChannelMessages narrows the same scoped/unscoped/unknown question to
+	// channel chat specifically (payload_type=5), window-scoped like
+	// Summary above — see ChannelScopeStats doc.
+	ChannelMessages *ChannelScopeStats `json:"channelMessages,omitempty"`
 }
 
 type RepeaterRef struct {

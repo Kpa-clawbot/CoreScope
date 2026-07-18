@@ -3581,6 +3581,10 @@ func (s *Server) handleScopeStats(w http.ResponseWriter, r *http.Request) {
 		resp.OriginatingNodesByRegion = originating
 	}
 
+	if chanStats, err := s.db.GetChannelMessageScopeStats(window); err == nil {
+		resp.ChannelMessages = chanStats
+	}
+
 	s.scopeStatsMu.Lock()
 	if s.scopeStatsCache == nil {
 		s.scopeStatsCache = make(map[string]*ScopeStatsResponse)

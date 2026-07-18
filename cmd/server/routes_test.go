@@ -4244,6 +4244,67 @@ func TestHandleScopeStats(t *testing.T) {
 	if resp.TimeSeries == nil {
 		t.Error("timeSeries is nil")
 	}
+	// All 6 seed rows above are payload_type=5 (channel messages) — same
+	// fixture, so ChannelMessages should mirror Summary exactly here.
+	if resp.ChannelMessages == nil {
+		t.Fatal("channelMessages is nil")
+	}
+	if resp.ChannelMessages.TotalMessages != 6 {
+		t.Errorf("channelMessages.totalMessages = %d, want 6", resp.ChannelMessages.TotalMessages)
+	}
+	if resp.ChannelMessages.Scoped != 3 {
+		t.Errorf("channelMessages.scoped = %d, want 3", resp.ChannelMessages.Scoped)
+	}
+	if resp.ChannelMessages.Unscoped != 3 {
+		t.Errorf("channelMessages.unscoped = %d, want 3", resp.ChannelMessages.Unscoped)
+	}
+	if resp.ChannelMessages.UnknownScope != 1 {
+		t.Errorf("channelMessages.unknownScope = %d, want 1", resp.ChannelMessages.UnknownScope)
+	}
+}
+
+// TestHandleScopeStats_ChannelMessagesExcludesOtherPayloadTypes verifies the
+// payload_type=5 filter: a non-channel transmission (e.g. an ADVERT) with a
+// scope must not be counted in ChannelMessages even though it affects the
+// all-traffic Summary.
+func TestHandleScopeStats_ChannelMessagesExcludesOtherPayloadTypes(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+		t.Fatalf("add scope_name column: %v", err)
+	}
+	srv.db.hasScopeName = true
+	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
+		t.Fatalf("clear transmissions: %v", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := srv.db.conn.Exec(
+		`INSERT INTO transmissions (raw_hex,hash,first_seen,route_type,payload_type,scope_name) VALUES (?,?,?,?,?,?)`,
+		"aa", "chan1", now, 0, 5, "#belgium",
+	); err != nil {
+		t.Fatalf("seed channel row: %v", err)
+	}
+	if _, err := srv.db.conn.Exec(
+		`INSERT INTO transmissions (raw_hex,hash,first_seen,route_type,payload_type,scope_name) VALUES (?,?,?,?,?,?)`,
+		"bb", "advert1", now, 0, 4, "#belgium",
+	); err != nil {
+		t.Fatalf("seed advert row: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/scope-stats?window=24h", nil)
+	w := httptest.NewRecorder()
+	srv.handleScopeStats(w, req)
+
+	var resp ScopeStatsResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Summary.Scoped != 2 {
+		t.Errorf("Summary.Scoped = %d, want 2 (both rows)", resp.Summary.Scoped)
+	}
+	if resp.ChannelMessages == nil || resp.ChannelMessages.TotalMessages != 1 || resp.ChannelMessages.Scoped != 1 {
+		t.Errorf("channelMessages = %+v, want totalMessages=1 scoped=1 (advert excluded)", resp.ChannelMessages)
+	}
 }
 
 // TestHandleScopeStats_UnusedRegions verifies the region-utilization diff:

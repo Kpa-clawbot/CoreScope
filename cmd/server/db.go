@@ -2961,6 +2961,57 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 	return resp, nil
 }
 
+// GetChannelMessageScopeStats narrows the scoped/unscoped/unknown question
+// to channel chat specifically (payload_type=5), for the given window.
+// Unlike GetScopeStats' TransportTotal (route_type 0/3 only), TotalMessages
+// here covers ALL route types — most channel chat is plain FLOOD, so
+// restricting to transport routes would answer a different question than
+// "how many of our channel messages are scoped".
+func (db *DB) GetChannelMessageScopeStats(window string) (*ChannelScopeStats, error) {
+	if !db.hasScopeName {
+		return nil, fmt.Errorf("scope_name column not present — run ingestor to apply migrations")
+	}
+
+	var since string
+	switch window {
+	case "1h":
+		since = time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+	case "7d":
+		since = time.Now().Add(-7 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	default:
+		since = time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+	}
+
+	stats := &ChannelScopeStats{}
+	row := db.conn.QueryRow(`
+		SELECT
+			COUNT(*) AS transport_total,
+			COUNT(scope_name) AS scoped,
+			COALESCE(SUM(CASE WHEN scope_name IS NULL THEN 1 ELSE 0 END), 0) AS unscoped,
+			COALESCE(SUM(CASE WHEN scope_name = '' THEN 1 ELSE 0 END), 0) AS unknown_scope
+		FROM transmissions
+		WHERE payload_type = 5 AND `+routeTypeTransportSQL+` AND first_seen >= ?
+	`, since)
+	var transportTotal int
+	if err := row.Scan(&transportTotal, &stats.Scoped, &stats.Unscoped, &stats.UnknownScope); err != nil {
+		return nil, fmt.Errorf("channel scope summary query: %w", err)
+	}
+
+	// Non-transport channel messages (plain FLOOD/DIRECT) never carry a
+	// scope per MeshCore protocol — fold into Unscoped, mirroring #1838.
+	var nonTransportCount int
+	if err := db.conn.QueryRow(`
+		SELECT COUNT(*) FROM transmissions
+		WHERE payload_type = 5 AND `+routeTypeNonTransportSQL+` AND first_seen >= ?
+	`, since).Scan(&nonTransportCount); err != nil {
+		return nil, fmt.Errorf("channel scope non-transport count query: %w", err)
+	}
+	stats.Unscoped += nonTransportCount
+	stats.TotalMessages = transportTotal + nonTransportCount
+
+	return stats, nil
+}
+
 // GetMatchedRegionNames returns the set of scope_name values that have ever
 // matched at least one transmission still in retention (NULL and empty-string
 // "unknown" rows are excluded). Used to diff against the operator's
