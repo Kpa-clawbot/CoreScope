@@ -121,6 +121,7 @@
             <button class="tab-btn" data-tab="subpaths">Route Patterns</button>
             <button class="tab-btn" data-tab="nodes">Nodes</button>
             <button class="tab-btn" data-tab="my-repeaters">My Repeaters</button>
+            <button class="tab-btn" data-tab="repeater-metrics">Repeater Metrics</button>
             <button class="tab-btn" data-tab="distance">Distance</button>
             <button class="tab-btn" data-tab="neighbor-graph">Neighbor Graph</button>
             <button class="tab-btn" data-tab="rf-health">RF Health</button>
@@ -139,7 +140,7 @@
       </div>`;
 
     // Tabs where the area filter is meaningful (transmitter GPS attribution)
-    const AREA_FILTER_TABS = new Set(['overview', 'rf', 'topology', 'hashsizes', 'collisions', 'nodes', 'my-repeaters', 'clock-health']);
+    const AREA_FILTER_TABS = new Set(['overview', 'rf', 'topology', 'hashsizes', 'collisions', 'nodes', 'my-repeaters', 'repeater-metrics', 'clock-health']);
 
     function setAreaFilterVisibility(tab) {
       const el = document.getElementById('analyticsAreaFilter');
@@ -286,6 +287,7 @@
       case 'subpaths': await renderSubpaths(el); break;
       case 'nodes': await renderNodesTab(el); break;
       case 'my-repeaters': await renderMyRepeatersTab(el); break;
+      case 'repeater-metrics': await renderRepeaterMetricsTab(el); break;
       case 'distance': await renderDistanceTab(el); break;
       case 'neighbor-graph': await renderNeighborGraphTab(el); break;
       case 'rf-health': await renderRFHealthTab(el); break;
@@ -2593,6 +2595,243 @@
     }
   }
   // === MY REPEATERS BLOCK END (test harness slices the renderer block to here) ===
+  // ===================== REPEATER METRIC SCATTER =====================
+  // Each point is a repeater (or room); the axes are two selectable metrics
+  // that /api/nodes already attaches to repeater/room rows — the two #672
+  // usefulness axes that exist today (traffic_share_score, bridge_score)
+  // plus relay activity (relay_count_1h/24h) and advert_count. This view
+  // only PLOTS those metrics; nothing is computed client-side.
+  const REPEATER_METRIC_AXES = [
+    { key: 'traffic',  label: 'Traffic share', score: true,  get: p => p.traffic },
+    { key: 'bridge',   label: 'Bridge score',  score: true,  get: p => p.bridge },
+    { key: 'relay1h',  label: 'Relays (1h)',   score: false, get: p => p.relay1h },
+    { key: 'relay24h', label: 'Relays (24h)',  score: false, get: p => p.relay24h },
+    { key: 'adverts',  label: 'Adverts',       score: false, get: p => p.adverts },
+  ];
+
+  // _niceCeil rounds v up to a "nice" 1/2/5 x 10^n value for an axis ceiling
+  // so the plot fills its area instead of squashing tiny scores against 0.
+  function _niceCeil(v) {
+    if (!(v > 0)) return 1;
+    const pow = Math.pow(10, Math.floor(Math.log10(v)));
+    const f = v / pow;
+    const nice = f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10;
+    return nice * pow;
+  }
+
+  // Scores (0..1) render as percentages; count axes render as integers
+  // (keyed on axis kind, not on whether a given tick value happens to be
+  // whole — niceCeil maxima don't always divide into 5 integer steps).
+  function _axisFmt(axis, v) {
+    if (v == null) return '—';
+    if (!axis.score) return String(Math.round(v));
+    // Drop the trailing ".0" on whole-percent gridlines (0%, 20%, 40%); keep a
+    // decimal only when the value actually needs it.
+    const pct = v * 100;
+    return (Number.isInteger(pct) ? pct.toFixed(0) : pct.toFixed(1)) + '%';
+  }
+
+  // Build a concrete axis (domain [0, niceCeil(max)]) from a registry entry and
+  // a precomputed data max — factored out so draw() can resolve both axes in a
+  // SINGLE pass over the points instead of one full pass per axis.
+  function _axisFromMax(axis, max) {
+    return { key: axis.key, label: axis.label, score: axis.score, get: axis.get, min: 0, max: _niceCeil(max) };
+  }
+
+  // Resolve a metric key to a concrete axis with a domain computed from the
+  // points actually being plotted. An unknown key falls back to the first axis —
+  // the single source of axis-key validation (callers need not pre-check).
+  function _resolveAxis(axisKey, points) {
+    const axis = REPEATER_METRIC_AXES.find(a => a.key === axisKey) || REPEATER_METRIC_AXES[0];
+    let max = 0;
+    points.forEach(p => { const v = axis.get(p); if (v != null && v > max) max = v; });
+    return _axisFromMax(axis, max);
+  }
+
+  // Map /api/nodes rows to plottable points. Pure and factored out of
+  // renderRepeaterMetricsTab so the repeater/room filter and the fallback
+  // chains (traffic_share_score → usefulness_score → null; name → pubkey
+  // prefix → '?') are unit-testable (#1760 review).
+  function _toScatterPoints(nodes, favs) {
+    return nodes
+      .filter(n => n.role === 'repeater' || n.role === 'room')
+      .map(n => ({
+        pk: n.public_key,
+        name: n.name || (n.public_key ? n.public_key.slice(0, 12) : '?'),
+        role: n.role,
+        fav: favs.has(n.public_key),
+        // #1456: prefer traffic_share_score, fall back to usefulness_score.
+        traffic: n.traffic_share_score != null ? n.traffic_share_score : (n.usefulness_score != null ? n.usefulness_score : null),
+        bridge: n.bridge_score != null ? n.bridge_score : null,
+        relay1h: n.relay_count_1h != null ? n.relay_count_1h : null,
+        relay24h: n.relay_count_24h != null ? n.relay_count_24h : null,
+        adverts: n.advert_count != null ? n.advert_count : null,
+      }));
+  }
+
+  function renderMetricScatter(points, xAxis, yAxis) {
+    const w = 620, h = 380, pad = 60;
+    const plotW = w - pad * 2, plotH = h - pad * 2;
+    const xOf = v => pad + (v - xAxis.min) / (xAxis.max - xAxis.min || 1) * plotW;
+    const yOf = v => h - pad - (v - yAxis.min) / (yAxis.max - yAxis.min || 1) * plotH;
+    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:420px" role="img" aria-label="Scatter plot of repeaters: ${esc(xAxis.label)} versus ${esc(yAxis.label)}"><title>Repeater metric scatter: ${esc(xAxis.label)} (x) vs ${esc(yAxis.label)} (y)</title>`;
+    // Gridlines + tick labels (5 steps per axis).
+    for (let i = 0; i <= 5; i++) {
+      const gx = pad + plotW * i / 5;
+      const gy = h - pad - plotH * i / 5;
+      const xv = xAxis.min + (xAxis.max - xAxis.min) * i / 5;
+      const yv = yAxis.min + (yAxis.max - yAxis.min) * i / 5;
+      svg += `<line x1="${gx}" y1="${pad}" x2="${gx}" y2="${h-pad}" stroke="var(--border)" stroke-dasharray="2" opacity="0.5"/>`;
+      svg += `<line x1="${pad}" y1="${gy}" x2="${w-pad}" y2="${gy}" stroke="var(--border)" stroke-dasharray="2" opacity="0.5"/>`;
+      svg += `<text x="${gx}" y="${h-pad+14}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${esc(_axisFmt(xAxis, xv))}</text>`;
+      svg += `<text x="${pad-6}" y="${gy+3}" text-anchor="end" font-size="9" fill="var(--text-muted)">${esc(_axisFmt(yAxis, yv))}</text>`;
+    }
+    // Axis lines + titles.
+    svg += `<line x1="${pad}" y1="${h-pad}" x2="${w-pad}" y2="${h-pad}" stroke="var(--text-muted)" stroke-width="0.75"/>`;
+    svg += `<line x1="${pad}" y1="${pad}" x2="${pad}" y2="${h-pad}" stroke="var(--text-muted)" stroke-width="0.75"/>`;
+    svg += `<text x="${pad + plotW/2}" y="${h-6}" text-anchor="middle" font-size="11" fill="var(--text-muted)">${esc(xAxis.label)}</text>`;
+    svg += `<text x="14" y="${pad + plotH/2}" text-anchor="middle" font-size="11" fill="var(--text-muted)" transform="rotate(-90,14,${pad + plotH/2})">${esc(yAxis.label)}</text>`;
+    // Only points with BOTH axis values present are plottable.
+    const plottable = points.filter(p => xAxis.get(p) != null && yAxis.get(p) != null);
+    if (!plottable.length) {
+      svg += `<text x="${pad + plotW / 2}" y="${pad + plotH / 2}" text-anchor="middle" font-size="12" fill="var(--text-muted)">No repeaters have values for both selected metrics.</text></svg>`;
+      return svg;
+    }
+    // Cap plotted points to keep the SVG snappy (~2000 stays smooth in a
+    // headless browser), but keep ALL favorites unconditionally and stride
+    // only the non-favorites into the remaining budget — so the legend's
+    // favorite count can never be a lie (#1760 review).
+    const POINT_CAP = 2000;
+    let sample = plottable;
+    if (plottable.length > POINT_CAP) {
+      let favs = plottable.filter(p => p.fav);
+      const others = plottable.filter(p => !p.fav);
+      // Favorites are kept ahead of non-favorites, but even they are strided
+      // if they ALONE exceed the cap — so a pathological favorite count can't
+      // blow past POINT_CAP (the "showing N of M" disclosure stays honest).
+      if (favs.length > POINT_CAP) {
+        favs = favs.filter((_, i) => i % Math.ceil(favs.length / POINT_CAP) === 0);
+      }
+      const budget = Math.max(0, POINT_CAP - favs.length);
+      const strided = (budget > 0 && others.length > budget)
+        ? others.filter((_, i) => i % Math.ceil(others.length / budget) === 0)
+        : others.slice(0, budget);
+      sample = favs.concat(strided);
+    }
+    // Sampling disclosure (graphical integrity): if we strided the points
+    // down, say so in-plot rather than silently hiding the rest.
+    if (sample.length < plottable.length) {
+      svg += `<text x="${w - pad}" y="${pad - 6}" text-anchor="end" font-size="9" fill="var(--text-muted)">showing ${sample.length} of ${plottable.length} points</text>`;
+    }
+    // Draw favorites last so their rings are never hidden behind other dots.
+    const ordered = sample.slice().sort((a, b) => (a.fav === b.fav ? 0 : a.fav ? 1 : -1));
+    // Favorite ring uses the neutral foreground colour, NOT a status colour:
+    // statusYellow means "degraded" elsewhere in the dashboard, so reusing it
+    // here would cross semantic wires.
+    const favColor = 'var(--text)';
+    ordered.forEach(p => {
+      const cx = xOf(xAxis.get(p)).toFixed(1);
+      const cy = yOf(yAxis.get(p)).toFixed(1);
+      const color = (window.ROLE_COLORS && window.ROLE_COLORS[p.role]) || 'var(--text-muted)';
+      // ' · ' separators, not '\n': SVG <title> tooltips collapse whitespace,
+      // so newlines would render as a run-on string.
+      const tip = `${p.name} · ${xAxis.label}: ${_axisFmt(xAxis, xAxis.get(p))} · ${yAxis.label}: ${_axisFmt(yAxis, yAxis.get(p))}`;
+      // tabindex="-1": with up to 2000 points we keep them clickable but out
+      // of the sequential keyboard tab order (the Nodes table is the
+      // keyboard-navigable surface for per-node drill-down).
+      svg += `<a href="#/nodes/${encodeURIComponent(p.pk)}/analytics" tabindex="-1"><title>${esc(tip)}</title>`;
+      if (p.fav) svg += `<circle cx="${cx}" cy="${cy}" r="5.5" fill="none" stroke="${favColor}" stroke-width="1.75"/>`;
+      svg += `<circle cx="${cx}" cy="${cy}" r="3" fill="${color}" opacity="0.8"/></a>`;
+    });
+    svg += '</svg>';
+    return svg;
+  }
+
+  async function renderRepeaterMetricsTab(el) {
+    el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Loading repeater metrics…</div>';
+    try {
+      const rq = RegionFilter.regionQueryString() + AreaFilter.areaQueryString();
+      const resp = await fetchAllNodes('&sortBy=lastSeen' + rq, { ttl: CLIENT_TTL.nodeList });
+      const nodes = resp.nodes || resp;
+      const favs = new Set(typeof getFavorites === 'function' ? getFavorites() : []);
+      const points = _toScatterPoints(nodes, favs);
+
+      if (!points.length) {
+        el.innerHTML = `<div class="analytics-section">
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-target"/></svg> Repeater Metric Scatter</h3>
+          <div class="text-muted" style="padding:24px">No repeater or room nodes in this view.</div>
+        </div>`;
+        return;
+      }
+
+      // Restore the last-picked axes (default Traffic share x Bridge score). A
+      // stale/unknown stored key is tolerated by _resolveAxis's own fallback
+      // (single validation path); the <select> then just shows its first option.
+      let xKey = localStorage.getItem('meshcore-repeater-scatter-x') || 'traffic';
+      let yKey = localStorage.getItem('meshcore-repeater-scatter-y') || 'bridge';
+      const opts = sel => REPEATER_METRIC_AXES.map(a => `<option value="${a.key}"${a.key === sel ? ' selected' : ''}>${esc(a.label)}</option>`).join('');
+
+      el.innerHTML = `
+        <div class="analytics-section">
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-target"/></svg> Repeater Metric Scatter</h3>
+          <p class="text-muted">Each point is a repeater or room. Pick two metrics to compare — colors follow node role, favorites are ringed. Click a point for its analytics.</p>
+          <p class="text-muted" style="font-size:12px;margin-top:-6px">Units — <strong>Traffic share</strong>: % of non-advert traffic relayed. <strong>Bridge score</strong>: 0–100% (network-normalized betweenness). <strong>Relays (1h/24h)</strong> and <strong>Adverts</strong>: packet counts. Axes auto-scale to the data.</p>
+          <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:center;margin-bottom:14px">
+            <label style="display:flex;gap:6px;align-items:center">X axis
+              <select id="metricScatterX" class="analytics-time-window-select" aria-label="X axis metric">${opts(xKey)}</select>
+            </label>
+            <label style="display:flex;gap:6px;align-items:center">Y axis
+              <select id="metricScatterY" class="analytics-time-window-select" aria-label="Y axis metric">${opts(yKey)}</select>
+            </label>
+            <span class="text-muted">${points.length} repeater${points.length === 1 ? '' : 's'}</span>
+          </div>
+          <div id="metricScatterPlot"></div>
+          <div id="metricScatterLegend" style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:12px"></div>
+        </div>`;
+
+      const plotEl = el.querySelector('#metricScatterPlot');
+      const legendEl = el.querySelector('#metricScatterLegend');
+      const xSel = el.querySelector('#metricScatterX');
+      const ySel = el.querySelector('#metricScatterY');
+
+      function draw() {
+        // Both axes share the same point set, so compute their maxima in one
+        // pass instead of a full pass per _resolveAxis call.
+        const xA = REPEATER_METRIC_AXES.find(a => a.key === xSel.value) || REPEATER_METRIC_AXES[0];
+        const yA = REPEATER_METRIC_AXES.find(a => a.key === ySel.value) || REPEATER_METRIC_AXES[0];
+        let xMax = 0, yMax = 0;
+        points.forEach(p => {
+          const xv = xA.get(p); if (xv != null && xv > xMax) xMax = xv;
+          const yv = yA.get(p); if (yv != null && yv > yMax) yMax = yv;
+        });
+        const xAxis = _axisFromMax(xA, xMax), yAxis = _axisFromMax(yA, yMax);
+        plotEl.innerHTML = renderMetricScatter(points, xAxis, yAxis);
+        // Legend: each role present, plus the favorite-ring marker.
+        const roles = Array.from(new Set(points.map(p => p.role)));
+        let lg = roles.map(r => {
+          const c = (window.ROLE_COLORS && window.ROLE_COLORS[r]) || 'var(--text-muted)';
+          return `<span style="display:inline-flex;gap:6px;align-items:center"><svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="4" fill="${c}"/></svg>${esc(r)}</span>`;
+        }).join('');
+        const favCount = points.filter(p => p.fav).length;
+        if (favCount) {
+          lg += `<span style="display:inline-flex;gap:6px;align-items:center"><svg width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="5" fill="none" stroke="var(--text)" stroke-width="1.75"/></svg>Favorite (${favCount})</span>`;
+        }
+        legendEl.innerHTML = lg;
+      }
+
+      // One wiring body for both axes — a behaviour change can't miss one
+      // of the two listeners (#1760 review).
+      const wireAxis = (sel, storageKey) => sel.addEventListener('change', () => {
+        try { localStorage.setItem(storageKey, sel.value); } catch (e) { /* ignore */ }
+        draw();
+      });
+      wireAxis(xSel, 'meshcore-repeater-scatter-x');
+      wireAxis(ySel, 'meshcore-repeater-scatter-y');
+      draw();
+    } catch (e) {
+      el.innerHTML = `<div style="padding:40px;text-align:center;color:#ff6b6b">Failed to load repeater metrics: ${esc(e.message)}</div>`;
+    }
+  }
 
   async function renderDistanceTab(el) {
     try {
