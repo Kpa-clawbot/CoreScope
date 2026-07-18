@@ -4692,20 +4692,26 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
       function renderRegionNodeGroups(elId, title, description, groups, unitLabel) {
         var el = document.getElementById(elId);
         if (!el) return;
-        if (!groups || !groups.length) { el.innerHTML = ''; return; }
-        var rows = groups.map(function(g) {
-          var links = g.repeaters.map(function(rp) {
-            return '<a href="#/nodes/' + encodeURIComponent(rp.publicKey) + '">' + esc(rp.name) + '</a>';
-          }).join(', ');
-          return '<details style="margin-bottom:6px">' +
-            '<summary style="cursor:pointer"><code>' + esc(g.region) + '</code> — ' + g.count.toLocaleString() + ' ' + unitLabel + (g.count === 1 ? '' : 's') + '</summary>' +
-            '<div class="text-muted" style="font-size:11px;margin-top:6px;margin-left:12px;max-height:200px;overflow-y:auto;line-height:1.8">' + links + '</div>' +
-            '</details>';
-        }).join('');
+        // Always show the heading — hiding the whole section when `groups`
+        // is empty (vs. showing an empty-state message) reads as "this
+        // feature doesn't exist" rather than "no data yet", which is
+        // especially confusing right after a restart while the neighbor
+        // graph + path resolution are still catching back up.
+        var body = (groups && groups.length)
+          ? groups.map(function(g) {
+              var links = g.repeaters.map(function(rp) {
+                return '<a href="#/nodes/' + encodeURIComponent(rp.publicKey) + '">' + esc(rp.name) + '</a>';
+              }).join(', ');
+              return '<details style="margin-bottom:6px">' +
+                '<summary style="cursor:pointer"><code>' + esc(g.region) + '</code> — ' + g.count.toLocaleString() + ' ' + unitLabel + (g.count === 1 ? '' : 's') + '</summary>' +
+                '<div class="text-muted" style="font-size:11px;margin-top:6px;margin-left:12px;max-height:200px;overflow-y:auto;line-height:1.8">' + links + '</div>' +
+                '</details>';
+            }).join('')
+          : '<p class="text-muted" style="font-size:0.85em">No data yet — path resolution catches up gradually as traffic flows; check back in a few minutes.</p>';
         el.innerHTML =
           '<h4 style="margin:0 0 4px">' + esc(title) + '</h4>' +
           '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">' + esc(description) + '</p>' +
-          rows;
+          body;
       }
 
       renderRegionNodeGroups('scopes-repeaters', 'Repeaters by Region',
@@ -4717,6 +4723,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
       var bridgeEl = document.getElementById('scopes-bridges');
       if (bridgeEl) {
         var bridges = d.bridgeRepeaters || [];
+        var bridgeBody;
         if (bridges.length > 0) {
           var bridgeRows = bridges.map(function(b) {
             var regionList = b.regions.map(function(r) { return '<code>' + esc(r) + '</code>'; }).join(', ');
@@ -4726,18 +4733,22 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
               '<td>' + regionList + '</td>' +
               '</tr>';
           }).join('');
-          bridgeEl.innerHTML =
-            '<h4 style="margin:0 0 4px">Bridge Repeaters</h4>' +
-            '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">' +
-              'All-time — repeaters that have relayed traffic for more than one region. These connect otherwise-separate regional communities; losing one can split the mesh\'s regional coverage.' +
-            '</p>' +
-            '<table class="data-table analytics-table">' +
-              '<thead><tr><th>Repeater</th><th># Regions</th><th>Regions</th></tr></thead>' +
-              '<tbody>' + bridgeRows + '</tbody>' +
+          bridgeBody = '<table class="data-table analytics-table">' +
+            '<thead><tr><th>Repeater</th><th># Regions</th><th>Regions</th></tr></thead>' +
+            '<tbody>' + bridgeRows + '</tbody>' +
             '</table>';
         } else {
-          bridgeEl.innerHTML = '';
+          // Needs a repeater confirmed in 2+ regions — a stricter bar than
+          // "Repeaters by Region" above, so it's normal for this to stay
+          // empty longer, especially right after a restart.
+          bridgeBody = '<p class="text-muted" style="font-size:0.85em">No bridge repeaters found yet — this needs a repeater confirmed in 2+ different regions, which takes longer to accumulate than the single-region data above.</p>';
         }
+        bridgeEl.innerHTML =
+          '<h4 style="margin:0 0 4px">Bridge Repeaters</h4>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">' +
+            'All-time — repeaters that have relayed traffic for more than one region. These connect otherwise-separate regional communities; losing one can split the mesh\'s regional coverage.' +
+          '</p>' +
+          bridgeBody;
       }
 
       renderRegionNodeGroups('scopes-origin-nodes', 'Nodes Running This Region',
