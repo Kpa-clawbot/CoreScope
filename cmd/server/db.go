@@ -2196,6 +2196,36 @@ func (db *DB) GetRepeaterNamesByKeys(keys []string) map[string]string {
 	return result
 }
 
+// GetNodesByDefaultScope groups nodes by their own configured region
+// (nodes.default_scope, #899) — the region a node's ADVERTs actually carry,
+// as opposed to GetRepeaterNamesByKeys/TransportedScopes which is about
+// repeaters *relaying* traffic scoped by other senders. Distinguishes
+// "runs this region" from "has carried this region's traffic".
+func (db *DB) GetNodesByDefaultScope() (map[string][]RepeaterRef, error) {
+	result := make(map[string][]RepeaterRef)
+	if !db.hasDefaultScope {
+		return result, nil
+	}
+	rows, err := db.conn.Query(`SELECT public_key, name, default_scope FROM nodes WHERE default_scope IS NOT NULL AND default_scope != ''`)
+	if err != nil {
+		return nil, fmt.Errorf("nodes by default_scope query: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var pk, scope string
+		var name sql.NullString
+		if rows.Scan(&pk, &name, &scope) != nil {
+			continue
+		}
+		displayName := pk
+		if name.Valid && name.String != "" {
+			displayName = name.String
+		}
+		result[scope] = append(result[scope], RepeaterRef{Name: displayName, PublicKey: strings.ToLower(pk)})
+	}
+	return result, rows.Err()
+}
+
 // QueryMultiNodePackets returns transmissions referencing any of the given pubkeys.
 func (db *DB) QueryMultiNodePackets(pubkeys []string, limit, offset int, order, since, until string) (*PacketResult, error) {
 	if len(pubkeys) == 0 {

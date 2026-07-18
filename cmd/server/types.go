@@ -132,6 +132,11 @@ type ScopeStatsResponse struct {
 	// 5-minute-cached bulk relay-info map the Nodes page uses. Omitted
 	// when the in-memory store isn't available (DB-only mode).
 	RepeatersByRegion []ScopeRegionRepeaters `json:"repeatersByRegion,omitempty"`
+	// OriginatingNodesByRegion is the complementary breakdown: nodes whose
+	// OWN default_scope (#899) is this region — i.e. actually configured/
+	// running that region themselves, not just relaying someone else's
+	// scoped traffic. All-time, like RepeatersByRegion.
+	OriginatingNodesByRegion []ScopeRegionRepeaters `json:"originatingNodesByRegion,omitempty"`
 }
 
 type RepeaterRef struct {

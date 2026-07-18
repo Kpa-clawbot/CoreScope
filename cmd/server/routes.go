@@ -3571,6 +3571,16 @@ func (s *Server) handleScopeStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if byScope, err := s.db.GetNodesByDefaultScope(); err == nil && len(byScope) > 0 {
+		originating := make([]ScopeRegionRepeaters, 0, len(byScope))
+		for region, refs := range byScope {
+			sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
+			originating = append(originating, ScopeRegionRepeaters{Region: region, Count: len(refs), Repeaters: refs})
+		}
+		sort.Slice(originating, func(i, j int) bool { return originating[i].Count > originating[j].Count })
+		resp.OriginatingNodesByRegion = originating
+	}
+
 	s.scopeStatsMu.Lock()
 	if s.scopeStatsCache == nil {
 		s.scopeStatsCache = make(map[string]*ScopeStatsResponse)

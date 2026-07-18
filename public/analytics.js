@@ -4491,7 +4491,8 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
         '</table>' +
         '<div id="scopes-chart"></div>' +
         '<div id="scopes-utilization" style="margin-top:16px"></div>' +
-        '<div id="scopes-repeaters" style="margin-top:16px"></div>';
+        '<div id="scopes-repeaters" style="margin-top:16px"></div>' +
+        '<div id="scopes-origin-nodes" style="margin-top:16px"></div>';
 
       // Attach window-button click listeners (once)
       el.querySelectorAll('[data-win]').forEach(function(btn) {
@@ -4651,33 +4652,37 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
         }
       }
 
-      // Repeaters by region: all-time (not window-scoped), which repeaters
-      // have relayed traffic carrying each scope. Sourced from the same
-      // 5-min-cached bulk relay-info map the Nodes page uses, so this is
-      // cheap — no new per-request computation.
-      var repEl = document.getElementById('scopes-repeaters');
-      if (repEl) {
-        var byRegion = d.repeatersByRegion || [];
-        if (byRegion.length > 0) {
-          var rows = byRegion.map(function(rbr) {
-            var links = rbr.repeaters.map(function(rp) {
-              return '<a href="#/nodes/' + encodeURIComponent(rp.publicKey) + '">' + esc(rp.name) + '</a>';
-            }).join(', ');
-            return '<details style="margin-bottom:6px">' +
-              '<summary style="cursor:pointer"><code>' + esc(rbr.region) + '</code> — ' + rbr.count.toLocaleString() + ' repeater' + (rbr.count === 1 ? '' : 's') + '</summary>' +
-              '<div class="text-muted" style="font-size:11px;margin-top:6px;margin-left:12px;max-height:200px;overflow-y:auto;line-height:1.8">' + links + '</div>' +
-              '</details>';
-          }).join('');
-          repEl.innerHTML =
-            '<h4 style="margin:0 0 4px">Repeaters by Region</h4>' +
-            '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">' +
-              'All-time, not limited to the window above — which repeaters have relayed traffic carrying each region scope. A region carried by only 1 repeater is a single point of failure for that area.' +
-            '</p>' +
-            rows;
-        } else {
-          repEl.innerHTML = '';
-        }
+      // Renders a "<region> -> [node links]" breakdown into a container.
+      // Shared by "Repeaters by Region" (transported_scopes — who relayed
+      // traffic for this region) and "Nodes Running This Region"
+      // (default_scope — who is actually configured with it). Both are
+      // all-time, not limited to the window selector above.
+      function renderRegionNodeGroups(elId, title, description, groups, unitLabel) {
+        var el = document.getElementById(elId);
+        if (!el) return;
+        if (!groups || !groups.length) { el.innerHTML = ''; return; }
+        var rows = groups.map(function(g) {
+          var links = g.repeaters.map(function(rp) {
+            return '<a href="#/nodes/' + encodeURIComponent(rp.publicKey) + '">' + esc(rp.name) + '</a>';
+          }).join(', ');
+          return '<details style="margin-bottom:6px">' +
+            '<summary style="cursor:pointer"><code>' + esc(g.region) + '</code> — ' + g.count.toLocaleString() + ' ' + unitLabel + (g.count === 1 ? '' : 's') + '</summary>' +
+            '<div class="text-muted" style="font-size:11px;margin-top:6px;margin-left:12px;max-height:200px;overflow-y:auto;line-height:1.8">' + links + '</div>' +
+            '</details>';
+        }).join('');
+        el.innerHTML =
+          '<h4 style="margin:0 0 4px">' + esc(title) + '</h4>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">' + esc(description) + '</p>' +
+          rows;
       }
+
+      renderRegionNodeGroups('scopes-repeaters', 'Repeaters by Region',
+        'All-time, not limited to the window above — which repeaters have relayed traffic carrying each region scope. A region carried by only 1 repeater is a single point of failure for that area.',
+        d.repeatersByRegion, 'repeater');
+
+      renderRegionNodeGroups('scopes-origin-nodes', 'Nodes Running This Region',
+        'All-time — nodes whose OWN configured scope is this region (not just relaying it for others). This is a much smaller, more specific set than "Repeaters by Region" above.',
+        d.originatingNodesByRegion, 'node');
     }
 
     load(selectedWindow);
