@@ -35,6 +35,15 @@ const neighborBuilderSlowTickThreshold = 5 * time.Second
 // independent of the server package.
 const payloadADVERT = 0x04
 
+// payloadAnonReq mirrors PayloadANON_REQ in cmd/server/decoder.go (#1777).
+// ANON_REQ carries the sender's full Ed25519 ephemeral pubkey
+// (decoder.go's EphemeralPubKey field), unlike REQ/RESP/PATH/TXT which
+// only carry a 1-byte truncated hash of the originator in src/dst — not
+// enough to seed a trustworthy neighbor edge (~1/256 collision odds).
+// ANON_REQ is therefore treated like ADVERT for the originator↔path[0]
+// edge; other non-ADVERT types are deliberately excluded.
+const payloadAnonReq = 0x07
+
 // edgeRow is one row to upsert into neighbor_edges. (a, b) is already
 // canonical-ordered (a <= b).
 type edgeRow struct {
@@ -202,22 +211,31 @@ func (s *Store) buildAndPersistNeighborEdges() (int, error) {
 		if err := rows.Scan(&payloadType, &decodedJSON, &fromPubkey, &pathJSON, &observerID, &epochTs); err != nil {
 			continue
 		}
+		isAdvert := payloadType.Valid && payloadType.Int64 == int64(payloadADVERT)
+		isAnonReq := payloadType.Valid && payloadType.Int64 == int64(payloadAnonReq)
+		// #1777: ANON_REQ's ephemeralPubKey is as trustworthy an originator
+		// identity as ADVERT's pubKey — see payloadAnonReq doc comment.
+		hasFullOriginator := isAdvert || isAnonReq
+
 		fromNode := strings.ToLower(fromPubkey)
 		if fromNode == "" {
-			fromNode = strings.ToLower(extractPubkeyFromAdvertJSON(decodedJSON))
+			if isAdvert {
+				fromNode = strings.ToLower(extractPubkeyFromAdvertJSON(decodedJSON))
+			} else if isAnonReq {
+				fromNode = strings.ToLower(extractPubkeyFromAnonReqJSON(decodedJSON))
+			}
 		}
-		isAdvert := payloadType.Valid && payloadType.Int64 == int64(payloadADVERT)
 		ts := time.Unix(epochTs, 0).UTC().Format(time.RFC3339)
 		observerPK := strings.ToLower(observerID)
 		path := parsePathArray(pathJSON)
 
 		if len(path) == 0 {
-			if isAdvert && fromNode != "" && fromNode != observerPK && observerPK != "" {
+			if hasFullOriginator && fromNode != "" && fromNode != observerPK && observerPK != "" {
 				edges = append(edges, canonEdge(fromNode, observerPK, ts))
 			}
 			continue
 		}
-		if isAdvert && fromNode != "" {
+		if hasFullOriginator && fromNode != "" {
 			if resolved, ok := resolvePrefix(prefixIdx, path[0]); ok && resolved != fromNode {
 				edges = append(edges, canonEdge(fromNode, resolved, ts))
 			}

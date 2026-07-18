@@ -622,6 +622,83 @@ func TestBuildNeighborGraph_ADVERTOnlyConstraint(t *testing.T) {
 	}
 }
 
+// ngEphemeralPubKeyJSON creates decoded JSON using the real ANON_REQ format
+// ("ephemeralPubKey" field) — #1777.
+func ngEphemeralPubKeyJSON(pubkey string) string {
+	b, _ := json.Marshal(map[string]string{"ephemeralPubKey": pubkey})
+	return string(b)
+}
+
+// TestBuildNeighborGraph_AnonReqSingleHopPath verifies #1777: ANON_REQ
+// (payload type 7) carries the sender's full ephemeral pubkey and should
+// produce an originator↔path[0] edge exactly like ADVERT, in addition to
+// the always-present observer↔path[last] edge.
+func TestBuildNeighborGraph_AnonReqSingleHopPath(t *testing.T) {
+	nodes := []nodeInfo{
+		{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeX"},
+		{Role: "repeater", PublicKey: "r1aabbcc", Name: "R1"},
+		{Role: "repeater", PublicKey: "obs00001", Name: "Observer"},
+	}
+	tx := ngMakeTx(1, 7, ngEphemeralPubKeyJSON("aaaa1111"), []*StoreObs{
+		ngMakeObs("obs00001", `["r1aa"]`, nowStr, ngFloatPtr(-10)),
+	})
+	store := ngTestStore(nodes, []*StoreTx{tx})
+	g := BuildFromStore(store)
+
+	edges := g.AllEdges()
+	if len(edges) != 2 {
+		t.Fatalf("expected 2 edges (originator↔path[0] + observer↔path[last]), got %d", len(edges))
+	}
+
+	found := false
+	for _, e := range edges {
+		if (e.NodeA == "aaaa1111" && e.NodeB == "r1aabbcc") ||
+			(e.NodeA == "r1aabbcc" && e.NodeB == "aaaa1111") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("ANON_REQ should produce originator↔path[0] edge (#1777)")
+	}
+
+	found = false
+	for _, e := range edges {
+		if (e.NodeA == "obs00001" && e.NodeB == "r1aabbcc") ||
+			(e.NodeA == "r1aabbcc" && e.NodeB == "obs00001") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("missing observer↔path[last] edge (Observer↔R1)")
+	}
+}
+
+// TestBuildNeighborGraph_ReqRespStillExcluded verifies #1777's scope
+// boundary: only ADVERT and ANON_REQ get an originator↔path[0] edge.
+// REQ (payload type 2, reusing the existing ADVERTOnlyConstraint fixture
+// shape) must still be excluded — its "from"/"src" is a 1-byte truncated
+// hash, not a full pubkey, and manufacturing an edge from it would carry
+// ~1/256 collision odds (rejected in the #1777 discussion).
+func TestBuildNeighborGraph_ReqRespStillExcluded(t *testing.T) {
+	nodes := []nodeInfo{
+		{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeX"},
+		{Role: "repeater", PublicKey: "r1aabbcc", Name: "R1"},
+		{Role: "repeater", PublicKey: "obs00001", Name: "Observer"},
+	}
+	tx := ngMakeTx(1, 2, ngFromNodeJSON("aaaa1111"), []*StoreObs{
+		ngMakeObs("obs00001", `["r1aa"]`, nowStr, ngFloatPtr(-10)),
+	})
+	store := ngTestStore(nodes, []*StoreTx{tx})
+	g := BuildFromStore(store)
+
+	for _, e := range g.AllEdges() {
+		a, b := e.NodeA, e.NodeB
+		if (a == "aaaa1111" && b == "r1aabbcc") || (a == "r1aabbcc" && b == "aaaa1111") {
+			t.Error("REQ (non-ADVERT, non-ANON_REQ) should NOT produce originator↔path[0] edge")
+		}
+	}
+}
+
 // ngPubKeyJSON creates decoded JSON using the real ADVERT format ("pubKey" field).
 func ngPubKeyJSON(pubkey string) string {
 	b, _ := json.Marshal(map[string]string{"pubKey": pubkey})
