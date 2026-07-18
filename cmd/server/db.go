@@ -3058,6 +3058,59 @@ func (db *DB) GetChannelMessageScopeStats(window string) (*ChannelScopeStats, er
 	return stats, nil
 }
 
+// GetChannelScopeAdoption breaks the channel-messages-only scoped/unscoped
+// question (see GetChannelMessageScopeStats) down PER CHANNEL — which
+// specific channels (#test, #wardriving, ...) actually use region scoping
+// vs which never do. Ordered by message volume, capped at the top 30
+// channels so a long tail of barely-used channels doesn't bloat the
+// response.
+func (db *DB) GetChannelScopeAdoption(window string) ([]ChannelScopeAdoption, error) {
+	if !db.hasScopeName {
+		return nil, fmt.Errorf("scope_name column not present — run ingestor to apply migrations")
+	}
+
+	var since string
+	switch window {
+	case "1h":
+		since = time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+	case "7d":
+		since = time.Now().Add(-7 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	default:
+		since = time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+	}
+
+	rows, err := db.conn.Query(`
+		SELECT
+			COALESCE(NULLIF(channel_hash, ''), '(unknown channel)') AS channel,
+			COUNT(*) AS total,
+			COALESCE(SUM(CASE WHEN `+routeTypeTransportSQL+` AND scope_name IS NOT NULL AND scope_name != '' THEN 1 ELSE 0 END), 0) AS scoped,
+			COALESCE(SUM(CASE WHEN `+routeTypeTransportSQL+` AND scope_name = '' THEN 1 ELSE 0 END), 0) AS unknown_scope
+		FROM transmissions
+		WHERE payload_type = 5 AND first_seen >= ?
+		GROUP BY channel
+		ORDER BY total DESC
+		LIMIT 30
+	`, since)
+	if err != nil {
+		return nil, fmt.Errorf("channel scope adoption query: %w", err)
+	}
+	defer rows.Close()
+
+	result := make([]ChannelScopeAdoption, 0)
+	for rows.Next() {
+		var ca ChannelScopeAdoption
+		if err := rows.Scan(&ca.Channel, &ca.TotalMessages, &ca.Scoped, &ca.UnknownScope); err != nil {
+			continue
+		}
+		ca.Unscoped = ca.TotalMessages - ca.Scoped - ca.UnknownScope
+		result = append(result, ca)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("channel scope adoption iteration: %w", err)
+	}
+	return result, nil
+}
+
 // GetMatchedRegionNames returns the set of scope_name values that have ever
 // matched at least one transmission still in retention (NULL and empty-string
 // "unknown" rows are excluded). Used to diff against the operator's

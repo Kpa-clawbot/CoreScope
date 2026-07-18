@@ -115,6 +115,17 @@ type ChannelScopeStats struct {
 	UnknownScope  int `json:"unknownScope"`
 }
 
+// ChannelScopeAdoption is ChannelScopeStats broken down PER CHANNEL — which
+// specific channels (#test, #wardriving, ...) actually use region scoping
+// vs which never do, as opposed to the single aggregate above.
+type ChannelScopeAdoption struct {
+	Channel       string `json:"channel"`
+	TotalMessages int    `json:"totalMessages"`
+	Scoped        int    `json:"scoped"`
+	Unscoped      int    `json:"unscoped"`
+	UnknownScope  int    `json:"unknownScope"`
+}
+
 type ScopeRegionCount struct {
 	Name  string `json:"name"`
 	Count int    `json:"count"`
@@ -163,6 +174,9 @@ type ScopeStatsResponse struct {
 	// channel chat specifically (payload_type=5), window-scoped like
 	// Summary above — see ChannelScopeStats doc.
 	ChannelMessages *ChannelScopeStats `json:"channelMessages,omitempty"`
+	// ChannelScopeAdoption is ChannelMessages broken down per channel,
+	// ordered by message volume, capped at the top 30 channels.
+	ChannelScopeAdoption []ChannelScopeAdoption `json:"channelScopeAdoption,omitempty"`
 	// BridgeRepeaters is the RepeatersByRegion data inverted: repeaters
 	// that have relayed traffic for MORE than one region are the mesh's
 	// literal backbone nodes connecting separate regional communities.

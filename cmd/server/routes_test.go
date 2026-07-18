@@ -4342,6 +4342,67 @@ func TestHandleScopeStats_HourlyActivityByRegion(t *testing.T) {
 	}
 }
 
+// TestHandleScopeStats_ChannelScopeAdoption verifies the per-channel
+// breakdown: two channels with different scoped/unscoped mixes must be
+// reported separately, ordered by total message volume.
+func TestHandleScopeStats_ChannelScopeAdoption(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+		t.Fatalf("add scope_name column: %v", err)
+	}
+	srv.db.hasScopeName = true
+	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
+		t.Fatalf("clear transmissions: %v", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	rows := []struct {
+		hash    string
+		channel string
+		route   int
+		scope   string
+	}{
+		// #test: 2 scoped, 1 unscoped (plain FLOOD) — 3 total
+		{"h1", "#test", 0, "#belgium"},
+		{"h2", "#test", 0, "#belgium"},
+		{"h3", "#test", 1, ""},
+		// #wardriving: 1 message, never scoped — 1 total
+		{"h4", "#wardriving", 1, ""},
+	}
+	for _, r := range rows {
+		if _, err := srv.db.conn.Exec(
+			`INSERT INTO transmissions (raw_hex,hash,first_seen,route_type,payload_type,channel_hash,scope_name) VALUES (?,?,?,?,5,?,?)`,
+			"aa", r.hash, now, r.route, r.channel, r.scope,
+		); err != nil {
+			t.Fatalf("seed row %s: %v", r.hash, err)
+		}
+	}
+
+	req := httptest.NewRequest("GET", "/api/scope-stats?window=24h", nil)
+	w := httptest.NewRecorder()
+	srv.handleScopeStats(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	var resp ScopeStatsResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.ChannelScopeAdoption) != 2 {
+		t.Fatalf("channelScopeAdoption = %+v, want 2 entries", resp.ChannelScopeAdoption)
+	}
+	// Ordered by total volume DESC: #test (3) before #wardriving (1).
+	test := resp.ChannelScopeAdoption[0]
+	if test.Channel != "#test" || test.TotalMessages != 3 || test.Scoped != 2 || test.Unscoped != 1 {
+		t.Errorf("channelScopeAdoption[0] = %+v, want {#test total=3 scoped=2 unscoped=1}", test)
+	}
+	wardriving := resp.ChannelScopeAdoption[1]
+	if wardriving.Channel != "#wardriving" || wardriving.TotalMessages != 1 || wardriving.Scoped != 0 || wardriving.Unscoped != 1 {
+		t.Errorf("channelScopeAdoption[1] = %+v, want {#wardriving total=1 scoped=0 unscoped=1}", wardriving)
+	}
+}
+
 // TestHandleScopeStats_ChannelMessagesExcludesOtherPayloadTypes verifies the
 // payload_type=5 filter: a non-channel transmission (e.g. an ADVERT) with a
 // scope must not be counted in ChannelMessages even though it affects the

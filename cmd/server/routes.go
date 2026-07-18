@@ -3614,6 +3614,10 @@ func (s *Server) handleScopeStats(w http.ResponseWriter, r *http.Request) {
 		resp.ChannelMessages = chanStats
 	}
 
+	if adoption, err := s.db.GetChannelScopeAdoption(window); err == nil {
+		resp.ChannelScopeAdoption = adoption
+	}
+
 	s.scopeStatsMu.Lock()
 	if s.scopeStatsCache == nil {
 		s.scopeStatsCache = make(map[string]*ScopeStatsResponse)

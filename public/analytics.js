@@ -4485,6 +4485,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
         '</div>' +
         '<div id="scopes-cards" class="stats-grid" style="margin-bottom:16px"></div>' +
         '<div id="scopes-channel-messages" style="margin-bottom:16px"></div>' +
+        '<div id="scopes-channel-adoption" style="margin-bottom:16px"></div>' +
         '<div class="text-center text-muted" id="scopes-loading" style="padding:20px">Loading scope stats…</div>' +
         '<table class="data-table analytics-table" style="margin-bottom:8px">' +
           '<thead><tr><th>Region</th><th>Messages</th><th>% of Scoped</th></tr></thead>' +
@@ -4585,6 +4586,38 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
         } else {
           chanEl.innerHTML = '';
         }
+      }
+
+      // Channel scope adoption: the Channel Messages breakdown above, but
+      // per channel — which specific channels actually use region scoping
+      // vs which never do. Top 30 by volume.
+      var adoptEl = document.getElementById('scopes-channel-adoption');
+      if (adoptEl) {
+        var adoption = d.channelScopeAdoption || [];
+        var adoptBody;
+        if (adoption.length > 0) {
+          var adoptRows = adoption.map(function(ca) {
+            var caOverall = ca.scoped + ca.unscoped;
+            return '<tr>' +
+              '<td><code>' + esc(ca.channel) + '</code></td>' +
+              '<td>' + ca.totalMessages.toLocaleString() + '</td>' +
+              '<td>' + ca.scoped.toLocaleString() + ' (' + pct(ca.scoped, caOverall) + ')</td>' +
+              '<td>' + ca.unknownScope.toLocaleString() + '</td>' +
+              '</tr>';
+          }).join('');
+          adoptBody = '<table class="data-table analytics-table">' +
+            '<thead><tr><th>Channel</th><th>Messages</th><th>Scoped</th><th>Unknown</th></tr></thead>' +
+            '<tbody>' + adoptRows + '</tbody>' +
+            '</table>';
+        } else {
+          adoptBody = '<p class="text-muted" style="font-size:0.85em">No channel messages in this window.</p>';
+        }
+        adoptEl.innerHTML =
+          '<h4 style="margin:0 0 4px">Scope Adoption by Channel</h4>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">' +
+            'Which channels actually use region scoping vs which never do. Top 30 by message volume.' +
+          '</p>' +
+          adoptBody;
       }
 
       // Per-region table
