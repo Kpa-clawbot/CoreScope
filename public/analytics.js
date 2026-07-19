@@ -4588,11 +4588,17 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
     // `key` is a stable identifier (independent of the dynamic count in
     // `title`) used by setSectionHtml to restore this section's open/closed
     // state across the 60s auto-refresh re-render below.
+    // Description lives inside <summary> (not as a sibling of it) so it
+    // stays visible while collapsed — <details> only ever hides its
+    // children other than the summary, and the summary itself is always
+    // shown regardless of open state.
     function detailsSection(title, description, bodyHtml, key) {
       return '<details style="margin-top:16px"' + (key ? ' data-key="' + esc(key) + '"' : '') + '>' +
-        '<summary style="cursor:pointer;font-weight:600;padding:2px 0">' + title + '</summary>' +
-        (description ? '<p class="text-muted" style="margin:8px 0 8px 2px;font-size:0.85em">' + description + '</p>' : '') +
-        '<div style="margin:4px 0 0 2px">' + bodyHtml + '</div>' +
+        '<summary style="cursor:pointer;padding:2px 0">' +
+          '<span style="font-weight:600">' + title + '</span>' +
+          (description ? '<div class="text-muted" style="font-weight:400;font-size:0.85em;margin-top:2px">' + description + '</div>' : '') +
+        '</summary>' +
+        '<div style="margin:8px 0 0 2px">' + bodyHtml + '</div>' +
       '</details>';
     }
 
