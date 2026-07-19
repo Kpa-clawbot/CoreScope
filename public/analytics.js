@@ -4482,6 +4482,19 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
     var winKey = 'scopes_window';
     var selectedWindow = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(winKey)) || '24h';
 
+    // #1852: the tab grew to 12 stacked sections (windowed adoption stats,
+    // all-time region breakdowns, all-time node/repeater hygiene lists) —
+    // grouped into 3 sub-tabs so a visitor sees one coherent screen at a
+    // time instead of one long scroll. Purely presentational: all three
+    // groups' data still loads together (one #scope-stats fetch + the two
+    // hygiene sections' own fetchAllNodes calls), only DOM visibility is
+    // gated on the active sub-tab. The 1h/24h/7d window picker only
+    // affects the Overview group (the all-time Regions/Hygiene sections
+    // ignore it entirely), so it lives inside that panel, not above the
+    // sub-tab bar.
+    var subtabKey = 'scopes_subtab';
+    var selectedSubtab = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(subtabKey)) || 'overview';
+
     // Fix 5: write static frame only once
     if (!el.querySelector('#scopes-cards')) {
       el.innerHTML =
@@ -4489,27 +4502,58 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         '<p class="text-muted" style="margin:0 0 12px;font-size:0.85em">' +
           'Denominator is all observed transmissions. Only TRANSPORT_FLOOD (0) and TRANSPORT_DIRECT (3) routes carry a scope; FLOOD (1) and DIRECT (2) are inherently unscoped per MeshCore protocol.' +
         '</p>' +
-        '<div style="margin-bottom:12px">' +
-          ['1h', '24h', '7d'].map(function(v) {
-            return '<button class="tab-btn' + (selectedWindow === v ? ' active' : '') + '" data-win="' + v + '">' + v + '</button>';
+        '<div class="analytics-tabs" id="scopesSubtabs" style="margin-bottom:12px">' +
+          [
+            { key: 'overview', label: 'Overview' },
+            { key: 'regions', label: 'Regions' },
+            { key: 'hygiene', label: 'Hygiene' },
+          ].map(function(t) {
+            return '<button class="tab-btn' + (selectedSubtab === t.key ? ' active' : '') + '" data-subtab="' + t.key + '">' + t.label + '</button>';
           }).join('') +
         '</div>' +
-        '<div id="scopes-cards" class="stats-grid" style="margin-bottom:16px"></div>' +
-        '<div id="scopes-channel-messages" style="margin-bottom:16px"></div>' +
-        '<div id="scopes-channel-adoption" style="margin-bottom:16px"></div>' +
-        '<div class="text-center text-muted" id="scopes-loading" style="padding:20px">Loading scope stats…</div>' +
-        '<table class="data-table analytics-table" style="margin-bottom:8px">' +
-          '<thead><tr><th>Region</th><th>Messages</th><th>% of Scoped</th></tr></thead>' +
-          '<tbody id="scopes-tbody"></tbody>' +
-        '</table>' +
-        '<div id="scopes-chart"></div>' +
-        '<div id="scopes-hourly" style="margin-top:16px"></div>' +
-        '<div id="scopes-utilization" style="margin-top:16px"></div>' +
-        '<div id="scopes-repeaters" style="margin-top:16px"></div>' +
-        '<div id="scopes-origin-nodes" style="margin-top:16px"></div>' +
-        '<div id="scopes-no-scope" style="margin-top:16px"></div>' +
-        '<div id="scopes-never-relay-scope" style="margin-top:16px"></div>' +
-        '<div id="scopes-bridges" style="margin-top:16px"></div>';
+        '<div id="scopes-panel-overview" style="display:' + (selectedSubtab === 'overview' ? '' : 'none') + '">' +
+          '<div style="margin-bottom:12px">' +
+            ['1h', '24h', '7d'].map(function(v) {
+              return '<button class="tab-btn' + (selectedWindow === v ? ' active' : '') + '" data-win="' + v + '">' + v + '</button>';
+            }).join('') +
+          '</div>' +
+          '<div id="scopes-cards" class="stats-grid" style="margin-bottom:16px"></div>' +
+          '<div id="scopes-channel-messages" style="margin-bottom:16px"></div>' +
+          '<div id="scopes-channel-adoption" style="margin-bottom:16px"></div>' +
+          '<div class="text-center text-muted" id="scopes-loading" style="padding:20px">Loading scope stats…</div>' +
+          '<table class="data-table analytics-table" style="margin-bottom:8px">' +
+            '<thead><tr><th>Region</th><th>Messages</th><th>% of Scoped</th></tr></thead>' +
+            '<tbody id="scopes-tbody"></tbody>' +
+          '</table>' +
+          '<div id="scopes-chart"></div>' +
+          '<div id="scopes-hourly" style="margin-top:16px"></div>' +
+        '</div>' +
+        '<div id="scopes-panel-regions" style="display:' + (selectedSubtab === 'regions' ? '' : 'none') + '">' +
+          '<div id="scopes-utilization"></div>' +
+          '<div id="scopes-repeaters" style="margin-top:16px"></div>' +
+          '<div id="scopes-origin-nodes" style="margin-top:16px"></div>' +
+          '<div id="scopes-bridges" style="margin-top:16px"></div>' +
+        '</div>' +
+        '<div id="scopes-panel-hygiene" style="display:' + (selectedSubtab === 'hygiene' ? '' : 'none') + '">' +
+          '<div id="scopes-no-scope"></div>' +
+          '<div id="scopes-never-relay-scope" style="margin-top:16px"></div>' +
+        '</div>';
+
+      // Sub-tab click listener (once) — pure visibility toggle, no re-fetch.
+      var subtabsEl = el.querySelector('#scopesSubtabs');
+      if (subtabsEl) {
+        subtabsEl.addEventListener('click', function(e) {
+          var btn = e.target.closest('[data-subtab]');
+          if (!btn) return;
+          selectedSubtab = btn.dataset.subtab;
+          if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(subtabKey, selectedSubtab);
+          subtabsEl.querySelectorAll('[data-subtab]').forEach(function(b) { b.classList.toggle('active', b.dataset.subtab === selectedSubtab); });
+          ['overview', 'regions', 'hygiene'].forEach(function(key) {
+            var panel = document.getElementById('scopes-panel-' + key);
+            if (panel) panel.style.display = key === selectedSubtab ? '' : 'none';
+          });
+        });
+      }
 
       // Attach window-button click listeners (once)
       el.querySelectorAll('[data-win]').forEach(function(btn) {
