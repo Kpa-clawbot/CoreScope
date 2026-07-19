@@ -2709,6 +2709,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
     window._analyticsRenderForeignTrafficTab = renderForeignTrafficTab;
     window._analyticsStopForeignTrafficRefresh = _stopForeignTrafficRefresh;
     window._analyticsComputeNodesWithoutScope = computeNodesWithoutScope;
+    window._analyticsComputeRepeatersNeverRelayingScope = computeRepeatersNeverRelayingScope;
   }
 
   // ─── Neighbor Graph Tab ─────────────────────────────────────────────────────
@@ -4507,6 +4508,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         '<div id="scopes-repeaters" style="margin-top:16px"></div>' +
         '<div id="scopes-origin-nodes" style="margin-top:16px"></div>' +
         '<div id="scopes-no-scope" style="margin-top:16px"></div>' +
+        '<div id="scopes-never-relay-scope" style="margin-top:16px"></div>' +
         '<div id="scopes-bridges" style="margin-top:16px"></div>';
 
       // Attach window-button click listeners (once)
@@ -4882,6 +4884,43 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           noScopeEl.innerHTML = '<h4 style="margin:0 0 4px">Nodes Not Using Any Scope</h4><p class="text-muted">Failed to load.</p>';
         }
       }
+
+      // Repeaters Never Relaying Any Scope: distinct from the section
+      // above — a repeater's own default_scope and whether it has ever
+      // relayed ANYONE's region-scoped traffic are different signals (see
+      // computeRepeatersNeverRelayingScope doc comment). Reuses the
+      // node list already fetched for the section above.
+      var neverRelayEl = document.getElementById('scopes-never-relay-scope');
+      if (neverRelayEl) {
+        try {
+          var nodesForRelay = typeof allNodes !== 'undefined' ? allNodes : (await fetchAllNodes('', { ttl: CLIENT_TTL.nodeList })).nodes;
+          var neverRelay = computeRepeatersNeverRelayingScope(nodesForRelay, 100);
+          var neverRelayBody;
+          if (neverRelay.sortedCapped.length > 0) {
+            var neverRelayRows = neverRelay.sortedCapped.map(function(n) {
+              return '<tr><td><a href="#/nodes/' + encodeURIComponent(n.public_key) + '">' + esc(n.name || n.public_key) + '</a></td>' +
+                '<td>' + esc(n.role || '—') + '</td>' +
+                '<td>' + (n.relay_count_24h || 0).toLocaleString() + '</td>' +
+                '<td>' + timeAgo(n.last_seen) + '</td></tr>';
+            }).join('');
+            neverRelayBody = '<table class="data-table analytics-table">' +
+              '<thead><tr><th>Repeater</th><th>Role</th><th>Relays (24h)</th><th>Last Seen</th></tr></thead>' +
+              '<tbody>' + neverRelayRows + '</tbody>' +
+              '</table>';
+          } else {
+            neverRelayBody = '<p class="text-muted" style="font-size:0.85em">Every known repeater/room has relayed at least one region-scoped packet.</p>';
+          }
+          neverRelayEl.innerHTML =
+            '<h4 style="margin:0 0 4px">Repeaters Never Relaying Any Scope (' + neverRelay.total.toLocaleString() + ')</h4>' +
+            '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">' +
+              'Repeater/room nodes that have never carried a single region-scoped (TRANSPORT_FLOOD/DIRECT) packet, ever — not the same set as "no default_scope" above: a repeater\'s hashRegions config can let it relay for others even when its own adverts never carry a matching transport code. ' +
+              'Sorted by current relay volume — the busiest ones are the most consequential to configure first' + (neverRelay.truncated ? ' (showing the top ' + neverRelay.sortedCapped.length + ')' : '') + '.' +
+            '</p>' +
+            neverRelayBody;
+        } catch (e) {
+          neverRelayEl.innerHTML = '<h4 style="margin:0 0 4px">Repeaters Never Relaying Any Scope</h4><p class="text-muted">Failed to load.</p>';
+        }
+      }
     }
 
 
@@ -4917,6 +4956,33 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
     return {
       total: noScopeNodes.length,
       roleSummary: roleSummary,
+      sortedCapped: sorted.slice(0, cap),
+      truncated: sorted.length > cap,
+    };
+  }
+
+  // Pure (no DOM/network) computation behind the Scopes tab's "Repeaters
+  // Never Relaying Any Scope" section. Distinct from
+  // computeNodesWithoutScope: a repeater's OWN default_scope (does it send
+  // its own scoped adverts?) and transported_scopes (has it ever relayed
+  // ANYONE's region-scoped traffic, ever?) are different signals — on
+  // stg.meshview.dk ~14% of no-default_scope repeaters still relay scope
+  // for others (their hashRegions config enables relaying even though
+  // their own adverts never carry a matching transport code). Only
+  // repeater/room nodes can relay at all — every other role is filtered
+  // out rather than silently 0-counted alongside them. Sorted by
+  // relay_count_24h descending: the busiest unconfigured repeaters are the
+  // most consequential ones to fix first.
+  function computeRepeatersNeverRelayingScope(allNodes, cap) {
+    var candidates = allNodes.filter(function(n) {
+      return (n.role === 'repeater' || n.role === 'room') &&
+        (!n.transported_scopes || n.transported_scopes.length === 0);
+    });
+    var sorted = candidates.slice().sort(function(a, b) {
+      return Number(b.relay_count_24h || 0) - Number(a.relay_count_24h || 0);
+    });
+    return {
+      total: candidates.length,
       sortedCapped: sorted.slice(0, cap),
       truncated: sorted.length > cap,
     };

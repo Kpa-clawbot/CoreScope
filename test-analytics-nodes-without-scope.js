@@ -90,6 +90,7 @@ function makeAnalyticsSandbox() {
 
 const ctx = makeAnalyticsSandbox();
 const computeNodesWithoutScope = ctx.window._analyticsComputeNodesWithoutScope;
+const computeRepeatersNeverRelayingScope = ctx.window._analyticsComputeRepeatersNeverRelayingScope;
 
 console.log('\n=== analytics.js: computeNodesWithoutScope ===');
 
@@ -170,6 +171,72 @@ test('returns zero total and empty rows when every node has a scope', () => {
   assert.strictEqual(result.total, 0);
   assert.deepStrictEqual(result.sortedCapped, []);
   assert.deepStrictEqual(result.roleSummary, []);
+});
+
+console.log('\n=== analytics.js: computeRepeatersNeverRelayingScope ===');
+
+test('is exported for testing', () => {
+  assert.strictEqual(typeof computeRepeatersNeverRelayingScope, 'function');
+});
+
+test('includes only repeater/room nodes with no transported_scopes, excludes other roles entirely', () => {
+  const nodes = [
+    { public_key: 'pk1', name: 'NeverRelays', role: 'repeater', transported_scopes: null },
+    { public_key: 'pk2', name: 'RelaysDK', role: 'repeater', transported_scopes: ['#dk'] },
+    { public_key: 'pk3', name: 'RoomNeverRelays', role: 'room', transported_scopes: [] },
+    { public_key: 'pk4', name: 'CompanionNeverRelays', role: 'companion', transported_scopes: null },
+  ];
+  const result = computeRepeatersNeverRelayingScope(nodes, 100);
+  const names = result.sortedCapped.map(n => n.name);
+  assert.strictEqual(result.total, 2, 'only NeverRelays and RoomNeverRelays should count');
+  assert.ok(names.includes('NeverRelays') && names.includes('RoomNeverRelays'));
+  assert.ok(!names.includes('RelaysDK'), 'a repeater that has relayed a scope must not appear');
+  assert.ok(!names.includes('CompanionNeverRelays'), 'a companion can never relay at all — must not appear regardless of transported_scopes');
+});
+
+test('a node missing default_scope but WITH transported_scopes is correctly excluded (the two signals differ)', () => {
+  // Real-world case found on stg.meshview.dk: a repeater's hashRegions
+  // config can let it relay for others even when its own adverts never
+  // carry a matching transport code (no default_scope).
+  const nodes = [
+    { public_key: 'pk1', name: 'RelaysForOthers', role: 'repeater', default_scope: null, transported_scopes: ['#dk', '#dk3'] },
+  ];
+  const result = computeRepeatersNeverRelayingScope(nodes, 100);
+  assert.strictEqual(result.total, 0, 'a repeater with transported_scopes must not appear here even without its own default_scope');
+});
+
+test('sorts by relay_count_24h descending — the busiest unconfigured repeaters first', () => {
+  const nodes = [
+    { public_key: 'pkQuiet', name: 'Quiet', role: 'repeater', relay_count_24h: 2, transported_scopes: null },
+    { public_key: 'pkBusy', name: 'Busy', role: 'repeater', relay_count_24h: 500, transported_scopes: null },
+    { public_key: 'pkMid', name: 'Mid', role: 'room', relay_count_24h: 40, transported_scopes: [] },
+  ];
+  const result = computeRepeatersNeverRelayingScope(nodes, 100);
+  assert.deepStrictEqual(result.sortedCapped.map(n => n.name), ['Busy', 'Mid', 'Quiet']);
+});
+
+test('caps sortedCapped at `cap` and sets truncated accordingly', () => {
+  const nodes = [];
+  for (let i = 0; i < 5; i++) {
+    nodes.push({ public_key: 'pk' + i, name: 'N' + i, role: 'repeater', relay_count_24h: i, transported_scopes: null });
+  }
+  const capped = computeRepeatersNeverRelayingScope(nodes, 3);
+  assert.strictEqual(capped.sortedCapped.length, 3);
+  assert.strictEqual(capped.total, 5);
+  assert.strictEqual(capped.truncated, true);
+
+  const uncapped = computeRepeatersNeverRelayingScope(nodes, 10);
+  assert.strictEqual(uncapped.truncated, false);
+});
+
+test('returns zero total when every repeater/room has relayed at least one scope', () => {
+  const nodes = [
+    { public_key: 'pk1', role: 'repeater', transported_scopes: ['#dk'] },
+    { public_key: 'pk2', role: 'room', transported_scopes: ['#dk-oj'] },
+  ];
+  const result = computeRepeatersNeverRelayingScope(nodes, 100);
+  assert.strictEqual(result.total, 0);
+  assert.deepStrictEqual(result.sortedCapped, []);
 });
 
 console.log('\n════════════════════════════════════════');
