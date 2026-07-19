@@ -29,18 +29,28 @@ func TestServerSourceHasNoCachedRWCalls(t *testing.T) {
 		regexp.MustCompile(`\bcachedRW\s*\(`),
 		regexp.MustCompile(`mode=rw`),
 		regexp.MustCompile(`sql\.Open\([^)]*\?[^)]*_journal_mode=WAL[^)]*\)`),
-		// #1324 follow-up: PR #903's persistMultibyteCapability moved
-		// to cmd/ingestor — the server may NEVER UPDATE these columns
-		// (it opens mode=ro since #1289). Server publishes a snapshot
-		// file via internal/mbcapqueue; the ingestor applies it.
-		regexp.MustCompile(`UPDATE\s+nodes\s+SET\s+multibyte_`),
-		// #1598: touchRelayLastSeen/TouchNodeLastSeen issued
-		// `UPDATE nodes SET last_seen` from the server. It failed on
-		// every call since #1289 (mode=ro) with the error discarded at
-		// the call site, so nodes.last_seen tracked ADVERTs only. The
-		// writer now lives in cmd/ingestor (Store.TouchRelayNodes).
-		regexp.MustCompile(`UPDATE\s+nodes\s+SET\s+last_seen`),
-		regexp.MustCompile(`UPDATE\s+inactive_nodes\s+SET\s+multibyte_`),
+		// The node directory is ingestor-owned (#1283/#1287); the
+		// server opens mode=ro since #1289 and may never write it.
+		//
+		// This deliberately matches ANY column rather than naming
+		// them. The column-specific form is what let #1598 through:
+		// #1324 added `UPDATE nodes SET multibyte_` after relocating
+		// PR #903's writer, then touchRelayLastSeen introduced a
+		// second write shape (`SET last_seen`) that the grep did not
+		// cover. It failed on every call for months with the error
+		// discarded at the call site, so nodes.last_seen silently
+		// degraded into an advert-age proxy. Enumerating shapes does
+		// not scale — forbid the table instead.
+		//
+		// Writers live in cmd/ingestor: Store.TouchRelayNodes (#1598)
+		// and RunMultibyteCapPersist (#1324, fed by a snapshot the
+		// server publishes via internal/mbcapqueue).
+		regexp.MustCompile(`UPDATE\s+nodes\s+SET`),
+		regexp.MustCompile(`UPDATE\s+inactive_nodes\s+SET`),
+		regexp.MustCompile(`INSERT\s+(OR\s+\w+\s+)?INTO\s+nodes\b`),
+		regexp.MustCompile(`INSERT\s+(OR\s+\w+\s+)?INTO\s+inactive_nodes\b`),
+		regexp.MustCompile(`DELETE\s+FROM\s+nodes\b`),
+		regexp.MustCompile(`DELETE\s+FROM\s+inactive_nodes\b`),
 		regexp.MustCompile(`\bpersistMultibyteCapability\s*\(`),
 		regexp.MustCompile(`\bmaybePersistMultibyteCapability\s*\(`),
 	}
