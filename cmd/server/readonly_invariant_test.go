@@ -45,12 +45,12 @@ func TestServerSourceHasNoCachedRWCalls(t *testing.T) {
 		// Writers live in cmd/ingestor: Store.TouchRelayNodes (#1598)
 		// and RunMultibyteCapPersist (#1324, fed by a snapshot the
 		// server publishes via internal/mbcapqueue).
-		regexp.MustCompile(`UPDATE\s+nodes\s+SET`),
-		regexp.MustCompile(`UPDATE\s+inactive_nodes\s+SET`),
-		regexp.MustCompile(`INSERT\s+(OR\s+\w+\s+)?INTO\s+nodes\b`),
-		regexp.MustCompile(`INSERT\s+(OR\s+\w+\s+)?INTO\s+inactive_nodes\b`),
-		regexp.MustCompile(`DELETE\s+FROM\s+nodes\b`),
-		regexp.MustCompile(`DELETE\s+FROM\s+inactive_nodes\b`),
+		// Shapes are normalised before matching (see nodeTableWritePattern):
+		// optional OR-conflict clause, optional quoting, optional alias.
+		nodeTableWritePattern(`UPDATE(\s+OR\s+\w+)?`, `SET`),
+		nodeTableWritePattern(`INSERT\s+(OR\s+\w+\s+)?INTO`, ``),
+		nodeTableWritePattern(`REPLACE\s+INTO`, ``),
+		nodeTableWritePattern(`DELETE\s+FROM`, ``),
 		regexp.MustCompile(`\bpersistMultibyteCapability\s*\(`),
 		regexp.MustCompile(`\bmaybePersistMultibyteCapability\s*\(`),
 	}
@@ -179,4 +179,34 @@ func TestPacketStoreHasNoMultibytePersistMethods(t *testing.T) {
 			t.Errorf("server *PacketStore exposes forbidden write method %q — must be relocated to ingestor (#1324)", name)
 		}
 	}
+}
+
+// nodeTableWritePattern builds a matcher for DML against the
+// ingestor-owned node directory. verb is the leading keyword(s); trailer
+// is what must follow the table name (e.g. SET for UPDATE), or empty.
+//
+// Covers the shapes a plain `UPDATE nodes SET` regex misses:
+//
+//	UPDATE OR REPLACE nodes SET ...
+//	UPDATE "nodes" SET ... / `nodes` / [nodes]
+//	UPDATE nodes AS n SET ...
+//	REPLACE INTO nodes ...
+//
+// Residual gap, stated rather than papered over: SQL assembled at
+// runtime (fmt.Sprintf("UPDATE %s SET ...", tbl)) cannot be caught by
+// source grepping. That is what TestServerDBConnIsReadOnly and
+// TestServerDBHasNoWriteMethods are for — the handle physically cannot
+// write and the write helpers do not exist on the type. This test is the
+// cheap first line that names the offending file and line; those two are
+// the structural backstop.
+func nodeTableWritePattern(verb, trailer string) *regexp.Regexp {
+	const table = "[\"`\\[]?(nodes|inactive_nodes)[\"`\\]]?"
+	const alias = `(\s+(AS\s+)?[a-z]\w*)?`
+	expr := `(?i)` + verb + `\s+` + table + alias
+	if trailer != "" {
+		expr += `\s+` + trailer
+	} else {
+		expr += `\b`
+	}
+	return regexp.MustCompile(expr)
 }

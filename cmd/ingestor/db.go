@@ -98,9 +98,9 @@ type Store struct {
 	// once per neighbor-edges builder tick (60s).
 	neighborGraph neighborGraphHolder
 
-	// relayTouchMu guards relayTouched, the debounce map for
-	// TouchRelayNodes: pubkey -> last time we wrote last_seen (#1598).
-	relayTouchMu sync.Mutex
+	// relayTouched is the debounce map for touchRelayNodesLocked:
+	// pubkey -> rxTime of the last last_seen write (#1598). Guarded by
+	// writerMu, which InsertTransmission holds for its whole body.
 	relayTouched map[string]time.Time
 }
 
@@ -109,6 +109,13 @@ type Store struct {
 // paths per hour; without this the ingest path would issue one UPDATE per
 // observation for no added freshness.
 const relayTouchDebounce = 5 * time.Minute
+
+// relayTouchedMaxEntries caps the debounce map. One entry per node ever
+// seen relaying — ~10^3-10^4 on real deployments — but a long-lived
+// process on a large mesh should not grow it without bound. On overflow
+// we drop entries older than two debounce windows, which can only cause
+// an extra UPDATE, never a missed one.
+const relayTouchedMaxEntries = 50000
 
 // OpenStore opens or creates a SQLite DB at the given path, applying the
 // v3 schema that is compatible with the Node.js server.
@@ -1014,7 +1021,7 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 		// #1598: a resolved hop proves the node was forwarding traffic at
 		// rxTime. Refresh its last_seen so staleness/eviction logic sees
 		// relay activity, not just ADVERTs.
-		s.TouchRelayNodes(resolvedPubkeys(resolved), rxTime)
+		s.touchRelayNodesLocked(resolvedPubkeys(resolved), rxTime)
 		// #1690: bump transmissions.last_seen so cold-load can filter on
 		// effective recency. Conditional `last_seen < ?` so we never go
 		// backwards on out-of-order ingest.
@@ -1486,9 +1493,13 @@ func (s *Store) LogStats() {
 	)
 }
 
-// TouchRelayNodes refreshes nodes.last_seen for nodes observed as relay
-// hops, so a node that forwards traffic stays fresh even when it adverts
-// rarely or not at all.
+// touchRelayNodesLocked refreshes nodes.last_seen for nodes observed as
+// relay hops, so a node that forwards traffic stays fresh even when it
+// adverts rarely or not at all.
+//
+// MUST be called with writerMu held. InsertTransmission holds it for its
+// entire body, so the debounce map needs no lock of its own; the name
+// carries the requirement for future callers.
 //
 // Ownership (#1283/#1287/#1289): nodes is written by the ingestor only.
 // The server opens SQLite mode=ro; its former touchRelayLastSeen has been
@@ -1498,11 +1509,14 @@ func (s *Store) LogStats() {
 // Callers pass the resolved pubkeys already computed for
 // observations.resolved_path (#1547/#1560) — only unambiguously resolved
 // hops reach this function, so a 1-byte prefix collision cannot keep a
-// silent node alive.
+// silent node alive. resolvedPubkeys already dedups, so no second pass here.
 //
 // Never inserts: the UPDATE matches an existing row or does nothing.
 // Never rewinds: the last_seen guard makes out-of-order ingest a no-op.
-func (s *Store) TouchRelayNodes(pubkeys []string, rxTime string) {
+// UpsertNode's ON CONFLICT clause is monotonic in the same direction
+// (MAX(MIN(last_seen, ingestNow), rxTime) reduces to MAX(last_seen, rxTime)
+// for any non-future stored value), so an ADVERT cannot undo a touch.
+func (s *Store) touchRelayNodesLocked(pubkeys []string, rxTime string) {
 	if len(pubkeys) == 0 || s.stmtTouchNodeLastSeen == nil {
 		return
 	}
@@ -1513,19 +1527,20 @@ func (s *Store) TouchRelayNodes(pubkeys []string, rxTime string) {
 	if err != nil {
 		return
 	}
+	// Same layout UpsertNode uses for last_seen, so the SQL comparisons
+	// above stay lexicographic-equals-chronological.
 	stamp := ts.UTC().Format(time.RFC3339)
 
-	s.relayTouchMu.Lock()
-	defer s.relayTouchMu.Unlock()
 	if s.relayTouched == nil {
 		s.relayTouched = make(map[string]time.Time)
 	}
-	seen := make(map[string]bool, len(pubkeys))
+	if len(s.relayTouched) >= relayTouchedMaxEntries {
+		s.compactRelayTouched(ts)
+	}
 	for _, pk := range pubkeys {
-		if pk == "" || seen[pk] {
+		if pk == "" {
 			continue
 		}
-		seen[pk] = true
 		if last, ok := s.relayTouched[pk]; ok && ts.Sub(last) < relayTouchDebounce {
 			continue
 		}
@@ -1536,9 +1551,25 @@ func (s *Store) TouchRelayNodes(pubkeys []string, rxTime string) {
 		}
 		// Debounce on attempt, not on row match: an unknown pubkey would
 		// otherwise be retried on every observation it appears in.
+		//
+		// Side effect: a pubkey touched while absent from nodes, then
+		// inserted by an ADVERT moments later, is skipped for the rest of
+		// the window. Harmless — the ADVERT wrote last_seen itself, and it
+		// is newer than anything this window would have written.
 		s.relayTouched[pk] = ts
 		if n, _ := res.RowsAffected(); n > 0 {
 			s.Stats.RelayTouches.Add(n)
+		}
+	}
+}
+
+// compactRelayTouched drops debounce entries older than two windows.
+// Caller must hold writerMu.
+func (s *Store) compactRelayTouched(now time.Time) {
+	cutoff := now.Add(-2 * relayTouchDebounce)
+	for pk, t := range s.relayTouched {
+		if t.Before(cutoff) {
+			delete(s.relayTouched, pk)
 		}
 	}
 }

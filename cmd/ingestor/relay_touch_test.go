@@ -45,7 +45,7 @@ func TestTouchRelayNodes_AdvancesLastSeen(t *testing.T) {
 	seedRelayNode(t, store, relay, "RelayOnly", "2026-07-01T00:00:00Z")
 
 	rxTime := "2026-07-10T12:00:00Z"
-	store.TouchRelayNodes([]string{relay}, rxTime)
+	store.touchRelayNodesLocked([]string{relay}, rxTime)
 
 	got := nodeLastSeen(t, store, relay)
 	if got != rxTime {
@@ -65,7 +65,7 @@ func TestTouchRelayNodes_NeverGoesBackwards(t *testing.T) {
 	const relay = "bb11223344556677889900aabbccddeeff00112233445566778899aabbccddee"
 	seedRelayNode(t, store, relay, "Backbone", "2026-07-10T12:00:00Z")
 
-	store.TouchRelayNodes([]string{relay}, "2026-07-09T00:00:00Z")
+	store.touchRelayNodesLocked([]string{relay}, "2026-07-09T00:00:00Z")
 
 	if got := nodeLastSeen(t, store, relay); got != "2026-07-10T12:00:00Z" {
 		t.Errorf("last_seen went backwards: got %q, want 2026-07-10T12:00:00Z", got)
@@ -82,9 +82,9 @@ func TestTouchRelayNodes_Debounces(t *testing.T) {
 	seedRelayNode(t, store, relay, "Chatty", "2026-07-01T00:00:00Z")
 
 	base := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
-	store.TouchRelayNodes([]string{relay}, base.Format(time.RFC3339))
+	store.touchRelayNodesLocked([]string{relay}, base.Format(time.RFC3339))
 	// Second hit two minutes later — inside the debounce window, no write.
-	store.TouchRelayNodes([]string{relay}, base.Add(2*time.Minute).Format(time.RFC3339))
+	store.touchRelayNodesLocked([]string{relay}, base.Add(2*time.Minute).Format(time.RFC3339))
 
 	if n := store.Stats.RelayTouches.Load(); n != 1 {
 		t.Errorf("RelayTouches = %d, want 1 (second touch should be debounced)", n)
@@ -95,7 +95,7 @@ func TestTouchRelayNodes_Debounces(t *testing.T) {
 
 	// Past the debounce window the write goes through again.
 	later := base.Add(6 * time.Minute)
-	store.TouchRelayNodes([]string{relay}, later.Format(time.RFC3339))
+	store.touchRelayNodesLocked([]string{relay}, later.Format(time.RFC3339))
 	if n := store.Stats.RelayTouches.Load(); n != 2 {
 		t.Errorf("RelayTouches = %d, want 2 after debounce window elapsed", n)
 	}
@@ -110,10 +110,10 @@ func TestTouchRelayNodes_Debounces(t *testing.T) {
 func TestTouchRelayNodes_IgnoresEmptyAndUnknown(t *testing.T) {
 	store := newTestStore(t)
 
-	store.TouchRelayNodes(nil, "2026-07-10T12:00:00Z")
-	store.TouchRelayNodes([]string{}, "2026-07-10T12:00:00Z")
-	store.TouchRelayNodes([]string{""}, "2026-07-10T12:00:00Z")
-	store.TouchRelayNodes([]string{"ff99887766554433221100ffeeddccbbaa99887766554433221100ffeeddccbb"}, "2026-07-10T12:00:00Z")
+	store.touchRelayNodesLocked(nil, "2026-07-10T12:00:00Z")
+	store.touchRelayNodesLocked([]string{}, "2026-07-10T12:00:00Z")
+	store.touchRelayNodesLocked([]string{""}, "2026-07-10T12:00:00Z")
+	store.touchRelayNodesLocked([]string{"ff99887766554433221100ffeeddccbbaa99887766554433221100ffeeddccbb"}, "2026-07-10T12:00:00Z")
 
 	var count int
 	if err := store.db.QueryRow(`SELECT COUNT(*) FROM nodes`).Scan(&count); err != nil {
@@ -135,7 +135,7 @@ func TestTouchRelayNodes_MalformedTimestamp(t *testing.T) {
 	const relay = "dd11223344556677889900aabbccddeeff00112233445566778899aabbccddee"
 	seedRelayNode(t, store, relay, "Fine", "2026-07-01T00:00:00Z")
 
-	store.TouchRelayNodes([]string{relay}, "not-a-timestamp")
+	store.touchRelayNodesLocked([]string{relay}, "not-a-timestamp")
 
 	if got := nodeLastSeen(t, store, relay); got != "2026-07-01T00:00:00Z" {
 		t.Errorf("last_seen = %q, want it unchanged on malformed rxTime", got)
