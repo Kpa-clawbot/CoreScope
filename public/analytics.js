@@ -4578,12 +4578,37 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
     // title can include a dynamic count ("Nodes Not Using Any Scope
     // (1423 of 1491)") since it's built at render time with the real data
     // already in hand, unlike a static skeleton-level heading would be.
-    function detailsSection(title, description, bodyHtml) {
-      return '<details style="margin-top:16px">' +
+    // `key` is a stable identifier (independent of the dynamic count in
+    // `title`) used by setSectionHtml to restore this section's open/closed
+    // state across the 60s auto-refresh re-render below.
+    function detailsSection(title, description, bodyHtml, key) {
+      return '<details style="margin-top:16px"' + (key ? ' data-key="' + esc(key) + '"' : '') + '>' +
         '<summary style="cursor:pointer;font-weight:600;padding:2px 0">' + title + '</summary>' +
         (description ? '<p class="text-muted" style="margin:8px 0 8px 2px;font-size:0.85em">' + description + '</p>' : '') +
         '<div style="margin:4px 0 0 2px">' + bodyHtml + '</div>' +
       '</details>';
+    }
+
+    // The 60s auto-refresh below rebuilds each section's innerHTML from
+    // scratch, which would otherwise silently re-collapse any <details> a
+    // visitor had open mid-read. Captures open state by data-key (falling
+    // back to summary text for nested details that don't set one, e.g. the
+    // per-region groups) before replacing, then reapplies it after.
+    function setSectionHtml(container, html) {
+      if (!container) return;
+      var openKeys = [];
+      container.querySelectorAll('details[open]').forEach(function(d) {
+        var s = d.querySelector('summary');
+        openKeys.push(d.getAttribute('data-key') || (s ? s.textContent : ''));
+      });
+      container.innerHTML = html;
+      if (openKeys.length) {
+        container.querySelectorAll('details').forEach(function(d) {
+          var s = d.querySelector('summary');
+          var k = d.getAttribute('data-key') || (s ? s.textContent : '');
+          if (k && openKeys.indexOf(k) !== -1) d.open = true;
+        });
+      }
     }
 
     async function load(w) {
@@ -4685,11 +4710,12 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         } else {
           adoptBody = '<p class="text-muted" style="font-size:0.85em">No channel messages in this window.</p>';
         }
-        adoptEl.innerHTML = detailsSection(
+        setSectionHtml(adoptEl, detailsSection(
           'Scope Adoption by Channel (' + adoption.length.toLocaleString() + ')',
           'Which channels actually use region scoping vs which never do. Top 30 by message volume.',
-          adoptBody
-        );
+          adoptBody,
+          'scope-adoption'
+        ));
       }
 
       // Per-region table
@@ -4785,17 +4811,18 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
               '<div style="flex:1;display:flex;gap:1px">' + cells + '</div>' +
               '</div>';
           }).join('');
-          hourlyEl.innerHTML = detailsSection(
+          setSectionHtml(hourlyEl, detailsSection(
             'Activity by Hour of Day (' + hourly.length.toLocaleString() + ' region' + (hourly.length === 1 ? '' : 's') + ')',
             'When during a typical day (UTC) each region is active, aggregated across every day in the window above. Reads best on 7d — color is normalized per region, so quiet and busy regions are both visible.',
             '<div style="display:flex;gap:6px;margin-bottom:4px">' +
               '<div style="width:110px"></div>' +
               '<div style="flex:1;display:flex">' + hourLabels + '</div>' +
             '</div>' +
-            hourlyRows
-          );
+            hourlyRows,
+            'activity-hourly'
+          ));
         } else {
-          hourlyEl.innerHTML = detailsSection('Activity by Hour of Day', 'No scoped messages in this window to chart by hour of day.', '');
+          setSectionHtml(hourlyEl, detailsSection('Activity by Hour of Day', 'No scoped messages in this window to chart by hour of day.', '', 'activity-hourly'));
         }
       }
 
@@ -4811,7 +4838,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           var usedCount = configured - unused.length;
           var unusedPct = (unused.length / configured * 100).toFixed(1);
           var listHtml = unused.map(function(name) { return esc(name); }).join(', ');
-          utilEl.innerHTML = detailsSection(
+          setSectionHtml(utilEl, detailsSection(
             'Region Utilization (' + usedCount.toLocaleString() + ' of ' + configured.toLocaleString() + ' used)',
             'All-time, not limited to the window above — has this configured region ever matched a message still in retention?',
             '<p style="margin:0 0 8px">' +
@@ -4819,10 +4846,11 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
               (unused.length > 0 ? ' — <strong>' + unused.length.toLocaleString() + '</strong> (' + unusedPct + '%) have never matched anything.' : '.') +
             '</p>' +
             (unused.length > 0 ?
-              '<details><summary style="cursor:pointer">Show ' + unused.length.toLocaleString() + ' unused region' + (unused.length === 1 ? '' : 's') + '</summary>' +
+              '<details data-key="unused-regions"><summary style="cursor:pointer">Show ' + unused.length.toLocaleString() + ' unused region' + (unused.length === 1 ? '' : 's') + '</summary>' +
               '<div class="mono text-muted" style="font-size:11px;margin-top:8px;max-height:200px;overflow-y:auto;line-height:1.6">' + listHtml + '</div></details>'
-              : '')
-          );
+              : ''),
+            'region-utilization'
+          ));
         } else {
           utilEl.innerHTML = '';
         }
@@ -4846,18 +4874,19 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
               var links = g.repeaters.map(function(rp) {
                 return '<a href="#/nodes/' + encodeURIComponent(rp.publicKey) + '">' + esc(rp.name) + '</a>';
               }).join(', ');
-              return '<details style="margin-bottom:6px">' +
+              return '<details style="margin-bottom:6px" data-key="region:' + esc(g.region) + '">' +
                 '<summary style="cursor:pointer"><code>' + esc(g.region) + '</code> — ' + g.count.toLocaleString() + ' ' + unitLabel + (g.count === 1 ? '' : 's') + '</summary>' +
                 '<div class="text-muted" style="font-size:11px;margin-top:6px;margin-left:12px;max-height:200px;overflow-y:auto;line-height:1.8">' + links + '</div>' +
                 '</details>';
             }).join('')
           : '<p class="text-muted" style="font-size:0.85em">No data yet — path resolution catches up gradually as traffic flows; check back in a few minutes.</p>';
         var count = groups ? groups.length : 0;
-        el.innerHTML = detailsSection(
+        setSectionHtml(el, detailsSection(
           esc(title) + ' (' + count.toLocaleString() + ' region' + (count === 1 ? '' : 's') + ')',
           esc(description),
-          body
-        );
+          body,
+          elId
+        ));
       }
 
       renderRegionNodeGroups('scopes-repeaters', 'Repeaters by Region',
@@ -4889,11 +4918,12 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           // empty longer, especially right after a restart.
           bridgeBody = '<p class="text-muted" style="font-size:0.85em">No bridge repeaters found yet — this needs a repeater confirmed in 2+ different regions, which takes longer to accumulate than the single-region data above.</p>';
         }
-        bridgeEl.innerHTML = detailsSection(
+        setSectionHtml(bridgeEl, detailsSection(
           'Bridge Repeaters (' + bridges.length.toLocaleString() + ')',
           'All-time — repeaters that have relayed traffic for more than one region. These connect otherwise-separate regional communities; losing one can split the mesh\'s regional coverage.',
-          bridgeBody
-        );
+          bridgeBody,
+          'bridge-repeaters'
+        ));
       }
 
       renderRegionNodeGroups('scopes-origin-nodes', 'Nodes Running This Region',
@@ -4928,14 +4958,15 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
             noScopeBody = '<p class="text-muted" style="font-size:0.85em">Every known node has a configured scope.</p>';
           }
 
-          noScopeEl.innerHTML = detailsSection(
+          setSectionHtml(noScopeEl, detailsSection(
             'Nodes Not Using Any Scope (' + noScope.total.toLocaleString() + ' of ' + allNodes.length.toLocaleString() + ')',
             'Nodes with no default_scope at all — never configured a hashRegions region for themselves. By role: ' + (roleSummary || 'none') + '. ' +
               'Sorted by most-recently-active first' + (noScope.truncated ? ' (showing the ' + noScope.sortedCapped.length + ' most recent)' : '') + '.',
-            noScopeBody
-          );
+            noScopeBody,
+            'no-scope'
+          ));
         } catch (e) {
-          noScopeEl.innerHTML = detailsSection('Nodes Not Using Any Scope', null, '<p class="text-muted">Failed to load.</p>');
+          setSectionHtml(noScopeEl, detailsSection('Nodes Not Using Any Scope', null, '<p class="text-muted">Failed to load.</p>', 'no-scope'));
         }
       }
 
@@ -4964,14 +4995,15 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           } else {
             neverRelayBody = '<p class="text-muted" style="font-size:0.85em">Every known repeater/room has relayed at least one region-scoped packet.</p>';
           }
-          neverRelayEl.innerHTML = detailsSection(
+          setSectionHtml(neverRelayEl, detailsSection(
             'Repeaters Never Relaying Any Scope (' + neverRelay.total.toLocaleString() + ')',
             'Repeater/room nodes that have never carried a single region-scoped (TRANSPORT_FLOOD/DIRECT) packet, ever — not the same set as "no default_scope" above: a repeater\'s hashRegions config can let it relay for others even when its own adverts never carry a matching transport code. ' +
               'Sorted by current relay volume — the busiest ones are the most consequential to configure first' + (neverRelay.truncated ? ' (showing the top ' + neverRelay.sortedCapped.length + ')' : '') + '.',
-            neverRelayBody
-          );
+            neverRelayBody,
+            'never-relay'
+          ));
         } catch (e) {
-          neverRelayEl.innerHTML = detailsSection('Repeaters Never Relaying Any Scope', null, '<p class="text-muted">Failed to load.</p>');
+          setSectionHtml(neverRelayEl, detailsSection('Repeaters Never Relaying Any Scope', null, '<p class="text-muted">Failed to load.</p>', 'never-relay'));
         }
       }
     }
