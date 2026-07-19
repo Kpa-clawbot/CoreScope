@@ -4946,9 +4946,8 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           '</p>' +
           '<h4 style="margin:0 0 4px">Foreign-Flagged Nodes (' + foreignNodes.length.toLocaleString() + ')</h4>' +
           '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">' +
-            'Nodes whose most recent advertised GPS position fell outside the configured geo_filter. ' +
-            'Caveat: this is self-reported GPS from the node\'s own ADVERT — MeshCore has no MQTT-to-RF bridging, so a node whose packets you can trace through a normal local FLOOD relay chain (check its Trace) is physically in range of that chain, full stop. ' +
-            'A flag on a node a realistic few hops from an actual border (DE/SE) may be genuine; a flag claiming hundreds/thousands of km away, arriving via a healthy local relay chain, is almost always just a wrong or joke GPS value on an otherwise-local node, not real long-distance traffic.' +
+            'Nodes whose most recent advertised GPS position fell outside the configured geo_filter — self-reported GPS from the node\'s own ADVERT. ' +
+            'A FLOOD packet can legitimately travel many hops through a dense mesh, so a node whose traffic you can trace through a real local relay chain (check its Trace) is genuinely reachable via that chain — that\'s foreign traffic actually entering the mesh, not a data artifact.' +
           '</p>' +
           foreignNodesBody +
           '<h4 style="margin:24px 0 4px">Repeaters Relaying Unscoped Traffic</h4>' +
