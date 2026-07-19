@@ -28,6 +28,9 @@ type DBStats struct {
 	ObserverUpserts        atomic.Int64
 	WriteErrors            atomic.Int64
 	SignatureDrops         atomic.Int64
+	// RelayTouches counts nodes.last_seen refreshes driven by relay
+	// participation rather than an ADVERT (#1598).
+	RelayTouches atomic.Int64
 	// WALCommits tracks every successful tx.Commit() that may have flushed
 	// WAL pages.
 	WALCommits atomic.Int64
@@ -1460,6 +1463,11 @@ func (s *Store) LogStats() {
 		s.Stats.SignatureDrops.Load(),
 	)
 }
+
+// TouchRelayNodes refreshes nodes.last_seen for nodes observed as relay
+// hops. STUB — implementation follows in the green commit; see
+// relay_touch_test.go for the specified behaviour.
+func (s *Store) TouchRelayNodes(pubkeys []string, rxTime string) {}
 
 // MoveStaleNodes moves nodes not seen in nodeDays to the inactive_nodes table.
 // Returns the number of nodes moved.
