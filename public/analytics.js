@@ -4526,6 +4526,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           '</div>' +
           '<div id="scopes-cards" class="stats-grid" style="margin-bottom:16px"></div>' +
           '<div id="scopes-highlights" style="margin-bottom:16px"></div>' +
+          '<div id="scopes-hourly" style="margin-bottom:16px"></div>' +
           '<div id="scopes-channel-messages" style="margin-bottom:16px"></div>' +
           '<div id="scopes-channel-adoption" style="margin-bottom:16px"></div>' +
           '<div class="text-center text-muted" id="scopes-loading" style="padding:20px">Loading scope stats…</div>' +
@@ -4537,7 +4538,6 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
             '</table>' +
             '<div id="scopes-chart"></div>' +
           '</details>' +
-          '<div id="scopes-hourly"></div>' +
         '</div>' +
         '<div id="scopes-panel-regions" style="display:' + (selectedSubtab === 'regions' ? '' : 'none') + '">' +
           '<div id="scopes-utilization"></div>' +
@@ -4961,18 +4961,18 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
               '<div style="flex:1;display:flex;gap:1px">' + cells + '</div>' +
               '</div>';
           }).join('');
-          setSectionHtml(hourlyEl, detailsSection(
-            'Activity by Hour of Day (' + hourly.length.toLocaleString() + ' region' + (hourly.length === 1 ? '' : 's') + ')',
-            'When during a typical day (UTC) each region is active, aggregated across every day in the window above. Reads best on 7d — color is normalized per region, so quiet and busy regions are both visible.',
+          hourlyEl.innerHTML =
+            '<h4 style="margin:0 0 4px">Activity by Hour of Day (' + hourly.length.toLocaleString() + ' region' + (hourly.length === 1 ? '' : 's') + ')</h4>' +
+            '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">When during a typical day (UTC) each region is active, aggregated across every day in the window above. Reads best on 7d — color is normalized per region, so quiet and busy regions are both visible.</p>' +
             '<div style="display:flex;gap:6px;margin-bottom:4px">' +
               '<div style="width:110px"></div>' +
               '<div style="flex:1;display:flex">' + hourLabels + '</div>' +
             '</div>' +
-            hourlyRows,
-            'activity-hourly'
-          ));
+            hourlyRows;
         } else {
-          setSectionHtml(hourlyEl, detailsSection('Activity by Hour of Day', 'No scoped messages in this window to chart by hour of day.', '', 'activity-hourly'));
+          hourlyEl.innerHTML =
+            '<h4 style="margin:0 0 4px">Activity by Hour of Day</h4>' +
+            '<p class="text-muted" style="margin:0;font-size:0.85em">No scoped messages in this window to chart by hour of day.</p>';
         }
       }
 
