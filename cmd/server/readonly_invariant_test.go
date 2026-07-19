@@ -34,6 +34,12 @@ func TestServerSourceHasNoCachedRWCalls(t *testing.T) {
 		// (it opens mode=ro since #1289). Server publishes a snapshot
 		// file via internal/mbcapqueue; the ingestor applies it.
 		regexp.MustCompile(`UPDATE\s+nodes\s+SET\s+multibyte_`),
+		// #1598: touchRelayLastSeen/TouchNodeLastSeen issued
+		// `UPDATE nodes SET last_seen` from the server. It failed on
+		// every call since #1289 (mode=ro) with the error discarded at
+		// the call site, so nodes.last_seen tracked ADVERTs only. The
+		// writer now lives in cmd/ingestor (Store.TouchRelayNodes).
+		regexp.MustCompile(`UPDATE\s+nodes\s+SET\s+last_seen`),
 		regexp.MustCompile(`UPDATE\s+inactive_nodes\s+SET\s+multibyte_`),
 		regexp.MustCompile(`\bpersistMultibyteCapability\s*\(`),
 		regexp.MustCompile(`\bmaybePersistMultibyteCapability\s*\(`),

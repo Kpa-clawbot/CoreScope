@@ -2638,16 +2638,6 @@ func (db *DB) GetMetricsSummary(since string) ([]MetricsSummaryRow, error) {
 // (PruneOldMetrics / RemoveStaleObservers removed in #1283 — see note
 // above the MetricsSample type. Ingestor owns these writes now.)
 
-// TouchNodeLastSeen updates last_seen for a node identified by full public key.
-// Only updates if the new timestamp is newer than the existing value (or NULL).
-// Returns nil even if no rows are affected (node doesn't exist).
-func (db *DB) TouchNodeLastSeen(pubkey string, timestamp string) error {
-	_, err := db.conn.Exec(
-		"UPDATE nodes SET last_seen = ? WHERE public_key = ? AND (last_seen IS NULL OR last_seen < ?)",
-		timestamp, pubkey, timestamp,
-	)
-	return err
-}
 
 // GetDroppedPackets returns recently dropped packets, newest first.
 func (db *DB) GetDroppedPackets(limit int, observerID, nodePubkey string) ([]map[string]interface{}, error) {
