@@ -840,6 +840,68 @@ console.log('\n=== pickByAffinity neighbor-graph scoring (#874) ===');
   });
 }
 
+// ===== ROLES.JS: getNodeStatus (#1598 relay-aware staleness) =====
+console.log('\n=== roles.js: getNodeStatus (#1598) ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  const getNodeStatus = ctx.getNodeStatus;
+  const iso = (msAgo) => new Date(Date.now() - msAgo).toISOString();
+  const H = 3600000;
+
+  // Legacy (role, lastSeenMs) signature — unchanged behavior
+  test('legacy: repeater seen 1h ago is active', () =>
+    assert.strictEqual(getNodeStatus('repeater', Date.now() - 1 * H), 'active'));
+  test('legacy: repeater seen 80h ago is stale (infraSilentMs=72h)', () =>
+    assert.strictEqual(getNodeStatus('repeater', Date.now() - 80 * H), 'stale'));
+  test('legacy: companion seen 25h ago is stale (nodeSilentMs=24h)', () =>
+    assert.strictEqual(getNodeStatus('companion', Date.now() - 25 * H), 'stale'));
+  test('legacy: non-number lastSeenMs is stale', () =>
+    assert.strictEqual(getNodeStatus('repeater', undefined), 'stale'));
+
+  // Node-object signature
+  test('node: backbone-repeater fixture — last_seen 25h, last_relayed 5min → active', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'repeater', last_seen: iso(25 * H), last_relayed: iso(5 * 60000)
+    }), 'active'));
+  test('node: repeater advert-silent 151h but relayed 2min ago → active', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'repeater', last_seen: iso(151 * H), last_relayed: iso(2 * 60000)
+    }), 'active'));
+  test('node: repeater with BOTH last_seen and last_relayed past 72h → stale', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'repeater', last_seen: iso(100 * H), last_relayed: iso(80 * H)
+    }), 'stale'));
+  test('node: room honors last_relayed like repeater', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'room', last_seen: iso(90 * H), last_relayed: iso(10 * 60000)
+    }), 'active'));
+  test('node: companion does NOT get relay-based freshness', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'companion', last_seen: iso(30 * H), last_relayed: iso(5 * 60000)
+    }), 'stale'));
+  test('node: repeater with no last_relayed falls back to advert freshness (stale at 80h)', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'repeater', last_seen: iso(80 * H)
+    }), 'stale'));
+  test('node: repeater with fresh advert and no last_relayed → active', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'repeater', last_seen: iso(1 * H)
+    }), 'active'));
+  test('node: _liveSeen (ms) takes precedence over stale last_seen', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'companion', _liveSeen: Date.now() - 5 * 60000, last_seen: iso(48 * H)
+    }), 'active'));
+  test('node: _lastHeard preferred over last_seen', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'companion', _lastHeard: iso(10 * 60000), last_seen: iso(48 * H)
+    }), 'active'));
+  test('node: missing role defaults to companion thresholds', () =>
+    assert.strictEqual(getNodeStatus({ last_seen: iso(25 * H) }), 'stale'));
+  test('node: no timestamps at all → stale', () =>
+    assert.strictEqual(getNodeStatus({ role: 'repeater' }), 'stale'));
+}
+
 // ===== ROLES.JS: copyToClipboard =====
 console.log('\n=== roles.js: copyToClipboard ===');
 {
@@ -1062,11 +1124,11 @@ console.log('\n=== live.js: pruneStaleNodes ===');
     const markers = ctx.window._liveNodeMarkers();
     const data = ctx.window._liveNodeData();
 
-    // A repeater seen 48h ago should NOT be pruned (infraSilentMs = 72h)
+    // A repeater seen 48h ago should NOT be pruned or dimmed (infraSilentMs = 72h)
     markers['rpt1'] = { _glowMarker: null };
     data['rpt1'] = { public_key: 'rpt1', role: 'repeater', _liveSeen: Date.now() - 48 * 3600000 };
 
-    // A repeater seen 96h ago SHOULD be pruned
+    // #1598: a repeater seen 96h ago is stale, but infra is DIMMED, never deleted
     markers['rpt2'] = { _glowMarker: null };
     data['rpt2'] = { public_key: 'rpt2', role: 'repeater', _liveSeen: Date.now() - 96 * 3600000 };
 
@@ -1074,8 +1136,30 @@ console.log('\n=== live.js: pruneStaleNodes ===');
 
     assert.ok(markers['rpt1'], 'repeater at 48h should remain (under 72h threshold)');
     assert.ok(data['rpt1'], 'repeater data at 48h should remain');
-    assert.ok(!markers['rpt2'], 'repeater at 96h should be pruned (over 72h threshold)');
-    assert.ok(!data['rpt2'], 'repeater data at 96h should be pruned');
+    assert.ok(!markers['rpt1']._staleDimmed, 'repeater at 48h should not be dimmed');
+    assert.ok(markers['rpt2'], 'repeater at 96h should remain (#1598: dim, not delete)');
+    assert.ok(data['rpt2'], 'repeater data at 96h should remain (#1598)');
+    assert.ok(markers['rpt2']._staleDimmed === true, 'repeater at 96h should be dimmed');
+  });
+
+  test('pruneStaleNodes: relay-aware — advert-silent repeater with fresh last_relayed stays active (#1598)', () => {
+    const { ctx } = makeLiveSandbox();
+    const prune = ctx.window._livePruneStaleNodes;
+    const markers = ctx.window._liveNodeMarkers();
+    const data = ctx.window._liveNodeData();
+
+    // Backbone fixture: advert 96h stale, relayed 5 minutes ago → active, undimmed
+    markers['bb1'] = { _glowMarker: null };
+    data['bb1'] = {
+      public_key: 'bb1', role: 'repeater',
+      _liveSeen: Date.now() - 96 * 3600000,
+      last_relayed: new Date(Date.now() - 5 * 60000).toISOString()
+    };
+
+    prune();
+
+    assert.ok(markers['bb1'], 'relaying repeater should remain');
+    assert.ok(!markers['bb1']._staleDimmed, 'relaying repeater should not be dimmed');
   });
 
   test('node count does not grow unbounded with repeated ADVERTs', () => {

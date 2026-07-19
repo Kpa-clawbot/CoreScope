@@ -3068,7 +3068,12 @@
 
   // Prune nodes not seen within their role's health threshold.
   // API-loaded nodes (_fromAPI) are dimmed instead of removed — matches static map behavior.
-  // WS-only nodes (dynamically added from ADVERTs) are removed to prevent memory leaks.
+  // #1598: infra nodes (repeater/room) are ALWAYS dimmed, never deleted —
+  // a dimmed marker still tells operators "infrastructure exists here,
+  // advert stale", whereas deletion silently rewrites the map. Staleness
+  // itself is relay-aware via getNodeStatus(node) (max of advert-based
+  // freshness and last_relayed for infra).
+  // Remaining WS-only non-infra nodes are removed to prevent memory leaks.
   function pruneStaleNodes() {
     var now = Date.now();
     var pruned = false;
@@ -3077,17 +3082,18 @@
       if (!n) continue;
       var lastSeen = n._liveSeen || (n.last_heard ? new Date(n.last_heard).getTime() : null) || (n.last_seen ? new Date(n.last_seen).getTime() : null);
       if (lastSeen == null) continue;
-      var status = window.getNodeStatus ? getNodeStatus(n.role || 'unknown', lastSeen) : 'active';
+      var status = window.getNodeStatus ? getNodeStatus(n) : 'active';
+      var isInfra = n.role === 'repeater' || n.role === 'room';
       var marker = nodeMarkers[key];
       if (status === 'stale') {
-        if (n._fromAPI) {
+        if (n._fromAPI || isInfra) {
           // API-loaded nodes: dim instead of removing (consistent with static map)
           if (marker && !marker._staleDimmed) {
             marker._staleDimmed = true;
             _liveSetMarkerOpacity(marker, 0.35);
           }
         } else {
-          // WS-only nodes: remove to prevent unbounded memory growth
+          // WS-only non-infra nodes: remove to prevent unbounded memory growth
           if (marker) {
             if (nodesLayer) {
               try { nodesLayer.removeLayer(marker); } catch (e) { }
