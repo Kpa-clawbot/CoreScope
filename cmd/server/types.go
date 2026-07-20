@@ -211,6 +211,56 @@ type BridgeRepeater struct {
 	Count     int      `json:"count"`
 }
 
+// ─── Wardriving ────────────────────────────────────────────────────────────────
+
+type WardrivingTimePoint struct {
+	T     string `json:"t"`
+	Count int    `json:"count"`
+}
+
+type WardrivingSenderCount struct {
+	Sender string `json:"sender"`
+	Count  int    `json:"count"`
+}
+
+// WardrivingEntryPrefix is a raw path[0] hash-prefix tally — path[0] is the
+// hop closest to the originator (see neighbor_graph.go's "Edge 1: originator
+// ↔ path[0]" convention), i.e. which local repeater first relayed this
+// wardriving message. The frontend resolves prefixes to repeater names via
+// /api/resolve-hops, keeping only unique_prefix-confidence matches — same
+// discipline as the Foreign Traffic tab's Entry Points section.
+type WardrivingEntryPrefix struct {
+	Prefix           string `json:"prefix"`
+	ObservationCount int    `json:"observationCount"`
+	MessageCount     int    `json:"messageCount"` // distinct transmissions this prefix appeared as path[0] for
+}
+
+// WardrivingObserverCoverage is how much wardriving traffic a given observer
+// station actually heard — observers sit at fixed, known locations (unlike
+// the wardriving sender, whose live GPS is deliberately not carried on-air
+// by MeshMapper's default privacy-preserving anonymous-token mode), so this
+// is the reliable half of a coverage picture: "where do we know wardriving
+// signal actually reached."
+type WardrivingObserverCoverage struct {
+	ObserverID       string   `json:"observerId"`
+	ObserverName     string   `json:"observerName"`
+	IATA             string   `json:"iata,omitempty"`
+	Lat              *float64 `json:"lat,omitempty"`
+	Lon              *float64 `json:"lon,omitempty"`
+	ObservationCount int      `json:"observationCount"`
+	MessageCount     int      `json:"messageCount"` // distinct transmissions this observer heard
+}
+
+type WardrivingStatsResponse struct {
+	Window        string                       `json:"window"`
+	Channel       string                       `json:"channel"`
+	TotalMessages int                          `json:"totalMessages"`
+	TimeSeries    []WardrivingTimePoint        `json:"timeSeries"`
+	TopSenders    []WardrivingSenderCount      `json:"topSenders"`
+	EntryPoints   []WardrivingEntryPrefix      `json:"entryPoints"`
+	Observers     []WardrivingObserverCoverage `json:"observers"`
+}
+
 // ─── Health ────────────────────────────────────────────────────────────────────
 
 type MemoryStats struct {

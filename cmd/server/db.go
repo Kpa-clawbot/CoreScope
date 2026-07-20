@@ -20,7 +20,9 @@ import (
 // routeTypeTransport covers TRANSPORT_FLOOD (0) and TRANSPORT_DIRECT (3) —
 // the only route types that carry transport_code_1 (transport-level scope).
 // Per firmware/docs/packet_format.md § Route Types:
-//   0 = TRANSPORT_FLOOD, 1 = FLOOD, 2 = DIRECT, 3 = TRANSPORT_DIRECT.
+//
+//	0 = TRANSPORT_FLOOD, 1 = FLOOD, 2 = DIRECT, 3 = TRANSPORT_DIRECT.
+//
 // Routes 1 (FLOOD) and 2 (DIRECT) never carry a scope by protocol — they are
 // inherently unscoped and are counted separately in GetScopeStats (#1838).
 const routeTypeTransportSQL = "route_type IN (0, 3)"
@@ -32,11 +34,11 @@ const routeTypeNonTransportSQL = "route_type IN (1, 2)"
 
 // DB wraps a read-only connection to the MeshCore SQLite database.
 type DB struct {
-	conn             *sql.DB
-	path             string // filesystem path to the database file
-	isV3             bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
-	hasResolvedPath  bool   // observations table has resolved_path column
-	hasObsRawHex     bool   // observations table has raw_hex column (#881)
+	conn                *sql.DB
+	path                string // filesystem path to the database file
+	isV3                bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
+	hasResolvedPath     bool   // observations table has resolved_path column
+	hasObsRawHex        bool   // observations table has raw_hex column (#881)
 	hasScopeName        bool   // transmissions.scope_name column exists (#899)
 	hasDefaultScope     bool   // nodes.default_scope column exists (#899)
 	hasMultibyteSupCols bool   // nodes/inactive_nodes have multibyte_sup/multibyte_evidence (#903)
@@ -229,7 +231,7 @@ func (db *DB) scanTransmissionRow(rows *sql.Rows) map[string]interface{} {
 
 // Node represents a row from the nodes table.
 type Node struct {
-	PublicKey     string   `json:"public_key"`
+	PublicKey    string   `json:"public_key"`
 	Name         *string  `json:"name"`
 	Role         *string  `json:"role"`
 	Lat          *float64 `json:"lat"`
@@ -480,20 +482,20 @@ func (db *DB) GetAllRoleCounts() map[string]int {
 
 // PacketQuery holds filter params for packet listing.
 type PacketQuery struct {
-	Limit    int
-	Offset   int
-	Type     *int
-	Route    *int
-	Observer string
-	Hash     string
-	Since    string
-	Until    string
-	Region   string
-	Area     string   // area key; filters by transmitting node's GPS position
-	Node     string
-	Channel  string // channel_hash filter (#812). Plain names like "#test"/"public" or "enc_<HEX>" for encrypted
-	Order               string // ASC or DESC
-	ExpandObservations  bool   // when true, include observation sub-maps in txToMap output
+	Limit              int
+	Offset             int
+	Type               *int
+	Route              *int
+	Observer           string
+	Hash               string
+	Since              string
+	Until              string
+	Region             string
+	Area               string // area key; filters by transmitting node's GPS position
+	Node               string
+	Channel            string // channel_hash filter (#812). Plain names like "#test"/"public" or "enc_<HEX>" for encrypted
+	Order              string // ASC or DESC
+	ExpandObservations bool   // when true, include observation sub-maps in txToMap output
 }
 
 // PacketResult wraps paginated packet list.
@@ -596,7 +598,7 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 			COALESCE((SELECT MAX(strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', oi.timestamp, 'unixepoch')) FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen) AS latest,
 			obs.id AS observer_id, obs.name AS observer_name, COALESCE(obs.iata, '') AS observer_iata,
 			o.snr, o.rssi, o.path_json,
-			COALESCE((SELECT GROUP_CONCAT(DISTINCT obi.iata) FROM observations oi JOIN observers obi ON obi.rowid = oi.observer_idx WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas` + groupedScopeCol + `
+			COALESCE((SELECT GROUP_CONCAT(DISTINCT obi.iata) FROM observations oi JOIN observers obi ON obi.rowid = oi.observer_idx WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas`+groupedScopeCol+`
 		FROM transmissions t
 		LEFT JOIN observations o ON o.id = (
 			SELECT id FROM observations WHERE transmission_id = t.id
@@ -611,7 +613,7 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 			COALESCE((SELECT MAX(oi.timestamp) FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen) AS latest,
 			o.observer_id, o.observer_name, COALESCE(obs2.iata, '') AS observer_iata,
 			o.snr, o.rssi, o.path_json,
-			COALESCE((SELECT GROUP_CONCAT(DISTINCT obi.iata) FROM observations oi JOIN observers obi ON obi.id = oi.observer_id WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas` + groupedScopeCol + `
+			COALESCE((SELECT GROUP_CONCAT(DISTINCT obi.iata) FROM observations oi JOIN observers obi ON obi.id = oi.observer_id WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas`+groupedScopeCol+`
 		FROM transmissions t
 		LEFT JOIN observations o ON o.id = (
 			SELECT id FROM observations WHERE transmission_id = t.id
@@ -823,7 +825,6 @@ func (db *DB) resolveNodePubkey(nodeIDOrName string) string {
 	return pk
 }
 
-
 // GetTransmissionByID fetches from transmissions table with observer data.
 func (db *DB) GetTransmissionByID(id int) (map[string]interface{}, error) {
 	selectCols, observerJoin := db.transmissionBaseSQL()
@@ -869,7 +870,6 @@ func (db *DB) GetObservationsForHash(hash string) []map[string]interface{} {
 	obsByTx := db.getObservationsForTransmissions([]int{txID})
 	return obsByTx[txID]
 }
-
 
 // GetNodes returns filtered, paginated node list.
 func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortBy, region string) ([]map[string]interface{}, int, map[string]int, error) {
@@ -1049,7 +1049,6 @@ func (db *DB) GetNodeByPubkey(pubkey string) (map[string]interface{}, error) {
 	}
 	return nil, nil
 }
-
 
 // GetRecentTransmissionsForNode returns recent transmissions originated by a
 // node, identified by exact pubkey match on the indexed from_pubkey column
@@ -1422,7 +1421,6 @@ func (db *DB) GetDistinctIATAs() ([]string, error) {
 	}
 	return codes, nil
 }
-
 
 // GetNetworkStatus returns overall network health status.
 func (db *DB) GetNetworkStatus(healthThresholds HealthThresholds) (map[string]interface{}, error) {
@@ -1895,8 +1893,8 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 	defer rows.Close()
 
 	type msg struct {
-		Data       map[string]interface{}
-		Repeats    int
+		Data        map[string]interface{}
+		Repeats     int
 		LatestEpoch int64 // max observation timestamp (unix seconds) — issue #1366
 	}
 	msgMap := make(map[int]*msg, len(pageIDs))
@@ -2020,8 +2018,6 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 
 	return messages, total, nil
 }
-
-
 
 // GetNewTransmissionsSince returns new transmissions after a given ID for WebSocket polling.
 func (db *DB) GetNewTransmissionsSince(lastID int, limit int) ([]map[string]interface{}, error) {
@@ -2896,7 +2892,7 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 			COALESCE(SUM(CASE WHEN scope_name IS NULL THEN 1 ELSE 0 END), 0) AS unscoped,
 			COALESCE(SUM(CASE WHEN scope_name = '' THEN 1 ELSE 0 END), 0) AS unknown_scope
 		FROM transmissions
-		WHERE ` + routeTypeTransportSQL + ` AND first_seen >= ?
+		WHERE `+routeTypeTransportSQL+` AND first_seen >= ?
 	`, since)
 	if err := row.Scan(
 		&resp.Summary.TransportTotal,
@@ -2924,7 +2920,7 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 	rows, err := db.conn.Query(`
 		SELECT scope_name, COUNT(*) AS cnt
 		FROM transmissions
-		WHERE ` + routeTypeTransportSQL + ` AND scope_name IS NOT NULL AND scope_name != '' AND first_seen >= ?
+		WHERE `+routeTypeTransportSQL+` AND scope_name IS NOT NULL AND scope_name != '' AND first_seen >= ?
 		GROUP BY scope_name
 		ORDER BY cnt DESC
 	`, since)
@@ -2951,7 +2947,7 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 			COUNT(scope_name) AS scoped,
 			SUM(CASE WHEN scope_name IS NULL THEN 1 ELSE 0 END) AS unscoped
 		FROM transmissions
-		WHERE ` + routeTypeTransportSQL + ` AND first_seen >= ?
+		WHERE `+routeTypeTransportSQL+` AND first_seen >= ?
 		GROUP BY bucket
 		ORDER BY bucket
 	`, bucketExpr)
@@ -2982,7 +2978,7 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 	hourRows, err := db.conn.Query(`
 		SELECT scope_name, CAST(strftime('%H', first_seen) AS INTEGER) AS hour, COUNT(*) AS cnt
 		FROM transmissions
-		WHERE ` + routeTypeTransportSQL + ` AND scope_name IS NOT NULL AND scope_name != '' AND first_seen >= ?
+		WHERE `+routeTypeTransportSQL+` AND scope_name IS NOT NULL AND scope_name != '' AND first_seen >= ?
 		GROUP BY scope_name, hour
 	`, since)
 	if err != nil {
@@ -3172,6 +3168,165 @@ func (db *DB) getChannelScopeRegions(since string) (map[string][]string, error) 
 		result[channel] = append(result[channel], region)
 	}
 	return result, rows.Err()
+}
+
+// GetWardrivingStats aggregates activity on the given channel (normally
+// "#wardriving") over the requested window: message volume over time, who's
+// actively sending, which repeater first relayed each message (raw hash
+// prefixes — the caller resolves names via /api/resolve-hops), and which
+// observer stations actually heard the traffic. See WardrivingObserverCoverage
+// doc for why observer coverage — not sender GPS — is the reliable half of
+// a "where did this reach" picture: MeshMapper's #wardriving messages carry
+// an anonymous per-session token by default, not the sender's live
+// coordinates (those go to MeshMapper's own server via a separate API call
+// we have no visibility into).
+func (db *DB) GetWardrivingStats(window, channel string) (*WardrivingStatsResponse, error) {
+	var since string
+	var bucketExpr string
+	switch window {
+	case "1h":
+		since = time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+		bucketExpr = `strftime('%Y-%m-%dT%H:', first_seen) || printf('%02d', (CAST(strftime('%M', first_seen) AS INTEGER) / 5) * 5) || ':00Z'`
+	case "7d":
+		since = time.Now().Add(-7 * 24 * time.Hour).UTC().Format(time.RFC3339)
+		bucketExpr = `strftime('%Y-%m-%dT', first_seen) || printf('%02d', (CAST(strftime('%H', first_seen) AS INTEGER) / 6) * 6) || ':00:00Z'`
+	default:
+		window = "24h"
+		since = time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+		bucketExpr = `strftime('%Y-%m-%dT%H:00:00Z', first_seen)`
+	}
+
+	resp := &WardrivingStatsResponse{Window: window, Channel: channel}
+
+	if err := db.conn.QueryRow(
+		`SELECT COUNT(*) FROM transmissions WHERE channel_hash = ? AND payload_type = 5 AND first_seen >= ?`,
+		channel, since,
+	).Scan(&resp.TotalMessages); err != nil {
+		return nil, fmt.Errorf("wardriving total query: %w", err)
+	}
+
+	tsQuery := fmt.Sprintf(`
+		SELECT %s AS bucket, COUNT(*) AS cnt
+		FROM transmissions
+		WHERE channel_hash = ? AND payload_type = 5 AND first_seen >= ?
+		GROUP BY bucket
+		ORDER BY bucket
+	`, bucketExpr)
+	tsRows, err := db.conn.Query(tsQuery, channel, since)
+	if err != nil {
+		return nil, fmt.Errorf("wardriving timeseries query: %w", err)
+	}
+	resp.TimeSeries = make([]WardrivingTimePoint, 0)
+	for tsRows.Next() {
+		var pt WardrivingTimePoint
+		if tsRows.Scan(&pt.T, &pt.Count) == nil {
+			resp.TimeSeries = append(resp.TimeSeries, pt)
+		}
+	}
+	tsRows.Close()
+	if err := tsRows.Err(); err != nil {
+		return nil, fmt.Errorf("wardriving timeseries iteration: %w", err)
+	}
+
+	senderRows, err := db.conn.Query(`
+		SELECT json_extract(decoded_json, '$.sender') AS sender, COUNT(*) AS cnt
+		FROM transmissions
+		WHERE channel_hash = ? AND payload_type = 5 AND first_seen >= ?
+			AND json_extract(decoded_json, '$.sender') IS NOT NULL
+			AND json_extract(decoded_json, '$.sender') != ''
+		GROUP BY sender
+		ORDER BY cnt DESC
+	`, channel, since)
+	if err != nil {
+		return nil, fmt.Errorf("wardriving senders query: %w", err)
+	}
+	resp.TopSenders = make([]WardrivingSenderCount, 0)
+	for senderRows.Next() {
+		var sc WardrivingSenderCount
+		if senderRows.Scan(&sc.Sender, &sc.Count) == nil {
+			resp.TopSenders = append(resp.TopSenders, sc)
+		}
+	}
+	senderRows.Close()
+	if err := senderRows.Err(); err != nil {
+		return nil, fmt.Errorf("wardriving senders iteration: %w", err)
+	}
+
+	entryRows, err := db.conn.Query(`
+		SELECT json_extract(o.path_json, '$[0]') AS prefix,
+			COUNT(*) AS observation_count,
+			COUNT(DISTINCT o.transmission_id) AS message_count
+		FROM observations o
+		JOIN transmissions t ON t.id = o.transmission_id
+		WHERE t.channel_hash = ? AND t.payload_type = 5 AND t.first_seen >= ?
+			AND o.path_json IS NOT NULL AND json_array_length(o.path_json) > 0
+		GROUP BY prefix
+		ORDER BY observation_count DESC
+	`, channel, since)
+	if err != nil {
+		return nil, fmt.Errorf("wardriving entry points query: %w", err)
+	}
+	resp.EntryPoints = make([]WardrivingEntryPrefix, 0)
+	for entryRows.Next() {
+		var ep WardrivingEntryPrefix
+		if entryRows.Scan(&ep.Prefix, &ep.ObservationCount, &ep.MessageCount) == nil {
+			resp.EntryPoints = append(resp.EntryPoints, ep)
+		}
+	}
+	entryRows.Close()
+	if err := entryRows.Err(); err != nil {
+		return nil, fmt.Errorf("wardriving entry points iteration: %w", err)
+	}
+
+	var obsQuery string
+	if db.isV3 {
+		obsQuery = `
+			SELECT obs.rowid AS observer_id, obs.name, COALESCE(obs.iata, ''),
+				COUNT(*) AS observation_count, COUNT(DISTINCT o.transmission_id) AS message_count
+			FROM observations o
+			JOIN transmissions t ON t.id = o.transmission_id
+			JOIN observers obs ON obs.rowid = o.observer_idx
+			WHERE t.channel_hash = ? AND t.payload_type = 5 AND t.first_seen >= ?
+			GROUP BY observer_id
+			ORDER BY observation_count DESC`
+	} else {
+		obsQuery = `
+			SELECT obs.id AS observer_id, obs.name, COALESCE(obs.iata, ''),
+				COUNT(*) AS observation_count, COUNT(DISTINCT o.transmission_id) AS message_count
+			FROM observations o
+			JOIN transmissions t ON t.id = o.transmission_id
+			JOIN observers obs ON obs.id = o.observer_id
+			WHERE t.channel_hash = ? AND t.payload_type = 5 AND t.first_seen >= ?
+			GROUP BY observer_id
+			ORDER BY observation_count DESC`
+	}
+	obsRows, err := db.conn.Query(obsQuery, channel, since)
+	if err != nil {
+		return nil, fmt.Errorf("wardriving observers query: %w", err)
+	}
+	resp.Observers = make([]WardrivingObserverCoverage, 0)
+	for obsRows.Next() {
+		var oc WardrivingObserverCoverage
+		var name sql.NullString
+		if err := obsRows.Scan(&oc.ObserverID, &name, &oc.IATA, &oc.ObservationCount, &oc.MessageCount); err != nil {
+			continue
+		}
+		oc.ObserverName = name.String
+		if oc.ObserverName == "" {
+			oc.ObserverName = oc.ObserverID
+		}
+		if coord, ok := iataCoords[strings.ToUpper(strings.TrimSpace(oc.IATA))]; ok {
+			lat, lon := coord.Lat, coord.Lon
+			oc.Lat, oc.Lon = &lat, &lon
+		}
+		resp.Observers = append(resp.Observers, oc)
+	}
+	obsRows.Close()
+	if err := obsRows.Err(); err != nil {
+		return nil, fmt.Errorf("wardriving observers iteration: %w", err)
+	}
+
+	return resp, nil
 }
 
 // GetMatchedRegionNames returns the set of scope_name values that have ever

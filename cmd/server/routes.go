@@ -66,6 +66,11 @@ type Server struct {
 	scopeStatsCache    map[string]*ScopeStatsResponse
 	scopeStatsCachedAt map[string]time.Time
 
+	// Cached /api/analytics/wardriving response — per-window, recomputed at most once every 30s
+	wardrivingStatsMu       sync.Mutex
+	wardrivingStatsCache    map[string]*WardrivingStatsResponse
+	wardrivingStatsCachedAt map[string]time.Time
+
 	// Router reference for OpenAPI spec generation
 	router *mux.Router
 
@@ -231,6 +236,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/health", s.handleHealth).Methods("GET")
 	r.HandleFunc("/api/stats", s.handleStats).Methods("GET")
 	r.HandleFunc("/api/scope-stats", s.handleScopeStats).Methods("GET")
+	r.HandleFunc("/api/analytics/wardriving", s.handleWardrivingStats).Methods("GET")
 	r.HandleFunc("/api/perf", s.handlePerf).Methods("GET")
 	r.HandleFunc("/api/perf/io", s.handlePerfIO).Methods("GET")
 	r.HandleFunc("/api/perf/sqlite", s.handlePerfSqlite).Methods("GET")
@@ -3703,6 +3709,54 @@ func (s *Server) handleScopeStats(w http.ResponseWriter, r *http.Request) {
 	s.scopeStatsCache[window] = resp
 	s.scopeStatsCachedAt[window] = time.Now()
 	s.scopeStatsMu.Unlock()
+
+	writeJSON(w, resp)
+}
+
+// handleWardrivingStats serves activity/entry-point/coverage analytics for
+// the #wardriving channel (see GetWardrivingStats doc). Same per-window
+// 30s-cache shape as handleScopeStats.
+func (s *Server) handleWardrivingStats(w http.ResponseWriter, r *http.Request) {
+	const wardrivingStatsTTL = 30 * time.Second
+
+	window := r.URL.Query().Get("window")
+	if window == "" {
+		window = "24h"
+	}
+	if window != "1h" && window != "24h" && window != "7d" {
+		writeError(w, 400, "window must be 1h, 24h, or 7d")
+		return
+	}
+	channel := r.URL.Query().Get("channel")
+	if channel == "" {
+		channel = "#wardriving"
+	}
+	cacheKey := window + "|" + channel
+
+	s.wardrivingStatsMu.Lock()
+	if s.wardrivingStatsCache != nil {
+		if cached, ok := s.wardrivingStatsCache[cacheKey]; ok && time.Since(s.wardrivingStatsCachedAt[cacheKey]) < wardrivingStatsTTL {
+			s.wardrivingStatsMu.Unlock()
+			writeJSON(w, cached)
+			return
+		}
+	}
+	s.wardrivingStatsMu.Unlock()
+
+	resp, err := s.db.GetWardrivingStats(window, channel)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+
+	s.wardrivingStatsMu.Lock()
+	if s.wardrivingStatsCache == nil {
+		s.wardrivingStatsCache = make(map[string]*WardrivingStatsResponse)
+		s.wardrivingStatsCachedAt = make(map[string]time.Time)
+	}
+	s.wardrivingStatsCache[cacheKey] = resp
+	s.wardrivingStatsCachedAt[cacheKey] = time.Now()
+	s.wardrivingStatsMu.Unlock()
 
 	writeJSON(w, resp)
 }

@@ -35,6 +35,10 @@
   function _stopForeignTrafficRefresh() {
     if (_foreignTrafficRefreshTimer) { clearInterval(_foreignTrafficRefreshTimer); _foreignTrafficRefreshTimer = null; }
   }
+  var _wardrivingRefreshTimer = null;
+  function _stopWardrivingRefresh() {
+    if (_wardrivingRefreshTimer) { clearInterval(_wardrivingRefreshTimer); _wardrivingRefreshTimer = null; }
+  }
 
   // --- Status color helpers (read from CSS variables for theme support) ---
   function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
@@ -135,6 +139,7 @@
             <button class="tab-btn" data-tab="roles">Roles</button>
             <button class="tab-btn" data-tab="scopes">Scopes</button>
             <button class="tab-btn" data-tab="foreign-traffic">Foreign Traffic</button>
+            <button class="tab-btn" data-tab="wardriving">Wardriving</button>
             <button class="tab-btn" data-tab="prefix-tool">Prefix Tool</button>
           </div>
         </div>
@@ -183,6 +188,7 @@
       if (_currentTab !== 'roles') _stopRolesRefresh();
       if (_currentTab !== 'scopes') _stopScopesRefresh();
       if (_currentTab !== 'foreign-traffic') _stopForeignTrafficRefresh();
+      if (_currentTab !== 'wardriving') _stopWardrivingRefresh();
       _updateAnalyticsUrl();
       renderTab(_currentTab);
     });
@@ -300,6 +306,7 @@
       case 'prefix-tool': await renderPrefixTool(el); break;
       case 'scopes': await renderScopesTab(el); break;
       case 'foreign-traffic': await renderForeignTrafficTab(el); break;
+      case 'wardriving': await renderWardrivingTab(el); break;
     }
     // Auto-apply column resizing to all analytics tables
     requestAnimationFrame(() => {
@@ -2691,7 +2698,7 @@
     }
   }
 
-function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTrafficRefresh(); _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
+function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTrafficRefresh(); _stopWardrivingRefresh(); _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
 
   // Expose for testing
   if (typeof window !== 'undefined') {
@@ -2708,6 +2715,8 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
     window._analyticsRenderCollisionsFromServer = renderCollisionsFromServer;
     window._analyticsRenderForeignTrafficTab = renderForeignTrafficTab;
     window._analyticsStopForeignTrafficRefresh = _stopForeignTrafficRefresh;
+    window._analyticsRenderWardrivingTab = renderWardrivingTab;
+    window._analyticsStopWardrivingRefresh = _stopWardrivingRefresh;
     window._analyticsComputeNodesWithoutScope = computeNodesWithoutScope;
     window._analyticsComputeRepeatersNeverRelayingScope = computeRepeatersNeverRelayingScope;
   }
@@ -5387,6 +5396,202 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       var cur = document.getElementById('analyticsContent');
       if (!cur) { _stopForeignTrafficRefresh(); return; }
       load();
+    }, 60000);
+  }
+
+  // Wardriving analytics: activity/entry-point/coverage for the
+  // #wardriving channel (MeshMapper's community wardriving convention —
+  // see /api/analytics/wardriving doc). MeshMapper's on-air message is an
+  // anonymous per-session token by default, not the sender's live GPS
+  // (that goes to MeshMapper's own server via a separate API call we
+  // never see) — so sender location can't be plotted here. What IS
+  // reliable: which repeater first relayed each message (Entry Points,
+  // same path[0]/unique_prefix discipline as the Foreign Traffic tab),
+  // and which observer stations — fixed, known locations — actually
+  // heard the traffic (Coverage).
+  async function renderWardrivingTab(el) {
+    var winKey = 'wardriving_window';
+    var selectedWindow = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(winKey)) || '24h';
+
+    function pct(n, total) {
+      if (!total) return '—';
+      return (n / total * 100).toFixed(1) + '%';
+    }
+
+    function cardsHtml(d) {
+      return [
+        { label: 'Messages', value: d.totalMessages.toLocaleString(), note: 'window: ' + d.window },
+        { label: 'Active Senders', value: (d.topSenders || []).length.toLocaleString(), note: null },
+        { label: 'Entry-Point Repeaters', value: (d.entryPoints || []).length.toLocaleString(), note: 'distinct path[0] prefixes' },
+        { label: 'Observers Reached', value: (d.observers || []).length.toLocaleString(), note: null },
+      ].map(function(c) {
+        return '<div class="stat-card"><div class="stat-value">' + c.value + '</div>' +
+          '<div class="stat-label">' + c.label + '</div>' +
+          (c.note ? '<div class="stat-note text-muted" style="font-size:11px">' + c.note + '</div>' : '') +
+          '</div>';
+      }).join('');
+    }
+
+    // Single-line SVG time series — matches the Scopes tab's two-line chart style.
+    function chartHtml(ts) {
+      if (!ts || ts.length <= 1) {
+        return '<p class="text-muted" style="font-size:0.85em">Insufficient data points to chart — wait for more wardriving activity in this window.</p>';
+      }
+      var vals = ts.map(function(p) { return p.count; });
+      var maxVal = Math.max(1, Math.max.apply(null, vals));
+      var W = 800, H = 160, padL = 44, padT = 10, padR = 10;
+      var plotW = W - padL - padR, plotH = H - 24 - padT;
+      var n = ts.length;
+      var pts = vals.map(function(v, i) {
+        var x = padL + i * plotW / Math.max(n - 1, 1);
+        var y = padT + plotH - (v / maxVal) * plotH;
+        return x.toFixed(1) + ',' + y.toFixed(1);
+      }).join(' ');
+      var grid = '';
+      for (var gi = 0; gi <= 4; gi++) {
+        var gy = padT + plotH * gi / 4;
+        var gv = Math.round(maxVal * (4 - gi) / 4);
+        grid += '<line x1="' + padL + '" y1="' + gy.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + gy.toFixed(1) + '" stroke="var(--border)" stroke-dasharray="2"/>';
+        grid += '<text x="' + (padL - 4) + '" y="' + (gy + 4).toFixed(1) + '" text-anchor="end" font-size="9" fill="var(--text-muted)">' + gv + '</text>';
+      }
+      return '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;max-height:' + H + 'px" role="img" aria-label="Wardriving message volume over time">' +
+        grid +
+        '<polyline points="' + pts + '" fill="none" stroke="var(--accent)" stroke-width="2"/>' +
+        '</svg>';
+    }
+
+    function sendersHtml(senders, totalMessages) {
+      if (!senders || senders.length === 0) {
+        return '<p class="text-muted" style="font-size:0.85em">No wardriving messages in this window.</p>';
+      }
+      var rows = senders.map(function(s) {
+        return '<tr><td>' + esc(s.sender) + '</td><td>' + s.count.toLocaleString() + '</td><td>' + pct(s.count, totalMessages) + '</td></tr>';
+      }).join('');
+      return '<table class="data-table analytics-table">' +
+        '<thead><tr><th>Sender</th><th>Messages</th><th>% of Total</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+        '</table>';
+    }
+
+    // Entry Points — resolve raw path[0] hash prefixes to repeater names,
+    // same unique_prefix-only discipline as the Foreign Traffic tab (a
+    // non-unique_prefix resolution is a genuine hash collision across
+    // multiple candidate repeaters — folded into "Ambiguous" rather than
+    // guessing).
+    async function entryPointsHtml(prefixes) {
+      if (!prefixes || prefixes.length === 0) {
+        return '<p class="text-muted" style="font-size:0.85em">No wardriving messages with a relay path in this window.</p>';
+      }
+      try {
+        var resp = await api('/resolve-hops?hops=' + prefixes.map(function(p) { return p.prefix; }).join(','), { ttl: CLIENT_TTL.nodeDetail }).catch(function() { return null; });
+        var resolved = (resp && resp.resolved) || {};
+        var totalObs = prefixes.reduce(function(sum, p) { return sum + p.observationCount; }, 0);
+        var named = [];
+        var ambiguousObs = 0, ambiguousMsgs = 0;
+        prefixes.forEach(function(p) {
+          var r = resolved[p.prefix];
+          if (r && r.confidence === 'unique_prefix') {
+            named.push({ name: r.name, pubkey: r.pubkey, obs: p.observationCount, msgs: p.messageCount });
+          } else {
+            ambiguousObs += p.observationCount;
+            ambiguousMsgs += p.messageCount;
+          }
+        });
+        named.sort(function(a, b) { return b.obs - a.obs; });
+        var rows = named.map(function(e) {
+          return '<tr><td><a href="#/nodes/' + encodeURIComponent(e.pubkey) + '">' + esc(e.name) + '</a></td>' +
+            '<td>' + e.obs.toLocaleString() + '</td>' +
+            '<td>' + pct(e.obs, totalObs) + '</td>' +
+            '<td>' + e.msgs.toLocaleString() + '</td></tr>';
+        }).join('') + (ambiguousObs > 0
+          ? '<tr><td class="text-muted">Ambiguous (hash prefix collides across multiple candidate repeaters)</td>' +
+            '<td>' + ambiguousObs.toLocaleString() + '</td><td>' + pct(ambiguousObs, totalObs) + '</td><td>' + ambiguousMsgs.toLocaleString() + '</td></tr>'
+          : '');
+        return (named.length > 0 || ambiguousObs > 0)
+          ? '<table class="data-table analytics-table">' +
+            '<thead><tr><th>Entry-Point Repeater</th><th>Observations</th><th>% of Observations</th><th>Distinct Messages</th></tr></thead>' +
+            '<tbody>' + rows + '</tbody>' +
+            '</table>'
+          : '<p class="text-muted" style="font-size:0.85em">No traceable relay path yet for any wardriving message.</p>';
+      } catch (e) {
+        return '<p class="text-muted">Failed to resolve entry points.</p>';
+      }
+    }
+
+    function observersHtml(observers) {
+      if (!observers || observers.length === 0) {
+        return '<p class="text-muted" style="font-size:0.85em">No observer has heard wardriving traffic in this window.</p>';
+      }
+      var totalObsCount = observers.reduce(function(sum, o) { return sum + o.observationCount; }, 0);
+      var rows = observers.map(function(o) {
+        var loc = (o.lat != null && o.lon != null) ? (o.lat.toFixed(2) + ', ' + o.lon.toFixed(2)) : '—';
+        return '<tr><td>' + esc(o.observerName) + '</td>' +
+          '<td>' + esc(o.iata || '—') + '</td>' +
+          '<td>' + loc + '</td>' +
+          '<td>' + o.observationCount.toLocaleString() + '</td>' +
+          '<td>' + pct(o.observationCount, totalObsCount) + '</td>' +
+          '<td>' + o.messageCount.toLocaleString() + '</td></tr>';
+      }).join('');
+      return '<table class="data-table analytics-table">' +
+        '<thead><tr><th>Observer</th><th>Region</th><th>Lat, Lon</th><th>Observations</th><th>% of Observations</th><th>Distinct Messages</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+        '</table>';
+    }
+
+    function attachWindowButtons() {
+      el.querySelectorAll('[data-wdwin]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          selectedWindow = btn.dataset.wdwin;
+          if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(winKey, selectedWindow);
+          load(selectedWindow);
+        });
+      });
+    }
+
+    async function load(w) {
+      var body;
+      try {
+        var d = await api('/analytics/wardriving?window=' + encodeURIComponent(w), { ttl: 30000 });
+        var entryHtml = await entryPointsHtml(d.entryPoints || []);
+        body =
+          '<div id="wardrivingCards" class="stats-grid" style="margin-bottom:16px">' + cardsHtml(d) + '</div>' +
+          '<div id="wardrivingChart" style="margin-bottom:16px">' + chartHtml(d.timeSeries) + '</div>' +
+          '<h4 style="margin:16px 0 4px">Top Senders</h4>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Who\'s actively wardriving in this window, by message count.</p>' +
+          '<div id="wardrivingSenders">' + sendersHtml(d.topSenders, d.totalMessages) + '</div>' +
+          '<h4 style="margin:24px 0 4px">Entry Points</h4>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Which local repeater first relayed each wardriving message — the hop closest to the origin (path[0]) across every observed copy.</p>' +
+          '<div id="wardrivingEntryPoints">' + entryHtml + '</div>' +
+          '<h4 style="margin:24px 0 4px">Coverage by Observer</h4>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Which observer stations actually heard wardriving traffic — observers sit at fixed, known locations, so this is the reliable half of "how far did it reach."</p>' +
+          '<div id="wardrivingObservers">' + observersHtml(d.observers) + '</div>';
+      } catch (err) {
+        body = '<div class="text-center" style="color:var(--status-red);padding:20px">Failed to load wardriving stats: ' + esc(String(err)) + '</div>';
+      }
+
+      el.innerHTML =
+        '<h3 style="margin:0 0 4px">Wardriving (#wardriving)</h3>' +
+        '<p class="text-muted" style="margin:0 0 16px;font-size:0.85em">' +
+          'Community coverage-mapping traffic on the #wardriving channel. MeshMapper\'s on-air ping carries an anonymous session token by default, not the sender\'s live GPS — coordinates go to MeshMapper\'s own server separately. What we can see: who\'s active, which repeater first relayed their signal, and which observer stations (fixed, known locations) actually heard it.' +
+        '</p>' +
+        '<div style="margin-bottom:12px">' +
+          ['1h', '24h', '7d'].map(function(v) {
+            return '<button class="tab-btn' + (selectedWindow === v ? ' active' : '') + '" data-wdwin="' + v + '">' + v + '</button>';
+          }).join('') +
+        '</div>' +
+        body;
+      attachWindowButtons();
+    }
+
+    await load(selectedWindow);
+
+    // Auto-refresh every 60s while this tab is active (matches Roles/Scopes/Foreign Traffic).
+    _stopWardrivingRefresh();
+    _wardrivingRefreshTimer = setInterval(function() {
+      if (_currentTab !== 'wardriving') { _stopWardrivingRefresh(); return; }
+      var cur = document.getElementById('analyticsContent');
+      if (!cur) { _stopWardrivingRefresh(); return; }
+      load(selectedWindow);
     }, 60000);
   }
 
