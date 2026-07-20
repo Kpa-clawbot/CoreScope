@@ -5510,7 +5510,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       var attrs = 'data-wd-sender="' + esc(sender) + '"';
       if (since) attrs += ' data-wd-since="' + esc(since) + '"';
       if (until) attrs += ' data-wd-until="' + esc(until) + '"';
-      return '<button type="button" class="btn-link" ' + attrs + ' aria-expanded="false">' + esc(sender) + '</button>';
+      return '<button type="button" ' + attrs + ' aria-expanded="false" style="background:none;border:none;padding:0;margin:0;font:inherit;color:var(--link-color);cursor:pointer">' + esc(sender) + '</button>';
     }
 
     // Sessions — each sender's messages grouped into runs (backend splits
