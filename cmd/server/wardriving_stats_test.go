@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http/httptest"
 	"testing"
@@ -284,6 +285,82 @@ func TestHandleWardrivingStats_Sessions(t *testing.T) {
 	}
 }
 
+// TestHandleWardrivingStats_Anomalies covers payload-anomaly detection:
+// standard 7-byte tokens count toward StandardPayloadCount, non-standard
+// lengths and undecodable base64 are grouped per sender into Anomalies,
+// and messages with no "MM:" prefix at all (plain chat) are ignored
+// entirely rather than polluting either bucket.
+func TestHandleWardrivingStats_Anomalies(t *testing.T) {
+	srv, router := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
+		t.Fatalf("clear transmissions: %v", err)
+	}
+
+	insertTx := func(hash, sender, text string, tsOffset time.Duration) {
+		ts := time.Now().UTC().Add(tsOffset).Format(time.RFC3339)
+		if _, err := srv.db.conn.Exec(
+			`INSERT INTO transmissions (raw_hex,hash,first_seen,route_type,payload_type,channel_hash,decoded_json) VALUES (?,?,?,1,5,'#wardriving',?)`,
+			"aa", hash, ts, `{"sender":"`+sender+`","text":"`+text+`"}`,
+		); err != nil {
+			t.Fatalf("insert tx %s: %v", hash, err)
+		}
+	}
+
+	standardToken := base64.RawURLEncoding.EncodeToString([]byte{1, 2, 3, 4, 5, 6, 7})
+	longPayload := base64.RawURLEncoding.EncodeToString(make([]byte, 12))
+
+	insertTx("std1", "Alice", "MM:"+standardToken, -3*time.Hour)
+	insertTx("std2", "Bob", "MM:"+standardToken, -2*time.Hour)
+	// Suspect1: two messages with a consistent non-standard 12-byte payload.
+	insertTx("anom1", "Suspect1", "MM:"+longPayload, -90*time.Minute)
+	insertTx("anom2", "Suspect1", "MM:"+longPayload, -80*time.Minute)
+	// Suspect2: one genuinely undecodable payload (invalid base64 chars).
+	insertTx("anom3", "Suspect2", "MM:!!!not-valid-b64!!!", -70*time.Minute)
+	// Plain chat on the same channel — must be ignored entirely, not
+	// counted as standard or anomalous.
+	insertTx("chat1", "Eve", "hey is anyone home", -60*time.Minute)
+
+	req := httptest.NewRequest("GET", "/api/analytics/wardriving?window=24h", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var resp WardrivingStatsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v body=%s", err, w.Body.String())
+	}
+
+	if resp.StandardPayloadCount != 2 {
+		t.Errorf("StandardPayloadCount = %d, want 2 (Alice + Bob)", resp.StandardPayloadCount)
+	}
+	if len(resp.Anomalies) != 2 {
+		t.Fatalf("Anomalies = %+v, want 2 senders (Suspect1, Suspect2)", resp.Anomalies)
+	}
+
+	// Sorted by MessageCount desc: Suspect1 (2 messages) before Suspect2 (1).
+	s1, s2 := resp.Anomalies[0], resp.Anomalies[1]
+	if s1.Sender != "Suspect1" || s1.MessageCount != 2 {
+		t.Errorf("Anomalies[0] = %+v, want {Suspect1, 2 messages}", s1)
+	}
+	if len(s1.PayloadBytes) != 1 || s1.PayloadBytes[0] != 12 {
+		t.Errorf("Suspect1 PayloadBytes = %v, want [12]", s1.PayloadBytes)
+	}
+	if s2.Sender != "Suspect2" || s2.MessageCount != 1 {
+		t.Errorf("Anomalies[1] = %+v, want {Suspect2, 1 message}", s2)
+	}
+	if len(s2.PayloadBytes) != 1 || s2.PayloadBytes[0] != -1 {
+		t.Errorf("Suspect2 PayloadBytes = %v, want [-1] (undecodable)", s2.PayloadBytes)
+	}
+
+	// Eve's plain-chat message must not appear anywhere in either bucket.
+	for _, a := range resp.Anomalies {
+		if a.Sender == "Eve" {
+			t.Error("Eve's plain-chat message (no MM: prefix) must not be counted as an anomaly")
+		}
+	}
+}
+
 // TestHandleWardrivingStats_InvalidWindow mirrors the existing scope-stats
 // window validation.
 func TestHandleWardrivingStats_InvalidWindow(t *testing.T) {
@@ -318,11 +395,14 @@ func TestHandleWardrivingStats_EmptyChannel(t *testing.T) {
 	if resp.TotalMessages != 0 {
 		t.Errorf("TotalMessages = %d, want 0", resp.TotalMessages)
 	}
-	if resp.TopSenders == nil || resp.EntryPoints == nil || resp.Observers == nil || resp.TimeSeries == nil || resp.SignalTimeSeries == nil || resp.Sessions == nil {
-		t.Errorf("expected empty (non-nil) slices, got TopSenders=%v EntryPoints=%v Observers=%v TimeSeries=%v SignalTimeSeries=%v Sessions=%v",
-			resp.TopSenders, resp.EntryPoints, resp.Observers, resp.TimeSeries, resp.SignalTimeSeries, resp.Sessions)
+	if resp.TopSenders == nil || resp.EntryPoints == nil || resp.Observers == nil || resp.TimeSeries == nil || resp.SignalTimeSeries == nil || resp.Sessions == nil || resp.Anomalies == nil {
+		t.Errorf("expected empty (non-nil) slices, got TopSenders=%v EntryPoints=%v Observers=%v TimeSeries=%v SignalTimeSeries=%v Sessions=%v Anomalies=%v",
+			resp.TopSenders, resp.EntryPoints, resp.Observers, resp.TimeSeries, resp.SignalTimeSeries, resp.Sessions, resp.Anomalies)
 	}
 	if resp.AvgSNR != nil || resp.AvgRSSI != nil {
 		t.Errorf("expected nil AvgSNR/AvgRSSI for a channel with no observations, got AvgSNR=%v AvgRSSI=%v", resp.AvgSNR, resp.AvgRSSI)
+	}
+	if resp.StandardPayloadCount != 0 {
+		t.Errorf("StandardPayloadCount = %d, want 0", resp.StandardPayloadCount)
 	}
 }

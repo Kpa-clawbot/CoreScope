@@ -5427,6 +5427,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         { label: 'Avg SNR', value: (d.avgSnr != null ? d.avgSnr.toFixed(1) + ' dB' : '—'), note: null },
         { label: 'Avg RSSI', value: (d.avgRssi != null ? d.avgRssi.toFixed(1) + ' dBm' : '—'), note: null },
         { label: 'Sessions', value: (d.sessions || []).length.toLocaleString(), note: '15min+ gap starts a new one' },
+        { label: 'Payload Anomalies', value: (d.anomalies || []).length.toLocaleString(), note: 'senders, non-standard "MM:" payload' },
       ].map(function(c) {
         return '<div class="stat-card"><div class="stat-value">' + c.value + '</div>' +
           '<div class="stat-label">' + c.label + '</div>' +
@@ -5599,6 +5600,32 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         '</table>';
     }
 
+    function payloadBytesLabel(bytesList) {
+      return (bytesList || []).map(function(n) { return n === -1 ? 'undecodable' : (n + 'B'); }).join(', ');
+    }
+
+    // Payload anomalies — a heuristic, not a decode: MeshMapper's optional
+    // "Broadcast My Coordinates" mode uses an undocumented on-air byte
+    // format, so we only flag that a sender's payload length deviates from
+    // the standard 7-byte token, and show the raw hex for manual review —
+    // never an attempted lat/lon interpretation.
+    function anomaliesHtml(anomalies, standardCount) {
+      if (!anomalies || anomalies.length === 0) {
+        return '<p class="text-muted" style="font-size:0.85em">All ' + standardCount.toLocaleString() + ' "MM:" wardriving messages in this window used the standard 7-byte anonymous token — no non-standard payloads detected.</p>';
+      }
+      var rows = anomalies.map(function(a) {
+        return '<tr><td>' + esc(a.sender) + '</td>' +
+          '<td>' + a.messageCount.toLocaleString() + '</td>' +
+          '<td>' + payloadBytesLabel(a.payloadBytes) + '</td>' +
+          '<td><code>' + esc(a.sampleHex || '—') + '</code></td>' +
+          '<td>' + (typeof timeAgo === 'function' ? timeAgo(a.lastSeen) : a.lastSeen) + '</td></tr>';
+      }).join('');
+      return '<table class="data-table analytics-table">' +
+        '<thead><tr><th>Sender</th><th>Messages</th><th>Payload Length</th><th>Sample Payload (hex)</th><th>Last Seen</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+        '</table>';
+    }
+
     function attachWindowButtons() {
       el.querySelectorAll('[data-wdwin]').forEach(function(btn) {
         btn.addEventListener('click', function() {
@@ -5634,7 +5661,10 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           '<div id="wardrivingSignal" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">' +
             '<div><div class="text-muted" style="font-size:0.8em;margin-bottom:4px">Avg SNR (dB)</div>' + signalChartHtml(d.signalTimeSeries, 'avgSnr', 'var(--accent)', 'Average SNR over time') + '</div>' +
             '<div><div class="text-muted" style="font-size:0.8em;margin-bottom:4px">Avg RSSI (dBm)</div>' + signalChartHtml(d.signalTimeSeries, 'avgRssi', 'var(--warning, #f39c12)', 'Average RSSI over time') + '</div>' +
-          '</div>';
+          '</div>' +
+          '<h4 style="margin:24px 0 4px">Payload Anomalies (Coordinate-Broadcast Watch)</h4>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">MeshMapper\'s default wardriving ping is a 7-byte anonymous token. A different payload length is a candidate signal that a sender has enabled MeshMapper\'s optional "Broadcast My Coordinates" mode — its on-air byte format is undocumented, so we show the raw hex rather than guessing at lat/lon.</p>' +
+          '<div id="wardrivingAnomalies">' + anomaliesHtml(d.anomalies, d.standardPayloadCount || 0) + '</div>';
       } catch (err) {
         body = '<div class="text-center" style="color:var(--status-red);padding:20px">Failed to load wardriving stats: ' + esc(String(err)) + '</div>';
       }

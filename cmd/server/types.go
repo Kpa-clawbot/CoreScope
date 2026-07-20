@@ -276,18 +276,37 @@ type WardrivingSession struct {
 	ObserverCount   int     `json:"observerCount"`   // distinct observers that heard any message in the session
 }
 
+// WardrivingAnomaly aggregates, per sender, every #wardriving message whose
+// "MM:<base64>" payload does NOT decode to the standard
+// wardrivingStandardPayloadBytes-byte anonymous session token — either a
+// different length or genuinely undecodable base64. This is a detector,
+// not a decoder: MeshMapper's optional "Broadcast My Coordinates" mode
+// would produce on-air payloads in an undocumented format, so a
+// non-standard length is a plausible signal that mode is active for that
+// sender, but the payload bytes are deliberately NOT interpreted as
+// lat/lon — see SampleHex, which is a raw hex dump for manual inspection.
+type WardrivingAnomaly struct {
+	Sender       string `json:"sender"`
+	MessageCount int    `json:"messageCount"`
+	PayloadBytes []int  `json:"payloadBytes"` // distinct decoded byte-lengths seen, sorted ascending (-1 marks undecodable base64)
+	SampleHex    string `json:"sampleHex"`    // hex dump of the most recent non-standard payload, for manual inspection
+	LastSeen     string `json:"lastSeen"`
+}
+
 type WardrivingStatsResponse struct {
-	Window           string                       `json:"window"`
-	Channel          string                       `json:"channel"`
-	TotalMessages    int                          `json:"totalMessages"`
-	TimeSeries       []WardrivingTimePoint        `json:"timeSeries"`
-	TopSenders       []WardrivingSenderCount      `json:"topSenders"`
-	EntryPoints      []WardrivingEntryPrefix      `json:"entryPoints"`
-	Observers        []WardrivingObserverCoverage `json:"observers"`
-	SignalTimeSeries []WardrivingSignalPoint      `json:"signalTimeSeries"`
-	AvgSNR           *float64                     `json:"avgSnr,omitempty"`
-	AvgRSSI          *float64                     `json:"avgRssi,omitempty"`
-	Sessions         []WardrivingSession          `json:"sessions"`
+	Window               string                       `json:"window"`
+	Channel              string                       `json:"channel"`
+	TotalMessages        int                          `json:"totalMessages"`
+	TimeSeries           []WardrivingTimePoint        `json:"timeSeries"`
+	TopSenders           []WardrivingSenderCount      `json:"topSenders"`
+	EntryPoints          []WardrivingEntryPrefix      `json:"entryPoints"`
+	Observers            []WardrivingObserverCoverage `json:"observers"`
+	SignalTimeSeries     []WardrivingSignalPoint      `json:"signalTimeSeries"`
+	AvgSNR               *float64                     `json:"avgSnr,omitempty"`
+	AvgRSSI              *float64                     `json:"avgRssi,omitempty"`
+	Sessions             []WardrivingSession          `json:"sessions"`
+	StandardPayloadCount int                          `json:"standardPayloadCount"`
+	Anomalies            []WardrivingAnomaly          `json:"anomalies"`
 }
 
 // ─── Health ────────────────────────────────────────────────────────────────────

@@ -2,6 +2,8 @@ package main
 
 import (
 	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -3175,9 +3177,11 @@ func (db *DB) getChannelScopeRegions(since string) (map[string][]string, error) 
 // actively sending, which repeater first relayed each message (raw hash
 // prefixes — the caller resolves names via /api/resolve-hops), which
 // observer stations actually heard the traffic, signal quality (SNR/RSSI)
-// over the same time buckets as the activity series, and each sender's
-// messages grouped into distinct sessions/runs (see buildWardrivingSessions).
-// See WardrivingObserverCoverage
+// over the same time buckets as the activity series, each sender's messages
+// grouped into distinct sessions/runs (see buildWardrivingSessions), and any
+// payload anomalies suggesting a sender might be broadcasting real
+// coordinates rather than the standard anonymous token (see
+// detectWardrivingAnomalies). See WardrivingObserverCoverage
 // doc for why observer coverage — not sender GPS — is the reliable half of
 // a "where did this reach" picture: MeshMapper's #wardriving messages carry
 // an anonymous per-session token by default, not the sender's live
@@ -3380,6 +3384,13 @@ func (db *DB) GetWardrivingStats(window, channel string) (*WardrivingStatsRespon
 	}
 	resp.Sessions = sessions
 
+	standardCount, anomalies, err := db.detectWardrivingAnomalies(channel, since)
+	if err != nil {
+		return nil, err
+	}
+	resp.StandardPayloadCount = standardCount
+	resp.Anomalies = anomalies
+
 	return resp, nil
 }
 
@@ -3514,6 +3525,98 @@ func (db *DB) buildWardrivingSessions(channel, since string) ([]WardrivingSessio
 
 	sort.Slice(sessions, func(i, j int) bool { return sessions[i].StartTime > sessions[j].StartTime })
 	return sessions, nil
+}
+
+// wardrivingStandardPayloadBytes is the decoded length of MeshMapper's
+// default anonymous per-session wardriving token — confirmed empirically
+// (every "MM:<base64>" payload observed decodes to exactly this many
+// bytes). Anything else is a candidate for MeshMapper's optional
+// "Broadcast My Coordinates" mode, whose on-air byte format is
+// undocumented — see WardrivingAnomaly doc for why we detect but don't
+// attempt to decode it.
+const wardrivingStandardPayloadBytes = 7
+
+// detectWardrivingAnomalies scans every #wardriving message's "MM:<base64>"
+// payload (messages without that prefix — e.g. manual human chat on the
+// channel — are ignored entirely, not counted either way) and buckets them
+// into the standard-length count vs per-sender anomalies for any
+// non-standard length or undecodable payload.
+func (db *DB) detectWardrivingAnomalies(channel, since string) (int, []WardrivingAnomaly, error) {
+	rows, err := db.conn.Query(`
+		SELECT json_extract(decoded_json, '$.sender'), json_extract(decoded_json, '$.text'), first_seen
+		FROM transmissions
+		WHERE channel_hash = ? AND payload_type = 5 AND first_seen >= ?
+	`, channel, since)
+	if err != nil {
+		return 0, nil, fmt.Errorf("wardriving anomaly query: %w", err)
+	}
+	defer rows.Close()
+
+	type anomalyAgg struct {
+		count     int
+		byteSet   map[int]bool
+		sampleHex string
+		lastSeen  string
+	}
+	standardCount := 0
+	agg := make(map[string]*anomalyAgg)
+
+	for rows.Next() {
+		var sender, text sql.NullString
+		var ts string
+		if err := rows.Scan(&sender, &text, &ts); err != nil {
+			continue
+		}
+		if !text.Valid || !strings.HasPrefix(text.String, "MM:") {
+			continue
+		}
+		payload := strings.TrimPrefix(text.String, "MM:")
+		decoded, decErr := base64.RawURLEncoding.DecodeString(payload)
+		if decErr == nil && len(decoded) == wardrivingStandardPayloadBytes {
+			standardCount++
+			continue
+		}
+
+		senderName := sender.String
+		if senderName == "" {
+			senderName = "(unknown sender)"
+		}
+		n := -1 // undecodable base64
+		if decErr == nil {
+			n = len(decoded)
+		}
+		if agg[senderName] == nil {
+			agg[senderName] = &anomalyAgg{byteSet: make(map[int]bool)}
+		}
+		a := agg[senderName]
+		a.count++
+		a.byteSet[n] = true
+		if ts >= a.lastSeen {
+			a.lastSeen = ts
+			a.sampleHex = hex.EncodeToString(decoded)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, nil, fmt.Errorf("wardriving anomaly iteration: %w", err)
+	}
+
+	anomalies := make([]WardrivingAnomaly, 0, len(agg))
+	for senderName, a := range agg {
+		bytesList := make([]int, 0, len(a.byteSet))
+		for b := range a.byteSet {
+			bytesList = append(bytesList, b)
+		}
+		sort.Ints(bytesList)
+		anomalies = append(anomalies, WardrivingAnomaly{
+			Sender:       senderName,
+			MessageCount: a.count,
+			PayloadBytes: bytesList,
+			SampleHex:    a.sampleHex,
+			LastSeen:     a.lastSeen,
+		})
+	}
+	sort.Slice(anomalies, func(i, j int) bool { return anomalies[i].MessageCount > anomalies[j].MessageCount })
+	return standardCount, anomalies, nil
 }
 
 // GetMatchedRegionNames returns the set of scope_name values that have ever

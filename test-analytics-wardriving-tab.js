@@ -142,6 +142,10 @@ function makeWardrivingResponse(overrides) {
       { sender: 'Bob', startTime: '2026-07-20T08:30:00Z', endTime: '2026-07-20T08:30:00Z', durationMinutes: 0, messageCount: 1, entryPointCount: 1, observerCount: 1 },
       { sender: 'Alice', startTime: '2026-07-20T08:00:00Z', endTime: '2026-07-20T08:05:00Z', durationMinutes: 5, messageCount: 1, entryPointCount: 2, observerCount: 1 },
     ],
+    standardPayloadCount: 3,
+    anomalies: [
+      { sender: 'Suspect1', messageCount: 2, payloadBytes: [12], sampleHex: 'aabbccdd', lastSeen: '2026-07-20T09:00:00Z' },
+    ],
   }, overrides);
 }
 
@@ -170,6 +174,29 @@ function makeApiStub(wardrivingResp, resolveHopsResp) {
     assert.ok(el.innerHTML.includes('Observers Reached'), 'Observers Reached card label should render');
     assert.ok(el.innerHTML.includes('5.5 dB'), 'Avg SNR card should show the API-provided average');
     assert.ok(el.innerHTML.includes('-72.5 dBm'), 'Avg RSSI card should show the API-provided average');
+    assert.ok(el.innerHTML.includes('<div class="stat-value">1</div><div class="stat-label">Payload Anomalies</div>'), 'Payload Anomalies card should show the anomalous-sender count');
+  });
+
+  await testAsync('Payload Anomalies table lists non-standard senders with hex sample, hides interpreted coordinates', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeWardrivingResponse()));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderWardrivingTab(el);
+    const startIdx = el.innerHTML.indexOf('id="wardrivingAnomalies"');
+    assert.ok(startIdx > -1, 'Payload Anomalies section should render');
+    const section = el.innerHTML.slice(startIdx);
+    assert.ok(section.includes('Suspect1'), 'the anomalous sender should be listed');
+    assert.ok(section.includes('12B'), 'the non-standard payload length should render');
+    assert.ok(section.includes('aabbccdd'), 'the sample hex dump should render for manual inspection');
+    assert.ok(!/-?\d+\.\d+,\s*-?\d+\.\d+/.test(section), 'must never render anything that looks like an interpreted lat/lon coordinate pair');
+  });
+
+  await testAsync('Payload Anomalies shows a reassuring message when nothing is anomalous', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeWardrivingResponse({ anomalies: [], standardPayloadCount: 42 })));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderWardrivingTab(el);
+    const startIdx = el.innerHTML.indexOf('id="wardrivingAnomalies"');
+    const section = el.innerHTML.slice(startIdx);
+    assert.ok(section.includes('42') && section.includes('no non-standard payloads detected'), 'should report the standard-payload count and a clean bill of health');
   });
 
   await testAsync('Signal Quality Trends renders both SNR and RSSI charts', async () => {
@@ -247,6 +274,7 @@ function makeApiStub(wardrivingResp, resolveHopsResp) {
     const ctx = makeAnalyticsSandbox(makeApiStub(makeWardrivingResponse({
       totalMessages: 0, topSenders: [], entryPoints: [], observers: [], timeSeries: [],
       signalTimeSeries: [], avgSnr: null, avgRssi: null, sessions: [],
+      anomalies: [], standardPayloadCount: 0,
     })));
     const el = fakeEl();
     await ctx.window._analyticsRenderWardrivingTab(el);
@@ -257,6 +285,7 @@ function makeApiStub(wardrivingResp, resolveHopsResp) {
     assert.ok(el.innerHTML.includes('Insufficient data points to chart'), 'signal chart empty state should show');
     assert.ok(el.innerHTML.includes('<div class="stat-value">—</div><div class="stat-label">Avg SNR</div>'), 'Avg SNR card should show a dash when there is no signal data');
     assert.ok(el.innerHTML.includes('<div class="stat-value">—</div><div class="stat-label">Avg RSSI</div>'), 'Avg RSSI card should show a dash when there is no signal data');
+    assert.ok(el.innerHTML.includes('no non-standard payloads detected'), 'anomalies empty state should show');
   });
 
   await testAsync('rendering registers a real interval, and stop() actually clears it (not a no-op)', async () => {
