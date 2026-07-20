@@ -3537,10 +3537,12 @@ func (db *DB) buildWardrivingSessions(channel, since string) ([]WardrivingSessio
 const wardrivingStandardPayloadBytes = 7
 
 // detectWardrivingAnomalies scans every #wardriving message's "MM:<base64>"
-// payload (messages without that prefix — e.g. manual human chat on the
-// channel — are ignored entirely, not counted either way) and buckets them
-// into the standard-length count vs per-sender anomalies for any
-// non-standard length or undecodable payload.
+// payload — stored as "<sender>: MM:<base64>" in decoded_json.text, per
+// decodeGrpTxt's "<sender>: <message>" convention — and buckets them into
+// the standard-length count vs per-sender anomalies for any non-standard
+// length or undecodable payload. Messages that don't match that exact
+// "<sender>: MM:" prefix (e.g. manual human chat on the channel) are
+// ignored entirely, not counted either way.
 func (db *DB) detectWardrivingAnomalies(channel, since string) (int, []WardrivingAnomaly, error) {
 	rows, err := db.conn.Query(`
 		SELECT json_extract(decoded_json, '$.sender'), json_extract(decoded_json, '$.text'), first_seen
@@ -3567,10 +3569,17 @@ func (db *DB) detectWardrivingAnomalies(channel, since string) (int, []Wardrivin
 		if err := rows.Scan(&sender, &text, &ts); err != nil {
 			continue
 		}
-		if !text.Valid || !strings.HasPrefix(text.String, "MM:") {
+		if !sender.Valid || !text.Valid {
 			continue
 		}
-		payload := strings.TrimPrefix(text.String, "MM:")
+		// decodeGrpTxt (cmd/ingestor/decoder.go) builds Text as
+		// "<sender>: <message>", so the wardriving payload prefix is
+		// "<sender>: MM:" — not a bare "MM:" at the start of text.
+		prefix := sender.String + ": MM:"
+		if !strings.HasPrefix(text.String, prefix) {
+			continue
+		}
+		payload := strings.TrimPrefix(text.String, prefix)
 		decoded, decErr := base64.RawURLEncoding.DecodeString(payload)
 		if decErr == nil && len(decoded) == wardrivingStandardPayloadBytes {
 			standardCount++

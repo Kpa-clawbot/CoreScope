@@ -296,8 +296,12 @@ func TestHandleWardrivingStats_Anomalies(t *testing.T) {
 		t.Fatalf("clear transmissions: %v", err)
 	}
 
-	insertTx := func(hash, sender, text string, tsOffset time.Duration) {
+	// insertTx mirrors decodeGrpTxt's "<sender>: <message>" convention —
+	// text is NOT a bare "MM:<base64>", it's sender-prefixed, and
+	// detectWardrivingAnomalies matches on that exact "<sender>: MM:" prefix.
+	insertTx := func(hash, sender, mmPayload string, tsOffset time.Duration) {
 		ts := time.Now().UTC().Add(tsOffset).Format(time.RFC3339)
+		text := sender + ": " + mmPayload
 		if _, err := srv.db.conn.Exec(
 			`INSERT INTO transmissions (raw_hex,hash,first_seen,route_type,payload_type,channel_hash,decoded_json) VALUES (?,?,?,1,5,'#wardriving',?)`,
 			"aa", hash, ts, `{"sender":"`+sender+`","text":"`+text+`"}`,
