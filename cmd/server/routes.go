@@ -66,6 +66,11 @@ type Server struct {
 	scopeStatsCache    map[string]*ScopeStatsResponse
 	scopeStatsCachedAt map[string]time.Time
 
+	// Cached /api/analytics/wardriving response — per-window, recomputed at most once every 30s
+	wardrivingStatsMu       sync.Mutex
+	wardrivingStatsCache    map[string]*WardrivingStatsResponse
+	wardrivingStatsCachedAt map[string]time.Time
+
 	// Router reference for OpenAPI spec generation
 	router *mux.Router
 
@@ -231,6 +236,8 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/health", s.handleHealth).Methods("GET")
 	r.HandleFunc("/api/stats", s.handleStats).Methods("GET")
 	r.HandleFunc("/api/scope-stats", s.handleScopeStats).Methods("GET")
+	r.HandleFunc("/api/analytics/wardriving", s.handleWardrivingStats).Methods("GET")
+	r.HandleFunc("/api/analytics/wardriving/sender-messages", s.handleWardrivingSenderMessages).Methods("GET")
 	r.HandleFunc("/api/perf", s.handlePerf).Methods("GET")
 	r.HandleFunc("/api/perf/io", s.handlePerfIO).Methods("GET")
 	r.HandleFunc("/api/perf/sqlite", s.handlePerfSqlite).Methods("GET")
@@ -3025,6 +3032,20 @@ var iataCoords = map[string]IataCoord{
 	"ICN": {Lat: 37.4602, Lon: 126.4407},
 	"SYD": {Lat: -33.9461, Lon: 151.1772},
 	"MEL": {Lat: -37.669, Lon: 144.841},
+	// Denmark / southern Sweden — added for wardriving observer coverage
+	// (issue class: same as #1786, iataCoords lacked entries for the
+	// airport codes this mesh's observers actually use).
+	"CPH": {Lat: 55.618, Lon: 12.656},   // Copenhagen (Kastrup)
+	"AAL": {Lat: 57.0928, Lon: 9.8492},  // Aalborg
+	"AAR": {Lat: 56.3, Lon: 10.619},     // Aarhus (Tirstrup)
+	"BLL": {Lat: 55.7403, Lon: 9.1518},  // Billund
+	"ODE": {Lat: 55.4767, Lon: 10.3311}, // Odense
+	"RNN": {Lat: 55.0633, Lon: 14.7596}, // Bornholm (Rønne)
+	"RKE": {Lat: 55.5857, Lon: 12.1315}, // Roskilde
+	"SGD": {Lat: 54.9642, Lon: 9.7924},  // Sønderborg
+	"MMX": {Lat: 55.5363, Lon: 13.3762}, // Malmö
+	"HAD": {Lat: 56.6911, Lon: 12.8202}, // Halmstad
+	"VXO": {Lat: 56.9294, Lon: 14.7422}, // Växjö
 }
 
 func (s *Server) handleIATACoords(w http.ResponseWriter, r *http.Request) {
@@ -3704,6 +3725,114 @@ func (s *Server) handleScopeStats(w http.ResponseWriter, r *http.Request) {
 	s.scopeStatsCachedAt[window] = time.Now()
 	s.scopeStatsMu.Unlock()
 
+	writeJSON(w, resp)
+}
+
+// handleWardrivingStats serves activity/entry-point/coverage analytics for
+// the #wardriving channel (see GetWardrivingStats doc). Same per-window
+// 30s-cache shape as handleScopeStats.
+func (s *Server) handleWardrivingStats(w http.ResponseWriter, r *http.Request) {
+	const wardrivingStatsTTL = 30 * time.Second
+
+	window := r.URL.Query().Get("window")
+	if window == "" {
+		window = "24h"
+	}
+	if window != "1h" && window != "24h" && window != "7d" {
+		writeError(w, 400, "window must be 1h, 24h, or 7d")
+		return
+	}
+	channel := r.URL.Query().Get("channel")
+	if channel == "" {
+		channel = "#wardriving"
+	}
+	cacheKey := window + "|" + channel
+
+	s.wardrivingStatsMu.Lock()
+	if s.wardrivingStatsCache != nil {
+		if cached, ok := s.wardrivingStatsCache[cacheKey]; ok && time.Since(s.wardrivingStatsCachedAt[cacheKey]) < wardrivingStatsTTL {
+			s.wardrivingStatsMu.Unlock()
+			writeJSON(w, cached)
+			return
+		}
+	}
+	s.wardrivingStatsMu.Unlock()
+
+	resp, err := s.db.GetWardrivingStats(window, channel)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+
+	// Airtime needs the in-memory store's resolved-path index (db.go alone
+	// can't resolve full relay paths to distinct repeaters) — omitted
+	// entirely in DB-only mode rather than shown as a misleading zero.
+	if s.store != nil {
+		for i := range resp.Sessions {
+			if ms, ok := s.store.AirtimeForTransmissions(resp.Sessions[i].TransmissionIDs); ok {
+				v := ms.Milliseconds()
+				resp.Sessions[i].AirtimeMs = &v
+			}
+		}
+	}
+
+	s.wardrivingStatsMu.Lock()
+	if s.wardrivingStatsCache == nil {
+		s.wardrivingStatsCache = make(map[string]*WardrivingStatsResponse)
+		s.wardrivingStatsCachedAt = make(map[string]time.Time)
+	}
+	s.wardrivingStatsCache[cacheKey] = resp
+	s.wardrivingStatsCachedAt[cacheKey] = time.Now()
+	s.wardrivingStatsMu.Unlock()
+
+	writeJSON(w, resp)
+}
+
+// handleWardrivingSenderMessages is the drill-down behind the Wardriving
+// tab's Top Senders/Sessions tables: one sender's individual messages, each
+// with its entry-point path and per-observer signal. Pass since+until to
+// scope to one session's exact time range (e.g. from a Sessions row);
+// otherwise window (default 24h, matching /api/analytics/wardriving)
+// covers the sender's whole activity in that period. Not cached — this is
+// an on-demand detail view, not a polled dashboard endpoint.
+func (s *Server) handleWardrivingSenderMessages(w http.ResponseWriter, r *http.Request) {
+	sender := strings.TrimSpace(r.URL.Query().Get("sender"))
+	if sender == "" {
+		writeError(w, 400, "sender is required")
+		return
+	}
+	channel := r.URL.Query().Get("channel")
+	if channel == "" {
+		channel = "#wardriving"
+	}
+	since := r.URL.Query().Get("since")
+	until := r.URL.Query().Get("until")
+	if since == "" || until == "" {
+		window := r.URL.Query().Get("window")
+		if window == "" {
+			window = "24h"
+		}
+		var dur time.Duration
+		switch window {
+		case "1h":
+			dur = time.Hour
+		case "7d":
+			dur = 7 * 24 * time.Hour
+		case "24h":
+			dur = 24 * time.Hour
+		default:
+			writeError(w, 400, "window must be 1h, 24h, or 7d")
+			return
+		}
+		since = time.Now().Add(-dur).UTC().Format(time.RFC3339)
+		until = time.Now().UTC().Format(time.RFC3339)
+	}
+
+	resp, err := s.db.GetWardrivingSenderMessages(sender, channel, since, until)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
 	writeJSON(w, resp)
 }
 

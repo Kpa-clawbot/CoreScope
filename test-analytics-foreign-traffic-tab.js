@@ -92,6 +92,14 @@ function loadInCtx(ctx, file) {
   for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
 }
 
+// Roughly Denmark — same box used by test-geo-filter.js / test-nodes-geo-scope-filter.js.
+// Foreign-flagged fixture nodes below all use lat/lon OUTSIDE this box: the
+// tab classifies foreign live from a node's own lat/lon (nodePassesGeoFilter)
+// rather than trusting the stored `foreign` flag, which only reflects nodes
+// classified at ADVERT-ingest time and never un-flags — see isForeignNode's
+// doc comment in analytics.js.
+const GEO_BOX = { latMin: 53, latMax: 59, lonMin: 6, lonMax: 15 };
+
 function makeAnalyticsSandbox(nodesFixture) {
   const ctx = makeSandbox();
   ctx.getComputedStyle = () => ({ getPropertyValue: () => '' });
@@ -112,6 +120,7 @@ function makeAnalyticsSandbox(nodesFixture) {
   // back a fixed node list, instead of exercising its real pagination
   // loop against the stubbed api().
   ctx.fetchAllNodes = async () => ({ nodes: nodesFixture });
+  ctx.window.MC_GEO_FILTER = GEO_BOX;
   try { loadInCtx(ctx, 'public/analytics.js'); } catch (e) {
     for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
   }
@@ -127,9 +136,9 @@ function fakeEl() {
 
   await testAsync('sorts repeaters by unscoped_relay_count_24h descending', async () => {
     const ctx = makeAnalyticsSandbox([
-      { public_key: 'pkA', name: 'RepeaterLow', role: 'repeater', unscoped_relay_count_24h: 10, relay_count_24h: 20, foreign: false },
-      { public_key: 'pkB', name: 'RepeaterHigh', role: 'repeater', unscoped_relay_count_24h: 50, relay_count_24h: 50, foreign: false },
-      { public_key: 'pkC', name: 'RoomMid', role: 'room', unscoped_relay_count_24h: 25, relay_count_24h: 30, foreign: false },
+      { public_key: 'pkA', name: 'RepeaterLow', role: 'repeater', unscoped_relay_count_24h: 10, relay_count_24h: 20 },
+      { public_key: 'pkB', name: 'RepeaterHigh', role: 'repeater', unscoped_relay_count_24h: 50, relay_count_24h: 50 },
+      { public_key: 'pkC', name: 'RoomMid', role: 'room', unscoped_relay_count_24h: 25, relay_count_24h: 30 },
     ]);
     const el = fakeEl();
     await ctx.window._analyticsRenderForeignTrafficTab(el);
@@ -142,9 +151,9 @@ function fakeEl() {
 
   await testAsync('excludes non-repeater/room roles and zero-unscoped repeaters', async () => {
     const ctx = makeAnalyticsSandbox([
-      { public_key: 'pkClient', name: 'NoisyClient', role: 'client', unscoped_relay_count_24h: 999, relay_count_24h: 999, foreign: false },
-      { public_key: 'pkClean', name: 'CleanRepeater', role: 'repeater', unscoped_relay_count_24h: 0, relay_count_24h: 40, foreign: false },
-      { public_key: 'pkDirty', name: 'DirtyRepeater', role: 'repeater', unscoped_relay_count_24h: 5, relay_count_24h: 40, foreign: false },
+      { public_key: 'pkClient', name: 'NoisyClient', role: 'client', unscoped_relay_count_24h: 999, relay_count_24h: 999 },
+      { public_key: 'pkClean', name: 'CleanRepeater', role: 'repeater', unscoped_relay_count_24h: 0, relay_count_24h: 40 },
+      { public_key: 'pkDirty', name: 'DirtyRepeater', role: 'repeater', unscoped_relay_count_24h: 5, relay_count_24h: 40 },
     ]);
     const el = fakeEl();
     await ctx.window._analyticsRenderForeignTrafficTab(el);
@@ -155,7 +164,7 @@ function fakeEl() {
 
   await testAsync('shows the empty-state message when no repeater has unscoped relays', async () => {
     const ctx = makeAnalyticsSandbox([
-      { public_key: 'pkClean', name: 'CleanRepeater', role: 'repeater', unscoped_relay_count_24h: 0, relay_count_24h: 40, foreign: false },
+      { public_key: 'pkClean', name: 'CleanRepeater', role: 'repeater', unscoped_relay_count_24h: 0, relay_count_24h: 40 },
     ]);
     const el = fakeEl();
     await ctx.window._analyticsRenderForeignTrafficTab(el);
@@ -164,9 +173,9 @@ function fakeEl() {
 
   await testAsync('foreignCount note reflects the number of foreign-flagged nodes', async () => {
     const ctx = makeAnalyticsSandbox([
-      { public_key: 'pkA', name: 'RepeaterA', role: 'repeater', unscoped_relay_count_24h: 5, relay_count_24h: 5, foreign: false },
-      { public_key: 'pkForeign1', name: 'ForeignNode1', role: 'client', unscoped_relay_count_24h: 0, relay_count_24h: 0, foreign: true },
-      { public_key: 'pkForeign2', name: 'ForeignNode2', role: 'client', unscoped_relay_count_24h: 0, relay_count_24h: 0, foreign: true },
+      { public_key: 'pkA', name: 'RepeaterA', role: 'repeater', unscoped_relay_count_24h: 5, relay_count_24h: 5 },
+      { public_key: 'pkForeign1', name: 'ForeignNode1', role: 'client', unscoped_relay_count_24h: 0, relay_count_24h: 0, lat: 40.7, lon: -74.0 },
+      { public_key: 'pkForeign2', name: 'ForeignNode2', role: 'client', unscoped_relay_count_24h: 0, relay_count_24h: 0, lat: 40.7, lon: -74.0 },
     ]);
     const el = fakeEl();
     await ctx.window._analyticsRenderForeignTrafficTab(el);
@@ -175,7 +184,7 @@ function fakeEl() {
 
   await testAsync('foreignCount note falls back to the no-foreign-yet message when none are flagged', async () => {
     const ctx = makeAnalyticsSandbox([
-      { public_key: 'pkA', name: 'RepeaterA', role: 'repeater', unscoped_relay_count_24h: 5, relay_count_24h: 5, foreign: false },
+      { public_key: 'pkA', name: 'RepeaterA', role: 'repeater', unscoped_relay_count_24h: 5, relay_count_24h: 5 },
     ]);
     const el = fakeEl();
     await ctx.window._analyticsRenderForeignTrafficTab(el);
@@ -184,9 +193,9 @@ function fakeEl() {
 
   await testAsync('foreign-flagged nodes list renders every foreign node, sorted newest-heard first', async () => {
     const ctx = makeAnalyticsSandbox([
-      { public_key: 'pkA', name: 'RepeaterA', role: 'repeater', unscoped_relay_count_24h: 5, relay_count_24h: 5, foreign: false },
-      { public_key: 'pkOld', name: 'OldForeign', role: 'companion', lat: 44.4, lon: 26.1, first_seen: '2026-07-01T00:00:00Z', last_seen: '2026-07-01T00:00:00Z', foreign: true },
-      { public_key: 'pkNew', name: 'NewForeign', role: 'client', lat: 52.4, lon: 10.8, first_seen: '2026-07-18T00:00:00Z', last_seen: '2026-07-18T12:00:00Z', foreign: true },
+      { public_key: 'pkA', name: 'RepeaterA', role: 'repeater', unscoped_relay_count_24h: 5, relay_count_24h: 5 },
+      { public_key: 'pkOld', name: 'OldForeign', role: 'companion', lat: 44.4, lon: 26.1, first_seen: '2026-07-01T00:00:00Z', last_seen: '2026-07-01T00:00:00Z' },
+      { public_key: 'pkNew', name: 'NewForeign', role: 'client', lat: 52.4, lon: 10.8, first_seen: '2026-07-18T00:00:00Z', last_seen: '2026-07-18T12:00:00Z' },
     ]);
     const el = fakeEl();
     await ctx.window._analyticsRenderForeignTrafficTab(el);
@@ -203,12 +212,38 @@ function fakeEl() {
 
   await testAsync('foreign-flagged nodes list shows a placeholder when none are flagged yet', async () => {
     const ctx = makeAnalyticsSandbox([
-      { public_key: 'pkA', name: 'RepeaterA', role: 'repeater', unscoped_relay_count_24h: 5, relay_count_24h: 5, foreign: false },
+      { public_key: 'pkA', name: 'RepeaterA', role: 'repeater', unscoped_relay_count_24h: 5, relay_count_24h: 5 },
     ]);
     const el = fakeEl();
     await ctx.window._analyticsRenderForeignTrafficTab(el);
     assert.ok(el.innerHTML.includes('Foreign-Flagged Nodes (0)'), 'heading should show a zero count');
     assert.ok(el.innerHTML.includes('None yet'), 'placeholder message should be shown when no node is foreign-flagged');
+  });
+
+  await testAsync('classifies live from lat/lon, ignoring a stale `foreign` DB flag either direction (Bornholm regression)', async () => {
+    // Real case found on stg.meshview.dk: a Bornholm repeater at the
+    // real coordinates below stayed flagged foreign=true forever because
+    // the ingestor's foreign_advert flag is written once from an ADVERT
+    // and never cleared (cmd/ingestor/db.go MarkNodeForeign) — even after
+    // the geo_filter box widened to include it and it sent fresh
+    // adverts. The tab must classify from the node's CURRENT lat/lon,
+    // not that stored flag, in both directions: a stale foreign=true
+    // inside the box must NOT show as foreign, and a node with no flag
+    // at all but real out-of-box coordinates MUST show as foreign.
+    const ctx = makeAnalyticsSandbox([
+      { public_key: 'pkStaleFlag', name: 'DK_BORNHOLMERTAARNET', role: 'repeater', lat: 55.00182, lon: 15.07351, foreign: true, last_seen: '2026-07-20T00:00:00Z' },
+      { public_key: 'pkUnflaggedForeign', name: 'ActuallyForeign', role: 'repeater', lat: 40.7, lon: -74.0, last_seen: '2026-07-20T00:00:00Z' },
+    ]);
+    // Real production box (matches stg.meshview.dk at the time this bug
+    // was found) — wider than the shared GEO_BOX above, since
+    // Bornholm's real lon (~15.07) needed the actual configured
+    // lonMax=15.25 to be correctly in-box.
+    ctx.window.MC_GEO_FILTER = { latMin: 54.5, latMax: 57.8, lonMin: 8, lonMax: 15.25 };
+    const el = fakeEl();
+    await ctx.window._analyticsRenderForeignTrafficTab(el);
+    assert.ok(el.innerHTML.includes('Foreign-Flagged Nodes (1)'), 'exactly 1 of 2 nodes should classify as foreign — the in-box one must not, regardless of its stale flag');
+    assert.ok(!el.innerHTML.includes('DK_BORNHOLMERTAARNET'), 'a node inside the geo_filter box must not appear as foreign, even with a stale foreign=true flag');
+    assert.ok(el.innerHTML.includes('ActuallyForeign'), 'a node outside the geo_filter box must appear as foreign, even with no stored flag at all');
   });
 
   await testAsync('rendering registers a real interval, and stop() actually clears it (not a no-op)', async () => {

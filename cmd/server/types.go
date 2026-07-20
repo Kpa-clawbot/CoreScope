@@ -211,6 +211,145 @@ type BridgeRepeater struct {
 	Count     int      `json:"count"`
 }
 
+// ─── Wardriving ────────────────────────────────────────────────────────────────
+
+type WardrivingTimePoint struct {
+	T     string `json:"t"`
+	Count int    `json:"count"`
+}
+
+type WardrivingSenderCount struct {
+	Sender string `json:"sender"`
+	Count  int    `json:"count"`
+}
+
+// WardrivingEntryPrefix is a raw path[0] hash-prefix tally — path[0] is the
+// hop closest to the originator (see neighbor_graph.go's "Edge 1: originator
+// ↔ path[0]" convention), i.e. which local repeater first relayed this
+// wardriving message. The frontend resolves prefixes to repeater names via
+// /api/resolve-hops, keeping only unique_prefix-confidence matches — same
+// discipline as the Foreign Traffic tab's Entry Points section.
+type WardrivingEntryPrefix struct {
+	Prefix           string `json:"prefix"`
+	ObservationCount int    `json:"observationCount"`
+	MessageCount     int    `json:"messageCount"` // distinct transmissions this prefix appeared as path[0] for
+}
+
+// WardrivingObserverCoverage is how much wardriving traffic a given observer
+// station actually heard — observers sit at fixed, known locations (unlike
+// the wardriving sender, whose live GPS is deliberately not carried on-air
+// by MeshMapper's default privacy-preserving anonymous-token mode), so this
+// is the reliable half of a coverage picture: "where do we know wardriving
+// signal actually reached."
+type WardrivingObserverCoverage struct {
+	ObserverID       string   `json:"observerId"`
+	ObserverName     string   `json:"observerName"`
+	IATA             string   `json:"iata,omitempty"`
+	Lat              *float64 `json:"lat,omitempty"`
+	Lon              *float64 `json:"lon,omitempty"`
+	ObservationCount int      `json:"observationCount"`
+	MessageCount     int      `json:"messageCount"` // distinct transmissions this observer heard
+}
+
+// WardrivingSignalPoint is one time bucket of average signal quality across
+// every observation of #wardriving traffic in that bucket (not per-observer —
+// see WardrivingObserverCoverage for the per-station breakdown). Always has
+// ObservationCount >= 1 since buckets only exist where there was traffic.
+type WardrivingSignalPoint struct {
+	T                string  `json:"t"`
+	AvgSNR           float64 `json:"avgSnr"`
+	AvgRSSI          float64 `json:"avgRssi"`
+	ObservationCount int     `json:"observationCount"`
+}
+
+// WardrivingSession groups one sender's messages into a distinct "run":
+// consecutive messages no more than wardrivingSessionGapMinutes apart. A
+// bigger gap starts a new session, on the theory the sender paused, went
+// out of range, or ended one wardriving trip and started another later.
+type WardrivingSession struct {
+	Sender          string  `json:"sender"`
+	StartTime       string  `json:"startTime"`
+	EndTime         string  `json:"endTime"`
+	DurationMinutes float64 `json:"durationMinutes"`
+	MessageCount    int     `json:"messageCount"`
+	EntryPointCount int     `json:"entryPointCount"` // distinct path[0] entry-point prefixes seen during the session
+	ObserverCount   int     `json:"observerCount"`   // distinct observers that heard any message in the session
+	// AirtimeMs is total LoRa Time-on-Air (milliseconds) consumed relaying
+	// this session's messages across the mesh: for each message,
+	// ToA(payload_bytes) × COUNT(DISTINCT resolved repeater in its path) —
+	// the same formula as the Overview tab's "Relay Airtime Share" (issue
+	// #1768), applied to this session's transmissions specifically. Set by
+	// the route handler (needs the in-memory store's resolved-path index,
+	// which db.go alone doesn't have); omitted entirely in DB-only mode.
+	AirtimeMs *int64 `json:"airtimeMs,omitempty"`
+	// TransmissionIDs is internal — the session's own transmission IDs,
+	// used by the route handler to compute AirtimeMs. Never serialized.
+	TransmissionIDs []int64 `json:"-"`
+}
+
+// WardrivingGPSShare is one sender who has explicitly shared their own
+// position: some wardriving clients append plaintext "<lat>,<lon>" after
+// the standard token (e.g. "MM:c3e_zJ1rUA:55.59743,13.00128") — a
+// deliberate choice by that sender's client, not something CoreScope
+// infers or decodes from an undocumented format. Lat/Lon is the most
+// recent position shared in the window.
+type WardrivingGPSShare struct {
+	Sender       string  `json:"sender"`
+	Lat          float64 `json:"lat"`
+	Lon          float64 `json:"lon"`
+	MessageCount int     `json:"messageCount"` // how many times this sender shared a position in this window
+	LastSeen     string  `json:"lastSeen"`
+}
+
+type WardrivingStatsResponse struct {
+	Window           string                       `json:"window"`
+	Channel          string                       `json:"channel"`
+	TotalMessages    int                          `json:"totalMessages"`
+	TimeSeries       []WardrivingTimePoint        `json:"timeSeries"`
+	TopSenders       []WardrivingSenderCount      `json:"topSenders"`
+	EntryPoints      []WardrivingEntryPrefix      `json:"entryPoints"`
+	Observers        []WardrivingObserverCoverage `json:"observers"`
+	SignalTimeSeries []WardrivingSignalPoint      `json:"signalTimeSeries"`
+	AvgSNR           *float64                     `json:"avgSnr,omitempty"`
+	AvgRSSI          *float64                     `json:"avgRssi,omitempty"`
+	Sessions         []WardrivingSession          `json:"sessions"`
+	GPSShares        []WardrivingGPSShare         `json:"gpsShares"`
+}
+
+// WardrivingMessageObservation is one observer's reception of a single
+// wardriving message — the per-message counterpart to
+// WardrivingObserverCoverage's aggregate-across-all-messages view.
+type WardrivingMessageObservation struct {
+	ObserverName string  `json:"observerName"`
+	SNR          float64 `json:"snr"`
+	RSSI         float64 `json:"rssi"`
+}
+
+// WardrivingMessage is one individual #wardriving transmission from a
+// specific sender — the drill-down behind the aggregate Sessions/Entry
+// Points/Coverage views. PathPrefixes[0] is the entry-point repeater (same
+// path[0] convention as WardrivingEntryPrefix); the frontend resolves
+// names via /api/resolve-hops, same as the aggregate Entry Points table.
+type WardrivingMessage struct {
+	TransmissionID int64                          `json:"transmissionId"`
+	Timestamp      string                         `json:"timestamp"`
+	PathPrefixes   []string                       `json:"pathPrefixes"`
+	Observations   []WardrivingMessageObservation `json:"observations"`
+	// Lat/Lon are set only when this specific message carried an explicit
+	// shared position (see WardrivingGPSShare) — nil for the standard
+	// anonymous token.
+	Lat *float64 `json:"lat,omitempty"`
+	Lon *float64 `json:"lon,omitempty"`
+}
+
+type WardrivingSenderMessagesResponse struct {
+	Sender   string              `json:"sender"`
+	Channel  string              `json:"channel"`
+	Since    string              `json:"since"`
+	Until    string              `json:"until"`
+	Messages []WardrivingMessage `json:"messages"`
+}
+
 // ─── Health ────────────────────────────────────────────────────────────────────
 
 type MemoryStats struct {

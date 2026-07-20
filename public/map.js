@@ -596,6 +596,20 @@
     });
 
     loadNodes().then(() => {
+      // Check for a wardriving GPS trail (via sessionStorage) — see
+      // drawGPSTrail. Distinct from map-route-hops: these are raw shared
+      // coordinates, not mesh hop keys needing node resolution.
+      const gpsTrailJson = sessionStorage.getItem('map-gps-trail');
+      if (gpsTrailJson) {
+        sessionStorage.removeItem('map-gps-trail');
+        try {
+          const parsed = JSON.parse(gpsTrailJson);
+          if (parsed && Array.isArray(parsed.points)) {
+            drawGPSTrail(parsed.points, { sender: parsed.sender, kind: parsed.kind, comparisonPoints: parsed.comparisonPoints });
+          }
+        } catch {}
+        return;
+      }
       // Check for route from packet detail (via sessionStorage)
       const routeHopsJson = sessionStorage.getItem('map-route-hops');
       if (routeHopsJson) {
@@ -854,6 +868,107 @@
       map.fitBounds(L.latLngBounds(coords).pad(0.3));
     } else if (coords.length === 1) {
       map.setView(coords[0], 13);
+    }
+  }
+
+  // Wardriving trail — draws a polyline through a sequence of points in
+  // chronological order (see "View path on map" / "View approximate path
+  // via entry points" / "Compare shared position vs. entry point" in the
+  // Wardriving analytics tab). All pre-resolved to plain lat/lon by the
+  // caller so no node resolution is needed here:
+  //  - opts.kind 'gps' (default): a sender's own literal shared positions.
+  //  - opts.kind 'entry-point': for senders who don't share GPS — each
+  //    point is the KNOWN position of the entry-point repeater that first
+  //    relayed one of their messages, not the sender's real position.
+  //  - opts.kind 'compare': `points` is the sender's real shared positions
+  //    for messages that ALSO have a resolvable entry-point repeater;
+  //    opts.comparisonPoints (same length, same order) is that repeater's
+  //    position for each corresponding message — drawn as a second trail
+  //    with a thin connecting line per pair, to visualize how far the
+  //    nearest-repeater proxy was from the sender's real position.
+  function drawGPSTrail(points, opts) {
+    opts = opts || {};
+    if (markerLayer) map.removeLayer(markerLayer);
+    if (clusterGroup) map.removeLayer(clusterGroup);
+    if (heatLayer) map.removeLayer(heatLayer);
+    routeLayer.clearLayers();
+
+    const closeBtn = L.control({ position: 'topright' });
+    closeBtn.onAdd = function () {
+      const div = L.DomUtil.create('div', 'leaflet-bar');
+      div.innerHTML = '<a href="#" title="Close path" style="font-size:18px;font-weight:bold;text-decoration:none;display:block;width:36px;height:36px;line-height:36px;text-align:center;background:var(--input-bg,#1e293b);color:var(--text,#e2e8f0);border-radius:4px" aria-label="Close path"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></a>';
+      L.DomEvent.on(div, 'click', function (e) {
+        L.DomEvent.preventDefault(e);
+        routeLayer.clearLayers();
+        if (markerLayer) map.addLayer(markerLayer);
+        if (clusterGroup) map.addLayer(clusterGroup);
+        map.removeControl(closeBtn);
+        const label = map.getContainer().querySelector('.mc-gps-trail-label');
+        if (label) label.remove();
+      });
+      return div;
+    };
+    closeBtn.addTo(map);
+
+    const valid = (points || []).filter(function (p) { return p && p.lat != null && p.lon != null; });
+    if (valid.length === 0) return;
+    const compValid = (opts.comparisonPoints || []).filter(function (p) { return p && p.lat != null && p.lon != null; });
+
+    const coords = valid.map(function (p) { return [p.lat, p.lon]; });
+    if (coords.length >= 2) {
+      L.polyline(coords, { color: '#22c55e', weight: 3, opacity: 0.85 }).addTo(routeLayer);
+    }
+    valid.forEach(function (p, i) {
+      const isFirst = i === 0, isLast = i === valid.length - 1;
+      const color = isFirst ? '#3b82f6' : (isLast ? '#ef4444' : '#22c55e');
+      const marker = L.circleMarker([p.lat, p.lon], {
+        radius: isFirst || isLast ? 7 : 5, color: color, fillColor: color, fillOpacity: 0.9, weight: 2
+      }).addTo(routeLayer);
+      const label = safeEsc(p.label || (isFirst ? 'Start' : isLast ? 'End' : 'Point ' + (i + 1))) +
+        (p.timestamp ? ' — ' + safeEsc(new Date(p.timestamp).toLocaleString()) : '');
+      marker.bindPopup(label);
+    });
+
+    // Comparison overlay: the entry-point repeater for each of the SAME
+    // messages, plus a thin dashed line per pair showing the offset.
+    const compCoords = compValid.map(function (p) { return [p.lat, p.lon]; });
+    if (compCoords.length >= 2) {
+      L.polyline(compCoords, { color: '#f97316', weight: 2, opacity: 0.7, dashArray: '4 4' }).addTo(routeLayer);
+    }
+    compValid.forEach(function (p, i) {
+      const marker = L.circleMarker([p.lat, p.lon], {
+        radius: 5, color: '#f97316', fillColor: '#f97316', fillOpacity: 0.75, weight: 1
+      }).addTo(routeLayer);
+      const label = safeEsc(p.label || 'Entry point ' + (i + 1)) +
+        (p.timestamp ? ' — ' + safeEsc(new Date(p.timestamp).toLocaleString()) : '');
+      marker.bindPopup(label);
+      if (valid[i]) {
+        L.polyline([[valid[i].lat, valid[i].lon], [p.lat, p.lon]], {
+          color: '#94a3b8', weight: 1, opacity: 0.6, dashArray: '2 5'
+        }).addTo(routeLayer);
+      }
+    });
+
+    const allCoords = coords.concat(compCoords);
+    if (allCoords.length >= 2) {
+      map.fitBounds(L.latLngBounds(allCoords).pad(0.2));
+    } else {
+      map.setView(allCoords[0], 15);
+    }
+
+    if (opts.sender) {
+      const container = map.getContainer();
+      const label = document.createElement('div');
+      label.className = 'mc-gps-trail-label';
+      label.style.cssText = 'position:absolute;top:10px;left:50px;z-index:1000;background:var(--input-bg,#1e293b);color:var(--text,#e2e8f0);padding:4px 10px;border-radius:4px;font-size:12px';
+      if (opts.kind === 'entry-point') {
+        label.textContent = opts.sender + ' — approximate path via ' + valid.length + ' entry-point repeater' + (valid.length === 1 ? '' : 's') + ' (not their real position)';
+      } else if (opts.kind === 'compare') {
+        label.textContent = opts.sender + ' — shared position (blue/red/green) vs. entry-point repeater (orange), ' + valid.length + ' message' + (valid.length === 1 ? '' : 's');
+      } else {
+        label.textContent = opts.sender + ' — ' + valid.length + ' shared position' + (valid.length === 1 ? '' : 's');
+      }
+      container.appendChild(label);
     }
   }
 

@@ -35,6 +35,10 @@
   function _stopForeignTrafficRefresh() {
     if (_foreignTrafficRefreshTimer) { clearInterval(_foreignTrafficRefreshTimer); _foreignTrafficRefreshTimer = null; }
   }
+  var _wardrivingRefreshTimer = null;
+  function _stopWardrivingRefresh() {
+    if (_wardrivingRefreshTimer) { clearInterval(_wardrivingRefreshTimer); _wardrivingRefreshTimer = null; }
+  }
 
   // --- Status color helpers (read from CSS variables for theme support) ---
   function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
@@ -135,6 +139,7 @@
             <button class="tab-btn" data-tab="roles">Roles</button>
             <button class="tab-btn" data-tab="scopes">Scopes</button>
             <button class="tab-btn" data-tab="foreign-traffic">Foreign Traffic</button>
+            <button class="tab-btn" data-tab="wardriving">Wardriving</button>
             <button class="tab-btn" data-tab="prefix-tool">Prefix Tool</button>
           </div>
         </div>
@@ -183,6 +188,7 @@
       if (_currentTab !== 'roles') _stopRolesRefresh();
       if (_currentTab !== 'scopes') _stopScopesRefresh();
       if (_currentTab !== 'foreign-traffic') _stopForeignTrafficRefresh();
+      if (_currentTab !== 'wardriving') _stopWardrivingRefresh();
       _updateAnalyticsUrl();
       renderTab(_currentTab);
     });
@@ -300,6 +306,7 @@
       case 'prefix-tool': await renderPrefixTool(el); break;
       case 'scopes': await renderScopesTab(el); break;
       case 'foreign-traffic': await renderForeignTrafficTab(el); break;
+      case 'wardriving': await renderWardrivingTab(el); break;
     }
     // Auto-apply column resizing to all analytics tables
     requestAnimationFrame(() => {
@@ -2691,7 +2698,7 @@
     }
   }
 
-function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTrafficRefresh(); _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
+function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTrafficRefresh(); _stopWardrivingRefresh(); _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
 
   // Expose for testing
   if (typeof window !== 'undefined') {
@@ -2708,6 +2715,8 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
     window._analyticsRenderCollisionsFromServer = renderCollisionsFromServer;
     window._analyticsRenderForeignTrafficTab = renderForeignTrafficTab;
     window._analyticsStopForeignTrafficRefresh = _stopForeignTrafficRefresh;
+    window._analyticsRenderWardrivingTab = renderWardrivingTab;
+    window._analyticsStopWardrivingRefresh = _stopWardrivingRefresh;
     window._analyticsComputeNodesWithoutScope = computeNodesWithoutScope;
     window._analyticsComputeRepeatersNeverRelayingScope = computeRepeatersNeverRelayingScope;
   }
@@ -5290,6 +5299,20 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       if (!total) return '—';
       return (n / total * 100).toFixed(1) + '%';
     }
+    // Classifies live from the node's own lat/lon against the currently
+    // configured geo_filter box/polygon (window.MC_GEO_FILTER, set from
+    // /api/config/client — see public/roles.js), NOT the node's `foreign`
+    // DB flag. That flag is written once, only from ADVERT packets
+    // (ingestor's MarkNodeForeign, cmd/ingestor/db.go), and is one-way —
+    // it's never cleared. A node flagged foreign under an earlier,
+    // narrower geo_filter configuration stays flagged forever unless it
+    // happens to send a fresh ADVERT after the box changes. Real case:
+    // Bornholm repeaters at lon~15.07 were flagged foreign under a
+    // stricter historical box and stayed stuck even after the box widened
+    // to include them (verified against a live advert only hours old).
+    function isForeignNode(n) {
+      return !nodePassesGeoFilter(n.lat, n.lon, window.MC_GEO_FILTER);
+    }
     async function load() {
       try {
         const nodesResp = await fetchAllNodes('', { ttl: CLIENT_TTL.nodeList });
@@ -5298,7 +5321,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           return (n.role === 'repeater' || n.role === 'room') && (n.unscoped_relay_count_24h || 0) > 0;
         });
         relays.sort(function(a, b) { return Number(b.unscoped_relay_count_24h || 0) - Number(a.unscoped_relay_count_24h || 0); });
-        const foreignCount = allNodes.filter(function(n) { return n.foreign; }).length;
+        const foreignCount = allNodes.filter(isForeignNode).length;
 
         let body;
         if (relays.length > 0) {
@@ -5328,7 +5351,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         // Foreign-flagged nodes so far (#730 foreign_advert), newest-heard
         // first. Only set going forward from when geo_filter was
         // configured — this list grows as nodes send their next ADVERT.
-        const foreignNodes = allNodes.filter(function(n) { return n.foreign; });
+        const foreignNodes = allNodes.filter(isForeignNode);
         // Parse last_seen once per node (decorate-sort-undecorate) instead
         // of twice per comparator call — cheap either way at this list
         // size, but avoids the repeated Date() allocations on principle.
@@ -5387,6 +5410,539 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       var cur = document.getElementById('analyticsContent');
       if (!cur) { _stopForeignTrafficRefresh(); return; }
       load();
+    }, 60000);
+  }
+
+  // Wardriving analytics: activity/entry-point/coverage for the
+  // #wardriving channel (MeshMapper's community wardriving convention —
+  // see /api/analytics/wardriving doc). MeshMapper's on-air message is an
+  // anonymous per-session token by default, not the sender's live GPS
+  // (that goes to MeshMapper's own server via a separate API call we
+  // never see) — so sender location can't be plotted here. What IS
+  // reliable: which repeater first relayed each message (Entry Points,
+  // same path[0]/unique_prefix discipline as the Foreign Traffic tab),
+  // and which observer stations — fixed, known locations — actually
+  // heard the traffic (Coverage).
+  async function renderWardrivingTab(el) {
+    var winKey = 'wardriving_window';
+    var selectedWindow = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(winKey)) || '24h';
+
+    function pct(n, total) {
+      if (!total) return '—';
+      return (n / total * 100).toFixed(1) + '%';
+    }
+
+    function cardsHtml(d) {
+      return [
+        { label: 'Messages', value: d.totalMessages.toLocaleString(), note: 'window: ' + d.window },
+        { label: 'Active Senders', value: (d.topSenders || []).length.toLocaleString(), note: null },
+        { label: 'Entry-Point Repeaters', value: (d.entryPoints || []).length.toLocaleString(), note: 'distinct path[0] prefixes' },
+        { label: 'Observers Reached', value: (d.observers || []).length.toLocaleString(), note: null },
+        { label: 'Avg SNR', value: (d.avgSnr != null ? d.avgSnr.toFixed(1) + ' dB' : '—'), note: null },
+        { label: 'Avg RSSI', value: (d.avgRssi != null ? d.avgRssi.toFixed(1) + ' dBm' : '—'), note: null },
+        { label: 'Sessions', value: (d.sessions || []).length.toLocaleString(), note: '15min+ gap starts a new one' },
+        { label: 'GPS Shared', value: (d.gpsShares || []).length.toLocaleString(), note: 'senders who shared a position' },
+      ].map(function(c) {
+        return '<div class="stat-card"><div class="stat-value">' + c.value + '</div>' +
+          '<div class="stat-label">' + c.label + '</div>' +
+          (c.note ? '<div class="stat-note text-muted" style="font-size:11px">' + c.note + '</div>' : '') +
+          '</div>';
+      }).join('');
+    }
+
+    // Single-line SVG time series — matches the Scopes tab's two-line chart style.
+    function chartHtml(ts) {
+      if (!ts || ts.length <= 1) {
+        return '<p class="text-muted" style="font-size:0.85em">Insufficient data points to chart — wait for more wardriving activity in this window.</p>';
+      }
+      var vals = ts.map(function(p) { return p.count; });
+      var maxVal = Math.max(1, Math.max.apply(null, vals));
+      var W = 800, H = 160, padL = 44, padT = 10, padR = 10;
+      var plotW = W - padL - padR, plotH = H - 24 - padT;
+      var n = ts.length;
+      var pts = vals.map(function(v, i) {
+        var x = padL + i * plotW / Math.max(n - 1, 1);
+        var y = padT + plotH - (v / maxVal) * plotH;
+        return x.toFixed(1) + ',' + y.toFixed(1);
+      }).join(' ');
+      var grid = '';
+      for (var gi = 0; gi <= 4; gi++) {
+        var gy = padT + plotH * gi / 4;
+        var gv = Math.round(maxVal * (4 - gi) / 4);
+        grid += '<line x1="' + padL + '" y1="' + gy.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + gy.toFixed(1) + '" stroke="var(--border)" stroke-dasharray="2"/>';
+        grid += '<text x="' + (padL - 4) + '" y="' + (gy + 4).toFixed(1) + '" text-anchor="end" font-size="9" fill="var(--text-muted)">' + gv + '</text>';
+      }
+      return '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;max-height:' + H + 'px" role="img" aria-label="Wardriving message volume over time">' +
+        grid +
+        '<polyline points="' + pts + '" fill="none" stroke="var(--accent)" stroke-width="2"/>' +
+        '</svg>';
+    }
+
+    // Signal quality line chart — scaled to the data's own min/max (unlike
+    // chartHtml's 0-baseline) since SNR and RSSI have no natural zero floor.
+    function signalChartHtml(sig, key, color, ariaLabel) {
+      if (!sig || sig.length <= 1) {
+        return '<p class="text-muted" style="font-size:0.85em">Insufficient data points to chart.</p>';
+      }
+      var vals = sig.map(function(p) { return p[key]; });
+      var minVal = Math.min.apply(null, vals);
+      var maxVal = Math.max.apply(null, vals);
+      if (minVal === maxVal) { minVal -= 1; maxVal += 1; }
+      var W = 800, H = 140, padL = 44, padT = 10, padR = 10, padB = 20;
+      var plotW = W - padL - padR, plotH = H - padB - padT;
+      var n = sig.length;
+      var pts = vals.map(function(v, i) {
+        var x = padL + i * plotW / Math.max(n - 1, 1);
+        var y = padT + plotH - ((v - minVal) / (maxVal - minVal)) * plotH;
+        return x.toFixed(1) + ',' + y.toFixed(1);
+      }).join(' ');
+      var grid = '';
+      for (var gi = 0; gi <= 3; gi++) {
+        var gy = padT + plotH * gi / 3;
+        var gv = maxVal - (maxVal - minVal) * gi / 3;
+        grid += '<line x1="' + padL + '" y1="' + gy.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + gy.toFixed(1) + '" stroke="var(--border)" stroke-dasharray="2"/>';
+        grid += '<text x="' + (padL - 4) + '" y="' + (gy + 4).toFixed(1) + '" text-anchor="end" font-size="9" fill="var(--text-muted)">' + gv.toFixed(1) + '</text>';
+      }
+      return '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;max-height:' + H + 'px" role="img" aria-label="' + ariaLabel + '">' +
+        grid +
+        '<polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="2"/>' +
+        '</svg>';
+    }
+
+    function formatSessionDuration(mins) {
+      if (mins < 1) return '<1m';
+      if (mins < 60) return Math.round(mins) + 'm';
+      var h = Math.floor(mins / 60), m = Math.round(mins % 60);
+      return h + 'h ' + m + 'm';
+    }
+
+    // Sender name → clickable trigger for the per-message drill-down (see
+    // attachSenderDrilldown). data-wd-since/until scope the drill-down to
+    // an exact range (e.g. one session); omitted, it covers the whole
+    // window for that sender.
+    function senderTriggerHtml(sender, since, until) {
+      var attrs = 'data-wd-sender="' + esc(sender) + '"';
+      if (since) attrs += ' data-wd-since="' + esc(since) + '"';
+      if (until) attrs += ' data-wd-until="' + esc(until) + '"';
+      return '<button type="button" ' + attrs + ' aria-expanded="false" style="background:none;border:none;padding:0;margin:0;font:inherit;color:var(--link-color);cursor:pointer">' + esc(sender) + '</button>';
+    }
+
+    // Sessions — each sender's messages grouped into runs (backend splits
+    // on any gap over 15 minutes). Pre-sorted most-recent-first by the API.
+    // Airtime is LoRa Time-on-Air × distinct relaying repeaters, summed
+    // across the session's messages — same formula as the Overview tab's
+    // "Relay Airtime Share". Needs the in-memory store's resolved-path
+    // index; omitted (shows "—") in DB-only mode.
+    function formatAirtimeMs(ms) {
+      if (ms == null) return '—';
+      if (ms < 1000) return Math.round(ms) + 'ms';
+      return (ms / 1000).toFixed(1) + 's';
+    }
+
+    function sessionsHtml(sessions) {
+      if (!sessions || sessions.length === 0) {
+        return '<p class="text-muted" style="font-size:0.85em">No wardriving sessions in this window.</p>';
+      }
+      var rows = sessions.map(function(s) {
+        return '<tr><td>' + senderTriggerHtml(s.sender, s.startTime, s.endTime) + '</td>' +
+          '<td>' + (typeof timeAgo === 'function' ? timeAgo(s.startTime) : s.startTime) + '</td>' +
+          '<td>' + formatSessionDuration(s.durationMinutes) + '</td>' +
+          '<td>' + s.messageCount.toLocaleString() + '</td>' +
+          '<td>' + s.entryPointCount.toLocaleString() + '</td>' +
+          '<td>' + s.observerCount.toLocaleString() + '</td>' +
+          '<td>' + formatAirtimeMs(s.airtimeMs) + '</td></tr>';
+      }).join('');
+      return '<table class="data-table analytics-table" data-wd-cols="7">' +
+        '<thead><tr><th>Sender</th><th>Started</th><th>Duration</th><th>Messages</th><th>Entry Points</th><th>Observers</th><th>Airtime</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+        '</table>';
+    }
+
+    function sendersHtml(senders, totalMessages) {
+      if (!senders || senders.length === 0) {
+        return '<p class="text-muted" style="font-size:0.85em">No wardriving messages in this window.</p>';
+      }
+      var rows = senders.map(function(s) {
+        return '<tr><td>' + senderTriggerHtml(s.sender) + '</td><td>' + s.count.toLocaleString() + '</td><td>' + pct(s.count, totalMessages) + '</td></tr>';
+      }).join('');
+      return '<table class="data-table analytics-table" data-wd-cols="3">' +
+        '<thead><tr><th>Sender</th><th>Messages</th><th>% of Total</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+        '</table>';
+    }
+
+    // Entry Points — resolve raw path[0] hash prefixes to repeater names,
+    // same unique_prefix-only discipline as the Foreign Traffic tab (a
+    // non-unique_prefix resolution is a genuine hash collision across
+    // multiple candidate repeaters — folded into "Ambiguous" rather than
+    // guessing).
+    async function entryPointsHtml(prefixes) {
+      if (!prefixes || prefixes.length === 0) {
+        return '<p class="text-muted" style="font-size:0.85em">No wardriving messages with a relay path in this window.</p>';
+      }
+      try {
+        var resp = await api('/resolve-hops?hops=' + prefixes.map(function(p) { return p.prefix; }).join(','), { ttl: CLIENT_TTL.nodeDetail }).catch(function() { return null; });
+        var resolved = (resp && resp.resolved) || {};
+        var totalObs = prefixes.reduce(function(sum, p) { return sum + p.observationCount; }, 0);
+        var named = [];
+        var ambiguousObs = 0, ambiguousMsgs = 0;
+        prefixes.forEach(function(p) {
+          var r = resolved[p.prefix];
+          if (r && r.confidence === 'unique_prefix') {
+            named.push({ name: r.name, pubkey: r.pubkey, obs: p.observationCount, msgs: p.messageCount });
+          } else {
+            ambiguousObs += p.observationCount;
+            ambiguousMsgs += p.messageCount;
+          }
+        });
+        named.sort(function(a, b) { return b.obs - a.obs; });
+        var rows = named.map(function(e) {
+          return '<tr><td><a href="#/nodes/' + encodeURIComponent(e.pubkey) + '">' + esc(e.name) + '</a></td>' +
+            '<td>' + e.obs.toLocaleString() + '</td>' +
+            '<td>' + pct(e.obs, totalObs) + '</td>' +
+            '<td>' + e.msgs.toLocaleString() + '</td></tr>';
+        }).join('') + (ambiguousObs > 0
+          ? '<tr><td class="text-muted">Ambiguous (hash prefix collides across multiple candidate repeaters)</td>' +
+            '<td>' + ambiguousObs.toLocaleString() + '</td><td>' + pct(ambiguousObs, totalObs) + '</td><td>' + ambiguousMsgs.toLocaleString() + '</td></tr>'
+          : '');
+        return (named.length > 0 || ambiguousObs > 0)
+          ? '<table class="data-table analytics-table">' +
+            '<thead><tr><th>Entry-Point Repeater</th><th>Observations</th><th>% of Observations</th><th>Distinct Messages</th></tr></thead>' +
+            '<tbody>' + rows + '</tbody>' +
+            '</table>'
+          : '<p class="text-muted" style="font-size:0.85em">No traceable relay path yet for any wardriving message.</p>';
+      } catch (e) {
+        return '<p class="text-muted">Failed to resolve entry points.</p>';
+      }
+    }
+
+    function observersHtml(observers) {
+      if (!observers || observers.length === 0) {
+        return '<p class="text-muted" style="font-size:0.85em">No observer has heard wardriving traffic in this window.</p>';
+      }
+      var totalObsCount = observers.reduce(function(sum, o) { return sum + o.observationCount; }, 0);
+      var rows = observers.map(function(o) {
+        var loc = (o.lat != null && o.lon != null) ? (o.lat.toFixed(2) + ', ' + o.lon.toFixed(2)) : '—';
+        return '<tr><td>' + esc(o.observerName) + '</td>' +
+          '<td>' + esc(o.iata || '—') + '</td>' +
+          '<td>' + loc + '</td>' +
+          '<td>' + o.observationCount.toLocaleString() + '</td>' +
+          '<td>' + pct(o.observationCount, totalObsCount) + '</td>' +
+          '<td>' + o.messageCount.toLocaleString() + '</td></tr>';
+      }).join('');
+      return '<table class="data-table analytics-table">' +
+        '<thead><tr><th>Observer</th><th>Region</th><th>Lat, Lon</th><th>Observations</th><th>% of Observations</th><th>Distinct Messages</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+        '</table>';
+    }
+
+    function mapLinkHtml(lat, lon) {
+      return '<a href="#/map?lat=' + encodeURIComponent(lat) + '&lon=' + encodeURIComponent(lon) + '&zoom=15" target="_blank" rel="noopener">' +
+        lat.toFixed(5) + ', ' + lon.toFixed(5) + '</a>';
+    }
+
+    // GPS Sharing — some wardriving clients append plaintext "<lat>,<lon>"
+    // after the standard token; this is a deliberate choice by that
+    // sender's client to share their position in-band, confirmed
+    // empirically against live traffic, not something CoreScope infers.
+    function gpsSharesHtml(shares) {
+      if (!shares || shares.length === 0) {
+        return '<p class="text-muted" style="font-size:0.85em">No sender has shared an explicit position in this window.</p>';
+      }
+      var rows = shares.map(function(s) {
+        return '<tr><td>' + esc(s.sender) + '</td>' +
+          '<td>' + mapLinkHtml(s.lat, s.lon) + '</td>' +
+          '<td>' + s.messageCount.toLocaleString() + '</td>' +
+          '<td>' + (typeof timeAgo === 'function' ? timeAgo(s.lastSeen) : s.lastSeen) + '</td></tr>';
+      }).join('');
+      return '<table class="data-table analytics-table">' +
+        '<thead><tr><th>Sender</th><th>Position (most recent)</th><th>Times Shared</th><th>Last Seen</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+        '</table>';
+    }
+
+    function attachWindowButtons() {
+      el.querySelectorAll('[data-wdwin]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          selectedWindow = btn.dataset.wdwin;
+          if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(winKey, selectedWindow);
+          load(selectedWindow);
+        });
+      });
+    }
+
+    // Per-message drill-down for one sender (whole window, or one exact
+    // since/until range when opened from a Sessions row). Resolves every
+    // distinct path[0..] prefix across the fetched messages in a single
+    // /resolve-hops call — same unique_prefix-only discipline as the
+    // aggregate Entry Points table (a non-unique_prefix match is shown as
+    // the raw hash, not guessed).
+    async function buildSenderDrilldownHtml(sender, since, until) {
+      try {
+        var qs = 'sender=' + encodeURIComponent(sender);
+        if (since && until) {
+          qs += '&since=' + encodeURIComponent(since) + '&until=' + encodeURIComponent(until);
+        } else {
+          qs += '&window=' + encodeURIComponent(selectedWindow);
+        }
+        var data = await api('/analytics/wardriving/sender-messages?' + qs, { ttl: 10000 });
+        var messages = data.messages || [];
+        if (messages.length === 0) {
+          return { html: '<p class="text-muted" style="font-size:0.85em;margin:8px 0">No individual messages found for this sender in range.</p>', gpsPoints: [] };
+        }
+
+        // Messages come back most-recent-first; a path needs chronological
+        // (oldest-first) order to draw correctly.
+        var gpsPoints = messages
+          .filter(function(m) { return m.lat != null && m.lon != null; })
+          .map(function(m) { return { lat: m.lat, lon: m.lon, timestamp: m.timestamp }; })
+          .reverse();
+
+        var allPrefixes = [];
+        messages.forEach(function(m) {
+          (m.pathPrefixes || []).forEach(function(p) { if (allPrefixes.indexOf(p) === -1) allPrefixes.push(p); });
+        });
+        var resolved = {};
+        if (allPrefixes.length > 0) {
+          try {
+            var hopsResp = await api('/resolve-hops?hops=' + allPrefixes.join(','), { ttl: CLIENT_TTL.nodeDetail });
+            resolved = (hopsResp && hopsResp.resolved) || {};
+          } catch (e) { /* fall back to raw prefixes below */ }
+        }
+        function resolvePrefix(p) {
+          var r = resolved[p];
+          if (r && r.confidence === 'unique_prefix') return esc(r.name);
+          return '<span class="text-muted">' + esc(p) + '</span>';
+        }
+
+        // Approximate path via entry-point repeater, for senders who don't
+        // share a literal position: each message's path[0] resolves to a
+        // fixed, known repeater location (same unique_prefix-only
+        // discipline as the path display above) — plotting those in
+        // chronological order gives a rough "which coverage area were they
+        // in" trail. This is NOT the sender's real position, just the
+        // nearest repeater that first relayed them at that moment.
+        var entryHits = messages
+          .filter(function(m) { return m.pathPrefixes && m.pathPrefixes.length > 0; })
+          .map(function(m) {
+            var r = resolved[m.pathPrefixes[0]];
+            if (!r || r.confidence !== 'unique_prefix' || !r.pubkey) return null;
+            return { pubkey: r.pubkey, name: r.name, timestamp: m.timestamp };
+          })
+          .filter(Boolean)
+          .reverse(); // chronological — messages come back most-recent-first
+
+        // Comparison: for messages where the sender ALSO shared a real
+        // position, pair it with that same message's resolved entry-point
+        // repeater — lets us see how far the nearest-repeater proxy was
+        // from where the sender actually said they were.
+        var comparisonHits = messages
+          .filter(function(m) { return m.lat != null && m.lon != null && m.pathPrefixes && m.pathPrefixes.length > 0; })
+          .map(function(m) {
+            var r = resolved[m.pathPrefixes[0]];
+            if (!r || r.confidence !== 'unique_prefix' || !r.pubkey) return null;
+            return { transmissionId: m.transmissionId, pubkey: r.pubkey, name: r.name, timestamp: m.timestamp, gpsLat: m.lat, gpsLon: m.lon };
+          })
+          .filter(Boolean)
+          .reverse();
+
+        var entryTrailPoints = [];
+        var comparisonGpsPoints = [];
+        var comparisonEntryPoints = [];
+        var distanceByTxId = {};
+        if (entryHits.length >= 2 || comparisonHits.length >= 1) {
+          try {
+            var nodesResp = await fetchAllNodes('', { ttl: CLIENT_TTL.nodeList });
+            var nodesByKey = {};
+            (nodesResp.nodes || []).forEach(function(n) { nodesByKey[n.public_key] = n; });
+
+            var lastKey = null;
+            entryHits.forEach(function(hit) {
+              if (hit.pubkey === lastKey) return; // collapse consecutive hits on the same repeater
+              var node = nodesByKey[hit.pubkey];
+              if (node && node.lat != null && node.lon != null) {
+                entryTrailPoints.push({ lat: node.lat, lon: node.lon, timestamp: hit.timestamp, label: hit.name });
+                lastKey = hit.pubkey;
+              }
+            });
+
+            comparisonHits.forEach(function(hit) {
+              var node = nodesByKey[hit.pubkey];
+              if (!node || node.lat == null || node.lon == null) return;
+              var km = (window.HopResolver && typeof window.HopResolver.haversineKm === 'function')
+                ? window.HopResolver.haversineKm(hit.gpsLat, hit.gpsLon, node.lat, node.lon) : null;
+              distanceByTxId[hit.transmissionId] = { km: km, name: hit.name };
+              comparisonGpsPoints.push({ lat: hit.gpsLat, lon: hit.gpsLon, timestamp: hit.timestamp, label: km != null ? (km.toFixed(1) + ' km from ' + hit.name) : 'Shared position' });
+              comparisonEntryPoints.push({ lat: node.lat, lon: node.lon, timestamp: hit.timestamp, label: hit.name });
+            });
+          } catch (e) { /* leave arrays empty — buttons just won't show */ }
+        }
+
+        var rows = messages.map(function(m) {
+          var pathStr = (m.pathPrefixes && m.pathPrefixes.length > 0)
+            ? m.pathPrefixes.map(resolvePrefix).join(' → ')
+            : '<span class="text-muted">—</span>';
+          var obsStr = (m.observations && m.observations.length > 0)
+            ? m.observations.map(function(o) {
+                return esc(o.observerName) + ' (' + o.snr.toFixed(1) + 'dB / ' + o.rssi.toFixed(0) + 'dBm)';
+              }).join(', ')
+            : '<span class="text-muted">—</span>';
+          var posStr = '<span class="text-muted">—</span>';
+          if (m.lat != null && m.lon != null) {
+            posStr = mapLinkHtml(m.lat, m.lon);
+            var dist = distanceByTxId[m.transmissionId];
+            if (dist && dist.km != null) {
+              posStr += ' <span class="text-muted" style="font-size:0.9em">(' + dist.km.toFixed(1) + ' km from ' + esc(dist.name) + ')</span>';
+            }
+          }
+          return '<tr><td>' + (typeof timeAgo === 'function' ? timeAgo(m.timestamp) : m.timestamp) + '</td>' +
+            '<td>' + pathStr + '</td>' +
+            '<td>' + obsStr + '</td>' +
+            '<td>' + posStr + '</td></tr>';
+        }).join('');
+        var tableHtml = '<table class="data-table analytics-table" style="margin:4px 0 12px;font-size:0.85em">' +
+          '<thead><tr><th>Time</th><th>Path (path[0] first)</th><th>Heard By (SNR / RSSI)</th><th>Shared Position</th></tr></thead>' +
+          '<tbody>' + rows + '</tbody>' +
+          '</table>';
+        var btnStyle = 'background:none;border:1px solid var(--border);padding:4px 10px;border-radius:4px;color:var(--link-color);cursor:pointer;font-size:0.85em;margin:0 8px 8px 0';
+        var pathBtnHtml = gpsPoints.length >= 2
+          ? '<button type="button" data-wd-view-path style="' + btnStyle + '">View path on map (' + gpsPoints.length + ' shared positions)</button>'
+          : '';
+        var entryBtnHtml = entryTrailPoints.length >= 2
+          ? '<button type="button" data-wd-view-entry-path style="' + btnStyle + '">View approximate path via entry points (' + entryTrailPoints.length + ' repeaters)</button>'
+          : '';
+        var compareBtnHtml = comparisonGpsPoints.length >= 1
+          ? '<button type="button" data-wd-view-compare style="' + btnStyle + '">Compare shared position vs. entry point (' + comparisonGpsPoints.length + ')</button>'
+          : '';
+        var btnRow = (pathBtnHtml || entryBtnHtml || compareBtnHtml) ? '<div>' + pathBtnHtml + entryBtnHtml + compareBtnHtml + '</div>' : '';
+        return {
+          html: btnRow + tableHtml, gpsPoints: gpsPoints, entryTrailPoints: entryTrailPoints,
+          comparisonGpsPoints: comparisonGpsPoints, comparisonEntryPoints: comparisonEntryPoints
+        };
+      } catch (err) {
+        return {
+          html: '<p style="color:var(--status-red);font-size:0.85em">Failed to load messages: ' + esc(String(err)) + '</p>',
+          gpsPoints: [], entryTrailPoints: [], comparisonGpsPoints: [], comparisonEntryPoints: []
+        };
+      }
+    }
+
+    // Clicking a sender name toggles an inline expansion row directly
+    // below it with that sender's individual messages. Only one expansion
+    // stays open per table at a time, to keep the tab from growing
+    // unbounded if a user clicks through several senders.
+    function attachSenderDrilldown() {
+      el.querySelectorAll('[data-wd-sender]').forEach(function(btn) {
+        btn.addEventListener('click', async function() {
+          var tr = btn.closest('tr');
+          if (!tr) return;
+          var next = tr.nextElementSibling;
+          if (next && next.hasAttribute('data-wd-expansion')) {
+            next.remove();
+            btn.setAttribute('aria-expanded', 'false');
+            return;
+          }
+          var table = tr.closest('table');
+          if (table) {
+            table.querySelectorAll('[data-wd-expansion]').forEach(function(r) { r.remove(); });
+            table.querySelectorAll('[data-wd-sender]').forEach(function(b) { b.setAttribute('aria-expanded', 'false'); });
+          }
+          var cols = (table && table.dataset.wdCols) || '1';
+          var expansionRow = document.createElement('tr');
+          expansionRow.setAttribute('data-wd-expansion', '1');
+          expansionRow.innerHTML = '<td colspan="' + cols + '"><div class="text-muted" style="padding:8px">Loading messages…</div></td>';
+          tr.parentNode.insertBefore(expansionRow, tr.nextSibling);
+          btn.setAttribute('aria-expanded', 'true');
+          var senderName = btn.dataset.wdSender;
+          var result = await buildSenderDrilldownHtml(senderName, btn.dataset.wdSince, btn.dataset.wdUntil);
+          var cell = expansionRow.querySelector('td');
+          if (!cell) return;
+          cell.innerHTML = result.html;
+          var pathBtn = cell.querySelector('[data-wd-view-path]');
+          if (pathBtn) {
+            pathBtn.addEventListener('click', function() {
+              sessionStorage.setItem('map-gps-trail', JSON.stringify({ points: result.gpsPoints, sender: senderName, kind: 'gps' }));
+              window.location.hash = '#/map';
+            });
+          }
+          var entryBtn = cell.querySelector('[data-wd-view-entry-path]');
+          if (entryBtn) {
+            entryBtn.addEventListener('click', function() {
+              sessionStorage.setItem('map-gps-trail', JSON.stringify({ points: result.entryTrailPoints, sender: senderName, kind: 'entry-point' }));
+              window.location.hash = '#/map';
+            });
+          }
+          var compareBtn = cell.querySelector('[data-wd-view-compare]');
+          if (compareBtn) {
+            compareBtn.addEventListener('click', function() {
+              sessionStorage.setItem('map-gps-trail', JSON.stringify({
+                points: result.comparisonGpsPoints, comparisonPoints: result.comparisonEntryPoints,
+                sender: senderName, kind: 'compare'
+              }));
+              window.location.hash = '#/map';
+            });
+          }
+        });
+      });
+    }
+
+    async function load(w) {
+      var body;
+      try {
+        var d = await api('/analytics/wardriving?window=' + encodeURIComponent(w), { ttl: 30000 });
+        var entryHtml = await entryPointsHtml(d.entryPoints || []);
+        body =
+          '<div id="wardrivingCards" class="stats-grid" style="margin-bottom:16px">' + cardsHtml(d) + '</div>' +
+          '<div id="wardrivingChart" style="margin-bottom:16px">' + chartHtml(d.timeSeries) + '</div>' +
+          '<h4 style="margin:16px 0 4px">Top Senders</h4>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Who\'s actively wardriving in this window, by message count.</p>' +
+          '<div id="wardrivingSenders">' + sendersHtml(d.topSenders, d.totalMessages) + '</div>' +
+          '<h4 style="margin:24px 0 4px">Sessions</h4>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Each sender\'s messages grouped into distinct runs — a gap of more than 15 minutes starts a new session.</p>' +
+          '<div id="wardrivingSessions">' + sessionsHtml(d.sessions) + '</div>' +
+          '<h4 style="margin:24px 0 4px">Entry Points</h4>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Which local repeater first relayed each wardriving message — the hop closest to the origin (path[0]) across every observed copy.</p>' +
+          '<div id="wardrivingEntryPoints">' + entryHtml + '</div>' +
+          '<h4 style="margin:24px 0 4px">Coverage by Observer</h4>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Which observer stations actually heard wardriving traffic — observers sit at fixed, known locations, so this is the reliable half of "how far did it reach."</p>' +
+          '<div id="wardrivingObservers">' + observersHtml(d.observers) + '</div>' +
+          '<h4 style="margin:24px 0 4px">Signal Quality Trends</h4>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Average SNR and RSSI across every observation of wardriving traffic in each time bucket — a rough proxy for link quality, not tied to any one observer.</p>' +
+          '<div id="wardrivingSignal" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">' +
+            '<div><div class="text-muted" style="font-size:0.8em;margin-bottom:4px">Avg SNR (dB)</div>' + signalChartHtml(d.signalTimeSeries, 'avgSnr', 'var(--accent)', 'Average SNR over time') + '</div>' +
+            '<div><div class="text-muted" style="font-size:0.8em;margin-bottom:4px">Avg RSSI (dBm)</div>' + signalChartHtml(d.signalTimeSeries, 'avgRssi', 'var(--warning, #f39c12)', 'Average RSSI over time') + '</div>' +
+          '</div>' +
+          '<h4 style="margin:24px 0 4px">GPS Sharing</h4>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Senders whose client appended their own position after the standard token — a deliberate choice by that sender to share their location, not something inferred from the anonymous token itself.</p>' +
+          '<div id="wardrivingGPSShares">' + gpsSharesHtml(d.gpsShares) + '</div>';
+      } catch (err) {
+        body = '<div class="text-center" style="color:var(--status-red);padding:20px">Failed to load wardriving stats: ' + esc(String(err)) + '</div>';
+      }
+
+      el.innerHTML =
+        '<h3 style="margin:0 0 4px">Wardriving (#wardriving)</h3>' +
+        '<p class="text-muted" style="margin:0 0 16px;font-size:0.85em">' +
+          'Community coverage-mapping traffic on the #wardriving channel. MeshMapper\'s on-air ping carries an anonymous session token by default, not the sender\'s live GPS — coordinates go to MeshMapper\'s own server separately. What we can see: who\'s active, which repeater first relayed their signal, and which observer stations (fixed, known locations) actually heard it.' +
+        '</p>' +
+        '<div style="margin-bottom:12px">' +
+          ['1h', '24h', '7d'].map(function(v) {
+            return '<button class="tab-btn' + (selectedWindow === v ? ' active' : '') + '" data-wdwin="' + v + '">' + v + '</button>';
+          }).join('') +
+        '</div>' +
+        body;
+      attachWindowButtons();
+      attachSenderDrilldown();
+    }
+
+    await load(selectedWindow);
+
+    // Auto-refresh every 60s while this tab is active (matches Roles/Scopes/Foreign Traffic).
+    _stopWardrivingRefresh();
+    _wardrivingRefreshTimer = setInterval(function() {
+      if (_currentTab !== 'wardriving') { _stopWardrivingRefresh(); return; }
+      var cur = document.getElementById('analyticsContent');
+      if (!cur) { _stopWardrivingRefresh(); return; }
+      load(selectedWindow);
     }, 60000);
   }
 
