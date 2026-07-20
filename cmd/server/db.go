@@ -2,14 +2,14 @@ package main
 
 import (
 	"database/sql"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"math"
 	"os"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -3179,9 +3179,8 @@ func (db *DB) getChannelScopeRegions(since string) (map[string][]string, error) 
 // observer stations actually heard the traffic, signal quality (SNR/RSSI)
 // over the same time buckets as the activity series, each sender's messages
 // grouped into distinct sessions/runs (see buildWardrivingSessions), and any
-// payload anomalies suggesting a sender might be broadcasting real
-// coordinates rather than the standard anonymous token (see
-// detectWardrivingAnomalies). See WardrivingObserverCoverage
+// senders who explicitly shared their own position (see
+// detectWardrivingGPSShares). See WardrivingObserverCoverage
 // doc for why observer coverage — not sender GPS — is the reliable half of
 // a "where did this reach" picture: MeshMapper's #wardriving messages carry
 // an anonymous per-session token by default, not the sender's live
@@ -3384,12 +3383,11 @@ func (db *DB) GetWardrivingStats(window, channel string) (*WardrivingStatsRespon
 	}
 	resp.Sessions = sessions
 
-	standardCount, anomalies, err := db.detectWardrivingAnomalies(channel, since)
+	gpsShares, err := db.detectWardrivingGPSShares(channel, since)
 	if err != nil {
 		return nil, err
 	}
-	resp.StandardPayloadCount = standardCount
-	resp.Anomalies = anomalies
+	resp.GPSShares = gpsShares
 
 	return resp, nil
 }
@@ -3527,41 +3525,38 @@ func (db *DB) buildWardrivingSessions(channel, since string) ([]WardrivingSessio
 	return sessions, nil
 }
 
-// wardrivingStandardPayloadBytes is the decoded length of MeshMapper's
-// default anonymous per-session wardriving token — confirmed empirically
-// (every "MM:<base64>" payload observed decodes to exactly this many
-// bytes). Anything else is a candidate for MeshMapper's optional
-// "Broadcast My Coordinates" mode, whose on-air byte format is
-// undocumented — see WardrivingAnomaly doc for why we detect but don't
-// attempt to decode it.
-const wardrivingStandardPayloadBytes = 7
+// wardrivingGPSSharePattern matches the plaintext coordinate suffix some
+// wardriving clients append after the standard token — e.g.
+// "MM:c3e_zJ1rUA:55.59743,13.00128" — confirmed empirically against live
+// traffic. This is an explicit choice by that sender's client to share
+// their position in-band; CoreScope reads the plaintext numbers, it does
+// not decode or infer them from the token itself.
+var wardrivingGPSSharePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+:(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$`)
 
-// detectWardrivingAnomalies scans every #wardriving message's "MM:<base64>"
-// payload — stored as "<sender>: MM:<base64>" in decoded_json.text, per
-// decodeGrpTxt's "<sender>: <message>" convention — and buckets them into
-// the standard-length count vs per-sender anomalies for any non-standard
-// length or undecodable payload. Messages that don't match that exact
-// "<sender>: MM:" prefix (e.g. manual human chat on the channel) are
-// ignored entirely, not counted either way.
-func (db *DB) detectWardrivingAnomalies(channel, since string) (int, []WardrivingAnomaly, error) {
+// detectWardrivingGPSShares scans every #wardriving message — stored as
+// "<sender>: MM:<message>" in decoded_json.text, per decodeGrpTxt's
+// "<sender>: <message>" convention — for that coordinate-suffix shape, and
+// returns one entry per sender with the most recent position they shared.
+// Messages without a coordinate suffix (the standard anonymous token, or
+// anything else) are ignored entirely.
+func (db *DB) detectWardrivingGPSShares(channel, since string) ([]WardrivingGPSShare, error) {
 	rows, err := db.conn.Query(`
 		SELECT json_extract(decoded_json, '$.sender'), json_extract(decoded_json, '$.text'), first_seen
 		FROM transmissions
 		WHERE channel_hash = ? AND payload_type = 5 AND first_seen >= ?
+		ORDER BY first_seen ASC
 	`, channel, since)
 	if err != nil {
-		return 0, nil, fmt.Errorf("wardriving anomaly query: %w", err)
+		return nil, fmt.Errorf("wardriving gps-share query: %w", err)
 	}
 	defer rows.Close()
 
-	type anomalyAgg struct {
-		count     int
-		byteSet   map[int]bool
-		sampleHex string
-		lastSeen  string
+	type shareAgg struct {
+		lat, lon float64
+		count    int
+		lastSeen string
 	}
-	standardCount := 0
-	agg := make(map[string]*anomalyAgg)
+	agg := make(map[string]*shareAgg)
 
 	for rows.Next() {
 		var sender, text sql.NullString
@@ -3569,7 +3564,7 @@ func (db *DB) detectWardrivingAnomalies(channel, since string) (int, []Wardrivin
 		if err := rows.Scan(&sender, &text, &ts); err != nil {
 			continue
 		}
-		if !sender.Valid || !text.Valid {
+		if !sender.Valid || !text.Valid || sender.String == "" {
 			continue
 		}
 		// decodeGrpTxt (cmd/ingestor/decoder.go) builds Text as
@@ -3579,53 +3574,42 @@ func (db *DB) detectWardrivingAnomalies(channel, since string) (int, []Wardrivin
 		if !strings.HasPrefix(text.String, prefix) {
 			continue
 		}
-		payload := strings.TrimPrefix(text.String, prefix)
-		decoded, decErr := base64.RawURLEncoding.DecodeString(payload)
-		if decErr == nil && len(decoded) == wardrivingStandardPayloadBytes {
-			standardCount++
+		rest := strings.TrimPrefix(text.String, prefix)
+		m := wardrivingGPSSharePattern.FindStringSubmatch(rest)
+		if m == nil {
 			continue
 		}
-
-		senderName := sender.String
-		if senderName == "" {
-			senderName = "(unknown sender)"
+		lat, errLat := strconv.ParseFloat(m[1], 64)
+		lon, errLon := strconv.ParseFloat(m[2], 64)
+		if errLat != nil || errLon != nil || lat < -90 || lat > 90 || lon < -180 || lon > 180 {
+			continue
 		}
-		n := -1 // undecodable base64
-		if decErr == nil {
-			n = len(decoded)
+		a := agg[sender.String]
+		if a == nil {
+			a = &shareAgg{}
+			agg[sender.String] = a
 		}
-		if agg[senderName] == nil {
-			agg[senderName] = &anomalyAgg{byteSet: make(map[int]bool)}
-		}
-		a := agg[senderName]
 		a.count++
-		a.byteSet[n] = true
-		if ts >= a.lastSeen {
-			a.lastSeen = ts
-			a.sampleHex = hex.EncodeToString(decoded)
-		}
+		// Rows are ordered first_seen ASC, so the last write below wins
+		// as the most recent shared position.
+		a.lat, a.lon, a.lastSeen = lat, lon, ts
 	}
 	if err := rows.Err(); err != nil {
-		return 0, nil, fmt.Errorf("wardriving anomaly iteration: %w", err)
+		return nil, fmt.Errorf("wardriving gps-share iteration: %w", err)
 	}
 
-	anomalies := make([]WardrivingAnomaly, 0, len(agg))
+	shares := make([]WardrivingGPSShare, 0, len(agg))
 	for senderName, a := range agg {
-		bytesList := make([]int, 0, len(a.byteSet))
-		for b := range a.byteSet {
-			bytesList = append(bytesList, b)
-		}
-		sort.Ints(bytesList)
-		anomalies = append(anomalies, WardrivingAnomaly{
+		shares = append(shares, WardrivingGPSShare{
 			Sender:       senderName,
+			Lat:          a.lat,
+			Lon:          a.lon,
 			MessageCount: a.count,
-			PayloadBytes: bytesList,
-			SampleHex:    a.sampleHex,
 			LastSeen:     a.lastSeen,
 		})
 	}
-	sort.Slice(anomalies, func(i, j int) bool { return anomalies[i].MessageCount > anomalies[j].MessageCount })
-	return standardCount, anomalies, nil
+	sort.Slice(shares, func(i, j int) bool { return shares[i].LastSeen > shares[j].LastSeen })
+	return shares, nil
 }
 
 // wardrivingSenderMessagesLimit caps how many individual messages
@@ -3636,10 +3620,11 @@ const wardrivingSenderMessagesLimit = 200
 // GetWardrivingSenderMessages returns one sender's individual #wardriving
 // messages in [since, until], most-recent-first: each message's entry-point
 // path (path[0] first, same convention as WardrivingEntryPrefix), the
-// observers that heard it with their own SNR/RSSI, and its payload
-// standard/anomaly classification (see detectWardrivingAnomalies). This is
-// the per-message detail behind the aggregate Sessions/Entry Points/
-// Coverage views — used when a user drills into one sender or one session.
+// observers that heard it with their own SNR/RSSI, and Lat/Lon when that
+// specific message carried an explicit shared position (see
+// detectWardrivingGPSShares). This is the per-message detail behind the
+// aggregate Sessions/Entry Points/Coverage views — used when a user drills
+// into one sender or one session.
 func (db *DB) GetWardrivingSenderMessages(sender, channel, since, until string) (*WardrivingSenderMessagesResponse, error) {
 	resp := &WardrivingSenderMessagesResponse{
 		Sender: sender, Channel: channel, Since: since, Until: until,
@@ -3755,13 +3740,14 @@ func (db *DB) GetWardrivingSenderMessages(sender, channel, since, until string) 
 		if t.text.Valid {
 			prefix := sender + ": MM:"
 			if strings.HasPrefix(t.text.String, prefix) {
-				payload := strings.TrimPrefix(t.text.String, prefix)
-				decoded, decErr := base64.RawURLEncoding.DecodeString(payload)
-				standard := decErr == nil && len(decoded) == wardrivingStandardPayloadBytes
-				msg.PayloadStandard = &standard
-				if decErr == nil {
-					n := len(decoded)
-					msg.PayloadBytes = &n
+				rest := strings.TrimPrefix(t.text.String, prefix)
+				if m := wardrivingGPSSharePattern.FindStringSubmatch(rest); m != nil {
+					lat, errLat := strconv.ParseFloat(m[1], 64)
+					lon, errLon := strconv.ParseFloat(m[2], 64)
+					if errLat == nil && errLon == nil && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180 {
+						msg.Lat = &lat
+						msg.Lon = &lon
+					}
 				}
 			}
 		}

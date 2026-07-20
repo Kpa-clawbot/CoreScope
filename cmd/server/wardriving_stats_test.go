@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"net/http/httptest"
 	"testing"
@@ -285,20 +284,21 @@ func TestHandleWardrivingStats_Sessions(t *testing.T) {
 	}
 }
 
-// TestHandleWardrivingStats_Anomalies covers payload-anomaly detection:
-// standard 7-byte tokens count toward StandardPayloadCount, non-standard
-// lengths and undecodable base64 are grouped per sender into Anomalies,
-// and messages with no "MM:" prefix at all (plain chat) are ignored
-// entirely rather than polluting either bucket.
-func TestHandleWardrivingStats_Anomalies(t *testing.T) {
+// TestHandleWardrivingStats_GPSShares covers detection of senders who
+// explicitly share their own position: a "<token>:<lat>,<lon>" suffix
+// after the standard "MM:" token (confirmed empirically against live
+// traffic — some wardriving clients append plaintext coordinates). Plain
+// tokens, plain chat, and out-of-range coordinates must never register as
+// a share.
+func TestHandleWardrivingStats_GPSShares(t *testing.T) {
 	srv, router := setupTestServer(t)
 	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
 		t.Fatalf("clear transmissions: %v", err)
 	}
 
 	// insertTx mirrors decodeGrpTxt's "<sender>: <message>" convention —
-	// text is NOT a bare "MM:<base64>", it's sender-prefixed, and
-	// detectWardrivingAnomalies matches on that exact "<sender>: MM:" prefix.
+	// text is sender-prefixed, and detectWardrivingGPSShares matches on
+	// that exact "<sender>: MM:" prefix.
 	insertTx := func(hash, sender, mmPayload string, tsOffset time.Duration) {
 		ts := time.Now().UTC().Add(tsOffset).Format(time.RFC3339)
 		text := sender + ": " + mmPayload
@@ -310,19 +310,14 @@ func TestHandleWardrivingStats_Anomalies(t *testing.T) {
 		}
 	}
 
-	standardToken := base64.RawURLEncoding.EncodeToString([]byte{1, 2, 3, 4, 5, 6, 7})
-	longPayload := base64.RawURLEncoding.EncodeToString(make([]byte, 12))
-
-	insertTx("std1", "Alice", "MM:"+standardToken, -3*time.Hour)
-	insertTx("std2", "Bob", "MM:"+standardToken, -2*time.Hour)
-	// Suspect1: two messages with a consistent non-standard 12-byte payload.
-	insertTx("anom1", "Suspect1", "MM:"+longPayload, -90*time.Minute)
-	insertTx("anom2", "Suspect1", "MM:"+longPayload, -80*time.Minute)
-	// Suspect2: one genuinely undecodable payload (invalid base64 chars).
-	insertTx("anom3", "Suspect2", "MM:!!!not-valid-b64!!!", -70*time.Minute)
-	// Plain chat on the same channel — must be ignored entirely, not
-	// counted as standard or anomalous.
+	insertTx("std1", "Alice", "MM:c3e_zJ1rUA", -3*time.Hour) // standard token, no shared position
+	// Alice shares her position twice, moving — the more recent one should win.
+	insertTx("gps1", "Alice", "MM:c3e_zJ1rUA:55.10000,13.10000", -90*time.Minute)
+	insertTx("gps2", "Alice", "MM:c3e_zJ1rUA:55.20000,13.20000", -80*time.Minute)
+	insertTx("std2", "Bob", "MM:c3e_zJ1rUA", -2*time.Hour) // Bob never shares — must not appear
+	// Plain chat, and an out-of-range "coordinate" — neither is a real share.
 	insertTx("chat1", "Eve", "hey is anyone home", -60*time.Minute)
+	insertTx("bad1", "BadCoords", "MM:c3e_zJ1rUA:999.0,13.0", -50*time.Minute)
 
 	req := httptest.NewRequest("GET", "/api/analytics/wardriving?window=24h", nil)
 	w := httptest.NewRecorder()
@@ -335,32 +330,19 @@ func TestHandleWardrivingStats_Anomalies(t *testing.T) {
 		t.Fatalf("decode: %v body=%s", err, w.Body.String())
 	}
 
-	if resp.StandardPayloadCount != 2 {
-		t.Errorf("StandardPayloadCount = %d, want 2 (Alice + Bob)", resp.StandardPayloadCount)
+	if len(resp.GPSShares) != 1 {
+		t.Fatalf("GPSShares = %+v, want 1 entry (only Alice actually shared a position)", resp.GPSShares)
 	}
-	if len(resp.Anomalies) != 2 {
-		t.Fatalf("Anomalies = %+v, want 2 senders (Suspect1, Suspect2)", resp.Anomalies)
+	share := resp.GPSShares[0]
+	if share.Sender != "Alice" || share.MessageCount != 2 {
+		t.Errorf("GPSShares[0] = %+v, want {Alice, 2 messages}", share)
 	}
-
-	// Sorted by MessageCount desc: Suspect1 (2 messages) before Suspect2 (1).
-	s1, s2 := resp.Anomalies[0], resp.Anomalies[1]
-	if s1.Sender != "Suspect1" || s1.MessageCount != 2 {
-		t.Errorf("Anomalies[0] = %+v, want {Suspect1, 2 messages}", s1)
+	if share.Lat != 55.2 || share.Lon != 13.2 {
+		t.Errorf("GPSShares[0] position = {%v, %v}, want the more recent {55.2, 13.2}", share.Lat, share.Lon)
 	}
-	if len(s1.PayloadBytes) != 1 || s1.PayloadBytes[0] != 12 {
-		t.Errorf("Suspect1 PayloadBytes = %v, want [12]", s1.PayloadBytes)
-	}
-	if s2.Sender != "Suspect2" || s2.MessageCount != 1 {
-		t.Errorf("Anomalies[1] = %+v, want {Suspect2, 1 message}", s2)
-	}
-	if len(s2.PayloadBytes) != 1 || s2.PayloadBytes[0] != -1 {
-		t.Errorf("Suspect2 PayloadBytes = %v, want [-1] (undecodable)", s2.PayloadBytes)
-	}
-
-	// Eve's plain-chat message must not appear anywhere in either bucket.
-	for _, a := range resp.Anomalies {
-		if a.Sender == "Eve" {
-			t.Error("Eve's plain-chat message (no MM: prefix) must not be counted as an anomaly")
+	for _, s := range resp.GPSShares {
+		if s.Sender == "Bob" || s.Sender == "Eve" || s.Sender == "BadCoords" {
+			t.Errorf("%s must not register as a GPS share (standard token / plain chat / out-of-range)", s.Sender)
 		}
 	}
 }
@@ -399,22 +381,19 @@ func TestHandleWardrivingStats_EmptyChannel(t *testing.T) {
 	if resp.TotalMessages != 0 {
 		t.Errorf("TotalMessages = %d, want 0", resp.TotalMessages)
 	}
-	if resp.TopSenders == nil || resp.EntryPoints == nil || resp.Observers == nil || resp.TimeSeries == nil || resp.SignalTimeSeries == nil || resp.Sessions == nil || resp.Anomalies == nil {
-		t.Errorf("expected empty (non-nil) slices, got TopSenders=%v EntryPoints=%v Observers=%v TimeSeries=%v SignalTimeSeries=%v Sessions=%v Anomalies=%v",
-			resp.TopSenders, resp.EntryPoints, resp.Observers, resp.TimeSeries, resp.SignalTimeSeries, resp.Sessions, resp.Anomalies)
+	if resp.TopSenders == nil || resp.EntryPoints == nil || resp.Observers == nil || resp.TimeSeries == nil || resp.SignalTimeSeries == nil || resp.Sessions == nil || resp.GPSShares == nil {
+		t.Errorf("expected empty (non-nil) slices, got TopSenders=%v EntryPoints=%v Observers=%v TimeSeries=%v SignalTimeSeries=%v Sessions=%v GPSShares=%v",
+			resp.TopSenders, resp.EntryPoints, resp.Observers, resp.TimeSeries, resp.SignalTimeSeries, resp.Sessions, resp.GPSShares)
 	}
 	if resp.AvgSNR != nil || resp.AvgRSSI != nil {
 		t.Errorf("expected nil AvgSNR/AvgRSSI for a channel with no observations, got AvgSNR=%v AvgRSSI=%v", resp.AvgSNR, resp.AvgRSSI)
-	}
-	if resp.StandardPayloadCount != 0 {
-		t.Errorf("StandardPayloadCount = %d, want 0", resp.StandardPayloadCount)
 	}
 }
 
 // TestHandleWardrivingSenderMessages covers the drill-down endpoint: one
 // sender's individual messages, most-recent-first, with resolved path,
-// per-observer signal, and payload classification — and that another
-// sender's messages never leak in.
+// per-observer signal, and lat/lon when a specific message shared a
+// position — and that another sender's messages never leak in.
 func TestHandleWardrivingSenderMessages(t *testing.T) {
 	srv, router := setupTestServer(t)
 	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
@@ -454,25 +433,23 @@ func TestHandleWardrivingSenderMessages(t *testing.T) {
 		}
 	}
 
-	standardToken := base64.RawURLEncoding.EncodeToString([]byte{1, 2, 3, 4, 5, 6, 7})
-	longPayload := base64.RawURLEncoding.EncodeToString(make([]byte, 12))
-
 	obs1 := insertObserver("wsmObsOne", "ObsOne")
 	obs2 := insertObserver("wsmObsTwo", "ObsTwo")
 
-	// Alice's older message: standard payload, heard by ObsOne only, short path.
-	txOld := insertTx("aliceOld", "Alice", "MM:"+standardToken, -2*time.Hour)
+	// Alice's older message: standard token, no shared position, heard by
+	// ObsOne only, short path.
+	txOld := insertTx("aliceOld", "Alice", "MM:c3e_zJ1rUA", -2*time.Hour)
 	insertObs(txOld, obs1, 3.0, -85, `["AAAA"]`)
 
-	// Alice's newer message: non-standard payload, heard by both observers;
-	// ObsTwo's observation carries the longer (more complete) path, which
-	// GetWardrivingSenderMessages should prefer.
-	txNew := insertTx("aliceNew", "Alice", "MM:"+longPayload, -30*time.Minute)
+	// Alice's newer message: she shared her position this time, heard by
+	// both observers; ObsTwo's observation carries the longer (more
+	// complete) path, which GetWardrivingSenderMessages should prefer.
+	txNew := insertTx("aliceNew", "Alice", "MM:c3e_zJ1rUA:55.59743,13.00128", -30*time.Minute)
 	insertObs(txNew, obs1, 5.0, -80, `["BBBB"]`)
 	insertObs(txNew, obs2, 7.0, -75, `["BBBB","CCCC"]`)
 
 	// Bob's message must never appear in Alice's results.
-	insertTx("bobMsg", "Bob", "MM:"+standardToken, -1*time.Hour)
+	insertTx("bobMsg", "Bob", "MM:c3e_zJ1rUA", -1*time.Hour)
 
 	req := httptest.NewRequest("GET", "/api/analytics/wardriving/sender-messages?sender=Alice&window=24h", nil)
 	w := httptest.NewRecorder()
@@ -503,11 +480,8 @@ func TestHandleWardrivingSenderMessages(t *testing.T) {
 	if len(newest.Observations) != 2 {
 		t.Errorf("newest.Observations = %+v, want 2 (ObsOne + ObsTwo)", newest.Observations)
 	}
-	if newest.PayloadStandard == nil || *newest.PayloadStandard {
-		t.Errorf("newest.PayloadStandard = %v, want false (12-byte non-standard payload)", newest.PayloadStandard)
-	}
-	if newest.PayloadBytes == nil || *newest.PayloadBytes != 12 {
-		t.Errorf("newest.PayloadBytes = %v, want 12", newest.PayloadBytes)
+	if newest.Lat == nil || newest.Lon == nil || *newest.Lat != 55.59743 || *newest.Lon != 13.00128 {
+		t.Errorf("newest.Lat/Lon = %v/%v, want the shared position 55.59743/13.00128", newest.Lat, newest.Lon)
 	}
 
 	if oldest.TransmissionID != txOld {
@@ -516,8 +490,8 @@ func TestHandleWardrivingSenderMessages(t *testing.T) {
 	if len(oldest.PathPrefixes) != 1 || oldest.PathPrefixes[0] != "AAAA" {
 		t.Errorf("oldest.PathPrefixes = %v, want [AAAA]", oldest.PathPrefixes)
 	}
-	if oldest.PayloadStandard == nil || !*oldest.PayloadStandard {
-		t.Errorf("oldest.PayloadStandard = %v, want true (standard 7-byte token)", oldest.PayloadStandard)
+	if oldest.Lat != nil || oldest.Lon != nil {
+		t.Errorf("oldest.Lat/Lon = %v/%v, want nil (standard token, no shared position)", oldest.Lat, oldest.Lon)
 	}
 }
 

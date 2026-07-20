@@ -5427,7 +5427,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         { label: 'Avg SNR', value: (d.avgSnr != null ? d.avgSnr.toFixed(1) + ' dB' : '—'), note: null },
         { label: 'Avg RSSI', value: (d.avgRssi != null ? d.avgRssi.toFixed(1) + ' dBm' : '—'), note: null },
         { label: 'Sessions', value: (d.sessions || []).length.toLocaleString(), note: '15min+ gap starts a new one' },
-        { label: 'Payload Anomalies', value: (d.anomalies || []).length.toLocaleString(), note: 'senders, non-standard "MM:" payload' },
+        { label: 'GPS Shared', value: (d.gpsShares || []).length.toLocaleString(), note: 'senders who shared a position' },
       ].map(function(c) {
         return '<div class="stat-card"><div class="stat-value">' + c.value + '</div>' +
           '<div class="stat-label">' + c.label + '</div>' +
@@ -5611,28 +5611,27 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         '</table>';
     }
 
-    function payloadBytesLabel(bytesList) {
-      return (bytesList || []).map(function(n) { return n === -1 ? 'undecodable' : (n + 'B'); }).join(', ');
+    function mapLinkHtml(lat, lon) {
+      return '<a href="#/map?lat=' + encodeURIComponent(lat) + '&lon=' + encodeURIComponent(lon) + '&zoom=15" target="_blank" rel="noopener">' +
+        lat.toFixed(5) + ', ' + lon.toFixed(5) + '</a>';
     }
 
-    // Payload anomalies — a heuristic, not a decode: MeshMapper's optional
-    // "Broadcast My Coordinates" mode uses an undocumented on-air byte
-    // format, so we only flag that a sender's payload length deviates from
-    // the standard 7-byte token, and show the raw hex for manual review —
-    // never an attempted lat/lon interpretation.
-    function anomaliesHtml(anomalies, standardCount) {
-      if (!anomalies || anomalies.length === 0) {
-        return '<p class="text-muted" style="font-size:0.85em">All ' + standardCount.toLocaleString() + ' "MM:" wardriving messages in this window used the standard 7-byte anonymous token — no non-standard payloads detected.</p>';
+    // GPS Sharing — some wardriving clients append plaintext "<lat>,<lon>"
+    // after the standard token; this is a deliberate choice by that
+    // sender's client to share their position in-band, confirmed
+    // empirically against live traffic, not something CoreScope infers.
+    function gpsSharesHtml(shares) {
+      if (!shares || shares.length === 0) {
+        return '<p class="text-muted" style="font-size:0.85em">No sender has shared an explicit position in this window.</p>';
       }
-      var rows = anomalies.map(function(a) {
-        return '<tr><td>' + esc(a.sender) + '</td>' +
-          '<td>' + a.messageCount.toLocaleString() + '</td>' +
-          '<td>' + payloadBytesLabel(a.payloadBytes) + '</td>' +
-          '<td><code>' + esc(a.sampleHex || '—') + '</code></td>' +
-          '<td>' + (typeof timeAgo === 'function' ? timeAgo(a.lastSeen) : a.lastSeen) + '</td></tr>';
+      var rows = shares.map(function(s) {
+        return '<tr><td>' + esc(s.sender) + '</td>' +
+          '<td>' + mapLinkHtml(s.lat, s.lon) + '</td>' +
+          '<td>' + s.messageCount.toLocaleString() + '</td>' +
+          '<td>' + (typeof timeAgo === 'function' ? timeAgo(s.lastSeen) : s.lastSeen) + '</td></tr>';
       }).join('');
       return '<table class="data-table analytics-table">' +
-        '<thead><tr><th>Sender</th><th>Messages</th><th>Payload Length</th><th>Sample Payload (hex)</th><th>Last Seen</th></tr></thead>' +
+        '<thead><tr><th>Sender</th><th>Position (most recent)</th><th>Times Shared</th><th>Last Seen</th></tr></thead>' +
         '<tbody>' + rows + '</tbody>' +
         '</table>';
     }
@@ -5693,21 +5692,14 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
                 return esc(o.observerName) + ' (' + o.snr.toFixed(1) + 'dB / ' + o.rssi.toFixed(0) + 'dBm)';
               }).join(', ')
             : '<span class="text-muted">—</span>';
-          var payloadStr;
-          if (m.payloadStandard == null) {
-            payloadStr = '<span class="text-muted">n/a</span>';
-          } else if (m.payloadStandard) {
-            payloadStr = 'standard';
-          } else {
-            payloadStr = '<span style="color:var(--warning, #f39c12)">anomaly (' + (m.payloadBytes != null ? m.payloadBytes + 'B' : 'undecodable') + ')</span>';
-          }
+          var posStr = (m.lat != null && m.lon != null) ? mapLinkHtml(m.lat, m.lon) : '<span class="text-muted">—</span>';
           return '<tr><td>' + (typeof timeAgo === 'function' ? timeAgo(m.timestamp) : m.timestamp) + '</td>' +
             '<td>' + pathStr + '</td>' +
             '<td>' + obsStr + '</td>' +
-            '<td>' + payloadStr + '</td></tr>';
+            '<td>' + posStr + '</td></tr>';
         }).join('');
         return '<table class="data-table analytics-table" style="margin:4px 0 12px;font-size:0.85em">' +
-          '<thead><tr><th>Time</th><th>Path (path[0] first)</th><th>Heard By (SNR / RSSI)</th><th>Payload</th></tr></thead>' +
+          '<thead><tr><th>Time</th><th>Path (path[0] first)</th><th>Heard By (SNR / RSSI)</th><th>Shared Position</th></tr></thead>' +
           '<tbody>' + rows + '</tbody>' +
           '</table>';
       } catch (err) {
@@ -5774,9 +5766,9 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
             '<div><div class="text-muted" style="font-size:0.8em;margin-bottom:4px">Avg SNR (dB)</div>' + signalChartHtml(d.signalTimeSeries, 'avgSnr', 'var(--accent)', 'Average SNR over time') + '</div>' +
             '<div><div class="text-muted" style="font-size:0.8em;margin-bottom:4px">Avg RSSI (dBm)</div>' + signalChartHtml(d.signalTimeSeries, 'avgRssi', 'var(--warning, #f39c12)', 'Average RSSI over time') + '</div>' +
           '</div>' +
-          '<h4 style="margin:24px 0 4px">Payload Anomalies (Coordinate-Broadcast Watch)</h4>' +
-          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">MeshMapper\'s default wardriving ping is a 7-byte anonymous token. A different payload length is a candidate signal that a sender has enabled MeshMapper\'s optional "Broadcast My Coordinates" mode — its on-air byte format is undocumented, so we show the raw hex rather than guessing at lat/lon.</p>' +
-          '<div id="wardrivingAnomalies">' + anomaliesHtml(d.anomalies, d.standardPayloadCount || 0) + '</div>';
+          '<h4 style="margin:24px 0 4px">GPS Sharing</h4>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Senders whose client appended their own position after the standard token — a deliberate choice by that sender to share their location, not something inferred from the anonymous token itself.</p>' +
+          '<div id="wardrivingGPSShares">' + gpsSharesHtml(d.gpsShares) + '</div>';
       } catch (err) {
         body = '<div class="text-center" style="color:var(--status-red);padding:20px">Failed to load wardriving stats: ' + esc(String(err)) + '</div>';
       }

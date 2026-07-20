@@ -276,37 +276,33 @@ type WardrivingSession struct {
 	ObserverCount   int     `json:"observerCount"`   // distinct observers that heard any message in the session
 }
 
-// WardrivingAnomaly aggregates, per sender, every #wardriving message whose
-// "MM:<base64>" payload does NOT decode to the standard
-// wardrivingStandardPayloadBytes-byte anonymous session token — either a
-// different length or genuinely undecodable base64. This is a detector,
-// not a decoder: MeshMapper's optional "Broadcast My Coordinates" mode
-// would produce on-air payloads in an undocumented format, so a
-// non-standard length is a plausible signal that mode is active for that
-// sender, but the payload bytes are deliberately NOT interpreted as
-// lat/lon — see SampleHex, which is a raw hex dump for manual inspection.
-type WardrivingAnomaly struct {
-	Sender       string `json:"sender"`
-	MessageCount int    `json:"messageCount"`
-	PayloadBytes []int  `json:"payloadBytes"` // distinct decoded byte-lengths seen, sorted ascending (-1 marks undecodable base64)
-	SampleHex    string `json:"sampleHex"`    // hex dump of the most recent non-standard payload, for manual inspection
-	LastSeen     string `json:"lastSeen"`
+// WardrivingGPSShare is one sender who has explicitly shared their own
+// position: some wardriving clients append plaintext "<lat>,<lon>" after
+// the standard token (e.g. "MM:c3e_zJ1rUA:55.59743,13.00128") — a
+// deliberate choice by that sender's client, not something CoreScope
+// infers or decodes from an undocumented format. Lat/Lon is the most
+// recent position shared in the window.
+type WardrivingGPSShare struct {
+	Sender       string  `json:"sender"`
+	Lat          float64 `json:"lat"`
+	Lon          float64 `json:"lon"`
+	MessageCount int     `json:"messageCount"` // how many times this sender shared a position in this window
+	LastSeen     string  `json:"lastSeen"`
 }
 
 type WardrivingStatsResponse struct {
-	Window               string                       `json:"window"`
-	Channel              string                       `json:"channel"`
-	TotalMessages        int                          `json:"totalMessages"`
-	TimeSeries           []WardrivingTimePoint        `json:"timeSeries"`
-	TopSenders           []WardrivingSenderCount      `json:"topSenders"`
-	EntryPoints          []WardrivingEntryPrefix      `json:"entryPoints"`
-	Observers            []WardrivingObserverCoverage `json:"observers"`
-	SignalTimeSeries     []WardrivingSignalPoint      `json:"signalTimeSeries"`
-	AvgSNR               *float64                     `json:"avgSnr,omitempty"`
-	AvgRSSI              *float64                     `json:"avgRssi,omitempty"`
-	Sessions             []WardrivingSession          `json:"sessions"`
-	StandardPayloadCount int                          `json:"standardPayloadCount"`
-	Anomalies            []WardrivingAnomaly          `json:"anomalies"`
+	Window           string                       `json:"window"`
+	Channel          string                       `json:"channel"`
+	TotalMessages    int                          `json:"totalMessages"`
+	TimeSeries       []WardrivingTimePoint        `json:"timeSeries"`
+	TopSenders       []WardrivingSenderCount      `json:"topSenders"`
+	EntryPoints      []WardrivingEntryPrefix      `json:"entryPoints"`
+	Observers        []WardrivingObserverCoverage `json:"observers"`
+	SignalTimeSeries []WardrivingSignalPoint      `json:"signalTimeSeries"`
+	AvgSNR           *float64                     `json:"avgSnr,omitempty"`
+	AvgRSSI          *float64                     `json:"avgRssi,omitempty"`
+	Sessions         []WardrivingSession          `json:"sessions"`
+	GPSShares        []WardrivingGPSShare         `json:"gpsShares"`
 }
 
 // WardrivingMessageObservation is one observer's reception of a single
@@ -324,12 +320,15 @@ type WardrivingMessageObservation struct {
 // path[0] convention as WardrivingEntryPrefix); the frontend resolves
 // names via /api/resolve-hops, same as the aggregate Entry Points table.
 type WardrivingMessage struct {
-	TransmissionID  int64                          `json:"transmissionId"`
-	Timestamp       string                         `json:"timestamp"`
-	PathPrefixes    []string                       `json:"pathPrefixes"`
-	Observations    []WardrivingMessageObservation `json:"observations"`
-	PayloadStandard *bool                          `json:"payloadStandard,omitempty"` // nil if this wasn't a recognizable "<sender>: MM:" wardriving ping
-	PayloadBytes    *int                           `json:"payloadBytes,omitempty"`
+	TransmissionID int64                          `json:"transmissionId"`
+	Timestamp      string                         `json:"timestamp"`
+	PathPrefixes   []string                       `json:"pathPrefixes"`
+	Observations   []WardrivingMessageObservation `json:"observations"`
+	// Lat/Lon are set only when this specific message carried an explicit
+	// shared position (see WardrivingGPSShare) — nil for the standard
+	// anonymous token.
+	Lat *float64 `json:"lat,omitempty"`
+	Lon *float64 `json:"lon,omitempty"`
 }
 
 type WardrivingSenderMessagesResponse struct {
