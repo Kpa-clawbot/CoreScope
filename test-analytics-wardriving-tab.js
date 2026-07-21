@@ -238,6 +238,69 @@ function makeApiStub(wardrivingResp, resolveHopsResp) {
     assert.ok(el.innerHTML.includes('66.7%'), 'Alice row should show 66.7% of total messages');
   });
 
+  await testAsync('Signal Quality Trends renders above Top Senders (moved up per layout request)', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeWardrivingResponse()));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderWardrivingTab(el);
+    const idxSignal = el.innerHTML.indexOf('Signal Quality Trends');
+    const idxSenders = el.innerHTML.indexOf('>Top Senders<');
+    assert.ok(idxSignal > -1 && idxSenders > -1, 'both sections should render');
+    assert.ok(idxSignal < idxSenders, 'Signal Quality Trends should render before Top Senders');
+  });
+
+  await testAsync('Top Senders and Coverage by Observer collapse to top 10 with a "Show all" toggle', async () => {
+    const manySenders = [];
+    for (let i = 0; i < 15; i++) manySenders.push({ sender: 'Sender' + i, count: 15 - i });
+    const manyObservers = [];
+    for (let i = 0; i < 12; i++) manyObservers.push({ observerId: String(i), observerName: 'Observer' + i, observationCount: 12 - i, messageCount: 1 });
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeWardrivingResponse({ topSenders: manySenders, observers: manyObservers })));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderWardrivingTab(el);
+
+    const sendersSection = el.innerHTML.slice(el.innerHTML.indexOf('id="wardrivingSenders"'), el.innerHTML.indexOf('id="wardrivingSessions"'));
+    assert.ok(sendersSection.includes('Sender9'), 'the 10th sender (index 9) should be shown');
+    assert.ok(!sendersSection.includes('Sender10'), 'the 11th sender should be collapsed away by default');
+    assert.ok(sendersSection.includes('Show all 15 senders'), 'a "Show all" toggle should appear when there are more than 10 senders');
+
+    const observersSection = el.innerHTML.slice(el.innerHTML.indexOf('id="wardrivingObservers"'), el.innerHTML.indexOf('id="wardrivingGPSShares"'));
+    assert.ok(observersSection.includes('Observer9'), 'the 10th observer (index 9) should be shown');
+    assert.ok(!observersSection.includes('Observer10'), 'the 11th observer should be collapsed away by default');
+    assert.ok(observersSection.includes('Show all 12 observers'), 'a "Show all" toggle should appear when there are more than 10 observers');
+  });
+
+  await testAsync('Sessions and Entry Points collapse to top 10 with a "Show all" toggle', async () => {
+    const manySessions = [];
+    for (let i = 0; i < 13; i++) {
+      manySessions.push({
+        sender: 'Sender' + i, startTime: '2026-07-20T0' + (i % 9) + ':00:00Z', endTime: '2026-07-20T0' + (i % 9) + ':05:00Z',
+        durationMinutes: 5, messageCount: 1, entryPointCount: 1, observerCount: 1, airtimeMs: 100,
+      });
+    }
+    const manyPrefixes = [];
+    const resolved = {};
+    for (let i = 0; i < 14; i++) {
+      const prefix = 'P' + String(i).padStart(3, '0');
+      manyPrefixes.push({ prefix, observationCount: 14 - i, messageCount: 1 });
+      resolved[prefix] = { name: 'Repeater' + i, pubkey: 'pk' + i, confidence: 'unique_prefix' };
+    }
+    const ctx = makeAnalyticsSandbox(makeApiStub(
+      makeWardrivingResponse({ sessions: manySessions, entryPoints: manyPrefixes }),
+      { resolved }
+    ));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderWardrivingTab(el);
+
+    const sessionsSection = el.innerHTML.slice(el.innerHTML.indexOf('id="wardrivingSessions"'), el.innerHTML.indexOf('id="wardrivingEntryPoints"'));
+    assert.ok(sessionsSection.includes('>Sender9<'), 'the 10th session (index 9) should be shown');
+    assert.ok(!sessionsSection.includes('>Sender10<'), 'the 11th session should be collapsed away by default');
+    assert.ok(sessionsSection.includes('Show all 13 sessions'), 'a "Show all" toggle should appear when there are more than 10 sessions');
+
+    const entrySection = el.innerHTML.slice(el.innerHTML.indexOf('id="wardrivingEntryPoints"'), el.innerHTML.indexOf('id="wardrivingObservers"'));
+    assert.ok(entrySection.includes('Repeater9'), 'the 10th entry point (index 9, highest observation count) should be shown');
+    assert.ok(!entrySection.includes('Repeater10'), 'the 11th entry point should be collapsed away by default');
+    assert.ok(entrySection.includes('Show all 14 entry-point repeaters'), 'a "Show all" toggle should appear when there are more than 10 entry points');
+  });
+
   await testAsync('Top Senders names are clickable drill-down triggers (whole-window, no since/until)', async () => {
     const ctx = makeAnalyticsSandbox(makeApiStub(makeWardrivingResponse()));
     const el = fakeEl();
