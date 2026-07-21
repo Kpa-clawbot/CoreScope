@@ -5558,17 +5558,29 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         '</table>';
     }
 
-    function sendersHtml(senders, totalMessages) {
+    var TOP_N_LIMIT = 10;
+
+    // Shared "Show all N / Show fewer" toggle trigger for any collapsible
+    // table below. The click handler itself is wired generically by
+    // wireExpandToggle, keyed on the data-wd-toggle attribute.
+    function topNToggleHtml(total, expanded, noun) {
+      if (total <= TOP_N_LIMIT) return '';
+      var label = expanded ? 'Show fewer' : 'Show all ' + total.toLocaleString() + ' ' + noun;
+      return '<div style="margin-top:6px;text-align:right"><button type="button" data-wd-toggle class="btn-link" style="font-size:12px;cursor:pointer;background:none;border:none;color:var(--link-color);padding:0">' + label + '</button></div>';
+    }
+
+    function sendersHtml(senders, totalMessages, expanded) {
       if (!senders || senders.length === 0) {
         return '<p class="text-muted" style="font-size:0.85em">No wardriving messages in this window.</p>';
       }
-      var rows = senders.map(function(s) {
+      var shown = expanded ? senders : senders.slice(0, TOP_N_LIMIT);
+      var rows = shown.map(function(s) {
         return '<tr><td>' + senderTriggerHtml(s.sender) + '</td><td>' + s.count.toLocaleString() + '</td><td>' + pct(s.count, totalMessages) + '</td></tr>';
       }).join('');
       return '<table class="data-table analytics-table" data-wd-cols="3">' +
         '<thead><tr><th>Sender</th><th>Messages</th><th>% of Total</th></tr></thead>' +
         '<tbody>' + rows + '</tbody>' +
-        '</table>';
+        '</table>' + topNToggleHtml(senders.length, expanded, 'senders');
     }
 
     // Entry Points — resolve raw path[0] hash prefixes to repeater names,
@@ -5616,12 +5628,15 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       }
     }
 
-    function observersHtml(observers) {
+    function observersHtml(observers, expanded) {
       if (!observers || observers.length === 0) {
         return '<p class="text-muted" style="font-size:0.85em">No observer has heard wardriving traffic in this window.</p>';
       }
+      // % of Observations stays relative to ALL observers, not just the
+      // shown top-N slice, so the numbers stay meaningful when collapsed.
       var totalObsCount = observers.reduce(function(sum, o) { return sum + o.observationCount; }, 0);
-      var rows = observers.map(function(o) {
+      var shown = expanded ? observers : observers.slice(0, TOP_N_LIMIT);
+      var rows = shown.map(function(o) {
         var loc = (o.lat != null && o.lon != null) ? (o.lat.toFixed(2) + ', ' + o.lon.toFixed(2)) : '—';
         return '<tr><td>' + esc(o.observerName) + '</td>' +
           '<td>' + esc(o.iata || '—') + '</td>' +
@@ -5633,7 +5648,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       return '<table class="data-table analytics-table">' +
         '<thead><tr><th>Observer</th><th>Region</th><th>Lat, Lon</th><th>Observations</th><th>% of Observations</th><th>Distinct Messages</th></tr></thead>' +
         '<tbody>' + rows + '</tbody>' +
-        '</table>';
+        '</table>' + topNToggleHtml(observers.length, expanded, 'observers');
     }
 
     function mapLinkHtml(lat, lon) {
@@ -5886,6 +5901,27 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       });
     }
 
+    // Generic "Show all / Show fewer" wiring for a collapsible section —
+    // re-renders just that section's content on click and rewires the
+    // (freshly-created) toggle button, since innerHTML replacement drops
+    // the old node's listener.
+    function wireExpandToggle(containerId, renderFn) {
+      var expanded = false;
+      function attach() {
+        var container = document.getElementById(containerId);
+        if (!container) return;
+        var btn = container.querySelector('[data-wd-toggle]');
+        if (btn) {
+          btn.addEventListener('click', function() {
+            expanded = !expanded;
+            container.innerHTML = renderFn(expanded);
+            attach();
+          });
+        }
+      }
+      attach();
+    }
+
     async function load(w) {
       var body;
       try {
@@ -5894,9 +5930,15 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         body =
           '<div id="wardrivingCards" class="stats-grid" style="margin-bottom:16px">' + cardsHtml(d) + '</div>' +
           '<div id="wardrivingChart" style="margin-bottom:16px">' + chartHtml(d.timeSeries) + '</div>' +
-          '<h4 style="margin:16px 0 4px">Top Senders</h4>' +
+          '<h4 style="margin:16px 0 4px">Signal Quality Trends</h4>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Average SNR and RSSI across every observation of wardriving traffic in each time bucket — a rough proxy for link quality, not tied to any one observer.</p>' +
+          '<div id="wardrivingSignal" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">' +
+            '<div><div class="text-muted" style="font-size:0.8em;margin-bottom:4px">Avg SNR (dB)</div>' + signalChartHtml(d.signalTimeSeries, 'avgSnr', 'var(--accent)', 'Average SNR over time') + '</div>' +
+            '<div><div class="text-muted" style="font-size:0.8em;margin-bottom:4px">Avg RSSI (dBm)</div>' + signalChartHtml(d.signalTimeSeries, 'avgRssi', 'var(--warning, #f39c12)', 'Average RSSI over time') + '</div>' +
+          '</div>' +
+          '<h4 style="margin:24px 0 4px">Top Senders</h4>' +
           '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Who\'s actively wardriving in this window, by message count.</p>' +
-          '<div id="wardrivingSenders">' + sendersHtml(d.topSenders, d.totalMessages) + '</div>' +
+          '<div id="wardrivingSenders">' + sendersHtml(d.topSenders, d.totalMessages, false) + '</div>' +
           '<h4 style="margin:24px 0 4px">Sessions</h4>' +
           '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Each sender\'s messages grouped into distinct runs — a gap of more than 15 minutes starts a new session.</p>' +
           '<div id="wardrivingSessions">' + sessionsHtml(d.sessions) + '</div>' +
@@ -5905,13 +5947,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           '<div id="wardrivingEntryPoints">' + entryHtml + '</div>' +
           '<h4 style="margin:24px 0 4px">Coverage by Observer</h4>' +
           '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Which observer stations actually heard wardriving traffic — observers sit at fixed, known locations, so this is the reliable half of "how far did it reach."</p>' +
-          '<div id="wardrivingObservers">' + observersHtml(d.observers) + '</div>' +
-          '<h4 style="margin:24px 0 4px">Signal Quality Trends</h4>' +
-          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Average SNR and RSSI across every observation of wardriving traffic in each time bucket — a rough proxy for link quality, not tied to any one observer.</p>' +
-          '<div id="wardrivingSignal" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">' +
-            '<div><div class="text-muted" style="font-size:0.8em;margin-bottom:4px">Avg SNR (dB)</div>' + signalChartHtml(d.signalTimeSeries, 'avgSnr', 'var(--accent)', 'Average SNR over time') + '</div>' +
-            '<div><div class="text-muted" style="font-size:0.8em;margin-bottom:4px">Avg RSSI (dBm)</div>' + signalChartHtml(d.signalTimeSeries, 'avgRssi', 'var(--warning, #f39c12)', 'Average RSSI over time') + '</div>' +
-          '</div>' +
+          '<div id="wardrivingObservers">' + observersHtml(d.observers, false) + '</div>' +
           '<h4 style="margin:24px 0 4px">GPS Sharing</h4>' +
           '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Senders whose client appended their own position after the standard token — a deliberate choice by that sender to share their location, not something inferred from the anonymous token itself.</p>' +
           '<div id="wardrivingGPSShares">' + gpsSharesHtml(d.gpsShares) + '</div>';
@@ -5932,6 +5968,10 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         body;
       attachWindowButtons();
       attachSenderDrilldown();
+      if (d) {
+        wireExpandToggle('wardrivingSenders', function(exp) { return sendersHtml(d.topSenders, d.totalMessages, exp); });
+        wireExpandToggle('wardrivingObservers', function(exp) { return observersHtml(d.observers, exp); });
+      }
     }
 
     await load(selectedWindow);
