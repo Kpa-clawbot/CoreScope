@@ -5107,7 +5107,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           }).join('');
           setSectionHtml(areaAdoptEl, detailsSection(
             'Scope Adoption by Area (' + byArea.length.toLocaleString() + ' areas)',
-            'All-time — expand an area to see exactly which nodes support its linked region (own default_scope or ever relayed it) and which don\'t. Broader areas (e.g. "Danmark (alle)") roll up every nested sub-area\'s nodes too, not just the ones no smaller area already claimed. Only counts nodes with a known GPS position, geographically inside the area — the "Repeaters by Region" section further down has no such restriction, so its counts won\'t match these; they measure different things, not the same thing twice.',
+            'All-time — expand an area to see exactly which nodes support its linked region (own default_scope or ever relayed it) and which don\'t. Broader areas (e.g. "Danmark (alle)") roll up every nested sub-area\'s nodes too, not just the ones no smaller area already claimed.',
             areaGroups,
             'scope-adoption-by-area'
           ));
@@ -5180,7 +5180,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       }
 
       renderRegionNodeGroups('scopes-repeaters', 'Repeaters by Region',
-        'Live, rolling activity window (not the 1h/24h/7d picker above) — which repeaters have RECENTLY relayed traffic carrying each region scope, with no geographic restriction (a repeater counts regardless of where it physically sits). A region carried by only 1 repeater is a single point of failure for that area. Counts here won\'t match "Scope Adoption by Area" further up, which is geographically bounded to positioned nodes — the two measure different things, not the same thing twice.',
+        'All-time, not limited to the window above — which repeaters have relayed traffic carrying each region scope. A region carried by only 1 repeater is a single point of failure for that area.',
         d.repeatersByRegion, 'repeater');
 
       // Bridge repeaters: RepeatersByRegion inverted — repeaters relaying
