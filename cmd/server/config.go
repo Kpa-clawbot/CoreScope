@@ -50,6 +50,28 @@ func AreaKeyForPoint(lat, lon float64, areas map[string]AreaEntry) (key string, 
 	return key, ok
 }
 
+// AreaKeysForPoint returns every configured area's key whose geometry
+// contains (lat, lon) — unlike AreaForPoint/AreaKeyForPoint (single
+// most-specific match, for per-node badges), this returns ALL of them, so
+// a point inside both "Aarhus by" and the broader "Jylland"/"Danmark
+// (alle)" counts toward all three. For aggregate reporting
+// (computeScopeAdoptionByArea) where a country-level area should roll up
+// its sub-areas' totals rather than only catching leftovers no smaller
+// area claimed. Returns nil for (0,0)/no-fix points.
+func AreaKeysForPoint(lat, lon float64, areas map[string]AreaEntry) []string {
+	if lat == 0 && lon == 0 {
+		return nil
+	}
+	var keys []string
+	for k, a := range areas {
+		gf := &geofilter.Config{Polygon: a.Polygon, LatMin: a.LatMin, LatMax: a.LatMax, LonMin: a.LonMin, LonMax: a.LonMax}
+		if geofilter.PassesFilter(lat, lon, gf) {
+			keys = append(keys, k)
+		}
+	}
+	return keys
+}
+
 func areaMatchForPoint(lat, lon float64, areas map[string]AreaEntry) (key, label string, ok bool) {
 	if lat == 0 && lon == 0 {
 		return "", "", false

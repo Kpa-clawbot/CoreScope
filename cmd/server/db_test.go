@@ -2433,6 +2433,50 @@ func TestComputeScopeAdoptionByArea_RelayedRegionCounts(t *testing.T) {
 	}
 }
 
+// TestComputeScopeAdoptionByArea_RollsUpIntoBroaderAreas is a regression
+// test for exactly what dborup flagged live: "Danmark (alle)" showed only
+// a handful of nodes because AreaKeyForPoint's single-most-specific-match
+// meant every node already claimed by a smaller sub-area (e.g. "Odense
+// by") never counted toward the broader containing area at all. A node
+// inside a nested area must now count toward EVERY containing area, so
+// DK's totals genuinely reflect the whole country, not just leftovers.
+func TestComputeScopeAdoptionByArea_RollsUpIntoBroaderAreas(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	areas := map[string]AreaEntry{
+		"DK":  {Label: "Danmark (alle)", RegionScope: "dk", LatMin: f(54.5), LatMax: f(57.8), LonMin: f(8.0), LonMax: f(15.25)},
+		"ODE": {Label: "Odense by", RegionScope: "dk-fyn-odense", LatMin: f(55.32), LatMax: f(55.45), LonMin: f(10.3), LonMax: f(10.5)},
+	}
+	nodes := []nodeAreaScopeInput{
+		{PublicKey: "odenode01", Name: "OdenseNode", Lat: 55.4047, Lon: 10.3810, DefaultScope: "#dk-fyn-odense"}, // inside BOTH DK and ODE
+		{PublicKey: "dkonly01", Name: "SomewhereElseInDK", Lat: 56.0, Lon: 9.0, DefaultScope: "#dk"},             // inside DK only, not ODE
+	}
+
+	got := computeScopeAdoptionByArea(nodes, areas, nil)
+	byKey := map[string]AreaScopeAdoption{}
+	for _, a := range got {
+		byKey[a.AreaKey] = a
+	}
+
+	dk := byKey["DK"]
+	if dk.TotalNodes != 2 {
+		t.Errorf("DK.TotalNodes = %d, want 2 (both nodes fall inside DK's box, including the one also inside ODE)", dk.TotalNodes)
+	}
+	// The Odense node's own scope is dk-fyn-odense, not dk -- so it does
+	// NOT match DK's own region even though it geographically counts
+	// toward DK's totals. Only dkonly01 (#dk) matches.
+	if dk.NodesMatchingArea != 1 {
+		t.Errorf("DK.NodesMatchingArea = %d, want 1 (only dkonly01 actually uses #dk)", dk.NodesMatchingArea)
+	}
+
+	ode := byKey["ODE"]
+	if ode.TotalNodes != 1 {
+		t.Errorf("ODE.TotalNodes = %d, want 1 (only the Odense-positioned node)", ode.TotalNodes)
+	}
+	if ode.NodesMatchingArea != 1 {
+		t.Errorf("ODE.NodesMatchingArea = %d, want 1", ode.NodesMatchingArea)
+	}
+}
+
 func TestComputeScopeAdoptionByArea_Empty(t *testing.T) {
 	got := computeScopeAdoptionByArea(nil, map[string]AreaEntry{"DK": {Label: "Danmark"}}, nil)
 	if len(got) != 0 {

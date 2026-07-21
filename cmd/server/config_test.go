@@ -571,4 +571,29 @@ func TestAreaForPoint(t *testing.T) {
 			t.Error("expected no match with no configured areas")
 		}
 	})
+
+	t.Run("AreaKeysForPoint returns every containing area, not just the most specific", func(t *testing.T) {
+		keys := AreaKeysForPoint(55.4047, 10.381, areas) // central Odense -- also inside Fyn and DK
+		want := map[string]bool{"DK": true, "FYN": true, "ODE": true}
+		if len(keys) != len(want) {
+			t.Fatalf("got %v, want all 3 of %v", keys, want)
+		}
+		for _, k := range keys {
+			if !want[k] {
+				t.Errorf("unexpected key %q in %v", k, keys)
+			}
+		}
+	})
+
+	t.Run("AreaKeysForPoint returns nil outside every area", func(t *testing.T) {
+		if keys := AreaKeysForPoint(60.0, 20.0, areas); keys != nil {
+			t.Errorf("expected nil, got %v", keys)
+		}
+	})
+
+	t.Run("AreaKeysForPoint returns nil for zero coordinates", func(t *testing.T) {
+		if keys := AreaKeysForPoint(0, 0, areas); keys != nil {
+			t.Errorf("expected nil, got %v", keys)
+		}
+	})
 }

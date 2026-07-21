@@ -5107,7 +5107,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           }).join('');
           setSectionHtml(areaAdoptEl, detailsSection(
             'Scope Adoption by Area (' + byArea.length.toLocaleString() + ' areas)',
-            'All-time — expand an area to see exactly which nodes support its linked region (own default_scope or ever relayed it) and which don\'t.',
+            'All-time — expand an area to see exactly which nodes support its linked region (own default_scope or ever relayed it) and which don\'t. Broader areas (e.g. "Danmark (alle)") roll up every nested sub-area\'s nodes too, not just the ones no smaller area already claimed.',
             areaGroups,
             'scope-adoption-by-area'
           ));

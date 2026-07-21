@@ -2292,13 +2292,21 @@ func (db *DB) GetNodesForScopeAdoption() ([]nodeAreaScopeInput, error) {
 }
 
 // computeScopeAdoptionByArea buckets nodes by their most specific
-// configured area (AreaKeyForPoint) and tallies, per area: how many nodes
-// sit there at all, how many "use scope" in ANY sense, and (when the area
-// itself has a RegionScope link) how many specifically use THAT region —
-// i.e. does this geographic community actually engage with the scope the
-// area is nominally tied to, or something else entirely (or nothing at
-// all). A node outside every configured area is excluded, same as the
-// area-badge features above.
+// configured area and tallies, per area: how many nodes sit there at all,
+// how many "use scope" in ANY sense, and (when the area itself has a
+// RegionScope link) how many specifically use THAT region — i.e. does
+// this geographic community actually engage with the scope the area is
+// nominally tied to, or something else entirely (or nothing at all). A
+// node outside every configured area is excluded.
+//
+// Unlike the per-node area *badges* (AreaForPoint/AreaKeyForPoint, which
+// pick a single most-specific area), this uses AreaKeysForPoint so a node
+// counts toward EVERY containing area — a node in "Aarhus by" also counts
+// toward "Jylland" and "Danmark (alle)". Without this, a broad roll-up
+// area like "Danmark (alle)" would only ever show the handful of nodes not
+// claimed by any smaller, more specific area (dborup flagged this: DK
+// showed almost nothing because nearly every real node already belonged
+// to a narrower sub-area), instead of the whole country's actual adoption.
 //
 // "Uses scope" counts two distinct signals, same runs-this-region vs
 // carried-this-region's-traffic distinction as OriginatingNodesByRegion vs
@@ -2316,52 +2324,44 @@ func (db *DB) GetNodesForScopeAdoption() ([]nodeAreaScopeInput, error) {
 func computeScopeAdoptionByArea(nodes []nodeAreaScopeInput, areas map[string]AreaEntry, relayInfo map[string]RepeaterRelayInfo) []AreaScopeAdoption {
 	counts := make(map[string]*AreaScopeAdoption)
 	for _, n := range nodes {
-		key, ok := AreaKeyForPoint(n.Lat, n.Lon, areas)
-		if !ok {
+		keys := AreaKeysForPoint(n.Lat, n.Lon, areas)
+		if len(keys) == 0 {
 			continue
 		}
-		c, exists := counts[key]
-		if !exists {
-			a := areas[key]
-			c = &AreaScopeAdoption{AreaKey: key, Label: a.Label, RegionScope: a.RegionScope}
-			counts[key] = c
-		}
-		c.TotalNodes++
 
 		ownScope := strings.ToLower(strings.TrimPrefix(n.DefaultScope, "#"))
-		hasAnyScope := ownScope != ""
-		var normalizedRegion string
-		regionMatch := false
-		if c.RegionScope != "" {
-			normalizedRegion = strings.ToLower(c.RegionScope)
-			regionMatch = ownScope == normalizedRegion
-		}
-
-		if info, ok := relayInfo[n.PublicKey]; ok && len(info.TransportedScopes) > 0 {
-			hasAnyScope = true
-			if normalizedRegion != "" && !regionMatch {
-				for _, r := range info.TransportedScopes {
-					if strings.ToLower(strings.TrimPrefix(r, "#")) == normalizedRegion {
-						regionMatch = true
-						break
-					}
-				}
+		relayedRegions := make(map[string]bool)
+		if info, ok := relayInfo[n.PublicKey]; ok {
+			for _, r := range info.TransportedScopes {
+				relayedRegions[strings.ToLower(strings.TrimPrefix(r, "#"))] = true
 			}
 		}
+		hasAnyScope := ownScope != "" || len(relayedRegions) > 0
 
-		if hasAnyScope {
-			c.NodesWithAnyScope++
-		}
-		// Matching/NotMatching per-node lists only make sense when the
-		// area actually has a region to compare against — an area with no
-		// RegionScope link has nothing to be "not matching".
-		if c.RegionScope != "" {
-			ref := RepeaterRef{Name: n.Name, PublicKey: n.PublicKey}
-			if regionMatch {
-				c.NodesMatchingArea++
-				c.Matching = append(c.Matching, ref)
-			} else {
-				c.NotMatching = append(c.NotMatching, ref)
+		for _, key := range keys {
+			c, exists := counts[key]
+			if !exists {
+				a := areas[key]
+				c = &AreaScopeAdoption{AreaKey: key, Label: a.Label, RegionScope: a.RegionScope}
+				counts[key] = c
+			}
+			c.TotalNodes++
+			if hasAnyScope {
+				c.NodesWithAnyScope++
+			}
+			// Matching/NotMatching per-node lists only make sense when the
+			// area actually has a region to compare against — an area
+			// with no RegionScope link has nothing to be "not matching".
+			if c.RegionScope != "" {
+				normalizedRegion := strings.ToLower(c.RegionScope)
+				regionMatch := ownScope == normalizedRegion || relayedRegions[normalizedRegion]
+				ref := RepeaterRef{Name: n.Name, PublicKey: n.PublicKey}
+				if regionMatch {
+					c.NodesMatchingArea++
+					c.Matching = append(c.Matching, ref)
+				} else {
+					c.NotMatching = append(c.NotMatching, ref)
+				}
 			}
 		}
 	}
