@@ -285,6 +285,19 @@ type WardrivingSession struct {
 	// TransmissionIDs is internal — the session's own transmission IDs,
 	// used by the route handler to compute AirtimeMs. Never serialized.
 	TransmissionIDs []int64 `json:"-"`
+	// EntryPointPrefixes is internal — the session's distinct path[0]
+	// hex prefixes, used by the route handler to resolve Area. Never
+	// serialized directly.
+	EntryPointPrefixes []string `json:"-"`
+	// Area is the most specific configured area containing the session's
+	// entry-point repeater — always approximate (the repeater's known
+	// position, not the sender's own; wardriving sessions never carry a
+	// literal shared GPS fix, unlike WardrivingGPSShare). Resolved by the
+	// route handler from EntryPointPrefixes when exactly one candidate
+	// node matches a prefix (same unique_prefix-only discipline as
+	// /api/resolve-hops) and that node has a known position. Nil when no
+	// prefix resolves unambiguously or areas aren't configured.
+	Area *string `json:"area,omitempty"`
 }
 
 // WardrivingGPSShare is one sender who has explicitly shared their own

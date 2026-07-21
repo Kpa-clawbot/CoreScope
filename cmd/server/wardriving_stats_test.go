@@ -507,6 +507,113 @@ func TestHandleWardrivingStats_GPSShareArea(t *testing.T) {
 	}
 }
 
+// TestHandleWardrivingStats_SessionArea covers approximating a session's
+// area from its entry-point repeater (path[0]) when the sender never shares
+// a literal GPS fix — must only trust a unique_prefix match, same discipline
+// as /api/resolve-hops, and must never guess when a prefix is ambiguous or
+// unresolvable.
+func TestHandleWardrivingStats_SessionArea(t *testing.T) {
+	srv, router := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
+		t.Fatalf("clear transmissions: %v", err)
+	}
+	if _, err := srv.db.conn.Exec(`DELETE FROM observations`); err != nil {
+		t.Fatalf("clear observations: %v", err)
+	}
+
+	f := func(v float64) *float64 { return &v }
+	srv.cfg.Areas = map[string]AreaEntry{
+		"ODE": {Label: "Odense by", LatMin: f(55.32), LatMax: f(55.45), LonMin: f(10.3), LonMax: f(10.5)},
+	}
+
+	// A repeater inside the configured area, resolvable only via a unique
+	// full-length prefix match (mirrors TestResolveHopsAPI_UniquePrefix).
+	if _, err := srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon, role) VALUES (?, ?, ?, ?, ?)",
+		"ff11223344", "OdenseRepeater", 55.4047, 10.3810, "repeater"); err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+	// A second, ambiguous prefix: two nodes share it, so it must never
+	// resolve to an area even though one of them has a position.
+	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon, role) VALUES (?, ?, ?, ?, ?)",
+		"ee1aaaaaaa", "AmbigA", 55.40, 10.38, "repeater")
+	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon, role) VALUES (?, ?, ?, ?, ?)",
+		"ee1bbbbbbb", "AmbigB", 55.41, 10.39, "repeater")
+	srv.store.InvalidateNodeCache()
+
+	now := time.Now().UTC()
+	insertTx := func(hash, sender string, ts time.Time) int64 {
+		res, err := srv.db.conn.Exec(
+			`INSERT INTO transmissions (raw_hex,hash,first_seen,route_type,payload_type,channel_hash,decoded_json) VALUES (?,?,?,1,5,'#wardriving',?)`,
+			"aa", hash, ts.Format(time.RFC3339), `{"sender":"`+sender+`","text":"`+sender+`: MM:x"}`,
+		)
+		if err != nil {
+			t.Fatalf("insert tx %s: %v", hash, err)
+		}
+		id, _ := res.LastInsertId()
+		return id
+	}
+	seaIdx := int64(0)
+	res, err := srv.db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES (?,?,?)`, "obsSEA", "SeattleObs", "SEA")
+	if err != nil {
+		t.Fatalf("insert observer: %v", err)
+	}
+	seaIdx, _ = res.LastInsertId()
+	insertObs := func(txID int64, pathJSON string) {
+		if _, err := srv.db.conn.Exec(
+			`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp) VALUES (?,?,?,?,?,?)`,
+			txID, seaIdx, 1.0, -90.0, pathJSON, time.Now().Unix(),
+		); err != nil {
+			t.Fatalf("insert observation: %v", err)
+		}
+	}
+
+	txResolvable := insertTx("area1", "InOdense", now.Add(-10*time.Minute))
+	insertObs(txResolvable, `["ff11223344"]`)
+
+	txAmbiguous := insertTx("area2", "Ambiguous", now.Add(-10*time.Minute))
+	insertObs(txAmbiguous, `["ee1"]`) // shared prefix of ee1aaaaaaa and ee1bbbbbbb -- 2 candidates
+
+	txNoMatch := insertTx("area3", "NoMatch", now.Add(-10*time.Minute))
+	insertObs(txNoMatch, `["deadbeef99"]`)
+
+	req := httptest.NewRequest("GET", "/api/analytics/wardriving?window=24h", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var resp WardrivingStatsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v body=%s", err, w.Body.String())
+	}
+
+	bySender := map[string]WardrivingSession{}
+	for _, s := range resp.Sessions {
+		bySender[s.Sender] = s
+	}
+	inOdense, ok := bySender["InOdense"]
+	if !ok {
+		t.Fatal("InOdense session missing")
+	}
+	if inOdense.Area == nil || *inOdense.Area != "Odense by" {
+		t.Errorf("InOdense.Area = %v, want \"Odense by\" (unique_prefix match with a known position)", inOdense.Area)
+	}
+	ambiguous, ok := bySender["Ambiguous"]
+	if !ok {
+		t.Fatal("Ambiguous session missing")
+	}
+	if ambiguous.Area != nil {
+		t.Errorf("Ambiguous.Area = %v, want nil (prefix matches 2 candidates, must not guess)", *ambiguous.Area)
+	}
+	noMatch, ok := bySender["NoMatch"]
+	if !ok {
+		t.Fatal("NoMatch session missing")
+	}
+	if noMatch.Area != nil {
+		t.Errorf("NoMatch.Area = %v, want nil (prefix matches no known node)", *noMatch.Area)
+	}
+}
+
 // TestHandleWardrivingStats_InvalidWindow mirrors the existing scope-stats
 // window validation.
 func TestHandleWardrivingStats_InvalidWindow(t *testing.T) {

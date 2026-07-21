@@ -5545,16 +5545,20 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       }
       var shown = expanded ? sessions : sessions.slice(0, TOP_N_LIMIT);
       var rows = shown.map(function(s) {
+        var areaBadge = s.area
+          ? '<span class="badge" style="background:var(--border);color:var(--text)" title="Approximate — the entry-point repeater\'s known position, not the sender\'s own">' + esc(s.area) + '</span>'
+          : '<span class="text-muted" style="font-size:0.85em">—</span>';
         return '<tr><td>' + senderTriggerHtml(s.sender, s.startTime, s.endTime) + '</td>' +
           '<td>' + (typeof timeAgo === 'function' ? timeAgo(s.startTime) : s.startTime) + '</td>' +
           '<td>' + formatSessionDuration(s.durationMinutes) + '</td>' +
           '<td>' + s.messageCount.toLocaleString() + '</td>' +
           '<td>' + s.entryPointCount.toLocaleString() + '</td>' +
           '<td>' + s.observerCount.toLocaleString() + '</td>' +
+          '<td>' + areaBadge + '</td>' +
           '<td>' + formatAirtimeMs(s.airtimeMs) + '</td></tr>';
       }).join('');
-      return '<table class="data-table analytics-table" data-wd-cols="7">' +
-        '<thead><tr><th>Sender</th><th>Started</th><th>Duration</th><th>Messages</th><th>Entry Points</th><th>Observers</th><th>Airtime</th></tr></thead>' +
+      return '<table class="data-table analytics-table" data-wd-cols="8">' +
+        '<thead><tr><th>Sender</th><th>Started</th><th>Duration</th><th>Messages</th><th>Entry Points</th><th>Observers</th><th>Area</th><th>Airtime</th></tr></thead>' +
         '<tbody>' + rows + '</tbody>' +
         '</table>' + topNToggleHtml(sessions.length, expanded, 'sessions');
     }

@@ -351,6 +351,22 @@ function makeApiStub(wardrivingResp, resolveHopsResp) {
     assert.ok(section.includes('<td>—</td></tr>'), 'a session with no airtime data (DB-only mode) should show a dash, not blank/null');
   });
 
+  await testAsync('Sessions table shows the approximate entry-point area, and a dash when unresolved', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeWardrivingResponse({
+      sessions: [
+        { sender: 'Alice', startTime: '2026-07-20T09:00:00Z', endTime: '2026-07-20T09:00:00Z', durationMinutes: 0, messageCount: 1, entryPointCount: 1, observerCount: 1, airtimeMs: 245, area: 'Odense by' },
+        { sender: 'Bob', startTime: '2026-07-20T08:30:00Z', endTime: '2026-07-20T08:30:00Z', durationMinutes: 0, messageCount: 1, entryPointCount: 1, observerCount: 1, airtimeMs: null },
+      ],
+    })));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderWardrivingTab(el);
+    const startIdx = el.innerHTML.indexOf('id="wardrivingSessions"');
+    const endIdx = el.innerHTML.indexOf('id="wardrivingEntryPoints"');
+    const section = el.innerHTML.slice(startIdx, endIdx);
+    assert.ok(section.includes('<th>Area</th>'), 'Sessions table should have an Area column');
+    assert.ok(section.includes('>Odense by<'), 'a resolved area should render as a badge');
+  });
+
   await testAsync('Entry Points resolves unique_prefix repeaters and folds ambiguous into one bucket', async () => {
     const ctx = makeAnalyticsSandbox(makeApiStub(makeWardrivingResponse(), {
       resolved: {

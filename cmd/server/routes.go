@@ -2716,6 +2716,39 @@ func (s *Server) handleResolveHops(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, ResolveHopsResponse{Resolved: resolved})
 }
 
+// resolveEntryPointArea approximates a wardriving session's area from its
+// entry-point repeater(s): for each candidate path[0] prefix, only a
+// unique_prefix match (exactly one node in the prefix map, same discipline
+// as handleResolveHops) with a known position is trusted — an ambiguous
+// prefix is skipped rather than guessed. Returns ok=false if no prefix
+// resolves this way, or the resolved node has no position, or areas aren't
+// configured.
+func (s *Server) resolveEntryPointArea(prefixes []string) (label string, ok bool) {
+	if s.store == nil || s.cfg == nil || len(s.cfg.Areas) == 0 || len(prefixes) == 0 {
+		return "", false
+	}
+	s.store.mu.RLock()
+	_, pm := s.store.getCachedNodesAndPM()
+	s.store.mu.RUnlock()
+	if pm == nil {
+		return "", false
+	}
+	for _, prefix := range prefixes {
+		candidates, found := pm.m[strings.ToLower(prefix)]
+		if !found || len(candidates) != 1 {
+			continue
+		}
+		ni := candidates[0]
+		if !ni.HasGPS {
+			continue
+		}
+		if label, ok := AreaForPoint(ni.Lat, ni.Lon, s.cfg.Areas); ok {
+			return label, true
+		}
+	}
+	return "", false
+}
+
 func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 	region := r.URL.Query().Get("region")
 	includeEncrypted := r.URL.Query().Get("includeEncrypted") == "true"
@@ -3780,6 +3813,13 @@ func (s *Server) handleWardrivingStats(w http.ResponseWriter, r *http.Request) {
 		for i := range resp.GPSShares {
 			if label, ok := AreaForPoint(resp.GPSShares[i].Lat, resp.GPSShares[i].Lon, s.cfg.Areas); ok {
 				resp.GPSShares[i].Area = &label
+			}
+		}
+		if s.store != nil {
+			for i := range resp.Sessions {
+				if label, ok := s.resolveEntryPointArea(resp.Sessions[i].EntryPointPrefixes); ok {
+					resp.Sessions[i].Area = &label
+				}
 			}
 		}
 	}

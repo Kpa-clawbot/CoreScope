@@ -3494,6 +3494,10 @@ func (db *DB) buildWardrivingSessions(channel, since string) ([]WardrivingSessio
 		}
 		cur.EntryPointCount = len(curPrefixes)
 		cur.ObserverCount = len(curObservers)
+		for p := range curPrefixes {
+			cur.EntryPointPrefixes = append(cur.EntryPointPrefixes, p)
+		}
+		sort.Strings(cur.EntryPointPrefixes)
 		start, errS := time.Parse(time.RFC3339, cur.StartTime)
 		end, errE := time.Parse(time.RFC3339, cur.EndTime)
 		if errS == nil && errE == nil {
