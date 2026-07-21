@@ -191,6 +191,33 @@ type ScopeStatsResponse struct {
 	// HourlyActivityByRegion is window-scoped like Summary/TimeSeries
 	// above — see ScopeHourlyActivity doc.
 	HourlyActivityByRegion []ScopeHourlyActivity `json:"hourlyActivityByRegion,omitempty"`
+	// ScopeAdoptionByArea buckets every positioned node by its configured
+	// geographic area (config.Areas, AreaKeyForPoint) and tallies scope
+	// adoption within that area — independent of whether the raw
+	// hashRegion codes above are "used" at all. Surfaces gaps like "34
+	// real nodes here, 0 have ever configured a scope" that
+	// UnusedRegions/RepeatersByRegion can't see, since those only know
+	// about region strings that already appeared in traffic. All-time,
+	// like the other Regions-tab sections. Omitted when no areas are
+	// configured.
+	ScopeAdoptionByArea []AreaScopeAdoption `json:"scopeAdoptionByArea,omitempty"`
+}
+
+// AreaScopeAdoption is one configured area's node count and scope adoption
+// — see ScopeStatsResponse.ScopeAdoptionByArea and computeScopeAdoptionByArea.
+type AreaScopeAdoption struct {
+	AreaKey     string `json:"areaKey"`
+	Label       string `json:"label"`
+	RegionScope string `json:"regionScope,omitempty"`
+	TotalNodes  int    `json:"totalNodes"`
+	// NodesWithAnyScope is how many of TotalNodes have ANY default_scope
+	// configured, regardless of which region it is.
+	NodesWithAnyScope int `json:"nodesWithAnyScope"`
+	// NodesMatchingArea is the subset of NodesWithAnyScope whose scope
+	// matches this area's own RegionScope specifically. Only meaningful
+	// when RegionScope is set — 0 otherwise (not the same as "0 of them
+	// match", there's simply nothing configured to match against).
+	NodesMatchingArea int `json:"nodesMatchingArea,omitempty"`
 }
 
 type RepeaterRef struct {

@@ -2327,3 +2327,59 @@ func TestLoadIndexesRelayHopsFromResolvedPath(t *testing.T) {
 		t.Errorf("relay byNode entry has wrong hash: %s", store.byNode[relayPubkey][0].Hash)
 	}
 }
+
+func TestComputeScopeAdoptionByArea(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	areas := map[string]AreaEntry{
+		"ODE": {Label: "Odense by", RegionScope: "dk-fyn-odense", LatMin: f(55.32), LatMax: f(55.45), LonMin: f(10.3), LonMax: f(10.5)},
+		"GOT": {Label: "Göteborg, SE", LatMin: f(57.35), LatMax: f(57.90), LonMin: f(11.85), LonMax: f(12.85)}, // no RegionScope link
+	}
+
+	nodes := []nodeAreaScopeInput{
+		{Lat: 55.4047, Lon: 10.3810, DefaultScope: "#dk-fyn-odense"}, // Odense, matches area's own region
+		{Lat: 55.40, Lon: 10.40, DefaultScope: "#dk-aarhus"},         // Odense, but a DIFFERENT region
+		{Lat: 55.41, Lon: 10.41, DefaultScope: ""},                   // Odense, no scope at all
+		{Lat: 57.68, Lon: 11.97, DefaultScope: "#dk-aarhus"},         // Göteborg, has a scope, but area has no RegionScope link
+		{Lat: 57.70, Lon: 11.98, DefaultScope: ""},                   // Göteborg, no scope
+		{Lat: 0, Lon: 0, DefaultScope: "#dk-aarhus"},                 // no-fix, must be excluded entirely
+		{Lat: 51.0, Lon: 4.0, DefaultScope: "#belgium"},              // outside every configured area, excluded
+	}
+
+	got := computeScopeAdoptionByArea(nodes, areas)
+	if len(got) != 2 {
+		t.Fatalf("got %d areas, want 2 (ODE and GOT) -- result: %+v", len(got), got)
+	}
+	byKey := map[string]AreaScopeAdoption{}
+	for _, a := range got {
+		byKey[a.AreaKey] = a
+	}
+
+	ode := byKey["ODE"]
+	if ode.TotalNodes != 3 {
+		t.Errorf("ODE.TotalNodes = %d, want 3", ode.TotalNodes)
+	}
+	if ode.NodesWithAnyScope != 2 {
+		t.Errorf("ODE.NodesWithAnyScope = %d, want 2 (one has no scope at all)", ode.NodesWithAnyScope)
+	}
+	if ode.NodesMatchingArea != 1 {
+		t.Errorf("ODE.NodesMatchingArea = %d, want 1 (only the dk-fyn-odense one matches, the dk-aarhus one doesn't)", ode.NodesMatchingArea)
+	}
+
+	got2 := byKey["GOT"]
+	if got2.TotalNodes != 2 {
+		t.Errorf("GOT.TotalNodes = %d, want 2", got2.TotalNodes)
+	}
+	if got2.NodesWithAnyScope != 1 {
+		t.Errorf("GOT.NodesWithAnyScope = %d, want 1", got2.NodesWithAnyScope)
+	}
+	if got2.NodesMatchingArea != 0 {
+		t.Errorf("GOT.NodesMatchingArea = %d, want 0 (area has no RegionScope link to match against)", got2.NodesMatchingArea)
+	}
+}
+
+func TestComputeScopeAdoptionByArea_Empty(t *testing.T) {
+	got := computeScopeAdoptionByArea(nil, map[string]AreaEntry{"DK": {Label: "Danmark"}})
+	if len(got) != 0 {
+		t.Errorf("expected no areas with 0 nodes, got %+v", got)
+	}
+}

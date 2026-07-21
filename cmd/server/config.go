@@ -37,11 +37,25 @@ type AreaEntry struct {
 // nested areas overlap (e.g. a point inside both "Odense by" and "Fyn").
 // Returns ok=false for (0,0)/no-fix points or when no area matches.
 func AreaForPoint(lat, lon float64, areas map[string]AreaEntry) (label string, ok bool) {
+	_, label, ok = areaMatchForPoint(lat, lon, areas)
+	return label, ok
+}
+
+// AreaKeyForPoint is AreaForPoint but returns the area's config key (e.g.
+// "ODE") instead of its display label — for callers that need to look up
+// other fields on the matched AreaEntry (e.g. RegionScope), not just show
+// the name.
+func AreaKeyForPoint(lat, lon float64, areas map[string]AreaEntry) (key string, ok bool) {
+	key, _, ok = areaMatchForPoint(lat, lon, areas)
+	return key, ok
+}
+
+func areaMatchForPoint(lat, lon float64, areas map[string]AreaEntry) (key, label string, ok bool) {
 	if lat == 0 && lon == 0 {
-		return "", false
+		return "", "", false
 	}
 	bestSpan := math.MaxFloat64
-	for _, a := range areas {
+	for k, a := range areas {
 		gf := &geofilter.Config{Polygon: a.Polygon, LatMin: a.LatMin, LatMax: a.LatMax, LonMin: a.LonMin, LonMax: a.LonMax}
 		if !geofilter.PassesFilter(lat, lon, gf) {
 			continue
@@ -49,11 +63,12 @@ func AreaForPoint(lat, lon float64, areas map[string]AreaEntry) (label string, o
 		span := areaSpan(a)
 		if span < bestSpan {
 			bestSpan = span
+			key = k
 			label = a.Label
 			ok = true
 		}
 	}
-	return label, ok
+	return key, label, ok
 }
 
 // areaSpan approximates an area's size as its bounding-box extent in

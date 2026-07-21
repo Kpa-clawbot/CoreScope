@@ -2239,6 +2239,91 @@ func (db *DB) GetNodesByDefaultScope() (map[string][]RepeaterRef, error) {
 	return result, rows.Err()
 }
 
+// nodeAreaScopeInput is one node's position + default_scope — the raw
+// input to computeScopeAdoptionByArea. DefaultScope is "" when unset or
+// when this DB predates #899 (no default_scope column at all).
+type nodeAreaScopeInput struct {
+	Lat, Lon     float64
+	DefaultScope string
+}
+
+// GetNodesForScopeAdoption returns every node with a real GPS fix (0,0
+// excluded, same convention as geofilter.PassesFilter) and its
+// default_scope, for computeScopeAdoptionByArea to bucket by configured
+// area. Unlike GetNodesByDefaultScope, this includes nodes with NO scope
+// too — the whole point is measuring adoption, not just listing who has one.
+func (db *DB) GetNodesForScopeAdoption() ([]nodeAreaScopeInput, error) {
+	query := "SELECT lat, lon"
+	if db.hasDefaultScope {
+		query += ", default_scope"
+	}
+	query += " FROM nodes WHERE lat IS NOT NULL AND lon IS NOT NULL AND lat != 0 AND lon != 0"
+	rows, err := db.conn.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("nodes for scope adoption query: %w", err)
+	}
+	defer rows.Close()
+	var out []nodeAreaScopeInput
+	for rows.Next() {
+		var lat, lon float64
+		var scope sql.NullString
+		var scanErr error
+		if db.hasDefaultScope {
+			scanErr = rows.Scan(&lat, &lon, &scope)
+		} else {
+			scanErr = rows.Scan(&lat, &lon)
+		}
+		if scanErr != nil {
+			continue
+		}
+		out = append(out, nodeAreaScopeInput{Lat: lat, Lon: lon, DefaultScope: scope.String})
+	}
+	return out, rows.Err()
+}
+
+// computeScopeAdoptionByArea buckets nodes by their most specific
+// configured area (AreaKeyForPoint) and tallies, per area: how many nodes
+// sit there at all, how many have ANY default_scope configured, and (when
+// the area itself has a RegionScope link) how many of those specifically
+// match the area's own region — i.e. does this geographic community
+// actually use the scope the area is nominally tied to, or something else
+// entirely (or nothing at all). A node outside every configured area is
+// excluded, same as the area-badge features above.
+func computeScopeAdoptionByArea(nodes []nodeAreaScopeInput, areas map[string]AreaEntry) []AreaScopeAdoption {
+	counts := make(map[string]*AreaScopeAdoption)
+	for _, n := range nodes {
+		key, ok := AreaKeyForPoint(n.Lat, n.Lon, areas)
+		if !ok {
+			continue
+		}
+		c, exists := counts[key]
+		if !exists {
+			a := areas[key]
+			c = &AreaScopeAdoption{AreaKey: key, Label: a.Label, RegionScope: a.RegionScope}
+			counts[key] = c
+		}
+		c.TotalNodes++
+		scope := strings.ToLower(strings.TrimPrefix(n.DefaultScope, "#"))
+		if scope != "" {
+			c.NodesWithAnyScope++
+			if c.RegionScope != "" && scope == strings.ToLower(c.RegionScope) {
+				c.NodesMatchingArea++
+			}
+		}
+	}
+	result := make([]AreaScopeAdoption, 0, len(counts))
+	for _, c := range counts {
+		result = append(result, *c)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].TotalNodes != result[j].TotalNodes {
+			return result[i].TotalNodes > result[j].TotalNodes
+		}
+		return result[i].Label < result[j].Label
+	})
+	return result
+}
+
 // QueryMultiNodePackets returns transmissions referencing any of the given pubkeys.
 func (db *DB) QueryMultiNodePackets(pubkeys []string, limit, offset int, order, since, until string) (*PacketResult, error) {
 	if len(pubkeys) == 0 {

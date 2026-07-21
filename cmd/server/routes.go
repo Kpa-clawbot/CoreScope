@@ -3744,6 +3744,14 @@ func (s *Server) handleScopeStats(w http.ResponseWriter, r *http.Request) {
 		log.Printf("WARN GetChannelMessageScopeStats: %v", err)
 	}
 
+	if s.cfg != nil && len(s.cfg.Areas) > 0 {
+		if nodes, err := s.db.GetNodesForScopeAdoption(); err == nil {
+			resp.ScopeAdoptionByArea = computeScopeAdoptionByArea(nodes, s.cfg.Areas)
+		} else {
+			log.Printf("WARN GetNodesForScopeAdoption: %v", err)
+		}
+	}
+
 	if adoption, err := s.db.GetChannelScopeAdoption(window); err == nil {
 		resp.ChannelScopeAdoption = adoption
 	} else {

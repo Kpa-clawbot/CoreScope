@@ -4556,6 +4556,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           '</details>' +
         '</div>' +
         '<div id="scopes-panel-regions" style="display:' + (selectedSubtab === 'regions' ? '' : 'none') + '">' +
+          '<div id="scopes-area-adoption"></div>' +
           '<div id="scopes-utilization"></div>' +
           '<div id="scopes-repeaters" style="margin-top:16px"></div>' +
           '<div id="scopes-origin-nodes" style="margin-top:16px"></div>' +
@@ -5061,6 +5062,43 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           hourlyEl.innerHTML =
             '<h4 style="margin:0 0 4px">Activity by Hour of Day</h4>' +
             '<p class="text-muted" style="margin:0;font-size:0.85em">No scoped messages in this window to chart by hour of day.</p>';
+        }
+      }
+
+      // Scope Adoption by Area: buckets every positioned node by its
+      // configured geographic area and asks "does this real, physical
+      // community actually use the region-scope system at all" —
+      // independent of which raw hashRegion codes have ever appeared in
+      // traffic. Region Utilization below only knows about region strings
+      // that already showed up in a message; a real area with real nodes
+      // that has NEVER produced a single region-scoped message is
+      // invisible there. This section catches exactly that gap.
+      var areaAdoptEl = document.getElementById('scopes-area-adoption');
+      if (areaAdoptEl) {
+        var byArea = d.scopeAdoptionByArea || [];
+        if (byArea.length > 0) {
+          var areaRows = byArea.map(function(a) {
+            var withScope = a.nodesWithAnyScope.toLocaleString() + ' (' + pct(a.nodesWithAnyScope, a.totalNodes) + ')';
+            var matching = a.regionScope
+              ? a.nodesMatchingArea.toLocaleString() + ' (' + pct(a.nodesMatchingArea, a.totalNodes) + ')' +
+                ' <span class="text-muted" style="font-size:0.85em">of <code>#' + esc(a.regionScope) + '</code></span>'
+              : '<span class="text-muted" style="font-size:0.85em">no region linked to this area</span>';
+            return '<tr><td>' + esc(a.label) + '</td>' +
+              '<td>' + a.totalNodes.toLocaleString() + '</td>' +
+              '<td>' + withScope + '</td>' +
+              '<td>' + matching + '</td></tr>';
+          }).join('');
+          setSectionHtml(areaAdoptEl, detailsSection(
+            'Scope Adoption by Area (' + byArea.length.toLocaleString() + ' areas)',
+            'All-time — every configured area with at least one positioned node. Shows whether that geographic community actually runs the region-scope system, and whether it runs the specific region this area is linked to.',
+            '<table class="data-table analytics-table">' +
+              '<thead><tr><th>Area</th><th>Nodes</th><th>With Any Scope</th><th>Matching Area’s Own Region</th></tr></thead>' +
+              '<tbody>' + areaRows + '</tbody>' +
+              '</table>',
+            'scope-adoption-by-area'
+          ));
+        } else {
+          areaAdoptEl.innerHTML = '';
         }
       }
 

@@ -4786,6 +4786,55 @@ func TestHandleScopeStats_OriginatingNodesByRegion(t *testing.T) {
 	}
 }
 
+func TestHandleScopeStats_ScopeAdoptionByArea(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+		t.Fatalf("add scope_name column: %v", err)
+	}
+	srv.db.hasScopeName = true
+	if !srv.db.hasDefaultScope {
+		if _, err := srv.db.conn.Exec(`ALTER TABLE nodes ADD COLUMN default_scope TEXT DEFAULT NULL`); err != nil {
+			t.Fatalf("add default_scope column: %v", err)
+		}
+		srv.db.hasDefaultScope = true
+	}
+	f := func(v float64) *float64 { return &v }
+	srv.cfg.Areas = map[string]AreaEntry{
+		"ODE": {Label: "Odense by", RegionScope: "dk-fyn-odense", LatMin: f(55.32), LatMax: f(55.45), LonMin: f(10.3), LonMax: f(10.5)},
+	}
+
+	insertNode := func(pk, defaultScope string, lat, lon float64) {
+		if _, err := srv.db.conn.Exec(
+			`INSERT INTO nodes (public_key, name, role, default_scope, lat, lon) VALUES (?, ?, 'repeater', ?, ?, ?)`,
+			pk, pk, defaultScope, lat, lon,
+		); err != nil {
+			t.Fatalf("seed node %s: %v", pk, err)
+		}
+	}
+	insertNode("odematch01", "#dk-fyn-odense", 55.4047, 10.3810)
+	insertNode("odewrong01", "#dk-aarhus", 55.40, 10.40)
+	insertNode("odenoscope1", "", 55.41, 10.41)
+
+	req := httptest.NewRequest("GET", "/api/scope-stats?window=24h", nil)
+	w := httptest.NewRecorder()
+	srv.handleScopeStats(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	var resp ScopeStatsResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.ScopeAdoptionByArea) != 1 {
+		t.Fatalf("scopeAdoptionByArea = %+v, want 1 entry (ODE)", resp.ScopeAdoptionByArea)
+	}
+	ode := resp.ScopeAdoptionByArea[0]
+	if ode.AreaKey != "ODE" || ode.TotalNodes != 3 || ode.NodesWithAnyScope != 2 || ode.NodesMatchingArea != 1 {
+		t.Errorf("ScopeAdoptionByArea[0] = %+v, want AreaKey=ODE TotalNodes=3 NodesWithAnyScope=2 NodesMatchingArea=1", ode)
+	}
+}
+
 func TestHandleScopeStatsInvalidWindow(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
