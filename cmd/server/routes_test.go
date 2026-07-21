@@ -4835,6 +4835,65 @@ func TestHandleScopeStats_ScopeAdoptionByArea(t *testing.T) {
 	}
 }
 
+// TestHandleScopeStats_ScopeAdoptionByArea_ZeroMatchKeyPresent is a
+// regression test: NodesMatchingArea must NOT have `omitempty`, or a
+// genuine 0 count (a real, meaningful value — "this area has a linked
+// region but nobody uses it") silently disappears from the raw JSON. The
+// frontend reads a.nodesMatchingArea directly and calls .toLocaleString()
+// on it — an absent key deserializes to `undefined` in JS, not 0, which
+// throws and breaks the whole Scopes tab render. Decodes into a raw map
+// (not the typed struct, which would hide this by defaulting to the zero
+// value regardless of whether the key was present).
+func TestHandleScopeStats_ScopeAdoptionByArea_ZeroMatchKeyPresent(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+		t.Fatalf("add scope_name column: %v", err)
+	}
+	srv.db.hasScopeName = true
+	if !srv.db.hasDefaultScope {
+		if _, err := srv.db.conn.Exec(`ALTER TABLE nodes ADD COLUMN default_scope TEXT DEFAULT NULL`); err != nil {
+			t.Fatalf("add default_scope column: %v", err)
+		}
+		srv.db.hasDefaultScope = true
+	}
+	f := func(v float64) *float64 { return &v }
+	srv.cfg.Areas = map[string]AreaEntry{
+		"AAR": {Label: "Aarhus by", RegionScope: "dk-aarhus", LatMin: f(56.05), LatMax: f(56.25), LonMin: f(9.95), LonMax: f(10.35)},
+	}
+	// A node with a scope, but NOT the area's own region — NodesMatchingArea
+	// must come out as a real, present 0, same as the live #dk-vs-#dk-aarhus
+	// case this feature was built to surface.
+	if _, err := srv.db.conn.Exec(
+		`INSERT INTO nodes (public_key, name, role, default_scope, lat, lon) VALUES ('aar00000001', 'AarhusNode', 'repeater', '#dk', 56.15, 10.15)`,
+	); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/scope-stats?window=24h", nil)
+	w := httptest.NewRecorder()
+	srv.handleScopeStats(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+
+	var raw map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	areas, ok := raw["scopeAdoptionByArea"].([]interface{})
+	if !ok || len(areas) != 1 {
+		t.Fatalf("scopeAdoptionByArea = %v, want 1 entry", raw["scopeAdoptionByArea"])
+	}
+	area := areas[0].(map[string]interface{})
+	val, present := area["nodesMatchingArea"]
+	if !present {
+		t.Fatal("nodesMatchingArea key is missing from the JSON entirely — omitempty regression, this crashes the frontend")
+	}
+	if val != float64(0) {
+		t.Errorf("nodesMatchingArea = %v, want 0", val)
+	}
+}
+
 func TestHandleScopeStatsInvalidWindow(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {

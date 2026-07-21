@@ -216,8 +216,10 @@ type AreaScopeAdoption struct {
 	// NodesMatchingArea is the subset of NodesWithAnyScope whose scope
 	// matches this area's own RegionScope specifically. Only meaningful
 	// when RegionScope is set — 0 otherwise (not the same as "0 of them
-	// match", there's simply nothing configured to match against).
-	NodesMatchingArea int `json:"nodesMatchingArea,omitempty"`
+	// match", there's simply nothing configured to match against). No
+	// omitempty: a real 0 count must still serialize, or the frontend has
+	// no way to distinguish it from "field absent".
+	NodesMatchingArea int `json:"nodesMatchingArea"`
 }
 
 type RepeaterRef struct {

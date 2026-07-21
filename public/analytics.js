@@ -5079,8 +5079,9 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         if (byArea.length > 0) {
           var areaRows = byArea.map(function(a) {
             var withScope = a.nodesWithAnyScope.toLocaleString() + ' (' + pct(a.nodesWithAnyScope, a.totalNodes) + ')';
+            var matchCount = a.nodesMatchingArea || 0;
             var matching = a.regionScope
-              ? a.nodesMatchingArea.toLocaleString() + ' (' + pct(a.nodesMatchingArea, a.totalNodes) + ')' +
+              ? matchCount.toLocaleString() + ' (' + pct(matchCount, a.totalNodes) + ')' +
                 ' <span class="text-muted" style="font-size:0.85em">of <code>#' + esc(a.regionScope) + '</code></span>'
               : '<span class="text-muted" style="font-size:0.85em">no region linked to this area</span>';
             return '<tr><td>' + esc(a.label) + '</td>' +
