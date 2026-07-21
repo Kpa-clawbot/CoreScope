@@ -251,6 +251,39 @@ function makeApiStub(wardrivingResp, resolveHopsResp) {
     assert.ok(observersSection.includes('Show all 12 observers'), 'a "Show all" toggle should appear when there are more than 10 observers');
   });
 
+  await testAsync('Sessions and Entry Points collapse to top 10 with a "Show all" toggle', async () => {
+    const manySessions = [];
+    for (let i = 0; i < 13; i++) {
+      manySessions.push({
+        sender: 'Sender' + i, startTime: '2026-07-20T0' + (i % 9) + ':00:00Z', endTime: '2026-07-20T0' + (i % 9) + ':05:00Z',
+        durationMinutes: 5, messageCount: 1, entryPointCount: 1, observerCount: 1, airtimeMs: 100,
+      });
+    }
+    const manyPrefixes = [];
+    const resolved = {};
+    for (let i = 0; i < 14; i++) {
+      const prefix = 'P' + String(i).padStart(3, '0');
+      manyPrefixes.push({ prefix, observationCount: 14 - i, messageCount: 1 });
+      resolved[prefix] = { name: 'Repeater' + i, pubkey: 'pk' + i, confidence: 'unique_prefix' };
+    }
+    const ctx = makeAnalyticsSandbox(makeApiStub(
+      makeWardrivingResponse({ sessions: manySessions, entryPoints: manyPrefixes }),
+      { resolved }
+    ));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderWardrivingTab(el);
+
+    const sessionsSection = el.innerHTML.slice(el.innerHTML.indexOf('id="wardrivingSessions"'), el.innerHTML.indexOf('id="wardrivingEntryPoints"'));
+    assert.ok(sessionsSection.includes('>Sender9<'), 'the 10th session (index 9) should be shown');
+    assert.ok(!sessionsSection.includes('>Sender10<'), 'the 11th session should be collapsed away by default');
+    assert.ok(sessionsSection.includes('Show all 13 sessions'), 'a "Show all" toggle should appear when there are more than 10 sessions');
+
+    const entrySection = el.innerHTML.slice(el.innerHTML.indexOf('id="wardrivingEntryPoints"'), el.innerHTML.indexOf('id="wardrivingObservers"'));
+    assert.ok(entrySection.includes('Repeater9'), 'the 10th entry point (index 9, highest observation count) should be shown');
+    assert.ok(!entrySection.includes('Repeater10'), 'the 11th entry point should be collapsed away by default');
+    assert.ok(entrySection.includes('Show all 14 entry-point repeaters'), 'a "Show all" toggle should appear when there are more than 10 entry points');
+  });
+
   await testAsync('Top Senders names are clickable drill-down triggers (whole-window, no since/until)', async () => {
     const ctx = makeAnalyticsSandbox(makeApiStub(makeWardrivingResponse()));
     const el = fakeEl();
