@@ -228,14 +228,27 @@ type AreaScopeAdoption struct {
 	// which specific nodes in this area relay/configure any of the area's
 	// own regions (correctly "support" it) and which sit here but don't.
 	// Only populated when RegionScopes is non-empty (nothing to split
-	// into two groups otherwise).
-	Matching    []RepeaterRef `json:"matching,omitempty"`
-	NotMatching []RepeaterRef `json:"notMatching,omitempty"`
+	// into two groups otherwise). Matching entries also carry WHICH of the
+	// area's regions each node matched (an area with several linked
+	// scopes, e.g. Europa's "eu"/"europe", needs this to answer "which
+	// nodes support which scope" — not just an aggregate yes/no).
+	Matching    []AreaScopeMatch `json:"matching,omitempty"`
+	NotMatching []RepeaterRef    `json:"notMatching,omitempty"`
 }
 
 type RepeaterRef struct {
 	Name      string `json:"name"`
 	PublicKey string `json:"publicKey"`
+}
+
+// AreaScopeMatch is a RepeaterRef plus which of the area's own
+// RegionScopes this node actually matched (via default_scope or by having
+// relayed it) — a node can match more than one when an area links several
+// scopes and the node uses/relays more than one of them.
+type AreaScopeMatch struct {
+	Name          string   `json:"name"`
+	PublicKey     string   `json:"publicKey"`
+	MatchedScopes []string `json:"matchedScopes"`
 }
 
 type ScopeRegionRepeaters struct {

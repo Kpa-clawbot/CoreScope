@@ -5101,6 +5101,23 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
               return '<a href="#/nodes/' + encodeURIComponent(r.publicKey) + '">' + esc(r.name) + '</a>';
             }).join(', ');
           }
+          // For areas linking more than one scope (e.g. Europa: "eu" and
+          // "europe"), a flat Supporting list can't say WHICH scope each
+          // node actually uses/relays — split it into one sub-list per
+          // scope instead. A node matching more than one scope (its own
+          // default_scope is one, and it relays another) appears in every
+          // group it matched, not just the first. Single-scope areas keep
+          // the plain flat list (grouping by one group is just noise).
+          function matchingByScope(matching, regionScopes) {
+            return regionScopes.map(function(rs) {
+              var inGroup = (matching || []).filter(function(m) {
+                return (m.matchedScopes || []).indexOf(rs) !== -1;
+              });
+              return '<div style="margin-top:4px"><code>#' + esc(rs) + '</code> (' + inGroup.length + '): ' +
+                (inGroup.length ? nodeLinks(inGroup) : '<span class="text-muted">none</span>') +
+                '</div>';
+            }).join('');
+          }
           var areaGroups = byArea.map(function(a) {
             var summary, body;
             if (a.regionScopes && a.regionScopes.length) {
@@ -5108,9 +5125,11 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
               var scopeCodes = a.regionScopes.map(function(rs) { return '<code>#' + esc(rs) + '</code>'; }).join(' or ');
               summary = esc(a.label) + ' — ' + matchCount.toLocaleString() + ' of ' + a.totalNodes.toLocaleString() +
                 ' support ' + scopeCodes + ' (' + pct(matchCount, a.totalNodes) + ')';
+              var supportingBody = a.regionScopes.length > 1
+                ? matchingByScope(a.matching, a.regionScopes)
+                : (a.matching && a.matching.length ? nodeLinks(a.matching) : '<span class="text-muted">none</span>');
               body =
-                '<div style="margin-bottom:6px"><strong>Supporting</strong> (' + (a.matching || []).length + '): ' +
-                  (a.matching && a.matching.length ? nodeLinks(a.matching) : '<span class="text-muted">none</span>') +
+                '<div style="margin-bottom:6px"><strong>Supporting</strong> (' + (a.matching || []).length + '): ' + supportingBody +
                 '</div>' +
                 '<div><strong>Not supporting</strong> (' + (a.notMatching || []).length + '): ' +
                   (a.notMatching && a.notMatching.length ? nodeLinks(a.notMatching) : '<span class="text-muted">none</span>') +

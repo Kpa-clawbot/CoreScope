@@ -2498,9 +2498,13 @@ func TestComputeScopeAdoptionByArea_MultipleRegionScopes(t *testing.T) {
 		{PublicKey: "usesEurope", Lat: 48.0, Lon: 11.0, DefaultScope: "#europe"},
 		{PublicKey: "relaysEurope", Lat: 48.0, Lon: 12.0, DefaultScope: ""},
 		{PublicKey: "usesNeither", Lat: 48.0, Lon: 13.0, DefaultScope: "#dk"},
+		// Own scope is #eu AND it also relays #europe -- must be
+		// reported as matching BOTH, not just the first one found.
+		{PublicKey: "usesBoth", Lat: 48.0, Lon: 14.0, DefaultScope: "#eu"},
 	}
 	relayInfo := map[string]RepeaterRelayInfo{
 		"relaysEurope": {TransportedScopes: []string{"#europe"}},
+		"usesBoth":     {TransportedScopes: []string{"#europe"}},
 	}
 
 	got := computeScopeAdoptionByArea(nodes, areas, relayInfo)
@@ -2508,23 +2512,30 @@ func TestComputeScopeAdoptionByArea_MultipleRegionScopes(t *testing.T) {
 		t.Fatalf("got %d areas, want 1", len(got))
 	}
 	eu := got[0]
-	if eu.TotalNodes != 4 {
-		t.Errorf("TotalNodes = %d, want 4", eu.TotalNodes)
+	if eu.TotalNodes != 5 {
+		t.Errorf("TotalNodes = %d, want 5", eu.TotalNodes)
 	}
-	// usesEu (#eu), usesEurope (#europe), and relaysEurope (relays
-	// #europe) all match one of Europa's two linked scopes; usesNeither
-	// (#dk) matches neither.
-	if eu.NodesMatchingArea != 3 {
-		t.Errorf("NodesMatchingArea = %d, want 3 (any of #eu or #europe should count)", eu.NodesMatchingArea)
+	// usesEu (#eu), usesEurope (#europe), relaysEurope (relays #europe),
+	// and usesBoth (both) all match one of Europa's two linked scopes;
+	// usesNeither (#dk) matches neither.
+	if eu.NodesMatchingArea != 4 {
+		t.Errorf("NodesMatchingArea = %d, want 4 (any of #eu or #europe should count)", eu.NodesMatchingArea)
 	}
-	matchingKeys := map[string]bool{}
+	matchedScopesByKey := map[string][]string{}
 	for _, m := range eu.Matching {
-		matchingKeys[m.PublicKey] = true
+		matchedScopesByKey[m.PublicKey] = m.MatchedScopes
 	}
-	for _, want := range []string{"usesEu", "usesEurope", "relaysEurope"} {
-		if !matchingKeys[want] {
-			t.Errorf("Matching missing %q, got %v", want, eu.Matching)
-		}
+	if diff := matchedScopesByKey["usesEu"]; len(diff) != 1 || diff[0] != "eu" {
+		t.Errorf("usesEu.MatchedScopes = %v, want [\"eu\"]", diff)
+	}
+	if diff := matchedScopesByKey["usesEurope"]; len(diff) != 1 || diff[0] != "europe" {
+		t.Errorf("usesEurope.MatchedScopes = %v, want [\"europe\"]", diff)
+	}
+	if diff := matchedScopesByKey["relaysEurope"]; len(diff) != 1 || diff[0] != "europe" {
+		t.Errorf("relaysEurope.MatchedScopes = %v, want [\"europe\"]", diff)
+	}
+	if diff := matchedScopesByKey["usesBoth"]; len(diff) != 2 || diff[0] != "eu" || diff[1] != "europe" {
+		t.Errorf("usesBoth.MatchedScopes = %v, want [\"eu\" \"europe\"] (node uses one scope AND relays the other)", diff)
 	}
 	if len(eu.NotMatching) != 1 || eu.NotMatching[0].PublicKey != "usesNeither" {
 		t.Errorf("NotMatching = %v, want just usesNeither", eu.NotMatching)

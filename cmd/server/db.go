@@ -2358,20 +2358,18 @@ func computeScopeAdoptionByArea(nodes []nodeAreaScopeInput, areas map[string]Are
 			// area actually has region(s) to compare against — an area
 			// with no RegionScopes link has nothing to be "not matching".
 			if len(c.RegionScopes) > 0 {
-				regionMatch := false
+				var matchedScopes []string
 				for _, rs := range c.RegionScopes {
 					normalizedRegion := strings.ToLower(rs)
 					if ownScope == normalizedRegion || relayedRegions[normalizedRegion] {
-						regionMatch = true
-						break
+						matchedScopes = append(matchedScopes, rs)
 					}
 				}
-				ref := RepeaterRef{Name: n.Name, PublicKey: n.PublicKey}
-				if regionMatch {
+				if len(matchedScopes) > 0 {
 					c.NodesMatchingArea++
-					c.Matching = append(c.Matching, ref)
+					c.Matching = append(c.Matching, AreaScopeMatch{Name: n.Name, PublicKey: n.PublicKey, MatchedScopes: matchedScopes})
 				} else {
-					c.NotMatching = append(c.NotMatching, ref)
+					c.NotMatching = append(c.NotMatching, RepeaterRef{Name: n.Name, PublicKey: n.PublicKey})
 				}
 			}
 		}
