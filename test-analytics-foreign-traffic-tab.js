@@ -268,6 +268,56 @@ function fakeEl() {
     assert.deepStrictEqual(ctx.__clearedIntervalIds, [registeredId], 'a second stop() call must not clear anything again — the timer reference should already be null');
   });
 
+  await testAsync('Foreign-Flagged Nodes collapses to top 10 with a "Show all" toggle', async () => {
+    const fixture = [];
+    for (let i = 0; i < 15; i++) {
+      // Newest-heard-first sort means index 0 is the most recent -- give
+      // decreasing last_seen so Foreign0..Foreign9 are exactly the shown set.
+      fixture.push({
+        public_key: 'pkForeign' + i, name: 'Foreign' + i, role: 'client',
+        lat: 40.7, lon: -74.0,
+        first_seen: '2026-07-01T00:00:00Z',
+        last_seen: '2026-07-' + String(20 - i).padStart(2, '0') + 'T00:00:00Z',
+      });
+    }
+    const ctx = makeAnalyticsSandbox(fixture);
+    const el = fakeEl();
+    await ctx.window._analyticsRenderForeignTrafficTab(el);
+    const startIdx = el.innerHTML.indexOf('id="foreignTrafficFlaggedNodes"');
+    const endIdx = el.innerHTML.indexOf('Repeaters Relaying Unscoped Traffic');
+    const section = el.innerHTML.slice(startIdx, endIdx);
+    assert.ok(section.includes('Foreign9'), 'the 10th foreign node (index 9) should be shown');
+    assert.ok(!section.includes('Foreign10'), 'the 11th foreign node should be collapsed away by default');
+    assert.ok(section.includes('Show all 15 nodes'), 'a "Show all" toggle should appear when there are more than 10 foreign nodes');
+  });
+
+  await testAsync('Repeaters Relaying Unscoped Traffic collapses to top 10 with a "Show all" toggle', async () => {
+    const fixture = [];
+    for (let i = 0; i < 15; i++) {
+      fixture.push({
+        public_key: 'pkRelay' + i, name: 'Relay' + i, role: 'repeater',
+        unscoped_relay_count_24h: 15 - i, relay_count_24h: 20,
+      });
+    }
+    const ctx = makeAnalyticsSandbox(fixture);
+    const el = fakeEl();
+    await ctx.window._analyticsRenderForeignTrafficTab(el);
+    const section = el.innerHTML.slice(el.innerHTML.indexOf('id="foreignTrafficRelays"'));
+    assert.ok(section.includes('Relay9'), 'the 10th relay (index 9, unscoped_relay_count_24h=6) should be shown');
+    assert.ok(!section.includes('Relay10'), 'the 11th relay should be collapsed away by default');
+    assert.ok(section.includes('Show all 15 repeaters'), 'a "Show all" toggle should appear when there are more than 10 relaying repeaters');
+  });
+
+  await testAsync('no "Show all" toggle when a list has 10 or fewer entries', async () => {
+    const ctx = makeAnalyticsSandbox([
+      { public_key: 'pkA', name: 'RepeaterA', role: 'repeater', unscoped_relay_count_24h: 5, relay_count_24h: 5 },
+      { public_key: 'pkForeign', name: 'ForeignNode', role: 'client', lat: 40.7, lon: -74.0 },
+    ]);
+    const el = fakeEl();
+    await ctx.window._analyticsRenderForeignTrafficTab(el);
+    assert.ok(!el.innerHTML.includes('Show all'), 'no toggle should render when neither list exceeds 10 entries');
+  });
+
   console.log('\n════════════════════════════════════════');
   console.log(`  Foreign Traffic tab: ${passed} passed, ${failed} failed`);
   console.log('════════════════════════════════════════');
