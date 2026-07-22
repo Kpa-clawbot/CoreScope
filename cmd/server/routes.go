@@ -1364,17 +1364,43 @@ func (s *Server) handlePostPacket(w http.ResponseWriter, r *http.Request) {
 
 // --- Node Handlers ---
 
-// nodeListPostFilters bundles the four filters handleNodes applies AFTER
+// nodeListPostFilters bundles the filters handleNodes applies AFTER
 // the SQL LIMIT/OFFSET page comes back from the DB: geo_filter (#730),
-// node blacklist, hidden-name-prefix (#1181), and area membership. Kept
-// together so handleNodes' pagination-compensation loop (see below) can
-// apply the exact same predicate to every DB page it pulls.
+// node blacklist, hidden-name-prefix (#1181), area membership, and (#1862)
+// hasScope/hashRegions relay filters. Kept together so handleNodes'
+// pagination-compensation loop (see below) can apply the exact same
+// predicate to every DB page it pulls.
 type nodeListPostFilters struct {
 	cfg           *Config
 	geoFilter     *GeoFilterConfig // resolved once via s.getGeoFilter() — cfgMu guards this field, see routes.go:53
 	applyGeo      bool
 	areaNodes     map[string]bool // nil = no area filter active
 	areaRequested bool            // true if ?area= was given but resolved to nothing
+
+	// relayMap backs hasScope/hashRegions below — the bulk pubkey ->
+	// RepeaterRelayInfo map (see GetRepeaterRelayInfoMap), keyed by
+	// lowercase pubkey. nil when the in-memory store is unavailable (DB-
+	// only mode): lookups then degrade to a zero-value RepeaterRelayInfo
+	// (no known transported scopes), same as any pubkey missing from the map.
+	relayMap map[string]RepeaterRelayInfo
+	// hasScope implements ?hasScope=true|false (#1862): nil = not
+	// requested, otherwise a node must have (true) or must not have
+	// (false) at least one entry in TransportedScopes to match.
+	hasScope *bool
+	// hashRegions implements ?hashRegion=#eu,#be (#1862): normalized
+	// (lowercased, "#" stripped) region names, OR-matched against a
+	// node's TransportedScopes. nil/empty = not requested.
+	hashRegions map[string]bool
+}
+
+// relayInfoFor looks up f.relayMap by lowercase pubkey, returning a
+// zero-value RepeaterRelayInfo (empty TransportedScopes) for a pubkey with
+// no relay activity or when relayMap itself is nil.
+func (f nodeListPostFilters) relayInfoFor(pk string) RepeaterRelayInfo {
+	if f.relayMap == nil {
+		return RepeaterRelayInfo{}
+	}
+	return f.relayMap[strings.ToLower(pk)]
 }
 
 func (f nodeListPostFilters) apply(nodes []map[string]interface{}) []map[string]interface{} {
@@ -1410,6 +1436,25 @@ func (f nodeListPostFilters) apply(nodes []map[string]interface{}) []map[string]
 				continue
 			}
 		}
+		if f.hasScope != nil || len(f.hashRegions) > 0 {
+			pk, _ := node["public_key"].(string)
+			info := f.relayInfoFor(pk)
+			if f.hasScope != nil && (len(info.TransportedScopes) > 0) != *f.hasScope {
+				continue
+			}
+			if len(f.hashRegions) > 0 {
+				matched := false
+				for _, rs := range info.TransportedScopes {
+					if f.hashRegions[strings.ToLower(strings.TrimPrefix(rs, "#"))] {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					continue
+				}
+			}
+		}
 		out = append(out, node)
 	}
 	return out
@@ -1419,7 +1464,8 @@ func (f nodeListPostFilters) apply(nodes []map[string]interface{}) []map[string]
 // to skip the compensation loop entirely on the (common) unfiltered path.
 func (f nodeListPostFilters) active() bool {
 	return (f.geoFilter != nil && f.applyGeo) || len(f.cfg.NodeBlacklist) > 0 ||
-		len(f.cfg.HiddenNamePrefixes) > 0 || f.areaRequested
+		len(f.cfg.HiddenNamePrefixes) > 0 || f.areaRequested ||
+		f.hasScope != nil || len(f.hashRegions) > 0
 }
 
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
@@ -1452,6 +1498,31 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filters := nodeListPostFilters{cfg: s.cfg, geoFilter: s.getGeoFilter(), applyGeo: applyGeoFilter}
+
+	// #1862: ?hasScope=true|false and ?hashRegion=#eu,#be filter the node
+	// list by relay activity — which repeaters have (or haven't) ever
+	// transported a region-scoped packet, and specifically which
+	// region(s). Both read the same bulk relay-info map TransportedScopes
+	// already backs elsewhere (Scopes tab's "Repeaters Never Relaying Any
+	// Scope"), fetched once here (not per-page) since it's independent of
+	// pagination.
+	if hs := q.Get("hasScope"); hs == "true" || hs == "false" {
+		v := hs == "true"
+		filters.hasScope = &v
+	}
+	if hr := q.Get("hashRegion"); hr != "" {
+		filters.hashRegions = make(map[string]bool)
+		for _, part := range strings.Split(hr, ",") {
+			part = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(part), "#")))
+			if part != "" {
+				filters.hashRegions[part] = true
+			}
+		}
+	}
+	if s.store != nil && (filters.hasScope != nil || len(filters.hashRegions) > 0) {
+		filters.relayMap = s.store.GetRepeaterRelayInfoMap(s.cfg.GetHealthThresholds().RelayActiveHours)
+	}
+
 	if area := q.Get("area"); area != "" {
 		filters.areaRequested = true
 		if s.store != nil {
