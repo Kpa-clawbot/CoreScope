@@ -2768,6 +2768,30 @@ func (s *Server) resolveEntryPointArea(prefixes []string) (label string, ok bool
 	return "", false
 }
 
+// annotateMessageAreas resolves each message's entry-point repeater (its
+// path[0], captured as "entryPrefix" by GetChannelMessages) to a
+// configured area — same unique_prefix-only discipline as
+// resolveEntryPointArea/handleWardrivingStats: only a truly unambiguous
+// prefix match with a known position sets "area", so this shows where the
+// SENDER actually was, distinct from (and often more specific than) the
+// area linked to the channel scope they sent with — dborup's own example:
+// sitting in Aarhus but sending with the broad #dk scope should still show
+// "Aarhus by" here. The raw entryPrefix never reaches the client, whether
+// or not it resolved.
+func (s *Server) annotateMessageAreas(messages []map[string]interface{}) {
+	hasAreas := s.cfg != nil && len(s.cfg.Areas) > 0
+	for _, m := range messages {
+		prefix, _ := m["entryPrefix"].(string)
+		delete(m, "entryPrefix")
+		if !hasAreas || prefix == "" {
+			continue
+		}
+		if label, ok := s.resolveEntryPointArea([]string{prefix}); ok {
+			m["area"] = label
+		}
+	}
+}
+
 func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 	region := r.URL.Query().Get("region")
 	includeEncrypted := r.URL.Query().Get("includeEncrypted") == "true"
@@ -2812,11 +2836,13 @@ func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 500, err.Error())
 			return
 		}
+		s.annotateMessageAreas(messages)
 		writeJSON(w, ChannelMessagesResponse{Messages: messages, Total: total})
 		return
 	}
 	if s.store != nil {
 		messages, total := s.store.GetChannelMessages(hash, limit, offset, region)
+		s.annotateMessageAreas(messages)
 		writeJSON(w, ChannelMessagesResponse{Messages: messages, Total: total})
 		return
 	}

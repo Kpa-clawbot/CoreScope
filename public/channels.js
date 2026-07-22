@@ -2299,6 +2299,14 @@
         const areaLabel = areaLabelForScope(msg.scope);
         meta.push(`Scope: ${escapeHtml(msg.scope)}` + (areaLabel ? ` (${escapeHtml(areaLabel)})` : ''));
       } else if (isTransportRoute) meta.push('Scope: unknown');
+      // msg.area (set server-side from the message's own path[0]
+      // entry-point repeater, not from the scope string) is where the
+      // SENDER physically was — distinct from the scope-linked area
+      // above, since e.g. a sender in Aarhus can still send with the
+      // broad #dk scope. Only present when path[0] resolved unambiguously
+      // (unique_prefix) to a positioned node; omitted otherwise, not
+      // guessed.
+      if (msg.area) meta.push(`From: ${escapeHtml(msg.area)}`);
 
       const safeId = btoa(encodeURIComponent(sender));
       // #1367: emit BOTH the new chat-app class names (.ch-message /

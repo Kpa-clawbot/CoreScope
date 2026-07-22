@@ -1945,10 +1945,14 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 			}
 		}
 		var hops int
+		var entryPrefix string
 		if pathJSON.Valid {
-			var h []interface{}
+			var h []string
 			if json.Unmarshal([]byte(pathJSON.String), &h) == nil {
 				hops = len(h)
+				if len(h) > 0 {
+					entryPrefix = h[0]
+				}
 			}
 		}
 		senderTs := decoded["sender_timestamp"]
@@ -1967,6 +1971,7 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 				"snr":              nullFloat(snr),
 				"scope":            nullStr(scopeName),
 				"routeType":        nullInt(routeType),
+				"entryPrefix":      entryPrefix,
 			},
 			Repeats: 1,
 		}

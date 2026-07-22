@@ -1675,6 +1675,19 @@ func pathLen(pathJSON string) int {
 	return len(hops)
 }
 
+// pathFirstHop returns path[0] (the entry-point repeater's hex prefix), or
+// "" when pathJSON is empty/invalid/has no hops.
+func pathFirstHop(pathJSON string) string {
+	if pathJSON == "" {
+		return ""
+	}
+	var hops []string
+	if json.Unmarshal([]byte(pathJSON), &hops) != nil || len(hops) == 0 {
+		return ""
+	}
+	return hops[0]
+}
+
 // indexResolvedPathHops indexes a transmission under every relay-hop pubkey
 // extracted from an observation's resolved_path, and refreshes the dependent
 // resolved-pubkey + path-hop indexes. This is the single point of truth for
@@ -5521,6 +5534,7 @@ func (s *PacketStore) GetChannelMessages(channelHash string, limit, offset int, 
 					"snr":              snrVal,
 					"scope":            strOrNil(tx.ScopeName),
 					"routeType":        intPtrOrNil(tx.RouteType),
+					"entryPrefix":      pathFirstHop(tx.PathJSON),
 				},
 				Repeats:   1,
 				Observers: observers,
