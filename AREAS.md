@@ -18,17 +18,17 @@ draw or which country you run CoreScope in.
 "areas": {
   "DK": {
     "label": "Danmark (alle)",
-    "regionScope": "dk",
+    "regionScopes": ["dk"],
     "polygon": [[54.85, 8.65], [55.50, 8.10], [57.10, 8.20], ...]
   },
   "AAR": {
     "label": "Aarhus by",
-    "regionScope": "dk-aarhus",
+    "regionScopes": ["dk-aarhus"],
     "polygon": [[56.35, 10.33], [56.31, 10.45], ...]
   },
   "EU": {
     "label": "Europa (alle)",
-    "regionScope": "eu",
+    "regionScopes": ["eu", "europe"],
     "latMin": 34.0, "latMax": 71.5, "lonMin": -25.0, "lonMax": 45.0
   }
 }
@@ -49,14 +49,17 @@ Each entry has three parts:
   If `polygon` has at least 3 points, it's used; otherwise the code falls
   back to the box. An area can have one or the other, not both meaningfully
   at once.
-- **`regionScope`** (optional) — links this area to a hashRegions channel
-  scope (e.g. `"dk-aarhus"`, stored *without* the leading `#`). This powers
-  the Scopes tab's "Scope Adoption by Area" section: which nodes physically
-  in this area actually use (via their own `default_scope`, or by relaying
-  it) the region this area represents. Leave it unset if there's no
-  matching hashRegion — the area still works for everything else (badges,
-  node counts, the area filter), it just won't have anything to compare
-  scope-adoption against.
+- **`regionScopes`** (optional) — links this area to one or more hashRegions
+  channel scopes (e.g. `["dk-aarhus"]`, each stored *without* the leading
+  `#`). This powers the Scopes tab's "Scope Adoption by Area" section: which
+  nodes physically in this area actually use (via their own `default_scope`,
+  or by relaying it) *any* of the regions this area represents. Most areas
+  only need one scope, but a broad umbrella area can link several — e.g.
+  Europa linking both `"eu"` and `"europe"` if both names see real traffic —
+  and a node matching any one of them counts as supporting the area. Leave
+  it unset/empty if there's no matching hashRegion — the area still works
+  for everything else (badges, node counts, the area filter), it just won't
+  have anything to compare scope-adoption against.
 
 ## Hierarchy: draw it, don't declare it
 

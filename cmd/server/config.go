@@ -25,11 +25,13 @@ type AreaEntry struct {
 	LonMin  *float64     `json:"lonMin,omitempty"`
 	LonMax  *float64     `json:"lonMax,omitempty"`
 
-	// RegionScope links this area to a hashRegions channel scope (e.g.
-	// "dk-aarhus"), stored without the leading "#" — callers should run it
-	// through regions.Normalize before comparing against a scope_name.
-	// Left empty when no confident area<->scope mapping exists.
-	RegionScope string `json:"regionScope,omitempty"`
+	// RegionScopes links this area to one or more hashRegions channel
+	// scopes (e.g. "dk-aarhus"; a broad umbrella area can have several,
+	// e.g. Europa linking both "eu" and "europe"), stored without the
+	// leading "#" — callers should run each through regions.Normalize
+	// before comparing against a scope_name. Left empty when no confident
+	// area<->scope mapping exists.
+	RegionScopes []string `json:"regionScopes,omitempty"`
 }
 
 // AreaForPoint returns the label of the most specific configured area that
@@ -43,7 +45,7 @@ func AreaForPoint(lat, lon float64, areas map[string]AreaEntry) (label string, o
 
 // AreaKeyForPoint is AreaForPoint but returns the area's config key (e.g.
 // "ODE") instead of its display label — for callers that need to look up
-// other fields on the matched AreaEntry (e.g. RegionScope), not just show
+// other fields on the matched AreaEntry (e.g. RegionScopes), not just show
 // the name.
 func AreaKeyForPoint(lat, lon float64, areas map[string]AreaEntry) (key string, ok bool) {
 	key, _, ok = areaMatchForPoint(lat, lon, areas)

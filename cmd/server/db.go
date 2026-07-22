@@ -2299,7 +2299,7 @@ func (db *DB) GetNodesForScopeAdoption() ([]nodeAreaScopeInput, error) {
 // computeScopeAdoptionByArea buckets nodes by their most specific
 // configured area and tallies, per area: how many nodes sit there at all,
 // how many "use scope" in ANY sense, and (when the area itself has a
-// RegionScope link) how many specifically use THAT region — i.e. does
+// RegionScopes link) how many specifically use THAT region — i.e. does
 // this geographic community actually engage with the scope the area is
 // nominally tied to, or something else entirely (or nothing at all). A
 // node outside every configured area is excluded.
@@ -2322,7 +2322,7 @@ func (db *DB) GetNodesForScopeAdoption() ([]nodeAreaScopeInput, error) {
 // may be nil (in-memory store unavailable), in which case matching falls
 // back to default_scope only.
 //
-// For areas with a RegionScope link, also returns the actual node lists
+// For areas with a RegionScopes link, also returns the actual node lists
 // (Matching/NotMatching) — dborup wanted to see which specific nodes in
 // e.g. Østjylland relay dk-oj (correctly "support" the area) and which
 // don't, not just an aggregate count.
@@ -2347,7 +2347,7 @@ func computeScopeAdoptionByArea(nodes []nodeAreaScopeInput, areas map[string]Are
 			c, exists := counts[key]
 			if !exists {
 				a := areas[key]
-				c = &AreaScopeAdoption{AreaKey: key, Label: a.Label, RegionScope: a.RegionScope}
+				c = &AreaScopeAdoption{AreaKey: key, Label: a.Label, RegionScopes: a.RegionScopes}
 				counts[key] = c
 			}
 			c.TotalNodes++
@@ -2355,11 +2355,17 @@ func computeScopeAdoptionByArea(nodes []nodeAreaScopeInput, areas map[string]Are
 				c.NodesWithAnyScope++
 			}
 			// Matching/NotMatching per-node lists only make sense when the
-			// area actually has a region to compare against — an area
-			// with no RegionScope link has nothing to be "not matching".
-			if c.RegionScope != "" {
-				normalizedRegion := strings.ToLower(c.RegionScope)
-				regionMatch := ownScope == normalizedRegion || relayedRegions[normalizedRegion]
+			// area actually has region(s) to compare against — an area
+			// with no RegionScopes link has nothing to be "not matching".
+			if len(c.RegionScopes) > 0 {
+				regionMatch := false
+				for _, rs := range c.RegionScopes {
+					normalizedRegion := strings.ToLower(rs)
+					if ownScope == normalizedRegion || relayedRegions[normalizedRegion] {
+						regionMatch = true
+						break
+					}
+				}
 				ref := RepeaterRef{Name: n.Name, PublicKey: n.PublicKey}
 				if regionMatch {
 					c.NodesMatchingArea++

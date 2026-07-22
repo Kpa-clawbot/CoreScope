@@ -206,10 +206,10 @@ type ScopeStatsResponse struct {
 // AreaScopeAdoption is one configured area's node count and scope adoption
 // — see ScopeStatsResponse.ScopeAdoptionByArea and computeScopeAdoptionByArea.
 type AreaScopeAdoption struct {
-	AreaKey     string `json:"areaKey"`
-	Label       string `json:"label"`
-	RegionScope string `json:"regionScope,omitempty"`
-	TotalNodes  int    `json:"totalNodes"`
+	AreaKey      string   `json:"areaKey"`
+	Label        string   `json:"label"`
+	RegionScopes []string `json:"regionScopes,omitempty"`
+	TotalNodes   int      `json:"totalNodes"`
 	// NodesWithAnyScope is how many of TotalNodes "use scope" in any
 	// sense: either their own default_scope is set, or they've ever
 	// relayed traffic carrying ANY region's scope (a repeater can support
@@ -217,18 +217,18 @@ type AreaScopeAdoption struct {
 	// its own — see computeScopeAdoptionByArea).
 	NodesWithAnyScope int `json:"nodesWithAnyScope"`
 	// NodesMatchingArea is the subset of NodesWithAnyScope that
-	// specifically use THIS area's own RegionScope — via default_scope OR
-	// by having relayed it. Only meaningful when RegionScope is set — 0
-	// otherwise (not the same as "0 of them match", there's simply
-	// nothing configured to match against). No omitempty: a real 0 count
-	// must still serialize, or the frontend has no way to distinguish it
-	// from "field absent".
+	// specifically use one of THIS area's own RegionScopes — via
+	// default_scope OR by having relayed it. Only meaningful when
+	// RegionScopes is non-empty — 0 otherwise (not the same as "0 of them
+	// match", there's simply nothing configured to match against). No
+	// omitempty: a real 0 count must still serialize, or the frontend has
+	// no way to distinguish it from "field absent".
 	NodesMatchingArea int `json:"nodesMatchingArea"`
 	// Matching/NotMatching are the actual nodes behind NodesMatchingArea —
-	// which specific nodes in this area relay/configure the area's own
-	// region (correctly "support" it) and which sit here but don't. Only
-	// populated when RegionScope is set (nothing to split into two groups
-	// otherwise).
+	// which specific nodes in this area relay/configure any of the area's
+	// own regions (correctly "support" it) and which sit here but don't.
+	// Only populated when RegionScopes is non-empty (nothing to split
+	// into two groups otherwise).
 	Matching    []RepeaterRef `json:"matching,omitempty"`
 	NotMatching []RepeaterRef `json:"notMatching,omitempty"`
 }

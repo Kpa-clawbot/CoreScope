@@ -4828,8 +4828,11 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
     }
 
     // regionScope -> area label lookup, e.g. "dk-aarhus" -> "Aarhus by".
-    // Areas rarely change, so this is fetched once and reused across every
-    // region-code section below rather than re-fetched per render.
+    // An area can link more than one scope (e.g. Europa: both "eu" and
+    // "europe"), so each one gets its own entry pointing back to the same
+    // label. Areas rarely change, so this is fetched once and reused
+    // across every region-code section below rather than re-fetched per
+    // render.
     var regionAreaLabels = null;
     async function loadRegionAreaLabels() {
       if (regionAreaLabels) return regionAreaLabels;
@@ -4837,14 +4840,16 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       try {
         var areas = await api('/config/areas', { ttl: CLIENT_TTL.nodeDetail });
         (areas || []).forEach(function(a) {
-          if (a.regionScope) regionAreaLabels[a.regionScope.toLowerCase()] = a.label;
+          (a.regionScopes || []).forEach(function(rs) {
+            regionAreaLabels[rs.toLowerCase()] = a.label;
+          });
         });
       } catch (e) { /* leave empty -- region codes render unlabeled */ }
       return regionAreaLabels;
     }
     // A configured hashRegions name is always "#"-prefixed (see
-    // internal/regions.Normalize); AreaEntry.RegionScope is stored without
-    // it, so strip before looking up.
+    // internal/regions.Normalize); AreaEntry.RegionScopes entries are
+    // stored without it, so strip before looking up.
     function regionAreaLabel(rawRegionName) {
       if (!regionAreaLabels || !rawRegionName) return null;
       var key = String(rawRegionName).replace(/^#/, '').toLowerCase();
@@ -5098,10 +5103,11 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           }
           var areaGroups = byArea.map(function(a) {
             var summary, body;
-            if (a.regionScope) {
+            if (a.regionScopes && a.regionScopes.length) {
               var matchCount = a.nodesMatchingArea || 0;
+              var scopeCodes = a.regionScopes.map(function(rs) { return '<code>#' + esc(rs) + '</code>'; }).join(' or ');
               summary = esc(a.label) + ' — ' + matchCount.toLocaleString() + ' of ' + a.totalNodes.toLocaleString() +
-                ' support <code>#' + esc(a.regionScope) + '</code> (' + pct(matchCount, a.totalNodes) + ')';
+                ' support ' + scopeCodes + ' (' + pct(matchCount, a.totalNodes) + ')';
               body =
                 '<div style="margin-bottom:6px"><strong>Supporting</strong> (' + (a.matching || []).length + '): ' +
                   (a.matching && a.matching.length ? nodeLinks(a.matching) : '<span class="text-muted">none</span>') +
@@ -5112,7 +5118,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
             } else {
               summary = esc(a.label) + ' — ' + a.totalNodes.toLocaleString() + ' node' + (a.totalNodes === 1 ? '' : 's') +
                 ', <span class="text-muted">no region linked to this area</span>';
-              body = '<p class="text-muted" style="margin:0;font-size:0.85em">This area has no regionScope configured, so there\'s nothing to check adoption against.</p>';
+              body = '<p class="text-muted" style="margin:0;font-size:0.85em">This area has no regionScopes configured, so there\'s nothing to check adoption against.</p>';
             }
             return '<details style="margin-bottom:8px" data-key="area-adopt:' + esc(a.areaKey) + '">' +
               '<summary style="cursor:pointer">' + summary + '</summary>' +

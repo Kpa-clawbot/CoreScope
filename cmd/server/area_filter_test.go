@@ -296,10 +296,10 @@ func TestHandleConfigAreas(t *testing.T) {
 	}
 }
 
-func TestHandleConfigAreas_RegionScope(t *testing.T) {
+func TestHandleConfigAreas_RegionScopes(t *testing.T) {
 	db := setupTestDBv2(t)
 	cfg := &Config{Areas: map[string]AreaEntry{
-		"AAR": {Label: "Aarhus by", RegionScope: "dk-aarhus"},
+		"AAR": {Label: "Aarhus by", RegionScopes: []string{"dk-aarhus"}},
 		"MST": {Label: "Maastricht"},
 	}}
 
@@ -319,11 +319,12 @@ func TestHandleConfigAreas_RegionScope(t *testing.T) {
 	for _, entry := range result {
 		byKey[entry["key"].(string)] = entry
 	}
-	if byKey["AAR"]["regionScope"] != "dk-aarhus" {
-		t.Errorf("AAR regionScope = %v, want \"dk-aarhus\"", byKey["AAR"]["regionScope"])
+	aarScopes, _ := byKey["AAR"]["regionScopes"].([]interface{})
+	if len(aarScopes) != 1 || aarScopes[0] != "dk-aarhus" {
+		t.Errorf("AAR regionScopes = %v, want [\"dk-aarhus\"]", byKey["AAR"]["regionScopes"])
 	}
-	if _, present := byKey["MST"]["regionScope"]; present {
-		t.Errorf("MST should omit regionScope entirely (unset), got %v", byKey["MST"]["regionScope"])
+	if _, present := byKey["MST"]["regionScopes"]; present {
+		t.Errorf("MST should omit regionScopes entirely (unset), got %v", byKey["MST"]["regionScopes"])
 	}
 }
 

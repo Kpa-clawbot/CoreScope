@@ -4802,7 +4802,7 @@ func TestHandleScopeStats_ScopeAdoptionByArea(t *testing.T) {
 	}
 	f := func(v float64) *float64 { return &v }
 	srv.cfg.Areas = map[string]AreaEntry{
-		"ODE": {Label: "Odense by", RegionScope: "dk-fyn-odense", LatMin: f(55.32), LatMax: f(55.45), LonMin: f(10.3), LonMax: f(10.5)},
+		"ODE": {Label: "Odense by", RegionScopes: []string{"dk-fyn-odense"}, LatMin: f(55.32), LatMax: f(55.45), LonMin: f(10.3), LonMax: f(10.5)},
 	}
 
 	insertNode := func(pk, defaultScope string, lat, lon float64) {
@@ -4860,7 +4860,7 @@ func TestHandleScopeStats_ScopeAdoptionByArea_ZeroMatchKeyPresent(t *testing.T) 
 	}
 	f := func(v float64) *float64 { return &v }
 	srv.cfg.Areas = map[string]AreaEntry{
-		"AAR": {Label: "Aarhus by", RegionScope: "dk-aarhus", LatMin: f(56.05), LatMax: f(56.25), LonMin: f(9.95), LonMax: f(10.35)},
+		"AAR": {Label: "Aarhus by", RegionScopes: []string{"dk-aarhus"}, LatMin: f(56.05), LatMax: f(56.25), LonMin: f(9.95), LonMax: f(10.35)},
 	}
 	// A node with a scope, but NOT the area's own region — NodesMatchingArea
 	// must come out as a real, present 0, same as the live #dk-vs-#dk-aarhus

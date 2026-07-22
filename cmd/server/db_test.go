@@ -2331,15 +2331,15 @@ func TestLoadIndexesRelayHopsFromResolvedPath(t *testing.T) {
 func TestComputeScopeAdoptionByArea(t *testing.T) {
 	f := func(v float64) *float64 { return &v }
 	areas := map[string]AreaEntry{
-		"ODE": {Label: "Odense by", RegionScope: "dk-fyn-odense", LatMin: f(55.32), LatMax: f(55.45), LonMin: f(10.3), LonMax: f(10.5)},
-		"GOT": {Label: "Göteborg, SE", LatMin: f(57.35), LatMax: f(57.90), LonMin: f(11.85), LonMax: f(12.85)}, // no RegionScope link
+		"ODE": {Label: "Odense by", RegionScopes: []string{"dk-fyn-odense"}, LatMin: f(55.32), LatMax: f(55.45), LonMin: f(10.3), LonMax: f(10.5)},
+		"GOT": {Label: "Göteborg, SE", LatMin: f(57.35), LatMax: f(57.90), LonMin: f(11.85), LonMax: f(12.85)}, // no RegionScopes link
 	}
 
 	nodes := []nodeAreaScopeInput{
 		{Lat: 55.4047, Lon: 10.3810, DefaultScope: "#dk-fyn-odense"}, // Odense, matches area's own region
 		{Lat: 55.40, Lon: 10.40, DefaultScope: "#dk-aarhus"},         // Odense, but a DIFFERENT region
 		{Lat: 55.41, Lon: 10.41, DefaultScope: ""},                   // Odense, no scope at all
-		{Lat: 57.68, Lon: 11.97, DefaultScope: "#dk-aarhus"},         // Göteborg, has a scope, but area has no RegionScope link
+		{Lat: 57.68, Lon: 11.97, DefaultScope: "#dk-aarhus"},         // Göteborg, has a scope, but area has no RegionScopes link
 		{Lat: 57.70, Lon: 11.98, DefaultScope: ""},                   // Göteborg, no scope
 		{Lat: 0, Lon: 0, DefaultScope: "#dk-aarhus"},                 // no-fix, must be excluded entirely
 		{Lat: 51.0, Lon: 4.0, DefaultScope: "#belgium"},              // outside every configured area, excluded
@@ -2365,7 +2365,7 @@ func TestComputeScopeAdoptionByArea(t *testing.T) {
 		t.Errorf("ODE.NodesMatchingArea = %d, want 1 (only the dk-fyn-odense one matches, the dk-aarhus one doesn't)", ode.NodesMatchingArea)
 	}
 	if len(ode.Matching) != 1 || len(ode.NotMatching) != 2 {
-		t.Errorf("ODE.Matching=%v NotMatching=%v, want 1 matching + 2 not-matching (RegionScope is set)", ode.Matching, ode.NotMatching)
+		t.Errorf("ODE.Matching=%v NotMatching=%v, want 1 matching + 2 not-matching (RegionScopes is set)", ode.Matching, ode.NotMatching)
 	}
 
 	got2 := byKey["GOT"]
@@ -2376,10 +2376,10 @@ func TestComputeScopeAdoptionByArea(t *testing.T) {
 		t.Errorf("GOT.NodesWithAnyScope = %d, want 1", got2.NodesWithAnyScope)
 	}
 	if got2.NodesMatchingArea != 0 {
-		t.Errorf("GOT.NodesMatchingArea = %d, want 0 (area has no RegionScope link to match against)", got2.NodesMatchingArea)
+		t.Errorf("GOT.NodesMatchingArea = %d, want 0 (area has no RegionScopes link to match against)", got2.NodesMatchingArea)
 	}
 	if len(got2.Matching) != 0 || len(got2.NotMatching) != 0 {
-		t.Errorf("GOT.Matching=%v NotMatching=%v, want both empty (no RegionScope, nothing to split into two groups)", got2.Matching, got2.NotMatching)
+		t.Errorf("GOT.Matching=%v NotMatching=%v, want both empty (no RegionScopes, nothing to split into two groups)", got2.Matching, got2.NotMatching)
 	}
 }
 
@@ -2393,7 +2393,7 @@ func TestComputeScopeAdoptionByArea(t *testing.T) {
 func TestComputeScopeAdoptionByArea_RelayedRegionCounts(t *testing.T) {
 	f := func(v float64) *float64 { return &v }
 	areas := map[string]AreaEntry{
-		"HORSENS": {Label: "Horsens", RegionScope: "dk-horsens", LatMin: f(55.76), LatMax: f(55.94), LonMin: f(9.6), LonMax: f(9.96)},
+		"HORSENS": {Label: "Horsens", RegionScopes: []string{"dk-horsens"}, LatMin: f(55.76), LatMax: f(55.94), LonMin: f(9.6), LonMax: f(9.96)},
 	}
 	nodes := []nodeAreaScopeInput{
 		{PublicKey: "relayer01", Lat: 55.85, Lon: 9.85, DefaultScope: "#dk"}, // own scope is the generic #dk, NOT dk-horsens
@@ -2443,8 +2443,8 @@ func TestComputeScopeAdoptionByArea_RelayedRegionCounts(t *testing.T) {
 func TestComputeScopeAdoptionByArea_RollsUpIntoBroaderAreas(t *testing.T) {
 	f := func(v float64) *float64 { return &v }
 	areas := map[string]AreaEntry{
-		"DK":  {Label: "Danmark (alle)", RegionScope: "dk", LatMin: f(54.5), LatMax: f(57.8), LonMin: f(8.0), LonMax: f(15.25)},
-		"ODE": {Label: "Odense by", RegionScope: "dk-fyn-odense", LatMin: f(55.32), LatMax: f(55.45), LonMin: f(10.3), LonMax: f(10.5)},
+		"DK":  {Label: "Danmark (alle)", RegionScopes: []string{"dk"}, LatMin: f(54.5), LatMax: f(57.8), LonMin: f(8.0), LonMax: f(15.25)},
+		"ODE": {Label: "Odense by", RegionScopes: []string{"dk-fyn-odense"}, LatMin: f(55.32), LatMax: f(55.45), LonMin: f(10.3), LonMax: f(10.5)},
 	}
 	nodes := []nodeAreaScopeInput{
 		{PublicKey: "odenode01", Name: "OdenseNode", Lat: 55.4047, Lon: 10.3810, DefaultScope: "#dk-fyn-odense"}, // inside BOTH DK and ODE
@@ -2481,5 +2481,52 @@ func TestComputeScopeAdoptionByArea_Empty(t *testing.T) {
 	got := computeScopeAdoptionByArea(nil, map[string]AreaEntry{"DK": {Label: "Danmark"}}, nil)
 	if len(got) != 0 {
 		t.Errorf("expected no areas with 0 nodes, got %+v", got)
+	}
+}
+
+// TestComputeScopeAdoptionByArea_MultipleRegionScopes covers dborup's exact
+// request: a broad umbrella area (Europa) can be linked to more than one
+// hashRegions scope at once (e.g. both "eu" and "europe"), and a node using
+// EITHER counts as matching -- not just the first-configured one.
+func TestComputeScopeAdoptionByArea_MultipleRegionScopes(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	areas := map[string]AreaEntry{
+		"EU": {Label: "Europa", RegionScopes: []string{"eu", "europe"}, LatMin: f(34.0), LatMax: f(71.5), LonMin: f(-25.0), LonMax: f(45.0)},
+	}
+	nodes := []nodeAreaScopeInput{
+		{PublicKey: "usesEu", Lat: 48.0, Lon: 10.0, DefaultScope: "#eu"},
+		{PublicKey: "usesEurope", Lat: 48.0, Lon: 11.0, DefaultScope: "#europe"},
+		{PublicKey: "relaysEurope", Lat: 48.0, Lon: 12.0, DefaultScope: ""},
+		{PublicKey: "usesNeither", Lat: 48.0, Lon: 13.0, DefaultScope: "#dk"},
+	}
+	relayInfo := map[string]RepeaterRelayInfo{
+		"relaysEurope": {TransportedScopes: []string{"#europe"}},
+	}
+
+	got := computeScopeAdoptionByArea(nodes, areas, relayInfo)
+	if len(got) != 1 {
+		t.Fatalf("got %d areas, want 1", len(got))
+	}
+	eu := got[0]
+	if eu.TotalNodes != 4 {
+		t.Errorf("TotalNodes = %d, want 4", eu.TotalNodes)
+	}
+	// usesEu (#eu), usesEurope (#europe), and relaysEurope (relays
+	// #europe) all match one of Europa's two linked scopes; usesNeither
+	// (#dk) matches neither.
+	if eu.NodesMatchingArea != 3 {
+		t.Errorf("NodesMatchingArea = %d, want 3 (any of #eu or #europe should count)", eu.NodesMatchingArea)
+	}
+	matchingKeys := map[string]bool{}
+	for _, m := range eu.Matching {
+		matchingKeys[m.PublicKey] = true
+	}
+	for _, want := range []string{"usesEu", "usesEurope", "relaysEurope"} {
+		if !matchingKeys[want] {
+			t.Errorf("Matching missing %q, got %v", want, eu.Matching)
+		}
+	}
+	if len(eu.NotMatching) != 1 || eu.NotMatching[0].PublicKey != "usesNeither" {
+		t.Errorf("NotMatching = %v, want just usesNeither", eu.NotMatching)
 	}
 }
