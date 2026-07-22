@@ -5471,6 +5471,35 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       if (!total) return '—';
       return (n / total * 100).toFixed(1) + '%';
     }
+
+    // "Show all N / Show fewer" collapse for the two lists below, same
+    // pattern (and same TOP_N_LIMIT) as the Wardriving tab's Sessions/
+    // Entry Points sections.
+    var TOP_N_LIMIT = 10;
+    function topNToggleHtml(total, expanded, noun) {
+      if (total <= TOP_N_LIMIT) return '';
+      var label = expanded ? 'Show fewer' : 'Show all ' + total.toLocaleString() + ' ' + noun;
+      return '<div style="margin-top:6px;text-align:right"><button type="button" data-ft-toggle class="btn-link" style="font-size:12px;cursor:pointer;background:none;border:none;color:var(--link-color);padding:0">' + label + '</button></div>';
+    }
+    // Re-renders just one section's content on click and rewires the
+    // (freshly-created) toggle button, since innerHTML replacement drops
+    // the old node's listener.
+    function wireExpandToggle(containerId, renderFn) {
+      var expanded = false;
+      function attach() {
+        var container = document.getElementById(containerId);
+        if (!container) return;
+        var btn = container.querySelector('[data-ft-toggle]');
+        if (btn) {
+          btn.addEventListener('click', function() {
+            expanded = !expanded;
+            container.innerHTML = renderFn(expanded);
+            attach();
+          });
+        }
+      }
+      attach();
+    }
     // Classifies live from the node's own lat/lon against the currently
     // configured geo_filter box/polygon (window.MC_GEO_FILTER, set from
     // /api/config/client — see public/roles.js), NOT the node's `foreign`
@@ -5485,6 +5514,50 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
     function isForeignNode(n) {
       return !nodePassesGeoFilter(n.lat, n.lon, window.MC_GEO_FILTER);
     }
+    function relaysHtml(relays, expanded) {
+      if (relays.length === 0) {
+        return '<p class="text-muted" style="font-size:0.85em">No repeater has relayed an unscoped flood packet in the last 24 hours.</p>';
+      }
+      var shown = expanded ? relays : relays.slice(0, TOP_N_LIMIT);
+      var rows = shown.map(function(n) {
+        var total = n.relay_count_24h || 0;
+        var unscoped = n.unscoped_relay_count_24h || 0;
+        return '<tr>' +
+          '<td><a href="#/nodes/' + encodeURIComponent(n.public_key) + '">' + esc(n.name || n.public_key) + '</a></td>' +
+          '<td>' + esc(n.role) + '</td>' +
+          '<td>' + unscoped.toLocaleString() + '</td>' +
+          '<td>' + total.toLocaleString() + '</td>' +
+          '<td>' + pct(unscoped, total) + '</td>' +
+          '</tr>';
+      }).join('');
+      return '<table class="data-table analytics-table">' +
+        '<thead><tr><th>Repeater</th><th>Role</th><th>Unscoped Relays (24h)</th><th>Total Relays (24h)</th><th>% Unscoped</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+        '</table>' + topNToggleHtml(relays.length, expanded, 'repeaters');
+    }
+
+    function foreignNodesHtml(foreignNodes, expanded) {
+      if (foreignNodes.length === 0) {
+        return '<p class="text-muted" style="font-size:0.85em">None yet — a node is only listed here after it advertises with a GPS position outside the configured geo_filter.</p>';
+      }
+      var shown = expanded ? foreignNodes : foreignNodes.slice(0, TOP_N_LIMIT);
+      var rows = shown.map(function(n) {
+        var lat = typeof n.lat === 'number' ? n.lat.toFixed(3) : '—';
+        var lon = typeof n.lon === 'number' ? n.lon.toFixed(3) : '—';
+        return '<tr>' +
+          '<td><a href="#/nodes/' + encodeURIComponent(n.public_key) + '">' + esc(n.name || n.public_key) + '</a></td>' +
+          '<td>' + esc(n.role || '—') + '</td>' +
+          '<td>' + lat + ', ' + lon + '</td>' +
+          '<td>' + timeAgo(n.first_seen) + '</td>' +
+          '<td>' + timeAgo(n.last_seen) + '</td>' +
+          '</tr>';
+      }).join('');
+      return '<table class="data-table analytics-table">' +
+        '<thead><tr><th>Node</th><th>Role</th><th>Lat, Lon</th><th>First Seen</th><th>Last Seen</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+        '</table>' + topNToggleHtml(foreignNodes.length, expanded, 'nodes');
+    }
+
     async function load() {
       try {
         const nodesResp = await fetchAllNodes('', { ttl: CLIENT_TTL.nodeList });
@@ -5494,27 +5567,6 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         });
         relays.sort(function(a, b) { return Number(b.unscoped_relay_count_24h || 0) - Number(a.unscoped_relay_count_24h || 0); });
         const foreignCount = allNodes.filter(isForeignNode).length;
-
-        let body;
-        if (relays.length > 0) {
-          const rows = relays.map(function(n) {
-            const total = n.relay_count_24h || 0;
-            const unscoped = n.unscoped_relay_count_24h || 0;
-            return '<tr>' +
-              '<td><a href="#/nodes/' + encodeURIComponent(n.public_key) + '">' + esc(n.name || n.public_key) + '</a></td>' +
-              '<td>' + esc(n.role) + '</td>' +
-              '<td>' + unscoped.toLocaleString() + '</td>' +
-              '<td>' + total.toLocaleString() + '</td>' +
-              '<td>' + pct(unscoped, total) + '</td>' +
-              '</tr>';
-          }).join('');
-          body = '<table class="data-table analytics-table">' +
-            '<thead><tr><th>Repeater</th><th>Role</th><th>Unscoped Relays (24h)</th><th>Total Relays (24h)</th><th>% Unscoped</th></tr></thead>' +
-            '<tbody>' + rows + '</tbody>' +
-            '</table>';
-        } else {
-          body = '<p class="text-muted" style="font-size:0.85em">No repeater has relayed an unscoped flood packet in the last 24 hours.</p>';
-        }
 
         const foreignNote = foreignCount > 0
           ? foreignCount.toLocaleString() + ' node(s) so far carry an advertised GPS position outside the configured geo_filter — cross-referencing which rows below actually trace back to those is a planned follow-up once more accumulates.'
@@ -5531,26 +5583,6 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           .map(function(n) { return { n: n, t: new Date(n.last_seen || 0).getTime() }; })
           .sort(function(a, b) { return b.t - a.t; })
           .forEach(function(entry, i) { foreignNodes[i] = entry.n; });
-        let foreignNodesBody;
-        if (foreignNodes.length > 0) {
-          const foreignRows = foreignNodes.map(function(n) {
-            const lat = typeof n.lat === 'number' ? n.lat.toFixed(3) : '—';
-            const lon = typeof n.lon === 'number' ? n.lon.toFixed(3) : '—';
-            return '<tr>' +
-              '<td><a href="#/nodes/' + encodeURIComponent(n.public_key) + '">' + esc(n.name || n.public_key) + '</a></td>' +
-              '<td>' + esc(n.role || '—') + '</td>' +
-              '<td>' + lat + ', ' + lon + '</td>' +
-              '<td>' + timeAgo(n.first_seen) + '</td>' +
-              '<td>' + timeAgo(n.last_seen) + '</td>' +
-              '</tr>';
-          }).join('');
-          foreignNodesBody = '<table class="data-table analytics-table">' +
-            '<thead><tr><th>Node</th><th>Role</th><th>Lat, Lon</th><th>First Seen</th><th>Last Seen</th></tr></thead>' +
-            '<tbody>' + foreignRows + '</tbody>' +
-            '</table>';
-        } else {
-          foreignNodesBody = '<p class="text-muted" style="font-size:0.85em">None yet — a node is only listed here after it advertises with a GPS position outside the configured geo_filter.</p>';
-        }
 
         el.innerHTML =
           '<h3 style="margin:0 0 4px">Foreign Traffic</h3>' +
@@ -5564,9 +5596,12 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
             'Nodes whose most recent advertised GPS position fell outside the configured geo_filter — self-reported GPS from the node\'s own ADVERT. ' +
             'A FLOOD packet can legitimately travel many hops through a dense mesh, so a node whose traffic you can trace through a real local relay chain (check its Trace) is genuinely reachable via that chain — that\'s foreign traffic actually entering the mesh, not a data artifact.' +
           '</p>' +
-          foreignNodesBody +
+          '<div id="foreignTrafficFlaggedNodes">' + foreignNodesHtml(foreignNodes, false) + '</div>' +
           '<h4 style="margin:24px 0 4px">Repeaters Relaying Unscoped Traffic</h4>' +
-          body;
+          '<div id="foreignTrafficRelays">' + relaysHtml(relays, false) + '</div>';
+
+        wireExpandToggle('foreignTrafficFlaggedNodes', function(exp) { return foreignNodesHtml(foreignNodes, exp); });
+        wireExpandToggle('foreignTrafficRelays', function(exp) { return relaysHtml(relays, exp); });
       } catch (e) {
         el.innerHTML = '<p class="text-muted">Failed to load repeater relay stats.</p>';
       }
