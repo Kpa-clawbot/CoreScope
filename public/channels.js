@@ -2282,7 +2282,7 @@
       // broad #dk scope. Only present when path[0] resolved unambiguously
       // (unique_prefix) to a positioned node; omitted otherwise, not
       // guessed.
-      if (msg.area) meta.push(`From: ${escapeHtml(msg.area)}`);
+      if (msg.area) meta.push(`Area: ${escapeHtml(msg.area)}`);
 
       const safeId = btoa(encodeURIComponent(sender));
       // #1367: emit BOTH the new chat-app class names (.ch-message /
