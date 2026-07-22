@@ -15,6 +15,7 @@
   let wsHandler = null;
   let heatLayer = null;
   let geoFilterLayer = null;
+  let selectedAreaLayer = null;
   let affinityLayer = null;
   let affinityData = null;
   let userHasMoved = false;
@@ -204,7 +205,8 @@
             <label for="mcHeatmap"><input type="checkbox" id="mcHeatmap"> Heat map</label>
             <label for="mcHashLabels"><input type="checkbox" id="mcHashLabels"> Hash prefix labels</label>
             <label for="mcMultiByte"><input type="checkbox" id="mcMultiByte"> Multi-byte support</label>
-            <label id="mcGeoFilterLabel" for="mcGeoFilter" style="display:none"><input type="checkbox" id="mcGeoFilter"> Mesh live area</label>
+            <label id="mcGeoFilterLabel" for="mcGeoFilter" style="display:none"><input type="checkbox" id="mcGeoFilter"> Geo filter boundary</label>
+            <label id="mcSelectedAreaLabel" for="mcSelectedArea" style="display:none"><input type="checkbox" id="mcSelectedArea"> Selected area outline</label>
           </fieldset>
           <div id="mapAreaFilter"></div>
           <fieldset class="mc-section">
@@ -586,6 +588,73 @@
           });
         }
       } catch (e) { /* no geo filter configured */ }
+    })();
+
+    // Selected area outline — distinct from the geo filter boundary above:
+    // this draws whichever area is currently picked via the "Area: X ▾"
+    // dropdown (AreaFilter, shared with Nodes/Live/Analytics), not
+    // necessarily the homeArea-linked geo_filter. Falls back to a plain
+    // box when the area has no polygon. Only one area can be selected at
+    // a time (AreaFilter is single-select), so at most one outline shows.
+    (function () {
+      var areaColor = getComputedStyle(document.documentElement).getPropertyValue('--geo-filter-color').trim() || '#3b82f6';
+      var areaPolygonsCache = null;
+      async function fetchAreaPolygons() {
+        if (areaPolygonsCache) return areaPolygonsCache;
+        try {
+          areaPolygonsCache = await api('/config/areas/polygons', { ttl: 3600 });
+        } catch (e) {
+          areaPolygonsCache = [];
+        }
+        return areaPolygonsCache;
+      }
+      function latLngsFor(entry) {
+        if (entry.polygon && entry.polygon.length >= 3) {
+          return entry.polygon.map(function (p) { return [p[0], p[1]]; });
+        }
+        if (entry.latMin != null && entry.latMax != null && entry.lonMin != null && entry.lonMax != null) {
+          return [
+            [entry.latMin, entry.lonMin], [entry.latMin, entry.lonMax],
+            [entry.latMax, entry.lonMax], [entry.latMax, entry.lonMin],
+          ];
+        }
+        return null;
+      }
+      async function refresh() {
+        var label = document.getElementById('mcSelectedAreaLabel');
+        var checkbox = document.getElementById('mcSelectedArea');
+        if (selectedAreaLayer) { map.removeLayer(selectedAreaLayer); selectedAreaLayer = null; }
+        var key = AreaFilter.getSelected();
+        if (!key) {
+          if (label) label.style.display = 'none';
+          return;
+        }
+        var areas = await fetchAreaPolygons();
+        var entry = areas.find(function (a) { return a.key === key; });
+        var latlngs = entry && latLngsFor(entry);
+        if (!latlngs) {
+          if (label) label.style.display = 'none';
+          return;
+        }
+        selectedAreaLayer = L.polygon(latlngs, {
+          color: areaColor, weight: 2, opacity: 0.8, dashArray: '2 4',
+          fillColor: areaColor, fillOpacity: 0.06
+        });
+        if (label) label.style.display = '';
+        var saved = localStorage.getItem('meshcore-map-selected-area-outline') !== 'false';
+        if (checkbox) checkbox.checked = saved;
+        if (saved) selectedAreaLayer.addTo(map);
+      }
+      var checkbox = document.getElementById('mcSelectedArea');
+      if (checkbox) {
+        checkbox.addEventListener('change', function (e) {
+          localStorage.setItem('meshcore-map-selected-area-outline', e.target.checked);
+          if (!selectedAreaLayer) return;
+          if (e.target.checked) { selectedAreaLayer.addTo(map); } else { map.removeLayer(selectedAreaLayer); }
+        });
+      }
+      AreaFilter.onChange(refresh);
+      refresh();
     })();
 
     // WS for live advert updates
