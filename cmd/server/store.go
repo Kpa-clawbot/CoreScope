@@ -1675,6 +1675,19 @@ func pathLen(pathJSON string) int {
 	return len(hops)
 }
 
+// pathFirstHop returns path[0] (the entry-point repeater's hex prefix), or
+// "" when pathJSON is empty/invalid/has no hops.
+func pathFirstHop(pathJSON string) string {
+	if pathJSON == "" {
+		return ""
+	}
+	var hops []string
+	if json.Unmarshal([]byte(pathJSON), &hops) != nil || len(hops) == 0 {
+		return ""
+	}
+	return hops[0]
+}
+
 // indexResolvedPathHops indexes a transmission under every relay-hop pubkey
 // extracted from an observation's resolved_path, and refreshes the dependent
 // resolved-pubkey + path-hop indexes. This is the single point of truth for
@@ -2949,6 +2962,16 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				"observation_count": tx.ObservationCount,
 				"scope_name":        strOrNil(tx.ScopeName),
 			}
+			// Same entry-point area resolution as the REST channel message
+			// list (annotateMessageAreas), applied live so a message
+			// appended via WebSocket shows "Area:" immediately instead of
+			// only after the next full reload. Only a unique_prefix match
+			// with a known position sets it — never a guess.
+			if entryPrefix := pathFirstHop(obs.PathJSON); entryPrefix != "" {
+				if label, ok := s.resolveEntryPointArea([]string{entryPrefix}); ok {
+					pkt["area"] = label
+				}
+			}
 			// Use decode-window resolved path for broadcast (never from struct)
 			if broadcastRP != nil {
 				if rp, ok := broadcastRP[obs.ID]; ok && rp != nil {
@@ -3221,6 +3244,13 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 			"direction":         strOrNil(obs.Direction),
 			"observation_count": tx.ObservationCount,
 			"scope_name":        strOrNil(tx.ScopeName),
+		}
+		// Same live entry-point area resolution as IngestNewFromDB above --
+		// see the comment there.
+		if entryPrefix := pathFirstHop(obs.PathJSON); entryPrefix != "" {
+			if label, ok := s.resolveEntryPointArea([]string{entryPrefix}); ok {
+				pkt["area"] = label
+			}
 		}
 		// Use decode-window resolved path for broadcast
 		if obsRPMap != nil {
@@ -3598,6 +3628,46 @@ func (s *PacketStore) fetchAndCacheRegionObs(region string) map[string]bool {
 	}
 	s.regionObsCache[region] = m
 	return m
+}
+
+// resolveEntryPointArea approximates a sender's area from their entry-point
+// repeater(s): for each candidate path[0] prefix, only a unique_prefix
+// match (exactly one node in the prefix map, same discipline as
+// handleResolveHops) with a known position is trusted — an ambiguous
+// prefix is skipped rather than guessed. Returns ok=false if no prefix
+// resolves this way, the resolved node has no position, or areas aren't
+// configured. Lives on PacketStore (not Server) so both the REST message
+// list (via (*Server).resolveEntryPointArea, which just delegates here)
+// and the live WebSocket broadcast path can reuse the exact same
+// resolution — a store method has everything it needs (config, prefix
+// map) without reaching back out to *Server.
+func (s *PacketStore) resolveEntryPointArea(prefixes []string) (label string, ok bool) {
+	if s == nil || s.config == nil || len(s.config.Areas) == 0 || len(prefixes) == 0 {
+		return "", false
+	}
+	// getCachedNodesAndPM guards itself with its own cacheMu -- it never
+	// touches s.mu. Do not wrap this call in s.mu.RLock(): callers like
+	// IngestNewFromDB/IngestNewObservations invoke this while already
+	// holding s.mu.Lock(), and Go's RWMutex is not reentrant, so an
+	// RLock here would deadlock against the caller's own write lock.
+	_, pm := s.getCachedNodesAndPM()
+	if pm == nil {
+		return "", false
+	}
+	for _, prefix := range prefixes {
+		candidates, found := pm.m[strings.ToLower(prefix)]
+		if !found || len(candidates) != 1 {
+			continue
+		}
+		ni := candidates[0]
+		if !ni.HasGPS {
+			continue
+		}
+		if label, ok := AreaForPoint(ni.Lat, ni.Lon, s.config.Areas); ok {
+			return label, true
+		}
+	}
+	return "", false
 }
 
 // resolveAreaNodes returns a set of node pubkeys whose GPS coordinates fall
@@ -5521,6 +5591,7 @@ func (s *PacketStore) GetChannelMessages(channelHash string, limit, offset int, 
 					"snr":              snrVal,
 					"scope":            strOrNil(tx.ScopeName),
 					"routeType":        intPtrOrNil(tx.RouteType),
+					"entryPrefix":      pathFirstHop(tx.PathJSON),
 				},
 				Repeats:   1,
 				Observers: observers,

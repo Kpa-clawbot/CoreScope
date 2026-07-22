@@ -76,3 +76,49 @@ func TestConfigClientOmitsGeoFilterWhenUnconfigured(t *testing.T) {
 		t.Error("expected geoFilter to be omitted from /api/config/client when unconfigured")
 	}
 }
+
+// TestGetGeoFilter_HomeAreaTakesPriority covers the new HomeArea linkage:
+// when cfg.HomeArea names an existing area, its geometry is the effective
+// geo_filter -- a single boundary shared with the areas system instead of
+// a second copy that can drift out of sync (exactly what happened with
+// Germany's box vs. Denmark's area earlier this session).
+func TestGetGeoFilter_HomeAreaTakesPriority(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	standaloneLat := 10.0
+	srv.cfg.GeoFilter = &GeoFilterConfig{LatMin: &standaloneLat} // deliberately different from the area
+	f := func(v float64) *float64 { return &v }
+	srv.cfg.Areas = map[string]AreaEntry{
+		"DK": {Label: "Danmark", LatMin: f(54.5), LatMax: f(57.8), LonMin: f(8.0), LonMax: f(15.25)},
+	}
+	srv.cfg.HomeArea = "DK"
+
+	gf := srv.getGeoFilter()
+	if gf == nil || gf.LatMin == nil || *gf.LatMin != 54.5 {
+		t.Fatalf("getGeoFilter() = %+v, want DK area's LatMin=54.5 (HomeArea should win over the standalone GeoFilter)", gf)
+	}
+}
+
+// TestGetGeoFilter_FallsBackWhenHomeAreaUnresolved confirms existing
+// deployments (no HomeArea configured, or one naming a since-removed area)
+// see no behavior change -- the standalone GeoFilter still applies.
+func TestGetGeoFilter_FallsBackWhenHomeAreaUnresolved(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	standaloneLat := 10.0
+	srv.cfg.GeoFilter = &GeoFilterConfig{LatMin: &standaloneLat}
+
+	t.Run("HomeArea unset", func(t *testing.T) {
+		srv.cfg.HomeArea = ""
+		gf := srv.getGeoFilter()
+		if gf == nil || gf.LatMin == nil || *gf.LatMin != 10.0 {
+			t.Errorf("getGeoFilter() = %+v, want the standalone GeoFilter (LatMin=10.0)", gf)
+		}
+	})
+
+	t.Run("HomeArea names a nonexistent area", func(t *testing.T) {
+		srv.cfg.HomeArea = "NOPE"
+		gf := srv.getGeoFilter()
+		if gf == nil || gf.LatMin == nil || *gf.LatMin != 10.0 {
+			t.Errorf("getGeoFilter() = %+v, want the standalone GeoFilter (LatMin=10.0)", gf)
+		}
+	})
+}

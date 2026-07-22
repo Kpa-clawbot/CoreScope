@@ -1423,6 +1423,10 @@
         var observer = m.data?.packet?.observer_name || m.data?.observer || null;
         var scope = m.data?.scope_name || m.data?.packet?.scope_name || null;
         var routeType = m.data?.route_type ?? m.data?.packet?.route_type ?? null;
+        // Same path[0]-resolved area as the REST message list (server-side
+        // resolveEntryPointArea, see store.go) -- already computed at
+        // broadcast time, just read it here.
+        var area = m.data?.area || m.data?.packet?.area || null;
 
         // Update channel list entry — only once per unique packet hash
         var isFirstObservation = pktHash && !seenHashes.has(pktHash + ':' + channelKey);
@@ -1476,6 +1480,7 @@
               snr: snr,
               scope: scope,
               routeType: routeType,
+              area: area,
               // #1498: mark as WS-pushed so a later REST replacement
               // (selectChannel / refreshMessages) can merge instead of
               // stomp. Without this flag the REST response wipes any
@@ -2273,8 +2278,16 @@
       // HMAC collision made the match ambiguous) — show it as unknown
       // rather than silently omitting the tag.
       const isTransportRoute = msg.routeType === 0 || msg.routeType === 3;
-      if (msg.scope) meta.push(`Scope: ${escapeHtml(msg.scope)}`);
-      else if (isTransportRoute) meta.push('Scope: unknown');
+      if (msg.scope) meta.push(`scope: ${escapeHtml(msg.scope)}`);
+      else if (isTransportRoute) meta.push('scope: unknown');
+      // msg.area (set server-side from the message's own path[0]
+      // entry-point repeater, not from the scope string) is where the
+      // SENDER physically was — distinct from the scope-linked area
+      // above, since e.g. a sender in Aarhus can still send with the
+      // broad #dk scope. Only present when path[0] resolved unambiguously
+      // (unique_prefix) to a positioned node; omitted otherwise, not
+      // guessed.
+      if (msg.area) meta.push(`area: ${escapeHtml(msg.area)}`);
 
       const safeId = btoa(encodeURIComponent(sender));
       // #1367: emit BOTH the new chat-app class names (.ch-message /

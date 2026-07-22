@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/meshcore-analyzer/geofilter"
 	"github.com/meshcore-analyzer/packetpath"
 	"github.com/meshcore-analyzer/prunequeue"
 	regionutil "github.com/meshcore-analyzer/regions"
@@ -180,9 +181,26 @@ func (s *Server) isPubkeyHidden(pubkey string) bool {
 	return s.cfg.IsNameHidden(name)
 }
 
+// getGeoFilter returns the effective home-boundary geometry. If
+// cfg.HomeArea names an existing entry in cfg.Areas, that area's geometry
+// wins — a single boundary shared with the areas system, instead of a
+// second copy that can silently drift (see cfg.HomeArea doc comment).
+// Falls back to the standalone GeoFilter field when HomeArea is unset or
+// doesn't resolve, so existing deployments see no behavior change.
 func (s *Server) getGeoFilter() *GeoFilterConfig {
 	s.cfgMu.RLock()
 	defer s.cfgMu.RUnlock()
+	if s.cfg != nil && s.cfg.HomeArea != "" {
+		if area, ok := s.cfg.Areas[s.cfg.HomeArea]; ok {
+			return &geofilter.Config{
+				Polygon: area.Polygon,
+				LatMin:  area.LatMin,
+				LatMax:  area.LatMax,
+				LonMin:  area.LonMin,
+				LonMax:  area.LonMax,
+			}
+		}
+	}
 	return s.cfg.GeoFilter
 }
 
@@ -471,15 +489,16 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleConfigAreas(w http.ResponseWriter, r *http.Request) {
 	type areaListEntry struct {
-		Key   string `json:"key"`
-		Label string `json:"label"`
+		Key          string   `json:"key"`
+		Label        string   `json:"label"`
+		RegionScopes []string `json:"regionScopes,omitempty"`
 	}
 	result := make([]areaListEntry, 0, len(s.cfg.Areas))
 	for k, v := range s.cfg.Areas {
 		if v.Label == "" {
 			continue // skip comment/invalid entries (e.g. "_comment" keys in config)
 		}
-		result = append(result, areaListEntry{Key: k, Label: v.Label})
+		result = append(result, areaListEntry{Key: k, Label: v.Label, RegionScopes: v.RegionScopes})
 	}
 	writeJSON(w, result)
 }
@@ -2716,6 +2735,44 @@ func (s *Server) handleResolveHops(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, ResolveHopsResponse{Resolved: resolved})
 }
 
+// resolveEntryPointArea approximates a wardriving session's area from its
+// entry-point repeater(s): for each candidate path[0] prefix, only a
+// unique_prefix match (exactly one node in the prefix map, same discipline
+// as handleResolveHops) with a known position is trusted — an ambiguous
+// prefix is skipped rather than guessed. Returns ok=false if no prefix
+// resolves this way, or the resolved node has no position, or areas aren't
+// configured.
+func (s *Server) resolveEntryPointArea(prefixes []string) (label string, ok bool) {
+	if s.store == nil {
+		return "", false
+	}
+	return s.store.resolveEntryPointArea(prefixes)
+}
+
+// annotateMessageAreas resolves each message's entry-point repeater (its
+// path[0], captured as "entryPrefix" by GetChannelMessages) to a
+// configured area — same unique_prefix-only discipline as
+// resolveEntryPointArea/handleWardrivingStats: only a truly unambiguous
+// prefix match with a known position sets "area", so this shows where the
+// SENDER actually was, distinct from (and often more specific than) the
+// area linked to the channel scope they sent with — dborup's own example:
+// sitting in Aarhus but sending with the broad #dk scope should still show
+// "Aarhus by" here. The raw entryPrefix never reaches the client, whether
+// or not it resolved.
+func (s *Server) annotateMessageAreas(messages []map[string]interface{}) {
+	hasAreas := s.cfg != nil && len(s.cfg.Areas) > 0
+	for _, m := range messages {
+		prefix, _ := m["entryPrefix"].(string)
+		delete(m, "entryPrefix")
+		if !hasAreas || prefix == "" {
+			continue
+		}
+		if label, ok := s.resolveEntryPointArea([]string{prefix}); ok {
+			m["area"] = label
+		}
+	}
+}
+
 func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 	region := r.URL.Query().Get("region")
 	includeEncrypted := r.URL.Query().Get("includeEncrypted") == "true"
@@ -2760,11 +2817,13 @@ func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 500, err.Error())
 			return
 		}
+		s.annotateMessageAreas(messages)
 		writeJSON(w, ChannelMessagesResponse{Messages: messages, Total: total})
 		return
 	}
 	if s.store != nil {
 		messages, total := s.store.GetChannelMessages(hash, limit, offset, region)
+		s.annotateMessageAreas(messages)
 		writeJSON(w, ChannelMessagesResponse{Messages: messages, Total: total})
 		return
 	}
@@ -3710,6 +3769,22 @@ func (s *Server) handleScopeStats(w http.ResponseWriter, r *http.Request) {
 		log.Printf("WARN GetChannelMessageScopeStats: %v", err)
 	}
 
+	if s.cfg != nil && len(s.cfg.Areas) > 0 {
+		if nodes, err := s.db.GetNodesForScopeAdoption(); err == nil {
+			// Reuses the same cached relay-info map as RepeatersByRegion
+			// above (GetRepeaterRelayInfoMap never rebuilds inline on a
+			// populated cache) so a node relaying an area's region counts
+			// as using it, not just one with a matching default_scope.
+			var relayInfo map[string]RepeaterRelayInfo
+			if s.store != nil {
+				relayInfo = s.store.GetRepeaterRelayInfoMap(s.cfg.GetHealthThresholds().RelayActiveHours)
+			}
+			resp.ScopeAdoptionByArea = computeScopeAdoptionByArea(nodes, s.cfg.Areas, relayInfo)
+		} else {
+			log.Printf("WARN GetNodesForScopeAdoption: %v", err)
+		}
+	}
+
 	if adoption, err := s.db.GetChannelScopeAdoption(window); err == nil {
 		resp.ChannelScopeAdoption = adoption
 	} else {
@@ -3772,6 +3847,21 @@ func (s *Server) handleWardrivingStats(w http.ResponseWriter, r *http.Request) {
 			if ms, ok := s.store.AirtimeForTransmissions(resp.Sessions[i].TransmissionIDs); ok {
 				v := ms.Milliseconds()
 				resp.Sessions[i].AirtimeMs = &v
+			}
+		}
+	}
+
+	if s.cfg != nil && len(s.cfg.Areas) > 0 {
+		for i := range resp.GPSShares {
+			if label, ok := AreaForPoint(resp.GPSShares[i].Lat, resp.GPSShares[i].Lon, s.cfg.Areas); ok {
+				resp.GPSShares[i].Area = &label
+			}
+		}
+		if s.store != nil {
+			for i := range resp.Sessions {
+				if label, ok := s.resolveEntryPointArea(resp.Sessions[i].EntryPointPrefixes); ok {
+					resp.Sessions[i].Area = &label
+				}
 			}
 		}
 	}

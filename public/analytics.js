@@ -4504,12 +4504,18 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
     var subtabKey = 'scopes_subtab';
     var selectedSubtab = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(subtabKey)) || 'overview';
 
-    // Role/text filter for the "Nodes Without a Default Scope" section
+    // Role/text/geo filter for the "Nodes Without a Default Scope" section
     // below. Lives at this scope (not inside updateData) so it survives
     // the 60s auto-refresh re-render — same reasoning as selectedWindow
     // above, just kept in memory rather than sessionStorage since it's a
     // finer-grained, more transient filter.
-    var noScopeFilter = { role: '', q: '' };
+    var noScopeFilter = { role: '', q: '', geo: '' };
+
+    // Geo filter for "Repeaters Never Relaying Any Scope" below — same
+    // domestic/foreign split as noScopeFilter.geo, kept separate since the
+    // two sections' result sets are independent (see
+    // computeRepeatersNeverRelayingScope's doc comment).
+    var neverRelayFilter = { geo: '' };
 
     // Encrypted/unencrypted filter for "Scope Adoption by Channel" below —
     // same persistence reasoning as noScopeFilter above. '' = all,
@@ -4556,6 +4562,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           '</details>' +
         '</div>' +
         '<div id="scopes-panel-regions" style="display:' + (selectedSubtab === 'regions' ? '' : 'none') + '">' +
+          '<div id="scopes-area-adoption"></div>' +
           '<div id="scopes-utilization"></div>' +
           '<div id="scopes-repeaters" style="margin-top:16px"></div>' +
           '<div id="scopes-origin-nodes" style="margin-top:16px"></div>' +
@@ -4656,7 +4663,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       var searchFocused = document.activeElement && document.activeElement.id === 'noScopeSearch';
       var caretPos = searchFocused ? document.activeElement.selectionStart : null;
 
-      var noScope = computeNodesWithoutScope(allNodes, 100, { role: noScopeFilter.role, q: noScopeFilter.q });
+      var noScope = computeNodesWithoutScope(allNodes, 100, { role: noScopeFilter.role, q: noScopeFilter.q, geo: noScopeFilter.geo });
       var roleSummaryText = noScope.roleSummary.map(function(r) { return r.count.toLocaleString() + ' ' + esc(r.role); }).join(', ');
 
       var roleButtons = '<button type="button" class="tab-btn' + (!noScopeFilter.role ? ' active' : '') +
@@ -4666,7 +4673,8 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
             '" data-role-filter="' + esc(r.role) + '">' + esc(r.role) + ' (' + r.count.toLocaleString() + ')</button>';
         }).join('');
 
-      var controlsHtml = '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:4px 0 10px">' +
+      var controlsHtml = geoFilterButtons(noScopeFilter, 'geo-filter') +
+        '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:4px 0 10px">' +
         roleButtons +
         '<input type="text" id="noScopeSearch" placeholder="Search by name or key…" value="' + esc(noScopeFilter.q) + '" ' +
           'style="margin-left:4px;padding:4px 8px;background:var(--card-bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:0.85em;min-width:180px">' +
@@ -4683,7 +4691,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           '<thead><tr><th>Node</th><th>Role</th><th>Last Seen</th></tr></thead>' +
           '<tbody>' + noScopeRows + '</tbody>' +
           '</table>';
-      } else if (noScopeFilter.role || noScopeFilter.q) {
+      } else if (noScopeFilter.role || noScopeFilter.q || noScopeFilter.geo) {
         resultsBody = '<p class="text-muted" style="font-size:0.85em">No nodes without a default scope match this filter.</p>';
       } else {
         resultsBody = '<p class="text-muted" style="font-size:0.85em">Every known node has a configured default scope.</p>';
@@ -4705,6 +4713,13 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       sectionEl.querySelectorAll('[data-role-filter]').forEach(function(btn) {
         btn.addEventListener('click', function() {
           noScopeFilter.role = btn.dataset.roleFilter || '';
+          renderNoScopeSection(allNodes);
+        });
+      });
+
+      sectionEl.querySelectorAll('[data-geo-filter]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          noScopeFilter.geo = btn.dataset.geoFilter || '';
           renderNoScopeSection(allNodes);
         });
       });
@@ -4812,7 +4827,41 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       }
     }
 
+    // regionScope -> area label lookup, e.g. "dk-aarhus" -> "Aarhus by".
+    // An area can link more than one scope (e.g. Europa: both "eu" and
+    // "europe"), so each one gets its own entry pointing back to the same
+    // label. Areas rarely change, so this is fetched once and reused
+    // across every region-code section below rather than re-fetched per
+    // render.
+    var regionAreaLabels = null;
+    async function loadRegionAreaLabels() {
+      if (regionAreaLabels) return regionAreaLabels;
+      regionAreaLabels = {};
+      try {
+        var areas = await api('/config/areas', { ttl: CLIENT_TTL.nodeDetail });
+        (areas || []).forEach(function(a) {
+          (a.regionScopes || []).forEach(function(rs) {
+            regionAreaLabels[rs.toLowerCase()] = a.label;
+          });
+        });
+      } catch (e) { /* leave empty -- region codes render unlabeled */ }
+      return regionAreaLabels;
+    }
+    // A configured hashRegions name is always "#"-prefixed (see
+    // internal/regions.Normalize); AreaEntry.RegionScopes entries are
+    // stored without it, so strip before looking up.
+    function regionAreaLabel(rawRegionName) {
+      if (!regionAreaLabels || !rawRegionName) return null;
+      var key = String(rawRegionName).replace(/^#/, '').toLowerCase();
+      return regionAreaLabels[key] || null;
+    }
+    function regionCodeHtml(rawRegionName) {
+      var label = regionAreaLabel(rawRegionName);
+      return '<code>' + esc(rawRegionName) + '</code>' + (label ? ' <span class="text-muted">(' + esc(label) + ')</span>' : '');
+    }
+
     async function updateData(d, w) {
+      await loadRegionAreaLabels();
       var s = d.summary;
       // #1838: denominator = transport-carrying transmissions (route_type 0,3).
       // Unscoped now includes non-transport routes (1,2) which are inherently
@@ -5035,6 +5084,77 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         }
       }
 
+      // Scope Adoption by Area: for each configured geographic area, which
+      // SPECIFIC nodes actually support the region that area is linked to
+      // (own default_scope OR ever relayed it — a repeater can carry
+      // dk-oj traffic and thereby support Østjylland without configuring
+      // dk-oj as its own scope) and which sit there but don't. Independent
+      // of Region Utilization below, which only knows about region
+      // strings that already appeared in a message — a real area with
+      // real nodes that never produced one is invisible there.
+      var areaAdoptEl = document.getElementById('scopes-area-adoption');
+      if (areaAdoptEl) {
+        var byArea = d.scopeAdoptionByArea || [];
+        if (byArea.length > 0) {
+          function nodeLinks(refs) {
+            return (refs || []).map(function(r) {
+              return '<a href="#/nodes/' + encodeURIComponent(r.publicKey) + '">' + esc(r.name) + '</a>';
+            }).join(', ');
+          }
+          // For areas linking more than one scope (e.g. Europa: "eu" and
+          // "europe"), a flat Supporting list can't say WHICH scope each
+          // node actually uses/relays — split it into one sub-list per
+          // scope instead. A node matching more than one scope (its own
+          // default_scope is one, and it relays another) appears in every
+          // group it matched, not just the first. Single-scope areas keep
+          // the plain flat list (grouping by one group is just noise).
+          function matchingByScope(matching, regionScopes) {
+            return regionScopes.map(function(rs) {
+              var inGroup = (matching || []).filter(function(m) {
+                return (m.matchedScopes || []).indexOf(rs) !== -1;
+              });
+              return '<div style="margin-top:4px"><code>#' + esc(rs) + '</code> (' + inGroup.length + '): ' +
+                (inGroup.length ? nodeLinks(inGroup) : '<span class="text-muted">none</span>') +
+                '</div>';
+            }).join('');
+          }
+          var areaGroups = byArea.map(function(a) {
+            var summary, body;
+            if (a.regionScopes && a.regionScopes.length) {
+              var matchCount = a.nodesMatchingArea || 0;
+              var scopeCodes = a.regionScopes.map(function(rs) { return '<code>#' + esc(rs) + '</code>'; }).join(' or ');
+              summary = esc(a.label) + ' — ' + matchCount.toLocaleString() + ' of ' + a.totalNodes.toLocaleString() +
+                ' support ' + scopeCodes + ' (' + pct(matchCount, a.totalNodes) + ')';
+              var supportingBody = a.regionScopes.length > 1
+                ? matchingByScope(a.matching, a.regionScopes)
+                : (a.matching && a.matching.length ? nodeLinks(a.matching) : '<span class="text-muted">none</span>');
+              body =
+                '<div style="margin-bottom:6px"><strong>Supporting</strong> (' + (a.matching || []).length + '): ' + supportingBody +
+                '</div>' +
+                '<div><strong>Not supporting</strong> (' + (a.notMatching || []).length + '): ' +
+                  (a.notMatching && a.notMatching.length ? nodeLinks(a.notMatching) : '<span class="text-muted">none</span>') +
+                '</div>';
+            } else {
+              summary = esc(a.label) + ' — ' + a.totalNodes.toLocaleString() + ' node' + (a.totalNodes === 1 ? '' : 's') +
+                ', <span class="text-muted">no region linked to this area</span>';
+              body = '<p class="text-muted" style="margin:0;font-size:0.85em">This area has no regionScopes configured, so there\'s nothing to check adoption against.</p>';
+            }
+            return '<details style="margin-bottom:8px" data-key="area-adopt:' + esc(a.areaKey) + '">' +
+              '<summary style="cursor:pointer">' + summary + '</summary>' +
+              '<div style="margin-top:6px;margin-left:12px;font-size:0.9em;line-height:1.6">' + body + '</div>' +
+              '</details>';
+          }).join('');
+          setSectionHtml(areaAdoptEl, detailsSection(
+            'Scope Adoption by Area (' + byArea.length.toLocaleString() + ' areas)',
+            null,
+            areaGroups,
+            'scope-adoption-by-area'
+          ));
+        } else {
+          areaAdoptEl.innerHTML = '';
+        }
+      }
+
       // Region utilization: how much of the configured hashRegions list
       // has never actually matched anything — all-time (not window-scoped),
       // so it doesn't fluctuate with the 1h/24h/7d selector above. Only
@@ -5046,7 +5166,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           var unused = d.unusedRegions || [];
           var usedCount = configured - unused.length;
           var unusedPct = (unused.length / configured * 100).toFixed(1);
-          var listHtml = unused.map(function(name) { return esc(name); }).join(', ');
+          var listHtml = unused.map(function(name) { return regionCodeHtml(name); }).join(', ');
           setSectionHtml(utilEl, detailsSection(
             'Region Utilization (' + usedCount.toLocaleString() + ' of ' + configured.toLocaleString() + ' used)',
             'All-time, not limited to the window above — has this configured region ever matched a message still in retention?',
@@ -5084,7 +5204,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
                 return '<a href="#/nodes/' + encodeURIComponent(rp.publicKey) + '">' + esc(rp.name) + '</a>';
               }).join(', ');
               return '<details style="margin-bottom:6px" data-key="region:' + esc(g.region) + '">' +
-                '<summary style="cursor:pointer"><code>' + esc(g.region) + '</code> — ' + g.count.toLocaleString() + ' ' + unitLabel + (g.count === 1 ? '' : 's') + '</summary>' +
+                '<summary style="cursor:pointer">' + regionCodeHtml(g.region) + ' — ' + g.count.toLocaleString() + ' ' + unitLabel + (g.count === 1 ? '' : 's') + '</summary>' +
                 '<div class="text-muted" style="font-size:11px;margin-top:6px;margin-left:12px;max-height:200px;overflow-y:auto;line-height:1.8">' + links + '</div>' +
                 '</details>';
             }).join('')
@@ -5110,7 +5230,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         var bridgeBody;
         if (bridges.length > 0) {
           var bridgeRows = bridges.map(function(b) {
-            var regionList = b.regions.map(function(r) { return '<code>' + esc(r) + '</code>'; }).join(', ');
+            var regionList = b.regions.map(function(r) { return regionCodeHtml(r); }).join(', ');
             return '<tr>' +
               '<td><a href="#/nodes/' + encodeURIComponent(b.publicKey) + '">' + esc(b.name) + '</a></td>' +
               '<td>' + b.count + '</td>' +
@@ -5165,37 +5285,62 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       // computeRepeatersNeverRelayingScope doc comment). Reuses the same
       // `allNodes` fetched above.
       var neverRelayEl = document.getElementById('scopes-never-relay-scope');
-      if (neverRelayEl && !allNodes) {
-        setSectionHtml(neverRelayEl, detailsSection('Repeaters Never Relaying Any Scope', null, '<p class="text-muted">Failed to load.</p>', 'never-relay'));
-      } else if (neverRelayEl) {
-        try {
-          var neverRelay = computeRepeatersNeverRelayingScope(allNodes, 100);
-          var neverRelayBody;
-          if (neverRelay.sortedCapped.length > 0) {
-            var neverRelayRows = neverRelay.sortedCapped.map(function(n) {
-              return '<tr><td><a href="#/nodes/' + encodeURIComponent(n.public_key) + '">' + esc(n.name || n.public_key) + '</a></td>' +
-                '<td>' + esc(n.role || '—') + '</td>' +
-                '<td>' + (n.relay_count_24h || 0).toLocaleString() + '</td>' +
-                '<td>' + timeAgo(n.last_seen) + '</td></tr>';
-            }).join('');
-            neverRelayBody = '<table class="data-table analytics-table">' +
-              '<thead><tr><th>Repeater</th><th>Role</th><th>Relays (24h)</th><th>Last Seen</th></tr></thead>' +
-              '<tbody>' + neverRelayRows + '</tbody>' +
-              '</table>';
-          } else {
-            neverRelayBody = '<p class="text-muted" style="font-size:0.85em">Every known repeater/room has relayed at least one region-scoped packet.</p>';
-          }
-          setSectionHtml(neverRelayEl, detailsSection(
-            'Repeaters Never Relaying Any Scope (' + neverRelay.total.toLocaleString() + ')',
-            'Repeater/room nodes that have never carried a single region-scoped (TRANSPORT_FLOOD/DIRECT) packet, ever — not the same set as "no default_scope" above: a repeater\'s hashRegions config can let it relay for others even when its own adverts never carry a matching transport code. ' +
-              'Sorted by current relay volume — the busiest ones are the most consequential to configure first' + (neverRelay.truncated ? ' (showing the top ' + neverRelay.sortedCapped.length + ')' : '') + '.',
-            neverRelayBody,
-            'never-relay'
-          ));
-        } catch (e) {
+      if (neverRelayEl) {
+        if (allNodes) {
+          renderNeverRelaySection(allNodes);
+        } else {
           setSectionHtml(neverRelayEl, detailsSection('Repeaters Never Relaying Any Scope', null, '<p class="text-muted">Failed to load.</p>', 'never-relay'));
         }
       }
+    }
+
+    // Renders (and re-renders, on geo filter change) the "Repeaters Never
+    // Relaying Any Scope" section from the already-fetched node list — same
+    // reactive-filter pattern as renderNoScopeSection above.
+    function renderNeverRelaySection(allNodes) {
+      var neverRelayElInner = document.getElementById('scopes-never-relay-scope');
+      if (!neverRelayElInner) return;
+      try {
+        var neverRelay = computeRepeatersNeverRelayingScope(allNodes, 100, { geo: neverRelayFilter.geo });
+        var neverRelayBody;
+        if (neverRelay.sortedCapped.length > 0) {
+          var neverRelayRows = neverRelay.sortedCapped.map(function(n) {
+            return '<tr><td><a href="#/nodes/' + encodeURIComponent(n.public_key) + '">' + esc(n.name || n.public_key) + '</a></td>' +
+              '<td>' + esc(n.role || '—') + '</td>' +
+              '<td>' + (n.relay_count_24h || 0).toLocaleString() + '</td>' +
+              '<td>' + timeAgo(n.last_seen) + '</td></tr>';
+          }).join('');
+          neverRelayBody = '<table class="data-table analytics-table">' +
+            '<thead><tr><th>Repeater</th><th>Role</th><th>Relays (24h)</th><th>Last Seen</th></tr></thead>' +
+            '<tbody>' + neverRelayRows + '</tbody>' +
+            '</table>';
+        } else if (neverRelayFilter.geo) {
+          neverRelayBody = '<p class="text-muted" style="font-size:0.85em">No repeaters match this filter.</p>';
+        } else {
+          neverRelayBody = '<p class="text-muted" style="font-size:0.85em">Every known repeater/room has relayed at least one region-scoped packet.</p>';
+        }
+        setSectionHtml(neverRelayElInner, detailsSection(
+          'Repeaters Never Relaying Any Scope (' + neverRelay.total.toLocaleString() + ')',
+          'Repeater/room nodes that have never carried a single region-scoped (TRANSPORT_FLOOD/DIRECT) packet, ever — not the same set as "no default_scope" above: a repeater\'s hashRegions config can let it relay for others even when its own adverts never carry a matching transport code. ' +
+            'Sorted by current relay volume — the busiest ones are the most consequential to configure first' +
+            (neverRelay.filteredTotal !== neverRelay.total ? ', filtered to ' + neverRelay.filteredTotal.toLocaleString() + ' matching below' : '') +
+            (neverRelay.truncated ? ' (showing the top ' + neverRelay.sortedCapped.length + ')' : '') + '.',
+          geoFilterButtons(neverRelayFilter, 'never-relay-geo-filter') + neverRelayBody,
+          'never-relay'
+        ));
+      } catch (e) {
+        setSectionHtml(neverRelayElInner, detailsSection('Repeaters Never Relaying Any Scope', null, '<p class="text-muted">Failed to load.</p>', 'never-relay'));
+        return;
+      }
+
+      var sectionEl = document.getElementById('scopes-never-relay-scope');
+      if (!sectionEl) return;
+      sectionEl.querySelectorAll('[data-never-relay-geo-filter]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          neverRelayFilter.geo = btn.dataset.neverRelayGeoFilter || '';
+          renderNeverRelaySection(allNodes);
+        });
+      });
     }
 
 
@@ -5220,6 +5365,27 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
   // returns a most-recently-active-first slice capped at `cap` rows.
   // `total` is always the full unfiltered count; `filteredTotal` reflects
   // opts.
+
+  // Classifies live from the node's own lat/lon against the currently
+  // configured geo_filter (window.MC_GEO_FILTER, set from
+  // /api/config/client — see public/roles.js), mirroring the Nodes tab's
+  // Domestic/Foreign filter (public/nodes.js) and renderForeignTrafficTab's
+  // isForeignNode below — NOT the node's one-way, never-cleared `foreign`
+  // DB flag.
+  function nodeMatchesGeo(n, mode) {
+    if (!mode) return true;
+    var domestic = nodePassesGeoFilter(n.lat, n.lon, window.MC_GEO_FILTER);
+    return mode === 'domestic' ? domestic : !domestic;
+  }
+
+  function geoFilterButtons(filter, dataAttr) {
+    return '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">' +
+      '<button type="button" class="tab-btn' + (!filter.geo ? ' active' : '') + '" data-' + dataAttr + '="">All</button>' +
+      '<button type="button" class="tab-btn' + (filter.geo === 'domestic' ? ' active' : '') + '" data-' + dataAttr + '="domestic">Domestic</button>' +
+      '<button type="button" class="tab-btn' + (filter.geo === 'foreign' ? ' active' : '') + '" data-' + dataAttr + '="foreign">Foreign</button>' +
+      '</div>';
+  }
+
   function computeNodesWithoutScope(allNodes, cap, opts) {
     opts = opts || {};
     var noScopeNodes = allNodes.filter(function(n) { return !n.default_scope; });
@@ -5233,6 +5399,9 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       .map(function(r) { return { role: r, count: roleCounts[r] }; });
 
     var filtered = noScopeNodes;
+    if (opts.geo) {
+      filtered = filtered.filter(function(n) { return nodeMatchesGeo(n, opts.geo); });
+    }
     if (opts.role) {
       filtered = filtered.filter(function(n) { return (n.role || 'unknown') === opts.role; });
     }
@@ -5268,16 +5437,19 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
   // out rather than silently 0-counted alongside them. Sorted by
   // relay_count_24h descending: the busiest unconfigured repeaters are the
   // most consequential ones to fix first.
-  function computeRepeatersNeverRelayingScope(allNodes, cap) {
+  function computeRepeatersNeverRelayingScope(allNodes, cap, opts) {
+    opts = opts || {};
     var candidates = allNodes.filter(function(n) {
       return (n.role === 'repeater' || n.role === 'room') &&
         (!n.transported_scopes || n.transported_scopes.length === 0);
     });
-    var sorted = candidates.slice().sort(function(a, b) {
+    var filtered = opts.geo ? candidates.filter(function(n) { return nodeMatchesGeo(n, opts.geo); }) : candidates;
+    var sorted = filtered.slice().sort(function(a, b) {
       return Number(b.relay_count_24h || 0) - Number(a.relay_count_24h || 0);
     });
     return {
       total: candidates.length,
+      filteredTotal: filtered.length,
       sortedCapped: sorted.slice(0, cap),
       truncated: sorted.length > cap,
     };
@@ -5545,16 +5717,20 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       }
       var shown = expanded ? sessions : sessions.slice(0, TOP_N_LIMIT);
       var rows = shown.map(function(s) {
+        var areaBadge = s.area
+          ? '<span class="badge" style="background:var(--border);color:var(--text)" title="Approximate — the entry-point repeater\'s known position, not the sender\'s own">' + esc(s.area) + '</span>'
+          : '<span class="text-muted" style="font-size:0.85em">—</span>';
         return '<tr><td>' + senderTriggerHtml(s.sender, s.startTime, s.endTime) + '</td>' +
           '<td>' + (typeof timeAgo === 'function' ? timeAgo(s.startTime) : s.startTime) + '</td>' +
           '<td>' + formatSessionDuration(s.durationMinutes) + '</td>' +
           '<td>' + s.messageCount.toLocaleString() + '</td>' +
           '<td>' + s.entryPointCount.toLocaleString() + '</td>' +
           '<td>' + s.observerCount.toLocaleString() + '</td>' +
+          '<td>' + areaBadge + '</td>' +
           '<td>' + formatAirtimeMs(s.airtimeMs) + '</td></tr>';
       }).join('');
-      return '<table class="data-table analytics-table" data-wd-cols="7">' +
-        '<thead><tr><th>Sender</th><th>Started</th><th>Duration</th><th>Messages</th><th>Entry Points</th><th>Observers</th><th>Airtime</th></tr></thead>' +
+      return '<table class="data-table analytics-table" data-wd-cols="8">' +
+        '<thead><tr><th>Sender</th><th>Started</th><th>Duration</th><th>Messages</th><th>Entry Points</th><th>Observers</th><th>Area</th><th>Airtime</th></tr></thead>' +
         '<tbody>' + rows + '</tbody>' +
         '</table>' + topNToggleHtml(sessions.length, expanded, 'sessions');
     }
@@ -5684,13 +5860,17 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         return '<p class="text-muted" style="font-size:0.85em">No sender has shared an explicit position in this window.</p>';
       }
       var rows = shares.map(function(s) {
+        var areaBadge = s.area
+          ? '<span class="badge" style="background:var(--border);color:var(--text)" title="Most specific configured area containing this position">' + esc(s.area) + '</span>'
+          : '<span class="text-muted" style="font-size:0.85em">—</span>';
         return '<tr><td>' + esc(s.sender) + '</td>' +
           '<td>' + mapLinkHtml(s.lat, s.lon) + '</td>' +
+          '<td>' + areaBadge + '</td>' +
           '<td>' + s.messageCount.toLocaleString() + '</td>' +
           '<td>' + (typeof timeAgo === 'function' ? timeAgo(s.lastSeen) : s.lastSeen) + '</td></tr>';
       }).join('');
       return '<table class="data-table analytics-table">' +
-        '<thead><tr><th>Sender</th><th>Position (most recent)</th><th>Times Shared</th><th>Last Seen</th></tr></thead>' +
+        '<thead><tr><th>Sender</th><th>Position (most recent)</th><th>Area</th><th>Times Shared</th><th>Last Seen</th></tr></thead>' +
         '<tbody>' + rows + '</tbody>' +
         '</table>';
     }

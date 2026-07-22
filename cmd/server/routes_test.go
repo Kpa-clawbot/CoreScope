@@ -34,6 +34,7 @@ func setupTestServer(t *testing.T) (*Server, *mux.Router) {
 	if !store.WaitIndexesReady(5 * time.Second) {
 		t.Fatalf("background indexes never became ready")
 	}
+	store.config = cfg // mirrors main.go's real wiring -- store.resolveEntryPointArea/resolveAreaNodes need it
 	srv.store = store
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
@@ -55,6 +56,7 @@ func setupTestServerWithAPIKey(t *testing.T, apiKey string) (*Server, *mux.Route
 	if !store.WaitIndexesReady(5 * time.Second) {
 		t.Fatalf("background indexes never became ready")
 	}
+	store.config = cfg
 	srv.store = store
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
@@ -4783,6 +4785,114 @@ func TestHandleScopeStats_OriginatingNodesByRegion(t *testing.T) {
 	}
 	if len(onr.Repeaters) != 1 || onr.Repeaters[0].Name != "OriginNode1" || onr.Repeaters[0].PublicKey != "ddeeff001122" {
 		t.Errorf("nodes = %+v, want [{OriginNode1 ddeeff001122}]", onr.Repeaters)
+	}
+}
+
+func TestHandleScopeStats_ScopeAdoptionByArea(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+		t.Fatalf("add scope_name column: %v", err)
+	}
+	srv.db.hasScopeName = true
+	if !srv.db.hasDefaultScope {
+		if _, err := srv.db.conn.Exec(`ALTER TABLE nodes ADD COLUMN default_scope TEXT DEFAULT NULL`); err != nil {
+			t.Fatalf("add default_scope column: %v", err)
+		}
+		srv.db.hasDefaultScope = true
+	}
+	f := func(v float64) *float64 { return &v }
+	srv.cfg.Areas = map[string]AreaEntry{
+		"ODE": {Label: "Odense by", RegionScopes: []string{"dk-fyn-odense"}, LatMin: f(55.32), LatMax: f(55.45), LonMin: f(10.3), LonMax: f(10.5)},
+	}
+
+	insertNode := func(pk, defaultScope string, lat, lon float64) {
+		if _, err := srv.db.conn.Exec(
+			`INSERT INTO nodes (public_key, name, role, default_scope, lat, lon) VALUES (?, ?, 'repeater', ?, ?, ?)`,
+			pk, pk, defaultScope, lat, lon,
+		); err != nil {
+			t.Fatalf("seed node %s: %v", pk, err)
+		}
+	}
+	insertNode("odematch01", "#dk-fyn-odense", 55.4047, 10.3810)
+	insertNode("odewrong01", "#dk-aarhus", 55.40, 10.40)
+	insertNode("odenoscope1", "", 55.41, 10.41)
+
+	req := httptest.NewRequest("GET", "/api/scope-stats?window=24h", nil)
+	w := httptest.NewRecorder()
+	srv.handleScopeStats(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	var resp ScopeStatsResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.ScopeAdoptionByArea) != 1 {
+		t.Fatalf("scopeAdoptionByArea = %+v, want 1 entry (ODE)", resp.ScopeAdoptionByArea)
+	}
+	ode := resp.ScopeAdoptionByArea[0]
+	if ode.AreaKey != "ODE" || ode.TotalNodes != 3 || ode.NodesWithAnyScope != 2 || ode.NodesMatchingArea != 1 {
+		t.Errorf("ScopeAdoptionByArea[0] = %+v, want AreaKey=ODE TotalNodes=3 NodesWithAnyScope=2 NodesMatchingArea=1", ode)
+	}
+}
+
+// TestHandleScopeStats_ScopeAdoptionByArea_ZeroMatchKeyPresent is a
+// regression test: NodesMatchingArea must NOT have `omitempty`, or a
+// genuine 0 count (a real, meaningful value — "this area has a linked
+// region but nobody uses it") silently disappears from the raw JSON. The
+// frontend reads a.nodesMatchingArea directly and calls .toLocaleString()
+// on it — an absent key deserializes to `undefined` in JS, not 0, which
+// throws and breaks the whole Scopes tab render. Decodes into a raw map
+// (not the typed struct, which would hide this by defaulting to the zero
+// value regardless of whether the key was present).
+func TestHandleScopeStats_ScopeAdoptionByArea_ZeroMatchKeyPresent(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+		t.Fatalf("add scope_name column: %v", err)
+	}
+	srv.db.hasScopeName = true
+	if !srv.db.hasDefaultScope {
+		if _, err := srv.db.conn.Exec(`ALTER TABLE nodes ADD COLUMN default_scope TEXT DEFAULT NULL`); err != nil {
+			t.Fatalf("add default_scope column: %v", err)
+		}
+		srv.db.hasDefaultScope = true
+	}
+	f := func(v float64) *float64 { return &v }
+	srv.cfg.Areas = map[string]AreaEntry{
+		"AAR": {Label: "Aarhus by", RegionScopes: []string{"dk-aarhus"}, LatMin: f(56.05), LatMax: f(56.25), LonMin: f(9.95), LonMax: f(10.35)},
+	}
+	// A node with a scope, but NOT the area's own region — NodesMatchingArea
+	// must come out as a real, present 0, same as the live #dk-vs-#dk-aarhus
+	// case this feature was built to surface.
+	if _, err := srv.db.conn.Exec(
+		`INSERT INTO nodes (public_key, name, role, default_scope, lat, lon) VALUES ('aar00000001', 'AarhusNode', 'repeater', '#dk', 56.15, 10.15)`,
+	); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/scope-stats?window=24h", nil)
+	w := httptest.NewRecorder()
+	srv.handleScopeStats(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+
+	var raw map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	areas, ok := raw["scopeAdoptionByArea"].([]interface{})
+	if !ok || len(areas) != 1 {
+		t.Fatalf("scopeAdoptionByArea = %v, want 1 entry", raw["scopeAdoptionByArea"])
+	}
+	area := areas[0].(map[string]interface{})
+	val, present := area["nodesMatchingArea"]
+	if !present {
+		t.Fatal("nodesMatchingArea key is missing from the JSON entirely — omitempty regression, this crashes the frontend")
+	}
+	if val != float64(0) {
+		t.Errorf("nodesMatchingArea = %v, want 0", val)
 	}
 }
 

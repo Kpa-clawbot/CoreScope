@@ -1945,10 +1945,14 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 			}
 		}
 		var hops int
+		var entryPrefix string
 		if pathJSON.Valid {
-			var h []interface{}
+			var h []string
 			if json.Unmarshal([]byte(pathJSON.String), &h) == nil {
 				hops = len(h)
+				if len(h) > 0 {
+					entryPrefix = h[0]
+				}
 			}
 		}
 		senderTs := decoded["sender_timestamp"]
@@ -1967,6 +1971,7 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 				"snr":              nullFloat(snr),
 				"scope":            nullStr(scopeName),
 				"routeType":        nullInt(routeType),
+				"entryPrefix":      entryPrefix,
 			},
 			Repeats: 1,
 		}
@@ -2237,6 +2242,151 @@ func (db *DB) GetNodesByDefaultScope() (map[string][]RepeaterRef, error) {
 		result[scope] = append(result[scope], RepeaterRef{Name: displayName, PublicKey: strings.ToLower(pk)})
 	}
 	return result, rows.Err()
+}
+
+// nodeAreaScopeInput is one node's position + name + default_scope +
+// pubkey — the raw input to computeScopeAdoptionByArea. DefaultScope is ""
+// when unset or when this DB predates #899 (no default_scope column at
+// all). PublicKey is lowercase, for looking a node up in a
+// RepeaterRelayInfo map.
+type nodeAreaScopeInput struct {
+	PublicKey    string
+	Name         string
+	Lat, Lon     float64
+	DefaultScope string
+}
+
+// GetNodesForScopeAdoption returns every node with a real GPS fix (0,0
+// excluded, same convention as geofilter.PassesFilter) and its
+// default_scope, for computeScopeAdoptionByArea to bucket by configured
+// area. Unlike GetNodesByDefaultScope, this includes nodes with NO scope
+// too — the whole point is measuring adoption, not just listing who has one.
+func (db *DB) GetNodesForScopeAdoption() ([]nodeAreaScopeInput, error) {
+	query := "SELECT public_key, name, lat, lon"
+	if db.hasDefaultScope {
+		query += ", default_scope"
+	}
+	query += " FROM nodes WHERE lat IS NOT NULL AND lon IS NOT NULL AND lat != 0 AND lon != 0"
+	rows, err := db.conn.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("nodes for scope adoption query: %w", err)
+	}
+	defer rows.Close()
+	var out []nodeAreaScopeInput
+	for rows.Next() {
+		var pk string
+		var name sql.NullString
+		var lat, lon float64
+		var scope sql.NullString
+		var scanErr error
+		if db.hasDefaultScope {
+			scanErr = rows.Scan(&pk, &name, &lat, &lon, &scope)
+		} else {
+			scanErr = rows.Scan(&pk, &name, &lat, &lon)
+		}
+		if scanErr != nil {
+			continue
+		}
+		displayName := pk
+		if name.Valid && name.String != "" {
+			displayName = name.String
+		}
+		out = append(out, nodeAreaScopeInput{PublicKey: strings.ToLower(pk), Name: displayName, Lat: lat, Lon: lon, DefaultScope: scope.String})
+	}
+	return out, rows.Err()
+}
+
+// computeScopeAdoptionByArea buckets nodes by their most specific
+// configured area and tallies, per area: how many nodes sit there at all,
+// how many "use scope" in ANY sense, and (when the area itself has a
+// RegionScopes link) how many specifically use THAT region — i.e. does
+// this geographic community actually engage with the scope the area is
+// nominally tied to, or something else entirely (or nothing at all). A
+// node outside every configured area is excluded.
+//
+// Unlike the per-node area *badges* (AreaForPoint/AreaKeyForPoint, which
+// pick a single most-specific area), this uses AreaKeysForPoint so a node
+// counts toward EVERY containing area — a node in "Aarhus by" also counts
+// toward "Jylland" and "Danmark (alle)". Without this, a broad roll-up
+// area like "Danmark (alle)" would only ever show the handful of nodes not
+// claimed by any smaller, more specific area (dborup flagged this: DK
+// showed almost nothing because nearly every real node already belonged
+// to a narrower sub-area), instead of the whole country's actual adoption.
+//
+// "Uses scope" counts two distinct signals, same runs-this-region vs
+// carried-this-region's-traffic distinction as OriginatingNodesByRegion vs
+// RepeatersByRegion above: (1) the node's own default_scope, and (2) any
+// region it has ever RELAYED (relayInfo/TransportedScopes) — a repeater
+// can carry dk-horsens traffic and thereby support the Horsens area
+// without ever configuring dk-horsens as its own default_scope. relayInfo
+// may be nil (in-memory store unavailable), in which case matching falls
+// back to default_scope only.
+//
+// For areas with a RegionScopes link, also returns the actual node lists
+// (Matching/NotMatching) — dborup wanted to see which specific nodes in
+// e.g. Østjylland relay dk-oj (correctly "support" the area) and which
+// don't, not just an aggregate count.
+func computeScopeAdoptionByArea(nodes []nodeAreaScopeInput, areas map[string]AreaEntry, relayInfo map[string]RepeaterRelayInfo) []AreaScopeAdoption {
+	counts := make(map[string]*AreaScopeAdoption)
+	for _, n := range nodes {
+		keys := AreaKeysForPoint(n.Lat, n.Lon, areas)
+		if len(keys) == 0 {
+			continue
+		}
+
+		ownScope := strings.ToLower(strings.TrimPrefix(n.DefaultScope, "#"))
+		relayedRegions := make(map[string]bool)
+		if info, ok := relayInfo[n.PublicKey]; ok {
+			for _, r := range info.TransportedScopes {
+				relayedRegions[strings.ToLower(strings.TrimPrefix(r, "#"))] = true
+			}
+		}
+		hasAnyScope := ownScope != "" || len(relayedRegions) > 0
+
+		for _, key := range keys {
+			c, exists := counts[key]
+			if !exists {
+				a := areas[key]
+				c = &AreaScopeAdoption{AreaKey: key, Label: a.Label, RegionScopes: a.RegionScopes}
+				counts[key] = c
+			}
+			c.TotalNodes++
+			if hasAnyScope {
+				c.NodesWithAnyScope++
+			}
+			// Matching/NotMatching per-node lists only make sense when the
+			// area actually has region(s) to compare against — an area
+			// with no RegionScopes link has nothing to be "not matching".
+			if len(c.RegionScopes) > 0 {
+				var matchedScopes []string
+				for _, rs := range c.RegionScopes {
+					normalizedRegion := strings.ToLower(rs)
+					if ownScope == normalizedRegion || relayedRegions[normalizedRegion] {
+						matchedScopes = append(matchedScopes, rs)
+					}
+				}
+				if len(matchedScopes) > 0 {
+					c.NodesMatchingArea++
+					c.Matching = append(c.Matching, AreaScopeMatch{Name: n.Name, PublicKey: n.PublicKey, MatchedScopes: matchedScopes})
+				} else {
+					c.NotMatching = append(c.NotMatching, RepeaterRef{Name: n.Name, PublicKey: n.PublicKey})
+				}
+			}
+		}
+	}
+	result := make([]AreaScopeAdoption, 0, len(counts))
+	for _, c := range counts {
+		sort.Slice(c.Matching, func(i, j int) bool { return c.Matching[i].Name < c.Matching[j].Name })
+		sort.Slice(c.NotMatching, func(i, j int) bool { return c.NotMatching[i].Name < c.NotMatching[j].Name })
+		result = append(result, *c)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].TotalNodes != result[j].TotalNodes {
+			return result[i].TotalNodes > result[j].TotalNodes
+		}
+		return result[i].Label < result[j].Label
+	})
+	return result
 }
 
 // QueryMultiNodePackets returns transmissions referencing any of the given pubkeys.
@@ -3494,6 +3644,10 @@ func (db *DB) buildWardrivingSessions(channel, since string) ([]WardrivingSessio
 		}
 		cur.EntryPointCount = len(curPrefixes)
 		cur.ObserverCount = len(curObservers)
+		for p := range curPrefixes {
+			cur.EntryPointPrefixes = append(cur.EntryPointPrefixes, p)
+		}
+		sort.Strings(cur.EntryPointPrefixes)
 		start, errS := time.Parse(time.RFC3339, cur.StartTime)
 		end, errE := time.Parse(time.RFC3339, cur.EndTime)
 		if errS == nil && errE == nil {

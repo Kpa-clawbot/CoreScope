@@ -219,6 +219,29 @@ test('no opts (or empty opts) behaves exactly as before — filteredTotal equals
   assert.strictEqual(result.filteredTotal, result.total);
 });
 
+test('opts.geo narrows to domestic/foreign via window.MC_GEO_FILTER, same box the Nodes tab uses', () => {
+  // Denmark-ish box: lat 54-58, lon 8-13. A node outside it is "foreign".
+  ctx.window.MC_GEO_FILTER = { latMin: 54, latMax: 58, lonMin: 8, lonMax: 13 };
+  try {
+    const nodes = [
+      { public_key: 'pk1', name: 'Domestic1', role: 'repeater', default_scope: null, lat: 56.0, lon: 10.0 },
+      { public_key: 'pk2', name: 'Foreign1', role: 'repeater', default_scope: null, lat: 40.0, lon: 20.0 },
+    ];
+    const domestic = computeNodesWithoutScope(nodes, 100, { geo: 'domestic' });
+    assert.strictEqual(domestic.filteredTotal, 1);
+    assert.strictEqual(domestic.sortedCapped[0].name, 'Domestic1');
+
+    const foreign = computeNodesWithoutScope(nodes, 100, { geo: 'foreign' });
+    assert.strictEqual(foreign.filteredTotal, 1);
+    assert.strictEqual(foreign.sortedCapped[0].name, 'Foreign1');
+
+    const all = computeNodesWithoutScope(nodes, 100);
+    assert.strictEqual(all.filteredTotal, 2, 'no geo opt leaves both nodes');
+  } finally {
+    ctx.window.MC_GEO_FILTER = null;
+  }
+});
+
 console.log('\n=== analytics.js: computeRepeatersNeverRelayingScope ===');
 
 test('is exported for testing', () => {
@@ -283,6 +306,26 @@ test('returns zero total when every repeater/room has relayed at least one scope
   const result = computeRepeatersNeverRelayingScope(nodes, 100);
   assert.strictEqual(result.total, 0);
   assert.deepStrictEqual(result.sortedCapped, []);
+});
+
+test('opts.geo narrows to domestic/foreign, leaving total (unfiltered) unchanged', () => {
+  ctx.window.MC_GEO_FILTER = { latMin: 54, latMax: 58, lonMin: 8, lonMax: 13 };
+  try {
+    const nodes = [
+      { public_key: 'pk1', name: 'DomesticRepeater', role: 'repeater', transported_scopes: null, lat: 56.0, lon: 10.0 },
+      { public_key: 'pk2', name: 'ForeignRepeater', role: 'repeater', transported_scopes: null, lat: 40.0, lon: 20.0 },
+    ];
+    const domestic = computeRepeatersNeverRelayingScope(nodes, 100, { geo: 'domestic' });
+    assert.strictEqual(domestic.total, 2, 'total stays the full unfiltered count');
+    assert.strictEqual(domestic.filteredTotal, 1);
+    assert.strictEqual(domestic.sortedCapped[0].name, 'DomesticRepeater');
+
+    const foreign = computeRepeatersNeverRelayingScope(nodes, 100, { geo: 'foreign' });
+    assert.strictEqual(foreign.filteredTotal, 1);
+    assert.strictEqual(foreign.sortedCapped[0].name, 'ForeignRepeater');
+  } finally {
+    ctx.window.MC_GEO_FILTER = null;
+  }
 });
 
 console.log('\n════════════════════════════════════════');

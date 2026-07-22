@@ -188,6 +188,23 @@ function makeApiStub(wardrivingResp, resolveHopsResp) {
     assert.ok(section.includes('href="#/map?lat=55.59743&lon=13.00128&zoom=15"'), 'the position should link to the live map centered on it');
   });
 
+  await testAsync('GPS Sharing shows the area badge when the API resolved one, and a dash otherwise', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeWardrivingResponse({
+      gpsShares: [
+        { sender: 'InOdense', lat: 55.4047, lon: 10.381, messageCount: 3, lastSeen: '2026-07-20T09:00:00Z', area: 'Odense by' },
+        { sender: 'NoAreaMatch', lat: 40.0, lon: -74.0, messageCount: 1, lastSeen: '2026-07-20T09:00:00Z' },
+      ],
+    })));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderWardrivingTab(el);
+    const startIdx = el.innerHTML.indexOf('id="wardrivingGPSShares"');
+    const section = el.innerHTML.slice(startIdx);
+    assert.ok(section.includes('<th>Area</th>'), 'GPS Sharing table should have an Area column');
+    assert.ok(section.includes('>Odense by<'), 'a resolved area should render as a badge with its label');
+    const noAreaRowIdx = section.indexOf('NoAreaMatch');
+    assert.ok(noAreaRowIdx > -1, 'the unresolved-area sender should still be listed');
+  });
+
   await testAsync('GPS Sharing shows a neutral message when nobody has shared a position', async () => {
     const ctx = makeAnalyticsSandbox(makeApiStub(makeWardrivingResponse({ gpsShares: [] })));
     const el = fakeEl();
@@ -332,6 +349,22 @@ function makeApiStub(wardrivingResp, resolveHopsResp) {
     assert.ok(section.includes('245ms'), 'sub-second airtime should render in milliseconds');
     assert.ok(section.includes('1.8s'), 'airtime over 1000ms should render in seconds');
     assert.ok(section.includes('<td>—</td></tr>'), 'a session with no airtime data (DB-only mode) should show a dash, not blank/null');
+  });
+
+  await testAsync('Sessions table shows the approximate entry-point area, and a dash when unresolved', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeWardrivingResponse({
+      sessions: [
+        { sender: 'Alice', startTime: '2026-07-20T09:00:00Z', endTime: '2026-07-20T09:00:00Z', durationMinutes: 0, messageCount: 1, entryPointCount: 1, observerCount: 1, airtimeMs: 245, area: 'Odense by' },
+        { sender: 'Bob', startTime: '2026-07-20T08:30:00Z', endTime: '2026-07-20T08:30:00Z', durationMinutes: 0, messageCount: 1, entryPointCount: 1, observerCount: 1, airtimeMs: null },
+      ],
+    })));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderWardrivingTab(el);
+    const startIdx = el.innerHTML.indexOf('id="wardrivingSessions"');
+    const endIdx = el.innerHTML.indexOf('id="wardrivingEntryPoints"');
+    const section = el.innerHTML.slice(startIdx, endIdx);
+    assert.ok(section.includes('<th>Area</th>'), 'Sessions table should have an Area column');
+    assert.ok(section.includes('>Odense by<'), 'a resolved area should render as a badge');
   });
 
   await testAsync('Entry Points resolves unique_prefix repeaters and folds ambiguous into one bucket', async () => {

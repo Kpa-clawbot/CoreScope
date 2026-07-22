@@ -191,11 +191,64 @@ type ScopeStatsResponse struct {
 	// HourlyActivityByRegion is window-scoped like Summary/TimeSeries
 	// above — see ScopeHourlyActivity doc.
 	HourlyActivityByRegion []ScopeHourlyActivity `json:"hourlyActivityByRegion,omitempty"`
+	// ScopeAdoptionByArea buckets every positioned node by its configured
+	// geographic area (config.Areas, AreaKeyForPoint) and tallies scope
+	// adoption within that area — independent of whether the raw
+	// hashRegion codes above are "used" at all. Surfaces gaps like "34
+	// real nodes here, 0 have ever configured a scope" that
+	// UnusedRegions/RepeatersByRegion can't see, since those only know
+	// about region strings that already appeared in traffic. All-time,
+	// like the other Regions-tab sections. Omitted when no areas are
+	// configured.
+	ScopeAdoptionByArea []AreaScopeAdoption `json:"scopeAdoptionByArea,omitempty"`
+}
+
+// AreaScopeAdoption is one configured area's node count and scope adoption
+// — see ScopeStatsResponse.ScopeAdoptionByArea and computeScopeAdoptionByArea.
+type AreaScopeAdoption struct {
+	AreaKey      string   `json:"areaKey"`
+	Label        string   `json:"label"`
+	RegionScopes []string `json:"regionScopes,omitempty"`
+	TotalNodes   int      `json:"totalNodes"`
+	// NodesWithAnyScope is how many of TotalNodes "use scope" in any
+	// sense: either their own default_scope is set, or they've ever
+	// relayed traffic carrying ANY region's scope (a repeater can support
+	// a region purely by relaying it, without configuring that region as
+	// its own — see computeScopeAdoptionByArea).
+	NodesWithAnyScope int `json:"nodesWithAnyScope"`
+	// NodesMatchingArea is the subset of NodesWithAnyScope that
+	// specifically use one of THIS area's own RegionScopes — via
+	// default_scope OR by having relayed it. Only meaningful when
+	// RegionScopes is non-empty — 0 otherwise (not the same as "0 of them
+	// match", there's simply nothing configured to match against). No
+	// omitempty: a real 0 count must still serialize, or the frontend has
+	// no way to distinguish it from "field absent".
+	NodesMatchingArea int `json:"nodesMatchingArea"`
+	// Matching/NotMatching are the actual nodes behind NodesMatchingArea —
+	// which specific nodes in this area relay/configure any of the area's
+	// own regions (correctly "support" it) and which sit here but don't.
+	// Only populated when RegionScopes is non-empty (nothing to split
+	// into two groups otherwise). Matching entries also carry WHICH of the
+	// area's regions each node matched (an area with several linked
+	// scopes, e.g. Europa's "eu"/"europe", needs this to answer "which
+	// nodes support which scope" — not just an aggregate yes/no).
+	Matching    []AreaScopeMatch `json:"matching,omitempty"`
+	NotMatching []RepeaterRef    `json:"notMatching,omitempty"`
 }
 
 type RepeaterRef struct {
 	Name      string `json:"name"`
 	PublicKey string `json:"publicKey"`
+}
+
+// AreaScopeMatch is a RepeaterRef plus which of the area's own
+// RegionScopes this node actually matched (via default_scope or by having
+// relayed it) — a node can match more than one when an area links several
+// scopes and the node uses/relays more than one of them.
+type AreaScopeMatch struct {
+	Name          string   `json:"name"`
+	PublicKey     string   `json:"publicKey"`
+	MatchedScopes []string `json:"matchedScopes"`
 }
 
 type ScopeRegionRepeaters struct {
@@ -285,6 +338,19 @@ type WardrivingSession struct {
 	// TransmissionIDs is internal — the session's own transmission IDs,
 	// used by the route handler to compute AirtimeMs. Never serialized.
 	TransmissionIDs []int64 `json:"-"`
+	// EntryPointPrefixes is internal — the session's distinct path[0]
+	// hex prefixes, used by the route handler to resolve Area. Never
+	// serialized directly.
+	EntryPointPrefixes []string `json:"-"`
+	// Area is the most specific configured area containing the session's
+	// entry-point repeater — always approximate (the repeater's known
+	// position, not the sender's own; wardriving sessions never carry a
+	// literal shared GPS fix, unlike WardrivingGPSShare). Resolved by the
+	// route handler from EntryPointPrefixes when exactly one candidate
+	// node matches a prefix (same unique_prefix-only discipline as
+	// /api/resolve-hops) and that node has a known position. Nil when no
+	// prefix resolves unambiguously or areas aren't configured.
+	Area *string `json:"area,omitempty"`
 }
 
 // WardrivingGPSShare is one sender who has explicitly shared their own
@@ -299,6 +365,9 @@ type WardrivingGPSShare struct {
 	Lon          float64 `json:"lon"`
 	MessageCount int     `json:"messageCount"` // how many times this sender shared a position in this window
 	LastSeen     string  `json:"lastSeen"`
+	// Area is the most specific configured area containing (Lat, Lon), set
+	// by the handler from config.Areas — omitted when no area matches.
+	Area *string `json:"area,omitempty"`
 }
 
 type WardrivingStatsResponse struct {

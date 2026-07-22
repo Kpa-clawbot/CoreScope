@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,95 @@ type AreaEntry struct {
 	LatMax  *float64     `json:"latMax,omitempty"`
 	LonMin  *float64     `json:"lonMin,omitempty"`
 	LonMax  *float64     `json:"lonMax,omitempty"`
+
+	// RegionScopes links this area to one or more hashRegions channel
+	// scopes (e.g. "dk-aarhus"; a broad umbrella area can have several,
+	// e.g. Europa linking both "eu" and "europe"), stored without the
+	// leading "#" — callers should run each through regions.Normalize
+	// before comparing against a scope_name. Left empty when no confident
+	// area<->scope mapping exists.
+	RegionScopes []string `json:"regionScopes,omitempty"`
+}
+
+// AreaForPoint returns the label of the most specific configured area that
+// contains (lat, lon), preferring the smallest matching area when several
+// nested areas overlap (e.g. a point inside both "Odense by" and "Fyn").
+// Returns ok=false for (0,0)/no-fix points or when no area matches.
+func AreaForPoint(lat, lon float64, areas map[string]AreaEntry) (label string, ok bool) {
+	_, label, ok = areaMatchForPoint(lat, lon, areas)
+	return label, ok
+}
+
+// AreaKeyForPoint is AreaForPoint but returns the area's config key (e.g.
+// "ODE") instead of its display label — for callers that need to look up
+// other fields on the matched AreaEntry (e.g. RegionScopes), not just show
+// the name.
+func AreaKeyForPoint(lat, lon float64, areas map[string]AreaEntry) (key string, ok bool) {
+	key, _, ok = areaMatchForPoint(lat, lon, areas)
+	return key, ok
+}
+
+// AreaKeysForPoint returns every configured area's key whose geometry
+// contains (lat, lon) — unlike AreaForPoint/AreaKeyForPoint (single
+// most-specific match, for per-node badges), this returns ALL of them, so
+// a point inside both "Aarhus by" and the broader "Jylland"/"Danmark
+// (alle)" counts toward all three. For aggregate reporting
+// (computeScopeAdoptionByArea) where a country-level area should roll up
+// its sub-areas' totals rather than only catching leftovers no smaller
+// area claimed. Returns nil for (0,0)/no-fix points.
+func AreaKeysForPoint(lat, lon float64, areas map[string]AreaEntry) []string {
+	if lat == 0 && lon == 0 {
+		return nil
+	}
+	var keys []string
+	for k, a := range areas {
+		gf := &geofilter.Config{Polygon: a.Polygon, LatMin: a.LatMin, LatMax: a.LatMax, LonMin: a.LonMin, LonMax: a.LonMax}
+		if geofilter.PassesFilter(lat, lon, gf) {
+			keys = append(keys, k)
+		}
+	}
+	return keys
+}
+
+func areaMatchForPoint(lat, lon float64, areas map[string]AreaEntry) (key, label string, ok bool) {
+	if lat == 0 && lon == 0 {
+		return "", "", false
+	}
+	bestSpan := math.MaxFloat64
+	for k, a := range areas {
+		gf := &geofilter.Config{Polygon: a.Polygon, LatMin: a.LatMin, LatMax: a.LatMax, LonMin: a.LonMin, LonMax: a.LonMax}
+		if !geofilter.PassesFilter(lat, lon, gf) {
+			continue
+		}
+		span := areaSpan(a)
+		if span < bestSpan {
+			bestSpan = span
+			key = k
+			label = a.Label
+			ok = true
+		}
+	}
+	return key, label, ok
+}
+
+// areaSpan approximates an area's size as its bounding-box extent in
+// degrees², used only to rank overlapping areas from most to least specific.
+func areaSpan(a AreaEntry) float64 {
+	var latMin, latMax, lonMin, lonMax float64
+	switch {
+	case len(a.Polygon) > 0:
+		latMin, latMax = a.Polygon[0][0], a.Polygon[0][0]
+		lonMin, lonMax = a.Polygon[0][1], a.Polygon[0][1]
+		for _, p := range a.Polygon {
+			latMin, latMax = math.Min(latMin, p[0]), math.Max(latMax, p[0])
+			lonMin, lonMax = math.Min(lonMin, p[1]), math.Max(lonMax, p[1])
+		}
+	case a.LatMin != nil && a.LatMax != nil && a.LonMin != nil && a.LonMax != nil:
+		latMin, latMax, lonMin, lonMax = *a.LatMin, *a.LatMax, *a.LonMin, *a.LonMax
+	default:
+		return math.MaxFloat64
+	}
+	return (latMax - latMin) * (lonMax - lonMin)
 }
 
 // ListLimitsConfig defines maximum row limits for list endpoints to prevent DoS.
@@ -155,6 +245,15 @@ type Config struct {
 	GeoFilterExemptNodeList bool `json:"geoFilterExemptNodeList,omitempty"`
 
 	Areas map[string]AreaEntry `json:"areas,omitempty"`
+
+	// HomeArea names an entry in Areas whose geometry defines "home" for
+	// the foreign/domestic classification (geo_filter above), instead of
+	// maintaining a second, separately-drawn boundary that can drift out
+	// of sync with the area map (see AreaForPoint/AreaKeysForPoint).
+	// When set and the named area exists, it takes priority over any
+	// standalone GeoFilter value — see (*Server).getGeoFilter. Leave
+	// unset to keep using GeoFilter exactly as before.
+	HomeArea string `json:"homeArea,omitempty"`
 
 	Timestamps *TimestampConfig `json:"timestamps,omitempty"`
 
