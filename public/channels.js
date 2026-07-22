@@ -2278,8 +2278,8 @@
       // HMAC collision made the match ambiguous) — show it as unknown
       // rather than silently omitting the tag.
       const isTransportRoute = msg.routeType === 0 || msg.routeType === 3;
-      if (msg.scope) meta.push(`Scope: ${escapeHtml(msg.scope)}`);
-      else if (isTransportRoute) meta.push('Scope: unknown');
+      if (msg.scope) meta.push(`scope: ${escapeHtml(msg.scope)}`);
+      else if (isTransportRoute) meta.push('scope: unknown');
       // msg.area (set server-side from the message's own path[0]
       // entry-point repeater, not from the scope string) is where the
       // SENDER physically was — distinct from the scope-linked area
@@ -2287,7 +2287,7 @@
       // broad #dk scope. Only present when path[0] resolved unambiguously
       // (unique_prefix) to a positioned node; omitted otherwise, not
       // guessed.
-      if (msg.area) meta.push(`Area: ${escapeHtml(msg.area)}`);
+      if (msg.area) meta.push(`area: ${escapeHtml(msg.area)}`);
 
       const safeId = btoa(encodeURIComponent(sender));
       // #1367: emit BOTH the new chat-app class names (.ch-message /
