@@ -91,12 +91,16 @@ function makeAnalyticsSandbox(nodesFixture, opts) {
   ctx.initTabBar = () => {};
   ctx.IATA_COORDS_GEO = {};
   // fetch is what app.js's real api() ultimately calls -- routes by URL so
-  // the hop-depth endpoint can be stubbed independently of every other
-  // in-flight api() call (e.g. roles.js's own config fetch on load).
-  if (opts.hopDepthResponse !== undefined) {
+  // the hop-depth/scope-stats endpoints can be stubbed independently of
+  // every other in-flight api() call (e.g. roles.js's own config fetch on
+  // load).
+  if (opts.hopDepthResponse !== undefined || opts.scopeStatsResponse !== undefined) {
     ctx.fetch = (url) => {
       if (String(url).indexOf('/analytics/hop-depth') !== -1) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(opts.hopDepthResponse) });
+      }
+      if (String(url).indexOf('/scope-stats') !== -1) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(opts.scopeStatsResponse) });
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
     };
@@ -289,6 +293,66 @@ function fakeEl() {
     await ctx.window._analyticsRenderForeignTrafficTab(el);
     assert.ok(el.innerHTML.includes('RepeaterA'), 'tab should still render the repeater row');
     assert.ok(el.innerHTML.includes('Min Hops'), 'table structure should still include the hop columns');
+  });
+
+  console.log('\n=== analytics.js: bridgeRepeaterPubkeySet ===');
+
+  await testAsync('builds a publicKey -> true set from BridgeRepeater entries', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    const set = ctx.window._analyticsBridgeRepeaterPubkeySet([
+      { publicKey: 'pkBridge1', name: 'Bridge1', regions: ['eu', 'dk'], count: 12 },
+      { publicKey: 'pkBridge2', name: 'Bridge2', regions: ['dk', 'se'], count: 3 },
+    ]);
+    assert.strictEqual(set.pkBridge1, true);
+    assert.strictEqual(set.pkBridge2, true);
+    assert.strictEqual(set.pkNotABridge, undefined);
+  });
+
+  await testAsync('empty/null input returns an empty set, not a throw', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    [[], null, undefined].forEach((input) => {
+      const set = ctx.window._analyticsBridgeRepeaterPubkeySet(input);
+      assert.strictEqual(Object.keys(set).length, 0);
+    });
+  });
+
+  console.log('\n=== analytics.js: Foreign Traffic tab bridge-repeater badge ===');
+
+  await testAsync('a confirmed bridge repeater gets a Bridge badge on its row', async () => {
+    const ctx = makeAnalyticsSandbox([
+      { public_key: 'pkBridge', name: 'BridgeRepeater', role: 'repeater', unscoped_relay_count_24h: 20, relay_count_24h: 25 },
+      { public_key: 'pkPlain', name: 'PlainRepeater', role: 'repeater', unscoped_relay_count_24h: 15, relay_count_24h: 20 },
+    ], {
+      hopDepthResponse: { window: '24h', scopedHopDepth: [], unscopedHopDepth: [], unscopedByRepeater: [] },
+      scopeStatsResponse: {
+        bridgeRepeaters: [
+          { publicKey: 'pkBridge', name: 'BridgeRepeater', regions: ['eu', 'dk'], count: 7 },
+        ],
+      },
+    });
+    const el = fakeEl();
+    await ctx.window._analyticsRenderForeignTrafficTab(el);
+    const bridgeRowStart = el.innerHTML.indexOf('BridgeRepeater');
+    const bridgeRowEnd = el.innerHTML.indexOf('</tr>', bridgeRowStart);
+    assert.ok(el.innerHTML.slice(bridgeRowStart, bridgeRowEnd).includes('Bridge'), 'the bridge repeater row should carry a Bridge badge');
+
+    const plainRowStart = el.innerHTML.indexOf('PlainRepeater');
+    const plainRowEnd = el.innerHTML.indexOf('</tr>', plainRowStart);
+    const plainRowHtml = el.innerHTML.slice(plainRowStart, plainRowEnd);
+    assert.ok(!plainRowHtml.includes('badge'), 'a non-bridge repeater must not get the badge');
+  });
+
+  await testAsync('no bridge data (fetch failure or empty list) renders with no badges, no throw', async () => {
+    const ctx = makeAnalyticsSandbox([
+      { public_key: 'pkA', name: 'RepeaterA', role: 'repeater', unscoped_relay_count_24h: 5, relay_count_24h: 5 },
+    ], {
+      hopDepthResponse: { window: '24h', scopedHopDepth: [], unscopedHopDepth: [], unscopedByRepeater: [] },
+      scopeStatsResponse: {},
+    });
+    const el = fakeEl();
+    await ctx.window._analyticsRenderForeignTrafficTab(el);
+    assert.ok(el.innerHTML.includes('RepeaterA'));
+    assert.ok(!el.innerHTML.includes('badge'), 'no bridge data should mean no badges anywhere');
   });
 
   console.log('\n════════════════════════════════════════');

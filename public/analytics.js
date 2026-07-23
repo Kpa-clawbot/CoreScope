@@ -2723,6 +2723,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
     window._analyticsHopDepthPercentile = hopDepthPercentile;
     window._analyticsRenderHopDepthSectionHtml = renderHopDepthSectionHtml;
     window._analyticsHopDepthLookupByPubkey = hopDepthLookupByPubkey;
+    window._analyticsBridgeRepeaterPubkeySet = bridgeRepeaterPubkeySet;
   }
 
   // ─── Neighbor Graph Tab ─────────────────────────────────────────────────────
@@ -5539,6 +5540,18 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
     return byPK;
   }
 
+  // publicKey -> true for every BridgeRepeater (ScopeStatsResponse.bridgeRepeaters,
+  // see db.go) -- repeaters confirmed relaying for 2+ regions. Cross-referenced
+  // against the Foreign Traffic tab's unscoped-relay table so a high hop-depth
+  // reading at a bridge reads as expected cross-region traffic, not a leak: a
+  // bridge is SUPPOSED to see traffic that already traveled far from another
+  // region's scope, unlike a plain regional repeater seeing the same pattern.
+  function bridgeRepeaterPubkeySet(bridgeRepeaters) {
+    var byPK = {};
+    (bridgeRepeaters || []).forEach(function(b) { byPK[b.publicKey] = true; });
+    return byPK;
+  }
+
   function computeNodesWithoutScope(allNodes, cap, opts) {
     opts = opts || {};
     var noScopeNodes = allNodes.filter(function(n) { return !n.default_scope; });
@@ -5674,6 +5687,9 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
     // traffic that already traveled far, unscoped, before reaching it — the
     // stronger signal of an actual containment problem.
     var hopDepthByPubkey = {};
+    // publicKey -> true for confirmed bridge repeaters (2+ regions), populated
+    // by load() from /api/scope-stats. See bridgeRepeaterPubkeySet's doc comment.
+    var bridgePubkeys = {};
     function relaysHtml(relays, expanded) {
       if (relays.length === 0) {
         return '<p class="text-muted" style="font-size:0.85em">No repeater has relayed an unscoped flood packet in the last 24 hours.</p>';
@@ -5683,8 +5699,11 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         var total = n.relay_count_24h || 0;
         var unscoped = n.unscoped_relay_count_24h || 0;
         var hd = hopDepthByPubkey[n.public_key];
+        var bridgeBadge = bridgePubkeys[n.public_key]
+          ? ' <span class="badge" style="background:var(--accent);color:#fff;font-size:9px;padding:1px 5px" title="Confirmed relaying for 2+ regions — a high hop-depth reading here is expected cross-region traffic, not a containment leak">Bridge</span>'
+          : '';
         return '<tr>' +
-          '<td><a href="#/nodes/' + encodeURIComponent(n.public_key) + '">' + esc(n.name || n.public_key) + '</a></td>' +
+          '<td><a href="#/nodes/' + encodeURIComponent(n.public_key) + '">' + esc(n.name || n.public_key) + '</a>' + bridgeBadge + '</td>' +
           '<td>' + esc(n.role) + '</td>' +
           '<td>' + unscoped.toLocaleString() + '</td>' +
           '<td>' + total.toLocaleString() + '</td>' +
@@ -5735,6 +5754,10 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         // before isForeignNode reads it (see
         // test-analytics-foreign-traffic-tab.js's makeAnalyticsSandbox).
         const hopDepthPromise = api('/analytics/hop-depth?window=24h', { ttl: 30000 }).catch(function() { return null; });
+        // bridgeRepeaters is all-time regardless of window (see BridgeRepeater's
+        // doc comment) -- 24h here just reuses the same cached /scope-stats
+        // response the Scopes tab's default window already warms.
+        const bridgeStatsPromise = api('/scope-stats?window=24h', { ttl: 30000 }).catch(function() { return null; });
 
         const nodesResp = await fetchAllNodes('', { ttl: CLIENT_TTL.nodeList });
         const allNodes = nodesResp.nodes || nodesResp;
@@ -5762,6 +5785,8 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
 
         const hopData = await hopDepthPromise;
         hopDepthByPubkey = hopDepthLookupByPubkey(hopData && hopData.unscopedByRepeater);
+        const bridgeStats = await bridgeStatsPromise;
+        bridgePubkeys = bridgeRepeaterPubkeySet(bridgeStats && bridgeStats.bridgeRepeaters);
 
         el.innerHTML =
           '<h3 style="margin:0 0 4px">Foreign Traffic</h3>' +
