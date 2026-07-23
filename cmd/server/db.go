@@ -1517,6 +1517,170 @@ func (db *DB) GetTraces(hash string) ([]map[string]interface{}, error) {
 	return traces, nil
 }
 
+// PacketPathPoint is one hop's position along a packet's resolved relay
+// path, for map visualization (public/packet-path-map.js). Lat/Lon are
+// nil when that node has never advertised a GPS position -- the caller
+// draws a gap rather than guessing.
+type PacketPathPoint struct {
+	PublicKey string   `json:"publicKey"`
+	Name      string   `json:"name"`
+	Role      string   `json:"role,omitempty"`
+	Lat       *float64 `json:"lat"`
+	Lon       *float64 `json:"lon"`
+}
+
+// PacketPathObserver is the station that produced the deepest observation
+// of a packet path (see GetPacketPath), positioned from its configured
+// IATA code the same way the Wardriving tab positions observers -- not a
+// stored per-observer lat/lon column.
+type PacketPathObserver struct {
+	Name string   `json:"name"`
+	IATA string   `json:"iata,omitempty"`
+	Lat  *float64 `json:"lat"`
+	Lon  *float64 `json:"lon"`
+}
+
+// PacketPathResponse is the geographic relay path for one packet hash,
+// used to draw it on a map (the ping-bot reply's "View path" link).
+type PacketPathResponse struct {
+	Hash     string              `json:"hash"`
+	Hops     int                 `json:"hops"`
+	Points   []PacketPathPoint   `json:"points"`
+	Observer *PacketPathObserver `json:"observer,omitempty"`
+}
+
+// GetPacketPath resolves a packet's DEEPEST observation (the one with the
+// most hops -- same "farthest leg" reasoning as the ping-bot reply, see
+// pingBotReply's doc comment) to a geographic point sequence: each
+// relay's name/role/lat/lon in path order, plus the hearing observer's
+// position. A packet can have several observations (heard by more than
+// one station, possibly at different hop depths); this always picks the
+// one that traveled farthest, since that's the more informative path to
+// show on a map.
+func (db *DB) GetPacketPath(hash string) (*PacketPathResponse, error) {
+	if !db.hasResolvedPath {
+		return nil, fmt.Errorf("resolved_path not available on this server")
+	}
+	var querySQL string
+	if db.isV3 {
+		querySQL = `SELECT obs.name, obs.iata, o.resolved_path
+			FROM observations o
+			JOIN transmissions t ON t.id = o.transmission_id
+			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
+			WHERE t.hash = ? AND o.resolved_path IS NOT NULL AND o.resolved_path != ''`
+	} else {
+		querySQL = `SELECT o.observer_name, NULL, o.resolved_path
+			FROM observations o
+			JOIN transmissions t ON t.id = o.transmission_id
+			WHERE t.hash = ? AND o.resolved_path IS NOT NULL AND o.resolved_path != ''`
+	}
+	rows, err := db.conn.Query(querySQL, strings.ToLower(hash))
+	if err != nil {
+		return nil, fmt.Errorf("packet path query: %w", err)
+	}
+	defer rows.Close()
+
+	var bestPath []*string
+	var bestObserverName, bestObserverIATA sql.NullString
+	for rows.Next() {
+		var obsName, obsIATA, rpJSON sql.NullString
+		if err := rows.Scan(&obsName, &obsIATA, &rpJSON); err != nil {
+			continue
+		}
+		if !rpJSON.Valid {
+			continue
+		}
+		rp := unmarshalResolvedPath(rpJSON.String)
+		if len(rp) > len(bestPath) {
+			bestPath = rp
+			bestObserverName, bestObserverIATA = obsName, obsIATA
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("packet path iteration: %w", err)
+	}
+
+	resp := &PacketPathResponse{Hash: hash, Hops: len(bestPath), Points: []PacketPathPoint{}}
+	if len(bestPath) == 0 {
+		return resp, nil
+	}
+
+	pubkeys := make([]string, 0, len(bestPath))
+	for _, pk := range bestPath {
+		if pk != nil && *pk != "" {
+			pubkeys = append(pubkeys, *pk)
+		}
+	}
+	type nodeInfo struct {
+		name string
+		role string
+		lat  *float64
+		lon  *float64
+	}
+	nodeByPK := make(map[string]nodeInfo, len(pubkeys))
+	if len(pubkeys) > 0 {
+		placeholders := make([]byte, 0, len(pubkeys)*2)
+		args := make([]interface{}, len(pubkeys))
+		for i, pk := range pubkeys {
+			if i > 0 {
+				placeholders = append(placeholders, ',')
+			}
+			placeholders = append(placeholders, '?')
+			args[i] = pk
+		}
+		nodeRows, err := db.conn.Query(
+			"SELECT public_key, name, role, lat, lon FROM nodes WHERE public_key IN ("+string(placeholders)+")", args...)
+		if err == nil {
+			for nodeRows.Next() {
+				var pk string
+				var name, role sql.NullString
+				var lat, lon sql.NullFloat64
+				if nodeRows.Scan(&pk, &name, &role, &lat, &lon) == nil {
+					ni := nodeInfo{name: name.String, role: role.String}
+					if lat.Valid {
+						v := lat.Float64
+						ni.lat = &v
+					}
+					if lon.Valid {
+						v := lon.Float64
+						ni.lon = &v
+					}
+					nodeByPK[pk] = ni
+				}
+			}
+			nodeRows.Close()
+		}
+	}
+
+	for _, pk := range bestPath {
+		if pk == nil || *pk == "" {
+			continue
+		}
+		ni := nodeByPK[*pk]
+		name := ni.name
+		if name == "" {
+			name = *pk
+		}
+		resp.Points = append(resp.Points, PacketPathPoint{
+			PublicKey: *pk, Name: name, Role: ni.role, Lat: ni.lat, Lon: ni.lon,
+		})
+	}
+
+	if bestObserverName.Valid && bestObserverName.String != "" {
+		obs := &PacketPathObserver{Name: bestObserverName.String}
+		if bestObserverIATA.Valid {
+			obs.IATA = strings.ToUpper(strings.TrimSpace(bestObserverIATA.String))
+			if coord, ok := iataCoords[obs.IATA]; ok {
+				lat, lon := coord.Lat, coord.Lon
+				obs.Lat, obs.Lon = &lat, &lon
+			}
+		}
+		resp.Observer = obs
+	}
+
+	return resp, nil
+}
+
 // GetChannels returns channel list from GRP_TXT packets.
 // Queries transmissions directly (not a VIEW) to avoid observation-level
 // duplicates that could cause stale lastMessage when an older message has
@@ -1749,6 +1913,72 @@ func (db *DB) GetEncryptedChannels(region ...string) ([]map[string]interface{}, 
 // This avoids loading every observation row for a channel into Go memory
 // before paginating (issue #1225: 5703 tx × ~50 obs ≈ 275K rows → ~30s
 // for limit=50).
+// channelMentionPrefixRe strips a leading "@target " reply-address the
+// same way the frontend does (public/channels.js replyMatch) before
+// matching the ping trigger, so "@CoreScopeBot ping" triggers the same as
+// a bare "ping".
+var channelMentionPrefixRe = regexp.MustCompile(`^@[A-Za-z0-9_-]{1,32}\s+`)
+
+// pingTriggerWords are the exact (case-insensitive) message bodies that
+// trigger a pong reply. Mirrored by pingTriggerWords in
+// public/channels.js -- keep both lists in sync by hand.
+var pingTriggerWords = map[string]bool{
+	"ping":  true,
+	"/ping": true,
+}
+
+// isPingTrigger reports whether displayText, after stripping a leading
+// "@target " mention the same way the frontend does (public/channels.js
+// replyMatch), exactly matches one of pingTriggerWords.
+func isPingTrigger(displayText string) bool {
+	trigger := strings.TrimSpace(displayText)
+	trigger = channelMentionPrefixRe.ReplaceAllString(trigger, "")
+	return pingTriggerWords[strings.ToLower(strings.TrimSpace(trigger))]
+}
+
+// pingBotReply synthesizes a "pong" reply for a channel message whose
+// text matched isPingTrigger — CoreScope-side only, never transmitted
+// back onto the mesh (CoreScope has no publish path to a MeshCore
+// broker/radio). Purely a read-time annotation over data this message's
+// own row already carries (hop count + relay path, SNR, hearing
+// observer, region scope), not a persisted message.
+//
+// repeaterNames is the resolved relay path in hop order (element i is
+// hop i's node name, falling back to its pubkey/hash-prefix when a name
+// couldn't be resolved); nil/empty when hops == 0 or resolution wasn't
+// available -- the hop count itself is unaffected either way.
+func pingBotReply(hops int, snr sql.NullFloat64, observer, scope string, repeaterNames []string) map[string]interface{} {
+	parts := make([]string, 0, 4)
+	if hops > 0 {
+		s := "s"
+		if hops == 1 {
+			s = ""
+		}
+		hopDesc := fmt.Sprintf("%d hop%s", hops, s)
+		if len(repeaterNames) > 0 {
+			hopDesc += " (via " + strings.Join(repeaterNames, " → ") + ")"
+		}
+		parts = append(parts, hopDesc)
+	} else {
+		parts = append(parts, "0 hops (direct)")
+	}
+	if snr.Valid {
+		parts = append(parts, fmt.Sprintf("SNR %.1fdB", snr.Float64))
+	}
+	if observer != "" {
+		parts = append(parts, "heard by "+observer)
+	}
+	if scope != "" {
+		parts = append(parts, "scope "+scope)
+	}
+	return map[string]interface{}{
+		"sender": "CoreScopeBot",
+		"text":   "🏓 pong! " + strings.Join(parts, " · "),
+		"hops":   hops,
+		"snr":    nullFloat(snr),
+	}
+}
+
 func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region ...string) ([]map[string]interface{}, int, error) {
 	if limit <= 0 {
 		limit = 100
@@ -1870,10 +2100,17 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 	if db.hasScopeName {
 		scopeCol = ", t.scope_name"
 	}
+	// resolvedPathCol feeds the ping-bot reply's "via RepeaterA → RepeaterB"
+	// hop names (see the bulk-resolve pass below) -- optional like
+	// scopeCol since not every DB/test fixture has this column.
+	resolvedPathCol := ""
+	if db.hasResolvedPath {
+		resolvedPathCol = ", o.resolved_path"
+	}
 	var obsSQL string
 	if db.isV3 {
 		obsSQL = `SELECT o.id, t.id, t.hash, t.decoded_json, t.first_seen,
-				obs.id, obs.name, o.snr, o.path_json, o.timestamp, t.route_type` + scopeCol + `
+				obs.id, obs.name, o.snr, o.path_json, o.timestamp, t.route_type` + scopeCol + resolvedPathCol + `
 			FROM observations o
 			JOIN transmissions t ON t.id = o.transmission_id
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
@@ -1881,7 +2118,7 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 			ORDER BY o.id ASC`
 	} else {
 		obsSQL = `SELECT o.id, t.id, t.hash, t.decoded_json, t.first_seen,
-				o.observer_id, o.observer_name, o.snr, o.path_json, o.timestamp, t.route_type` + scopeCol + `
+				o.observer_id, o.observer_name, o.snr, o.path_json, o.timestamp, t.route_type` + scopeCol + resolvedPathCol + `
 			FROM observations o
 			JOIN transmissions t ON t.id = o.transmission_id
 			WHERE t.id IN (` + strings.Join(idPlaceholders, ",") + `)
@@ -1901,9 +2138,26 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 	}
 	msgMap := make(map[int]*msg, len(pageIDs))
 
+	// pendingPing collects a ping-triggering message's REACH across every
+	// observation of it, not just the first: hops/snr/resolvedPath track
+	// the DEEPEST (max-hop) observation seen so far -- how far the packet
+	// had propagated before the farthest-along observer heard it -- and
+	// observers is every distinct observer that heard it at all (breadth).
+	// A single arbitrary "first observation wins" data point understates
+	// both: two observers can hear the same flood at very different hop
+	// depths depending on which relay leg reached them.
+	type pendingPing struct {
+		hops         int
+		snr          sql.NullFloat64
+		resolvedPath []*string
+		observers    map[string]bool
+		scope        string
+	}
+	pendingPings := make(map[int]*pendingPing)
+
 	for rows.Next() {
 		var pktID, txID int
-		var pktHash, dj, fs, obsID, obsName, pathJSON sql.NullString
+		var pktHash, dj, fs, obsID, obsName, pathJSON, resolvedPathJSON sql.NullString
 		var snr sql.NullFloat64
 		var obsTs sql.NullInt64
 		var routeType sql.NullInt64
@@ -1912,16 +2166,53 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 		if db.hasScopeName {
 			scanArgs = append(scanArgs, &scopeName)
 		}
+		if db.hasResolvedPath {
+			scanArgs = append(scanArgs, &resolvedPathJSON)
+		}
 		if err := rows.Scan(scanArgs...); err != nil {
 			return nil, 0, err
 		}
 		if !dj.Valid {
 			continue
 		}
+
+		// Hop count, relay path, and hearing station for THIS observation
+		// row -- computed for every row (not just the first) so a ping's
+		// reach can be tracked across every station that heard it.
+		var hops int
+		var entryPrefix string
+		if pathJSON.Valid {
+			var h []string
+			if json.Unmarshal([]byte(pathJSON.String), &h) == nil {
+				hops = len(h)
+				if len(h) > 0 {
+					entryPrefix = h[0]
+				}
+			}
+		}
+		var resolvedPath []*string
+		if resolvedPathJSON.Valid {
+			resolvedPath = unmarshalResolvedPath(resolvedPathJSON.String)
+		}
+		observerName := ""
+		if obsName.Valid {
+			observerName = obsName.String
+		} else if obsID.Valid {
+			observerName = obsID.String
+		}
+
 		if existing, ok := msgMap[txID]; ok {
 			existing.Repeats++
 			if obsTs.Valid && obsTs.Int64 > existing.LatestEpoch {
 				existing.LatestEpoch = obsTs.Int64
+			}
+			if agg, ok := pendingPings[txID]; ok {
+				if observerName != "" {
+					agg.observers[observerName] = true
+				}
+				if hops > agg.hops {
+					agg.hops, agg.snr, agg.resolvedPath = hops, snr, resolvedPath
+				}
 			}
 			continue
 		}
@@ -1942,17 +2233,6 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 			if idx := strings.Index(text, ": "); idx > 0 && idx < 50 {
 				displaySender = text[:idx]
 				displayText = text[idx+2:]
-			}
-		}
-		var hops int
-		var entryPrefix string
-		if pathJSON.Valid {
-			var h []string
-			if json.Unmarshal([]byte(pathJSON.String), &h) == nil {
-				hops = len(h)
-				if len(h) > 0 {
-					entryPrefix = h[0]
-				}
 			}
 		}
 		senderTs := decoded["sender_timestamp"]
@@ -1978,12 +2258,70 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 		if obsTs.Valid {
 			m.LatestEpoch = obsTs.Int64
 		}
-		if obsName.Valid {
-			m.Data["observers"] = []string{obsName.String}
-		} else if obsID.Valid {
-			m.Data["observers"] = []string{obsID.String}
+		if observerName != "" {
+			m.Data["observers"] = []string{observerName}
+		}
+		if isPingTrigger(displayText) {
+			agg := &pendingPing{hops: hops, snr: snr, resolvedPath: resolvedPath, scope: scopeName.String, observers: map[string]bool{}}
+			if observerName != "" {
+				agg.observers[observerName] = true
+			}
+			pendingPings[txID] = agg
 		}
 		msgMap[txID] = m
+	}
+
+	// Bulk-resolve every pubkey referenced by any ping's DEEPEST relay path
+	// in ONE query, then build each pending reply's "via RepeaterA →
+	// RepeaterB" text plus its observer-breadth label. Names default to
+	// the raw pubkey/prefix when unresolved rather than being dropped, so
+	// the hop count and reply still make sense.
+	if len(pendingPings) > 0 {
+		pubkeySet := map[string]bool{}
+		for _, p := range pendingPings {
+			for _, pk := range p.resolvedPath {
+				if pk != nil && *pk != "" {
+					pubkeySet[*pk] = true
+				}
+			}
+		}
+		pubkeys := make([]string, 0, len(pubkeySet))
+		for pk := range pubkeySet {
+			pubkeys = append(pubkeys, pk)
+		}
+		names, _ := db.namesAndRolesForPubkeys(pubkeys)
+
+		for txID, p := range pendingPings {
+			var repeaterNames []string
+			for _, pk := range p.resolvedPath {
+				if pk == nil || *pk == "" {
+					continue
+				}
+				if name := names[*pk]; name != "" {
+					repeaterNames = append(repeaterNames, name)
+				} else {
+					repeaterNames = append(repeaterNames, *pk)
+				}
+			}
+			// Breadth: name the single observer when there's only one (as
+			// specific as before), otherwise report the count -- "heard by
+			// 4 observers" says more about actual reach than an arbitrarily
+			// picked single name once more than one observer heard it.
+			observerLabel := ""
+			switch len(p.observers) {
+			case 0:
+				// leave empty
+			case 1:
+				for name := range p.observers {
+					observerLabel = name
+				}
+			default:
+				observerLabel = fmt.Sprintf("%d observers", len(p.observers))
+			}
+			if m, ok := msgMap[txID]; ok {
+				m.Data["botReply"] = pingBotReply(p.hops, p.snr, observerLabel, p.scope, repeaterNames)
+			}
+		}
 	}
 
 	// Issue #1366 follow-up: emit batch sorted by LatestSeen ascending

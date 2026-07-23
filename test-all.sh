@@ -72,6 +72,8 @@ node test-issue-1770-mobile-row-clamp.js
 node test-issue-1849-trace-hashbytes.js
 node test-node-analytics-hop-chart.js
 node test-analytics-hop-depth-ui.js
+node test-channels-ping-bot-reply.js
+node test-packet-path-map.js
 
 echo ""
 echo "═══════════════════════════════════════"

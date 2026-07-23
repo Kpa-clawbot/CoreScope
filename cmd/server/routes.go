@@ -346,6 +346,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/observers/{id}", s.handleObserverDetail).Methods("GET")
 	r.HandleFunc("/api/observers", s.handleObservers).Methods("GET")
 	r.HandleFunc("/api/traces/{hash}", s.handleTraces).Methods("GET")
+	r.HandleFunc("/api/packets/{hash}/path", s.handlePacketPath).Methods("GET")
 	r.HandleFunc("/api/paths/inspect", s.handlePathInspect).Methods("POST")
 	r.HandleFunc("/api/iata-coords", s.handleIATACoords).Methods("GET")
 	r.HandleFunc("/api/audio-lab/buckets", s.handleAudioLabBuckets).Methods("GET")
@@ -2889,6 +2890,26 @@ func (s *Server) annotateMessageAreas(messages []map[string]interface{}) {
 	}
 }
 
+// appendAreaToBotReply folds a ping message's own resolved area (set by
+// annotateMessageAreas just above, which MUST run first) into its
+// botReply text. Area resolution needs server-level config (s.cfg.Areas)
+// that db.go's GetChannelMessages/pingBotReply don't have access to, so
+// this runs as a handler-level second pass instead.
+func appendAreaToBotReply(messages []map[string]interface{}) {
+	for _, m := range messages {
+		area, _ := m["area"].(string)
+		if area == "" {
+			continue
+		}
+		reply, ok := m["botReply"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		text, _ := reply["text"].(string)
+		reply["text"] = text + " · area " + area
+	}
+}
+
 func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 	region := r.URL.Query().Get("region")
 	includeEncrypted := r.URL.Query().Get("includeEncrypted") == "true"
@@ -2934,12 +2955,14 @@ func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.annotateMessageAreas(messages)
+		appendAreaToBotReply(messages)
 		writeJSON(w, ChannelMessagesResponse{Messages: messages, Total: total})
 		return
 	}
 	if s.store != nil {
 		messages, total := s.store.GetChannelMessages(hash, limit, offset, region)
 		s.annotateMessageAreas(messages)
+		appendAreaToBotReply(messages)
 		writeJSON(w, ChannelMessagesResponse{Messages: messages, Total: total})
 		return
 	}
@@ -3150,6 +3173,20 @@ func (s *Server) handleTraces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, TraceResponse{Traces: traces})
+}
+
+func (s *Server) handlePacketPath(w http.ResponseWriter, r *http.Request) {
+	hash := mux.Vars(r)["hash"]
+	if s.db == nil {
+		writeJSON(w, PacketPathResponse{Hash: hash, Points: []PacketPathPoint{}})
+		return
+	}
+	resp, err := s.db.GetPacketPath(hash)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, resp)
 }
 
 var iataCoords = map[string]IataCoord{

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -617,6 +618,89 @@ func TestGetTraces(t *testing.T) {
 	}
 	if len(traces) != 2 {
 		t.Errorf("expected 2 traces, got %d", len(traces))
+	}
+}
+
+// TestGetPacketPath covers the "View path" map data source: given a
+// packet hash, resolve its DEEPEST observation's relay path to
+// name/role/lat/lon per hop, plus the hearing observer's IATA-derived
+// position. Deliberately independent of seedTestData's fixtures.
+func TestGetPacketPath(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('obs1', 'Observer One', 'SJC')`)
+	db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('obs2', 'Observer Two', 'SFO')`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon) VALUES ('pkAlpha', 'RepeaterAlpha', 'repeater', 56.1, 10.2)`)
+	// pkBravo deliberately has NO nodes row -- exercises the raw-pubkey/no-position fallback.
+
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('AA', 'pathtest00000001', '2026-01-15T10:00:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"ping","sender":"Eve"}', '#ping')`)
+	// Shallow observation (obs1): 1 hop.
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, resolved_path, timestamp)
+		VALUES (1, 1, 9.0, -88, '["aa"]', '["pkAlpha"]', 1736935200)`)
+	// Deeper observation (obs2): 2 hops -- must win even though it's not first.
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, resolved_path, timestamp)
+		VALUES (1, 2, 4.0, -95, '["aa","bb"]', '["pkAlpha","pkBravo"]', 1736935260)`)
+
+	resp, err := db.GetPacketPath("pathtest00000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Hops != 2 {
+		t.Fatalf("Hops = %d, want 2 (the deeper observation)", resp.Hops)
+	}
+	if len(resp.Points) != 2 {
+		t.Fatalf("Points = %+v, want 2 entries", resp.Points)
+	}
+	if resp.Points[0].Name != "RepeaterAlpha" || resp.Points[0].Lat == nil || *resp.Points[0].Lat != 56.1 {
+		t.Errorf("Points[0] = %+v, want RepeaterAlpha at lat 56.1", resp.Points[0])
+	}
+	if resp.Points[1].PublicKey != "pkBravo" || resp.Points[1].Name != "pkBravo" || resp.Points[1].Lat != nil {
+		t.Errorf("Points[1] = %+v, want raw pubkey fallback with nil lat (no nodes row)", resp.Points[1])
+	}
+	if resp.Observer == nil || resp.Observer.Name != "Observer Two" {
+		t.Fatalf("Observer = %+v, want Observer Two (heard the deeper observation)", resp.Observer)
+	}
+	if resp.Observer.Lat == nil || *resp.Observer.Lat != 37.6213 {
+		t.Errorf("Observer.Lat = %v, want the SFO IATA coordinate (37.6213)", resp.Observer.Lat)
+	}
+}
+
+func TestGetPacketPath_NoResolvedPath(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('obs1', 'Observer One', 'SJC')`)
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('AA', 'pathtest00000002', '2026-01-15T10:00:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"ping","sender":"Eve"}', '#ping')`)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (1, 1, 9.0, -88, '["aa"]', 1736935200)`)
+
+	resp, err := db.GetPacketPath("pathtest00000002")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Points) != 0 {
+		t.Errorf("Points = %+v, want empty when no observation has a resolved_path", resp.Points)
+	}
+	if resp.Observer != nil {
+		t.Errorf("Observer = %+v, want nil when there's no resolved path", resp.Observer)
+	}
+}
+
+func TestGetPacketPath_UnknownHash(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	resp, err := db.GetPacketPath("doesnotexist0000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Hops != 0 || len(resp.Points) != 0 {
+		t.Errorf("expected an empty response for an unknown hash, got %+v", resp)
 	}
 }
 
@@ -1397,6 +1481,198 @@ func TestGetChannelMessagesNoSender(t *testing.T) {
 	}
 	if len(messages) != 1 {
 		t.Errorf("expected 1 message, got %d", len(messages))
+	}
+}
+
+// TestGetChannelMessages_PingBotReply covers the CoreScope-only "ping"
+// bot: a channel message whose text is exactly "ping" gets a synthetic
+// botReply attached (never transmitted back onto the mesh -- see
+// pingBotReply's doc comment), while ordinary messages don't.
+func TestGetChannelMessages_PingBotReply(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('obs1', 'Observer One', 'SJC')`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role) VALUES ('pkAlphaRepeater', 'RepeaterAlpha', 'repeater')`)
+	// pkBravoRepeater deliberately has NO nodes row -- exercises the
+	// unresolved-pubkey fallback (raw pubkey shown instead of a name).
+
+	// tx1: a plain chat message -- must NOT get a botReply.
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('AA', 'chanmsg00000001', '2026-01-15T10:00:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"just chatting","sender":"Alice"}', '#ping')`)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (1, 1, 9.0, -88, '["aa","bb"]', 1736935200)`)
+
+	// tx2: bare "ping" -- must get a botReply with hops=2, snr=8.2, observer,
+	// and the relay path resolved to "RepeaterAlpha → pkBravoRepeater"
+	// (second hop has no nodes row, so its raw pubkey is shown instead).
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('BB', 'chanmsg00000002', '2026-01-15T10:01:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"ping","sender":"Bob"}', '#ping')`)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, resolved_path, timestamp)
+		VALUES (2, 1, 8.2, -90, '["aa","bb"]', '["pkAlphaRepeater","pkBravoRepeater"]', 1736935260)`)
+
+	// tx3: "@CoreScopeBot ping" -- the mention-prefix must be stripped before matching.
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('CC', 'chanmsg00000003', '2026-01-15T10:02:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"@CoreScopeBot ping","sender":"Carol"}', '#ping')`)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (3, 1, 5.0, -95, '[]', 1736935320)`)
+
+	// tx4: "pinging" -- must NOT match (not an exact "ping").
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('DD', 'chanmsg00000004', '2026-01-15T10:03:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"pinging around","sender":"Dave"}', '#ping')`)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (4, 1, 3.0, -99, '[]', 1736935380)`)
+
+	// tx5: "/ping" -- the slash-command form must trigger too.
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('EE', 'chanmsg00000005', '2026-01-15T10:04:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"/ping","sender":"Frank"}', '#ping')`)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (5, 1, 6.0, -91, '["aa"]', 1736935440)`)
+
+	messages, total, err := db.GetChannelMessages("#ping", 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 5 {
+		t.Fatalf("expected 5 messages, got %d", total)
+	}
+
+	byText := map[string]map[string]interface{}{}
+	for _, m := range messages {
+		byText[m["text"].(string)] = m
+	}
+
+	if r := byText["just chatting"]["botReply"]; r != nil {
+		t.Errorf("plain chat message should not get a botReply, got %+v", r)
+	}
+	if r := byText["pinging around"]["botReply"]; r != nil {
+		t.Errorf("\"pinging\" should not match the exact \"ping\" trigger, got %+v", r)
+	}
+
+	pingReply, _ := byText["ping"]["botReply"].(map[string]interface{})
+	if pingReply == nil {
+		t.Fatal("bare \"ping\" message should get a botReply")
+	}
+	if pingReply["sender"] != "CoreScopeBot" {
+		t.Errorf("botReply sender = %v, want CoreScopeBot", pingReply["sender"])
+	}
+	if pingReply["hops"] != 2 {
+		t.Errorf("botReply hops = %v, want 2", pingReply["hops"])
+	}
+	replyText, _ := pingReply["text"].(string)
+	if !strings.Contains(replyText, "2 hops") || !strings.Contains(replyText, "8.2dB") || !strings.Contains(replyText, "Observer One") {
+		t.Errorf("botReply text = %q, want hops/SNR/observer mentioned", replyText)
+	}
+	if !strings.Contains(replyText, "via RepeaterAlpha → pkBravoRepeater") {
+		t.Errorf("botReply text = %q, want the resolved relay path (RepeaterAlpha for the known node, raw pubkey fallback for the unresolved one)", replyText)
+	}
+
+	mentionReply, _ := byText["@CoreScopeBot ping"]["botReply"].(map[string]interface{})
+	if mentionReply == nil {
+		t.Fatal("\"@CoreScopeBot ping\" should get a botReply (mention prefix stripped before matching)")
+	}
+	if mentionReply["hops"] != 0 {
+		t.Errorf("mention-prefixed ping botReply hops = %v, want 0 (empty path)", mentionReply["hops"])
+	}
+
+	slashReply, _ := byText["/ping"]["botReply"].(map[string]interface{})
+	if slashReply == nil {
+		t.Fatal("\"/ping\" should get a botReply -- it's in pingTriggerWords alongside bare \"ping\"")
+	}
+	if slashReply["sender"] != "CoreScopeBot" {
+		t.Errorf("\"/ping\" botReply sender = %v, want CoreScopeBot", slashReply["sender"])
+	}
+}
+
+// TestGetChannelMessages_PingBotReply_MultiObservation covers a single
+// ping transmission heard by TWO different observers at
+// DIFFERENT hop depths (normal in a mesh: one station may hear an early
+// relay leg, another a later one). The botReply must report the DEEPEST
+// (max-hop) observation's path/SNR -- not whichever observation happened
+// to be scanned first -- and the breadth ("N observers") once more than
+// one distinct station heard it, per pingBotReply's doc comment.
+func TestGetChannelMessages_PingBotReply_MultiObservation(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('obs1', 'Observer One', 'SJC')`)
+	db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('obs2', 'Observer Two', 'SFO')`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role) VALUES ('pkAlphaRepeater', 'RepeaterAlpha', 'repeater')`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role) VALUES ('pkCharlieRepeater', 'RepeaterCharlie', 'repeater')`)
+
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('EE', 'chanmsg00000005', '2026-01-15T10:04:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"ping","sender":"Eve"}', '#ping')`)
+	// obs1 (scanned first, o.id=1): shallow leg, 1 hop. transmission_id=1
+	// since this is the first (only) transmission inserted in this fresh DB.
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, resolved_path, timestamp)
+		VALUES (1, 1, 9.0, -88, '["aa"]', '["pkAlphaRepeater"]', 1736935440)`)
+	// obs2 (scanned second, o.id=2): deeper leg, 3 hops -- must win despite
+	// being neither first nor having the highest SNR.
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, resolved_path, timestamp)
+		VALUES (1, 2, 4.5, -99, '["aa","bb","cc"]', '["pkAlphaRepeater","pkBravoRepeater","pkCharlieRepeater"]', 1736935445)`)
+
+	messages, _, err := db.GetChannelMessages("#ping", 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reply map[string]interface{}
+	for _, m := range messages {
+		if m["text"] == "ping" {
+			reply, _ = m["botReply"].(map[string]interface{})
+		}
+	}
+	if reply == nil {
+		t.Fatal("expected a botReply on the ping message")
+	}
+	if reply["hops"] != 3 {
+		t.Errorf("botReply hops = %v, want 3 (the deeper of the two observations)", reply["hops"])
+	}
+	text, _ := reply["text"].(string)
+	if !strings.Contains(text, "SNR 4.5dB") {
+		t.Errorf("botReply text = %q, want the SNR paired with the deeper (3-hop) observation, not the shallower one's 9.0dB", text)
+	}
+	if !strings.Contains(text, "via RepeaterAlpha → pkBravoRepeater → RepeaterCharlie") {
+		t.Errorf("botReply text = %q, want the deeper observation's resolved relay path", text)
+	}
+	if !strings.Contains(text, "heard by 2 observers") {
+		t.Errorf("botReply text = %q, want breadth reported as \"2 observers\" now that more than one observer heard it", text)
+	}
+}
+
+// TestAppendAreaToBotReply covers appendAreaToBotReply (routes.go): the
+// handler-level pass that folds a ping message's resolved "area" (set by
+// annotateMessageAreas, which needs server config unavailable to db.go)
+// into its already-built botReply text.
+func TestAppendAreaToBotReply(t *testing.T) {
+	withArea := map[string]interface{}{
+		"area":     "Aarhus",
+		"botReply": map[string]interface{}{"sender": "CoreScopeBot", "text": "🏓 pong! 2 hops"},
+	}
+	noArea := map[string]interface{}{
+		"botReply": map[string]interface{}{"sender": "CoreScopeBot", "text": "🏓 pong! 0 hops (direct)"},
+	}
+	noBotReply := map[string]interface{}{"area": "Aarhus", "text": "just chatting"}
+
+	appendAreaToBotReply([]map[string]interface{}{withArea, noArea, noBotReply})
+
+	gotText := withArea["botReply"].(map[string]interface{})["text"].(string)
+	if !strings.Contains(gotText, "area Aarhus") {
+		t.Errorf("botReply text = %q, want area appended", gotText)
+	}
+
+	gotNoAreaText := noArea["botReply"].(map[string]interface{})["text"].(string)
+	if strings.Contains(gotNoAreaText, "area") {
+		t.Errorf("botReply text = %q, want unchanged when message has no area", gotNoAreaText)
+	}
+
+	if _, ok := noBotReply["botReply"]; ok {
+		t.Error("a message with no botReply must not gain one")
 	}
 }
 
