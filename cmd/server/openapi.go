@@ -91,6 +91,10 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/nodes/{pubkey}/health":    {Summary: "Get node health", Tag: "nodes"},
 		"GET /api/nodes/{pubkey}/paths":     {Summary: "Get node routing paths", Tag: "nodes"},
 		"GET /api/nodes/{pubkey}/analytics": {Summary: "Get node analytics", Description: "Per-node packet counts, timing, and RF stats.", Tag: "nodes"},
+		"GET /api/nodes/{pubkey}/hop_analytics": {Summary: "Get node hop-count analytics", Description: "Issue #1812. For each recent transmission that passed through this node as a relay, its hop-count AT THIS NODE — the node's own 0-based index within the packet's resolved relay path, i.e. the number MeshCore firmware compares against flood_max/flood_max_advert/flood_max_unscoped in allowPacketForward. Deliberately not the same number as /analytics' hopDistribution field, which is path length to whichever observer reported the packet (a different, unrelated distance). Only transmissions with a resolved relay path are included.", Tag: "nodes", Response: schemaRef("NodeHopAnalyticsResponse"),
+			QueryParams: []paramMeta{
+				{Name: "days", Description: "Time window in days, 1-365.", Type: "integer"},
+			}},
 		"GET /api/nodes/{pubkey}/neighbors": {Summary: "Get node neighbors", Description: "Returns the queried node's first-hop neighbors with affinity scores and observation metadata (count, SNR, distance, observers). Ambiguous edges carry candidate pubkeys.", Tag: "nodes", Response: schemaRef("NodeNeighborsResponse")},
 
 		// Analytics
@@ -264,6 +268,23 @@ func componentSchemas() map[string]interface{} {
 				"node":               str("The queried node's public key."),
 				"neighbors":          map[string]interface{}{"type": "array", "items": schemaRef("NeighborEntry")},
 				"total_observations": map[string]interface{}{"type": "integer"},
+			},
+		},
+		"HopAnalyticsPacket": map[string]interface{}{
+			"type":        "object",
+			"description": "One transmission that passed through the queried node as a relay hop (issue #1812).",
+			"properties": map[string]interface{}{
+				"hash":      str("Packet hash."),
+				"tsMs":      map[string]interface{}{"type": "integer", "description": "First-seen timestamp, Unix milliseconds."},
+				"hops":      map[string]interface{}{"type": "integer", "description": "0-based index of the queried node within the packet's resolved relay path — the value MeshCore firmware compares against flood_max in allowPacketForward. NOT distance to the reporting observer."},
+				"transport": map[string]interface{}{"type": "string", "enum": []string{"flood", "flood_advert", "flood_unscoped", "direct", "unknown"}, "description": "Which firmware flood.max* knob (if any) caps this packet's hop count."},
+				"scoped":    map[string]interface{}{"type": "boolean", "description": "Whether the transmission carried a region scope (TRANSPORT_FLOOD/TRANSPORT_DIRECT)."},
+			},
+		},
+		"NodeHopAnalyticsResponse": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"packets": map[string]interface{}{"type": "array", "items": schemaRef("HopAnalyticsPacket")},
 			},
 		},
 	}

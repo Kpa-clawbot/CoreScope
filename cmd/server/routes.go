@@ -292,6 +292,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/nodes/{pubkey}/health", s.handleNodeHealth).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/paths", s.handleNodePaths).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/analytics", s.handleNodeAnalytics).Methods("GET")
+	r.HandleFunc("/api/nodes/{pubkey}/hop_analytics", s.handleNodeHopAnalytics).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/battery", s.handleNodeBattery).Methods("GET")
 	r.HandleFunc("/api/nodes/clock-skew", s.handleFleetClockSkew).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/clock-skew", s.handleNodeClockSkew).Methods("GET")
@@ -2310,6 +2311,41 @@ func (s *Server) handleNodeAnalytics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeError(w, 404, "Not found")
+}
+
+// handleNodeHopAnalytics answers upstream issue #1812: hop-count (this
+// node's own index within each packet's resolved relay path, not distance
+// to whichever observer reported it) for tuning the firmware's
+// flood.max / flood.max.advert / flood.max.unscoped knobs. See
+// GetNodeHopAnalytics's doc comment for the full derivation.
+func (s *Server) handleNodeHopAnalytics(w http.ResponseWriter, r *http.Request) {
+	pubkey := mux.Vars(r)["pubkey"]
+	if s.cfg.IsBlacklisted(pubkey) {
+		writeError(w, 404, "Not found")
+		return
+	}
+	if s.isPubkeyHidden(pubkey) {
+		writeError(w, 404, "Not found")
+		return
+	}
+	days := queryInt(r, "days", 7)
+	if days < 1 {
+		days = 1
+	}
+	if days > 365 {
+		days = 365
+	}
+
+	if s.store == nil {
+		writeError(w, 404, "Not found")
+		return
+	}
+	result, err := s.store.GetNodeHopAnalytics(pubkey, days)
+	if err != nil || result == nil {
+		writeError(w, 404, "Not found")
+		return
+	}
+	writeJSON(w, result)
 }
 
 func (s *Server) handleNodeClockSkew(w http.ResponseWriter, r *http.Request) {
