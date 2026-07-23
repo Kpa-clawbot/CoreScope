@@ -1969,10 +1969,10 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 	// pendingPing collects a ping-triggering message's REACH across every
 	// observation of it, not just the first: hops/snr/resolvedPath track
 	// the DEEPEST (max-hop) observation seen so far -- how far the packet
-	// had propagated before the farthest-along station heard it -- and
-	// observers is every distinct station that heard it at all (breadth).
+	// had propagated before the farthest-along observer heard it -- and
+	// observers is every distinct observer that heard it at all (breadth).
 	// A single arbitrary "first observation wins" data point understates
-	// both: two stations can hear the same flood at very different hop
+	// both: two observers can hear the same flood at very different hop
 	// depths depending on which relay leg reached them.
 	type pendingPing struct {
 		hops         int
@@ -2131,10 +2131,10 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 					repeaterNames = append(repeaterNames, *pk)
 				}
 			}
-			// Breadth: name the single station when there's only one (as
+			// Breadth: name the single observer when there's only one (as
 			// specific as before), otherwise report the count -- "heard by
-			// 4 stations" says more about actual reach than an arbitrarily
-			// picked single name once more than one station heard it.
+			// 4 observers" says more about actual reach than an arbitrarily
+			// picked single name once more than one observer heard it.
 			observerLabel := ""
 			switch len(p.observers) {
 			case 0:
@@ -2144,7 +2144,7 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 					observerLabel = name
 				}
 			default:
-				observerLabel = fmt.Sprintf("%d stations", len(p.observers))
+				observerLabel = fmt.Sprintf("%d observers", len(p.observers))
 			}
 			if m, ok := msgMap[txID]; ok {
 				m.Data["botReply"] = pingBotReply(p.hops, p.snr, observerLabel, p.scope, repeaterNames)

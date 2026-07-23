@@ -1492,11 +1492,11 @@ func TestGetChannelMessages_PingBotReply(t *testing.T) {
 }
 
 // TestGetChannelMessages_PingBotReply_MultiObservation covers a single
-// ping transmission heard by TWO different observer stations at
+// ping transmission heard by TWO different observers at
 // DIFFERENT hop depths (normal in a mesh: one station may hear an early
 // relay leg, another a later one). The botReply must report the DEEPEST
 // (max-hop) observation's path/SNR -- not whichever observation happened
-// to be scanned first -- and the breadth ("N stations") once more than
+// to be scanned first -- and the breadth ("N observers") once more than
 // one distinct station heard it, per pingBotReply's doc comment.
 func TestGetChannelMessages_PingBotReply_MultiObservation(t *testing.T) {
 	db := setupTestDB(t)
@@ -1542,8 +1542,8 @@ func TestGetChannelMessages_PingBotReply_MultiObservation(t *testing.T) {
 	if !strings.Contains(text, "via RepeaterAlpha → pkBravoRepeater → RepeaterCharlie") {
 		t.Errorf("botReply text = %q, want the deeper observation's resolved relay path", text)
 	}
-	if !strings.Contains(text, "heard by 2 stations") {
-		t.Errorf("botReply text = %q, want breadth reported as \"2 stations\" now that more than one station heard it", text)
+	if !strings.Contains(text, "heard by 2 observers") {
+		t.Errorf("botReply text = %q, want breadth reported as \"2 observers\" now that more than one observer heard it", text)
 	}
 }
 
