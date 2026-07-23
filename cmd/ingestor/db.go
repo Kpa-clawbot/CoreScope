@@ -861,9 +861,7 @@ func (s *Store) prepareStatements() error {
 	s.stmtUpdateNodeTelemetry, err = s.db.Prepare(`
 		UPDATE nodes SET
 			battery_mv = COALESCE(?, battery_mv),
-			temperature_c = COALESCE(?, temperature_c),
-			feat1 = COALESCE(?, feat1),
-			feat2 = COALESCE(?, feat2)
+			temperature_c = COALESCE(?, temperature_c)
 		WHERE public_key = ?
 	`)
 	if err != nil {
@@ -1047,29 +1045,16 @@ func (s *Store) MarkNodeForeign(pubKey string) error {
 	return err
 }
 
-// UpdateNodeTelemetry updates battery, temperature, and the raw ADVERT
-// Feat1/Feat2 capability bytes for a node. feat1/feat2 are the wire
-// capability bits MeshCore firmware sends per AdvertDataHelpers.h when the
-// ADVERT's HasFeat1/HasFeat2 flags are set -- previously decoded per-packet
-// but never persisted per-node (see decoder.go's Payload.Feat1/Feat2 doc).
-// COALESCE-based like battery/temperature: a nil here leaves the existing
-// stored value untouched rather than clobbering it with NULL, since not
-// every ADVERT carries every field.
-func (s *Store) UpdateNodeTelemetry(pubKey string, batteryMv *int, temperatureC *float64, feat1 *int, feat2 *int) error {
-	var bv, tc, f1, f2 interface{}
+// UpdateNodeTelemetry updates battery and temperature for a node.
+func (s *Store) UpdateNodeTelemetry(pubKey string, batteryMv *int, temperatureC *float64) error {
+	var bv, tc interface{}
 	if batteryMv != nil {
 		bv = *batteryMv
 	}
 	if temperatureC != nil {
 		tc = *temperatureC
 	}
-	if feat1 != nil {
-		f1 = *feat1
-	}
-	if feat2 != nil {
-		f2 = *feat2
-	}
-	_, err := s.stmtUpdateNodeTelemetry.Exec(bv, tc, f1, f2, pubKey)
+	_, err := s.stmtUpdateNodeTelemetry.Exec(bv, tc, pubKey)
 	if err != nil {
 		s.Stats.WriteErrors.Add(1)
 	}

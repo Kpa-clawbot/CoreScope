@@ -18,12 +18,6 @@ func TestFirstSeen_1166_HandleNodesSurface(t *testing.T) {
 	if _, err := db.conn.Exec(`ALTER TABLE nodes ADD COLUMN foreign_advert INTEGER DEFAULT 0`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.conn.Exec(`ALTER TABLE nodes ADD COLUMN feat1 INTEGER`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.conn.Exec(`ALTER TABLE nodes ADD COLUMN feat2 INTEGER`); err != nil {
-		t.Fatal(err)
-	}
 
 	pk := "cccc000000000000000000000000000000000000000000000000000000000000"
 	first := time.Now().Add(-72 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")

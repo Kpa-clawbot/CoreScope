@@ -816,9 +816,9 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 					log.Printf("MQTT [%s] advert count error: %v", tag, err)
 				}
 			}
-			// Update telemetry + raw capability bytes if present in advert
-			if decoded.Payload.BatteryMv != nil || decoded.Payload.TemperatureC != nil || decoded.Payload.Feat1 != nil || decoded.Payload.Feat2 != nil {
-				if err := store.UpdateNodeTelemetry(decoded.Payload.PubKey, decoded.Payload.BatteryMv, decoded.Payload.TemperatureC, decoded.Payload.Feat1, decoded.Payload.Feat2); err != nil {
+			// Update telemetry if present in advert
+			if decoded.Payload.BatteryMv != nil || decoded.Payload.TemperatureC != nil {
+				if err := store.UpdateNodeTelemetry(decoded.Payload.PubKey, decoded.Payload.BatteryMv, decoded.Payload.TemperatureC); err != nil {
 					log.Printf("MQTT [%s] node telemetry update error: %v", tag, err)
 				}
 			}

@@ -20,12 +20,6 @@ func TestUsefulnessAxes_HandleNodesSurface(t *testing.T) {
 	if _, err := db.conn.Exec(`ALTER TABLE nodes ADD COLUMN foreign_advert INTEGER DEFAULT 0`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.conn.Exec(`ALTER TABLE nodes ADD COLUMN feat1 INTEGER`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.conn.Exec(`ALTER TABLE nodes ADD COLUMN feat2 INTEGER`); err != nil {
-		t.Fatal(err)
-	}
 
 	pks := []string{
 		"aaaa000000000000000000000000000000000000000000000000000000000000",

@@ -153,7 +153,7 @@ func (db *DB) detectSchema() {
 // nodeSelectCols returns the SELECT column list for nodes queries.
 // When hasDefaultScope is true, default_scope is appended as the last column.
 func (db *DB) nodeSelectCols() string {
-	cols := "public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert, feat1, feat2"
+	cols := "public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert"
 	if db.hasDefaultScope {
 		cols += ", default_scope"
 	}
@@ -243,12 +243,6 @@ type Node struct {
 	AdvertCount  int      `json:"advert_count"`
 	BatteryMv    *int     `json:"battery_mv"`
 	TemperatureC *float64 `json:"temperature_c"`
-	// Feat1/Feat2 are the raw ADVERT capability bytes (wire bits per
-	// MeshCore firmware's AdvertDataHelpers.h), present only when the
-	// advert's HasFeat1/HasFeat2 flags were set. CoreScope does not
-	// decode individual bits — these are the raw uint16 values as sent.
-	Feat1 *int `json:"feat1"`
-	Feat2 *int `json:"feat2"`
 }
 
 // Observer represents a row from the observers table.
@@ -2502,10 +2496,9 @@ func (db *DB) scanNodeRow(rows *sql.Rows) map[string]interface{} {
 	var batteryMv sql.NullInt64
 	var temperatureC sql.NullFloat64
 	var foreign sql.NullInt64
-	var feat1, feat2 sql.NullInt64
 	var defaultScope sql.NullString
 
-	scanArgs := []interface{}{&pk, &name, &role, &lat, &lon, &lastSeen, &firstSeen, &advertCount, &batteryMv, &temperatureC, &foreign, &feat1, &feat2}
+	scanArgs := []interface{}{&pk, &name, &role, &lat, &lon, &lastSeen, &firstSeen, &advertCount, &batteryMv, &temperatureC, &foreign}
 	if db.hasDefaultScope {
 		scanArgs = append(scanArgs, &defaultScope)
 	}
@@ -2535,16 +2528,6 @@ func (db *DB) scanNodeRow(rows *sql.Rows) map[string]interface{} {
 		m["temperature_c"] = temperatureC.Float64
 	} else {
 		m["temperature_c"] = nil
-	}
-	if feat1.Valid {
-		m["feat1"] = int(feat1.Int64)
-	} else {
-		m["feat1"] = nil
-	}
-	if feat2.Valid {
-		m["feat2"] = int(feat2.Int64)
-	} else {
-		m["feat2"] = nil
 	}
 	if db.hasDefaultScope {
 		m["default_scope"] = nullStr(defaultScope)

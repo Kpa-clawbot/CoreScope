@@ -1664,8 +1664,6 @@
             ${stats.avgSnr != null ? `<dt>Avg SNR</dt><dd>${Number(stats.avgSnr).toFixed(1)} dB</dd>` : ''}
             ${stats.avgHops ? `<dt>Avg Hops</dt><dd>${stats.avgHops}</dd>` : ''}
             ${hasLoc ? `<dt>Location</dt><dd>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</dd>` : ''}
-            ${n.feat1 != null ? `<dt title="Raw ADVERT capability byte (MeshCore firmware AdvertDataHelpers.h). Undecoded -- shown as-is.">Feat1</dt><dd class="mono">0x${Number(n.feat1).toString(16).padStart(4, '0')}</dd>` : ''}
-            ${n.feat2 != null ? `<dt title="Raw ADVERT capability byte (MeshCore firmware AdvertDataHelpers.h). Undecoded -- shown as-is.">Feat2</dt><dd class="mono">0x${Number(n.feat2).toString(16).padStart(4, '0')}</dd>` : ''}
           </dl>
         </div>
 

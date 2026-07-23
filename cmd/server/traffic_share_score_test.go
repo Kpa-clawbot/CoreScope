@@ -24,12 +24,6 @@ func TestTrafficShareScore_HandleNodesSurface(t *testing.T) {
 	if _, err := db.conn.Exec(`ALTER TABLE nodes ADD COLUMN foreign_advert INTEGER DEFAULT 0`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.conn.Exec(`ALTER TABLE nodes ADD COLUMN feat1 INTEGER`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.conn.Exec(`ALTER TABLE nodes ADD COLUMN feat2 INTEGER`); err != nil {
-		t.Fatal(err)
-	}
 
 	// Three repeaters on a line L-pk-R so the middle node `pk` is a cut
 	// vertex: bridge/coverage/redundancy all > 0 while it relays no traffic.
@@ -125,12 +119,6 @@ func TestTrafficShareScore_NodeDetail(t *testing.T) {
 	db := setupCapabilityTestDB(t)
 	defer db.conn.Close()
 	if _, err := db.conn.Exec(`ALTER TABLE nodes ADD COLUMN foreign_advert INTEGER DEFAULT 0`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.conn.Exec(`ALTER TABLE nodes ADD COLUMN feat1 INTEGER`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.conn.Exec(`ALTER TABLE nodes ADD COLUMN feat2 INTEGER`); err != nil {
 		t.Fatal(err)
 	}
 

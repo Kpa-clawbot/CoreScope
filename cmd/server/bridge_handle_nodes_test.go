@@ -17,15 +17,9 @@ import (
 func TestBridgeScore_HandleNodesSurface(t *testing.T) {
 	db := setupCapabilityTestDB(t)
 	defer db.conn.Close()
-	// handleNodes/db.GetNodes selects foreign_advert/feat1/feat2 columns
-	// not in the minimal capability-test schema.
+	// handleNodes/db.GetNodes selects a foreign_advert column not in
+	// the minimal capability-test schema.
 	if _, err := db.conn.Exec(`ALTER TABLE nodes ADD COLUMN foreign_advert INTEGER DEFAULT 0`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.conn.Exec(`ALTER TABLE nodes ADD COLUMN feat1 INTEGER`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.conn.Exec(`ALTER TABLE nodes ADD COLUMN feat2 INTEGER`); err != nil {
 		t.Fatal(err)
 	}
 

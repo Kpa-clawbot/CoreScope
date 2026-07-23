@@ -79,9 +79,6 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensureMultibyteCapColumns(rw, logf); err != nil {
 		return fmt.Errorf("ensure multibyte_cap columns: %w", err)
 	}
-	if err := ensureFeat1Feat2Columns(rw, logf); err != nil {
-		return fmt.Errorf("ensure feat1/feat2 columns: %w", err)
-	}
 	if err := ensureObserverNaiveClockColumns(rw, logf); err != nil {
 		return fmt.Errorf("ensure observers naive-clock columns: %w", err)
 	}
@@ -153,12 +150,6 @@ func AssertReady(ro *sql.DB) error {
 	// enrichment, ingestor's RunMultibyteCapPersist is the only writer.
 	mustCol("nodes", "multibyte_sup")
 	mustCol("nodes", "multibyte_evidence")
-	// Raw ADVERT capability bytes (Feat1/Feat2) -- owned by ingestor, see
-	// ensureFeat1Feat2Columns.
-	mustCol("nodes", "feat1")
-	mustCol("nodes", "feat2")
-	mustCol("inactive_nodes", "feat1")
-	mustCol("inactive_nodes", "feat2")
 	mustCol("inactive_nodes", "multibyte_sup")
 	mustCol("inactive_nodes", "multibyte_evidence")
 	// Issue #1478: per-observer naive-clock skew tracking. Server reads
@@ -528,34 +519,6 @@ func ensureMultibyteCapColumns(rw *sql.DB, logf Logger) error {
 				return fmt.Errorf("add %s.multibyte_evidence: %w", table, err)
 			}
 			logf("[dbschema] added multibyte_evidence column to %s", table)
-		}
-	}
-	return nil
-}
-
-// ensureFeat1Feat2Columns adds the raw ADVERT Feat1/Feat2 capability-byte
-// columns to nodes / inactive_nodes. MeshCore firmware sends these as
-// wire capability bits (per AdvertDataHelpers.h) on every ADVERT that has
-// HasFeat1/HasFeat2 set, but CoreScope only ever decoded them into the
-// per-packet Payload struct and discarded them rather than persisting a
-// per-node value — this closes that gap. Nullable: absent until the next
-// ADVERT with the corresponding flag set arrives for that node (a repeat
-// of the battery_mv/temperature_c nullability, which are also only
-// present on sensor-role ADVERTs).
-func ensureFeat1Feat2Columns(rw *sql.DB, logf Logger) error {
-	for _, table := range []string{"nodes", "inactive_nodes"} {
-		for _, col := range []string{"feat1", "feat2"} {
-			has, err := TableHasColumn(rw, table, col)
-			if err != nil {
-				return fmt.Errorf("inspect %s.%s: %w", table, col, err)
-			}
-			if !has {
-				if _, err := rw.Exec(fmt.Sprintf(
-					"ALTER TABLE %s ADD COLUMN %s INTEGER", table, col)); err != nil {
-					return fmt.Errorf("add %s.%s: %w", table, col, err)
-				}
-				logf("[dbschema] added %s column to %s", col, table)
-			}
 		}
 	}
 	return nil

@@ -195,8 +195,6 @@ func componentSchemas() map[string]interface{} {
 				"flood_advert_count_7d":    map[string]interface{}{"type": "integer", "description": "Distinct FLOOD adverts originated in the last 7 days (zero-hop adverts excluded). Present on the node detail endpoint."},
 				"battery_mv":               map[string]interface{}{"type": "integer", "nullable": true},
 				"temperature_c":            map[string]interface{}{"type": "number", "nullable": true},
-				"feat1":                    map[string]interface{}{"type": "integer", "nullable": true, "description": "Raw ADVERT Feat1 capability byte (wire bits per MeshCore firmware's AdvertDataHelpers.h), present only when the node's most recent advert carrying it had the HasFeat1 flag set. CoreScope does not decode individual bits -- this is the raw uint16 value as sent."},
-				"feat2":                    map[string]interface{}{"type": "integer", "nullable": true, "description": "Raw ADVERT Feat2 capability byte, same caveats as feat1."},
 				"relay_active":             map[string]interface{}{"type": "boolean", "description": "Repeater/room only: relayed traffic within the active window."},
 				"relay_count_1h":           map[string]interface{}{"type": "integer", "description": "Repeater/room only: relay-hop appearances in the last hour."},
 				"relay_count_24h":          map[string]interface{}{"type": "integer", "description": "Repeater/room only: relay-hop appearances in the last 24 hours."},

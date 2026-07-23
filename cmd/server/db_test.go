@@ -33,9 +33,7 @@ func setupTestDB(t *testing.T) *DB {
 			advert_count INTEGER DEFAULT 0,
 			battery_mv INTEGER,
 			temperature_c REAL,
-			foreign_advert INTEGER DEFAULT 0,
-			feat1 INTEGER,
-			feat2 INTEGER
+			foreign_advert INTEGER DEFAULT 0
 		);
 
 		CREATE TABLE observers (
@@ -1214,9 +1212,7 @@ func setupTestDBV2(t *testing.T) *DB {
 			advert_count INTEGER DEFAULT 0,
 			battery_mv INTEGER,
 			temperature_c REAL,
-			foreign_advert INTEGER DEFAULT 0,
-			feat1 INTEGER,
-			feat2 INTEGER
+			foreign_advert INTEGER DEFAULT 0
 		);
 
 		CREATE TABLE observers (
@@ -1765,9 +1761,9 @@ func TestNodeTelemetryFields(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	// Insert node with telemetry data + raw ADVERT capability bytes
-	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, feat1, feat2)
-		VALUES ('pk_telem1', 'SensorNode', 'sensor', 37.0, -122.0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 5, 3700, 28.5, 18, 52)`)
+	// Insert node with telemetry data
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c)
+		VALUES ('pk_telem1', 'SensorNode', 'sensor', 37.0, -122.0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 5, 3700, 28.5)`)
 
 	// Test via GetNodeByPubkey
 	node, err := db.GetNodeByPubkey("pk_telem1")
@@ -1783,12 +1779,6 @@ func TestNodeTelemetryFields(t *testing.T) {
 	if node["temperature_c"] != 28.5 {
 		t.Errorf("temperature_c=%v, want 28.5", node["temperature_c"])
 	}
-	if node["feat1"] != 18 {
-		t.Errorf("feat1=%v, want 18", node["feat1"])
-	}
-	if node["feat2"] != 52 {
-		t.Errorf("feat2=%v, want 52", node["feat2"])
-	}
 
 	// Test via GetNodes
 	nodes, _, _, err := db.GetNodes(50, 0, "sensor", "", "", "", "", "")
@@ -1801,12 +1791,6 @@ func TestNodeTelemetryFields(t *testing.T) {
 	if nodes[0]["battery_mv"] != 3700 {
 		t.Errorf("GetNodes battery_mv=%v, want 3700", nodes[0]["battery_mv"])
 	}
-	if nodes[0]["feat1"] != 18 {
-		t.Errorf("GetNodes feat1=%v, want 18", nodes[0]["feat1"])
-	}
-	if nodes[0]["feat2"] != 52 {
-		t.Errorf("GetNodes feat2=%v, want 52", nodes[0]["feat2"])
-	}
 
 	// Test node without telemetry — fields should be nil
 	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen, first_seen, advert_count)
@@ -1817,12 +1801,6 @@ func TestNodeTelemetryFields(t *testing.T) {
 	}
 	if node2["temperature_c"] != nil {
 		t.Errorf("expected nil temperature_c for node without telemetry, got %v", node2["temperature_c"])
-	}
-	if node2["feat1"] != nil {
-		t.Errorf("expected nil feat1 for node without a Feat1-carrying advert, got %v", node2["feat1"])
-	}
-	if node2["feat2"] != nil {
-		t.Errorf("expected nil feat2 for node without a Feat2-carrying advert, got %v", node2["feat2"])
 	}
 }
 
