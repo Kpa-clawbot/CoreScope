@@ -1751,7 +1751,7 @@ func (db *DB) GetEncryptedChannels(region ...string) ([]map[string]interface{}, 
 // for limit=50).
 // channelMentionPrefixRe strips a leading "@target " reply-address the
 // same way the frontend does (public/channels.js replyMatch) before
-// matching the ping trigger, so "@MeshviewBot ping" triggers the same as
+// matching the ping trigger, so "@CoreScopeBot ping" triggers the same as
 // a bare "ping".
 var channelMentionPrefixRe = regexp.MustCompile(`^@[A-Za-z0-9_-]{1,32}\s+`)
 
@@ -1800,7 +1800,7 @@ func pingBotReply(hops int, snr sql.NullFloat64, observer, scope string, repeate
 		parts = append(parts, "scope "+scope)
 	}
 	return map[string]interface{}{
-		"sender": "MeshviewBot",
+		"sender": "CoreScopeBot",
 		"text":   "🏓 pong! " + strings.Join(parts, " · "),
 		"hops":   hops,
 		"snr":    nullFloat(snr),

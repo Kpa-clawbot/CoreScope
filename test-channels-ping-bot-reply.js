@@ -86,10 +86,10 @@ test('exact "ping" (any case) triggers a reply', () => {
   assert.ok(fn('  ping  ', 1, 5, 'Obs') !== null, 'surrounding whitespace should be trimmed');
 });
 
-test('a mention prefix like "@MeshviewBot ping" is stripped before matching', () => {
+test('a mention prefix like "@CoreScopeBot ping" is stripped before matching', () => {
   const { ctx } = makeSandbox();
   const fn = ctx.window._channelsPingBotReplyForTest;
-  assert.ok(fn('@MeshviewBot ping', 0, null, null) !== null);
+  assert.ok(fn('@CoreScopeBot ping', 0, null, null) !== null);
 });
 
 test('"pinging" or other substrings do not match (exact trigger only)', () => {
@@ -104,7 +104,7 @@ test('reply text includes hops, SNR, and observer when present', () => {
   const { ctx } = makeSandbox();
   const fn = ctx.window._channelsPingBotReplyForTest;
   const r = fn('ping', 3, 8.25, 'Observer One');
-  assert.strictEqual(r.sender, 'MeshviewBot');
+  assert.strictEqual(r.sender, 'CoreScopeBot');
   assert.ok(r.text.includes('3 hops'), r.text);
   assert.ok(r.text.includes('SNR 8.3dB') || r.text.includes('SNR 8.2dB'), r.text);
   assert.ok(r.text.includes('heard by Observer One'), r.text);
@@ -147,13 +147,13 @@ test('a message with botReply renders a distinct bot bubble with the reply text'
   ctx.window._channelsSetStateForTest({ messages: [
     {
       sender: 'Bob', text: 'ping', timestamp: '2026-01-15T10:01:00Z',
-      botReply: { sender: 'MeshviewBot', text: '🏓 pong! 2 hops · SNR 8.2dB · heard by Observer One', hops: 2, snr: 8.2 },
+      botReply: { sender: 'CoreScopeBot', text: '🏓 pong! 2 hops · SNR 8.2dB · heard by Observer One', hops: 2, snr: 8.2 },
     },
   ] });
   ctx.window._channelsRenderMessagesForTest();
   const html = chMessagesEl.innerHTML;
   assert.ok(html.includes('ch-bot-message'), 'should render the distinct bot-message class');
-  assert.ok(html.includes('MeshviewBot'), 'should show the bot sender name');
+  assert.ok(html.includes('CoreScopeBot'), 'should show the bot sender name');
   assert.ok(html.includes('2 hops'), 'should include the hop count from the reply text');
   assert.ok(html.includes('SNR 8.2dB'), 'should include the SNR from the reply text');
 });
@@ -161,7 +161,7 @@ test('a message with botReply renders a distinct bot bubble with the reply text'
 test('the "not sent to the mesh" caveat is always present on a bot bubble', () => {
   const { ctx, chMessagesEl } = makeSandbox();
   ctx.window._channelsSetStateForTest({ messages: [
-    { sender: 'Bob', text: 'ping', timestamp: '2026-01-15T10:01:00Z', botReply: { sender: 'MeshviewBot', text: 'pong', hops: 0 } },
+    { sender: 'Bob', text: 'ping', timestamp: '2026-01-15T10:01:00Z', botReply: { sender: 'CoreScopeBot', text: 'pong', hops: 0 } },
   ] });
   ctx.window._channelsRenderMessagesForTest();
   assert.ok(chMessagesEl.innerHTML.includes('Not sent to the mesh'), 'the caveat must be visible so this is never mistaken for a real mesh reply');
@@ -184,7 +184,7 @@ test('botReply.text and .sender are HTML-escaped (observer names are operator-co
 test('the bot bubble renders immediately after its triggering message, not before other messages', () => {
   const { ctx, chMessagesEl } = makeSandbox();
   ctx.window._channelsSetStateForTest({ messages: [
-    { sender: 'Bob', text: 'ping', timestamp: '2026-01-15T10:01:00Z', botReply: { sender: 'MeshviewBot', text: 'pong', hops: 0 } },
+    { sender: 'Bob', text: 'ping', timestamp: '2026-01-15T10:01:00Z', botReply: { sender: 'CoreScopeBot', text: 'pong', hops: 0 } },
     { sender: 'Carol', text: 'after', timestamp: '2026-01-15T10:02:00Z' },
   ] });
   ctx.window._channelsRenderMessagesForTest();

@@ -343,7 +343,7 @@
     if (observer) parts.push('heard by ' + observer);
     if (scope) parts.push('scope ' + scope);
     if (area) parts.push('area ' + area);
-    return { sender: 'MeshviewBot', text: '🏓 pong! ' + parts.join(' · '), hops: hops, snr: snr };
+    return { sender: 'CoreScopeBot', text: '🏓 pong! ' + parts.join(' · '), hops: hops, snr: snr };
   }
   function getSenderColor(name) {
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
@@ -2329,7 +2329,7 @@
       const botReplyHtml = msg.botReply ? `<div class="ch-msg ch-message ch-bot-message">
         <div class="ch-avatar" aria-hidden="true" style="background:var(--text-muted)">🤖</div>
         <div class="ch-msg-content ch-message-content">
-          <div class="ch-msg-sender ch-message-sender" style="color:var(--text-muted)">${escapeHtml(msg.botReply.sender || 'MeshviewBot')}</div>
+          <div class="ch-msg-sender ch-message-sender" style="color:var(--text-muted)">${escapeHtml(msg.botReply.sender || 'CoreScopeBot')}</div>
           <div class="ch-msg-bubble ch-message-bubble">${escapeHtml(msg.botReply.text || '')}</div>
           <div class="ch-msg-meta ch-message-meta">Not sent to the mesh — CoreScope-only reply</div>
         </div>

@@ -1430,10 +1430,10 @@ func TestGetChannelMessages_PingBotReply(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, resolved_path, timestamp)
 		VALUES (2, 1, 8.2, -90, '["aa","bb"]', '["pkAlphaRepeater","pkBravoRepeater"]', 1736935260)`)
 
-	// tx3: "@MeshviewBot ping" -- the mention-prefix must be stripped before matching.
+	// tx3: "@CoreScopeBot ping" -- the mention-prefix must be stripped before matching.
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
 		VALUES ('CC', 'chanmsg00000003', '2026-01-15T10:02:00Z', 1, 5,
-		'{"type":"CHAN","channel":"#ping","text":"@MeshviewBot ping","sender":"Carol"}', '#ping')`)
+		'{"type":"CHAN","channel":"#ping","text":"@CoreScopeBot ping","sender":"Carol"}', '#ping')`)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (3, 1, 5.0, -95, '[]', 1736935320)`)
 
@@ -1468,8 +1468,8 @@ func TestGetChannelMessages_PingBotReply(t *testing.T) {
 	if pingReply == nil {
 		t.Fatal("bare \"ping\" message should get a botReply")
 	}
-	if pingReply["sender"] != "MeshviewBot" {
-		t.Errorf("botReply sender = %v, want MeshviewBot", pingReply["sender"])
+	if pingReply["sender"] != "CoreScopeBot" {
+		t.Errorf("botReply sender = %v, want CoreScopeBot", pingReply["sender"])
 	}
 	if pingReply["hops"] != 2 {
 		t.Errorf("botReply hops = %v, want 2", pingReply["hops"])
@@ -1482,9 +1482,9 @@ func TestGetChannelMessages_PingBotReply(t *testing.T) {
 		t.Errorf("botReply text = %q, want the resolved relay path (RepeaterAlpha for the known node, raw pubkey fallback for the unresolved one)", replyText)
 	}
 
-	mentionReply, _ := byText["@MeshviewBot ping"]["botReply"].(map[string]interface{})
+	mentionReply, _ := byText["@CoreScopeBot ping"]["botReply"].(map[string]interface{})
 	if mentionReply == nil {
-		t.Fatal("\"@MeshviewBot ping\" should get a botReply (mention prefix stripped before matching)")
+		t.Fatal("\"@CoreScopeBot ping\" should get a botReply (mention prefix stripped before matching)")
 	}
 	if mentionReply["hops"] != 0 {
 		t.Errorf("mention-prefixed ping botReply hops = %v, want 0 (empty path)", mentionReply["hops"])
@@ -1498,10 +1498,10 @@ func TestGetChannelMessages_PingBotReply(t *testing.T) {
 func TestAppendAreaToBotReply(t *testing.T) {
 	withArea := map[string]interface{}{
 		"area":     "Aarhus",
-		"botReply": map[string]interface{}{"sender": "MeshviewBot", "text": "🏓 pong! 2 hops"},
+		"botReply": map[string]interface{}{"sender": "CoreScopeBot", "text": "🏓 pong! 2 hops"},
 	}
 	noArea := map[string]interface{}{
-		"botReply": map[string]interface{}{"sender": "MeshviewBot", "text": "🏓 pong! 0 hops (direct)"},
+		"botReply": map[string]interface{}{"sender": "CoreScopeBot", "text": "🏓 pong! 0 hops (direct)"},
 	}
 	noBotReply := map[string]interface{}{"area": "Aarhus", "text": "just chatting"}
 
