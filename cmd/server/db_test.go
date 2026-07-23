@@ -1527,12 +1527,19 @@ func TestGetChannelMessages_PingBotReply(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (4, 1, 3.0, -99, '[]', 1736935380)`)
 
+	// tx5: "/ping" -- the slash-command form must trigger too.
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('EE', 'chanmsg00000005', '2026-01-15T10:04:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"/ping","sender":"Frank"}', '#ping')`)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (5, 1, 6.0, -91, '["aa"]', 1736935440)`)
+
 	messages, total, err := db.GetChannelMessages("#ping", 100, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if total != 4 {
-		t.Fatalf("expected 4 messages, got %d", total)
+	if total != 5 {
+		t.Fatalf("expected 5 messages, got %d", total)
 	}
 
 	byText := map[string]map[string]interface{}{}
@@ -1571,6 +1578,14 @@ func TestGetChannelMessages_PingBotReply(t *testing.T) {
 	}
 	if mentionReply["hops"] != 0 {
 		t.Errorf("mention-prefixed ping botReply hops = %v, want 0 (empty path)", mentionReply["hops"])
+	}
+
+	slashReply, _ := byText["/ping"]["botReply"].(map[string]interface{})
+	if slashReply == nil {
+		t.Fatal("\"/ping\" should get a botReply -- it's in pingTriggerWords alongside bare \"ping\"")
+	}
+	if slashReply["sender"] != "CoreScopeBot" {
+		t.Errorf("\"/ping\" botReply sender = %v, want CoreScopeBot", slashReply["sender"])
 	}
 }
 

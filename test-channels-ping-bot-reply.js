@@ -86,6 +86,14 @@ test('exact "ping" (any case) triggers a reply', () => {
   assert.ok(fn('  ping  ', 1, 5, 'Obs') !== null, 'surrounding whitespace should be trimmed');
 });
 
+test('"/ping" (the slash-command form) also triggers, alongside bare "ping"', () => {
+  const { ctx } = makeSandbox();
+  const fn = ctx.window._channelsPingBotReplyForTest;
+  assert.ok(fn('/ping', 1, 5, 'Obs') !== null);
+  assert.ok(fn('/PING', 1, 5, 'Obs') !== null, 'case-insensitive like the bare form');
+  assert.strictEqual(fn('/pingx', 1, 5, 'Obs'), null, 'still an exact match, not a prefix match');
+});
+
 test('a mention prefix like "@CoreScopeBot ping" is stripped before matching', () => {
   const { ctx } = makeSandbox();
   const fn = ctx.window._channelsPingBotReplyForTest;

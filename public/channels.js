@@ -335,9 +335,12 @@
   // path (repeater names) -- the live WS broadcast doesn't carry a
   // per-packet resolved_path, only REST-loaded history does (via
   // GetChannelMessages). scope/area ARE available live and are included.
+  // pingTriggerWords mirrors pingTriggerWords in cmd/server/db.go -- keep
+  // both lists in sync by hand.
+  var pingTriggerWords = { 'ping': true, '/ping': true };
   function pingBotReply(text, hops, snr, observer, scope, area) {
     var trigger = String(text || '').trim().replace(/^@[A-Za-z0-9_-]{1,32}\s+/, '').trim();
-    if (trigger.toLowerCase() !== 'ping') return null;
+    if (!pingTriggerWords[trigger.toLowerCase()]) return null;
     var parts = [hops > 0 ? (hops + ' hop' + (hops === 1 ? '' : 's')) : '0 hops (direct)'];
     if (snr !== null && snr !== undefined) parts.push('SNR ' + Number(snr).toFixed(1) + 'dB');
     if (observer) parts.push('heard by ' + observer);
@@ -2324,7 +2327,8 @@
       const safeId = btoa(encodeURIComponent(sender));
 
       // Ping-bot reply (server-synthesized in GetChannelMessages when this
-      // message's text is exactly "ping" -- see pingBotReply in db.go).
+      // message's text matches a trigger word (pingTriggerWords) -- see
+      // pingBotReply in db.go).
       // CoreScope-only: never transmitted back onto the mesh, since
       // CoreScope has no publish path to a MeshCore broker/radio. The
       // "Not sent to the mesh" caveat is load-bearing, not decoration --

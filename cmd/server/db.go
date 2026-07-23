@@ -1919,13 +1919,21 @@ func (db *DB) GetEncryptedChannels(region ...string) ([]map[string]interface{}, 
 // a bare "ping".
 var channelMentionPrefixRe = regexp.MustCompile(`^@[A-Za-z0-9_-]{1,32}\s+`)
 
+// pingTriggerWords are the exact (case-insensitive) message bodies that
+// trigger a pong reply. Mirrored by pingTriggerWords in
+// public/channels.js -- keep both lists in sync by hand.
+var pingTriggerWords = map[string]bool{
+	"ping":  true,
+	"/ping": true,
+}
+
 // isPingTrigger reports whether displayText, after stripping a leading
 // "@target " mention the same way the frontend does (public/channels.js
-// replyMatch), is exactly "ping".
+// replyMatch), exactly matches one of pingTriggerWords.
 func isPingTrigger(displayText string) bool {
 	trigger := strings.TrimSpace(displayText)
 	trigger = channelMentionPrefixRe.ReplaceAllString(trigger, "")
-	return strings.EqualFold(strings.TrimSpace(trigger), "ping")
+	return pingTriggerWords[strings.ToLower(strings.TrimSpace(trigger))]
 }
 
 // pingBotReply synthesizes a "pong" reply for a channel message whose
