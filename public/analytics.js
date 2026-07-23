@@ -4494,16 +4494,18 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
     var winKey = 'scopes_window';
     var selectedWindow = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(winKey)) || '24h';
 
-    // #1852: the tab grew to 12 stacked sections (windowed adoption stats,
+    // #1852: the tab grew to stacked sections (windowed adoption stats,
     // all-time region breakdowns, all-time node/repeater hygiene lists) —
-    // grouped into 3 sub-tabs so a visitor sees one coherent screen at a
-    // time instead of one long scroll. Purely presentational: all three
-    // groups' data still loads together (one #scope-stats fetch + the two
-    // hygiene sections' own fetchAllNodes calls), only DOM visibility is
-    // gated on the active sub-tab. The 1h/24h/7d window picker only
-    // affects the Overview group (the all-time Regions/Hygiene sections
-    // ignore it entirely), so it lives inside that panel, not above the
-    // sub-tab bar.
+    // grouped into sub-tabs so a visitor sees one coherent screen at a
+    // time instead of one long scroll. Purely presentational: every
+    // group's data still loads together (one #scope-stats fetch + the
+    // hop-depth fetch + the two hygiene sections' own fetchAllNodes
+    // calls), only DOM visibility is gated on the active sub-tab. The
+    // 1h/24h/7d window picker affects Overview and Hop Depth (both
+    // windowed) but not the all-time Regions/Hygiene groups, so each
+    // windowed panel gets its own copy of the picker buttons rather than
+    // one shared control above the sub-tab bar — every button still
+    // drives the same selectedWindow/load(), see the click listener below.
     var subtabKey = 'scopes_subtab';
     var selectedSubtab = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(subtabKey)) || 'overview';
 
@@ -4537,6 +4539,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         '<div class="analytics-tabs" id="scopesSubtabs" style="margin-bottom:12px">' +
           [
             { key: 'overview', label: 'Overview' },
+            { key: 'hopdepth', label: 'Hop Depth' },
             { key: 'regions', label: 'Regions' },
             { key: 'hygiene', label: 'Hygiene' },
           ].map(function(t) {
@@ -4551,7 +4554,6 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           '</div>' +
           '<div id="scopes-cards" class="stats-grid" style="margin-bottom:16px"></div>' +
           '<div id="scopes-highlights" style="margin-bottom:16px"></div>' +
-          '<div id="scopes-hop-depth" style="margin-bottom:16px"></div>' +
           '<div id="scopes-hourly" style="margin-bottom:16px"></div>' +
           '<div id="scopes-channel-messages" style="margin-bottom:16px"></div>' +
           '<div id="scopes-channel-adoption" style="margin-bottom:16px"></div>' +
@@ -4564,6 +4566,14 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
             '</table>' +
             '<div id="scopes-chart"></div>' +
           '</details>' +
+        '</div>' +
+        '<div id="scopes-panel-hopdepth" style="display:' + (selectedSubtab === 'hopdepth' ? '' : 'none') + '">' +
+          '<div style="margin-bottom:12px">' +
+            ['1h', '24h', '7d'].map(function(v) {
+              return '<button class="tab-btn' + (selectedWindow === v ? ' active' : '') + '" data-win="' + v + '">' + v + '</button>';
+            }).join('') +
+          '</div>' +
+          '<div id="scopes-hop-depth"></div>' +
         '</div>' +
         '<div id="scopes-panel-regions" style="display:' + (selectedSubtab === 'regions' ? '' : 'none') + '">' +
           '<div id="scopes-area-adoption"></div>' +
@@ -4586,7 +4596,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           selectedSubtab = btn.dataset.subtab;
           if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(subtabKey, selectedSubtab);
           subtabsEl.querySelectorAll('[data-subtab]').forEach(function(b) { b.classList.toggle('active', b.dataset.subtab === selectedSubtab); });
-          ['overview', 'regions', 'hygiene'].forEach(function(key) {
+          ['overview', 'hopdepth', 'regions', 'hygiene'].forEach(function(key) {
             var panel = document.getElementById('scopes-panel-' + key);
             if (panel) panel.style.display = key === selectedSubtab ? '' : 'none';
           });
