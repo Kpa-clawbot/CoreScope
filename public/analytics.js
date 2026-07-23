@@ -2719,6 +2719,9 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
     window._analyticsStopWardrivingRefresh = _stopWardrivingRefresh;
     window._analyticsComputeNodesWithoutScope = computeNodesWithoutScope;
     window._analyticsComputeRepeatersNeverRelayingScope = computeRepeatersNeverRelayingScope;
+    window._analyticsHopDepthBucketStats = hopDepthBucketStats;
+    window._analyticsRenderHopDepthSectionHtml = renderHopDepthSectionHtml;
+    window._analyticsHopDepthLookupByPubkey = hopDepthLookupByPubkey;
   }
 
   // ─── Neighbor Graph Tab ─────────────────────────────────────────────────────
@@ -4548,6 +4551,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           '</div>' +
           '<div id="scopes-cards" class="stats-grid" style="margin-bottom:16px"></div>' +
           '<div id="scopes-highlights" style="margin-bottom:16px"></div>' +
+          '<div id="scopes-hop-depth" style="margin-bottom:16px"></div>' +
           '<div id="scopes-hourly" style="margin-bottom:16px"></div>' +
           '<div id="scopes-channel-messages" style="margin-bottom:16px"></div>' +
           '<div id="scopes-channel-adoption" style="margin-bottom:16px"></div>' +
@@ -4936,6 +4940,22 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
               '</div>';
           }).join('') +
         '</div>';
+      }
+
+      // Flood-containment check: is scoping actually working, i.e. does
+      // scoped traffic travel fewer relay hops than unscoped traffic before
+      // a repeater's flood.max cap kicks in? Same 0-based per-node hop
+      // index as /api/nodes/{pubkey}/hop_analytics (issue #1812) — NOT the
+      // unrelated observer-distance hopDistribution field.
+      var hopDepthEl = document.getElementById('scopes-hop-depth');
+      var hopDepthData = null;
+      try {
+        hopDepthData = await api('/analytics/hop-depth?window=' + encodeURIComponent(w), { ttl: 30000 });
+      } catch (e) {
+        hopDepthData = null;
+      }
+      if (hopDepthEl) {
+        hopDepthEl.innerHTML = renderHopDepthSectionHtml(hopDepthData);
       }
 
       // Channel-messages-only breakdown: same scoped/unscoped/unknown
@@ -5386,6 +5406,102 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       '</div>';
   }
 
+  // Weighted median + total from a HopDepthBucket[] (see GetHopDepthAnalytics).
+  function hopDepthBucketStats(buckets) {
+    var total = 0;
+    (buckets || []).forEach(function(b) { total += b.count; });
+    if (!total) return { total: 0, median: null };
+    var sorted = (buckets || []).slice().sort(function(a, b) { return a.hops - b.hops; });
+    var cum = 0, median = null;
+    sorted.forEach(function(b) {
+      cum += b.count;
+      if (median === null && cum >= total / 2) median = b.hops;
+    });
+    return { total: total, median: median };
+  }
+
+  // Renders the scoped-vs-unscoped hop-depth comparison (Scopes tab
+  // Overview): two stat cards (median hop, sample size) plus a grouped bar
+  // chart across hop values 0..max, normalized to the taller of the two
+  // series at each hop. The whole point is to answer "is region scoping
+  // actually containing flood propagation" — scoped traffic clustering at
+  // a lower median hop than unscoped is the expected/healthy shape.
+  function renderHopDepthSectionHtml(hopData) {
+    if (!hopData || (!hopData.scopedHopDepth && !hopData.unscopedHopDepth)) {
+      return '';
+    }
+    var scoped = hopData.scopedHopDepth || [];
+    var unscoped = hopData.unscopedHopDepth || [];
+    var scopedStats = hopDepthBucketStats(scoped);
+    var unscopedStats = hopDepthBucketStats(unscoped);
+    if (!scopedStats.total && !unscopedStats.total) {
+      return '<h4 style="margin:0 0 4px">Flood Containment: Scoped vs Unscoped Hop Depth</h4>' +
+        '<p class="text-muted" style="font-size:0.85em">No relay-hop data in this window.</p>';
+    }
+
+    var maxHops = 0;
+    scoped.concat(unscoped).forEach(function(b) { if (b.hops > maxHops) maxHops = b.hops; });
+    var scopedByHop = {}, unscopedByHop = {};
+    scoped.forEach(function(b) { scopedByHop[b.hops] = b.count; });
+    unscoped.forEach(function(b) { unscopedByHop[b.hops] = b.count; });
+    var maxCount = 1;
+    for (var h = 0; h <= maxHops; h++) {
+      maxCount = Math.max(maxCount, scopedByHop[h] || 0, unscopedByHop[h] || 0);
+    }
+
+    var rows = '';
+    for (var hi = 0; hi <= maxHops; hi++) {
+      var sc = scopedByHop[hi] || 0, un = unscopedByHop[hi] || 0;
+      if (!sc && !un) continue;
+      var scW = (sc / maxCount * 100).toFixed(1);
+      var unW = (un / maxCount * 100).toFixed(1);
+      rows += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">' +
+        '<div style="width:44px;font-size:11px;text-align:right" class="text-muted">' + hi + ' hop' + (hi === 1 ? '' : 's') + '</div>' +
+        '<div style="flex:1;display:flex;flex-direction:column;gap:1px">' +
+          '<div style="display:flex;align-items:center;gap:4px">' +
+            '<div style="height:7px;width:' + scW + '%;background:var(--accent);min-width:' + (sc ? '2px' : '0') + '"></div>' +
+            '<span style="font-size:10px" class="text-muted">' + sc.toLocaleString() + '</span>' +
+          '</div>' +
+          '<div style="display:flex;align-items:center;gap:4px">' +
+            '<div style="height:7px;width:' + unW + '%;background:var(--text-muted);min-width:' + (un ? '2px' : '0') + '"></div>' +
+            '<span style="font-size:10px" class="text-muted">' + un.toLocaleString() + '</span>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }
+
+    return '<h4 style="margin:0 0 4px">Flood Containment: Scoped vs Unscoped Hop Depth</h4>' +
+      '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">' +
+        'How many relay hops packets travel before reaching a repeater, split by whether they carried a region scope (TRANSPORT_FLOOD/TRANSPORT_DIRECT) or not (plain FLOOD). If scoping is containing traffic as intended, Scoped should cluster at fewer hops than Unscoped &mdash; a similar or higher scoped median means scope boundaries aren&rsquo;t actually limiting propagation.' +
+      '</p>' +
+      '<div class="stats-grid" style="margin-bottom:10px">' +
+        [
+          { label: 'Scoped Median Hop', value: scopedStats.median === null ? '—' : scopedStats.median.toLocaleString(), note: scopedStats.total.toLocaleString() + ' samples' },
+          { label: 'Unscoped Median Hop', value: unscopedStats.median === null ? '—' : unscopedStats.median.toLocaleString(), note: unscopedStats.total.toLocaleString() + ' samples' },
+        ].map(function(c) {
+          return '<div class="stat-card"><div class="stat-value">' + c.value + '</div>' +
+            '<div class="stat-label">' + c.label + '</div>' +
+            '<div class="stat-note text-muted" style="font-size:11px">' + c.note + '</div>' +
+            '</div>';
+        }).join('') +
+      '</div>' +
+      '<div style="display:flex;gap:10px;margin-bottom:4px;font-size:11px" class="text-muted">' +
+        '<span><span style="display:inline-block;width:8px;height:8px;background:var(--accent);margin-right:3px"></span>Scoped</span>' +
+        '<span><span style="display:inline-block;width:8px;height:8px;background:var(--text-muted);margin-right:3px"></span>Unscoped</span>' +
+      '</div>' +
+      rows;
+  }
+
+  // publicKey -> RepeaterUnscopedHopDepth lookup from
+  // HopDepthAnalyticsResponse.unscopedByRepeater (see GetHopDepthAnalytics),
+  // used to enrich the Foreign Traffic tab's unscoped-relay table with how
+  // far that traffic had already traveled before reaching each repeater.
+  function hopDepthLookupByPubkey(unscopedByRepeater) {
+    var byPK = {};
+    (unscopedByRepeater || []).forEach(function(r) { byPK[r.publicKey] = r; });
+    return byPK;
+  }
+
   function computeNodesWithoutScope(allNodes, cap, opts) {
     opts = opts || {};
     var noScopeNodes = allNodes.filter(function(n) { return !n.default_scope; });
@@ -5514,6 +5630,13 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
     function isForeignNode(n) {
       return !nodePassesGeoFilter(n.lat, n.lon, window.MC_GEO_FILTER);
     }
+    // publicKey -> RepeaterUnscopedHopDepth, populated by load() from
+    // /api/analytics/hop-depth. Enriches the volume-only unscoped_relay_count_24h
+    // metric with WHERE in the flood's propagation this repeater sits: low
+    // hops means mostly fresh/local unscoped traffic, high hops means
+    // traffic that already traveled far, unscoped, before reaching it — the
+    // stronger signal of an actual containment problem.
+    var hopDepthByPubkey = {};
     function relaysHtml(relays, expanded) {
       if (relays.length === 0) {
         return '<p class="text-muted" style="font-size:0.85em">No repeater has relayed an unscoped flood packet in the last 24 hours.</p>';
@@ -5522,16 +5645,22 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       var rows = shown.map(function(n) {
         var total = n.relay_count_24h || 0;
         var unscoped = n.unscoped_relay_count_24h || 0;
+        var hd = hopDepthByPubkey[n.public_key];
         return '<tr>' +
           '<td><a href="#/nodes/' + encodeURIComponent(n.public_key) + '">' + esc(n.name || n.public_key) + '</a></td>' +
           '<td>' + esc(n.role) + '</td>' +
           '<td>' + unscoped.toLocaleString() + '</td>' +
           '<td>' + total.toLocaleString() + '</td>' +
           '<td>' + pct(unscoped, total) + '</td>' +
+          '<td>' + (hd ? hd.minHops : '—') + '</td>' +
+          '<td>' + (hd ? (hd.medianHops % 1 === 0 ? hd.medianHops : hd.medianHops.toFixed(1)) : '—') + '</td>' +
+          '<td>' + (hd ? hd.maxHops : '—') + '</td>' +
           '</tr>';
       }).join('');
       return '<table class="data-table analytics-table">' +
-        '<thead><tr><th>Repeater</th><th>Role</th><th>Unscoped Relays (24h)</th><th>Total Relays (24h)</th><th>% Unscoped</th></tr></thead>' +
+        '<thead><tr><th>Repeater</th><th>Role</th><th>Unscoped Relays (24h)</th><th>Total Relays (24h)</th><th>% Unscoped</th>' +
+          '<th title="0-based hop index within the packet\'s resolved relay path at this repeater — how far the packet had already traveled before this hop.">Min Hops</th>' +
+          '<th>Median Hops</th><th>Max Hops</th></tr></thead>' +
         '<tbody>' + rows + '</tbody>' +
         '</table>' + topNToggleHtml(relays.length, expanded, 'repeaters');
     }
@@ -5560,6 +5689,16 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
 
     async function load() {
       try {
+        // Fired early but only awaited below, right before it's needed for
+        // relaysHtml -- deliberately NOT awaited here. An extra await
+        // ahead of the isForeignNode/geo_filter computation just below
+        // shifts how many microtask ticks elapse before it runs, which in
+        // the test sandbox lets roles.js's own async window.MC_GEO_FILTER
+        // config-fetch race ahead and clobber the fixture's geo filter
+        // before isForeignNode reads it (see
+        // test-analytics-foreign-traffic-tab.js's makeAnalyticsSandbox).
+        const hopDepthPromise = api('/analytics/hop-depth?window=24h', { ttl: 30000 }).catch(function() { return null; });
+
         const nodesResp = await fetchAllNodes('', { ttl: CLIENT_TTL.nodeList });
         const allNodes = nodesResp.nodes || nodesResp;
         const relays = allNodes.filter(function(n) {
@@ -5583,6 +5722,9 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           .map(function(n) { return { n: n, t: new Date(n.last_seen || 0).getTime() }; })
           .sort(function(a, b) { return b.t - a.t; })
           .forEach(function(entry, i) { foreignNodes[i] = entry.n; });
+
+        const hopData = await hopDepthPromise;
+        hopDepthByPubkey = hopDepthLookupByPubkey(hopData && hopData.unscopedByRepeater);
 
         el.innerHTML =
           '<h3 style="margin:0 0 4px">Foreign Traffic</h3>' +

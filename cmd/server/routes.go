@@ -72,6 +72,14 @@ type Server struct {
 	wardrivingStatsCache    map[string]*WardrivingStatsResponse
 	wardrivingStatsCachedAt map[string]time.Time
 
+	// Cached /api/analytics/hop-depth response — per-window, recomputed at
+	// most once every 30s (same reasoning as scopeStatsCache: this walks
+	// every resolved relay path in the window, expensive enough to be
+	// worth a short TTL cache rather than recomputing on every page view).
+	hopDepthMu       sync.Mutex
+	hopDepthCache    map[string]*HopDepthAnalyticsResponse
+	hopDepthCachedAt map[string]time.Time
+
 	// Router reference for OpenAPI spec generation
 	router *mux.Router
 
@@ -254,6 +262,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/health", s.handleHealth).Methods("GET")
 	r.HandleFunc("/api/stats", s.handleStats).Methods("GET")
 	r.HandleFunc("/api/scope-stats", s.handleScopeStats).Methods("GET")
+	r.HandleFunc("/api/analytics/hop-depth", s.handleHopDepthAnalytics).Methods("GET")
 	r.HandleFunc("/api/analytics/wardriving", s.handleWardrivingStats).Methods("GET")
 	r.HandleFunc("/api/analytics/wardriving/sender-messages", s.handleWardrivingSenderMessages).Methods("GET")
 	r.HandleFunc("/api/perf", s.handlePerf).Methods("GET")
@@ -3906,6 +3915,50 @@ func (s *Server) handleScopeStats(w http.ResponseWriter, r *http.Request) {
 	s.scopeStatsCache[window] = resp
 	s.scopeStatsCachedAt[window] = time.Now()
 	s.scopeStatsMu.Unlock()
+
+	writeJSON(w, resp)
+}
+
+// handleHopDepthAnalytics serves GetHopDepthAnalytics (see its doc comment)
+// for the Scopes tab's scoped-vs-unscoped containment comparison and the
+// Foreign Traffic tab's per-repeater unscoped hop-depth enrichment. Same
+// per-window 30s-cache shape as handleScopeStats.
+func (s *Server) handleHopDepthAnalytics(w http.ResponseWriter, r *http.Request) {
+	const hopDepthTTL = 30 * time.Second
+
+	window := r.URL.Query().Get("window")
+	if window == "" {
+		window = "24h"
+	}
+	if window != "1h" && window != "24h" && window != "7d" {
+		writeError(w, 400, "window must be 1h, 24h, or 7d")
+		return
+	}
+
+	s.hopDepthMu.Lock()
+	if s.hopDepthCache != nil {
+		if cached, ok := s.hopDepthCache[window]; ok && time.Since(s.hopDepthCachedAt[window]) < hopDepthTTL {
+			s.hopDepthMu.Unlock()
+			writeJSON(w, cached)
+			return
+		}
+	}
+	s.hopDepthMu.Unlock()
+
+	resp, err := s.db.GetHopDepthAnalytics(window)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+
+	s.hopDepthMu.Lock()
+	if s.hopDepthCache == nil {
+		s.hopDepthCache = make(map[string]*HopDepthAnalyticsResponse)
+		s.hopDepthCachedAt = make(map[string]time.Time)
+	}
+	s.hopDepthCache[window] = resp
+	s.hopDepthCachedAt[window] = time.Now()
+	s.hopDepthMu.Unlock()
 
 	writeJSON(w, resp)
 }

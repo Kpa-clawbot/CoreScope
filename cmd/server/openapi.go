@@ -113,6 +113,11 @@ func routeDescriptions() map[string]routeMeta {
 				{Name: "window", Description: "Time window: 1h, 24h (default), or 7d", Type: "string"},
 				{Name: "channel", Description: "Channel name to analyze (default #wardriving)", Type: "string"},
 			}},
+		"GET /api/analytics/hop-depth": {Summary: "Network-wide hop-depth analytics", Description: "Answers two flood-containment questions in one pass over resolved relay paths, using the same 0-based per-node path-index hop count as /api/nodes/{pubkey}/hop_analytics (issue #1812), not the unrelated observer-distance hopDistribution field: (1) does scoped (TRANSPORT_FLOOD/TRANSPORT_DIRECT) traffic actually travel fewer hops network-wide than unscoped (plain FLOOD, non-advert) traffic, and (2) which repeater/room nodes are relaying unscoped flood traffic that already traveled far (high hops, a stronger containment-problem signal) vs merely locally (low hops). Plain DIRECT traffic never undergoes flood propagation and is excluded from both buckets. Cached 30s per window.", Tag: "analytics",
+			QueryParams: []paramMeta{
+				{Name: "window", Description: "Time window: 1h, 24h (default), or 7d", Type: "string"},
+			},
+			Response: schemaRef("HopDepthAnalyticsResponse")},
 		"GET /api/analytics/wardriving/sender-messages": {Summary: "Wardriving sender message drill-down", Description: "Individual #wardriving messages from one sender (drill-down behind Top Senders/Sessions): each message's entry-point path (path[0] first, resolve names via /api/resolve-hops), per-observer SNR/RSSI, and lat/lon when that message carried an explicit shared position. Pass since+until (RFC3339) to scope to one session's exact range; otherwise window covers the sender's whole activity in that period. Capped at 200 messages, most-recent-first. Not cached.", Tag: "analytics",
 			QueryParams: []paramMeta{
 				{Name: "sender", Description: "Sender display name to look up (required, exact match)", Type: "string"},
@@ -285,6 +290,35 @@ func componentSchemas() map[string]interface{} {
 			"type": "object",
 			"properties": map[string]interface{}{
 				"packets": map[string]interface{}{"type": "array", "items": schemaRef("HopAnalyticsPacket")},
+			},
+		},
+		"HopDepthBucket": map[string]interface{}{
+			"type":        "object",
+			"description": "How many relay-hop instances (network-wide) saw a given hop count.",
+			"properties": map[string]interface{}{
+				"hops":  map[string]interface{}{"type": "integer", "description": "0-based hop index."},
+				"count": map[string]interface{}{"type": "integer"},
+			},
+		},
+		"RepeaterUnscopedHopDepth": map[string]interface{}{
+			"type":        "object",
+			"description": "One repeater/room's hop-count profile across the unscoped (plain FLOOD, non-advert) traffic it has relayed.",
+			"properties": map[string]interface{}{
+				"publicKey":  str("Node's public key."),
+				"name":       str("Node's display name, or its public key if unnamed."),
+				"count":      map[string]interface{}{"type": "integer", "description": "Number of unscoped relay-hop instances at this node."},
+				"minHops":    map[string]interface{}{"type": "integer"},
+				"medianHops": map[string]interface{}{"type": "number"},
+				"maxHops":    map[string]interface{}{"type": "integer"},
+			},
+		},
+		"HopDepthAnalyticsResponse": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"window":             str("Time window this response covers: 1h, 24h, or 7d."),
+				"scopedHopDepth":     map[string]interface{}{"type": "array", "items": schemaRef("HopDepthBucket"), "description": "Hop-depth histogram for scoped (TRANSPORT_FLOOD/TRANSPORT_DIRECT) traffic."},
+				"unscopedHopDepth":   map[string]interface{}{"type": "array", "items": schemaRef("HopDepthBucket"), "description": "Hop-depth histogram for unscoped (plain FLOOD) traffic."},
+				"unscopedByRepeater": map[string]interface{}{"type": "array", "items": schemaRef("RepeaterUnscopedHopDepth"), "description": "Per-repeater/room breakdown of unscoped hop depth, sorted by count descending."},
 			},
 		},
 	}
