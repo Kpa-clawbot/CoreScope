@@ -9912,6 +9912,168 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	}, nil
 }
 
+// classifyHopAnalyticsTransport maps a transmission's RouteType/PayloadType
+// to the firmware knob it's capped by (issue #1812): ADVERT payloads sent
+// via a flood route are capped by flood.max.advert (checked before the
+// plain flood/unscoped split, since an advert is still "a flood" but has
+// its own separate cap); TRANSPORT_FLOOD (scoped) and FLOOD (unscoped) are
+// the other two flood.max* knobs; DIRECT/TRANSPORT_DIRECT never flood so
+// have no hop-count cap to tune, reported as "direct" for comparison only.
+func classifyHopAnalyticsTransport(tx *StoreTx) string {
+	isFloodRoute := tx.RouteType != nil && (*tx.RouteType == RouteFlood || *tx.RouteType == RouteTransportFlood)
+	if isFloodRoute && tx.PayloadType != nil && *tx.PayloadType == PayloadADVERT {
+		return "flood_advert"
+	}
+	if tx.RouteType == nil {
+		return "unknown"
+	}
+	switch *tx.RouteType {
+	case RouteFlood:
+		return "flood_unscoped"
+	case RouteTransportFlood:
+		return "flood"
+	case RouteDirect, RouteTransportDirect:
+		return "direct"
+	default:
+		return "unknown"
+	}
+}
+
+// GetNodeHopAnalytics answers upstream issue #1812: for a specific node
+// acting as a RELAY, what hop-count (this node's own position within each
+// packet's resolved path, 0-based) does it actually see across recent
+// traffic — the number MeshCore firmware compares against flood_max /
+// flood_max_advert / flood_max_unscoped in allowPacketForward. This is
+// deliberately NOT path length to whichever observer reported the packet
+// (that's the existing, unrelated HopDistribution field on
+// NodeAnalyticsResponse) — a repeater three hops from the origin can still
+// be heard directly by a nearby observer, and vice versa.
+//
+// Candidate-finding mirrors handleNodePaths' byPathHop-index lookup +
+// resolved_path confirmation (routes.go) rather than calling it directly:
+// that function also does per-hop NAME resolution for rendering, which this
+// endpoint doesn't need, and duplicating just the candidate-finding logic
+// here avoids risking a regression in that older, correctness-critical
+// code path. A candidate only contributes a data point when its CANONICAL
+// resolved_path (fetchResolvedPathForTxBest) is available and actually
+// contains the target pubkey — no resolved_path means no reliable hop
+// index, so it's skipped rather than guessed (matches the "don't guess"
+// discipline used throughout this codebase's path-resolution code).
+func (s *PacketStore) GetNodeHopAnalytics(pubkey string, days int) (*NodeHopAnalyticsResponse, error) {
+	node, err := s.db.GetNodeByPubkey(pubkey)
+	if err != nil || node == nil {
+		return nil, err
+	}
+
+	lowerPK := strings.ToLower(pubkey)
+	prefix2 := lowerPK
+	if len(prefix2) > 4 {
+		prefix2 = prefix2[:4]
+	}
+	prefix1 := lowerPK
+	if len(prefix1) > 2 {
+		prefix1 = prefix1[:2]
+	}
+	fromISO := time.Now().Add(-time.Duration(days) * 24 * time.Hour).Format(time.RFC3339)
+
+	s.mu.RLock()
+	seen := make(map[int]bool)
+	var candidates []*StoreTx
+	addCandidates := func(key string) {
+		for _, tx := range s.byPathHop[key] {
+			if !seen[tx.ID] {
+				seen[tx.ID] = true
+				candidates = append(candidates, tx)
+			}
+		}
+	}
+	addCandidates(lowerPK)
+	addCandidates(prefix1)
+	addCandidates(prefix2)
+	for key := range s.byPathHop {
+		if len(key) > 4 && len(key) < len(lowerPK) && strings.HasPrefix(key, prefix2) {
+			addCandidates(key)
+		}
+	}
+
+	// Time-window filter early, before the more expensive index/SQL
+	// confirmation pass below.
+	timeFiltered := candidates[:0]
+	for _, tx := range candidates {
+		if tx.FirstSeen > fromISO {
+			timeFiltered = append(timeFiltered, tx)
+		}
+	}
+	candidates = timeFiltered
+
+	type candidateCheck struct {
+		tx         *StoreTx
+		hasReverse bool
+		inIndex    bool
+	}
+	checks := make([]candidateCheck, len(candidates))
+	for i, tx := range candidates {
+		cc := candidateCheck{tx: tx}
+		if !s.useResolvedPathIndex {
+			cc.inIndex = true
+		} else if _, hasRev := s.resolvedPubkeyReverse[tx.ID]; !hasRev {
+			cc.inIndex = true
+		} else {
+			h := resolvedPubkeyHash(lowerPK)
+			for _, id := range s.resolvedPubkeyIndex[h] {
+				if id == tx.ID {
+					cc.hasReverse = true
+					break
+				}
+			}
+		}
+		checks[i] = cc
+	}
+	s.mu.RUnlock()
+
+	confirmed := candidates[:0]
+	for _, cc := range checks {
+		if cc.inIndex {
+			confirmed = append(confirmed, cc.tx)
+		} else if cc.hasReverse && s.confirmResolvedPathContains(cc.tx.ID, lowerPK) {
+			confirmed = append(confirmed, cc.tx)
+		}
+	}
+
+	packets := make([]HopAnalyticsPacket, 0, len(confirmed))
+	for _, tx := range confirmed {
+		rp := s.fetchResolvedPathForTxBest(tx)
+		if rp == nil {
+			continue
+		}
+		idx := -1
+		for i, p := range rp {
+			if p != nil && strings.EqualFold(*p, lowerPK) {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			continue // conservative "inIndex" keep that didn't actually resolve to this pubkey
+		}
+		tsMs := int64(0)
+		if t, err := time.Parse(time.RFC3339, tx.FirstSeen); err == nil {
+			tsMs = t.UnixMilli()
+		} else if t, err := time.Parse(time.RFC3339Nano, tx.FirstSeen); err == nil {
+			tsMs = t.UnixMilli()
+		}
+		packets = append(packets, HopAnalyticsPacket{
+			Hash:      tx.Hash,
+			TsMs:      tsMs,
+			Hops:      idx,
+			Transport: classifyHopAnalyticsTransport(tx),
+			Scoped:    tx.ScopeName != "",
+		})
+	}
+
+	return &NodeHopAnalyticsResponse{Packets: packets}, nil
+}
+
 // GetAnalyticsSubpathsWithWindow is the window-aware variant of
 // GetAnalyticsSubpaths. Issue #1217: the Route Patterns chart on /analytics
 // ignored the Time window filter because callers always reached the unbounded

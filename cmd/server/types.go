@@ -858,6 +858,28 @@ type NodeAnalyticsResponse struct {
 	ClockSkew           *NodeClockSkew          `json:"clockSkew,omitempty"`
 }
 
+// HopAnalyticsPacket is one transmission that passed through a specific node
+// as a relay hop (upstream issue #1812: help operators tune the firmware's
+// flood.max / flood.max.advert / flood.max.unscoped knobs, which cap based
+// on hop count AT THE RELAYING NODE, not distance to the observer). Hops is
+// the target node's own index within the packet's resolved relay path
+// (0-based, no +1 — matches how MeshCore firmware itself evaluates
+// getPathHashCount() against flood_max in allowPacketForward), which is
+// deliberately NOT the same number as HopDistEntry/hopDistribution above
+// (that's path length to whichever OBSERVER reported the packet — a
+// different, unrelated distance).
+type HopAnalyticsPacket struct {
+	Hash      string `json:"hash"`
+	TsMs      int64  `json:"tsMs"`
+	Hops      int    `json:"hops"`
+	Transport string `json:"transport"` // "flood" | "flood_advert" | "flood_unscoped" | "direct" | "unknown"
+	Scoped    bool   `json:"scoped"`
+}
+
+type NodeHopAnalyticsResponse struct {
+	Packets []HopAnalyticsPacket `json:"packets"`
+}
+
 // ─── Analytics — RF ────────────────────────────────────────────────────────────
 
 type PayloadTypeSignal struct {
