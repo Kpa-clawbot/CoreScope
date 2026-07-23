@@ -72,6 +72,53 @@ function test(name, fn) {
   catch (e) { failed++; console.log('  ❌ ' + name + ': ' + e.message); }
 }
 
+console.log('\n=== channels.js: pingBotReply (shared trigger/format logic) ===');
+// This is the client-side twin of pingBotReply in cmd/server/db.go, used
+// by the WebSocket live-push path and the client-side PSK-channel decrypt
+// path (neither of which round-trips through GetChannelMessages, so
+// neither gets the server-computed botReply without this).
+
+test('exact "ping" (any case) triggers a reply', () => {
+  const { ctx } = makeSandbox();
+  const fn = ctx.window._channelsPingBotReplyForTest;
+  assert.ok(fn('ping', 1, 5, 'Obs') !== null);
+  assert.ok(fn('PING', 1, 5, 'Obs') !== null);
+  assert.ok(fn('  ping  ', 1, 5, 'Obs') !== null, 'surrounding whitespace should be trimmed');
+});
+
+test('a mention prefix like "@MeshviewBot ping" is stripped before matching', () => {
+  const { ctx } = makeSandbox();
+  const fn = ctx.window._channelsPingBotReplyForTest;
+  assert.ok(fn('@MeshviewBot ping', 0, null, null) !== null);
+});
+
+test('"pinging" or other substrings do not match (exact trigger only)', () => {
+  const { ctx } = makeSandbox();
+  const fn = ctx.window._channelsPingBotReplyForTest;
+  assert.strictEqual(fn('pinging around', 1, 5, 'Obs'), null);
+  assert.strictEqual(fn('not ping', 1, 5, 'Obs'), null);
+  assert.strictEqual(fn('', 1, 5, 'Obs'), null);
+});
+
+test('reply text includes hops, SNR, and observer when present', () => {
+  const { ctx } = makeSandbox();
+  const fn = ctx.window._channelsPingBotReplyForTest;
+  const r = fn('ping', 3, 8.25, 'Observer One');
+  assert.strictEqual(r.sender, 'MeshviewBot');
+  assert.ok(r.text.includes('3 hops'), r.text);
+  assert.ok(r.text.includes('SNR 8.3dB') || r.text.includes('SNR 8.2dB'), r.text);
+  assert.ok(r.text.includes('heard by Observer One'), r.text);
+});
+
+test('hops=0 reports "0 hops (direct)"; missing SNR/observer are omitted cleanly', () => {
+  const { ctx } = makeSandbox();
+  const fn = ctx.window._channelsPingBotReplyForTest;
+  const r = fn('ping', 0, null, null);
+  assert.ok(r.text.includes('0 hops (direct)'), r.text);
+  assert.ok(!r.text.includes('SNR'), r.text);
+  assert.ok(!r.text.includes('heard by'), r.text);
+});
+
 console.log('\n=== channels.js: ping-bot reply rendering ===');
 
 test('a message without botReply renders no bot bubble', () => {

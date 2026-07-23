@@ -323,6 +323,21 @@
     return typeof hash === 'number' ? '0x' + hash.toString(16).toUpperCase().padStart(2, '0') : hash;
   }
   function getChannelColor(hash) { return CHANNEL_COLORS[hashCode(String(hash)) % CHANNEL_COLORS.length]; }
+  // Mirrors pingBotReply in cmd/server/db.go -- kept in sync by hand since
+  // this is the client-side equivalent for messages that arrive live over
+  // the WebSocket (handleWSMessage below), which never round-trips through
+  // GetChannelMessages and so never gets the server-computed botReply.
+  // Same trigger rule, same reply format. CoreScope-only: see the doc
+  // comment on botReplyHtml in renderMessages for why this never reaches
+  // the real mesh.
+  function pingBotReply(text, hops, snr, observer) {
+    var trigger = String(text || '').trim().replace(/^@[A-Za-z0-9_-]{1,32}\s+/, '').trim();
+    if (trigger.toLowerCase() !== 'ping') return null;
+    var parts = [hops > 0 ? (hops + ' hop' + (hops === 1 ? '' : 's')) : '0 hops (direct)'];
+    if (snr !== null && snr !== undefined) parts.push('SNR ' + Number(snr).toFixed(1) + 'dB');
+    if (observer) parts.push('heard by ' + observer);
+    return { sender: 'MeshviewBot', text: '🏓 pong! ' + parts.join(' · '), hops: hops, snr: snr };
+  }
   function getSenderColor(name) {
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
       (!document.documentElement.getAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -656,6 +671,7 @@
         if (ci > 0 && ci < 50 && text.substring(0, ci) === sender) {
           text = text.substring(ci + 2);
         }
+        var alreadyDecObserver = c.packet.observer_name || null;
         decrypted.push({
           sender: sender, text: text,
           timestamp: c.packet.first_seen || c.packet.timestamp,
@@ -665,7 +681,8 @@
           observers: c.packet.observer_name ? [c.packet.observer_name] : [],
           scope: c.packet.scope_name || null,
           routeType: c.packet.route_type ?? null,
-          repeats: 1
+          repeats: 1,
+          botReply: pingBotReply(text, d.path_len || 0, c.packet.snr || null, alreadyDecObserver)
         });
         continue;
       }
@@ -674,6 +691,7 @@
       var result = await ChannelDecrypt.decryptPacket(keyBytes, c.decoded.mac, c.decoded.encryptedData);
       if (result) {
         macFailCount = 0;
+        var decObserver = c.packet.observer_name || null;
         decrypted.push({
           sender: result.sender, text: result.message,
           timestamp: c.packet.first_seen || c.packet.timestamp,
@@ -683,7 +701,8 @@
           observers: c.packet.observer_name ? [c.packet.observer_name] : [],
           scope: c.packet.scope_name || null,
           routeType: c.packet.route_type ?? null,
-          repeats: 1
+          repeats: 1,
+          botReply: pingBotReply(result.message, 0, c.packet.snr || null, decObserver)
         });
       } else {
         macFailCount++;
@@ -1467,6 +1486,7 @@
             existing._fromWS = true;
             existing._wsAt = Date.now();
           } else {
+            var wsHops = payload.path_len || 0;
             messages.push({
               sender: sender,
               text: displayText,
@@ -1476,11 +1496,12 @@
               packetHash: pktHash,
               repeats: 1,
               observers: observer ? [observer] : [],
-              hops: payload.path_len || 0,
+              hops: wsHops,
               snr: snr,
               scope: scope,
               routeType: routeType,
               area: area,
+              botReply: pingBotReply(displayText, wsHops, snr, observer),
               // #1498: mark as WS-pushed so a later REST replacement
               // (selectChannel / refreshMessages) can merge instead of
               // stomp. Without this flag the REST response wipes any
@@ -2327,6 +2348,7 @@
   }
 
   window._channelsRenderMessagesForTest = renderMessages;
+  window._channelsPingBotReplyForTest = pingBotReply;
   window._channelsSetStateForTest = function (state) {
     if (!state) return;
     if (Array.isArray(state.channels)) channels = state.channels;
