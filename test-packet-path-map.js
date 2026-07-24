@@ -37,7 +37,15 @@ test('fetches via the shared api() helper, not a raw fetch (picks up auth/base-U
 });
 
 test('escapes node/observer names before interpolating into tooltip HTML (operator-controlled data)', () => {
-  assert.ok(/escapeHtml\(p\.name\)/.test(src), 'point tooltips must escape the name');
+  assert.ok(/escapeHtml\(pt\.name\)/.test(src), 'point tooltips must escape the name');
+});
+
+test('draws every branch, not just the deepest one', () => {
+  assert.ok(/branches\.map/.test(src), 'should iterate all branches from the response');
+});
+
+test('draws the deepest branch on top of the others (primary drawn last)', () => {
+  assert.ok(/a\.primary \? 1 : 0/.test(src) || /primary.*sort/.test(src), 'should reorder so the primary branch paints last');
 });
 
 test('handles Escape key and click-outside to close, matching other CoreScope modals', () => {
@@ -140,21 +148,24 @@ function makeSandbox(apiImpl) {
 
   await (async () => {
     try {
-      const ctx = makeSandbox(() => Promise.resolve({ hash: 'deadbeef', hops: 0, points: [] }));
+      const ctx = makeSandbox(() => Promise.resolve({ hash: 'deadbeef', branches: [] }));
       await ctx.window.PacketPathMap.open('deadbeef');
       const status = ctx.document.getElementById('packetPathStatus');
-      assert.ok(status.textContent.includes('no resolved relay path'), 'should explain there is nothing to show yet, got: ' + status.textContent);
+      assert.ok(status.textContent.includes('no observations'), 'should explain there is nothing to show yet, got: ' + status.textContent);
       passed++;
-      console.log('  ✅ an empty path (hops=0, no points) shows a clear "nothing to show" status');
-    } catch (e) { failed++; console.log('  ❌ an empty path (hops=0, no points) shows a clear "nothing to show" status: ' + e.message); }
+      console.log('  ✅ no branches at all shows a clear "nothing to show" status');
+    } catch (e) { failed++; console.log('  ❌ no branches at all shows a clear "nothing to show" status: ' + e.message); }
   })();
 
   await (async () => {
     try {
-      const ctx = makeSandbox(() => Promise.resolve({ hash: 'deadbeef', hops: 3, points: [{ publicKey: 'pk1', name: 'RepeaterA', lat: null, lon: null }] }));
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [{ hops: 3, points: [{ publicKey: 'pk1', name: 'RepeaterA', lat: null, lon: null }], observer: null }],
+      }));
       await ctx.window.PacketPathMap.open('deadbeef');
       const status = ctx.document.getElementById('packetPathStatus');
-      assert.ok(status.textContent.includes('3 hop'), 'should mention the hop count even when no hop has a known position, got: ' + status.textContent);
+      assert.ok(status.textContent.includes('3 hop'), 'should mention the hop count even when no branch has a known position, got: ' + status.textContent);
       passed++;
       console.log('  ✅ hops with no known position at all still report the hop count, not a silent blank');
     } catch (e) { failed++; console.log('  ❌ hops with no known position at all still report the hop count, not a silent blank: ' + e.message); }
@@ -170,6 +181,52 @@ function makeSandbox(apiImpl) {
       passed++;
       console.log('  ✅ close() removes the modal overlay from the DOM');
     } catch (e) { failed++; console.log('  ❌ close() removes the modal overlay from the DOM: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
+      // Two branches: a 2-hop chain (deepest, drawn primary) and a
+      // 0-hop direct observer with no resolvable relay names at all.
+      // Both should still get plotted -- this is the whole point of the
+      // "show every branch" rework (a station that heard the packet
+      // directly is real reach data even without a relay chain).
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [
+          {
+            hops: 2,
+            points: [
+              { publicKey: 'pk1', name: 'RepeaterA', lat: 56.0, lon: 10.0 },
+              { publicKey: 'pk2', name: 'RepeaterB', lat: 56.1, lon: 10.1 },
+            ],
+            observer: { name: 'FarObserver', lat: 56.2, lon: 10.2 },
+          },
+          { hops: 0, points: [], observer: { name: 'NearObserver', lat: 55.9, lon: 9.9 } },
+        ],
+      }));
+
+      let markerCount = 0, polylineCount = 0;
+      ctx.L = {
+        map: () => ({
+          setView() { return this; },
+          fitBounds() {},
+          invalidateSize() {},
+          remove() {},
+        }),
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: () => { markerCount++; return { addTo() { return this; }, bindTooltip() { return this; } }; },
+        polyline: () => { polylineCount++; return { addTo() { return this; } }; },
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const status = ctx.document.getElementById('packetPathStatus');
+      assert.strictEqual(markerCount, 4, 'expected 4 markers: 2 hops + observer for branch 1, 1 observer-only point for branch 2, got ' + markerCount);
+      assert.strictEqual(polylineCount, 1, 'expected exactly 1 polyline (only the 3-point branch has >1 point to connect), got ' + polylineCount);
+      assert.ok(status.textContent.includes('2 of 2 stations shown'), 'status should report both branches plotted, got: ' + status.textContent);
+      assert.ok(status.textContent.includes('deepest reached 2 hop'), 'status should report the deepest branch hop count, got: ' + status.textContent);
+      passed++;
+      console.log('  ✅ multiple branches (including a 0-hop direct observer) are all plotted, not just the deepest');
+    } catch (e) { failed++; console.log('  ❌ multiple branches (including a 0-hop direct observer) are all plotted, not just the deepest: ' + e.message); }
   })();
 
   console.log('\n════════════════════════════════════════');

@@ -3156,7 +3156,7 @@ func (s *Server) handleTraces(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePacketPath(w http.ResponseWriter, r *http.Request) {
 	hash := mux.Vars(r)["hash"]
 	if s.db == nil {
-		writeJSON(w, PacketPathResponse{Hash: hash, Points: []PacketPathPoint{}})
+		writeJSON(w, PacketPathResponse{Hash: hash, Branches: []PacketPathBranch{}})
 		return
 	}
 	resp, err := s.db.GetPacketPath(hash)

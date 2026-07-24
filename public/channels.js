@@ -2334,10 +2334,11 @@
       // "Not sent to the mesh" caveat is load-bearing, not decoration --
       // without it this could be misread as a real bot reply the sender's
       // own radio received.
-      // "View path" only makes sense when there's an actual multi-hop
-      // route to draw (hops > 0) and we have a packet hash to look it up
-      // by -- a direct (0-hop) reply has no relay path to show on a map.
-      const viewPathHtml = (msg.botReply && msg.botReply.hops > 0 && msg.packetHash)
+      // "View path" needs a packet hash to look up. Shown even for a
+      // 0-hop reply -- the map now plots every station that heard the
+      // packet (not just the deepest relay chain), so a direct-only ping
+      // still has a spread worth visualizing (see GetPacketPath).
+      const viewPathHtml = (msg.botReply && msg.packetHash)
         ? ` · <button type="button" class="ch-analyze-link" data-view-path="${escapeHtml(msg.packetHash)}" style="background:none;border:none;padding:0;cursor:pointer;font:inherit">View path →</button>`
         : '';
       const botReplyHtml = msg.botReply ? `<div class="ch-msg ch-message ch-bot-message">

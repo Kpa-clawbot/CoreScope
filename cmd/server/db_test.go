@@ -622,9 +622,10 @@ func TestGetTraces(t *testing.T) {
 }
 
 // TestGetPacketPath covers the "View path" map data source: given a
-// packet hash, resolve its DEEPEST observation's relay path to
-// name/role/lat/lon per hop, plus the hearing observer's IATA-derived
-// position. Deliberately independent of seedTestData's fixtures.
+// packet hash, resolve every distinct station's OWN deepest observation
+// (not just the single farthest one overall) to a branch of
+// name/role/lat/lon per hop, plus that station's IATA-derived position.
+// Deliberately independent of seedTestData's fixtures.
 func TestGetPacketPath(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
@@ -640,7 +641,7 @@ func TestGetPacketPath(t *testing.T) {
 	// Shallow observation (obs1): 1 hop.
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, resolved_path, timestamp)
 		VALUES (1, 1, 9.0, -88, '["aa"]', '["pkAlpha"]', 1736935200)`)
-	// Deeper observation (obs2): 2 hops -- must win even though it's not first.
+	// Deeper observation (obs2): 2 hops.
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, resolved_path, timestamp)
 		VALUES (1, 2, 4.0, -95, '["aa","bb"]', '["pkAlpha","pkBravo"]', 1736935260)`)
 
@@ -648,26 +649,37 @@ func TestGetPacketPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Hops != 2 {
-		t.Fatalf("Hops = %d, want 2 (the deeper observation)", resp.Hops)
+	if len(resp.Branches) != 2 {
+		t.Fatalf("Branches = %+v, want 2 (one per distinct observer)", resp.Branches)
 	}
-	if len(resp.Points) != 2 {
-		t.Fatalf("Points = %+v, want 2 entries", resp.Points)
+	// Sorted deepest-first: obs2's 2-hop branch, then obs1's 1-hop branch.
+	deep, shallow := resp.Branches[0], resp.Branches[1]
+	if deep.Hops != 2 {
+		t.Fatalf("Branches[0].Hops = %d, want 2 (the deeper branch first)", deep.Hops)
 	}
-	if resp.Points[0].Name != "RepeaterAlpha" || resp.Points[0].Lat == nil || *resp.Points[0].Lat != 56.1 {
-		t.Errorf("Points[0] = %+v, want RepeaterAlpha at lat 56.1", resp.Points[0])
+	if len(deep.Points) != 2 {
+		t.Fatalf("Branches[0].Points = %+v, want 2 entries", deep.Points)
 	}
-	if resp.Points[1].PublicKey != "pkBravo" || resp.Points[1].Name != "pkBravo" || resp.Points[1].Lat != nil {
-		t.Errorf("Points[1] = %+v, want raw pubkey fallback with nil lat (no nodes row)", resp.Points[1])
+	if deep.Points[0].Name != "RepeaterAlpha" || deep.Points[0].Lat == nil || *deep.Points[0].Lat != 56.1 {
+		t.Errorf("Branches[0].Points[0] = %+v, want RepeaterAlpha at lat 56.1", deep.Points[0])
 	}
-	if resp.Observer == nil || resp.Observer.Name != "Observer Two" {
-		t.Fatalf("Observer = %+v, want Observer Two (heard the deeper observation)", resp.Observer)
+	if deep.Points[1].PublicKey != "pkBravo" || deep.Points[1].Name != "pkBravo" || deep.Points[1].Lat != nil {
+		t.Errorf("Branches[0].Points[1] = %+v, want raw pubkey fallback with nil lat (no nodes row)", deep.Points[1])
 	}
-	if resp.Observer.Lat == nil || *resp.Observer.Lat != 37.6213 {
-		t.Errorf("Observer.Lat = %v, want the SFO IATA coordinate (37.6213)", resp.Observer.Lat)
+	if deep.Observer == nil || deep.Observer.Name != "Observer Two" {
+		t.Fatalf("Branches[0].Observer = %+v, want Observer Two", deep.Observer)
+	}
+	if deep.Observer.Lat == nil || *deep.Observer.Lat != 37.6213 {
+		t.Errorf("Branches[0].Observer.Lat = %v, want the SFO IATA coordinate (37.6213)", deep.Observer.Lat)
+	}
+	if shallow.Hops != 1 || shallow.Observer == nil || shallow.Observer.Name != "Observer One" {
+		t.Fatalf("Branches[1] = %+v, want Observer One's 1-hop branch", shallow)
 	}
 }
 
+// TestGetPacketPath_NoResolvedPath covers a station whose observation
+// never resolved: it still contributes a branch (hop count from
+// path_json, so reach is never silently dropped), just with no points.
 func TestGetPacketPath_NoResolvedPath(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
@@ -683,11 +695,51 @@ func TestGetPacketPath_NoResolvedPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resp.Points) != 0 {
-		t.Errorf("Points = %+v, want empty when no observation has a resolved_path", resp.Points)
+	if len(resp.Branches) != 1 {
+		t.Fatalf("Branches = %+v, want 1 branch even though its path never resolved", resp.Branches)
 	}
-	if resp.Observer != nil {
-		t.Errorf("Observer = %+v, want nil when there's no resolved path", resp.Observer)
+	b := resp.Branches[0]
+	if b.Hops != 1 {
+		t.Errorf("Branches[0].Hops = %d, want 1 (from path_json, independent of resolution)", b.Hops)
+	}
+	if len(b.Points) != 0 {
+		t.Errorf("Branches[0].Points = %+v, want empty when the path never resolved", b.Points)
+	}
+	if b.Observer == nil || b.Observer.Name != "Observer One" {
+		t.Errorf("Branches[0].Observer = %+v, want Observer One (who heard it is always known)", b.Observer)
+	}
+}
+
+// TestGetPacketPath_SameObserverMultipleObservations covers a station
+// that heard the same packet more than once as later flood copies
+// arrived via longer routes (the common case -- see the trace dump for
+// any busy channel): only its single deepest observation should
+// contribute a branch, not one branch per observation.
+func TestGetPacketPath_SameObserverMultipleObservations(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('obs1', 'Observer One', 'SJC')`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon) VALUES ('pkAlpha', 'RepeaterAlpha', 'repeater', 56.1, 10.2)`)
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('AA', 'pathtest00000003', '2026-01-15T10:00:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"ping","sender":"Eve"}', '#ping')`)
+	// Direct copy arrives first (0 hops)...
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (1, 1, 9.0, -88, '[]', 1736935200)`)
+	// ...then a relayed copy arrives later, 1 hop.
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, resolved_path, timestamp)
+		VALUES (1, 1, 6.0, -100, '["aa"]', '["pkAlpha"]', 1736935260)`)
+
+	resp, err := db.GetPacketPath("pathtest00000003")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Branches) != 1 {
+		t.Fatalf("Branches = %+v, want exactly 1 (same station, keep only its deepest observation)", resp.Branches)
+	}
+	if resp.Branches[0].Hops != 1 || len(resp.Branches[0].Points) != 1 {
+		t.Errorf("Branches[0] = %+v, want the 1-hop relayed observation, not the 0-hop direct one", resp.Branches[0])
 	}
 }
 
@@ -699,7 +751,7 @@ func TestGetPacketPath_UnknownHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Hops != 0 || len(resp.Points) != 0 {
+	if len(resp.Branches) != 0 {
 		t.Errorf("expected an empty response for an unknown hash, got %+v", resp)
 	}
 }

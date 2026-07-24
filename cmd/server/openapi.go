@@ -141,7 +141,7 @@ func routeDescriptions() map[string]routeMeta {
 		// Misc
 		"GET /api/resolve-hops":  {Summary: "Resolve hop path", Description: "Resolves hash prefixes in a hop path to node names. Returns affinity scores and best candidates.", Tag: "nodes", QueryParams: []paramMeta{{Name: "hops", Description: "Comma-separated hop hash prefixes", Type: "string", Required: true}}},
 		"GET /api/traces/{hash}": {Summary: "Get packet traces", Description: "Returns all observer sightings for a packet hash.", Tag: "packets"},
-		"GET /api/packets/{hash}/path": {Summary: "Get a packet's geographic relay path", Description: "Resolves a packet's DEEPEST observation (the one with the most hops -- same reasoning as the ping-bot reply, issue tracker: when the same flood is heard by more than one station, the farthest-along leg is the more informative one to show) to a point sequence: each relay's name/role/lat/lon in path order, plus the hearing observer's position (from its configured IATA code, like the Wardriving tab). Lat/lon are null for any hop that has never advertised a GPS position -- callers should draw a gap, not guess. Backs the Channels tab's ping-bot \"View path\" map link.", Tag: "packets",
+		"GET /api/packets/{hash}/path": {Summary: "Get a packet's full geographic flood spread", Description: "Resolves EVERY distinct station that observed a packet to its own branch: hop count (from that station's deepest observation) plus, where resolvable, each relay's name/role/lat/lon in path order and the station's own position (from its configured IATA code, like the Wardriving tab). A station heard more than once (later flood copies via longer routes) contributes only its deepest observation. Lat/lon are null for any hop that has never advertised a GPS position -- callers should draw a gap, not guess. Backs the Channels tab's ping-bot \"View path\" map link.", Tag: "packets",
 			Response: schemaRef("PacketPathResponse")},
 		"GET /api/iata-coords":       {Summary: "Get IATA airport coordinates", Description: "Returns lat/lon for known airport codes (used for observer positioning).", Tag: "config"},
 		"GET /api/audio-lab/buckets": {Summary: "Audio lab frequency buckets", Description: "Returns frequency bucket data for audio analysis.", Tag: "analytics"},
@@ -346,7 +346,7 @@ func componentSchemas() map[string]interface{} {
 		},
 		"PacketPathObserver": map[string]interface{}{
 			"type":        "object",
-			"description": "The station that produced the deepest observation of a packet path, positioned from its configured IATA code.",
+			"description": "The station that produced a given branch's observation of a packet path, positioned from its configured IATA code.",
 			"properties": map[string]interface{}{
 				"name": str("Observer display name."),
 				"iata": str("Observer's configured IATA airport code, when set."),
@@ -354,13 +354,21 @@ func componentSchemas() map[string]interface{} {
 				"lon":  map[string]interface{}{"type": "number", "nullable": true},
 			},
 		},
+		"PacketPathBranch": map[string]interface{}{
+			"type":        "object",
+			"description": "One station's own route to a packet: how far it traveled to reach them (from that observation's raw hop count, independent of how much of it resolved) and, where resolvable, each hop's position in path order.",
+			"properties": map[string]interface{}{
+				"hops":     map[string]interface{}{"type": "integer", "description": "Hop count for this station's deepest observation, taken from the raw path length -- present even when none of it resolved."},
+				"points":   map[string]interface{}{"type": "array", "items": schemaRef("PacketPathPoint"), "description": "The resolvable portion of the relay path in hop order. Can be shorter than hops, or empty, when some/all hops never resolved."},
+				"observer": schemaRef("PacketPathObserver"),
+				"snr":      map[string]interface{}{"type": "number", "nullable": true, "description": "SNR of this station's deepest observation."},
+			},
+		},
 		"PacketPathResponse": map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"hash":     str("The packet hash this path was resolved for."),
-				"hops":     map[string]interface{}{"type": "integer", "description": "Length of the deepest observed relay path."},
-				"points":   map[string]interface{}{"type": "array", "items": schemaRef("PacketPathPoint"), "description": "The relay path in hop order."},
-				"observer": schemaRef("PacketPathObserver"),
+				"branches": map[string]interface{}{"type": "array", "items": schemaRef("PacketPathBranch"), "description": "One branch per distinct station that observed the packet, each kept at that station's own deepest observation, sorted deepest-first -- shows the full flood spread, not just the single farthest route."},
 			},
 		},
 	}

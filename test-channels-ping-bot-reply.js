@@ -162,7 +162,7 @@ test('a message with botReply renders a distinct bot bubble with the reply text'
   assert.ok(html.includes('SNR 8.2dB'), 'should include the SNR from the reply text');
 });
 
-test('"View path" link appears when hops > 0 and a packetHash is available', () => {
+test('"View path" link appears when a packetHash is available', () => {
   const { ctx, chMessagesEl } = makeSandbox();
   ctx.window._channelsSetStateForTest({ messages: [
     {
@@ -176,7 +176,7 @@ test('"View path" link appears when hops > 0 and a packetHash is available', () 
   assert.ok(html.includes('data-view-path="abc123"'), 'should carry the packet hash for the click handler to look up');
 });
 
-test('"View path" link is absent for a direct (0-hop) reply -- nothing to draw', () => {
+test('"View path" link still appears for a direct (0-hop) reply -- the map plots every station that heard it, not just relay hops', () => {
   const { ctx, chMessagesEl } = makeSandbox();
   ctx.window._channelsSetStateForTest({ messages: [
     {
@@ -185,7 +185,7 @@ test('"View path" link is absent for a direct (0-hop) reply -- nothing to draw',
     },
   ] });
   ctx.window._channelsRenderMessagesForTest();
-  assert.ok(!chMessagesEl.innerHTML.includes('View path'), 'a direct reply has no relay path to visualize');
+  assert.ok(chMessagesEl.innerHTML.includes('View path'), 'a direct reply still has observer positions worth visualizing');
 });
 
 test('"View path" link is absent when there is no packetHash to look it up by', () => {
