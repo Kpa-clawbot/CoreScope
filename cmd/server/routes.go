@@ -18,8 +18,10 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/meshcore-analyzer/geofilter"
 	"github.com/meshcore-analyzer/packetpath"
 	"github.com/meshcore-analyzer/prunequeue"
+	regionutil "github.com/meshcore-analyzer/regions"
 )
 
 // memBreakdownNote is the static accounting caveat attached to the opt-in
@@ -64,6 +66,19 @@ type Server struct {
 	scopeStatsMu       sync.Mutex
 	scopeStatsCache    map[string]*ScopeStatsResponse
 	scopeStatsCachedAt map[string]time.Time
+
+	// Cached /api/analytics/wardriving response — per-window, recomputed at most once every 30s
+	wardrivingStatsMu       sync.Mutex
+	wardrivingStatsCache    map[string]*WardrivingStatsResponse
+	wardrivingStatsCachedAt map[string]time.Time
+
+	// Cached /api/analytics/hop-depth response — per-window, recomputed at
+	// most once every 30s (same reasoning as scopeStatsCache: this walks
+	// every resolved relay path in the window, expensive enough to be
+	// worth a short TTL cache rather than recomputing on every page view).
+	hopDepthMu       sync.Mutex
+	hopDepthCache    map[string]*HopDepthAnalyticsResponse
+	hopDepthCachedAt map[string]time.Time
 
 	// Router reference for OpenAPI spec generation
 	router *mux.Router
@@ -174,9 +189,26 @@ func (s *Server) isPubkeyHidden(pubkey string) bool {
 	return s.cfg.IsNameHidden(name)
 }
 
+// getGeoFilter returns the effective home-boundary geometry. If
+// cfg.HomeArea names an existing entry in cfg.Areas, that area's geometry
+// wins — a single boundary shared with the areas system, instead of a
+// second copy that can silently drift (see cfg.HomeArea doc comment).
+// Falls back to the standalone GeoFilter field when HomeArea is unset or
+// doesn't resolve, so existing deployments see no behavior change.
 func (s *Server) getGeoFilter() *GeoFilterConfig {
 	s.cfgMu.RLock()
 	defer s.cfgMu.RUnlock()
+	if s.cfg != nil && s.cfg.HomeArea != "" {
+		if area, ok := s.cfg.Areas[s.cfg.HomeArea]; ok {
+			return &geofilter.Config{
+				Polygon: area.Polygon,
+				LatMin:  area.LatMin,
+				LatMax:  area.LatMax,
+				LonMin:  area.LonMin,
+				LonMax:  area.LonMax,
+			}
+		}
+	}
 	return s.cfg.GeoFilter
 }
 
@@ -230,6 +262,9 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/health", s.handleHealth).Methods("GET")
 	r.HandleFunc("/api/stats", s.handleStats).Methods("GET")
 	r.HandleFunc("/api/scope-stats", s.handleScopeStats).Methods("GET")
+	r.HandleFunc("/api/analytics/hop-depth", s.handleHopDepthAnalytics).Methods("GET")
+	r.HandleFunc("/api/analytics/wardriving", s.handleWardrivingStats).Methods("GET")
+	r.HandleFunc("/api/analytics/wardriving/sender-messages", s.handleWardrivingSenderMessages).Methods("GET")
 	r.HandleFunc("/api/perf", s.handlePerf).Methods("GET")
 	r.HandleFunc("/api/perf/io", s.handlePerfIO).Methods("GET")
 	r.HandleFunc("/api/perf/sqlite", s.handlePerfSqlite).Methods("GET")
@@ -266,6 +301,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/nodes/{pubkey}/health", s.handleNodeHealth).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/paths", s.handleNodePaths).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/analytics", s.handleNodeAnalytics).Methods("GET")
+	r.HandleFunc("/api/nodes/{pubkey}/hop_analytics", s.handleNodeHopAnalytics).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/battery", s.handleNodeBattery).Methods("GET")
 	r.HandleFunc("/api/nodes/clock-skew", s.handleFleetClockSkew).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/clock-skew", s.handleNodeClockSkew).Methods("GET")
@@ -310,6 +346,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/observers/{id}", s.handleObserverDetail).Methods("GET")
 	r.HandleFunc("/api/observers", s.handleObservers).Methods("GET")
 	r.HandleFunc("/api/traces/{hash}", s.handleTraces).Methods("GET")
+	r.HandleFunc("/api/packets/{hash}/path", s.handlePacketPath).Methods("GET")
 	r.HandleFunc("/api/paths/inspect", s.handlePathInspect).Methods("POST")
 	r.HandleFunc("/api/iata-coords", s.handleIATACoords).Methods("GET")
 	r.HandleFunc("/api/audio-lab/buckets", s.handleAudioLabBuckets).Methods("GET")
@@ -457,20 +494,22 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 		Tiles:               s.cfg.Tiles,
 		Customizer:          CustomizerClientConfig{DisabledTabs: disabledTabs},
 		ClientRxCoverage:    s.cfg.ClientRxCoverageEnabled(),
+		GeoFilter:           s.getGeoFilter(),
 	})
 }
 
 func (s *Server) handleConfigAreas(w http.ResponseWriter, r *http.Request) {
 	type areaListEntry struct {
-		Key   string `json:"key"`
-		Label string `json:"label"`
+		Key          string   `json:"key"`
+		Label        string   `json:"label"`
+		RegionScopes []string `json:"regionScopes,omitempty"`
 	}
 	result := make([]areaListEntry, 0, len(s.cfg.Areas))
 	for k, v := range s.cfg.Areas {
 		if v.Label == "" {
 			continue // skip comment/invalid entries (e.g. "_comment" keys in config)
 		}
-		result = append(result, areaListEntry{Key: k, Label: v.Label})
+		result = append(result, areaListEntry{Key: k, Label: v.Label, RegionScopes: v.RegionScopes})
 	}
 	writeJSON(w, result)
 }
@@ -1336,18 +1375,250 @@ func (s *Server) handlePostPacket(w http.ResponseWriter, r *http.Request) {
 
 // --- Node Handlers ---
 
+// nodeListPostFilters bundles the filters handleNodes applies AFTER
+// the SQL LIMIT/OFFSET page comes back from the DB: geo_filter (#730),
+// node blacklist, hidden-name-prefix (#1181), area membership, and (#1862)
+// hasScope/hashRegions relay filters. Kept together so handleNodes'
+// pagination-compensation loop (see below) can apply the exact same
+// predicate to every DB page it pulls.
+type nodeListPostFilters struct {
+	cfg           *Config
+	geoFilter     *GeoFilterConfig // resolved once via s.getGeoFilter() — cfgMu guards this field, see routes.go:53
+	applyGeo      bool
+	areaNodes     map[string]bool // nil = no area filter active
+	areaRequested bool            // true if ?area= was given but resolved to nothing
+
+	// relayMap backs hasScope/hashRegions below — the bulk pubkey ->
+	// RepeaterRelayInfo map (see GetRepeaterRelayInfoMap), keyed by
+	// lowercase pubkey. nil when the in-memory store is unavailable (DB-
+	// only mode): lookups then degrade to a zero-value RepeaterRelayInfo
+	// (no known transported scopes), same as any pubkey missing from the map.
+	relayMap map[string]RepeaterRelayInfo
+	// hasScope implements ?hasScope=true|false (#1862): nil = not
+	// requested, otherwise a node must have (true) or must not have
+	// (false) at least one entry in TransportedScopes to match.
+	hasScope *bool
+	// hashRegions implements ?hashRegion=#eu,#be (#1862): normalized
+	// (lowercased, "#" stripped) region names, OR-matched against a
+	// node's TransportedScopes. nil/empty = not requested.
+	hashRegions map[string]bool
+}
+
+// relayInfoFor looks up f.relayMap by lowercase pubkey, returning a
+// zero-value RepeaterRelayInfo (empty TransportedScopes) for a pubkey with
+// no relay activity or when relayMap itself is nil.
+func (f nodeListPostFilters) relayInfoFor(pk string) RepeaterRelayInfo {
+	if f.relayMap == nil {
+		return RepeaterRelayInfo{}
+	}
+	return f.relayMap[strings.ToLower(pk)]
+}
+
+func (f nodeListPostFilters) apply(nodes []map[string]interface{}) []map[string]interface{} {
+	out := nodes[:0]
+	for _, node := range nodes {
+		if f.geoFilter != nil && f.applyGeo {
+			// Foreign-flagged nodes (#730) are kept even when their GPS lies
+			// outside the geofilter polygon — that's the whole point of the
+			// flag: operators need to SEE bridged/leaked nodes, not have them
+			// filtered away.
+			isForeign, _ := node["foreign"].(bool)
+			if !isForeign && !NodePassesGeoFilter(node["lat"], node["lon"], f.geoFilter) {
+				continue
+			}
+		}
+		if len(f.cfg.NodeBlacklist) > 0 {
+			if pk, ok := node["public_key"].(string); ok && f.cfg.IsBlacklisted(pk) {
+				continue
+			}
+		}
+		if len(f.cfg.HiddenNamePrefixes) > 0 {
+			name, _ := node["name"].(string)
+			if f.cfg.IsNameHidden(name) {
+				continue
+			}
+		}
+		if f.areaRequested {
+			if f.areaNodes == nil {
+				continue // area given but couldn't be resolved — matches nothing
+			}
+			pk, _ := node["public_key"].(string)
+			if !f.areaNodes[pk] {
+				continue
+			}
+		}
+		if f.hasScope != nil || len(f.hashRegions) > 0 {
+			pk, _ := node["public_key"].(string)
+			info := f.relayInfoFor(pk)
+			if f.hasScope != nil && (len(info.TransportedScopes) > 0) != *f.hasScope {
+				continue
+			}
+			if len(f.hashRegions) > 0 {
+				matched := false
+				for _, rs := range info.TransportedScopes {
+					if f.hashRegions[strings.ToLower(strings.TrimPrefix(rs, "#"))] {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					continue
+				}
+			}
+		}
+		out = append(out, node)
+	}
+	return out
+}
+
+// active reports whether any post-filter could actually drop a row — used
+// to skip the compensation loop entirely on the (common) unfiltered path.
+func (f nodeListPostFilters) active() bool {
+	return (f.geoFilter != nil && f.applyGeo) || len(f.cfg.NodeBlacklist) > 0 ||
+		len(f.cfg.HiddenNamePrefixes) > 0 || f.areaRequested ||
+		f.hasScope != nil || len(f.hashRegions) > 0
+}
+
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	nodes, total, counts, err := s.db.GetNodes(
-		queryLimit(r, 50, s.cfg.ListLimits.NodesMax),
-		queryInt(r, "offset", 0),
-		q.Get("role"), q.Get("search"), q.Get("before"),
-		q.Get("lastHeard"), q.Get("sortBy"), q.Get("region"),
-	)
-	if err != nil {
-		writeError(w, 500, err.Error())
-		return
+	requestedLimit := queryLimit(r, 50, s.cfg.ListLimits.NodesMax)
+	requestedOffset := queryInt(r, "offset", 0)
+	role, search, before := q.Get("role"), q.Get("search"), q.Get("before")
+	lastHeard, sortBy, region := q.Get("lastHeard"), q.Get("sortBy"), q.Get("region")
+
+	// geo_filter applies to the node list (and therefore the live map,
+	// which lists straight off this endpoint) BY DEFAULT when configured —
+	// the long-standing #730 declutter behavior. Every deployment that
+	// already had geo_filter set before GeoFilterExemptNodeList existed
+	// keeps getting exactly that, unchanged: the field is absent from
+	// their config.json, which decodes to false, which preserves the
+	// default. A deployment that wants geo_filter purely for
+	// foreign_advert classification/analytics — without also hiding
+	// out-of-polygon nodes from the map — opts out via
+	// GeoFilterExemptNodeList. ?geoFilter=0 / ?geoFilter=1 overrides
+	// either default for a single request. geo_filter's own ingestor-side
+	// tagging (and the explicit prune-geo-filter admin flow) are
+	// unaffected either way — this only gates the passive declutter view.
+	applyGeoFilter := !s.cfg.GeoFilterExemptNodeList
+	switch q.Get("geoFilter") {
+	case "1", "true":
+		applyGeoFilter = true
+	case "0", "false":
+		applyGeoFilter = false
+		// Any other value (including absent) falls through to the deployment default.
 	}
+
+	filters := nodeListPostFilters{cfg: s.cfg, geoFilter: s.getGeoFilter(), applyGeo: applyGeoFilter}
+
+	// #1862: ?hasScope=true|false and ?hashRegion=#eu,#be filter the node
+	// list by relay activity — which repeaters have (or haven't) ever
+	// transported a region-scoped packet, and specifically which
+	// region(s). Both read the same bulk relay-info map TransportedScopes
+	// already backs elsewhere (Scopes tab's "Repeaters Never Relaying Any
+	// Scope"), fetched once here (not per-page) since it's independent of
+	// pagination.
+	if hs := q.Get("hasScope"); hs == "true" || hs == "false" {
+		v := hs == "true"
+		filters.hasScope = &v
+	}
+	if hr := q.Get("hashRegion"); hr != "" {
+		filters.hashRegions = make(map[string]bool)
+		for _, part := range strings.Split(hr, ",") {
+			part = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(part), "#")))
+			if part != "" {
+				filters.hashRegions[part] = true
+			}
+		}
+	}
+	if s.store != nil && (filters.hasScope != nil || len(filters.hashRegions) > 0) {
+		filters.relayMap = s.store.GetRepeaterRelayInfoMap(s.cfg.GetHealthThresholds().RelayActiveHours)
+	}
+
+	if area := q.Get("area"); area != "" {
+		filters.areaRequested = true
+		if s.store != nil {
+			filters.areaNodes = s.store.resolveAreaNodes(area)
+		} else if s.cfg != nil && s.cfg.Areas != nil {
+			if entry, ok := s.cfg.Areas[area]; ok {
+				if pks, err := s.db.GetNodePubkeysInArea(entry); err == nil {
+					filters.areaNodes = make(map[string]bool, len(pks))
+					for _, pk := range pks {
+						filters.areaNodes[pk] = true
+					}
+				}
+			}
+		}
+	}
+
+	var nodes []map[string]interface{}
+	var counts map[string]int
+	var total int
+
+	if !filters.active() {
+		// Fast path: nothing can drop a row post-LIMIT, so a single DB
+		// page is exactly what the client asked for.
+		var err error
+		nodes, total, counts, err = s.db.GetNodes(requestedLimit, requestedOffset, role, search, before, lastHeard, sortBy, region)
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+	} else {
+		// Compensation loop (fixes #1861-class truncation): geo_filter,
+		// blacklist, hidden-name-prefix, and area all filter the page
+		// AFTER the SQL LIMIT already fixed its size, so a page that was
+		// genuinely full at the DB layer can come back shorter than
+		// `requestedLimit`. The client's pagination loop (fetchAllNodes,
+		// public/app.js) treats "shorter page than requested" as "this
+		// was the last page" and stops — so a single filtered-out row
+		// anywhere in a page used to silently truncate everything after
+		// it (e.g. the live map showing ~450 of ~1300 GPS-valid nodes
+		// because a hidden-prefix node happened to fall in page 1).
+		// Keep pulling more DB pages and re-filtering until we've
+		// collected `requestedLimit` rows or the DB itself runs out
+		// (a raw page shorter than requested = genuine end of data).
+		const maxIterations = 50 // bounds worst case to 50*requestedLimit DB rows scanned
+		curOffset := requestedOffset
+		exhaustedIterations := true
+		for iter := 0; iter < maxIterations; iter++ {
+			page, _, pageCounts, err := s.db.GetNodes(requestedLimit, curOffset, role, search, before, lastHeard, sortBy, region)
+			if err != nil {
+				writeError(w, 500, err.Error())
+				return
+			}
+			if counts == nil {
+				counts = pageCounts
+			}
+			dbPageLen := len(page)
+			nodes = append(nodes, filters.apply(page)...)
+			curOffset += requestedLimit
+			if dbPageLen < requestedLimit || len(nodes) >= requestedLimit {
+				exhaustedIterations = false
+				break
+			}
+		}
+		if exhaustedIterations {
+			// Only reachable if a post-filter is dropping an extreme,
+			// sustained run of consecutive rows (>50*requestedLimit) —
+			// astronomically unlikely for blacklist/hidden-prefix in
+			// practice, but log it so a truncated response is diagnosable
+			// instead of silently under-filling the page.
+			log.Printf("WARN handleNodes: pagination compensation loop hit maxIterations=%d (offset=%d, limit=%d) — returning %d rows, possibly short",
+				maxIterations, requestedOffset, requestedLimit, len(nodes))
+		}
+		if len(nodes) > requestedLimit {
+			nodes = nodes[:requestedLimit]
+		}
+		// total reflects only this returned page-slice under any active
+		// post-filter, not a true all-pages count — matches the
+		// pre-existing filtered-path semantics (each filter block used to
+		// set total = len(filtered) the same way). fetchAllNodes
+		// (public/app.js) never reads `total` for its own pagination
+		// termination — it relies on page-length — so this is display-only
+		// and safe to leave approximate.
+		total = len(nodes)
+	}
+
 	if s.store != nil {
 		hashInfo := s.store.GetNodeHashSizeInfo()
 		relayWindow := s.cfg.GetHealthThresholds().RelayActiveHours
@@ -1423,79 +1694,6 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 					}, axesComputed)
 				}
 			}
-		}
-	}
-	if s.cfg.GeoFilter != nil {
-		filtered := nodes[:0]
-		for _, node := range nodes {
-			// Foreign-flagged nodes (#730) are kept even when their GPS lies
-			// outside the geofilter polygon — that's the whole point of the
-			// flag: operators need to SEE bridged/leaked nodes, not have them
-			// filtered away. The ingestor sets foreign_advert=1 when its
-			// configured geo_filter rejected the advert; the server must
-			// surface those.
-			if isForeign, _ := node["foreign"].(bool); isForeign {
-				filtered = append(filtered, node)
-				continue
-			}
-			if NodePassesGeoFilter(node["lat"], node["lon"], s.cfg.GeoFilter) {
-				filtered = append(filtered, node)
-			}
-		}
-		total = len(filtered)
-		nodes = filtered
-	}
-	// Filter blacklisted nodes
-	if len(s.cfg.NodeBlacklist) > 0 {
-		filtered := nodes[:0]
-		for _, node := range nodes {
-			if pk, ok := node["public_key"].(string); !ok || !s.cfg.IsBlacklisted(pk) {
-				filtered = append(filtered, node)
-			}
-		}
-		total = len(filtered)
-		nodes = filtered
-	}
-	// Filter nodes whose name starts with a hidden prefix (#1181). DB rows
-	// are preserved — this only drops them from the API surface so observer
-	// history (paths, hops, distances) remains intact for analytics.
-	if len(s.cfg.HiddenNamePrefixes) > 0 {
-		filtered := nodes[:0]
-		for _, node := range nodes {
-			name, _ := node["name"].(string)
-			if !s.cfg.IsNameHidden(name) {
-				filtered = append(filtered, node)
-			}
-		}
-		total = len(filtered)
-		nodes = filtered
-	}
-	// Filter by area
-	if area := q.Get("area"); area != "" {
-		var areaNodes map[string]bool
-		if s.store != nil {
-			areaNodes = s.store.resolveAreaNodes(area)
-		} else if s.cfg != nil && s.cfg.Areas != nil {
-			if entry, ok := s.cfg.Areas[area]; ok {
-				pks, err := s.db.GetNodePubkeysInArea(entry)
-				if err == nil {
-					areaNodes = make(map[string]bool, len(pks))
-					for _, pk := range pks {
-						areaNodes[pk] = true
-					}
-				}
-			}
-		}
-		if areaNodes != nil {
-			filtered := make([]map[string]interface{}, 0, len(nodes))
-			for _, n := range nodes {
-				pk, _ := n["public_key"].(string)
-				if areaNodes[pk] {
-					filtered = append(filtered, n)
-				}
-			}
-			nodes = filtered
-			total = len(filtered)
 		}
 	}
 	writeJSON(w, NodeListResponse{Nodes: nodes, Total: total, Counts: counts})
@@ -2125,6 +2323,41 @@ func (s *Server) handleNodeAnalytics(w http.ResponseWriter, r *http.Request) {
 	writeError(w, 404, "Not found")
 }
 
+// handleNodeHopAnalytics answers upstream issue #1812: hop-count (this
+// node's own index within each packet's resolved relay path, not distance
+// to whichever observer reported it) for tuning the firmware's
+// flood.max / flood.max.advert / flood.max.unscoped knobs. See
+// GetNodeHopAnalytics's doc comment for the full derivation.
+func (s *Server) handleNodeHopAnalytics(w http.ResponseWriter, r *http.Request) {
+	pubkey := mux.Vars(r)["pubkey"]
+	if s.cfg.IsBlacklisted(pubkey) {
+		writeError(w, 404, "Not found")
+		return
+	}
+	if s.isPubkeyHidden(pubkey) {
+		writeError(w, 404, "Not found")
+		return
+	}
+	days := queryInt(r, "days", 7)
+	if days < 1 {
+		days = 1
+	}
+	if days > 365 {
+		days = 365
+	}
+
+	if s.store == nil {
+		writeError(w, 404, "Not found")
+		return
+	}
+	result, err := s.store.GetNodeHopAnalytics(pubkey, days)
+	if err != nil || result == nil {
+		writeError(w, 404, "Not found")
+		return
+	}
+	writeJSON(w, result)
+}
+
 func (s *Server) handleNodeClockSkew(w http.ResponseWriter, r *http.Request) {
 	pubkey := mux.Vars(r)["pubkey"]
 	if s.store == nil {
@@ -2619,6 +2852,44 @@ func (s *Server) handleResolveHops(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, ResolveHopsResponse{Resolved: resolved})
 }
 
+// resolveEntryPointArea approximates a wardriving session's area from its
+// entry-point repeater(s): for each candidate path[0] prefix, only a
+// unique_prefix match (exactly one node in the prefix map, same discipline
+// as handleResolveHops) with a known position is trusted — an ambiguous
+// prefix is skipped rather than guessed. Returns ok=false if no prefix
+// resolves this way, or the resolved node has no position, or areas aren't
+// configured.
+func (s *Server) resolveEntryPointArea(prefixes []string) (label string, ok bool) {
+	if s.store == nil {
+		return "", false
+	}
+	return s.store.resolveEntryPointArea(prefixes)
+}
+
+// annotateMessageAreas resolves each message's entry-point repeater (its
+// path[0], captured as "entryPrefix" by GetChannelMessages) to a
+// configured area — same unique_prefix-only discipline as
+// resolveEntryPointArea/handleWardrivingStats: only a truly unambiguous
+// prefix match with a known position sets "area", so this shows where the
+// SENDER actually was, distinct from (and often more specific than) the
+// area linked to the channel scope they sent with — dborup's own example:
+// sitting in Aarhus but sending with the broad #dk scope should still show
+// "Aarhus by" here. The raw entryPrefix never reaches the client, whether
+// or not it resolved.
+func (s *Server) annotateMessageAreas(messages []map[string]interface{}) {
+	hasAreas := s.cfg != nil && len(s.cfg.Areas) > 0
+	for _, m := range messages {
+		prefix, _ := m["entryPrefix"].(string)
+		delete(m, "entryPrefix")
+		if !hasAreas || prefix == "" {
+			continue
+		}
+		if label, ok := s.resolveEntryPointArea([]string{prefix}); ok {
+			m["area"] = label
+		}
+	}
+}
+
 func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 	region := r.URL.Query().Get("region")
 	includeEncrypted := r.URL.Query().Get("includeEncrypted") == "true"
@@ -2663,11 +2934,13 @@ func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 500, err.Error())
 			return
 		}
+		s.annotateMessageAreas(messages)
 		writeJSON(w, ChannelMessagesResponse{Messages: messages, Total: total})
 		return
 	}
 	if s.store != nil {
 		messages, total := s.store.GetChannelMessages(hash, limit, offset, region)
+		s.annotateMessageAreas(messages)
 		writeJSON(w, ChannelMessagesResponse{Messages: messages, Total: total})
 		return
 	}
@@ -2880,6 +3153,20 @@ func (s *Server) handleTraces(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, TraceResponse{Traces: traces})
 }
 
+func (s *Server) handlePacketPath(w http.ResponseWriter, r *http.Request) {
+	hash := mux.Vars(r)["hash"]
+	if s.db == nil {
+		writeJSON(w, PacketPathResponse{Hash: hash, Branches: []PacketPathBranch{}})
+		return
+	}
+	resp, err := s.db.GetPacketPath(hash)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, resp)
+}
+
 var iataCoords = map[string]IataCoord{
 	"SJC": {Lat: 37.3626, Lon: -121.929},
 	"SFO": {Lat: 37.6213, Lon: -122.379},
@@ -2935,6 +3222,20 @@ var iataCoords = map[string]IataCoord{
 	"ICN": {Lat: 37.4602, Lon: 126.4407},
 	"SYD": {Lat: -33.9461, Lon: 151.1772},
 	"MEL": {Lat: -37.669, Lon: 144.841},
+	// Denmark / southern Sweden — added for wardriving observer coverage
+	// (issue class: same as #1786, iataCoords lacked entries for the
+	// airport codes this mesh's observers actually use).
+	"CPH": {Lat: 55.618, Lon: 12.656},   // Copenhagen (Kastrup)
+	"AAL": {Lat: 57.0928, Lon: 9.8492},  // Aalborg
+	"AAR": {Lat: 56.3, Lon: 10.619},     // Aarhus (Tirstrup)
+	"BLL": {Lat: 55.7403, Lon: 9.1518},  // Billund
+	"ODE": {Lat: 55.4767, Lon: 10.3311}, // Odense
+	"RNN": {Lat: 55.0633, Lon: 14.7596}, // Bornholm (Rønne)
+	"RKE": {Lat: 55.5857, Lon: 12.1315}, // Roskilde
+	"SGD": {Lat: 54.9642, Lon: 9.7924},  // Sønderborg
+	"MMX": {Lat: 55.5363, Lon: 13.3762}, // Malmö
+	"HAD": {Lat: 56.6911, Lon: 12.8202}, // Halmstad
+	"VXO": {Lat: 56.9294, Lon: 14.7422}, // Växjö
 }
 
 func (s *Server) handleIATACoords(w http.ResponseWriter, r *http.Request) {
@@ -3481,6 +3782,146 @@ func (s *Server) handleScopeStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.cfg != nil && len(s.cfg.HashRegions) > 0 {
+		configured := regionutil.NormalizeNames(s.cfg.HashRegions)
+		resp.ConfiguredRegions = len(configured)
+		if matched, err := s.db.GetMatchedRegionNames(); err == nil {
+			unused := make([]string, 0, len(configured))
+			for _, name := range configured {
+				if !matched[name] {
+					unused = append(unused, name)
+				}
+			}
+			sort.Strings(unused)
+			resp.UnusedRegions = unused
+		} else {
+			log.Printf("WARN GetMatchedRegionNames: %v", err)
+		}
+	}
+
+	if s.store != nil {
+		// windowHours is irrelevant to TransportedScopes (explicitly
+		// not time-windowed — see RepeaterRelayInfo doc comment) and the
+		// map is served from the 5-min background-recomputed cache
+		// regardless of the value passed once warm, so reusing whatever
+		// handleNodes uses costs nothing extra here.
+		relayWindow := s.cfg.GetHealthThresholds().RelayActiveHours
+		relayMap := s.store.GetRepeaterRelayInfoMap(relayWindow)
+
+		byRegion := make(map[string][]string) // region -> pubkeys
+		pubkeySet := make(map[string]bool)
+		for pk, info := range relayMap {
+			for _, region := range info.TransportedScopes {
+				byRegion[region] = append(byRegion[region], pk)
+				pubkeySet[pk] = true
+			}
+		}
+		if len(pubkeySet) > 0 {
+			pubkeys := make([]string, 0, len(pubkeySet))
+			for pk := range pubkeySet {
+				pubkeys = append(pubkeys, pk)
+			}
+			// byPathHop mixes full pubkeys with short hex-prefix bucket
+			// keys (ambiguous-hop resolution fallback) — the role-filtered
+			// lookup only returns entries for keys that are actually a
+			// repeater/room node, so it doubles as the existence filter.
+			// Any key NOT in `names` is a bucket key, not a real repeater,
+			// and must be excluded below rather than falling back to
+			// showing the raw key as a fake "repeater".
+			names := s.db.GetRepeaterNamesByKeys(pubkeys)
+
+			repeaters := make([]ScopeRegionRepeaters, 0, len(byRegion))
+			for region, pks := range byRegion {
+				refs := make([]RepeaterRef, 0, len(pks))
+				for _, pk := range pks {
+					name, ok := names[pk]
+					if !ok {
+						continue
+					}
+					refs = append(refs, RepeaterRef{Name: name, PublicKey: pk})
+				}
+				if len(refs) == 0 {
+					continue
+				}
+				sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
+				repeaters = append(repeaters, ScopeRegionRepeaters{Region: region, Count: len(refs), Repeaters: refs})
+			}
+			sort.Slice(repeaters, func(i, j int) bool { return repeaters[i].Count > repeaters[j].Count })
+			resp.RepeatersByRegion = repeaters
+
+			// Bridge repeaters: invert byRegion into pubkey -> regions and
+			// keep only repeaters relaying for MORE than one region — the
+			// mesh's literal backbone nodes connecting separate regional
+			// communities. Same `names` existence-filter as above.
+			pubkeyRegions := make(map[string][]string)
+			for region, pks := range byRegion {
+				for _, pk := range pks {
+					if _, ok := names[pk]; !ok {
+						continue
+					}
+					pubkeyRegions[pk] = append(pubkeyRegions[pk], region)
+				}
+			}
+			bridges := make([]BridgeRepeater, 0)
+			for pk, regions := range pubkeyRegions {
+				if len(regions) < 2 {
+					continue
+				}
+				sort.Strings(regions)
+				bridges = append(bridges, BridgeRepeater{Name: names[pk], PublicKey: pk, Regions: regions, Count: len(regions)})
+			}
+			sort.Slice(bridges, func(i, j int) bool {
+				if bridges[i].Count != bridges[j].Count {
+					return bridges[i].Count > bridges[j].Count
+				}
+				return bridges[i].Name < bridges[j].Name
+			})
+			resp.BridgeRepeaters = bridges
+		}
+	}
+
+	if byScope, err := s.db.GetNodesByDefaultScope(); err == nil {
+		if len(byScope) > 0 {
+			originating := make([]ScopeRegionRepeaters, 0, len(byScope))
+			for region, refs := range byScope {
+				sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
+				originating = append(originating, ScopeRegionRepeaters{Region: region, Count: len(refs), Repeaters: refs})
+			}
+			sort.Slice(originating, func(i, j int) bool { return originating[i].Count > originating[j].Count })
+			resp.OriginatingNodesByRegion = originating
+		}
+	} else {
+		log.Printf("WARN GetNodesByDefaultScope: %v", err)
+	}
+
+	if chanStats, err := s.db.GetChannelMessageScopeStats(window); err == nil {
+		resp.ChannelMessages = chanStats
+	} else {
+		log.Printf("WARN GetChannelMessageScopeStats: %v", err)
+	}
+
+	if s.cfg != nil && len(s.cfg.Areas) > 0 {
+		if nodes, err := s.db.GetNodesForScopeAdoption(); err == nil {
+			// Reuses the same cached relay-info map as RepeatersByRegion
+			// above (GetRepeaterRelayInfoMap never rebuilds inline on a
+			// populated cache) so a node relaying an area's region counts
+			// as using it, not just one with a matching default_scope.
+			var relayInfo map[string]RepeaterRelayInfo
+			if s.store != nil {
+				relayInfo = s.store.GetRepeaterRelayInfoMap(s.cfg.GetHealthThresholds().RelayActiveHours)
+			}
+			resp.ScopeAdoptionByArea = computeScopeAdoptionByArea(nodes, s.cfg.Areas, relayInfo)
+		} else {
+			log.Printf("WARN GetNodesForScopeAdoption: %v", err)
+		}
+	}
+
+	if adoption, err := s.db.GetChannelScopeAdoption(window); err == nil {
+		resp.ChannelScopeAdoption = adoption
+	} else {
+		log.Printf("WARN GetChannelScopeAdoption: %v", err)
+	}
+
 	s.scopeStatsMu.Lock()
 	if s.scopeStatsCache == nil {
 		s.scopeStatsCache = make(map[string]*ScopeStatsResponse)
@@ -3490,6 +3931,173 @@ func (s *Server) handleScopeStats(w http.ResponseWriter, r *http.Request) {
 	s.scopeStatsCachedAt[window] = time.Now()
 	s.scopeStatsMu.Unlock()
 
+	writeJSON(w, resp)
+}
+
+// handleHopDepthAnalytics serves GetHopDepthAnalytics (see its doc comment)
+// for the Scopes tab's scoped-vs-unscoped containment comparison and the
+// Foreign Traffic tab's per-repeater unscoped hop-depth enrichment. Same
+// per-window 30s-cache shape as handleScopeStats.
+func (s *Server) handleHopDepthAnalytics(w http.ResponseWriter, r *http.Request) {
+	const hopDepthTTL = 30 * time.Second
+
+	window := r.URL.Query().Get("window")
+	if window == "" {
+		window = "24h"
+	}
+	if window != "1h" && window != "24h" && window != "7d" {
+		writeError(w, 400, "window must be 1h, 24h, or 7d")
+		return
+	}
+
+	s.hopDepthMu.Lock()
+	if s.hopDepthCache != nil {
+		if cached, ok := s.hopDepthCache[window]; ok && time.Since(s.hopDepthCachedAt[window]) < hopDepthTTL {
+			s.hopDepthMu.Unlock()
+			writeJSON(w, cached)
+			return
+		}
+	}
+	s.hopDepthMu.Unlock()
+
+	resp, err := s.db.GetHopDepthAnalytics(window)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+
+	s.hopDepthMu.Lock()
+	if s.hopDepthCache == nil {
+		s.hopDepthCache = make(map[string]*HopDepthAnalyticsResponse)
+		s.hopDepthCachedAt = make(map[string]time.Time)
+	}
+	s.hopDepthCache[window] = resp
+	s.hopDepthCachedAt[window] = time.Now()
+	s.hopDepthMu.Unlock()
+
+	writeJSON(w, resp)
+}
+
+// handleWardrivingStats serves activity/entry-point/coverage analytics for
+// the #wardriving channel (see GetWardrivingStats doc). Same per-window
+// 30s-cache shape as handleScopeStats.
+func (s *Server) handleWardrivingStats(w http.ResponseWriter, r *http.Request) {
+	const wardrivingStatsTTL = 30 * time.Second
+
+	window := r.URL.Query().Get("window")
+	if window == "" {
+		window = "24h"
+	}
+	if window != "1h" && window != "24h" && window != "7d" {
+		writeError(w, 400, "window must be 1h, 24h, or 7d")
+		return
+	}
+	channel := r.URL.Query().Get("channel")
+	if channel == "" {
+		channel = "#wardriving"
+	}
+	cacheKey := window + "|" + channel
+
+	s.wardrivingStatsMu.Lock()
+	if s.wardrivingStatsCache != nil {
+		if cached, ok := s.wardrivingStatsCache[cacheKey]; ok && time.Since(s.wardrivingStatsCachedAt[cacheKey]) < wardrivingStatsTTL {
+			s.wardrivingStatsMu.Unlock()
+			writeJSON(w, cached)
+			return
+		}
+	}
+	s.wardrivingStatsMu.Unlock()
+
+	resp, err := s.db.GetWardrivingStats(window, channel)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+
+	// Airtime needs the in-memory store's resolved-path index (db.go alone
+	// can't resolve full relay paths to distinct repeaters) — omitted
+	// entirely in DB-only mode rather than shown as a misleading zero.
+	if s.store != nil {
+		for i := range resp.Sessions {
+			if ms, ok := s.store.AirtimeForTransmissions(resp.Sessions[i].TransmissionIDs); ok {
+				v := ms.Milliseconds()
+				resp.Sessions[i].AirtimeMs = &v
+			}
+		}
+	}
+
+	if s.cfg != nil && len(s.cfg.Areas) > 0 {
+		for i := range resp.GPSShares {
+			if label, ok := AreaForPoint(resp.GPSShares[i].Lat, resp.GPSShares[i].Lon, s.cfg.Areas); ok {
+				resp.GPSShares[i].Area = &label
+			}
+		}
+		if s.store != nil {
+			for i := range resp.Sessions {
+				if label, ok := s.resolveEntryPointArea(resp.Sessions[i].EntryPointPrefixes); ok {
+					resp.Sessions[i].Area = &label
+				}
+			}
+		}
+	}
+
+	s.wardrivingStatsMu.Lock()
+	if s.wardrivingStatsCache == nil {
+		s.wardrivingStatsCache = make(map[string]*WardrivingStatsResponse)
+		s.wardrivingStatsCachedAt = make(map[string]time.Time)
+	}
+	s.wardrivingStatsCache[cacheKey] = resp
+	s.wardrivingStatsCachedAt[cacheKey] = time.Now()
+	s.wardrivingStatsMu.Unlock()
+
+	writeJSON(w, resp)
+}
+
+// handleWardrivingSenderMessages is the drill-down behind the Wardriving
+// tab's Top Senders/Sessions tables: one sender's individual messages, each
+// with its entry-point path and per-observer signal. Pass since+until to
+// scope to one session's exact time range (e.g. from a Sessions row);
+// otherwise window (default 24h, matching /api/analytics/wardriving)
+// covers the sender's whole activity in that period. Not cached — this is
+// an on-demand detail view, not a polled dashboard endpoint.
+func (s *Server) handleWardrivingSenderMessages(w http.ResponseWriter, r *http.Request) {
+	sender := strings.TrimSpace(r.URL.Query().Get("sender"))
+	if sender == "" {
+		writeError(w, 400, "sender is required")
+		return
+	}
+	channel := r.URL.Query().Get("channel")
+	if channel == "" {
+		channel = "#wardriving"
+	}
+	since := r.URL.Query().Get("since")
+	until := r.URL.Query().Get("until")
+	if since == "" || until == "" {
+		window := r.URL.Query().Get("window")
+		if window == "" {
+			window = "24h"
+		}
+		var dur time.Duration
+		switch window {
+		case "1h":
+			dur = time.Hour
+		case "7d":
+			dur = 7 * 24 * time.Hour
+		case "24h":
+			dur = 24 * time.Hour
+		default:
+			writeError(w, 400, "window must be 1h, 24h, or 7d")
+			return
+		}
+		since = time.Now().Add(-dur).UTC().Format(time.RFC3339)
+		until = time.Now().UTC().Format(time.RFC3339)
+	}
+
+	resp, err := s.db.GetWardrivingSenderMessages(sender, channel, since, until)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
 	writeJSON(w, resp)
 }
 

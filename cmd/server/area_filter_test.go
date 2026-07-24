@@ -296,6 +296,38 @@ func TestHandleConfigAreas(t *testing.T) {
 	}
 }
 
+func TestHandleConfigAreas_RegionScopes(t *testing.T) {
+	db := setupTestDBv2(t)
+	cfg := &Config{Areas: map[string]AreaEntry{
+		"AAR": {Label: "Aarhus by", RegionScopes: []string{"dk-aarhus"}},
+		"MST": {Label: "Maastricht"},
+	}}
+
+	r := mux.NewRouter()
+	srv := &Server{db: db, cfg: cfg}
+	r.HandleFunc("/api/config/areas", srv.handleConfigAreas).Methods("GET")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config/areas", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	var result []map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	byKey := map[string]map[string]interface{}{}
+	for _, entry := range result {
+		byKey[entry["key"].(string)] = entry
+	}
+	aarScopes, _ := byKey["AAR"]["regionScopes"].([]interface{})
+	if len(aarScopes) != 1 || aarScopes[0] != "dk-aarhus" {
+		t.Errorf("AAR regionScopes = %v, want [\"dk-aarhus\"]", byKey["AAR"]["regionScopes"])
+	}
+	if _, present := byKey["MST"]["regionScopes"]; present {
+		t.Errorf("MST should omit regionScopes entirely (unset), got %v", byKey["MST"]["regionScopes"])
+	}
+}
+
 func TestHandleConfigAreasEmpty(t *testing.T) {
 	db := setupTestDBv2(t)
 	cfg := &Config{}

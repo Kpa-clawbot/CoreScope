@@ -7,7 +7,9 @@ import (
 	"log"
 	"math"
 	"os"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,7 +22,9 @@ import (
 // routeTypeTransport covers TRANSPORT_FLOOD (0) and TRANSPORT_DIRECT (3) —
 // the only route types that carry transport_code_1 (transport-level scope).
 // Per firmware/docs/packet_format.md § Route Types:
-//   0 = TRANSPORT_FLOOD, 1 = FLOOD, 2 = DIRECT, 3 = TRANSPORT_DIRECT.
+//
+//	0 = TRANSPORT_FLOOD, 1 = FLOOD, 2 = DIRECT, 3 = TRANSPORT_DIRECT.
+//
 // Routes 1 (FLOOD) and 2 (DIRECT) never carry a scope by protocol — they are
 // inherently unscoped and are counted separately in GetScopeStats (#1838).
 const routeTypeTransportSQL = "route_type IN (0, 3)"
@@ -32,11 +36,11 @@ const routeTypeNonTransportSQL = "route_type IN (1, 2)"
 
 // DB wraps a read-only connection to the MeshCore SQLite database.
 type DB struct {
-	conn             *sql.DB
-	path             string // filesystem path to the database file
-	isV3             bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
-	hasResolvedPath  bool   // observations table has resolved_path column
-	hasObsRawHex     bool   // observations table has raw_hex column (#881)
+	conn                *sql.DB
+	path                string // filesystem path to the database file
+	isV3                bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
+	hasResolvedPath     bool   // observations table has resolved_path column
+	hasObsRawHex        bool   // observations table has raw_hex column (#881)
 	hasScopeName        bool   // transmissions.scope_name column exists (#899)
 	hasDefaultScope     bool   // nodes.default_scope column exists (#899)
 	hasMultibyteSupCols bool   // nodes/inactive_nodes have multibyte_sup/multibyte_evidence (#903)
@@ -229,7 +233,7 @@ func (db *DB) scanTransmissionRow(rows *sql.Rows) map[string]interface{} {
 
 // Node represents a row from the nodes table.
 type Node struct {
-	PublicKey     string   `json:"public_key"`
+	PublicKey    string   `json:"public_key"`
 	Name         *string  `json:"name"`
 	Role         *string  `json:"role"`
 	Lat          *float64 `json:"lat"`
@@ -480,20 +484,20 @@ func (db *DB) GetAllRoleCounts() map[string]int {
 
 // PacketQuery holds filter params for packet listing.
 type PacketQuery struct {
-	Limit    int
-	Offset   int
-	Type     *int
-	Route    *int
-	Observer string
-	Hash     string
-	Since    string
-	Until    string
-	Region   string
-	Area     string   // area key; filters by transmitting node's GPS position
-	Node     string
-	Channel  string // channel_hash filter (#812). Plain names like "#test"/"public" or "enc_<HEX>" for encrypted
-	Order               string // ASC or DESC
-	ExpandObservations  bool   // when true, include observation sub-maps in txToMap output
+	Limit              int
+	Offset             int
+	Type               *int
+	Route              *int
+	Observer           string
+	Hash               string
+	Since              string
+	Until              string
+	Region             string
+	Area               string // area key; filters by transmitting node's GPS position
+	Node               string
+	Channel            string // channel_hash filter (#812). Plain names like "#test"/"public" or "enc_<HEX>" for encrypted
+	Order              string // ASC or DESC
+	ExpandObservations bool   // when true, include observation sub-maps in txToMap output
 }
 
 // PacketResult wraps paginated packet list.
@@ -584,6 +588,10 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 	// codes across all observers of the transmission, with empty/NULL IATAs
 	// excluded. Frontend needs this on the DEFAULT COLLAPSED VIEW (where
 	// p._children is empty), so we compute it server-side.
+	groupedScopeCol := ""
+	if db.hasScopeName {
+		groupedScopeCol = ", t.scope_name"
+	}
 	var querySQL string
 	if db.isV3 {
 		querySQL = fmt.Sprintf(`SELECT t.hash, t.first_seen, t.raw_hex, t.decoded_json, t.payload_type, t.route_type,
@@ -592,7 +600,7 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 			COALESCE((SELECT MAX(strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', oi.timestamp, 'unixepoch')) FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen) AS latest,
 			obs.id AS observer_id, obs.name AS observer_name, COALESCE(obs.iata, '') AS observer_iata,
 			o.snr, o.rssi, o.path_json,
-			COALESCE((SELECT GROUP_CONCAT(DISTINCT obi.iata) FROM observations oi JOIN observers obi ON obi.rowid = oi.observer_idx WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas
+			COALESCE((SELECT GROUP_CONCAT(DISTINCT obi.iata) FROM observations oi JOIN observers obi ON obi.rowid = oi.observer_idx WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas`+groupedScopeCol+`
 		FROM transmissions t
 		LEFT JOIN observations o ON o.id = (
 			SELECT id FROM observations WHERE transmission_id = t.id
@@ -607,7 +615,7 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 			COALESCE((SELECT MAX(oi.timestamp) FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen) AS latest,
 			o.observer_id, o.observer_name, COALESCE(obs2.iata, '') AS observer_iata,
 			o.snr, o.rssi, o.path_json,
-			COALESCE((SELECT GROUP_CONCAT(DISTINCT obi.iata) FROM observations oi JOIN observers obi ON obi.id = oi.observer_id WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas
+			COALESCE((SELECT GROUP_CONCAT(DISTINCT obi.iata) FROM observations oi JOIN observers obi ON obi.id = oi.observer_id WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas`+groupedScopeCol+`
 		FROM transmissions t
 		LEFT JOIN observations o ON o.id = (
 			SELECT id FROM observations WHERE transmission_id = t.id
@@ -633,10 +641,15 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 		var payloadType, routeType sql.NullInt64
 		var count, observerCount int
 		var snr, rssi sql.NullFloat64
+		var scopeName sql.NullString
 
-		if err := rows.Scan(&hash, &firstSeen, &rawHex, &decodedJSON, &payloadType, &routeType,
+		scanArgs := []interface{}{&hash, &firstSeen, &rawHex, &decodedJSON, &payloadType, &routeType,
 			&count, &observerCount, &latest,
-			&observerID, &observerName, &observerIATA, &snr, &rssi, &pathJSON, &distinctIatasCSV); err != nil {
+			&observerID, &observerName, &observerIATA, &snr, &rssi, &pathJSON, &distinctIatasCSV}
+		if db.hasScopeName {
+			scanArgs = append(scanArgs, &scopeName)
+		}
+		if err := rows.Scan(scanArgs...); err != nil {
 			continue
 		}
 
@@ -658,6 +671,7 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 			"decoded_json":      nullStr(decodedJSON),
 			"snr":               nullFloat(snr),
 			"rssi":              nullFloat(rssi),
+			"scope_name":        nullStr(scopeName),
 		})
 	}
 
@@ -813,7 +827,6 @@ func (db *DB) resolveNodePubkey(nodeIDOrName string) string {
 	return pk
 }
 
-
 // GetTransmissionByID fetches from transmissions table with observer data.
 func (db *DB) GetTransmissionByID(id int) (map[string]interface{}, error) {
 	selectCols, observerJoin := db.transmissionBaseSQL()
@@ -859,7 +872,6 @@ func (db *DB) GetObservationsForHash(hash string) []map[string]interface{} {
 	obsByTx := db.getObservationsForTransmissions([]int{txID})
 	return obsByTx[txID]
 }
-
 
 // GetNodes returns filtered, paginated node list.
 func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortBy, region string) ([]map[string]interface{}, int, map[string]int, error) {
@@ -1039,7 +1051,6 @@ func (db *DB) GetNodeByPubkey(pubkey string) (map[string]interface{}, error) {
 	}
 	return nil, nil
 }
-
 
 // GetRecentTransmissionsForNode returns recent transmissions originated by a
 // node, identified by exact pubkey match on the indexed from_pubkey column
@@ -1413,7 +1424,6 @@ func (db *DB) GetDistinctIATAs() ([]string, error) {
 	return codes, nil
 }
 
-
 // GetNetworkStatus returns overall network health status.
 func (db *DB) GetNetworkStatus(healthThresholds HealthThresholds) (map[string]interface{}, error) {
 	rows, err := db.conn.Query("SELECT public_key, name, role, last_seen FROM nodes")
@@ -1505,6 +1515,303 @@ func (db *DB) GetTraces(hash string) ([]map[string]interface{}, error) {
 		traces = make([]map[string]interface{}, 0)
 	}
 	return traces, nil
+}
+
+// PacketPathPoint is one hop's position along a packet's resolved relay
+// path, for map visualization (public/packet-path-map.js). Lat/Lon are
+// nil when that node has never advertised a GPS position -- the caller
+// draws a gap rather than guessing.
+type PacketPathPoint struct {
+	PublicKey string   `json:"publicKey"`
+	Name      string   `json:"name"`
+	Role      string   `json:"role,omitempty"`
+	Lat       *float64 `json:"lat"`
+	Lon       *float64 `json:"lon"`
+}
+
+// PacketPathObserver is the station that produced a given branch's
+// observation of a packet (see GetPacketPath), positioned from its own
+// self-advertised GPS (the same source /api/observers uses) when known,
+// falling back to its configured IATA code otherwise -- not a stored
+// per-observer lat/lon column.
+type PacketPathObserver struct {
+	Name string   `json:"name"`
+	IATA string   `json:"iata,omitempty"`
+	Lat  *float64 `json:"lat"`
+	Lon  *float64 `json:"lon"`
+}
+
+// PacketPathBranch is one station's route to a packet: how far it
+// traveled to reach them (hop count taken straight from that
+// observation's path_json, independent of how much of it resolved) and,
+// where resolvable, each hop's name/role/lat/lon in path order.
+type PacketPathBranch struct {
+	Hops     int                 `json:"hops"`
+	Points   []PacketPathPoint   `json:"points"`
+	Observer *PacketPathObserver `json:"observer,omitempty"`
+	SNR      *float64            `json:"snr,omitempty"`
+}
+
+// PacketPathResponse is every branch a packet is known to have reached --
+// one per distinct observer, kept at that observer's own deepest
+// observation -- used to draw the full flood spread on a map (the
+// ping-bot reply's "View path" link), not just the single farthest route.
+type PacketPathResponse struct {
+	Hash     string             `json:"hash"`
+	Branches []PacketPathBranch `json:"branches"`
+}
+
+// GetPacketPath resolves every distinct station that observed a packet to
+// its own branch: hop count and (where resolvable) relay names/positions
+// in path order, plus that station's own position. A station can hear a
+// packet more than once as flood copies arrive via different routes; only
+// its deepest observation (by raw hop count, same "farthest leg"
+// reasoning as the ping-bot reply -- see pingBotReply's doc comment) is
+// kept, so each station contributes exactly one branch. Branches are
+// returned deepest-first.
+func (db *DB) GetPacketPath(hash string) (*PacketPathResponse, error) {
+	if !db.hasResolvedPath {
+		return nil, fmt.Errorf("resolved_path not available on this server")
+	}
+	var querySQL string
+	if db.isV3 {
+		querySQL = `SELECT obs.rowid, obs.id, obs.name, obs.iata, o.path_json, o.resolved_path, o.snr
+			FROM observations o
+			JOIN transmissions t ON t.id = o.transmission_id
+			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
+			WHERE t.hash = ?`
+	} else {
+		querySQL = `SELECT o.observer_id, o.observer_id, o.observer_name, NULL, o.path_json, o.resolved_path, o.snr
+			FROM observations o
+			JOIN transmissions t ON t.id = o.transmission_id
+			WHERE t.hash = ?`
+	}
+	rows, err := db.conn.Query(querySQL, strings.ToLower(hash))
+	if err != nil {
+		return nil, fmt.Errorf("packet path query: %w", err)
+	}
+	defer rows.Close()
+
+	type obsBranch struct {
+		hops           int
+		resolvedPath   []*string
+		observerName   string
+		observerPubkey string
+		observerIATA   sql.NullString
+		snr            sql.NullFloat64
+	}
+	best := make(map[string]*obsBranch)
+
+	for rows.Next() {
+		var obsKey, obsPubkey, obsName, obsIATA, pathJSON, resolvedPathJSON sql.NullString
+		var snr sql.NullFloat64
+		if err := rows.Scan(&obsKey, &obsPubkey, &obsName, &obsIATA, &pathJSON, &resolvedPathJSON, &snr); err != nil {
+			continue
+		}
+		if !pathJSON.Valid {
+			continue
+		}
+		var h []string
+		if json.Unmarshal([]byte(pathJSON.String), &h) != nil {
+			continue
+		}
+		hops := len(h)
+		var resolvedPath []*string
+		if resolvedPathJSON.Valid {
+			resolvedPath = unmarshalResolvedPath(resolvedPathJSON.String)
+		}
+		key := obsKey.String
+		if key == "" {
+			key = obsName.String
+		}
+		if key == "" {
+			continue // no way to attribute this observation to a station
+		}
+		if existing, ok := best[key]; !ok || hops > existing.hops {
+			best[key] = &obsBranch{
+				hops: hops, resolvedPath: resolvedPath,
+				observerName: obsName.String, observerPubkey: strings.ToLower(strings.TrimSpace(obsPubkey.String)),
+				observerIATA: obsIATA, snr: snr,
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("packet path iteration: %w", err)
+	}
+
+	resp := &PacketPathResponse{Hash: hash, Branches: []PacketPathBranch{}}
+	if len(best) == 0 {
+		return resp, nil
+	}
+
+	pubkeySet := map[string]bool{}
+	for _, b := range best {
+		for _, pk := range b.resolvedPath {
+			if pk != nil && *pk != "" {
+				pubkeySet[*pk] = true
+			}
+		}
+		// An observer is itself a mesh node -- if it has ever self-advertised
+		// a GPS position, that's a more precise fix than its (often manually
+		// typed, sometimes wrong or missing) configured IATA code. Folded
+		// into the same batched lookup below rather than a second query.
+		if b.observerPubkey != "" {
+			pubkeySet[b.observerPubkey] = true
+		}
+	}
+	pubkeys := make([]string, 0, len(pubkeySet))
+	for pk := range pubkeySet {
+		pubkeys = append(pubkeys, pk)
+	}
+	type nodeInfo struct {
+		name string
+		role string
+		lat  *float64
+		lon  *float64
+	}
+	nodeByPK := make(map[string]nodeInfo, len(pubkeys))
+	if len(pubkeys) > 0 {
+		placeholders := make([]byte, 0, len(pubkeys)*2)
+		args := make([]interface{}, len(pubkeys))
+		for i, pk := range pubkeys {
+			if i > 0 {
+				placeholders = append(placeholders, ',')
+			}
+			placeholders = append(placeholders, '?')
+			args[i] = pk
+		}
+		nodeRows, err := db.conn.Query(
+			"SELECT public_key, name, role, lat, lon FROM nodes WHERE public_key IN ("+string(placeholders)+")", args...)
+		if err == nil {
+			for nodeRows.Next() {
+				var pk string
+				var name, role sql.NullString
+				var lat, lon sql.NullFloat64
+				if nodeRows.Scan(&pk, &name, &role, &lat, &lon) == nil {
+					ni := nodeInfo{name: name.String, role: role.String}
+					if lat.Valid {
+						v := lat.Float64
+						ni.lat = &v
+					}
+					if lon.Valid {
+						v := lon.Float64
+						ni.lon = &v
+					}
+					nodeByPK[pk] = ni
+				}
+			}
+			nodeRows.Close()
+		}
+	}
+
+	// Fallback for observers whose own `observers.id` isn't its mesh
+	// pubkey at all -- e.g. an MQTT-bridge-type observer (observed:
+	// openHop-Repeater firmware) that publishes its status keyed by
+	// device name rather than pubkey, so the lookup above never matches
+	// even though the same physical device has a real, positioned nodes
+	// row under its actual pubkey. Matched by exact display name; only
+	// queried for observers the pubkey lookup left unpositioned, and only
+	// applied if the pubkey lookup didn't already find something.
+	nameFallbackNeeded := map[string]bool{}
+	for _, b := range best {
+		if b.observerName == "" {
+			continue
+		}
+		if ni, ok := nodeByPK[b.observerPubkey]; ok && ni.lat != nil && ni.lon != nil {
+			continue
+		}
+		nameFallbackNeeded[b.observerName] = true
+	}
+	nodeByName := make(map[string]nodeInfo, len(nameFallbackNeeded))
+	if len(nameFallbackNeeded) > 0 {
+		names := make([]string, 0, len(nameFallbackNeeded))
+		for n := range nameFallbackNeeded {
+			names = append(names, n)
+		}
+		placeholders := make([]byte, 0, len(names)*2)
+		args := make([]interface{}, len(names))
+		for i, n := range names {
+			if i > 0 {
+				placeholders = append(placeholders, ',')
+			}
+			placeholders = append(placeholders, '?')
+			args[i] = n
+		}
+		nameRows, err := db.conn.Query(
+			"SELECT name, role, lat, lon FROM nodes WHERE name IN ("+string(placeholders)+") AND lat IS NOT NULL AND lon IS NOT NULL", args...)
+		if err == nil {
+			ambiguous := map[string]bool{}
+			for nameRows.Next() {
+				var name, role sql.NullString
+				var lat, lon sql.NullFloat64
+				if nameRows.Scan(&name, &role, &lat, &lon) == nil {
+					if _, exists := nodeByName[name.String]; exists {
+						ambiguous[name.String] = true // >1 positioned node shares this name -- don't guess which one
+						continue
+					}
+					v1, v2 := lat.Float64, lon.Float64
+					nodeByName[name.String] = nodeInfo{role: role.String, lat: &v1, lon: &v2}
+				}
+			}
+			nameRows.Close()
+			for n := range ambiguous {
+				delete(nodeByName, n)
+			}
+		}
+	}
+
+	for _, b := range best {
+		branch := PacketPathBranch{Hops: b.hops, Points: []PacketPathPoint{}}
+		for _, pk := range b.resolvedPath {
+			if pk == nil || *pk == "" {
+				continue
+			}
+			ni := nodeByPK[*pk]
+			name := ni.name
+			if name == "" {
+				name = *pk
+			}
+			branch.Points = append(branch.Points, PacketPathPoint{
+				PublicKey: *pk, Name: name, Role: ni.role, Lat: ni.lat, Lon: ni.lon,
+			})
+		}
+		if b.observerName != "" {
+			obs := &PacketPathObserver{Name: b.observerName}
+			if b.observerIATA.Valid {
+				obs.IATA = strings.ToUpper(strings.TrimSpace(b.observerIATA.String))
+			}
+			// Prefer the observer's own self-advertised GPS (same source as
+			// /api/observers and the Wardriving tab), falling back to a
+			// name match against `nodes` (some bridge-type observers --
+			// seen on openHop-Repeater firmware -- publish their MQTT
+			// status keyed by device name rather than mesh pubkey, so the
+			// pubkey lookup above never finds their real, positioned node
+			// row), and only then the configured IATA code -- which only
+			// covers a fixed list of real airports plus a handful of
+			// hand-added local codes, so a custom/regional code an
+			// operator typed in (or a typo) falls through it even when
+			// the node itself knows exactly where it is.
+			if ni, ok := nodeByPK[b.observerPubkey]; ok && ni.lat != nil && ni.lon != nil {
+				obs.Lat, obs.Lon = ni.lat, ni.lon
+			} else if ni, ok := nodeByName[b.observerName]; ok {
+				obs.Lat, obs.Lon = ni.lat, ni.lon
+			} else if obs.IATA != "" {
+				if coord, ok := iataCoords[obs.IATA]; ok {
+					lat, lon := coord.Lat, coord.Lon
+					obs.Lat, obs.Lon = &lat, &lon
+				}
+			}
+			branch.Observer = obs
+		}
+		if b.snr.Valid {
+			v := b.snr.Float64
+			branch.SNR = &v
+		}
+		resp.Branches = append(resp.Branches, branch)
+	}
+	sort.Slice(resp.Branches, func(i, j int) bool { return resp.Branches[i].Hops > resp.Branches[j].Hops })
+
+	return resp, nil
 }
 
 // GetChannels returns channel list from GRP_TXT packets.
@@ -1739,6 +2046,72 @@ func (db *DB) GetEncryptedChannels(region ...string) ([]map[string]interface{}, 
 // This avoids loading every observation row for a channel into Go memory
 // before paginating (issue #1225: 5703 tx × ~50 obs ≈ 275K rows → ~30s
 // for limit=50).
+// channelMentionPrefixRe strips a leading "@target " reply-address the
+// same way the frontend does (public/channels.js replyMatch) before
+// matching the ping trigger, so "@CoreScopeBot ping" triggers the same as
+// a bare "ping".
+var channelMentionPrefixRe = regexp.MustCompile(`^@[A-Za-z0-9_-]{1,32}\s+`)
+
+// pingTriggerWords are the exact (case-insensitive) message bodies that
+// trigger a pong reply. Mirrored by pingTriggerWords in
+// public/channels.js -- keep both lists in sync by hand.
+var pingTriggerWords = map[string]bool{
+	"ping":  true,
+	"/ping": true,
+}
+
+// isPingTrigger reports whether displayText, after stripping a leading
+// "@target " mention the same way the frontend does (public/channels.js
+// replyMatch), exactly matches one of pingTriggerWords.
+func isPingTrigger(displayText string) bool {
+	trigger := strings.TrimSpace(displayText)
+	trigger = channelMentionPrefixRe.ReplaceAllString(trigger, "")
+	return pingTriggerWords[strings.ToLower(strings.TrimSpace(trigger))]
+}
+
+// pingBotReply synthesizes a "pong" reply for a channel message whose
+// text matched isPingTrigger — CoreScope-side only, never transmitted
+// back onto the mesh (CoreScope has no publish path to a MeshCore
+// broker/radio). Purely a read-time annotation over data this message's
+// own row already carries (hop count + relay path, SNR, hearing
+// observer, region scope), not a persisted message.
+//
+// repeaterNames is the resolved relay path in hop order (element i is
+// hop i's node name, falling back to its pubkey/hash-prefix when a name
+// couldn't be resolved); nil/empty when hops == 0 or resolution wasn't
+// available -- the hop count itself is unaffected either way.
+func pingBotReply(hops int, snr sql.NullFloat64, observer string, repeaterNames []string) map[string]interface{} {
+	parts := make([]string, 0, 3)
+	if hops > 0 {
+		s := "s"
+		if hops == 1 {
+			s = ""
+		}
+		hopDesc := fmt.Sprintf("%d hop%s", hops, s)
+		if len(repeaterNames) > 0 {
+			hopDesc += " (via " + strings.Join(repeaterNames, " → ") + ")"
+		}
+		parts = append(parts, hopDesc)
+	} else {
+		parts = append(parts, "0 hops (direct)")
+	}
+	if snr.Valid {
+		parts = append(parts, fmt.Sprintf("SNR %.1fdB", snr.Float64))
+	}
+	if observer != "" {
+		parts = append(parts, "heard by "+observer)
+	}
+	// Deliberately no scope/area here -- both are already shown on the
+	// triggering message's own meta line right above this reply, so
+	// repeating them would just be redundant.
+	return map[string]interface{}{
+		"sender": "CoreScopeBot",
+		"text":   "🏓 pong! " + strings.Join(parts, " · "),
+		"hops":   hops,
+		"snr":    nullFloat(snr),
+	}
+}
+
 func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region ...string) ([]map[string]interface{}, int, error) {
 	if limit <= 0 {
 		limit = 100
@@ -1856,10 +2229,21 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 		idPlaceholders[i] = "?"
 		obsArgs[i] = id
 	}
+	scopeCol := ""
+	if db.hasScopeName {
+		scopeCol = ", t.scope_name"
+	}
+	// resolvedPathCol feeds the ping-bot reply's "via RepeaterA → RepeaterB"
+	// hop names (see the bulk-resolve pass below) -- optional like
+	// scopeCol since not every DB/test fixture has this column.
+	resolvedPathCol := ""
+	if db.hasResolvedPath {
+		resolvedPathCol = ", o.resolved_path"
+	}
 	var obsSQL string
 	if db.isV3 {
 		obsSQL = `SELECT o.id, t.id, t.hash, t.decoded_json, t.first_seen,
-				obs.id, obs.name, o.snr, o.path_json, o.timestamp
+				obs.id, obs.name, o.snr, o.path_json, o.timestamp, t.route_type` + scopeCol + resolvedPathCol + `
 			FROM observations o
 			JOIN transmissions t ON t.id = o.transmission_id
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
@@ -1867,7 +2251,7 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 			ORDER BY o.id ASC`
 	} else {
 		obsSQL = `SELECT o.id, t.id, t.hash, t.decoded_json, t.first_seen,
-				o.observer_id, o.observer_name, o.snr, o.path_json, o.timestamp
+				o.observer_id, o.observer_name, o.snr, o.path_json, o.timestamp, t.route_type` + scopeCol + resolvedPathCol + `
 			FROM observations o
 			JOIN transmissions t ON t.id = o.transmission_id
 			WHERE t.id IN (` + strings.Join(idPlaceholders, ",") + `)
@@ -1881,25 +2265,86 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 	defer rows.Close()
 
 	type msg struct {
-		Data       map[string]interface{}
-		Repeats    int
+		Data        map[string]interface{}
+		Repeats     int
 		LatestEpoch int64 // max observation timestamp (unix seconds) — issue #1366
 	}
 	msgMap := make(map[int]*msg, len(pageIDs))
 
+	// pendingPing collects a ping-triggering message's REACH across every
+	// observation of it, not just the first: hops/snr/resolvedPath track
+	// the DEEPEST (max-hop) observation seen so far -- how far the packet
+	// had propagated before the farthest-along observer heard it -- and
+	// observers is every distinct observer that heard it at all (breadth).
+	// A single arbitrary "first observation wins" data point understates
+	// both: two observers can hear the same flood at very different hop
+	// depths depending on which relay leg reached them.
+	type pendingPing struct {
+		hops         int
+		snr          sql.NullFloat64
+		resolvedPath []*string
+		observers    map[string]bool
+	}
+	pendingPings := make(map[int]*pendingPing)
+
 	for rows.Next() {
 		var pktID, txID int
-		var pktHash, dj, fs, obsID, obsName, pathJSON sql.NullString
+		var pktHash, dj, fs, obsID, obsName, pathJSON, resolvedPathJSON sql.NullString
 		var snr sql.NullFloat64
 		var obsTs sql.NullInt64
-		rows.Scan(&pktID, &txID, &pktHash, &dj, &fs, &obsID, &obsName, &snr, &pathJSON, &obsTs)
+		var routeType sql.NullInt64
+		var scopeName sql.NullString
+		scanArgs := []interface{}{&pktID, &txID, &pktHash, &dj, &fs, &obsID, &obsName, &snr, &pathJSON, &obsTs, &routeType}
+		if db.hasScopeName {
+			scanArgs = append(scanArgs, &scopeName)
+		}
+		if db.hasResolvedPath {
+			scanArgs = append(scanArgs, &resolvedPathJSON)
+		}
+		if err := rows.Scan(scanArgs...); err != nil {
+			return nil, 0, err
+		}
 		if !dj.Valid {
 			continue
 		}
+
+		// Hop count, relay path, and hearing station for THIS observation
+		// row -- computed for every row (not just the first) so a ping's
+		// reach can be tracked across every station that heard it.
+		var hops int
+		var entryPrefix string
+		if pathJSON.Valid {
+			var h []string
+			if json.Unmarshal([]byte(pathJSON.String), &h) == nil {
+				hops = len(h)
+				if len(h) > 0 {
+					entryPrefix = h[0]
+				}
+			}
+		}
+		var resolvedPath []*string
+		if resolvedPathJSON.Valid {
+			resolvedPath = unmarshalResolvedPath(resolvedPathJSON.String)
+		}
+		observerName := ""
+		if obsName.Valid {
+			observerName = obsName.String
+		} else if obsID.Valid {
+			observerName = obsID.String
+		}
+
 		if existing, ok := msgMap[txID]; ok {
 			existing.Repeats++
 			if obsTs.Valid && obsTs.Int64 > existing.LatestEpoch {
 				existing.LatestEpoch = obsTs.Int64
+			}
+			if agg, ok := pendingPings[txID]; ok {
+				if observerName != "" {
+					agg.observers[observerName] = true
+				}
+				if hops > agg.hops {
+					agg.hops, agg.snr, agg.resolvedPath = hops, snr, resolvedPath
+				}
 			}
 			continue
 		}
@@ -1922,13 +2367,6 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 				displayText = text[idx+2:]
 			}
 		}
-		var hops int
-		if pathJSON.Valid {
-			var h []interface{}
-			if json.Unmarshal([]byte(pathJSON.String), &h) == nil {
-				hops = len(h)
-			}
-		}
 		senderTs := decoded["sender_timestamp"]
 		m := &msg{
 			Data: map[string]interface{}{
@@ -1943,18 +2381,79 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 				"observers":        []string{},
 				"hops":             hops,
 				"snr":              nullFloat(snr),
+				"scope":            nullStr(scopeName),
+				"routeType":        nullInt(routeType),
+				"entryPrefix":      entryPrefix,
 			},
 			Repeats: 1,
 		}
 		if obsTs.Valid {
 			m.LatestEpoch = obsTs.Int64
 		}
-		if obsName.Valid {
-			m.Data["observers"] = []string{obsName.String}
-		} else if obsID.Valid {
-			m.Data["observers"] = []string{obsID.String}
+		if observerName != "" {
+			m.Data["observers"] = []string{observerName}
+		}
+		if isPingTrigger(displayText) {
+			agg := &pendingPing{hops: hops, snr: snr, resolvedPath: resolvedPath, observers: map[string]bool{}}
+			if observerName != "" {
+				agg.observers[observerName] = true
+			}
+			pendingPings[txID] = agg
 		}
 		msgMap[txID] = m
+	}
+
+	// Bulk-resolve every pubkey referenced by any ping's DEEPEST relay path
+	// in ONE query, then build each pending reply's "via RepeaterA →
+	// RepeaterB" text plus its observer-breadth label. Names default to
+	// the raw pubkey/prefix when unresolved rather than being dropped, so
+	// the hop count and reply still make sense.
+	if len(pendingPings) > 0 {
+		pubkeySet := map[string]bool{}
+		for _, p := range pendingPings {
+			for _, pk := range p.resolvedPath {
+				if pk != nil && *pk != "" {
+					pubkeySet[*pk] = true
+				}
+			}
+		}
+		pubkeys := make([]string, 0, len(pubkeySet))
+		for pk := range pubkeySet {
+			pubkeys = append(pubkeys, pk)
+		}
+		names, _ := db.namesAndRolesForPubkeys(pubkeys)
+
+		for txID, p := range pendingPings {
+			var repeaterNames []string
+			for _, pk := range p.resolvedPath {
+				if pk == nil || *pk == "" {
+					continue
+				}
+				if name := names[*pk]; name != "" {
+					repeaterNames = append(repeaterNames, name)
+				} else {
+					repeaterNames = append(repeaterNames, *pk)
+				}
+			}
+			// Breadth: name the single observer when there's only one (as
+			// specific as before), otherwise report the count -- "heard by
+			// 4 observers" says more about actual reach than an arbitrarily
+			// picked single name once more than one observer heard it.
+			observerLabel := ""
+			switch len(p.observers) {
+			case 0:
+				// leave empty
+			case 1:
+				for name := range p.observers {
+					observerLabel = name
+				}
+			default:
+				observerLabel = fmt.Sprintf("%d observers", len(p.observers))
+			}
+			if m, ok := msgMap[txID]; ok {
+				m.Data["botReply"] = pingBotReply(p.hops, p.snr, observerLabel, repeaterNames)
+			}
+		}
 	}
 
 	// Issue #1366 follow-up: emit batch sorted by LatestSeen ascending
@@ -1996,8 +2495,6 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 
 	return messages, total, nil
 }
-
-
 
 // GetNewTransmissionsSince returns new transmissions after a given ID for WebSocket polling.
 func (db *DB) GetNewTransmissionsSince(lastID int, limit int) ([]map[string]interface{}, error) {
@@ -2130,6 +2627,235 @@ func (db *DB) GetNodeLocationsByKeys(keys []string) map[string]map[string]interf
 			"role": nullStr(role),
 		}
 	}
+	return result
+}
+
+// GetRepeaterNamesByKeys batch-resolves pubkey -> display name, restricted
+// to role IN ('repeater','room'). The candidate key set (e.g. from
+// PacketStore.byPathHop) mixes full pubkeys with short hex-prefix bucket
+// keys used internally for ambiguous-hop resolution (#1751 follow-up) —
+// those never match a real nodes.public_key row, so the role-filtered IN
+// query doubles as the "is this actually a distinct node" existence check.
+// A matched pubkey with an empty/unset name falls back to itself so a
+// real repeater is never silently dropped just because it has no name yet.
+//
+// Queried in chunks of repeaterNamesByKeysBatchSize — SQLite's default
+// SQLITE_MAX_VARIABLE_NUMBER is 999 on older builds, and a large mesh's
+// byPathHop candidate set can exceed that in one IN (...) clause.
+const repeaterNamesByKeysBatchSize = 500
+
+func (db *DB) GetRepeaterNamesByKeys(keys []string) map[string]string {
+	result := make(map[string]string)
+	if len(keys) == 0 {
+		return result
+	}
+	for start := 0; start < len(keys); start += repeaterNamesByKeysBatchSize {
+		end := start + repeaterNamesByKeysBatchSize
+		if end > len(keys) {
+			end = len(keys)
+		}
+		chunk := keys[start:end]
+		placeholders := make([]string, len(chunk))
+		args := make([]interface{}, len(chunk))
+		for i, k := range chunk {
+			placeholders[i] = "?"
+			args[i] = strings.ToLower(k)
+		}
+		query := "SELECT public_key, name FROM nodes WHERE role IN ('repeater','room') AND public_key IN (" + strings.Join(placeholders, ",") + ")"
+		rows, err := db.conn.Query(query, args...)
+		if err != nil {
+			continue
+		}
+		for rows.Next() {
+			var pk string
+			var name sql.NullString
+			if rows.Scan(&pk, &name) != nil {
+				continue
+			}
+			pk = strings.ToLower(pk)
+			if name.Valid && name.String != "" {
+				result[pk] = name.String
+			} else {
+				result[pk] = pk
+			}
+		}
+		rows.Close()
+	}
+	return result
+}
+
+// GetNodesByDefaultScope groups nodes by their own configured region
+// (nodes.default_scope, #899) — the region a node's ADVERTs actually carry,
+// as opposed to GetRepeaterNamesByKeys/TransportedScopes which is about
+// repeaters *relaying* traffic scoped by other senders. Distinguishes
+// "runs this region" from "has carried this region's traffic".
+func (db *DB) GetNodesByDefaultScope() (map[string][]RepeaterRef, error) {
+	result := make(map[string][]RepeaterRef)
+	if !db.hasDefaultScope {
+		return result, nil
+	}
+	rows, err := db.conn.Query(`SELECT public_key, name, default_scope FROM nodes WHERE default_scope IS NOT NULL AND default_scope != ''`)
+	if err != nil {
+		return nil, fmt.Errorf("nodes by default_scope query: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var pk, scope string
+		var name sql.NullString
+		if rows.Scan(&pk, &name, &scope) != nil {
+			continue
+		}
+		displayName := pk
+		if name.Valid && name.String != "" {
+			displayName = name.String
+		}
+		result[scope] = append(result[scope], RepeaterRef{Name: displayName, PublicKey: strings.ToLower(pk)})
+	}
+	return result, rows.Err()
+}
+
+// nodeAreaScopeInput is one node's position + name + default_scope +
+// pubkey — the raw input to computeScopeAdoptionByArea. DefaultScope is ""
+// when unset or when this DB predates #899 (no default_scope column at
+// all). PublicKey is lowercase, for looking a node up in a
+// RepeaterRelayInfo map.
+type nodeAreaScopeInput struct {
+	PublicKey    string
+	Name         string
+	Lat, Lon     float64
+	DefaultScope string
+}
+
+// GetNodesForScopeAdoption returns every node with a real GPS fix (0,0
+// excluded, same convention as geofilter.PassesFilter) and its
+// default_scope, for computeScopeAdoptionByArea to bucket by configured
+// area. Unlike GetNodesByDefaultScope, this includes nodes with NO scope
+// too — the whole point is measuring adoption, not just listing who has one.
+func (db *DB) GetNodesForScopeAdoption() ([]nodeAreaScopeInput, error) {
+	query := "SELECT public_key, name, lat, lon"
+	if db.hasDefaultScope {
+		query += ", default_scope"
+	}
+	query += " FROM nodes WHERE lat IS NOT NULL AND lon IS NOT NULL AND lat != 0 AND lon != 0"
+	rows, err := db.conn.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("nodes for scope adoption query: %w", err)
+	}
+	defer rows.Close()
+	var out []nodeAreaScopeInput
+	for rows.Next() {
+		var pk string
+		var name sql.NullString
+		var lat, lon float64
+		var scope sql.NullString
+		var scanErr error
+		if db.hasDefaultScope {
+			scanErr = rows.Scan(&pk, &name, &lat, &lon, &scope)
+		} else {
+			scanErr = rows.Scan(&pk, &name, &lat, &lon)
+		}
+		if scanErr != nil {
+			continue
+		}
+		displayName := pk
+		if name.Valid && name.String != "" {
+			displayName = name.String
+		}
+		out = append(out, nodeAreaScopeInput{PublicKey: strings.ToLower(pk), Name: displayName, Lat: lat, Lon: lon, DefaultScope: scope.String})
+	}
+	return out, rows.Err()
+}
+
+// computeScopeAdoptionByArea buckets nodes by their most specific
+// configured area and tallies, per area: how many nodes sit there at all,
+// how many "use scope" in ANY sense, and (when the area itself has a
+// RegionScopes link) how many specifically use THAT region — i.e. does
+// this geographic community actually engage with the scope the area is
+// nominally tied to, or something else entirely (or nothing at all). A
+// node outside every configured area is excluded.
+//
+// Unlike the per-node area *badges* (AreaForPoint/AreaKeyForPoint, which
+// pick a single most-specific area), this uses AreaKeysForPoint so a node
+// counts toward EVERY containing area — a node in "Aarhus by" also counts
+// toward "Jylland" and "Danmark (alle)". Without this, a broad roll-up
+// area like "Danmark (alle)" would only ever show the handful of nodes not
+// claimed by any smaller, more specific area (dborup flagged this: DK
+// showed almost nothing because nearly every real node already belonged
+// to a narrower sub-area), instead of the whole country's actual adoption.
+//
+// "Uses scope" counts two distinct signals, same runs-this-region vs
+// carried-this-region's-traffic distinction as OriginatingNodesByRegion vs
+// RepeatersByRegion above: (1) the node's own default_scope, and (2) any
+// region it has ever RELAYED (relayInfo/TransportedScopes) — a repeater
+// can carry dk-horsens traffic and thereby support the Horsens area
+// without ever configuring dk-horsens as its own default_scope. relayInfo
+// may be nil (in-memory store unavailable), in which case matching falls
+// back to default_scope only.
+//
+// For areas with a RegionScopes link, also returns the actual node lists
+// (Matching/NotMatching) — dborup wanted to see which specific nodes in
+// e.g. Østjylland relay dk-oj (correctly "support" the area) and which
+// don't, not just an aggregate count.
+func computeScopeAdoptionByArea(nodes []nodeAreaScopeInput, areas map[string]AreaEntry, relayInfo map[string]RepeaterRelayInfo) []AreaScopeAdoption {
+	counts := make(map[string]*AreaScopeAdoption)
+	for _, n := range nodes {
+		keys := AreaKeysForPoint(n.Lat, n.Lon, areas)
+		if len(keys) == 0 {
+			continue
+		}
+
+		ownScope := strings.ToLower(strings.TrimPrefix(n.DefaultScope, "#"))
+		relayedRegions := make(map[string]bool)
+		if info, ok := relayInfo[n.PublicKey]; ok {
+			for _, r := range info.TransportedScopes {
+				relayedRegions[strings.ToLower(strings.TrimPrefix(r, "#"))] = true
+			}
+		}
+		hasAnyScope := ownScope != "" || len(relayedRegions) > 0
+
+		for _, key := range keys {
+			c, exists := counts[key]
+			if !exists {
+				a := areas[key]
+				c = &AreaScopeAdoption{AreaKey: key, Label: a.Label, RegionScopes: a.RegionScopes}
+				counts[key] = c
+			}
+			c.TotalNodes++
+			if hasAnyScope {
+				c.NodesWithAnyScope++
+			}
+			// Matching/NotMatching per-node lists only make sense when the
+			// area actually has region(s) to compare against — an area
+			// with no RegionScopes link has nothing to be "not matching".
+			if len(c.RegionScopes) > 0 {
+				var matchedScopes []string
+				for _, rs := range c.RegionScopes {
+					normalizedRegion := strings.ToLower(rs)
+					if ownScope == normalizedRegion || relayedRegions[normalizedRegion] {
+						matchedScopes = append(matchedScopes, rs)
+					}
+				}
+				if len(matchedScopes) > 0 {
+					c.NodesMatchingArea++
+					c.Matching = append(c.Matching, AreaScopeMatch{Name: n.Name, PublicKey: n.PublicKey, MatchedScopes: matchedScopes})
+				} else {
+					c.NotMatching = append(c.NotMatching, RepeaterRef{Name: n.Name, PublicKey: n.PublicKey})
+				}
+			}
+		}
+	}
+	result := make([]AreaScopeAdoption, 0, len(counts))
+	for _, c := range counts {
+		sort.Slice(c.Matching, func(i, j int) bool { return c.Matching[i].Name < c.Matching[j].Name })
+		sort.Slice(c.NotMatching, func(i, j int) bool { return c.NotMatching[i].Name < c.NotMatching[j].Name })
+		result = append(result, *c)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].TotalNodes != result[j].TotalNodes {
+			return result[i].TotalNodes > result[j].TotalNodes
+		}
+		return result[i].Label < result[j].Label
+	})
 	return result
 }
 
@@ -2788,7 +3514,7 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 			COALESCE(SUM(CASE WHEN scope_name IS NULL THEN 1 ELSE 0 END), 0) AS unscoped,
 			COALESCE(SUM(CASE WHEN scope_name = '' THEN 1 ELSE 0 END), 0) AS unknown_scope
 		FROM transmissions
-		WHERE ` + routeTypeTransportSQL + ` AND first_seen >= ?
+		WHERE `+routeTypeTransportSQL+` AND first_seen >= ?
 	`, since)
 	if err := row.Scan(
 		&resp.Summary.TransportTotal,
@@ -2816,7 +3542,7 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 	rows, err := db.conn.Query(`
 		SELECT scope_name, COUNT(*) AS cnt
 		FROM transmissions
-		WHERE ` + routeTypeTransportSQL + ` AND scope_name IS NOT NULL AND scope_name != '' AND first_seen >= ?
+		WHERE `+routeTypeTransportSQL+` AND scope_name IS NOT NULL AND scope_name != '' AND first_seen >= ?
 		GROUP BY scope_name
 		ORDER BY cnt DESC
 	`, since)
@@ -2843,7 +3569,7 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 			COUNT(scope_name) AS scoped,
 			SUM(CASE WHEN scope_name IS NULL THEN 1 ELSE 0 END) AS unscoped
 		FROM transmissions
-		WHERE ` + routeTypeTransportSQL + ` AND first_seen >= ?
+		WHERE `+routeTypeTransportSQL+` AND first_seen >= ?
 		GROUP BY bucket
 		ORDER BY bucket
 	`, bucketExpr)
@@ -2865,7 +3591,1082 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 		resp.TimeSeries = []ScopeTimePoint{}
 	}
 
+	// Hour-of-day activity per region: same named-region set as ByRegion,
+	// but bucketed by hour-of-day (0-23, UTC) instead of chronological
+	// time — answers "when during a typical day is this region active"
+	// rather than "how did volume change over the window". Aggregated
+	// across every day in the window, so this reads best on 7d (a single
+	// 1h/24h window won't show a meaningful daily shape).
+	hourRows, err := db.conn.Query(`
+		SELECT scope_name, CAST(strftime('%H', first_seen) AS INTEGER) AS hour, COUNT(*) AS cnt
+		FROM transmissions
+		WHERE `+routeTypeTransportSQL+` AND scope_name IS NOT NULL AND scope_name != '' AND first_seen >= ?
+		GROUP BY scope_name, hour
+	`, since)
+	if err != nil {
+		return nil, fmt.Errorf("scope hourly activity query: %w", err)
+	}
+	defer hourRows.Close()
+	hourly := make(map[string]*ScopeHourlyActivity)
+	var hourlyOrder []string
+	for hourRows.Next() {
+		var region string
+		var hour, cnt int
+		if hourRows.Scan(&region, &hour, &cnt) != nil {
+			continue
+		}
+		if hour < 0 || hour > 23 {
+			continue
+		}
+		ha, ok := hourly[region]
+		if !ok {
+			ha = &ScopeHourlyActivity{Region: region}
+			hourly[region] = ha
+			hourlyOrder = append(hourlyOrder, region)
+		}
+		ha.Hours[hour] = cnt
+	}
+	if err := hourRows.Err(); err != nil {
+		return nil, fmt.Errorf("scope hourly activity iteration: %w", err)
+	}
+	resp.HourlyActivityByRegion = make([]ScopeHourlyActivity, 0, len(hourlyOrder))
+	for _, region := range hourlyOrder {
+		resp.HourlyActivityByRegion = append(resp.HourlyActivityByRegion, *hourly[region])
+	}
+	sort.Slice(resp.HourlyActivityByRegion, func(i, j int) bool {
+		return resp.HourlyActivityByRegion[i].Region < resp.HourlyActivityByRegion[j].Region
+	})
+
 	return resp, nil
+}
+
+// GetHopDepthAnalytics answers, network-wide over the given window, two
+// questions that share the same expensive "walk every resolved relay path"
+// pass — see HopDepthAnalyticsResponse's doc comment for the full
+// rationale. "Scoped" here is derived purely from route_type
+// (TRANSPORT_FLOOD=0/TRANSPORT_DIRECT=3 vs FLOOD=1/DIRECT=2, the same
+// convention used throughout this codebase — e.g. computeHopAnalyticsTransport),
+// not the scope_name column, so this works even on schemas predating #899.
+//
+// A transmission can have resolved_path stored on more than one
+// observation; this keeps whichever has the MOST entries per transmission
+// (a proxy for "most complete"), matching fetchResolvedPathForTxBest's
+// "longest wins" selection without needing per-tx round trips.
+func (db *DB) GetHopDepthAnalytics(window string) (*HopDepthAnalyticsResponse, error) {
+	var since string
+	var bucketExpr string
+	switch window {
+	case "1h":
+		since = time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+		// 5-minute buckets -- same bucketing as GetScopeStats' TimeSeries.
+		bucketExpr = `strftime('%Y-%m-%dT%H:', t.first_seen) || printf('%02d', (CAST(strftime('%M', t.first_seen) AS INTEGER) / 5) * 5) || ':00Z'`
+	case "7d":
+		since = time.Now().Add(-7 * 24 * time.Hour).UTC().Format(time.RFC3339)
+		// 6-hour buckets
+		bucketExpr = `strftime('%Y-%m-%dT', t.first_seen) || printf('%02d', (CAST(strftime('%H', t.first_seen) AS INTEGER) / 6) * 6) || ':00:00Z'`
+	default:
+		window = "24h"
+		since = time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+		// 1-hour buckets
+		bucketExpr = `strftime('%Y-%m-%dT%H:00:00Z', t.first_seen)`
+	}
+
+	rows, err := db.conn.Query(`
+		SELECT t.id, t.route_type, t.payload_type, o.resolved_path, `+bucketExpr+` AS bucket
+		FROM transmissions t
+		JOIN observations o ON o.transmission_id = t.id
+		WHERE t.first_seen > ? AND o.resolved_path IS NOT NULL AND o.resolved_path != ''`, since)
+	if err != nil {
+		return nil, fmt.Errorf("hop depth analytics query: %w", err)
+	}
+	defer rows.Close()
+
+	type txInfo struct {
+		routeType   sql.NullInt64
+		payloadType sql.NullInt64
+		bestPath    []*string
+		bucket      string
+	}
+	byTx := make(map[int]*txInfo)
+	for rows.Next() {
+		var txID int
+		var routeType, payloadType sql.NullInt64
+		var rpJSON, bucket string
+		if err := rows.Scan(&txID, &routeType, &payloadType, &rpJSON, &bucket); err != nil {
+			continue
+		}
+		rp := unmarshalResolvedPath(rpJSON)
+		if len(rp) == 0 {
+			continue
+		}
+		cur, ok := byTx[txID]
+		if !ok {
+			byTx[txID] = &txInfo{routeType: routeType, payloadType: payloadType, bestPath: rp, bucket: bucket}
+			continue
+		}
+		if len(rp) > len(cur.bestPath) {
+			cur.bestPath = rp
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("hop depth analytics iteration: %w", err)
+	}
+
+	scopedBuckets := map[int]int{}
+	unscopedBuckets := map[int]int{}
+	repeaterHops := map[string][]int{}
+	// Same scoped/unscoped hop-index tally as scopedBuckets/unscopedBuckets
+	// above, but split by time bucket too -- feeds TimeSeries, answering
+	// "is containment getting better or worse over the window" instead of
+	// just a single window-wide snapshot.
+	scopedByTimeBucket := map[string]map[int]int{}
+	unscopedByTimeBucket := map[string]map[int]int{}
+
+	for _, info := range byTx {
+		if !info.routeType.Valid {
+			continue
+		}
+		rt := int(info.routeType.Int64)
+		isFlood := rt == routeTypeFlood || rt == RouteTransportFlood
+		if !isFlood {
+			continue
+		}
+		scoped := rt == RouteTransportFlood
+		isAdvert := info.payloadType.Valid && int(info.payloadType.Int64) == payloadTypeAdvert
+		isUnscopedFlood := rt == routeTypeFlood && !isAdvert
+
+		for idx, pk := range info.bestPath {
+			if scoped {
+				scopedBuckets[idx]++
+				if scopedByTimeBucket[info.bucket] == nil {
+					scopedByTimeBucket[info.bucket] = map[int]int{}
+				}
+				scopedByTimeBucket[info.bucket][idx]++
+			} else {
+				unscopedBuckets[idx]++
+				if unscopedByTimeBucket[info.bucket] == nil {
+					unscopedByTimeBucket[info.bucket] = map[int]int{}
+				}
+				unscopedByTimeBucket[info.bucket][idx]++
+			}
+			if isUnscopedFlood && pk != nil && *pk != "" {
+				repeaterHops[*pk] = append(repeaterHops[*pk], idx)
+			}
+		}
+	}
+
+	toSortedBuckets := func(m map[int]int) []HopDepthBucket {
+		out := make([]HopDepthBucket, 0, len(m))
+		for hops, count := range m {
+			out = append(out, HopDepthBucket{Hops: hops, Count: count})
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Hops < out[j].Hops })
+		return out
+	}
+
+	// medianHopFromCounts mirrors the frontend's hopDepthBucketStats: the
+	// smallest hop value whose cumulative count reaches half the total --
+	// a histogram-based median consistent with how ScopedHopDepth/
+	// UnscopedHopDepth's medians are read client-side, rather than
+	// introducing a second, subtly different median definition here.
+	medianHopFromCounts := func(counts map[int]int) *int {
+		total := 0
+		for _, c := range counts {
+			total += c
+		}
+		if total == 0 {
+			return nil
+		}
+		hops := make([]int, 0, len(counts))
+		for h := range counts {
+			hops = append(hops, h)
+		}
+		sort.Ints(hops)
+		cum := 0
+		for _, h := range hops {
+			cum += counts[h]
+			if cum*2 >= total {
+				v := h
+				return &v
+			}
+		}
+		return nil
+	}
+
+	bucketSet := map[string]bool{}
+	for b := range scopedByTimeBucket {
+		bucketSet[b] = true
+	}
+	for b := range unscopedByTimeBucket {
+		bucketSet[b] = true
+	}
+	timeBuckets := make([]string, 0, len(bucketSet))
+	for b := range bucketSet {
+		timeBuckets = append(timeBuckets, b)
+	}
+	sort.Strings(timeBuckets)
+	timeSeries := make([]HopDepthTimePoint, 0, len(timeBuckets))
+	for _, b := range timeBuckets {
+		timeSeries = append(timeSeries, HopDepthTimePoint{
+			T:                 b,
+			ScopedMedianHop:   medianHopFromCounts(scopedByTimeBucket[b]),
+			UnscopedMedianHop: medianHopFromCounts(unscopedByTimeBucket[b]),
+		})
+	}
+
+	// Only repeater/room nodes are meaningful here (matches the Foreign
+	// Traffic tab's existing "Repeaters Relaying Unscoped Traffic" role
+	// filter) -- look up name/role for the pubkeys that actually relayed
+	// unscoped flood traffic in this window, rather than every known node.
+	pubkeys := make([]string, 0, len(repeaterHops))
+	for pk := range repeaterHops {
+		pubkeys = append(pubkeys, pk)
+	}
+	names, roles := db.namesAndRolesForPubkeys(pubkeys)
+
+	unscopedByRepeater := make([]RepeaterUnscopedHopDepth, 0, len(repeaterHops))
+	for pk, hops := range repeaterHops {
+		if roles[pk] != "repeater" && roles[pk] != "room" {
+			continue
+		}
+		sort.Ints(hops)
+		n := len(hops)
+		median := float64(hops[n/2])
+		if n%2 == 0 {
+			median = float64(hops[n/2-1]+hops[n/2]) / 2
+		}
+		name := names[pk]
+		if name == "" {
+			name = pk
+		}
+		unscopedByRepeater = append(unscopedByRepeater, RepeaterUnscopedHopDepth{
+			PublicKey:  pk,
+			Name:       name,
+			Count:      n,
+			MinHops:    hops[0],
+			MedianHops: median,
+			MaxHops:    hops[n-1],
+		})
+	}
+	sort.Slice(unscopedByRepeater, func(i, j int) bool { return unscopedByRepeater[i].Count > unscopedByRepeater[j].Count })
+
+	return &HopDepthAnalyticsResponse{
+		Window:             window,
+		ScopedHopDepth:     toSortedBuckets(scopedBuckets),
+		UnscopedHopDepth:   toSortedBuckets(unscopedBuckets),
+		UnscopedByRepeater: unscopedByRepeater,
+		TimeSeries:         timeSeries,
+	}, nil
+}
+
+// namesAndRolesForPubkeys bulk-looks-up name/role for a set of pubkeys,
+// chunked to stay under SQLite's parameter limit. Missing pubkeys are
+// simply absent from the returned maps.
+func (db *DB) namesAndRolesForPubkeys(pubkeys []string) (names, roles map[string]string) {
+	names = make(map[string]string, len(pubkeys))
+	roles = make(map[string]string, len(pubkeys))
+	if len(pubkeys) == 0 {
+		return names, roles
+	}
+	const chunkSize = 499
+	for start := 0; start < len(pubkeys); start += chunkSize {
+		end := start + chunkSize
+		if end > len(pubkeys) {
+			end = len(pubkeys)
+		}
+		chunk := pubkeys[start:end]
+		placeholders := make([]byte, 0, len(chunk)*2)
+		args := make([]interface{}, len(chunk))
+		for i, pk := range chunk {
+			if i > 0 {
+				placeholders = append(placeholders, ',')
+			}
+			placeholders = append(placeholders, '?')
+			args[i] = pk
+		}
+		query := "SELECT public_key, name, role FROM nodes WHERE public_key IN (" + string(placeholders) + ")"
+		rows, err := db.conn.Query(query, args...)
+		if err != nil {
+			continue
+		}
+		for rows.Next() {
+			var pk string
+			var name, role sql.NullString
+			if err := rows.Scan(&pk, &name, &role); err != nil {
+				continue
+			}
+			names[pk] = name.String
+			roles[pk] = role.String
+		}
+		rows.Close()
+	}
+	return names, roles
+}
+
+// GetChannelMessageScopeStats narrows the scoped/unscoped/unknown question
+// to channel chat specifically (payload_type=5), for the given window.
+// Unlike GetScopeStats' TransportTotal (route_type 0/3 only), TotalMessages
+// here covers ALL route types — most channel chat is plain FLOOD, so
+// restricting to transport routes would answer a different question than
+// "how many of our channel messages are scoped".
+func (db *DB) GetChannelMessageScopeStats(window string) (*ChannelScopeStats, error) {
+	if !db.hasScopeName {
+		return nil, fmt.Errorf("scope_name column not present — run ingestor to apply migrations")
+	}
+
+	var since string
+	switch window {
+	case "1h":
+		since = time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+	case "7d":
+		since = time.Now().Add(-7 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	default:
+		since = time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+	}
+
+	stats := &ChannelScopeStats{}
+	row := db.conn.QueryRow(`
+		SELECT
+			COUNT(*) AS transport_total,
+			COUNT(scope_name) AS scoped,
+			COALESCE(SUM(CASE WHEN scope_name IS NULL THEN 1 ELSE 0 END), 0) AS unscoped,
+			COALESCE(SUM(CASE WHEN scope_name = '' THEN 1 ELSE 0 END), 0) AS unknown_scope
+		FROM transmissions
+		WHERE payload_type = 5 AND `+routeTypeTransportSQL+` AND first_seen >= ?
+	`, since)
+	var transportTotal int
+	if err := row.Scan(&transportTotal, &stats.Scoped, &stats.Unscoped, &stats.UnknownScope); err != nil {
+		return nil, fmt.Errorf("channel scope summary query: %w", err)
+	}
+
+	// Non-transport channel messages (plain FLOOD/DIRECT) never carry a
+	// scope per MeshCore protocol — fold into Unscoped, mirroring #1838.
+	var nonTransportCount int
+	if err := db.conn.QueryRow(`
+		SELECT COUNT(*) FROM transmissions
+		WHERE payload_type = 5 AND `+routeTypeNonTransportSQL+` AND first_seen >= ?
+	`, since).Scan(&nonTransportCount); err != nil {
+		return nil, fmt.Errorf("channel scope non-transport count query: %w", err)
+	}
+	stats.Unscoped += nonTransportCount
+	stats.TotalMessages = transportTotal + nonTransportCount
+
+	return stats, nil
+}
+
+// GetChannelScopeAdoption breaks the channel-messages-only scoped/unscoped
+// question (see GetChannelMessageScopeStats) down PER CHANNEL — which
+// specific channels (#test, #wardriving, ...) actually use region scoping
+// vs which never do. Ordered by message volume; uncapped.
+//
+// Cardinality isn't a hard bound like the 1-byte hash space alone would
+// suggest: encrypted channels ARE bounded to 256 'enc_%02x' buckets, but
+// plain-text CHAN channels use the free-form channel name string
+// (ingestor/db.go's `json_extract(decoded_json, '$.channel')`), so in
+// principle a mesh with many ad-hoc named channels could grow this
+// unbounded. In practice payload_type=5 rows within a single window stay
+// small enough that this hasn't needed a cap.
+func (db *DB) GetChannelScopeAdoption(window string) ([]ChannelScopeAdoption, error) {
+	if !db.hasScopeName {
+		return nil, fmt.Errorf("scope_name column not present — run ingestor to apply migrations")
+	}
+
+	var since string
+	switch window {
+	case "1h":
+		since = time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+	case "7d":
+		since = time.Now().Add(-7 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	default:
+		since = time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+	}
+
+	rows, err := db.conn.Query(`
+		SELECT
+			COALESCE(NULLIF(channel_hash, ''), '(unknown channel)') AS channel,
+			COUNT(*) AS total,
+			COALESCE(SUM(CASE WHEN `+routeTypeTransportSQL+` AND scope_name IS NOT NULL AND scope_name != '' THEN 1 ELSE 0 END), 0) AS scoped,
+			COALESCE(SUM(CASE WHEN `+routeTypeTransportSQL+` AND scope_name = '' THEN 1 ELSE 0 END), 0) AS unknown_scope
+		FROM transmissions
+		WHERE payload_type = 5 AND first_seen >= ?
+		GROUP BY channel
+		ORDER BY total DESC
+	`, since)
+	if err != nil {
+		return nil, fmt.Errorf("channel scope adoption query: %w", err)
+	}
+	defer rows.Close()
+
+	result := make([]ChannelScopeAdoption, 0)
+	for rows.Next() {
+		var ca ChannelScopeAdoption
+		if err := rows.Scan(&ca.Channel, &ca.TotalMessages, &ca.Scoped, &ca.UnknownScope); err != nil {
+			continue
+		}
+		ca.Unscoped = ca.TotalMessages - ca.Scoped - ca.UnknownScope
+		result = append(result, ca)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("channel scope adoption iteration: %w", err)
+	}
+
+	regionsByChannel, err := db.getChannelScopeRegions(since)
+	if err != nil {
+		// Non-fatal: the adoption counts above are still useful without
+		// the per-channel region breakdown.
+		log.Printf("WARN getChannelScopeRegions: %v", err)
+	} else {
+		for i := range result {
+			result[i].Regions = regionsByChannel[result[i].Channel]
+		}
+	}
+
+	return result, nil
+}
+
+// getChannelScopeRegions answers "which regions" for GetChannelScopeAdoption's
+// "how many scoped messages" — for each channel, which distinct scope_name
+// values have actually been seen on its scoped messages, most-used first.
+func (db *DB) getChannelScopeRegions(since string) (map[string][]string, error) {
+	rows, err := db.conn.Query(`
+		SELECT
+			COALESCE(NULLIF(channel_hash, ''), '(unknown channel)') AS channel,
+			scope_name,
+			COUNT(*) AS cnt
+		FROM transmissions
+		WHERE payload_type = 5 AND first_seen >= ? AND `+routeTypeTransportSQL+` AND scope_name IS NOT NULL AND scope_name != ''
+		GROUP BY channel, scope_name
+		ORDER BY channel, cnt DESC
+	`, since)
+	if err != nil {
+		return nil, fmt.Errorf("channel scope regions query: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string][]string)
+	for rows.Next() {
+		var channel, region string
+		var cnt int
+		if err := rows.Scan(&channel, &region, &cnt); err != nil {
+			continue
+		}
+		result[channel] = append(result[channel], region)
+	}
+	return result, rows.Err()
+}
+
+// GetWardrivingStats aggregates activity on the given channel (normally
+// "#wardriving") over the requested window: message volume over time, who's
+// actively sending, which repeater first relayed each message (raw hash
+// prefixes — the caller resolves names via /api/resolve-hops), which
+// observer stations actually heard the traffic, signal quality (SNR/RSSI)
+// over the same time buckets as the activity series, each sender's messages
+// grouped into distinct sessions/runs (see buildWardrivingSessions), and any
+// senders who explicitly shared their own position (see
+// detectWardrivingGPSShares). See WardrivingObserverCoverage
+// doc for why observer coverage — not sender GPS — is the reliable half of
+// a "where did this reach" picture: MeshMapper's #wardriving messages carry
+// an anonymous per-session token by default, not the sender's live
+// coordinates (those go to MeshMapper's own server via a separate API call
+// we have no visibility into).
+func (db *DB) GetWardrivingStats(window, channel string) (*WardrivingStatsResponse, error) {
+	var since string
+	var bucketExpr string
+	switch window {
+	case "1h":
+		since = time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+		bucketExpr = `strftime('%Y-%m-%dT%H:', first_seen) || printf('%02d', (CAST(strftime('%M', first_seen) AS INTEGER) / 5) * 5) || ':00Z'`
+	case "7d":
+		since = time.Now().Add(-7 * 24 * time.Hour).UTC().Format(time.RFC3339)
+		bucketExpr = `strftime('%Y-%m-%dT', first_seen) || printf('%02d', (CAST(strftime('%H', first_seen) AS INTEGER) / 6) * 6) || ':00:00Z'`
+	default:
+		window = "24h"
+		since = time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+		bucketExpr = `strftime('%Y-%m-%dT%H:00:00Z', first_seen)`
+	}
+
+	resp := &WardrivingStatsResponse{Window: window, Channel: channel}
+
+	if err := db.conn.QueryRow(
+		`SELECT COUNT(*) FROM transmissions WHERE channel_hash = ? AND payload_type = 5 AND first_seen >= ?`,
+		channel, since,
+	).Scan(&resp.TotalMessages); err != nil {
+		return nil, fmt.Errorf("wardriving total query: %w", err)
+	}
+
+	tsQuery := fmt.Sprintf(`
+		SELECT %s AS bucket, COUNT(*) AS cnt
+		FROM transmissions
+		WHERE channel_hash = ? AND payload_type = 5 AND first_seen >= ?
+		GROUP BY bucket
+		ORDER BY bucket
+	`, bucketExpr)
+	tsRows, err := db.conn.Query(tsQuery, channel, since)
+	if err != nil {
+		return nil, fmt.Errorf("wardriving timeseries query: %w", err)
+	}
+	resp.TimeSeries = make([]WardrivingTimePoint, 0)
+	for tsRows.Next() {
+		var pt WardrivingTimePoint
+		if tsRows.Scan(&pt.T, &pt.Count) == nil {
+			resp.TimeSeries = append(resp.TimeSeries, pt)
+		}
+	}
+	tsRows.Close()
+	if err := tsRows.Err(); err != nil {
+		return nil, fmt.Errorf("wardriving timeseries iteration: %w", err)
+	}
+
+	senderRows, err := db.conn.Query(`
+		SELECT json_extract(decoded_json, '$.sender') AS sender, COUNT(*) AS cnt
+		FROM transmissions
+		WHERE channel_hash = ? AND payload_type = 5 AND first_seen >= ?
+			AND json_extract(decoded_json, '$.sender') IS NOT NULL
+			AND json_extract(decoded_json, '$.sender') != ''
+		GROUP BY sender
+		ORDER BY cnt DESC
+	`, channel, since)
+	if err != nil {
+		return nil, fmt.Errorf("wardriving senders query: %w", err)
+	}
+	resp.TopSenders = make([]WardrivingSenderCount, 0)
+	for senderRows.Next() {
+		var sc WardrivingSenderCount
+		if senderRows.Scan(&sc.Sender, &sc.Count) == nil {
+			resp.TopSenders = append(resp.TopSenders, sc)
+		}
+	}
+	senderRows.Close()
+	if err := senderRows.Err(); err != nil {
+		return nil, fmt.Errorf("wardriving senders iteration: %w", err)
+	}
+
+	entryRows, err := db.conn.Query(`
+		SELECT json_extract(o.path_json, '$[0]') AS prefix,
+			COUNT(*) AS observation_count,
+			COUNT(DISTINCT o.transmission_id) AS message_count
+		FROM observations o
+		JOIN transmissions t ON t.id = o.transmission_id
+		WHERE t.channel_hash = ? AND t.payload_type = 5 AND t.first_seen >= ?
+			AND o.path_json IS NOT NULL AND json_array_length(o.path_json) > 0
+		GROUP BY prefix
+		ORDER BY observation_count DESC
+	`, channel, since)
+	if err != nil {
+		return nil, fmt.Errorf("wardriving entry points query: %w", err)
+	}
+	resp.EntryPoints = make([]WardrivingEntryPrefix, 0)
+	for entryRows.Next() {
+		var ep WardrivingEntryPrefix
+		if entryRows.Scan(&ep.Prefix, &ep.ObservationCount, &ep.MessageCount) == nil {
+			resp.EntryPoints = append(resp.EntryPoints, ep)
+		}
+	}
+	entryRows.Close()
+	if err := entryRows.Err(); err != nil {
+		return nil, fmt.Errorf("wardriving entry points iteration: %w", err)
+	}
+
+	var obsQuery string
+	if db.isV3 {
+		obsQuery = `
+			SELECT obs.rowid AS observer_id, obs.name, COALESCE(obs.iata, ''),
+				COUNT(*) AS observation_count, COUNT(DISTINCT o.transmission_id) AS message_count
+			FROM observations o
+			JOIN transmissions t ON t.id = o.transmission_id
+			JOIN observers obs ON obs.rowid = o.observer_idx
+			WHERE t.channel_hash = ? AND t.payload_type = 5 AND t.first_seen >= ?
+			GROUP BY observer_id
+			ORDER BY observation_count DESC`
+	} else {
+		obsQuery = `
+			SELECT obs.id AS observer_id, obs.name, COALESCE(obs.iata, ''),
+				COUNT(*) AS observation_count, COUNT(DISTINCT o.transmission_id) AS message_count
+			FROM observations o
+			JOIN transmissions t ON t.id = o.transmission_id
+			JOIN observers obs ON obs.id = o.observer_id
+			WHERE t.channel_hash = ? AND t.payload_type = 5 AND t.first_seen >= ?
+			GROUP BY observer_id
+			ORDER BY observation_count DESC`
+	}
+	obsRows, err := db.conn.Query(obsQuery, channel, since)
+	if err != nil {
+		return nil, fmt.Errorf("wardriving observers query: %w", err)
+	}
+	resp.Observers = make([]WardrivingObserverCoverage, 0)
+	for obsRows.Next() {
+		var oc WardrivingObserverCoverage
+		var name sql.NullString
+		if err := obsRows.Scan(&oc.ObserverID, &name, &oc.IATA, &oc.ObservationCount, &oc.MessageCount); err != nil {
+			continue
+		}
+		oc.ObserverName = name.String
+		if oc.ObserverName == "" {
+			oc.ObserverName = oc.ObserverID
+		}
+		if coord, ok := iataCoords[strings.ToUpper(strings.TrimSpace(oc.IATA))]; ok {
+			lat, lon := coord.Lat, coord.Lon
+			oc.Lat, oc.Lon = &lat, &lon
+		}
+		resp.Observers = append(resp.Observers, oc)
+	}
+	obsRows.Close()
+	if err := obsRows.Err(); err != nil {
+		return nil, fmt.Errorf("wardriving observers iteration: %w", err)
+	}
+
+	// Signal quality over time — same bucketing as the activity time series,
+	// but averaged across every observation (any observer) in that bucket.
+	sigBucketExpr := strings.ReplaceAll(bucketExpr, "first_seen", "t.first_seen")
+	sigQuery := fmt.Sprintf(`
+		SELECT %s AS bucket, AVG(o.snr) AS avg_snr, AVG(o.rssi) AS avg_rssi, COUNT(*) AS cnt
+		FROM observations o
+		JOIN transmissions t ON t.id = o.transmission_id
+		WHERE t.channel_hash = ? AND t.payload_type = 5 AND t.first_seen >= ?
+		GROUP BY bucket
+		ORDER BY bucket
+	`, sigBucketExpr)
+	sigRows, err := db.conn.Query(sigQuery, channel, since)
+	if err != nil {
+		return nil, fmt.Errorf("wardriving signal timeseries query: %w", err)
+	}
+	resp.SignalTimeSeries = make([]WardrivingSignalPoint, 0)
+	for sigRows.Next() {
+		var sp WardrivingSignalPoint
+		if sigRows.Scan(&sp.T, &sp.AvgSNR, &sp.AvgRSSI, &sp.ObservationCount) == nil {
+			resp.SignalTimeSeries = append(resp.SignalTimeSeries, sp)
+		}
+	}
+	sigRows.Close()
+	if err := sigRows.Err(); err != nil {
+		return nil, fmt.Errorf("wardriving signal timeseries iteration: %w", err)
+	}
+
+	var avgSNR, avgRSSI sql.NullFloat64
+	if err := db.conn.QueryRow(`
+		SELECT AVG(o.snr), AVG(o.rssi)
+		FROM observations o
+		JOIN transmissions t ON t.id = o.transmission_id
+		WHERE t.channel_hash = ? AND t.payload_type = 5 AND t.first_seen >= ?
+	`, channel, since).Scan(&avgSNR, &avgRSSI); err != nil {
+		return nil, fmt.Errorf("wardriving avg signal query: %w", err)
+	}
+	if avgSNR.Valid {
+		v := avgSNR.Float64
+		resp.AvgSNR = &v
+	}
+	if avgRSSI.Valid {
+		v := avgRSSI.Float64
+		resp.AvgRSSI = &v
+	}
+
+	sessions, err := db.buildWardrivingSessions(channel, since)
+	if err != nil {
+		return nil, err
+	}
+	resp.Sessions = sessions
+
+	gpsShares, err := db.detectWardrivingGPSShares(channel, since)
+	if err != nil {
+		return nil, err
+	}
+	resp.GPSShares = gpsShares
+
+	return resp, nil
+}
+
+// wardrivingSessionGapMinutes is the max gap between two consecutive
+// messages from the same sender before buildWardrivingSessions treats them
+// as separate wardriving runs rather than one continuous session.
+const wardrivingSessionGapMinutes = 15.0
+
+// buildWardrivingSessions groups each sender's messages (ordered by time)
+// into runs, splitting on any gap over wardrivingSessionGapMinutes. For
+// each session it also computes how many distinct entry-point repeaters
+// and observers were involved, by unioning the per-transmission
+// observation data across every message in that session.
+func (db *DB) buildWardrivingSessions(channel, since string) ([]WardrivingSession, error) {
+	msgRows, err := db.conn.Query(`
+		SELECT id, json_extract(decoded_json, '$.sender') AS sender, first_seen
+		FROM transmissions
+		WHERE channel_hash = ? AND payload_type = 5 AND first_seen >= ?
+			AND json_extract(decoded_json, '$.sender') IS NOT NULL
+			AND json_extract(decoded_json, '$.sender') != ''
+		ORDER BY sender, first_seen ASC
+	`, channel, since)
+	if err != nil {
+		return nil, fmt.Errorf("wardriving sessions message query: %w", err)
+	}
+	type txInfo struct {
+		id     int64
+		sender string
+		ts     time.Time
+	}
+	var txs []txInfo
+	for msgRows.Next() {
+		var id int64
+		var sender, tsStr string
+		if err := msgRows.Scan(&id, &sender, &tsStr); err != nil {
+			continue
+		}
+		ts, err := time.Parse(time.RFC3339, tsStr)
+		if err != nil {
+			continue
+		}
+		txs = append(txs, txInfo{id: id, sender: sender, ts: ts})
+	}
+	msgRows.Close()
+	if err := msgRows.Err(); err != nil {
+		return nil, fmt.Errorf("wardriving sessions message iteration: %w", err)
+	}
+
+	// Per-transmission entry-point prefixes and observer IDs, so each
+	// session can report how many distinct ones it touched.
+	var perTxQuery string
+	if db.isV3 {
+		perTxQuery = `
+			SELECT o.transmission_id, json_extract(o.path_json, '$[0]'), obs.rowid
+			FROM observations o
+			JOIN transmissions t ON t.id = o.transmission_id
+			JOIN observers obs ON obs.rowid = o.observer_idx
+			WHERE t.channel_hash = ? AND t.payload_type = 5 AND t.first_seen >= ?`
+	} else {
+		perTxQuery = `
+			SELECT o.transmission_id, json_extract(o.path_json, '$[0]'), obs.id
+			FROM observations o
+			JOIN transmissions t ON t.id = o.transmission_id
+			JOIN observers obs ON obs.id = o.observer_id
+			WHERE t.channel_hash = ? AND t.payload_type = 5 AND t.first_seen >= ?`
+	}
+	perTxRows, err := db.conn.Query(perTxQuery, channel, since)
+	if err != nil {
+		return nil, fmt.Errorf("wardriving sessions per-tx query: %w", err)
+	}
+	txPrefixes := make(map[int64]map[string]bool)
+	txObservers := make(map[int64]map[string]bool)
+	for perTxRows.Next() {
+		var txID int64
+		var prefix sql.NullString
+		var observerID string
+		if err := perTxRows.Scan(&txID, &prefix, &observerID); err != nil {
+			continue
+		}
+		if prefix.Valid && prefix.String != "" {
+			if txPrefixes[txID] == nil {
+				txPrefixes[txID] = make(map[string]bool)
+			}
+			txPrefixes[txID][prefix.String] = true
+		}
+		if txObservers[txID] == nil {
+			txObservers[txID] = make(map[string]bool)
+		}
+		txObservers[txID][observerID] = true
+	}
+	perTxRows.Close()
+	if err := perTxRows.Err(); err != nil {
+		return nil, fmt.Errorf("wardriving sessions per-tx iteration: %w", err)
+	}
+
+	sessions := make([]WardrivingSession, 0)
+	var cur *WardrivingSession
+	var curPrefixes, curObservers map[string]bool
+	var lastTS time.Time
+	flush := func() {
+		if cur == nil {
+			return
+		}
+		cur.EntryPointCount = len(curPrefixes)
+		cur.ObserverCount = len(curObservers)
+		for p := range curPrefixes {
+			cur.EntryPointPrefixes = append(cur.EntryPointPrefixes, p)
+		}
+		sort.Strings(cur.EntryPointPrefixes)
+		start, errS := time.Parse(time.RFC3339, cur.StartTime)
+		end, errE := time.Parse(time.RFC3339, cur.EndTime)
+		if errS == nil && errE == nil {
+			cur.DurationMinutes = end.Sub(start).Minutes()
+		}
+		sessions = append(sessions, *cur)
+	}
+	for _, tx := range txs {
+		newSession := cur == nil || cur.Sender != tx.sender || tx.ts.Sub(lastTS).Minutes() > wardrivingSessionGapMinutes
+		if newSession {
+			flush()
+			cur = &WardrivingSession{Sender: tx.sender, StartTime: tx.ts.UTC().Format(time.RFC3339)}
+			curPrefixes = make(map[string]bool)
+			curObservers = make(map[string]bool)
+		}
+		cur.EndTime = tx.ts.UTC().Format(time.RFC3339)
+		cur.MessageCount++
+		cur.TransmissionIDs = append(cur.TransmissionIDs, tx.id)
+		for p := range txPrefixes[tx.id] {
+			curPrefixes[p] = true
+		}
+		for o := range txObservers[tx.id] {
+			curObservers[o] = true
+		}
+		lastTS = tx.ts
+	}
+	flush()
+
+	sort.Slice(sessions, func(i, j int) bool { return sessions[i].StartTime > sessions[j].StartTime })
+	return sessions, nil
+}
+
+// wardrivingGPSSharePattern matches the plaintext coordinate suffix some
+// wardriving clients append after the standard token — e.g.
+// "MM:c3e_zJ1rUA:55.59743,13.00128" — confirmed empirically against live
+// traffic. This is an explicit choice by that sender's client to share
+// their position in-band; CoreScope reads the plaintext numbers, it does
+// not decode or infer them from the token itself.
+var wardrivingGPSSharePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+:(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$`)
+
+// detectWardrivingGPSShares scans every #wardriving message — stored as
+// "<sender>: MM:<message>" in decoded_json.text, per decodeGrpTxt's
+// "<sender>: <message>" convention — for that coordinate-suffix shape, and
+// returns one entry per sender with the most recent position they shared.
+// Messages without a coordinate suffix (the standard anonymous token, or
+// anything else) are ignored entirely.
+func (db *DB) detectWardrivingGPSShares(channel, since string) ([]WardrivingGPSShare, error) {
+	rows, err := db.conn.Query(`
+		SELECT json_extract(decoded_json, '$.sender'), json_extract(decoded_json, '$.text'), first_seen
+		FROM transmissions
+		WHERE channel_hash = ? AND payload_type = 5 AND first_seen >= ?
+		ORDER BY first_seen ASC
+	`, channel, since)
+	if err != nil {
+		return nil, fmt.Errorf("wardriving gps-share query: %w", err)
+	}
+	defer rows.Close()
+
+	type shareAgg struct {
+		lat, lon float64
+		count    int
+		lastSeen string
+	}
+	agg := make(map[string]*shareAgg)
+
+	for rows.Next() {
+		var sender, text sql.NullString
+		var ts string
+		if err := rows.Scan(&sender, &text, &ts); err != nil {
+			continue
+		}
+		if !sender.Valid || !text.Valid || sender.String == "" {
+			continue
+		}
+		// decodeGrpTxt (cmd/ingestor/decoder.go) builds Text as
+		// "<sender>: <message>", so the wardriving payload prefix is
+		// "<sender>: MM:" — not a bare "MM:" at the start of text.
+		prefix := sender.String + ": MM:"
+		if !strings.HasPrefix(text.String, prefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(text.String, prefix)
+		m := wardrivingGPSSharePattern.FindStringSubmatch(rest)
+		if m == nil {
+			continue
+		}
+		lat, errLat := strconv.ParseFloat(m[1], 64)
+		lon, errLon := strconv.ParseFloat(m[2], 64)
+		if errLat != nil || errLon != nil || lat < -90 || lat > 90 || lon < -180 || lon > 180 {
+			continue
+		}
+		a := agg[sender.String]
+		if a == nil {
+			a = &shareAgg{}
+			agg[sender.String] = a
+		}
+		a.count++
+		// Rows are ordered first_seen ASC, so the last write below wins
+		// as the most recent shared position.
+		a.lat, a.lon, a.lastSeen = lat, lon, ts
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("wardriving gps-share iteration: %w", err)
+	}
+
+	shares := make([]WardrivingGPSShare, 0, len(agg))
+	for senderName, a := range agg {
+		shares = append(shares, WardrivingGPSShare{
+			Sender:       senderName,
+			Lat:          a.lat,
+			Lon:          a.lon,
+			MessageCount: a.count,
+			LastSeen:     a.lastSeen,
+		})
+	}
+	sort.Slice(shares, func(i, j int) bool { return shares[i].LastSeen > shares[j].LastSeen })
+	return shares, nil
+}
+
+// wardrivingSenderMessagesLimit caps how many individual messages
+// GetWardrivingSenderMessages returns per request — this is a drill-down
+// view (one sender, optionally one session), not a bulk export.
+const wardrivingSenderMessagesLimit = 200
+
+// GetWardrivingSenderMessages returns one sender's individual #wardriving
+// messages in [since, until], most-recent-first: each message's entry-point
+// path (path[0] first, same convention as WardrivingEntryPrefix), the
+// observers that heard it with their own SNR/RSSI, and Lat/Lon when that
+// specific message carried an explicit shared position (see
+// detectWardrivingGPSShares). This is the per-message detail behind the
+// aggregate Sessions/Entry Points/Coverage views — used when a user drills
+// into one sender or one session.
+func (db *DB) GetWardrivingSenderMessages(sender, channel, since, until string) (*WardrivingSenderMessagesResponse, error) {
+	resp := &WardrivingSenderMessagesResponse{
+		Sender: sender, Channel: channel, Since: since, Until: until,
+		Messages: make([]WardrivingMessage, 0),
+	}
+
+	txRows, err := db.conn.Query(`
+		SELECT id, first_seen, json_extract(decoded_json, '$.text')
+		FROM transmissions
+		WHERE channel_hash = ? AND payload_type = 5 AND first_seen >= ? AND first_seen <= ?
+			AND json_extract(decoded_json, '$.sender') = ?
+		ORDER BY first_seen DESC
+		LIMIT ?
+	`, channel, since, until, sender, wardrivingSenderMessagesLimit)
+	if err != nil {
+		return nil, fmt.Errorf("wardriving sender messages query: %w", err)
+	}
+	type txRow struct {
+		id   int64
+		ts   string
+		text sql.NullString
+	}
+	var txs []txRow
+	for txRows.Next() {
+		var t txRow
+		if err := txRows.Scan(&t.id, &t.ts, &t.text); err != nil {
+			continue
+		}
+		txs = append(txs, t)
+	}
+	txRows.Close()
+	if err := txRows.Err(); err != nil {
+		return nil, fmt.Errorf("wardriving sender messages iteration: %w", err)
+	}
+	if len(txs) == 0 {
+		return resp, nil
+	}
+
+	placeholders := make([]string, len(txs))
+	args := make([]interface{}, len(txs))
+	txIndex := make(map[int64]int, len(txs))
+	for i, t := range txs {
+		placeholders[i] = "?"
+		args[i] = t.id
+		txIndex[t.id] = i
+	}
+
+	var obsQuery string
+	if db.isV3 {
+		obsQuery = fmt.Sprintf(`
+			SELECT o.transmission_id, obs.name, o.snr, o.rssi, o.path_json
+			FROM observations o
+			JOIN observers obs ON obs.rowid = o.observer_idx
+			WHERE o.transmission_id IN (%s)`, strings.Join(placeholders, ","))
+	} else {
+		obsQuery = fmt.Sprintf(`
+			SELECT o.transmission_id, obs.name, o.snr, o.rssi, o.path_json
+			FROM observations o
+			JOIN observers obs ON obs.id = o.observer_id
+			WHERE o.transmission_id IN (%s)`, strings.Join(placeholders, ","))
+	}
+	obsRows, err := db.conn.Query(obsQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("wardriving sender messages observations query: %w", err)
+	}
+
+	type msgAgg struct {
+		observations []WardrivingMessageObservation
+		pathPrefixes []string
+	}
+	aggs := make([]*msgAgg, len(txs))
+	for i := range aggs {
+		aggs[i] = &msgAgg{observations: make([]WardrivingMessageObservation, 0), pathPrefixes: make([]string, 0)}
+	}
+
+	for obsRows.Next() {
+		var txID int64
+		var observerName sql.NullString
+		var snr, rssi sql.NullFloat64
+		var pathJSON sql.NullString
+		if err := obsRows.Scan(&txID, &observerName, &snr, &rssi, &pathJSON); err != nil {
+			continue
+		}
+		idx, ok := txIndex[txID]
+		if !ok {
+			continue
+		}
+		agg := aggs[idx]
+		agg.observations = append(agg.observations, WardrivingMessageObservation{
+			ObserverName: observerName.String,
+			SNR:          snr.Float64,
+			RSSI:         rssi.Float64,
+		})
+		if pathJSON.Valid && pathJSON.String != "" {
+			var path []string
+			if json.Unmarshal([]byte(pathJSON.String), &path) == nil && len(path) > len(agg.pathPrefixes) {
+				agg.pathPrefixes = path
+			}
+		}
+	}
+	obsRows.Close()
+	if err := obsRows.Err(); err != nil {
+		return nil, fmt.Errorf("wardriving sender messages observations iteration: %w", err)
+	}
+
+	for i, t := range txs {
+		msg := WardrivingMessage{
+			TransmissionID: t.id,
+			Timestamp:      t.ts,
+			PathPrefixes:   aggs[i].pathPrefixes,
+			Observations:   aggs[i].observations,
+		}
+		if t.text.Valid {
+			prefix := sender + ": MM:"
+			if strings.HasPrefix(t.text.String, prefix) {
+				rest := strings.TrimPrefix(t.text.String, prefix)
+				if m := wardrivingGPSSharePattern.FindStringSubmatch(rest); m != nil {
+					lat, errLat := strconv.ParseFloat(m[1], 64)
+					lon, errLon := strconv.ParseFloat(m[2], 64)
+					if errLat == nil && errLon == nil && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180 {
+						msg.Lat = &lat
+						msg.Lon = &lon
+					}
+				}
+			}
+		}
+		resp.Messages = append(resp.Messages, msg)
+	}
+
+	return resp, nil
+}
+
+// GetMatchedRegionNames returns the set of scope_name values that have ever
+// matched at least one transmission still in retention (NULL and empty-string
+// "unknown" rows are excluded). Used to diff against the operator's
+// configured hashRegions list and surface which configured regions have
+// never actually matched anything — region-utilization analytics.
+func (db *DB) GetMatchedRegionNames() (map[string]bool, error) {
+	matched := make(map[string]bool)
+	if !db.hasScopeName {
+		return matched, nil
+	}
+	rows, err := db.conn.Query(`SELECT DISTINCT scope_name FROM transmissions WHERE scope_name IS NOT NULL AND scope_name != ''`)
+	if err != nil {
+		return nil, fmt.Errorf("matched region names query: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if rows.Scan(&name) == nil {
+			matched[name] = true
+		}
+	}
+	return matched, rows.Err()
 }
 
 // NodeForGeoPrune holds the minimal fields needed for geo-filter pruning.

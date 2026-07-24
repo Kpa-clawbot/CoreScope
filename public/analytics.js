@@ -31,6 +31,14 @@
   function _stopScopesRefresh() {
     if (_scopesRefreshTimer) { clearInterval(_scopesRefreshTimer); _scopesRefreshTimer = null; }
   }
+  var _foreignTrafficRefreshTimer = null;
+  function _stopForeignTrafficRefresh() {
+    if (_foreignTrafficRefreshTimer) { clearInterval(_foreignTrafficRefreshTimer); _foreignTrafficRefreshTimer = null; }
+  }
+  var _wardrivingRefreshTimer = null;
+  function _stopWardrivingRefresh() {
+    if (_wardrivingRefreshTimer) { clearInterval(_wardrivingRefreshTimer); _wardrivingRefreshTimer = null; }
+  }
 
   // --- Status color helpers (read from CSS variables for theme support) ---
   function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
@@ -130,6 +138,8 @@
                  inside this tab) and before Prefix Tool (utility tabs trail). -->
             <button class="tab-btn" data-tab="roles">Roles</button>
             <button class="tab-btn" data-tab="scopes">Scopes</button>
+            <button class="tab-btn" data-tab="foreign-traffic">Foreign Traffic</button>
+            <button class="tab-btn" data-tab="wardriving">Wardriving</button>
             <button class="tab-btn" data-tab="prefix-tool">Prefix Tool</button>
           </div>
         </div>
@@ -177,6 +187,8 @@
       // #1085 — Roles tab owns its own 60s auto-refresh; stop it on switch.
       if (_currentTab !== 'roles') _stopRolesRefresh();
       if (_currentTab !== 'scopes') _stopScopesRefresh();
+      if (_currentTab !== 'foreign-traffic') _stopForeignTrafficRefresh();
+      if (_currentTab !== 'wardriving') _stopWardrivingRefresh();
       _updateAnalyticsUrl();
       renderTab(_currentTab);
     });
@@ -293,6 +305,8 @@
       case 'roles': await renderRolesTab(el); break;
       case 'prefix-tool': await renderPrefixTool(el); break;
       case 'scopes': await renderScopesTab(el); break;
+      case 'foreign-traffic': await renderForeignTrafficTab(el); break;
+      case 'wardriving': await renderWardrivingTab(el); break;
     }
     // Auto-apply column resizing to all analytics tables
     requestAnimationFrame(() => {
@@ -2684,7 +2698,7 @@
     }
   }
 
-function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
+function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTrafficRefresh(); _stopWardrivingRefresh(); _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
 
   // Expose for testing
   if (typeof window !== 'undefined') {
@@ -2699,6 +2713,18 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
     window._analyticsRenderMultiByteAdopters = renderMultiByteAdopters;
     window._analyticsHashStatCardsHtml = hashStatCardsHtml;
     window._analyticsRenderCollisionsFromServer = renderCollisionsFromServer;
+    window._analyticsRenderForeignTrafficTab = renderForeignTrafficTab;
+    window._analyticsStopForeignTrafficRefresh = _stopForeignTrafficRefresh;
+    window._analyticsRenderWardrivingTab = renderWardrivingTab;
+    window._analyticsStopWardrivingRefresh = _stopWardrivingRefresh;
+    window._analyticsComputeNodesWithoutScope = computeNodesWithoutScope;
+    window._analyticsComputeRepeatersNeverRelayingScope = computeRepeatersNeverRelayingScope;
+    window._analyticsHopDepthBucketStats = hopDepthBucketStats;
+    window._analyticsHopDepthPercentile = hopDepthPercentile;
+    window._analyticsRenderHopDepthSectionHtml = renderHopDepthSectionHtml;
+    window._analyticsHopDepthTimeSeriesChartHtml = hopDepthTimeSeriesChartHtml;
+    window._analyticsHopDepthLookupByPubkey = hopDepthLookupByPubkey;
+    window._analyticsBridgeRepeaterPubkeySet = bridgeRepeaterPubkeySet;
   }
 
   // ─── Neighbor Graph Tab ─────────────────────────────────────────────────────
@@ -4471,6 +4497,41 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
     var winKey = 'scopes_window';
     var selectedWindow = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(winKey)) || '24h';
 
+    // #1852: the tab grew to stacked sections (windowed adoption stats,
+    // all-time region breakdowns, all-time node/repeater hygiene lists) —
+    // grouped into sub-tabs so a visitor sees one coherent screen at a
+    // time instead of one long scroll. Purely presentational: every
+    // group's data still loads together (one #scope-stats fetch + the
+    // hop-depth fetch + the two hygiene sections' own fetchAllNodes
+    // calls), only DOM visibility is gated on the active sub-tab. The
+    // 1h/24h/7d window picker affects Overview and Hop Depth (both
+    // windowed) but not the all-time Regions/Hygiene groups, so each
+    // windowed panel gets its own copy of the picker buttons rather than
+    // one shared control above the sub-tab bar — every button still
+    // drives the same selectedWindow/load(), see the click listener below.
+    var subtabKey = 'scopes_subtab';
+    var selectedSubtab = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(subtabKey)) || 'overview';
+
+    // Role/text/geo filter for the "Nodes Without a Default Scope" section
+    // below. Lives at this scope (not inside updateData) so it survives
+    // the 60s auto-refresh re-render — same reasoning as selectedWindow
+    // above, just kept in memory rather than sessionStorage since it's a
+    // finer-grained, more transient filter.
+    var noScopeFilter = { role: '', q: '', geo: '' };
+
+    // Geo filter for "Repeaters Never Relaying Any Scope" below — same
+    // domestic/foreign split as noScopeFilter.geo, kept separate since the
+    // two sections' result sets are independent (see
+    // computeRepeatersNeverRelayingScope's doc comment).
+    var neverRelayFilter = { geo: '' };
+
+    // Encrypted/unencrypted filter for "Scope Adoption by Channel" below —
+    // same persistence reasoning as noScopeFilter above. '' = all,
+    // 'encrypted' = channel_hash prefixed 'enc_' (undecryptable at ingest,
+    // see db.go GetChannelScopeAdoption), 'unencrypted' = everything else
+    // (plain channel names — never encrypted to begin with).
+    var adoptFilter = { mode: '' };
+
     // Fix 5: write static frame only once
     if (!el.querySelector('#scopes-cards')) {
       el.innerHTML =
@@ -4478,18 +4539,72 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
         '<p class="text-muted" style="margin:0 0 12px;font-size:0.85em">' +
           'Denominator is all observed transmissions. Only TRANSPORT_FLOOD (0) and TRANSPORT_DIRECT (3) routes carry a scope; FLOOD (1) and DIRECT (2) are inherently unscoped per MeshCore protocol.' +
         '</p>' +
-        '<div style="margin-bottom:12px">' +
-          ['1h', '24h', '7d'].map(function(v) {
-            return '<button class="tab-btn' + (selectedWindow === v ? ' active' : '') + '" data-win="' + v + '">' + v + '</button>';
+        '<div class="analytics-tabs" id="scopesSubtabs" style="margin-bottom:12px">' +
+          [
+            { key: 'overview', label: 'Overview' },
+            { key: 'hopdepth', label: 'Hop Depth' },
+            { key: 'regions', label: 'Regions' },
+            { key: 'hygiene', label: 'Hygiene' },
+          ].map(function(t) {
+            return '<button class="tab-btn' + (selectedSubtab === t.key ? ' active' : '') + '" data-subtab="' + t.key + '">' + t.label + '</button>';
           }).join('') +
         '</div>' +
-        '<div id="scopes-cards" class="stats-grid" style="margin-bottom:16px"></div>' +
-        '<div class="text-center text-muted" id="scopes-loading" style="padding:20px">Loading scope stats…</div>' +
-        '<table class="data-table analytics-table" style="margin-bottom:8px">' +
-          '<thead><tr><th>Region</th><th>Messages</th><th>% of Scoped</th></tr></thead>' +
-          '<tbody id="scopes-tbody"></tbody>' +
-        '</table>' +
-        '<div id="scopes-chart"></div>';
+        '<div id="scopes-panel-overview" style="display:' + (selectedSubtab === 'overview' ? '' : 'none') + '">' +
+          '<div style="margin-bottom:12px">' +
+            ['1h', '24h', '7d'].map(function(v) {
+              return '<button class="tab-btn' + (selectedWindow === v ? ' active' : '') + '" data-win="' + v + '">' + v + '</button>';
+            }).join('') +
+          '</div>' +
+          '<div id="scopes-cards" class="stats-grid" style="margin-bottom:16px"></div>' +
+          '<div id="scopes-highlights" style="margin-bottom:16px"></div>' +
+          '<div id="scopes-hourly" style="margin-bottom:16px"></div>' +
+          '<div id="scopes-channel-messages" style="margin-bottom:16px"></div>' +
+          '<div id="scopes-channel-adoption" style="margin-bottom:16px"></div>' +
+          '<div class="text-center text-muted" id="scopes-loading" style="padding:20px">Loading scope stats…</div>' +
+          '<details style="margin-top:16px">' +
+            '<summary style="cursor:pointer;font-weight:600;padding:2px 0">Region Breakdown &amp; Trend</summary>' +
+            '<table class="data-table analytics-table" style="margin:8px 0">' +
+              '<thead><tr><th>Region</th><th>Messages</th><th>% of Scoped</th></tr></thead>' +
+              '<tbody id="scopes-tbody"></tbody>' +
+            '</table>' +
+            '<div id="scopes-chart"></div>' +
+          '</details>' +
+        '</div>' +
+        '<div id="scopes-panel-hopdepth" style="display:' + (selectedSubtab === 'hopdepth' ? '' : 'none') + '">' +
+          '<div style="margin-bottom:12px">' +
+            ['1h', '24h', '7d'].map(function(v) {
+              return '<button class="tab-btn' + (selectedWindow === v ? ' active' : '') + '" data-win="' + v + '">' + v + '</button>';
+            }).join('') +
+          '</div>' +
+          '<div id="scopes-hop-depth"></div>' +
+        '</div>' +
+        '<div id="scopes-panel-regions" style="display:' + (selectedSubtab === 'regions' ? '' : 'none') + '">' +
+          '<div id="scopes-area-adoption"></div>' +
+          '<div id="scopes-utilization"></div>' +
+          '<div id="scopes-repeaters" style="margin-top:16px"></div>' +
+          '<div id="scopes-origin-nodes" style="margin-top:16px"></div>' +
+          '<div id="scopes-bridges" style="margin-top:16px"></div>' +
+        '</div>' +
+        '<div id="scopes-panel-hygiene" style="display:' + (selectedSubtab === 'hygiene' ? '' : 'none') + '">' +
+          '<div id="scopes-no-scope"></div>' +
+          '<div id="scopes-never-relay-scope" style="margin-top:16px"></div>' +
+        '</div>';
+
+      // Sub-tab click listener (once) — pure visibility toggle, no re-fetch.
+      var subtabsEl = el.querySelector('#scopesSubtabs');
+      if (subtabsEl) {
+        subtabsEl.addEventListener('click', function(e) {
+          var btn = e.target.closest('[data-subtab]');
+          if (!btn) return;
+          selectedSubtab = btn.dataset.subtab;
+          if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(subtabKey, selectedSubtab);
+          subtabsEl.querySelectorAll('[data-subtab]').forEach(function(b) { b.classList.toggle('active', b.dataset.subtab === selectedSubtab); });
+          ['overview', 'hopdepth', 'regions', 'hygiene'].forEach(function(key) {
+            var panel = document.getElementById('scopes-panel-' + key);
+            if (panel) panel.style.display = key === selectedSubtab ? '' : 'none';
+          });
+        });
+      }
 
       // Attach window-button click listeners (once)
       el.querySelectorAll('[data-win]').forEach(function(btn) {
@@ -4507,6 +4622,208 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
       return (n / total * 100).toFixed(1) + '%';
     }
 
+    // Collapsed-by-default <details> wrapper for a scope-tab subsection —
+    // title can include a dynamic count ("Nodes Not Using Any Scope
+    // (1423 of 1491)") since it's built at render time with the real data
+    // already in hand, unlike a static skeleton-level heading would be.
+    // `key` is a stable identifier (independent of the dynamic count in
+    // `title`) used by setSectionHtml to restore this section's open/closed
+    // state across the 60s auto-refresh re-render below.
+    // Description lives inside <summary> (not as a sibling of it) so it
+    // stays visible while collapsed — <details> only ever hides its
+    // children other than the summary, and the summary itself is always
+    // shown regardless of open state.
+    function detailsSection(title, description, bodyHtml, key) {
+      return '<details style="margin-top:16px"' + (key ? ' data-key="' + esc(key) + '"' : '') + '>' +
+        '<summary style="cursor:pointer;padding:2px 0">' +
+          '<span style="font-weight:600">' + title + '</span>' +
+          (description ? '<div class="text-muted" style="font-weight:400;font-size:0.85em;margin-top:2px">' + description + '</div>' : '') +
+        '</summary>' +
+        '<div style="margin:8px 0 0 2px">' + bodyHtml + '</div>' +
+      '</details>';
+    }
+
+    // The 60s auto-refresh below rebuilds each section's innerHTML from
+    // scratch, which would otherwise silently re-collapse any <details> a
+    // visitor had open mid-read. Captures open state by data-key (falling
+    // back to summary text for nested details that don't set one, e.g. the
+    // per-region groups) before replacing, then reapplies it after.
+    function setSectionHtml(container, html) {
+      if (!container) return;
+      var openKeys = [];
+      container.querySelectorAll('details[open]').forEach(function(d) {
+        var s = d.querySelector('summary');
+        openKeys.push(d.getAttribute('data-key') || (s ? s.textContent : ''));
+      });
+      container.innerHTML = html;
+      if (openKeys.length) {
+        container.querySelectorAll('details').forEach(function(d) {
+          var s = d.querySelector('summary');
+          var k = d.getAttribute('data-key') || (s ? s.textContent : '');
+          if (k && openKeys.indexOf(k) !== -1) d.open = true;
+        });
+      }
+    }
+
+    // Renders (and re-renders, on every filter change) the "Nodes Without
+    // a Default Scope" section from an already-fetched node list — role
+    // buttons and the search box filter that same in-memory list, so
+    // narrowing to e.g. just companions never re-fetches. The search
+    // input's own re-render (triggered by typing) would otherwise steal
+    // focus every keystroke since setSectionHtml rebuilds the whole
+    // section including the input; focus + caret are captured before and
+    // restored after for that reason.
+    function renderNoScopeSection(allNodes) {
+      var noScopeElInner = document.getElementById('scopes-no-scope');
+      if (!noScopeElInner) return;
+
+      var searchFocused = document.activeElement && document.activeElement.id === 'noScopeSearch';
+      var caretPos = searchFocused ? document.activeElement.selectionStart : null;
+
+      var noScope = computeNodesWithoutScope(allNodes, 100, { role: noScopeFilter.role, q: noScopeFilter.q, geo: noScopeFilter.geo });
+      var roleSummaryText = noScope.roleSummary.map(function(r) { return r.count.toLocaleString() + ' ' + esc(r.role); }).join(', ');
+
+      var roleButtons = '<button type="button" class="tab-btn' + (!noScopeFilter.role ? ' active' : '') +
+          '" data-role-filter="">All (' + noScope.total.toLocaleString() + ')</button>' +
+        noScope.roleSummary.map(function(r) {
+          return '<button type="button" class="tab-btn' + (noScopeFilter.role === r.role ? ' active' : '') +
+            '" data-role-filter="' + esc(r.role) + '">' + esc(r.role) + ' (' + r.count.toLocaleString() + ')</button>';
+        }).join('');
+
+      var controlsHtml = geoFilterButtons(noScopeFilter, 'geo-filter') +
+        '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:4px 0 10px">' +
+        roleButtons +
+        '<input type="text" id="noScopeSearch" placeholder="Search by name or key…" value="' + esc(noScopeFilter.q) + '" ' +
+          'style="margin-left:4px;padding:4px 8px;background:var(--card-bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:0.85em;min-width:180px">' +
+        '</div>';
+
+      var resultsBody;
+      if (noScope.sortedCapped.length > 0) {
+        var noScopeRows = noScope.sortedCapped.map(function(n) {
+          return '<tr><td><a href="#/nodes/' + encodeURIComponent(n.public_key) + '">' + esc(n.name || n.public_key) + '</a></td>' +
+            '<td>' + esc(n.role || '—') + '</td>' +
+            '<td>' + timeAgo(n.last_seen) + '</td></tr>';
+        }).join('');
+        resultsBody = '<table class="data-table analytics-table">' +
+          '<thead><tr><th>Node</th><th>Role</th><th>Last Seen</th></tr></thead>' +
+          '<tbody>' + noScopeRows + '</tbody>' +
+          '</table>';
+      } else if (noScopeFilter.role || noScopeFilter.q || noScopeFilter.geo) {
+        resultsBody = '<p class="text-muted" style="font-size:0.85em">No nodes without a default scope match this filter.</p>';
+      } else {
+        resultsBody = '<p class="text-muted" style="font-size:0.85em">Every known node has a configured default scope.</p>';
+      }
+
+      setSectionHtml(noScopeElInner, detailsSection(
+        'Nodes Without a Default Scope (' + noScope.total.toLocaleString() + ' of ' + allNodes.length.toLocaleString() + ')',
+        'Nodes with no <code>default_scope</code> configured — they never set a hashRegions region for themselves in their own adverts. By role: ' + (roleSummaryText || 'none') + '. ' +
+          'Sorted by most-recently-active first' +
+          (noScope.filteredTotal !== noScope.total ? ', filtered to ' + noScope.filteredTotal.toLocaleString() + ' matching below' : '') +
+          (noScope.truncated ? ' (capped at ' + noScope.sortedCapped.length + ')' : '') + '.',
+        controlsHtml + resultsBody,
+        'no-scope'
+      ));
+
+      var sectionEl = document.getElementById('scopes-no-scope');
+      if (!sectionEl) return;
+
+      sectionEl.querySelectorAll('[data-role-filter]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          noScopeFilter.role = btn.dataset.roleFilter || '';
+          renderNoScopeSection(allNodes);
+        });
+      });
+
+      sectionEl.querySelectorAll('[data-geo-filter]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          noScopeFilter.geo = btn.dataset.geoFilter || '';
+          renderNoScopeSection(allNodes);
+        });
+      });
+
+      var searchInput = sectionEl.querySelector('#noScopeSearch');
+      if (searchInput) {
+        searchInput.addEventListener('input', debounce(function() {
+          noScopeFilter.q = searchInput.value;
+          renderNoScopeSection(allNodes);
+        }, 200));
+        if (searchFocused) {
+          searchInput.focus();
+          if (caretPos != null) {
+            try { searchInput.setSelectionRange(caretPos, caretPos); } catch (e) { /* ignore */ }
+          }
+        }
+      }
+    }
+
+    // Renders (and re-renders, on filter change) "Scope Adoption by
+    // Channel" from the already-fetched `adoption` array — uncapped
+    // server-side (see db.go GetChannelScopeAdoption), so every channel
+    // seen in the window shows up here, filterable by whether its
+    // channel_hash carries the 'enc_' prefix db.go uses for channels the
+    // ingestor couldn't decrypt.
+    function renderAdoptSection(adoption) {
+      var adoptElInner = document.getElementById('scopes-channel-adoption');
+      if (!adoptElInner) return;
+
+      function isEncrypted(ca) { return !!(ca.channel && ca.channel.indexOf('enc_') === 0); }
+      var encryptedCount = adoption.filter(isEncrypted).length;
+      var unencryptedCount = adoption.length - encryptedCount;
+
+      var filtered = adoption;
+      if (adoptFilter.mode === 'encrypted') filtered = adoption.filter(isEncrypted);
+      else if (adoptFilter.mode === 'unencrypted') filtered = adoption.filter(function(ca) { return !isEncrypted(ca); });
+
+      var filterButtons = '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">' +
+        '<button type="button" class="tab-btn' + (!adoptFilter.mode ? ' active' : '') + '" data-adopt-filter="">All (' + adoption.length.toLocaleString() + ')</button>' +
+        '<button type="button" class="tab-btn' + (adoptFilter.mode === 'unencrypted' ? ' active' : '') + '" data-adopt-filter="unencrypted">Unencrypted (' + unencryptedCount.toLocaleString() + ')</button>' +
+        '<button type="button" class="tab-btn' + (adoptFilter.mode === 'encrypted' ? ' active' : '') + '" data-adopt-filter="encrypted">Encrypted (' + encryptedCount.toLocaleString() + ')</button>' +
+        '</div>';
+
+      var adoptBody;
+      if (filtered.length > 0) {
+        var adoptRows = filtered.map(function(ca) {
+          var caOverall = ca.scoped + ca.unscoped;
+          var label = isEncrypted(ca) ? 'Encrypted (0x' + ca.channel.slice(4).toUpperCase() + ')' : ca.channel;
+          var regionsHtml = (ca.regions && ca.regions.length)
+            ? ca.regions.map(function(r) { return '<code>' + esc(r) + '</code>'; }).join(', ')
+            : '<span class="text-muted">—</span>';
+          return '<tr>' +
+            '<td><code>' + esc(label) + '</code></td>' +
+            '<td>' + ca.totalMessages.toLocaleString() + '</td>' +
+            '<td>' + ca.scoped.toLocaleString() + ' (' + pct(ca.scoped, caOverall) + ')</td>' +
+            '<td>' + ca.unscoped.toLocaleString() + '</td>' +
+            '<td>' + ca.unknownScope.toLocaleString() + '</td>' +
+            '<td>' + regionsHtml + '</td>' +
+            '</tr>';
+        }).join('');
+        adoptBody = '<table class="data-table analytics-table">' +
+          '<thead><tr><th>Channel</th><th>Messages</th><th>Scoped</th><th>Unscoped</th><th>Unknown</th><th>Regions Used</th></tr></thead>' +
+          '<tbody>' + adoptRows + '</tbody>' +
+          '</table>';
+      } else if (adoption.length > 0) {
+        adoptBody = '<p class="text-muted" style="font-size:0.85em">No channels match this filter.</p>';
+      } else {
+        adoptBody = '<p class="text-muted" style="font-size:0.85em">No channel messages in this window.</p>';
+      }
+
+      setSectionHtml(adoptElInner, detailsSection(
+        'Scope Adoption by Channel (' + adoption.length.toLocaleString() + ')',
+        'Which channels actually use region scoping vs which never do — every channel seen in this window.',
+        adoption.length > 0 ? (filterButtons + adoptBody) : adoptBody,
+        'scope-adoption'
+      ));
+
+      var sectionEl = document.getElementById('scopes-channel-adoption');
+      if (!sectionEl) return;
+      sectionEl.querySelectorAll('[data-adopt-filter]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          adoptFilter.mode = btn.dataset.adoptFilter || '';
+          renderAdoptSection(adoption);
+        });
+      });
+    }
+
     async function load(w) {
       var loadingEl = document.getElementById('scopes-loading');
       if (loadingEl) loadingEl.style.display = '';
@@ -4519,7 +4836,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
           if (cardsEl2) cardsEl2.innerHTML = '<div class="text-center text-muted" style="padding:20px">' + esc(data.error) + '</div>';
           return;
         }
-        updateData(data, w);
+        await updateData(data, w);
       } catch (err) {
         if (loadingEl) loadingEl.style.display = 'none';
         var cardsEl3 = document.getElementById('scopes-cards');
@@ -4527,7 +4844,41 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
       }
     }
 
-    function updateData(d, w) {
+    // regionScope -> area label lookup, e.g. "dk-aarhus" -> "Aarhus by".
+    // An area can link more than one scope (e.g. Europa: both "eu" and
+    // "europe"), so each one gets its own entry pointing back to the same
+    // label. Areas rarely change, so this is fetched once and reused
+    // across every region-code section below rather than re-fetched per
+    // render.
+    var regionAreaLabels = null;
+    async function loadRegionAreaLabels() {
+      if (regionAreaLabels) return regionAreaLabels;
+      regionAreaLabels = {};
+      try {
+        var areas = await api('/config/areas', { ttl: CLIENT_TTL.nodeDetail });
+        (areas || []).forEach(function(a) {
+          (a.regionScopes || []).forEach(function(rs) {
+            regionAreaLabels[rs.toLowerCase()] = a.label;
+          });
+        });
+      } catch (e) { /* leave empty -- region codes render unlabeled */ }
+      return regionAreaLabels;
+    }
+    // A configured hashRegions name is always "#"-prefixed (see
+    // internal/regions.Normalize); AreaEntry.RegionScopes entries are
+    // stored without it, so strip before looking up.
+    function regionAreaLabel(rawRegionName) {
+      if (!regionAreaLabels || !rawRegionName) return null;
+      var key = String(rawRegionName).replace(/^#/, '').toLowerCase();
+      return regionAreaLabels[key] || null;
+    }
+    function regionCodeHtml(rawRegionName) {
+      var label = regionAreaLabel(rawRegionName);
+      return '<code>' + esc(rawRegionName) + '</code>' + (label ? ' <span class="text-muted">(' + esc(label) + ')</span>' : '');
+    }
+
+    async function updateData(d, w) {
+      await loadRegionAreaLabels();
       var s = d.summary;
       // #1838: denominator = transport-carrying transmissions (route_type 0,3).
       // Unscoped now includes non-transport routes (1,2) which are inherently
@@ -4549,6 +4900,113 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
             (c.note ? '<div class="stat-note text-muted" style="font-size:11px">' + c.note + '</div>' : '') +
             '</div>';
         }).join('');
+      }
+
+      // Highlights row: the single most-asked-about number from each of
+      // the Regions and Hygiene sub-tabs, surfaced here so a visitor
+      // doesn't have to switch sub-tabs to see them. Region/bridge counts
+      // come straight off `d` (already fetched above); the two
+      // node-list-derived counts need `allNodes`, fetched once here and
+      // reused below by the Hygiene sections themselves instead of each
+      // fetching their own copy.
+      var highlightsEl = document.getElementById('scopes-highlights');
+      var allNodes = null;
+      try {
+        var allNodesResp = await fetchAllNodes('', { ttl: CLIENT_TTL.nodeList });
+        allNodes = allNodesResp.nodes || allNodesResp;
+      } catch (e) {
+        allNodes = null;
+      }
+      if (highlightsEl) {
+        var hlConfigured = d.configuredRegions || 0;
+        var hlUnused = (d.unusedRegions || []).length;
+        var hlUsed = hlConfigured - hlUnused;
+        var hlBridges = (d.bridgeRepeaters || []).length;
+        var hlNoScope = allNodes ? computeNodesWithoutScope(allNodes, 0).total : null;
+        var hlNeverRelay = allNodes ? computeRepeatersNeverRelayingScope(allNodes, 0).total : null;
+        highlightsEl.innerHTML = '<div class="stats-grid">' +
+          [
+            {
+              label: 'Regions Used',
+              value: hlConfigured > 0 ? hlUsed.toLocaleString() + ' / ' + hlConfigured.toLocaleString() : '—',
+              note: hlConfigured > 0 ? pct(hlUsed, hlConfigured) + ' of configured' : 'no hashRegions configured',
+            },
+            {
+              label: 'Bridge Repeaters',
+              value: hlBridges.toLocaleString(),
+              note: 'relay for 2+ regions',
+            },
+            {
+              label: 'Nodes W/O Default Scope',
+              value: hlNoScope != null ? hlNoScope.toLocaleString() : '—',
+              note: (hlNoScope != null && allNodes.length) ? pct(hlNoScope, allNodes.length) + ' of all nodes' : '',
+            },
+            {
+              label: 'Never Relaying Scope',
+              value: hlNeverRelay != null ? hlNeverRelay.toLocaleString() : '—',
+              note: 'repeaters/rooms',
+            },
+          ].map(function(c) {
+            return '<div class="stat-card"><div class="stat-value">' + c.value + '</div>' +
+              '<div class="stat-label">' + c.label + '</div>' +
+              (c.note ? '<div class="stat-note text-muted" style="font-size:11px">' + c.note + '</div>' : '') +
+              '</div>';
+          }).join('') +
+        '</div>';
+      }
+
+      // Flood-containment check: is scoping actually working, i.e. does
+      // scoped traffic travel fewer relay hops than unscoped traffic before
+      // a repeater's flood.max cap kicks in? Same 0-based per-node hop
+      // index as /api/nodes/{pubkey}/hop_analytics (issue #1812) — NOT the
+      // unrelated observer-distance hopDistribution field.
+      var hopDepthEl = document.getElementById('scopes-hop-depth');
+      var hopDepthData = null;
+      try {
+        hopDepthData = await api('/analytics/hop-depth?window=' + encodeURIComponent(w), { ttl: 30000 });
+      } catch (e) {
+        hopDepthData = null;
+      }
+      if (hopDepthEl) {
+        hopDepthEl.innerHTML = renderHopDepthSectionHtml(hopDepthData);
+      }
+
+      // Channel-messages-only breakdown: same scoped/unscoped/unknown
+      // question as the cards above, but restricted to payload_type=5
+      // (channel chat) — most channel traffic is plain FLOOD, so this can
+      // read very differently from the all-traffic numbers above.
+      var chanEl = document.getElementById('scopes-channel-messages');
+      if (chanEl) {
+        var cm = d.channelMessages;
+        if (cm && cm.totalMessages > 0) {
+          var cmOverall = cm.scoped + cm.unscoped;
+          chanEl.innerHTML =
+            '<h4 style="margin:0 0 4px">Channel Messages</h4>' +
+            '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Same scoped/unscoped/unknown breakdown, restricted to channel chat messages only.</p>' +
+            '<div class="stats-grid">' +
+            [
+              { label: 'Total Messages', value: cm.totalMessages.toLocaleString(), note: null },
+              { label: 'Scoped', value: cm.scoped.toLocaleString(), note: pct(cm.scoped, cmOverall) + ' of channel messages' },
+              { label: 'Unscoped', value: cm.unscoped.toLocaleString(), note: pct(cm.unscoped, cmOverall) + ' of channel messages' },
+              { label: 'Unknown Scope', value: cm.unknownScope.toLocaleString(), note: pct(cm.unknownScope, cm.scoped) + ' of scoped' },
+            ].map(function(c) {
+              return '<div class="stat-card"><div class="stat-value">' + c.value + '</div>' +
+                '<div class="stat-label">' + c.label + '</div>' +
+                (c.note ? '<div class="stat-note text-muted" style="font-size:11px">' + c.note + '</div>' : '') +
+                '</div>';
+            }).join('') +
+            '</div>';
+        } else {
+          chanEl.innerHTML = '';
+        }
+      }
+
+      // Channel scope adoption: the Channel Messages breakdown above, but
+      // per channel — which specific channels actually use region scoping
+      // vs which never do. Uncapped; filterable by encrypted/unencrypted.
+      var adoptEl = document.getElementById('scopes-channel-adoption');
+      if (adoptEl) {
+        renderAdoptSection(d.channelScopeAdoption || []);
       }
 
       // Per-region table
@@ -4618,7 +5076,306 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
         }
         chartEl.innerHTML = chartHtml;
       }
+
+      // Hour-of-day activity per region: when during a typical day is each
+      // region active — a heatmap, not a chronological chart. Color
+      // intensity is normalized PER ROW (each region's own busiest hour),
+      // not globally, so a quiet region's shape is still visible next to
+      // a loud one instead of being crushed to near-zero.
+      var hourlyEl = document.getElementById('scopes-hourly');
+      if (hourlyEl) {
+        var hourly = d.hourlyActivityByRegion || [];
+        if (hourly.length > 0) {
+          var hourLabels = '';
+          for (var hl = 0; hl < 24; hl += 3) {
+            hourLabels += '<div style="flex:3;text-align:left;font-size:9px" title="' + hl + ':00 UTC">' + hl + '</div>';
+          }
+          var hourlyRows = hourly.map(function(ha) {
+            var maxV = Math.max.apply(null, ha.hours.concat([1]));
+            var cells = ha.hours.map(function(v, h) {
+              var alpha = v > 0 ? (0.12 + 0.88 * (v / maxV)) : 0;
+              var bg = v > 0 ? 'background:var(--accent);opacity:' + alpha.toFixed(2) : 'background:var(--border)';
+              return '<div style="flex:1;height:16px;' + bg + '" title="' + esc(ha.region) + ' ' + h + ':00 UTC — ' + v.toLocaleString() + ' msg' + (v === 1 ? '' : 's') + '"></div>';
+            }).join('');
+            return '<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">' +
+              '<div style="width:110px;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(ha.region) + '"><code>' + esc(ha.region) + '</code></div>' +
+              '<div style="flex:1;display:flex;gap:1px">' + cells + '</div>' +
+              '</div>';
+          }).join('');
+          hourlyEl.innerHTML =
+            '<h4 style="margin:0 0 4px">Activity by Hour of Day (' + hourly.length.toLocaleString() + ' region' + (hourly.length === 1 ? '' : 's') + ')</h4>' +
+            '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">When during a typical day (UTC) each region is active, aggregated across every day in the window above. Reads best on 7d — color is normalized per region, so quiet and busy regions are both visible.</p>' +
+            '<div style="display:flex;gap:6px;margin-bottom:4px">' +
+              '<div style="width:110px"></div>' +
+              '<div style="flex:1;display:flex">' + hourLabels + '</div>' +
+            '</div>' +
+            hourlyRows;
+        } else {
+          hourlyEl.innerHTML =
+            '<h4 style="margin:0 0 4px">Activity by Hour of Day</h4>' +
+            '<p class="text-muted" style="margin:0;font-size:0.85em">No scoped messages in this window to chart by hour of day.</p>';
+        }
+      }
+
+      // Scope Adoption by Area: for each configured geographic area, which
+      // SPECIFIC nodes actually support the region that area is linked to
+      // (own default_scope OR ever relayed it — a repeater can carry
+      // dk-oj traffic and thereby support Østjylland without configuring
+      // dk-oj as its own scope) and which sit there but don't. Independent
+      // of Region Utilization below, which only knows about region
+      // strings that already appeared in a message — a real area with
+      // real nodes that never produced one is invisible there.
+      var areaAdoptEl = document.getElementById('scopes-area-adoption');
+      if (areaAdoptEl) {
+        var byArea = d.scopeAdoptionByArea || [];
+        if (byArea.length > 0) {
+          function nodeLinks(refs) {
+            return (refs || []).map(function(r) {
+              return '<a href="#/nodes/' + encodeURIComponent(r.publicKey) + '">' + esc(r.name) + '</a>';
+            }).join(', ');
+          }
+          // For areas linking more than one scope (e.g. Europa: "eu" and
+          // "europe"), a flat Supporting list can't say WHICH scope each
+          // node actually uses/relays — split it into one sub-list per
+          // scope instead. A node matching more than one scope (its own
+          // default_scope is one, and it relays another) appears in every
+          // group it matched, not just the first. Single-scope areas keep
+          // the plain flat list (grouping by one group is just noise).
+          function matchingByScope(matching, regionScopes) {
+            return regionScopes.map(function(rs) {
+              var inGroup = (matching || []).filter(function(m) {
+                return (m.matchedScopes || []).indexOf(rs) !== -1;
+              });
+              return '<div style="margin-top:4px"><code>#' + esc(rs) + '</code> (' + inGroup.length + '): ' +
+                (inGroup.length ? nodeLinks(inGroup) : '<span class="text-muted">none</span>') +
+                '</div>';
+            }).join('');
+          }
+          var areaGroups = byArea.map(function(a) {
+            var summary, body;
+            if (a.regionScopes && a.regionScopes.length) {
+              var matchCount = a.nodesMatchingArea || 0;
+              var scopeCodes = a.regionScopes.map(function(rs) { return '<code>#' + esc(rs) + '</code>'; }).join(' or ');
+              summary = esc(a.label) + ' — ' + matchCount.toLocaleString() + ' of ' + a.totalNodes.toLocaleString() +
+                ' support ' + scopeCodes + ' (' + pct(matchCount, a.totalNodes) + ')';
+              var supportingBody = a.regionScopes.length > 1
+                ? matchingByScope(a.matching, a.regionScopes)
+                : (a.matching && a.matching.length ? nodeLinks(a.matching) : '<span class="text-muted">none</span>');
+              body =
+                '<div style="margin-bottom:6px"><strong>Supporting</strong> (' + (a.matching || []).length + '): ' + supportingBody +
+                '</div>' +
+                '<div><strong>Not supporting</strong> (' + (a.notMatching || []).length + '): ' +
+                  (a.notMatching && a.notMatching.length ? nodeLinks(a.notMatching) : '<span class="text-muted">none</span>') +
+                '</div>';
+            } else {
+              summary = esc(a.label) + ' — ' + a.totalNodes.toLocaleString() + ' node' + (a.totalNodes === 1 ? '' : 's') +
+                ', <span class="text-muted">no region linked to this area</span>';
+              body = '<p class="text-muted" style="margin:0;font-size:0.85em">This area has no regionScopes configured, so there\'s nothing to check adoption against.</p>';
+            }
+            return '<details style="margin-bottom:8px" data-key="area-adopt:' + esc(a.areaKey) + '">' +
+              '<summary style="cursor:pointer">' + summary + '</summary>' +
+              '<div style="margin-top:6px;margin-left:12px;font-size:0.9em;line-height:1.6">' + body + '</div>' +
+              '</details>';
+          }).join('');
+          setSectionHtml(areaAdoptEl, detailsSection(
+            'Scope Adoption by Area (' + byArea.length.toLocaleString() + ' areas)',
+            null,
+            areaGroups,
+            'scope-adoption-by-area'
+          ));
+        } else {
+          areaAdoptEl.innerHTML = '';
+        }
+      }
+
+      // Region utilization: how much of the configured hashRegions list
+      // has never actually matched anything — all-time (not window-scoped),
+      // so it doesn't fluctuate with the 1h/24h/7d selector above. Only
+      // shown when the server config has hashRegions configured.
+      var utilEl = document.getElementById('scopes-utilization');
+      if (utilEl) {
+        var configured = d.configuredRegions || 0;
+        if (configured > 0) {
+          var unused = d.unusedRegions || [];
+          var usedCount = configured - unused.length;
+          var unusedPct = (unused.length / configured * 100).toFixed(1);
+          var listHtml = unused.map(function(name) { return regionCodeHtml(name); }).join(', ');
+          setSectionHtml(utilEl, detailsSection(
+            'Region Utilization (' + usedCount.toLocaleString() + ' of ' + configured.toLocaleString() + ' used)',
+            'All-time, not limited to the window above — has this configured region ever matched a message still in retention?',
+            '<p style="margin:0 0 8px">' +
+              '<strong>' + usedCount.toLocaleString() + '</strong> of <strong>' + configured.toLocaleString() + '</strong> configured regions have matched at least once' +
+              (unused.length > 0 ? ' — <strong>' + unused.length.toLocaleString() + '</strong> (' + unusedPct + '%) have never matched anything.' : '.') +
+            '</p>' +
+            (unused.length > 0 ?
+              '<details data-key="unused-regions"><summary style="cursor:pointer">Show ' + unused.length.toLocaleString() + ' unused region' + (unused.length === 1 ? '' : 's') + '</summary>' +
+              '<div class="mono text-muted" style="font-size:11px;margin-top:8px;max-height:200px;overflow-y:auto;line-height:1.6">' + listHtml + '</div></details>'
+              : ''),
+            'region-utilization'
+          ));
+        } else {
+          utilEl.innerHTML = '';
+        }
+      }
+
+      // Renders a "<region> -> [node links]" breakdown into a container.
+      // Shared by "Repeaters by Region" (transported_scopes — who relayed
+      // traffic for this region) and "Nodes Running This Region"
+      // (default_scope — who is actually configured with it). Both are
+      // all-time, not limited to the window selector above.
+      function renderRegionNodeGroups(elId, title, description, groups, unitLabel) {
+        var el = document.getElementById(elId);
+        if (!el) return;
+        // Always show the heading — hiding the whole section when `groups`
+        // is empty (vs. showing an empty-state message) reads as "this
+        // feature doesn't exist" rather than "no data yet", which is
+        // especially confusing right after a restart while the neighbor
+        // graph + path resolution are still catching back up.
+        var body = (groups && groups.length)
+          ? groups.map(function(g) {
+              var links = g.repeaters.map(function(rp) {
+                return '<a href="#/nodes/' + encodeURIComponent(rp.publicKey) + '">' + esc(rp.name) + '</a>';
+              }).join(', ');
+              return '<details style="margin-bottom:6px" data-key="region:' + esc(g.region) + '">' +
+                '<summary style="cursor:pointer">' + regionCodeHtml(g.region) + ' — ' + g.count.toLocaleString() + ' ' + unitLabel + (g.count === 1 ? '' : 's') + '</summary>' +
+                '<div class="text-muted" style="font-size:11px;margin-top:6px;margin-left:12px;max-height:200px;overflow-y:auto;line-height:1.8">' + links + '</div>' +
+                '</details>';
+            }).join('')
+          : '<p class="text-muted" style="font-size:0.85em">No data yet — path resolution catches up gradually as traffic flows; check back in a few minutes.</p>';
+        var count = groups ? groups.length : 0;
+        setSectionHtml(el, detailsSection(
+          esc(title) + ' (' + count.toLocaleString() + ' region' + (count === 1 ? '' : 's') + ')',
+          esc(description),
+          body,
+          elId
+        ));
+      }
+
+      renderRegionNodeGroups('scopes-repeaters', 'Repeaters by Region',
+        'All-time, not limited to the window above — which repeaters have relayed traffic carrying each region scope. A region carried by only 1 repeater is a single point of failure for that area.',
+        d.repeatersByRegion, 'repeater');
+
+      // Bridge repeaters: RepeatersByRegion inverted — repeaters relaying
+      // for MORE than one region are the mesh's literal backbone nodes.
+      var bridgeEl = document.getElementById('scopes-bridges');
+      if (bridgeEl) {
+        var bridges = d.bridgeRepeaters || [];
+        var bridgeBody;
+        if (bridges.length > 0) {
+          var bridgeRows = bridges.map(function(b) {
+            var regionList = b.regions.map(function(r) { return regionCodeHtml(r); }).join(', ');
+            return '<tr>' +
+              '<td><a href="#/nodes/' + encodeURIComponent(b.publicKey) + '">' + esc(b.name) + '</a></td>' +
+              '<td>' + b.count + '</td>' +
+              '<td>' + regionList + '</td>' +
+              '</tr>';
+          }).join('');
+          bridgeBody = '<table class="data-table analytics-table">' +
+            '<thead><tr><th>Repeater</th><th># Regions</th><th>Regions</th></tr></thead>' +
+            '<tbody>' + bridgeRows + '</tbody>' +
+            '</table>';
+        } else {
+          // Needs a repeater confirmed in 2+ regions — a stricter bar than
+          // "Repeaters by Region" above, so it's normal for this to stay
+          // empty longer, especially right after a restart.
+          bridgeBody = '<p class="text-muted" style="font-size:0.85em">No bridge repeaters found yet — this needs a repeater confirmed in 2+ different regions, which takes longer to accumulate than the single-region data above.</p>';
+        }
+        setSectionHtml(bridgeEl, detailsSection(
+          'Bridge Repeaters (' + bridges.length.toLocaleString() + ')',
+          'All-time — repeaters that have relayed traffic for more than one region. These connect otherwise-separate regional communities; losing one can split the mesh\'s regional coverage.',
+          bridgeBody,
+          'bridge-repeaters'
+        ));
+      }
+
+      renderRegionNodeGroups('scopes-origin-nodes', 'Nodes Running This Region',
+        'All-time — nodes whose OWN configured scope is this region (not just relaying it for others). This is a much smaller, more specific set than "Repeaters by Region" above.',
+        d.originatingNodesByRegion, 'node');
+
+      // Nodes Without a Default Scope: the flip side of "Nodes Running
+      // This Region" — every node with no default_scope at all, i.e.
+      // never configured a hashRegions region for itself. Computed
+      // client-side from the full node list (default_scope isn't
+      // windowed/aggregated server-side the way the other scope-stats
+      // fields are) — `allNodes` was already fetched above for the
+      // highlights row, reused here rather than fetched again. Role
+      // filter + name/key search re-filter this same in-memory node list
+      // without a re-fetch; the debounced search input restores
+      // focus/caret after each re-render since the whole section (search
+      // box included) is rebuilt via setSectionHtml.
+      var noScopeEl = document.getElementById('scopes-no-scope');
+      if (noScopeEl) {
+        if (allNodes) {
+          renderNoScopeSection(allNodes);
+        } else {
+          setSectionHtml(noScopeEl, detailsSection('Nodes Without a Default Scope', null, '<p class="text-muted">Failed to load.</p>', 'no-scope'));
+        }
+      }
+
+      // Repeaters Never Relaying Any Scope: distinct from the section
+      // above — a repeater's own default_scope and whether it has ever
+      // relayed ANYONE's region-scoped traffic are different signals (see
+      // computeRepeatersNeverRelayingScope doc comment). Reuses the same
+      // `allNodes` fetched above.
+      var neverRelayEl = document.getElementById('scopes-never-relay-scope');
+      if (neverRelayEl) {
+        if (allNodes) {
+          renderNeverRelaySection(allNodes);
+        } else {
+          setSectionHtml(neverRelayEl, detailsSection('Repeaters Never Relaying Any Scope', null, '<p class="text-muted">Failed to load.</p>', 'never-relay'));
+        }
+      }
     }
+
+    // Renders (and re-renders, on geo filter change) the "Repeaters Never
+    // Relaying Any Scope" section from the already-fetched node list — same
+    // reactive-filter pattern as renderNoScopeSection above.
+    function renderNeverRelaySection(allNodes) {
+      var neverRelayElInner = document.getElementById('scopes-never-relay-scope');
+      if (!neverRelayElInner) return;
+      try {
+        var neverRelay = computeRepeatersNeverRelayingScope(allNodes, 100, { geo: neverRelayFilter.geo });
+        var neverRelayBody;
+        if (neverRelay.sortedCapped.length > 0) {
+          var neverRelayRows = neverRelay.sortedCapped.map(function(n) {
+            return '<tr><td><a href="#/nodes/' + encodeURIComponent(n.public_key) + '">' + esc(n.name || n.public_key) + '</a></td>' +
+              '<td>' + esc(n.role || '—') + '</td>' +
+              '<td>' + (n.relay_count_24h || 0).toLocaleString() + '</td>' +
+              '<td>' + timeAgo(n.last_seen) + '</td></tr>';
+          }).join('');
+          neverRelayBody = '<table class="data-table analytics-table">' +
+            '<thead><tr><th>Repeater</th><th>Role</th><th>Relays (24h)</th><th>Last Seen</th></tr></thead>' +
+            '<tbody>' + neverRelayRows + '</tbody>' +
+            '</table>';
+        } else if (neverRelayFilter.geo) {
+          neverRelayBody = '<p class="text-muted" style="font-size:0.85em">No repeaters match this filter.</p>';
+        } else {
+          neverRelayBody = '<p class="text-muted" style="font-size:0.85em">Every known repeater/room has relayed at least one region-scoped packet.</p>';
+        }
+        setSectionHtml(neverRelayElInner, detailsSection(
+          'Repeaters Never Relaying Any Scope (' + neverRelay.total.toLocaleString() + ')',
+          'Repeater/room nodes that have never carried a single region-scoped (TRANSPORT_FLOOD/DIRECT) packet, ever — not the same set as "no default_scope" above: a repeater\'s hashRegions config can let it relay for others even when its own adverts never carry a matching transport code. ' +
+            'Sorted by current relay volume — the busiest ones are the most consequential to configure first' +
+            (neverRelay.filteredTotal !== neverRelay.total ? ', filtered to ' + neverRelay.filteredTotal.toLocaleString() + ' matching below' : '') +
+            (neverRelay.truncated ? ' (showing the top ' + neverRelay.sortedCapped.length + ')' : '') + '.',
+          geoFilterButtons(neverRelayFilter, 'never-relay-geo-filter') + neverRelayBody,
+          'never-relay'
+        ));
+      } catch (e) {
+        setSectionHtml(neverRelayElInner, detailsSection('Repeaters Never Relaying Any Scope', null, '<p class="text-muted">Failed to load.</p>', 'never-relay'));
+        return;
+      }
+
+      var sectionEl = document.getElementById('scopes-never-relay-scope');
+      if (!sectionEl) return;
+      sectionEl.querySelectorAll('[data-never-relay-geo-filter]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          neverRelayFilter.geo = btn.dataset.neverRelayGeoFilter || '';
+          renderNeverRelaySection(allNodes);
+        });
+      });
+    }
+
 
     load(selectedWindow);
 
@@ -4628,6 +5385,1117 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
       if (_currentTab !== 'scopes') { _stopScopesRefresh(); return; }
       var cur = document.getElementById('analyticsContent');
       if (!cur) { _stopScopesRefresh(); return; }
+      load(selectedWindow);
+    }, 60000);
+  }
+
+  // Pure (no DOM/network) computation behind the Scopes tab's "Nodes
+  // Without a Default Scope" section: filters to nodes with no
+  // default_scope, tallies by role (most common first — always over the
+  // FULL unfiltered set, so the role filter buttons' counts don't shift
+  // as you filter), then optionally narrows further by `opts.role` and/or
+  // a case-insensitive `opts.q` match against name or public_key, and
+  // returns a most-recently-active-first slice capped at `cap` rows.
+  // `total` is always the full unfiltered count; `filteredTotal` reflects
+  // opts.
+
+  // Classifies live from the node's own lat/lon against the currently
+  // configured geo_filter (window.MC_GEO_FILTER, set from
+  // /api/config/client — see public/roles.js), mirroring the Nodes tab's
+  // Domestic/Foreign filter (public/nodes.js) and renderForeignTrafficTab's
+  // isForeignNode below — NOT the node's one-way, never-cleared `foreign`
+  // DB flag.
+  function nodeMatchesGeo(n, mode) {
+    if (!mode) return true;
+    var domestic = nodePassesGeoFilter(n.lat, n.lon, window.MC_GEO_FILTER);
+    return mode === 'domestic' ? domestic : !domestic;
+  }
+
+  function geoFilterButtons(filter, dataAttr) {
+    return '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">' +
+      '<button type="button" class="tab-btn' + (!filter.geo ? ' active' : '') + '" data-' + dataAttr + '="">All</button>' +
+      '<button type="button" class="tab-btn' + (filter.geo === 'domestic' ? ' active' : '') + '" data-' + dataAttr + '="domestic">Domestic</button>' +
+      '<button type="button" class="tab-btn' + (filter.geo === 'foreign' ? ' active' : '') + '" data-' + dataAttr + '="foreign">Foreign</button>' +
+      '</div>';
+  }
+
+  // Weighted median + total from a HopDepthBucket[] (see GetHopDepthAnalytics).
+  function hopDepthBucketStats(buckets) {
+    var total = 0;
+    (buckets || []).forEach(function(b) { total += b.count; });
+    if (!total) return { total: 0, median: null };
+    var sorted = (buckets || []).slice().sort(function(a, b) { return a.hops - b.hops; });
+    var cum = 0, median = null;
+    sorted.forEach(function(b) {
+      cum += b.count;
+      if (median === null && cum >= total / 2) median = b.hops;
+    });
+    return { total: total, median: median };
+  }
+
+  // Cumulative-count percentile from a HopDepthBucket[] (see
+  // GetHopDepthAnalytics) -- p is 0..1 (e.g. 0.95 for P95). Returns the
+  // smallest hop value whose cumulative count reaches that fraction of
+  // the total, or null when there's no data. Used to turn the raw
+  // scoped/unscoped histograms into a concrete "set flood.max.unscoped to
+  // roughly this" number, rather than making the operator eyeball the bar
+  // chart themselves.
+  function hopDepthPercentile(buckets, p) {
+    var total = 0;
+    (buckets || []).forEach(function(b) { total += b.count; });
+    if (!total) return null;
+    var sorted = (buckets || []).slice().sort(function(a, b) { return a.hops - b.hops; });
+    var target = total * p;
+    var cum = 0;
+    for (var i = 0; i < sorted.length; i++) {
+      cum += sorted[i].count;
+      if (cum >= target) return sorted[i].hops;
+    }
+    return sorted.length ? sorted[sorted.length - 1].hops : null;
+  }
+
+  // Two-line SVG chart of scoped vs unscoped median hop depth over time
+  // (HopDepthAnalyticsResponse.timeSeries) -- same visual language as the
+  // Scopes Overview's scoped/unscoped count time-series, but each series
+  // can have gaps (a bucket with no traffic of that kind reports
+  // scopedMedianHop/unscopedMedianHop as null, not 0) so the polyline is
+  // built as separate contiguous segments rather than one line that would
+  // otherwise silently interpolate straight through missing data.
+  function hopDepthTimeSeriesChartHtml(timeSeries) {
+    if (!timeSeries || timeSeries.length < 2) {
+      return '<p class="text-muted" style="font-size:0.85em;margin:12px 0 0">Insufficient data points to render a trend — wait for more observations in this window.</p>';
+    }
+    var n = timeSeries.length;
+    var maxVal = 1;
+    timeSeries.forEach(function(p) {
+      if (typeof p.scopedMedianHop === 'number') maxVal = Math.max(maxVal, p.scopedMedianHop);
+      if (typeof p.unscopedMedianHop === 'number') maxVal = Math.max(maxVal, p.unscopedMedianHop);
+    });
+
+    var W = 800, H = 180, padL = 30, padT = 10, padR = 10;
+    var plotW = W - padL - padR, plotH = H - 24 - padT;
+
+    function segments(key) {
+      var out = [];
+      var current = [];
+      timeSeries.forEach(function(p, i) {
+        var v = p[key];
+        if (typeof v !== 'number') {
+          if (current.length > 1) out.push(current);
+          current = [];
+          return;
+        }
+        var x = padL + i * plotW / Math.max(n - 1, 1);
+        var y = padT + plotH - (v / maxVal) * plotH;
+        current.push(x.toFixed(1) + ',' + y.toFixed(1));
+      });
+      if (current.length > 1) out.push(current);
+      return out;
+    }
+
+    function polylines(key, stroke, dash) {
+      return segments(key).map(function(seg) {
+        return '<polyline points="' + seg.join(' ') + '" fill="none" stroke="' + stroke + '" stroke-width="2"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + '/>';
+      }).join('');
+    }
+
+    var grid = '';
+    for (var gi = 0; gi <= 4; gi++) {
+      var gy = padT + plotH * gi / 4;
+      var gv = Math.round(maxVal * (4 - gi) / 4);
+      grid += '<line x1="' + padL + '" y1="' + gy.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + gy.toFixed(1) + '" stroke="var(--border)" stroke-dasharray="2"/>';
+      grid += '<text x="' + (padL - 4) + '" y="' + (gy + 4).toFixed(1) + '" text-anchor="end" font-size="9" fill="var(--text-muted)">' + gv + '</text>';
+    }
+
+    var legendX = padL + plotW - 120;
+    return '<div style="margin-top:16px">' +
+      '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;max-height:' + H + 'px" role="img" aria-label="Scoped vs unscoped median hop depth over time">' +
+      grid +
+      polylines('scopedMedianHop', 'var(--accent)') +
+      polylines('unscopedMedianHop', 'var(--text-muted)', '4') +
+      '<rect x="' + legendX + '" y="' + padT + '" width="10" height="10" fill="var(--accent)"/>' +
+      '<text x="' + (legendX + 14) + '" y="' + (padT + 9) + '" font-size="10" fill="var(--text)">Scoped median</text>' +
+      '<rect x="' + legendX + '" y="' + (padT + 16) + '" width="10" height="10" fill="var(--text-muted)"/>' +
+      '<text x="' + (legendX + 14) + '" y="' + (padT + 25) + '" font-size="10" fill="var(--text)">Unscoped median</text>' +
+      '</svg></div>';
+  }
+
+  // Renders the scoped-vs-unscoped hop-depth comparison (Scopes tab > Hop
+  // Depth sub-tab). Order (top to bottom): the median-hop-over-time trend
+  // chart first (most at-a-glance signal, "is this getting better or
+  // worse" — put at the top for visibility rather than buried below the
+  // static snapshot), then median-hop stat cards for both series, a
+  // P95-derived "suggested flood.max.unscoped" callout, and a grouped bar
+  // chart across hop values 0..max normalized to the taller of the two
+  // series at each hop. The whole point is to answer "is region scoping
+  // actually containing flood propagation" — scoped traffic clustering at
+  // a lower median hop than unscoped is the expected/healthy shape — turn
+  // that into a concrete number an operator can plug into their MeshCore
+  // firmware config instead of eyeballing the chart, and show whether
+  // it's getting better or worse over time.
+  function renderHopDepthSectionHtml(hopData) {
+    if (!hopData || (!hopData.scopedHopDepth && !hopData.unscopedHopDepth)) {
+      return '';
+    }
+    var scoped = hopData.scopedHopDepth || [];
+    var unscoped = hopData.unscopedHopDepth || [];
+    var scopedStats = hopDepthBucketStats(scoped);
+    var unscopedStats = hopDepthBucketStats(unscoped);
+    var unscopedP95 = hopDepthPercentile(unscoped, 0.95);
+    if (!scopedStats.total && !unscopedStats.total) {
+      return '<h4 style="margin:0 0 4px">Flood Containment: Scoped vs Unscoped Hop Depth</h4>' +
+        '<p class="text-muted" style="font-size:0.85em">No relay-hop data in this window.</p>';
+    }
+
+    var maxHops = 0;
+    scoped.concat(unscoped).forEach(function(b) { if (b.hops > maxHops) maxHops = b.hops; });
+    var scopedByHop = {}, unscopedByHop = {};
+    scoped.forEach(function(b) { scopedByHop[b.hops] = b.count; });
+    unscoped.forEach(function(b) { unscopedByHop[b.hops] = b.count; });
+    var maxCount = 1;
+    for (var h = 0; h <= maxHops; h++) {
+      maxCount = Math.max(maxCount, scopedByHop[h] || 0, unscopedByHop[h] || 0);
+    }
+
+    var rows = '';
+    for (var hi = 0; hi <= maxHops; hi++) {
+      var sc = scopedByHop[hi] || 0, un = unscopedByHop[hi] || 0;
+      if (!sc && !un) continue;
+      var scW = (sc / maxCount * 100).toFixed(1);
+      var unW = (un / maxCount * 100).toFixed(1);
+      rows += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">' +
+        '<div style="width:44px;font-size:11px;text-align:right" class="text-muted">' + hi + ' hop' + (hi === 1 ? '' : 's') + '</div>' +
+        '<div style="flex:1;display:flex;flex-direction:column;gap:1px">' +
+          '<div style="display:flex;align-items:center;gap:4px">' +
+            '<div style="height:7px;width:' + scW + '%;background:var(--accent);min-width:' + (sc ? '2px' : '0') + '"></div>' +
+            '<span style="font-size:10px" class="text-muted">' + sc.toLocaleString() + '</span>' +
+          '</div>' +
+          '<div style="display:flex;align-items:center;gap:4px">' +
+            '<div style="height:7px;width:' + unW + '%;background:var(--text-muted);min-width:' + (un ? '2px' : '0') + '"></div>' +
+            '<span style="font-size:10px" class="text-muted">' + un.toLocaleString() + '</span>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }
+
+    return '<h4 style="margin:0 0 4px">Flood Containment: Scoped vs Unscoped Hop Depth</h4>' +
+      '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">' +
+        'How many relay hops packets travel before reaching a repeater, split by whether they carried a region scope (TRANSPORT_FLOOD/TRANSPORT_DIRECT) or not (plain FLOOD). If scoping is containing traffic as intended, Scoped should cluster at fewer hops than Unscoped &mdash; a similar or higher scoped median means scope boundaries aren&rsquo;t actually limiting propagation.' +
+      '</p>' +
+      '<h4 style="margin:12px 0 4px">Median Hop Depth Over Time</h4>' +
+      '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Is containment trending better or worse within this window, rather than just where it stands right now. A gap in a line means no traffic of that kind in that bucket, not a median of zero.</p>' +
+      hopDepthTimeSeriesChartHtml(hopData.timeSeries) +
+      '<div class="stats-grid" style="margin:16px 0 10px">' +
+        [
+          { label: 'Scoped Median Hop', value: scopedStats.median === null ? '—' : scopedStats.median.toLocaleString(), note: scopedStats.total.toLocaleString() + ' samples' },
+          { label: 'Unscoped Median Hop', value: unscopedStats.median === null ? '—' : unscopedStats.median.toLocaleString(), note: unscopedStats.total.toLocaleString() + ' samples' },
+          { label: 'Suggested flood.max.unscoped', value: unscopedP95 === null ? '—' : unscopedP95.toLocaleString(), note: 'P95 of unscoped hop depth — caps runaway propagation, lets ~95% of legitimate unscoped traffic through' },
+        ].map(function(c) {
+          return '<div class="stat-card"><div class="stat-value">' + c.value + '</div>' +
+            '<div class="stat-label">' + c.label + '</div>' +
+            '<div class="stat-note text-muted" style="font-size:11px">' + c.note + '</div>' +
+            '</div>';
+        }).join('') +
+      '</div>' +
+      '<div style="display:flex;gap:10px;margin-bottom:4px;font-size:11px" class="text-muted">' +
+        '<span><span style="display:inline-block;width:8px;height:8px;background:var(--accent);margin-right:3px"></span>Scoped</span>' +
+        '<span><span style="display:inline-block;width:8px;height:8px;background:var(--text-muted);margin-right:3px"></span>Unscoped</span>' +
+      '</div>' +
+      rows;
+  }
+
+  // publicKey -> RepeaterUnscopedHopDepth lookup from
+  // HopDepthAnalyticsResponse.unscopedByRepeater (see GetHopDepthAnalytics),
+  // used to enrich the Foreign Traffic tab's unscoped-relay table with how
+  // far that traffic had already traveled before reaching each repeater.
+  function hopDepthLookupByPubkey(unscopedByRepeater) {
+    var byPK = {};
+    (unscopedByRepeater || []).forEach(function(r) { byPK[r.publicKey] = r; });
+    return byPK;
+  }
+
+  // publicKey -> true for every BridgeRepeater (ScopeStatsResponse.bridgeRepeaters,
+  // see db.go) -- repeaters confirmed relaying for 2+ regions. Cross-referenced
+  // against the Foreign Traffic tab's unscoped-relay table so a high hop-depth
+  // reading at a bridge reads as expected cross-region traffic, not a leak: a
+  // bridge is SUPPOSED to see traffic that already traveled far from another
+  // region's scope, unlike a plain regional repeater seeing the same pattern.
+  function bridgeRepeaterPubkeySet(bridgeRepeaters) {
+    var byPK = {};
+    (bridgeRepeaters || []).forEach(function(b) { byPK[b.publicKey] = true; });
+    return byPK;
+  }
+
+  function computeNodesWithoutScope(allNodes, cap, opts) {
+    opts = opts || {};
+    var noScopeNodes = allNodes.filter(function(n) { return !n.default_scope; });
+    var roleCounts = {};
+    noScopeNodes.forEach(function(n) {
+      var r = n.role || 'unknown';
+      roleCounts[r] = (roleCounts[r] || 0) + 1;
+    });
+    var roleSummary = Object.keys(roleCounts)
+      .sort(function(a, b) { return roleCounts[b] - roleCounts[a]; })
+      .map(function(r) { return { role: r, count: roleCounts[r] }; });
+
+    var filtered = noScopeNodes;
+    if (opts.geo) {
+      filtered = filtered.filter(function(n) { return nodeMatchesGeo(n, opts.geo); });
+    }
+    if (opts.role) {
+      filtered = filtered.filter(function(n) { return (n.role || 'unknown') === opts.role; });
+    }
+    if (opts.q) {
+      var q = String(opts.q).toLowerCase();
+      filtered = filtered.filter(function(n) {
+        return ((n.name || '').toLowerCase().indexOf(q) !== -1) ||
+          ((n.public_key || '').toLowerCase().indexOf(q) !== -1);
+      });
+    }
+
+    var sorted = filtered.slice().sort(function(a, b) {
+      return new Date(b.last_seen || 0) - new Date(a.last_seen || 0);
+    });
+    return {
+      total: noScopeNodes.length,
+      filteredTotal: filtered.length,
+      roleSummary: roleSummary,
+      sortedCapped: sorted.slice(0, cap),
+      truncated: sorted.length > cap,
+    };
+  }
+
+  // Pure (no DOM/network) computation behind the Scopes tab's "Repeaters
+  // Never Relaying Any Scope" section. Distinct from
+  // computeNodesWithoutScope: a repeater's OWN default_scope (does it send
+  // its own scoped adverts?) and transported_scopes (has it ever relayed
+  // ANYONE's region-scoped traffic, ever?) are different signals — on
+  // stg.meshview.dk ~14% of no-default_scope repeaters still relay scope
+  // for others (their hashRegions config enables relaying even though
+  // their own adverts never carry a matching transport code). Only
+  // repeater/room nodes can relay at all — every other role is filtered
+  // out rather than silently 0-counted alongside them. Sorted by
+  // relay_count_24h descending: the busiest unconfigured repeaters are the
+  // most consequential ones to fix first.
+  function computeRepeatersNeverRelayingScope(allNodes, cap, opts) {
+    opts = opts || {};
+    var candidates = allNodes.filter(function(n) {
+      return (n.role === 'repeater' || n.role === 'room') &&
+        (!n.transported_scopes || n.transported_scopes.length === 0);
+    });
+    var filtered = opts.geo ? candidates.filter(function(n) { return nodeMatchesGeo(n, opts.geo); }) : candidates;
+    var sorted = filtered.slice().sort(function(a, b) {
+      return Number(b.relay_count_24h || 0) - Number(a.relay_count_24h || 0);
+    });
+    return {
+      total: candidates.length,
+      filteredTotal: filtered.length,
+      sortedCapped: sorted.slice(0, cap),
+      truncated: sorted.length > cap,
+    };
+  }
+
+  // Repeaters relaying unscoped (route_type FLOOD) traffic, sorted by volume
+  // — a quick, no-new-backend-work way to surface an existing but previously
+  // unsurfaced metric (unscoped_relay_count_24h, see openapi.go). A little
+  // unscoped traffic is normal and expected (flood.max.unscoped 0 isn't
+  // realistic in practice) — this view is for spotting disproportionate
+  // volume, not for zero-tolerance. Phase 1 of the "foreign traffic"
+  // investigation: cross-referencing which of this
+  // unscoped volume actually traces back to a foreign-origin sender (via the
+  // geo_filter-derived `foreign` flag on nodes) needs foreign_advert data to
+  // accumulate first, since it's only set going forward from when geo_filter
+  // was configured — not backfilled for existing history.
+  async function renderForeignTrafficTab(el) {
+    function pct(n, total) {
+      if (!total) return '—';
+      return (n / total * 100).toFixed(1) + '%';
+    }
+
+    // "Show all N / Show fewer" collapse for the two lists below, same
+    // pattern (and same TOP_N_LIMIT) as the Wardriving tab's Sessions/
+    // Entry Points sections.
+    var TOP_N_LIMIT = 10;
+    function topNToggleHtml(total, expanded, noun) {
+      if (total <= TOP_N_LIMIT) return '';
+      var label = expanded ? 'Show fewer' : 'Show all ' + total.toLocaleString() + ' ' + noun;
+      return '<div style="margin-top:6px;text-align:right"><button type="button" data-ft-toggle class="btn-link" style="font-size:12px;cursor:pointer;background:none;border:none;color:var(--link-color);padding:0">' + label + '</button></div>';
+    }
+    // Re-renders just one section's content on click and rewires the
+    // (freshly-created) toggle button, since innerHTML replacement drops
+    // the old node's listener.
+    function wireExpandToggle(containerId, renderFn) {
+      var expanded = false;
+      function attach() {
+        var container = document.getElementById(containerId);
+        if (!container) return;
+        var btn = container.querySelector('[data-ft-toggle]');
+        if (btn) {
+          btn.addEventListener('click', function() {
+            expanded = !expanded;
+            container.innerHTML = renderFn(expanded);
+            attach();
+          });
+        }
+      }
+      attach();
+    }
+    // Classifies live from the node's own lat/lon against the currently
+    // configured geo_filter box/polygon (window.MC_GEO_FILTER, set from
+    // /api/config/client — see public/roles.js), NOT the node's `foreign`
+    // DB flag. That flag is written once, only from ADVERT packets
+    // (ingestor's MarkNodeForeign, cmd/ingestor/db.go), and is one-way —
+    // it's never cleared. A node flagged foreign under an earlier,
+    // narrower geo_filter configuration stays flagged forever unless it
+    // happens to send a fresh ADVERT after the box changes. Real case:
+    // Bornholm repeaters at lon~15.07 were flagged foreign under a
+    // stricter historical box and stayed stuck even after the box widened
+    // to include them (verified against a live advert only hours old).
+    function isForeignNode(n) {
+      return !nodePassesGeoFilter(n.lat, n.lon, window.MC_GEO_FILTER);
+    }
+    // publicKey -> RepeaterUnscopedHopDepth, populated by load() from
+    // /api/analytics/hop-depth. Enriches the volume-only unscoped_relay_count_24h
+    // metric with WHERE in the flood's propagation this repeater sits: low
+    // hops means mostly fresh/local unscoped traffic, high hops means
+    // traffic that already traveled far, unscoped, before reaching it — the
+    // stronger signal of an actual containment problem.
+    var hopDepthByPubkey = {};
+    // publicKey -> true for confirmed bridge repeaters (2+ regions), populated
+    // by load() from /api/scope-stats. See bridgeRepeaterPubkeySet's doc comment.
+    var bridgePubkeys = {};
+    function relaysHtml(relays, expanded) {
+      if (relays.length === 0) {
+        return '<p class="text-muted" style="font-size:0.85em">No repeater has relayed an unscoped flood packet in the last 24 hours.</p>';
+      }
+      var shown = expanded ? relays : relays.slice(0, TOP_N_LIMIT);
+      var rows = shown.map(function(n) {
+        var total = n.relay_count_24h || 0;
+        var unscoped = n.unscoped_relay_count_24h || 0;
+        var hd = hopDepthByPubkey[n.public_key];
+        var bridgeBadge = bridgePubkeys[n.public_key]
+          ? ' <span class="badge" style="background:var(--accent);color:#fff;font-size:9px;padding:1px 5px" title="Confirmed relaying for 2+ regions — a high hop-depth reading here is expected cross-region traffic, not a containment leak">Bridge</span>'
+          : '';
+        return '<tr>' +
+          '<td><a href="#/nodes/' + encodeURIComponent(n.public_key) + '">' + esc(n.name || n.public_key) + '</a>' + bridgeBadge + '</td>' +
+          '<td>' + esc(n.role) + '</td>' +
+          '<td>' + unscoped.toLocaleString() + '</td>' +
+          '<td>' + total.toLocaleString() + '</td>' +
+          '<td>' + pct(unscoped, total) + '</td>' +
+          '<td>' + (hd ? hd.minHops : '—') + '</td>' +
+          '<td>' + (hd ? (hd.medianHops % 1 === 0 ? hd.medianHops : hd.medianHops.toFixed(1)) : '—') + '</td>' +
+          '<td>' + (hd ? hd.maxHops : '—') + '</td>' +
+          '</tr>';
+      }).join('');
+      return '<table class="data-table analytics-table">' +
+        '<thead><tr><th>Repeater</th><th>Role</th><th>Unscoped Relays (24h)</th><th>Total Relays (24h)</th><th>% Unscoped</th>' +
+          '<th title="0-based hop index within the packet\'s resolved relay path at this repeater — how far the packet had already traveled before this hop.">Min Hops</th>' +
+          '<th>Median Hops</th><th>Max Hops</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+        '</table>' + topNToggleHtml(relays.length, expanded, 'repeaters');
+    }
+
+    function foreignNodesHtml(foreignNodes, expanded) {
+      if (foreignNodes.length === 0) {
+        return '<p class="text-muted" style="font-size:0.85em">None yet — a node is only listed here after it advertises with a GPS position outside the configured geo_filter.</p>';
+      }
+      var shown = expanded ? foreignNodes : foreignNodes.slice(0, TOP_N_LIMIT);
+      var rows = shown.map(function(n) {
+        var lat = typeof n.lat === 'number' ? n.lat.toFixed(3) : '—';
+        var lon = typeof n.lon === 'number' ? n.lon.toFixed(3) : '—';
+        return '<tr>' +
+          '<td><a href="#/nodes/' + encodeURIComponent(n.public_key) + '">' + esc(n.name || n.public_key) + '</a></td>' +
+          '<td>' + esc(n.role || '—') + '</td>' +
+          '<td>' + lat + ', ' + lon + '</td>' +
+          '<td>' + timeAgo(n.first_seen) + '</td>' +
+          '<td>' + timeAgo(n.last_seen) + '</td>' +
+          '</tr>';
+      }).join('');
+      return '<table class="data-table analytics-table">' +
+        '<thead><tr><th>Node</th><th>Role</th><th>Lat, Lon</th><th>First Seen</th><th>Last Seen</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+        '</table>' + topNToggleHtml(foreignNodes.length, expanded, 'nodes');
+    }
+
+    async function load() {
+      try {
+        // Fired early but only awaited below, right before it's needed for
+        // relaysHtml -- deliberately NOT awaited here. An extra await
+        // ahead of the isForeignNode/geo_filter computation just below
+        // shifts how many microtask ticks elapse before it runs, which in
+        // the test sandbox lets roles.js's own async window.MC_GEO_FILTER
+        // config-fetch race ahead and clobber the fixture's geo filter
+        // before isForeignNode reads it (see
+        // test-analytics-foreign-traffic-tab.js's makeAnalyticsSandbox).
+        const hopDepthPromise = api('/analytics/hop-depth?window=24h', { ttl: 30000 }).catch(function() { return null; });
+        // bridgeRepeaters is all-time regardless of window (see BridgeRepeater's
+        // doc comment) -- 24h here just reuses the same cached /scope-stats
+        // response the Scopes tab's default window already warms.
+        const bridgeStatsPromise = api('/scope-stats?window=24h', { ttl: 30000 }).catch(function() { return null; });
+
+        const nodesResp = await fetchAllNodes('', { ttl: CLIENT_TTL.nodeList });
+        const allNodes = nodesResp.nodes || nodesResp;
+        const relays = allNodes.filter(function(n) {
+          return (n.role === 'repeater' || n.role === 'room') && (n.unscoped_relay_count_24h || 0) > 0;
+        });
+        relays.sort(function(a, b) { return Number(b.unscoped_relay_count_24h || 0) - Number(a.unscoped_relay_count_24h || 0); });
+        const foreignCount = allNodes.filter(isForeignNode).length;
+
+        const foreignNote = foreignCount > 0
+          ? foreignCount.toLocaleString() + ' node(s) so far carry an advertised GPS position outside the configured geo_filter — cross-referencing which rows below actually trace back to those is a planned follow-up once more accumulates.'
+          : 'geo_filter is configured, but no foreign-origin node has advertised since — check back once traffic accumulates to cross-reference which of the unscoped relays below trace back to a foreign sender.';
+
+        // Foreign-flagged nodes so far (#730 foreign_advert), newest-heard
+        // first. Only set going forward from when geo_filter was
+        // configured — this list grows as nodes send their next ADVERT.
+        const foreignNodes = allNodes.filter(isForeignNode);
+        // Parse last_seen once per node (decorate-sort-undecorate) instead
+        // of twice per comparator call — cheap either way at this list
+        // size, but avoids the repeated Date() allocations on principle.
+        foreignNodes
+          .map(function(n) { return { n: n, t: new Date(n.last_seen || 0).getTime() }; })
+          .sort(function(a, b) { return b.t - a.t; })
+          .forEach(function(entry, i) { foreignNodes[i] = entry.n; });
+
+        const hopData = await hopDepthPromise;
+        hopDepthByPubkey = hopDepthLookupByPubkey(hopData && hopData.unscopedByRepeater);
+        const bridgeStats = await bridgeStatsPromise;
+        bridgePubkeys = bridgeRepeaterPubkeySet(bridgeStats && bridgeStats.bridgeRepeaters);
+
+        el.innerHTML =
+          '<h3 style="margin:0 0 4px">Foreign Traffic</h3>' +
+          '<p class="text-muted" style="margin:0 0 16px;font-size:0.85em">' +
+            'Repeaters relaying unscoped (route_type FLOOD) packets in the last 24 hours, sorted by volume. ' +
+            'A small amount of unscoped traffic is normal — <code>flood.max.unscoped</code> caps it rather than blocking it outright. Disproportionate volume or % here is what\'s worth investigating on that specific node. ' +
+            foreignNote +
+          '</p>' +
+          '<h4 style="margin:0 0 4px">Foreign-Flagged Nodes (' + foreignNodes.length.toLocaleString() + ')</h4>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">' +
+            'Nodes whose most recent advertised GPS position fell outside the configured geo_filter — self-reported GPS from the node\'s own ADVERT. ' +
+            'A FLOOD packet can legitimately travel many hops through a dense mesh, so a node whose traffic you can trace through a real local relay chain (check its Trace) is genuinely reachable via that chain — that\'s foreign traffic actually entering the mesh, not a data artifact.' +
+          '</p>' +
+          '<div id="foreignTrafficFlaggedNodes">' + foreignNodesHtml(foreignNodes, false) + '</div>' +
+          '<h4 style="margin:24px 0 4px">Repeaters Relaying Unscoped Traffic</h4>' +
+          '<div id="foreignTrafficRelays">' + relaysHtml(relays, false) + '</div>';
+
+        wireExpandToggle('foreignTrafficFlaggedNodes', function(exp) { return foreignNodesHtml(foreignNodes, exp); });
+        wireExpandToggle('foreignTrafficRelays', function(exp) { return relaysHtml(relays, exp); });
+      } catch (e) {
+        el.innerHTML = '<p class="text-muted">Failed to load repeater relay stats.</p>';
+      }
+    }
+
+    el.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading repeater relay stats…</div>';
+    await load();
+
+    // Auto-refresh every 60s while this tab is active (matches Roles/Scopes).
+    _stopForeignTrafficRefresh();
+    _foreignTrafficRefreshTimer = setInterval(function() {
+      if (_currentTab !== 'foreign-traffic') { _stopForeignTrafficRefresh(); return; }
+      var cur = document.getElementById('analyticsContent');
+      if (!cur) { _stopForeignTrafficRefresh(); return; }
+      load();
+    }, 60000);
+  }
+
+  // Wardriving analytics: activity/entry-point/coverage for the
+  // #wardriving channel (MeshMapper's community wardriving convention —
+  // see /api/analytics/wardriving doc). MeshMapper's on-air message is an
+  // anonymous per-session token by default, not the sender's live GPS
+  // (that goes to MeshMapper's own server via a separate API call we
+  // never see) — so sender location can't be plotted here. What IS
+  // reliable: which repeater first relayed each message (Entry Points,
+  // same path[0]/unique_prefix discipline as the Foreign Traffic tab),
+  // and which observer stations — fixed, known locations — actually
+  // heard the traffic (Coverage).
+  async function renderWardrivingTab(el) {
+    var winKey = 'wardriving_window';
+    var selectedWindow = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(winKey)) || '24h';
+
+    function pct(n, total) {
+      if (!total) return '—';
+      return (n / total * 100).toFixed(1) + '%';
+    }
+
+    function cardsHtml(d) {
+      return [
+        { label: 'Messages', value: d.totalMessages.toLocaleString(), note: 'window: ' + d.window },
+        { label: 'Active Senders', value: (d.topSenders || []).length.toLocaleString(), note: null },
+        { label: 'Entry-Point Repeaters', value: (d.entryPoints || []).length.toLocaleString(), note: 'distinct path[0] prefixes' },
+        { label: 'Observers Reached', value: (d.observers || []).length.toLocaleString(), note: null },
+        { label: 'Avg SNR', value: (d.avgSnr != null ? d.avgSnr.toFixed(1) + ' dB' : '—'), note: null },
+        { label: 'Avg RSSI', value: (d.avgRssi != null ? d.avgRssi.toFixed(1) + ' dBm' : '—'), note: null },
+        { label: 'Sessions', value: (d.sessions || []).length.toLocaleString(), note: '15min+ gap starts a new one' },
+        { label: 'GPS Shared', value: (d.gpsShares || []).length.toLocaleString(), note: 'senders who shared a position' },
+      ].map(function(c) {
+        return '<div class="stat-card"><div class="stat-value">' + c.value + '</div>' +
+          '<div class="stat-label">' + c.label + '</div>' +
+          (c.note ? '<div class="stat-note text-muted" style="font-size:11px">' + c.note + '</div>' : '') +
+          '</div>';
+      }).join('');
+    }
+
+    // Single-line SVG time series — matches the Scopes tab's two-line chart style.
+    function chartHtml(ts) {
+      if (!ts || ts.length <= 1) {
+        return '<p class="text-muted" style="font-size:0.85em">Insufficient data points to chart — wait for more wardriving activity in this window.</p>';
+      }
+      var vals = ts.map(function(p) { return p.count; });
+      var maxVal = Math.max(1, Math.max.apply(null, vals));
+      var W = 800, H = 160, padL = 44, padT = 10, padR = 10;
+      var plotW = W - padL - padR, plotH = H - 24 - padT;
+      var n = ts.length;
+      var pts = vals.map(function(v, i) {
+        var x = padL + i * plotW / Math.max(n - 1, 1);
+        var y = padT + plotH - (v / maxVal) * plotH;
+        return x.toFixed(1) + ',' + y.toFixed(1);
+      }).join(' ');
+      var grid = '';
+      for (var gi = 0; gi <= 4; gi++) {
+        var gy = padT + plotH * gi / 4;
+        var gv = Math.round(maxVal * (4 - gi) / 4);
+        grid += '<line x1="' + padL + '" y1="' + gy.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + gy.toFixed(1) + '" stroke="var(--border)" stroke-dasharray="2"/>';
+        grid += '<text x="' + (padL - 4) + '" y="' + (gy + 4).toFixed(1) + '" text-anchor="end" font-size="9" fill="var(--text-muted)">' + gv + '</text>';
+      }
+      return '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;max-height:' + H + 'px" role="img" aria-label="Wardriving message volume over time">' +
+        grid +
+        '<polyline points="' + pts + '" fill="none" stroke="var(--accent)" stroke-width="2"/>' +
+        '</svg>';
+    }
+
+    // Signal quality line chart — scaled to the data's own min/max (unlike
+    // chartHtml's 0-baseline) since SNR and RSSI have no natural zero floor.
+    function signalChartHtml(sig, key, color, ariaLabel) {
+      if (!sig || sig.length <= 1) {
+        return '<p class="text-muted" style="font-size:0.85em">Insufficient data points to chart.</p>';
+      }
+      var vals = sig.map(function(p) { return p[key]; });
+      var minVal = Math.min.apply(null, vals);
+      var maxVal = Math.max.apply(null, vals);
+      if (minVal === maxVal) { minVal -= 1; maxVal += 1; }
+      var W = 800, H = 140, padL = 44, padT = 10, padR = 10, padB = 20;
+      var plotW = W - padL - padR, plotH = H - padB - padT;
+      var n = sig.length;
+      var pts = vals.map(function(v, i) {
+        var x = padL + i * plotW / Math.max(n - 1, 1);
+        var y = padT + plotH - ((v - minVal) / (maxVal - minVal)) * plotH;
+        return x.toFixed(1) + ',' + y.toFixed(1);
+      }).join(' ');
+      var grid = '';
+      for (var gi = 0; gi <= 3; gi++) {
+        var gy = padT + plotH * gi / 3;
+        var gv = maxVal - (maxVal - minVal) * gi / 3;
+        grid += '<line x1="' + padL + '" y1="' + gy.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + gy.toFixed(1) + '" stroke="var(--border)" stroke-dasharray="2"/>';
+        grid += '<text x="' + (padL - 4) + '" y="' + (gy + 4).toFixed(1) + '" text-anchor="end" font-size="9" fill="var(--text-muted)">' + gv.toFixed(1) + '</text>';
+      }
+      return '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;max-height:' + H + 'px" role="img" aria-label="' + ariaLabel + '">' +
+        grid +
+        '<polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="2"/>' +
+        '</svg>';
+    }
+
+    function formatSessionDuration(mins) {
+      if (mins < 1) return '<1m';
+      if (mins < 60) return Math.round(mins) + 'm';
+      var h = Math.floor(mins / 60), m = Math.round(mins % 60);
+      return h + 'h ' + m + 'm';
+    }
+
+    // Sender name → clickable trigger for the per-message drill-down (see
+    // attachSenderDrilldown). data-wd-since/until scope the drill-down to
+    // an exact range (e.g. one session); omitted, it covers the whole
+    // window for that sender.
+    function senderTriggerHtml(sender, since, until) {
+      var attrs = 'data-wd-sender="' + esc(sender) + '"';
+      if (since) attrs += ' data-wd-since="' + esc(since) + '"';
+      if (until) attrs += ' data-wd-until="' + esc(until) + '"';
+      return '<button type="button" ' + attrs + ' aria-expanded="false" style="background:none;border:none;padding:0;margin:0;font:inherit;color:var(--link-color);cursor:pointer">' + esc(sender) + '</button>';
+    }
+
+    // Sessions — each sender's messages grouped into runs (backend splits
+    // on any gap over 15 minutes). Pre-sorted most-recent-first by the API.
+    // Airtime is LoRa Time-on-Air × distinct relaying repeaters, summed
+    // across the session's messages — same formula as the Overview tab's
+    // "Relay Airtime Share". Needs the in-memory store's resolved-path
+    // index; omitted (shows "—") in DB-only mode.
+    function formatAirtimeMs(ms) {
+      if (ms == null) return '—';
+      if (ms < 1000) return Math.round(ms) + 'ms';
+      return (ms / 1000).toFixed(1) + 's';
+    }
+
+    function sessionsHtml(sessions, expanded) {
+      if (!sessions || sessions.length === 0) {
+        return '<p class="text-muted" style="font-size:0.85em">No wardriving sessions in this window.</p>';
+      }
+      var shown = expanded ? sessions : sessions.slice(0, TOP_N_LIMIT);
+      var rows = shown.map(function(s) {
+        var areaBadge = s.area
+          ? '<span class="badge" style="background:var(--border);color:var(--text)" title="Approximate — the entry-point repeater\'s known position, not the sender\'s own">' + esc(s.area) + '</span>'
+          : '<span class="text-muted" style="font-size:0.85em">—</span>';
+        return '<tr><td>' + senderTriggerHtml(s.sender, s.startTime, s.endTime) + '</td>' +
+          '<td>' + (typeof timeAgo === 'function' ? timeAgo(s.startTime) : s.startTime) + '</td>' +
+          '<td>' + formatSessionDuration(s.durationMinutes) + '</td>' +
+          '<td>' + s.messageCount.toLocaleString() + '</td>' +
+          '<td>' + s.entryPointCount.toLocaleString() + '</td>' +
+          '<td>' + s.observerCount.toLocaleString() + '</td>' +
+          '<td>' + areaBadge + '</td>' +
+          '<td>' + formatAirtimeMs(s.airtimeMs) + '</td></tr>';
+      }).join('');
+      return '<table class="data-table analytics-table" data-wd-cols="8">' +
+        '<thead><tr><th>Sender</th><th>Started</th><th>Duration</th><th>Messages</th><th>Entry Points</th><th>Observers</th><th>Area</th><th>Airtime</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+        '</table>' + topNToggleHtml(sessions.length, expanded, 'sessions');
+    }
+
+    var TOP_N_LIMIT = 10;
+
+    // Shared "Show all N / Show fewer" toggle trigger for any collapsible
+    // table below. The click handler itself is wired generically by
+    // wireExpandToggle, keyed on the data-wd-toggle attribute.
+    function topNToggleHtml(total, expanded, noun) {
+      if (total <= TOP_N_LIMIT) return '';
+      var label = expanded ? 'Show fewer' : 'Show all ' + total.toLocaleString() + ' ' + noun;
+      return '<div style="margin-top:6px;text-align:right"><button type="button" data-wd-toggle class="btn-link" style="font-size:12px;cursor:pointer;background:none;border:none;color:var(--link-color);padding:0">' + label + '</button></div>';
+    }
+
+    function sendersHtml(senders, totalMessages, expanded) {
+      if (!senders || senders.length === 0) {
+        return '<p class="text-muted" style="font-size:0.85em">No wardriving messages in this window.</p>';
+      }
+      var shown = expanded ? senders : senders.slice(0, TOP_N_LIMIT);
+      var rows = shown.map(function(s) {
+        return '<tr><td>' + senderTriggerHtml(s.sender) + '</td><td>' + s.count.toLocaleString() + '</td><td>' + pct(s.count, totalMessages) + '</td></tr>';
+      }).join('');
+      return '<table class="data-table analytics-table" data-wd-cols="3">' +
+        '<thead><tr><th>Sender</th><th>Messages</th><th>% of Total</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+        '</table>' + topNToggleHtml(senders.length, expanded, 'senders');
+    }
+
+    // Entry Points — resolve raw path[0] hash prefixes to repeater names,
+    // same unique_prefix-only discipline as the Foreign Traffic tab (a
+    // non-unique_prefix resolution is a genuine hash collision across
+    // multiple candidate repeaters — folded into "Ambiguous" rather than
+    // guessing). Split into an async resolve step (runs once) and a sync
+    // render step (runs once per collapse/expand toggle) so expanding
+    // doesn't re-hit /resolve-hops.
+    async function resolveEntryPoints(prefixes) {
+      if (!prefixes || prefixes.length === 0) {
+        return { state: 'empty' };
+      }
+      try {
+        var resp = await api('/resolve-hops?hops=' + prefixes.map(function(p) { return p.prefix; }).join(','), { ttl: CLIENT_TTL.nodeDetail }).catch(function() { return null; });
+        var resolved = (resp && resp.resolved) || {};
+        var totalObs = prefixes.reduce(function(sum, p) { return sum + p.observationCount; }, 0);
+        var named = [];
+        var ambiguousObs = 0, ambiguousMsgs = 0;
+        prefixes.forEach(function(p) {
+          var r = resolved[p.prefix];
+          if (r && r.confidence === 'unique_prefix') {
+            named.push({ name: r.name, pubkey: r.pubkey, obs: p.observationCount, msgs: p.messageCount });
+          } else {
+            ambiguousObs += p.observationCount;
+            ambiguousMsgs += p.messageCount;
+          }
+        });
+        named.sort(function(a, b) { return b.obs - a.obs; });
+        return { state: 'ok', named: named, ambiguousObs: ambiguousObs, ambiguousMsgs: ambiguousMsgs, totalObs: totalObs };
+      } catch (e) {
+        return { state: 'error' };
+      }
+    }
+
+    function entryPointsHtml(data, expanded) {
+      if (data.state === 'empty') {
+        return '<p class="text-muted" style="font-size:0.85em">No wardriving messages with a relay path in this window.</p>';
+      }
+      if (data.state === 'error') {
+        return '<p class="text-muted">Failed to resolve entry points.</p>';
+      }
+      var named = data.named, ambiguousObs = data.ambiguousObs, ambiguousMsgs = data.ambiguousMsgs, totalObs = data.totalObs;
+      if (named.length === 0 && ambiguousObs === 0) {
+        return '<p class="text-muted" style="font-size:0.85em">No traceable relay path yet for any wardriving message.</p>';
+      }
+      // The ambiguous bucket (if any) is a fixed, always-visible row — only
+      // the named repeaters collapse to top-N, so "Ambiguous" doesn't
+      // count against the limit or get hidden by it.
+      var shownNamed = expanded ? named : named.slice(0, TOP_N_LIMIT);
+      var rows = shownNamed.map(function(e) {
+        return '<tr><td><a href="#/nodes/' + encodeURIComponent(e.pubkey) + '">' + esc(e.name) + '</a></td>' +
+          '<td>' + e.obs.toLocaleString() + '</td>' +
+          '<td>' + pct(e.obs, totalObs) + '</td>' +
+          '<td>' + e.msgs.toLocaleString() + '</td></tr>';
+      }).join('') + (ambiguousObs > 0
+        ? '<tr><td class="text-muted">Ambiguous (hash prefix collides across multiple candidate repeaters)</td>' +
+          '<td>' + ambiguousObs.toLocaleString() + '</td><td>' + pct(ambiguousObs, totalObs) + '</td><td>' + ambiguousMsgs.toLocaleString() + '</td></tr>'
+        : '');
+      return '<table class="data-table analytics-table">' +
+        '<thead><tr><th>Entry-Point Repeater</th><th>Observations</th><th>% of Observations</th><th>Distinct Messages</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+        '</table>' + topNToggleHtml(named.length, expanded, 'entry-point repeaters');
+    }
+
+    function observersHtml(observers, expanded) {
+      if (!observers || observers.length === 0) {
+        return '<p class="text-muted" style="font-size:0.85em">No observer has heard wardriving traffic in this window.</p>';
+      }
+      // % of Observations stays relative to ALL observers, not just the
+      // shown top-N slice, so the numbers stay meaningful when collapsed.
+      var totalObsCount = observers.reduce(function(sum, o) { return sum + o.observationCount; }, 0);
+      var shown = expanded ? observers : observers.slice(0, TOP_N_LIMIT);
+      var rows = shown.map(function(o) {
+        var loc = (o.lat != null && o.lon != null) ? (o.lat.toFixed(2) + ', ' + o.lon.toFixed(2)) : '—';
+        return '<tr><td>' + esc(o.observerName) + '</td>' +
+          '<td>' + esc(o.iata || '—') + '</td>' +
+          '<td>' + loc + '</td>' +
+          '<td>' + o.observationCount.toLocaleString() + '</td>' +
+          '<td>' + pct(o.observationCount, totalObsCount) + '</td>' +
+          '<td>' + o.messageCount.toLocaleString() + '</td></tr>';
+      }).join('');
+      return '<table class="data-table analytics-table">' +
+        '<thead><tr><th>Observer</th><th>Region</th><th>Lat, Lon</th><th>Observations</th><th>% of Observations</th><th>Distinct Messages</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+        '</table>' + topNToggleHtml(observers.length, expanded, 'observers');
+    }
+
+    function mapLinkHtml(lat, lon) {
+      return '<a href="#/map?lat=' + encodeURIComponent(lat) + '&lon=' + encodeURIComponent(lon) + '&zoom=15" target="_blank" rel="noopener">' +
+        lat.toFixed(5) + ', ' + lon.toFixed(5) + '</a>';
+    }
+
+    // GPS Sharing — some wardriving clients append plaintext "<lat>,<lon>"
+    // after the standard token; this is a deliberate choice by that
+    // sender's client to share their position in-band, confirmed
+    // empirically against live traffic, not something CoreScope infers.
+    function gpsSharesHtml(shares) {
+      if (!shares || shares.length === 0) {
+        return '<p class="text-muted" style="font-size:0.85em">No sender has shared an explicit position in this window.</p>';
+      }
+      var rows = shares.map(function(s) {
+        var areaBadge = s.area
+          ? '<span class="badge" style="background:var(--border);color:var(--text)" title="Most specific configured area containing this position">' + esc(s.area) + '</span>'
+          : '<span class="text-muted" style="font-size:0.85em">—</span>';
+        return '<tr><td>' + esc(s.sender) + '</td>' +
+          '<td>' + mapLinkHtml(s.lat, s.lon) + '</td>' +
+          '<td>' + areaBadge + '</td>' +
+          '<td>' + s.messageCount.toLocaleString() + '</td>' +
+          '<td>' + (typeof timeAgo === 'function' ? timeAgo(s.lastSeen) : s.lastSeen) + '</td></tr>';
+      }).join('');
+      return '<table class="data-table analytics-table">' +
+        '<thead><tr><th>Sender</th><th>Position (most recent)</th><th>Area</th><th>Times Shared</th><th>Last Seen</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+        '</table>';
+    }
+
+    function attachWindowButtons() {
+      el.querySelectorAll('[data-wdwin]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          selectedWindow = btn.dataset.wdwin;
+          if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(winKey, selectedWindow);
+          load(selectedWindow);
+        });
+      });
+    }
+
+    // Per-message drill-down for one sender (whole window, or one exact
+    // since/until range when opened from a Sessions row). Resolves every
+    // distinct path[0..] prefix across the fetched messages in a single
+    // /resolve-hops call — same unique_prefix-only discipline as the
+    // aggregate Entry Points table (a non-unique_prefix match is shown as
+    // the raw hash, not guessed).
+    async function buildSenderDrilldownHtml(sender, since, until) {
+      try {
+        var qs = 'sender=' + encodeURIComponent(sender);
+        if (since && until) {
+          qs += '&since=' + encodeURIComponent(since) + '&until=' + encodeURIComponent(until);
+        } else {
+          qs += '&window=' + encodeURIComponent(selectedWindow);
+        }
+        var data = await api('/analytics/wardriving/sender-messages?' + qs, { ttl: 10000 });
+        var messages = data.messages || [];
+        if (messages.length === 0) {
+          return { html: '<p class="text-muted" style="font-size:0.85em;margin:8px 0">No individual messages found for this sender in range.</p>', gpsPoints: [] };
+        }
+
+        // Messages come back most-recent-first; a path needs chronological
+        // (oldest-first) order to draw correctly.
+        var gpsPoints = messages
+          .filter(function(m) { return m.lat != null && m.lon != null; })
+          .map(function(m) { return { lat: m.lat, lon: m.lon, timestamp: m.timestamp }; })
+          .reverse();
+
+        var allPrefixes = [];
+        messages.forEach(function(m) {
+          (m.pathPrefixes || []).forEach(function(p) { if (allPrefixes.indexOf(p) === -1) allPrefixes.push(p); });
+        });
+        var resolved = {};
+        if (allPrefixes.length > 0) {
+          try {
+            var hopsResp = await api('/resolve-hops?hops=' + allPrefixes.join(','), { ttl: CLIENT_TTL.nodeDetail });
+            resolved = (hopsResp && hopsResp.resolved) || {};
+          } catch (e) { /* fall back to raw prefixes below */ }
+        }
+        function resolvePrefix(p) {
+          var r = resolved[p];
+          if (r && r.confidence === 'unique_prefix') return esc(r.name);
+          return '<span class="text-muted">' + esc(p) + '</span>';
+        }
+
+        // Approximate path via entry-point repeater, for senders who don't
+        // share a literal position: each message's path[0] resolves to a
+        // fixed, known repeater location (same unique_prefix-only
+        // discipline as the path display above) — plotting those in
+        // chronological order gives a rough "which coverage area were they
+        // in" trail. This is NOT the sender's real position, just the
+        // nearest repeater that first relayed them at that moment.
+        var entryHits = messages
+          .filter(function(m) { return m.pathPrefixes && m.pathPrefixes.length > 0; })
+          .map(function(m) {
+            var r = resolved[m.pathPrefixes[0]];
+            if (!r || r.confidence !== 'unique_prefix' || !r.pubkey) return null;
+            return { pubkey: r.pubkey, name: r.name, timestamp: m.timestamp };
+          })
+          .filter(Boolean)
+          .reverse(); // chronological — messages come back most-recent-first
+
+        // Comparison: for messages where the sender ALSO shared a real
+        // position, pair it with that same message's resolved entry-point
+        // repeater — lets us see how far the nearest-repeater proxy was
+        // from where the sender actually said they were.
+        var comparisonHits = messages
+          .filter(function(m) { return m.lat != null && m.lon != null && m.pathPrefixes && m.pathPrefixes.length > 0; })
+          .map(function(m) {
+            var r = resolved[m.pathPrefixes[0]];
+            if (!r || r.confidence !== 'unique_prefix' || !r.pubkey) return null;
+            return { transmissionId: m.transmissionId, pubkey: r.pubkey, name: r.name, timestamp: m.timestamp, gpsLat: m.lat, gpsLon: m.lon };
+          })
+          .filter(Boolean)
+          .reverse();
+
+        var entryTrailPoints = [];
+        var comparisonGpsPoints = [];
+        var comparisonEntryPoints = [];
+        var distanceByTxId = {};
+        if (entryHits.length >= 2 || comparisonHits.length >= 1) {
+          try {
+            var nodesResp = await fetchAllNodes('', { ttl: CLIENT_TTL.nodeList });
+            var nodesByKey = {};
+            (nodesResp.nodes || []).forEach(function(n) { nodesByKey[n.public_key] = n; });
+
+            var lastKey = null;
+            entryHits.forEach(function(hit) {
+              if (hit.pubkey === lastKey) return; // collapse consecutive hits on the same repeater
+              var node = nodesByKey[hit.pubkey];
+              if (node && node.lat != null && node.lon != null) {
+                entryTrailPoints.push({ lat: node.lat, lon: node.lon, timestamp: hit.timestamp, label: hit.name });
+                lastKey = hit.pubkey;
+              }
+            });
+
+            comparisonHits.forEach(function(hit) {
+              var node = nodesByKey[hit.pubkey];
+              if (!node || node.lat == null || node.lon == null) return;
+              var km = (window.HopResolver && typeof window.HopResolver.haversineKm === 'function')
+                ? window.HopResolver.haversineKm(hit.gpsLat, hit.gpsLon, node.lat, node.lon) : null;
+              distanceByTxId[hit.transmissionId] = { km: km, name: hit.name };
+              comparisonGpsPoints.push({ lat: hit.gpsLat, lon: hit.gpsLon, timestamp: hit.timestamp, label: km != null ? (km.toFixed(1) + ' km from ' + hit.name) : 'Shared position' });
+              comparisonEntryPoints.push({ lat: node.lat, lon: node.lon, timestamp: hit.timestamp, label: hit.name });
+            });
+          } catch (e) { /* leave arrays empty — buttons just won't show */ }
+        }
+
+        var rows = messages.map(function(m) {
+          var pathStr = (m.pathPrefixes && m.pathPrefixes.length > 0)
+            ? m.pathPrefixes.map(resolvePrefix).join(' → ')
+            : '<span class="text-muted">—</span>';
+          var obsStr = (m.observations && m.observations.length > 0)
+            ? m.observations.map(function(o) {
+                return esc(o.observerName) + ' (' + o.snr.toFixed(1) + 'dB / ' + o.rssi.toFixed(0) + 'dBm)';
+              }).join(', ')
+            : '<span class="text-muted">—</span>';
+          var posStr = '<span class="text-muted">—</span>';
+          if (m.lat != null && m.lon != null) {
+            posStr = mapLinkHtml(m.lat, m.lon);
+            var dist = distanceByTxId[m.transmissionId];
+            if (dist && dist.km != null) {
+              posStr += ' <span class="text-muted" style="font-size:0.9em">(' + dist.km.toFixed(1) + ' km from ' + esc(dist.name) + ')</span>';
+            }
+          }
+          return '<tr><td>' + (typeof timeAgo === 'function' ? timeAgo(m.timestamp) : m.timestamp) + '</td>' +
+            '<td>' + pathStr + '</td>' +
+            '<td>' + obsStr + '</td>' +
+            '<td>' + posStr + '</td></tr>';
+        }).join('');
+        var tableHtml = '<table class="data-table analytics-table" style="margin:4px 0 12px;font-size:0.85em">' +
+          '<thead><tr><th>Time</th><th>Path (path[0] first)</th><th>Heard By (SNR / RSSI)</th><th>Shared Position</th></tr></thead>' +
+          '<tbody>' + rows + '</tbody>' +
+          '</table>';
+        var btnStyle = 'background:none;border:1px solid var(--border);padding:4px 10px;border-radius:4px;color:var(--link-color);cursor:pointer;font-size:0.85em;margin:0 8px 8px 0';
+        var pathBtnHtml = gpsPoints.length >= 2
+          ? '<button type="button" data-wd-view-path style="' + btnStyle + '">View path on map (' + gpsPoints.length + ' shared positions)</button>'
+          : '';
+        var entryBtnHtml = entryTrailPoints.length >= 2
+          ? '<button type="button" data-wd-view-entry-path style="' + btnStyle + '">View approximate path via entry points (' + entryTrailPoints.length + ' repeaters)</button>'
+          : '';
+        var compareBtnHtml = comparisonGpsPoints.length >= 1
+          ? '<button type="button" data-wd-view-compare style="' + btnStyle + '">Compare shared position vs. entry point (' + comparisonGpsPoints.length + ')</button>'
+          : '';
+        var btnRow = (pathBtnHtml || entryBtnHtml || compareBtnHtml) ? '<div>' + pathBtnHtml + entryBtnHtml + compareBtnHtml + '</div>' : '';
+        return {
+          html: btnRow + tableHtml, gpsPoints: gpsPoints, entryTrailPoints: entryTrailPoints,
+          comparisonGpsPoints: comparisonGpsPoints, comparisonEntryPoints: comparisonEntryPoints
+        };
+      } catch (err) {
+        return {
+          html: '<p style="color:var(--status-red);font-size:0.85em">Failed to load messages: ' + esc(String(err)) + '</p>',
+          gpsPoints: [], entryTrailPoints: [], comparisonGpsPoints: [], comparisonEntryPoints: []
+        };
+      }
+    }
+
+    // Clicking a sender name toggles an inline expansion row directly
+    // below it with that sender's individual messages. Only one expansion
+    // stays open per table at a time, to keep the tab from growing
+    // unbounded if a user clicks through several senders.
+    function attachSenderDrilldown() {
+      el.querySelectorAll('[data-wd-sender]').forEach(function(btn) {
+        btn.addEventListener('click', async function() {
+          var tr = btn.closest('tr');
+          if (!tr) return;
+          var next = tr.nextElementSibling;
+          if (next && next.hasAttribute('data-wd-expansion')) {
+            next.remove();
+            btn.setAttribute('aria-expanded', 'false');
+            return;
+          }
+          var table = tr.closest('table');
+          if (table) {
+            table.querySelectorAll('[data-wd-expansion]').forEach(function(r) { r.remove(); });
+            table.querySelectorAll('[data-wd-sender]').forEach(function(b) { b.setAttribute('aria-expanded', 'false'); });
+          }
+          var cols = (table && table.dataset.wdCols) || '1';
+          var expansionRow = document.createElement('tr');
+          expansionRow.setAttribute('data-wd-expansion', '1');
+          expansionRow.innerHTML = '<td colspan="' + cols + '"><div class="text-muted" style="padding:8px">Loading messages…</div></td>';
+          tr.parentNode.insertBefore(expansionRow, tr.nextSibling);
+          btn.setAttribute('aria-expanded', 'true');
+          var senderName = btn.dataset.wdSender;
+          var result = await buildSenderDrilldownHtml(senderName, btn.dataset.wdSince, btn.dataset.wdUntil);
+          var cell = expansionRow.querySelector('td');
+          if (!cell) return;
+          cell.innerHTML = result.html;
+          var pathBtn = cell.querySelector('[data-wd-view-path]');
+          if (pathBtn) {
+            pathBtn.addEventListener('click', function() {
+              sessionStorage.setItem('map-gps-trail', JSON.stringify({ points: result.gpsPoints, sender: senderName, kind: 'gps' }));
+              window.location.hash = '#/map';
+            });
+          }
+          var entryBtn = cell.querySelector('[data-wd-view-entry-path]');
+          if (entryBtn) {
+            entryBtn.addEventListener('click', function() {
+              sessionStorage.setItem('map-gps-trail', JSON.stringify({ points: result.entryTrailPoints, sender: senderName, kind: 'entry-point' }));
+              window.location.hash = '#/map';
+            });
+          }
+          var compareBtn = cell.querySelector('[data-wd-view-compare]');
+          if (compareBtn) {
+            compareBtn.addEventListener('click', function() {
+              sessionStorage.setItem('map-gps-trail', JSON.stringify({
+                points: result.comparisonGpsPoints, comparisonPoints: result.comparisonEntryPoints,
+                sender: senderName, kind: 'compare'
+              }));
+              window.location.hash = '#/map';
+            });
+          }
+        });
+      });
+    }
+
+    // Generic "Show all / Show fewer" wiring for a collapsible section —
+    // re-renders just that section's content on click and rewires the
+    // (freshly-created) toggle button, since innerHTML replacement drops
+    // the old node's listener.
+    function wireExpandToggle(containerId, renderFn) {
+      var expanded = false;
+      function attach() {
+        var container = document.getElementById(containerId);
+        if (!container) return;
+        var btn = container.querySelector('[data-wd-toggle]');
+        if (btn) {
+          btn.addEventListener('click', function() {
+            expanded = !expanded;
+            container.innerHTML = renderFn(expanded);
+            attach();
+          });
+        }
+      }
+      attach();
+    }
+
+    async function load(w) {
+      var body;
+      try {
+        var d = await api('/analytics/wardriving?window=' + encodeURIComponent(w), { ttl: 30000 });
+        var entryData = await resolveEntryPoints(d.entryPoints || []);
+        body =
+          '<div id="wardrivingCards" class="stats-grid" style="margin-bottom:16px">' + cardsHtml(d) + '</div>' +
+          '<div id="wardrivingChart" style="margin-bottom:16px">' + chartHtml(d.timeSeries) + '</div>' +
+          '<h4 style="margin:16px 0 4px">Signal Quality Trends</h4>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Average SNR and RSSI across every observation of wardriving traffic in each time bucket — a rough proxy for link quality, not tied to any one observer.</p>' +
+          '<div id="wardrivingSignal" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">' +
+            '<div><div class="text-muted" style="font-size:0.8em;margin-bottom:4px">Avg SNR (dB)</div>' + signalChartHtml(d.signalTimeSeries, 'avgSnr', 'var(--accent)', 'Average SNR over time') + '</div>' +
+            '<div><div class="text-muted" style="font-size:0.8em;margin-bottom:4px">Avg RSSI (dBm)</div>' + signalChartHtml(d.signalTimeSeries, 'avgRssi', 'var(--warning, #f39c12)', 'Average RSSI over time') + '</div>' +
+          '</div>' +
+          '<h4 style="margin:24px 0 4px">Top Senders</h4>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Who\'s actively wardriving in this window, by message count.</p>' +
+          '<div id="wardrivingSenders">' + sendersHtml(d.topSenders, d.totalMessages, false) + '</div>' +
+          '<h4 style="margin:24px 0 4px">Sessions</h4>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Each sender\'s messages grouped into distinct runs — a gap of more than 15 minutes starts a new session.</p>' +
+          '<div id="wardrivingSessions">' + sessionsHtml(d.sessions, false) + '</div>' +
+          '<h4 style="margin:24px 0 4px">Entry Points</h4>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Which local repeater first relayed each wardriving message — the hop closest to the origin (path[0]) across every observed copy.</p>' +
+          '<div id="wardrivingEntryPoints">' + entryPointsHtml(entryData, false) + '</div>' +
+          '<h4 style="margin:24px 0 4px">Coverage by Observer</h4>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Which observer stations actually heard wardriving traffic — observers sit at fixed, known locations, so this is the reliable half of "how far did it reach."</p>' +
+          '<div id="wardrivingObservers">' + observersHtml(d.observers, false) + '</div>' +
+          '<h4 style="margin:24px 0 4px">GPS Sharing</h4>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Senders whose client appended their own position after the standard token — a deliberate choice by that sender to share their location, not something inferred from the anonymous token itself.</p>' +
+          '<div id="wardrivingGPSShares">' + gpsSharesHtml(d.gpsShares) + '</div>';
+      } catch (err) {
+        body = '<div class="text-center" style="color:var(--status-red);padding:20px">Failed to load wardriving stats: ' + esc(String(err)) + '</div>';
+      }
+
+      el.innerHTML =
+        '<h3 style="margin:0 0 4px">Wardriving (#wardriving)</h3>' +
+        '<p class="text-muted" style="margin:0 0 16px;font-size:0.85em">' +
+          'Community coverage-mapping traffic on the #wardriving channel. MeshMapper\'s on-air ping carries an anonymous session token by default, not the sender\'s live GPS — coordinates go to MeshMapper\'s own server separately. What we can see: who\'s active, which repeater first relayed their signal, and which observer stations (fixed, known locations) actually heard it.' +
+        '</p>' +
+        '<div style="margin-bottom:12px">' +
+          ['1h', '24h', '7d'].map(function(v) {
+            return '<button class="tab-btn' + (selectedWindow === v ? ' active' : '') + '" data-wdwin="' + v + '">' + v + '</button>';
+          }).join('') +
+        '</div>' +
+        body;
+      attachWindowButtons();
+      attachSenderDrilldown();
+      if (d) {
+        wireExpandToggle('wardrivingSenders', function(exp) { return sendersHtml(d.topSenders, d.totalMessages, exp); });
+        wireExpandToggle('wardrivingObservers', function(exp) { return observersHtml(d.observers, exp); });
+        wireExpandToggle('wardrivingSessions', function(exp) { return sessionsHtml(d.sessions, exp); });
+        wireExpandToggle('wardrivingEntryPoints', function(exp) { return entryPointsHtml(entryData, exp); });
+      }
+    }
+
+    await load(selectedWindow);
+
+    // Auto-refresh every 60s while this tab is active (matches Roles/Scopes/Foreign Traffic).
+    _stopWardrivingRefresh();
+    _wardrivingRefreshTimer = setInterval(function() {
+      if (_currentTab !== 'wardriving') { _stopWardrivingRefresh(); return; }
+      var cur = document.getElementById('analyticsContent');
+      if (!cur) { _stopWardrivingRefresh(); return; }
       load(selectedWindow);
     }, 60000);
   }

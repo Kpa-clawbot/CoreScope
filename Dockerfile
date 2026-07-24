@@ -24,6 +24,7 @@ COPY internal/prunequeue/ ../../internal/prunequeue/
 COPY internal/perfio/ ../../internal/perfio/
 COPY internal/mbcapqueue/ ../../internal/mbcapqueue/
 COPY internal/lora/ ../../internal/lora/
+COPY internal/regions/ ../../internal/regions/
 RUN go mod download
 COPY cmd/server/ ./
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
@@ -40,6 +41,7 @@ COPY internal/dbschema/ ../../internal/dbschema/
 COPY internal/prunequeue/ ../../internal/prunequeue/
 COPY internal/perfio/ ../../internal/perfio/
 COPY internal/mbcapqueue/ ../../internal/mbcapqueue/
+COPY internal/regions/ ../../internal/regions/
 RUN go mod download
 COPY cmd/ingestor/ ./
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \

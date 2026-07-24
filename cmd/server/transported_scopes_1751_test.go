@@ -100,14 +100,19 @@ func TestTransportedScopes_EmptyWhenNoScope(t *testing.T) {
 	}
 }
 
-// TestTransportedScopes_CrossBucketFold covers the bulk path's prefix fold:
-// for a full-pubkey key it also folds in the matching 1-byte raw-prefix bucket
-// (deduping by tx.ID). A scope seen only in the prefix bucket must surface on
-// the full key, and a tx present in BOTH buckets must not be double-processed.
-func TestTransportedScopes_CrossBucketFold(t *testing.T) {
-	full := scopeTx(1, 2, "region-direct")           // only in the full-key bucket
-	prefixOnly := scopeTx(2, 2, "region-via-prefix") // only in the 1-byte bucket
-	shared := scopeTx(3, 2, "region-shared")         // in BOTH buckets (dedup by ID)
+// TestTransportedScopes_PrefixBucketExcludedFromScope covers the fix for
+// the false-attribution bug found via a real stg.meshview.dk report: the
+// 1-byte raw-prefix bucket (ambiguous hop hash — could be ANY node sharing
+// that first byte) still folds into RelayCount/LastRelayed as before, but
+// must NOT contribute to TransportedScopes. MeshCore firmware only relays a
+// TRANSPORT_FLOOD/DIRECT packet when the repeater's own configured region
+// matches the packet's (examples/simple_repeater/MyMesh.cpp
+// allowPacketForward + RegionMap::findMatch), so crediting a scope from an
+// unresolved hop would assert something the protocol itself wouldn't allow.
+func TestTransportedScopes_PrefixBucketExcludedFromScope(t *testing.T) {
+	full := scopeTx(1, 2, "region-direct")           // only in the full-key bucket — must count
+	prefixOnly := scopeTx(2, 2, "region-via-prefix") // only in the 1-byte bucket — must NOT count
+	shared := scopeTx(3, 2, "region-shared")         // in BOTH buckets — must count (present in the full-key list)
 
 	store := &PacketStore{
 		byPathHop: map[string][]*StoreTx{
@@ -118,9 +123,34 @@ func TestTransportedScopes_CrossBucketFold(t *testing.T) {
 	}
 
 	got := store.computeRepeaterRelayInfoMap(24)[scope1751Key].TransportedScopes
-	want := []string{"region-direct", "region-shared", "region-via-prefix"}
+	want := []string{"region-direct", "region-shared"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("cross-bucket fold TransportedScopes = %v, want %v", got, want)
+		t.Fatalf("TransportedScopes = %v, want %v (region-via-prefix must be excluded — it only appeared in the ambiguous prefix bucket)", got, want)
+	}
+}
+
+// TestTransportedScopes_PerNodePrefixBucketExcludedFromScope is the
+// per-node-path (GetRepeaterRelayInfo) counterpart to
+// TestTransportedScopes_PrefixBucketExcludedFromScope, keeping the single-
+// node detail endpoint (Nodes page "Transported scopes" badges) in parity
+// with the bulk /api/nodes path.
+func TestTransportedScopes_PerNodePrefixBucketExcludedFromScope(t *testing.T) {
+	full := scopeTx(1, 2, "region-direct")
+	prefixOnly := scopeTx(2, 2, "region-via-prefix")
+	shared := scopeTx(3, 2, "region-shared")
+
+	store := &PacketStore{
+		byPathHop: map[string][]*StoreTx{
+			scope1751Key:     {full, shared},
+			scope1751Key[:2]: {prefixOnly, shared},
+		},
+		mu: sync.RWMutex{},
+	}
+
+	got := store.GetRepeaterRelayInfo(scope1751Key, 24).TransportedScopes
+	want := []string{"region-direct", "region-shared"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("per-node TransportedScopes = %v, want %v (region-via-prefix must be excluded)", got, want)
 	}
 }
 

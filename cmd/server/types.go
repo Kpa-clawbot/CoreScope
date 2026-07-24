@@ -102,6 +102,36 @@ type ScopeStatsSummary struct {
 	UnknownScope   int `json:"unknownScope"`
 }
 
+// ChannelScopeStats answers a narrower question than ScopeStatsSummary:
+// of channel chat messages specifically (payload_type=5 / GRP_TXT), how
+// many actually carry a resolvable region scope vs none vs unresolved.
+// TotalMessages covers ALL route types (unlike ScopeStatsSummary's
+// TransportTotal, which only counts route_type 0/3) since most channel
+// chat is plain FLOOD, not transport-scoped.
+type ChannelScopeStats struct {
+	TotalMessages int `json:"totalMessages"`
+	Scoped        int `json:"scoped"`
+	Unscoped      int `json:"unscoped"`
+	UnknownScope  int `json:"unknownScope"`
+}
+
+// ChannelScopeAdoption is ChannelScopeStats broken down PER CHANNEL — which
+// specific channels (#test, #wardriving, ...) actually use region scoping
+// vs which never do, as opposed to the single aggregate above.
+type ChannelScopeAdoption struct {
+	Channel       string `json:"channel"`
+	TotalMessages int    `json:"totalMessages"`
+	Scoped        int    `json:"scoped"`
+	Unscoped      int    `json:"unscoped"`
+	UnknownScope  int    `json:"unknownScope"`
+	// Regions is which specific scope_name values have actually been seen
+	// on this channel's scoped messages, most-used first. Distinct from
+	// Scoped (a count) — this answers "which regions", not just "how
+	// many scoped messages". Omitted when the channel has no scoped
+	// messages in the window.
+	Regions []string `json:"regions,omitempty"`
+}
+
 type ScopeRegionCount struct {
 	Name  string `json:"name"`
 	Count int    `json:"count"`
@@ -113,11 +143,280 @@ type ScopeTimePoint struct {
 	Unscoped int    `json:"unscoped"`
 }
 
+// ScopeHourlyActivity is a region's message counts bucketed by hour-of-day
+// (0-23, UTC), aggregated across every day in the requested window —
+// "when during a typical day is this region active" rather than "how did
+// volume change over the window" (that's ScopeTimePoint/TimeSeries).
+type ScopeHourlyActivity struct {
+	Region string  `json:"region"`
+	Hours  [24]int `json:"hours"`
+}
+
 type ScopeStatsResponse struct {
 	Window     string             `json:"window"`
 	Summary    ScopeStatsSummary  `json:"summary"`
 	ByRegion   []ScopeRegionCount `json:"byRegion"`
 	TimeSeries []ScopeTimePoint   `json:"timeSeries"`
+	// ConfiguredRegions/UnusedRegions are all-time (not window-scoped):
+	// how many hashRegions are configured, and which of them have never
+	// matched a single transmission still in retention. Lets an operator
+	// see at a glance how much of their region list is dead weight.
+	// Omitted (both zero-value) when the server config has no hashRegions.
+	ConfiguredRegions int      `json:"configuredRegions,omitempty"`
+	UnusedRegions     []string `json:"unusedRegions,omitempty"`
+	// RepeatersByRegion is all-time (not window-scoped), like
+	// UnusedRegions: for each region that has ever matched a transmission,
+	// which distinct repeaters/rooms have relayed traffic carrying that
+	// scope (nodes.go transported_scopes, #1751), sourced from the same
+	// 5-minute-cached bulk relay-info map the Nodes page uses. Omitted
+	// when the in-memory store isn't available (DB-only mode).
+	RepeatersByRegion []ScopeRegionRepeaters `json:"repeatersByRegion,omitempty"`
+	// OriginatingNodesByRegion is the complementary breakdown: nodes whose
+	// OWN default_scope (#899) is this region — i.e. actually configured/
+	// running that region themselves, not just relaying someone else's
+	// scoped traffic. All-time, like RepeatersByRegion.
+	OriginatingNodesByRegion []ScopeRegionRepeaters `json:"originatingNodesByRegion,omitempty"`
+	// ChannelMessages narrows the same scoped/unscoped/unknown question to
+	// channel chat specifically (payload_type=5), window-scoped like
+	// Summary above — see ChannelScopeStats doc.
+	ChannelMessages *ChannelScopeStats `json:"channelMessages,omitempty"`
+	// ChannelScopeAdoption is ChannelMessages broken down per channel,
+	// ordered by message volume. Uncapped — see GetChannelScopeAdoption.
+	ChannelScopeAdoption []ChannelScopeAdoption `json:"channelScopeAdoption,omitempty"`
+	// BridgeRepeaters is the RepeatersByRegion data inverted: repeaters
+	// that have relayed traffic for MORE than one region are the mesh's
+	// literal backbone nodes connecting separate regional communities.
+	// All-time, like RepeatersByRegion (same source data, same caveats).
+	BridgeRepeaters []BridgeRepeater `json:"bridgeRepeaters,omitempty"`
+	// HourlyActivityByRegion is window-scoped like Summary/TimeSeries
+	// above — see ScopeHourlyActivity doc.
+	HourlyActivityByRegion []ScopeHourlyActivity `json:"hourlyActivityByRegion,omitempty"`
+	// ScopeAdoptionByArea buckets every positioned node by its configured
+	// geographic area (config.Areas, AreaKeyForPoint) and tallies scope
+	// adoption within that area — independent of whether the raw
+	// hashRegion codes above are "used" at all. Surfaces gaps like "34
+	// real nodes here, 0 have ever configured a scope" that
+	// UnusedRegions/RepeatersByRegion can't see, since those only know
+	// about region strings that already appeared in traffic. All-time,
+	// like the other Regions-tab sections. Omitted when no areas are
+	// configured.
+	ScopeAdoptionByArea []AreaScopeAdoption `json:"scopeAdoptionByArea,omitempty"`
+}
+
+// AreaScopeAdoption is one configured area's node count and scope adoption
+// — see ScopeStatsResponse.ScopeAdoptionByArea and computeScopeAdoptionByArea.
+type AreaScopeAdoption struct {
+	AreaKey      string   `json:"areaKey"`
+	Label        string   `json:"label"`
+	RegionScopes []string `json:"regionScopes,omitempty"`
+	TotalNodes   int      `json:"totalNodes"`
+	// NodesWithAnyScope is how many of TotalNodes "use scope" in any
+	// sense: either their own default_scope is set, or they've ever
+	// relayed traffic carrying ANY region's scope (a repeater can support
+	// a region purely by relaying it, without configuring that region as
+	// its own — see computeScopeAdoptionByArea).
+	NodesWithAnyScope int `json:"nodesWithAnyScope"`
+	// NodesMatchingArea is the subset of NodesWithAnyScope that
+	// specifically use one of THIS area's own RegionScopes — via
+	// default_scope OR by having relayed it. Only meaningful when
+	// RegionScopes is non-empty — 0 otherwise (not the same as "0 of them
+	// match", there's simply nothing configured to match against). No
+	// omitempty: a real 0 count must still serialize, or the frontend has
+	// no way to distinguish it from "field absent".
+	NodesMatchingArea int `json:"nodesMatchingArea"`
+	// Matching/NotMatching are the actual nodes behind NodesMatchingArea —
+	// which specific nodes in this area relay/configure any of the area's
+	// own regions (correctly "support" it) and which sit here but don't.
+	// Only populated when RegionScopes is non-empty (nothing to split
+	// into two groups otherwise). Matching entries also carry WHICH of the
+	// area's regions each node matched (an area with several linked
+	// scopes, e.g. Europa's "eu"/"europe", needs this to answer "which
+	// nodes support which scope" — not just an aggregate yes/no).
+	Matching    []AreaScopeMatch `json:"matching,omitempty"`
+	NotMatching []RepeaterRef    `json:"notMatching,omitempty"`
+}
+
+type RepeaterRef struct {
+	Name      string `json:"name"`
+	PublicKey string `json:"publicKey"`
+}
+
+// AreaScopeMatch is a RepeaterRef plus which of the area's own
+// RegionScopes this node actually matched (via default_scope or by having
+// relayed it) — a node can match more than one when an area links several
+// scopes and the node uses/relays more than one of them.
+type AreaScopeMatch struct {
+	Name          string   `json:"name"`
+	PublicKey     string   `json:"publicKey"`
+	MatchedScopes []string `json:"matchedScopes"`
+}
+
+type ScopeRegionRepeaters struct {
+	Region    string        `json:"region"`
+	Count     int           `json:"count"`
+	Repeaters []RepeaterRef `json:"repeaters"`
+}
+
+type BridgeRepeater struct {
+	Name      string   `json:"name"`
+	PublicKey string   `json:"publicKey"`
+	Regions   []string `json:"regions"`
+	Count     int      `json:"count"`
+}
+
+// ─── Wardriving ────────────────────────────────────────────────────────────────
+
+type WardrivingTimePoint struct {
+	T     string `json:"t"`
+	Count int    `json:"count"`
+}
+
+type WardrivingSenderCount struct {
+	Sender string `json:"sender"`
+	Count  int    `json:"count"`
+}
+
+// WardrivingEntryPrefix is a raw path[0] hash-prefix tally — path[0] is the
+// hop closest to the originator (see neighbor_graph.go's "Edge 1: originator
+// ↔ path[0]" convention), i.e. which local repeater first relayed this
+// wardriving message. The frontend resolves prefixes to repeater names via
+// /api/resolve-hops, keeping only unique_prefix-confidence matches — same
+// discipline as the Foreign Traffic tab's Entry Points section.
+type WardrivingEntryPrefix struct {
+	Prefix           string `json:"prefix"`
+	ObservationCount int    `json:"observationCount"`
+	MessageCount     int    `json:"messageCount"` // distinct transmissions this prefix appeared as path[0] for
+}
+
+// WardrivingObserverCoverage is how much wardriving traffic a given observer
+// station actually heard — observers sit at fixed, known locations (unlike
+// the wardriving sender, whose live GPS is deliberately not carried on-air
+// by MeshMapper's default privacy-preserving anonymous-token mode), so this
+// is the reliable half of a coverage picture: "where do we know wardriving
+// signal actually reached."
+type WardrivingObserverCoverage struct {
+	ObserverID       string   `json:"observerId"`
+	ObserverName     string   `json:"observerName"`
+	IATA             string   `json:"iata,omitempty"`
+	Lat              *float64 `json:"lat,omitempty"`
+	Lon              *float64 `json:"lon,omitempty"`
+	ObservationCount int      `json:"observationCount"`
+	MessageCount     int      `json:"messageCount"` // distinct transmissions this observer heard
+}
+
+// WardrivingSignalPoint is one time bucket of average signal quality across
+// every observation of #wardriving traffic in that bucket (not per-observer —
+// see WardrivingObserverCoverage for the per-station breakdown). Always has
+// ObservationCount >= 1 since buckets only exist where there was traffic.
+type WardrivingSignalPoint struct {
+	T                string  `json:"t"`
+	AvgSNR           float64 `json:"avgSnr"`
+	AvgRSSI          float64 `json:"avgRssi"`
+	ObservationCount int     `json:"observationCount"`
+}
+
+// WardrivingSession groups one sender's messages into a distinct "run":
+// consecutive messages no more than wardrivingSessionGapMinutes apart. A
+// bigger gap starts a new session, on the theory the sender paused, went
+// out of range, or ended one wardriving trip and started another later.
+type WardrivingSession struct {
+	Sender          string  `json:"sender"`
+	StartTime       string  `json:"startTime"`
+	EndTime         string  `json:"endTime"`
+	DurationMinutes float64 `json:"durationMinutes"`
+	MessageCount    int     `json:"messageCount"`
+	EntryPointCount int     `json:"entryPointCount"` // distinct path[0] entry-point prefixes seen during the session
+	ObserverCount   int     `json:"observerCount"`   // distinct observers that heard any message in the session
+	// AirtimeMs is total LoRa Time-on-Air (milliseconds) consumed relaying
+	// this session's messages across the mesh: for each message,
+	// ToA(payload_bytes) × COUNT(DISTINCT resolved repeater in its path) —
+	// the same formula as the Overview tab's "Relay Airtime Share" (issue
+	// #1768), applied to this session's transmissions specifically. Set by
+	// the route handler (needs the in-memory store's resolved-path index,
+	// which db.go alone doesn't have); omitted entirely in DB-only mode.
+	AirtimeMs *int64 `json:"airtimeMs,omitempty"`
+	// TransmissionIDs is internal — the session's own transmission IDs,
+	// used by the route handler to compute AirtimeMs. Never serialized.
+	TransmissionIDs []int64 `json:"-"`
+	// EntryPointPrefixes is internal — the session's distinct path[0]
+	// hex prefixes, used by the route handler to resolve Area. Never
+	// serialized directly.
+	EntryPointPrefixes []string `json:"-"`
+	// Area is the most specific configured area containing the session's
+	// entry-point repeater — always approximate (the repeater's known
+	// position, not the sender's own; wardriving sessions never carry a
+	// literal shared GPS fix, unlike WardrivingGPSShare). Resolved by the
+	// route handler from EntryPointPrefixes when exactly one candidate
+	// node matches a prefix (same unique_prefix-only discipline as
+	// /api/resolve-hops) and that node has a known position. Nil when no
+	// prefix resolves unambiguously or areas aren't configured.
+	Area *string `json:"area,omitempty"`
+}
+
+// WardrivingGPSShare is one sender who has explicitly shared their own
+// position: some wardriving clients append plaintext "<lat>,<lon>" after
+// the standard token (e.g. "MM:c3e_zJ1rUA:55.59743,13.00128") — a
+// deliberate choice by that sender's client, not something CoreScope
+// infers or decodes from an undocumented format. Lat/Lon is the most
+// recent position shared in the window.
+type WardrivingGPSShare struct {
+	Sender       string  `json:"sender"`
+	Lat          float64 `json:"lat"`
+	Lon          float64 `json:"lon"`
+	MessageCount int     `json:"messageCount"` // how many times this sender shared a position in this window
+	LastSeen     string  `json:"lastSeen"`
+	// Area is the most specific configured area containing (Lat, Lon), set
+	// by the handler from config.Areas — omitted when no area matches.
+	Area *string `json:"area,omitempty"`
+}
+
+type WardrivingStatsResponse struct {
+	Window           string                       `json:"window"`
+	Channel          string                       `json:"channel"`
+	TotalMessages    int                          `json:"totalMessages"`
+	TimeSeries       []WardrivingTimePoint        `json:"timeSeries"`
+	TopSenders       []WardrivingSenderCount      `json:"topSenders"`
+	EntryPoints      []WardrivingEntryPrefix      `json:"entryPoints"`
+	Observers        []WardrivingObserverCoverage `json:"observers"`
+	SignalTimeSeries []WardrivingSignalPoint      `json:"signalTimeSeries"`
+	AvgSNR           *float64                     `json:"avgSnr,omitempty"`
+	AvgRSSI          *float64                     `json:"avgRssi,omitempty"`
+	Sessions         []WardrivingSession          `json:"sessions"`
+	GPSShares        []WardrivingGPSShare         `json:"gpsShares"`
+}
+
+// WardrivingMessageObservation is one observer's reception of a single
+// wardriving message — the per-message counterpart to
+// WardrivingObserverCoverage's aggregate-across-all-messages view.
+type WardrivingMessageObservation struct {
+	ObserverName string  `json:"observerName"`
+	SNR          float64 `json:"snr"`
+	RSSI         float64 `json:"rssi"`
+}
+
+// WardrivingMessage is one individual #wardriving transmission from a
+// specific sender — the drill-down behind the aggregate Sessions/Entry
+// Points/Coverage views. PathPrefixes[0] is the entry-point repeater (same
+// path[0] convention as WardrivingEntryPrefix); the frontend resolves
+// names via /api/resolve-hops, same as the aggregate Entry Points table.
+type WardrivingMessage struct {
+	TransmissionID int64                          `json:"transmissionId"`
+	Timestamp      string                         `json:"timestamp"`
+	PathPrefixes   []string                       `json:"pathPrefixes"`
+	Observations   []WardrivingMessageObservation `json:"observations"`
+	// Lat/Lon are set only when this specific message carried an explicit
+	// shared position (see WardrivingGPSShare) — nil for the standard
+	// anonymous token.
+	Lat *float64 `json:"lat,omitempty"`
+	Lon *float64 `json:"lon,omitempty"`
+}
+
+type WardrivingSenderMessagesResponse struct {
+	Sender   string              `json:"sender"`
+	Channel  string              `json:"channel"`
+	Since    string              `json:"since"`
+	Until    string              `json:"until"`
+	Messages []WardrivingMessage `json:"messages"`
 }
 
 // ─── Health ────────────────────────────────────────────────────────────────────
@@ -559,6 +858,91 @@ type NodeAnalyticsResponse struct {
 	ClockSkew           *NodeClockSkew          `json:"clockSkew,omitempty"`
 }
 
+// HopAnalyticsPacket is one transmission that passed through a specific node
+// as a relay hop (upstream issue #1812: help operators tune the firmware's
+// flood.max / flood.max.advert / flood.max.unscoped knobs, which cap based
+// on hop count AT THE RELAYING NODE, not distance to the observer). Hops is
+// the target node's own index within the packet's resolved relay path
+// (0-based, no +1 — matches how MeshCore firmware itself evaluates
+// getPathHashCount() against flood_max in allowPacketForward), which is
+// deliberately NOT the same number as HopDistEntry/hopDistribution above
+// (that's path length to whichever OBSERVER reported the packet — a
+// different, unrelated distance).
+type HopAnalyticsPacket struct {
+	Hash      string `json:"hash"`
+	TsMs      int64  `json:"tsMs"`
+	Hops      int    `json:"hops"`
+	Transport string `json:"transport"` // "flood" | "flood_advert" | "flood_unscoped" | "direct" | "unknown"
+	Scoped    bool   `json:"scoped"`
+}
+
+type NodeHopAnalyticsResponse struct {
+	Packets []HopAnalyticsPacket `json:"packets"`
+}
+
+// HopDepthBucket is a (hop count -> how many relay-hop instances saw that
+// count) tally, network-wide.
+type HopDepthBucket struct {
+	Hops  int `json:"hops"`
+	Count int `json:"count"`
+}
+
+// RepeaterUnscopedHopDepth is one repeater/room's hop-count profile across
+// the unscoped (FLOOD, non-advert) traffic it has relayed — the flip side
+// of unscoped_relay_count_24h's raw volume: whether that volume is mostly
+// FRESH/local unscoped traffic (low hops) or traffic that already
+// propagated far, unscoped, before reaching this repeater (high hops) --
+// the latter is the stronger signal of an actual containment problem.
+type RepeaterUnscopedHopDepth struct {
+	PublicKey  string  `json:"publicKey"`
+	Name       string  `json:"name"`
+	Count      int     `json:"count"`
+	MinHops    int     `json:"minHops"`
+	MedianHops float64 `json:"medianHops"`
+	MaxHops    int     `json:"maxHops"`
+}
+
+// HopDepthAnalyticsResponse answers two related "is flood containment
+// actually working" questions in one pass over resolved relay paths
+// (both need the same expensive walk, so they're computed together):
+//
+//  1. ScopedHopDepth/UnscopedHopDepth: network-wide, does SCOPED
+//     (TRANSPORT_FLOOD/TRANSPORT_DIRECT) traffic actually travel fewer
+//     hops than UNSCOPED (FLOOD/DIRECT) traffic? hashRegions exists
+//     specifically to contain flood propagation to a relevant area — if
+//     scoped hop depth isn't meaningfully lower, that's evidence region
+//     boundaries are too loose or flood_max isn't tuned differently per
+//     scope, not just an adoption-percentage number.
+//  2. UnscopedByRepeater: per-repeater hop-depth profile of the unscoped
+//     traffic it relays, enriching the Foreign Traffic tab's "Repeaters
+//     Relaying Unscoped Traffic" (which today only ranks by volume) with
+//     whether that volume is nearby noise or far-propagated pollution.
+//  3. TimeSeries: the same scoped/unscoped median hop split by time
+//     bucket instead of collapsed to one window-wide number -- is
+//     containment trending better or worse, not just where it stands
+//     right now.
+type HopDepthAnalyticsResponse struct {
+	Window             string                     `json:"window"`
+	ScopedHopDepth     []HopDepthBucket           `json:"scopedHopDepth"`
+	UnscopedHopDepth   []HopDepthBucket           `json:"unscopedHopDepth"`
+	UnscopedByRepeater []RepeaterUnscopedHopDepth `json:"unscopedByRepeater"`
+	TimeSeries         []HopDepthTimePoint        `json:"timeSeries"`
+}
+
+// HopDepthTimePoint is one time bucket's scoped/unscoped median hop depth
+// -- same time-series shape as ScopeTimePoint, but tracking flood-
+// propagation depth instead of raw scoped/unscoped transmission counts.
+// Same bucketing as ScopeStatsResponse.TimeSeries (5min/1h/6h for
+// 1h/24h/7d windows). Pointers, not plain ints: 0 is a valid median hop,
+// so "no scoped (or unscoped) traffic in this bucket" has to be
+// distinguishable from "median is 0" rather than silently defaulting to
+// zero and implying containment that isn't really there.
+type HopDepthTimePoint struct {
+	T                 string `json:"t"`
+	ScopedMedianHop   *int   `json:"scopedMedianHop,omitempty"`
+	UnscopedMedianHop *int   `json:"unscopedMedianHop,omitempty"`
+}
+
 // ─── Analytics — RF ────────────────────────────────────────────────────────────
 
 type PayloadTypeSignal struct {
@@ -894,19 +1278,6 @@ type ChannelListResponse struct {
 	Channels []map[string]interface{} `json:"channels"`
 }
 
-type ChannelMessageResp struct {
-	Sender          string      `json:"sender"`
-	Text            string      `json:"text"`
-	Timestamp       string      `json:"timestamp"`
-	SenderTimestamp interface{} `json:"sender_timestamp"`
-	PacketID        int64       `json:"packetId"`
-	PacketHash      string      `json:"packetHash"`
-	Repeats         int         `json:"repeats"`
-	Observers       []string    `json:"observers"`
-	Hops            int         `json:"hops"`
-	SNR             interface{} `json:"snr"`
-}
-
 type ChannelMessagesResponse struct {
 	Messages []map[string]interface{} `json:"messages"`
 	Total    int                      `json:"total"`
@@ -1044,6 +1415,11 @@ type ClientConfigResponse struct {
 	MapDarkTileProvider string                 `json:"mapDarkTileProvider,omitempty"` // deprecated. TODO: remove after v3.5.0
 	Customizer          CustomizerClientConfig `json:"customizer"`
 	ClientRxCoverage    bool                   `json:"clientRxCoverage"`
+	// GeoFilter is the configured geo_filter box/polygon (#730), exposed
+	// for client-side domestic/foreign classification — see
+	// nodePassesGeoFilter (public/app.js) and geo_filter.go. Omitted when
+	// no geo_filter is configured.
+	GeoFilter *GeoFilterConfig `json:"geoFilter,omitempty"`
 }
 
 // CustomizerClientConfig is the operator-side customizer-modal knobs that

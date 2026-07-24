@@ -23,6 +23,7 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/meshcore-analyzer/regions"
 )
 
 func main() {
@@ -104,6 +105,13 @@ func main() {
 	regionKeys := loadRegionKeys(cfg)
 	store.BackfillDefaultScopeAsync(regionKeys)
 
+	// hashChannels/hashRegions additions in config.json otherwise require a
+	// full restart to take effect — SIGHUP reloads just these two derived
+	// key sets in place. See hot_reload.go.
+	keys := newHotKeys(channelKeys, regionKeys)
+	stopSIGHUPReload := startSIGHUPReload(keys, *configPath)
+	defer stopSIGHUPReload()
+
 	// Subscribe-early + buffer (#1608): the MQTT subscription is brought up
 	// before startup maintenance so no packets are missed while the single
 	// SQLite writer is blocked (e.g. a large CREATE INDEX migration). Received
@@ -180,7 +188,7 @@ func main() {
 			markReceiptForTag(tag, time.Now())
 			status.MarkPacket(time.Now())
 			ingestBuffer.Submit(func() {
-				handleMessage(store, tag, src, m, channelKeys, regionKeys, cfg)
+				handleMessage(store, tag, src, m, keys.Channels(), keys.Regions(), cfg)
 			})
 		})
 
@@ -1431,13 +1439,10 @@ func loadChannelKeys(cfg *Config, configPath string) map[string]string {
 func loadRegionKeys(cfg *Config) map[string][]byte {
 	keys := make(map[string][]byte)
 	for _, raw := range cfg.HashRegions {
-		name := strings.TrimSpace(raw)
-		if name == "" {
+		name, ok := regions.Normalize(raw)
+		if !ok {
 			log.Printf("[regions] skipping empty hashRegions entry")
 			continue
-		}
-		if !strings.HasPrefix(name, "#") {
-			name = "#" + name
 		}
 		if _, exists := keys[name]; exists {
 			log.Printf("[regions] duplicate region %q ignored", name)
@@ -1454,10 +1459,24 @@ func loadRegionKeys(cfg *Config) map[string][]byte {
 
 // matchScope performs one HMAC-SHA256 per configured region. Expected
 // len(regionKeys) ≤ 50; beyond that, consider a pre-indexed lookup table.
+//
+// code1 is only 16 bits (65534 usable values after the 0x0000/0xFFFF
+// remap), so with enough configured regions a *different*, unrelated
+// region's HMAC can coincidentally also produce the packet's real code1
+// (birthday-paradox collision — expected rate ≈ len(regionKeys)/65534
+// per packet). Silently returning the first map-iteration match would
+// make the guess a coin flip between the true region and the collider,
+// and Go's randomized map order means the same ambiguous packet could
+// even resolve differently across ingestor restarts. Instead we scan
+// every region and only return a name when exactly one matches; two or
+// more matches means the code1 doesn't uniquely identify a region for
+// this payload, so we report unknown-scoped ("") rather than guess.
 func matchScope(regionKeys map[string][]byte, payloadType byte, payloadRaw []byte, code1 string) string {
 	if code1 == "0000" || len(regionKeys) == 0 || len(payloadRaw) == 0 {
 		return ""
 	}
+	var match string
+	matchCount := 0
 	for name, key := range regionKeys {
 		mac := hmac.New(sha256.New, key)
 		mac.Write([]byte{payloadType})
@@ -1471,10 +1490,15 @@ func matchScope(regionKeys map[string][]byte, payloadType byte, payloadRaw []byt
 		}
 		codeBytes := [2]byte{byte(code & 0xFF), byte(code >> 8)}
 		if strings.ToUpper(hex.EncodeToString(codeBytes[:])) == code1 {
-			return name
+			match = name
+			matchCount++
 		}
 	}
-	return ""
+	if matchCount > 1 {
+		log.Printf("[regions] ambiguous scope match for code1=%s: %d regions collide (including %q) — reporting unknown-scoped instead of guessing", code1, matchCount, match)
+		return ""
+	}
+	return match
 }
 
 // Version info (set via ldflags)

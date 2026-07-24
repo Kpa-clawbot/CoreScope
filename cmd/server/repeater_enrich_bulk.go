@@ -129,7 +129,19 @@ func (s *PacketStore) computeRepeaterRelayInfoMap(windowHours float64) map[strin
 				}
 			}
 		}
-		visit := func(txs []*StoreTx) {
+		// includeScope gates TransportedScopes accumulation: the 1-byte
+		// prefix-bucket fallback below folds in transmissions whose hop
+		// hash was NEVER resolved to this specific pubkey — MeshCore
+		// firmware (examples/simple_repeater/MyMesh.cpp allowPacketForward)
+		// only relays a TRANSPORT_FLOOD/DIRECT packet when the repeater's
+		// own locally configured region matches, so crediting a scope to a
+		// node based on nothing but a shared 1-byte hash prefix produces
+		// claims the protocol itself would never allow (e.g. a repeater
+		// hundreds of km away "transporting" a hyper-local town scope).
+		// RelayCount/LastRelayed/RelayActive keep the fallback — those are
+		// intentionally approximate "is this node active" signals, not a
+		// specific factual claim about which region it carried.
+		visit := func(txs []*StoreTx, includeScope bool) {
 			for _, tx := range txs {
 				if tx == nil {
 					continue
@@ -147,12 +159,12 @@ func (s *PacketStore) computeRepeaterRelayInfoMap(windowHours float64) map[strin
 				if p.pt == payloadTypeAdvert {
 					continue
 				}
-				// #1751: scope accumulation is intentionally NOT gated on
-				// p.ok (timestamp parseability) — a packet with an
-				// unparseable first_seen still proves the repeater
-				// transported that scope. RelayCount/LastRelayed below
-				// remain timestamp-gated.
-				if tx.ScopeName != "" {
+				// #1751 (tightened, see includeScope doc above): scope
+				// accumulation is intentionally NOT gated on p.ok
+				// (timestamp parseability) — a packet with an unparseable
+				// first_seen still proves the repeater transported that
+				// scope, as long as the hop resolved unambiguously to it.
+				if includeScope && tx.ScopeName != "" {
 					if scopeSet == nil {
 						scopeSet = map[string]struct{}{}
 					}
@@ -180,11 +192,11 @@ func (s *PacketStore) computeRepeaterRelayInfoMap(windowHours float64) map[strin
 				}
 			}
 		}
-		visit(list)
+		visit(list, true)
 		if seen != nil {
 			prefix := key[:2]
 			if prefix != key {
-				visit(snap[prefix])
+				visit(snap[prefix], false)
 			}
 		}
 		info.TransportedScopes = sortedCappedScopes(scopeSet)

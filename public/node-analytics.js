@@ -125,6 +125,15 @@
             <canvas id="hopChart" role="img" aria-label="Hop distribution chart"></canvas>
           </div>
           <div class="analytics-chart-card full">
+            <h4>Relay Hop-Count <span style="font-weight:normal;font-size:11px;color:var(--text-muted)">(tuning flood.max)</span></h4>
+            <div class="analytics-chart-desc">Hop count <em>at this node</em> when it relayed each packet — the value MeshCore firmware compares against <code>flood.max</code>/<code>flood.max.advert</code>/<code>flood.max.unscoped</code> before forwarding. Not the same as Hop Distribution above, which measures distance to the observer instead.</div>
+            <div id="hopAnalyticsChips" class="analytics-time-range" style="margin-bottom:8px"></div>
+            <div id="hopAnalyticsSummary" style="font-size:11px;color:var(--text-muted);margin-bottom:6px"></div>
+            <canvas id="hopAnalyticsBoxplot" role="img" aria-label="Hop count boxplot" style="max-height:60px;margin-bottom:4px"></canvas>
+            <canvas id="hopAnalyticsHistogram" role="img" aria-label="Hop count histogram"></canvas>
+            <div id="hopAnalyticsEmpty" style="display:none;padding:20px;text-align:center;color:var(--text-muted);font-size:12px">No relayed traffic with a resolvable path through this node in this window.</div>
+          </div>
+          <div class="analytics-chart-card full">
             <h4>Battery Voltage <span id="batteryStatusBadge" style="font-size:11px;font-weight:normal;margin-left:8px"></span></h4>
             <div class="analytics-chart-desc">Battery voltage over time from observer status reports — flat line means full, downward slope means draining</div>
             <canvas id="batteryChart" role="img" aria-label="Battery voltage trend chart"></canvas>
@@ -166,6 +175,7 @@
     buildHopChart(data);
     buildHeatmap(data);
     loadBatteryChart(pubkey, currentDays);
+    loadHopAnalyticsChart(pubkey, currentDays);
   }
 
   function buildActivityChart(data) {
@@ -358,6 +368,176 @@
     charts.push(c);
   }
 
+  // ─── Relay Hop-Count (issue #1812) ────────────────────────────────────────
+  // Hop count HERE is the node's own 0-based index within a packet's
+  // resolved relay path (set server-side, GetNodeHopAnalytics) -- the value
+  // MeshCore firmware compares against flood_max/flood_max_advert/
+  // flood_max_unscoped before forwarding. Distinct from the Hop
+  // Distribution chart above, which is path length to the reporting
+  // observer, a different and unrelated number.
+  const HOP_TRANSPORT_CHIPS = [
+    { key: 'flood', label: 'Flood' },
+    { key: 'flood_advert', label: 'Flood Adverts' },
+    { key: 'flood_unscoped', label: 'Flood Unscoped' },
+    { key: 'direct', label: 'Direct' },
+  ];
+  let hopAnalyticsPackets = [];
+  let hopAnalyticsFilter = 'flood';
+  let hopAnalyticsHistChart = null;
+
+  async function loadHopAnalyticsChart(pubkey, days) {
+    hopAnalyticsFilter = 'flood';
+    try {
+      const data = await api('/nodes/' + encodeURIComponent(pubkey) + '/hop_analytics?days=' + days);
+      hopAnalyticsPackets = (data && data.packets) || [];
+    } catch (e) {
+      hopAnalyticsPackets = [];
+      const empty = document.getElementById('hopAnalyticsEmpty');
+      if (empty) { empty.style.display = 'block'; empty.textContent = 'Hop-count data unavailable: ' + e.message; }
+      return;
+    }
+    renderHopAnalyticsChips();
+    renderHopAnalyticsChart();
+  }
+
+  function renderHopAnalyticsChips() {
+    const container = document.getElementById('hopAnalyticsChips');
+    if (!container) return;
+    container.innerHTML = HOP_TRANSPORT_CHIPS.map(c =>
+      '<button data-hop-transport="' + c.key + '"' + (hopAnalyticsFilter === c.key ? ' class="active"' : '') + '>' + c.label + '</button>'
+    ).join('');
+    container.querySelectorAll('[data-hop-transport]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        hopAnalyticsFilter = btn.dataset.hopTransport;
+        renderHopAnalyticsChips();
+        renderHopAnalyticsChart();
+      });
+    });
+  }
+
+  // Linear-interpolation percentile (same convention as numpy's default) —
+  // `sorted` must already be ascending.
+  function hopQuantile(sortedVals, p) {
+    const idx = p * (sortedVals.length - 1);
+    const lo = Math.floor(idx), hi = Math.ceil(idx);
+    if (lo === hi) return sortedVals[lo];
+    return sortedVals[lo] + (sortedVals[hi] - sortedVals[lo]) * (idx - lo);
+  }
+
+  function renderHopAnalyticsChart() {
+    const empty = document.getElementById('hopAnalyticsEmpty');
+    const boxCanvas = document.getElementById('hopAnalyticsBoxplot');
+    const histCanvas = document.getElementById('hopAnalyticsHistogram');
+    const summary = document.getElementById('hopAnalyticsSummary');
+    if (hopAnalyticsHistChart) { try { hopAnalyticsHistChart.destroy(); } catch (e) {} hopAnalyticsHistChart = null; }
+
+    const filtered = hopAnalyticsPackets.filter(p => p.transport === hopAnalyticsFilter);
+    if (filtered.length === 0) {
+      if (boxCanvas) boxCanvas.style.display = 'none';
+      if (histCanvas) histCanvas.style.display = 'none';
+      if (summary) summary.textContent = '';
+      if (empty) empty.style.display = 'block';
+      return;
+    }
+    if (empty) empty.style.display = 'none';
+    if (boxCanvas) boxCanvas.style.display = '';
+    if (histCanvas) histCanvas.style.display = '';
+
+    const hopsSorted = filtered.map(p => p.hops).sort((a, b) => a - b);
+    const q = {
+      min: hopsSorted[0],
+      q1: hopQuantile(hopsSorted, 0.25),
+      median: hopQuantile(hopsSorted, 0.5),
+      q3: hopQuantile(hopsSorted, 0.75),
+      max: hopsSorted[hopsSorted.length - 1],
+    };
+
+    if (summary) {
+      summary.textContent = filtered.length.toLocaleString() + ' packets — min ' + q.min +
+        ', Q1 ' + q.q1.toFixed(1) + ', median ' + q.median.toFixed(1) +
+        ', Q3 ' + q.q3.toFixed(1) + ', max ' + q.max;
+    }
+
+    drawHopBoxplot(boxCanvas, q, q.max);
+
+    const buckets = new Array(q.max + 1).fill(0);
+    hopsSorted.forEach(h => buckets[h]++);
+    hopAnalyticsHistChart = new Chart(histCanvas, {
+      type: 'bar',
+      data: {
+        labels: buckets.map((_, i) => String(i)),
+        datasets: [{ label: 'Packets', data: buckets, backgroundColor: 'rgba(74,158,255,0.5)', borderColor: '#4a9eff', borderWidth: 1 }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { title: { display: true, text: 'Hop count at this node' } },
+          y: { beginAtZero: true, title: { display: true, text: 'Packets' } }
+        }
+      }
+    });
+    charts.push(hopAnalyticsHistChart);
+  }
+
+  // Hand-drawn boxplot — Chart.js has no built-in boxplot type and this
+  // project doesn't load a boxplot plugin. Draws horizontal box+whiskers
+  // over [0, maxHops], positioned directly above the histogram with a
+  // best-effort matching left padding so the two roughly share an x-axis
+  // (exact pixel alignment with Chart.js's own computed padding isn't
+  // attempted — close enough to read visually).
+  function drawHopBoxplot(canvas, q, maxHops) {
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssWidth = (canvas.parentElement && canvas.parentElement.clientWidth) || 300;
+    const cssHeight = 50;
+    canvas.style.width = cssWidth + 'px';
+    canvas.style.height = cssHeight + 'px';
+    canvas.width = cssWidth * dpr;
+    canvas.height = cssHeight * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+    const style = getComputedStyle(document.documentElement);
+    const lineColor = style.getPropertyValue('--text').trim() || '#333';
+
+    const padLeft = 36, padRight = 12;
+    const plotW = Math.max(10, cssWidth - padLeft - padRight);
+    const domainMax = Math.max(1, maxHops);
+    const xFor = v => padLeft + (v / domainMax) * plotW;
+
+    const midY = cssHeight / 2;
+    const boxH = 20;
+
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(xFor(q.min), midY);
+    ctx.lineTo(xFor(q.q1), midY);
+    ctx.moveTo(xFor(q.q3), midY);
+    ctx.lineTo(xFor(q.max), midY);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(xFor(q.min), midY - boxH / 4); ctx.lineTo(xFor(q.min), midY + boxH / 4);
+    ctx.moveTo(xFor(q.max), midY - boxH / 4); ctx.lineTo(xFor(q.max), midY + boxH / 4);
+    ctx.stroke();
+
+    ctx.fillStyle = 'rgba(74,158,255,0.35)';
+    ctx.strokeStyle = '#4a9eff';
+    ctx.lineWidth = 1.5;
+    const boxX = xFor(q.q1), boxW = Math.max(1, xFor(q.q3) - xFor(q.q1));
+    ctx.fillRect(boxX, midY - boxH / 2, boxW, boxH);
+    ctx.strokeRect(boxX, midY - boxH / 2, boxW, boxH);
+
+    ctx.beginPath();
+    ctx.moveTo(xFor(q.median), midY - boxH / 2);
+    ctx.lineTo(xFor(q.median), midY + boxH / 2);
+    ctx.strokeStyle = '#4a9eff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
   function init(container, routeParam) {
     // routeParam is "PUBKEY/analytics"
     if (!routeParam || !routeParam.endsWith('/analytics')) {
@@ -371,6 +551,16 @@
   function destroy() {
     destroyCharts();
     currentPubkey = null;
+  }
+
+  // Expose for testing
+  if (typeof window !== 'undefined') {
+    window._nodeAnalyticsHopQuantile = hopQuantile;
+    window._nodeAnalyticsLoadHopChart = loadHopAnalyticsChart;
+    window._nodeAnalyticsGetHopFilter = function() { return hopAnalyticsFilter; };
+    window._nodeAnalyticsSetHopFilter = function(v) { hopAnalyticsFilter = v; };
+    window._nodeAnalyticsRenderHopChart = renderHopAnalyticsChart;
+    window._nodeAnalyticsGetHopPackets = function() { return hopAnalyticsPackets; };
   }
 
   registerPage('node-analytics', { init, destroy });

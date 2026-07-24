@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -33,6 +34,7 @@ func setupTestServer(t *testing.T) (*Server, *mux.Router) {
 	if !store.WaitIndexesReady(5 * time.Second) {
 		t.Fatalf("background indexes never became ready")
 	}
+	store.config = cfg // mirrors main.go's real wiring -- store.resolveEntryPointArea/resolveAreaNodes need it
 	srv.store = store
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
@@ -54,6 +56,7 @@ func setupTestServerWithAPIKey(t *testing.T, apiKey string) (*Server, *mux.Route
 	if !store.WaitIndexesReady(5 * time.Second) {
 		t.Fatalf("background indexes never became ready")
 	}
+	store.config = cfg
 	srv.store = store
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
@@ -4243,6 +4246,653 @@ func TestHandleScopeStats(t *testing.T) {
 	}
 	if resp.TimeSeries == nil {
 		t.Error("timeSeries is nil")
+	}
+	// All 6 seed rows above are payload_type=5 (channel messages) — same
+	// fixture, so ChannelMessages should mirror Summary exactly here.
+	if resp.ChannelMessages == nil {
+		t.Fatal("channelMessages is nil")
+	}
+	if resp.ChannelMessages.TotalMessages != 6 {
+		t.Errorf("channelMessages.totalMessages = %d, want 6", resp.ChannelMessages.TotalMessages)
+	}
+	if resp.ChannelMessages.Scoped != 3 {
+		t.Errorf("channelMessages.scoped = %d, want 3", resp.ChannelMessages.Scoped)
+	}
+	if resp.ChannelMessages.Unscoped != 3 {
+		t.Errorf("channelMessages.unscoped = %d, want 3", resp.ChannelMessages.Unscoped)
+	}
+	if resp.ChannelMessages.UnknownScope != 1 {
+		t.Errorf("channelMessages.unknownScope = %d, want 1", resp.ChannelMessages.UnknownScope)
+	}
+}
+
+// TestHandleScopeStats_HourlyActivityByRegion verifies the hour-of-day
+// bucketing: counts must land in the bucket matching first_seen's actual
+// hour-of-day (UTC), grouped separately per region.
+func TestHandleScopeStats_HourlyActivityByRegion(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+		t.Fatalf("add scope_name column: %v", err)
+	}
+	srv.db.hasScopeName = true
+	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
+		t.Fatalf("clear transmissions: %v", err)
+	}
+
+	t1 := time.Now().UTC().Add(-2 * time.Hour)
+	t2 := time.Now().UTC().Add(-1 * time.Hour)
+	hour1, hour2 := t1.Hour(), t2.Hour()
+
+	rows := []struct {
+		hash  string
+		scope string
+		ts    time.Time
+	}{
+		{"h1", "#belgium", t1},
+		{"h2", "#belgium", t1},
+		{"h3", "#belgium", t2},
+		{"h4", "#france", t1},
+	}
+	for _, r := range rows {
+		if _, err := srv.db.conn.Exec(
+			`INSERT INTO transmissions (raw_hex,hash,first_seen,route_type,payload_type,scope_name) VALUES (?,?,?,0,5,?)`,
+			"aa", r.hash, r.ts.Format(time.RFC3339), r.scope,
+		); err != nil {
+			t.Fatalf("seed row %s: %v", r.hash, err)
+		}
+	}
+
+	req := httptest.NewRequest("GET", "/api/scope-stats?window=24h", nil)
+	w := httptest.NewRecorder()
+	srv.handleScopeStats(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	var resp ScopeStatsResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	var belgium, france *ScopeHourlyActivity
+	for i := range resp.HourlyActivityByRegion {
+		switch resp.HourlyActivityByRegion[i].Region {
+		case "#belgium":
+			belgium = &resp.HourlyActivityByRegion[i]
+		case "#france":
+			france = &resp.HourlyActivityByRegion[i]
+		}
+	}
+	if belgium == nil || france == nil {
+		t.Fatalf("hourlyActivityByRegion missing entries: %+v", resp.HourlyActivityByRegion)
+	}
+	if hour1 == hour2 {
+		// Edge case: test ran within a few minutes of an hour rollover, so
+		// t1 and t2 collapsed into the same hour-of-day bucket.
+		if belgium.Hours[hour1] != 3 {
+			t.Errorf("belgium.Hours[%d] = %d, want 3 (hour1==hour2 collapse case)", hour1, belgium.Hours[hour1])
+		}
+	} else {
+		if belgium.Hours[hour1] != 2 {
+			t.Errorf("belgium.Hours[%d] = %d, want 2", hour1, belgium.Hours[hour1])
+		}
+		if belgium.Hours[hour2] != 1 {
+			t.Errorf("belgium.Hours[%d] = %d, want 1", hour2, belgium.Hours[hour2])
+		}
+	}
+	if france.Hours[hour1] != 1 {
+		t.Errorf("france.Hours[%d] = %d, want 1", hour1, france.Hours[hour1])
+	}
+}
+
+// TestHandleScopeStats_ChannelScopeAdoption verifies the per-channel
+// breakdown: two channels with different scoped/unscoped mixes must be
+// reported separately, ordered by total message volume.
+func TestHandleScopeStats_ChannelScopeAdoption(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+		t.Fatalf("add scope_name column: %v", err)
+	}
+	srv.db.hasScopeName = true
+	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
+		t.Fatalf("clear transmissions: %v", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	rows := []struct {
+		hash    string
+		channel string
+		route   int
+		scope   string
+	}{
+		// #test: 2 scoped, 1 unscoped (plain FLOOD) — 3 total
+		{"h1", "#test", 0, "#belgium"},
+		{"h2", "#test", 0, "#belgium"},
+		{"h3", "#test", 1, ""},
+		// #wardriving: 1 message, never scoped — 1 total
+		{"h4", "#wardriving", 1, ""},
+	}
+	for _, r := range rows {
+		if _, err := srv.db.conn.Exec(
+			`INSERT INTO transmissions (raw_hex,hash,first_seen,route_type,payload_type,channel_hash,scope_name) VALUES (?,?,?,?,5,?,?)`,
+			"aa", r.hash, now, r.route, r.channel, r.scope,
+		); err != nil {
+			t.Fatalf("seed row %s: %v", r.hash, err)
+		}
+	}
+
+	req := httptest.NewRequest("GET", "/api/scope-stats?window=24h", nil)
+	w := httptest.NewRecorder()
+	srv.handleScopeStats(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	var resp ScopeStatsResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.ChannelScopeAdoption) != 2 {
+		t.Fatalf("channelScopeAdoption = %+v, want 2 entries", resp.ChannelScopeAdoption)
+	}
+	// Ordered by total volume DESC: #test (3) before #wardriving (1).
+	test := resp.ChannelScopeAdoption[0]
+	if test.Channel != "#test" || test.TotalMessages != 3 || test.Scoped != 2 || test.Unscoped != 1 {
+		t.Errorf("channelScopeAdoption[0] = %+v, want {#test total=3 scoped=2 unscoped=1}", test)
+	}
+	if len(test.Regions) != 1 || test.Regions[0] != "#belgium" {
+		t.Errorf("channelScopeAdoption[0].Regions = %+v, want [#belgium]", test.Regions)
+	}
+	wardriving := resp.ChannelScopeAdoption[1]
+	if wardriving.Channel != "#wardriving" || wardriving.TotalMessages != 1 || wardriving.Scoped != 0 || wardriving.Unscoped != 1 {
+		t.Errorf("channelScopeAdoption[1] = %+v, want {#wardriving total=1 scoped=0 unscoped=1}", wardriving)
+	}
+	if len(wardriving.Regions) != 0 {
+		t.Errorf("channelScopeAdoption[1].Regions = %+v, want none — #wardriving has no scoped messages", wardriving.Regions)
+	}
+}
+
+// TestHandleScopeStats_ChannelScopeAdoption_RegionsOrderedByUsage verifies
+// the Regions field on each channel: which distinct scope_name values its
+// scoped messages actually carry, most-used first — a channel with mixed
+// region traffic (a shared/public channel spanning several hashRegions
+// areas) must list every region it's seen, not just the top one.
+func TestHandleScopeStats_ChannelScopeAdoption_RegionsOrderedByUsage(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+		t.Fatalf("add scope_name column: %v", err)
+	}
+	srv.db.hasScopeName = true
+	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
+		t.Fatalf("clear transmissions: %v", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	rows := []struct {
+		hash, channel, scope string
+	}{
+		// #public: 3x #dk, 2x #dk-oj, 1x #se — #dk must sort first.
+		{"h1", "#public", "#dk"}, {"h2", "#public", "#dk"}, {"h3", "#public", "#dk"},
+		{"h4", "#public", "#dk-oj"}, {"h5", "#public", "#dk-oj"},
+		{"h6", "#public", "#se"},
+	}
+	for _, r := range rows {
+		if _, err := srv.db.conn.Exec(
+			`INSERT INTO transmissions (raw_hex,hash,first_seen,route_type,payload_type,channel_hash,scope_name) VALUES (?,?,?,0,5,?,?)`,
+			"aa", r.hash, now, r.channel, r.scope,
+		); err != nil {
+			t.Fatalf("seed row %s: %v", r.hash, err)
+		}
+	}
+
+	req := httptest.NewRequest("GET", "/api/scope-stats?window=24h", nil)
+	w := httptest.NewRecorder()
+	srv.handleScopeStats(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	var resp ScopeStatsResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.ChannelScopeAdoption) != 1 {
+		t.Fatalf("channelScopeAdoption = %+v, want 1 entry", resp.ChannelScopeAdoption)
+	}
+	got := resp.ChannelScopeAdoption[0].Regions
+	want := []string{"#dk", "#dk-oj", "#se"}
+	if len(got) != len(want) {
+		t.Fatalf("Regions = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Regions[%d] = %q, want %q (most-used-first order) — full: %+v", i, got[i], want[i], got)
+		}
+	}
+}
+
+// TestHandleScopeStats_ChannelScopeAdoption_Uncapped verifies the endpoint
+// returns every distinct channel seen in the window, not just a top-N
+// subset — the handler used to LIMIT 30, which silently hid the encrypted/
+// unencrypted filter's less-active channels from the Scopes tab UI.
+func TestHandleScopeStats_ChannelScopeAdoption_Uncapped(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+		t.Fatalf("add scope_name column: %v", err)
+	}
+	srv.db.hasScopeName = true
+	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
+		t.Fatalf("clear transmissions: %v", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	const channelCount = 35
+	for i := 0; i < channelCount; i++ {
+		channel := fmt.Sprintf("#chan%d", i)
+		if _, err := srv.db.conn.Exec(
+			`INSERT INTO transmissions (raw_hex,hash,first_seen,route_type,payload_type,channel_hash,scope_name) VALUES (?,?,?,?,5,?,?)`,
+			"aa", fmt.Sprintf("h%d", i), now, 1, channel, "",
+		); err != nil {
+			t.Fatalf("seed row %d: %v", i, err)
+		}
+	}
+
+	req := httptest.NewRequest("GET", "/api/scope-stats?window=24h", nil)
+	w := httptest.NewRecorder()
+	srv.handleScopeStats(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	var resp ScopeStatsResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.ChannelScopeAdoption) != channelCount {
+		t.Fatalf("channelScopeAdoption has %d entries, want all %d (no cap)", len(resp.ChannelScopeAdoption), channelCount)
+	}
+}
+
+// TestHandleScopeStats_ChannelMessagesExcludesOtherPayloadTypes verifies the
+// payload_type=5 filter: a non-channel transmission (e.g. an ADVERT) with a
+// scope must not be counted in ChannelMessages even though it affects the
+// all-traffic Summary.
+func TestHandleScopeStats_ChannelMessagesExcludesOtherPayloadTypes(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+		t.Fatalf("add scope_name column: %v", err)
+	}
+	srv.db.hasScopeName = true
+	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
+		t.Fatalf("clear transmissions: %v", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := srv.db.conn.Exec(
+		`INSERT INTO transmissions (raw_hex,hash,first_seen,route_type,payload_type,scope_name) VALUES (?,?,?,?,?,?)`,
+		"aa", "chan1", now, 0, 5, "#belgium",
+	); err != nil {
+		t.Fatalf("seed channel row: %v", err)
+	}
+	if _, err := srv.db.conn.Exec(
+		`INSERT INTO transmissions (raw_hex,hash,first_seen,route_type,payload_type,scope_name) VALUES (?,?,?,?,?,?)`,
+		"bb", "advert1", now, 0, 4, "#belgium",
+	); err != nil {
+		t.Fatalf("seed advert row: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/scope-stats?window=24h", nil)
+	w := httptest.NewRecorder()
+	srv.handleScopeStats(w, req)
+
+	var resp ScopeStatsResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Summary.Scoped != 2 {
+		t.Errorf("Summary.Scoped = %d, want 2 (both rows)", resp.Summary.Scoped)
+	}
+	if resp.ChannelMessages == nil || resp.ChannelMessages.TotalMessages != 1 || resp.ChannelMessages.Scoped != 1 {
+		t.Errorf("channelMessages = %+v, want totalMessages=1 scoped=1 (advert excluded)", resp.ChannelMessages)
+	}
+}
+
+// TestHandleScopeStats_UnusedRegions verifies the region-utilization diff:
+// configured hashRegions that never matched a transmission are reported so
+// an operator can see how much of their region list is dead weight.
+func TestHandleScopeStats_UnusedRegions(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+		t.Fatalf("add scope_name column: %v", err)
+	}
+	srv.db.hasScopeName = true
+
+	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
+		t.Fatalf("clear transmissions: %v", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := srv.db.conn.Exec(
+		`INSERT INTO transmissions (raw_hex,hash,first_seen,route_type,payload_type,scope_name) VALUES (?,?,?,?,5,?)`,
+		"aa", "h1", now, 0, "#belgium",
+	); err != nil {
+		t.Fatalf("seed row: %v", err)
+	}
+
+	// "noHashPrefix" should be normalized to "#noHashPrefix" — same rule
+	// the ingestor applies when deriving HMAC keys (loadRegionKeys).
+	srv.cfg.HashRegions = []string{"#belgium", "#unused-region", "noHashPrefix", "#belgium"}
+
+	req := httptest.NewRequest("GET", "/api/scope-stats?window=24h", nil)
+	w := httptest.NewRecorder()
+	srv.handleScopeStats(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	var resp ScopeStatsResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.ConfiguredRegions != 3 { // dedup collapses the duplicate "#belgium"
+		t.Errorf("configuredRegions = %d, want 3", resp.ConfiguredRegions)
+	}
+	want := []string{"#noHashPrefix", "#unused-region"}
+	if len(resp.UnusedRegions) != len(want) {
+		t.Fatalf("unusedRegions = %v, want %v", resp.UnusedRegions, want)
+	}
+	for i, name := range want {
+		if resp.UnusedRegions[i] != name {
+			t.Errorf("unusedRegions[%d] = %q, want %q", i, resp.UnusedRegions[i], name)
+		}
+	}
+}
+
+// TestHandleScopeStats_RepeatersByRegion verifies the "which repeaters
+// transported this region" breakdown, sourced from the same bulk relay-info
+// cache the Nodes page uses (GetRepeaterRelayInfoMap / TransportedScopes,
+// #1751) and cross-referenced against nodes.name for display.
+func TestHandleScopeStats_RepeatersByRegion(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+		t.Fatalf("add scope_name column: %v", err)
+	}
+	srv.db.hasScopeName = true
+
+	if _, err := srv.db.conn.Exec(
+		`INSERT INTO nodes (public_key, name, role) VALUES ('aabbccdd0011', 'TestRepeater1', 'repeater')`,
+	); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	pt5 := 5 // GRP_TXT — non-advert, so it counts toward TransportedScopes
+	tx := &StoreTx{
+		ID:          1,
+		Hash:        "txhash1",
+		FirstSeen:   time.Now().UTC().Add(-5 * time.Minute).Format(time.RFC3339Nano),
+		PayloadType: &pt5,
+		ScopeName:   "#belgium",
+	}
+	// #1751 follow-up regression: byPathHop also indexes short hex-prefix
+	// "bucket" keys (ambiguous-hop resolution fallback) alongside full
+	// pubkeys — "aabb" here mimics that. It must NOT be surfaced as a
+	// distinct "repeater" since it never matches a real nodes.public_key.
+	bucketTx := &StoreTx{
+		ID:          2,
+		Hash:        "txhash2",
+		FirstSeen:   time.Now().UTC().Add(-5 * time.Minute).Format(time.RFC3339Nano),
+		PayloadType: &pt5,
+		ScopeName:   "#belgium",
+	}
+	srv.store = &PacketStore{
+		byPathHop: map[string][]*StoreTx{
+			"aabbccdd0011": {tx},
+			"aabb":         {bucketTx},
+		},
+	}
+
+	req := httptest.NewRequest("GET", "/api/scope-stats?window=24h", nil)
+	w := httptest.NewRecorder()
+	srv.handleScopeStats(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	var resp ScopeStatsResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.RepeatersByRegion) != 1 {
+		t.Fatalf("repeatersByRegion = %v, want 1 entry", resp.RepeatersByRegion)
+	}
+	rbr := resp.RepeatersByRegion[0]
+	if rbr.Region != "#belgium" || rbr.Count != 1 {
+		t.Errorf("repeatersByRegion[0] = %+v, want region=#belgium count=1", rbr)
+	}
+	if len(rbr.Repeaters) != 1 || rbr.Repeaters[0].Name != "TestRepeater1" || rbr.Repeaters[0].PublicKey != "aabbccdd0011" {
+		t.Errorf("repeaters = %+v, want [{TestRepeater1 aabbccdd0011}]", rbr.Repeaters)
+	}
+}
+
+// TestHandleScopeStats_BridgeRepeaters verifies the RepeatersByRegion
+// inversion: a repeater that relayed traffic for TWO distinct regions must
+// appear in BridgeRepeaters with both region names, while a repeater that
+// only ever relayed one region must be excluded.
+func TestHandleScopeStats_BridgeRepeaters(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+		t.Fatalf("add scope_name column: %v", err)
+	}
+	srv.db.hasScopeName = true
+
+	if _, err := srv.db.conn.Exec(
+		`INSERT INTO nodes (public_key, name, role) VALUES ('bbbbccdd0011', 'BridgeNode', 'repeater')`,
+	); err != nil {
+		t.Fatalf("seed bridge node: %v", err)
+	}
+	if _, err := srv.db.conn.Exec(
+		`INSERT INTO nodes (public_key, name, role) VALUES ('ccccccdd0011', 'SingleRegionNode', 'repeater')`,
+	); err != nil {
+		t.Fatalf("seed single-region node: %v", err)
+	}
+
+	pt5 := 5
+	txBelgium := &StoreTx{ID: 1, Hash: "tx1", FirstSeen: time.Now().UTC().Add(-5 * time.Minute).Format(time.RFC3339Nano), PayloadType: &pt5, ScopeName: "#belgium"}
+	txFrance := &StoreTx{ID: 2, Hash: "tx2", FirstSeen: time.Now().UTC().Add(-5 * time.Minute).Format(time.RFC3339Nano), PayloadType: &pt5, ScopeName: "#france"}
+	txBelgium2 := &StoreTx{ID: 3, Hash: "tx3", FirstSeen: time.Now().UTC().Add(-5 * time.Minute).Format(time.RFC3339Nano), PayloadType: &pt5, ScopeName: "#belgium"}
+
+	srv.store = &PacketStore{
+		byPathHop: map[string][]*StoreTx{
+			"bbbbccdd0011": {txBelgium, txFrance}, // relayed BOTH regions — a bridge
+			"ccccccdd0011": {txBelgium2},          // relayed only #belgium — not a bridge
+		},
+	}
+
+	req := httptest.NewRequest("GET", "/api/scope-stats?window=24h", nil)
+	w := httptest.NewRecorder()
+	srv.handleScopeStats(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	var resp ScopeStatsResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.BridgeRepeaters) != 1 {
+		t.Fatalf("bridgeRepeaters = %v, want 1 entry", resp.BridgeRepeaters)
+	}
+	br := resp.BridgeRepeaters[0]
+	if br.Name != "BridgeNode" || br.PublicKey != "bbbbccdd0011" || br.Count != 2 {
+		t.Errorf("bridgeRepeaters[0] = %+v, want {BridgeNode bbbbccdd0011 2 [...]}", br)
+	}
+	wantRegions := []string{"#belgium", "#france"}
+	if len(br.Regions) != len(wantRegions) {
+		t.Fatalf("bridgeRepeaters[0].Regions = %v, want %v", br.Regions, wantRegions)
+	}
+	for i, r := range wantRegions {
+		if br.Regions[i] != r {
+			t.Errorf("bridgeRepeaters[0].Regions[%d] = %q, want %q", i, br.Regions[i], r)
+		}
+	}
+	for _, b := range resp.BridgeRepeaters {
+		if b.PublicKey == "ccccccdd0011" {
+			t.Errorf("SingleRegionNode should not appear in bridgeRepeaters (only relayed 1 region)")
+		}
+	}
+}
+
+// TestHandleScopeStats_OriginatingNodesByRegion verifies the complementary
+// breakdown to RepeatersByRegion: nodes whose OWN default_scope (#899) is a
+// given region, i.e. nodes actually configured with/running that region
+// themselves, as distinct from repeaters merely relaying someone else's
+// scoped traffic.
+func TestHandleScopeStats_OriginatingNodesByRegion(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+		t.Fatalf("add scope_name column: %v", err)
+	}
+	srv.db.hasScopeName = true
+	if !srv.db.hasDefaultScope {
+		if _, err := srv.db.conn.Exec(`ALTER TABLE nodes ADD COLUMN default_scope TEXT DEFAULT NULL`); err != nil {
+			t.Fatalf("add default_scope column: %v", err)
+		}
+		srv.db.hasDefaultScope = true
+	}
+
+	if _, err := srv.db.conn.Exec(
+		`INSERT INTO nodes (public_key, name, role, default_scope) VALUES ('ddeeff001122', 'OriginNode1', 'repeater', '#belgium')`,
+	); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/scope-stats?window=24h", nil)
+	w := httptest.NewRecorder()
+	srv.handleScopeStats(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	var resp ScopeStatsResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.OriginatingNodesByRegion) != 1 {
+		t.Fatalf("originatingNodesByRegion = %v, want 1 entry", resp.OriginatingNodesByRegion)
+	}
+	onr := resp.OriginatingNodesByRegion[0]
+	if onr.Region != "#belgium" || onr.Count != 1 {
+		t.Errorf("originatingNodesByRegion[0] = %+v, want region=#belgium count=1", onr)
+	}
+	if len(onr.Repeaters) != 1 || onr.Repeaters[0].Name != "OriginNode1" || onr.Repeaters[0].PublicKey != "ddeeff001122" {
+		t.Errorf("nodes = %+v, want [{OriginNode1 ddeeff001122}]", onr.Repeaters)
+	}
+}
+
+func TestHandleScopeStats_ScopeAdoptionByArea(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+		t.Fatalf("add scope_name column: %v", err)
+	}
+	srv.db.hasScopeName = true
+	if !srv.db.hasDefaultScope {
+		if _, err := srv.db.conn.Exec(`ALTER TABLE nodes ADD COLUMN default_scope TEXT DEFAULT NULL`); err != nil {
+			t.Fatalf("add default_scope column: %v", err)
+		}
+		srv.db.hasDefaultScope = true
+	}
+	f := func(v float64) *float64 { return &v }
+	srv.cfg.Areas = map[string]AreaEntry{
+		"ODE": {Label: "Odense by", RegionScopes: []string{"dk-fyn-odense"}, LatMin: f(55.32), LatMax: f(55.45), LonMin: f(10.3), LonMax: f(10.5)},
+	}
+
+	insertNode := func(pk, defaultScope string, lat, lon float64) {
+		if _, err := srv.db.conn.Exec(
+			`INSERT INTO nodes (public_key, name, role, default_scope, lat, lon) VALUES (?, ?, 'repeater', ?, ?, ?)`,
+			pk, pk, defaultScope, lat, lon,
+		); err != nil {
+			t.Fatalf("seed node %s: %v", pk, err)
+		}
+	}
+	insertNode("odematch01", "#dk-fyn-odense", 55.4047, 10.3810)
+	insertNode("odewrong01", "#dk-aarhus", 55.40, 10.40)
+	insertNode("odenoscope1", "", 55.41, 10.41)
+
+	req := httptest.NewRequest("GET", "/api/scope-stats?window=24h", nil)
+	w := httptest.NewRecorder()
+	srv.handleScopeStats(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	var resp ScopeStatsResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.ScopeAdoptionByArea) != 1 {
+		t.Fatalf("scopeAdoptionByArea = %+v, want 1 entry (ODE)", resp.ScopeAdoptionByArea)
+	}
+	ode := resp.ScopeAdoptionByArea[0]
+	if ode.AreaKey != "ODE" || ode.TotalNodes != 3 || ode.NodesWithAnyScope != 2 || ode.NodesMatchingArea != 1 {
+		t.Errorf("ScopeAdoptionByArea[0] = %+v, want AreaKey=ODE TotalNodes=3 NodesWithAnyScope=2 NodesMatchingArea=1", ode)
+	}
+}
+
+// TestHandleScopeStats_ScopeAdoptionByArea_ZeroMatchKeyPresent is a
+// regression test: NodesMatchingArea must NOT have `omitempty`, or a
+// genuine 0 count (a real, meaningful value — "this area has a linked
+// region but nobody uses it") silently disappears from the raw JSON. The
+// frontend reads a.nodesMatchingArea directly and calls .toLocaleString()
+// on it — an absent key deserializes to `undefined` in JS, not 0, which
+// throws and breaks the whole Scopes tab render. Decodes into a raw map
+// (not the typed struct, which would hide this by defaulting to the zero
+// value regardless of whether the key was present).
+func TestHandleScopeStats_ScopeAdoptionByArea_ZeroMatchKeyPresent(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+		t.Fatalf("add scope_name column: %v", err)
+	}
+	srv.db.hasScopeName = true
+	if !srv.db.hasDefaultScope {
+		if _, err := srv.db.conn.Exec(`ALTER TABLE nodes ADD COLUMN default_scope TEXT DEFAULT NULL`); err != nil {
+			t.Fatalf("add default_scope column: %v", err)
+		}
+		srv.db.hasDefaultScope = true
+	}
+	f := func(v float64) *float64 { return &v }
+	srv.cfg.Areas = map[string]AreaEntry{
+		"AAR": {Label: "Aarhus by", RegionScopes: []string{"dk-aarhus"}, LatMin: f(56.05), LatMax: f(56.25), LonMin: f(9.95), LonMax: f(10.35)},
+	}
+	// A node with a scope, but NOT the area's own region — NodesMatchingArea
+	// must come out as a real, present 0, same as the live #dk-vs-#dk-aarhus
+	// case this feature was built to surface.
+	if _, err := srv.db.conn.Exec(
+		`INSERT INTO nodes (public_key, name, role, default_scope, lat, lon) VALUES ('aar00000001', 'AarhusNode', 'repeater', '#dk', 56.15, 10.15)`,
+	); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/scope-stats?window=24h", nil)
+	w := httptest.NewRecorder()
+	srv.handleScopeStats(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+
+	var raw map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	areas, ok := raw["scopeAdoptionByArea"].([]interface{})
+	if !ok || len(areas) != 1 {
+		t.Fatalf("scopeAdoptionByArea = %v, want 1 entry", raw["scopeAdoptionByArea"])
+	}
+	area := areas[0].(map[string]interface{})
+	val, present := area["nodesMatchingArea"]
+	if !present {
+		t.Fatal("nodesMatchingArea key is missing from the JSON entirely — omitempty regression, this crashes the frontend")
+	}
+	if val != float64(0) {
+		t.Errorf("nodesMatchingArea = %v, want 0", val)
 	}
 }
 

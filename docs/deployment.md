@@ -184,6 +184,27 @@ See `config.example.json` in the repository for all available options including:
 - Geo-filtering
 - Map tile providers (OSM, Stamen, Carto, etc.)
 
+### Reloading config changes without a restart (SIGHUP)
+
+Most `config.json` changes require a container restart to take effect. **`hashChannels`** and **`hashRegions`** are the exception — the ingestor can reload just these two settings live:
+
+```bash
+docker exec corescope kill -HUP $(docker exec corescope pgrep corescope-ingestor)
+```
+
+This re-reads `config.json` and derives fresh channel-decryption and region-scope keys in place — no restart, no dropped MQTT connections. The ingestor logs the result:
+
+```
+[hot-reload] SIGHUP received, reloading hashChannels/hashRegions from /app/config.json
+[hot-reload] reloaded 1415 channel key(s), 1098 region key(s) from /app/config.json
+```
+
+If the edited `config.json` is malformed, the reload is aborted and logged, and the ingestor keeps its previous, working keys rather than going dark.
+
+Why this matters more than it sounds: restarting the whole container to add a single hashtag channel or region also resets the in-memory relay/scope analytics (Analytics → Scopes tab — Repeaters by Region, Bridge Repeaters, etc.), which take real time to rebuild from live traffic after a cold start. SIGHUP lets you add a channel or region without paying that cost.
+
+Other `config.json` changes (MQTT sources, retention, branding, health thresholds, etc.) still require a full restart.
+
 ### Map Tile Providers
 
 Map tile providers are enabled and configured via the `config.json` file. You can provide your custom API credentials (e.g. `osm_url`, `stamen_api_key`, `mapbox_api_key`) to activate external tile services. Once configured on the server, users can select their preferred tile provider from the Customizer UI on the client, and their choice will be persisted automatically.

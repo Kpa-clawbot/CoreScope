@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -617,6 +618,252 @@ func TestGetTraces(t *testing.T) {
 	}
 	if len(traces) != 2 {
 		t.Errorf("expected 2 traces, got %d", len(traces))
+	}
+}
+
+// TestGetPacketPath covers the "View path" map data source: given a
+// packet hash, resolve every distinct station's OWN deepest observation
+// (not just the single farthest one overall) to a branch of
+// name/role/lat/lon per hop, plus that station's IATA-derived position.
+// Deliberately independent of seedTestData's fixtures.
+func TestGetPacketPath(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('obs1', 'Observer One', 'SJC')`)
+	db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('obs2', 'Observer Two', 'SFO')`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon) VALUES ('pkAlpha', 'RepeaterAlpha', 'repeater', 56.1, 10.2)`)
+	// pkBravo deliberately has NO nodes row -- exercises the raw-pubkey/no-position fallback.
+
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('AA', 'pathtest00000001', '2026-01-15T10:00:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"ping","sender":"Eve"}', '#ping')`)
+	// Shallow observation (obs1): 1 hop.
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, resolved_path, timestamp)
+		VALUES (1, 1, 9.0, -88, '["aa"]', '["pkAlpha"]', 1736935200)`)
+	// Deeper observation (obs2): 2 hops.
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, resolved_path, timestamp)
+		VALUES (1, 2, 4.0, -95, '["aa","bb"]', '["pkAlpha","pkBravo"]', 1736935260)`)
+
+	resp, err := db.GetPacketPath("pathtest00000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Branches) != 2 {
+		t.Fatalf("Branches = %+v, want 2 (one per distinct observer)", resp.Branches)
+	}
+	// Sorted deepest-first: obs2's 2-hop branch, then obs1's 1-hop branch.
+	deep, shallow := resp.Branches[0], resp.Branches[1]
+	if deep.Hops != 2 {
+		t.Fatalf("Branches[0].Hops = %d, want 2 (the deeper branch first)", deep.Hops)
+	}
+	if len(deep.Points) != 2 {
+		t.Fatalf("Branches[0].Points = %+v, want 2 entries", deep.Points)
+	}
+	if deep.Points[0].Name != "RepeaterAlpha" || deep.Points[0].Lat == nil || *deep.Points[0].Lat != 56.1 {
+		t.Errorf("Branches[0].Points[0] = %+v, want RepeaterAlpha at lat 56.1", deep.Points[0])
+	}
+	if deep.Points[1].PublicKey != "pkBravo" || deep.Points[1].Name != "pkBravo" || deep.Points[1].Lat != nil {
+		t.Errorf("Branches[0].Points[1] = %+v, want raw pubkey fallback with nil lat (no nodes row)", deep.Points[1])
+	}
+	if deep.Observer == nil || deep.Observer.Name != "Observer Two" {
+		t.Fatalf("Branches[0].Observer = %+v, want Observer Two", deep.Observer)
+	}
+	if deep.Observer.Lat == nil || *deep.Observer.Lat != 37.6213 {
+		t.Errorf("Branches[0].Observer.Lat = %v, want the SFO IATA coordinate (37.6213)", deep.Observer.Lat)
+	}
+	if shallow.Hops != 1 || shallow.Observer == nil || shallow.Observer.Name != "Observer One" {
+		t.Fatalf("Branches[1] = %+v, want Observer One's 1-hop branch", shallow)
+	}
+}
+
+// TestGetPacketPath_ObserverPositionPrefersOwnGPS covers an observer whose
+// configured IATA code isn't a real airport (a custom/regional code an
+// operator typed in, or a typo) and so isn't in the hardcoded iataCoords
+// table -- but the observer is itself a mesh node that has self-advertised
+// a real GPS position. That position must be used instead of leaving the
+// observer unplaced, since it's the same source /api/observers and the
+// Wardriving tab already treat as authoritative.
+func TestGetPacketPath_ObserverPositionPrefersOwnGPS(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('deadbeefcafe', 'Custom Coded Observer', 'QXV')`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon) VALUES ('deadbeefcafe', 'Custom Coded Observer', 'room', 56.19, 9.6)`)
+
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('AA', 'pathtest00000004', '2026-01-15T10:00:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"ping","sender":"Eve"}', '#ping')`)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (1, 1, 9.0, -88, '[]', 1736935200)`)
+
+	resp, err := db.GetPacketPath("pathtest00000004")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Branches) != 1 {
+		t.Fatalf("Branches = %+v, want 1", resp.Branches)
+	}
+	obs := resp.Branches[0].Observer
+	if obs == nil {
+		t.Fatalf("Observer = nil, want a populated observer")
+	}
+	if obs.IATA != "QXV" {
+		t.Errorf("Observer.IATA = %q, want QXV (kept even though it's not in iataCoords)", obs.IATA)
+	}
+	if obs.Lat == nil || *obs.Lat != 56.19 || obs.Lon == nil || *obs.Lon != 9.6 {
+		t.Errorf("Observer.Lat/Lon = %v/%v, want the node's own self-advertised GPS (56.19, 9.6), not left nil just because QXV isn't a known airport", obs.Lat, obs.Lon)
+	}
+}
+
+// TestGetPacketPath_ObserverPositionFallsBackToNameMatch covers a
+// bridge-type observer (seen in the wild on openHop-Repeater firmware)
+// whose `observers.id` is a human-readable device name rather than its
+// mesh pubkey -- so the pubkey lookup can never find its real, positioned
+// node row. The position should still be found by matching display name
+// against `nodes` instead of leaving the observer unplaced.
+func TestGetPacketPath_ObserverPositionFallsBackToNameMatch(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	// observers.id is the device's NAME, not a pubkey -- the real pubkey
+	// only exists as nodes.public_key on a separate row.
+	db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('DK_FRØRUP_5871_R0001', 'DK_FRØRUP_5871_R0001', 'REPEATER')`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon) VALUES ('226e9df0...real-pubkey', 'DK_FRØRUP_5871_R0001', 'repeater', 55.237344, 10.710082)`)
+
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('AA', 'pathtest00000005', '2026-01-15T10:00:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"ping","sender":"Eve"}', '#ping')`)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (1, 1, 9.0, -88, '[]', 1736935200)`)
+
+	resp, err := db.GetPacketPath("pathtest00000005")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Branches) != 1 {
+		t.Fatalf("Branches = %+v, want 1", resp.Branches)
+	}
+	obs := resp.Branches[0].Observer
+	if obs == nil {
+		t.Fatalf("Observer = nil, want a populated observer")
+	}
+	if obs.Lat == nil || *obs.Lat != 55.237344 || obs.Lon == nil || *obs.Lon != 10.710082 {
+		t.Errorf("Observer.Lat/Lon = %v/%v, want the name-matched node's GPS (55.237344, 10.710082)", obs.Lat, obs.Lon)
+	}
+}
+
+// TestGetPacketPath_ObserverPositionSkipsAmbiguousNameMatch covers two
+// unrelated positioned nodes that happen to share a display name: the
+// name-match fallback must not guess which one is the real observer, so
+// the observer should stay unplaced (falling through to the IATA table,
+// or nil if that has nothing either) rather than silently picking one.
+func TestGetPacketPath_ObserverPositionSkipsAmbiguousNameMatch(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('bridge-id-not-a-pubkey', 'Duplicate Name', NULL)`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon) VALUES ('pkOne', 'Duplicate Name', 'repeater', 10.0, 20.0)`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon) VALUES ('pkTwo', 'Duplicate Name', 'repeater', 30.0, 40.0)`)
+
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('AA', 'pathtest00000006', '2026-01-15T10:00:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"ping","sender":"Eve"}', '#ping')`)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (1, 1, 9.0, -88, '[]', 1736935200)`)
+
+	resp, err := db.GetPacketPath("pathtest00000006")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Branches) != 1 {
+		t.Fatalf("Branches = %+v, want 1", resp.Branches)
+	}
+	obs := resp.Branches[0].Observer
+	if obs == nil {
+		t.Fatalf("Observer = nil, want a populated observer (just without a position)")
+	}
+	if obs.Lat != nil || obs.Lon != nil {
+		t.Errorf("Observer.Lat/Lon = %v/%v, want nil -- must not guess between two same-named nodes", obs.Lat, obs.Lon)
+	}
+}
+
+// TestGetPacketPath_NoResolvedPath covers a station whose observation
+// never resolved: it still contributes a branch (hop count from
+// path_json, so reach is never silently dropped), just with no points.
+func TestGetPacketPath_NoResolvedPath(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('obs1', 'Observer One', 'SJC')`)
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('AA', 'pathtest00000002', '2026-01-15T10:00:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"ping","sender":"Eve"}', '#ping')`)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (1, 1, 9.0, -88, '["aa"]', 1736935200)`)
+
+	resp, err := db.GetPacketPath("pathtest00000002")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Branches) != 1 {
+		t.Fatalf("Branches = %+v, want 1 branch even though its path never resolved", resp.Branches)
+	}
+	b := resp.Branches[0]
+	if b.Hops != 1 {
+		t.Errorf("Branches[0].Hops = %d, want 1 (from path_json, independent of resolution)", b.Hops)
+	}
+	if len(b.Points) != 0 {
+		t.Errorf("Branches[0].Points = %+v, want empty when the path never resolved", b.Points)
+	}
+	if b.Observer == nil || b.Observer.Name != "Observer One" {
+		t.Errorf("Branches[0].Observer = %+v, want Observer One (who heard it is always known)", b.Observer)
+	}
+}
+
+// TestGetPacketPath_SameObserverMultipleObservations covers a station
+// that heard the same packet more than once as later flood copies
+// arrived via longer routes (the common case -- see the trace dump for
+// any busy channel): only its single deepest observation should
+// contribute a branch, not one branch per observation.
+func TestGetPacketPath_SameObserverMultipleObservations(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('obs1', 'Observer One', 'SJC')`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon) VALUES ('pkAlpha', 'RepeaterAlpha', 'repeater', 56.1, 10.2)`)
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('AA', 'pathtest00000003', '2026-01-15T10:00:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"ping","sender":"Eve"}', '#ping')`)
+	// Direct copy arrives first (0 hops)...
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (1, 1, 9.0, -88, '[]', 1736935200)`)
+	// ...then a relayed copy arrives later, 1 hop.
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, resolved_path, timestamp)
+		VALUES (1, 1, 6.0, -100, '["aa"]', '["pkAlpha"]', 1736935260)`)
+
+	resp, err := db.GetPacketPath("pathtest00000003")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Branches) != 1 {
+		t.Fatalf("Branches = %+v, want exactly 1 (same station, keep only its deepest observation)", resp.Branches)
+	}
+	if resp.Branches[0].Hops != 1 || len(resp.Branches[0].Points) != 1 {
+		t.Errorf("Branches[0] = %+v, want the 1-hop relayed observation, not the 0-hop direct one", resp.Branches[0])
+	}
+}
+
+func TestGetPacketPath_UnknownHash(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	resp, err := db.GetPacketPath("doesnotexist0000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Branches) != 0 {
+		t.Errorf("expected an empty response for an unknown hash, got %+v", resp)
 	}
 }
 
@@ -1397,6 +1644,167 @@ func TestGetChannelMessagesNoSender(t *testing.T) {
 	}
 	if len(messages) != 1 {
 		t.Errorf("expected 1 message, got %d", len(messages))
+	}
+}
+
+// TestGetChannelMessages_PingBotReply covers the CoreScope-only "ping"
+// bot: a channel message whose text is exactly "ping" gets a synthetic
+// botReply attached (never transmitted back onto the mesh -- see
+// pingBotReply's doc comment), while ordinary messages don't.
+func TestGetChannelMessages_PingBotReply(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('obs1', 'Observer One', 'SJC')`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role) VALUES ('pkAlphaRepeater', 'RepeaterAlpha', 'repeater')`)
+	// pkBravoRepeater deliberately has NO nodes row -- exercises the
+	// unresolved-pubkey fallback (raw pubkey shown instead of a name).
+
+	// tx1: a plain chat message -- must NOT get a botReply.
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('AA', 'chanmsg00000001', '2026-01-15T10:00:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"just chatting","sender":"Alice"}', '#ping')`)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (1, 1, 9.0, -88, '["aa","bb"]', 1736935200)`)
+
+	// tx2: bare "ping" -- must get a botReply with hops=2, snr=8.2, observer,
+	// and the relay path resolved to "RepeaterAlpha → pkBravoRepeater"
+	// (second hop has no nodes row, so its raw pubkey is shown instead).
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('BB', 'chanmsg00000002', '2026-01-15T10:01:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"ping","sender":"Bob"}', '#ping')`)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, resolved_path, timestamp)
+		VALUES (2, 1, 8.2, -90, '["aa","bb"]', '["pkAlphaRepeater","pkBravoRepeater"]', 1736935260)`)
+
+	// tx3: "@CoreScopeBot ping" -- the mention-prefix must be stripped before matching.
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('CC', 'chanmsg00000003', '2026-01-15T10:02:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"@CoreScopeBot ping","sender":"Carol"}', '#ping')`)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (3, 1, 5.0, -95, '[]', 1736935320)`)
+
+	// tx4: "pinging" -- must NOT match (not an exact "ping").
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('DD', 'chanmsg00000004', '2026-01-15T10:03:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"pinging around","sender":"Dave"}', '#ping')`)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (4, 1, 3.0, -99, '[]', 1736935380)`)
+
+	// tx5: "/ping" -- the slash-command form must trigger too.
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('EE', 'chanmsg00000005', '2026-01-15T10:04:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"/ping","sender":"Frank"}', '#ping')`)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (5, 1, 6.0, -91, '["aa"]', 1736935440)`)
+
+	messages, total, err := db.GetChannelMessages("#ping", 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 5 {
+		t.Fatalf("expected 5 messages, got %d", total)
+	}
+
+	byText := map[string]map[string]interface{}{}
+	for _, m := range messages {
+		byText[m["text"].(string)] = m
+	}
+
+	if r := byText["just chatting"]["botReply"]; r != nil {
+		t.Errorf("plain chat message should not get a botReply, got %+v", r)
+	}
+	if r := byText["pinging around"]["botReply"]; r != nil {
+		t.Errorf("\"pinging\" should not match the exact \"ping\" trigger, got %+v", r)
+	}
+
+	pingReply, _ := byText["ping"]["botReply"].(map[string]interface{})
+	if pingReply == nil {
+		t.Fatal("bare \"ping\" message should get a botReply")
+	}
+	if pingReply["sender"] != "CoreScopeBot" {
+		t.Errorf("botReply sender = %v, want CoreScopeBot", pingReply["sender"])
+	}
+	if pingReply["hops"] != 2 {
+		t.Errorf("botReply hops = %v, want 2", pingReply["hops"])
+	}
+	replyText, _ := pingReply["text"].(string)
+	if !strings.Contains(replyText, "2 hops") || !strings.Contains(replyText, "8.2dB") || !strings.Contains(replyText, "Observer One") {
+		t.Errorf("botReply text = %q, want hops/SNR/observer mentioned", replyText)
+	}
+	if !strings.Contains(replyText, "via RepeaterAlpha → pkBravoRepeater") {
+		t.Errorf("botReply text = %q, want the resolved relay path (RepeaterAlpha for the known node, raw pubkey fallback for the unresolved one)", replyText)
+	}
+
+	mentionReply, _ := byText["@CoreScopeBot ping"]["botReply"].(map[string]interface{})
+	if mentionReply == nil {
+		t.Fatal("\"@CoreScopeBot ping\" should get a botReply (mention prefix stripped before matching)")
+	}
+	if mentionReply["hops"] != 0 {
+		t.Errorf("mention-prefixed ping botReply hops = %v, want 0 (empty path)", mentionReply["hops"])
+	}
+
+	slashReply, _ := byText["/ping"]["botReply"].(map[string]interface{})
+	if slashReply == nil {
+		t.Fatal("\"/ping\" should get a botReply -- it's in pingTriggerWords alongside bare \"ping\"")
+	}
+	if slashReply["sender"] != "CoreScopeBot" {
+		t.Errorf("\"/ping\" botReply sender = %v, want CoreScopeBot", slashReply["sender"])
+	}
+}
+
+// TestGetChannelMessages_PingBotReply_MultiObservation covers a single
+// ping transmission heard by TWO different observers at
+// DIFFERENT hop depths (normal in a mesh: one station may hear an early
+// relay leg, another a later one). The botReply must report the DEEPEST
+// (max-hop) observation's path/SNR -- not whichever observation happened
+// to be scanned first -- and the breadth ("N observers") once more than
+// one distinct station heard it, per pingBotReply's doc comment.
+func TestGetChannelMessages_PingBotReply_MultiObservation(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('obs1', 'Observer One', 'SJC')`)
+	db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('obs2', 'Observer Two', 'SFO')`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role) VALUES ('pkAlphaRepeater', 'RepeaterAlpha', 'repeater')`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role) VALUES ('pkCharlieRepeater', 'RepeaterCharlie', 'repeater')`)
+
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('EE', 'chanmsg00000005', '2026-01-15T10:04:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"ping","sender":"Eve"}', '#ping')`)
+	// obs1 (scanned first, o.id=1): shallow leg, 1 hop. transmission_id=1
+	// since this is the first (only) transmission inserted in this fresh DB.
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, resolved_path, timestamp)
+		VALUES (1, 1, 9.0, -88, '["aa"]', '["pkAlphaRepeater"]', 1736935440)`)
+	// obs2 (scanned second, o.id=2): deeper leg, 3 hops -- must win despite
+	// being neither first nor having the highest SNR.
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, resolved_path, timestamp)
+		VALUES (1, 2, 4.5, -99, '["aa","bb","cc"]', '["pkAlphaRepeater","pkBravoRepeater","pkCharlieRepeater"]', 1736935445)`)
+
+	messages, _, err := db.GetChannelMessages("#ping", 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reply map[string]interface{}
+	for _, m := range messages {
+		if m["text"] == "ping" {
+			reply, _ = m["botReply"].(map[string]interface{})
+		}
+	}
+	if reply == nil {
+		t.Fatal("expected a botReply on the ping message")
+	}
+	if reply["hops"] != 3 {
+		t.Errorf("botReply hops = %v, want 3 (the deeper of the two observations)", reply["hops"])
+	}
+	text, _ := reply["text"].(string)
+	if !strings.Contains(text, "SNR 4.5dB") {
+		t.Errorf("botReply text = %q, want the SNR paired with the deeper (3-hop) observation, not the shallower one's 9.0dB", text)
+	}
+	if !strings.Contains(text, "via RepeaterAlpha → pkBravoRepeater → RepeaterCharlie") {
+		t.Errorf("botReply text = %q, want the deeper observation's resolved relay path", text)
+	}
+	if !strings.Contains(text, "heard by 2 observers") {
+		t.Errorf("botReply text = %q, want breadth reported as \"2 observers\" now that more than one observer heard it", text)
 	}
 }
 
@@ -2325,5 +2733,219 @@ func TestLoadIndexesRelayHopsFromResolvedPath(t *testing.T) {
 	}
 	if store.byNode[relayPubkey][0].Hash != "relaytest0001hash" {
 		t.Errorf("relay byNode entry has wrong hash: %s", store.byNode[relayPubkey][0].Hash)
+	}
+}
+
+func TestComputeScopeAdoptionByArea(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	areas := map[string]AreaEntry{
+		"ODE": {Label: "Odense by", RegionScopes: []string{"dk-fyn-odense"}, LatMin: f(55.32), LatMax: f(55.45), LonMin: f(10.3), LonMax: f(10.5)},
+		"GOT": {Label: "Göteborg, SE", LatMin: f(57.35), LatMax: f(57.90), LonMin: f(11.85), LonMax: f(12.85)}, // no RegionScopes link
+	}
+
+	nodes := []nodeAreaScopeInput{
+		{Lat: 55.4047, Lon: 10.3810, DefaultScope: "#dk-fyn-odense"}, // Odense, matches area's own region
+		{Lat: 55.40, Lon: 10.40, DefaultScope: "#dk-aarhus"},         // Odense, but a DIFFERENT region
+		{Lat: 55.41, Lon: 10.41, DefaultScope: ""},                   // Odense, no scope at all
+		{Lat: 57.68, Lon: 11.97, DefaultScope: "#dk-aarhus"},         // Göteborg, has a scope, but area has no RegionScopes link
+		{Lat: 57.70, Lon: 11.98, DefaultScope: ""},                   // Göteborg, no scope
+		{Lat: 0, Lon: 0, DefaultScope: "#dk-aarhus"},                 // no-fix, must be excluded entirely
+		{Lat: 51.0, Lon: 4.0, DefaultScope: "#belgium"},              // outside every configured area, excluded
+	}
+
+	got := computeScopeAdoptionByArea(nodes, areas, nil)
+	if len(got) != 2 {
+		t.Fatalf("got %d areas, want 2 (ODE and GOT) -- result: %+v", len(got), got)
+	}
+	byKey := map[string]AreaScopeAdoption{}
+	for _, a := range got {
+		byKey[a.AreaKey] = a
+	}
+
+	ode := byKey["ODE"]
+	if ode.TotalNodes != 3 {
+		t.Errorf("ODE.TotalNodes = %d, want 3", ode.TotalNodes)
+	}
+	if ode.NodesWithAnyScope != 2 {
+		t.Errorf("ODE.NodesWithAnyScope = %d, want 2 (one has no scope at all)", ode.NodesWithAnyScope)
+	}
+	if ode.NodesMatchingArea != 1 {
+		t.Errorf("ODE.NodesMatchingArea = %d, want 1 (only the dk-fyn-odense one matches, the dk-aarhus one doesn't)", ode.NodesMatchingArea)
+	}
+	if len(ode.Matching) != 1 || len(ode.NotMatching) != 2 {
+		t.Errorf("ODE.Matching=%v NotMatching=%v, want 1 matching + 2 not-matching (RegionScopes is set)", ode.Matching, ode.NotMatching)
+	}
+
+	got2 := byKey["GOT"]
+	if got2.TotalNodes != 2 {
+		t.Errorf("GOT.TotalNodes = %d, want 2", got2.TotalNodes)
+	}
+	if got2.NodesWithAnyScope != 1 {
+		t.Errorf("GOT.NodesWithAnyScope = %d, want 1", got2.NodesWithAnyScope)
+	}
+	if got2.NodesMatchingArea != 0 {
+		t.Errorf("GOT.NodesMatchingArea = %d, want 0 (area has no RegionScopes link to match against)", got2.NodesMatchingArea)
+	}
+	if len(got2.Matching) != 0 || len(got2.NotMatching) != 0 {
+		t.Errorf("GOT.Matching=%v NotMatching=%v, want both empty (no RegionScopes, nothing to split into two groups)", got2.Matching, got2.NotMatching)
+	}
+}
+
+// TestComputeScopeAdoptionByArea_RelayedRegionCounts covers the case
+// dborup flagged directly: a repeater sitting inside the Horsens area that
+// has RELAYED dk-horsens traffic supports that region, even if its own
+// default_scope is something else (or unset entirely) — matching must not
+// be limited to default_scope, same runs-this-region vs
+// carried-this-region's-traffic distinction as RepeatersByRegion vs
+// OriginatingNodesByRegion elsewhere in this file.
+func TestComputeScopeAdoptionByArea_RelayedRegionCounts(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	areas := map[string]AreaEntry{
+		"HORSENS": {Label: "Horsens", RegionScopes: []string{"dk-horsens"}, LatMin: f(55.76), LatMax: f(55.94), LonMin: f(9.6), LonMax: f(9.96)},
+	}
+	nodes := []nodeAreaScopeInput{
+		{PublicKey: "relayer01", Lat: 55.85, Lon: 9.85, DefaultScope: "#dk"}, // own scope is the generic #dk, NOT dk-horsens
+		{PublicKey: "plainnode1", Lat: 55.86, Lon: 9.86, DefaultScope: ""},   // no scope, no relay activity either
+		{PublicKey: "relayerother", Lat: 55.87, Lon: 9.87, DefaultScope: ""}, // relays something, but not dk-horsens
+	}
+	relayInfo := map[string]RepeaterRelayInfo{
+		"relayer01":    {TransportedScopes: []string{"#dk-horsens"}},
+		"relayerother": {TransportedScopes: []string{"#dk-aarhus"}},
+	}
+
+	got := computeScopeAdoptionByArea(nodes, areas, relayInfo)
+	if len(got) != 1 {
+		t.Fatalf("got %d areas, want 1", len(got))
+	}
+	h := got[0]
+	if h.TotalNodes != 3 {
+		t.Errorf("TotalNodes = %d, want 3", h.TotalNodes)
+	}
+	// relayer01 (relays dk-horsens) and relayerother (relays something,
+	// just not dk-horsens) both "use scope" in some sense; plainnode1 does
+	// nothing at all.
+	if h.NodesWithAnyScope != 2 {
+		t.Errorf("NodesWithAnyScope = %d, want 2", h.NodesWithAnyScope)
+	}
+	// Only relayer01 specifically relays THIS area's own region
+	// (dk-horsens) -- despite its own default_scope being the unrelated,
+	// generic #dk.
+	if h.NodesMatchingArea != 1 {
+		t.Errorf("NodesMatchingArea = %d, want 1 (relayer01 relays dk-horsens even though its default_scope is #dk)", h.NodesMatchingArea)
+	}
+	if len(h.Matching) != 1 || h.Matching[0].PublicKey != "relayer01" {
+		t.Errorf("Matching = %v, want just relayer01", h.Matching)
+	}
+	if len(h.NotMatching) != 2 {
+		t.Errorf("NotMatching = %v, want 2 (plainnode1 and relayerother)", h.NotMatching)
+	}
+}
+
+// TestComputeScopeAdoptionByArea_RollsUpIntoBroaderAreas is a regression
+// test for exactly what dborup flagged live: "Danmark (alle)" showed only
+// a handful of nodes because AreaKeyForPoint's single-most-specific-match
+// meant every node already claimed by a smaller sub-area (e.g. "Odense
+// by") never counted toward the broader containing area at all. A node
+// inside a nested area must now count toward EVERY containing area, so
+// DK's totals genuinely reflect the whole country, not just leftovers.
+func TestComputeScopeAdoptionByArea_RollsUpIntoBroaderAreas(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	areas := map[string]AreaEntry{
+		"DK":  {Label: "Danmark (alle)", RegionScopes: []string{"dk"}, LatMin: f(54.5), LatMax: f(57.8), LonMin: f(8.0), LonMax: f(15.25)},
+		"ODE": {Label: "Odense by", RegionScopes: []string{"dk-fyn-odense"}, LatMin: f(55.32), LatMax: f(55.45), LonMin: f(10.3), LonMax: f(10.5)},
+	}
+	nodes := []nodeAreaScopeInput{
+		{PublicKey: "odenode01", Name: "OdenseNode", Lat: 55.4047, Lon: 10.3810, DefaultScope: "#dk-fyn-odense"}, // inside BOTH DK and ODE
+		{PublicKey: "dkonly01", Name: "SomewhereElseInDK", Lat: 56.0, Lon: 9.0, DefaultScope: "#dk"},             // inside DK only, not ODE
+	}
+
+	got := computeScopeAdoptionByArea(nodes, areas, nil)
+	byKey := map[string]AreaScopeAdoption{}
+	for _, a := range got {
+		byKey[a.AreaKey] = a
+	}
+
+	dk := byKey["DK"]
+	if dk.TotalNodes != 2 {
+		t.Errorf("DK.TotalNodes = %d, want 2 (both nodes fall inside DK's box, including the one also inside ODE)", dk.TotalNodes)
+	}
+	// The Odense node's own scope is dk-fyn-odense, not dk -- so it does
+	// NOT match DK's own region even though it geographically counts
+	// toward DK's totals. Only dkonly01 (#dk) matches.
+	if dk.NodesMatchingArea != 1 {
+		t.Errorf("DK.NodesMatchingArea = %d, want 1 (only dkonly01 actually uses #dk)", dk.NodesMatchingArea)
+	}
+
+	ode := byKey["ODE"]
+	if ode.TotalNodes != 1 {
+		t.Errorf("ODE.TotalNodes = %d, want 1 (only the Odense-positioned node)", ode.TotalNodes)
+	}
+	if ode.NodesMatchingArea != 1 {
+		t.Errorf("ODE.NodesMatchingArea = %d, want 1", ode.NodesMatchingArea)
+	}
+}
+
+func TestComputeScopeAdoptionByArea_Empty(t *testing.T) {
+	got := computeScopeAdoptionByArea(nil, map[string]AreaEntry{"DK": {Label: "Danmark"}}, nil)
+	if len(got) != 0 {
+		t.Errorf("expected no areas with 0 nodes, got %+v", got)
+	}
+}
+
+// TestComputeScopeAdoptionByArea_MultipleRegionScopes covers dborup's exact
+// request: a broad umbrella area (Europa) can be linked to more than one
+// hashRegions scope at once (e.g. both "eu" and "europe"), and a node using
+// EITHER counts as matching -- not just the first-configured one.
+func TestComputeScopeAdoptionByArea_MultipleRegionScopes(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	areas := map[string]AreaEntry{
+		"EU": {Label: "Europa", RegionScopes: []string{"eu", "europe"}, LatMin: f(34.0), LatMax: f(71.5), LonMin: f(-25.0), LonMax: f(45.0)},
+	}
+	nodes := []nodeAreaScopeInput{
+		{PublicKey: "usesEu", Lat: 48.0, Lon: 10.0, DefaultScope: "#eu"},
+		{PublicKey: "usesEurope", Lat: 48.0, Lon: 11.0, DefaultScope: "#europe"},
+		{PublicKey: "relaysEurope", Lat: 48.0, Lon: 12.0, DefaultScope: ""},
+		{PublicKey: "usesNeither", Lat: 48.0, Lon: 13.0, DefaultScope: "#dk"},
+		// Own scope is #eu AND it also relays #europe -- must be
+		// reported as matching BOTH, not just the first one found.
+		{PublicKey: "usesBoth", Lat: 48.0, Lon: 14.0, DefaultScope: "#eu"},
+	}
+	relayInfo := map[string]RepeaterRelayInfo{
+		"relaysEurope": {TransportedScopes: []string{"#europe"}},
+		"usesBoth":     {TransportedScopes: []string{"#europe"}},
+	}
+
+	got := computeScopeAdoptionByArea(nodes, areas, relayInfo)
+	if len(got) != 1 {
+		t.Fatalf("got %d areas, want 1", len(got))
+	}
+	eu := got[0]
+	if eu.TotalNodes != 5 {
+		t.Errorf("TotalNodes = %d, want 5", eu.TotalNodes)
+	}
+	// usesEu (#eu), usesEurope (#europe), relaysEurope (relays #europe),
+	// and usesBoth (both) all match one of Europa's two linked scopes;
+	// usesNeither (#dk) matches neither.
+	if eu.NodesMatchingArea != 4 {
+		t.Errorf("NodesMatchingArea = %d, want 4 (any of #eu or #europe should count)", eu.NodesMatchingArea)
+	}
+	matchedScopesByKey := map[string][]string{}
+	for _, m := range eu.Matching {
+		matchedScopesByKey[m.PublicKey] = m.MatchedScopes
+	}
+	if diff := matchedScopesByKey["usesEu"]; len(diff) != 1 || diff[0] != "eu" {
+		t.Errorf("usesEu.MatchedScopes = %v, want [\"eu\"]", diff)
+	}
+	if diff := matchedScopesByKey["usesEurope"]; len(diff) != 1 || diff[0] != "europe" {
+		t.Errorf("usesEurope.MatchedScopes = %v, want [\"europe\"]", diff)
+	}
+	if diff := matchedScopesByKey["relaysEurope"]; len(diff) != 1 || diff[0] != "europe" {
+		t.Errorf("relaysEurope.MatchedScopes = %v, want [\"europe\"]", diff)
+	}
+	if diff := matchedScopesByKey["usesBoth"]; len(diff) != 2 || diff[0] != "eu" || diff[1] != "europe" {
+		t.Errorf("usesBoth.MatchedScopes = %v, want [\"eu\" \"europe\"] (node uses one scope AND relays the other)", diff)
+	}
+	if len(eu.NotMatching) != 1 || eu.NotMatching[0].PublicKey != "usesNeither" {
+		t.Errorf("NotMatching = %v, want just usesNeither", eu.NotMatching)
 	}
 }

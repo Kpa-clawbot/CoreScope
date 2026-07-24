@@ -14,7 +14,9 @@ node test-packet-filter-ux.js
 node test-aging.js
 node test-issue-1065-gesture-hints-gates.js
 node test-frontend-helpers.js
+node test-geo-filter.js
 node test-fetch-all-nodes-pagination.js
+node test-nodes-geo-scope-filter.js
 node test-my-repeaters-dashboard.js
 node test-url-state.js
 node test-perf-go-runtime.js
@@ -28,6 +30,8 @@ node test-channel-qr-wiring.js
 node test-channel-issue-1087.js
 node test-issue-1409-no-encrypted-flood.js
 node test-analytics-channels-integration.js
+node test-analytics-foreign-traffic-tab.js
+node test-analytics-nodes-without-scope.js
 node test-observers-headings.js
 node test-issue-1789-observer-firmware-cols.js
 node test-issue-1648-m1-emoji-scan.js
@@ -66,6 +70,10 @@ node test-issue-1473-reserved-prefixes.js
 node test-issue-1473-prefix-generator.js
 node test-issue-1770-mobile-row-clamp.js
 node test-issue-1849-trace-hashbytes.js
+node test-node-analytics-hop-chart.js
+node test-analytics-hop-depth-ui.js
+node test-channels-ping-bot-reply.js
+node test-packet-path-map.js
 
 echo ""
 echo "═══════════════════════════════════════"

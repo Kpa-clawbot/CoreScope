@@ -1424,6 +1424,29 @@ body.scroll-locked { overflow: hidden; }
   font-size: 9px; font-weight: 700; font-family: var(--mono);
   background: var(--transport-badge-bg, #f59e0b20); color: var(--transport-badge-fg, #d97706);
   letter-spacing: .5px; vertical-align: middle;
+  /* Region names can run long (e.g. "#dk-trekantsomraadet") — cap and
+     ellipsis instead of blowing out the Type column; full name is
+     always in the title attribute. */
+  max-width: 90px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Transport-scoped but the region couldn't be resolved (no configured
+   region matched, or an HMAC collision made the match ambiguous) —
+   muted instead of the confident amber so it reads as "unresolved". */
+.badge-transport-unknown {
+  background: var(--text-muted-bg, #6b728020); color: var(--text-muted, #6b7280);
+}
+/* Dedicated Scope column pill (#71 Packets column). Reuses the
+   badge-transport-unknown muted look for the "no match" state so it reads
+   consistently with the inline T? pill on the Type column. */
+.badge-scope {
+  display: inline-block; padding: 1px 6px; border-radius: 4px;
+  font-size: 10px; font-weight: 700; font-family: var(--mono);
+  background: var(--transport-badge-bg, #f59e0b20); color: var(--transport-badge-fg, #d97706);
+  letter-spacing: .3px;
+}
+.badge-scope-unknown {
+  background: var(--text-muted-bg, #6b728020); color: var(--text-muted, #6b7280);
 }
 .badge-obs {
   display: inline-block; padding: 1px 6px; border-radius: 10px;
@@ -1879,6 +1902,11 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   border: 1px solid var(--border);
 }
 .ch-mention { color: var(--link-color); font-weight: 600; }
+/* Ping-bot reply (public/channels.js botReplyHtml) -- dashed border marks
+ * it as a synthesized, CoreScope-only reply, never actually transmitted
+ * onto the mesh, distinct from a real observed message. */
+.ch-bot-message { margin-top: -8px; }
+.ch-bot-message .ch-msg-bubble { border-style: dashed; font-style: italic; }
 .ch-encrypted-text { font-size: 11px; color: var(--text-muted); }
 .ch-msg-meta { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
 .ch-analyze-link { color: var(--link-color); text-decoration: none; margin-left: 8px; }
@@ -2126,6 +2154,7 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 .obs-table td:first-child { white-space: nowrap; }
 .obs-table td:nth-child(6) { max-width: none; overflow: visible; }
 .col-observer { min-width: 70px; max-width: none; }
+.col-scope { min-width: 60px; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .spark-bar { position: relative; min-width: 60px; max-width: 100px; flex: 1; height: 18px; background: var(--border); border-radius: 4px; overflow: hidden; display: inline-block; vertical-align: middle; }
 @media (max-width: 640px) { .spark-bar { max-width: 60px; } }
 .spark-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-hover, #60a5fa)); border-radius: 4px; transition: width 0.3s; }
@@ -2982,7 +3011,7 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 
 /* Hide low-value columns on mobile */
 @media (max-width: 640px) {
-  .col-region, .col-rpt, .col-size, .col-hashsize, .col-pubkey { display: none; }
+  .col-region, .col-rpt, .col-size, .col-hashsize, .col-pubkey, .col-scope { display: none; }
 }
 
 /* Clickable hop links */
@@ -3174,6 +3203,7 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .hide-col-hash .col-hash,
 .hide-col-size .col-size,
 .hide-col-type .col-type,
+.hide-col-scope .col-scope,
 .hide-col-observer .col-observer,
 .hide-col-path .col-path,
 .hide-col-rpt .col-rpt,

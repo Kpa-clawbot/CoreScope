@@ -604,6 +604,10 @@
       : { disabledTabs: [] };
     // #1574 — operator-configurable cap on /live map node count.
     if (cfg.liveMapMaxNodes != null) window.LIVE_MAP_MAX_NODES = cfg.liveMapMaxNodes;
+    // Configured geo_filter box/polygon (#730), for classifying domestic
+    // vs foreign nodes directly from lat/lon — see ClientConfigResponse.GeoFilter
+    // doc (cmd/server/types.go) for why the `foreign` flag alone isn't enough.
+    window.MC_GEO_FILTER = cfg.geoFilter || null;
     // Sync ROLE_STYLE colors with ROLE_COLORS
     // #1407 — both are now live getters; no manual sync needed. Kept as no-op for clarity.
   }).catch(function () { /* use defaults */ });

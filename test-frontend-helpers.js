@@ -1958,6 +1958,27 @@ console.log('\n=== app.js: isTransportRoute + transportBadge ===');
     assert.ok(html.includes('TRANSPORT_FLOOD'), 'should contain route type name in title');
   });
   test('transportBadge(1) returns empty string', () => assert.strictEqual(transportBadge(1), ''));
+
+  const scopeCellHtml = ctx.scopeCellHtml;
+  test('scopeCellHtml non-transport route returns em-dash', () => {
+    assert.strictEqual(scopeCellHtml(1, 'dk'), '—');
+    assert.strictEqual(scopeCellHtml(2, ''), '—');
+  });
+  test('scopeCellHtml transport route with resolved scope shows the region name', () => {
+    const html = scopeCellHtml(0, 'dk-oj');
+    assert.ok(html.includes('badge-scope'), 'should contain badge-scope class');
+    assert.ok(!html.includes('badge-scope-unknown'), 'resolved scope should not use the unknown modifier');
+    assert.ok(html.includes('dk-oj'), 'should contain the region name');
+  });
+  test('scopeCellHtml transport route with no match shows muted unknown', () => {
+    const html = scopeCellHtml(3, '');
+    assert.ok(html.includes('badge-scope-unknown'), 'should contain the unknown modifier class');
+    assert.ok(html.includes('unknown'), 'should contain the word unknown');
+  });
+  test('scopeCellHtml escapes region names', () => {
+    const html = scopeCellHtml(0, '<img src=x onerror=alert(1)>');
+    assert.ok(!html.includes('<img'), 'should not contain raw injected markup');
+  });
 }
 
 // ===== ANALYTICS.JS: Channel Sort =====

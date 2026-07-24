@@ -228,6 +228,26 @@ func (s *Store) buildAndPersistNeighborEdges() (int, error) {
 				edges = append(edges, canonEdge(observerPK, resolved, ts))
 			}
 		}
+		// Interior hop-to-hop edges: each consecutive pair of repeaters
+		// in the path must have been in range of each other to relay the
+		// packet along. Unlike the two endpoint edges above, this isn't
+		// gated on isAdvert or which side is the "true" origin/observer
+		// -- it's purely relational between resolved hops in the path
+		// itself. Without it, resolvePathWithContext's anchor-on-
+		// previous-hop lookup (path_resolver.go) has no adjacency data
+		// for any interior hop, so a multi-hop path only ever resolves
+		// its first hop in practice (#1547 follow-up).
+		for i := 0; i+1 < len(path); i++ {
+			resolvedA, okA := resolvePrefix(prefixIdx, path[i])
+			if !okA {
+				continue
+			}
+			resolvedB, okB := resolvePrefix(prefixIdx, path[i+1])
+			if !okB || resolvedA == resolvedB {
+				continue
+			}
+			edges = append(edges, canonEdge(resolvedA, resolvedB, ts))
+		}
 	}
 
 	if len(edges) == 0 {

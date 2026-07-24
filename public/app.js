@@ -12,7 +12,47 @@ function payloadTypeColor(n) { return PAYLOAD_COLORS[n] || 'unknown'; }
 function isTransportRoute(rt) { return rt === 0 || rt === 3; }
 /** Byte offset of path_len in raw_hex: 5 for transport routes (4 bytes of next/last hop codes precede it), 1 otherwise. */
 function getPathLenOffset(routeType) { return isTransportRoute(routeType) ? 5 : 1; }
-function transportBadge(rt) { return isTransportRoute(rt) ? ' <span class="badge badge-transport" title="' + routeTypeName(rt) + '">T</span>' : ''; }
+/**
+ * scopeName is optional (callers that don't pass it get the original
+ * unscoped "T" badge). Pass a packet's scope_name to also surface the
+ * region-scope state directly in the badge label (not just on hover): a
+ * non-empty string is appended to the label as "T·#region", an empty
+ * string (transport-eligible but no region matched, or an HMAC collision
+ * made the match ambiguous) renders as "T?" with a distinct muted badge
+ * style so it's visually distinguishable from a resolved scope without
+ * relying on the tooltip or on color alone. The full name always stays
+ * in the title too, for the (rare) case a long region name gets
+ * ellipsis-truncated by the badge's CSS max-width.
+ */
+function transportBadge(rt, scopeName) {
+  if (!isTransportRoute(rt)) return '';
+  var title = routeTypeName(rt);
+  var cls = 'badge-transport';
+  var label = 'T';
+  if (scopeName !== undefined) {
+    if (scopeName) {
+      title += ' · Scope: ' + scopeName;
+      label = 'T·' + scopeName;
+    } else {
+      title += ' · Scope: unknown';
+      cls += ' badge-transport-unknown';
+      label = 'T?';
+    }
+  }
+  return ' <span class="badge ' + cls + '" title="' + escapeHtml(title) + '">' + escapeHtml(label) + '</span>';
+}
+
+/**
+ * Dedicated Scope column cell (as opposed to transportBadge's inline pill
+ * on the Type column) — same three-state semantics: non-transport routes
+ * show a dash, transport routes with no resolved region show a muted
+ * "unknown", and a resolved match shows the region name.
+ */
+function scopeCellHtml(rt, scopeName) {
+  if (!isTransportRoute(rt)) return '—';
+  if (scopeName) return '<span class="badge-scope" title="Scope: ' + escapeHtml(scopeName) + '">' + escapeHtml(scopeName) + '</span>';
+  return '<span class="badge-scope badge-scope-unknown" title="Transport packet, matching region unknown">unknown</span>';
+}
 
 /**
  * Compute breakdown byte ranges from raw_hex on the client.
@@ -976,6 +1016,69 @@ function escapeHtml(s) {
 function debounce(fn, ms) {
   let t;
   return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
+
+/* Ray-casting point-in-polygon — mirrors internal/geofilter.PointInPolygon
+   (Go) exactly, including its edge/vertex tie-break behavior, so client and
+   server never disagree on which side of the line a node falls on. */
+function geoPointInPolygon(lat, lon, polygon) {
+  let inside = false;
+  const n = polygon.length;
+  let j = n - 1;
+  for (let i = 0; i < n; i++) {
+    const yi = polygon[i][0], xi = polygon[i][1];
+    const yj = polygon[j][0], xj = polygon[j][1];
+    if ((yi > lat) !== (yj > lat)) {
+      if (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) inside = !inside;
+    }
+    j = i;
+  }
+  return inside;
+}
+
+/* Flat-earth point-to-segment distance in km — mirrors
+   internal/geofilter.DistToSegmentKm (Go) exactly. */
+function geoDistToSegmentKm(lat, lon, a, b) {
+  const [lat1, lon1] = a, [lat2, lon2] = b;
+  const cosLat = Math.cos((lat1 + lat2) / 2.0 * Math.PI / 180.0);
+  const ax = (lon1 - lon) * 111.0 * cosLat;
+  const ay = (lat1 - lat) * 111.0;
+  const bx = (lon2 - lon) * 111.0 * cosLat;
+  const by = (lat2 - lat) * 111.0;
+  const abx = bx - ax, aby = by - ay;
+  const abSq = abx * abx + aby * aby;
+  if (abSq === 0) return Math.sqrt(ax * ax + ay * ay);
+  const t = Math.max(0, Math.min(1, -(ax * abx + ay * aby) / abSq));
+  const px = ax + t * abx, py = ay + t * aby;
+  return Math.sqrt(px * px + py * py);
+}
+
+/* Mirrors internal/geofilter.PassesFilter (Go) exactly — same (0,0)-always-
+   passes rule, same polygon-with-buffer-then-bbox-fallback precedence — so
+   a node's client-side domestic/foreign classification always agrees with
+   what the server would compute. `gf` is window.MC_GEO_FILTER (set from
+   /api/config/client's geoFilter field): {polygon, bufferKm, latMin,
+   latMax, lonMin, lonMax}, or null/undefined when no geo_filter is
+   configured. */
+function nodePassesGeoFilter(lat, lon, gf) {
+  if (!gf) return true;
+  if (typeof lat !== 'number' || typeof lon !== 'number' || isNaN(lat) || isNaN(lon)) return true;
+  if (lat === 0 && lon === 0) return true;
+  if (Array.isArray(gf.polygon) && gf.polygon.length >= 3) {
+    if (geoPointInPolygon(lat, lon, gf.polygon)) return true;
+    if (gf.bufferKm > 0) {
+      const n = gf.polygon.length;
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        if (geoDistToSegmentKm(lat, lon, gf.polygon[i], gf.polygon[j]) <= gf.bufferKm) return true;
+      }
+    }
+    return false;
+  }
+  if (gf.latMin != null && gf.latMax != null && gf.lonMin != null && gf.lonMax != null) {
+    return lat >= gf.latMin && lat <= gf.latMax && lon >= gf.lonMin && lon <= gf.lonMax;
+  }
+  return true;
 }
 
 /* Debounced WS helper — batches rapid messages, calls fn with array of msgs */

@@ -323,6 +323,31 @@
     return typeof hash === 'number' ? '0x' + hash.toString(16).toUpperCase().padStart(2, '0') : hash;
   }
   function getChannelColor(hash) { return CHANNEL_COLORS[hashCode(String(hash)) % CHANNEL_COLORS.length]; }
+  // Mirrors pingBotReply in cmd/server/db.go -- kept in sync by hand since
+  // this is the client-side equivalent for messages that arrive live over
+  // the WebSocket (handleWSMessage below), which never round-trips through
+  // GetChannelMessages and so never gets the server-computed botReply.
+  // Same trigger rule, same reply format. CoreScope-only: see the doc
+  // comment on botReplyHtml in renderMessages for why this never reaches
+  // the real mesh.
+  //
+  // Unlike the server version, this one can't show the resolved relay
+  // path (repeater names) -- the live WS broadcast doesn't carry a
+  // per-packet resolved_path, only REST-loaded history does (via
+  // GetChannelMessages). No scope/area either -- both are already shown
+  // on the triggering message's own meta line, so repeating them in the
+  // reply would just be redundant.
+  // pingTriggerWords mirrors pingTriggerWords in cmd/server/db.go -- keep
+  // both lists in sync by hand.
+  var pingTriggerWords = { 'ping': true, '/ping': true };
+  function pingBotReply(text, hops, snr, observer) {
+    var trigger = String(text || '').trim().replace(/^@[A-Za-z0-9_-]{1,32}\s+/, '').trim();
+    if (!pingTriggerWords[trigger.toLowerCase()]) return null;
+    var parts = [hops > 0 ? (hops + ' hop' + (hops === 1 ? '' : 's')) : '0 hops (direct)'];
+    if (snr !== null && snr !== undefined) parts.push('SNR ' + Number(snr).toFixed(1) + 'dB');
+    if (observer) parts.push('heard by ' + observer);
+    return { sender: 'CoreScopeBot', text: '🏓 pong! ' + parts.join(' · '), hops: hops, snr: snr };
+  }
   function getSenderColor(name) {
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
       (!document.documentElement.getAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -656,6 +681,7 @@
         if (ci > 0 && ci < 50 && text.substring(0, ci) === sender) {
           text = text.substring(ci + 2);
         }
+        var alreadyDecObserver = c.packet.observer_name || null;
         decrypted.push({
           sender: sender, text: text,
           timestamp: c.packet.first_seen || c.packet.timestamp,
@@ -663,7 +689,10 @@
           packetHash: c.packet.hash, packetId: c.packet.id,
           hops: d.path_len || 0, snr: c.packet.snr || null,
           observers: c.packet.observer_name ? [c.packet.observer_name] : [],
-          repeats: 1
+          scope: c.packet.scope_name || null,
+          routeType: c.packet.route_type ?? null,
+          repeats: 1,
+          botReply: pingBotReply(text, d.path_len || 0, c.packet.snr || null, alreadyDecObserver)
         });
         continue;
       }
@@ -672,6 +701,7 @@
       var result = await ChannelDecrypt.decryptPacket(keyBytes, c.decoded.mac, c.decoded.encryptedData);
       if (result) {
         macFailCount = 0;
+        var decObserver = c.packet.observer_name || null;
         decrypted.push({
           sender: result.sender, text: result.message,
           timestamp: c.packet.first_seen || c.packet.timestamp,
@@ -679,7 +709,10 @@
           packetHash: c.packet.hash, packetId: c.packet.id,
           hops: 0, snr: c.packet.snr || null,
           observers: c.packet.observer_name ? [c.packet.observer_name] : [],
-          repeats: 1
+          scope: c.packet.scope_name || null,
+          routeType: c.packet.route_type ?? null,
+          repeats: 1,
+          botReply: pingBotReply(result.message, 0, c.packet.snr || null, decObserver)
         });
       } else {
         macFailCount++;
@@ -1319,6 +1352,10 @@
     });
 
     msgEl.addEventListener('click', handleNodeTap);
+    msgEl.addEventListener('click', function (e) {
+      const el = e.target.closest('[data-view-path]');
+      if (el && window.PacketPathMap) window.PacketPathMap.open(el.dataset.viewPath);
+    });
     // touchend fires more reliably on mobile for non-button elements
     let touchMoved = false;
     msgEl.addEventListener('touchstart', () => { touchMoved = false; }, { passive: true });
@@ -1417,6 +1454,12 @@
         var pktId = m.data?.id || null;
         var snr = m.data?.snr ?? m.data?.packet?.snr ?? payload.SNR ?? null;
         var observer = m.data?.packet?.observer_name || m.data?.observer || null;
+        var scope = m.data?.scope_name || m.data?.packet?.scope_name || null;
+        var routeType = m.data?.route_type ?? m.data?.packet?.route_type ?? null;
+        // Same path[0]-resolved area as the REST message list (server-side
+        // resolveEntryPointArea, see store.go) -- already computed at
+        // broadcast time, just read it here.
+        var area = m.data?.area || m.data?.packet?.area || null;
 
         // Update channel list entry — only once per unique packet hash
         var isFirstObservation = pktHash && !seenHashes.has(pktHash + ':' + channelKey);
@@ -1457,6 +1500,7 @@
             existing._fromWS = true;
             existing._wsAt = Date.now();
           } else {
+            var wsHops = payload.path_len || 0;
             messages.push({
               sender: sender,
               text: displayText,
@@ -1466,8 +1510,12 @@
               packetHash: pktHash,
               repeats: 1,
               observers: observer ? [observer] : [],
-              hops: payload.path_len || 0,
+              hops: wsHops,
               snr: snr,
+              scope: scope,
+              routeType: routeType,
+              area: area,
+              botReply: pingBotReply(displayText, wsHops, snr, observer),
               // #1498: mark as WS-pushed so a later REST replacement
               // (selectChannel / refreshMessages) can merge instead of
               // stomp. Without this flag the REST response wipes any
@@ -2258,8 +2306,50 @@
       if (msg.observers?.length > 1) meta.push(`${msg.observers.length} observers`);
       if (msg.hops > 0) meta.push(`${msg.hops} hops`);
       if (msg.snr !== null && msg.snr !== undefined) meta.push(`SNR ${msg.snr}`);
+      // Scope only applies to TRANSPORT_FLOOD(0)/TRANSPORT_DIRECT(3) routes.
+      // Plain FLOOD(1)/DIRECT(2) never carry a scope — show nothing for those.
+      // A transport-eligible message with an empty scope means the region
+      // couldn't be determined (no configured region matched, or an
+      // HMAC collision made the match ambiguous) — show it as unknown
+      // rather than silently omitting the tag.
+      const isTransportRoute = msg.routeType === 0 || msg.routeType === 3;
+      if (msg.scope) meta.push(`scope: ${escapeHtml(msg.scope)}`);
+      else if (isTransportRoute) meta.push('scope: unknown');
+      // msg.area (set server-side from the message's own path[0]
+      // entry-point repeater, not from the scope string) is where the
+      // SENDER physically was — distinct from the scope-linked area
+      // above, since e.g. a sender in Aarhus can still send with the
+      // broad #dk scope. Only present when path[0] resolved unambiguously
+      // (unique_prefix) to a positioned node; omitted otherwise, not
+      // guessed.
+      if (msg.area) meta.push(`area: ${escapeHtml(msg.area)}`);
 
       const safeId = btoa(encodeURIComponent(sender));
+
+      // Ping-bot reply (server-synthesized in GetChannelMessages when this
+      // message's text matches a trigger word (pingTriggerWords) -- see
+      // pingBotReply in db.go).
+      // CoreScope-only: never transmitted back onto the mesh, since
+      // CoreScope has no publish path to a MeshCore broker/radio. The
+      // "Not sent to the mesh" caveat is load-bearing, not decoration --
+      // without it this could be misread as a real bot reply the sender's
+      // own radio received.
+      // "View path" needs a packet hash to look up. Shown even for a
+      // 0-hop reply -- the map now plots every station that heard the
+      // packet (not just the deepest relay chain), so a direct-only ping
+      // still has a spread worth visualizing (see GetPacketPath).
+      const viewPathHtml = (msg.botReply && msg.packetHash)
+        ? ` · <button type="button" class="ch-analyze-link" data-view-path="${escapeHtml(msg.packetHash)}" style="background:none;border:none;padding:0;cursor:pointer;font:inherit">View path →</button>`
+        : '';
+      const botReplyHtml = msg.botReply ? `<div class="ch-msg ch-message ch-bot-message">
+        <div class="ch-avatar" aria-hidden="true" style="background:var(--text-muted)">🤖</div>
+        <div class="ch-msg-content ch-message-content">
+          <div class="ch-msg-sender ch-message-sender" style="color:var(--text-muted)">${escapeHtml(msg.botReply.sender || 'CoreScopeBot')}</div>
+          <div class="ch-msg-bubble ch-message-bubble">${escapeHtml(msg.botReply.text || '')}</div>
+          <div class="ch-msg-meta ch-message-meta">Not sent to the mesh — CoreScope-only reply${viewPathHtml}</div>
+        </div>
+      </div>` : '';
+
       // #1367: emit BOTH the new chat-app class names (.ch-message /
       // .ch-message-bubble / .ch-message-meta) and the legacy .ch-msg*
       // names so existing tests/themes don't regress.
@@ -2270,7 +2360,7 @@
           <div class="ch-msg-bubble ch-message-bubble">${displayText}</div>
           <div class="ch-msg-meta ch-message-meta">${meta.join(' · ')}${msg.packetHash ? ` · <a href="#/packets/${msg.packetHash}" class="ch-analyze-link">View packet →</a>` : ''}</div>
         </div>
-      </div>`;
+      </div>${botReplyHtml}`;
     }).join('');
   }
 
@@ -2279,6 +2369,8 @@
     if (msgEl) { msgEl.scrollTop = msgEl.scrollHeight; autoScroll = true; document.getElementById('chScrollBtn')?.classList.add('hidden'); }
   }
 
+  window._channelsRenderMessagesForTest = renderMessages;
+  window._channelsPingBotReplyForTest = pingBotReply;
   window._channelsSetStateForTest = function (state) {
     if (!state) return;
     if (Array.isArray(state.channels)) channels = state.channels;

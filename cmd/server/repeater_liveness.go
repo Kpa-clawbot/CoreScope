@@ -114,6 +114,15 @@ type relayEntry struct {
 	// scope is the tx's region scope name (transmissions.scope_name).
 	// Empty when absent / on older schemas. Used for TransportedScopes (#1751).
 	scope string
+	// fromPrefix marks entries that came from the 1-byte raw-prefix
+	// fallback bucket rather than this exact (resolved-pubkey) key — see
+	// collectRelayEntriesLocked. computeRelayInfoFromEntries must not
+	// accumulate `scope` for these: MeshCore firmware only relays a
+	// TRANSPORT_FLOOD/DIRECT packet when the repeater's own configured
+	// region matches (allowPacketForward in examples/simple_repeater/
+	// MyMesh.cpp), so crediting a scope based on nothing but a shared
+	// 1-byte hash prefix asserts something the protocol wouldn't allow.
+	fromPrefix bool
 }
 
 // collectRelayEntriesLocked returns deduplicated relayEntry snapshots for
@@ -147,7 +156,7 @@ func (s *PacketStore) collectRelayEntriesLocked(key string) []relayEntry {
 	hint := len(txList) + len(prefixList)
 	entries := make([]relayEntry, 0, hint)
 	seen := make(map[int]bool, hint)
-	collect := func(list []*StoreTx) {
+	collect := func(list []*StoreTx, fromPrefix bool) {
 		for _, tx := range list {
 			if tx == nil || seen[tx.ID] {
 				continue
@@ -161,11 +170,11 @@ func (s *PacketStore) collectRelayEntriesLocked(key string) []relayEntry {
 			if tx.RouteType != nil {
 				rt = *tx.RouteType
 			}
-			entries = append(entries, relayEntry{ts: tx.FirstSeen, pt: pt, rt: rt, scope: tx.ScopeName})
+			entries = append(entries, relayEntry{ts: tx.FirstSeen, pt: pt, rt: rt, scope: tx.ScopeName, fromPrefix: fromPrefix})
 		}
 	}
-	collect(txList)
-	collect(prefixList)
+	collect(txList, false)
+	collect(prefixList, true)
 	return entries
 }
 
@@ -188,8 +197,9 @@ func computeRelayInfoFromEntries(entries []relayEntry, windowHours float64) Repe
 		}
 		// #1751: accumulate transported scopes BEFORE the timestamp gate —
 		// a non-advert path-hop tx proves scope transport even if its
-		// first_seen is unparseable. Mirrors the bulk path.
-		if e.scope != "" {
+		// first_seen is unparseable. Mirrors the bulk path. Skipped for
+		// fromPrefix entries — see relayEntry.fromPrefix doc.
+		if !e.fromPrefix && e.scope != "" {
 			if scopeSet == nil {
 				scopeSet = map[string]struct{}{}
 			}

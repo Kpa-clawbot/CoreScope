@@ -238,12 +238,14 @@
       [37.20, -122.52]
     ],
     "bufferKm": 20,
-    "_comment": "Optional. Restricts ingestion and API responses to nodes within the polygon + bufferKm. Polygon is an array of [lat, lon] pairs (minimum 3). Use the GeoFilter tab in the Customizer (requires apiKey) or the GeoFilter Builder (`/geofilter-builder.html`) to draw a polygon visually and export a config snippet. Remove this section to disable filtering. Nodes with no GPS fix are always allowed through."
+    "_comment": "Optional. By default, also restricts GET /api/nodes (and therefore the live map) to nodes within the polygon + bufferKm — foreign_advert-tagged nodes are always kept regardless (#730, see foreignAdverts below); see geoFilterExemptNodeList to opt out of that. The prune-geo-filter admin flow always uses this polygon regardless of geoFilterExemptNodeList. Polygon is an array of [lat, lon] pairs (minimum 3). Use the GeoFilter tab in the Customizer (requires apiKey) or the GeoFilter Builder (`/geofilter-builder.html`) to draw a polygon visually and export a config snippet. Remove this section to disable filtering entirely. Nodes with no GPS fix are always allowed through."
   },
   "foreignAdverts": {
     "mode": "flag",
     "_comment": "Controls how the ingestor handles ADVERTs whose GPS is OUTSIDE the geo_filter polygon (#730). 'flag' (default): store the advert/node and tag it foreign_advert=1 so operators can see bridged/leaked nodes via the API ('foreign': true on /api/nodes). 'drop': legacy behavior — silently discard the advert (no log, no node row). Only applies when geo_filter is configured; otherwise has no effect."
   },
+  "geoFilterExemptNodeList": false,
+  "_comment_geoFilterExemptNodeList": "Optional, default false. When geo_filter is configured, GET /api/nodes (and therefore the live map) excludes out-of-polygon nodes by default — the long-standing #730 declutter behavior, preserved automatically for every deployment upgrading from before this field existed. Set to true if you want geo_filter purely for foreign_advert classification/analytics (e.g. a 'Foreign Traffic' investigation) WITHOUT also hiding out-of-polygon nodes from the node list/map. Per-request ?geoFilter=0 / ?geoFilter=1 on /api/nodes overrides either default for a single call. Has no effect on ingestion (foreignAdverts.mode) or the prune-geo-filter admin flow, both of which are unaffected by this flag.",
   "areas": {
     "_comment": "Optional. GPS-based display filter. Each entry defines a geographic area by polygon ([lat, lon] pairs) or bounding box (latMin/latMax/lonMin/lonMax). Packets and nodes are attributed to an area based on the transmitting node's own GPS coordinates — not the observer's location. Areas appear as a filter pill bar in the dashboard. Remove this section to disable the area filter UI.",
     "BAY": {

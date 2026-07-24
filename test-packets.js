@@ -1019,6 +1019,58 @@ console.log('\n=== packets.js: page registration ===');
   });
 }
 
+console.log('\n=== packets.js: reconcileVisibleCols (column-prefs backfill) ===');
+{
+  const ctx = loadPacketsSandbox();
+  const api = ctx._packetsTestAPI;
+  const COL_DEFS = [
+    { key: 'region' }, { key: 'time' }, { key: 'hash' }, { key: 'size' },
+    { key: 'type' }, { key: 'scope' }, { key: 'observer' }, { key: 'path' },
+    { key: 'rpt' }, { key: 'details' },
+  ];
+  const defaultHidden = ['region'];
+
+  test('reconcileVisibleCols is exported', () => {
+    assert(typeof api.reconcileVisibleCols === 'function');
+  });
+
+  test('no saved prefs: falls back to all columns minus defaultHidden', () => {
+    const result = api.reconcileVisibleCols(null, null, COL_DEFS, defaultHidden);
+    assert.deepStrictEqual(result, COL_DEFS.map(c => c.key).filter(k => k !== 'region'));
+  });
+
+  test('legacy saved prefs (no known-cols baseline yet) get the scope column backfilled', () => {
+    // Reproduces a real saved localStorage value from before the Scope
+    // column (#1852) existed, and before packets-visible-cols-known was
+    // ever persisted — must not stay permanently hidden.
+    const legacy = ['time', 'hash', 'size', 'type', 'observer', 'path', 'rpt', 'details'];
+    const result = api.reconcileVisibleCols(legacy, null, COL_DEFS, defaultHidden);
+    assert.ok(result.includes('scope'), 'scope column should be backfilled into a legacy saved array');
+  });
+
+  test('a column the user explicitly hid (present in known, absent from saved) stays hidden', () => {
+    const known = ['region', 'time', 'hash', 'size', 'type', 'scope', 'observer', 'path', 'rpt', 'details'];
+    const saved = ['time', 'hash', 'size', 'type', 'scope', 'path', 'rpt', 'details']; // observer unchecked by user
+    const result = api.reconcileVisibleCols(saved, known, COL_DEFS, defaultHidden);
+    assert.ok(!result.includes('observer'), 'user-hidden column must not be resurrected');
+  });
+
+  test('a genuinely new column (absent from known) gets backfilled even with a known-cols baseline', () => {
+    const known = ['region', 'time', 'hash', 'size', 'type', 'observer', 'path', 'rpt', 'details']; // no scope yet
+    const saved = ['time', 'hash', 'size', 'type', 'observer', 'path', 'rpt', 'details'];
+    const result = api.reconcileVisibleCols(saved, known, COL_DEFS, defaultHidden);
+    assert.ok(result.includes('scope'), 'a column absent from the known baseline should be backfilled');
+  });
+
+  test('a column in defaultHidden is not force-added even if missing from saved and known', () => {
+    const legacy = ['time', 'hash', 'type', 'observer', 'path', 'rpt', 'details']; // no size, no scope
+    const narrowDefaultHidden = ['region', 'size', 'scope'];
+    const result = api.reconcileVisibleCols(legacy, null, COL_DEFS, narrowDefaultHidden);
+    assert.ok(!result.includes('scope'), 'columns in defaultHidden should not be backfilled');
+    assert.ok(!result.includes('size'), 'columns in defaultHidden should not be backfilled');
+  });
+}
+
 console.log('\n=== packets.js: _invalidateRowCounts / _refreshRowCountsIfDirty (#410) ===');
 {
   const ctx = loadPacketsSandbox();

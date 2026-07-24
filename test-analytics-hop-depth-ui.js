@@ -1,0 +1,443 @@
+/**
+ * Tests for the two "lad os lave dem begge" extensions built on top of
+ * /api/analytics/hop-depth (GetHopDepthAnalytics, cmd/server/db.go):
+ *
+ *  1. Scopes tab Overview: renderHopDepthSectionHtml / hopDepthBucketStats
+ *     — the scoped-vs-unscoped hop-depth comparison (does region scoping
+ *     actually contain flood propagation to fewer hops than unscoped
+ *     traffic).
+ *  2. Foreign Traffic tab: hopDepthLookupByPubkey — the per-repeater
+ *     min/median/max hop-depth enrichment joined onto the existing
+ *     "Repeaters Relaying Unscoped Traffic" table by public key.
+ *
+ * Pure-function unit tests plus one DOM-rendering integration test for
+ * the Foreign Traffic table join, following the same vm-sandbox pattern
+ * as test-analytics-foreign-traffic-tab.js / test-node-analytics-hop-chart.js.
+ */
+'use strict';
+
+const vm = require('vm');
+const fs = require('fs');
+const assert = require('assert');
+
+let passed = 0, failed = 0;
+async function testAsync(name, fn) {
+  try {
+    await fn();
+    passed++;
+    console.log(`  ✅ ${name}`);
+  } catch (e) {
+    failed++;
+    console.log(`  ❌ ${name}: ${e.message}`);
+  }
+}
+
+function makeSandbox() {
+  const ctx = {
+    window: { addEventListener: () => {}, dispatchEvent: () => {} },
+    document: {
+      readyState: 'complete',
+      createElement: () => ({ id: '', textContent: '', innerHTML: '' }),
+      head: { appendChild: () => {} },
+      getElementById: () => null,
+      addEventListener: () => {},
+      querySelectorAll: () => [],
+      querySelector: () => null,
+    },
+    console, Date, Infinity, Math, Array, Object, String, Number, JSON, RegExp,
+    Error, TypeError, parseInt, parseFloat, isNaN, isFinite,
+    encodeURIComponent, decodeURIComponent,
+    setTimeout: () => {}, clearTimeout: () => {},
+    fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve({}) }),
+    performance: { now: () => Date.now() },
+    localStorage: (() => { const s = {}; return { getItem: k => s[k] || null, setItem: (k, v) => { s[k] = String(v); }, removeItem: k => { delete s[k]; } }; })(),
+    location: { hash: '' },
+    getHashParams: function() { return new URLSearchParams((ctx.location.hash.split('?')[1] || '')); },
+    CustomEvent: class CustomEvent {},
+    Map, Promise, URLSearchParams,
+    addEventListener: () => {},
+    dispatchEvent: () => {},
+    requestAnimationFrame: (cb) => setTimeout(cb, 0),
+    setInterval: () => 1,
+    clearInterval: () => {},
+  };
+  vm.createContext(ctx);
+  return ctx;
+}
+
+function loadInCtx(ctx, file) {
+  if (!ctx.__payloadLabelsLoaded && file !== 'public/payload-labels.js') {
+    ctx.__payloadLabelsLoaded = true;
+    vm.runInContext(fs.readFileSync('public/payload-labels.js', 'utf8'), ctx);
+  }
+  vm.runInContext(fs.readFileSync(file, 'utf8'), ctx);
+  for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
+}
+
+const GEO_BOX = { latMin: 53, latMax: 59, lonMin: 6, lonMax: 15 };
+
+function makeAnalyticsSandbox(nodesFixture, opts) {
+  opts = opts || {};
+  const ctx = makeSandbox();
+  ctx.getComputedStyle = () => ({ getPropertyValue: () => '' });
+  ctx.registerPage = () => {};
+  ctx.timeAgo = (iso) => iso ? 'x ago' : '—';
+  ctx.RegionFilter = { init: () => {}, onChange: () => {}, regionQueryString: () => '' };
+  ctx.onWS = () => {};
+  ctx.offWS = () => {};
+  ctx.connectWS = () => {};
+  ctx.invalidateApiCache = () => {};
+  ctx.makeColumnsResizable = () => {};
+  ctx.initTabBar = () => {};
+  ctx.IATA_COORDS_GEO = {};
+  // fetch is what app.js's real api() ultimately calls -- routes by URL so
+  // the hop-depth/scope-stats endpoints can be stubbed independently of
+  // every other in-flight api() call (e.g. roles.js's own config fetch on
+  // load).
+  if (opts.hopDepthResponse !== undefined || opts.scopeStatsResponse !== undefined) {
+    ctx.fetch = (url) => {
+      if (String(url).indexOf('/analytics/hop-depth') !== -1) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(opts.hopDepthResponse) });
+      }
+      if (String(url).indexOf('/scope-stats') !== -1) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(opts.scopeStatsResponse) });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    };
+  }
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  ctx.fetchAllNodes = async () => ({ nodes: nodesFixture || [] });
+  ctx.window.MC_GEO_FILTER = GEO_BOX;
+  try { loadInCtx(ctx, 'public/analytics.js'); } catch (e) {
+    for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
+  }
+  return ctx;
+}
+
+function fakeEl() {
+  return { innerHTML: '' };
+}
+
+(async () => {
+  console.log('\n=== analytics.js: hopDepthBucketStats ===');
+
+  await testAsync('empty/missing buckets return total 0 and null median', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    [[], null, undefined].forEach((input) => {
+      const stats = ctx.window._analyticsHopDepthBucketStats(input);
+      assert.strictEqual(stats.total, 0);
+      assert.strictEqual(stats.median, null);
+    });
+  });
+
+  await testAsync('single bucket -> median is that bucket\'s hop value', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    const stats = ctx.window._analyticsHopDepthBucketStats([{ hops: 3, count: 7 }]);
+    assert.strictEqual(stats.total, 7);
+    assert.strictEqual(stats.median, 3);
+  });
+
+  await testAsync('odd total -> median is the middle bucket by cumulative count', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    // hops 0..4 counts 1 -> total 5, cumulative >= 2.5 first at hops=2.
+    const stats = ctx.window._analyticsHopDepthBucketStats([
+      { hops: 0, count: 1 }, { hops: 1, count: 1 }, { hops: 2, count: 1 },
+      { hops: 3, count: 1 }, { hops: 4, count: 1 },
+    ]);
+    assert.strictEqual(stats.total, 5);
+    assert.strictEqual(stats.median, 2);
+  });
+
+  await testAsync('median is unaffected by input bucket order (sorts internally)', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    const stats = ctx.window._analyticsHopDepthBucketStats([
+      { hops: 4, count: 1 }, { hops: 0, count: 1 }, { hops: 2, count: 1 },
+      { hops: 1, count: 1 }, { hops: 3, count: 1 },
+    ]);
+    assert.strictEqual(stats.median, 2);
+  });
+
+  console.log('\n=== analytics.js: hopDepthPercentile ===');
+
+  await testAsync('no data returns null', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    assert.strictEqual(ctx.window._analyticsHopDepthPercentile([], 0.95), null);
+    assert.strictEqual(ctx.window._analyticsHopDepthPercentile(null, 0.95), null);
+  });
+
+  await testAsync('P95 of a 100-sample even spread lands at hops=94', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    // hops 0..99, count 1 each -> total 100, cumulative >= 95 first at hops=94.
+    const buckets = [];
+    for (let h = 0; h < 100; h++) buckets.push({ hops: h, count: 1 });
+    assert.strictEqual(ctx.window._analyticsHopDepthPercentile(buckets, 0.95), 94);
+  });
+
+  await testAsync('P50 matches the median helper on the same data', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    const buckets = [{ hops: 0, count: 1 }, { hops: 1, count: 1 }, { hops: 2, count: 1 }, { hops: 3, count: 1 }, { hops: 4, count: 1 }];
+    const median = ctx.window._analyticsHopDepthBucketStats(buckets).median;
+    const p50 = ctx.window._analyticsHopDepthPercentile(buckets, 0.5);
+    assert.strictEqual(p50, median);
+  });
+
+  await testAsync('a single heavy bucket dominates the percentile regardless of p', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    const buckets = [{ hops: 0, count: 1000 }, { hops: 20, count: 1 }];
+    assert.strictEqual(ctx.window._analyticsHopDepthPercentile(buckets, 0.95), 0);
+    assert.strictEqual(ctx.window._analyticsHopDepthPercentile(buckets, 0.999), 0);
+  });
+
+  console.log('\n=== analytics.js: renderHopDepthSectionHtml ===');
+
+  await testAsync('null/empty hopData renders nothing', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    assert.strictEqual(ctx.window._analyticsRenderHopDepthSectionHtml(null), '');
+    assert.strictEqual(ctx.window._analyticsRenderHopDepthSectionHtml({}), '');
+  });
+
+  await testAsync('present-but-empty buckets renders the no-data message', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    const html = ctx.window._analyticsRenderHopDepthSectionHtml({ scopedHopDepth: [], unscopedHopDepth: [] });
+    assert.ok(html.includes('No relay-hop data in this window'));
+  });
+
+  await testAsync('renders scoped/unscoped median stat cards and per-hop bar rows', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    const html = ctx.window._analyticsRenderHopDepthSectionHtml({
+      scopedHopDepth: [{ hops: 0, count: 10 }],
+      unscopedHopDepth: [{ hops: 0, count: 4 }, { hops: 1, count: 4 }, { hops: 2, count: 2 }],
+    });
+    assert.ok(html.includes('Scoped Median Hop'), 'should show a scoped median stat card');
+    assert.ok(html.includes('Unscoped Median Hop'), 'should show an unscoped median stat card');
+    assert.ok(html.includes('Suggested flood.max.unscoped'), 'should show a suggested flood.max.unscoped card');
+    assert.ok(html.includes('10 samples'), 'scoped sample size should be 10');
+    assert.ok(html.includes('0 hops'), 'should have a hop=0 row');
+    assert.ok(html.includes('2 hops'), 'should have a hop=2 row');
+  });
+
+  await testAsync('renderHopDepthSectionHtml includes the time-series trend when timeSeries is present', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    const html = ctx.window._analyticsRenderHopDepthSectionHtml({
+      scopedHopDepth: [{ hops: 0, count: 10 }],
+      unscopedHopDepth: [{ hops: 0, count: 4 }],
+      timeSeries: [
+        { t: '2026-07-23T06:00:00Z', scopedMedianHop: 0, unscopedMedianHop: 1 },
+        { t: '2026-07-23T07:00:00Z', scopedMedianHop: 1, unscopedMedianHop: 2 },
+      ],
+    });
+    assert.ok(html.includes('Median Hop Depth Over Time'), 'should include the trend section heading');
+    assert.ok(html.includes('<svg'), 'should render an svg chart when there are 2+ time points');
+  });
+
+  await testAsync('the time-series trend renders above the stat cards and bar chart (moved to the top for visibility)', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    const html = ctx.window._analyticsRenderHopDepthSectionHtml({
+      scopedHopDepth: [{ hops: 0, count: 10 }],
+      unscopedHopDepth: [{ hops: 0, count: 4 }],
+      timeSeries: [
+        { t: '2026-07-23T06:00:00Z', scopedMedianHop: 0, unscopedMedianHop: 1 },
+        { t: '2026-07-23T07:00:00Z', scopedMedianHop: 1, unscopedMedianHop: 2 },
+      ],
+    });
+    const trendIdx = html.indexOf('Median Hop Depth Over Time');
+    const statsIdx = html.indexOf('Scoped Median Hop');
+    assert.ok(trendIdx > -1 && statsIdx > -1, 'both sections should be present');
+    assert.ok(trendIdx < statsIdx, 'the time-series trend heading should appear before the stat cards');
+  });
+
+  console.log('\n=== analytics.js: hopDepthTimeSeriesChartHtml ===');
+
+  await testAsync('fewer than 2 points renders the insufficient-data message, not a broken chart', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    assert.ok(ctx.window._analyticsHopDepthTimeSeriesChartHtml([]).includes('Insufficient data'));
+    assert.ok(ctx.window._analyticsHopDepthTimeSeriesChartHtml(null).includes('Insufficient data'));
+    assert.ok(ctx.window._analyticsHopDepthTimeSeriesChartHtml([{ t: '2026-07-23T06:00:00Z', scopedMedianHop: 0, unscopedMedianHop: 0 }]).includes('Insufficient data'));
+  });
+
+  await testAsync('2+ points render an svg with both series polylines', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    const html = ctx.window._analyticsHopDepthTimeSeriesChartHtml([
+      { t: '2026-07-23T06:00:00Z', scopedMedianHop: 0, unscopedMedianHop: 2 },
+      { t: '2026-07-23T07:00:00Z', scopedMedianHop: 1, unscopedMedianHop: 3 },
+      { t: '2026-07-23T08:00:00Z', scopedMedianHop: 2, unscopedMedianHop: 4 },
+    ]);
+    assert.ok(html.includes('<svg'), 'should render an svg');
+    const polylineCount = (html.match(/<polyline/g) || []).length;
+    assert.strictEqual(polylineCount, 2, 'should render exactly one polyline per fully-populated series');
+  });
+
+  await testAsync('a null median in the middle of a series breaks it into two segments, not one connected line', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    // 3 points, middle one null for unscopedMedianHop -- the unscoped
+    // series must render as 0 polylines (each segment needs 2+ points to
+    // draw a line, and isolated single points on either side of the gap
+    // don't qualify), while scoped (fully populated) still renders 1.
+    const html = ctx.window._analyticsHopDepthTimeSeriesChartHtml([
+      { t: '2026-07-23T06:00:00Z', scopedMedianHop: 0, unscopedMedianHop: 2 },
+      { t: '2026-07-23T07:00:00Z', scopedMedianHop: 1, unscopedMedianHop: null },
+      { t: '2026-07-23T08:00:00Z', scopedMedianHop: 2, unscopedMedianHop: 4 },
+    ]);
+    const polylineCount = (html.match(/<polyline/g) || []).length;
+    assert.strictEqual(polylineCount, 1, 'only the fully-populated scoped series should draw a line; the gapped unscoped series draws none');
+  });
+
+  await testAsync('a run of 2+ consecutive non-null points around a gap still draws that segment', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    // 4 points: unscoped has data at [0,1], gap at [2], data at [3] --
+    // should draw exactly one segment (points 0-1), not connect across
+    // the gap to point 3, and not draw anything for the isolated point 3.
+    const html = ctx.window._analyticsHopDepthTimeSeriesChartHtml([
+      { t: 't0', scopedMedianHop: 0, unscopedMedianHop: 1 },
+      { t: 't1', scopedMedianHop: 1, unscopedMedianHop: 2 },
+      { t: 't2', scopedMedianHop: 2, unscopedMedianHop: null },
+      { t: 't3', scopedMedianHop: 3, unscopedMedianHop: 5 },
+    ]);
+    const polylineCount = (html.match(/<polyline/g) || []).length;
+    assert.strictEqual(polylineCount, 2, 'scoped draws 1 full segment, unscoped draws 1 segment for the [t0,t1] run and nothing for isolated t3');
+  });
+
+  console.log('\n=== analytics.js: hopDepthLookupByPubkey ===');
+
+  await testAsync('builds a publicKey -> entry map', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    const entries = [
+      { publicKey: 'pkA', name: 'A', count: 5, minHops: 1, medianHops: 2, maxHops: 4 },
+      { publicKey: 'pkB', name: 'B', count: 2, minHops: 0, medianHops: 0.5, maxHops: 1 },
+    ];
+    const map = ctx.window._analyticsHopDepthLookupByPubkey(entries);
+    assert.strictEqual(map.pkA.count, 5);
+    assert.strictEqual(map.pkB.maxHops, 1);
+  });
+
+  await testAsync('empty/null input returns an empty map, not a throw', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    [[], null, undefined].forEach((input) => {
+      const map = ctx.window._analyticsHopDepthLookupByPubkey(input);
+      assert.strictEqual(Object.keys(map).length, 0);
+    });
+  });
+
+  console.log('\n=== analytics.js: Foreign Traffic tab hop-depth enrichment ===');
+
+  await testAsync('relay table shows min/median/max hop columns joined by public key', async () => {
+    const ctx = makeAnalyticsSandbox([
+      { public_key: 'pkA', name: 'RepeaterA', role: 'repeater', unscoped_relay_count_24h: 10, relay_count_24h: 20 },
+    ], {
+      hopDepthResponse: {
+        window: '24h',
+        scopedHopDepth: [],
+        unscopedHopDepth: [],
+        unscopedByRepeater: [
+          { publicKey: 'pkA', name: 'RepeaterA', count: 10, minHops: 1, medianHops: 2.5, maxHops: 6 },
+        ],
+      },
+    });
+    const el = fakeEl();
+    await ctx.window._analyticsRenderForeignTrafficTab(el);
+    assert.ok(el.innerHTML.includes('Min Hops'), 'table header should include Min Hops');
+    assert.ok(el.innerHTML.includes('Median Hops'), 'table header should include Median Hops');
+    assert.ok(el.innerHTML.includes('Max Hops'), 'table header should include Max Hops');
+    // Row cells: min=1, median=2.5, max=6 for pkA.
+    const rowStart = el.innerHTML.indexOf('RepeaterA');
+    const rowSection = el.innerHTML.slice(rowStart, rowStart + 500);
+    assert.ok(rowSection.includes('>1<'), 'min hops cell should show 1');
+    assert.ok(rowSection.includes('>2.5<'), 'median hops cell should show 2.5');
+    assert.ok(rowSection.includes('>6<'), 'max hops cell should show 6');
+  });
+
+  await testAsync('a repeater with no hop-depth entry shows placeholders instead of throwing', async () => {
+    const ctx = makeAnalyticsSandbox([
+      { public_key: 'pkNoHops', name: 'QuietRepeater', role: 'repeater', unscoped_relay_count_24h: 3, relay_count_24h: 10 },
+    ], {
+      hopDepthResponse: { window: '24h', scopedHopDepth: [], unscopedHopDepth: [], unscopedByRepeater: [] },
+    });
+    const el = fakeEl();
+    await ctx.window._analyticsRenderForeignTrafficTab(el);
+    assert.ok(el.innerHTML.includes('QuietRepeater'));
+    const rowStart = el.innerHTML.indexOf('QuietRepeater');
+    const rowSection = el.innerHTML.slice(rowStart, rowStart + 500);
+    assert.ok(rowSection.includes('>—<'), 'missing hop-depth data should render as an em dash placeholder');
+  });
+
+  await testAsync('a failing hop-depth fetch degrades to placeholders, not a broken tab', async () => {
+    const ctx = makeAnalyticsSandbox([
+      { public_key: 'pkA', name: 'RepeaterA', role: 'repeater', unscoped_relay_count_24h: 5, relay_count_24h: 5 },
+    ]);
+    // No hopDepthResponse opt given -> default sandbox fetch mock returns
+    // { ok:true, json: () => ({}) } for every path, including hop-depth,
+    // so unscopedByRepeater is simply undefined/absent -- exercises the
+    // "no data at all" branch through the same code path a real network
+    // error's catch(() => null) would also produce.
+    const el = fakeEl();
+    await ctx.window._analyticsRenderForeignTrafficTab(el);
+    assert.ok(el.innerHTML.includes('RepeaterA'), 'tab should still render the repeater row');
+    assert.ok(el.innerHTML.includes('Min Hops'), 'table structure should still include the hop columns');
+  });
+
+  console.log('\n=== analytics.js: bridgeRepeaterPubkeySet ===');
+
+  await testAsync('builds a publicKey -> true set from BridgeRepeater entries', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    const set = ctx.window._analyticsBridgeRepeaterPubkeySet([
+      { publicKey: 'pkBridge1', name: 'Bridge1', regions: ['eu', 'dk'], count: 12 },
+      { publicKey: 'pkBridge2', name: 'Bridge2', regions: ['dk', 'se'], count: 3 },
+    ]);
+    assert.strictEqual(set.pkBridge1, true);
+    assert.strictEqual(set.pkBridge2, true);
+    assert.strictEqual(set.pkNotABridge, undefined);
+  });
+
+  await testAsync('empty/null input returns an empty set, not a throw', async () => {
+    const ctx = makeAnalyticsSandbox([]);
+    [[], null, undefined].forEach((input) => {
+      const set = ctx.window._analyticsBridgeRepeaterPubkeySet(input);
+      assert.strictEqual(Object.keys(set).length, 0);
+    });
+  });
+
+  console.log('\n=== analytics.js: Foreign Traffic tab bridge-repeater badge ===');
+
+  await testAsync('a confirmed bridge repeater gets a Bridge badge on its row', async () => {
+    const ctx = makeAnalyticsSandbox([
+      { public_key: 'pkBridge', name: 'BridgeRepeater', role: 'repeater', unscoped_relay_count_24h: 20, relay_count_24h: 25 },
+      { public_key: 'pkPlain', name: 'PlainRepeater', role: 'repeater', unscoped_relay_count_24h: 15, relay_count_24h: 20 },
+    ], {
+      hopDepthResponse: { window: '24h', scopedHopDepth: [], unscopedHopDepth: [], unscopedByRepeater: [] },
+      scopeStatsResponse: {
+        bridgeRepeaters: [
+          { publicKey: 'pkBridge', name: 'BridgeRepeater', regions: ['eu', 'dk'], count: 7 },
+        ],
+      },
+    });
+    const el = fakeEl();
+    await ctx.window._analyticsRenderForeignTrafficTab(el);
+    const bridgeRowStart = el.innerHTML.indexOf('BridgeRepeater');
+    const bridgeRowEnd = el.innerHTML.indexOf('</tr>', bridgeRowStart);
+    assert.ok(el.innerHTML.slice(bridgeRowStart, bridgeRowEnd).includes('Bridge'), 'the bridge repeater row should carry a Bridge badge');
+
+    const plainRowStart = el.innerHTML.indexOf('PlainRepeater');
+    const plainRowEnd = el.innerHTML.indexOf('</tr>', plainRowStart);
+    const plainRowHtml = el.innerHTML.slice(plainRowStart, plainRowEnd);
+    assert.ok(!plainRowHtml.includes('badge'), 'a non-bridge repeater must not get the badge');
+  });
+
+  await testAsync('no bridge data (fetch failure or empty list) renders with no badges, no throw', async () => {
+    const ctx = makeAnalyticsSandbox([
+      { public_key: 'pkA', name: 'RepeaterA', role: 'repeater', unscoped_relay_count_24h: 5, relay_count_24h: 5 },
+    ], {
+      hopDepthResponse: { window: '24h', scopedHopDepth: [], unscopedHopDepth: [], unscopedByRepeater: [] },
+      scopeStatsResponse: {},
+    });
+    const el = fakeEl();
+    await ctx.window._analyticsRenderForeignTrafficTab(el);
+    assert.ok(el.innerHTML.includes('RepeaterA'));
+    assert.ok(!el.innerHTML.includes('badge'), 'no bridge data should mean no badges anywhere');
+  });
+
+  console.log('\n════════════════════════════════════════');
+  console.log(`  Hop-Depth Analytics UI: ${passed} passed, ${failed} failed`);
+  console.log('════════════════════════════════════════');
+  if (failed > 0) process.exit(1);
+})();
