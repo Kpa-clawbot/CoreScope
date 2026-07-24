@@ -449,7 +449,11 @@ func main() {
 	// Neighbor-edges builder (#1287 — Option 4): ingestor owns
 	// neighbor_edges writes. Runs every 60s. Server reads the snapshot
 	// via cmd/server/neighbor_recomputer.go on the same cadence.
-	stopNeighborBuilder := store.StartNeighborEdgesBuilder(NeighborEdgesBuilderInterval)
+	// #1784: the neighbor builder is the first real consumer of the
+	// path-trust threshold. Resolved once here so every tick shares the
+	// same operator-configured value.
+	neighborTrust := cfg.GetPathTrust()
+	stopNeighborBuilder := store.StartNeighborEdgesBuilder(NeighborEdgesBuilderInterval, &neighborTrust)
 	defer stopNeighborBuilder()
 	log.Printf("[neighbor-build] enabled (interval=%s)", NeighborEdgesBuilderInterval)
 
