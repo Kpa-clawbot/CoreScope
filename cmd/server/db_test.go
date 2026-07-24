@@ -716,6 +716,78 @@ func TestGetPacketPath_ObserverPositionPrefersOwnGPS(t *testing.T) {
 	}
 }
 
+// TestGetPacketPath_ObserverPositionFallsBackToNameMatch covers a
+// bridge-type observer (seen in the wild on openHop-Repeater firmware)
+// whose `observers.id` is a human-readable device name rather than its
+// mesh pubkey -- so the pubkey lookup can never find its real, positioned
+// node row. The position should still be found by matching display name
+// against `nodes` instead of leaving the observer unplaced.
+func TestGetPacketPath_ObserverPositionFallsBackToNameMatch(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	// observers.id is the device's NAME, not a pubkey -- the real pubkey
+	// only exists as nodes.public_key on a separate row.
+	db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('DK_FRØRUP_5871_R0001', 'DK_FRØRUP_5871_R0001', 'REPEATER')`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon) VALUES ('226e9df0...real-pubkey', 'DK_FRØRUP_5871_R0001', 'repeater', 55.237344, 10.710082)`)
+
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('AA', 'pathtest00000005', '2026-01-15T10:00:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"ping","sender":"Eve"}', '#ping')`)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (1, 1, 9.0, -88, '[]', 1736935200)`)
+
+	resp, err := db.GetPacketPath("pathtest00000005")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Branches) != 1 {
+		t.Fatalf("Branches = %+v, want 1", resp.Branches)
+	}
+	obs := resp.Branches[0].Observer
+	if obs == nil {
+		t.Fatalf("Observer = nil, want a populated observer")
+	}
+	if obs.Lat == nil || *obs.Lat != 55.237344 || obs.Lon == nil || *obs.Lon != 10.710082 {
+		t.Errorf("Observer.Lat/Lon = %v/%v, want the name-matched node's GPS (55.237344, 10.710082)", obs.Lat, obs.Lon)
+	}
+}
+
+// TestGetPacketPath_ObserverPositionSkipsAmbiguousNameMatch covers two
+// unrelated positioned nodes that happen to share a display name: the
+// name-match fallback must not guess which one is the real observer, so
+// the observer should stay unplaced (falling through to the IATA table,
+// or nil if that has nothing either) rather than silently picking one.
+func TestGetPacketPath_ObserverPositionSkipsAmbiguousNameMatch(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('bridge-id-not-a-pubkey', 'Duplicate Name', NULL)`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon) VALUES ('pkOne', 'Duplicate Name', 'repeater', 10.0, 20.0)`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon) VALUES ('pkTwo', 'Duplicate Name', 'repeater', 30.0, 40.0)`)
+
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('AA', 'pathtest00000006', '2026-01-15T10:00:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"ping","sender":"Eve"}', '#ping')`)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (1, 1, 9.0, -88, '[]', 1736935200)`)
+
+	resp, err := db.GetPacketPath("pathtest00000006")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Branches) != 1 {
+		t.Fatalf("Branches = %+v, want 1", resp.Branches)
+	}
+	obs := resp.Branches[0].Observer
+	if obs == nil {
+		t.Fatalf("Observer = nil, want a populated observer (just without a position)")
+	}
+	if obs.Lat != nil || obs.Lon != nil {
+		t.Errorf("Observer.Lat/Lon = %v/%v, want nil -- must not guess between two same-named nodes", obs.Lat, obs.Lon)
+	}
+}
+
 // TestGetPacketPath_NoResolvedPath covers a station whose observation
 // never resolved: it still contributes a branch (hop count from
 // path_json, so reach is never silently dropped), just with no points.

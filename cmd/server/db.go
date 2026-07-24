@@ -1704,6 +1704,62 @@ func (db *DB) GetPacketPath(hash string) (*PacketPathResponse, error) {
 		}
 	}
 
+	// Fallback for observers whose own `observers.id` isn't its mesh
+	// pubkey at all -- e.g. an MQTT-bridge-type observer (observed:
+	// openHop-Repeater firmware) that publishes its status keyed by
+	// device name rather than pubkey, so the lookup above never matches
+	// even though the same physical device has a real, positioned nodes
+	// row under its actual pubkey. Matched by exact display name; only
+	// queried for observers the pubkey lookup left unpositioned, and only
+	// applied if the pubkey lookup didn't already find something.
+	nameFallbackNeeded := map[string]bool{}
+	for _, b := range best {
+		if b.observerName == "" {
+			continue
+		}
+		if ni, ok := nodeByPK[b.observerPubkey]; ok && ni.lat != nil && ni.lon != nil {
+			continue
+		}
+		nameFallbackNeeded[b.observerName] = true
+	}
+	nodeByName := make(map[string]nodeInfo, len(nameFallbackNeeded))
+	if len(nameFallbackNeeded) > 0 {
+		names := make([]string, 0, len(nameFallbackNeeded))
+		for n := range nameFallbackNeeded {
+			names = append(names, n)
+		}
+		placeholders := make([]byte, 0, len(names)*2)
+		args := make([]interface{}, len(names))
+		for i, n := range names {
+			if i > 0 {
+				placeholders = append(placeholders, ',')
+			}
+			placeholders = append(placeholders, '?')
+			args[i] = n
+		}
+		nameRows, err := db.conn.Query(
+			"SELECT name, role, lat, lon FROM nodes WHERE name IN ("+string(placeholders)+") AND lat IS NOT NULL AND lon IS NOT NULL", args...)
+		if err == nil {
+			ambiguous := map[string]bool{}
+			for nameRows.Next() {
+				var name, role sql.NullString
+				var lat, lon sql.NullFloat64
+				if nameRows.Scan(&name, &role, &lat, &lon) == nil {
+					if _, exists := nodeByName[name.String]; exists {
+						ambiguous[name.String] = true // >1 positioned node shares this name -- don't guess which one
+						continue
+					}
+					v1, v2 := lat.Float64, lon.Float64
+					nodeByName[name.String] = nodeInfo{role: role.String, lat: &v1, lon: &v2}
+				}
+			}
+			nameRows.Close()
+			for n := range ambiguous {
+				delete(nodeByName, n)
+			}
+		}
+	}
+
 	for _, b := range best {
 		branch := PacketPathBranch{Hops: b.hops, Points: []PacketPathPoint{}}
 		for _, pk := range b.resolvedPath {
@@ -1725,12 +1781,19 @@ func (db *DB) GetPacketPath(hash string) (*PacketPathResponse, error) {
 				obs.IATA = strings.ToUpper(strings.TrimSpace(b.observerIATA.String))
 			}
 			// Prefer the observer's own self-advertised GPS (same source as
-			// /api/observers and the Wardriving tab) over its configured
-			// IATA code -- the IATA table only covers a fixed list of real
-			// airports plus a handful of hand-added local codes, so a
-			// custom/regional code an operator typed in (or a typo) falls
-			// through it even when the node itself knows exactly where it is.
+			// /api/observers and the Wardriving tab), falling back to a
+			// name match against `nodes` (some bridge-type observers --
+			// seen on openHop-Repeater firmware -- publish their MQTT
+			// status keyed by device name rather than mesh pubkey, so the
+			// pubkey lookup above never finds their real, positioned node
+			// row), and only then the configured IATA code -- which only
+			// covers a fixed list of real airports plus a handful of
+			// hand-added local codes, so a custom/regional code an
+			// operator typed in (or a typo) falls through it even when
+			// the node itself knows exactly where it is.
 			if ni, ok := nodeByPK[b.observerPubkey]; ok && ni.lat != nil && ni.lon != nil {
+				obs.Lat, obs.Lon = ni.lat, ni.lon
+			} else if ni, ok := nodeByName[b.observerName]; ok {
 				obs.Lat, obs.Lon = ni.lat, ni.lon
 			} else if obs.IATA != "" {
 				if coord, ok := iataCoords[obs.IATA]; ok {
