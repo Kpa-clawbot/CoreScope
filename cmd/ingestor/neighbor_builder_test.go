@@ -3,6 +3,8 @@ package main
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/meshcore-analyzer/packetpath"
 )
 
 // TestNeighborEdgesBuilderUpsertsFromObservations enforces issue
@@ -66,7 +68,7 @@ func TestNeighborEdgesBuilderUpsertsFromObservations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	n, err := store.buildAndPersistNeighborEdges()
+	n, err := store.buildAndPersistNeighborEdges(trustAllPrefixes())
 	if err != nil {
 		t.Fatalf("buildAndPersistNeighborEdges: %v", err)
 	}
@@ -140,7 +142,7 @@ func TestNeighborEdgesBuilderUpsertsFromAnonReqEphemeralPubKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	n, err := store.buildAndPersistNeighborEdges()
+	n, err := store.buildAndPersistNeighborEdges(trustAllPrefixes())
 	if err != nil {
 		t.Fatalf("buildAndPersistNeighborEdges: %v", err)
 	}
@@ -210,7 +212,7 @@ func TestNeighborEdgesBuilderExcludesOtherNonAdvertTypes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := store.buildAndPersistNeighborEdges(); err != nil {
+	if _, err := store.buildAndPersistNeighborEdges(trustAllPrefixes()); err != nil {
 		t.Fatalf("buildAndPersistNeighborEdges: %v", err)
 	}
 
@@ -220,5 +222,109 @@ func TestNeighborEdgesBuilderExcludesOtherNonAdvertTypes(t *testing.T) {
 	}
 	if got != 0 {
 		t.Fatalf("REQ should not produce an originator\u2194path[0] edge; got %d rows", got)
+	}
+}
+
+// trustAllPrefixes returns the pre-#1784 threshold, where 1-byte hop
+// hashes still count as mapping evidence. The builder tests above
+// exercise edge *shape* using 1-byte fixtures; pinning them to the
+// legacy threshold keeps their original intent intact, while the gate
+// itself is covered by the two tests below.
+func trustAllPrefixes() *packetpath.TrustConfig {
+	return &packetpath.TrustConfig{MinHashBytesForMapping: 1}
+}
+
+// seedTrustFixture builds the minimal DB shape shared by the path-trust
+// tests: two nodes, one observer, one ADVERT transmission, and one
+// observation carrying hop as its single path element.
+func seedTrustFixture(t *testing.T, store *Store, hop string) {
+	t.Helper()
+	if _, err := store.db.Exec(
+		`INSERT INTO nodes (public_key, name) VALUES (?, ?), (?, ?)`,
+		"aaaaaaaaaa", "from-node",
+		"bbbbbbbbbb", "first-hop",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO observers (id, name) VALUES (?, ?)`, "obs-1", "observer-1"); err != nil {
+		t.Fatal(err)
+	}
+	var obsRowid int64
+	if err := store.db.QueryRow(`SELECT rowid FROM observers WHERE id = ?`, "obs-1").Scan(&obsRowid); err != nil {
+		t.Fatal(err)
+	}
+	res, err := store.db.Exec(
+		`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, from_pubkey)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"", "h1", "2026-01-01T00:00:00Z", 0, payloadADVERT, 0, "{}", "aaaaaaaaaa",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txID, _ := res.LastInsertId()
+	if _, err := store.db.Exec(
+		`INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp) VALUES (?, ?, ?, ?)`,
+		txID, obsRowid, `["`+hop+`"]`, int64(1735689600),
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestNeighborEdgesBuilderPathTrustExcludesOneByte pins #1784 at the
+// builder: under the default threshold (2 bytes) a 1-byte hop hash
+// produces no edge, even though it resolves to exactly one candidate in
+// the nodes table. Uniqueness of a 1-byte prefix is a property of the
+// nodes we happen to know about — on a mesh large enough to occupy all
+// 256 values (SaarMesh: 1071 nodes, 13 of them uniquely resolvable by
+// one byte) a later-joining repeater sharing that byte turns today's
+// "unique" resolution into a wrong edge.
+func TestNeighborEdgesBuilderPathTrustExcludesOneByte(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "trust1.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+	seedTrustFixture(t, store, "bb")
+
+	// nil == package default (MinHashBytesForMapping = 2).
+	if _, err := store.buildAndPersistNeighborEdges(nil); err != nil {
+		t.Fatalf("buildAndPersistNeighborEdges: %v", err)
+	}
+
+	var got int
+	if err := store.db.QueryRow(
+		`SELECT COUNT(*) FROM neighbor_edges WHERE node_a = ? AND node_b = ?`,
+		"aaaaaaaaaa", "bbbbbbbbbb").Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != 0 {
+		t.Fatalf("1-byte hop must not produce an edge under the default threshold, got %d", got)
+	}
+}
+
+// TestNeighborEdgesBuilderPathTrustAllowsTwoByte is the positive half of
+// the gate: the same fixture with a 2-byte hop still produces the edge,
+// so the threshold narrows the evidence base rather than disabling the
+// builder.
+func TestNeighborEdgesBuilderPathTrustAllowsTwoByte(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "trust2.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+	seedTrustFixture(t, store, "bbbb")
+
+	if _, err := store.buildAndPersistNeighborEdges(nil); err != nil {
+		t.Fatalf("buildAndPersistNeighborEdges: %v", err)
+	}
+
+	var got int
+	if err := store.db.QueryRow(
+		`SELECT COUNT(*) FROM neighbor_edges WHERE node_a = ? AND node_b = ?`,
+		"aaaaaaaaaa", "bbbbbbbbbb").Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != 1 {
+		t.Fatalf("2-byte hop must still produce the edge, got %d", got)
 	}
 }
