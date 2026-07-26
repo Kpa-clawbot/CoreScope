@@ -320,6 +320,19 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
     return timeAgo(o.last_packet_at);
   }
 
+  // #1865 follow-up (cwichura, PR #1867): /neighbors reports are opt-in
+  // firmware and unavailable on non-PSRAM hardware, so absence is common
+  // and NOT a fault — never render a warning icon or red styling here,
+  // just a neutral dash with an explanatory title.
+  function neighborsReportBadge(o) {
+    const icon = '<svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-share-network"></use></svg>';
+    if (!o.last_neighbors_report_at) {
+      return '<span class="text-muted" title="This observer has never sent a /neighbors report — the feature is opt-in firmware and unavailable on non-PSRAM hardware, so this is expected for many observers.">—</span>';
+    }
+    return `<span title="Last /neighbors report ${timeAgo(o.last_neighbors_report_at)}">${icon} ${timeAgo(o.last_neighbors_report_at)}</span>`;
+  }
+  window.neighborsReportBadge = neighborsReportBadge;
+
   // #1789 — Firmware strings can be long, e.g.
   // "v1.16.0-07a3ca9 Build: 2025-..."; truncate the "Build:" suffix for the
   // display string, keeping the full value in the cell's title= attr.
@@ -384,7 +397,7 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
         <caption class="sr-only">Observer status and statistics</caption>
         <thead><tr>
           <th scope="col" data-priority="1" data-sort-key="status" data-type="numeric">Status</th><th scope="col" data-priority="1" data-sort-key="name">Name</th><th scope="col" data-priority="3" data-sort-key="region">Region</th><th scope="col" data-priority="2" data-sort-key="last_seen" data-type="numeric">Last Status</th><th scope="col" data-priority="2" data-sort-key="last_packet_at" data-type="numeric">Last Packet</th>
-          <th scope="col" data-priority="3" data-sort-key="packet_health" data-type="numeric">Packet Health</th><th scope="col" data-priority="4" data-sort-key="packet_count" data-type="numeric">Total Packets</th><th scope="col" data-priority="3" data-sort-key="packets_hour" data-type="numeric">Packets/Hour</th><th scope="col" data-priority="4" data-sort-key="clock_offset" data-type="numeric">Clock Offset</th><th scope="col" data-priority="4" data-sort-key="uptime" data-type="numeric">Uptime</th><th scope="col" data-priority="4" data-sort-key="firmware">Firmware</th><th scope="col" data-priority="4" data-sort-key="client_version">Client</th>
+          <th scope="col" data-priority="3" data-sort-key="packet_health" data-type="numeric">Packet Health</th><th scope="col" data-priority="4" data-sort-key="packet_count" data-type="numeric">Total Packets</th><th scope="col" data-priority="3" data-sort-key="packets_hour" data-type="numeric">Packets/Hour</th><th scope="col" data-priority="4" data-sort-key="clock_offset" data-type="numeric">Clock Offset</th><th scope="col" data-priority="4" data-sort-key="uptime" data-type="numeric">Uptime</th><th scope="col" data-priority="4" data-sort-key="firmware">Firmware</th><th scope="col" data-priority="4" data-sort-key="client_version">Client</th><th scope="col" data-priority="4" data-sort-key="neighbors_report" data-type="numeric" title="Whether this observer sends /neighbors reports (opt-in firmware feature)">Neighbors</th>
           <th scope="col" data-priority="1" class="col-compare-select" style="width:32px"><span class="sr-only">Select for compare</span></th>
         </tr></thead>
         <tbody>${filtered.map(o => {
@@ -410,6 +423,7 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
           const _healthRank = h.cls === 'health-green' ? 2 : (h.cls === 'health-yellow' ? 1 : 0);
           const _packetCount = (o.packet_count != null) ? o.packet_count : '';
           const _packetsHour = (o.packetsLastHour != null) ? o.packetsLastHour : '';
+          const _neighborsReportMs = o.last_neighbors_report_at ? new Date(o.last_neighbors_report_at).getTime() : '';
           return `<tr style="cursor:pointer" tabindex="0" role="row" data-action="navigate" data-value="#/observers/${encodeURIComponent(o.id)}" data-observer-id="${escapeHtml(o.id)}" onclick="location.hash='#/observers/${encodeURIComponent(o.id)}'">
             <td data-value="${_healthRank}"><span class="health-dot ${h.cls}" title="${h.label}">${shapeIcon}</span> ${h.label}</td>
             <td data-testid="obs-cell-name" data-value="${escapeHtml(String(o.name || o.id))}" class="mono">${escapeHtml(o.name || o.id)}${window.ObserversNaiveChip.render(o)}${o.can_relay === false ? ' <span class="badge-listener" title="Firmware reported repeat:off — listener-only; excluded from path-hop disambiguator (issue #1290)">listener</span>' : (o.can_relay === true ? ' <span class="badge-repeater" title="Firmware reported repeat:on — eligible as a path hop">repeater</span>' : '')}</td>
@@ -428,6 +442,7 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
             <td data-value="${_uptimeMs}">${uptimeStr(o.first_seen)}</td>
             <td data-testid="obs-cell-firmware" data-value="${escapeHtml(String(o.firmware || ''))}" class="mono"${o.firmware ? ` title="${escapeHtml(String(o.firmware))}"` : ''}>${o.firmware ? escapeHtml(truncateBuildSuffix(String(o.firmware))) : '<span class="text-muted">—</span>'}</td>
             <td data-testid="obs-cell-client-version" data-value="${escapeHtml(String(o.client_version || ''))}" class="mono"${o.client_version ? ` title="${escapeHtml(String(o.client_version))}"` : ''}>${o.client_version ? escapeHtml(String(o.client_version)) : '<span class="text-muted">—</span>'}</td>
+            <td data-testid="obs-cell-neighbors-report" data-value="${_neighborsReportMs}">${neighborsReportBadge(o)}</td>
             <td class="col-compare-select" onclick="event.stopPropagation()" style="text-align:center">
               <input type="checkbox" data-compare-select value="${escapeHtml(o.id)}"
                      aria-label="Select ${escapeHtml(o.name || o.id)} for comparison"

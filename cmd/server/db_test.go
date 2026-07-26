@@ -54,6 +54,7 @@ func setupTestDB(t *testing.T) *DB {
 			noise_floor REAL,
 			inactive INTEGER DEFAULT 0,
 			last_packet_at TEXT DEFAULT NULL,
+			last_neighbors_report_at TEXT DEFAULT NULL,
 			clock_skew_seconds INTEGER DEFAULT NULL,
 			clock_skew_count_24h INTEGER DEFAULT 0,
 			clock_last_naive_at TEXT DEFAULT NULL

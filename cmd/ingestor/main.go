@@ -1537,6 +1537,14 @@ func init() {
 func handleNeighborsReport(store *Store, tag string, observerID string, msg map[string]interface{}) {
 	reportedAt, _ := msg["timestamp"].(string)
 
+	// #1865 follow-up: record that this observer sends /neighbors reports
+	// at all, regardless of whether self/neighbors below carry usable scope
+	// evidence. Lets the UI identify which observers have the opt-in
+	// firmware feature enabled.
+	if err := store.TouchObserverNeighborsReport(observerID, reportedAt); err != nil {
+		log.Printf("MQTT [%s] neighbors report touch error for observer %.8s: %v", tag, observerID, err)
+	}
+
 	// self: the observer's own configured scopes.
 	originID, _ := msg["origin_id"].(string)
 	if originID == "" {

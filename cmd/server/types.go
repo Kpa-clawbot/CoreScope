@@ -1290,24 +1290,28 @@ type ChannelMessagesResponse struct {
 // ─── Observers ─────────────────────────────────────────────────────────────────
 
 type ObserverResp struct {
-	ID              string      `json:"id"`
-	Name            interface{} `json:"name"`
-	IATA            interface{} `json:"iata"`
-	LastSeen        interface{} `json:"last_seen"`
-	FirstSeen       interface{} `json:"first_seen"`
-	PacketCount     int         `json:"packet_count"`
-	Model           interface{} `json:"model"`
-	Firmware        interface{} `json:"firmware"`
-	ClientVersion   interface{} `json:"client_version"`
-	Radio           interface{} `json:"radio"`
-	BatteryMv       interface{} `json:"battery_mv"`
-	UptimeSecs      interface{} `json:"uptime_secs"`
-	NoiseFloor      interface{} `json:"noise_floor"`
-	LastPacketAt    interface{} `json:"last_packet_at"`
-	PacketsLastHour int         `json:"packetsLastHour"`
-	Lat             interface{} `json:"lat"`
-	Lon             interface{} `json:"lon"`
-	NodeRole        interface{} `json:"nodeRole"`
+	ID            string      `json:"id"`
+	Name          interface{} `json:"name"`
+	IATA          interface{} `json:"iata"`
+	LastSeen      interface{} `json:"last_seen"`
+	FirstSeen     interface{} `json:"first_seen"`
+	PacketCount   int         `json:"packet_count"`
+	Model         interface{} `json:"model"`
+	Firmware      interface{} `json:"firmware"`
+	ClientVersion interface{} `json:"client_version"`
+	Radio         interface{} `json:"radio"`
+	BatteryMv     interface{} `json:"battery_mv"`
+	UptimeSecs    interface{} `json:"uptime_secs"`
+	NoiseFloor    interface{} `json:"noise_floor"`
+	LastPacketAt  interface{} `json:"last_packet_at"`
+	// #1865 follow-up: timestamp of the observer's most recent /neighbors
+	// MQTT report. nil means never reported -- opt-in firmware feature,
+	// unavailable on non-PSRAM hardware, NOT a fault (cwichura on PR #1867).
+	LastNeighborsReportAt interface{} `json:"last_neighbors_report_at"`
+	PacketsLastHour       int         `json:"packetsLastHour"`
+	Lat                   interface{} `json:"lat"`
+	Lon                   interface{} `json:"lon"`
+	NodeRole              interface{} `json:"nodeRole"`
 	// Issue #1478: surface naive-clock observers to the UI.
 	// `clock_naive` is derived from clock_last_naive_at being within the
 	// last 24h; once decayed, all three skew fields read as zero/null so the

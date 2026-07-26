@@ -293,6 +293,12 @@ type Observer struct {
 	UptimeSecs    *int64   `json:"uptime_secs"`
 	NoiseFloor    *float64 `json:"noise_floor"`
 	LastPacketAt  *string  `json:"last_packet_at"`
+	// #1865 follow-up: timestamp of the observer's most recent /neighbors
+	// MQTT report (opt-in firmware feature). Written by the ingestor's
+	// TouchObserverNeighborsReport; nil means the observer has never sent
+	// one (may be legacy firmware, non-PSRAM hardware, or feature disabled
+	// — the UI must not present this as a fault, per cwichura's request).
+	LastNeighborsReportAt *string `json:"last_neighbors_report_at"`
 	// Issue #1478: per-observer naive-clock skew tracking.
 	// Written by the ingestor in cmd/ingestor/db.go RecordNaiveSkew whenever
 	// resolveRxTime clamps a naive envelope timestamp >15 min off UTC. The
@@ -1228,6 +1234,7 @@ func (db *DB) GetObservers() ([]Observer, error) {
 	}
 	rows, err := db.conn.Query(`SELECT id, name, iata, last_seen, first_seen, packet_count,
 		model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, last_packet_at,
+		last_neighbors_report_at,
 		clock_skew_seconds, clock_skew_count_24h, clock_last_naive_at,
 		` + canRelayClause + `, ` + canRelaySeenClause + `
 		FROM observers WHERE inactive IS NULL OR inactive = 0 ORDER BY last_seen DESC`)
@@ -1245,6 +1252,7 @@ func (db *DB) GetObservers() ([]Observer, error) {
 		var canRelay, canRelaySeen int
 		if err := rows.Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount,
 			&o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor, &o.LastPacketAt,
+			&o.LastNeighborsReportAt,
 			&clockSkewSec, &clockSkewCount, &o.ClockLastNaiveAt, &canRelay, &canRelaySeen); err != nil {
 			continue
 		}
@@ -1346,11 +1354,13 @@ func (db *DB) GetObserverByID(id string) (*Observer, error) {
 	}
 	err := db.conn.QueryRow(`SELECT id, name, iata, last_seen, first_seen, packet_count,
 		model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, last_packet_at,
+		last_neighbors_report_at,
 		clock_skew_seconds, clock_skew_count_24h, clock_last_naive_at,
 		`+canRelayClause+`, `+canRelaySeenClause+`
 		FROM observers WHERE id = ?`, id).
 		Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount,
 			&o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor, &o.LastPacketAt,
+			&o.LastNeighborsReportAt,
 			&clockSkewSec, &clockSkewCount, &o.ClockLastNaiveAt, &canRelay, &canRelaySeen)
 	if err != nil {
 		return nil, err

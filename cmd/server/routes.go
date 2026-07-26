@@ -3167,10 +3167,11 @@ func (s *Server) buildObserversDefaultResponse() (ObserverListResponse, error) {
 			Model:       o.Model, Firmware: o.Firmware,
 			ClientVersion: o.ClientVersion, Radio: o.Radio,
 			BatteryMv: o.BatteryMv, UptimeSecs: o.UptimeSecs,
-			NoiseFloor:      o.NoiseFloor,
-			LastPacketAt:    o.LastPacketAt,
-			PacketsLastHour: plh,
-			Lat:             lat, Lon: lon, NodeRole: nodeRole,
+			NoiseFloor:            o.NoiseFloor,
+			LastPacketAt:          o.LastPacketAt,
+			LastNeighborsReportAt: o.LastNeighborsReportAt,
+			PacketsLastHour:       plh,
+			Lat:                   lat, Lon: lon, NodeRole: nodeRole,
 			CanRelay: o.CanRelay,
 		}
 		applyObserverNaiveClock(&resp, o, nowTime)
@@ -3213,10 +3214,11 @@ func (s *Server) handleObserverDetail(w http.ResponseWriter, r *http.Request) {
 			Model:       obs.Model, Firmware: obs.Firmware,
 			ClientVersion: obs.ClientVersion, Radio: obs.Radio,
 			BatteryMv: obs.BatteryMv, UptimeSecs: obs.UptimeSecs,
-			NoiseFloor:      obs.NoiseFloor,
-			LastPacketAt:    obs.LastPacketAt,
-			PacketsLastHour: plh,
-			CanRelay:        obs.CanRelay,
+			NoiseFloor:            obs.NoiseFloor,
+			LastPacketAt:          obs.LastPacketAt,
+			LastNeighborsReportAt: obs.LastNeighborsReportAt,
+			PacketsLastHour:       plh,
+			CanRelay:              obs.CanRelay,
 		}
 		applyObserverNaiveClock(&resp, obs, time.Now().UTC())
 		return resp
