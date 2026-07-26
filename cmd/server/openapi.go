@@ -389,10 +389,12 @@ func componentSchemas() map[string]interface{} {
 		"PacketPathResponse": map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"hash":         str("The packet hash this path was resolved for."),
-				"branches":     map[string]interface{}{"type": "array", "items": schemaRef("PacketPathBranch"), "description": "One branch per distinct station that observed the packet, each kept at that station's own deepest observation, sorted deepest-first -- shows the full flood spread, not just the single farthest route."},
-				"first":        schemaRef("PacketPathBranch"),
-				"touchedAreas": map[string]interface{}{"type": "array", "items": schemaRef("TouchedAreaShape"), "description": "Every configured area any point or observer on the path falls in, deduped and alphabetized by label. Omitted when no areas are configured or none resolved."},
+				"hash":               str("The packet hash this path was resolved for."),
+				"branches":           map[string]interface{}{"type": "array", "items": schemaRef("PacketPathBranch"), "description": "One branch per distinct station that observed the packet, each kept at that station's own deepest observation, sorted deepest-first -- shows the full flood spread, not just the single farthest route."},
+				"first":              schemaRef("PacketPathBranch"),
+				"touchedAreas":       map[string]interface{}{"type": "array", "items": schemaRef("TouchedAreaShape"), "description": "Every configured area any point or observer on the path falls in, deduped and alphabetized by label. Omitted when no areas are configured or none resolved."},
+				"estimatedAirtimeMs": map[string]interface{}{"type": "number", "nullable": true, "description": "Estimated LoRa Time-on-Air (milliseconds) x distinct-relay-count for this packet's whole flood -- same formula as the Relay Airtime Share analytics metric (issue #1768), applied to a single packet. Assumes the configured/default LoRa PHY preset; relay count is inferred from the union of every hearing station's resolved relay path, not a literal per-retransmission log. Omitted when the in-memory store doesn't have this transmission (DB-only mode, or evicted)."},
+				"airtimeRelayCount":  map[string]interface{}{"type": "integer", "description": "Distinct relay count behind estimatedAirtimeMs. Present only alongside it."},
 			},
 		},
 	}

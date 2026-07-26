@@ -265,6 +265,42 @@ func TestAirtimeForTransmissions(t *testing.T) {
 	}
 }
 
+// TestAirtimeAndRelayCountForTransmission covers the single-transmission
+// variant (View Path's per-packet airtime estimate): same formula as
+// AirtimeForTransmissions, but additionally returns the distinct-relay
+// count that fed the estimate.
+func TestAirtimeAndRelayCountForTransmission(t *testing.T) {
+	tx1 := makeRelayAirtimeTx(701, PayloadGRP_TXT, 20, 3, "wd101")
+	store := newRelayAirtimeShareTestStore([]*StoreTx{tx1})
+	store.addToResolvedPubkeyIndex(tx1.ID, []string{"r1", "r2", "r3"})
+
+	total, relays, ok := store.AirtimeAndRelayCountForTransmission(int64(tx1.ID))
+	if !ok {
+		t.Fatal("ok=false, want true")
+	}
+	if relays != 3 {
+		t.Errorf("relays = %d, want 3", relays)
+	}
+	preset := store.resolveLoRaPreset()
+	want := lora.TimeOnAir(20, preset) * 3
+	if total != want {
+		t.Errorf("total = %v, want %v", total, want)
+	}
+}
+
+// TestAirtimeAndRelayCountForTransmission_Unknown mirrors
+// TestAirtimeForTransmissions_UnknownIDs for the single-tx variant.
+func TestAirtimeAndRelayCountForTransmission_Unknown(t *testing.T) {
+	store := newRelayAirtimeShareTestStore(nil)
+	total, relays, ok := store.AirtimeAndRelayCountForTransmission(999)
+	if ok {
+		t.Fatal("ok = true, want false — transmission not held in memory")
+	}
+	if total != 0 || relays != 0 {
+		t.Errorf("total = %v, relays = %d, want 0, 0", total, relays)
+	}
+}
+
 // TestAirtimeForTransmissions_UnknownIDs confirms that when NONE of the
 // requested transmission IDs are held in memory (e.g. evicted from the
 // memory-bounded store despite still being in the SQL retention window),
