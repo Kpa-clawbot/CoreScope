@@ -38,3 +38,6 @@ docs/superpowers/
 # Environment-specific deploy scripts — live only on the deploy host, not tracked
 deploy-live.sh
 deploy-staging.sh
+
+__pycache__/
+*.pyc

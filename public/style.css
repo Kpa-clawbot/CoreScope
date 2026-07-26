@@ -4509,6 +4509,21 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .tools-card h3 { margin: 0 0 4px 0; font-size: 16px; }
 .tools-card p { margin: 0; font-size: 13px; color: var(--text-muted); }
 
+/* ── Ping Scores page (cmd/server/ping_scores.go, GET /api/ping-scores) ── */
+.ping-scores-page { padding: 16px; max-width: 1100px; margin: 0 auto; }
+.ps-records-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.ps-record-card { position: relative; }
+.ps-record-card.ps-empty { opacity: 0.6; }
+.ps-record-meta { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+.ps-record-desc { font-size: 11px; color: var(--text-muted); margin-top: 6px; line-height: 1.4; }
+.ps-leaderboards-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-top: 8px; }
+.ps-leaderboard { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; }
+.ps-leaderboard h3 { margin: 0 0 8px 0; font-size: 15px; }
+.ps-leaderboard-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ps-leaderboard-table th { text-align: left; color: var(--text-muted); font-weight: 600; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--border); }
+.ps-leaderboard-table td { padding: 4px 8px 4px 0; border-bottom: 1px solid var(--border); }
+.ps-leaderboard-table tr:last-child td { border-bottom: none; }
+
 /* ── Map marker clustering (issue #1036, a11y refit issue #1356) ──
  *
  * #1356 WCAG 2.2 AA refit — Tufte structural framing + audit minimal patch.

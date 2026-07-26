@@ -145,6 +145,8 @@ func routeDescriptions() map[string]routeMeta {
 			Response: schemaRef("PacketPathResponse")},
 		"GET /api/iata-coords":       {Summary: "Get IATA airport coordinates", Description: "Returns lat/lon for known airport codes (used for observer positioning).", Tag: "config"},
 		"GET /api/audio-lab/buckets": {Summary: "Audio lab frequency buckets", Description: "Returns frequency bucket data for audio analysis.", Tag: "analytics"},
+		"GET /api/ping-scores": {Summary: "Ping-score highscore board", Description: "Global (not scoped by region/area) records and leaderboards derived from every ping-bot-triggering channel message ever seen: farthest reach, most hops, widest simultaneous spread, fastest full spread, and most airtime-efficient ping, plus which relay nodes and which observers appear most often. Computed from the same GetPacketPath + LoRa-airtime-estimate logic behind /api/packets/{hash}/path and refreshed on a background interval, so it may lag the very latest ping by a few minutes. Fields are omitted (not zero) until at least one qualifying ping has been recorded.", Tag: "packets",
+			Response: schemaRef("PingScoresResponse")},
 	}
 }
 
@@ -395,6 +397,50 @@ func componentSchemas() map[string]interface{} {
 				"touchedAreas":       map[string]interface{}{"type": "array", "items": schemaRef("TouchedAreaShape"), "description": "Every configured area any point or observer on the path falls in, deduped and alphabetized by label. Omitted when no areas are configured or none resolved."},
 				"estimatedAirtimeMs": map[string]interface{}{"type": "number", "nullable": true, "description": "Estimated LoRa Time-on-Air (milliseconds) x distinct-relay-count for this packet's whole flood -- same formula as the Relay Airtime Share analytics metric (issue #1768), applied to a single packet. Assumes the configured/default LoRa PHY preset; relay count is inferred from the union of every hearing station's resolved relay path, not a literal per-retransmission log. Omitted when the in-memory store doesn't have this transmission (DB-only mode, or evicted)."},
 				"airtimeRelayCount":  map[string]interface{}{"type": "integer", "description": "Distinct relay count behind estimatedAirtimeMs. Present only alongside it."},
+			},
+		},
+		"PingScore": map[string]interface{}{
+			"type":        "object",
+			"description": "One ping's computed highscore-relevant stats, derived from the same GetPacketPath + airtime-annotation logic behind /api/packets/{hash}/path.",
+			"properties": map[string]interface{}{
+				"hash":               str("The winning ping's packet hash -- pass to /api/packets/{hash}/path for the full View Path map."),
+				"sender":             str("Display name of whoever sent the ping, when resolvable from the channel message."),
+				"channelHash":        str("Which channel the ping was sent on."),
+				"timestamp":          str("RFC3339 timestamp the ping was first seen."),
+				"stationCount":       map[string]interface{}{"type": "integer", "description": "Distinct stations that heard this ping."},
+				"deepestHops":        map[string]interface{}{"type": "integer", "description": "Most relay hops any station's observation of this ping took."},
+				"deepestNodePubkey":  str("Pubkey of the station behind deepestHops."),
+				"deepestNodeName":    str("Name of the station behind deepestHops."),
+				"farthestKm":         map[string]interface{}{"type": "number", "nullable": true, "description": "Farthest any hearing station was from whoever heard it first, in km. Omitted when no station on this ping's path has a known position."},
+				"farthestNodePubkey": str("Pubkey of the station behind farthestKm."),
+				"farthestNodeName":   str("Name of the station behind farthestKm."),
+				"spreadSeconds":      map[string]interface{}{"type": "number", "nullable": true, "description": "How long the flood took to finish reaching every station it ever reached. Omitted when fewer than 2 stations heard it, or no station has timing data."},
+				"airtimeMs":          map[string]interface{}{"type": "number", "nullable": true, "description": "Estimated LoRa Time-on-Air x distinct-relay-count for this ping's whole flood -- same estimate as /api/packets/{hash}/path's estimatedAirtimeMs."},
+				"relayCount":         map[string]interface{}{"type": "integer", "description": "Distinct relay count behind airtimeMs. Present only alongside it."},
+				"kmPerSecondAirtime": map[string]interface{}{"type": "number", "nullable": true, "description": "farthestKm / (airtimeMs/1000) -- geographic distance covered per second of estimated RF airtime spent relaying this ping. Only set when both farthestKm and airtimeMs (with relayCount>0) are available."},
+			},
+		},
+		"PingLeaderboardEntry": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"pubkey": str("The node/observer's pubkey."),
+				"name":   str("Display name, falling back to the raw pubkey when unresolved."),
+				"count":  map[string]interface{}{"type": "integer", "description": "How many distinct pings this entry earned credit for."},
+			},
+		},
+		"PingScoresResponse": map[string]interface{}{
+			"type":        "object",
+			"description": "The ping-score highscore board: current records plus leaderboards, global (not scoped by region/area).",
+			"properties": map[string]interface{}{
+				"generatedAt":         str("RFC3339 timestamp this snapshot was computed."),
+				"totalPings":          map[string]interface{}{"type": "integer", "description": "Total ping-bot-triggering messages ever seen, whether or not each one resolved to a usable score."},
+				"farthestPing":        schemaRef("PingScore"),
+				"mostHopsPing":        schemaRef("PingScore"),
+				"widestSpreadPing":    schemaRef("PingScore"),
+				"fastestSpreadPing":   map[string]interface{}{"allOf": []interface{}{schemaRef("PingScore")}, "description": "The fastest full spread among pings heard by at least 2 stations -- a lone station is trivially \"instant\" and is excluded so it can't win this record for nothing."},
+				"mostEfficientPing":   schemaRef("PingScore"),
+				"relayLeaderboard":    map[string]interface{}{"type": "array", "items": schemaRef("PingLeaderboardEntry"), "description": "Top nodes ranked by number of distinct pings they appeared as a relay hop in (deduped per ping first, so one busy ping's many branches can't over-credit a relay)."},
+				"observerLeaderboard": map[string]interface{}{"type": "array", "items": schemaRef("PingLeaderboardEntry"), "description": "Top observers ranked by number of pings they were the first station to hear."},
 			},
 		},
 	}

@@ -112,6 +112,10 @@ type Server struct {
 	// Known-channels catalogue cache (issue #1323). Nil until configured;
 	// when nil the /api/known-channels endpoint returns an empty snapshot.
 	knownChannels *knownChannelsCache
+
+	// Ping-score highscore/leaderboard cache, refreshed by
+	// StartPingScoresRecomputer (see ping_scores.go).
+	pingScores pingScoresCache
 }
 
 // PerfStats tracks request performance.
@@ -253,6 +257,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/config/geo-filter", s.handleConfigGeoFilter).Methods("GET")
 	r.HandleFunc("/api/config/areas", s.handleConfigAreas).Methods("GET")
 	r.HandleFunc("/api/config/areas/polygons", s.handleConfigAreasPolygons).Methods("GET")
+	r.HandleFunc("/api/ping-scores", s.handlePingScores).Methods("GET")
 	r.Handle("/api/config/geo-filter", s.requireAPIKey(http.HandlerFunc(s.handlePutConfigGeoFilter))).Methods("PUT")
 
 	// Readiness endpoint (gated on background init completion)
@@ -537,6 +542,20 @@ func (s *Server) handleConfigAreasPolygons(w http.ResponseWriter, r *http.Reques
 		})
 	}
 	writeJSON(w, result)
+}
+
+// handlePingScores returns the cached ping-score highscore/leaderboard
+// snapshot (see ping_scores.go). Returns an explicit empty-but-valid
+// snapshot (totalPings=0, all records/leaderboards omitted) rather than
+// 404/500 when the background recomputer hasn't completed its first pass
+// yet (e.g. immediately after server startup) or no ping has ever been
+// sent -- both are ordinary states, not errors.
+func (s *Server) handlePingScores(w http.ResponseWriter, r *http.Request) {
+	snap := s.pingScores.Load()
+	if snap == nil {
+		snap = &PingScoresSnapshot{GeneratedAt: time.Now().UTC().Format(time.RFC3339)}
+	}
+	writeJSON(w, snap)
 }
 
 func (s *Server) handleConfigRegions(w http.ResponseWriter, r *http.Request) {

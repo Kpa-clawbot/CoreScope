@@ -2341,12 +2341,15 @@
       const viewPathHtml = (msg.botReply && msg.packetHash)
         ? ` · <button type="button" class="ch-analyze-link" data-view-path="${escapeHtml(msg.packetHash)}" style="background:none;border:none;padding:0;cursor:pointer;font:inherit">View path →</button>`
         : '';
+      const pingScoresLinkHtml = msg.botReply
+        ? ` · <a href="#/ping-scores" style="font:inherit"><svg class="ph-icon" aria-hidden="true" style="width:1em;height:1em;vertical-align:-0.15em"><use href="/icons/phosphor-sprite.svg#ph-trophy"/></svg> Ping Scores</a>`
+        : '';
       const botReplyHtml = msg.botReply ? `<div class="ch-msg ch-message ch-bot-message">
         <div class="ch-avatar" aria-hidden="true" style="background:var(--text-muted)">🤖</div>
         <div class="ch-msg-content ch-message-content">
           <div class="ch-msg-sender ch-message-sender" style="color:var(--text-muted)">${escapeHtml(msg.botReply.sender || 'CoreScopeBot')}</div>
           <div class="ch-msg-bubble ch-message-bubble">${escapeHtml(msg.botReply.text || '')}</div>
-          <div class="ch-msg-meta ch-message-meta">Not sent to the mesh — CoreScope-only reply${viewPathHtml}</div>
+          <div class="ch-msg-meta ch-message-meta">Not sent to the mesh — CoreScope-only reply${viewPathHtml}${pingScoresLinkHtml}</div>
         </div>
       </div>` : '';
 

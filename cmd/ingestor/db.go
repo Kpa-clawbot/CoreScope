@@ -80,6 +80,7 @@ type Store struct {
 	stmtUpdateObserverLastSeen *sql.Stmt
 	stmtUpdateNodeTelemetry    *sql.Stmt
 	stmtUpsertMetrics          *sql.Stmt
+	stmtInsertPingTrigger      *sql.Stmt
 
 	sampleIntervalSec int
 	backfillWg        sync.WaitGroup
@@ -770,6 +771,18 @@ func (s *Store) prepareStatements() error {
 		return err
 	}
 
+	// Ping-score highscore/leaderboard feature (see ping_triggers.go and
+	// internal/dbschema's ensurePingTriggersTable). INSERT OR IGNORE on
+	// tx_id (PRIMARY KEY) makes this idempotent -- only ever written once
+	// per transmission, at the isNew branch in InsertTransmission.
+	s.stmtInsertPingTrigger, err = s.db.Prepare(`
+		INSERT OR IGNORE INTO ping_triggers (tx_id, hash, channel_hash, sender, first_seen)
+		VALUES (?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+
 	// #1690: bump transmissions.last_seen to MAX(current, ?) on every
 	// observation insert so cold-load can filter on effective recency.
 	// This is NOT a migration — it's the steady-state writer path. The
@@ -938,6 +951,18 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 		}
 		txID, _ = result.LastInsertId()
 		s.Stats.TransmissionsInserted.Add(1)
+
+		// Ping-score detection: only for a brand-new CHAN transmission
+		// (payload_type 5), never re-checked on a repeat observation of
+		// the same hash -- one row per unique ping, matching the
+		// transmissions table's own find-or-create semantics.
+		if data.PayloadType == 5 {
+			if sender, displayText, ok := pingTriggerSenderAndText(data.DecodedJSON); ok && isPingTrigger(displayText) {
+				if _, err := s.stmtInsertPingTrigger.Exec(txID, hash, nilIfEmpty(data.ChannelHash), nilIfEmpty(sender), rxTime); err != nil {
+					log.Printf("[db] ping_triggers insert (non-fatal): %v", err)
+				}
+			}
+		}
 	}
 
 	if !isNew {

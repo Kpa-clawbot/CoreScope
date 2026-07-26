@@ -74,6 +74,7 @@ node test-node-analytics-hop-chart.js
 node test-analytics-hop-depth-ui.js
 node test-channels-ping-bot-reply.js
 node test-packet-path-map.js
+node test-ping-scores.js
 
 echo ""
 echo "═══════════════════════════════════════"

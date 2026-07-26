@@ -470,6 +470,15 @@ func main() {
 	log.Printf("[neighbor-recompute] snapshot reload enabled (interval=%s)",
 		NeighborGraphRecomputerDefaultInterval)
 
+	// Ping-score highscore/leaderboard recomputer: joins ping_triggers
+	// (written by the ingestor at ingest time) with the same
+	// GetPacketPath + airtime-annotation logic View Path uses, so a
+	// later observation of an old ping can still improve a standing
+	// record without a migration. Global, not scoped by region/area.
+	stopPingScoresRecomp := srv.StartPingScoresRecomputer(pingScoresRecomputeInterval)
+	defer stopPingScoresRecomp()
+	log.Printf("[ping-scores] background recompute enabled (interval=%s)", pingScoresRecomputeInterval)
+
 	// Packet / metrics / observer retention moved to the ingestor in
 	// #1283 (writes only belong on the writer process). Neighbor-edge
 	// pruning moved to the ingestor in #1287 for the same reason. The
