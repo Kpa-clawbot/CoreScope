@@ -1651,6 +1651,25 @@ func (s *Store) UpdateNodeDefaultScope(pubkey, scope string) error {
 	return err
 }
 
+// normalizeReportTS parses an observer report timestamp and returns it in
+// canonical UTC RFC3339 form ("2006-01-02T15:04:05Z"). It accepts both the
+// firmware's fractional/offset form (e.g. "2026-07-26T09:43:48.000000+00:00")
+// and plain "Z"/offset variants. An empty or unparseable input returns "" so
+// the caller writes an empty configured_scope_at and skips the ordering guard;
+// this keeps every stored timestamp either canonical or empty, never a mix of
+// offset/precision formats that would break lexicographic last-write-wins.
+func normalizeReportTS(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t.UTC().Format(time.RFC3339)
+		}
+	}
+	return ""
+}
+
 // UpdateNodeConfiguredScope records the region scopes a node has CONFIGURED,
 // as concrete evidence from an observer /neighbors report (#1865). Unlike
 // UpdateNodeDefaultScope (inferred, overwritten on every observation), this is
@@ -1668,11 +1687,15 @@ func (s *Store) UpdateNodeConfiguredScope(pubkey, scope, reportedAt string) erro
 		return nil
 	}
 	scope = normalizeConfiguredScopeList(scope)
+	// Normalize to canonical UTC RFC3339 so the last-write-wins comparison is
+	// chronological, not lexicographic (see normalizeReportTS). Stored values
+	// are therefore always canonical or empty.
+	reportedAt = normalizeReportTS(reportedAt)
 	// Last-write-wins: skip if the stored confirmation is newer-or-equal.
 	if reportedAt != "" {
 		var curAt sql.NullString
 		row := s.db.QueryRow(`SELECT configured_scope_at FROM nodes WHERE public_key = ?`, pubkey)
-		if row.Scan(&curAt) == nil && curAt.Valid && curAt.String >= reportedAt {
+		if row.Scan(&curAt) == nil && curAt.Valid && curAt.String != "" && curAt.String >= reportedAt {
 			return nil
 		}
 	}
