@@ -51,8 +51,8 @@ test('draws every branch, not just the deepest one', () => {
   assert.ok(/branches\.map/.test(src), 'should iterate all branches from the response');
 });
 
-test('draws the deepest branch on top of the others (primary drawn last)', () => {
-  assert.ok(/a\.primary \? 1 : 0/.test(src) || /primary.*sort/.test(src), 'should reorder so the primary branch paints last');
+test('draws highlighted branch(es) on top of the others', () => {
+  assert.ok(/a\.highlightRole \? 1 : 0/.test(src), 'should reorder so highlighted (farthest/deepest) branches paint last');
 });
 
 test('handles Escape key and click-outside to close, matching other CoreScope modals', () => {
@@ -689,18 +689,25 @@ function makeSandbox(apiImpl) {
 
   await (async () => {
     try {
-      // More hops does not mean more geographic distance -- the
-      // highlighted ("primary") branch must be picked by actual
-      // distanceFromFirstKm when that data exists, not by branches[0]
-      // (the deepest-by-hops branch, which is a different thing). Here
+      // More hops does not mean more geographic distance, and they're not
+      // always the same branch -- both deserve their own highlight. Here
       // the SHALLOWER branch (2 hops) travels much farther (200km) than
-      // the DEEPER one (5 hops, only 50km) -- a dense-mesh short-hop
-      // chain vs. a couple of long-range links.
+      // the DEEPER one (5 hops, only 50km): a dense-mesh short-hop chain
+      // vs. a couple of long-range links. Both get weight-2 (highlighted)
+      // styling, but in DIFFERENT colors -- farthest keeps the accent
+      // color, deepest gets the second (purple) color -- and the legend
+      // shows both.
       const ctx = makeSandbox(() => Promise.resolve({
         hash: 'deadbeef',
         branches: [
           { hops: 5, points: [], observer: { name: 'DeepButClose', lat: 56.0, lon: 10.0 }, distanceFromFirstKm: 50 },
           { hops: 2, points: [], observer: { name: 'ShallowButFar', lat: 57.0, lon: 11.0 }, distanceFromFirstKm: 200 },
+          // A third, fully-secondary branch -- neither farthest nor
+          // deepest -- so there's something left for the declutter
+          // toggle to actually hide (with only the two highlighted
+          // branches, hiddenCount would be 0 and no toggle appears at
+          // all, same as the existing single-branch case).
+          { hops: 3, points: [], observer: { name: 'PlainSecondary', lat: 56.5, lon: 10.5 }, distanceFromFirstKm: 80 },
         ],
       }));
 
@@ -720,14 +727,52 @@ function makeSandbox(apiImpl) {
       const deepMarker = markerCalls.find((m) => m.tooltip && m.tooltip.includes('DeepButClose'));
       const farMarker = markerCalls.find((m) => m.tooltip && m.tooltip.includes('ShallowButFar'));
       assert.ok(deepMarker && farMarker, 'expected markers for both observers, got: ' + JSON.stringify(markerCalls.map((m) => m.tooltip)));
-      assert.strictEqual(farMarker.opts.weight, 2, 'ShallowButFar (200km, actually farthest) should get primary styling (weight 2), got ' + farMarker.opts.weight);
-      assert.strictEqual(deepMarker.opts.weight, 1, 'DeepButClose (5 hops but only 50km) should get secondary styling (weight 1) despite having more hops, got ' + deepMarker.opts.weight);
+      assert.strictEqual(farMarker.opts.weight, 2, 'ShallowButFar (200km, actually farthest) should get highlighted styling (weight 2), got ' + farMarker.opts.weight);
+      assert.strictEqual(deepMarker.opts.weight, 2, 'DeepButClose (5 hops, most hops) should ALSO get highlighted styling (weight 2) via its own "deepest" role, got ' + deepMarker.opts.weight);
+      // Both are observer-only (no relay hop) points, so both FILL
+      // yellow (the constant "this is an observer" color) -- the role
+      // distinction shows up in the ring (stroke) color instead.
+      assert.notStrictEqual(farMarker.opts.color, deepMarker.opts.color, 'farthest and deepest are different branches here, so their marker rings must use different colors, got matching color ' + farMarker.opts.color);
 
       const legendLabel = ctx.document.getElementById('packetPathPrimaryLegendLabel');
-      assert.ok(legendLabel && legendLabel.textContent.includes('farthest-traveled'), 'legend should say "farthest-traveled" when real distance data picked the highlight, got: ' + (legendLabel && legendLabel.textContent));
+      assert.ok(legendLabel && legendLabel.textContent.includes('farthest-traveled') && !legendLabel.textContent.includes('deepest'), 'primary legend slot should say just "farthest-traveled" (deepest gets its own slot) when they diverge, got: ' + (legendLabel && legendLabel.textContent));
+      const deepestLegendItem = ctx.document.getElementById('packetPathDeepestLegendItem');
+      assert.strictEqual(deepestLegendItem.style.display, 'inline-flex', 'the second "deepest" legend swatch should be shown when farthest and deepest are different branches');
+      const controlsEl = ctx.document.getElementById('packetPathControls');
+      assert.ok(controlsEl.innerHTML.includes('farthest-traveled and deepest routes'), 'declutter checkbox should mention both routes when they diverge, got: ' + controlsEl.innerHTML);
       passed++;
-      console.log('  ✅ the highlighted branch is picked by actual distance, not hop count, when distance data exists');
-    } catch (e) { failed++; console.log('  ❌ the highlighted branch is picked by actual distance, not hop count, when distance data exists: ' + e.message); }
+      console.log('  ✅ farthest and deepest get their own distinct highlight (color + legend entry) when they are different branches');
+    } catch (e) { failed++; console.log('  ❌ farthest and deepest get their own distinct highlight (color + legend entry) when they are different branches: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
+      // The common case: the deepest branch IS also the farthest one.
+      // Must show a SINGLE combined highlight (not two), still only the
+      // accent color, with a combined label -- not a second purple
+      // "deepest" swatch for a branch that's already shown.
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [
+          { hops: 5, points: [], observer: { name: 'DeepAndFar', lat: 57.0, lon: 11.0 }, distanceFromFirstKm: 200 },
+          { hops: 2, points: [], observer: { name: 'ShallowAndClose', lat: 56.0, lon: 10.0 }, distanceFromFirstKm: 20 },
+        ],
+      }));
+      ctx.L = {
+        map: () => ({ setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {} }),
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: () => ({ addTo() { return this; }, bindTooltip() { return this; }, on() { return this; } }),
+        polyline: () => ({ addTo() { return this; } }),
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const legendLabel = ctx.document.getElementById('packetPathPrimaryLegendLabel');
+      assert.ok(legendLabel && legendLabel.textContent.includes('farthest-traveled & deepest'), 'legend should combine both facts into one label for the same branch, got: ' + (legendLabel && legendLabel.textContent));
+      const deepestLegendItem = ctx.document.getElementById('packetPathDeepestLegendItem');
+      assert.notStrictEqual(deepestLegendItem.style.display, 'inline-flex', 'the second "deepest" legend swatch must stay hidden when it is the same branch as farthest, got display=' + deepestLegendItem.style.display);
+      passed++;
+      console.log('  ✅ shows one combined highlight (not two) when the deepest branch is also the farthest one');
+    } catch (e) { failed++; console.log('  ❌ shows one combined highlight (not two) when the deepest branch is also the farthest one: ' + e.message); }
   })();
 
   await (async () => {
