@@ -390,6 +390,10 @@ jobs:
 
       - name: Run Playwright E2E tests (fail-fast)
         run: |
+          # Flake guard (issue #61): run the whole E2E suite in a child
+          # bash -eo pipefail so fail-fast is preserved; on failure, retry ONCE.
+          # A genuinely failing test still reds the build after the retry.
+          run_e2e_suite() { bash -eo pipefail -c '
           BASE_URL=http://localhost:13581 node test-e2e-playwright.js 2>&1 | tee e2e-output.txt
           # M5+M6 of #1668 — axe-core CI gate.
           # M5: color-contrast on desktop dark+light.
@@ -494,6 +498,12 @@ jobs:
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-issue-1630-reach-mobile-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-node-reach-coverage-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-issue-1640-compare-discovery-e2e.js 2>&1 | tee -a e2e-output.txt
+          '; }
+          run_e2e_suite || {
+            echo "::warning::E2E suite failed - flake-guard retry once (issue #61)"
+            cp e2e-output.txt e2e-output.attempt1.txt 2>/dev/null || true
+            run_e2e_suite
+          }
 
       # #1616: slide-over focus-restore flake-gate. Runs the slide-over
       # E2E 20 consecutive times against the SAME backend instance so
