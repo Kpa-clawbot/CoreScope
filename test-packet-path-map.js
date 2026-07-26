@@ -322,6 +322,50 @@ function makeSandbox(apiImpl) {
 
   await (async () => {
     try {
+      // A shared entry-point node with an approximate position commonly
+      // appears in MANY branches' chains (e.g. one repeater near the
+      // sender that a dozen stations all relayed through). The status
+      // count must dedupe by identity -- 1 distinct approximate node
+      // showing up in 3 branches is "1 approximate", not "3".
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [
+          {
+            hops: 2,
+            points: [{ publicKey: 'pk-shared', name: 'SharedRepeater', lat: 56.0, lon: 10.0, approx: true }],
+            observer: { name: 'ObserverA', lat: 56.1, lon: 10.1 },
+          },
+          {
+            hops: 1,
+            points: [{ publicKey: 'pk-shared', name: 'SharedRepeater', lat: 56.0, lon: 10.0, approx: true }],
+            observer: { name: 'ObserverB', lat: 56.2, lon: 10.2 },
+          },
+          {
+            hops: 1,
+            points: [{ publicKey: 'pk-shared', name: 'SharedRepeater', lat: 56.0, lon: 10.0, approx: true }],
+            observer: { name: 'ObserverC', lat: 56.3, lon: 10.3 },
+          },
+        ],
+      }));
+
+      ctx.L = {
+        map: () => ({ setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {} }),
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: () => ({ addTo() { return this; }, bindTooltip() { return this; }, on() { return this; } }),
+        polyline: () => ({ addTo() { return this; } }),
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const status = ctx.document.getElementById('packetPathStatus');
+      assert.ok(status.textContent.includes('1 approximate'), 'status should count the shared node once (1 approximate), not once per branch it appears in, got: ' + status.textContent);
+      assert.ok(!status.textContent.includes('3 approximate'), 'status should NOT count 3 -- that would be counting chain appearances, not distinct nodes, got: ' + status.textContent);
+      passed++;
+      console.log('  ✅ "N approximate" dedupes a shared node across branches instead of counting each chain appearance');
+    } catch (e) { failed++; console.log('  ❌ "N approximate" dedupes a shared node across branches instead of counting each chain appearance: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
       // branch.secondsAfterFirst (0 for the earliest arrival, positive
       // for later ones) should show up in the observer's tooltip label.
       const ctx = makeSandbox(() => Promise.resolve({

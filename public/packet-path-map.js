@@ -192,6 +192,12 @@
     var bounds = [];
     var missingTotal = 0;
     var approxTotal = 0;
+    // The same physical node (e.g. a shared entry-point repeater near the
+    // sender) commonly appears in many branches' chains -- dedupe by
+    // identity so "N approximate" counts distinct stations, not chain
+    // appearances (#1... a packet heard by 12 stations through one shared
+    // repeater was showing "11 approximate" for what was really 1 node).
+    var approxSeen = {};
     // Draw secondary branches first so the primary (deepest) one ends up on top.
     var ordered = plotted.slice().sort(function (a, b) { return (a.primary ? 1 : 0) - (b.primary ? 1 : 0); });
     ordered.forEach(function (p) {
@@ -199,7 +205,13 @@
       var lineColor = p.primary ? accent : muted;
       var line = [];
       p.chain.forEach(function (pt) {
-        if (pt.approx) approxTotal++;
+        if (pt.approx) {
+          var approxKey = pt.publicKey || pt.name;
+          if (!approxSeen[approxKey]) {
+            approxSeen[approxKey] = true;
+            approxTotal++;
+          }
+        }
         bounds.push([pt.lat, pt.lon]);
         line.push([pt.lat, pt.lon]);
         var color = pt.isObserver ? observerColor : lineColor;
