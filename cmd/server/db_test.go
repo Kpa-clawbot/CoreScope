@@ -2362,6 +2362,66 @@ func TestDetectSchemaScopeName(t *testing.T) {
 	}
 }
 
+// TestDetectSchemaWithRetryClosesMigrationRace reproduces the startup race
+// found while testing #1865/#1867 live: the server and ingestor are
+// separate processes started ~simultaneously, sharing one SQLite file, and
+// the ingestor's ALTER TABLE migration can still be in flight when the
+// server's one-time column detection first runs. Without a retry, a column
+// added a few milliseconds after OpenDB's first PRAGMA scan would stay
+// undetected for the server's entire lifetime. Here the column is added by
+// a concurrent writer shortly after OpenDB starts, simulating exactly that
+// race; detectSchemaWithRetry's short escalating-delay loop must still
+// pick it up.
+func TestDetectSchemaWithRetryClosesMigrationRace(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "race.db")
+
+	// Match the ingestor's real DSN (cmd/ingestor/db.go) -- WAL mode, so
+	// this writer and OpenDB's concurrent read-only connections behave
+	// like the real two-process deploy instead of hitting rollback-journal
+	// lock contention that wouldn't occur in production.
+	conn, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.SetMaxOpenConns(1)
+	defer conn.Close()
+	if _, err := conn.Exec(`CREATE TABLE transmissions (id INTEGER PRIMARY KEY, hash TEXT)`); err != nil {
+		t.Fatalf("create transmissions: %v", err)
+	}
+	if _, err := conn.Exec(`CREATE TABLE nodes (public_key TEXT PRIMARY KEY)`); err != nil {
+		t.Fatalf("create nodes: %v", err)
+	}
+	if _, err := conn.Exec(`CREATE TABLE observations (id INTEGER PRIMARY KEY)`); err != nil {
+		t.Fatalf("create observations: %v", err)
+	}
+
+	// Simulate the ingestor's migration landing ~10ms after the server
+	// opens its connection -- after OpenDB's first scan (t=0) but well
+	// before the retry loop's second scan (t=30ms), so it's reliably
+	// picked up regardless of scheduler jitter. Left open (closed via
+	// defer above) so the server's WAL checkpoint on Close doesn't race
+	// an already-closed writer -- that race is a test-harness artifact,
+	// not something that happens in production where the ingestor keeps
+	// running for the server's whole lifetime.
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		if _, err := conn.Exec(`ALTER TABLE nodes ADD COLUMN configured_scope TEXT`); err != nil {
+			t.Errorf("simulated migration ALTER TABLE failed: %v", err)
+		}
+	}()
+
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	if !db.hasConfiguredScope {
+		t.Error("hasConfiguredScope should be true -- detectSchemaWithRetry should have caught the column added shortly after the initial scan, not just the first PRAGMA snapshot")
+	}
+}
+
 func TestGetChannelMessagesObserverFallback(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()

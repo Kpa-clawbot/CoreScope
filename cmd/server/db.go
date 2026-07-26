@@ -68,8 +68,33 @@ func OpenDB(path string) (*DB, error) {
 		return nil, fmt.Errorf("ping failed: %w", err)
 	}
 	d := &DB{conn: conn, path: path}
-	d.detectSchema()
+	d.detectSchemaWithRetry()
 	return d, nil
+}
+
+// detectSchemaWithRetry calls detectSchema and re-scans a few more times
+// on a short fixed schedule. The server and ingestor are separate
+// processes started ~simultaneously by supervisor, sharing one SQLite
+// file; the ingestor's additive ALTER TABLE migrations can still be in
+// flight when the server's column detection first runs, silently leaving
+// a newly-added optional column undetected for the server's entire
+// process lifetime (reproduced live while testing #1865/#1867 -- a fresh
+// deploy raced the migration and the API omitted the new field until the
+// container was restarted).
+//
+// This deliberately does NOT stop early just because two consecutive
+// scans agree -- a migration that lands between two poll points would
+// make an early scan look "stable" right before the real change arrives,
+// so an early-exit-on-no-change loop can miss the race it exists to
+// catch. detectSchema's booleans are monotonic (once a column is found
+// they're never reset to false), so repeated calls are safe to merge;
+// this just always spends the whole fixed budget below.
+func (db *DB) detectSchemaWithRetry() {
+	db.detectSchema()
+	for _, delay := range []time.Duration{30 * time.Millisecond, 50 * time.Millisecond, 70 * time.Millisecond} {
+		time.Sleep(delay)
+		db.detectSchema()
+	}
 }
 
 func (db *DB) Close() error {
