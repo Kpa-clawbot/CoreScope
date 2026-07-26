@@ -689,6 +689,80 @@ function makeSandbox(apiImpl) {
 
   await (async () => {
     try {
+      // More hops does not mean more geographic distance -- the
+      // highlighted ("primary") branch must be picked by actual
+      // distanceFromFirstKm when that data exists, not by branches[0]
+      // (the deepest-by-hops branch, which is a different thing). Here
+      // the SHALLOWER branch (2 hops) travels much farther (200km) than
+      // the DEEPER one (5 hops, only 50km) -- a dense-mesh short-hop
+      // chain vs. a couple of long-range links.
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [
+          { hops: 5, points: [], observer: { name: 'DeepButClose', lat: 56.0, lon: 10.0 }, distanceFromFirstKm: 50 },
+          { hops: 2, points: [], observer: { name: 'ShallowButFar', lat: 57.0, lon: 11.0 }, distanceFromFirstKm: 200 },
+        ],
+      }));
+
+      const markerCalls = [];
+      ctx.L = {
+        map: () => ({ setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {} }),
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: (latlng, opts) => {
+          const entry = { opts, tooltip: null };
+          markerCalls.push(entry);
+          return { addTo() { return this; }, bindTooltip(t) { entry.tooltip = t; return this; }, on() { return this; } };
+        },
+        polyline: () => ({ addTo() { return this; } }),
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const deepMarker = markerCalls.find((m) => m.tooltip && m.tooltip.includes('DeepButClose'));
+      const farMarker = markerCalls.find((m) => m.tooltip && m.tooltip.includes('ShallowButFar'));
+      assert.ok(deepMarker && farMarker, 'expected markers for both observers, got: ' + JSON.stringify(markerCalls.map((m) => m.tooltip)));
+      assert.strictEqual(farMarker.opts.weight, 2, 'ShallowButFar (200km, actually farthest) should get primary styling (weight 2), got ' + farMarker.opts.weight);
+      assert.strictEqual(deepMarker.opts.weight, 1, 'DeepButClose (5 hops but only 50km) should get secondary styling (weight 1) despite having more hops, got ' + deepMarker.opts.weight);
+
+      const legendLabel = ctx.document.getElementById('packetPathPrimaryLegendLabel');
+      assert.ok(legendLabel && legendLabel.textContent.includes('farthest-traveled'), 'legend should say "farthest-traveled" when real distance data picked the highlight, got: ' + (legendLabel && legendLabel.textContent));
+      passed++;
+      console.log('  ✅ the highlighted branch is picked by actual distance, not hop count, when distance data exists');
+    } catch (e) { failed++; console.log('  ❌ the highlighted branch is picked by actual distance, not hop count, when distance data exists: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
+      // No branch has distanceFromFirstKm at all (e.g. sparse GPS
+      // coverage) -- falls back to the old hops-based pick, and the
+      // legend/checkbox wording must say so honestly rather than still
+      // claiming "farthest-traveled" for a branch nobody measured.
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [
+          { hops: 3, points: [], observer: { name: 'ObsA', lat: 56.0, lon: 10.0 } },
+          { hops: 1, points: [], observer: { name: 'ObsB', lat: 56.1, lon: 10.1 } },
+        ],
+      }));
+      ctx.L = {
+        map: () => ({ setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {} }),
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: () => ({ addTo() { return this; }, bindTooltip() { return this; }, on() { return this; } }),
+        polyline: () => ({ addTo() { return this; } }),
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const legendLabel = ctx.document.getElementById('packetPathPrimaryLegendLabel');
+      assert.ok(legendLabel && legendLabel.textContent.includes('deepest (most hops)'), 'legend should honestly say "deepest (most hops)" when no branch has distance data, got: ' + (legendLabel && legendLabel.textContent));
+      assert.ok(!legendLabel.textContent.includes('farthest'), 'legend must not claim "farthest" when nothing was actually measured by distance, got: ' + legendLabel.textContent);
+      const controlsEl = ctx.document.getElementById('packetPathControls');
+      assert.ok(controlsEl.innerHTML.includes('deepest (most hops)'), 'declutter checkbox label should also use the honest wording, got: ' + controlsEl.innerHTML);
+      passed++;
+      console.log('  ✅ falls back to hop-based selection with honest "deepest (most hops)" wording when no branch has distance data');
+    } catch (e) { failed++; console.log('  ❌ falls back to hop-based selection with honest "deepest (most hops)" wording when no branch has distance data: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
       // A single-neighbor approx point should render with a bigger,
       // fainter ring than a 4-neighbor approx point -- more agreeing
       // neighbors means more confidence, so a tighter, more solid marker.

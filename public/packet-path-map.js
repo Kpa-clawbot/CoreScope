@@ -131,7 +131,7 @@
         '<h3 style="margin:0 0 4px;padding-right:24px">Relay Path</h3>' +
         '<p class="text-muted" style="margin:0 0 8px;font-size:12px">How far and how wide this packet spread. Click a marker to open that node\'s detail page.</p>' +
         '<div style="display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;margin:0 0 10px;font-size:11px;color:var(--text-muted)">' +
-          '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:14px;height:2px;background:var(--accent)"></span>farthest-traveled route</span>' +
+          '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:14px;height:2px;background:var(--accent)"></span><span id="packetPathPrimaryLegendLabel">farthest-traveled route</span></span>' +
           '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:14px;height:2px;background:var(--text-muted)"></span>other station</span>' +
           '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:9px;height:9px;border:2px dashed var(--text-muted);border-radius:50%;box-sizing:border-box"></span>approximate position</span>' +
           '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:9px;height:9px;border:2px solid var(--status-green);border-radius:50%;box-sizing:border-box"></span>first to hear it</span>' +
@@ -157,10 +157,34 @@
     }
 
     var branches = data.branches || [];
-    var plotted = branches.map(function (b, i) {
+    var plotted = branches.map(function (b) {
       var built = chainForBranch(b);
-      return { branch: b, chain: built.chain, missing: built.missing, primary: i === 0 };
+      return { branch: b, chain: built.chain, missing: built.missing, primary: false };
     }).filter(function (p) { return p.chain.length > 0; });
+
+    // The "highlighted" branch used to just be branches[0] (most hops) --
+    // but more hops doesn't mean more geographic distance (a dense area
+    // can take many short hops; a couple of long-range links can cover
+    // more real distance in fewer). Prefer the branch that actually
+    // traveled farthest by distanceFromFirstKm when any branch has that
+    // data; among ties, branches[] is already deepest-first so the
+    // earliest match also has the most hops. Falls back to the old
+    // hops-based pick (plotted[0]) only when NO branch has usable
+    // distance data (e.g. sparse GPS coverage) -- there's nothing better
+    // to compare by in that case.
+    var hasDistanceData = plotted.some(function (p) { return typeof p.branch.distanceFromFirstKm === 'number'; });
+    var primaryIdx = 0;
+    if (hasDistanceData) {
+      var farthestKm = -1;
+      plotted.forEach(function (p, i) {
+        var d = p.branch.distanceFromFirstKm;
+        if (typeof d === 'number' && d > farthestKm) {
+          farthestKm = d;
+          primaryIdx = i;
+        }
+      });
+    }
+    if (plotted[primaryIdx]) plotted[primaryIdx].primary = true;
 
     if (plotted.length === 0) {
       if (statusEl) {
@@ -315,6 +339,16 @@
     setTimeout(function () { map.invalidateSize(); }, 120);
     activeMap = map;
 
+    // Label the highlighted branch honestly: only call it
+    // "farthest-traveled" when it was actually picked by real distance
+    // (see the primaryIdx selection above) -- when no branch has usable
+    // distance data, what's highlighted is really just the one with the
+    // most hops, which is a different thing and shouldn't borrow the
+    // "farthest" word.
+    var primaryLabel = hasDistanceData ? 'farthest-traveled' : 'deepest (most hops)';
+    var primaryLegendLabel = document.getElementById('packetPathPrimaryLegendLabel');
+    if (primaryLegendLabel) primaryLegendLabel.textContent = primaryLabel + ' route';
+
     // Build whichever filter checkboxes are actually relevant for this
     // packet -- a single-branch packet gets no declutter toggle, one
     // with no approximate positions gets no approx-only toggle, etc.
@@ -325,7 +359,7 @@
       controlsHtml +=
         '<label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:0 0 8px;cursor:pointer;color:var(--text-muted)">' +
           '<input type="checkbox" id="packetPathPrimaryOnly">' +
-          'Show only the farthest-traveled route (' + hiddenCount + ' other station' + (hiddenCount === 1 ? '' : 's') + ' hidden when checked)' +
+          'Show only the ' + primaryLabel + ' route (' + hiddenCount + ' other station' + (hiddenCount === 1 ? '' : 's') + ' hidden when checked)' +
         '</label>';
     }
     if (approxTotal > 0) {
