@@ -332,6 +332,182 @@ function makeSandbox(apiImpl) {
 
   await (async () => {
     try {
+      // "Show only approximate positions" should only appear when at
+      // least one marker is approx, and checking it should hide exactly
+      // the non-approx markers while leaving the polyline (route context)
+      // and the approx marker itself untouched.
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [
+          {
+            hops: 2,
+            points: [
+              { publicKey: 'pk1', name: 'RealFix', lat: 56.0, lon: 10.0 },
+              { publicKey: 'pk2', name: 'GhostRepeater', lat: 56.1, lon: 10.1, approx: true },
+            ],
+            observer: { name: 'FarObserver', lat: 56.2, lon: 10.2 },
+          },
+        ],
+      }));
+      const removedLayers = [];
+      const mapObj = {
+        setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {},
+        removeLayer(layer) { removedLayers.push(layer); },
+      };
+      ctx.L = {
+        map: () => mapObj,
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: () => ({ addTo() { return this; }, bindTooltip() { return this; }, on() { return this; } }),
+        polyline: () => ({ addTo() { return this; } }),
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const checkbox = ctx.document.getElementById('packetPathApproxOnly');
+      assert.ok(checkbox, 'expected the approx-only checkbox to exist when at least one marker is approximate');
+      const controlsEl = ctx.document.getElementById('packetPathControls');
+      assert.ok(controlsEl.innerHTML.includes('1 estimated from neighbors'), 'label should count the approximate markers, got: ' + controlsEl.innerHTML);
+
+      checkbox.checked = true;
+      (checkbox._listeners.change || []).forEach((fn) => fn());
+      assert.strictEqual(removedLayers.length, 2, 'expected 2 removeLayer calls: RealFix and FarObserver (both non-approx) -- GhostRepeater (approx) and the polyline (not approx-filtered) must stay, got ' + removedLayers.length);
+      passed++;
+      console.log('  ✅ "show only approximate positions" toggle hides exactly the non-approx markers, leaves the route line');
+    } catch (e) { failed++; console.log('  ❌ "show only approximate positions" toggle hides exactly the non-approx markers, leaves the route line: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
+      // No approximate positions at all -- the approx-only checkbox must
+      // not appear (nothing to filter to).
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [{ hops: 1, points: [], observer: { name: 'OnlyObserver', lat: 56.0, lon: 10.0 } }],
+      }));
+      ctx.L = {
+        map: () => ({ setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {} }),
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: () => ({ addTo() { return this; }, bindTooltip() { return this; }, on() { return this; } }),
+        polyline: () => ({ addTo() { return this; } }),
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const checkbox = ctx.document.getElementById('packetPathApproxOnly');
+      assert.ok(!checkbox, 'expected no approx-only checkbox when nothing is approximate, found one');
+      passed++;
+      console.log('  ✅ approx-only toggle is absent when no marker is approximate');
+    } catch (e) { failed++; console.log('  ❌ approx-only toggle is absent when no marker is approximate: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
+      // "Show area boundaries" starts checked (shapes visible by
+      // default, matching prior always-on behavior) and unchecking it
+      // removes exactly the area shape layers -- markers/polylines must
+      // be untouched.
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [{ hops: 0, points: [], observer: { name: 'Obs', lat: 56.0, lon: 10.0 } }],
+        touchedAreas: [{ label: 'Aarhus by', latMin: 56.05, latMax: 56.25, lonMin: 9.95, lonMax: 10.35 }],
+      }));
+      const removedLayers = [];
+      const mapObj = {
+        setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {},
+        removeLayer(layer) { removedLayers.push(layer); },
+      };
+      ctx.L = {
+        map: () => mapObj,
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: () => ({ addTo() { return this; }, bindTooltip() { return this; }, on() { return this; } }),
+        polyline: () => ({ addTo() { return this; } }),
+        rectangle: () => ({ addTo() { return this; } }),
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const checkbox = ctx.document.getElementById('packetPathShowAreas');
+      assert.ok(checkbox, 'expected the show-areas checkbox to exist when touchedAreas is present');
+      assert.strictEqual(checkbox.checked, true, 'show-areas checkbox should start checked (shapes visible by default)');
+
+      checkbox.checked = false;
+      (checkbox._listeners.change || []).forEach((fn) => fn());
+      assert.strictEqual(removedLayers.length, 1, 'expected exactly 1 removeLayer call for the single area shape, got ' + removedLayers.length);
+      passed++;
+      console.log('  ✅ "show area boundaries" toggle starts checked and hides exactly the area shapes when unchecked');
+    } catch (e) { failed++; console.log('  ❌ "show area boundaries" toggle starts checked and hides exactly the area shapes when unchecked: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
+      // The declutter and approx-only filters are independent and
+      // combinable -- checking BOTH, then unchecking just one, must
+      // recompute visibility from the OTHER filter's still-active state
+      // rather than blindly re-adding everything. A naive
+      // "each checkbox owns its own add/remove" implementation breaks
+      // exactly this case.
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [
+          {
+            hops: 1,
+            points: [],
+            observer: { name: 'PrimaryObserver', lat: 56.0, lon: 10.0 },
+          },
+          {
+            hops: 1,
+            points: [],
+            observer: { name: 'SecondaryApprox', lat: 56.1, lon: 10.1, approx: true },
+          },
+        ],
+      }));
+      let secondaryApproxOnMap = true; // starts added via .addTo() at draw time
+      const secondaryApproxMarker = {
+        addTo() { secondaryApproxOnMap = true; return this; },
+        bindTooltip() { return this; },
+        on() { return this; },
+      };
+      let callIndex = 0;
+      const mapObj = {
+        setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {},
+        removeLayer(layer) { if (layer === secondaryApproxMarker) secondaryApproxOnMap = false; },
+      };
+      ctx.L = {
+        map: () => mapObj,
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: () => {
+          callIndex++;
+          // Secondary branches are drawn FIRST (so the primary ends up
+          // drawn last, on top) -- the 1st circleMarker created is
+          // SecondaryApprox's observer marker, not the 2nd.
+          if (callIndex === 1) return secondaryApproxMarker;
+          return { addTo() { return this; }, bindTooltip() { return this; }, on() { return this; } };
+        },
+        polyline: () => ({ addTo() { return this; } }),
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const primaryOnly = ctx.document.getElementById('packetPathPrimaryOnly');
+      const approxOnly = ctx.document.getElementById('packetPathApproxOnly');
+      assert.ok(primaryOnly && approxOnly, 'expected both filter checkboxes to exist');
+
+      // Check both -- the secondary+approx marker is hidden by primaryOnly.
+      primaryOnly.checked = true;
+      (primaryOnly._listeners.change || []).forEach((fn) => fn());
+      approxOnly.checked = true;
+      (approxOnly._listeners.change || []).forEach((fn) => fn());
+      assert.strictEqual(secondaryApproxOnMap, false, 'secondary+approx marker should be hidden once primaryOnly is checked');
+
+      // Uncheck primaryOnly -- approxOnly is STILL checked, and this
+      // marker IS approx, so it must reappear (approxOnly alone doesn't
+      // exclude it).
+      primaryOnly.checked = false;
+      (primaryOnly._listeners.change || []).forEach((fn) => fn());
+      assert.strictEqual(secondaryApproxOnMap, true, 'secondary+approx marker should reappear once primaryOnly is unchecked -- approxOnly alone does not hide an approx marker');
+      passed++;
+      console.log('  ✅ declutter and approx-only filters combine correctly instead of fighting over the same layer');
+    } catch (e) { failed++; console.log('  ❌ declutter and approx-only filters combine correctly instead of fighting over the same layer: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
       // `first` is the earliest-arriving observation (usually 0 hops,
       // close to the sender) -- distinct from the deepest branch. It
       // should get its own extra landmark marker on top of the branch

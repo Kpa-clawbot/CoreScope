@@ -181,19 +181,6 @@
       return;
     }
 
-    // A packet heard by many stations draws a lot of secondary routes on
-    // top of each other -- only worth offering the declutter toggle once
-    // there's more than one branch to hide.
-    var controlsEl = document.getElementById('packetPathControls');
-    if (controlsEl && plotted.length > 1) {
-      var hiddenCount = plotted.length - 1;
-      controlsEl.innerHTML =
-        '<label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:0 0 8px;cursor:pointer;color:var(--text-muted)">' +
-          '<input type="checkbox" id="packetPathPrimaryOnly">' +
-          'Show only the farthest-traveled route (' + hiddenCount + ' other station' + (hiddenCount === 1 ? '' : 's') + ' hidden when checked)' +
-        '</label>';
-    }
-
     var primaryChain = plotted[0].chain;
     var center = primaryChain[Math.floor(primaryChain.length / 2)];
     var map = L.map('packetPathMapContainer', { zoomControl: true, attributionControl: false })
@@ -215,23 +202,36 @@
     // markers, and deliberately excluded from the fitBounds calculation
     // below: a huge area (e.g. a whole region) would zoom the map out
     // past the point where individual branches are still readable.
+    // Tracked separately from marker/polyline layers below -- toggled by
+    // its own "show area boundaries" checkbox, independent of the
+    // branch/approx filters.
+    var areaShapeLayers = [];
     (data.touchedAreas || []).forEach(function (area) {
       var shapeOpts = { color: accent, weight: 1, opacity: 0.35, fillColor: accent, fillOpacity: 0.06, interactive: false };
+      var shape = null;
       if (area.polygon && area.polygon.length > 0) {
-        L.polygon(area.polygon, shapeOpts).addTo(map);
+        shape = L.polygon(area.polygon, shapeOpts).addTo(map);
       } else if (area.latMin != null && area.latMax != null && area.lonMin != null && area.lonMax != null) {
-        L.rectangle([[area.latMin, area.lonMin], [area.latMax, area.lonMax]], shapeOpts).addTo(map);
+        shape = L.rectangle([[area.latMin, area.lonMin], [area.latMax, area.lonMax]], shapeOpts).addTo(map);
       }
+      if (shape) areaShapeLayers.push(shape);
     });
 
     var bounds = [];
     var missingTotal = 0;
     var approxTotal = 0;
-    // Markers/lines belonging to a non-primary branch -- toggled off by
-    // the "show only farthest route" checkbox above. The landmark "first
-    // to hear it" ring (drawn separately below) is never included: it's
-    // not a branch, it stays visible regardless of the toggle.
-    var secondaryLayers = [];
+    // Every branch marker/polyline, tagged with which filters apply to it
+    // -- the "show only farthest route" and "show only approximate"
+    // checkboxes are independent and combinable (e.g. both checked at
+    // once), so visibility is recomputed from BOTH current checkbox
+    // states together (applyMarkerFilters below) rather than each
+    // checkbox naively add/removing its own layers -- that naive
+    // approach breaks as soon as two filters overlap on the same layer
+    // and get toggled in different orders. The landmark "first to hear
+    // it" ring (drawn separately below) is never tracked here: it's not
+    // a branch, it stays visible regardless of either filter.
+    var markerEntries = [];
+    var polylineEntries = [];
     // The same physical node (e.g. a shared entry-point repeater near the
     // sender) commonly appears in many branches' chains -- dedupe by
     // identity so "N approximate" counts distinct stations, not chain
@@ -286,11 +286,11 @@
             window.location.hash = '#/nodes/' + encodeURIComponent(pt.publicKey);
           });
         }
-        if (!p.primary) secondaryLayers.push(marker);
+        markerEntries.push({ layer: marker, primary: p.primary, approx: !!pt.approx });
       });
       if (line.length > 1) {
         var polyline = L.polyline(line, { color: lineColor, weight: p.primary ? 2.5 : 1.5, opacity: p.primary ? 0.85 : 0.5 }).addTo(map);
-        if (!p.primary) secondaryLayers.push(polyline);
+        polylineEntries.push({ layer: polyline, primary: p.primary });
       }
     });
     // The earliest-arriving observation, drawn last so its landmark ring
@@ -315,12 +315,67 @@
     setTimeout(function () { map.invalidateSize(); }, 120);
     activeMap = map;
 
+    // Build whichever filter checkboxes are actually relevant for this
+    // packet -- a single-branch packet gets no declutter toggle, one
+    // with no approximate positions gets no approx-only toggle, etc.
+    var controlsEl = document.getElementById('packetPathControls');
+    var controlsHtml = '';
+    var hiddenCount = plotted.length - 1;
+    if (plotted.length > 1) {
+      controlsHtml +=
+        '<label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:0 0 8px;cursor:pointer;color:var(--text-muted)">' +
+          '<input type="checkbox" id="packetPathPrimaryOnly">' +
+          'Show only the farthest-traveled route (' + hiddenCount + ' other station' + (hiddenCount === 1 ? '' : 's') + ' hidden when checked)' +
+        '</label>';
+    }
+    if (approxTotal > 0) {
+      controlsHtml +=
+        '<label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:0 0 8px;cursor:pointer;color:var(--text-muted)">' +
+          '<input type="checkbox" id="packetPathApproxOnly">' +
+          'Show only approximate positions (' + approxTotal + ' estimated from neighbors)' +
+        '</label>';
+    }
+    if (data.touchedAreas && data.touchedAreas.length > 0) {
+      controlsHtml +=
+        '<label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:0 0 8px;cursor:pointer;color:var(--text-muted)">' +
+          '<input type="checkbox" id="packetPathShowAreas">' +
+          'Show area boundaries on the map' +
+        '</label>';
+    }
+    if (controlsEl && controlsHtml) controlsEl.innerHTML = controlsHtml;
+
     var primaryOnlyCheckbox = document.getElementById('packetPathPrimaryOnly');
-    if (primaryOnlyCheckbox) {
-      primaryOnlyCheckbox.addEventListener('change', function () {
-        secondaryLayers.forEach(function (layer) {
-          if (primaryOnlyCheckbox.checked) map.removeLayer(layer);
-          else layer.addTo(map);
+    var approxOnlyCheckbox = document.getElementById('packetPathApproxOnly');
+    // Recomputes every marker/polyline's visibility from BOTH checkboxes'
+    // CURRENT state together, rather than each checkbox naively add/
+    // removing only its own layers -- the two filters are independent
+    // and combinable (e.g. both checked at once), and a naive per-
+    // checkbox toggle breaks as soon as they overlap on the same layer
+    // and get unchecked in a different order than they were checked.
+    function applyMarkerFilters() {
+      var primaryOnly = !!(primaryOnlyCheckbox && primaryOnlyCheckbox.checked);
+      var approxOnly = !!(approxOnlyCheckbox && approxOnlyCheckbox.checked);
+      markerEntries.forEach(function (m) {
+        var visible = (!primaryOnly || m.primary) && (!approxOnly || m.approx);
+        if (visible) m.layer.addTo(map); else map.removeLayer(m.layer);
+      });
+      polylineEntries.forEach(function (p) {
+        var visible = !primaryOnly || p.primary;
+        if (visible) p.layer.addTo(map); else map.removeLayer(p.layer);
+      });
+    }
+    if (primaryOnlyCheckbox) primaryOnlyCheckbox.addEventListener('change', applyMarkerFilters);
+    if (approxOnlyCheckbox) approxOnlyCheckbox.addEventListener('change', applyMarkerFilters);
+
+    // Area-boundary visibility is a separate, independent toggle -- not
+    // part of applyMarkerFilters since it's a different layer type
+    // entirely and never interacts with the branch/approx filters above.
+    var showAreasCheckbox = document.getElementById('packetPathShowAreas');
+    if (showAreasCheckbox) {
+      showAreasCheckbox.checked = true; // shapes are drawn (visible) by default; unchecking hides them
+      showAreasCheckbox.addEventListener('change', function () {
+        areaShapeLayers.forEach(function (layer) {
+          if (showAreasCheckbox.checked) layer.addTo(map); else map.removeLayer(layer);
         });
       });
     }
