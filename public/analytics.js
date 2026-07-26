@@ -5179,7 +5179,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           }).join('');
           setSectionHtml(areaAdoptEl, detailsSection(
             'Scope Adoption by Area (' + byArea.length.toLocaleString() + ' areas)',
-            null,
+            'All-time, not limited to the window above — of the real nodes sitting in each configured area, how many actually support its linked region (own default_scope, or ever relayed it)?',
             areaGroups,
             'scope-adoption-by-area'
           ));
@@ -5197,9 +5197,11 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         var configured = d.configuredRegions || 0;
         if (configured > 0) {
           var unused = d.unusedRegions || [];
-          var usedCount = configured - unused.length;
+          var used = d.usedRegions || [];
+          var usedCount = used.length;
           var unusedPct = (unused.length / configured * 100).toFixed(1);
-          var listHtml = unused.map(function(name) { return regionCodeHtml(name); }).join(', ');
+          var unusedListHtml = unused.map(function(name) { return regionCodeHtml(name); }).join(', ');
+          var usedListHtml = used.map(function(name) { return regionCodeHtml(name); }).join(', ');
           setSectionHtml(utilEl, detailsSection(
             'Region Utilization (' + usedCount.toLocaleString() + ' of ' + configured.toLocaleString() + ' used)',
             'All-time, not limited to the window above — has this configured region ever matched a message still in retention?',
@@ -5207,9 +5209,13 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
               '<strong>' + usedCount.toLocaleString() + '</strong> of <strong>' + configured.toLocaleString() + '</strong> configured regions have matched at least once' +
               (unused.length > 0 ? ' — <strong>' + unused.length.toLocaleString() + '</strong> (' + unusedPct + '%) have never matched anything.' : '.') +
             '</p>' +
+            (used.length > 0 ?
+              '<details data-key="used-regions"><summary style="cursor:pointer">Show ' + used.length.toLocaleString() + ' used region' + (used.length === 1 ? '' : 's') + '</summary>' +
+              '<div class="mono text-muted" style="font-size:11px;margin-top:8px;max-height:200px;overflow-y:auto;line-height:1.6">' + usedListHtml + '</div></details>'
+              : '') +
             (unused.length > 0 ?
               '<details data-key="unused-regions"><summary style="cursor:pointer">Show ' + unused.length.toLocaleString() + ' unused region' + (unused.length === 1 ? '' : 's') + '</summary>' +
-              '<div class="mono text-muted" style="font-size:11px;margin-top:8px;max-height:200px;overflow-y:auto;line-height:1.6">' + listHtml + '</div></details>'
+              '<div class="mono text-muted" style="font-size:11px;margin-top:8px;max-height:200px;overflow-y:auto;line-height:1.6">' + unusedListHtml + '</div></details>'
               : ''),
             'region-utilization'
           ));

@@ -157,13 +157,17 @@ type ScopeStatsResponse struct {
 	Summary    ScopeStatsSummary  `json:"summary"`
 	ByRegion   []ScopeRegionCount `json:"byRegion"`
 	TimeSeries []ScopeTimePoint   `json:"timeSeries"`
-	// ConfiguredRegions/UnusedRegions are all-time (not window-scoped):
-	// how many hashRegions are configured, and which of them have never
-	// matched a single transmission still in retention. Lets an operator
-	// see at a glance how much of their region list is dead weight.
-	// Omitted (both zero-value) when the server config has no hashRegions.
+	// ConfiguredRegions/UnusedRegions/UsedRegions are all-time (not
+	// window-scoped): how many hashRegions are configured, and which of
+	// them have never matched a single transmission still in retention
+	// (UnusedRegions) vs which have (UsedRegions) -- together a
+	// complete partition of the configured list. Lets an operator see
+	// at a glance how much of their region list is dead weight, and
+	// which specific regions the used/unused counts refer to. Omitted
+	// (all zero-value) when the server config has no hashRegions.
 	ConfiguredRegions int      `json:"configuredRegions,omitempty"`
 	UnusedRegions     []string `json:"unusedRegions,omitempty"`
+	UsedRegions       []string `json:"usedRegions,omitempty"`
 	// RepeatersByRegion is all-time (not window-scoped), like
 	// UnusedRegions: for each region that has ever matched a transmission,
 	// which distinct repeaters/rooms have relayed traffic carrying that

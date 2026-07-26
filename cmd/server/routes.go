@@ -3939,13 +3939,18 @@ func (s *Server) handleScopeStats(w http.ResponseWriter, r *http.Request) {
 		resp.ConfiguredRegions = len(configured)
 		if matched, err := s.db.GetMatchedRegionNames(); err == nil {
 			unused := make([]string, 0, len(configured))
+			used := make([]string, 0, len(configured))
 			for _, name := range configured {
-				if !matched[name] {
+				if matched[name] {
+					used = append(used, name)
+				} else {
 					unused = append(unused, name)
 				}
 			}
 			sort.Strings(unused)
+			sort.Strings(used)
 			resp.UnusedRegions = unused
+			resp.UsedRegions = used
 		} else {
 			log.Printf("WARN GetMatchedRegionNames: %v", err)
 		}
