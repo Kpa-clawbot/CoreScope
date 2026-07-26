@@ -1625,6 +1625,42 @@ func (s *Store) UpdateNodeDefaultScope(pubkey, scope string) error {
 	return err
 }
 
+// UpdateNodeConfiguredScope records the region scopes a node has CONFIGURED,
+// as concrete evidence from an observer /neighbors report (#1865). Unlike
+// UpdateNodeDefaultScope (inferred, overwritten on every observation), this is
+// only called for the observer's own `self` scopes and for neighbors whose OTA
+// scope query returned status="responded" — so the caller, not this method,
+// gates on status. An empty scope IS a valid "responded, no scopes configured"
+// statement and is stored; a timeout must simply not reach this method.
+//
+// reportedAt is the report envelope timestamp (ISO-8601). It is stored in
+// configured_scope_at and used for last-write-wins: an out-of-order older
+// report must not clobber a newer confirmed value. A blank reportedAt skips
+// the ordering guard (always writes).
+func (s *Store) UpdateNodeConfiguredScope(pubkey, scope, reportedAt string) error {
+	if pubkey == "" {
+		return nil
+	}
+	// Last-write-wins: skip if the stored confirmation is newer-or-equal.
+	if reportedAt != "" {
+		var curAt sql.NullString
+		row := s.db.QueryRow(`SELECT configured_scope_at FROM nodes WHERE public_key = ?`, pubkey)
+		if row.Scan(&curAt) == nil && curAt.Valid && curAt.String >= reportedAt {
+			return nil
+		}
+	}
+	if _, err := s.db.Exec(
+		`UPDATE nodes SET configured_scope = ?, configured_scope_at = ? WHERE public_key = ?`,
+		scope, reportedAt, pubkey); err != nil {
+		return err
+	}
+	// Mirror to inactive_nodes (node may be there if recently moved by retention).
+	_, err := s.db.Exec(
+		`UPDATE inactive_nodes SET configured_scope = ?, configured_scope_at = ? WHERE public_key = ?`,
+		scope, reportedAt, pubkey)
+	return err
+}
+
 // RecordNaiveSkew is called when resolveRxTime() clamps a packet's envelope
 // timestamp because the observer is emitting a zone-less local-time string
 // off from UTC by more than 15 min (issue #1478). Stamps the observer's
