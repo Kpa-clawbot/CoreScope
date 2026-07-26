@@ -233,9 +233,17 @@ window.ObserverDetailNaiveBanner = {
       const y = h - 2 - ((v - min) / range) * (h - 4);
       return x.toFixed(1) + ',' + y.toFixed(1);
     }).join(' ');
-    return '<svg viewBox="0 0 ' + w + ' ' + h + '" style="width:' + w + 'px;height:' + h + 'px" role="img" aria-label="SNR trend"><title>SNR trend</title><polyline points="' + pts + '" fill="none" stroke="var(--accent)" stroke-width="1.5"/></svg>';
+    // Min/max labels directly on the sparkline -- dborup asked to see more
+    // than just the bare line without having to hover.
+    const labels = '<text x="' + w + '" y="8" text-anchor="end" font-size="7" fill="var(--text-muted)">' + max.toFixed(1) + '</text>'
+      + '<text x="' + w + '" y="' + (h - 1) + '" text-anchor="end" font-size="7" fill="var(--text-muted)">' + min.toFixed(1) + '</text>';
+    return '<svg viewBox="0 0 ' + w + ' ' + h + '" style="width:' + w + 'px;height:' + h + 'px" role="img" aria-label="SNR trend, ' + min.toFixed(1) + ' to ' + max.toFixed(1) + ' dB"><title>SNR trend</title><polyline points="' + pts + '" fill="none" stroke="var(--accent)" stroke-width="1.5"/>' + labels + '</svg>';
   }
   window.neighborSnrSparkline = neighborSnrSparkline;
+
+  // Cached by pubkey when the sparkline loads, so clicking to open the
+  // expanded chart (openNeighborSnrModal) doesn't need a second fetch.
+  const _neighborMetricsCache = {};
 
   // Fetched per-row, after the Direct Neighbors table is in the DOM --
   // mirrors the RF Health grid's loadRFSparkline pattern (async, non-fatal
@@ -248,12 +256,15 @@ window.ObserverDetailNaiveBanner = {
       if (!container) continue;
       try {
         const data = await api('/observers/' + encodeURIComponent(observerId) + '/neighbors/' + encodeURIComponent(n.pubkey) + '/metrics');
-        const values = (data.metrics || []).map(function(m) { return m.snr; }).filter(function(v) { return v != null; });
+        const metrics = data.metrics || [];
+        _neighborMetricsCache[n.pubkey] = { metrics: metrics, label: n.name || n.pubkey };
+        const values = metrics.map(function(m) { return m.snr; }).filter(function(v) { return v != null; });
+        const clickable = values.length > 0 ? ' class="nb-spark-clickable" data-nb-pubkey="' + escapeHtml(n.pubkey) + '" style="cursor:pointer" title="Click for a larger chart"' : '';
         if (values.length > 1) {
           const latest = values[values.length - 1];
-          container.outerHTML = neighborSnrSparkline(values, 80, 20) + ' <span class="text-muted" style="font-size:10px">' + latest.toFixed(1) + ' dB</span>';
+          container.outerHTML = '<span' + clickable + '>' + neighborSnrSparkline(values, 80, 20) + ' <span class="text-muted" style="font-size:10px">' + latest.toFixed(1) + ' dB</span></span>';
         } else if (values.length === 1) {
-          container.outerHTML = '<span class="text-muted" style="font-size:10px">' + values[0].toFixed(1) + ' dB</span>';
+          container.outerHTML = '<span' + clickable + '><span class="text-muted" style="font-size:10px">' + values[0].toFixed(1) + ' dB</span></span>';
         } else {
           container.outerHTML = '<span class="text-muted" style="font-size:10px">no data</span>';
         }
@@ -263,6 +274,66 @@ window.ObserverDetailNaiveBanner = {
     }
   }
   window.loadNeighborSnrSparklines = loadNeighborSnrSparklines;
+
+  // Click-to-expand: a bigger Chart.js chart with both SNR and
+  // heard_secs_ago (dual y-axis) and native hover tooltips -- dborup asked
+  // for more than the bare sparkline gives. Delegated on the panel
+  // container (set up once in renderDetail) so it survives re-renders.
+  let _neighborSnrModalChart = null;
+  function openNeighborSnrModal(pubkey) {
+    const cached = _neighborMetricsCache[pubkey];
+    if (!cached) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.innerHTML = ''
+      + '<div class="modal" style="max-width:min(90vw,680px)">'
+      +   '<button type="button" class="modal-close" aria-label="Close"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>'
+      +   '<h3>' + escapeHtml(cached.label) + ' — SNR History</h3>'
+      +   '<canvas id="nbSnrModalChart" role="img" aria-label="SNR and heard-seconds-ago history"></canvas>'
+      + '</div>';
+    document.body.appendChild(overlay);
+    function close() {
+      if (_neighborSnrModalChart) { _neighborSnrModalChart.destroy(); _neighborSnrModalChart = null; }
+      overlay.remove();
+    }
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) close(); });
+    overlay.querySelector('.modal-close').addEventListener('click', close);
+    function onKeydown(e) {
+      if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onKeydown); }
+    }
+    document.addEventListener('keydown', onKeydown);
+
+    const canvas = overlay.querySelector('#nbSnrModalChart');
+    _neighborSnrModalChart = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: cached.metrics.map(function(m) { return new Date(m.timestamp).toLocaleString(); }),
+        datasets: [
+          { label: 'SNR (dB)', data: cached.metrics.map(function(m) { return m.snr; }), borderColor: 'var(--accent)', yAxisID: 'y', tension: 0.2 },
+          { label: 'Heard (s ago)', data: cached.metrics.map(function(m) { return m.heardSecsAgo; }), borderColor: 'var(--status-yellow)', yAxisID: 'y1', tension: 0.2 },
+        ],
+      },
+      options: {
+        scales: {
+          y: { position: 'left', title: { display: true, text: 'SNR (dB)' } },
+          y1: { position: 'right', title: { display: true, text: 'Heard (s ago)' }, grid: { drawOnChartArea: false } },
+        },
+        plugins: { tooltip: { mode: 'index', intersect: false } },
+      },
+    });
+    return overlay;
+  }
+  window.openNeighborSnrModal = openNeighborSnrModal;
+
+  // Delegated once at module load (not per-render) -- renderDetail rewrites
+  // #obsDetailContent's innerHTML on every load, which would silently drop
+  // a listener bound to the table itself.
+  document.addEventListener('click', function(e) {
+    const el = e.target.closest('[data-nb-pubkey]');
+    if (el) openNeighborSnrModal(el.getAttribute('data-nb-pubkey'));
+  });
 
   function renderDetail(obs, analytics, obsSkew, neighborsData) {
     const el = document.getElementById('obsDetailContent');

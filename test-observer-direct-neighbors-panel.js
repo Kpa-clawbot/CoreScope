@@ -176,6 +176,14 @@ test('renders an SVG polyline for 2+ points', () => {
   assert.ok(html.includes('<polyline'));
 });
 
+test('labels the min/max dB values directly on the sparkline', () => {
+  // dborup: "jeg vil bare gerne se mere" -- min/max readable without hover.
+  const html = ctx.window.neighborSnrSparkline([1, 5, 3], 80, 20);
+  assert.ok(html.includes('<text'), 'expected min/max <text> labels');
+  assert.ok(html.includes('>5.0<'), 'expected the max value labeled');
+  assert.ok(html.includes('>1.0<'), 'expected the min value labeled');
+});
+
 console.log('\n=== #1865 follow-up — SNR sparkline async loader ===');
 
 test('loads and injects a sparkline + latest value on success', async () => {
@@ -222,6 +230,92 @@ test('a failed fetch degrades to a neutral dash, not a thrown error', async () =
   vm.runInContext(fs.readFileSync('public/observer-detail.js', 'utf8'), apiCtx);
   await apiCtx.window.loadNeighborSnrSparklines('obs1', { neighbors: [{ pubkey: 'abc123' }] });
   assert.ok(el.outerHTML.length > 0, 'expected a fallback rendered, not left blank/thrown');
+});
+
+test('a sparkline with data is marked clickable (data-nb-pubkey), for the expand-to-modal feature', async () => {
+  const el = mockElement();
+  const apiCtx = makeLoaderCtx(
+    () => Promise.resolve({ metrics: [{ timestamp: 't1', snr: 5 }, { timestamp: 't2', snr: 8 }] }),
+    { 'nb-spark-abc123': el }
+  );
+  vm.runInContext(fs.readFileSync('public/observer-detail.js', 'utf8'), apiCtx);
+  await apiCtx.window.loadNeighborSnrSparklines('obs1', { neighbors: [{ pubkey: 'abc123' }] });
+  assert.ok(el.outerHTML.includes('data-nb-pubkey="abc123"'));
+});
+
+test('the "no data" state is not marked clickable (nothing to expand)', async () => {
+  const el = mockElement();
+  const apiCtx = makeLoaderCtx(
+    () => Promise.resolve({ metrics: [] }),
+    { 'nb-spark-abc123': el }
+  );
+  vm.runInContext(fs.readFileSync('public/observer-detail.js', 'utf8'), apiCtx);
+  await apiCtx.window.loadNeighborSnrSparklines('obs1', { neighbors: [{ pubkey: 'abc123' }] });
+  assert.ok(!el.outerHTML.includes('data-nb-pubkey'));
+});
+
+console.log('\n=== #1865 follow-up — SNR history expand-to-modal ===');
+
+// Minimal fake DOM sufficient for openNeighborSnrModal: createElement /
+// body.appendChild / querySelector / addEventListener, nothing more.
+function fakeModalDom() {
+  function makeEl() {
+    const listeners = {};
+    const el = {
+      _html: '',
+      set innerHTML(v) { this._html = v; },
+      get innerHTML() { return this._html; },
+      setAttribute() {},
+      className: '',
+      addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+      removeEventListener() {},
+      _fire(type, evt) { (listeners[type] || []).forEach((fn) => fn(evt || {})); },
+      querySelector() { return makeEl(); },
+      remove() {},
+    };
+    return el;
+  }
+  const body = { appendChild() {} };
+  return { createElement: () => makeEl(), body, addEventListener() {}, removeEventListener() {} };
+}
+
+test('clicking a cached sparkline opens a modal with a dual-axis SNR/heard-secs-ago chart', async () => {
+  let lastChartConfig = null;
+  const apiCtx = makeLoaderCtx(
+    () => Promise.resolve({ metrics: [
+      { timestamp: '2026-07-26T10:00:00Z', snr: 5, heardSecsAgo: 60 },
+      { timestamp: '2026-07-26T11:00:00Z', snr: 8, heardSecsAgo: 90 },
+    ] }),
+    { 'nb-spark-abc123': mockElement() }
+  );
+  apiCtx.document = fakeModalDom();
+  apiCtx.Chart = function(canvas, config) { lastChartConfig = config; return { destroy() {} }; };
+  vm.createContext(apiCtx);
+  vm.runInContext(fs.readFileSync('public/observer-detail.js', 'utf8'), apiCtx);
+
+  // Populate the metrics cache the way loadNeighborSnrSparklines would --
+  // getElementById isn't wired to the fake modal DOM here, so call the
+  // loader against the richer document directly to exercise the real path.
+  apiCtx.document.getElementById = () => mockElement();
+  await apiCtx.window.loadNeighborSnrSparklines('obs1', { neighbors: [{ pubkey: 'abc123', name: 'Repeater A' }] });
+
+  apiCtx.window.openNeighborSnrModal('abc123');
+  assert.ok(lastChartConfig, 'expected Chart to be constructed');
+  assert.strictEqual(lastChartConfig.data.datasets.length, 2, 'expected an SNR dataset and a heard_secs_ago dataset');
+  assert.strictEqual(lastChartConfig.data.datasets[0].yAxisID, 'y');
+  assert.strictEqual(lastChartConfig.data.datasets[1].yAxisID, 'y1');
+  assert.ok(lastChartConfig.options.scales.y1.title.text.toLowerCase().includes('heard'), 'expected the second axis labeled for heard_secs_ago');
+});
+
+test('openNeighborSnrModal is a no-op for a pubkey with no cached data', () => {
+  let chartCalled = false;
+  const apiCtx = makeLoaderCtx(() => Promise.resolve({ metrics: [] }), {});
+  apiCtx.document = fakeModalDom();
+  apiCtx.Chart = function() { chartCalled = true; return { destroy() {} }; };
+  vm.createContext(apiCtx);
+  vm.runInContext(fs.readFileSync('public/observer-detail.js', 'utf8'), apiCtx);
+  apiCtx.window.openNeighborSnrModal('never-fetched-pubkey');
+  assert.ok(!chartCalled, 'must not construct a chart with no data to show');
 });
 
 Promise.all(pending).then(() => {
