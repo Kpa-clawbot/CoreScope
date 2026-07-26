@@ -1602,6 +1602,13 @@ type PacketPathResponse struct {
 	Hash     string             `json:"hash"`
 	Branches []PacketPathBranch `json:"branches"`
 	First    *PacketPathBranch  `json:"first,omitempty"`
+	// TouchedAreas is every configured area any point or observer on this
+	// path resolved to (deduped, alphabetized, uncapped -- unlike the
+	// ping-bot reply's capped list, the map has room to show all of them).
+	// Populated by routes.go's annotatePacketPathTouchedAreas, not here:
+	// area resolution needs config.Areas, not available at this SQL-only
+	// DB layer.
+	TouchedAreas []string `json:"touchedAreas,omitempty"`
 }
 
 // GetPacketPath resolves every distinct station that observed a packet to
@@ -2643,22 +2650,34 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 			}
 		}
 		senderTs := decoded["sender_timestamp"]
+		// entryObserverPubkey: a 0-hop (direct) reception has no relay path,
+		// so entryPrefix is empty and annotateMessageAreas has nothing to
+		// resolve -- even though the hearing station's own position is a
+		// reasonable stand-in for "where this happened" at 0 hops. Only
+		// captured for the direct case; a message with an unresolvable
+		// multi-hop path deliberately still gets no fallback (an estimate
+		// from the wrong end of a relay chain isn't worth showing).
+		var entryObserverPubkey string
+		if hops == 0 && obsID.Valid && obsID.String != "" {
+			entryObserverPubkey = strings.ToLower(strings.TrimSpace(obsID.String))
+		}
 		m := &msg{
 			Data: map[string]interface{}{
-				"sender":           displaySender,
-				"text":             displayText,
-				"timestamp":        nullStr(fs),
-				"first_seen":       nullStr(fs),
-				"sender_timestamp": senderTs,
-				"packetId":         pktID,
-				"packetHash":       nullStr(pktHash),
-				"repeats":          1,
-				"observers":        []string{},
-				"hops":             hops,
-				"snr":              nullFloat(snr),
-				"scope":            nullStr(scopeName),
-				"routeType":        nullInt(routeType),
-				"entryPrefix":      entryPrefix,
+				"sender":              displaySender,
+				"text":                displayText,
+				"timestamp":           nullStr(fs),
+				"first_seen":          nullStr(fs),
+				"sender_timestamp":    senderTs,
+				"packetId":            pktID,
+				"packetHash":          nullStr(pktHash),
+				"repeats":             1,
+				"observers":           []string{},
+				"hops":                hops,
+				"snr":                 nullFloat(snr),
+				"scope":               nullStr(scopeName),
+				"routeType":           nullInt(routeType),
+				"entryPrefix":         entryPrefix,
+				"entryObserverPubkey": entryObserverPubkey,
 			},
 			Repeats: 1,
 		}
@@ -2803,7 +2822,19 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 				}
 			}
 			if m, ok := msgMap[txID]; ok {
-				m.Data["botReply"] = pingBotReply(p.hops, p.snr, observerLabel, repeaterNames, farthestKm)
+				br := pingBotReply(p.hops, p.snr, observerLabel, repeaterNames, farthestKm)
+				// touchedObserverPubkeys never reaches the client -- routes.go's
+				// annotateBotReplyTouchedAreas resolves it to area labels
+				// (needs s.cfg.Areas, not available at this SQL-only DB
+				// layer) and deletes it before the response is written.
+				if len(p.observerPubkeys) > 0 {
+					pks := make([]string, 0, len(p.observerPubkeys))
+					for pk := range p.observerPubkeys {
+						pks = append(pks, pk)
+					}
+					br["touchedObserverPubkeys"] = pks
+				}
+				m.Data["botReply"] = br
 			}
 		}
 	}
@@ -4253,6 +4284,55 @@ func (db *DB) namesAndRolesForPubkeys(pubkeys []string) (names, roles map[string
 		rows.Close()
 	}
 	return names, roles
+}
+
+// gpsByPubkeysExact bulk-resolves GPS positions for a set of FULL pubkeys
+// via an exact match -- unlike the path-hop prefix machinery (buildPrefixMap
+// /resolveEntryPointArea), which only indexes repeater/room-server roles as
+// path-hop candidates, this has no role filter: any node type qualifies,
+// since a hearing station's own position doesn't depend on whether it could
+// ever appear as a relay hop in someone else's path.
+func (db *DB) gpsByPubkeysExact(pubkeys []string) map[string][2]float64 {
+	result := make(map[string][2]float64, len(pubkeys))
+	if len(pubkeys) == 0 {
+		return result
+	}
+	const chunkSize = 499
+	for start := 0; start < len(pubkeys); start += chunkSize {
+		end := start + chunkSize
+		if end > len(pubkeys) {
+			end = len(pubkeys)
+		}
+		chunk := pubkeys[start:end]
+		placeholders := make([]byte, 0, len(chunk)*2)
+		args := make([]interface{}, len(chunk))
+		for i, pk := range chunk {
+			if i > 0 {
+				placeholders = append(placeholders, ',')
+			}
+			placeholders = append(placeholders, '?')
+			args[i] = pk
+		}
+		query := "SELECT public_key, lat, lon FROM nodes WHERE public_key IN (" + string(placeholders) + ")"
+		rows, err := db.conn.Query(query, args...)
+		if err != nil {
+			continue
+		}
+		for rows.Next() {
+			var pk string
+			var lat, lon sql.NullFloat64
+			if rows.Scan(&pk, &lat, &lon) != nil {
+				continue
+			}
+			// (0,0) is the ocean off Ghana, not a real fix -- same
+			// exclusion GetPacketPath/packetSpreadStats apply.
+			if lat.Valid && lon.Valid && !(lat.Float64 == 0 && lon.Float64 == 0) {
+				result[pk] = [2]float64{lat.Float64, lon.Float64}
+			}
+		}
+		rows.Close()
+	}
+	return result
 }
 
 // GetChannelMessageScopeStats narrows the scoped/unscoped/unknown question

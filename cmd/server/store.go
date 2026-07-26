@@ -2971,6 +2971,18 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				if label, ok := s.resolveEntryPointArea([]string{entryPrefix}); ok {
 					pkt["area"] = label
 				}
+			} else if obs.ObserverID != "" && s.db != nil && s.config != nil && len(s.config.Areas) > 0 {
+				// 0-hop (direct) reception: no relay path to resolve, but
+				// the hearing station's own position is a reasonable
+				// stand-in for "where this happened" -- same fallback as
+				// annotateMessageAreas (routes.go), not extended to a
+				// multi-hop path that just failed to resolve.
+				pk := strings.ToLower(strings.TrimSpace(obs.ObserverID))
+				if gps, ok := s.db.gpsByPubkeysExact([]string{pk})[pk]; ok {
+					if label, ok := AreaForPoint(gps[0], gps[1], s.config.Areas); ok {
+						pkt["area"] = label
+					}
+				}
 			}
 			// Use decode-window resolved path for broadcast (never from struct)
 			if broadcastRP != nil {

@@ -2876,17 +2876,120 @@ func (s *Server) resolveEntryPointArea(prefixes []string) (label string, ok bool
 // sitting in Aarhus but sending with the broad #dk scope should still show
 // "Aarhus by" here. The raw entryPrefix never reaches the client, whether
 // or not it resolved.
+//
+// A 0-hop (direct) message has no relay path at all, so there's no
+// entryPrefix to resolve -- even though the hearing station's own GPS fix
+// (captured as "entryObserverPubkey", direct-reception case only) is a
+// reasonable stand-in for "where this happened". That fallback is resolved
+// in a second bulk pass below, deliberately not extended to messages whose
+// multi-hop path just failed to resolve (an estimate from the wrong end of
+// a relay chain isn't worth showing). entryObserverPubkey never reaches the
+// client either way.
 func (s *Server) annotateMessageAreas(messages []map[string]interface{}) {
 	hasAreas := s.cfg != nil && len(s.cfg.Areas) > 0
+	needsFallback := make([]map[string]interface{}, 0)
+	fallbackPubkeys := make([]string, 0)
 	for _, m := range messages {
 		prefix, _ := m["entryPrefix"].(string)
 		delete(m, "entryPrefix")
-		if !hasAreas || prefix == "" {
+		observerPK, _ := m["entryObserverPubkey"].(string)
+		delete(m, "entryObserverPubkey")
+		if !hasAreas {
 			continue
 		}
-		if label, ok := s.resolveEntryPointArea([]string{prefix}); ok {
+		if prefix != "" {
+			if label, ok := s.resolveEntryPointArea([]string{prefix}); ok {
+				m["area"] = label
+				continue
+			}
+		}
+		if observerPK != "" {
+			needsFallback = append(needsFallback, m)
+			fallbackPubkeys = append(fallbackPubkeys, observerPK)
+		}
+	}
+	if len(needsFallback) == 0 || s.db == nil {
+		return
+	}
+	gpsByPK := s.db.gpsByPubkeysExact(fallbackPubkeys)
+	for i, m := range needsFallback {
+		pos, ok := gpsByPK[fallbackPubkeys[i]]
+		if !ok {
+			continue
+		}
+		if label, ok := AreaForPoint(pos[0], pos[1], s.cfg.Areas); ok {
 			m["area"] = label
 		}
+	}
+}
+
+// annotateBotReplyTouchedAreas extends a ping-bot reply with the distinct
+// configured areas any hearing station (with its own GPS fix on file) was
+// in -- "how wide" the spread was in named-place terms, alongside the
+// numeric "spread up to Nkm" pingBotReply already reports. Capped to keep
+// the chat bubble readable, since a broadly-flooded packet can easily touch
+// a dozen+ areas. touchedObserverPubkeys never reaches the client either
+// way.
+const botReplyMaxAreasShown = 3
+
+func (s *Server) annotateBotReplyTouchedAreas(messages []map[string]interface{}) {
+	hasAreas := s.cfg != nil && len(s.cfg.Areas) > 0
+	type pending struct {
+		br      map[string]interface{}
+		pubkeys []string
+	}
+	var work []pending
+	pubkeySet := map[string]bool{}
+	for _, m := range messages {
+		br, ok := m["botReply"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		pks, _ := br["touchedObserverPubkeys"].([]string)
+		delete(br, "touchedObserverPubkeys")
+		if !hasAreas || len(pks) == 0 {
+			continue
+		}
+		for _, pk := range pks {
+			pubkeySet[pk] = true
+		}
+		work = append(work, pending{br: br, pubkeys: pks})
+	}
+	if len(work) == 0 || s.db == nil {
+		return
+	}
+	allPubkeys := make([]string, 0, len(pubkeySet))
+	for pk := range pubkeySet {
+		allPubkeys = append(allPubkeys, pk)
+	}
+	gpsByPK := s.db.gpsByPubkeysExact(allPubkeys)
+	for _, w := range work {
+		seen := map[string]bool{}
+		var labels []string
+		for _, pk := range w.pubkeys {
+			pos, ok := gpsByPK[pk]
+			if !ok {
+				continue
+			}
+			label, ok := AreaForPoint(pos[0], pos[1], s.cfg.Areas)
+			if !ok || seen[label] {
+				continue
+			}
+			seen[label] = true
+			labels = append(labels, label)
+		}
+		if len(labels) == 0 {
+			continue
+		}
+		sort.Strings(labels)
+		shown := labels
+		suffix := ""
+		if len(labels) > botReplyMaxAreasShown {
+			shown = labels[:botReplyMaxAreasShown]
+			suffix = fmt.Sprintf(" +%d more", len(labels)-botReplyMaxAreasShown)
+		}
+		text, _ := w.br["text"].(string)
+		w.br["text"] = text + " · touched " + strings.Join(shown, ", ") + suffix
 	}
 }
 
@@ -2935,12 +3038,14 @@ func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.annotateMessageAreas(messages)
+		s.annotateBotReplyTouchedAreas(messages)
 		writeJSON(w, ChannelMessagesResponse{Messages: messages, Total: total})
 		return
 	}
 	if s.store != nil {
 		messages, total := s.store.GetChannelMessages(hash, limit, offset, region)
 		s.annotateMessageAreas(messages)
+		s.annotateBotReplyTouchedAreas(messages)
 		writeJSON(w, ChannelMessagesResponse{Messages: messages, Total: total})
 		return
 	}
@@ -3164,7 +3269,47 @@ func (s *Server) handlePacketPath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	s.annotatePacketPathTouchedAreas(resp)
 	writeJSON(w, resp)
+}
+
+// annotatePacketPathTouchedAreas resolves resp.TouchedAreas: every
+// configured area any point or observer on the path falls in, deduped and
+// alphabetized, uncapped (unlike annotateBotReplyTouchedAreas's capped
+// pong-reply list -- the map view has room to show the full set). Unlike
+// that function, no DB round-trip is needed: GetPacketPath already
+// resolved every position (including the neighbor-centroid approximation
+// fallback), so this just reads the lat/lon already on the response.
+func (s *Server) annotatePacketPathTouchedAreas(resp *PacketPathResponse) {
+	if resp == nil || s.cfg == nil || len(s.cfg.Areas) == 0 {
+		return
+	}
+	seen := map[string]bool{}
+	var labels []string
+	add := func(lat, lon *float64) {
+		if lat == nil || lon == nil {
+			return
+		}
+		label, ok := AreaForPoint(*lat, *lon, s.cfg.Areas)
+		if !ok || seen[label] {
+			return
+		}
+		seen[label] = true
+		labels = append(labels, label)
+	}
+	for _, b := range resp.Branches {
+		for _, pt := range b.Points {
+			add(pt.Lat, pt.Lon)
+		}
+		if b.Observer != nil {
+			add(b.Observer.Lat, b.Observer.Lon)
+		}
+	}
+	if len(labels) == 0 {
+		return
+	}
+	sort.Strings(labels)
+	resp.TouchedAreas = labels
 }
 
 var iataCoords = map[string]IataCoord{

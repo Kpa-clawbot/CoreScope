@@ -155,3 +155,161 @@ func TestHandleChannelMessages_EntryPointArea_Unresolved(t *testing.T) {
 		t.Error("entryPrefix must never reach the client")
 	}
 }
+
+// TestHandleChannelMessages_EntryPointArea_DirectObserverFallback covers a
+// 0-hop (direct) reception: there's no relay path at all, so path[0]
+// resolution has nothing to work with, but the hearing station's own GPS
+// fix is a reasonable stand-in for "where this happened" at 0 hops. The
+// observer here has role "client" (not repeater), deliberately proving the
+// fallback bypasses the path-hop role filter that buildPrefixMap applies --
+// a listening station doesn't need to be relay-eligible to have its own
+// position count here.
+func TestHandleChannelMessages_EntryPointArea_DirectObserverFallback(t *testing.T) {
+	srv, router := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
+		t.Fatalf("clear transmissions: %v", err)
+	}
+	if _, err := srv.db.conn.Exec(`DELETE FROM observations`); err != nil {
+		t.Fatalf("clear observations: %v", err)
+	}
+	if !srv.db.hasScopeName {
+		if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+			t.Fatalf("add scope_name column: %v", err)
+		}
+		srv.db.hasScopeName = true
+	}
+
+	f := func(v float64) *float64 { return &v }
+	srv.cfg.Areas = map[string]AreaEntry{
+		"DK_DJURS": {Label: "Djursland", LatMin: f(56.10), LatMax: f(56.55), LonMin: f(10.35), LonMax: f(10.90)},
+	}
+
+	// The hearing station itself: a plain client, not a repeater, sitting
+	// in Djursland.
+	if _, err := srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon, role) VALUES (?, ?, ?, ?, ?)",
+		"pkebeltoftobserver", "DK_8400_Ebeltoft Observer", 56.1959, 10.6801, "client"); err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+	srv.store.InvalidateNodeCache()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := srv.db.conn.Exec(
+		`INSERT INTO transmissions (raw_hex,hash,first_seen,route_type,payload_type,channel_hash,decoded_json,scope_name) VALUES (?,?,?,0,5,'#test',?,'#dk')`,
+		"aa", "chmsgdirect1", now, `{"sender":"HSVI","text":"HSVI: Tak tak"}`,
+	)
+	if err != nil {
+		t.Fatalf("insert tx: %v", err)
+	}
+	txID, _ := res.LastInsertId()
+
+	obsRes, err := srv.db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES (?,?,?)`,
+		"pkebeltoftobserver", "DK_8400_Ebeltoft Observer", "EBT")
+	if err != nil {
+		t.Fatalf("insert observer: %v", err)
+	}
+	obsIdx, _ := obsRes.LastInsertId()
+	// path_json '[]' -- direct reception, no relay hops at all.
+	if _, err := srv.db.conn.Exec(
+		`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp) VALUES (?,?,?,?,?,?)`,
+		txID, obsIdx, 12.8, -70.0, `[]`, time.Now().Unix(),
+	); err != nil {
+		t.Fatalf("insert observation: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/channels/%23test/messages?limit=10", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	var body map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	messages, _ := body["messages"].([]interface{})
+	if len(messages) != 1 {
+		t.Fatalf("messages = %+v, want 1", messages)
+	}
+	msg, _ := messages[0].(map[string]interface{})
+
+	if msg["hops"] != float64(0) {
+		t.Errorf("hops = %v, want 0 (direct)", msg["hops"])
+	}
+	if msg["area"] != "Djursland" {
+		t.Errorf("area = %v, want \"Djursland\" (resolved from the hearing station's own position, no relay path needed)", msg["area"])
+	}
+	if _, present := msg["entryObserverPubkey"]; present {
+		t.Error("entryObserverPubkey must never reach the client -- it's an internal-only intermediate field")
+	}
+}
+
+// TestHandleChannelMessages_EntryPointArea_DirectObserverFallback_NoGPS
+// confirms the fallback stays silent (never guesses) when the hearing
+// station of a 0-hop message has no GPS fix of its own on file -- the
+// common case, since most observers aren't also positioned mesh nodes.
+func TestHandleChannelMessages_EntryPointArea_DirectObserverFallback_NoGPS(t *testing.T) {
+	srv, router := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
+		t.Fatalf("clear transmissions: %v", err)
+	}
+	if _, err := srv.db.conn.Exec(`DELETE FROM observations`); err != nil {
+		t.Fatalf("clear observations: %v", err)
+	}
+	if !srv.db.hasScopeName {
+		if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+			t.Fatalf("add scope_name column: %v", err)
+		}
+		srv.db.hasScopeName = true
+	}
+
+	f := func(v float64) *float64 { return &v }
+	srv.cfg.Areas = map[string]AreaEntry{
+		"DK_DJURS": {Label: "Djursland", LatMin: f(56.20), LatMax: f(56.55), LonMin: f(10.35), LonMax: f(10.90)},
+	}
+	// Deliberately no nodes row for the observer -- no GPS fix on file.
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := srv.db.conn.Exec(
+		`INSERT INTO transmissions (raw_hex,hash,first_seen,route_type,payload_type,channel_hash,decoded_json,scope_name) VALUES (?,?,?,0,5,'#test',?,'#dk')`,
+		"aa", "chmsgdirect2", now, `{"sender":"Someone","text":"Someone: hi"}`,
+	)
+	if err != nil {
+		t.Fatalf("insert tx: %v", err)
+	}
+	txID, _ := res.LastInsertId()
+	obsRes, err := srv.db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES (?,?,?)`,
+		"pknogps", "No GPS Observer", "XXX")
+	if err != nil {
+		t.Fatalf("insert observer: %v", err)
+	}
+	obsIdx, _ := obsRes.LastInsertId()
+	if _, err := srv.db.conn.Exec(
+		`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp) VALUES (?,?,?,?,?,?)`,
+		txID, obsIdx, 5.0, -90.0, `[]`, time.Now().Unix(),
+	); err != nil {
+		t.Fatalf("insert observation: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/channels/%23test/messages?limit=10", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	messages, _ := body["messages"].([]interface{})
+	if len(messages) != 1 {
+		t.Fatalf("messages = %+v, want 1", messages)
+	}
+	msg, _ := messages[0].(map[string]interface{})
+	if _, present := msg["area"]; present {
+		t.Errorf("area = %v, want absent (observer has no GPS fix on file)", msg["area"])
+	}
+	if _, present := msg["entryObserverPubkey"]; present {
+		t.Error("entryObserverPubkey must never reach the client")
+	}
+}

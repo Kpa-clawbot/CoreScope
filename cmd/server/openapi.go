@@ -377,9 +377,10 @@ func componentSchemas() map[string]interface{} {
 		"PacketPathResponse": map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"hash":     str("The packet hash this path was resolved for."),
-				"branches": map[string]interface{}{"type": "array", "items": schemaRef("PacketPathBranch"), "description": "One branch per distinct station that observed the packet, each kept at that station's own deepest observation, sorted deepest-first -- shows the full flood spread, not just the single farthest route."},
-				"first":    schemaRef("PacketPathBranch"),
+				"hash":         str("The packet hash this path was resolved for."),
+				"branches":     map[string]interface{}{"type": "array", "items": schemaRef("PacketPathBranch"), "description": "One branch per distinct station that observed the packet, each kept at that station's own deepest observation, sorted deepest-first -- shows the full flood spread, not just the single farthest route."},
+				"first":        schemaRef("PacketPathBranch"),
+				"touchedAreas": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Every configured area any point or observer on the path falls in, deduped and alphabetized. Omitted when no areas are configured or none resolved."},
 			},
 		},
 	}
