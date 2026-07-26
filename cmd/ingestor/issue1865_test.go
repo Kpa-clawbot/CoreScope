@@ -77,13 +77,13 @@ func TestHandleNeighborsReportWritesSelfAndResponded(t *testing.T) {
 	if sc, _ := configuredScope(t, store, originLower); !sc.Valid || sc.String != "*" {
 		t.Errorf("self configured_scope = %v, want '*'", sc)
 	}
-	// responded neighbor written, lowercased.
-	if sc, _ := configuredScope(t, store, respLower); !sc.Valid || sc.String != "de,eu" {
-		t.Errorf("responded configured_scope = %v, want 'de,eu'", sc)
+	// responded neighbor written, lowercased, and normalized to #-prefixed scope form.
+	if sc, _ := configuredScope(t, store, respLower); !sc.Valid || sc.String != "#de,#eu" {
+		t.Errorf("responded configured_scope = %v, want '#de,#eu'", sc)
 	}
 	// timeout neighbor untouched — prior confirmed value survives.
-	if sc, _ := configuredScope(t, store, timeoutLower); !sc.Valid || sc.String != "eu" {
-		t.Errorf("timeout node configured_scope = %v, want prior 'eu' (must not be cleared)", sc)
+	if sc, _ := configuredScope(t, store, timeoutLower); !sc.Valid || sc.String != "#eu" {
+		t.Errorf("timeout node configured_scope = %v, want prior '#eu' (must not be cleared)", sc)
 	}
 }
 
@@ -139,22 +139,22 @@ func TestUpdateNodeConfiguredScopeLastWriteWins(t *testing.T) {
 	if err := store.UpdateNodeConfiguredScope(pk, "stale", "2026-07-24T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
-	if sc, _ := configuredScope(t, store, pk); sc.String != "eu" {
-		t.Errorf("configured_scope = %q, want 'eu' (older report must not overwrite)", sc.String)
+	if sc, _ := configuredScope(t, store, pk); sc.String != "#eu" {
+		t.Errorf("configured_scope = %q, want '#eu' (older report must not overwrite)", sc.String)
 	}
 	// Newer report updates.
 	if err := store.UpdateNodeConfiguredScope(pk, "de", "2026-07-26T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
-	if sc, _ := configuredScope(t, store, pk); sc.String != "de" {
-		t.Errorf("configured_scope = %q, want 'de' (newer report should update)", sc.String)
+	if sc, _ := configuredScope(t, store, pk); sc.String != "#de" {
+		t.Errorf("configured_scope = %q, want '#de' (newer report should update)", sc.String)
 	}
 	// inactive_nodes mirrored.
 	var inactive sql.NullString
 	if err := store.db.QueryRow(`SELECT configured_scope FROM inactive_nodes WHERE public_key = ?`, pk).Scan(&inactive); err != nil {
 		t.Fatal(err)
 	}
-	if inactive.String != "de" {
-		t.Errorf("inactive_nodes.configured_scope = %q, want 'de'", inactive.String)
+	if inactive.String != "#de" {
+		t.Errorf("inactive_nodes.configured_scope = %q, want '#de'", inactive.String)
 	}
 }
