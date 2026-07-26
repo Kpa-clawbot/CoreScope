@@ -118,6 +118,20 @@ def main():
     confirmed_scopes = {v.get("scope") for v in cities.values() if v.get("scope")}
     confirmed_scopes |= set(regions.keys())
 
+    # 0) one-time migration: an earlier version of this script wrote the
+    # singular "regionScope" key, which CoreScope's config schema never
+    # reads (it reads regionScopes, a list) -- silently invisible to the
+    # app. Areas created by that buggy run (not in CROSSWALK, so step 1
+    # below never touches them, and already present, so step 2's "add new
+    # area" skips them too) would stay broken forever without this pass.
+    for area_key, entry in areas.items():
+        legacy_scope = entry.pop("regionScope", None)
+        if legacy_scope:
+            scopes_list = entry.setdefault("regionScopes", [])
+            if legacy_scope not in scopes_list:
+                scopes_list.append(legacy_scope)
+            changed.append(f"migrated {area_key} ({entry.get('label')}) regionScope -> regionScopes")
+
     # 1) enrich existing crosswalked areas
     for area_key, scope in CROSSWALK.items():
         entry = areas.get(area_key)
