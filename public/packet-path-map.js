@@ -37,6 +37,17 @@
     return '+' + m + 'm ' + s + 's';
   }
 
+  // Plain "Xs"/"Xm Ys" duration, no leading "+" or "first to arrive" --
+  // for footer stats standing on their own (unlike formatElapsed's
+  // tooltip use, these aren't continuing a "this station arrived..."
+  // sentence).
+  function formatDuration(seconds) {
+    if (seconds < 60) return seconds.toFixed(1) + 's';
+    var m = Math.floor(seconds / 60);
+    var s = Math.round(seconds % 60);
+    return m + 'm ' + s + 's';
+  }
+
   // How much bigger/fuzzier an approximate marker's ring should be than
   // a normal marker, given how many positioned neighbors fed the
   // estimate (more = tighter) and how much they disagreed (a wide
@@ -467,10 +478,27 @@
     }
 
     var deepestHops = branches[0].hops;
+    var deepestBranch = plotted[deepestIdx] && plotted[deepestIdx].branch;
+    var deepestSeconds = deepestBranch && typeof deepestBranch.secondsAfterFirst === 'number' ? deepestBranch.secondsAfterFirst : null;
     var statusParts = [
       plotted.length + ' of ' + branches.length + ' station' + (branches.length === 1 ? '' : 's') + ' shown',
-      'deepest reached ' + deepestHops + ' hop' + (deepestHops === 1 ? '' : 's'),
+      'deepest reached ' + deepestHops + ' hop' + (deepestHops === 1 ? '' : 's') + (deepestSeconds != null ? ' (' + formatDuration(deepestSeconds) + ')' : ''),
     ];
+    if (hasDistanceData) {
+      var farthestBranch = plotted[farthestIdx] && plotted[farthestIdx].branch;
+      var farthestSeconds = farthestBranch && typeof farthestBranch.secondsAfterFirst === 'number' ? farthestBranch.secondsAfterFirst : null;
+      statusParts.push('farthest reached ' + farthestKm.toFixed(1) + 'km' + (farthestSeconds != null ? ' (' + formatDuration(farthestSeconds) + ')' : ''));
+    }
+    // How long the whole flood took to finish reaching every station it
+    // ever reached -- the largest secondsAfterFirst across ALL branches,
+    // not just the farthest/deepest ones (a station that's neither can
+    // still be the last to hear it).
+    var maxSpreadSeconds = null;
+    plotted.forEach(function (p) {
+      var s = p.branch.secondsAfterFirst;
+      if (typeof s === 'number' && (maxSpreadSeconds === null || s > maxSpreadSeconds)) maxSpreadSeconds = s;
+    });
+    if (maxSpreadSeconds != null && maxSpreadSeconds > 0) statusParts.push('fully spread in ' + formatDuration(maxSpreadSeconds));
     if (firstPoint) statusParts.push('entered near ' + firstPoint.name);
     if (approxTotal > 0) statusParts.push(approxTotal + ' approximate (estimated from neighbors)');
     if (missingTotal > 0) statusParts.push(missingTotal + ' hop' + (missingTotal === 1 ? '' : 's') + ' without a known position (not shown)');

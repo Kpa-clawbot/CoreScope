@@ -808,6 +808,66 @@ function makeSandbox(apiImpl) {
 
   await (async () => {
     try {
+      // Status line should report how long it took to reach the deepest
+      // and farthest stations, plus the overall spread duration (the
+      // largest secondsAfterFirst across ALL branches, not just those
+      // two -- a station that's neither can still be the last to hear
+      // it, e.g. a middling branch stuck behind a slow relay).
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [
+          { hops: 5, points: [], observer: { name: 'DeepButClose', lat: 56.0, lon: 10.0 }, distanceFromFirstKm: 50, secondsAfterFirst: 4.1 },
+          { hops: 2, points: [], observer: { name: 'ShallowButFar', lat: 57.0, lon: 11.0 }, distanceFromFirstKm: 200, secondsAfterFirst: 3.2 },
+          { hops: 3, points: [], observer: { name: 'SlowestOfAll', lat: 56.5, lon: 10.5 }, distanceFromFirstKm: 80, secondsAfterFirst: 9.7 },
+        ],
+      }));
+      ctx.L = {
+        map: () => ({ setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {} }),
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: () => ({ addTo() { return this; }, bindTooltip() { return this; }, on() { return this; } }),
+        polyline: () => ({ addTo() { return this; } }),
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const status = ctx.document.getElementById('packetPathStatus');
+      assert.ok(status.textContent.includes('deepest reached 5 hops (4.1s)'), 'status should show the deepest branch\'s own elapsed time, got: ' + status.textContent);
+      assert.ok(status.textContent.includes('farthest reached 200.0km (3.2s)'), 'status should show the farthest branch\'s distance and its own elapsed time, got: ' + status.textContent);
+      assert.ok(status.textContent.includes('fully spread in 9.7s'), 'status should report the LARGEST elapsed time across all branches (SlowestOfAll, neither deepest nor farthest), not just the deepest/farthest ones, got: ' + status.textContent);
+      passed++;
+      console.log('  ✅ status line reports deepest/farthest elapsed time plus overall spread duration (max across all branches)');
+    } catch (e) { failed++; console.log('  ❌ status line reports deepest/farthest elapsed time plus overall spread duration (max across all branches): ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
+      // No branch has secondsAfterFirst at all -- must omit all three
+      // timing additions cleanly rather than showing "(NaNs)" or a
+      // spurious "fully spread in 0.0s".
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [
+          { hops: 3, points: [], observer: { name: 'ObsA', lat: 56.0, lon: 10.0 }, distanceFromFirstKm: 40 },
+        ],
+      }));
+      ctx.L = {
+        map: () => ({ setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {} }),
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: () => ({ addTo() { return this; }, bindTooltip() { return this; }, on() { return this; } }),
+        polyline: () => ({ addTo() { return this; } }),
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const status = ctx.document.getElementById('packetPathStatus');
+      assert.ok(status.textContent.includes('deepest reached 3 hops') && !status.textContent.includes('deepest reached 3 hops ('), 'deepest line should have no "(Xs)" suffix when secondsAfterFirst is unknown, got: ' + status.textContent);
+      assert.ok(status.textContent.includes('farthest reached 40.0km') && !status.textContent.includes('farthest reached 40.0km ('), 'farthest line should have no "(Xs)" suffix when secondsAfterFirst is unknown, got: ' + status.textContent);
+      assert.ok(!status.textContent.includes('fully spread'), 'should not claim a spread duration when no branch has timing data, got: ' + status.textContent);
+      passed++;
+      console.log('  ✅ omits timing suffixes and the spread-duration stat when no branch has secondsAfterFirst');
+    } catch (e) { failed++; console.log('  ❌ omits timing suffixes and the spread-duration stat when no branch has secondsAfterFirst: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
       // A single-neighbor approx point should render with a bigger,
       // fainter ring than a 4-neighbor approx point -- more agreeing
       // neighbors means more confidence, so a tighter, more solid marker.
