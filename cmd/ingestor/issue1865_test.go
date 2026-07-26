@@ -158,3 +158,52 @@ func TestUpdateNodeConfiguredScopeLastWriteWins(t *testing.T) {
 		t.Errorf("inactive_nodes.configured_scope = %q, want 'de'", inactive.String)
 	}
 }
+
+// TestUpdateNodeConfiguredScopeNormalizesAndOrdersByInstant proves the
+// last-write-wins guard orders by chronological instant, not by raw string.
+// A "+02:00" report that is lexicographically "greater" but chronologically
+// EARLIER than the stored UTC value must not win, and stored timestamps are
+// canonicalized to UTC "Z" form regardless of the incoming offset/precision.
+func TestUpdateNodeConfiguredScopeNormalizesAndOrdersByInstant(t *testing.T) {
+	store := openNeighborsStore(t)
+	pk := "ee00000000000000000000000000000000000000000000000000000000000001"
+	seedNode(t, store, pk)
+
+	// Baseline: noon UTC.
+	if err := store.UpdateNodeConfiguredScope(pk, "eu", "2026-07-25T12:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if _, at := configuredScope(t, store, pk); at.String != "2026-07-25T12:00:00Z" {
+		t.Fatalf("stored at = %q, want canonical 'Z' form", at.String)
+	}
+
+	// "2026-07-25T13:30:00+02:00" == 11:30Z, chronologically EARLIER than 12:00Z,
+	// but lexicographically GREATER ("13:30..." > "12:00...Z"). Must be skipped.
+	if err := store.UpdateNodeConfiguredScope(pk, "stale", "2026-07-25T13:30:00+02:00"); err != nil {
+		t.Fatal(err)
+	}
+	if sc, _ := configuredScope(t, store, pk); sc.String != "eu" {
+		t.Errorf("configured_scope = %q, want 'eu' (earlier +02:00 report must not win)", sc.String)
+	}
+
+	// "2026-07-25T15:00:00+02:00" == 13:00Z, chronologically LATER. Must update,
+	// and be stored canonicalized to UTC.
+	if err := store.UpdateNodeConfiguredScope(pk, "de", "2026-07-25T15:00:00+02:00"); err != nil {
+		t.Fatal(err)
+	}
+	sc, at := configuredScope(t, store, pk)
+	if sc.String != "de" {
+		t.Errorf("configured_scope = %q, want 'de' (later +02:00 report should win)", sc.String)
+	}
+	if at.String != "2026-07-25T13:00:00Z" {
+		t.Errorf("stored at = %q, want canonical '2026-07-25T13:00:00Z'", at.String)
+	}
+
+	// Firmware's real format (microseconds + "+00:00") canonicalizes to "Z".
+	if err := store.UpdateNodeConfiguredScope(pk, "dk", "2026-07-26T09:43:48.000000+00:00"); err != nil {
+		t.Fatal(err)
+	}
+	if _, at := configuredScope(t, store, pk); at.String != "2026-07-26T09:43:48Z" {
+		t.Errorf("stored at = %q, want canonical '2026-07-26T09:43:48Z'", at.String)
+	}
+}
