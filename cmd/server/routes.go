@@ -3285,17 +3285,24 @@ func (s *Server) annotatePacketPathTouchedAreas(resp *PacketPathResponse) {
 		return
 	}
 	seen := map[string]bool{}
-	var labels []string
+	var shapes []TouchedAreaShape
 	add := func(lat, lon *float64) {
 		if lat == nil || lon == nil {
 			return
 		}
-		label, ok := AreaForPoint(*lat, *lon, s.cfg.Areas)
-		if !ok || seen[label] {
+		key, ok := AreaKeyForPoint(*lat, *lon, s.cfg.Areas)
+		if !ok || seen[key] {
 			return
 		}
-		seen[label] = true
-		labels = append(labels, label)
+		seen[key] = true
+		entry := s.cfg.Areas[key]
+		shape := TouchedAreaShape{Label: entry.Label}
+		if len(entry.Polygon) > 0 {
+			shape.Polygon = entry.Polygon
+		} else {
+			shape.LatMin, shape.LatMax, shape.LonMin, shape.LonMax = entry.LatMin, entry.LatMax, entry.LonMin, entry.LonMax
+		}
+		shapes = append(shapes, shape)
 	}
 	for _, b := range resp.Branches {
 		for _, pt := range b.Points {
@@ -3305,11 +3312,11 @@ func (s *Server) annotatePacketPathTouchedAreas(resp *PacketPathResponse) {
 			add(b.Observer.Lat, b.Observer.Lon)
 		}
 	}
-	if len(labels) == 0 {
+	if len(shapes) == 0 {
 		return
 	}
-	sort.Strings(labels)
-	resp.TouchedAreas = labels
+	sort.Slice(shapes, func(i, j int) bool { return shapes[i].Label < shapes[j].Label })
+	resp.TouchedAreas = shapes
 }
 
 var iataCoords = map[string]IataCoord{

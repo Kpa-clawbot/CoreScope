@@ -129,7 +129,14 @@
         '<button type="button" id="packetPathClose" aria-label="Close" ' +
           'style="position:absolute;top:8px;right:8px;background:none;border:none;cursor:pointer;font-size:22px;line-height:1;color:var(--text-muted)">&times;</button>' +
         '<h3 style="margin:0 0 4px;padding-right:24px">Relay Path</h3>' +
-        '<p class="text-muted" style="margin:0 0 10px;font-size:12px">How far and how wide this packet spread. The highlighted route is the farthest-traveled branch; every other station that heard it is shown too. The green ring marks whoever heard it first. Dashed markers are approximate -- estimated from nearby positioned neighbors, not the station\'s own position. Click a marker to open that node\'s detail page.</p>' +
+        '<p class="text-muted" style="margin:0 0 8px;font-size:12px">How far and how wide this packet spread. Click a marker to open that node\'s detail page.</p>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;margin:0 0 10px;font-size:11px;color:var(--text-muted)">' +
+          '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:14px;height:2px;background:var(--accent)"></span>farthest-traveled route</span>' +
+          '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:14px;height:2px;background:var(--text-muted)"></span>other station</span>' +
+          '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:9px;height:9px;border:2px dashed var(--text-muted);border-radius:50%;box-sizing:border-box"></span>approximate position</span>' +
+          '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:9px;height:9px;border:2px solid var(--status-green);border-radius:50%;box-sizing:border-box"></span>first to hear it</span>' +
+        '</div>' +
+        '<div id="packetPathControls"></div>' +
         '<div id="packetPathMapContainer" style="height:360px;border-radius:8px;overflow:hidden;background:var(--surface-1)"></div>' +
         '<div id="packetPathStatus" style="margin-top:8px;font-size:12px;color:var(--text-muted)">Loading…</div>' +
       '</div>';
@@ -189,9 +196,42 @@
     var observerColor = cssVar('--status-yellow');
     var muted = cssVar('--text-muted');
 
+    // Shade every touched area's configured boundary as a faint
+    // background layer -- ties the "touched: X, Y" footer text to actual
+    // geography. Non-interactive so it never steals clicks from branch
+    // markers, and deliberately excluded from the fitBounds calculation
+    // below: a huge area (e.g. a whole region) would zoom the map out
+    // past the point where individual branches are still readable.
+    // Tracked separately from marker/polyline layers below -- toggled by
+    // its own "show area boundaries" checkbox, independent of the
+    // branch/approx filters.
+    var areaShapeLayers = [];
+    (data.touchedAreas || []).forEach(function (area) {
+      var shapeOpts = { color: accent, weight: 1, opacity: 0.35, fillColor: accent, fillOpacity: 0.06, interactive: false };
+      var shape = null;
+      if (area.polygon && area.polygon.length > 0) {
+        shape = L.polygon(area.polygon, shapeOpts).addTo(map);
+      } else if (area.latMin != null && area.latMax != null && area.lonMin != null && area.lonMax != null) {
+        shape = L.rectangle([[area.latMin, area.lonMin], [area.latMax, area.lonMax]], shapeOpts).addTo(map);
+      }
+      if (shape) areaShapeLayers.push(shape);
+    });
+
     var bounds = [];
     var missingTotal = 0;
     var approxTotal = 0;
+    // Every branch marker/polyline, tagged with which filters apply to it
+    // -- the "show only farthest route" and "show only approximate"
+    // checkboxes are independent and combinable (e.g. both checked at
+    // once), so visibility is recomputed from BOTH current checkbox
+    // states together (applyMarkerFilters below) rather than each
+    // checkbox naively add/removing its own layers -- that naive
+    // approach breaks as soon as two filters overlap on the same layer
+    // and get toggled in different orders. The landmark "first to hear
+    // it" ring (drawn separately below) is never tracked here: it's not
+    // a branch, it stays visible regardless of either filter.
+    var markerEntries = [];
+    var polylineEntries = [];
     // The same physical node (e.g. a shared entry-point repeater near the
     // sender) commonly appears in many branches' chains -- dedupe by
     // identity so "N approximate" counts distinct stations, not chain
@@ -246,9 +286,11 @@
             window.location.hash = '#/nodes/' + encodeURIComponent(pt.publicKey);
           });
         }
+        markerEntries.push({ layer: marker, primary: p.primary, approx: !!pt.approx });
       });
       if (line.length > 1) {
-        L.polyline(line, { color: lineColor, weight: p.primary ? 2.5 : 1.5, opacity: p.primary ? 0.85 : 0.5 }).addTo(map);
+        var polyline = L.polyline(line, { color: lineColor, weight: p.primary ? 2.5 : 1.5, opacity: p.primary ? 0.85 : 0.5 }).addTo(map);
+        polylineEntries.push({ layer: polyline, primary: p.primary });
       }
     });
     // The earliest-arriving observation, drawn last so its landmark ring
@@ -273,6 +315,71 @@
     setTimeout(function () { map.invalidateSize(); }, 120);
     activeMap = map;
 
+    // Build whichever filter checkboxes are actually relevant for this
+    // packet -- a single-branch packet gets no declutter toggle, one
+    // with no approximate positions gets no approx-only toggle, etc.
+    var controlsEl = document.getElementById('packetPathControls');
+    var controlsHtml = '';
+    var hiddenCount = plotted.length - 1;
+    if (plotted.length > 1) {
+      controlsHtml +=
+        '<label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:0 0 8px;cursor:pointer;color:var(--text-muted)">' +
+          '<input type="checkbox" id="packetPathPrimaryOnly">' +
+          'Show only the farthest-traveled route (' + hiddenCount + ' other station' + (hiddenCount === 1 ? '' : 's') + ' hidden when checked)' +
+        '</label>';
+    }
+    if (approxTotal > 0) {
+      controlsHtml +=
+        '<label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:0 0 8px;cursor:pointer;color:var(--text-muted)">' +
+          '<input type="checkbox" id="packetPathApproxOnly">' +
+          'Show only approximate positions (' + approxTotal + ' estimated from neighbors)' +
+        '</label>';
+    }
+    if (data.touchedAreas && data.touchedAreas.length > 0) {
+      controlsHtml +=
+        '<label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:0 0 8px;cursor:pointer;color:var(--text-muted)">' +
+          '<input type="checkbox" id="packetPathShowAreas">' +
+          'Show area boundaries on the map' +
+        '</label>';
+    }
+    if (controlsEl && controlsHtml) controlsEl.innerHTML = controlsHtml;
+
+    var primaryOnlyCheckbox = document.getElementById('packetPathPrimaryOnly');
+    var approxOnlyCheckbox = document.getElementById('packetPathApproxOnly');
+    // Recomputes every marker/polyline's visibility from BOTH checkboxes'
+    // CURRENT state together, rather than each checkbox naively add/
+    // removing only its own layers -- the two filters are independent
+    // and combinable (e.g. both checked at once), and a naive per-
+    // checkbox toggle breaks as soon as they overlap on the same layer
+    // and get unchecked in a different order than they were checked.
+    function applyMarkerFilters() {
+      var primaryOnly = !!(primaryOnlyCheckbox && primaryOnlyCheckbox.checked);
+      var approxOnly = !!(approxOnlyCheckbox && approxOnlyCheckbox.checked);
+      markerEntries.forEach(function (m) {
+        var visible = (!primaryOnly || m.primary) && (!approxOnly || m.approx);
+        if (visible) m.layer.addTo(map); else map.removeLayer(m.layer);
+      });
+      polylineEntries.forEach(function (p) {
+        var visible = !primaryOnly || p.primary;
+        if (visible) p.layer.addTo(map); else map.removeLayer(p.layer);
+      });
+    }
+    if (primaryOnlyCheckbox) primaryOnlyCheckbox.addEventListener('change', applyMarkerFilters);
+    if (approxOnlyCheckbox) approxOnlyCheckbox.addEventListener('change', applyMarkerFilters);
+
+    // Area-boundary visibility is a separate, independent toggle -- not
+    // part of applyMarkerFilters since it's a different layer type
+    // entirely and never interacts with the branch/approx filters above.
+    var showAreasCheckbox = document.getElementById('packetPathShowAreas');
+    if (showAreasCheckbox) {
+      showAreasCheckbox.checked = true; // shapes are drawn (visible) by default; unchecking hides them
+      showAreasCheckbox.addEventListener('change', function () {
+        areaShapeLayers.forEach(function (layer) {
+          if (showAreasCheckbox.checked) layer.addTo(map); else map.removeLayer(layer);
+        });
+      });
+    }
+
     var deepestHops = branches[0].hops;
     var statusParts = [
       plotted.length + ' of ' + branches.length + ' station' + (branches.length === 1 ? '' : 's') + ' shown',
@@ -281,7 +388,9 @@
     if (firstPoint) statusParts.push('entered near ' + firstPoint.name);
     if (approxTotal > 0) statusParts.push(approxTotal + ' approximate (estimated from neighbors)');
     if (missingTotal > 0) statusParts.push(missingTotal + ' hop' + (missingTotal === 1 ? '' : 's') + ' without a known position (not shown)');
-    if (data.touchedAreas && data.touchedAreas.length > 0) statusParts.push('touched ' + data.touchedAreas.join(', '));
+    if (data.touchedAreas && data.touchedAreas.length > 0) {
+      statusParts.push('touched ' + data.touchedAreas.map(function (a) { return a.label; }).join(', '));
+    }
     if (statusEl) statusEl.textContent = statusParts.join(' · ');
   }
 

@@ -1589,6 +1589,20 @@ type PacketPathBranch struct {
 	DistanceFromFirstKm *float64 `json:"distanceFromFirstKm,omitempty"`
 }
 
+// TouchedAreaShape is one touched area's display label plus its
+// configured boundary -- a real Polygon when the area was drawn as one,
+// otherwise a bounding box (LatMin/LatMax/LonMin/LonMax), matching
+// whichever AreaEntry (cmd/server/config.go) was configured with. Exactly
+// one of Polygon or the LatMin.../LonMax... quartet is populated.
+type TouchedAreaShape struct {
+	Label   string       `json:"label"`
+	Polygon [][2]float64 `json:"polygon,omitempty"`
+	LatMin  *float64     `json:"latMin,omitempty"`
+	LatMax  *float64     `json:"latMax,omitempty"`
+	LonMin  *float64     `json:"lonMin,omitempty"`
+	LonMax  *float64     `json:"lonMax,omitempty"`
+}
+
 // PacketPathResponse is every branch a packet is known to have reached --
 // one per distinct observer, kept at that observer's own deepest
 // observation -- used to draw the full flood spread on a map (the
@@ -1604,11 +1618,12 @@ type PacketPathResponse struct {
 	First    *PacketPathBranch  `json:"first,omitempty"`
 	// TouchedAreas is every configured area any point or observer on this
 	// path resolved to (deduped, alphabetized, uncapped -- unlike the
-	// ping-bot reply's capped list, the map has room to show all of them).
-	// Populated by routes.go's annotatePacketPathTouchedAreas, not here:
-	// area resolution needs config.Areas, not available at this SQL-only
-	// DB layer.
-	TouchedAreas []string `json:"touchedAreas,omitempty"`
+	// ping-bot reply's capped list, the map has room to show all of them),
+	// each carrying its configured boundary so the map can shade it, not
+	// just list it as text. Populated by routes.go's
+	// annotatePacketPathTouchedAreas, not here: area resolution needs
+	// config.Areas, not available at this SQL-only DB layer.
+	TouchedAreas []TouchedAreaShape `json:"touchedAreas,omitempty"`
 }
 
 // GetPacketPath resolves every distinct station that observed a packet to
