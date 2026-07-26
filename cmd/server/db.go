@@ -2815,7 +2815,19 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 				}
 			}
 			if m, ok := msgMap[txID]; ok {
-				m.Data["botReply"] = pingBotReply(p.hops, p.snr, observerLabel, repeaterNames, farthestKm)
+				br := pingBotReply(p.hops, p.snr, observerLabel, repeaterNames, farthestKm)
+				// touchedObserverPubkeys never reaches the client -- routes.go's
+				// annotateBotReplyTouchedAreas resolves it to area labels
+				// (needs s.cfg.Areas, not available at this SQL-only DB
+				// layer) and deletes it before the response is written.
+				if len(p.observerPubkeys) > 0 {
+					pks := make([]string, 0, len(p.observerPubkeys))
+					for pk := range p.observerPubkeys {
+						pks = append(pks, pk)
+					}
+					br["touchedObserverPubkeys"] = pks
+				}
+				m.Data["botReply"] = br
 			}
 		}
 	}

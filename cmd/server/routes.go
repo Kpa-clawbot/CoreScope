@@ -2923,6 +2923,76 @@ func (s *Server) annotateMessageAreas(messages []map[string]interface{}) {
 	}
 }
 
+// annotateBotReplyTouchedAreas extends a ping-bot reply with the distinct
+// configured areas any hearing station (with its own GPS fix on file) was
+// in -- "how wide" the spread was in named-place terms, alongside the
+// numeric "spread up to Nkm" pingBotReply already reports. Capped to keep
+// the chat bubble readable, since a broadly-flooded packet can easily touch
+// a dozen+ areas. touchedObserverPubkeys never reaches the client either
+// way.
+const botReplyMaxAreasShown = 3
+
+func (s *Server) annotateBotReplyTouchedAreas(messages []map[string]interface{}) {
+	hasAreas := s.cfg != nil && len(s.cfg.Areas) > 0
+	type pending struct {
+		br      map[string]interface{}
+		pubkeys []string
+	}
+	var work []pending
+	pubkeySet := map[string]bool{}
+	for _, m := range messages {
+		br, ok := m["botReply"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		pks, _ := br["touchedObserverPubkeys"].([]string)
+		delete(br, "touchedObserverPubkeys")
+		if !hasAreas || len(pks) == 0 {
+			continue
+		}
+		for _, pk := range pks {
+			pubkeySet[pk] = true
+		}
+		work = append(work, pending{br: br, pubkeys: pks})
+	}
+	if len(work) == 0 || s.db == nil {
+		return
+	}
+	allPubkeys := make([]string, 0, len(pubkeySet))
+	for pk := range pubkeySet {
+		allPubkeys = append(allPubkeys, pk)
+	}
+	gpsByPK := s.db.gpsByPubkeysExact(allPubkeys)
+	for _, w := range work {
+		seen := map[string]bool{}
+		var labels []string
+		for _, pk := range w.pubkeys {
+			pos, ok := gpsByPK[pk]
+			if !ok {
+				continue
+			}
+			label, ok := AreaForPoint(pos[0], pos[1], s.cfg.Areas)
+			if !ok || seen[label] {
+				continue
+			}
+			seen[label] = true
+			labels = append(labels, label)
+		}
+		if len(labels) == 0 {
+			continue
+		}
+		sort.Strings(labels)
+		shown := labels
+		suffix := ""
+		if len(labels) > botReplyMaxAreasShown {
+			shown = labels[:botReplyMaxAreasShown]
+			suffix = fmt.Sprintf(" +%d more", len(labels)-botReplyMaxAreasShown)
+		}
+		text, _ := w.br["text"].(string)
+		w.br["text"] = text + " · touched " + strings.Join(shown, ", ") + suffix
+	}
+}
+
 func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 	region := r.URL.Query().Get("region")
 	includeEncrypted := r.URL.Query().Get("includeEncrypted") == "true"
@@ -2968,12 +3038,14 @@ func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.annotateMessageAreas(messages)
+		s.annotateBotReplyTouchedAreas(messages)
 		writeJSON(w, ChannelMessagesResponse{Messages: messages, Total: total})
 		return
 	}
 	if s.store != nil {
 		messages, total := s.store.GetChannelMessages(hash, limit, offset, region)
 		s.annotateMessageAreas(messages)
+		s.annotateBotReplyTouchedAreas(messages)
 		writeJSON(w, ChannelMessagesResponse{Messages: messages, Total: total})
 		return
 	}
