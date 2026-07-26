@@ -143,17 +143,18 @@ window.ObserverDetailNaiveBanner = {
     try {
       destroyCharts();
       chartDefaults();
-      const [obs, analytics, obsSkewArr] = await Promise.all([
+      const [obs, analytics, obsSkewArr, neighborsData] = await Promise.all([
         api('/observers/' + encodeURIComponent(currentId)),
         api('/observers/' + encodeURIComponent(currentId) + '/analytics?days=' + currentDays),
         api('/observers/clock-skew', { ttl: 30000 }).catch(function() { return []; }),
+        api('/observers/' + encodeURIComponent(currentId) + '/neighbors').catch(function() { return { neighbors: [], reportedAt: '' }; }),
       ]);
       // Find this observer's calibration data.
       var obsSkew = null;
       (Array.isArray(obsSkewArr) ? obsSkewArr : []).forEach(function(s) {
         if (s && s.observerID === currentId) obsSkew = s;
       });
-      renderDetail(obs, analytics, obsSkew);
+      renderDetail(obs, analytics, obsSkew, neighborsData);
     } catch (e) {
       // SECURITY (OBS-2, PR #1539): use textContent for error messages.
       // Error.message is JS-controlled and shouldn't normally carry attacker
@@ -167,7 +168,46 @@ window.ObserverDetailNaiveBanner = {
     }
   }
 
-  function renderDetail(obs, analytics, obsSkew) {
+  function directNeighborRoleIcon(role) {
+    switch (role) {
+      case 'repeater': return '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg>';
+      case 'room': return '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-house-line"/></svg>';
+      case 'sensor': return '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-thermometer"/></svg>';
+      default: return '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-radio"/></svg>';
+    }
+  }
+
+  // #1865 follow-up (cwichura, PR #1867): renders the observer's own
+  // firmware-reported zero-hop neighbor set -- ground truth, distinct from
+  // the packet-path-inferred neighbor graph elsewhere in the app. Absence
+  // is normal (opt-in firmware, unavailable on non-PSRAM hardware) and
+  // renders a plain explanatory note, never an error/warning treatment.
+  function renderDirectNeighbors(neighborsData) {
+    const neighbors = (neighborsData && Array.isArray(neighborsData.neighbors)) ? neighborsData.neighbors : [];
+    if (neighbors.length === 0) {
+      return '<div class="text-muted" style="font-size:12px" title="/neighbors reports are opt-in firmware and unavailable on non-PSRAM hardware">No direct-neighbor data reported yet.</div>';
+    }
+    const rows = neighbors.map(function(n) {
+      const shortPubkey = escapeHtml(String(n.pubkey || '').slice(0, 12)) + '…';
+      const label = n.name ? escapeHtml(n.name) : shortPubkey;
+      const nameCell = n.name
+        ? '<a href="#/nodes/' + encodeURIComponent(n.pubkey) + '">' + directNeighborRoleIcon(n.role) + ' ' + label + '</a>'
+        : directNeighborRoleIcon(n.role) + ' <span class="mono">' + label + '</span>';
+      const scopeCell = n.scopes
+        ? '<span class="badge-region">' + escapeHtml(n.scopes) + '</span>'
+        : (n.status === 'timeout'
+          ? '<span class="text-muted" title="Scope query timed out">no reply</span>'
+          : '<span class="text-muted">—</span>');
+      return '<tr><td>' + nameCell + '</td><td>' + scopeCell + '</td></tr>';
+    }).join('');
+    const asOf = neighborsData.reportedAt
+      ? '<div class="text-muted" style="font-size:11px;margin-top:6px">As of ' + timeAgo(neighborsData.reportedAt) + '</div>'
+      : '';
+    return '<div class="table-fluid-wrap"><table class="data-table"><thead><tr><th scope="col">Neighbor</th><th scope="col">Configured Scope</th></tr></thead><tbody>' + rows + '</tbody></table></div>' + asOf;
+  }
+  window.renderDirectNeighbors = renderDirectNeighbors;
+
+  function renderDetail(obs, analytics, obsSkew, neighborsData) {
     const el = document.getElementById('obsDetailContent');
     if (!el) return;
 
@@ -291,6 +331,10 @@ window.ObserverDetailNaiveBanner = {
           <strong>How this is computed:</strong> when this observer and another observer see the same packet, we compare their receive timestamps. The median deviation across all multi-observer packets is this observer's offset.
         </div>
       </div>` : ''}
+      <div class="node-full-card" style="margin-bottom:20px;padding:12px">
+        <h4 style="margin:0 0 6px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-share-network"/></svg> Direct Neighbors</h4>
+        ${renderDirectNeighbors(neighborsData)}
+      </div>
       <div class="obs-charts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));gap:16px">
         <div class="chart-card" style="padding:12px">
           <h3 style="margin:0 0 8px;font-size:0.95em">Packets Over Time</h3>

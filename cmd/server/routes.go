@@ -348,6 +348,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/observers/metrics/summary", s.handleMetricsSummary).Methods("GET")
 	r.HandleFunc("/api/observers/{id}/metrics", s.handleObserverMetrics).Methods("GET")
 	r.HandleFunc("/api/observers/{id}/analytics", s.handleObserverAnalytics).Methods("GET")
+	r.HandleFunc("/api/observers/{id}/neighbors", s.handleObserverNeighbors).Methods("GET")
 	r.HandleFunc("/api/observers/{id}", s.handleObserverDetail).Methods("GET")
 	r.HandleFunc("/api/observers", s.handleObservers).Methods("GET")
 	r.HandleFunc("/api/traces/{hash}", s.handleTraces).Methods("GET")
@@ -3223,6 +3224,31 @@ func (s *Server) handleObserverDetail(w http.ResponseWriter, r *http.Request) {
 		applyObserverNaiveClock(&resp, obs, time.Now().UTC())
 		return resp
 	}())
+}
+
+// handleObserverNeighbors serves the #1865 follow-up "Direct Neighbors"
+// panel: the observer's own firmware-reported zero-hop neighbor set, ground
+// truth from /neighbors distinct from the packet-path-inferred
+// neighbor_edges graph. Empty/never-reported is a normal 200 with an empty
+// list -- not an error (the feature is opt-in and hardware-gated; absence
+// must not read as a fault, per cwichura's request on PR #1867).
+func (s *Server) handleObserverNeighbors(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+
+	if s.cfg != nil && s.cfg.IsObserverBlacklisted(id) {
+		writeError(w, 404, "Observer not found")
+		return
+	}
+
+	neighbors, reportedAt, err := s.db.GetObserverNeighbors(id)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, map[string]interface{}{
+		"neighbors":  neighbors,
+		"reportedAt": reportedAt,
+	})
 }
 
 func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request) {

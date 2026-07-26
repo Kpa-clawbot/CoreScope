@@ -136,6 +136,7 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/observers/{id}":            {Summary: "Get observer detail", Tag: "observers"},
 		"GET /api/observers/{id}/metrics":    {Summary: "Get observer metrics", Description: "Packet rates, uptime, and performance metrics.", Tag: "observers"},
 		"GET /api/observers/{id}/analytics":  {Summary: "Get observer analytics", Tag: "observers"},
+		"GET /api/observers/{id}/neighbors":  {Summary: "Get an observer's direct (zero-hop) neighbors", Description: "Ground truth from the observer's own /neighbors firmware report (#1865) -- distinct from the packet-path-inferred neighbor graph. Empty `neighbors` (never null) and an empty `reportedAt` mean the observer has never sent a /neighbors report: opt-in firmware, unavailable on non-PSRAM hardware -- absence is normal, not a fault. Each entry's `scopes` is null unless the neighbor's OTA scope query responded (status=\"responded\"); `name`/`role` are null when the pubkey doesn't resolve to a known node.", Tag: "observers"},
 		"GET /api/observers/metrics/summary": {Summary: "Observer metrics summary", Description: "Aggregate metrics across all observers.", Tag: "observers"},
 
 		// Misc

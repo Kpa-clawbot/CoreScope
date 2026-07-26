@@ -1559,14 +1559,15 @@ func handleNeighborsReport(store *Store, tag string, observerID string, msg map[
 		}
 	}
 
-	// neighbors[]: only status=="responded" carries usable scope evidence.
+	// neighbors[]: only status=="responded" carries usable scope evidence,
+	// but ALL entries (including timeout) are direct (zero-hop) neighbors
+	// per the observer's own firmware neighbor table -- collected below for
+	// the #1865 follow-up "Direct Neighbors" panel regardless of status.
 	neighbors, _ := msg["neighbors"].([]interface{})
+	entries := make([]ObserverNeighborEntry, 0, len(neighbors))
 	for _, raw := range neighbors {
 		n, ok := raw.(map[string]interface{})
 		if !ok {
-			continue
-		}
-		if status, _ := n["status"].(string); status != "responded" {
 			continue
 		}
 		pubkey, _ := n["pubkey"].(string)
@@ -1574,10 +1575,19 @@ func handleNeighborsReport(store *Store, tag string, observerID string, msg map[
 		if pubkey == "" {
 			continue
 		}
+		status, _ := n["status"].(string)
 		scopes, _ := n["scopes"].(string)
-		if err := store.UpdateNodeConfiguredScope(pubkey, scopes, reportedAt); err != nil {
-			log.Printf("MQTT [%s] neighbors scope error for %.8s: %v", tag, pubkey, err)
+		if status == "responded" {
+			if err := store.UpdateNodeConfiguredScope(pubkey, scopes, reportedAt); err != nil {
+				log.Printf("MQTT [%s] neighbors scope error for %.8s: %v", tag, pubkey, err)
+			}
+			entries = append(entries, ObserverNeighborEntry{Pubkey: pubkey, Scopes: normalizeConfiguredScopeList(scopes), Status: status})
+		} else {
+			entries = append(entries, ObserverNeighborEntry{Pubkey: pubkey, Status: status})
 		}
+	}
+	if err := store.ReplaceObserverNeighbors(observerID, entries, reportedAt); err != nil {
+		log.Printf("MQTT [%s] neighbors replace error for observer %.8s: %v", tag, observerID, err)
 	}
 }
 
