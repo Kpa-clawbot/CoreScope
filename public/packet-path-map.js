@@ -48,6 +48,13 @@
     return m + 'm ' + s + 's';
   }
 
+  // Same rounding convention as analytics.js's Relay Airtime Share tab
+  // (formatAirtimeMs) -- sub-second in ms, otherwise one decimal in s.
+  function formatAirtimeMs(ms) {
+    if (ms < 1000) return Math.round(ms) + 'ms';
+    return (ms / 1000).toFixed(1) + 's';
+  }
+
   // How much bigger/fuzzier an approximate marker's ring should be than
   // a normal marker, given how many positioned neighbors fed the
   // estimate (more = tighter) and how much they disagreed (a wide
@@ -499,6 +506,9 @@
       if (typeof s === 'number' && (maxSpreadSeconds === null || s > maxSpreadSeconds)) maxSpreadSeconds = s;
     });
     if (maxSpreadSeconds != null && maxSpreadSeconds > 0) statusParts.push('fully spread in ' + formatDuration(maxSpreadSeconds));
+    if (typeof data.estimatedAirtimeMs === 'number') {
+      statusParts.push('~' + formatAirtimeMs(data.estimatedAirtimeMs) + ' estimated airtime (' + data.airtimeRelayCount + ' relay' + (data.airtimeRelayCount === 1 ? '' : 's') + ')');
+    }
     if (firstPoint) statusParts.push('entered near ' + firstPoint.name);
     if (approxTotal > 0) statusParts.push(approxTotal + ' approximate (estimated from neighbors)');
     if (missingTotal > 0) statusParts.push(missingTotal + ' hop' + (missingTotal === 1 ? '' : 's') + ' without a known position (not shown)');

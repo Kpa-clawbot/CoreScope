@@ -868,6 +868,89 @@ function makeSandbox(apiImpl) {
 
   await (async () => {
     try {
+      // Status line should surface the backend's estimated LoRa
+      // Time-on-Air x distinct-relay-count for the whole flood, formatted
+      // the same way analytics.js's Relay Airtime Share tab does (sub-1s
+      // in ms, otherwise one decimal in s), with a "~" prefix flagging it
+      // as an estimate.
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [
+          { hops: 2, points: [], observer: { name: 'ObsA', lat: 56.0, lon: 10.0 } },
+        ],
+        estimatedAirtimeMs: 340.4,
+        airtimeRelayCount: 3,
+      }));
+      ctx.L = {
+        map: () => ({ setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {} }),
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: () => ({ addTo() { return this; }, bindTooltip() { return this; }, on() { return this; } }),
+        polyline: () => ({ addTo() { return this; } }),
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const status = ctx.document.getElementById('packetPathStatus');
+      assert.ok(status.textContent.includes('~340ms estimated airtime (3 relays)'), 'status should show the estimated airtime and relay count, got: ' + status.textContent);
+      passed++;
+      console.log('  ✅ status line reports estimated airtime and relay count when the backend provides them');
+    } catch (e) { failed++; console.log('  ❌ status line reports estimated airtime and relay count when the backend provides them: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
+      // Singular "relay" (not "relays") when the count is exactly 1, and
+      // the seconds-formatted branch (>=1000ms) when airtime is large.
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [
+          { hops: 1, points: [], observer: { name: 'ObsA', lat: 56.0, lon: 10.0 } },
+        ],
+        estimatedAirtimeMs: 1234,
+        airtimeRelayCount: 1,
+      }));
+      ctx.L = {
+        map: () => ({ setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {} }),
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: () => ({ addTo() { return this; }, bindTooltip() { return this; }, on() { return this; } }),
+        polyline: () => ({ addTo() { return this; } }),
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const status = ctx.document.getElementById('packetPathStatus');
+      assert.ok(status.textContent.includes('~1.2s estimated airtime (1 relay)'), 'status should use singular "relay" and seconds formatting above 1000ms, got: ' + status.textContent);
+      assert.ok(!status.textContent.includes('1 relays'), 'must not pluralize "relay" for a count of 1, got: ' + status.textContent);
+      passed++;
+      console.log('  ✅ status line uses singular "relay" and seconds formatting for airtime >= 1000ms');
+    } catch (e) { failed++; console.log('  ❌ status line uses singular "relay" and seconds formatting for airtime >= 1000ms: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
+      // No estimatedAirtimeMs in the response (store unavailable /
+      // DB-only mode) -- must omit the stat cleanly, not show "~undefined".
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [
+          { hops: 1, points: [], observer: { name: 'ObsA', lat: 56.0, lon: 10.0 } },
+        ],
+      }));
+      ctx.L = {
+        map: () => ({ setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {} }),
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: () => ({ addTo() { return this; }, bindTooltip() { return this; }, on() { return this; } }),
+        polyline: () => ({ addTo() { return this; } }),
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const status = ctx.document.getElementById('packetPathStatus');
+      assert.ok(!status.textContent.includes('airtime'), 'should not mention airtime when the backend omitted the field, got: ' + status.textContent);
+      passed++;
+      console.log('  ✅ omits the airtime stat cleanly when the backend response has no estimatedAirtimeMs');
+    } catch (e) { failed++; console.log('  ❌ omits the airtime stat cleanly when the backend response has no estimatedAirtimeMs: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
       // A single-neighbor approx point should render with a bigger,
       // fainter ring than a 4-neighbor approx point -- more agreeing
       // neighbors means more confidence, so a tighter, more solid marker.

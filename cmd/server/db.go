@@ -1624,6 +1624,27 @@ type PacketPathResponse struct {
 	// annotatePacketPathTouchedAreas, not here: area resolution needs
 	// config.Areas, not available at this SQL-only DB layer.
 	TouchedAreas []TouchedAreaShape `json:"touchedAreas,omitempty"`
+	// EstimatedAirtimeMs/AirtimeRelayCount are the LoRa Time-on-Air ×
+	// distinct-relay-count estimate for this packet's whole flood --
+	// same "score" formula as the Relay Airtime Share analytics metric
+	// (issue #1768), applied to a single packet instead of aggregated
+	// across a window. An ESTIMATE: relay count is inferred from the
+	// union of every hearing station's resolved_path, not a literal
+	// per-retransmission log, and assumes the configured/default LoRa
+	// PHY preset. Populated by routes.go's annotatePacketPathAirtime
+	// (needs the in-memory PacketStore, not available at this SQL-only
+	// DB layer); omitted when the store doesn't have this transmission
+	// in memory (evicted, or DB-only mode).
+	EstimatedAirtimeMs *float64 `json:"estimatedAirtimeMs,omitempty"`
+	AirtimeRelayCount  int      `json:"airtimeRelayCount,omitempty"`
+	// TxID is the packet's transmissions.id -- the ingestor dedups on
+	// hash (stmtGetTxByHash), so a packet hash always maps to exactly
+	// one transmission row, however many observations (stations that
+	// heard it) hang off it. Used by routes.go's annotatePacketPathAirtime
+	// to look up the in-memory store's LoRa airtime estimate for this
+	// packet; never serialized to the client, it's meaningless outside
+	// the server process.
+	TxID int64 `json:"-"`
 }
 
 // GetPacketPath resolves every distinct station that observed a packet to
@@ -1642,13 +1663,13 @@ func (db *DB) GetPacketPath(hash string) (*PacketPathResponse, error) {
 	}
 	var querySQL string
 	if db.isV3 {
-		querySQL = `SELECT obs.rowid, obs.id, obs.name, obs.iata, o.path_json, o.resolved_path, o.snr, o.timestamp
+		querySQL = `SELECT obs.rowid, obs.id, obs.name, obs.iata, o.path_json, o.resolved_path, o.snr, o.timestamp, t.id
 			FROM observations o
 			JOIN transmissions t ON t.id = o.transmission_id
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
 			WHERE t.hash = ?`
 	} else {
-		querySQL = `SELECT o.observer_id, o.observer_id, o.observer_name, NULL, o.path_json, o.resolved_path, o.snr, o.timestamp
+		querySQL = `SELECT o.observer_id, o.observer_id, o.observer_name, NULL, o.path_json, o.resolved_path, o.snr, o.timestamp, t.id
 			FROM observations o
 			JOIN transmissions t ON t.id = o.transmission_id
 			WHERE t.hash = ?`
@@ -1671,13 +1692,18 @@ func (db *DB) GetPacketPath(hash string) (*PacketPathResponse, error) {
 	best := make(map[string]*obsBranch)
 	var first *obsBranch
 	var firstTS int64
+	var txID int64 // transmissions.id -- same value on every row (one tx per hash), captured for annotatePacketPathAirtime
 
 	for rows.Next() {
 		var obsKey, obsPubkey, obsName, obsIATA, pathJSON, resolvedPathJSON sql.NullString
 		var snr sql.NullFloat64
 		var ts sql.NullInt64
-		if err := rows.Scan(&obsKey, &obsPubkey, &obsName, &obsIATA, &pathJSON, &resolvedPathJSON, &snr, &ts); err != nil {
+		var rowTxID sql.NullInt64
+		if err := rows.Scan(&obsKey, &obsPubkey, &obsName, &obsIATA, &pathJSON, &resolvedPathJSON, &snr, &ts, &rowTxID); err != nil {
 			continue
+		}
+		if rowTxID.Valid {
+			txID = rowTxID.Int64
 		}
 		if !pathJSON.Valid {
 			continue
@@ -1718,7 +1744,7 @@ func (db *DB) GetPacketPath(hash string) (*PacketPathResponse, error) {
 		return nil, fmt.Errorf("packet path iteration: %w", err)
 	}
 
-	resp := &PacketPathResponse{Hash: hash, Branches: []PacketPathBranch{}}
+	resp := &PacketPathResponse{Hash: hash, Branches: []PacketPathBranch{}, TxID: txID}
 	if len(best) == 0 {
 		return resp, nil
 	}

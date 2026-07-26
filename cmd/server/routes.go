@@ -3270,7 +3270,33 @@ func (s *Server) handlePacketPath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.annotatePacketPathTouchedAreas(resp)
+	s.annotatePacketPathAirtime(resp)
 	writeJSON(w, resp)
+}
+
+// annotatePacketPathAirtime resolves resp.EstimatedAirtimeMs/
+// AirtimeRelayCount: the LoRa Time-on-Air x distinct-relay-count estimate
+// for this packet's whole flood (same formula as the Relay Airtime Share
+// analytics metric, issue #1768), looked up from the in-memory
+// PacketStore via the transmission ID GetPacketPath captured. Left
+// unset -- not a guessed zero -- when the store is unavailable (DB-only
+// mode) or this transmission has been evicted from memory.
+func (s *Server) annotatePacketPathAirtime(resp *PacketPathResponse) {
+	if resp == nil || s.store == nil || resp.TxID == 0 {
+		return
+	}
+	total, relays, ok := s.store.AirtimeAndRelayCountForTransmission(resp.TxID)
+	if !ok || relays == 0 {
+		// relays == 0 means a direct reception with nothing to relay --
+		// there's no meaningful airtime estimate to show (and 0 would
+		// otherwise survive JSON encoding as a bare "estimatedAirtimeMs":0
+		// while the omitempty int AirtimeRelayCount vanishes alongside it,
+		// leaving the frontend with a number but no relay count to pair it with).
+		return
+	}
+	ms := float64(total.Microseconds()) / 1000.0
+	resp.EstimatedAirtimeMs = &ms
+	resp.AirtimeRelayCount = relays
 }
 
 // annotatePacketPathTouchedAreas resolves resp.TouchedAreas: every

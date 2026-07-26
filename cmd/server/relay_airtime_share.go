@@ -155,14 +155,46 @@ func (s *PacketStore) AirtimeForTransmissions(txIDs []int64) (total time.Duratio
 			continue
 		}
 		matched++
-		payloadBytes := len(tx.RawHex) / 2
-		relays := s.distinctRelayCount(tx)
-		total += lora.TimeOnAir(payloadBytes, preset) * time.Duration(relays)
+		d, _ := s.airtimeForTx(tx, preset)
+		total += d
 	}
 	if matched == 0 {
 		return 0, false
 	}
 	return total, true
+}
+
+// airtimeForTx computes one transmission's LoRa Time-on-Air ×
+// distinct-resolved-repeater-count contribution -- the shared per-tx
+// formula behind both AirtimeForTransmissions (aggregate) and
+// AirtimeAndRelayCountForTransmission (single tx, relay count exposed).
+// Caller MUST hold s.mu at least RLock.
+func (s *PacketStore) airtimeForTx(tx *StoreTx, preset lora.Preset) (time.Duration, int) {
+	payloadBytes := len(tx.RawHex) / 2
+	relays := s.distinctRelayCount(tx)
+	return lora.TimeOnAir(payloadBytes, preset) * time.Duration(relays), relays
+}
+
+// AirtimeAndRelayCountForTransmission is AirtimeForTransmissions narrowed
+// to a single transmission, additionally returning the distinct-relay
+// count that fed the estimate -- View Path's "N relays" caveat needs it;
+// AirtimeForTransmissions's aggregate-only callers don't. Same
+// availability caveat: ok=false when the resolved-path index is off or
+// this transmission isn't currently held in memory (evicted) -- callers
+// should omit the field, not show a zero.
+func (s *PacketStore) AirtimeAndRelayCountForTransmission(txID int64) (total time.Duration, relays int, ok bool) {
+	if s == nil || !s.useResolvedPathIndex {
+		return 0, 0, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	tx := s.byTxID[int(txID)]
+	if tx == nil {
+		return 0, 0, false
+	}
+	preset := s.resolveLoRaPreset()
+	total, relays = s.airtimeForTx(tx, preset)
+	return total, relays, true
 }
 
 // computeRelayAirtimeShare aggregates relay-airtime-share per payload_type.
