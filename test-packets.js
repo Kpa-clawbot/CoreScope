@@ -1240,6 +1240,28 @@ console.log('\n=== packets.js: scroll position preserved across renderTableRows 
   });
 }
 
+console.log('\n=== packets.js: virtual-scroll 0-height viewport guard (#63) ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/payload-labels.js');
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  loadInCtx(ctx, 'public/packet-helpers.js');
+  vm.runInContext('window.HopDisplay = { renderHop: function(){ return ""; }, _showFromBtn: function(){} };', ctx);
+  loadInCtx(ctx, 'public/packets.js');
+  const api = ctx._packetsTestAPI;
+
+  test('_effectiveViewportHeight uses clientHeight when > 0, else falls back (#63)', () => {
+    // Regression: a 0-height scroll container collapsed the virtual range to 0
+    // rows so the packets table rendered empty (flaky slideover-1056 packets@800).
+    assert.strictEqual(api._effectiveViewportHeight(600, 900), 600, 'positive clientHeight is used as-is');
+    assert.strictEqual(api._effectiveViewportHeight(0, 900), 900, '0 clientHeight falls back to window height');
+    assert.strictEqual(api._effectiveViewportHeight(0, 0), 800, '0 clientHeight + 0 fallback uses 800');
+    assert.strictEqual(api._effectiveViewportHeight(0, undefined), 800, 'missing fallback uses 800');
+  });
+}
+
+
 // ===== SUMMARY =====
 console.log(`\n${'='.repeat(40)}`);
 console.log(`packets.js tests: ${passed} passed, ${failed} failed`);

@@ -831,6 +831,15 @@
 
   // Pure function: calculate visible entry range from scroll state.
   // Extracted for testability (#405, #409).
+  // Guard against a 0-height scroll container (initial SPA mount / narrow
+  // viewport before flex layout settles): clientHeight 0 makes the visible
+  // range collapse to 0 rows, so the table renders empty. Fall back to the
+  // window height so the first rows paint; the ResizeObserver re-fits once
+  // the real container height is known (#63).
+  function _effectiveViewportHeight(clientHeight, fallback) {
+    return clientHeight > 0 ? clientHeight : (fallback || 800);
+  }
+
   function _calcVisibleRange(offsets, entryCount, scrollTop, viewportHeight, rowHeight, theadHeight, buffer) {
     const adjustedScrollTop = Math.max(0, scrollTop - theadHeight);
     const firstDomRow = Math.floor(adjustedScrollTop / rowHeight);
@@ -2413,7 +2422,8 @@
 
     // Calculate visible range based on scroll position
     const scrollTop = scrollContainer.scrollTop;
-    const viewportHeight = scrollContainer.clientHeight;
+    // 0-height scroll container guard (see _effectiveViewportHeight, #63).
+    const viewportHeight = _effectiveViewportHeight(scrollContainer.clientHeight, window.innerHeight);
     // Account for thead height (measured dynamically)
     const theadEl = scrollContainer.querySelector('thead');
     if (theadEl) _vscrollTheadHeight = theadEl.offsetHeight || _vscrollTheadHeight;
@@ -3878,6 +3888,7 @@
       buildGroupRowHtml,
       buildFlatRowHtml,
       _calcVisibleRange,
+      _effectiveViewportHeight,
       buildPacketsParams,
       renderTableRows,
       _setPackets: function(p) { packets = p; },
