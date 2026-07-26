@@ -349,6 +349,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/observers/{id}/metrics", s.handleObserverMetrics).Methods("GET")
 	r.HandleFunc("/api/observers/{id}/analytics", s.handleObserverAnalytics).Methods("GET")
 	r.HandleFunc("/api/observers/{id}/neighbors", s.handleObserverNeighbors).Methods("GET")
+	r.HandleFunc("/api/observers/{id}/neighbors/{pubkey}/metrics", s.handleObserverNeighborMetrics).Methods("GET")
 	r.HandleFunc("/api/observers/{id}", s.handleObserverDetail).Methods("GET")
 	r.HandleFunc("/api/observers", s.handleObservers).Methods("GET")
 	r.HandleFunc("/api/traces/{hash}", s.handleTraces).Methods("GET")
@@ -3249,6 +3250,33 @@ func (s *Server) handleObserverNeighbors(w http.ResponseWriter, r *http.Request)
 		"neighbors":  neighbors,
 		"reportedAt": reportedAt,
 	})
+}
+
+// handleObserverNeighborMetrics serves the SNR/heard_secs_ago history for
+// one observer<->neighbor direct-RF link (#1865 follow-up), for the Direct
+// Neighbors panel's per-row sparkline. Defaults to the last 30 days --
+// report volume per pair is inherently low, so this rarely needs trimming.
+func (s *Server) handleObserverNeighborMetrics(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	pubkey := strings.ToLower(mux.Vars(r)["pubkey"])
+
+	if s.cfg != nil && s.cfg.IsObserverBlacklisted(id) {
+		writeError(w, 404, "Observer not found")
+		return
+	}
+
+	since := r.URL.Query().Get("since")
+	until := r.URL.Query().Get("until")
+	if since == "" {
+		since = time.Now().UTC().AddDate(0, 0, -30).Format(time.RFC3339)
+	}
+
+	metrics, err := s.db.GetObserverNeighborMetrics(id, pubkey, since, until)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, map[string]interface{}{"metrics": metrics})
 }
 
 func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request) {

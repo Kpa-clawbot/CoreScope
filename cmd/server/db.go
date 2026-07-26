@@ -1488,6 +1488,61 @@ func (db *DB) GetObserverNeighbors(observerID string) ([]ObserverNeighbor, strin
 	return result, reportedAt, rows.Err()
 }
 
+// NeighborMetricPoint is one time-series sample of an observer<->neighbor
+// direct-RF link (#1865 follow-up: the /neighbors report's snr and
+// heard_secs_ago fields, previously dropped). Mirrors MetricsSample's
+// shape but deliberately simpler -- report volume per neighbor pair is
+// inherently low (one row per /neighbors report, which arrive hours
+// apart), so unlike GetObserverMetrics there's no resolution/downsampling.
+type NeighborMetricPoint struct {
+	Timestamp    string   `json:"timestamp"`
+	SNR          *float64 `json:"snr"`
+	HeardSecsAgo *int     `json:"heardSecsAgo"`
+}
+
+// GetObserverNeighborMetrics returns raw SNR/heard_secs_ago history for one
+// observer<->neighbor pair, oldest first, optionally bounded by since/until
+// (RFC3339; either may be "" to leave that bound open).
+func (db *DB) GetObserverNeighborMetrics(observerID, neighborPubkey, since, until string) ([]NeighborMetricPoint, error) {
+	query := `SELECT timestamp, snr, heard_secs_ago FROM observer_neighbor_metrics WHERE observer_id = ? AND neighbor_pubkey = ?`
+	args := []interface{}{observerID, neighborPubkey}
+	if since != "" {
+		query += ` AND timestamp >= ?`
+		args = append(args, since)
+	}
+	if until != "" {
+		query += ` AND timestamp <= ?`
+		args = append(args, until)
+	}
+	query += ` ORDER BY timestamp ASC`
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := []NeighborMetricPoint{}
+	for rows.Next() {
+		var p NeighborMetricPoint
+		var snr sql.NullFloat64
+		var heardSecsAgo sql.NullInt64
+		if err := rows.Scan(&p.Timestamp, &snr, &heardSecsAgo); err != nil {
+			return nil, err
+		}
+		if snr.Valid {
+			v := snr.Float64
+			p.SNR = &v
+		}
+		if heardSecsAgo.Valid {
+			v := int(heardSecsAgo.Int64)
+			p.HeardSecsAgo = &v
+		}
+		result = append(result, p)
+	}
+	return result, rows.Err()
+}
+
 // GetObserverIdsForRegion returns observer IDs for given IATA codes.
 func (db *DB) GetObserverIdsForRegion(regionParam string) ([]string, error) {
 	codes := normalizeRegionCodes(regionParam)

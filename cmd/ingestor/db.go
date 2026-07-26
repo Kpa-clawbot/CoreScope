@@ -1798,11 +1798,14 @@ func (s *Store) TouchObserverNeighborsReport(observerID, reportedAt string) erro
 }
 
 // ObserverNeighborEntry is one entry from an observer's /neighbors report,
-// carrying enough to populate the observer_neighbors table.
+// carrying enough to populate the observer_neighbors and
+// observer_neighbor_metrics tables.
 type ObserverNeighborEntry struct {
-	Pubkey string // lowercase, already validated non-empty by the caller
-	Scopes string // normalized "#"-prefixed form; empty for timeout entries
-	Status string // "responded" | "timeout"
+	Pubkey       string   // lowercase, already validated non-empty by the caller
+	Scopes       string   // normalized "#"-prefixed form; empty for timeout entries
+	Status       string   // "responded" | "timeout"
+	SNR          *float64 // dBm signal-to-noise for this direct neighbor; present regardless of status
+	HeardSecsAgo *int     // seconds since the observer last heard this neighbor directly
 }
 
 // ReplaceObserverNeighbors stores the observer's CURRENT direct (zero-hop)
@@ -1853,6 +1856,60 @@ func (s *Store) ReplaceObserverNeighbors(observerID string, neighbors []Observer
 		}
 	}
 	return tx.Commit()
+}
+
+// RecordObserverNeighborMetrics appends one SNR/heard_secs_ago history row
+// per neighbor entry that carries an SNR reading (#1865 follow-up: dborup
+// noticed the raw report also carries snr/heard_secs_ago per neighbor,
+// previously dropped entirely). Unlike ReplaceObserverNeighbors' current-
+// only snapshot, this is pure time-series -- every report is valid
+// historical data at its own timestamp regardless of arrival order, so
+// there is deliberately NO ordering guard here. The
+// (observer_id, neighbor_pubkey, timestamp) primary key makes a retried/
+// duplicate MQTT delivery a no-op via INSERT OR IGNORE.
+func (s *Store) RecordObserverNeighborMetrics(observerID string, neighbors []ObserverNeighborEntry, reportedAt string) error {
+	if observerID == "" {
+		return nil
+	}
+	reportedAt = normalizeReportTS(reportedAt)
+	if reportedAt == "" {
+		return nil
+	}
+	stmt, err := s.db.Prepare(`INSERT OR IGNORE INTO observer_neighbor_metrics (observer_id, neighbor_pubkey, timestamp, snr, heard_secs_ago) VALUES (?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, n := range neighbors {
+		if n.Pubkey == "" || n.SNR == nil {
+			continue
+		}
+		var heardSecsAgo interface{}
+		if n.HeardSecsAgo != nil {
+			heardSecsAgo = *n.HeardSecsAgo
+		}
+		if _, err := stmt.Exec(observerID, n.Pubkey, reportedAt, *n.SNR, heardSecsAgo); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PruneOldNeighborMetrics deletes observer_neighbor_metrics rows older than
+// retentionDays, mirroring PruneOldMetrics' retention model for
+// observer_metrics (same MetricsRetentionDays config knob, no separate
+// setting for this table).
+func (s *Store) PruneOldNeighborMetrics(retentionDays int) (int64, error) {
+	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays).Format(time.RFC3339)
+	result, err := s.instrumentedExec("prune_neighbor_metrics", `DELETE FROM observer_neighbor_metrics WHERE timestamp < ?`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("prune neighbor metrics: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	if n > 0 {
+		log.Printf("[neighbor-metrics] Pruned %d rows older than %d days", n, retentionDays)
+	}
+	return n, nil
 }
 
 // normalizeConfiguredScopeList applies the same "#"-prefix normalization

@@ -11,9 +11,21 @@ const fs = require('fs');
 const assert = require('assert');
 
 let passed = 0, failed = 0;
+const pending = [];
 function test(name, fn) {
-  try { fn(); passed++; console.log(`  ✅ ${name}`); }
-  catch (e) { failed++; console.log(`  ❌ ${name}: ${e.message}`); }
+  try {
+    const result = fn();
+    if (result && typeof result.then === 'function') {
+      // Async test (the sparkline loader tests) -- defer accounting until
+      // it settles; the final summary waits on `pending` before printing.
+      pending.push(result.then(
+        () => { passed++; console.log(`  ✅ ${name}`); },
+        (e) => { failed++; console.log(`  ❌ ${name}: ${e.message}`); }
+      ));
+    } else {
+      passed++; console.log(`  ✅ ${name}`);
+    }
+  } catch (e) { failed++; console.log(`  ❌ ${name}: ${e.message}`); }
 }
 
 function makeCtx() {
@@ -42,6 +54,39 @@ function makeCtx() {
   ctx.Chart = function () { return { destroy() {} }; };
   vm.createContext(ctx);
   return ctx;
+}
+
+// Richer sandbox for the async sparkline loader: needs a mockable api()
+// and a document.getElementById that returns a settable-outerHTML stub.
+function makeLoaderCtx(apiImpl, elementsById) {
+  const ctx = {
+    window: { addEventListener: () => {}, dispatchEvent: () => {} },
+    document: {
+      readyState: 'complete',
+      createElement: () => ({ id: '', textContent: '', innerHTML: '' }),
+      head: { appendChild: () => {} },
+      getElementById: (id) => elementsById[id] || null,
+      addEventListener: () => {},
+      querySelectorAll: () => [],
+      querySelector: () => null,
+    },
+    console, Date, Math, Array, Object, String, Number, Boolean, JSON, Promise,
+    setInterval: () => 0, clearInterval: () => {},
+    setTimeout: (fn) => { try { fn(); } catch {} return 0; },
+    encodeURIComponent, decodeURIComponent,
+    api: apiImpl,
+  };
+  ctx.registerPage = () => {};
+  ctx.timeAgo = (iso) => 'TIME_AGO(' + iso + ')';
+  ctx.escapeHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[c]);
+  ctx.Chart = function () { return { destroy() {} }; };
+  vm.createContext(ctx);
+  return ctx;
+}
+function mockElement() {
+  return { _outerHTML: '', set outerHTML(v) { this._outerHTML = v; }, get outerHTML() { return this._outerHTML; } };
 }
 
 console.log('\n=== #1865 follow-up — Observer detail "Direct Neighbors" panel ===');
@@ -107,5 +152,79 @@ test('seenViaPackets=false surfaces the coverage-gap diagnostic, styled neutrall
   assert.ok(!/ph-warning/.test(html), 'must not use the warning icon treatment');
 });
 
-console.log(`\n${passed} passed, ${failed} failed\n`);
-if (failed > 0) process.exit(1);
+test('renders a placeholder span per row for the async SNR sparkline loader', () => {
+  const html = ctx.window.renderDirectNeighbors({
+    neighbors: [{ pubkey: 'abc123', name: 'Repeater A', role: 'repeater', scopes: '#dk', status: 'responded' }],
+    reportedAt: '',
+  });
+  assert.ok(html.includes('id="nb-spark-abc123"'), 'expected a placeholder span keyed by pubkey');
+});
+
+console.log('\n=== #1865 follow-up — SNR sparkline (pure helper) ===');
+
+test('window.neighborSnrSparkline exists', () => {
+  assert.strictEqual(typeof ctx.window.neighborSnrSparkline, 'function');
+});
+
+test('empty data returns empty string', () => {
+  assert.strictEqual(ctx.window.neighborSnrSparkline([], 80, 20), '');
+});
+
+test('renders an SVG polyline for 2+ points', () => {
+  const html = ctx.window.neighborSnrSparkline([1, 5, 3], 80, 20);
+  assert.ok(html.includes('<svg'));
+  assert.ok(html.includes('<polyline'));
+});
+
+console.log('\n=== #1865 follow-up — SNR sparkline async loader ===');
+
+test('loads and injects a sparkline + latest value on success', async () => {
+  const el = mockElement();
+  const apiCtx = makeLoaderCtx(
+    () => Promise.resolve({ metrics: [{ timestamp: 't1', snr: 5 }, { timestamp: 't2', snr: 8 }] }),
+    { 'nb-spark-abc123': el }
+  );
+  vm.runInContext(fs.readFileSync('public/observer-detail.js', 'utf8'), apiCtx);
+  await apiCtx.window.loadNeighborSnrSparklines('obs1', { neighbors: [{ pubkey: 'abc123' }] });
+  assert.ok(el.outerHTML.includes('<svg'), 'expected a sparkline to be injected');
+  assert.ok(el.outerHTML.includes('8.0 dB'), 'expected the latest SNR value shown');
+});
+
+test('shows a single value (no sparkline) when only one data point exists', async () => {
+  const el = mockElement();
+  const apiCtx = makeLoaderCtx(
+    () => Promise.resolve({ metrics: [{ timestamp: 't1', snr: 4.5 }] }),
+    { 'nb-spark-abc123': el }
+  );
+  vm.runInContext(fs.readFileSync('public/observer-detail.js', 'utf8'), apiCtx);
+  await apiCtx.window.loadNeighborSnrSparklines('obs1', { neighbors: [{ pubkey: 'abc123' }] });
+  assert.ok(!el.outerHTML.includes('<svg'), 'a single point should not render a sparkline');
+  assert.ok(el.outerHTML.includes('4.5 dB'));
+});
+
+test('shows a neutral "no data" state, not an error, when metrics is empty', async () => {
+  const el = mockElement();
+  const apiCtx = makeLoaderCtx(
+    () => Promise.resolve({ metrics: [] }),
+    { 'nb-spark-abc123': el }
+  );
+  vm.runInContext(fs.readFileSync('public/observer-detail.js', 'utf8'), apiCtx);
+  await apiCtx.window.loadNeighborSnrSparklines('obs1', { neighbors: [{ pubkey: 'abc123' }] });
+  assert.ok(/no data/.test(el.outerHTML));
+});
+
+test('a failed fetch degrades to a neutral dash, not a thrown error', async () => {
+  const el = mockElement();
+  const apiCtx = makeLoaderCtx(
+    () => Promise.reject(new Error('network error')),
+    { 'nb-spark-abc123': el }
+  );
+  vm.runInContext(fs.readFileSync('public/observer-detail.js', 'utf8'), apiCtx);
+  await apiCtx.window.loadNeighborSnrSparklines('obs1', { neighbors: [{ pubkey: 'abc123' }] });
+  assert.ok(el.outerHTML.length > 0, 'expected a fallback rendered, not left blank/thrown');
+});
+
+Promise.all(pending).then(() => {
+  console.log(`\n${passed} passed, ${failed} failed\n`);
+  if (failed > 0) process.exit(1);
+});
