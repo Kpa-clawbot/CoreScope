@@ -16,6 +16,7 @@ import (
 
 	"github.com/meshcore-analyzer/dbschema"
 	"github.com/meshcore-analyzer/packetpath"
+	"github.com/meshcore-analyzer/regions"
 	_ "modernc.org/sqlite"
 )
 
@@ -1729,6 +1730,7 @@ func (s *Store) UpdateNodeConfiguredScope(pubkey, scope, reportedAt string) erro
 	if pubkey == "" {
 		return nil
 	}
+	scope = normalizeConfiguredScopeList(scope)
 	// Last-write-wins: skip if the stored confirmation is newer-or-equal.
 	if reportedAt != "" {
 		var curAt sql.NullString
@@ -1747,6 +1749,40 @@ func (s *Store) UpdateNodeConfiguredScope(pubkey, scope, reportedAt string) erro
 		`UPDATE inactive_nodes SET configured_scope = ?, configured_scope_at = ? WHERE public_key = ?`,
 		scope, reportedAt, pubkey)
 	return err
+}
+
+// normalizeConfiguredScopeList applies the same "#"-prefix normalization
+// default_scope already gets (regions.Normalize, via matchScope) to a
+// comma-separated /neighbors-report scope list, so both fields display
+// consistently (flagged by cwichura on PR #1867: configured_scope was
+// stored as the observer's raw OTA-query string -- "dk", not "#dk").
+//
+// "*" is passed through UNCHANGED: it's a MeshCore protocol wildcard
+// ("responds to any scope"), not a real hashRegion name, so "#"-prefixing
+// it would misleadingly present it as one. Empty input stays empty -- a
+// responded-with-no-scopes report is a valid, meaningful "none configured"
+// state (see UpdateNodeConfiguredScope's doc comment) and must not gain a
+// stray "#".
+func normalizeConfiguredScopeList(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if p == "*" {
+			out = append(out, p)
+			continue
+		}
+		if name, ok := regions.Normalize(p); ok {
+			out = append(out, name)
+		}
+	}
+	return strings.Join(out, ",")
 }
 
 // RecordNaiveSkew is called when resolveRxTime() clamps a packet's envelope
