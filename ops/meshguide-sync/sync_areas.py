@@ -15,8 +15,9 @@ What it does:
      cities.json (scope confirmation + human names).
   2. For areas already in config.json's "areas" that we're confident match a
      meshguide region (see CROSSWALK below -- hand-verified, never guessed),
-     sets regionScope and replaces the polygon with meshguide's more precise
-     one.
+     adds the scope to regionScopes (an area's scope list -- CoreScope reads
+     this field, not the singular "regionScope") and replaces the polygon
+     with meshguide's more precise one.
   3. Adds any meshguide region we don't already have as a new area entry, as
      long as it has a real (non-empty) scope assigned.
   4. Anything not in CROSSWALK and not clearly a new region is left alone and
@@ -131,7 +132,16 @@ def main():
             )
             continue
         before = json.dumps(entry, sort_keys=True)
-        entry["regionScope"] = scope
+        # regionScopes is the field CoreScope's config schema actually reads
+        # (cmd/server/routes.go's handleConfigAreas -> Config.Areas[k].RegionScopes)
+        # -- a stray singular "regionScope" here would be silently invisible
+        # to the app, so append to the list instead (preserving any other
+        # manually-configured scopes) and drop the wrong key if a prior buggy
+        # run of this script left one behind.
+        entry.pop("regionScope", None)
+        scopes_list = entry.setdefault("regionScopes", [])
+        if scope not in scopes_list:
+            scopes_list.append(scope)
         polygon = geojson_ring_to_polygon((regions.get(scope) or {}).get("geometry"))
         if polygon:
             entry["polygon"] = polygon
@@ -139,13 +149,13 @@ def main():
                 entry.pop(k, None)
         if json.dumps(entry, sort_keys=True) != before:
             changed.append(
-                f"enriched {area_key} ({entry.get('label')}) with regionScope={scope}"
+                f"enriched {area_key} ({entry.get('label')}) with regionScopes+={scope}"
                 + (" + polygon" if polygon else "")
             )
 
     # 2) add new areas for meshguide regions we don't have yet
     linked_scopes = set(CROSSWALK.values())
-    existing_scopes = {v.get("regionScope") for v in areas.values() if v.get("regionScope")}
+    existing_scopes = {s for v in areas.values() for s in v.get("regionScopes", [])}
     for scope, region in regions.items():
         if scope in no_scope_keys:
             continue
@@ -161,12 +171,12 @@ def main():
         areas[new_key] = {
             "label": region.get("name", scope),
             "polygon": polygon,
-            "regionScope": scope,
+            "regionScopes": [scope],
         }
-        changed.append(f"added new area {new_key} ({region.get('name')}) regionScope={scope}")
+        changed.append(f"added new area {new_key} ({region.get('name')}) regionScopes=[{scope}]")
 
     for area_key, reason in KNOWN_GAPS.items():
-        if area_key in areas and not areas[area_key].get("regionScope"):
+        if area_key in areas and not areas[area_key].get("regionScopes"):
             warnings.append(f"{area_key}: {reason}")
 
     print(f"{len(changed)} change(s):")
