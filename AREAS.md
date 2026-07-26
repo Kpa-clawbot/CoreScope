@@ -141,3 +141,10 @@ imprecision than a polygon since there's usually nothing on the other side
 of an unclaimed edge to misclassify — but two adjacent countries sharing a
 long border will bleed into each other badly with simple boxes, which is
 why Denmark/Sweden/Norway/Germany all ended up as polygons.
+
+## `ops/meshguide-sync/`
+
+That directory holds a script specific to this deployment (fetches Danish
+region boundaries from a community-run site, meshguide.dk) — not part of
+the generic areas feature, and not expected to be useful for any other
+CoreScope deployment. See its own docstring for details.
