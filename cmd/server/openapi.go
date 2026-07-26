@@ -374,13 +374,25 @@ func componentSchemas() map[string]interface{} {
 				"distanceFromFirstKm": map[string]interface{}{"type": "number", "description": "Great-circle distance (km) between this branch's own observer and first's observer. Zero for first itself. Omitted when either position is unknown, or when either observer is positioned via approx (an estimate compounding another estimate isn't worth surfacing)."},
 			},
 		},
+		"TouchedAreaShape": map[string]interface{}{
+			"type":        "object",
+			"description": "One configured area's display label plus its drawn boundary, for shading directly on the map. Exactly one of polygon or the latMin/latMax/lonMin/lonMax quartet is present, matching however the area itself was configured.",
+			"properties": map[string]interface{}{
+				"label":   str("The area's display label (e.g. \"Aarhus by\")."),
+				"polygon": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "number"}, "minItems": 2, "maxItems": 2}, "description": "Ordered [lat, lon] pairs tracing the area's drawn boundary. Present only when the area was configured with a polygon rather than a bounding box."},
+				"latMin":  map[string]interface{}{"type": "number", "nullable": true, "description": "Present only when the area was configured as a bounding box rather than a polygon."},
+				"latMax":  map[string]interface{}{"type": "number", "nullable": true},
+				"lonMin":  map[string]interface{}{"type": "number", "nullable": true},
+				"lonMax":  map[string]interface{}{"type": "number", "nullable": true},
+			},
+		},
 		"PacketPathResponse": map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"hash":         str("The packet hash this path was resolved for."),
 				"branches":     map[string]interface{}{"type": "array", "items": schemaRef("PacketPathBranch"), "description": "One branch per distinct station that observed the packet, each kept at that station's own deepest observation, sorted deepest-first -- shows the full flood spread, not just the single farthest route."},
 				"first":        schemaRef("PacketPathBranch"),
-				"touchedAreas": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Every configured area any point or observer on the path falls in, deduped and alphabetized. Omitted when no areas are configured or none resolved."},
+				"touchedAreas": map[string]interface{}{"type": "array", "items": schemaRef("TouchedAreaShape"), "description": "Every configured area any point or observer on the path falls in, deduped and alphabetized by label. Omitted when no areas are configured or none resolved."},
 			},
 		},
 	}

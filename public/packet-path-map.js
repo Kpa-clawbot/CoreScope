@@ -129,7 +129,14 @@
         '<button type="button" id="packetPathClose" aria-label="Close" ' +
           'style="position:absolute;top:8px;right:8px;background:none;border:none;cursor:pointer;font-size:22px;line-height:1;color:var(--text-muted)">&times;</button>' +
         '<h3 style="margin:0 0 4px;padding-right:24px">Relay Path</h3>' +
-        '<p class="text-muted" style="margin:0 0 10px;font-size:12px">How far and how wide this packet spread. The highlighted route is the farthest-traveled branch; every other station that heard it is shown too. The green ring marks whoever heard it first. Dashed markers are approximate -- estimated from nearby positioned neighbors, not the station\'s own position. Click a marker to open that node\'s detail page.</p>' +
+        '<p class="text-muted" style="margin:0 0 8px;font-size:12px">How far and how wide this packet spread. Click a marker to open that node\'s detail page.</p>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;margin:0 0 10px;font-size:11px;color:var(--text-muted)">' +
+          '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:14px;height:2px;background:var(--accent)"></span>farthest-traveled route</span>' +
+          '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:14px;height:2px;background:var(--text-muted)"></span>other station</span>' +
+          '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:9px;height:9px;border:2px dashed var(--text-muted);border-radius:50%;box-sizing:border-box"></span>approximate position</span>' +
+          '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:9px;height:9px;border:2px solid var(--status-green);border-radius:50%;box-sizing:border-box"></span>first to hear it</span>' +
+        '</div>' +
+        '<div id="packetPathControls"></div>' +
         '<div id="packetPathMapContainer" style="height:360px;border-radius:8px;overflow:hidden;background:var(--surface-1)"></div>' +
         '<div id="packetPathStatus" style="margin-top:8px;font-size:12px;color:var(--text-muted)">Loading…</div>' +
       '</div>';
@@ -174,6 +181,19 @@
       return;
     }
 
+    // A packet heard by many stations draws a lot of secondary routes on
+    // top of each other -- only worth offering the declutter toggle once
+    // there's more than one branch to hide.
+    var controlsEl = document.getElementById('packetPathControls');
+    if (controlsEl && plotted.length > 1) {
+      var hiddenCount = plotted.length - 1;
+      controlsEl.innerHTML =
+        '<label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:0 0 8px;cursor:pointer;color:var(--text-muted)">' +
+          '<input type="checkbox" id="packetPathPrimaryOnly">' +
+          'Show only the farthest-traveled route (' + hiddenCount + ' other station' + (hiddenCount === 1 ? '' : 's') + ' hidden when checked)' +
+        '</label>';
+    }
+
     var primaryChain = plotted[0].chain;
     var center = primaryChain[Math.floor(primaryChain.length / 2)];
     var map = L.map('packetPathMapContainer', { zoomControl: true, attributionControl: false })
@@ -189,9 +209,29 @@
     var observerColor = cssVar('--status-yellow');
     var muted = cssVar('--text-muted');
 
+    // Shade every touched area's configured boundary as a faint
+    // background layer -- ties the "touched: X, Y" footer text to actual
+    // geography. Non-interactive so it never steals clicks from branch
+    // markers, and deliberately excluded from the fitBounds calculation
+    // below: a huge area (e.g. a whole region) would zoom the map out
+    // past the point where individual branches are still readable.
+    (data.touchedAreas || []).forEach(function (area) {
+      var shapeOpts = { color: accent, weight: 1, opacity: 0.35, fillColor: accent, fillOpacity: 0.06, interactive: false };
+      if (area.polygon && area.polygon.length > 0) {
+        L.polygon(area.polygon, shapeOpts).addTo(map);
+      } else if (area.latMin != null && area.latMax != null && area.lonMin != null && area.lonMax != null) {
+        L.rectangle([[area.latMin, area.lonMin], [area.latMax, area.lonMax]], shapeOpts).addTo(map);
+      }
+    });
+
     var bounds = [];
     var missingTotal = 0;
     var approxTotal = 0;
+    // Markers/lines belonging to a non-primary branch -- toggled off by
+    // the "show only farthest route" checkbox above. The landmark "first
+    // to hear it" ring (drawn separately below) is never included: it's
+    // not a branch, it stays visible regardless of the toggle.
+    var secondaryLayers = [];
     // The same physical node (e.g. a shared entry-point repeater near the
     // sender) commonly appears in many branches' chains -- dedupe by
     // identity so "N approximate" counts distinct stations, not chain
@@ -246,9 +286,11 @@
             window.location.hash = '#/nodes/' + encodeURIComponent(pt.publicKey);
           });
         }
+        if (!p.primary) secondaryLayers.push(marker);
       });
       if (line.length > 1) {
-        L.polyline(line, { color: lineColor, weight: p.primary ? 2.5 : 1.5, opacity: p.primary ? 0.85 : 0.5 }).addTo(map);
+        var polyline = L.polyline(line, { color: lineColor, weight: p.primary ? 2.5 : 1.5, opacity: p.primary ? 0.85 : 0.5 }).addTo(map);
+        if (!p.primary) secondaryLayers.push(polyline);
       }
     });
     // The earliest-arriving observation, drawn last so its landmark ring
@@ -273,6 +315,16 @@
     setTimeout(function () { map.invalidateSize(); }, 120);
     activeMap = map;
 
+    var primaryOnlyCheckbox = document.getElementById('packetPathPrimaryOnly');
+    if (primaryOnlyCheckbox) {
+      primaryOnlyCheckbox.addEventListener('change', function () {
+        secondaryLayers.forEach(function (layer) {
+          if (primaryOnlyCheckbox.checked) map.removeLayer(layer);
+          else layer.addTo(map);
+        });
+      });
+    }
+
     var deepestHops = branches[0].hops;
     var statusParts = [
       plotted.length + ' of ' + branches.length + ' station' + (branches.length === 1 ? '' : 's') + ' shown',
@@ -281,7 +333,9 @@
     if (firstPoint) statusParts.push('entered near ' + firstPoint.name);
     if (approxTotal > 0) statusParts.push(approxTotal + ' approximate (estimated from neighbors)');
     if (missingTotal > 0) statusParts.push(missingTotal + ' hop' + (missingTotal === 1 ? '' : 's') + ' without a known position (not shown)');
-    if (data.touchedAreas && data.touchedAreas.length > 0) statusParts.push('touched ' + data.touchedAreas.join(', '));
+    if (data.touchedAreas && data.touchedAreas.length > 0) {
+      statusParts.push('touched ' + data.touchedAreas.map(function (a) { return a.label; }).join(', '));
+    }
     if (statusEl) statusEl.textContent = statusParts.join(' · ');
   }
 

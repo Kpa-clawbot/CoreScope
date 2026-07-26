@@ -169,6 +169,24 @@ function makeSandbox(apiImpl) {
 
   await (async () => {
     try {
+      // A compact legend explaining marker/line meaning (solid vs
+      // approximate, primary vs other route, first-heard ring) -- the
+      // old approach explained all of this in a long paragraph instead.
+      const ctx = makeSandbox(() => Promise.resolve({ hash: 'deadbeef', branches: [] }));
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const overlay = ctx.document.getElementById('packetPathModal');
+      const html = overlay.innerHTML;
+      assert.ok(html.includes('farthest-traveled route'), 'legend should explain the primary route color, got: ' + html);
+      assert.ok(html.includes('other station'), 'legend should explain the secondary route color, got: ' + html);
+      assert.ok(html.includes('approximate position'), 'legend should explain dashed markers, got: ' + html);
+      assert.ok(html.includes('first to hear it'), 'legend should explain the green ring, got: ' + html);
+      passed++;
+      console.log('  ✅ renders a compact legend explaining route/marker colors and symbols');
+    } catch (e) { failed++; console.log('  ❌ renders a compact legend explaining route/marker colors and symbols: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
       const ctx = makeSandbox(() => Promise.resolve({
         hash: 'deadbeef',
         branches: [{ hops: 3, points: [{ publicKey: 'pk1', name: 'RepeaterA', lat: null, lon: null }], observer: null }],
@@ -237,6 +255,79 @@ function makeSandbox(apiImpl) {
       passed++;
       console.log('  ✅ multiple branches (including a 0-hop direct observer) are all plotted, not just the deepest');
     } catch (e) { failed++; console.log('  ❌ multiple branches (including a 0-hop direct observer) are all plotted, not just the deepest: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
+      // The "show only farthest route" toggle should only appear when
+      // there's more than one branch to hide, and checking/unchecking it
+      // should remove/re-add exactly the non-primary layers -- the
+      // primary branch's own markers/polyline must never be touched.
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [
+          {
+            hops: 2,
+            points: [
+              { publicKey: 'pk1', name: 'RepeaterA', lat: 56.0, lon: 10.0 },
+              { publicKey: 'pk2', name: 'RepeaterB', lat: 56.1, lon: 10.1 },
+            ],
+            observer: { name: 'FarObserver', lat: 56.2, lon: 10.2 },
+          },
+          { hops: 0, points: [], observer: { name: 'NearObserver', lat: 55.9, lon: 9.9 } },
+        ],
+      }));
+
+      const removedLayers = [];
+      const mapObj = {
+        setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {},
+        removeLayer(layer) { removedLayers.push(layer); },
+      };
+      ctx.L = {
+        map: () => mapObj,
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: () => ({ addTo() { return this; }, bindTooltip() { return this; }, on() { return this; } }),
+        polyline: () => ({ addTo() { return this; } }),
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const checkbox = ctx.document.getElementById('packetPathPrimaryOnly');
+      assert.ok(checkbox, 'expected the declutter checkbox to exist when there is more than one branch');
+      const controlsEl = ctx.document.getElementById('packetPathControls');
+      assert.ok(controlsEl.innerHTML.includes('1 other station'), 'label should count the non-primary branch, got: ' + controlsEl.innerHTML);
+
+      checkbox.checked = true;
+      (checkbox._listeners.change || []).forEach((fn) => fn());
+      assert.strictEqual(removedLayers.length, 1, 'expected exactly 1 removeLayer call: the 0-hop branch\'s single observer marker (no polyline, single point) -- the primary branch\'s 3 markers + 1 polyline must stay untouched, got ' + removedLayers.length);
+
+      checkbox.checked = false;
+      (checkbox._listeners.change || []).forEach((fn) => fn());
+      passed++;
+      console.log('  ✅ "show only farthest route" toggle hides/reveals exactly the non-primary layers');
+    } catch (e) { failed++; console.log('  ❌ "show only farthest route" toggle hides/reveals exactly the non-primary layers: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
+      // A single-branch packet has nothing to declutter -- the toggle
+      // must not appear at all.
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [{ hops: 1, points: [], observer: { name: 'OnlyObserver', lat: 56.0, lon: 10.0 } }],
+      }));
+      ctx.L = {
+        map: () => ({ setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {} }),
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: () => ({ addTo() { return this; }, bindTooltip() { return this; }, on() { return this; } }),
+        polyline: () => ({ addTo() { return this; } }),
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const checkbox = ctx.document.getElementById('packetPathPrimaryOnly');
+      assert.ok(!checkbox, 'expected no declutter checkbox for a single-branch packet, found one');
+      passed++;
+      console.log('  ✅ declutter toggle is absent for a single-branch packet');
+    } catch (e) { failed++; console.log('  ❌ declutter toggle is absent for a single-branch packet: ' + e.message); }
   })();
 
   await (async () => {
@@ -547,31 +638,39 @@ function makeSandbox(apiImpl) {
       // touchedAreas is the server-resolved, uncapped list of every
       // configured area any point/observer on the path fell in -- View
       // Path has room to show all of them (unlike the pong reply's
-      // capped "+N more" version).
+      // capped "+N more" version). Each entry is an object (label +
+      // boundary), not a plain string -- the footer text uses only .label.
       const ctx = makeSandbox(() => Promise.resolve({
         hash: 'deadbeef',
         branches: [{ hops: 0, points: [], observer: { name: 'Obs', lat: 56.0, lon: 10.0 } }],
-        touchedAreas: ['Aarhus by', 'Djursland', 'Odense by'],
+        touchedAreas: [
+          { label: 'Aarhus by', latMin: 56.05, latMax: 56.25, lonMin: 9.95, lonMax: 10.35 },
+          { label: 'Djursland', latMin: 56.20, latMax: 56.55, lonMin: 10.35, lonMax: 10.90 },
+          { label: 'Odense by', latMin: 55.30, latMax: 55.50, lonMin: 10.25, lonMax: 10.45 },
+        ],
       }));
       ctx.L = {
         map: () => ({ setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {} }),
         tileLayer: () => ({ addTo() { return this; } }),
         circleMarker: () => ({ addTo() { return this; }, bindTooltip() { return this; }, on() { return this; } }),
         polyline: () => ({ addTo() { return this; } }),
+        polygon: () => ({ addTo() { return this; } }),
+        rectangle: () => ({ addTo() { return this; } }),
       };
 
       await ctx.window.PacketPathMap.open('deadbeef');
       const status = ctx.document.getElementById('packetPathStatus');
-      assert.ok(status.textContent.includes('touched Aarhus by, Djursland, Odense by'), 'status should list every touched area uncapped, got: ' + status.textContent);
+      assert.ok(status.textContent.includes('touched Aarhus by, Djursland, Odense by'), 'status should list every touched area\'s label uncapped, got: ' + status.textContent);
       passed++;
-      console.log('  ✅ touchedAreas renders as an uncapped, comma-joined list in the status line');
-    } catch (e) { failed++; console.log('  ❌ touchedAreas renders as an uncapped, comma-joined list in the status line: ' + e.message); }
+      console.log('  ✅ touchedAreas renders as an uncapped, comma-joined list of labels in the status line');
+    } catch (e) { failed++; console.log('  ❌ touchedAreas renders as an uncapped, comma-joined list of labels in the status line: ' + e.message); }
   })();
 
   await (async () => {
     try {
       // No touchedAreas field at all (no areas configured server-side, or
-      // none resolved) -- must not add a stray "touched" fragment or throw.
+      // none resolved) -- must not add a stray "touched" fragment, try to
+      // shade anything, or throw.
       const ctx = makeSandbox(() => Promise.resolve({
         hash: 'deadbeef',
         branches: [{ hops: 0, points: [], observer: { name: 'Obs', lat: 56.0, lon: 10.0 } }],
@@ -589,6 +688,51 @@ function makeSandbox(apiImpl) {
       passed++;
       console.log('  ✅ omits the "touched" fragment when touchedAreas is absent');
     } catch (e) { failed++; console.log('  ❌ omits the "touched" fragment when touchedAreas is absent: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
+      // Each touched area is shaded on the map: a polygon area draws via
+      // L.polygon (its actual drawn boundary), a bbox-only area falls
+      // back to L.rectangle -- and every shape must be non-interactive so
+      // it never steals a click meant for a branch marker underneath it.
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [{ hops: 0, points: [], observer: { name: 'Obs', lat: 56.0, lon: 10.0 } }],
+        touchedAreas: [
+          { label: 'Aarhus by', polygon: [[56.05, 9.95], [56.05, 10.35], [56.25, 10.35], [56.25, 9.95]] },
+          { label: 'Djursland', latMin: 56.20, latMax: 56.55, lonMin: 10.35, lonMax: 10.90 },
+        ],
+      }));
+      const polygonCalls = [];
+      const rectangleCalls = [];
+      ctx.L = {
+        map: () => ({ setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {} }),
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: () => ({ addTo() { return this; }, bindTooltip() { return this; }, on() { return this; } }),
+        polyline: () => ({ addTo() { return this; } }),
+        polygon: (latlngs, opts) => { polygonCalls.push({ latlngs, opts }); return { addTo() { return this; } }; },
+        rectangle: (bounds, opts) => { rectangleCalls.push({ bounds, opts }); return { addTo() { return this; } }; },
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      assert.strictEqual(polygonCalls.length, 1, 'expected exactly 1 L.polygon call for the area with a drawn polygon, got ' + polygonCalls.length);
+      assert.strictEqual(polygonCalls[0].latlngs.length, 4, 'expected the polygon\'s own 4 points passed through, got ' + JSON.stringify(polygonCalls[0].latlngs));
+      assert.strictEqual(rectangleCalls.length, 1, 'expected exactly 1 L.rectangle call for the bbox-only area, got ' + rectangleCalls.length);
+      // Compared field-by-field rather than via deepStrictEqual: the
+      // array came out of a separate vm context (a different Array
+      // realm), which deepStrictEqual treats as unequal even for
+      // identical primitive contents.
+      const rectBounds = rectangleCalls[0].bounds;
+      assert.strictEqual(rectBounds[0][0], 56.20, 'rectangle bounds[0][0] (latMin) mismatch, got ' + JSON.stringify(rectBounds));
+      assert.strictEqual(rectBounds[0][1], 10.35, 'rectangle bounds[0][1] (lonMin) mismatch, got ' + JSON.stringify(rectBounds));
+      assert.strictEqual(rectBounds[1][0], 56.55, 'rectangle bounds[1][0] (latMax) mismatch, got ' + JSON.stringify(rectBounds));
+      assert.strictEqual(rectBounds[1][1], 10.90, 'rectangle bounds[1][1] (lonMax) mismatch, got ' + JSON.stringify(rectBounds));
+      assert.strictEqual(polygonCalls[0].opts.interactive, false, 'area shapes must be non-interactive so they never steal clicks from branch markers');
+      assert.strictEqual(rectangleCalls[0].opts.interactive, false, 'area shapes must be non-interactive so they never steal clicks from branch markers');
+      passed++;
+      console.log('  ✅ shades each touched area on the map: polygon when drawn, rectangle fallback for bbox-only areas, both non-interactive');
+    } catch (e) { failed++; console.log('  ❌ shades each touched area on the map: polygon when drawn, rectangle fallback for bbox-only areas, both non-interactive: ' + e.message); }
   })();
 
   console.log('\n════════════════════════════════════════');
