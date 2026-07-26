@@ -185,7 +185,70 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 		log.Printf("[migration/async] scheduling tx_last_seen_backfill_v1 failed: %v", err)
 	}
 
+	// Ping-score highscore backfill: ping_triggers only started getting
+	// written at InsertTransmission's isNew branch going forward (#1865-
+	// style pattern, see ping_triggers.go) -- CHAN messages that predate
+	// this feature never triggered that write. Scan history once so the
+	// highscore board isn't empty for pings sent before today.
+	// PREFLIGHT: async=true reason="full scan of payload_type=5 transmissions with a LIKE prefilter -- bounded by channel-message volume, not total transmissions, but still a full-table scan so kept off the boot path"
+	if err := s.RunAsyncMigration(context.Background(), "ping_triggers_backfill_v1", backfillPingTriggers); err != nil {
+		log.Printf("[migration/async] scheduling ping_triggers_backfill_v1 failed: %v", err)
+	}
+
 	return s, nil
+}
+
+// backfillPingTriggers is the ping_triggers_backfill_v1 async migration
+// body -- pulled into its own named function (rather than inline like its
+// siblings above) so tests can call it directly without needing to fake
+// the whole marker-row/goroutine dance RunAsyncMigration wraps it in.
+func backfillPingTriggers(ctx context.Context, d *sql.DB) error {
+	log.Println("[migration/async] Backfilling ping_triggers from historical CHAN messages...")
+	rows, err := d.QueryContext(ctx, `
+		SELECT id, hash, channel_hash, decoded_json, first_seen FROM transmissions
+		WHERE payload_type = 5 AND decoded_json LIKE '%ping%'
+	`)
+	if err != nil {
+		return err
+	}
+	type candidate struct {
+		txID                                      int64
+		hash, channelHash, decodedJSON, firstSeen string
+	}
+	var candidates []candidate
+	for rows.Next() {
+		var c candidate
+		var channelHash sql.NullString
+		if err := rows.Scan(&c.txID, &c.hash, &channelHash, &c.decodedJSON, &c.firstSeen); err != nil {
+			continue
+		}
+		c.channelHash = channelHash.String
+		candidates = append(candidates, c)
+	}
+	rows.Close()
+
+	var inserted int
+	for _, c := range candidates {
+		sender, displayText, ok := pingTriggerSenderAndText(c.decodedJSON)
+		if !ok || !isPingTrigger(displayText) {
+			continue
+		}
+		res, err := d.ExecContext(ctx,
+			`INSERT OR IGNORE INTO ping_triggers (tx_id, hash, channel_hash, sender, first_seen) VALUES (?, ?, ?, ?, ?)`,
+			c.txID, c.hash, nilIfEmpty(c.channelHash), nilIfEmpty(sender), c.firstSeen)
+		if err != nil {
+			log.Printf("[migration/async] ping_triggers backfill insert (non-fatal): %v", err)
+			continue
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			inserted++
+		}
+	}
+	if _, err := d.ExecContext(ctx, `INSERT OR IGNORE INTO _migrations (name) VALUES ('ping_triggers_backfill_v1')`); err != nil {
+		return err
+	}
+	log.Printf("[migration/async] ping_triggers backfill complete: %d historical ping(s) recorded (scanned %d candidates)", inserted, len(candidates))
+	return nil
 }
 
 func applySchema(db *sql.DB) error {
