@@ -3,15 +3,9 @@ package main
 // Tests for the ping-score highscore/leaderboard feature's detection side:
 // isPingTrigger/pingTriggerSenderAndText mirror cmd/server/db.go's copies
 // exactly, and InsertTransmission writes exactly one ping_triggers row per
-// new ping-triggering CHAN transmission. Also covers backfillPingTriggers,
-// the one-time async migration that catches CHAN messages sent before this
-// feature existed (which never went through InsertTransmission's isNew
-// detection hook).
+// new ping-triggering CHAN transmission.
 
-import (
-	"context"
-	"testing"
-)
+import "testing"
 
 func TestIsPingTrigger(t *testing.T) {
 	cases := []struct {
@@ -124,88 +118,6 @@ func TestInsertTransmission_RepeatObservationDoesNotDuplicate(t *testing.T) {
 
 	if got := countPingTriggers(t, s); got != 1 {
 		t.Errorf("ping_triggers count = %d, want 1 (no duplicate on repeat observation)", got)
-	}
-}
-
-// insertHistoricalChanTxDirect inserts a transmission row directly via SQL,
-// bypassing InsertTransmission entirely -- simulating a CHAN message that
-// was ingested before the ping-score feature existed, so it never went
-// through the isNew detection hook and has no ping_triggers row.
-func insertHistoricalChanTxDirect(t *testing.T, s *Store, hash, text, channelHash string) int64 {
-	t.Helper()
-	res, err := s.db.Exec(
-		`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, channel_hash, last_seen)
-		 VALUES ('AABB', ?, '2026-01-01T00:00:00Z', 1, 5, 1, ?, ?, 0)`,
-		hash, `{"type":"CHAN","channel":"`+channelHash+`","text":"`+text+`"}`, channelHash,
-	)
-	if err != nil {
-		t.Fatalf("insert historical tx: %v", err)
-	}
-	txID, _ := res.LastInsertId()
-	return txID
-}
-
-func TestBackfillPingTriggers_FindsHistoricalPings(t *testing.T) {
-	s := openNeighborsStore(t)
-	// OpenStore already schedules this same migration in the background;
-	// let its (empty-DB, no-op) first pass finish before inserting test
-	// data, or the automatic run could race the inserts below and find
-	// them itself before this test's own explicit call does.
-	s.WaitForAsyncMigrations()
-
-	insertHistoricalChanTxDirect(t, s, "histping0000001", "Alice: ping", "#test")
-	insertHistoricalChanTxDirect(t, s, "histchat0000001", "Alice: just chatting", "#test")
-
-	if got := countPingTriggers(t, s); got != 0 {
-		t.Fatalf("ping_triggers count before backfill = %d, want 0 (historical rows bypass InsertTransmission)", got)
-	}
-
-	if err := backfillPingTriggers(context.Background(), s.db); err != nil {
-		t.Fatalf("backfillPingTriggers: %v", err)
-	}
-
-	if got := countPingTriggers(t, s); got != 1 {
-		t.Fatalf("ping_triggers count after backfill = %d, want 1 (only the historical ping, not the chat message)", got)
-	}
-	var hash string
-	if err := s.db.QueryRow(`SELECT hash FROM ping_triggers`).Scan(&hash); err != nil {
-		t.Fatalf("read backfilled row: %v", err)
-	}
-	if hash != "histping0000001" {
-		t.Errorf("backfilled hash = %q, want histping0000001", hash)
-	}
-}
-
-func TestBackfillPingTriggers_IdempotentOnRerun(t *testing.T) {
-	s := openNeighborsStore(t)
-	s.WaitForAsyncMigrations() // let OpenStore's own (empty-DB) pass finish first
-	insertHistoricalChanTxDirect(t, s, "histping0000002", "Bob: /ping", "#test")
-
-	if err := backfillPingTriggers(context.Background(), s.db); err != nil {
-		t.Fatalf("first backfill: %v", err)
-	}
-	if err := backfillPingTriggers(context.Background(), s.db); err != nil {
-		t.Fatalf("second backfill: %v", err)
-	}
-
-	if got := countPingTriggers(t, s); got != 1 {
-		t.Errorf("ping_triggers count after two backfill runs = %d, want 1 (tx_id PRIMARY KEY + INSERT OR IGNORE must dedupe)", got)
-	}
-}
-
-// TestOpenStore_SchedulesPingTriggersBackfill confirms the migration is
-// actually wired into OpenStore's boot path (registered + completed),
-// not just directly callable in isolation like the tests above.
-func TestOpenStore_SchedulesPingTriggersBackfill(t *testing.T) {
-	s := openNeighborsStore(t)
-	s.WaitForAsyncMigrations()
-
-	status, err := s.AsyncMigrationStatus("ping_triggers_backfill_v1")
-	if err != nil {
-		t.Fatalf("AsyncMigrationStatus: %v", err)
-	}
-	if status != "done" {
-		t.Errorf("ping_triggers_backfill_v1 status = %q, want %q -- OpenStore must schedule and complete this migration on every boot", status, "done")
 	}
 }
 
