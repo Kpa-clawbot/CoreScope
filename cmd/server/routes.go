@@ -3269,7 +3269,47 @@ func (s *Server) handlePacketPath(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	s.annotatePacketPathTouchedAreas(resp)
 	writeJSON(w, resp)
+}
+
+// annotatePacketPathTouchedAreas resolves resp.TouchedAreas: every
+// configured area any point or observer on the path falls in, deduped and
+// alphabetized, uncapped (unlike annotateBotReplyTouchedAreas's capped
+// pong-reply list -- the map view has room to show the full set). Unlike
+// that function, no DB round-trip is needed: GetPacketPath already
+// resolved every position (including the neighbor-centroid approximation
+// fallback), so this just reads the lat/lon already on the response.
+func (s *Server) annotatePacketPathTouchedAreas(resp *PacketPathResponse) {
+	if resp == nil || s.cfg == nil || len(s.cfg.Areas) == 0 {
+		return
+	}
+	seen := map[string]bool{}
+	var labels []string
+	add := func(lat, lon *float64) {
+		if lat == nil || lon == nil {
+			return
+		}
+		label, ok := AreaForPoint(*lat, *lon, s.cfg.Areas)
+		if !ok || seen[label] {
+			return
+		}
+		seen[label] = true
+		labels = append(labels, label)
+	}
+	for _, b := range resp.Branches {
+		for _, pt := range b.Points {
+			add(pt.Lat, pt.Lon)
+		}
+		if b.Observer != nil {
+			add(b.Observer.Lat, b.Observer.Lon)
+		}
+	}
+	if len(labels) == 0 {
+		return
+	}
+	sort.Strings(labels)
+	resp.TouchedAreas = labels
 }
 
 var iataCoords = map[string]IataCoord{

@@ -269,6 +269,7 @@
     if (firstPoint) statusParts.push('entered near ' + firstPoint.name);
     if (approxTotal > 0) statusParts.push(approxTotal + ' approximate (estimated from neighbors)');
     if (missingTotal > 0) statusParts.push(missingTotal + ' hop' + (missingTotal === 1 ? '' : 's') + ' without a known position (not shown)');
+    if (data.touchedAreas && data.touchedAreas.length > 0) statusParts.push('touched ' + data.touchedAreas.join(', '));
     if (statusEl) statusEl.textContent = statusParts.join(' · ');
   }
 

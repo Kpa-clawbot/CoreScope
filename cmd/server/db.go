@@ -1602,6 +1602,13 @@ type PacketPathResponse struct {
 	Hash     string             `json:"hash"`
 	Branches []PacketPathBranch `json:"branches"`
 	First    *PacketPathBranch  `json:"first,omitempty"`
+	// TouchedAreas is every configured area any point or observer on this
+	// path resolved to (deduped, alphabetized, uncapped -- unlike the
+	// ping-bot reply's capped list, the map has room to show all of them).
+	// Populated by routes.go's annotatePacketPathTouchedAreas, not here:
+	// area resolution needs config.Areas, not available at this SQL-only
+	// DB layer.
+	TouchedAreas []string `json:"touchedAreas,omitempty"`
 }
 
 // GetPacketPath resolves every distinct station that observed a packet to

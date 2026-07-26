@@ -498,6 +498,55 @@ function makeSandbox(apiImpl) {
     } catch (e) { failed++; console.log('  ❌ markers with a publicKey are clickable and navigate to node detail, closing the modal: ' + e.message); }
   })();
 
+  await (async () => {
+    try {
+      // touchedAreas is the server-resolved, uncapped list of every
+      // configured area any point/observer on the path fell in -- View
+      // Path has room to show all of them (unlike the pong reply's
+      // capped "+N more" version).
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [{ hops: 0, points: [], observer: { name: 'Obs', lat: 56.0, lon: 10.0 } }],
+        touchedAreas: ['Aarhus by', 'Djursland', 'Odense by'],
+      }));
+      ctx.L = {
+        map: () => ({ setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {} }),
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: () => ({ addTo() { return this; }, bindTooltip() { return this; }, on() { return this; } }),
+        polyline: () => ({ addTo() { return this; } }),
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const status = ctx.document.getElementById('packetPathStatus');
+      assert.ok(status.textContent.includes('touched Aarhus by, Djursland, Odense by'), 'status should list every touched area uncapped, got: ' + status.textContent);
+      passed++;
+      console.log('  ✅ touchedAreas renders as an uncapped, comma-joined list in the status line');
+    } catch (e) { failed++; console.log('  ❌ touchedAreas renders as an uncapped, comma-joined list in the status line: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
+      // No touchedAreas field at all (no areas configured server-side, or
+      // none resolved) -- must not add a stray "touched" fragment or throw.
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [{ hops: 0, points: [], observer: { name: 'Obs', lat: 56.0, lon: 10.0 } }],
+      }));
+      ctx.L = {
+        map: () => ({ setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {} }),
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: () => ({ addTo() { return this; }, bindTooltip() { return this; }, on() { return this; } }),
+        polyline: () => ({ addTo() { return this; } }),
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const status = ctx.document.getElementById('packetPathStatus');
+      assert.ok(!status.textContent.includes('touched'), 'status should have no "touched" fragment when touchedAreas is absent, got: ' + status.textContent);
+      passed++;
+      console.log('  ✅ omits the "touched" fragment when touchedAreas is absent');
+    } catch (e) { failed++; console.log('  ❌ omits the "touched" fragment when touchedAreas is absent: ' + e.message); }
+  })();
+
   console.log('\n════════════════════════════════════════');
   console.log(`  packet-path-map.js: ${passed} passed, ${failed} failed`);
   console.log('════════════════════════════════════════');
