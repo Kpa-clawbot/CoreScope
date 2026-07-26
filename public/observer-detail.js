@@ -271,6 +271,10 @@ window.ObserverDetailNaiveBanner = {
           <div class="stat-label">Last Packet Observation</div>
           <div class="stat-value" style="font-size:0.85em">${obs.last_packet_at ? timeAgo(obs.last_packet_at) + '<br><span style="font-size:0.8em;color:var(--text-muted)">' + new Date(obs.last_packet_at).toLocaleString() + '</span>' : '<span style="color:var(--text-muted)">never</span>'}</div>
         </div>
+        <div class="stat-card" title="/neighbors reports are opt-in firmware and unavailable on non-PSRAM hardware -- 'never' is expected for many observers, not a fault">
+          <div class="stat-label">Last /neighbors Report</div>
+          <div class="stat-value" style="font-size:0.85em">${obs.last_neighbors_report_at ? timeAgo(obs.last_neighbors_report_at) + '<br><span style="font-size:0.8em;color:var(--text-muted)">' + new Date(obs.last_neighbors_report_at).toLocaleString() + '</span>' : '<span style="color:var(--text-muted)">never</span>'}</div>
+        </div>
       </div>
       <div class="mono" style="font-size:0.75em;color:var(--text-muted);margin-bottom:20px;word-break:break-all">
         ID: ${escapeHtml(obs.id)}

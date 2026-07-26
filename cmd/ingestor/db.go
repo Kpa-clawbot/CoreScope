@@ -287,6 +287,7 @@ func applySchema(db *sql.DB) error {
 			noise_floor REAL,
 			inactive INTEGER DEFAULT 0,
 			last_packet_at TEXT DEFAULT NULL,
+			last_neighbors_report_at TEXT DEFAULT NULL,
 			clock_skew_seconds INTEGER DEFAULT NULL,
 			clock_skew_count_24h INTEGER DEFAULT 0,
 			clock_last_naive_at TEXT DEFAULT NULL,
@@ -1771,6 +1772,28 @@ func (s *Store) UpdateNodeConfiguredScope(pubkey, scope, reportedAt string) erro
 	_, err := s.db.Exec(
 		`UPDATE inactive_nodes SET configured_scope = ?, configured_scope_at = ? WHERE public_key = ?`,
 		scope, reportedAt, pubkey)
+	return err
+}
+
+// TouchObserverNeighborsReport records that the given observer sent a
+// /neighbors report (#1865 follow-up, cwichura on PR #1867): the feature is
+// opt-in firmware and unavailable on non-PSRAM devices, so operators asked
+// for a way to see which observers have it enabled. Called once per report,
+// regardless of whether any individual neighbor entry carried scope
+// evidence. Uses MAX so an out-of-order older report can't roll the
+// displayed timestamp backwards; a blank/unparseable reportedAt is a no-op
+// (never regresses a known-good value to empty).
+func (s *Store) TouchObserverNeighborsReport(observerID, reportedAt string) error {
+	if observerID == "" {
+		return nil
+	}
+	reportedAt = normalizeReportTS(reportedAt)
+	if reportedAt == "" {
+		return nil
+	}
+	_, err := s.db.Exec(
+		`UPDATE observers SET last_neighbors_report_at = MAX(COALESCE(last_neighbors_report_at, ''), ?) WHERE id = ?`,
+		reportedAt, observerID)
 	return err
 }
 

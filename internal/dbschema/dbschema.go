@@ -94,6 +94,9 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensurePingTriggersTable(rw, logf); err != nil {
 		return fmt.Errorf("ensure ping_triggers: %w", err)
 	}
+	if err := ensureLastNeighborsReportAtColumn(rw, logf); err != nil {
+		return fmt.Errorf("ensure observers.last_neighbors_report_at: %w", err)
+	}
 	// #1690: denormalized last_seen on transmissions so cold-load filters
 	// on effective recency rather than first-ever first_seen. The column
 	// add + index creation are cheap (single ALTER, indexed INTEGER
@@ -180,6 +183,10 @@ func AssertReady(ro *sql.DB) error {
 	// unset (unknown state).
 	mustCol("observers", "can_relay_seen")
 	mustTable("ping_triggers")
+	// #1865 follow-up: which observers send /neighbors reports (opt-in
+	// firmware feature). Owned by ingestor — TouchObserverNeighborsReport
+	// is the only writer.
+	mustCol("observers", "last_neighbors_report_at")
 
 	if len(missing) > 0 {
 		return fmt.Errorf("schema not migrated by ingestor; restart ingestor first. missing: %s",
@@ -333,6 +340,27 @@ func ensureLastPacketAtColumn(rw *sql.DB, logf Logger) error {
 		return err
 	}
 	logf("[dbschema] added last_packet_at column to observers")
+	return nil
+}
+
+// ensureLastNeighborsReportAtColumn adds the timestamp of an observer's most
+// recent /neighbors MQTT report (#1865 follow-up: cwichura asked for a way
+// to identify which observers have the feature enabled, since it's opt-in
+// and unavailable on non-PSRAM devices). Written by the ingestor's
+// TouchObserverNeighborsReport whenever handleNeighborsReport fires,
+// regardless of whether any individual neighbor carried scope evidence.
+func ensureLastNeighborsReportAtColumn(rw *sql.DB, logf Logger) error {
+	has, err := TableHasColumn(rw, "observers", "last_neighbors_report_at")
+	if err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+	if _, err := rw.Exec("ALTER TABLE observers ADD COLUMN last_neighbors_report_at TEXT"); err != nil {
+		return err
+	}
+	logf("[dbschema] added last_neighbors_report_at column to observers")
 	return nil
 }
 
