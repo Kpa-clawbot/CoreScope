@@ -4605,6 +4605,17 @@ func TestHandleScopeStats_UnusedRegions(t *testing.T) {
 			t.Errorf("unusedRegions[%d] = %q, want %q", i, resp.UnusedRegions[i], name)
 		}
 	}
+	// UsedRegions is the complement -- together with UnusedRegions it's a
+	// complete partition of the (deduped) configured list.
+	wantUsed := []string{"#belgium"}
+	if len(resp.UsedRegions) != len(wantUsed) {
+		t.Fatalf("usedRegions = %v, want %v", resp.UsedRegions, wantUsed)
+	}
+	for i, name := range wantUsed {
+		if resp.UsedRegions[i] != name {
+			t.Errorf("usedRegions[%d] = %q, want %q", i, resp.UsedRegions[i], name)
+		}
+	}
 }
 
 // TestHandleScopeStats_RepeatersByRegion verifies the "which repeaters
