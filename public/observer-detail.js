@@ -198,12 +198,19 @@ window.ObserverDetailNaiveBanner = {
         : (n.status === 'timeout'
           ? '<span class="text-muted" title="Scope query timed out">no reply</span>'
           : '<span class="text-muted">—</span>');
-      return '<tr><td>' + nameCell + '</td><td>' + scopeCell + '</td></tr>';
+      // Cross-reference against the packet-derived neighbor_edges graph.
+      // false is a diagnostic signal (coverage gap / packet loss / just
+      // hasn't transmitted recently) -- worth noticing, but styled neutral
+      // rather than as an error since it's not necessarily a problem.
+      const evidenceCell = n.seenViaPackets
+        ? '<span class="text-muted" title="A packet path connecting this station and the observer has been resolved">confirmed</span>'
+        : '<span style="color:var(--text-muted)" title="Firmware reports this as a direct RF neighbor, but no packet path between the two has been resolved yet -- possible coverage gap, packet loss, or the neighbor simply hasn\'t transmitted recently.">not seen yet</span>';
+      return '<tr><td>' + nameCell + '</td><td>' + scopeCell + '</td><td>' + evidenceCell + '</td></tr>';
     }).join('');
     const asOf = neighborsData.reportedAt
       ? '<div class="text-muted" style="font-size:11px;margin-top:6px">As of ' + timeAgo(neighborsData.reportedAt) + '</div>'
       : '';
-    return '<div class="table-fluid-wrap"><table class="data-table"><thead><tr><th scope="col">Neighbor</th><th scope="col">Configured Scope</th></tr></thead><tbody>' + rows + '</tbody></table></div>' + asOf;
+    return '<div class="table-fluid-wrap"><table class="data-table"><thead><tr><th scope="col">Neighbor</th><th scope="col">Configured Scope</th><th scope="col" title="Cross-referenced against the packet-derived neighbor graph">Packet Evidence</th></tr></thead><tbody>' + rows + '</tbody></table></div>' + asOf;
   }
   window.renderDirectNeighbors = renderDirectNeighbors;
 

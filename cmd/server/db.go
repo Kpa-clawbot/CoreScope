@@ -1399,14 +1399,55 @@ type ObserverNeighbor struct {
 	Role   *string `json:"role"`
 	Scopes *string `json:"scopes"`
 	Status string  `json:"status"`
+	// SeenViaPackets is true when this firmware-confirmed neighbor also has
+	// an edge in the packet-path-inferred neighbor_edges graph. false is a
+	// diagnostic signal, NOT necessarily a fault: it means we've never
+	// resolved a packet path connecting these two stations despite RF
+	// adjacency, which can point at a coverage gap, packet loss, or simply
+	// that the neighbor hasn't transmitted since neighbor_edges last built
+	// (#1865 follow-up, requested by dborup to help "make the disambiguator
+	// smarter" -- this surfaces the mismatch; it does not yet feed the
+	// disambiguator's own scoring, which would be a separate, larger change).
+	SeenViaPackets bool `json:"seenViaPackets"`
+}
+
+// packetGraphNeighbors returns the set of lowercase pubkeys that
+// neighbor_edges records as adjacent to pubkey, in either edge direction
+// (canonEdge in cmd/ingestor/neighbor_builder.go stores node_a<=node_b, so
+// callers must check both columns rather than assuming a side).
+func (db *DB) packetGraphNeighbors(pubkey string) (map[string]bool, error) {
+	rows, err := db.conn.Query(`SELECT node_a, node_b FROM neighbor_edges WHERE node_a = ? OR node_b = ?`, pubkey, pubkey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	set := make(map[string]bool)
+	for rows.Next() {
+		var a, b string
+		if err := rows.Scan(&a, &b); err != nil {
+			return nil, err
+		}
+		if a == pubkey {
+			set[b] = true
+		} else {
+			set[a] = true
+		}
+	}
+	return set, rows.Err()
 }
 
 // GetObserverNeighbors returns the observer's current direct-neighbor
 // snapshot (empty slice if none/never reported -- not an error) alongside
 // the shared report timestamp all rows carry (from observer_neighbors.
 // reported_at, which the ingestor sets identically for every row in a
-// single replace).
+// single replace). Each entry is cross-referenced against the
+// packet-derived neighbor_edges graph via SeenViaPackets.
 func (db *DB) GetObserverNeighbors(observerID string) ([]ObserverNeighbor, string, error) {
+	packetNeighbors, err := db.packetGraphNeighbors(strings.ToLower(observerID))
+	if err != nil {
+		return nil, "", err
+	}
+
 	rows, err := db.conn.Query(`
 		SELECT on2.neighbor_pubkey, on2.scopes, on2.status, on2.reported_at, n.name, n.role
 		FROM observer_neighbors on2
@@ -1426,6 +1467,7 @@ func (db *DB) GetObserverNeighbors(observerID string) ([]ObserverNeighbor, strin
 		if err := rows.Scan(&n.Pubkey, &scopes, &n.Status, &reportedAtCol, &name, &role); err != nil {
 			return nil, "", err
 		}
+		n.SeenViaPackets = packetNeighbors[n.Pubkey]
 		if scopes.Valid && scopes.String != "" {
 			s := scopes.String
 			n.Scopes = &s

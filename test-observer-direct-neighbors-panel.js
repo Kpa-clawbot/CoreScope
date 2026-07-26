@@ -88,5 +88,24 @@ test('an unresolved pubkey (no name) renders truncated, unlinked', () => {
   assert.ok(/no reply/.test(html), 'expected the timeout "no reply" label');
 });
 
+test('seenViaPackets=true renders "confirmed", not an error/warning treatment', () => {
+  const html = ctx.window.renderDirectNeighbors({
+    neighbors: [{ pubkey: 'abc123', name: 'Repeater A', role: 'repeater', scopes: '#dk', status: 'responded', seenViaPackets: true }],
+    reportedAt: '',
+  });
+  assert.ok(/confirmed/.test(html));
+  assert.ok(!/ph-warning/.test(html));
+});
+
+test('seenViaPackets=false surfaces the coverage-gap diagnostic, styled neutrally', () => {
+  const html = ctx.window.renderDirectNeighbors({
+    neighbors: [{ pubkey: 'abc123', name: 'Repeater A', role: 'repeater', scopes: '#dk', status: 'responded', seenViaPackets: false }],
+    reportedAt: '',
+  });
+  assert.ok(/not seen yet/.test(html));
+  assert.ok(/coverage gap/.test(html), 'expected the explanatory tooltip');
+  assert.ok(!/ph-warning/.test(html), 'must not use the warning icon treatment');
+});
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);
