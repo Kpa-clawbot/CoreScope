@@ -3286,7 +3286,12 @@ func (s *Server) annotatePacketPathAirtime(resp *PacketPathResponse) {
 		return
 	}
 	total, relays, ok := s.store.AirtimeAndRelayCountForTransmission(resp.TxID)
-	if !ok {
+	if !ok || relays == 0 {
+		// relays == 0 means a direct reception with nothing to relay --
+		// there's no meaningful airtime estimate to show (and 0 would
+		// otherwise survive JSON encoding as a bare "estimatedAirtimeMs":0
+		// while the omitempty int AirtimeRelayCount vanishes alongside it,
+		// leaving the frontend with a number but no relay count to pair it with).
 		return
 	}
 	ms := float64(total.Microseconds()) / 1000.0

@@ -112,6 +112,65 @@ func TestHandlePacketPath_Airtime(t *testing.T) {
 	}
 }
 
+// TestHandlePacketPath_Airtime_ZeroRelays confirms the fields are omitted
+// -- not a bare "estimatedAirtimeMs":0 with no accompanying relay count --
+// for a directly-received packet (no resolved_path relays at all). This
+// caught a real bug on stg: the *float64 EstimatedAirtimeMs survived JSON
+// encoding as 0 (a non-nil pointer isn't "empty"), while the plain int
+// AirtimeRelayCount's omitempty dropped it at exactly 0, leaving the
+// frontend a number with nothing to pair it with.
+func TestHandlePacketPath_Airtime_ZeroRelays(t *testing.T) {
+	srv, router := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
+		t.Fatalf("clear transmissions: %v", err)
+	}
+	if _, err := srv.db.conn.Exec(`DELETE FROM observations`); err != nil {
+		t.Fatalf("clear observations: %v", err)
+	}
+
+	txRes, err := srv.db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('AABBCCDDEE', 'airtimepath00003', '2026-01-15T10:00:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#ping","text":"ping","sender":"Eve"}', '#ping')`)
+	if err != nil {
+		t.Fatalf("insert tx: %v", err)
+	}
+	txID, _ := txRes.LastInsertId()
+	obsRes, err := srv.db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES (?,?,?)`, "airtimeobs1", "ObsOne", "SJC")
+	if err != nil {
+		t.Fatalf("insert observer: %v", err)
+	}
+	obsIdx, _ := obsRes.LastInsertId()
+	if _, err := srv.db.conn.Exec(
+		`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, resolved_path, timestamp) VALUES (?,?,?,?,?,?,?)`,
+		txID, obsIdx, 9.0, -88.0, `[]`, `[]`, 1736935200,
+	); err != nil {
+		t.Fatalf("insert observation: %v", err)
+	}
+	if err := srv.store.Load(); err != nil {
+		t.Fatalf("reload store: %v", err)
+	}
+	if !srv.store.WaitIndexesReady(5 * time.Second) {
+		t.Fatal("background indexes never became ready after reload")
+	}
+
+	req := httptest.NewRequest("GET", "/api/packets/airtimepath00003/path", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, present := raw["estimatedAirtimeMs"]; present {
+		t.Errorf("estimatedAirtimeMs = %v, want absent for a direct reception with 0 relays", raw["estimatedAirtimeMs"])
+	}
+	if _, present := raw["airtimeRelayCount"]; present {
+		t.Errorf("airtimeRelayCount = %v, want absent for a direct reception with 0 relays", raw["airtimeRelayCount"])
+	}
+}
+
 // TestHandlePacketPath_Airtime_StoreUnavailable confirms the field is
 // simply omitted -- not a guessed zero -- when the in-memory store has no
 // record of this transmission's ID (e.g. DB-only mode, or an old packet
