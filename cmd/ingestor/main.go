@@ -267,6 +267,7 @@ func main() {
 	// Metrics retention: prune old metrics on startup
 	metricsDays := cfg.MetricsRetentionDays()
 	store.PruneOldMetrics(metricsDays)
+	store.PruneOldNeighborMetrics(metricsDays)
 	store.PruneDroppedPackets(metricsDays)
 
 	// Packet (transmissions) retention: previously lived in cmd/server,
@@ -334,6 +335,7 @@ func main() {
 	go func() {
 		for range metricsRetentionTicker.C {
 			store.PruneOldMetrics(metricsDays)
+			store.PruneOldNeighborMetrics(metricsDays)
 			store.PruneDroppedPackets(metricsDays)
 			store.RunIncrementalVacuum(vacuumPages)
 		}
@@ -1577,17 +1579,32 @@ func handleNeighborsReport(store *Store, tag string, observerID string, msg map[
 		}
 		status, _ := n["status"].(string)
 		scopes, _ := n["scopes"].(string)
+		// snr/heard_secs_ago are present regardless of scope-query status --
+		// they come from the firmware's own RF neighbor table, not the OTA
+		// scope query (#1865 follow-up, spotted by dborup in a live payload).
+		var snr *float64
+		if v, ok := n["snr"].(float64); ok {
+			snr = &v
+		}
+		var heardSecsAgo *int
+		if v, ok := n["heard_secs_ago"].(float64); ok {
+			hs := int(v)
+			heardSecsAgo = &hs
+		}
 		if status == "responded" {
 			if err := store.UpdateNodeConfiguredScope(pubkey, scopes, reportedAt); err != nil {
 				log.Printf("MQTT [%s] neighbors scope error for %.8s: %v", tag, pubkey, err)
 			}
-			entries = append(entries, ObserverNeighborEntry{Pubkey: pubkey, Scopes: normalizeConfiguredScopeList(scopes), Status: status})
+			entries = append(entries, ObserverNeighborEntry{Pubkey: pubkey, Scopes: normalizeConfiguredScopeList(scopes), Status: status, SNR: snr, HeardSecsAgo: heardSecsAgo})
 		} else {
-			entries = append(entries, ObserverNeighborEntry{Pubkey: pubkey, Status: status})
+			entries = append(entries, ObserverNeighborEntry{Pubkey: pubkey, Status: status, SNR: snr, HeardSecsAgo: heardSecsAgo})
 		}
 	}
 	if err := store.ReplaceObserverNeighbors(observerID, entries, reportedAt); err != nil {
 		log.Printf("MQTT [%s] neighbors replace error for observer %.8s: %v", tag, observerID, err)
+	}
+	if err := store.RecordObserverNeighborMetrics(observerID, entries, reportedAt); err != nil {
+		log.Printf("MQTT [%s] neighbor metrics record error for observer %.8s: %v", tag, observerID, err)
 	}
 }
 

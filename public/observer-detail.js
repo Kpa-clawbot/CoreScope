@@ -198,14 +198,71 @@ window.ObserverDetailNaiveBanner = {
         : (n.status === 'timeout'
           ? '<span class="text-muted" title="Scope query timed out">no reply</span>'
           : '<span class="text-muted">—</span>');
-      return '<tr><td>' + nameCell + '</td><td>' + scopeCell + '</td></tr>';
+      // Cross-reference against the packet-derived neighbor_edges graph.
+      // false is a diagnostic signal (coverage gap / packet loss / just
+      // hasn't transmitted recently) -- worth noticing, but styled neutral
+      // rather than as an error since it's not necessarily a problem.
+      const evidenceCell = n.seenViaPackets
+        ? '<span class="text-muted" title="A packet path connecting this station and the observer has been resolved">confirmed</span>'
+        : '<span style="color:var(--text-muted)" title="Firmware reports this as a direct RF neighbor, but no packet path between the two has been resolved yet -- possible coverage gap, packet loss, or the neighbor simply hasn\'t transmitted recently.">not seen yet</span>';
+      // Sparkline is loaded async (loadNeighborSnrSparklines) once this
+      // table is in the DOM -- placeholder id keyed by pubkey.
+      const snrCell = n.pubkey
+        ? '<span id="nb-spark-' + escapeHtml(n.pubkey) + '" class="text-muted" style="font-size:10px">…</span>'
+        : '<span class="text-muted">—</span>';
+      return '<tr><td>' + nameCell + '</td><td>' + scopeCell + '</td><td>' + evidenceCell + '</td><td>' + snrCell + '</td></tr>';
     }).join('');
     const asOf = neighborsData.reportedAt
       ? '<div class="text-muted" style="font-size:11px;margin-top:6px">As of ' + timeAgo(neighborsData.reportedAt) + '</div>'
       : '';
-    return '<div class="table-fluid-wrap"><table class="data-table"><thead><tr><th scope="col">Neighbor</th><th scope="col">Configured Scope</th></tr></thead><tbody>' + rows + '</tbody></table></div>' + asOf;
+    return '<div class="table-fluid-wrap"><table class="data-table"><thead><tr><th scope="col">Neighbor</th><th scope="col">Configured Scope</th><th scope="col" title="Cross-referenced against the packet-derived neighbor graph">Packet Evidence</th><th scope="col" title="SNR trend from this observer\'s /neighbors reports, most recent 30 days">SNR Trend</th></tr></thead><tbody>' + rows + '</tbody></table></div>' + asOf;
   }
   window.renderDirectNeighbors = renderDirectNeighbors;
+
+  // #1865 follow-up: lightweight inline-SVG sparkline, same technique as
+  // the RF Health tab's rfNFSparkline (public/analytics.js) -- no Chart.js
+  // overhead for a tiny per-row indicator. Unlike noise floor, higher SNR
+  // is better, so no axis inversion.
+  function neighborSnrSparkline(values, w, h) {
+    if (!values.length) return '';
+    const min = Math.min.apply(null, values);
+    const max = Math.max.apply(null, values);
+    const range = max - min || 1;
+    const pts = values.map(function(v, i) {
+      const x = (i / Math.max(values.length - 1, 1)) * w;
+      const y = h - 2 - ((v - min) / range) * (h - 4);
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    }).join(' ');
+    return '<svg viewBox="0 0 ' + w + ' ' + h + '" style="width:' + w + 'px;height:' + h + 'px" role="img" aria-label="SNR trend"><title>SNR trend</title><polyline points="' + pts + '" fill="none" stroke="var(--accent)" stroke-width="1.5"/></svg>';
+  }
+  window.neighborSnrSparkline = neighborSnrSparkline;
+
+  // Fetched per-row, after the Direct Neighbors table is in the DOM --
+  // mirrors the RF Health grid's loadRFSparkline pattern (async, non-fatal
+  // on failure, since the sparkline is a nice-to-have, not core content).
+  async function loadNeighborSnrSparklines(observerId, neighborsData) {
+    const neighbors = (neighborsData && Array.isArray(neighborsData.neighbors)) ? neighborsData.neighbors : [];
+    for (const n of neighbors) {
+      if (!n.pubkey) continue;
+      const container = document.getElementById('nb-spark-' + n.pubkey);
+      if (!container) continue;
+      try {
+        const data = await api('/observers/' + encodeURIComponent(observerId) + '/neighbors/' + encodeURIComponent(n.pubkey) + '/metrics');
+        const values = (data.metrics || []).map(function(m) { return m.snr; }).filter(function(v) { return v != null; });
+        if (values.length > 1) {
+          const latest = values[values.length - 1];
+          container.outerHTML = neighborSnrSparkline(values, 80, 20) + ' <span class="text-muted" style="font-size:10px">' + latest.toFixed(1) + ' dB</span>';
+        } else if (values.length === 1) {
+          container.outerHTML = '<span class="text-muted" style="font-size:10px">' + values[0].toFixed(1) + ' dB</span>';
+        } else {
+          container.outerHTML = '<span class="text-muted" style="font-size:10px">no data</span>';
+        }
+      } catch (e) {
+        if (container) container.outerHTML = '<span class="text-muted" style="font-size:10px">—</span>';
+      }
+    }
+  }
+  window.loadNeighborSnrSparklines = loadNeighborSnrSparklines;
 
   function renderDetail(obs, analytics, obsSkew, neighborsData) {
     const el = document.getElementById('obsDetailContent');
@@ -374,6 +431,7 @@ window.ObserverDetailNaiveBanner = {
     if (analytics.recentPackets) {
       renderRecentPackets(analytics.recentPackets);
     }
+    loadNeighborSnrSparklines(currentId, neighborsData);
   }
 
   function renderTimelineChart(timeline) {

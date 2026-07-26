@@ -100,6 +100,9 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensureObserverNeighborsTable(rw, logf); err != nil {
 		return fmt.Errorf("ensure observer_neighbors: %w", err)
 	}
+	if err := ensureObserverNeighborMetricsTable(rw, logf); err != nil {
+		return fmt.Errorf("ensure observer_neighbor_metrics: %w", err)
+	}
 	// #1690: denormalized last_seen on transmissions so cold-load filters
 	// on effective recency rather than first-ever first_seen. The column
 	// add + index creation are cheap (single ALTER, indexed INTEGER
@@ -191,6 +194,7 @@ func AssertReady(ro *sql.DB) error {
 	// is the only writer.
 	mustCol("observers", "last_neighbors_report_at")
 	mustTable("observer_neighbors")
+	mustTable("observer_neighbor_metrics")
 
 	if len(missing) > 0 {
 		return fmt.Errorf("schema not migrated by ingestor; restart ingestor first. missing: %s",
@@ -793,5 +797,42 @@ func ensureObserverNeighborsTable(rw *sql.DB, logf Logger) error {
 		return fmt.Errorf("record observer_neighbors_v1: %w", err)
 	}
 	logf("[dbschema] created observer_neighbors table")
+	return nil
+}
+
+// ensureObserverNeighborMetricsTable creates observer_neighbor_metrics: an
+// APPEND-ONLY SNR/heard_secs_ago history per observer<->neighbor pair,
+// unlike observer_neighbors' current-only snapshot. Every report is valid
+// historical data at its own timestamp regardless of arrival order, so
+// there is no ordering guard on the write side (contrast
+// ReplaceObserverNeighbors). Retention mirrors observer_metrics'
+// MetricsRetentionDays (30-day default) -- pruned by the ingestor's
+// PruneOldNeighborMetrics, not owned here.
+func ensureObserverNeighborMetricsTable(rw *sql.DB, logf Logger) error {
+	if err := ensureMigrationsTable(rw); err != nil {
+		return err
+	}
+	row := rw.QueryRow(`SELECT 1 FROM _migrations WHERE name = 'observer_neighbor_metrics_v1'`)
+	var one int
+	if err := row.Scan(&one); err == nil {
+		return nil // already applied
+	}
+	if _, err := rw.Exec(`CREATE TABLE IF NOT EXISTS observer_neighbor_metrics (
+		observer_id TEXT NOT NULL,
+		neighbor_pubkey TEXT NOT NULL,
+		timestamp TEXT NOT NULL,
+		snr REAL,
+		heard_secs_ago INTEGER,
+		PRIMARY KEY (observer_id, neighbor_pubkey, timestamp)
+	)`); err != nil {
+		return fmt.Errorf("create observer_neighbor_metrics: %w", err)
+	}
+	if _, err := rw.Exec(`CREATE INDEX IF NOT EXISTS idx_observer_neighbor_metrics_ts ON observer_neighbor_metrics(timestamp)`); err != nil {
+		return fmt.Errorf("create idx_observer_neighbor_metrics_ts: %w", err)
+	}
+	if _, err := rw.Exec(`INSERT OR IGNORE INTO _migrations (name) VALUES ('observer_neighbor_metrics_v1')`); err != nil {
+		return fmt.Errorf("record observer_neighbor_metrics_v1: %w", err)
+	}
+	logf("[dbschema] created observer_neighbor_metrics table")
 	return nil
 }

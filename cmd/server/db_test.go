@@ -112,6 +112,23 @@ func setupTestDB(t *testing.T) *DB {
 			PRIMARY KEY (observer_id, neighbor_pubkey)
 		);
 
+		CREATE TABLE neighbor_edges (
+			node_a TEXT NOT NULL,
+			node_b TEXT NOT NULL,
+			count INTEGER DEFAULT 1,
+			last_seen TEXT,
+			PRIMARY KEY (node_a, node_b)
+		);
+
+		CREATE TABLE observer_neighbor_metrics (
+			observer_id TEXT NOT NULL,
+			neighbor_pubkey TEXT NOT NULL,
+			timestamp TEXT NOT NULL,
+			snr REAL,
+			heard_secs_ago INTEGER,
+			PRIMARY KEY (observer_id, neighbor_pubkey, timestamp)
+		);
+
 		-- Auto-populate from_pubkey for ADVERT rows so existing test fixtures
 		-- (which only set decoded_json) still attribute correctly under #1143's
 		-- exact-match column. Production migration handles legacy data; the

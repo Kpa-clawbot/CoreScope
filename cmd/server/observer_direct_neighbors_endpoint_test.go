@@ -128,3 +128,94 @@ func TestHandleObserverNeighbors_UnresolvedPubkeyHasNilNameAndRole(t *testing.T)
 		t.Errorf("Status = %q, want 'timeout'", n.Status)
 	}
 }
+
+// More ambitious use, requested by dborup after the panel shipped:
+// cross-reference the firmware-confirmed direct neighbor against the
+// packet-derived neighbor_edges graph and flag mismatches.
+func TestHandleObserverNeighbors_SeenViaPacketsCrossReference(t *testing.T) {
+	srv, router := setupTestServer(t)
+
+	observerPubkey := "1111111111111111111111111111111111111111111111111111111111111111"
+	confirmedAndSeen := "2222222222222222222222222222222222222222222222222222222222222222"
+	confirmedButNeverSeen := "3333333333333333333333333333333333333333333333333333333333333333"
+
+	if _, err := srv.db.conn.Exec(`INSERT INTO observer_neighbors (observer_id, neighbor_pubkey, scopes, status, reported_at) VALUES
+		(?, ?, '', 'responded', '2026-07-26T12:00:00Z'),
+		(?, ?, '', 'responded', '2026-07-26T12:00:00Z')`,
+		observerPubkey, confirmedAndSeen, observerPubkey, confirmedButNeverSeen); err != nil {
+		t.Fatalf("seed observer_neighbors: %v", err)
+	}
+	// Packet-path evidence exists for observerPubkey<->confirmedAndSeen but
+	// NOT for observerPubkey<->confirmedButNeverSeen.
+	if _, err := srv.db.conn.Exec(`INSERT INTO neighbor_edges (node_a, node_b, count, last_seen) VALUES (?, ?, 5, '2026-07-26T11:00:00Z')`,
+		observerPubkey, confirmedAndSeen); err != nil {
+		t.Fatalf("seed neighbor_edges: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/observers/"+observerPubkey+"/neighbors", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var body struct {
+		Neighbors []struct {
+			Pubkey         string `json:"pubkey"`
+			SeenViaPackets bool   `json:"seenViaPackets"`
+		} `json:"neighbors"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v body=%s", err, w.Body.String())
+	}
+	got := map[string]bool{}
+	for _, n := range body.Neighbors {
+		got[n.Pubkey] = n.SeenViaPackets
+	}
+	if !got[confirmedAndSeen] {
+		t.Errorf("seenViaPackets for %s = false, want true (edge exists in neighbor_edges)", confirmedAndSeen)
+	}
+	if got[confirmedButNeverSeen] {
+		t.Errorf("seenViaPackets for %s = true, want false (no edge in neighbor_edges)", confirmedButNeverSeen)
+	}
+}
+
+// The edge might be stored with the observer as node_b rather than node_a
+// (canonEdge orders node_a<=node_b) -- must still be detected.
+func TestHandleObserverNeighbors_SeenViaPacketsChecksBothEdgeColumns(t *testing.T) {
+	srv, router := setupTestServer(t)
+
+	observerPubkey := "9999999999999999999999999999999999999999999999999999999999999999"
+	neighborPubkey := "1000000000000000000000000000000000000000000000000000000000000000"
+
+	if _, err := srv.db.conn.Exec(`INSERT INTO observer_neighbors (observer_id, neighbor_pubkey, scopes, status, reported_at) VALUES (?, ?, '', 'responded', '2026-07-26T12:00:00Z')`,
+		observerPubkey, neighborPubkey); err != nil {
+		t.Fatalf("seed observer_neighbors: %v", err)
+	}
+	// neighborPubkey < observerPubkey lexicographically, so canonEdge would
+	// store it as node_a=neighborPubkey, node_b=observerPubkey.
+	if _, err := srv.db.conn.Exec(`INSERT INTO neighbor_edges (node_a, node_b, count, last_seen) VALUES (?, ?, 1, '2026-07-26T11:00:00Z')`,
+		neighborPubkey, observerPubkey); err != nil {
+		t.Fatalf("seed neighbor_edges: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/observers/"+observerPubkey+"/neighbors", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var body struct {
+		Neighbors []struct {
+			Pubkey         string `json:"pubkey"`
+			SeenViaPackets bool   `json:"seenViaPackets"`
+		} `json:"neighbors"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v body=%s", err, w.Body.String())
+	}
+	if len(body.Neighbors) != 1 || !body.Neighbors[0].SeenViaPackets {
+		t.Fatalf("expected 1 neighbor with seenViaPackets=true (edge stored as node_a), got %+v", body.Neighbors)
+	}
+}
