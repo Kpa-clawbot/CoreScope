@@ -76,6 +76,7 @@ node test-channels-ping-bot-reply.js
 node test-packet-path-map.js
 node test-ping-scores.js
 node test-observer-neighbors-report-badge.js
+node test-observer-direct-neighbors-panel.js
 
 echo ""
 echo "═══════════════════════════════════════"

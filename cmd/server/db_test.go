@@ -103,6 +103,15 @@ func setupTestDB(t *testing.T) *DB {
 
 		CREATE INDEX IF NOT EXISTS idx_observer_metrics_timestamp ON observer_metrics(timestamp);
 
+		CREATE TABLE observer_neighbors (
+			observer_id TEXT NOT NULL,
+			neighbor_pubkey TEXT NOT NULL,
+			scopes TEXT,
+			status TEXT NOT NULL,
+			reported_at TEXT,
+			PRIMARY KEY (observer_id, neighbor_pubkey)
+		);
+
 		-- Auto-populate from_pubkey for ADVERT rows so existing test fixtures
 		-- (which only set decoded_json) still attribute correctly under #1143's
 		-- exact-match column. Production migration handles legacy data; the

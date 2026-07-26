@@ -1389,6 +1389,63 @@ func (db *DB) GetObserverByID(id string) (*Observer, error) {
 	return &o, nil
 }
 
+// ObserverNeighbor is one row of an observer's CURRENT direct (zero-hop)
+// neighbor set (#1865 follow-up "Direct Neighbors" panel) -- ground truth
+// from the observer's own firmware /neighbors report, joined against nodes
+// for a display name/role when the pubkey resolves to a known node.
+type ObserverNeighbor struct {
+	Pubkey string  `json:"pubkey"`
+	Name   *string `json:"name"`
+	Role   *string `json:"role"`
+	Scopes *string `json:"scopes"`
+	Status string  `json:"status"`
+}
+
+// GetObserverNeighbors returns the observer's current direct-neighbor
+// snapshot (empty slice if none/never reported -- not an error) alongside
+// the shared report timestamp all rows carry (from observer_neighbors.
+// reported_at, which the ingestor sets identically for every row in a
+// single replace).
+func (db *DB) GetObserverNeighbors(observerID string) ([]ObserverNeighbor, string, error) {
+	rows, err := db.conn.Query(`
+		SELECT on2.neighbor_pubkey, on2.scopes, on2.status, on2.reported_at, n.name, n.role
+		FROM observer_neighbors on2
+		LEFT JOIN nodes n ON n.public_key = on2.neighbor_pubkey
+		WHERE on2.observer_id = ?
+		ORDER BY on2.neighbor_pubkey`, observerID)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+
+	result := []ObserverNeighbor{}
+	var reportedAt string
+	for rows.Next() {
+		var n ObserverNeighbor
+		var scopes, reportedAtCol, name, role sql.NullString
+		if err := rows.Scan(&n.Pubkey, &scopes, &n.Status, &reportedAtCol, &name, &role); err != nil {
+			return nil, "", err
+		}
+		if scopes.Valid && scopes.String != "" {
+			s := scopes.String
+			n.Scopes = &s
+		}
+		if name.Valid {
+			s := name.String
+			n.Name = &s
+		}
+		if role.Valid {
+			s := role.String
+			n.Role = &s
+		}
+		if reportedAtCol.Valid {
+			reportedAt = reportedAtCol.String
+		}
+		result = append(result, n)
+	}
+	return result, reportedAt, rows.Err()
+}
+
 // GetObserverIdsForRegion returns observer IDs for given IATA codes.
 func (db *DB) GetObserverIdsForRegion(regionParam string) ([]string, error) {
 	codes := normalizeRegionCodes(regionParam)

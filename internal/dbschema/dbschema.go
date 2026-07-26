@@ -97,6 +97,9 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensureLastNeighborsReportAtColumn(rw, logf); err != nil {
 		return fmt.Errorf("ensure observers.last_neighbors_report_at: %w", err)
 	}
+	if err := ensureObserverNeighborsTable(rw, logf); err != nil {
+		return fmt.Errorf("ensure observer_neighbors: %w", err)
+	}
 	// #1690: denormalized last_seen on transmissions so cold-load filters
 	// on effective recency rather than first-ever first_seen. The column
 	// add + index creation are cheap (single ALTER, indexed INTEGER
@@ -187,6 +190,7 @@ func AssertReady(ro *sql.DB) error {
 	// firmware feature). Owned by ingestor — TouchObserverNeighborsReport
 	// is the only writer.
 	mustCol("observers", "last_neighbors_report_at")
+	mustTable("observer_neighbors")
 
 	if len(missing) > 0 {
 		return fmt.Errorf("schema not migrated by ingestor; restart ingestor first. missing: %s",
@@ -753,5 +757,41 @@ func ensurePingTriggersTable(rw *sql.DB, logf Logger) error {
 		return fmt.Errorf("record ping_triggers_v1: %w", err)
 	}
 	logf("[dbschema] created ping_triggers table")
+	return nil
+}
+
+// ensureObserverNeighborsTable creates observer_neighbors for the #1865
+// follow-up "Direct Neighbors" panel: the observer's own firmware-reported
+// zero-hop neighbor table (ground truth from /neighbors, distinct from the
+// packet-path-inferred neighbor_edges graph). Deliberately a CURRENT-ONLY
+// snapshot, not history -- the ingestor's ReplaceObserverNeighbors deletes
+// and re-inserts the full set on every report, so a neighbor that drops off
+// naturally disappears rather than accumulating stale rows forever.
+func ensureObserverNeighborsTable(rw *sql.DB, logf Logger) error {
+	if err := ensureMigrationsTable(rw); err != nil {
+		return err
+	}
+	row := rw.QueryRow(`SELECT 1 FROM _migrations WHERE name = 'observer_neighbors_v1'`)
+	var one int
+	if err := row.Scan(&one); err == nil {
+		return nil // already applied
+	}
+	if _, err := rw.Exec(`CREATE TABLE IF NOT EXISTS observer_neighbors (
+		observer_id TEXT NOT NULL,
+		neighbor_pubkey TEXT NOT NULL,
+		scopes TEXT,
+		status TEXT NOT NULL,
+		reported_at TEXT,
+		PRIMARY KEY (observer_id, neighbor_pubkey)
+	)`); err != nil {
+		return fmt.Errorf("create observer_neighbors: %w", err)
+	}
+	if _, err := rw.Exec(`CREATE INDEX IF NOT EXISTS idx_observer_neighbors_observer ON observer_neighbors(observer_id)`); err != nil {
+		return fmt.Errorf("create idx_observer_neighbors_observer: %w", err)
+	}
+	if _, err := rw.Exec(`INSERT OR IGNORE INTO _migrations (name) VALUES ('observer_neighbors_v1')`); err != nil {
+		return fmt.Errorf("record observer_neighbors_v1: %w", err)
+	}
+	logf("[dbschema] created observer_neighbors table")
 	return nil
 }

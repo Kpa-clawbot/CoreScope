@@ -1734,6 +1734,64 @@ func (s *Store) TouchObserverNeighborsReport(observerID, reportedAt string) erro
 	return err
 }
 
+// ObserverNeighborEntry is one entry from an observer's /neighbors report,
+// carrying enough to populate the observer_neighbors table.
+type ObserverNeighborEntry struct {
+	Pubkey string // lowercase, already validated non-empty by the caller
+	Scopes string // normalized "#"-prefixed form; empty for timeout entries
+	Status string // "responded" | "timeout"
+}
+
+// ReplaceObserverNeighbors stores the observer's CURRENT direct (zero-hop)
+// neighbor set from its own firmware neighbor table -- ground truth, distinct
+// from the packet-path-inferred neighbor_edges graph (#1865 follow-up,
+// "Direct Neighbors" panel). Deliberately a full replace (delete + re-insert)
+// rather than an upsert: a neighbor that drops off a subsequent report is a
+// real signal (it's no longer a direct neighbor) and must disappear, not
+// linger as stale data.
+//
+// Call this AFTER TouchObserverNeighborsReport in the same handler: it reuses
+// the just-updated observers.last_neighbors_report_at as an out-of-order
+// guard. If the given reportedAt doesn't match what's now stored there, a
+// newer report already won the MAX race and this one is stale -- skip the
+// replace so an older, out-of-order report can't clobber a newer snapshot.
+func (s *Store) ReplaceObserverNeighbors(observerID string, neighbors []ObserverNeighborEntry, reportedAt string) error {
+	if observerID == "" {
+		return nil
+	}
+	reportedAt = normalizeReportTS(reportedAt)
+	if reportedAt == "" {
+		return nil
+	}
+	var curAt sql.NullString
+	row := s.db.QueryRow(`SELECT last_neighbors_report_at FROM observers WHERE id = ?`, observerID)
+	if row.Scan(&curAt) == nil && curAt.Valid && curAt.String != "" && curAt.String != reportedAt {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM observer_neighbors WHERE observer_id = ?`, observerID); err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare(`INSERT INTO observer_neighbors (observer_id, neighbor_pubkey, scopes, status, reported_at) VALUES (?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, n := range neighbors {
+		if n.Pubkey == "" {
+			continue
+		}
+		if _, err := stmt.Exec(observerID, n.Pubkey, n.Scopes, n.Status, reportedAt); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // normalizeConfiguredScopeList applies the same "#"-prefix normalization
 // default_scope already gets (regions.Normalize, via matchScope) to a
 // comma-separated /neighbors-report scope list, so both fields display
