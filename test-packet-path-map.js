@@ -51,8 +51,8 @@ test('draws every branch, not just the deepest one', () => {
   assert.ok(/branches\.map/.test(src), 'should iterate all branches from the response');
 });
 
-test('draws the deepest branch on top of the others (primary drawn last)', () => {
-  assert.ok(/a\.primary \? 1 : 0/.test(src) || /primary.*sort/.test(src), 'should reorder so the primary branch paints last');
+test('draws highlighted branch(es) on top of the others', () => {
+  assert.ok(/a\.highlightRole \? 1 : 0/.test(src), 'should reorder so highlighted (farthest/deepest) branches paint last');
 });
 
 test('handles Escape key and click-outside to close, matching other CoreScope modals', () => {
@@ -685,6 +685,185 @@ function makeSandbox(apiImpl) {
       passed++;
       console.log('  ✅ distanceFromFirstKm renders as a "N km away" label in the tooltip');
     } catch (e) { failed++; console.log('  ❌ distanceFromFirstKm renders as a "N km away" label in the tooltip: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
+      // More hops does not mean more geographic distance, and they're not
+      // always the same branch -- both deserve their own highlight. Here
+      // the SHALLOWER branch (2 hops) travels much farther (200km) than
+      // the DEEPER one (5 hops, only 50km): a dense-mesh short-hop chain
+      // vs. a couple of long-range links. Both get weight-2 (highlighted)
+      // styling, but in DIFFERENT colors -- farthest keeps the accent
+      // color, deepest gets the second (purple) color -- and the legend
+      // shows both.
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [
+          { hops: 5, points: [], observer: { name: 'DeepButClose', lat: 56.0, lon: 10.0 }, distanceFromFirstKm: 50 },
+          { hops: 2, points: [], observer: { name: 'ShallowButFar', lat: 57.0, lon: 11.0 }, distanceFromFirstKm: 200 },
+          // A third, fully-secondary branch -- neither farthest nor
+          // deepest -- so there's something left for the declutter
+          // toggle to actually hide (with only the two highlighted
+          // branches, hiddenCount would be 0 and no toggle appears at
+          // all, same as the existing single-branch case).
+          { hops: 3, points: [], observer: { name: 'PlainSecondary', lat: 56.5, lon: 10.5 }, distanceFromFirstKm: 80 },
+        ],
+      }));
+
+      const markerCalls = [];
+      ctx.L = {
+        map: () => ({ setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {} }),
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: (latlng, opts) => {
+          const entry = { opts, tooltip: null };
+          markerCalls.push(entry);
+          return { addTo() { return this; }, bindTooltip(t) { entry.tooltip = t; return this; }, on() { return this; } };
+        },
+        polyline: () => ({ addTo() { return this; } }),
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const deepMarker = markerCalls.find((m) => m.tooltip && m.tooltip.includes('DeepButClose'));
+      const farMarker = markerCalls.find((m) => m.tooltip && m.tooltip.includes('ShallowButFar'));
+      assert.ok(deepMarker && farMarker, 'expected markers for both observers, got: ' + JSON.stringify(markerCalls.map((m) => m.tooltip)));
+      assert.strictEqual(farMarker.opts.weight, 2, 'ShallowButFar (200km, actually farthest) should get highlighted styling (weight 2), got ' + farMarker.opts.weight);
+      assert.strictEqual(deepMarker.opts.weight, 2, 'DeepButClose (5 hops, most hops) should ALSO get highlighted styling (weight 2) via its own "deepest" role, got ' + deepMarker.opts.weight);
+      // Both are observer-only (no relay hop) points, so both FILL
+      // yellow (the constant "this is an observer" color) -- the role
+      // distinction shows up in the ring (stroke) color instead.
+      assert.notStrictEqual(farMarker.opts.color, deepMarker.opts.color, 'farthest and deepest are different branches here, so their marker rings must use different colors, got matching color ' + farMarker.opts.color);
+
+      const legendLabel = ctx.document.getElementById('packetPathPrimaryLegendLabel');
+      assert.ok(legendLabel && legendLabel.textContent.includes('farthest-traveled') && !legendLabel.textContent.includes('deepest'), 'primary legend slot should say just "farthest-traveled" (deepest gets its own slot) when they diverge, got: ' + (legendLabel && legendLabel.textContent));
+      const deepestLegendItem = ctx.document.getElementById('packetPathDeepestLegendItem');
+      assert.strictEqual(deepestLegendItem.style.display, 'inline-flex', 'the second "deepest" legend swatch should be shown when farthest and deepest are different branches');
+      const controlsEl = ctx.document.getElementById('packetPathControls');
+      assert.ok(controlsEl.innerHTML.includes('farthest-traveled and deepest routes'), 'declutter checkbox should mention both routes when they diverge, got: ' + controlsEl.innerHTML);
+      passed++;
+      console.log('  ✅ farthest and deepest get their own distinct highlight (color + legend entry) when they are different branches');
+    } catch (e) { failed++; console.log('  ❌ farthest and deepest get their own distinct highlight (color + legend entry) when they are different branches: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
+      // The common case: the deepest branch IS also the farthest one.
+      // Must show a SINGLE combined highlight (not two), still only the
+      // accent color, with a combined label -- not a second purple
+      // "deepest" swatch for a branch that's already shown.
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [
+          { hops: 5, points: [], observer: { name: 'DeepAndFar', lat: 57.0, lon: 11.0 }, distanceFromFirstKm: 200 },
+          { hops: 2, points: [], observer: { name: 'ShallowAndClose', lat: 56.0, lon: 10.0 }, distanceFromFirstKm: 20 },
+        ],
+      }));
+      ctx.L = {
+        map: () => ({ setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {} }),
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: () => ({ addTo() { return this; }, bindTooltip() { return this; }, on() { return this; } }),
+        polyline: () => ({ addTo() { return this; } }),
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const legendLabel = ctx.document.getElementById('packetPathPrimaryLegendLabel');
+      assert.ok(legendLabel && legendLabel.textContent.includes('farthest-traveled & deepest'), 'legend should combine both facts into one label for the same branch, got: ' + (legendLabel && legendLabel.textContent));
+      const deepestLegendItem = ctx.document.getElementById('packetPathDeepestLegendItem');
+      assert.notStrictEqual(deepestLegendItem.style.display, 'inline-flex', 'the second "deepest" legend swatch must stay hidden when it is the same branch as farthest, got display=' + deepestLegendItem.style.display);
+      passed++;
+      console.log('  ✅ shows one combined highlight (not two) when the deepest branch is also the farthest one');
+    } catch (e) { failed++; console.log('  ❌ shows one combined highlight (not two) when the deepest branch is also the farthest one: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
+      // No branch has distanceFromFirstKm at all (e.g. sparse GPS
+      // coverage) -- falls back to the old hops-based pick, and the
+      // legend/checkbox wording must say so honestly rather than still
+      // claiming "farthest-traveled" for a branch nobody measured.
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [
+          { hops: 3, points: [], observer: { name: 'ObsA', lat: 56.0, lon: 10.0 } },
+          { hops: 1, points: [], observer: { name: 'ObsB', lat: 56.1, lon: 10.1 } },
+        ],
+      }));
+      ctx.L = {
+        map: () => ({ setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {} }),
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: () => ({ addTo() { return this; }, bindTooltip() { return this; }, on() { return this; } }),
+        polyline: () => ({ addTo() { return this; } }),
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const legendLabel = ctx.document.getElementById('packetPathPrimaryLegendLabel');
+      assert.ok(legendLabel && legendLabel.textContent.includes('deepest (most hops)'), 'legend should honestly say "deepest (most hops)" when no branch has distance data, got: ' + (legendLabel && legendLabel.textContent));
+      assert.ok(!legendLabel.textContent.includes('farthest'), 'legend must not claim "farthest" when nothing was actually measured by distance, got: ' + legendLabel.textContent);
+      const controlsEl = ctx.document.getElementById('packetPathControls');
+      assert.ok(controlsEl.innerHTML.includes('deepest (most hops)'), 'declutter checkbox label should also use the honest wording, got: ' + controlsEl.innerHTML);
+      passed++;
+      console.log('  ✅ falls back to hop-based selection with honest "deepest (most hops)" wording when no branch has distance data');
+    } catch (e) { failed++; console.log('  ❌ falls back to hop-based selection with honest "deepest (most hops)" wording when no branch has distance data: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
+      // Status line should report how long it took to reach the deepest
+      // and farthest stations, plus the overall spread duration (the
+      // largest secondsAfterFirst across ALL branches, not just those
+      // two -- a station that's neither can still be the last to hear
+      // it, e.g. a middling branch stuck behind a slow relay).
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [
+          { hops: 5, points: [], observer: { name: 'DeepButClose', lat: 56.0, lon: 10.0 }, distanceFromFirstKm: 50, secondsAfterFirst: 4.1 },
+          { hops: 2, points: [], observer: { name: 'ShallowButFar', lat: 57.0, lon: 11.0 }, distanceFromFirstKm: 200, secondsAfterFirst: 3.2 },
+          { hops: 3, points: [], observer: { name: 'SlowestOfAll', lat: 56.5, lon: 10.5 }, distanceFromFirstKm: 80, secondsAfterFirst: 9.7 },
+        ],
+      }));
+      ctx.L = {
+        map: () => ({ setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {} }),
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: () => ({ addTo() { return this; }, bindTooltip() { return this; }, on() { return this; } }),
+        polyline: () => ({ addTo() { return this; } }),
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const status = ctx.document.getElementById('packetPathStatus');
+      assert.ok(status.textContent.includes('deepest reached 5 hops (4.1s)'), 'status should show the deepest branch\'s own elapsed time, got: ' + status.textContent);
+      assert.ok(status.textContent.includes('farthest reached 200.0km (3.2s)'), 'status should show the farthest branch\'s distance and its own elapsed time, got: ' + status.textContent);
+      assert.ok(status.textContent.includes('fully spread in 9.7s'), 'status should report the LARGEST elapsed time across all branches (SlowestOfAll, neither deepest nor farthest), not just the deepest/farthest ones, got: ' + status.textContent);
+      passed++;
+      console.log('  ✅ status line reports deepest/farthest elapsed time plus overall spread duration (max across all branches)');
+    } catch (e) { failed++; console.log('  ❌ status line reports deepest/farthest elapsed time plus overall spread duration (max across all branches): ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
+      // No branch has secondsAfterFirst at all -- must omit all three
+      // timing additions cleanly rather than showing "(NaNs)" or a
+      // spurious "fully spread in 0.0s".
+      const ctx = makeSandbox(() => Promise.resolve({
+        hash: 'deadbeef',
+        branches: [
+          { hops: 3, points: [], observer: { name: 'ObsA', lat: 56.0, lon: 10.0 }, distanceFromFirstKm: 40 },
+        ],
+      }));
+      ctx.L = {
+        map: () => ({ setView() { return this; }, fitBounds() {}, invalidateSize() {}, remove() {} }),
+        tileLayer: () => ({ addTo() { return this; } }),
+        circleMarker: () => ({ addTo() { return this; }, bindTooltip() { return this; }, on() { return this; } }),
+        polyline: () => ({ addTo() { return this; } }),
+      };
+
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const status = ctx.document.getElementById('packetPathStatus');
+      assert.ok(status.textContent.includes('deepest reached 3 hops') && !status.textContent.includes('deepest reached 3 hops ('), 'deepest line should have no "(Xs)" suffix when secondsAfterFirst is unknown, got: ' + status.textContent);
+      assert.ok(status.textContent.includes('farthest reached 40.0km') && !status.textContent.includes('farthest reached 40.0km ('), 'farthest line should have no "(Xs)" suffix when secondsAfterFirst is unknown, got: ' + status.textContent);
+      assert.ok(!status.textContent.includes('fully spread'), 'should not claim a spread duration when no branch has timing data, got: ' + status.textContent);
+      passed++;
+      console.log('  ✅ omits timing suffixes and the spread-duration stat when no branch has secondsAfterFirst');
+    } catch (e) { failed++; console.log('  ❌ omits timing suffixes and the spread-duration stat when no branch has secondsAfterFirst: ' + e.message); }
   })();
 
   await (async () => {

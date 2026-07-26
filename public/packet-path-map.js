@@ -37,6 +37,17 @@
     return '+' + m + 'm ' + s + 's';
   }
 
+  // Plain "Xs"/"Xm Ys" duration, no leading "+" or "first to arrive" --
+  // for footer stats standing on their own (unlike formatElapsed's
+  // tooltip use, these aren't continuing a "this station arrived..."
+  // sentence).
+  function formatDuration(seconds) {
+    if (seconds < 60) return seconds.toFixed(1) + 's';
+    var m = Math.floor(seconds / 60);
+    var s = Math.round(seconds % 60);
+    return m + 'm ' + s + 's';
+  }
+
   // How much bigger/fuzzier an approximate marker's ring should be than
   // a normal marker, given how many positioned neighbors fed the
   // estimate (more = tighter) and how much they disagreed (a wide
@@ -131,7 +142,8 @@
         '<h3 style="margin:0 0 4px;padding-right:24px">Relay Path</h3>' +
         '<p class="text-muted" style="margin:0 0 8px;font-size:12px">How far and how wide this packet spread. Click a marker to open that node\'s detail page.</p>' +
         '<div style="display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;margin:0 0 10px;font-size:11px;color:var(--text-muted)">' +
-          '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:14px;height:2px;background:var(--accent)"></span>farthest-traveled route</span>' +
+          '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:14px;height:2px;background:var(--accent)"></span><span id="packetPathPrimaryLegendLabel">farthest-traveled route</span></span>' +
+          '<span id="packetPathDeepestLegendItem" style="display:none;align-items:center;gap:4px"><span style="display:inline-block;width:14px;height:2px;background:var(--status-purple)"></span>deepest (most hops) route</span>' +
           '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:14px;height:2px;background:var(--text-muted)"></span>other station</span>' +
           '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:9px;height:9px;border:2px dashed var(--text-muted);border-radius:50%;box-sizing:border-box"></span>approximate position</span>' +
           '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:9px;height:9px;border:2px solid var(--status-green);border-radius:50%;box-sizing:border-box"></span>first to hear it</span>' +
@@ -157,10 +169,52 @@
     }
 
     var branches = data.branches || [];
-    var plotted = branches.map(function (b, i) {
+    var plotted = branches.map(function (b) {
       var built = chainForBranch(b);
-      return { branch: b, chain: built.chain, missing: built.missing, primary: i === 0 };
+      return { branch: b, chain: built.chain, missing: built.missing, highlightRole: null };
     }).filter(function (p) { return p.chain.length > 0; });
+
+    // Two different questions, not always the same branch: which station
+    // did the packet reach at the greatest real-world DISTANCE
+    // (distanceFromFirstKm), and which took the most HOPS to reach it (a
+    // dense area can take many short hops; a couple of long-range links
+    // can cover more real distance in fewer -- caught on a real packet:
+    // 7 hops but 117km vs. 6 hops but 124km). Both get their own
+    // highlight when they're different branches; when they coincide (the
+    // common case) it's shown once, combined, exactly as before.
+    var hasDistanceData = plotted.some(function (p) { return typeof p.branch.distanceFromFirstKm === 'number'; });
+    var deepestIdx = 0;
+    var deepestHopsSeen = -1;
+    plotted.forEach(function (p, i) {
+      if (p.branch.hops > deepestHopsSeen) {
+        deepestHopsSeen = p.branch.hops;
+        deepestIdx = i;
+      }
+    });
+    var farthestIdx = -1;
+    if (hasDistanceData) {
+      var farthestKm = -1;
+      plotted.forEach(function (p, i) {
+        var d = p.branch.distanceFromFirstKm;
+        if (typeof d === 'number' && d > farthestKm) {
+          farthestKm = d;
+          farthestIdx = i;
+        }
+      });
+    }
+    // 'deepestFallback' (no distance data anywhere) reuses the farthest
+    // slot's accent color -- there's only one highlighted concept in
+    // that case, same single-highlight look as before this branch/role
+    // split existed. 'deepest' (purple) only appears when it's actually
+    // a DIFFERENT branch from farthest -- the genuinely new information.
+    if (!hasDistanceData) {
+      if (plotted[deepestIdx]) plotted[deepestIdx].highlightRole = 'deepestFallback';
+    } else if (farthestIdx === deepestIdx) {
+      if (plotted[deepestIdx]) plotted[deepestIdx].highlightRole = 'both';
+    } else {
+      if (plotted[farthestIdx]) plotted[farthestIdx].highlightRole = 'farthest';
+      if (plotted[deepestIdx]) plotted[deepestIdx].highlightRole = 'deepest';
+    }
 
     if (plotted.length === 0) {
       if (statusEl) {
@@ -193,8 +247,16 @@
 
     var outline = cssVar('--surface-0');
     var accent = cssVar('--accent');
+    var deepestColor = cssVar('--status-purple');
     var observerColor = cssVar('--status-yellow');
     var muted = cssVar('--text-muted');
+    // 'both'/'farthest'/'deepestFallback' all read as the accent color;
+    // only a genuinely-distinct 'deepest' branch gets the second color.
+    function colorForRole(role) {
+      if (role === 'deepest') return deepestColor;
+      if (role) return accent;
+      return muted;
+    }
 
     // Shade every touched area's configured boundary as a faint
     // background layer -- ties the "touched: X, Y" footer text to actual
@@ -238,11 +300,13 @@
     // appearances (#1... a packet heard by 12 stations through one shared
     // repeater was showing "11 approximate" for what was really 1 node).
     var approxSeen = {};
-    // Draw secondary branches first so the primary (deepest) one ends up on top.
-    var ordered = plotted.slice().sort(function (a, b) { return (a.primary ? 1 : 0) - (b.primary ? 1 : 0); });
+    // Draw non-highlighted branches first so the highlighted one(s) --
+    // farthest and/or deepest -- end up drawn on top.
+    var ordered = plotted.slice().sort(function (a, b) { return (a.highlightRole ? 1 : 0) - (b.highlightRole ? 1 : 0); });
     ordered.forEach(function (p) {
       missingTotal += p.missing;
-      var lineColor = p.primary ? accent : muted;
+      var isHighlighted = !!p.highlightRole;
+      var lineColor = colorForRole(p.highlightRole);
       var line = [];
       p.chain.forEach(function (pt) {
         if (pt.approx) {
@@ -255,7 +319,17 @@
         bounds.push([pt.lat, pt.lon]);
         line.push([pt.lat, pt.lon]);
         var color = pt.isObserver ? observerColor : lineColor;
-        var radius = p.primary ? (pt.isObserver ? 7 : 6) : (pt.isObserver ? 5 : 4);
+        var radius = isHighlighted ? (pt.isObserver ? 7 : 6) : (pt.isObserver ? 5 : 4);
+        // Observer dots always FILL yellow (the established "this is a
+        // hearing station" language, kept regardless of role) -- but for
+        // an observer that's also the branch's only point (a direct/
+        // 0-hop reception has no relay hops and thus no polyline
+        // either), fill color alone can't show whether it's the
+        // farthest, deepest, or neither. The STROKE carries the role
+        // color instead when highlighted, so a farthest/deepest observer
+        // still reads as accent/purple-ringed, not just "a yellow dot"
+        // indistinguishable from every other observer.
+        var strokeColor = isHighlighted ? lineColor : outline;
         var markerOpts = pt.approx
           // Approximate (borrowed-from-neighbor) position: larger,
           // thick-dashed ring with a faint fill -- a plain hollow outline
@@ -265,10 +339,10 @@
           // more agreeing neighbors = tighter, more solid; one neighbor
           // or a wide spread among several = bigger, fainter.
           ? {
-              radius: radius + approxRadiusBonus(pt.approxNeighborCount, pt.approxSpreadKm), color: color, weight: 3,
+              radius: radius + approxRadiusBonus(pt.approxNeighborCount, pt.approxSpreadKm), color: isHighlighted ? lineColor : color, weight: 3,
               fillColor: color, fillOpacity: approxFillOpacity(pt.approxNeighborCount), dashArray: '5,4',
             }
-          : { radius: radius, color: outline, weight: p.primary ? 2 : 1, fillColor: color, fillOpacity: p.primary ? 1 : 0.8 };
+          : { radius: radius, color: strokeColor, weight: isHighlighted ? 2 : 1, fillColor: color, fillOpacity: isHighlighted ? 1 : 0.8 };
         var approxNote = '';
         if (pt.approx) {
           approxNote = ', approx. position';
@@ -286,11 +360,11 @@
             window.location.hash = '#/nodes/' + encodeURIComponent(pt.publicKey);
           });
         }
-        markerEntries.push({ layer: marker, primary: p.primary, approx: !!pt.approx });
+        markerEntries.push({ layer: marker, primary: isHighlighted, approx: !!pt.approx });
       });
       if (line.length > 1) {
-        var polyline = L.polyline(line, { color: lineColor, weight: p.primary ? 2.5 : 1.5, opacity: p.primary ? 0.85 : 0.5 }).addTo(map);
-        polylineEntries.push({ layer: polyline, primary: p.primary });
+        var polyline = L.polyline(line, { color: lineColor, weight: isHighlighted ? 2.5 : 1.5, opacity: isHighlighted ? 0.85 : 0.5 }).addTo(map);
+        polylineEntries.push({ layer: polyline, primary: isHighlighted });
       }
     });
     // The earliest-arriving observation, drawn last so its landmark ring
@@ -315,17 +389,40 @@
     setTimeout(function () { map.invalidateSize(); }, 120);
     activeMap = map;
 
+    // Label the highlight(s) honestly, matching the role split above:
+    // no distance data at all -> one accent-colored "deepest (most
+    // hops)" route (old single-highlight look); farthest and deepest
+    // are the same branch -> one accent-colored route, combined label;
+    // genuinely different branches -> two legend entries, accent
+    // "farthest-traveled" plus a second purple "deepest (most hops)".
+    var primaryLabel;
+    var showDeepestLegendItem = false;
+    if (!hasDistanceData) {
+      primaryLabel = 'deepest (most hops)';
+    } else if (farthestIdx === deepestIdx) {
+      primaryLabel = 'farthest-traveled & deepest';
+    } else {
+      primaryLabel = 'farthest-traveled';
+      showDeepestLegendItem = true;
+    }
+    var primaryLegendLabel = document.getElementById('packetPathPrimaryLegendLabel');
+    if (primaryLegendLabel) primaryLegendLabel.textContent = primaryLabel + ' route';
+    var deepestLegendItem = document.getElementById('packetPathDeepestLegendItem');
+    if (deepestLegendItem && showDeepestLegendItem) deepestLegendItem.style.display = 'inline-flex';
+
     // Build whichever filter checkboxes are actually relevant for this
     // packet -- a single-branch packet gets no declutter toggle, one
     // with no approximate positions gets no approx-only toggle, etc.
     var controlsEl = document.getElementById('packetPathControls');
     var controlsHtml = '';
-    var hiddenCount = plotted.length - 1;
-    if (plotted.length > 1) {
+    var highlightedCount = plotted.filter(function (p) { return !!p.highlightRole; }).length;
+    var hiddenCount = plotted.length - highlightedCount;
+    var toggleRouteLabel = showDeepestLegendItem ? 'farthest-traveled and deepest routes' : (primaryLabel + ' route');
+    if (plotted.length > highlightedCount) {
       controlsHtml +=
         '<label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:0 0 8px;cursor:pointer;color:var(--text-muted)">' +
           '<input type="checkbox" id="packetPathPrimaryOnly">' +
-          'Show only the farthest-traveled route (' + hiddenCount + ' other station' + (hiddenCount === 1 ? '' : 's') + ' hidden when checked)' +
+          'Show only the ' + toggleRouteLabel + ' (' + hiddenCount + ' other station' + (hiddenCount === 1 ? '' : 's') + ' hidden when checked)' +
         '</label>';
     }
     if (approxTotal > 0) {
@@ -381,10 +478,27 @@
     }
 
     var deepestHops = branches[0].hops;
+    var deepestBranch = plotted[deepestIdx] && plotted[deepestIdx].branch;
+    var deepestSeconds = deepestBranch && typeof deepestBranch.secondsAfterFirst === 'number' ? deepestBranch.secondsAfterFirst : null;
     var statusParts = [
       plotted.length + ' of ' + branches.length + ' station' + (branches.length === 1 ? '' : 's') + ' shown',
-      'deepest reached ' + deepestHops + ' hop' + (deepestHops === 1 ? '' : 's'),
+      'deepest reached ' + deepestHops + ' hop' + (deepestHops === 1 ? '' : 's') + (deepestSeconds != null ? ' (' + formatDuration(deepestSeconds) + ')' : ''),
     ];
+    if (hasDistanceData) {
+      var farthestBranch = plotted[farthestIdx] && plotted[farthestIdx].branch;
+      var farthestSeconds = farthestBranch && typeof farthestBranch.secondsAfterFirst === 'number' ? farthestBranch.secondsAfterFirst : null;
+      statusParts.push('farthest reached ' + farthestKm.toFixed(1) + 'km' + (farthestSeconds != null ? ' (' + formatDuration(farthestSeconds) + ')' : ''));
+    }
+    // How long the whole flood took to finish reaching every station it
+    // ever reached -- the largest secondsAfterFirst across ALL branches,
+    // not just the farthest/deepest ones (a station that's neither can
+    // still be the last to hear it).
+    var maxSpreadSeconds = null;
+    plotted.forEach(function (p) {
+      var s = p.branch.secondsAfterFirst;
+      if (typeof s === 'number' && (maxSpreadSeconds === null || s > maxSpreadSeconds)) maxSpreadSeconds = s;
+    });
+    if (maxSpreadSeconds != null && maxSpreadSeconds > 0) statusParts.push('fully spread in ' + formatDuration(maxSpreadSeconds));
     if (firstPoint) statusParts.push('entered near ' + firstPoint.name);
     if (approxTotal > 0) statusParts.push(approxTotal + ' approximate (estimated from neighbors)');
     if (missingTotal > 0) statusParts.push(missingTotal + ' hop' + (missingTotal === 1 ? '' : 's') + ' without a known position (not shown)');
