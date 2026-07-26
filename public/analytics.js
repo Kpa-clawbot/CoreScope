@@ -5179,7 +5179,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           }).join('');
           setSectionHtml(areaAdoptEl, detailsSection(
             'Scope Adoption by Area (' + byArea.length.toLocaleString() + ' areas)',
-            null,
+            'All-time, not limited to the window above — of the real nodes sitting in each configured area, how many actually support its linked region (own default_scope, or ever relayed it)?',
             areaGroups,
             'scope-adoption-by-area'
           ));
