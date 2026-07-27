@@ -4181,7 +4181,7 @@ func TestHandleScopeStats(t *testing.T) {
 	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
 		t.Fatalf("add scope_name column: %v", err)
 	}
-	srv.db.hasScopeName = true
+	srv.db.hasScopeNameFlag.forceTrue()
 
 	// Clear seed transmissions so this test isolates scope-stats math.
 	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
@@ -4274,7 +4274,7 @@ func TestHandleScopeStats_HourlyActivityByRegion(t *testing.T) {
 	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
 		t.Fatalf("add scope_name column: %v", err)
 	}
-	srv.db.hasScopeName = true
+	srv.db.hasScopeNameFlag.forceTrue()
 	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
 		t.Fatalf("clear transmissions: %v", err)
 	}
@@ -4353,7 +4353,7 @@ func TestHandleScopeStats_ChannelScopeAdoption(t *testing.T) {
 	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
 		t.Fatalf("add scope_name column: %v", err)
 	}
-	srv.db.hasScopeName = true
+	srv.db.hasScopeNameFlag.forceTrue()
 	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
 		t.Fatalf("clear transmissions: %v", err)
 	}
@@ -4422,7 +4422,7 @@ func TestHandleScopeStats_ChannelScopeAdoption_RegionsOrderedByUsage(t *testing.
 	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
 		t.Fatalf("add scope_name column: %v", err)
 	}
-	srv.db.hasScopeName = true
+	srv.db.hasScopeNameFlag.forceTrue()
 	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
 		t.Fatalf("clear transmissions: %v", err)
 	}
@@ -4479,7 +4479,7 @@ func TestHandleScopeStats_ChannelScopeAdoption_Uncapped(t *testing.T) {
 	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
 		t.Fatalf("add scope_name column: %v", err)
 	}
-	srv.db.hasScopeName = true
+	srv.db.hasScopeNameFlag.forceTrue()
 	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
 		t.Fatalf("clear transmissions: %v", err)
 	}
@@ -4521,7 +4521,7 @@ func TestHandleScopeStats_ChannelMessagesExcludesOtherPayloadTypes(t *testing.T)
 	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
 		t.Fatalf("add scope_name column: %v", err)
 	}
-	srv.db.hasScopeName = true
+	srv.db.hasScopeNameFlag.forceTrue()
 	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
 		t.Fatalf("clear transmissions: %v", err)
 	}
@@ -4564,7 +4564,7 @@ func TestHandleScopeStats_UnusedRegions(t *testing.T) {
 	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
 		t.Fatalf("add scope_name column: %v", err)
 	}
-	srv.db.hasScopeName = true
+	srv.db.hasScopeNameFlag.forceTrue()
 
 	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
 		t.Fatalf("clear transmissions: %v", err)
@@ -4627,7 +4627,7 @@ func TestHandleScopeStats_RepeatersByRegion(t *testing.T) {
 	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
 		t.Fatalf("add scope_name column: %v", err)
 	}
-	srv.db.hasScopeName = true
+	srv.db.hasScopeNameFlag.forceTrue()
 
 	if _, err := srv.db.conn.Exec(
 		`INSERT INTO nodes (public_key, name, role) VALUES ('aabbccdd0011', 'TestRepeater1', 'repeater')`,
@@ -4693,7 +4693,7 @@ func TestHandleScopeStats_BridgeRepeaters(t *testing.T) {
 	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
 		t.Fatalf("add scope_name column: %v", err)
 	}
-	srv.db.hasScopeName = true
+	srv.db.hasScopeNameFlag.forceTrue()
 
 	if _, err := srv.db.conn.Exec(
 		`INSERT INTO nodes (public_key, name, role) VALUES ('bbbbccdd0011', 'BridgeNode', 'repeater')`,
@@ -4762,12 +4762,12 @@ func TestHandleScopeStats_OriginatingNodesByRegion(t *testing.T) {
 	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
 		t.Fatalf("add scope_name column: %v", err)
 	}
-	srv.db.hasScopeName = true
-	if !srv.db.hasDefaultScope {
+	srv.db.hasScopeNameFlag.forceTrue()
+	if !srv.db.hasDefaultScope() {
 		if _, err := srv.db.conn.Exec(`ALTER TABLE nodes ADD COLUMN default_scope TEXT DEFAULT NULL`); err != nil {
 			t.Fatalf("add default_scope column: %v", err)
 		}
-		srv.db.hasDefaultScope = true
+		srv.db.hasDefaultScopeFlag.forceTrue()
 	}
 
 	if _, err := srv.db.conn.Exec(
@@ -4804,12 +4804,12 @@ func TestHandleScopeStats_ScopeAdoptionByArea(t *testing.T) {
 	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
 		t.Fatalf("add scope_name column: %v", err)
 	}
-	srv.db.hasScopeName = true
-	if !srv.db.hasDefaultScope {
+	srv.db.hasScopeNameFlag.forceTrue()
+	if !srv.db.hasDefaultScope() {
 		if _, err := srv.db.conn.Exec(`ALTER TABLE nodes ADD COLUMN default_scope TEXT DEFAULT NULL`); err != nil {
 			t.Fatalf("add default_scope column: %v", err)
 		}
-		srv.db.hasDefaultScope = true
+		srv.db.hasDefaultScopeFlag.forceTrue()
 	}
 	f := func(v float64) *float64 { return &v }
 	srv.cfg.Areas = map[string]AreaEntry{
@@ -4862,12 +4862,12 @@ func TestHandleScopeStats_ScopeAdoptionByArea_ZeroMatchKeyPresent(t *testing.T) 
 	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
 		t.Fatalf("add scope_name column: %v", err)
 	}
-	srv.db.hasScopeName = true
-	if !srv.db.hasDefaultScope {
+	srv.db.hasScopeNameFlag.forceTrue()
+	if !srv.db.hasDefaultScope() {
 		if _, err := srv.db.conn.Exec(`ALTER TABLE nodes ADD COLUMN default_scope TEXT DEFAULT NULL`); err != nil {
 			t.Fatalf("add default_scope column: %v", err)
 		}
-		srv.db.hasDefaultScope = true
+		srv.db.hasDefaultScopeFlag.forceTrue()
 	}
 	f := func(v float64) *float64 { return &v }
 	srv.cfg.Areas = map[string]AreaEntry{
@@ -4912,7 +4912,7 @@ func TestHandleScopeStatsInvalidWindow(t *testing.T) {
 	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
 		t.Fatalf("add scope_name column: %v", err)
 	}
-	srv.db.hasScopeName = true
+	srv.db.hasScopeNameFlag.forceTrue()
 
 	req := httptest.NewRequest("GET", "/api/scope-stats?window=invalid", nil)
 	w := httptest.NewRecorder()

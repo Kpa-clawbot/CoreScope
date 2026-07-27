@@ -22,11 +22,11 @@ func TestHandleChannelMessages_EntryPointArea(t *testing.T) {
 	if _, err := srv.db.conn.Exec(`DELETE FROM observations`); err != nil {
 		t.Fatalf("clear observations: %v", err)
 	}
-	if !srv.db.hasScopeName {
+	if !srv.db.hasScopeName() {
 		if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
 			t.Fatalf("add scope_name column: %v", err)
 		}
-		srv.db.hasScopeName = true
+		srv.db.hasScopeNameFlag.forceTrue()
 	}
 
 	f := func(v float64) *float64 { return &v }
@@ -103,11 +103,11 @@ func TestHandleChannelMessages_EntryPointArea_Unresolved(t *testing.T) {
 	if _, err := srv.db.conn.Exec(`DELETE FROM observations`); err != nil {
 		t.Fatalf("clear observations: %v", err)
 	}
-	if !srv.db.hasScopeName {
+	if !srv.db.hasScopeName() {
 		if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
 			t.Fatalf("add scope_name column: %v", err)
 		}
-		srv.db.hasScopeName = true
+		srv.db.hasScopeNameFlag.forceTrue()
 	}
 	// No areas configured at all.
 	srv.cfg.Areas = nil
@@ -172,11 +172,11 @@ func TestHandleChannelMessages_EntryPointArea_DirectObserverFallback(t *testing.
 	if _, err := srv.db.conn.Exec(`DELETE FROM observations`); err != nil {
 		t.Fatalf("clear observations: %v", err)
 	}
-	if !srv.db.hasScopeName {
+	if !srv.db.hasScopeName() {
 		if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
 			t.Fatalf("add scope_name column: %v", err)
 		}
-		srv.db.hasScopeName = true
+		srv.db.hasScopeNameFlag.forceTrue()
 	}
 
 	f := func(v float64) *float64 { return &v }
@@ -256,11 +256,11 @@ func TestHandleChannelMessages_EntryPointArea_DirectObserverFallback_NoGPS(t *te
 	if _, err := srv.db.conn.Exec(`DELETE FROM observations`); err != nil {
 		t.Fatalf("clear observations: %v", err)
 	}
-	if !srv.db.hasScopeName {
+	if !srv.db.hasScopeName() {
 		if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
 			t.Fatalf("add scope_name column: %v", err)
 		}
-		srv.db.hasScopeName = true
+		srv.db.hasScopeNameFlag.forceTrue()
 	}
 
 	f := func(v float64) *float64 { return &v }
