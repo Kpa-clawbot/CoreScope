@@ -149,6 +149,8 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/audio-lab/buckets": {Summary: "Audio lab frequency buckets", Description: "Returns frequency bucket data for audio analysis.", Tag: "analytics"},
 		"GET /api/ping-scores": {Summary: "Ping-score highscore board", Description: "Global (not scoped by region/area) records and leaderboards derived from every ping-bot-triggering channel message ever seen: farthest reach, most hops, widest simultaneous spread, fastest full spread, and most airtime-efficient ping, plus which relay nodes and which observers appear most often. Computed from the same GetPacketPath + LoRa-airtime-estimate logic behind /api/packets/{hash}/path and refreshed on a background interval, so it may lag the very latest ping by a few minutes. Fields are omitted (not zero) until at least one qualifying ping has been recorded.", Tag: "packets",
 			Response: schemaRef("PingScoresResponse")},
+		"GET /api/analytics/areas": {Summary: "Per-configured-Area node density, cross-area bridge nodes, and position-fix coverage", Description: "Three breakdowns over the drawn-polygon Areas configured via the meshguide.dk sync, distinct from hashRegion scope adoption (see /api/analytics/scope-stats): (1) density, node count/active-degraded-silent health/role mix per area (multi-membership via AreaKeysForPoint, so a node in a sub-area also counts toward its parent region), (2) bridgeNodes, nodes whose packet-derived neighbor_edges reach into at least one OTHER area (single most-specific area via AreaKeyForPoint), ranked by how many other areas they reach -- distinct from the network-wide, area-unaware bridge_score betweenness centrality, (3) positionGaps, per area how many nodes have a real GPS fix vs. how many were only placeable via the same neighbor-centroid estimate View Path's approx markers use (nearestPositionedNeighbor), used here purely as an internal coverage signal, not a map pin. Returns an empty response if no Areas are configured. Cached 30s.", Tag: "analytics",
+			Response: schemaRef("AreaAnalyticsResponse")},
 	}
 }
 
@@ -443,6 +445,53 @@ func componentSchemas() map[string]interface{} {
 				"mostEfficientPing":   schemaRef("PingScore"),
 				"relayLeaderboard":    map[string]interface{}{"type": "array", "items": schemaRef("PingLeaderboardEntry"), "description": "Top nodes ranked by number of distinct pings they appeared as a relay hop in (deduped per ping first, so one busy ping's many branches can't over-credit a relay)."},
 				"observerLeaderboard": map[string]interface{}{"type": "array", "items": schemaRef("PingLeaderboardEntry"), "description": "Top observers ranked by number of pings they were the first station to hear."},
+			},
+		},
+		"AreaDensity": map[string]interface{}{
+			"type":        "object",
+			"description": "One configured area's node count, active/degraded/silent health breakdown, and role mix. Multi-membership: a node in a sub-area also counts toward its parent region.",
+			"properties": map[string]interface{}{
+				"areaKey":    str("The area's config key."),
+				"label":      str("The area's display label."),
+				"total":      map[string]interface{}{"type": "integer", "description": "Total nodes with a real GPS fix inside this area (or any of its sub-areas)."},
+				"active":     map[string]interface{}{"type": "integer", "description": "Nodes heard within their role's active threshold."},
+				"degraded":   map[string]interface{}{"type": "integer", "description": "Nodes heard within their role's degraded threshold but not active."},
+				"silent":     map[string]interface{}{"type": "integer", "description": "Nodes not heard within either threshold."},
+				"roleCounts": map[string]interface{}{"type": "object", "additionalProperties": map[string]interface{}{"type": "integer"}, "description": "Node count per role string."},
+			},
+		},
+		"AreaBridgeNode": map[string]interface{}{
+			"type":        "object",
+			"description": "One node whose packet-derived neighbor_edges reach into at least one other configured area than its own -- distinct from the network-wide, area-unaware bridge_score betweenness centrality.",
+			"properties": map[string]interface{}{
+				"publicKey":      str("The node's pubkey."),
+				"name":           str("Display name, falling back to the raw pubkey when unresolved."),
+				"areaKey":        str("This node's own single most-specific area."),
+				"label":          str("That area's display label."),
+				"edgeCount":      map[string]interface{}{"type": "integer", "description": "Number of neighbor_edges reaching into a different area than this node's own."},
+				"otherAreaCount": map[string]interface{}{"type": "integer", "description": "Number of distinct other areas reached."},
+				"otherAreas":     map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Display labels of every other area reached."},
+			},
+		},
+		"AreaPositionGap": map[string]interface{}{
+			"type":        "object",
+			"description": "One configured area's position-fix coverage: nodes with a real GPS fix vs. nodes only placeable via nearestPositionedNeighbor's estimate.",
+			"properties": map[string]interface{}{
+				"areaKey":      str("The area's config key."),
+				"label":        str("The area's display label."),
+				"realFix":      map[string]interface{}{"type": "integer", "description": "Nodes in this area with an actual reported GPS position."},
+				"approximated": map[string]interface{}{"type": "integer", "description": "Nodes with no GPS fix whose neighbor-centroid estimate landed in this area."},
+			},
+		},
+		"AreaAnalyticsResponse": map[string]interface{}{
+			"type":        "object",
+			"description": "Node density/health, cross-area bridge nodes, and position-fix coverage per configured Area (the drawn-polygon regions from the meshguide.dk sync, distinct from hashRegion scope adoption). Empty when no Areas are configured.",
+			"properties": map[string]interface{}{
+				"density":                   map[string]interface{}{"type": "array", "items": schemaRef("AreaDensity")},
+				"bridgeNodes":               map[string]interface{}{"type": "array", "items": schemaRef("AreaBridgeNode"), "description": "Top cross-area bridge nodes, ranked by how many other areas they reach."},
+				"positionGaps":              map[string]interface{}{"type": "array", "items": schemaRef("AreaPositionGap")},
+				"unpositionedTotal":         map[string]interface{}{"type": "integer", "description": "Every node with no real GPS fix, regardless of area."},
+				"unpositionedNoNeighborFix": map[string]interface{}{"type": "integer", "description": "The subset of unpositionedTotal that also has no positioned neighbor to estimate from -- can't be placed even approximately, so absent from every area's positionGaps.approximated."},
 			},
 		},
 	}

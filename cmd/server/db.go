@@ -3556,6 +3556,251 @@ func computeScopeAdoptionByArea(nodes []nodeAreaScopeInput, areas map[string]Are
 	return result
 }
 
+// areaAnalyticsNode is one node with a real GPS fix plus the role/last_seen
+// fields computeAreaDensity needs for its active/degraded/silent breakdown
+// (GetNodesForScopeAdoption/nodeAreaScopeInput don't carry these — they
+// were built for scope adoption, not health).
+type areaAnalyticsNode struct {
+	PublicKey string
+	Name      string
+	Role      string
+	LastSeen  sql.NullString
+	Lat, Lon  float64
+}
+
+// GetNodesForAreaAnalytics returns every node split into those with a real
+// GPS fix (positioned, for computeAreaDensity/computeAreaBridgeNodes) and
+// those without one (unpositioned, for computeAreaPositionGaps to feed
+// through nearestPositionedNeighbor). Same "real fix" convention as
+// GetNodesForScopeAdoption: lat/lon both present and non-zero.
+func (db *DB) GetNodesForAreaAnalytics() (positioned []areaAnalyticsNode, unpositioned []RepeaterRef, err error) {
+	rows, err := db.conn.Query("SELECT public_key, name, role, last_seen, lat, lon FROM nodes")
+	if err != nil {
+		return nil, nil, fmt.Errorf("nodes for area analytics query: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var pk string
+		var name, role, lastSeen sql.NullString
+		var lat, lon sql.NullFloat64
+		if rows.Scan(&pk, &name, &role, &lastSeen, &lat, &lon) != nil {
+			continue
+		}
+		displayName := pk
+		if name.Valid && name.String != "" {
+			displayName = name.String
+		}
+		pkLower := strings.ToLower(pk)
+		if lat.Valid && lon.Valid && lat.Float64 != 0 && lon.Float64 != 0 {
+			positioned = append(positioned, areaAnalyticsNode{
+				PublicKey: pkLower, Name: displayName,
+				Role: role.String, LastSeen: lastSeen,
+				Lat: lat.Float64, Lon: lon.Float64,
+			})
+		} else {
+			unpositioned = append(unpositioned, RepeaterRef{Name: displayName, PublicKey: pkLower})
+		}
+	}
+	return positioned, unpositioned, rows.Err()
+}
+
+// computeAreaDensity buckets positioned nodes by every containing area
+// (AreaKeysForPoint, same multi-membership as computeScopeAdoptionByArea —
+// a node in "Aarhus by" also counts toward "Jylland") and tallies role mix
+// plus the same active/degraded/silent breakdown GetNetworkStatus uses
+// network-wide, but per area.
+func computeAreaDensity(nodes []areaAnalyticsNode, areas map[string]AreaEntry, healthThresholds HealthThresholds) []AreaDensity {
+	now := time.Now().UnixMilli()
+	counts := make(map[string]*AreaDensity)
+	for _, n := range nodes {
+		keys := AreaKeysForPoint(n.Lat, n.Lon, areas)
+		if len(keys) == 0 {
+			continue
+		}
+		role := n.Role
+		if role == "" {
+			role = "unknown"
+		}
+		age := int64(math.MaxInt64)
+		if n.LastSeen.Valid {
+			if t, err := time.Parse(time.RFC3339, n.LastSeen.String); err == nil {
+				age = now - t.UnixMilli()
+			} else if t, err := time.Parse("2006-01-02 15:04:05", n.LastSeen.String); err == nil {
+				age = now - t.UnixMilli()
+			}
+		}
+		degradedMs, silentMs := healthThresholds.GetHealthMs(role)
+		status := "silent"
+		if age < int64(degradedMs) {
+			status = "active"
+		} else if age < int64(silentMs) {
+			status = "degraded"
+		}
+		for _, key := range keys {
+			c, exists := counts[key]
+			if !exists {
+				a := areas[key]
+				c = &AreaDensity{AreaKey: key, Label: a.Label, RoleCounts: map[string]int{}}
+				counts[key] = c
+			}
+			c.Total++
+			switch status {
+			case "active":
+				c.Active++
+			case "degraded":
+				c.Degraded++
+			default:
+				c.Silent++
+			}
+			c.RoleCounts[role]++
+		}
+	}
+	result := make([]AreaDensity, 0, len(counts))
+	for _, c := range counts {
+		result = append(result, *c)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Total != result[j].Total {
+			return result[i].Total > result[j].Total
+		}
+		return result[i].Label < result[j].Label
+	})
+	return result
+}
+
+// computeAreaBridgeNodes ranks positioned nodes by how many OTHER areas
+// their packet-derived neighbor_edges reach into — the "who's actually
+// load-bearing between areas" list. Unlike computeAreaDensity's
+// multi-membership, each node here uses its single most-specific area
+// (AreaKeyForPoint) since a bridge node needs one home to measure "other"
+// against. Distinct from bridge_score (bridge_recomputer.go): that's
+// network-wide betweenness centrality with no area awareness at all.
+func computeAreaBridgeNodes(nodes []areaAnalyticsNode, areas map[string]AreaEntry, graph *NeighborGraph) []AreaBridgeNode {
+	if graph == nil || len(areas) == 0 {
+		return nil
+	}
+	type nodeMeta struct {
+		name    string
+		areaKey string
+		label   string
+	}
+	byPubkey := make(map[string]nodeMeta, len(nodes))
+	for _, n := range nodes {
+		key, ok := AreaKeyForPoint(n.Lat, n.Lon, areas)
+		if !ok {
+			continue
+		}
+		byPubkey[n.PublicKey] = nodeMeta{name: n.Name, areaKey: key, label: areas[key].Label}
+	}
+	if len(byPubkey) == 0 {
+		return nil
+	}
+
+	bridges := make(map[string]*AreaBridgeNode)
+	otherAreaSets := make(map[string]map[string]bool)
+	for _, e := range graph.AllEdges() {
+		if e == nil || e.NodeA == "" || e.NodeB == "" {
+			continue
+		}
+		a, aOK := byPubkey[strings.ToLower(e.NodeA)]
+		b, bOK := byPubkey[strings.ToLower(e.NodeB)]
+		if !aOK || !bOK || a.areaKey == b.areaKey {
+			continue
+		}
+		for _, pair := range []struct {
+			pk    string
+			self  nodeMeta
+			other nodeMeta
+		}{
+			{strings.ToLower(e.NodeA), a, b},
+			{strings.ToLower(e.NodeB), b, a},
+		} {
+			bn, exists := bridges[pair.pk]
+			if !exists {
+				bn = &AreaBridgeNode{PublicKey: pair.pk, Name: pair.self.name, AreaKey: pair.self.areaKey, Label: pair.self.label}
+				bridges[pair.pk] = bn
+				otherAreaSets[pair.pk] = make(map[string]bool)
+			}
+			bn.EdgeCount++
+			if !otherAreaSets[pair.pk][pair.other.label] {
+				otherAreaSets[pair.pk][pair.other.label] = true
+				bn.OtherAreas = append(bn.OtherAreas, pair.other.label)
+			}
+		}
+	}
+	result := make([]AreaBridgeNode, 0, len(bridges))
+	for _, bn := range bridges {
+		sort.Strings(bn.OtherAreas)
+		bn.OtherAreaCount = len(bn.OtherAreas)
+		result = append(result, *bn)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].OtherAreaCount != result[j].OtherAreaCount {
+			return result[i].OtherAreaCount > result[j].OtherAreaCount
+		}
+		if result[i].EdgeCount != result[j].EdgeCount {
+			return result[i].EdgeCount > result[j].EdgeCount
+		}
+		return result[i].Name < result[j].Name
+	})
+	if len(result) > 25 {
+		result = result[:25]
+	}
+	return result
+}
+
+// computeAreaPositionGaps reports, per area, how many nodes have a real
+// GPS fix vs. how many were only reachable via nearestPositionedNeighbor's
+// weighted-centroid estimate (the same technique View Path's "approx"
+// markers use) — purely as an internal coverage signal here, not exposed
+// as a map pin. Each unpositioned node's estimated point lands in exactly
+// one most-specific area (AreaKeyForPoint), same reasoning as
+// computeAreaBridgeNodes. Nodes with no positioned neighbor to estimate
+// from at all (nearestPositionedNeighbor ok=false) can't be placed
+// anywhere and are counted only in unpositionedNoNeighborFix, not in any
+// area's Approximated total.
+func computeAreaPositionGaps(db *DB, positioned []areaAnalyticsNode, unpositioned []RepeaterRef, areas map[string]AreaEntry) (gaps []AreaPositionGap, unpositionedNoNeighborFix int) {
+	counts := make(map[string]*AreaPositionGap)
+	get := func(key string) *AreaPositionGap {
+		g, exists := counts[key]
+		if !exists {
+			g = &AreaPositionGap{AreaKey: key, Label: areas[key].Label}
+			counts[key] = g
+		}
+		return g
+	}
+	for _, n := range positioned {
+		key, ok := AreaKeyForPoint(n.Lat, n.Lon, areas)
+		if !ok {
+			continue
+		}
+		get(key).RealFix++
+	}
+	for _, n := range unpositioned {
+		_, estLat, estLon, _, _, ok := db.nearestPositionedNeighbor(n.PublicKey)
+		if !ok {
+			unpositionedNoNeighborFix++
+			continue
+		}
+		key, ok := AreaKeyForPoint(estLat, estLon, areas)
+		if !ok {
+			continue
+		}
+		get(key).Approximated++
+	}
+	result := make([]AreaPositionGap, 0, len(counts))
+	for _, g := range counts {
+		result = append(result, *g)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].RealFix != result[j].RealFix {
+			return result[i].RealFix > result[j].RealFix
+		}
+		return result[i].Label < result[j].Label
+	})
+	return result, unpositionedNoNeighborFix
+}
+
 // QueryMultiNodePackets returns transmissions referencing any of the given pubkeys.
 func (db *DB) QueryMultiNodePackets(pubkeys []string, limit, offset int, order, since, until string) (*PacketResult, error) {
 	if len(pubkeys) == 0 {

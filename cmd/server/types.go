@@ -255,6 +255,73 @@ type AreaScopeMatch struct {
 	MatchedScopes []string `json:"matchedScopes"`
 }
 
+// AreaAnalyticsResponse bundles the Area-based analytics dborup asked for
+// after seeing the neighbor-centroid position approximation built for View
+// Path: node density/health per area, cross-area bridge nodes (via the
+// packet-derived neighbor_edges graph -- distinct from bridge_score's
+// network-wide betweenness centrality in bridge_recomputer.go, which has no
+// area awareness at all), and position-fix coverage gaps per area (reusing
+// nearestPositionedNeighbor, the same estimation View Path's approximate
+// markers use, purely as an internal analytics signal here -- not exposed
+// as a map pin).
+type AreaAnalyticsResponse struct {
+	Density      []AreaDensity     `json:"density"`
+	BridgeNodes  []AreaBridgeNode  `json:"bridgeNodes"`
+	PositionGaps []AreaPositionGap `json:"positionGaps"`
+	// UnpositionedTotal is every node with no real GPS fix, regardless of
+	// area. UnpositionedNoNeighborFix is the subset that ALSO has no
+	// positioned neighbor to estimate from (nearestPositionedNeighbor
+	// returns ok=false) -- these can't be placed anywhere, not even
+	// approximately, and so don't appear in PositionGaps' Approximated
+	// counts at all.
+	UnpositionedTotal         int `json:"unpositionedTotal"`
+	UnpositionedNoNeighborFix int `json:"unpositionedNoNeighborFix"`
+}
+
+// AreaDensity is one configured area's node count, health breakdown
+// (active/degraded/silent, same classification and thresholds as
+// GetNetworkStatus), and role mix. Uses AreaKeysForPoint (multi-membership
+// like computeScopeAdoptionByArea) so a node in "Aarhus by" also counts
+// toward "Jylland"/"Danmark (alle)".
+type AreaDensity struct {
+	AreaKey    string         `json:"areaKey"`
+	Label      string         `json:"label"`
+	Total      int            `json:"total"`
+	Active     int            `json:"active"`
+	Degraded   int            `json:"degraded"`
+	Silent     int            `json:"silent"`
+	RoleCounts map[string]int `json:"roleCounts"`
+}
+
+// AreaBridgeNode is one node whose packet-derived neighbor_edges reach
+// into at least one OTHER area than its own -- ranked by OtherAreaCount,
+// the "who's actually load-bearing between areas" list. Uses each node's
+// single most-specific area (AreaKeyForPoint), unlike AreaDensity's
+// multi-membership, since a bridge node needs one home to measure
+// "other" against.
+type AreaBridgeNode struct {
+	PublicKey      string   `json:"publicKey"`
+	Name           string   `json:"name"`
+	AreaKey        string   `json:"areaKey"`
+	Label          string   `json:"label"`
+	EdgeCount      int      `json:"edgeCount"`
+	OtherAreaCount int      `json:"otherAreaCount"`
+	OtherAreas     []string `json:"otherAreas"`
+}
+
+// AreaPositionGap is one configured area's position-fix coverage: how many
+// of its nodes have a real GPS fix vs. how many were only reachable via
+// nearestPositionedNeighbor's estimate. Uses each node's single
+// most-specific area for the SAME reason AreaBridgeNode does -- an
+// estimated position is one point, which lands in exactly one
+// most-specific area, not several.
+type AreaPositionGap struct {
+	AreaKey      string `json:"areaKey"`
+	Label        string `json:"label"`
+	RealFix      int    `json:"realFix"`
+	Approximated int    `json:"approximated"`
+}
+
 type ScopeRegionRepeaters struct {
 	Region    string        `json:"region"`
 	Count     int           `json:"count"`
