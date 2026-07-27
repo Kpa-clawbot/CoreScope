@@ -305,6 +305,18 @@ test('clicking a cached sparkline opens a modal with a dual-axis SNR/heard-secs-
   assert.strictEqual(lastChartConfig.data.datasets[0].yAxisID, 'y');
   assert.strictEqual(lastChartConfig.data.datasets[1].yAxisID, 'y1');
   assert.ok(lastChartConfig.options.scales.y1.title.text.toLowerCase().includes('heard'), 'expected the second axis labeled for heard_secs_ago');
+  // Regression: canvas can't resolve CSS var() as a strokeStyle, so a raw
+  // 'var(--x)' string silently renders as Chart.js's default black --
+  // both lines looked identical/black in production before this was caught.
+  // Line colors must be resolved literal values (this page's CHART_COLORS
+  // palette), and the two datasets must be visually distinct.
+  const c0 = lastChartConfig.data.datasets[0].borderColor;
+  const c1 = lastChartConfig.data.datasets[1].borderColor;
+  assert.ok(!/^var\(/.test(c0), `dataset[0].borderColor must not be a CSS var() reference, got ${c0}`);
+  assert.ok(!/^var\(/.test(c1), `dataset[1].borderColor must not be a CSS var() reference, got ${c1}`);
+  assert.ok(/^#[0-9a-f]{6}$/i.test(c0), `dataset[0].borderColor must be a resolved hex color, got ${c0}`);
+  assert.ok(/^#[0-9a-f]{6}$/i.test(c1), `dataset[1].borderColor must be a resolved hex color, got ${c1}`);
+  assert.notStrictEqual(c0, c1, 'SNR and Heard(s ago) lines must be visually distinct colors');
 });
 
 test('openNeighborSnrModal is a no-op for a pubkey with no cached data', () => {

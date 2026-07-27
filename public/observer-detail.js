@@ -311,8 +311,12 @@ window.ObserverDetailNaiveBanner = {
       data: {
         labels: cached.metrics.map(function(m) { return new Date(m.timestamp).toLocaleString(); }),
         datasets: [
-          { label: 'SNR (dB)', data: cached.metrics.map(function(m) { return m.snr; }), borderColor: 'var(--accent)', yAxisID: 'y', tension: 0.2 },
-          { label: 'Heard (s ago)', data: cached.metrics.map(function(m) { return m.heardSecsAgo; }), borderColor: 'var(--status-yellow)', yAxisID: 'y1', tension: 0.2 },
+          // Canvas can't resolve CSS var() as a strokeStyle -- Chart.js
+          // silently falls back to black for both lines if given one
+          // (bug: both lines rendered black). CHART_COLORS is this page's
+          // established literal-hex palette (see the 4 main charts below).
+          { label: 'SNR (dB)', data: cached.metrics.map(function(m) { return m.snr; }), borderColor: CHART_COLORS[0], backgroundColor: CHART_COLORS[0] + '20', yAxisID: 'y', tension: 0.2 },
+          { label: 'Heard (s ago)', data: cached.metrics.map(function(m) { return m.heardSecsAgo; }), borderColor: CHART_COLORS[6], backgroundColor: CHART_COLORS[6] + '20', yAxisID: 'y1', tension: 0.2 },
         ],
       },
       options: {
