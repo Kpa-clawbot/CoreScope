@@ -12,12 +12,51 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/meshcore-analyzer/dbschema"
 	"github.com/meshcore-analyzer/geofilter"
 	_ "modernc.org/sqlite"
 )
+
+// schemaFlag is a self-healing, monotonic "does this optional column
+// exist" cache. true is permanent (ADD-only columns never disappear, so
+// once seen, never re-verified); false just means "not yet observed as
+// true." This replaces the old pattern of a plain bool set once in
+// OpenDB's detectSchema pass: the server and ingestor are separate
+// processes started ~simultaneously, sharing one SQLite file, and the
+// ingestor's ALTER TABLE migration for a newly-added column can still be
+// in flight when detectSchema's one-time PRAGMA scan ran -- freezing the
+// bool at false for the server's entire process lifetime even though the
+// column existed microseconds later (reproduced live while testing
+// #1865/#1867 on a fresh stg deploy).
+//
+// get() is a PURE ATOMIC READ, deliberately never issuing its own query.
+// An earlier version of this fix re-probed via PRAGMA on every miss
+// inside get() itself -- that self-deadlocks the instant a caller reads
+// the flag from inside a loop that already holds this DB's connection
+// checked out via an open, not-yet-closed *sql.Rows cursor on a
+// single-connection pool (exactly the shape store.go's Load/LoadChunked
+// row-scan loops and several MaxOpenConns(1) test fixtures use -- see
+// getCachedNodesAndPM's ordering comment in store.go for the same
+// constraint bitten elsewhere). All re-probing instead happens on
+// (*DB).healSchemaFlags, a background ticker started once in OpenDB that
+// is never nested inside another caller's callstack, so it cannot
+// deadlock the pool the way an eager reprobe-on-read would.
+type schemaFlag struct {
+	v atomic.Bool
+}
+
+func (f *schemaFlag) get() bool { return f.v.Load() }
+
+// forceTrue latches the flag true without a PRAGMA probe. Used by
+// detectSchema (already has the answer from its own PRAGMA scan, no need
+// to re-query) and by tests that ALTER a column into an in-memory
+// fixture and want the flag to reflect that immediately.
+func (f *schemaFlag) forceTrue() {
+	f.v.Store(true)
+}
 
 // routeTypeTransport covers TRANSPORT_FLOOD (0) and TRANSPORT_DIRECT (3) —
 // the only route types that carry transport_code_1 (transport-level scope).
@@ -36,16 +75,17 @@ const routeTypeNonTransportSQL = "route_type IN (1, 2)"
 
 // DB wraps a read-only connection to the MeshCore SQLite database.
 type DB struct {
-	conn                *sql.DB
-	path                string // filesystem path to the database file
-	isV3                bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
-	hasResolvedPath     bool   // observations table has resolved_path column
-	hasObsRawHex        bool   // observations table has raw_hex column (#881)
-	hasScopeName        bool   // transmissions.scope_name column exists (#899)
-	hasDefaultScope     bool   // nodes.default_scope column exists (#899)
-	hasConfiguredScope  bool   // nodes.configured_scope column exists (#1865)
-	hasMultibyteSupCols bool   // nodes/inactive_nodes have multibyte_sup/multibyte_evidence (#903)
-	hasLastSeen         bool   // transmissions.last_seen column exists (#1690)
+	conn                    *sql.DB
+	path                    string        // filesystem path to the database file
+	isV3                    bool          // v3 schema: observer_idx in observations (vs observer_id in v2)
+	hasResolvedPathFlag     schemaFlag    // observations.resolved_path (#791) -- read via hasResolvedPath()
+	hasObsRawHexFlag        schemaFlag    // observations.raw_hex (#881) -- read via hasObsRawHex()
+	hasScopeNameFlag        schemaFlag    // transmissions.scope_name (#899) -- read via hasScopeName()
+	hasDefaultScopeFlag     schemaFlag    // nodes.default_scope (#899) -- read via hasDefaultScope()
+	hasConfiguredScopeFlag  schemaFlag    // nodes.configured_scope (#1865) -- read via hasConfiguredScope()
+	hasMultibyteSupColsFlag schemaFlag    // nodes.multibyte_sup (#903) -- read via hasMultibyteSupCols()
+	hasLastSeenFlag         schemaFlag    // transmissions.last_seen (#1690) -- read via hasLastSeen()
+	schemaHealerStop        chan struct{} // closed by Close() to stop healSchemaFlags; nil if OpenDB never started it
 
 	// Channel list cache (60s TTL) — avoids repeated GROUP BY scans (#762)
 	channelsCacheMu  sync.Mutex
@@ -53,6 +93,19 @@ type DB struct {
 	channelsCacheRes []map[string]interface{}
 	channelsCacheExp time.Time
 }
+
+// hasResolvedPath, hasObsRawHex, hasScopeName, hasDefaultScope,
+// hasConfiguredScope, hasMultibyteSupCols, and hasLastSeen are pure
+// atomic-load accessors over the corresponding schemaFlag fields above
+// -- see schemaFlag's doc comment for why these are methods, not bools,
+// and why they never issue a query themselves.
+func (db *DB) hasResolvedPath() bool     { return db.hasResolvedPathFlag.get() }
+func (db *DB) hasObsRawHex() bool        { return db.hasObsRawHexFlag.get() }
+func (db *DB) hasScopeName() bool        { return db.hasScopeNameFlag.get() }
+func (db *DB) hasDefaultScope() bool     { return db.hasDefaultScopeFlag.get() }
+func (db *DB) hasConfiguredScope() bool  { return db.hasConfiguredScopeFlag.get() }
+func (db *DB) hasMultibyteSupCols() bool { return db.hasMultibyteSupColsFlag.get() }
+func (db *DB) hasLastSeen() bool         { return db.hasLastSeenFlag.get() }
 
 // OpenDB opens a read-only SQLite connection with WAL mode.
 func OpenDB(path string) (*DB, error) {
@@ -67,37 +120,61 @@ func OpenDB(path string) (*DB, error) {
 		conn.Close()
 		return nil, fmt.Errorf("ping failed: %w", err)
 	}
-	d := &DB{conn: conn, path: path}
-	d.detectSchemaWithRetry()
+	d := &DB{conn: conn, path: path, schemaHealerStop: make(chan struct{})}
+	// One synchronous warm pass so the common case (columns already exist
+	// at boot) is already true by the time OpenDB returns.
+	d.detectSchema()
+	// Background healer for the race case (a column's ALTER TABLE was
+	// still in flight when the warm pass above ran) -- see
+	// healSchemaFlags's doc comment for why this runs independently
+	// rather than reprobing from inside hasX().
+	go d.healSchemaFlags()
 	return d, nil
 }
 
-// detectSchemaWithRetry calls detectSchema and re-scans a few more times
-// on a short fixed schedule. The server and ingestor are separate
-// processes started ~simultaneously by supervisor, sharing one SQLite
-// file; the ingestor's additive ALTER TABLE migrations can still be in
-// flight when the server's column detection first runs, silently leaving
-// a newly-added optional column undetected for the server's entire
-// process lifetime (reproduced live while testing #1865/#1867 -- a fresh
-// deploy raced the migration and the API omitted the new field until the
-// container was restarted).
-//
-// This deliberately does NOT stop early just because two consecutive
-// scans agree -- a migration that lands between two poll points would
-// make an early scan look "stable" right before the real change arrives,
-// so an early-exit-on-no-change loop can miss the race it exists to
-// catch. detectSchema's booleans are monotonic (once a column is found
-// they're never reset to false), so repeated calls are safe to merge;
-// this just always spends the whole fixed budget below.
-func (db *DB) detectSchemaWithRetry() {
-	db.detectSchema()
-	for _, delay := range []time.Duration{30 * time.Millisecond, 50 * time.Millisecond, 70 * time.Millisecond} {
-		time.Sleep(delay)
-		db.detectSchema()
+// healSchemaFlags re-probes any still-false optional-column flag on a
+// low-frequency ticker until every flag is true, then exits. Runs on its
+// own goroutine, decoupled from every request code path -- unlike an
+// eager reprobe-on-read inside hasX(), it never nests inside another
+// caller's already-open *sql.Rows cursor, so it cannot self-deadlock a
+// single-connection pool. Closes over db.detectSchema, which already
+// calls schemaFlag.forceTrue() for whatever it finds.
+func (db *DB) healSchemaFlags() {
+	flags := []*schemaFlag{
+		&db.hasResolvedPathFlag, &db.hasObsRawHexFlag, &db.hasScopeNameFlag,
+		&db.hasDefaultScopeFlag, &db.hasConfiguredScopeFlag,
+		&db.hasMultibyteSupColsFlag, &db.hasLastSeenFlag,
+	}
+	allTrue := func() bool {
+		for _, f := range flags {
+			if !f.v.Load() {
+				return false
+			}
+		}
+		return true
+	}
+	if allTrue() {
+		return
+	}
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-db.schemaHealerStop:
+			return
+		case <-ticker.C:
+			db.detectSchema()
+			if allTrue() {
+				return
+			}
+		}
 	}
 }
 
 func (db *DB) Close() error {
+	if db.schemaHealerStop != nil {
+		close(db.schemaHealerStop)
+	}
 	// Checkpoint WAL before closing to release lock cleanly for new processes
 	if _, err := db.conn.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 		log.Printf("[db] WAL checkpoint error: %v", err)
@@ -125,10 +202,10 @@ func (db *DB) detectSchema() {
 				db.isV3 = true
 			}
 			if colName == "resolved_path" {
-				db.hasResolvedPath = true
+				db.hasResolvedPathFlag.forceTrue()
 			}
 			if colName == "raw_hex" {
-				db.hasObsRawHex = true
+				db.hasObsRawHexFlag.forceTrue()
 			}
 		}
 	}
@@ -146,10 +223,10 @@ func (db *DB) detectSchema() {
 		var dflt sql.NullString
 		if txRows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil {
 			if colName == "scope_name" {
-				db.hasScopeName = true
+				db.hasScopeNameFlag.forceTrue()
 			}
 			if colName == "last_seen" {
-				db.hasLastSeen = true
+				db.hasLastSeenFlag.forceTrue()
 			}
 		}
 	}
@@ -168,11 +245,11 @@ func (db *DB) detectSchema() {
 		if nodeRows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil {
 			switch colName {
 			case "default_scope":
-				db.hasDefaultScope = true
+				db.hasDefaultScopeFlag.forceTrue()
 			case "configured_scope":
-				db.hasConfiguredScope = true
+				db.hasConfiguredScopeFlag.forceTrue()
 			case "multibyte_sup":
-				db.hasMultibyteSupCols = true
+				db.hasMultibyteSupColsFlag.forceTrue()
 			}
 		}
 	}
@@ -182,11 +259,11 @@ func (db *DB) detectSchema() {
 // When hasDefaultScope is true, default_scope is appended as the last column.
 func (db *DB) nodeSelectCols() string {
 	cols := "public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert"
-	if db.hasDefaultScope {
+	if db.hasDefaultScope() {
 		cols += ", default_scope"
 	}
 	// #1865: confirmed scopes appended after default_scope; scan order must match.
-	if db.hasConfiguredScope {
+	if db.hasConfiguredScope() {
 		cols += ", configured_scope, configured_scope_at"
 	}
 	return cols
@@ -215,7 +292,7 @@ func (db *DB) transmissionBaseSQL() (selectCols, observerJoin string) {
 			)
 			LEFT JOIN observers obs2 ON obs2.id = o.observer_id`
 	}
-	if db.hasScopeName {
+	if db.hasScopeName() {
 		selectCols += `, t.scope_name`
 	}
 	return
@@ -232,7 +309,7 @@ func (db *DB) scanTransmissionRow(rows *sql.Rows) map[string]interface{} {
 
 	scanArgs := []interface{}{&id, &rawHex, &hash, &firstSeen, &routeType, &payloadType, &decodedJSON,
 		&observationCount, &observerID, &observerName, &observerIATA, &snr, &rssi, &pathJSON, &direction}
-	if db.hasScopeName {
+	if db.hasScopeName() {
 		scanArgs = append(scanArgs, &scopeName)
 	}
 	if err := rows.Scan(scanArgs...); err != nil {
@@ -257,7 +334,7 @@ func (db *DB) scanTransmissionRow(rows *sql.Rows) map[string]interface{} {
 		"path_json":         nullStr(pathJSON),
 		"direction":         nullStr(direction),
 	}
-	if db.hasScopeName {
+	if db.hasScopeName() {
 		m["scope_name"] = nullStr(scopeName)
 	}
 	return m
@@ -627,7 +704,7 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 	// excluded. Frontend needs this on the DEFAULT COLLAPSED VIEW (where
 	// p._children is empty), so we compute it server-side.
 	groupedScopeCol := ""
-	if db.hasScopeName {
+	if db.hasScopeName() {
 		groupedScopeCol = ", t.scope_name"
 	}
 	var querySQL string
@@ -684,7 +761,7 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 		scanArgs := []interface{}{&hash, &firstSeen, &rawHex, &decodedJSON, &payloadType, &routeType,
 			&count, &observerCount, &latest,
 			&observerID, &observerName, &observerIATA, &snr, &rssi, &pathJSON, &distinctIatasCSV}
-		if db.hasScopeName {
+		if db.hasScopeName() {
 			scanArgs = append(scanArgs, &scopeName)
 		}
 		if err := rows.Scan(scanArgs...); err != nil {
@@ -1854,7 +1931,7 @@ type PacketPathResponse struct {
 // (usually 0 hops, close to the sender) is additionally surfaced via
 // First, independent of which station it came from or how deep it was.
 func (db *DB) GetPacketPath(hash string) (*PacketPathResponse, error) {
-	if !db.hasResolvedPath {
+	if !db.hasResolvedPath() {
 		return nil, fmt.Errorf("resolved_path not available on this server")
 	}
 	var querySQL string
@@ -2733,14 +2810,14 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 		obsArgs[i] = id
 	}
 	scopeCol := ""
-	if db.hasScopeName {
+	if db.hasScopeName() {
 		scopeCol = ", t.scope_name"
 	}
 	// resolvedPathCol feeds the ping-bot reply's "via RepeaterA → RepeaterB"
 	// hop names (see the bulk-resolve pass below) -- optional like
 	// scopeCol since not every DB/test fixture has this column.
 	resolvedPathCol := ""
-	if db.hasResolvedPath {
+	if db.hasResolvedPath() {
 		resolvedPathCol = ", o.resolved_path"
 	}
 	var obsSQL string
@@ -2806,10 +2883,10 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 		var routeType sql.NullInt64
 		var scopeName sql.NullString
 		scanArgs := []interface{}{&pktID, &txID, &pktHash, &dj, &fs, &obsID, &obsName, &snr, &pathJSON, &obsTs, &routeType}
-		if db.hasScopeName {
+		if db.hasScopeName() {
 			scanArgs = append(scanArgs, &scopeName)
 		}
-		if db.hasResolvedPath {
+		if db.hasResolvedPath() {
 			scanArgs = append(scanArgs, &resolvedPathJSON)
 		}
 		if err := rows.Scan(scanArgs...); err != nil {
@@ -3311,7 +3388,7 @@ func (db *DB) GetRepeaterNamesByKeys(keys []string) map[string]string {
 // "runs this region" from "has carried this region's traffic".
 func (db *DB) GetNodesByDefaultScope() (map[string][]RepeaterRef, error) {
 	result := make(map[string][]RepeaterRef)
-	if !db.hasDefaultScope {
+	if !db.hasDefaultScope() {
 		return result, nil
 	}
 	rows, err := db.conn.Query(`SELECT public_key, name, default_scope FROM nodes WHERE default_scope IS NOT NULL AND default_scope != ''`)
@@ -3353,7 +3430,7 @@ type nodeAreaScopeInput struct {
 // too — the whole point is measuring adoption, not just listing who has one.
 func (db *DB) GetNodesForScopeAdoption() ([]nodeAreaScopeInput, error) {
 	query := "SELECT public_key, name, lat, lon"
-	if db.hasDefaultScope {
+	if db.hasDefaultScope() {
 		query += ", default_scope"
 	}
 	query += " FROM nodes WHERE lat IS NOT NULL AND lon IS NOT NULL AND lat != 0 AND lon != 0"
@@ -3369,7 +3446,7 @@ func (db *DB) GetNodesForScopeAdoption() ([]nodeAreaScopeInput, error) {
 		var lat, lon float64
 		var scope sql.NullString
 		var scanErr error
-		if db.hasDefaultScope {
+		if db.hasDefaultScope() {
 			scanErr = rows.Scan(&pk, &name, &lat, &lon, &scope)
 		} else {
 			scanErr = rows.Scan(&pk, &name, &lat, &lon)
@@ -3590,10 +3667,10 @@ func (db *DB) scanNodeRow(rows *sql.Rows) map[string]interface{} {
 	var configuredScope, configuredScopeAt sql.NullString
 
 	scanArgs := []interface{}{&pk, &name, &role, &lat, &lon, &lastSeen, &firstSeen, &advertCount, &batteryMv, &temperatureC, &foreign}
-	if db.hasDefaultScope {
+	if db.hasDefaultScope() {
 		scanArgs = append(scanArgs, &defaultScope)
 	}
-	if db.hasConfiguredScope {
+	if db.hasConfiguredScope() {
 		scanArgs = append(scanArgs, &configuredScope, &configuredScopeAt)
 	}
 	if err := rows.Scan(scanArgs...); err != nil {
@@ -3623,10 +3700,10 @@ func (db *DB) scanNodeRow(rows *sql.Rows) map[string]interface{} {
 	} else {
 		m["temperature_c"] = nil
 	}
-	if db.hasDefaultScope {
+	if db.hasDefaultScope() {
 		m["default_scope"] = nullStr(defaultScope)
 	}
-	if db.hasConfiguredScope {
+	if db.hasConfiguredScope() {
 		m["configured_scope"] = nullStr(configuredScope)
 		m["configured_scope_at"] = nullStr(configuredScopeAt)
 	}
@@ -4110,7 +4187,7 @@ func (db *DB) GetSignatureDropCount() int64 {
 }
 
 func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
-	if !db.hasScopeName {
+	if !db.hasScopeName() {
 		return nil, fmt.Errorf("scope_name column not present — run ingestor to apply migrations")
 	}
 
@@ -4587,7 +4664,7 @@ func (db *DB) gpsByPubkeysExact(pubkeys []string) map[string][2]float64 {
 // restricting to transport routes would answer a different question than
 // "how many of our channel messages are scoped".
 func (db *DB) GetChannelMessageScopeStats(window string) (*ChannelScopeStats, error) {
-	if !db.hasScopeName {
+	if !db.hasScopeName() {
 		return nil, fmt.Errorf("scope_name column not present — run ingestor to apply migrations")
 	}
 
@@ -4644,7 +4721,7 @@ func (db *DB) GetChannelMessageScopeStats(window string) (*ChannelScopeStats, er
 // unbounded. In practice payload_type=5 rows within a single window stay
 // small enough that this hasn't needed a cap.
 func (db *DB) GetChannelScopeAdoption(window string) ([]ChannelScopeAdoption, error) {
-	if !db.hasScopeName {
+	if !db.hasScopeName() {
 		return nil, fmt.Errorf("scope_name column not present — run ingestor to apply migrations")
 	}
 
@@ -5329,7 +5406,7 @@ func (db *DB) GetWardrivingSenderMessages(sender, channel, since, until string) 
 // never actually matched anything — region-utilization analytics.
 func (db *DB) GetMatchedRegionNames() (map[string]bool, error) {
 	matched := make(map[string]bool)
-	if !db.hasScopeName {
+	if !db.hasScopeName() {
 		return matched, nil
 	}
 	rows, err := db.conn.Query(`SELECT DISTINCT scope_name FROM transmissions WHERE scope_name IS NOT NULL AND scope_name != ''`)

@@ -167,7 +167,9 @@ func setupTestDB(t *testing.T) *DB {
 		t.Fatal(err)
 	}
 
-	return &DB{conn: conn, isV3: true, hasResolvedPath: true}
+	db := &DB{conn: conn, isV3: true}
+	db.hasResolvedPathFlag.forceTrue()
+	return db
 }
 
 func seedTestData(t *testing.T, db *DB) {
@@ -2356,10 +2358,10 @@ func TestDetectSchemaScopeName(t *testing.T) {
 	}
 	defer db.Close()
 
-	if !db.hasScopeName {
+	if !db.hasScopeName() {
 		t.Error("hasScopeName should be true when scope_name column exists")
 	}
-	if !db.hasDefaultScope {
+	if !db.hasDefaultScope() {
 		t.Error("hasDefaultScope should be true when default_scope column exists")
 	}
 
@@ -2381,32 +2383,29 @@ func TestDetectSchemaScopeName(t *testing.T) {
 	}
 	defer db2.Close()
 
-	if db2.hasScopeName {
+	if db2.hasScopeName() {
 		t.Error("hasScopeName should be false when scope_name column is absent")
 	}
-	if db2.hasDefaultScope {
+	if db2.hasDefaultScope() {
 		t.Error("hasDefaultScope should be false when default_scope column is absent")
 	}
 }
 
-// TestDetectSchemaWithRetryClosesMigrationRace reproduces the startup race
-// found while testing #1865/#1867 live: the server and ingestor are
+// TestSchemaFlagSelfHealsAfterMigrationLandsLate reproduces the startup
+// race found while testing #1865/#1867 live: the server and ingestor are
 // separate processes started ~simultaneously, sharing one SQLite file, and
 // the ingestor's ALTER TABLE migration can still be in flight when the
-// server's one-time column detection first runs. Without a retry, a column
-// added a few milliseconds after OpenDB's first PRAGMA scan would stay
-// undetected for the server's entire lifetime. Here the column is added by
-// a concurrent writer shortly after OpenDB starts, simulating exactly that
-// race; detectSchemaWithRetry's short escalating-delay loop must still
-// pick it up.
-func TestDetectSchemaWithRetryClosesMigrationRace(t *testing.T) {
+// server's warm detectSchema() pass first runs. hasConfiguredScope() must
+// stay false right after that miss (proving get() doesn't itself probe --
+// see schemaFlag's doc comment on why an eager reprobe-on-read would
+// deadlock a single-connection pool), and then flip true once
+// detectSchema() re-runs -- exactly what healSchemaFlags's background
+// ticker does on its own schedule, called directly here for a fast,
+// deterministic test instead of waiting on real ticker timing.
+func TestSchemaFlagSelfHealsAfterMigrationLandsLate(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "race.db")
 
-	// Match the ingestor's real DSN (cmd/ingestor/db.go) -- WAL mode, so
-	// this writer and OpenDB's concurrent read-only connections behave
-	// like the real two-process deploy instead of hitting rollback-journal
-	// lock contention that wouldn't occur in production.
 	conn, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
@@ -2423,29 +2422,68 @@ func TestDetectSchemaWithRetryClosesMigrationRace(t *testing.T) {
 		t.Fatalf("create observations: %v", err)
 	}
 
-	// Simulate the ingestor's migration landing ~10ms after the server
-	// opens its connection -- after OpenDB's first scan (t=0) but well
-	// before the retry loop's second scan (t=30ms), so it's reliably
-	// picked up regardless of scheduler jitter. Left open (closed via
-	// defer above) so the server's WAL checkpoint on Close doesn't race
-	// an already-closed writer -- that race is a test-harness artifact,
-	// not something that happens in production where the ingestor keeps
-	// running for the server's whole lifetime.
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		if _, err := conn.Exec(`ALTER TABLE nodes ADD COLUMN configured_scope TEXT`); err != nil {
-			t.Errorf("simulated migration ALTER TABLE failed: %v", err)
-		}
-	}()
-
 	db, err := OpenDB(dbPath)
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}
 	defer db.Close()
 
-	if !db.hasConfiguredScope {
-		t.Error("hasConfiguredScope should be true -- detectSchemaWithRetry should have caught the column added shortly after the initial scan, not just the first PRAGMA snapshot")
+	// The column doesn't exist yet at OpenDB time -- the warm pass
+	// correctly found nothing, and hasConfiguredScope() must NOT try to
+	// probe for it itself.
+	if db.hasConfiguredScope() {
+		t.Fatal("hasConfiguredScope should be false before the migration lands")
+	}
+
+	// Simulate the ingestor's migration landing after the server's warm
+	// pass already ran.
+	if _, err := conn.Exec(`ALTER TABLE nodes ADD COLUMN configured_scope TEXT`); err != nil {
+		t.Fatalf("simulated migration ALTER TABLE failed: %v", err)
+	}
+
+	// A bare re-read must still be false -- proves get() is a pure atomic
+	// load, not a reprobe-on-miss (the thing that deadlocked open-cursor
+	// callers before this test's predecessor caught it).
+	if db.hasConfiguredScope() {
+		t.Fatal("hasConfiguredScope must not self-heal on a bare read -- only healSchemaFlags's detectSchema() call should")
+	}
+
+	// Simulate healSchemaFlags's next tick.
+	db.detectSchema()
+
+	if !db.hasConfiguredScope() {
+		t.Error("hasConfiguredScope should be true once detectSchema() re-scans and finds the column the migration added")
+	}
+}
+
+// TestHealSchemaFlagsStopsOnceAllTrue proves the background healer exits
+// promptly once every optional column exists, rather than ticking forever
+// -- a goroutine/ticker leak per open *DB would be a real cost across the
+// server's lifetime if it never stopped.
+func TestHealSchemaFlagsStopsOnceAllTrue(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	db.hasResolvedPathFlag.forceTrue()
+	db.hasObsRawHexFlag.forceTrue()
+	db.hasScopeNameFlag.forceTrue()
+	db.hasDefaultScopeFlag.forceTrue()
+	db.hasConfiguredScopeFlag.forceTrue()
+	db.hasMultibyteSupColsFlag.forceTrue()
+	db.hasLastSeenFlag.forceTrue()
+	db.schemaHealerStop = make(chan struct{})
+
+	done := make(chan struct{})
+	go func() {
+		db.healSchemaFlags()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// healSchemaFlags saw allTrue() immediately and returned without
+		// ever starting the ticker -- correct.
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("healSchemaFlags should exit immediately when every flag is already true")
 	}
 }
 
@@ -3145,7 +3183,7 @@ func TestGetScopeStats(t *testing.T) {
 		scope_name TEXT DEFAULT NULL
 	)`)
 	// Manually set hasScopeName since we bypassed the detector
-	db.hasScopeName = true
+	db.hasScopeNameFlag.forceTrue()
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	// Transport scoped, known region

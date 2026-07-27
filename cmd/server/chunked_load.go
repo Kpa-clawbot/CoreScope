@@ -304,7 +304,7 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 		// keep existing fixtures green. Production goes through
 		// dbschema.AssertReady which fail-fasts when the column is
 		// missing — so the fallback is only ever hit in tests.
-		if s.db.hasLastSeen {
+		if s.db.hasLastSeen() {
 			loadConditions = append(loadConditions, fmt.Sprintf("t2.last_seen >= %d", hotCutoffUnix))
 		} else {
 			loadConditions = append(loadConditions, fmt.Sprintf("t2.first_seen >= '%s'", hotCutoffStr))
@@ -370,17 +370,17 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 		whereClause := "WHERE " + strings.Join(conds, " AND ")
 
 		rpCol := ""
-		if s.db.hasResolvedPath {
+		if s.db.hasResolvedPath() {
 			rpCol = ", o.resolved_path"
 		}
 		obsRawHexCol := ""
-		if s.db.hasObsRawHex {
+		if s.db.hasObsRawHex() {
 			obsRawHexCol = ", o.raw_hex"
 		}
 		// #1751: scope_name is on the transmission row, so appending it as the
 		// last selected column is safe regardless of the observation fan-out.
 		scopeNameCol := ""
-		if s.db.hasScopeName {
+		if s.db.hasScopeName() {
 			scopeNameCol = ", t.scope_name"
 		}
 
@@ -517,13 +517,13 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 			&payloadVersion, &decodedJSON,
 			&obsID, &observerID, &observerName, &observerIATA, &direction,
 			&snr, &rssi, &score, &pathJSON, &obsTimestamp}
-		if s.db.hasObsRawHex {
+		if s.db.hasObsRawHex() {
 			scanArgs = append(scanArgs, &obsRawHex)
 		}
-		if s.db.hasResolvedPath {
+		if s.db.hasResolvedPath() {
 			scanArgs = append(scanArgs, &resolvedPathStr)
 		}
-		if s.db.hasScopeName {
+		if s.db.hasScopeName() {
 			scanArgs = append(scanArgs, &scopeName)
 		}
 		if err := rows.Scan(scanArgs...); err != nil {

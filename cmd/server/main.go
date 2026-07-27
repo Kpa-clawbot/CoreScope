@@ -73,11 +73,11 @@ func main() {
 	}
 
 	var (
-		configDir  string
-		port       int
-		dbPath     string
-		publicDir  string
-		pollMs     int
+		configDir string
+		port      int
+		dbPath    string
+		publicDir string
+		pollMs    int
 	)
 
 	flag.StringVar(&configDir, "config-dir", ".", "Directory containing config.json")
@@ -273,7 +273,11 @@ func main() {
 	// all live in the ingestor; the server only reads the snapshot and
 	// then refreshes it via the recompNeighborGraph slot every 60s.
 	dbPath = database.path
-	database.hasResolvedPath = true // dbschema.AssertReady above already verified observations.resolved_path exists
+	// Optimization only, not required for correctness: hasResolvedPath()
+	// self-heals on its own via a PRAGMA re-probe if this weren't here --
+	// AssertReady above already guarantees the column exists, so skip
+	// even that first probe.
+	database.hasResolvedPathFlag.forceTrue()
 
 	// WaitGroup for background init steps that gate /api/healthz readiness.
 	var initWg sync.WaitGroup

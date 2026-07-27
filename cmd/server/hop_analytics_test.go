@@ -23,7 +23,7 @@ func TestHandleNodeHopAnalytics(t *testing.T) {
 	if _, err := db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
 		t.Fatalf("add scope_name column: %v", err)
 	}
-	db.hasScopeName = true
+	db.hasScopeNameFlag.forceTrue()
 
 	recent := time.Now().Add(-1 * time.Hour).Format(time.RFC3339)
 	recentEpoch := time.Now().Add(-1 * time.Hour).Unix()

@@ -113,7 +113,7 @@ func TestLoadChunk_IndexesResolvedPathPubkeys_Issue1558(t *testing.T) {
 	}
 	defer db.conn.Close()
 
-	if !db.hasResolvedPath {
+	if !db.hasResolvedPath() {
 		t.Fatalf("setup: fixture should expose resolved_path column; hasResolvedPath=false")
 	}
 

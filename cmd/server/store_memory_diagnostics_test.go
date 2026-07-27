@@ -139,7 +139,7 @@ func TestObsRawHexNotRetainedOnLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}
-	if !db.hasObsRawHex {
+	if !db.hasObsRawHex() {
 		t.Fatal("fixture precondition: observations.raw_hex must be detected (hasObsRawHex)")
 	}
 	store := NewPacketStore(db, &PacketStoreConfig{})

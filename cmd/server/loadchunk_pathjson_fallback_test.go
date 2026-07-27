@@ -109,7 +109,7 @@ func TestLoadChunked_ResolvesRelayHopsFromPathJSON_WhenResolvedPathEmpty(t *test
 	}
 	defer db.conn.Close()
 
-	if !db.hasResolvedPath {
+	if !db.hasResolvedPath() {
 		t.Fatalf("setup: fixture should expose resolved_path column; hasResolvedPath=false")
 	}
 
