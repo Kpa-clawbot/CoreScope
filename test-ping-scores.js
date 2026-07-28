@@ -126,6 +126,7 @@ function makeSandbox(apiImpl) {
         mostEfficientPing: { hash: 'eff0001', sender: 'Eve', timestamp: new Date().toISOString(), kmPerSecondAirtime: 50.2, farthestKm: 100, stationCount: 2, deepestHops: 1 },
         relayLeaderboard: [{ pubkey: 'pkrelay1', name: 'RelayOne', count: 7 }],
         observerLeaderboard: [{ pubkey: 'pkobs1', name: 'ObsOne', count: 3 }],
+        senderLeaderboard: [{ name: 'PingMaster', count: 12 }],
       };
       const { container, getPage } = makeSandbox(() => Promise.resolve(data));
       await getPage().init(container);
@@ -134,9 +135,30 @@ function makeSandbox(apiImpl) {
       assert.ok(container.innerHTML.includes('6 stations'), 'should show the widest-spread record, got: ' + container.innerHTML);
       assert.ok(container.innerHTML.includes('RelayOne'), 'should show the relay leaderboard entry, got: ' + container.innerHTML);
       assert.ok(container.innerHTML.includes('ObsOne'), 'should show the observer leaderboard entry, got: ' + container.innerHTML);
+      assert.ok(container.innerHTML.includes('PingMaster'), 'should show the sender leaderboard entry, got: ' + container.innerHTML);
+      assert.ok(container.innerHTML.includes('Top Senders'), 'should show the Top Senders leaderboard heading, got: ' + container.innerHTML);
       passed++;
-      console.log('  ✅ renders all 5 records and both leaderboards from a populated response');
-    } catch (e) { failed++; console.log('  ❌ renders all 5 records and both leaderboards from a populated response: ' + e.message); }
+      console.log('  ✅ renders all 5 records and all three leaderboards (including Top Senders) from a populated response');
+    } catch (e) { failed++; console.log('  ❌ renders all 5 records and all three leaderboards (including Top Senders) from a populated response: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
+      // Sender entries never carry a pubkey (see cmd/server/ping_scores.go
+      // -- senders are keyed by channel-message display name only) --
+      // must render as plain text, not a broken/empty node-detail link.
+      const data = {
+        totalPings: 1,
+        generatedAt: new Date().toISOString(),
+        senderLeaderboard: [{ name: 'NoPubkeySender', count: 3 }],
+      };
+      const { container, getPage } = makeSandbox(() => Promise.resolve(data));
+      await getPage().init(container);
+      assert.ok(container.innerHTML.includes('NoPubkeySender'), 'should show the sender name, got: ' + container.innerHTML);
+      assert.ok(!container.innerHTML.includes('#/nodes/'), 'a pubkey-less sender must not render as a node-detail link, got: ' + container.innerHTML);
+      passed++;
+      console.log('  ✅ a pubkey-less sender leaderboard entry renders as plain text, not a node link');
+    } catch (e) { failed++; console.log('  ❌ a pubkey-less sender leaderboard entry renders as plain text, not a node link: ' + e.message); }
   })();
 
   await (async () => {

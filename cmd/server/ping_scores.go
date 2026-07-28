@@ -95,6 +95,14 @@ type PingScoresSnapshot struct {
 	// ObserverLeaderboard ranks observers by how many pings they were
 	// the FIRST station to hear.
 	ObserverLeaderboard []PingLeaderboardEntry `json:"observerLeaderboard,omitempty"`
+
+	// SenderLeaderboard ranks senders by how many pings they've sent.
+	// Keyed by the sender display NAME from the channel message itself
+	// (ping_triggers.sender / pingTriggerSenderAndText in the ingestor) --
+	// unlike RelayLeaderboard/ObserverLeaderboard there's no resolved
+	// pubkey to link back to a node, so entries never carry one (matches
+	// PingLeaderboardEntry.Pubkey's existing omitempty).
+	SenderLeaderboard []PingLeaderboardEntry `json:"senderLeaderboard,omitempty"`
 }
 
 type pingTriggerRow struct {
@@ -217,6 +225,7 @@ func (s *Server) computeAllPingScores() *PingScoresSnapshot {
 	}
 	relayCounts := map[string]*PingLeaderboardEntry{}
 	observerCounts := map[string]*PingLeaderboardEntry{}
+	senderCounts := map[string]*PingLeaderboardEntry{}
 
 	for _, trigger := range triggers {
 		score := s.computePingScore(trigger)
@@ -261,6 +270,14 @@ func (s *Server) computeAllPingScores() *PingScoresSnapshot {
 			}
 			e.Count++
 		}
+		if score.Sender != "" {
+			e := senderCounts[score.Sender]
+			if e == nil {
+				e = &PingLeaderboardEntry{Name: score.Sender}
+				senderCounts[score.Sender] = e
+			}
+			e.Count++
+		}
 	}
 
 	// Resolve relay names in one bulk query rather than N individual ones.
@@ -281,6 +298,7 @@ func (s *Server) computeAllPingScores() *PingScoresSnapshot {
 
 	snap.RelayLeaderboard = topPingLeaderboard(relayCounts, 10)
 	snap.ObserverLeaderboard = topPingLeaderboard(observerCounts, 10)
+	snap.SenderLeaderboard = topPingLeaderboard(senderCounts, 10)
 	return snap
 }
 
