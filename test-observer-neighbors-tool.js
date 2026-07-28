@@ -32,7 +32,7 @@ function makeRow(overrides) {
   }, overrides);
 }
 
-function createSandbox(rows) {
+function createSandbox(rows, unknownScopesFixture) {
   const docStore = {};
   const listeners = {};
   function fakeEl(id) {
@@ -60,7 +60,7 @@ function createSandbox(rows) {
       querySelector: () => null,
     },
     location: { hash: '#/tools/observer-neighbors' },
-    fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve({ neighbors: rows }) }),
+    fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve({ neighbors: rows, unknownScopes: unknownScopesFixture || [] }) }),
     URLSearchParams: URLSearchParams,
     registerPage: function () {},
     timeAgo: (iso) => 'TIME_AGO(' + iso + ')',
@@ -84,8 +84,8 @@ function createSandbox(rows) {
 // That's fine for these tests: we only need to observe what renderTable()
 // assigns to '#obs-nb-table-wrap'.innerHTML and '#obs-nb-status'.textContent
 // after fetch resolves, and that async load() runs inside init().
-function initWith(rows) {
-  const sb = createSandbox(rows);
+function initWith(rows, unknownScopesFixture) {
+  const sb = createSandbox(rows, unknownScopesFixture);
   const container = { innerHTML: '' };
   sb.window.ObserverNeighborsTool.init(container);
   return sb;
@@ -140,6 +140,24 @@ function waitForLoad() {
     await waitForLoad();
     const status = sb.__docStore['obs-nb-status'];
     assert.ok(status.textContent.includes('2 of 2 neighbor pairs'), `got: ${status.textContent}`);
+  });
+
+  await test('renders the Unknown Scopes panel with scope, count, and example neighbors', async () => {
+    const sb = initWith([makeRow()], [
+      { scope: '#dk-storkbh', count: 3, examples: ['Neighbor A', 'Neighbor B', 'Neighbor C'] },
+    ]);
+    await waitForLoad();
+    const wrap = sb.__docStore['obs-nb-unknown-scopes-wrap'];
+    assert.ok(wrap.innerHTML.includes('Scopes CoreScope Doesn\'t Know About Yet (1)'), `got: ${wrap.innerHTML}`);
+    assert.ok(wrap.innerHTML.includes('#dk-storkbh'), 'expected the unknown scope name');
+    assert.ok(wrap.innerHTML.includes('Neighbor A, Neighbor B, Neighbor C'), 'expected the example neighbors joined');
+  });
+
+  await test('Unknown Scopes panel renders nothing when there are no unknown scopes', async () => {
+    const sb = initWith([makeRow()], []);
+    await waitForLoad();
+    const wrap = sb.__docStore['obs-nb-unknown-scopes-wrap'];
+    assert.strictEqual(wrap.innerHTML, '', 'panel should be empty, not an empty-state message -- absence of unknown scopes is the normal case');
   });
 
   await test('sortValue: observer/neighbor fall back to id/pubkey when unresolved, lowercased', () => {

@@ -201,3 +201,41 @@ func TestHandleAllObserverNeighbors_ExcludesBlacklistedObserver(t *testing.T) {
 		t.Fatalf("expected only normal-obs's row, got %+v", body.Neighbors)
 	}
 }
+
+// dborup: "kan vi have en panel med scopes vi ikke kender på corescope
+// som observer neighbors har fundet" -- unknownScopes surfaces
+// region-scope names seen in reported neighbor scope lists that aren't
+// part of the deployment's configured hashRegions.
+func TestHandleAllObserverNeighbors_UnknownScopes(t *testing.T) {
+	srv, router := setupTestServer(t)
+	srv.cfg.HashRegions = []string{"dk"}
+
+	if _, err := srv.db.conn.Exec(`INSERT INTO observer_neighbors (observer_id, neighbor_pubkey, scopes, status, reported_at) VALUES
+		('obs1', ?, '*,#dk,#dk-storkbh', 'responded', '2026-07-28T14:00:00Z')`,
+		"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"); err != nil {
+		t.Fatalf("seed observer_neighbors: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/observers/neighbors", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var body struct {
+		UnknownScopes []struct {
+			Scope string `json:"scope"`
+			Count int    `json:"count"`
+		} `json:"unknownScopes"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v body=%s", err, w.Body.String())
+	}
+	if len(body.UnknownScopes) != 1 {
+		t.Fatalf("expected 1 unknown scope (#dk-storkbh; #dk is configured, * is the wildcard), got %+v", body.UnknownScopes)
+	}
+	if body.UnknownScopes[0].Scope != "#dk-storkbh" || body.UnknownScopes[0].Count != 1 {
+		t.Errorf("UnknownScopes[0] = %+v, want {#dk-storkbh 1}", body.UnknownScopes[0])
+	}
+}

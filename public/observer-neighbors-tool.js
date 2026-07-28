@@ -10,6 +10,7 @@
 
   var container = null;
   var allRows = [];
+  var unknownScopes = [];
   var filterText = '';
   var sortState = { col: 'observer', dir: 'asc' };
 
@@ -20,6 +21,7 @@
   function init(app) {
     container = app;
     allRows = [];
+    unknownScopes = [];
     filterText = '';
     sortState = { col: 'observer', dir: 'asc' };
 
@@ -27,6 +29,7 @@
       '<div class="tools-landing" style="max-width:1100px">' +
         '<h2>Observer Neighbors</h2>' +
         '<p class="help-text">Every observer\'s firmware-reported direct (zero-hop) neighbors, network-wide. Ground truth from each observer\'s own /neighbors report -- distinct from the packet-path-inferred neighbor graph. Click a column header to sort.</p>' +
+        '<div id="obs-nb-unknown-scopes-wrap"></div>' +
         '<div style="margin:12px 0"><input type="text" id="obs-nb-filter" class="input" placeholder="Filter by observer or neighbor name…" style="max-width:320px"></div>' +
         '<div id="obs-nb-status" class="text-muted" style="font-size:12px;margin-bottom:8px"></div>' +
         '<div id="obs-nb-table-wrap" class="table-fluid-wrap"></div>' +
@@ -46,6 +49,7 @@
   function destroy() {
     container = null;
     allRows = [];
+    unknownScopes = [];
   }
 
   function load() {
@@ -59,12 +63,42 @@
       })
       .then(function (data) {
         allRows = (data && Array.isArray(data.neighbors)) ? data.neighbors : [];
+        unknownScopes = (data && Array.isArray(data.unknownScopes)) ? data.unknownScopes : [];
+        renderUnknownScopes();
         renderTable();
       })
       .catch(function (e) {
         if (wrap) wrap.innerHTML = '';
         if (statusEl) statusEl.textContent = 'Failed to load: ' + e.message;
       });
+  }
+
+  // "Scopes CoreScope doesn't know about yet" -- region-scope names seen
+  // in reported neighbor scope lists that aren't part of this
+  // deployment's configured hashRegions (dborup: "kan vi have en panel
+  // med scopes vi ikke kender på corescope som observer neighbors har
+  // fundet"). Computed server-side (computeUnknownScopes, db.go) from the
+  // same rows this page already fetches -- no second request.
+  function renderUnknownScopes() {
+    var wrap = document.getElementById('obs-nb-unknown-scopes-wrap');
+    if (!wrap) return;
+    if (unknownScopes.length === 0) {
+      wrap.innerHTML = '';
+      return;
+    }
+    var rows = unknownScopes.map(function (u) {
+      return '<tr>' +
+        '<td><code>' + escapeHtml(u.scope) + '</code></td>' +
+        '<td style="text-align:right">' + u.count.toLocaleString() + '</td>' +
+        '<td class="text-muted" style="font-size:0.85em">' + (u.examples || []).map(escapeHtml).join(', ') + '</td>' +
+        '</tr>';
+    }).join('');
+    wrap.innerHTML =
+      '<div class="analytics-card" style="margin:12px 0">' +
+        '<h3 style="margin:0 0 4px">Scopes CoreScope Doesn\'t Know About Yet (' + unknownScopes.length.toLocaleString() + ')</h3>' +
+        '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Region-scope names reported in the wild by neighbors\' OTA scope query, but not part of this deployment\'s configured regions. Might be worth adding to config -- or just neighboring mesh communities using their own naming.</p>' +
+        '<table class="data-table"><thead><tr><th>Scope</th><th style="text-align:right">Seen By</th><th>Example Neighbors</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+      '</div>';
   }
 
   function sortValue(row, col) {

@@ -3326,7 +3326,10 @@ func (s *Server) handleObserverNeighbors(w http.ResponseWriter, r *http.Request)
 // into each observer individually). Same fields/semantics as
 // handleObserverNeighbors, just not scoped to one observer -- including
 // the empty-list-not-error convention for a network with no /neighbors
-// data reported yet.
+// data reported yet. Also surfaces unknownScopes -- region-scope names
+// that turned up in a reported neighbor scope list but aren't part of
+// this deployment's configured hashRegions, computed from the SAME
+// entries (no second query).
 func (s *Server) handleAllObserverNeighbors(w http.ResponseWriter, r *http.Request) {
 	entries, err := s.db.GetAllObserverNeighbors()
 	if err != nil {
@@ -3342,7 +3345,14 @@ func (s *Server) handleAllObserverNeighbors(w http.ResponseWriter, r *http.Reque
 		}
 		entries = filtered
 	}
-	writeJSON(w, map[string]interface{}{"neighbors": entries})
+	var hashRegions []string
+	if s.cfg != nil {
+		hashRegions = s.cfg.HashRegions
+	}
+	writeJSON(w, map[string]interface{}{
+		"neighbors":     entries,
+		"unknownScopes": computeUnknownScopes(entries, hashRegions),
+	})
 }
 
 // handleObserverNeighborMetrics serves the SNR/heard_secs_ago history for
