@@ -122,6 +122,9 @@ function makeAreasResponse(overrides) {
     ],
     unpositionedTotal: 3,
     unpositionedNoNeighborFix: 1,
+    estimatedNodes: [
+      { publicKey: 'pkest01', name: 'EstimatedNode1', areaKey: 'ODE', label: 'Odense by', lat: 55.4, lon: 10.4, contributorCount: 3, spreadKm: 1.2 },
+    ],
   }, overrides);
 }
 
@@ -326,6 +329,21 @@ function makeApiStub(resp) {
     const el = fakeEl();
     await ctx.window._analyticsRenderAreasTab(el);
     assert.ok(!el.innerHTML.includes('Show all'), 'no toggle should render with only 1 area in positionGaps');
+  });
+
+  await testAsync('renders a "View Estimated Nodes on Map" button with the estimated-node count when estimatedNodes is non-empty', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse()));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    assert.ok(el.innerHTML.includes('id="areasViewEstimatedNodes"'), 'the View Estimated Nodes button should render');
+    assert.ok(el.innerHTML.includes('View Estimated Nodes on Map (1)'), 'the button label should show the estimated-node count');
+  });
+
+  await testAsync('does not render the "View Estimated Nodes on Map" button when estimatedNodes is empty', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse({ estimatedNodes: [] })));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    assert.ok(!el.innerHTML.includes('id="areasViewEstimatedNodes"'), 'the button should not render when there are no estimated nodes to show');
   });
 
   await testAsync('renders the unpositioned-nodes summary note including the no-neighbor-fix subset', async () => {

@@ -679,6 +679,21 @@
         } catch {}
         return;
       }
+      // Check for an estimated-nodes view from the Areas tab (via
+      // sessionStorage) — see drawEstimatedNodes. Checked before
+      // map-route-hops since both use similar payload shapes but mean
+      // different things (a resolved hop route vs. a flat point list).
+      const estimatedNodesJson = sessionStorage.getItem('map-estimated-nodes');
+      if (estimatedNodesJson) {
+        sessionStorage.removeItem('map-estimated-nodes');
+        try {
+          const parsed = JSON.parse(estimatedNodesJson);
+          if (parsed && Array.isArray(parsed.points)) {
+            drawEstimatedNodes(parsed.points);
+          }
+        } catch {}
+        return;
+      }
       // Check for route from packet detail (via sessionStorage)
       const routeHopsJson = sessionStorage.getItem('map-route-hops');
       if (routeHopsJson) {
@@ -1039,6 +1054,80 @@
       }
       container.appendChild(label);
     }
+  }
+
+  // Areas tab "View Estimated Nodes" — plots every node behind
+  // Position-Fix Coverage Gaps' Approximated counts at its
+  // nearestPositionedNeighbor weighted-centroid estimate. Same dashed,
+  // semi-transparent marker language as View Path's approximate markers
+  // (packet-path-map.js) so the two "this position is a guess" visual
+  // cues stay consistent across the app, just adapted from an SVG chart
+  // to Leaflet circleMarkers here.
+  function estimatedNodeRadius(contributorCount) {
+    var base = 6;
+    if (contributorCount >= 5) base += 2;
+    else if (contributorCount >= 2) base += 1;
+    return base;
+  }
+  function estimatedNodeOpacity(contributorCount) {
+    if (!contributorCount) return 0.35;
+    return Math.min(0.75, 0.35 + contributorCount * 0.08);
+  }
+  function drawEstimatedNodes(points) {
+    if (markerLayer) map.removeLayer(markerLayer);
+    if (clusterGroup) map.removeLayer(clusterGroup);
+    if (heatLayer) map.removeLayer(heatLayer);
+    routeLayer.clearLayers();
+
+    const closeBtn = L.control({ position: 'topright' });
+    closeBtn.onAdd = function () {
+      const div = L.DomUtil.create('div', 'leaflet-bar');
+      div.innerHTML = '<a href="#" title="Close view" style="font-size:18px;font-weight:bold;text-decoration:none;display:block;width:36px;height:36px;line-height:36px;text-align:center;background:var(--input-bg,#1e293b);color:var(--text,#e2e8f0);border-radius:4px" aria-label="Close view"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></a>';
+      L.DomEvent.on(div, 'click', function (e) {
+        L.DomEvent.preventDefault(e);
+        routeLayer.clearLayers();
+        if (markerLayer) map.addLayer(markerLayer);
+        if (clusterGroup) map.addLayer(clusterGroup);
+        map.removeControl(closeBtn);
+        const label = map.getContainer().querySelector('.mc-estimated-nodes-label');
+        if (label) label.remove();
+      });
+      return div;
+    };
+    closeBtn.addTo(map);
+
+    const valid = (points || []).filter(function (p) { return p && p.lat != null && p.lon != null; });
+    if (valid.length === 0) return;
+
+    const color = '#f59e0b';
+    valid.forEach(function (p) {
+      const marker = L.circleMarker([p.lat, p.lon], {
+        radius: estimatedNodeRadius(p.contributorCount), color: color, fillColor: color,
+        fillOpacity: estimatedNodeOpacity(p.contributorCount), weight: 2, dashArray: '5,4'
+      }).addTo(routeLayer);
+      const spreadNote = p.spreadKm != null ? ('~' + p.spreadKm.toFixed(1) + ' km spread') : 'spread unknown';
+      const contribNote = p.contributorCount ? (p.contributorCount + ' neighbor' + (p.contributorCount === 1 ? '' : 's')) : 'no neighbor count';
+      const areaNote = p.label ? (' — ' + safeEsc(p.label)) : '';
+      marker.bindPopup(
+        '<strong>' + safeEsc(p.name || p.publicKey) + '</strong>' + areaNote + '<br>' +
+        '<span style="font-size:11px;color:var(--text-muted,#94a3b8)">approximate position, estimated from ' + contribNote + ', ' + spreadNote + '</span>' +
+        (p.publicKey ? '<br><a href="#/nodes/' + encodeURIComponent(p.publicKey) + '" style="color:var(--link-color);font-size:12px">View Node →</a>' : '')
+      );
+    });
+
+    const coords = valid.map(function (p) { return [p.lat, p.lon]; });
+    if (coords.length >= 2) {
+      map.fitBounds(L.latLngBounds(coords).pad(0.2));
+    } else {
+      map.setView(coords[0], 13);
+    }
+
+    const container = map.getContainer();
+    const label = document.createElement('div');
+    label.className = 'mc-estimated-nodes-label';
+    label.style.cssText = 'position:absolute;top:10px;left:50px;z-index:1000;background:var(--input-bg,#1e293b);color:var(--text,#e2e8f0);padding:4px 10px;border-radius:4px;font-size:12px';
+    label.textContent = valid.length + ' node' + (valid.length === 1 ? '' : 's') + ' with no real GPS fix — dashed markers are neighbor-based estimates, not reported positions';
+    container.appendChild(label);
   }
 
   // #1418 Phase C — multi-path renderer. Accepts an array of paths (each =

@@ -145,7 +145,7 @@ func TestComputeAreaPositionGaps(t *testing.T) {
 		{PublicKey: "noneighborfix01", Name: "NoNeighborFix"},
 	}
 
-	gaps, noNeighborFix := computeAreaPositionGaps(db, positioned, unpositioned, areas)
+	gaps, noNeighborFix, estimatedNodes := computeAreaPositionGaps(db, positioned, unpositioned, areas)
 	if len(gaps) != 1 {
 		t.Fatalf("got %d area gaps, want 1: %+v", len(gaps), gaps)
 	}
@@ -158,6 +158,19 @@ func TestComputeAreaPositionGaps(t *testing.T) {
 	}
 	if noNeighborFix != 1 {
 		t.Errorf("unpositionedNoNeighborFix = %d, want 1 (noneighborfix01 has no neighbor_edges row)", noNeighborFix)
+	}
+	if len(estimatedNodes) != 1 {
+		t.Fatalf("got %d estimatedNodes, want 1: %+v", len(estimatedNodes), estimatedNodes)
+	}
+	en := estimatedNodes[0]
+	if en.PublicKey != "estimateme01" || en.Name != "EstimateMe" {
+		t.Errorf("estimatedNodes[0] = %+v, want PublicKey=estimateme01 Name=EstimateMe", en)
+	}
+	if en.AreaKey != "ODE" || en.Label != "Odense by" {
+		t.Errorf("estimatedNodes[0] area = %+v, want ODE/Odense by", en)
+	}
+	if en.Lat != 55.40 || en.Lon != 10.40 {
+		t.Errorf("estimatedNodes[0] Lat/Lon = %v/%v, want the estimate centered on its only neighbor realfix01 (55.40/10.40)", en.Lat, en.Lon)
 	}
 }
 
