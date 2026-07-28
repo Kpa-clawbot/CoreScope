@@ -30,7 +30,7 @@
         '<h2>Observer Neighbors</h2>' +
         '<p class="help-text">Every observer\'s firmware-reported direct (zero-hop) neighbors, network-wide. Ground truth from each observer\'s own /neighbors report -- distinct from the packet-path-inferred neighbor graph. Click a column header to sort.</p>' +
         '<div id="obs-nb-unknown-scopes-wrap"></div>' +
-        '<div style="margin:12px 0"><input type="text" id="obs-nb-filter" class="input" placeholder="Filter by observer or neighbor name…" style="max-width:320px"></div>' +
+        '<div style="margin:12px 0"><input type="text" id="obs-nb-filter" class="input" placeholder="Filter by observer or neighbor…" style="width:100%;max-width:420px"></div>' +
         '<div id="obs-nb-status" class="text-muted" style="font-size:12px;margin-bottom:8px"></div>' +
         '<div id="obs-nb-table-wrap" class="table-fluid-wrap"></div>' +
       '</div>';
