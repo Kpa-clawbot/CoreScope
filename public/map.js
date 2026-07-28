@@ -679,19 +679,15 @@
         } catch {}
         return;
       }
-      // Check for an estimated-nodes view from the Areas tab (via
-      // sessionStorage) — see drawEstimatedNodes. Checked before
-      // map-route-hops since both use similar payload shapes but mean
-      // different things (a resolved hop route vs. a flat point list).
-      const estimatedNodesJson = sessionStorage.getItem('map-estimated-nodes');
-      if (estimatedNodesJson) {
-        sessionStorage.removeItem('map-estimated-nodes');
-        try {
-          const parsed = JSON.parse(estimatedNodesJson);
-          if (parsed && Array.isArray(parsed.points)) {
-            drawEstimatedNodes(parsed.points);
-          }
-        } catch {}
+      // Estimated-nodes deep link: #/map?estimatedNodes=1 -- the Areas
+      // tab's "View Estimated Nodes on Map" button links straight here
+      // instead of stashing state in sessionStorage (like the old
+      // map-estimated-nodes key did), so dborup can copy/share/bookmark
+      // the URL and it still works after a reload -- same shareable-URL
+      // convention as loadRouteFromDeepLink below (#1418/#1419).
+      const hashQs = (location.hash || '').split('?')[1];
+      if (new URLSearchParams(hashQs || '').get('estimatedNodes')) {
+        loadEstimatedNodesFromDeepLink();
         return;
       }
       // Check for route from packet detail (via sessionStorage)
@@ -1097,7 +1093,15 @@
     closeBtn.addTo(map);
 
     const valid = (points || []).filter(function (p) { return p && p.lat != null && p.lon != null; });
-    if (valid.length === 0) return;
+    if (valid.length === 0) {
+      const container = map.getContainer();
+      const label = document.createElement('div');
+      label.className = 'mc-estimated-nodes-label';
+      label.style.cssText = 'position:absolute;top:10px;left:50px;z-index:1000;background:var(--input-bg,#1e293b);color:var(--text,#e2e8f0);padding:4px 10px;border-radius:4px;font-size:12px';
+      label.textContent = 'No nodes currently have an estimated position.';
+      container.appendChild(label);
+      return;
+    }
 
     const color = '#f59e0b';
     valid.forEach(function (p) {
@@ -1549,6 +1553,28 @@
       }
     } catch (e) {
       console.warn('[deep-link] route load failed', e);
+    }
+  }
+
+  // Deep link for #/map?estimatedNodes=1 -- fetches the current
+  // network-wide estimated-position list fresh from the same endpoint
+  // the Areas tab uses (/api/analytics/areas) and draws it, rather than
+  // relying on a sessionStorage snapshot from whenever the link was
+  // clicked. Since this list isn't per-user/per-request state (it's the
+  // deployment's current estimate), the URL alone is enough to
+  // reproduce the view -- share/bookmark/reload all just work.
+  async function loadEstimatedNodesFromDeepLink() {
+    try {
+      const resp = await fetch('/api/analytics/areas');
+      if (!resp.ok) {
+        console.warn('[deep-link] /api/analytics/areas returned ' + resp.status);
+        return;
+      }
+      const data = await resp.json();
+      const points = (data && Array.isArray(data.estimatedNodes)) ? data.estimatedNodes : [];
+      drawEstimatedNodes(points);
+    } catch (e) {
+      console.warn('[deep-link] estimated-nodes load failed', e);
     }
   }
 

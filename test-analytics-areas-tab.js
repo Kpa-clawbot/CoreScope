@@ -331,19 +331,24 @@ function makeApiStub(resp) {
     assert.ok(!el.innerHTML.includes('Show all'), 'no toggle should render with only 1 area in positionGaps');
   });
 
-  await testAsync('renders a "View Estimated Nodes on Map" button with the estimated-node count when estimatedNodes is non-empty', async () => {
+  await testAsync('renders a "View Estimated Nodes on Map" LINK (not a JS-click button) with the estimated-node count, pointing at a shareable/bookmarkable URL', async () => {
     const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse()));
     const el = fakeEl();
     await ctx.window._analyticsRenderAreasTab(el);
-    assert.ok(el.innerHTML.includes('id="areasViewEstimatedNodes"'), 'the View Estimated Nodes button should render');
-    assert.ok(el.innerHTML.includes('View Estimated Nodes on Map (1)'), 'the button label should show the estimated-node count');
+    assert.ok(el.innerHTML.includes('id="areasViewEstimatedNodes"'), 'the View Estimated Nodes link should render');
+    assert.ok(el.innerHTML.includes('View Estimated Nodes on Map (1)'), 'the link label should show the estimated-node count');
+    // Must be a real <a href> so right-click "Copy Link Address" works and
+    // the URL survives a reload -- dborup asked for this after the first
+    // version (sessionStorage + a plain button) only ever led to a bare
+    // "#/map" with no shareable state.
+    assert.ok(el.innerHTML.includes('<a href="#/map?estimatedNodes=1" id="areasViewEstimatedNodes"'), 'expected a real anchor with the estimatedNodes=1 deep-link query param');
   });
 
-  await testAsync('does not render the "View Estimated Nodes on Map" button when estimatedNodes is empty', async () => {
+  await testAsync('does not render the "View Estimated Nodes on Map" link when estimatedNodes is empty', async () => {
     const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse({ estimatedNodes: [] })));
     const el = fakeEl();
     await ctx.window._analyticsRenderAreasTab(el);
-    assert.ok(!el.innerHTML.includes('id="areasViewEstimatedNodes"'), 'the button should not render when there are no estimated nodes to show');
+    assert.ok(!el.innerHTML.includes('id="areasViewEstimatedNodes"'), 'the link should not render when there are no estimated nodes to show');
   });
 
   await testAsync('renders the unpositioned-nodes summary note including the no-neighbor-fix subset', async () => {
