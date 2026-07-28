@@ -135,7 +135,7 @@
       '<h2>' + phIcon('trophy') + ' Ping Scores</h2>' +
       '<p class="text-muted">Global records and leaderboards from every "ping" sent in any channel (' + data.totalPings + ' total). Not scoped by region. Updated ' + escapeHtml(formatAgo(data.generatedAt)) + '.</p>' +
       '<h3>' + phIcon('arrow-clockwise') + ' This Week\'s Best</h3>' +
-      '<p class="text-muted" style="font-size:0.85em">Resets on its own after 7 days -- an achievable target, not the same all-time record forever.</p>' +
+      '<p class="text-muted" style="font-size:0.85em">Resets on its own after 7 days.</p>' +
       '<div class="stats-grid ps-records-grid ps-week-grid">' + weekHtml + '</div>' +
       '<h3>All-Time Records</h3>' +
       '<div class="stats-grid ps-records-grid">' + recordsHtml + '</div>' +
