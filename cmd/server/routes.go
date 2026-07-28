@@ -604,7 +604,7 @@ func (s *Server) handleAreaAnalytics(w http.ResponseWriter, r *http.Request) {
 		graph = s.store.graph.Load()
 	}
 
-	positionGaps, noNeighborFix := computeAreaPositionGaps(s.db, positioned, unpositioned, s.cfg.Areas)
+	positionGaps, noNeighborFix, estimatedNodes := computeAreaPositionGaps(s.db, positioned, unpositioned, s.cfg.Areas)
 
 	resp := &AreaAnalyticsResponse{
 		Density:                   computeAreaDensity(positioned, s.cfg.Areas, s.cfg.GetHealthThresholds()),
@@ -612,6 +612,7 @@ func (s *Server) handleAreaAnalytics(w http.ResponseWriter, r *http.Request) {
 		PositionGaps:              positionGaps,
 		UnpositionedTotal:         len(unpositioned),
 		UnpositionedNoNeighborFix: noNeighborFix,
+		EstimatedNodes:            estimatedNodes,
 	}
 
 	s.areaAnalyticsMu.Lock()

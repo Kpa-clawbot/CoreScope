@@ -149,7 +149,7 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/audio-lab/buckets": {Summary: "Audio lab frequency buckets", Description: "Returns frequency bucket data for audio analysis.", Tag: "analytics"},
 		"GET /api/ping-scores": {Summary: "Ping-score highscore board", Description: "Global (not scoped by region/area) records and leaderboards derived from every ping-bot-triggering channel message ever seen: farthest reach, most hops, widest simultaneous spread, fastest full spread, and most airtime-efficient ping, plus which relay nodes and which observers appear most often. Computed from the same GetPacketPath + LoRa-airtime-estimate logic behind /api/packets/{hash}/path and refreshed on a background interval, so it may lag the very latest ping by a few minutes. Fields are omitted (not zero) until at least one qualifying ping has been recorded.", Tag: "packets",
 			Response: schemaRef("PingScoresResponse")},
-		"GET /api/analytics/areas": {Summary: "Per-configured-Area node density, cross-area bridge nodes, and position-fix coverage", Description: "Three breakdowns over the drawn-polygon Areas configured via the meshguide.dk sync, distinct from hashRegion scope adoption (see /api/analytics/scope-stats): (1) density, node count/active-degraded-silent health/role mix per area (multi-membership via AreaKeysForPoint, so a node in a sub-area also counts toward its parent region), (2) bridgeNodes, nodes whose packet-derived neighbor_edges reach into at least one OTHER area (single most-specific area via AreaKeyForPoint), ranked by how many other areas they reach -- distinct from the network-wide, area-unaware bridge_score betweenness centrality, (3) positionGaps, per area how many nodes have a real GPS fix vs. how many were only placeable via the same neighbor-centroid estimate View Path's approx markers use (nearestPositionedNeighbor), used here purely as an internal coverage signal, not a map pin. Returns an empty response if no Areas are configured. Cached 30s.", Tag: "analytics",
+		"GET /api/analytics/areas": {Summary: "Per-configured-Area node density, cross-area bridge nodes, and position-fix coverage", Description: "Three breakdowns over the drawn-polygon Areas configured via the meshguide.dk sync, distinct from hashRegion scope adoption (see /api/analytics/scope-stats): (1) density, node count/active-degraded-silent health/role mix per area (multi-membership via AreaKeysForPoint, so a node in a sub-area also counts toward its parent region), (2) bridgeNodes, nodes whose packet-derived neighbor_edges reach into at least one OTHER area (single most-specific area via AreaKeyForPoint), ranked by how many other areas they reach -- distinct from the network-wide, area-unaware bridge_score betweenness centrality, (3) positionGaps, per area how many nodes have a real GPS fix vs. how many were only placeable via the same neighbor-centroid estimate View Path's approx markers use (nearestPositionedNeighbor). estimatedNodes is the flat, network-wide list backing positionGaps' approximated counts, with actual estimated coordinates -- used by the Areas tab's \"View Estimated Nodes\" map view. Returns an empty response if no Areas are configured. Cached 30s.", Tag: "analytics",
 			Response: schemaRef("AreaAnalyticsResponse")},
 	}
 }
@@ -483,6 +483,20 @@ func componentSchemas() map[string]interface{} {
 				"approximated": map[string]interface{}{"type": "integer", "description": "Nodes with no GPS fix whose neighbor-centroid estimate landed in this area."},
 			},
 		},
+		"EstimatedAreaNode": map[string]interface{}{
+			"type":        "object",
+			"description": "One node with no real GPS fix, plotted at its nearestPositionedNeighbor weighted-centroid estimate -- the same technique View Path's approximate markers use.",
+			"properties": map[string]interface{}{
+				"publicKey":        str("The node's pubkey."),
+				"name":             str("Display name, falling back to the raw pubkey when unresolved."),
+				"areaKey":          str("The area this estimated position falls inside."),
+				"label":            str("That area's display label."),
+				"lat":              map[string]interface{}{"type": "number", "description": "Estimated latitude (weighted centroid of positioned neighbors)."},
+				"lon":              map[string]interface{}{"type": "number", "description": "Estimated longitude."},
+				"contributorCount": map[string]interface{}{"type": "integer", "description": "How many positioned neighbors fed into the estimate."},
+				"spreadKm":         map[string]interface{}{"type": "number", "description": "How spread out (km) those contributing neighbors were -- a rough confidence signal, wider spread means a less certain estimate."},
+			},
+		},
 		"AreaAnalyticsResponse": map[string]interface{}{
 			"type":        "object",
 			"description": "Node density/health, cross-area bridge nodes, and position-fix coverage per configured Area (the drawn-polygon regions from the meshguide.dk sync, distinct from hashRegion scope adoption). Empty when no Areas are configured.",
@@ -492,6 +506,7 @@ func componentSchemas() map[string]interface{} {
 				"positionGaps":              map[string]interface{}{"type": "array", "items": schemaRef("AreaPositionGap")},
 				"unpositionedTotal":         map[string]interface{}{"type": "integer", "description": "Every node with no real GPS fix, regardless of area."},
 				"unpositionedNoNeighborFix": map[string]interface{}{"type": "integer", "description": "The subset of unpositionedTotal that also has no positioned neighbor to estimate from -- can't be placed even approximately, so absent from every area's positionGaps.approximated."},
+				"estimatedNodes":            map[string]interface{}{"type": "array", "items": schemaRef("EstimatedAreaNode"), "description": "Flat, network-wide list of every node behind positionGaps' approximated counts, with actual estimated coordinates for plotting on a map."},
 			},
 		},
 	}

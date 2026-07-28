@@ -122,6 +122,9 @@ function makeAreasResponse(overrides) {
     ],
     unpositionedTotal: 3,
     unpositionedNoNeighborFix: 1,
+    estimatedNodes: [
+      { publicKey: 'pkest01', name: 'EstimatedNode1', areaKey: 'ODE', label: 'Odense by', lat: 55.4, lon: 10.4, contributorCount: 3, spreadKm: 1.2 },
+    ],
   }, overrides);
 }
 
@@ -205,6 +208,36 @@ function makeApiStub(resp) {
     assert.ok(section.includes('Show all 12 nodes'), 'a "Show all" toggle should appear when there are more than 10 bridge nodes');
   });
 
+  await testAsync('numeric column headers are right-aligned to match their right-aligned data cells, in all three tables', async () => {
+    // dborup: numbers didn't line up under their headers -- td cells had
+    // text-align:right but the matching th headers didn't, so header text
+    // sat flush-left while the numbers under it sat flush-right.
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse()));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+
+    function countRightAligned(html, startMarker, endMarker) {
+      const start = html.indexOf(startMarker);
+      const end = endMarker ? html.indexOf(endMarker) : html.length;
+      const section = html.slice(start, end);
+      const thead = section.slice(section.indexOf('<thead>'), section.indexOf('</thead>'));
+      const tbodyStart = section.indexOf('<tbody>');
+      const firstRow = section.slice(tbodyStart, section.indexOf('</tr>', tbodyStart));
+      const theadRight = (thead.match(/text-align:right/g) || []).length;
+      const rowRight = (firstRow.match(/text-align:right/g) || []).length;
+      return { theadRight, rowRight };
+    }
+
+    const density = countRightAligned(el.innerHTML, 'id="areasDensity"', 'id="areasBridgeNodes"');
+    assert.strictEqual(density.theadRight, density.rowRight, `Density: ${density.theadRight} right-aligned headers vs ${density.rowRight} right-aligned cells in the first row`);
+
+    const bridge = countRightAligned(el.innerHTML, 'id="areasBridgeNodes"', 'id="areasPositionGaps"');
+    assert.strictEqual(bridge.theadRight, bridge.rowRight, `Bridge Nodes: ${bridge.theadRight} right-aligned headers vs ${bridge.rowRight} right-aligned cells in the first row`);
+
+    const gaps = countRightAligned(el.innerHTML, 'id="areasPositionGaps"', null);
+    assert.strictEqual(gaps.theadRight, gaps.rowRight, `Position Gaps: ${gaps.theadRight} right-aligned headers vs ${gaps.rowRight} right-aligned cells in the first row`);
+  });
+
   await testAsync('renders the Position-Fix Coverage Gaps table with a computed percentage', async () => {
     const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse()));
     const el = fakeEl();
@@ -212,6 +245,50 @@ function makeApiStub(resp) {
     assert.ok(el.innerHTML.includes('Position-Fix Coverage Gaps by Area'), 'position gaps section heading should render');
     // 1 approximated of (4 real + 1 approximated) = 20.0%
     assert.ok(el.innerHTML.includes('20.0%'), 'ODE row should show 20.0% estimated');
+  });
+
+  await testAsync('all three tables mark scalar columns sortable with data-sort-col, and leave free-text columns (Role Mix, Which Areas) unsortable', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse()));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+
+    const density = el.innerHTML.slice(el.innerHTML.indexOf('id="areasDensity"'), el.innerHTML.indexOf('id="areasBridgeNodes"'));
+    for (const col of ['area', 'total', 'active', 'degraded', 'silent']) {
+      assert.ok(density.includes('data-sort-col="' + col + '"'), `Density should have a sortable "${col}" column`);
+    }
+    const densityThead = density.slice(density.indexOf('<thead>'), density.indexOf('</thead>'));
+    assert.ok(!densityThead.includes('data-sort-col="roleMix"'), 'Density Role Mix header should not be sortable (free-text breakdown)');
+
+    const bridge = el.innerHTML.slice(el.innerHTML.indexOf('id="areasBridgeNodes"'), el.innerHTML.indexOf('id="areasPositionGaps"'));
+    for (const col of ['node', 'homeArea', 'edgeCount', 'otherAreaCount']) {
+      assert.ok(bridge.includes('data-sort-col="' + col + '"'), `Bridge Nodes should have a sortable "${col}" column`);
+    }
+    const bridgeThead = bridge.slice(bridge.indexOf('<thead>'), bridge.indexOf('</thead>'));
+    assert.ok(!bridgeThead.includes('data-sort-col="whichAreas"'), 'Bridge Nodes Which Areas header should not be sortable (free-text list)');
+
+    const gaps = el.innerHTML.slice(el.innerHTML.indexOf('id="areasPositionGaps"'));
+    for (const col of ['area', 'realFix', 'approximated', 'pctEstimated']) {
+      assert.ok(gaps.includes('data-sort-col="' + col + '"'), `Position Gaps should have a sortable "${col}" column`);
+    }
+  });
+
+  await testAsync('the pre-click default sort highlights a real header (sort-active + down arrow) on Bridge Nodes and Position Gaps, but no header on Density (composite default)', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse()));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+
+    const density = el.innerHTML.slice(el.innerHTML.indexOf('id="areasDensity"'), el.innerHTML.indexOf('id="areasBridgeNodes"'));
+    assert.ok(!density.includes('sort-active'), 'Density has no single default column (worst-health is a composite), so no header should start highlighted');
+
+    const bridge = el.innerHTML.slice(el.innerHTML.indexOf('id="areasBridgeNodes"'), el.innerHTML.indexOf('id="areasPositionGaps"'));
+    const otherAreaCountTh = bridge.slice(bridge.indexOf('data-sort-col="otherAreaCount"') - 80, bridge.indexOf('data-sort-col="otherAreaCount"') + 200);
+    assert.ok(otherAreaCountTh.includes('sort-active'), 'Bridge Nodes\' default sort column (otherAreaCount) should start highlighted');
+    assert.ok(otherAreaCountTh.includes('↓'), 'Bridge Nodes\' default direction (desc) should show a down arrow');
+
+    const gaps = el.innerHTML.slice(el.innerHTML.indexOf('id="areasPositionGaps"'));
+    const pctTh = gaps.slice(gaps.indexOf('data-sort-col="pctEstimated"') - 80, gaps.indexOf('data-sort-col="pctEstimated"') + 200);
+    assert.ok(pctTh.includes('sort-active'), 'Position Gaps\' default sort column (pctEstimated) should start highlighted');
+    assert.ok(pctTh.includes('↓'), 'Position Gaps\' default direction (desc) should show a down arrow');
   });
 
   await testAsync('Position-Fix Coverage Gaps sorts worst-coverage-first, not the API\'s realFix-desc order', async () => {
@@ -252,6 +329,21 @@ function makeApiStub(resp) {
     const el = fakeEl();
     await ctx.window._analyticsRenderAreasTab(el);
     assert.ok(!el.innerHTML.includes('Show all'), 'no toggle should render with only 1 area in positionGaps');
+  });
+
+  await testAsync('renders a "View Estimated Nodes on Map" button with the estimated-node count when estimatedNodes is non-empty', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse()));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    assert.ok(el.innerHTML.includes('id="areasViewEstimatedNodes"'), 'the View Estimated Nodes button should render');
+    assert.ok(el.innerHTML.includes('View Estimated Nodes on Map (1)'), 'the button label should show the estimated-node count');
+  });
+
+  await testAsync('does not render the "View Estimated Nodes on Map" button when estimatedNodes is empty', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse({ estimatedNodes: [] })));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    assert.ok(!el.innerHTML.includes('id="areasViewEstimatedNodes"'), 'the button should not render when there are no estimated nodes to show');
   });
 
   await testAsync('renders the unpositioned-nodes summary note including the no-neighbor-fix subset', async () => {

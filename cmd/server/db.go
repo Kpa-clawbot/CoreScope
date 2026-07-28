@@ -3759,7 +3759,7 @@ func computeAreaBridgeNodes(nodes []areaAnalyticsNode, areas map[string]AreaEntr
 // from at all (nearestPositionedNeighbor ok=false) can't be placed
 // anywhere and are counted only in unpositionedNoNeighborFix, not in any
 // area's Approximated total.
-func computeAreaPositionGaps(db *DB, positioned []areaAnalyticsNode, unpositioned []RepeaterRef, areas map[string]AreaEntry) (gaps []AreaPositionGap, unpositionedNoNeighborFix int) {
+func computeAreaPositionGaps(db *DB, positioned []areaAnalyticsNode, unpositioned []RepeaterRef, areas map[string]AreaEntry) (gaps []AreaPositionGap, unpositionedNoNeighborFix int, estimatedNodes []EstimatedAreaNode) {
 	counts := make(map[string]*AreaPositionGap)
 	get := func(key string) *AreaPositionGap {
 		g, exists := counts[key]
@@ -3777,7 +3777,7 @@ func computeAreaPositionGaps(db *DB, positioned []areaAnalyticsNode, unpositione
 		get(key).RealFix++
 	}
 	for _, n := range unpositioned {
-		_, estLat, estLon, _, _, ok := db.nearestPositionedNeighbor(n.PublicKey)
+		_, estLat, estLon, contributorCount, spreadKm, ok := db.nearestPositionedNeighbor(n.PublicKey)
 		if !ok {
 			unpositionedNoNeighborFix++
 			continue
@@ -3787,6 +3787,10 @@ func computeAreaPositionGaps(db *DB, positioned []areaAnalyticsNode, unpositione
 			continue
 		}
 		get(key).Approximated++
+		estimatedNodes = append(estimatedNodes, EstimatedAreaNode{
+			PublicKey: n.PublicKey, Name: n.Name, AreaKey: key, Label: areas[key].Label,
+			Lat: estLat, Lon: estLon, ContributorCount: contributorCount, SpreadKm: spreadKm,
+		})
 	}
 	result := make([]AreaPositionGap, 0, len(counts))
 	for _, g := range counts {
@@ -3798,7 +3802,8 @@ func computeAreaPositionGaps(db *DB, positioned []areaAnalyticsNode, unpositione
 		}
 		return result[i].Label < result[j].Label
 	})
-	return result, unpositionedNoNeighborFix
+	sort.Slice(estimatedNodes, func(i, j int) bool { return estimatedNodes[i].Name < estimatedNodes[j].Name })
+	return result, unpositionedNoNeighborFix, estimatedNodes
 }
 
 // QueryMultiNodePackets returns transmissions referencing any of the given pubkeys.

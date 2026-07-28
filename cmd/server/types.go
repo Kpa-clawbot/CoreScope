@@ -276,6 +276,12 @@ type AreaAnalyticsResponse struct {
 	// counts at all.
 	UnpositionedTotal         int `json:"unpositionedTotal"`
 	UnpositionedNoNeighborFix int `json:"unpositionedNoNeighborFix"`
+	// EstimatedNodes is the flat, network-wide list of every node behind
+	// PositionGaps' Approximated counts -- one entry per node, carrying
+	// its actual estimated lat/lon so the frontend can plot them (Areas
+	// tab's "View Estimated Nodes" map view), not just the per-area
+	// tallies. Same nearestPositionedNeighbor estimate as PositionGaps.
+	EstimatedNodes []EstimatedAreaNode `json:"estimatedNodes"`
 }
 
 // AreaDensity is one configured area's node count, health breakdown
@@ -320,6 +326,22 @@ type AreaPositionGap struct {
 	Label        string `json:"label"`
 	RealFix      int    `json:"realFix"`
 	Approximated int    `json:"approximated"`
+}
+
+// EstimatedAreaNode is one node with no real GPS fix, plotted at its
+// nearestPositionedNeighbor weighted-centroid estimate -- the same
+// technique View Path's approximate markers use, exposed here as a
+// standalone network-wide list (not per-area) for the Areas tab's "View
+// Estimated Nodes" map view.
+type EstimatedAreaNode struct {
+	PublicKey        string  `json:"publicKey"`
+	Name             string  `json:"name"`
+	AreaKey          string  `json:"areaKey"`
+	Label            string  `json:"label"`
+	Lat              float64 `json:"lat"`
+	Lon              float64 `json:"lon"`
+	ContributorCount int     `json:"contributorCount"`
+	SpreadKm         float64 `json:"spreadKm"`
 }
 
 type ScopeRegionRepeaters struct {
