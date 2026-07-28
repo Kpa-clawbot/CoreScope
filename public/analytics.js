@@ -6783,7 +6783,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         '<div class="analytics-card" style="margin-top:16px">' +
           '<h3 style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">' +
             '<span>Position-Fix Coverage Gaps by Area</span>' +
-            (estimatedNodes.length ? '<button type="button" id="areasViewEstimatedNodes" class="btn-link" style="font-size:12px;font-weight:400;cursor:pointer;background:none;border:1px solid var(--border);border-radius:4px;padding:4px 10px;color:var(--link-color)">View Estimated Nodes on Map (' + estimatedNodes.length.toLocaleString() + ')</button>' : '') +
+            (estimatedNodes.length ? '<a href="#/map?estimatedNodes=1" id="areasViewEstimatedNodes" class="btn-link" style="font-size:12px;font-weight:400;text-decoration:none;background:none;border:1px solid var(--border);border-radius:4px;padding:4px 10px;color:var(--link-color)">View Estimated Nodes on Map (' + estimatedNodes.length.toLocaleString() + ')</a>' : '') +
           '</h3>' +
           '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">How many of each area\'s nodes have an actual reported GPS position vs. how many were only placeable via a neighbor-based estimate (same technique used for View Path\'s approximate markers). Click a column header to sort by it.</p>' +
           '<div id="areasPositionGaps">' + gapsSection.tableHtml() + '</div>' +
@@ -6793,14 +6793,6 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       densitySection.attach();
       bridgeSection.attach();
       gapsSection.attach();
-
-      var viewEstimatedBtn = document.getElementById('areasViewEstimatedNodes');
-      if (viewEstimatedBtn) {
-        viewEstimatedBtn.addEventListener('click', function () {
-          sessionStorage.setItem('map-estimated-nodes', JSON.stringify({ points: estimatedNodes }));
-          window.location.hash = '#/map';
-        });
-      }
     } catch (e) {
       el.innerHTML = '<div class="text-center" style="color:var(--status-red);padding:20px">Failed to load area analytics: ' + esc(String(e)) + '</div>';
     }
