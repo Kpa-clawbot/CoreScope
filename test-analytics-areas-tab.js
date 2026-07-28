@@ -205,6 +205,36 @@ function makeApiStub(resp) {
     assert.ok(section.includes('Show all 12 nodes'), 'a "Show all" toggle should appear when there are more than 10 bridge nodes');
   });
 
+  await testAsync('numeric column headers are right-aligned to match their right-aligned data cells, in all three tables', async () => {
+    // dborup: numbers didn't line up under their headers -- td cells had
+    // text-align:right but the matching th headers didn't, so header text
+    // sat flush-left while the numbers under it sat flush-right.
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse()));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+
+    function countRightAligned(html, startMarker, endMarker) {
+      const start = html.indexOf(startMarker);
+      const end = endMarker ? html.indexOf(endMarker) : html.length;
+      const section = html.slice(start, end);
+      const thead = section.slice(section.indexOf('<thead>'), section.indexOf('</thead>'));
+      const tbodyStart = section.indexOf('<tbody>');
+      const firstRow = section.slice(tbodyStart, section.indexOf('</tr>', tbodyStart));
+      const theadRight = (thead.match(/text-align:right/g) || []).length;
+      const rowRight = (firstRow.match(/text-align:right/g) || []).length;
+      return { theadRight, rowRight };
+    }
+
+    const density = countRightAligned(el.innerHTML, 'id="areasDensity"', 'id="areasBridgeNodes"');
+    assert.strictEqual(density.theadRight, density.rowRight, `Density: ${density.theadRight} right-aligned headers vs ${density.rowRight} right-aligned cells in the first row`);
+
+    const bridge = countRightAligned(el.innerHTML, 'id="areasBridgeNodes"', 'id="areasPositionGaps"');
+    assert.strictEqual(bridge.theadRight, bridge.rowRight, `Bridge Nodes: ${bridge.theadRight} right-aligned headers vs ${bridge.rowRight} right-aligned cells in the first row`);
+
+    const gaps = countRightAligned(el.innerHTML, 'id="areasPositionGaps"', null);
+    assert.strictEqual(gaps.theadRight, gaps.rowRight, `Position Gaps: ${gaps.theadRight} right-aligned headers vs ${gaps.rowRight} right-aligned cells in the first row`);
+  });
+
   await testAsync('renders the Position-Fix Coverage Gaps table with a computed percentage', async () => {
     const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse()));
     const el = fakeEl();

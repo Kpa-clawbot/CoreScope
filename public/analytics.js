@@ -6617,7 +6617,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           '<td class="text-muted" style="font-size:0.85em">' + esc(roleParts) + '</td>' +
           '</tr>';
       }
-      var densityThead = '<th scope="col">Area</th><th scope="col">Total</th><th scope="col">Active</th><th scope="col">Degraded</th><th scope="col">Silent</th><th scope="col">Role Mix</th>';
+      var densityThead = '<th scope="col">Area</th><th scope="col" style="text-align:right">Total</th><th scope="col" style="text-align:right">Active</th><th scope="col" style="text-align:right">Degraded</th><th scope="col" style="text-align:right">Silent</th><th scope="col">Role Mix</th>';
       function densityTableHtml(expanded) {
         return collapsibleTableHtml(sortedDensity, densityThead, densityRowHtml, 'data-areas-density-toggle', 'areas',
           '<p class="text-muted" style="font-size:0.85em">No positioned nodes fall inside any configured area.</p>', expanded);
@@ -6635,7 +6635,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           '<td class="text-muted" style="font-size:0.85em">' + (b.otherAreas || []).map(esc).join(', ') + '</td>' +
           '</tr>';
       }
-      var bridgeThead = '<th scope="col">Node</th><th scope="col">Home Area</th><th scope="col">Cross-Area Edges</th><th scope="col">Other Areas Reached</th><th scope="col">Which Areas</th>';
+      var bridgeThead = '<th scope="col">Node</th><th scope="col">Home Area</th><th scope="col" style="text-align:right">Cross-Area Edges</th><th scope="col" style="text-align:right">Other Areas Reached</th><th scope="col">Which Areas</th>';
       function bridgeTableHtml(expanded) {
         return collapsibleTableHtml(bridgeNodes, bridgeThead, bridgeRowHtml, 'data-areas-bridge-toggle', 'nodes',
           '<p class="text-muted" style="font-size:0.85em">No packet-derived neighbor edges cross between two different areas yet.</p>', expanded);
@@ -6660,7 +6660,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           '<td style="text-align:right">' + pct(g.approximated, total) + '</td>' +
           '</tr>';
       }
-      var gapsThead = '<th scope="col">Area</th><th scope="col">Real GPS Fix</th><th scope="col">Estimated (via Neighbors)</th><th scope="col">% Estimated</th>';
+      var gapsThead = '<th scope="col">Area</th><th scope="col" style="text-align:right">Real GPS Fix</th><th scope="col" style="text-align:right">Estimated (via Neighbors)</th><th scope="col" style="text-align:right">% Estimated</th>';
       function gapsTableHtml(expanded) {
         return collapsibleTableHtml(sortedGaps, gapsThead, gapsRowHtml, 'data-areas-gaps-toggle', 'areas',
           '<p class="text-muted" style="font-size:0.85em">No unpositioned node could be placed in any area, even approximately.</p>', expanded);
