@@ -139,6 +139,8 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/observers/{id}/neighbors":                  {Summary: "Get an observer's direct (zero-hop) neighbors", Description: "Ground truth from the observer's own /neighbors firmware report (#1865) -- distinct from the packet-path-inferred neighbor graph. Empty `neighbors` (never null) and an empty `reportedAt` mean the observer has never sent a /neighbors report: opt-in firmware, unavailable on non-PSRAM hardware -- absence is normal, not a fault. Each entry's `scopes` is null unless the neighbor's OTA scope query responded (status=\"responded\"); `name`/`role` are null when the pubkey doesn't resolve to a known node. `seenViaPackets` cross-references the packet-path-inferred neighbor_edges graph: false means this firmware-confirmed neighbor has never had a resolved packet path between it and the observer, a diagnostic signal (possible coverage gap or packet loss), not itself a fault.", Tag: "observers"},
 		"GET /api/observers/{id}/neighbors/{pubkey}/metrics": {Summary: "Get SNR history for one observer<->neighbor direct-RF link", Description: "Raw (unaggregated) history of the snr/heard_secs_ago fields the observer's own /neighbors report carries per neighbor -- report volume per pair is inherently low so, unlike /api/observers/{id}/metrics, there is no resolution/downsampling. Defaults to the last 30 days.", Tag: "observers", QueryParams: []paramMeta{{Name: "since", Description: "RFC3339 lower bound (default: 30 days ago)", Type: "string"}, {Name: "until", Description: "RFC3339 upper bound (default: none)", Type: "string"}}},
 		"GET /api/observers/metrics/summary":                 {Summary: "Observer metrics summary", Description: "Aggregate metrics across all observers.", Tag: "observers"},
+		"GET /api/observers/neighbors": {Summary: "Every observer's reported direct neighbors, network-wide", Description: "Flattens /api/observers/{id}/neighbors across ALL observers into one list -- Tools > Observer Neighbors. Same per-entry semantics (scopes null unless the OTA scope query responded, seenViaPackets cross-references the packet-derived neighbor_edges graph, observer/neighbor name null when unresolved). Blacklisted observers (config.json observerBlacklist) are excluded. Empty list (not an error) when no observer has ever sent a /neighbors report.", Tag: "observers",
+			Response: schemaRef("AllObserverNeighborsResponse")},
 
 		// Misc
 		"GET /api/resolve-hops":  {Summary: "Resolve hop path", Description: "Resolves hash prefixes in a hop path to node names. Returns affinity scores and best candidates.", Tag: "nodes", QueryParams: []paramMeta{{Name: "hops", Description: "Comma-separated hop hash prefixes", Type: "string", Required: true}}},
@@ -507,6 +509,29 @@ func componentSchemas() map[string]interface{} {
 				"unpositionedTotal":         map[string]interface{}{"type": "integer", "description": "Every node with no real GPS fix, regardless of area."},
 				"unpositionedNoNeighborFix": map[string]interface{}{"type": "integer", "description": "The subset of unpositionedTotal that also has no positioned neighbor to estimate from -- can't be placed even approximately, so absent from every area's positionGaps.approximated."},
 				"estimatedNodes":            map[string]interface{}{"type": "array", "items": schemaRef("EstimatedAreaNode"), "description": "Flat, network-wide list of every node behind positionGaps' approximated counts, with actual estimated coordinates for plotting on a map."},
+			},
+		},
+		"AllObserverNeighborsEntry": map[string]interface{}{
+			"type":        "object",
+			"description": "One observer's firmware-reported direct neighbor, flattened with which observer it came from.",
+			"properties": map[string]interface{}{
+				"observerId":     str("The reporting observer's ID."),
+				"observerName":   map[string]interface{}{"type": "string", "nullable": true, "description": "Observer display name, null when unresolved."},
+				"observerIata":   map[string]interface{}{"type": "string", "nullable": true, "description": "Observer's IATA region code, when set."},
+				"neighborPubkey": str("The neighbor's pubkey."),
+				"neighborName":   map[string]interface{}{"type": "string", "nullable": true, "description": "Neighbor display name, null when the pubkey doesn't resolve to a known node."},
+				"neighborRole":   map[string]interface{}{"type": "string", "nullable": true},
+				"scopes":         map[string]interface{}{"type": "string", "nullable": true, "description": "Null unless the neighbor's OTA scope query responded (status=\"responded\")."},
+				"status":         str("The /neighbors report's status for this entry (e.g. \"responded\", \"timeout\")."),
+				"seenViaPackets": map[string]interface{}{"type": "boolean", "description": "Cross-references the packet-path-inferred neighbor_edges graph -- false means this firmware-confirmed neighbor has never had a resolved packet path to the observer (possible coverage gap or packet loss, not necessarily a fault)."},
+				"reportedAt":     str("RFC3339 timestamp of the /neighbors report this row came from."),
+			},
+		},
+		"AllObserverNeighborsResponse": map[string]interface{}{
+			"type":        "object",
+			"description": "Every observer's reported direct neighbors, network-wide (Tools > Observer Neighbors). Empty (not an error) when no observer has ever sent a /neighbors report.",
+			"properties": map[string]interface{}{
+				"neighbors": map[string]interface{}{"type": "array", "items": schemaRef("AllObserverNeighborsEntry")},
 			},
 		},
 	}
