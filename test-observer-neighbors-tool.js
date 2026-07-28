@@ -151,6 +151,15 @@ function waitForLoad() {
     assert.strictEqual(sv({ neighborPubkey: 'AABB' }, 'neighbor'), 'aabb');
   });
 
+  await test('the default-sorted column (Observer) header carries sort-active', async () => {
+    const sb = initWith([makeRow(), makeRow({ observerId: 'obs2', observerName: 'Observer Two' })]);
+    await waitForLoad();
+    const wrap = sb.__docStore['obs-nb-table-wrap'];
+    assert.ok(/data-sort-col="observer"[^>]*class="sortable sort-active"|class="sortable sort-active"[^>]*data-sort-col="observer"/.test(wrap.innerHTML),
+      `expected Observer header to carry sort-active by default; got: ${wrap.innerHTML.slice(0, 400)}`);
+    assert.ok(!/data-sort-col="neighbor"[^>]*sort-active/.test(wrap.innerHTML), 'Neighbor header should not be marked active');
+  });
+
   await test('sortValue: evidence sorts booleans as 1/0', () => {
     const sb = createSandbox([]);
     const sv = sb.window.ObserverNeighborsTool.sortValue;

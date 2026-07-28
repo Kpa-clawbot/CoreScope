@@ -83,6 +83,11 @@
     return '<span class="sort-arrow">' + (sortState.dir === 'asc' ? '↑' : '↓') + '</span>';
   }
 
+  function sortTh(col, label) {
+    var cls = 'sortable' + (col === sortState.col ? ' sort-active' : '');
+    return '<th class="' + cls + '" data-sort-col="' + col + '">' + label + sortArrow(col) + '</th>';
+  }
+
   function matchesFilter(row) {
     if (!filterText) return true;
     var observer = (row.observerName || row.observerId || '').toLowerCase();
@@ -149,12 +154,12 @@
 
     wrap.innerHTML =
       '<table class="data-table" id="obs-nb-table"><thead><tr>' +
-        '<th class="sortable" data-sort-col="observer">Observer' + sortArrow('observer') + '</th>' +
-        '<th class="sortable" data-sort-col="neighbor">Neighbor' + sortArrow('neighbor') + '</th>' +
+        sortTh('observer', 'Observer') +
+        sortTh('neighbor', 'Neighbor') +
         '<th>Configured Scope</th>' +
-        '<th class="sortable" data-sort-col="evidence">Packet Evidence' + sortArrow('evidence') + '</th>' +
-        '<th class="sortable" data-sort-col="status">Status' + sortArrow('status') + '</th>' +
-        '<th class="sortable" data-sort-col="reportedAt">Reported' + sortArrow('reportedAt') + '</th>' +
+        sortTh('evidence', 'Packet Evidence') +
+        sortTh('status', 'Status') +
+        sortTh('reportedAt', 'Reported') +
       '</tr></thead><tbody>' + rows + '</tbody></table>';
 
     var table = document.getElementById('obs-nb-table');
