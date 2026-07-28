@@ -6552,7 +6552,59 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         return (n / total * 100).toFixed(1) + '%';
       }
 
-      var densityRows = density.map(function (a) {
+      // Every section below collapses to the top 10 with a "Show all N"
+      // toggle, same pattern as the Wardriving tab's Top Senders/Coverage
+      // by Observer sections — dborup flagged that a flat 36-row dump
+      // "fylder hele billedet" (fills the whole picture) and asked for
+      // this treatment across all three Areas sections, not just
+      // Position-Fix Coverage Gaps where it started.
+      var AREAS_TOP_N = 10;
+
+      // Generic collapsible-table renderer + click wiring shared by all
+      // three sections below. `items` is assumed already sorted into the
+      // order that matters for that section (worst-first for Density and
+      // Position Gaps, most-cross-area-reach-first for Bridge Nodes,
+      // both already established before this call).
+      function collapsibleTableHtml(items, theadHtml, rowFn, toggleAttr, noun, emptyMsg, expanded) {
+        if (!items.length) return emptyMsg;
+        var shown = expanded ? items : items.slice(0, AREAS_TOP_N);
+        var rows = shown.map(rowFn).join('');
+        var toggle = items.length > AREAS_TOP_N
+          ? '<div style="margin-top:6px;text-align:right"><button type="button" ' + toggleAttr + ' class="btn-link" style="font-size:12px;cursor:pointer;background:none;border:none;color:var(--link-color);padding:0">' +
+            (expanded ? 'Show fewer' : 'Show all ' + items.length.toLocaleString() + ' ' + noun) + '</button></div>'
+          : '';
+        return '<table class="analytics-table"><thead><tr>' + theadHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + toggle;
+      }
+      function wireCollapseToggle(containerId, toggleAttr, renderFn) {
+        var expanded = false;
+        function attach() {
+          var container = document.getElementById(containerId);
+          if (!container) return;
+          var btn = container.querySelector('[' + toggleAttr + ']');
+          if (btn) {
+            btn.addEventListener('click', function () {
+              expanded = !expanded;
+              container.innerHTML = renderFn(expanded);
+              attach();
+            });
+          }
+        }
+        attach();
+      }
+
+      // Density: sorted by % unhealthy (degraded+silent) descending, not
+      // the API's Total-desc order — a handful of big, mostly-healthy
+      // areas (Europa, Danmark) otherwise buried the small areas actually
+      // worth a look. Ties (including the common all-active 0% case)
+      // fall back to Total desc so the biggest areas still anchor each
+      // health tier.
+      var sortedDensity = density.slice().sort(function (a, b) {
+        var pctA = a.total ? (a.degraded + a.silent) / a.total : 0;
+        var pctB = b.total ? (b.degraded + b.silent) / b.total : 0;
+        if (pctB !== pctA) return pctB - pctA;
+        return b.total - a.total;
+      });
+      function densityRowHtml(a) {
         var roleParts = Object.keys(a.roleCounts || {}).sort().map(function (r) {
           return r + ': ' + a.roleCounts[r];
         }).join(', ');
@@ -6564,14 +6616,17 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           '<td style="text-align:right;color:var(--status-red)">' + a.silent.toLocaleString() + '</td>' +
           '<td class="text-muted" style="font-size:0.85em">' + esc(roleParts) + '</td>' +
           '</tr>';
-      }).join('');
-      var densityHtml = density.length ?
-        '<table class="analytics-table"><thead><tr>' +
-          '<th scope="col">Area</th><th scope="col">Total</th><th scope="col">Active</th><th scope="col">Degraded</th><th scope="col">Silent</th><th scope="col">Role Mix</th>' +
-        '</tr></thead><tbody>' + densityRows + '</tbody></table>' :
-        '<p class="text-muted" style="font-size:0.85em">No positioned nodes fall inside any configured area.</p>';
+      }
+      var densityThead = '<th scope="col">Area</th><th scope="col">Total</th><th scope="col">Active</th><th scope="col">Degraded</th><th scope="col">Silent</th><th scope="col">Role Mix</th>';
+      function densityTableHtml(expanded) {
+        return collapsibleTableHtml(sortedDensity, densityThead, densityRowHtml, 'data-areas-density-toggle', 'areas',
+          '<p class="text-muted" style="font-size:0.85em">No positioned nodes fall inside any configured area.</p>', expanded);
+      }
 
-      var bridgeRows = bridgeNodes.map(function (b) {
+      // Bridge nodes: already ranked most-cross-area-reach-first by the
+      // API (computeAreaBridgeNodes, and capped at 25) -- no re-sort
+      // needed, just the same collapse-to-10 treatment.
+      function bridgeRowHtml(b) {
         return '<tr>' +
           '<td><a href="#/nodes/' + encodeURIComponent(b.publicKey) + '">' + esc(b.name) + '</a></td>' +
           '<td>' + esc(b.label) + '</td>' +
@@ -6579,49 +6634,38 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           '<td style="text-align:right">' + b.otherAreaCount.toLocaleString() + '</td>' +
           '<td class="text-muted" style="font-size:0.85em">' + (b.otherAreas || []).map(esc).join(', ') + '</td>' +
           '</tr>';
-      }).join('');
-      var bridgeHtml = bridgeNodes.length ?
-        '<table class="analytics-table"><thead><tr>' +
-          '<th scope="col">Node</th><th scope="col">Home Area</th><th scope="col">Cross-Area Edges</th><th scope="col">Other Areas Reached</th><th scope="col">Which Areas</th>' +
-        '</tr></thead><tbody>' + bridgeRows + '</tbody></table>' :
-        '<p class="text-muted" style="font-size:0.85em">No packet-derived neighbor edges cross between two different areas yet.</p>';
+      }
+      var bridgeThead = '<th scope="col">Node</th><th scope="col">Home Area</th><th scope="col">Cross-Area Edges</th><th scope="col">Other Areas Reached</th><th scope="col">Which Areas</th>';
+      function bridgeTableHtml(expanded) {
+        return collapsibleTableHtml(bridgeNodes, bridgeThead, bridgeRowHtml, 'data-areas-bridge-toggle', 'nodes',
+          '<p class="text-muted" style="font-size:0.85em">No packet-derived neighbor edges cross between two different areas yet.</p>', expanded);
+      }
 
-      // Sorted worst-coverage-first (highest % estimated) rather than the
-      // API's realFix-desc order — most areas have 0% estimated (fully
-      // GPS-mapped already), so a plain dump buried the handful of areas
-      // that actually have a gap worth looking at. Collapses to the top
-      // 10 by default, same "Show all N" pattern as the Wardriving tab's
-      // Top Senders/Coverage by Observer sections.
-      var AREAS_TOP_N = 10;
+      // Position gaps: sorted worst-coverage-first (highest % estimated)
+      // rather than the API's realFix-desc order — most areas have 0%
+      // estimated (fully GPS-mapped already), so a plain dump buried the
+      // handful of areas that actually have a gap worth looking at.
       var sortedGaps = positionGaps.slice().sort(function (a, b) {
         var totalA = a.realFix + a.approximated, totalB = b.realFix + b.approximated;
         var pctA = totalA ? a.approximated / totalA : 0;
         var pctB = totalB ? b.approximated / totalB : 0;
         return pctB - pctA;
       });
-      function gapsToggleHtml(expanded) {
-        if (sortedGaps.length <= AREAS_TOP_N) return '';
-        var label = expanded ? 'Show fewer' : 'Show all ' + sortedGaps.length.toLocaleString() + ' areas';
-        return '<div style="margin-top:6px;text-align:right"><button type="button" data-areas-gaps-toggle class="btn-link" style="font-size:12px;cursor:pointer;background:none;border:none;color:var(--link-color);padding:0">' + label + '</button></div>';
+      function gapsRowHtml(g) {
+        var total = g.realFix + g.approximated;
+        return '<tr>' +
+          '<td>' + esc(g.label) + '</td>' +
+          '<td style="text-align:right">' + g.realFix.toLocaleString() + '</td>' +
+          '<td style="text-align:right">' + g.approximated.toLocaleString() + '</td>' +
+          '<td style="text-align:right">' + pct(g.approximated, total) + '</td>' +
+          '</tr>';
       }
+      var gapsThead = '<th scope="col">Area</th><th scope="col">Real GPS Fix</th><th scope="col">Estimated (via Neighbors)</th><th scope="col">% Estimated</th>';
       function gapsTableHtml(expanded) {
-        if (!sortedGaps.length) {
-          return '<p class="text-muted" style="font-size:0.85em">No unpositioned node could be placed in any area, even approximately.</p>';
-        }
-        var shown = expanded ? sortedGaps : sortedGaps.slice(0, AREAS_TOP_N);
-        var rows = shown.map(function (g) {
-          var total = g.realFix + g.approximated;
-          return '<tr>' +
-            '<td>' + esc(g.label) + '</td>' +
-            '<td style="text-align:right">' + g.realFix.toLocaleString() + '</td>' +
-            '<td style="text-align:right">' + g.approximated.toLocaleString() + '</td>' +
-            '<td style="text-align:right">' + pct(g.approximated, total) + '</td>' +
-            '</tr>';
-        }).join('');
-        return '<table class="analytics-table"><thead><tr>' +
-          '<th scope="col">Area</th><th scope="col">Real GPS Fix</th><th scope="col">Estimated (via Neighbors)</th><th scope="col">% Estimated</th>' +
-        '</tr></thead><tbody>' + rows + '</tbody></table>' + gapsToggleHtml(expanded);
+        return collapsibleTableHtml(sortedGaps, gapsThead, gapsRowHtml, 'data-areas-gaps-toggle', 'areas',
+          '<p class="text-muted" style="font-size:0.85em">No unpositioned node could be placed in any area, even approximately.</p>', expanded);
       }
+
       var unpositionedNote = '<p class="text-muted" style="margin:8px 0 0;font-size:0.85em">' +
         (d.unpositionedTotal || 0).toLocaleString() + ' node' + (d.unpositionedTotal === 1 ? '' : 's') + ' network-wide have no real GPS fix' +
         (d.unpositionedNoNeighborFix ? ', of which ' + d.unpositionedNoNeighborFix.toLocaleString() + ' also have no positioned neighbor to estimate from — those can\'t be placed anywhere, not even approximately, so they\'re absent from the table above entirely.' : '.') +
@@ -6630,13 +6674,13 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       el.innerHTML =
         '<div class="analytics-card">' +
           '<h3>Node Density &amp; Health by Area</h3>' +
-          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Nodes with a real GPS fix inside each configured area — a node in a narrower sub-area also counts toward any broader area containing it (e.g. a city area rolls up into its region).</p>' +
-          densityHtml +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Nodes with a real GPS fix inside each configured area — a node in a narrower sub-area also counts toward any broader area containing it (e.g. a city area rolls up into its region). Sorted worst-health-first.</p>' +
+          '<div id="areasDensity">' + densityTableHtml(false) + '</div>' +
         '</div>' +
         '<div class="analytics-card" style="margin-top:16px">' +
           '<h3>Cross-Area Bridge Nodes</h3>' +
           '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Nodes whose packet-derived neighbor connections reach into at least one OTHER area than their own, ranked by how many other areas they reach. Distinct from the network-wide Bridge Score elsewhere in this app, which has no concept of areas at all.</p>' +
-          bridgeHtml +
+          '<div id="areasBridgeNodes">' + bridgeTableHtml(false) + '</div>' +
         '</div>' +
         '<div class="analytics-card" style="margin-top:16px">' +
           '<h3>Position-Fix Coverage Gaps by Area</h3>' +
@@ -6645,21 +6689,9 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           unpositionedNote +
         '</div>';
 
-      var gapsExpanded = false;
-      var gapsContainer = document.getElementById('areasPositionGaps');
-      function attachGapsToggle() {
-        var container = document.getElementById('areasPositionGaps');
-        if (!container) return;
-        var btn = container.querySelector('[data-areas-gaps-toggle]');
-        if (btn) {
-          btn.addEventListener('click', function () {
-            gapsExpanded = !gapsExpanded;
-            container.innerHTML = gapsTableHtml(gapsExpanded);
-            attachGapsToggle();
-          });
-        }
-      }
-      if (gapsContainer) attachGapsToggle();
+      wireCollapseToggle('areasDensity', 'data-areas-density-toggle', densityTableHtml);
+      wireCollapseToggle('areasBridgeNodes', 'data-areas-bridge-toggle', bridgeTableHtml);
+      wireCollapseToggle('areasPositionGaps', 'data-areas-gaps-toggle', gapsTableHtml);
     } catch (e) {
       el.innerHTML = '<div class="text-center" style="color:var(--status-red);padding:20px">Failed to load area analytics: ' + esc(String(e)) + '</div>';
     }

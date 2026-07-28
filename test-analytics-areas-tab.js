@@ -155,6 +155,56 @@ function makeApiStub(resp) {
     assert.ok(el.innerHTML.includes('Danmark (alle), Jylland'), 'other areas reached should be listed');
   });
 
+  await testAsync('Node Density & Health sorts worst-health-first, not the API\'s Total-desc order', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse({
+      density: [
+        { areaKey: 'BIG', label: 'BigHealthy', total: 100, active: 100, degraded: 0, silent: 0, roleCounts: {} },   // 0% unhealthy, biggest
+        { areaKey: 'SMALL', label: 'SmallSick', total: 4, active: 1, degraded: 1, silent: 2, roleCounts: {} },      // 75% unhealthy, smallest
+        { areaKey: 'MID', label: 'MidSick', total: 10, active: 5, degraded: 3, silent: 2, roleCounts: {} },         // 50% unhealthy
+      ],
+    })));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    const startIdx = el.innerHTML.indexOf('id="areasDensity"');
+    const section = el.innerHTML.slice(startIdx);
+    const idxSmall = section.indexOf('SmallSick');
+    const idxMid = section.indexOf('MidSick');
+    const idxBig = section.indexOf('BigHealthy');
+    assert.ok(idxSmall > -1 && idxMid > -1 && idxBig > -1, 'all three areas should render');
+    assert.ok(idxSmall < idxMid && idxMid < idxBig, 'rows should be ordered worst-health -> best-health, not by Total');
+  });
+
+  await testAsync('Node Density & Health collapses to top 10 with a "Show all" toggle', async () => {
+    const manyAreas = [];
+    for (let i = 0; i < 15; i++) manyAreas.push({ areaKey: 'A' + i, label: 'Area' + i, total: 10, active: 10 - i, degraded: 0, silent: i, roleCounts: {} });
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse({ density: manyAreas })));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    const startIdx = el.innerHTML.indexOf('id="areasDensity"');
+    const section = el.innerHTML.slice(startIdx, el.innerHTML.indexOf('id="areasBridgeNodes"'));
+    const tbody = section.slice(section.indexOf('<tbody>'), section.indexOf('</tbody>'));
+    const rowCount = (tbody.match(/<tr>/g) || []).length;
+    assert.strictEqual(rowCount, 10, 'only 10 rows should render by default');
+    assert.ok(section.includes('Show all 15 areas'), 'a "Show all" toggle should appear when there are more than 10 areas');
+  });
+
+  await testAsync('Cross-Area Bridge Nodes keeps the API\'s otherAreaCount-desc order and collapses to top 10', async () => {
+    const manyBridges = [];
+    for (let i = 0; i < 12; i++) manyBridges.push({ publicKey: 'pk' + i, name: 'Bridge' + i, areaKey: 'A', label: 'AreaA', edgeCount: 5, otherAreaCount: 12 - i, otherAreas: ['AreaB'] });
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse({ bridgeNodes: manyBridges })));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    const startIdx = el.innerHTML.indexOf('id="areasBridgeNodes"');
+    const section = el.innerHTML.slice(startIdx, el.innerHTML.indexOf('id="areasPositionGaps"'));
+    const idxFirst = section.indexOf('Bridge0');
+    const idxLast = section.indexOf('Bridge9');
+    assert.ok(idxFirst > -1 && idxFirst < idxLast, 'highest otherAreaCount (Bridge0) should render before a lower one (Bridge9)');
+    const tbody = section.slice(section.indexOf('<tbody>'), section.indexOf('</tbody>'));
+    const rowCount = (tbody.match(/<tr>/g) || []).length;
+    assert.strictEqual(rowCount, 10, 'only 10 rows should render by default');
+    assert.ok(section.includes('Show all 12 nodes'), 'a "Show all" toggle should appear when there are more than 10 bridge nodes');
+  });
+
   await testAsync('renders the Position-Fix Coverage Gaps table with a computed percentage', async () => {
     const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse()));
     const el = fakeEl();
