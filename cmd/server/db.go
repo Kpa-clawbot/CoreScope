@@ -21,7 +21,9 @@ import (
 // routeTypeTransport covers TRANSPORT_FLOOD (0) and TRANSPORT_DIRECT (3) —
 // the only route types that carry transport_code_1 (transport-level scope).
 // Per firmware/docs/packet_format.md § Route Types:
-//   0 = TRANSPORT_FLOOD, 1 = FLOOD, 2 = DIRECT, 3 = TRANSPORT_DIRECT.
+//
+//	0 = TRANSPORT_FLOOD, 1 = FLOOD, 2 = DIRECT, 3 = TRANSPORT_DIRECT.
+//
 // Routes 1 (FLOOD) and 2 (DIRECT) never carry a scope by protocol — they are
 // inherently unscoped and are counted separately in GetScopeStats (#1838).
 const routeTypeTransportSQL = "route_type IN (0, 3)"
@@ -33,11 +35,11 @@ const routeTypeNonTransportSQL = "route_type IN (1, 2)"
 
 // DB wraps a read-only connection to the MeshCore SQLite database.
 type DB struct {
-	conn             *sql.DB
-	path             string // filesystem path to the database file
-	isV3             bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
-	hasResolvedPath  bool   // observations table has resolved_path column
-	hasObsRawHex     bool   // observations table has raw_hex column (#881)
+	conn                *sql.DB
+	path                string // filesystem path to the database file
+	isV3                bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
+	hasResolvedPath     bool   // observations table has resolved_path column
+	hasObsRawHex        bool   // observations table has raw_hex column (#881)
 	hasScopeName        bool   // transmissions.scope_name column exists (#899)
 	hasDefaultScope     bool   // nodes.default_scope column exists (#899)
 	hasMultibyteSupCols bool   // nodes/inactive_nodes have multibyte_sup/multibyte_evidence (#903)
@@ -48,6 +50,22 @@ type DB struct {
 	channelsCacheKey string
 	channelsCacheRes []map[string]interface{}
 	channelsCacheExp time.Time
+
+	// Prepared statements for frequently-called queries.
+	// Prepared once at initDB time, reused across all requests.
+	stmtCountTransmissions  *sql.Stmt
+	stmtCountObservations   *sql.Stmt
+	stmtCountNodesActive    *sql.Stmt // WHERE last_seen > ?
+	stmtCountNodesAll       *sql.Stmt
+	stmtCountObservers      *sql.Stmt
+	stmtCountObsLastHour    *sql.Stmt // WHERE timestamp > ?
+	stmtCountObsLastDay     *sql.Stmt // WHERE timestamp > ?
+	stmtNodeLookup          *sql.Stmt // WHERE public_key = ? OR name = ?
+	stmtTxByHash            *sql.Stmt // WHERE hash = ?
+	stmtCountNodesByRole    *sql.Stmt // WHERE role = ? AND last_seen > ?
+	stmtCountNodesByRoleAll *sql.Stmt // WHERE role = ?
+	stmtMaxTxID             *sql.Stmt // COALESCE(MAX(id), 0) FROM transmissions
+	stmtMaxObsID            *sql.Stmt // COALESCE(MAX(id), 0) FROM observations
 }
 
 // OpenDB opens a read-only SQLite connection with WAL mode.
@@ -82,15 +100,64 @@ func OpenDB(path string) (*DB, error) {
 		conn.Close()
 		return nil, fmt.Errorf("schema detection failed: %w", derr)
 	}
+	// Statements are prepared after schema detection so they can never be
+	// compiled against a schema mode that turned out to be wrong (#1901).
+	if err := d.prepareStatements(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("prepare statements: %w", err)
+	}
 	return d, nil
 }
 
+// prepareStatements creates prepared statements for frequently-called queries.
+// SQLite compiles and caches the query plan once, avoiding re-parsing per request.
+func (db *DB) prepareStatements() error {
+	var err error
+	prepare := func(query string) *sql.Stmt {
+		if err != nil {
+			return nil
+		}
+		var s *sql.Stmt
+		s, err = db.conn.Prepare(query)
+		return s
+	}
+
+	db.stmtCountTransmissions = prepare("SELECT COUNT(*) FROM transmissions")
+	db.stmtCountObservations = prepare("SELECT COUNT(*) FROM observations")
+	db.stmtCountNodesActive = prepare("SELECT COUNT(*) FROM nodes WHERE last_seen > ?")
+	db.stmtCountNodesAll = prepare("SELECT COUNT(*) FROM nodes")
+	db.stmtCountObservers = prepare("SELECT COUNT(*) FROM observers WHERE inactive IS NULL OR inactive = 0")
+	db.stmtCountObsLastHour = prepare("SELECT COUNT(*) FROM observations WHERE timestamp > ?")
+	db.stmtCountObsLastDay = prepare("SELECT COUNT(*) FROM observations WHERE timestamp > ?")
+	db.stmtNodeLookup = prepare("SELECT public_key FROM nodes WHERE public_key = ? OR name = ? LIMIT 1")
+	db.stmtTxByHash = prepare("SELECT id FROM transmissions WHERE hash = ?")
+	db.stmtCountNodesByRole = prepare("SELECT COUNT(*) FROM nodes WHERE role = ? AND last_seen > ?")
+	db.stmtCountNodesByRoleAll = prepare("SELECT COUNT(*) FROM nodes WHERE role = ?")
+	db.stmtMaxTxID = prepare("SELECT COALESCE(MAX(id), 0) FROM transmissions")
+	db.stmtMaxObsID = prepare("SELECT COALESCE(MAX(id), 0) FROM observations")
+	return err
+}
+
 func (db *DB) Close() error {
-	// The connection is opened read-only (mode=ro in OpenDB), so it cannot
-	// checkpoint the WAL: PRAGMA wal_checkpoint(TRUNCATE) always fails with
-	// "disk I/O error (778)" on a read-only handle. Attempting it emitted a
-	// misleading storage-fault line on every shutdown that wasted incident
-	// investigation time (#1901); the ingestor (the writer) owns checkpointing.
+	// Close prepared statements
+	closers := []*sql.Stmt{
+		db.stmtCountTransmissions, db.stmtCountObservations,
+		db.stmtCountNodesActive, db.stmtCountNodesAll, db.stmtCountObservers,
+		db.stmtCountObsLastHour, db.stmtCountObsLastDay,
+		db.stmtNodeLookup, db.stmtTxByHash,
+		db.stmtCountNodesByRole, db.stmtCountNodesByRoleAll,
+		db.stmtMaxTxID, db.stmtMaxObsID,
+	}
+	for _, s := range closers {
+		if s != nil {
+			s.Close()
+		}
+	}
+	// No WAL checkpoint here. The connection is opened read-only (mode=ro in
+	// OpenDB), so PRAGMA wal_checkpoint(TRUNCATE) always fails with "disk I/O
+	// error (778)" on it. Attempting it emitted a misleading storage-fault line
+	// on every shutdown that wasted incident investigation time (#1901); the
+	// ingestor (the writer) owns checkpointing.
 	return db.conn.Close()
 }
 
@@ -248,7 +315,7 @@ func (db *DB) scanTransmissionRow(rows *sql.Rows) map[string]interface{} {
 
 // Node represents a row from the nodes table.
 type Node struct {
-	PublicKey     string   `json:"public_key"`
+	PublicKey    string   `json:"public_key"`
 	Name         *string  `json:"name"`
 	Role         *string  `json:"role"`
 	Lat          *float64 `json:"lat"`
@@ -341,24 +408,24 @@ type Stats struct {
 // GetStats returns aggregate counts (matches Node.js db.getStats shape).
 func (db *DB) GetStats() (*Stats, error) {
 	s := &Stats{}
-	err := db.conn.QueryRow("SELECT COUNT(*) FROM transmissions").Scan(&s.TotalTransmissions)
+	err := db.stmtCountTransmissions.QueryRow().Scan(&s.TotalTransmissions)
 	if err != nil {
 		return nil, err
 	}
 	s.TotalPackets = s.TotalTransmissions
 
-	db.conn.QueryRow("SELECT COUNT(*) FROM observations").Scan(&s.TotalObservations)
+	db.stmtCountObservations.QueryRow().Scan(&s.TotalObservations)
 	// Node.js uses 7-day active nodes for totalNodes
 	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
-	db.conn.QueryRow("SELECT COUNT(*) FROM nodes WHERE last_seen > ?", sevenDaysAgo).Scan(&s.TotalNodes)
-	db.conn.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&s.TotalNodesAllTime)
-	db.conn.QueryRow("SELECT COUNT(*) FROM observers WHERE inactive IS NULL OR inactive = 0").Scan(&s.TotalObservers)
+	db.stmtCountNodesActive.QueryRow(sevenDaysAgo).Scan(&s.TotalNodes)
+	db.stmtCountNodesAll.QueryRow().Scan(&s.TotalNodesAllTime)
+	db.stmtCountObservers.QueryRow().Scan(&s.TotalObservers)
 
 	oneHourAgo := time.Now().Add(-1 * time.Hour).Unix()
-	db.conn.QueryRow("SELECT COUNT(*) FROM observations WHERE timestamp > ?", oneHourAgo).Scan(&s.PacketsLastHour)
+	db.stmtCountObsLastHour.QueryRow(oneHourAgo).Scan(&s.PacketsLastHour)
 
 	oneDayAgo := time.Now().Add(-24 * time.Hour).Unix()
-	db.conn.QueryRow("SELECT COUNT(*) FROM observations WHERE timestamp > ?", oneDayAgo).Scan(&s.PacketsLast24h)
+	db.stmtCountObsLastDay.QueryRow(oneDayAgo).Scan(&s.PacketsLast24h)
 
 	return s, nil
 }
@@ -480,7 +547,7 @@ func (db *DB) GetRoleCounts() map[string]int {
 	counts := map[string]int{}
 	for _, role := range []string{"repeater", "room", "companion", "sensor"} {
 		var c int
-		db.conn.QueryRow("SELECT COUNT(*) FROM nodes WHERE role = ? AND last_seen > ?", role, sevenDaysAgo).Scan(&c)
+		db.stmtCountNodesByRole.QueryRow(role, sevenDaysAgo).Scan(&c)
 		counts[role+"s"] = c
 	}
 	return counts
@@ -491,7 +558,7 @@ func (db *DB) GetAllRoleCounts() map[string]int {
 	counts := map[string]int{}
 	for _, role := range []string{"repeater", "room", "companion", "sensor"} {
 		var c int
-		db.conn.QueryRow("SELECT COUNT(*) FROM nodes WHERE role = ?", role).Scan(&c)
+		db.stmtCountNodesByRoleAll.QueryRow(role).Scan(&c)
 		counts[role+"s"] = c
 	}
 	return counts
@@ -499,20 +566,20 @@ func (db *DB) GetAllRoleCounts() map[string]int {
 
 // PacketQuery holds filter params for packet listing.
 type PacketQuery struct {
-	Limit    int
-	Offset   int
-	Type     *int
-	Route    *int
-	Observer string
-	Hash     string
-	Since    string
-	Until    string
-	Region   string
-	Area     string   // area key; filters by transmitting node's GPS position
-	Node     string
-	Channel  string // channel_hash filter (#812). Plain names like "#test"/"public" or "enc_<HEX>" for encrypted
-	Order               string // ASC or DESC
-	ExpandObservations  bool   // when true, include observation sub-maps in txToMap output
+	Limit              int
+	Offset             int
+	Type               *int
+	Route              *int
+	Observer           string
+	Hash               string
+	Since              string
+	Until              string
+	Region             string
+	Area               string // area key; filters by transmitting node's GPS position
+	Node               string
+	Channel            string // channel_hash filter (#812). Plain names like "#test"/"public" or "enc_<HEX>" for encrypted
+	Order              string // ASC or DESC
+	ExpandObservations bool   // when true, include observation sub-maps in txToMap output
 }
 
 // PacketResult wraps paginated packet list.
@@ -541,7 +608,7 @@ func (db *DB) QueryPackets(q PacketQuery) (*PacketResult, error) {
 	// Count transmissions (not observations)
 	var total int
 	if len(where) == 0 {
-		db.conn.QueryRow("SELECT COUNT(*) FROM transmissions").Scan(&total)
+		db.stmtCountTransmissions.QueryRow().Scan(&total)
 	} else {
 		countSQL := fmt.Sprintf("SELECT COUNT(*) FROM transmissions t %s", w)
 		db.conn.QueryRow(countSQL, args...).Scan(&total)
@@ -593,7 +660,7 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 	// Count total transmissions (fast — queries transmissions directly, not a VIEW)
 	var total int
 	if len(where) == 0 {
-		db.conn.QueryRow("SELECT COUNT(*) FROM transmissions").Scan(&total)
+		db.stmtCountTransmissions.QueryRow().Scan(&total)
 	} else {
 		db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM transmissions t %s", w), args...).Scan(&total)
 	}
@@ -825,13 +892,12 @@ func (db *DB) buildTransmissionWhere(q PacketQuery) ([]string, []interface{}) {
 
 func (db *DB) resolveNodePubkey(nodeIDOrName string) string {
 	var pk string
-	err := db.conn.QueryRow("SELECT public_key FROM nodes WHERE public_key = ? OR name = ? LIMIT 1", nodeIDOrName, nodeIDOrName).Scan(&pk)
+	err := db.stmtNodeLookup.QueryRow(nodeIDOrName, nodeIDOrName).Scan(&pk)
 	if err != nil {
 		return nodeIDOrName
 	}
 	return pk
 }
-
 
 // GetTransmissionByID fetches from transmissions table with observer data.
 func (db *DB) GetTransmissionByID(id int) (map[string]interface{}, error) {
@@ -870,15 +936,13 @@ func (db *DB) GetPacketByHash(hash string) (map[string]interface{}, error) {
 // when the in-memory PacketStore has pruned the entry but the DB still has it.
 func (db *DB) GetObservationsForHash(hash string) []map[string]interface{} {
 	var txID int
-	err := db.conn.QueryRow("SELECT id FROM transmissions WHERE hash = ?",
-		strings.ToLower(hash)).Scan(&txID)
+	err := db.stmtTxByHash.QueryRow(strings.ToLower(hash)).Scan(&txID)
 	if err != nil {
 		return nil
 	}
 	obsByTx := db.getObservationsForTransmissions([]int{txID})
 	return obsByTx[txID]
 }
-
 
 // GetNodes returns filtered, paginated node list.
 func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortBy, region string) ([]map[string]interface{}, int, map[string]int, error) {
@@ -1058,7 +1122,6 @@ func (db *DB) GetNodeByPubkey(pubkey string) (map[string]interface{}, error) {
 	}
 	return nil, nil
 }
-
 
 // GetRecentTransmissionsForNode returns recent transmissions originated by a
 // node, identified by exact pubkey match on the indexed from_pubkey column
@@ -1431,7 +1494,6 @@ func (db *DB) GetDistinctIATAs() ([]string, error) {
 	}
 	return codes, nil
 }
-
 
 // GetNetworkStatus returns overall network health status.
 func (db *DB) GetNetworkStatus(healthThresholds HealthThresholds) (map[string]interface{}, error) {
@@ -1900,8 +1962,8 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 	defer rows.Close()
 
 	type msg struct {
-		Data       map[string]interface{}
-		Repeats    int
+		Data        map[string]interface{}
+		Repeats     int
 		LatestEpoch int64 // max observation timestamp (unix seconds) — issue #1366
 	}
 	msgMap := make(map[int]*msg, len(pageIDs))
@@ -2016,8 +2078,6 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 	return messages, total, nil
 }
 
-
-
 // GetNewTransmissionsSince returns new transmissions after a given ID for WebSocket polling.
 func (db *DB) GetNewTransmissionsSince(lastID int, limit int) ([]map[string]interface{}, error) {
 	if limit <= 0 {
@@ -2053,14 +2113,14 @@ func (db *DB) GetNewTransmissionsSince(lastID int, limit int) ([]map[string]inte
 // GetMaxTransmissionID returns the current max ID for polling.
 func (db *DB) GetMaxTransmissionID() int {
 	var maxID int
-	db.conn.QueryRow("SELECT COALESCE(MAX(id), 0) FROM transmissions").Scan(&maxID)
+	db.stmtMaxTxID.QueryRow().Scan(&maxID)
 	return maxID
 }
 
 // GetMaxObservationID returns the current max observation ID for polling.
 func (db *DB) GetMaxObservationID() int {
 	var maxID int
-	db.conn.QueryRow("SELECT COALESCE(MAX(id), 0) FROM observations").Scan(&maxID)
+	db.stmtMaxObsID.QueryRow().Scan(&maxID)
 	return maxID
 }
 
@@ -2657,7 +2717,6 @@ func (db *DB) GetMetricsSummary(since string) ([]MetricsSummaryRow, error) {
 // (PruneOldMetrics / RemoveStaleObservers removed in #1283 — see note
 // above the MetricsSample type. Ingestor owns these writes now.)
 
-
 // GetDroppedPackets returns recently dropped packets, newest first.
 func (db *DB) GetDroppedPackets(limit int, observerID, nodePubkey string) ([]map[string]interface{}, error) {
 	if limit <= 0 || limit > 500 {
@@ -2797,7 +2856,7 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 			COALESCE(SUM(CASE WHEN scope_name IS NULL THEN 1 ELSE 0 END), 0) AS unscoped,
 			COALESCE(SUM(CASE WHEN scope_name = '' THEN 1 ELSE 0 END), 0) AS unknown_scope
 		FROM transmissions
-		WHERE ` + routeTypeTransportSQL + ` AND first_seen >= ?
+		WHERE `+routeTypeTransportSQL+` AND first_seen >= ?
 	`, since)
 	if err := row.Scan(
 		&resp.Summary.TransportTotal,
@@ -2825,7 +2884,7 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 	rows, err := db.conn.Query(`
 		SELECT scope_name, COUNT(*) AS cnt
 		FROM transmissions
-		WHERE ` + routeTypeTransportSQL + ` AND scope_name IS NOT NULL AND scope_name != '' AND first_seen >= ?
+		WHERE `+routeTypeTransportSQL+` AND scope_name IS NOT NULL AND scope_name != '' AND first_seen >= ?
 		GROUP BY scope_name
 		ORDER BY cnt DESC
 	`, since)
@@ -2852,7 +2911,7 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 			COUNT(scope_name) AS scoped,
 			SUM(CASE WHEN scope_name IS NULL THEN 1 ELSE 0 END) AS unscoped
 		FROM transmissions
-		WHERE ` + routeTypeTransportSQL + ` AND first_seen >= ?
+		WHERE `+routeTypeTransportSQL+` AND first_seen >= ?
 		GROUP BY bucket
 		ORDER BY bucket
 	`, bucketExpr)
