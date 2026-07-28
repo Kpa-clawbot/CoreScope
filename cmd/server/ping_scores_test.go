@@ -318,6 +318,63 @@ func TestComputeAllPingScores_SenderLeaderboard30DayCutoff(t *testing.T) {
 	}
 }
 
+// TestComputeAllPingScores_ThisWeek confirms ThisWeek is an independently
+// windowed record set: an older, BIGGER ping still wins the all-time slot,
+// while a smaller but recent ping wins the equivalent ThisWeek slot since
+// the older one falls outside the 7-day window.
+func TestComputeAllPingScores_ThisWeek(t *testing.T) {
+	srv, _ := setupPingScoresFixture(t)
+
+	// Old: 10 days ago, farther (pingobsb, ~230km from pingobsa) -- must
+	// win the all-time FarthestPing but be excluded from ThisWeek.
+	oldTs := time.Now().AddDate(0, 0, -10)
+	txOld := seedPingTrigger(t, srv, "weekold0000001", "#test", "Alice", oldTs.Format(time.RFC3339))
+	seedPingObservation(t, srv, txOld, "pingobsa", 9.0, `[]`, `[]`, oldTs.Unix())
+	seedPingObservation(t, srv, txOld, "pingobsb", 6.0, `["aa"]`, `["pkrelay1"]`, oldTs.Unix()+10)
+
+	// Recent: 2 days ago, closer (pingobsc, ~6km from pingobsa) -- the
+	// only ping inside the 7-day window, so it must win ThisWeek's
+	// FarthestPing even though it's smaller than the old one.
+	recentTs := time.Now().AddDate(0, 0, -2)
+	txRecent := seedPingTrigger(t, srv, "weeknew0000001", "#test", "Bob", recentTs.Format(time.RFC3339))
+	seedPingObservation(t, srv, txRecent, "pingobsa", 9.0, `[]`, `[]`, recentTs.Unix())
+	seedPingObservation(t, srv, txRecent, "pingobsc", 6.0, `["aa"]`, `["pkrelay2"]`, recentTs.Unix()+10)
+
+	snap := srv.computeAllPingScores()
+	if snap == nil {
+		t.Fatal("computeAllPingScores returned nil")
+	}
+	if snap.FarthestPing == nil || snap.FarthestPing.Hash != "weekold0000001" {
+		t.Errorf("all-time FarthestPing = %+v, want weekold0000001 (the farther, older ping)", snap.FarthestPing)
+	}
+	if snap.ThisWeek == nil {
+		t.Fatal("ThisWeek is nil, want a populated record set from the recent ping")
+	}
+	if snap.ThisWeek.FarthestPing == nil || snap.ThisWeek.FarthestPing.Hash != "weeknew0000001" {
+		t.Errorf("ThisWeek.FarthestPing = %+v, want weeknew0000001 -- the old ping is outside the 7-day window", snap.ThisWeek.FarthestPing)
+	}
+}
+
+// TestComputeAllPingScores_ThisWeekNilWhenNoRecentPings confirms ThisWeek
+// stays nil (not a zero-valued struct) when every ping is outside the
+// 7-day window, matching the frontend's null-safe "no record yet"
+// rendering rather than an empty-but-present object.
+func TestComputeAllPingScores_ThisWeekNilWhenNoRecentPings(t *testing.T) {
+	srv, _ := setupPingScoresFixture(t)
+	oldTs := time.Now().AddDate(0, 0, -30)
+	txOld := seedPingTrigger(t, srv, "weeknone000001", "#test", "Alice", oldTs.Format(time.RFC3339))
+	seedPingObservation(t, srv, txOld, "pingobsa", 9.0, `[]`, `[]`, oldTs.Unix())
+	seedPingObservation(t, srv, txOld, "pingobsb", 6.0, `["aa"]`, `["pkrelay1"]`, oldTs.Unix()+10)
+
+	snap := srv.computeAllPingScores()
+	if snap == nil {
+		t.Fatal("computeAllPingScores returned nil")
+	}
+	if snap.ThisWeek != nil {
+		t.Errorf("ThisWeek = %+v, want nil when no ping in the last 7 days resolved to a usable score", snap.ThisWeek)
+	}
+}
+
 // TestHandlePingScores_EmptyState confirms the endpoint returns a
 // well-formed 200 with zero-valued/omitted fields rather than an error
 // when no ping has ever been recorded -- an ordinary state, not a failure.

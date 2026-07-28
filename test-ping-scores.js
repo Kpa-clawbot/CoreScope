@@ -124,22 +124,56 @@ function makeSandbox(apiImpl) {
         widestSpreadPing: { hash: 'wide0001', sender: 'Carol', timestamp: new Date().toISOString(), stationCount: 6, deepestHops: 3 },
         fastestSpreadPing: { hash: 'fast0001', sender: 'Dave', timestamp: new Date().toISOString(), spreadSeconds: 2.5, stationCount: 2, deepestHops: 1 },
         mostEfficientPing: { hash: 'eff0001', sender: 'Eve', timestamp: new Date().toISOString(), kmPerSecondAirtime: 50.2, farthestKm: 100, stationCount: 2, deepestHops: 1 },
+        thisWeek: {
+          farthestPing: { hash: 'wkfar0001', sender: 'Frank', timestamp: new Date().toISOString(), farthestKm: 12.3, farthestNodeName: 'WeeklyRepeater', stationCount: 2, deepestHops: 1 },
+        },
         relayLeaderboard: [{ pubkey: 'pkrelay1', name: 'RelayOne', count: 7 }],
         observerLeaderboard: [{ pubkey: 'pkobs1', name: 'ObsOne', count: 3 }],
         senderLeaderboard: [{ name: 'PingMaster', count: 12 }],
       };
       const { container, getPage } = makeSandbox(() => Promise.resolve(data));
       await getPage().init(container);
-      assert.ok(container.innerHTML.includes('123.4'), 'should show the farthest record km, got: ' + container.innerHTML);
+      assert.ok(container.innerHTML.includes('123.4'), 'should show the all-time farthest record km, got: ' + container.innerHTML);
       assert.ok(container.innerHTML.includes('4 hops'), 'should show the most-hops record, got: ' + container.innerHTML);
       assert.ok(container.innerHTML.includes('6 stations'), 'should show the widest-spread record, got: ' + container.innerHTML);
       assert.ok(container.innerHTML.includes('RelayOne'), 'should show the relay leaderboard entry, got: ' + container.innerHTML);
       assert.ok(container.innerHTML.includes('ObsOne'), 'should show the observer leaderboard entry, got: ' + container.innerHTML);
       assert.ok(container.innerHTML.includes('PingMaster'), 'should show the sender leaderboard entry, got: ' + container.innerHTML);
       assert.ok(container.innerHTML.includes('Top Senders (30 days)'), 'should show the Top Senders leaderboard heading with the 30-day window noted, got: ' + container.innerHTML);
+      assert.ok(container.innerHTML.includes("This Week's Best"), 'should show the This Week\'s Best section heading, got: ' + container.innerHTML);
+      assert.ok(container.innerHTML.includes('All-Time Records'), 'should show the All-Time Records section heading, got: ' + container.innerHTML);
+      assert.ok(container.innerHTML.includes('12.3'), 'should show the thisWeek farthest record km distinct from the all-time one, got: ' + container.innerHTML);
+      assert.ok(container.innerHTML.includes('WeeklyRepeater'), 'should show the thisWeek record\'s node name, got: ' + container.innerHTML);
       passed++;
       console.log('  ✅ renders all 5 records and all three leaderboards (including Top Senders) from a populated response');
     } catch (e) { failed++; console.log('  ❌ renders all 5 records and all three leaderboards (including Top Senders) from a populated response: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
+      // thisWeek is entirely absent when no ping in the last 7 days
+      // resolved to a usable score (cmd/server/ping_scores.go leaves it
+      // nil rather than sending an empty object) -- the section must
+      // still render its 5 "No record yet" placeholders, not throw. All 5
+      // all-time slots are populated here so the only "No record yet"
+      // cards left are the 5 thisWeek ones -- isolates what's under test.
+      const data = {
+        totalPings: 1,
+        generatedAt: new Date().toISOString(),
+        farthestPing: { hash: 'old0001', sender: 'Grace', timestamp: new Date().toISOString(), farthestKm: 300, stationCount: 2, deepestHops: 1 },
+        mostHopsPing: { hash: 'old0002', sender: 'Grace', timestamp: new Date().toISOString(), deepestHops: 3, stationCount: 2 },
+        widestSpreadPing: { hash: 'old0003', sender: 'Grace', timestamp: new Date().toISOString(), stationCount: 4, deepestHops: 1 },
+        fastestSpreadPing: { hash: 'old0004', sender: 'Grace', timestamp: new Date().toISOString(), spreadSeconds: 3, stationCount: 2, deepestHops: 1 },
+        mostEfficientPing: { hash: 'old0005', sender: 'Grace', timestamp: new Date().toISOString(), kmPerSecondAirtime: 10, farthestKm: 20, stationCount: 2, deepestHops: 1 },
+      };
+      const { container, getPage } = makeSandbox(() => Promise.resolve(data));
+      await getPage().init(container);
+      assert.ok(container.innerHTML.includes("This Week's Best"), 'should still show the This Week\'s Best heading, got: ' + container.innerHTML);
+      const weekSectionCount = (container.innerHTML.match(/No record yet/g) || []).length;
+      assert.strictEqual(weekSectionCount, 5, 'expected all 5 thisWeek cards to fall back to "No record yet", got ' + weekSectionCount);
+      passed++;
+      console.log('  ✅ missing thisWeek renders 5 "No record yet" placeholders instead of throwing');
+    } catch (e) { failed++; console.log('  ❌ missing thisWeek renders 5 "No record yet" placeholders instead of throwing: ' + e.message); }
   })();
 
   await (async () => {

@@ -119,10 +119,25 @@
       return recordCardHtml(def, data[def.key]);
     }).join('');
 
+    // ThisWeek mirrors the same 5 slots, scoped to the trailing 7 days --
+    // an all-time record set once (e.g. a 364km farthest ping) locks that
+    // card in forever, so this gives people an achievable target that
+    // resets on its own. May be entirely absent (no ping in 7 days), in
+    // which case every card falls through to recordCardHtml's "No record
+    // yet" placeholder via the `|| {}` fallback.
+    var week = data.thisWeek || {};
+    var weekHtml = recordDefs.map(function (def) {
+      return recordCardHtml(def, week[def.key]);
+    }).join('');
+
     container.innerHTML =
       '<div class="ping-scores-page">' +
       '<h2>' + phIcon('trophy') + ' Ping Scores</h2>' +
       '<p class="text-muted">Global records and leaderboards from every "ping" sent in any channel (' + data.totalPings + ' total). Not scoped by region. Updated ' + escapeHtml(formatAgo(data.generatedAt)) + '.</p>' +
+      '<h3>' + phIcon('arrow-clockwise') + ' This Week\'s Best</h3>' +
+      '<p class="text-muted" style="font-size:0.85em">Resets on its own after 7 days -- an achievable target, not the same all-time record forever.</p>' +
+      '<div class="stats-grid ps-records-grid ps-week-grid">' + weekHtml + '</div>' +
+      '<h3>All-Time Records</h3>' +
       '<div class="stats-grid ps-records-grid">' + recordsHtml + '</div>' +
       '<div class="ps-leaderboards-grid">' +
         leaderboardTableHtml('Top Senders (30 days)', phIcon('megaphone'), data.senderLeaderboard, 'Sender') +

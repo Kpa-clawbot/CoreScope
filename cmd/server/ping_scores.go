@@ -86,6 +86,13 @@ type PingScoresSnapshot struct {
 	FastestSpreadPing *PingScore `json:"fastestSpreadPing,omitempty"`
 	MostEfficientPing *PingScore `json:"mostEfficientPing,omitempty"`
 
+	// ThisWeek mirrors the 5 all-time records above but scoped to the
+	// trailing 7 days -- an all-time record set once (e.g. a 364km
+	// farthest ping) locks that slot forever, so this gives people an
+	// achievable target that resets on its own (dborup, 2026-07-28).
+	// nil when no ping in the last 7 days resolved to a usable score.
+	ThisWeek *WeeklyPingRecords `json:"thisWeek,omitempty"`
+
 	// RelayLeaderboard ranks nodes by how many DISTINCT pings they
 	// appeared as a relay hop in (deduped per ping first, so one busy
 	// ping's many branches can't over-credit a relay that appears in
@@ -103,6 +110,16 @@ type PingScoresSnapshot struct {
 	// pubkey to link back to a node, so entries never carry one (matches
 	// PingLeaderboardEntry.Pubkey's existing omitempty).
 	SenderLeaderboard []PingLeaderboardEntry `json:"senderLeaderboard,omitempty"`
+}
+
+// WeeklyPingRecords mirrors PingScoresSnapshot's 5 all-time record slots,
+// scoped to the trailing 7 days.
+type WeeklyPingRecords struct {
+	FarthestPing      *PingScore `json:"farthestPing,omitempty"`
+	MostHopsPing      *PingScore `json:"mostHopsPing,omitempty"`
+	WidestSpreadPing  *PingScore `json:"widestSpreadPing,omitempty"`
+	FastestSpreadPing *PingScore `json:"fastestSpreadPing,omitempty"`
+	MostEfficientPing *PingScore `json:"mostEfficientPing,omitempty"`
 }
 
 type pingTriggerRow struct {
@@ -211,6 +228,40 @@ func (s *Server) computePingScore(trigger pingTriggerRow) *PingScore {
 	return score
 }
 
+// pingRecordSet accumulates the same 5 "best of" record slots used by
+// both the all-time and this-week views, so the selection rules only
+// need to be written once.
+type pingRecordSet struct {
+	Farthest      *PingScore
+	MostHops      *PingScore
+	WidestSpread  *PingScore
+	FastestSpread *PingScore
+	MostEfficient *PingScore
+}
+
+func (rs *pingRecordSet) consider(score *PingScore) {
+	if score.FarthestKm != nil && (rs.Farthest == nil || rs.Farthest.FarthestKm == nil || *score.FarthestKm > *rs.Farthest.FarthestKm) {
+		rs.Farthest = score
+	}
+	if rs.MostHops == nil || score.DeepestHops > rs.MostHops.DeepestHops {
+		rs.MostHops = score
+	}
+	if rs.WidestSpread == nil || score.StationCount > rs.WidestSpread.StationCount {
+		rs.WidestSpread = score
+	}
+	// Fastest full spread only makes sense with a real multi-station
+	// spread to measure -- a lone station is trivially "instant" and
+	// would otherwise always win this record for nothing.
+	if score.SpreadSeconds != nil && score.StationCount >= 2 &&
+		(rs.FastestSpread == nil || rs.FastestSpread.SpreadSeconds == nil || *score.SpreadSeconds < *rs.FastestSpread.SpreadSeconds) {
+		rs.FastestSpread = score
+	}
+	if score.KmPerSecondAirtime != nil &&
+		(rs.MostEfficient == nil || rs.MostEfficient.KmPerSecondAirtime == nil || *score.KmPerSecondAirtime > *rs.MostEfficient.KmPerSecondAirtime) {
+		rs.MostEfficient = score
+	}
+}
+
 // computeAllPingScores computes the full snapshot: records + leaderboards.
 func (s *Server) computeAllPingScores() *PingScoresSnapshot {
 	triggers, err := s.db.fetchPingTriggers()
@@ -236,31 +287,23 @@ func (s *Server) computeAllPingScores() *PingScoresSnapshot {
 	senderCutoff := time.Now().AddDate(0, 0, -30)
 	senderCounts := map[string]*PingLeaderboardEntry{}
 
+	// weekCutoff drives ThisWeek -- same fail-toward-stale rule as
+	// senderCutoff above (an unparseable timestamp is excluded, not
+	// defaulted to included).
+	weekCutoff := time.Now().AddDate(0, 0, -7)
+	allTime := &pingRecordSet{}
+	week := &pingRecordSet{}
+
 	for _, trigger := range triggers {
 		score := s.computePingScore(trigger)
 		if score == nil {
 			continue
 		}
 
-		if score.FarthestKm != nil && (snap.FarthestPing == nil || snap.FarthestPing.FarthestKm == nil || *score.FarthestKm > *snap.FarthestPing.FarthestKm) {
-			snap.FarthestPing = score
-		}
-		if snap.MostHopsPing == nil || score.DeepestHops > snap.MostHopsPing.DeepestHops {
-			snap.MostHopsPing = score
-		}
-		if snap.WidestSpreadPing == nil || score.StationCount > snap.WidestSpreadPing.StationCount {
-			snap.WidestSpreadPing = score
-		}
-		// Fastest full spread only makes sense with a real multi-station
-		// spread to measure -- a lone station is trivially "instant" and
-		// would otherwise always win this record for nothing.
-		if score.SpreadSeconds != nil && score.StationCount >= 2 &&
-			(snap.FastestSpreadPing == nil || snap.FastestSpreadPing.SpreadSeconds == nil || *score.SpreadSeconds < *snap.FastestSpreadPing.SpreadSeconds) {
-			snap.FastestSpreadPing = score
-		}
-		if score.KmPerSecondAirtime != nil &&
-			(snap.MostEfficientPing == nil || snap.MostEfficientPing.KmPerSecondAirtime == nil || *score.KmPerSecondAirtime > *snap.MostEfficientPing.KmPerSecondAirtime) {
-			snap.MostEfficientPing = score
+		allTime.consider(score)
+		ts, tsErr := time.Parse(time.RFC3339, score.Timestamp)
+		if tsErr == nil && ts.After(weekCutoff) {
+			week.consider(score)
 		}
 
 		for _, pk := range score.relayPubkeys {
@@ -279,15 +322,28 @@ func (s *Server) computeAllPingScores() *PingScoresSnapshot {
 			}
 			e.Count++
 		}
-		if score.Sender != "" {
-			if ts, err := time.Parse(time.RFC3339, score.Timestamp); err == nil && ts.After(senderCutoff) {
-				e := senderCounts[score.Sender]
-				if e == nil {
-					e = &PingLeaderboardEntry{Name: score.Sender}
-					senderCounts[score.Sender] = e
-				}
-				e.Count++
+		if score.Sender != "" && tsErr == nil && ts.After(senderCutoff) {
+			e := senderCounts[score.Sender]
+			if e == nil {
+				e = &PingLeaderboardEntry{Name: score.Sender}
+				senderCounts[score.Sender] = e
 			}
+			e.Count++
+		}
+	}
+
+	snap.FarthestPing = allTime.Farthest
+	snap.MostHopsPing = allTime.MostHops
+	snap.WidestSpreadPing = allTime.WidestSpread
+	snap.FastestSpreadPing = allTime.FastestSpread
+	snap.MostEfficientPing = allTime.MostEfficient
+	if week.Farthest != nil || week.MostHops != nil || week.WidestSpread != nil || week.FastestSpread != nil || week.MostEfficient != nil {
+		snap.ThisWeek = &WeeklyPingRecords{
+			FarthestPing:      week.Farthest,
+			MostHopsPing:      week.MostHops,
+			WidestSpreadPing:  week.WidestSpread,
+			FastestSpreadPing: week.FastestSpread,
+			MostEfficientPing: week.MostEfficient,
 		}
 	}
 

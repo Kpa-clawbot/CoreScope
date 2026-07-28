@@ -4517,9 +4517,12 @@ th.sort-active { color: var(--accent, #60a5fa); }
 
 /* ── Ping Scores page (cmd/server/ping_scores.go, GET /api/ping-scores) ── */
 .ping-scores-page { padding: 16px; max-width: 1100px; margin: 0 auto; }
+.ping-scores-page h3 { margin: 20px 0 4px 0; font-size: 16px; }
+.ping-scores-page h3:first-of-type { margin-top: 12px; }
 .ps-records-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
 .ps-record-card { position: relative; }
 .ps-record-card.ps-empty { opacity: 0.6; }
+.ps-week-grid .ps-record-card { border-left: 3px solid var(--accent); padding-left: 13px; }
 .ps-record-meta { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
 .ps-record-desc { font-size: 11px; color: var(--text-muted); margin-top: 6px; line-height: 1.4; }
 .ps-leaderboards-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-top: 8px; }
