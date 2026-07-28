@@ -426,6 +426,17 @@ func componentSchemas() map[string]interface{} {
 				"kmPerSecondAirtime": map[string]interface{}{"type": "number", "nullable": true, "description": "farthestKm / (airtimeMs/1000) -- geographic distance covered per second of estimated RF airtime spent relaying this ping. Only set when both farthestKm and airtimeMs (with relayCount>0) are available."},
 			},
 		},
+		"WeeklyPingRecords": map[string]interface{}{
+			"type":        "object",
+			"description": "Mirrors PingScoresResponse's 5 all-time record slots, scoped to the trailing 7 days -- an achievable target that resets on its own, instead of a slot that locks in forever once someone sets a big all-time record.",
+			"properties": map[string]interface{}{
+				"farthestPing":      schemaRef("PingScore"),
+				"mostHopsPing":      schemaRef("PingScore"),
+				"widestSpreadPing":  schemaRef("PingScore"),
+				"fastestSpreadPing": map[string]interface{}{"allOf": []interface{}{schemaRef("PingScore")}, "description": "Same >=2-station rule as the all-time fastestSpreadPing, applied within the 7-day window."},
+				"mostEfficientPing": schemaRef("PingScore"),
+			},
+		},
 		"PingLeaderboardEntry": map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -445,6 +456,7 @@ func componentSchemas() map[string]interface{} {
 				"widestSpreadPing":    schemaRef("PingScore"),
 				"fastestSpreadPing":   map[string]interface{}{"allOf": []interface{}{schemaRef("PingScore")}, "description": "The fastest full spread among pings heard by at least 2 stations -- a lone station is trivially \"instant\" and is excluded so it can't win this record for nothing."},
 				"mostEfficientPing":   schemaRef("PingScore"),
+				"thisWeek":            map[string]interface{}{"allOf": []interface{}{schemaRef("WeeklyPingRecords")}, "description": "The same 5 records as above, scoped to the trailing 7 days instead of all-time. Omitted when no ping in the last 7 days resolved to a usable score."},
 				"relayLeaderboard":    map[string]interface{}{"type": "array", "items": schemaRef("PingLeaderboardEntry"), "description": "Top nodes ranked by number of distinct pings they appeared as a relay hop in (deduped per ping first, so one busy ping's many branches can't over-credit a relay)."},
 				"observerLeaderboard": map[string]interface{}{"type": "array", "items": schemaRef("PingLeaderboardEntry"), "description": "Top observers ranked by number of pings they were the first station to hear."},
 				"senderLeaderboard":   map[string]interface{}{"type": "array", "items": schemaRef("PingLeaderboardEntry"), "description": "Top senders ranked by number of pings sent in the last 30 days (unlike the other leaderboards and records, which are all-time). Keyed by the sender display name from the channel message itself -- no resolved pubkey, so entries never carry one."},
