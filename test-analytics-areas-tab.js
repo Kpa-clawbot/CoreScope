@@ -164,6 +164,46 @@ function makeApiStub(resp) {
     assert.ok(el.innerHTML.includes('20.0%'), 'ODE row should show 20.0% estimated');
   });
 
+  await testAsync('Position-Fix Coverage Gaps sorts worst-coverage-first, not the API\'s realFix-desc order', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse({
+      positionGaps: [
+        { areaKey: 'FULL', label: 'FullyMapped', realFix: 100, approximated: 0 },   // 0% estimated, biggest realFix
+        { areaKey: 'WORST', label: 'WorstCoverage', realFix: 2, approximated: 8 },   // 80% estimated, smallest realFix
+        { areaKey: 'MID', label: 'MidCoverage', realFix: 10, approximated: 5 },      // ~33% estimated
+      ],
+    })));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    const startIdx = el.innerHTML.indexOf('id="areasPositionGaps"');
+    const section = el.innerHTML.slice(startIdx);
+    const idxWorst = section.indexOf('WorstCoverage');
+    const idxMid = section.indexOf('MidCoverage');
+    const idxFull = section.indexOf('FullyMapped');
+    assert.ok(idxWorst > -1 && idxMid > -1 && idxFull > -1, 'all three areas should render');
+    assert.ok(idxWorst < idxMid && idxMid < idxFull, 'rows should be ordered worst-% -> best-%, not by realFix');
+  });
+
+  await testAsync('Position-Fix Coverage Gaps collapses to top 10 with a "Show all" toggle', async () => {
+    const manyGaps = [];
+    for (let i = 0; i < 15; i++) manyGaps.push({ areaKey: 'A' + i, label: 'Area' + i, realFix: 10, approximated: i });
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse({ positionGaps: manyGaps })));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    const startIdx = el.innerHTML.indexOf('id="areasPositionGaps"');
+    const section = el.innerHTML.slice(startIdx, el.innerHTML.indexOf('nodes network-wide have no real GPS fix'));
+    const tbody = section.slice(section.indexOf('<tbody>'), section.indexOf('</tbody>'));
+    const rowCount = (tbody.match(/<tr>/g) || []).length;
+    assert.strictEqual(rowCount, 10, 'only 10 rows should render by default');
+    assert.ok(section.includes('Show all 15 areas'), 'a "Show all" toggle should appear when there are more than 10 areas');
+  });
+
+  await testAsync('no "Show all" toggle on the Position-Fix Coverage Gaps table when there are 10 or fewer areas', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse()));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    assert.ok(!el.innerHTML.includes('Show all'), 'no toggle should render with only 1 area in positionGaps');
+  });
+
   await testAsync('renders the unpositioned-nodes summary note including the no-neighbor-fix subset', async () => {
     const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse()));
     const el = fakeEl();

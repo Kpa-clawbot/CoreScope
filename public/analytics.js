@@ -6586,20 +6586,42 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         '</tr></thead><tbody>' + bridgeRows + '</tbody></table>' :
         '<p class="text-muted" style="font-size:0.85em">No packet-derived neighbor edges cross between two different areas yet.</p>';
 
-      var gapRows = positionGaps.map(function (g) {
-        var total = g.realFix + g.approximated;
-        return '<tr>' +
-          '<td>' + esc(g.label) + '</td>' +
-          '<td style="text-align:right">' + g.realFix.toLocaleString() + '</td>' +
-          '<td style="text-align:right">' + g.approximated.toLocaleString() + '</td>' +
-          '<td style="text-align:right">' + pct(g.approximated, total) + '</td>' +
-          '</tr>';
-      }).join('');
-      var gapHtml = positionGaps.length ?
-        '<table class="analytics-table"><thead><tr>' +
+      // Sorted worst-coverage-first (highest % estimated) rather than the
+      // API's realFix-desc order — most areas have 0% estimated (fully
+      // GPS-mapped already), so a plain dump buried the handful of areas
+      // that actually have a gap worth looking at. Collapses to the top
+      // 10 by default, same "Show all N" pattern as the Wardriving tab's
+      // Top Senders/Coverage by Observer sections.
+      var AREAS_TOP_N = 10;
+      var sortedGaps = positionGaps.slice().sort(function (a, b) {
+        var totalA = a.realFix + a.approximated, totalB = b.realFix + b.approximated;
+        var pctA = totalA ? a.approximated / totalA : 0;
+        var pctB = totalB ? b.approximated / totalB : 0;
+        return pctB - pctA;
+      });
+      function gapsToggleHtml(expanded) {
+        if (sortedGaps.length <= AREAS_TOP_N) return '';
+        var label = expanded ? 'Show fewer' : 'Show all ' + sortedGaps.length.toLocaleString() + ' areas';
+        return '<div style="margin-top:6px;text-align:right"><button type="button" data-areas-gaps-toggle class="btn-link" style="font-size:12px;cursor:pointer;background:none;border:none;color:var(--link-color);padding:0">' + label + '</button></div>';
+      }
+      function gapsTableHtml(expanded) {
+        if (!sortedGaps.length) {
+          return '<p class="text-muted" style="font-size:0.85em">No unpositioned node could be placed in any area, even approximately.</p>';
+        }
+        var shown = expanded ? sortedGaps : sortedGaps.slice(0, AREAS_TOP_N);
+        var rows = shown.map(function (g) {
+          var total = g.realFix + g.approximated;
+          return '<tr>' +
+            '<td>' + esc(g.label) + '</td>' +
+            '<td style="text-align:right">' + g.realFix.toLocaleString() + '</td>' +
+            '<td style="text-align:right">' + g.approximated.toLocaleString() + '</td>' +
+            '<td style="text-align:right">' + pct(g.approximated, total) + '</td>' +
+            '</tr>';
+        }).join('');
+        return '<table class="analytics-table"><thead><tr>' +
           '<th scope="col">Area</th><th scope="col">Real GPS Fix</th><th scope="col">Estimated (via Neighbors)</th><th scope="col">% Estimated</th>' +
-        '</tr></thead><tbody>' + gapRows + '</tbody></table>' :
-        '<p class="text-muted" style="font-size:0.85em">No unpositioned node could be placed in any area, even approximately.</p>';
+        '</tr></thead><tbody>' + rows + '</tbody></table>' + gapsToggleHtml(expanded);
+      }
       var unpositionedNote = '<p class="text-muted" style="margin:8px 0 0;font-size:0.85em">' +
         (d.unpositionedTotal || 0).toLocaleString() + ' node' + (d.unpositionedTotal === 1 ? '' : 's') + ' network-wide have no real GPS fix' +
         (d.unpositionedNoNeighborFix ? ', of which ' + d.unpositionedNoNeighborFix.toLocaleString() + ' also have no positioned neighbor to estimate from — those can\'t be placed anywhere, not even approximately, so they\'re absent from the table above entirely.' : '.') +
@@ -6618,10 +6640,26 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
         '</div>' +
         '<div class="analytics-card" style="margin-top:16px">' +
           '<h3>Position-Fix Coverage Gaps by Area</h3>' +
-          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">How many of each area\'s nodes have an actual reported GPS position vs. how many were only placeable via a neighbor-based estimate (same technique used for View Path\'s approximate markers).</p>' +
-          gapHtml +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">How many of each area\'s nodes have an actual reported GPS position vs. how many were only placeable via a neighbor-based estimate (same technique used for View Path\'s approximate markers). Sorted worst-coverage-first.</p>' +
+          '<div id="areasPositionGaps">' + gapsTableHtml(false) + '</div>' +
           unpositionedNote +
         '</div>';
+
+      var gapsExpanded = false;
+      var gapsContainer = document.getElementById('areasPositionGaps');
+      function attachGapsToggle() {
+        var container = document.getElementById('areasPositionGaps');
+        if (!container) return;
+        var btn = container.querySelector('[data-areas-gaps-toggle]');
+        if (btn) {
+          btn.addEventListener('click', function () {
+            gapsExpanded = !gapsExpanded;
+            container.innerHTML = gapsTableHtml(gapsExpanded);
+            attachGapsToggle();
+          });
+        }
+      }
+      if (gapsContainer) attachGapsToggle();
     } catch (e) {
       el.innerHTML = '<div class="text-center" style="color:var(--status-red);padding:20px">Failed to load area analytics: ' + esc(String(e)) + '</div>';
     }
