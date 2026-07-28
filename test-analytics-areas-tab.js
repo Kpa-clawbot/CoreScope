@@ -244,6 +244,50 @@ function makeApiStub(resp) {
     assert.ok(el.innerHTML.includes('20.0%'), 'ODE row should show 20.0% estimated');
   });
 
+  await testAsync('all three tables mark scalar columns sortable with data-sort-col, and leave free-text columns (Role Mix, Which Areas) unsortable', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse()));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+
+    const density = el.innerHTML.slice(el.innerHTML.indexOf('id="areasDensity"'), el.innerHTML.indexOf('id="areasBridgeNodes"'));
+    for (const col of ['area', 'total', 'active', 'degraded', 'silent']) {
+      assert.ok(density.includes('data-sort-col="' + col + '"'), `Density should have a sortable "${col}" column`);
+    }
+    const densityThead = density.slice(density.indexOf('<thead>'), density.indexOf('</thead>'));
+    assert.ok(!densityThead.includes('data-sort-col="roleMix"'), 'Density Role Mix header should not be sortable (free-text breakdown)');
+
+    const bridge = el.innerHTML.slice(el.innerHTML.indexOf('id="areasBridgeNodes"'), el.innerHTML.indexOf('id="areasPositionGaps"'));
+    for (const col of ['node', 'homeArea', 'edgeCount', 'otherAreaCount']) {
+      assert.ok(bridge.includes('data-sort-col="' + col + '"'), `Bridge Nodes should have a sortable "${col}" column`);
+    }
+    const bridgeThead = bridge.slice(bridge.indexOf('<thead>'), bridge.indexOf('</thead>'));
+    assert.ok(!bridgeThead.includes('data-sort-col="whichAreas"'), 'Bridge Nodes Which Areas header should not be sortable (free-text list)');
+
+    const gaps = el.innerHTML.slice(el.innerHTML.indexOf('id="areasPositionGaps"'));
+    for (const col of ['area', 'realFix', 'approximated', 'pctEstimated']) {
+      assert.ok(gaps.includes('data-sort-col="' + col + '"'), `Position Gaps should have a sortable "${col}" column`);
+    }
+  });
+
+  await testAsync('the pre-click default sort highlights a real header (sort-active + down arrow) on Bridge Nodes and Position Gaps, but no header on Density (composite default)', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse()));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+
+    const density = el.innerHTML.slice(el.innerHTML.indexOf('id="areasDensity"'), el.innerHTML.indexOf('id="areasBridgeNodes"'));
+    assert.ok(!density.includes('sort-active'), 'Density has no single default column (worst-health is a composite), so no header should start highlighted');
+
+    const bridge = el.innerHTML.slice(el.innerHTML.indexOf('id="areasBridgeNodes"'), el.innerHTML.indexOf('id="areasPositionGaps"'));
+    const otherAreaCountTh = bridge.slice(bridge.indexOf('data-sort-col="otherAreaCount"') - 80, bridge.indexOf('data-sort-col="otherAreaCount"') + 200);
+    assert.ok(otherAreaCountTh.includes('sort-active'), 'Bridge Nodes\' default sort column (otherAreaCount) should start highlighted');
+    assert.ok(otherAreaCountTh.includes('↓'), 'Bridge Nodes\' default direction (desc) should show a down arrow');
+
+    const gaps = el.innerHTML.slice(el.innerHTML.indexOf('id="areasPositionGaps"'));
+    const pctTh = gaps.slice(gaps.indexOf('data-sort-col="pctEstimated"') - 80, gaps.indexOf('data-sort-col="pctEstimated"') + 200);
+    assert.ok(pctTh.includes('sort-active'), 'Position Gaps\' default sort column (pctEstimated) should start highlighted');
+    assert.ok(pctTh.includes('↓'), 'Position Gaps\' default direction (desc) should show a down arrow');
+  });
+
   await testAsync('Position-Fix Coverage Gaps sorts worst-coverage-first, not the API\'s realFix-desc order', async () => {
     const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse({
       positionGaps: [

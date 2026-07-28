@@ -6560,50 +6560,93 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       // Position-Fix Coverage Gaps where it started.
       var AREAS_TOP_N = 10;
 
-      // Generic collapsible-table renderer + click wiring shared by all
-      // three sections below. `items` is assumed already sorted into the
-      // order that matters for that section (worst-first for Density and
-      // Position Gaps, most-cross-area-reach-first for Bridge Nodes,
-      // both already established before this call).
-      function collapsibleTableHtml(items, theadHtml, rowFn, toggleAttr, noun, emptyMsg, expanded) {
-        if (!items.length) return emptyMsg;
-        var shown = expanded ? items : items.slice(0, AREAS_TOP_N);
-        var rows = shown.map(rowFn).join('');
-        var toggle = items.length > AREAS_TOP_N
-          ? '<div style="margin-top:6px;text-align:right"><button type="button" ' + toggleAttr + ' class="btn-link" style="font-size:12px;cursor:pointer;background:none;border:none;color:var(--link-color);padding:0">' +
-            (expanded ? 'Show fewer' : 'Show all ' + items.length.toLocaleString() + ' ' + noun) + '</button></div>'
-          : '';
-        return '<table class="analytics-table"><thead><tr>' + theadHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + toggle;
+      // Sort arrow + header cell, same visual language as the Channels
+      // table's channelSortArrow/sortable th convention elsewhere in this
+      // file. Non-sortable columns (free-text breakdowns like Role Mix /
+      // Which Areas, where there's no single meaningful sort value) render
+      // as a plain header.
+      function areasSortArrow(colKey, activeCol, dir) {
+        if (colKey !== activeCol) return '<span class="sort-arrow">⇅</span>';
+        return '<span class="sort-arrow">' + (dir === 'asc' ? '↑' : '↓') + '</span>';
       }
-      function wireCollapseToggle(containerId, toggleAttr, renderFn) {
-        var expanded = false;
+      function areasTheadHtml(cols, activeCol, dir) {
+        return cols.map(function (c) {
+          var attrs = ' scope="col"';
+          var classes = [];
+          if (c.sortable) {
+            classes.push('sortable');
+            if (c.key === activeCol) classes.push('sort-active');
+            attrs += ' data-sort-col="' + c.key + '"';
+          }
+          if (classes.length) attrs += ' class="' + classes.join(' ') + '"';
+          if (c.align === 'right') attrs += ' style="text-align:right"';
+          return '<th' + attrs + '>' + esc(c.label) + (c.sortable ? areasSortArrow(c.key, activeCol, dir) : '') + '</th>';
+        }).join('');
+      }
+
+      // Generic collapsible + sortable table controller shared by all
+      // three sections below. `getValue(item, col)` returns the scalar to
+      // sort by for a given column key; string values sort
+      // case-insensitively, numbers numerically. `initialSort` seeds the
+      // default order shown before the user clicks any header — for
+      // Density this is a synthetic '_health' key (not a real column,
+      // since "worst health" is a composite of Degraded+Silent/Total, not
+      // one field) so no header starts highlighted; Bridge Nodes and
+      // Position Gaps default to a real column that's already the most
+      // useful lens (otherAreaCount / pctEstimated), so that header does
+      // start highlighted.
+      function makeAreasSection(opts) {
+        var state = { expanded: false, col: opts.initialSort.col, dir: opts.initialSort.dir };
+        function sortedItems() {
+          var mult = state.dir === 'asc' ? 1 : -1;
+          return opts.items.slice().sort(function (a, b) {
+            var av = opts.getValue(a, state.col), bv = opts.getValue(b, state.col);
+            if (typeof av === 'string' || typeof bv === 'string') {
+              av = String(av).toLowerCase(); bv = String(bv).toLowerCase();
+              return av < bv ? -1 * mult : av > bv ? 1 * mult : 0;
+            }
+            return (av - bv) * mult;
+          });
+        }
+        function tableHtml() {
+          var items = sortedItems();
+          if (!items.length) return opts.emptyMsg;
+          var shown = state.expanded ? items : items.slice(0, AREAS_TOP_N);
+          var rows = shown.map(opts.rowFn).join('');
+          var toggle = items.length > AREAS_TOP_N
+            ? '<div style="margin-top:6px;text-align:right"><button type="button" ' + opts.toggleAttr + ' class="btn-link" style="font-size:12px;cursor:pointer;background:none;border:none;color:var(--link-color);padding:0">' +
+              (state.expanded ? 'Show fewer' : 'Show all ' + items.length.toLocaleString() + ' ' + opts.noun) + '</button></div>'
+            : '';
+          return '<table class="analytics-table"><thead><tr>' + areasTheadHtml(opts.cols, state.col, state.dir) + '</tr></thead><tbody>' + rows + '</tbody></table>' + toggle;
+        }
         function attach() {
-          var container = document.getElementById(containerId);
+          var container = document.getElementById(opts.containerId);
           if (!container) return;
-          var btn = container.querySelector('[' + toggleAttr + ']');
-          if (btn) {
-            btn.addEventListener('click', function () {
-              expanded = !expanded;
-              container.innerHTML = renderFn(expanded);
+          var toggleBtn = container.querySelector('[' + opts.toggleAttr + ']');
+          if (toggleBtn) {
+            toggleBtn.addEventListener('click', function () {
+              state.expanded = !state.expanded;
+              container.innerHTML = tableHtml();
               attach();
             });
           }
+          container.querySelectorAll('th[data-sort-col]').forEach(function (th) {
+            th.addEventListener('click', function () {
+              var col = th.dataset.sortCol;
+              if (state.col === col) {
+                state.dir = state.dir === 'asc' ? 'desc' : 'asc';
+              } else {
+                state.col = col;
+                state.dir = opts.ascByDefault && opts.ascByDefault.indexOf(col) !== -1 ? 'asc' : 'desc';
+              }
+              container.innerHTML = tableHtml();
+              attach();
+            });
+          });
         }
-        attach();
+        return { tableHtml: tableHtml, attach: attach };
       }
 
-      // Density: sorted by % unhealthy (degraded+silent) descending, not
-      // the API's Total-desc order — a handful of big, mostly-healthy
-      // areas (Europa, Danmark) otherwise buried the small areas actually
-      // worth a look. Ties (including the common all-active 0% case)
-      // fall back to Total desc so the biggest areas still anchor each
-      // health tier.
-      var sortedDensity = density.slice().sort(function (a, b) {
-        var pctA = a.total ? (a.degraded + a.silent) / a.total : 0;
-        var pctB = b.total ? (b.degraded + b.silent) / b.total : 0;
-        if (pctB !== pctA) return pctB - pctA;
-        return b.total - a.total;
-      });
       function densityRowHtml(a) {
         var roleParts = Object.keys(a.roleCounts || {}).sort().map(function (r) {
           return r + ': ' + a.roleCounts[r];
@@ -6617,15 +6660,36 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           '<td class="text-muted" style="font-size:0.85em">' + esc(roleParts) + '</td>' +
           '</tr>';
       }
-      var densityThead = '<th scope="col">Area</th><th scope="col" style="text-align:right">Total</th><th scope="col" style="text-align:right">Active</th><th scope="col" style="text-align:right">Degraded</th><th scope="col" style="text-align:right">Silent</th><th scope="col">Role Mix</th>';
-      function densityTableHtml(expanded) {
-        return collapsibleTableHtml(sortedDensity, densityThead, densityRowHtml, 'data-areas-density-toggle', 'areas',
-          '<p class="text-muted" style="font-size:0.85em">No positioned nodes fall inside any configured area.</p>', expanded);
-      }
+      var densitySection = makeAreasSection({
+        containerId: 'areasDensity', toggleAttr: 'data-areas-density-toggle', noun: 'areas',
+        items: density, rowFn: densityRowHtml,
+        emptyMsg: '<p class="text-muted" style="font-size:0.85em">No positioned nodes fall inside any configured area.</p>',
+        cols: [
+          { key: 'area', label: 'Area', sortable: true },
+          { key: 'total', label: 'Total', sortable: true, align: 'right' },
+          { key: 'active', label: 'Active', sortable: true, align: 'right' },
+          { key: 'degraded', label: 'Degraded', sortable: true, align: 'right' },
+          { key: 'silent', label: 'Silent', sortable: true, align: 'right' },
+          { key: 'roleMix', label: 'Role Mix', sortable: false },
+        ],
+        // '_health' (Degraded+Silent as a share of Total) is the pre-click
+        // default -- worst-health areas first -- but isn't itself a
+        // clickable column since it's a composite, not one field.
+        getValue: function (a, col) {
+          switch (col) {
+            case 'area': return a.label;
+            case 'total': return a.total;
+            case 'active': return a.active;
+            case 'degraded': return a.degraded;
+            case 'silent': return a.silent;
+            case '_health': return a.total ? (a.degraded + a.silent) / a.total : 0;
+            default: return 0;
+          }
+        },
+        initialSort: { col: '_health', dir: 'desc' },
+        ascByDefault: ['area'],
+      });
 
-      // Bridge nodes: already ranked most-cross-area-reach-first by the
-      // API (computeAreaBridgeNodes, and capped at 25) -- no re-sort
-      // needed, just the same collapse-to-10 treatment.
       function bridgeRowHtml(b) {
         return '<tr>' +
           '<td><a href="#/nodes/' + encodeURIComponent(b.publicKey) + '">' + esc(b.name) + '</a></td>' +
@@ -6635,22 +6699,33 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           '<td class="text-muted" style="font-size:0.85em">' + (b.otherAreas || []).map(esc).join(', ') + '</td>' +
           '</tr>';
       }
-      var bridgeThead = '<th scope="col">Node</th><th scope="col">Home Area</th><th scope="col" style="text-align:right">Cross-Area Edges</th><th scope="col" style="text-align:right">Other Areas Reached</th><th scope="col">Which Areas</th>';
-      function bridgeTableHtml(expanded) {
-        return collapsibleTableHtml(bridgeNodes, bridgeThead, bridgeRowHtml, 'data-areas-bridge-toggle', 'nodes',
-          '<p class="text-muted" style="font-size:0.85em">No packet-derived neighbor edges cross between two different areas yet.</p>', expanded);
-      }
-
-      // Position gaps: sorted worst-coverage-first (highest % estimated)
-      // rather than the API's realFix-desc order — most areas have 0%
-      // estimated (fully GPS-mapped already), so a plain dump buried the
-      // handful of areas that actually have a gap worth looking at.
-      var sortedGaps = positionGaps.slice().sort(function (a, b) {
-        var totalA = a.realFix + a.approximated, totalB = b.realFix + b.approximated;
-        var pctA = totalA ? a.approximated / totalA : 0;
-        var pctB = totalB ? b.approximated / totalB : 0;
-        return pctB - pctA;
+      var bridgeSection = makeAreasSection({
+        containerId: 'areasBridgeNodes', toggleAttr: 'data-areas-bridge-toggle', noun: 'nodes',
+        items: bridgeNodes, rowFn: bridgeRowHtml,
+        emptyMsg: '<p class="text-muted" style="font-size:0.85em">No packet-derived neighbor edges cross between two different areas yet.</p>',
+        cols: [
+          { key: 'node', label: 'Node', sortable: true },
+          { key: 'homeArea', label: 'Home Area', sortable: true },
+          { key: 'edgeCount', label: 'Cross-Area Edges', sortable: true, align: 'right' },
+          { key: 'otherAreaCount', label: 'Other Areas Reached', sortable: true, align: 'right' },
+          { key: 'whichAreas', label: 'Which Areas', sortable: false },
+        ],
+        getValue: function (b, col) {
+          switch (col) {
+            case 'node': return b.name;
+            case 'homeArea': return b.label;
+            case 'edgeCount': return b.edgeCount;
+            case 'otherAreaCount': return b.otherAreaCount;
+            default: return 0;
+          }
+        },
+        // Already ranked most-cross-area-reach-first by the API
+        // (computeAreaBridgeNodes, capped at 25) -- reuse that as the
+        // pre-click default, it's a real column so it starts highlighted.
+        initialSort: { col: 'otherAreaCount', dir: 'desc' },
+        ascByDefault: ['node', 'homeArea'],
       });
+
       function gapsRowHtml(g) {
         var total = g.realFix + g.approximated;
         return '<tr>' +
@@ -6660,11 +6735,33 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
           '<td style="text-align:right">' + pct(g.approximated, total) + '</td>' +
           '</tr>';
       }
-      var gapsThead = '<th scope="col">Area</th><th scope="col" style="text-align:right">Real GPS Fix</th><th scope="col" style="text-align:right">Estimated (via Neighbors)</th><th scope="col" style="text-align:right">% Estimated</th>';
-      function gapsTableHtml(expanded) {
-        return collapsibleTableHtml(sortedGaps, gapsThead, gapsRowHtml, 'data-areas-gaps-toggle', 'areas',
-          '<p class="text-muted" style="font-size:0.85em">No unpositioned node could be placed in any area, even approximately.</p>', expanded);
-      }
+      var gapsSection = makeAreasSection({
+        containerId: 'areasPositionGaps', toggleAttr: 'data-areas-gaps-toggle', noun: 'areas',
+        items: positionGaps, rowFn: gapsRowHtml,
+        emptyMsg: '<p class="text-muted" style="font-size:0.85em">No unpositioned node could be placed in any area, even approximately.</p>',
+        cols: [
+          { key: 'area', label: 'Area', sortable: true },
+          { key: 'realFix', label: 'Real GPS Fix', sortable: true, align: 'right' },
+          { key: 'approximated', label: 'Estimated (via Neighbors)', sortable: true, align: 'right' },
+          { key: 'pctEstimated', label: '% Estimated', sortable: true, align: 'right' },
+        ],
+        getValue: function (g, col) {
+          var total = g.realFix + g.approximated;
+          switch (col) {
+            case 'area': return g.label;
+            case 'realFix': return g.realFix;
+            case 'approximated': return g.approximated;
+            case 'pctEstimated': return total ? g.approximated / total : 0;
+            default: return 0;
+          }
+        },
+        // % estimated descending -- most areas sit at 0% (fully
+        // GPS-mapped), so a plain realFix-desc dump buried the handful of
+        // areas with an actual gap worth looking at. It's a real column,
+        // so it starts highlighted.
+        initialSort: { col: 'pctEstimated', dir: 'desc' },
+        ascByDefault: ['area'],
+      });
 
       var unpositionedNote = '<p class="text-muted" style="margin:8px 0 0;font-size:0.85em">' +
         (d.unpositionedTotal || 0).toLocaleString() + ' node' + (d.unpositionedTotal === 1 ? '' : 's') + ' network-wide have no real GPS fix' +
@@ -6674,24 +6771,24 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopForeignTraf
       el.innerHTML =
         '<div class="analytics-card">' +
           '<h3>Node Density &amp; Health by Area</h3>' +
-          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Nodes with a real GPS fix inside each configured area — a node in a narrower sub-area also counts toward any broader area containing it (e.g. a city area rolls up into its region). Sorted worst-health-first.</p>' +
-          '<div id="areasDensity">' + densityTableHtml(false) + '</div>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Nodes with a real GPS fix inside each configured area — a node in a narrower sub-area also counts toward any broader area containing it (e.g. a city area rolls up into its region). Sorted worst-health-first by default — click a column header to sort by it.</p>' +
+          '<div id="areasDensity">' + densitySection.tableHtml() + '</div>' +
         '</div>' +
         '<div class="analytics-card" style="margin-top:16px">' +
           '<h3>Cross-Area Bridge Nodes</h3>' +
-          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Nodes whose packet-derived neighbor connections reach into at least one OTHER area than their own, ranked by how many other areas they reach. Distinct from the network-wide Bridge Score elsewhere in this app, which has no concept of areas at all.</p>' +
-          '<div id="areasBridgeNodes">' + bridgeTableHtml(false) + '</div>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">Nodes whose packet-derived neighbor connections reach into at least one OTHER area than their own. Distinct from the network-wide Bridge Score elsewhere in this app, which has no concept of areas at all. Click a column header to sort by it.</p>' +
+          '<div id="areasBridgeNodes">' + bridgeSection.tableHtml() + '</div>' +
         '</div>' +
         '<div class="analytics-card" style="margin-top:16px">' +
           '<h3>Position-Fix Coverage Gaps by Area</h3>' +
-          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">How many of each area\'s nodes have an actual reported GPS position vs. how many were only placeable via a neighbor-based estimate (same technique used for View Path\'s approximate markers). Sorted worst-coverage-first.</p>' +
-          '<div id="areasPositionGaps">' + gapsTableHtml(false) + '</div>' +
+          '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">How many of each area\'s nodes have an actual reported GPS position vs. how many were only placeable via a neighbor-based estimate (same technique used for View Path\'s approximate markers). Click a column header to sort by it.</p>' +
+          '<div id="areasPositionGaps">' + gapsSection.tableHtml() + '</div>' +
           unpositionedNote +
         '</div>';
 
-      wireCollapseToggle('areasDensity', 'data-areas-density-toggle', densityTableHtml);
-      wireCollapseToggle('areasBridgeNodes', 'data-areas-bridge-toggle', bridgeTableHtml);
-      wireCollapseToggle('areasPositionGaps', 'data-areas-gaps-toggle', gapsTableHtml);
+      densitySection.attach();
+      bridgeSection.attach();
+      gapsSection.attach();
     } catch (e) {
       el.innerHTML = '<div class="text-center" style="color:var(--status-red);padding:20px">Failed to load area analytics: ' + esc(String(e)) + '</div>';
     }
