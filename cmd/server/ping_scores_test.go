@@ -201,15 +201,19 @@ func TestComputeAllPingScores_Leaderboards(t *testing.T) {
 	srv, _ := setupPingScoresFixture(t)
 
 	// Ping 1: pkrelay1 appears in BOTH branches -- must count once for this ping.
-	tx1 := seedPingTrigger(t, srv, "lbtest0000001", "#test", "Alice", "2026-01-15T10:00:00Z")
-	seedPingObservation(t, srv, tx1, "pingobsa", 9.0, `[]`, `[]`, 1736935200)
-	seedPingObservation(t, srv, tx1, "pingobsb", 6.0, `["aa"]`, `["pkrelay1"]`, 1736935210)
-	seedPingObservation(t, srv, tx1, "pingobsc", 4.0, `["aa"]`, `["pkrelay1"]`, 1736935220)
+	// Uses a recent (now-relative) timestamp since SenderLeaderboard is a
+	// rolling 30-day window -- see TestComputeAllPingScores_SenderLeaderboard30DayCutoff.
+	ts1 := time.Now().Add(-1 * time.Hour)
+	tx1 := seedPingTrigger(t, srv, "lbtest0000001", "#test", "Alice", ts1.Format(time.RFC3339))
+	seedPingObservation(t, srv, tx1, "pingobsa", 9.0, `[]`, `[]`, ts1.Unix())
+	seedPingObservation(t, srv, tx1, "pingobsb", 6.0, `["aa"]`, `["pkrelay1"]`, ts1.Unix()+10)
+	seedPingObservation(t, srv, tx1, "pingobsc", 4.0, `["aa"]`, `["pkrelay1"]`, ts1.Unix()+20)
 
 	// Ping 2: pkrelay1 appears again -- second distinct ping, should now be 2.
-	tx2 := seedPingTrigger(t, srv, "lbtest0000002", "#test", "Bob", "2026-01-15T11:00:00Z")
-	seedPingObservation(t, srv, tx2, "pingobsa", 9.0, `[]`, `[]`, 1736938800)
-	seedPingObservation(t, srv, tx2, "pingobsb", 6.0, `["aa"]`, `["pkrelay1"]`, 1736938810)
+	ts2 := time.Now().Add(-30 * time.Minute)
+	tx2 := seedPingTrigger(t, srv, "lbtest0000002", "#test", "Bob", ts2.Format(time.RFC3339))
+	seedPingObservation(t, srv, tx2, "pingobsa", 9.0, `[]`, `[]`, ts2.Unix())
+	seedPingObservation(t, srv, tx2, "pingobsb", 6.0, `["aa"]`, `["pkrelay1"]`, ts2.Unix()+10)
 
 	snap := srv.computeAllPingScores()
 	if snap == nil {
@@ -255,6 +259,62 @@ func TestComputeAllPingScores_Leaderboards(t *testing.T) {
 	}
 	if senderCounts["Alice"].Pubkey != "" {
 		t.Errorf("Alice entry has Pubkey=%q, want empty -- senders have no resolved pubkey", senderCounts["Alice"].Pubkey)
+	}
+}
+
+// TestComputeAllPingScores_SenderLeaderboard30DayCutoff confirms
+// SenderLeaderboard only counts pings from the last 30 days, while the
+// other leaderboards and the 5 all-time records stay unaffected by a ping's
+// age.
+func TestComputeAllPingScores_SenderLeaderboard30DayCutoff(t *testing.T) {
+	srv, _ := setupPingScoresFixture(t)
+
+	// Old: 40 days ago -- outside the 30-day window, must NOT appear in
+	// SenderLeaderboard, but must still count in RelayLeaderboard.
+	oldTs := time.Now().AddDate(0, 0, -40)
+	txOld := seedPingTrigger(t, srv, "lbold0000001", "#test", "OldSender", oldTs.Format(time.RFC3339))
+	seedPingObservation(t, srv, txOld, "pingobsa", 9.0, `[]`, `[]`, oldTs.Unix())
+	seedPingObservation(t, srv, txOld, "pingobsb", 6.0, `["aa"]`, `["pkrelay1"]`, oldTs.Unix()+10)
+
+	// Recent: 5 days ago -- inside the window, must appear in SenderLeaderboard.
+	recentTs := time.Now().AddDate(0, 0, -5)
+	txRecent := seedPingTrigger(t, srv, "lbnew0000001", "#test", "RecentSender", recentTs.Format(time.RFC3339))
+	seedPingObservation(t, srv, txRecent, "pingobsa", 9.0, `[]`, `[]`, recentTs.Unix())
+	seedPingObservation(t, srv, txRecent, "pingobsb", 6.0, `["aa"]`, `["pkrelay1"]`, recentTs.Unix()+10)
+
+	snap := srv.computeAllPingScores()
+	if snap == nil {
+		t.Fatal("computeAllPingScores returned nil")
+	}
+
+	for _, e := range snap.SenderLeaderboard {
+		if e.Name == "OldSender" {
+			t.Errorf("OldSender (40 days old) must be excluded from SenderLeaderboard, got entry: %+v", e)
+		}
+	}
+	var foundRecent bool
+	for _, e := range snap.SenderLeaderboard {
+		if e.Name == "RecentSender" {
+			foundRecent = true
+			if e.Count != 1 {
+				t.Errorf("RecentSender count = %d, want 1", e.Count)
+			}
+		}
+	}
+	if !foundRecent {
+		t.Errorf("RecentSender (5 days old) missing from SenderLeaderboard: %+v", snap.SenderLeaderboard)
+	}
+
+	// The 40-day-old ping's relay must still count -- only the sender
+	// leaderboard is time-windowed, not the underlying data or other boards.
+	var relay1Count int
+	for _, e := range snap.RelayLeaderboard {
+		if e.Pubkey == "pkrelay1" {
+			relay1Count = e.Count
+		}
+	}
+	if relay1Count != 2 {
+		t.Errorf("pkrelay1 relay count = %d, want 2 (both old and recent pings count toward RelayLeaderboard)", relay1Count)
 	}
 }
 
@@ -309,9 +369,10 @@ func TestHandlePingScores_NilCache(t *testing.T) {
 // (nested PingScore objects, leaderboards present).
 func TestHandlePingScores_Populated(t *testing.T) {
 	srv, router := setupPingScoresFixture(t)
-	txID := seedPingTrigger(t, srv, "handlerpop00001", "#test", "Alice", "2026-01-15T10:00:00Z")
-	seedPingObservation(t, srv, txID, "pingobsa", 9.0, `[]`, `[]`, 1736935200)
-	seedPingObservation(t, srv, txID, "pingobsb", 6.0, `["aa"]`, `["pkrelay1"]`, 1736935210)
+	ts := time.Now().Add(-1 * time.Hour)
+	txID := seedPingTrigger(t, srv, "handlerpop00001", "#test", "Alice", ts.Format(time.RFC3339))
+	seedPingObservation(t, srv, txID, "pingobsa", 9.0, `[]`, `[]`, ts.Unix())
+	seedPingObservation(t, srv, txID, "pingobsb", 6.0, `["aa"]`, `["pkrelay1"]`, ts.Unix()+10)
 
 	srv.pingScores.Store(srv.computeAllPingScores())
 

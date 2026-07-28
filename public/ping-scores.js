@@ -125,7 +125,7 @@
       '<p class="text-muted">Global records and leaderboards from every "ping" sent in any channel (' + data.totalPings + ' total). Not scoped by region. Updated ' + escapeHtml(formatAgo(data.generatedAt)) + '.</p>' +
       '<div class="stats-grid ps-records-grid">' + recordsHtml + '</div>' +
       '<div class="ps-leaderboards-grid">' +
-        leaderboardTableHtml('Top Senders', phIcon('megaphone'), data.senderLeaderboard, 'Sender') +
+        leaderboardTableHtml('Top Senders (30 days)', phIcon('megaphone'), data.senderLeaderboard, 'Sender') +
         leaderboardTableHtml('Top Relays', phIcon('repeat'), data.relayLeaderboard) +
         leaderboardTableHtml('Top First-Hearers', phIcon('eye'), data.observerLeaderboard) +
       '</div>' +
