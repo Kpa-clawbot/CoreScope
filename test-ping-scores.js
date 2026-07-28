@@ -136,7 +136,7 @@ function makeSandbox(apiImpl) {
       assert.ok(container.innerHTML.includes('RelayOne'), 'should show the relay leaderboard entry, got: ' + container.innerHTML);
       assert.ok(container.innerHTML.includes('ObsOne'), 'should show the observer leaderboard entry, got: ' + container.innerHTML);
       assert.ok(container.innerHTML.includes('PingMaster'), 'should show the sender leaderboard entry, got: ' + container.innerHTML);
-      assert.ok(container.innerHTML.includes('Top Senders'), 'should show the Top Senders leaderboard heading, got: ' + container.innerHTML);
+      assert.ok(container.innerHTML.includes('Top Senders (30 days)'), 'should show the Top Senders leaderboard heading with the 30-day window noted, got: ' + container.innerHTML);
       passed++;
       console.log('  ✅ renders all 5 records and all three leaderboards (including Top Senders) from a populated response');
     } catch (e) { failed++; console.log('  ❌ renders all 5 records and all three leaderboards (including Top Senders) from a populated response: ' + e.message); }
