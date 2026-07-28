@@ -225,6 +225,15 @@ func (s *Server) computeAllPingScores() *PingScoresSnapshot {
 	}
 	relayCounts := map[string]*PingLeaderboardEntry{}
 	observerCounts := map[string]*PingLeaderboardEntry{}
+	// SenderLeaderboard is deliberately a rolling 30-day window, NOT
+	// all-time like the records and the other two leaderboards (dborup,
+	// after seeing it first ship all-time) -- "who pings the most" is
+	// more interesting as an ongoing/current thing than a fixed
+	// leaderboard someone can win once and hold forever. An unparseable
+	// timestamp is treated as too old (excluded), same fail-toward-stale
+	// convention as the active/degraded/silent health classification
+	// elsewhere in this file's package.
+	senderCutoff := time.Now().AddDate(0, 0, -30)
 	senderCounts := map[string]*PingLeaderboardEntry{}
 
 	for _, trigger := range triggers {
@@ -271,12 +280,14 @@ func (s *Server) computeAllPingScores() *PingScoresSnapshot {
 			e.Count++
 		}
 		if score.Sender != "" {
-			e := senderCounts[score.Sender]
-			if e == nil {
-				e = &PingLeaderboardEntry{Name: score.Sender}
-				senderCounts[score.Sender] = e
+			if ts, err := time.Parse(time.RFC3339, score.Timestamp); err == nil && ts.After(senderCutoff) {
+				e := senderCounts[score.Sender]
+				if e == nil {
+					e = &PingLeaderboardEntry{Name: score.Sender}
+					senderCounts[score.Sender] = e
+				}
+				e.Count++
 			}
-			e.Count++
 		}
 	}
 
