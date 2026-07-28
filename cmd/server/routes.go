@@ -360,6 +360,11 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/observers/{id}/analytics", s.handleObserverAnalytics).Methods("GET")
 	r.HandleFunc("/api/observers/{id}/neighbors", s.handleObserverNeighbors).Methods("GET")
 	r.HandleFunc("/api/observers/{id}/neighbors/{pubkey}/metrics", s.handleObserverNeighborMetrics).Methods("GET")
+	// Must be registered before /api/observers/{id} below -- both are
+	// 3-segment patterns and gorilla/mux matches registration order, so
+	// a static /api/observers/neighbors registered after {id} would be
+	// swallowed by it (id="neighbors") instead of reaching this handler.
+	r.HandleFunc("/api/observers/neighbors", s.handleAllObserverNeighbors).Methods("GET")
 	r.HandleFunc("/api/observers/{id}", s.handleObserverDetail).Methods("GET")
 	r.HandleFunc("/api/observers", s.handleObservers).Methods("GET")
 	r.HandleFunc("/api/traces/{hash}", s.handleTraces).Methods("GET")
@@ -3313,6 +3318,31 @@ func (s *Server) handleObserverNeighbors(w http.ResponseWriter, r *http.Request)
 		"neighbors":  neighbors,
 		"reportedAt": reportedAt,
 	})
+}
+
+// handleAllObserverNeighbors serves the Tools > Observer Neighbors page:
+// every observer's reported direct-neighbor set network-wide in one flat
+// list (dborup asked for a single place to see this, rather than clicking
+// into each observer individually). Same fields/semantics as
+// handleObserverNeighbors, just not scoped to one observer -- including
+// the empty-list-not-error convention for a network with no /neighbors
+// data reported yet.
+func (s *Server) handleAllObserverNeighbors(w http.ResponseWriter, r *http.Request) {
+	entries, err := s.db.GetAllObserverNeighbors()
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	if s.cfg != nil && len(s.cfg.ObserverBlacklist) > 0 {
+		filtered := entries[:0]
+		for _, e := range entries {
+			if !s.cfg.IsObserverBlacklisted(e.ObserverID) {
+				filtered = append(filtered, e)
+			}
+		}
+		entries = filtered
+	}
+	writeJSON(w, map[string]interface{}{"neighbors": entries})
 }
 
 // handleObserverNeighborMetrics serves the SNR/heard_secs_ago history for

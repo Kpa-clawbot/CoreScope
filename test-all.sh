@@ -78,6 +78,7 @@ node test-ping-scores.js
 node test-observer-neighbors-report-badge.js
 node test-observer-direct-neighbors-panel.js
 node test-analytics-areas-tab.js
+node test-observer-neighbors-tool.js
 
 echo ""
 echo "═══════════════════════════════════════"

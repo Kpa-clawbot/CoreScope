@@ -1565,6 +1565,109 @@ func (db *DB) GetObserverNeighbors(observerID string) ([]ObserverNeighbor, strin
 	return result, reportedAt, rows.Err()
 }
 
+// AllObserverNeighborsEntry is one row of the network-wide "every
+// observer's reported direct neighbors" listing (Tools > Observer
+// Neighbors), flattening ObserverNeighbor with which observer it came
+// from -- dborup asked for a single place to see this across ALL
+// observers, distinct from the per-observer Direct Neighbors panel this
+// reuses the same fields/semantics from.
+type AllObserverNeighborsEntry struct {
+	ObserverID     string  `json:"observerId"`
+	ObserverName   *string `json:"observerName"`
+	ObserverIATA   *string `json:"observerIata"`
+	NeighborPubkey string  `json:"neighborPubkey"`
+	NeighborName   *string `json:"neighborName"`
+	NeighborRole   *string `json:"neighborRole"`
+	Scopes         *string `json:"scopes"`
+	Status         string  `json:"status"`
+	SeenViaPackets bool    `json:"seenViaPackets"`
+	ReportedAt     string  `json:"reportedAt"`
+}
+
+// GetAllObserverNeighbors returns every observer_neighbors row network-wide,
+// joined with observer/neighbor display names and cross-referenced against
+// the packet-derived neighbor_edges graph exactly like GetObserverNeighbors
+// does per-observer. Reads the whole result set into memory FIRST and closes
+// that cursor before running any packetGraphNeighbors lookups -- issuing a
+// second query per row while the first cursor is still open is the
+// single-connection-pool deadlock class documented on schemaFlag; memoizing
+// per distinct observer_id (mesh has few observers, many neighbor rows each)
+// also avoids redundant repeat queries for the same observer.
+func (db *DB) GetAllObserverNeighbors() ([]AllObserverNeighborsEntry, error) {
+	rows, err := db.conn.Query(`
+		SELECT on2.observer_id, obs.name, obs.iata, on2.neighbor_pubkey, n.name, n.role, on2.scopes, on2.status, on2.reported_at
+		FROM observer_neighbors on2
+		LEFT JOIN observers obs ON obs.id = on2.observer_id
+		LEFT JOIN nodes n ON n.public_key = on2.neighbor_pubkey
+		ORDER BY on2.observer_id, on2.neighbor_pubkey`)
+	if err != nil {
+		return nil, err
+	}
+	type rawRow struct {
+		observerID                                     string
+		observerName, observerIATA                     sql.NullString
+		neighborPubkey                                 string
+		neighborName, neighborRole, scopes, reportedAt sql.NullString
+		status                                         string
+	}
+	var raws []rawRow
+	for rows.Next() {
+		var r rawRow
+		if err := rows.Scan(&r.observerID, &r.observerName, &r.observerIATA, &r.neighborPubkey, &r.neighborName, &r.neighborRole, &r.scopes, &r.status, &r.reportedAt); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		raws = append(raws, r)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	packetNeighborsCache := make(map[string]map[string]bool)
+	result := make([]AllObserverNeighborsEntry, 0, len(raws))
+	for _, r := range raws {
+		observerLower := strings.ToLower(r.observerID)
+		set, cached := packetNeighborsCache[observerLower]
+		if !cached {
+			set, _ = db.packetGraphNeighbors(observerLower)
+			packetNeighborsCache[observerLower] = set
+		}
+		entry := AllObserverNeighborsEntry{
+			ObserverID:     r.observerID,
+			NeighborPubkey: r.neighborPubkey,
+			Status:         r.status,
+			SeenViaPackets: set[r.neighborPubkey],
+		}
+		if r.observerName.Valid {
+			s := r.observerName.String
+			entry.ObserverName = &s
+		}
+		if r.observerIATA.Valid {
+			s := r.observerIATA.String
+			entry.ObserverIATA = &s
+		}
+		if r.neighborName.Valid {
+			s := r.neighborName.String
+			entry.NeighborName = &s
+		}
+		if r.neighborRole.Valid {
+			s := r.neighborRole.String
+			entry.NeighborRole = &s
+		}
+		if r.scopes.Valid && r.scopes.String != "" {
+			s := r.scopes.String
+			entry.Scopes = &s
+		}
+		if r.reportedAt.Valid {
+			entry.ReportedAt = r.reportedAt.String
+		}
+		result = append(result, entry)
+	}
+	return result, nil
+}
+
 // NeighborMetricPoint is one time-series sample of an observer<->neighbor
 // direct-RF link (#1865 follow-up: the /neighbors report's snr and
 // heard_secs_ago fields, previously dropped). Mirrors MetricsSample's

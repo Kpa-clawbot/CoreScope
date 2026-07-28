@@ -1116,6 +1116,7 @@ registerPage('tools-landing', {
           '<a href="#/tools/path-inspector" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Path Inspector</h3><p>Resolve prefix paths to candidate full-pubkey routes with confidence scoring.</p></a>' +
           '<a href="#/tools/trace/" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Trace Viewer</h3><p>View detailed packet traces by hash.</p></a>' +
           '<a href="#/ping-scores" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trophy"/></svg> Ping Scores</h3><p>Global highscore board and leaderboards from every "ping" ever sent in a channel.</p></a>' +
+          '<a href="#/tools/observer-neighbors" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-share-network"/></svg> Observer Neighbors</h3><p>Every observer\'s firmware-reported direct neighbors, network-wide in one searchable list.</p></a>' +
         '</div>' +
       '</div>';
   },
@@ -1196,6 +1197,9 @@ function navigate() {
     } else if (routeParam === 'path-inspector' || (routeParam && routeParam.startsWith('path-inspector'))) {
       basePage = 'path-inspector';
       routeParam = null;
+    } else if (routeParam === 'observer-neighbors') {
+      basePage = 'observer-neighbors-tool';
+      routeParam = null;
     } else if (!routeParam) {
       // Default tools landing shows menu with both entries.
       basePage = 'tools-landing';
@@ -1208,7 +1212,7 @@ function navigate() {
 
   // Update nav active state
   document.querySelectorAll('.nav-link[data-route]').forEach(el => {
-    el.classList.toggle('active', el.dataset.route === basePage || (el.dataset.route === 'tools' && (basePage === 'traces' || basePage === 'path-inspector' || basePage === 'tools-landing')));
+    el.classList.toggle('active', el.dataset.route === basePage || (el.dataset.route === 'tools' && (basePage === 'traces' || basePage === 'path-inspector' || basePage === 'observer-neighbors-tool' || basePage === 'tools-landing')));
   });
   // Update "More" button to show active state if a low-priority page is selected
   var moreBtn = document.getElementById('navMoreBtn');
