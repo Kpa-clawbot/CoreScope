@@ -517,6 +517,19 @@ console.log('\n=== packets.js: getDetailPreview ===');
     assert(result.includes('tag'), 'should render tag field');
   });
 
+  // #1868 — filter is a bitmask (ADV_TYPE_* bit-per-type, per firmware's
+  // `filter & (1 << ADV_TYPE_x)`); bit 2 = ADV_TYPE_REPEATER, so filter=4
+  // (1<<2) must render as the human-readable type name, not raw hex.
+  test('getDetailPreview renders CONTROL DISCOVER_REQ filter as type name(s), not raw hex', () => {
+    const result = api.getDetailPreview({
+      type: 'CONTROL',
+      ctrlSubtype: 'DISCOVER_REQ',
+      ctrlFilter: 4, // 1 << 2 = ADV_TYPE_REPEATER
+    });
+    assert(result.includes('Repeater'), 'should show "Repeater" for filter bit 2, got: ' + result);
+    assert(!/filter=0x/.test(result), 'should not fall back to raw hex when bits are known, got: ' + result);
+  });
+
   test('getDetailPreview handles CONTROL DISCOVER_RESP', () => {
     const result = api.getDetailPreview({
       type: 'CONTROL',
@@ -528,7 +541,34 @@ console.log('\n=== packets.js: getDetailPreview ===');
     });
     assert(result.includes('DISCOVER_RESP'), 'should label subtype');
     assert(result.includes('snr') || result.includes('SNR'), 'should render snr');
-    assert(result.includes('0001020304050607'), 'should render pubkey hex');
+    // #1868: pubkey truncated to first 8 hex chars for the per-row preview
+    // (no live node lookup per row -- see the async detail-panel resolution
+    // instead), and full raw hex must NOT leak into the row.
+    assert(result.includes('00010203'), 'should render truncated pubkey prefix, got: ' + result);
+    assert(!result.includes('0001020304050607'), 'should NOT render the full raw pubkey in the row preview, got: ' + result);
+  });
+
+  // #1868 — node_type (ADV_TYPE_REPEATER=2) must render as "Repeater", not
+  // the raw number.
+  test('getDetailPreview renders CONTROL DISCOVER_RESP node type as a name, not a raw number', () => {
+    const result = api.getDetailPreview({
+      type: 'CONTROL',
+      ctrlSubtype: 'DISCOVER_RESP',
+      ctrlNodeType: 2,
+    });
+    assert(result.includes('Repeater'), 'should show "Repeater" for node type 2, got: ' + result);
+    assert(!/type=2\b/.test(result), 'should not show the raw type number, got: ' + result);
+  });
+
+  // #1868 — SNR is wire-encoded (value * 4); a raw 16 must display as 4.00 dB.
+  test('getDetailPreview converts CONTROL DISCOVER_RESP SNR from wire units to dB', () => {
+    const result = api.getDetailPreview({
+      type: 'CONTROL',
+      ctrlSubtype: 'DISCOVER_RESP',
+      ctrlSNR: 16,
+    });
+    assert(result.includes('4.00dB') || result.includes('4.00 dB'), 'should show 16/4.0=4.00 dB, got: ' + result);
+    assert(!/snr=16(?!\.)/.test(result), 'should not show the raw wire SNR value, got: ' + result);
   });
 
   test('getDetailPreview handles CONTROL UNKNOWN subtype', () => {
@@ -828,6 +868,37 @@ console.log('\n=== packets.js: buildFieldTable ===');
     const decoded = {};
     const result = api.buildFieldTable(pkt, decoded, [], []);
     assert(result.includes('Raw'));
+  });
+
+  // #1868 — CONTROL no longer falls through to the generic "Raw" row; it
+  // gets a proper field breakdown matching decodeControl()'s byte layout.
+  test('buildFieldTable renders CONTROL DISCOVER_REQ with human-readable filter', () => {
+    const pkt = { raw_hex: 'c040', route_type: 1, payload_type: 11 };
+    const decoded = { type: 'CONTROL', ctrlSubtype: 'DISCOVER_REQ', ctrlFilter: 4, ctrlTag: 0xDEADBEEF, ctrlSince: 0x11223344 };
+    const result = api.buildFieldTable(pkt, decoded, [], []);
+    assert(!result.includes('>Raw<'), 'should not fall through to the generic Raw row, got: ' + result);
+    assert(result.includes('DISCOVER_REQ'));
+    assert(result.includes('Repeater'), 'filter=4 (1<<2) should show "Repeater", got: ' + result);
+    assert(result.includes('DEADBEEF'));
+  });
+
+  test('buildFieldTable renders CONTROL DISCOVER_RESP with converted SNR and truncated pubkey when node is unresolved', () => {
+    const pkt = { raw_hex: 'c040', route_type: 1, payload_type: 11 };
+    const decoded = { type: 'CONTROL', ctrlSubtype: 'DISCOVER_RESP', ctrlNodeType: 2, ctrlSNR: 16, ctrlPubKey: '00'.repeat(32) };
+    // 5th arg (ctrlPubKeyNode) omitted -- unresolved case.
+    const result = api.buildFieldTable(pkt, decoded, [], []);
+    assert(result.includes('Repeater'), 'node type 2 should show "Repeater", got: ' + result);
+    assert(result.includes('4.00 dB'), 'SNR 16/4.0 should show 4.00 dB, got: ' + result);
+    assert(!result.includes('#/nodes/'), 'should not render a node link when unresolved, got: ' + result);
+  });
+
+  test('buildFieldTable renders CONTROL DISCOVER_RESP pubkey as a clickable node link when resolved', () => {
+    const pkt = { raw_hex: 'c040', route_type: 1, payload_type: 11 };
+    const decoded = { type: 'CONTROL', ctrlSubtype: 'DISCOVER_RESP', ctrlPubKey: 'ab'.repeat(32) };
+    const ctrlPubKeyNode = { public_key: 'ab'.repeat(32), name: 'KnownRepeater' };
+    const result = api.buildFieldTable(pkt, decoded, [], [], ctrlPubKeyNode);
+    assert(result.includes('#/nodes/' + ctrlPubKeyNode.public_key), 'should link to the resolved node, got: ' + result);
+    assert(result.includes('KnownRepeater'), 'should show the resolved node name, got: ' + result);
   });
 
   test('buildFieldTable hash_size calculation', () => {

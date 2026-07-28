@@ -2865,6 +2865,33 @@
     if (scrollContainer) scrollContainer.scrollTop = savedScrollTop;
   }
 
+  // #1868 — CONTROL DISCOVER_REQ/RESP node-type + SNR display helpers.
+  // node_type (RESP low nibble, single value) and filter (REQ byte, bitmask
+  // of these SAME type values -- firmware checks `filter & (1 << ADV_TYPE_x)`)
+  // share the ADV_TYPE_* enum already used for ADVERT role labels
+  // (cmd/ingestor/decoder.go's advertRole(), firmware/src/helpers/
+  // AdvertDataHelpers.h:7-12): 0 NONE, 1 CHAT, 2 REPEATER, 3 ROOM, 4 SENSOR.
+  var CTRL_TYPE_LABELS = { 0: 'None', 1: 'Companion', 2: 'Repeater', 3: 'Room Server', 4: 'Sensor' };
+  function ctrlTypeLabel(n) {
+    return CTRL_TYPE_LABELS[n] != null ? CTRL_TYPE_LABELS[n] : ('Unknown(' + n + ')');
+  }
+  function ctrlFilterLabels(filter) {
+    var labels = [];
+    for (var bit = 0; bit <= 4; bit++) {
+      if (filter & (1 << bit)) labels.push(ctrlTypeLabel(bit));
+    }
+    return labels;
+  }
+  // Firmware sends SNR as a wire-encoded int8 (value * 4); divide by 4.0 for
+  // real dB, same conversion already applied to TRACE's snrValues in both
+  // decoders (cmd/ingestor/decoder.go:1016, cmd/server/decoder.go:619) --
+  // CONTROL's SNR just hasn't had the same conversion applied yet, and doing
+  // it here (display-only) avoids any ambiguity with already-stored raw
+  // values from packets ingested before this fix.
+  function ctrlSnrDb(raw) {
+    return (Number(raw) / 4.0).toFixed(2);
+  }
+
   function getDetailPreview(decoded) {
     if (!decoded) return '';
     // Channel messages (GRP_TXT) — show channel name and message text
@@ -2941,7 +2968,8 @@
       const parts = [];
       if (subtype === 'DISCOVER_REQ') {
         if (decoded.ctrlFilter != null) {
-          parts.push(`filter=0x${Number(decoded.ctrlFilter).toString(16).padStart(2, '0')}`);
+          const labels = ctrlFilterLabels(Number(decoded.ctrlFilter));
+          parts.push(`filter=${labels.length ? labels.join('+') : '0x' + Number(decoded.ctrlFilter).toString(16).padStart(2, '0')}`);
         }
         if (decoded.ctrlTag != null) {
           parts.push(`tag=0x${(Number(decoded.ctrlTag) >>> 0).toString(16).padStart(8, '0')}`);
@@ -2951,16 +2979,21 @@
         }
       } else if (subtype === 'DISCOVER_RESP') {
         if (decoded.ctrlNodeType != null) {
-          parts.push(`type=${Number(decoded.ctrlNodeType)}`);
+          parts.push(`type=${ctrlTypeLabel(Number(decoded.ctrlNodeType))}`);
         }
         if (decoded.ctrlSNR != null) {
-          parts.push(`snr=${Number(decoded.ctrlSNR)}`);
+          parts.push(`snr=${ctrlSnrDb(decoded.ctrlSNR)}dB`);
         }
         if (decoded.ctrlTag != null) {
           parts.push(`tag=0x${(Number(decoded.ctrlTag) >>> 0).toString(16).padStart(8, '0')}`);
         }
         if (decoded.ctrlPubKey) {
-          parts.push(`pubkey=${escapeHtml(decoded.ctrlPubKey)}`);
+          // Row preview is synchronous/rendered per-row -- no live node
+          // lookup here (that would mean one API call per visible CONTROL
+          // row). Truncated to 8 hex chars, matching the same fallback
+          // used elsewhere in this file (e.g. srcLabel's pubKey.slice(0,8)
+          // in renderDetail) for an unresolved node identifier.
+          parts.push(`pubkey=${escapeHtml(decoded.ctrlPubKey.slice(0, 8))}…`);
         }
       } else if (decoded.ctrlFlags) {
         parts.push(`flags=0x${escapeHtml(decoded.ctrlFlags)}`);
@@ -3132,6 +3165,17 @@
           if (match?.lat && match.lon) { senderLat = match.lat; senderLon = match.lon; }
         }
       } catch {}
+    }
+
+    // #1868 — CONTROL DISCOVER_RESP carries a responder pubkey (full 32B or
+    // 8B prefix) with no name attached. /api/nodes/{pubkey} already handles
+    // prefix resolution server-side (issue #772's short-URL fallback), so
+    // this works for both lengths the same way. Falls back to null (plain
+    // truncated hex in buildFieldTable) when unresolved/unknown/blacklisted.
+    let ctrlPubKeyNode = null;
+    if (decoded.type === 'CONTROL' && decoded.ctrlPubKey) {
+      const nd = await api(`/nodes/${decoded.ctrlPubKey}`, { ttl: 30000 }).catch(() => null);
+      if (nd?.node?.public_key) ctrlPubKeyNode = nd.node;
     }
 
     // Resolve hops: prefer server-side resolved_path, fall back to client-side HopResolver
@@ -3327,7 +3371,7 @@
         ${hasRawHex ? `<div class="hex-legend">${buildHexLegend(ranges)}</div>
         <div class="hex-dump">${createColoredHexDump(effectivePkt.raw_hex || pkt.raw_hex, ranges)}</div>` : ''}
 
-        ${hasRawHex ? buildFieldTable(effectivePkt.raw_hex ? effectivePkt : pkt, decoded, pathHops, ranges) : buildDecodedTable(decoded)}
+        ${hasRawHex ? buildFieldTable(effectivePkt.raw_hex ? effectivePkt : pkt, decoded, pathHops, ranges, ctrlPubKeyNode) : buildDecodedTable(decoded)}
       </details>` : ''}
 
       ${observations.length > 1 ? `
@@ -3508,7 +3552,7 @@
     return rows ? `<table class="detail-decoded" style="width:100%;border-collapse:collapse;margin-top:8px">${rows}</table>` : '';
   }
 
-  function buildFieldTable(pkt, decoded, pathHops, ranges) {
+  function buildFieldTable(pkt, decoded, pathHops, ranges, ctrlPubKeyNode) {
     const buf = pkt.raw_hex || '';
     const size = Math.floor(buf.length / 2);
     let rows = '';
@@ -3607,6 +3651,41 @@
       rows += fieldRow(off + 1, 'Src Hash (1B)', decoded.srcHash || '', '');
       rows += fieldRow(off + 2, 'MAC (2B)', decoded.mac || '', '');
       rows += fieldRow(off + 4, 'Encrypted Data', truncate(decoded.encryptedData || '', 30), '');
+    } else if (decoded.type === 'CONTROL') {
+      // #1868 — CONTROL DISCOVER_REQ/RESP field breakdown, matching decoder
+      // layout in cmd/ingestor/decoder.go decodeControl(). Body fields are
+      // length-gated there too, so each row is only added when present.
+      const subtype = decoded.ctrlSubtype || 'CONTROL';
+      rows += fieldRow(off, 'Subtype', escapeHtml(subtype), decoded.ctrlFlags ? 'byte0 high nibble, flags=0x' + escapeHtml(decoded.ctrlFlags) : '');
+      if (subtype === 'DISCOVER_REQ') {
+        if (decoded.ctrlFilter != null) {
+          const labels = ctrlFilterLabels(Number(decoded.ctrlFilter));
+          rows += fieldRow(off + 1, 'Filter (1B)', '0x' + Number(decoded.ctrlFilter).toString(16).padStart(2, '0'), labels.length ? 'Requesting: ' + labels.join(', ') : 'No types requested');
+        }
+        if (decoded.ctrlTag != null) {
+          rows += fieldRow(off + 2, 'Tag (4B)', '0x' + (Number(decoded.ctrlTag) >>> 0).toString(16).toUpperCase().padStart(8, '0'), '');
+        }
+        if (decoded.ctrlSince != null) {
+          rows += fieldRow(off + 6, 'Since (4B)', String(Number(decoded.ctrlSince) >>> 0), 'Unix epoch');
+        }
+      } else if (subtype === 'DISCOVER_RESP') {
+        if (decoded.ctrlNodeType != null) {
+          rows += fieldRow(off, 'Node Type', escapeHtml(ctrlTypeLabel(Number(decoded.ctrlNodeType))), 'byte0 low nibble');
+        }
+        if (decoded.ctrlSNR != null) {
+          rows += fieldRow(off + 1, 'SNR (1B)', ctrlSnrDb(decoded.ctrlSNR) + ' dB', 'wire value ' + decoded.ctrlSNR + ' ÷ 4.0');
+        }
+        if (decoded.ctrlTag != null) {
+          rows += fieldRow(off + 2, 'Tag (4B)', '0x' + (Number(decoded.ctrlTag) >>> 0).toString(16).toUpperCase().padStart(8, '0'), '');
+        }
+        if (decoded.ctrlPubKey) {
+          const pkLen = decoded.ctrlPubKey.length === 64 ? '32B' : '8B prefix';
+          const pkValue = ctrlPubKeyNode
+            ? `<a href="#/nodes/${encodeURIComponent(ctrlPubKeyNode.public_key)}" class="hop-link hop-named" data-hop-link="true">${escapeHtml(ctrlPubKeyNode.name || ctrlPubKeyNode.public_key.slice(0, 8) + '…')}</a>`
+            : escapeHtml(truncate(decoded.ctrlPubKey, 24));
+          rows += fieldRow(off + 6, 'Pubkey (' + pkLen + ')', pkValue, ctrlPubKeyNode ? '' : 'Unknown node');
+        }
+      }
     } else {
       rows += fieldRow(off, 'Raw', truncate(buf.slice(off * 2), 40), '');
     }
