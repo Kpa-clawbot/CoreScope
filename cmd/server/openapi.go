@@ -460,6 +460,7 @@ func componentSchemas() map[string]interface{} {
 				"relayLeaderboard":    map[string]interface{}{"type": "array", "items": schemaRef("PingLeaderboardEntry"), "description": "Top nodes ranked by number of distinct pings they appeared as a relay hop in (deduped per ping first, so one busy ping's many branches can't over-credit a relay)."},
 				"observerLeaderboard": map[string]interface{}{"type": "array", "items": schemaRef("PingLeaderboardEntry"), "description": "Top observers ranked by number of pings they were the first station to hear."},
 				"senderLeaderboard":   map[string]interface{}{"type": "array", "items": schemaRef("PingLeaderboardEntry"), "description": "Top senders ranked by number of pings sent in the last 30 days (unlike the other leaderboards and records, which are all-time). Keyed by the sender display name from the channel message itself -- no resolved pubkey, so entries never carry one."},
+				"areaLeaderboard":     map[string]interface{}{"type": "array", "items": schemaRef("PingLeaderboardEntry"), "description": "Configured areas ranked by number of distinct pings with at least one relay hop or hearing station inside them -- \"which area is most active,\" all-time. Same area-matching config as View Path's touchedAreas. Keyed by area label -- no resolved pubkey, so entries never carry one. Omitted entirely when no areas are configured."},
 			},
 		},
 		"AreaDensity": map[string]interface{}{

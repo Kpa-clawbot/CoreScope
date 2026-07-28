@@ -130,6 +130,7 @@ function makeSandbox(apiImpl) {
         relayLeaderboard: [{ pubkey: 'pkrelay1', name: 'RelayOne', count: 7 }],
         observerLeaderboard: [{ pubkey: 'pkobs1', name: 'ObsOne', count: 3 }],
         senderLeaderboard: [{ name: 'PingMaster', count: 12 }],
+        areaLeaderboard: [{ name: 'Area A', count: 9 }],
       };
       const { container, getPage } = makeSandbox(() => Promise.resolve(data));
       await getPage().init(container);
@@ -144,9 +145,30 @@ function makeSandbox(apiImpl) {
       assert.ok(container.innerHTML.includes('All-Time Records'), 'should show the All-Time Records section heading, got: ' + container.innerHTML);
       assert.ok(container.innerHTML.includes('12.3'), 'should show the thisWeek farthest record km distinct from the all-time one, got: ' + container.innerHTML);
       assert.ok(container.innerHTML.includes('WeeklyRepeater'), 'should show the thisWeek record\'s node name, got: ' + container.innerHTML);
+      assert.ok(container.innerHTML.includes('Area Activity'), 'should show the Area Activity leaderboard heading, got: ' + container.innerHTML);
+      assert.ok(container.innerHTML.includes('Area A'), 'should show the area leaderboard entry, got: ' + container.innerHTML);
       passed++;
-      console.log('  ✅ renders all 5 records and all three leaderboards (including Top Senders) from a populated response');
-    } catch (e) { failed++; console.log('  ❌ renders all 5 records and all three leaderboards (including Top Senders) from a populated response: ' + e.message); }
+      console.log('  ✅ renders all 5 records and all four leaderboards (including Top Senders and Area Activity) from a populated response');
+    } catch (e) { failed++; console.log('  ❌ renders all 5 records and all four leaderboards (including Top Senders and Area Activity) from a populated response: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
+      // areaLeaderboard is omitted entirely (not an empty array) when the
+      // deployment has no areas configured -- the whole "Area Activity"
+      // card must be skipped, not shown empty/broken, on deployments that
+      // never set up areas.
+      const data = {
+        totalPings: 1,
+        generatedAt: new Date().toISOString(),
+        relayLeaderboard: [{ pubkey: 'pkrelay1', name: 'RelayOne', count: 7 }],
+      };
+      const { container, getPage } = makeSandbox(() => Promise.resolve(data));
+      await getPage().init(container);
+      assert.ok(!container.innerHTML.includes('Area Activity'), 'should NOT show an Area Activity card when areaLeaderboard is absent, got: ' + container.innerHTML);
+      passed++;
+      console.log('  ✅ Area Activity leaderboard card is skipped entirely when no areas are configured');
+    } catch (e) { failed++; console.log('  ❌ Area Activity leaderboard card is skipped entirely when no areas are configured: ' + e.message); }
   })();
 
   await (async () => {
