@@ -116,6 +116,15 @@ type Server struct {
 	// Ping-score highscore/leaderboard cache, refreshed by
 	// StartPingScoresRecomputer (see ping_scores.go).
 	pingScores pingScoresCache
+
+	// Cached /api/analytics/areas response, recomputed at most once every
+	// 30s. Worth a TTL cache: computeAreaPositionGaps calls
+	// nearestPositionedNeighbor once per unpositioned node, each a couple
+	// of small queries -- cheap individually but adds up when many nodes
+	// lack a real fix (the exact situation this endpoint exists to report on).
+	areaAnalyticsMu       sync.Mutex
+	areaAnalyticsCache    *AreaAnalyticsResponse
+	areaAnalyticsCachedAt time.Time
 }
 
 // PerfStats tracks request performance.
@@ -258,6 +267,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/config/areas", s.handleConfigAreas).Methods("GET")
 	r.HandleFunc("/api/config/areas/polygons", s.handleConfigAreasPolygons).Methods("GET")
 	r.HandleFunc("/api/ping-scores", s.handlePingScores).Methods("GET")
+	r.HandleFunc("/api/analytics/areas", s.handleAreaAnalytics).Methods("GET")
 	r.Handle("/api/config/geo-filter", s.requireAPIKey(http.HandlerFunc(s.handlePutConfigGeoFilter))).Methods("PUT")
 
 	// Readiness endpoint (gated on background init completion)
@@ -558,6 +568,58 @@ func (s *Server) handlePingScores(w http.ResponseWriter, r *http.Request) {
 		snap = &PingScoresSnapshot{GeneratedAt: time.Now().UTC().Format(time.RFC3339)}
 	}
 	writeJSON(w, snap)
+}
+
+// handleAreaAnalytics serves the node density/health, cross-area bridge
+// node, and position-fix coverage gap breakdowns for every configured
+// Area (public/analytics.js's "Areas" tab). Cached for 30s: like
+// areaAnalyticsCache's field comment explains, computeAreaPositionGaps
+// calls nearestPositionedNeighbor once per unpositioned node, which adds
+// up on networks with many nodes lacking a real GPS fix.
+func (s *Server) handleAreaAnalytics(w http.ResponseWriter, r *http.Request) {
+	const areaAnalyticsTTL = 30 * time.Second
+
+	s.areaAnalyticsMu.Lock()
+	if s.areaAnalyticsCache != nil && time.Since(s.areaAnalyticsCachedAt) < areaAnalyticsTTL {
+		cached := s.areaAnalyticsCache
+		s.areaAnalyticsMu.Unlock()
+		writeJSON(w, cached)
+		return
+	}
+	s.areaAnalyticsMu.Unlock()
+
+	if s.cfg == nil || len(s.cfg.Areas) == 0 {
+		writeJSON(w, &AreaAnalyticsResponse{})
+		return
+	}
+
+	positioned, unpositioned, err := s.db.GetNodesForAreaAnalytics()
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+
+	var graph *NeighborGraph
+	if s.store != nil {
+		graph = s.store.graph.Load()
+	}
+
+	positionGaps, noNeighborFix := computeAreaPositionGaps(s.db, positioned, unpositioned, s.cfg.Areas)
+
+	resp := &AreaAnalyticsResponse{
+		Density:                   computeAreaDensity(positioned, s.cfg.Areas, s.cfg.GetHealthThresholds()),
+		BridgeNodes:               computeAreaBridgeNodes(positioned, s.cfg.Areas, graph),
+		PositionGaps:              positionGaps,
+		UnpositionedTotal:         len(unpositioned),
+		UnpositionedNoNeighborFix: noNeighborFix,
+	}
+
+	s.areaAnalyticsMu.Lock()
+	s.areaAnalyticsCache = resp
+	s.areaAnalyticsCachedAt = time.Now()
+	s.areaAnalyticsMu.Unlock()
+
+	writeJSON(w, resp)
 }
 
 func (s *Server) handleConfigRegions(w http.ResponseWriter, r *http.Request) {

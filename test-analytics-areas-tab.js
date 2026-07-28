@@ -1,0 +1,306 @@
+/**
+ * DOM-rendering tests for the "Areas" Analytics tab
+ * (renderAreasTab, public/analytics.js).
+ *
+ * Drives the real render function against a stubbed api() that returns a
+ * fixed /api/analytics/areas response, asserting rendered tables, empty
+ * states, and the 60s auto-refresh timer lifecycle — same harness style
+ * as test-analytics-wardriving-tab.js.
+ */
+'use strict';
+
+const vm = require('vm');
+const fs = require('fs');
+const assert = require('assert');
+
+let passed = 0, failed = 0;
+async function testAsync(name, fn) {
+  try {
+    await fn();
+    passed++;
+    console.log(`  ✅ ${name}`);
+  } catch (e) {
+    failed++;
+    console.log(`  ❌ ${name}: ${e.message}`);
+  }
+}
+
+function makeSandbox() {
+  const ctx = {
+    window: { addEventListener: () => {}, dispatchEvent: () => {} },
+    document: {
+      readyState: 'complete',
+      createElement: () => ({ id: '', textContent: '', innerHTML: '' }),
+      head: { appendChild: () => {} },
+      getElementById: () => null,
+      addEventListener: () => {},
+      querySelectorAll: () => [],
+      querySelector: () => null,
+    },
+    console, Date, Infinity, Math, Array, Object, String, Number, JSON, RegExp,
+    Error, TypeError, parseInt, parseFloat, isNaN, isFinite,
+    encodeURIComponent, decodeURIComponent,
+    setTimeout: () => {}, clearTimeout: () => {},
+    fetch: () => Promise.resolve({ json: () => Promise.resolve({}) }),
+    performance: { now: () => Date.now() },
+    localStorage: (() => { const s = {}; return { getItem: k => s[k] || null, setItem: (k, v) => { s[k] = String(v); }, removeItem: k => { delete s[k]; } }; })(),
+    location: { hash: '' },
+    getHashParams: function() { return new URLSearchParams((ctx.location.hash.split('?')[1] || '')); },
+    CustomEvent: class CustomEvent {},
+    Map, Promise, URLSearchParams,
+    addEventListener: () => {},
+    dispatchEvent: () => {},
+    requestAnimationFrame: (cb) => setTimeout(cb, 0),
+  };
+  // Spies (not just no-ops) so the timer-lifecycle test can verify a
+  // real interval got registered AND really cleared.
+  let nextIntervalId = 1;
+  const liveIntervalIds = new Set();
+  const clearedIntervalIds = [];
+  ctx.__liveIntervalIds = liveIntervalIds;
+  ctx.__clearedIntervalIds = clearedIntervalIds;
+  ctx.setInterval = function () {
+    const id = nextIntervalId++;
+    liveIntervalIds.add(id);
+    return id;
+  };
+  ctx.clearInterval = function (id) {
+    liveIntervalIds.delete(id);
+    clearedIntervalIds.push(id);
+  };
+  vm.createContext(ctx);
+  return ctx;
+}
+
+function loadInCtx(ctx, file) {
+  if (!ctx.__payloadLabelsLoaded && file !== 'public/payload-labels.js') {
+    ctx.__payloadLabelsLoaded = true;
+    vm.runInContext(fs.readFileSync('public/payload-labels.js', 'utf8'), ctx);
+  }
+  vm.runInContext(fs.readFileSync(file, 'utf8'), ctx);
+  for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
+}
+
+function makeAnalyticsSandbox(apiStub) {
+  const ctx = makeSandbox();
+  ctx.getComputedStyle = () => ({ getPropertyValue: () => '' });
+  ctx.registerPage = () => {};
+  ctx.timeAgo = (iso) => iso ? 'x ago' : '—';
+  ctx.RegionFilter = { init: () => {}, onChange: () => {}, regionQueryString: () => '' };
+  ctx.onWS = () => {};
+  ctx.offWS = () => {};
+  ctx.connectWS = () => {};
+  ctx.invalidateApiCache = () => {};
+  ctx.makeColumnsResizable = () => {};
+  ctx.initTabBar = () => {};
+  ctx.IATA_COORDS_GEO = {};
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  ctx.fetchAllNodes = async () => ({ nodes: [] });
+  ctx.api = apiStub || (() => Promise.resolve({}));
+  try { loadInCtx(ctx, 'public/analytics.js'); } catch (e) {
+    for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
+  }
+  return ctx;
+}
+
+function fakeEl() {
+  return { innerHTML: '', querySelector: () => null, querySelectorAll: () => [] };
+}
+
+function makeAreasResponse(overrides) {
+  return Object.assign({
+    density: [
+      { areaKey: 'ODE', label: 'Odense by', total: 5, active: 3, degraded: 1, silent: 1, roleCounts: { repeater: 2, client: 3 } },
+      { areaKey: 'DK', label: 'Danmark (alle)', total: 8, active: 5, degraded: 2, silent: 1, roleCounts: { repeater: 3, client: 5 } },
+    ],
+    bridgeNodes: [
+      { publicKey: 'pkbridge01', name: 'BridgeNode', areaKey: 'ODE', label: 'Odense by', edgeCount: 4, otherAreaCount: 2, otherAreas: ['Danmark (alle)', 'Jylland'] },
+    ],
+    positionGaps: [
+      { areaKey: 'ODE', label: 'Odense by', realFix: 4, approximated: 1 },
+    ],
+    unpositionedTotal: 3,
+    unpositionedNoNeighborFix: 1,
+  }, overrides);
+}
+
+function makeApiStub(resp) {
+  return function (path) {
+    if (path.indexOf('/analytics/areas') === 0) return Promise.resolve(resp);
+    return Promise.resolve({});
+  };
+}
+
+(async () => {
+  console.log('\n=== analytics.js: renderAreasTab ===');
+
+  await testAsync('renders the Node Density & Health table from the API response', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse()));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    assert.ok(el.innerHTML.includes('Node Density &amp; Health by Area'), 'density section heading should render');
+    assert.ok(el.innerHTML.includes('Odense by'), 'ODE area label should render');
+    assert.ok(el.innerHTML.includes('Danmark (alle)'), 'DK area label should render');
+    assert.ok(el.innerHTML.includes('client: 3, repeater: 2'), 'role mix should render sorted alphabetically');
+  });
+
+  await testAsync('renders the Cross-Area Bridge Nodes table with a node link and other-areas list', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse()));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    assert.ok(el.innerHTML.includes('Cross-Area Bridge Nodes'), 'bridge section heading should render');
+    assert.ok(el.innerHTML.includes('href="#/nodes/pkbridge01"'), 'bridge node should link to its node detail page');
+    assert.ok(el.innerHTML.includes('BridgeNode'), 'bridge node display name should render');
+    assert.ok(el.innerHTML.includes('Danmark (alle), Jylland'), 'other areas reached should be listed');
+  });
+
+  await testAsync('Node Density & Health sorts worst-health-first, not the API\'s Total-desc order', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse({
+      density: [
+        { areaKey: 'BIG', label: 'BigHealthy', total: 100, active: 100, degraded: 0, silent: 0, roleCounts: {} },   // 0% unhealthy, biggest
+        { areaKey: 'SMALL', label: 'SmallSick', total: 4, active: 1, degraded: 1, silent: 2, roleCounts: {} },      // 75% unhealthy, smallest
+        { areaKey: 'MID', label: 'MidSick', total: 10, active: 5, degraded: 3, silent: 2, roleCounts: {} },         // 50% unhealthy
+      ],
+    })));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    const startIdx = el.innerHTML.indexOf('id="areasDensity"');
+    const section = el.innerHTML.slice(startIdx);
+    const idxSmall = section.indexOf('SmallSick');
+    const idxMid = section.indexOf('MidSick');
+    const idxBig = section.indexOf('BigHealthy');
+    assert.ok(idxSmall > -1 && idxMid > -1 && idxBig > -1, 'all three areas should render');
+    assert.ok(idxSmall < idxMid && idxMid < idxBig, 'rows should be ordered worst-health -> best-health, not by Total');
+  });
+
+  await testAsync('Node Density & Health collapses to top 10 with a "Show all" toggle', async () => {
+    const manyAreas = [];
+    for (let i = 0; i < 15; i++) manyAreas.push({ areaKey: 'A' + i, label: 'Area' + i, total: 10, active: 10 - i, degraded: 0, silent: i, roleCounts: {} });
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse({ density: manyAreas })));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    const startIdx = el.innerHTML.indexOf('id="areasDensity"');
+    const section = el.innerHTML.slice(startIdx, el.innerHTML.indexOf('id="areasBridgeNodes"'));
+    const tbody = section.slice(section.indexOf('<tbody>'), section.indexOf('</tbody>'));
+    const rowCount = (tbody.match(/<tr>/g) || []).length;
+    assert.strictEqual(rowCount, 10, 'only 10 rows should render by default');
+    assert.ok(section.includes('Show all 15 areas'), 'a "Show all" toggle should appear when there are more than 10 areas');
+  });
+
+  await testAsync('Cross-Area Bridge Nodes keeps the API\'s otherAreaCount-desc order and collapses to top 10', async () => {
+    const manyBridges = [];
+    for (let i = 0; i < 12; i++) manyBridges.push({ publicKey: 'pk' + i, name: 'Bridge' + i, areaKey: 'A', label: 'AreaA', edgeCount: 5, otherAreaCount: 12 - i, otherAreas: ['AreaB'] });
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse({ bridgeNodes: manyBridges })));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    const startIdx = el.innerHTML.indexOf('id="areasBridgeNodes"');
+    const section = el.innerHTML.slice(startIdx, el.innerHTML.indexOf('id="areasPositionGaps"'));
+    const idxFirst = section.indexOf('Bridge0');
+    const idxLast = section.indexOf('Bridge9');
+    assert.ok(idxFirst > -1 && idxFirst < idxLast, 'highest otherAreaCount (Bridge0) should render before a lower one (Bridge9)');
+    const tbody = section.slice(section.indexOf('<tbody>'), section.indexOf('</tbody>'));
+    const rowCount = (tbody.match(/<tr>/g) || []).length;
+    assert.strictEqual(rowCount, 10, 'only 10 rows should render by default');
+    assert.ok(section.includes('Show all 12 nodes'), 'a "Show all" toggle should appear when there are more than 10 bridge nodes');
+  });
+
+  await testAsync('renders the Position-Fix Coverage Gaps table with a computed percentage', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse()));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    assert.ok(el.innerHTML.includes('Position-Fix Coverage Gaps by Area'), 'position gaps section heading should render');
+    // 1 approximated of (4 real + 1 approximated) = 20.0%
+    assert.ok(el.innerHTML.includes('20.0%'), 'ODE row should show 20.0% estimated');
+  });
+
+  await testAsync('Position-Fix Coverage Gaps sorts worst-coverage-first, not the API\'s realFix-desc order', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse({
+      positionGaps: [
+        { areaKey: 'FULL', label: 'FullyMapped', realFix: 100, approximated: 0 },   // 0% estimated, biggest realFix
+        { areaKey: 'WORST', label: 'WorstCoverage', realFix: 2, approximated: 8 },   // 80% estimated, smallest realFix
+        { areaKey: 'MID', label: 'MidCoverage', realFix: 10, approximated: 5 },      // ~33% estimated
+      ],
+    })));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    const startIdx = el.innerHTML.indexOf('id="areasPositionGaps"');
+    const section = el.innerHTML.slice(startIdx);
+    const idxWorst = section.indexOf('WorstCoverage');
+    const idxMid = section.indexOf('MidCoverage');
+    const idxFull = section.indexOf('FullyMapped');
+    assert.ok(idxWorst > -1 && idxMid > -1 && idxFull > -1, 'all three areas should render');
+    assert.ok(idxWorst < idxMid && idxMid < idxFull, 'rows should be ordered worst-% -> best-%, not by realFix');
+  });
+
+  await testAsync('Position-Fix Coverage Gaps collapses to top 10 with a "Show all" toggle', async () => {
+    const manyGaps = [];
+    for (let i = 0; i < 15; i++) manyGaps.push({ areaKey: 'A' + i, label: 'Area' + i, realFix: 10, approximated: i });
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse({ positionGaps: manyGaps })));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    const startIdx = el.innerHTML.indexOf('id="areasPositionGaps"');
+    const section = el.innerHTML.slice(startIdx, el.innerHTML.indexOf('nodes network-wide have no real GPS fix'));
+    const tbody = section.slice(section.indexOf('<tbody>'), section.indexOf('</tbody>'));
+    const rowCount = (tbody.match(/<tr>/g) || []).length;
+    assert.strictEqual(rowCount, 10, 'only 10 rows should render by default');
+    assert.ok(section.includes('Show all 15 areas'), 'a "Show all" toggle should appear when there are more than 10 areas');
+  });
+
+  await testAsync('no "Show all" toggle on the Position-Fix Coverage Gaps table when there are 10 or fewer areas', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse()));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    assert.ok(!el.innerHTML.includes('Show all'), 'no toggle should render with only 1 area in positionGaps');
+  });
+
+  await testAsync('renders the unpositioned-nodes summary note including the no-neighbor-fix subset', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse()));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    assert.ok(el.innerHTML.includes('3 nodes network-wide have no real GPS fix'), 'unpositioned total should render');
+    assert.ok(el.innerHTML.includes('of which 1 also have no positioned neighbor'), 'no-neighbor-fix subset should render');
+  });
+
+  await testAsync('shows a neutral empty state when no Areas are configured', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub({ density: [], bridgeNodes: [], positionGaps: [], unpositionedTotal: 0, unpositionedNoNeighborFix: 0 }));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    assert.ok(el.innerHTML.includes('No Areas are configured'), 'should show the no-areas-configured empty state');
+  });
+
+  await testAsync('shows a neutral message when bridgeNodes is empty but other sections have data', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse({ bridgeNodes: [] })));
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    assert.ok(el.innerHTML.includes('No packet-derived neighbor edges cross between two different areas yet'), 'should show the bridge-nodes empty state');
+  });
+
+  await testAsync('shows a friendly message on API failure instead of throwing', async () => {
+    const ctx = makeAnalyticsSandbox(function () { return Promise.reject(new Error('network down')); });
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+    assert.ok(el.innerHTML.includes('Failed to load area analytics'), 'should show a failure message');
+    assert.ok(el.innerHTML.includes('network down'), 'should include the underlying error');
+  });
+
+  await testAsync('rendering registers a real interval, and stop() actually clears it (not a no-op)', async () => {
+    const ctx = makeAnalyticsSandbox(makeApiStub(makeAreasResponse()));
+    const stop = ctx.window._analyticsStopAreasRefresh;
+    assert.strictEqual(typeof stop, 'function', '_stopAreasRefresh must be exported for testing/cleanup');
+
+    stop(); // must not throw when no timer is registered yet
+    const el = fakeEl();
+    await ctx.window._analyticsRenderAreasTab(el);
+
+    assert.strictEqual(ctx.__liveIntervalIds.size, 1, 'rendering should register exactly one live interval');
+    stop();
+    assert.strictEqual(ctx.__liveIntervalIds.size, 0, 'stop() should clear the registered interval');
+    assert.ok(ctx.__clearedIntervalIds.length >= 1, 'clearInterval should have actually been called');
+  });
+
+  console.log('\n════════════════════════════════════════');
+  console.log(`  Areas tab: ${passed} passed, ${failed} failed`);
+  console.log('════════════════════════════════════════');
+  process.exit(failed === 0 ? 0 : 1);
+})();
