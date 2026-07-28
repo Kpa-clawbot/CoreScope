@@ -240,6 +240,22 @@ func TestComputeAllPingScores_Leaderboards(t *testing.T) {
 	if obsACount != 2 {
 		t.Errorf("pingobsa first-hearer count = %d, want 2 (first on both pings)", obsACount)
 	}
+
+	// Alice sent ping 1, Bob sent ping 2 -- one each, and neither entry
+	// should carry a pubkey since senders are keyed by display name only.
+	senderCounts := map[string]PingLeaderboardEntry{}
+	for _, e := range snap.SenderLeaderboard {
+		senderCounts[e.Name] = e
+	}
+	if senderCounts["Alice"].Count != 1 {
+		t.Errorf("Alice sender count = %+v, want Count=1", senderCounts["Alice"])
+	}
+	if senderCounts["Bob"].Count != 1 {
+		t.Errorf("Bob sender count = %+v, want Count=1", senderCounts["Bob"])
+	}
+	if senderCounts["Alice"].Pubkey != "" {
+		t.Errorf("Alice entry has Pubkey=%q, want empty -- senders have no resolved pubkey", senderCounts["Alice"].Pubkey)
+	}
 }
 
 // TestHandlePingScores_EmptyState confirms the endpoint returns a
@@ -314,5 +330,8 @@ func TestHandlePingScores_Populated(t *testing.T) {
 	}
 	if _, present := raw["relayLeaderboard"]; !present {
 		t.Error("expected relayLeaderboard in the JSON response")
+	}
+	if _, present := raw["senderLeaderboard"]; !present {
+		t.Error("expected senderLeaderboard in the JSON response")
 	}
 }

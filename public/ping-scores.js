@@ -81,7 +81,12 @@
       '</div>';
   }
 
-  function leaderboardTableHtml(title, icon, entries) {
+  // colLabel defaults to "Node" (Top Relays/Top First-Hearers are real,
+  // resolvable mesh nodes) -- Top Senders passes "Sender" instead since
+  // entries there are just the display name from the channel message
+  // itself, never a resolvable node (see PingLeaderboardEntry.Pubkey's
+  // omitempty on the backend, cmd/server/ping_scores.go).
+  function leaderboardTableHtml(title, icon, entries, colLabel) {
     if (!entries || entries.length === 0) {
       return '<div class="ps-leaderboard"><h3>' + icon + ' ' + title + '</h3><p class="text-muted" style="font-size:0.9em">No data yet.</p></div>';
     }
@@ -92,7 +97,7 @@
     }).join('');
     return '<div class="ps-leaderboard">' +
       '<h3>' + icon + ' ' + title + '</h3>' +
-      '<table class="ps-leaderboard-table"><thead><tr><th>#</th><th>Node</th><th>Pings</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+      '<table class="ps-leaderboard-table"><thead><tr><th>#</th><th>' + (colLabel || 'Node') + '</th><th>Pings</th></tr></thead><tbody>' + rows + '</tbody></table>' +
       '</div>';
   }
 
@@ -120,6 +125,7 @@
       '<p class="text-muted">Global records and leaderboards from every "ping" sent in any channel (' + data.totalPings + ' total). Not scoped by region. Updated ' + escapeHtml(formatAgo(data.generatedAt)) + '.</p>' +
       '<div class="stats-grid ps-records-grid">' + recordsHtml + '</div>' +
       '<div class="ps-leaderboards-grid">' +
+        leaderboardTableHtml('Top Senders', phIcon('megaphone'), data.senderLeaderboard, 'Sender') +
         leaderboardTableHtml('Top Relays', phIcon('repeat'), data.relayLeaderboard) +
         leaderboardTableHtml('Top First-Hearers', phIcon('eye'), data.observerLeaderboard) +
       '</div>' +

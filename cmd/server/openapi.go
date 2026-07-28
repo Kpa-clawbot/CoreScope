@@ -447,6 +447,7 @@ func componentSchemas() map[string]interface{} {
 				"mostEfficientPing":   schemaRef("PingScore"),
 				"relayLeaderboard":    map[string]interface{}{"type": "array", "items": schemaRef("PingLeaderboardEntry"), "description": "Top nodes ranked by number of distinct pings they appeared as a relay hop in (deduped per ping first, so one busy ping's many branches can't over-credit a relay)."},
 				"observerLeaderboard": map[string]interface{}{"type": "array", "items": schemaRef("PingLeaderboardEntry"), "description": "Top observers ranked by number of pings they were the first station to hear."},
+				"senderLeaderboard":   map[string]interface{}{"type": "array", "items": schemaRef("PingLeaderboardEntry"), "description": "Top senders ranked by number of pings sent. Keyed by the sender display name from the channel message itself -- no resolved pubkey, so entries never carry one."},
 			},
 		},
 		"AreaDensity": map[string]interface{}{
