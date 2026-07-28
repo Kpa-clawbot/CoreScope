@@ -143,13 +143,6 @@
         leaderboardTableHtml('Top Senders (30 days)', phIcon('megaphone'), data.senderLeaderboard, 'Sender') +
         leaderboardTableHtml('Top Relays', phIcon('repeat'), data.relayLeaderboard) +
         leaderboardTableHtml('Top First-Hearers', phIcon('eye'), data.observerLeaderboard) +
-        // areaLeaderboard is omitted entirely (not an empty array) when the
-        // deployment has no areas configured (cmd/server/ping_scores.go) --
-        // skip the whole card rather than show an always-empty "Area
-        // Activity" section on every deployment without areas set up.
-        (data.areaLeaderboard && data.areaLeaderboard.length
-          ? leaderboardTableHtml('Area Activity', phIcon('map-pin'), data.areaLeaderboard, 'Area')
-          : '') +
       '</div>' +
       '</div>';
 

@@ -375,69 +375,6 @@ func TestComputeAllPingScores_ThisWeekNilWhenNoRecentPings(t *testing.T) {
 	}
 }
 
-// TestComputeAllPingScores_AreaLeaderboard confirms AreaLeaderboard tallies
-// DISTINCT pings per configured area (a ping with two hearing stations in
-// the SAME area still counts once for it, mirroring RelayLeaderboard's
-// per-ping dedup), correctly attributes a ping that touches two areas to
-// BOTH, and reuses the exact same area-matching config View Path's
-// touchedAreas draws from.
-func TestComputeAllPingScores_AreaLeaderboard(t *testing.T) {
-	srv, _ := setupPingScoresFixture(t)
-
-	f := func(v float64) *float64 { return &v }
-	srv.cfg.Areas = map[string]AreaEntry{
-		"AREAA": {Label: "Area A", LatMin: f(55.9), LatMax: f(56.2), LonMin: f(9.9), LonMax: f(10.2)},
-		"AREAB": {Label: "Area B", LatMin: f(57.7), LatMax: f(57.9), LonMin: f(12.5), LonMax: f(12.7)},
-	}
-
-	// Ping 1: pingobsa AND pingobsc both fall in Area A (must count once
-	// for Area A, not twice), pingobsb falls in Area B -- touches both.
-	tx1 := seedPingTrigger(t, srv, "arealb0000001", "#test", "Alice", "2026-01-15T10:00:00Z")
-	seedPingObservation(t, srv, tx1, "pingobsa", 9.0, `[]`, `[]`, 1736935200)
-	seedPingObservation(t, srv, tx1, "pingobsc", 6.0, `["aa"]`, `["pkrelay1"]`, 1736935210)
-	seedPingObservation(t, srv, tx1, "pingobsb", 4.0, `["aa","bb"]`, `["pkrelay1","pkrelay2"]`, 1736935260)
-
-	// Ping 2: only pingobsa (Area A) -- Area B must NOT get credit for this one.
-	tx2 := seedPingTrigger(t, srv, "arealb0000002", "#test", "Bob", "2026-01-15T11:00:00Z")
-	seedPingObservation(t, srv, tx2, "pingobsa", 9.0, `[]`, `[]`, 1736938800)
-
-	snap := srv.computeAllPingScores()
-	if snap == nil {
-		t.Fatal("computeAllPingScores returned nil")
-	}
-	counts := map[string]int{}
-	for _, e := range snap.AreaLeaderboard {
-		counts[e.Name] = e.Count
-	}
-	if counts["Area A"] != 2 {
-		t.Errorf("Area A count = %d, want 2 (both pings touch it, dedup within ping 1's two same-area stations)", counts["Area A"])
-	}
-	if counts["Area B"] != 1 {
-		t.Errorf("Area B count = %d, want 1 (only ping 1 touches it)", counts["Area B"])
-	}
-}
-
-// TestComputeAllPingScores_AreaLeaderboardNoAreasConfigured confirms
-// AreaLeaderboard stays nil (not present) rather than an empty-but-present
-// array when the deployment has no areas configured -- matches
-// annotatePacketPathTouchedAreas's own early-return for the same case.
-func TestComputeAllPingScores_AreaLeaderboardNoAreasConfigured(t *testing.T) {
-	srv, _ := setupPingScoresFixture(t)
-	srv.cfg.Areas = nil
-
-	txID := seedPingTrigger(t, srv, "arealbnone0001", "#test", "Alice", "2026-01-15T10:00:00Z")
-	seedPingObservation(t, srv, txID, "pingobsa", 9.0, `[]`, `[]`, 1736935200)
-	seedPingObservation(t, srv, txID, "pingobsb", 6.0, `["aa"]`, `["pkrelay1"]`, 1736935210)
-
-	snap := srv.computeAllPingScores()
-	if snap == nil {
-		t.Fatal("computeAllPingScores returned nil")
-	}
-	if snap.AreaLeaderboard != nil {
-		t.Errorf("AreaLeaderboard = %+v, want nil when no areas are configured", snap.AreaLeaderboard)
-	}
-}
-
 // TestHandlePingScores_EmptyState confirms the endpoint returns a
 // well-formed 200 with zero-valued/omitted fields rather than an error
 // when no ping has ever been recorded -- an ordinary state, not a failure.

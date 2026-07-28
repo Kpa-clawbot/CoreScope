@@ -60,13 +60,11 @@ type PingScore struct {
 	// AirtimeMs (with RelayCount>0) are available.
 	KmPerSecondAirtime *float64 `json:"kmPerSecondAirtime,omitempty"`
 
-	// relayPubkeys/firstPubkey/firstName/touchedAreaLabels feed the
-	// leaderboards during computeAllPingScores -- never serialized on an
-	// individual record.
-	relayPubkeys      []string
-	firstPubkey       string
-	firstName         string
-	touchedAreaLabels []string
+	// relayPubkeys/firstPubkey/firstName feed the leaderboards during
+	// computeAllPingScores -- never serialized on an individual record.
+	relayPubkeys []string
+	firstPubkey  string
+	firstName    string
 }
 
 // PingLeaderboardEntry is one row of a leaderboard ranking.
@@ -112,16 +110,6 @@ type PingScoresSnapshot struct {
 	// pubkey to link back to a node, so entries never carry one (matches
 	// PingLeaderboardEntry.Pubkey's existing omitempty).
 	SenderLeaderboard []PingLeaderboardEntry `json:"senderLeaderboard,omitempty"`
-
-	// AreaLeaderboard ranks configured areas (cmd/server/config.go's
-	// AreaEntry, same set View Path's touchedAreas draws from) by how
-	// many DISTINCT pings had at least one relay hop or hearing station
-	// inside them -- "which area is most active." Keyed by area Label
-	// (matching SenderLeaderboard's no-pubkey precedent -- an area isn't a
-	// resolvable node either). Omitted entirely when no areas are
-	// configured (per-deployment optional feature, like the rest of the
-	// Areas tooling).
-	AreaLeaderboard []PingLeaderboardEntry `json:"areaLeaderboard,omitempty"`
 }
 
 // WeeklyPingRecords mirrors PingScoresSnapshot's 5 all-time record slots,
@@ -169,16 +157,14 @@ func (db *DB) fetchPingTriggers() ([]pingTriggerRow, error) {
 }
 
 // computePingScore builds one ping's full stats via the same GetPacketPath
-// + airtime/touched-areas annotation path View Path uses, so the numbers
-// on the highscore board always match what "View path" shows for that
-// packet.
+// + airtime-annotation path View Path uses, so the numbers on the
+// highscore board always match what "View path" shows for that packet.
 func (s *Server) computePingScore(trigger pingTriggerRow) *PingScore {
 	resp, err := s.db.GetPacketPath(trigger.hash)
 	if err != nil || resp == nil || len(resp.Branches) == 0 {
 		return nil
 	}
 	s.annotatePacketPathAirtime(resp)
-	s.annotatePacketPathTouchedAreas(resp)
 
 	score := &PingScore{
 		Hash:         trigger.hash,
@@ -238,9 +224,6 @@ func (s *Server) computePingScore(trigger pingTriggerRow) *PingScore {
 	if resp.First != nil && resp.First.Observer != nil {
 		score.firstPubkey = resp.First.Observer.PublicKey
 		score.firstName = resp.First.Observer.Name
-	}
-	for _, area := range resp.TouchedAreas {
-		score.touchedAreaLabels = append(score.touchedAreaLabels, area.Label)
 	}
 	return score
 }
@@ -303,7 +286,6 @@ func (s *Server) computeAllPingScores() *PingScoresSnapshot {
 	// elsewhere in this file's package.
 	senderCutoff := time.Now().AddDate(0, 0, -30)
 	senderCounts := map[string]*PingLeaderboardEntry{}
-	areaCounts := map[string]*PingLeaderboardEntry{}
 
 	// weekCutoff drives ThisWeek -- same fail-toward-stale rule as
 	// senderCutoff above (an unparseable timestamp is excluded, not
@@ -348,14 +330,6 @@ func (s *Server) computeAllPingScores() *PingScoresSnapshot {
 			}
 			e.Count++
 		}
-		for _, label := range score.touchedAreaLabels {
-			e := areaCounts[label]
-			if e == nil {
-				e = &PingLeaderboardEntry{Name: label}
-				areaCounts[label] = e
-			}
-			e.Count++
-		}
 	}
 
 	snap.FarthestPing = allTime.Farthest
@@ -392,7 +366,6 @@ func (s *Server) computeAllPingScores() *PingScoresSnapshot {
 	snap.RelayLeaderboard = topPingLeaderboard(relayCounts, 10)
 	snap.ObserverLeaderboard = topPingLeaderboard(observerCounts, 10)
 	snap.SenderLeaderboard = topPingLeaderboard(senderCounts, 10)
-	snap.AreaLeaderboard = topPingLeaderboard(areaCounts, 10)
 	return snap
 }
 
