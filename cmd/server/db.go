@@ -17,6 +17,7 @@ import (
 
 	"github.com/meshcore-analyzer/dbschema"
 	"github.com/meshcore-analyzer/geofilter"
+	regionutil "github.com/meshcore-analyzer/regions"
 	_ "modernc.org/sqlite"
 )
 
@@ -1666,6 +1667,84 @@ func (db *DB) GetAllObserverNeighbors() ([]AllObserverNeighborsEntry, error) {
 		result = append(result, entry)
 	}
 	return result, nil
+}
+
+// UnknownScopeEntry is one region-scope name that turned up in an
+// observer's reported neighbor scope list but isn't part of the
+// deployment's configured hashRegions -- a scope the mesh is actually
+// using that CoreScope doesn't know about yet. dborup asked for this
+// after seeing how cluttered a real observer's scope list can get (e.g.
+// "*,#eu,#dk,#dk-sjl,#nordic,...").
+type UnknownScopeEntry struct {
+	Scope string `json:"scope"`
+	// Count is the number of DISTINCT neighbors (by display name, falling
+	// back to pubkey) that reported this scope -- not a raw row count,
+	// which would double-count a neighbor seen by multiple observers.
+	Count    int      `json:"count"`
+	Examples []string `json:"examples"`
+}
+
+// computeUnknownScopes finds scope names present in observer-reported
+// neighbor scope lists that aren't in the configured hashRegions set.
+// "*" (the catch-all wildcard some firmware includes) is excluded, it's
+// not a real region. Pure function over already-fetched
+// AllObserverNeighborsEntry rows -- no DB access, so callers can reuse
+// data they already have (handleAllObserverNeighbors does exactly that,
+// no second query needed).
+func computeUnknownScopes(entries []AllObserverNeighborsEntry, configuredHashRegions []string) []UnknownScopeEntry {
+	configured := make(map[string]bool)
+	for _, r := range regionutil.NormalizeNames(configuredHashRegions) {
+		configured[r] = true
+	}
+
+	neighborsByScope := make(map[string]map[string]bool)
+	for _, e := range entries {
+		if e.Scopes == nil || *e.Scopes == "" {
+			continue
+		}
+		label := e.NeighborPubkey
+		if e.NeighborName != nil && *e.NeighborName != "" {
+			label = *e.NeighborName
+		}
+		for _, raw := range strings.Split(*e.Scopes, ",") {
+			s := strings.TrimSpace(raw)
+			if s == "" || s == "*" {
+				continue
+			}
+			if !strings.HasPrefix(s, "#") {
+				s = "#" + s
+			}
+			if configured[s] {
+				continue
+			}
+			if neighborsByScope[s] == nil {
+				neighborsByScope[s] = make(map[string]bool)
+			}
+			neighborsByScope[s][label] = true
+		}
+	}
+
+	const maxExamples = 5
+	result := make([]UnknownScopeEntry, 0, len(neighborsByScope))
+	for scope, labelSet := range neighborsByScope {
+		labels := make([]string, 0, len(labelSet))
+		for l := range labelSet {
+			labels = append(labels, l)
+		}
+		sort.Strings(labels)
+		examples := labels
+		if len(examples) > maxExamples {
+			examples = examples[:maxExamples]
+		}
+		result = append(result, UnknownScopeEntry{Scope: scope, Count: len(labels), Examples: examples})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Count != result[j].Count {
+			return result[i].Count > result[j].Count
+		}
+		return result[i].Scope < result[j].Scope
+	})
+	return result
 }
 
 // NeighborMetricPoint is one time-series sample of an observer<->neighbor

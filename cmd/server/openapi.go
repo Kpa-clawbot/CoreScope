@@ -139,7 +139,7 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/observers/{id}/neighbors":                  {Summary: "Get an observer's direct (zero-hop) neighbors", Description: "Ground truth from the observer's own /neighbors firmware report (#1865) -- distinct from the packet-path-inferred neighbor graph. Empty `neighbors` (never null) and an empty `reportedAt` mean the observer has never sent a /neighbors report: opt-in firmware, unavailable on non-PSRAM hardware -- absence is normal, not a fault. Each entry's `scopes` is null unless the neighbor's OTA scope query responded (status=\"responded\"); `name`/`role` are null when the pubkey doesn't resolve to a known node. `seenViaPackets` cross-references the packet-path-inferred neighbor_edges graph: false means this firmware-confirmed neighbor has never had a resolved packet path between it and the observer, a diagnostic signal (possible coverage gap or packet loss), not itself a fault.", Tag: "observers"},
 		"GET /api/observers/{id}/neighbors/{pubkey}/metrics": {Summary: "Get SNR history for one observer<->neighbor direct-RF link", Description: "Raw (unaggregated) history of the snr/heard_secs_ago fields the observer's own /neighbors report carries per neighbor -- report volume per pair is inherently low so, unlike /api/observers/{id}/metrics, there is no resolution/downsampling. Defaults to the last 30 days.", Tag: "observers", QueryParams: []paramMeta{{Name: "since", Description: "RFC3339 lower bound (default: 30 days ago)", Type: "string"}, {Name: "until", Description: "RFC3339 upper bound (default: none)", Type: "string"}}},
 		"GET /api/observers/metrics/summary":                 {Summary: "Observer metrics summary", Description: "Aggregate metrics across all observers.", Tag: "observers"},
-		"GET /api/observers/neighbors": {Summary: "Every observer's reported direct neighbors, network-wide", Description: "Flattens /api/observers/{id}/neighbors across ALL observers into one list -- Tools > Observer Neighbors. Same per-entry semantics (scopes null unless the OTA scope query responded, seenViaPackets cross-references the packet-derived neighbor_edges graph, observer/neighbor name null when unresolved). Blacklisted observers (config.json observerBlacklist) are excluded. Empty list (not an error) when no observer has ever sent a /neighbors report.", Tag: "observers",
+		"GET /api/observers/neighbors": {Summary: "Every observer's reported direct neighbors, network-wide", Description: "Flattens /api/observers/{id}/neighbors across ALL observers into one list -- Tools > Observer Neighbors. Same per-entry semantics (scopes null unless the OTA scope query responded, seenViaPackets cross-references the packet-derived neighbor_edges graph, observer/neighbor name null when unresolved). Blacklisted observers (config.json observerBlacklist) are excluded. Empty list (not an error) when no observer has ever sent a /neighbors report. unknownScopes surfaces region-scope names that turned up in a reported neighbor scope list but aren't part of this deployment's configured hashRegions -- scopes the mesh is using that CoreScope doesn't know about yet.", Tag: "observers",
 			Response: schemaRef("AllObserverNeighborsResponse")},
 
 		// Misc
@@ -527,11 +527,21 @@ func componentSchemas() map[string]interface{} {
 				"reportedAt":     str("RFC3339 timestamp of the /neighbors report this row came from."),
 			},
 		},
+		"UnknownScopeEntry": map[string]interface{}{
+			"type":        "object",
+			"description": "A region-scope name seen in a reported neighbor scope list that isn't part of this deployment's configured hashRegions.",
+			"properties": map[string]interface{}{
+				"scope":    str("The scope name (e.g. \"#dk-storkbh\"), always #-prefixed."),
+				"count":    map[string]interface{}{"type": "integer", "description": "Number of distinct neighbors (by display name, falling back to pubkey) that reported this scope."},
+				"examples": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Up to 5 example neighbor display names/pubkeys that reported this scope."},
+			},
+		},
 		"AllObserverNeighborsResponse": map[string]interface{}{
 			"type":        "object",
 			"description": "Every observer's reported direct neighbors, network-wide (Tools > Observer Neighbors). Empty (not an error) when no observer has ever sent a /neighbors report.",
 			"properties": map[string]interface{}{
-				"neighbors": map[string]interface{}{"type": "array", "items": schemaRef("AllObserverNeighborsEntry")},
+				"neighbors":     map[string]interface{}{"type": "array", "items": schemaRef("AllObserverNeighborsEntry")},
+				"unknownScopes": map[string]interface{}{"type": "array", "items": schemaRef("UnknownScopeEntry"), "description": "Region-scope names observed in the wild that aren't part of this deployment's configured hashRegions, ranked by how many distinct neighbors reported them."},
 			},
 		},
 	}
