@@ -2955,7 +2955,11 @@
     // Requests/responses (encrypted)
     if (decoded.type === 'REQ' || decoded.type === 'RESPONSE') return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> ${decoded.srcHash?.slice(0,8) || '?'} → ${decoded.destHash?.slice(0,8) || '?'}`;
     // Anonymous requests
-    if (decoded.type === 'ANON_REQ') return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> anon → ${decoded.destHash?.slice(0,8) || '?'}`;
+    // #1864 — ANON_REQ carries the sender's FULL ephemeral pubkey (unlike
+    // REQ/RESPONSE's 1-byte srcHash), so it's not actually anonymous to us.
+    // Row preview stays synchronous (no live lookup per row, same reasoning
+    // as CONTROL's pubkey in #1868) -- truncated to 8 hex chars.
+    if (decoded.type === 'ANON_REQ') return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> ${decoded.ephemeralPubKey ? escapeHtml(decoded.ephemeralPubKey.slice(0, 8)) + '…' : 'anon'} → ${decoded.destHash?.slice(0,8) || '?'}`;
     // CONTROL packets (#1802) — DISCOVER_REQ / DISCOVER_RESP body fields,
     // decoded by cmd/ingestor/decoder.go decodeControl(). Wire format:
     //   firmware/src/Mesh.cpp:69
@@ -3178,6 +3182,15 @@
       if (nd?.node?.public_key) ctrlPubKeyNode = nd.node;
     }
 
+    // #1864 — ANON_REQ carries the sender's FULL ephemeral pubkey (32B, no
+    // prefix ambiguity), so it's not actually anonymous -- resolve it to a
+    // node the same way CONTROL's DISCOVER_RESP pubkey is resolved above.
+    let anonReqSenderNode = null;
+    if (decoded.type === 'ANON_REQ' && decoded.ephemeralPubKey) {
+      const nd = await api(`/nodes/${decoded.ephemeralPubKey}`, { ttl: 30000 }).catch(() => null);
+      if (nd?.node?.public_key) anonReqSenderNode = nd.node;
+    }
+
     // Resolve hops: prefer server-side resolved_path, fall back to client-side HopResolver
     if (pathHops.length) {
       try {
@@ -3328,7 +3341,9 @@
     // src→dst). Replaces the prior byte-count title that buried packet
     // identity behind a byte counter (#1458 P0-A).
     const semanticSummary = getDetailPreview(decoded);
-    const srcLabel = decoded.sender || decoded.name || (decoded.srcHash ? decoded.srcHash.slice(0,8) : null) || (decoded.pubKey ? decoded.pubKey.slice(0,8) + '…' : null);
+    // #1864 — ANON_REQ's sender is anonReqSenderNode's resolved name (if
+    // known) or its ephemeralPubKey (not srcHash/pubKey, which it doesn't carry).
+    const srcLabel = decoded.sender || decoded.name || (decoded.srcHash ? decoded.srcHash.slice(0,8) : null) || (decoded.pubKey ? decoded.pubKey.slice(0,8) + '…' : null) || (anonReqSenderNode ? anonReqSenderNode.name || anonReqSenderNode.public_key.slice(0,8) + '…' : null) || (decoded.ephemeralPubKey ? decoded.ephemeralPubKey.slice(0,8) + '…' : null);
     const dstLabel = decoded.recipient || (decoded.destHash ? decoded.destHash.slice(0,8) : null);
     const srcDstHtml = (srcLabel || dstLabel)
       ? `<div class="detail-srcdst">${escapeHtml(srcLabel || '?')} <span class="arrow">→</span> ${escapeHtml(dstLabel || (decoded.channel ? '#' + decoded.channel : '?'))}</div>`
@@ -3371,7 +3386,7 @@
         ${hasRawHex ? `<div class="hex-legend">${buildHexLegend(ranges)}</div>
         <div class="hex-dump">${createColoredHexDump(effectivePkt.raw_hex || pkt.raw_hex, ranges)}</div>` : ''}
 
-        ${hasRawHex ? buildFieldTable(effectivePkt.raw_hex ? effectivePkt : pkt, decoded, pathHops, ranges, ctrlPubKeyNode) : buildDecodedTable(decoded)}
+        ${hasRawHex ? buildFieldTable(effectivePkt.raw_hex ? effectivePkt : pkt, decoded, pathHops, ranges, ctrlPubKeyNode, anonReqSenderNode) : buildDecodedTable(decoded)}
       </details>` : ''}
 
       ${observations.length > 1 ? `
@@ -3552,7 +3567,7 @@
     return rows ? `<table class="detail-decoded" style="width:100%;border-collapse:collapse;margin-top:8px">${rows}</table>` : '';
   }
 
-  function buildFieldTable(pkt, decoded, pathHops, ranges, ctrlPubKeyNode) {
+  function buildFieldTable(pkt, decoded, pathHops, ranges, ctrlPubKeyNode, anonReqSenderNode) {
     const buf = pkt.raw_hex || '';
     const size = Math.floor(buf.length / 2);
     let rows = '';
@@ -3646,6 +3661,22 @@
       if (decoded.pathData) {
         rows += fieldRow(off + 9, 'Route Hops', decoded.pathData.toUpperCase(), pathHops.length + ' hop(s)');
       }
+    } else if (decoded.type === 'ANON_REQ') {
+      // #1864 — ANON_REQ's layout differs from REQ/RESPONSE: dest hash (1B)
+      // + FULL ephemeral pubkey (32B, not a 1B srcHash) + MAC (2B) + data.
+      // Must be checked before the generic destHash branch below, since
+      // ANON_REQ also sets destHash and would otherwise be misread with
+      // REQ/RESPONSE's byte offsets (empty Src Hash, MAC/data 31 bytes too
+      // early). cmd/ingestor/decoder.go decodeAnonReq().
+      rows += fieldRow(off, 'Dest Hash (1B)', decoded.destHash || '', '');
+      if (decoded.ephemeralPubKey) {
+        const pkValue = anonReqSenderNode
+          ? `<a href="#/nodes/${encodeURIComponent(anonReqSenderNode.public_key)}" class="hop-link hop-named" data-hop-link="true">${escapeHtml(anonReqSenderNode.name || anonReqSenderNode.public_key.slice(0, 8) + '…')}</a>`
+          : escapeHtml(truncate(decoded.ephemeralPubKey, 24));
+        rows += fieldRow(off + 1, 'Ephemeral Pubkey (32B)', pkValue, anonReqSenderNode ? '' : 'Unknown node');
+      }
+      rows += fieldRow(off + 33, 'MAC (2B)', decoded.mac || '', '');
+      rows += fieldRow(off + 35, 'Encrypted Data', truncate(decoded.encryptedData || '', 30), '');
     } else if (decoded.destHash !== undefined) {
       rows += fieldRow(off, 'Dest Hash (1B)', decoded.destHash || '', '');
       rows += fieldRow(off + 1, 'Src Hash (1B)', decoded.srcHash || '', '');
