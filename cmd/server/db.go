@@ -109,6 +109,16 @@ func OpenDB(path string) (*DB, error) {
 	return d, nil
 }
 
+// stmtQueryRow returns a QueryRow-like helper that uses the prepared statement
+// when non-nil (production), or falls back to a direct db.conn.QueryRow query
+// when the statement is nil (test DBs that skip prepareStatements).
+func (db *DB) stmtQueryRow(stmt *sql.Stmt, fallbackSQL string, args ...interface{}) *sql.Row {
+	if stmt != nil {
+		return stmt.QueryRow(args...)
+	}
+	return db.conn.QueryRow(fallbackSQL, args...)
+}
+
 // prepareStatements creates prepared statements for frequently-called queries.
 // SQLite compiles and caches the query plan once, avoiding re-parsing per request.
 func (db *DB) prepareStatements() error {
@@ -408,24 +418,24 @@ type Stats struct {
 // GetStats returns aggregate counts (matches Node.js db.getStats shape).
 func (db *DB) GetStats() (*Stats, error) {
 	s := &Stats{}
-	err := db.stmtCountTransmissions.QueryRow().Scan(&s.TotalTransmissions)
+	err := db.stmtQueryRow(db.stmtCountTransmissions, "SELECT COUNT(*) FROM transmissions").Scan(&s.TotalTransmissions)
 	if err != nil {
 		return nil, err
 	}
 	s.TotalPackets = s.TotalTransmissions
 
-	db.stmtCountObservations.QueryRow().Scan(&s.TotalObservations)
+	db.stmtQueryRow(db.stmtCountObservations, "SELECT COUNT(*) FROM observations").Scan(&s.TotalObservations)
 	// Node.js uses 7-day active nodes for totalNodes
 	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
-	db.stmtCountNodesActive.QueryRow(sevenDaysAgo).Scan(&s.TotalNodes)
-	db.stmtCountNodesAll.QueryRow().Scan(&s.TotalNodesAllTime)
-	db.stmtCountObservers.QueryRow().Scan(&s.TotalObservers)
+	db.stmtQueryRow(db.stmtCountNodesActive, "SELECT COUNT(*) FROM nodes WHERE last_seen > ?", sevenDaysAgo).Scan(&s.TotalNodes)
+	db.stmtQueryRow(db.stmtCountNodesAll, "SELECT COUNT(*) FROM nodes").Scan(&s.TotalNodesAllTime)
+	db.stmtQueryRow(db.stmtCountObservers, "SELECT COUNT(*) FROM observers WHERE inactive IS NULL OR inactive = 0").Scan(&s.TotalObservers)
 
 	oneHourAgo := time.Now().Add(-1 * time.Hour).Unix()
-	db.stmtCountObsLastHour.QueryRow(oneHourAgo).Scan(&s.PacketsLastHour)
+	db.stmtQueryRow(db.stmtCountObsLastHour, "SELECT COUNT(*) FROM observations WHERE timestamp > ?", oneHourAgo).Scan(&s.PacketsLastHour)
 
 	oneDayAgo := time.Now().Add(-24 * time.Hour).Unix()
-	db.stmtCountObsLastDay.QueryRow(oneDayAgo).Scan(&s.PacketsLast24h)
+	db.stmtQueryRow(db.stmtCountObsLastDay, "SELECT COUNT(*) FROM observations WHERE timestamp > ?", oneDayAgo).Scan(&s.PacketsLast24h)
 
 	return s, nil
 }
@@ -547,7 +557,7 @@ func (db *DB) GetRoleCounts() map[string]int {
 	counts := map[string]int{}
 	for _, role := range []string{"repeater", "room", "companion", "sensor"} {
 		var c int
-		db.stmtCountNodesByRole.QueryRow(role, sevenDaysAgo).Scan(&c)
+		db.stmtQueryRow(db.stmtCountNodesByRole, "SELECT COUNT(*) FROM nodes WHERE role = ? AND last_seen > ?", role, sevenDaysAgo).Scan(&c)
 		counts[role+"s"] = c
 	}
 	return counts
@@ -558,7 +568,7 @@ func (db *DB) GetAllRoleCounts() map[string]int {
 	counts := map[string]int{}
 	for _, role := range []string{"repeater", "room", "companion", "sensor"} {
 		var c int
-		db.stmtCountNodesByRoleAll.QueryRow(role).Scan(&c)
+		db.stmtQueryRow(db.stmtCountNodesByRoleAll, "SELECT COUNT(*) FROM nodes WHERE role = ?", role).Scan(&c)
 		counts[role+"s"] = c
 	}
 	return counts
@@ -608,7 +618,7 @@ func (db *DB) QueryPackets(q PacketQuery) (*PacketResult, error) {
 	// Count transmissions (not observations)
 	var total int
 	if len(where) == 0 {
-		db.stmtCountTransmissions.QueryRow().Scan(&total)
+		db.stmtQueryRow(db.stmtCountTransmissions, "SELECT COUNT(*) FROM transmissions").Scan(&total)
 	} else {
 		countSQL := fmt.Sprintf("SELECT COUNT(*) FROM transmissions t %s", w)
 		db.conn.QueryRow(countSQL, args...).Scan(&total)
@@ -660,7 +670,7 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 	// Count total transmissions (fast — queries transmissions directly, not a VIEW)
 	var total int
 	if len(where) == 0 {
-		db.stmtCountTransmissions.QueryRow().Scan(&total)
+		db.stmtQueryRow(db.stmtCountTransmissions, "SELECT COUNT(*) FROM transmissions").Scan(&total)
 	} else {
 		db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM transmissions t %s", w), args...).Scan(&total)
 	}
@@ -892,7 +902,7 @@ func (db *DB) buildTransmissionWhere(q PacketQuery) ([]string, []interface{}) {
 
 func (db *DB) resolveNodePubkey(nodeIDOrName string) string {
 	var pk string
-	err := db.stmtNodeLookup.QueryRow(nodeIDOrName, nodeIDOrName).Scan(&pk)
+	err := db.stmtQueryRow(db.stmtNodeLookup, "SELECT public_key FROM nodes WHERE public_key = ? OR name = ? LIMIT 1", nodeIDOrName, nodeIDOrName).Scan(&pk)
 	if err != nil {
 		return nodeIDOrName
 	}
@@ -936,7 +946,7 @@ func (db *DB) GetPacketByHash(hash string) (map[string]interface{}, error) {
 // when the in-memory PacketStore has pruned the entry but the DB still has it.
 func (db *DB) GetObservationsForHash(hash string) []map[string]interface{} {
 	var txID int
-	err := db.stmtTxByHash.QueryRow(strings.ToLower(hash)).Scan(&txID)
+	err := db.stmtQueryRow(db.stmtTxByHash, "SELECT id FROM transmissions WHERE hash = ?", strings.ToLower(hash)).Scan(&txID)
 	if err != nil {
 		return nil
 	}
@@ -2113,14 +2123,14 @@ func (db *DB) GetNewTransmissionsSince(lastID int, limit int) ([]map[string]inte
 // GetMaxTransmissionID returns the current max ID for polling.
 func (db *DB) GetMaxTransmissionID() int {
 	var maxID int
-	db.stmtMaxTxID.QueryRow().Scan(&maxID)
+	db.stmtQueryRow(db.stmtMaxTxID, "SELECT COALESCE(MAX(id), 0) FROM transmissions").Scan(&maxID)
 	return maxID
 }
 
 // GetMaxObservationID returns the current max observation ID for polling.
 func (db *DB) GetMaxObservationID() int {
 	var maxID int
-	db.stmtMaxObsID.QueryRow().Scan(&maxID)
+	db.stmtQueryRow(db.stmtMaxObsID, "SELECT COALESCE(MAX(id), 0) FROM observations").Scan(&maxID)
 	return maxID
 }
 
