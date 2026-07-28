@@ -210,7 +210,7 @@ window.ObserverDetailNaiveBanner = {
       const snrCell = n.pubkey
         ? '<span id="nb-spark-' + escapeHtml(n.pubkey) + '" class="text-muted" style="font-size:10px">…</span>'
         : '<span class="text-muted">—</span>';
-      return '<tr><td>' + nameCell + '</td><td>' + scopeCell + '</td><td>' + evidenceCell + '</td><td>' + snrCell + '</td></tr>';
+      return '<tr><td>' + nameCell + '</td><td class="col-scope-list">' + scopeCell + '</td><td>' + evidenceCell + '</td><td>' + snrCell + '</td></tr>';
     }).join('');
     const asOf = neighborsData.reportedAt
       ? '<div class="text-muted" style="font-size:11px;margin-top:6px">As of ' + timeAgo(neighborsData.reportedAt) + '</div>'

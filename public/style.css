@@ -1095,6 +1095,12 @@ img.brand-logo {
   max-width: 0; /* forces td to respect table width instead of expanding to content */
 }
 .data-table td.col-details { white-space: normal; word-break: break-word; max-width: 480px; }
+/* Direct Neighbors' Configured Scope cell (observer-detail.js) can hold a
+ * long comma-joined scope list (e.g. a #eu/#dk/#dk-sjl/... catch-all
+ * observer) -- the generic max-width:0 ellipsis rule above truncated it
+ * down to nothing readable. Wrap instead, same override pattern as
+ * col-details. */
+.data-table td.col-scope-list { white-space: normal; word-break: break-word; max-width: 320px; }
 /* #1415: pin the expand-chevron column narrow at every viewport.
  * Chevron glyph is ~16px wide; legacy column auto-sized to 50-180px and shoved every
  * downstream data column right. 32px is enough for the ▶/▼ + 8px padding. */

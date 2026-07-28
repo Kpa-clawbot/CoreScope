@@ -152,6 +152,20 @@ test('seenViaPackets=false surfaces the coverage-gap diagnostic, styled neutrall
   assert.ok(!/ph-warning/.test(html), 'must not use the warning icon treatment');
 });
 
+test('Configured Scope cell carries col-scope-list so long scope lists wrap instead of ellipsis-truncating to nothing', () => {
+  // A catch-all/multi-region observer's scopes string can be a long
+  // comma-joined list (e.g. "*,#eu,#dk,#dk-sjl,#nordic,..."). The
+  // generic .data-table td rule (max-width:0 + ellipsis) truncated this
+  // down to unreadable — col-scope-list opts this column out of that in
+  // favor of wrapping (style.css, same override pattern as col-details).
+  const html = ctx.window.renderDirectNeighbors({
+    neighbors: [{ pubkey: 'abc123', name: 'Repeater A', role: 'repeater', scopes: '*,#eu,#dk,#dk-sjl,#nordic,#dk-kbh,#dk-frb,#oresund,#se12,#dk-storkbh,#link-mk,#dk-kbh-og-frb', status: 'responded' }],
+    reportedAt: '',
+  });
+  assert.ok(html.includes('<td class="col-scope-list">'), 'expected the Configured Scope <td> to carry col-scope-list');
+  assert.ok(html.includes('#dk-kbh-og-frb'), 'expected the full scope list text to be present, not cut off');
+});
+
 test('renders a placeholder span per row for the async SNR sparkline loader', () => {
   const html = ctx.window.renderDirectNeighbors({
     neighbors: [{ pubkey: 'abc123', name: 'Repeater A', role: 'repeater', scopes: '#dk', status: 'responded' }],
