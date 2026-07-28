@@ -140,7 +140,7 @@ function makeSandbox(apiImpl) {
       assert.ok(container.innerHTML.includes('ObsOne'), 'should show the observer leaderboard entry, got: ' + container.innerHTML);
       assert.ok(container.innerHTML.includes('PingMaster'), 'should show the sender leaderboard entry, got: ' + container.innerHTML);
       assert.ok(container.innerHTML.includes('Top Senders (30 days)'), 'should show the Top Senders leaderboard heading with the 30-day window noted, got: ' + container.innerHTML);
-      assert.ok(container.innerHTML.includes("This Week's Best"), 'should show the This Week\'s Best section heading, got: ' + container.innerHTML);
+      assert.ok(container.innerHTML.includes("Last 7 Days"), 'should show the Last 7 Days section heading, got: ' + container.innerHTML);
       assert.ok(container.innerHTML.includes('All-Time Records'), 'should show the All-Time Records section heading, got: ' + container.innerHTML);
       assert.ok(container.innerHTML.includes('12.3'), 'should show the thisWeek farthest record km distinct from the all-time one, got: ' + container.innerHTML);
       assert.ok(container.innerHTML.includes('WeeklyRepeater'), 'should show the thisWeek record\'s node name, got: ' + container.innerHTML);
@@ -168,7 +168,7 @@ function makeSandbox(apiImpl) {
       };
       const { container, getPage } = makeSandbox(() => Promise.resolve(data));
       await getPage().init(container);
-      assert.ok(container.innerHTML.includes("This Week's Best"), 'should still show the This Week\'s Best heading, got: ' + container.innerHTML);
+      assert.ok(container.innerHTML.includes("Last 7 Days"), 'should still show the Last 7 Days heading, got: ' + container.innerHTML);
       const weekSectionCount = (container.innerHTML.match(/No record yet/g) || []).length;
       assert.strictEqual(weekSectionCount, 5, 'expected all 5 thisWeek cards to fall back to "No record yet", got ' + weekSectionCount);
       passed++;
