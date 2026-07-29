@@ -377,6 +377,32 @@ func TestNodeDetail_NoRealFix_IncludesEstimatedPosition(t *testing.T) {
 	}
 }
 
+// TestNodeDetail_ZeroZeroFix_IncludesEstimatedPosition covers a node that
+// advertised (0,0) -- a "no GPS lock yet" sentinel some firmware sends
+// rather than omitting lat/lon -- which must be treated the same as no fix
+// at all (same convention as GetNodesForAreaAnalytics), not as a real
+// position 0,0 degrees off the coast of Africa.
+func TestNodeDetail_ZeroZeroFix_IncludesEstimatedPosition(t *testing.T) {
+	srv, router := setupTestServer(t)
+	srv.db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
+		VALUES ('zerofix0000000001', 'ZeroFixNode', 'repeater', 0, 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1)`)
+	srv.db.conn.Exec(`INSERT INTO neighbor_edges (node_a, node_b, count) VALUES ('zerofix0000000001', 'aabbccdd11223344', 5)`)
+
+	req := httptest.NewRequest("GET", "/api/nodes/zerofix0000000001", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d (body=%s)", w.Code, w.Body.String())
+	}
+	var body map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &body)
+	node := body["node"].(map[string]interface{})
+	if node["estimated_lat"] == nil || node["estimated_lon"] == nil {
+		t.Fatalf("expected estimated_lat/estimated_lon for a (0,0)-fix node, got node=%+v", node)
+	}
+}
+
 // TestNodeDetail_RealFix_OmitsEstimatedPosition confirms a node with an
 // actual GPS fix never gets estimated_lat/estimated_lon populated -- the
 // estimate is a fallback, not a value shown alongside a real position.

@@ -590,7 +590,12 @@
       const title = document.querySelector('.node-full-title');
       if (title) title.textContent = n.name || pubkey.slice(0, 12);
 
-      const hasLoc = n.lat != null && n.lon != null;
+      // Same "real fix" convention as GetNodesForAreaAnalytics on the
+      // backend: some nodes advertise (0,0) as a "no GPS lock yet"
+      // sentinel rather than omitting lat/lon, so that doesn't count as a
+      // real fix either -- otherwise it'd plot a bogus marker off the
+      // coast of Africa instead of falling back to the estimate below.
+      const hasLoc = n.lat != null && n.lon != null && !(n.lat === 0 && n.lon === 0);
       // Fallback for nodes with no real GPS fix: the same neighbor-centroid
       // estimate Position-Fix Coverage Gaps and View Path's approx markers
       // use, so the detail page can still show a (dashed/approximate) map.
@@ -1639,7 +1644,8 @@
     const stats = h.stats || {};
     const observers = h.observers || [];
     const recent = h.recentPackets || [];
-    const hasLoc = n.lat != null && n.lon != null;
+    // Same "real fix" convention as loadFullNode above -- see its comment.
+    const hasLoc = n.lat != null && n.lon != null && !(n.lat === 0 && n.lon === 0);
     const hasEstLoc = !hasLoc && n.estimated_lat != null && n.estimated_lon != null;
     const nodeUrl = location.origin + '/#/nodes/' + encodeURIComponent(n.public_key);
 
