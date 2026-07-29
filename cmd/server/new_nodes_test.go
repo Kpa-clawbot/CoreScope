@@ -160,6 +160,42 @@ func TestComputeNewNodes_ResolvesAreas(t *testing.T) {
 	}
 }
 
+// TestComputeNewNodes_ForeignFlag confirms nodes.foreign_advert surfaces
+// as Foreign on each entry, matching the same flag the node list's
+// "foreign" field and MarkNodeForeign (#730) already use -- reused, not
+// reimplemented.
+func TestComputeNewNodes_ForeignFlag(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ensureInactiveNodesTable(t, srv)
+
+	now := time.Now().UTC()
+	insertNewNodeRow(t, srv, "domesticnode000001", "Domestic", "repeater", f64(56.0), f64(10.0), now.Add(-1*time.Minute).Format(time.RFC3339))
+	insertNewNodeRow(t, srv, "foreignnode0000001", "Foreign", "repeater", f64(52.5), f64(13.4), now.Add(-2*time.Minute).Format(time.RFC3339))
+	if _, err := srv.db.conn.Exec(`UPDATE nodes SET foreign_advert = 1 WHERE public_key = ?`, "foreignnode0000001"); err != nil {
+		t.Fatalf("set foreign_advert: %v", err)
+	}
+
+	entries, err := srv.computeNewNodes(50)
+	if err != nil {
+		t.Fatalf("computeNewNodes: %v", err)
+	}
+	var domestic, foreign *NewNodeEntry
+	for i := range entries {
+		if entries[i].PublicKey == "domesticnode000001" {
+			domestic = &entries[i]
+		}
+		if entries[i].PublicKey == "foreignnode0000001" {
+			foreign = &entries[i]
+		}
+	}
+	if domestic == nil || domestic.Foreign {
+		t.Errorf("domesticnode000001 Foreign = %+v, want false", domestic)
+	}
+	if foreign == nil || !foreign.Foreign {
+		t.Errorf("foreignnode0000001 Foreign = %+v, want true", foreign)
+	}
+}
+
 // TestComputeNewNodes_LimitRespected confirms the limit param truncates
 // after blacklist filtering (not before, which could silently undercount).
 func TestComputeNewNodes_LimitRespected(t *testing.T) {

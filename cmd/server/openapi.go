@@ -570,6 +570,7 @@ func componentSchemas() map[string]interface{} {
 				"lon":       map[string]interface{}{"type": "number", "nullable": true, "description": "Last known longitude, when known."},
 				"firstSeen": str("RFC3339 timestamp this node was first ever seen."),
 				"areas":     map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Every configured area this node's position falls in, alphabetized. Omitted when the node has no known position or no areas are configured."},
+				"foreign":   map[string]interface{}{"type": "boolean", "description": "True when this node's ADVERT GPS lay outside the configured geofilter polygon (#730, same flag the node list's \"foreign\" field uses)."},
 			},
 		},
 		"NewNodesResponse": map[string]interface{}{

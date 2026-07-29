@@ -26,6 +26,7 @@ function makeRow(overrides) {
     lon: 10.0,
     firstSeen: '2026-07-29T10:00:00Z',
     areas: ['Aarhus by'],
+    foreign: false,
   }, overrides);
 }
 
@@ -146,6 +147,41 @@ function waitForLoad() {
     const wrap = sb.__docStore['new-nodes-table-wrap'];
     assert.ok(wrap.innerHTML.includes('RoomTwo'), 'expected the Bornholm row to match');
     assert.ok(!wrap.innerHTML.includes('RepeaterOne'), 'expected the Aarhus row to be filtered out');
+  });
+
+  // #1868-followup — All/Domestic/Foreign origin toggle, reusing
+  // nodes.foreign_advert (#730) rather than reimplementing geo classification.
+  await test('origin toggle: Domestic shows only non-foreign, Foreign shows only foreign', async () => {
+    const sb = initWith([
+      makeRow({ publicKey: 'aa'.repeat(32), name: 'HomeNode', foreign: false }),
+      makeRow({ publicKey: 'bb'.repeat(32), name: 'BridgedNode', foreign: true }),
+    ]);
+    await waitForLoad();
+    const tabsWrap = sb.__docStore['new-nodes-origin-tabs'];
+    const wrap = sb.__docStore['new-nodes-table-wrap'];
+
+    // All (default): both rows present.
+    assert.ok(wrap.innerHTML.includes('HomeNode') && wrap.innerHTML.includes('BridgedNode'), 'expected both rows under All');
+
+    // Domestic: only the non-foreign row.
+    tabsWrap._listeners.click({ target: { dataset: { origin: 'domestic' }, closest: function () { return this; } } });
+    assert.ok(wrap.innerHTML.includes('HomeNode'), 'expected HomeNode under Domestic');
+    assert.ok(!wrap.innerHTML.includes('BridgedNode'), 'expected BridgedNode excluded under Domestic');
+
+    // Foreign: only the foreign row.
+    tabsWrap._listeners.click({ target: { dataset: { origin: 'foreign' }, closest: function () { return this; } } });
+    assert.ok(wrap.innerHTML.includes('BridgedNode'), 'expected BridgedNode under Foreign');
+    assert.ok(!wrap.innerHTML.includes('HomeNode'), 'expected HomeNode excluded under Foreign');
+  });
+
+  await test('origin toggle: clicking the already-active tab is a no-op', async () => {
+    const sb = initWith([makeRow({ foreign: false })]);
+    await waitForLoad();
+    const tabsWrap = sb.__docStore['new-nodes-origin-tabs'];
+    const wrap = sb.__docStore['new-nodes-table-wrap'];
+    const before = wrap.innerHTML;
+    tabsWrap._listeners.click({ target: { dataset: { origin: 'all' }, closest: function () { return this; } } });
+    assert.strictEqual(wrap.innerHTML, before, 'clicking the already-active "All" tab should not change the rendered table');
   });
 
   await test('roleLabel maps known roles to display names and passes through unknown ones', () => {

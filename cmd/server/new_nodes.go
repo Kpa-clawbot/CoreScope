@@ -26,6 +26,12 @@ type NewNodeEntry struct {
 	// leaderboard), alphabetized. Omitted when the node has no known
 	// position or no areas are configured.
 	Areas []string `json:"areas,omitempty"`
+	// Foreign mirrors nodes.foreign_advert -- set when this node's ADVERT
+	// GPS lay outside the configured geofilter polygon (#730, same flag
+	// the node list's "foreign" field and MarkNodeForeign use). Not
+	// omitempty: false is a real, meaningful value here (domestic), not
+	// an absence of data.
+	Foreign bool `json:"foreign"`
 }
 
 // newNodesSQLFetchCap bounds how many rows we ever pull from SQL before
@@ -56,7 +62,7 @@ func (s *Server) computeNewNodes(limit int) ([]NewNodeEntry, error) {
 		limit = newNodesSQLFetchCap
 	}
 	rows, err := s.db.conn.Query(`
-		SELECT n.public_key, n.name, n.role, n.lat, n.lon, n.first_seen
+		SELECT n.public_key, n.name, n.role, n.lat, n.lon, n.first_seen, n.foreign_advert
 		FROM nodes n
 		WHERE NOT EXISTS (SELECT 1 FROM inactive_nodes i WHERE i.public_key = n.public_key)
 		  AND n.first_seen IS NOT NULL AND n.first_seen != ''
@@ -72,9 +78,11 @@ func (s *Server) computeNewNodes(limit int) ([]NewNodeEntry, error) {
 		var e NewNodeEntry
 		var name, role sql.NullString
 		var lat, lon sql.NullFloat64
-		if err := rows.Scan(&e.PublicKey, &name, &role, &lat, &lon, &e.FirstSeen); err != nil {
+		var foreignAdvert sql.NullInt64
+		if err := rows.Scan(&e.PublicKey, &name, &role, &lat, &lon, &e.FirstSeen, &foreignAdvert); err != nil {
 			continue
 		}
+		e.Foreign = foreignAdvert.Valid && foreignAdvert.Int64 != 0
 		if s.cfg.IsBlacklisted(e.PublicKey) {
 			continue
 		}

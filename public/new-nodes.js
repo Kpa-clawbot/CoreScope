@@ -8,23 +8,38 @@
   var container = null;
   var allRows = [];
   var filterText = '';
+  var originFilter = 'all'; // 'all' | 'domestic' | 'foreign' -- nodes.foreign_advert (#730)
   var sortState = { col: 'firstSeen', dir: 'desc' };
 
   function escapeHtml(s) {
     return s == null ? '' : String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
+  var ORIGIN_TABS = [
+    { key: 'all', label: 'All' },
+    { key: 'domestic', label: 'Domestic' },
+    { key: 'foreign', label: 'Foreign' },
+  ];
+
+  function originTabsHtml() {
+    return ORIGIN_TABS.map(function (t) {
+      return '<button type="button" class="tab-btn' + (t.key === originFilter ? ' active' : '') + '" data-origin="' + t.key + '">' + t.label + '</button>';
+    }).join('');
+  }
+
   function init(app) {
     container = app;
     allRows = [];
     filterText = '';
+    originFilter = 'all';
     sortState = { col: 'firstSeen', dir: 'desc' };
 
     container.innerHTML =
       '<div class="tools-landing" style="max-width:1100px">' +
         '<h2><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-rocket"/></svg> New Nodes</h2>' +
         '<p class="help-text">Nodes seen on the mesh for the very first time, newest first. Excludes nodes returning after a period of inactivity -- those aren\'t new, just quiet for a while. Click a column header to sort.</p>' +
-        '<div style="margin:12px 0"><input type="text" id="new-nodes-filter" class="input" placeholder="Filter by name, pubkey, role, or area…" style="width:100%;max-width:420px"></div>' +
+        '<div id="new-nodes-origin-tabs" style="display:flex;gap:6px;margin:12px 0 8px">' + originTabsHtml() + '</div>' +
+        '<div style="margin:0 0 12px"><input type="text" id="new-nodes-filter" class="input" placeholder="Filter by name, pubkey, role, or area…" style="width:100%;max-width:420px"></div>' +
         '<div id="new-nodes-status" class="text-muted" style="font-size:12px;margin-bottom:8px"></div>' +
         '<div id="new-nodes-table-wrap" class="table-fluid-wrap"></div>' +
       '</div>';
@@ -33,6 +48,21 @@
     if (filterInput) {
       filterInput.addEventListener('input', function () {
         filterText = filterInput.value.toLowerCase();
+        renderTable();
+      });
+    }
+
+    // Delegated on the wrap (not per-button) so re-rendering the tab
+    // buttons' HTML on selection change doesn't lose the listener.
+    var tabsWrap = document.getElementById('new-nodes-origin-tabs');
+    if (tabsWrap) {
+      tabsWrap.addEventListener('click', function (evt) {
+        var el = evt.target;
+        if (el && el.closest) el = el.closest('[data-origin]');
+        var origin = el && el.dataset ? el.dataset.origin : null;
+        if (!origin || origin === originFilter) return;
+        originFilter = origin;
+        tabsWrap.innerHTML = originTabsHtml();
         renderTable();
       });
     }
@@ -86,7 +116,14 @@
     return '<th class="' + cls + '" data-sort-col="' + col + '">' + label + sortArrow(col) + '</th>';
   }
 
+  function matchesOrigin(row) {
+    if (originFilter === 'domestic') return !row.foreign;
+    if (originFilter === 'foreign') return !!row.foreign;
+    return true;
+  }
+
   function matchesFilter(row) {
+    if (!matchesOrigin(row)) return false;
     if (!filterText) return true;
     var haystack = [row.name, row.publicKey, row.role, (row.areas || []).join(' ')].filter(Boolean).join(' ').toLowerCase();
     return haystack.indexOf(filterText) !== -1;
@@ -114,7 +151,7 @@
 
     if (statusEl) {
       statusEl.textContent = filtered.length.toLocaleString() + ' of ' + allRows.length.toLocaleString() + ' new node' + (allRows.length === 1 ? '' : 's') +
-        (filterText ? ' (filtered)' : '');
+        ((filterText || originFilter !== 'all') ? ' (filtered)' : '');
     }
 
     if (sorted.length === 0) {
