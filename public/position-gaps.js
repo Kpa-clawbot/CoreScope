@@ -47,7 +47,7 @@
     container.innerHTML =
       '<div class="tools-landing" style="max-width:1100px">' +
         '<h2><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-pin"/></svg> Position-Fix Coverage Gaps</h2>' +
-        '<p class="help-text">How many nodes in each area have an actual reported GPS position vs. only a neighbor-based estimate (same technique View Path\'s approximate markers use), plus the actual estimated nodes behind those numbers.</p>' +
+        '<p class="help-text">How many nodes in each area have an actual reported GPS position vs. only a neighbor-based estimate.</p>' +
         '<div id="position-gaps-status" class="text-muted" style="font-size:12px;margin-bottom:8px"></div>' +
         '<div id="position-gaps-content"></div>' +
       '</div>';
