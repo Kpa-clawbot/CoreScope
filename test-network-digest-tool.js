@@ -131,6 +131,52 @@ function waitForLoad() {
     assert.strictEqual(sb.__apiCalls.length, callsBefore, 'expected no additional api call for a no-op tab click');
   });
 
+  await test('init renders origin tabs with All active by default and requests origin=all', async () => {
+    const sb = initWith(makeDigest());
+    await waitForLoad();
+    const html = sb.__container.innerHTML;
+    assert.ok(html.includes('data-origin="all"'), `expected an All tab, got: ${html}`);
+    assert.ok(/class="tab-btn active"[^>]*data-origin="all"|data-origin="all"[^>]*class="tab-btn active"/.test(html),
+      `expected the All tab to be active by default, got: ${html}`);
+    assert.ok(sb.__apiCalls[0].includes('origin=all'), `expected the initial load to request origin=all, got: ${sb.__apiCalls[0]}`);
+  });
+
+  await test('clicking a different origin tab reloads data for that origin', async () => {
+    const sb = initWith(makeDigest());
+    await waitForLoad();
+    const tabs = sb.__docStore['network-digest-origin-tabs'];
+    tabs._listeners.click({ target: { closest: () => ({ dataset: { origin: 'foreign' } }) } });
+    await waitForLoad();
+    assert.ok(sb.__apiCalls[sb.__apiCalls.length - 1].includes('origin=foreign'), `expected a reload for origin=foreign, got: ${sb.__apiCalls}`);
+    assert.ok(tabs.innerHTML.includes('data-origin="foreign"'), 'expected the tabs to re-render');
+    assert.ok(/class="tab-btn active"[^>]*data-origin="foreign"|data-origin="foreign"[^>]*class="tab-btn active"/.test(tabs.innerHTML),
+      `expected the Foreign tab to become active, got: ${tabs.innerHTML}`);
+  });
+
+  await test('clicking the already-active origin tab does not trigger a reload', async () => {
+    const sb = initWith(makeDigest());
+    await waitForLoad();
+    const callsBefore = sb.__apiCalls.length;
+    const tabs = sb.__docStore['network-digest-origin-tabs'];
+    tabs._listeners.click({ target: { closest: () => ({ dataset: { origin: 'all' } }) } });
+    await waitForLoad();
+    assert.strictEqual(sb.__apiCalls.length, callsBefore, 'expected no additional api call for a no-op origin tab click');
+  });
+
+  await test('window and origin filters are independent -- switching one keeps the other', async () => {
+    const sb = initWith(makeDigest());
+    await waitForLoad();
+    const windowTabs = sb.__docStore['network-digest-window-tabs'];
+    const originTabs = sb.__docStore['network-digest-origin-tabs'];
+    originTabs._listeners.click({ target: { closest: () => ({ dataset: { origin: 'domestic' } }) } });
+    await waitForLoad();
+    windowTabs._listeners.click({ target: { closest: () => ({ dataset: { window: '24h' } }) } });
+    await waitForLoad();
+    const lastCall = sb.__apiCalls[sb.__apiCalls.length - 1];
+    assert.ok(lastCall.includes('window=24h') && lastCall.includes('origin=domestic'),
+      `expected the last request to carry both filters, got: ${lastCall}`);
+  });
+
   await test('renders a stat tile for each of the five counts, linking to the right drill-down tool', async () => {
     const sb = initWith(makeDigest());
     await waitForLoad();

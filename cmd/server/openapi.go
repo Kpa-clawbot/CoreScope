@@ -147,9 +147,12 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/analytics/node-changes": {Summary: "Recent node role/name/position changes and pruned-node returns", Description: "Tools > Node Changes, a durable audit log written by cmd/ingestor's UpsertNode as ADVERTs arrive (not a periodic snapshot diff, so nothing is missed between polls). changeType is \"role\", \"name\", \"position\" (>=1km move; GPS jitter under that is not logged), or \"resurrected\" (pubkey previously pruned to inactive_nodes for inactivity, now advertising again -- oldValue is its last_seen there before it returned). A field is only compared when both the old and new ADVERT values are present, since adverts routinely omit name/location. Newest first. Blacklisted nodes excluded. Empty list (not an error) when nothing has been logged yet.", Tag: "nodes",
 			QueryParams: []paramMeta{{Name: "limit", Description: "Max entries to return (default 50)", Type: "integer"}},
 			Response:    schemaRef("NodeChangesResponse")},
-		"GET /api/analytics/network-digest": {Summary: "Rolling-window summary of New Nodes + Node Changes activity", Description: "Tools > Network Digest. \"What happened lately\" at a glance: new-node count, role/name changes, position moves, resurrections, and the configured area with the most new-node activity, all within the requested window (default 7d). Built on top of /api/analytics/new-nodes and /api/analytics/node-changes -- exact up to 500 rows fetched from each; a single window's activity on a network this size has never come close to that.", Tag: "nodes",
-			QueryParams: []paramMeta{{Name: "window", Description: "Time window, e.g. \"24h\", \"7d\", \"30d\" (default 7d)", Type: "string"}},
-			Response:    schemaRef("NetworkDigest")},
+		"GET /api/analytics/network-digest": {Summary: "Rolling-window summary of New Nodes + Node Changes activity", Description: "Tools > Network Digest. \"What happened lately\" at a glance: new-node count, role/name changes, position moves, resurrections, and the configured area with the most new-node activity, all within the requested window (default 7d). Built on top of /api/analytics/new-nodes and /api/analytics/node-changes -- exact up to 500 rows fetched from each (see newNodesCapped/changesCapped on the response). topArea picks each new node's single most specific configured area (smallest bounding box on overlap), not every area its position happens to fall in -- an umbrella area covering a whole country/continent would otherwise \"win\" on virtually every window regardless of where the activity actually concentrated.", Tag: "nodes",
+			QueryParams: []paramMeta{
+				{Name: "window", Description: "Time window, e.g. \"24h\", \"7d\", \"30d\" (default 7d)", Type: "string"},
+				{Name: "origin", Description: "\"all\" (default), \"domestic\", or \"foreign\" -- same nodes.foreign_advert flag as Tools > New Nodes' toggle. Narrows every count (and topArea) to nodes/changes matching that origin; node_changes rows are matched via the node's current foreign_advert, since the audit log doesn't store its own snapshot of it.", Type: "string"},
+			},
+			Response: schemaRef("NetworkDigest")},
 
 		// Misc
 		"GET /api/resolve-hops":  {Summary: "Resolve hop path", Description: "Resolves hash prefixes in a hop path to node names. Returns affinity scores and best candidates.", Tag: "nodes", QueryParams: []paramMeta{{Name: "hops", Description: "Comma-separated hop hash prefixes", Type: "string", Required: true}}},
@@ -618,6 +621,7 @@ func componentSchemas() map[string]interface{} {
 			"description": "Rolling-window summary of New Nodes + Node Changes activity (Tools > Network Digest).",
 			"properties": map[string]interface{}{
 				"window":         str("The requested window, e.g. \"7d\"."),
+				"origin":         str("The requested origin filter: \"all\", \"domestic\", or \"foreign\"."),
 				"since":          str("RFC3339 timestamp the window starts at."),
 				"newNodes":       map[string]interface{}{"type": "integer", "description": "Nodes first seen within the window (same exclusions as /api/analytics/new-nodes)."},
 				"roleChanges":    map[string]interface{}{"type": "integer"},

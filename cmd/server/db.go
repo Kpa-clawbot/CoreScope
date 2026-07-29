@@ -5040,6 +5040,53 @@ func (db *DB) namesAndRolesForPubkeys(pubkeys []string) (names, roles map[string
 	return names, roles
 }
 
+// foreignFlagsForPubkeys bulk-resolves nodes.foreign_advert for a set of
+// FULL pubkeys, same chunking/missing-key convention as
+// namesAndRolesForPubkeys -- used by the Network Digest origin filter to
+// classify node_changes rows (which don't store foreign_advert
+// themselves) as domestic/foreign via the node's current state. A pubkey
+// absent from the result (deleted from nodes since, e.g. re-pruned) is
+// treated as domestic by the caller, matching computeNewNodes' own
+// "not set means false" default for this flag.
+func (db *DB) foreignFlagsForPubkeys(pubkeys []string) map[string]bool {
+	out := make(map[string]bool, len(pubkeys))
+	if len(pubkeys) == 0 {
+		return out
+	}
+	const chunkSize = 499
+	for start := 0; start < len(pubkeys); start += chunkSize {
+		end := start + chunkSize
+		if end > len(pubkeys) {
+			end = len(pubkeys)
+		}
+		chunk := pubkeys[start:end]
+		placeholders := make([]byte, 0, len(chunk)*2)
+		args := make([]interface{}, len(chunk))
+		for i, pk := range chunk {
+			if i > 0 {
+				placeholders = append(placeholders, ',')
+			}
+			placeholders = append(placeholders, '?')
+			args[i] = pk
+		}
+		query := "SELECT public_key, foreign_advert FROM nodes WHERE public_key IN (" + string(placeholders) + ")"
+		rows, err := db.conn.Query(query, args...)
+		if err != nil {
+			continue
+		}
+		for rows.Next() {
+			var pk string
+			var foreignAdvert sql.NullInt64
+			if err := rows.Scan(&pk, &foreignAdvert); err != nil {
+				continue
+			}
+			out[pk] = foreignAdvert.Valid && foreignAdvert.Int64 != 0
+		}
+		rows.Close()
+	}
+	return out
+}
+
 // gpsByPubkeysExact bulk-resolves GPS positions for a set of FULL pubkeys
 // via an exact match -- unlike the path-hop prefix machinery (buildPrefixMap
 // /resolveEntryPointArea), which only indexes repeater/room-server roles as

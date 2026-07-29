@@ -20,6 +20,7 @@ type AreaGrowth struct {
 // cutoff time.
 type NetworkDigest struct {
 	Window        string `json:"window"`
+	Origin        string `json:"origin"`
 	Since         string `json:"since"`
 	NewNodes      int    `json:"newNodes"`
 	RoleChanges   int    `json:"roleChanges"`
@@ -39,8 +40,24 @@ type NetworkDigest struct {
 	ChangesCapped  bool `json:"changesCapped,omitempty"`
 }
 
+// matchesOrigin reports whether a domestic/foreign flag satisfies the
+// requested origin filter ("all" | "domestic" | "foreign"); unrecognized
+// values behave like "all", matching handleNetworkDigest's own
+// validation already having rejected anything else.
+func matchesOrigin(foreign bool, origin string) bool {
+	switch origin {
+	case "domestic":
+		return !foreign
+	case "foreign":
+		return foreign
+	default:
+		return true
+	}
+}
+
 // computeNetworkDigest summarizes New Nodes and Node Changes activity
-// since the given cutoff.
+// since the given cutoff, optionally narrowed to "domestic" or "foreign"
+// nodes only (origin == "all" for no filtering).
 //
 // Reuses computeNewNodes/computeNodeChanges (with their existing
 // blacklist filtering and, for new nodes, resurrection exclusion) rather
@@ -51,8 +68,11 @@ type NetworkDigest struct {
 // cap within the requested window (observed on this deployment's 30d
 // window), the affected counts become a floor rather than an exact
 // total; NewNodesCapped/ChangesCapped flag that case so the frontend can
-// render e.g. "500+" instead of a falsely-precise number.
-func (s *Server) computeNetworkDigest(since time.Time) (*NetworkDigest, error) {
+// render e.g. "500+" instead of a falsely-precise number. The capped
+// check always runs against the unfiltered fetch, since it's asking
+// "did the SQL LIMIT cut off rows we didn't see" -- a question that
+// doesn't depend on the origin filter applied afterward.
+func (s *Server) computeNetworkDigest(since time.Time, origin string) (*NetworkDigest, error) {
 	digest := &NetworkDigest{Since: since.UTC().Format(time.RFC3339)}
 
 	newNodes, err := s.computeNewNodes(newNodesSQLFetchCap)
@@ -61,13 +81,25 @@ func (s *Server) computeNetworkDigest(since time.Time) (*NetworkDigest, error) {
 	}
 	areaCounts := map[string]int{}
 	for _, n := range newNodes {
+		if !matchesOrigin(n.Foreign, origin) {
+			continue
+		}
 		t, perr := time.Parse(time.RFC3339, n.FirstSeen)
 		if perr != nil || t.Before(since) {
 			continue
 		}
 		digest.NewNodes++
-		for _, a := range n.Areas {
-			areaCounts[a]++
+		// Most-specific area only (AreaForPoint), not every overlapping
+		// area (AreaKeysForPoint/n.Areas) -- a broad umbrella area like
+		// "Europa" contains virtually every node, so tallying all
+		// matches makes it "win" Most Growth every time regardless of
+		// where the real activity is. AreaForPoint already exists for
+		// exactly this per-node "which area does this belong to"
+		// question (smallest bounding box wins on overlap).
+		if n.Lat != nil && n.Lon != nil && len(s.cfg.Areas) > 0 {
+			if label, ok := AreaForPoint(*n.Lat, *n.Lon, s.cfg.Areas); ok {
+				areaCounts[label]++
+			}
 		}
 	}
 	if len(newNodes) == newNodesSQLFetchCap {
@@ -94,7 +126,23 @@ func (s *Server) computeNetworkDigest(since time.Time) (*NetworkDigest, error) {
 	if err != nil {
 		return nil, err
 	}
+	// node_changes rows don't carry their own foreign_advert snapshot --
+	// resolved live against the node's current state via a bulk lookup,
+	// same shape as computeNodeChanges' own name resolution. Skipped
+	// entirely for origin=="all" since it's an extra query nobody asked
+	// for in the common case.
+	var foreignFlags map[string]bool
+	if origin != "all" {
+		pubkeys := make([]string, 0, len(changes))
+		for _, c := range changes {
+			pubkeys = append(pubkeys, c.PublicKey)
+		}
+		foreignFlags = s.db.foreignFlagsForPubkeys(pubkeys)
+	}
 	for _, c := range changes {
+		if origin != "all" && !matchesOrigin(foreignFlags[c.PublicKey], origin) {
+			continue
+		}
 		t, perr := time.Parse(time.RFC3339, c.DetectedAt)
 		if perr != nil || t.Before(since) {
 			continue
@@ -122,7 +170,8 @@ func (s *Server) computeNetworkDigest(since time.Time) (*NetworkDigest, error) {
 // handleNetworkDigest serves Tools > Network Digest: a rolling-window
 // summary of New Nodes + Node Changes activity. Defaults to a 7-day
 // window, same "d" suffix convention as other window query params in
-// this codebase (parseWindowDuration).
+// this codebase (parseWindowDuration), and an "all" origin (same
+// All/Domestic/Foreign vocabulary as Tools > New Nodes' toggle).
 func (s *Server) handleNetworkDigest(w http.ResponseWriter, r *http.Request) {
 	window := r.URL.Query().Get("window")
 	if window == "" {
@@ -133,12 +182,21 @@ func (s *Server) handleNetworkDigest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid window: "+window)
 		return
 	}
+	origin := r.URL.Query().Get("origin")
+	if origin == "" {
+		origin = "all"
+	}
+	if origin != "all" && origin != "domestic" && origin != "foreign" {
+		writeError(w, 400, "invalid origin: "+origin)
+		return
+	}
 	since := time.Now().UTC().Add(-dur)
-	digest, err := s.computeNetworkDigest(since)
+	digest, err := s.computeNetworkDigest(since, origin)
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
 	digest.Window = window
+	digest.Origin = origin
 	writeJSON(w, digest)
 }

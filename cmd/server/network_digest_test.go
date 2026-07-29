@@ -19,7 +19,7 @@ func TestComputeNetworkDigest_CountsNewNodesWithinWindow(t *testing.T) {
 	insertNewNodeRow(t, srv, "digestnew0000001", "InWindow", "repeater", f64(56.0), f64(10.0), now.Add(-1*time.Hour).Format(time.RFC3339))
 	insertNewNodeRow(t, srv, "digestold0000001", "OutOfWindow", "repeater", f64(56.0), f64(10.0), now.Add(-10*24*time.Hour).Format(time.RFC3339))
 
-	digest, err := srv.computeNetworkDigest(now.Add(-7 * 24 * time.Hour))
+	digest, err := srv.computeNetworkDigest(now.Add(-7*24*time.Hour), "all")
 	if err != nil {
 		t.Fatalf("computeNetworkDigest: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestComputeNetworkDigest_CountsChangeTypesWithinWindow(t *testing.T) {
 	// Outside the window -- must not be counted.
 	insertNodeChangeRow(t, srv, "digestoldrole00001", "role", "sensor", "repeater", outOfWindow)
 
-	digest, err := srv.computeNetworkDigest(now.Add(-7 * 24 * time.Hour))
+	digest, err := srv.computeNetworkDigest(now.Add(-7*24*time.Hour), "all")
 	if err != nil {
 		t.Fatalf("computeNetworkDigest: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestComputeNetworkDigest_TopArea(t *testing.T) {
 	insertNewNodeRow(t, srv, "topareaa0000002", "A2", "repeater", f64(56.0), f64(10.0), now.Add(-2*time.Hour).Format(time.RFC3339))
 	insertNewNodeRow(t, srv, "topareab0000001", "B1", "repeater", f64(10.1), f64(50.1), now.Add(-3*time.Hour).Format(time.RFC3339))
 
-	digest, err := srv.computeNetworkDigest(now.Add(-7 * 24 * time.Hour))
+	digest, err := srv.computeNetworkDigest(now.Add(-7*24*time.Hour), "all")
 	if err != nil {
 		t.Fatalf("computeNetworkDigest: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestComputeNetworkDigest_TopAreaNilWhenNoAreasConfigured(t *testing.T) {
 	now := time.Now().UTC()
 	insertNewNodeRow(t, srv, "noareasnode000001", "NoArea", "repeater", f64(56.0), f64(10.0), now.Add(-1*time.Hour).Format(time.RFC3339))
 
-	digest, err := srv.computeNetworkDigest(now.Add(-7 * 24 * time.Hour))
+	digest, err := srv.computeNetworkDigest(now.Add(-7*24*time.Hour), "all")
 	if err != nil {
 		t.Fatalf("computeNetworkDigest: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestComputeNetworkDigest_NewNodesCappedFlag(t *testing.T) {
 		insertNewNodeRow(t, srv, pubkey, "Cap", "repeater", f64(56.0), f64(10.0), now.Add(-time.Duration(i)*time.Minute).Format(time.RFC3339))
 	}
 
-	digest, err := srv.computeNetworkDigest(now.Add(-7 * 24 * time.Hour))
+	digest, err := srv.computeNetworkDigest(now.Add(-7*24*time.Hour), "all")
 	if err != nil {
 		t.Fatalf("computeNetworkDigest: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestComputeNetworkDigest_NewNodesNotCappedWhenUnderLimit(t *testing.T) {
 	now := time.Now().UTC()
 	insertNewNodeRow(t, srv, "notcapped0000001", "Solo", "repeater", f64(56.0), f64(10.0), now.Add(-1*time.Hour).Format(time.RFC3339))
 
-	digest, err := srv.computeNetworkDigest(now.Add(-7 * 24 * time.Hour))
+	digest, err := srv.computeNetworkDigest(now.Add(-7*24*time.Hour), "all")
 	if err != nil {
 		t.Fatalf("computeNetworkDigest: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestComputeNetworkDigest_ChangesCappedFlag(t *testing.T) {
 		insertNodeChangeRow(t, srv, pubkey, "role", "companion", "repeater", now.Add(-time.Duration(i)*time.Minute).Format(time.RFC3339))
 	}
 
-	digest, err := srv.computeNetworkDigest(now.Add(-7 * 24 * time.Hour))
+	digest, err := srv.computeNetworkDigest(now.Add(-7*24*time.Hour), "all")
 	if err != nil {
 		t.Fatalf("computeNetworkDigest: %v", err)
 	}
@@ -197,6 +197,151 @@ func TestComputeNetworkDigest_ChangesCappedFlag(t *testing.T) {
 	}
 	if digest.RoleChanges != nodeChangesSQLFetchCap {
 		t.Errorf("RoleChanges = %d, want %d (the full capped fetch)", digest.RoleChanges, nodeChangesSQLFetchCap)
+	}
+}
+
+// TestComputeNetworkDigest_TopAreaPrefersMostSpecific confirms an
+// umbrella area whose bounding box contains a smaller, more specific
+// area does NOT dominate Most Growth just because it also matches every
+// node -- reported https://github.com/dborup/CoreScope after live
+// verification on stg always showed "Europa" as Most Growth regardless
+// of where nodes actually were, since AreaKeysForPoint (used before this
+// fix) tallies every overlapping area equally rather than picking the
+// most specific one per node.
+func TestComputeNetworkDigest_TopAreaPrefersMostSpecific(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ensureInactiveNodesTable(t, srv)
+	ensureNodeChangesTable(t, srv)
+
+	srv.cfg.Areas = map[string]AreaEntry{
+		// A broad umbrella area whose box contains AREAB entirely.
+		"UMBRELLA": {Label: "Umbrella", LatMin: f64(0), LatMax: f64(90), LonMin: f64(0), LonMax: f64(90)},
+		"AREAB":    {Label: "Area B", LatMin: f64(55.9), LatMax: f64(56.2), LonMin: f64(9.9), LonMax: f64(10.2)},
+	}
+	now := time.Now().UTC()
+	insertNewNodeRow(t, srv, "specific0000001", "S1", "repeater", f64(56.0), f64(10.0), now.Add(-1*time.Hour).Format(time.RFC3339))
+
+	digest, err := srv.computeNetworkDigest(now.Add(-7*24*time.Hour), "all")
+	if err != nil {
+		t.Fatalf("computeNetworkDigest: %v", err)
+	}
+	if digest.TopArea == nil || digest.TopArea.Label != "Area B" {
+		t.Errorf("TopArea = %+v, want the more specific \"Area B\", not the umbrella area that also happens to contain it", digest.TopArea)
+	}
+}
+
+// TestComputeNetworkDigest_OriginFilterNewNodes confirms origin=domestic
+// / origin=foreign narrow the New Nodes count (and Most Growth) using
+// the same nodes.foreign_advert flag as Tools > New Nodes' toggle.
+func TestComputeNetworkDigest_OriginFilterNewNodes(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ensureInactiveNodesTable(t, srv)
+	ensureNodeChangesTable(t, srv)
+
+	now := time.Now().UTC()
+	insertNewNodeRow(t, srv, "domesticnew0000001", "Domestic", "repeater", f64(56.0), f64(10.0), now.Add(-1*time.Hour).Format(time.RFC3339))
+	insertNewNodeRow(t, srv, "foreignnew00000001", "Foreign", "repeater", f64(52.5), f64(13.4), now.Add(-1*time.Hour).Format(time.RFC3339))
+	if _, err := srv.db.conn.Exec(`UPDATE nodes SET foreign_advert = 1 WHERE public_key = ?`, "foreignnew00000001"); err != nil {
+		t.Fatalf("set foreign_advert: %v", err)
+	}
+
+	since := now.Add(-7 * 24 * time.Hour)
+	all, err := srv.computeNetworkDigest(since, "all")
+	if err != nil {
+		t.Fatalf("computeNetworkDigest(all): %v", err)
+	}
+	if all.NewNodes != 2 {
+		t.Errorf("all.NewNodes = %d, want 2", all.NewNodes)
+	}
+
+	domestic, err := srv.computeNetworkDigest(since, "domestic")
+	if err != nil {
+		t.Fatalf("computeNetworkDigest(domestic): %v", err)
+	}
+	if domestic.NewNodes != 1 {
+		t.Errorf("domestic.NewNodes = %d, want 1", domestic.NewNodes)
+	}
+
+	foreign, err := srv.computeNetworkDigest(since, "foreign")
+	if err != nil {
+		t.Fatalf("computeNetworkDigest(foreign): %v", err)
+	}
+	if foreign.NewNodes != 1 {
+		t.Errorf("foreign.NewNodes = %d, want 1", foreign.NewNodes)
+	}
+}
+
+// TestComputeNetworkDigest_OriginFilterNodeChanges confirms origin
+// filtering also applies to the node_changes side, resolved live
+// against the node's current foreign_advert (node_changes rows don't
+// store their own snapshot of it).
+func TestComputeNetworkDigest_OriginFilterNodeChanges(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ensureInactiveNodesTable(t, srv)
+	ensureNodeChangesTable(t, srv)
+
+	now := time.Now().UTC()
+	inWindow := now.Add(-1 * time.Hour).Format(time.RFC3339)
+	insertNewNodeRow(t, srv, "domesticchg0000001", "Domestic", "repeater", f64(56.0), f64(10.0), now.Add(-30*24*time.Hour).Format(time.RFC3339))
+	insertNewNodeRow(t, srv, "foreignchg00000001", "Foreign", "repeater", f64(52.5), f64(13.4), now.Add(-30*24*time.Hour).Format(time.RFC3339))
+	if _, err := srv.db.conn.Exec(`UPDATE nodes SET foreign_advert = 1 WHERE public_key = ?`, "foreignchg00000001"); err != nil {
+		t.Fatalf("set foreign_advert: %v", err)
+	}
+	insertNodeChangeRow(t, srv, "domesticchg0000001", "role", "companion", "repeater", inWindow)
+	insertNodeChangeRow(t, srv, "foreignchg00000001", "role", "companion", "repeater", inWindow)
+
+	since := now.Add(-7 * 24 * time.Hour)
+	domestic, err := srv.computeNetworkDigest(since, "domestic")
+	if err != nil {
+		t.Fatalf("computeNetworkDigest(domestic): %v", err)
+	}
+	if domestic.RoleChanges != 1 {
+		t.Errorf("domestic.RoleChanges = %d, want 1", domestic.RoleChanges)
+	}
+
+	foreign, err := srv.computeNetworkDigest(since, "foreign")
+	if err != nil {
+		t.Fatalf("computeNetworkDigest(foreign): %v", err)
+	}
+	if foreign.RoleChanges != 1 {
+		t.Errorf("foreign.RoleChanges = %d, want 1", foreign.RoleChanges)
+	}
+}
+
+// TestHandleNetworkDigest_OriginEchoedAndDefaulted confirms the handler
+// defaults origin to "all" and echoes back whatever was requested.
+func TestHandleNetworkDigest_OriginEchoedAndDefaulted(t *testing.T) {
+	srv, router := setupTestServer(t)
+	ensureInactiveNodesTable(t, srv)
+	ensureNodeChangesTable(t, srv)
+
+	req := httptest.NewRequest("GET", "/api/analytics/network-digest", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if !strings.Contains(w.Body.String(), `"origin":"all"`) {
+		t.Errorf("response should default+echo origin=all, got: %s", w.Body.String())
+	}
+
+	req2 := httptest.NewRequest("GET", "/api/analytics/network-digest?origin=foreign", nil)
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+	if !strings.Contains(w2.Body.String(), `"origin":"foreign"`) {
+		t.Errorf("response should echo origin=foreign, got: %s", w2.Body.String())
+	}
+}
+
+// TestHandleNetworkDigest_InvalidOriginRejected confirms a malformed
+// origin query param is a 400, not a silent fallback to "all".
+func TestHandleNetworkDigest_InvalidOriginRejected(t *testing.T) {
+	srv, router := setupTestServer(t)
+	ensureInactiveNodesTable(t, srv)
+	ensureNodeChangesTable(t, srv)
+
+	req := httptest.NewRequest("GET", "/api/analytics/network-digest?origin=extraterrestrial", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 400 {
+		t.Errorf("status = %d, want 400 for an invalid origin, body: %s", w.Code, w.Body.String())
 	}
 }
 

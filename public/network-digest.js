@@ -8,6 +8,7 @@
 
   var container = null;
   var window_ = '7d'; // 'window' shadows the DOM global if unqualified
+  var origin_ = 'all';
 
   function escapeHtml(s) {
     return s == null ? '' : String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -19,22 +20,38 @@
     { key: '30d', label: '30 Days' },
   ];
 
+  var ORIGIN_TABS = [
+    { key: 'all', label: 'All' },
+    { key: 'domestic', label: 'Domestic' },
+    { key: 'foreign', label: 'Foreign' },
+  ];
+
   function windowTabsHtml() {
     return WINDOW_TABS.map(function (t) {
       return '<button type="button" class="tab-btn' + (t.key === window_ ? ' active' : '') + '" data-window="' + t.key + '">' + t.label + '</button>';
     }).join('');
   }
 
+  function originTabsHtml() {
+    return ORIGIN_TABS.map(function (t) {
+      return '<button type="button" class="tab-btn' + (t.key === origin_ ? ' active' : '') + '" data-origin="' + t.key + '">' + t.label + '</button>';
+    }).join('');
+  }
+
   function init(app) {
     container = app;
     window_ = '7d';
+    origin_ = 'all';
 
     container.innerHTML =
       '<div class="tools-landing" style="max-width:1100px">' +
         '<h2><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Network Digest</h2>' +
         '<p class="help-text">What happened lately, at a glance -- built on top of ' +
           '<a href="#/tools/new-nodes">New Nodes</a> and <a href="#/tools/node-changes">Node Changes</a>.</p>' +
-        '<div id="network-digest-window-tabs" style="display:flex;gap:6px;margin:12px 0 16px">' + windowTabsHtml() + '</div>' +
+        '<div style="display:flex;gap:16px;flex-wrap:wrap;margin:12px 0 16px">' +
+          '<div id="network-digest-window-tabs" style="display:flex;gap:6px">' + windowTabsHtml() + '</div>' +
+          '<div id="network-digest-origin-tabs" style="display:flex;gap:6px">' + originTabsHtml() + '</div>' +
+        '</div>' +
         '<div id="network-digest-status" class="text-muted" style="font-size:12px;margin-bottom:8px"></div>' +
         '<div id="network-digest-content"></div>' +
       '</div>';
@@ -52,6 +69,19 @@
       });
     }
 
+    var originWrap = document.getElementById('network-digest-origin-tabs');
+    if (originWrap) {
+      originWrap.addEventListener('click', function (evt) {
+        var el = evt.target;
+        if (el && el.closest) el = el.closest('[data-origin]');
+        var o = el && el.dataset ? el.dataset.origin : null;
+        if (!o || o === origin_) return;
+        origin_ = o;
+        originWrap.innerHTML = originTabsHtml();
+        load();
+      });
+    }
+
     load();
   }
 
@@ -64,7 +94,7 @@
     var contentEl = document.getElementById('network-digest-content');
     if (contentEl) contentEl.innerHTML = '<p class="text-muted">Loading…</p>';
     if (statusEl) statusEl.textContent = '';
-    api('/analytics/network-digest?window=' + encodeURIComponent(window_))
+    api('/analytics/network-digest?window=' + encodeURIComponent(window_) + '&origin=' + encodeURIComponent(origin_))
       .then(function (data) {
         render(data);
       })
