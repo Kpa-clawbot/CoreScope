@@ -147,9 +147,12 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/analytics/node-changes": {Summary: "Recent node role/name/position changes and pruned-node returns", Description: "Tools > Node Changes, a durable audit log written by cmd/ingestor's UpsertNode as ADVERTs arrive (not a periodic snapshot diff, so nothing is missed between polls). changeType is \"role\", \"name\", \"position\" (>=1km move; GPS jitter under that is not logged), or \"resurrected\" (pubkey previously pruned to inactive_nodes for inactivity, now advertising again -- oldValue is its last_seen there before it returned). A field is only compared when both the old and new ADVERT values are present, since adverts routinely omit name/location. Newest first. Blacklisted nodes excluded. Empty list (not an error) when nothing has been logged yet.", Tag: "nodes",
 			QueryParams: []paramMeta{{Name: "limit", Description: "Max entries to return (default 50)", Type: "integer"}},
 			Response:    schemaRef("NodeChangesResponse")},
-		"GET /api/analytics/network-digest": {Summary: "Rolling-window summary of New Nodes + Node Changes activity", Description: "Tools > Network Digest. \"What happened lately\" at a glance: new-node count, role/name changes, position moves, resurrections, and the configured area with the most new-node activity, all within the requested window (default 7d). Built on top of /api/analytics/new-nodes and /api/analytics/node-changes -- exact up to 500 rows fetched from each; a single window's activity on a network this size has never come close to that.", Tag: "nodes",
-			QueryParams: []paramMeta{{Name: "window", Description: "Time window, e.g. \"24h\", \"7d\", \"30d\" (default 7d)", Type: "string"}},
-			Response:    schemaRef("NetworkDigest")},
+		"GET /api/analytics/network-digest": {Summary: "Rolling-window summary of New Nodes + Node Changes activity", Description: "Tools > Network Digest. \"What happened lately\" at a glance: new-node count, role/name changes, position moves, resurrections, and a ranked breakdown of new-node activity by area, all within the requested window (default 7d). Built on top of /api/analytics/new-nodes and /api/analytics/node-changes -- exact up to 500 rows fetched from each (see newNodesCapped/changesCapped on the response). areaBreakdown counts each new node toward its single most specific configured area (smallest bounding box on overlap), not every area its position happens to fall in -- an umbrella area covering a whole country/continent would otherwise \"win\" on virtually every window regardless of where the activity actually concentrated.", Tag: "nodes",
+			QueryParams: []paramMeta{
+				{Name: "window", Description: "Time window, e.g. \"24h\", \"7d\", \"30d\" (default 7d)", Type: "string"},
+				{Name: "origin", Description: "\"all\" (default), \"domestic\", or \"foreign\" -- same nodes.foreign_advert flag as Tools > New Nodes' toggle. Narrows every count (and areaBreakdown) to nodes/changes matching that origin; node_changes rows are matched via the node's current foreign_advert, since the audit log doesn't store its own snapshot of it.", Type: "string"},
+			},
+			Response: schemaRef("NetworkDigest")},
 
 		// Misc
 		"GET /api/resolve-hops":  {Summary: "Resolve hop path", Description: "Resolves hash prefixes in a hop path to node names. Returns affinity scores and best candidates.", Tag: "nodes", QueryParams: []paramMeta{{Name: "hops", Description: "Comma-separated hop hash prefixes", Type: "string", Required: true}}},
@@ -611,6 +614,15 @@ func componentSchemas() map[string]interface{} {
 			"properties": map[string]interface{}{
 				"label": str("The area's display label."),
 				"count": map[string]interface{}{"type": "integer", "description": "New nodes in this area within the digest window."},
+				"nodes": map[string]interface{}{"type": "array", "items": schemaRef("AreaNodeRef"), "description": "Every new node counted toward this area, newest first."},
+			},
+		},
+		"AreaNodeRef": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"publicKey": str("The node's public key."),
+				"name":      str("Display name, when known."),
+				"firstSeen": str("RFC3339 timestamp the node was first seen."),
 			},
 		},
 		"NetworkDigest": map[string]interface{}{
@@ -618,13 +630,14 @@ func componentSchemas() map[string]interface{} {
 			"description": "Rolling-window summary of New Nodes + Node Changes activity (Tools > Network Digest).",
 			"properties": map[string]interface{}{
 				"window":         str("The requested window, e.g. \"7d\"."),
+				"origin":         str("The requested origin filter: \"all\", \"domestic\", or \"foreign\"."),
 				"since":          str("RFC3339 timestamp the window starts at."),
 				"newNodes":       map[string]interface{}{"type": "integer", "description": "Nodes first seen within the window (same exclusions as /api/analytics/new-nodes)."},
 				"roleChanges":    map[string]interface{}{"type": "integer"},
 				"nameChanges":    map[string]interface{}{"type": "integer"},
 				"positionMoves":  map[string]interface{}{"type": "integer"},
 				"resurrections":  map[string]interface{}{"type": "integer"},
-				"topArea":        map[string]interface{}{"allOf": []interface{}{schemaRef("AreaGrowth")}, "description": "The configured area with the most new-node activity in the window. Omitted when no new node in the window has a known area."},
+				"areaBreakdown":  map[string]interface{}{"type": "array", "items": schemaRef("AreaGrowth"), "description": "Every configured area with at least one new node in the window, most active first (ties alphabetical). Omitted when no new node in the window has a known area."},
 				"newNodesCapped": map[string]interface{}{"type": "boolean", "description": "True when the underlying fetch hit its row cap (500) and the oldest fetched row is still inside the window -- newNodes is then a floor, not an exact total. Omitted (false) otherwise."},
 				"changesCapped":  map[string]interface{}{"type": "boolean", "description": "Same as newNodesCapped, for roleChanges/nameChanges/positionMoves/resurrections. Omitted (false) otherwise."},
 			},

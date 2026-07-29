@@ -8,6 +8,7 @@
 
   var container = null;
   var window_ = '7d'; // 'window' shadows the DOM global if unqualified
+  var origin_ = 'all';
 
   function escapeHtml(s) {
     return s == null ? '' : String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -19,22 +20,38 @@
     { key: '30d', label: '30 Days' },
   ];
 
+  var ORIGIN_TABS = [
+    { key: 'all', label: 'All' },
+    { key: 'domestic', label: 'Domestic' },
+    { key: 'foreign', label: 'Foreign' },
+  ];
+
   function windowTabsHtml() {
     return WINDOW_TABS.map(function (t) {
       return '<button type="button" class="tab-btn' + (t.key === window_ ? ' active' : '') + '" data-window="' + t.key + '">' + t.label + '</button>';
     }).join('');
   }
 
+  function originTabsHtml() {
+    return ORIGIN_TABS.map(function (t) {
+      return '<button type="button" class="tab-btn' + (t.key === origin_ ? ' active' : '') + '" data-origin="' + t.key + '">' + t.label + '</button>';
+    }).join('');
+  }
+
   function init(app) {
     container = app;
     window_ = '7d';
+    origin_ = 'all';
 
     container.innerHTML =
       '<div class="tools-landing" style="max-width:1100px">' +
         '<h2><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Network Digest</h2>' +
         '<p class="help-text">What happened lately, at a glance -- built on top of ' +
           '<a href="#/tools/new-nodes">New Nodes</a> and <a href="#/tools/node-changes">Node Changes</a>.</p>' +
-        '<div id="network-digest-window-tabs" style="display:flex;gap:6px;margin:12px 0 16px">' + windowTabsHtml() + '</div>' +
+        '<div style="display:flex;gap:16px;flex-wrap:wrap;margin:12px 0 16px">' +
+          '<div id="network-digest-window-tabs" style="display:flex;gap:6px">' + windowTabsHtml() + '</div>' +
+          '<div id="network-digest-origin-tabs" style="display:flex;gap:6px">' + originTabsHtml() + '</div>' +
+        '</div>' +
         '<div id="network-digest-status" class="text-muted" style="font-size:12px;margin-bottom:8px"></div>' +
         '<div id="network-digest-content"></div>' +
       '</div>';
@@ -52,6 +69,41 @@
       });
     }
 
+    var originWrap = document.getElementById('network-digest-origin-tabs');
+    if (originWrap) {
+      originWrap.addEventListener('click', function (evt) {
+        var el = evt.target;
+        if (el && el.closest) el = el.closest('[data-origin]');
+        var o = el && el.dataset ? el.dataset.origin : null;
+        if (!o || o === origin_) return;
+        origin_ = o;
+        originWrap.innerHTML = originTabsHtml();
+        load();
+      });
+    }
+
+    // Delegated once here (not re-wired per render) since it's bound to
+    // the content wrapper, which persists across every render() call --
+    // only its innerHTML is replaced.
+    var contentEl = document.getElementById('network-digest-content');
+    if (contentEl) {
+      contentEl.addEventListener('click', function (evt) {
+        var el = evt.target;
+        var toggleBtn = el && el.closest ? el.closest('[data-area-toggle]') : null;
+        if (toggleBtn) {
+          areaShowAllExpanded = !areaShowAllExpanded;
+          rerenderAreaBreakdown();
+          return;
+        }
+        var row = el && el.closest ? el.closest('[data-area-label]') : null;
+        var label = row && row.dataset ? row.dataset.areaLabel : null;
+        if (label) {
+          expandedAreas[label] = !expandedAreas[label];
+          rerenderAreaBreakdown();
+        }
+      });
+    }
+
     load();
   }
 
@@ -62,9 +114,11 @@
   function load() {
     var statusEl = document.getElementById('network-digest-status');
     var contentEl = document.getElementById('network-digest-content');
+    areaShowAllExpanded = false;
+    expandedAreas = {};
     if (contentEl) contentEl.innerHTML = '<p class="text-muted">Loading…</p>';
     if (statusEl) statusEl.textContent = '';
-    api('/analytics/network-digest?window=' + encodeURIComponent(window_))
+    api('/analytics/network-digest?window=' + encodeURIComponent(window_) + '&origin=' + encodeURIComponent(origin_))
       .then(function (data) {
         render(data);
       })
@@ -87,6 +141,63 @@
     return '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-' + name + '"/></svg>';
   }
 
+  // "Show all N / Show fewer" collapse, same pattern (and same limit) as
+  // the Wardriving/Foreign Traffic tabs' Sessions/Entry Points sections
+  // (public/analytics.js's topNToggleHtml/wireExpandToggle) -- plus each
+  // row itself expands in place to list the actual nodes counted toward
+  // it (dborup: "kan vi lave så man kan klikke på et område og se
+  // hvilket noder"). Both toggle states live at module scope and reset
+  // per load() so switching window/origin starts from a clean slate;
+  // a single delegated click listener (wired once in init(), see below)
+  // survives every re-render since it's bound to the container, not the
+  // rows/buttons that get replaced.
+  var AREA_LIMIT = 10;
+  var areaShowAllExpanded = false;
+  var expandedAreas = {}; // area label -> true while its node list is open
+  var lastAreaBreakdown = [];
+
+  function nodeRefLabel(n) {
+    if (n.name) return n.name;
+    return n.publicKey ? n.publicKey.slice(0, 8) + '…' : 'Unknown';
+  }
+
+  function areaBreakdownRowHtml(a) {
+    var hasNodes = !!(a.nodes && a.nodes.length);
+    var isOpen = hasNodes && !!expandedAreas[a.label];
+    var arrow = hasNodes ? (isOpen ? ' ▾' : ' ▸') : '';
+    var header =
+      '<div class="area-breakdown-row" data-area-label="' + escapeHtml(a.label) + '" style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);cursor:' + (hasNodes ? 'pointer' : 'default') + '">' +
+        '<span class="badge-region">' + escapeHtml(a.label) + '</span>' +
+        '<span>' + a.count + ' new node' + (a.count === 1 ? '' : 's') + arrow + '</span>' +
+      '</div>';
+    var nodesHtml = '';
+    if (isOpen) {
+      nodesHtml =
+        '<div class="area-breakdown-nodes" style="padding:2px 0 10px 12px;font-size:13px">' +
+          a.nodes.map(function (n) {
+            return '<div style="padding:2px 0"><a href="#/nodes/' + encodeURIComponent(n.publicKey) + '">' + escapeHtml(nodeRefLabel(n)) + '</a></div>';
+          }).join('') +
+        '</div>';
+    }
+    return header + nodesHtml;
+  }
+
+  function areaBreakdownToggleHtml(total) {
+    if (total <= AREA_LIMIT) return '';
+    var label = areaShowAllExpanded ? 'Show fewer' : 'Show all ' + total + ' areas';
+    return '<div style="margin-top:6px;text-align:right"><button type="button" data-area-toggle class="btn-link" style="font-size:12px;cursor:pointer;background:none;border:none;color:var(--link-color);padding:0">' + label + '</button></div>';
+  }
+
+  function areaBreakdownInnerHtml(areas) {
+    var shown = areaShowAllExpanded ? areas : areas.slice(0, AREA_LIMIT);
+    return shown.map(areaBreakdownRowHtml).join('') + areaBreakdownToggleHtml(areas.length);
+  }
+
+  function rerenderAreaBreakdown() {
+    var listEl = document.getElementById('network-digest-area-breakdown-list');
+    if (listEl) listEl.innerHTML = areaBreakdownInnerHtml(lastAreaBreakdown);
+  }
+
   function render(data) {
     var statusEl = document.getElementById('network-digest-status');
     var contentEl = document.getElementById('network-digest-content');
@@ -107,15 +218,15 @@
       tile(phIcon('map-pin'), data.positionMoves, 'Position Moves', '#/tools/node-changes', data.changesCapped) +
       tile(phIcon('arrow-clockwise'), data.resurrections, 'Returned', '#/tools/node-changes', data.changesCapped);
 
-    var topAreaHtml = '';
-    if (data.topArea) {
-      topAreaHtml =
+    var areaBreakdownHtml = '';
+    var areas = data.areaBreakdown || [];
+    lastAreaBreakdown = areas;
+    if (areas.length > 0) {
+      areaBreakdownHtml =
         '<div class="analytics-card" style="margin-top:16px">' +
-          '<h3 style="margin:0 0 4px">' + phIcon('map-trifold') + ' Most Growth</h3>' +
-          '<p style="margin:0">' +
-            '<span class="badge-region">' + escapeHtml(data.topArea.label) + '</span> — ' +
-            data.topArea.count + ' new node' + (data.topArea.count === 1 ? '' : 's') +
-          '</p>' +
+          '<h3 style="margin:0 0 8px">' + phIcon('map-trifold') + ' Area Breakdown</h3>' +
+          '<p class="help-text" style="margin:0 0 8px;font-size:12px">Click an area to see which nodes.</p>' +
+          '<div id="network-digest-area-breakdown-list">' + areaBreakdownInnerHtml(areas) + '</div>' +
         '</div>';
     }
 
@@ -127,7 +238,7 @@
 
     contentEl.innerHTML =
       '<div class="stats-grid">' + tiles + '</div>' +
-      topAreaHtml;
+      areaBreakdownHtml;
   }
 
   window.NetworkDigestTool = { init: init, destroy: destroy };

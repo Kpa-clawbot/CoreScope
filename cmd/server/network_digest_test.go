@@ -19,7 +19,7 @@ func TestComputeNetworkDigest_CountsNewNodesWithinWindow(t *testing.T) {
 	insertNewNodeRow(t, srv, "digestnew0000001", "InWindow", "repeater", f64(56.0), f64(10.0), now.Add(-1*time.Hour).Format(time.RFC3339))
 	insertNewNodeRow(t, srv, "digestold0000001", "OutOfWindow", "repeater", f64(56.0), f64(10.0), now.Add(-10*24*time.Hour).Format(time.RFC3339))
 
-	digest, err := srv.computeNetworkDigest(now.Add(-7 * 24 * time.Hour))
+	digest, err := srv.computeNetworkDigest(now.Add(-7*24*time.Hour), "all")
 	if err != nil {
 		t.Fatalf("computeNetworkDigest: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestComputeNetworkDigest_CountsChangeTypesWithinWindow(t *testing.T) {
 	// Outside the window -- must not be counted.
 	insertNodeChangeRow(t, srv, "digestoldrole00001", "role", "sensor", "repeater", outOfWindow)
 
-	digest, err := srv.computeNetworkDigest(now.Add(-7 * 24 * time.Hour))
+	digest, err := srv.computeNetworkDigest(now.Add(-7*24*time.Hour), "all")
 	if err != nil {
 		t.Fatalf("computeNetworkDigest: %v", err)
 	}
@@ -64,9 +64,11 @@ func TestComputeNetworkDigest_CountsChangeTypesWithinWindow(t *testing.T) {
 	}
 }
 
-// TestComputeNetworkDigest_TopArea confirms the area with the most
-// new-node activity in the window wins, and ties break alphabetically.
-func TestComputeNetworkDigest_TopArea(t *testing.T) {
+// TestComputeNetworkDigest_AreaBreakdownRanked confirms EVERY area with
+// activity is returned (not just the winner), most active first, ties
+// alphabetical -- dborup asked for an overview across all areas rather
+// than being shown only one area at a time.
+func TestComputeNetworkDigest_AreaBreakdownRanked(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	ensureInactiveNodesTable(t, srv)
 	ensureNodeChangesTable(t, srv)
@@ -76,24 +78,68 @@ func TestComputeNetworkDigest_TopArea(t *testing.T) {
 		"AREAB": {Label: "Area B", LatMin: f64(10.0), LatMax: f64(10.2), LonMin: f64(50.0), LonMax: f64(50.2)},
 	}
 	now := time.Now().UTC()
-	// Two new nodes in Area A, one in Area B -- Area A should win.
+	// Two new nodes in Area A, one in Area B -- Area A should rank first,
+	// but Area B should still be present in the breakdown, not dropped.
 	insertNewNodeRow(t, srv, "topareaa0000001", "A1", "repeater", f64(56.0), f64(10.0), now.Add(-1*time.Hour).Format(time.RFC3339))
 	insertNewNodeRow(t, srv, "topareaa0000002", "A2", "repeater", f64(56.0), f64(10.0), now.Add(-2*time.Hour).Format(time.RFC3339))
 	insertNewNodeRow(t, srv, "topareab0000001", "B1", "repeater", f64(10.1), f64(50.1), now.Add(-3*time.Hour).Format(time.RFC3339))
 
-	digest, err := srv.computeNetworkDigest(now.Add(-7 * 24 * time.Hour))
+	digest, err := srv.computeNetworkDigest(now.Add(-7*24*time.Hour), "all")
 	if err != nil {
 		t.Fatalf("computeNetworkDigest: %v", err)
 	}
-	if digest.TopArea == nil || digest.TopArea.Label != "Area A" || digest.TopArea.Count != 2 {
-		t.Errorf("TopArea = %+v, want Area A with count 2", digest.TopArea)
+	if len(digest.AreaBreakdown) != 2 {
+		t.Fatalf("AreaBreakdown = %+v, want 2 entries (both areas, not just the winner)", digest.AreaBreakdown)
+	}
+	if digest.AreaBreakdown[0].Label != "Area A" || digest.AreaBreakdown[0].Count != 2 {
+		t.Errorf("AreaBreakdown[0] = %+v, want Area A with count 2", digest.AreaBreakdown[0])
+	}
+	if digest.AreaBreakdown[1].Label != "Area B" || digest.AreaBreakdown[1].Count != 1 {
+		t.Errorf("AreaBreakdown[1] = %+v, want Area B with count 1", digest.AreaBreakdown[1])
 	}
 }
 
-// TestComputeNetworkDigest_TopAreaNilWhenNoAreasConfigured confirms
-// TopArea stays nil rather than a zero-valued struct when no areas are
-// configured (matches New Nodes' own nil-Areas behavior in that case).
-func TestComputeNetworkDigest_TopAreaNilWhenNoAreasConfigured(t *testing.T) {
+// TestComputeNetworkDigest_AreaBreakdownIncludesNodeRefs confirms each
+// AreaGrowth entry carries the actual nodes counted toward it (newest
+// first), so the frontend can show which nodes are behind the number
+// without a second request -- dborup asked to be able to click an area
+// and see which nodes are in it.
+func TestComputeNetworkDigest_AreaBreakdownIncludesNodeRefs(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ensureInactiveNodesTable(t, srv)
+	ensureNodeChangesTable(t, srv)
+
+	srv.cfg.Areas = map[string]AreaEntry{
+		"AREAA": {Label: "Area A", LatMin: f64(55.9), LatMax: f64(56.2), LonMin: f64(9.9), LonMax: f64(10.2)},
+	}
+	now := time.Now().UTC()
+	insertNewNodeRow(t, srv, "arearef0000000001", "Older", "repeater", f64(56.0), f64(10.0), now.Add(-2*time.Hour).Format(time.RFC3339))
+	insertNewNodeRow(t, srv, "arearef0000000002", "Newer", "repeater", f64(56.0), f64(10.0), now.Add(-1*time.Hour).Format(time.RFC3339))
+
+	digest, err := srv.computeNetworkDigest(now.Add(-7*24*time.Hour), "all")
+	if err != nil {
+		t.Fatalf("computeNetworkDigest: %v", err)
+	}
+	if len(digest.AreaBreakdown) != 1 {
+		t.Fatalf("AreaBreakdown = %+v, want 1 area", digest.AreaBreakdown)
+	}
+	nodes := digest.AreaBreakdown[0].Nodes
+	if len(nodes) != 2 {
+		t.Fatalf("Nodes = %+v, want 2 node refs", nodes)
+	}
+	if nodes[0].PublicKey != "arearef0000000002" || nodes[0].Name != "Newer" {
+		t.Errorf("Nodes[0] = %+v, want the newer node first", nodes[0])
+	}
+	if nodes[1].PublicKey != "arearef0000000001" || nodes[1].Name != "Older" {
+		t.Errorf("Nodes[1] = %+v, want the older node second", nodes[1])
+	}
+}
+
+// TestComputeNetworkDigest_AreaBreakdownNilWhenNoAreasConfigured
+// confirms AreaBreakdown stays empty/nil rather than a slice of
+// zero-valued structs when no areas are configured (matches New Nodes'
+// own nil-Areas behavior in that case).
+func TestComputeNetworkDigest_AreaBreakdownNilWhenNoAreasConfigured(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	ensureInactiveNodesTable(t, srv)
 	ensureNodeChangesTable(t, srv)
@@ -102,12 +148,12 @@ func TestComputeNetworkDigest_TopAreaNilWhenNoAreasConfigured(t *testing.T) {
 	now := time.Now().UTC()
 	insertNewNodeRow(t, srv, "noareasnode000001", "NoArea", "repeater", f64(56.0), f64(10.0), now.Add(-1*time.Hour).Format(time.RFC3339))
 
-	digest, err := srv.computeNetworkDigest(now.Add(-7 * 24 * time.Hour))
+	digest, err := srv.computeNetworkDigest(now.Add(-7*24*time.Hour), "all")
 	if err != nil {
 		t.Fatalf("computeNetworkDigest: %v", err)
 	}
-	if digest.TopArea != nil {
-		t.Errorf("TopArea = %+v, want nil when no areas are configured", digest.TopArea)
+	if len(digest.AreaBreakdown) != 0 {
+		t.Errorf("AreaBreakdown = %+v, want empty when no areas are configured", digest.AreaBreakdown)
 	}
 }
 
@@ -144,7 +190,7 @@ func TestComputeNetworkDigest_NewNodesCappedFlag(t *testing.T) {
 		insertNewNodeRow(t, srv, pubkey, "Cap", "repeater", f64(56.0), f64(10.0), now.Add(-time.Duration(i)*time.Minute).Format(time.RFC3339))
 	}
 
-	digest, err := srv.computeNetworkDigest(now.Add(-7 * 24 * time.Hour))
+	digest, err := srv.computeNetworkDigest(now.Add(-7*24*time.Hour), "all")
 	if err != nil {
 		t.Fatalf("computeNetworkDigest: %v", err)
 	}
@@ -166,7 +212,7 @@ func TestComputeNetworkDigest_NewNodesNotCappedWhenUnderLimit(t *testing.T) {
 	now := time.Now().UTC()
 	insertNewNodeRow(t, srv, "notcapped0000001", "Solo", "repeater", f64(56.0), f64(10.0), now.Add(-1*time.Hour).Format(time.RFC3339))
 
-	digest, err := srv.computeNetworkDigest(now.Add(-7 * 24 * time.Hour))
+	digest, err := srv.computeNetworkDigest(now.Add(-7*24*time.Hour), "all")
 	if err != nil {
 		t.Fatalf("computeNetworkDigest: %v", err)
 	}
@@ -188,7 +234,7 @@ func TestComputeNetworkDigest_ChangesCappedFlag(t *testing.T) {
 		insertNodeChangeRow(t, srv, pubkey, "role", "companion", "repeater", now.Add(-time.Duration(i)*time.Minute).Format(time.RFC3339))
 	}
 
-	digest, err := srv.computeNetworkDigest(now.Add(-7 * 24 * time.Hour))
+	digest, err := srv.computeNetworkDigest(now.Add(-7*24*time.Hour), "all")
 	if err != nil {
 		t.Fatalf("computeNetworkDigest: %v", err)
 	}
@@ -197,6 +243,152 @@ func TestComputeNetworkDigest_ChangesCappedFlag(t *testing.T) {
 	}
 	if digest.RoleChanges != nodeChangesSQLFetchCap {
 		t.Errorf("RoleChanges = %d, want %d (the full capped fetch)", digest.RoleChanges, nodeChangesSQLFetchCap)
+	}
+}
+
+// TestComputeNetworkDigest_AreaBreakdownPrefersMostSpecific confirms a
+// node counts toward its single most specific area only, NOT every
+// overlapping area -- reported by dborup after live verification on stg
+// always showed "Europa" (an umbrella area covering everything) as Most
+// Growth regardless of where nodes actually were, since
+// AreaKeysForPoint (used before this fix) tallies every overlapping
+// area equally rather than picking the most specific one per node. The
+// umbrella area should NOT even appear in the breakdown here, since
+// nothing counts toward it once each node picks its smallest match.
+func TestComputeNetworkDigest_AreaBreakdownPrefersMostSpecific(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ensureInactiveNodesTable(t, srv)
+	ensureNodeChangesTable(t, srv)
+
+	srv.cfg.Areas = map[string]AreaEntry{
+		// A broad umbrella area whose box contains AREAB entirely.
+		"UMBRELLA": {Label: "Umbrella", LatMin: f64(0), LatMax: f64(90), LonMin: f64(0), LonMax: f64(90)},
+		"AREAB":    {Label: "Area B", LatMin: f64(55.9), LatMax: f64(56.2), LonMin: f64(9.9), LonMax: f64(10.2)},
+	}
+	now := time.Now().UTC()
+	insertNewNodeRow(t, srv, "specific0000001", "S1", "repeater", f64(56.0), f64(10.0), now.Add(-1*time.Hour).Format(time.RFC3339))
+
+	digest, err := srv.computeNetworkDigest(now.Add(-7*24*time.Hour), "all")
+	if err != nil {
+		t.Fatalf("computeNetworkDigest: %v", err)
+	}
+	if len(digest.AreaBreakdown) != 1 || digest.AreaBreakdown[0].Label != "Area B" {
+		t.Errorf("AreaBreakdown = %+v, want just the more specific \"Area B\", not the umbrella area that also happens to contain it", digest.AreaBreakdown)
+	}
+}
+
+// TestComputeNetworkDigest_OriginFilterNewNodes confirms origin=domestic
+// / origin=foreign narrow the New Nodes count (and Most Growth) using
+// the same nodes.foreign_advert flag as Tools > New Nodes' toggle.
+func TestComputeNetworkDigest_OriginFilterNewNodes(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ensureInactiveNodesTable(t, srv)
+	ensureNodeChangesTable(t, srv)
+
+	now := time.Now().UTC()
+	insertNewNodeRow(t, srv, "domesticnew0000001", "Domestic", "repeater", f64(56.0), f64(10.0), now.Add(-1*time.Hour).Format(time.RFC3339))
+	insertNewNodeRow(t, srv, "foreignnew00000001", "Foreign", "repeater", f64(52.5), f64(13.4), now.Add(-1*time.Hour).Format(time.RFC3339))
+	if _, err := srv.db.conn.Exec(`UPDATE nodes SET foreign_advert = 1 WHERE public_key = ?`, "foreignnew00000001"); err != nil {
+		t.Fatalf("set foreign_advert: %v", err)
+	}
+
+	since := now.Add(-7 * 24 * time.Hour)
+	all, err := srv.computeNetworkDigest(since, "all")
+	if err != nil {
+		t.Fatalf("computeNetworkDigest(all): %v", err)
+	}
+	if all.NewNodes != 2 {
+		t.Errorf("all.NewNodes = %d, want 2", all.NewNodes)
+	}
+
+	domestic, err := srv.computeNetworkDigest(since, "domestic")
+	if err != nil {
+		t.Fatalf("computeNetworkDigest(domestic): %v", err)
+	}
+	if domestic.NewNodes != 1 {
+		t.Errorf("domestic.NewNodes = %d, want 1", domestic.NewNodes)
+	}
+
+	foreign, err := srv.computeNetworkDigest(since, "foreign")
+	if err != nil {
+		t.Fatalf("computeNetworkDigest(foreign): %v", err)
+	}
+	if foreign.NewNodes != 1 {
+		t.Errorf("foreign.NewNodes = %d, want 1", foreign.NewNodes)
+	}
+}
+
+// TestComputeNetworkDigest_OriginFilterNodeChanges confirms origin
+// filtering also applies to the node_changes side, resolved live
+// against the node's current foreign_advert (node_changes rows don't
+// store their own snapshot of it).
+func TestComputeNetworkDigest_OriginFilterNodeChanges(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ensureInactiveNodesTable(t, srv)
+	ensureNodeChangesTable(t, srv)
+
+	now := time.Now().UTC()
+	inWindow := now.Add(-1 * time.Hour).Format(time.RFC3339)
+	insertNewNodeRow(t, srv, "domesticchg0000001", "Domestic", "repeater", f64(56.0), f64(10.0), now.Add(-30*24*time.Hour).Format(time.RFC3339))
+	insertNewNodeRow(t, srv, "foreignchg00000001", "Foreign", "repeater", f64(52.5), f64(13.4), now.Add(-30*24*time.Hour).Format(time.RFC3339))
+	if _, err := srv.db.conn.Exec(`UPDATE nodes SET foreign_advert = 1 WHERE public_key = ?`, "foreignchg00000001"); err != nil {
+		t.Fatalf("set foreign_advert: %v", err)
+	}
+	insertNodeChangeRow(t, srv, "domesticchg0000001", "role", "companion", "repeater", inWindow)
+	insertNodeChangeRow(t, srv, "foreignchg00000001", "role", "companion", "repeater", inWindow)
+
+	since := now.Add(-7 * 24 * time.Hour)
+	domestic, err := srv.computeNetworkDigest(since, "domestic")
+	if err != nil {
+		t.Fatalf("computeNetworkDigest(domestic): %v", err)
+	}
+	if domestic.RoleChanges != 1 {
+		t.Errorf("domestic.RoleChanges = %d, want 1", domestic.RoleChanges)
+	}
+
+	foreign, err := srv.computeNetworkDigest(since, "foreign")
+	if err != nil {
+		t.Fatalf("computeNetworkDigest(foreign): %v", err)
+	}
+	if foreign.RoleChanges != 1 {
+		t.Errorf("foreign.RoleChanges = %d, want 1", foreign.RoleChanges)
+	}
+}
+
+// TestHandleNetworkDigest_OriginEchoedAndDefaulted confirms the handler
+// defaults origin to "all" and echoes back whatever was requested.
+func TestHandleNetworkDigest_OriginEchoedAndDefaulted(t *testing.T) {
+	srv, router := setupTestServer(t)
+	ensureInactiveNodesTable(t, srv)
+	ensureNodeChangesTable(t, srv)
+
+	req := httptest.NewRequest("GET", "/api/analytics/network-digest", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if !strings.Contains(w.Body.String(), `"origin":"all"`) {
+		t.Errorf("response should default+echo origin=all, got: %s", w.Body.String())
+	}
+
+	req2 := httptest.NewRequest("GET", "/api/analytics/network-digest?origin=foreign", nil)
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+	if !strings.Contains(w2.Body.String(), `"origin":"foreign"`) {
+		t.Errorf("response should echo origin=foreign, got: %s", w2.Body.String())
+	}
+}
+
+// TestHandleNetworkDigest_InvalidOriginRejected confirms a malformed
+// origin query param is a 400, not a silent fallback to "all".
+func TestHandleNetworkDigest_InvalidOriginRejected(t *testing.T) {
+	srv, router := setupTestServer(t)
+	ensureInactiveNodesTable(t, srv)
+	ensureNodeChangesTable(t, srv)
+
+	req := httptest.NewRequest("GET", "/api/analytics/network-digest?origin=extraterrestrial", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 400 {
+		t.Errorf("status = %d, want 400 for an invalid origin, body: %s", w.Code, w.Body.String())
 	}
 }
 

@@ -26,7 +26,7 @@ function makeDigest(overrides) {
     nameChanges: 0,
     positionMoves: 2,
     resurrections: 1,
-    topArea: { label: 'Area A', count: 2 },
+    areaBreakdown: [{ label: 'Area A', count: 2 }],
   }, overrides);
 }
 
@@ -131,6 +131,52 @@ function waitForLoad() {
     assert.strictEqual(sb.__apiCalls.length, callsBefore, 'expected no additional api call for a no-op tab click');
   });
 
+  await test('init renders origin tabs with All active by default and requests origin=all', async () => {
+    const sb = initWith(makeDigest());
+    await waitForLoad();
+    const html = sb.__container.innerHTML;
+    assert.ok(html.includes('data-origin="all"'), `expected an All tab, got: ${html}`);
+    assert.ok(/class="tab-btn active"[^>]*data-origin="all"|data-origin="all"[^>]*class="tab-btn active"/.test(html),
+      `expected the All tab to be active by default, got: ${html}`);
+    assert.ok(sb.__apiCalls[0].includes('origin=all'), `expected the initial load to request origin=all, got: ${sb.__apiCalls[0]}`);
+  });
+
+  await test('clicking a different origin tab reloads data for that origin', async () => {
+    const sb = initWith(makeDigest());
+    await waitForLoad();
+    const tabs = sb.__docStore['network-digest-origin-tabs'];
+    tabs._listeners.click({ target: { closest: () => ({ dataset: { origin: 'foreign' } }) } });
+    await waitForLoad();
+    assert.ok(sb.__apiCalls[sb.__apiCalls.length - 1].includes('origin=foreign'), `expected a reload for origin=foreign, got: ${sb.__apiCalls}`);
+    assert.ok(tabs.innerHTML.includes('data-origin="foreign"'), 'expected the tabs to re-render');
+    assert.ok(/class="tab-btn active"[^>]*data-origin="foreign"|data-origin="foreign"[^>]*class="tab-btn active"/.test(tabs.innerHTML),
+      `expected the Foreign tab to become active, got: ${tabs.innerHTML}`);
+  });
+
+  await test('clicking the already-active origin tab does not trigger a reload', async () => {
+    const sb = initWith(makeDigest());
+    await waitForLoad();
+    const callsBefore = sb.__apiCalls.length;
+    const tabs = sb.__docStore['network-digest-origin-tabs'];
+    tabs._listeners.click({ target: { closest: () => ({ dataset: { origin: 'all' } }) } });
+    await waitForLoad();
+    assert.strictEqual(sb.__apiCalls.length, callsBefore, 'expected no additional api call for a no-op origin tab click');
+  });
+
+  await test('window and origin filters are independent -- switching one keeps the other', async () => {
+    const sb = initWith(makeDigest());
+    await waitForLoad();
+    const windowTabs = sb.__docStore['network-digest-window-tabs'];
+    const originTabs = sb.__docStore['network-digest-origin-tabs'];
+    originTabs._listeners.click({ target: { closest: () => ({ dataset: { origin: 'domestic' } }) } });
+    await waitForLoad();
+    windowTabs._listeners.click({ target: { closest: () => ({ dataset: { window: '24h' } }) } });
+    await waitForLoad();
+    const lastCall = sb.__apiCalls[sb.__apiCalls.length - 1];
+    assert.ok(lastCall.includes('window=24h') && lastCall.includes('origin=domestic'),
+      `expected the last request to carry both filters, got: ${lastCall}`);
+  });
+
   await test('renders a stat tile for each of the five counts, linking to the right drill-down tool', async () => {
     const sb = initWith(makeDigest());
     await waitForLoad();
@@ -145,31 +191,140 @@ function waitForLoad() {
     assert.ok(content.innerHTML.includes('>3<'), `expected the newNodes value 3 to render, got: ${content.innerHTML}`);
   });
 
-  await test('renders the topArea card when present', async () => {
-    const sb = initWith(makeDigest({ topArea: { label: 'Area A', count: 2 } }));
+  await test('renders the area breakdown card with the area label and count', async () => {
+    const sb = initWith(makeDigest({ areaBreakdown: [{ label: 'Area A', count: 2 }] }));
     await waitForLoad();
     const content = sb.__docStore['network-digest-content'];
-    assert.ok(content.innerHTML.includes('Area A'), `expected the top area label, got: ${content.innerHTML}`);
+    assert.ok(content.innerHTML.includes('Area A'), `expected the area label, got: ${content.innerHTML}`);
     assert.ok(content.innerHTML.includes('2 new nodes'), `expected the pluralized count, got: ${content.innerHTML}`);
   });
 
-  await test('singular "new node" wording when topArea count is 1', async () => {
-    const sb = initWith(makeDigest({ topArea: { label: 'Area B', count: 1 } }));
+  await test('singular "new node" wording when an area count is 1', async () => {
+    const sb = initWith(makeDigest({ areaBreakdown: [{ label: 'Area B', count: 1 }] }));
     await waitForLoad();
     const content = sb.__docStore['network-digest-content'];
     assert.ok(content.innerHTML.includes('1 new node') && !content.innerHTML.includes('1 new nodes'),
       `expected singular wording, got: ${content.innerHTML}`);
   });
 
-  await test('omits the topArea card entirely when absent', async () => {
-    const sb = initWith(makeDigest({ topArea: null }));
+  await test('renders EVERY area in the breakdown, not just the top one', async () => {
+    const sb = initWith(makeDigest({ areaBreakdown: [{ label: 'Area A', count: 5 }, { label: 'Area B', count: 3 }, { label: 'Area C', count: 1 }] }));
     await waitForLoad();
     const content = sb.__docStore['network-digest-content'];
-    assert.ok(!content.innerHTML.includes('Most Growth'), `expected no top-area card, got: ${content.innerHTML}`);
+    assert.ok(content.innerHTML.includes('Area A'), 'expected Area A to render');
+    assert.ok(content.innerHTML.includes('Area B'), 'expected Area B to render too, not just the winner');
+    assert.ok(content.innerHTML.includes('Area C'), 'expected Area C to render too');
+  });
+
+  await test('collapses to 10 areas with a "Show all" toggle when there are more than 10', async () => {
+    const many = Array.from({ length: 15 }, (_, i) => ({ label: 'Area ' + i, count: 15 - i }));
+    const sb = initWith(makeDigest({ areaBreakdown: many }));
+    await waitForLoad();
+    const content = sb.__docStore['network-digest-content'];
+    assert.ok(content.innerHTML.includes('Area 0'), 'expected the top area to render');
+    assert.ok(content.innerHTML.includes('Area 9'), 'expected the 10th area (index 9) to render');
+    assert.ok(!content.innerHTML.includes('Area 10'), 'expected the 11th area to be collapsed away');
+    assert.ok(content.innerHTML.includes('Show all 15 areas'), `expected a "Show all 15 areas" toggle, got: ${content.innerHTML}`);
+  });
+
+  await test('no "Show all" toggle when there are 10 or fewer areas', async () => {
+    const ten = Array.from({ length: 10 }, (_, i) => ({ label: 'Area ' + i, count: 10 - i }));
+    const sb = initWith(makeDigest({ areaBreakdown: ten }));
+    await waitForLoad();
+    const content = sb.__docStore['network-digest-content'];
+    assert.ok(!content.innerHTML.includes('Show all'), `expected no toggle button for exactly 10 areas, got: ${content.innerHTML}`);
+  });
+
+  // rerenderAreaBreakdown() (fired by the click handlers below) writes
+  // directly into the #network-digest-area-breakdown-list element, not
+  // into #network-digest-content's innerHTML -- this sandbox has no real
+  // DOM tree, so document.getElementById returns an independent fakeEl
+  // per id rather than something nested inside content's own markup.
+  // Assert against that element specifically for click-driven updates.
+
+  await test('clicking "Show all" via the delegated listener expands the collapsed areas', async () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({ label: 'Area ' + i, count: 12 - i }));
+    const sb = initWith(makeDigest({ areaBreakdown: many }));
+    await waitForLoad();
+    const content = sb.__docStore['network-digest-content'];
+    assert.ok(!content.innerHTML.includes('Area 11'), 'expected Area 11 to be collapsed away initially');
+    content._listeners.click({ target: { closest: (sel) => (sel === '[data-area-toggle]' ? { dataset: {} } : null) } });
+    const list = sb.__docStore['network-digest-area-breakdown-list'];
+    assert.ok(list.innerHTML.includes('Area 11'), `expected Area 11 to appear after expanding, got: ${list.innerHTML}`);
+    assert.ok(list.innerHTML.includes('Show fewer'), `expected the toggle label to flip to "Show fewer", got: ${list.innerHTML}`);
+  });
+
+  await test('clicking an area row reveals the node list with names and node links', async () => {
+    const sb = initWith(makeDigest({
+      areaBreakdown: [{
+        label: 'Area A',
+        count: 2,
+        nodes: [
+          { publicKey: 'aa'.repeat(32), name: 'FirstNode', firstSeen: '2026-07-22T09:00:00Z' },
+          { publicKey: 'bb'.repeat(32), name: 'SecondNode', firstSeen: '2026-07-22T08:00:00Z' },
+        ],
+      }],
+    }));
+    await waitForLoad();
+    const content = sb.__docStore['network-digest-content'];
+    assert.ok(!content.innerHTML.includes('FirstNode'), 'expected the node list to be collapsed initially');
+    content._listeners.click({ target: { closest: (sel) => (sel === '[data-area-label]' ? { dataset: { areaLabel: 'Area A' } } : null) } });
+    const list = sb.__docStore['network-digest-area-breakdown-list'];
+    assert.ok(list.innerHTML.includes('FirstNode'), `expected FirstNode to appear after clicking the area, got: ${list.innerHTML}`);
+    assert.ok(list.innerHTML.includes('SecondNode'), 'expected SecondNode to appear too');
+    assert.ok(list.innerHTML.includes('href="#/nodes/' + 'aa'.repeat(32) + '"'), 'expected a link to the node detail page');
+  });
+
+  await test('clicking the same area row again collapses the node list', async () => {
+    const sb = initWith(makeDigest({
+      areaBreakdown: [{ label: 'Area A', count: 1, nodes: [{ publicKey: 'cc'.repeat(32), name: 'ToggleNode', firstSeen: '2026-07-22T09:00:00Z' }] }],
+    }));
+    await waitForLoad();
+    const content = sb.__docStore['network-digest-content'];
+    const clickRow = () => content._listeners.click({ target: { closest: (sel) => (sel === '[data-area-label]' ? { dataset: { areaLabel: 'Area A' } } : null) } });
+    clickRow();
+    const list = sb.__docStore['network-digest-area-breakdown-list'];
+    assert.ok(list.innerHTML.includes('ToggleNode'), 'expected the node list open after the first click');
+    clickRow();
+    assert.ok(!list.innerHTML.includes('ToggleNode'), `expected the node list closed after a second click, got: ${list.innerHTML}`);
+  });
+
+  await test('a node with no known name falls back to a truncated pubkey', async () => {
+    const sb = initWith(makeDigest({
+      areaBreakdown: [{ label: 'Area A', count: 1, nodes: [{ publicKey: 'deadbeefcafebabe0000000000000000000000000000000000000000000000', name: '', firstSeen: '2026-07-22T09:00:00Z' }] }],
+    }));
+    await waitForLoad();
+    const content = sb.__docStore['network-digest-content'];
+    content._listeners.click({ target: { closest: (sel) => (sel === '[data-area-label]' ? { dataset: { areaLabel: 'Area A' } } : null) } });
+    const list = sb.__docStore['network-digest-area-breakdown-list'];
+    assert.ok(list.innerHTML.includes('deadbeef'), `expected a truncated-pubkey fallback, got: ${list.innerHTML}`);
+  });
+
+  await test('expand state resets on a fresh load (window/origin switch)', async () => {
+    const sb = initWith(makeDigest({
+      areaBreakdown: [{ label: 'Area A', count: 1, nodes: [{ publicKey: 'ee'.repeat(32), name: 'ResetNode', firstSeen: '2026-07-22T09:00:00Z' }] }],
+    }));
+    await waitForLoad();
+    const content = sb.__docStore['network-digest-content'];
+    content._listeners.click({ target: { closest: (sel) => (sel === '[data-area-label]' ? { dataset: { areaLabel: 'Area A' } } : null) } });
+    const list = sb.__docStore['network-digest-area-breakdown-list'];
+    assert.ok(list.innerHTML.includes('ResetNode'), 'expected the node list open before switching windows');
+
+    const windowTabs = sb.__docStore['network-digest-window-tabs'];
+    windowTabs._listeners.click({ target: { closest: () => ({ dataset: { window: '30d' } }) } });
+    await waitForLoad();
+    assert.ok(!content.innerHTML.includes('ResetNode'), `expected the expand state to reset on a fresh load, got: ${content.innerHTML}`);
+  });
+
+  await test('omits the area breakdown card entirely when absent', async () => {
+    const sb = initWith(makeDigest({ areaBreakdown: null }));
+    await waitForLoad();
+    const content = sb.__docStore['network-digest-content'];
+    assert.ok(!content.innerHTML.includes('Area Breakdown'), `expected no area breakdown card, got: ${content.innerHTML}`);
   });
 
   await test('shows a neutral "nothing to report" message when every count is zero', async () => {
-    const sb = initWith(makeDigest({ newNodes: 0, roleChanges: 0, nameChanges: 0, positionMoves: 0, resurrections: 0, topArea: null }));
+    const sb = initWith(makeDigest({ newNodes: 0, roleChanges: 0, nameChanges: 0, positionMoves: 0, resurrections: 0, areaBreakdown: null }));
     await waitForLoad();
     const content = sb.__docStore['network-digest-content'];
     assert.ok(content.innerHTML.includes('Nothing to report'), `expected the all-zero message, got: ${content.innerHTML}`);
