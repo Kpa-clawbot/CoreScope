@@ -94,6 +94,9 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensurePingTriggersTable(rw, logf); err != nil {
 		return fmt.Errorf("ensure ping_triggers: %w", err)
 	}
+	if err := ensureNodeChangesTable(rw, logf); err != nil {
+		return fmt.Errorf("ensure node_changes: %w", err)
+	}
 	if err := ensureLastNeighborsReportAtColumn(rw, logf); err != nil {
 		return fmt.Errorf("ensure observers.last_neighbors_report_at: %w", err)
 	}
@@ -189,6 +192,7 @@ func AssertReady(ro *sql.DB) error {
 	// unset (unknown state).
 	mustCol("observers", "can_relay_seen")
 	mustTable("ping_triggers")
+	mustTable("node_changes")
 	// #1865 follow-up: which observers send /neighbors reports (opt-in
 	// firmware feature). Owned by ingestor — TouchObserverNeighborsReport
 	// is the only writer.
@@ -761,6 +765,48 @@ func ensurePingTriggersTable(rw *sql.DB, logf Logger) error {
 		return fmt.Errorf("record ping_triggers_v1: %w", err)
 	}
 	logf("[dbschema] created ping_triggers table")
+	return nil
+}
+
+// ensureNodeChangesTable creates node_changes for the node-change audit
+// tool (dborup, 2026-07-29, follow-up to the New Nodes feed): a durable
+// log of role/name/position changes and "returned after being pruned"
+// events, written by cmd/ingestor's UpsertNode as they happen -- a
+// dedicated table rather than diffing periodic snapshots, so nothing
+// slips through between polls. change_type is one of "role", "name",
+// "position", "resurrected". old_value/new_value are free-form text,
+// interpretation depends on change_type (role/name: the raw values;
+// position: "lat,lon"; resurrected: old_value is the last_seen timestamp
+// from inactive_nodes before it returned, new_value is empty).
+func ensureNodeChangesTable(rw *sql.DB, logf Logger) error {
+	if err := ensureMigrationsTable(rw); err != nil {
+		return err
+	}
+	row := rw.QueryRow(`SELECT 1 FROM _migrations WHERE name = 'node_changes_v1'`)
+	var one int
+	if err := row.Scan(&one); err == nil {
+		return nil // already applied
+	}
+	if _, err := rw.Exec(`CREATE TABLE IF NOT EXISTS node_changes (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		public_key TEXT NOT NULL,
+		change_type TEXT NOT NULL,
+		old_value TEXT,
+		new_value TEXT,
+		detected_at TEXT NOT NULL
+	)`); err != nil {
+		return fmt.Errorf("create node_changes: %w", err)
+	}
+	if _, err := rw.Exec(`CREATE INDEX IF NOT EXISTS idx_node_changes_detected_at ON node_changes(detected_at)`); err != nil {
+		return fmt.Errorf("create idx_node_changes_detected_at: %w", err)
+	}
+	if _, err := rw.Exec(`CREATE INDEX IF NOT EXISTS idx_node_changes_public_key ON node_changes(public_key)`); err != nil {
+		return fmt.Errorf("create idx_node_changes_public_key: %w", err)
+	}
+	if _, err := rw.Exec(`INSERT OR IGNORE INTO _migrations (name) VALUES ('node_changes_v1')`); err != nil {
+		return fmt.Errorf("record node_changes_v1: %w", err)
+	}
+	logf("[dbschema] created node_changes table")
 	return nil
 }
 

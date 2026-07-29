@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -82,6 +83,9 @@ type Store struct {
 	stmtUpdateNodeTelemetry    *sql.Stmt
 	stmtUpsertMetrics          *sql.Stmt
 	stmtInsertPingTrigger      *sql.Stmt
+	stmtSelectNodeForChange    *sql.Stmt
+	stmtCheckInactiveNode      *sql.Stmt
+	stmtInsertNodeChange       *sql.Stmt
 
 	sampleIntervalSec int
 	backfillWg        sync.WaitGroup
@@ -848,6 +852,27 @@ func (s *Store) prepareStatements() error {
 		return err
 	}
 
+	// Node-change audit log (dborup, 2026-07-29 follow-up to New Nodes).
+	// See UpsertNode's detectAndLogNodeChange for how these three are used
+	// together: read the node's current state, compare against the
+	// incoming ADVERT, and (only if it existed already, or was previously
+	// pruned to inactive_nodes) write a node_changes row before upserting.
+	s.stmtSelectNodeForChange, err = s.db.Prepare(`SELECT name, role, lat, lon FROM nodes WHERE public_key = ?`)
+	if err != nil {
+		return err
+	}
+	s.stmtCheckInactiveNode, err = s.db.Prepare(`SELECT last_seen FROM inactive_nodes WHERE public_key = ? LIMIT 1`)
+	if err != nil {
+		return err
+	}
+	s.stmtInsertNodeChange, err = s.db.Prepare(`
+		INSERT INTO node_changes (public_key, change_type, old_value, new_value, detected_at)
+		VALUES (?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+
 	// #1690: bump transmissions.last_seen to MAX(current, ?) on every
 	// observation insert so cold-load can filter on effective recency.
 	// This is NOT a migration — it's the steady-state writer path. The
@@ -1102,6 +1127,7 @@ func (s *Store) UpsertNode(pubKey, name, role string, lat, lon *float64, lastSee
 	if now == "" {
 		now = ingestNow
 	}
+	s.detectAndLogNodeChange(pubKey, name, role, lat, lon, ingestNow)
 	_, err := s.stmtUpsertNode.Exec(
 		pubKey, name, role, lat, lon, now, now,
 		name, role, lat, lon, ingestNow, now,
@@ -1112,6 +1138,87 @@ func (s *Store) UpsertNode(pubKey, name, role string, lat, lon *float64, lastSee
 		s.Stats.NodeUpserts.Add(1)
 	}
 	return err
+}
+
+// nodeChangePositionThresholdKm: a position "change" below this is just
+// GPS jitter, not a real move -- dborup, 2026-07-29.
+const nodeChangePositionThresholdKm = 1.0
+
+// detectAndLogNodeChange compares the incoming ADVERT's name/role/position
+// against the node's CURRENT stored state (read fresh, right before
+// UpsertNode's write) and records any meaningful change to node_changes.
+// Must run BEFORE the upsert -- afterward the "current" state IS the new
+// state, and there'd be nothing left to diff against.
+//
+// Deliberately conservative to avoid noise: a field is only compared when
+// BOTH the old and new values are present. Adverts routinely omit name/
+// location (see AdvertDataHelpers' hasName/hasLocation bits), and treating
+// "this advert didn't carry a name" as "name changed to empty" would flag
+// nearly every node constantly. Same reasoning as New Nodes' resurrected-
+// node exclusion (cmd/server/new_nodes.go) -- fail toward silence, not noise.
+//
+// Errors from the two read-side lookups are logged and swallowed (best-
+// effort auditing must never block the actual node upsert, which is the
+// thing that matters for correctness).
+func (s *Store) detectAndLogNodeChange(pubKey, name, role string, lat, lon *float64, detectedAt string) {
+	if pubKey == "" {
+		return
+	}
+	var curName, curRole sql.NullString
+	var curLat, curLon sql.NullFloat64
+	err := s.stmtSelectNodeForChange.QueryRow(pubKey).Scan(&curName, &curRole, &curLat, &curLon)
+	if err == sql.ErrNoRows {
+		// No current row -- this INSERT will create a fresh one. Check
+		// whether it's actually a RETURNING node (previously pruned to
+		// inactive_nodes for going quiet) rather than genuinely new; New
+		// Nodes (cmd/server/new_nodes.go) already excludes these from its
+		// feed on the same reasoning, this is where that signal originates.
+		var inactiveLastSeen sql.NullString
+		ierr := s.stmtCheckInactiveNode.QueryRow(pubKey).Scan(&inactiveLastSeen)
+		if ierr == nil && inactiveLastSeen.Valid {
+			s.insertNodeChange(pubKey, "resurrected", inactiveLastSeen.String, "", detectedAt)
+		} else if ierr != nil && ierr != sql.ErrNoRows {
+			log.Printf("[node-changes] check inactive_nodes for %s (non-fatal): %v", pubKey, ierr)
+		}
+		return
+	}
+	if err != nil {
+		log.Printf("[node-changes] read current node state for %s (non-fatal): %v", pubKey, err)
+		return
+	}
+
+	if curRole.Valid && curRole.String != "" && role != "" && curRole.String != role {
+		s.insertNodeChange(pubKey, "role", curRole.String, role, detectedAt)
+	}
+	if curName.Valid && curName.String != "" && name != "" && curName.String != name {
+		s.insertNodeChange(pubKey, "name", curName.String, name, detectedAt)
+	}
+	if curLat.Valid && curLon.Valid && lat != nil && lon != nil {
+		if haversineKm(curLat.Float64, curLon.Float64, *lat, *lon) >= nodeChangePositionThresholdKm {
+			oldPos := fmt.Sprintf("%f,%f", curLat.Float64, curLon.Float64)
+			newPos := fmt.Sprintf("%f,%f", *lat, *lon)
+			s.insertNodeChange(pubKey, "position", oldPos, newPos, detectedAt)
+		}
+	}
+}
+
+func (s *Store) insertNodeChange(pubKey, changeType, oldValue, newValue, detectedAt string) {
+	if _, err := s.stmtInsertNodeChange.Exec(pubKey, changeType, oldValue, newValue, detectedAt); err != nil {
+		log.Printf("[node-changes] insert %s change for %s (non-fatal): %v", changeType, pubKey, err)
+	}
+}
+
+// haversineKm mirrors cmd/server/store.go's haversineKm -- duplicated
+// rather than shared because cmd/ingestor and cmd/server are separate Go
+// modules with no shared geo-math package.
+func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
+	const earthRadiusKm = 6371.0
+	dLat := (lat2 - lat1) * math.Pi / 180
+	dLon := (lon2 - lon1) * math.Pi / 180
+	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
+		math.Cos(lat1*math.Pi/180)*math.Cos(lat2*math.Pi/180)*
+			math.Sin(dLon/2)*math.Sin(dLon/2)
+	return earthRadiusKm * 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 }
 
 // IncrementAdvertCount increments advert_count for a node by public key.
