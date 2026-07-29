@@ -242,6 +242,12 @@
         });
       });
     }
+
+    // Drag-resizable columns (widths persisted to localStorage), same
+    // utility as the main Nodes/Observers/Packets tables -- dborup asked
+    // to be able to widen the Node column to see the full name instead
+    // of it ellipsis-truncating to fit.
+    if (typeof makeColumnsResizable === 'function') makeColumnsResizable('#new-nodes-table', 'meshcore-new-nodes-col-widths');
   }
 
   window.NewNodesTool = { init: init, destroy: destroy, sortValue: sortValue, roleLabel: roleLabel };
