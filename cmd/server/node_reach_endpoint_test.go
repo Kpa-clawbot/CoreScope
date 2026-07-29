@@ -93,7 +93,9 @@ func newReachIntegrationDB(t *testing.T, obsPath string) (*DB, string) {
 			t.Fatal(err)
 		}
 	}
-	return &DB{conn: conn, isV3: true}, n
+	db := &DB{conn: conn}
+	db.isV3Flag.forceTrue()
+	return db, n
 }
 
 func TestClampDays(t *testing.T) {

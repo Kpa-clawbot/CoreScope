@@ -78,7 +78,7 @@ const routeTypeNonTransportSQL = "route_type IN (1, 2)"
 type DB struct {
 	conn                    *sql.DB
 	path                    string        // filesystem path to the database file
-	isV3                    bool          // v3 schema: observer_idx in observations (vs observer_id in v2)
+	isV3Flag                schemaFlag    // v3 schema: observer_idx in observations (vs observer_id in v2) -- read via isV3()
 	hasResolvedPathFlag     schemaFlag    // observations.resolved_path (#791) -- read via hasResolvedPath()
 	hasObsRawHexFlag        schemaFlag    // observations.raw_hex (#881) -- read via hasObsRawHex()
 	hasScopeNameFlag        schemaFlag    // transmissions.scope_name (#899) -- read via hasScopeName()
@@ -95,11 +95,12 @@ type DB struct {
 	channelsCacheExp time.Time
 }
 
-// hasResolvedPath, hasObsRawHex, hasScopeName, hasDefaultScope,
+// isV3, hasResolvedPath, hasObsRawHex, hasScopeName, hasDefaultScope,
 // hasConfiguredScope, hasMultibyteSupCols, and hasLastSeen are pure
 // atomic-load accessors over the corresponding schemaFlag fields above
 // -- see schemaFlag's doc comment for why these are methods, not bools,
 // and why they never issue a query themselves.
+func (db *DB) isV3() bool                { return db.isV3Flag.get() }
 func (db *DB) hasResolvedPath() bool     { return db.hasResolvedPathFlag.get() }
 func (db *DB) hasObsRawHex() bool        { return db.hasObsRawHexFlag.get() }
 func (db *DB) hasScopeName() bool        { return db.hasScopeNameFlag.get() }
@@ -142,7 +143,7 @@ func OpenDB(path string) (*DB, error) {
 // calls schemaFlag.forceTrue() for whatever it finds.
 func (db *DB) healSchemaFlags() {
 	flags := []*schemaFlag{
-		&db.hasResolvedPathFlag, &db.hasObsRawHexFlag, &db.hasScopeNameFlag,
+		&db.isV3Flag, &db.hasResolvedPathFlag, &db.hasObsRawHexFlag, &db.hasScopeNameFlag,
 		&db.hasDefaultScopeFlag, &db.hasConfiguredScopeFlag,
 		&db.hasMultibyteSupColsFlag, &db.hasLastSeenFlag,
 	}
@@ -200,7 +201,7 @@ func (db *DB) detectSchema() {
 		var dflt sql.NullString
 		if rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil {
 			if colName == "observer_idx" {
-				db.isV3 = true
+				db.isV3Flag.forceTrue()
 			}
 			if colName == "resolved_path" {
 				db.hasResolvedPathFlag.forceTrue()
@@ -272,7 +273,7 @@ func (db *DB) nodeSelectCols() string {
 
 // transmissionBaseSQL returns the SELECT columns and JOIN clause for transmission-centric queries.
 func (db *DB) transmissionBaseSQL() (selectCols, observerJoin string) {
-	if db.isV3 {
+	if db.isV3() {
 		selectCols = `t.id, t.raw_hex, t.hash, t.first_seen, t.route_type, t.payload_type, t.decoded_json,
 			COALESCE((SELECT COUNT(*) FROM observations WHERE transmission_id = t.id), 0) AS observation_count,
 			obs.id AS observer_id, obs.name AS observer_name, COALESCE(obs.iata, '') AS observer_iata,
@@ -709,7 +710,7 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 		groupedScopeCol = ", t.scope_name"
 	}
 	var querySQL string
-	if db.isV3 {
+	if db.isV3() {
 		querySQL = fmt.Sprintf(`SELECT t.hash, t.first_seen, t.raw_hex, t.decoded_json, t.payload_type, t.route_type,
 			COALESCE((SELECT COUNT(*) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS count,
 			COALESCE((SELECT COUNT(DISTINCT oi.observer_idx) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS observer_count,
@@ -914,7 +915,7 @@ func (db *DB) buildTransmissionWhere(q PacketQuery) ([]string, []interface{}) {
 		ids := strings.Split(q.Observer, ",")
 		placeholders := strings.Repeat("?,", len(ids))
 		placeholders = placeholders[:len(placeholders)-1]
-		if db.isV3 {
+		if db.isV3() {
 			where = append(where, "EXISTS (SELECT 1 FROM observations oi JOIN observers obi ON obi.rowid = oi.observer_idx WHERE oi.transmission_id = t.id AND obi.id IN ("+placeholders+"))")
 		} else {
 			where = append(where, "EXISTS (SELECT 1 FROM observations oi WHERE oi.transmission_id = t.id AND oi.observer_id IN ("+placeholders+"))")
@@ -924,7 +925,7 @@ func (db *DB) buildTransmissionWhere(q PacketQuery) ([]string, []interface{}) {
 		}
 	}
 	if q.Region != "" {
-		if db.isV3 {
+		if db.isV3() {
 			where = append(where, "EXISTS (SELECT 1 FROM observations oi JOIN observers obi ON obi.rowid = oi.observer_idx WHERE oi.transmission_id = t.id AND obi.iata = ?)")
 		} else {
 			where = append(where, "EXISTS (SELECT 1 FROM observations oi JOIN observers obi ON obi.id = oi.observer_id WHERE oi.transmission_id = t.id AND obi.iata = ?)")
@@ -1028,7 +1029,7 @@ func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortB
 				regionArgs[i] = c
 			}
 			joinCond := "obs.rowid = o.observer_idx"
-			if !db.isV3 {
+			if !db.isV3() {
 				joinCond = "obs.id = o.observer_id"
 			}
 			subq := fmt.Sprintf(`public_key IN (
@@ -1240,7 +1241,7 @@ func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]
 	}
 
 	var querySQL string
-	if db.isV3 {
+	if db.isV3() {
 		querySQL = fmt.Sprintf(`SELECT o.transmission_id, o.id, obs.id AS observer_id, obs.name AS observer_name, COALESCE(obs.iata, '') AS observer_iata,
 			o.direction, o.snr, o.rssi, o.path_json, strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', o.timestamp, 'unixepoch') AS obs_timestamp
 			FROM observations o
@@ -1929,7 +1930,7 @@ func (db *DB) GetNetworkStatus(healthThresholds HealthThresholds) (map[string]in
 // GetTraces returns observations for a hash using direct table queries.
 func (db *DB) GetTraces(hash string) ([]map[string]interface{}, error) {
 	var querySQL string
-	if db.isV3 {
+	if db.isV3() {
 		querySQL = `SELECT obs.id AS observer_id, obs.name AS observer_name,
 			strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch') AS timestamp,
 			o.snr, o.rssi, o.path_json
@@ -2120,7 +2121,7 @@ func (db *DB) GetPacketPath(hash string, maxEdgeKm float64) (*PacketPathResponse
 		return nil, fmt.Errorf("resolved_path not available on this server")
 	}
 	var querySQL string
-	if db.isV3 {
+	if db.isV3() {
 		querySQL = `SELECT obs.rowid, obs.id, obs.name, obs.iata, o.path_json, o.resolved_path, o.snr, o.timestamp, t.id
 			FROM observations o
 			JOIN transmissions t ON t.id = o.transmission_id
@@ -2637,7 +2638,7 @@ func (db *DB) GetChannels(region ...string) ([]map[string]interface{}, error) {
 			args = append(args, code)
 		}
 		regionPlaceholder := strings.Join(placeholders, ",")
-		if db.isV3 {
+		if db.isV3() {
 			querySQL = fmt.Sprintf(`SELECT t.channel_hash,
 					COUNT(*) AS msg_count,
 					MAX(t.first_seen) AS last_activity,
@@ -2760,7 +2761,7 @@ func (db *DB) GetEncryptedChannels(region ...string) ([]map[string]interface{}, 
 			args = append(args, code)
 		}
 		regionPlaceholder := strings.Join(placeholders, ",")
-		if db.isV3 {
+		if db.isV3() {
 			querySQL = fmt.Sprintf(`SELECT t.channel_hash,
 					COUNT(*) AS msg_count,
 					MAX(t.first_seen) AS last_activity
@@ -2940,7 +2941,7 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 	// observations has an observer in one of the requested regions.
 	regionFilter := ""
 	if len(regionCodes) > 0 {
-		if db.isV3 {
+		if db.isV3() {
 			regionFilter = fmt.Sprintf(` AND EXISTS (
 				SELECT 1 FROM observations o
 				JOIN observers obs ON obs.rowid = o.observer_idx
@@ -3041,7 +3042,7 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 		resolvedPathCol = ", o.resolved_path"
 	}
 	var obsSQL string
-	if db.isV3 {
+	if db.isV3() {
 		obsSQL = `SELECT o.id, t.id, t.hash, t.decoded_json, t.first_seen,
 				obs.id, obs.name, o.snr, o.path_json, o.timestamp, t.route_type` + scopeCol + resolvedPathCol + `
 			FROM observations o
@@ -3464,7 +3465,7 @@ func (db *DB) GetObserverPacketCounts(sinceEpoch int64) map[string]int {
 	counts := make(map[string]int)
 	var rows *sql.Rows
 	var err error
-	if db.isV3 {
+	if db.isV3() {
 		rows, err = db.conn.Query(`SELECT obs.id, COUNT(*) as cnt
 			FROM observations o
 			JOIN observers obs ON obs.rowid = o.observer_idx
@@ -5441,7 +5442,7 @@ func (db *DB) GetWardrivingStats(window, channel string) (*WardrivingStatsRespon
 	}
 
 	var obsQuery string
-	if db.isV3 {
+	if db.isV3() {
 		obsQuery = `
 			SELECT obs.rowid AS observer_id, obs.name, COALESCE(obs.iata, ''),
 				COUNT(*) AS observation_count, COUNT(DISTINCT o.transmission_id) AS message_count
@@ -5596,7 +5597,7 @@ func (db *DB) buildWardrivingSessions(channel, since string) ([]WardrivingSessio
 	// Per-transmission entry-point prefixes and observer IDs, so each
 	// session can report how many distinct ones it touched.
 	var perTxQuery string
-	if db.isV3 {
+	if db.isV3() {
 		perTxQuery = `
 			SELECT o.transmission_id, json_extract(o.path_json, '$[0]'), obs.rowid
 			FROM observations o
@@ -5834,7 +5835,7 @@ func (db *DB) GetWardrivingSenderMessages(sender, channel, since, until string) 
 	}
 
 	var obsQuery string
-	if db.isV3 {
+	if db.isV3() {
 		obsQuery = fmt.Sprintf(`
 			SELECT o.transmission_id, obs.name, o.snr, o.rssi, o.path_json
 			FROM observations o

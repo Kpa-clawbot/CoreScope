@@ -167,7 +167,8 @@ func setupTestDB(t *testing.T) *DB {
 		t.Fatal(err)
 	}
 
-	db := &DB{conn: conn, isV3: true}
+	db := &DB{conn: conn}
+	db.isV3Flag.forceTrue()
 	db.hasResolvedPathFlag.forceTrue()
 	return db
 }
@@ -1964,7 +1965,7 @@ func setupTestDBV2(t *testing.T) *DB {
 		t.Fatal(err)
 	}
 
-	return &DB{conn: conn, isV3: false}
+	return &DB{conn: conn}
 }
 
 func TestGetNodesRegionFilterV2(t *testing.T) {
