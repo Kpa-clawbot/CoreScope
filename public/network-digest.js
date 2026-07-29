@@ -117,6 +117,49 @@
     return '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-' + name + '"/></svg>';
   }
 
+  // "Show all N / Show fewer" collapse, same pattern (and same limit) as
+  // the Wardriving/Foreign Traffic tabs' Sessions/Entry Points sections
+  // (public/analytics.js's topNToggleHtml/wireExpandToggle).
+  var AREA_LIMIT = 10;
+
+  function areaBreakdownRowHtml(a) {
+    return '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)">' +
+      '<span class="badge-region">' + escapeHtml(a.label) + '</span>' +
+      '<span>' + a.count + ' new node' + (a.count === 1 ? '' : 's') + '</span>' +
+      '</div>';
+  }
+
+  function areaBreakdownToggleHtml(total, expanded) {
+    if (total <= AREA_LIMIT) return '';
+    var label = expanded ? 'Show fewer' : 'Show all ' + total + ' areas';
+    return '<div style="margin-top:6px;text-align:right"><button type="button" data-area-toggle class="btn-link" style="font-size:12px;cursor:pointer;background:none;border:none;color:var(--link-color);padding:0">' + label + '</button></div>';
+  }
+
+  function areaBreakdownInnerHtml(areas, expanded) {
+    var shown = expanded ? areas : areas.slice(0, AREA_LIMIT);
+    return shown.map(areaBreakdownRowHtml).join('') + areaBreakdownToggleHtml(areas.length, expanded);
+  }
+
+  // Re-renders just the area list on toggle click and rewires the
+  // (freshly-created) button, since innerHTML replacement drops the old
+  // node's listener.
+  function wireAreaBreakdownToggle(areas) {
+    var expanded = false;
+    function attach() {
+      var listEl = document.getElementById('network-digest-area-breakdown-list');
+      if (!listEl) return;
+      var btn = listEl.querySelector('[data-area-toggle]');
+      if (btn) {
+        btn.addEventListener('click', function () {
+          expanded = !expanded;
+          listEl.innerHTML = areaBreakdownInnerHtml(areas, expanded);
+          attach();
+        });
+      }
+    }
+    attach();
+  }
+
   function render(data) {
     var statusEl = document.getElementById('network-digest-status');
     var contentEl = document.getElementById('network-digest-content');
@@ -137,15 +180,13 @@
       tile(phIcon('map-pin'), data.positionMoves, 'Position Moves', '#/tools/node-changes', data.changesCapped) +
       tile(phIcon('arrow-clockwise'), data.resurrections, 'Returned', '#/tools/node-changes', data.changesCapped);
 
-    var topAreaHtml = '';
-    if (data.topArea) {
-      topAreaHtml =
+    var areaBreakdownHtml = '';
+    var areas = data.areaBreakdown || [];
+    if (areas.length > 0) {
+      areaBreakdownHtml =
         '<div class="analytics-card" style="margin-top:16px">' +
-          '<h3 style="margin:0 0 4px">' + phIcon('map-trifold') + ' Most Growth</h3>' +
-          '<p style="margin:0">' +
-            '<span class="badge-region">' + escapeHtml(data.topArea.label) + '</span> — ' +
-            data.topArea.count + ' new node' + (data.topArea.count === 1 ? '' : 's') +
-          '</p>' +
+          '<h3 style="margin:0 0 8px">' + phIcon('map-trifold') + ' Area Breakdown</h3>' +
+          '<div id="network-digest-area-breakdown-list">' + areaBreakdownInnerHtml(areas, false) + '</div>' +
         '</div>';
     }
 
@@ -157,7 +198,9 @@
 
     contentEl.innerHTML =
       '<div class="stats-grid">' + tiles + '</div>' +
-      topAreaHtml;
+      areaBreakdownHtml;
+
+    if (areas.length > 0) wireAreaBreakdownToggle(areas);
   }
 
   window.NetworkDigestTool = { init: init, destroy: destroy };

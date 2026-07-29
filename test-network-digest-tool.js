@@ -26,7 +26,7 @@ function makeDigest(overrides) {
     nameChanges: 0,
     positionMoves: 2,
     resurrections: 1,
-    topArea: { label: 'Area A', count: 2 },
+    areaBreakdown: [{ label: 'Area A', count: 2 }],
   }, overrides);
 }
 
@@ -191,31 +191,59 @@ function waitForLoad() {
     assert.ok(content.innerHTML.includes('>3<'), `expected the newNodes value 3 to render, got: ${content.innerHTML}`);
   });
 
-  await test('renders the topArea card when present', async () => {
-    const sb = initWith(makeDigest({ topArea: { label: 'Area A', count: 2 } }));
+  await test('renders the area breakdown card with the area label and count', async () => {
+    const sb = initWith(makeDigest({ areaBreakdown: [{ label: 'Area A', count: 2 }] }));
     await waitForLoad();
     const content = sb.__docStore['network-digest-content'];
-    assert.ok(content.innerHTML.includes('Area A'), `expected the top area label, got: ${content.innerHTML}`);
+    assert.ok(content.innerHTML.includes('Area A'), `expected the area label, got: ${content.innerHTML}`);
     assert.ok(content.innerHTML.includes('2 new nodes'), `expected the pluralized count, got: ${content.innerHTML}`);
   });
 
-  await test('singular "new node" wording when topArea count is 1', async () => {
-    const sb = initWith(makeDigest({ topArea: { label: 'Area B', count: 1 } }));
+  await test('singular "new node" wording when an area count is 1', async () => {
+    const sb = initWith(makeDigest({ areaBreakdown: [{ label: 'Area B', count: 1 }] }));
     await waitForLoad();
     const content = sb.__docStore['network-digest-content'];
     assert.ok(content.innerHTML.includes('1 new node') && !content.innerHTML.includes('1 new nodes'),
       `expected singular wording, got: ${content.innerHTML}`);
   });
 
-  await test('omits the topArea card entirely when absent', async () => {
-    const sb = initWith(makeDigest({ topArea: null }));
+  await test('renders EVERY area in the breakdown, not just the top one', async () => {
+    const sb = initWith(makeDigest({ areaBreakdown: [{ label: 'Area A', count: 5 }, { label: 'Area B', count: 3 }, { label: 'Area C', count: 1 }] }));
     await waitForLoad();
     const content = sb.__docStore['network-digest-content'];
-    assert.ok(!content.innerHTML.includes('Most Growth'), `expected no top-area card, got: ${content.innerHTML}`);
+    assert.ok(content.innerHTML.includes('Area A'), 'expected Area A to render');
+    assert.ok(content.innerHTML.includes('Area B'), 'expected Area B to render too, not just the winner');
+    assert.ok(content.innerHTML.includes('Area C'), 'expected Area C to render too');
+  });
+
+  await test('collapses to 10 areas with a "Show all" toggle when there are more than 10', async () => {
+    const many = Array.from({ length: 15 }, (_, i) => ({ label: 'Area ' + i, count: 15 - i }));
+    const sb = initWith(makeDigest({ areaBreakdown: many }));
+    await waitForLoad();
+    const content = sb.__docStore['network-digest-content'];
+    assert.ok(content.innerHTML.includes('Area 0'), 'expected the top area to render');
+    assert.ok(content.innerHTML.includes('Area 9'), 'expected the 10th area (index 9) to render');
+    assert.ok(!content.innerHTML.includes('Area 10'), 'expected the 11th area to be collapsed away');
+    assert.ok(content.innerHTML.includes('Show all 15 areas'), `expected a "Show all 15 areas" toggle, got: ${content.innerHTML}`);
+  });
+
+  await test('no "Show all" toggle when there are 10 or fewer areas', async () => {
+    const ten = Array.from({ length: 10 }, (_, i) => ({ label: 'Area ' + i, count: 10 - i }));
+    const sb = initWith(makeDigest({ areaBreakdown: ten }));
+    await waitForLoad();
+    const content = sb.__docStore['network-digest-content'];
+    assert.ok(!content.innerHTML.includes('Show all'), `expected no toggle button for exactly 10 areas, got: ${content.innerHTML}`);
+  });
+
+  await test('omits the area breakdown card entirely when absent', async () => {
+    const sb = initWith(makeDigest({ areaBreakdown: null }));
+    await waitForLoad();
+    const content = sb.__docStore['network-digest-content'];
+    assert.ok(!content.innerHTML.includes('Area Breakdown'), `expected no area breakdown card, got: ${content.innerHTML}`);
   });
 
   await test('shows a neutral "nothing to report" message when every count is zero', async () => {
-    const sb = initWith(makeDigest({ newNodes: 0, roleChanges: 0, nameChanges: 0, positionMoves: 0, resurrections: 0, topArea: null }));
+    const sb = initWith(makeDigest({ newNodes: 0, roleChanges: 0, nameChanges: 0, positionMoves: 0, resurrections: 0, areaBreakdown: null }));
     await waitForLoad();
     const content = sb.__docStore['network-digest-content'];
     assert.ok(content.innerHTML.includes('Nothing to report'), `expected the all-zero message, got: ${content.innerHTML}`);

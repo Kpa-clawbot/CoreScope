@@ -27,10 +27,13 @@ type NetworkDigest struct {
 	NameChanges   int    `json:"nameChanges"`
 	PositionMoves int    `json:"positionMoves"`
 	Resurrections int    `json:"resurrections"`
-	// TopArea is the configured area with the most new-node activity in
-	// the window. Omitted when no new node in the window has a known
-	// area (no areas configured, or none resolved).
-	TopArea *AreaGrowth `json:"topArea,omitempty"`
+	// AreaBreakdown ranks every configured area that had at least one new
+	// node in the window, most active first (ties alphabetical). Each
+	// node counts toward its single most-specific area only (see
+	// AreaForPoint in computeNetworkDigest), so a broad umbrella area
+	// doesn't dominate just because it also contains everything else.
+	// Omitted when no new node in the window has a known area.
+	AreaBreakdown []AreaGrowth `json:"areaBreakdown,omitempty"`
 	// NewNodesCapped/ChangesCapped are true when newNodesSQLFetchCap /
 	// nodeChangesSQLFetchCap was hit AND the oldest fetched row still
 	// falls inside the window -- meaning there may be more qualifying
@@ -119,7 +122,7 @@ func (s *Server) computeNetworkDigest(since time.Time, origin string) (*NetworkD
 			}
 			return areas[i].Label < areas[j].Label
 		})
-		digest.TopArea = &areas[0]
+		digest.AreaBreakdown = areas
 	}
 
 	changes, err := s.computeNodeChanges(nodeChangesSQLFetchCap)

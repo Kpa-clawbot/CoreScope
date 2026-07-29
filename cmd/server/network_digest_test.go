@@ -64,9 +64,11 @@ func TestComputeNetworkDigest_CountsChangeTypesWithinWindow(t *testing.T) {
 	}
 }
 
-// TestComputeNetworkDigest_TopArea confirms the area with the most
-// new-node activity in the window wins, and ties break alphabetically.
-func TestComputeNetworkDigest_TopArea(t *testing.T) {
+// TestComputeNetworkDigest_AreaBreakdownRanked confirms EVERY area with
+// activity is returned (not just the winner), most active first, ties
+// alphabetical -- dborup asked for an overview across all areas rather
+// than being shown only one area at a time.
+func TestComputeNetworkDigest_AreaBreakdownRanked(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	ensureInactiveNodesTable(t, srv)
 	ensureNodeChangesTable(t, srv)
@@ -76,7 +78,8 @@ func TestComputeNetworkDigest_TopArea(t *testing.T) {
 		"AREAB": {Label: "Area B", LatMin: f64(10.0), LatMax: f64(10.2), LonMin: f64(50.0), LonMax: f64(50.2)},
 	}
 	now := time.Now().UTC()
-	// Two new nodes in Area A, one in Area B -- Area A should win.
+	// Two new nodes in Area A, one in Area B -- Area A should rank first,
+	// but Area B should still be present in the breakdown, not dropped.
 	insertNewNodeRow(t, srv, "topareaa0000001", "A1", "repeater", f64(56.0), f64(10.0), now.Add(-1*time.Hour).Format(time.RFC3339))
 	insertNewNodeRow(t, srv, "topareaa0000002", "A2", "repeater", f64(56.0), f64(10.0), now.Add(-2*time.Hour).Format(time.RFC3339))
 	insertNewNodeRow(t, srv, "topareab0000001", "B1", "repeater", f64(10.1), f64(50.1), now.Add(-3*time.Hour).Format(time.RFC3339))
@@ -85,15 +88,22 @@ func TestComputeNetworkDigest_TopArea(t *testing.T) {
 	if err != nil {
 		t.Fatalf("computeNetworkDigest: %v", err)
 	}
-	if digest.TopArea == nil || digest.TopArea.Label != "Area A" || digest.TopArea.Count != 2 {
-		t.Errorf("TopArea = %+v, want Area A with count 2", digest.TopArea)
+	if len(digest.AreaBreakdown) != 2 {
+		t.Fatalf("AreaBreakdown = %+v, want 2 entries (both areas, not just the winner)", digest.AreaBreakdown)
+	}
+	if digest.AreaBreakdown[0].Label != "Area A" || digest.AreaBreakdown[0].Count != 2 {
+		t.Errorf("AreaBreakdown[0] = %+v, want Area A with count 2", digest.AreaBreakdown[0])
+	}
+	if digest.AreaBreakdown[1].Label != "Area B" || digest.AreaBreakdown[1].Count != 1 {
+		t.Errorf("AreaBreakdown[1] = %+v, want Area B with count 1", digest.AreaBreakdown[1])
 	}
 }
 
-// TestComputeNetworkDigest_TopAreaNilWhenNoAreasConfigured confirms
-// TopArea stays nil rather than a zero-valued struct when no areas are
-// configured (matches New Nodes' own nil-Areas behavior in that case).
-func TestComputeNetworkDigest_TopAreaNilWhenNoAreasConfigured(t *testing.T) {
+// TestComputeNetworkDigest_AreaBreakdownNilWhenNoAreasConfigured
+// confirms AreaBreakdown stays empty/nil rather than a slice of
+// zero-valued structs when no areas are configured (matches New Nodes'
+// own nil-Areas behavior in that case).
+func TestComputeNetworkDigest_AreaBreakdownNilWhenNoAreasConfigured(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	ensureInactiveNodesTable(t, srv)
 	ensureNodeChangesTable(t, srv)
@@ -106,8 +116,8 @@ func TestComputeNetworkDigest_TopAreaNilWhenNoAreasConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("computeNetworkDigest: %v", err)
 	}
-	if digest.TopArea != nil {
-		t.Errorf("TopArea = %+v, want nil when no areas are configured", digest.TopArea)
+	if len(digest.AreaBreakdown) != 0 {
+		t.Errorf("AreaBreakdown = %+v, want empty when no areas are configured", digest.AreaBreakdown)
 	}
 }
 
@@ -200,15 +210,16 @@ func TestComputeNetworkDigest_ChangesCappedFlag(t *testing.T) {
 	}
 }
 
-// TestComputeNetworkDigest_TopAreaPrefersMostSpecific confirms an
-// umbrella area whose bounding box contains a smaller, more specific
-// area does NOT dominate Most Growth just because it also matches every
-// node -- reported https://github.com/dborup/CoreScope after live
-// verification on stg always showed "Europa" as Most Growth regardless
-// of where nodes actually were, since AreaKeysForPoint (used before this
-// fix) tallies every overlapping area equally rather than picking the
-// most specific one per node.
-func TestComputeNetworkDigest_TopAreaPrefersMostSpecific(t *testing.T) {
+// TestComputeNetworkDigest_AreaBreakdownPrefersMostSpecific confirms a
+// node counts toward its single most specific area only, NOT every
+// overlapping area -- reported by dborup after live verification on stg
+// always showed "Europa" (an umbrella area covering everything) as Most
+// Growth regardless of where nodes actually were, since
+// AreaKeysForPoint (used before this fix) tallies every overlapping
+// area equally rather than picking the most specific one per node. The
+// umbrella area should NOT even appear in the breakdown here, since
+// nothing counts toward it once each node picks its smallest match.
+func TestComputeNetworkDigest_AreaBreakdownPrefersMostSpecific(t *testing.T) {
 	srv, _ := setupTestServer(t)
 	ensureInactiveNodesTable(t, srv)
 	ensureNodeChangesTable(t, srv)
@@ -225,8 +236,8 @@ func TestComputeNetworkDigest_TopAreaPrefersMostSpecific(t *testing.T) {
 	if err != nil {
 		t.Fatalf("computeNetworkDigest: %v", err)
 	}
-	if digest.TopArea == nil || digest.TopArea.Label != "Area B" {
-		t.Errorf("TopArea = %+v, want the more specific \"Area B\", not the umbrella area that also happens to contain it", digest.TopArea)
+	if len(digest.AreaBreakdown) != 1 || digest.AreaBreakdown[0].Label != "Area B" {
+		t.Errorf("AreaBreakdown = %+v, want just the more specific \"Area B\", not the umbrella area that also happens to contain it", digest.AreaBreakdown)
 	}
 }
 
