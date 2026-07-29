@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -125,6 +126,77 @@ func TestHandleNetworkDigest_DefaultsTo7Days(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), `"window":"7d"`) {
 		t.Errorf("response should echo window=7d, got: %s", w.Body.String())
+	}
+}
+
+// TestComputeNetworkDigest_NewNodesCappedFlag confirms NewNodesCapped is
+// set when the underlying fetch hits newNodesSQLFetchCap and the oldest
+// fetched row is still inside the window (real count may exceed what
+// was fetched) -- and stays false for an ordinary, uncapped window.
+func TestComputeNetworkDigest_NewNodesCappedFlag(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ensureInactiveNodesTable(t, srv)
+	ensureNodeChangesTable(t, srv)
+
+	now := time.Now().UTC()
+	for i := 0; i < newNodesSQLFetchCap; i++ {
+		pubkey := fmt.Sprintf("capnode%010d0001", i)
+		insertNewNodeRow(t, srv, pubkey, "Cap", "repeater", f64(56.0), f64(10.0), now.Add(-time.Duration(i)*time.Minute).Format(time.RFC3339))
+	}
+
+	digest, err := srv.computeNetworkDigest(now.Add(-7 * 24 * time.Hour))
+	if err != nil {
+		t.Fatalf("computeNetworkDigest: %v", err)
+	}
+	if !digest.NewNodesCapped {
+		t.Errorf("NewNodesCapped = false, want true when the fetch cap is hit within the window")
+	}
+	if digest.NewNodes != newNodesSQLFetchCap {
+		t.Errorf("NewNodes = %d, want %d (the full capped fetch)", digest.NewNodes, newNodesSQLFetchCap)
+	}
+}
+
+// TestComputeNetworkDigest_NewNodesNotCappedWhenUnderLimit confirms the
+// flag stays false on an ordinary window well under the fetch cap.
+func TestComputeNetworkDigest_NewNodesNotCappedWhenUnderLimit(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ensureInactiveNodesTable(t, srv)
+	ensureNodeChangesTable(t, srv)
+
+	now := time.Now().UTC()
+	insertNewNodeRow(t, srv, "notcapped0000001", "Solo", "repeater", f64(56.0), f64(10.0), now.Add(-1*time.Hour).Format(time.RFC3339))
+
+	digest, err := srv.computeNetworkDigest(now.Add(-7 * 24 * time.Hour))
+	if err != nil {
+		t.Fatalf("computeNetworkDigest: %v", err)
+	}
+	if digest.NewNodesCapped {
+		t.Errorf("NewNodesCapped = true, want false when nowhere near the fetch cap")
+	}
+}
+
+// TestComputeNetworkDigest_ChangesCappedFlag mirrors the new-nodes cap
+// test for the node_changes side of the digest.
+func TestComputeNetworkDigest_ChangesCappedFlag(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ensureInactiveNodesTable(t, srv)
+	ensureNodeChangesTable(t, srv)
+
+	now := time.Now().UTC()
+	for i := 0; i < nodeChangesSQLFetchCap; i++ {
+		pubkey := fmt.Sprintf("capchange%09d01", i)
+		insertNodeChangeRow(t, srv, pubkey, "role", "companion", "repeater", now.Add(-time.Duration(i)*time.Minute).Format(time.RFC3339))
+	}
+
+	digest, err := srv.computeNetworkDigest(now.Add(-7 * 24 * time.Hour))
+	if err != nil {
+		t.Fatalf("computeNetworkDigest: %v", err)
+	}
+	if !digest.ChangesCapped {
+		t.Errorf("ChangesCapped = false, want true when the fetch cap is hit within the window")
+	}
+	if digest.RoleChanges != nodeChangesSQLFetchCap {
+		t.Errorf("RoleChanges = %d, want %d (the full capped fetch)", digest.RoleChanges, nodeChangesSQLFetchCap)
 	}
 }
 

@@ -30,6 +30,13 @@ type NetworkDigest struct {
 	// the window. Omitted when no new node in the window has a known
 	// area (no areas configured, or none resolved).
 	TopArea *AreaGrowth `json:"topArea,omitempty"`
+	// NewNodesCapped/ChangesCapped are true when newNodesSQLFetchCap /
+	// nodeChangesSQLFetchCap was hit AND the oldest fetched row still
+	// falls inside the window -- meaning there may be more qualifying
+	// rows older than the cap that were never fetched, so the
+	// corresponding counts above are a floor, not an exact total.
+	NewNodesCapped bool `json:"newNodesCapped,omitempty"`
+	ChangesCapped  bool `json:"changesCapped,omitempty"`
 }
 
 // computeNetworkDigest summarizes New Nodes and Node Changes activity
@@ -38,10 +45,13 @@ type NetworkDigest struct {
 // Reuses computeNewNodes/computeNodeChanges (with their existing
 // blacklist filtering and, for new nodes, resurrection exclusion) rather
 // than re-querying from scratch. Counts are exact up to
-// newNodesSQLFetchCap/nodeChangesSQLFetchCap (500) rows -- a single
-// digest window's activity on a network this size has never come close
-// to that, so this is a deliberate, documented tradeoff rather than a
-// silent undercount risk worth a second set of dedicated COUNT queries.
+// newNodesSQLFetchCap/nodeChangesSQLFetchCap (500) rows fetched from
+// each -- a deliberate tradeoff favoring reuse over a second set of
+// dedicated COUNT queries. On networks with enough churn to exceed the
+// cap within the requested window (observed on this deployment's 30d
+// window), the affected counts become a floor rather than an exact
+// total; NewNodesCapped/ChangesCapped flag that case so the frontend can
+// render e.g. "500+" instead of a falsely-precise number.
 func (s *Server) computeNetworkDigest(since time.Time) (*NetworkDigest, error) {
 	digest := &NetworkDigest{Since: since.UTC().Format(time.RFC3339)}
 
@@ -58,6 +68,12 @@ func (s *Server) computeNetworkDigest(since time.Time) (*NetworkDigest, error) {
 		digest.NewNodes++
 		for _, a := range n.Areas {
 			areaCounts[a]++
+		}
+	}
+	if len(newNodes) == newNodesSQLFetchCap {
+		oldest := newNodes[len(newNodes)-1]
+		if t, perr := time.Parse(time.RFC3339, oldest.FirstSeen); perr == nil && !t.Before(since) {
+			digest.NewNodesCapped = true
 		}
 	}
 	if len(areaCounts) > 0 {
@@ -92,6 +108,12 @@ func (s *Server) computeNetworkDigest(since time.Time) (*NetworkDigest, error) {
 			digest.PositionMoves++
 		case "resurrected":
 			digest.Resurrections++
+		}
+	}
+	if len(changes) == nodeChangesSQLFetchCap {
+		oldest := changes[len(changes)-1]
+		if t, perr := time.Parse(time.RFC3339, oldest.DetectedAt); perr == nil && !t.Before(since) {
+			digest.ChangesCapped = true
 		}
 	}
 	return digest, nil

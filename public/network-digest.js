@@ -74,8 +74,8 @@
       });
   }
 
-  function tile(icon, value, label, link) {
-    var valueHtml = '<div class="stat-value">' + value + '</div>';
+  function tile(icon, value, label, link, capped) {
+    var valueHtml = '<div class="stat-value">' + value + (capped ? '+' : '') + '</div>';
     var inner = '<div class="stat-label">' + icon + ' ' + escapeHtml(label) + '</div>' + valueHtml;
     if (link) {
       return '<a href="' + link + '" class="stat-card" style="display:block;text-decoration:none;color:inherit">' + inner + '</a>';
@@ -93,15 +93,19 @@
     if (!contentEl) return;
 
     if (statusEl) {
-      statusEl.textContent = 'Since ' + escapeHtml(data.since) + (typeof timeAgo === 'function' ? ' (' + timeAgo(data.since) + ')' : '');
+      var statusText = 'Since ' + escapeHtml(data.since) + (typeof timeAgo === 'function' ? ' (' + timeAgo(data.since) + ')' : '');
+      if (data.newNodesCapped || data.changesCapped) {
+        statusText += ' -- some counts marked "+" may be higher than shown';
+      }
+      statusEl.textContent = statusText;
     }
 
     var tiles =
-      tile(phIcon('rocket'), data.newNodes, 'New Nodes', '#/tools/new-nodes') +
-      tile(phIcon('shuffle'), data.roleChanges, 'Role Changes', '#/tools/node-changes') +
-      tile(phIcon('tag'), data.nameChanges, 'Name Changes', '#/tools/node-changes') +
-      tile(phIcon('map-pin'), data.positionMoves, 'Position Moves', '#/tools/node-changes') +
-      tile(phIcon('arrow-clockwise'), data.resurrections, 'Returned', '#/tools/node-changes');
+      tile(phIcon('rocket'), data.newNodes, 'New Nodes', '#/tools/new-nodes', data.newNodesCapped) +
+      tile(phIcon('shuffle'), data.roleChanges, 'Role Changes', '#/tools/node-changes', data.changesCapped) +
+      tile(phIcon('tag'), data.nameChanges, 'Name Changes', '#/tools/node-changes', data.changesCapped) +
+      tile(phIcon('map-pin'), data.positionMoves, 'Position Moves', '#/tools/node-changes', data.changesCapped) +
+      tile(phIcon('arrow-clockwise'), data.resurrections, 'Returned', '#/tools/node-changes', data.changesCapped);
 
     var topAreaHtml = '';
     if (data.topArea) {

@@ -176,6 +176,43 @@ function waitForLoad() {
     assert.ok(!content.innerHTML.includes('stats-grid'), 'should not render the stat tiles when everything is zero');
   });
 
+  await test('appends "+" to the New Nodes tile when newNodesCapped is true', async () => {
+    const sb = initWith(makeDigest({ newNodes: 500, newNodesCapped: true }));
+    await waitForLoad();
+    const content = sb.__docStore['network-digest-content'];
+    assert.ok(content.innerHTML.includes('>500+<'), `expected a "500+" value, got: ${content.innerHTML}`);
+  });
+
+  await test('does not append "+" when newNodesCapped is false', async () => {
+    const sb = initWith(makeDigest({ newNodes: 39, newNodesCapped: false }));
+    await waitForLoad();
+    const content = sb.__docStore['network-digest-content'];
+    assert.ok(content.innerHTML.includes('>39<'), `expected a plain "39" value, got: ${content.innerHTML}`);
+    assert.ok(!content.innerHTML.includes('39+'), 'should not append + when not capped');
+  });
+
+  await test('appends "+" to all four change tiles when changesCapped is true', async () => {
+    const sb = initWith(makeDigest({ roleChanges: 500, nameChanges: 500, positionMoves: 500, resurrections: 500, changesCapped: true }));
+    await waitForLoad();
+    const content = sb.__docStore['network-digest-content'];
+    const plusCount = (content.innerHTML.match(/500\+/g) || []).length;
+    assert.strictEqual(plusCount, 4, `expected all 4 change tiles to show "500+", got ${plusCount} in: ${content.innerHTML}`);
+  });
+
+  await test('status line notes possible undercounts when a cap was hit', async () => {
+    const sb = initWith(makeDigest({ newNodesCapped: true }));
+    await waitForLoad();
+    const status = sb.__docStore['network-digest-status'];
+    assert.ok(status.textContent.includes('may be higher'), `expected a caveat note, got: ${status.textContent}`);
+  });
+
+  await test('status line has no caveat note when nothing is capped', async () => {
+    const sb = initWith(makeDigest({ newNodesCapped: false, changesCapped: false }));
+    await waitForLoad();
+    const status = sb.__docStore['network-digest-status'];
+    assert.ok(!status.textContent.includes('may be higher'), `expected no caveat note, got: ${status.textContent}`);
+  });
+
   await test('status line reports the since timestamp', async () => {
     const sb = initWith(makeDigest({ since: '2026-07-22T10:00:00Z' }));
     await waitForLoad();
