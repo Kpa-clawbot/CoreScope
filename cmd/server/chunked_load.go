@@ -385,7 +385,7 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 		}
 
 		var chunkSQL string
-		if s.db.isV3 {
+		if s.db.isV3() {
 			chunkSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 					t.payload_type, t.payload_version, t.decoded_json,
 					o.id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,

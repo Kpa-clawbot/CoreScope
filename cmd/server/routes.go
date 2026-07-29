@@ -612,7 +612,7 @@ func (s *Server) handleAreaAnalytics(w http.ResponseWriter, r *http.Request) {
 		graph = s.store.graph.Load()
 	}
 
-	positionGaps, noNeighborFix, estimatedNodes := computeAreaPositionGaps(s.db, positioned, unpositioned, s.cfg.Areas)
+	positionGaps, noNeighborFix, estimatedNodes := computeAreaPositionGaps(s.db, positioned, unpositioned, s.cfg.Areas, s.cfg.NeighborMaxEdgeKm())
 
 	resp := &AreaAnalyticsResponse{
 		Density:                   computeAreaDensity(positioned, s.cfg.Areas, s.cfg.GetHealthThresholds()),
@@ -3445,7 +3445,7 @@ func (s *Server) handlePacketPath(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, PacketPathResponse{Hash: hash, Branches: []PacketPathBranch{}})
 		return
 	}
-	resp, err := s.db.GetPacketPath(hash)
+	resp, err := s.db.GetPacketPath(hash, s.cfg.NeighborMaxEdgeKm())
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return

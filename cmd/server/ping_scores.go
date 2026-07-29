@@ -160,7 +160,7 @@ func (db *DB) fetchPingTriggers() ([]pingTriggerRow, error) {
 // + airtime-annotation path View Path uses, so the numbers on the
 // highscore board always match what "View path" shows for that packet.
 func (s *Server) computePingScore(trigger pingTriggerRow) *PingScore {
-	resp, err := s.db.GetPacketPath(trigger.hash)
+	resp, err := s.db.GetPacketPath(trigger.hash, s.cfg.NeighborMaxEdgeKm())
 	if err != nil || resp == nil || len(resp.Branches) == 0 {
 		return nil
 	}

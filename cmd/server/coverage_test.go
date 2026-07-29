@@ -66,7 +66,7 @@ func setupTestDBv2(t *testing.T) *DB {
 	if _, err := conn.Exec(schema); err != nil {
 		t.Fatal(err)
 	}
-	return &DB{conn: conn, isV3: false}
+	return &DB{conn: conn}
 }
 
 func seedV2Data(t *testing.T, db *DB) {
@@ -103,7 +103,7 @@ func setupNoStoreServer(t *testing.T) (*Server, *mux.Router) {
 func TestDetectSchemaV3(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
-	if !db.isV3 {
+	if !db.isV3() {
 		t.Error("expected v3 schema (observer_idx)")
 	}
 }
@@ -112,7 +112,7 @@ func TestDetectSchemaV2(t *testing.T) {
 	db := setupTestDBv2(t)
 	defer db.Close()
 	db.detectSchema()
-	if db.isV3 {
+	if db.isV3() {
 		t.Error("expected v2 schema (observer_id), got v3")
 	}
 }

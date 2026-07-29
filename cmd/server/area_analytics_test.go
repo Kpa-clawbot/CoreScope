@@ -145,7 +145,7 @@ func TestComputeAreaPositionGaps(t *testing.T) {
 		{PublicKey: "noneighborfix01", Name: "NoNeighborFix"},
 	}
 
-	gaps, noNeighborFix, estimatedNodes := computeAreaPositionGaps(db, positioned, unpositioned, areas)
+	gaps, noNeighborFix, estimatedNodes := computeAreaPositionGaps(db, positioned, unpositioned, areas, DefaultMaxEdgeKm)
 	if len(gaps) != 1 {
 		t.Fatalf("got %d area gaps, want 1: %+v", len(gaps), gaps)
 	}

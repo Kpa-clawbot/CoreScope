@@ -801,7 +801,7 @@ func (s *PacketStore) Load() error {
 		filterClause = "\n\t\t\tWHERE " + strings.Join(loadConditions, "\n\t\t\t  AND ")
 	}
 
-	if s.db.isV3 {
+	if s.db.isV3() {
 		loadSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
 				o.id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,
@@ -1107,7 +1107,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 	}
 
 	var chunkSQL string
-	if s.db.isV3 {
+	if s.db.isV3() {
 		chunkSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
 				o.id, obs.id, obs.name, o.direction,
@@ -2618,7 +2618,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 	if s.db.hasScopeName() {
 		scopeNameCol = ", t.scope_name"
 	}
-	if s.db.isV3 {
+	if s.db.isV3() {
 		querySQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
 				o.id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,
@@ -3048,7 +3048,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 	if s.db.hasObsRawHex() {
 		obsRHCol2 = ", o.raw_hex"
 	}
-	if s.db.isV3 {
+	if s.db.isV3() {
 		querySQL = `SELECT o.id, o.transmission_id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,
 				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRHCol2 + `
 			FROM observations o
