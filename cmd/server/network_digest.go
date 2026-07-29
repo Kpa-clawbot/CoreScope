@@ -14,6 +14,18 @@ import (
 type AreaGrowth struct {
 	Label string `json:"label"`
 	Count int    `json:"count"`
+	// Nodes is every new node counted toward this area, newest first
+	// (same order as /api/analytics/new-nodes) -- lets the frontend show
+	// which specific nodes are behind the count on click, without a
+	// second request.
+	Nodes []AreaNodeRef `json:"nodes,omitempty"`
+}
+
+// AreaNodeRef is a minimal per-node reference within an AreaGrowth entry.
+type AreaNodeRef struct {
+	PublicKey string `json:"publicKey"`
+	Name      string `json:"name,omitempty"`
+	FirstSeen string `json:"firstSeen"`
 }
 
 // NetworkDigest summarizes New Nodes + Node Changes activity since a
@@ -82,7 +94,7 @@ func (s *Server) computeNetworkDigest(since time.Time, origin string) (*NetworkD
 	if err != nil {
 		return nil, err
 	}
-	areaCounts := map[string]int{}
+	areaNodes := map[string][]AreaNodeRef{}
 	for _, n := range newNodes {
 		if !matchesOrigin(n.Foreign, origin) {
 			continue
@@ -101,7 +113,10 @@ func (s *Server) computeNetworkDigest(since time.Time, origin string) (*NetworkD
 		// question (smallest bounding box wins on overlap).
 		if n.Lat != nil && n.Lon != nil && len(s.cfg.Areas) > 0 {
 			if label, ok := AreaForPoint(*n.Lat, *n.Lon, s.cfg.Areas); ok {
-				areaCounts[label]++
+				// newNodes is already newest-first (computeNewNodes'
+				// ORDER BY first_seen DESC), so appending here preserves
+				// that order within each area without a separate sort.
+				areaNodes[label] = append(areaNodes[label], AreaNodeRef{PublicKey: n.PublicKey, Name: n.Name, FirstSeen: n.FirstSeen})
 			}
 		}
 	}
@@ -111,10 +126,10 @@ func (s *Server) computeNetworkDigest(since time.Time, origin string) (*NetworkD
 			digest.NewNodesCapped = true
 		}
 	}
-	if len(areaCounts) > 0 {
-		areas := make([]AreaGrowth, 0, len(areaCounts))
-		for label, count := range areaCounts {
-			areas = append(areas, AreaGrowth{Label: label, Count: count})
+	if len(areaNodes) > 0 {
+		areas := make([]AreaGrowth, 0, len(areaNodes))
+		for label, nodes := range areaNodes {
+			areas = append(areas, AreaGrowth{Label: label, Count: len(nodes), Nodes: nodes})
 		}
 		sort.Slice(areas, func(i, j int) bool {
 			if areas[i].Count != areas[j].Count {

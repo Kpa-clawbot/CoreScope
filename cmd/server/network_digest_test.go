@@ -99,6 +99,42 @@ func TestComputeNetworkDigest_AreaBreakdownRanked(t *testing.T) {
 	}
 }
 
+// TestComputeNetworkDigest_AreaBreakdownIncludesNodeRefs confirms each
+// AreaGrowth entry carries the actual nodes counted toward it (newest
+// first), so the frontend can show which nodes are behind the number
+// without a second request -- dborup asked to be able to click an area
+// and see which nodes are in it.
+func TestComputeNetworkDigest_AreaBreakdownIncludesNodeRefs(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ensureInactiveNodesTable(t, srv)
+	ensureNodeChangesTable(t, srv)
+
+	srv.cfg.Areas = map[string]AreaEntry{
+		"AREAA": {Label: "Area A", LatMin: f64(55.9), LatMax: f64(56.2), LonMin: f64(9.9), LonMax: f64(10.2)},
+	}
+	now := time.Now().UTC()
+	insertNewNodeRow(t, srv, "arearef0000000001", "Older", "repeater", f64(56.0), f64(10.0), now.Add(-2*time.Hour).Format(time.RFC3339))
+	insertNewNodeRow(t, srv, "arearef0000000002", "Newer", "repeater", f64(56.0), f64(10.0), now.Add(-1*time.Hour).Format(time.RFC3339))
+
+	digest, err := srv.computeNetworkDigest(now.Add(-7*24*time.Hour), "all")
+	if err != nil {
+		t.Fatalf("computeNetworkDigest: %v", err)
+	}
+	if len(digest.AreaBreakdown) != 1 {
+		t.Fatalf("AreaBreakdown = %+v, want 1 area", digest.AreaBreakdown)
+	}
+	nodes := digest.AreaBreakdown[0].Nodes
+	if len(nodes) != 2 {
+		t.Fatalf("Nodes = %+v, want 2 node refs", nodes)
+	}
+	if nodes[0].PublicKey != "arearef0000000002" || nodes[0].Name != "Newer" {
+		t.Errorf("Nodes[0] = %+v, want the newer node first", nodes[0])
+	}
+	if nodes[1].PublicKey != "arearef0000000001" || nodes[1].Name != "Older" {
+		t.Errorf("Nodes[1] = %+v, want the older node second", nodes[1])
+	}
+}
+
 // TestComputeNetworkDigest_AreaBreakdownNilWhenNoAreasConfigured
 // confirms AreaBreakdown stays empty/nil rather than a slice of
 // zero-valued structs when no areas are configured (matches New Nodes'

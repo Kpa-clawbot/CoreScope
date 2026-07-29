@@ -82,6 +82,28 @@
       });
     }
 
+    // Delegated once here (not re-wired per render) since it's bound to
+    // the content wrapper, which persists across every render() call --
+    // only its innerHTML is replaced.
+    var contentEl = document.getElementById('network-digest-content');
+    if (contentEl) {
+      contentEl.addEventListener('click', function (evt) {
+        var el = evt.target;
+        var toggleBtn = el && el.closest ? el.closest('[data-area-toggle]') : null;
+        if (toggleBtn) {
+          areaShowAllExpanded = !areaShowAllExpanded;
+          rerenderAreaBreakdown();
+          return;
+        }
+        var row = el && el.closest ? el.closest('[data-area-label]') : null;
+        var label = row && row.dataset ? row.dataset.areaLabel : null;
+        if (label) {
+          expandedAreas[label] = !expandedAreas[label];
+          rerenderAreaBreakdown();
+        }
+      });
+    }
+
     load();
   }
 
@@ -92,6 +114,8 @@
   function load() {
     var statusEl = document.getElementById('network-digest-status');
     var contentEl = document.getElementById('network-digest-content');
+    areaShowAllExpanded = false;
+    expandedAreas = {};
     if (contentEl) contentEl.innerHTML = '<p class="text-muted">Loading…</p>';
     if (statusEl) statusEl.textContent = '';
     api('/analytics/network-digest?window=' + encodeURIComponent(window_) + '&origin=' + encodeURIComponent(origin_))
@@ -119,45 +143,59 @@
 
   // "Show all N / Show fewer" collapse, same pattern (and same limit) as
   // the Wardriving/Foreign Traffic tabs' Sessions/Entry Points sections
-  // (public/analytics.js's topNToggleHtml/wireExpandToggle).
+  // (public/analytics.js's topNToggleHtml/wireExpandToggle) -- plus each
+  // row itself expands in place to list the actual nodes counted toward
+  // it (dborup: "kan vi lave så man kan klikke på et område og se
+  // hvilket noder"). Both toggle states live at module scope and reset
+  // per load() so switching window/origin starts from a clean slate;
+  // a single delegated click listener (wired once in init(), see below)
+  // survives every re-render since it's bound to the container, not the
+  // rows/buttons that get replaced.
   var AREA_LIMIT = 10;
+  var areaShowAllExpanded = false;
+  var expandedAreas = {}; // area label -> true while its node list is open
+  var lastAreaBreakdown = [];
 
-  function areaBreakdownRowHtml(a) {
-    return '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)">' +
-      '<span class="badge-region">' + escapeHtml(a.label) + '</span>' +
-      '<span>' + a.count + ' new node' + (a.count === 1 ? '' : 's') + '</span>' +
-      '</div>';
+  function nodeRefLabel(n) {
+    if (n.name) return n.name;
+    return n.publicKey ? n.publicKey.slice(0, 8) + '…' : 'Unknown';
   }
 
-  function areaBreakdownToggleHtml(total, expanded) {
+  function areaBreakdownRowHtml(a) {
+    var hasNodes = !!(a.nodes && a.nodes.length);
+    var isOpen = hasNodes && !!expandedAreas[a.label];
+    var arrow = hasNodes ? (isOpen ? ' ▾' : ' ▸') : '';
+    var header =
+      '<div class="area-breakdown-row" data-area-label="' + escapeHtml(a.label) + '" style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);cursor:' + (hasNodes ? 'pointer' : 'default') + '">' +
+        '<span class="badge-region">' + escapeHtml(a.label) + '</span>' +
+        '<span>' + a.count + ' new node' + (a.count === 1 ? '' : 's') + arrow + '</span>' +
+      '</div>';
+    var nodesHtml = '';
+    if (isOpen) {
+      nodesHtml =
+        '<div class="area-breakdown-nodes" style="padding:2px 0 10px 12px;font-size:13px">' +
+          a.nodes.map(function (n) {
+            return '<div style="padding:2px 0"><a href="#/nodes/' + encodeURIComponent(n.publicKey) + '">' + escapeHtml(nodeRefLabel(n)) + '</a></div>';
+          }).join('') +
+        '</div>';
+    }
+    return header + nodesHtml;
+  }
+
+  function areaBreakdownToggleHtml(total) {
     if (total <= AREA_LIMIT) return '';
-    var label = expanded ? 'Show fewer' : 'Show all ' + total + ' areas';
+    var label = areaShowAllExpanded ? 'Show fewer' : 'Show all ' + total + ' areas';
     return '<div style="margin-top:6px;text-align:right"><button type="button" data-area-toggle class="btn-link" style="font-size:12px;cursor:pointer;background:none;border:none;color:var(--link-color);padding:0">' + label + '</button></div>';
   }
 
-  function areaBreakdownInnerHtml(areas, expanded) {
-    var shown = expanded ? areas : areas.slice(0, AREA_LIMIT);
-    return shown.map(areaBreakdownRowHtml).join('') + areaBreakdownToggleHtml(areas.length, expanded);
+  function areaBreakdownInnerHtml(areas) {
+    var shown = areaShowAllExpanded ? areas : areas.slice(0, AREA_LIMIT);
+    return shown.map(areaBreakdownRowHtml).join('') + areaBreakdownToggleHtml(areas.length);
   }
 
-  // Re-renders just the area list on toggle click and rewires the
-  // (freshly-created) button, since innerHTML replacement drops the old
-  // node's listener.
-  function wireAreaBreakdownToggle(areas) {
-    var expanded = false;
-    function attach() {
-      var listEl = document.getElementById('network-digest-area-breakdown-list');
-      if (!listEl) return;
-      var btn = listEl.querySelector('[data-area-toggle]');
-      if (btn) {
-        btn.addEventListener('click', function () {
-          expanded = !expanded;
-          listEl.innerHTML = areaBreakdownInnerHtml(areas, expanded);
-          attach();
-        });
-      }
-    }
-    attach();
+  function rerenderAreaBreakdown() {
+    var listEl = document.getElementById('network-digest-area-breakdown-list');
+    if (listEl) listEl.innerHTML = areaBreakdownInnerHtml(lastAreaBreakdown);
   }
 
   function render(data) {
@@ -182,11 +220,13 @@
 
     var areaBreakdownHtml = '';
     var areas = data.areaBreakdown || [];
+    lastAreaBreakdown = areas;
     if (areas.length > 0) {
       areaBreakdownHtml =
         '<div class="analytics-card" style="margin-top:16px">' +
           '<h3 style="margin:0 0 8px">' + phIcon('map-trifold') + ' Area Breakdown</h3>' +
-          '<div id="network-digest-area-breakdown-list">' + areaBreakdownInnerHtml(areas, false) + '</div>' +
+          '<p class="help-text" style="margin:0 0 8px;font-size:12px">Click an area to see which nodes.</p>' +
+          '<div id="network-digest-area-breakdown-list">' + areaBreakdownInnerHtml(areas) + '</div>' +
         '</div>';
     }
 
@@ -199,8 +239,6 @@
     contentEl.innerHTML =
       '<div class="stats-grid">' + tiles + '</div>' +
       areaBreakdownHtml;
-
-    if (areas.length > 0) wireAreaBreakdownToggle(areas);
   }
 
   window.NetworkDigestTool = { init: init, destroy: destroy };

@@ -235,6 +235,87 @@ function waitForLoad() {
     assert.ok(!content.innerHTML.includes('Show all'), `expected no toggle button for exactly 10 areas, got: ${content.innerHTML}`);
   });
 
+  // rerenderAreaBreakdown() (fired by the click handlers below) writes
+  // directly into the #network-digest-area-breakdown-list element, not
+  // into #network-digest-content's innerHTML -- this sandbox has no real
+  // DOM tree, so document.getElementById returns an independent fakeEl
+  // per id rather than something nested inside content's own markup.
+  // Assert against that element specifically for click-driven updates.
+
+  await test('clicking "Show all" via the delegated listener expands the collapsed areas', async () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({ label: 'Area ' + i, count: 12 - i }));
+    const sb = initWith(makeDigest({ areaBreakdown: many }));
+    await waitForLoad();
+    const content = sb.__docStore['network-digest-content'];
+    assert.ok(!content.innerHTML.includes('Area 11'), 'expected Area 11 to be collapsed away initially');
+    content._listeners.click({ target: { closest: (sel) => (sel === '[data-area-toggle]' ? { dataset: {} } : null) } });
+    const list = sb.__docStore['network-digest-area-breakdown-list'];
+    assert.ok(list.innerHTML.includes('Area 11'), `expected Area 11 to appear after expanding, got: ${list.innerHTML}`);
+    assert.ok(list.innerHTML.includes('Show fewer'), `expected the toggle label to flip to "Show fewer", got: ${list.innerHTML}`);
+  });
+
+  await test('clicking an area row reveals the node list with names and node links', async () => {
+    const sb = initWith(makeDigest({
+      areaBreakdown: [{
+        label: 'Area A',
+        count: 2,
+        nodes: [
+          { publicKey: 'aa'.repeat(32), name: 'FirstNode', firstSeen: '2026-07-22T09:00:00Z' },
+          { publicKey: 'bb'.repeat(32), name: 'SecondNode', firstSeen: '2026-07-22T08:00:00Z' },
+        ],
+      }],
+    }));
+    await waitForLoad();
+    const content = sb.__docStore['network-digest-content'];
+    assert.ok(!content.innerHTML.includes('FirstNode'), 'expected the node list to be collapsed initially');
+    content._listeners.click({ target: { closest: (sel) => (sel === '[data-area-label]' ? { dataset: { areaLabel: 'Area A' } } : null) } });
+    const list = sb.__docStore['network-digest-area-breakdown-list'];
+    assert.ok(list.innerHTML.includes('FirstNode'), `expected FirstNode to appear after clicking the area, got: ${list.innerHTML}`);
+    assert.ok(list.innerHTML.includes('SecondNode'), 'expected SecondNode to appear too');
+    assert.ok(list.innerHTML.includes('href="#/nodes/' + 'aa'.repeat(32) + '"'), 'expected a link to the node detail page');
+  });
+
+  await test('clicking the same area row again collapses the node list', async () => {
+    const sb = initWith(makeDigest({
+      areaBreakdown: [{ label: 'Area A', count: 1, nodes: [{ publicKey: 'cc'.repeat(32), name: 'ToggleNode', firstSeen: '2026-07-22T09:00:00Z' }] }],
+    }));
+    await waitForLoad();
+    const content = sb.__docStore['network-digest-content'];
+    const clickRow = () => content._listeners.click({ target: { closest: (sel) => (sel === '[data-area-label]' ? { dataset: { areaLabel: 'Area A' } } : null) } });
+    clickRow();
+    const list = sb.__docStore['network-digest-area-breakdown-list'];
+    assert.ok(list.innerHTML.includes('ToggleNode'), 'expected the node list open after the first click');
+    clickRow();
+    assert.ok(!list.innerHTML.includes('ToggleNode'), `expected the node list closed after a second click, got: ${list.innerHTML}`);
+  });
+
+  await test('a node with no known name falls back to a truncated pubkey', async () => {
+    const sb = initWith(makeDigest({
+      areaBreakdown: [{ label: 'Area A', count: 1, nodes: [{ publicKey: 'deadbeefcafebabe0000000000000000000000000000000000000000000000', name: '', firstSeen: '2026-07-22T09:00:00Z' }] }],
+    }));
+    await waitForLoad();
+    const content = sb.__docStore['network-digest-content'];
+    content._listeners.click({ target: { closest: (sel) => (sel === '[data-area-label]' ? { dataset: { areaLabel: 'Area A' } } : null) } });
+    const list = sb.__docStore['network-digest-area-breakdown-list'];
+    assert.ok(list.innerHTML.includes('deadbeef'), `expected a truncated-pubkey fallback, got: ${list.innerHTML}`);
+  });
+
+  await test('expand state resets on a fresh load (window/origin switch)', async () => {
+    const sb = initWith(makeDigest({
+      areaBreakdown: [{ label: 'Area A', count: 1, nodes: [{ publicKey: 'ee'.repeat(32), name: 'ResetNode', firstSeen: '2026-07-22T09:00:00Z' }] }],
+    }));
+    await waitForLoad();
+    const content = sb.__docStore['network-digest-content'];
+    content._listeners.click({ target: { closest: (sel) => (sel === '[data-area-label]' ? { dataset: { areaLabel: 'Area A' } } : null) } });
+    const list = sb.__docStore['network-digest-area-breakdown-list'];
+    assert.ok(list.innerHTML.includes('ResetNode'), 'expected the node list open before switching windows');
+
+    const windowTabs = sb.__docStore['network-digest-window-tabs'];
+    windowTabs._listeners.click({ target: { closest: () => ({ dataset: { window: '30d' } }) } });
+    await waitForLoad();
+    assert.ok(!content.innerHTML.includes('ResetNode'), `expected the expand state to reset on a fresh load, got: ${content.innerHTML}`);
+  });
+
   await test('omits the area breakdown card entirely when absent', async () => {
     const sb = initWith(makeDigest({ areaBreakdown: null }));
     await waitForLoad();

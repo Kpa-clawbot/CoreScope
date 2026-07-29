@@ -614,6 +614,15 @@ func componentSchemas() map[string]interface{} {
 			"properties": map[string]interface{}{
 				"label": str("The area's display label."),
 				"count": map[string]interface{}{"type": "integer", "description": "New nodes in this area within the digest window."},
+				"nodes": map[string]interface{}{"type": "array", "items": schemaRef("AreaNodeRef"), "description": "Every new node counted toward this area, newest first."},
+			},
+		},
+		"AreaNodeRef": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"publicKey": str("The node's public key."),
+				"name":      str("Display name, when known."),
+				"firstSeen": str("RFC3339 timestamp the node was first seen."),
 			},
 		},
 		"NetworkDigest": map[string]interface{}{
