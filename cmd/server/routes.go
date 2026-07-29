@@ -365,6 +365,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	// a static /api/observers/neighbors registered after {id} would be
 	// swallowed by it (id="neighbors") instead of reaching this handler.
 	r.HandleFunc("/api/observers/neighbors", s.handleAllObserverNeighbors).Methods("GET")
+	r.HandleFunc("/api/analytics/new-nodes", s.handleNewNodes).Methods("GET")
 	r.HandleFunc("/api/observers/{id}", s.handleObserverDetail).Methods("GET")
 	r.HandleFunc("/api/observers", s.handleObservers).Methods("GET")
 	r.HandleFunc("/api/traces/{hash}", s.handleTraces).Methods("GET")
