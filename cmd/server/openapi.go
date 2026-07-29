@@ -144,6 +144,9 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/analytics/new-nodes": {Summary: "Most recently first-seen nodes, network-wide", Description: "Tools > New Nodes. Newest first, each with its configured area(s) (same touched-areas matching View Path/Ping Scores' Area Activity draw from). Excludes nodes that also appear in inactive_nodes -- a node pruned for inactivity and later returning would otherwise get a freshly-INSERTed nodes.first_seen and misleadingly look brand new; that \"came back after being pruned\" case is its own distinct signal, not covered by this feed. Blacklisted nodes (config.json nodeBlacklist) are excluded. Empty list (not an error) when nothing qualifies.", Tag: "nodes",
 			QueryParams: []paramMeta{{Name: "limit", Description: "Max entries to return (default 50)", Type: "integer"}},
 			Response:    schemaRef("NewNodesResponse")},
+		"GET /api/analytics/node-changes": {Summary: "Recent node role/name/position changes and pruned-node returns", Description: "Tools > Node Changes, a durable audit log written by cmd/ingestor's UpsertNode as ADVERTs arrive (not a periodic snapshot diff, so nothing is missed between polls). changeType is \"role\", \"name\", \"position\" (>=1km move; GPS jitter under that is not logged), or \"resurrected\" (pubkey previously pruned to inactive_nodes for inactivity, now advertising again -- oldValue is its last_seen there before it returned). A field is only compared when both the old and new ADVERT values are present, since adverts routinely omit name/location. Newest first. Blacklisted nodes excluded. Empty list (not an error) when nothing has been logged yet.", Tag: "nodes",
+			QueryParams: []paramMeta{{Name: "limit", Description: "Max entries to return (default 50)", Type: "integer"}},
+			Response:    schemaRef("NodeChangesResponse")},
 
 		// Misc
 		"GET /api/resolve-hops":  {Summary: "Resolve hop path", Description: "Resolves hash prefixes in a hop path to node names. Returns affinity scores and best candidates.", Tag: "nodes", QueryParams: []paramMeta{{Name: "hops", Description: "Comma-separated hop hash prefixes", Type: "string", Required: true}}},
@@ -578,6 +581,26 @@ func componentSchemas() map[string]interface{} {
 			"description": "Most recently first-seen nodes, network-wide (Tools > New Nodes). Empty (not an error) when nothing qualifies.",
 			"properties": map[string]interface{}{
 				"newNodes": map[string]interface{}{"type": "array", "items": schemaRef("NewNodeEntry")},
+			},
+		},
+		"NodeChangeEntry": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"id":         map[string]interface{}{"type": "integer", "description": "node_changes row id."},
+				"publicKey":  str("The node's full public key."),
+				"name":       str("The node's CURRENT display name (resolved fresh), not a historical snapshot at the time of the change."),
+				"changeType": str("One of \"role\", \"name\", \"position\", or \"resurrected\"."),
+				"oldValue":   str("For role/name: the previous raw value. For position: \"lat,lon\". For resurrected: the last_seen timestamp from inactive_nodes before the node returned."),
+				"newValue":   str("For role/name: the new raw value. For position: \"lat,lon\". Empty for resurrected."),
+				"detectedAt": str("RFC3339 timestamp this change was detected."),
+				"distanceKm": map[string]interface{}{"type": "number", "nullable": true, "description": "Distance between old and new position. Only present when changeType is \"position\"."},
+			},
+		},
+		"NodeChangesResponse": map[string]interface{}{
+			"type":        "object",
+			"description": "Recent node role/name/position changes and pruned-node returns (Tools > Node Changes). Empty (not an error) when nothing has been logged yet.",
+			"properties": map[string]interface{}{
+				"nodeChanges": map[string]interface{}{"type": "array", "items": schemaRef("NodeChangeEntry")},
 			},
 		},
 	}

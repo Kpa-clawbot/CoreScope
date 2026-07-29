@@ -80,6 +80,7 @@ node test-observer-direct-neighbors-panel.js
 node test-analytics-areas-tab.js
 node test-observer-neighbors-tool.js
 node test-new-nodes-tool.js
+node test-node-changes-tool.js
 
 echo ""
 echo "═══════════════════════════════════════"
