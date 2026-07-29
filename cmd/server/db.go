@@ -2112,7 +2112,10 @@ type PacketPathResponse struct {
 // returned deepest-first. The single earliest-arriving observation
 // (usually 0 hops, close to the sender) is additionally surfaced via
 // First, independent of which station it came from or how deep it was.
-func (db *DB) GetPacketPath(hash string) (*PacketPathResponse, error) {
+// maxEdgeKm is threaded straight through to nearestPositionedNeighbor's
+// geo-sanity filter for the Approx position fallback (see its doc
+// comment) -- pass Config.NeighborMaxEdgeKm().
+func (db *DB) GetPacketPath(hash string, maxEdgeKm float64) (*PacketPathResponse, error) {
 	if !db.hasResolvedPath() {
 		return nil, fmt.Errorf("resolved_path not available on this server")
 	}
@@ -2353,7 +2356,7 @@ func (db *DB) GetPacketPath(hash string) (*PacketPathResponse, error) {
 				// position -- borrow a weighted centroid of its
 				// positioned neighbors instead, clearly flagged as
 				// approximate rather than a real fix.
-				if _, nLat, nLon, nCount, nSpread, ok := db.nearestPositionedNeighbor(*pk); ok {
+				if _, nLat, nLon, nCount, nSpread, ok := db.nearestPositionedNeighbor(*pk, maxEdgeKm); ok {
 					lat, lon := nLat, nLon
 					point.Lat, point.Lon, point.Approx, point.ApproxNeighborCount = &lat, &lon, true, nCount
 					if nCount > 1 {
@@ -2399,7 +2402,7 @@ func (db *DB) GetPacketPath(hash string) (*PacketPathResponse, error) {
 				// Last resort, same as the hop-point fallback above: no
 				// position of its own anywhere, so borrow a weighted
 				// centroid of its positioned neighbors, flagged as approximate.
-				if _, nLat, nLon, nCount, nSpread, ok := db.nearestPositionedNeighbor(b.observerPubkey); ok {
+				if _, nLat, nLon, nCount, nSpread, ok := db.nearestPositionedNeighbor(b.observerPubkey, maxEdgeKm); ok {
 					lat, lon := nLat, nLon
 					obs.Lat, obs.Lon, obs.Approx, obs.ApproxNeighborCount = &lat, &lon, true, nCount
 					if nCount > 1 {
@@ -2470,8 +2473,25 @@ func (db *DB) GetPacketPath(hash string) (*PacketPathResponse, error) {
 // agree (small spread) means a tighter estimate than a single neighbor
 // or several that disagree (large spread).
 //
+// maxEdgeKm geo-sanity-filters the candidate pool before averaging:
+// neighbor_edges isn't purely RF adjacency -- it also carries
+// observer↔last-hop edges (cmd/ingestor/neighbor_builder.go), and an
+// MQTT-bridged remote observer can be genuinely hundreds of km from a
+// repeater it merely "heard" over the bridge, not next to it. Anchored
+// on the single highest-weight (most-observed) candidate as the most
+// trustworthy data point, any other candidate further than maxEdgeKm
+// from it is dropped before the centroid/spread math runs -- otherwise
+// one rare distant outlier both skews the estimate and inflates
+// spreadKm into something like "800km", which reads as "this whole
+// estimate is garbage" when in practice the real local neighbors
+// dominate by weight. Same threshold already used to reject
+// geo-implausible edges when building the in-memory NeighborGraph
+// (neighbor_graph.go's shouldRejectGeoFar / Config.NeighborMaxEdgeKm) --
+// this is the same sanity check, applied to this separate raw-SQL path.
+// maxEdgeKm <= 0 disables the filter.
+//
 // Returns ok=false when pubkey has no neighbor with a position at all.
-func (db *DB) nearestPositionedNeighbor(pubkey string) (name string, lat, lon float64, contributorCount int, spreadKm float64, ok bool) {
+func (db *DB) nearestPositionedNeighbor(pubkey string, maxEdgeKm float64) (name string, lat, lon float64, contributorCount int, spreadKm float64, ok bool) {
 	pk := strings.ToLower(strings.TrimSpace(pubkey))
 	if pk == "" {
 		return "", 0, 0, 0, 0, false
@@ -2530,12 +2550,14 @@ func (db *DB) nearestPositionedNeighbor(pubkey string) (name string, lat, lon fl
 		nodeRows.Close()
 	}
 
-	// candidates is count-DESC ordered, so the first contributor found
-	// is the strongest -- used only for the returned name, which is
-	// otherwise cosmetic (current callers discard it).
-	var sumLat, sumLon, sumWeight float64
-	var strongestName string
-	var contributors []posInfo
+	// candidates is count-DESC ordered, so the first resolved contributor
+	// is the strongest (most-observed) -- both the geo-sanity anchor
+	// below and, for the returned name, the presumed most trustworthy.
+	type weighted struct {
+		posInfo
+		weight float64
+	}
+	var contributors []weighted
 	for _, c := range candidates {
 		p, found := posByPK[c.pubkey]
 		if !found {
@@ -2545,16 +2567,32 @@ func (db *DB) nearestPositionedNeighbor(pubkey string) (name string, lat, lon fl
 		if w <= 0 {
 			w = 1
 		}
-		sumLat += p.lat * w
-		sumLon += p.lon * w
-		sumWeight += w
-		if strongestName == "" {
-			strongestName = p.name
-		}
-		contributors = append(contributors, p)
+		contributors = append(contributors, weighted{posInfo: p, weight: w})
 	}
-	if sumWeight == 0 {
+	if len(contributors) == 0 {
 		return "", 0, 0, 0, 0, false
+	}
+
+	if maxEdgeKm > 0 && len(contributors) > 1 {
+		anchor := contributors[0]
+		filtered := contributors[:1:1] // anchor always survives (distance to itself is 0)
+		for _, c := range contributors[1:] {
+			if haversineKm(anchor.lat, anchor.lon, c.lat, c.lon) <= maxEdgeKm {
+				filtered = append(filtered, c)
+			}
+		}
+		contributors = filtered
+	}
+
+	var sumLat, sumLon, sumWeight float64
+	var strongestName string
+	for _, c := range contributors {
+		sumLat += c.lat * c.weight
+		sumLon += c.lon * c.weight
+		sumWeight += c.weight
+		if strongestName == "" {
+			strongestName = c.name
+		}
 	}
 	var spread float64
 	for i := 0; i < len(contributors); i++ {
@@ -3940,8 +3978,10 @@ func computeAreaBridgeNodes(nodes []areaAnalyticsNode, areas map[string]AreaEntr
 // computeAreaBridgeNodes. Nodes with no positioned neighbor to estimate
 // from at all (nearestPositionedNeighbor ok=false) can't be placed
 // anywhere and are counted only in unpositionedNoNeighborFix, not in any
-// area's Approximated total.
-func computeAreaPositionGaps(db *DB, positioned []areaAnalyticsNode, unpositioned []RepeaterRef, areas map[string]AreaEntry) (gaps []AreaPositionGap, unpositionedNoNeighborFix int, estimatedNodes []EstimatedAreaNode) {
+// area's Approximated total. maxEdgeKm is threaded through to
+// nearestPositionedNeighbor's geo-sanity filter (see its doc comment) --
+// pass Config.NeighborMaxEdgeKm().
+func computeAreaPositionGaps(db *DB, positioned []areaAnalyticsNode, unpositioned []RepeaterRef, areas map[string]AreaEntry, maxEdgeKm float64) (gaps []AreaPositionGap, unpositionedNoNeighborFix int, estimatedNodes []EstimatedAreaNode) {
 	counts := make(map[string]*AreaPositionGap)
 	get := func(key string) *AreaPositionGap {
 		g, exists := counts[key]
@@ -3959,7 +3999,7 @@ func computeAreaPositionGaps(db *DB, positioned []areaAnalyticsNode, unpositione
 		get(key).RealFix++
 	}
 	for _, n := range unpositioned {
-		_, estLat, estLon, contributorCount, spreadKm, ok := db.nearestPositionedNeighbor(n.PublicKey)
+		_, estLat, estLon, contributorCount, spreadKm, ok := db.nearestPositionedNeighbor(n.PublicKey, maxEdgeKm)
 		if !ok {
 			unpositionedNoNeighborFix++
 			continue

@@ -675,7 +675,7 @@ func TestGetPacketPath(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, resolved_path, timestamp)
 		VALUES (1, 2, 4.0, -95, '["aa","bb"]', '["pkAlpha","pkBravo"]', 1736935260)`)
 
-	resp, err := db.GetPacketPath("pathtest00000001")
+	resp, err := db.GetPacketPath("pathtest00000001", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -736,7 +736,7 @@ func TestGetPacketPath_First(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (1, 3, 6.0, -90, '["aa","bb"]', 300)`)
 
-	resp, err := db.GetPacketPath("pathtest00000007")
+	resp, err := db.GetPacketPath("pathtest00000007", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -820,7 +820,7 @@ func TestGetPacketPath_DistanceOmittedWhenApprox(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (1, 2, 4.0, -95, '["aa","bb"]', 200)`)
 
-	resp, err := db.GetPacketPath("pathtest00000011")
+	resp, err := db.GetPacketPath("pathtest00000011", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -871,7 +871,7 @@ func TestGetPacketPath_ExcludesNullIsland(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, resolved_path, timestamp)
 		VALUES (1, 1, 9.0, -88, '["aa"]', '["pkZero"]', 1736935200)`)
 
-	resp, err := db.GetPacketPath("pathtest00000008")
+	resp, err := db.GetPacketPath("pathtest00000008", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -923,7 +923,7 @@ func TestGetPacketPath_FallsBackToSingleNeighborPosition(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, resolved_path, timestamp)
 		VALUES (1, 1, 9.0, -88, '["aa"]', '["pkghost"]', 1736935200)`)
 
-	resp, err := db.GetPacketPath("pathtest00000009")
+	resp, err := db.GetPacketPath("pathtest00000009", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -993,7 +993,12 @@ func TestGetPacketPath_FallsBackToWeightedNeighborCentroid(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, resolved_path, timestamp)
 		VALUES (1, 1, 9.0, -88, '["aa"]', '["pkghost"]', 1736935200)`)
 
-	resp, err := db.GetPacketPath("pathtest00000010")
+	// maxEdgeKm=0: this test's own point is the ~640km disagreement
+	// between AnchorRepeater and WeakRepeater -- the geo-sanity filter
+	// (nearestPositionedNeighbor's maxEdgeKm) is a separate concern with
+	// its own dedicated tests below and would otherwise drop WeakRepeater
+	// here, breaking ApproxNeighborCount/ApproxSpreadKm's assertions.
+	resp, err := db.GetPacketPath("pathtest00000010", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1023,6 +1028,99 @@ func TestGetPacketPath_FallsBackToWeightedNeighborCentroid(t *testing.T) {
 	}
 }
 
+// TestNearestPositionedNeighbor_GeoFilterDropsDistantOutlier reproduces
+// the real-data symptom dborup reported (spreadKm in the hundreds of km
+// for nodes in small Danish areas): one strong, genuinely-nearby
+// candidate plus one distant, low-weight outlier -- e.g. an MQTT-bridged
+// observer that "heard" this node's traffic without ever being RF-
+// adjacent to it. With the geo-sanity filter enabled (maxEdgeKm),
+// the outlier must be dropped before both the centroid and the spread
+// are computed, so the estimate stays anchored near the real neighbor
+// and spreadKm stops looking like "this estimate is garbage" when it
+// isn't.
+func TestNearestPositionedNeighbor_GeoFilterDropsDistantOutlier(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	db.conn.Exec(`CREATE TABLE IF NOT EXISTS neighbor_edges (node_a TEXT NOT NULL, node_b TEXT NOT NULL, count INTEGER DEFAULT 1, last_seen TEXT, PRIMARY KEY (node_a, node_b))`)
+	// Sønderjylland, Denmark.
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, lat, lon) VALUES ('nearby01', 'NearbyRepeater', 55.0, 9.4)`)
+	// ~800km away -- an implausible single RF hop, plausible only as an
+	// MQTT-bridge observer↔last-hop edge.
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, lat, lon) VALUES ('faraway01', 'FarAwayObserver', 48.0, 11.5)`)
+	db.conn.Exec(`INSERT INTO neighbor_edges (node_a, node_b, count) VALUES ('ghost', 'nearby01', 10)`)
+	db.conn.Exec(`INSERT INTO neighbor_edges (node_a, node_b, count) VALUES ('ghost', 'faraway01', 1)`)
+
+	name, lat, lon, count, spread, ok := db.nearestPositionedNeighbor("ghost", 500)
+	if !ok {
+		t.Fatalf("ok = false, want true")
+	}
+	if count != 1 {
+		t.Errorf("contributorCount = %d, want 1 (faraway01 dropped by the geo-sanity filter)", count)
+	}
+	if name != "NearbyRepeater" {
+		t.Errorf("name = %q, want NearbyRepeater", name)
+	}
+	if lat != 55.0 || lon != 9.4 {
+		t.Errorf("lat/lon = %v/%v, want exactly nearby01's position (single surviving contributor)", lat, lon)
+	}
+	if spread != 0 {
+		t.Errorf("spreadKm = %v, want 0 (only one contributor survives the filter)", spread)
+	}
+}
+
+// TestNearestPositionedNeighbor_GeoFilterDisabledIncludesEveryCandidate
+// confirms maxEdgeKm<=0 disables the filter entirely -- the pre-existing
+// behavior, preserved for callers that don't want it (or a deployment
+// that explicitly disabled Config.NeighborMaxEdgeKm via a negative
+// value, per its own doc comment).
+func TestNearestPositionedNeighbor_GeoFilterDisabledIncludesEveryCandidate(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	db.conn.Exec(`CREATE TABLE IF NOT EXISTS neighbor_edges (node_a TEXT NOT NULL, node_b TEXT NOT NULL, count INTEGER DEFAULT 1, last_seen TEXT, PRIMARY KEY (node_a, node_b))`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, lat, lon) VALUES ('nearby01', 'NearbyRepeater', 55.0, 9.4)`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, lat, lon) VALUES ('faraway01', 'FarAwayObserver', 48.0, 11.5)`)
+	db.conn.Exec(`INSERT INTO neighbor_edges (node_a, node_b, count) VALUES ('ghost', 'nearby01', 10)`)
+	db.conn.Exec(`INSERT INTO neighbor_edges (node_a, node_b, count) VALUES ('ghost', 'faraway01', 1)`)
+
+	_, _, _, count, spread, ok := db.nearestPositionedNeighbor("ghost", 0)
+	if !ok {
+		t.Fatalf("ok = false, want true")
+	}
+	if count != 2 {
+		t.Errorf("contributorCount = %d, want 2 (filter disabled, faraway01 included)", count)
+	}
+	if spread < 500 {
+		t.Errorf("spreadKm = %v, want >=500 (the real ~800km disagreement, unfiltered)", spread)
+	}
+}
+
+// TestNearestPositionedNeighbor_GeoFilterKeepsCandidatesWithinRange
+// confirms the filter doesn't over-trigger -- two genuinely nearby
+// candidates both survive.
+func TestNearestPositionedNeighbor_GeoFilterKeepsCandidatesWithinRange(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	db.conn.Exec(`CREATE TABLE IF NOT EXISTS neighbor_edges (node_a TEXT NOT NULL, node_b TEXT NOT NULL, count INTEGER DEFAULT 1, last_seen TEXT, PRIMARY KEY (node_a, node_b))`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, lat, lon) VALUES ('near1', 'Near1', 55.00, 9.40)`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, lat, lon) VALUES ('near2', 'Near2', 55.05, 9.45)`) // a few km away
+	db.conn.Exec(`INSERT INTO neighbor_edges (node_a, node_b, count) VALUES ('ghost', 'near1', 5)`)
+	db.conn.Exec(`INSERT INTO neighbor_edges (node_a, node_b, count) VALUES ('ghost', 'near2', 5)`)
+
+	_, _, _, count, spread, ok := db.nearestPositionedNeighbor("ghost", 500)
+	if !ok {
+		t.Fatalf("ok = false, want true")
+	}
+	if count != 2 {
+		t.Errorf("contributorCount = %d, want 2 (both candidates are well within maxEdgeKm)", count)
+	}
+	if spread <= 0 || spread > 50 {
+		t.Errorf("spreadKm = %v, want a small real distance between near1 and near2 (a few km)", spread)
+	}
+}
+
 // TestGetPacketPath_ObserverPositionPrefersOwnGPS covers an observer whose
 // configured IATA code isn't a real airport (a custom/regional code an
 // operator typed in, or a typo) and so isn't in the hardcoded iataCoords
@@ -1043,7 +1141,7 @@ func TestGetPacketPath_ObserverPositionPrefersOwnGPS(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (1, 1, 9.0, -88, '[]', 1736935200)`)
 
-	resp, err := db.GetPacketPath("pathtest00000004")
+	resp, err := db.GetPacketPath("pathtest00000004", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1086,7 +1184,7 @@ func TestGetPacketPath_ObserverPositionFallsBackToNameMatch(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (1, 1, 9.0, -88, '[]', 1736935200)`)
 
-	resp, err := db.GetPacketPath("pathtest00000005")
+	resp, err := db.GetPacketPath("pathtest00000005", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1121,7 +1219,7 @@ func TestGetPacketPath_ObserverPositionSkipsAmbiguousNameMatch(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (1, 1, 9.0, -88, '[]', 1736935200)`)
 
-	resp, err := db.GetPacketPath("pathtest00000006")
+	resp, err := db.GetPacketPath("pathtest00000006", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1151,7 +1249,7 @@ func TestGetPacketPath_NoResolvedPath(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (1, 1, 9.0, -88, '["aa"]', 1736935200)`)
 
-	resp, err := db.GetPacketPath("pathtest00000002")
+	resp, err := db.GetPacketPath("pathtest00000002", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1191,7 +1289,7 @@ func TestGetPacketPath_SameObserverMultipleObservations(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, resolved_path, timestamp)
 		VALUES (1, 1, 6.0, -100, '["aa"]', '["pkAlpha"]', 1736935260)`)
 
-	resp, err := db.GetPacketPath("pathtest00000003")
+	resp, err := db.GetPacketPath("pathtest00000003", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1207,7 +1305,7 @@ func TestGetPacketPath_UnknownHash(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
-	resp, err := db.GetPacketPath("doesnotexist0000")
+	resp, err := db.GetPacketPath("doesnotexist0000", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
