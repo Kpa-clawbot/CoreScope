@@ -305,6 +305,12 @@
         });
       });
     }
+
+    // Drag-resizable columns (widths persisted to localStorage), same
+    // utility as new-nodes.js and the main Nodes/Observers/Packets
+    // tables -- dborup asked for the same on Node Changes right after
+    // it landed on New Nodes.
+    if (typeof makeColumnsResizable === 'function') makeColumnsResizable('#node-changes-table', 'meshcore-node-changes-col-widths');
   }
 
   window.NodeChangesTool = { init: init, destroy: destroy, sortValue: sortValue, typeLabel: typeLabel, roleLabel: roleLabel };

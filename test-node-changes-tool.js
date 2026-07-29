@@ -33,6 +33,7 @@ function makeRow(overrides) {
 
 function createSandbox(nodeChangesFixture) {
   const docStore = {};
+  const resizeCalls = [];
   function fakeEl(id) {
     if (!docStore[id]) {
       docStore[id] = {
@@ -65,6 +66,8 @@ function createSandbox(nodeChangesFixture) {
     encodeURIComponent: encodeURIComponent,
     console: console,
     __docStore: docStore,
+    __resizeCalls: resizeCalls,
+    makeColumnsResizable: function (selector, storageKey) { resizeCalls.push({ selector, storageKey }); },
   };
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
@@ -309,6 +312,29 @@ function waitForLoad() {
     const wrap = sb.__docStore['node-changes-table-wrap'];
     assert.ok(/data-sort-col="detectedAt"[^>]*class="sortable sort-active"|class="sortable sort-active"[^>]*data-sort-col="detectedAt"/.test(wrap.innerHTML),
       `expected Detected header to carry sort-active by default; got: ${wrap.innerHTML.slice(0, 400)}`);
+  });
+
+  // Column resizing — same request as New Nodes, same shared
+  // makeColumnsResizable utility. Not itself testable in this DOM-less
+  // sandbox -- just confirm the tool wires it with the right table
+  // selector and a dedicated (not shared/colliding) localStorage key.
+  await test('wires makeColumnsResizable with the table selector and a dedicated storage key', async () => {
+    const sb = initWith([makeRow()]);
+    await waitForLoad();
+    assert.strictEqual(sb.__resizeCalls.length, 1, `expected exactly one makeColumnsResizable call, got: ${JSON.stringify(sb.__resizeCalls)}`);
+    assert.strictEqual(sb.__resizeCalls[0].selector, '#node-changes-table');
+    assert.ok(sb.__resizeCalls[0].storageKey && sb.__resizeCalls[0].storageKey.indexOf('node-changes') !== -1,
+      `expected a node-changes-specific storage key, got: ${sb.__resizeCalls[0].storageKey}`);
+  });
+
+  await test('re-renders (sort/filter) re-wire makeColumnsResizable each time', async () => {
+    const sb = initWith([makeRow(), makeRow({ id: 2, publicKey: 'bb'.repeat(32), name: 'Second' })]);
+    await waitForLoad();
+    const callsBefore = sb.__resizeCalls.length;
+    const filterInput = sb.__docStore['node-changes-filter'];
+    filterInput.value = 'second';
+    filterInput._listeners.input();
+    assert.ok(sb.__resizeCalls.length > callsBefore, 'expected another makeColumnsResizable call after a re-render');
   });
 
   console.log('\n════════════════════════════════════════');
