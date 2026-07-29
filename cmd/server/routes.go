@@ -367,6 +367,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/observers/neighbors", s.handleAllObserverNeighbors).Methods("GET")
 	r.HandleFunc("/api/analytics/new-nodes", s.handleNewNodes).Methods("GET")
 	r.HandleFunc("/api/analytics/node-changes", s.handleNodeChanges).Methods("GET")
+	r.HandleFunc("/api/analytics/network-digest", s.handleNetworkDigest).Methods("GET")
 	r.HandleFunc("/api/observers/{id}", s.handleObserverDetail).Methods("GET")
 	r.HandleFunc("/api/observers", s.handleObservers).Methods("GET")
 	r.HandleFunc("/api/traces/{hash}", s.handleTraces).Methods("GET")

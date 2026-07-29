@@ -1,0 +1,144 @@
+package main
+
+import (
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
+// TestComputeNetworkDigest_CountsNewNodesWithinWindow confirms only nodes
+// first_seen within the window are counted, and older ones are excluded.
+func TestComputeNetworkDigest_CountsNewNodesWithinWindow(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ensureInactiveNodesTable(t, srv)
+	ensureNodeChangesTable(t, srv)
+
+	now := time.Now().UTC()
+	insertNewNodeRow(t, srv, "digestnew0000001", "InWindow", "repeater", f64(56.0), f64(10.0), now.Add(-1*time.Hour).Format(time.RFC3339))
+	insertNewNodeRow(t, srv, "digestold0000001", "OutOfWindow", "repeater", f64(56.0), f64(10.0), now.Add(-10*24*time.Hour).Format(time.RFC3339))
+
+	digest, err := srv.computeNetworkDigest(now.Add(-7 * 24 * time.Hour))
+	if err != nil {
+		t.Fatalf("computeNetworkDigest: %v", err)
+	}
+	if digest.NewNodes != 1 {
+		t.Errorf("NewNodes = %d, want 1 (only the in-window node)", digest.NewNodes)
+	}
+}
+
+// TestComputeNetworkDigest_CountsChangeTypesWithinWindow confirms each
+// change type is tallied into its own field, and only within the window.
+func TestComputeNetworkDigest_CountsChangeTypesWithinWindow(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ensureInactiveNodesTable(t, srv)
+	ensureNodeChangesTable(t, srv)
+
+	now := time.Now().UTC()
+	inWindow := now.Add(-1 * time.Hour).Format(time.RFC3339)
+	outOfWindow := now.Add(-10 * 24 * time.Hour).Format(time.RFC3339)
+
+	insertNodeChangeRow(t, srv, "digestrole0000001", "role", "companion", "repeater", inWindow)
+	insertNodeChangeRow(t, srv, "digestname0000001", "name", "Old", "New", inWindow)
+	insertNodeChangeRow(t, srv, "digestpos00000001", "position", "56.0,10.0", "56.1,10.0", inWindow)
+	insertNodeChangeRow(t, srv, "digestres00000001", "resurrected", "2026-06-01T00:00:00Z", "", inWindow)
+	// Outside the window -- must not be counted.
+	insertNodeChangeRow(t, srv, "digestoldrole00001", "role", "sensor", "repeater", outOfWindow)
+
+	digest, err := srv.computeNetworkDigest(now.Add(-7 * 24 * time.Hour))
+	if err != nil {
+		t.Fatalf("computeNetworkDigest: %v", err)
+	}
+	if digest.RoleChanges != 1 {
+		t.Errorf("RoleChanges = %d, want 1", digest.RoleChanges)
+	}
+	if digest.NameChanges != 1 {
+		t.Errorf("NameChanges = %d, want 1", digest.NameChanges)
+	}
+	if digest.PositionMoves != 1 {
+		t.Errorf("PositionMoves = %d, want 1", digest.PositionMoves)
+	}
+	if digest.Resurrections != 1 {
+		t.Errorf("Resurrections = %d, want 1", digest.Resurrections)
+	}
+}
+
+// TestComputeNetworkDigest_TopArea confirms the area with the most
+// new-node activity in the window wins, and ties break alphabetically.
+func TestComputeNetworkDigest_TopArea(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ensureInactiveNodesTable(t, srv)
+	ensureNodeChangesTable(t, srv)
+
+	srv.cfg.Areas = map[string]AreaEntry{
+		"AREAA": {Label: "Area A", LatMin: f64(55.9), LatMax: f64(56.2), LonMin: f64(9.9), LonMax: f64(10.2)},
+		"AREAB": {Label: "Area B", LatMin: f64(10.0), LatMax: f64(10.2), LonMin: f64(50.0), LonMax: f64(50.2)},
+	}
+	now := time.Now().UTC()
+	// Two new nodes in Area A, one in Area B -- Area A should win.
+	insertNewNodeRow(t, srv, "topareaa0000001", "A1", "repeater", f64(56.0), f64(10.0), now.Add(-1*time.Hour).Format(time.RFC3339))
+	insertNewNodeRow(t, srv, "topareaa0000002", "A2", "repeater", f64(56.0), f64(10.0), now.Add(-2*time.Hour).Format(time.RFC3339))
+	insertNewNodeRow(t, srv, "topareab0000001", "B1", "repeater", f64(10.1), f64(50.1), now.Add(-3*time.Hour).Format(time.RFC3339))
+
+	digest, err := srv.computeNetworkDigest(now.Add(-7 * 24 * time.Hour))
+	if err != nil {
+		t.Fatalf("computeNetworkDigest: %v", err)
+	}
+	if digest.TopArea == nil || digest.TopArea.Label != "Area A" || digest.TopArea.Count != 2 {
+		t.Errorf("TopArea = %+v, want Area A with count 2", digest.TopArea)
+	}
+}
+
+// TestComputeNetworkDigest_TopAreaNilWhenNoAreasConfigured confirms
+// TopArea stays nil rather than a zero-valued struct when no areas are
+// configured (matches New Nodes' own nil-Areas behavior in that case).
+func TestComputeNetworkDigest_TopAreaNilWhenNoAreasConfigured(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ensureInactiveNodesTable(t, srv)
+	ensureNodeChangesTable(t, srv)
+	srv.cfg.Areas = nil
+
+	now := time.Now().UTC()
+	insertNewNodeRow(t, srv, "noareasnode000001", "NoArea", "repeater", f64(56.0), f64(10.0), now.Add(-1*time.Hour).Format(time.RFC3339))
+
+	digest, err := srv.computeNetworkDigest(now.Add(-7 * 24 * time.Hour))
+	if err != nil {
+		t.Fatalf("computeNetworkDigest: %v", err)
+	}
+	if digest.TopArea != nil {
+		t.Errorf("TopArea = %+v, want nil when no areas are configured", digest.TopArea)
+	}
+}
+
+// TestHandleNetworkDigest_DefaultsTo7Days confirms the handler defaults
+// to a 7-day window when none is given, and echoes it back.
+func TestHandleNetworkDigest_DefaultsTo7Days(t *testing.T) {
+	srv, router := setupTestServer(t)
+	ensureInactiveNodesTable(t, srv)
+	ensureNodeChangesTable(t, srv)
+
+	req := httptest.NewRequest("GET", "/api/analytics/network-digest", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"window":"7d"`) {
+		t.Errorf("response should echo window=7d, got: %s", w.Body.String())
+	}
+}
+
+// TestHandleNetworkDigest_InvalidWindowRejected confirms a malformed
+// window query param is a 400, not a silent fallback.
+func TestHandleNetworkDigest_InvalidWindowRejected(t *testing.T) {
+	srv, router := setupTestServer(t)
+	ensureInactiveNodesTable(t, srv)
+	ensureNodeChangesTable(t, srv)
+
+	req := httptest.NewRequest("GET", "/api/analytics/network-digest?window=notaduration", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 400 {
+		t.Errorf("status = %d, want 400 for an invalid window, body: %s", w.Code, w.Body.String())
+	}
+}
