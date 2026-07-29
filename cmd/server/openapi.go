@@ -141,6 +141,9 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/observers/metrics/summary":                 {Summary: "Observer metrics summary", Description: "Aggregate metrics across all observers.", Tag: "observers"},
 		"GET /api/observers/neighbors": {Summary: "Every observer's reported direct neighbors, network-wide", Description: "Flattens /api/observers/{id}/neighbors across ALL observers into one list -- Tools > Observer Neighbors. Same per-entry semantics (scopes null unless the OTA scope query responded, seenViaPackets cross-references the packet-derived neighbor_edges graph, observer/neighbor name null when unresolved). Blacklisted observers (config.json observerBlacklist) are excluded. Empty list (not an error) when no observer has ever sent a /neighbors report. unknownScopes surfaces region-scope names that turned up in a reported neighbor scope list but aren't part of this deployment's configured hashRegions -- scopes the mesh is using that CoreScope doesn't know about yet.", Tag: "observers",
 			Response: schemaRef("AllObserverNeighborsResponse")},
+		"GET /api/analytics/new-nodes": {Summary: "Most recently first-seen nodes, network-wide", Description: "Tools > New Nodes. Newest first, each with its configured area(s) (same touched-areas matching View Path/Ping Scores' Area Activity draw from). Excludes nodes that also appear in inactive_nodes -- a node pruned for inactivity and later returning would otherwise get a freshly-INSERTed nodes.first_seen and misleadingly look brand new; that \"came back after being pruned\" case is its own distinct signal, not covered by this feed. Blacklisted nodes (config.json nodeBlacklist) are excluded. Empty list (not an error) when nothing qualifies.", Tag: "nodes",
+			QueryParams: []paramMeta{{Name: "limit", Description: "Max entries to return (default 50)", Type: "integer"}},
+			Response:    schemaRef("NewNodesResponse")},
 
 		// Misc
 		"GET /api/resolve-hops":  {Summary: "Resolve hop path", Description: "Resolves hash prefixes in a hop path to node names. Returns affinity scores and best candidates.", Tag: "nodes", QueryParams: []paramMeta{{Name: "hops", Description: "Comma-separated hop hash prefixes", Type: "string", Required: true}}},
@@ -555,6 +558,26 @@ func componentSchemas() map[string]interface{} {
 			"properties": map[string]interface{}{
 				"neighbors":     map[string]interface{}{"type": "array", "items": schemaRef("AllObserverNeighborsEntry")},
 				"unknownScopes": map[string]interface{}{"type": "array", "items": schemaRef("UnknownScopeEntry"), "description": "Region-scope names observed in the wild that aren't part of this deployment's configured hashRegions, ranked by how many distinct neighbors reported them."},
+			},
+		},
+		"NewNodeEntry": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"publicKey": str("The node's full public key."),
+				"name":      str("Display name, when known."),
+				"role":      str("Node role (repeater/room/companion/sensor/etc), when known."),
+				"lat":       map[string]interface{}{"type": "number", "nullable": true, "description": "Last known latitude, when known."},
+				"lon":       map[string]interface{}{"type": "number", "nullable": true, "description": "Last known longitude, when known."},
+				"firstSeen": str("RFC3339 timestamp this node was first ever seen."),
+				"areas":     map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Every configured area this node's position falls in, alphabetized. Omitted when the node has no known position or no areas are configured."},
+				"foreign":   map[string]interface{}{"type": "boolean", "description": "True when this node's ADVERT GPS lay outside the configured geofilter polygon (#730, same flag the node list's \"foreign\" field uses)."},
+			},
+		},
+		"NewNodesResponse": map[string]interface{}{
+			"type":        "object",
+			"description": "Most recently first-seen nodes, network-wide (Tools > New Nodes). Empty (not an error) when nothing qualifies.",
+			"properties": map[string]interface{}{
+				"newNodes": map[string]interface{}{"type": "array", "items": schemaRef("NewNodeEntry")},
 			},
 		},
 	}
