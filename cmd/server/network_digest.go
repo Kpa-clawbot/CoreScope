@@ -144,21 +144,11 @@ func (s *Server) computeNetworkDigest(since time.Time, origin string) (*NetworkD
 	if err != nil {
 		return nil, err
 	}
-	// node_changes rows don't carry their own foreign_advert snapshot --
-	// resolved live against the node's current state via a bulk lookup,
-	// same shape as computeNodeChanges' own name resolution. Skipped
-	// entirely for origin=="all" since it's an extra query nobody asked
-	// for in the common case.
-	var foreignFlags map[string]bool
-	if origin != "all" {
-		pubkeys := make([]string, 0, len(changes))
-		for _, c := range changes {
-			pubkeys = append(pubkeys, c.PublicKey)
-		}
-		foreignFlags = s.db.foreignFlagsForPubkeys(pubkeys)
-	}
+	// computeNodeChanges already resolves each entry's current
+	// foreign_advert (c.Foreign) via its own bulk lookup, so no separate
+	// query is needed here.
 	for _, c := range changes {
-		if origin != "all" && !matchesOrigin(foreignFlags[c.PublicKey], origin) {
+		if !matchesOrigin(c.Foreign, origin) {
 			continue
 		}
 		t, perr := time.Parse(time.RFC3339, c.DetectedAt)

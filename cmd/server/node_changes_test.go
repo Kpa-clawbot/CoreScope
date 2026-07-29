@@ -67,6 +67,62 @@ func TestComputeNodeChanges_ResolvesCurrentName(t *testing.T) {
 	}
 }
 
+// TestComputeNodeChanges_ResolvesCurrentRole confirms Role is resolved
+// live from the nodes table (for the Tools > Node Changes role filter),
+// same convention as Name.
+func TestComputeNodeChanges_ResolvesCurrentRole(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ensureNodeChangesTable(t, srv)
+
+	// aabbccdd11223344 is seeded by seedTestData with role "repeater".
+	insertNodeChangeRow(t, srv, "aabbccdd11223344", "name", "Old", "New", "2026-07-29T10:00:00Z")
+
+	entries, err := srv.computeNodeChanges(50)
+	if err != nil {
+		t.Fatalf("computeNodeChanges: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Role != "repeater" {
+		t.Errorf("entries = %+v, want Role=repeater resolved from the nodes table", entries)
+	}
+}
+
+// TestComputeNodeChanges_ResolvesCurrentForeign confirms Foreign mirrors
+// nodes.foreign_advert for the node's CURRENT state, for the Tools >
+// Node Changes All/Domestic/Foreign filter.
+func TestComputeNodeChanges_ResolvesCurrentForeign(t *testing.T) {
+	srv, _ := setupTestServer(t)
+	ensureNodeChangesTable(t, srv)
+	ensureInactiveNodesTable(t, srv)
+
+	insertNewNodeRow(t, srv, "foreignchgtest001", "ForeignChg", "repeater", f64(52.5), f64(13.4), "2026-07-29T09:00:00Z")
+	if _, err := srv.db.conn.Exec(`UPDATE nodes SET foreign_advert = 1 WHERE public_key = ?`, "foreignchgtest001"); err != nil {
+		t.Fatalf("set foreign_advert: %v", err)
+	}
+	insertNodeChangeRow(t, srv, "foreignchgtest001", "role", "companion", "repeater", "2026-07-29T10:00:00Z")
+	// aabbccdd11223344 has no foreign_advert set -- should resolve false.
+	insertNodeChangeRow(t, srv, "aabbccdd11223344", "role", "companion", "repeater", "2026-07-29T10:00:00Z")
+
+	entries, err := srv.computeNodeChanges(50)
+	if err != nil {
+		t.Fatalf("computeNodeChanges: %v", err)
+	}
+	var foreign, domestic *NodeChangeEntry
+	for i := range entries {
+		if entries[i].PublicKey == "foreignchgtest001" {
+			foreign = &entries[i]
+		}
+		if entries[i].PublicKey == "aabbccdd11223344" {
+			domestic = &entries[i]
+		}
+	}
+	if foreign == nil || !foreign.Foreign {
+		t.Errorf("foreignchgtest001 Foreign = %+v, want true", foreign)
+	}
+	if domestic == nil || domestic.Foreign {
+		t.Errorf("aabbccdd11223344 Foreign = %+v, want false", domestic)
+	}
+}
+
 // TestComputeNodeChanges_ExcludesBlacklisted confirms nodeBlacklist is honored.
 func TestComputeNodeChanges_ExcludesBlacklisted(t *testing.T) {
 	srv, _ := setupTestServer(t)
