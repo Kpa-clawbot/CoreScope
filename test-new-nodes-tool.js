@@ -184,6 +184,62 @@ function waitForLoad() {
     assert.strictEqual(wrap.innerHTML, before, 'clicking the already-active "All" tab should not change the rendered table');
   });
 
+  // Role checkboxes — user-requested (2026-07-29): let people narrow the
+  // view to just companions, just repeaters, etc. Built from whatever
+  // roles are actually present in the loaded data, all checked by default.
+  await test('role checkboxes render one per distinct role present, all checked by default', async () => {
+    const sb = initWith([
+      makeRow({ publicKey: 'aa'.repeat(32), role: 'repeater' }),
+      makeRow({ publicKey: 'bb'.repeat(32), role: 'companion' }),
+    ]);
+    await waitForLoad();
+    const roleWrap = sb.__docStore['new-nodes-role-filters'];
+    assert.ok(roleWrap.innerHTML.includes('data-role="repeater"'), `expected a repeater checkbox, got: ${roleWrap.innerHTML}`);
+    assert.ok(roleWrap.innerHTML.includes('data-role="companion"'), `expected a companion checkbox, got: ${roleWrap.innerHTML}`);
+    assert.ok(!roleWrap.innerHTML.includes('checked=""') || roleWrap.innerHTML.match(/checked/g).length === 2,
+      `expected both checkboxes checked by default, got: ${roleWrap.innerHTML}`);
+  });
+
+  await test('unchecking a role checkbox hides matching rows without touching others', async () => {
+    const sb = initWith([
+      makeRow({ publicKey: 'aa'.repeat(32), name: 'ARepeater', role: 'repeater' }),
+      makeRow({ publicKey: 'bb'.repeat(32), name: 'ACompanion', role: 'companion' }),
+    ]);
+    await waitForLoad();
+    const roleWrap = sb.__docStore['new-nodes-role-filters'];
+    const wrap = sb.__docStore['new-nodes-table-wrap'];
+    assert.ok(wrap.innerHTML.includes('ARepeater') && wrap.innerHTML.includes('ACompanion'), 'expected both rows before unchecking');
+
+    roleWrap._listeners.change({ target: { dataset: { role: 'companion' }, checked: false } });
+    assert.ok(wrap.innerHTML.includes('ARepeater'), 'expected the repeater row to remain');
+    assert.ok(!wrap.innerHTML.includes('ACompanion'), 'expected the companion row to be hidden after unchecking Companion');
+
+    const status = sb.__docStore['new-nodes-status'];
+    assert.ok(status.textContent.includes('(filtered)'), `expected the status line to note filtering, got: ${status.textContent}`);
+  });
+
+  await test('re-checking a previously unchecked role restores its rows', async () => {
+    const sb = initWith([
+      makeRow({ publicKey: 'aa'.repeat(32), name: 'ARepeater', role: 'repeater' }),
+      makeRow({ publicKey: 'bb'.repeat(32), name: 'ACompanion', role: 'companion' }),
+    ]);
+    await waitForLoad();
+    const roleWrap = sb.__docStore['new-nodes-role-filters'];
+    const wrap = sb.__docStore['new-nodes-table-wrap'];
+    roleWrap._listeners.change({ target: { dataset: { role: 'companion' }, checked: false } });
+    assert.ok(!wrap.innerHTML.includes('ACompanion'), 'expected companion row hidden');
+    roleWrap._listeners.change({ target: { dataset: { role: 'companion' }, checked: true } });
+    assert.ok(wrap.innerHTML.includes('ACompanion'), 'expected companion row restored after re-checking');
+  });
+
+  await test('a node with no role is bucketed under "Unknown"', async () => {
+    const sb = initWith([makeRow({ role: null })]);
+    await waitForLoad();
+    const roleWrap = sb.__docStore['new-nodes-role-filters'];
+    assert.ok(roleWrap.innerHTML.includes('data-role="unknown"'), `expected an Unknown bucket checkbox, got: ${roleWrap.innerHTML}`);
+    assert.ok(roleWrap.innerHTML.includes('Unknown'), `expected the "Unknown" label, got: ${roleWrap.innerHTML}`);
+  });
+
   await test('roleLabel maps known roles to display names and passes through unknown ones', () => {
     const sb = createSandbox([]);
     const rl = sb.window.NewNodesTool.roleLabel;

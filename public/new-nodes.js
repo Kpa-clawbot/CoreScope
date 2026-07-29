@@ -9,6 +9,8 @@
   var allRows = [];
   var filterText = '';
   var originFilter = 'all'; // 'all' | 'domestic' | 'foreign' -- nodes.foreign_advert (#730)
+  var knownRoles = []; // distinct role keys present in allRows, computed once per load()
+  var enabledRoles = null; // Set of role keys currently checked; null until first computed (defaults to "all checked")
   var sortState = { col: 'firstSeen', dir: 'desc' };
 
   function escapeHtml(s) {
@@ -27,11 +29,33 @@
     }).join('');
   }
 
+  var ROLE_LABELS = { repeater: 'Repeater', room: 'Room Server', companion: 'Companion', sensor: 'Sensor', chat: 'Companion', none: 'None', unknown: 'Unknown' };
+  function roleLabel(role) {
+    if (!role) return '';
+    return ROLE_LABELS[role.toLowerCase()] || role;
+  }
+
+  // Role checkboxes are built from whatever roles actually appear in the
+  // loaded data (not a hardcoded list) so a network with no sensors, say,
+  // doesn't show a dead "Sensor" checkbox. All checked by default -- the
+  // control narrows the view, it doesn't start empty.
+  function roleCheckboxesHtml() {
+    return knownRoles.map(function (role) {
+      var checked = enabledRoles.has(role) ? ' checked' : '';
+      var id = 'new-nodes-role-' + role;
+      return '<label for="' + id + '" style="display:inline-flex;align-items:center;gap:4px;margin-right:14px;font-size:13px;cursor:pointer">' +
+        '<input type="checkbox" id="' + id + '" data-role="' + role + '"' + checked + '> ' + escapeHtml(roleLabel(role)) +
+        '</label>';
+    }).join('');
+  }
+
   function init(app) {
     container = app;
     allRows = [];
     filterText = '';
     originFilter = 'all';
+    knownRoles = [];
+    enabledRoles = null;
     sortState = { col: 'firstSeen', dir: 'desc' };
 
     container.innerHTML =
@@ -39,6 +63,7 @@
         '<h2><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-rocket"/></svg> New Nodes</h2>' +
         '<p class="help-text">Nodes seen on the mesh for the very first time, newest first. Excludes nodes returning after a period of inactivity -- those aren\'t new, just quiet for a while. Click a column header to sort.</p>' +
         '<div id="new-nodes-origin-tabs" style="display:flex;gap:6px;margin:12px 0 8px">' + originTabsHtml() + '</div>' +
+        '<div id="new-nodes-role-filters" style="margin:0 0 12px"></div>' +
         '<div style="margin:0 0 12px"><input type="text" id="new-nodes-filter" class="input" placeholder="Filter by name, pubkey, role, or area…" style="width:100%;max-width:420px"></div>' +
         '<div id="new-nodes-status" class="text-muted" style="font-size:12px;margin-bottom:8px"></div>' +
         '<div id="new-nodes-table-wrap" class="table-fluid-wrap"></div>' +
@@ -67,6 +92,21 @@
       });
     }
 
+    // Delegated the same way as the origin tabs -- roleCheckboxesHtml() is
+    // only re-rendered on toggle (not on every keystroke), so a per-input
+    // listener would be lost; this survives that.
+    var roleFiltersWrap = document.getElementById('new-nodes-role-filters');
+    if (roleFiltersWrap) {
+      roleFiltersWrap.addEventListener('change', function (evt) {
+        var el = evt.target;
+        var role = el && el.dataset ? el.dataset.role : null;
+        if (!role || !enabledRoles) return;
+        if (el.checked) enabledRoles.add(role);
+        else enabledRoles.delete(role);
+        renderTable();
+      });
+    }
+
     load();
   }
 
@@ -82,18 +122,16 @@
     api('/analytics/new-nodes?limit=200')
       .then(function (data) {
         allRows = (data && Array.isArray(data.newNodes)) ? data.newNodes : [];
+        knownRoles = Array.from(new Set(allRows.map(function (r) { return (r.role || '').toLowerCase() || 'unknown'; }))).sort();
+        enabledRoles = new Set(knownRoles);
+        var roleFiltersWrap = document.getElementById('new-nodes-role-filters');
+        if (roleFiltersWrap) roleFiltersWrap.innerHTML = roleCheckboxesHtml();
         renderTable();
       })
       .catch(function (e) {
         if (wrap) wrap.innerHTML = '';
         if (statusEl) statusEl.textContent = 'Failed to load: ' + escapeHtml(e.message);
       });
-  }
-
-  var ROLE_LABELS = { repeater: 'Repeater', room: 'Room Server', companion: 'Companion', sensor: 'Sensor', chat: 'Companion', none: 'None' };
-  function roleLabel(role) {
-    if (!role) return '';
-    return ROLE_LABELS[role.toLowerCase()] || role;
   }
 
   function sortValue(row, col) {
@@ -122,8 +160,15 @@
     return true;
   }
 
+  function matchesRole(row) {
+    if (!enabledRoles) return true; // not computed yet (pre-load)
+    var key = (row.role || '').toLowerCase() || 'unknown';
+    return enabledRoles.has(key);
+  }
+
   function matchesFilter(row) {
     if (!matchesOrigin(row)) return false;
+    if (!matchesRole(row)) return false;
     if (!filterText) return true;
     var haystack = [row.name, row.publicKey, row.role, (row.areas || []).join(' ')].filter(Boolean).join(' ').toLowerCase();
     return haystack.indexOf(filterText) !== -1;
@@ -149,9 +194,10 @@
       return 0;
     });
 
+    var roleNarrowed = !!enabledRoles && enabledRoles.size < knownRoles.length;
     if (statusEl) {
       statusEl.textContent = filtered.length.toLocaleString() + ' of ' + allRows.length.toLocaleString() + ' new node' + (allRows.length === 1 ? '' : 's') +
-        ((filterText || originFilter !== 'all') ? ' (filtered)' : '');
+        ((filterText || originFilter !== 'all' || roleNarrowed) ? ' (filtered)' : '');
     }
 
     if (sorted.length === 0) {
