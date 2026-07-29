@@ -22,6 +22,8 @@ function makeRow(overrides) {
     id: 1,
     publicKey: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     name: 'ChangedNode',
+    role: 'repeater',
+    foreign: false,
     changeType: 'role',
     oldValue: 'companion',
     newValue: 'repeater',
@@ -76,6 +78,7 @@ function initWith(rows) {
   const sb = createSandbox(rows);
   const container = { innerHTML: '' };
   sb.window.NodeChangesTool.init(container);
+  sb.__container = container;
   return sb;
 }
 
@@ -86,12 +89,13 @@ function waitForLoad() {
 (async () => {
   console.log('\n=== node-changes.js: Node Changes tool page ===');
 
-  await test('window.NodeChangesTool exists with init/destroy/sortValue/typeLabel', () => {
+  await test('window.NodeChangesTool exists with init/destroy/sortValue/typeLabel/roleLabel', () => {
     const sb = createSandbox([]);
     assert.strictEqual(typeof sb.window.NodeChangesTool.init, 'function');
     assert.strictEqual(typeof sb.window.NodeChangesTool.destroy, 'function');
     assert.strictEqual(typeof sb.window.NodeChangesTool.sortValue, 'function');
     assert.strictEqual(typeof sb.window.NodeChangesTool.typeLabel, 'function');
+    assert.strictEqual(typeof sb.window.NodeChangesTool.roleLabel, 'function');
   });
 
   await test('empty result set shows a neutral message, not an error', async () => {
@@ -188,6 +192,98 @@ function waitForLoad() {
 
     const status = sb.__docStore['node-changes-status'];
     assert.ok(status.textContent.includes('(filtered)'), `expected the status line to note filtering, got: ${status.textContent}`);
+  });
+
+  // Origin tabs — same All/Domestic/Foreign vocabulary as New Nodes'
+  // toggle, filtering client-side on row.foreign.
+  await test('origin tabs render with All active by default', async () => {
+    const sb = initWith([makeRow()]);
+    await waitForLoad();
+    const html = sb.__container.innerHTML;
+    assert.ok(html.includes('data-origin="all"'), `expected an All tab, got: ${html}`);
+    assert.ok(/class="tab-btn active"[^>]*data-origin="all"|data-origin="all"[^>]*class="tab-btn active"/.test(html),
+      `expected the All tab active by default, got: ${html}`);
+  });
+
+  await test('clicking Domestic hides foreign rows, clicking Foreign hides domestic rows', async () => {
+    const sb = initWith([
+      makeRow({ publicKey: 'aa'.repeat(32), name: 'DomesticRow', foreign: false }),
+      makeRow({ publicKey: 'bb'.repeat(32), name: 'ForeignRow', foreign: true }),
+    ]);
+    await waitForLoad();
+    const originWrap = sb.__docStore['node-changes-origin-tabs'];
+    const wrap = sb.__docStore['node-changes-table-wrap'];
+    assert.ok(wrap.innerHTML.includes('DomesticRow') && wrap.innerHTML.includes('ForeignRow'), 'expected both rows under All');
+
+    originWrap._listeners.click({ target: { closest: () => ({ dataset: { origin: 'domestic' } }) } });
+    assert.ok(wrap.innerHTML.includes('DomesticRow'), 'expected DomesticRow under Domestic');
+    assert.ok(!wrap.innerHTML.includes('ForeignRow'), 'expected ForeignRow hidden under Domestic');
+
+    originWrap._listeners.click({ target: { closest: () => ({ dataset: { origin: 'foreign' } }) } });
+    assert.ok(!wrap.innerHTML.includes('DomesticRow'), 'expected DomesticRow hidden under Foreign');
+    assert.ok(wrap.innerHTML.includes('ForeignRow'), 'expected ForeignRow under Foreign');
+  });
+
+  await test('clicking the already-active origin tab does not reset the render', async () => {
+    const sb = initWith([makeRow()]);
+    await waitForLoad();
+    const originWrap = sb.__docStore['node-changes-origin-tabs'];
+    const before = originWrap.innerHTML;
+    originWrap._listeners.click({ target: { closest: () => ({ dataset: { origin: 'all' } }) } });
+    assert.strictEqual(originWrap.innerHTML, before, 'expected no re-render for a no-op origin click');
+  });
+
+  // Role checkboxes — same "built from what's present, all checked by
+  // default" convention as New Nodes' role filter.
+  await test('role checkboxes render one per distinct role present, all checked by default', async () => {
+    const sb = initWith([
+      makeRow({ publicKey: 'aa'.repeat(32), role: 'repeater' }),
+      makeRow({ publicKey: 'bb'.repeat(32), role: 'companion' }),
+    ]);
+    await waitForLoad();
+    const roleWrap = sb.__docStore['node-changes-role-filters'];
+    assert.ok(roleWrap.innerHTML.includes('data-role="repeater"'), `expected a repeater checkbox, got: ${roleWrap.innerHTML}`);
+    assert.ok(roleWrap.innerHTML.includes('data-role="companion"'), `expected a companion checkbox, got: ${roleWrap.innerHTML}`);
+  });
+
+  await test('unchecking a role checkbox hides matching rows without touching others', async () => {
+    const sb = initWith([
+      makeRow({ publicKey: 'aa'.repeat(32), name: 'RepeaterRow', role: 'repeater' }),
+      makeRow({ publicKey: 'bb'.repeat(32), name: 'RoomRow', role: 'room' }),
+    ]);
+    await waitForLoad();
+    const roleWrap = sb.__docStore['node-changes-role-filters'];
+    const wrap = sb.__docStore['node-changes-table-wrap'];
+    assert.ok(wrap.innerHTML.includes('RepeaterRow') && wrap.innerHTML.includes('RoomRow'), 'expected both rows before unchecking');
+
+    roleWrap._listeners.change({ target: { dataset: { role: 'room' }, checked: false } });
+    assert.ok(wrap.innerHTML.includes('RepeaterRow'), 'expected the repeater row to remain');
+    assert.ok(!wrap.innerHTML.includes('RoomRow'), 'expected the room row to be hidden after unchecking Room Server');
+
+    const status = sb.__docStore['node-changes-status'];
+    assert.ok(status.textContent.includes('(filtered)'), `expected the status line to note filtering, got: ${status.textContent}`);
+  });
+
+  await test('the table shows a Role column with the resolved role label', async () => {
+    const sb = initWith([makeRow({ role: 'companion' })]);
+    await waitForLoad();
+    const wrap = sb.__docStore['node-changes-table-wrap'];
+    assert.ok(wrap.innerHTML.includes('Companion'), `expected the Companion role label in the table, got: ${wrap.innerHTML}`);
+  });
+
+  await test('roleLabel maps known roles to display names and passes through unknown ones', () => {
+    const sb = createSandbox([]);
+    const rl = sb.window.NodeChangesTool.roleLabel;
+    assert.strictEqual(rl('repeater'), 'Repeater');
+    assert.strictEqual(rl('room'), 'Room Server');
+    assert.strictEqual(rl('companion'), 'Companion');
+    assert.strictEqual(rl('mystery-role'), 'mystery-role');
+  });
+
+  await test('sortValue: role is lowercased', () => {
+    const sb = createSandbox([]);
+    const sv = sb.window.NodeChangesTool.sortValue;
+    assert.strictEqual(sv({ role: 'Repeater' }, 'role'), 'repeater');
   });
 
   await test('typeLabel maps known types to display names and passes through unknown ones', () => {

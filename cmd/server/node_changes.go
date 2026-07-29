@@ -21,7 +21,15 @@ type NodeChangeEntry struct {
 	// Name is the node's CURRENT display name (resolved via a bulk nodes
 	// lookup, same as ping_scores.go's relay-name resolution) -- not a
 	// historical snapshot at the time of the change.
-	Name       string `json:"name,omitempty"`
+	Name string `json:"name,omitempty"`
+	// Role is the node's CURRENT role (same resolved-live convention as
+	// Name), for the Tools > Node Changes role filter.
+	Role string `json:"role,omitempty"`
+	// Foreign mirrors nodes.foreign_advert for the node's CURRENT state
+	// (node_changes rows don't store their own snapshot of it) -- same
+	// All/Domestic/Foreign vocabulary as Tools > New Nodes' toggle. Not
+	// omitempty: false is a real, meaningful value here (domestic).
+	Foreign    bool   `json:"foreign"`
 	ChangeType string `json:"changeType"` // "role" | "name" | "position" | "resurrected"
 	OldValue   string `json:"oldValue,omitempty"`
 	NewValue   string `json:"newValue,omitempty"`
@@ -81,11 +89,15 @@ func (s *Server) computeNodeChanges(limit int) ([]NodeChangeEntry, error) {
 		pubkeys = append(pubkeys, e.PublicKey)
 	}
 	if len(pubkeys) > 0 {
-		names, _ := s.db.namesAndRolesForPubkeys(pubkeys)
+		names, roles := s.db.namesAndRolesForPubkeys(pubkeys)
+		foreignFlags := s.db.foreignFlagsForPubkeys(pubkeys)
 		for i := range out {
-			if name := names[out[i].PublicKey]; name != "" {
+			pk := out[i].PublicKey
+			if name := names[pk]; name != "" {
 				out[i].Name = name
 			}
+			out[i].Role = roles[pk]
+			out[i].Foreign = foreignFlags[pk]
 		}
 	}
 	return out, nil
