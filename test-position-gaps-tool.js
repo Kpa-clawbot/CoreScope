@@ -48,6 +48,7 @@ function makeAreasResponse(overrides) {
 function createSandbox(areasFixture) {
   const docStore = {};
   const resizeCalls = [];
+  const areaMapCalls = [];
   function fakeEl(id) {
     if (!docStore[id]) {
       docStore[id] = {
@@ -66,7 +67,9 @@ function createSandbox(areasFixture) {
   }
 
   const sandbox = {
-    window: {},
+    window: {
+      AreaNodesMap: { open: function (label, points) { areaMapCalls.push({ label, points }); } },
+    },
     document: {
       getElementById: (id) => fakeEl(id),
       querySelectorAll: () => [],
@@ -81,6 +84,7 @@ function createSandbox(areasFixture) {
     console: console,
     __docStore: docStore,
     __resizeCalls: resizeCalls,
+    __areaMapCalls: areaMapCalls,
     makeColumnsResizable: function (selector, storageKey) { resizeCalls.push({ selector, storageKey }); },
   };
   sandbox.self = sandbox;
@@ -254,6 +258,95 @@ function waitForLoad() {
     assert.strictEqual(sb.__resizeCalls[0].selector, '#position-gaps-est-table');
     assert.ok(sb.__resizeCalls[0].storageKey && sb.__resizeCalls[0].storageKey.indexOf('position-gaps') !== -1,
       `expected a position-gaps-specific storage key, got: ${sb.__resizeCalls[0].storageKey}`);
+  });
+
+  // ---- Area Breakdown sorting + click-to-map (helpers mock
+  // Element.closest for the delegated click handler on
+  // #position-gaps-content). ----
+
+  function fakeTarget(matches) {
+    return { closest: (sel) => matches[sel] || null };
+  }
+
+  await test('area table headers render sortable, pctEstimated active by default', async () => {
+    const sb = initWith(makeAreasResponse());
+    await waitForLoad();
+    const content = sb.__docStore['position-gaps-content'];
+    assert.ok(content.innerHTML.includes('data-sort-col="area"'), 'expected a sortable Area header');
+    assert.ok(content.innerHTML.includes('data-sort-col="realFix"'), 'expected a sortable Real GPS Fix header');
+    assert.ok(content.innerHTML.includes('data-sort-col="approximated"'), 'expected a sortable Estimated header');
+    assert.ok(/data-sort-col="pctEstimated"[^>]*class="sortable sort-active"|class="sortable sort-active"[^>]*data-sort-col="pctEstimated"/.test(content.innerHTML),
+      `expected % Estimated to be sort-active by default, got: ${content.innerHTML}`);
+  });
+
+  await test('clicking an area table header re-sorts by that column', async () => {
+    const sb = initWith(makeAreasResponse({
+      positionGaps: [
+        makeAreaGap({ areaKey: 'A', label: 'Zeta', realFix: 1, approximated: 9 }),
+        makeAreaGap({ areaKey: 'B', label: 'Alpha', realFix: 99, approximated: 1 }),
+      ],
+    }));
+    await waitForLoad();
+    const content = sb.__docStore['position-gaps-content'];
+    content._listeners.click({ target: fakeTarget({ '#position-gaps-area-table th[data-sort-col]': { dataset: { sortCol: 'area' } } }) });
+    const areaTable = sb.__docStore['position-gaps-area-table'];
+    const iAlpha = areaTable.innerHTML.indexOf('Alpha');
+    const iZeta = areaTable.innerHTML.indexOf('Zeta');
+    assert.ok(iAlpha !== -1 && iZeta !== -1 && iAlpha < iZeta, `expected alphabetical (asc-by-default for Area) order, got: ${areaTable.innerHTML}`);
+  });
+
+  await test('clicking the already-active area header flips sort direction', async () => {
+    const sb = initWith(makeAreasResponse({
+      positionGaps: [
+        makeAreaGap({ areaKey: 'A', label: 'HighReal', realFix: 90, approximated: 1 }),
+        makeAreaGap({ areaKey: 'B', label: 'LowReal', realFix: 1, approximated: 1 }),
+      ],
+    }));
+    await waitForLoad();
+    const content = sb.__docStore['position-gaps-content'];
+    var click = () => content._listeners.click({ target: fakeTarget({ '#position-gaps-area-table th[data-sort-col]': { dataset: { sortCol: 'realFix' } } }) });
+    click(); // realFix desc by default (new column) -> HighReal first
+    let areaTable = sb.__docStore['position-gaps-area-table'];
+    assert.ok(areaTable.innerHTML.indexOf('HighReal') < areaTable.innerHTML.indexOf('LowReal'), 'expected HighReal first (desc)');
+    click(); // same column again -> flips to asc -> LowReal first
+    assert.ok(areaTable.innerHTML.indexOf('LowReal') < areaTable.innerHTML.indexOf('HighReal'), `expected LowReal first after flipping to asc, got: ${areaTable.innerHTML}`);
+  });
+
+  await test('an area row with an estimate is clickable; one at 0%% is plain text', async () => {
+    const sb = initWith(makeAreasResponse({
+      positionGaps: [
+        makeAreaGap({ areaKey: 'HASGAP', label: 'HasGap', realFix: 5, approximated: 2 }),
+        makeAreaGap({ areaKey: 'NOGAP', label: 'NoGap', realFix: 5, approximated: 0 }),
+      ],
+    }));
+    await waitForLoad();
+    const content = sb.__docStore['position-gaps-content'];
+    assert.ok(content.innerHTML.includes('data-area-key="HASGAP"'), `expected HasGap's row to carry data-area-key, got: ${content.innerHTML}`);
+    assert.ok(!content.innerHTML.includes('data-area-key="NOGAP"'), `expected NoGap's row to NOT be clickable (0%% estimated), got: ${content.innerHTML}`);
+  });
+
+  await test('clicking a clickable area row opens AreaNodesMap with only that area\'s estimated nodes', async () => {
+    const sb = initWith(makeAreasResponse({
+      positionGaps: [makeAreaGap({ areaKey: 'AREAA', label: 'Area A', realFix: 5, approximated: 2 })],
+      estimatedNodes: [
+        makeEstimatedNode({ publicKey: 'aa'.repeat(32), areaKey: 'AREAA', label: 'Area A' }),
+        makeEstimatedNode({ publicKey: 'bb'.repeat(32), areaKey: 'AREAB', label: 'Area B' }),
+      ],
+    }));
+    await waitForLoad();
+    const content = sb.__docStore['position-gaps-content'];
+    content._listeners.click({ target: fakeTarget({ '#position-gaps-area-table tr[data-area-key]': { dataset: { areaKey: 'AREAA', areaLabel: 'Area A' } } }) });
+    assert.strictEqual(sb.__areaMapCalls.length, 1, `expected exactly one AreaNodesMap.open call, got: ${JSON.stringify(sb.__areaMapCalls)}`);
+    assert.strictEqual(sb.__areaMapCalls[0].label, 'Area A');
+    assert.strictEqual(sb.__areaMapCalls[0].points.length, 1, `expected only AREAA's node passed, got: ${JSON.stringify(sb.__areaMapCalls[0].points)}`);
+    assert.strictEqual(sb.__areaMapCalls[0].points[0].publicKey, 'aa'.repeat(32));
+  });
+
+  await test('areaSortValue: pctEstimated is 0 for an area with no nodes at all', () => {
+    const sb = createSandbox(makeAreasResponse());
+    const asv = sb.window.PositionGapsTool.areaSortValue;
+    assert.strictEqual(asv({ label: 'Empty', realFix: 0, approximated: 0 }, 'pctEstimated'), 0);
+    assert.strictEqual(asv({ label: 'Half', realFix: 1, approximated: 1 }, 'pctEstimated'), 0.5);
   });
 
   await test('a failed load shows an error message, not a stuck loading state', async () => {

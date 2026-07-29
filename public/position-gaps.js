@@ -21,6 +21,7 @@
   var unpositionedNoNeighborFix = 0;
   var filterText = '';
   var sortState = { col: 'spreadKm', dir: 'desc' };
+  var areaSortState = { col: 'pctEstimated', dir: 'desc' };
   var areaExpanded = false;
   var lastAreaRows = [];
 
@@ -41,6 +42,7 @@
     unpositionedNoNeighborFix = 0;
     filterText = '';
     sortState = { col: 'spreadKm', dir: 'desc' };
+    areaSortState = { col: 'pctEstimated', dir: 'desc' };
     areaExpanded = false;
     lastAreaRows = [];
 
@@ -54,12 +56,37 @@
 
     var contentEl = document.getElementById('position-gaps-content');
     if (contentEl) {
+      // Delegated once here (not re-wired per render) since it's bound
+      // to the content wrapper, which persists across every render()
+      // call -- only its innerHTML is replaced. Each branch is scoped to
+      // #position-gaps-area-table so it can't fire for clicks inside the
+      // separately-wired Estimated Nodes table below it.
       contentEl.addEventListener('click', function (evt) {
         var el = evt.target;
+
         var toggleBtn = el && el.closest ? el.closest('[data-area-toggle]') : null;
         if (toggleBtn) {
           areaExpanded = !areaExpanded;
           rerenderAreaTable();
+          return;
+        }
+
+        var areaTh = el && el.closest ? el.closest('#position-gaps-area-table th[data-sort-col]') : null;
+        if (areaTh) {
+          var col = areaTh.dataset.sortCol;
+          if (areaSortState.col === col) {
+            areaSortState.dir = areaSortState.dir === 'asc' ? 'desc' : 'asc';
+          } else {
+            areaSortState.col = col;
+            areaSortState.dir = col === 'area' ? 'asc' : 'desc';
+          }
+          rerenderAreaTable();
+          return;
+        }
+
+        var areaRow = el && el.closest ? el.closest('#position-gaps-area-table tr[data-area-key]') : null;
+        if (areaRow) {
+          openAreaMap(areaRow.dataset.areaKey, areaRow.dataset.areaLabel);
         }
       });
     }
@@ -92,15 +119,37 @@
       });
   }
 
-  // ---- Area breakdown table (collapse-to-10, same pattern as
-  // network-digest.js's Area Breakdown) ----
+  // ---- Area breakdown table (sortable, collapse-to-10, same pattern
+  // as network-digest.js's Area Breakdown) ----
 
   var AREA_LIMIT = 10;
 
+  function areaSortValue(g, col) {
+    var total = g.realFix + g.approximated;
+    switch (col) {
+      case 'area': return (g.label || '').toLowerCase();
+      case 'realFix': return g.realFix;
+      case 'approximated': return g.approximated;
+      case 'pctEstimated': return total ? g.approximated / total : 0;
+      default: return 0;
+    }
+  }
+
+  // Rows for an area with at least one estimated node are clickable --
+  // opens a small map of just that area's estimated nodes (same "map
+  // that pops up" pattern as Channels' View Path). Nothing to show for
+  // an area sitting at 0% estimated, so those stay plain text.
   function areaRowHtml(g) {
     var total = g.realFix + g.approximated;
-    return '<tr>' +
-      '<td>' + escapeHtml(g.label) + '</td>' +
+    var clickable = g.approximated > 0;
+    var labelHtml = clickable
+      ? '<span style="color:var(--link-color)">' + escapeHtml(g.label) + '</span>'
+      : escapeHtml(g.label);
+    var rowAttrs = clickable
+      ? ' data-area-key="' + escapeHtml(g.areaKey) + '" data-area-label="' + escapeHtml(g.label) + '" style="cursor:pointer" title="Click to see these nodes on a map"'
+      : '';
+    return '<tr' + rowAttrs + '>' +
+      '<td>' + labelHtml + '</td>' +
       '<td style="text-align:right">' + g.realFix.toLocaleString() + '</td>' +
       '<td style="text-align:right">' + g.approximated.toLocaleString() + '</td>' +
       '<td style="text-align:right">' + pct(g.approximated, total) + '</td>' +
@@ -108,10 +157,11 @@
   }
 
   function areaTableInnerHtml(areas) {
+    var mult = areaSortState.dir === 'asc' ? 1 : -1;
     var sorted = areas.slice().sort(function (a, b) {
-      var at = a.realFix + a.approximated, bt = b.realFix + b.approximated;
-      var av = at ? a.approximated / at : 0, bv = bt ? b.approximated / bt : 0;
-      if (av !== bv) return bv - av;
+      var av = areaSortValue(a, areaSortState.col), bv = areaSortValue(b, areaSortState.col);
+      if (av < bv) return -1 * mult;
+      if (av > bv) return 1 * mult;
       return a.label.localeCompare(b.label);
     });
     var shown = areaExpanded ? sorted : sorted.slice(0, AREA_LIMIT);
@@ -121,13 +171,23 @@
         (areaExpanded ? 'Show fewer' : 'Show all ' + sorted.length + ' areas') + '</button></div>'
       : '';
     return '<table class="data-table"><thead><tr>' +
-      '<th>Area</th><th style="text-align:right">Real GPS Fix</th><th style="text-align:right">Estimated (via Neighbors)</th><th style="text-align:right">% Estimated</th>' +
+      sortTh(areaSortState, 'area', 'Area') +
+      sortTh(areaSortState, 'realFix', 'Real GPS Fix', 'right') +
+      sortTh(areaSortState, 'approximated', 'Estimated (via Neighbors)', 'right') +
+      sortTh(areaSortState, 'pctEstimated', '% Estimated', 'right') +
       '</tr></thead><tbody>' + rows + '</tbody></table>' + toggle;
   }
 
   function rerenderAreaTable() {
     var el = document.getElementById('position-gaps-area-table');
     if (el) el.innerHTML = areaTableInnerHtml(lastAreaRows);
+  }
+
+  function openAreaMap(areaKey, areaLabel) {
+    var points = estimatedRows.filter(function (r) { return r.areaKey === areaKey; });
+    if (window.AreaNodesMap && typeof window.AreaNodesMap.open === 'function') {
+      window.AreaNodesMap.open(areaLabel, points);
+    }
   }
 
   // ---- Estimated nodes table (sortable + filterable + resizable,
@@ -143,15 +203,18 @@
     }
   }
 
-  function sortArrow(col) {
-    if (col !== sortState.col) return '<span class="sort-arrow">⇅</span>';
-    return '<span class="sort-arrow">' + (sortState.dir === 'asc' ? '↑' : '↓') + '</span>';
+  // Both tables on this page (Area Breakdown, Estimated Nodes) have
+  // their own independent sort state, so these take it explicitly
+  // rather than closing over a single module-level one.
+  function sortArrow(state, col) {
+    if (col !== state.col) return '<span class="sort-arrow">⇅</span>';
+    return '<span class="sort-arrow">' + (state.dir === 'asc' ? '↑' : '↓') + '</span>';
   }
 
-  function sortTh(col, label, align) {
-    var cls = 'sortable' + (col === sortState.col ? ' sort-active' : '');
+  function sortTh(state, col, label, align) {
+    var cls = 'sortable' + (col === state.col ? ' sort-active' : '');
     var style = align === 'right' ? ' style="text-align:right"' : '';
-    return '<th class="' + cls + '" data-sort-col="' + col + '"' + style + '>' + label + sortArrow(col) + '</th>';
+    return '<th class="' + cls + '" data-sort-col="' + col + '"' + style + '>' + label + sortArrow(state, col) + '</th>';
   }
 
   function matchesFilter(row) {
@@ -204,10 +267,10 @@
 
     wrap.innerHTML =
       '<table class="data-table" id="position-gaps-est-table"><thead><tr>' +
-        sortTh('name', 'Node') +
-        sortTh('area', 'Area') +
-        sortTh('contributorCount', 'Contributors', 'right') +
-        sortTh('spreadKm', 'Spread', 'right') +
+        sortTh(sortState, 'name', 'Node') +
+        sortTh(sortState, 'area', 'Area') +
+        sortTh(sortState, 'contributorCount', 'Contributors', 'right') +
+        sortTh(sortState, 'spreadKm', 'Spread', 'right') +
       '</tr></thead><tbody>' + rows + '</tbody></table>';
 
     var table = document.getElementById('position-gaps-est-table');
@@ -253,6 +316,7 @@
     contentEl.innerHTML =
       '<div class="analytics-card">' +
         '<h3>Area Breakdown</h3>' +
+        '<p class="help-text" style="margin:0 0 8px;font-size:12px">Click a column header to sort. Click an area with an estimate to see those nodes on a map.</p>' +
         '<div id="position-gaps-area-table">' + areaTableInnerHtml(areaRows) + '</div>' +
       '</div>' +
       '<div class="analytics-card" style="margin-top:16px">' +
@@ -276,6 +340,6 @@
     renderEstimatedTable();
   }
 
-  window.PositionGapsTool = { init: init, destroy: destroy, sortValue: sortValue };
+  window.PositionGapsTool = { init: init, destroy: destroy, sortValue: sortValue, areaSortValue: areaSortValue };
   if (typeof registerPage === 'function') registerPage('position-gaps-tool', { init: init, destroy: destroy });
 })();
