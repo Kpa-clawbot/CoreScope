@@ -1926,6 +1926,18 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 		log.Printf("WARN CountFloodAdvertsForNode(%s): %v", pubkey, err)
 	}
 
+	// Nodes with no real GPS fix still get an approximate position on the
+	// detail page, via the same neighbor-centroid estimate (and geo-sanity
+	// filter) that backs Position-Fix Coverage Gaps and the map's
+	// estimatedNodes view.
+	if node["lat"] == nil || node["lon"] == nil {
+		if _, lat, lon, contributorCount, _, ok := s.db.nearestPositionedNeighbor(pubkey, s.cfg.NeighborMaxEdgeKm()); ok {
+			node["estimated_lat"] = lat
+			node["estimated_lon"] = lon
+			node["estimated_contributor_count"] = contributorCount
+		}
+	}
+
 	writeJSON(w, NodeDetailResponse{
 		Node:          node,
 		RecentAdverts: recentAdverts,
