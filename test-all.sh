@@ -82,6 +82,7 @@ node test-observer-neighbors-tool.js
 node test-new-nodes-tool.js
 node test-node-changes-tool.js
 node test-network-digest-tool.js
+node test-position-gaps-tool.js
 
 echo ""
 echo "═══════════════════════════════════════"
