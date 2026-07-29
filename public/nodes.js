@@ -590,7 +590,16 @@
       const title = document.querySelector('.node-full-title');
       if (title) title.textContent = n.name || pubkey.slice(0, 12);
 
-      const hasLoc = n.lat != null && n.lon != null;
+      // Same "real fix" convention as GetNodesForAreaAnalytics on the
+      // backend: some nodes advertise (0,0) as a "no GPS lock yet"
+      // sentinel rather than omitting lat/lon, so that doesn't count as a
+      // real fix either -- otherwise it'd plot a bogus marker off the
+      // coast of Africa instead of falling back to the estimate below.
+      const hasLoc = n.lat != null && n.lon != null && !(n.lat === 0 && n.lon === 0);
+      // Fallback for nodes with no real GPS fix: the same neighbor-centroid
+      // estimate Position-Fix Coverage Gaps and View Path's approx markers
+      // use, so the detail page can still show a (dashed/approximate) map.
+      const hasEstLoc = !hasLoc && n.estimated_lat != null && n.estimated_lon != null;
 
       // Health stats
       const h = healthData || {};
@@ -628,8 +637,8 @@
         </div>
 
         <div class="node-top-row">
-          ${hasLoc ? `<div class="node-map-wrap"><div id="nodeFullMap" class="node-detail-map" style="height:100%;min-height:200px;border-radius:8px;overflow:hidden"></div></div>` : ''}
-          <div class="node-qr-wrap${hasLoc ? '' : ' node-qr-wrap--full'}">
+          ${(hasLoc || hasEstLoc) ? `<div class="node-map-wrap"><div id="nodeFullMap" class="node-detail-map" style="height:100%;min-height:200px;border-radius:8px;overflow:hidden"></div></div>` : ''}
+          <div class="node-qr-wrap${(hasLoc || hasEstLoc) ? '' : ' node-qr-wrap--full'}">
             <div class="node-qr" id="nodeFullQrCode"></div>
             <div class="mono" style="font-size:10px;color:var(--text-muted);margin-top:8px;word-break:break-all;text-align:center;max-width:180px">${n.public_key.slice(0, 16)}…${n.public_key.slice(-8)}</div>
           </div>
@@ -687,7 +696,7 @@
           <tr><td>Packets Today</td><td>${stats.packetsToday || 0}</td></tr>
           ${stats.avgSnr != null ? `<tr><td>Avg SNR</td><td>${Number(stats.avgSnr).toFixed(1)} dB</td></tr>` : ''}
           ${stats.avgHops ? `<tr><td>Avg Hops</td><td>${stats.avgHops}</td></tr>` : ''}
-          ${hasLoc ? `<tr><td>Location</td><td>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</td></tr>` : ''}
+          ${hasLoc ? `<tr><td>Location</td><td>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</td></tr>` : hasEstLoc ? `<tr><td>Location <span class="text-muted" style="font-size:10px">(estimated)</span></td><td>~${Number(n.estimated_lat).toFixed(5)}, ~${Number(n.estimated_lon).toFixed(5)} <span class="text-muted" style="font-size:11px">(from ${n.estimated_contributor_count} neighbor${n.estimated_contributor_count === 1 ? '' : 's'}, no real GPS fix)</span></td></tr>` : ''}
           <tr><td>Hash Prefix</td><td>${n.hash_size ? '<code style="font-family:var(--mono);font-weight:700">' + n.public_key.slice(0, n.hash_size * 2).toUpperCase() + '</code> (' + n.hash_size + '-byte)' : 'Unknown'}${n.hash_size_inconsistent ? ' <span style="color:var(--status-yellow);cursor:help" title="Seen: ' + (Array.isArray(n.hash_sizes_seen) ? n.hash_sizes_seen : []).join(', ') + '-byte"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> varies</span>' : ''}</td></tr>
         </table>
 
@@ -768,12 +777,24 @@
         <div class="node-full-card skew-detail-section" id="node-clock-skew" style="display:none"></div>`;
 
       // Map
-      if (hasLoc) {
+      if (hasLoc || hasEstLoc) {
         try {
           if (detailMap) { detailMap.remove(); detailMap = null; }
-          detailMap = L.map('nodeFullMap', { zoomControl: true, attributionControl: false }).setView([n.lat, n.lon], 13);
+          const mapLat = hasLoc ? n.lat : n.estimated_lat;
+          const mapLon = hasLoc ? n.lon : n.estimated_lon;
+          detailMap = L.map('nodeFullMap', { zoomControl: true, attributionControl: false }).setView([mapLat, mapLon], 13);
           _applyTilesToNodeMap(detailMap);
-          L.marker([n.lat, n.lon]).addTo(detailMap).bindPopup(escapeHtml(n.name || n.public_key.slice(0, 12)));
+          if (hasLoc) {
+            L.marker([mapLat, mapLon]).addTo(detailMap).bindPopup(escapeHtml(n.name || n.public_key.slice(0, 12)));
+          } else {
+            // Dashed pin, same convention as area-nodes-map.js -- this
+            // position is an estimate, not a reported GPS fix.
+            L.circleMarker([mapLat, mapLon], {
+              radius: 8, color: getComputedStyle(document.documentElement).getPropertyValue('--surface-0') || '#fff',
+              weight: 2, fillColor: getComputedStyle(document.documentElement).getPropertyValue('--accent') || '#3b82f6',
+              fillOpacity: 0.5, dashArray: '5,4',
+            }).addTo(detailMap).bindPopup(escapeHtml(n.name || n.public_key.slice(0, 12)) + ' (estimated position, no real GPS fix)');
+          }
           setTimeout(() => detailMap.invalidateSize(), 100);
         } catch {}
       }
@@ -1623,7 +1644,9 @@
     const stats = h.stats || {};
     const observers = h.observers || [];
     const recent = h.recentPackets || [];
-    const hasLoc = n.lat != null && n.lon != null;
+    // Same "real fix" convention as loadFullNode above -- see its comment.
+    const hasLoc = n.lat != null && n.lon != null && !(n.lat === 0 && n.lon === 0);
+    const hasEstLoc = !hasLoc && n.estimated_lat != null && n.estimated_lon != null;
     const nodeUrl = location.origin + '/#/nodes/' + encodeURIComponent(n.public_key);
 
     // Status calculation via shared helper
@@ -1647,7 +1670,7 @@
         </div>
         ${renderStatusExplanation(n)}
 
-        ${hasLoc ? `<div class="node-map-qr-wrap">
+        ${(hasLoc || hasEstLoc) ? `<div class="node-map-qr-wrap">
           <div class="node-map-container node-detail-map" id="nodeMap" style="border-radius:8px;overflow:hidden;"></div>
           <div class="node-map-qr-overlay node-qr" id="nodeQrCode"></div>
         </div>` : `<div class="node-qr" id="nodeQrCode" style="margin:8px 0"></div>`}
@@ -1665,7 +1688,7 @@
             <dt>Packets Today</dt><dd>${stats.packetsToday || 0}</dd>
             ${stats.avgSnr != null ? `<dt>Avg SNR</dt><dd>${Number(stats.avgSnr).toFixed(1)} dB</dd>` : ''}
             ${stats.avgHops ? `<dt>Avg Hops</dt><dd>${stats.avgHops}</dd>` : ''}
-            ${hasLoc ? `<dt>Location</dt><dd>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</dd>` : ''}
+            ${hasLoc ? `<dt>Location</dt><dd>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</dd>` : hasEstLoc ? `<dt>Location <span class="text-muted" style="font-size:10px">(estimated)</span></dt><dd>~${Number(n.estimated_lat).toFixed(5)}, ~${Number(n.estimated_lon).toFixed(5)} <span class="text-muted" style="font-size:11px">(from ${n.estimated_contributor_count} neighbor${n.estimated_contributor_count === 1 ? '' : 's'}, no real GPS fix)</span></dd>` : ''}
           </dl>
         </div>
 
@@ -1725,12 +1748,22 @@
       </div>`;
 
     // Init map
-    if (hasLoc) {
+    if (hasLoc || hasEstLoc) {
       try {
         if (detailMap) { detailMap.remove(); detailMap = null; }
-        detailMap = L.map('nodeMap', { zoomControl: false, attributionControl: false }).setView([n.lat, n.lon], 13);
+        const mapLat = hasLoc ? n.lat : n.estimated_lat;
+        const mapLon = hasLoc ? n.lon : n.estimated_lon;
+        detailMap = L.map('nodeMap', { zoomControl: false, attributionControl: false }).setView([mapLat, mapLon], 13);
         _applyTilesToNodeMap(detailMap);
-        L.marker([n.lat, n.lon]).addTo(detailMap).bindPopup(escapeHtml(n.name || n.public_key.slice(0, 12)));
+        if (hasLoc) {
+          L.marker([mapLat, mapLon]).addTo(detailMap).bindPopup(escapeHtml(n.name || n.public_key.slice(0, 12)));
+        } else {
+          L.circleMarker([mapLat, mapLon], {
+            radius: 8, color: getComputedStyle(document.documentElement).getPropertyValue('--surface-0') || '#fff',
+            weight: 2, fillColor: getComputedStyle(document.documentElement).getPropertyValue('--accent') || '#3b82f6',
+            fillOpacity: 0.5, dashArray: '5,4',
+          }).addTo(detailMap).bindPopup(escapeHtml(n.name || n.public_key.slice(0, 12)) + ' (estimated position, no real GPS fix)');
+        }
         setTimeout(() => detailMap.invalidateSize(), 100);
       } catch {}
     }
