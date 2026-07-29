@@ -30,7 +30,6 @@ function makeEstimatedNode(overrides) {
     lat: 56.0,
     lon: 10.0,
     contributorCount: 3,
-    spreadKm: 1.2,
   }, overrides);
 }
 
@@ -180,15 +179,21 @@ function waitForLoad() {
     assert.ok(!content.innerHTML.includes('estimatedNodes=1'), `expected no map link, got: ${content.innerHTML}`);
   });
 
-  await test('renders an estimated-node row with node link, area, contributors, and spread', async () => {
-    const sb = initWith(makeAreasResponse({ estimatedNodes: [makeEstimatedNode({ name: 'GuessedNode', contributorCount: 4, spreadKm: 2.345 })] }));
+  await test('renders an estimated-node row with node link, area, and contributors', async () => {
+    const sb = initWith(makeAreasResponse({ estimatedNodes: [makeEstimatedNode({ name: 'GuessedNode', contributorCount: 4 })] }));
     await waitForLoad();
     const wrap = sb.__docStore['position-gaps-est-table-wrap'];
     assert.ok(wrap.innerHTML.includes('href="#/nodes/' + 'aa'.repeat(32) + '"'), 'expected a node link');
     assert.ok(wrap.innerHTML.includes('GuessedNode'), 'expected the node name');
     assert.ok(wrap.innerHTML.includes('Area A'), 'expected the area badge');
     assert.ok(wrap.innerHTML.includes('>4<'), `expected the contributor count, got: ${wrap.innerHTML}`);
-    assert.ok(wrap.innerHTML.includes('2.3 km'), `expected the rounded spread, got: ${wrap.innerHTML}`);
+  });
+
+  await test('an estimated-node row carries a data-node-pk hook so it can open the node on a map', async () => {
+    const sb = initWith(makeAreasResponse({ estimatedNodes: [makeEstimatedNode({ publicKey: 'aa'.repeat(32) })] }));
+    await waitForLoad();
+    const wrap = sb.__docStore['position-gaps-est-table-wrap'];
+    assert.ok(wrap.innerHTML.includes('data-node-pk="' + 'aa'.repeat(32) + '"'), `expected a clickable row hook, got: ${wrap.innerHTML}`);
   });
 
   await test('a node with no known name falls back to truncated pubkey', async () => {
@@ -243,12 +248,12 @@ function waitForLoad() {
     assert.strictEqual(sv({ publicKey: 'AABBCC' }, 'name'), 'aabbcc');
   });
 
-  await test('the default-sorted column (Spread) header carries sort-active', async () => {
+  await test('the default-sorted column (Contributors) header carries sort-active', async () => {
     const sb = initWith(makeAreasResponse({ estimatedNodes: [makeEstimatedNode(), makeEstimatedNode({ publicKey: 'cc'.repeat(32) })] }));
     await waitForLoad();
     const wrap = sb.__docStore['position-gaps-est-table-wrap'];
-    assert.ok(/data-sort-col="spreadKm"[^>]*class="sortable sort-active"|class="sortable sort-active"[^>]*data-sort-col="spreadKm"/.test(wrap.innerHTML),
-      `expected Spread header to carry sort-active by default; got: ${wrap.innerHTML.slice(0, 400)}`);
+    assert.ok(/data-sort-col="contributorCount"[^>]*class="sortable sort-active"|class="sortable sort-active"[^>]*data-sort-col="contributorCount"/.test(wrap.innerHTML),
+      `expected Contributors header to carry sort-active by default; got: ${wrap.innerHTML.slice(0, 400)}`);
   });
 
   await test('wires makeColumnsResizable with the table selector and a dedicated storage key', async () => {

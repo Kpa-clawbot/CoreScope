@@ -8,9 +8,9 @@
 //
 // The "more": that flat per-node estimatedNodes list only ever drove
 // anonymous map markers before this -- nowhere in the app could you see
-// it as a table (name, area, contributor count, spread) or filter/sort
-// it. This page adds exactly that, alongside the same per-area
-// breakdown table the Areas tab already shows.
+// it as a table (name, area, contributor count) or filter/sort it. This
+// page adds exactly that, alongside the same per-area breakdown table
+// the Areas tab already shows.
 (function () {
   'use strict';
 
@@ -20,7 +20,7 @@
   var unpositionedTotal = 0;
   var unpositionedNoNeighborFix = 0;
   var filterText = '';
-  var sortState = { col: 'spreadKm', dir: 'desc' };
+  var sortState = { col: 'contributorCount', dir: 'desc' };
   var areaSortState = { col: 'pctEstimated', dir: 'desc' };
   var areaExpanded = false;
   var lastAreaRows = [];
@@ -41,7 +41,7 @@
     unpositionedTotal = 0;
     unpositionedNoNeighborFix = 0;
     filterText = '';
-    sortState = { col: 'spreadKm', dir: 'desc' };
+    sortState = { col: 'contributorCount', dir: 'desc' };
     areaSortState = { col: 'pctEstimated', dir: 'desc' };
     areaExpanded = false;
     lastAreaRows = [];
@@ -190,6 +190,17 @@
     }
   }
 
+  // Same "map that pops up" pattern as an area row, but for a single
+  // estimated node -- lets you jump straight to where one specific node
+  // was placed without going through its area first.
+  function openNodeMap(publicKey) {
+    var row = estimatedRows.filter(function (r) { return r.publicKey === publicKey; });
+    if (!row.length) return;
+    if (window.AreaNodesMap && typeof window.AreaNodesMap.open === 'function') {
+      window.AreaNodesMap.open(row[0].name || row[0].publicKey, row);
+    }
+  }
+
   // ---- Estimated nodes table (sortable + filterable + resizable,
   // same conventions as new-nodes.js / node-changes.js) ----
 
@@ -198,7 +209,6 @@
       case 'name': return (row.name || row.publicKey || '').toLowerCase();
       case 'area': return (row.label || '').toLowerCase();
       case 'contributorCount': return row.contributorCount || 0;
-      case 'spreadKm': return row.spreadKm || 0;
       default: return '';
     }
   }
@@ -257,11 +267,10 @@
       var nameLabel = row.name ? escapeHtml(row.name) : escapeHtml(row.publicKey.slice(0, 8)) + '…';
       var nameCell = '<a href="#/nodes/' + encodeURIComponent(row.publicKey) + '">' + nameLabel + '</a>';
       var areaCell = row.label ? '<span class="badge-region">' + escapeHtml(row.label) + '</span>' : '<span class="text-muted">—</span>';
-      return '<tr>' +
+      return '<tr data-node-pk="' + escapeHtml(row.publicKey) + '" style="cursor:pointer" title="Click to see this node on a map">' +
         '<td>' + nameCell + '</td>' +
         '<td>' + areaCell + '</td>' +
         '<td style="text-align:right">' + (row.contributorCount || 0).toLocaleString() + '</td>' +
-        '<td style="text-align:right">' + (typeof row.spreadKm === 'number' ? row.spreadKm.toFixed(1) + ' km' : '—') + '</td>' +
         '</tr>';
     }).join('');
 
@@ -270,7 +279,6 @@
         sortTh(sortState, 'name', 'Node') +
         sortTh(sortState, 'area', 'Area') +
         sortTh(sortState, 'contributorCount', 'Contributors', 'right') +
-        sortTh(sortState, 'spreadKm', 'Spread', 'right') +
       '</tr></thead><tbody>' + rows + '</tbody></table>';
 
     var table = document.getElementById('position-gaps-est-table');
@@ -285,6 +293,15 @@
             sortState.dir = (col === 'name' || col === 'area') ? 'asc' : 'desc';
           }
           renderEstimatedTable();
+        });
+      });
+      // Row click opens the same pop-up map as an Area Breakdown row,
+      // scoped to just this one node -- skip it when the click landed on
+      // the node-name link itself, which already navigates on its own.
+      table.querySelectorAll('tbody tr[data-node-pk]').forEach(function (tr) {
+        tr.addEventListener('click', function (evt) {
+          if (evt.target && evt.target.closest && evt.target.closest('a')) return;
+          openNodeMap(tr.dataset.nodePk);
         });
       });
     }
@@ -323,7 +340,7 @@
         '<h3 style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">' +
           '<span>Estimated Nodes</span>' + mapLink +
         '</h3>' +
-        '<p class="help-text" style="margin:0 0 8px;font-size:12px">Every node with no real GPS fix that was placed anyway, via a weighted centroid of its positioned neighbors. Click a column header to sort.</p>' +
+        '<p class="help-text" style="margin:0 0 8px;font-size:12px">Every node with no real GPS fix that was placed anyway, via a weighted centroid of its positioned neighbors. Click a column header to sort, or a row to see that node on a map.</p>' +
         '<div style="margin:0 0 12px"><input type="text" id="position-gaps-filter" class="input" placeholder="Filter by name, pubkey, or area…" style="width:100%;max-width:420px"></div>' +
         '<div id="position-gaps-est-status" class="text-muted" style="font-size:12px;margin-bottom:8px"></div>' +
         '<div id="position-gaps-est-table-wrap" class="table-fluid-wrap"></div>' +
