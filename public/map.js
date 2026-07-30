@@ -9,7 +9,7 @@
   let nodes = [];
   let targetNodeKey = null;
   let observers = [];
-  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clustering: localStorage.getItem('meshcore-map-clustering') !== 'false', hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all', multiByteOverlay: localStorage.getItem('meshcore-map-multibyte-overlay') === 'true', scope: localStorage.getItem('meshcore-map-scope-filter') || 'all' };
+  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clustering: localStorage.getItem('meshcore-map-clustering') !== 'false', hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all', multiByteOverlay: localStorage.getItem('meshcore-map-multibyte-overlay') === 'true', scope: localStorage.getItem('meshcore-map-scope-filter') || 'all', relayedScope: localStorage.getItem('meshcore-map-relayed-scope-filter') || 'all' };
   let selectedReferenceNode = null;  // pubkey of the reference node for neighbor filtering
   let neighborPubkeys = null;        // Set of pubkeys that are direct neighbors of selected node
   let wsHandler = null;
@@ -221,6 +221,11 @@
             <legend class="mc-label">Default Scope</legend>
             <label for="mcScopeFilter" class="sr-only">Filter by node's own default scope</label>
             <select id="mcScopeFilter" aria-label="Filter by node's own default scope"></select>
+          </fieldset>
+          <fieldset class="mc-section">
+            <legend class="mc-label">Relayed Scope</legend>
+            <label for="mcRelayedScopeFilter" class="sr-only">Filter by scope this repeater has recently relayed</label>
+            <select id="mcRelayedScopeFilter" aria-label="Filter by scope this repeater has recently relayed"></select>
           </fieldset>
           <fieldset class="mc-section">
             <legend class="mc-label">Filters</legend>
@@ -527,6 +532,7 @@
     }
     document.getElementById('mcLastHeard').addEventListener('change', e => { filters.lastHeard = e.target.value; loadNodes(); });
     document.getElementById('mcScopeFilter').addEventListener('change', e => { filters.scope = e.target.value; localStorage.setItem('meshcore-map-scope-filter', filters.scope); renderMarkers(); });
+    document.getElementById('mcRelayedScopeFilter').addEventListener('change', e => { filters.relayedScope = e.target.value; localStorage.setItem('meshcore-map-relayed-scope-filter', filters.relayedScope); renderMarkers(); });
 
     AreaFilter.init(document.getElementById('mapAreaFilter'));
     AreaFilter.onChange(function () { loadNodes(); });
@@ -1603,6 +1609,7 @@
       buildRoleChecks(data.counts || {});
       buildJumpButtons();
       buildScopeOptions();
+      buildRelayedScopeOptions();
 
       renderMarkers();
 
@@ -1747,6 +1754,46 @@
       localStorage.setItem('meshcore-map-scope-filter', 'all');
     }
     el.value = filters.scope;
+  }
+
+  // Pure predicate for the "Relayed Scope" filter — matches against
+  // transported_scopes_recent (array membership, #899/#1751 relay-parity
+  // follow-up), NOT default_scope. A node can relay a scope it doesn't own
+  // itself. scopeValue is filters.relayedScope: 'all', '__none__' (no
+  // recently-relayed scope at all — includes non-repeater roles, same
+  // convention as nodePassesScopeFilter's '__none__'), or an exact scope.
+  function nodePassesRelayedScopeFilter(node, scopeValue) {
+    if (scopeValue === 'all') return true;
+    const relayed = Array.isArray(node.transported_scopes_recent) ? node.transported_scopes_recent : [];
+    if (scopeValue === '__none__') return relayed.length === 0;
+    return relayed.indexOf(scopeValue) !== -1;
+  }
+
+  function buildRelayedScopeOptions() {
+    const el = document.getElementById('mcRelayedScopeFilter');
+    if (!el) return;
+    const scopeSet = new Set();
+    let hasNoRelayed = false;
+    for (const n of nodes) {
+      if (Array.isArray(n.transported_scopes_recent) && n.transported_scopes_recent.length > 0) {
+        for (const s of n.transported_scopes_recent) scopeSet.add(s);
+      } else {
+        hasNoRelayed = true;
+      }
+    }
+    const scopes = Array.from(scopeSet).sort((a, b) => a.localeCompare(b));
+    let html = '<option value="all">All scopes</option>';
+    for (const s of scopes) {
+      html += '<option value="' + escapeHtml(s) + '">' + escapeHtml(s) + '</option>';
+    }
+    if (hasNoRelayed) html += '<option value="__none__">No relayed scope</option>';
+    el.innerHTML = html;
+    const validValues = new Set(['all'].concat(scopes, hasNoRelayed ? ['__none__'] : []));
+    if (!validValues.has(filters.relayedScope)) {
+      filters.relayedScope = 'all';
+      localStorage.setItem('meshcore-map-relayed-scope-filter', 'all');
+    }
+    el.value = filters.relayedScope;
   }
 
   let REGION_NAMES = {};
@@ -1943,10 +1990,11 @@
         const pk = n.public_key;
         if (pk !== selectedReferenceNode && !neighborPubkeys.has(pk)) return false;
       }
-      // Scope filter: own default_scope only (#899) -- relayed/transported
-      // scope support isn't in the /api/nodes payload yet, see the
-      // relay-parity follow-up.
+      // Scope filter: own default_scope only (#899).
       if (!nodePassesScopeFilter(n, filters.scope)) return false;
+      // Relayed Scope filter: transported_scopes_recent (#1751 + relay-
+      // parity follow-up) -- independent, AND-combined with the above.
+      if (!nodePassesRelayedScopeFilter(n, filters.relayedScope)) return false;
       return true;
     });
 
@@ -2542,6 +2590,6 @@
   }
 
   if (typeof window !== 'undefined') {
-    window.__meshcoreMapInternals = { createClusterGroup: createClusterGroup, makeClusterIcon: makeClusterIcon, nodePassesScopeFilter: nodePassesScopeFilter, buildScopeOptions: buildScopeOptions };
+    window.__meshcoreMapInternals = { createClusterGroup: createClusterGroup, makeClusterIcon: makeClusterIcon, nodePassesScopeFilter: nodePassesScopeFilter, buildScopeOptions: buildScopeOptions, nodePassesRelayedScopeFilter: nodePassesRelayedScopeFilter, buildRelayedScopeOptions: buildRelayedScopeOptions };
   }
 })();

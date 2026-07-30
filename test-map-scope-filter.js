@@ -89,6 +89,44 @@ console.log('\n=== map.js: scope filter ===');
   });
 }
 
+console.log('\n=== map.js: relayed scope filter ===');
+{
+  const ctx = makeSandbox();
+  const internals = ctx.window.__meshcoreMapInternals;
+
+  test('exposes nodePassesRelayedScopeFilter test hook', () => {
+    assert.ok(typeof internals.nodePassesRelayedScopeFilter === 'function', 'nodePassesRelayedScopeFilter not exported');
+  });
+
+  test('"all" passes every node regardless of transported_scopes_recent', () => {
+    assert.strictEqual(internals.nodePassesRelayedScopeFilter({ transported_scopes_recent: ['dk-oj'] }, 'all'), true);
+    assert.strictEqual(internals.nodePassesRelayedScopeFilter({}, 'all'), true);
+  });
+
+  test('array-membership match passes, non-member fails', () => {
+    assert.strictEqual(internals.nodePassesRelayedScopeFilter({ transported_scopes_recent: ['dk-oj', 'dk-nj'] }, 'dk-oj'), true);
+    assert.strictEqual(internals.nodePassesRelayedScopeFilter({ transported_scopes_recent: ['dk-nj'] }, 'dk-oj'), false);
+  });
+
+  test('"__none__" matches only nodes with no recently-relayed scope', () => {
+    assert.strictEqual(internals.nodePassesRelayedScopeFilter({ transported_scopes_recent: [] }, '__none__'), true);
+    assert.strictEqual(internals.nodePassesRelayedScopeFilter({}, '__none__'), true);
+    assert.strictEqual(internals.nodePassesRelayedScopeFilter({ transported_scopes_recent: null }, '__none__'), true);
+    assert.strictEqual(internals.nodePassesRelayedScopeFilter({ transported_scopes_recent: ['dk-oj'] }, '__none__'), false);
+  });
+
+  test('non-array transported_scopes_recent is treated as empty, not a crash', () => {
+    assert.strictEqual(internals.nodePassesRelayedScopeFilter({ transported_scopes_recent: 'dk-oj' }, 'dk-oj'), false);
+  });
+
+  test('a node can match Default Scope and Relayed Scope independently (different values)', () => {
+    const node = { default_scope: 'dk-nj', transported_scopes_recent: ['dk-oj'] };
+    assert.strictEqual(internals.nodePassesScopeFilter(node, 'dk-nj'), true);
+    assert.strictEqual(internals.nodePassesRelayedScopeFilter(node, 'dk-oj'), true);
+    assert.strictEqual(internals.nodePassesScopeFilter(node, 'dk-oj'), false, 'own default_scope must not be satisfied by a relayed scope');
+  });
+}
+
 if (failed > 0) {
   console.log(`\n${failed} test(s) failed, ${passed} passed`);
   process.exit(1);

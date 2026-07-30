@@ -117,6 +117,10 @@ func (s *PacketStore) computeRepeaterRelayInfoMap(windowHours float64) map[strin
 		// scope hit so hosts without scope_name pay nothing per key; converted
 		// to a sorted, capped slice before this key's info is stored.
 		var scopeSet map[string]struct{}
+		// Map scope-filter parity follow-up: latest parseable timestamp
+		// per scope, mirroring computeRelayInfoFromEntries's scopeLatest
+		// — kept in exact parity per this file's existing convention.
+		var scopeLatest map[string]time.Time
 		// When key looks like a full pubkey (>= 2 hex chars), also fold
 		// in the matching 1-byte raw-prefix bucket to mirror
 		// GetRepeaterRelayInfo's behavior. We dedup by tx ID.
@@ -173,6 +177,14 @@ func (s *PacketStore) computeRepeaterRelayInfoMap(windowHours float64) map[strin
 				if !p.ok {
 					continue
 				}
+				if includeScope && tx.ScopeName != "" && windowHours > 0 {
+					if scopeLatest == nil {
+						scopeLatest = map[string]time.Time{}
+					}
+					if p.t.After(scopeLatest[tx.ScopeName]) {
+						scopeLatest[tx.ScopeName] = p.t
+					}
+				}
 				if p.t.After(cutoff24h) {
 					info.RelayCount24h++
 					if tx.RouteType != nil && *tx.RouteType == routeTypeFlood {
@@ -200,6 +212,15 @@ func (s *PacketStore) computeRepeaterRelayInfoMap(windowHours float64) map[strin
 			}
 		}
 		info.TransportedScopes = sortedCappedScopes(scopeSet)
+		if windowHours > 0 && scopeLatest != nil {
+			recentSet := make(map[string]struct{}, len(scopeLatest))
+			for scope, t := range scopeLatest {
+				if t.After(windowCutoff) {
+					recentSet[scope] = struct{}{}
+				}
+			}
+			info.TransportedScopesRecent = sortedCappedScopes(recentSet)
+		}
 		out[key] = info
 	}
 	return out

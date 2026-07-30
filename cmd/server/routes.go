@@ -1814,6 +1814,13 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 					if len(info.TransportedScopes) > 0 {
 						node["transported_scopes"] = info.TransportedScopes
 					}
+					// Map scope-filter parity follow-up: subset of the above
+					// relayed within the activity window, i.e. still a live
+					// signal rather than "carried this scope at some point
+					// while the in-memory index happened to still hold it."
+					if len(info.TransportedScopesRecent) > 0 {
+						node["transported_scopes_recent"] = info.TransportedScopesRecent
+					}
 					// #672 4-axis usefulness. traffic_share_score keeps the
 					// raw per-axis Traffic value (#1456); the structural axes
 					// are surfaced individually; the composite uses the
@@ -1937,6 +1944,11 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 			// when non-empty (absent for no-scope nodes / older schemas).
 			if len(info.TransportedScopes) > 0 {
 				node["transported_scopes"] = info.TransportedScopes
+			}
+			// Map scope-filter parity follow-up (see handleNodes for the
+			// field contract).
+			if len(info.TransportedScopesRecent) > 0 {
+				node["transported_scopes_recent"] = info.TransportedScopesRecent
 			}
 			// #672 4-axis usefulness (see handleNodes for the field
 			// contract). traffic_share_score keeps the raw per-axis

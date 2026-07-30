@@ -39,6 +39,15 @@ type RepeaterRelayInfo struct {
 	// repeater carried traffic for, ever (within the in-memory window)".
 	// Empty/absent on schemas without scope_name (#1751).
 	TransportedScopes []string `json:"transportedScopes,omitempty"`
+	// TransportedScopesRecent is the subset of TransportedScopes whose
+	// most recent relay falls within WindowHours — the same recency
+	// window RelayActive uses. Unlike TransportedScopes (which answers
+	// "ever, while still resident in memory" and can hold scopes a
+	// repeater carried weeks ago), this answers "recently, and therefore
+	// still trustworthy as a live signal" (map scope-filter parity
+	// follow-up). Nil when WindowHours <= 0 (recency undetermined, same
+	// convention as RelayActive staying false in that case).
+	TransportedScopesRecent []string `json:"transportedScopesRecent,omitempty"`
 }
 
 // maxTransportedScopes bounds the per-node TransportedScopes list so a
@@ -190,6 +199,7 @@ func computeRelayInfoFromEntries(entries []relayEntry, windowHours float64) Repe
 	var latest time.Time
 	var latestRaw string
 	var scopeSet map[string]struct{}
+	var scopeLatest map[string]time.Time
 	for _, e := range entries {
 		// Self-originated adverts are not relay activity.
 		if e.pt == payloadTypeAdvert {
@@ -208,6 +218,17 @@ func computeRelayInfoFromEntries(entries []relayEntry, windowHours float64) Repe
 		t, ok := parseRelayTS(e.ts)
 		if !ok {
 			continue
+		}
+		// Map scope-filter parity follow-up: track the latest parseable
+		// timestamp per scope so recency can be judged per-scope, not
+		// just per-node. Same fromPrefix exclusion as scopeSet above.
+		if !e.fromPrefix && e.scope != "" {
+			if scopeLatest == nil {
+				scopeLatest = map[string]time.Time{}
+			}
+			if t.After(scopeLatest[e.scope]) {
+				scopeLatest[e.scope] = t
+			}
 		}
 		if t.After(latest) {
 			latest = t
@@ -235,6 +256,15 @@ func computeRelayInfoFromEntries(entries []relayEntry, windowHours float64) Repe
 		cutoff := now.Add(-time.Duration(windowHours * float64(time.Hour)))
 		if latest.After(cutoff) {
 			info.RelayActive = true
+		}
+		if scopeLatest != nil {
+			recentSet := make(map[string]struct{}, len(scopeLatest))
+			for scope, t := range scopeLatest {
+				if t.After(cutoff) {
+					recentSet[scope] = struct{}{}
+				}
+			}
+			info.TransportedScopesRecent = sortedCappedScopes(recentSet)
 		}
 	}
 	return info
