@@ -619,7 +619,7 @@ func (s *Server) handleAreaAnalytics(w http.ResponseWriter, r *http.Request) {
 		graph = s.store.graph.Load()
 	}
 
-	positionGaps, noNeighborFix, estimatedNodes := computeAreaPositionGaps(s.db, positioned, unpositioned, s.cfg.Areas, s.cfg.NeighborMaxEdgeKm())
+	positionGaps, noNeighborFix, estimatedNodes := computeAreaPositionGaps(s.db, positioned, unpositioned, s.cfg.Areas, EstimateMaxEdgeKm)
 
 	resp := &AreaAnalyticsResponse{
 		Density:                   computeAreaDensity(positioned, s.cfg.Areas, s.cfg.GetHealthThresholds()),
@@ -1814,6 +1814,13 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 					if len(info.TransportedScopes) > 0 {
 						node["transported_scopes"] = info.TransportedScopes
 					}
+					// Map scope-filter parity follow-up: subset of the above
+					// relayed within the activity window, i.e. still a live
+					// signal rather than "carried this scope at some point
+					// while the in-memory index happened to still hold it."
+					if len(info.TransportedScopesRecent) > 0 {
+						node["transported_scopes_recent"] = info.TransportedScopesRecent
+					}
 					// #672 4-axis usefulness. traffic_share_score keeps the
 					// raw per-axis Traffic value (#1456); the structural axes
 					// are surfaced individually; the composite uses the
@@ -1938,6 +1945,11 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 			if len(info.TransportedScopes) > 0 {
 				node["transported_scopes"] = info.TransportedScopes
 			}
+			// Map scope-filter parity follow-up (see handleNodes for the
+			// field contract).
+			if len(info.TransportedScopesRecent) > 0 {
+				node["transported_scopes_recent"] = info.TransportedScopesRecent
+			}
 			// #672 4-axis usefulness (see handleNodes for the field
 			// contract). traffic_share_score keeps the raw per-axis
 			// Traffic value (#1456); the composite uses the
@@ -1990,7 +2002,7 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 	nodeLat, hasLat := node["lat"].(float64)
 	nodeLon, hasLon := node["lon"].(float64)
 	hasRealFix := hasLat && hasLon && !(nodeLat == 0 && nodeLon == 0)
-	if _, lat, lon, contributorCount, _, ok := s.db.nearestPositionedNeighbor(pubkey, s.cfg.NeighborMaxEdgeKm()); ok {
+	if _, lat, lon, contributorCount, _, ok := s.db.nearestPositionedNeighbor(pubkey, EstimateMaxEdgeKm); ok {
 		node["estimated_lat"] = lat
 		node["estimated_lon"] = lon
 		node["estimated_contributor_count"] = contributorCount
@@ -3518,7 +3530,7 @@ func (s *Server) handlePacketPath(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, PacketPathResponse{Hash: hash, Branches: []PacketPathBranch{}})
 		return
 	}
-	resp, err := s.db.GetPacketPath(hash, s.cfg.NeighborMaxEdgeKm())
+	resp, err := s.db.GetPacketPath(hash, EstimateMaxEdgeKm)
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return

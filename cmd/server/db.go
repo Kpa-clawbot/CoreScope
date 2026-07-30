@@ -2462,6 +2462,16 @@ func (db *DB) GetPacketPath(hash string, maxEdgeKm float64) (*PacketPathResponse
 	return resp, nil
 }
 
+// EstimateMaxEdgeKm is the geo-sanity threshold nearestPositionedNeighbor's
+// callers pass -- deliberately much tighter than Config.NeighborMaxEdgeKm()
+// (500km, default), which governs a different, coarser question (see
+// nearestPositionedNeighbor's doc comment for the real-world case that
+// motivated this). Genuine LoRa RF adjacency rarely exceeds a few tens of
+// km, so 30km errs toward excluding a real-but-unusually-long neighbor
+// link over including an MQTT-bridge artifact that happens to have
+// accumulated a large edge count.
+const EstimateMaxEdgeKm = 30.0
+
 // nearestPositionedNeighbor estimates pubkey's position from its
 // neighbor_edges neighbors that themselves have a real, known position,
 // for use as an approximate stand-in when pubkey has none of its own --
@@ -2494,11 +2504,20 @@ func (db *DB) GetPacketPath(hash string, maxEdgeKm float64) (*PacketPathResponse
 // one rare distant outlier both skews the estimate and inflates
 // spreadKm into something like "800km", which reads as "this whole
 // estimate is garbage" when in practice the real local neighbors
-// dominate by weight. Same threshold already used to reject
-// geo-implausible edges when building the in-memory NeighborGraph
-// (neighbor_graph.go's shouldRejectGeoFar / Config.NeighborMaxEdgeKm) --
-// this is the same sanity check, applied to this separate raw-SQL path.
-// maxEdgeKm <= 0 disables the filter.
+// dominate by weight.
+//
+// Callers pass EstimateMaxEdgeKm, NOT Config.NeighborMaxEdgeKm() (500km) --
+// that default is tuned for deciding which edges are implausible enough to
+// exclude from the general-purpose NeighborGraph entirely, a much coarser
+// question than "is this specific candidate close enough to trust for a
+// single-point position estimate". A real case (dborup, #Bornholm test
+// repeater) showed why 500km is far too loose here: the correct anchor
+// (DK_Bornholm_Olsker, on the island) had a Swedish MQTT-bridge neighbor
+// 177km away with a MASSIVE accumulated count (6403, vs the anchor's
+// 11917) -- big enough on its own to drag the weighted centroid out into
+// the sea between Bornholm and Sweden. Genuine LoRa RF range rarely
+// exceeds a few tens of km even with favorable terrain, so a much tighter
+// cap catches this class of bug. maxEdgeKm <= 0 disables the filter.
 //
 // Returns ok=false when pubkey has no neighbor with a position at all.
 func (db *DB) nearestPositionedNeighbor(pubkey string, maxEdgeKm float64) (name string, lat, lon float64, contributorCount int, spreadKm float64, ok bool) {
