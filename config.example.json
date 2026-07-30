@@ -97,6 +97,10 @@
         "stamen": {
           "enabled": false,
           "token": ""
+        },
+        "_comment_usgs": "USGS topographical tile provider. Limited to zoom level 16.",
+        "usgs": {
+          "enabled": false
         }
       }
     }
