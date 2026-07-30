@@ -4509,7 +4509,15 @@ th.sort-active { color: var(--accent, #60a5fa); }
 
 /* Tools landing page */
 .tools-landing { padding: 24px; max-width: 600px; }
-.tools-menu { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
+/* auto-fill collapses to 1 column on narrow viewports with no media query
+   needed -- each card gets at least 260px, as many columns as fit above that. */
+/* No align-items override -- grid's default "stretch" makes every card in
+   a row match the tallest one, so cards with a longer description don't
+   look bigger than their neighbors. */
+.tools-menu { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 12px; }
+.tools-section { margin-top: 24px; }
+.tools-section:first-of-type { margin-top: 16px; }
+.tools-section-title { margin: 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
 .tools-card { display: block; padding: 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text); text-decoration: none; transition: border-color 0.2s; }
 .tools-card:hover { border-color: var(--primary); }
 .tools-card h3 { margin: 0 0 4px 0; font-size: 16px; }
