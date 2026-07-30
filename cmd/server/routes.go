@@ -125,6 +125,12 @@ type Server struct {
 	areaAnalyticsMu       sync.Mutex
 	areaAnalyticsCache    *AreaAnalyticsResponse
 	areaAnalyticsCachedAt time.Time
+
+	// Cached /api/analytics/gps-sanity response, same 30s-TTL reasoning as
+	// areaAnalyticsCache -- see handleGPSSanity.
+	gpsSanityMu       sync.Mutex
+	gpsSanityCache    *GPSSanityResponse
+	gpsSanityCachedAt time.Time
 }
 
 // PerfStats tracks request performance.
@@ -268,6 +274,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/config/areas/polygons", s.handleConfigAreasPolygons).Methods("GET")
 	r.HandleFunc("/api/ping-scores", s.handlePingScores).Methods("GET")
 	r.HandleFunc("/api/analytics/areas", s.handleAreaAnalytics).Methods("GET")
+	r.HandleFunc("/api/analytics/gps-sanity", s.handleGPSSanity).Methods("GET")
 	r.Handle("/api/config/geo-filter", s.requireAPIKey(http.HandlerFunc(s.handlePutConfigGeoFilter))).Methods("PUT")
 
 	// Readiness endpoint (gated on background init completion)
@@ -627,6 +634,44 @@ func (s *Server) handleAreaAnalytics(w http.ResponseWriter, r *http.Request) {
 	s.areaAnalyticsCache = resp
 	s.areaAnalyticsCachedAt = time.Now()
 	s.areaAnalyticsMu.Unlock()
+
+	writeJSON(w, resp)
+}
+
+// handleGPSSanity serves computeSuspiciousGPSPositions' cross-check of
+// every node's self-reported GPS against its own RF neighbors. Doesn't
+// depend on Areas being configured (unlike handleAreaAnalytics) -- it's a
+// network-wide check, not an area breakdown. Cached 30s for the same
+// reason as areaAnalyticsCache: cheap per node, but adds up across the
+// whole positioned population on every request otherwise.
+func (s *Server) handleGPSSanity(w http.ResponseWriter, r *http.Request) {
+	const gpsSanityTTL = 30 * time.Second
+
+	s.gpsSanityMu.Lock()
+	if s.gpsSanityCache != nil && time.Since(s.gpsSanityCachedAt) < gpsSanityTTL {
+		cached := s.gpsSanityCache
+		s.gpsSanityMu.Unlock()
+		writeJSON(w, cached)
+		return
+	}
+	s.gpsSanityMu.Unlock()
+
+	positioned, _, err := s.db.GetNodesForAreaAnalytics()
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+
+	resp, err := computeSuspiciousGPSPositions(s.db, positioned)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+
+	s.gpsSanityMu.Lock()
+	s.gpsSanityCache = &resp
+	s.gpsSanityCachedAt = time.Now()
+	s.gpsSanityMu.Unlock()
 
 	writeJSON(w, resp)
 }

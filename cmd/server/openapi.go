@@ -165,6 +165,8 @@ func routeDescriptions() map[string]routeMeta {
 			Response: schemaRef("PingScoresResponse")},
 		"GET /api/analytics/areas": {Summary: "Per-configured-Area node density, cross-area bridge nodes, and position-fix coverage", Description: "Three breakdowns over the drawn-polygon Areas configured via the meshguide.dk sync, distinct from hashRegion scope adoption (see /api/analytics/scope-stats): (1) density, node count/active-degraded-silent health/role mix per area (multi-membership via AreaKeysForPoint, so a node in a sub-area also counts toward its parent region), (2) bridgeNodes, nodes whose packet-derived neighbor_edges reach into at least one OTHER area (single most-specific area via AreaKeyForPoint), ranked by how many other areas they reach -- distinct from the network-wide, area-unaware bridge_score betweenness centrality, (3) positionGaps, per area how many nodes have a real GPS fix vs. how many were only placeable via the same neighbor-centroid estimate View Path's approx markers use (nearestPositionedNeighbor, geo-sanity-filtered by Config.NeighborMaxEdgeKm so a stray MQTT-bridge observer↔last-hop edge hundreds of km away can't skew the estimate or inflate its spreadKm). estimatedNodes is the flat, network-wide list backing positionGaps' approximated counts, with actual estimated coordinates -- used by the Areas tab's \"View Estimated Nodes\" map view and Tools > Position-Fix Coverage Gaps. Returns an empty response if no Areas are configured. Cached 30s.", Tag: "analytics",
 			Response: schemaRef("AreaAnalyticsResponse")},
+		"GET /api/analytics/gps-sanity": {Summary: "Nodes whose self-reported GPS disagrees with their own RF neighbors", Description: "The neighbor-centroid technique nearestPositionedNeighbor uses to ESTIMATE a position for a node with no GPS, flipped around to sanity-check a node that DOES report one. For each node with a real (non-zero) GPS fix, takes its strongest neighbor_edges neighbor as an anchor, keeps whichever other positioned neighbors agree with the anchor within GPSSanityClusterTightKm (50km), and -- only if at least GPSSanityMinClusterSize (2) survive that filter -- compares the node's own position against their weighted centroid. Flags it when the distance exceeds GPSSanitySuspectKm (100km). Most nodes are skipped, not evaluated (no neighbor_edges, no positioned neighbor, or too scattered a neighbor set to trust), so evaluated is always well under totalRealGps. v1: doesn't weight by neighbor_edges' hash-prefix ambiguity mode (the confidence indicator public/nodes.js's Neighbors panel shows) since that breakdown only lives in the in-memory NeighborGraph, not the persisted table this reads. Not area-scoped -- works regardless of whether Areas are configured. Cached 30s.", Tag: "analytics",
+			Response: schemaRef("GPSSanityResponse")},
 	}
 }
 
@@ -537,6 +539,30 @@ func componentSchemas() map[string]interface{} {
 				"unpositionedTotal":         map[string]interface{}{"type": "integer", "description": "Every node with no real GPS fix, regardless of area."},
 				"unpositionedNoNeighborFix": map[string]interface{}{"type": "integer", "description": "The subset of unpositionedTotal that also has no positioned neighbor to estimate from -- can't be placed even approximately, so absent from every area's positionGaps.approximated."},
 				"estimatedNodes":            map[string]interface{}{"type": "array", "items": schemaRef("EstimatedAreaNode"), "description": "Flat, network-wide list of every node behind positionGaps' approximated counts, with actual estimated coordinates for plotting on a map."},
+			},
+		},
+		"SuspiciousGPSNode": map[string]interface{}{
+			"type":        "object",
+			"description": "One node whose self-reported lat/lon sits more than GPSSanitySuspectKm from the weighted centroid of its trusted RF-neighbor cluster.",
+			"properties": map[string]interface{}{
+				"publicKey":       str("The node's pubkey."),
+				"name":            str("Display name, falling back to the raw pubkey when unresolved."),
+				"lat":             map[string]interface{}{"type": "number", "description": "The node's own self-reported latitude."},
+				"lon":             map[string]interface{}{"type": "number", "description": "The node's own self-reported longitude."},
+				"clusterLat":      map[string]interface{}{"type": "number", "description": "Weighted-centroid latitude of the trusted neighbor cluster."},
+				"clusterLon":      map[string]interface{}{"type": "number", "description": "Weighted-centroid longitude of the trusted neighbor cluster."},
+				"distanceKm":      map[string]interface{}{"type": "number", "description": "Distance between the node's own position and its cluster centroid -- always > GPSSanitySuspectKm for a flagged node."},
+				"clusterSpreadKm": map[string]interface{}{"type": "number", "description": "Max distance between any two cluster members -- a confidence signal, tighter is more trustworthy."},
+				"clusterSize":     map[string]interface{}{"type": "integer", "description": "How many neighbors fed the cluster centroid."},
+			},
+		},
+		"GPSSanityResponse": map[string]interface{}{
+			"type":        "object",
+			"description": "Nodes whose self-reported GPS disagrees with a trusted cluster of their own RF neighbors.",
+			"properties": map[string]interface{}{
+				"nodes":        map[string]interface{}{"type": "array", "items": schemaRef("SuspiciousGPSNode"), "description": "Flagged nodes, sorted worst (largest distanceKm) first."},
+				"totalRealGps": map[string]interface{}{"type": "integer", "description": "Every node with a real (non-zero) GPS fix -- the population this check ran over."},
+				"evaluated":    map[string]interface{}{"type": "integer", "description": "The subset of totalRealGps that had a trustworthy neighbor cluster to compare against."},
 			},
 		},
 		"AllObserverNeighborsEntry": map[string]interface{}{

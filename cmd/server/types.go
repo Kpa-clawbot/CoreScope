@@ -344,6 +344,42 @@ type EstimatedAreaNode struct {
 	SpreadKm         float64 `json:"spreadKm"`
 }
 
+// GPSSanityResponse reports nodes whose self-advertised GPS position
+// disagrees with a trusted cluster of its own RF neighbors -- the same
+// neighbor_edges data nearestPositionedNeighbor uses to ESTIMATE a position
+// for a node with no GPS, flipped around to sanity-check a node that DOES
+// report one. See computeSuspiciousGPSPositions (gps_sanity.go) for the
+// full algorithm.
+type GPSSanityResponse struct {
+	Nodes []SuspiciousGPSNode `json:"nodes"`
+	// TotalRealGPS is every node with a real (non-zero) GPS fix -- the
+	// population this check ran over.
+	TotalRealGPS int `json:"totalRealGps"`
+	// Evaluated is the subset that had a trustworthy neighbor cluster to
+	// compare against (see SuspiciousGPSNode's doc comment for why most
+	// nodes don't qualify).
+	Evaluated int `json:"evaluated"`
+}
+
+// SuspiciousGPSNode is one node whose self-reported lat/lon sits more than
+// GPSSanitySuspectKm from the weighted centroid of its trusted cluster --
+// the subset of its strongest RF neighbors (by neighbor_edges observation
+// count) that agree with each other to within GPSSanityClusterTightKm. Only
+// nodes with at least GPSSanityMinClusterSize such neighbors are evaluated
+// at all, so this list skews toward well-connected nodes with a genuinely
+// wrong or stale position, not sparse/edge-of-network ones.
+type SuspiciousGPSNode struct {
+	PublicKey       string  `json:"publicKey"`
+	Name            string  `json:"name"`
+	Lat             float64 `json:"lat"`
+	Lon             float64 `json:"lon"`
+	ClusterLat      float64 `json:"clusterLat"`
+	ClusterLon      float64 `json:"clusterLon"`
+	DistanceKm      float64 `json:"distanceKm"`
+	ClusterSpreadKm float64 `json:"clusterSpreadKm"`
+	ClusterSize     int     `json:"clusterSize"`
+}
+
 type ScopeRegionRepeaters struct {
 	Region    string        `json:"region"`
 	Count     int           `json:"count"`
