@@ -84,6 +84,7 @@ node test-new-nodes-tool.js
 node test-node-changes-tool.js
 node test-network-digest-tool.js
 node test-position-gaps-tool.js
+node test-gps-sanity-tool.js
 
 echo ""
 echo "═══════════════════════════════════════"

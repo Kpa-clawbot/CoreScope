@@ -1121,6 +1121,7 @@ registerPage('tools-landing', {
           '<a href="#/tools/node-changes" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-pulse"/></svg> Node Changes</h3><p>Audit log of role/name/position changes and nodes returning after being pruned for inactivity.</p></a>' +
           '<a href="#/tools/network-digest" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Network Digest</h3><p>Rolling-window summary of New Nodes and Node Changes activity -- what happened lately, at a glance.</p></a>' +
           '<a href="#/tools/position-gaps" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-pin"/></svg> Position-Fix Coverage Gaps</h3><p>Which areas rely on estimated node positions instead of real GPS fixes, and the actual estimated nodes behind those numbers.</p></a>' +
+          '<a href="#/tools/gps-sanity" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-crosshair"/></svg> Suspicious GPS Positions</h3><p>Nodes whose self-reported GPS disagrees with a tight, trusted cluster of their own RF neighbors.</p></a>' +
         '</div>' +
       '</div>';
   },
@@ -1216,6 +1217,9 @@ function navigate() {
     } else if (routeParam === 'position-gaps') {
       basePage = 'position-gaps-tool';
       routeParam = null;
+    } else if (routeParam === 'gps-sanity') {
+      basePage = 'gps-sanity-tool';
+      routeParam = null;
     } else if (!routeParam) {
       // Default tools landing shows menu with both entries.
       basePage = 'tools-landing';
@@ -1228,7 +1232,7 @@ function navigate() {
 
   // Update nav active state
   document.querySelectorAll('.nav-link[data-route]').forEach(el => {
-    el.classList.toggle('active', el.dataset.route === basePage || (el.dataset.route === 'tools' && (basePage === 'traces' || basePage === 'path-inspector' || basePage === 'observer-neighbors-tool' || basePage === 'new-nodes-tool' || basePage === 'node-changes-tool' || basePage === 'network-digest-tool' || basePage === 'position-gaps-tool' || basePage === 'tools-landing')));
+    el.classList.toggle('active', el.dataset.route === basePage || (el.dataset.route === 'tools' && (basePage === 'traces' || basePage === 'path-inspector' || basePage === 'observer-neighbors-tool' || basePage === 'new-nodes-tool' || basePage === 'node-changes-tool' || basePage === 'network-digest-tool' || basePage === 'position-gaps-tool' || basePage === 'gps-sanity-tool' || basePage === 'tools-landing')));
   });
   // Update "More" button to show active state if a low-priority page is selected
   var moreBtn = document.getElementById('navMoreBtn');
