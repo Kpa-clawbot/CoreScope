@@ -1110,7 +1110,7 @@ function registerPage(name, mod) { pages[name] = mod; }
 registerPage('tools-landing', {
   init: function (container) {
     container.innerHTML =
-      '<div class="tools-landing">' +
+      '<div class="tools-landing" style="max-width:1100px">' +
         '<h2>Tools</h2>' +
         '<div class="tools-menu">' +
           '<a href="#/tools/path-inspector" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Path Inspector</h3><p>Resolve prefix paths to candidate full-pubkey routes with confidence scoring.</p></a>' +
