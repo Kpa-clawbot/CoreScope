@@ -218,9 +218,9 @@
             </div>
           </fieldset>
           <fieldset class="mc-section">
-            <legend class="mc-label">Scope</legend>
-            <label for="mcScopeFilter" class="sr-only">Filter by node's own scope</label>
-            <select id="mcScopeFilter" aria-label="Filter by node's own scope"></select>
+            <legend class="mc-label">Default Scope</legend>
+            <label for="mcScopeFilter" class="sr-only">Filter by node's own default scope</label>
+            <select id="mcScopeFilter" aria-label="Filter by node's own default scope"></select>
           </fieldset>
           <fieldset class="mc-section">
             <legend class="mc-label">Filters</legend>
