@@ -1112,16 +1112,34 @@ registerPage('tools-landing', {
     container.innerHTML =
       '<div class="tools-landing" style="max-width:1100px">' +
         '<h2>Tools</h2>' +
-        '<div class="tools-menu">' +
-          '<a href="#/tools/path-inspector" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Path Inspector</h3><p>Resolve prefix paths to candidate full-pubkey routes with confidence scoring.</p></a>' +
-          '<a href="#/tools/trace/" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Trace Viewer</h3><p>View detailed packet traces by hash.</p></a>' +
-          '<a href="#/ping-scores" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trophy"/></svg> Ping Scores</h3><p>Global highscore board and leaderboards from every "ping" ever sent in a channel.</p></a>' +
-          '<a href="#/tools/observer-neighbors" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-share-network"/></svg> Observer Neighbors</h3><p>Every observer\'s firmware-reported direct neighbors, network-wide in one searchable list.</p></a>' +
-          '<a href="#/tools/new-nodes" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-rocket"/></svg> New Nodes</h3><p>Nodes seen on the mesh for the very first time, newest first, with their area.</p></a>' +
-          '<a href="#/tools/node-changes" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-pulse"/></svg> Node Changes</h3><p>Audit log of role/name/position changes and nodes returning after being pruned for inactivity.</p></a>' +
-          '<a href="#/tools/network-digest" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Network Digest</h3><p>Rolling-window summary of New Nodes and Node Changes activity -- what happened lately, at a glance.</p></a>' +
-          '<a href="#/tools/position-gaps" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-pin"/></svg> Position-Fix Coverage Gaps</h3><p>Which areas rely on estimated node positions instead of real GPS fixes, and the actual estimated nodes behind those numbers.</p></a>' +
-          '<a href="#/tools/gps-sanity" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-crosshair"/></svg> Suspicious GPS Positions</h3><p>Nodes whose self-reported GPS disagrees with a tight, trusted cluster of their own RF neighbors.</p></a>' +
+        '<div class="tools-section">' +
+          '<h3 class="tools-section-title">Network Activity</h3>' +
+          '<div class="tools-menu">' +
+            '<a href="#/tools/new-nodes" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-rocket"/></svg> New Nodes</h3><p>Nodes seen on the mesh for the very first time, newest first, with their area.</p></a>' +
+            '<a href="#/tools/node-changes" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-pulse"/></svg> Node Changes</h3><p>Audit log of role/name/position changes and nodes returning after being pruned for inactivity.</p></a>' +
+            '<a href="#/tools/network-digest" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Network Digest</h3><p>Rolling-window summary of New Nodes and Node Changes activity -- what happened lately, at a glance.</p></a>' +
+          '</div>' +
+        '</div>' +
+        '<div class="tools-section">' +
+          '<h3 class="tools-section-title">Position &amp; GPS</h3>' +
+          '<div class="tools-menu">' +
+            '<a href="#/tools/position-gaps" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-pin"/></svg> Position-Fix Coverage Gaps</h3><p>Which areas rely on estimated node positions instead of real GPS fixes, and the actual estimated nodes behind those numbers.</p></a>' +
+            '<a href="#/tools/gps-sanity" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-crosshair"/></svg> Suspicious GPS Positions</h3><p>Nodes whose self-reported GPS disagrees with a tight, trusted cluster of their own RF neighbors.</p></a>' +
+          '</div>' +
+        '</div>' +
+        '<div class="tools-section">' +
+          '<h3 class="tools-section-title">Lookup Tools</h3>' +
+          '<div class="tools-menu">' +
+            '<a href="#/tools/path-inspector" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Path Inspector</h3><p>Resolve prefix paths to candidate full-pubkey routes with confidence scoring.</p></a>' +
+            '<a href="#/tools/trace/" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Trace Viewer</h3><p>View detailed packet traces by hash.</p></a>' +
+            '<a href="#/tools/observer-neighbors" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-share-network"/></svg> Observer Neighbors</h3><p>Every observer\'s firmware-reported direct neighbors, network-wide in one searchable list.</p></a>' +
+          '</div>' +
+        '</div>' +
+        '<div class="tools-section">' +
+          '<h3 class="tools-section-title">Fun</h3>' +
+          '<div class="tools-menu">' +
+            '<a href="#/ping-scores" class="tools-card"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-trophy"/></svg> Ping Scores</h3><p>Global highscore board and leaderboards from every "ping" ever sent in a channel.</p></a>' +
+          '</div>' +
         '</div>' +
       '</div>';
   },
