@@ -68,6 +68,12 @@ test('close() tears down the Leaflet map instance, not just the DOM overlay (avo
   assert.ok(/activeMap\.remove\(\)/.test(src));
 });
 
+test('the "Copy link" button builds a #/packets/<hash>?viewPath=1 URL and copies via window.copyToClipboard', () => {
+  assert.ok(/id="packetPathCopyLink"/.test(src), 'expected a packetPathCopyLink button in the modal');
+  assert.ok(/'\/#\/packets\/'\s*\+\s*encodeURIComponent\(hash\)\s*\+\s*'\?viewPath=1'/.test(src), 'expected the link to encode the hash and carry ?viewPath=1');
+  assert.ok(/window\.copyToClipboard/.test(src), 'expected the shared copyToClipboard helper, not a bespoke clipboard implementation');
+});
+
 console.log('\n=== packet-path-map.js: functional smoke test (no-Leaflet code paths) ===');
 
 function makeSandbox(apiImpl) {
@@ -136,7 +142,9 @@ function makeSandbox(apiImpl) {
     escapeHtml: (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
     api: apiImpl,
     L: undefined, // Leaflet deliberately absent -- these tests only cover the no-plot-data / no-Leaflet paths.
+    location: { origin: 'https://stg.meshview.dk' },
   };
+  ctx.window.copyToClipboard = (text, onDone) => { ctx.__copiedText = text; if (onDone) onDone(); };
   vm.createContext(ctx);
   vm.runInContext(src, ctx);
   return ctx;
@@ -209,6 +217,20 @@ function makeSandbox(apiImpl) {
       passed++;
       console.log('  ✅ close() removes the modal overlay from the DOM');
     } catch (e) { failed++; console.log('  ❌ close() removes the modal overlay from the DOM: ' + e.message); }
+  })();
+
+  await (async () => {
+    try {
+      const ctx = makeSandbox(() => Promise.reject(new Error('boom')));
+      await ctx.window.PacketPathMap.open('deadbeef');
+      const copyBtn = ctx.document.getElementById('packetPathCopyLink');
+      assert.ok(copyBtn, 'expected a packetPathCopyLink button in the modal');
+      copyBtn._listeners.click.forEach((fn) => fn());
+      assert.strictEqual(ctx.__copiedText, 'https://stg.meshview.dk/#/packets/deadbeef?viewPath=1',
+        'expected the copied URL to encode the packet hash and carry ?viewPath=1, got: ' + ctx.__copiedText);
+      passed++;
+      console.log('  ✅ clicking "Copy link" copies a #/packets/<hash>?viewPath=1 URL via window.copyToClipboard');
+    } catch (e) { failed++; console.log('  ❌ clicking "Copy link" copies a #/packets/<hash>?viewPath=1 URL via window.copyToClipboard: ' + e.message); }
   })();
 
   await (async () => {

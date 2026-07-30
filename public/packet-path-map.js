@@ -146,7 +146,11 @@
       '<div class="modal" style="max-width:min(92vw,700px);padding:16px">' +
         '<button type="button" id="packetPathClose" aria-label="Close" ' +
           'style="position:absolute;top:8px;right:8px;background:none;border:none;cursor:pointer;font-size:22px;line-height:1;color:var(--text-muted)">&times;</button>' +
-        '<h3 style="margin:0 0 4px;padding-right:24px">Relay Path</h3>' +
+        '<button type="button" id="packetPathCopyLink" aria-label="Copy link to this view" title="Copy link to this view" ' +
+          'style="position:absolute;top:10px;right:38px;background:none;border:none;cursor:pointer;padding:2px;color:var(--text-muted)">' +
+          '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-link"/></svg>' +
+        '</button>' +
+        '<h3 style="margin:0 0 4px;padding-right:48px">Relay Path</h3>' +
         '<p class="text-muted" style="margin:0 0 8px;font-size:12px">How far and how wide this packet spread. Click a marker to open that node\'s detail page.</p>' +
         '<div style="display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;margin:0 0 10px;font-size:11px;color:var(--text-muted)">' +
           '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:14px;height:2px;background:var(--accent)"></span><span id="packetPathPrimaryLegendLabel">farthest-traveled route</span></span>' +
@@ -164,6 +168,25 @@
     var closeBtn = document.getElementById('packetPathClose');
     if (closeBtn) closeBtn.addEventListener('click', close);
     document.addEventListener('keydown', onKeydown);
+
+    // Shareable link: #/packets/<hash>?viewPath=1 -- packets.js's init()
+    // (public/packets.js) checks for viewPath=1 and re-opens this exact
+    // modal once the packet route resolves, so recipients land straight
+    // on the map instead of the packet detail page.
+    var copyLinkBtn = document.getElementById('packetPathCopyLink');
+    if (copyLinkBtn) {
+      copyLinkBtn.addEventListener('click', function () {
+        var url = location.origin + '/#/packets/' + encodeURIComponent(hash) + '?viewPath=1';
+        if (typeof window.copyToClipboard === 'function') {
+          window.copyToClipboard(url, function () {
+            copyLinkBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg>';
+            setTimeout(function () {
+              copyLinkBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-link"/></svg>';
+            }, 1500);
+          });
+        }
+      });
+    }
 
     var statusEl = document.getElementById('packetPathStatus');
 
