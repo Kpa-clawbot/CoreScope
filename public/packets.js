@@ -1122,6 +1122,17 @@
     if (_urlRegion) _pendingUrlRegion = _urlRegion;
     var _urlHash = _initUrlParams.get('hash');
     if (_urlHash) filters.hash = _urlHash;
+    // Shareable "View Path" link (?viewPath=1) -- packet-path-map.js's
+    // "Copy link" button builds #/packets/<hash>?viewPath=1, so a shared
+    // link reopens the exact same modal instead of leaving the recipient
+    // on the plain packet detail page. Independent of the packets-list
+    // rendering below (the modal fetches its own data), so it's safe to
+    // fire immediately.
+    var _urlViewPath = _initUrlParams.get('viewPath');
+    if (_urlViewPath === '1') {
+      var _viewPathHash = directPacketHash || filters.hash;
+      if (_viewPathHash && window.PacketPathMap) window.PacketPathMap.open(_viewPathHash);
+    }
     var _urlNode = _initUrlParams.get('node');
     if (_urlNode) { filters.node = _urlNode; filters.nodeName = _urlNode.slice(0, 8); }
     var _urlObserver = _initUrlParams.get('observer');
