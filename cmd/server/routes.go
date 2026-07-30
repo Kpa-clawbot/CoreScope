@@ -619,7 +619,7 @@ func (s *Server) handleAreaAnalytics(w http.ResponseWriter, r *http.Request) {
 		graph = s.store.graph.Load()
 	}
 
-	positionGaps, noNeighborFix, estimatedNodes := computeAreaPositionGaps(s.db, positioned, unpositioned, s.cfg.Areas, s.cfg.NeighborMaxEdgeKm())
+	positionGaps, noNeighborFix, estimatedNodes := computeAreaPositionGaps(s.db, positioned, unpositioned, s.cfg.Areas, EstimateMaxEdgeKm)
 
 	resp := &AreaAnalyticsResponse{
 		Density:                   computeAreaDensity(positioned, s.cfg.Areas, s.cfg.GetHealthThresholds()),
@@ -2002,7 +2002,7 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 	nodeLat, hasLat := node["lat"].(float64)
 	nodeLon, hasLon := node["lon"].(float64)
 	hasRealFix := hasLat && hasLon && !(nodeLat == 0 && nodeLon == 0)
-	if _, lat, lon, contributorCount, _, ok := s.db.nearestPositionedNeighbor(pubkey, s.cfg.NeighborMaxEdgeKm()); ok {
+	if _, lat, lon, contributorCount, _, ok := s.db.nearestPositionedNeighbor(pubkey, EstimateMaxEdgeKm); ok {
 		node["estimated_lat"] = lat
 		node["estimated_lon"] = lon
 		node["estimated_contributor_count"] = contributorCount
@@ -3530,7 +3530,7 @@ func (s *Server) handlePacketPath(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, PacketPathResponse{Hash: hash, Branches: []PacketPathBranch{}})
 		return
 	}
-	resp, err := s.db.GetPacketPath(hash, s.cfg.NeighborMaxEdgeKm())
+	resp, err := s.db.GetPacketPath(hash, EstimateMaxEdgeKm)
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
