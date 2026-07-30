@@ -406,6 +406,12 @@ func TestNodeDetail_ZeroZeroFix_IncludesEstimatedPosition(t *testing.T) {
 // TestNodeDetail_RealFix_OmitsEstimatedPosition confirms a node with an
 // actual GPS fix never gets estimated_lat/estimated_lon populated -- the
 // estimate is a fallback, not a value shown alongside a real position.
+// seedTestData's aabbccdd11223344 has a real fix but no neighbor_edges rows
+// at all, so nearestPositionedNeighbor legitimately finds nothing -- this
+// is "omits because there's no neighbor data to estimate from," not
+// "omits because it already has a real fix" (see
+// TestNodeDetail_RealFixWithNeighbors_IncludesBothPositions below for the
+// case where a real-fix node DOES have neighbors).
 func TestNodeDetail_RealFix_OmitsEstimatedPosition(t *testing.T) {
 	_, router := setupTestServer(t)
 	req := httptest.NewRequest("GET", "/api/nodes/aabbccdd11223344", nil)
@@ -416,7 +422,42 @@ func TestNodeDetail_RealFix_OmitsEstimatedPosition(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &body)
 	node := body["node"].(map[string]interface{})
 	if node["estimated_lat"] != nil || node["estimated_lon"] != nil {
-		t.Errorf("expected no estimated_lat/estimated_lon on a node with a real fix, got estimated_lat=%v estimated_lon=%v", node["estimated_lat"], node["estimated_lon"])
+		t.Errorf("expected no estimated_lat/estimated_lon when the node has no neighbor_edges data, got estimated_lat=%v estimated_lon=%v", node["estimated_lat"], node["estimated_lon"])
+	}
+}
+
+// TestNodeDetail_RealFixWithNeighbors_IncludesBothPositions covers a node
+// that has BOTH a real fix AND a trustworthy neighbor cluster -- the
+// detail page should show both (own reported position, and the
+// neighbor-centroid estimate) plus the distance between them, so a node
+// flagged by Suspicious GPS Positions can be visually cross-checked here.
+func TestNodeDetail_RealFixWithNeighbors_IncludesBothPositions(t *testing.T) {
+	srv, router := setupTestServer(t)
+	// aabbccdd11223344 (TestRepeater, seedTestData) sits at lat=37.5,lon=-122.0.
+	// Place a neighbor far enough away that the distance is unambiguous.
+	srv.db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
+		VALUES ('farneighbor00000001', 'FarNeighbor', 'repeater', 40.0, -122.0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1)`)
+	srv.db.conn.Exec(`INSERT INTO neighbor_edges (node_a, node_b, count) VALUES ('aabbccdd11223344', 'farneighbor00000001', 5)`)
+
+	req := httptest.NewRequest("GET", "/api/nodes/aabbccdd11223344", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d (body=%s)", w.Code, w.Body.String())
+	}
+
+	var body map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &body)
+	node := body["node"].(map[string]interface{})
+	if node["lat"] == nil || node["lon"] == nil {
+		t.Fatalf("expected the real lat/lon to still be present, got node=%+v", node)
+	}
+	if node["estimated_lat"] == nil || node["estimated_lon"] == nil {
+		t.Fatalf("expected estimated_lat/estimated_lon alongside the real fix, got node=%+v", node)
+	}
+	dist, ok := node["estimated_distance_km"].(float64)
+	if !ok || dist <= 0 {
+		t.Errorf("expected a positive estimated_distance_km, got %v", node["estimated_distance_km"])
 	}
 }
 
