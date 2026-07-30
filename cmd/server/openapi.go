@@ -217,6 +217,8 @@ func componentSchemas() map[string]interface{} {
 				"estimated_lon":               map[string]interface{}{"type": "number", "nullable": true, "description": "Paired with estimated_lat."},
 				"estimated_contributor_count": map[string]interface{}{"type": "integer", "description": "Number of positioned neighbors the estimated_lat/estimated_lon centroid was averaged from. Present only alongside estimated_lat/estimated_lon."},
 				"estimated_distance_km":       map[string]interface{}{"type": "number", "description": "Distance between the node's own reported lat/lon and estimated_lat/estimated_lon. Present only when the node has BOTH a real fix and an estimate -- absent when either is missing."},
+				"default_scope":               str("The region this node floods to by default -- either inferred from an observed transport-scoped advert, or firmware-confirmed (see default_scope_confirmed_at). '*' means unscoped."),
+				"default_scope_confirmed_at":  map[string]interface{}{"type": "string", "nullable": true, "description": "RFC3339 timestamp of the observer /neighbors report that self-reported this node's default_scope (self.default_scope, added to the firmware 2026-07-29). Non-null means default_scope is confirmed evidence, not a packet-inferred guess -- once set, it can never be silently overwritten by inference."},
 				"last_seen":                   str("RFC3339 timestamp of the most recent observation."),
 				"first_seen":                  str("RFC3339 timestamp of the first observation."),
 				"advert_count":                map[string]interface{}{"type": "integer"},

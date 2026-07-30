@@ -690,7 +690,21 @@
             const btooltip = "Normalized betweenness centrality (0..1). How often this node sits on the shortest path between other pairs of nodes in the affinity graph. 1.0 = the most structurally critical node on the mesh. High Bridge + low Traffic share = a quiet but irreplaceable chokepoint.";
             return `<tr id="row-bridge-score" data-bridge-score="${b.toFixed(4)}"><td title="${btooltip}">Bridge score <span style="color:var(--text-muted);cursor:help" aria-label="help">ⓘ</span></td><td><span style="display:inline-block;vertical-align:middle;width:80px;height:8px;background:var(--bg-secondary,#333);border-radius:4px;overflow:hidden;margin-right:6px"><span style="display:block;width:${bbarWidth}%;height:100%;background:${bcolor}"></span></span><span style="color:${bcolor};font-weight:600">${bpct}%</span> <span style="color:var(--text-muted);font-size:11px;margin-left:4px">${blabel}</span></td></tr>`;
           })() : ''}
-          ${'default_scope' in n ? `<tr id="row-own-scope"><td title="This node's own configured region scope (hashRegions) — set in its own adverts. Distinct from Transported scopes below, which are regions this node has relayed for OTHER nodes.">Own scope</td><td>${n.default_scope === null ? '<span class="text-muted">—</span>' : n.default_scope === '' ? '<span class="text-muted">unknown scope</span>' : '<span class="badge">' + escapeHtml(n.default_scope) + '</span>'}</td></tr>` : ''}
+          ${'default_scope' in n ? (() => {
+            // #1865 follow-up: default_scope_confirmed_at non-null means this
+            // came from the observer /neighbors report's self.default_scope
+            // (a direct firmware self-report), not an inferred advert
+            // observation — same "confirmed" treatment as Configured scope
+            // below, on the same field the Own-scope row already shows.
+            const confirmed = !!n.default_scope_confirmed_at;
+            const label = confirmed
+              ? `Own scope <span style="color:var(--status-green,#2ecc71)" aria-label="confirmed">✓</span>`
+              : 'Own scope';
+            const title = "This node's own configured region scope (hashRegions) — set in its own adverts. Distinct from Transported scopes below, which are regions this node has relayed for OTHER nodes." +
+              (confirmed ? ` Confirmed via the observer /neighbors report's self.default_scope (#1865 follow-up), last confirmed ${escapeHtml(String(n.default_scope_confirmed_at))}.` : '');
+            const value = n.default_scope === null ? '<span class="text-muted">—</span>' : n.default_scope === '' ? '<span class="text-muted">unknown scope</span>' : '<span class="badge">' + escapeHtml(n.default_scope) + '</span>';
+            return `<tr id="row-own-scope"><td title="${title}">${label}</td><td>${value}</td></tr>`;
+          })() : ''}
           ${(n.role === 'repeater' || n.role === 'room') && Array.isArray(n.transported_scopes) && n.transported_scopes.length ? `<tr id="row-transported-scopes"><td title="Distinct region scopes (transmissions.scope_name) of all non-advert packets in which this repeater appears as a path hop. Shows which regions' traffic this repeater has carried (#1751).">Transported scopes</td><td><span style="display:inline-flex;flex-wrap:wrap;gap:3px;vertical-align:middle">${n.transported_scopes.map(sc => '<span class="badge">' + escapeHtml(String(sc)) + '</span>').join('')}</span></td></tr>` : ''}
           ${'configured_scope' in n && n.configured_scope !== null ? `<tr id="row-configured-scope"><td title="Region scopes this node has CONFIGURED, confirmed via an observer /neighbors report (status=responded) — concrete evidence, distinct from observed default scope and transported scopes (#1865).${n.configured_scope_at ? ' Last confirmed ' + escapeHtml(String(n.configured_scope_at)) + '.' : ''}">Configured scope <span style="color:var(--status-green,#2ecc71)" aria-label="confirmed">✓</span></td><td>${n.configured_scope === '' ? '<span style="color:var(--text-muted)">none configured</span>' : `<code style="color:var(--link-color)">${escapeHtml(n.configured_scope)}</code>`}</td></tr>` : ''}
           <tr><td>First Seen</td><td>${renderNodeTimestampHtml(n.first_seen)}</td></tr>

@@ -76,6 +76,9 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensureConfiguredScopeColumns(rw, logf); err != nil {
 		return fmt.Errorf("ensure configured_scope: %w", err)
 	}
+	if err := ensureDefaultScopeConfirmedAtColumn(rw, logf); err != nil {
+		return fmt.Errorf("ensure default_scope_confirmed_at: %w", err)
+	}
 	if err := ensureObservationsRawHexColumn(rw, logf); err != nil {
 		return fmt.Errorf("ensure observations.raw_hex: %w", err)
 	}
@@ -165,6 +168,11 @@ func AssertReady(ro *sql.DB) error {
 	// #1865: confirmed region scopes from the observer /neighbors report.
 	mustCol("nodes", "configured_scope")
 	mustCol("inactive_nodes", "configured_scope")
+	// #1865 follow-up: non-NULL means default_scope was last set from the
+	// firmware's self-reported `self.default_scope`, not inferred from a
+	// packet observation -- guards against inference downgrading it.
+	mustCol("nodes", "default_scope_confirmed_at")
+	mustCol("inactive_nodes", "default_scope_confirmed_at")
 	mustCol("observations", "raw_hex")
 	// Multi-byte capability cache (#1324 follow-up; PR #903 surface).
 	// Owned by ingestor — server reads these for O(1) /api/nodes
@@ -508,6 +516,39 @@ func ensureConfiguredScopeColumns(rw *sql.DB, logf Logger) error {
 	}
 	if _, err := rw.Exec(`INSERT OR IGNORE INTO _migrations (name) VALUES ('nodes_configured_scope_v1')`); err != nil {
 		return fmt.Errorf("record nodes_configured_scope_v1: %w", err)
+	}
+	return nil
+}
+
+// ensureDefaultScopeConfirmedAtColumn adds nodes.default_scope_confirmed_at
+// (and mirrors on inactive_nodes) for #1865 follow-up: firmware's /neighbors
+// report now sends `self.default_scope` (region a node floods to by
+// default), a direct self-report distinct from the packet-inferred
+// default_scope value. Non-NULL means default_scope was last set from that
+// self-report rather than an inferred advert observation -- once confirmed,
+// UpdateNodeDefaultScope's inference path must never silently downgrade it
+// (same "confirmed evidence outranks inference" precedent as
+// configured_scope vs. default_scope itself). The server PRAGMA-detects
+// this as hasDefaultScopeConfirmedAt.
+func ensureDefaultScopeConfirmedAtColumn(rw *sql.DB, logf Logger) error {
+	if err := ensureMigrationsTable(rw); err != nil {
+		return err
+	}
+	for _, table := range []string{"nodes", "inactive_nodes"} {
+		has, err := TableHasColumn(rw, table, "default_scope_confirmed_at")
+		if err != nil {
+			return fmt.Errorf("inspect %s.default_scope_confirmed_at: %w", table, err)
+		}
+		if has {
+			continue
+		}
+		if _, err := rw.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN default_scope_confirmed_at TEXT DEFAULT NULL`, table)); err != nil {
+			return fmt.Errorf("alter %s add default_scope_confirmed_at: %w", table, err)
+		}
+		logf("[dbschema] added default_scope_confirmed_at column to %s (#1865)", table)
+	}
+	if _, err := rw.Exec(`INSERT OR IGNORE INTO _migrations (name) VALUES ('nodes_default_scope_confirmed_at_v1')`); err != nil {
+		return fmt.Errorf("record nodes_default_scope_confirmed_at_v1: %w", err)
 	}
 	return nil
 }

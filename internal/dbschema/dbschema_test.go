@@ -89,6 +89,8 @@ func TestApplyAddsOptionalColumns_CanonicalSource(t *testing.T) {
 		{"nodes", "default_scope"},
 		{"inactive_nodes", "default_scope"},
 		{"observations", "raw_hex"},
+		{"nodes", "default_scope_confirmed_at"},
+		{"inactive_nodes", "default_scope_confirmed_at"},
 	}
 	for _, c := range cases {
 		has, err := TableHasColumn(db, c.table, c.col)

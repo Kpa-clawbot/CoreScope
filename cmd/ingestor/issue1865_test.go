@@ -33,6 +33,17 @@ func configuredScope(t *testing.T, store *Store, pubkey string) (sql.NullString,
 	return sc, at
 }
 
+func defaultScopeConfirmed(t *testing.T, store *Store, pubkey string) (sql.NullString, sql.NullString) {
+	t.Helper()
+	var sc, at sql.NullString
+	if err := store.db.QueryRow(
+		`SELECT default_scope, default_scope_confirmed_at FROM nodes WHERE public_key = ?`, pubkey,
+	).Scan(&sc, &at); err != nil {
+		t.Fatalf("read default_scope for %s: %v", pubkey, err)
+	}
+	return sc, at
+}
+
 func openNeighborsStore(t *testing.T) *Store {
 	t.Helper()
 	store, err := OpenStore(filepath.Join(t.TempDir(), "test.db"))
@@ -206,5 +217,126 @@ func TestUpdateNodeConfiguredScopeNormalizesAndOrdersByInstant(t *testing.T) {
 	}
 	if _, at := configuredScope(t, store, pk); at.String != "2026-07-26T09:43:48Z" {
 		t.Errorf("stored at = %q, want canonical '2026-07-26T09:43:48Z'", at.String)
+	}
+}
+
+// Tests below cover the #1865 follow-up: firmware's /neighbors report added
+// self.default_scope (2026-07-29), a direct self-report of the region a
+// node floods to by default -- distinct from the packet-inferred
+// default_scope UpdateNodeDefaultScope sets elsewhere in the ingest path.
+
+func TestHandleNeighborsReportWritesSelfDefaultScope(t *testing.T) {
+	store := openNeighborsStore(t)
+	const originUpper = "FEEDCA4AD4E2AE615AAAB3CB73FAEC6EF0C7AF4D410F5C58A70FC0F724B7C933"
+	originLower := "feedca4ad4e2ae615aaab3cb73faec6ef0c7af4d410f5c58a70fc0f724b7c933"
+	seedNode(t, store, originLower)
+
+	report := map[string]interface{}{
+		"timestamp": "2026-07-29T22:40:00.000000+00:00",
+		"origin_id": originUpper,
+		"self":      map[string]interface{}{"scopes": "dk", "default_scope": "dk"},
+	}
+	handleNeighborsReport(store, "test", "obs-topic-id", report)
+
+	sc, at := defaultScopeConfirmed(t, store, originLower)
+	if !sc.Valid || sc.String != "#dk" {
+		t.Errorf("default_scope = %v, want '#dk' (normalized like configured_scope)", sc)
+	}
+	if !at.Valid || at.String == "" {
+		t.Errorf("default_scope_confirmed_at = %v, want the report timestamp", at)
+	}
+}
+
+func TestHandleNeighborsReportSelfDefaultScope_WildcardPassthrough(t *testing.T) {
+	store := openNeighborsStore(t)
+	pk := "ff00000000000000000000000000000000000000000000000000000000000001"
+	seedNode(t, store, pk)
+
+	report := map[string]interface{}{
+		"timestamp": "2026-07-29T22:40:00Z",
+		"origin_id": pk,
+		"self":      map[string]interface{}{"scopes": "*", "default_scope": "*"},
+	}
+	handleNeighborsReport(store, "test", "obs", report)
+
+	sc, _ := defaultScopeConfirmed(t, store, pk)
+	if sc.String != "*" {
+		t.Errorf("default_scope = %q, want '*' unchanged (protocol wildcard, not a real region)", sc.String)
+	}
+}
+
+func TestUpdateNodeDefaultScope_DoesNotOverwriteConfirmedValue(t *testing.T) {
+	store := openNeighborsStore(t)
+	pk := "aa11111111111111111111111111111111111111111111111111111111111111"
+	seedNode(t, store, pk)
+
+	// Firmware self-report confirms #dk.
+	if err := store.UpdateNodeDefaultScopeConfirmed(pk, "dk", "2026-07-29T22:40:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	// A later packet-inferred observation must NOT be allowed to downgrade it,
+	// even though UpdateNodeDefaultScope has no timestamp-ordering concept of
+	// its own -- confirmation always wins over inference.
+	if err := store.UpdateNodeDefaultScope(pk, "#eu"); err != nil {
+		t.Fatal(err)
+	}
+	sc, at := defaultScopeConfirmed(t, store, pk)
+	if sc.String != "#dk" {
+		t.Errorf("default_scope = %q, want '#dk' (confirmed value must survive an inferred write)", sc.String)
+	}
+	if !at.Valid || at.String == "" {
+		t.Errorf("default_scope_confirmed_at = %v, want unchanged (still set)", at)
+	}
+}
+
+func TestUpdateNodeDefaultScope_StillWritesWhenUnconfirmed(t *testing.T) {
+	store := openNeighborsStore(t)
+	pk := "bb11111111111111111111111111111111111111111111111111111111111111"
+	seedNode(t, store, pk)
+
+	// No confirmation yet -- packet inference should write normally, same as
+	// before this feature existed.
+	if err := store.UpdateNodeDefaultScope(pk, "#eu"); err != nil {
+		t.Fatal(err)
+	}
+	sc, at := defaultScopeConfirmed(t, store, pk)
+	if sc.String != "#eu" {
+		t.Errorf("default_scope = %q, want '#eu'", sc.String)
+	}
+	if at.Valid && at.String != "" {
+		t.Errorf("default_scope_confirmed_at = %v, want still unset (inference doesn't confirm)", at)
+	}
+}
+
+func TestUpdateNodeDefaultScopeConfirmedLastWriteWins(t *testing.T) {
+	store := openNeighborsStore(t)
+	pk := "cc11111111111111111111111111111111111111111111111111111111111111"
+	seedNode(t, store, pk)
+
+	if err := store.UpdateNodeDefaultScopeConfirmed(pk, "eu", "2026-07-25T12:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	// Older report must NOT clobber the newer confirmed value.
+	if err := store.UpdateNodeDefaultScopeConfirmed(pk, "stale", "2026-07-24T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if sc, _ := defaultScopeConfirmed(t, store, pk); sc.String != "#eu" {
+		t.Errorf("default_scope = %q, want '#eu' (older report must not overwrite)", sc.String)
+	}
+	// Newer report updates.
+	if err := store.UpdateNodeDefaultScopeConfirmed(pk, "dk", "2026-07-26T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	sc, _ := defaultScopeConfirmed(t, store, pk)
+	if sc.String != "#dk" {
+		t.Errorf("default_scope = %q, want '#dk' (newer report should update)", sc.String)
+	}
+	// inactive_nodes mirrored.
+	var inactive sql.NullString
+	if err := store.db.QueryRow(`SELECT default_scope FROM inactive_nodes WHERE public_key = ?`, pk).Scan(&inactive); err != nil {
+		t.Fatal(err)
+	}
+	if inactive.String != "#dk" {
+		t.Errorf("inactive_nodes.default_scope = %q, want '#dk'", inactive.String)
 	}
 }

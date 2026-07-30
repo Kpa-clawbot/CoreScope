@@ -1796,29 +1796,77 @@ func scopeNameForDB(data *PacketData) *string {
 }
 
 // UpdateNodeDefaultScope records the most-recently observed region scope for a
-// node. Skips the UPDATE when the stored value already matches to avoid
-// redundant writes on the hot MQTT ingest path. Updates both nodes and
-// inactive_nodes to stay consistent.
+// node, INFERRED from a transport-scoped advert. Skips the UPDATE when the
+// stored value already matches to avoid redundant writes on the hot MQTT
+// ingest path. Updates both nodes and inactive_nodes to stay consistent.
 //
 // Defense-in-depth (#1534): an empty scope is treated as a no-op. The call
 // site at handleMessage is the primary guard (shouldUpdateDefaultScope),
 // but this layer refuses the invalid write so a future caller cannot
 // reintroduce the bug by passing "" directly.
+//
+// #1865 follow-up: also refuses to write once default_scope_confirmed_at is
+// set -- a firmware self-report (UpdateNodeDefaultScopeConfirmed, from the
+// observer /neighbors report's self.default_scope) is concrete evidence and
+// must never be silently downgraded by a later packet-inferred guess.
 func (s *Store) UpdateNodeDefaultScope(pubkey, scope string) error {
 	if scope == "" {
 		return nil
 	}
-	// Short-circuit: skip if already stored.
-	var cur sql.NullString
-	row := s.db.QueryRow(`SELECT default_scope FROM nodes WHERE public_key = ?`, pubkey)
-	if row.Scan(&cur) == nil && cur.Valid && cur.String == scope {
-		return nil
+	// Short-circuit: skip if already stored, or if a firmware self-report
+	// has already confirmed this node's default_scope.
+	var cur, confirmedAt sql.NullString
+	row := s.db.QueryRow(`SELECT default_scope, default_scope_confirmed_at FROM nodes WHERE public_key = ?`, pubkey)
+	if row.Scan(&cur, &confirmedAt) == nil {
+		if confirmedAt.Valid && confirmedAt.String != "" {
+			return nil
+		}
+		if cur.Valid && cur.String == scope {
+			return nil
+		}
 	}
 	if _, err := s.db.Exec(`UPDATE nodes SET default_scope = ? WHERE public_key = ?`, scope, pubkey); err != nil {
 		return err
 	}
 	// Mirror to inactive_nodes (node may be there if recently moved by retention).
 	_, err := s.db.Exec(`UPDATE inactive_nodes SET default_scope = ? WHERE public_key = ?`, scope, pubkey)
+	return err
+}
+
+// UpdateNodeDefaultScopeConfirmed records the region a node floods to by
+// default as CONFIRMED evidence -- taken from the observer /neighbors
+// report's self.default_scope (#1865 follow-up), a direct firmware
+// self-report rather than an inference from observed packets. Unlike
+// UpdateNodeDefaultScope, this stamps default_scope_confirmed_at, which in
+// turn makes UpdateNodeDefaultScope refuse to overwrite the value it sets
+// here. "*" (the firmware's "no default region set" sentinel) is passed
+// through unchanged, same as UpdateNodeConfiguredScope treats it.
+//
+// reportedAt is the report envelope timestamp (ISO-8601), used the same way
+// UpdateNodeConfiguredScope uses it: last-write-wins so an out-of-order
+// older report can't clobber a newer confirmation. A blank reportedAt skips
+// the ordering guard (always writes).
+func (s *Store) UpdateNodeDefaultScopeConfirmed(pubkey, scope, reportedAt string) error {
+	if pubkey == "" {
+		return nil
+	}
+	scope = normalizeSingleScope(scope)
+	reportedAt = normalizeReportTS(reportedAt)
+	if reportedAt != "" {
+		var curAt sql.NullString
+		row := s.db.QueryRow(`SELECT default_scope_confirmed_at FROM nodes WHERE public_key = ?`, pubkey)
+		if row.Scan(&curAt) == nil && curAt.Valid && curAt.String != "" && curAt.String >= reportedAt {
+			return nil
+		}
+	}
+	if _, err := s.db.Exec(
+		`UPDATE nodes SET default_scope = ?, default_scope_confirmed_at = ? WHERE public_key = ?`,
+		scope, reportedAt, pubkey); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(
+		`UPDATE inactive_nodes SET default_scope = ?, default_scope_confirmed_at = ? WHERE public_key = ?`,
+		scope, reportedAt, pubkey)
 	return err
 }
 
@@ -2051,6 +2099,21 @@ func normalizeConfiguredScopeList(raw string) string {
 		}
 	}
 	return strings.Join(out, ",")
+}
+
+// normalizeSingleScope applies normalizeConfiguredScopeList's same "#"-prefix
+// + "*"-passthrough rule to a single scope value rather than a
+// comma-separated list -- used for self.default_scope (#1865 follow-up),
+// which is always exactly one region name or "*", never a list.
+func normalizeSingleScope(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "*" {
+		return raw
+	}
+	if name, ok := regions.Normalize(raw); ok {
+		return name
+	}
+	return ""
 }
 
 // RecordNaiveSkew is called when resolveRxTime() clamps a packet's envelope
