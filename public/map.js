@@ -9,7 +9,7 @@
   let nodes = [];
   let targetNodeKey = null;
   let observers = [];
-  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clustering: localStorage.getItem('meshcore-map-clustering') !== 'false', hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all', multiByteOverlay: localStorage.getItem('meshcore-map-multibyte-overlay') === 'true' };
+  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clustering: localStorage.getItem('meshcore-map-clustering') !== 'false', hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all', multiByteOverlay: localStorage.getItem('meshcore-map-multibyte-overlay') === 'true', scope: localStorage.getItem('meshcore-map-scope-filter') || 'all' };
   let selectedReferenceNode = null;  // pubkey of the reference node for neighbor filtering
   let neighborPubkeys = null;        // Set of pubkeys that are direct neighbors of selected node
   let wsHandler = null;
@@ -216,6 +216,11 @@
               <button class="btn ${filters.statusFilter==='active'?'active':''}" data-status="active">Active</button>
               <button class="btn ${filters.statusFilter==='stale'?'active':''}" data-status="stale">Stale</button>
             </div>
+          </fieldset>
+          <fieldset class="mc-section">
+            <legend class="mc-label">Scope</legend>
+            <label for="mcScopeFilter" class="sr-only">Filter by node's own scope</label>
+            <select id="mcScopeFilter" aria-label="Filter by node's own scope"></select>
           </fieldset>
           <fieldset class="mc-section">
             <legend class="mc-label">Filters</legend>
@@ -521,6 +526,7 @@
       multiByteEl.addEventListener('change', e => { filters.multiByteOverlay = e.target.checked; localStorage.setItem('meshcore-map-multibyte-overlay', e.target.checked); renderMarkers(); });
     }
     document.getElementById('mcLastHeard').addEventListener('change', e => { filters.lastHeard = e.target.value; loadNodes(); });
+    document.getElementById('mcScopeFilter').addEventListener('change', e => { filters.scope = e.target.value; localStorage.setItem('meshcore-map-scope-filter', filters.scope); renderMarkers(); });
 
     AreaFilter.init(document.getElementById('mapAreaFilter'));
     AreaFilter.onChange(function () { loadNodes(); });
@@ -1596,6 +1602,7 @@
 
       buildRoleChecks(data.counts || {});
       buildJumpButtons();
+      buildScopeOptions();
 
       renderMarkers();
 
@@ -1703,6 +1710,43 @@
       });
       el.appendChild(lbl);
     }
+  }
+
+  // Pure predicate so tests can exercise the matching rule without a DOM.
+  // scopeValue is filters.scope: 'all' (no filtering), '__none__' (nodes
+  // with no default_scope), or an exact scope string.
+  function nodePassesScopeFilter(node, scopeValue) {
+    if (scopeValue === 'all') return true;
+    if (scopeValue === '__none__') return !node.default_scope;
+    return (node.default_scope || '') === scopeValue;
+  }
+
+  function buildScopeOptions() {
+    const el = document.getElementById('mcScopeFilter');
+    if (!el) return;
+    const scopeSet = new Set();
+    let hasNoScope = false;
+    for (const n of nodes) {
+      if (n.default_scope) scopeSet.add(n.default_scope);
+      else hasNoScope = true;
+    }
+    const scopes = Array.from(scopeSet).sort((a, b) => a.localeCompare(b));
+    let html = '<option value="all">All scopes</option>';
+    for (const s of scopes) {
+      html += '<option value="' + escapeHtml(s) + '">' + escapeHtml(s) + '</option>';
+    }
+    if (hasNoScope) html += '<option value="__none__">No scope</option>';
+    el.innerHTML = html;
+    // Rebuilt every load — the previously selected scope may no longer be
+    // present in the current node set (e.g. Last Heard window narrowed).
+    // Fall back to "all" rather than silently desyncing filters.scope from
+    // what the <select> actually shows.
+    const validValues = new Set(['all'].concat(scopes, hasNoScope ? ['__none__'] : []));
+    if (!validValues.has(filters.scope)) {
+      filters.scope = 'all';
+      localStorage.setItem('meshcore-map-scope-filter', 'all');
+    }
+    el.value = filters.scope;
   }
 
   let REGION_NAMES = {};
@@ -1899,6 +1943,10 @@
         const pk = n.public_key;
         if (pk !== selectedReferenceNode && !neighborPubkeys.has(pk)) return false;
       }
+      // Scope filter: own default_scope only (#899) -- relayed/transported
+      // scope support isn't in the /api/nodes payload yet, see the
+      // relay-parity follow-up.
+      if (!nodePassesScopeFilter(n, filters.scope)) return false;
       return true;
     });
 
@@ -2494,6 +2542,6 @@
   }
 
   if (typeof window !== 'undefined') {
-    window.__meshcoreMapInternals = { createClusterGroup: createClusterGroup, makeClusterIcon: makeClusterIcon };
+    window.__meshcoreMapInternals = { createClusterGroup: createClusterGroup, makeClusterIcon: makeClusterIcon, nodePassesScopeFilter: nodePassesScopeFilter, buildScopeOptions: buildScopeOptions };
   }
 })();
