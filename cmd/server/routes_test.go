@@ -461,6 +461,37 @@ func TestNodeDetail_RealFixWithNeighbors_IncludesBothPositions(t *testing.T) {
 	}
 }
 
+// TestNodeDetail_ExposesDefaultScopeConfirmedAt covers the #1865 follow-up:
+// once a node's default_scope has been confirmed via the observer
+// /neighbors report's self.default_scope (not merely inferred from a
+// packet), the detail endpoint must expose default_scope_confirmed_at so
+// the frontend can render a "confirmed" indicator distinct from an inferred
+// value. setupTestServer's base fixture predates this column, so it's added
+// here directly and detectSchema() re-run, mirroring
+// TestSchemaFlagSelfHealsAfterMigrationLandsLate's pattern.
+func TestNodeDetail_ExposesDefaultScopeConfirmedAt(t *testing.T) {
+	srv, router := setupTestServer(t)
+	srv.db.conn.Exec(`ALTER TABLE nodes ADD COLUMN default_scope TEXT`)
+	srv.db.conn.Exec(`ALTER TABLE nodes ADD COLUMN default_scope_confirmed_at TEXT`)
+	srv.db.detectSchema()
+	if _, err := srv.db.conn.Exec(`UPDATE nodes SET default_scope = '#dk', default_scope_confirmed_at = '2026-07-29T22:40:00Z' WHERE public_key = 'aabbccdd11223344'`); err != nil {
+		t.Fatalf("seed update: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/nodes/aabbccdd11223344", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d (body=%s)", w.Code, w.Body.String())
+	}
+	var body map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &body)
+	node := body["node"].(map[string]interface{})
+	if node["default_scope_confirmed_at"] != "2026-07-29T22:40:00Z" {
+		t.Errorf("default_scope_confirmed_at = %v, want '2026-07-29T22:40:00Z'", node["default_scope_confirmed_at"])
+	}
+}
+
 func TestNodeDetail404(t *testing.T) {
 	_, router := setupTestServer(t)
 	req := httptest.NewRequest("GET", "/api/nodes/nonexistent", nil)

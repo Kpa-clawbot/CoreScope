@@ -1559,6 +1559,16 @@ func handleNeighborsReport(store *Store, tag string, observerID string, msg map[
 				log.Printf("MQTT [%s] neighbors self scope error: %v", tag, err)
 			}
 		}
+		// #1865 follow-up: self.default_scope (added to the firmware's
+		// /neighbors report 2026-07-29) is a direct self-report of the
+		// region this node floods to by default -- concrete evidence, same
+		// trust level as self.scopes above, distinct from the packet-
+		// inferred default_scope UpdateNodeDefaultScope sets elsewhere.
+		if ds, ok := self["default_scope"].(string); ok {
+			if err := store.UpdateNodeDefaultScopeConfirmed(originID, ds, reportedAt); err != nil {
+				log.Printf("MQTT [%s] neighbors self default_scope error: %v", tag, err)
+			}
+		}
 	}
 
 	// neighbors[]: only status=="responded" carries usable scope evidence,

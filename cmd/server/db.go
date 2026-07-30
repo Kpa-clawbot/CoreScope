@@ -76,17 +76,18 @@ const routeTypeNonTransportSQL = "route_type IN (1, 2)"
 
 // DB wraps a read-only connection to the MeshCore SQLite database.
 type DB struct {
-	conn                    *sql.DB
-	path                    string        // filesystem path to the database file
-	isV3Flag                schemaFlag    // v3 schema: observer_idx in observations (vs observer_id in v2) -- read via isV3()
-	hasResolvedPathFlag     schemaFlag    // observations.resolved_path (#791) -- read via hasResolvedPath()
-	hasObsRawHexFlag        schemaFlag    // observations.raw_hex (#881) -- read via hasObsRawHex()
-	hasScopeNameFlag        schemaFlag    // transmissions.scope_name (#899) -- read via hasScopeName()
-	hasDefaultScopeFlag     schemaFlag    // nodes.default_scope (#899) -- read via hasDefaultScope()
-	hasConfiguredScopeFlag  schemaFlag    // nodes.configured_scope (#1865) -- read via hasConfiguredScope()
-	hasMultibyteSupColsFlag schemaFlag    // nodes.multibyte_sup (#903) -- read via hasMultibyteSupCols()
-	hasLastSeenFlag         schemaFlag    // transmissions.last_seen (#1690) -- read via hasLastSeen()
-	schemaHealerStop        chan struct{} // closed by Close() to stop healSchemaFlags; nil if OpenDB never started it
+	conn                           *sql.DB
+	path                           string        // filesystem path to the database file
+	isV3Flag                       schemaFlag    // v3 schema: observer_idx in observations (vs observer_id in v2) -- read via isV3()
+	hasResolvedPathFlag            schemaFlag    // observations.resolved_path (#791) -- read via hasResolvedPath()
+	hasObsRawHexFlag               schemaFlag    // observations.raw_hex (#881) -- read via hasObsRawHex()
+	hasScopeNameFlag               schemaFlag    // transmissions.scope_name (#899) -- read via hasScopeName()
+	hasDefaultScopeFlag            schemaFlag    // nodes.default_scope (#899) -- read via hasDefaultScope()
+	hasConfiguredScopeFlag         schemaFlag    // nodes.configured_scope (#1865) -- read via hasConfiguredScope()
+	hasDefaultScopeConfirmedAtFlag schemaFlag    // nodes.default_scope_confirmed_at (#1865 follow-up) -- read via hasDefaultScopeConfirmedAt()
+	hasMultibyteSupColsFlag        schemaFlag    // nodes.multibyte_sup (#903) -- read via hasMultibyteSupCols()
+	hasLastSeenFlag                schemaFlag    // transmissions.last_seen (#1690) -- read via hasLastSeen()
+	schemaHealerStop               chan struct{} // closed by Close() to stop healSchemaFlags; nil if OpenDB never started it
 
 	// Channel list cache (60s TTL) — avoids repeated GROUP BY scans (#762)
 	channelsCacheMu  sync.Mutex
@@ -96,18 +97,19 @@ type DB struct {
 }
 
 // isV3, hasResolvedPath, hasObsRawHex, hasScopeName, hasDefaultScope,
-// hasConfiguredScope, hasMultibyteSupCols, and hasLastSeen are pure
-// atomic-load accessors over the corresponding schemaFlag fields above
-// -- see schemaFlag's doc comment for why these are methods, not bools,
-// and why they never issue a query themselves.
-func (db *DB) isV3() bool                { return db.isV3Flag.get() }
-func (db *DB) hasResolvedPath() bool     { return db.hasResolvedPathFlag.get() }
-func (db *DB) hasObsRawHex() bool        { return db.hasObsRawHexFlag.get() }
-func (db *DB) hasScopeName() bool        { return db.hasScopeNameFlag.get() }
-func (db *DB) hasDefaultScope() bool     { return db.hasDefaultScopeFlag.get() }
-func (db *DB) hasConfiguredScope() bool  { return db.hasConfiguredScopeFlag.get() }
-func (db *DB) hasMultibyteSupCols() bool { return db.hasMultibyteSupColsFlag.get() }
-func (db *DB) hasLastSeen() bool         { return db.hasLastSeenFlag.get() }
+// hasConfiguredScope, hasDefaultScopeConfirmedAt, hasMultibyteSupCols, and
+// hasLastSeen are pure atomic-load accessors over the corresponding
+// schemaFlag fields above -- see schemaFlag's doc comment for why these
+// are methods, not bools, and why they never issue a query themselves.
+func (db *DB) isV3() bool                       { return db.isV3Flag.get() }
+func (db *DB) hasResolvedPath() bool            { return db.hasResolvedPathFlag.get() }
+func (db *DB) hasObsRawHex() bool               { return db.hasObsRawHexFlag.get() }
+func (db *DB) hasScopeName() bool               { return db.hasScopeNameFlag.get() }
+func (db *DB) hasDefaultScope() bool            { return db.hasDefaultScopeFlag.get() }
+func (db *DB) hasConfiguredScope() bool         { return db.hasConfiguredScopeFlag.get() }
+func (db *DB) hasDefaultScopeConfirmedAt() bool { return db.hasDefaultScopeConfirmedAtFlag.get() }
+func (db *DB) hasMultibyteSupCols() bool        { return db.hasMultibyteSupColsFlag.get() }
+func (db *DB) hasLastSeen() bool                { return db.hasLastSeenFlag.get() }
 
 // OpenDB opens a read-only SQLite connection with WAL mode.
 func OpenDB(path string) (*DB, error) {
@@ -144,7 +146,7 @@ func OpenDB(path string) (*DB, error) {
 func (db *DB) healSchemaFlags() {
 	flags := []*schemaFlag{
 		&db.isV3Flag, &db.hasResolvedPathFlag, &db.hasObsRawHexFlag, &db.hasScopeNameFlag,
-		&db.hasDefaultScopeFlag, &db.hasConfiguredScopeFlag,
+		&db.hasDefaultScopeFlag, &db.hasConfiguredScopeFlag, &db.hasDefaultScopeConfirmedAtFlag,
 		&db.hasMultibyteSupColsFlag, &db.hasLastSeenFlag,
 	}
 	allTrue := func() bool {
@@ -250,6 +252,8 @@ func (db *DB) detectSchema() {
 				db.hasDefaultScopeFlag.forceTrue()
 			case "configured_scope":
 				db.hasConfiguredScopeFlag.forceTrue()
+			case "default_scope_confirmed_at":
+				db.hasDefaultScopeConfirmedAtFlag.forceTrue()
 			case "multibyte_sup":
 				db.hasMultibyteSupColsFlag.forceTrue()
 			}
@@ -267,6 +271,11 @@ func (db *DB) nodeSelectCols() string {
 	// #1865: confirmed scopes appended after default_scope; scan order must match.
 	if db.hasConfiguredScope() {
 		cols += ", configured_scope, configured_scope_at"
+	}
+	// #1865 follow-up: non-NULL means default_scope was last set from the
+	// firmware's self-reported self.default_scope, not packet inference.
+	if db.hasDefaultScopeConfirmedAt() {
+		cols += ", default_scope_confirmed_at"
 	}
 	return cols
 }
@@ -4138,6 +4147,7 @@ func (db *DB) scanNodeRow(rows *sql.Rows) map[string]interface{} {
 	var foreign sql.NullInt64
 	var defaultScope sql.NullString
 	var configuredScope, configuredScopeAt sql.NullString
+	var defaultScopeConfirmedAt sql.NullString
 
 	scanArgs := []interface{}{&pk, &name, &role, &lat, &lon, &lastSeen, &firstSeen, &advertCount, &batteryMv, &temperatureC, &foreign}
 	if db.hasDefaultScope() {
@@ -4145,6 +4155,9 @@ func (db *DB) scanNodeRow(rows *sql.Rows) map[string]interface{} {
 	}
 	if db.hasConfiguredScope() {
 		scanArgs = append(scanArgs, &configuredScope, &configuredScopeAt)
+	}
+	if db.hasDefaultScopeConfirmedAt() {
+		scanArgs = append(scanArgs, &defaultScopeConfirmedAt)
 	}
 	if err := rows.Scan(scanArgs...); err != nil {
 		return nil
@@ -4179,6 +4192,9 @@ func (db *DB) scanNodeRow(rows *sql.Rows) map[string]interface{} {
 	if db.hasConfiguredScope() {
 		m["configured_scope"] = nullStr(configuredScope)
 		m["configured_scope_at"] = nullStr(configuredScopeAt)
+	}
+	if db.hasDefaultScopeConfirmedAt() {
+		m["default_scope_confirmed_at"] = nullStr(defaultScopeConfirmedAt)
 	}
 	return m
 }
