@@ -596,10 +596,12 @@
       // real fix either -- otherwise it'd plot a bogus marker off the
       // coast of Africa instead of falling back to the estimate below.
       const hasLoc = n.lat != null && n.lon != null && !(n.lat === 0 && n.lon === 0);
-      // Fallback for nodes with no real GPS fix: the same neighbor-centroid
-      // estimate Position-Fix Coverage Gaps and View Path's approx markers
-      // use, so the detail page can still show a (dashed/approximate) map.
-      const hasEstLoc = !hasLoc && n.estimated_lat != null && n.estimated_lon != null;
+      // Neighbor-centroid estimate (same technique Position-Fix Coverage
+      // Gaps, View Path's approx markers, and Suspicious GPS Positions
+      // use). Shown alongside a real fix too, not just as a fallback when
+      // one's missing -- lets a node flagged by Suspicious GPS Positions
+      // be visually cross-checked against its own claimed position.
+      const hasEstLoc = n.estimated_lat != null && n.estimated_lon != null;
 
       // Health stats
       const h = healthData || {};
@@ -696,7 +698,8 @@
           <tr><td>Packets Today</td><td>${stats.packetsToday || 0}</td></tr>
           ${stats.avgSnr != null ? `<tr><td>Avg SNR</td><td>${Number(stats.avgSnr).toFixed(1)} dB</td></tr>` : ''}
           ${stats.avgHops ? `<tr><td>Avg Hops</td><td>${stats.avgHops}</td></tr>` : ''}
-          ${hasLoc ? `<tr><td>Location</td><td>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</td></tr>` : hasEstLoc ? `<tr><td>Location <span class="text-muted" style="font-size:10px">(estimated)</span></td><td>~${Number(n.estimated_lat).toFixed(5)}, ~${Number(n.estimated_lon).toFixed(5)} <span class="text-muted" style="font-size:11px">(from ${n.estimated_contributor_count} neighbor${n.estimated_contributor_count === 1 ? '' : 's'}, no real GPS fix)</span></td></tr>` : ''}
+          ${hasLoc ? `<tr><td>Location</td><td>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</td></tr>` : ''}
+          ${hasEstLoc ? `<tr><td>${hasLoc ? 'Neighbor Estimate' : 'Location'} <span class="text-muted" style="font-size:10px">(estimated)</span></td><td>~${Number(n.estimated_lat).toFixed(5)}, ~${Number(n.estimated_lon).toFixed(5)} <span class="text-muted" style="font-size:11px">(from ${n.estimated_contributor_count} neighbor${n.estimated_contributor_count === 1 ? '' : 's'}${hasLoc ? ', ' + Number(n.estimated_distance_km).toFixed(1) + ' km from reported position' : ', no real GPS fix'})</span></td></tr>` : ''}
           <tr><td>Hash Prefix</td><td>${n.hash_size ? '<code style="font-family:var(--mono);font-weight:700">' + n.public_key.slice(0, n.hash_size * 2).toUpperCase() + '</code> (' + n.hash_size + '-byte)' : 'Unknown'}${n.hash_size_inconsistent ? ' <span style="color:var(--status-yellow);cursor:help" title="Seen: ' + (Array.isArray(n.hash_sizes_seen) ? n.hash_sizes_seen : []).join(', ') + '-byte"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> varies</span>' : ''}</td></tr>
         </table>
 
@@ -776,24 +779,37 @@
 
         <div class="node-full-card skew-detail-section" id="node-clock-skew" style="display:none"></div>`;
 
-      // Map
+      // Map -- shows the real fix (solid pin), the neighbor estimate
+      // (dashed pin), or both at once (connected by a dashed line, fit to
+      // include both) so a node flagged by Suspicious GPS Positions can be
+      // visually cross-checked against its own claimed position.
       if (hasLoc || hasEstLoc) {
         try {
           if (detailMap) { detailMap.remove(); detailMap = null; }
-          const mapLat = hasLoc ? n.lat : n.estimated_lat;
-          const mapLon = hasLoc ? n.lon : n.estimated_lon;
-          detailMap = L.map('nodeFullMap', { zoomControl: true, attributionControl: false }).setView([mapLat, mapLon], 13);
+          detailMap = L.map('nodeFullMap', { zoomControl: true, attributionControl: false });
           _applyTilesToNodeMap(detailMap);
+          var bounds = [];
           if (hasLoc) {
-            L.marker([mapLat, mapLon]).addTo(detailMap).bindPopup(escapeHtml(n.name || n.public_key.slice(0, 12)));
-          } else {
+            L.marker([n.lat, n.lon]).addTo(detailMap).bindPopup(escapeHtml(n.name || n.public_key.slice(0, 12)));
+            bounds.push([n.lat, n.lon]);
+          }
+          if (hasEstLoc) {
             // Dashed pin, same convention as area-nodes-map.js -- this
             // position is an estimate, not a reported GPS fix.
-            L.circleMarker([mapLat, mapLon], {
+            var estPopup = escapeHtml(n.name || n.public_key.slice(0, 12)) + ' (estimated position' +
+              (hasLoc ? ', ' + Number(n.estimated_distance_km).toFixed(1) + ' km from reported position' : ', no real GPS fix') + ')';
+            L.circleMarker([n.estimated_lat, n.estimated_lon], {
               radius: 8, color: getComputedStyle(document.documentElement).getPropertyValue('--surface-0') || '#fff',
               weight: 2, fillColor: getComputedStyle(document.documentElement).getPropertyValue('--accent') || '#3b82f6',
               fillOpacity: 0.5, dashArray: '5,4',
-            }).addTo(detailMap).bindPopup(escapeHtml(n.name || n.public_key.slice(0, 12)) + ' (estimated position, no real GPS fix)');
+            }).addTo(detailMap).bindPopup(estPopup);
+            bounds.push([n.estimated_lat, n.estimated_lon]);
+          }
+          if (hasLoc && hasEstLoc) {
+            L.polyline(bounds, { color: getComputedStyle(document.documentElement).getPropertyValue('--text-muted') || '#888', weight: 2, dashArray: '4,4', opacity: 0.6 }).addTo(detailMap);
+            detailMap.fitBounds(bounds, { padding: [30, 30] });
+          } else {
+            detailMap.setView(bounds[0], 13);
           }
           setTimeout(() => detailMap.invalidateSize(), 100);
         } catch {}
@@ -1644,9 +1660,10 @@
     const stats = h.stats || {};
     const observers = h.observers || [];
     const recent = h.recentPackets || [];
-    // Same "real fix" convention as loadFullNode above -- see its comment.
+    // Same "real fix" convention and estimate-alongside-real-fix behavior
+    // as loadFullNode above -- see its comments.
     const hasLoc = n.lat != null && n.lon != null && !(n.lat === 0 && n.lon === 0);
-    const hasEstLoc = !hasLoc && n.estimated_lat != null && n.estimated_lon != null;
+    const hasEstLoc = n.estimated_lat != null && n.estimated_lon != null;
     const nodeUrl = location.origin + '/#/nodes/' + encodeURIComponent(n.public_key);
 
     // Status calculation via shared helper
@@ -1688,7 +1705,8 @@
             <dt>Packets Today</dt><dd>${stats.packetsToday || 0}</dd>
             ${stats.avgSnr != null ? `<dt>Avg SNR</dt><dd>${Number(stats.avgSnr).toFixed(1)} dB</dd>` : ''}
             ${stats.avgHops ? `<dt>Avg Hops</dt><dd>${stats.avgHops}</dd>` : ''}
-            ${hasLoc ? `<dt>Location</dt><dd>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</dd>` : hasEstLoc ? `<dt>Location <span class="text-muted" style="font-size:10px">(estimated)</span></dt><dd>~${Number(n.estimated_lat).toFixed(5)}, ~${Number(n.estimated_lon).toFixed(5)} <span class="text-muted" style="font-size:11px">(from ${n.estimated_contributor_count} neighbor${n.estimated_contributor_count === 1 ? '' : 's'}, no real GPS fix)</span></dd>` : ''}
+            ${hasLoc ? `<dt>Location</dt><dd>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</dd>` : ''}
+            ${hasEstLoc ? `<dt>${hasLoc ? 'Neighbor Estimate' : 'Location'} <span class="text-muted" style="font-size:10px">(estimated)</span></dt><dd>~${Number(n.estimated_lat).toFixed(5)}, ~${Number(n.estimated_lon).toFixed(5)} <span class="text-muted" style="font-size:11px">(from ${n.estimated_contributor_count} neighbor${n.estimated_contributor_count === 1 ? '' : 's'}${hasLoc ? ', ' + Number(n.estimated_distance_km).toFixed(1) + ' km from reported position' : ', no real GPS fix'})</span></dd>` : ''}
           </dl>
         </div>
 
@@ -1747,22 +1765,32 @@
         <div class="node-detail-section skew-detail-section" id="node-clock-skew" style="display:none"></div>
       </div>`;
 
-    // Init map
+    // Init map -- same real+estimate side-by-side treatment as loadFullNode.
     if (hasLoc || hasEstLoc) {
       try {
         if (detailMap) { detailMap.remove(); detailMap = null; }
-        const mapLat = hasLoc ? n.lat : n.estimated_lat;
-        const mapLon = hasLoc ? n.lon : n.estimated_lon;
-        detailMap = L.map('nodeMap', { zoomControl: false, attributionControl: false }).setView([mapLat, mapLon], 13);
+        detailMap = L.map('nodeMap', { zoomControl: false, attributionControl: false });
         _applyTilesToNodeMap(detailMap);
+        var panelBounds = [];
         if (hasLoc) {
-          L.marker([mapLat, mapLon]).addTo(detailMap).bindPopup(escapeHtml(n.name || n.public_key.slice(0, 12)));
-        } else {
-          L.circleMarker([mapLat, mapLon], {
+          L.marker([n.lat, n.lon]).addTo(detailMap).bindPopup(escapeHtml(n.name || n.public_key.slice(0, 12)));
+          panelBounds.push([n.lat, n.lon]);
+        }
+        if (hasEstLoc) {
+          var panelEstPopup = escapeHtml(n.name || n.public_key.slice(0, 12)) + ' (estimated position' +
+            (hasLoc ? ', ' + Number(n.estimated_distance_km).toFixed(1) + ' km from reported position' : ', no real GPS fix') + ')';
+          L.circleMarker([n.estimated_lat, n.estimated_lon], {
             radius: 8, color: getComputedStyle(document.documentElement).getPropertyValue('--surface-0') || '#fff',
             weight: 2, fillColor: getComputedStyle(document.documentElement).getPropertyValue('--accent') || '#3b82f6',
             fillOpacity: 0.5, dashArray: '5,4',
-          }).addTo(detailMap).bindPopup(escapeHtml(n.name || n.public_key.slice(0, 12)) + ' (estimated position, no real GPS fix)');
+          }).addTo(detailMap).bindPopup(panelEstPopup);
+          panelBounds.push([n.estimated_lat, n.estimated_lon]);
+        }
+        if (hasLoc && hasEstLoc) {
+          L.polyline(panelBounds, { color: getComputedStyle(document.documentElement).getPropertyValue('--text-muted') || '#888', weight: 2, dashArray: '4,4', opacity: 0.6 }).addTo(detailMap);
+          detailMap.fitBounds(panelBounds, { padding: [30, 30] });
+        } else {
+          detailMap.setView(panelBounds[0], 13);
         }
         setTimeout(() => detailMap.invalidateSize(), 100);
       } catch {}
