@@ -127,6 +127,44 @@ console.log('\n=== map.js: relayed scope filter ===');
   });
 }
 
+console.log('\n=== map.js: configured scope filter ===');
+{
+  const ctx = makeSandbox();
+  const internals = ctx.window.__meshcoreMapInternals;
+
+  test('exposes nodePassesConfiguredScopeFilter test hook', () => {
+    assert.ok(typeof internals.nodePassesConfiguredScopeFilter === 'function', 'nodePassesConfiguredScopeFilter not exported');
+  });
+
+  test('"all" passes every node regardless of configured_scope', () => {
+    assert.strictEqual(internals.nodePassesConfiguredScopeFilter({ configured_scope: '#dk-oj' }, 'all'), true);
+    assert.strictEqual(internals.nodePassesConfiguredScopeFilter({}, 'all'), true);
+  });
+
+  test('comma-separated list membership match passes, non-member fails', () => {
+    assert.strictEqual(internals.nodePassesConfiguredScopeFilter({ configured_scope: '#dk-oj,#dk' }, '#dk-oj'), true);
+    assert.strictEqual(internals.nodePassesConfiguredScopeFilter({ configured_scope: '#dk-oj,#dk' }, '#dk'), true);
+    assert.strictEqual(internals.nodePassesConfiguredScopeFilter({ configured_scope: '#dk-nj' }, '#dk-oj'), false);
+  });
+
+  test('"*" wildcard is its own literal bucket, not a match-everything value (v1 decision)', () => {
+    assert.strictEqual(internals.nodePassesConfiguredScopeFilter({ configured_scope: '*' }, '*'), true);
+    assert.strictEqual(internals.nodePassesConfiguredScopeFilter({ configured_scope: '*' }, '#dk-oj'), false);
+  });
+
+  test('"__none__" covers both never-observed (null) and confirmed-empty ("") configured_scope', () => {
+    assert.strictEqual(internals.nodePassesConfiguredScopeFilter({ configured_scope: null }, '__none__'), true);
+    assert.strictEqual(internals.nodePassesConfiguredScopeFilter({ configured_scope: '' }, '__none__'), true);
+    assert.strictEqual(internals.nodePassesConfiguredScopeFilter({}, '__none__'), true);
+    assert.strictEqual(internals.nodePassesConfiguredScopeFilter({ configured_scope: '#dk-oj' }, '__none__'), false);
+  });
+
+  test('whitespace around list entries is trimmed', () => {
+    assert.strictEqual(internals.nodePassesConfiguredScopeFilter({ configured_scope: ' #dk-oj , #dk ' }, '#dk-oj'), true);
+    assert.strictEqual(internals.nodePassesConfiguredScopeFilter({ configured_scope: ' #dk-oj , #dk ' }, '#dk'), true);
+  });
+}
+
 if (failed > 0) {
   console.log(`\n${failed} test(s) failed, ${passed} passed`);
   process.exit(1);
