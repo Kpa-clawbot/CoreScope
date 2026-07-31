@@ -2581,6 +2581,38 @@ func (s *Server) handleNodeClockSkew(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "No clock skew data for this node")
 		return
 	}
+
+	// Fase 5.2b: sample_limit projects the already-computed Samples slice
+	// down to the caller's requested tail before serialization. result is
+	// a freshly built response object owned solely by this request (see
+	// GetNodeClockSkew / getNodeClockSkewLocked, which always return a new
+	// &NodeClockSkew{...} built from a freshly allocated samples slice) —
+	// slicing result.Samples here can never mutate ClockSkewEngine's cache
+	// or any other shared state, and never re-triggers or changes
+	// Recompute. It also doesn't save the server-side allocation of
+	// Samples (already built above); it only saves JSON serialization,
+	// network payload, and client-side decoding/memory for callers that
+	// don't need the full history.
+	//
+	// Missing, non-numeric, or negative sample_limit: unchanged (legacy —
+	// every sample, exactly today's response). "0": Samples set to nil,
+	// which the `samples,omitempty` tag drops from the JSON entirely.
+	// Positive N below the sample count: keep the last (most recent) N,
+	// same chronological order — a plain sub-slice, no copy. N at or above
+	// the sample count: unchanged, no panic. sampleCount and every other
+	// field are untouched regardless — SampleCount already reflects the
+	// full advert-derived count, not len(Samples).
+	if raw := r.URL.Query().Get("sample_limit"); raw != "" {
+		if limit, err := strconv.Atoi(raw); err == nil && limit >= 0 {
+			switch {
+			case limit == 0:
+				result.Samples = nil
+			case limit < len(result.Samples):
+				result.Samples = result.Samples[len(result.Samples)-limit:]
+			}
+		}
+	}
+
 	writeJSON(w, result)
 }
 
