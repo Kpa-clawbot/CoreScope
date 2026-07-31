@@ -9571,12 +9571,22 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 
 // GetNodeAnalytics computes analytics for a single node using in-memory byNode index.
 func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsResponse, error) {
+	return s.getNodeAnalyticsAt(pubkey, days, time.Now())
+}
+
+// getNodeAnalyticsAt does the real work for GetNodeAnalytics, taking `now`
+// explicitly instead of calling time.Now() itself — see
+// getNodeAnalyticsSummaryAt in node_analytics_summary.go for why: this is
+// what lets a test drive both endpoints off the identical instant without
+// any package-level mutable clock. The public method above is the only
+// production caller, and it always passes a real time.Now(), read exactly
+// once.
+func (s *PacketStore) getNodeAnalyticsAt(pubkey string, days int, now time.Time) (*NodeAnalyticsResponse, error) {
 	node, err := s.db.GetNodeByPubkey(pubkey)
 	if err != nil || node == nil {
 		return nil, err
 	}
 
-	now := nodeAnalyticsNow()
 	fromISO := now.Add(-time.Duration(days) * 24 * time.Hour).Format(time.RFC3339)
 	toISO := now.Format(time.RFC3339)
 

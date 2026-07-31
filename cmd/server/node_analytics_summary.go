@@ -8,14 +8,6 @@ import (
 	"time"
 )
 
-// nodeAnalyticsNow is the time source GetNodeAnalytics and
-// GetNodeAnalyticsSummary use for "now" — a package-level function var
-// (not a parameter) so their public signatures stay unchanged, but a test
-// can substitute a fixed instant to make "full and summary see literally
-// the same now" assertions deterministic instead of racing two real
-// time.Now() calls a few instructions apart.
-var nodeAnalyticsNow = time.Now
-
 // nodeAnalyticsObsAccum and nodeAnalyticsPeerAccum are the per-observer and
 // per-peer running totals GetNodeAnalytics used to build inline — extracted
 // verbatim (not renamed in meaning) so the full endpoint's own output is
@@ -50,11 +42,16 @@ type nodeAnalyticsAccumulator struct {
 	// Always accumulated: every ComputedNodeStats field derives from these.
 	totalPackets    int
 	timelineBuckets map[string]int
-	snrValues       []float64
-	totalWithPath   int
-	relayedCount    int
-	observerSeen    map[string]struct{}
-	peerSeen        map[string]struct{}
+	// snrCount/snrRunningMean/snrM2 are Welford's online mean/variance
+	// state (constant memory, no per-packet SNR history kept) — see
+	// accumulate() and finalizeComputedStats() for the update/read steps.
+	snrCount       int
+	snrRunningMean float64
+	snrM2          float64
+	totalWithPath  int
+	relayedCount   int
+	observerSeen   map[string]struct{}
+	peerSeen       map[string]struct{}
 
 	// Only accumulated when withDisplayArrays is true — the full endpoint's
 	// exclusive display data; ComputedNodeStats never reads from these.
@@ -96,10 +93,15 @@ func (a *nodeAnalyticsAccumulator) accumulate(p *StoreTx) {
 		a.timelineBuckets[p.FirstSeen[:13]+":00:00Z"]++
 	}
 
-	// SNR — raw value always kept (mean/stddev need it); the richer
-	// per-packet trend entry only when building display arrays.
+	// SNR — folded into Welford's online mean/M2 in constant memory (mean/
+	// stddev need these, never the raw history); the richer per-packet
+	// trend entry only when building display arrays.
 	if p.SNR != nil {
-		a.snrValues = append(a.snrValues, *p.SNR)
+		a.snrCount++
+		delta := *p.SNR - a.snrRunningMean
+		a.snrRunningMean += delta / float64(a.snrCount)
+		delta2 := *p.SNR - a.snrRunningMean
+		a.snrM2 += delta * delta2
 		if a.withDisplayArrays {
 			a.snrTrend = append(a.snrTrend, SnrTrendEntry{
 				Timestamp:    p.FirstSeen,
@@ -284,20 +286,14 @@ func (a *nodeAnalyticsAccumulator) finalizeComputedStats(days int) ComputedNodeS
 		}
 	}
 
+	// Population variance (divide by N, matching the endpoint's original
+	// two-pass semantics — not the N-1 sample variance) from Welford's M2:
+	// for snrCount==1, M2 is exactly 0 (the first update sets mean to that
+	// value with zero deviation), so stddev is 0 without a separate branch.
 	var snrMean, snrStdDev float64
-	if len(a.snrValues) > 0 {
-		var sum float64
-		for _, v := range a.snrValues {
-			sum += v
-		}
-		snrMean = sum / float64(len(a.snrValues))
-		if len(a.snrValues) > 1 {
-			var sqSum float64
-			for _, v := range a.snrValues {
-				sqSum += (v - snrMean) * (v - snrMean)
-			}
-			snrStdDev = math.Sqrt(sqSum / float64(len(a.snrValues)))
-		}
+	if a.snrCount > 0 {
+		snrMean = a.snrRunningMean
+		snrStdDev = math.Sqrt(a.snrM2 / float64(a.snrCount))
 	}
 
 	signalGrade := "D"
@@ -448,15 +444,26 @@ func (s *PacketStore) filterNodePacketsLocked(pubkey, fromISO string) []*StoreTx
 // none of the seven heavy display arrays are ever built, and clock skew is
 // never computed (this endpoint never calls getNodeClockSkewLocked).
 // ComputedStats is guaranteed identical to what GetNodeAnalytics produces
-// for the same pubkey/days/nodeAnalyticsNow, since both share
-// accumulate()/finalizeComputedStats().
+// for the same pubkey/days/now, since both share the same private "at a
+// given instant" implementation and accumulate()/finalizeComputedStats().
 func (s *PacketStore) GetNodeAnalyticsSummary(pubkey string, days int) (*NodeAnalyticsSummaryResponse, error) {
+	return s.getNodeAnalyticsSummaryAt(pubkey, days, time.Now())
+}
+
+// getNodeAnalyticsSummaryAt does the real work for GetNodeAnalyticsSummary,
+// taking `now` explicitly instead of calling time.Now() itself. This is the
+// seam that lets a test drive GetNodeAnalytics and GetNodeAnalyticsSummary
+// off literally the same instant (for the full/summary parity assertion)
+// without any package-level mutable clock: no global var, no mutex around a
+// test hook, no test-only state in the production call path — the public
+// method above is the only production caller, and it always passes a real
+// time.Now(), read exactly once.
+func (s *PacketStore) getNodeAnalyticsSummaryAt(pubkey string, days int, now time.Time) (*NodeAnalyticsSummaryResponse, error) {
 	node, err := s.db.GetNodeByPubkey(pubkey)
 	if err != nil || node == nil {
 		return nil, err
 	}
 
-	now := nodeAnalyticsNow()
 	fromISO := now.Add(-time.Duration(days) * 24 * time.Hour).Format(time.RFC3339)
 	toISO := now.Format(time.RFC3339)
 
