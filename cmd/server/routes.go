@@ -323,6 +323,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/nodes/{pubkey}/health", s.handleNodeHealth).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/paths", s.handleNodePaths).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/analytics", s.handleNodeAnalytics).Methods("GET")
+	r.HandleFunc("/api/nodes/{pubkey}/analytics/summary", s.handleNodeAnalyticsSummary).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/hop_analytics", s.handleNodeHopAnalytics).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/battery", s.handleNodeBattery).Methods("GET")
 	r.HandleFunc("/api/nodes/clock-skew", s.handleFleetClockSkew).Methods("GET")
@@ -2489,6 +2490,40 @@ func (s *Server) handleNodeAnalytics(w http.ResponseWriter, r *http.Request) {
 
 	if s.store != nil {
 		result, err := s.store.GetNodeAnalytics(pubkey, days)
+		if err != nil || result == nil {
+			writeError(w, 404, "Not found")
+			return
+		}
+		writeJSON(w, result)
+		return
+	}
+
+	writeError(w, 404, "Not found")
+}
+
+// handleNodeAnalyticsSummary is handleNodeAnalytics' light sibling (Fase
+// 5.2a): identical blacklist/hidden/days-clamp guards, but returns only
+// timeRange + computedStats — see PacketStore.GetNodeAnalyticsSummary.
+func (s *Server) handleNodeAnalyticsSummary(w http.ResponseWriter, r *http.Request) {
+	pubkey := mux.Vars(r)["pubkey"]
+	if s.cfg.IsBlacklisted(pubkey) {
+		writeError(w, 404, "Not found")
+		return
+	}
+	if s.isPubkeyHidden(pubkey) {
+		writeError(w, 404, "Not found")
+		return
+	}
+	days := queryInt(r, "days", 7)
+	if days < 1 {
+		days = 1
+	}
+	if days > 365 {
+		days = 365
+	}
+
+	if s.store != nil {
+		result, err := s.store.GetNodeAnalyticsSummary(pubkey, days)
 		if err != nil || result == nil {
 			writeError(w, 404, "Not found")
 			return

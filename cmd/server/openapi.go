@@ -91,6 +91,10 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/nodes/{pubkey}/health":    {Summary: "Get node health", Tag: "nodes"},
 		"GET /api/nodes/{pubkey}/paths":     {Summary: "Get node routing paths", Tag: "nodes"},
 		"GET /api/nodes/{pubkey}/analytics": {Summary: "Get node analytics", Description: "Per-node packet counts, timing, and RF stats.", Tag: "nodes"},
+		"GET /api/nodes/{pubkey}/analytics/summary": {Summary: "Get node analytics summary", Description: "Fase 5.2a: light sibling of /analytics — timeRange + computedStats only (availabilityPct, longestSilenceMs/Start, signalGrade, snrMean/snrStdDev, relayPct, totalPackets, uniqueObservers, uniquePeers, avgPacketsPerDay). No node object, no clockSkew, and none of the heavy display arrays (activityTimeline/snrTrend/packetTypeBreakdown/observerCoverage/hopDistribution/peerInteractions/uptimeHeatmap) — for callers that only need the summary numbers, not the full endpoint's per-packet detail. Shares its per-packet computation with /analytics, so computedStats is identical between the two for the same pubkey/days.", Tag: "nodes",
+			QueryParams: []paramMeta{
+				{Name: "days", Description: "Time window in days, 1-365. Default 7.", Type: "integer"},
+			}},
 		"GET /api/nodes/{pubkey}/hop_analytics": {Summary: "Get node hop-count analytics", Description: "Issue #1812. For each recent transmission that passed through this node as a relay, its hop-count AT THIS NODE — the node's own 0-based index within the packet's resolved relay path, i.e. the number MeshCore firmware compares against flood_max/flood_max_advert/flood_max_unscoped in allowPacketForward. Deliberately not the same number as /analytics' hopDistribution field, which is path length to whichever observer reported the packet (a different, unrelated distance). Only transmissions with a resolved relay path are included.", Tag: "nodes", Response: schemaRef("NodeHopAnalyticsResponse"),
 			QueryParams: []paramMeta{
 				{Name: "days", Description: "Time window in days, 1-365.", Type: "integer"},
