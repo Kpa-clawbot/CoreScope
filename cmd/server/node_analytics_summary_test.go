@@ -11,24 +11,11 @@ import (
 
 const nodeAnalyticsSummaryTestPK = "aabbccdd11223344" // seeded by seedTestData
 
-// withFixedNodeAnalyticsNow pins nodeAnalyticsNow for the duration of the
-// test, so GetNodeAnalytics/GetNodeAnalyticsSummary compute against the
-// exact same instant instead of racing two independent time.Now() calls a
-// few instructions apart — required for the full/summary parity assertion
-// to be deterministic.
-func withFixedNodeAnalyticsNow(t *testing.T, now time.Time) {
-	t.Helper()
-	orig := nodeAnalyticsNow
-	nodeAnalyticsNow = func() time.Time { return now }
-	t.Cleanup(func() { nodeAnalyticsNow = orig })
-}
-
 // TestNodeAnalyticsSummary_OnlyTimeRangeAndComputedStats asserts the wire
 // JSON has exactly two top-level keys — no node, no clockSkew, none of the
 // heavy display arrays the full /analytics endpoint carries.
 func TestNodeAnalyticsSummary_OnlyTimeRangeAndComputedStats(t *testing.T) {
 	_, router := setupTestServer(t)
-	withFixedNodeAnalyticsNow(t, time.Now().UTC())
 
 	req := httptest.NewRequest("GET", "/api/nodes/"+nodeAnalyticsSummaryTestPK+"/analytics/summary?days=7", nil)
 	w := httptest.NewRecorder()
@@ -58,7 +45,11 @@ func TestNodeAnalyticsSummary_OnlyTimeRangeAndComputedStats(t *testing.T) {
 
 // TestNodeAnalyticsSummary_MatchesFullComputedStats asserts full and
 // summary produce byte-for-byte identical ComputedNodeStats for the same
-// pubkey/days/now — the whole point of sharing one accumulator.
+// pubkey/days/now — the whole point of sharing one accumulator. Drives both
+// through the private getNodeAnalyticsAt/getNodeAnalyticsSummaryAt seam
+// with an explicit fixed `now` (see node_analytics_summary.go) rather than
+// any global clock override, so both endpoints see literally the same
+// instant without racing two independent time.Now() calls.
 func TestNodeAnalyticsSummary_MatchesFullComputedStats(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
@@ -71,15 +62,15 @@ func TestNodeAnalyticsSummary_MatchesFullComputedStats(t *testing.T) {
 		t.Fatal("background indexes never became ready")
 	}
 
-	withFixedNodeAnalyticsNow(t, time.Now().UTC())
+	now := time.Now().UTC()
 
-	full, err := store.GetNodeAnalytics(nodeAnalyticsSummaryTestPK, 7)
+	full, err := store.getNodeAnalyticsAt(nodeAnalyticsSummaryTestPK, 7, now)
 	if err != nil {
-		t.Fatalf("GetNodeAnalytics: %v", err)
+		t.Fatalf("getNodeAnalyticsAt: %v", err)
 	}
-	summary, err := store.GetNodeAnalyticsSummary(nodeAnalyticsSummaryTestPK, 7)
+	summary, err := store.getNodeAnalyticsSummaryAt(nodeAnalyticsSummaryTestPK, 7, now)
 	if err != nil {
-		t.Fatalf("GetNodeAnalyticsSummary: %v", err)
+		t.Fatalf("getNodeAnalyticsSummaryAt: %v", err)
 	}
 
 	if !reflect.DeepEqual(full.ComputedStats, summary.ComputedStats) {
