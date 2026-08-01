@@ -323,6 +323,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/nodes/{pubkey}/health", s.handleNodeHealth).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/paths", s.handleNodePaths).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/analytics", s.handleNodeAnalytics).Methods("GET")
+	r.HandleFunc("/api/nodes/{pubkey}/analytics/summary", s.handleNodeAnalyticsSummary).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/hop_analytics", s.handleNodeHopAnalytics).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/battery", s.handleNodeBattery).Methods("GET")
 	r.HandleFunc("/api/nodes/clock-skew", s.handleFleetClockSkew).Methods("GET")
@@ -2500,6 +2501,40 @@ func (s *Server) handleNodeAnalytics(w http.ResponseWriter, r *http.Request) {
 	writeError(w, 404, "Not found")
 }
 
+// handleNodeAnalyticsSummary is handleNodeAnalytics' light sibling (Fase
+// 5.2a): identical blacklist/hidden/days-clamp guards, but returns only
+// timeRange + computedStats — see PacketStore.GetNodeAnalyticsSummary.
+func (s *Server) handleNodeAnalyticsSummary(w http.ResponseWriter, r *http.Request) {
+	pubkey := mux.Vars(r)["pubkey"]
+	if s.cfg.IsBlacklisted(pubkey) {
+		writeError(w, 404, "Not found")
+		return
+	}
+	if s.isPubkeyHidden(pubkey) {
+		writeError(w, 404, "Not found")
+		return
+	}
+	days := queryInt(r, "days", 7)
+	if days < 1 {
+		days = 1
+	}
+	if days > 365 {
+		days = 365
+	}
+
+	if s.store != nil {
+		result, err := s.store.GetNodeAnalyticsSummary(pubkey, days)
+		if err != nil || result == nil {
+			writeError(w, 404, "Not found")
+			return
+		}
+		writeJSON(w, result)
+		return
+	}
+
+	writeError(w, 404, "Not found")
+}
+
 // handleNodeHopAnalytics answers upstream issue #1812: hop-count (this
 // node's own index within each packet's resolved relay path, not distance
 // to whichever observer reported it) for tuning the firmware's
@@ -2546,6 +2581,38 @@ func (s *Server) handleNodeClockSkew(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "No clock skew data for this node")
 		return
 	}
+
+	// Fase 5.2b: sample_limit projects the already-computed Samples slice
+	// down to the caller's requested tail before serialization. result is
+	// a freshly built response object owned solely by this request (see
+	// GetNodeClockSkew / getNodeClockSkewLocked, which always return a new
+	// &NodeClockSkew{...} built from a freshly allocated samples slice) —
+	// slicing result.Samples here can never mutate ClockSkewEngine's cache
+	// or any other shared state, and never re-triggers or changes
+	// Recompute. It also doesn't save the server-side allocation of
+	// Samples (already built above); it only saves JSON serialization,
+	// network payload, and client-side decoding/memory for callers that
+	// don't need the full history.
+	//
+	// Missing, non-numeric, or negative sample_limit: unchanged (legacy —
+	// every sample, exactly today's response). "0": Samples set to nil,
+	// which the `samples,omitempty` tag drops from the JSON entirely.
+	// Positive N below the sample count: keep the last (most recent) N,
+	// same chronological order — a plain sub-slice, no copy. N at or above
+	// the sample count: unchanged, no panic. sampleCount and every other
+	// field are untouched regardless — SampleCount already reflects the
+	// full advert-derived count, not len(Samples).
+	if raw := r.URL.Query().Get("sample_limit"); raw != "" {
+		if limit, err := strconv.Atoi(raw); err == nil && limit >= 0 {
+			switch {
+			case limit == 0:
+				result.Samples = nil
+			case limit < len(result.Samples):
+				result.Samples = result.Samples[len(result.Samples)-limit:]
+			}
+		}
+	}
+
 	writeJSON(w, result)
 }
 

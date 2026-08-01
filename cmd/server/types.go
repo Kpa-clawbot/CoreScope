@@ -987,6 +987,15 @@ type NodeAnalyticsResponse struct {
 	ClockSkew           *NodeClockSkew          `json:"clockSkew,omitempty"`
 }
 
+// NodeAnalyticsSummaryResponse is the light sibling of NodeAnalyticsResponse
+// (Fase 5.2a) — GET /api/nodes/{pubkey}/analytics/summary. Only timeRange +
+// computedStats: no node object, no clockSkew, none of the heavy display
+// arrays. See PacketStore.GetNodeAnalyticsSummary.
+type NodeAnalyticsSummaryResponse struct {
+	TimeRange     TimeRangeResp     `json:"timeRange"`
+	ComputedStats ComputedNodeStats `json:"computedStats"`
+}
+
 // HopAnalyticsPacket is one transmission that passed through a specific node
 // as a relay hop (upstream issue #1812: help operators tune the firmware's
 // flood.max / flood.max.advert / flood.max.unscoped knobs, which cap based
