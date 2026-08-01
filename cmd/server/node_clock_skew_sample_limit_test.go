@@ -18,10 +18,21 @@ const clockSkewSampleLimitTestPK = "SKEWNODE001"
 // with 3 chronologically-ordered clock-skew samples for one node --
 // enough to exercise sample_limit=0/1/2/len/over meaningfully. Mirrors
 // TestGetNodeClockSkew_Integration's construction (NewPacketStore(nil,
-// nil), manual byNode/byPayloadType population, computeInterval=0 to force
-// a fresh Recompute on every call) since GetNodeClockSkew never touches
-// the DB at all.
-func setupClockSkewSampleLimitFixture(t *testing.T) (*Server, *mux.Router) {
+// nil), manual byNode/byPayloadType population) since GetNodeClockSkew
+// never touches the DB at all.
+//
+// computeInterval is set to a long duration (1h), NOT 0: the engine's
+// Recompute() fast-paths on `time.Since(lastComputed) < computeInterval`,
+// so computeInterval=0 (the earlier version of this fixture) makes EVERY
+// request recompute from scratch -- which would make
+// TestNodeClockSkewSampleLimit_ZeroThenDefaultProvesNoSharedStateMutation
+// pass even if the handler mutated ClockSkewEngine's cache, since the
+// second request would just rebuild fresh data instead of ever reading the
+// (possibly-corrupted) cache. With a 1h interval, the fixture's very first
+// request (lastComputed is still its zero value) triggers one real
+// Recompute, and every later request in the same test hits the cache --
+// which is what that test needs to actually exercise the cache path.
+func setupClockSkewSampleLimitFixture(t *testing.T) (*Server, *mux.Router, *PacketStore) {
 	t.Helper()
 	pt := 4 // ADVERT
 	mkTx := func(hash string, advertTS, obsTS int64) *StoreTx {
@@ -44,7 +55,7 @@ func setupClockSkewSampleLimitFixture(t *testing.T) (*Server, *mux.Router) {
 	ps.mu.Lock()
 	ps.byNode[clockSkewSampleLimitTestPK] = []*StoreTx{tx1, tx2, tx3}
 	ps.byPayloadType[pt] = []*StoreTx{tx1, tx2, tx3}
-	ps.clockSkew.computeInterval = 0
+	ps.clockSkew.computeInterval = time.Hour
 	ps.mu.Unlock()
 
 	cfg := &Config{Port: 3000}
@@ -53,7 +64,7 @@ func setupClockSkewSampleLimitFixture(t *testing.T) (*Server, *mux.Router) {
 	srv.store = ps
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
-	return srv, router
+	return srv, router, ps
 }
 
 func getClockSkew(t *testing.T, router *mux.Router, query string) (*httptest.ResponseRecorder, NodeClockSkew) {
@@ -76,7 +87,7 @@ func getClockSkew(t *testing.T, router *mux.Router, query string) (*httptest.Res
 
 // 1. No sample_limit parameter -> unchanged legacy response, all samples.
 func TestNodeClockSkewSampleLimit_MissingReturnsAll(t *testing.T) {
-	_, router := setupClockSkewSampleLimitFixture(t)
+	_, router, _ := setupClockSkewSampleLimitFixture(t)
 	w, resp := getClockSkew(t, router, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
@@ -88,7 +99,7 @@ func TestNodeClockSkewSampleLimit_MissingReturnsAll(t *testing.T) {
 
 // 2. Invalid (non-numeric) sample_limit -> unchanged, all samples.
 func TestNodeClockSkewSampleLimit_InvalidReturnsAll(t *testing.T) {
-	_, router := setupClockSkewSampleLimitFixture(t)
+	_, router, _ := setupClockSkewSampleLimitFixture(t)
 	w, resp := getClockSkew(t, router, "sample_limit=notanumber")
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -100,7 +111,7 @@ func TestNodeClockSkewSampleLimit_InvalidReturnsAll(t *testing.T) {
 
 // 3. Negative sample_limit -> unchanged, all samples.
 func TestNodeClockSkewSampleLimit_NegativeReturnsAll(t *testing.T) {
-	_, router := setupClockSkewSampleLimitFixture(t)
+	_, router, _ := setupClockSkewSampleLimitFixture(t)
 	w, resp := getClockSkew(t, router, "sample_limit=-1")
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -114,7 +125,7 @@ func TestNodeClockSkewSampleLimit_NegativeReturnsAll(t *testing.T) {
 // to a struct alone can't distinguish "missing key" from "empty/nil
 // slice"), sampleCount unchanged, and every other field unchanged.
 func TestNodeClockSkewSampleLimit_ZeroOmitsSamplesKey(t *testing.T) {
-	_, router := setupClockSkewSampleLimitFixture(t)
+	_, router, _ := setupClockSkewSampleLimitFixture(t)
 
 	wFull, respFull := getClockSkew(t, router, "")
 	if wFull.Code != http.StatusOK {
@@ -153,7 +164,7 @@ func TestNodeClockSkewSampleLimit_ZeroOmitsSamplesKey(t *testing.T) {
 
 // 5. sample_limit=1 returns exactly the single most-recent sample.
 func TestNodeClockSkewSampleLimit_OneReturnsLatestOnly(t *testing.T) {
-	_, router := setupClockSkewSampleLimitFixture(t)
+	_, router, _ := setupClockSkewSampleLimitFixture(t)
 	_, respFull := getClockSkew(t, router, "")
 	w, resp := getClockSkew(t, router, "sample_limit=1")
 	if w.Code != http.StatusOK {
@@ -170,7 +181,7 @@ func TestNodeClockSkewSampleLimit_OneReturnsLatestOnly(t *testing.T) {
 
 // 6. sample_limit=2 returns the two most recent, in original chronological order.
 func TestNodeClockSkewSampleLimit_TwoReturnsLatestTwoInOrder(t *testing.T) {
-	_, router := setupClockSkewSampleLimitFixture(t)
+	_, router, _ := setupClockSkewSampleLimitFixture(t)
 	_, respFull := getClockSkew(t, router, "")
 	w, resp := getClockSkew(t, router, "sample_limit=2")
 	if w.Code != http.StatusOK {
@@ -188,7 +199,7 @@ func TestNodeClockSkewSampleLimit_TwoReturnsLatestTwoInOrder(t *testing.T) {
 
 // 7. sample_limit == len(samples) returns all.
 func TestNodeClockSkewSampleLimit_EqualToLengthReturnsAll(t *testing.T) {
-	_, router := setupClockSkewSampleLimitFixture(t)
+	_, router, _ := setupClockSkewSampleLimitFixture(t)
 	_, respFull := getClockSkew(t, router, "")
 	w, resp := getClockSkew(t, router, fmt.Sprintf("sample_limit=%d", len(respFull.Samples)))
 	if w.Code != http.StatusOK {
@@ -201,7 +212,7 @@ func TestNodeClockSkewSampleLimit_EqualToLengthReturnsAll(t *testing.T) {
 
 // 8. sample_limit > len(samples) returns all, no panic.
 func TestNodeClockSkewSampleLimit_GreaterThanLengthReturnsAllNoPanic(t *testing.T) {
-	_, router := setupClockSkewSampleLimitFixture(t)
+	_, router, _ := setupClockSkewSampleLimitFixture(t)
 	_, respFull := getClockSkew(t, router, "")
 	w, resp := getClockSkew(t, router, "sample_limit=9999")
 	if w.Code != http.StatusOK {
@@ -217,7 +228,7 @@ func TestNodeClockSkewSampleLimit_GreaterThanLengthReturnsAllNoPanic(t *testing.
 // only the per-request response object, not any cached/shared state in
 // ClockSkewEngine.
 func TestNodeClockSkewSampleLimit_ZeroThenDefaultProvesNoSharedStateMutation(t *testing.T) {
-	_, router := setupClockSkewSampleLimitFixture(t)
+	_, router, ps := setupClockSkewSampleLimitFixture(t)
 
 	wZero, respZero := getClockSkew(t, router, "sample_limit=0")
 	if wZero.Code != http.StatusOK {
@@ -227,6 +238,16 @@ func TestNodeClockSkewSampleLimit_ZeroThenDefaultProvesNoSharedStateMutation(t *
 		t.Fatalf("expected 0 samples at limit=0, got %d", len(respZero.Samples))
 	}
 
+	// The fixture's computeInterval is 1h (see setupClockSkewSampleLimitFixture's
+	// doc comment), so this first request is the ONLY one expected to run a
+	// real Recompute -- lastComputed starts as the zero Time, well outside
+	// any interval. Record it now so the next request can be proven to have
+	// hit the cache instead of recomputing.
+	lastComputedAfterZero := clockSkewEngineLastComputed(ps)
+	if lastComputedAfterZero.IsZero() {
+		t.Fatal("expected the first request to have triggered a real Recompute (lastComputed still zero)")
+	}
+
 	wDefault, respDefault := getClockSkew(t, router, "")
 	if wDefault.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", wDefault.Code)
@@ -234,11 +255,33 @@ func TestNodeClockSkewSampleLimit_ZeroThenDefaultProvesNoSharedStateMutation(t *
 	if len(respDefault.Samples) != 3 {
 		t.Fatalf("default call after sample_limit=0 returned %d samples, want 3 -- shared/cached state was mutated", len(respDefault.Samples))
 	}
+
+	// The real proof: lastComputed must be UNCHANGED between the two
+	// requests. If it had moved, the second request would have run its own
+	// fresh Recompute -- meaning "all 3 samples came back" would only show
+	// the engine recomputes correctly, not that the sample_limit=0 request
+	// left the cache untouched. An unchanged lastComputed proves the second
+	// request served straight from ClockSkewEngine's cache, which is only
+	// possible if nothing about it (including result.Samples on the first
+	// request) mutated that cache.
+	lastComputedAfterDefault := clockSkewEngineLastComputed(ps)
+	if !lastComputedAfterDefault.Equal(lastComputedAfterZero) {
+		t.Fatalf("lastComputed changed between requests (%v -> %v): the second request recomputed instead of hitting the cache, so this test cannot prove no-mutation",
+			lastComputedAfterZero, lastComputedAfterDefault)
+	}
+}
+
+// clockSkewEngineLastComputed reads ClockSkewEngine.lastComputed under its
+// own RWMutex, matching the engine's own lock discipline (see Recompute).
+func clockSkewEngineLastComputed(ps *PacketStore) time.Time {
+	ps.clockSkew.mu.RLock()
+	defer ps.clockSkew.mu.RUnlock()
+	return ps.clockSkew.lastComputed
 }
 
 // 10. A node with no clock-skew data keeps the existing 404 and error text.
 func TestNodeClockSkewSampleLimit_NoDataNode404Unchanged(t *testing.T) {
-	_, router := setupClockSkewSampleLimitFixture(t)
+	_, router, _ := setupClockSkewSampleLimitFixture(t)
 	req := httptest.NewRequest("GET", "/api/nodes/does-not-exist/clock-skew?sample_limit=5", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -259,7 +302,7 @@ func TestNodeClockSkewSampleLimit_NoDataNode404Unchanged(t *testing.T) {
 // several limit values (not just 0 -- see test 4 for the limit=0-specific
 // raw-JSON-key-absence check).
 func TestNodeClockSkewSampleLimit_OtherFieldsUnaffectedAcrossLimits(t *testing.T) {
-	_, router := setupClockSkewSampleLimitFixture(t)
+	_, router, _ := setupClockSkewSampleLimitFixture(t)
 	_, respFull := getClockSkew(t, router, "")
 
 	for _, query := range []string{"sample_limit=0", "sample_limit=1", "sample_limit=2", "sample_limit=9999"} {
