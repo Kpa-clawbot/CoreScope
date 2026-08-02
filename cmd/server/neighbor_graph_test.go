@@ -43,7 +43,7 @@ func ngTestStore(nodes []nodeInfo, packets []*StoreTx) *PacketStore {
 	return ps
 }
 
-func ngIntPtr(v int) *int         { return &v }
+func ngIntPtr(v int) *int           { return &v }
 func ngFloatPtr(v float64) *float64 { return &v }
 
 func ngMakeTx(id int, payloadType int, decodedJSON string, obs []*StoreObs) *StoreTx {
@@ -641,7 +641,10 @@ func TestBuildNeighborGraph_AdvertPubKeyField(t *testing.T) {
 		ngMakeObs("obs0000100112233445566778899001122334455667788990011223344556677", `["r1"]`, nowStr, ngFloatPtr(-8.5)),
 	})
 	store := ngTestStore(nodes, []*StoreTx{tx})
-	g := BuildFromStore(store)
+	g := BuildFromStoreWithOptions(store, BuildOptions{
+		PathTrust: &packetpath.TrustConfig{MinHashBytesForMapping: 1},
+		MaxEdgeKm: DefaultMaxEdgeKm,
+	})
 
 	edges := g.AllEdges()
 	if len(edges) < 1 {
@@ -678,7 +681,10 @@ func TestBuildNeighborGraph_OneByteHashPrefixes(t *testing.T) {
 		ngMakeObs("obs1234500000000000000000000000000000000000000000000000000000004", `["c0"]`, nowStr, ngFloatPtr(-12)),
 	})
 	store := ngTestStore(nodes, []*StoreTx{tx})
-	g := BuildFromStore(store)
+	g := BuildFromStoreWithOptions(store, BuildOptions{
+		PathTrust: &packetpath.TrustConfig{MinHashBytesForMapping: 1},
+		MaxEdgeKm: DefaultMaxEdgeKm,
+	})
 
 	edges := g.AllEdges()
 	if len(edges) == 0 {
@@ -920,7 +926,10 @@ func TestBuildNeighborGraph_CountsByMode(t *testing.T) {
 		}),
 	}
 	store := ngTestStore(nodes, txs)
-	g := BuildFromStore(store)
+	g := BuildFromStoreWithOptions(store, BuildOptions{
+		PathTrust: &packetpath.TrustConfig{MinHashBytesForMapping: 1},
+		MaxEdgeKm: DefaultMaxEdgeKm,
+	})
 
 	edges := g.Neighbors("aaaa1111")
 	var xr1 *NeighborEdge
