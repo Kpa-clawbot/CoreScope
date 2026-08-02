@@ -34,6 +34,9 @@ type pathCandidate struct {
 	Path        []string        `json:"path"`
 	Names       []string        `json:"names"`
 	Score       float64         `json:"score"`
+	// Speculative is true when the score is below speculativeThreshold or any
+	// hop is below the configured path-trust threshold. Consumers needing the
+	// reason should inspect evidence.perHop[].trusted.
 	Speculative bool            `json:"speculative"`
 	Evidence    pathEvidence    `json:"evidence"`
 }
@@ -200,6 +203,7 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 
 	// Beam search.
 	beam := s.store.beamSearch(req.Prefixes, pm, graph, nodeByPK, now)
+	pt := s.cfg.GetPathTrust()
 
 	// Sort by score descending, take top limit.
 	sortBeam(beam)
@@ -220,7 +224,6 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 		evidence := make([]hopEvidence, len(entry.evidence))
 		copy(evidence, entry.evidence)
 		allHopsTrusted := true
-		pt := s.cfg.GetPathTrust()
 		for hi, ev := range evidence {
 			if hi >= len(req.Prefixes) {
 				break
@@ -240,9 +243,11 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 				if hi > 0 {
 					partialEntry = beamEntry{pubkeys: entry.pubkeys[:hi], names: entry.names[:hi], score: 1.0}
 				}
+				// Score this alternative in the context of the partial path.
 				altScore := s.store.scoreHop(partialEntry, c, ev.CandidatesConsidered, graph, nodeByPK, now, hi)
 				alts = append(alts, hopAlternative{PublicKey: c.PublicKey, Name: c.Name, Score: math.Round(altScore*1000) / 1000})
 			}
+			// Sort alternatives by score descending, cap at 5.
 			sort.Slice(alts, func(i, j int) bool { return alts[i].Score > alts[j].Score })
 			if len(alts) > 5 {
 				alts = alts[:5]
@@ -267,7 +272,6 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	elapsed := time.Since(start).Milliseconds()
-	statsMinBytes := s.cfg.GetPathTrust()
 	resp := pathInspectResponse{
 		Candidates: candidates,
 		Stale:      stale,
@@ -279,7 +283,7 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 			"beamWidth":              beamWidth,
 			"expansionsRun":          len(req.Prefixes) * beamWidth,
 			"elapsedMs":              elapsed,
-			"minHashBytesForMapping": statsMinBytes.MinHashBytesOrDefault(),
+			"minHashBytesForMapping": pt.MinHashBytesOrDefault(),
 		},
 	}
 

@@ -548,6 +548,10 @@ test('#1784: map.js references MC_pathBelowTrust for trust-gated route display',
     'map.js must call MC_pathBelowTrust to gate route drawing on trust threshold');
   assert.ok(src.indexOf('Route not displayed') !== -1,
     'map.js must show a clear message when route is below trust threshold');
+  const cleanup = src.indexOf('map.removeControl(window.__mc_routeTrustControl)');
+  const trustGate = src.indexOf('if (window.MC_pathBelowTrust && window.MC_pathBelowTrust(hopKeys))');
+  assert.ok(cleanup >= 0 && cleanup < trustGate,
+    'map.js must remove a previous trust message before evaluating the next route');
 });
 
 test('#1784: analytics.js references MC_meetsPathTrust for subpath filtering', () => {

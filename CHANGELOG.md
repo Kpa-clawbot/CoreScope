@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- `/api/paths/inspect` now marks a candidate as `speculative` when any hop
+  falls below `pathTrust.minHashBytesForMapping`; consumers can distinguish
+  this from score-based speculation through `evidence.perHop[].trusted`.
+
 ## [3.9.1] — 2026-06-12
 
 Patch release on top of v3.9.0 — v3.9.0's container image never published (Playwright flake gated Docker build). See [docs/release-notes/v3.9.1.md](docs/release-notes/v3.9.1.md).
