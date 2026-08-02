@@ -877,6 +877,26 @@ func TestBuildNeighborGraph_PathTrustExcludes1ByteHops(t *testing.T) {
 	}
 }
 
+// TestBuildNeighborGraph_PathTrustDefaultExcludes1ByteHops pins the configured
+// default for installations without a pathTrust block. The default is strict:
+// one-byte prefixes are not trusted as mapping evidence.
+func TestBuildNeighborGraph_PathTrustDefaultExcludes1ByteHops(t *testing.T) {
+	nodes := []nodeInfo{
+		{Role: "repeater", PublicKey: "ccc0000100000000000000000000000000000000000000000000000000000001", Name: "NodeC-1"},
+		{Role: "repeater", PublicKey: "ccc0000200000000000000000000000000000000000000000000000000000002", Name: "NodeC-2"},
+		{Role: "repeater", PublicKey: "aaa0000100000000000000000000000000000000000000000000000000000003", Name: "Originator"},
+		{Role: "repeater", PublicKey: "obs00001000000000000000000000000000000000000000000000000000000004", Name: "Observer"},
+	}
+	tx := ngMakeTx(1, 4, ngPubKeyJSON("aaa0000100000000000000000000000000000000000000000000000000000003"), []*StoreObs{
+		ngMakeObs("obs00001000000000000000000000000000000000000000000000000000000004", `["cc"]`, nowStr, ngFloatPtr(-12)),
+	})
+
+	g := BuildFromStoreWithOptions(ngTestStore(nodes, []*StoreTx{tx}), BuildOptions{MaxEdgeKm: DefaultMaxEdgeKm})
+	if edges := g.AllEdges(); len(edges) != 0 {
+		t.Fatalf("expected default path trust to exclude 1-byte prefix, got %d edges", len(edges))
+	}
+}
+
 // confidence indicator can weight 3-byte (effectively unambiguous) sightings
 // higher than 1-byte (high-collision) sightings. Modes track firmware-valid
 // hash sizes 1/2/3 per Packet.cpp:13-18.

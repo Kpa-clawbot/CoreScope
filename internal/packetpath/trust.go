@@ -20,6 +20,8 @@ type TrustConfig struct {
 	MinHashBytesForMapping int `json:"minHashBytesForMapping,omitempty"`
 }
 
+// DefaultMinHashBytesForMapping excludes collision-prone 1-byte prefixes.
+// Operators can explicitly set 1 to retain legacy trust-all behavior.
 const DefaultMinHashBytesForMapping = 2
 
 const MaxHashBytes = 3

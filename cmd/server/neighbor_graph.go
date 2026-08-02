@@ -237,10 +237,10 @@ type BuildOptions struct {
 	EnableLog bool    // structured disambiguation logging
 	MaxEdgeKm float64 // geo-sanity threshold; 0 disables the filter
 	// PathTrust is the trust threshold config for path-hash observations
-	// (issue #1784). When nil, the default threshold (1 byte) is used:
-	// all prefix lengths count as evidence (backward-compatible). Set
-	// MinHashBytesForMapping: 2 to exclude 1-byte observations from
-	// neighbor-edge building, or 3 for the strictest mode.
+	// (issue #1784). When nil, the default threshold (2 bytes) is used:
+	// 1-byte observations do not count as mapping evidence. Set
+	// MinHashBytesForMapping: 1 to opt into legacy trust-all behavior,
+	// or 3 for the strictest mode.
 	PathTrust *packetpath.TrustConfig
 }
 

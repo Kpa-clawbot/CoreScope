@@ -200,6 +200,7 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 
 	// Beam search.
 	beam := s.store.beamSearch(req.Prefixes, pm, graph, nodeByPK, now)
+	pt := s.cfg.GetPathTrust()
 
 	// Sort by score descending, take top limit.
 	sortBeam(beam)
@@ -220,7 +221,6 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 		evidence := make([]hopEvidence, len(entry.evidence))
 		copy(evidence, entry.evidence)
 		allHopsTrusted := true
-		pt := s.cfg.GetPathTrust()
 		for hi, ev := range evidence {
 			if hi >= len(req.Prefixes) {
 				break
@@ -267,7 +267,6 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	elapsed := time.Since(start).Milliseconds()
-	statsMinBytes := s.cfg.GetPathTrust()
 	resp := pathInspectResponse{
 		Candidates: candidates,
 		Stale:      stale,
@@ -279,7 +278,7 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 			"beamWidth":              beamWidth,
 			"expansionsRun":          len(req.Prefixes) * beamWidth,
 			"elapsedMs":              elapsed,
-			"minHashBytesForMapping": statsMinBytes.MinHashBytesOrDefault(),
+			"minHashBytesForMapping": pt.MinHashBytesOrDefault(),
 		},
 	}
 
