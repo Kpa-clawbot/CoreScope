@@ -49,6 +49,24 @@ jobs:
             cmd/server/go.sum
             cmd/ingestor/go.sum
 
+      - name: Enforce gofmt + go vet (issue #1859)
+        run: |
+          set -e
+          # gofmt: every tracked *.go file except the misnamed Dockerfile.go,
+          # which is a Dockerfile (FROM ...) that gofmt cannot parse.
+          unformatted=$(gofmt -l $(git ls-files '*.go' | grep -vi 'Dockerfile.go'))
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt required on these files:"
+            echo "$unformatted"
+            exit 1
+          fi
+          echo "gofmt: clean"
+          # go vet: multi-module repo, so vet each module in turn.
+          for mod in $(git ls-files '*go.mod' | sed 's#/go.mod##'); do
+            echo "== go vet $mod =="
+            ( cd "$mod" && go vet ./... )
+          done
+
       - name: Build and test Go server (with coverage)
         run: |
           set -e -o pipefail
