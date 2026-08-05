@@ -41,7 +41,7 @@ func ngTestStore(nodes []nodeInfo, packets []*StoreTx) *PacketStore {
 	return ps
 }
 
-func ngIntPtr(v int) *int         { return &v }
+func ngIntPtr(v int) *int           { return &v }
 func ngFloatPtr(v float64) *float64 { return &v }
 
 func ngMakeTx(id int, payloadType int, decodedJSON string, obs []*StoreObs) *StoreTx {

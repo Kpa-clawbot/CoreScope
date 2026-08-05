@@ -85,17 +85,17 @@ type AdvertFlags struct {
 
 // Payload is a generic decoded payload. Fields are populated depending on type.
 type Payload struct {
-	Type            string       `json:"type"`
-	DestHash        string       `json:"destHash,omitempty"`
-	SrcHash         string       `json:"srcHash,omitempty"`
-	MAC             string       `json:"mac,omitempty"`
-	EncryptedData   string       `json:"encryptedData,omitempty"`
-	ExtraHash       string       `json:"extraHash,omitempty"`
+	Type          string `json:"type"`
+	DestHash      string `json:"destHash,omitempty"`
+	SrcHash       string `json:"srcHash,omitempty"`
+	MAC           string `json:"mac,omitempty"`
+	EncryptedData string `json:"encryptedData,omitempty"`
+	ExtraHash     string `json:"extraHash,omitempty"`
 	// Extended ACK fields per firmware 1.16.0 (issue #1610) — populated by
 	// decodeAck once the server-side re-decoder is upgraded (issue #1694).
-	AckLen     *int `json:"ackLen,omitempty"`
-	AckAttempt *int `json:"ackAttempt,omitempty"`
-	AckRand    *int `json:"ackRand,omitempty"`
+	AckLen          *int         `json:"ackLen,omitempty"`
+	AckAttempt      *int         `json:"ackAttempt,omitempty"`
+	AckRand         *int         `json:"ackRand,omitempty"`
 	PubKey          string       `json:"pubKey,omitempty"`
 	Timestamp       uint32       `json:"timestamp,omitempty"`
 	TimestampISO    string       `json:"timestampISO,omitempty"`
@@ -134,7 +134,7 @@ type Payload struct {
 	InnerAckLen     *int   `json:"innerAckLen,omitempty"`
 	InnerAckAttempt *int   `json:"innerAckAttempt,omitempty"`
 	InnerAckRand    *int   `json:"innerAckRand,omitempty"`
-	InnerPayload  string `json:"innerPayload,omitempty"`
+	InnerPayload    string `json:"innerPayload,omitempty"`
 	// CONTROL (PAYLOAD_TYPE_CONTROL=0x0B) byte0 flags, per
 	// firmware/src/Mesh.cpp:69 — high-bit = zero-hop direct subset.
 	CtrlFlags   string `json:"ctrlFlags,omitempty"`
@@ -331,10 +331,10 @@ func decodeAdvert(buf []byte, validateSignatures bool) Payload {
 			off += 8
 		}
 		if hasFeat1 && len(appdata) >= off+2 {
-			off += 2  // skip feat1 bytes (reserved for future use)
+			off += 2 // skip feat1 bytes (reserved for future use)
 		}
 		if hasFeat2 && len(appdata) >= off+2 {
-			off += 2  // skip feat2 bytes (reserved for future use)
+			off += 2 // skip feat2 bytes (reserved for future use)
 		}
 		if p.Flags.HasName {
 			name := string(appdata[off:])
@@ -801,7 +801,9 @@ func sanitizeName(s string) string {
 
 // advertRole returns a stable role label for an advert. Follows firmware
 // ADV_TYPE_* constants in firmware/src/helpers/AdvertDataHelpers.h:7-12:
-//   0 NONE, 1 CHAT, 2 REPEATER, 3 ROOM, 4 SENSOR, 5-15 FUTURE.
+//
+//	0 NONE, 1 CHAT, 2 REPEATER, 3 ROOM, 4 SENSOR, 5-15 FUTURE.
+//
 // Previously this coerced both 0 (NONE) and 5-15 (FUTURE) to "companion",
 // silently relabelling unknown/reserved types — see issue #1279 P1 #3.
 func advertRole(f *AdvertFlags) string {

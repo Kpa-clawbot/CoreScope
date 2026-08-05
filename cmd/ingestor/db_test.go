@@ -1939,12 +1939,12 @@ func TestExtractObserverMetaNewFields(t *testing.T) {
 	msg := map[string]interface{}{
 		"model": "L1",
 		"stats": map[string]interface{}{
-			"noise_floor":  -112.5,
-			"battery_mv":   3720.0,
-			"uptime_secs":  86400.0,
-			"tx_air_secs":  100.0,
-			"rx_air_secs":  500.0,
-			"recv_errors":  3.0,
+			"noise_floor": -112.5,
+			"battery_mv":  3720.0,
+			"uptime_secs": 86400.0,
+			"tx_air_secs": 100.0,
+			"rx_air_secs": 500.0,
+			"recv_errors": 3.0,
 		},
 	}
 	meta := extractObserverMeta(msg)
@@ -1965,7 +1965,7 @@ func TestExtractObserverMetaNewFields(t *testing.T) {
 // TestInsertObservationSNRFillIn verifies that when the same observation is
 // received twice — first without SNR, then with SNR — the SNR is filled in
 // rather than silently discarded. The unique dedup index is
-// (transmission_id, observer_idx, COALESCE(path_json, '')); observer_idx must
+// (transmission_id, observer_idx, COALESCE(path_json, ”)); observer_idx must
 // be non-NULL for the conflict to fire (SQLite treats NULL != NULL).
 func TestInsertObservationSNRFillIn(t *testing.T) {
 	s, err := OpenStore(tempDBPath(t))
@@ -2068,9 +2068,9 @@ func TestPerObservationRawHex(t *testing.T) {
 
 	// First observation from observer A
 	pdA := &PacketData{
-		RawHex:    rawA,
-		Hash:      hash,
-		Timestamp: "2026-04-21T10:00:00Z",
+		RawHex:     rawA,
+		Hash:       hash,
+		Timestamp:  "2026-04-21T10:00:00Z",
 		ObserverID: "obs-A",
 		Direction:  &dir,
 		PathJSON:   "[]",
@@ -2085,9 +2085,9 @@ func TestPerObservationRawHex(t *testing.T) {
 
 	// Second observation from observer B (same hash, different raw bytes)
 	pdB := &PacketData{
-		RawHex:    rawB,
-		Hash:      hash,
-		Timestamp: "2026-04-21T10:00:01Z",
+		RawHex:     rawB,
+		Hash:       hash,
+		Timestamp:  "2026-04-21T10:00:01Z",
 		ObserverID: "obs-B",
 		Direction:  &dir,
 		PathJSON:   `["aabb"]`,
@@ -2532,7 +2532,6 @@ func TestBuildPacketDataRegionFallsBackToTopic(t *testing.T) {
 		t.Fatalf("expected region SJC from topic, got %q", pkt.Region)
 	}
 }
-
 
 // TestBackfillPathJSONAsync verifies that the path_json backfill does NOT block
 // OpenStore from returning. MQTT connect happens immediately after OpenStore;

@@ -109,9 +109,9 @@ type mockMessage struct {
 	payload []byte
 }
 
-func (m *mockMessage) Duplicate() bool  { return false }
-func (m *mockMessage) Qos() byte        { return 0 }
-func (m *mockMessage) Retained() bool   { return false }
+func (m *mockMessage) Duplicate() bool   { return false }
+func (m *mockMessage) Qos() byte         { return 0 }
+func (m *mockMessage) Retained() bool    { return false }
 func (m *mockMessage) Topic() string     { return m.topic }
 func (m *mockMessage) MessageID() uint16 { return 0 }
 func (m *mockMessage) Payload() []byte   { return m.payload }
@@ -598,10 +598,10 @@ func TestLoadChannelKeysHashChannelsNormalization(t *testing.T) {
 
 	cfg := &Config{
 		HashChannels: []string{
-			"NoPound",       // should become #NoPound
-			"#HasPound",     // stays #HasPound
-			"  Spaced  ",   // trimmed → #Spaced
-			"",              // skipped
+			"NoPound",    // should become #NoPound
+			"#HasPound",  // stays #HasPound
+			"  Spaced  ", // trimmed → #Spaced
+			"",           // skipped
 		},
 	}
 
