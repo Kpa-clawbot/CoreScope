@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/meshcore-analyzer/admindb"
 	"github.com/meshcore-analyzer/dbschema"
 )
 
@@ -209,6 +210,24 @@ func main() {
 		dbCloseOnce.Do(func() { err = database.Close() })
 		return err
 	}
+
+	// Open (or create) the admin accounts/sessions store. This is a
+	// separate, server-owned database — never meshcore.db — so it does
+	// not touch the read-only invariant enforced by
+	// readonly_invariant_test.go.
+	//
+	// Anchored to resolvedDB's directory, NOT configDir: in production
+	// (docker/supervisord-go.conf) -config-dir is /app (the container's
+	// ephemeral writable layer) while -db is explicitly /app/data/meshcore.db
+	// (the persistent bind-mounted volume). admin.db must live alongside
+	// meshcore.db on that volume or admin accounts vanish on every
+	// container rebuild/recreation.
+	adminDBPath := filepath.Join(filepath.Dir(resolvedDB), "admin.db")
+	adminStore, err := admindb.Open(adminDBPath)
+	if err != nil {
+		log.Fatalf("[admin] failed to open %s: %v", adminDBPath, err)
+	}
+	defer adminStore.Close()
 	defer dbClose()
 
 	// Verify DB has expected tables
@@ -393,6 +412,7 @@ func main() {
 	srv := NewServer(database, cfg, hub)
 	srv.configDir = configDir
 	srv.store = store
+	srv.admin = adminStore
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
 
@@ -401,6 +421,15 @@ func main() {
 
 	// Static files + SPA fallback
 	absPublic, _ := filepath.Abs(publicDir)
+
+	// Pretty URL for the admin login page (public/admin/login.html is a
+	// real file, so /admin/login.html already works via the file server
+	// below; /admin/ itself resolves to public/admin/index.html for free
+	// via the same mechanism — only the extension-less /admin/login needs
+	// an explicit alias).
+	router.HandleFunc("/admin/login", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, filepath.Join(absPublic, "admin", "login.html"))
+	}).Methods("GET")
 	if _, err := os.Stat(absPublic); err == nil {
 		fs := http.FileServer(http.Dir(absPublic))
 		router.PathPrefix("/").Handler(wsOrStatic(hub, spaHandler(absPublic, fs)))

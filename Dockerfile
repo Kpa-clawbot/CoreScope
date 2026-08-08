@@ -24,6 +24,7 @@ COPY internal/prunequeue/ ../../internal/prunequeue/
 COPY internal/perfio/ ../../internal/perfio/
 COPY internal/mbcapqueue/ ../../internal/mbcapqueue/
 COPY internal/lora/ ../../internal/lora/
+COPY internal/admindb/ ../../internal/admindb/
 RUN go mod download
 COPY cmd/server/ ./
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
@@ -54,6 +55,17 @@ COPY cmd/decrypt/ ./
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -ldflags="-s -w" -o /corescope-decrypt .
 
+# Build admin CLI: bootstraps the first super-admin account (there is no
+# public registration flow) — run via `docker exec -it <container>
+# /app/corescope-admin -db /app/data/admin.db create-super-admin -username <name>`.
+WORKDIR /build/admin
+COPY cmd/admin/go.mod cmd/admin/go.sum ./
+COPY internal/admindb/ ../../internal/admindb/
+RUN go mod download
+COPY cmd/admin/ ./
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -ldflags="-s -w" -o /corescope-admin .
+
 # Runtime image
 FROM alpine:3.20
 
@@ -62,7 +74,7 @@ RUN apk add --no-cache mosquitto mosquitto-clients supervisor caddy wget sqlite
 WORKDIR /app
 
 # Go binaries
-COPY --from=builder /corescope-server /corescope-ingestor /corescope-decrypt /app/
+COPY --from=builder /corescope-server /corescope-ingestor /corescope-decrypt /corescope-admin /app/
 
 # Frontend assets + config
 COPY public/ ./public/

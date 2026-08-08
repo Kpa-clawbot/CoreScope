@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/meshcore-analyzer/admindb"
 	"github.com/meshcore-analyzer/packetpath"
 	"github.com/meshcore-analyzer/prunequeue"
 )
@@ -38,6 +39,18 @@ type Server struct {
 	version   string
 	commit    string
 	buildTime string
+
+	// admin is the read-write store for admin accounts/sessions (admin.db).
+	// This is the server's own database — separate from the read-only
+	// meshcore.db — so it does not affect the read-only invariant enforced
+	// by readonly_invariant_test.go.
+	admin *admindb.Store
+
+	// In-memory per-username login failure tracking for the admin login
+	// endpoint (see admin_auth.go). Not persisted, not shared across
+	// replicas — best-effort brute-force mitigation only.
+	loginAttemptsMu sync.Mutex
+	loginAttempts   map[string]*loginAttemptState
 
 	// Cached runtime.MemStats to avoid stop-the-world pauses on every health check
 	memStatsMu       sync.Mutex
@@ -248,6 +261,16 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.Handle("/api/debug/affinity", s.requireAPIKey(http.HandlerFunc(s.handleDebugAffinity))).Methods("GET")
 	r.Handle("/api/dropped-packets", s.requireAPIKey(http.HandlerFunc(s.handleDroppedPackets))).Methods("GET")
 	r.Handle("/api/backup", s.requireAPIKey(http.HandlerFunc(s.handleBackup))).Methods("GET")
+
+	// Admin account login/session + account management. Unlike the
+	// requireAPIKey-gated /api/admin/* endpoints above (a shared static
+	// key for ops tooling), these are per-person accounts authenticated
+	// via a session cookie — see admin_auth.go.
+	r.HandleFunc("/api/admin/login", s.handleAdminLogin).Methods("POST")
+	r.Handle("/api/admin/logout", s.requireAdmin(http.HandlerFunc(s.handleAdminLogout))).Methods("POST")
+	r.Handle("/api/admin/me", s.requireAdmin(http.HandlerFunc(s.handleAdminMe))).Methods("GET")
+	r.Handle("/api/admin/admins", s.requireAdmin(http.HandlerFunc(s.handleListAdmins))).Methods("GET")
+	r.Handle("/api/admin/admins", s.requireSuperAdmin(http.HandlerFunc(s.handleCreateAdmin))).Methods("POST")
 
 	// Packet endpoints
 	r.HandleFunc("/api/packets/observations", s.handleBatchObservations).Methods("POST")
