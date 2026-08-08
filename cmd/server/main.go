@@ -57,6 +57,33 @@ func resolveBuildTime() string {
 	return "unknown"
 }
 
+// waitForObservationsTable blocks (bounded) until dbPath's observations
+// table exists — see the call site in main() for why this matters. A
+// missing file (DB not created yet) or a missing table both just cause
+// another retry; this is not a fatal condition until maxWait elapses.
+func waitForObservationsTable(dbPath string) {
+	const (
+		maxWait  = 30 * time.Second
+		interval = 250 * time.Millisecond
+	)
+	deadline := time.Now().Add(maxWait)
+	for {
+		if conn, err := sql.Open("sqlite", "file:"+dbPath+"?mode=ro"); err == nil {
+			var name string
+			scanErr := conn.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='observations'`).Scan(&name)
+			conn.Close()
+			if scanErr == nil {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			log.Printf("[db] warning: observations table not found in %s after %s — proceeding anyway; if queries start failing with \"no such column\", restart the server once the ingestor has finished creating the schema", dbPath, maxWait)
+			return
+		}
+		time.Sleep(interval)
+	}
+}
+
 func main() {
 	// pprof profiling — off by default, enable with ENABLE_PPROF=true
 	if os.Getenv("ENABLE_PPROF") == "true" {
@@ -73,11 +100,11 @@ func main() {
 	}
 
 	var (
-		configDir  string
-		port       int
-		dbPath     string
-		publicDir  string
-		pollMs     int
+		configDir string
+		port      int
+		dbPath    string
+		publicDir string
+		pollMs    int
 	)
 
 	flag.StringVar(&configDir, "config-dir", ".", "Directory containing config.json")
@@ -155,6 +182,21 @@ func main() {
 			}
 		}
 	}
+
+	// Close the boot race between cmd/ingestor and cmd/server: they start
+	// concurrently in the same container (docker/supervisord-go.conf has
+	// no ordering between them), so on a brand-new deployment there is no
+	// meshcore.db yet — the ingestor creates it, including the
+	// observations table. If the server opened its read-only handle
+	// first, db.go's detectSchema (a one-time PRAGMA probe run inside
+	// OpenDB) would latch the wrong v2/v3 schema shape for the server's
+	// entire process lifetime, and every subsequent query would fail with
+	// "no such column: o.observer_id" forever — even after the ingestor
+	// finishes creating the real schema moments later. Only this
+	// production boot path waits; OpenDB itself stays an unconditional
+	// single probe so unit tests that open minimal fixture DBs (some
+	// deliberately without an observations table) aren't slowed down.
+	waitForObservationsTable(resolvedDB)
 
 	// Open database
 	database, err := OpenDB(resolvedDB)
