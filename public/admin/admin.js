@@ -96,10 +96,19 @@
       setupAddAdmin(me.role === 'super_admin');
       return loadAdmins();
     })
+    .then(function () {
+      // Reveal only once the page has something real to show — body starts
+      // hidden (see index.html) so a logged-out visitor never sees a flash
+      // of the dashboard before fetchJSON's 401 handler redirects them.
+      document.body.classList.add('authed');
+    })
     .catch(function (err) {
-      // fetchJSON already redirects on 401; anything else, surface it.
+      // fetchJSON already redirects on 401 without ever revealing the
+      // page; anything else, surface it and reveal so the user isn't
+      // left staring at a blank screen.
       if (err.message !== 'not logged in') {
         console.error('[admin]', err);
+        document.body.classList.add('authed');
       }
     });
 })();
