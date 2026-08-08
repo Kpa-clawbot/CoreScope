@@ -13,8 +13,22 @@
     return div.innerHTML;
   }
 
+  function getCookie(name) {
+    var match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+    return match ? decodeURIComponent(match[1]) : '';
+  }
+
+  // Double-submit CSRF: the server sets a non-HttpOnly cookie at login;
+  // we echo its value back as a header on every request. A cross-site
+  // page can't read the cookie (same-origin policy) so can't forge this.
+  function csrfHeaders() {
+    return { 'X-CSRF-Token': getCookie('corescope_admin_csrf') };
+  }
+
   function fetchJSON(url, opts) {
-    return fetch(url, Object.assign({ credentials: 'same-origin' }, opts)).then(function (res) {
+    opts = opts || {};
+    var headers = Object.assign({}, opts.headers, csrfHeaders());
+    return fetch(url, Object.assign({ credentials: 'same-origin' }, opts, { headers: headers })).then(function (res) {
       if (res.status === 401) {
         window.location.href = '/admin/login';
         return Promise.reject(new Error('not logged in'));
@@ -32,7 +46,7 @@
     logout.className = 'link';
     logout.textContent = 'Log out';
     logout.addEventListener('click', function () {
-      fetch('/api/admin/logout', { method: 'POST', credentials: 'same-origin' }).then(function () {
+      fetch('/api/admin/logout', { method: 'POST', credentials: 'same-origin', headers: csrfHeaders() }).then(function () {
         window.location.href = '/admin/login';
       });
     });

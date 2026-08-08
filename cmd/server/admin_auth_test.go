@@ -41,6 +41,17 @@ func sessionCookie(t *testing.T, w *httptest.ResponseRecorder) *http.Cookie {
 	return nil
 }
 
+func csrfCookie(t *testing.T, w *httptest.ResponseRecorder) *http.Cookie {
+	t.Helper()
+	for _, c := range w.Result().Cookies() {
+		if c.Name == adminCSRFCookieName {
+			return c
+		}
+	}
+	t.Fatal("no CSRF cookie set")
+	return nil
+}
+
 func TestAdminLoginSuccess(t *testing.T) {
 	srv := newTestAdminServer(t)
 	if _, err := srv.admin.CreateAdmin("alice", "correct horse battery staple", admindb.RoleSuperAdmin, nil); err != nil {
@@ -292,5 +303,160 @@ func TestListAdminsRequiresAuth(t *testing.T) {
 	}
 	if len(resp["admins"]) != 1 {
 		t.Fatalf("expected 1 admin, got %d", len(resp["admins"]))
+	}
+}
+
+func TestAdminLoginSetsCSRFCookie(t *testing.T) {
+	srv := newTestAdminServer(t)
+	if _, err := srv.admin.CreateAdmin("nora", "password12345", admindb.RoleAdmin, nil); err != nil {
+		t.Fatalf("CreateAdmin: %v", err)
+	}
+	w := doLogin(t, srv, "nora", "password12345")
+	c := csrfCookie(t, w)
+	if c.Value == "" {
+		t.Fatal("expected non-empty CSRF token")
+	}
+	if c.HttpOnly {
+		t.Error("CSRF cookie must NOT be HttpOnly — admin.js needs to read it")
+	}
+	if c.SameSite != http.SameSiteStrictMode {
+		t.Errorf("expected SameSite=Strict, got %v", c.SameSite)
+	}
+}
+
+func TestAdminLogoutClearsCSRFCookie(t *testing.T) {
+	srv := newTestAdminServer(t)
+	if _, err := srv.admin.CreateAdmin("oscar", "password12345", admindb.RoleAdmin, nil); err != nil {
+		t.Fatalf("CreateAdmin: %v", err)
+	}
+	loginResp := doLogin(t, srv, "oscar", "password12345")
+	sc := sessionCookie(t, loginResp)
+	cc := csrfCookie(t, loginResp)
+
+	req := httptest.NewRequest("POST", "/api/admin/logout", nil)
+	req.AddCookie(sc)
+	req.Header.Set(adminCSRFHeaderName, cc.Value)
+	req.AddCookie(cc)
+	w := httptest.NewRecorder()
+	srv.requireAdmin(srv.requireCSRF(http.HandlerFunc(srv.handleAdminLogout))).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	cleared := csrfCookie(t, w)
+	if cleared.Value != "" || cleared.MaxAge >= 0 {
+		t.Fatalf("expected CSRF cookie to be cleared, got %+v", cleared)
+	}
+}
+
+func TestRequireCSRFMissingCookie(t *testing.T) {
+	srv := newTestAdminServer(t)
+	if _, err := srv.admin.CreateAdmin("pat", "password12345", admindb.RoleSuperAdmin, nil); err != nil {
+		t.Fatalf("CreateAdmin: %v", err)
+	}
+	sc := sessionCookie(t, doLogin(t, srv, "pat", "password12345"))
+
+	handler := srv.requireSuperAdmin(srv.requireCSRF(http.HandlerFunc(srv.handleCreateAdmin)))
+	body, _ := json.Marshal(createAdminRequest{Username: "newguy", Password: "password12345", Role: "admin"})
+	req := httptest.NewRequest("POST", "/api/admin/admins", bytes.NewReader(body))
+	req.AddCookie(sc)
+	req.Header.Set(adminCSRFHeaderName, "some-token-with-no-matching-cookie")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestRequireCSRFMissingHeader(t *testing.T) {
+	srv := newTestAdminServer(t)
+	if _, err := srv.admin.CreateAdmin("quinn", "password12345", admindb.RoleSuperAdmin, nil); err != nil {
+		t.Fatalf("CreateAdmin: %v", err)
+	}
+	loginResp := doLogin(t, srv, "quinn", "password12345")
+	sc := sessionCookie(t, loginResp)
+	cc := csrfCookie(t, loginResp)
+
+	handler := srv.requireSuperAdmin(srv.requireCSRF(http.HandlerFunc(srv.handleCreateAdmin)))
+	body, _ := json.Marshal(createAdminRequest{Username: "newguy", Password: "password12345", Role: "admin"})
+	req := httptest.NewRequest("POST", "/api/admin/admins", bytes.NewReader(body))
+	req.AddCookie(sc)
+	req.AddCookie(cc)
+	// No X-CSRF-Token header set — this is exactly what an attacker's
+	// cross-site request would look like: it can't read cc.Value to
+	// forge the header.
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestRequireCSRFMismatchedToken(t *testing.T) {
+	srv := newTestAdminServer(t)
+	if _, err := srv.admin.CreateAdmin("river", "password12345", admindb.RoleSuperAdmin, nil); err != nil {
+		t.Fatalf("CreateAdmin: %v", err)
+	}
+	loginResp := doLogin(t, srv, "river", "password12345")
+	sc := sessionCookie(t, loginResp)
+	cc := csrfCookie(t, loginResp)
+
+	handler := srv.requireSuperAdmin(srv.requireCSRF(http.HandlerFunc(srv.handleCreateAdmin)))
+	body, _ := json.Marshal(createAdminRequest{Username: "newguy", Password: "password12345", Role: "admin"})
+	req := httptest.NewRequest("POST", "/api/admin/admins", bytes.NewReader(body))
+	req.AddCookie(sc)
+	req.AddCookie(cc)
+	req.Header.Set(adminCSRFHeaderName, cc.Value+"-tampered")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestRequireCSRFValidTokenPasses(t *testing.T) {
+	srv := newTestAdminServer(t)
+	super, err := srv.admin.CreateAdmin("sam", "password12345", admindb.RoleSuperAdmin, nil)
+	if err != nil {
+		t.Fatalf("CreateAdmin: %v", err)
+	}
+	loginResp := doLogin(t, srv, "sam", "password12345")
+	sc := sessionCookie(t, loginResp)
+	cc := csrfCookie(t, loginResp)
+
+	handler := srv.requireSuperAdmin(srv.requireCSRF(http.HandlerFunc(srv.handleCreateAdmin)))
+	body, _ := json.Marshal(createAdminRequest{Username: "newguy", Password: "password12345", Role: "admin"})
+	req := httptest.NewRequest("POST", "/api/admin/admins", bytes.NewReader(body))
+	req.AddCookie(sc)
+	req.AddCookie(cc)
+	req.Header.Set(adminCSRFHeaderName, cc.Value)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var created adminView
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if created.CreatedBy == nil || *created.CreatedBy != super.ID {
+		t.Fatalf("expected createdBy=%d, got %+v", super.ID, created.CreatedBy)
+	}
+}
+
+func TestRequireCSRFRejectsUnauthenticatedEvenWithValidToken(t *testing.T) {
+	srv := newTestAdminServer(t)
+	// requireSuperAdmin (session check) must run before requireCSRF gets
+	// a chance to matter — a stolen/guessed CSRF token alone must not be
+	// enough without a valid session.
+	handler := srv.requireSuperAdmin(srv.requireCSRF(http.HandlerFunc(srv.handleCreateAdmin)))
+	body, _ := json.Marshal(createAdminRequest{Username: "newguy", Password: "password12345", Role: "admin"})
+	req := httptest.NewRequest("POST", "/api/admin/admins", bytes.NewReader(body))
+	req.Header.Set(adminCSRFHeaderName, "whatever")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 (no session), got %d: %s", w.Code, w.Body.String())
 	}
 }

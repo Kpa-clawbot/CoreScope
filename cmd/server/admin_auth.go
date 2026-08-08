@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"log"
@@ -17,6 +19,22 @@ import (
 // SHA-256 hash stored server-side (admindb.ValidateSession) — losing
 // admin.db does not hand out usable session tokens.
 const adminSessionCookieName = "corescope_admin_session"
+
+// adminCSRFCookieName is a deliberately NON-HttpOnly cookie set
+// alongside the session cookie at login. It carries a random token
+// that admin.js reads and echoes back as the X-CSRF-Token header on
+// every state-changing (POST) request — the "double-submit cookie"
+// pattern. A cross-site page can trigger a browser into sending our
+// session cookie (that's the attack CSRF defends against), but it
+// cannot READ this cookie's value (same-origin policy) and so cannot
+// construct a matching header. This is defense-in-depth on top of the
+// session cookie's SameSite=Strict, which already blocks the cookie
+// from being sent on cross-site requests in modern browsers.
+const adminCSRFCookieName = "corescope_admin_csrf"
+
+// adminCSRFHeaderName is the header admin.js must echo the CSRF cookie
+// value back in for state-changing requests.
+const adminCSRFHeaderName = "X-CSRF-Token"
 
 // Best-effort brute-force mitigation: lock a username out for
 // loginLockoutDuration after loginMaxFailures consecutive failed
@@ -112,6 +130,42 @@ func clearAdminSessionCookie(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// generateCSRFToken returns a random 32-byte token, base64url-encoded.
+// Unlike the session token, this is never stored server-side — the
+// double-submit pattern validates it by comparing the cookie value
+// against the request header on each state-changing request.
+func generateCSRFToken() (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+func setAdminCSRFCookie(w http.ResponseWriter, r *http.Request, token string, expiresAt time.Time) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     adminCSRFCookieName,
+		Value:    token,
+		Path:     "/",
+		Expires:  expiresAt,
+		HttpOnly: false, // admin.js must be able to read this
+		Secure:   isRequestSecure(r),
+		SameSite: http.SameSiteStrictMode,
+	})
+}
+
+func clearAdminCSRFCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     adminCSRFCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: false,
+		Secure:   isRequestSecure(r),
+		SameSite: http.SameSiteStrictMode,
+	})
+}
+
 // --- Middleware ---
 
 // requireAdmin validates the admin session cookie and, on success,
@@ -150,6 +204,28 @@ func (s *Server) requireSuperAdmin(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	}))
+}
+
+// requireCSRF enforces the double-submit cookie check on state-changing
+// admin requests: the X-CSRF-Token header must be present and match the
+// corescope_admin_csrf cookie set at login. Only meaningful once a
+// session exists, so this wraps handlers that already sit behind
+// requireAdmin/requireSuperAdmin — it does not apply to POST
+// /api/admin/login itself (no CSRF cookie exists yet at that point).
+func (s *Server) requireCSRF(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cookie, err := r.Cookie(adminCSRFCookieName)
+		if err != nil || cookie.Value == "" {
+			writeError(w, http.StatusForbidden, "missing CSRF token")
+			return
+		}
+		header := r.Header.Get(adminCSRFHeaderName)
+		if header == "" || !constantTimeEqual(header, cookie.Value) {
+			writeError(w, http.StatusForbidden, "invalid CSRF token")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // --- Wire types ---
@@ -213,6 +289,15 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setAdminSessionCookie(w, r, token, expiresAt)
+
+	csrfToken, err := generateCSRFToken()
+	if err != nil {
+		log.Printf("[admin-auth] generateCSRFToken error: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to create session")
+		return
+	}
+	setAdminCSRFCookie(w, r, csrfToken, expiresAt)
+
 	writeJSON(w, toAdminView(a))
 }
 
@@ -223,6 +308,7 @@ func (s *Server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	clearAdminSessionCookie(w, r)
+	clearAdminCSRFCookie(w, r)
 	writeJSON(w, map[string]bool{"ok": true})
 }
 

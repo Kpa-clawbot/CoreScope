@@ -267,10 +267,10 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	// key for ops tooling), these are per-person accounts authenticated
 	// via a session cookie — see admin_auth.go.
 	r.HandleFunc("/api/admin/login", s.handleAdminLogin).Methods("POST")
-	r.Handle("/api/admin/logout", s.requireAdmin(http.HandlerFunc(s.handleAdminLogout))).Methods("POST")
+	r.Handle("/api/admin/logout", s.requireAdmin(s.requireCSRF(http.HandlerFunc(s.handleAdminLogout)))).Methods("POST")
 	r.Handle("/api/admin/me", s.requireAdmin(http.HandlerFunc(s.handleAdminMe))).Methods("GET")
 	r.Handle("/api/admin/admins", s.requireAdmin(http.HandlerFunc(s.handleListAdmins))).Methods("GET")
-	r.Handle("/api/admin/admins", s.requireSuperAdmin(http.HandlerFunc(s.handleCreateAdmin))).Methods("POST")
+	r.Handle("/api/admin/admins", s.requireSuperAdmin(s.requireCSRF(http.HandlerFunc(s.handleCreateAdmin)))).Methods("POST")
 
 	// Packet endpoints
 	r.HandleFunc("/api/packets/observations", s.handleBatchObservations).Methods("POST")
