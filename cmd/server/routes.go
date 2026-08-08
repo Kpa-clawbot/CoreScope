@@ -272,6 +272,13 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.Handle("/api/admin/admins", s.requireAdmin(http.HandlerFunc(s.handleListAdmins))).Methods("GET")
 	r.Handle("/api/admin/admins", s.requireSuperAdmin(s.requireCSRF(http.HandlerFunc(s.handleCreateAdmin)))).Methods("POST")
 
+	// Infrastructure-node management: both admin and super_admin can do
+	// this (per the spec, super_admin's only extra capability is
+	// creating admins) — session-cookie + CSRF auth like the routes
+	// above, not requireAPIKey. See admin_infra.go.
+	r.Handle("/api/admin/nodes/infrastructure", s.requireAdmin(s.requireCSRF(http.HandlerFunc(s.handleSetInfrastructureFlag)))).Methods("POST")
+	r.Handle("/api/admin/nodes/infrastructure/status", s.requireAdmin(http.HandlerFunc(s.handleInfrastructureFlagStatus))).Methods("GET")
+
 	// Packet endpoints
 	r.HandleFunc("/api/packets/observations", s.handleBatchObservations).Methods("POST")
 	r.HandleFunc("/api/packets/timestamps", s.handlePacketTimestamps).Methods("GET")

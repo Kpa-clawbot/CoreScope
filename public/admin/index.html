@@ -26,6 +26,8 @@
       border-bottom: 1px solid #262626;
     }
     header h1 { font-size: 16px; font-weight: 600; margin: 0; }
+    header nav a { color: #7aa5e8; font-size: 13px; text-decoration: none; margin-right: 16px; }
+    header nav a:hover { text-decoration: underline; }
     #who { font-size: 13px; color: #999; }
     #who strong { color: #e8e8e8; }
     button.link {
@@ -67,6 +69,10 @@
 <body>
   <header>
     <h1>CoreScope Admin</h1>
+    <nav>
+      <a href="/admin/">Admins</a>
+      <a href="/admin/infrastructure">Infrastructure Nodes</a>
+    </nav>
     <div id="who"></div>
   </header>
   <main>

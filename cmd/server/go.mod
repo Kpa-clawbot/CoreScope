@@ -61,3 +61,7 @@ replace github.com/meshcore-analyzer/mbcapqueue => ../../internal/mbcapqueue
 require github.com/meshcore-analyzer/admindb v0.0.0
 
 replace github.com/meshcore-analyzer/admindb => ../../internal/admindb
+
+require github.com/meshcore-analyzer/infraqueue v0.0.0
+
+replace github.com/meshcore-analyzer/infraqueue => ../../internal/infraqueue

@@ -62,6 +62,12 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/admin/admins":  {Summary: "List admin accounts", Tag: "admin", Auth: true},
 		"POST /api/admin/admins": {Summary: "Create an admin account", Description: "Requires the super_admin role — the only capability that differs between admin and super_admin.", Tag: "admin", Auth: true},
 
+		// Infrastructure-node management (admin panel). The server opens
+		// SQLite read-only, so these enqueue a request for the ingestor
+		// (see internal/infraqueue) rather than writing directly.
+		"POST /api/admin/nodes/infrastructure":       {Summary: "Toggle a node's infrastructure flag", Description: "Enqueues a request for the ingestor to set/clear nodes.infrastructure by exact public key. Returns 202 with a requestId to poll. Available to any logged-in admin (not just super_admin).", Tag: "admin", Auth: true},
+		"GET /api/admin/nodes/infrastructure/status": {Summary: "Poll an infrastructure-toggle request", Description: "Returns pending/done/error for a previously-enqueued infrastructure-flag request.", Tag: "admin", Auth: true},
+
 		// Packets
 		"GET /api/packets": {Summary: "List packets", Description: "Returns decoded packets with filtering, sorting, and pagination.", Tag: "packets",
 			QueryParams: []paramMeta{

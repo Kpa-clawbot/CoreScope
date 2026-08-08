@@ -430,6 +430,9 @@ func main() {
 	router.HandleFunc("/admin/login", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, filepath.Join(absPublic, "admin", "login.html"))
 	}).Methods("GET")
+	router.HandleFunc("/admin/infrastructure", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, filepath.Join(absPublic, "admin", "infrastructure.html"))
+	}).Methods("GET")
 	if _, err := os.Stat(absPublic); err == nil {
 		fs := http.FileServer(http.Dir(absPublic))
 		router.PathPrefix("/").Handler(wsOrStatic(hub, spaHandler(absPublic, fs)))

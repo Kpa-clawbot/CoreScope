@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" href="../favicon.ico" type="image/x-icon">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Infrastructure Nodes — CoreScope Admin</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #0a0a0a;
+      color: #e8e8e8;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      visibility: hidden;
+    }
+    body.authed { visibility: visible; }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 24px;
+      border-bottom: 1px solid #262626;
+    }
+    header h1 { font-size: 16px; font-weight: 600; margin: 0; }
+    header nav a { color: #7aa5e8; font-size: 13px; text-decoration: none; margin-right: 16px; }
+    header nav a:hover { text-decoration: underline; }
+    #who { font-size: 13px; color: #999; }
+    #who strong { color: #e8e8e8; }
+    button.link {
+      background: none;
+      border: none;
+      color: #7aa5e8;
+      font-size: 13px;
+      cursor: pointer;
+      padding: 0;
+      margin-left: 12px;
+    }
+    main { max-width: 800px; margin: 0 auto; padding: 24px; }
+    section { margin-bottom: 32px; }
+    h2 { font-size: 14px; color: #999; text-transform: uppercase; letter-spacing: 0.04em; margin: 0 0 12px; }
+    .search-row { display: flex; gap: 8px; margin-bottom: 16px; }
+    .search-row input {
+      flex: 1; padding: 8px 10px; background: #1c1c1c; border: 1px solid #333;
+      border-radius: 6px; color: #e8e8e8; font-size: 14px;
+    }
+    .search-row button {
+      padding: 8px 16px; background: #3b6fc9; border: none; border-radius: 6px;
+      color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #1e1e1e; }
+    th { color: #888; font-weight: 500; font-size: 12px; text-transform: uppercase; }
+    td.pubkey { font-family: ui-monospace, monospace; font-size: 12px; color: #999; }
+    .empty-row td { color: #666; font-style: italic; }
+    button.toggle {
+      padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600;
+      cursor: pointer; border: 1px solid #333;
+    }
+    button.toggle.on { background: #2a1e0a; color: #e8b84a; border-color: #5a4a1a; }
+    button.toggle.off { background: #1c1c1c; color: #9ac0e8; border-color: #333; }
+    button.toggle:disabled { opacity: 0.5; cursor: default; }
+    .row-error { color: #f0a0a0; font-size: 12px; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>CoreScope Admin</h1>
+    <nav>
+      <a href="/admin/">Admins</a>
+      <a href="/admin/infrastructure">Infrastructure Nodes</a>
+    </nav>
+    <div id="who"></div>
+  </header>
+  <main>
+    <section>
+      <h2>Search Nodes</h2>
+      <div class="search-row">
+        <input type="text" id="search-input" placeholder="Search by name or public key…">
+        <button id="search-btn">Search</button>
+      </div>
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Role</th><th>Public Key</th><th>Infrastructure</th></tr>
+        </thead>
+        <tbody id="search-results"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Currently Infrastructure</h2>
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Role</th><th>Public Key</th><th></th></tr>
+        </thead>
+        <tbody id="infra-list"></tbody>
+      </table>
+    </section>
+  </main>
+  <script src="infrastructure.js"></script>
+</body>
+</html>
