@@ -74,6 +74,8 @@ type Server struct {
 	// #1483 follow-up (singleflight + monotonic time).
 	observersCacheV2 observersCacheField
 
+	channelsCache channelsCacheField // see channels_cache.go
+
 	// Cached default-shape /api/analytics/neighbor-graph response,
 	// recomputed every 5 min in a background goroutine. Issue #1481 P0-1.
 	neighborGraphCache neighborGraphCacheField
@@ -2610,33 +2612,38 @@ func (s *Server) handleResolveHops(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 	region := r.URL.Query().Get("region")
 	includeEncrypted := r.URL.Query().Get("includeEncrypted") == "true"
-	// Prefer DB for full history (in-memory store has limited retention)
-	if s.db != nil {
-		channels, err := s.db.GetChannels(region)
-		if err != nil {
-			writeError(w, 500, err.Error())
+	cacheKey := channelsCacheKey(region, includeEncrypted)
+
+	if v, ok := s.channelsCache.entries.Load(cacheKey); ok {
+		if e, ok := v.(*channelsCacheEntry); ok && e != nil && !s.isChannelsListCacheStale(e.at) {
+			w.Header().Set("X-Cache-Age-Seconds", cacheAgeSecondsHeader(time.Since(e.at)))
+			writeJSON(w, e.resp)
 			return
 		}
-		if includeEncrypted {
-			encrypted, err := s.db.GetEncryptedChannels(region)
-			if err != nil {
-				log.Printf("WARN GetEncryptedChannels: %v", err)
-			} else {
-				channels = append(channels, encrypted...)
+	}
+
+	v, err, _ := s.channelsCache.sf.Do(cacheKey, func() (interface{}, error) {
+		if v, ok := s.channelsCache.entries.Load(cacheKey); ok {
+			if e, ok := v.(*channelsCacheEntry); ok && e != nil && !s.isChannelsListCacheStale(e.at) {
+				return e, nil
 			}
 		}
-		writeJSON(w, ChannelListResponse{Channels: channels})
-		return
-	}
-	if s.store != nil {
-		channels := s.store.GetChannels(region)
-		if includeEncrypted {
-			channels = append(channels, s.store.GetEncryptedChannels(region)...)
+		resp, fetchErr := s.fetchChannelsList(region, includeEncrypted)
+		if fetchErr != nil {
+			return nil, fetchErr
 		}
-		writeJSON(w, ChannelListResponse{Channels: channels})
+		s.channelsCache.fillCount.Add(1)
+		entry := &channelsCacheEntry{resp: resp, at: time.Now()}
+		s.channelsCache.entries.Store(cacheKey, entry)
+		return entry, nil
+	})
+	if err != nil {
+		writeError(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, ChannelListResponse{Channels: []map[string]interface{}{}})
+	entry := v.(*channelsCacheEntry)
+	w.Header().Set("X-Cache-Age-Seconds", cacheAgeSecondsHeader(time.Since(entry.at)))
+	writeJSON(w, entry.resp)
 }
 
 func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request) {

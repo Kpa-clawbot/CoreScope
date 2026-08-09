@@ -170,8 +170,9 @@ type Config struct {
 	ResolvedPath  *ResolvedPathConfig  `json:"resolvedPath,omitempty"`
 	NeighborGraph *NeighborGraphConfig `json:"neighborGraph,omitempty"`
 
-	// Observers cache settings (#1481 P0-3 / #1483).
-	ObserversCache *ObserversCacheConfig `json:"observersCache,omitempty"`
+	// Handler response caches (#1481 / #1483).
+	ObserversCache *HandlerCacheConfig `json:"observersCache,omitempty"`
+	ChannelsCache  *HandlerCacheConfig `json:"channelsCache,omitempty"`
 
 	// Analytics steady-state background recompute (issue #1240).
 	Analytics *AnalyticsConfig `json:"analytics,omitempty"`
@@ -289,12 +290,9 @@ type NeighborGraphConfig struct {
 	CacheRecomputeIntervalSeconds int `json:"cacheRecomputeIntervalSeconds,omitempty"`
 }
 
-// ObserversCacheConfig controls the /api/observers default-shape cache.
-// #1481 P0-3 / #1483.
-type ObserversCacheConfig struct {
-	// TTLSeconds: how long the cached default-shape /api/observers
-	// response is served before a singleflight-collapsed refill.
-	// 0/missing = default 30. Lower = fresher data, more SQL pressure.
+// HandlerCacheConfig is the TTL knob for handler-level response caches
+// (observers default shape, channels list, etc.). 0/missing = endpoint default.
+type HandlerCacheConfig struct {
 	TTLSeconds int `json:"ttlSeconds,omitempty"`
 }
 
