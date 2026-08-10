@@ -65,6 +65,14 @@ var ErrSessionInvalid = errors.New("session invalid or expired")
 // ValidateSession slides this window forward on every successful check.
 const sessionTTL = 24 * time.Hour
 
+// bcryptCost is one step above bcrypt.DefaultCost (10). This is a
+// low-traffic admin panel, not a consumer service hashing thousands of
+// logins/sec, so the extra ~4x hashing time is free in practice and
+// buys real brute-force margin. Safe to raise further later — bcrypt
+// embeds its cost in the hash string itself, so existing hashes keep
+// verifying correctly no matter what this constant changes to.
+const bcryptCost = 12
+
 // Store wraps a read-write SQLite connection dedicated to admin.db.
 type Store struct {
 	db *sql.DB
@@ -137,7 +145,7 @@ func (s *Store) CreateAdmin(username, password string, role Role, createdBy *int
 	if !role.Valid() {
 		return nil, fmt.Errorf("invalid role %q", role)
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
 	if err != nil {
 		return nil, fmt.Errorf("hash password: %w", err)
 	}
@@ -168,11 +176,11 @@ func (s *Store) Authenticate(username, password string) (*Admin, error) {
 		strings.TrimSpace(username),
 	)
 	var (
-		a          Admin
-		hash       string
-		disabled   int
-		createdAt  string
-		createdBy  sql.NullInt64
+		a         Admin
+		hash      string
+		disabled  int
+		createdAt string
+		createdBy sql.NullInt64
 	)
 	if err := row.Scan(&a.ID, &a.Username, &hash, &a.Role, &disabled, &createdAt, &createdBy); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
