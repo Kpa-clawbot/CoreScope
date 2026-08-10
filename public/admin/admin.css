@@ -1,0 +1,152 @@
+/* CoreScope Admin — layout rules specific to the admin panel.
+   Tokens, base reset, .top-nav, .data-table, .btn-*, form inputs, and
+   .empty-state all come from ../style.css — this file only adds the
+   handful of structures the main app doesn't have (login card, admin
+   page container, role badges, infra toggle buttons). */
+
+/* Auth-flash prevention: opt-in via <body class="auth-gated"> on pages
+   behind a session check (index.html, infrastructure.html) — the login
+   page itself has nothing to gate and stays visible immediately.
+   admin.js/infrastructure.js add "authed" once /api/admin/me resolves. */
+body.auth-gated { visibility: hidden; }
+body.auth-gated.authed { visibility: visible; }
+
+/* --- Trimmed admin nav (text brand + up to 2 links + account menu) ---
+   No logo/wordmark graphic — plain text, deliberately styled to read as
+   a brand label rather than another nav-link: bigger, bolder, full
+   --nav-text contrast + letter-spacing vs. .nav-link's smaller/muted/
+   regular-weight treatment (style.css: 13px, --fw-medium, --nav-text-muted). */
+.admin-brand {
+  font-size: 16px;
+  font-weight: var(--fw-bold, 700);
+  letter-spacing: 0.02em;
+  color: var(--nav-text);
+}
+/* --- Account menu (username/role trigger + dropdown) ---
+   .account-menu is position:fixed, NOT absolute — .top-nav sets
+   overflow:hidden (style.css, for unrelated nav-priority-overflow
+   reasons) which would otherwise clip an absolutely-positioned dropdown
+   the moment it extends past the 52px nav bar. This is the same fix the
+   main app already uses for its "More ▾" menu (see .nav-more-menu in
+   style.css + positionMoreMenu() in app.js) — account-menu.js computes
+   top/right from the trigger's bounding rect on each open. Colors
+   reference --nav-* since the trigger sits on the always-dark .top-nav
+   regardless of page theme (the page --text-muted token is dark-on-light
+   in light theme and would be unreadable here). */
+.account-menu-wrap { position: relative; }
+.account-menu-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  min-height: 40px; padding: 6px 10px; border-radius: 6px;
+  background: transparent; border: 1px solid transparent;
+  color: var(--nav-text-muted); font-family: inherit; font-size: var(--fs-sm, 13px);
+  cursor: pointer; transition: background 120ms, border-color 120ms, color 120ms;
+}
+.account-menu-btn strong { color: var(--nav-text); font-weight: var(--fw-semibold, 600); }
+.account-menu-btn:hover,
+.account-menu-btn[aria-expanded="true"] {
+  color: var(--nav-text); background: rgba(255, 255, 255, 0.08); border-color: var(--border);
+}
+.account-menu-btn .ph-icon { transition: transform 120ms; }
+.account-menu-btn[aria-expanded="true"] .ph-icon { transform: rotate(180deg); }
+
+.account-menu {
+  display: none; position: fixed; min-width: 200px;
+  background: var(--surface-1, var(--detail-bg));
+  border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25); padding: 4px; z-index: 1200;
+}
+.account-menu.open { display: block; }
+.account-menu-header {
+  padding: 8px 10px; margin-bottom: 4px; border-bottom: 1px solid var(--border);
+  font-size: 12px; color: var(--text-muted);
+}
+.account-menu-header strong { color: var(--text); }
+.account-menu-item {
+  display: flex; align-items: center; width: 100%; gap: 8px; padding: 8px 10px;
+  border: none; background: none; border-radius: 6px; color: var(--text);
+  font-family: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.account-menu-item:hover { background: var(--row-hover); }
+.account-menu-item.danger { color: var(--danger); }
+
+/* --- Page container --- */
+.admin-page { padding: 24px; max-width: 960px; margin: 0 auto; }
+.admin-header { margin-bottom: 20px; }
+.admin-header h1 { font-size: var(--fs-xl, 22px); font-weight: var(--fw-semibold, 600); margin: 0 0 4px; }
+.admin-header p { color: var(--text-muted); font-size: var(--fs-sm, 13px); margin: 0; }
+
+.admin-section { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin-bottom: 20px; }
+.admin-section h2 {
+  font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-muted); margin: 0 0 14px;
+}
+.empty-row td { color: var(--text-subtle); font-style: italic; }
+
+/* --- Role badges (Admins list) --- */
+.role-badge {
+  display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em;
+}
+.role-badge.super_admin { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); }
+.role-badge.admin { background: color-mix(in srgb, var(--role-companion) 16%, transparent); color: var(--role-companion); }
+.disabled-name { color: var(--text-subtle); text-decoration: line-through; }
+
+/* --- Infra toggle buttons --- */
+.toggle {
+  padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600;
+  cursor: pointer; border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text); font-family: inherit; transition: background 120ms, border-color 120ms;
+}
+.toggle:hover:not(:disabled) { border-color: var(--accent); background: var(--row-hover); }
+.toggle:disabled { opacity: 0.6; cursor: default; }
+.toggle.on { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); }
+.toggle.off { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+.row-error { color: var(--danger); font-size: 12px; margin-top: 4px; }
+
+/* .data-table (style.css) uses table-layout: auto, which sizes each
+   column from its own content/header — an action-only column (no
+   header label) gets squeezed to near-zero width and the toggle button
+   spills out past the card edge instead of reflowing. .node-table pins
+   explicit column widths via <colgroup> (table-layout: fixed) so the
+   action column always has guaranteed room and nothing needs to escape
+   its cell to stay visible. */
+.node-table { table-layout: fixed; }
+.node-table td.action-cell { overflow: hidden; }
+.node-table td.action-cell .toggle { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+
+/* --- Forms (add-admin, search) --- */
+.admin-form { margin-top: 16px; padding: 16px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; display: none; }
+.admin-form.visible { display: block; }
+.admin-form label { display: block; font-size: 12px; color: var(--text-muted); margin: 0 0 6px; font-weight: 500; }
+.admin-form input, .admin-form select {
+  width: 100%; padding: 8px 10px; margin-bottom: 14px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--input-bg); color: var(--text); font-size: 14px; font-family: var(--font);
+}
+.form-error {
+  display: none; background: color-mix(in srgb, var(--danger) 12%, var(--card-bg));
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
+  color: var(--danger); padding: 8px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 12px;
+}
+
+.search-row { display: flex; gap: 8px; margin-bottom: 16px; }
+.search-row input {
+  flex: 1; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--input-bg); color: var(--text); font-size: 14px; font-family: var(--font);
+}
+
+/* --- Login page --- */
+.login-wrap {
+  min-height: calc(100vh - 52px);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.login-card {
+  width: 100%; max-width: 340px; padding: 32px;
+  background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px;
+}
+.login-card h1 { font-size: var(--fs-lg, 17px); font-weight: 600; margin: 0 0 22px; text-align: center; }
+.login-card label { display: block; font-size: 12px; color: var(--text-muted); margin: 0 0 6px; font-weight: 500; }
+.login-card input {
+  width: 100%; padding: 10px 12px; margin-bottom: 16px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--input-bg); color: var(--text); font-size: 14px; font-family: var(--font);
+}
+.login-card input:focus { outline: none; border-color: var(--accent); }

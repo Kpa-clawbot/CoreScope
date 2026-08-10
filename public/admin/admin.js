@@ -1,7 +1,6 @@
 (function () {
   'use strict';
 
-  var whoEl = document.getElementById('who');
   var tbody = document.getElementById('admins-table-body');
   var showAddBtn = document.getElementById('show-add-admin');
   var addForm = document.getElementById('add-admin-form');
@@ -40,27 +39,14 @@
     });
   }
 
-  function renderWho(me) {
-    whoEl.innerHTML = 'Logged in as <strong>' + escapeHTML(me.username) + '</strong> (' + escapeHTML(me.role) + ')';
-    var logout = document.createElement('button');
-    logout.className = 'link';
-    logout.textContent = 'Log out';
-    logout.addEventListener('click', function () {
-      fetch('/api/admin/logout', { method: 'POST', credentials: 'same-origin', headers: csrfHeaders() }).then(function () {
-        window.location.href = '/admin/login';
-      });
-    });
-    whoEl.appendChild(logout);
-  }
-
   function renderAdmins(admins) {
     tbody.innerHTML = '';
     admins.forEach(function (a) {
       var tr = document.createElement('tr');
       var created = new Date(a.createdAt);
       tr.innerHTML =
-        '<td class="' + (a.disabled ? 'disabled' : '') + '">' + escapeHTML(a.username) + '</td>' +
-        '<td class="role-' + escapeHTML(a.role) + '">' + escapeHTML(a.role) + '</td>' +
+        '<td class="' + (a.disabled ? 'disabled-name' : '') + '">' + escapeHTML(a.username) + '</td>' +
+        '<td><span class="role-badge ' + escapeHTML(a.role) + '">' + escapeHTML(a.role) + '</span></td>' +
         '<td>' + (isNaN(created.getTime()) ? escapeHTML(a.createdAt) : created.toLocaleDateString()) + '</td>';
       tbody.appendChild(tr);
     });
@@ -106,7 +92,7 @@
 
   fetchJSON('/api/admin/me')
     .then(function (me) {
-      renderWho(me);
+      window.renderAccountMenu(me);
       setupAddAdmin(me.role === 'super_admin');
       return loadAdmins();
     })

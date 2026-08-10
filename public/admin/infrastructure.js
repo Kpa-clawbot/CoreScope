@@ -1,7 +1,6 @@
 (function () {
   'use strict';
 
-  var whoEl = document.getElementById('who');
   var searchInput = document.getElementById('search-input');
   var searchBtn = document.getElementById('search-btn');
   var searchResults = document.getElementById('search-results');
@@ -37,19 +36,6 @@
         return body;
       });
     });
-  }
-
-  function renderWho(me) {
-    whoEl.innerHTML = 'Logged in as <strong>' + escapeHTML(me.username) + '</strong> (' + escapeHTML(me.role) + ')';
-    var logout = document.createElement('button');
-    logout.className = 'link';
-    logout.textContent = 'Log out';
-    logout.addEventListener('click', function () {
-      fetch('/api/admin/logout', { method: 'POST', credentials: 'same-origin', headers: csrfHeaders() }).then(function () {
-        window.location.href = '/admin/login';
-      });
-    });
-    whoEl.appendChild(logout);
   }
 
   // Polls /api/admin/nodes/infrastructure/status?id=<id> until the
@@ -122,11 +108,12 @@
     tr.appendChild(td(node.name || '(unnamed)'));
     tr.appendChild(td(node.role || '?'));
     var pkTd = document.createElement('td');
-    pkTd.className = 'pubkey';
+    pkTd.className = 'mono';
     pkTd.textContent = node.public_key;
     tr.appendChild(pkTd);
 
     var actionTd = document.createElement('td');
+    actionTd.className = 'action-cell';
     var btn = document.createElement('button');
     btn.className = 'toggle ' + (isInfra ? 'on' : 'off');
     btn.textContent = isInfra ? 'Remove' : 'Mark infrastructure';
@@ -193,7 +180,7 @@
 
   fetchJSON('/api/admin/me')
     .then(function (me) {
-      renderWho(me);
+      window.renderAccountMenu(me);
       renderEmptyRow(searchResults, 4, 'Type a name or public key to search.');
       return loadInfraList();
     })
