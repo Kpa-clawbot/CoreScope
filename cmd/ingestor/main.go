@@ -604,6 +604,17 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		name, _ := msg["origin"].(string)
 		iata := parts[1]
 		meta := extractObserverMeta(msg)
+		// A retained status message is the broker replaying the observer's last
+		// published snapshot on subscribe — it is not evidence the observer is
+		// alive now. Stamping last_seen from it resurrects dead observers on
+		// every ingestor restart, so the retained path only refreshes metadata.
+		if m.Retained() {
+			if err := store.UpsertObserverRetained(observerID, name, iata, meta); err != nil {
+				log.Printf("MQTT [%s] retained observer status error: %v", tag, err)
+			}
+			log.Print(formatStatusLog(tag, firstNonEmpty(name, observerID), iata))
+			return
+		}
 		// observer.last_seen is "when did the analyzer last hear from this
 		// observer" — fundamentally an ingest-time question. Passing "" makes
 		// UpsertObserverAt use time.Now(), independent of the envelope timestamp
