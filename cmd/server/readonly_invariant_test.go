@@ -37,6 +37,11 @@ func TestServerSourceHasNoCachedRWCalls(t *testing.T) {
 		regexp.MustCompile(`UPDATE\s+inactive_nodes\s+SET\s+multibyte_`),
 		regexp.MustCompile(`\bpersistMultibyteCapability\s*\(`),
 		regexp.MustCompile(`\bmaybePersistMultibyteCapability\s*\(`),
+		// Admin-panel infrastructure toggle: the server enqueues a
+		// request via internal/infraqueue; only cmd/ingestor's
+		// SetInfrastructureFlag may UPDATE this column.
+		regexp.MustCompile(`UPDATE\s+nodes\s+SET\s+infrastructure`),
+		regexp.MustCompile(`UPDATE\s+inactive_nodes\s+SET\s+infrastructure`),
 	}
 	violations := []string{}
 	for _, e := range entries {

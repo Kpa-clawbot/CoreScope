@@ -415,11 +415,17 @@ func main() {
 	// write handle) executes the DELETEs. Process on startup, then every
 	// 15 seconds — short enough for a one-click UX, long enough to avoid
 	// useless wake-ups.
+	//
+	// Infra-flag requests (admin panel's infrastructure toggle) share
+	// this same ticker rather than getting their own goroutine — both
+	// are cheap directory listings on the same cadence.
 	store.RunPendingPruneRequests()
+	store.RunPendingInfraRequests()
 	pruneQueueTicker := time.NewTicker(15 * time.Second)
 	go func() {
 		for range pruneQueueTicker.C {
 			store.RunPendingPruneRequests()
+			store.RunPendingInfraRequests()
 		}
 	}()
 

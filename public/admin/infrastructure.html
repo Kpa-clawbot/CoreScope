@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" href="../favicon.ico" type="image/x-icon">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Infrastructure Nodes — CoreScope Admin</title>
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem('meshcore-theme');
+        var t = saved === 'dark' || saved === 'light'
+          ? saved
+          : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (_) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="../style.css">
+  <link rel="stylesheet" href="admin.css">
+</head>
+<body class="auth-gated">
+  <nav class="top-nav" role="navigation" aria-label="Admin navigation">
+    <div class="nav-left">
+      <a href="/admin/" class="nav-brand" aria-label="CoreScope Admin"><span class="admin-brand">Admin Management</span></a>
+      <div class="nav-links">
+        <a href="/admin/" class="nav-link">Admins</a>
+        <a href="/admin/infrastructure" class="nav-link active">Infrastructure Nodes</a>
+      </div>
+    </div>
+    <div class="nav-right">
+      <label class="theme-toggle" title="Toggle dark mode">
+        <input type="checkbox" id="darkModeCheckbox" role="switch" aria-label="Toggle dark mode">
+        <span class="theme-toggle-track" aria-hidden="true">
+          <span class="theme-toggle-thumb"></span>
+          <span class="theme-toggle-icon theme-toggle-sun"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-sun"></use></svg></span>
+          <span class="theme-toggle-icon theme-toggle-moon"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-moon"></use></svg></span>
+        </span>
+      </label>
+      <div class="who" id="who"></div>
+    </div>
+  </nav>
+
+  <main class="admin-page">
+    <div class="admin-header">
+      <h1>Infrastructure Nodes</h1>
+      <p>Mark operator-curated anchor nodes — towers, mountain-peak repeaters — as infrastructure.</p>
+    </div>
+
+    <div class="admin-section">
+      <h2>Search Nodes</h2>
+      <div class="search-row">
+        <input type="text" id="search-input" placeholder="Search by name or public key…">
+        <button class="btn-secondary" id="search-btn">Search</button>
+      </div>
+      <table class="data-table node-table">
+        <colgroup><col style="width:28%"><col style="width:14%"><col style="width:38%"><col style="width:20%"></colgroup>
+        <thead>
+          <tr><th>Name</th><th>Role</th><th>Public Key</th><th>Infrastructure</th></tr>
+        </thead>
+        <tbody id="search-results"></tbody>
+      </table>
+    </div>
+
+    <div class="admin-section">
+      <h2>Currently Infrastructure</h2>
+      <table class="data-table node-table">
+        <colgroup><col style="width:28%"><col style="width:14%"><col style="width:38%"><col style="width:20%"></colgroup>
+        <thead>
+          <tr><th>Name</th><th>Role</th><th>Public Key</th><th></th></tr>
+        </thead>
+        <tbody id="infra-list"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <script src="theme-toggle.js"></script>
+  <script src="account-menu.js"></script>
+  <script src="infrastructure.js"></script>
+</body>
+</html>

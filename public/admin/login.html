@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" href="../favicon.ico" type="image/x-icon">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Admin Login — CoreScope</title>
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem('meshcore-theme');
+        var t = saved === 'dark' || saved === 'light'
+          ? saved
+          : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (_) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="../style.css">
+  <link rel="stylesheet" href="admin.css">
+</head>
+<body>
+  <nav class="top-nav" role="navigation" aria-label="Admin navigation">
+    <div class="nav-left">
+      <a href="/admin/" class="nav-brand" aria-label="CoreScope Admin"><span class="admin-brand">Admin Management</span></a>
+    </div>
+    <div class="nav-right">
+      <label class="theme-toggle" title="Toggle dark mode">
+        <input type="checkbox" id="darkModeCheckbox" role="switch" aria-label="Toggle dark mode">
+        <span class="theme-toggle-track" aria-hidden="true">
+          <span class="theme-toggle-thumb"></span>
+          <span class="theme-toggle-icon theme-toggle-sun"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-sun"></use></svg></span>
+          <span class="theme-toggle-icon theme-toggle-moon"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-moon"></use></svg></span>
+        </span>
+      </label>
+    </div>
+  </nav>
+
+  <div class="login-wrap">
+    <div class="login-card">
+      <h1>Admin sign in</h1>
+      <div class="form-error" id="error"></div>
+      <form id="login-form">
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username" autocomplete="username" required autofocus>
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" autocomplete="current-password" required>
+        <button type="submit" class="btn-primary" id="submit-btn" style="width: 100%; margin-top: 4px;">Log in</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="theme-toggle.js"></script>
+  <script src="login.js"></script>
+</body>
+</html>

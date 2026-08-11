@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" href="../favicon.ico" type="image/x-icon">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Admin — CoreScope</title>
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem('meshcore-theme');
+        var t = saved === 'dark' || saved === 'light'
+          ? saved
+          : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (_) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="../style.css">
+  <link rel="stylesheet" href="admin.css">
+</head>
+<body class="auth-gated">
+  <nav class="top-nav" role="navigation" aria-label="Admin navigation">
+    <div class="nav-left">
+      <a href="/admin/" class="nav-brand" aria-label="CoreScope Admin"><span class="admin-brand">Admin Management</span></a>
+      <div class="nav-links">
+        <a href="/admin/" class="nav-link active">Admins</a>
+        <a href="/admin/infrastructure" class="nav-link">Infrastructure Nodes</a>
+      </div>
+    </div>
+    <div class="nav-right">
+      <label class="theme-toggle" title="Toggle dark mode">
+        <input type="checkbox" id="darkModeCheckbox" role="switch" aria-label="Toggle dark mode">
+        <span class="theme-toggle-track" aria-hidden="true">
+          <span class="theme-toggle-thumb"></span>
+          <span class="theme-toggle-icon theme-toggle-sun"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-sun"></use></svg></span>
+          <span class="theme-toggle-icon theme-toggle-moon"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-moon"></use></svg></span>
+        </span>
+      </label>
+      <div class="who" id="who"></div>
+    </div>
+  </nav>
+
+  <main class="admin-page">
+    <div class="admin-header">
+      <h1>Admin Accounts</h1>
+      <p>Manage who can sign in to the CoreScope admin panel.</p>
+    </div>
+
+    <div class="admin-section">
+      <h2>Accounts</h2>
+      <table class="data-table">
+        <thead>
+          <tr><th>Username</th><th>Role</th><th>Created</th></tr>
+        </thead>
+        <tbody id="admins-table-body"></tbody>
+      </table>
+
+      <button class="btn-secondary" id="show-add-admin" style="display:none; margin-top:16px;">+ Add admin</button>
+
+      <form class="admin-form" id="add-admin-form">
+        <div class="form-error" id="add-admin-error"></div>
+        <label for="new-username">Username</label>
+        <input type="text" id="new-username" required>
+        <label for="new-password">Password</label>
+        <input type="password" id="new-password" required>
+        <label for="new-role">Role</label>
+        <select id="new-role">
+          <option value="admin">admin</option>
+          <option value="super_admin">super_admin</option>
+        </select>
+        <button type="submit" class="btn-primary">Create admin</button>
+      </form>
+    </div>
+  </main>
+
+  <script src="theme-toggle.js"></script>
+  <script src="account-menu.js"></script>
+  <script src="admin.js"></script>
+</body>
+</html>

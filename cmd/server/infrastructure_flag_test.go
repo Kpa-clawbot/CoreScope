@@ -158,6 +158,16 @@ func TestInfrastructureNodesEndpoint(t *testing.T) {
 	if _, err := srv.db.conn.Exec(`ALTER TABLE nodes ADD COLUMN infrastructure INTEGER NOT NULL DEFAULT 0`); err != nil {
 		t.Fatal(err)
 	}
+	// setupTestDB's shared fixture doesn't include inactive_nodes (most
+	// tests don't need it); GetInfrastructureNodes UNIONs it in, so this
+	// test needs the table to exist even though this case leaves it empty.
+	if _, err := srv.db.conn.Exec(`CREATE TABLE inactive_nodes (
+		public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL,
+		last_seen TEXT, first_seen TEXT, advert_count INTEGER DEFAULT 0,
+		battery_mv INTEGER, temperature_c REAL, foreign_advert INTEGER DEFAULT 0,
+		infrastructure INTEGER NOT NULL DEFAULT 0)`); err != nil {
+		t.Fatal(err)
+	}
 	srv.db.detectSchema()
 
 	recent := time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339)
@@ -232,6 +242,60 @@ func TestInfrastructureNodesEndpoint(t *testing.T) {
 		if n["public_key"] == "11aa000011112222000011112222aabb" {
 			t.Error("blacklisted node leaked into /api/nodes/infrastructure")
 		}
+	}
+}
+
+// TestInfrastructureNodesEndpointIncludesInactive covers the gap found
+// while building the admin-panel infra toggle: a node's infrastructure
+// flag is operator-curated and independent of recent activity, so a
+// retention-moved (inactive_nodes) infra node must still show up here —
+// otherwise an admin who flags a node that later goes stale can never
+// find it again in their own management UI to un-flag it.
+func TestInfrastructureNodesEndpointIncludesInactive(t *testing.T) {
+	srv, router := setupTestServer(t)
+
+	if _, err := srv.db.conn.Exec(`ALTER TABLE nodes ADD COLUMN infrastructure INTEGER NOT NULL DEFAULT 0`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.db.conn.Exec(`CREATE TABLE inactive_nodes (
+		public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL,
+		last_seen TEXT, first_seen TEXT, advert_count INTEGER DEFAULT 0,
+		battery_mv INTEGER, temperature_c REAL, foreign_advert INTEGER DEFAULT 0,
+		infrastructure INTEGER NOT NULL DEFAULT 0)`); err != nil {
+		t.Fatal(err)
+	}
+	srv.db.detectSchema()
+
+	old := time.Now().UTC().Add(-30 * 24 * time.Hour).Format(time.RFC3339)
+	if _, err := srv.db.conn.Exec(`INSERT INTO inactive_nodes (public_key, name, role, last_seen, first_seen, infrastructure)
+		VALUES ('55ee000011112222000011112222aabb', 'Gone Quiet Tower', 'repeater', ?, ?, 1)`,
+		old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/nodes/infrastructure", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Nodes []map[string]interface{} `json:"nodes"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("bad JSON: %v", err)
+	}
+	found := false
+	for _, n := range resp.Nodes {
+		if n["public_key"] == "55ee000011112222000011112222aabb" {
+			found = true
+			if n["infrastructure"] != true {
+				t.Errorf("expected infrastructure=true, got %v", n["infrastructure"])
+			}
+		}
+	}
+	if !found {
+		t.Error("infra-flagged node in inactive_nodes should still appear in /api/nodes/infrastructure")
 	}
 }
 

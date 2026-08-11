@@ -31,6 +31,7 @@ cmd/ingestor/ingestor.exe
 !test-fixtures/e2e-fixture.db
 corescope-server
 cmd/server/server
+cmd/admin/admin
 # Local-only planning and design files
 docs/superpowers/
 # Local Docker bind-mount data dir (live DB + config.json with secrets)

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/meshcore-analyzer/admindb"
 	"github.com/meshcore-analyzer/dbschema"
 )
 
@@ -57,6 +58,33 @@ func resolveBuildTime() string {
 	return "unknown"
 }
 
+// waitForObservationsTable blocks (bounded) until dbPath's observations
+// table exists — see the call site in main() for why this matters. A
+// missing file (DB not created yet) or a missing table both just cause
+// another retry; this is not a fatal condition until maxWait elapses.
+func waitForObservationsTable(dbPath string) {
+	const (
+		maxWait  = 30 * time.Second
+		interval = 250 * time.Millisecond
+	)
+	deadline := time.Now().Add(maxWait)
+	for {
+		if conn, err := sql.Open("sqlite", "file:"+dbPath+"?mode=ro"); err == nil {
+			var name string
+			scanErr := conn.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='observations'`).Scan(&name)
+			conn.Close()
+			if scanErr == nil {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			log.Printf("[db] warning: observations table not found in %s after %s — proceeding anyway; if queries start failing with \"no such column\", restart the server once the ingestor has finished creating the schema", dbPath, maxWait)
+			return
+		}
+		time.Sleep(interval)
+	}
+}
+
 func main() {
 	// pprof profiling — off by default, enable with ENABLE_PPROF=true
 	if os.Getenv("ENABLE_PPROF") == "true" {
@@ -73,11 +101,11 @@ func main() {
 	}
 
 	var (
-		configDir  string
-		port       int
-		dbPath     string
-		publicDir  string
-		pollMs     int
+		configDir string
+		port      int
+		dbPath    string
+		publicDir string
+		pollMs    int
 	)
 
 	flag.StringVar(&configDir, "config-dir", ".", "Directory containing config.json")
@@ -156,6 +184,21 @@ func main() {
 		}
 	}
 
+	// Close the boot race between cmd/ingestor and cmd/server: they start
+	// concurrently in the same container (docker/supervisord-go.conf has
+	// no ordering between them), so on a brand-new deployment there is no
+	// meshcore.db yet — the ingestor creates it, including the
+	// observations table. If the server opened its read-only handle
+	// first, db.go's detectSchema (a one-time PRAGMA probe run inside
+	// OpenDB) would latch the wrong v2/v3 schema shape for the server's
+	// entire process lifetime, and every subsequent query would fail with
+	// "no such column: o.observer_id" forever — even after the ingestor
+	// finishes creating the real schema moments later. Only this
+	// production boot path waits; OpenDB itself stays an unconditional
+	// single probe so unit tests that open minimal fixture DBs (some
+	// deliberately without an observations table) aren't slowed down.
+	waitForObservationsTable(resolvedDB)
+
 	// Open database
 	database, err := OpenDB(resolvedDB)
 	if err != nil {
@@ -167,6 +210,24 @@ func main() {
 		dbCloseOnce.Do(func() { err = database.Close() })
 		return err
 	}
+
+	// Open (or create) the admin accounts/sessions store. This is a
+	// separate, server-owned database — never meshcore.db — so it does
+	// not touch the read-only invariant enforced by
+	// readonly_invariant_test.go.
+	//
+	// Anchored to resolvedDB's directory, NOT configDir: in production
+	// (docker/supervisord-go.conf) -config-dir is /app (the container's
+	// ephemeral writable layer) while -db is explicitly /app/data/meshcore.db
+	// (the persistent bind-mounted volume). admin.db must live alongside
+	// meshcore.db on that volume or admin accounts vanish on every
+	// container rebuild/recreation.
+	adminDBPath := filepath.Join(filepath.Dir(resolvedDB), "admin.db")
+	adminStore, err := admindb.Open(adminDBPath)
+	if err != nil {
+		log.Fatalf("[admin] failed to open %s: %v", adminDBPath, err)
+	}
+	defer adminStore.Close()
 	defer dbClose()
 
 	// Verify DB has expected tables
@@ -351,6 +412,7 @@ func main() {
 	srv := NewServer(database, cfg, hub)
 	srv.configDir = configDir
 	srv.store = store
+	srv.admin = adminStore
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
 
@@ -359,6 +421,18 @@ func main() {
 
 	// Static files + SPA fallback
 	absPublic, _ := filepath.Abs(publicDir)
+
+	// Pretty URL for the admin login page (public/admin/login.html is a
+	// real file, so /admin/login.html already works via the file server
+	// below; /admin/ itself resolves to public/admin/index.html for free
+	// via the same mechanism — only the extension-less /admin/login needs
+	// an explicit alias).
+	router.HandleFunc("/admin/login", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, filepath.Join(absPublic, "admin", "login.html"))
+	}).Methods("GET")
+	router.HandleFunc("/admin/infrastructure", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, filepath.Join(absPublic, "admin", "infrastructure.html"))
+	}).Methods("GET")
 	if _, err := os.Stat(absPublic); err == nil {
 		fs := http.FileServer(http.Dir(absPublic))
 		router.PathPrefix("/").Handler(wsOrStatic(hub, spaHandler(absPublic, fs)))

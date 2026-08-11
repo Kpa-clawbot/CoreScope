@@ -53,6 +53,21 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/debug/affinity": {Summary: "Debug neighbor affinity scores", Tag: "admin", Auth: true},
 		"GET /api/backup":         {Summary: "Download SQLite backup", Description: "Streams a consistent SQLite snapshot of the analyzer DB (VACUUM INTO). Response is application/octet-stream with attachment filename corescope-backup-<unix>.db.", Tag: "admin", Auth: true},
 
+		// Admin accounts (login-based, distinct from the requireAPIKey-gated
+		// routes above). No public registration — accounts are created by an
+		// existing super_admin, or bootstrapped via the `admin` CLI.
+		"POST /api/admin/login":  {Summary: "Admin login", Description: "Authenticates an admin account and sets an HttpOnly session cookie.", Tag: "admin"},
+		"POST /api/admin/logout": {Summary: "Admin logout", Description: "Invalidates the current session and clears the session cookie.", Tag: "admin", Auth: true},
+		"GET /api/admin/me":      {Summary: "Get current admin", Description: "Returns the identity (username, role) of the currently logged-in admin.", Tag: "admin", Auth: true},
+		"GET /api/admin/admins":  {Summary: "List admin accounts", Tag: "admin", Auth: true},
+		"POST /api/admin/admins": {Summary: "Create an admin account", Description: "Requires the super_admin role — the only capability that differs between admin and super_admin.", Tag: "admin", Auth: true},
+
+		// Infrastructure-node management (admin panel). The server opens
+		// SQLite read-only, so these enqueue a request for the ingestor
+		// (see internal/infraqueue) rather than writing directly.
+		"POST /api/admin/nodes/infrastructure":       {Summary: "Toggle a node's infrastructure flag", Description: "Enqueues a request for the ingestor to set/clear nodes.infrastructure by exact public key. Returns 202 with a requestId to poll. Available to any logged-in admin (not just super_admin).", Tag: "admin", Auth: true},
+		"GET /api/admin/nodes/infrastructure/status": {Summary: "Poll an infrastructure-toggle request", Description: "Returns pending/done/error for a previously-enqueued infrastructure-flag request.", Tag: "admin", Auth: true},
+
 		// Packets
 		"GET /api/packets": {Summary: "List packets", Description: "Returns decoded packets with filtering, sorting, and pagination.", Tag: "packets",
 			QueryParams: []paramMeta{
