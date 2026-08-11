@@ -1513,6 +1513,42 @@ func (s *Store) RemoveStaleObservers(observerDays int) (int64, error) {
 	return removed, nil
 }
 
+// PurgeStaleObservers hard-deletes rows RemoveStaleObservers already soft-deleted,
+// once they are older than purgeDays and nothing references them any more. It is
+// the second stage of observer retention: the soft-delete hides the observer,
+// this reclaims the row after its packets have aged out via packetDays.
+//
+// observations.observer_idx is a bare rowid with no foreign key, so deleting a
+// still-referenced observer silently orphans history — packets_v stops resolving
+// the observer and the packets are mis-attributed. The three NOT EXISTS guards
+// are what make the delete safe; they are correctness, not defensive padding.
+// Each is an index seek per candidate row (observers is O(100)), so the whole
+// statement stays cheap enough for the daily retention tick.
+//
+// purgeDays <= 0 disables the purge (the default).
+func (s *Store) PurgeStaleObservers(purgeDays int) (int64, error) {
+	if purgeDays <= 0 {
+		return 0, nil // disabled
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -purgeDays).Format(time.RFC3339)
+	// Tagged for /api/perf writer-lock visibility (#1340).
+	result, err := s.instrumentedExec("purge_observers", `
+		DELETE FROM observers
+		WHERE inactive = 1
+		  AND last_seen < ?
+		  AND NOT EXISTS (SELECT 1 FROM observations o WHERE o.observer_idx = observers.rowid)
+		  AND NOT EXISTS (SELECT 1 FROM observer_metrics m WHERE m.observer_id = observers.id)
+		  AND NOT EXISTS (SELECT 1 FROM dropped_packets d WHERE d.observer_id = observers.id)`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("purge stale observers: %w", err)
+	}
+	purged, _ := result.RowsAffected()
+	if purged > 0 {
+		log.Printf("Purged %d inactive observer(s) with no remaining data (not seen in %d days)", purged, purgeDays)
+	}
+	return purged, nil
+}
+
 // DroppedPacket holds data for a packet rejected during ingest.
 type DroppedPacket struct {
 	Hash         string

@@ -256,6 +256,14 @@ func main() {
 	observerDays := cfg.ObserverDaysOrDefault()
 	store.RemoveStaleObservers(observerDays)
 
+	// Observer purge: second stage, hard-deletes long-inactive observers whose
+	// packets have already aged out. Always runs after the soft-delete so a row
+	// crossing both thresholds is finalised in a single pass. 0 = disabled.
+	observerPurgeDays := cfg.ObserverPurgeDaysOrZero()
+	if _, err := store.PurgeStaleObservers(observerPurgeDays); err != nil {
+		log.Printf("[prune] error: %v", err)
+	}
+
 	// Metrics retention: prune old metrics on startup
 	metricsDays := cfg.MetricsRetentionDays()
 	store.PruneOldMetrics(metricsDays)
@@ -314,9 +322,11 @@ func main() {
 	go func() {
 		time.Sleep(90 * time.Second) // stagger after metrics prune
 		store.RemoveStaleObservers(observerDays)
+		store.PurgeStaleObservers(observerPurgeDays)
 		store.RunIncrementalVacuum(vacuumPages)
 		for range observerRetentionTicker.C {
 			store.RemoveStaleObservers(observerDays)
+			store.PurgeStaleObservers(observerPurgeDays)
 			store.RunIncrementalVacuum(vacuumPages)
 		}
 	}()

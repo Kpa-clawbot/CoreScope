@@ -144,7 +144,13 @@ func (c *Config) ClientRxCoverageEnabled() bool {
 type RetentionConfig struct {
 	NodeDays     int `json:"nodeDays"`
 	ObserverDays int `json:"observerDays"`
-	MetricsDays  int `json:"metricsDays"`
+	// ObserverPurgeDays hard-deletes observers that observerDays already
+	// soft-deleted, once they are older than this and no observation,
+	// metric or dropped-packet row still references them; 0 disables.
+	// Only meaningful above observerDays and packetDays — below those the
+	// reference guards keep every candidate row anyway.
+	ObserverPurgeDays int `json:"observerPurgeDays"`
+	MetricsDays       int `json:"metricsDays"`
 	// PacketDays is the retention window for transmissions (#1283).
 	// Ownership moved from cmd/server to cmd/ingestor; 0 disables.
 	PacketDays int `json:"packetDays"`
@@ -159,6 +165,15 @@ type RetentionConfig struct {
 func (c *Config) PacketDaysOrZero() int {
 	if c.Retention != nil && c.Retention.PacketDays > 0 {
 		return c.Retention.PacketDays
+	}
+	return 0
+}
+
+// ObserverPurgeDaysOrZero returns the configured retention.observerPurgeDays
+// or 0 (disabled) if not set.
+func (c *Config) ObserverPurgeDaysOrZero() int {
+	if c.Retention != nil && c.Retention.ObserverPurgeDays > 0 {
+		return c.Retention.ObserverPurgeDays
 	}
 	return 0
 }
