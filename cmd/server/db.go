@@ -45,11 +45,20 @@ type DB struct {
 	hasMultibyteSupCols bool   // nodes/inactive_nodes have multibyte_sup/multibyte_evidence (#903)
 	hasLastSeen         bool   // transmissions.last_seen column exists (#1690)
 
-	// Channel list cache (60s TTL) — avoids repeated GROUP BY scans (#762)
-	channelsCacheMu  sync.Mutex
-	channelsCacheKey string
-	channelsCacheRes []map[string]interface{}
-	channelsCacheExp time.Time
+	// Channel list caches, keyed by region param — avoids repeated GROUP BY
+	// scans (#762). Keyed per-region (not a single slot) so mixed-region
+	// traffic doesn't evict and re-run the query on every request.
+	channelsCacheMu sync.Mutex
+	channelsCache   map[string]channelsCacheEntry
+
+	encChannelsCacheMu sync.Mutex
+	encChannelsCache   map[string]channelsCacheEntry
+
+	// Channel messages cache, keyed by hash+limit+offset+region. Unlike
+	// GetChannels, this previously had no cache at all — every page
+	// view/poll re-ran the full paginated query.
+	msgCacheMu sync.Mutex
+	msgCache   map[string]channelMessagesCacheEntry
 
 	// Prepared statements for frequently-called queries.
 	// Prepared once at initDB time, reused across all requests.
@@ -66,6 +75,30 @@ type DB struct {
 	stmtCountNodesByRoleAll *sql.Stmt // WHERE role = ?
 	stmtMaxTxID             *sql.Stmt // COALESCE(MAX(id), 0) FROM transmissions
 	stmtMaxObsID            *sql.Stmt // COALESCE(MAX(id), 0) FROM observations
+}
+
+// channelsCacheTTL is shared by the GetChannels and GetEncryptedChannels
+// caches — both are cheap to keep fresh at the same cadence as before.
+const channelsCacheTTL = 60 * time.Second
+
+// msgCacheTTL is shorter than channelsCacheTTL: channel message pages are
+// polled more aggressively (e.g. an open channel view) and staleness is
+// more visible to users than in the channel list.
+const msgCacheTTL = 10 * time.Second
+
+// maxCacheEntries bounds a keyed cache's size. Region/pagination keys are
+// low-cardinality in practice; this is a defensive reset, not a real LRU.
+const maxCacheEntries = 256
+
+type channelsCacheEntry struct {
+	res []map[string]interface{}
+	exp time.Time
+}
+
+type channelMessagesCacheEntry struct {
+	msgs  []map[string]interface{}
+	total int
+	exp   time.Time
 }
 
 // OpenDB opens a read-only SQLite connection with WAL mode.
@@ -1598,6 +1631,48 @@ func (db *DB) GetTraces(hash string) ([]map[string]interface{}, error) {
 	return traces, nil
 }
 
+// getChannelsCache returns the cached GetChannels result for key, if present
+// and unexpired.
+func (db *DB) getChannelsCache(key string) ([]map[string]interface{}, bool) {
+	db.channelsCacheMu.Lock()
+	defer db.channelsCacheMu.Unlock()
+	e, ok := db.channelsCache[key]
+	if !ok || time.Now().After(e.exp) {
+		return nil, false
+	}
+	return e.res, true
+}
+
+func (db *DB) setChannelsCache(key string, res []map[string]interface{}) {
+	db.channelsCacheMu.Lock()
+	defer db.channelsCacheMu.Unlock()
+	if db.channelsCache == nil || len(db.channelsCache) > maxCacheEntries {
+		db.channelsCache = make(map[string]channelsCacheEntry)
+	}
+	db.channelsCache[key] = channelsCacheEntry{res: res, exp: time.Now().Add(channelsCacheTTL)}
+}
+
+// getEncChannelsCache/setEncChannelsCache mirror getChannelsCache/
+// setChannelsCache for GetEncryptedChannels, which previously had no cache.
+func (db *DB) getEncChannelsCache(key string) ([]map[string]interface{}, bool) {
+	db.encChannelsCacheMu.Lock()
+	defer db.encChannelsCacheMu.Unlock()
+	e, ok := db.encChannelsCache[key]
+	if !ok || time.Now().After(e.exp) {
+		return nil, false
+	}
+	return e.res, true
+}
+
+func (db *DB) setEncChannelsCache(key string, res []map[string]interface{}) {
+	db.encChannelsCacheMu.Lock()
+	defer db.encChannelsCacheMu.Unlock()
+	if db.encChannelsCache == nil || len(db.encChannelsCache) > maxCacheEntries {
+		db.encChannelsCache = make(map[string]channelsCacheEntry)
+	}
+	db.encChannelsCache[key] = channelsCacheEntry{res: res, exp: time.Now().Add(channelsCacheTTL)}
+}
+
 // GetChannels returns channel list from GRP_TXT packets.
 // Queries transmissions directly (not a VIEW) to avoid observation-level
 // duplicates that could cause stale lastMessage when an older message has
@@ -1608,14 +1683,9 @@ func (db *DB) GetChannels(region ...string) ([]map[string]interface{}, error) {
 		regionParam = region[0]
 	}
 
-	// Check cache (60s TTL)
-	db.channelsCacheMu.Lock()
-	if db.channelsCacheRes != nil && db.channelsCacheKey == regionParam && time.Now().Before(db.channelsCacheExp) {
-		res := db.channelsCacheRes
-		db.channelsCacheMu.Unlock()
-		return res, nil
+	if cached, ok := db.getChannelsCache(regionParam); ok {
+		return cached, nil
 	}
-	db.channelsCacheMu.Unlock()
 
 	regionCodes := normalizeRegionCodes(regionParam)
 
@@ -1723,12 +1793,7 @@ func (db *DB) GetChannels(region ...string) ([]map[string]interface{}, error) {
 		})
 	}
 
-	// Store in cache (60s TTL)
-	db.channelsCacheMu.Lock()
-	db.channelsCacheRes = channels
-	db.channelsCacheKey = regionParam
-	db.channelsCacheExp = time.Now().Add(60 * time.Second)
-	db.channelsCacheMu.Unlock()
+	db.setChannelsCache(regionParam, channels)
 
 	return channels, nil
 }
@@ -1740,6 +1805,11 @@ func (db *DB) GetEncryptedChannels(region ...string) ([]map[string]interface{}, 
 	if len(region) > 0 {
 		regionParam = region[0]
 	}
+
+	if cached, ok := db.getEncChannelsCache(regionParam); ok {
+		return cached, nil
+	}
+
 	regionCodes := normalizeRegionCodes(regionParam)
 
 	var querySQL string
@@ -1816,7 +1886,33 @@ func (db *DB) GetEncryptedChannels(region ...string) ([]map[string]interface{}, 
 			"encrypted":    true,
 		})
 	}
+
+	db.setEncChannelsCache(regionParam, channels)
+
 	return channels, nil
+}
+
+// getMsgCache/setMsgCache cache GetChannelMessages results, keyed by
+// hash+limit+offset+region. GetChannelMessages previously had no cache at
+// all, so every page view/poll re-ran the full paginated query even though
+// polling the same page repeatedly is the common case.
+func (db *DB) getMsgCache(key string) ([]map[string]interface{}, int, bool) {
+	db.msgCacheMu.Lock()
+	defer db.msgCacheMu.Unlock()
+	e, ok := db.msgCache[key]
+	if !ok || time.Now().After(e.exp) {
+		return nil, 0, false
+	}
+	return e.msgs, e.total, true
+}
+
+func (db *DB) setMsgCache(key string, msgs []map[string]interface{}, total int) {
+	db.msgCacheMu.Lock()
+	defer db.msgCacheMu.Unlock()
+	if db.msgCache == nil || len(db.msgCache) > maxCacheEntries {
+		db.msgCache = make(map[string]channelMessagesCacheEntry)
+	}
+	db.msgCache[key] = channelMessagesCacheEntry{msgs: msgs, total: total, exp: time.Now().Add(msgCacheTTL)}
 }
 
 // GetChannelMessages returns messages for a specific channel.
@@ -1842,6 +1938,12 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 	if len(region) > 0 {
 		regionParam = region[0]
 	}
+
+	cacheKey := fmt.Sprintf("%s|%d|%d|%s", channelHash, limit, offset, regionParam)
+	if msgs, total, ok := db.getMsgCache(cacheKey); ok {
+		return msgs, total, nil
+	}
+
 	regionCodes := normalizeRegionCodes(regionParam)
 	regionArgs := make([]interface{}, 0, len(regionCodes))
 	regionPlaceholders := ""
@@ -1935,7 +2037,9 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 	idRows.Close()
 
 	if len(pageIDs) == 0 {
-		return []map[string]interface{}{}, total, nil
+		empty := []map[string]interface{}{}
+		db.setMsgCache(cacheKey, empty, total)
+		return empty, total, nil
 	}
 
 	// 3) Fetch observations for just this page of transmissions. We keep
@@ -2084,6 +2188,8 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 	for _, e := range rowsOut {
 		messages = append(messages, e.data)
 	}
+
+	db.setMsgCache(cacheKey, messages, total)
 
 	return messages, total, nil
 }
