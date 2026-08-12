@@ -61,6 +61,11 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensureObserverIATAColumn(rw, logf); err != nil {
 		return fmt.Errorf("ensure observers.iata: %w", err)
 	}
+	// Must run after ensureObserverIATAColumn: the expression index below
+	// is on observers.iata, which that step guarantees exists.
+	if err := ensureChannelIndexes(rw); err != nil {
+		return fmt.Errorf("ensure channel indexes: %w", err)
+	}
 	if err := ensureForeignAdvertColumn(rw, logf); err != nil {
 		return fmt.Errorf("ensure foreign_advert: %w", err)
 	}
@@ -239,6 +244,41 @@ func ensureServerIndexes(rw *sql.DB) error {
 		if _, err := rw.Exec(`CREATE INDEX IF NOT EXISTS idx_observations_observer_id ON observations(observer_id)`); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// ensureChannelIndexes speeds up /api/channels and
+// /api/channels/{hash}/messages.
+//
+//   - idx_transmissions_channel_hash_payload adds first_seen to the
+//     existing channel_hash index (cmd/ingestor/db.go migration
+//     'channel_hash_v1', idx_tx_channel_hash) so GetChannels' "latest
+//     message" correlated subquery (channel_hash + payload_type, ORDER BY
+//     first_seen DESC LIMIT 1) and GetChannelMessages' count/page queries
+//     resolve as index-order scans instead of sorting per channel.
+//   - idx_observers_iata_norm indexes the UPPER(TRIM(iata)) expression
+//     that GetChannels/GetEncryptedChannels/GetChannelMessages use for
+//     region filtering; a plain index on iata can't be used under that
+//     expression, so the expression itself is indexed.
+//
+// transmissions.channel_hash itself is added by the ingestor's legacy
+// 'channel_hash_v1' migration (cmd/ingestor/db.go), not by this package,
+// so it isn't guaranteed to exist yet on every DB Apply runs against —
+// probe before indexing, same pattern as the observer_idx/observer_id
+// probe in ensureServerIndexes above.
+func ensureChannelIndexes(rw *sql.DB) error {
+	hasChannelHash, err := TableHasColumn(rw, "transmissions", "channel_hash")
+	if err != nil {
+		return err
+	}
+	if hasChannelHash {
+		if _, err := rw.Exec(`CREATE INDEX IF NOT EXISTS idx_transmissions_channel_hash_payload ON transmissions(channel_hash, payload_type, first_seen)`); err != nil {
+			return fmt.Errorf("ensure idx_transmissions_channel_hash_payload: %w", err)
+		}
+	}
+	if _, err := rw.Exec(`CREATE INDEX IF NOT EXISTS idx_observers_iata_norm ON observers(UPPER(TRIM(iata)))`); err != nil {
+		return fmt.Errorf("ensure idx_observers_iata_norm: %w", err)
 	}
 	return nil
 }
