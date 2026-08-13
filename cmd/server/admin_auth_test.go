@@ -460,3 +460,126 @@ func TestRequireCSRFRejectsUnauthenticatedEvenWithValidToken(t *testing.T) {
 		t.Fatalf("expected 401 (no session), got %d: %s", w.Code, w.Body.String())
 	}
 }
+
+func doChangePassword(t *testing.T, srv *Server, sc, cc *http.Cookie, current, newPw string) *httptest.ResponseRecorder {
+	t.Helper()
+	body, _ := json.Marshal(changePasswordRequest{CurrentPassword: current, NewPassword: newPw})
+	req := httptest.NewRequest("POST", "/api/admin/change-password", bytes.NewReader(body))
+	if sc != nil {
+		req.AddCookie(sc)
+	}
+	if cc != nil {
+		req.AddCookie(cc)
+		req.Header.Set(adminCSRFHeaderName, cc.Value)
+	}
+	w := httptest.NewRecorder()
+	srv.requireAdmin(srv.requireCSRF(http.HandlerFunc(srv.handleChangePassword))).ServeHTTP(w, req)
+	return w
+}
+
+func TestChangePasswordSuccess(t *testing.T) {
+	srv := newTestAdminServer(t)
+	if _, err := srv.admin.CreateAdmin("victor", "original-password", admindb.RoleAdmin, nil); err != nil {
+		t.Fatalf("CreateAdmin: %v", err)
+	}
+	loginResp := doLogin(t, srv, "victor", "original-password")
+	sc := sessionCookie(t, loginResp)
+	cc := csrfCookie(t, loginResp)
+
+	w := doChangePassword(t, srv, sc, cc, "original-password", "new-password-123")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Old password no longer works, new one does.
+	if _, err := srv.admin.Authenticate("victor", "original-password"); err == nil {
+		t.Fatal("old password should no longer authenticate")
+	}
+	if _, err := srv.admin.Authenticate("victor", "new-password-123"); err != nil {
+		t.Fatalf("new password should authenticate: %v", err)
+	}
+}
+
+func TestChangePasswordWrongCurrentPassword(t *testing.T) {
+	srv := newTestAdminServer(t)
+	if _, err := srv.admin.CreateAdmin("wendy", "original-password", admindb.RoleAdmin, nil); err != nil {
+		t.Fatalf("CreateAdmin: %v", err)
+	}
+	loginResp := doLogin(t, srv, "wendy", "original-password")
+	sc := sessionCookie(t, loginResp)
+	cc := csrfCookie(t, loginResp)
+
+	w := doChangePassword(t, srv, sc, cc, "totally-wrong", "new-password-123")
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+	}
+	// Original password must still work.
+	if _, err := srv.admin.Authenticate("wendy", "original-password"); err != nil {
+		t.Fatalf("original password should still work: %v", err)
+	}
+}
+
+func TestChangePasswordTooShort(t *testing.T) {
+	srv := newTestAdminServer(t)
+	if _, err := srv.admin.CreateAdmin("xavier", "original-password", admindb.RoleAdmin, nil); err != nil {
+		t.Fatalf("CreateAdmin: %v", err)
+	}
+	loginResp := doLogin(t, srv, "xavier", "original-password")
+	sc := sessionCookie(t, loginResp)
+	cc := csrfCookie(t, loginResp)
+
+	w := doChangePassword(t, srv, sc, cc, "original-password", "short")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestChangePasswordRequiresAuth(t *testing.T) {
+	srv := newTestAdminServer(t)
+	w := doChangePassword(t, srv, nil, nil, "whatever", "new-password-123")
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestChangePasswordRequiresCSRF(t *testing.T) {
+	srv := newTestAdminServer(t)
+	if _, err := srv.admin.CreateAdmin("yara", "original-password", admindb.RoleAdmin, nil); err != nil {
+		t.Fatalf("CreateAdmin: %v", err)
+	}
+	loginResp := doLogin(t, srv, "yara", "original-password")
+	sc := sessionCookie(t, loginResp)
+
+	w := doChangePassword(t, srv, sc, nil, "original-password", "new-password-123")
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestChangePasswordInvalidatesOtherSessionsButNotCurrent(t *testing.T) {
+	srv := newTestAdminServer(t)
+	if _, err := srv.admin.CreateAdmin("zeke", "original-password", admindb.RoleAdmin, nil); err != nil {
+		t.Fatalf("CreateAdmin: %v", err)
+	}
+
+	// Two independent logins — e.g. a laptop and a phone.
+	loginResp1 := doLogin(t, srv, "zeke", "original-password")
+	sc1 := sessionCookie(t, loginResp1)
+	cc1 := csrfCookie(t, loginResp1)
+	loginResp2 := doLogin(t, srv, "zeke", "original-password")
+	sc2 := sessionCookie(t, loginResp2)
+
+	w := doChangePassword(t, srv, sc1, cc1, "original-password", "new-password-123")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Session 1 (the one that made the change) stays valid.
+	if _, err := srv.admin.ValidateSession(sc1.Value); err != nil {
+		t.Fatalf("session making the change should stay valid: %v", err)
+	}
+	// Session 2 (a different device) is invalidated.
+	if _, err := srv.admin.ValidateSession(sc2.Value); err == nil {
+		t.Fatal("other session should have been invalidated by the password change")
+	}
+}

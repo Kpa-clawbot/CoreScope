@@ -150,3 +150,27 @@ body.auth-gated.authed { visibility: visible; }
   border-radius: 6px; background: var(--input-bg); color: var(--text); font-size: 14px; font-family: var(--font);
 }
 .login-card input:focus { outline: none; border-color: var(--accent); }
+
+/* --- Change-password modal (opened from the account menu) --- */
+.modal-backdrop {
+  display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5);
+  z-index: 1300; align-items: center; justify-content: center; padding: 24px;
+}
+.modal-backdrop.open { display: flex; }
+.modal-card {
+  width: 100%; max-width: 360px; padding: 24px;
+  background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px;
+}
+.modal-card h2 { font-size: var(--fs-lg, 17px); font-weight: 600; margin: 0 0 18px; text-transform: none; letter-spacing: normal; color: var(--text); }
+.modal-card label { display: block; font-size: 12px; color: var(--text-muted); margin: 0 0 6px; font-weight: 500; }
+.modal-card input {
+  width: 100%; padding: 10px 12px; margin-bottom: 14px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--input-bg); color: var(--text); font-size: 14px; font-family: var(--font);
+}
+.modal-card input:focus { outline: none; border-color: var(--accent); }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+.modal-success {
+  display: none; background: color-mix(in srgb, var(--success) 12%, var(--card-bg));
+  border: 1px solid color-mix(in srgb, var(--success) 40%, var(--border));
+  color: var(--success); padding: 8px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 12px;
+}

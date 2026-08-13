@@ -271,6 +271,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.Handle("/api/admin/me", s.requireAdmin(http.HandlerFunc(s.handleAdminMe))).Methods("GET")
 	r.Handle("/api/admin/admins", s.requireAdmin(http.HandlerFunc(s.handleListAdmins))).Methods("GET")
 	r.Handle("/api/admin/admins", s.requireSuperAdmin(s.requireCSRF(http.HandlerFunc(s.handleCreateAdmin)))).Methods("POST")
+	r.Handle("/api/admin/change-password", s.requireAdmin(s.requireCSRF(http.HandlerFunc(s.handleChangePassword)))).Methods("POST")
 
 	// Infrastructure-node management: both admin and super_admin can do
 	// this (per the spec, super_admin's only extra capability is
