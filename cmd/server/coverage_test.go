@@ -2908,6 +2908,33 @@ func TestStoreGetStoreStats(t *testing.T) {
 	}
 }
 
+// TestStoreGetStoreStatsExcludesInactiveObservers guards the discrepancy
+// between the top-nav "obs" count (GET /api/stats -> GetStoreStats, this
+// query) and the Observers page (GET /api/observers -> GetObservers,
+// db.go), which filters `WHERE inactive IS NULL OR inactive = 0`.
+// GetStoreStats' observer subquery previously had no WHERE clause at
+// all, so a soft-deleted observer inflated the top bar's count relative
+// to what the Observers page actually lists.
+func TestStoreGetStoreStatsExcludesInactiveObservers(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	seedTestData(t, db) // seeds 2 active observers: obs1, obs2
+	if _, err := db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count, inactive)
+		VALUES ('obs3-inactive', 'Soft Deleted', 'LAX', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 10, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	store := NewPacketStore(db, nil)
+	store.Load()
+
+	stats, err := store.GetStoreStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.TotalObservers != 2 {
+		t.Errorf("expected TotalObservers=2 (inactive observer excluded, matching GetObservers), got %d", stats.TotalObservers)
+	}
+}
+
 // --- Store.QueryGroupedPackets ---
 
 func TestStoreQueryGroupedPackets(t *testing.T) {
