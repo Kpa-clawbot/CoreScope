@@ -107,17 +107,23 @@ async function gotoPackets(page) {
   });
 
   await test('Columns menu can hide and restore the Scope column', async () => {
-    await page.click('#colToggleBtn');
-    await page.waitForTimeout(200);
-    const box = await page.$('#colToggleMenu input[data-col="scope"]');
-    assert(box, 'no Scope checkbox in the Columns menu');
-    assert(await box.isChecked(), 'Scope checkbox should start checked');
-    await box.uncheck();
-    await page.waitForTimeout(200);
+    // A checkbox click bubbles to the document handler that closes the menu, so
+    // each toggle needs its own open.
+    const toggleScope = async () => {
+      await page.click('#colToggleBtn');
+      await page.waitForTimeout(200);
+      const box = await page.$('#colToggleMenu input[data-col="scope"]');
+      assert(box, 'no Scope checkbox in the Columns menu');
+      const wasChecked = await box.isChecked();
+      await box.click();
+      await page.waitForTimeout(300);
+      return wasChecked;
+    };
+
+    assert(await toggleScope(), 'Scope checkbox should start checked');
     assert(await page.$eval('#pktTable', t => t.classList.contains('hide-col-scope')),
       'unchecking should add hide-col-scope');
-    await box.check();
-    await page.waitForTimeout(200);
+    assert(!(await toggleScope()), 'Scope checkbox should now be unchecked');
     assert(!(await page.$eval('#pktTable', t => t.classList.contains('hide-col-scope'))),
       're-checking should remove hide-col-scope');
   });
