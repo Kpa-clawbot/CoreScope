@@ -161,7 +161,11 @@ func (s *PacketStore) collectRelayEntriesLocked(key string) []relayEntry {
 			if tx.RouteType != nil {
 				rt = *tx.RouteType
 			}
-			entries = append(entries, relayEntry{ts: tx.FirstSeen, pt: pt, rt: rt, scope: tx.ScopeName})
+			scope := ""
+			if tx.ScopeName != nil {
+				scope = *tx.ScopeName
+			}
+			entries = append(entries, relayEntry{ts: tx.FirstSeen, pt: pt, rt: rt, scope: scope})
 		}
 	}
 	collect(txList)

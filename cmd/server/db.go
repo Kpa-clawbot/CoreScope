@@ -2293,6 +2293,17 @@ func nullStrVal(ns sql.NullString) string {
 	return ""
 }
 
+// nullStrPtr preserves the NULL/"" distinction that nullStrVal collapses.
+// transmissions.scope_name needs it: NULL means "not transport-scoped" while
+// "" means "transport-scoped, region unmatched" (#899).
+func nullStrPtr(ns sql.NullString) *string {
+	if !ns.Valid {
+		return nil
+	}
+	s := ns.String
+	return &s
+}
+
 func nilIfEmpty(s string) interface{} {
 	if s == "" {
 		return nil

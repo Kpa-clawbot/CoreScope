@@ -38,9 +38,11 @@ type StoreTx struct {
 	PayloadType      *int
 	DecodedJSON      string
 	// ScopeName is the transmission's region scope name (transmissions.scope_name,
-	// #899). Empty on schemas without the column (db.hasScopeName=false). Used to
-	// surface the set of region scopes a repeater has transported (#1751).
-	ScopeName        string
+	// #899). nil means the row is not transport-scoped (SQL NULL), or the schema
+	// has no such column (db.hasScopeName=false); a pointer to "" means
+	// transport-scoped with an unmatched region. Used to surface the set of region
+	// scopes a repeater has transported (#1751) and the packet-detail Scope row.
+	ScopeName        *string
 	Observations     []*StoreObs
 	ObservationCount int
 	// Display fields from longest-path observation
@@ -885,7 +887,7 @@ func (s *PacketStore) Load() error {
 				RouteType:   nullIntPtr(routeType),
 				PayloadType: nullIntPtr(payloadType),
 				DecodedJSON: nullStrVal(decodedJSON),
-				ScopeName:   nullStrVal(scopeName),
+				ScopeName:   nullStrPtr(scopeName),
 				obsKeys:     make(map[string]bool),
 				observerSet: make(map[string]bool),
 			}
@@ -1213,7 +1215,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 				RouteType:   nullIntPtr(routeType),
 				PayloadType: nullIntPtr(payloadType),
 				DecodedJSON: nullStrVal(decodedJSON),
-				ScopeName:   nullStrVal(scopeName),
+				ScopeName:   nullStrPtr(scopeName),
 				obsKeys:     make(map[string]bool),
 				observerSet: make(map[string]bool),
 			}
@@ -2642,7 +2644,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		obsID                                                              *int
 		observerID, observerName, observerIATA, direction, pathJSON, obsTS string
 		obsRawHex                                                          string
-		scopeName                                                          string
+		scopeName                                                          *string
 		snr, rssi                                                          *float64
 		score                                                              *int
 	}
@@ -2699,7 +2701,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			pathJSON:     nullStrVal(pathJSON),
 			obsTS:        nullStrVal(obsTimestamp),
 			obsRawHex:    nullStrVal(obsRawHex),
-			scopeName:    nullStrVal(scopeName),
+			scopeName:    nullStrPtr(scopeName),
 			snr:          nullFloatPtr(snrVal),
 			rssi:         nullFloatPtr(rssiVal),
 			score:        nullIntPtr(scoreVal),
@@ -3843,6 +3845,7 @@ func txToMap(tx *StoreTx, includeObservations ...bool) map[string]interface{} {
 		"rssi":              floatPtrOrNil(tx.RSSI),
 		"path_json":         strOrNil(tx.PathJSON),
 		"direction":         strOrNil(tx.Direction),
+		"scope_name":        strPtrOrNil(tx.ScopeName),
 	}
 	// Include parsed path array to match Node.js output shape
 	if hops := txGetParsedPath(tx); len(hops) > 0 {
@@ -3913,6 +3916,13 @@ func normalizeTimestamp(s string) string {
 		return t.UTC().Format("2006-01-02T15:04:05.000Z")
 	}
 	return s
+}
+
+func strPtrOrNil(p *string) interface{} {
+	if p == nil {
+		return nil
+	}
+	return *p
 }
 
 func intPtrOrNil(p *int) interface{} {

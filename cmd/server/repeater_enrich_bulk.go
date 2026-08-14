@@ -152,11 +152,11 @@ func (s *PacketStore) computeRepeaterRelayInfoMap(windowHours float64) map[strin
 				// unparseable first_seen still proves the repeater
 				// transported that scope. RelayCount/LastRelayed below
 				// remain timestamp-gated.
-				if tx.ScopeName != "" {
+				if tx.ScopeName != nil && *tx.ScopeName != "" {
 					if scopeSet == nil {
 						scopeSet = map[string]struct{}{}
 					}
-					scopeSet[tx.ScopeName] = struct{}{}
+					scopeSet[*tx.ScopeName] = struct{}{}
 				}
 				if !p.ok {
 					continue
