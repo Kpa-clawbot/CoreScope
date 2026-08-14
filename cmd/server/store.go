@@ -2011,6 +2011,7 @@ func groupedTxsToPage(txs []*StoreTx, total, offset, limit int) *PacketResult {
 			"decoded_json":      strOrNil(tx.DecodedJSON),
 			"snr":               floatPtrOrNil(tx.SNR),
 			"rssi":              floatPtrOrNil(tx.RSSI),
+			"scope_name":        strPtrOrNil(tx.ScopeName),
 		}
 		// resolved_path omitted for grouped view (cold path, not worth SQL round-trip)
 		packets[i] = m

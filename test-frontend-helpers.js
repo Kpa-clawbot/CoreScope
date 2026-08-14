@@ -235,6 +235,32 @@ console.log('\n=== app.js: routeTypeName / payloadTypeName ===');
   test('getPathLenOffset: direct route (2) → 1', () => assert.strictEqual(ctx.getPathLenOffset(2), 1));
 }
 
+console.log('\n=== app.js: scopeCellHtml ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+
+  // transmissions.scope_name has three states; the Scope column in the packets
+  // table must render each one distinguishably.
+  test('scope_name null (not transport-scoped) → em dash', () =>
+    assert.strictEqual(ctx.scopeCellHtml(null), '—'));
+  test('scope_name undefined (older API without the field) → em dash', () =>
+    assert.strictEqual(ctx.scopeCellHtml(undefined), '—'));
+  test('scope_name "" (transport-scoped, region unmatched) → muted unknown', () => {
+    const html = ctx.scopeCellHtml('');
+    assert.ok(html.includes('unknown'), 'should say unknown, got: ' + html);
+    assert.ok(html.includes('text-muted'), 'should be muted, got: ' + html);
+  });
+  test('scope_name "#be" → the region name', () =>
+    assert.strictEqual(ctx.scopeCellHtml('#be'), '#be'));
+  test('scope_name is escaped', () => {
+    const html = ctx.scopeCellHtml('<img src=x onerror=alert(1)>');
+    assert.ok(!html.includes('<img'), 'must not emit a raw tag, got: ' + html);
+    assert.ok(html.includes('&lt;img'), 'should escape the tag, got: ' + html);
+  });
+}
+
 console.log('\n=== app.js: truncate ===');
 {
   const ctx = makeSandbox();

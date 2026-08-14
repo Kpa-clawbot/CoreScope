@@ -15,6 +15,21 @@ function getPathLenOffset(routeType) { return isTransportRoute(routeType) ? 5 : 
 function transportBadge(rt) { return isTransportRoute(rt) ? ' <span class="badge badge-transport" title="' + routeTypeName(rt) + '">T</span>' : ''; }
 
 /**
+ * Render a packet's transport region scope (transmissions.scope_name) for the
+ * Scope column and the detail pane. Three states, matching what the DB stores:
+ *   null/undefined — not transport-scoped; FLOOD and DIRECT carry no
+ *                    transport_code_1 at all, so there is nothing to show.
+ *   ""             — transport-scoped, but the code matched no configured
+ *                    hashRegions entry.
+ *   "#be"          — the matched region name.
+ */
+function scopeCellHtml(scopeName) {
+  if (scopeName == null) return '—';
+  if (scopeName === '') return '<span style="color:var(--text-muted)">unknown</span>';
+  return escapeHtml(scopeName);
+}
+
+/**
  * Compute breakdown byte ranges from raw_hex on the client.
  * Mirrors cmd/server/decoder.go BuildBreakdown(). Used so per-observation raw_hex
  * (which can differ in path length from the top-level packet) gets accurate
