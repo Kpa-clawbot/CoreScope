@@ -4557,19 +4557,25 @@ console.log('\n=== app.js: favorites ===');
     assert.deepStrictEqual(ctx.getFavorites(), ['pk2']);
   });
 
+  // #1648 replaced the ★/☆ literals with Phosphor sprite refs; these assert the
+  // sprite ids rather than the old glyphs, which the repo-wide emoji scan
+  // (test-issue-1648-m6-final-sweep.js) now forbids from coming back.
   test('favStar returns filled star for favorite', () => {
     ctx.localStorage.setItem('meshcore-favorites', '["pk1"]');
     const html = ctx.favStar('pk1');
-    assert.ok(html.includes('★'));
-    assert.ok(html.includes('on'));
+    assert.ok(html.includes('#ph-star-fill'), 'expected the filled star sprite, got: ' + html);
+    assert.ok(html.includes('class="fav-star  on"'), 'expected the on class, got: ' + html);
+    assert.ok(html.includes('aria-pressed="true"'), 'expected aria-pressed=true, got: ' + html);
     assert.ok(html.includes('Remove from favorites'));
   });
 
   test('favStar returns empty star for non-favorite', () => {
     ctx.localStorage.setItem('meshcore-favorites', '[]');
     const html = ctx.favStar('pk1');
-    assert.ok(html.includes('☆'));
-    assert.ok(!html.includes(' on'));
+    assert.ok(html.includes('#ph-star"'), 'expected the outline star sprite, got: ' + html);
+    assert.ok(!html.includes('#ph-star-fill'), 'must not use the filled sprite, got: ' + html);
+    assert.ok(!/class="fav-star[^"]*\bon\b/.test(html), 'must not carry the on class, got: ' + html);
+    assert.ok(html.includes('aria-pressed="false"'), 'expected aria-pressed=false, got: ' + html);
     assert.ok(html.includes('Add to favorites'));
   });
 
