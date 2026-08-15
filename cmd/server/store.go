@@ -2086,7 +2086,7 @@ func (s *PacketStore) GetStoreStats() (*Stats, error) {
 			`SELECT
 				(SELECT COUNT(*) FROM nodes WHERE last_seen > ?) AS active_nodes,
 				(SELECT COUNT(*) FROM nodes) AS all_nodes,
-				(SELECT COUNT(*) FROM observers) AS observers`,
+				(SELECT COUNT(*) FROM observers WHERE inactive IS NULL OR inactive = 0) AS observers`,
 			sevenDaysAgo,
 		).Scan(&st.TotalNodes, &st.TotalNodesAllTime, &st.TotalObservers)
 	}()
