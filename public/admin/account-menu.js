@@ -22,6 +22,35 @@
     return { 'X-CSRF-Token': getCookie('corescope_admin_csrf') };
   }
 
+  // --- Hamburger menu (<768px) — mirrors the main app's hamburger wiring
+  // in app.js (#hamburger / .nav-links.open / body.nav-open), which the
+  // admin panel doesn't load. Runs once at script-load time since the
+  // hamburger button and .nav-links are static markup, not re-rendered
+  // per page like #who is.
+  function initHamburger() {
+    var hamburger = document.getElementById('hamburger');
+    var navLinks = document.querySelector('.nav-links');
+    if (!hamburger || !navLinks) return;
+    hamburger.addEventListener('click', function () {
+      var opening = !navLinks.classList.contains('open');
+      navLinks.classList.toggle('open');
+      document.body.classList.toggle('nav-open');
+      hamburger.setAttribute('aria-expanded', String(opening));
+    });
+    navLinks.querySelectorAll('.nav-link').forEach(function (link) {
+      link.addEventListener('click', function () {
+        navLinks.classList.remove('open');
+        document.body.classList.remove('nav-open');
+        hamburger.setAttribute('aria-expanded', 'false');
+      });
+    });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initHamburger);
+  } else {
+    initHamburger();
+  }
+
   function logout() {
     fetch('/api/admin/logout', {
       method: 'POST',
