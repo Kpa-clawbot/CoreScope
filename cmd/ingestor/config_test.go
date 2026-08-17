@@ -496,3 +496,21 @@ func TestIngestBufferSizeOrDefault(t *testing.T) {
 		t.Fatalf("invalid negative should fall back to default, got %d", got)
 	}
 }
+
+func TestClientRxObservationsGate(t *testing.T) {
+	var c Config
+	if c.ClientRxObservationsEnabled() {
+		t.Error("default should be disabled")
+	}
+	c.ClientRxObservations = &ClientRxObservationsConfig{Enabled: true}
+	if !c.ClientRxObservationsEnabled() {
+		t.Error("explicit enable not honoured")
+	}
+	if got := c.ClientRxObsDaysOrZero(); got != 0 {
+		t.Errorf("unset retention = %d, want 0", got)
+	}
+	c.Retention = &RetentionConfig{ClientRxObsDays: 14}
+	if got := c.ClientRxObsDaysOrZero(); got != 14 {
+		t.Errorf("retention = %d, want 14", got)
+	}
+}
