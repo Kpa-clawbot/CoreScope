@@ -2421,7 +2421,10 @@ func TestBackfillTransportCodes_MultiBatchWithUndecodableRow(t *testing.T) {
 		}
 	}
 
-	total := s.backfillTransportCodes(batchSize)
+	total, err := s.backfillTransportCodes(batchSize)
+	if err != nil {
+		t.Fatalf("backfillTransportCodes: %v", err)
+	}
 	if total != len(goodRaws) {
 		t.Errorf("backfillTransportCodes returned %d, want %d (one per good row)", total, len(goodRaws))
 	}
@@ -2445,6 +2448,69 @@ func TestBackfillTransportCodes_MultiBatchWithUndecodableRow(t *testing.T) {
 	}
 	if badC1 != nil {
 		t.Errorf("undecodable row code1 = %v, want NULL", badC1)
+	}
+}
+
+// TestBackfillTransportCodes_ErrorWithholdsGuardRow is a regression test for the
+// invariant that backfill_transport_codes_v1 is recorded iff and only if the
+// backfill actually ran to exhaustion of all matching rows. Forces the select
+// branch of backfillTransportCodes to fail mid-run by closing the store's DB
+// connection out from under it (simulating a transient DB error), then verifies
+// (a) the guard row is absent afterward and (b) reopening a fresh Store on the
+// same file and running the backfill again still processes the row the failed
+// run never reached.
+func TestBackfillTransportCodes_ErrorWithholdsGuardRow(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	store1, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+
+	raw := "14" + "AABB" + "CCDD" + "00" + strings.Repeat("11", 32)
+	if _, err := store1.db.Exec(
+		`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
+		 VALUES (?,?,?,?,?)`,
+		raw, ComputeContentHash(raw), "2026-08-01T00:00:00Z", 0, 5); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := store1.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if _, err := store1.backfillTransportCodes(5000); err == nil {
+		t.Fatal("backfillTransportCodes on a closed store returned nil error, want non-nil")
+	}
+
+	store2, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer store2.Close()
+
+	var done int
+	if err := store2.db.QueryRow(
+		`SELECT 1 FROM _migrations WHERE name = 'backfill_transport_codes_v1'`).Scan(&done); err != sql.ErrNoRows {
+		t.Fatalf("guard row query = (done=%d, err=%v), want sql.ErrNoRows — guard must be withheld after a failed run", done, err)
+	}
+
+	// Unobstructed, a subsequent run must still backfill the row the failed
+	// run never reached.
+	store2.BackfillTransportCodesAsync()
+	store2.backfillWg.Wait()
+
+	var c1 *string
+	if err := store2.db.QueryRow(`SELECT code1 FROM transmissions WHERE hash = ?`,
+		ComputeContentHash(raw)).Scan(&c1); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if c1 == nil || *c1 != "AABB" {
+		t.Errorf("code1 = %v, want AABB — subsequent run must backfill what the failed run skipped", c1)
+	}
+	if err := store2.db.QueryRow(
+		`SELECT 1 FROM _migrations WHERE name = 'backfill_transport_codes_v1'`).Scan(&done); err != nil {
+		t.Errorf("guard row not recorded after a successful run: %v", err)
 	}
 }
 

@@ -1492,7 +1492,11 @@ func (s *Store) BackfillTransportCodesAsync() {
 			return // already ran
 		}
 
-		total := s.backfillTransportCodes(5000)
+		total, err := s.backfillTransportCodes(5000)
+		if err != nil {
+			log.Printf("[backfill] transport_codes: %v", err)
+			return // NOT recording the guard row — retry from scratch on next restart
+		}
 		s.Stats.IncBackfill("transport_codes")
 		log.Printf("[backfill] transport_codes populated for %d transmissions", total)
 		s.db.Exec(`INSERT INTO _migrations (name) VALUES ('backfill_transport_codes_v1')`)
@@ -1509,7 +1513,12 @@ func (s *Store) BackfillTransportCodesAsync() {
 // actually scanned (seen), not by how many decoded successfully; lastID
 // advances past undecodable rows too, so they are stepped over rather than
 // re-selected forever.
-func (s *Store) backfillTransportCodes(batchSize int) int {
+//
+// Invariant: the caller records the backfill_transport_codes_v1 guard row iff
+// this returns a nil error, i.e. iff the loop ran to genuine exhaustion of all
+// matching rows. Every error path below returns non-nil immediately, without
+// finishing the run, so the guard is withheld and the next startup retries.
+func (s *Store) backfillTransportCodes(batchSize int) (int, error) {
 	var total int
 	var lastID int64
 	for {
@@ -1519,8 +1528,7 @@ func (s *Store) backfillTransportCodes(batchSize int) int {
 			ORDER BY id
 			LIMIT ?`, lastID, batchSize)
 		if err != nil {
-			log.Printf("[backfill] transport_codes select: %v", err)
-			return total
+			return total, fmt.Errorf("transport_codes select: %w", err)
 		}
 		type item struct {
 			id           int64
@@ -1532,7 +1540,8 @@ func (s *Store) backfillTransportCodes(batchSize int) int {
 			var id int64
 			var raw string
 			if err := rows.Scan(&id, &raw); err != nil {
-				continue
+				rows.Close()
+				return total, fmt.Errorf("transport_codes scan: %w", err)
 			}
 			seen++
 			lastID = id // advance past undecodable rows too, or they are re-selected forever
@@ -1550,22 +1559,23 @@ func (s *Store) backfillTransportCodes(batchSize int) int {
 		if len(items) > 0 {
 			tx, err := s.db.Begin()
 			if err != nil {
-				log.Printf("[backfill] transport_codes begin: %v", err)
-				return total
+				return total, fmt.Errorf("transport_codes begin: %w", err)
 			}
 			stmt, err := tx.Prepare(`UPDATE transmissions SET code1 = ?, code2 = ? WHERE id = ?`)
 			if err != nil {
 				tx.Rollback()
-				log.Printf("[backfill] transport_codes prepare: %v", err)
-				return total
+				return total, fmt.Errorf("transport_codes prepare: %w", err)
 			}
 			for _, it := range items {
-				stmt.Exec(it.code1, it.code2, it.id)
+				if _, err := stmt.Exec(it.code1, it.code2, it.id); err != nil {
+					stmt.Close()
+					tx.Rollback()
+					return total, fmt.Errorf("transport_codes update id=%d: %w", it.id, err)
+				}
 			}
 			stmt.Close()
 			if err := tx.Commit(); err != nil {
-				log.Printf("[backfill] transport_codes commit: %v", err)
-				return total
+				return total, fmt.Errorf("transport_codes commit: %w", err)
 			}
 			total += len(items)
 		}
@@ -1573,7 +1583,7 @@ func (s *Store) backfillTransportCodes(batchSize int) int {
 			break // last partial page
 		}
 	}
-	return total
+	return total, nil
 }
 
 // LogStats logs current operational metrics.
