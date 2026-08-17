@@ -2376,6 +2376,78 @@ func TestBackfillTransportCodes(t *testing.T) {
 	}
 }
 
+// TestBackfillTransportCodes_MultiBatchWithUndecodableRow is a regression test for
+// a defect in the original loop: it terminated on "items returned < batchSize"
+// rather than "rows scanned < batchSize", so a full page containing even one
+// undecodable row broke the loop early and the exported wrapper then recorded
+// the completion migration — silently truncating the backfill and, because the
+// guard blocks all future runs, leaving every later row permanently NULL.
+// Seeds more rows than one batch holds, with an undecodable row in the first
+// page, and asserts every decodable row across every page got backfilled.
+func TestBackfillTransportCodes_MultiBatchWithUndecodableRow(t *testing.T) {
+	s := newTestStore(t)
+
+	const batchSize = 3
+
+	// route_type 0 (TRANSPORT_FLOOD) header, but only 1 byte follows — too
+	// short for the 4-byte transport codes field, so DecodePacket errors and
+	// this row is skipped. It must not stop rows after it in later pages from
+	// being backfilled.
+	badRaw := "14" + "AA"
+
+	// Payload byte varies per row so ComputeContentHash (which hashes only the
+	// payload, skipping path and transport-code bytes) gives each row a
+	// distinct hash despite the shared header/path/code shape.
+	var goodRaws []string
+	for i := 1; i <= 6; i++ {
+		goodRaws = append(goodRaws, fmt.Sprintf("14%04X%04X00%s", i, i+100, strings.Repeat(fmt.Sprintf("%02X", i), 32)))
+	}
+
+	// Insertion order fixes id order: bad row first, then the 6 good rows,
+	// giving 7 matching rows across 3 pages of 3 — batch 1 = {bad, good1,
+	// good2}, batch 2 = {good3, good4, good5}, batch 3 = {good6}.
+	if _, err := s.db.Exec(
+		`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
+		 VALUES (?,?,?,?,?)`,
+		badRaw, ComputeContentHash(badRaw), "2026-08-01T00:00:00Z", 0, 5); err != nil {
+		t.Fatalf("seed bad row: %v", err)
+	}
+	for _, raw := range goodRaws {
+		if _, err := s.db.Exec(
+			`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
+			 VALUES (?,?,?,?,?)`,
+			raw, ComputeContentHash(raw), "2026-08-01T00:00:00Z", 0, 5); err != nil {
+			t.Fatalf("seed good row: %v", err)
+		}
+	}
+
+	total := s.backfillTransportCodes(batchSize)
+	if total != len(goodRaws) {
+		t.Errorf("backfillTransportCodes returned %d, want %d (one per good row)", total, len(goodRaws))
+	}
+
+	for i, raw := range goodRaws {
+		wantCode1 := fmt.Sprintf("%04X", i+1)
+		var c1 *string
+		if err := s.db.QueryRow(`SELECT code1 FROM transmissions WHERE hash = ?`,
+			ComputeContentHash(raw)).Scan(&c1); err != nil {
+			t.Fatalf("read good row %d: %v", i, err)
+		}
+		if c1 == nil || *c1 != wantCode1 {
+			t.Errorf("good row %d code1 = %v, want %s (row after the undecodable one in an earlier or later page must still be backfilled)", i, c1, wantCode1)
+		}
+	}
+
+	var badC1 *string
+	if err := s.db.QueryRow(`SELECT code1 FROM transmissions WHERE hash = ?`,
+		ComputeContentHash(badRaw)).Scan(&badC1); err != nil {
+		t.Fatalf("read bad row: %v", err)
+	}
+	if badC1 != nil {
+		t.Errorf("undecodable row code1 = %v, want NULL", badC1)
+	}
+}
+
 // --- Feature 3: default_scope column on nodes (#899) ---
 
 func TestUpdateNodeDefaultScope(t *testing.T) {

@@ -1492,49 +1492,72 @@ func (s *Store) BackfillTransportCodesAsync() {
 			return // already ran
 		}
 
-		const batch = 5000
-		var total int
-		for {
-			rows, err := s.db.Query(`
-				SELECT id, raw_hex FROM transmissions
-				WHERE code1 IS NULL AND route_type IN (0, 3)
-				LIMIT ?`, batch)
-			if err != nil {
-				log.Printf("[backfill] transport_codes select: %v", err)
-				return
-			}
-			type item struct {
-				id           int64
-				code1, code2 string
-			}
-			var items []item
-			for rows.Next() {
-				var id int64
-				var raw string
-				if err := rows.Scan(&id, &raw); err != nil {
-					continue
-				}
-				decoded, err := DecodePacket(raw, nil, false)
-				if err != nil || decoded.TransportCodes == nil {
-					continue
-				}
-				items = append(items, item{id, decoded.TransportCodes.Code1, decoded.TransportCodes.Code2})
-			}
-			rows.Close()
-			if len(items) == 0 {
-				break
-			}
+		total := s.backfillTransportCodes(5000)
+		s.Stats.IncBackfill("transport_codes")
+		log.Printf("[backfill] transport_codes populated for %d transmissions", total)
+		s.db.Exec(`INSERT INTO _migrations (name) VALUES ('backfill_transport_codes_v1')`)
+	}()
+}
 
+// backfillTransportCodes does the actual batched decode-and-update work,
+// returning the number of rows updated. Uses keyset pagination on id rather
+// than counting decoded items per page: a page can hit the LIMIT while
+// containing undecodable rows, so "items returned < batchSize" does NOT mean
+// "no rows remain" — that conflation previously caused the backfill to record
+// its completion migration after silently truncating on the first page with
+// an undecodable row. Termination is driven by how many rows the page
+// actually scanned (seen), not by how many decoded successfully; lastID
+// advances past undecodable rows too, so they are stepped over rather than
+// re-selected forever.
+func (s *Store) backfillTransportCodes(batchSize int) int {
+	var total int
+	var lastID int64
+	for {
+		rows, err := s.db.Query(`
+			SELECT id, raw_hex FROM transmissions
+			WHERE id > ? AND code1 IS NULL AND route_type IN (0, 3)
+			ORDER BY id
+			LIMIT ?`, lastID, batchSize)
+		if err != nil {
+			log.Printf("[backfill] transport_codes select: %v", err)
+			return total
+		}
+		type item struct {
+			id           int64
+			code1, code2 string
+		}
+		var items []item
+		var seen int
+		for rows.Next() {
+			var id int64
+			var raw string
+			if err := rows.Scan(&id, &raw); err != nil {
+				continue
+			}
+			seen++
+			lastID = id // advance past undecodable rows too, or they are re-selected forever
+			decoded, err := DecodePacket(raw, nil, false)
+			if err != nil || decoded.TransportCodes == nil {
+				continue
+			}
+			items = append(items, item{id, decoded.TransportCodes.Code1, decoded.TransportCodes.Code2})
+		}
+		rows.Close()
+		if seen == 0 {
+			break // no rows left matching the filter
+		}
+
+		if len(items) > 0 {
 			tx, err := s.db.Begin()
 			if err != nil {
 				log.Printf("[backfill] transport_codes begin: %v", err)
-				return
+				return total
 			}
 			stmt, err := tx.Prepare(`UPDATE transmissions SET code1 = ?, code2 = ? WHERE id = ?`)
 			if err != nil {
 				tx.Rollback()
 				log.Printf("[backfill] transport_codes prepare: %v", err)
-				return
+				return total
 			}
 			for _, it := range items {
 				stmt.Exec(it.code1, it.code2, it.id)
@@ -1542,18 +1565,15 @@ func (s *Store) BackfillTransportCodesAsync() {
 			stmt.Close()
 			if err := tx.Commit(); err != nil {
 				log.Printf("[backfill] transport_codes commit: %v", err)
-				return
+				return total
 			}
 			total += len(items)
-			if len(items) < batch {
-				break
-			}
 		}
-
-		s.Stats.IncBackfill("transport_codes")
-		log.Printf("[backfill] transport_codes populated for %d transmissions", total)
-		s.db.Exec(`INSERT INTO _migrations (name) VALUES ('backfill_transport_codes_v1')`)
-	}()
+		if seen < batchSize {
+			break // last partial page
+		}
+	}
+	return total
 }
 
 // LogStats logs current operational metrics.
