@@ -2274,8 +2274,13 @@ func TestTransportCodesStored(t *testing.T) {
 	rawScoped := "14" + "AABB" + "CCDD" + "00" + strings.Repeat("11", 32)
 	// header 0x15 = route_type 1 (FLOOD), payload_type 5 — no transport codes.
 	rawUnscoped := "15" + "00" + strings.Repeat("22", 32)
+	// header 0x14 = route_type 0 (TRANSPORT_FLOOD) with all-zero transport
+	// codes. "0000" is stored literally (NOT NULL) — it is the meaningful
+	// "explicitly unscoped transport packet" case and must not collapse
+	// into the same NULL a non-transport packet gets.
+	rawZeroCodes := "14" + "0000" + "0000" + "00" + strings.Repeat("33", 32)
 
-	for _, raw := range []string{rawScoped, rawUnscoped} {
+	for _, raw := range []string{rawScoped, rawUnscoped, rawZeroCodes} {
 		pd := &PacketData{
 			RawHex: raw, Hash: ComputeContentHash(raw), Timestamp: "2026-08-17T10:00:00Z",
 			ObserverID: "obs1", RouteType: 0, PayloadType: 5,
@@ -2285,6 +2290,9 @@ func TestTransportCodesStored(t *testing.T) {
 		}
 		if raw == rawScoped {
 			pd.Code1, pd.Code2 = "AABB", "CCDD"
+		}
+		if raw == rawZeroCodes {
+			pd.Code1, pd.Code2 = "0000", "0000"
 		}
 		if _, err := s.InsertTransmission(pd); err != nil {
 			t.Fatalf("insert: %v", err)
@@ -2306,6 +2314,14 @@ func TestTransportCodesStored(t *testing.T) {
 	}
 	if c1 != nil || c2 != nil {
 		t.Errorf("unscoped codes = %v/%v, want NULL/NULL", c1, c2)
+	}
+
+	if err := s.db.QueryRow(`SELECT code1, code2 FROM transmissions WHERE hash = ?`,
+		ComputeContentHash(rawZeroCodes)).Scan(&c1, &c2); err != nil {
+		t.Fatalf("read zero-codes: %v", err)
+	}
+	if c1 == nil || *c1 != "0000" || c2 == nil || *c2 != "0000" {
+		t.Errorf("zero-codes codes = %v/%v, want literal \"0000\"/\"0000\" (not NULL)", c1, c2)
 	}
 }
 
