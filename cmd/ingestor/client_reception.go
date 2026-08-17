@@ -221,3 +221,49 @@ func (s *Store) InsertClientReception(r *ClientReception) (bool, error) {
 	n, _ := res.RowsAffected()
 	return n > 0, nil
 }
+
+// ClientRxObservation is one decodable packet a mobile client heard, whether or
+// not it was attributable to a directly-heard node. Diagnostic only: this table
+// is never a coverage source (see client_receptions for that).
+type ClientRxObservation struct {
+	RxPubkey    string
+	RxAt        string
+	IngestedAt  string
+	PktHash     string
+	RouteType   int
+	PayloadType int
+	HashSize    int
+	HopCount    int
+	Code1       *string
+	Code2       *string
+	ScopeName   *string
+	PathJSON    *string
+	Forwarder   *string
+	SNR         *float64
+	RSSI        *int
+	Lat         float64
+	Lon         float64
+	PosAccM     *float64
+}
+
+// InsertClientRxObservation writes one diagnostic observation. Idempotent via
+// UNIQUE(rx_pubkey, pkt_hash, rx_at); returns ins=false when the row existed.
+// Several rows per pkt_hash are EXPECTED — each is one forwarder's copy of the
+// same flood, and that multiplicity is the flood-amplification signal.
+func (s *Store) InsertClientRxObservation(o *ClientRxObservation) (bool, error) {
+	res, err := s.db.Exec(`
+		INSERT INTO client_rx_observations
+			(rx_pubkey, rx_at, ingested_at, pkt_hash, route_type, payload_type,
+			 code1, code2, scope_name, hash_size, hop_count, path_json, forwarder,
+			 snr, rssi, lat, lon, pos_acc_m)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(rx_pubkey, pkt_hash, rx_at) DO NOTHING`,
+		o.RxPubkey, o.RxAt, o.IngestedAt, o.PktHash, o.RouteType, o.PayloadType,
+		o.Code1, o.Code2, o.ScopeName, o.HashSize, o.HopCount, o.PathJSON, o.Forwarder,
+		o.SNR, o.RSSI, o.Lat, o.Lon, o.PosAccM)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}

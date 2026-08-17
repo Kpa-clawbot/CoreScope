@@ -3216,3 +3216,36 @@ func TestUpdateNodeDefaultScope_EmptyScopeIsNoop(t *testing.T) {
 		t.Errorf("inactive_nodes.default_scope after empty-scope call = %q, want #belgium (DB-layer guard missing — #1534)", gotInactive)
 	}
 }
+
+func TestInsertClientRxObservation(t *testing.T) {
+	s := newTestStore(t)
+	code1, fwd := "AABB", "1a2b"
+	o := &ClientRxObservation{
+		RxPubkey: "aa11", RxAt: "2026-08-17T10:00:00.123Z", IngestedAt: "2026-08-17T10:00:01Z",
+		PktHash: "0123456789abcdef", RouteType: 0, PayloadType: 4,
+		HashSize: 2, HopCount: 1, Code1: &code1, Forwarder: &fwd,
+		Lat: 51.2, Lon: 4.4,
+	}
+	ins, err := s.InsertClientRxObservation(o)
+	if err != nil || !ins {
+		t.Fatalf("insert: ins=%v err=%v", ins, err)
+	}
+	// Same (rx_pubkey, pkt_hash, rx_at) → idempotent, no second row.
+	ins, err = s.InsertClientRxObservation(o)
+	if err != nil || ins {
+		t.Fatalf("re-insert: ins=%v err=%v (want false, nil)", ins, err)
+	}
+	// A second copy of the same flood from another forwarder, 40 ms later,
+	// MUST create its own row — that multiplicity is the amplification signal.
+	fwd2 := "3c4d"
+	o2 := *o
+	o2.RxAt, o2.Forwarder = "2026-08-17T10:00:00.163Z", &fwd2
+	if ins, err = s.InsertClientRxObservation(&o2); err != nil || !ins {
+		t.Fatalf("second copy: ins=%v err=%v", ins, err)
+	}
+	var n int
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_rx_observations WHERE pkt_hash = ?`, o.PktHash).Scan(&n)
+	if n != 2 {
+		t.Errorf("rows for pkt_hash = %d, want 2", n)
+	}
+}
