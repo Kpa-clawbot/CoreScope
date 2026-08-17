@@ -266,3 +266,140 @@ func TestOpenIsIdempotent(t *testing.T) {
 		t.Fatalf("expected data to survive reopen, got %+v", admins)
 	}
 }
+
+func TestChangePasswordSuccess(t *testing.T) {
+	s := openTestStore(t)
+	a, err := s.CreateAdmin("oscar", "original-password", RoleAdmin, nil)
+	if err != nil {
+		t.Fatalf("CreateAdmin: %v", err)
+	}
+	if err := s.ChangePassword(a.ID, "original-password", "new-password-123"); err != nil {
+		t.Fatalf("ChangePassword: %v", err)
+	}
+
+	if _, err := s.Authenticate("oscar", "original-password"); err != ErrInvalidCredentials {
+		t.Fatalf("old password should no longer work, got %v", err)
+	}
+	if _, err := s.Authenticate("oscar", "new-password-123"); err != nil {
+		t.Fatalf("new password should work: %v", err)
+	}
+}
+
+func TestChangePasswordWrongOldPassword(t *testing.T) {
+	s := openTestStore(t)
+	a, err := s.CreateAdmin("pat", "original-password", RoleAdmin, nil)
+	if err != nil {
+		t.Fatalf("CreateAdmin: %v", err)
+	}
+	if err := s.ChangePassword(a.ID, "wrong-old-password", "new-password-123"); err != ErrInvalidCredentials {
+		t.Fatalf("got %v, want ErrInvalidCredentials", err)
+	}
+	// Original password must still work — the change must not have applied.
+	if _, err := s.Authenticate("pat", "original-password"); err != nil {
+		t.Fatalf("original password should still work after a rejected change: %v", err)
+	}
+}
+
+func TestChangePasswordTooShort(t *testing.T) {
+	s := openTestStore(t)
+	a, err := s.CreateAdmin("quinn", "original-password", RoleAdmin, nil)
+	if err != nil {
+		t.Fatalf("CreateAdmin: %v", err)
+	}
+	if err := s.ChangePassword(a.ID, "original-password", "short"); err != ErrPasswordTooShort {
+		t.Fatalf("got %v, want ErrPasswordTooShort", err)
+	}
+	if _, err := s.Authenticate("quinn", "original-password"); err != nil {
+		t.Fatalf("original password should still work after a rejected change: %v", err)
+	}
+}
+
+func TestChangePasswordUnknownAdminID(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.ChangePassword(999999, "whatever", "new-password-123"); err != ErrInvalidCredentials {
+		t.Fatalf("got %v, want ErrInvalidCredentials", err)
+	}
+}
+
+func TestDeleteOtherSessionsKeepsCurrent(t *testing.T) {
+	s := openTestStore(t)
+	a, err := s.CreateAdmin("river", "password12345", RoleAdmin, nil)
+	if err != nil {
+		t.Fatalf("CreateAdmin: %v", err)
+	}
+	keepToken, _, err := s.CreateSession(a.ID)
+	if err != nil {
+		t.Fatalf("CreateSession (keep): %v", err)
+	}
+	otherToken, _, err := s.CreateSession(a.ID)
+	if err != nil {
+		t.Fatalf("CreateSession (other): %v", err)
+	}
+
+	if err := s.DeleteOtherSessions(a.ID, keepToken); err != nil {
+		t.Fatalf("DeleteOtherSessions: %v", err)
+	}
+
+	if _, err := s.ValidateSession(keepToken); err != nil {
+		t.Fatalf("kept session should still validate: %v", err)
+	}
+	if _, err := s.ValidateSession(otherToken); err != ErrSessionInvalid {
+		t.Fatalf("other session should be invalidated, got %v", err)
+	}
+}
+
+func TestDeleteOtherSessionsAllWhenKeepEmpty(t *testing.T) {
+	s := openTestStore(t)
+	a, err := s.CreateAdmin("sam", "password12345", RoleAdmin, nil)
+	if err != nil {
+		t.Fatalf("CreateAdmin: %v", err)
+	}
+	tok1, _, err := s.CreateSession(a.ID)
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	tok2, _, err := s.CreateSession(a.ID)
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	if err := s.DeleteOtherSessions(a.ID, ""); err != nil {
+		t.Fatalf("DeleteOtherSessions: %v", err)
+	}
+	if _, err := s.ValidateSession(tok1); err != ErrSessionInvalid {
+		t.Fatalf("tok1 should be invalidated, got %v", err)
+	}
+	if _, err := s.ValidateSession(tok2); err != ErrSessionInvalid {
+		t.Fatalf("tok2 should be invalidated, got %v", err)
+	}
+}
+
+func TestDeleteOtherSessionsDoesNotAffectOtherAdmins(t *testing.T) {
+	s := openTestStore(t)
+	a1, err := s.CreateAdmin("tina", "password12345", RoleAdmin, nil)
+	if err != nil {
+		t.Fatalf("CreateAdmin a1: %v", err)
+	}
+	a2, err := s.CreateAdmin("uma", "password12345", RoleAdmin, nil)
+	if err != nil {
+		t.Fatalf("CreateAdmin a2: %v", err)
+	}
+	a1Token, _, err := s.CreateSession(a1.ID)
+	if err != nil {
+		t.Fatalf("CreateSession a1: %v", err)
+	}
+	a2Token, _, err := s.CreateSession(a2.ID)
+	if err != nil {
+		t.Fatalf("CreateSession a2: %v", err)
+	}
+
+	if err := s.DeleteOtherSessions(a1.ID, ""); err != nil {
+		t.Fatalf("DeleteOtherSessions: %v", err)
+	}
+	if _, err := s.ValidateSession(a1Token); err != ErrSessionInvalid {
+		t.Fatalf("a1's session should be invalidated, got %v", err)
+	}
+	if _, err := s.ValidateSession(a2Token); err != nil {
+		t.Fatalf("a2's session should be untouched: %v", err)
+	}
+}

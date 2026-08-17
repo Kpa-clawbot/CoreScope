@@ -312,6 +312,59 @@ func (s *Server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
+type changePasswordRequest struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
+}
+
+// handleChangePassword lets a logged-in admin change their own
+// password. Requires the current password — see admindb.ChangePassword
+// for why a session cookie alone isn't sufficient. On success,
+// invalidates every OTHER session belonging to this admin (e.g. a
+// device that's since been lost, or in case the old password had
+// leaked) while keeping the session making this request logged in.
+func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	a := adminFromContext(r.Context())
+	if a == nil {
+		writeError(w, http.StatusUnauthorized, "not logged in")
+		return
+	}
+	var req changePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.CurrentPassword == "" || req.NewPassword == "" {
+		writeError(w, http.StatusBadRequest, "current and new password are required")
+		return
+	}
+
+	if err := s.admin.ChangePassword(a.ID, req.CurrentPassword, req.NewPassword); err != nil {
+		switch {
+		case errors.Is(err, admindb.ErrInvalidCredentials):
+			writeError(w, http.StatusUnauthorized, "current password is incorrect")
+		case errors.Is(err, admindb.ErrPasswordTooShort):
+			writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			log.Printf("[admin-auth] ChangePassword error: %v", err)
+			writeError(w, http.StatusInternalServerError, "failed to change password")
+		}
+		return
+	}
+
+	var currentToken string
+	if cookie, err := r.Cookie(adminSessionCookieName); err == nil {
+		currentToken = cookie.Value
+	}
+	if err := s.admin.DeleteOtherSessions(a.ID, currentToken); err != nil {
+		// Password change already succeeded — this is best-effort
+		// cleanup, don't fail the request over it.
+		log.Printf("[admin-auth] DeleteOtherSessions error: %v", err)
+	}
+
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
 func (s *Server) handleAdminMe(w http.ResponseWriter, r *http.Request) {
 	a := adminFromContext(r.Context())
 	if a == nil {

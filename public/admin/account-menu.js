@@ -18,14 +18,158 @@
     return match ? decodeURIComponent(match[1]) : '';
   }
 
+  function csrfHeaders() {
+    return { 'X-CSRF-Token': getCookie('corescope_admin_csrf') };
+  }
+
+  // --- Hamburger menu (<768px) — mirrors the main app's hamburger wiring
+  // in app.js (#hamburger / .nav-links.open / body.nav-open), which the
+  // admin panel doesn't load. Runs once at script-load time since the
+  // hamburger button and .nav-links are static markup, not re-rendered
+  // per page like #who is.
+  function initHamburger() {
+    var hamburger = document.getElementById('hamburger');
+    var navLinks = document.querySelector('.nav-links');
+    if (!hamburger || !navLinks) return;
+    hamburger.addEventListener('click', function () {
+      var opening = !navLinks.classList.contains('open');
+      navLinks.classList.toggle('open');
+      document.body.classList.toggle('nav-open');
+      hamburger.setAttribute('aria-expanded', String(opening));
+    });
+    navLinks.querySelectorAll('.nav-link').forEach(function (link) {
+      link.addEventListener('click', function () {
+        navLinks.classList.remove('open');
+        document.body.classList.remove('nav-open');
+        hamburger.setAttribute('aria-expanded', 'false');
+      });
+    });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initHamburger);
+  } else {
+    initHamburger();
+  }
+
   function logout() {
     fetch('/api/admin/logout', {
       method: 'POST',
       credentials: 'same-origin',
-      headers: { 'X-CSRF-Token': getCookie('corescope_admin_csrf') }
+      headers: csrfHeaders()
     }).then(function () {
       window.location.href = '/admin/login';
     });
+  }
+
+  // Modal is built once and reused across opens (not rebuilt per
+  // renderAccountMenu call, since #who — and the account menu inside it
+  // — gets re-rendered by loadAdmins()/loadInfraList() refresh cycles on
+  // the pages that use it; the modal itself doesn't need to move).
+  var modalBackdrop = null;
+
+  function ensureChangePasswordModal() {
+    if (modalBackdrop) return modalBackdrop;
+
+    modalBackdrop = document.createElement('div');
+    modalBackdrop.className = 'modal-backdrop';
+    modalBackdrop.id = 'changePasswordBackdrop';
+    modalBackdrop.innerHTML =
+      '<div class="modal-card">' +
+        '<h2>Change password</h2>' +
+        '<div class="form-error" id="changePasswordError"></div>' +
+        '<div class="modal-success" id="changePasswordSuccess">Password changed. Your other sessions have been logged out.</div>' +
+        '<form id="changePasswordForm">' +
+          '<label for="currentPassword">Current password</label>' +
+          '<input type="password" id="currentPassword" autocomplete="current-password" required>' +
+          '<label for="newPassword">New password</label>' +
+          '<input type="password" id="newPassword" autocomplete="new-password" required minlength="8">' +
+          '<label for="confirmPassword">Confirm new password</label>' +
+          '<input type="password" id="confirmPassword" autocomplete="new-password" required minlength="8">' +
+          '<div class="modal-actions">' +
+            '<button type="button" class="btn-secondary" id="changePasswordCancel">Cancel</button>' +
+            '<button type="submit" class="btn-primary" id="changePasswordSubmit">Save</button>' +
+          '</div>' +
+        '</form>' +
+      '</div>';
+    document.body.appendChild(modalBackdrop);
+
+    var form = document.getElementById('changePasswordForm');
+    var errorEl = document.getElementById('changePasswordError');
+    var successEl = document.getElementById('changePasswordSuccess');
+    var submitBtn = document.getElementById('changePasswordSubmit');
+
+    function closeModal() {
+      modalBackdrop.classList.remove('open');
+      form.reset();
+      errorEl.style.display = 'none';
+      successEl.style.display = 'none';
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Save';
+    }
+
+    modalBackdrop.addEventListener('click', function (e) {
+      if (e.target === modalBackdrop) closeModal();
+    });
+    document.getElementById('changePasswordCancel').addEventListener('click', closeModal);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && modalBackdrop.classList.contains('open')) closeModal();
+    });
+
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      errorEl.style.display = 'none';
+      successEl.style.display = 'none';
+
+      var current = document.getElementById('currentPassword').value;
+      var next = document.getElementById('newPassword').value;
+      var confirm = document.getElementById('confirmPassword').value;
+
+      if (next !== confirm) {
+        errorEl.textContent = 'New password and confirmation do not match.';
+        errorEl.style.display = 'block';
+        return;
+      }
+      if (next.length < 8) {
+        errorEl.textContent = 'New password must be at least 8 characters.';
+        errorEl.style.display = 'block';
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Saving…';
+
+      fetch('/api/admin/change-password', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, csrfHeaders()),
+        body: JSON.stringify({ currentPassword: current, newPassword: next })
+      })
+        .then(function (res) {
+          return res.json().catch(function () { return {}; }).then(function (body) {
+            if (!res.ok) throw new Error(body.error || ('request failed (' + res.status + ')'));
+            return body;
+          });
+        })
+        .then(function () {
+          form.reset();
+          successEl.style.display = 'block';
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Save';
+        })
+        .catch(function (err) {
+          errorEl.textContent = err.message || 'Failed to change password';
+          errorEl.style.display = 'block';
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Save';
+        });
+    });
+
+    return modalBackdrop;
+  }
+
+  function openChangePasswordModal() {
+    ensureChangePasswordModal().classList.add('open');
+    document.getElementById('currentPassword').focus();
   }
 
   // renderAccountMenu(me) builds the dropdown into <div id="who"> (inside
@@ -43,6 +187,7 @@
         '</button>' +
         '<div class="account-menu" id="accountMenu" role="menu">' +
           '<div class="account-menu-header">Signed in as <strong>' + escapeHTML(me.username) + '</strong></div>' +
+          '<button class="account-menu-item" type="button" role="menuitem" id="accountChangePasswordBtn">Change password</button>' +
           '<button class="account-menu-item danger" type="button" role="menuitem" id="accountLogoutBtn">Log out</button>' +
         '</div>' +
       '</div>';
@@ -79,6 +224,10 @@
     });
     document.addEventListener('keydown', function (e) {
       if (open && e.key === 'Escape') setOpen(false);
+    });
+    document.getElementById('accountChangePasswordBtn').addEventListener('click', function () {
+      setOpen(false);
+      openChangePasswordModal();
     });
     document.getElementById('accountLogoutBtn').addEventListener('click', function () {
       setOpen(false);

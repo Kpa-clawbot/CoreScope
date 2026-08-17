@@ -61,6 +61,16 @@ var ErrUsernameTaken = errors.New("username already taken")
 // expired session token.
 var ErrSessionInvalid = errors.New("session invalid or expired")
 
+// ErrPasswordTooShort is returned by ChangePassword when newPassword is
+// under minPasswordLen.
+var ErrPasswordTooShort = errors.New("password must be at least 8 characters")
+
+// minPasswordLen is the minimum length enforced on a newly *chosen*
+// password (ChangePassword). Existing accounts and CreateAdmin are left
+// as-is — this only guards the one path where an admin is actively
+// picking their own new password.
+const minPasswordLen = 8
+
 // sessionTTL is how long a session stays valid after its last use;
 // ValidateSession slides this window forward on every successful check.
 const sessionTTL = 24 * time.Hour
@@ -205,6 +215,38 @@ func (s *Store) Authenticate(username, password string) (*Admin, error) {
 	return &a, nil
 }
 
+// ChangePassword verifies oldPassword against adminID's stored hash,
+// then replaces it with newPassword. The current password is always
+// required, even when called on behalf of the account's own owner —
+// a stolen or idle session cookie alone must not be enough to change
+// (and thereby lock out) the account. Returns ErrInvalidCredentials if
+// oldPassword doesn't match (never distinguishes that from "unknown
+// admin", consistent with Authenticate), or ErrPasswordTooShort if
+// newPassword is under the minimum length.
+func (s *Store) ChangePassword(adminID int64, oldPassword, newPassword string) error {
+	if len(newPassword) < minPasswordLen {
+		return ErrPasswordTooShort
+	}
+	var hash string
+	if err := s.db.QueryRow(`SELECT password_hash FROM admins WHERE id = ?`, adminID).Scan(&hash); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrInvalidCredentials
+		}
+		return fmt.Errorf("query admin: %w", err)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(oldPassword)); err != nil {
+		return ErrInvalidCredentials
+	}
+	newHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcryptCost)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+	if _, err := s.db.Exec(`UPDATE admins SET password_hash = ? WHERE id = ?`, string(newHash), adminID); err != nil {
+		return fmt.Errorf("update password: %w", err)
+	}
+	return nil
+}
+
 // CreateSession issues a new random session token for adminID and
 // returns the raw token (only its SHA-256 hash is persisted).
 func (s *Store) CreateSession(adminID int64) (token string, expiresAt time.Time, err error) {
@@ -289,6 +331,24 @@ func (s *Store) DeleteSession(token string) error {
 	_, err := s.db.Exec(`DELETE FROM admin_sessions WHERE token_hash = ?`, hashToken(token))
 	if err != nil {
 		return fmt.Errorf("delete session: %w", err)
+	}
+	return nil
+}
+
+// DeleteOtherSessions removes every session belonging to adminID except
+// the one matching keepToken (pass "" to remove all of them). Called
+// after a password change so any other logged-in session — e.g. on a
+// device that's since been lost, or if the old password had leaked —
+// doesn't silently stay valid; the session making the change itself
+// stays logged in.
+func (s *Store) DeleteOtherSessions(adminID int64, keepToken string) error {
+	keep := ""
+	if keepToken != "" {
+		keep = hashToken(keepToken)
+	}
+	_, err := s.db.Exec(`DELETE FROM admin_sessions WHERE admin_id = ? AND token_hash != ?`, adminID, keep)
+	if err != nil {
+		return fmt.Errorf("delete other sessions: %w", err)
 	}
 	return nil
 }

@@ -56,11 +56,12 @@ func routeDescriptions() map[string]routeMeta {
 		// Admin accounts (login-based, distinct from the requireAPIKey-gated
 		// routes above). No public registration — accounts are created by an
 		// existing super_admin, or bootstrapped via the `admin` CLI.
-		"POST /api/admin/login":  {Summary: "Admin login", Description: "Authenticates an admin account and sets an HttpOnly session cookie.", Tag: "admin"},
-		"POST /api/admin/logout": {Summary: "Admin logout", Description: "Invalidates the current session and clears the session cookie.", Tag: "admin", Auth: true},
-		"GET /api/admin/me":      {Summary: "Get current admin", Description: "Returns the identity (username, role) of the currently logged-in admin.", Tag: "admin", Auth: true},
-		"GET /api/admin/admins":  {Summary: "List admin accounts", Tag: "admin", Auth: true},
-		"POST /api/admin/admins": {Summary: "Create an admin account", Description: "Requires the super_admin role — the only capability that differs between admin and super_admin.", Tag: "admin", Auth: true},
+		"POST /api/admin/login":           {Summary: "Admin login", Description: "Authenticates an admin account and sets an HttpOnly session cookie.", Tag: "admin"},
+		"POST /api/admin/logout":          {Summary: "Admin logout", Description: "Invalidates the current session and clears the session cookie.", Tag: "admin", Auth: true},
+		"GET /api/admin/me":               {Summary: "Get current admin", Description: "Returns the identity (username, role) of the currently logged-in admin.", Tag: "admin", Auth: true},
+		"GET /api/admin/admins":           {Summary: "List admin accounts", Tag: "admin", Auth: true},
+		"POST /api/admin/admins":          {Summary: "Create an admin account", Description: "Requires the super_admin role — the only capability that differs between admin and super_admin.", Tag: "admin", Auth: true},
+		"POST /api/admin/change-password": {Summary: "Change your own password", Description: "Requires the current password. On success, invalidates every other session for this admin (e.g. a lost device) while keeping the current one logged in.", Tag: "admin", Auth: true},
 
 		// Infrastructure-node management (admin panel). The server opens
 		// SQLite read-only, so these enqueue a request for the ingestor
