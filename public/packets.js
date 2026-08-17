@@ -1042,6 +1042,92 @@
     else _docColMenuCloseHandler = handler;
   }
 
+  // --- Locally-added channels in the channel filter ---------------------
+  // Channels the operator adds in their own browser (Channels page → "Add
+  // channel") live only in localStorage — the keys never leave the client
+  // (channel-decrypt.js). The server therefore cannot decrypt their traffic
+  // and files it under the synthetic channel hash "enc_<HH>", which
+  // /api/channels omits. Result: a channel you just added is invisible in
+  // the packets channel picker.
+  //
+  // Fix: derive the same "enc_<HH>" value client-side from the stored key
+  // (SHA-256(key)[0], exactly what the ingestor writes) and offer those
+  // channels as extra options. /api/packets?channel=enc_<HH> already
+  // filters on that value server-side, so no backend change is needed.
+
+  /**
+   * Read the browser's stored channel keys and map each to the server-side
+   * channel-hash value its packets are stored under.
+   * Cost: one SHA-256 per stored key (a handful), once per page init.
+   * @returns {Promise<Array<{value:string,name:string,label:string}>>}
+   */
+  async function collectLocalChannels() {
+    const CD = window.ChannelDecrypt;
+    if (!CD || typeof CD.getStoredKeys !== 'function') return [];
+    let keys;
+    try { keys = CD.getStoredKeys() || {}; } catch (e) { return []; }
+    const out = [];
+    for (const name of Object.keys(keys)) {
+      const keyHex = keys[name];
+      if (!keyHex || typeof keyHex !== 'string') continue;
+      let hashByte;
+      try {
+        const keyBytes = CD.hexToBytes(keyHex);
+        if (!keyBytes || keyBytes.length !== 16) continue;
+        hashByte = await CD.computeChannelHash(keyBytes);
+      } catch (e) { continue; }
+      if (typeof hashByte !== 'number') continue;
+      const label = (typeof CD.getLabel === 'function' && CD.getLabel(name)) || name;
+      out.push({
+        // Uppercase 2-digit hex — matches cmd/ingestor/decoder.go ("%02X").
+        value: 'enc_' + hashByte.toString(16).padStart(2, '0').toUpperCase(),
+        name: name,
+        label: label
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Merge the server channel list with locally-added ones into the two
+   * option groups the picker renders. Pure — unit-tested.
+   * A local channel is dropped when the server already exposes it (same
+   * hash value, or same name because the server holds the key too).
+   * @returns {{server: Array<{value:string,label:string}>, local: Array<{value:string,label:string}>}}
+   */
+  function buildChannelOptions(serverChannels, localChannels) {
+    const byLabel = (a, b) => {
+      const an = (a.label || '').toLowerCase();
+      const bn = (b.label || '').toLowerCase();
+      return an < bn ? -1 : an > bn ? 1 : 0;
+    };
+    const server = [];
+    const seenValues = new Set();
+    const seenNames = new Set();
+    for (const ch of serverChannels || []) {
+      const value = (ch && (ch.hash || ch.name)) || '';
+      if (!value || seenValues.has(value)) continue;
+      seenValues.add(value);
+      seenNames.add(String(ch.name || value).toLowerCase());
+      server.push({ value: value, label: ch.name || value });
+    }
+    const local = [];
+    for (const lc of localChannels || []) {
+      if (!lc || !lc.value) continue;
+      if (seenValues.has(lc.value)) continue;
+      if (seenNames.has(String(lc.name || '').toLowerCase())) continue;
+      seenValues.add(lc.value);
+      local.push({ value: lc.value, label: lc.label || lc.name });
+    }
+    return { server: server.sort(byLabel), local: local.sort(byLabel) };
+  }
+
+  // Exported for test-packets-local-channels.js (no DOM required).
+  if (typeof window !== 'undefined') {
+    window._packetsBuildChannelOptionsForTest = buildChannelOptions;
+    window._packetsCollectLocalChannelsForTest = collectLocalChannels;
+  }
+
   function renderTimestampCell(isoString) {
     if (typeof formatTimestampWithTooltip !== 'function' || typeof getTimestampMode !== 'function') {
       return escapeHtml(typeof timeAgo === 'function' ? timeAgo(isoString) : '—');
@@ -1815,31 +1901,37 @@
         opt.selected = true;
         channelSel.appendChild(opt);
       }
-      api('/channels').then(data => {
+      Promise.all([
+        api('/channels').catch(() => null),
+        collectLocalChannels()
+      ]).then(([data, localChannels]) => {
         const channels = (data && data.channels) || [];
         // Build options via DOM API: channel names are network-supplied
         // and must NOT be interpolated into innerHTML (XSS, #812).
         // Sort alphabetically (case-insensitive) for predictable picker order;
         // the API returns last-activity order which is unstable for a dropdown.
-        const sorted = channels.slice().sort((a, b) => {
-          const an = (a.name || a.hash || '').toLowerCase();
-          const bn = (b.name || b.hash || '').toLowerCase();
-          return an < bn ? -1 : an > bn ? 1 : 0;
-        });
+        const groups = buildChannelOptions(channels, localChannels);
         channelSel.textContent = '';
         const allOpt = document.createElement('option');
         allOpt.value = '';
         allOpt.textContent = 'All Channels';
         channelSel.appendChild(allOpt);
         let matched = false;
-        for (const ch of sorted) {
-          const v = ch.hash || ch.name || '';
-          if (!v) continue;
+        const addOption = (o, parent) => {
           const opt = document.createElement('option');
-          opt.value = v;
-          opt.textContent = ch.name || v;
-          if (v === filters.channel) { opt.selected = true; matched = true; }
-          channelSel.appendChild(opt);
+          opt.value = o.value;
+          opt.textContent = o.label;
+          if (o.value === filters.channel) { opt.selected = true; matched = true; }
+          parent.appendChild(opt);
+        };
+        for (const o of groups.server) addOption(o, channelSel);
+        // Browser-added channels the server can't see, grouped so it's
+        // obvious they come from keys stored in this browser only.
+        if (groups.local.length) {
+          const grp = document.createElement('optgroup');
+          grp.label = 'My Channels (this browser)';
+          for (const o of groups.local) addOption(o, grp);
+          channelSel.appendChild(grp);
         }
         // If current filter isn't in the list (encrypted hash, stale, or
         // race with cache), keep it as a selected option so the UI reflects state.
