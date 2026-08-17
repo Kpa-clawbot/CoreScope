@@ -259,12 +259,20 @@ func applySchema(db *sql.DB) error {
 			decoded_json TEXT,
 			from_pubkey TEXT,
 			last_seen INTEGER NOT NULL DEFAULT 0,
-			created_at TEXT DEFAULT (datetime('now'))
+			created_at TEXT DEFAULT (datetime('now')),
+			code1 TEXT,
+			code2 TEXT
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_transmissions_hash ON transmissions(hash);
 		CREATE INDEX IF NOT EXISTS idx_transmissions_first_seen ON transmissions(first_seen);
 		CREATE INDEX IF NOT EXISTS idx_transmissions_payload_type ON transmissions(payload_type);
+		-- idx_tx_code1 is created by the transport_codes_v1 migration below,
+		-- after the ALTER runs — same reasoning as idx_transmissions_from_pubkey
+		-- and idx_tx_last_seen_zero above: a legacy DB (table-exists,
+		-- column-missing) would trip on this CREATE INDEX referencing code1
+		-- before the column exists, since CREATE TABLE IF NOT EXISTS is a
+		-- no-op against a pre-existing table.
 		-- idx_transmissions_from_pubkey is created by the from_pubkey_v1
 		-- migration after the column is added on legacy DBs (#1143).
 		-- idx_tx_last_seen_zero (partial, WHERE last_seen=0) is created by
@@ -746,6 +754,18 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] channel_hash casing normalization complete")
 	}
 
+	// Migration: transmissions.code1/code2 — the transport codes were decoded
+	// and discarded; storing them makes scope forwarding queryable per repeater.
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'transport_codes_v1'")
+	if row.Scan(new(int)) != nil {
+		log.Println("[migration] Adding code1/code2 columns to transmissions...")
+		db.Exec(`ALTER TABLE transmissions ADD COLUMN code1 TEXT DEFAULT NULL`)
+		db.Exec(`ALTER TABLE transmissions ADD COLUMN code2 TEXT DEFAULT NULL`)
+		db.Exec(`CREATE INDEX IF NOT EXISTS idx_tx_code1 ON transmissions(code1) WHERE code1 IS NOT NULL`)
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('transport_codes_v1')`)
+		log.Println("[migration] code1/code2 columns added")
+	}
+
 	return nil
 }
 
@@ -758,8 +778,8 @@ func (s *Store) prepareStatements() error {
 	}
 
 	s.stmtInsertTransmission, err = s.db.Prepare(`
-		INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, channel_hash, scope_name, from_pubkey, last_seen)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, channel_hash, scope_name, from_pubkey, last_seen, code1, code2)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
@@ -931,6 +951,8 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 			scopeNameForDB(data),
 			nilIfEmpty(data.FromPubkey),
 			epochSecondsForLastSeen(rxTime),
+			nilIfEmpty(data.Code1),
+			nilIfEmpty(data.Code2),
 		)
 		if err != nil {
 			s.Stats.WriteErrors.Add(1)
@@ -1574,6 +1596,8 @@ type PacketData struct {
 	ChannelHash       string // grouping key for channel queries (#762)
 	ScopeName         string // matched region name, or "" for unknown-scoped
 	IsTransportScoped bool   // true when route_type IN (0,3) AND Code1 ≠ "0000"
+	Code1             string // transport code 1 (scope), "" when the route carries none
+	Code2             string // transport code 2 (return-region hint), "" when absent
 	Region            string // observer region: payload > topic > source config (#788)
 	Foreign           bool   // true when ADVERT GPS lies outside configured geofilter (#730)
 	FromPubkey        string // pubkey of the originating node, for exact-match attribution (#1143)
@@ -1733,9 +1757,13 @@ func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID,
 		}
 	}
 
-	if decoded.TransportCodes != nil && decoded.TransportCodes.Code1 != "0000" {
-		pd.IsTransportScoped = true
-		pd.ScopeName = matchScope(regionKeys, byte(decoded.Header.PayloadType), decoded.payloadRaw, decoded.TransportCodes.Code1)
+	if decoded.TransportCodes != nil {
+		pd.Code1 = decoded.TransportCodes.Code1
+		pd.Code2 = decoded.TransportCodes.Code2
+		if decoded.TransportCodes.Code1 != "0000" {
+			pd.IsTransportScoped = true
+			pd.ScopeName = matchScope(regionKeys, byte(decoded.Header.PayloadType), decoded.payloadRaw, decoded.TransportCodes.Code1)
+		}
 	}
 
 	// Populate from_pubkey at write time (#1143). ADVERTs carry the

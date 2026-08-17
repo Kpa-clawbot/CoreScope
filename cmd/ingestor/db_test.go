@@ -2258,6 +2258,57 @@ func TestScopeNameMigration(t *testing.T) {
 	}
 }
 
+func TestTransportCodesStored(t *testing.T) {
+	s, err := OpenStore(tempDBPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// Byte order matters: Code1 is the RAW wire hex of the two bytes,
+	// uppercased, with NO little-endian swap (decoder.go:954). Bytes AA BB
+	// therefore read back as "AABB". Layout, per firmware packet_format.md:
+	// header + transport_codes(4) + path_len + path + payload.
+	// header 0x14 = route_type 0 (TRANSPORT_FLOOD), payload_type 5 (GRP_TXT).
+	// payload_type 5 keeps the advert validation path out of this test.
+	rawScoped := "14" + "AABB" + "CCDD" + "00" + strings.Repeat("11", 32)
+	// header 0x15 = route_type 1 (FLOOD), payload_type 5 — no transport codes.
+	rawUnscoped := "15" + "00" + strings.Repeat("22", 32)
+
+	for _, raw := range []string{rawScoped, rawUnscoped} {
+		pd := &PacketData{
+			RawHex: raw, Hash: ComputeContentHash(raw), Timestamp: "2026-08-17T10:00:00Z",
+			ObserverID: "obs1", RouteType: 0, PayloadType: 5,
+		}
+		if raw == rawUnscoped {
+			pd.RouteType = 1
+		}
+		if raw == rawScoped {
+			pd.Code1, pd.Code2 = "AABB", "CCDD"
+		}
+		if _, err := s.InsertTransmission(pd); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+
+	var c1, c2 *string
+	if err := s.db.QueryRow(`SELECT code1, code2 FROM transmissions WHERE hash = ?`,
+		ComputeContentHash(rawScoped)).Scan(&c1, &c2); err != nil {
+		t.Fatalf("read scoped: %v", err)
+	}
+	if c1 == nil || *c1 != "AABB" || c2 == nil || *c2 != "CCDD" {
+		t.Errorf("scoped codes = %v/%v, want AABB/CCDD", c1, c2)
+	}
+
+	if err := s.db.QueryRow(`SELECT code1, code2 FROM transmissions WHERE hash = ?`,
+		ComputeContentHash(rawUnscoped)).Scan(&c1, &c2); err != nil {
+		t.Fatalf("read unscoped: %v", err)
+	}
+	if c1 != nil || c2 != nil {
+		t.Errorf("unscoped codes = %v/%v, want NULL/NULL", c1, c2)
+	}
+}
+
 // --- Feature 3: default_scope column on nodes (#899) ---
 
 func TestUpdateNodeDefaultScope(t *testing.T) {
