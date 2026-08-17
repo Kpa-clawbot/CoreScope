@@ -103,6 +103,7 @@ func main() {
 
 	regionKeys := loadRegionKeys(cfg)
 	store.BackfillDefaultScopeAsync(regionKeys)
+	store.BackfillTransportCodesAsync()
 
 	// Subscribe-early + buffer (#1608): the MQTT subscription is brought up
 	// before startup maintenance so no packets are missed while the single

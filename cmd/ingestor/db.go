@@ -1470,6 +1470,92 @@ func (s *Store) BackfillDefaultScopeAsync(regionKeys map[string][]byte) {
 	}()
 }
 
+// BackfillTransportCodesAsync populates transmissions.code1/code2 for rows
+// inserted before the transport_codes_v1 migration, by re-parsing raw_hex.
+// Runs in a background goroutine so it does not block MQTT startup.
+//
+// Batched: SQLite holds a single write connection (SetMaxOpenConns(1)), so a
+// multi-million-row UPDATE in one transaction would stall live ingest for the
+// whole run. 5k-row batches keep each transaction short.
+func (s *Store) BackfillTransportCodesAsync() {
+	s.backfillWg.Add(1)
+	go func() {
+		defer s.backfillWg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[backfill] transport_codes async panic recovered: %v", r)
+			}
+		}()
+
+		var done int
+		if s.db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'backfill_transport_codes_v1'").Scan(&done) == nil {
+			return // already ran
+		}
+
+		const batch = 5000
+		var total int
+		for {
+			rows, err := s.db.Query(`
+				SELECT id, raw_hex FROM transmissions
+				WHERE code1 IS NULL AND route_type IN (0, 3)
+				LIMIT ?`, batch)
+			if err != nil {
+				log.Printf("[backfill] transport_codes select: %v", err)
+				return
+			}
+			type item struct {
+				id           int64
+				code1, code2 string
+			}
+			var items []item
+			for rows.Next() {
+				var id int64
+				var raw string
+				if err := rows.Scan(&id, &raw); err != nil {
+					continue
+				}
+				decoded, err := DecodePacket(raw, nil, false)
+				if err != nil || decoded.TransportCodes == nil {
+					continue
+				}
+				items = append(items, item{id, decoded.TransportCodes.Code1, decoded.TransportCodes.Code2})
+			}
+			rows.Close()
+			if len(items) == 0 {
+				break
+			}
+
+			tx, err := s.db.Begin()
+			if err != nil {
+				log.Printf("[backfill] transport_codes begin: %v", err)
+				return
+			}
+			stmt, err := tx.Prepare(`UPDATE transmissions SET code1 = ?, code2 = ? WHERE id = ?`)
+			if err != nil {
+				tx.Rollback()
+				log.Printf("[backfill] transport_codes prepare: %v", err)
+				return
+			}
+			for _, it := range items {
+				stmt.Exec(it.code1, it.code2, it.id)
+			}
+			stmt.Close()
+			if err := tx.Commit(); err != nil {
+				log.Printf("[backfill] transport_codes commit: %v", err)
+				return
+			}
+			total += len(items)
+			if len(items) < batch {
+				break
+			}
+		}
+
+		s.Stats.IncBackfill("transport_codes")
+		log.Printf("[backfill] transport_codes populated for %d transmissions", total)
+		s.db.Exec(`INSERT INTO _migrations (name) VALUES ('backfill_transport_codes_v1')`)
+	}()
+}
+
 // LogStats logs current operational metrics.
 func (s *Store) LogStats() {
 	log.Printf("[stats] tx_inserted=%d tx_dupes=%d obs_inserted=%d node_upserts=%d observer_upserts=%d write_errors=%d sig_drops=%d",

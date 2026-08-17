@@ -2325,6 +2325,57 @@ func TestTransportCodesStored(t *testing.T) {
 	}
 }
 
+func TestBackfillTransportCodes(t *testing.T) {
+	s := newTestStore(t)
+
+	// Same layout and byte-order rules as TestTransportCodesStored: raw wire
+	// hex, no swap, so bytes AA BB read back as "AABB".
+	rawScoped := "14" + "AABB" + "CCDD" + "00" + strings.Repeat("11", 32)
+	rawFlood := "15" + "00" + strings.Repeat("22", 32)
+
+	// Simulate pre-migration rows: inserted directly, code1/code2 left NULL.
+	// route_type must match the raw header, or the backfill's route filter
+	// selects the wrong rows: 0 for the transport packet, 1 for the flood.
+	for _, tc := range []struct {
+		raw       string
+		routeType int
+	}{{rawScoped, 0}, {rawFlood, 1}} {
+		if _, err := s.db.Exec(
+			`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
+			 VALUES (?,?,?,?,?)`,
+			tc.raw, ComputeContentHash(tc.raw), "2026-08-01T00:00:00Z", tc.routeType, 5); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	s.BackfillTransportCodesAsync()
+	s.backfillWg.Wait()
+
+	var c1 *string
+	if err := s.db.QueryRow(`SELECT code1 FROM transmissions WHERE hash = ?`,
+		ComputeContentHash(rawScoped)).Scan(&c1); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if c1 == nil || *c1 != "AABB" {
+		t.Errorf("backfilled code1 = %v, want AABB", c1)
+	}
+
+	if err := s.db.QueryRow(`SELECT code1 FROM transmissions WHERE hash = ?`,
+		ComputeContentHash(rawFlood)).Scan(&c1); err != nil {
+		t.Fatalf("read flood: %v", err)
+	}
+	if c1 != nil {
+		t.Errorf("flood code1 = %v, want NULL", c1)
+	}
+
+	// Idempotent: a second run is a no-op guarded by _migrations.
+	var done int
+	if err := s.db.QueryRow(
+		`SELECT 1 FROM _migrations WHERE name = 'backfill_transport_codes_v1'`).Scan(&done); err != nil {
+		t.Errorf("migration not recorded: %v", err)
+	}
+}
+
 // --- Feature 3: default_scope column on nodes (#899) ---
 
 func TestUpdateNodeDefaultScope(t *testing.T) {
