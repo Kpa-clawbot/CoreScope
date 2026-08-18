@@ -256,6 +256,8 @@ func (s *Store) InsertClientReception(r *ClientReception) (bool, error) {
 // counter is an absolute cumulative value the radio reported; Task 5 derives
 // deltas at query time. RecvErrors stays nil on firmware that cannot count
 // CRC errors — never storing 0, which would read as a perfectly clean channel.
+// Errors is the exception: per the firmware stats frame, it is an error-flags
+// bitmask, not a counter, so it is deliberately excluded from ClientRfDeltas.
 type ClientRfSample struct {
 	RxPubkey, SampledAt, IngestedAt                                                    string
 	Lat, Lon                                                                           float64

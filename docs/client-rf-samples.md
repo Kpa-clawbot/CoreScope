@@ -54,6 +54,8 @@ Topic: `meshcore/client/{PUBLIC_KEY}/rf` — `{PUBLIC_KEY}` is the companion's p
 - `stationary` is optional, defaults to `false` when absent.
 - Every counter besides `uptime_secs` is optional. Absent stays SQL `NULL`, never `0` — see
   [recv_errors](#recv_errors-absent-vs-zero) below.
+- `errors` is not a counter despite sitting among them here: per the firmware stats frame it is an
+  error-flags bitmask, so it is stored as reported but deliberately excluded from `ClientRfDeltas`.
 - Subscription: the ingestor's default subscription (`meshcore/#`) already covers this topic. Sources
   configured with an explicit topic list must add `meshcore/client/+/rf`.
 
@@ -84,7 +86,9 @@ client_rf_samples(
 ```
 
 Every counter is stored as an absolute cumulative value, exactly as the radio reports it — the
-handler does no arithmetic. `sampled_at` is stored at **millisecond** precision (the
+handler does no arithmetic. `errors` is the exception: per the firmware stats frame it is an
+error-flags bitmask, not a counter, so it is deliberately excluded from `ClientRfDeltas` — a future
+consumer must not wire it into a rate calculation. `sampled_at` is stored at **millisecond** precision (the
 `rxTimeMillisLayout` format shared with `client_rx_observations.rx_at`), not the second-resolution
 RFC3339 used by `client_receptions.rx_at`. This matters for two reasons: samples can arrive faster
 than once per second along a moving track, and Task 6's retention prune compares the cutoff
@@ -109,10 +113,10 @@ between two samples from the *same uninterrupted uptime*:
   interval represented.
 - The absolute values always stay in `client_rf_samples`; only the delta view drops the
   cross-reboot pair. No row is ever deleted or modified because of this check.
-- Each `*Delta` field on `ClientRfDelta` (`RxAirDelta`, `TxAirDelta`, `RecvDelta`, `ErrDelta`) is a
+- Each `*Delta` field on `ClientRfDelta` (`RxAirDelta`, `TxAirDelta`, `RecvDelta`, `RecvErrDelta`) is a
   `*int64`, **nil** when either endpoint of the pair is NULL — i.e. the underlying counter is
   unsupported on that firmware. A delta of `0` there would be indistinguishable from a measured zero,
-  which for `ErrDelta` in particular would render as "clean channel" on a radio that simply can't
+  which for `RecvErrDelta` in particular would render as "clean channel" on a radio that simply can't
   count CRC errors. Consumers must treat nil as unknown, not zero.
 - When both endpoints of a pair *are* present, the per-metric delta additionally guards against
   `cur < prev` (covers a wrapped individual counter even when `uptime_secs` itself looks monotonic) by
@@ -121,6 +125,12 @@ between two samples from the *same uninterrupted uptime*:
   callers must pass bounds in the same `rxTimeMillisLayout` format
   (`2006-01-02T15:04:05.000Z07:00`). A bound like `10:00:00Z` would lexicographically exclude a sample
   stored as `10:00:00.500Z` (`.` sorts before `Z`), silently narrowing the range.
+- A phone clock running more than 14h ahead has its `timestamp` clamped to ingest time by
+  `resolveRxTimeCore` (same clamp used across the client-RX paths), which compresses `WallMillis` for a
+  buffered batch uploaded in one burst — several samples with distinct on-device timestamps can collapse
+  onto ingest-time values seconds apart. `sampled_at` can never be zero-spaced (the UNIQUE constraint
+  drops an exact collision), so this is a wrong-rate hazard, not a divide-by-zero: a consumer computing
+  a rate from `*Delta / WallMillis` must sanity-bound `WallMillis` before dividing.
 
 ## Configurable values (future customizer)
 
