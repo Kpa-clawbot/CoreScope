@@ -595,10 +595,22 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 	// Mobile client RX coverage: dedicated topic meshcore/client/{PUBLIC_KEY}/packets.
 	// A roaming companion reports where it directly heard a node; handled in isolation
 	// from the observer/observations path. EMQX ACL binds parts[2] to the client's own key.
-	if cfg.ClientRxCoverageEnabled() && len(parts) >= 4 && parts[1] == "client" && parts[3] == "packets" {
-		// The observer blacklist (checked below) only runs on the observer path,
-		// so a blacklisted operator could otherwise skirt it via the client topic
-		// (#1). Enforce it here before any coverage write.
+	//
+	// The topic match and the enable-gate MUST be separate: matching on
+	// parts[1]=="client" always returns from this branch, whatever the config
+	// says. The gate only decides drop-vs-handle. Previously the gate sat
+	// inside the topic match, so a disabled gate made the whole condition
+	// false and fell through to the observer path below, where parts[1]
+	// ("client") would be taken as a region and the companion pubkey as an
+	// observer id — silently poisoning the region list, and worse now that
+	// fullRfLog multiplies client-topic volume.
+	if len(parts) >= 4 && parts[1] == "client" {
+		if !cfg.ClientRxCoverageEnabled() || parts[3] != "packets" {
+			return
+		}
+		// The observer blacklist (checked below on the observer path) only runs
+		// there, so a blacklisted operator could otherwise skirt it via the
+		// client topic (#1). Enforce it here before any coverage write.
 		if cfg.IsObserverBlacklisted(parts[2]) {
 			log.Printf("MQTT [%s] client %.8s blacklisted, dropping", tag, parts[2])
 			return
