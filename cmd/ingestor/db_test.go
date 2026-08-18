@@ -3285,3 +3285,35 @@ func TestInsertClientRxObservation(t *testing.T) {
 // failure mode isn't reachable from a black-box test of applySchema without
 // contorting production code. The fix itself (db.go, transport_codes_v1
 // block) still stands, matching the observers_clock_naive_v1 pattern.
+
+func TestInsertClientRfSample(t *testing.T) {
+	s := newTestStore(t)
+	nf := -119
+	o := &ClientRfSample{
+		RxPubkey: "aa11", SampledAt: "2026-08-17T10:00:00.000Z", IngestedAt: "2026-08-17T10:00:01Z",
+		Lat: 51.2, Lon: 4.4, Stationary: true, UptimeSecs: 84213, NoiseFloor: &nf,
+	}
+	ins, err := s.InsertClientRfSample(o)
+	if err != nil || !ins {
+		t.Fatalf("insert: ins=%v err=%v", ins, err)
+	}
+	ins, err = s.InsertClientRfSample(o)
+	if err != nil || ins {
+		t.Fatalf("duplicate must be idempotent: ins=%v err=%v", ins, err)
+	}
+
+	var got int
+	var stationary int
+	var recvErrors *int64
+	if err := s.db.QueryRow(
+		`SELECT noise_floor, stationary, recv_errors FROM client_rf_samples`).
+		Scan(&got, &stationary, &recvErrors); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got != -119 || stationary != 1 {
+		t.Errorf("noise_floor/stationary = %d/%d, want -119/1", got, stationary)
+	}
+	if recvErrors != nil {
+		t.Errorf("recv_errors = %v, want NULL on firmware that cannot count them", recvErrors)
+	}
+}

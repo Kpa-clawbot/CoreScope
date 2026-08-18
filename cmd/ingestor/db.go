@@ -355,6 +355,39 @@ func applySchema(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_cro_hash      ON client_rx_observations(pkt_hash, rx_at);
 		CREATE INDEX IF NOT EXISTS idx_cro_forwarder ON client_rx_observations(forwarder, rx_at);
 		CREATE INDEX IF NOT EXISTS idx_cro_scope     ON client_rx_observations(scope_name, rx_at);
+
+		-- RF environment samples from mobile clients: radio counters paired with
+		-- a GPS point. Absolutes only — deltas are computed at query time, and a
+		-- decrease in uptime_secs (reboot) or any counter (wrap) breaks the chain.
+		CREATE TABLE IF NOT EXISTS client_rf_samples (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			rx_pubkey    TEXT NOT NULL,
+			sampled_at   TEXT NOT NULL,
+			ingested_at  TEXT NOT NULL,
+			lat          REAL NOT NULL,
+			lon          REAL NOT NULL,
+			pos_acc_m    REAL,
+			stationary   INTEGER NOT NULL DEFAULT 0,
+			uptime_secs  INTEGER NOT NULL,
+			battery_mv   INTEGER,
+			queue_len    INTEGER,
+			errors       INTEGER,
+			noise_floor  INTEGER,
+			last_rssi    INTEGER,
+			last_snr     REAL,
+			tx_air_secs  INTEGER,
+			rx_air_secs  INTEGER,
+			recv         INTEGER,
+			sent         INTEGER,
+			flood_rx     INTEGER,
+			direct_rx    INTEGER,
+			flood_tx     INTEGER,
+			direct_tx    INTEGER,
+			recv_errors  INTEGER,
+			UNIQUE(rx_pubkey, sampled_at)
+		);
+		CREATE INDEX IF NOT EXISTS idx_crf_prune ON client_rf_samples(sampled_at);
+		CREATE INDEX IF NOT EXISTS idx_crf_track ON client_rf_samples(rx_pubkey, sampled_at);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("base schema: %w", err)
@@ -1767,6 +1800,14 @@ func nilIfEmpty(s string) interface{} {
 		return nil
 	}
 	return s
+}
+
+// boolToInt converts a bool to SQLite's 0/1 INTEGER representation.
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // scopeNameForDB encodes PacketData scope semantics for DB storage:

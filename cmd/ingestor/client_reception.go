@@ -250,6 +250,48 @@ func (s *Store) InsertClientReception(r *ClientReception) (bool, error) {
 	return n > 0, nil
 }
 
+// ClientRfSample is one RF environment sample from a mobile client: the
+// attached LoRa radio's own counters (noise floor, RX/TX airtime, CRC errors,
+// packet totals), paired with the GPS point where the sample was taken. Every
+// counter is an absolute cumulative value the radio reported; Task 5 derives
+// deltas at query time. RecvErrors stays nil on firmware that cannot count
+// CRC errors — never storing 0, which would read as a perfectly clean channel.
+type ClientRfSample struct {
+	RxPubkey, SampledAt, IngestedAt                                                    string
+	Lat, Lon                                                                           float64
+	PosAccM                                                                            *float64
+	Stationary                                                                         bool
+	UptimeSecs                                                                         int64
+	BatteryMV, QueueLen, Errors                                                        *int
+	NoiseFloor, LastRSSI                                                               *int
+	LastSNR                                                                            *float64
+	TxAirSecs, RxAirSecs, Recv, Sent, FloodRx, DirectRx, FloodTx, DirectTx, RecvErrors *int64
+}
+
+// InsertClientRfSample writes one RF environment sample. Idempotent via
+// UNIQUE(rx_pubkey, sampled_at). Every counter is stored as an absolute; the
+// server derives deltas, so a lost or reordered sample costs one interval
+// rather than corrupting a running total.
+func (s *Store) InsertClientRfSample(o *ClientRfSample) (bool, error) {
+	res, err := s.db.Exec(`
+		INSERT INTO client_rf_samples
+			(rx_pubkey, sampled_at, ingested_at, lat, lon, pos_acc_m, stationary,
+			 uptime_secs, battery_mv, queue_len, errors, noise_floor, last_rssi,
+			 last_snr, tx_air_secs, rx_air_secs, recv, sent, flood_rx, direct_rx,
+			 flood_tx, direct_tx, recv_errors)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(rx_pubkey, sampled_at) DO NOTHING`,
+		o.RxPubkey, o.SampledAt, o.IngestedAt, o.Lat, o.Lon, o.PosAccM, boolToInt(o.Stationary),
+		o.UptimeSecs, o.BatteryMV, o.QueueLen, o.Errors, o.NoiseFloor, o.LastRSSI,
+		o.LastSNR, o.TxAirSecs, o.RxAirSecs, o.Recv, o.Sent, o.FloodRx, o.DirectRx,
+		o.FloodTx, o.DirectTx, o.RecvErrors)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
 // ClientRxObservation is one decodable packet a mobile client heard, whether or
 // not it was attributable to a directly-heard node. Diagnostic only: this table
 // is never a coverage source (see client_receptions for that).
