@@ -104,6 +104,29 @@ func (s *Store) PruneOldClientRxObservations(days int) (int64, error) {
 	return n, nil
 }
 
+// PruneOldClientRfSamples deletes RF environment sample rows older than
+// `days` (by sampled_at). Diagnostic, not archival, so it gets its own
+// window, independent of clientRxDays/clientRxObsDays. 0 disables. Owned by
+// the ingestor writer (#1283). sampled_at on this table is stored at
+// millisecond precision via rxTimeMillisLayout, not RFC3339 — the cutoff
+// must be formatted the same way so lexicographic comparison against
+// stored values stays correct.
+func (s *Store) PruneOldClientRfSamples(days int) (int64, error) {
+	if days <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format(rxTimeMillisLayout)
+	res, err := s.db.Exec(`DELETE FROM client_rf_samples WHERE sampled_at < ?`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("prune client_rf_samples: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n > 0 {
+		log.Printf("[prune] deleted %d client_rf_samples older than %d days", n, days)
+	}
+	return n, nil
+}
+
 // SoftDeleteBlacklistedObservers marks observers in the blacklist as
 // inactive=1 so they are hidden from API responses. Owned by ingestor
 // per #1287. Runs once at startup.

@@ -3414,3 +3414,86 @@ func TestInsertClientRfSample(t *testing.T) {
 		t.Errorf("recv_errors = %v, want 55", gotRecvErrors2)
 	}
 }
+
+// TestPruneClientRfSamplesUsesIndex verifies the RF-sample reaper's
+// DELETE ... WHERE sampled_at < ? seeks idx_crf_prune rather than
+// full-scanning under the writer lock, mirroring
+// TestPruneClientRxObservationsUsesIndex for the sibling table. May pass
+// immediately since idx_crf_prune already exists (Task 4) — in that case
+// this is a regression guard.
+func TestPruneClientRfSamplesUsesIndex(t *testing.T) {
+	s := newTestStore(t)
+	rows, err := s.db.Query(`EXPLAIN QUERY PLAN DELETE FROM client_rf_samples WHERE sampled_at < ?`, "2026-01-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	plan := ""
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan += detail + "\n"
+	}
+	if !strings.Contains(plan, "idx_crf_prune") {
+		t.Fatalf("retention DELETE should use idx_crf_prune, plan was:\n%s", plan)
+	}
+}
+
+// TestPruneOldClientRfSamples verifies the RF-sample reaper deletes rows
+// older than the window and keeps recent ones, and that days=0 disables it —
+// mirroring TestPruneOldClientRxObservations for the sibling table. It also
+// covers the case an RFC3339 (no-millisecond) cutoff gets wrong: sampled_at
+// is stored via rxTimeMillisLayout, and a row sampled 500ms after the cutoff
+// instant — chronologically newer, so it must survive — has a string form
+// like "...T10:00:00.500Z" that sorts lexicographically BEFORE a bare
+// "...T10:00:00Z" cutoff (since '.' is 0x2E and 'Z' is 0x5A). An
+// RFC3339-formatted cutoff would therefore wrongly delete it; a
+// millisecond-formatted cutoff correctly keeps it.
+func TestPruneOldClientRfSamples(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	recent := now.AddDate(0, 0, -1).Format(rxTimeMillisLayout)
+	old := now.AddDate(0, 0, -40).Format(rxTimeMillisLayout)
+	cutoffInstant := now.AddDate(0, 0, -7)
+	boundary := cutoffInstant.Add(500 * time.Millisecond).Format(rxTimeMillisLayout)
+
+	mk := func(sampledAt string) *ClientRfSample {
+		return &ClientRfSample{
+			RxPubkey: "aa11", SampledAt: sampledAt, IngestedAt: sampledAt,
+			Lat: 51.2, Lon: 4.4, UptimeSecs: 100,
+		}
+	}
+	if _, err := s.InsertClientRfSample(mk(recent)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.InsertClientRfSample(mk(old)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.InsertClientRfSample(mk(boundary)); err != nil {
+		t.Fatal(err)
+	}
+
+	if n, _ := s.PruneOldClientRfSamples(0); n != 0 {
+		t.Fatalf("days=0 must be a no-op, got %d", n)
+	}
+	n, err := s.PruneOldClientRfSamples(7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 old sample pruned, got %d", n)
+	}
+	var remaining int
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_rf_samples`).Scan(&remaining)
+	if remaining != 2 {
+		t.Fatalf("expected 2 samples remaining (recent + boundary), got %d", remaining)
+	}
+	var boundarySurvived int
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_rf_samples WHERE sampled_at = ?`, boundary).Scan(&boundarySurvived)
+	if boundarySurvived != 1 {
+		t.Fatalf("boundary row (500ms after cutoff instant) must survive; an RFC3339 (no-ms) cutoff would wrongly delete it because '.' < 'Z' lexicographically — got %d", boundarySurvived)
+	}
+}

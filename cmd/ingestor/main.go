@@ -298,6 +298,17 @@ func main() {
 		}
 	}
 
+	// Diagnostic client_rf_samples retention: separate window, independent
+	// of clientRxDays/clientRxObsDays. 0 = disabled.
+	clientRfDays := cfg.ClientRfDaysOrZero()
+	if clientRfDays > 0 {
+		if n, err := store.PruneOldClientRfSamples(clientRfDays); err != nil {
+			log.Printf("[prune] client_rf_samples: %v", err)
+		} else if n > 0 {
+			log.Printf("[prune] startup pruned %d client_rf_samples older than %d days", n, clientRfDays)
+		}
+	}
+
 	vacuumPages := cfg.IncrementalVacuumPages()
 	store.RunIncrementalVacuum(vacuumPages)
 
@@ -361,10 +372,11 @@ func main() {
 	}
 
 	// Daily ticker for client-RX coverage retention (#1727), reused for the
-	// diagnostic client_rx_observations retention (Task 6) rather than
-	// starting a second ticker — the two flags are independent (0 disables
-	// each separately), so the ticker itself must run when either is set.
-	if clientRxDays > 0 || clientRxObsDays > 0 {
+	// diagnostic client_rx_observations and client_rf_samples retention
+	// (Task 6) rather than starting a second ticker — the three flags are
+	// independent (0 disables each separately), so the ticker itself must
+	// run when any is set.
+	if clientRxDays > 0 || clientRxObsDays > 0 || clientRfDays > 0 {
 		clientRxRetentionTicker := time.NewTicker(24 * time.Hour)
 		go func() {
 			for range clientRxRetentionTicker.C {
@@ -382,6 +394,13 @@ func main() {
 						store.RunIncrementalVacuum(vacuumPages)
 					}
 				}
+				if clientRfDays > 0 {
+					if n, err := store.PruneOldClientRfSamples(clientRfDays); err != nil {
+						log.Printf("[prune] client_rf_samples: %v", err)
+					} else if n > 0 {
+						store.RunIncrementalVacuum(vacuumPages)
+					}
+				}
 			}
 		}()
 		if clientRxDays > 0 {
@@ -389,6 +408,9 @@ func main() {
 		}
 		if clientRxObsDays > 0 {
 			log.Printf("[prune] auto-prune enabled: client_rx_observations older than %d days will be removed daily", clientRxObsDays)
+		}
+		if clientRfDays > 0 {
+			log.Printf("[prune] auto-prune enabled: client_rf_samples older than %d days will be removed daily", clientRfDays)
 		}
 	}
 
