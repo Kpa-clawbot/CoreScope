@@ -56,6 +56,7 @@ type Config struct {
 	Runtime              *RuntimeConfig              `json:"runtime,omitempty"`
 	ClientRxCoverage     *ClientRxCoverageConfig     `json:"clientRxCoverage,omitempty"`
 	ClientRxObservations *ClientRxObservationsConfig `json:"clientRxObservations,omitempty"`
+	ClientRfSamples      *ClientRfSamplesConfig      `json:"clientRfSamples,omitempty"`
 	GeoFilter            *GeoFilterConfig            `json:"geo_filter,omitempty"`
 	ForeignAdverts       *ForeignAdvertConfig        `json:"foreignAdverts,omitempty"`
 	ValidateSignatures   *bool                       `json:"validateSignatures,omitempty"`
@@ -154,6 +155,16 @@ func (c *Config) ClientRxObservationsEnabled() bool {
 	return c.ClientRxObservations != nil && c.ClientRxObservations.Enabled
 }
 
+// ClientRfSamplesConfig controls the opt-in RF environment sample stream.
+type ClientRfSamplesConfig struct {
+	Enabled bool `json:"enabled"`
+}
+
+// ClientRfSamplesEnabled reports whether RF samples are recorded. Default false.
+func (c *Config) ClientRfSamplesEnabled() bool {
+	return c.ClientRfSamples != nil && c.ClientRfSamples.Enabled
+}
+
 // RetentionConfig controls how long stale nodes are kept before being moved to inactive_nodes.
 type RetentionConfig struct {
 	NodeDays     int `json:"nodeDays"`
@@ -170,6 +181,10 @@ type RetentionConfig struct {
 	// client_rx_observations table; 0 disables. Shorter than clientRxDays —
 	// this table is diagnostic, not archival.
 	ClientRxObsDays int `json:"clientRxObsDays"`
+	// ClientRfDays is the retention window (by sampled_at) for the
+	// client_rf_samples table; 0 disables. Bounds the table the opt-in RF
+	// sample stream would otherwise grow without limit.
+	ClientRfDays int `json:"clientRfDays"`
 }
 
 // PacketDaysOrZero returns the configured retention.packetDays or 0
@@ -194,6 +209,14 @@ func (c *Config) ClientRxDaysOrZero() int {
 func (c *Config) ClientRxObsDaysOrZero() int {
 	if c.Retention != nil && c.Retention.ClientRxObsDays > 0 {
 		return c.Retention.ClientRxObsDays
+	}
+	return 0
+}
+
+// ClientRfDaysOrZero returns retention.clientRfDays or 0 (disabled).
+func (c *Config) ClientRfDaysOrZero() int {
+	if c.Retention != nil && c.Retention.ClientRfDays > 0 {
+		return c.Retention.ClientRfDays
 	}
 	return 0
 }

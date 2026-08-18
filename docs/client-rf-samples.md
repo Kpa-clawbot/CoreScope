@@ -1,0 +1,114 @@
+# Client RF Environment Samples
+
+Crowdsourced RF environment data from mobile clients: the same phone that samples
+[client RX coverage](client-rx-coverage.md) also reads its attached MeshCore companion radio's own
+counters — noise floor, RX/TX airtime, CRC errors, packet totals — along the GPS track, and publishes
+them on a separate topic. Unlike a fixed observer, which measures one point forever, a roaming
+companion builds a noise-floor map, a channel-utilisation map and a CRC-error-rate map as it moves.
+
+## Enabling RF samples (operators)
+
+Off by default. To turn it on:
+
+1. In CoreScope's `config.json`, set `"clientRfSamples": { "enabled": true }` and restart the
+   ingestor. Independent of `clientRxCoverage` — a deployment can run one, both, or neither.
+2. **Required: an ACL-capable broker**, same as coverage. Bind `meshcore/client/{PUBLIC_KEY}/rf` so
+   each client may publish only under its own pubkey. The ingestor already subscribes under
+   `meshcore/#`.
+3. Optionally set `retention.clientRfDays` to bound the table.
+
+## MQTT topic & payload
+
+Topic: `meshcore/client/{PUBLIC_KEY}/rf` — `{PUBLIC_KEY}` is the companion's pubkey.
+
+```json
+{
+  "type": "RF_SAMPLE",
+  "timestamp": "2026-08-17T10:00:00.000Z",
+  "gps": { "lat": 51.2, "lon": 4.4, "acc_m": 8.0 },
+  "stationary": false,
+  "uptime_secs": 84213,
+  "battery_mv": 3950,
+  "queue_len": 0,
+  "errors": 0,
+  "noise_floor": -119,
+  "last_rssi": -92,
+  "last_snr": -7.0,
+  "tx_air_secs": 120,
+  "rx_air_secs": 20877,
+  "recv": 4310,
+  "sent": 12,
+  "flood_rx": 3980,
+  "direct_rx": 330,
+  "flood_tx": 10,
+  "direct_tx": 2,
+  "recv_errors": 5
+}
+```
+
+- The discriminator is the `gps` object, same as coverage: a sample without `gps` (or with an
+  out-of-range `lat`/`lon`) is dropped.
+- `uptime_secs` is required. It is the only reboot/wrap detector the delta query has — see
+  [Deltas](#deltas--reboot-and-wrap-handling) below. A sample missing it is dropped and logged, the
+  same as a missing GPS fix, rather than silently defaulting to 0.
+- `stationary` is optional, defaults to `false` when absent.
+- Every counter besides `uptime_secs` is optional. Absent stays SQL `NULL`, never `0` — see
+  [recv_errors](#recv_errors-absent-vs-zero) below.
+- Subscription: the ingestor's default subscription (`meshcore/#`) already covers this topic. Sources
+  configured with an explicit topic list must add `meshcore/client/+/rf`.
+
+## Trust
+
+Identity = the companion pubkey, taken from the `{PUBLIC_KEY}` topic segment — never from a
+payload-supplied `origin_id`, which would defeat the ACL trust model. The ingestor rejects any topic
+pubkey that is not lowercase hex before writing (same `clientPubkeyRe` used for coverage), and the
+observer blacklist is enforced before any write, so a blacklisted operator cannot contribute RF
+samples any more than it can contribute coverage.
+
+## `recv_errors`: absent vs. zero
+
+`recv_errors` counts CRC errors. Firmware predating the counter cannot report it at all, and that
+case must stay `NULL` — storing `0` would read as "a perfectly clean channel," the opposite of "we
+don't know." The app is expected to omit the field entirely (not send a fabricated `0`) on firmware
+that doesn't support it, and the handler never collapses an absent optional field to a zero.
+
+## Storage — `client_rf_samples` (ingestor-owned)
+
+```
+client_rf_samples(
+  id, rx_pubkey, sampled_at, ingested_at, lat, lon, pos_acc_m, stationary,
+  uptime_secs, battery_mv, queue_len, errors, noise_floor, last_rssi, last_snr,
+  tx_air_secs, rx_air_secs, recv, sent, flood_rx, direct_rx, flood_tx, direct_tx,
+  recv_errors,
+  UNIQUE(rx_pubkey, sampled_at))   -- idempotent re-ingest
+```
+
+Every counter is stored as an absolute cumulative value, exactly as the radio reports it — the
+handler does no arithmetic. `sampled_at` is stored at **millisecond** precision (the
+`rxTimeMillisLayout` format shared with `client_rx_observations.rx_at`), not the second-resolution
+RFC3339 used by `client_receptions.rx_at`. This matters for two reasons: samples can arrive faster
+than once per second along a moving track, and Task 6's retention prune compares the cutoff
+lexicographically against these stored strings — a second-resolution cutoff against
+millisecond-resolution values would delete rows it should keep.
+
+Retention: `retention.clientRfDays` bounds the table by `sampled_at`; `0` disables it (Task 6).
+
+## Deltas — reboot and wrap handling
+
+`Store.ClientRfDeltas(rxPubkey, from, to)` derives consecutive-sample deltas (RX/TX airtime, recv,
+recv_errors, wall-clock seconds) for one radio over a time range, via a `LAG(...) OVER (ORDER BY
+sampled_at)` window query. Every counter in the table is cumulative, so a delta is only meaningful
+between two samples from the *same uninterrupted uptime*:
+
+- A pair is skipped whenever `uptime_secs` does not strictly increase between consecutive samples.
+  That is a reboot (uptime reset near 0) or a counter wrap, and subtracting across it would produce a
+  large negative or a bogus spike.
+- The absolute values always stay in `client_rf_samples`; only the delta view drops the
+  cross-reboot pair. No row is ever deleted or modified because of this check.
+- Per-metric deltas additionally guard against `cur < prev` (covers a wrapped individual counter even
+  when `uptime_secs` itself looks monotonic) by clamping to `0` rather than going negative.
+
+## Configurable values (future customizer)
+
+`retention.clientRfDays` is the only tunable so far; no color/threshold customization applies to this
+feature yet (no map rendering built on it in this task).
