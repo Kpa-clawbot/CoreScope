@@ -1250,7 +1250,8 @@ func firstNonEmpty(vals ...string) string {
 // ahead). Caller records this via Store.RecordNaiveSkew so the UI can flag
 // the observer (#1478).
 func resolveRxTime(msg map[string]interface{}, tag string) (string, int64) {
-	return resolveRxTimeWithLayout(msg, tag, time.RFC3339)
+	t, skew := resolveRxTimeCore(msg, tag)
+	return t.Format(time.RFC3339), skew
 }
 
 // resolveRxTimeMillis is the millisecond-precision sibling of resolveRxTime,
@@ -1261,28 +1262,33 @@ func resolveRxTime(msg map[string]interface{}, tag string) (string, int64) {
 // the first. Fixed three-decimal width (not time.RFC3339Nano, which strips
 // trailing zeros) so the string is a stable uniqueness/sort key.
 func resolveRxTimeMillis(msg map[string]interface{}, tag string) (string, int64) {
-	return resolveRxTimeWithLayout(msg, tag, "2006-01-02T15:04:05.000Z07:00")
+	t, skew := resolveRxTimeCore(msg, tag)
+	return t.Format("2006-01-02T15:04:05.000Z07:00"), skew
 }
 
-// resolveRxTimeWithLayout holds the validation/clamping logic shared by
+// resolveRxTimeCore holds the validation/clamping logic shared by
 // resolveRxTime and resolveRxTimeMillis: the >14h-future reject, the >30d-stale
-// reject, and the naive-skew clamp. Only the output layout differs.
-func resolveRxTimeWithLayout(msg map[string]interface{}, tag, layout string) (string, int64) {
+// reject, and the naive-skew clamp. Returns UTC time so callers format it (and
+// so a caller that needs both a resolveRxTime-style and a resolveRxTimeMillis-
+// style string for the SAME packet — as handleClientPacket does — can call
+// this once and format twice, instead of parsing/validating/logging twice and
+// risking two independent time.Now() reads straddling a second boundary.
+func resolveRxTimeCore(msg map[string]interface{}, tag string) (time.Time, int64) {
 	now := time.Now().UTC()
 	raw, _ := msg["timestamp"].(string)
 	if raw == "" {
-		return now.Format(layout), 0
+		return now, 0
 	}
 	t, naive, err := parseEnvelopeTime(raw)
 	if err != nil {
 		log.Printf("MQTT [%s] unparseable timestamp %q, using ingest time", tag, raw)
-		return now.Format(layout), 0
+		return now, 0
 	}
 	// Hard reject: > 14h ahead is a genuine clock error (UTC+14 is the maximum
 	// standard offset, so nothing valid should be further ahead than that).
 	if t.After(now.Add(14 * time.Hour)) {
 		log.Printf("MQTT [%s] future timestamp %q, using ingest time", tag, raw)
-		return now.Format(layout), 0
+		return now, 0
 	}
 	// Hard reject: > 30 days in the past is an RTC-reset node reporting a
 	// factory date (e.g. 2020-01-01). Such a value would permanently drag
@@ -1290,7 +1296,7 @@ func resolveRxTimeWithLayout(msg map[string]interface{}, tag, layout string) (st
 	// InsertTransmission. No legitimate buffered upload is that stale.
 	if t.Before(now.Add(-30 * 24 * time.Hour)) {
 		log.Printf("MQTT [%s] stale timestamp %q (>30d old), using ingest time", tag, raw)
-		return now.Format(layout), 0
+		return now, 0
 	}
 	// Symmetric naive-timestamp clamp (issue #1463). Naive (zone-less) ISO
 	// values from observers in non-UTC zones are parsed as-if UTC, leaving a
@@ -1314,16 +1320,16 @@ func resolveRxTimeWithLayout(msg map[string]interface{}, tag, layout string) (st
 			// Per-message log was silenced in #1479 — chip + banner in the UI
 			// replace it.
 			deltaSec := int64(signed / time.Second)
-			return now.Format(layout), deltaSec
+			return now, deltaSec
 		}
 	}
 	// Legacy soft clamp for zone-aware near-future values: any value ahead of
 	// now is from a slightly skewed observer clock — collapse to now so we
 	// don't render ⚠️ in the UI for live packets from those nodes.
 	if t.After(now) {
-		return now.Format(layout), 0
+		return now, 0
 	}
-	return t.UTC().Format(layout), 0
+	return t.UTC(), 0
 }
 
 // parseEnvelopeTime parses the MQTT envelope timestamp. Two on-wire forms

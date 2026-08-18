@@ -127,8 +127,16 @@ unbounded.
 
 The client topic may also carry packets the companion could not attribute to a directly-heard
 node — a DIRECT-route packet with a path, for instance (see the capture HARD RULE above). Those
-packets are still decodable, and every decodable client packet is optionally recorded as a
-diagnostic RF observation, independent of whether it produced a coverage row.
+packets are still decodable, and are optionally recorded as a diagnostic RF observation,
+independent of whether they produced a coverage row.
+
+**Not literally every decodable packet, though.** A packet still needs a `gps` fix and
+`direction: "rx"` to reach the decoder/observation write at all — `handleClientPacket` returns
+early (before `DecodePacket` even runs) when `gps` is missing or its `lat`/`lon` don't parse, and
+`direction: "tx"` (a companion's own outgoing transmission) is decoded but explicitly excluded
+from the observation write, the same as it already was from coverage. A diagnostic table silently
+requiring a GPS fix is a bit surprising, so: no `gps` → no observation row either, same constraint
+as coverage.
 
 - Written to `client_rx_observations` only, **never** to `client_receptions` — the coverage
   invariant (only directly-heard nodes) is unchanged and unaffected by this feature.
@@ -146,6 +154,16 @@ diagnostic RF observation, independent of whether it produced a coverage row.
   one forwarder's copy of the same flood, and that multiplicity is the flood-amplification signal
   this table exists to capture. Retention is `retention.clientRxObsDays` (separate from, and
   typically shorter than, `retention.clientRxDays` — this table is diagnostic, not archival).
+- `pkt_hash` (`ComputeContentHash`) deliberately excludes both the transport-code bytes and the
+  path bytes, so distinctness inside `UNIQUE(rx_pubkey, pkt_hash, rx_at)` rests entirely on `rx_at`.
+  On the happy path that's fine — real receive times come from the envelope timestamp at
+  millisecond resolution, and same-millisecond collisions aren't physical on a half-duplex LoRa
+  radio. But on any fallback path (missing/unparseable/implausible timestamp — see
+  `resolveRxTimeCore`), every packet in a buffered upload batch is stamped with the same ingest-time
+  `rx_at`, and distinct forwarder copies of one flood inside that batch collapse into a single row
+  via `ON CONFLICT DO NOTHING`. Not a correctness bug — the constraint is doing exactly what it's
+  told — but it means a buffered/late upload with a bad envelope timestamp under-reports flood
+  amplification for that batch.
 
 ## Read API — coverage GeoJSON
 

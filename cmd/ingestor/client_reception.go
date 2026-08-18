@@ -73,7 +73,14 @@ func handleClientPacket(store *Store, cfg *Config, tag, rxPubkey string, msg map
 		rssiPtr = &v
 	}
 
-	rxAt, _ := resolveRxTime(msg, tag)
+	// Resolved once and formatted twice (RFC3339 for coverage, millisecond
+	// layout for observations) rather than calling resolveRxTime/
+	// resolveRxTimeMillis independently — each re-parses/validates/logs the
+	// same envelope timestamp and takes its own time.Now() reading, so two
+	// calls could log the same rejection twice and let the coverage row and
+	// the observation for the SAME packet straddle a second boundary.
+	rxTime, _ := resolveRxTimeCore(msg, tag)
+	rxAt := rxTime.Format(time.RFC3339)
 	ingestedAt := time.Now().UTC().Format(time.RFC3339)
 	isAdvert := decoded.Header.PayloadTypeName == "ADVERT"
 
@@ -83,10 +90,11 @@ func handleClientPacket(store *Store, cfg *Config, tag, rxPubkey string, msg map
 		// separate rows — resolveRxTime's second-resolution RFC3339 would
 		// collapse them and ON CONFLICT DO NOTHING would silently drop all but
 		// the first.
-		rxAtMillis, _ := resolveRxTimeMillis(msg, tag)
-		obs := buildClientRxObservation(rxPubkey, rawHex, rxAtMillis, ingestedAt, decoded, regionKeys, snrPtr, rssiPtr, lat, lon, accPtr)
-		if _, err := store.InsertClientRxObservation(obs); err != nil {
-			log.Printf("MQTT [%s] client observation insert: %v", tag, err)
+		rxAtMillis := rxTime.Format("2006-01-02T15:04:05.000Z07:00")
+		if obs := buildClientRxObservation(direction, rxPubkey, rawHex, rxAtMillis, ingestedAt, decoded, regionKeys, snrPtr, rssiPtr, lat, lon, accPtr); obs != nil {
+			if _, err := store.InsertClientRxObservation(obs); err != nil {
+				log.Printf("MQTT [%s] client observation insert: %v", tag, err)
+			}
 		}
 	}
 
@@ -264,11 +272,19 @@ type ClientRxObservation struct {
 // buildClientRxObservation assembles a ClientRxObservation from a decoded
 // client packet, regardless of whether it is attributable to a directly-heard
 // node (deriveHeardKey/buildClientReception decide that separately, and this
-// function has no opinion on it).
+// function has no opinion on it). It does, however, require direction "rx"
+// (case-insensitively, matching deriveHeardKey's own check on the coverage
+// path) and returns nil otherwise: a companion's own outgoing transmission is
+// not RF it observed, and recording it would inflate this table's headline
+// signal — per-flood row multiplicity meant to measure forwarder
+// amplification of traffic actually heard over the air.
 func buildClientRxObservation(
-	rxPubkey, rawHex, rxAt, ingestedAt string, decoded *DecodedPacket, regionKeys map[string][]byte,
+	direction, rxPubkey, rawHex, rxAt, ingestedAt string, decoded *DecodedPacket, regionKeys map[string][]byte,
 	snr *float64, rssi *int, lat, lon float64, posAccM *float64,
 ) *ClientRxObservation {
+	if !strings.EqualFold(direction, "rx") {
+		return nil
+	}
 	obs := &ClientRxObservation{
 		RxPubkey:    rxPubkey,
 		RxAt:        rxAt,

@@ -320,6 +320,10 @@ func cfgWithObservations() *Config {
 	return &Config{ClientRxObservations: &ClientRxObservationsConfig{Enabled: true}}
 }
 
+// clientObsMillisLayout mirrors resolveRxTimeMillis' output layout, for tests
+// that need to derive (rather than hardcode) an rx_at they can query back by.
+const clientObsMillisLayout = "2006-01-02T15:04:05.000Z07:00"
+
 // TestClientPacketWritesObservationNotCoverage verifies a DIRECT-route packet
 // (not attributable per deriveHeardKey) still produces one diagnostic
 // observation row while writing ZERO coverage rows — the two paths are
@@ -351,13 +355,21 @@ func TestClientPacketWritesObservationNotCoverage(t *testing.T) {
 
 	var hash string
 	var hopCount, hashSize int
-	s.db.QueryRow(`SELECT pkt_hash, hop_count, hash_size FROM client_rx_observations`).
-		Scan(&hash, &hopCount, &hashSize)
+	var fwd sql.NullString
+	s.db.QueryRow(`SELECT pkt_hash, hop_count, hash_size, forwarder FROM client_rx_observations`).
+		Scan(&hash, &hopCount, &hashSize, &fwd)
 	if hash != ComputeContentHash(raw) {
 		t.Errorf("pkt_hash = %q, want ComputeContentHash value %q", hash, ComputeContentHash(raw))
 	}
 	if hopCount != 1 || hashSize != 2 {
 		t.Errorf("hop_count/hash_size = %d/%d, want 1/2", hopCount, hashSize)
+	}
+	// path[last] on a DIRECT route is the route's far end, not who transmitted
+	// (deriveHeardKey's "path[last] is flood-only" rule) — a production bug
+	// once got this wrong, so pin it here: forwarder must stay NULL, not the
+	// path's last hop.
+	if fwd.Valid {
+		t.Errorf("forwarder = %q, want NULL for a DIRECT route (path[last] is flood-only)", fwd.String)
 	}
 }
 
@@ -415,6 +427,35 @@ func TestClientObservationsGateOff(t *testing.T) {
 	}
 }
 
+// TestClientObservationsTxDirectionSkipped verifies a companion's own
+// outgoing transmission (direction "tx") writes zero observation rows, even
+// though this FLOOD packet would otherwise be attributable (as
+// TestClientPacketFloodWritesBoth proves for the same shape with "rx"). The
+// observations gate sits above deriveHeardKey's own "rx" check, which runs
+// only on the coverage path — without a matching check here, a companion's
+// own transmissions would be recorded as observed RF and inflate the table's
+// headline per-flood forwarder-multiplicity signal.
+func TestClientObservationsTxDirectionSkipped(t *testing.T) {
+	s := newTestStore(t)
+	raw := "15" + "41" + "1a2b" + strings.Repeat("33", 16)
+	msg := map[string]interface{}{
+		"raw": raw, "direction": "tx",
+		"timestamp": "2026-08-17T10:00:00.123Z",
+		"gps":       map[string]interface{}{"lat": 51.2, "lon": 4.4},
+	}
+	handleClientPacket(s, cfgWithObservations(), "test", "aa11", msg, nil, nil)
+
+	var obs, cov int
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_rx_observations`).Scan(&obs)
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_receptions`).Scan(&cov)
+	if obs != 0 {
+		t.Errorf("observations = %d, want 0 for a tx (self-transmission) packet", obs)
+	}
+	if cov != 0 {
+		t.Errorf("coverage rows = %d, want 0 for a tx packet", cov)
+	}
+}
+
 // TestClientObservationsMillisecondPrecisionAllowsDistinctRows is the
 // regression test for the second-resolution rx_at bug: two client packets
 // with the same raw and rx_pubkey, timestamps 40ms apart in the same second,
@@ -425,13 +466,20 @@ func TestClientObservationsGateOff(t *testing.T) {
 func TestClientObservationsMillisecondPrecisionAllowsDistinctRows(t *testing.T) {
 	s := newTestStore(t)
 	raw := "16" + "41" + "1a2b" + strings.Repeat("33", 16)
-	base := map[string]interface{}{
+	// Derived from time.Now() (not hardcoded) so this test never crosses
+	// resolveRxTimeCore's >30d-stale reject, which would replace rx_at with
+	// ingest time and silently stop exercising the millisecond-distinctness
+	// this test exists to pin.
+	base := time.Now().UTC().Add(-time.Minute)
+	ts1 := base.Format(clientObsMillisLayout)
+	ts2 := base.Add(40 * time.Millisecond).Format(clientObsMillisLayout)
+	baseMsg := map[string]interface{}{
 		"raw": raw, "direction": "rx",
 		"gps": map[string]interface{}{"lat": 51.2, "lon": 4.4},
 	}
-	msg1 := map[string]interface{}{"timestamp": "2026-08-17T10:00:00.100Z"}
-	msg2 := map[string]interface{}{"timestamp": "2026-08-17T10:00:00.140Z"}
-	for k, v := range base {
+	msg1 := map[string]interface{}{"timestamp": ts1}
+	msg2 := map[string]interface{}{"timestamp": ts2}
+	for k, v := range baseMsg {
 		msg1[k] = v
 		msg2[k] = v
 	}
@@ -456,8 +504,8 @@ func TestClientObservationsMillisecondPrecisionAllowsDistinctRows(t *testing.T) 
 		}
 		rxAts = append(rxAts, rxAt)
 	}
-	if rxAts[0] != "2026-08-17T10:00:00.100Z" || rxAts[1] != "2026-08-17T10:00:00.140Z" {
-		t.Errorf("rx_at values = %v, want millisecond-distinct timestamps", rxAts)
+	if rxAts[0] != ts1 || rxAts[1] != ts2 {
+		t.Errorf("rx_at values = %v, want millisecond-distinct timestamps %v/%v", rxAts, ts1, ts2)
 	}
 }
 
@@ -476,6 +524,13 @@ func TestClientObservationScopeNameFromTransportCode(t *testing.T) {
 	regionKeys := map[string][]byte{"#test": testKey}
 	helloHex := hex.EncodeToString([]byte("hello"))
 
+	// Derived from time.Now() (not hardcoded) so this test never crosses
+	// resolveRxTimeCore's >30d-stale reject, which would replace rx_at with
+	// ingest time and break the WHERE rx_at = ? lookups below.
+	base := time.Now().UTC().Add(-time.Minute)
+	ts1 := base.Format(clientObsMillisLayout)
+	ts2 := base.Add(time.Second).Format(clientObsMillisLayout)
+
 	// header 0x14 = route_type 0 (TRANSPORT_FLOOD), payload_type 5 (GRP_TXT).
 	// Transport routes (0,3) carry code1/code2 right after the header, raw
 	// wire hex uppercased with no byte swap: bytes 2A B5 -> "2AB5", AA BB ->
@@ -484,7 +539,7 @@ func TestClientObservationScopeNameFromTransportCode(t *testing.T) {
 	raw := "14" + "2ab5" + "aabb" + "00" + helloHex
 	msg := map[string]interface{}{
 		"raw": raw, "direction": "rx",
-		"timestamp": "2026-08-17T10:00:00.123Z",
+		"timestamp": ts1,
 		"gps":       map[string]interface{}{"lat": 51.2, "lon": 4.4},
 	}
 	handleClientPacket(s, cfgWithObservations(), "test", "aa11", msg, nil, regionKeys)
@@ -493,7 +548,7 @@ func TestClientObservationScopeNameFromTransportCode(t *testing.T) {
 	// same content dedups across scopes), so raw and raw2 below share one
 	// pkt_hash — distinguish the two inserted rows by rx_at, not pkt_hash.
 	var code1, code2, scopeName sql.NullString
-	if err := s.db.QueryRow(`SELECT code1, code2, scope_name FROM client_rx_observations WHERE rx_at = ?`, "2026-08-17T10:00:00.123Z").
+	if err := s.db.QueryRow(`SELECT code1, code2, scope_name FROM client_rx_observations WHERE rx_at = ?`, ts1).
 		Scan(&code1, &code2, &scopeName); err != nil {
 		t.Fatal(err)
 	}
@@ -513,13 +568,13 @@ func TestClientObservationScopeNameFromTransportCode(t *testing.T) {
 	raw2 := "14" + "0000" + "aabb" + "00" + helloHex
 	msg2 := map[string]interface{}{
 		"raw": raw2, "direction": "rx",
-		"timestamp": "2026-08-17T10:00:01.123Z",
+		"timestamp": ts2,
 		"gps":       map[string]interface{}{"lat": 51.2, "lon": 4.4},
 	}
 	handleClientPacket(s, cfgWithObservations(), "test", "aa11", msg2, nil, regionKeys)
 
 	var code1b, scopeNameB sql.NullString
-	if err := s.db.QueryRow(`SELECT code1, scope_name FROM client_rx_observations WHERE rx_at = ?`, "2026-08-17T10:00:01.123Z").
+	if err := s.db.QueryRow(`SELECT code1, scope_name FROM client_rx_observations WHERE rx_at = ?`, ts2).
 		Scan(&code1b, &scopeNameB); err != nil {
 		t.Fatal(err)
 	}
