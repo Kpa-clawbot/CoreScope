@@ -286,6 +286,18 @@ func main() {
 		}
 	}
 
+	// Diagnostic client_rx_observations retention: separate, typically
+	// shorter window than clientRxDays — this table is diagnostic, not
+	// archival. 0 = disabled.
+	clientRxObsDays := cfg.ClientRxObsDaysOrZero()
+	if clientRxObsDays > 0 {
+		if n, err := store.PruneOldClientRxObservations(clientRxObsDays); err != nil {
+			log.Printf("[prune] client_rx_observations: %v", err)
+		} else if n > 0 {
+			log.Printf("[prune] startup pruned %d client_rx_observations older than %d days", n, clientRxObsDays)
+		}
+	}
+
 	vacuumPages := cfg.IncrementalVacuumPages()
 	store.RunIncrementalVacuum(vacuumPages)
 
@@ -348,19 +360,36 @@ func main() {
 		log.Printf("[prune] auto-prune enabled: packets older than %d days will be removed daily", packetDays)
 	}
 
-	// Daily ticker for client-RX coverage retention (#1727).
-	if clientRxDays > 0 {
+	// Daily ticker for client-RX coverage retention (#1727), reused for the
+	// diagnostic client_rx_observations retention (Task 6) rather than
+	// starting a second ticker — the two flags are independent (0 disables
+	// each separately), so the ticker itself must run when either is set.
+	if clientRxDays > 0 || clientRxObsDays > 0 {
 		clientRxRetentionTicker := time.NewTicker(24 * time.Hour)
 		go func() {
 			for range clientRxRetentionTicker.C {
-				if n, err := store.PruneOldClientReceptions(clientRxDays); err != nil {
-					log.Printf("[prune] error: %v", err)
-				} else if n > 0 {
-					store.RunIncrementalVacuum(vacuumPages)
+				if clientRxDays > 0 {
+					if n, err := store.PruneOldClientReceptions(clientRxDays); err != nil {
+						log.Printf("[prune] error: %v", err)
+					} else if n > 0 {
+						store.RunIncrementalVacuum(vacuumPages)
+					}
+				}
+				if clientRxObsDays > 0 {
+					if n, err := store.PruneOldClientRxObservations(clientRxObsDays); err != nil {
+						log.Printf("[prune] client_rx_observations: %v", err)
+					} else if n > 0 {
+						store.RunIncrementalVacuum(vacuumPages)
+					}
 				}
 			}
 		}()
-		log.Printf("[prune] auto-prune enabled: client_receptions older than %d days will be removed daily", clientRxDays)
+		if clientRxDays > 0 {
+			log.Printf("[prune] auto-prune enabled: client_receptions older than %d days will be removed daily", clientRxDays)
+		}
+		if clientRxObsDays > 0 {
+			log.Printf("[prune] auto-prune enabled: client_rx_observations older than %d days will be removed daily", clientRxObsDays)
+		}
 	}
 
 	// Hourly WAL checkpoint to prevent unbounded WAL growth.

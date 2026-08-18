@@ -46,6 +46,77 @@ func TestPruneOldClientReceptions(t *testing.T) {
 	}
 }
 
+// TestPruneClientRxObservationsUsesIndex verifies the diagnostic observations
+// reaper's DELETE ... WHERE rx_at < ? seeks idx_cro_prune rather than
+// full-scanning under the writer lock, mirroring
+// TestClientReceptionsRetentionUsesRxAtIndex for client_receptions below. May
+// pass immediately since idx_cro_prune already exists (Task 3) — in that case
+// this is a regression guard.
+func TestPruneClientRxObservationsUsesIndex(t *testing.T) {
+	s := newTestStore(t)
+	rows, err := s.db.Query(`EXPLAIN QUERY PLAN DELETE FROM client_rx_observations WHERE rx_at < ?`, "2026-01-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	plan := ""
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan += detail + "\n"
+	}
+	if !strings.Contains(plan, "idx_cro_prune") {
+		t.Fatalf("retention DELETE should use idx_cro_prune, plan was:\n%s", plan)
+	}
+}
+
+// TestPruneOldClientRxObservations verifies the diagnostic observations reaper
+// deletes rows older than the window and keeps recent ones, and that days=0
+// disables it — mirroring TestPruneOldClientReceptions for the sibling table.
+func TestPruneOldClientRxObservations(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now().UTC()
+	recent := now.AddDate(0, 0, -1).Format(rxTimeMillisLayout)
+	old := now.AddDate(0, 0, -40).Format(rxTimeMillisLayout)
+
+	mk := func(rxAt, pktHash string) *ClientRxObservation {
+		return &ClientRxObservation{
+			RxPubkey: testCompanionPK, RxAt: rxAt, IngestedAt: rxAt, PktHash: pktHash,
+			RouteType: 1, PayloadType: 5, HashSize: 1, HopCount: 0, Lat: 51.0, Lon: 3.7,
+		}
+	}
+	if _, err := s.InsertClientRxObservation(mk(recent, "hash-recent")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.InsertClientRxObservation(mk(old, "hash-old")); err != nil {
+		t.Fatal(err)
+	}
+
+	if n, _ := s.PruneOldClientRxObservations(0); n != 0 {
+		t.Fatalf("days=0 must be a no-op, got %d", n)
+	}
+	n, err := s.PruneOldClientRxObservations(7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 old observation pruned, got %d", n)
+	}
+	var remaining int
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_rx_observations`).Scan(&remaining)
+	if remaining != 1 {
+		t.Fatalf("expected 1 observation remaining (recent), got %d", remaining)
+	}
+	var remainingHash string
+	s.db.QueryRow(`SELECT pkt_hash FROM client_rx_observations`).Scan(&remainingHash)
+	if remainingHash != "hash-recent" {
+		t.Fatalf("expected the recent row to survive, got pkt_hash=%q", remainingHash)
+	}
+}
+
 func TestClientReceptionsTableExists(t *testing.T) {
 	s := newTestStore(t)
 	cols := map[string]bool{}
