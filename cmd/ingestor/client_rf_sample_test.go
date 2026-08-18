@@ -136,7 +136,34 @@ func TestRfDeltaNilWhenEitherEndpointMissingCounter(t *testing.T) {
 	if len(deltas) != 1 {
 		t.Fatalf("deltas = %d, want 1", len(deltas))
 	}
-	if deltas[0].ErrDelta != nil {
-		t.Errorf("ErrDelta = %v, want nil (prev recv_errors was NULL)", *deltas[0].ErrDelta)
+	if deltas[0].RecvErrDelta != nil {
+		t.Errorf("RecvErrDelta = %v, want nil (prev recv_errors was NULL)", *deltas[0].RecvErrDelta)
+	}
+}
+
+// TestClientRfDeltasNormalizesPubkeyCase proves ClientRfDeltas matches the
+// stored lowercase rx_pubkey even when a caller passes uppercase hex —
+// mirroring the strings.ToLower(rx) normalization in
+// cmd/server/rx_dashboard.go's queryCoverageFiltered. Without it, a URL path
+// pubkey pasted in uppercase silently returns zero rows.
+func TestClientRfDeltasNormalizesPubkeyCase(t *testing.T) {
+	s := newTestStore(t)
+	seed := func(ts string, uptime, rxAir float64) {
+		handleClientRfSample(s, "test", "aa11", map[string]interface{}{
+			"timestamp":   ts,
+			"gps":         map[string]interface{}{"lat": 51.2, "lon": 4.4},
+			"uptime_secs": uptime,
+			"rx_air_secs": rxAir,
+		})
+	}
+	seed("2026-08-17T10:00:00.000Z", 1000, 500)
+	seed("2026-08-17T10:00:15.000Z", 1015, 512)
+
+	deltas, err := s.ClientRfDeltas("AA11", "2026-08-17T00:00:00.000Z", "2026-08-18T00:00:00.000Z")
+	if err != nil {
+		t.Fatalf("deltas: %v", err)
+	}
+	if len(deltas) != 1 {
+		t.Fatalf("deltas = %d, want 1 for uppercase pubkey lookup", len(deltas))
 	}
 }

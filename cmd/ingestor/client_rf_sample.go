@@ -108,14 +108,14 @@ func optFloat(m map[string]interface{}, k string) *float64 {
 // would be indistinguishable from a measured zero, the exact conflation the
 // NULL-vs-zero rule on the underlying columns exists to prevent.
 type ClientRfDelta struct {
-	At         string
-	Lat, Lon   float64
-	Stationary bool
-	WallMillis int64
-	RxAirDelta *int64
-	TxAirDelta *int64
-	RecvDelta  *int64
-	ErrDelta   *int64
+	At           string
+	Lat, Lon     float64
+	Stationary   bool
+	WallMillis   int64
+	RxAirDelta   *int64
+	TxAirDelta   *int64
+	RecvDelta    *int64
+	RecvErrDelta *int64
 }
 
 // ClientRfDeltas returns consecutive-sample deltas for one radio. Pairs where
@@ -123,6 +123,7 @@ type ClientRfDelta struct {
 // wrap), and subtracting across it would produce a large negative or a bogus
 // spike. Absolutes stay in the table; only this view does arithmetic.
 func (s *Store) ClientRfDeltas(rxPubkey, from, to string) ([]ClientRfDelta, error) {
+	rxPubkey = strings.ToLower(strings.TrimSpace(rxPubkey))
 	rows, err := s.db.Query(`
 		SELECT sampled_at, lat, lon, stationary, uptime_secs,
 		       rx_air_secs, tx_air_secs, recv, recv_errors,
@@ -170,7 +171,7 @@ func (s *Store) ClientRfDeltas(rxPubkey, from, to string) ([]ClientRfDelta, erro
 		d.RxAirDelta = deltaOf(rx, prevRx)
 		d.TxAirDelta = deltaOf(tx, prevTx)
 		d.RecvDelta = deltaOf(recv, prevRecv)
-		d.ErrDelta = deltaOf(errs, prevErrs)
+		d.RecvErrDelta = deltaOf(errs, prevErrs)
 		out = append(out, d)
 	}
 	return out, rows.Err()
