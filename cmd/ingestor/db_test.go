@@ -3288,10 +3288,27 @@ func TestInsertClientRxObservation(t *testing.T) {
 
 func TestInsertClientRfSample(t *testing.T) {
 	s := newTestStore(t)
+	posAcc := 12.5
+	snr := -6.75
+	errs := 7
 	nf := -119
+	rssi := -92
+	battery := 4021
+	queueLen := 3
+	txAir := int64(341)
+	rxAir := int64(20877)
+	recv := int64(18422)
+	sent := int64(290)
+	floodRx := int64(17110)
+	directRx := int64(1312)
+	floodTx := int64(212)
+	directTx := int64(78)
 	o := &ClientRfSample{
 		RxPubkey: "aa11", SampledAt: "2026-08-17T10:00:00.000Z", IngestedAt: "2026-08-17T10:00:01Z",
-		Lat: 51.2, Lon: 4.4, Stationary: true, UptimeSecs: 84213, NoiseFloor: &nf,
+		Lat: 51.2, Lon: 4.4, PosAccM: &posAcc, Stationary: true, UptimeSecs: 84213,
+		BatteryMV: &battery, QueueLen: &queueLen, Errors: &errs, NoiseFloor: &nf, LastRSSI: &rssi,
+		LastSNR: &snr, TxAirSecs: &txAir, RxAirSecs: &rxAir, Recv: &recv, Sent: &sent,
+		FloodRx: &floodRx, DirectRx: &directRx, FloodTx: &floodTx, DirectTx: &directTx,
 	}
 	ins, err := s.InsertClientRfSample(o)
 	if err != nil || !ins {
@@ -3302,18 +3319,98 @@ func TestInsertClientRfSample(t *testing.T) {
 		t.Fatalf("duplicate must be idempotent: ins=%v err=%v", ins, err)
 	}
 
-	var got int
-	var stationary int
-	var recvErrors *int64
-	if err := s.db.QueryRow(
-		`SELECT noise_floor, stationary, recv_errors FROM client_rf_samples`).
-		Scan(&got, &stationary, &recvErrors); err != nil {
+	// Every column gets a distinct, non-symmetric value and is read back, so a
+	// positional transposition between any two same-typed neighbours in the
+	// 23-column INSERT (e.g. flood_rx/direct_rx, or recv/sent) is detectable —
+	// row-counting alone would pass either way.
+	var gotLat, gotLon, gotPosAccM, gotLastSNR float64
+	var gotStationary, gotErrors, gotNoiseFloor, gotLastRSSI, gotBatteryMV, gotQueueLen int
+	var gotUptimeSecs, gotTxAirSecs, gotRxAirSecs, gotRecv, gotSent, gotFloodRx, gotDirectRx, gotFloodTx, gotDirectTx int64
+	var gotRecvErrors *int64
+	if err := s.db.QueryRow(`
+		SELECT lat, lon, pos_acc_m, stationary, uptime_secs, battery_mv, queue_len,
+		       errors, noise_floor, last_rssi, last_snr, tx_air_secs, rx_air_secs,
+		       recv, sent, flood_rx, direct_rx, flood_tx, direct_tx, recv_errors
+		FROM client_rf_samples WHERE sampled_at = ?`, o.SampledAt).Scan(
+		&gotLat, &gotLon, &gotPosAccM, &gotStationary, &gotUptimeSecs, &gotBatteryMV, &gotQueueLen,
+		&gotErrors, &gotNoiseFloor, &gotLastRSSI, &gotLastSNR, &gotTxAirSecs, &gotRxAirSecs,
+		&gotRecv, &gotSent, &gotFloodRx, &gotDirectRx, &gotFloodTx, &gotDirectTx, &gotRecvErrors); err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if got != -119 || stationary != 1 {
-		t.Errorf("noise_floor/stationary = %d/%d, want -119/1", got, stationary)
+	if gotLat != 51.2 || gotLon != 4.4 {
+		t.Errorf("lat/lon = %v/%v, want 51.2/4.4 (a lat<->lon swap would pass with symmetric values)", gotLat, gotLon)
 	}
-	if recvErrors != nil {
-		t.Errorf("recv_errors = %v, want NULL on firmware that cannot count them", recvErrors)
+	if gotPosAccM != 12.5 {
+		t.Errorf("pos_acc_m = %v, want 12.5", gotPosAccM)
+	}
+	if gotStationary != 1 {
+		t.Errorf("stationary = %d, want 1", gotStationary)
+	}
+	if gotUptimeSecs != 84213 {
+		t.Errorf("uptime_secs = %d, want 84213", gotUptimeSecs)
+	}
+	if gotBatteryMV != 4021 {
+		t.Errorf("battery_mv = %d, want 4021", gotBatteryMV)
+	}
+	if gotQueueLen != 3 {
+		t.Errorf("queue_len = %d, want 3", gotQueueLen)
+	}
+	if gotErrors != 7 {
+		t.Errorf("errors = %d, want 7", gotErrors)
+	}
+	if gotNoiseFloor != -119 {
+		t.Errorf("noise_floor = %d, want -119", gotNoiseFloor)
+	}
+	if gotLastRSSI != -92 {
+		t.Errorf("last_rssi = %d, want -92", gotLastRSSI)
+	}
+	if gotLastSNR != -6.75 {
+		t.Errorf("last_snr = %v, want -6.75", gotLastSNR)
+	}
+	if gotTxAirSecs != 341 {
+		t.Errorf("tx_air_secs = %d, want 341", gotTxAirSecs)
+	}
+	if gotRxAirSecs != 20877 {
+		t.Errorf("rx_air_secs = %d, want 20877", gotRxAirSecs)
+	}
+	if gotRecv != 18422 {
+		t.Errorf("recv = %d, want 18422", gotRecv)
+	}
+	if gotSent != 290 {
+		t.Errorf("sent = %d, want 290", gotSent)
+	}
+	if gotFloodRx != 17110 {
+		t.Errorf("flood_rx = %d, want 17110", gotFloodRx)
+	}
+	if gotDirectRx != 1312 {
+		t.Errorf("direct_rx = %d, want 1312", gotDirectRx)
+	}
+	if gotFloodTx != 212 {
+		t.Errorf("flood_tx = %d, want 212", gotFloodTx)
+	}
+	if gotDirectTx != 78 {
+		t.Errorf("direct_tx = %d, want 78", gotDirectTx)
+	}
+	if gotRecvErrors != nil {
+		t.Errorf("recv_errors = %v, want NULL on firmware that cannot count them", gotRecvErrors)
+	}
+
+	// A second sample, at a different sampled_at, proves recv_errors round-trips
+	// non-NULL too — the first sample only covers the NULL direction.
+	re := int64(55)
+	o2 := &ClientRfSample{
+		RxPubkey: "aa11", SampledAt: "2026-08-17T10:00:15.000Z", IngestedAt: "2026-08-17T10:00:16Z",
+		Lat: 51.2, Lon: 4.4, Stationary: true, UptimeSecs: 84228, RecvErrors: &re,
+	}
+	if ins, err = s.InsertClientRfSample(o2); err != nil || !ins {
+		t.Fatalf("insert second sample: ins=%v err=%v", ins, err)
+	}
+	var gotRecvErrors2 *int64
+	if err := s.db.QueryRow(`SELECT recv_errors FROM client_rf_samples WHERE sampled_at = ?`, o2.SampledAt).
+		Scan(&gotRecvErrors2); err != nil {
+		t.Fatalf("read second sample: %v", err)
+	}
+	if gotRecvErrors2 == nil || *gotRecvErrors2 != 55 {
+		t.Errorf("recv_errors = %v, want 55", gotRecvErrors2)
 	}
 }
