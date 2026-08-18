@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"regexp"
 	"strings"
@@ -21,7 +22,7 @@ var clientPubkeyRe = regexp.MustCompile(`^[0-9a-f]{2,64}$`)
 // companion reports WHERE it directly heard a node, so we write a
 // client_receptions row and never touch the observers/observations tables.
 // rxPubkey is the companion pubkey from the topic (ACL-bound by the broker).
-func handleClientPacket(store *Store, tag, rxPubkey string, msg map[string]interface{}, channelKeys map[string]string) {
+func handleClientPacket(store *Store, cfg *Config, tag, rxPubkey string, msg map[string]interface{}, channelKeys map[string]string, regionKeys map[string][]byte) {
 	// The companion identity IS the (ACL-bound) topic pubkey. Reject non-hex
 	// topic segments so a no-ACL broker can't pollute the coverage tables, and
 	// never fall back to a payload-supplied id (that would defeat the ACL trust
@@ -73,12 +74,26 @@ func handleClientPacket(store *Store, tag, rxPubkey string, msg map[string]inter
 	}
 
 	rxAt, _ := resolveRxTime(msg, tag)
+	ingestedAt := time.Now().UTC().Format(time.RFC3339)
 	isAdvert := decoded.Header.PayloadTypeName == "ADVERT"
+
+	if cfg.ClientRxObservationsEnabled() {
+		// rxAtMillis: UNIQUE(rx_pubkey, pkt_hash, rx_at) needs sub-second
+		// resolution to keep distinct forwarder copies of the same flood as
+		// separate rows — resolveRxTime's second-resolution RFC3339 would
+		// collapse them and ON CONFLICT DO NOTHING would silently drop all but
+		// the first.
+		rxAtMillis, _ := resolveRxTimeMillis(msg, tag)
+		obs := buildClientRxObservation(rxPubkey, rawHex, rxAtMillis, ingestedAt, decoded, regionKeys, snrPtr, rssiPtr, lat, lon, accPtr)
+		if _, err := store.InsertClientRxObservation(obs); err != nil {
+			log.Printf("MQTT [%s] client observation insert: %v", tag, err)
+		}
+	}
 
 	rec, ok := buildClientReception(
 		rxPubkey,
 		direction, decoded.Header.RouteType, decoded.Path.Hops, decoded.Payload.PubKey, isAdvert,
-		snrPtr, rssiPtr, lat, lon, accPtr, rxAt, time.Now().UTC().Format(time.RFC3339),
+		snrPtr, rssiPtr, lat, lon, accPtr, rxAt, ingestedAt,
 	)
 	if !ok {
 		return
@@ -89,7 +104,7 @@ func handleClientPacket(store *Store, tag, rxPubkey string, msg map[string]inter
 	// Remember the companion's self-reported name (sent as "origin") so the
 	// leaderboard can show a name even if this companion never advertised.
 	if name := stringField(msg, "origin"); name != "" {
-		if err := store.UpsertClientObserver(rec.RxPubkey, name, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		if err := store.UpsertClientObserver(rec.RxPubkey, name, ingestedAt); err != nil {
 			log.Printf("MQTT [%s] client_observer upsert: %v", tag, err)
 		}
 	}
@@ -244,6 +259,54 @@ type ClientRxObservation struct {
 	Lat         float64
 	Lon         float64
 	PosAccM     *float64
+}
+
+// buildClientRxObservation assembles a ClientRxObservation from a decoded
+// client packet, regardless of whether it is attributable to a directly-heard
+// node (deriveHeardKey/buildClientReception decide that separately, and this
+// function has no opinion on it).
+func buildClientRxObservation(
+	rxPubkey, rawHex, rxAt, ingestedAt string, decoded *DecodedPacket, regionKeys map[string][]byte,
+	snr *float64, rssi *int, lat, lon float64, posAccM *float64,
+) *ClientRxObservation {
+	obs := &ClientRxObservation{
+		RxPubkey:    rxPubkey,
+		RxAt:        rxAt,
+		IngestedAt:  ingestedAt,
+		PktHash:     ComputeContentHash(rawHex),
+		RouteType:   decoded.Header.RouteType,
+		PayloadType: decoded.Header.PayloadType,
+		HashSize:    decoded.Path.HashSize,
+		HopCount:    decoded.Path.HashCount, // declared count; len(Hops) can be short on a truncated path
+		SNR:         snr,
+		RSSI:        rssi,
+		Lat:         lat,
+		Lon:         lon,
+		PosAccM:     posAccM,
+	}
+	if decoded.TransportCodes != nil {
+		obs.Code1 = &decoded.TransportCodes.Code1
+		obs.Code2 = &decoded.TransportCodes.Code2
+		if decoded.TransportCodes.Code1 != "0000" {
+			sn := matchScope(regionKeys, byte(decoded.Header.PayloadType), decoded.payloadRaw, decoded.TransportCodes.Code1)
+			obs.ScopeName = &sn
+		}
+	}
+	if len(decoded.Path.Hops) > 0 {
+		if b, err := json.Marshal(decoded.Path.Hops); err == nil {
+			j := string(b)
+			obs.PathJSON = &j
+		}
+		// FLOOD routes accumulate forwarders at the END of the path, so
+		// path[last] is the node that actually transmitted. DIRECT routes
+		// consume from the FRONT, so their path[last] is the route's far
+		// end — never the transmitter. Same rule as deriveHeardKey.
+		if decoded.Header.RouteType == RouteTransportFlood || decoded.Header.RouteType == RouteFlood {
+			f := strings.ToLower(decoded.Path.Hops[len(decoded.Path.Hops)-1])
+			obs.Forwarder = &f
+		}
+	}
+	return obs
 }
 
 // InsertClientRxObservation writes one diagnostic observation. Idempotent via

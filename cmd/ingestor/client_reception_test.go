@@ -243,7 +243,7 @@ func TestHandleClientPacketRelayedAdvertWritesReception(t *testing.T) {
 		"RSSI":      -92.0,
 		"gps":       map[string]interface{}{"lat": 51.05, "lon": 3.72, "acc_m": 8.0},
 	}
-	handleClientPacket(s, "test", testCompanionPK, msg, nil)
+	handleClientPacket(s, &Config{}, "test", testCompanionPK, msg, nil, nil)
 
 	var obsName string
 	s.db.QueryRow(`SELECT name FROM client_observers WHERE pubkey=?`, testCompanionPK).Scan(&obsName)
@@ -265,7 +265,7 @@ func TestHandleClientPacketRelayedAdvertWritesReception(t *testing.T) {
 
 	// No GPS → no row.
 	const companion2 = "b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3"
-	handleClientPacket(s, "test", companion2, map[string]interface{}{"raw": advertHex, "direction": "rx"}, nil)
+	handleClientPacket(s, &Config{}, "test", companion2, map[string]interface{}{"raw": advertHex, "direction": "rx"}, nil, nil)
 	var n2 int
 	s.db.QueryRow(`SELECT COUNT(*) FROM client_receptions WHERE rx_pubkey=?`, companion2).Scan(&n2)
 	if n2 != 0 {
@@ -292,7 +292,7 @@ func TestHandleClientPacketZeroHopAdvertWritesReception(t *testing.T) {
 		"origin": "MyMob", "SNR": -7.0, "RSSI": -92.0,
 		"gps": map[string]interface{}{"lat": 51.05, "lon": 3.72, "acc_m": 8.0},
 	}
-	handleClientPacket(s, "test", testCompanionPK, msg, nil)
+	handleClientPacket(s, &Config{}, "test", testCompanionPK, msg, nil, nil)
 
 	var heardKey, src string
 	var keylen int
@@ -314,6 +314,145 @@ func TestHandleClientPacketZeroHopAdvertWritesReception(t *testing.T) {
 // pubkey from the topic that isn't lowercase hex (a no-ACL broker could publish
 // meshcore/client/!@#$/packets) writes nothing to either coverage table. Without
 // the clientPubkeyRe guard this fixture would insert a polluting row.
+// cfgWithObservations returns a Config with the observations gate on.
+func cfgWithObservations() *Config {
+	return &Config{ClientRxObservations: &ClientRxObservationsConfig{Enabled: true}}
+}
+
+// TestClientPacketWritesObservationNotCoverage verifies a DIRECT-route packet
+// (not attributable per deriveHeardKey) still produces one diagnostic
+// observation row while writing ZERO coverage rows — the two paths are
+// independent.
+func TestClientPacketWritesObservationNotCoverage(t *testing.T) {
+	s := newTestStore(t)
+	// header 0x16 = route_type 2 (DIRECT), payload_type 5 (GRP_TXT). DIRECT
+	// carries no transport codes. path byte 0x41 = hash_size 2, hop_count 1,
+	// then the 2-byte hop, then the payload.
+	// deriveHeardKey refuses a DIRECT route, so this must produce an
+	// observation row and ZERO coverage rows.
+	raw := "16" + "41" + "1a2b" + strings.Repeat("33", 16)
+	msg := map[string]interface{}{
+		"raw": raw, "direction": "rx", "SNR": 4.5, "RSSI": -101.0,
+		"timestamp": "2026-08-17T10:00:00.123Z",
+		"gps":       map[string]interface{}{"lat": 51.2, "lon": 4.4, "acc_m": 8.0},
+	}
+	handleClientPacket(s, cfgWithObservations(), "test", "aa11", msg, nil, nil)
+
+	var obs, cov int
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_rx_observations`).Scan(&obs)
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_receptions`).Scan(&cov)
+	if obs != 1 {
+		t.Errorf("observations = %d, want 1", obs)
+	}
+	if cov != 0 {
+		t.Errorf("coverage rows = %d, want 0 — the invariant must hold", cov)
+	}
+
+	var hash string
+	var hopCount, hashSize int
+	s.db.QueryRow(`SELECT pkt_hash, hop_count, hash_size FROM client_rx_observations`).
+		Scan(&hash, &hopCount, &hashSize)
+	if hash != ComputeContentHash(raw) {
+		t.Errorf("pkt_hash = %q, want ComputeContentHash value %q", hash, ComputeContentHash(raw))
+	}
+	if hopCount != 1 || hashSize != 2 {
+		t.Errorf("hop_count/hash_size = %d/%d, want 1/2", hopCount, hashSize)
+	}
+}
+
+// TestClientPacketFloodWritesBoth verifies a FLOOD-route packet (attributable)
+// writes both an observation row AND a coverage row, and that the observation's
+// forwarder is path[last] — the immediate RF transmitter.
+func TestClientPacketFloodWritesBoth(t *testing.T) {
+	s := newTestStore(t)
+	// header 0x15 = route_type 1 (FLOOD), payload_type 5. 2-byte hash, one hop
+	// → path[last] is the transmitter, so this IS attributable.
+	raw := "15" + "41" + "1a2b" + strings.Repeat("33", 16)
+	msg := map[string]interface{}{
+		"raw": raw, "direction": "rx", "SNR": 4.5, "RSSI": -101.0,
+		"timestamp": "2026-08-17T10:00:00.123Z",
+		"gps":       map[string]interface{}{"lat": 51.2, "lon": 4.4},
+	}
+	handleClientPacket(s, cfgWithObservations(), "test", "aa11", msg, nil, nil)
+
+	var obs, cov int
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_rx_observations`).Scan(&obs)
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_receptions`).Scan(&cov)
+	if obs != 1 || cov != 1 {
+		t.Errorf("observations/coverage = %d/%d, want 1/1", obs, cov)
+	}
+	var fwd string
+	s.db.QueryRow(`SELECT forwarder FROM client_rx_observations`).Scan(&fwd)
+	if fwd != "1a2b" {
+		t.Errorf("forwarder = %q, want 1a2b", fwd)
+	}
+}
+
+// TestClientObservationsGateOff verifies that with clientRxObservations
+// disabled, a client packet writes zero observation rows.
+func TestClientObservationsGateOff(t *testing.T) {
+	s := newTestStore(t)
+	raw := "16" + "41" + "1a2b" + strings.Repeat("33", 16)
+	msg := map[string]interface{}{
+		"raw": raw, "direction": "rx",
+		"timestamp": "2026-08-17T10:00:00.123Z",
+		"gps":       map[string]interface{}{"lat": 51.2, "lon": 4.4},
+	}
+	handleClientPacket(s, &Config{}, "test", "aa11", msg, nil, nil)
+
+	var n int
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_rx_observations`).Scan(&n)
+	if n != 0 {
+		t.Errorf("rows = %d, want 0 when the gate is off", n)
+	}
+}
+
+// TestClientObservationsMillisecondPrecisionAllowsDistinctRows is the
+// regression test for the second-resolution rx_at bug: two client packets
+// with the same raw and rx_pubkey, timestamps 40ms apart in the same second,
+// must produce TWO observation rows, not one collapsed by
+// UNIQUE(rx_pubkey, pkt_hash, rx_at) + ON CONFLICT DO NOTHING. resolveRxTime's
+// RFC3339 (second-resolution) formatting would collapse these; the dedicated
+// millisecond-precision rx_at for this table must not.
+func TestClientObservationsMillisecondPrecisionAllowsDistinctRows(t *testing.T) {
+	s := newTestStore(t)
+	raw := "16" + "41" + "1a2b" + strings.Repeat("33", 16)
+	base := map[string]interface{}{
+		"raw": raw, "direction": "rx",
+		"gps": map[string]interface{}{"lat": 51.2, "lon": 4.4},
+	}
+	msg1 := map[string]interface{}{"timestamp": "2026-08-17T10:00:00.100Z"}
+	msg2 := map[string]interface{}{"timestamp": "2026-08-17T10:00:00.140Z"}
+	for k, v := range base {
+		msg1[k] = v
+		msg2[k] = v
+	}
+	handleClientPacket(s, cfgWithObservations(), "test", "aa11", msg1, nil, nil)
+	handleClientPacket(s, cfgWithObservations(), "test", "aa11", msg2, nil, nil)
+
+	var n int
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_rx_observations`).Scan(&n)
+	if n != 2 {
+		t.Fatalf("observations = %d, want 2 — sub-second rx_at must keep both forwarder copies distinct", n)
+	}
+	var rxAts []string
+	rows, err := s.db.Query(`SELECT rx_at FROM client_rx_observations ORDER BY rx_at`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var rxAt string
+		if err := rows.Scan(&rxAt); err != nil {
+			t.Fatal(err)
+		}
+		rxAts = append(rxAts, rxAt)
+	}
+	if rxAts[0] != "2026-08-17T10:00:00.100Z" || rxAts[1] != "2026-08-17T10:00:00.140Z" {
+		t.Errorf("rx_at values = %v, want millisecond-distinct timestamps", rxAts)
+	}
+}
+
 func TestHandleClientPacketRejectsNonHexPubkey(t *testing.T) {
 	s := newTestStore(t)
 	advertHex := "11451000D818206D3AAC152C8A91F89957E6D30CA51F36E28790228971C473B755F244F718754CF5EE4A2FD58D944466E42CDED140C66D0CC590183E32BAF40F112BE8F3F2BDF6012B4B2793C52F1D36F69EE054D9A05593286F78453E56C0EC4A3EB95DDA2A7543FCCC00B939CACC009278603902FC12BCF84B706120526F6F6620536F6C6172"
@@ -323,7 +462,7 @@ func TestHandleClientPacketRejectsNonHexPubkey(t *testing.T) {
 			"origin": "Spoof", "SNR": -7.0, "RSSI": -92.0,
 			"gps": map[string]interface{}{"lat": 51.05, "lon": 3.72, "acc_m": 8.0},
 		}
-		handleClientPacket(s, "test", bad, msg, nil)
+		handleClientPacket(s, &Config{}, "test", bad, msg, nil, nil)
 	}
 	var nRecept, nObs int
 	s.db.QueryRow(`SELECT COUNT(*) FROM client_receptions`).Scan(&nRecept)

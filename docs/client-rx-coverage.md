@@ -123,6 +123,30 @@ Retention: the table grows on every submission, so set `retention.clientRxDays` 
 rows older than N days (and stale `client_observers`); `0` disables it. Without it the table is
 unbounded.
 
+## Diagnostic observations — `client_rx_observations` (ingestor-owned)
+
+The client topic may also carry packets the companion could not attribute to a directly-heard
+node — a DIRECT-route packet with a path, for instance (see the capture HARD RULE above). Those
+packets are still decodable, and every decodable client packet is optionally recorded as a
+diagnostic RF observation, independent of whether it produced a coverage row.
+
+- Written to `client_rx_observations` only, **never** to `client_receptions` — the coverage
+  invariant (only directly-heard nodes) is unchanged and unaffected by this feature.
+- Gated by its own flag, `"clientRxObservations": { "enabled": true }`, nested inside the
+  `clientRxCoverage` gate: observations require coverage to be enabled. An ingestor without
+  `clientRxObservations.enabled` simply drops these packets (no table writes, no error).
+- The JSON payload shape from the companion app is **unchanged** either way — this is purely an
+  ingestor-side decision based on what `raw` decodes to, not a new field the app must send.
+- Captures routing detail the coverage path discards: `route_type`, `payload_type`,
+  `code1`/`code2` transport codes (route types 0/3 only), `scope_name` (matched against configured
+  region keys), `hash_size`, `hop_count`, the full forwarder path (`path_json`), and — for FLOOD
+  routes only — the immediate `forwarder`.
+- `rx_at` is stored at millisecond precision (unlike `client_receptions.rx_at`), because
+  `UNIQUE(rx_pubkey, pkt_hash, rx_at)` deliberately allows multiple rows per `pkt_hash`: each row is
+  one forwarder's copy of the same flood, and that multiplicity is the flood-amplification signal
+  this table exists to capture. Retention is `retention.clientRxObsDays` (separate from, and
+  typically shorter than, `retention.clientRxDays` — this table is diagnostic, not archival).
+
 ## Read API — coverage GeoJSON
 
 `GET /api/nodes/{pubkey}/rx-coverage?bbox={minLat,minLon,maxLat,maxLon}&z={zoom}`
