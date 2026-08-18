@@ -242,45 +242,55 @@ func TestRxLeaderboardQueryIsIndexBacked(t *testing.T) {
 
 func TestDeriveHeardKey(t *testing.T) {
 	full := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-	k, l, src, ok := deriveHeardKey("rx", packetpath.RouteFlood, nil, strings.ToUpper(full), true)
+	k, l, src, ok := deriveHeardKey("rx", packetpath.RouteFlood, PayloadADVERT, nil, strings.ToUpper(full), true)
 	if !ok || l != 32 || src != "advert" || k != full {
 		t.Fatalf("0-hop advert: got k=%q l=%d src=%q ok=%v", k, l, src, ok)
 	}
-	k, l, src, ok = deriveHeardKey("rx", packetpath.RouteFlood, []string{"aa", "bbccdd"}, "", false)
+	k, l, src, ok = deriveHeardKey("rx", packetpath.RouteFlood, PayloadGRP_TXT, []string{"aa", "bbccdd"}, "", false)
 	if !ok || k != "bbccdd" || l != 3 || src != "rxlog" {
 		t.Fatalf("flood path: got k=%q l=%d src=%q ok=%v", k, l, src, ok)
 	}
 	// DIRECT route: path[last] is the route's far end, not the transmitter — must be rejected.
-	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteDirect, []string{"aa", "bbccdd"}, "", false); ok {
+	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteDirect, PayloadGRP_TXT, []string{"aa", "bbccdd"}, "", false); ok {
 		t.Fatalf("direct-route path must be rejected")
 	}
-	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteTransportDirect, []string{"aa", "bbccdd"}, "", false); ok {
+	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteTransportDirect, PayloadGRP_TXT, []string{"aa", "bbccdd"}, "", false); ok {
 		t.Fatalf("transport-direct-route path must be rejected")
 	}
-	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteFlood, []string{"aa", "bb"}, "", false); ok {
+	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteFlood, PayloadGRP_TXT, []string{"aa", "bb"}, "", false); ok {
 		t.Fatalf("1-byte last hop should be rejected")
 	}
-	if _, _, _, ok = deriveHeardKey("tx", packetpath.RouteFlood, []string{"aabbcc"}, "", false); ok {
+	if _, _, _, ok = deriveHeardKey("tx", packetpath.RouteFlood, PayloadGRP_TXT, []string{"aabbcc"}, "", false); ok {
 		t.Fatalf("tx must be rejected")
 	}
-	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteFlood, nil, "", false); ok {
+	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteFlood, PayloadGRP_TXT, nil, "", false); ok {
 		t.Fatalf("no hops + non-advert must be rejected")
+	}
+	// TRACE repurposes the header path bytes as per-hop SNR values, not node
+	// hashes — a FLOOD-routed TRACE must never be attributable, even though the
+	// route type and hop shape are otherwise identical to the accepted case above.
+	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteFlood, PayloadTRACE, []string{"aa", "bbccdd"}, "", false); ok {
+		t.Fatalf("FLOOD-routed TRACE must be rejected (path bytes are SNR values, not node hashes)")
 	}
 }
 
 func TestBuildClientReception(t *testing.T) {
 	acc := 8.0
-	rec, ok := buildClientReception("companionpk", "rx", packetpath.RouteFlood, []string{"aa", "bbccdd"}, "", false,
+	rec, ok := buildClientReception("companionpk", "rx", packetpath.RouteFlood, PayloadGRP_TXT, []string{"aa", "bbccdd"}, "", false,
 		crF(-7.5), crI(-92), 51.05, 3.72, &acc, "2026-06-09T12:00:00Z", "2026-06-09T12:00:01Z")
 	if !ok || rec.HeardKey != "bbccdd" || rec.HeardKeyLen != 3 || rec.Src != "rxlog" {
 		t.Fatalf("bad reception: %+v ok=%v", rec, ok)
 	}
-	if _, ok := buildClientReception("c", "rx", packetpath.RouteDirect, []string{"bbccdd"}, "", false,
+	if _, ok := buildClientReception("c", "rx", packetpath.RouteDirect, PayloadGRP_TXT, []string{"bbccdd"}, "", false,
 		crF(-7.5), crI(-92), 51.05, 3.72, nil, "t", "t"); ok {
 		t.Fatal("direct-route path must be rejected (not the transmitter)")
 	}
-	if _, ok := buildClientReception("c", "rx", packetpath.RouteFlood, []string{"bbccdd"}, "", false, nil, nil, 99.0, 3.72, nil, "t", "t"); ok {
+	if _, ok := buildClientReception("c", "rx", packetpath.RouteFlood, PayloadGRP_TXT, []string{"bbccdd"}, "", false, nil, nil, 99.0, 3.72, nil, "t", "t"); ok {
 		t.Fatal("out-of-range lat must be rejected")
+	}
+	if _, ok := buildClientReception("c", "rx", packetpath.RouteFlood, PayloadTRACE, []string{"aa", "bbccdd"}, "", false,
+		crF(-7.5), crI(-92), 51.05, 3.72, nil, "t", "t"); ok {
+		t.Fatal("FLOOD-routed TRACE must be rejected (path bytes are SNR values, not node hashes)")
 	}
 }
 
@@ -650,6 +660,64 @@ func TestClientObservationScopeNameFromTransportCode(t *testing.T) {
 	}
 	if scopeNameB.Valid {
 		t.Errorf("scope_name = %q, want NULL when code1=0000", scopeNameB.String)
+	}
+}
+
+// TestHandleClientPacketFloodTraceWritesNoCoverage is the CRITICAL-1
+// regression test: a FLOOD-routed TRACE (header 0x25 = payload_type 9 << 2 |
+// route_type 1) repurposes the header path bytes as per-hop SNR values, not
+// node hashes (decoder.go). Before the packetpath.PathBytesAreHops guard was
+// wired into the client path, this shape yielded heardKey=<SNR bytes>,
+// src="rxlog" and a phantom client_receptions row. It must now produce ZERO
+// coverage rows, and the surviving diagnostic observation must carry NULL
+// forwarder/path_json (the route type, codes and signal are still valid
+// diagnostics, so the row itself is kept).
+func TestHandleClientPacketFloodTraceWritesNoCoverage(t *testing.T) {
+	s := newTestStore(t)
+	// header 0x25 = route_type 1 (FLOOD), payload_type 9 (TRACE).
+	// pathByte 0x41 = hash_size 2, hash_count 1 -> path bytes "1a2b" (SNR, not a hop hash).
+	// payload: tag(4) + authCode(4) + flags(1) = 9 bytes, so decodeTrace succeeds cleanly.
+	raw := "25" + "41" + "1a2b" + "aabbccdd1122334400"
+	decoded, err := DecodePacket(raw, nil, false)
+	if err != nil {
+		t.Fatalf("fixture must decode: %v", err)
+	}
+	if decoded.Header.PayloadTypeName != "TRACE" || decoded.Header.RouteType != packetpath.RouteFlood {
+		t.Fatalf("fixture sanity check failed: payloadType=%s routeType=%d", decoded.Header.PayloadTypeName, decoded.Header.RouteType)
+	}
+	if len(decoded.Path.Hops) != 1 || decoded.Path.Hops[0] != "1A2B" {
+		t.Fatalf("fixture sanity check failed: hops=%v, want a 2-byte SNR entry decoded as a hop", decoded.Path.Hops)
+	}
+
+	msg := map[string]interface{}{
+		"raw": raw, "direction": "rx", "SNR": 4.5, "RSSI": -101.0,
+		"timestamp": "2026-08-17T10:00:00.123Z",
+		"gps":       map[string]interface{}{"lat": 51.2, "lon": 4.4, "acc_m": 8.0},
+	}
+	handleClientPacket(s, cfgWithObservations(), "test", "aa11", msg, nil, nil)
+
+	var cov int
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_receptions`).Scan(&cov)
+	if cov != 0 {
+		t.Fatalf("coverage rows = %d, want 0 — a FLOOD-routed TRACE must never be attributable", cov)
+	}
+
+	var obs int
+	var fwd, pathJSON sql.NullString
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM client_rx_observations`).Scan(&obs); err != nil {
+		t.Fatal(err)
+	}
+	if obs != 1 {
+		t.Fatalf("observations = %d, want 1 (the packet was genuinely heard; only forwarder/path_json must be NULL)", obs)
+	}
+	if err := s.db.QueryRow(`SELECT forwarder, path_json FROM client_rx_observations`).Scan(&fwd, &pathJSON); err != nil {
+		t.Fatal(err)
+	}
+	if fwd.Valid {
+		t.Errorf("forwarder = %q, want NULL for a TRACE packet (path bytes are SNR values, not a node hash)", fwd.String)
+	}
+	if pathJSON.Valid {
+		t.Errorf("path_json = %q, want NULL for a TRACE packet (path bytes are SNR values, not a hop chain)", pathJSON.String)
 	}
 }
 
