@@ -506,11 +506,19 @@ func TestClientRxObservationsGate(t *testing.T) {
 	if !c.ClientRxObservationsEnabled() {
 		t.Error("explicit enable not honoured")
 	}
+	c.ClientRxObservations = &ClientRxObservationsConfig{Enabled: false}
+	if c.ClientRxObservationsEnabled() {
+		t.Error("explicit disable not honoured")
+	}
 	if got := c.ClientRxObsDaysOrZero(); got != 0 {
 		t.Errorf("unset retention = %d, want 0", got)
 	}
 	c.Retention = &RetentionConfig{ClientRxObsDays: 14}
 	if got := c.ClientRxObsDaysOrZero(); got != 14 {
 		t.Errorf("retention = %d, want 14", got)
+	}
+	c.Retention = &RetentionConfig{ClientRxObsDays: 0}
+	if got := c.ClientRxObsDaysOrZero(); got != 0 {
+		t.Errorf("retention=0 = %d, want 0", got)
 	}
 }
