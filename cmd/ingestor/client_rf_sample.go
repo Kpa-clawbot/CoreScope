@@ -102,16 +102,20 @@ func optFloat(m map[string]interface{}, k string) *float64 {
 	return nil
 }
 
-// ClientRfDelta is one consecutive pair of samples from the same radio.
+// ClientRfDelta is one consecutive pair of samples from the same radio. Each
+// *Delta field is nil when either endpoint of the pair is NULL (the counter
+// is unsupported on that firmware) — a plain int64 defaulting to 0 there
+// would be indistinguishable from a measured zero, the exact conflation the
+// NULL-vs-zero rule on the underlying columns exists to prevent.
 type ClientRfDelta struct {
 	At         string
 	Lat, Lon   float64
 	Stationary bool
-	WallSecs   int64
-	RxAirDelta int64
-	TxAirDelta int64
-	RecvDelta  int64
-	ErrDelta   int64
+	WallMillis int64
+	RxAirDelta *int64
+	TxAirDelta *int64
+	RecvDelta  *int64
+	ErrDelta   *int64
 }
 
 // ClientRfDeltas returns consecutive-sample deltas for one radio. Pairs where
@@ -148,6 +152,7 @@ func (s *Store) ClientRfDeltas(rxPubkey, from, to string) ([]ClientRfDelta, erro
 		var prevUptime, prevRx, prevTx, prevRecv, prevErrs *int64
 		if err := rows.Scan(&at, &lat, &lon, &stationary, &uptime, &rx, &tx, &recv, &errs,
 			&prevAt, &prevUptime, &prevRx, &prevTx, &prevRecv, &prevErrs); err != nil {
+			log.Printf("client_rf_samples delta scan: %v", err)
 			continue
 		}
 		if prevAt == nil || prevUptime == nil || uptime <= *prevUptime {
@@ -160,7 +165,7 @@ func (s *Store) ClientRfDeltas(rxPubkey, from, to string) ([]ClientRfDelta, erro
 		}
 		d := ClientRfDelta{
 			At: at, Lat: lat, Lon: lon, Stationary: stationary == 1,
-			WallSecs: int64(t2.Sub(t1).Seconds()),
+			WallMillis: t2.Sub(t1).Milliseconds(),
 		}
 		d.RxAirDelta = deltaOf(rx, prevRx)
 		d.TxAirDelta = deltaOf(tx, prevTx)
@@ -171,9 +176,13 @@ func (s *Store) ClientRfDeltas(rxPubkey, from, to string) ([]ClientRfDelta, erro
 	return out, rows.Err()
 }
 
-func deltaOf(cur, prev *int64) int64 {
-	if cur == nil || prev == nil || *cur < *prev {
-		return 0
+func deltaOf(cur, prev *int64) *int64 {
+	if cur == nil || prev == nil {
+		return nil
 	}
-	return *cur - *prev
+	d := *cur - *prev
+	if d < 0 { // a wrapped individual counter even though uptime_secs looked monotonic
+		d = 0
+	}
+	return &d
 }

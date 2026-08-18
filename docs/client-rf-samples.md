@@ -96,17 +96,31 @@ Retention: `retention.clientRfDays` bounds the table by `sampled_at`; `0` disabl
 ## Deltas — reboot and wrap handling
 
 `Store.ClientRfDeltas(rxPubkey, from, to)` derives consecutive-sample deltas (RX/TX airtime, recv,
-recv_errors, wall-clock seconds) for one radio over a time range, via a `LAG(...) OVER (ORDER BY
+recv_errors, wall-clock milliseconds) for one radio over a time range, via a `LAG(...) OVER (ORDER BY
 sampled_at)` window query. Every counter in the table is cumulative, so a delta is only meaningful
 between two samples from the *same uninterrupted uptime*:
 
 - A pair is skipped whenever `uptime_secs` does not strictly increase between consecutive samples.
   That is a reboot (uptime reset near 0) or a counter wrap, and subtracting across it would produce a
-  large negative or a bogus spike.
+  large negative or a bogus spike. `uptime_secs` has whole-second granularity, so sampling faster than
+  1 Hz means roughly every other pair gets skipped this way too (equal, not decreased, `uptime_secs`)
+  — that is expected, not a bug: strict-increase is deliberately correct for reboot detection, but it
+  means `ClientRfDeltas` effectively assumes callers sample at ≥1 s intervals if they want every
+  interval represented.
 - The absolute values always stay in `client_rf_samples`; only the delta view drops the
   cross-reboot pair. No row is ever deleted or modified because of this check.
-- Per-metric deltas additionally guard against `cur < prev` (covers a wrapped individual counter even
-  when `uptime_secs` itself looks monotonic) by clamping to `0` rather than going negative.
+- Each `*Delta` field on `ClientRfDelta` (`RxAirDelta`, `TxAirDelta`, `RecvDelta`, `ErrDelta`) is a
+  `*int64`, **nil** when either endpoint of the pair is NULL — i.e. the underlying counter is
+  unsupported on that firmware. A delta of `0` there would be indistinguishable from a measured zero,
+  which for `ErrDelta` in particular would render as "clean channel" on a radio that simply can't
+  count CRC errors. Consumers must treat nil as unknown, not zero.
+- When both endpoints of a pair *are* present, the per-metric delta additionally guards against
+  `cur < prev` (covers a wrapped individual counter even when `uptime_secs` itself looks monotonic) by
+  clamping to `0` rather than going negative.
+- `from`/`to` are compared **lexicographically** against millisecond-precision `sampled_at` strings, so
+  callers must pass bounds in the same `rxTimeMillisLayout` format
+  (`2006-01-02T15:04:05.000Z07:00`). A bound like `10:00:00Z` would lexicographically exclude a sample
+  stored as `10:00:00.500Z` (`.` sorts before `Z`), silently narrowing the range.
 
 ## Configurable values (future customizer)
 
