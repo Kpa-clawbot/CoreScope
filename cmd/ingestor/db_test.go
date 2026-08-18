@@ -3454,7 +3454,7 @@ func TestPruneClientRfSamplesUsesIndex(t *testing.T) {
 // millisecond-formatted cutoff correctly keeps it.
 func TestPruneOldClientRfSamples(t *testing.T) {
 	s := newTestStore(t)
-	now := time.Now().UTC().Truncate(time.Second)
+	now := time.Now().UTC()
 	recent := now.AddDate(0, 0, -1).Format(rxTimeMillisLayout)
 	old := now.AddDate(0, 0, -40).Format(rxTimeMillisLayout)
 	cutoffInstant := now.AddDate(0, 0, -7)

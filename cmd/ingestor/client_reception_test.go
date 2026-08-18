@@ -76,11 +76,22 @@ func TestPruneClientRxObservationsUsesIndex(t *testing.T) {
 // TestPruneOldClientRxObservations verifies the diagnostic observations reaper
 // deletes rows older than the window and keeps recent ones, and that days=0
 // disables it — mirroring TestPruneOldClientReceptions for the sibling table.
+// It also covers the millisecond-boundary case an RFC3339 (no-millisecond)
+// cutoff would get wrong, mirroring TestPruneOldClientRfSamples: rx_at is
+// stored via rxTimeMillisLayout, and a row 500ms after the cutoff instant —
+// chronologically newer, so it must survive — has a string form like
+// "...T10:00:00.500Z" that sorts lexicographically BEFORE a bare
+// "...T10:00:00Z" cutoff (since '.' is 0x2E and 'Z' is 0x5A). An
+// RFC3339-formatted cutoff would therefore wrongly delete it; a
+// millisecond-formatted cutoff (what PruneOldClientRxObservations uses today)
+// correctly keeps it.
 func TestPruneOldClientRxObservations(t *testing.T) {
 	s := newTestStore(t)
 	now := time.Now().UTC()
 	recent := now.AddDate(0, 0, -1).Format(rxTimeMillisLayout)
 	old := now.AddDate(0, 0, -40).Format(rxTimeMillisLayout)
+	cutoffInstant := now.AddDate(0, 0, -7)
+	boundary := cutoffInstant.Add(500 * time.Millisecond).Format(rxTimeMillisLayout)
 
 	mk := func(rxAt, pktHash string) *ClientRxObservation {
 		return &ClientRxObservation{
@@ -92,6 +103,9 @@ func TestPruneOldClientRxObservations(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := s.InsertClientRxObservation(mk(old, "hash-old")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.InsertClientRxObservation(mk(boundary, "hash-boundary")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -107,13 +121,13 @@ func TestPruneOldClientRxObservations(t *testing.T) {
 	}
 	var remaining int
 	s.db.QueryRow(`SELECT COUNT(*) FROM client_rx_observations`).Scan(&remaining)
-	if remaining != 1 {
-		t.Fatalf("expected 1 observation remaining (recent), got %d", remaining)
+	if remaining != 2 {
+		t.Fatalf("expected 2 observations remaining (recent + boundary), got %d", remaining)
 	}
-	var remainingHash string
-	s.db.QueryRow(`SELECT pkt_hash FROM client_rx_observations`).Scan(&remainingHash)
-	if remainingHash != "hash-recent" {
-		t.Fatalf("expected the recent row to survive, got pkt_hash=%q", remainingHash)
+	var boundarySurvived int
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_rx_observations WHERE pkt_hash = ?`, "hash-boundary").Scan(&boundarySurvived)
+	if boundarySurvived != 1 {
+		t.Fatalf("boundary row (500ms after cutoff instant) must survive; an RFC3339 (no-ms) cutoff would wrongly delete it because '.' < 'Z' lexicographically — got %d", boundarySurvived)
 	}
 }
 
