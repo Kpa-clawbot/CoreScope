@@ -1939,12 +1939,12 @@ func TestExtractObserverMetaNewFields(t *testing.T) {
 	msg := map[string]interface{}{
 		"model": "L1",
 		"stats": map[string]interface{}{
-			"noise_floor":  -112.5,
-			"battery_mv":   3720.0,
-			"uptime_secs":  86400.0,
-			"tx_air_secs":  100.0,
-			"rx_air_secs":  500.0,
-			"recv_errors":  3.0,
+			"noise_floor": -112.5,
+			"battery_mv":  3720.0,
+			"uptime_secs": 86400.0,
+			"tx_air_secs": 100.0,
+			"rx_air_secs": 500.0,
+			"recv_errors": 3.0,
 		},
 	}
 	meta := extractObserverMeta(msg)
@@ -1965,7 +1965,7 @@ func TestExtractObserverMetaNewFields(t *testing.T) {
 // TestInsertObservationSNRFillIn verifies that when the same observation is
 // received twice — first without SNR, then with SNR — the SNR is filled in
 // rather than silently discarded. The unique dedup index is
-// (transmission_id, observer_idx, COALESCE(path_json, '')); observer_idx must
+// (transmission_id, observer_idx, COALESCE(path_json, ”)); observer_idx must
 // be non-NULL for the conflict to fire (SQLite treats NULL != NULL).
 func TestInsertObservationSNRFillIn(t *testing.T) {
 	s, err := OpenStore(tempDBPath(t))
@@ -2068,9 +2068,9 @@ func TestPerObservationRawHex(t *testing.T) {
 
 	// First observation from observer A
 	pdA := &PacketData{
-		RawHex:    rawA,
-		Hash:      hash,
-		Timestamp: "2026-04-21T10:00:00Z",
+		RawHex:     rawA,
+		Hash:       hash,
+		Timestamp:  "2026-04-21T10:00:00Z",
 		ObserverID: "obs-A",
 		Direction:  &dir,
 		PathJSON:   "[]",
@@ -2085,9 +2085,9 @@ func TestPerObservationRawHex(t *testing.T) {
 
 	// Second observation from observer B (same hash, different raw bytes)
 	pdB := &PacketData{
-		RawHex:    rawB,
-		Hash:      hash,
-		Timestamp: "2026-04-21T10:00:01Z",
+		RawHex:     rawB,
+		Hash:       hash,
+		Timestamp:  "2026-04-21T10:00:01Z",
 		ObserverID: "obs-B",
 		Direction:  &dir,
 		PathJSON:   `["aabb"]`,
@@ -2789,7 +2789,6 @@ func TestBuildPacketDataRegionFallsBackToTopic(t *testing.T) {
 	}
 }
 
-
 // TestBackfillPathJSONAsync verifies that the path_json backfill does NOT block
 // OpenStore from returning. MQTT connect happens immediately after OpenStore;
 // if the backfill is synchronous, MQTT would be delayed indefinitely on large DBs.
@@ -3220,15 +3219,38 @@ func TestUpdateNodeDefaultScope_EmptyScopeIsNoop(t *testing.T) {
 func TestInsertClientRxObservation(t *testing.T) {
 	s := newTestStore(t)
 	code1, fwd := "AABB", "1a2b"
+	snr, rssi, posAccM := -7.5, -92, 8.5
 	o := &ClientRxObservation{
 		RxPubkey: "aa11", RxAt: "2026-08-17T10:00:00.123Z", IngestedAt: "2026-08-17T10:00:01Z",
 		PktHash: "0123456789abcdef", RouteType: 0, PayloadType: 4,
 		HashSize: 2, HopCount: 1, Code1: &code1, Forwarder: &fwd,
-		Lat: 51.2, Lon: 4.4,
+		Lat: 51.2, Lon: 4.4, SNR: &snr, RSSI: &rssi, PosAccM: &posAccM,
 	}
 	ins, err := s.InsertClientRxObservation(o)
 	if err != nil || !ins {
 		t.Fatalf("insert: ins=%v err=%v", ins, err)
+	}
+	// Geometry/signal round-trip: lat/lon/snr/rssi/pos_acc_m are never read back
+	// anywhere else in the suite, so a field swap inside the 18-argument Exec
+	// (e.g. lat<->lon) would pass green. lat and lon are deliberately unequal so
+	// a swap is detectable.
+	var gotLat, gotLon, gotSNR, gotPosAccM float64
+	var gotRSSI int
+	if err := s.db.QueryRow(`SELECT lat, lon, snr, rssi, pos_acc_m FROM client_rx_observations WHERE pkt_hash = ?`, o.PktHash).
+		Scan(&gotLat, &gotLon, &gotSNR, &gotRSSI, &gotPosAccM); err != nil {
+		t.Fatalf("read back geometry: %v", err)
+	}
+	if gotLat != 51.2 || gotLon != 4.4 {
+		t.Errorf("lat/lon = %v/%v, want 51.2/4.4 (a lat<->lon swap would pass with symmetric values)", gotLat, gotLon)
+	}
+	if gotSNR != -7.5 {
+		t.Errorf("snr = %v, want -7.5", gotSNR)
+	}
+	if gotRSSI != -92 {
+		t.Errorf("rssi = %v, want -92", gotRSSI)
+	}
+	if gotPosAccM != 8.5 {
+		t.Errorf("pos_acc_m = %v, want 8.5", gotPosAccM)
 	}
 	// Same (rx_pubkey, pkt_hash, rx_at) → idempotent, no second row.
 	ins, err = s.InsertClientRxObservation(o)
@@ -3247,5 +3269,63 @@ func TestInsertClientRxObservation(t *testing.T) {
 	s.db.QueryRow(`SELECT COUNT(*) FROM client_rx_observations WHERE pkt_hash = ?`, o.PktHash).Scan(&n)
 	if n != 2 {
 		t.Errorf("rows for pkt_hash = %d, want 2", n)
+	}
+}
+
+// TestTransportCodesV1MigrationFailsClosed is the IMPORTANT-5 regression test:
+// unlike observers_clock_naive_v1 (which checks each ALTER's error and
+// tolerates only "duplicate column"), the transport_codes_v1 block used to
+// fire four bare db.Exec calls and record its guard row unconditionally. If an
+// ALTER genuinely failed (disk full, busy timeout), the guard row still
+// landed, code1/code2 never existed, and prepareStatements' code1/code2
+// INSERT would fail forever on every subsequent restart with no way to
+// re-run the migration.
+//
+// This forces a REAL ALTER failure (not "duplicate column") by holding the
+// SQLite write lock from a second connection while transport_codes_v1 is
+// re-run, and asserts applySchema returns an error AND the guard row is not
+// recorded — so the migration is retried on the next restart instead of
+// wedging forever.
+func TestTransportCodesV1MigrationFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	s, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer s.Close()
+
+	var done int
+	if err := s.db.QueryRow(`SELECT 1 FROM _migrations WHERE name = 'transport_codes_v1'`).Scan(&done); err != nil {
+		t.Fatalf("expected transport_codes_v1 recorded after normal open: %v", err)
+	}
+	if _, err := s.db.Exec(`DELETE FROM _migrations WHERE name = 'transport_codes_v1'`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Hold the single SQLite write lock from a second connection (short
+	// busy_timeout, so this test doesn't wait on s.db's 5000ms) so the re-run
+	// ALTER on s.db hits a real "database is locked" error, not "duplicate
+	// column".
+	lockDB, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(50)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lockDB.Close()
+	tx, err := lockDB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`CREATE TABLE lock_holder(id INTEGER)`); err != nil {
+		t.Fatalf("acquire write lock: %v", err)
+	}
+
+	if err := applySchema(s.db); err == nil {
+		t.Fatal("applySchema must fail when the code1/code2 ALTERs hit a real (non-duplicate-column) error")
+	}
+
+	if err := s.db.QueryRow(`SELECT 1 FROM _migrations WHERE name = 'transport_codes_v1'`).Scan(&done); err != sql.ErrNoRows {
+		t.Fatalf("guard row must NOT be recorded when the ALTERs failed (got err=%v) — the migration must be retried on next restart, not wedged forever", err)
 	}
 }

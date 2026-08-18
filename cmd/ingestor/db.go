@@ -790,8 +790,19 @@ func applySchema(db *sql.DB) error {
 	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'transport_codes_v1'")
 	if row.Scan(new(int)) != nil {
 		log.Println("[migration] Adding code1/code2 columns to transmissions...")
-		db.Exec(`ALTER TABLE transmissions ADD COLUMN code1 TEXT DEFAULT NULL`)
-		db.Exec(`ALTER TABLE transmissions ADD COLUMN code2 TEXT DEFAULT NULL`)
+		// Each ALTER is independent — ignore "duplicate column" so reruns (and
+		// the fresh-database path, where the base schema already created the
+		// columns) are safe. Any other failure must stop before the guard row
+		// is inserted, or prepareStatements' code1/code2 INSERT fails forever
+		// on every subsequent restart with no way to retry the migration.
+		for _, stmt := range []string{
+			`ALTER TABLE transmissions ADD COLUMN code1 TEXT DEFAULT NULL`,
+			`ALTER TABLE transmissions ADD COLUMN code2 TEXT DEFAULT NULL`,
+		} {
+			if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+				return fmt.Errorf("transport_codes_v1 migration: %w", err)
+			}
+		}
 		db.Exec(`CREATE INDEX IF NOT EXISTS idx_tx_code1 ON transmissions(code1) WHERE code1 IS NOT NULL`)
 		db.Exec(`INSERT INTO _migrations (name) VALUES ('transport_codes_v1')`)
 		log.Println("[migration] code1/code2 columns added")
