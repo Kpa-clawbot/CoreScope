@@ -293,7 +293,18 @@ func buildClientRxObservation(
 		}
 	}
 	if len(decoded.Path.Hops) > 0 {
-		if b, err := json.Marshal(decoded.Path.Hops); err == nil {
+		// The decoder emits hops as uppercase hex (decoder.go strings.ToUpper),
+		// but every other identifier in this schema is lowercase (rxPubkey,
+		// heard_key, ComputeContentHash output). Lowercase every hop here so
+		// path_json and forwarder agree in case within this table and stay
+		// joinable against them — otherwise a case-sensitive comparison (e.g.
+		// json_extract(path_json,'$[n]') = forwarder) silently matches zero
+		// rows instead of erroring.
+		lowerHops := make([]string, len(decoded.Path.Hops))
+		for i, h := range decoded.Path.Hops {
+			lowerHops[i] = strings.ToLower(h)
+		}
+		if b, err := json.Marshal(lowerHops); err == nil {
 			j := string(b)
 			obs.PathJSON = &j
 		}
@@ -302,7 +313,7 @@ func buildClientRxObservation(
 		// consume from the FRONT, so their path[last] is the route's far
 		// end — never the transmitter. Same rule as deriveHeardKey.
 		if decoded.Header.RouteType == RouteTransportFlood || decoded.Header.RouteType == RouteFlood {
-			f := strings.ToLower(decoded.Path.Hops[len(decoded.Path.Hops)-1])
+			f := lowerHops[len(lowerHops)-1]
 			obs.Forwarder = &f
 		}
 	}

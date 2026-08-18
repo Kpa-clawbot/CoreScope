@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/hex"
 	"strings"
 	"testing"
 	"time"
@@ -381,10 +382,17 @@ func TestClientPacketFloodWritesBoth(t *testing.T) {
 	if obs != 1 || cov != 1 {
 		t.Errorf("observations/coverage = %d/%d, want 1/1", obs, cov)
 	}
-	var fwd string
-	s.db.QueryRow(`SELECT forwarder FROM client_rx_observations`).Scan(&fwd)
+	var fwd, pathJSON string
+	s.db.QueryRow(`SELECT forwarder, path_json FROM client_rx_observations`).Scan(&fwd, &pathJSON)
 	if fwd != "1a2b" {
 		t.Errorf("forwarder = %q, want 1a2b", fwd)
+	}
+	// The decoder emits hops uppercase; path_json must be lowercased to match
+	// forwarder (and every other identifier in this table), or a
+	// json_extract(path_json,'$[...]') = forwarder join silently returns zero
+	// rows instead of erroring.
+	if pathJSON != `["1a2b"]` {
+		t.Errorf("path_json = %q, want [\"1a2b\"] (lowercase, matching forwarder's case)", pathJSON)
 	}
 }
 
@@ -450,6 +458,76 @@ func TestClientObservationsMillisecondPrecisionAllowsDistinctRows(t *testing.T) 
 	}
 	if rxAts[0] != "2026-08-17T10:00:00.100Z" || rxAts[1] != "2026-08-17T10:00:00.140Z" {
 		t.Errorf("rx_at values = %v, want millisecond-distinct timestamps", rxAts)
+	}
+}
+
+// TestClientObservationScopeNameFromTransportCode covers code1/code2/scope_name
+// — the field this whole table exists for ("which repeater forwards which
+// scope"). Uses the same precomputed matchScope vector as main_test.go's
+// TestMatchScope (key = SHA256("#test")[:16], payloadType=5, payload="hello"
+// -> code1 2AB5) rather than inventing a vector, so a wrong HMAC algorithm
+// cannot pass.
+func TestClientObservationScopeNameFromTransportCode(t *testing.T) {
+	s := newTestStore(t)
+	testKey, err := hex.DecodeString("9cd8fcf22a47333b591d96a2b848b73f") // SHA256("#test")[:16]
+	if err != nil {
+		t.Fatal(err)
+	}
+	regionKeys := map[string][]byte{"#test": testKey}
+	helloHex := hex.EncodeToString([]byte("hello"))
+
+	// header 0x14 = route_type 0 (TRANSPORT_FLOOD), payload_type 5 (GRP_TXT).
+	// Transport routes (0,3) carry code1/code2 right after the header, raw
+	// wire hex uppercased with no byte swap: bytes 2A B5 -> "2AB5", AA BB ->
+	// "AABB". path byte 0x00 = hash_size 1, hop_count 0 (no hops). Payload
+	// bytes are "hello" to match the precomputed matchScope vector.
+	raw := "14" + "2ab5" + "aabb" + "00" + helloHex
+	msg := map[string]interface{}{
+		"raw": raw, "direction": "rx",
+		"timestamp": "2026-08-17T10:00:00.123Z",
+		"gps":       map[string]interface{}{"lat": 51.2, "lon": 4.4},
+	}
+	handleClientPacket(s, cfgWithObservations(), "test", "aa11", msg, nil, regionKeys)
+
+	// ComputeContentHash deliberately excludes the transport-code bytes (so the
+	// same content dedups across scopes), so raw and raw2 below share one
+	// pkt_hash — distinguish the two inserted rows by rx_at, not pkt_hash.
+	var code1, code2, scopeName sql.NullString
+	if err := s.db.QueryRow(`SELECT code1, code2, scope_name FROM client_rx_observations WHERE rx_at = ?`, "2026-08-17T10:00:00.123Z").
+		Scan(&code1, &code2, &scopeName); err != nil {
+		t.Fatal(err)
+	}
+	if !code1.Valid || code1.String != "2AB5" {
+		t.Errorf("code1 = %v, want raw wire hex uppercased 2AB5 (bytes 2A B5, no byte swap)", code1)
+	}
+	if !code2.Valid || code2.String != "AABB" {
+		t.Errorf("code2 = %v, want raw wire hex uppercased AABB (bytes AA BB, no byte swap)", code2)
+	}
+	if !scopeName.Valid || scopeName.String != "#test" {
+		t.Errorf("scope_name = %v, want matched region #test", scopeName)
+	}
+
+	// Second packet: code1 "0000" is the real, non-scoped value — stored
+	// literally, and the != "0000" guard must leave scope_name NULL rather
+	// than attempt (and fail) a match.
+	raw2 := "14" + "0000" + "aabb" + "00" + helloHex
+	msg2 := map[string]interface{}{
+		"raw": raw2, "direction": "rx",
+		"timestamp": "2026-08-17T10:00:01.123Z",
+		"gps":       map[string]interface{}{"lat": 51.2, "lon": 4.4},
+	}
+	handleClientPacket(s, cfgWithObservations(), "test", "aa11", msg2, nil, regionKeys)
+
+	var code1b, scopeNameB sql.NullString
+	if err := s.db.QueryRow(`SELECT code1, scope_name FROM client_rx_observations WHERE rx_at = ?`, "2026-08-17T10:00:01.123Z").
+		Scan(&code1b, &scopeNameB); err != nil {
+		t.Fatal(err)
+	}
+	if !code1b.Valid || code1b.String != "0000" {
+		t.Errorf("code1 = %v, want literal 0000 (a real value, not NULL)", code1b)
+	}
+	if scopeNameB.Valid {
+		t.Errorf("scope_name = %q, want NULL when code1=0000", scopeNameB.String)
 	}
 }
 
