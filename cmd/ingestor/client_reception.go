@@ -73,12 +73,12 @@ func handleClientPacket(store *Store, cfg *Config, tag, rxPubkey string, msg map
 		rssiPtr = &v
 	}
 
-	// Resolved once and formatted twice (RFC3339 for coverage, millisecond
-	// layout for observations) rather than calling resolveRxTime/
-	// resolveRxTimeMillis independently — each re-parses/validates/logs the
-	// same envelope timestamp and takes its own time.Now() reading, so two
-	// calls could log the same rejection twice and let the coverage row and
-	// the observation for the SAME packet straddle a second boundary.
+	// Resolved once via resolveRxTimeCore and formatted twice (RFC3339 for
+	// coverage, rxTimeMillisLayout for observations) rather than reparsing the
+	// envelope timestamp per format — a second parse would re-validate/re-log
+	// the same timestamp and take its own independent time.Now() reading, so
+	// the coverage row and the observation for the SAME packet could straddle
+	// a second boundary on a fallback path.
 	rxTime, _ := resolveRxTimeCore(msg, tag)
 	rxAt := rxTime.Format(time.RFC3339)
 	ingestedAt := time.Now().UTC().Format(time.RFC3339)
@@ -90,7 +90,7 @@ func handleClientPacket(store *Store, cfg *Config, tag, rxPubkey string, msg map
 		// separate rows — resolveRxTime's second-resolution RFC3339 would
 		// collapse them and ON CONFLICT DO NOTHING would silently drop all but
 		// the first.
-		rxAtMillis := rxTime.Format("2006-01-02T15:04:05.000Z07:00")
+		rxAtMillis := rxTime.Format(rxTimeMillisLayout)
 		if obs := buildClientRxObservation(direction, rxPubkey, rawHex, rxAtMillis, ingestedAt, decoded, regionKeys, snrPtr, rssiPtr, lat, lon, accPtr); obs != nil {
 			if _, err := store.InsertClientRxObservation(obs); err != nil {
 				log.Printf("MQTT [%s] client observation insert: %v", tag, err)

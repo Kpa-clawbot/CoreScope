@@ -320,10 +320,6 @@ func cfgWithObservations() *Config {
 	return &Config{ClientRxObservations: &ClientRxObservationsConfig{Enabled: true}}
 }
 
-// clientObsMillisLayout mirrors resolveRxTimeMillis' output layout, for tests
-// that need to derive (rather than hardcode) an rx_at they can query back by.
-const clientObsMillisLayout = "2006-01-02T15:04:05.000Z07:00"
-
 // TestClientPacketWritesObservationNotCoverage verifies a DIRECT-route packet
 // (not attributable per deriveHeardKey) still produces one diagnostic
 // observation row while writing ZERO coverage rows — the two paths are
@@ -471,8 +467,8 @@ func TestClientObservationsMillisecondPrecisionAllowsDistinctRows(t *testing.T) 
 	// ingest time and silently stop exercising the millisecond-distinctness
 	// this test exists to pin.
 	base := time.Now().UTC().Add(-time.Minute)
-	ts1 := base.Format(clientObsMillisLayout)
-	ts2 := base.Add(40 * time.Millisecond).Format(clientObsMillisLayout)
+	ts1 := base.Format(rxTimeMillisLayout)
+	ts2 := base.Add(40 * time.Millisecond).Format(rxTimeMillisLayout)
 	baseMsg := map[string]interface{}{
 		"raw": raw, "direction": "rx",
 		"gps": map[string]interface{}{"lat": 51.2, "lon": 4.4},
@@ -528,8 +524,8 @@ func TestClientObservationScopeNameFromTransportCode(t *testing.T) {
 	// resolveRxTimeCore's >30d-stale reject, which would replace rx_at with
 	// ingest time and break the WHERE rx_at = ? lookups below.
 	base := time.Now().UTC().Add(-time.Minute)
-	ts1 := base.Format(clientObsMillisLayout)
-	ts2 := base.Add(time.Second).Format(clientObsMillisLayout)
+	ts1 := base.Format(rxTimeMillisLayout)
+	ts2 := base.Add(time.Second).Format(rxTimeMillisLayout)
 
 	// header 0x14 = route_type 0 (TRANSPORT_FLOOD), payload_type 5 (GRP_TXT).
 	// Transport routes (0,3) carry code1/code2 right after the header, raw

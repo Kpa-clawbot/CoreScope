@@ -1254,25 +1254,26 @@ func resolveRxTime(msg map[string]interface{}, tag string) (string, int64) {
 	return t.Format(time.RFC3339), skew
 }
 
-// resolveRxTimeMillis is the millisecond-precision sibling of resolveRxTime,
-// for client_rx_observations. UNIQUE(rx_pubkey, pkt_hash, rx_at) on that table
-// relies on sub-second resolution to keep distinct forwarder copies of the
-// same flood as separate rows — resolveRxTime's second-resolution RFC3339
-// would collapse them and ON CONFLICT DO NOTHING would silently drop all but
-// the first. Fixed three-decimal width (not time.RFC3339Nano, which strips
-// trailing zeros) so the string is a stable uniqueness/sort key.
-func resolveRxTimeMillis(msg map[string]interface{}, tag string) (string, int64) {
-	t, skew := resolveRxTimeCore(msg, tag)
-	return t.Format("2006-01-02T15:04:05.000Z07:00"), skew
-}
+// rxTimeMillisLayout is the fixed three-decimal millisecond layout for
+// client_rx_observations.rx_at. UNIQUE(rx_pubkey, pkt_hash, rx_at) on that
+// table relies on sub-second resolution to keep distinct forwarder copies of
+// the same flood as separate rows — RFC3339's second resolution would
+// collapse them and ON CONFLICT DO NOTHING would silently drop all but the
+// first. Deliberately not time.RFC3339Nano, which strips trailing zeros, so
+// this stays a stable uniqueness/sort key. The single definition here is
+// shared by its only production caller (handleClientPacket, which formats a
+// resolveRxTimeCore result with it directly) and by tests that need to
+// derive an rx_at they can query back by.
+const rxTimeMillisLayout = "2006-01-02T15:04:05.000Z07:00"
 
 // resolveRxTimeCore holds the validation/clamping logic shared by
-// resolveRxTime and resolveRxTimeMillis: the >14h-future reject, the >30d-stale
-// reject, and the naive-skew clamp. Returns UTC time so callers format it (and
-// so a caller that needs both a resolveRxTime-style and a resolveRxTimeMillis-
-// style string for the SAME packet — as handleClientPacket does — can call
-// this once and format twice, instead of parsing/validating/logging twice and
-// risking two independent time.Now() reads straddling a second boundary.
+// resolveRxTime and any caller that needs the resolved time in a different
+// format (handleClientPacket formats it with rxTimeMillisLayout for
+// client_rx_observations). Returns UTC time so callers format it themselves —
+// a caller that needs two different formatted strings for the SAME packet
+// calls this once and formats twice, instead of parsing/validating/logging
+// twice and risking two independent time.Now() reads straddling a second
+// boundary.
 func resolveRxTimeCore(msg map[string]interface{}, tag string) (time.Time, int64) {
 	now := time.Now().UTC()
 	raw, _ := msg["timestamp"].(string)
