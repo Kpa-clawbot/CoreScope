@@ -239,3 +239,33 @@ func TestHexSizeRendersConstantPx(t *testing.T) {
 		}
 	}
 }
+
+// TestCoverageHeardKeyCandidatesIncludesDiscoverPrefix pins the 8-byte (16 hex)
+// candidate. corescope-rx requests DISCOVER_PREFIX_ONLY, so the firmware answers
+// with a 6+8 byte body and essentially every discover-attributed reception is
+// stored under an 8-byte heard_key. Without this candidate those rows exist in
+// client_receptions and are matched by no per-node coverage query — stored, and
+// invisible on the node page.
+func TestCoverageHeardKeyCandidatesIncludesDiscoverPrefix(t *testing.T) {
+	pk := "efef7943505052b47f1809488ea4b4d3942d4ed72d2b1953b90a9f5e62a65fb5"
+	got := coverageHeardKeyCandidates(pk)
+
+	want := map[string]bool{
+		pk:                 false,
+		"efef7943505052b4": false, // 8-byte discover prefix
+		"efef79":           false, // 3-byte relay hop
+		"efef":             false, // 2-byte relay hop
+	}
+	for _, c := range got {
+		if _, ok := want[c]; !ok {
+			t.Errorf("unexpected candidate %q", c)
+			continue
+		}
+		want[c] = true
+	}
+	for c, seen := range want {
+		if !seen {
+			t.Errorf("candidate %q missing from %v", c, got)
+		}
+	}
+}

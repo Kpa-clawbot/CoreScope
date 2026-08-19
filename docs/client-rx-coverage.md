@@ -46,7 +46,7 @@ packet (promiscuous, incl. overheard flood traffic), not just messages addressed
   is connected over BLE (`_serial->isConnected()`).
 
 So per received packet the app gets SNR + RSSI + the raw bytes. It decodes the raw packet (standard
-MeshCore format) to derive the directly-heard node (`path[last]` or 0-hop advert pubkey) and pairs it
+MeshCore format) to derive the directly-heard node (`path[last]`, a 0-hop advert pubkey, or a 0-hop node-discover response pubkey) and pairs it
 with the phone's GPS. The bare advert push (`PUSH_CODE_ADVERT` 0x80) carries only a pubkey (no SNR/
 RSSI/path) and is NOT used — 0x88 already covers adverts (the raw advert is in its payload).
 
@@ -140,11 +140,16 @@ client_receptions(
   UNIQUE(rx_pubkey, heard_key, rx_at))   -- idempotent re-ingest
 ```
 
-`heard_keylen` is 32 for a full pubkey (0-hop advert) or 2/3 for a multibyte prefix. `src` is
-`advert` or `rxlog`. No hex cell is stored — binning is computed server-side from lat/lon.
+`heard_keylen` is 32 for a full pubkey (0-hop advert, or a node-discover response that carried the
+full key) or 2, 3 or 8 for a multibyte prefix. `src` is `advert`, `rxlog` or `discover`.
+
+`discover` rows come from a 0-hop CONTROL/DISCOVER_RESP, which carries the responder's OWN pubkey
+in its payload — a first-hand identification, not a path inference. corescope-rx asks for
+DISCOVER_PREFIX_ONLY to save airtime, so those keys are normally 8 bytes; per-node coverage queries
+must therefore include the 16-hex prefix among their heard_key candidates. No hex cell is stored — binning is computed server-side from lat/lon.
 
 Indexes: a composite `(heard_key, heard_keylen, lat, lon)` and a `(lat, lon)` index back the coverage
-queries; the per-node query matches a sargable `heard_key IN (pubkey, prefix6, prefix4)` list so the
+queries; the per-node query matches a sargable `heard_key IN (pubkey, prefix16, prefix6, prefix4)` list so the
 composite is used instead of a table scan (see the benchmark in `cmd/ingestor`).
 
 Retention: the table grows on every submission, so set `retention.clientRxDays` (ingestor) to delete

@@ -224,16 +224,24 @@ func sortedCoverageNodes(m map[string]*covNodeAgg) (nodes []CoverageNode, trunca
 type bbox struct{ MinLat, MinLon, MaxLat, MaxLon float64 }
 
 // coverageHeardKeyCandidates returns the exact heard_key values that identify a
-// node: its full pubkey (stored with heard_keylen 32) and the 2-byte (4 hex) and
-// 3-byte (6 hex) prefixes a relay logs. Matching heard_key IN (these) is
+// node: its full pubkey (stored with heard_keylen 32), the 8-byte (16 hex) prefix
+// a node-discover response carries, and the 2-byte (4 hex) and 3-byte (6 hex)
+// prefixes a relay logs.
+//
+// The 16-hex entry is load-bearing, not defensive: corescope-rx asks for
+// DISCOVER_PREFIX_ONLY (src/app.js sends CTRL_NODE_DISCOVER_REQ|0x01 to save 24
+// bytes of airtime per reply), and the firmware then answers with 6+8 bytes
+// (simple_repeater/MyMesh.cpp:799-805). So essentially EVERY discover-attributed
+// reception is an 8-byte key; without this candidate they are stored and then
+// never matched by any per-node coverage query. Matching heard_key IN (these) is
 // equivalent to the old "heard_keylen=32 AND heard_key=? OR heard_keylen IN (2,3)
 // AND substr(?,1,keylen*2)=heard_key", but sargable — so the (heard_key, …)
 // composite index seeks the few matching rows instead of scanning the bbox (#5).
 func coverageHeardKeyCandidates(pubkey string) []string {
 	pk := strings.ToLower(pubkey)
 	seen := map[string]bool{}
-	out := make([]string, 0, 3)
-	for _, c := range []string{pk, prefixOrEmpty(pk, 6), prefixOrEmpty(pk, 4)} {
+	out := make([]string, 0, 4)
+	for _, c := range []string{pk, prefixOrEmpty(pk, 16), prefixOrEmpty(pk, 6), prefixOrEmpty(pk, 4)} {
 		if c != "" && !seen[c] {
 			seen[c] = true
 			out = append(out, c)
