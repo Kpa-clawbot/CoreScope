@@ -84,6 +84,7 @@ func handleClientPacket(store *Store, cfg *Config, tag, rxPubkey string, msg map
 	rxAt := rxTime.Format(time.RFC3339)
 	ingestedAt := time.Now().UTC().Format(time.RFC3339)
 	isAdvert := decoded.Header.PayloadTypeName == "ADVERT"
+	isDiscoverResp := decoded.Header.PayloadTypeName == "CONTROL" && decoded.Payload.CtrlSubtype == "DISCOVER_RESP"
 
 	if cfg.ClientRxObservationsEnabled() {
 		// rxAtMillis: UNIQUE(rx_pubkey, pkt_hash, rx_at) needs sub-second
@@ -102,6 +103,7 @@ func handleClientPacket(store *Store, cfg *Config, tag, rxPubkey string, msg map
 	rec, ok := buildClientReception(
 		rxPubkey,
 		direction, decoded.Header.RouteType, decoded.Header.PayloadType, decoded.Path.Hops, decoded.Payload.PubKey, isAdvert,
+		isDiscoverResp, decoded.Payload.CtrlPubKey,
 		snrPtr, rssiPtr, lat, lon, accPtr, rxAt, ingestedAt,
 	)
 	if !ok {
@@ -179,10 +181,16 @@ type ClientReception struct {
 //     consume the next hop from the FRONT (firmware Mesh.cpp removeSelfFromPath),
 //     so path[len-1] is the route's destination-side end, not who was heard.
 //   - hops empty + isAdvert → the 0-hop advertiser, by its full pubkey.
+//   - hops empty + isDiscoverResp → the 0-hop responder, by its pubkey (8 or
+//     32 bytes — CTL_TYPE_NODE_DISCOVER_RESP always carries an 8-byte prefix
+//     or the full 32-byte key; anything else is rejected outright, not
+//     truncated). A node-discover reply is always a direct, zero-hop RX —
+//     stronger identification than a path hash, since it carries the
+//     responder's own identity rather than an inferred forwarder.
 //   - otherwise → not attributable (ok=false).
 //
 // Returns (heardKey lowercased, keylenBytes, src, ok).
-func deriveHeardKey(direction string, routeType, payloadType int, hops []string, advertPubkey string, isAdvert bool) (string, int, string, bool) {
+func deriveHeardKey(direction string, routeType, payloadType int, hops []string, advertPubkey string, isAdvert bool, isDiscoverResp bool, discoverPubkey string) (string, int, string, bool) {
 	if !strings.EqualFold(direction, "rx") {
 		return "", 0, "", false
 	}
@@ -208,6 +216,14 @@ func deriveHeardKey(direction string, routeType, payloadType int, hops []string,
 		pk := strings.ToLower(strings.TrimSpace(advertPubkey))
 		return pk, len(pk) / 2, "advert", true
 	}
+	if isDiscoverResp && discoverPubkey != "" {
+		pk := strings.ToLower(strings.TrimSpace(discoverPubkey))
+		keylen := len(pk) / 2
+		if keylen != 8 && keylen != 32 { // discover pubkeys are always 8B (prefix) or 32B (full) — no floor, an exact set
+			return "", 0, "", false
+		}
+		return pk, keylen, "discover", true
+	}
 	return "", 0, "", false
 }
 
@@ -215,6 +231,7 @@ func deriveHeardKey(direction string, routeType, payloadType int, hops []string,
 // returns ok=false when the packet is not attributable / out of range.
 func buildClientReception(
 	rxPubkey, direction string, routeType, payloadType int, hops []string, advertPubkey string, isAdvert bool,
+	isDiscoverResp bool, discoverPubkey string,
 	snr *float64, rssi *int, lat, lon float64, posAccM *float64, rxAt, ingestedAt string,
 ) (*ClientReception, bool) {
 	if rxPubkey == "" || rxAt == "" {
@@ -223,7 +240,7 @@ func buildClientReception(
 	if lat < -90 || lat > 90 || lon < -180 || lon > 180 {
 		return nil, false
 	}
-	heardKey, keylen, src, ok := deriveHeardKey(direction, routeType, payloadType, hops, advertPubkey, isAdvert)
+	heardKey, keylen, src, ok := deriveHeardKey(direction, routeType, payloadType, hops, advertPubkey, isAdvert, isDiscoverResp, discoverPubkey)
 	if !ok {
 		return nil, false
 	}

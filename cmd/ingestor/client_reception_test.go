@@ -261,55 +261,88 @@ func TestRxLeaderboardQueryIsIndexBacked(t *testing.T) {
 
 func TestDeriveHeardKey(t *testing.T) {
 	full := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-	k, l, src, ok := deriveHeardKey("rx", packetpath.RouteFlood, PayloadADVERT, nil, strings.ToUpper(full), true)
+	k, l, src, ok := deriveHeardKey("rx", packetpath.RouteFlood, PayloadADVERT, nil, strings.ToUpper(full), true, false, "")
 	if !ok || l != 32 || src != "advert" || k != full {
 		t.Fatalf("0-hop advert: got k=%q l=%d src=%q ok=%v", k, l, src, ok)
 	}
-	k, l, src, ok = deriveHeardKey("rx", packetpath.RouteFlood, PayloadGRP_TXT, []string{"aa", "bbccdd"}, "", false)
+	k, l, src, ok = deriveHeardKey("rx", packetpath.RouteFlood, PayloadGRP_TXT, []string{"aa", "bbccdd"}, "", false, false, "")
 	if !ok || k != "bbccdd" || l != 3 || src != "rxlog" {
 		t.Fatalf("flood path: got k=%q l=%d src=%q ok=%v", k, l, src, ok)
 	}
 	// DIRECT route: path[last] is the route's far end, not the transmitter — must be rejected.
-	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteDirect, PayloadGRP_TXT, []string{"aa", "bbccdd"}, "", false); ok {
+	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteDirect, PayloadGRP_TXT, []string{"aa", "bbccdd"}, "", false, false, ""); ok {
 		t.Fatalf("direct-route path must be rejected")
 	}
-	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteTransportDirect, PayloadGRP_TXT, []string{"aa", "bbccdd"}, "", false); ok {
+	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteTransportDirect, PayloadGRP_TXT, []string{"aa", "bbccdd"}, "", false, false, ""); ok {
 		t.Fatalf("transport-direct-route path must be rejected")
 	}
-	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteFlood, PayloadGRP_TXT, []string{"aa", "bb"}, "", false); ok {
+	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteFlood, PayloadGRP_TXT, []string{"aa", "bb"}, "", false, false, ""); ok {
 		t.Fatalf("1-byte last hop should be rejected")
 	}
-	if _, _, _, ok = deriveHeardKey("tx", packetpath.RouteFlood, PayloadGRP_TXT, []string{"aabbcc"}, "", false); ok {
+	if _, _, _, ok = deriveHeardKey("tx", packetpath.RouteFlood, PayloadGRP_TXT, []string{"aabbcc"}, "", false, false, ""); ok {
 		t.Fatalf("tx must be rejected")
 	}
-	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteFlood, PayloadGRP_TXT, nil, "", false); ok {
+	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteFlood, PayloadGRP_TXT, nil, "", false, false, ""); ok {
 		t.Fatalf("no hops + non-advert must be rejected")
 	}
 	// TRACE repurposes the header path bytes as per-hop SNR values, not node
 	// hashes — a FLOOD-routed TRACE must never be attributable, even though the
 	// route type and hop shape are otherwise identical to the accepted case above.
-	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteFlood, PayloadTRACE, []string{"aa", "bbccdd"}, "", false); ok {
+	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteFlood, PayloadTRACE, []string{"aa", "bbccdd"}, "", false, false, ""); ok {
 		t.Fatalf("FLOOD-routed TRACE must be rejected (path bytes are SNR values, not node hashes)")
+	}
+
+	// --- discover-response cases (0x90 CTL_TYPE_NODE_DISCOVER_RESP) ---
+	discover32 := strings.Repeat("ab", 32)
+	discover8 := "abcdef0123456789"
+
+	k, l, src, ok = deriveHeardKey("rx", packetpath.RouteFlood, PayloadCONTROL, nil, "", false, true, discover8)
+	if !ok || l != 8 || src != "discover" || k != discover8 {
+		t.Fatalf("8-byte discover pubkey: got k=%q l=%d src=%q ok=%v", k, l, src, ok)
+	}
+	k, l, src, ok = deriveHeardKey("rx", packetpath.RouteFlood, PayloadCONTROL, nil, "", false, true, strings.ToUpper(discover32))
+	if !ok || l != 32 || src != "discover" || k != discover32 {
+		t.Fatalf("32-byte discover pubkey: got k=%q l=%d src=%q ok=%v", k, l, src, ok)
+	}
+	// Malformed/short discover payload (neither 8 nor 32 bytes) must be rejected outright, not truncated.
+	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteFlood, PayloadCONTROL, nil, "", false, true, "aabbcc"); ok {
+		t.Fatalf("short discover pubkey (3 bytes) must be rejected")
+	}
+	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteFlood, PayloadCONTROL, nil, "", false, true, ""); ok {
+		t.Fatalf("empty discover pubkey must be rejected")
+	}
+	// Wrong control type (not a DISCOVER_RESP) must be rejected even with a well-formed pubkey.
+	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteFlood, PayloadCONTROL, nil, "", false, false, discover8); ok {
+		t.Fatalf("non-discover CONTROL payload must be rejected")
+	}
+	// A discover response that arrived with hops is not a direct reception.
+	if _, _, _, ok = deriveHeardKey("rx", packetpath.RouteDirect, PayloadCONTROL, []string{"aa", "bbccdd"}, "", false, true, discover8); ok {
+		t.Fatalf("discover response with hops (DIRECT route) must be rejected")
 	}
 }
 
 func TestBuildClientReception(t *testing.T) {
 	acc := 8.0
-	rec, ok := buildClientReception("companionpk", "rx", packetpath.RouteFlood, PayloadGRP_TXT, []string{"aa", "bbccdd"}, "", false,
+	rec, ok := buildClientReception("companionpk", "rx", packetpath.RouteFlood, PayloadGRP_TXT, []string{"aa", "bbccdd"}, "", false, false, "",
 		crF(-7.5), crI(-92), 51.05, 3.72, &acc, "2026-06-09T12:00:00Z", "2026-06-09T12:00:01Z")
 	if !ok || rec.HeardKey != "bbccdd" || rec.HeardKeyLen != 3 || rec.Src != "rxlog" {
 		t.Fatalf("bad reception: %+v ok=%v", rec, ok)
 	}
-	if _, ok := buildClientReception("c", "rx", packetpath.RouteDirect, PayloadGRP_TXT, []string{"bbccdd"}, "", false,
+	if _, ok := buildClientReception("c", "rx", packetpath.RouteDirect, PayloadGRP_TXT, []string{"bbccdd"}, "", false, false, "",
 		crF(-7.5), crI(-92), 51.05, 3.72, nil, "t", "t"); ok {
 		t.Fatal("direct-route path must be rejected (not the transmitter)")
 	}
-	if _, ok := buildClientReception("c", "rx", packetpath.RouteFlood, PayloadGRP_TXT, []string{"bbccdd"}, "", false, nil, nil, 99.0, 3.72, nil, "t", "t"); ok {
+	if _, ok := buildClientReception("c", "rx", packetpath.RouteFlood, PayloadGRP_TXT, []string{"bbccdd"}, "", false, false, "", nil, nil, 99.0, 3.72, nil, "t", "t"); ok {
 		t.Fatal("out-of-range lat must be rejected")
 	}
-	if _, ok := buildClientReception("c", "rx", packetpath.RouteFlood, PayloadTRACE, []string{"aa", "bbccdd"}, "", false,
+	if _, ok := buildClientReception("c", "rx", packetpath.RouteFlood, PayloadTRACE, []string{"aa", "bbccdd"}, "", false, false, "",
 		crF(-7.5), crI(-92), 51.05, 3.72, nil, "t", "t"); ok {
 		t.Fatal("FLOOD-routed TRACE must be rejected (path bytes are SNR values, not node hashes)")
+	}
+	acc32 := strings.Repeat("ab", 32)
+	if rec, ok := buildClientReception("c", "rx", packetpath.RouteFlood, PayloadCONTROL, nil, "", false, true, acc32,
+		crF(-7.5), crI(-92), 51.05, 3.72, nil, "t", "t"); !ok || rec.HeardKey != acc32 || rec.HeardKeyLen != 32 || rec.Src != "discover" {
+		t.Fatalf("discover reception: %+v ok=%v", rec, ok)
 	}
 }
 
@@ -501,6 +534,38 @@ func TestClientPacketFloodWritesBoth(t *testing.T) {
 	// rows instead of erroring.
 	if pathJSON != `["1a2b"]` {
 		t.Errorf("path_json = %q, want [\"1a2b\"] (lowercase, matching forwarder's case)", pathJSON)
+	}
+}
+
+// TestHandleClientPacketDiscoverRespWritesReception is the end-to-end
+// regression test for the discover-response gap: a zero-hop CONTROL packet
+// carrying a CTL_TYPE_NODE_DISCOVER_RESP (firmware
+// examples/simple_repeater/MyMesh.cpp:780) must attribute a client_receptions
+// row keyed on the responder's own pubkey, src='discover' — not be silently
+// dropped as it was before this fix.
+func TestHandleClientPacketDiscoverRespWritesReception(t *testing.T) {
+	s := newTestStore(t)
+	// header 0x2D = route_type 1 (FLOOD), payload_type 0x0B (CONTROL).
+	// path byte 0x00 = 0 hops (a discover response is always heard direct).
+	// payload: flags(0x92 = CTL_TYPE_NODE_DISCOVER_RESP|ADV_TYPE_REPEATER) +
+	// snr(0x0A) + tag(4B LE) + 32-byte pubkey.
+	pubkey := strings.Repeat("ab", 32)
+	raw := "2d" + "00" + "920a44332211" + pubkey
+	msg := map[string]interface{}{
+		"raw": raw, "direction": "rx", "SNR": 4.5, "RSSI": -101.0,
+		"timestamp": "2026-08-17T10:00:00.123Z",
+		"gps":       map[string]interface{}{"lat": 51.2, "lon": 4.4, "acc_m": 8.0},
+	}
+	handleClientPacket(s, cfgWithObservations(), "test", "aa11", msg, nil, nil)
+
+	var heardKey, src string
+	var keylen int
+	if err := s.db.QueryRow(`SELECT heard_key, heard_keylen, src FROM client_receptions WHERE rx_pubkey=?`, "aa11").
+		Scan(&heardKey, &keylen, &src); err != nil {
+		t.Fatalf("expected a discover-response reception: %v", err)
+	}
+	if heardKey != pubkey || keylen != 32 || src != "discover" {
+		t.Fatalf("discover reception: want heard_key=%s/32/discover, got %s/%d/%s", pubkey, heardKey, keylen, src)
 	}
 }
 
