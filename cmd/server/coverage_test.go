@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -111,7 +112,9 @@ func TestDetectSchemaV3(t *testing.T) {
 func TestDetectSchemaV2(t *testing.T) {
 	db := setupTestDBv2(t)
 	defer db.Close()
-	db.detectSchema()
+	if err := db.detectSchema(context.Background(), db.conn); err != nil {
+		t.Fatalf("detectSchema: %v", err)
+	}
 	if db.isV3 {
 		t.Error("expected v2 schema (observer_id), got v3")
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -63,87 +64,105 @@ func OpenDB(path string) (*DB, error) {
 		return nil, fmt.Errorf("ping failed: %w", err)
 	}
 	d := &DB{conn: conn, path: path}
-	d.detectSchema()
+	// Detect the on-disk schema on a single pinned connection and fail loudly if
+	// it cannot be probed. A swallowed detection failure would silently cache the
+	// wrong schema mode (isV3=false against a v3 DB) for the entire process
+	// lifetime, breaking every read path until a manual restart (#1901). Aborting
+	// here lets the supervisor restart us, which clears any transient cause (e.g.
+	// a WAL recovery racing the read-only open).
+	ctx := context.Background()
+	sc, err := conn.Conn(ctx)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("schema detection: acquire connection: %w", err)
+	}
+	derr := d.detectSchema(ctx, sc)
+	_ = sc.Close()
+	if derr != nil {
+		conn.Close()
+		return nil, fmt.Errorf("schema detection failed: %w", derr)
+	}
 	return d, nil
 }
 
 func (db *DB) Close() error {
-	// Checkpoint WAL before closing to release lock cleanly for new processes
-	if _, err := db.conn.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
-		log.Printf("[db] WAL checkpoint error: %v", err)
-	} else {
-		log.Println("[db] WAL checkpoint complete")
-	}
+	// The connection is opened read-only (mode=ro in OpenDB), so it cannot
+	// checkpoint the WAL: PRAGMA wal_checkpoint(TRUNCATE) always fails with
+	// "disk I/O error (778)" on a read-only handle. Attempting it emitted a
+	// misleading storage-fault line on every shutdown that wasted incident
+	// investigation time (#1901); the ingestor (the writer) owns checkpointing.
 	return db.conn.Close()
 }
 
-// detectSchema checks if the observations table uses v3 schema (observer_idx).
-func (db *DB) detectSchema() {
-	rows, err := db.conn.Query("PRAGMA table_info(observations)")
+// detectSchema probes the on-disk schema and sets the capability flags.
+//
+// It returns an error if any probe query fails. Previously these failures were
+// swallowed with a bare return, leaving isV3 (and the feature flags) at their
+// zero value for the whole process lifetime: a single transient failure of the
+// first PRAGMA silently ran v2 SQL against a v3 database until the process was
+// restarted (#1901). Detection is now all-or-nothing — on any probe error the
+// caller aborts startup so the supervisor can retry.
+func (db *DB) detectSchema(ctx context.Context, q rowQuerier) error {
+	obs, err := schemaColumns(ctx, q, "observations")
 	if err != nil {
-		return
+		return fmt.Errorf("probe observations: %w", err)
+	}
+	db.isV3 = obs["observer_idx"]
+	db.hasResolvedPath = obs["resolved_path"]
+	db.hasObsRawHex = obs["raw_hex"]
+
+	tx, err := schemaColumns(ctx, q, "transmissions")
+	if err != nil {
+		return fmt.Errorf("probe transmissions: %w", err)
+	}
+	db.hasScopeName = tx["scope_name"]
+	db.hasLastSeen = tx["last_seen"]
+
+	nodes, err := schemaColumns(ctx, q, "nodes")
+	if err != nil {
+		return fmt.Errorf("probe nodes: %w", err)
+	}
+	db.hasDefaultScope = nodes["default_scope"]
+	db.hasMultibyteSupCols = nodes["multibyte_sup"]
+
+	if db.isV3 {
+		log.Printf("[db] schema mode: v3 (observer_idx)")
+	} else {
+		log.Printf("[db] schema mode: v2 (observer_id)")
+	}
+	return nil
+}
+
+// rowQuerier is satisfied by both *sql.DB and *sql.Conn. detectSchema takes it
+// so it can run against a single pinned connection (see OpenDB) and be
+// unit-tested with an injected probe failure (#1901).
+type rowQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// schemaColumns returns the set of column names present on the given table via
+// PRAGMA table_info. Unlike the previous inline scans, a query or scan error is
+// returned rather than swallowed (#1901). The table name is a trusted literal
+// supplied by the caller, not user input.
+func schemaColumns(ctx context.Context, q rowQuerier, table string) (map[string]bool, error) {
+	rows, err := q.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return nil, err
 	}
 	defer rows.Close()
+	cols := make(map[string]bool)
 	for rows.Next() {
 		var cid int
-		var colName string
-		var colType sql.NullString
-		var notNull, pk int
+		var name string
+		var ctype sql.NullString
+		var notnull, pk int
 		var dflt sql.NullString
-		if rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil {
-			if colName == "observer_idx" {
-				db.isV3 = true
-			}
-			if colName == "resolved_path" {
-				db.hasResolvedPath = true
-			}
-			if colName == "raw_hex" {
-				db.hasObsRawHex = true
-			}
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return nil, err
 		}
+		cols[name] = true
 	}
-
-	txRows, err := db.conn.Query("PRAGMA table_info(transmissions)")
-	if err != nil {
-		return
-	}
-	defer txRows.Close()
-	for txRows.Next() {
-		var cid int
-		var colName string
-		var colType sql.NullString
-		var notNull, pk int
-		var dflt sql.NullString
-		if txRows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil {
-			if colName == "scope_name" {
-				db.hasScopeName = true
-			}
-			if colName == "last_seen" {
-				db.hasLastSeen = true
-			}
-		}
-	}
-
-	nodeRows, err := db.conn.Query("PRAGMA table_info(nodes)")
-	if err != nil {
-		return
-	}
-	defer nodeRows.Close()
-	for nodeRows.Next() {
-		var cid int
-		var colName string
-		var colType sql.NullString
-		var notNull, pk int
-		var dflt sql.NullString
-		if nodeRows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil {
-			switch colName {
-			case "default_scope":
-				db.hasDefaultScope = true
-			case "multibyte_sup":
-				db.hasMultibyteSupCols = true
-			}
-		}
-	}
+	return cols, rows.Err()
 }
 
 // nodeSelectCols returns the SELECT column list for nodes queries.
