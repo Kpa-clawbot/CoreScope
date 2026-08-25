@@ -8084,14 +8084,17 @@ func (s *PacketStore) computeAnalyticsHashSizes(region, area string) map[string]
 					name = pk
 				}
 			}
-			// Skip zero-hop direct adverts for hash_size — the
-			// path byte is locally generated and unreliable.
-			// Still count the packet and update lastSeen.
-			isZeroHop := (routeType == uint64(RouteDirect) || routeType == uint64(RouteTransportDirect)) && (actualPathByte&0x3F) == 0
+			// Skip zero-hop direct adverts whose path byte is entirely zero —
+			// there the size bits were wiped by the sender and say nothing.
+			// A non-zero byte with a zero hop count (0x40 / 0x80) is a
+			// deliberate size declaration; keep it. Same rule as
+			// computeNodeHashSizeInfo. Skipped packets still count and still
+			// update lastSeen.
+			isUndeclaredZeroHop := (routeType == uint64(RouteDirect) || routeType == uint64(RouteTransportDirect)) && actualPathByte == 0x00
 			if byNode[pk] == nil {
 				role := nodeRoleByPK[pk] // empty if unknown
 				initHS := hashSize
-				if isZeroHop {
+				if isUndeclaredZeroHop {
 					initHS = 0
 				}
 				byNode[pk] = map[string]interface{}{
@@ -8101,7 +8104,7 @@ func (s *PacketStore) computeAnalyticsHashSizes(region, area string) map[string]
 				}
 			}
 			byNode[pk]["packets"] = byNode[pk]["packets"].(int) + 1
-			if !isZeroHop {
+			if !isUndeclaredZeroHop {
 				byNode[pk]["hashSize"] = hashSize
 			}
 			byNode[pk]["lastSeen"] = tx.FirstSeen
@@ -8699,9 +8702,15 @@ func (s *PacketStore) computeNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
 		if err != nil {
 			continue
 		}
-		// Direct zero-hop adverts (route types 2 and 3) use path byte 0x00
-		// locally and can misreport multibyte hash mode as 1-byte.
-		if (routeType == RouteDirect || routeType == RouteTransportDirect) && (pathByte&0x3F) == 0 {
+		// Direct zero-hop adverts carry no path, so the hop count is 0. Whether
+		// the SIZE bits are meaningful depends on the sender: firmware that
+		// predates meshcore-dev/MeshCore#3293 does `path_len = 0`, wiping the
+		// whole byte including the two size bits, so 0x00 says nothing about
+		// the node's path.hash.mode. A sender that writes the size through
+		// setPathHashSizeAndCount() emits 0x40 / 0x80 with a zero hop count —
+		// that is a deliberate declaration and the only way those bits can be
+		// non-zero here. Skip on the byte's content, not on the route type.
+		if (routeType == RouteDirect || routeType == RouteTransportDirect) && pathByte == 0x00 {
 			continue
 		}
 		hs := int((pathByte>>6)&0x3) + 1

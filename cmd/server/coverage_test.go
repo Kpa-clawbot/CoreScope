@@ -3341,17 +3341,20 @@ func TestHashSizeTransportDirectZeroHopSkipped(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
 		VALUES ('obs1', 'Obs', 'SJC', ?, '2026-01-01T00:00:00Z', 10)`, recent)
 
-	// RouteDirect (2) zero-hop: path byte 0x40 → hop_count=0, hash_size bits=01
-	// Should be skipped (existing behavior)
+	// RouteDirect (2) zero-hop with an all-zero path byte: the sender wiped the
+	// size bits, so there is nothing to read. Should be skipped.
+	// (This fixture used to be 0x40. A zero hop count with the size bits SET is
+	// a deliberate declaration — see TestZeroHopDirectAdvertDeclaredSizeIsEvidence
+	// — so the skip is keyed on the byte's content, not on the route type.)
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('1240aabbccdd', 'direct_zh', ?, 2, 4, '{"pubKey":"bbbb000000000001","name":"Direct-ZH","type":"ADVERT"}')`, recent)
+		VALUES ('1200aabbccdd', 'direct_zh', ?, 2, 4, '{"pubKey":"bbbb000000000001","name":"Direct-ZH","type":"ADVERT"}')`, recent)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (1, 1, 10.0, -90, '[]', ?)`, recentEpoch)
 
-	// RouteTransportDirect (3) zero-hop: 4 transport bytes + path byte 0x40 → hop_count=0
-	// Should ALSO be skipped (this was the missing case)
+	// RouteTransportDirect (3) zero-hop: 4 transport bytes + all-zero path byte
+	// Should ALSO be skipped (this was the missing case in #747)
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('130102030440aabb', 'tdirect_zh', ?, 3, 4, '{"pubKey":"bbbb000000000002","name":"TDirect-ZH","type":"ADVERT"}')`, recent)
+		VALUES ('130102030400aabb', 'tdirect_zh', ?, 3, 4, '{"pubKey":"bbbb000000000002","name":"TDirect-ZH","type":"ADVERT"}')`, recent)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (2, 1, 10.0, -90, '[]', ?)`, recentEpoch)
 
