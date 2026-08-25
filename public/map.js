@@ -141,16 +141,20 @@
   }
 
   function makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus) {
-    var hs = node.hash_size || 1;
-    // Show the short mesh hash ID (first N bytes of pubkey, uppercased)
-    var shortHash = node.public_key ? node.public_key.slice(0, hs * 2).toUpperCase() : '??';
+    // Show the short mesh hash ID (first N bytes of pubkey, uppercased). When
+    // the width is unobserved the label falls back to one byte — it has to draw
+    // something — but says so instead of asserting a 1-byte config.
+    var hashInfo = hashPrefixInfo(node);
+    var shortHash = hashInfo.prefix;
+    var unknownWidth = hashInfo.known ? '' : ' hash-unconfirmed';
     // #1356 V3: glyph is the primary non-color status carrier, hash is the data,
     // status color is a thin left-border (CSS class drives the hue).
     var status = mbStatus || null;
     var glyph = status ? (MB_GLYPHS[status] || MB_GLYPHS.unknown) : '';
     var statusClass = status ? (' ' + (MB_STATUS_CLASS[status] || MB_STATUS_CLASS.unknown)) : '';
-    var ariaStatus = status ? ('multi-byte ' + status + ', hash ' + shortHash)
-                            : ('repeater hash ' + shortHash);
+    var ariaWidth = hashInfo.known ? '' : ', hash size unknown';
+    var ariaStatus = status ? ('multi-byte ' + status + ', hash ' + shortHash + ariaWidth)
+                            : ('repeater hash ' + shortHash + ariaWidth);
     // Observer indicator stays a star — it is an orthogonal signal, not a status color.
     var obsIndicator = isAlsoObserver
       ? ' <span aria-hidden="true" style="color:' + (ROLE_COLORS.observer || '#f1c40f') + ';font-size:13px;line-height:1;" title="Also an observer"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg></span>'
@@ -158,7 +162,7 @@
     // Glyph + thin-space (U+2009) + hash. Visible content is aria-hidden so AT
     // reads the aria-label only (avoids "check mark 3 E" literal announcements).
     var visible = (glyph ? glyph + '\u2009' : '') + shortHash;
-    var html = '<div class="mc-mb-label' + statusClass + '" role="img" aria-label="' + ariaStatus + '">' +
+    var html = '<div class="mc-mb-label' + statusClass + unknownWidth + '" role="img" aria-label="' + ariaStatus + '">' +
       '<span aria-hidden="true">' + visible + '</span>' + obsIndicator + '</div>';
     return L.divIcon({
       html: html,
@@ -200,6 +204,7 @@
               <button class="btn ${filters.byteSize==='1'?'active':''}" data-byte="1">1-byte</button>
               <button class="btn ${filters.byteSize==='2'?'active':''}" data-byte="2">2-byte</button>
               <button class="btn ${filters.byteSize==='3'?'active':''}" data-byte="3">3-byte</button>
+              <button class="btn ${filters.byteSize==='unknown'?'active':''}" data-byte="unknown" title="No advert-derived hash size in the retention window">Unknown</button>
             </div>
           </fieldset>
           <fieldset class="mc-section">
@@ -1668,10 +1673,16 @@
     const filtered = nodes.filter(n => {
       if (!n.lat || !n.lon) return false;
       if (!filters[n.role || 'companion']) return false;
-      // Byte size filter (applies only to repeaters)
+      // Byte size filter (applies only to repeaters). A node with no observed
+      // size is its own bucket — folding it into "1-byte" made that bucket a
+      // mix of measured and merely-unheard nodes.
       if (filters.byteSize !== 'all' && (n.role || 'companion') === 'repeater') {
-        const hs = n.hash_size || 1;
-        if (String(hs) !== filters.byteSize) return false;
+        const hi = hashPrefixInfo(n);
+        if (filters.byteSize === 'unknown') {
+          if (hi.known) return false;
+        } else if (!hi.known || String(hi.bytes) !== filters.byteSize) {
+          return false;
+        }
       }
       // Status filter
       if (filters.statusFilter !== 'all') {
@@ -1855,10 +1866,14 @@
     // Check if this node is also an observer (combined repeater+observer)
     const matchingObs = node.public_key ? _observerByPubkey.get(node.public_key.toLowerCase()) : null;
     const obsBadge = matchingObs ? ` <span style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;background:${ROLE_COLORS.observer || '#f1c40f'};color:#fff;">OBSERVER</span>` : '';
-    const hs = node.hash_size || 1;
-    const hashPrefix = node.public_key ? node.public_key.slice(0, hs * 2).toUpperCase() : '—';
+    // Unknown width is reported as unknown, not as 1 — same wording the node
+    // detail page uses (nodes.js), so the two views can't disagree.
+    const hashInfo = hashPrefixInfo(node);
+    const hashPrefixValue = hashInfo.known
+      ? `${safeEsc(hashInfo.prefix)} <span style="font-weight:400;color:var(--text-muted);">(${hashInfo.bytes}B)</span>`
+      : `<span style="font-weight:400;color:var(--text-muted);">Unknown</span>`;
     const hashPrefixRow = `<dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Hash Prefix</dt>
-          <dd style="font-family:var(--mono);font-size:11px;font-weight:700;margin-left:88px;padding:2px 0;">${safeEsc(hashPrefix)} <span style="font-weight:400;color:var(--text-muted);">(${hs}B)</span></dd>`;
+          <dd style="font-family:var(--mono);font-size:11px;font-weight:700;margin-left:88px;padding:2px 0;">${hashPrefixValue}</dd>`;
     // Multi-byte support indicator for repeaters
     var mbRow = '';
     if (node.role === 'repeater' && node.multi_byte_status) {

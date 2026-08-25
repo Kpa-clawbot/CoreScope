@@ -6864,6 +6864,78 @@ console.log('\n=== live.js: node-filter URL update preserves lat/lon/zoom (#1709
   });
 }
 
+// ===== roles.js: hashPrefixInfo =====
+// hash_size is evidence, not a default. A node the analyzer has heard no
+// countable advert from has none — rendering that as "1" invents a 1-byte
+// config. Guards the map against regressing to `node.hash_size || 1`.
+console.log('\n=== roles.js: hashPrefixInfo ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  const hashPrefixInfo = ctx.hashPrefixInfo;
+  const PK = 'aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899';
+
+  test('missing hash_size is not known', () => {
+    const r = hashPrefixInfo({ public_key: PK });
+    assert.strictEqual(r.known, false);
+  });
+
+  test('null hash_size is not known', () => {
+    assert.strictEqual(hashPrefixInfo({ public_key: PK, hash_size: null }).known, false);
+  });
+
+  test('unknown width still renders a 1-byte prefix to draw', () => {
+    const r = hashPrefixInfo({ public_key: PK, hash_size: null });
+    assert.strictEqual(r.bytes, 1);
+    assert.strictEqual(r.prefix, 'AA');
+  });
+
+  test('1-byte evidence is known', () => {
+    const r = hashPrefixInfo({ public_key: PK, hash_size: 1 });
+    assert.strictEqual(r.known, true);
+    assert.strictEqual(r.prefix, 'AA');
+  });
+
+  test('2-byte evidence widens the prefix', () => {
+    const r = hashPrefixInfo({ public_key: PK, hash_size: 2 });
+    assert.strictEqual(r.known, true);
+    assert.strictEqual(r.bytes, 2);
+    assert.strictEqual(r.prefix, 'AABB');
+  });
+
+  test('3-byte evidence widens the prefix', () => {
+    const r = hashPrefixInfo({ public_key: PK, hash_size: 3 });
+    assert.strictEqual(r.prefix, 'AABBCC');
+  });
+
+  test('hash_size 0 counts as unknown, not zero-width', () => {
+    const r = hashPrefixInfo({ public_key: PK, hash_size: 0 });
+    assert.strictEqual(r.known, false);
+    assert.strictEqual(r.prefix, 'AA');
+  });
+
+  test('missing public_key degrades to placeholder', () => {
+    assert.strictEqual(hashPrefixInfo({ hash_size: 2 }).prefix, '??');
+  });
+
+  test('null node does not throw', () => {
+    const r = hashPrefixInfo(null);
+    assert.strictEqual(r.known, false);
+    assert.strictEqual(r.prefix, '??');
+  });
+}
+
+// ===== map.js: no bare `hash_size || 1` =====
+console.log('\n=== map.js: hash size fallback ===');
+{
+  const mapSrc = fs.readFileSync(__dirname + '/public/map.js', 'utf8');
+
+  test('map.js does not default an unknown hash_size to 1', () => {
+    assert.ok(!/hash_size\s*\|\|\s*1/.test(mapSrc),
+      'map.js must go through hashPrefixInfo() — a bare `hash_size || 1` renders "unknown" as a measured 1 byte');
+  });
+}
+
 // ===== SUMMARY =====
 Promise.allSettled(pendingTests).then(() => {
   console.log(`\n${'═'.repeat(40)}`);
