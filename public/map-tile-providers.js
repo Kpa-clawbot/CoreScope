@@ -62,7 +62,7 @@
     'stamen-toner-dark': { provider: 'stamen', label: 'Stamen Toner Lite', url: _getStamenUrl, invertFilter: INVERT_CSS, type: 'dark', attribution: '© Stadia Maps © Stamen Design © OpenStreetMap', maxZoom: 20 },
     'usgs-topo': { provider: 'usgs', label: 'USGS Topographic', url: function() { return 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}'; }, invertFilter: null, type: 'light', attribution: 'U.S. Geological Survey, National Geospatial Program', maxZoom: 16 },
     'usgs-imagery': { provider: 'usgs', label: 'USGS Imagery', url: function() { return 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryTopo/MapServer/tile/{z}/{y}/{x}'; }, invertFilter: null, type: 'light', attribution: 'U.S. Geological Survey, National Geospatial Program', maxZoom: 16 },
-    'esri-darkgray-labels': { provider: 'esri', label: 'Esri Dark Gray Canvas', url: function() { return 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'; }, invertFilter: null, type: 'dark', attribution: 'Tiles © Esri', maxZoom: 19 }
+    'esri-darkgray-labels': { provider: 'esri', label: 'Esri Dark Gray Canvas', url: function() { return 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'; }, refUrl: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}', invertFilter: null, type: 'dark', attribution: 'Tiles © Esri', maxZoom: 19 }
   };
 
   var REGISTRY = {};
@@ -278,7 +278,17 @@
       function _makeLayer(id) {
         var p   = REGISTRY[id];
         var url = typeof p.url === 'function' ? p.url() : p.url;
-        var layer = L.tileLayer(url, { attribution: p.attribution || '', maxZoom: p.maxZoom || 19 });
+        var opts = { attribution: p.attribution || '', maxZoom: p.maxZoom || 19 };
+        var layer = L.tileLayer(url, opts);
+
+        // Two-layer providers (Esri Dark Gray Canvas) ship their place labels as
+        // a separate transparent reference tileset that has to be stacked on the
+        // base. The theme-synced path in map.js/live.js already does this; the
+        // layer control did not, so picking such a provider explicitly produced
+        // a map with no place names at all.
+        if (p.refUrl && typeof L.layerGroup === 'function') {
+          layer = L.layerGroup([layer, L.tileLayer(p.refUrl, opts)]);
+        }
         
         // Every explicit layer enforces its own filter and locks the pane
         layer.on('add', function () {

@@ -457,6 +457,11 @@ test('MC_createLayerControl handles Auto mode and explicit layers correctly', ()
       createdLayers.push(layer);
       return layer;
     },
+    layerGroup: (layers) => {
+      const group = { _isGroup: true, _layers: layers, _events: {} };
+      group.on = (ev, cb) => { group._events[ev] = cb; };
+      return group;
+    },
     control: {
       layers: (maps) => { ctx._capturedBaseMaps = maps; return mockControl; }
     }
@@ -598,6 +603,77 @@ test('MC_tileUrlById returns the fallback for a disabled or unknown provider', (
   assert.strictEqual(ctx.window.MC_tileUrlById('nope', 'FALLBACK'), 'FALLBACK', 'unknown id falls back');
 });
 
+
+// ─── Esri two-layer provider (base + labels reference) ──────────────────────
+
+test('Esri Dark Gray Canvas declares a labels reference layer', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, {});
+  const p = ctx.window.MC_TILE_PROVIDERS['esri-darkgray-labels'];
+  assert.ok(p, 'esri provider should be registered');
+  assert.ok(p.refUrl, 'must declare refUrl — the id promises labels');
+  assert.ok(p.refUrl.indexOf('World_Dark_Gray_Reference') >= 0, 'refUrl points at the Reference tileset: ' + p.refUrl);
+});
+
+test('Esri refUrl is a string, matching how map.js/live.js/nodes.js consume it', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, {});
+  const p = ctx.window.MC_TILE_PROVIDERS['esri-darkgray-labels'];
+  assert.strictEqual(typeof p.refUrl, 'string', 'consumers pass refUrl straight to L.tileLayer');
+  assert.ok(/\{z\}\/\{y\}\/\{x\}/.test(p.refUrl), 'Esri uses {z}/{y}/{x} order: ' + p.refUrl);
+});
+
+test('Single-layer providers declare no refUrl', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, { tiles: { providers: { carto: { enabled: true } } } });
+  for (const id of ALL_CARTO_IDS) {
+    assert.ok(!ctx.window.MC_TILE_PROVIDERS[id].refUrl, id + ' should not declare refUrl');
+  }
+});
+
+test('Layer control stacks base + labels for a two-layer provider', () => {
+  const ctx = makeSandbox();
+  const created = [];
+  const groups  = [];
+  ctx.L = ctx.window.L = {
+    tileLayer: (url, opts) => { const l = { url, _events: {} }; l.on = (e, c) => { l._events[e] = c; }; created.push(l); return l; },
+    layerGroup: (layers) => { const g = { _isGroup: true, _layers: layers, _events: {} }; g.on = (e, c) => { g._events[e] = c; }; groups.push(g); return g; },
+    control: { layers: (maps) => { ctx._capturedBaseMaps = maps; return { addTo: function () { return this; } }; } }
+  };
+  const mockMap = {
+    hasLayer: () => false, addLayer: () => {}, removeLayer: () => {},
+    on: () => {}, off: () => {}, getPane: () => ctx.tilePane
+  };
+  loadProviders(ctx, {});
+  ctx.window.MC_initTileRegistry(false);
+  ctx.window.MC_createLayerControl(mockMap, { _isAutoGroup: true });
+
+  const entry = ctx._capturedBaseMaps['esri-darkgray-labels'];
+  assert.ok(entry, 'esri should appear in the control');
+  assert.ok(entry._isGroup, 'esri entry must be a layer group, not a bare tile layer');
+  assert.strictEqual(entry._layers.length, 2, 'group holds base + reference');
+  assert.ok(entry._layers[1].url.indexOf('World_Dark_Gray_Reference') >= 0, 'second layer is the labels overlay');
+});
+
+test('Layer control still builds a bare tile layer for single-layer providers', () => {
+  const ctx = makeSandbox();
+  ctx.L = ctx.window.L = {
+    tileLayer: (url) => { const l = { url, _events: {} }; l.on = (e, c) => { l._events[e] = c; }; return l; },
+    layerGroup: (layers) => ({ _isGroup: true, _layers: layers, on: () => {} }),
+    control: { layers: (maps) => { ctx._capturedBaseMaps = maps; return { addTo: function () { return this; } }; } }
+  };
+  const mockMap = {
+    hasLayer: () => false, addLayer: () => {}, removeLayer: () => {},
+    on: () => {}, off: () => {}, getPane: () => ctx.tilePane
+  };
+  loadProviders(ctx, { tiles: { providers: { carto: { enabled: true } } } });
+  ctx.window.MC_initTileRegistry(false);
+  ctx.window.MC_createLayerControl(mockMap, { _isAutoGroup: true });
+
+  const entry = ctx._capturedBaseMaps['carto-dark'];
+  assert.ok(entry, 'carto-dark should appear in the control');
+  assert.ok(!entry._isGroup, 'single-layer provider must stay a bare tile layer');
+});
 
 process.on('beforeExit', () => {
   console.log('');
