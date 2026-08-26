@@ -1835,7 +1835,9 @@
     var modalClosingLine = null;
 
     _gfModalMap = L.map(mapDiv, { zoomControl: true });
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    L.tileLayer(window.MC_tileUrlById
+      ? window.MC_tileUrlById('carto-light', 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png')
+      : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
       attribution: '© OpenStreetMap © CartoDB', maxZoom: 19
     }).addTo(_gfModalMap);
 
@@ -2044,7 +2046,9 @@
     if (!mapEl || typeof L === 'undefined') return;
 
     _gfMap = L.map(mapEl, { zoomControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, touchZoom: false });
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    L.tileLayer(window.MC_tileUrlById
+      ? window.MC_tileUrlById('carto-light', 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png')
+      : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
       attribution: '© OpenStreetMap © CartoDB', maxZoom: 19
     }).addTo(_gfMap);
 

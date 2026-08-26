@@ -519,6 +519,75 @@ test('MC_createLayerControl handles Auto mode and explicit layers correctly', ()
   assert.strictEqual(ev.detail.auto, true, 'event detail.auto should be true');
 });
 
+// ─── CARTO API key (?key=) ──────────────────────────────────────────────────
+
+test('Carto URLs carry no key param when no token is configured', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, { tiles: { providers: { carto: { enabled: true } } } });
+  const url = ctx.window.MC_TILE_PROVIDERS['carto-dark'].url();
+  assert.ok(url.indexOf('?') < 0, 'should have no query string: ' + url);
+  assert.ok(/\/dark_all\/\{z\}\/\{x\}\/\{y\}\{r\}\.png$/.test(url), 'url shape preserved: ' + url);
+});
+
+test('Carto token appends ?key= (NOT ?api_key=, which CARTO ignores)', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, { tiles: { providers: { carto: { enabled: true, token: 'abc123' } } } });
+  const url = ctx.window.MC_TILE_PROVIDERS['carto-dark'].url();
+  assert.ok(url.endsWith('?key=abc123'), 'should end with ?key=abc123: ' + url);
+  assert.ok(url.indexOf('api_key') < 0, 'must not use the api_key param: ' + url);
+});
+
+test('Carto token applies to all five carto styles', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, { tiles: { providers: { carto: { enabled: true, token: 'k' } } } });
+  for (const id of ALL_CARTO_IDS) {
+    const url = ctx.window.MC_TILE_PROVIDERS[id].url();
+    assert.ok(url.endsWith('?key=k'), id + ' should carry the key: ' + url);
+  }
+});
+
+test('Carto token is URL-encoded', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, { tiles: { providers: { carto: { enabled: true, token: 'a b&c=d?e' } } } });
+  const url = ctx.window.MC_TILE_PROVIDERS['carto-dark'].url();
+  assert.ok(url.endsWith('?key=' + encodeURIComponent('a b&c=d?e')), 'token must be encoded: ' + url);
+  assert.strictEqual((url.match(/\?/g) || []).length, 1, 'exactly one ? in the URL: ' + url);
+});
+
+test('Carto token composes with the enterprise domain option', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, { tiles: { providers: { carto: { enabled: true, token: 'k', domain: 'mycompany' } } } });
+  const url = ctx.window.MC_TILE_PROVIDERS['carto-dark'].url();
+  assert.ok(url.indexOf('mycompany.cartocdn.com') >= 0, 'domain honoured: ' + url);
+  assert.ok(url.endsWith('?key=k'), 'key still appended: ' + url);
+});
+
+test('Carto token resolves lazily — set after load, picked up on re-init', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, { tiles: { providers: { carto: { enabled: true } } } });
+  assert.ok(ctx.window.MC_TILE_PROVIDERS['carto-dark'].url().indexOf('key=') < 0, 'no key before config');
+  ctx.window.MC_MAP_CFG = { tiles: { providers: { carto: { enabled: true, token: 'late' } } } };
+  ctx.window.MC_initTileRegistry(true);
+  assert.ok(ctx.window.MC_TILE_PROVIDERS['carto-dark'].url().endsWith('?key=late'), 'key picked up after async config');
+});
+
+// ─── MC_tileUrlById ─────────────────────────────────────────────────────────
+
+test('MC_tileUrlById resolves a function-typed url to a string', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, { tiles: { providers: { carto: { enabled: true, token: 'k' } } } });
+  const url = ctx.window.MC_tileUrlById('carto-light', 'FALLBACK');
+  assert.strictEqual(typeof url, 'string', 'must return a string, not a function');
+  assert.ok(url.endsWith('?key=k'), 'carries the key: ' + url);
+});
+
+test('MC_tileUrlById returns the fallback for a disabled or unknown provider', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, { tiles: { providers: { carto: { enabled: false } } } });
+  assert.strictEqual(ctx.window.MC_tileUrlById('carto-dark', 'FALLBACK'), 'FALLBACK', 'disabled provider falls back');
+  assert.strictEqual(ctx.window.MC_tileUrlById('nope', 'FALLBACK'), 'FALLBACK', 'unknown id falls back');
+});
+
 process.on('beforeExit', () => {
   console.log('');
   console.log('  ' + passed + ' passed, ' + failed + ' failed');

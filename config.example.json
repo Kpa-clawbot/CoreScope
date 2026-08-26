@@ -78,9 +78,10 @@
       "darkDefault": "carto-dark",
       "lightDefault": "carto-light",
       "providers": {
-        "_comment_carto": "Carto is the default free-tier provider. Optional: specify 'domain' for Carto enterprise (e.g. 'mycompany' for 'https://{s}.mycompany.cartocdn.com').",
+        "_comment_carto": "Carto is the default provider. 'token' is a CARTO basemaps API key, REQUIRED as of 2026 — without one every raster tile is served stamped 'API KEY REQUIRED' (with a 200 status, so nothing errors). Free key, no account and no card, 5M tiles/month: https://carto.com/basemaps/apikey. WARNING: the key is sent to the browser and CARTO offers no referrer restriction. Optional: specify 'domain' for Carto enterprise (e.g. 'mycompany' for 'https://{s}.mycompany.cartocdn.com').",
         "carto": {
           "enabled": true,
+          "token": "",
           "domain": ""
         },
         "_comment_osm": "OSM providers: 'mapbox', 'thunderforest', 'maptiler'. WARNING: Tokens are sent to the browser. Apply origin/referrer restrictions in your provider dashboard.",
