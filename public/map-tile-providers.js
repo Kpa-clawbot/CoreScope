@@ -192,6 +192,19 @@
   window.MC_setServerDefaultLightTileProvider = setServerDefaultLight;
   window.MC_applyTileFilter             = applyTileFilter;
 
+  /**
+   * Resolve a registry id to a concrete tile-URL string, invoking function-typed
+   * `url` builders so callers never hand L.tileLayer a function (#1614). Returns
+   * `fallback` when the id isn't in the active registry (e.g. provider disabled).
+   * Lets non-map pages request a specific style without duplicating the URL.
+   */
+  window.MC_tileUrlById = function (id, fallback) {
+    var p = _hasId(id) ? REGISTRY[id] : null;
+    var u = p && (p.url || p.baseUrl);
+    if (!u) return fallback;
+    return (typeof u === 'function') ? u() : u;
+  };
+
 
   /**
    * Build and attach a Leaflet layer control listing "Auto (follows theme)"

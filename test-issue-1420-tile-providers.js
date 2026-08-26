@@ -564,6 +564,41 @@ test('Carto key coexists with the enterprise domain option', () => {
   assert.ok(u.endsWith('?key=abc123'), 'key lost: ' + u);
 });
 
+test('Carto uses ?key= and never ?api_key= (CARTO ignores api_key and still watermarks)', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, { tiles: { providers: { carto: { enabled: true, key: 'abc123' } } } });
+  const url = ctx.window.MC_TILE_PROVIDERS['carto-dark'].url();
+  assert.ok(url.endsWith('?key=abc123'), 'should end with ?key=abc123: ' + url);
+  assert.ok(url.indexOf('api_key') < 0, 'must not use the api_key param: ' + url);
+});
+
+test('Carto key resolves lazily - set after load, picked up on re-init', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, { tiles: { providers: { carto: { enabled: true } } } });
+  assert.ok(ctx.window.MC_TILE_PROVIDERS['carto-dark'].url().indexOf('key=') < 0, 'no key before config');
+  ctx.window.MC_MAP_CFG = { tiles: { providers: { carto: { enabled: true, key: 'late' } } } };
+  ctx.window.MC_initTileRegistry(true);
+  assert.ok(ctx.window.MC_TILE_PROVIDERS['carto-dark'].url().endsWith('?key=late'), 'key picked up after async config');
+});
+
+// --- MC_tileUrlById -------------------------------------------------------
+
+test('MC_tileUrlById resolves a function-typed url to a string', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, { tiles: { providers: { carto: { enabled: true, key: 'k' } } } });
+  const url = ctx.window.MC_tileUrlById('carto-light', 'FALLBACK');
+  assert.strictEqual(typeof url, 'string', 'must return a string, not a function');
+  assert.ok(url.endsWith('?key=k'), 'carries the key: ' + url);
+});
+
+test('MC_tileUrlById returns the fallback for a disabled or unknown provider', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, { tiles: { providers: { carto: { enabled: false } } } });
+  assert.strictEqual(ctx.window.MC_tileUrlById('carto-dark', 'FALLBACK'), 'FALLBACK', 'disabled provider falls back');
+  assert.strictEqual(ctx.window.MC_tileUrlById('nope', 'FALLBACK'), 'FALLBACK', 'unknown id falls back');
+});
+
+
 process.on('beforeExit', () => {
   console.log('');
   console.log('  ' + passed + ' passed, ' + failed + ' failed');

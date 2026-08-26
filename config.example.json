@@ -78,7 +78,7 @@
       "darkDefault": "carto-dark",
       "lightDefault": "carto-light",
       "providers": {
-        "_comment_carto": "Carto is the default provider. Since 2026-08 Carto requires an API key - without one the tiles come back stamped 'API KEY REQUIRED'. Get a free key at https://carto.com/basemaps/apikey and put it in 'key'. WARNING: the key is sent to the browser; restrict it by domain in the Carto dashboard. Optional: specify 'domain' for Carto enterprise (e.g. 'mycompany' for 'https://{s}.mycompany.cartocdn.com').",
+        "_comment_carto": "Carto is the default provider. Since 2026-08 CARTO requires an API key on its raster basemaps: without one every tile is served stamped 'API KEY REQUIRED' with a 200 status, so nothing errors and no healthcheck fires - verify by looking at a tile, not at a status code. Get a free key (no account, no card, 5M tile requests/month) at https://carto.com/basemaps/apikey and put it in 'key'. The query parameter is 'key'; 'api_key' is silently ignored and still serves the watermarked tile. WARNING: the key is sent to the browser; restrict it by domain in the CARTO dashboard. Optional: specify 'domain' for Carto enterprise (e.g. 'mycompany' for 'https://{s}.mycompany.cartocdn.com').",
         "carto": {
           "enabled": true,
           "key": "",
