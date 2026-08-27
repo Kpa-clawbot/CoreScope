@@ -597,6 +597,14 @@
       if (cfg.map.tiles.darkUrl) window.TILE_DARK = cfg.map.tiles.darkUrl;
       if (cfg.map.tiles.lightUrl) window.TILE_LIGHT = cfg.map.tiles.lightUrl;
     }
+    // Keep the last-resort TILE_DARK/TILE_LIGHT fallback in sync with a configured
+    // Carto API key, unless an explicit tile URL override already took precedence above.
+    var _cartoCfg = cfg.map && cfg.map.tiles && cfg.map.tiles.providers && cfg.map.tiles.providers.carto;
+    if (_cartoCfg && _cartoCfg.apiKey) {
+      var _cartoKeyQS = '?key=' + encodeURIComponent(_cartoCfg.apiKey);
+      if (window.TILE_DARK.indexOf('cartocdn.com') !== -1) window.TILE_DARK = 'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png' + _cartoKeyQS;
+      if (window.TILE_LIGHT.indexOf('cartocdn.com') !== -1) window.TILE_LIGHT = 'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png' + _cartoKeyQS;
+    }
     if (typeof window.MC_initTileRegistry === 'function') window.MC_initTileRegistry(true);
     if (cfg.snrThresholds) Object.assign(SNR_THRESHOLDS, cfg.snrThresholds);
     if (cfg.distThresholds) Object.assign(DIST_THRESHOLDS, cfg.distThresholds);

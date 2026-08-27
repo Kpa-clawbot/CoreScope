@@ -78,10 +78,11 @@
       "darkDefault": "carto-dark",
       "lightDefault": "carto-light",
       "providers": {
-        "_comment_carto": "Carto is the default free-tier provider. Optional: specify 'domain' for Carto enterprise (e.g. 'mycompany' for 'https://{s}.mycompany.cartocdn.com').",
+        "_comment_carto": "Carto is the default free-tier provider. Optional: specify 'domain' for Carto enterprise (e.g. 'mycompany' for 'https://{s}.mycompany.cartocdn.com'). Optional: 'apiKey' for Carto's keyed basemaps API (required now that anonymous tile requests are rate-limited/blocked). WARNING: apiKey is sent to the browser. Apply origin/referrer restrictions in your Carto dashboard.",
         "carto": {
           "enabled": true,
-          "domain": ""
+          "domain": "",
+          "apiKey": ""
         },
         "_comment_osm": "OSM providers: 'mapbox', 'thunderforest', 'maptiler'. WARNING: Tokens are sent to the browser. Apply origin/referrer restrictions in your provider dashboard.",
         "osm": {

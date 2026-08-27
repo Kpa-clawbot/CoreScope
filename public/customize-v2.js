@@ -4,6 +4,17 @@
 'use strict';
 
 (function () {
+  // Preview-map tile URL: reuse the key-aware registry from map-tile-providers.js
+  // so these customizer previews respect a configured Carto API key. Falls back to
+  // the anonymous URL if the registry hasn't loaded yet.
+  function _cv2CartoLightTileUrl() {
+    try {
+      var p = window.MC_TILE_PROVIDERS && window.MC_TILE_PROVIDERS['carto-light'];
+      if (p && typeof p.url === 'function') return p.url();
+    } catch (_) {}
+    return 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+  }
+
   // ── Constants ──
 
   var DEFAULT_HOME = {
@@ -1835,7 +1846,7 @@
     var modalClosingLine = null;
 
     _gfModalMap = L.map(mapDiv, { zoomControl: true });
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    L.tileLayer(_cv2CartoLightTileUrl(), {
       attribution: '© OpenStreetMap © CartoDB', maxZoom: 19
     }).addTo(_gfModalMap);
 
@@ -2044,7 +2055,7 @@
     if (!mapEl || typeof L === 'undefined') return;
 
     _gfMap = L.map(mapEl, { zoomControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, touchZoom: false });
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    L.tileLayer(_cv2CartoLightTileUrl(), {
       attribution: '© OpenStreetMap © CartoDB', maxZoom: 19
     }).addTo(_gfMap);
 

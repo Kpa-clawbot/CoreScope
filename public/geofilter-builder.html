@@ -88,10 +88,20 @@
 <script>
 const map = L.map('map').setView([50.5, 4.4], 8);
 
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-  attribution: '© OpenStreetMap © CartoDB',
-  maxZoom: 19
-}).addTo(map);
+// Standalone tool page (no roles.js/map-tile-providers.js) — fetch the Carto
+// API key directly so tiles keep working now that anonymous requests need one.
+fetch('/api/config/client').then(function (r) { return r.json(); }).then(function (cfg) {
+  var carto = cfg && cfg.map && cfg.map.tiles && cfg.map.tiles.providers && cfg.map.tiles.providers.carto;
+  var url = (carto && carto.apiKey)
+    ? 'https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=' + encodeURIComponent(carto.apiKey)
+    : 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+  L.tileLayer(url, { attribution: '© OpenStreetMap © CartoDB', maxZoom: 19 }).addTo(map);
+}).catch(function () {
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '© OpenStreetMap © CartoDB',
+    maxZoom: 19
+  }).addTo(map);
+});
 
 let points = [];
 let markers = [];
