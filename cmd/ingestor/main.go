@@ -759,6 +759,14 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 	// Global observer IATA whitelist: if configured, drop messages from observers
 	// in non-whitelisted IATA regions. Applies to ALL message types (status + packets).
 	if len(parts) > 1 && !cfg.IsObserverIATAAllowed(parts[1]) {
+		// Throttled to one line per region per cfg.IATAWarnInterval — see
+		// ShouldWarnIATADrop. Format matches the fleet's Python region filter so
+		// one scraper regex covers both.
+		if cfg.ShouldWarnIATADrop(parts[1]) {
+			code := strings.ToUpper(strings.TrimSpace(parts[1]))
+			log.Printf("MQTT [%s] [region-filter] dropping unknown region '%s' (not in observerIATAWhitelist) -- further messages from %s suppressed for %.0fh",
+				tag, code, code, cfg.IATAWarnInterval().Hours())
+		}
 		return
 	}
 
