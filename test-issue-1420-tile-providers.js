@@ -519,6 +519,51 @@ test('MC_createLayerControl handles Auto mode and explicit layers correctly', ()
   assert.strictEqual(ev.detail.auto, true, 'event detail.auto should be true');
 });
 
+test('Carto URLs carry no ?key= when no key is configured', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, { tiles: { providers: { carto: { enabled: true } } } });
+  const reg = ctx.window.MC_TILE_PROVIDERS;
+  for (const id of ALL_CARTO_IDS) {
+    const u = reg[id].url();
+    assert.ok(u.indexOf('?key=') === -1, id + ' should have no key param: ' + u);
+    assert.ok(u.indexOf('basemaps.cartocdn.com') !== -1, id + ' unexpected host: ' + u);
+  }
+});
+
+test('Every Carto style appends ?key= when carto.key is set', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, { tiles: { providers: { carto: { enabled: true, key: 'abc123' } } } });
+  const reg = ctx.window.MC_TILE_PROVIDERS;
+  for (const id of ALL_CARTO_IDS) {
+    assert.ok(/\.png\?key=abc123$/.test(reg[id].url()), id + ' bad URL: ' + reg[id].url());
+  }
+});
+
+test('Carto key is URL-encoded', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, { tiles: { providers: { carto: { enabled: true, key: 'a b&c=d' } } } });
+  const u = ctx.window.MC_TILE_PROVIDERS['carto-dark'].url();
+  assert.ok(u.endsWith('?key=a%20b%26c%3Dd'), 'bad encoding: ' + u);
+});
+
+test('Carto key does not leak into non-Carto providers', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, { tiles: { providers: { carto: { enabled: true, key: 'abc123' }, osm: { enabled: true } } } });
+  const reg = ctx.window.MC_TILE_PROVIDERS;
+  for (const id of ['osm-standard', 'osm-dark', 'esri-darkgray-labels']) {
+    if (!reg[id]) continue;
+    assert.ok(reg[id].url().indexOf('abc123') === -1, id + ' leaked the key: ' + reg[id].url());
+  }
+});
+
+test('Carto key coexists with the enterprise domain option', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, { tiles: { providers: { carto: { enabled: true, domain: 'mycompany', key: 'abc123' } } } });
+  const u = ctx.window.MC_TILE_PROVIDERS['carto-dark'].url();
+  assert.ok(u.indexOf('mycompany.cartocdn.com') !== -1, 'domain lost: ' + u);
+  assert.ok(u.endsWith('?key=abc123'), 'key lost: ' + u);
+});
+
 process.on('beforeExit', () => {
   console.log('');
   console.log('  ' + passed + ' passed, ' + failed + ' failed');
