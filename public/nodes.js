@@ -384,7 +384,7 @@
         '<td data-value="' + lastSeenVal + '">' + renderNodeTimestampHtml(nb.last_seen) + '</td>' +
         '<td data-value="' + distanceVal + '">' + distanceCell + '</td>' +
         '<td><span title="' + conf.label + '">' + conf.icon + '</span></td>' +
-        '<td style="text-align:right">' + showOnMap + '</td>' +
+        '<td class="col-action">' + showOnMap + '</td>' +
         '</tr>';
     }).join('');
   }
@@ -398,7 +398,7 @@
       '<th scope="col" data-sort-key="count" data-type="numeric" data-sort-default="desc">Obs</th>' +
       '<th scope="col" data-sort-key="last_seen" data-type="numeric" data-sort-default="desc">Last Seen</th>' +
       '<th scope="col" data-sort-key="distance" data-type="numeric">Distance</th>' +
-      '<th scope="col">Conf</th><th scope="col"></th>' +
+      '<th scope="col">Conf</th><th scope="col" class="col-action"></th>' +
       '</tr></thead>' +
       '<tbody>' + renderNeighborRows(neighbors, limit) + '</tbody></table>';
   }

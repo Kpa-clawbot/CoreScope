@@ -1104,6 +1104,30 @@ img.brand-logo {
   padding: 3px 4px; text-align: center;
 }
 
+/* Trailing action column (row buttons: neighbours "Map", analytics "View on
+ * map"). These columns carry an empty <th>, so they contribute nothing to the
+ * width distribution, and the global `.data-table td { max-width: 0 }` above
+ * zeroes their max-content contribution too — the auto table algorithm then
+ * hands them whatever is left over, which is routinely narrower than the
+ * button they contain, and `overflow: hidden` silently clips it. Measured on
+ * the node Neighbours table: 40px of column for a 53px button at a 1440px
+ * viewport, 12px in the 420px split panel — clipped on every row at every
+ * desktop width below ~2000px.
+ *
+ * `width: 1%` is the shrink-to-content idiom for auto-layout tables: the
+ * column takes its min-content width and the data columns absorb the rest.
+ * `max-width: none` opts back out of the zeroing; `overflow: visible` means a
+ * future miscalculation shows as a visible overhang rather than a silent crop.
+ */
+.data-table th.col-action,
+.data-table td.col-action {
+  width: 1%;
+  max-width: none;
+  overflow: visible;
+  white-space: nowrap;
+  text-align: right;
+}
+
 /* #1415 / #1458 / #1461 — mobile packets UX overhaul.
  * NOTE: hiding the first dt/dd pair below assumes Payload Type is the
  * first <dt> in .detail-meta (per packets.js renderDetail). Keep that
