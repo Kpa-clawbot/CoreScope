@@ -1039,16 +1039,20 @@ function navigate() {
   closeNav();
 
   // Backward-compat redirect: #/traces/<hash> → #/tools/trace/<hash> (issue #944).
+  // Uses replaceState (not location.hash =) so this redirect doesn't add its
+  // own history entry, otherwise the back button gets stuck bouncing off it.
   if (location.hash.startsWith('#/traces/')) {
-    location.hash = location.hash.replace('#/traces/', '#/tools/trace/');
+    history.replaceState(null, '', location.hash.replace('#/traces/', '#/tools/trace/'));
+    navigate();
     return;
   }
 
   // Backward-compat redirect: #/roles → #/analytics?tab=roles (issue #1085).
   // The Roles page was folded into the Analytics tab strip; old links and
-  // bookmarks must keep working.
+  // bookmarks must keep working. Uses replaceState for the same reason as above.
   if (location.hash === '#/roles' || location.hash.startsWith('#/roles?') || location.hash.startsWith('#/roles/')) {
-    location.hash = '#/analytics?tab=roles';
+    history.replaceState(null, '', '#/analytics?tab=roles');
+    navigate();
     return;
   }
 

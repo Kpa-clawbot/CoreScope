@@ -69,6 +69,8 @@ node test-issue-1473-reserved-prefixes.js
 node test-issue-1473-prefix-generator.js
 node test-issue-1770-mobile-row-clamp.js
 node test-issue-1849-trace-hashbytes.js
+node test-nodes-export.js
+node test-nodes-export-wiring.js
 
 echo ""
 echo "═══════════════════════════════════════"

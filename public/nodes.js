@@ -511,6 +511,8 @@
       <div class="nodes-topbar">
         <input type="text" class="nodes-search" id="nodeSearch" placeholder="Search by name or pubkey prefix…" aria-label="Search nodes by name or pubkey prefix">
         <div class="nodes-counts" id="nodeCounts"></div>
+        <button class="btn-secondary nodes-export-btn" id="nodesExportBtn" disabled
+          title="Download the visible nodes as a MeshCore companion config">Export JSON</button>
       </div>
       <div id="nodesRegionFilter" class="region-filter-container"></div>
       <div id="nodesAreaFilter" style="display:none"></div>
@@ -535,6 +537,12 @@
       updateNodesUrl();
       loadNodes();
     }, 250));
+
+    document.getElementById('nodesExportBtn').addEventListener('click', function () {
+      // WYSIWYG: `nodes` is the list the table is showing, so every active
+      // filter (area, region, tab, search, last-heard, status) carries over.
+      window.NodesExport.download(nodes, AreaFilter.getSelected());
+    });
 
     loadNodes();
     if (directNode) selectNode(directNode);
@@ -1274,6 +1282,7 @@
       syncClaimedToFavorites();
 
       renderCounts();
+      updateExportBtn();
       if (refreshOnly) {
         renderRows();
       } else {
@@ -1288,6 +1297,14 @@
       var nodesContainer = document.getElementById('nodesLeft') || document.getElementById('nodesBody');
       if (nodesContainer) nodesContainer.setAttribute('data-loaded', 'true');
     }
+  }
+
+  function updateExportBtn() {
+    const btn = document.getElementById('nodesExportBtn');
+    if (!btn || !window.NodesExport) return;
+    const n = window.NodesExport.buildContacts(nodes).contacts.length;
+    btn.disabled = n === 0;
+    btn.textContent = n ? 'Export JSON (' + n + ')' : 'Export JSON';
   }
 
   function renderCounts() {
