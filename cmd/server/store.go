@@ -1800,8 +1800,8 @@ func (s *PacketStore) untrackAdvertPubkey(tx *StoreTx) {
 	if tx.PayloadType == nil || *tx.PayloadType != PayloadADVERT || tx.DecodedJSON == "" {
 		return
 	}
-	var d map[string]interface{}
-	if json.Unmarshal([]byte(tx.DecodedJSON), &d) != nil {
+	d := tx.ParsedDecoded()
+	if d == nil {
 		return
 	}
 	pk := ""
@@ -2089,7 +2089,7 @@ func (s *PacketStore) GetStoreStats() (*Stats, error) {
 			`SELECT
 				(SELECT COUNT(*) FROM nodes WHERE last_seen > ?) AS active_nodes,
 				(SELECT COUNT(*) FROM nodes) AS all_nodes,
-				(SELECT COUNT(*) FROM observers) AS observers`,
+				(SELECT COUNT(*) FROM observers WHERE inactive IS NULL OR inactive = 0) AS observers`,
 			sevenDaysAgo,
 		).Scan(&st.TotalNodes, &st.TotalNodesAllTime, &st.TotalObservers)
 	}()
@@ -2919,9 +2919,14 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			},
 		}
 		if tx.DecodedJSON != "" {
-			var payload map[string]interface{}
-			if json.Unmarshal([]byte(tx.DecodedJSON), &payload) == nil {
-				decoded["payload"] = payload
+			if payload := tx.ParsedDecoded(); payload != nil {
+				// Copy the cached map so broadcast consumers cannot mutate
+				// the shared cache or cause a data race (#1871 review).
+				cp := make(map[string]interface{}, len(payload))
+				for k, v := range payload {
+					cp[k] = v
+				}
+				decoded["payload"] = cp
 			}
 		}
 		// For TRACE packets, decode the full packet to include path.hopsCompleted
@@ -3192,9 +3197,14 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 			},
 		}
 		if tx.DecodedJSON != "" {
-			var payload map[string]interface{}
-			if json.Unmarshal([]byte(tx.DecodedJSON), &payload) == nil {
-				decoded["payload"] = payload
+			if payload := tx.ParsedDecoded(); payload != nil {
+				// Copy the cached map so broadcast consumers cannot mutate
+				// the shared cache or cause a data race (#1871 review).
+				cp := make(map[string]interface{}, len(payload))
+				for k, v := range payload {
+					cp[k] = v
+				}
+				decoded["payload"] = cp
 			}
 		}
 		// For TRACE packets, decode the full packet to include path.hopsCompleted
@@ -3740,8 +3750,8 @@ func (s *PacketStore) computeNodeHomeRegions() map[string]string {
 			continue
 		}
 
-		var d map[string]interface{}
-		if json.Unmarshal([]byte(tx.DecodedJSON), &d) != nil {
+		d := tx.ParsedDecoded()
+		if d == nil {
 			continue
 		}
 		pk, _ := d["pubKey"].(string)
@@ -4662,8 +4672,7 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 		// Must mirror indexByNode: process decoded JSON fields AND resolved_path pubkeys.
 		evictedFromNode := make(map[string]bool)
 		if tx.DecodedJSON != "" {
-			var decoded map[string]interface{}
-			if json.Unmarshal([]byte(tx.DecodedJSON), &decoded) == nil {
+			if decoded := tx.ParsedDecoded(); decoded != nil {
 				for _, field := range []string{"pubKey", "destPubKey", "srcPubKey"} {
 					if v, ok := decoded[field].(string); ok && v != "" {
 						if hashes, ok := s.nodeHashes[v]; ok {
@@ -5020,8 +5029,7 @@ func computeDistancesForTx(tx *StoreTx, nodeByPk map[string]*nodeInfo, repeaterS
 
 	var senderNode *nodeInfo
 	if tx.DecodedJSON != "" {
-		var dec map[string]interface{}
-		if json.Unmarshal([]byte(tx.DecodedJSON), &dec) == nil {
+		if dec := tx.ParsedDecoded(); dec != nil {
 			if pk, ok := dec["pubKey"].(string); ok && pk != "" {
 				senderNode = nodeByPk[pk]
 			}
@@ -8041,8 +8049,7 @@ func (s *PacketStore) computeAnalyticsHashSizes(region, area string) map[string]
 		var advertPK, advertName string
 		var advertParsed bool
 		if tx.PayloadType != nil && *tx.PayloadType == PayloadADVERT && tx.DecodedJSON != "" {
-			var d map[string]interface{}
-			if json.Unmarshal([]byte(tx.DecodedJSON), &d) == nil {
+			if d := tx.ParsedDecoded(); d != nil {
 				if v, ok := d["pubKey"].(string); ok {
 					advertPK = v
 				} else if v, ok := d["public_key"].(string); ok {
@@ -8353,8 +8360,7 @@ func (s *PacketStore) computeHashCollisions(region, area string) map[string]inte
 				}
 				// Collect node public keys from advert packets
 				if tx.DecodedJSON != "" {
-					var d map[string]interface{}
-					if json.Unmarshal([]byte(tx.DecodedJSON), &d) == nil {
+					if d := tx.ParsedDecoded(); d != nil {
 						if pk, ok := d["pubKey"].(string); ok && pk != "" {
 							regionNodePKs[pk] = true
 						}
@@ -8717,8 +8723,8 @@ func (s *PacketStore) computeNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
 		}
 		hs := int((pathByte>>6)&0x3) + 1
 
-		var d map[string]interface{}
-		if json.Unmarshal([]byte(tx.DecodedJSON), &d) != nil {
+		d := tx.ParsedDecoded()
+		if d == nil {
 			continue
 		}
 		pk := ""
@@ -9656,8 +9662,8 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 		if p.DecodedJSON == "" {
 			continue
 		}
-		var decoded map[string]interface{}
-		if json.Unmarshal([]byte(p.DecodedJSON), &decoded) != nil {
+		decoded := p.ParsedDecoded()
+		if decoded == nil {
 			continue
 		}
 		type candidate struct{ key, name string }

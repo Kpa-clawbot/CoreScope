@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/meshcore-analyzer/packetpath"
 )
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -234,6 +236,12 @@ func BuildFromStore(store *PacketStore) *NeighborGraph {
 type BuildOptions struct {
 	EnableLog bool    // structured disambiguation logging
 	MaxEdgeKm float64 // geo-sanity threshold; 0 disables the filter
+	// PathTrust is the trust threshold config for path-hash observations
+	// (issue #1784). When nil, the default threshold (1 byte) is used:
+	// all prefix lengths count as evidence (backward-compatible). Set
+	// MinHashBytesForMapping: 2 to exclude 1-byte observations from
+	// neighbor-edge building, or 3 for the strictest mode.
+	PathTrust *packetpath.TrustConfig
 }
 
 // DefaultMaxEdgeKm is the conservative built-in cap for the
@@ -319,16 +327,20 @@ func BuildFromStoreWithOptions(store *PacketStore, opts BuildOptions) *NeighborG
 			if isAdvert && fromLower != "" {
 				firstHop := cachedToLower(lowerCache, path[0])
 				if fromLower != firstHop { // self-edge guard (shouldn't happen but spec says check)
-					candidates := pm.m[firstHop]
-					g.upsertEdgeWithCandidates(fromLower, firstHop, candidates, observerPK, obs.SNR, parseTimestamp(obs.Timestamp), lowerCache)
+					if packetpath.MeetsPathTrust(len(path[0])/2, opts.PathTrust) {
+						candidates := pm.m[firstHop]
+						g.upsertEdgeWithCandidates(fromLower, firstHop, candidates, observerPK, obs.SNR, parseTimestamp(obs.Timestamp), lowerCache)
+					}
 				}
 			}
 
 			// Edge 2: observer ↔ path[last] — ALL packet types
 			lastHop := cachedToLower(lowerCache, path[len(path)-1])
 			if observerPK != lastHop { // self-edge guard
-				candidates := pm.m[lastHop]
-				g.upsertEdgeWithCandidates(observerPK, lastHop, candidates, observerPK, obs.SNR, parseTimestamp(obs.Timestamp), lowerCache)
+				if packetpath.MeetsPathTrust(len(path[len(path)-1])/2, opts.PathTrust) {
+					candidates := pm.m[lastHop]
+					g.upsertEdgeWithCandidates(observerPK, lastHop, candidates, observerPK, obs.SNR, parseTimestamp(obs.Timestamp), lowerCache)
+				}
 			}
 		}
 	}

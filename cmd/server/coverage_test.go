@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -1039,6 +1040,39 @@ func TestResolveVersion(t *testing.T) {
 	Version = ""
 	if resolveVersion() != "unknown" {
 		t.Error("expected unknown when empty")
+	}
+}
+
+func TestResolveVersionFallbackChain(t *testing.T) {
+	old := Version
+	defer func() { Version = old }()
+
+	// (a) CORESCOPE_VERSION env wins over baked Version="edge"
+	Version = "edge"
+	t.Setenv("CORESCOPE_VERSION", "v3.9.2")
+	if got := resolveVersion(); got != "v3.9.2" {
+		t.Errorf("expected v3.9.2 from env, got %s", got)
+	}
+
+	// (b) .image-version file wins over baked Version="edge" when env is unset
+	t.Setenv("CORESCOPE_VERSION", "")
+	Version = "edge"
+	tmp := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(tmp)
+	if err := os.WriteFile(".image-version", []byte("v3.9.2\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveVersion(); got != "v3.9.2" {
+		t.Errorf("expected v3.9.2 from .image-version, got %s", got)
+	}
+
+	// (c) Version="edge" returned when neither env nor file present
+	os.Chdir(t.TempDir())
+	Version = "edge"
+	if got := resolveVersion(); got != "edge" {
+		t.Errorf("expected edge as fallback, got %s", got)
 	}
 }
 
@@ -4708,3 +4742,4 @@ func TestIngestTraceBroadcastIncludesPath(t *testing.T) {
 		t.Errorf("expected hopsCompleted=2, got %d", *pathStruct.HopsCompleted)
 	}
 }
+

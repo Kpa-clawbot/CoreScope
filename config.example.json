@@ -78,9 +78,10 @@
       "darkDefault": "carto-dark",
       "lightDefault": "carto-light",
       "providers": {
-        "_comment_carto": "Carto is the default free-tier provider. Optional: specify 'domain' for Carto enterprise (e.g. 'mycompany' for 'https://{s}.mycompany.cartocdn.com').",
+        "_comment_carto": "Carto is the default provider. Since 2026-08 CARTO requires an API key on its raster basemaps: without one every tile is served stamped 'API KEY REQUIRED' with a 200 status, so nothing errors and no healthcheck fires - verify by looking at a tile, not at a status code. Get a free key (no account, no card, 5M tile requests/month) at https://carto.com/basemaps/apikey and put it in 'key'. The query parameter is 'key'; 'api_key' is silently ignored and still serves the watermarked tile. WARNING: the key is sent to the browser; restrict it by domain in the CARTO dashboard. Optional: specify 'domain' for Carto enterprise (e.g. 'mycompany' for 'https://{s}.mycompany.cartocdn.com').",
         "carto": {
           "enabled": true,
+          "key": "",
           "domain": ""
         },
         "_comment_osm": "OSM providers: 'mapbox', 'thunderforest', 'maptiler'. WARNING: Tokens are sent to the browser. Apply origin/referrer restrictions in your provider dashboard.",
@@ -221,6 +222,10 @@
     "observerStaleMinutes": 1440,
     "_comment": "How long (hours) before nodes show as degraded/silent. 'infra' = repeaters & rooms, 'node' = companions & others. relayActiveHours: a repeater is shown as 'actively relaying' if its pubkey appeared as a path hop in a non-advert packet within this window (issue #662).",
     "_comment_observerThresholds": "Observer health classification. Online: last_seen < observerOnlineMinutes ago. Stale: between Online and observerStaleMinutes. Offline: beyond observerStaleMinutes. Defaults 60 / 1440 (1h / 24h) match the node thresholds for consistency and eliminate flap on low-traffic / CDN-fronted instances (#1552). Operators who want the old aggressive 10-min Online threshold can set observerOnlineMinutes: 10."
+  },
+  "pathTrust": {
+    "minHashBytesForMapping": 2,
+    "_comment_pathTrust": "Minimum path-hash prefix length, in bytes, trusted as mapping/topology evidence (issue #1784). MeshCore path hops are hashed pubkey prefixes of 1, 2, or 3 bytes (firmware hash_size = (pathByte>>6)+1); valid range is 1-3. Default 2 excludes 1-byte prefixes (256-value collision space) from mapping evidence — operator-confirmed to reduce false positives on denser meshes. Set to 1 for backward-compatible trust-all behavior. Set to 3 for the strictest mode (only 3-byte evidence trusted). This does not affect raw storage — packets/paths are always stored as received."
   },
   "defaultRegion": "SJC",
   "mapDefaults": {
