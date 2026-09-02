@@ -4748,4 +4748,3 @@ func TestIngestTraceBroadcastIncludesPath(t *testing.T) {
 		t.Errorf("expected hopsCompleted=2, got %d", *pathStruct.HopsCompleted)
 	}
 }
-

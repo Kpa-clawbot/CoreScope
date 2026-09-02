@@ -75,8 +75,8 @@ func (h *Hub) checkOrigin(r *http.Request) bool {
 
 // Client is a single WebSocket connection.
 type Client struct {
-	conn     *websocket.Conn
-	send     chan []byte
+	conn      *websocket.Conn
+	send      chan []byte
 	closeOnce sync.Once
 }
 

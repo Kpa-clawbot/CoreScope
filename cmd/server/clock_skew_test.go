@@ -15,17 +15,17 @@ func TestClassifySkew(t *testing.T) {
 		expected SkewSeverity
 	}{
 		{0, SkewOK},
-		{60, SkewOK},           // 1 min
-		{299, SkewOK},          // just under 5 min
-		{300, SkewWarning},     // exactly 5 min
-		{1800, SkewWarning},    // 30 min
-		{3599, SkewWarning},    // just under 1 hour
-		{3600, SkewCritical},   // exactly 1 hour
-		{86400, SkewCritical},  // 1 day
-		{2592000 - 1, SkewCritical}, // just under 30 days
-		{2592000, SkewAbsurd},  // exactly 30 days
-		{86400 * 365 - 1, SkewAbsurd}, // just under 365 days
-		{86400 * 365, SkewNoClock}, // exactly 365 days
+		{60, SkewOK},                    // 1 min
+		{299, SkewOK},                   // just under 5 min
+		{300, SkewWarning},              // exactly 5 min
+		{1800, SkewWarning},             // 30 min
+		{3599, SkewWarning},             // just under 1 hour
+		{3600, SkewCritical},            // exactly 1 hour
+		{86400, SkewCritical},           // 1 day
+		{2592000 - 1, SkewCritical},     // just under 30 days
+		{2592000, SkewAbsurd},           // exactly 30 days
+		{86400*365 - 1, SkewAbsurd},     // just under 365 days
+		{86400 * 365, SkewNoClock},      // exactly 365 days
 		{86400 * 365 * 10, SkewNoClock}, // 10 years (epoch-0 style)
 	}
 	for _, tc := range tests {
@@ -228,7 +228,7 @@ func TestComputeNodeSkew_ThreeObservers(t *testing.T) {
 	// raw from obs1 = 60, corrected = 60 + 0 = 60
 	// raw from obs2 = 60, corrected = 60 + 0 = 60
 	// raw from obs3 = 30, corrected = 30 + 30 = 60
-	// All three converge to 60. 
+	// All three converge to 60.
 	if cs.MedianSkewSec != 60 {
 		t.Errorf("median skew = %v, want 60 (node is 60s ahead)", cs.MedianSkewSec)
 	}

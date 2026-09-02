@@ -52,18 +52,18 @@ func makeEdgeKey(a, b string) edgeKey {
 
 // NeighborEdge represents a weighted, undirected first-hop neighbor relationship.
 type NeighborEdge struct {
-	NodeA      string            // full pubkey
-	NodeB      string            // full pubkey, or "" if unresolved/ambiguous
-	Prefix     string            // raw hop prefix that established this edge
-	Count      int               // total observations
-	FirstSeen  time.Time         //
-	LastSeen   time.Time         //
-	SNRSum     float64           // running sum for average
-	SNRCount   int               // how many SNR samples
-	Observers  map[string]bool   // observer pubkeys that witnessed
-	Ambiguous  bool              // multiple candidates or zero candidates
-	Candidates []string          // candidate pubkeys when ambiguous
-	Resolved   bool              // true if auto-resolved via Jaccard
+	NodeA      string          // full pubkey
+	NodeB      string          // full pubkey, or "" if unresolved/ambiguous
+	Prefix     string          // raw hop prefix that established this edge
+	Count      int             // total observations
+	FirstSeen  time.Time       //
+	LastSeen   time.Time       //
+	SNRSum     float64         // running sum for average
+	SNRCount   int             // how many SNR samples
+	Observers  map[string]bool // observer pubkeys that witnessed
+	Ambiguous  bool            // multiple candidates or zero candidates
+	Candidates []string        // candidate pubkeys when ambiguous
+	Resolved   bool            // true if auto-resolved via Jaccard
 	// CountsByMode tallies sightings broken down by hash-prefix mode in bytes
 	// (1, 2, or 3). Firmware path-byte encoding (Packet.cpp:13-18) sets
 	// hash_size = (pathByte>>6)+1 with values 1/2/3 valid and 4 reserved.
@@ -779,7 +779,6 @@ func parseTimestamp(s string) time.Time {
 	}
 	return time.Time{}
 }
-
 
 // minLen returns the smaller of n and len(s).
 func minLen(s string, n int) int {

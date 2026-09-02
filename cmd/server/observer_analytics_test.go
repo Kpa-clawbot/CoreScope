@@ -205,7 +205,7 @@ func TestBuildNodesTimelineDistinct(t *testing.T) {
 	}
 	base := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
 	filtered := []*StoreObs{
-		buildObsForTest(1, base, nil, `["bb","cc"]`),           // bucket A: nodes {aaaa, bb, cc}
+		buildObsForTest(1, base, nil, `["bb","cc"]`),                // bucket A: nodes {aaaa, bb, cc}
 		buildObsForTest(1, base.Add(10*time.Minute), nil, `["bb"]`), // same bucket: dedup
 	}
 	got := buildNodesTimeline(filtered, 1, store.byTxID)

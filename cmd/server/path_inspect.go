@@ -18,9 +18,9 @@ import (
 
 // pathInspectRequest is the JSON body for the inspect endpoint.
 type pathInspectRequest struct {
-	Prefixes []string             `json:"prefixes"`
-	Context  *pathInspectContext  `json:"context,omitempty"`
-	Limit    int                  `json:"limit,omitempty"`
+	Prefixes []string            `json:"prefixes"`
+	Context  *pathInspectContext `json:"context,omitempty"`
+	Limit    int                 `json:"limit,omitempty"`
 }
 
 type pathInspectContext struct {
@@ -31,14 +31,14 @@ type pathInspectContext struct {
 
 // pathCandidate is one scored candidate path in the response.
 type pathCandidate struct {
-	Path        []string        `json:"path"`
-	Names       []string        `json:"names"`
-	Score       float64         `json:"score"`
+	Path  []string `json:"path"`
+	Names []string `json:"names"`
+	Score float64  `json:"score"`
 	// Speculative is true when the score is below speculativeThreshold or any
 	// hop is below the configured path-trust threshold. Consumers needing the
 	// reason should inspect evidence.perHop[].trusted.
-	Speculative bool            `json:"speculative"`
-	Evidence    pathEvidence    `json:"evidence"`
+	Speculative bool         `json:"speculative"`
+	Evidence    pathEvidence `json:"evidence"`
 }
 
 type pathEvidence struct {
@@ -57,8 +57,8 @@ type hopEvidence struct {
 // hopAlternative shows a candidate that was considered but not chosen for this hop.
 type hopAlternative struct {
 	PublicKey string  `json:"publicKey"`
-	Name     string  `json:"name"`
-	Score    float64 `json:"score"`
+	Name      string  `json:"name"`
+	Score     float64 `json:"score"`
 }
 
 type pathInspectResponse struct {
@@ -79,15 +79,15 @@ type beamEntry struct {
 }
 
 const (
-	beamWidth       = 20
-	maxInputHops    = 64
-	maxPrefixBytes  = 3
-	maxRequestItems = 64
-	geoMaxKm        = 50.0
-	hopScoreFloor   = 0.05
+	beamWidth            = 20
+	maxInputHops         = 64
+	maxPrefixBytes       = 3
+	maxRequestItems      = 64
+	geoMaxKm             = 50.0
+	hopScoreFloor        = 0.05
 	speculativeThreshold = 0.7
-	inspectCacheTTL = 30 * time.Second
-	inspectBodyLimit = 4096
+	inspectCacheTTL      = 30 * time.Second
+	inspectBodyLimit     = 4096
 )
 
 // Weights per spec §2.3.
@@ -355,8 +355,8 @@ func (s *PacketStore) beamSearch(prefixes []string, pm *prefixMap, graph *Neighb
 				}
 
 				newEntry := beamEntry{
-					pubkeys:  append(append([]string{}, entry.pubkeys...), cand.PublicKey),
-					names:    append(append([]string{}, entry.names...), cand.Name),
+					pubkeys: append(append([]string{}, entry.pubkeys...), cand.PublicKey),
+					names:   append(append([]string{}, entry.names...), cand.Name),
 					evidence: append(append([]hopEvidence{}, entry.evidence...), hopEvidence{
 						Prefix:               prefix,
 						CandidatesConsidered: candidateCount,
@@ -433,7 +433,6 @@ func (s *PacketStore) scoreHop(entry beamEntry, cand nodeInfo, candidateCount in
 
 	return wEdge*edgeScore + wGeo*geoScore + wRecency*recencyScore + wSelectivity*selectivityScore
 }
-
 
 func sortBeam(beam []beamEntry) {
 	sort.Slice(beam, func(i, j int) bool {

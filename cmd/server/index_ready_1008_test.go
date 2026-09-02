@@ -2,12 +2,12 @@
 // synchronous Load() critical path into a background goroutine.
 //
 // Contract:
-//   1. Immediately after Load() returns, SubpathIndexReady() and
-//      PathHopIndexReady() report false (the goroutine has not finished).
-//   2. Analytics handlers that depend on those indices respond 503 with
-//      Retry-After: 5 until the corresponding ready flag flips true.
-//   3. After the background build completes (waitable via a helper),
-//      both flags flip true and handlers respond 200.
+//  1. Immediately after Load() returns, SubpathIndexReady() and
+//     PathHopIndexReady() report false (the goroutine has not finished).
+//  2. Analytics handlers that depend on those indices respond 503 with
+//     Retry-After: 5 until the corresponding ready flag flips true.
+//  3. After the background build completes (waitable via a helper),
+//     both flags flip true and handlers respond 200.
 package main
 
 import (

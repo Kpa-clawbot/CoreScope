@@ -86,11 +86,11 @@ func main() {
 	}
 
 	var (
-		configDir  string
-		port       int
-		dbPath     string
-		publicDir  string
-		pollMs     int
+		configDir string
+		port      int
+		dbPath    string
+		publicDir string
+		pollMs    int
 	)
 
 	flag.StringVar(&configDir, "config-dir", ".", "Directory containing config.json")
