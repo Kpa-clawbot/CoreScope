@@ -523,6 +523,12 @@ func TestDecodeAnonReqValid(t *testing.T) {
 	if p.MAC != "aabb" {
 		t.Errorf("mac=%s, want aabb", p.MAC)
 	}
+	// #1864: ANON_REQ must capture the FULL 32-byte source pubkey (buf[1:33]),
+	// not a 1-byte srcHash. buf[i]=i for i in 1..32 -> 0102..20.
+	wantPK := "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+	if p.SrcPubKey != wantPK {
+		t.Errorf("srcPubKey=%s, want %s", p.SrcPubKey, wantPK)
+	}
 }
 
 func TestDecodePathPayloadShort(t *testing.T) {

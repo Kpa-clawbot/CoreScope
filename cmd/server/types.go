@@ -1044,6 +1044,7 @@ type ClientConfigResponse struct {
 	MapDarkTileProvider string                 `json:"mapDarkTileProvider,omitempty"` // deprecated. TODO: remove after v3.5.0
 	Customizer          CustomizerClientConfig `json:"customizer"`
 	ClientRxCoverage    bool                   `json:"clientRxCoverage"`
+	PathTrust           *PathTrustConfig       `json:"pathTrust,omitempty"`
 }
 
 // CustomizerClientConfig is the operator-side customizer-modal knobs that

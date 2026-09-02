@@ -79,22 +79,41 @@ jobs:
           echo "tag SHA (github.sha)               = ${{ github.sha }}"
 
       # ─────────── FAST PATH: SHAs match, metadata-only retag ───────────
+      # Issue #1807: a plain `crane tag` keeps the ldflags-baked
+      # Version="edge" inside the binary, so /api/stats reports "edge" on
+      # tagged releases. Instead of a full rebuild we append a single-file
+      # layer (/app/.image-version containing the tag) and set the OCI
+      # version label, then point the remaining tags at that mutated image.
+      # The server reads .image-version at startup (see resolveVersion()).
       - name: Re-tag :edge → :vX.Y.Z + :vX.Y + :vX + :latest (fast path)
         if: steps.edge.outputs.no_edge == 'false' && steps.edge.outputs.edge_revision == github.sha
         run: |
           set -euo pipefail
           IMAGE="ghcr.io/kpa-clawbot/corescope"
           SRC="${IMAGE}:edge"
+          TAG="${{ steps.semver.outputs.tag }}"
           echo "SHA match — fast-path re-tag from $SRC"
+
+          # Build a one-file layer: /app/.image-version = vX.Y.Z
+          LAYER_DIR="$(mktemp -d)"
+          mkdir -p "${LAYER_DIR}/app"
+          printf '%s' "$TAG" > "${LAYER_DIR}/app/.image-version"
+          tar --owner=0 --group=0 --mtime='UTC 2020-01-01' \
+              -C "$LAYER_DIR" -cf /tmp/image-version-layer.tar app
+          echo "  crane mutate $SRC (+.image-version layer, +version label) → ${IMAGE}:${TAG}"
+          crane mutate "$SRC" \
+            --append /tmp/image-version-layer.tar \
+            --label "org.opencontainers.image.version=${TAG}" \
+            --tag "${IMAGE}:${TAG}"
+
           for NEW_TAG in \
-              "${{ steps.semver.outputs.tag }}" \
               "${{ steps.semver.outputs.vMajorMinor }}" \
               "${{ steps.semver.outputs.vMajor }}" \
               "latest"; do
-            echo "  crane tag $SRC $NEW_TAG"
-            crane tag "$SRC" "$NEW_TAG"
+            echo "  crane tag ${IMAGE}:${TAG} $NEW_TAG"
+            crane tag "${IMAGE}:${TAG}" "$NEW_TAG"
           done
-          echo "Fast-path complete — all tags point at the :edge manifest digest."
+          echo "Fast-path complete — release tags point at :edge plus a one-file version layer."
 
       # ─────────── FALLBACK: SHAs differ, run the full pipeline ───────────
       - name: Dispatch full deploy.yml pipeline (fallback)

@@ -129,7 +129,10 @@ func (s *PacketStore) computeRepeaterRelayInfoMap(windowHours float64) map[strin
 				}
 			}
 		}
-		visit := func(txs []*StoreTx) {
+		// viaPrefix marks the 1-byte wire-prefix bucket, shared by every
+		// node with the same first pubkey byte. See collectRelayEntriesLocked
+		// for the counters-vs-scopes split (#662 / #1902).
+		visit := func(txs []*StoreTx, viaPrefix bool) {
 			for _, tx := range txs {
 				if tx == nil {
 					continue
@@ -152,7 +155,11 @@ func (s *PacketStore) computeRepeaterRelayInfoMap(windowHours float64) map[strin
 				// unparseable first_seen still proves the repeater
 				// transported that scope. RelayCount/LastRelayed below
 				// remain timestamp-gated.
-				if tx.ScopeName != "" {
+				//
+				// #1902: it IS gated on full-pubkey attribution — a 1-byte
+				// hop cannot prove which of the nodes sharing that byte
+				// carried the packet.
+				if tx.ScopeName != "" && !viaPrefix {
 					if scopeSet == nil {
 						scopeSet = map[string]struct{}{}
 					}
@@ -180,11 +187,11 @@ func (s *PacketStore) computeRepeaterRelayInfoMap(windowHours float64) map[strin
 				}
 			}
 		}
-		visit(list)
+		visit(list, false)
 		if seen != nil {
 			prefix := key[:2]
 			if prefix != key {
-				visit(snap[prefix])
+				visit(snap[prefix], true)
 			}
 		}
 		info.TransportedScopes = sortedCappedScopes(scopeSet)

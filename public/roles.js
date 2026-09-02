@@ -444,11 +444,41 @@
     };
   };
 
-  // Simplified two-state helper: returns 'active' or 'stale'
-  window.getNodeStatus = function (role, lastSeenMs) {
-    var isInfra = role === 'repeater' || role === 'room';
+  // Simplified two-state helper: returns 'active' or 'stale'.
+  // Accepts either a full node object (preferred) or legacy (role, lastSeenMs).
+  //
+  // #1598: for infra roles (repeater/room), freshness is the max of the
+  // ADVERT-based timestamp and last_relayed (resolved path participation).
+  // Operators increasingly run long or disabled advert intervals (firmware
+  // default trajectory is 47h flood adverts), so an actively-relaying
+  // backbone repeater must not be marked stale just because its last
+  // ADVERT is old.
+  window.getNodeStatus = function (roleOrNode, lastSeenMs) {
+    var role, effectiveMs;
+    if (roleOrNode && typeof roleOrNode === 'object') {
+      var n = roleOrNode;
+      role = n.role || 'companion';
+      // Freshness precedence mirrors the existing call sites:
+      // _liveSeen (live view, ms) > _lastHeard (health API) >
+      // last_heard (in-memory packets) > last_seen (DB, ADVERT).
+      var seenTime = n._lastHeard || n.last_heard || n.last_seen;
+      effectiveMs = (typeof n._liveSeen === 'number' && n._liveSeen) ||
+                    (seenTime ? new Date(seenTime).getTime() : NaN);
+      var infra = String(role).toLowerCase() === 'repeater' ||
+                  String(role).toLowerCase() === 'room';
+      if (infra && n.last_relayed) {
+        var relayedMs = new Date(n.last_relayed).getTime();
+        if (!(effectiveMs >= relayedMs)) effectiveMs = relayedMs;
+      }
+      if (isNaN(effectiveMs)) effectiveMs = undefined;
+    } else {
+      role = roleOrNode;
+      effectiveMs = lastSeenMs;
+    }
+    var isInfra = String(role || '').toLowerCase() === 'repeater' ||
+                  String(role || '').toLowerCase() === 'room';
     var staleMs = isInfra ? HEALTH_THRESHOLDS.infraSilentMs : HEALTH_THRESHOLDS.nodeSilentMs;
-    var age = typeof lastSeenMs === 'number' ? (Date.now() - lastSeenMs) : Infinity;
+    var age = typeof effectiveMs === 'number' ? (Date.now() - effectiveMs) : Infinity;
     return age < staleMs ? 'active' : 'stale';
   };
 
@@ -587,6 +617,15 @@
       if (cfg.map.tiles.lightUrl) window.TILE_LIGHT = cfg.map.tiles.lightUrl;
     }
     if (typeof window.MC_initTileRegistry === 'function') window.MC_initTileRegistry(true);
+    // CARTO raster needs an API key now, so the bare TILE_DARK/TILE_LIGHT
+    // fallbacks have to pick it up as well — getTileUrl() returns TILE_LIGHT
+    // directly in light mode and never consults the registry. Explicit
+    // darkUrl/lightUrl overrides above still win.
+    if (typeof window.MC_tileUrlById === 'function') {
+      var _tOv = (cfg.tiles || (cfg.map && cfg.map.tiles) || {});
+      if (!_tOv.dark && !_tOv.darkUrl)   window.TILE_DARK  = window.MC_tileUrlById('carto-dark',  window.TILE_DARK);
+      if (!_tOv.light && !_tOv.lightUrl) window.TILE_LIGHT = window.MC_tileUrlById('carto-light', window.TILE_LIGHT);
+    }
     if (cfg.snrThresholds) Object.assign(SNR_THRESHOLDS, cfg.snrThresholds);
     if (cfg.distThresholds) Object.assign(DIST_THRESHOLDS, cfg.distThresholds);
     if (cfg.maxHopDist != null) window.MAX_HOP_DIST = cfg.maxHopDist;
@@ -604,6 +643,11 @@
       : { disabledTabs: [] };
     // #1574 — operator-configurable cap on /live map node count.
     if (cfg.liveMapMaxNodes != null) window.LIVE_MAP_MAX_NODES = cfg.liveMapMaxNodes;
+    // #1784 — path trust threshold: minimum hash bytes for mapping evidence.
+    // Default 2 means 1-byte observations are excluded from topology/mapping.
+    window.PATH_TRUST = cfg.pathTrust && cfg.pathTrust.minHashBytesForMapping
+      ? cfg.pathTrust.minHashBytesForMapping
+      : 2;
     // Sync ROLE_STYLE colors with ROLE_COLORS
     // #1407 — both are now live getters; no manual sync needed. Kept as no-op for clarity.
   }).catch(function () { /* use defaults */ });

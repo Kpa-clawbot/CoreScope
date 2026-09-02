@@ -189,14 +189,22 @@
     // Prefer last_heard (from in-memory packets) > _lastHeard (health API) > last_seen (DB)
     const lastHeardTime = n._lastHeard || n.last_heard || n.last_seen;
     const lastHeardMs = lastHeardTime ? new Date(lastHeardTime).getTime() : 0;
-    const status = getNodeStatus(role, lastHeardMs);
+    // #1598: pass the full node so infra staleness also considers last_relayed
+    const status = getNodeStatus(n);
     const statusTooltip = getStatusTooltip(role, status);
     const statusLabel = status === 'active' ? '<span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> Active' : '<span style="color:var(--text-muted)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> Stale';
     const statusAge = lastHeardMs ? (Date.now() - lastHeardMs) : Infinity;
 
     let explanation = '';
     if (status === 'active') {
-      explanation = 'Last heard ' + (lastHeardTime ? renderNodeTimestampText(lastHeardTime) : 'unknown');
+      // #1598: an infra node can be active purely via relay participation —
+      // surface that instead of a misleading old "last heard".
+      const relayedMs = n.last_relayed ? new Date(n.last_relayed).getTime() : 0;
+      if (relayedMs > lastHeardMs) {
+        explanation = 'Last relayed ' + renderNodeTimestampText(n.last_relayed);
+      } else {
+        explanation = 'Last heard ' + (lastHeardTime ? renderNodeTimestampText(lastHeardTime) : 'unknown');
+      }
     } else {
       const ageDays = Math.floor(statusAge / 86400000);
       const ageHours = Math.floor(statusAge / 3600000);
@@ -257,7 +265,16 @@
     // collision sharply; 3-byte (~16M) is effectively unambiguous. Bucket 0
     // is the legacy/unknown bucket used for edges loaded from the persisted
     // snapshot (no per-mode breakdown stored) — weight is conservative 0.5.
+    // #1784 — path trust threshold: if the configured minimum hash bytes
+    // for mapping is >= 2, observations below it get zero weight in the
+    // confidence computation (they're excluded from trusted evidence). This
+    // also excludes bucket 0: its legacy/unknown hash length cannot prove it
+    // meets a strict threshold, so refreshed observations replace its weight.
+    var _tt = (typeof window !== 'undefined' && window.MC_getPathTrustThreshold) ? window.MC_getPathTrustThreshold() : 1;
     var modeWeight = { 0: 0.5, 1: 0.125, 2: 0.875, 3: 1.0 };
+    if (_tt >= 2) {
+      for (var _m = 0; _m < _tt; _m++) modeWeight[_m] = 0;
+    }
     var cbm = entry.counts_by_mode || null;
     var weighted;
     if (cbm) {
@@ -673,7 +690,7 @@
             const btooltip = "Normalized betweenness centrality (0..1). How often this node sits on the shortest path between other pairs of nodes in the affinity graph. 1.0 = the most structurally critical node on the mesh. High Bridge + low Traffic share = a quiet but irreplaceable chokepoint.";
             return `<tr id="row-bridge-score" data-bridge-score="${b.toFixed(4)}"><td title="${btooltip}">Bridge score <span style="color:var(--text-muted);cursor:help" aria-label="help">ⓘ</span></td><td><span style="display:inline-block;vertical-align:middle;width:80px;height:8px;background:var(--bg-secondary,#333);border-radius:4px;overflow:hidden;margin-right:6px"><span style="display:block;width:${bbarWidth}%;height:100%;background:${bcolor}"></span></span><span style="color:${bcolor};font-weight:600">${bpct}%</span> <span style="color:var(--text-muted);font-size:11px;margin-left:4px">${blabel}</span></td></tr>`;
           })() : ''}
-          ${(n.role === 'repeater' || n.role === 'room') && Array.isArray(n.transported_scopes) && n.transported_scopes.length ? `<tr id="row-transported-scopes"><td title="Distinct region scopes (transmissions.scope_name) of all non-advert packets in which this repeater appears as a path hop. Shows which regions' traffic this repeater has carried (#1751).">Transported scopes</td><td><span style="display:inline-flex;flex-wrap:wrap;gap:3px;vertical-align:middle">${n.transported_scopes.map(sc => '<span class="badge">' + escapeHtml(String(sc)) + '</span>').join('')}</span></td></tr>` : ''}
+          ${(n.role === 'repeater' || n.role === 'room') && Array.isArray(n.transported_scopes) && n.transported_scopes.length ? `<tr id="row-transported-scopes"><td title="Distinct region scopes (transmissions.scope_name) of the non-advert packets whose path names this repeater by its full pubkey. Shows which regions' traffic it has carried (#1751). Packets that only carry a 1-byte hop are excluded: that byte is shared by every node with the same pubkey prefix, so it cannot say which of them relayed (#1902).">Transported scopes</td><td><span style="display:inline-flex;flex-wrap:wrap;gap:3px;vertical-align:middle">${n.transported_scopes.map(sc => '<span class="badge">' + escapeHtml(String(sc)) + '</span>').join('')}</span></td></tr>` : ''}
           <tr><td>First Seen</td><td>${renderNodeTimestampHtml(n.first_seen)}</td></tr>
           <tr><td>Total Packets</td><td>${stats.totalTransmissions || stats.totalPackets || n.advert_count || 0}${stats.totalObservations && stats.totalObservations !== (stats.totalTransmissions || stats.totalPackets) ? ' <span class="text-muted" style="font-size:0.85em">(seen ' + stats.totalObservations + '×)</span>' : ''}</td></tr>
           <tr><td>Packets Today</td><td>${stats.packetsToday || 0}</td></tr>
@@ -1229,12 +1246,7 @@
       }
       // Status filter (active/stale)
       if (statusFilter === 'active' || statusFilter === 'stale') {
-        filtered = filtered.filter(n => {
-          const role = (n.role || 'companion').toLowerCase();
-          const t = n.last_heard || n.last_seen;
-          const lastMs = t ? new Date(t).getTime() : 0;
-          return getNodeStatus(role, lastMs) === statusFilter;
-        });
+        filtered = filtered.filter(n => getNodeStatus(n) === statusFilter); // #1598
       }
       nodes = filtered;
 
@@ -1460,7 +1472,7 @@
       const roleColor = ROLE_COLORS[n.role] || '#6b7280';
       const isClaimed = myKeys.has(n.public_key);
       const lastSeenTime = n.last_heard || n.last_seen;
-      const status = getNodeStatus(n.role || 'companion', lastSeenTime ? new Date(lastSeenTime).getTime() : 0);
+      const status = getNodeStatus(n); // #1598: relay-aware for infra
       const lastSeenClass = status === 'active' ? 'last-seen-active' : 'last-seen-stale';
       const cs = _fleetSkew && _fleetSkew[n.public_key];
       const skewBadgeHtml = cs && cs.severity && cs.severity !== 'ok' ? renderSkewBadge(cs.severity, window.currentSkewValue(cs), cs) : '';
