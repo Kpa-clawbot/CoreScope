@@ -119,8 +119,24 @@ function makePkt(hash, rawHex) {
       localStorage.setItem('live-multibyte-only', 'true');
     });
     await persistPage.goto(BASE + '/#/live', { waitUntil: 'domcontentloaded' });
-    await persistPage.waitForFunction(() => !!document.getElementById('liveMultibyteToggle'), { timeout: 15000 });
-    const checked = await persistPage.evaluate(() => document.getElementById('liveMultibyteToggle').checked);
+    // Wait for the toggle to be RESTORED, not merely present. The element
+    // existing does not mean the code that reads localStorage and sets
+    // .checked has run yet, and under CI load it frequently has not. Waiting
+    // on existence is a proxy for the thing under test, which is the same
+    // mistake #1317 documented in test-channel-color-picker-e2e.js.
+    //
+    // Observed failing on the master push for 859173f1 (2026-09-02, re-run)
+    // with none of the PR code that first surfaced it (#1933) present.
+    try {
+      await persistPage.waitForFunction(() => {
+        const el = document.getElementById('liveMultibyteToggle');
+        return !!el && el.checked === true;
+      }, { timeout: 15000 });
+    } catch (_) { /* fall through so the assertion reports what it actually saw */ }
+    const checked = await persistPage.evaluate(() => {
+      const el = document.getElementById('liveMultibyteToggle');
+      return el ? el.checked : '(toggle absent)';
+    });
     await persistCtx.close();
     assert(checked === true, 'multibyte toggle should restore checked=true from localStorage');
   });
