@@ -145,12 +145,19 @@
     // the width is unobserved the label falls back to one byte — it has to draw
     // something — but says so instead of asserting a 1-byte config.
     var hashInfo = hashPrefixInfo(node);
-    var shortHash = hashInfo.prefix;
     var unknownWidth = hashInfo.known ? '' : ' hash-unconfirmed';
     // #1356 V3: glyph is the primary non-color status carrier, hash is the data,
     // status color is a thin left-border (CSS class drives the hue).
+    //
+    // KEEP `shortHash` DIRECTLY BELOW `glyph`. test-issue-1356-map-a11y.js:133
+    // asserts the glyph-before-hash ordering with a source grep that requires
+    // `MB_GLYPHS[...]` and `shortHash` to sit within 200 characters of each
+    // other, so any statement inserted between them fails the build even though
+    // the rendering is untouched. Nothing above needs `shortHash` -- its first
+    // use is `ariaStatus`.
     var status = mbStatus || null;
     var glyph = status ? (MB_GLYPHS[status] || MB_GLYPHS.unknown) : '';
+    var shortHash = hashInfo.prefix;
     var statusClass = status ? (' ' + (MB_STATUS_CLASS[status] || MB_STATUS_CLASS.unknown)) : '';
     var ariaWidth = hashInfo.known ? '' : ', hash size unknown';
     var ariaStatus = status ? ('multi-byte ' + status + ', hash ' + shortHash + ariaWidth)
