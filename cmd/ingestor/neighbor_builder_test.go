@@ -286,8 +286,12 @@ func TestNeighborEdgesBuilderPathTrustExcludesOneByte(t *testing.T) {
 	defer store.Close()
 	seedTrustFixture(t, store, "bb")
 
-	// nil == package default (MinHashBytesForMapping = 2).
-	if _, err := store.buildAndPersistNeighborEdges(nil); err != nil {
+	// Pass the threshold explicitly rather than leaning on the package default.
+	// This test is about what happens AT threshold 2, not about what the default
+	// happens to be, and coupling the two made it fail the moment the default
+	// moved to 1 (#1929).
+	trust := &packetpath.TrustConfig{MinHashBytesForMapping: 2}
+	if _, err := store.buildAndPersistNeighborEdges(trust); err != nil {
 		t.Fatalf("buildAndPersistNeighborEdges: %v", err)
 	}
 
