@@ -1626,7 +1626,7 @@
         <thead><tr>
           <th scope="col" class="col-expand" data-priority="1"></th><th scope="col" class="col-region" data-sort-key="region" data-priority="3">Region</th><th scope="col" class="col-time" data-sort-key="time" data-type="date" data-priority="1">Time</th><th scope="col" class="col-hash" data-sort-key="hash" data-priority="3">Hash</th><th scope="col" class="col-size" data-sort-key="size" data-type="numeric" data-priority="4">Size</th>
           <th scope="col" class="col-hashsize" data-sort-key="hb" data-type="numeric" data-priority="5">HB</th>
-          <th scope="col" class="col-type" data-sort-key="type" data-priority="1">Type</th><th scope="col" class="col-observer" data-sort-key="observer" data-priority="3">Observer</th><th scope="col" class="col-path" data-sort-key="path" data-priority="5">Path</th><th scope="col" class="col-rpt" data-sort-key="rpt" data-type="numeric" data-priority="3">Rpt</th><th scope="col" class="col-details" data-priority="1">Details</th>
+          <th scope="col" class="col-type" data-sort-key="type" data-priority="1">Type</th><th scope="col" class="col-scope" data-sort-key="scope" data-priority="4">Scope</th><th scope="col" class="col-observer" data-sort-key="observer" data-priority="3">Observer</th><th scope="col" class="col-path" data-sort-key="path" data-priority="5">Path</th><th scope="col" class="col-rpt" data-sort-key="rpt" data-type="numeric" data-priority="3">Rpt</th><th scope="col" class="col-details" data-priority="1">Details</th>
         </tr></thead>
         <tbody id="pktBody"></tbody>
       </table></div>
@@ -2010,6 +2010,7 @@
       { key: 'hash', label: 'Hash' },
       { key: 'size', label: 'Size' },
       { key: 'type', label: 'Type' },
+      { key: 'scope', label: 'Scope' },
       { key: 'observer', label: 'Observer' },
       { key: 'path', label: 'Path' },
       { key: 'rpt', label: 'Rpt' },
@@ -2019,12 +2020,27 @@
     // #1249: observer column must stay visible at narrow widths so the IATA
     // badge (#1188) renders on mobile. Without observer in scope the user
     // can't see who heard the packet at all.
-    const defaultHidden = isNarrow ? ['region', 'hash', 'path', 'rpt', 'size'] : ['region'];
+    const defaultHidden = isNarrow ? ['region', 'hash', 'path', 'rpt', 'size', 'scope'] : ['region'];
     let visibleCols;
+    let knownCols;
     try {
       visibleCols = JSON.parse(localStorage.getItem('packets-visible-cols'));
+      knownCols = JSON.parse(localStorage.getItem('packets-known-cols'));
     } catch {}
     if (!visibleCols) visibleCols = COL_DEFS.map(c => c.key).filter(k => !defaultHidden.includes(k));
+    else {
+      // A column added after the visitor last saved their preferences is absent
+      // from the stored array for the same reason a column they unchecked is:
+      // the array alone can't tell the two apart, so a new column would arrive
+      // silently hidden. `packets-known-cols` records which keys existed at save
+      // time; anything newer than that gets the default treatment instead.
+      if (!Array.isArray(knownCols)) knownCols = ['region', 'time', 'hash', 'size', 'type', 'observer', 'path', 'rpt', 'details'];
+      COL_DEFS.forEach(c => {
+        if (!knownCols.includes(c.key) && !visibleCols.includes(c.key) && !defaultHidden.includes(c.key)) {
+          visibleCols.push(c.key);
+        }
+      });
+    }
     const colMenu = document.getElementById('colToggleMenu');
     const pktTable = document.getElementById('pktTable');
     function applyColVisibility() {
@@ -2032,6 +2048,7 @@
         pktTable.classList.toggle('hide-col-' + c.key, !visibleCols.includes(c.key));
       });
       localStorage.setItem('packets-visible-cols', JSON.stringify(visibleCols));
+      localStorage.setItem('packets-known-cols', JSON.stringify(COL_DEFS.map(c => c.key)));
     }
     colMenu.innerHTML = COL_DEFS.map(c =>
       `<label><input type="checkbox" data-col="${c.key}" ${visibleCols.includes(c.key) ? 'checked' : ''}> ${c.label}</label>`
@@ -2264,6 +2281,7 @@
           <td class="col-size" data-filter-field="size" data-filter-value="${groupSize || ''}">${groupSize ? groupSize + 'B' : '—'}</td>
           <td class="col-hashsize mono"${_grpHashSizeTitle}>${groupHashBytes}</td>
           <td class="col-type" data-filter-field="type" data-filter-value="${escapeHtml(groupTypeName || '')}">${p.payload_type != null ? `<span class="badge badge-${groupTypeClass}">${groupTypeName}</span>${transportBadge(p.route_type)}` : '—'}</td>
+          <td class="col-scope" data-filter-field="scope" data-filter-value="${escapeHtml(p.scope_name || '')}">${scopeCellHtml(p.scope_name)}</td>
           <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(headerObserverId) || '')}">${isSingle ? escapeHtml(truncate(obsNameOnly(headerObserverId), 16)) + obsIataBadge(p) : escapeHtml(truncate(obsNameOnly(headerObserverId), 10)) + groupedObserverIataBadgesHtml(p)}</td>
           <td class="col-path"><span class="path-hops">${groupPathStr}</span></td>
           <td class="col-rpt">${p.observation_count > 1 ? '<span class="badge badge-obs" title="Seen ' + p.observation_count + ' times"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> ' + p.observation_count + '</span>' : (isSingle ? '' : p.count)}</td>
@@ -2298,6 +2316,7 @@
               <td class="col-size" data-filter-field="size" data-filter-value="${size || ''}">${size}B</td>
               <td class="col-hashsize mono"${_cHashSizeTitle}>${childHashBytes}</td>
               <td class="col-type" data-filter-field="type" data-filter-value="${escapeHtml(typeName || '')}"><span class="badge badge-${typeClass}">${typeName}</span>${transportBadge(c.route_type)}</td>
+              <td class="col-scope" data-filter-field="scope" data-filter-value="${escapeHtml(c.scope_name || '')}">${scopeCellHtml(c.scope_name)}</td>
               <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(c.observer_id) || '')}">${escapeHtml(truncate(obsNameOnly(c.observer_id), 16))}${obsIataBadge(c)}</td>
               <td class="col-path"><span class="path-hops">${childPathStr}</span></td>
               <td class="col-rpt"></td>
@@ -2334,6 +2353,7 @@
         <td class="col-size" data-filter-field="size" data-filter-value="${size || ''}">${size}B</td>
         <td class="col-hashsize mono"${_flatHashSizeTitle}>${hashBytes}</td>
         <td class="col-type" data-filter-field="type" data-filter-value="${escapeHtml(typeName || '')}"><span class="badge badge-${typeClass}">${typeName}</span>${transportBadge(p.route_type)}</td>
+        <td class="col-scope" data-filter-field="scope" data-filter-value="${escapeHtml(p.scope_name || '')}">${scopeCellHtml(p.scope_name)}</td>
         <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(p.observer_id) || '')}">${escapeHtml(truncate(obsNameOnly(p.observer_id), 16))}${obsIataBadge(p)}</td>
         <td class="col-path"><span class="path-hops">${pathStr}</span></td>
         <td class="col-rpt"></td>
@@ -2700,6 +2720,7 @@
       case 'rpt': accessor = function(p) {
         try { var pj = typeof p.path_json === 'string' ? JSON.parse(p.path_json) : p.path_json; return Array.isArray(pj) ? pj.length : 0; } catch(e) { return 0; }
       }; break;
+      case 'scope': accessor = function(p) { return p.scope_name || ''; }; break;
       case 'region': accessor = function(p) { return (regionMap && regionMap[p.observer_id]) || ''; }; break;
       case 'path': accessor = function(p) {
         try { var pj = typeof p.path_json === 'string' ? JSON.parse(p.path_json) : p.path_json; return Array.isArray(pj) ? pj.join(',') : ''; } catch(e) { return ''; }
@@ -2712,6 +2733,13 @@
     var isDate = (col === 'time');
 
     packets.sort(function(a, b) {
+      // Most packets carry no scope (FLOOD and DIRECT cannot), so an ascending
+      // sort would bury every scoped row under a wall of dashes. Pin the empties
+      // last in BOTH directions, as the nodes table does for default_scope.
+      if (col === 'scope') {
+        var aHasScope = a.scope_name ? 1 : 0, bHasScope = b.scope_name ? 1 : 0;
+        if (aHasScope !== bHasScope) return bHasScope - aHasScope;
+      }
       var va = accessor(a), vb = accessor(b);
       var result;
       if (isDate) {

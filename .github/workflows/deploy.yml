@@ -690,11 +690,30 @@ jobs:
   # ───────────────────────────────────────────────────────────────
   deploy:
     name: "🚀 Deploy Staging"
+    # DISABLED. Re-enable by setting the repository variable
+    # ENABLE_STAGING_DEPLOY to 'true' (Settings > Secrets and variables >
+    # Actions > Variables). No code change needed.
+    #
+    # Why: this job runs on [self-hosted, meshcore-runner-2] and that runner
+    # has not picked up a job since at least 2026-08-31. It has no
+    # timeout-minutes, so it sat queued for 22+ hours, held its run open, and
+    # through the concurrency group ci-refs/heads/master caused GitHub to
+    # cancel every subsequent master push. The result was that master produced
+    # no completed pipeline result at all: 30+ runs cancelled or stuck while
+    # go-test, e2e-test and build-and-publish were passing inside them.
+    #
+    # timeout-minutes alone would unblock the queue but leave master
+    # permanently red on a job that cannot succeed while the runner is absent,
+    # so the deploy is gated instead. It is added here as well, so that if the
+    # variable is set while the runner is still missing the job fails in ten
+    # minutes rather than blocking the branch again.
     if: |
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      vars.ENABLE_STAGING_DEPLOY == 'true'
+      && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
       && github.ref == 'refs/heads/master'
     needs: [build-and-publish]
     runs-on: [self-hosted, meshcore-runner-2]
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -781,7 +800,12 @@ jobs:
   publish:
     name: "📝 Publish Badges & Summary"
     if: github.event_name == 'push'
-    needs: [deploy]
+    # Was needs: [deploy]. The badges are built from the go-test and e2e-test
+    # artifacts and never needed the deploy step; depending on it meant the
+    # coverage badges stopped updating whenever the self-hosted runner was
+    # unavailable. build-and-publish already transitively requires both test
+    # jobs, so ordering is unchanged.
+    needs: [build-and-publish]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code

@@ -30,7 +30,7 @@ func scopeTx(id int, payloadType int, scope string) *StoreTx {
 		ID:          id,
 		Hash:        "scope-tx-" + scope + "-" + strconv.Itoa(id),
 		PayloadType: &pt,
-		ScopeName:   scope,
+		ScopeName:   &scope,
 		FirstSeen:   time.Now().UTC().Add(-10 * time.Minute).Format(time.RFC3339Nano),
 	}
 }
@@ -81,22 +81,25 @@ func TestTransportedScopes_PerNodeMatchesBulk(t *testing.T) {
 }
 
 // TestTransportedScopes_EmptyWhenNoScope guards the "field absent" contract:
-// a repeater whose path-hop packets carry no scope_name (older schema /
-// hasScopeName=false → ScopeName always "") must yield a nil/empty slice so
-// routes.go omits the JSON field entirely.
+// a repeater whose path-hop packets carry no usable scope_name must yield a
+// nil/empty slice so routes.go omits the JSON field entirely. Both non-values
+// count: ScopeName nil (not transport-scoped, or older schema with
+// hasScopeName=false) and a pointer to "" (transport-scoped, region unmatched).
 func TestTransportedScopes_EmptyWhenNoScope(t *testing.T) {
-	noScope := scopeTx(1, 2, "") // non-advert but ScopeName==""
+	unmatchedScope := scopeTx(1, 2, "") // non-advert, transport-scoped, region unmatched
+	noScope := scopeTx(2, 2, "")        // non-advert, not transport-scoped at all
+	noScope.ScopeName = nil
 
 	store := &PacketStore{
-		byPathHop: map[string][]*StoreTx{scope1751Key: {noScope}},
+		byPathHop: map[string][]*StoreTx{scope1751Key: {unmatchedScope, noScope}},
 		mu:        sync.RWMutex{},
 	}
 
 	if got := store.computeRepeaterRelayInfoMap(24)[scope1751Key].TransportedScopes; len(got) != 0 {
-		t.Fatalf("bulk: expected no scopes when ScopeName empty, got %v", got)
+		t.Fatalf("bulk: expected no scopes when ScopeName empty/nil, got %v", got)
 	}
 	if got := store.GetRepeaterRelayInfo(scope1751Key, 24).TransportedScopes; len(got) != 0 {
-		t.Fatalf("per-node: expected no scopes when ScopeName empty, got %v", got)
+		t.Fatalf("per-node: expected no scopes when ScopeName empty/nil, got %v", got)
 	}
 }
 

@@ -2127,6 +2127,8 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 .obs-table td:first-child { white-space: nowrap; }
 .obs-table td:nth-child(6) { max-width: none; overflow: visible; }
 .col-observer { min-width: 70px; max-width: none; }
+/* Region names run to "#nl-nb-mie"; clip rather than push the wider columns. */
+.col-scope { min-width: 56px; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 12px; }
 .spark-bar { position: relative; min-width: 60px; max-width: 100px; flex: 1; height: 18px; background: var(--border); border-radius: 4px; overflow: hidden; display: inline-block; vertical-align: middle; }
 @media (max-width: 640px) { .spark-bar { max-width: 60px; } }
 .spark-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-hover, #60a5fa)); border-radius: 4px; transition: width 0.3s; }
@@ -2993,7 +2995,7 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 
 /* Hide low-value columns on mobile */
 @media (max-width: 640px) {
-  .col-region, .col-rpt, .col-size, .col-hashsize, .col-pubkey { display: none; }
+  .col-region, .col-rpt, .col-size, .col-hashsize, .col-pubkey, .col-scope { display: none; }
 }
 
 /* Clickable hop links */
@@ -3185,6 +3187,7 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .hide-col-hash .col-hash,
 .hide-col-size .col-size,
 .hide-col-type .col-type,
+.hide-col-scope .col-scope,
 .hide-col-observer .col-observer,
 .hide-col-path .col-path,
 .hide-col-rpt .col-rpt,

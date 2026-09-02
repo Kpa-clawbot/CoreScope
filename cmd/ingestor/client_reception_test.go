@@ -124,6 +124,11 @@ func TestPruneOldClientRxObservations(t *testing.T) {
 	if remaining != 2 {
 		t.Fatalf("expected 2 observations remaining (recent + boundary), got %d", remaining)
 	}
+	var recentSurvived int
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_rx_observations WHERE pkt_hash = ?`, "hash-recent").Scan(&recentSurvived)
+	if recentSurvived != 1 {
+		t.Fatalf("the recent row must survive the prune; got %d", recentSurvived)
+	}
 	var boundarySurvived int
 	s.db.QueryRow(`SELECT COUNT(*) FROM client_rx_observations WHERE pkt_hash = ?`, "hash-boundary").Scan(&boundarySurvived)
 	if boundarySurvived != 1 {

@@ -159,11 +159,11 @@ func (s *PacketStore) computeRepeaterRelayInfoMap(windowHours float64) map[strin
 				// #1902: it IS gated on full-pubkey attribution — a 1-byte
 				// hop cannot prove which of the nodes sharing that byte
 				// carried the packet.
-				if tx.ScopeName != "" && !viaPrefix {
+				if tx.ScopeName != nil && *tx.ScopeName != "" && !viaPrefix {
 					if scopeSet == nil {
 						scopeSet = map[string]struct{}{}
 					}
-					scopeSet[tx.ScopeName] = struct{}{}
+					scopeSet[*tx.ScopeName] = struct{}{}
 				}
 				if !p.ok {
 					continue
