@@ -177,7 +177,6 @@ type PacketStore struct {
 	byNode        map[string][]*StoreTx      // pubkey → transmissions
 	nodeHashes    map[string]map[string]bool // pubkey → Set<hash>
 	byPathHop     map[string][]*StoreTx      // lowercase hop/pubkey → transmissions with that hop in path
-	relayTimes    map[string][]int64         // lowercase pubkey → sorted unix-millis of relay events (full pubkeys only)
 	byPayloadType map[int][]*StoreTx         // payload_type → transmissions
 	loaded        bool
 	totalObs      int
@@ -641,7 +640,6 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig, cacheTTLs ...map[string]inte
 		byObserver:    make(map[string][]*StoreObs),
 		byNode:        make(map[string][]*StoreTx),
 		byPathHop:     make(map[string][]*StoreTx),
-		relayTimes:    make(map[string][]int64),
 		nodeHashes:    make(map[string]map[string]bool),
 		byPayloadType: make(map[int][]*StoreTx),
 		rfCache:       make(map[string]*cachedResult),
@@ -4028,14 +4026,81 @@ func (s *PacketStore) buildSubpathIndex() {
 		len(s.spIndex), s.spTotalPaths)
 }
 
-// buildPathHopIndex scans all packets and populates byPathHop.
+// buildPathHopIndex rebuilds byPathHop: raw wire hops from every packet's
+// path_json, plus the resolved full-pubkey hops carried over from the
+// previous index (see retainResolvedPathHops).
 // Must be called with s.mu held.
 func (s *PacketStore) buildPathHopIndex() {
-	s.byPathHop = make(map[string][]*StoreTx, 4096)
+	prev := s.byPathHop
+	s.byPathHop = make(map[string][]*StoreTx, max(4096, len(prev)))
 	for _, tx := range s.packets {
 		addTxToPathHopIndex(s.byPathHop, tx)
 	}
-	log.Printf("[store] Built path-hop index: %d unique keys", len(s.byPathHop))
+	retained := s.retainResolvedPathHops(prev)
+	log.Printf("[store] Built path-hop index: %d unique keys (%d resolved-hop entries retained)",
+		len(s.byPathHop), retained)
+}
+
+// retainResolvedPathHops re-merges the entries of a pre-rebuild byPathHop
+// that the raw-hop pass above cannot reproduce: the resolved full-pubkey
+// keys fed by indexResolvedPathHops. Their pubkey strings are retained
+// nowhere — #800 dropped the per-StoreTx ResolvedPath field in favour of a
+// hash-only membership index — so a plain rebuild silently discarded every
+// resolved relay attribution, leaving relay counts and transported scopes
+// empty after each cold load until live ingestion refilled them (#1904).
+//
+// Only transmissions still in s.packets are carried over. This matters:
+// eviction's removeTxFromPathHopIndex strips raw hops only (it derives them
+// from txGetParsedPath), so evicted transmissions linger in prev under their
+// resolved keys. Filtering them here is what keeps the index bounded by the
+// eviction policy instead of turning that gap into a permanent leak.
+//
+// Cost is O(entries in prev) with one reused scratch map, and it runs only
+// where buildPathHopIndex already runs — cold load and background-fill
+// completion — never on an ingest or request path.
+//
+// Returns the number of entries carried over. Must be called with s.mu held,
+// after s.byPathHop has been rebuilt from raw hops.
+func (s *PacketStore) retainResolvedPathHops(prev map[string][]*StoreTx) int {
+	if len(prev) == 0 {
+		return 0
+	}
+	live := make(map[*StoreTx]struct{}, len(s.packets))
+	for _, tx := range s.packets {
+		live[tx] = struct{}{}
+	}
+
+	// Reused across keys (cleared per key) so a large index does not churn
+	// one map allocation per key. Guards against both a key that the raw
+	// pass already produced and repeated appends of the same tx in prev —
+	// indexResolvedPathHops dedups within a call, not across the several
+	// observations of one transmission.
+	seen := make(map[*StoreTx]struct{}, 16)
+	retained := 0
+	for key, list := range prev {
+		if len(list) == 0 {
+			continue
+		}
+		clear(seen)
+		for _, tx := range s.byPathHop[key] {
+			seen[tx] = struct{}{}
+		}
+		for _, tx := range list {
+			if tx == nil {
+				continue
+			}
+			if _, ok := live[tx]; !ok {
+				continue
+			}
+			if _, dup := seen[tx]; dup {
+				continue
+			}
+			seen[tx] = struct{}{}
+			s.byPathHop[key] = append(s.byPathHop[key], tx)
+			retained++
+		}
+	}
+	return retained
 }
 
 // addTxToPathHopIndex indexes a transmission under each unique raw hop key.
