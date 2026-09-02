@@ -145,6 +145,24 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     const firstColor = await page.evaluate(() =>
       document.activeElement.getAttribute('data-color'));
     await page.keyboard.press('ArrowRight');
+    // Wait for focus to actually move rather than reading activeElement on the
+    // next tick. The keydown handler moves focus, but under CI load that can
+    // land after Playwright's evaluate has already run, and the assertion then
+    // compares the swatch against itself: "was #ef4444, now #ef4444".
+    //
+    // This is the same macrotask race the "outside click" step below documents
+    // at length for #1317; the fix there was to wait on the real condition
+    // instead of a proxy, and this step needs it too. Observed failing on the
+    // master pushes for 589fa987 (2026-08-31) and 859173f1 (2026-09-02), and
+    // on PR #1884, which passed unchanged on a re-run.
+    try {
+      await page.waitForFunction((prev) => {
+        const el = document.activeElement;
+        if (!el || !el.classList || !el.classList.contains('cc-swatch')) return false;
+        const c = el.getAttribute('data-color');
+        return !!c && c !== prev;
+      }, firstColor, { timeout: 3000 });
+    } catch (_) { /* fall through so the assertion reports the actual value */ }
     const nextColor = await page.evaluate(() =>
       document.activeElement.getAttribute('data-color'));
     assert(nextColor && nextColor !== firstColor,
