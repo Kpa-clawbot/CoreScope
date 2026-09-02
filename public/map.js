@@ -149,12 +149,13 @@
     // #1356 V3: glyph is the primary non-color status carrier, hash is the data,
     // status color is a thin left-border (CSS class drives the hue).
     //
-    // KEEP `shortHash` DIRECTLY BELOW `glyph`. test-issue-1356-map-a11y.js:133
-    // asserts the glyph-before-hash ordering with a source grep that requires
-    // `MB_GLYPHS[...]` and `shortHash` to sit within 200 characters of each
-    // other, so any statement inserted between them fails the build even though
-    // the rendering is untouched. Nothing above needs `shortHash` -- its first
-    // use is `ariaStatus`.
+    // ORDER MATTERS: the hash variable must stay immediately below the glyph
+    // lookup. test-issue-1356-map-a11y.js:133 asserts the glyph-before-hash
+    // ordering with a source grep bounded to 200 characters, so anything
+    // inserted between the two declarations fails the build even though the
+    // rendering is untouched. Deliberately worded without naming either
+    // identifier: spelling them out here would satisfy that grep from inside
+    // this comment and the assertion could then never fail.
     var status = mbStatus || null;
     var glyph = status ? (MB_GLYPHS[status] || MB_GLYPHS.unknown) : '';
     var shortHash = hashInfo.prefix;
