@@ -11,6 +11,7 @@ import (
 
 	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/geofilter"
+	"github.com/meshcore-analyzer/packetpath"
 )
 
 // MQTTSource represents a single MQTT broker connection.
@@ -57,9 +58,12 @@ type Config struct {
 	ClientRxCoverage     *ClientRxCoverageConfig     `json:"clientRxCoverage,omitempty"`
 	ClientRxObservations *ClientRxObservationsConfig `json:"clientRxObservations,omitempty"`
 	GeoFilter            *GeoFilterConfig            `json:"geo_filter,omitempty"`
-	ForeignAdverts       *ForeignAdvertConfig        `json:"foreignAdverts,omitempty"`
-	ValidateSignatures   *bool                       `json:"validateSignatures,omitempty"`
-	DB                   *DBConfig                   `json:"db,omitempty"`
+	// PathTrust configures the minimum path-hash prefix length trusted as
+	// mapping/topology evidence (issue #1784).
+	PathTrust          *PathTrustConfig     `json:"pathTrust,omitempty"`
+	ForeignAdverts     *ForeignAdvertConfig `json:"foreignAdverts,omitempty"`
+	ValidateSignatures *bool                `json:"validateSignatures,omitempty"`
+	DB                 *DBConfig            `json:"db,omitempty"`
 
 	// ObserverIATAWhitelist restricts which observer IATA regions are processed.
 	// When non-empty, only observers whose IATA code (from the MQTT topic) matches
@@ -72,7 +76,7 @@ type Config struct {
 	obsIATAWhitelistOnce   sync.Once
 
 	// ObserverBlacklist is a list of observer public keys to drop at ingest.
-	// Messages from blacklisted observers are silently discarded — no DB writes,
+	// Messages from blacklisted observers are silently discarded â€” no DB writes,
 	// no UpsertObserver, no observations, no metrics.
 	ObserverBlacklist []string `json:"observerBlacklist,omitempty"`
 
@@ -81,7 +85,7 @@ type Config struct {
 	obsBlacklistOnce      sync.Once
 
 	// NeighborEdgesMaxAgeDays controls neighbor_edges row retention
-	// (#1287 — moved from cmd/server). 0 = default 5.
+	// (#1287 â€” moved from cmd/server). 0 = default 5.
 	NeighborEdgesMaxAgeDays int `json:"neighborEdgesMaxAgeDays,omitempty"`
 
 	// IngestBufferSize caps the in-memory queue (number of MQTT messages) held
@@ -113,6 +117,10 @@ func (c *Config) IngestBufferSizeOrDefault() int {
 // GeoFilterConfig is an alias for the shared geofilter.Config type.
 type GeoFilterConfig = geofilter.Config
 
+// PathTrustConfig is an alias for the shared packetpath.TrustConfig type
+// (issue #1784). See packetpath.TrustConfig for the full doc comment.
+type PathTrustConfig = packetpath.TrustConfig
+
 // ForeignAdvertConfig controls how the ingestor handles ADVERTs whose GPS lies
 // outside the configured geofilter polygon (#730). Modes:
 //   - "flag" (default): store the advert/node and tag it foreign for visibility.
@@ -136,7 +144,7 @@ type ClientRxCoverageConfig struct {
 }
 
 // ClientRxCoverageEnabled reports whether the opt-in mobile client-RX coverage
-// feature is on. Absent/nil ⇒ off (the safe default).
+// feature is on. Absent/nil â‡’ off (the safe default).
 func (c *Config) ClientRxCoverageEnabled() bool {
 	return c.ClientRxCoverage != nil && c.ClientRxCoverage.Enabled
 }
@@ -167,7 +175,7 @@ type RetentionConfig struct {
 	// the table the opt-in coverage feature would otherwise grow without limit.
 	ClientRxDays int `json:"clientRxDays"`
 	// ClientRxObsDays is the retention window (by rx_at) for the diagnostic
-	// client_rx_observations table; 0 disables. Shorter than clientRxDays —
+	// client_rx_observations table; 0 disables. Shorter than clientRxDays â€”
 	// this table is diagnostic, not archival.
 	ClientRxObsDays int `json:"clientRxObsDays"`
 }
@@ -264,6 +272,15 @@ func (c *Config) ObserverDaysOrDefault() int {
 	return 14
 }
 
+// GetPathTrust returns the effective path-trust config, applying
+// DefaultMinHashBytesForMapping when unset (issue #1784).
+func (c *Config) GetPathTrust() PathTrustConfig {
+	if c != nil && c.PathTrust != nil {
+		return *c.PathTrust
+	}
+	return PathTrustConfig{MinHashBytesForMapping: packetpath.DefaultMinHashBytesForMapping}
+}
+
 // IsObserverBlacklisted returns true if the given observer ID is in the observerBlacklist.
 func (c *Config) IsObserverBlacklisted(id string) bool {
 	if c == nil || len(c.ObserverBlacklist) == 0 {
@@ -311,7 +328,7 @@ func LoadConfig(path string) (*Config, error) {
 		if !errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("reading config %s: %w", path, err)
 		}
-		// Config file doesn't exist — use defaults (zero-config mode)
+		// Config file doesn't exist â€” use defaults (zero-config mode)
 		log.Printf("config file %s not found, using sensible defaults", path)
 	} else {
 		if err := json.Unmarshal(data, &cfg); err != nil {
@@ -324,7 +341,7 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.DBPath = v
 	}
 	if v := os.Getenv("MQTT_BROKER"); v != "" {
-		// Single broker from env — create a source
+		// Single broker from env â€” create a source
 		topic := os.Getenv("MQTT_TOPIC")
 		if topic == "" {
 			topic = "meshcore/#"
@@ -367,10 +384,10 @@ func LoadConfig(path string) (*Config, error) {
 //
 // Scheme mapping:
 //
-//	mqtt://  → tcp://   (paho plain TCP)
-//	mqtts:// → ssl://   (paho TLS over TCP)
-//	ws://               (paho WebSocket — passed through, no mapping needed)
-//	wss://              (paho WebSocket TLS — passed through, no mapping needed)
+//	mqtt://  â†’ tcp://   (paho plain TCP)
+//	mqtts:// â†’ ssl://   (paho TLS over TCP)
+//	ws://               (paho WebSocket â€” passed through, no mapping needed)
+//	wss://              (paho WebSocket TLS â€” passed through, no mapping needed)
 func (c *Config) ResolvedSources() []MQTTSource {
 	for i := range c.MQTTSources {
 		// paho uses tcp:// and ssl:// for plain MQTT; ws:// and wss:// are accepted natively.
@@ -380,7 +397,7 @@ func (c *Config) ResolvedSources() []MQTTSource {
 		} else if strings.HasPrefix(b, "mqtts://") {
 			c.MQTTSources[i].Broker = "ssl://" + b[8:]
 		}
-		// ws:// and wss:// pass through unchanged — paho handles WebSocket
+		// ws:// and wss:// pass through unchanged â€” paho handles WebSocket
 		// connections natively via gorilla/websocket.
 	}
 	return c.MQTTSources

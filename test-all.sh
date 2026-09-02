@@ -16,6 +16,8 @@ node test-issue-1065-gesture-hints-gates.js
 node test-frontend-helpers.js
 node test-fetch-all-nodes-pagination.js
 node test-my-repeaters-dashboard.js
+node test-repeater-metric-scatter.js
+node test-top-routes-overlay.js
 node test-url-state.js
 node test-perf-go-runtime.js
 node test-channel-psk-ux.js
@@ -35,6 +37,7 @@ node test-issue-1648-m2-emoji-scan.js
 node test-issue-1648-m3-emoji-scan.js
 node test-issue-1648-m6-final-sweep.js
 node test-issue-1648-m6-lint-self.js
+node test-issue-1890-og-url.js
 node test-traces.js
 node test-live-multibyte-filter.js
 

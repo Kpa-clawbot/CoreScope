@@ -437,6 +437,7 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Customizer != nil && s.cfg.Customizer.DisabledTabs != nil {
 		disabledTabs = s.cfg.Customizer.DisabledTabs
 	}
+	pathTrust := s.cfg.GetPathTrust()
 	writeJSON(w, ClientConfigResponse{
 		Roles:               s.cfg.Roles,
 		HealthThresholds:    s.cfg.GetHealthThresholds().ToClientMs(),
@@ -457,6 +458,7 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 		Tiles:               s.cfg.Tiles,
 		Customizer:          CustomizerClientConfig{DisabledTabs: disabledTabs},
 		ClientRxCoverage:    s.cfg.ClientRxCoverageEnabled(),
+		PathTrust:           &pathTrust,
 	})
 }
 
@@ -2848,6 +2850,18 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 	obsList := s.store.byObserver[id]
 	obsSnapshot := make([]*StoreObs, len(obsList))
 	copy(obsSnapshot, obsList)
+	// #1830: also resolve each referenced transmission's *StoreTx under
+	// this same RLock. s.store.byTxID is guarded by s.store.mu (writes
+	// from ingest/eviction); reading it after RUnlock — as the loop below
+	// used to via s.store.byTxID[...] and enrichObs() — races with those
+	// writers. Keyed by TransmissionID (not by observation index) since
+	// multiple observations can share one transmission.
+	txByID := make(map[int]*StoreTx, len(obsSnapshot))
+	for _, obs := range obsSnapshot {
+		if _, ok := txByID[obs.TransmissionID]; !ok {
+			txByID[obs.TransmissionID] = s.store.byTxID[obs.TransmissionID]
+		}
+	}
 	s.store.mu.RUnlock()
 	filtered := make([]*StoreObs, 0, len(obsSnapshot))
 	for _, obs := range obsSnapshot {
@@ -2863,10 +2877,10 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 
 	writeJSON(w, ObserverAnalyticsResponse{
 		Timeline:        buildTimeline(filtered, days),
-		PacketTypes:     buildPacketTypes(s.store, filtered),
-		NodesTimeline:   buildNodesTimeline(s.store, filtered, days),
+		PacketTypes:     buildPacketTypes(filtered, txByID),
+		NodesTimeline:   buildNodesTimeline(filtered, days, txByID),
 		SnrDistribution: buildSnrDistribution(filtered),
-		RecentPackets:   buildRecentPackets(s.store, filtered, 20),
+		RecentPackets:   buildRecentPackets(s.store, filtered, 20, txByID),
 	})
 }
 
@@ -2954,8 +2968,7 @@ func (s *Server) handleAudioLabBuckets(w http.ResponseWriter, r *http.Request) {
 			}
 			typeName := "UNKNOWN"
 			if tx.DecodedJSON != "" {
-				var d map[string]interface{}
-				if err := json.Unmarshal([]byte(tx.DecodedJSON), &d); err == nil {
+				if d := tx.ParsedDecoded(); d != nil {
 					if t, ok := d["type"].(string); ok && t != "" {
 						typeName = t
 					}

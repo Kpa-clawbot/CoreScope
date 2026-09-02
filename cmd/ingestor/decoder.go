@@ -143,7 +143,12 @@ type Payload struct {
 	Text             string    `json:"text,omitempty"`
 	Sender           string    `json:"sender,omitempty"`
 	SenderTimestamp  uint32    `json:"sender_timestamp,omitempty"`
-	EphemeralPubKey string     `json:"ephemeralPubKey,omitempty"`
+	// ANON_REQ carries the sender's FULL 32-byte public key (not a 1-byte
+	// srcHash like REQ) — MeshCore firmware/src/Mesh.cpp. Surfaced as
+	// srcPubKey so store.go's node indexer picks it up and it resolves to a
+	// node name; frontend also reads legacy ephemeralPubKey for pre-rename
+	// packets (#1864).
+	SrcPubKey       string     `json:"srcPubKey,omitempty"`
 	PathData      string       `json:"pathData,omitempty"`
 	SNRValues     []float64    `json:"snrValues,omitempty"`
 	Tag           uint32       `json:"tag,omitempty"`
@@ -857,7 +862,7 @@ func decodeAnonReq(buf []byte) Payload {
 	return Payload{
 		Type:            "ANON_REQ",
 		DestHash:        hex.EncodeToString(buf[0:1]),
-		EphemeralPubKey: hex.EncodeToString(buf[1:33]),
+		SrcPubKey:       hex.EncodeToString(buf[1:33]),
 		MAC:             hex.EncodeToString(buf[33:35]),
 		EncryptedData:   hex.EncodeToString(buf[35:]),
 	}

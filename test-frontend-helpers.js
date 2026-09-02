@@ -840,6 +840,68 @@ console.log('\n=== pickByAffinity neighbor-graph scoring (#874) ===');
   });
 }
 
+// ===== ROLES.JS: getNodeStatus (#1598 relay-aware staleness) =====
+console.log('\n=== roles.js: getNodeStatus (#1598) ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  const getNodeStatus = ctx.getNodeStatus;
+  const iso = (msAgo) => new Date(Date.now() - msAgo).toISOString();
+  const H = 3600000;
+
+  // Legacy (role, lastSeenMs) signature — unchanged behavior
+  test('legacy: repeater seen 1h ago is active', () =>
+    assert.strictEqual(getNodeStatus('repeater', Date.now() - 1 * H), 'active'));
+  test('legacy: repeater seen 80h ago is stale (infraSilentMs=72h)', () =>
+    assert.strictEqual(getNodeStatus('repeater', Date.now() - 80 * H), 'stale'));
+  test('legacy: companion seen 25h ago is stale (nodeSilentMs=24h)', () =>
+    assert.strictEqual(getNodeStatus('companion', Date.now() - 25 * H), 'stale'));
+  test('legacy: non-number lastSeenMs is stale', () =>
+    assert.strictEqual(getNodeStatus('repeater', undefined), 'stale'));
+
+  // Node-object signature
+  test('node: backbone-repeater fixture — last_seen 25h, last_relayed 5min → active', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'repeater', last_seen: iso(25 * H), last_relayed: iso(5 * 60000)
+    }), 'active'));
+  test('node: repeater advert-silent 151h but relayed 2min ago → active', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'repeater', last_seen: iso(151 * H), last_relayed: iso(2 * 60000)
+    }), 'active'));
+  test('node: repeater with BOTH last_seen and last_relayed past 72h → stale', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'repeater', last_seen: iso(100 * H), last_relayed: iso(80 * H)
+    }), 'stale'));
+  test('node: room honors last_relayed like repeater', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'room', last_seen: iso(90 * H), last_relayed: iso(10 * 60000)
+    }), 'active'));
+  test('node: companion does NOT get relay-based freshness', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'companion', last_seen: iso(30 * H), last_relayed: iso(5 * 60000)
+    }), 'stale'));
+  test('node: repeater with no last_relayed falls back to advert freshness (stale at 80h)', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'repeater', last_seen: iso(80 * H)
+    }), 'stale'));
+  test('node: repeater with fresh advert and no last_relayed → active', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'repeater', last_seen: iso(1 * H)
+    }), 'active'));
+  test('node: _liveSeen (ms) takes precedence over stale last_seen', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'companion', _liveSeen: Date.now() - 5 * 60000, last_seen: iso(48 * H)
+    }), 'active'));
+  test('node: _lastHeard preferred over last_seen', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'companion', _lastHeard: iso(10 * 60000), last_seen: iso(48 * H)
+    }), 'active'));
+  test('node: missing role defaults to companion thresholds', () =>
+    assert.strictEqual(getNodeStatus({ last_seen: iso(25 * H) }), 'stale'));
+  test('node: no timestamps at all → stale', () =>
+    assert.strictEqual(getNodeStatus({ role: 'repeater' }), 'stale'));
+}
+
 // ===== ROLES.JS: copyToClipboard =====
 console.log('\n=== roles.js: copyToClipboard ===');
 {
@@ -1062,11 +1124,11 @@ console.log('\n=== live.js: pruneStaleNodes ===');
     const markers = ctx.window._liveNodeMarkers();
     const data = ctx.window._liveNodeData();
 
-    // A repeater seen 48h ago should NOT be pruned (infraSilentMs = 72h)
+    // A repeater seen 48h ago should NOT be pruned or dimmed (infraSilentMs = 72h)
     markers['rpt1'] = { _glowMarker: null };
     data['rpt1'] = { public_key: 'rpt1', role: 'repeater', _liveSeen: Date.now() - 48 * 3600000 };
 
-    // A repeater seen 96h ago SHOULD be pruned
+    // #1598: a repeater seen 96h ago is stale, but infra is DIMMED, never deleted
     markers['rpt2'] = { _glowMarker: null };
     data['rpt2'] = { public_key: 'rpt2', role: 'repeater', _liveSeen: Date.now() - 96 * 3600000 };
 
@@ -1074,8 +1136,30 @@ console.log('\n=== live.js: pruneStaleNodes ===');
 
     assert.ok(markers['rpt1'], 'repeater at 48h should remain (under 72h threshold)');
     assert.ok(data['rpt1'], 'repeater data at 48h should remain');
-    assert.ok(!markers['rpt2'], 'repeater at 96h should be pruned (over 72h threshold)');
-    assert.ok(!data['rpt2'], 'repeater data at 96h should be pruned');
+    assert.ok(!markers['rpt1']._staleDimmed, 'repeater at 48h should not be dimmed');
+    assert.ok(markers['rpt2'], 'repeater at 96h should remain (#1598: dim, not delete)');
+    assert.ok(data['rpt2'], 'repeater data at 96h should remain (#1598)');
+    assert.ok(markers['rpt2']._staleDimmed === true, 'repeater at 96h should be dimmed');
+  });
+
+  test('pruneStaleNodes: relay-aware — advert-silent repeater with fresh last_relayed stays active (#1598)', () => {
+    const { ctx } = makeLiveSandbox();
+    const prune = ctx.window._livePruneStaleNodes;
+    const markers = ctx.window._liveNodeMarkers();
+    const data = ctx.window._liveNodeData();
+
+    // Backbone fixture: advert 96h stale, relayed 5 minutes ago → active, undimmed
+    markers['bb1'] = { _glowMarker: null };
+    data['bb1'] = {
+      public_key: 'bb1', role: 'repeater',
+      _liveSeen: Date.now() - 96 * 3600000,
+      last_relayed: new Date(Date.now() - 5 * 60000).toISOString()
+    };
+
+    prune();
+
+    assert.ok(markers['bb1'], 'relaying repeater should remain');
+    assert.ok(!markers['bb1']._staleDimmed, 'relaying repeater should not be dimmed');
   });
 
   test('node count does not grow unbounded with repeated ADVERTs', () => {
@@ -3171,6 +3255,97 @@ console.log('\n=== packets.js: savedTimeWindowMin defaults ===');
   });
 }
 
+// ===== Packets page: observer filter in grouped mode (issue #1748) =====
+{
+  console.log('\n--- Observer filter — grouped vs. flat mode (#1748) ---');
+
+  // Load the REAL applyObserverFilter from packets.js via sandbox, rather
+  // than testing a hand-copied reimplementation of its logic. Per #1748 PR
+  // review (kent-beck): a test that only checks a copy doesn't fail if the
+  // actual production function regresses. Mirrors the same loadInCtx
+  // pattern used below for _calcVisibleRange.
+  const obsFilterCtx = makeSandbox();
+  obsFilterCtx.registerPage = (name, handlers) => {};
+  obsFilterCtx.onWS = () => {};
+  obsFilterCtx.offWS = () => {};
+  obsFilterCtx.api = () => Promise.resolve({});
+  obsFilterCtx.window.getParsedPath = () => [];
+  obsFilterCtx.window.getParsedDecoded = () => ({});
+  loadInCtx(obsFilterCtx, 'public/packets.js');
+  const applyObserverFilter = obsFilterCtx.window._packetsTestAPI.applyObserverFilter;
+
+  // A transmission the server correctly returned for observer "B" (it was
+  // one of several observers of this hash) but whose displayed
+  // "representative" observer is "A" (longest path) — exactly the shape
+  // QueryGroupedPackets returns. `_children` is undefined, matching the
+  // state on initial load (only fetched lazily on expand/obs-sort-change).
+  const groupedRowRepresentativeNotFiltered = {
+    hash: 'hash1', observer_id: 'A', observer_count: 3, _children: undefined,
+  };
+  // A single-observer transmission whose only observer is NOT in the filter —
+  // must still be excluded (it genuinely wasn't observed by the filtered
+  // observer; the server wouldn't have returned it in the first place, but
+  // the client function must not accidentally let everything through).
+  const groupedRowGenuinelyExcludedByServer = {
+    hash: 'hash2', observer_id: 'C', observer_count: 1, _children: undefined,
+  };
+  // A flat/expanded-mode row: single observation, own observer_id.
+  const flatRowMatching = { hash: 'hash3', observer_id: 'B' };
+  const flatRowNonMatching = { hash: 'hash4', observer_id: 'A' };
+  // A flat/expanded-mode row with already-loaded children, only one of
+  // which matches — the pre-existing children-aware fallback path.
+  const flatRowWithMatchingChild = {
+    hash: 'hash5', observer_id: 'A',
+    _children: [{ observer_id: 'A' }, { observer_id: 'B' }],
+  };
+
+  test('grouped mode: keeps a multi-observer row whose representative is not the filtered observer (#1748 core bug)', () => {
+    const result = applyObserverFilter([groupedRowRepresentativeNotFiltered], { observer: 'B' }, true, false);
+    assert.strictEqual(result.length, 1, 'server already guaranteed observer B saw this transmission');
+  });
+
+  test('grouped mode: does not need _children to keep a valid server-filtered row', () => {
+    // The defining regression: _children is undefined (not yet fetched),
+    // and observer_id (the representative) does not match — pre-fix this
+    // returned zero rows.
+    const result = applyObserverFilter([groupedRowRepresentativeNotFiltered], { observer: 'B' }, true, false);
+    assert.strictEqual(result.length, 1);
+  });
+
+  test('grouped mode: passes through rows unfiltered (server EXISTS filter is authoritative)', () => {
+    // The client no longer second-guesses the server in grouped mode at all —
+    // this row would never have been returned by the server if observer C
+    // weren't a match, so the client trusts it.
+    const result = applyObserverFilter([groupedRowGenuinelyExcludedByServer], { observer: 'B' }, true, false);
+    assert.strictEqual(result.length, 1, 'grouped mode does not re-filter; server already applied the correct filter');
+  });
+
+  test('flat mode: keeps a row whose own observer_id matches', () => {
+    const result = applyObserverFilter([flatRowMatching], { observer: 'B' }, false, false);
+    assert.strictEqual(result.length, 1);
+  });
+
+  test('flat mode: excludes a row whose own observer_id does not match and has no children', () => {
+    const result = applyObserverFilter([flatRowNonMatching], { observer: 'B' }, false, false);
+    assert.strictEqual(result.length, 0);
+  });
+
+  test('flat mode: falls back to matching children when representative does not match', () => {
+    const result = applyObserverFilter([flatRowWithMatchingChild], { observer: 'B' }, false, false);
+    assert.strictEqual(result.length, 1, 'observer B is among the already-loaded children');
+  });
+
+  test('hashOnly bypasses the observer filter entirely (pinned-hash view)', () => {
+    const result = applyObserverFilter([groupedRowGenuinelyExcludedByServer, flatRowNonMatching], { observer: 'B' }, true, true);
+    assert.strictEqual(result.length, 2, 'hashOnly must return every row unfiltered, matching renderTableRows()');
+  });
+
+  test('no observer filter set: all rows pass through unchanged', () => {
+    const result = applyObserverFilter([groupedRowGenuinelyExcludedByServer, flatRowNonMatching], {}, false, false);
+    assert.strictEqual(result.length, 2);
+  });
+}
+
 // ===== Packets page: virtual scroll infrastructure =====
 {
   console.log('\nPackets page — virtual scroll:');
@@ -4557,19 +4732,25 @@ console.log('\n=== app.js: favorites ===');
     assert.deepStrictEqual(ctx.getFavorites(), ['pk2']);
   });
 
+  // #1648 replaced the ★/☆ literals with Phosphor sprite refs; these assert the
+  // sprite ids rather than the old glyphs, which the repo-wide emoji scan
+  // (test-issue-1648-m6-final-sweep.js) now forbids from coming back.
   test('favStar returns filled star for favorite', () => {
     ctx.localStorage.setItem('meshcore-favorites', '["pk1"]');
     const html = ctx.favStar('pk1');
-    assert.ok(html.includes('★'));
-    assert.ok(html.includes('on'));
+    assert.ok(html.includes('#ph-star-fill'), 'expected the filled star sprite, got: ' + html);
+    assert.ok(html.includes('class="fav-star  on"'), 'expected the on class, got: ' + html);
+    assert.ok(html.includes('aria-pressed="true"'), 'expected aria-pressed=true, got: ' + html);
     assert.ok(html.includes('Remove from favorites'));
   });
 
   test('favStar returns empty star for non-favorite', () => {
     ctx.localStorage.setItem('meshcore-favorites', '[]');
     const html = ctx.favStar('pk1');
-    assert.ok(html.includes('☆'));
-    assert.ok(!html.includes(' on'));
+    assert.ok(html.includes('#ph-star"'), 'expected the outline star sprite, got: ' + html);
+    assert.ok(!html.includes('#ph-star-fill'), 'must not use the filled sprite, got: ' + html);
+    assert.ok(!/class="fav-star[^"]*\bon\b/.test(html), 'must not carry the on class, got: ' + html);
+    assert.ok(html.includes('aria-pressed="false"'), 'expected aria-pressed=false, got: ' + html);
     assert.ok(html.includes('Add to favorites'));
   });
 

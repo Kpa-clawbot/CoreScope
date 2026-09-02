@@ -2613,11 +2613,28 @@
             return window.MC_isVisibleHop(h && h.prefix ? String(h.prefix) : '');
           });
         }
+        // #1784 — path trust threshold: check whether ALL hops in a path
+        // are below the configured minimum hash bytes for mapping.
+        function _pathHopsBelowTrust(hops) {
+          if (typeof window === 'undefined' || !window.MC_meetsPathTrust) return false;
+          if (!hops || !hops.length) return false;
+          for (var i = 0; i < hops.length; i++) {
+            if (window.MC_meetsPathTrust(hops[i] && hops[i].prefix ? String(hops[i].prefix) : '')) return false;
+          }
+          return true;
+        }
         function renderPathList(paths) {
           return paths.map(p => {
             const filteredHops = _filterHopObjs(p.hops || []);
             if (!filteredHops.length) {
-              return `<div style="padding:3px 0;font-size:11px;line-height:1.4;color:var(--text-muted)">— (1-byte filtered) <span style="color:var(--text-muted)">(${p.count}×)</span></div>`;
+              // #1784 — distinguish between "all 1-byte filtered" and
+              // "all below trust threshold" for the fallback message.
+              var _msg = '1-byte filtered';
+              if (_pathHopsBelowTrust(p.hops || [])) {
+                var _tt = (window.MC_getPathTrustThreshold ? window.MC_getPathTrustThreshold() : 1);
+                _msg = _tt + '-byte trust threshold (pathTrust.minHashBytesForMapping: ' + _tt + ')';
+              }
+              return `<div style="padding:3px 0;font-size:11px;line-height:1.4;color:var(--text-muted)">— (${_msg}) <span style="color:var(--text-muted)">(${p.count}×)</span></div>`;
             }
             const chain = filteredHops.map(h => {
               const isThis = h.pubkey === n.public_key || (h.prefix && n.public_key.toLowerCase().startsWith(h.prefix.toLowerCase()));
@@ -3068,7 +3085,12 @@
 
   // Prune nodes not seen within their role's health threshold.
   // API-loaded nodes (_fromAPI) are dimmed instead of removed — matches static map behavior.
-  // WS-only nodes (dynamically added from ADVERTs) are removed to prevent memory leaks.
+  // #1598: infra nodes (repeater/room) are ALWAYS dimmed, never deleted —
+  // a dimmed marker still tells operators "infrastructure exists here,
+  // advert stale", whereas deletion silently rewrites the map. Staleness
+  // itself is relay-aware via getNodeStatus(node) (max of advert-based
+  // freshness and last_relayed for infra).
+  // Remaining WS-only non-infra nodes are removed to prevent memory leaks.
   function pruneStaleNodes() {
     var now = Date.now();
     var pruned = false;
@@ -3077,17 +3099,18 @@
       if (!n) continue;
       var lastSeen = n._liveSeen || (n.last_heard ? new Date(n.last_heard).getTime() : null) || (n.last_seen ? new Date(n.last_seen).getTime() : null);
       if (lastSeen == null) continue;
-      var status = window.getNodeStatus ? getNodeStatus(n.role || 'unknown', lastSeen) : 'active';
+      var status = window.getNodeStatus ? getNodeStatus(n) : 'active';
+      var isInfra = n.role === 'repeater' || n.role === 'room';
       var marker = nodeMarkers[key];
       if (status === 'stale') {
-        if (n._fromAPI) {
+        if (n._fromAPI || isInfra) {
           // API-loaded nodes: dim instead of removing (consistent with static map)
           if (marker && !marker._staleDimmed) {
             marker._staleDimmed = true;
             _liveSetMarkerOpacity(marker, 0.35);
           }
         } else {
-          // WS-only nodes: remove to prevent unbounded memory growth
+          // WS-only non-infra nodes: remove to prevent unbounded memory growth
           if (marker) {
             if (nodesLayer) {
               try { nodesLayer.removeLayer(marker); } catch (e) { }

@@ -30,7 +30,6 @@ func newChannelTestStore(packets []*StoreTx) *PacketStore {
 		spIndex:       make(map[string]int),
 		spTxIndex:     make(map[string][]*StoreTx),
 		advertPubkeys: make(map[string]int),
-		lastSeenTouched: make(map[string]time.Time),
 		clockSkew:     NewClockSkewEngine(),
 	}
 	ps.byPayloadType[5] = packets

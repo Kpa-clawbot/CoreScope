@@ -364,9 +364,6 @@ type PacketStore struct {
 	// Updated incrementally during Load/Ingest/Evict — avoids JSON parsing in GetPerfStoreStats.
 	advertPubkeys map[string]int // pubkey → number of advert packets referencing it
 
-	// Debounce map for touchRelayLastSeen: pubkey → last time we wrote last_seen to DB.
-	// Limits DB writes to at most 1 per node per 5 minutes.
-	lastSeenTouched map[string]time.Time
 
 	// Resolved path membership index: xxhash → []txID (forward) and txID → []hashes (reverse).
 	// Replaces per-StoreTx/StoreObs ResolvedPath []*string field (#800).
@@ -669,7 +666,6 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig, cacheTTLs ...map[string]inte
 		spIndex:       make(map[string]int, 4096),
 		spTxIndex:     make(map[string][]*StoreTx, 4096),
 		advertPubkeys:   make(map[string]int),
-		lastSeenTouched: make(map[string]time.Time),
 		clockSkew:       NewClockSkewEngine(),
 		useResolvedPathIndex: true,
 		areaNodeCache:      make(map[string]map[string]bool),
@@ -1745,31 +1741,6 @@ func (s *PacketStore) addToByNode(tx *StoreTx, pubkey string) bool {
 	return isNew
 }
 
-// touchRelayLastSeen updates last_seen in the DB for relay nodes that appear
-// in resolved paths. Debounced to at most 1 write per node per 5 minutes.
-// resolvedPubkeys is the pre-extracted list from the decode window.
-// Must be called under s.mu write lock (reads/writes lastSeenTouched).
-func (s *PacketStore) touchRelayLastSeen(resolvedPubkeys []string, now time.Time) {
-	if s.db == nil || len(resolvedPubkeys) == 0 {
-		return
-	}
-	const debounceInterval = 5 * time.Minute
-
-	ts := now.UTC().Format(time.RFC3339)
-	seen := make(map[string]bool, len(resolvedPubkeys))
-	for _, pk := range resolvedPubkeys {
-		if pk == "" || seen[pk] {
-			continue
-		}
-		seen[pk] = true
-		if last, ok := s.lastSeenTouched[pk]; ok && now.Sub(last) < debounceInterval {
-			continue
-		}
-		if err := s.db.TouchNodeLastSeen(pk, ts); err == nil {
-			s.lastSeenTouched[pk] = now
-		}
-	}
-}
 
 // trackAdvertPubkey increments the advertPubkeys refcount for ADVERT packets.
 // Must be called under s.mu write lock.
@@ -1798,8 +1769,8 @@ func (s *PacketStore) untrackAdvertPubkey(tx *StoreTx) {
 	if tx.PayloadType == nil || *tx.PayloadType != PayloadADVERT || tx.DecodedJSON == "" {
 		return
 	}
-	var d map[string]interface{}
-	if json.Unmarshal([]byte(tx.DecodedJSON), &d) != nil {
+	d := tx.ParsedDecoded()
+	if d == nil {
 		return
 	}
 	pk := ""
@@ -2086,7 +2057,7 @@ func (s *PacketStore) GetStoreStats() (*Stats, error) {
 			`SELECT
 				(SELECT COUNT(*) FROM nodes WHERE last_seen > ?) AS active_nodes,
 				(SELECT COUNT(*) FROM nodes) AS all_nodes,
-				(SELECT COUNT(*) FROM observers) AS observers`,
+				(SELECT COUNT(*) FROM observers WHERE inactive IS NULL OR inactive = 0) AS observers`,
 			sevenDaysAgo,
 		).Scan(&st.TotalNodes, &st.TotalNodesAllTime, &st.TotalObservers)
 	}()
@@ -2731,10 +2702,8 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 	// carmack #1) — one Load per ingest call, not one per row.
 	cachedGraph := s.graph.Load()
 
-	// Decode-window tracking: resolved pubkeys per-tx for touchRelayLastSeen,
-	// and resolved paths per-obs for broadcast/persist.
-	var broadcastRP map[int][]*string           // obsID → resolved path (for broadcast/persist)
-	allResolvedPKs := make(map[int][]string)    // txID → all resolved pubkeys (for touchRelayLastSeen)
+	// Decode-window tracking: resolved paths per-obs for broadcast/persist.
+	var broadcastRP map[int][]*string // obsID → resolved path (for broadcast/persist)
 
 	hopsSeen := make(map[string]bool) // reused across observations; cleared per use
 
@@ -2825,11 +2794,6 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				}
 				broadcastRP[*r.obsID] = rpForBroadcast
 			}
-			// Collect resolved pubkeys per-tx for touchRelayLastSeen
-			if len(resolvedPubkeys) > 0 {
-				allResolvedPKs[r.txID] = append(allResolvedPKs[r.txID], resolvedPubkeys...)
-			}
-
 			tx.Observations = append(tx.Observations, obs)
 			tx.obsKeys[dk] = true
 			if obs.ObserverID != "" && !tx.observerSet[obs.ObserverID] {
@@ -2855,14 +2819,6 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 	// Pick best observation for new transmissions
 	for _, tx := range broadcastTxs {
 		pickBestObservation(tx)
-	}
-
-	// Phase 2 of #660: update last_seen in DB for relay nodes seen in resolved_path.
-	now := time.Now()
-	for txID := range broadcastTxs {
-		if pks, ok := allResolvedPKs[txID]; ok {
-			s.touchRelayLastSeen(pks, now)
-		}
 	}
 
 	// Incrementally update precomputed subpath index with new transmissions
@@ -2916,9 +2872,14 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			},
 		}
 		if tx.DecodedJSON != "" {
-			var payload map[string]interface{}
-			if json.Unmarshal([]byte(tx.DecodedJSON), &payload) == nil {
-				decoded["payload"] = payload
+			if payload := tx.ParsedDecoded(); payload != nil {
+				// Copy the cached map so broadcast consumers cannot mutate
+				// the shared cache or cause a data race (#1871 review).
+				cp := make(map[string]interface{}, len(payload))
+				for k, v := range payload {
+					cp[k] = v
+				}
+				decoded["payload"] = cp
 			}
 		}
 		// For TRACE packets, decode the full packet to include path.hopsCompleted
@@ -3189,9 +3150,14 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 			},
 		}
 		if tx.DecodedJSON != "" {
-			var payload map[string]interface{}
-			if json.Unmarshal([]byte(tx.DecodedJSON), &payload) == nil {
-				decoded["payload"] = payload
+			if payload := tx.ParsedDecoded(); payload != nil {
+				// Copy the cached map so broadcast consumers cannot mutate
+				// the shared cache or cause a data race (#1871 review).
+				cp := make(map[string]interface{}, len(payload))
+				for k, v := range payload {
+					cp[k] = v
+				}
+				decoded["payload"] = cp
 			}
 		}
 		// For TRACE packets, decode the full packet to include path.hopsCompleted
@@ -3737,8 +3703,8 @@ func (s *PacketStore) computeNodeHomeRegions() map[string]string {
 			continue
 		}
 
-		var d map[string]interface{}
-		if json.Unmarshal([]byte(tx.DecodedJSON), &d) != nil {
+		d := tx.ParsedDecoded()
+		if d == nil {
 			continue
 		}
 		pk, _ := d["pubKey"].(string)
@@ -3781,9 +3747,25 @@ func (s *PacketStore) computeNodeHomeRegions() map[string]string {
 }
 
 // enrichObs returns a map with observation fields + transmission fields.
+// Looks up the transmission in s.byTxID itself — safe only when the caller
+// already holds s.mu (directly, or via a defer'd RLock spanning the call).
+// Callers that snapshot observations under RLock and then release it before
+// iterating (e.g. handleObserverAnalytics, #1830) must use enrichObsWithTx
+// with a tx pointer resolved during that same snapshot instead.
 func (s *PacketStore) enrichObs(obs *StoreObs) map[string]interface{} {
-	tx := s.byTxID[obs.TransmissionID]
+	return s.enrichObsWithTx(obs, s.byTxID[obs.TransmissionID])
+}
 
+// enrichObsWithTx is enrichObs with the transmission pointer already
+// resolved by the caller, instead of looking it up in s.byTxID here. #1830:
+// s.byTxID is guarded by s.mu (writes from ingest/eviction); reading it
+// without holding at least RLock races with those writers — Go maps can
+// panic with "concurrent map read and map write" during a rehash, not just
+// fail under -race. Callers that need to read byTxID after releasing their
+// RLock (to keep JSON decode / enrichment off the hot lock, per #1481)
+// should resolve the *StoreTx for each observation during their RLock-held
+// snapshot and pass it in here.
+func (s *PacketStore) enrichObsWithTx(obs *StoreObs, tx *StoreTx) map[string]interface{} {
 	m := map[string]interface{}{
 		"id":            obs.ID,
 		"timestamp":     strOrNil(obs.Timestamp),
@@ -4651,8 +4633,7 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 		// Must mirror indexByNode: process decoded JSON fields AND resolved_path pubkeys.
 		evictedFromNode := make(map[string]bool)
 		if tx.DecodedJSON != "" {
-			var decoded map[string]interface{}
-			if json.Unmarshal([]byte(tx.DecodedJSON), &decoded) == nil {
+			if decoded := tx.ParsedDecoded(); decoded != nil {
 				for _, field := range []string{"pubKey", "destPubKey", "srcPubKey"} {
 					if v, ok := decoded[field].(string); ok && v != "" {
 						if hashes, ok := s.nodeHashes[v]; ok {
@@ -5009,8 +4990,7 @@ func computeDistancesForTx(tx *StoreTx, nodeByPk map[string]*nodeInfo, repeaterS
 
 	var senderNode *nodeInfo
 	if tx.DecodedJSON != "" {
-		var dec map[string]interface{}
-		if json.Unmarshal([]byte(tx.DecodedJSON), &dec) == nil {
+		if dec := tx.ParsedDecoded(); dec != nil {
 			if pk, ok := dec["pubKey"].(string); ok && pk != "" {
 				senderNode = nodeByPk[pk]
 			}
@@ -8030,8 +8010,7 @@ func (s *PacketStore) computeAnalyticsHashSizes(region, area string) map[string]
 		var advertPK, advertName string
 		var advertParsed bool
 		if tx.PayloadType != nil && *tx.PayloadType == PayloadADVERT && tx.DecodedJSON != "" {
-			var d map[string]interface{}
-			if json.Unmarshal([]byte(tx.DecodedJSON), &d) == nil {
+			if d := tx.ParsedDecoded(); d != nil {
 				if v, ok := d["pubKey"].(string); ok {
 					advertPK = v
 				} else if v, ok := d["public_key"].(string); ok {
@@ -8084,14 +8063,17 @@ func (s *PacketStore) computeAnalyticsHashSizes(region, area string) map[string]
 					name = pk
 				}
 			}
-			// Skip zero-hop direct adverts for hash_size — the
-			// path byte is locally generated and unreliable.
-			// Still count the packet and update lastSeen.
-			isZeroHop := (routeType == uint64(RouteDirect) || routeType == uint64(RouteTransportDirect)) && (actualPathByte&0x3F) == 0
+			// Skip zero-hop direct adverts whose path byte is entirely zero —
+			// there the size bits were wiped by the sender and say nothing.
+			// A non-zero byte with a zero hop count (0x40 / 0x80) is a
+			// deliberate size declaration; keep it. Same rule as
+			// computeNodeHashSizeInfo. Skipped packets still count and still
+			// update lastSeen.
+			isUndeclaredZeroHop := (routeType == uint64(RouteDirect) || routeType == uint64(RouteTransportDirect)) && actualPathByte == 0x00
 			if byNode[pk] == nil {
 				role := nodeRoleByPK[pk] // empty if unknown
 				initHS := hashSize
-				if isZeroHop {
+				if isUndeclaredZeroHop {
 					initHS = 0
 				}
 				byNode[pk] = map[string]interface{}{
@@ -8101,7 +8083,7 @@ func (s *PacketStore) computeAnalyticsHashSizes(region, area string) map[string]
 				}
 			}
 			byNode[pk]["packets"] = byNode[pk]["packets"].(int) + 1
-			if !isZeroHop {
+			if !isUndeclaredZeroHop {
 				byNode[pk]["hashSize"] = hashSize
 			}
 			byNode[pk]["lastSeen"] = tx.FirstSeen
@@ -8342,8 +8324,7 @@ func (s *PacketStore) computeHashCollisions(region, area string) map[string]inte
 				}
 				// Collect node public keys from advert packets
 				if tx.DecodedJSON != "" {
-					var d map[string]interface{}
-					if json.Unmarshal([]byte(tx.DecodedJSON), &d) == nil {
+					if d := tx.ParsedDecoded(); d != nil {
 						if pk, ok := d["pubKey"].(string); ok && pk != "" {
 							regionNodePKs[pk] = true
 						}
@@ -8699,15 +8680,21 @@ func (s *PacketStore) computeNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
 		if err != nil {
 			continue
 		}
-		// Direct zero-hop adverts (route types 2 and 3) use path byte 0x00
-		// locally and can misreport multibyte hash mode as 1-byte.
-		if (routeType == RouteDirect || routeType == RouteTransportDirect) && (pathByte&0x3F) == 0 {
+		// Direct zero-hop adverts carry no path, so the hop count is 0. Whether
+		// the SIZE bits are meaningful depends on the sender: firmware that
+		// predates meshcore-dev/MeshCore#3293 does `path_len = 0`, wiping the
+		// whole byte including the two size bits, so 0x00 says nothing about
+		// the node's path.hash.mode. A sender that writes the size through
+		// setPathHashSizeAndCount() emits 0x40 / 0x80 with a zero hop count —
+		// that is a deliberate declaration and the only way those bits can be
+		// non-zero here. Skip on the byte's content, not on the route type.
+		if (routeType == RouteDirect || routeType == RouteTransportDirect) && pathByte == 0x00 {
 			continue
 		}
 		hs := int((pathByte>>6)&0x3) + 1
 
-		var d map[string]interface{}
-		if json.Unmarshal([]byte(tx.DecodedJSON), &d) != nil {
+		d := tx.ParsedDecoded()
+		if d == nil {
 			continue
 		}
 		pk := ""
@@ -9645,8 +9632,8 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 		if p.DecodedJSON == "" {
 			continue
 		}
-		var decoded map[string]interface{}
-		if json.Unmarshal([]byte(p.DecodedJSON), &decoded) != nil {
+		decoded := p.ParsedDecoded()
+		if decoded == nil {
 			continue
 		}
 		type candidate struct{ key, name string }

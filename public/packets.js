@@ -2732,6 +2732,47 @@
     });
   }
 
+  // applyObserverFilter decides which already-loaded packets remain visible
+  // under the current observer filter. Extracted into its own function
+  // (rather than left inline in renderTableRows) specifically so tests can
+  // exercise the real production logic instead of a hand-copied
+  // reimplementation — see #1748 PR review (kent-beck): a test that only
+  // checks a copy of this logic doesn't fail if this function regresses.
+  //
+  // #1748: In grouped mode, the server already filters transmissions
+  // correctly (buildTransmissionWhere emits an EXISTS subquery over ALL
+  // observations of the transmission, not just the displayed one — see
+  // cmd/server/db.go). Each row's `observer_id` here is only the
+  // *representative* observer chosen for display (longest observed path),
+  // which may legitimately differ from the observer that satisfied the
+  // filter. Re-filtering client-side against that single representative —
+  // with `_children` still unpopulated at this point (only fetched lazily
+  // on row-expand or observer-sort-change) — hid every multi-observer
+  // transmission whose representative happened not to be one of the
+  // selected observers. In practice this meant a transmission only stayed
+  // visible when the filtered observer was also the one with the longest
+  // path (which is why the report described it as "works only for
+  // whichever observer logged it first" in dense meshes, where
+  // longest-path and earliest-seen correlate). The server-side EXISTS
+  // filter is authoritative for grouped rows, so no client-side
+  // re-filtering is needed or correct here.
+  //
+  // Flat/expanded mode (groupByHash === false) has no such
+  // representative-vs-actual mismatch — buildPacketWhere filters each
+  // observation row by its own exact observer_id — but we keep the
+  // defensive re-filter for that path since it costs nothing and guards
+  // against any future flat-mode server change.
+  function applyObserverFilter(displayPackets, filters, groupByHash, hashOnly) {
+    if (hashOnly || !filters.observer) return displayPackets;
+    if (groupByHash) return displayPackets;
+    const obsIds = new Set(filters.observer.split(','));
+    return displayPackets.filter(p => {
+      if (obsIds.has(p.observer_id)) return true;
+      if (p._children) return p._children.some(c => obsIds.has(String(c.observer_id)));
+      return false;
+    });
+  }
+
   async function renderTableRows() {
     const tbody = document.getElementById('pktBody');
     if (!tbody) return;
@@ -2774,14 +2815,7 @@
       const types = filters.type.split(',').map(Number);
       displayPackets = displayPackets.filter(p => types.includes(p.payload_type));
     }
-    if (!hashOnly && filters.observer) {
-      const obsIds = new Set(filters.observer.split(','));
-      displayPackets = displayPackets.filter(p => {
-        if (obsIds.has(p.observer_id)) return true;
-        if (p._children) return p._children.some(c => obsIds.has(String(c.observer_id)));
-        return false;
-      });
-    }
+    displayPackets = applyObserverFilter(displayPackets, filters, groupByHash, hashOnly);
 
     // Packet Filter Language
     const pfCount = document.getElementById('packetFilterCount');
@@ -2895,8 +2929,16 @@
     if (decoded.type === 'PATH') return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-shuffle"/></svg> ${decoded.srcHash?.slice(0,8) || '?'} → ${decoded.destHash?.slice(0,8) || '?'}`;
     // Requests/responses (encrypted)
     if (decoded.type === 'REQ' || decoded.type === 'RESPONSE') return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> ${decoded.srcHash?.slice(0,8) || '?'} → ${decoded.destHash?.slice(0,8) || '?'}`;
-    // Anonymous requests
-    if (decoded.type === 'ANON_REQ') return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> anon → ${decoded.destHash?.slice(0,8) || '?'}`;
+    // Anonymous requests (#1864). ANON_REQ carries the sender's FULL 32-byte
+    // pubkey (not a 1-byte srcHash) — resolve it to a node name if known,
+    // else show the first 8 hex chars. Legacy ephemeralPubKey fallback covers
+    // packets decoded before the backend field was renamed to srcPubKey.
+    if (decoded.type === 'ANON_REQ') {
+      const anonKey = decoded.srcPubKey || decoded.ephemeralPubKey || '';
+      const anonName = (anonKey && window.HopResolver && HopResolver.nameForKey) ? HopResolver.nameForKey(anonKey) : null;
+      const anonSrc = anonName ? escapeHtml(anonName) : (anonKey ? escapeHtml(anonKey.slice(0, 8)) : 'anon');
+      return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> ${anonSrc} → ${decoded.destHash?.slice(0,8) || '?'}`;
+    }
     // CONTROL packets (#1802) — DISCOVER_REQ / DISCOVER_RESP body fields,
     // decoded by cmd/ingestor/decoder.go decodeControl(). Wire format:
     //   firmware/src/Mesh.cpp:69
@@ -3252,7 +3294,10 @@
     // src→dst). Replaces the prior byte-count title that buried packet
     // identity behind a byte counter (#1458 P0-A).
     const semanticSummary = getDetailPreview(decoded);
-    const srcLabel = decoded.sender || decoded.name || (decoded.srcHash ? decoded.srcHash.slice(0,8) : null) || (decoded.pubKey ? decoded.pubKey.slice(0,8) + '…' : null);
+    // #1864: ANON_REQ has no srcHash — its sender is the full srcPubKey.
+    const _anonKey = decoded.srcPubKey || decoded.ephemeralPubKey || '';
+    const _anonName = (_anonKey && window.HopResolver && HopResolver.nameForKey) ? HopResolver.nameForKey(_anonKey) : null;
+    const srcLabel = decoded.sender || decoded.name || (decoded.srcHash ? decoded.srcHash.slice(0,8) : null) || _anonName || (_anonKey ? _anonKey.slice(0,8) + '…' : null) || (decoded.pubKey ? decoded.pubKey.slice(0,8) + '…' : null);
     const dstLabel = decoded.recipient || (decoded.destHash ? decoded.destHash.slice(0,8) : null);
     const srcDstHtml = (srcLabel || dstLabel)
       ? `<div class="detail-srcdst">${escapeHtml(srcLabel || '?')} <span class="arrow">→</span> ${escapeHtml(dstLabel || (decoded.channel ? '#' + decoded.channel : '?'))}</div>`
@@ -3570,6 +3615,19 @@
       if (decoded.pathData) {
         rows += fieldRow(off + 9, 'Route Hops', decoded.pathData.toUpperCase(), pathHops.length + ' hop(s)');
       }
+    } else if (decoded.type === 'ANON_REQ') {
+      // #1864: ANON_REQ layout differs from REQ — the source is a FULL 32-byte
+      // pubkey, not a 1-byte srcHash, so MAC/data sit at off+33/off+35 (not
+      // off+2/off+4). Decode explicitly and resolve the key to a node link.
+      const anonKey = decoded.srcPubKey || decoded.ephemeralPubKey || '';
+      const anonName = (anonKey && window.HopResolver && HopResolver.nameForKey) ? HopResolver.nameForKey(anonKey) : null;
+      rows += fieldRow(off, 'Dest Hash (1B)', decoded.destHash || '', '');
+      const anonKeyCell = anonKey
+        ? `<a href="#/nodes/${encodeURIComponent(anonKey)}" class="hop-link ${anonName ? 'hop-named' : ''}" data-hop-link="true">${anonName ? escapeHtml(anonName) : truncate(anonKey, 24)}</a>`
+        : '—';
+      rows += fieldRow(off + 1, 'Src Public Key (32B)', anonKeyCell, anonName ? '' : 'sender pubkey (unresolved)');
+      rows += fieldRow(off + 33, 'MAC (2B)', decoded.mac || '', '');
+      rows += fieldRow(off + 35, 'Encrypted Data', truncate(decoded.encryptedData || '', 30), '');
     } else if (decoded.destHash !== undefined) {
       rows += fieldRow(off, 'Dest Hash (1B)', decoded.destHash || '', '');
       rows += fieldRow(off + 1, 'Src Hash (1B)', decoded.srcHash || '', '');
@@ -3892,6 +3950,7 @@
       buildFlatRowHtml,
       _calcVisibleRange,
       buildPacketsParams,
+      applyObserverFilter,
       renderTableRows,
       _setPackets: function(p) { packets = p; },
       _setFilter: function(k, v) { filters[k] = v; },
