@@ -451,12 +451,18 @@ test('[kb #1] anti-tautology: tests reference the actual production files (not i
 
 console.log('\n=== #1784: path trust threshold ===');
 
-test('#1784: MC_getPathTrustThreshold default is 2 (operator-confirmed)', () => {
+test('#1784: MC_getPathTrustThreshold defaults to 1 (backward compatible)', () => {
+  // Deliberately 1, matching DefaultMinHashBytesForMapping in
+  // internal/packetpath/trust.go. There is no UI control for this threshold —
+  // it is config.json only and needs a restart — so a stricter default would
+  // silently tighten every instance on upgrade with nothing in the UI saying
+  // why the neighbour graph shrank. Operators opt in with
+  // pathTrust.minHashBytesForMapping: 2 or 3.
   const ctx = makeSandbox();
   load(ctx, 'public/hop-filter.js');
   delete ctx.window.PATH_TRUST;
-  assert.strictEqual(ctx.window.MC_getPathTrustThreshold(), 2,
-    'default path trust threshold must be 2 (operator-confirmed, excludes 1-byte)');
+  assert.strictEqual(ctx.window.MC_getPathTrustThreshold(), 1,
+    'default path trust threshold must be 1 so an upgrade changes nothing');
 });
 
 test('#1784: MC_getPathTrustThreshold reads window.PATH_TRUST', () => {

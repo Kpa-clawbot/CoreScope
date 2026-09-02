@@ -56,7 +56,7 @@
     if (typeof window !== 'undefined' && typeof window.PATH_TRUST === 'number') {
       return window.PATH_TRUST;
     }
-    return 2;
+    return 1;
   }
 
   // #1784 — whether a hop meets the server-side path trust threshold.

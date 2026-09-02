@@ -20,7 +20,19 @@ type TrustConfig struct {
 	MinHashBytesForMapping int `json:"minHashBytesForMapping,omitempty"`
 }
 
-const DefaultMinHashBytesForMapping = 2
+// DefaultMinHashBytesForMapping is the backward-compatible default: every
+// prefix length counts as mapping evidence, exactly as before #1784.
+//
+// It is deliberately 1 rather than the stricter 2. There is no UI control for
+// this threshold, it can only be changed in config.json and that needs a
+// restart, so shipping 2 would tighten every instance on upgrade with nothing
+// in the UI explaining why the neighbour graph shrank. Measured on a live
+// network, 56% of path-hop observations carry a 1-byte prefix and 41% of
+// repeaters use a 1-byte hash, so that is not a marginal change. Issue #1784's
+// own first acceptance criterion is that the default stays backward compatible.
+//
+// Operators who want the stricter behaviour set minHashBytesForMapping: 2 or 3.
+const DefaultMinHashBytesForMapping = 1
 
 const MaxHashBytes = 3
 

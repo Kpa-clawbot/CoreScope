@@ -3,13 +3,16 @@ package packetpath
 import "testing"
 
 func TestMeetsPathTrust_DefaultThreshold(t *testing.T) {
-	// nil cfg → DefaultMinHashBytesForMapping (2): 0-byte and 1-byte excluded.
+	// nil cfg → DefaultMinHashBytesForMapping (1): everything is trusted, which
+	// is the pre-#1784 behaviour. This test is the guard on that promise: if the
+	// default is ever raised, upgrading instances silently lose a large share of
+	// their mapping evidence with no UI control to opt back out.
 	cases := []struct {
 		prefixBytes int
 		want        bool
 	}{
-		{0, false},
-		{1, false},
+		{0, true},
+		{1, true},
 		{2, true},
 		{3, true},
 	}
@@ -49,17 +52,25 @@ func TestMeetsPathTrust_Exclude1Byte(t *testing.T) {
 }
 
 func TestMeetsPathTrust_ZeroValueOptIn(t *testing.T) {
-	// A zero-value MinHashBytesForMapping (unset) must fall back to default (2),
-	// so bucket-0 and 1-byte prefixes fail; 2-byte and above pass.
-	cfg := &TrustConfig{}
-	if MeetsPathTrust(1, cfg) {
-		t.Errorf("MeetsPathTrust(1, %+v) = true, want false (unset uses default=2, 1-byte excluded)", cfg)
+	// A zero-value MinHashBytesForMapping (the JSON field absent) must resolve to
+	// DefaultMinHashBytesForMapping, not be read as an explicit opt-in to some
+	// other number. Asserted against the constant rather than against a literal
+	// so this keeps testing the property if the default is ever changed again.
+	unset := &TrustConfig{}
+	if got := unset.MinHashBytesOrDefault(); got != DefaultMinHashBytesForMapping {
+		t.Errorf("unset.MinHashBytesOrDefault() = %d, want %d", got, DefaultMinHashBytesForMapping)
 	}
-	if MeetsPathTrust(0, cfg) {
-		t.Errorf("MeetsPathTrust(0, %+v) = true, want false (bucket-0 excluded at default threshold)", cfg)
+	// And it must behave identically to a config that names the default outright.
+	explicit := &TrustConfig{MinHashBytesForMapping: DefaultMinHashBytesForMapping}
+	for _, prefixBytes := range []int{0, 1, 2, 3} {
+		if MeetsPathTrust(prefixBytes, unset) != MeetsPathTrust(prefixBytes, explicit) {
+			t.Errorf("prefixBytes=%d: unset and explicit-default disagree", prefixBytes)
+		}
 	}
-	if !MeetsPathTrust(2, cfg) {
-		t.Errorf("MeetsPathTrust(2, %+v) = false, want true (2-byte passes at default threshold)", cfg)
+	// An explicit stricter setting must still be honoured over the default.
+	strict := &TrustConfig{MinHashBytesForMapping: 2}
+	if MeetsPathTrust(1, strict) {
+		t.Error("MeetsPathTrust(1, minBytes=2) = true, want false — an explicit setting must win")
 	}
 }
 
