@@ -48,6 +48,13 @@
   let _lastAnimFrame = 0;
   let nodeActivity = {};
   let recentPaths = [];
+  // Heat is a `let` mirror like the seven below it, NOT an inline
+  // localStorage read: wireLiveControls() restores from it and its onChange
+  // writes it back, so it stays fresh across SPA remounts the same way the
+  // others do (destroy() never resets these; the onChange assignment is what
+  // keeps them honest). Nothing else writes 'meshcore-live-heatmap' -- checked
+  // across the tree, the only writer is the heat onChange below.
+  let heatEnabled = localStorage.getItem('meshcore-live-heatmap') !== 'false';
   let showGhostHops = localStorage.getItem('live-ghost-hops') !== 'false';
   let realisticPropagation = localStorage.getItem('live-realistic-propagation') === 'true';
   let showOnlyFavorites = localStorage.getItem('live-favorites-only') === 'true';
@@ -1100,6 +1107,137 @@
     startReplay();
   }
 
+
+  /** Restore persisted state and attach listeners for the eight persisted
+   * live-view toggles: heat, inferred hops, realistic, colour-by-hash,
+   * favourites, multibyte-only, matrix and rain.
+   *
+   * MUST be called synchronously right after `app.innerHTML`, before init()
+   * awaits anything. Until it runs, those checkboxes are in the DOM, clickable
+   * and inert: a click flips `.checked` and no handler fires, so nothing
+   * reaches localStorage. For the seven toggles whose state is assigned
+   * unconditionally the click is then also undone by `.checked = <pref>`; for
+   * the heat toggle, whose old code only assigned on an explicit stored value,
+   * a first-time visitor's click survived visually but still did nothing.
+   *
+   * Restoring state and attaching listeners must therefore never sit behind an
+   * await. Applying the visible EFFECT of a restored setting may -- that is
+   * applyLiveControlEffects(), called once the map and markers exist.
+   *
+   * NOT covered here, deliberately: #liveAudioToggle still has the same
+   * dead window (MeshAudio persists 'live-audio-enabled' to localStorage and
+   * the toggle is wired after the awaits), but its restore path runs through
+   * MeshAudio.restore() and a whole slider panel, so moving it is its own
+   * change. #liveGeoFilterToggle stays hidden until its own config fetch
+   * resolves, so its window is not user-reachable. The fullscreen control is
+   * not in this template at all -- Leaflet creates it after the map exists.
+   */
+  function wireLiveControls() {
+    // One table instead of eight near-identical blocks, so the lookup is
+    // guarded in exactly one place and the restore/persist halves of each
+    // toggle sit next to each other instead of hundreds of lines apart.
+    const TOGGLES = [
+      { id: 'liveHeatToggle',
+        restore: () => heatEnabled,
+        onChange: (v) => {
+          heatEnabled = v;
+          localStorage.setItem('meshcore-live-heatmap', heatEnabled);
+          if (v) showHeatMap(); else hideHeatMap();
+        } },
+      { id: 'liveGhostToggle',
+        restore: () => showGhostHops,
+        onChange: (v) => {
+          showGhostHops = v;
+          localStorage.setItem('live-ghost-hops', showGhostHops);
+        } },
+      { id: 'liveRealisticToggle',
+        restore: () => realisticPropagation,
+        onChange: (v) => {
+          realisticPropagation = v;
+          localStorage.setItem('live-realistic-propagation', realisticPropagation);
+        } },
+      { id: 'liveColorHashToggle',
+        restore: () => colorByHash,
+        onChange: (v) => {
+          colorByHash = v;
+          localStorage.setItem('meshcore-color-packets-by-hash', colorByHash);
+          window.dispatchEvent(new Event('storage'));
+        } },
+      { id: 'liveFavoritesToggle',
+        restore: () => showOnlyFavorites,
+        onChange: (v) => {
+          showOnlyFavorites = v;
+          localStorage.setItem('live-favorites-only', showOnlyFavorites);
+          applyFavoritesFilter();
+        } },
+      { id: 'liveMultibyteToggle',
+        restore: () => multibyteOnly,
+        onChange: (v) => {
+          multibyteOnly = v;
+          localStorage.setItem('live-multibyte-only', multibyteOnly);
+          rebuildFeedList();
+        } },
+      { id: 'liveMatrixToggle',
+        restore: () => matrixMode,
+        onChange: (v) => {
+          matrixMode = v;
+          localStorage.setItem('live-matrix-mode', matrixMode);
+          applyMatrixTheme(matrixMode);
+          syncHeatToggleToMatrix(matrixMode);
+        } },
+      { id: 'liveMatrixRainToggle',
+        restore: () => matrixRain,
+        onChange: (v) => {
+          matrixRain = v;
+          localStorage.setItem('live-matrix-rain', matrixRain);
+          if (matrixRain) startMatrixRain(); else stopMatrixRain();
+        } },
+    ];
+    for (const t of TOGGLES) {
+      // Guarded: this now runs before `L.map()`, so an unguarded throw would
+      // reject init() and leave the whole route blank. (The old inline blocks
+      // were unguarded too, but sat late in init(): a missing id cost the rest
+      // of the wiring from that point on, while the map, feed and WS survived.)
+      const el = document.getElementById(t.id);
+      if (!el) { console.warn('[live] control not found: ' + t.id); continue; }
+      el.checked = t.restore();
+      el.addEventListener('change', (e) => t.onChange(e.target.checked));
+    }
+    // The matrix<->heat interlock applies from the first paint too: with matrix
+    // stored ON the heat box would otherwise render checked and enabled until
+    // applyLiveControlEffects() runs after the awaits. Safe before the map
+    // exists -- hideHeatMap() guards on heatLayer, which is unset here.
+    syncHeatToggleToMatrix(matrixMode);
+  }
+
+  /** Matrix mode owns the heat map: while it is on, heat is off and its toggle
+   * is disabled. Extracted because the same block ran both in the matrix change
+   * handler and at load; two copies of an interlock drift.
+   */
+  function syncHeatToggleToMatrix(on) {
+    const ht = document.getElementById('liveHeatToggle');
+    if (on) {
+      hideHeatMap();
+      if (ht) { ht.checked = false; ht.disabled = true; }
+    } else if (ht) {
+      // Recover from stale state: heat stays usable whenever matrix is off.
+      ht.disabled = false;
+    }
+  }
+
+  /** Apply the effects of the restored control state.
+   *
+   * Split out of wireLiveControls() because these need state that init() builds
+   * behind its awaits: applyMatrixTheme() recolours the existing `nodeMarkers`,
+   * and the heat-map calls act on `heatLayer`/`map`. Deliberately NOT a
+   * prerequisite for the controls being usable.
+   */
+  function applyLiveControlEffects() {
+    applyMatrixTheme(matrixMode);
+    syncHeatToggleToMatrix(matrixMode);
+    if (matrixRain) startMatrixRain();
+  }
+
   async function init(app) {
     app.innerHTML = `
       <div class="live-page">
@@ -1248,6 +1386,9 @@
           <div id="vcrPrompt" class="vcr-prompt hidden"></div>
         </div>
       </div>`;
+
+    // Controls are wired BEFORE any await below -- see wireLiveControls().
+    wireLiveControls();
 
     // Fetch configurable map defaults (#115)
     let mapCenter = [37.45, -122.0];
@@ -1541,7 +1682,13 @@
     AreaFilter.init(document.getElementById('liveAreaFilter'));
     AreaFilter.onChange(function () { loadNodes(); });
     await loadNodes();
-    showHeatMap();
+    // Build the heat layer only when the user wants it. It used to be built
+    // unconditionally and torn down ~270 lines later, which was invisible
+    // (no await in between, so no frame composited) but meant that any throw
+    // between the two calls left the layer visible AGAINST the stored
+    // preference. Matrix-forced hiding is deliberately not repeated here --
+    // that interlock lives in syncHeatToggleToMatrix() and only there.
+    if (heatEnabled) showHeatMap();
     connectWS();
     initResizeHandler();
     initVCRHeightTracker();
@@ -1569,53 +1716,6 @@
     }
 
     map.on('zoomend', rescaleMarkers);
-
-    // Heat map toggle — persist in localStorage
-    const liveHeatEl = document.getElementById('liveHeatToggle');
-    if (localStorage.getItem('meshcore-live-heatmap') === 'false') { liveHeatEl.checked = false; hideHeatMap(); }
-    else if (localStorage.getItem('meshcore-live-heatmap') === 'true') { liveHeatEl.checked = true; }
-    liveHeatEl.addEventListener('change', (e) => {
-      localStorage.setItem('meshcore-live-heatmap', e.target.checked);
-      if (e.target.checked) showHeatMap(); else hideHeatMap();
-    });
-
-    const ghostToggle = document.getElementById('liveGhostToggle');
-    ghostToggle.checked = showGhostHops;
-    ghostToggle.addEventListener('change', (e) => {
-      showGhostHops = e.target.checked;
-      localStorage.setItem('live-ghost-hops', showGhostHops);
-    });
-
-    const realisticToggle = document.getElementById('liveRealisticToggle');
-    realisticToggle.checked = realisticPropagation;
-    realisticToggle.addEventListener('change', (e) => {
-      realisticPropagation = e.target.checked;
-      localStorage.setItem('live-realistic-propagation', realisticPropagation);
-    });
-
-    const colorHashToggle = document.getElementById('liveColorHashToggle');
-    colorHashToggle.checked = colorByHash;
-    colorHashToggle.addEventListener('change', (e) => {
-      colorByHash = e.target.checked;
-      localStorage.setItem('meshcore-color-packets-by-hash', colorByHash);
-      window.dispatchEvent(new Event('storage'));
-    });
-
-    const favoritesToggle = document.getElementById('liveFavoritesToggle');
-    favoritesToggle.checked = showOnlyFavorites;
-    favoritesToggle.addEventListener('change', (e) => {
-      showOnlyFavorites = e.target.checked;
-      localStorage.setItem('live-favorites-only', showOnlyFavorites);
-      applyFavoritesFilter();
-    });
-
-    const multibyteToggle = document.getElementById('liveMultibyteToggle');
-    multibyteToggle.checked = multibyteOnly;
-    multibyteToggle.addEventListener('change', (e) => {
-      multibyteOnly = e.target.checked;
-      localStorage.setItem('live-multibyte-only', multibyteOnly);
-      rebuildFeedList();
-    });
 
     // Region filter (#1045): dropdown of observer IATA regions
     (function initLiveRegionFilter() {
@@ -1856,40 +1956,7 @@
       } catch (e) { /* no geo filter configured */ }
     })();
 
-    const matrixToggle = document.getElementById('liveMatrixToggle');
-    matrixToggle.checked = matrixMode;
-    matrixToggle.addEventListener('change', (e) => {
-      matrixMode = e.target.checked;
-      localStorage.setItem('live-matrix-mode', matrixMode);
-      applyMatrixTheme(matrixMode);
-      if (matrixMode) {
-        hideHeatMap();
-        const ht = document.getElementById('liveHeatToggle');
-        if (ht) { ht.checked = false; ht.disabled = true; }
-      } else {
-        const ht = document.getElementById('liveHeatToggle');
-        if (ht) { ht.disabled = false; }
-      }
-    });
-    applyMatrixTheme(matrixMode);
-    if (matrixMode) {
-      hideHeatMap();
-      const ht = document.getElementById('liveHeatToggle');
-      if (ht) { ht.checked = false; ht.disabled = true; }
-    } else {
-      // Ensure heat toggle is enabled if matrix mode is off (recover from stale state)
-      const ht = document.getElementById('liveHeatToggle');
-      if (ht) { ht.disabled = false; }
-    }
-
-    const rainToggle = document.getElementById('liveMatrixRainToggle');
-    rainToggle.checked = matrixRain;
-    rainToggle.addEventListener('change', (e) => {
-      matrixRain = e.target.checked;
-      localStorage.setItem('live-matrix-rain', matrixRain);
-      if (matrixRain) startMatrixRain(); else stopMatrixRain();
-    });
-    if (matrixRain) startMatrixRain();
+    applyLiveControlEffects();
 
     // Audio toggle
     const audioToggle = document.getElementById('liveAudioToggle');
@@ -4252,6 +4319,11 @@
   }
 
   function showHeatMap() {
+    // The change handlers are attached before L.map() exists (wireLiveControls
+    // runs ahead of the awaits), so a click during page load can land here with
+    // `map` still unset. Today that is saved by nodeData being empty at that
+    // point; make the guard explicit instead of accidental.
+    if (!map) return;
     if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
     const points = [];
     Object.values(nodeData).forEach(n => {
