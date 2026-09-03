@@ -621,6 +621,18 @@ jobs:
   # ───────────────────────────────────────────────────────────────
   # 3. Build & Publish Docker Image
   # ───────────────────────────────────────────────────────────────
+  # The five GHCR steps below publish on a push to master (the :edge image) and
+  # on a tag ref. The tag half is not decoration: release-fast-path.yml re-tags
+  # :edge to :vX.Y.Z when the :edge revision label matches the tagged commit,
+  # and dispatches THIS workflow when it does not. That fallback previously
+  # produced no image at all, because a workflow_dispatch is not a push and
+  # every publishing step was gated on github.event_name == 'push'. It built
+  # locally, reported success, and pushed nothing.
+  #
+  # That went unnoticed until v3.10.0, where the tagged commit was
+  # documentation-only. Documentation-only commits skip this workflow (see the
+  # paths-ignore above), so no :edge image was ever built for it, the label
+  # comparison failed, and the fallback ran for the first time.
   build-and-publish:
     name: "🏗️ Build & Publish Docker Image"
     needs: [e2e-test]
@@ -653,15 +665,15 @@ jobs:
           echo "Built Go staging image ✅"
 
       - name: Set up Docker Buildx
-        if: github.event_name == 'push'
+        if: ${{ github.event_name == 'push' || startsWith(github.ref, 'refs/tags/v') }}
         uses: docker/setup-buildx-action@v3
 
       - name: Set up QEMU (arm64 runtime stage)
-        if: github.event_name == 'push'
+        if: ${{ github.event_name == 'push' || startsWith(github.ref, 'refs/tags/v') }}
         uses: docker/setup-qemu-action@v3
 
       - name: Log in to GHCR
-        if: github.event_name == 'push'
+        if: ${{ github.event_name == 'push' || startsWith(github.ref, 'refs/tags/v') }}
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -669,7 +681,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract Docker metadata
-        if: github.event_name == 'push'
+        if: ${{ github.event_name == 'push' || startsWith(github.ref, 'refs/tags/v') }}
         id: docker-meta
         uses: docker/metadata-action@v5
         with:
@@ -682,7 +694,7 @@ jobs:
             type=edge,branch=master
 
       - name: Build and push to GHCR
-        if: github.event_name == 'push'
+        if: ${{ github.event_name == 'push' || startsWith(github.ref, 'refs/tags/v') }}
         uses: docker/build-push-action@v6
         with:
           context: .
