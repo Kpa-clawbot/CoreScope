@@ -2,9 +2,11 @@
 
 ## [Unreleased]
 
-## [3.10.0] - 2026-09-03
+## [3.10.1] - 2026-09-04
 
-See [docs/release-notes/v3.10.0.md](docs/release-notes/v3.10.0.md) for the full notes. 111 commits since v3.9.2, all substantive (no coverage bumps in this range).
+v3.10.0 was tagged and withdrawn before any container image or release asset was published; nothing was ever available under that number. Same release, next number.
+
+See [docs/release-notes/v3.10.1.md](docs/release-notes/v3.10.1.md) for the full notes. 111 commits since v3.9.2, all substantive (no coverage bumps in this range).
 
 ### Highlights
 - **CARTO basemaps need an API key now** (#1919, #1926) - unauthenticated tiles come back watermarked with HTTP 200, so this failed silently. Set `map.tiles.providers.carto.key`. **Operator action required.**
@@ -21,6 +23,10 @@ See [docs/release-notes/v3.10.0.md](docs/release-notes/v3.10.0.md) for the full 
 ### Retention
 - New `observerPurgeDays` for hard-deleting long-inactive observers, disabled by default (#1886).
 - New windows for the opt-in client tables: `retention.clientRxDays`, `clientRxObsDays`, `clientRfDays`.
+
+### CI
+- Documentation-only changes skip the pipeline, with root-level markdown covered by the filter (#1949, #1950).
+- Container images are published on a tag ref and not only on a `push` event, so the release fallback in `release-fast-path.yml` can actually publish (#1951).
 
 ## [3.9.1] — 2026-06-12
 
