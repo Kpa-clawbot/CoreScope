@@ -246,9 +246,12 @@ if [[ -z "$count" ]]; then
     echo "  ❌ retain-failed: TARGET_DB_PATH unset and no ADMIN_API_TOKEN — cannot probe"
     fails=$((fails+1))
   else
-    # TEST_PUBKEY is hex-validated → safe to inline single-quoted in SQL.
+    # TEST_PUBKEY is hex-validated above, but escape any embedded single
+    # quotes for the SQL string literal too — defense in depth against
+    # copy-paste reuse of this pattern without the earlier hex check.
     # Container/db path also validated; printf %q for defense in depth.
-    q="SELECT COUNT(*) FROM transmissions WHERE from_node = '$TEST_PUBKEY';"
+    sql_safe_pubkey="${TEST_PUBKEY//\'/\'\'}"
+    q="SELECT COUNT(*) FROM transmissions WHERE from_node = '$sql_safe_pubkey';"
     qq=$(printf %q "$q")
     if ! count=$(ssh_t "docker exec $(printf %q "$TARGET_CONTAINER") sqlite3 $(printf %q "$TARGET_DB_PATH") $qq" 2>/dev/null); then
       count=$(ssh_t "sqlite3 $(printf %q "$TARGET_DB_PATH") $qq" 2>/dev/null || echo "")
