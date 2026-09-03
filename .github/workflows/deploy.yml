@@ -10,6 +10,13 @@ name: CI/CD Pipeline
 # paths-ignore skips only when EVERY changed file matches, so a PR that
 # touches both code and docs still runs the full pipeline.
 #
+# The pattern is '**.md', not '**/*.md'. GitHub's own example for "any file
+# with this extension" is '**.js' with no slash; '**/*.md' reads as requiring
+# a directory component, which would leave root-level files such as
+# CHANGELOG.md and README.md uncovered. Since paths-ignore only skips when
+# EVERY changed file matches, one uncovered root file is enough to run the
+# whole pipeline.
+#
 # Caveat if required status checks are ever enabled on master: a skipped
 # workflow never reports, so a docs-only PR would wait forever on a check
 # that cannot arrive. At that point this needs to become a change-detection
@@ -19,13 +26,13 @@ on:
   push:
     branches: [master]
     paths-ignore:
-      - '**/*.md'
+      - '**.md'
       - 'docs/**'
       - 'LICENSE'
   pull_request:
     branches: [master]
     paths-ignore:
-      - '**/*.md'
+      - '**.md'
       - 'docs/**'
       - 'LICENSE'
   workflow_dispatch:
