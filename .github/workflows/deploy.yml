@@ -1,10 +1,33 @@
 name: CI/CD Pipeline
 
+# Documentation-only changes skip this pipeline entirely. Nothing under
+# docs/ or any *.md file is read at build or test time: no Go or JS source
+# opens one, and /api/docs serves Swagger generated from openapi.go, not
+# from docs/. Running a 16-minute Playwright suite to prove that a
+# markdown file does not break the browser only pushed the runs that do
+# matter further down a queue that has been hours deep.
+#
+# paths-ignore skips only when EVERY changed file matches, so a PR that
+# touches both code and docs still runs the full pipeline.
+#
+# Caveat if required status checks are ever enabled on master: a skipped
+# workflow never reports, so a docs-only PR would wait forever on a check
+# that cannot arrive. At that point this needs to become a change-detection
+# job with conditional heavy jobs, not a trigger filter. There are no
+# required checks on master today.
 on:
   push:
     branches: [master]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
   pull_request:
     branches: [master]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
   workflow_dispatch:
 
 permissions:
