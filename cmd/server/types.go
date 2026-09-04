@@ -388,11 +388,6 @@ type PacketDetailResponse struct {
 	Observations     []ObservationResp `json:"observations,omitempty"`
 }
 
-type PacketIngestResponse struct {
-	ID      int64       `json:"id"`
-	Decoded interface{} `json:"decoded"`
-}
-
 type DecodeResponse struct {
 	Decoded interface{} `json:"decoded"`
 }

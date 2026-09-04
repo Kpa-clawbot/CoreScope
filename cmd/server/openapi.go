@@ -66,7 +66,6 @@ func routeDescriptions() map[string]routeMeta {
 				{Name: "search", Description: "Full-text search", Type: "string"},
 				{Name: "groupByHash", Description: "Group duplicate packets by hash", Type: "boolean"},
 			}},
-		"POST /api/packets":              {Summary: "Ingest a packet", Description: "Submit a raw packet for decoding and storage.", Tag: "packets", Auth: true},
 		"GET /api/packets/{id}":          {Summary: "Get packet detail", Tag: "packets"},
 		"GET /api/packets/timestamps":    {Summary: "Get packet timestamp ranges", Tag: "packets"},
 		"POST /api/packets/observations": {Summary: "Batch submit observations", Description: "Submit multiple observer sightings for existing packets.", Tag: "packets"},
