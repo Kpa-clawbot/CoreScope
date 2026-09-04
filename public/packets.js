@@ -3449,7 +3449,11 @@
               id: o.id, hash: pkt.hash, raw: o.raw_hex || pkt.raw_hex,
               _ts: new Date(o.timestamp).getTime(),
               decoded: { header: { payloadTypeName: typeName }, payload: oDec, path: { hops: oPath } },
-              snr: o.snr, rssi: o.rssi, observer: obsName(o.observer_id)
+              snr: o.snr, rssi: o.rssi, observer: obsName(o.observer_id),
+              // #1900: carry the id itself, not just the resolved name. The Live
+              // region filter matches on observer_id, so without it the replay
+              // silently renders nothing whenever a region is selected.
+              observer_id: o.observer_id, observer_iata: o.observer_iata
             });
           }
         } else {
@@ -3457,7 +3461,8 @@
             id: pkt.id, hash: pkt.hash, raw: pkt.raw_hex,
             _ts: new Date(pkt.timestamp).getTime(),
             decoded: { header: { payloadTypeName: typeName }, payload: decoded, path: { hops: pathHops } },
-            snr: pkt.snr, rssi: pkt.rssi, observer: obsName(pkt.observer_id)
+            snr: pkt.snr, rssi: pkt.rssi, observer: obsName(pkt.observer_id),
+            observer_id: pkt.observer_id, observer_iata: pkt.observer_iata
           });
         }
         sessionStorage.setItem('replay-packet', JSON.stringify(replayPackets));

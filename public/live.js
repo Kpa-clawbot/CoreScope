@@ -845,7 +845,13 @@
       resolved_path: pkt.resolved_path,
       _ts: new Date(pkt.timestamp || pkt.created_at).getTime(),
       decoded: { header: { payloadTypeName: typeName }, payload: raw, path: { hops } },
-      snr: pkt.snr, rssi: pkt.rssi, observer: pkt.observer_name
+      snr: pkt.snr, rssi: pkt.rssi, observer: pkt.observer_name,
+      // #1898: the region filter matches on observer_id (packetMatchesRegion,
+      // line ~85). Without it every replayed packet has observer_id undefined,
+      // so the filter skips them all and drops the whole group. observer_iata
+      // is carried too so obsIataBadgeHtml does not have to fall back to the
+      // roster map for replayed packets.
+      observer_id: pkt.observer_id, observer_iata: pkt.observer_iata
     };
   }
 
