@@ -1715,12 +1715,19 @@ func (db *DB) GetChannels(region ...string) ([]map[string]interface{}, error) {
 			args = append(args, code)
 		}
 		regionPlaceholder := strings.Join(placeholders, ",")
+		// #1899: the sample_json subquery is region-scoped too, so its placeholders
+		// appear FIRST in the statement (it sits in the SELECT list, ahead of the
+		// WHERE). Bind the codes twice, subquery set first.
+		args = append(append(make([]interface{}, 0, len(regionCodes)*2), args...), args...)
 		if db.isV3 {
 			querySQL = fmt.Sprintf(`SELECT t.channel_hash,
 					COUNT(*) AS msg_count,
 					MAX(t.first_seen) AS last_activity,
 					(SELECT t2.decoded_json FROM transmissions t2
+					 JOIN observations o2 ON o2.transmission_id = t2.id
+					 LEFT JOIN observers obs2 ON obs2.rowid = o2.observer_idx
 					 WHERE t2.channel_hash = t.channel_hash AND t2.payload_type = 5
+					 AND obs2.rowid IS NOT NULL AND UPPER(TRIM(obs2.iata)) IN (%s)
 					 ORDER BY t2.first_seen DESC LIMIT 1) AS sample_json
 				FROM transmissions t
 				JOIN observations o ON o.transmission_id = t.id
@@ -1730,13 +1737,19 @@ func (db *DB) GetChannels(region ...string) ([]map[string]interface{}, error) {
 				AND t.channel_hash NOT LIKE 'enc_%%'
 				AND obs.rowid IS NOT NULL AND UPPER(TRIM(obs.iata)) IN (%s)
 				GROUP BY t.channel_hash
-				ORDER BY last_activity DESC`, regionPlaceholder)
+				ORDER BY last_activity DESC`, regionPlaceholder, regionPlaceholder)
 		} else {
 			querySQL = fmt.Sprintf(`SELECT t.channel_hash,
 					COUNT(*) AS msg_count,
 					MAX(t.first_seen) AS last_activity,
 					(SELECT t2.decoded_json FROM transmissions t2
+					 JOIN observations o2 ON o2.transmission_id = t2.id
 					 WHERE t2.channel_hash = t.channel_hash AND t2.payload_type = 5
+					 AND EXISTS (
+						SELECT 1 FROM observers obs2
+						WHERE obs2.id = o2.observer_id
+						AND UPPER(TRIM(obs2.iata)) IN (%s)
+					 )
 					 ORDER BY t2.first_seen DESC LIMIT 1) AS sample_json
 				FROM transmissions t
 				JOIN observations o ON o.transmission_id = t.id
@@ -1749,7 +1762,7 @@ func (db *DB) GetChannels(region ...string) ([]map[string]interface{}, error) {
 					AND UPPER(TRIM(obs.iata)) IN (%s)
 				)
 				GROUP BY t.channel_hash
-				ORDER BY last_activity DESC`, regionPlaceholder)
+				ORDER BY last_activity DESC`, regionPlaceholder, regionPlaceholder)
 		}
 	} else {
 		querySQL = `SELECT channel_hash,

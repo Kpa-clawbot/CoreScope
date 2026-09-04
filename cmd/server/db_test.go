@@ -2425,3 +2425,65 @@ func TestDetectSchemaV3AndV2(t *testing.T) {
 	}
 	db2.Close()
 }
+
+// #1899: the sidebar preview must come from the region being filtered on.
+//
+// GetChannels scoped msg_count and last_activity through observations/observers,
+// but the sample_json subquery that feeds lastMessage/lastSender did not join
+// either table. It therefore always returned the globally newest message on the
+// channel, so an operator filtering on their own region saw a preview line from
+// a message their observers never heard.
+func TestGetChannelsPreviewRespectsRegionFilter(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('obs1', 'Observer1', 'SJC')`)
+	db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('obs2', 'Observer2', 'SFO')`)
+
+	// One channel, seen in both regions. The SFO message is the newer one, so it
+	// is what an unscoped preview would show.
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('AA', 'hash1', '2026-01-15T10:00:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#shared","text":"Alice: heard in SJC","sender":"Alice"}', '#shared')`)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, timestamp)
+		VALUES (1, 1, 12.0, -90, 1736935200)`)
+
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('BB', 'hash2', '2026-01-15T10:05:00Z', 1, 5,
+		'{"type":"CHAN","channel":"#shared","text":"Bob: heard in SFO","sender":"Bob"}', '#shared')`)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, timestamp)
+		VALUES (2, 2, 14.0, -88, 1736935500)`)
+
+	sjc, err := db.GetChannels("SJC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sjc) != 1 {
+		t.Fatalf("expected 1 channel for SJC, got %d", len(sjc))
+	}
+	if got := sjc[0]["lastSender"]; got != "Alice" {
+		t.Errorf("preview sender = %v, want Alice: SJC must not be shown Bob's message, "+
+			"which only SFO heard", got)
+	}
+	if got := sjc[0]["lastMessage"]; got != "heard in SJC" {
+		t.Errorf("preview message = %v, want \"heard in SJC\"", got)
+	}
+
+	// The other direction, so the test cannot pass by always picking the oldest.
+	sfo, err := db.GetChannels("SFO")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sfo[0]["lastSender"]; got != "Bob" {
+		t.Errorf("preview sender = %v, want Bob for SFO", got)
+	}
+
+	// Unscoped still shows the globally newest, which was never in question.
+	all, err := db.GetChannels()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := all[0]["lastSender"]; got != "Bob" {
+		t.Errorf("unfiltered preview sender = %v, want Bob (the newest message)", got)
+	}
+}
