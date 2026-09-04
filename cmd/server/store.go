@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/meshcore-analyzer/mbcapqueue"
+	"golang.org/x/sync/singleflight"
 )
 
 // payloadTypeNames maps payload_type int → human-readable name (firmware-standard).
@@ -490,6 +491,12 @@ type PacketStore struct {
 	statsCacheTime time.Time
 	statsLastHour  int
 	statsLast24h   int
+	// #1910: collapses concurrent misses onto one query. Without it every
+	// in-flight request ran the observations scan itself the moment the cache
+	// expired, because the check above releases statsCacheMu before doing the
+	// work. With SetMaxOpenConns(4) and a page that fires five endpoints at
+	// once, that turned one scan into a queue of them.
+	statsSF singleflight.Group
 
 	// Test-only hook fired at the very start of loadBackgroundChunks
 	// (after the #1809 invariant check). Nil in production. Used by
@@ -2038,17 +2045,32 @@ func (s *PacketStore) GetStoreStats() (*Stats, error) {
 	oneHourAgo := time.Now().Add(-1 * time.Hour).Unix()
 	oneDayAgo := time.Now().Add(-24 * time.Hour).Unix()
 
-	// Serve observation counts from cache if fresh (avoids per-request full-table scan).
+	// Observation counts (#1910). Three cases, and only the cold one makes the
+	// caller wait:
+	//   fresh  — serve the cache.
+	//   stale  — serve the cache anyway and refresh once in the background. A
+	//            count that is half a minute old is not worth a page that hangs.
+	//   cold   — compute, but under singleflight, so N concurrent callers share
+	//            one scan instead of each running their own.
 	var obsFromCache bool
 	s.statsCacheMu.Lock()
-	if !s.statsCacheTime.IsZero() && time.Since(s.statsCacheTime) < 30*time.Second {
+	haveObsCache := !s.statsCacheTime.IsZero()
+	obsCacheFresh := haveObsCache && time.Since(s.statsCacheTime) < 30*time.Second
+	if haveObsCache {
 		st.PacketsLastHour = s.statsLastHour
 		st.PacketsLast24h = s.statsLast24h
-		obsFromCache = true
 	}
 	s.statsCacheMu.Unlock()
 
-	// Run node/observer counts and (if cache miss) observation counts concurrently.
+	switch {
+	case obsCacheFresh:
+		obsFromCache = true
+	case haveObsCache:
+		obsFromCache = true
+		go func() { _, _, _ = s.refreshObsCounts(oneHourAgo, oneDayAgo) }()
+	}
+
+	// Run node/observer counts and (if cold) observation counts concurrently.
 	var wg sync.WaitGroup
 	var nodeErr, obsErr error
 
@@ -2069,19 +2091,11 @@ func (s *PacketStore) GetStoreStats() (*Stats, error) {
 	if !obsFromCache {
 		go func() {
 			defer wg.Done()
-			obsErr = s.db.conn.QueryRow(
-				`SELECT
-					COALESCE(SUM(CASE WHEN timestamp > ? THEN 1 ELSE 0 END), 0),
-					COALESCE(SUM(CASE WHEN timestamp > ? THEN 1 ELSE 0 END), 0)
-				FROM observations WHERE timestamp > ?`,
-				oneHourAgo, oneDayAgo, oneDayAgo,
-			).Scan(&st.PacketsLastHour, &st.PacketsLast24h)
-			if obsErr == nil {
-				s.statsCacheMu.Lock()
-				s.statsLastHour = st.PacketsLastHour
-				s.statsLast24h = st.PacketsLast24h
-				s.statsCacheTime = time.Now()
-				s.statsCacheMu.Unlock()
+			lastHour, last24h, err := s.refreshObsCounts(oneHourAgo, oneDayAgo)
+			obsErr = err
+			if err == nil {
+				st.PacketsLastHour = lastHour
+				st.PacketsLast24h = last24h
 			}
 		}()
 	}
@@ -2095,6 +2109,42 @@ func (s *PacketStore) GetStoreStats() (*Stats, error) {
 	}
 
 	return st, nil
+}
+
+// refreshObsCounts runs the observations range scan for the last hour and the
+// last 24h, and writes the result into the stats cache.
+//
+// #1910: wrapped in singleflight. The cache check in GetStoreStats releases
+// statsCacheMu before doing the work, so every request that arrived while the
+// cache was expired used to run this scan itself. With SetMaxOpenConns(4) and a
+// page that fires stats, observers, nodes, channels and clock-skew at once, that
+// turned one scan into a queue of them: /stats was measured at 10-17s under
+// mixed load while staying under 70ms when it was the only endpoint being hit.
+// Now the second and later callers wait for the first one's result.
+func (s *PacketStore) refreshObsCounts(oneHourAgo, oneDayAgo int64) (int, int, error) {
+	v, err, _ := s.statsSF.Do("obs-counts", func() (interface{}, error) {
+		var lastHour, last24h int
+		if qErr := s.db.conn.QueryRow(
+			`SELECT
+				COALESCE(SUM(CASE WHEN timestamp > ? THEN 1 ELSE 0 END), 0),
+				COALESCE(SUM(CASE WHEN timestamp > ? THEN 1 ELSE 0 END), 0)
+			FROM observations WHERE timestamp > ?`,
+			oneHourAgo, oneDayAgo, oneDayAgo,
+		).Scan(&lastHour, &last24h); qErr != nil {
+			return nil, qErr
+		}
+		s.statsCacheMu.Lock()
+		s.statsLastHour = lastHour
+		s.statsLast24h = last24h
+		s.statsCacheTime = time.Now()
+		s.statsCacheMu.Unlock()
+		return [2]int{lastHour, last24h}, nil
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	pair := v.([2]int)
+	return pair[0], pair[1], nil
 }
 
 // GetPerfStoreStats returns packet store statistics for /api/perf.

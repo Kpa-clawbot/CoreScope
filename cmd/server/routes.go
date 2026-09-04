@@ -19,6 +19,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/meshcore-analyzer/prunequeue"
+	"golang.org/x/sync/singleflight"
 )
 
 // memBreakdownNote is the static accounting caveat attached to the opt-in
@@ -47,6 +48,11 @@ type Server struct {
 	statsMu       sync.Mutex
 	statsCache    *StatsResponse
 	statsCachedAt time.Time
+	// #1910: collapses concurrent rebuilds. The cache check below releases
+	// statsMu before building the response, so every request arriving while the
+	// 10s window was expired used to rebuild it in full, each running its own DB
+	// queries against a 4-connection pool.
+	statsSF singleflight.Group
 
 	// Guards s.cfg.GeoFilter — read by ingest/handler goroutines, written by PUT handler
 	cfgMu sync.RWMutex
@@ -780,66 +786,86 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 	s.statsMu.Unlock()
 
-	var stats *Stats
-	var err error
-	if s.store != nil {
-		stats, err = s.store.GetStoreStats()
-	} else {
-		stats, err = s.db.GetStats()
-	}
-	if err != nil {
-		writeError(w, 500, err.Error())
+	// #1910: one rebuild per expiry, not one per request. Everything below runs
+	// inside singleflight, so concurrent callers that miss the cache wait for the
+	// first one's response instead of each running the same DB queries against a
+	// 4-connection pool.
+	built, sfErr, _ := s.statsSF.Do("stats", func() (interface{}, error) {
+		// Re-check under the group: the winner may have just filled the cache.
+		s.statsMu.Lock()
+		if s.statsCache != nil && time.Since(s.statsCachedAt) < statsTTL {
+			cached := s.statsCache
+			s.statsMu.Unlock()
+			return cached, nil
+		}
+		s.statsMu.Unlock()
+
+		var stats *Stats
+		var err error
+		if s.store != nil {
+			stats, err = s.store.GetStoreStats()
+		} else {
+			stats, err = s.db.GetStats()
+		}
+		if err != nil {
+			return nil, err
+		}
+		counts := s.db.GetRoleCounts()
+
+		// Memory accounting (#832). storeDataMB is the in-store packet byte
+		// estimate (the old "trackedMB"); processRSSMB / goHeapInuseMB / goSysMB
+		// give ops the breakdown needed to reason about real RSS. All values
+		// share a single 1s-cached snapshot to amortize ReadMemStats cost.
+		var storeDataMB float64
+		if s.store != nil {
+			storeDataMB = s.store.trackedMemoryMB()
+		}
+		mem := s.getMemorySnapshot(storeDataMB)
+
+		resp := &StatsResponse{
+			TotalPackets:       stats.TotalPackets,
+			TotalTransmissions: &stats.TotalTransmissions,
+			TotalObservations:  stats.TotalObservations,
+			TotalNodes:         stats.TotalNodes,
+			TotalNodesAllTime:  stats.TotalNodesAllTime,
+			TotalObservers:     stats.TotalObservers,
+			PacketsLastHour:    stats.PacketsLastHour,
+			PacketsLast24h:     stats.PacketsLast24h,
+			Engine:             "go",
+			Version:            s.version,
+			Commit:             s.commit,
+			BuildTime:          s.buildTime,
+			Counts: RoleCounts{
+				Repeaters:  counts["repeaters"],
+				Rooms:      counts["rooms"],
+				Companions: counts["companions"],
+				Sensors:    counts["sensors"],
+			},
+			SignatureDrops:        s.db.GetSignatureDropCount(),
+			HashMigrationComplete: s.store != nil && s.store.hashMigrationComplete.Load(),
+
+			TrackedMB:     mem.StoreDataMB, // deprecated alias
+			StoreDataMB:   mem.StoreDataMB,
+			ProcessRSSMB:  mem.ProcessRSSMB,
+			GoHeapInuseMB: mem.GoHeapInuseMB,
+			GoSysMB:       mem.GoSysMB,
+
+			NeighborGraphCacheRebuildFailures: atomic.LoadUint64(&s.neighborGraphCacheRebuildFailures),
+		}
+
+		s.statsMu.Lock()
+		s.statsCache = resp
+		s.statsCachedAt = time.Now()
+		s.statsMu.Unlock()
+
+		return resp, nil
+	})
+	if sfErr != nil {
+		writeError(w, 500, sfErr.Error())
 		return
 	}
-	counts := s.db.GetRoleCounts()
 
-	// Memory accounting (#832). storeDataMB is the in-store packet byte
-	// estimate (the old "trackedMB"); processRSSMB / goHeapInuseMB / goSysMB
-	// give ops the breakdown needed to reason about real RSS. All values
-	// share a single 1s-cached snapshot to amortize ReadMemStats cost.
-	var storeDataMB float64
-	if s.store != nil {
-		storeDataMB = s.store.trackedMemoryMB()
-	}
-	mem := s.getMemorySnapshot(storeDataMB)
-
-	resp := &StatsResponse{
-		TotalPackets:       stats.TotalPackets,
-		TotalTransmissions: &stats.TotalTransmissions,
-		TotalObservations:  stats.TotalObservations,
-		TotalNodes:         stats.TotalNodes,
-		TotalNodesAllTime:  stats.TotalNodesAllTime,
-		TotalObservers:     stats.TotalObservers,
-		PacketsLastHour:    stats.PacketsLastHour,
-		PacketsLast24h:     stats.PacketsLast24h,
-		Engine:             "go",
-		Version:            s.version,
-		Commit:             s.commit,
-		BuildTime:          s.buildTime,
-		Counts: RoleCounts{
-			Repeaters:  counts["repeaters"],
-			Rooms:      counts["rooms"],
-			Companions: counts["companions"],
-			Sensors:    counts["sensors"],
-		},
-		SignatureDrops:        s.db.GetSignatureDropCount(),
-		HashMigrationComplete: s.store != nil && s.store.hashMigrationComplete.Load(),
-
-		TrackedMB:     mem.StoreDataMB, // deprecated alias
-		StoreDataMB:   mem.StoreDataMB,
-		ProcessRSSMB:  mem.ProcessRSSMB,
-		GoHeapInuseMB: mem.GoHeapInuseMB,
-		GoSysMB:       mem.GoSysMB,
-
-		NeighborGraphCacheRebuildFailures: atomic.LoadUint64(&s.neighborGraphCacheRebuildFailures),
-	}
-
-	s.statsMu.Lock()
-	s.statsCache = resp
-	s.statsCachedAt = time.Now()
-	s.statsMu.Unlock()
-
-	writeJSON(w, resp)
+	writeJSON(w, built.(*StatsResponse))
 }
 
 func (s *Server) handlePerf(w http.ResponseWriter, r *http.Request) {
