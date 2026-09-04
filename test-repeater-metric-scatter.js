@@ -81,8 +81,14 @@ assert(mapped[0].traffic === 0.5 && mapped[0].fav === true,
   'traffic_share_score is preferred and favorites are flagged');
 assert(mapped[0].bridge === 0.2 && mapped[0].relay1h === 1 && mapped[0].relay24h === 2 && mapped[0].adverts === 3,
   'bridge/relay/advert counts map onto their renamed point fields (advert_count → adverts)');
-assert(mapped[1].traffic === 0.07 && mapped[1].fav === false,
-  'missing traffic_share_score falls back to usefulness_score');
+// #1927: no fallback. usefulness_score is the #672 composite
+// (0.30*bridge + 0.25*coverage + ...), a different metric from the single
+// traffic axis, and substituting it put a composite under a column and an axis
+// that both promise share of non-advert traffic. A node carrying only the
+// composite now reads as unknown on that axis and is dropped from the plot by
+// the plottable filter, which is what #1927 asked for.
+assert(mapped[1].traffic === null && mapped[1].fav === false,
+  'a node with only usefulness_score has no traffic value; it must not be substituted');
 assert(mapped[2].traffic === null && mapped[2].bridge === null && mapped[2].relay1h === null,
   'rows without scores map to null (not 0/undefined) so plots can skip them');
 assert(mapped[3].name === 'NAMELESS0000',

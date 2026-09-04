@@ -2487,8 +2487,13 @@
         return age < th.degradedMs ? 'active' : age < th.silentMs ? 'degraded' : 'silent';
       }
       const pct = v => (v != null ? (v * 100).toFixed(1) + '%' : '—');
-      // #1456: prefer traffic_share_score, fall back to usefulness_score.
-      const trafficOf = n => (n.traffic_share_score != null ? n.traffic_share_score : (n.usefulness_score != null ? n.usefulness_score : null));
+      // #1927: no fallback to usefulness_score. They are different metrics:
+      // traffic_share_score is the single traffic axis, usefulness_score is the
+      // #672 composite (0.30*bridge + 0.25*coverage + ...), set separately at
+      // cmd/server/usefulness_composite.go:147 and :152. Substituting one for the
+      // other put a composite under a column and an axis that both promise share
+      // of non-advert traffic. A node without the metric now reads as unknown.
+      const trafficOf = n => (n.traffic_share_score != null ? n.traffic_share_score : null);
       function roleBadge(role) {
         // Route the unknown-role fallback through ROLE_COLORS.unknown (backed by
         // --mc-role-unknown / the shared Wong palette) instead of a hard-coded
@@ -2682,9 +2687,10 @@
   }
 
   // Map /api/nodes rows to plottable points. Pure and factored out of
-  // renderRepeaterMetricsTab so the repeater/room filter and the fallback
-  // chains (traffic_share_score → usefulness_score → null; name → pubkey
-  // prefix → '?') are unit-testable (#1760 review).
+  // renderRepeaterMetricsTab so the repeater/room filter and the name fallback
+  // (name → pubkey prefix → '?') are unit-testable (#1760 review). The traffic
+  // fallback to usefulness_score that used to be documented here was removed in
+  // #1927; see the note above trafficOf.
   function _toScatterPoints(nodes, favs) {
     return nodes
       .filter(n => n.role === 'repeater' || n.role === 'room')
@@ -2693,8 +2699,9 @@
         name: n.name || (n.public_key ? n.public_key.slice(0, 12) : '?'),
         role: n.role,
         fav: favs.has(n.public_key),
-        // #1456: prefer traffic_share_score, fall back to usefulness_score.
-        traffic: n.traffic_share_score != null ? n.traffic_share_score : (n.usefulness_score != null ? n.usefulness_score : null),
+        // #1927: see trafficOf above. A null drops the point from the scatter via
+        // the plottable filter, the same way a node with no bridge score is dropped.
+        traffic: n.traffic_share_score != null ? n.traffic_share_score : null,
         bridge: n.bridge_score != null ? n.bridge_score : null,
         relay1h: n.relay_count_1h != null ? n.relay_count_1h : null,
         relay24h: n.relay_count_24h != null ? n.relay_count_24h : null,
