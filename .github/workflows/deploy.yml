@@ -743,12 +743,11 @@ jobs:
   # ───────────────────────────────────────────────────────────────
   release-artifacts:
     name: "📦 Release Artifacts"
-    if: startsWith(github.ref, 'refs/tags/v')
     needs: [go-test, changes]
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    if: needs.changes.outputs.code == 'true'
+    if: startsWith(github.ref, 'refs/tags/v') && needs.changes.outputs.code == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
