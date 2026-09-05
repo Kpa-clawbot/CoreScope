@@ -10,6 +10,13 @@ const { spawnSync } = require('node:child_process');
 const read = name => fs.readFileSync(path.join(__dirname, '.github/workflows', name), 'utf8').replace(/\r/g, '');
 const fast = read('release-fast-path.yml');
 const deploy = read('deploy.yml');
+let bash = process.env.BASH_PATH || 'bash';
+if (!process.env.BASH_PATH && process.platform === 'win32') {
+  // Prefer Git Bash over Windows' WSL launcher; CI uses the native Linux bash.
+  const git = spawnSync('git', ['--exec-path'], { encoding: 'utf8' });
+  const gitBash = path.resolve((git.stdout || '').trim(), '../../../bin/bash.exe');
+  if (git.status === 0 && fs.existsSync(gitBash)) bash = gitBash;
+}
 
 // Extract known YAML blocks, retaining the actual expressions and shell code.
 // Full YAML syntax is separately checked by actionlint; no YAML dependency here.
@@ -72,7 +79,7 @@ function runSteps(source, context, edge, mutateFails = false) {
       const script = value(step, 'run', 8);
       if (!script || !evaluate(value(step, 'if', 8), context)) continue;
       fs.writeFileSync(output, '');
-      const result = spawnSync(process.env.BASH_PATH || 'bash', ['--noprofile', '--norc', '-e', '-o', 'pipefail'], {
+      const result = spawnSync(bash, ['--noprofile', '--norc', '-e', '-o', 'pipefail'], {
         input: stubs + '\n' + expand(script, context), cwd: dir, encoding: 'utf8', timeout: 15000,
         env: {
           ...process.env, GITHUB_REF: context.github.ref, GITHUB_SHA: context.github.sha,
@@ -148,6 +155,9 @@ for (const [ref, event] of [['refs/heads/master', 'push'], ['refs/heads/master',
   assert.equal(Boolean(evaluate(value(publishing, 'if', 8), context(ref, event))), event === 'push', `${event}: GHCR publishing`);
 }
 assert.equal(route(context(), 'go-test')['release-artifacts'].result, 'skipped', 'failed Go validation must block release');
+const dispatchInput = block(deploy, 'images_published', 6);
+assert.equal(value(dispatchInput, 'type', 8), 'boolean', 'dispatch flag must retain boolean semantics');
+assert.equal(value(dispatchInput, 'default', 8), 'false', 'manual and fallback dispatches must build images by default');
 
 const release = block(deploy, 'release-artifacts', 2);
 const builds = runSteps(release, context(), null).commands.filter(command => command[0] === 'go');
