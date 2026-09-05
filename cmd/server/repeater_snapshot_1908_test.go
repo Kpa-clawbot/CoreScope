@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"runtime"
 	"testing"
 	"time"
 )
@@ -69,25 +68,43 @@ func TestRelayComputeConcurrentEviction1908(t *testing.T) {
 	store := relaySnapshotStore1908(30000, 256, 1)
 	key := fmt.Sprintf("%064x", 0)
 	want := len(store.byPathHop[key])
-	result := make(chan map[string]RepeaterRelayInfo, 1)
-	go func() { result <- store.computeRepeaterRelayInfoMap(24) }()
+	const readers = 2
+	start := make(chan struct{})
+	result := make(chan map[string]RepeaterRelayInfo, readers)
+	for i := 0; i < readers; i++ {
+		go func() {
+			<-start
+			result <- store.computeRepeaterRelayInfoMap(24)
+		}()
+	}
+	evicted := make(chan int, 1)
+	go func() {
+		<-start
+		evicted <- store.RunEviction()
+	}()
+	close(start)
 
-	// Observe the actual reader holding RLock, then queue eviction behind it.
-	// Eviction and the unlocked aggregation must safely use separate buckets.
-	deadline := time.Now().Add(5 * time.Second)
-	for store.mu.TryLock() {
-		store.mu.Unlock()
-		if time.Now().After(deadline) {
-			t.Fatal("relay computation did not acquire the snapshot lock")
+	// Either lock order is valid, including on a single CPU. The separate
+	// snapshot-preservation test deterministically checks bucket ownership;
+	// this exercises real concurrent callers without assuming a scheduler order.
+	deadline := time.After(30 * time.Second)
+	select {
+	case got := <-evicted:
+		if got != 1 {
+			t.Fatalf("evicted %d transmissions, want 1", got)
 		}
-		runtime.Gosched()
+	case <-deadline:
+		t.Fatal("eviction did not finish")
 	}
-	if got := store.RunEviction(); got != 1 {
-		t.Fatalf("evicted %d transmissions, want 1", got)
-	}
-	got := <-result
-	if got[key].RelayCount24h != want {
-		t.Errorf("in-flight relay snapshot count = %d, want %d", got[key].RelayCount24h, want)
+	for i := 0; i < readers; i++ {
+		select {
+		case got := <-result:
+			if count := got[key].RelayCount24h; count != want && count != want-1 {
+				t.Errorf("relay snapshot count = %d, want before-eviction %d or after-eviction %d", count, want, want-1)
+			}
+		case <-deadline:
+			t.Fatal("relay computation did not finish")
+		}
 	}
 }
 
