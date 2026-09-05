@@ -2415,6 +2415,12 @@
   }
 
   if (typeof window !== 'undefined') {
-    window.__meshcoreMapInternals = { createClusterGroup: createClusterGroup, makeClusterIcon: makeClusterIcon };
+    window.__meshcoreMapInternals = {
+      createClusterGroup: createClusterGroup,
+      makeClusterIcon: makeClusterIcon,
+      // #1356: exposed so the a11y test can assert what the label RENDERS
+      // instead of grepping map.js for where two identifiers sit.
+      makeRepeaterLabelIcon: makeRepeaterLabelIcon,
+    };
   }
 })();
