@@ -9,6 +9,7 @@ echo ""
 
 # Unit tests (deterministic, fast)
 echo "── Unit Tests ──"
+node test-test-inventory.js
 node test-packet-filter.js
 node test-packet-filter-ux.js
 node test-aging.js
