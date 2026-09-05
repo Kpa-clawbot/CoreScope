@@ -170,6 +170,7 @@ jobs:
       - name: Run JS unit tests (packet-filter)
         run: |
           set -e
+          node test-test-inventory.js
           node test-packet-filter.js
           node test-packet-filter-time.js
           node test-confidence-indicator.js
