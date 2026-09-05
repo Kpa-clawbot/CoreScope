@@ -52,6 +52,16 @@ func (s *PacketStore) GetRepeaterRelayInfoMap(windowHours float64) map[string]Re
 	return cached
 }
 
+// snapshotPathHopIndexLocked snapshots the hop buckets for bulk relay reads.
+// The caller must hold s.mu for reading.
+func (s *PacketStore) snapshotPathHopIndexLocked() map[string][]*StoreTx {
+	snap := make(map[string][]*StoreTx, len(s.byPathHop))
+	for k, list := range s.byPathHop {
+		snap[k] = list
+	}
+	return snap
+}
+
 // computeRepeaterRelayInfoMap walks byPathHop once under a single RLock,
 // pre-parses every FirstSeen timestamp once (not once-per-pubkey-bucket),
 // and emits one RepeaterRelayInfo per hop key.
@@ -67,10 +77,7 @@ func (s *PacketStore) computeRepeaterRelayInfoMap(windowHours float64) map[strin
 	// arrays but those are append-only-by-id; the worst-case race here is
 	// that ingest grows a slice we already snapshotted (we miss the new
 	// tail), which is acceptable for a 15s-TTL status read.
-	snap := make(map[string][]*StoreTx, len(s.byPathHop))
-	for k, list := range s.byPathHop {
-		snap[k] = list
-	}
+	snap := s.snapshotPathHopIndexLocked()
 
 	// Build a tx-id-keyed pre-parsed cache so the inner loop doesn't
 	// re-parse the same FirstSeen N times when the same tx is indexed
