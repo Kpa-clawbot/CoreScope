@@ -942,6 +942,32 @@
     return abs >= 3600 ? 'critical' : abs >= 300 ? 'warning' : 'ok';
   };
 
+  /**
+   * Hash prefix for display. `hash_size` is EVIDENCE, not a default: it is set
+   * only from adverts the analyzer could actually read a size out of, so a node
+   * that has not advertised in the retention window has no value at all. Reading
+   * that absence as "1" claims a 1-byte configuration nobody observed — and the
+   * 1-byte bucket is exactly where a node is most likely to be miscounted.
+   *
+   * nodes.js (detail: "Unknown") and analytics.js ("?B") already treat it that
+   * way; this helper is the shared version so the map can too.
+   *
+   * @returns {{known: boolean, bytes: number, prefix: string}} `bytes` is the
+   * rendering width — the real evidence when known, a 1-byte fallback when not,
+   * in which case `known` is false and callers must not print it as a size.
+   */
+  window.hashPrefixInfo = function (node) {
+    var raw = node ? node.hash_size : null;
+    var known = raw != null && Number(raw) > 0;
+    var bytes = known ? Number(raw) : 1;
+    var pk = (node && node.public_key) || '';
+    return {
+      known: known,
+      bytes: bytes,
+      prefix: pk ? pk.slice(0, bytes * 2).toUpperCase() : '??',
+    };
+  };
+
   /** Render a skew sparkline SVG (inline, word-sized) */
   window.renderSkewSparkline = function(samples, w, h) {
     w = w || 120; h = h || 24;

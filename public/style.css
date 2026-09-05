@@ -4706,6 +4706,14 @@ body[data-cb-preset="achromat"] {
 .mc-mb-label.status-confirmed { border-left-color: var(--mc-mb-confirmed); }
 .mc-mb-label.status-suspected { border-left-color: var(--mc-mb-suspected); }
 .mc-mb-label.status-unknown   { border-left-color: var(--mc-mb-unknown);   }
+/* The width of the prefix itself is a guess when the node has no advert-derived
+   hash_size. Dotted underline marks the digits as unverified — a shape cue, not
+   a color one, so it survives forced-colors and color-vision differences. The
+   aria-label says "hash size unknown" for AT. */
+.mc-mb-label.hash-unconfirmed span[aria-hidden="true"] {
+  text-decoration: underline dotted currentColor;
+  text-underline-offset: 2px;
+}
 
 /* Forced-colors / Windows High Contrast — degrade gracefully (audit item 7). */
 @media (forced-colors: active) {
