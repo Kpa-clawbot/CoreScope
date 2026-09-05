@@ -239,6 +239,35 @@ async function assertHashView(page, bytes, collisionData) {
     });
   }
 
+  await step('#1914: nonempty risk rows follow deep-linked and clicked byte sizes', async () => {
+    const prefixesBySize = { 1: ['A1'], 2: ['B2C3', 'B2D4'], 3: ['D4E5F6'] };
+    const routePattern = '**/api/analytics/hash-collisions*';
+    await page.route(routePattern, async route => {
+      const response = await route.fetch();
+      const json = await response.json();
+      // Keep the real matrix data, but distinguish each risk list even
+      // when the local fixture has no observed collisions.
+      for (const [bytes, prefixes] of Object.entries(prefixesBySize)) {
+        json.by_size[bytes].collisions = prefixes.map(prefix => ({
+          prefix, appearances: 1, with_coords: 0, classification: 'unknown', nodes: []
+        }));
+      }
+      await route.fulfill({ response, json });
+    });
+    try {
+      await openCollisions(page, '&section=collisionRiskSection&bytes=2');
+      await page.waitForFunction(() => window.__collisionsThemeReady);
+      for (const bytes of [2, 3, 1]) {
+        if (bytes !== 2) await page.locator(`.hash-byte-btn[data-bytes="${bytes}"]`).click();
+        const prefixes = await page.locator('#collisionList tbody tr > td:first-child').allTextContents();
+        assert(JSON.stringify(prefixes) === JSON.stringify(prefixesBySize[bytes]),
+          `Expected ${bytes}-byte risk prefixes ${prefixesBySize[bytes]}, got ${prefixes}`);
+      }
+    } finally {
+      await page.unroute(routePattern);
+    }
+  });
+
   await browser.close();
 
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
