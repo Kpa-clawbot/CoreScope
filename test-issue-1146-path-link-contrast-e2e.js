@@ -19,6 +19,7 @@
  * Covers the desktop side/full views and mobile full view in both themes.
  *
  * Usage: BASE_URL=http://localhost:13581 node test-issue-1146-path-link-contrast-e2e.js
+ * Optional SCREENSHOT_DIR saves PNG evidence; use an ignored output directory.
  */
 'use strict';
 const { chromium } = require('playwright');
@@ -26,6 +27,8 @@ const { chromium } = require('playwright');
 const BASE = process.env.BASE_URL || 'http://localhost:13581';
 assert(['localhost', '127.0.0.1', '[::1]'].includes(new URL(BASE).hostname),
   'Browser regression tests must use a local server');
+const SCREENSHOT_DIR = process.env.SCREENSHOT_DIR;
+if (SCREENSHOT_DIR) require('fs').mkdirSync(SCREENSHOT_DIR, { recursive: true });
 
 let passed = 0, failed = 0;
 async function step(name, fn) {
@@ -104,7 +107,7 @@ async function effectiveBgFor(page, selector) {
       pubkey: hopPubkey.slice(0, -2) + i.toString(16).padStart(2, '0'),
       prefix: 'a1', name: 'Relay ' + (i + 1),
     }));
-    hops[8] = { pubkey: targetHopKey, prefix: targetHopKey.slice(0, 2), name: targetName, unreliable: true };
+    hops[8] = { pubkey: targetHopKey, prefix: targetHopKey.slice(0, 2), name: targetName, unreliable: true, ambiguous: true };
     hops[9] = {
       pubkey: siblingKey, prefix: targetHopKey.slice(0, 2), name: 'Same-prefix sibling', ambiguous: true,
       conflicts: [
@@ -187,6 +190,7 @@ async function effectiveBgFor(page, selector) {
       return {
         marked: Array.from(chain.querySelectorAll('.hop-current')).map(el => el.getAttribute('href')),
         ring: outline || border, ringColor: outline ? style.outlineColor : style.borderTopColor,
+        outline, dashedBottom: style.borderBottomStyle === 'dashed' && parseFloat(style.borderBottomWidth) >= 1,
         textColor: style.color, padding: parseFloat(style.paddingLeft),
         text: target.textContent, injectedElements: target.childElementCount,
         siblingMarked: sibling.classList.contains('hop-current'),
@@ -212,6 +216,13 @@ async function effectiveBgFor(page, selector) {
     if (hasHopDisplay) {
       assert(result.warning && result.conflict && result.siblingAmbiguous,
         'Shared hop rendering must preserve unreliable and ambiguous indicators');
+      assert(result.outline && result.dashedBottom,
+        'The selected ambiguous hop must keep its dashed bottom border alongside the enclosing outline');
+    }
+    if (SCREENSHOT_DIR) {
+      const theme = await page.locator('html').getAttribute('data-theme');
+      const filename = `${selector.slice(1)}-${page.viewportSize().width}-${theme}${hasHopDisplay ? '' : '-plain'}.png`;
+      await page.locator(selector).screenshot({ path: require('path').join(SCREENSHOT_DIR, filename) });
     }
   }
 
