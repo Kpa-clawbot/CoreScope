@@ -10,42 +10,83 @@ import (
 	"github.com/meshcore-analyzer/dbschema"
 )
 
+// pruneBatchTransmissions bounds how many transmissions (and their child
+// observations) one prune transaction deletes before it commits and
+// releases the writer lock.
+//
+// Releasing between batches is the entire point. writerMu serialises every
+// wrapped writer call, so while the prune holds it the MQTT ingest path is
+// blocked. Go's sync.Mutex switches to FIFO handoff once a waiter has been
+// blocked for 1ms (starvation mode), so an ingest goroutine queued behind
+// the prune is served at the next batch boundary instead of after the whole
+// retention day.
+//
+// 250 keeps a batch near ~4k observation deletes at a typical ~16
+// observations per transmission — a few hundred milliseconds — while
+// keeping the number of commits low (a 16k-transmission day is 64
+// transactions, not 16k).
+const pruneBatchTransmissions = 250
+
 // PruneOldPackets deletes transmissions (and their child observations)
 // older than `days`. Returns count of transmissions deleted.
 //
 // Owned by the ingestor per #1283: the writer process is the only one
 // allowed to hold the DB write lock; previously this lived in
 // cmd/server/db.go and raced ingestor INSERTs (SQLITE_BUSY).
+//
+// Deletion is chunked into bounded transactions so ingest is never blocked
+// for longer than a single batch. Deleting a whole retention day in one
+// transaction held the writer lock for ~35s on a mesh doing ~260k
+// observations/day, stalling MQTT ingest for the same duration.
+//
+// On error the transmissions deleted by already-committed batches are
+// returned alongside it — those rows are gone, so reporting 0 would be
+// wrong.
 func (s *Store) PruneOldPackets(days int) (int64, error) {
 	if days <= 0 {
 		return 0, nil
 	}
 	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339)
 
-	// Tagged for writer-perf visibility (#1340).
-	var n int64
-	err := s.WriterTx("prune_packets", func(tx *sql.Tx) error {
-		// Delete child observations first (no CASCADE in SQLite).
-		if _, err := tx.Exec(`DELETE FROM observations WHERE transmission_id IN (
-			SELECT id FROM transmissions WHERE first_seen < ?
-		)`, cutoff); err != nil {
-			return fmt.Errorf("prune observations: %w", err)
-		}
+	var total int64
+	for {
+		var batch int64
+		// Tagged for writer-perf visibility (#1340).
+		err := s.WriterTx("prune_packets", func(tx *sql.Tx) error {
+			// Both statements resolve the same bounded set: nothing modifies
+			// `transmissions` between them inside this transaction, and
+			// ORDER BY id makes the LIMIT deterministic.
+			//
+			// Delete child observations first (no CASCADE in SQLite).
+			if _, err := tx.Exec(`DELETE FROM observations WHERE transmission_id IN (
+				SELECT id FROM transmissions WHERE first_seen < ? ORDER BY id LIMIT ?
+			)`, cutoff, pruneBatchTransmissions); err != nil {
+				return fmt.Errorf("prune observations: %w", err)
+			}
 
-		res, err := tx.Exec(`DELETE FROM transmissions WHERE first_seen < ?`, cutoff)
+			res, err := tx.Exec(`DELETE FROM transmissions WHERE id IN (
+				SELECT id FROM transmissions WHERE first_seen < ? ORDER BY id LIMIT ?
+			)`, cutoff, pruneBatchTransmissions)
+			if err != nil {
+				return fmt.Errorf("prune transmissions: %w", err)
+			}
+			batch, _ = res.RowsAffected()
+			return nil
+		})
 		if err != nil {
-			return fmt.Errorf("prune transmissions: %w", err)
+			return total, err
 		}
-		n, _ = res.RowsAffected()
-		return nil
-	})
-	if err != nil {
-		return 0, err
+		// A batch that deleted nothing means no rows are left below the
+		// cutoff; every batch before it deleted exactly what it selected.
+		if batch == 0 {
+			break
+		}
+		total += batch
 	}
-	if n > 0 {
-		log.Printf("[prune] deleted %d transmissions older than %d days", n, days)
+	if total > 0 {
+		log.Printf("[prune] deleted %d transmissions older than %d days", total, days)
 	}
-	return n, nil
+	return total, nil
 }
 
 // PruneOldClientReceptions deletes mobile client-RX coverage rows older than
