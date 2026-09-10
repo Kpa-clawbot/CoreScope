@@ -118,6 +118,15 @@
     return 'var(--mc-scope-' + state + ')';
   }
 
+  // scopeTintEnabled says whether markers should carry scope colours. The
+  // overlay checkbox turns them on for the whole map, and picking a state in
+  // the filter turns them on too: an operator who just asked "show me the
+  // repeaters with no scope data" should not have to find a second control to
+  // see the answer in the colour they picked it by.
+  function scopeTintEnabled(overlayOn, selection) {
+    return !!overlayOn || (!!selection && selection !== 'all');
+  }
+
   // scopeFilterHtml builds the button group. Same shape as the byte-size and
   // status groups above it, so the panel keeps one filter idiom.
   function scopeFilterHtml(current) {
@@ -1843,7 +1852,7 @@
       // #2001: scope-config tint. One marker carries one colour, so when both
       // overlays are on the older multi-byte tint keeps the marker and the
       // scope overlay stands down rather than the two fighting over the fill.
-      var scopeState = (filters.scopeOverlay && !mbColor) ? (node.scope_config_state || null) : null;
+      var scopeState = (scopeTintEnabled(filters.scopeOverlay, filters.scopeState) && !mbColor) ? (node.scope_config_state || null) : null;
       var scopeColor = scopeState ? scopeTint(node) : null;
       const icon = useLabel ? makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus, scopeState) : makeMarkerIcon(node.role || 'companion', isStale, isAlsoObserver, mbColor || scopeColor);
       const latLng = L.latLng(node.lat, node.lon);
@@ -2537,6 +2546,7 @@
       // rule and the tint can be asserted without a browser.
       scopeFilterAccepts: scopeFilterAccepts,
       scopeTint: scopeTint,
+      scopeTintEnabled: scopeTintEnabled,
       scopeFilterHtml: scopeFilterHtml,
       // #1356: exposed so the a11y test can assert what the label RENDERS
       // instead of grepping map.js for where two identifiers sit.

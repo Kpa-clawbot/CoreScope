@@ -126,6 +126,18 @@ console.log('\n=== map.js: scope-configuration state (#2001) ===');
     }
   });
 
+  // Picking a state in the filter and getting the map's ordinary role colours
+  // back is the confusing case: the operator asked about scope config, so the
+  // markers answer in scope colours without a second control having to be
+  // found first. The overlay checkbox stays, for colouring the whole map while
+  // the filter is on All.
+  test('the tint follows the filter, not only the overlay checkbox', () => {
+    assert.strictEqual(internals.scopeTintEnabled(false, 'all'), false);
+    assert.strictEqual(internals.scopeTintEnabled(true, 'all'), true);
+    assert.strictEqual(internals.scopeTintEnabled(false, 'none'), true);
+    assert.strictEqual(internals.scopeTintEnabled(false, 'full'), true);
+  });
+
   test('the current selection is the active button, and the only one', () => {
     const html = internals.scopeFilterHtml('none');
     const active = html.match(/class="btn active" data-scope="([^"]+)"/g) || [];
