@@ -4541,6 +4541,26 @@ th.sort-active { color: var(--accent, #60a5fa); }
   --mc-mb-confirmed:   #56F0A0; /* audit override of Tol vibrant for fill contrast */
   --mc-mb-suspected:   #FFD966;
   --mc-mb-unknown:     #FF8888;
+
+  /* #2001 — repeater scope-configuration state (map overlay + legend).
+   *
+   * Four of the six derive from the multi-byte accents and one from the role
+   * palette rather than adding a sixth hand-tuned palette: every colorblind
+   * preset below already overrides those, so the scope colours follow a preset
+   * switch instead of silently staying Wong while the rest of the map changes.
+   *
+   * --mc-scope-observed is the odd one out on purpose. It means "carries
+   * scoped traffic, but never told us its config", which is a weaker claim
+   * than 'full' and reads as a lighter version of the same colour rather than
+   * a different one. --mc-scope-none is a fixed neutral: absence of
+   * information is not a state on the good/bad axis and must not compete for
+   * attention with the states that are. */
+  --mc-scope-full:        var(--mc-mb-confirmed);
+  --mc-scope-observed:    color-mix(in srgb, var(--mc-mb-confirmed) 55%, #ffffff);
+  --mc-scope-no-unscoped: var(--mc-mb-suspected);
+  --mc-scope-no-scopes:   var(--mc-mb-unknown);
+  --mc-scope-no-flood:    var(--mc-role-room);
+  --mc-scope-none:        #9aa3ad;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -4714,6 +4734,19 @@ body[data-cb-preset="achromat"] {
 .mc-mb-label.status-confirmed { border-left-color: var(--mc-mb-confirmed); }
 .mc-mb-label.status-suspected { border-left-color: var(--mc-mb-suspected); }
 .mc-mb-label.status-unknown   { border-left-color: var(--mc-mb-unknown);   }
+/* #2001 — scope-config overlay. Only ever set when the multi-byte overlay is
+ * off (map.js stands the scope tint down when both are on), so these can share
+ * the same stripe without a specificity fight. */
+.mc-mb-label.scope-full        { border-left-color: var(--mc-scope-full);        }
+.mc-mb-label.scope-observed    { border-left-color: var(--mc-scope-observed);    }
+.mc-mb-label.scope-no-unscoped { border-left-color: var(--mc-scope-no-unscoped); }
+.mc-mb-label.scope-no-scopes   { border-left-color: var(--mc-scope-no-scopes);   }
+.mc-mb-label.scope-no-flood    { border-left-color: var(--mc-scope-no-flood);    }
+.mc-mb-label.scope-none        { border-left-color: var(--mc-scope-none);        }
+/* #2001 — swatch inside a filter button: small enough to sit on the text
+ * baseline without stretching the button, round so it does not read as a
+ * second nested button. */
+.scope-swatch { width: 9px; height: 9px; border-radius: 50%; border: none; }
 /* The width of the prefix itself is a guess when the node has no advert-derived
    hash_size. Dotted underline marks the digits as unverified — a shape cue, not
    a color one, so it survives forced-colors and color-vision differences. The

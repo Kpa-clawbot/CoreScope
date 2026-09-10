@@ -317,7 +317,8 @@ Paginated node list with filtering.
       "hash_size_inconsistent": boolean, // true if flip-flopping
       "hash_sizes_seen": [number] | undefined, // present only if >1 unique size seen
       "last_heard":    string (ISO) | undefined, // from in-memory packets or path relay
-      "default_scope": string | null | undefined // Most recently observed transport scope for this node. null = never observed transport-scoped, "" = observed scoped but no configured region matched, "#name" = matched region. Only present when ingestor has applied the nodes_default_scope_v1 migration.
+      "default_scope": string | null | undefined, // Most recently observed transport scope for this node. null = never observed transport-scoped, "" = observed scoped but no configured region matched, "#name" = matched region. Only present when ingestor has applied the nodes_default_scope_v1 migration.
+      "scope_config_state": string | undefined // Repeater/room only. How this node's region config reads: "full" | "no-unscoped" | "no-scopes" | "no-flood" from its own declared-regions answer, "observed" when it never answered but has been seen forwarding scoped traffic, "none" when it never answered and nothing scoped was observed. Absent for other roles and when the declared-regions lookup failed.
     }
   ],
   "total":  number,                      // total matching count (before pagination)
@@ -333,6 +334,7 @@ Paginated node list with filtering.
 **Notes:**
 - `hash_sizes_seen` is only present when more than one hash size has been observed.
 - `last_heard` is only present when in-memory data provides a more recent timestamp than `last_seen`.
+- `scope_config_state` carries the same four declared states as [GET /api/scope-audit](#get-apiscope-audit) and is computed the same way, from the newest declared-regions answer merged across collectors. The audit lists only repeaters that have answered; this field also classifies the ones that have not, which is what the map colours by. `"none"` means the answer is missing, not that the node is misconfigured: firmware drops scoped floods for regions it holds no key for, so a repeater with no region config and one nobody sends scoped traffic past are indistinguishable here.
 
 ---
 

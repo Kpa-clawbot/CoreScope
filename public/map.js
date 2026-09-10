@@ -9,7 +9,7 @@
   let nodes = [];
   let targetNodeKey = null;
   let observers = [];
-  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clustering: localStorage.getItem('meshcore-map-clustering') !== 'false', hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all', multiByteOverlay: localStorage.getItem('meshcore-map-multibyte-overlay') === 'true' };
+  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clustering: localStorage.getItem('meshcore-map-clustering') !== 'false', hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all', multiByteOverlay: localStorage.getItem('meshcore-map-multibyte-overlay') === 'true', scopeState: localStorage.getItem('meshcore-map-scope-filter') || 'all', scopeOverlay: localStorage.getItem('meshcore-map-scope-overlay') === 'true' };
   let selectedReferenceNode = null;  // pubkey of the reference node for neighbor filtering
   let neighborPubkeys = null;        // Set of pubkeys that are direct neighbors of selected node
   let wsHandler = null;
@@ -63,6 +63,79 @@
   // marker-dot and label-stripe surfaces stay visually consistent. Module
   // scope (not loop-local) to avoid per-iteration object allocation.
   var MB_MARKER_TINT = { confirmed: '#56F0A0', suspected: '#FFD966', unknown: '#FF8888' };
+
+  // #2001 — repeater scope-configuration state, read straight from the
+  // scope_config_state field /api/nodes carries per forwarding node. The four
+  // declared states are the Scope Audit's own vocabulary (scope-audit.js
+  // CONFIG_STATES) and their titles say the same thing, so a repeater does not
+  // mean two different things on two pages.
+  //
+  // The two extra states exist because the audit lists only repeaters that
+  // have answered a declared-regions request, and the map draws every
+  // repeater. 'observed' is a node that never answered but has been seen
+  // forwarding scoped traffic; 'none' is one that never answered and has not
+  // been seen carrying anything scoped either.
+  //
+  // 'none' is not a fault. Firmware drops scoped floods for regions it holds
+  // no key for, so a repeater with no region config and a repeater nobody has
+  // sent scoped traffic past look identical from here — the title says so
+  // rather than leaving the grey to be read as red.
+  var SCOPE_STATES = [
+    { key: 'full', label: 'Full',
+      title: 'Declares named regions and \'*\': forwards its declared regions and plain unscoped floods.' },
+    { key: 'observed', label: 'Observed',
+      title: 'Never answered a declared-regions request, but has been observed forwarding scoped traffic, so it has a region configured. Which ones, and whether it also forwards unscoped floods, is unknown.' },
+    { key: 'no-unscoped', label: 'No unscoped',
+      title: 'Declares named regions but not \'*\': does not forward plain unscoped floods. Exact, not an inference.' },
+    { key: 'no-scopes', label: 'No scopes',
+      title: 'Declares only \'*\', no named regions: no region is flood-allowed. Almost always means no scopes are configured, but a repeater whose regions are all set to deny flooding looks identical.' },
+    { key: 'no-flood', label: 'No flood',
+      title: 'Declares neither named regions nor \'*\': an answered-but-empty list. Nothing is flood-allowed by this repeater, not even plain unscoped traffic.' },
+    { key: 'none', label: 'No data',
+      title: 'Never answered a declared-regions request and nothing scoped has been observed through it. That is missing information, not a finding: a repeater with no region config and one nobody sends scoped traffic past look the same from here.' },
+  ];
+  var SCOPE_STATE_KEYS = {};
+  SCOPE_STATES.forEach(function (s) { SCOPE_STATE_KEYS[s.key] = true; });
+
+  // scopeFilterAccepts answers whether a node survives the scope filter.
+  // A node with no scope_config_state is unclassified, never 'none': the
+  // server omits the field for roles that do not forward and for every node
+  // when the declared-regions lookup failed, and folding those into the
+  // no-data bucket would fill the category operators hunt in with phones.
+  function scopeFilterAccepts(n, selection) {
+    if (!selection || selection === 'all') return true;
+    return n.scope_config_state === selection;
+  }
+
+  // scopeTint returns the marker fill for a node's scope state, or null when
+  // the node has none — null leaves the role colour in place rather than
+  // painting an unclassified node as if it had been measured. An unknown
+  // state string also returns null: emitting var(--mc-scope-<whatever>) would
+  // resolve to nothing and draw an invisible marker.
+  function scopeTint(n) {
+    var state = n && n.scope_config_state;
+    if (!state || !SCOPE_STATE_KEYS[state]) return null;
+    return 'var(--mc-scope-' + state + ')';
+  }
+
+  // scopeFilterHtml builds the button group. Same shape as the byte-size and
+  // status groups above it, so the panel keeps one filter idiom.
+  function scopeFilterHtml(current) {
+    var cur = current || 'all';
+    // Each state button carries the swatch its markers are painted with: the
+    // map has no separate colour legend, so this group is the legend.
+    var btn = function (key, label, title, swatch) {
+      var dot = swatch ? '<span class="legend-swatch scope-swatch" style="background:var(--mc-scope-' + key + ')" aria-hidden="true"></span> ' : '';
+      return '<button class="btn' + (cur === key ? ' active' : '') + '" data-scope="' + key + '"' +
+        (title ? ' title="' + title.replace(/"/g, '&quot;') + '"' : '') + '>' + dot + label + '</button>';
+    };
+    return '<fieldset class="mc-section">' +
+      '<legend class="mc-label">Scope Config</legend>' +
+      '<div class="filter-group" id="mcScopeFilter">' +
+      btn('all', 'All', 'Every node, whatever its scope state') +
+      SCOPE_STATES.map(function (s) { return btn(s.key, s.label, s.title, true); }).join('') +
+      '</div></fieldset>';
+  }
 
   function makeMarkerIcon(role, isStale, isAlsoObserver, colorOverride) {
     const s = ROLE_STYLE[role] || ROLE_STYLE.companion;
@@ -140,7 +213,7 @@
     });
   }
 
-  function makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus) {
+  function makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus, scopeState) {
     // Show the short mesh hash ID (first N bytes of pubkey, uppercased). When
     // the width is unobserved the label falls back to one byte — it has to draw
     // something — but says so instead of asserting a 1-byte config.
@@ -161,8 +234,21 @@
     var shortHash = hashInfo.prefix;
     var statusClass = status ? (' ' + (MB_STATUS_CLASS[status] || MB_STATUS_CLASS.unknown)) : '';
     var ariaWidth = hashInfo.known ? '' : ', hash size unknown';
-    var ariaStatus = status ? ('multi-byte ' + status + ', hash ' + shortHash + ariaWidth)
-                            : ('repeater hash ' + shortHash + ariaWidth);
+    // #2001: the scope-config overlay colours this label's left border, and a
+    // colour alone says nothing to a screen reader or to an operator who
+    // cannot separate the hues. The state goes into the aria-label and into a
+    // hover title so the stripe is never the only carrier.
+    var scopeMeta = null;
+    if (scopeState) {
+      for (var si = 0; si < SCOPE_STATES.length; si++) {
+        if (SCOPE_STATES[si].key === scopeState) { scopeMeta = SCOPE_STATES[si]; break; }
+      }
+    }
+    var scopeClass = scopeMeta ? (' scope-' + scopeMeta.key) : '';
+    var scopeAria = scopeMeta ? (', scope config ' + scopeMeta.label) : '';
+    var scopeTitle = scopeMeta ? (' title="' + scopeMeta.label + ' — ' + scopeMeta.title.replace(/"/g, '&quot;') + '"') : '';
+    var ariaStatus = status ? ('multi-byte ' + status + ', hash ' + shortHash + ariaWidth + scopeAria)
+                            : ('repeater hash ' + shortHash + ariaWidth + scopeAria);
     // Observer indicator stays a star — it is an orthogonal signal, not a status color.
     var obsIndicator = isAlsoObserver
       ? ' <span aria-hidden="true" style="color:' + (ROLE_COLORS.observer || '#f1c40f') + ';font-size:13px;line-height:1;" title="Also an observer"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg></span>'
@@ -170,7 +256,7 @@
     // Glyph + thin-space (U+2009) + hash. Visible content is aria-hidden so AT
     // reads the aria-label only (avoids "check mark 3 E" literal announcements).
     var visible = (glyph ? glyph + '\u2009' : '') + shortHash;
-    var html = '<div class="mc-mb-label' + statusClass + unknownWidth + '" role="img" aria-label="' + ariaStatus + '">' +
+    var html = '<div class="mc-mb-label' + statusClass + scopeClass + unknownWidth + '" role="img" aria-label="' + ariaStatus + '"' + scopeTitle + '>' +
       '<span aria-hidden="true">' + visible + '</span>' + obsIndicator + '</div>';
     return L.divIcon({
       html: html,
@@ -221,6 +307,7 @@
             <label for="mcHeatmap"><input type="checkbox" id="mcHeatmap"> Heat map</label>
             <label for="mcHashLabels"><input type="checkbox" id="mcHashLabels"> Hash prefix labels</label>
             <label for="mcMultiByte"><input type="checkbox" id="mcMultiByte"> Multi-byte support</label>
+            <label for="mcScopeOverlay" title="Colour repeater markers by their region-scope configuration"><input type="checkbox" id="mcScopeOverlay"> Scope config colours</label>
             <label id="mcGeoFilterLabel" for="mcGeoFilter" style="display:none"><input type="checkbox" id="mcGeoFilter"> Mesh live area</label>
           </fieldset>
           <div id="mapAreaFilter"></div>
@@ -232,6 +319,7 @@
               <button class="btn ${filters.statusFilter==='stale'?'active':''}" data-status="stale">Stale</button>
             </div>
           </fieldset>
+          ${scopeFilterHtml(filters.scopeState)}
           <fieldset class="mc-section">
             <legend class="mc-label">Filters</legend>
             <label for="mcNeighbors"><input type="checkbox" id="mcNeighbors"> Show direct neighbors</label>
@@ -584,6 +672,15 @@
       multiByteEl.checked = filters.multiByteOverlay;
       multiByteEl.addEventListener('change', e => { filters.multiByteOverlay = e.target.checked; localStorage.setItem('meshcore-map-multibyte-overlay', e.target.checked); renderMarkers(); });
     }
+    // #2001 scope-config colours. Same shape as the multi-byte overlay above,
+    // and deliberately a separate control from the Scope Config filter: the
+    // filter answers "show me only these", the overlay answers "colour what
+    // is on screen", and an operator wants either without the other.
+    const scopeOverlayEl = document.getElementById('mcScopeOverlay');
+    if (scopeOverlayEl) {
+      scopeOverlayEl.checked = filters.scopeOverlay;
+      scopeOverlayEl.addEventListener('change', e => { filters.scopeOverlay = e.target.checked; localStorage.setItem('meshcore-map-scope-overlay', e.target.checked); renderMarkers(); });
+    }
     document.getElementById('mcLastHeard').addEventListener('change', e => { filters.lastHeard = e.target.value; loadNodes(); });
 
     AreaFilter.init(document.getElementById('mapAreaFilter'));
@@ -595,6 +692,16 @@
         filters.statusFilter = btn.dataset.status;
         localStorage.setItem('meshcore-map-status-filter', filters.statusFilter);
         document.querySelectorAll('#mcStatusFilter .btn').forEach(b => b.classList.toggle('active', b.dataset.status === filters.statusFilter));
+        renderMarkers();
+      });
+    });
+
+    // Scope config filter buttons (#2001)
+    document.querySelectorAll('#mcScopeFilter .btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        filters.scopeState = btn.dataset.scope;
+        localStorage.setItem('meshcore-map-scope-filter', filters.scopeState);
+        document.querySelectorAll('#mcScopeFilter .btn').forEach(b => b.classList.toggle('active', b.dataset.scope === filters.scopeState));
         renderMarkers();
       });
     });
@@ -1692,6 +1799,9 @@
           return false;
         }
       }
+      // Scope config filter (#2001). Unclassified nodes drop out as soon as a
+      // specific state is picked — see scopeFilterAccepts.
+      if (!scopeFilterAccepts(n, filters.scopeState)) return false;
       // Status filter
       if (filters.statusFilter !== 'all') {
         const status = getNodeStatus(n); // #1598: relay-aware for infra
@@ -1730,7 +1840,12 @@
         // set kept in sync with --mc-mb-* CSS stripes so label + marker agree.
         mbColor = MB_MARKER_TINT[mbStatus] || MB_MARKER_TINT.unknown;
       }
-      const icon = useLabel ? makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus) : makeMarkerIcon(node.role || 'companion', isStale, isAlsoObserver, mbColor);
+      // #2001: scope-config tint. One marker carries one colour, so when both
+      // overlays are on the older multi-byte tint keeps the marker and the
+      // scope overlay stands down rather than the two fighting over the fill.
+      var scopeState = (filters.scopeOverlay && !mbColor) ? (node.scope_config_state || null) : null;
+      var scopeColor = scopeState ? scopeTint(node) : null;
+      const icon = useLabel ? makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus, scopeState) : makeMarkerIcon(node.role || 'companion', isStale, isAlsoObserver, mbColor || scopeColor);
       const latLng = L.latLng(node.lat, node.lon);
       allMarkers.push({ latLng, node, icon, isLabel: useLabel, popupFn: function() { return buildPopup(node); }, alt: (node.name || 'Unknown') + ' (' + (node.role || 'node') + (isAlsoObserver ? ' + observer' : '') + ')' });
     }
@@ -2418,6 +2533,11 @@
     window.__meshcoreMapInternals = {
       createClusterGroup: createClusterGroup,
       makeClusterIcon: makeClusterIcon,
+      // #2001: the three pure pieces of the scope-state layer, so the filter
+      // rule and the tint can be asserted without a browser.
+      scopeFilterAccepts: scopeFilterAccepts,
+      scopeTint: scopeTint,
+      scopeFilterHtml: scopeFilterHtml,
       // #1356: exposed so the a11y test can assert what the label RENDERS
       // instead of grepping map.js for where two identifiers sit.
       makeRepeaterLabelIcon: makeRepeaterLabelIcon,
