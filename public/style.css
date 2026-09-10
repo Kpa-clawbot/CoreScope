@@ -4544,10 +4544,16 @@ th.sort-active { color: var(--accent, #60a5fa); }
 
   /* #2001 — repeater scope-configuration state (map overlay + legend).
    *
-   * Four of the six derive from the multi-byte accents and one from the role
-   * palette rather than adding a sixth hand-tuned palette: every colorblind
-   * preset below already overrides those, so the scope colours follow a preset
-   * switch instead of silently staying Wong while the rest of the map changes.
+   * Three of the six derive from the multi-byte accents rather than adding a
+   * sixth hand-tuned palette: every colorblind preset below already overrides
+   * those, so the scope colours follow a preset switch instead of silently
+   * staying Wong while the rest of the map changes.
+   *
+   * --mc-scope-no-flood does NOT derive. Every role colour is operator-
+   * customisable and the default --mc-role-room is #009E73, a green, which put
+   * the rarest state in the same hue as 'full' on a live instance. It is a
+   * literal violet instead: no other scope colour is near it, at the cost of
+   * not following a preset switch.
    *
    * --mc-scope-observed is the odd one out on purpose. It means "carries
    * scoped traffic, but never told us its config", which is a weaker claim
@@ -4559,7 +4565,7 @@ th.sort-active { color: var(--accent, #60a5fa); }
   --mc-scope-observed:    color-mix(in srgb, var(--mc-mb-confirmed) 55%, #ffffff);
   --mc-scope-no-unscoped: var(--mc-mb-suspected);
   --mc-scope-no-scopes:   var(--mc-mb-unknown);
-  --mc-scope-no-flood:    var(--mc-role-room);
+  --mc-scope-no-flood:    #B197FC;
   --mc-scope-none:        #9aa3ad;
 }
 
