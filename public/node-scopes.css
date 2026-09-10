@@ -1,0 +1,47 @@
+/* Node detail — Scopes section. Reuses .analytics-stats / .analytics-stat-card /
+   .analytics-time-range from the analytics page (same tokens node-reach.css
+   reuses); these are the scopes-specific bits only. No hex/rgb literals —
+   --text-muted / --border / --status-* are defined globally. --section-bg is
+   NOT: it exists only in the dark-theme blocks (style.css), never in light
+   :root, so every use below MUST keep the var(--section-bg, var(--card-bg))
+   fallback — the fallback is load-bearing, not decorative. */
+
+.ns-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.ns-head h4 { margin: 0; }
+.ns-window { margin: 0; }
+
+.ns-declared-meta { font-size: 11px; color: var(--text-muted); margin: 0 0 10px; }
+.ns-declared-meta .ns-truncated { color: var(--status-amber-text); font-weight: 600; }
+.ns-declared-meta .ns-never-asked { color: var(--text-muted); font-style: italic; }
+
+.ns-empty {
+  color: var(--text-muted); font-size: 13px; padding: 14px 12px;
+  border: 1px dashed var(--border); border-radius: 6px; margin: 6px 0 4px;
+}
+.ns-empty.ns-empty-config { color: var(--status-amber-text); border-color: var(--status-amber-text); }
+
+.ns-table { border-collapse: collapse; width: 100%; font-size: 12px; margin: 4px 0 10px; }
+.ns-table th, .ns-table td { border: 0; border-bottom: 1px solid var(--border); padding: 5px 8px; }
+.ns-table thead th { border-bottom: 2px solid var(--border); background: none; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; color: var(--text-muted); text-align: left; }
+.ns-n { text-align: right; font-variant-numeric: tabular-nums; }
+.ns-scope-name { font-family: var(--mono); font-weight: 600; }
+
+.ns-decl {
+  display: inline-block; padding: 2px 7px; border-radius: var(--badge-radius, 4px);
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px;
+  white-space: nowrap;
+}
+.ns-decl-yes { background: color-mix(in srgb, var(--status-green) 16%, transparent); color: var(--status-green-text); }
+.ns-decl-quiet { background: color-mix(in srgb, var(--status-yellow) 18%, transparent); color: var(--status-amber-text); }
+.ns-decl-warn { background: color-mix(in srgb, var(--status-red) 16%, transparent); color: var(--danger); }
+.ns-decl-unknown { background: var(--section-bg, var(--card-bg)); color: var(--text-muted); font-weight: 600; text-transform: none; }
+
+.ns-routes { font-size: 11px; color: var(--text-muted); margin: 0 0 14px; }
+.ns-routes b { color: var(--text); font-variant-numeric: tabular-nums; }
+
+.ns-links { font-size: 12px; margin-top: 4px; }
+.ns-links a { color: var(--link-color); }
+
+@media (max-width: 480px) {
+  .ns-table th:nth-child(3), .ns-table td:nth-child(3) { display: none; }
+}

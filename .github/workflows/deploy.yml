@@ -249,6 +249,7 @@ jobs:
           node test-issue-1360-pill-letter-count.js
           node test-issue-1364-pill-no-clamp.js
           node test-issue-1375-scope-stats-fetch.js
+          node test-scope-audit-styles-linked.js
           node test-issue-1361-cb-presets.js
           node test-issue-1380-cb-sim-overlay.js
           node test-issue-1380-cb-reset-button.js
