@@ -4752,7 +4752,15 @@ body[data-cb-preset="achromat"] {
 /* #2001 — swatch inside a filter button: small enough to sit on the text
  * baseline without stretching the button, round so it does not read as a
  * second nested button. */
-.scope-swatch { width: 9px; height: 9px; border-radius: 50%; border: none; }
+.scope-swatch { width: 9px; height: 9px; border-radius: 50%; border: none; margin-right: 5px; flex: 0 0 auto; }
+/* Seven buttons do not fit the map-controls panel on one line (it is
+ * clamp(160px, 18vw, 240px) wide), and the flex default of nowrap pushed the
+ * last ones past the panel edge with "No unscoped" broken mid-label. Wrap the
+ * group into rows and keep each label whole. Scoped to this group so the
+ * three-button Status and five-button Byte Size groups keep the layout they
+ * already have. */
+#mcScopeFilter { flex-wrap: wrap; }
+#mcScopeFilter .btn { white-space: nowrap; }
 /* The width of the prefix itself is a guess when the node has no advert-derived
    hash_size. Dotted underline marks the digits as unverified — a shape cue, not
    a color one, so it survives forced-colors and color-vision differences. The
