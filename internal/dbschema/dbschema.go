@@ -192,7 +192,11 @@ func AssertReady(ro *sql.DB) error {
 	return nil
 }
 
-// Querier is the read surface shared by *sql.DB, *sql.Tx and *sql.Conn.
+// Querier is the read surface shared by *sql.DB and *sql.Tx.
+//
+// Not *sql.Conn: it exposes only QueryContext/QueryRowContext, so it does not
+// satisfy this. Widen the interface to the Context variants if a caller ever
+// needs one.
 //
 // It exists so schema probes can run on whichever handle the caller already
 // holds. Taking *sql.DB unconditionally is a deadlock waiting to happen: a

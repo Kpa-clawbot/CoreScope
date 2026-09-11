@@ -155,8 +155,14 @@ Two hazards worth knowing before an upgrade:
 The failing `CREATE UNIQUE INDEX` that triggers all this is itself a stall: on
 11.2M rows it held the write lock long enough for a concurrent writer to hit the
 full 5s `busy_timeout`. So an instance that needs the repair pauses writers for
-seconds *before* the repair starts, then again for the grouping scan (~18s at
-that size, holding nothing).
+seconds *before* the repair starts.
+
+The repair itself does not hold the write lock throughout, tempting as that is
+to assume. The grouping scan (~18s at that size) reads, and a concurrent writer
+can proceed during it; the lock is taken when the repair first writes. A writer
+that gets in between makes the repair fail and roll back, which is the intended
+outcome — but "holds the write lock until it completes" is the wrong mental
+model.
 
 The collapse itself is measured at 4.1s on 2.4M synthetic rows holding 5
 duplicates. That is well short of a real deployment: an 11M-row instance has not

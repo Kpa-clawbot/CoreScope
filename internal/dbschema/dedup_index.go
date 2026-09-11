@@ -114,8 +114,8 @@ func ensureObservationsDedupIndex(rw *sql.DB, logf Logger) error {
 	// holds the write lock long enough that an operator watching startup
 	// deserves to know why before it happens rather than after.
 	logf("[dbschema] idx_observations_dedup cannot be created: duplicate observations exist. " +
-		"Repairing now — this holds the write lock until it completes, and on a large " +
-		"observations table it can take tens of seconds.")
+		"Repairing now — on a large observations table this takes tens of seconds, and " +
+		"writers are blocked for part of it.")
 
 	removed, err := collapseDuplicatesAndIndex(rw, logf)
 	if err != nil {
