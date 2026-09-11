@@ -159,6 +159,13 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 		return nil, fmt.Errorf("preparing statements: %w", err)
 	}
 
+	// Continue the scope-match tally from where the previous process left
+	// off. Not fatal: a tally that cannot be read costs an observability
+	// number, and refusing to ingest over it would be the worse trade.
+	if err := s.LoadScopeMatchTotals(); err != nil {
+		log.Printf("[regions] restoring scope-match tally: %v", err)
+	}
+
 	// Schedule async migrations. These must NOT block boot. See
 	// async_migration.go for the convention.
 	// PREFLIGHT: async=true reason="composite index build on observations (1.9M+ rows in prod) — converted from sync after v3.8.3"
@@ -226,6 +233,16 @@ func applySchema(db *sql.DB) error {
 			battery_mv INTEGER,
 			temperature_c REAL,
 			foreign_advert INTEGER DEFAULT 0
+		);
+
+		CREATE TABLE IF NOT EXISTS scope_match_totals (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			since_unix INTEGER NOT NULL,
+			unique_matches INTEGER NOT NULL,
+			explicit_over_derived INTEGER NOT NULL,
+			ambiguous INTEGER NOT NULL,
+			none_matches INTEGER NOT NULL,
+			updated_unix INTEGER NOT NULL
 		);
 
 		CREATE TABLE IF NOT EXISTS observers (

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 // declaredRegionStat is one region name as reported over RF, with the two
@@ -402,6 +403,10 @@ var scopeMatchCounters struct {
 	explicitOverDerived atomic.Int64
 	ambiguous           atomic.Int64
 	none                atomic.Int64
+	// sinceUnix is when this tally started counting, carried across
+	// restarts with the counters themselves (scope_match_tally.go). A
+	// ratio without its window is not a measurement.
+	sinceUnix atomic.Int64
 }
 
 // recordScopeMatch tallies one decision and logs the interesting ones. Unique
@@ -426,7 +431,8 @@ func recordScopeMatch(m scopeMatch) {
 // ticker so the numbers arrive on the same cadence as the key-set changes that
 // move them.
 func logScopeMatchCounters() {
-	log.Printf("[regions] scope matches: unique=%d explicit-over-derived=%d ambiguous=%d none=%d",
+	log.Printf("[regions] scope matches since %s: unique=%d explicit-over-derived=%d ambiguous=%d none=%d",
+		time.Unix(scopeMatchCounters.sinceUnix.Load(), 0).UTC().Format(time.RFC3339),
 		scopeMatchCounters.unique.Load(), scopeMatchCounters.explicitOverDerived.Load(),
 		scopeMatchCounters.ambiguous.Load(), scopeMatchCounters.none.Load())
 }

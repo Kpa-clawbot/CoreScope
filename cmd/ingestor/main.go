@@ -485,6 +485,13 @@ func main() {
 	go func() {
 		for range statsTicker.C {
 			store.LogStats()
+			// Persist the scope-match tally on the stats cadence rather
+			// than the region-refresh one: the counters are recorded for
+			// every transport-scoped packet, including on instances that
+			// never enable autoRegionKeys and so never run that ticker.
+			if err := store.SaveScopeMatchTotals(); err != nil {
+				log.Printf("[regions] saving scope-match tally: %v", err)
+			}
 			if d := ingestBuffer.Dropped(); d > 0 || ingestBuffer.Pending() > 0 {
 				log.Printf("[ingest-buffer] pending=%d dropped_total=%d", ingestBuffer.Pending(), d)
 			}
@@ -559,6 +566,12 @@ func main() {
 	pruneQueueTicker.Stop()
 	walCheckpointTicker.Stop()
 	stopWatchdog()
+	// A deploy is a SIGTERM, which is exactly the case that used to lose
+	// the tally: save before the process goes away rather than leaving up
+	// to 5 minutes of counting to the next tick that will not come.
+	if err := store.SaveScopeMatchTotals(); err != nil {
+		log.Printf("[regions] saving scope-match tally: %v", err)
+	}
 	store.LogStats() // final stats on shutdown
 	for _, c := range clients {
 		c.Disconnect(5000) // 5s to allow in-flight messages to drain

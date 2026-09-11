@@ -10,42 +10,98 @@ import (
 	"github.com/meshcore-analyzer/dbschema"
 )
 
+// pruneBatchTransmissions bounds how many transmissions (and their child
+// observations) one prune transaction deletes before it commits and
+// releases the writer lock.
+//
+// Releasing between batches is the entire point. writerMu serialises every
+// wrapped writer call, so while the prune holds it the MQTT ingest path is
+// blocked. Go's sync.Mutex switches to FIFO handoff once a waiter has been
+// blocked for 1ms (starvation mode), so an ingest goroutine queued behind
+// the prune is served at the next batch boundary instead of after the whole
+// retention day.
+//
+// The bound is on transmissions, but hold time scales with the rows actually
+// deleted, and each transmission carries an unbounded number of observations.
+// At ~16 observations per transmission a batch is ~4k row deletes and a few
+// hundred milliseconds; an instance with a denser observation ratio gets a
+// proportionally longer hold from the same batch size. 250 also keeps the
+// commit count low (a 16k-transmission day is 64 transactions, not 16k).
+const pruneBatchTransmissions = 250
+
+// pruneAgedTransmissionIDs selects the next batch of transmissions older than
+// the cutoff. Both statements of a batch embed it, so they resolve the same
+// set: nothing modifies `transmissions` between them inside the transaction.
+//
+// The ORDER BY must be satisfiable from idx_transmissions_first_seen. That
+// index carries the rowid as its tiebreaker, so "first_seen, id" is walked
+// straight off it and the LIMIT stays deterministic even when timestamps tie.
+// Ordering by id alone looks equivalent but makes SQLite abandon the index for
+// a rowid SCAN. That is harmless while rows are being deleted — the oldest
+// rows have the lowest rowids and match at once — but the batch that finds
+// nothing, which is the steady state whenever nothing has aged out, walks the
+// whole table under writerMu. TestPruneAgedTransmissionIDsUsesFirstSeenIndex
+// pins the plan.
+const pruneAgedTransmissionIDs = `SELECT id FROM transmissions WHERE first_seen < ? ORDER BY first_seen, id LIMIT ?`
+
+// The two statements of one prune batch. Child observations go first (no
+// CASCADE in SQLite).
+const (
+	pruneObservationsBatch  = `DELETE FROM observations WHERE transmission_id IN (` + pruneAgedTransmissionIDs + `)`
+	pruneTransmissionsBatch = `DELETE FROM transmissions WHERE id IN (` + pruneAgedTransmissionIDs + `)`
+)
+
 // PruneOldPackets deletes transmissions (and their child observations)
 // older than `days`. Returns count of transmissions deleted.
 //
 // Owned by the ingestor per #1283: the writer process is the only one
 // allowed to hold the DB write lock; previously this lived in
 // cmd/server/db.go and raced ingestor INSERTs (SQLITE_BUSY).
+//
+// Deletion is chunked into bounded transactions so ingest is never blocked
+// for longer than a single batch. Deleting a whole retention day in one
+// transaction held the writer lock for ~35s on a mesh doing ~260k
+// observations/day, stalling MQTT ingest for the same duration.
+//
+// On error the transmissions deleted by already-committed batches are
+// returned alongside it — those rows are gone, so reporting 0 would be
+// wrong.
 func (s *Store) PruneOldPackets(days int) (int64, error) {
 	if days <= 0 {
 		return 0, nil
 	}
 	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339)
 
-	// Tagged for writer-perf visibility (#1340).
-	var n int64
-	err := s.WriterTx("prune_packets", func(tx *sql.Tx) error {
-		// Delete child observations first (no CASCADE in SQLite).
-		if _, err := tx.Exec(`DELETE FROM observations WHERE transmission_id IN (
-			SELECT id FROM transmissions WHERE first_seen < ?
-		)`, cutoff); err != nil {
-			return fmt.Errorf("prune observations: %w", err)
-		}
-
-		res, err := tx.Exec(`DELETE FROM transmissions WHERE first_seen < ?`, cutoff)
+	var total int64
+	for {
+		var batch int64
+		// Tagged for writer-perf visibility (#1340).
+		err := s.WriterTx("prune_packets", func(tx *sql.Tx) error {
+			if _, err := tx.Exec(pruneObservationsBatch, cutoff, pruneBatchTransmissions); err != nil {
+				return fmt.Errorf("prune observations: %w", err)
+			}
+			res, err := tx.Exec(pruneTransmissionsBatch, cutoff, pruneBatchTransmissions)
+			if err != nil {
+				return fmt.Errorf("prune transmissions: %w", err)
+			}
+			batch, _ = res.RowsAffected()
+			return nil
+		})
 		if err != nil {
-			return fmt.Errorf("prune transmissions: %w", err)
+			return total, err
 		}
-		n, _ = res.RowsAffected()
-		return nil
-	})
-	if err != nil {
-		return 0, err
+		total += batch
+		// A short batch proves nothing is left below the cutoff: the subquery
+		// found fewer rows than it was allowed to take. Only a batch that came
+		// back exactly full needs another pass.
+		if batch < pruneBatchTransmissions {
+			break
+		}
 	}
-	if n > 0 {
-		log.Printf("[prune] deleted %d transmissions older than %d days", n, days)
+	if total > 0 {
+		log.Printf("[prune] deleted %d transmissions older than %d days", total, days)
 	}
-	return n, nil
+	return total, nil
 }
 
 // PruneOldClientReceptions deletes mobile client-RX coverage rows older than
