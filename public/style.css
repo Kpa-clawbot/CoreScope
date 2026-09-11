@@ -4541,6 +4541,42 @@ th.sort-active { color: var(--accent, #60a5fa); }
   --mc-mb-confirmed:   #56F0A0; /* audit override of Tol vibrant for fill contrast */
   --mc-mb-suspected:   #FFD966;
   --mc-mb-unknown:     #FF8888;
+
+  /* #2001 — the scope-state colours are declared on `body`, not here: a custom
+   * property that references --mc-mb-* has to be declared on the same element
+   * the presets override those on, or it resolves against :root's value and the
+   * preset never reaches it. See the body rule below. */
+}
+
+/* #2001 — scope-state colours, declared on `body` rather than `:root`.
+ *
+ * Four of the six derive from the multi-byte accents rather than adding a
+ * sixth hand-tuned palette, so a colorblind preset retints them with the rest
+ * of the map. That only works from here: the presets override --mc-mb-* on
+ * `body[data-cb-preset="..."]`, and a custom property is substituted using the
+ * value computed on the element it is declared on. Declared on :root these
+ * resolved against :root's --mc-mb-*, so the CSS half of the preset system
+ * never reached them — measured with data-cb-preset="deut" set and no inline
+ * override: --mc-mb-confirmed became #648FFF at body level while
+ * --mc-scope-full stayed #56F0A0. Declared here, both preset paths work: the
+ * CSS blocks because they land on the same element, and cb-presets.js's inline
+ * write on documentElement because body inherits it.
+ *
+ * --mc-scope-observed means "carries scoped traffic, but never told us its
+ * config", a weaker claim than 'full', so it reads as a lighter version of the
+ * same colour rather than a different one. --mc-scope-no-flood does NOT derive:
+ * every role colour is operator-customisable and the default --mc-role-room is
+ * #009E73, a green, which put the rarest state in the same hue as 'full' on a
+ * live instance. --mc-scope-none is a fixed neutral: absence of information is
+ * not a state on the good/bad axis and must not compete for attention with the
+ * states that are. */
+body {
+  --mc-scope-full:        var(--mc-mb-confirmed);
+  --mc-scope-observed:    color-mix(in srgb, var(--mc-mb-confirmed) 55%, #ffffff);
+  --mc-scope-no-unscoped: var(--mc-mb-suspected);
+  --mc-scope-no-scopes:   var(--mc-mb-unknown);
+  --mc-scope-no-flood:    #B197FC;
+  --mc-scope-none:        #9aa3ad;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -4633,6 +4669,26 @@ body[data-cb-preset="achromat"] {
   --mc-mb-confirmed:   #b3b3b3;
   --mc-mb-suspected:   #808080;
   --mc-mb-unknown:     #595959;
+  /* #2001 — the six scope states, spread across this preset's own luminance
+     ramp. Four of them derive from the --mc-mb-* values above and would come
+     out at 70/50/35%, but the two literals (no-flood, none) do not derive and
+     landed at L 0.385 and L 0.361 next to full's 0.451: 1.15:1 and 1.06:1,
+     which on a monochrome preset is one colour. Ordered by how closed the
+     state is, so the ramp itself carries meaning: observed lightest, no-flood
+     darkest, no-data between observed and full.
+
+     This does not make the six distinguishable. Six levels cannot be spread
+     across a greyscale at 3:1 steps — the worst pair here is observed vs
+     no-data at 1.25:1, up from 1.06:1 before, and half the pairs sit under
+     1.8:1. The ramp is an aid, not the answer. What carries the state on this
+     preset is the marker title and the Scope row in the popup (map.js), which
+     is why those are not optional. */
+  --mc-scope-observed:    #e6e6e6;
+  --mc-scope-full:        #b3b3b3;
+  --mc-scope-no-unscoped: #808080;
+  --mc-scope-no-scopes:   #595959;
+  --mc-scope-no-flood:    #333333;
+  --mc-scope-none:        #cfcfcf;
 }
 
 .mc-cluster-wrap { background: transparent !important; border: 0 !important; }
@@ -4714,6 +4770,27 @@ body[data-cb-preset="achromat"] {
 .mc-mb-label.status-confirmed { border-left-color: var(--mc-mb-confirmed); }
 .mc-mb-label.status-suspected { border-left-color: var(--mc-mb-suspected); }
 .mc-mb-label.status-unknown   { border-left-color: var(--mc-mb-unknown);   }
+/* #2001 — scope-config overlay. Only ever set when the multi-byte overlay is
+ * off (map.js stands the scope tint down when both are on), so these can share
+ * the same stripe without a specificity fight. */
+.mc-mb-label.scope-full        { border-left-color: var(--mc-scope-full);        }
+.mc-mb-label.scope-observed    { border-left-color: var(--mc-scope-observed);    }
+.mc-mb-label.scope-no-unscoped { border-left-color: var(--mc-scope-no-unscoped); }
+.mc-mb-label.scope-no-scopes   { border-left-color: var(--mc-scope-no-scopes);   }
+.mc-mb-label.scope-no-flood    { border-left-color: var(--mc-scope-no-flood);    }
+.mc-mb-label.scope-none        { border-left-color: var(--mc-scope-none);        }
+/* #2001 — swatch inside a filter button: small enough to sit on the text
+ * baseline without stretching the button, round so it does not read as a
+ * second nested button. */
+.scope-swatch { width: 9px; height: 9px; border-radius: 50%; border: none; margin-right: 5px; flex: 0 0 auto; }
+/* Seven buttons do not fit the map-controls panel on one line (it is
+ * clamp(160px, 18vw, 240px) wide), and the flex default of nowrap pushed the
+ * last ones past the panel edge with "No unscoped" broken mid-label. Wrap the
+ * group into rows and keep each label whole. Scoped to this group so the
+ * three-button Status and five-button Byte Size groups keep the layout they
+ * already have. */
+#mcScopeFilter { flex-wrap: wrap; }
+#mcScopeFilter .btn { white-space: nowrap; }
 /* The width of the prefix itself is a guess when the node has no advert-derived
    hash_size. Dotted underline marks the digits as unverified — a shape cue, not
    a color one, so it survives forced-colors and color-vision differences. The

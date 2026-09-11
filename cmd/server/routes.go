@@ -44,6 +44,19 @@ type Server struct {
 	memStatsCache    runtime.MemStats
 	memStatsCachedAt time.Time
 
+	// #2001: declared region lists for the scope_config_state field, cached
+	// so /api/nodes does not re-run the merge query pair per request. The
+	// cached map is read by concurrent requests and replaced, never mutated.
+	declaredRegionsMu    sync.Mutex
+	declaredRegionsCache map[string]string
+	declaredRegionsAt    time.Time
+	// Collapses the TTL-boundary herd so the query runs once, not once per
+	// in-flight request, and never under declaredRegionsMu.
+	declaredRegionsSF singleflight.Group
+	// Counts executions of that query. Read by the test that pins the cache:
+	// the enforceable perf characteristic here is "N requests, one query".
+	declaredRegionsQueries int64
+
 	// Cached /api/stats response — recomputed at most once every 10s
 	statsMu       sync.Mutex
 	statsCache    *StatsResponse
@@ -1307,6 +1320,16 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 			relayMap = s.store.GetRepeaterRelayInfoMap(relayWindow)
 			usefulMap = s.store.GetRepeaterUsefulnessScoreMap()
 		}
+		// #2001: declared region lists, once per request rather than per
+		// node, so the map can colour every repeater by its scope-config
+		// state. Two small queries (232 rows on a live instance) and no
+		// window scan — the state is a pure function of the declared list,
+		// see nodeScopeConfigState.
+		var declaredCSV map[string]string
+		declaredOK := false
+		if needsRelay {
+			declaredCSV, declaredOK = s.declaredRegionsCSV()
+		}
 		// Bridge axis (#672 axis 2 of 4). Snapshot is an atomic load
 		// — safe to call regardless of needsRelay, and we want the
 		// score on repeater rows specifically.
@@ -1343,6 +1366,15 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 					// nodes without scopes / on older schemas.
 					if len(info.TransportedScopes) > 0 {
 						node["transported_scopes"] = info.TransportedScopes
+					}
+					// #2001: how this repeater's region config reads, from
+					// its own declared answer where it gave one and from
+					// what it has been observed carrying where it did not.
+					// Omitted entirely when the declared lookup failed —
+					// see declaredRegionsCSV.
+					if declaredOK {
+						csv, has := declaredCSV[strings.ToLower(pk)]
+						node["scope_config_state"] = nodeScopeConfigState(csv, has, info.TransportedScopes)
 					}
 					// #672 4-axis usefulness. traffic_share_score keeps the
 					// raw per-axis Traffic value (#1456); the structural axes
@@ -1540,6 +1572,12 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 			// when non-empty (absent for no-scope nodes / older schemas).
 			if len(info.TransportedScopes) > 0 {
 				node["transported_scopes"] = info.TransportedScopes
+			}
+			// #2001: same field, same rules as handleNodes — the node page
+			// and the map must not disagree about a repeater's scope state.
+			if declaredCSV, ok := s.declaredRegionsCSV(); ok {
+				csv, has := declaredCSV[strings.ToLower(pubkey)]
+				node["scope_config_state"] = nodeScopeConfigState(csv, has, info.TransportedScopes)
 			}
 			// #672 4-axis usefulness (see handleNodes for the field
 			// contract). traffic_share_score keeps the raw per-axis

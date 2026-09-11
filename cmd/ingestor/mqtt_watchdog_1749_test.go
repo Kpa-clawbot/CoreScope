@@ -58,15 +58,8 @@ func TestMQTTStallWatchdog_EscalateOnPersistentDisconnect_1749(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	tick := make(chan time.Time)
-	done := make(chan struct{})
-	defer close(done)
-
-	exited := make(chan struct{})
-	go func() {
-		runLivenessWatchdogLoop(tick, done, threshold, func(args ...any) {})
-		close(exited)
-	}()
+	tick, stopLoop := startWatchdogTestLoop(t, threshold, func(args ...any) {})
+	defer stopLoop()
 
 	// Feed ticks spanning > (multiplier × threshold) of wall clock so
 	// the escalation path fires. We control the `now` parameter by
@@ -114,10 +107,8 @@ func TestMQTTStallWatchdog_DisconnectedEscalationThrottled_1749(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	tick := make(chan time.Time)
-	done := make(chan struct{})
-	defer close(done)
-	go runLivenessWatchdogLoop(tick, done, threshold, func(args ...any) {})
+	tick, stopLoop := startWatchdogTestLoop(t, threshold, func(args ...any) {})
+	defer stopLoop()
 
 	base := time.Now()
 	// Pre-stamp DisconnectedSinceUnix so that the first tick is
@@ -259,10 +250,8 @@ func TestMQTTStallWatchdog_LastTickUnixExposed_1749(t *testing.T) {
 		watchdogLastTickUnix.Store(before)
 	})
 
-	tick := make(chan time.Time)
-	done := make(chan struct{})
-	defer close(done)
-	go runLivenessWatchdogLoop(tick, done, time.Minute, func(args ...any) {})
+	tick, stopLoop := startWatchdogTestLoop(t, time.Minute, func(args ...any) {})
+	defer stopLoop()
 
 	stamp := time.Now().Add(48 * time.Hour) // guaranteed > before
 	select {
