@@ -11,6 +11,9 @@ theme.json
 firmware/
 coverage/
 dist/
+# internal/prunequeue writes these next to the database; the server tests leave
+# them in cmd/server/. Runtime queue state, never repo content.
+prune-requests/
 public-instrumented/
 .nyc_output/
 .setup-state

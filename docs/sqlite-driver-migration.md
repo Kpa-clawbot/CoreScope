@@ -27,6 +27,32 @@ corescope's own hot-path SQL under both drivers (Apple M4, `-count=5`, medians):
 Allocation counts drop with it: 1.12M vs 1.64M allocs (−32%) and 21 MB vs 30 MB
 (−30%) on the chunk load, 20.3k vs 27.3k on the lookups.
 
+## Confirmed on production
+
+The table above comes from a standalone harness. @efiten then ran both drivers
+against a real instance — 11,077,038 observations, 9.7 GB database, 4-core arm64
+— as server-only containers against the same live volume, one at a time. Round 2
+reverses the order so the page-cache advantage goes to the old driver:
+
+| | audit 7d | audit 24h | background fill (13 chunks) | start → /api/health |
+|---|---:|---:|---:|---:|
+| modernc, round 1 | 16.67s | 2.27s | 130.2s | 16.6s |
+| mattn, round 1 | 7.87s | 1.34s | 93.8s | 13.5s |
+| mattn, round 2 | 8.15s | 1.35s | 96.4s | 13.0s |
+| modernc, round 2 | 13.46s | 2.29s | 137.8s | 15.5s |
+
+Warm, the old driver improves to 13.46s on the 7d audit and still loses by
+~1.8×. Chunk load is ~1.4×. `/api/nodes?limit=500` is 0.039s against 0.037s —
+i.e. nothing.
+
+**Real-world gains are smaller than the harness suggests: ~1.4-1.8× on the
+paths that matter, not 2-2.3×.** The shape holds — scans and joins gain, small
+lookups do not — but quote these numbers, not the harness ones.
+
+**Build time is the counterweight**, cold and native on that machine:
+**52s on master, 163s on this branch**. An instance that builds its own image
+pays that on every deploy.
+
 ## The cost: the build is cgo now
 
 `CGO_ENABLED=0` still *builds*, which is the trap: mattn links a stub, and the
@@ -101,6 +127,17 @@ readings.
 Merge, delete and index creation all share one transaction. Split apart, a
 writer inserting a duplicate in the gap makes the index creation fail while the
 deletions stay committed — rows destroyed and no index to show for it.
+
+The repair logs what it is about to destroy — group count, rows to remove, and
+the first 20 group keys with the id it keeps — before deleting anything, because
+a bare row count is not enough to reconstruct from if the merge direction is
+ever wrong again. It also says up front that it holds the write lock, since on a
+large table that pause at ingestor startup is otherwise unexplained.
+
+The cost is measured at 4.1s on 2.4M synthetic rows holding 5 duplicates. That
+is well short of a real deployment: an 11M-row instance has not been measured,
+and the collapse has not been run against a database an ingestor is actively
+writing to.
 
 Note `COALESCE(path_json, '')` makes a NULL path and an empty-string path the
 same key, but `NULL` and `'[]'` different keys. See

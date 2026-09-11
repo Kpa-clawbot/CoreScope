@@ -2,7 +2,9 @@ package dbschema
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -173,7 +175,7 @@ func TestCollapseDuplicatesAndIndexIsAtomic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := collapseDuplicatesAndIndex(db); err == nil {
+	if _, err := collapseDuplicatesAndIndex(db, t.Logf); err == nil {
 		t.Fatal("expected index creation to fail")
 	}
 
@@ -223,5 +225,80 @@ func TestEnsureObservationsDedupIndexSkipsV2Schema(t *testing.T) {
 	}
 	if dedupIndexExists(t, db) {
 		t.Error("index must not be created on a v2 schema")
+	}
+}
+
+// Nothing covered the branch that DECIDES to repair. TestCollapseDuplicates...
+// calls collapseDuplicatesAndIndex directly, so a broken error check in
+// ensureObservationsDedupIndex would leave every one of those tests green while
+// production silently skipped the repair and failed later at OpenStore.
+//
+// This asserts the decision: duplicates present, the real driver's real error,
+// and the repair actually taken. It is the test that would catch the driver
+// rewording its constraint message.
+func TestEnsureObservationsDedupIndexTakesRepairPathOnRealDriverError(t *testing.T) {
+	db := observationsDB(t)
+	if _, err := db.Exec(`INSERT INTO observations (id, transmission_id, observer_idx, path_json, timestamp) VALUES
+		(1, 4, 4, '[]', 10), (2, 4, 4, '[]', 10)`); err != nil {
+		t.Fatal(err)
+	}
+
+	// The error the fast path actually gets. If isConstraintViolation stops
+	// recognising this, the repair below never runs.
+	_, createErr := db.Exec(dedupIndexDDL)
+	if createErr == nil {
+		t.Fatal("expected CREATE UNIQUE INDEX to fail over duplicates")
+	}
+	if !isConstraintViolation(createErr) {
+		t.Fatalf("isConstraintViolation did not recognise the driver's own error: %v (%T)", createErr, createErr)
+	}
+
+	var repaired bool
+	logf := func(format string, args ...interface{}) {
+		repaired = true
+		t.Logf(format, args...)
+	}
+	if err := ensureObservationsDedupIndex(db, logf); err != nil {
+		t.Fatalf("ensureObservationsDedupIndex: %v", err)
+	}
+	if !repaired {
+		t.Error("repair path was not taken: no log output, so the constraint error was not recognised")
+	}
+	if !dedupIndexExists(t, db) {
+		t.Error("index missing after repair")
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM observations`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("observations = %d, want 1", n)
+	}
+}
+
+// The audit log has to name what it destroyed, not just count it.
+func TestCollapseLogsGroupKeysBeforeDeleting(t *testing.T) {
+	db := observationsDB(t)
+	if _, err := db.Exec(`INSERT INTO observations (id, transmission_id, observer_idx, path_json, timestamp) VALUES
+		(1, 11, 3, '["AA"]', 10), (2, 11, 3, '["AA"]', 10), (3, 11, 3, '["AA"]', 10)`); err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	logf := func(format string, args ...interface{}) {
+		out = append(out, fmt.Sprintf(format, args...))
+	}
+	if err := ensureObservationsDedupIndex(db, logf); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(out, "\n")
+	for _, want := range []string{
+		"1 duplicate observation group(s), 2 row(s) to remove",
+		"transmission_id=11",
+		`path_json="[\"AA\"]"`,
+		"keeping id=1",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("audit log missing %q; got:\n%s", want, joined)
+		}
 	}
 }

@@ -2,8 +2,10 @@ package dbschema
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
-	"strings"
+
+	sqlite3 "github.com/mattn/go-sqlite3"
 )
 
 // upsertMergedColumns are the columns the ingestor's observation UPSERT writes
@@ -39,7 +41,8 @@ var upsertMergedColumns = []string{"snr", "rssi", "score", "raw_hex", "resolved_
 // transaction and holds the write lock for its duration, so the repetition is
 // worth removing.
 const dupGroupsDDL = `CREATE TEMP TABLE dedup_groups AS
-	SELECT transmission_id, observer_idx, COALESCE(path_json, '') AS p, MIN(id) AS keep
+	SELECT transmission_id, observer_idx, COALESCE(path_json, '') AS p,
+	       MIN(id) AS keep, COUNT(*) AS n
 	  FROM observations
 	 GROUP BY transmission_id, observer_idx, COALESCE(path_json, '')
 	HAVING COUNT(*) > 1`
@@ -82,16 +85,41 @@ func ensureObservationsDedupIndex(rw *sql.DB, logf Logger) error {
 	if err == nil {
 		return nil
 	}
-	if !strings.Contains(err.Error(), "UNIQUE constraint failed") {
+	if !isConstraintViolation(err) {
 		return err
 	}
 
-	removed, err := collapseDuplicatesAndIndex(rw)
+	// Deleting rows is not something to do quietly, and on a large table this
+	// holds the write lock long enough that an operator watching startup
+	// deserves to know why before it happens rather than after.
+	logf("[dbschema] idx_observations_dedup cannot be created: duplicate observations exist. " +
+		"Repairing now — this holds the write lock until it completes, and on a large " +
+		"observations table it can take tens of seconds.")
+
+	removed, err := collapseDuplicatesAndIndex(rw, logf)
 	if err != nil {
 		return fmt.Errorf("collapse duplicate observations: %w", err)
 	}
-	logf("[dbschema] collapsed %d duplicate observation row(s) so idx_observations_dedup could be created", removed)
+	logf("[dbschema] collapsed %d duplicate observation row(s); idx_observations_dedup created", removed)
 	return nil
+}
+
+// isConstraintViolation reports whether err is SQLite refusing a constraint.
+//
+// Deliberately a typed check. This used to match on
+// strings.Contains(err, "UNIQUE constraint failed"), which made the entire
+// repair path — including the row deletion — hinge on the driver's prose, in
+// the same change that swapped the driver. A reworded or wrapped message would
+// silently skip the repair and surface later as an OpenStore failure with no
+// hint as to why. CREATE UNIQUE INDEX can only hit a constraint error because
+// the data violates the uniqueness it asks for, so the primary code is the
+// right granularity.
+func isConstraintViolation(err error) bool {
+	var se sqlite3.Error
+	if errors.As(err, &se) {
+		return se.Code == sqlite3.ErrConstraint
+	}
+	return false
 }
 
 // collapseDuplicatesAndIndex merges duplicate observation rows into the lowest
@@ -102,27 +130,39 @@ func ensureObservationsDedupIndex(rw *sql.DB, logf Logger) error {
 // them separated, a writer inserting a duplicate in the gap makes the index
 // creation fail while leaving the deletions committed: rows destroyed and no
 // index to show for it. One transaction makes the repair all-or-nothing.
-func collapseDuplicatesAndIndex(rw *sql.DB) (int64, error) {
+func collapseDuplicatesAndIndex(rw *sql.DB, logf Logger) (int64, error) {
 	tx, err := rw.Begin()
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// A TEMP table lives for the life of the connection, and database/sql hands
-	// out pooled connections, so an earlier call may have left one behind on
-	// this one. Drop before creating rather than assume, and again afterwards
-	// so the connection returns to the pool clean.
+	// Every reference to the TEMP table goes through tx, so its whole lifecycle
+	// sits on one connection: created here, dropped before COMMIT below, and
+	// removed by ROLLBACK on any error path (a TEMP table created inside a
+	// transaction does not survive its rollback — verified, not assumed).
+	//
+	// It has to be tx, not rw. A TEMP table belongs to a single connection and
+	// database/sql hands out pooled ones, so an `rw.Exec` drop can land on a
+	// different connection and leave the table behind on the one that has it.
+	// The leading DROP is still here because this package cannot prove nothing
+	// else ever left one on this connection.
 	if _, err := tx.Exec(`DROP TABLE IF EXISTS temp.dedup_groups`); err != nil {
 		return 0, fmt.Errorf("drop stale dedup_groups: %w", err)
 	}
 	if _, err := tx.Exec(dupGroupsDDL); err != nil {
 		return 0, fmt.Errorf("build dedup_groups: %w", err)
 	}
-	defer func() { _, _ = rw.Exec(`DROP TABLE IF EXISTS temp.dedup_groups`) }()
 	if _, err := tx.Exec(`CREATE INDEX temp.dedup_groups_key
 		ON dedup_groups(transmission_id, observer_idx, p)`); err != nil {
 		return 0, fmt.Errorf("index dedup_groups: %w", err)
+	}
+
+	// The group keys exist right now and cease to after the delete. Record them
+	// before destroying anything: a row count is not enough to reconstruct from
+	// if the merge direction is ever wrong again.
+	if err := logDuplicateGroups(tx, logf); err != nil {
+		return 0, err
 	}
 
 	// Only merge columns this database actually has. Apply runs this step
@@ -168,6 +208,10 @@ func collapseDuplicatesAndIndex(rw *sql.DB) (int64, error) {
 	}
 
 	// Same transaction: if this fails, the deletions above roll back with it.
+	if _, err := tx.Exec(`DROP TABLE temp.dedup_groups`); err != nil {
+		return 0, fmt.Errorf("drop dedup_groups: %w", err)
+	}
+
 	if _, err := tx.Exec(dedupIndexDDL); err != nil {
 		return 0, fmt.Errorf("create idx_observations_dedup after collapsing %d row(s): %w", removed, err)
 	}
@@ -191,4 +235,47 @@ func existingColumns(rw *sql.DB, table string, want []string) ([]string, error) 
 		}
 	}
 	return out, nil
+}
+
+// maxLoggedDupGroups bounds the audit log. A database missing the index for
+// long enough can have a great many duplicate groups, and an unbounded dump at
+// startup is its own operational problem.
+const maxLoggedDupGroups = 20
+
+// logDuplicateGroups records what is about to be collapsed, while dedup_groups
+// still holds it. Reads through tx because the TEMP table lives on that
+// transaction's connection.
+func logDuplicateGroups(tx *sql.Tx, logf Logger) error {
+	var groups, extra int64
+	if err := tx.QueryRow(`SELECT COUNT(*), COALESCE(SUM(n - 1), 0) FROM dedup_groups`).
+		Scan(&groups, &extra); err != nil {
+		return fmt.Errorf("count dedup_groups: %w", err)
+	}
+	logf("[dbschema] %d duplicate observation group(s), %d row(s) to remove", groups, extra)
+
+	rows, err := tx.Query(`SELECT transmission_id, observer_idx, p, keep, n
+		FROM dedup_groups ORDER BY keep LIMIT ?`, maxLoggedDupGroups)
+	if err != nil {
+		return fmt.Errorf("list dedup_groups: %w", err)
+	}
+	defer rows.Close()
+	var listed int64
+	for rows.Next() {
+		var txID, keep, n int64
+		var observerIdx sql.NullInt64
+		var pathJSON string
+		if err := rows.Scan(&txID, &observerIdx, &pathJSON, &keep, &n); err != nil {
+			return fmt.Errorf("scan dedup_groups: %w", err)
+		}
+		logf("[dbschema]   transmission_id=%d observer_idx=%v path_json=%q rows=%d keeping id=%d",
+			txID, observerIdx.Int64, pathJSON, n, keep)
+		listed++
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate dedup_groups: %w", err)
+	}
+	if groups > listed {
+		logf("[dbschema]   ... and %d more group(s) not listed", groups-listed)
+	}
+	return nil
 }
