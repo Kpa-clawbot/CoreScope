@@ -134,10 +134,34 @@ a bare row count is not enough to reconstruct from if the merge direction is
 ever wrong again. It also says up front that it holds the write lock, since on a
 large table that pause at ingestor startup is otherwise unexplained.
 
-The cost is measured at 4.1s on 2.4M synthetic rows holding 5 duplicates. That
-is well short of a real deployment: an 11M-row instance has not been measured,
-and the collapse has not been run against a database an ingestor is actively
-writing to.
+Two hazards worth knowing before an upgrade:
+
+- **Reads inside the repair must use the transaction, not the pool.**
+  `cmd/ingestor` runs `SetMaxOpenConns(1)`, so a query issued against the pool
+  while the repair holds its transaction waits for a connection that
+  transaction has checked out, forever. It deadlocked a staging ingestor at
+  boot — logs stop after "Repairing now", the write lock is free, the process
+  is simply blocked. Anything reading in there takes a `Querier` and is passed
+  `tx`.
+- **NULL is not a duplicate.** `GROUP BY` folds NULLs into one group; a UNIQUE
+  index treats them as distinct, so a row with a NULL in an indexed column can
+  never violate it. Grouping without excluding them does not delete the rows —
+  the `DELETE` joins on `observer_idx = observer_idx`, which NULL never
+  satisfies — it is the *merge* that does the damage, matching nothing and
+  writing NULL over the survivor's real readings. The rows stay put and their
+  measurements disappear. On an 11.2M-row instance 198 of 222 reported groups
+  were `observer_idx IS NULL`.
+
+The failing `CREATE UNIQUE INDEX` that triggers all this is itself a stall: on
+11.2M rows it held the write lock long enough for a concurrent writer to hit the
+full 5s `busy_timeout`. So an instance that needs the repair pauses writers for
+seconds *before* the repair starts, then again for the grouping scan (~18s at
+that size, holding nothing).
+
+The collapse itself is measured at 4.1s on 2.4M synthetic rows holding 5
+duplicates. That is well short of a real deployment: an 11M-row instance has not
+been measured to completion, and the collapse has not been run against a
+database an ingestor is actively writing to.
 
 Note `COALESCE(path_json, '')` makes a NULL path and an empty-string path the
 same key, but `NULL` and `'[]'` different keys. See

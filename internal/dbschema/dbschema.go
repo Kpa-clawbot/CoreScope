@@ -192,9 +192,23 @@ func AssertReady(ro *sql.DB) error {
 	return nil
 }
 
+// Querier is the read surface shared by *sql.DB, *sql.Tx and *sql.Conn.
+//
+// It exists so schema probes can run on whichever handle the caller already
+// holds. Taking *sql.DB unconditionally is a deadlock waiting to happen: a
+// caller inside a transaction has the connection checked out, and on a pool
+// capped at one connection — which is what cmd/ingestor runs — a probe against
+// the pool waits forever for the connection its own transaction is holding.
+type Querier interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
 // TableHasColumn reports whether the given table has the given column.
 // Exported because tests and the read-side need it without re-implementing.
-func TableHasColumn(db *sql.DB, table, column string) (bool, error) {
+//
+// Pass the transaction, not the pool, when you are inside one. See Querier.
+func TableHasColumn(db Querier, table, column string) (bool, error) {
 	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {
 		return false, err

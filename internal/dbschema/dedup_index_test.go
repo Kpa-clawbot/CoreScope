@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -21,6 +22,11 @@ func observationsDB(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
+	// One connection, like cmd/ingestor. An unbounded pool hides any code that
+	// queries the pool while holding a transaction: it quietly opens a second
+	// connection instead of deadlocking, so the suite passes and production
+	// hangs. Every fixture here must match the tightest pool in production.
+	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(`CREATE TABLE observations (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		transmission_id INTEGER NOT NULL,
@@ -300,5 +306,105 @@ func TestCollapseLogsGroupKeysBeforeDeleting(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Errorf("audit log missing %q; got:\n%s", want, joined)
 		}
+	}
+}
+
+// A pool of one is what cmd/ingestor runs. Anything in the repair that queries
+// the pool while holding the transaction waits for a connection the transaction
+// itself has checked out, and never gets it: the ingestor hangs at boot, after
+// logging that it is repairing, with the database untouched and ingest dead.
+//
+// Found on staging, not here, because every fixture used an unbounded pool.
+// Runs in a goroutine so a regression fails in seconds with a usable message
+// rather than hanging until the package timeout.
+func TestCollapseDoesNotDeadlockOnSingleConnectionPool(t *testing.T) {
+	db := observationsDB(t) // SetMaxOpenConns(1)
+	if _, err := db.Exec(`INSERT INTO observations (id, transmission_id, observer_idx, path_json, timestamp) VALUES
+		(1, 3, 1, '[]', 10), (2, 3, 1, '[]', 10)`); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- ensureObservationsDedupIndex(db, func(string, ...interface{}) {}) }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ensureObservationsDedupIndex: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("deadlock: the repair is querying the pool while holding its own transaction — " +
+			"pass tx, not rw, to anything that reads inside collapseDuplicatesAndIndex")
+	}
+	if !dedupIndexExists(t, db) {
+		t.Error("index missing")
+	}
+}
+
+// GROUP BY folds NULLs together; a UNIQUE index keeps them apart. Rows with a
+// NULL in an indexed column can never violate the index, so the repair must not
+// treat them as duplicates at all.
+//
+// The damage is not the obvious one. Both the DELETE and the merge's correlated
+// subquery join on `observer_idx = observer_idx`, and NULL = NULL is not true,
+// so the rows are never actually deleted — the *merge* is what destroys data:
+// the subquery matches nothing and writes NULL over the survivor's real
+// readings. Measured with the guard removed, a row holding snr=4.5 rssi=-70
+// came back with both NULL and its row still in place, so nothing looks missing
+// while the measurements are gone. Assert the values, not just the row count:
+// an earlier version of this test checked survival alone and passed against the
+// bug.
+//
+// On an 11.2M-row instance, 198 of 222 reported groups were observer_idx IS
+// NULL — direction='tx' rows.
+func TestCollapseLeavesNullKeyedRowsAlone(t *testing.T) {
+	db := observationsDB(t)
+	if _, err := db.Exec(`INSERT INTO observations (id, transmission_id, observer_idx, direction, snr, rssi, path_json, timestamp) VALUES
+		(1, 1, NULL, 'tx', 4.5, -70, '[]', 10),
+		(2, 1, NULL, 'tx', 5.5, -60, '[]', 10),
+		(3, 2, 7,    'rx', 1.0, -80, '[]', 20),
+		(4, 2, 7,    'rx', 2.0, -90, '[]', 20)`); err != nil {
+		t.Fatal(err)
+	}
+
+	var logged []string
+	logf := func(format string, args ...interface{}) { logged = append(logged, fmt.Sprintf(format, args...)) }
+	if err := ensureObservationsDedupIndex(db, logf); err != nil {
+		t.Fatalf("ensureObservationsDedupIndex: %v", err)
+	}
+
+	// Only the observer_idx=7 pair was a real violation: one row removed there,
+	// both NULL rows left entirely alone.
+	var ids string
+	if err := db.QueryRow(`SELECT GROUP_CONCAT(id) FROM (SELECT id FROM observations ORDER BY id)`).Scan(&ids); err != nil {
+		t.Fatal(err)
+	}
+	if ids != "1,2,3" {
+		t.Errorf("surviving ids = %q, want \"1,2,3\": NULL observer_idx rows never violate the unique index", ids)
+	}
+
+	// The readings on the NULL rows must be exactly as inserted.
+	for _, want := range []struct {
+		id        int64
+		snr, rssi float64
+	}{{1, 4.5, -70}, {2, 5.5, -60}} {
+		var snr, rssi sql.NullFloat64
+		if err := db.QueryRow(`SELECT snr, rssi FROM observations WHERE id = ?`, want.id).Scan(&snr, &rssi); err != nil {
+			t.Fatal(err)
+		}
+		if !snr.Valid || !rssi.Valid {
+			t.Errorf("id=%d: snr/rssi wiped to NULL — the merge matched nothing and overwrote real readings", want.id)
+			continue
+		}
+		if snr.Float64 != want.snr || rssi.Float64 != want.rssi {
+			t.Errorf("id=%d: snr=%v rssi=%v, want %v/%v", want.id, snr.Float64, rssi.Float64, want.snr, want.rssi)
+		}
+	}
+
+	if !dedupIndexExists(t, db) {
+		t.Error("index missing — proof the NULL rows were never in its way")
+	}
+	if strings.Contains(strings.Join(logged, "\n"), "observer_idx=0") {
+		t.Error("a NULL observer_idx was logged as 0, which hides exactly this class of bug")
 	}
 }

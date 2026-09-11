@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
 )
@@ -40,10 +41,30 @@ var upsertMergedColumns = []string{"snr", "rssi", "score", "raw_hex", "resolved_
 // nearly all of it the same scan performed repeatedly. This runs inside a write
 // transaction and holds the write lock for its duration, so the repetition is
 // worth removing.
+// The WHERE clause is the whole correctness of this query, and leaving it out
+// destroys data.
+//
+// GROUP BY folds all NULLs into one group. A UNIQUE index does the opposite:
+// SQLite treats NULLs as distinct, so a row with NULL in any indexed column can
+// never violate it. Group without excluding them and the repair calls rows
+// duplicates that the index would have accepted, then deletes them to build an
+// index that did not need them gone.
+//
+// Not hypothetical: on an 11.2M-row instance, 198 of the 222 groups this
+// reported had observer_idx IS NULL — 238 of the 262 rows it planned to delete.
+// They were direction='tx' rows, and the index built without complaint once
+// they were left alone.
+//
+// transmission_id is NOT NULL in the schema and COALESCE(path_json, ”) can
+// never be NULL, so observer_idx is the only one that needs the guard; it is
+// written out in full anyway, because the next person to add a column to this
+// index should see the rule rather than infer it.
 const dupGroupsDDL = `CREATE TEMP TABLE dedup_groups AS
 	SELECT transmission_id, observer_idx, COALESCE(path_json, '') AS p,
 	       MIN(id) AS keep, COUNT(*) AS n
 	  FROM observations
+	 WHERE transmission_id IS NOT NULL
+	   AND observer_idx IS NOT NULL
 	 GROUP BY transmission_id, observer_idx, COALESCE(path_json, '')
 	HAVING COUNT(*) > 1`
 
@@ -169,7 +190,7 @@ func collapseDuplicatesAndIndex(rw *sql.DB, logf Logger) (int64, error) {
 	// before ensureResolvedPathColumn and ensureObservationsRawHexColumn, so on
 	// a database old enough to be missing the dedup index, resolved_path and
 	// raw_hex may not exist yet either.
-	cols, err := existingColumns(rw, "observations", upsertMergedColumns)
+	cols, err := existingColumns(tx, "observations", upsertMergedColumns)
 	if err != nil {
 		return 0, err
 	}
@@ -223,7 +244,12 @@ func collapseDuplicatesAndIndex(rw *sql.DB, logf Logger) (int64, error) {
 
 // existingColumns filters want down to the columns table actually has, keeping
 // the given order.
-func existingColumns(rw *sql.DB, table string, want []string) ([]string, error) {
+//
+// Takes a Querier, not *sql.DB, and callers inside a transaction must pass the
+// transaction. Probing the pool from inside one deadlocks the ingestor, whose
+// pool is capped at a single connection: the probe waits for the connection the
+// transaction is holding, and nothing ever releases it.
+func existingColumns(rw Querier, table string, want []string) ([]string, error) {
 	out := make([]string, 0, len(want))
 	for _, c := range want {
 		ok, err := TableHasColumn(rw, table, c)
@@ -267,8 +293,15 @@ func logDuplicateGroups(tx *sql.Tx, logf Logger) error {
 		if err := rows.Scan(&txID, &observerIdx, &pathJSON, &keep, &n); err != nil {
 			return fmt.Errorf("scan dedup_groups: %w", err)
 		}
-		logf("[dbschema]   transmission_id=%d observer_idx=%v path_json=%q rows=%d keeping id=%d",
-			txID, observerIdx.Int64, pathJSON, n, keep)
+		// Print NULL as NULL. Rendering observerIdx.Int64 unconditionally shows
+		// a NULL as 0, which is the one value that would hide the grouping bug
+		// above from the only person able to notice it.
+		idx := "NULL"
+		if observerIdx.Valid {
+			idx = strconv.FormatInt(observerIdx.Int64, 10)
+		}
+		logf("[dbschema]   transmission_id=%d observer_idx=%s path_json=%q rows=%d keeping id=%d",
+			txID, idx, pathJSON, n, keep)
 		listed++
 	}
 	if err := rows.Err(); err != nil {
