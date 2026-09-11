@@ -1764,10 +1764,18 @@
       e.stopPropagation();
       obsMenu.classList.toggle('open');
       typeMenu.classList.remove('open');
-      if (obsMenu.classList.contains('open')) obsSearchInput.focus();
+      // #1884 — don't autofocus on touch devices; it raises the on-screen
+      // keyboard over the list the user is about to tap.
+      const isTouch = window.matchMedia('(pointer: coarse)').matches;
+      if (obsMenu.classList.contains('open') && !isTouch) obsSearchInput.focus();
     });
     obsMenu.addEventListener('change', (e) => {
       const id = e.target.dataset.obsId;
+      // #1884 — obsSearchInput lives inside obsMenu, so its own change
+      // events (blur/Enter) bubble here too; without this guard they run
+      // the else branch below and rebuild the list mid-click, dropping
+      // whatever checkbox the user just pressed.
+      if (!id) return;
       if (id === '__all__') {
         selectedObservers.clear();
       } else {
@@ -1937,6 +1945,8 @@
       var obMenu = document.getElementById('observerMenu');
       if (obMenu) obMenu.querySelectorAll('input[type=checkbox]').forEach(function(cb) { cb.checked = false; });
       document.getElementById('observerTrigger').textContent = 'All Observers ▾';
+      obsSearchInput.value = '';
+      applyObserverSearchFilter();
 
       // Reset type multi-select
       var typeMenu = document.getElementById('typeMenu');
