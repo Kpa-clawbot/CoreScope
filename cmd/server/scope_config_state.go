@@ -125,6 +125,18 @@ func (s *Server) declaredRegionsCSV() (map[string]string, bool) {
 	// endpoint in the server, every 30s. AGENTS.md: copy under the lock,
 	// process outside it.
 	v, err, _ := s.declaredRegionsSF.Do("declared-regions", func() (interface{}, error) {
+		// Double-check inside the flight: a previous winner may have stored a
+		// fresh map between this caller's read above and its arrival here, and
+		// singleflight frees the key as soon as that winner returns. Without
+		// this, a TTL boundary under load can run the query a second time for
+		// nothing. Same idiom as the stats cache in routes.go.
+		s.declaredRegionsMu.Lock()
+		fresh, freshAt := s.declaredRegionsCache, s.declaredRegionsAt
+		s.declaredRegionsMu.Unlock()
+		if fresh != nil && time.Since(freshAt) < declaredRegionsTTL {
+			return fresh, nil
+		}
+
 		rows, qerr := s.db.AllCurrentDeclaredRegions()
 		if qerr != nil {
 			return nil, qerr

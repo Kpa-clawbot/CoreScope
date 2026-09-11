@@ -1877,14 +1877,29 @@
       var scopeColor = scopeState ? scopeTint(node) : null;
       const icon = useLabel ? makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus, scopeState) : makeMarkerIcon(node.role || 'companion', isStale, isAlsoObserver, mbColor || scopeColor);
       const latLng = L.latLng(node.lat, node.lon);
-      var scopeAlt = scopeState ? (', scope config ' + scopeStateLabel(scopeState)) : '';
-      allMarkers.push({ latLng, node, icon, isLabel: useLabel, popupFn: function() { return buildPopup(node); }, alt: (node.name || 'Unknown') + ' (' + (node.role || 'node') + (isAlsoObserver ? ' + observer' : '') + ')' + scopeAlt });
+      // The scope state has to leave the fill and reach the DOM, or a dot marker
+      // is colour and nothing else — which on the achromat preset is six greys
+      // inside 1.7:1. It goes on `title`, NOT `alt`: Leaflet sets options.alt
+      // only when the icon element is an <img> (leaflet-src.js, L.Marker
+      // _initIcon), and every icon on this map is a divIcon, so an alt string
+      // never lands. options.title is applied to whatever element the icon
+      // produced. The popup carries it too, for the pointerless case.
+      var scopeLabel = scopeState ? scopeStateLabel(scopeState) : '';
+      var markerAlt = (node.name || 'Unknown') + ' (' + (node.role || 'node') + (isAlsoObserver ? ' + observer' : '') + ')' +
+        (scopeLabel ? ', scope config ' + scopeLabel : '');
+      allMarkers.push({ latLng, node, icon, isLabel: useLabel, popupFn: function() { return buildPopup(node); }, alt: markerAlt, title: scopeLabel ? markerAlt : '' });
     }
 
     // Add observer markers (skip observers already represented as a node marker)
     // Build set of node pubkeys that are displayed on the map
     const displayedNodePubkeys = new Set(filtered.map(n => (n.public_key || '').toLowerCase()));
-    if (filters.observer) {
+    // #2001 — while a specific scope state is picked, the observer layer stands
+    // down. Two reasons: the filter leads (see the note in the predicate above),
+    // so leaving unrelated pins on the map contradicts the answer; and a
+    // repeater that is also an observer would otherwise drop out of `filtered`,
+    // stop matching displayedNodePubkeys, and reappear as a plain observer pin —
+    // the node the operator just filtered away, back in another guise.
+    if (filters.observer && filters.scopeState === 'all') {
       for (const obs of observers) {
         if (!obs.lat || !obs.lon) continue;
         // Skip observers whose pubkey matches a displayed node — they're shown as combined markers
@@ -1913,7 +1928,7 @@
     var clusterMarkers = [];
     for (const m of allMarkers) {
       const pos = (useCluster ? m.latLng : (m.adjustedLatLng || m.latLng));
-      const marker = L.marker(pos, { icon: m.icon, alt: m.alt });
+      const marker = L.marker(pos, { icon: m.icon, alt: m.alt, title: m.title || '' });
       marker._nodeKey = m.node.public_key || m.node.id || null;
       marker._role = (m.node && m.node.role) || 'companion';
       marker.bindPopup(m.popupFn(), { maxWidth: 280 });
@@ -2028,6 +2043,20 @@
       : `<span style="font-weight:400;color:var(--text-muted);">Unknown</span>`;
     const hashPrefixRow = `<dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Hash Prefix</dt>
           <dd style="font-family:var(--mono);font-size:11px;font-weight:700;margin-left:88px;padding:2px 0;">${hashPrefixValue}</dd>`;
+    // #2001 — scope config, whenever the server classified this node. Stated
+    // here as well as in the marker title because a popup is the one surface
+    // every path reaches: dot markers, hash labels and clustered markers alike.
+    var scopeRow = '';
+    var scopeMeta = null;
+    for (var sgi = 0; sgi < SCOPE_STATES.length; sgi++) {
+      if (SCOPE_STATES[sgi].key === node.scope_config_state) { scopeMeta = SCOPE_STATES[sgi]; break; }
+    }
+    if (scopeMeta) {
+      scopeRow = '<dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Scope</dt>' +
+        '<dd style="margin-left:88px;padding:2px 0;font-size:12px;" title="' + safeEsc(scopeMeta.title) + '">' +
+        '<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--mc-scope-' + scopeMeta.key + ');margin-right:5px;"></span>' +
+        safeEsc(scopeMeta.label) + '</dd>';
+    }
     // Multi-byte support indicator for repeaters
     var mbRow = '';
     if (node.role === 'repeater' && node.multi_byte_status) {
@@ -2044,6 +2073,7 @@
         <dl style="margin-top:8px;font-size:12px;">
           ${hashPrefixRow}
           ${mbRow}
+          ${scopeRow}
           <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Key</dt>
           <dd style="font-family:var(--mono);font-size:11px;margin-left:88px;padding:2px 0;">${safeEsc(key)}</dd>
           <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Location</dt>

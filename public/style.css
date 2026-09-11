@@ -4674,11 +4674,15 @@ body[data-cb-preset="achromat"] {
      out at 70/50/35%, but the two literals (no-flood, none) do not derive and
      landed at L 0.385 and L 0.361 next to full's 0.451: 1.15:1 and 1.06:1,
      which on a monochrome preset is one colour. Ordered by how closed the
-     state is, so the ramp itself carries meaning: observed is the lightest,
-     no-flood the darkest, and "no data" sits outside the ramp as the one
-     value that is not a finding. Adjacent steps are still only ~1.3:1, so the
-     marker's alt text carries the state as well (map.js) — the colour is
-     never the only carrier. */
+     state is, so the ramp itself carries meaning: observed lightest, no-flood
+     darkest, no-data between observed and full.
+
+     This does not make the six distinguishable. Six levels cannot be spread
+     across a greyscale at 3:1 steps — the worst pair here is observed vs
+     no-data at 1.25:1, up from 1.06:1 before, and half the pairs sit under
+     1.8:1. The ramp is an aid, not the answer. What carries the state on this
+     preset is the marker title and the Scope row in the popup (map.js), which
+     is why those are not optional. */
   --mc-scope-observed:    #e6e6e6;
   --mc-scope-full:        #b3b3b3;
   --mc-scope-no-unscoped: #808080;

@@ -198,8 +198,11 @@ func TestHandleNodesMatchesDeclaredTargetCaseInsensitively(t *testing.T) {
 // the query count. Twenty concurrent requests inside the TTL window must
 // produce exactly one execution — one for the cold start, none after.
 //
-// Concurrency is the point, not decoration: the version this replaces held the
-// mutex across the query, and a plain sequential loop passes either way.
+// What this pins is the cache, not the lock: with the cache short-circuit
+// removed it reports 6 to 9 executions, and it passes either way on the older
+// shape that held the mutex across the query. The lock fix is argued from the
+// code, not from this test — see the singleflight comment in
+// scope_config_state.go.
 func TestDeclaredRegionsLookupRunsOncePerWindow(t *testing.T) {
 	srv, router := setupScopeConfigStateServer(t)
 
@@ -325,5 +328,61 @@ func TestHandleNodesReportsObservedForUndeclaredForwarder(t *testing.T) {
 	}
 	if got := node["scope_config_state"]; got != ScopeConfigObserved {
 		t.Errorf("scope_config_state = %v for a never-asked repeater carrying scoped traffic, want %q", got, ScopeConfigObserved)
+	}
+}
+
+// TestScopeAuditAndNodesAgreeEndToEnd is the guard the unit-level agreement
+// test cannot be: it drives the two real handlers over the same stored answer
+// and compares what each page would show. The unit test compares against a
+// copy of the audit's parse loop living in the test file, so reverting the
+// production fix in scope_audit.go leaves it green — which is the exact
+// regression this round was opened for.
+func TestScopeAuditAndNodesAgreeEndToEnd(t *testing.T) {
+	srv, router := setupScopeConfigStateServer(t)
+	// /api/scope-audit reads transmissions.scope_name; the stock test schema
+	// predates it and the handler fails without it.
+	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT`); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.db.detectSchema(context.Background(), srv.db.conn); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := map[string]string{
+		"PK_AGREE_HASHSTAR":  "#be,#*",
+		"PK_AGREE_BARESTAR":  "be,*",
+		"PK_AGREE_STARONLY":  "#*",
+		"PK_AGREE_NAMEDONLY": "#be",
+		"PK_AGREE_EMPTY":     "",
+	}
+	for pk, csv := range cases {
+		if _, err := srv.db.conn.Exec(`INSERT INTO nodes
+			(public_key, name, role, lat, lon, last_seen, first_seen, advert_count, configured_scope, configured_scope_at)
+			VALUES (?, ?, 'repeater', 51.0, 4.0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1, ?, '2026-01-01T00:00:00Z')`,
+			pk, "rp-"+pk, csv,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	audit := getScopeAudit(t, router, "?window=24h")
+	// The audit lowercases the declared target before joining (scope_audit.go),
+	// so its PublicKey comes back lowercased whatever the collector stored.
+	auditState := map[string]string{}
+	for _, row := range audit.Repeaters {
+		auditState[strings.ToLower(row.PublicKey)] = row.ConfigState
+	}
+	nodes := nodesByPubkey(t, router, "?limit=200")
+
+	for pk, csv := range cases {
+		got, ok := auditState[strings.ToLower(pk)]
+		if !ok {
+			t.Errorf("%s (%q): the scope audit does not list the repeater at all", pk, csv)
+			continue
+		}
+		want := nodes[pk]["scope_config_state"]
+		if got != want {
+			t.Errorf("regions_csv %q: the scope audit page shows %q, the map shows %v", csv, got, want)
+		}
 	}
 }
