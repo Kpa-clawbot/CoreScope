@@ -134,3 +134,56 @@ func TestHandleNodeDetailExposesScopeConfigState(t *testing.T) {
 		t.Errorf("scope_config_state = %v, want %q", got, ScopeConfigNoUnscoped)
 	}
 }
+
+// TestHandleNodesOmitsScopeConfigStateWithoutASource is the difference between
+// "nobody has answered" and "this database cannot hold an answer". The stock
+// test schema has neither configured_scope nor node_declared_regions, so every
+// repeater would otherwise be labelled "none" — a positive claim about a
+// network, made from a database that structurally cannot carry the fact.
+func TestHandleNodesOmitsScopeConfigStateWithoutASource(t *testing.T) {
+	srv, router := setupTestServer(t)
+	if srv.db.hasConfiguredScope || srv.db.hasDeclaredRegionsTable {
+		t.Fatal("fixture has a declared-regions source: this test would prove nothing")
+	}
+	if _, err := srv.db.conn.Exec(`INSERT INTO nodes
+		(public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
+		VALUES ('PK_NOSOURCE', 'rp', 'repeater', 51.0, 4.0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1)`,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	nodes := nodesByPubkey(t, router, "?limit=200")
+
+	if v, present := nodes["PK_NOSOURCE"]["scope_config_state"]; present {
+		t.Errorf("repeater carries scope_config_state = %v on a schema with no declared-regions source, want the field absent", v)
+	}
+}
+
+// TestHandleNodesMatchesDeclaredTargetCaseInsensitively pins the join the
+// Scope Audit already makes case-insensitively (scope_audit.go lowercases the
+// declared target before joining). node_declared_regions is filled by an
+// external collector whose casing this repo does not control, and a case-only
+// mismatch would put the audit and the map in disagreement about the same node.
+func TestHandleNodesMatchesDeclaredTargetCaseInsensitively(t *testing.T) {
+	srv, router := setupScopeConfigStateServer(t)
+
+	if _, err := srv.db.conn.Exec(`INSERT INTO nodes
+		(public_key, name, role, lat, lon, last_seen, first_seen, advert_count, configured_scope, configured_scope_at)
+		VALUES ('pk_mixedcase', 'rp', 'repeater', 51.0, 4.0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1, NULL, NULL)`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	// The declared answer names the same node in a different case.
+	if _, err := srv.db.conn.Exec(`INSERT INTO nodes
+		(public_key, configured_scope, configured_scope_at)
+		VALUES ('PK_MIXEDCASE', 'be,*', '2026-01-01T00:00:00Z')`,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	nodes := nodesByPubkey(t, router, "?limit=200")
+
+	if got := nodes["pk_mixedcase"]["scope_config_state"]; got != ScopeConfigFull {
+		t.Errorf("scope_config_state = %v for a declared answer in the other case, want %q", got, ScopeConfigFull)
+	}
+}

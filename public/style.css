@@ -4542,6 +4542,11 @@ th.sort-active { color: var(--accent, #60a5fa); }
   --mc-mb-suspected:   #FFD966;
   --mc-mb-unknown:     #FF8888;
 
+  /* #2001 — the scope-state colours are declared on `body` below, not here.
+   * See the comment there: a custom property that references --mc-mb-* has to
+   * be declared on the same element the preset overrides them on, or it
+   * resolves against :root's value and the preset never reaches it. */
+
   /* #2001 — repeater scope-configuration state (map overlay + legend).
    *
    * Three of the six derive from the multi-byte accents rather than adding a
@@ -4561,6 +4566,32 @@ th.sort-active { color: var(--accent, #60a5fa); }
    * a different one. --mc-scope-none is a fixed neutral: absence of
    * information is not a state on the good/bad axis and must not compete for
    * attention with the states that are. */
+  /* moved to the body rule below */
+}
+
+/* #2001 — scope-state colours, declared on `body` rather than `:root`.
+ *
+ * Four of the six derive from the multi-byte accents rather than adding a
+ * sixth hand-tuned palette, so a colorblind preset retints them with the rest
+ * of the map. That only works from here: the presets override --mc-mb-* on
+ * `body[data-cb-preset="..."]`, and a custom property is substituted using the
+ * value computed on the element it is declared on. Declared on :root these
+ * resolved against :root's --mc-mb-*, so the CSS half of the preset system
+ * never reached them — measured with data-cb-preset="deut" set and no inline
+ * override: --mc-mb-confirmed became #648FFF at body level while
+ * --mc-scope-full stayed #56F0A0. Declared here, both preset paths work: the
+ * CSS blocks because they land on the same element, and cb-presets.js's inline
+ * write on documentElement because body inherits it.
+ *
+ * --mc-scope-observed means "carries scoped traffic, but never told us its
+ * config", a weaker claim than 'full', so it reads as a lighter version of the
+ * same colour rather than a different one. --mc-scope-no-flood does NOT derive:
+ * every role colour is operator-customisable and the default --mc-role-room is
+ * #009E73, a green, which put the rarest state in the same hue as 'full' on a
+ * live instance. --mc-scope-none is a fixed neutral: absence of information is
+ * not a state on the good/bad axis and must not compete for attention with the
+ * states that are. */
+body {
   --mc-scope-full:        var(--mc-mb-confirmed);
   --mc-scope-observed:    color-mix(in srgb, var(--mc-mb-confirmed) 55%, #ffffff);
   --mc-scope-no-unscoped: var(--mc-mb-suspected);

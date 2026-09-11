@@ -52,3 +52,17 @@ func TestNodeScopeConfigStateIgnoresWhitespaceAndCase(t *testing.T) {
 		t.Errorf("hash-prefixed region = %q, want %q", got, ScopeConfigNoUnscoped)
 	}
 }
+
+// TestNodeScopeConfigStateAcceptsHashPrefixedWildcard pins the second spelling
+// of the wildcard. The ingestor treats "*" and "#*" as the same thing
+// (cmd/ingestor/region_keys.go:94), so a collector storing the prefixed form
+// must not have it counted as a named region — that would turn a fully
+// configured repeater into "no unscoped", which reads as a fault.
+func TestNodeScopeConfigStateAcceptsHashPrefixedWildcard(t *testing.T) {
+	if got := nodeScopeConfigState("#be,#*", true, nil); got != ScopeConfigFull {
+		t.Errorf("nodeScopeConfigState(\"#be,#*\") = %q, want %q", got, ScopeConfigFull)
+	}
+	if got := nodeScopeConfigState("#*", true, nil); got != ScopeConfigNoScopes {
+		t.Errorf("nodeScopeConfigState(\"#*\") = %q, want %q", got, ScopeConfigNoScopes)
+	}
+}

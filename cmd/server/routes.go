@@ -44,6 +44,13 @@ type Server struct {
 	memStatsCache    runtime.MemStats
 	memStatsCachedAt time.Time
 
+	// #2001: declared region lists for the scope_config_state field, cached
+	// so /api/nodes does not re-run the merge query pair per request. The
+	// cached map is read by concurrent requests and replaced, never mutated.
+	declaredRegionsMu    sync.Mutex
+	declaredRegionsCache map[string]string
+	declaredRegionsAt    time.Time
+
 	// Cached /api/stats response — recomputed at most once every 10s
 	statsMu       sync.Mutex
 	statsCache    *StatsResponse
@@ -1360,7 +1367,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 					// Omitted entirely when the declared lookup failed —
 					// see declaredRegionsCSV.
 					if declaredOK {
-						csv, has := declaredCSV[pk]
+						csv, has := declaredCSV[strings.ToLower(pk)]
 						node["scope_config_state"] = nodeScopeConfigState(csv, has, info.TransportedScopes)
 					}
 					// #672 4-axis usefulness. traffic_share_score keeps the
@@ -1563,7 +1570,7 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 			// #2001: same field, same rules as handleNodes — the node page
 			// and the map must not disagree about a repeater's scope state.
 			if declaredCSV, ok := s.declaredRegionsCSV(); ok {
-				csv, has := declaredCSV[pubkey]
+				csv, has := declaredCSV[strings.ToLower(pubkey)]
 				node["scope_config_state"] = nodeScopeConfigState(csv, has, info.TransportedScopes)
 			}
 			// #672 4-axis usefulness (see handleNodes for the field
