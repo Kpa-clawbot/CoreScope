@@ -124,7 +124,11 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: '1.27'
-          cache-dependency-path: cmd/ingestor/go.sum
+          # All modules: a -race build of a cgo package is the slowest thing in
+          # this pipeline, and setup-go caches ~/.cache/go-build as well as the
+          # module cache, so a key that misses on an unrelated module hurts most
+          # here. Same reasoning as go-test below.
+          cache-dependency-path: "**/go.sum"
 
       - name: go test -race
         run: |
