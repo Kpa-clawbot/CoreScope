@@ -1123,7 +1123,11 @@ func (s *Server) computeScopeAudit(window, sinceISO string) (*ScopeAuditResponse
 		declaredNamed := make([]string, 0, len(allRegions))
 		declaredSet := make(map[string]bool, len(allRegions))
 		for _, rgn := range allRegions {
-			if rgn == "*" {
+			// isScopeWildcard, not a bare "*" compare: a collector storing the
+			// "#*" spelling would otherwise have it counted as a named region
+			// here and as the wildcard by /api/nodes, and the two pages would
+			// classify the same repeater differently (#2006 review).
+			if isScopeWildcard(rgn) {
 				declaredWildcard = true
 				continue
 			}

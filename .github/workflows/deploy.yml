@@ -266,6 +266,7 @@ jobs:
           node test-issue-1360-pill-letter-count.js
           node test-issue-1364-pill-no-clamp.js
           node test-issue-1375-scope-stats-fetch.js
+          node test-scope-audit-styles-linked.js
           node test-issue-1361-cb-presets.js
           node test-issue-1380-cb-sim-overlay.js
           node test-issue-1380-cb-reset-button.js
@@ -280,6 +281,7 @@ jobs:
           node test-issue-1420-tile-providers.js
           node test-issue-1614-tile-url-function.js
           node test-issue-1438-marker-css-vars.js
+          node test-issue-2001-map-scope-state.js
           node test-issue-1846-observers-width.js
           node test-issue-1562-observers-summary.js
           node test-issue-1509-nav-active-bg.js
