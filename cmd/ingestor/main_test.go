@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -858,7 +861,7 @@ func TestMatchScope(t *testing.T) {
 	// Key = SHA256("#test")[:16] = 9cd8fcf22a47333b591d96a2b848b73f
 	testKey, _ := hex.DecodeString("9cd8fcf22a47333b591d96a2b848b73f")
 	testKeys := map[string][]byte{"#test": testKey}
-	if got := matchScope(testKeys, 5, []byte("hello"), "2AB5"); got != "#test" {
+	if got := regionKeySetFromKeys(testKeys).matchScopeName(5, []byte("hello"), "2AB5"); got != "#test" {
 		t.Errorf("#test vector: matchScope = %q, want #test", got)
 	}
 
@@ -866,17 +869,17 @@ func TestMatchScope(t *testing.T) {
 	// Key = SHA256("#belgium")[:16] = 7085b78ed010599094f8c8e7d1aa0e27
 	belgiumKey, _ := hex.DecodeString("7085b78ed010599094f8c8e7d1aa0e27")
 	belgiumKeys := map[string][]byte{"#belgium": belgiumKey}
-	if got := matchScope(belgiumKeys, 5, []byte("hello"), "4A75"); got != "#belgium" {
+	if got := regionKeySetFromKeys(belgiumKeys).matchScopeName(5, []byte("hello"), "4A75"); got != "#belgium" {
 		t.Errorf("#belgium vector: matchScope = %q, want #belgium", got)
 	}
 
 	// Code1=0000 (unscoped transport) → no region matched
-	if got := matchScope(belgiumKeys, 5, []byte("hello"), "0000"); got != "" {
+	if got := regionKeySetFromKeys(belgiumKeys).matchScopeName(5, []byte("hello"), "0000"); got != "" {
 		t.Errorf("unscoped: matchScope = %q, want empty", got)
 	}
 
 	// Code1 present but matches no configured region → empty string
-	if got := matchScope(belgiumKeys, 5, []byte("hello"), "BEEF"); got != "" {
+	if got := regionKeySetFromKeys(belgiumKeys).matchScopeName(5, []byte("hello"), "BEEF"); got != "" {
 		t.Errorf("no match: matchScope = %q, want empty", got)
 	}
 }
@@ -896,7 +899,7 @@ func TestBuildPacketDataScopeMatching(t *testing.T) {
 	}
 
 	msg := &MQTTPacketMessage{Raw: rawHex}
-	pktData := BuildPacketData(msg, decoded, "obs1", "region1", regionKeys)
+	pktData := BuildPacketData(msg, decoded, "obs1", "region1", regionKeySetFromKeys(regionKeys))
 	if pktData.ScopeName != "#test" {
 		t.Errorf("ScopeName = %q, want #test", pktData.ScopeName)
 	}
@@ -1075,7 +1078,7 @@ func TestBuildPacketDataScopeMatchingNoMatch(t *testing.T) {
 		t.Fatalf("DecodePacket: %v", err)
 	}
 	msg := &MQTTPacketMessage{Raw: rawHex}
-	pktData := BuildPacketData(msg, decoded, "obs1", "region1", regionKeys)
+	pktData := BuildPacketData(msg, decoded, "obs1", "region1", regionKeySetFromKeys(regionKeys))
 
 	if !pktData.IsTransportScoped {
 		t.Fatalf("precondition: IsTransportScoped should be true (Code1 != 0000)")
@@ -1124,7 +1127,7 @@ func TestHandleMessageAdvert_EmptyScopeSkipsDefaultScopeUpdate(t *testing.T) {
 		topic:   "meshcore/SJC/obs1/packets",
 		payload: []byte(`{"raw":"` + rawHex + `"}`),
 	}
-	handleMessage(store, "test", source, msg, nil, map[string][]byte{}, &Config{})
+	handleMessage(store, "test", source, msg, nil, nil, &Config{})
 
 	var got sql.NullString
 	if err := store.db.QueryRow(`SELECT default_scope FROM nodes WHERE public_key = ?`, pubkey).Scan(&got); err != nil {
@@ -1176,7 +1179,7 @@ func TestHandleMessageAdvert_MatchedScopeUpdatesDefaultScope(t *testing.T) {
 		topic:   "meshcore/SJC/obs1/packets",
 		payload: []byte(`{"raw":"` + rawHex + `"}`),
 	}
-	handleMessage(store, "test", source, msg, nil, map[string][]byte{"#de": regionKey}, &Config{})
+	handleMessage(store, "test", source, msg, nil, regionKeySetFromKeys(map[string][]byte{"#de": regionKey}), &Config{})
 
 	var got sql.NullString
 	if err := store.db.QueryRow(`SELECT default_scope FROM nodes WHERE public_key = ?`, pubkey).Scan(&got); err != nil {
@@ -1184,5 +1187,90 @@ func TestHandleMessageAdvert_MatchedScopeUpdatesDefaultScope(t *testing.T) {
 	}
 	if !got.Valid || got.String != "#de" {
 		t.Errorf("default_scope after matched-scope advert = %q (valid=%v), want #de", got.String, got.Valid)
+	}
+}
+
+// codeForRegion derives the on-wire code1 a sender in this region would emit
+// for this payload: the forward direction of what matchScope inverts.
+func codeForRegion(name string, payloadType byte, payload []byte) string {
+	if !strings.HasPrefix(name, "#") {
+		name = "#" + name
+	}
+	sum := sha256.Sum256([]byte(name))
+	mac := hmac.New(sha256.New, sum[:16])
+	mac.Write([]byte{payloadType})
+	mac.Write(payload)
+	h := mac.Sum(nil)
+	code := uint16(h[0]) | uint16(h[1])<<8
+	if code == 0 {
+		code = 1
+	} else if code == 0xFFFF {
+		code = 0xFFFE
+	}
+	return strings.ToUpper(hex.EncodeToString([]byte{byte(code & 0xFF), byte(code >> 8)}))
+}
+
+// findRegionCollision searches for a payload whose code1 is identical under two
+// region names. code1 is two bytes, so one turns up after ~65k tries and the
+// search costs a fraction of a second.
+//
+// A hand-built fixture cannot stand in here: the whole point of the case below
+// is what happens when the matcher genuinely finds two names for one packet,
+// and a fabricated code1 would only prove the test agrees with itself.
+func findRegionCollision(t *testing.T, nameA, nameB string, payloadType byte) ([]byte, string) {
+	t.Helper()
+	payload := make([]byte, 4)
+	for i := 0; i < 1<<22; i++ {
+		payload[0], payload[1] = byte(i), byte(i>>8)
+		payload[2], payload[3] = byte(i>>16), byte(i>>24)
+		if a, b := codeForRegion(nameA, payloadType, payload), codeForRegion(nameB, payloadType, payload); a == b {
+			return append([]byte(nil), payload...), a
+		}
+	}
+	t.Fatalf("no code1 collision between %s and %s in 2^22 payloads", nameA, nameB)
+	return nil, ""
+}
+
+// TestMatchScopeNamesAnUnambiguousPacket is the ordinary case: one configured
+// region derives the packet's code1, so the packet carries that region's name.
+func TestMatchScopeNamesAnUnambiguousPacket(t *testing.T) {
+	keys := loadRegionKeys(&Config{HashRegions: []string{"#be", "#nl"}})
+	payload := []byte{0x01, 0x02, 0x03, 0x04}
+	code1 := codeForRegion("#be", 5, payload)
+
+	if got := regionKeySetFromKeys(keys).matchScopeName(5, payload, code1); got != "#be" {
+		t.Errorf("matchScope = %q, want %q", got, "#be")
+	}
+}
+
+// TestMatchScopeStoresAmbiguousAsUnmatched pins the reason this changed. Two
+// configured regions derive the same code1 for one payload; naming the packet
+// after either is a coin flip, and before this the flip was Go's map iteration
+// order, so the same packet could be stored under different regions on two
+// runs of the same binary.
+func TestMatchScopeStoresAmbiguousAsUnmatched(t *testing.T) {
+	payload, code1 := findRegionCollision(t, "#be", "#zz", 5)
+	keys := loadRegionKeys(&Config{HashRegions: []string{"#be", "#zz"}})
+
+	if n := len(matchingRegions(keys, 5, payload, code1)); n != 2 {
+		t.Fatalf("matchingRegions returned %d names, want 2 — the collision fixture is wrong", n)
+	}
+	if got := regionKeySetFromKeys(keys).matchScopeName(5, payload, code1); got != "" {
+		t.Errorf("matchScope = %q, want the unmatched state: two equally-sourced candidates have no principled winner", got)
+	}
+}
+
+// TestMatchScopeIsOrderIndependent runs the ambiguous case repeatedly. Map
+// iteration order is randomised per range in Go, so a first-match matcher
+// returns different names across iterations of this loop; the answer must not
+// move.
+func TestMatchScopeIsOrderIndependent(t *testing.T) {
+	payload, code1 := findRegionCollision(t, "#be", "#zz", 5)
+	keys := loadRegionKeys(&Config{HashRegions: []string{"#be", "#zz"}})
+
+	for i := 0; i < 50; i++ {
+		if got := regionKeySetFromKeys(keys).matchScopeName(5, payload, code1); got != "" {
+			t.Fatalf("iteration %d: matchScope = %q, want a stable answer across map iteration orders", i, got)
+		}
 	}
 }

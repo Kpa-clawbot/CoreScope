@@ -101,8 +101,15 @@ func main() {
 		log.Printf("No channel keys loaded — GRP_TXT packets will not be decrypted")
 	}
 
-	regionKeys := loadRegionKeys(cfg)
-	store.BackfillDefaultScopeAsync(regionKeys)
+	regionSet := newRegionKeySet(cfg)
+	if cfg.AutoRegionKeysEnabled() {
+		// Fill the derived tier before the first packet is matched, so a
+		// restart does not spend a refresh interval naming nothing.
+		regionSet.refreshFromStore(store)
+	} else {
+		log.Printf("[regions] autoRegionKeys disabled — only the %d configured hashRegions key(s) are in force", len(regionSet.snapshot().all))
+	}
+	store.BackfillDefaultScopeAsync(regionSet)
 	store.BackfillTransportCodesAsync()
 
 	// Subscribe-early + buffer (#1608): the MQTT subscription is brought up
@@ -181,7 +188,7 @@ func main() {
 			markReceiptForTag(tag, time.Now())
 			status.MarkPacket(time.Now())
 			ingestBuffer.Submit(func() {
-				handleMessage(store, tag, src, m, channelKeys, regionKeys, cfg)
+				handleMessage(store, tag, src, m, channelKeys, regionSet, cfg)
 			})
 		})
 
@@ -420,6 +427,22 @@ func main() {
 		}
 	}
 
+	// Derived region keys refresh on their own ticker rather than the daily
+	// retention one: declared-region answers arrive continuously (an observer
+	// report lands, a node is asked again), and waiting up to 24h to name a
+	// newly-discovered region would defeat the point of deriving them.
+	if cfg.AutoRegionKeysEnabled() {
+		interval := time.Duration(cfg.AutoRegionKeysRefreshMinutes()) * time.Minute
+		regionRefreshTicker := time.NewTicker(interval)
+		go func() {
+			for range regionRefreshTicker.C {
+				regionSet.refreshFromStore(store)
+				logScopeMatchCounters()
+			}
+		}()
+		log.Printf("[regions] auto-derived region keys enabled: refreshing every %v, cap %d", interval, cfg.AutoRegionKeysMaxDerived())
+	}
+
 	// Hourly WAL checkpoint to prevent unbounded WAL growth.
 	// TRUNCATE resets the WAL file to zero bytes when all frames are flushed;
 	// if the server's read connection holds frames, remaining pages stay in the
@@ -462,6 +485,13 @@ func main() {
 	go func() {
 		for range statsTicker.C {
 			store.LogStats()
+			// Persist the scope-match tally on the stats cadence rather
+			// than the region-refresh one: the counters are recorded for
+			// every transport-scoped packet, including on instances that
+			// never enable autoRegionKeys and so never run that ticker.
+			if err := store.SaveScopeMatchTotals(); err != nil {
+				log.Printf("[regions] saving scope-match tally: %v", err)
+			}
 			if d := ingestBuffer.Dropped(); d > 0 || ingestBuffer.Pending() > 0 {
 				log.Printf("[ingest-buffer] pending=%d dropped_total=%d", ingestBuffer.Pending(), d)
 			}
@@ -536,6 +566,12 @@ func main() {
 	pruneQueueTicker.Stop()
 	walCheckpointTicker.Stop()
 	stopWatchdog()
+	// A deploy is a SIGTERM, which is exactly the case that used to lose
+	// the tally: save before the process goes away rather than leaving up
+	// to 5 minutes of counting to the next tick that will not come.
+	if err := store.SaveScopeMatchTotals(); err != nil {
+		log.Printf("[regions] saving scope-match tally: %v", err)
+	}
 	store.LogStats() // final stats on shutdown
 	for _, c := range clients {
 		c.Disconnect(5000) // 5s to allow in-flight messages to drain
@@ -654,7 +690,7 @@ func buildForceReconnectFn(client mqtt.Client, tag string) func() {
 	}
 }
 
-func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, channelKeys map[string]string, regionKeys map[string][]byte, cfg *Config) {
+func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, channelKeys map[string]string, regionSet *regionKeySet, cfg *Config) {
 	// Liveness watchdog (#1212): record receipt before any processing so a
 	// slow handler still counts as "source is alive". Cheap atomic store.
 	markLivenessForTag(tag, time.Now())
@@ -698,7 +734,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		switch parts[3] {
 		case "packets":
 			if cfg.ClientRxCoverageEnabled() {
-				handleClientPacket(store, cfg, tag, parts[2], msg, channelKeys, regionKeys)
+				handleClientPacket(store, cfg, tag, parts[2], msg, channelKeys, regionSet)
 			}
 		case "rf":
 			if cfg.ClientRfSamplesEnabled() {
@@ -946,7 +982,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 				log.Printf("MQTT [%s] foreign advert: node=%s name=%s lat=%.4f lon=%.4f observer=%s",
 					tag, truncPK, sanitizeLogString(decoded.Payload.Name), lat, lon, sanitizeLogString(firstNonEmpty(mqttMsg.Origin, observerID)))
 			}
-			pktData := BuildPacketData(mqttMsg, decoded, observerID, region, regionKeys)
+			pktData := BuildPacketData(mqttMsg, decoded, observerID, region, regionSet)
 			pktData.Foreign = foreign
 			isNew, err := store.InsertTransmission(pktData)
 			if err != nil {
@@ -981,7 +1017,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		} else {
 			// Non-ADVERT packets: store normally (routing/channel messages from
 			// in-area observers are relevant regardless of relay hop origin).
-			pktData := BuildPacketData(mqttMsg, decoded, observerID, region, regionKeys)
+			pktData := BuildPacketData(mqttMsg, decoded, observerID, region, regionSet)
 			if _, err := store.InsertTransmission(pktData); err != nil {
 				log.Printf("MQTT [%s] db insert error: %v", tag, err)
 			}
@@ -1635,12 +1671,25 @@ func loadRegionKeys(cfg *Config) map[string][]byte {
 	return keys
 }
 
-// matchScope performs one HMAC-SHA256 per configured region. Expected
-// len(regionKeys) ≤ 50; beyond that, consider a pre-indexed lookup table.
-func matchScope(regionKeys map[string][]byte, payloadType byte, payloadRaw []byte, code1 string) string {
+// matchingRegions returns every configured region whose derived code equals
+// the packet's code1, rather than the first one found.
+//
+// The distinction matters because code1 is two bytes: two configured regions
+// collide on a given payload with probability 1/65536, and at 159 keys on a
+// live instance that is roughly 0.25% of transport-scoped packets, hundreds a
+// week rather than a curiosity. Returning the first match made the stored
+// region name depend on Go's randomised map iteration order, so the same
+// packet could be named differently on two runs and neither answer was
+// evidence of anything.
+//
+// The cost is unchanged: this is the same single pass over the same keys, it
+// just does not stop early. There is no indexable shortcut, because code1 is
+// an HMAC over the payload and nothing here is payload-independent.
+func matchingRegions(regionKeys map[string][]byte, payloadType byte, payloadRaw []byte, code1 string) []string {
 	if code1 == "0000" || len(regionKeys) == 0 || len(payloadRaw) == 0 {
-		return ""
+		return nil
 	}
+	var matched []string
 	for name, key := range regionKeys {
 		mac := hmac.New(sha256.New, key)
 		mac.Write([]byte{payloadType})
@@ -1654,10 +1703,10 @@ func matchScope(regionKeys map[string][]byte, payloadType byte, payloadRaw []byt
 		}
 		codeBytes := [2]byte{byte(code & 0xFF), byte(code >> 8)}
 		if strings.ToUpper(hex.EncodeToString(codeBytes[:])) == code1 {
-			return name
+			matched = append(matched, name)
 		}
 	}
-	return ""
+	return matched
 }
 
 // Version info (set via ldflags)

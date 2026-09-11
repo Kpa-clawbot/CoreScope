@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -851,5 +852,499 @@ func TestDeclaredRegionsMergeWithNoSourcesIsEmptyNotAnError(t *testing.T) {
 	}
 	if len(rows) != 0 {
 		t.Errorf("rows = %+v, want empty", rows)
+	}
+}
+
+// --- Every-hop forwarder attribution and the scan that pays for it ---
+//
+// These cover the change from crediting path[last] to crediting every hop of a
+// flood-family route, and the two-column scan plus per-window TTL that keeps
+// the wider scan affordable.
+
+// seedTransmissionPathAt seeds one transmission whose single observation
+// carries a MULTI-hop path. A one-hop seed cannot tell the two reasons a node
+// gets attributed apart — it is simultaneously path[0] and path[last] — so the
+// mid-path cases below need a path with something after the target on it.
+//
+// Hops are upper-cased for the same reason seedTransmissionRoute does it: the
+// decoder writes them that way (packetpath.DecodePathFromRawHex), and the join
+// has to cope with that rather than with a lowercase convenience fiction.
+func seedTransmissionPathAt(t *testing.T, s *PacketStore, hops []string, seed scopeSeed, routeType int, firstSeen string) {
+	t.Helper()
+	scopeSeedCounter++
+	hash := fmt.Sprintf("scopehash%d", scopeSeedCounter)
+
+	res, err := s.db.conn.Exec(
+		`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, code1, code2, scope_name)
+		 VALUES ('AA', ?, ?, ?, 1, ?, '00', ?)`,
+		hash, firstSeen, routeType, seed.code1, seed.scopeName,
+	)
+	if err != nil {
+		t.Fatalf("seed transmission: %v", err)
+	}
+	txID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("seed transmission id: %v", err)
+	}
+
+	quoted := make([]string, len(hops))
+	for i, h := range hops {
+		quoted[i] = `"` + strings.ToUpper(h) + `"`
+	}
+	pathJSON := "[" + strings.Join(quoted, ",") + "]"
+	if _, err := s.db.conn.Exec(
+		`INSERT INTO observations (transmission_id, path_json, timestamp) VALUES (?, ?, ?)`,
+		txID, pathJSON, time.Now().Unix(),
+	); err != nil {
+		t.Fatalf("seed observation: %v", err)
+	}
+}
+
+// seedTransmission seeds a FLOOD packet (route_type=1) — path[last] is the
+// actual transmitter, so forwarder is attributable.
+
+// TestScopeAuditForwardingAttributesMidPathHop is the fleet-wide half of the
+// mid-path attribution fix. The audit runs a different query from
+// ScopeConformance — one full-window scan instead of one EXISTS per pubkey — so
+// the two share the rule but not the code, and both need pinning.
+//
+// This is the case behind the audit's 65% blind spot: a declared target that
+// forwards steadily but is never the hop an observer hears directly had every
+// region it declares reported as notObserved.
+func TestScopeAuditForwardingAttributesMidPathHop(t *testing.T) {
+	s := newScopeTestStore(t)
+	recent := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	seedTransmissionPathAt(t, s, []string{testFullPubkeyA[:4], "AAAA", "BBBB"}, scopeMatched("#be"), RouteFlood, recent)
+
+	got, err := s.ScopeAuditForwarding("2026-01-01T00:00:00Z", []string{testFullPubkeyA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agg := got[testFullPubkeyA]
+	if agg == nil || agg.scopes["be"] == nil || agg.scopes["be"].Packets != 1 {
+		t.Fatalf("want the mid-path hop attributed to its sole matching target, got %+v", got)
+	}
+	if agg.ambiguousHops != 0 {
+		t.Errorf("ambiguousHops = %d, want 0 — one target matches this hop", agg.ambiguousHops)
+	}
+}
+
+// TestScopeAuditForwardingIgnoresDirectRoutes pins the route-type filter on the
+// audit's own query. With the last-hop restriction gone it is the only guard
+// against crediting a DIRECT route's remaining path plan as forwarding — and a
+// DIRECT packet's hops are frequently the declared targets this audit judges.
+
+// TestScopeAuditForwardingIgnoresDirectRoutes pins the route-type filter on the
+// audit's own query. With the last-hop restriction gone it is the only guard
+// against crediting a DIRECT route's remaining path plan as forwarding — and a
+// DIRECT packet's hops are frequently the declared targets this audit judges.
+func TestScopeAuditForwardingIgnoresDirectRoutes(t *testing.T) {
+	s := newScopeTestStore(t)
+	recent := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	seedTransmissionPathAt(t, s, []string{"AAAA", testFullPubkeyA[:4], "BBBB"}, scopeMatched("#be"), RouteDirect, recent)
+	seedTransmissionPathAt(t, s, []string{"AAAA", "BBBB", testFullPubkeyA[:4]}, scopeMatched("#be"), RouteTransportDirect, recent)
+
+	got, err := s.ScopeAuditForwarding("2026-01-01T00:00:00Z", []string{testFullPubkeyA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agg := got[testFullPubkeyA]; agg != nil && (len(agg.scopes) != 0 || agg.unscopedPackets != 0 || agg.ambiguousHops != 0) {
+		t.Errorf("agg = %+v, want no attribution from DIRECT routes", agg)
+	}
+}
+
+// TestScopeAuditForwardingCountsOneTransmissionOncePerTarget pins that the
+// existing "<target>|<txID>" de-duplication also absorbs the same target
+// matching several hops of ONE path — which could not happen while only
+// path[last] was read, and now can (a routing loop, or two hops colliding on the
+// same truncated prefix). Without it a looping packet would inflate a target's
+// packet count and quietly make a quiet region look busy.
+
+// TestScopeAuditForwardingCountsOneTransmissionOncePerTarget pins that the
+// existing "<target>|<txID>" de-duplication also absorbs the same target
+// matching several hops of ONE path — which could not happen while only
+// path[last] was read, and now can (a routing loop, or two hops colliding on the
+// same truncated prefix). Without it a looping packet would inflate a target's
+// packet count and quietly make a quiet region look busy.
+func TestScopeAuditForwardingCountsOneTransmissionOncePerTarget(t *testing.T) {
+	s := newScopeTestStore(t)
+	recent := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	seedTransmissionPathAt(t, s, []string{testFullPubkeyA[:4], "AAAA", testFullPubkeyA[:4]}, scopeMatched("#be"), RouteFlood, recent)
+
+	got, err := s.ScopeAuditForwarding("2026-01-01T00:00:00Z", []string{testFullPubkeyA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agg := got[testFullPubkeyA]
+	if agg == nil || agg.scopes["be"] == nil {
+		t.Fatalf("want #be attributed, got %+v", got)
+	}
+	if agg.scopes["be"].Packets != 1 {
+		t.Errorf("Packets = %d, want 1 — one transmission, matched on two of its hops", agg.scopes["be"].Packets)
+	}
+}
+
+// TestScopeAuditForwardingAttributesLongerHopByItsOwnLength pins the
+// length-indexed half of scopeAuditPrefixIndex, which every other test in this
+// file leaves untested: they all seed 4-char hops, so a lookup that ignored hop
+// length entirely would still pass them.
+//
+// pkOther shares the first 4 hex chars with testFullPubkeyA and diverges after
+// that, so an 8-char hop has exactly one candidate while a 4-char hop would
+// have two. Attribution must therefore key on the hop's OWN length: at 8 chars
+// this is an unambiguous attribution, not an ambiguousHops row.
+
+// TestScopeAuditForwardingAttributesLongerHopByItsOwnLength pins the
+// length-indexed half of scopeAuditPrefixIndex, which every other test in this
+// file leaves untested: they all seed 4-char hops, so a lookup that ignored hop
+// length entirely would still pass them.
+//
+// pkOther shares the first 4 hex chars with testFullPubkeyA and diverges after
+// that, so an 8-char hop has exactly one candidate while a 4-char hop would
+// have two. Attribution must therefore key on the hop's OWN length: at 8 chars
+// this is an unambiguous attribution, not an ambiguousHops row.
+func TestScopeAuditForwardingAttributesLongerHopByItsOwnLength(t *testing.T) {
+	s := newScopeTestStore(t)
+	pkOther := testFullPubkeyA[:4] + strings.Repeat("33", 30)
+	hop := testFullPubkeyA[:8]
+	recent := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	seedTransmissionPathAt(t, s, []string{hop, "AAAA"}, scopeMatched("#be"), RouteFlood, recent)
+
+	got, err := s.ScopeAuditForwarding("2026-01-01T00:00:00Z", []string{testFullPubkeyA, pkOther})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agg := got[testFullPubkeyA]
+	if agg == nil || agg.scopes["be"] == nil || agg.scopes["be"].Packets != 1 {
+		t.Fatalf("want the 8-char hop attributed to its sole matching target, got %+v", got)
+	}
+	if agg.ambiguousHops != 0 {
+		t.Errorf("ambiguousHops = %d, want 0 — the two targets diverge before hop length 8", agg.ambiguousHops)
+	}
+	if other := got[pkOther]; other != nil && (len(other.scopes) != 0 || other.ambiguousHops != 0) {
+		t.Errorf("pkOther = %+v, want no attribution and no ambiguity — the hop is not its prefix", other)
+	}
+}
+
+// TestScopeAuditForwardingCountsUnmatchedPackets: a transport-scoped packet
+// whose code1 matched no configured region key is stored with scope_name = ""
+// (scopeNameForDB's "transport-scoped but unnameable" state). It is not a
+// named scope, so it must not enter agg.scopes, and it is not an unscoped
+// plain flood either, so it must not enter unscopedPackets. It is its own
+// fact: this instance saw the target forward traffic it holds no key for.
+//
+// Without this counter the audit reports the declared region as "not
+// observed", which reads as a finding about the repeater when it is really a
+// gap in this instance's own hashRegions.
+
+// TestScopeAuditTTLForSevenDayWindow pins the per-window TTL. The 7d window
+// costs a different order of magnitude than the others (16.7s against 4.0s and
+// 0.15s, measured on the live-shaped staging database on 2026-09-07), so it is
+// deliberately not on the 30s the other two share. A future edit that collapses
+// this back to one constant should have to delete a test that says why.
+func TestScopeAuditTTLForSevenDayWindow(t *testing.T) {
+	if got := scopeAuditTTLFor("7d"); got != 5*time.Minute {
+		t.Errorf("scopeAuditTTLFor(7d) = %s, want 5m", got)
+	}
+	for _, w := range []string{"1h", "24h", ""} {
+		if got := scopeAuditTTLFor(w); got != 30*time.Second {
+			t.Errorf("scopeAuditTTLFor(%q) = %s, want 30s", w, got)
+		}
+	}
+}
+
+// TestHandleScopeAuditServesSecondRequestFromCache pins the cache path itself,
+// which the singleflight rewrite moved out of the handler and into
+// scopeAuditCached/scopeAuditStore. A declared row inserted between two
+// requests inside the TTL must NOT appear in the second response: if it does,
+// the response was recomputed and the cache is not being consulted.
+
+// TestHandleScopeAuditServesSecondRequestFromCache pins the cache path itself,
+// which the singleflight rewrite moved out of the handler and into
+// scopeAuditCached/scopeAuditStore. A declared row inserted between two
+// requests inside the TTL must NOT appear in the second response: if it does,
+// the response was recomputed and the cache is not being consulted.
+func TestHandleScopeAuditServesSecondRequestFromCache(t *testing.T) {
+	srv, router := setupScopeAuditServer(t)
+	now := time.Now().UTC().Format(time.RFC3339)
+	insertDeclared(t, srv, testFullPubkeyA, now, "be", 0)
+
+	first := getScopeAudit(t, router, "")
+	if len(first.Repeaters) != 1 {
+		t.Fatalf("first call repeaters = %d, want 1", len(first.Repeaters))
+	}
+
+	insertDeclared(t, srv, testFullPubkeyB, now, "be", 0)
+	second := getScopeAudit(t, router, "")
+	if len(second.Repeaters) != 1 {
+		t.Errorf("second call repeaters = %d, want 1 — the row added after the first call proves the cache was bypassed", len(second.Repeaters))
+	}
+}
+
+// TestHandleScopeAuditNormalisesHashPrefix pins trap 1: transmissions.scope_name
+// keeps the '#' (hashRegions config), regions_csv arrives from the firmware
+// with it already stripped. Declared "be-van" and observed "#be-van" must be
+// recognised as the same scope, not reported as both missing and undeclared.
+
+// TestScopeAuditForwardingCountsUnmatchedPackets: a transport-scoped packet
+// whose code1 matched no configured region key is stored with scope_name = ""
+// (scopeNameForDB's "transport-scoped but unnameable" state). It is not a
+// named scope, so it must not enter agg.scopes, and it is not an unscoped
+// plain flood either, so it must not enter unscopedPackets. It is its own
+// fact: this instance saw the target forward traffic it holds no key for.
+//
+// Without this counter the audit reports the declared region as "not
+// observed", which reads as a finding about the repeater when it is really a
+// gap in this instance's own hashRegions.
+func TestScopeAuditForwardingCountsUnmatchedPackets(t *testing.T) {
+	s := newScopeTestStore(t)
+	hop := testFullPubkeyA[:4]
+	recent := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	seedTransmissionRouteAt(t, s, hop, scopeUnmatched(), RouteFlood, recent)
+
+	got, err := s.ScopeAuditForwarding("2026-01-01T00:00:00Z", []string{testFullPubkeyA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agg := got[testFullPubkeyA]
+	if agg == nil {
+		t.Fatalf("want an agg for the target, got none (result = %+v)", got)
+	}
+	if agg.unmatchedPackets != 1 {
+		t.Errorf("unmatchedPackets = %d, want 1", agg.unmatchedPackets)
+	}
+	if len(agg.scopes) != 0 {
+		t.Errorf("scopes = %+v, want empty — an unmatched packet names no region", agg.scopes)
+	}
+	if agg.unscopedPackets != 0 {
+		t.Errorf("unscopedPackets = %d, want 0 — unmatched is not the same as unscoped", agg.unscopedPackets)
+	}
+}
+
+// TestScopeAuditForwardingCountsUnmatchedOnMidPathHop is the post-M0 case that
+// carries almost all of this counter's real volume: before M0 only a last hop
+// was attributed, so a repeater deep in a flood path contributed nothing at
+// all. Now every hop counts, and the same de-duplication that protects the
+// named-scope tally must protect this one — a target appearing twice in one
+// path is still one packet, not two.
+func TestScopeAuditForwardingCountsUnmatchedOnMidPathHop(t *testing.T) {
+	s := newScopeTestStore(t)
+	hop := testFullPubkeyA[:4]
+	recent := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	seedTransmissionPathAt(t, s, []string{"AAAA", hop, "BBBB", hop}, scopeUnmatched(), RouteFlood, recent)
+
+	got, err := s.ScopeAuditForwarding("2026-01-01T00:00:00Z", []string{testFullPubkeyA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agg := got[testFullPubkeyA]
+	if agg == nil {
+		t.Fatalf("want an agg for the mid-path target, got none (result = %+v)", got)
+	}
+	if agg.unmatchedPackets != 1 {
+		t.Errorf("unmatchedPackets = %d, want 1 — one transmission, matched on two of its hops", agg.unmatchedPackets)
+	}
+}
+
+// TestHandleScopeAuditSurfacesUnmatchedPackets: a repeater declares "behss",
+// and this instance sees it forward transport-scoped traffic it cannot name.
+// The row must still list "behss" as notObserved — an unmatched packet names
+// no region, so it cannot satisfy the declaration — but it must also carry
+// observedUnmatchedPackets, so a client can say the finding might be a missing
+// region key rather than a silent repeater.
+func TestHandleScopeAuditSurfacesUnmatchedPackets(t *testing.T) {
+	srv, router := setupScopeAuditServer(t)
+	pk := testFullPubkeyA
+	insertDeclared(t, srv, pk, time.Now().UTC().Format(time.RFC3339), "behss", 0)
+	recent := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	seedTransmissionRouteAt(t, srv.store, pk[:4], scopeUnmatched(), RouteFlood, recent)
+
+	got := getScopeAudit(t, router, "")
+	if len(got.Repeaters) != 1 {
+		t.Fatalf("repeaters = %+v, want 1", got.Repeaters)
+	}
+	row := got.Repeaters[0]
+	if row.ObservedUnmatchedPackets != 1 {
+		t.Errorf("observedUnmatchedPackets = %d, want 1", row.ObservedUnmatchedPackets)
+	}
+	if len(row.NotObserved) != 1 || row.NotObserved[0] != "behss" {
+		t.Errorf("notObserved = %v, want [\"behss\"] — an unmatched packet names no region and cannot satisfy a declaration", row.NotObserved)
+	}
+	if row.WildcardContradiction {
+		t.Error("wildcardContradiction = true, want false — unmatched traffic is scoped, so it says nothing about '*'")
+	}
+}
+
+// TestHandleScopeAuditVerifiesDeclaredRegion is the case this milestone exists
+// for, built from the real packet that started the investigation. A repeater
+// declares "fm-112"; this instance holds no key for it, so both packets it
+// forwarded are stored unmatched. Verification derives the key from the
+// repeater's own declaration, finds two corroborating packets, and the region
+// must leave notObserved with its evidence count reported.
+// transportFloodPacketFor builds a TRANSPORT_FLOOD packet whose code1 is the
+// code `region` derives over this payload, so the verifier will match it. The
+// shape mirrors realTransportFloodPacket: header 0x14 (route 0, payload type
+// 5), the two transport codes, path byte 0x41 (hash size 2, one hop), the hop,
+// then the payload.
+//
+// It exists because corroboration has to come from DIFFERENT payloads. Two
+// copies of one packet derive the same code by construction, so they are one
+// observation counted twice, not the two independent matches the threshold
+// argument rests on.
+func transportFloodPacketFor(region string, payload []byte) string {
+	code1 := regionCode(region, 5, payload)
+	return "14" + code1 + "0000" + "41" + "E3D3" + strings.ToUpper(hex.EncodeToString(payload))
+}
+
+func TestHandleScopeAuditVerifiesDeclaredRegion(t *testing.T) {
+	srv, router := setupScopeAuditServer(t)
+	pk := testFullPubkeyA
+	insertDeclared(t, srv, pk, time.Now().UTC().Format(time.RFC3339), "fm-112,behss", 0)
+	recent := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	// Two DIFFERENT payloads, each deriving to #fm-112 on its own. The first is
+	// the real packet captured from a live instance; the second is built for
+	// this test. Seeding the same packet twice would prove only that the
+	// verifier counts rows.
+	seedUnmatchedRawAt(t, srv.store, pk[:4], realTransportFloodPacket, RouteTransportFlood, recent)
+	seedUnmatchedRawAt(t, srv.store, pk[:4], transportFloodPacketFor("fm-112", []byte{0x51, 0x52, 0x53, 0x54, 0x55}), RouteTransportFlood, recent)
+
+	got := getScopeAudit(t, router, "")
+	if len(got.Repeaters) != 1 {
+		t.Fatalf("repeaters = %+v, want 1", got.Repeaters)
+	}
+	row := got.Repeaters[0]
+	if row.RegionEvidence["fm-112"] != 2 {
+		t.Errorf("regionEvidence = %v, want fm-112:2", row.RegionEvidence)
+	}
+	for _, n := range row.NotObserved {
+		if n == "fm-112" {
+			t.Errorf("notObserved = %v, must not contain fm-112 - two corroborating packets prove it is forwarded", row.NotObserved)
+		}
+	}
+	if len(row.NotObserved) != 1 || row.NotObserved[0] != "behss" {
+		t.Errorf("notObserved = %v, want [behss] - that region has no corroborating traffic here", row.NotObserved)
+	}
+}
+
+// TestHandleScopeAuditReportsTheVerificationSampleSize pins the field a client
+// needs to subtract RegionEvidence from ObservedUnmatchedPackets honestly.
+// RegionEvidence can only ever count packets inside the sample, so a client
+// that subtracts it from an uncapped total overstates what is unexplained. The
+// two are equal here, which is the case that says "this subtraction is exact".
+
+// TestHandleScopeAuditDoesNotVerifyOnOnePacket: a single match is 1-in-65536
+// and must leave the region in notObserved, with its count still reported so a
+// client can say "one hit, not enough".
+func TestHandleScopeAuditDoesNotVerifyOnOnePacket(t *testing.T) {
+	srv, router := setupScopeAuditServer(t)
+	pk := testFullPubkeyA
+	insertDeclared(t, srv, pk, time.Now().UTC().Format(time.RFC3339), "fm-112", 0)
+	recent := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	seedUnmatchedRawAt(t, srv.store, pk[:4], realTransportFloodPacket, RouteTransportFlood, recent)
+
+	got := getScopeAudit(t, router, "")
+	row := got.Repeaters[0]
+	if row.RegionEvidence["fm-112"] != 1 {
+		t.Errorf("regionEvidence = %v, want fm-112:1", row.RegionEvidence)
+	}
+	if len(row.NotObserved) != 1 || row.NotObserved[0] != "fm-112" {
+		t.Errorf("notObserved = %v, want [fm-112] - one corroborating packet is not evidence", row.NotObserved)
+	}
+}
+
+// TestHandleScopeAuditLeavesCleanRowsAlone: a repeater whose declared regions
+// are all observed by name, with no unmatched traffic at all, must be untouched
+// by verification - no evidence, no change to notObserved, and an empty (not
+// null) regionEvidence so a client can iterate it without a guard.
+
+// TestHandleScopeAuditReportsTheVerificationSampleSize pins the field a client
+// needs to subtract RegionEvidence from ObservedUnmatchedPackets honestly.
+// RegionEvidence can only ever count packets inside the sample, so a client
+// that subtracts it from an uncapped total overstates what is unexplained. The
+// two are equal here, which is the case that says "this subtraction is exact".
+func TestHandleScopeAuditReportsTheVerificationSampleSize(t *testing.T) {
+	srv, router := setupScopeAuditServer(t)
+	pk := testFullPubkeyA
+	insertDeclared(t, srv, pk, time.Now().UTC().Format(time.RFC3339), "fm-112", 0)
+	recent := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	seedUnmatchedRawAt(t, srv.store, pk[:4], realTransportFloodPacket, RouteTransportFlood, recent)
+	seedUnmatchedRawAt(t, srv.store, pk[:4], realTransportFloodPacket, RouteTransportFlood, recent)
+
+	row := getScopeAudit(t, router, "").Repeaters[0]
+	if row.ObservedUnmatchedPackets != 2 {
+		t.Fatalf("observedUnmatchedPackets = %d, want 2", row.ObservedUnmatchedPackets)
+	}
+	if row.ObservedUnmatchedSampled != row.ObservedUnmatchedPackets {
+		t.Errorf("observedUnmatchedSampled = %d, want %d — nothing was capped away at this size, and a client can only tell from this field",
+			row.ObservedUnmatchedSampled, row.ObservedUnmatchedPackets)
+	}
+}
+
+// TestHandleScopeAuditDoesNotVerifyOnOnePacket: a single match is 1-in-65536
+// and must leave the region in notObserved, with its count still reported so a
+// client can say "one hit, not enough".
+
+// seedUnmatchedRawAt seeds one unmatched transmission carrying a real raw_hex,
+// attributed to forwarder. Distinct from seedTransmissionRouteAt, which seeds
+// raw_hex 'AA' - fine for tests that never parse it, useless here.
+func seedUnmatchedRawAt(t *testing.T, s *PacketStore, forwarder, rawHex string, routeType int, firstSeen string) {
+	t.Helper()
+	scopeSeedCounter++
+	hash := fmt.Sprintf("scoperaw%d", scopeSeedCounter)
+	res, err := s.db.conn.Exec(
+		`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, code1, code2, scope_name)
+		 VALUES (?, ?, ?, ?, 5, '9209', '0000', '')`,
+		rawHex, hash, firstSeen, routeType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.conn.Exec(
+		`INSERT INTO observations (transmission_id, path_json, timestamp) VALUES (?, ?, 0)`,
+		txID, `["`+strings.ToUpper(forwarder)+`"]`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestHandleNodeScopesDifferentWindowIsSeparateCacheEntry confirms the cache
+// key includes window: a request for a different window must recompute
+// rather than reuse another window's cached entry.
+
+// TestHandleScopeAuditNamedRegionNeedsNoVerification pins the interaction
+// between naming a packet at ingest and verifying it at read time, which are
+// built separately and had no test together.
+//
+// Deriving region keys from what nodes declare means a packet that used to be
+// stored unnameable now arrives with a name. The audit must then report that
+// region as observed by the ordinary route: present in agg.scopes, absent from
+// notObserved, and NOT claimed by regionEvidence, which exists to explain
+// regions that could only be established by verification.
+//
+// Getting this wrong is not loud. A region would still be green, so the page
+// looks right while the reason underneath it is wrong, and a reader chasing
+// "how do we know this" is told the wrong story.
+func TestHandleScopeAuditNamedRegionNeedsNoVerification(t *testing.T) {
+	srv, router := setupScopeAuditServer(t)
+	pk := testFullPubkeyA
+	insertDeclared(t, srv, pk, time.Now().UTC().Format(time.RFC3339), "fm-112", 0)
+	recent := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	// scopeMatched is the state the ingestor writes once it holds a key for
+	// the region, whether that key was configured by hand or derived.
+	seedTransmissionRouteAt(t, srv.store, pk[:4], scopeMatched("#fm-112"), RouteTransportFlood, recent)
+
+	row := getScopeAudit(t, router, "").Repeaters[0]
+	for _, rgn := range row.NotObserved {
+		if rgn == "fm-112" {
+			t.Errorf("notObserved = %v, must not contain fm-112 — it was observed under its own name", row.NotObserved)
+		}
+	}
+	if n, ok := row.RegionEvidence["fm-112"]; ok {
+		t.Errorf("regionEvidence[fm-112] = %d, want absent — verification explains regions that could not be named, and this one was", n)
+	}
+	if row.ObservedUnmatchedPackets != 0 {
+		t.Errorf("observedUnmatchedPackets = %d, want 0 — a named packet is not unnameable traffic", row.ObservedUnmatchedPackets)
 	}
 }

@@ -159,6 +159,13 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 		return nil, fmt.Errorf("preparing statements: %w", err)
 	}
 
+	// Continue the scope-match tally from where the previous process left
+	// off. Not fatal: a tally that cannot be read costs an observability
+	// number, and refusing to ingest over it would be the worse trade.
+	if err := s.LoadScopeMatchTotals(); err != nil {
+		log.Printf("[regions] restoring scope-match tally: %v", err)
+	}
+
 	// Schedule async migrations. These must NOT block boot. See
 	// async_migration.go for the convention.
 	// PREFLIGHT: async=true reason="composite index build on observations (1.9M+ rows in prod) — converted from sync after v3.8.3"
@@ -226,6 +233,16 @@ func applySchema(db *sql.DB) error {
 			battery_mv INTEGER,
 			temperature_c REAL,
 			foreign_advert INTEGER DEFAULT 0
+		);
+
+		CREATE TABLE IF NOT EXISTS scope_match_totals (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			since_unix INTEGER NOT NULL,
+			unique_matches INTEGER NOT NULL,
+			explicit_over_derived INTEGER NOT NULL,
+			ambiguous INTEGER NOT NULL,
+			none_matches INTEGER NOT NULL,
+			updated_unix INTEGER NOT NULL
 		);
 
 		CREATE TABLE IF NOT EXISTS observers (
@@ -1581,9 +1598,11 @@ func (s *Store) BackfillPathJSONAsync() {
 // MQTT packet inserts and any concurrent backfill goroutines — serialize through
 // the single connection pool. busy_timeout(5000) handles transient cross-process
 // contention with the read-only server process. No additional locking is needed.
-func (s *Store) BackfillDefaultScopeAsync(regionKeys map[string][]byte) {
-	// No region keys configured — all scope_name values will be NULL, nothing to backfill.
-	if len(regionKeys) == 0 {
+func (s *Store) BackfillDefaultScopeAsync(regionSet *regionKeySet) {
+	// No region keys at all — every scope_name is NULL, nothing to backfill.
+	// The emptiness gate is read once here rather than per row: the loop below
+	// uses no keys, it only copies names that are already stored.
+	if len(regionSet.snapshot().all) == 0 {
 		return
 	}
 	s.backfillWg.Add(1)
@@ -2207,7 +2226,7 @@ type MQTTPacketMessage struct {
 // into the past. Packet ordering is owned by the server clock; client
 // clocks are untrusted. msg.Timestamp still flows into observer.last_seen
 // via UpsertObserverAt — that's #1233's MAX/MIN guarded path and is fine.
-func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID, region string, regionKeys map[string][]byte) *PacketData {
+func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID, region string, regionSet *regionKeySet) *PacketData {
 	pathJSON := "[]"
 	// For TRACE packets, path_json must be the payload-decoded route hops
 	// (decoded.Path.Hops), NOT the raw_hex header bytes which are SNR values.
@@ -2260,7 +2279,7 @@ func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID,
 		pd.Code2 = decoded.TransportCodes.Code2
 		if decoded.TransportCodes.Code1 != "0000" {
 			pd.IsTransportScoped = true
-			pd.ScopeName = matchScope(regionKeys, byte(decoded.Header.PayloadType), decoded.payloadRaw, decoded.TransportCodes.Code1)
+			pd.ScopeName = regionSet.matchScopeName(byte(decoded.Header.PayloadType), decoded.payloadRaw, decoded.TransportCodes.Code1)
 		}
 	}
 

@@ -93,12 +93,31 @@
   function mergedScopeChips(row) {
     var missing = Object.create(null);
     row.notObserved.forEach(function (n) { missing[n] = true; });
+    var evidence = row.regionEvidence || {};
     var chips = row.declaredRegions.map(function (n) {
       var observed = !missing[n];
-      return '<span class="sa-chip ' + (observed ? 'sa-chip-observed' : 'sa-chip-unobserved') +
-        '" title="' + escapeHtml(n) +
-        (observed ? ': observed forwarding in this window' : ': declared, but no forwarding observed in this window') +
-        '">' + escapeHtml(n) + '</span>';
+      var hits = evidence[n] || 0;
+      // A green chip with evidence was established by verifying the repeater's
+      // own declaration against its own unnameable traffic, not by matching a
+      // configured region key. Same colour — it is observed either way — with a
+      // dotted underline, so the reader can tell the two apart without a third
+      // colour competing for attention in a column that already carries two.
+      var verified = observed && hits > 0;
+      var cls = 'sa-chip ' + (observed ? 'sa-chip-observed' : 'sa-chip-unobserved') + (verified ? ' sa-chip-verified' : '');
+      var title;
+      if (verified) {
+        title = n + ': observed — ' + hits + ' forwarded packet' + (hits === 1 ? '' : 's') +
+          ' in this window derive to this region, verified against the repeater’s own declared list. ' +
+          'This instance holds no hashRegions key for it, so it could not be named directly.';
+      } else if (observed) {
+        title = n + ': observed forwarding in this window';
+      } else if (hits === 1) {
+        title = n + ': declared, and exactly one forwarded packet derives to it — that is one match in 65536 by chance alone, ' +
+          'so it is not treated as evidence. Two would be.';
+      } else {
+        title = n + ': declared, but no forwarding observed in this window';
+      }
+      return '<span class="' + cls + '" title="' + escapeHtml(title) + '">' + escapeHtml(n) + '</span>';
     });
     if (!chips.length) return '<span class="text-muted">—</span>';
     return chips.join(' ');
@@ -183,6 +202,59 @@
       ' in this window matched more than one declared target\'s pubkey prefix and could not be attributed to any of them. Any “not observed” entry on this row may be explained by that prefix collision rather than a real gap.">possibly ambiguous</span>';
   }
 
+  // unmatchedCaveat flags rows where this instance saw the repeater forward
+  // transport-scoped traffic it holds no region key for. The ingestor stores
+  // those packets with an empty scope_name (see scopeNameForDB), so they name
+  // no region and can never satisfy a declared one — a repeater forwarding a
+  // region this instance cannot name looks exactly like one forwarding
+  // nothing.
+  //
+  // Distinct from ambiguousCaveat, and the distinction is the whole point:
+  // that one is a prefix collision between two repeaters and is nobody's
+  // fault, this one is a missing entry in this instance's own hashRegions and
+  // the reader can fix it. Saying so is what stops them investigating an
+  // innocent repeater.
+  function unmatchedCaveat(row) {
+    var n = row.observedUnmatchedPackets;
+    if (typeof n !== 'number' || !isFinite(n) || n <= 0) return '';
+    // Traffic already accounted for by verification is explained, not
+    // mysterious. What is left over is the interesting case: this repeater
+    // forwards a region it does NOT declare and that this instance also cannot
+    // name. Reporting the full count here would re-raise a question the Scopes
+    // column has just answered.
+    // Only evidence that actually ESTABLISHED a region counts as an
+    // explanation. A region with a single deriving packet stays in notObserved
+    // by design — one match in 65536 is chance, not evidence — and subtracting
+    // it here would call that packet explained while the chip next to it says
+    // the region was not observed. Keyed on notObserved rather than on the
+    // count, so the corroboration threshold stays in one place: the server.
+    var established = Object.create(null);
+    Object.keys(row.regionEvidence || {}).forEach(function (k) { established[k] = true; });
+    (row.notObserved || []).forEach(function (rgn) { delete established[rgn]; });
+
+    var explained = 0;
+    var evidence = row.regionEvidence || {};
+    Object.keys(established).forEach(function (k) { explained += evidence[k]; });
+    // One packet can derive to two of this repeater's declared regions, so the
+    // values can sum past the number of distinct packets behind them.
+    if (explained > n) explained = n;
+    var left = n - explained;
+    if (left <= 0) return '';
+
+    // observedUnmatchedPackets counts every unnameable packet; the evidence can
+    // only come from the ones the verifier actually held (both the per-target
+    // list and the per-window sample are capped). Subtracting an undercounted
+    // number from a complete one overstates what is unexplained, so when the
+    // count was sampled the chip states a bound instead of a figure.
+    var sampled = typeof row.observedUnmatchedSampled === 'number' ? row.observedUnmatchedSampled : n;
+    var bounded = sampled < n;
+    var label = (bounded ? 'at most ' : '') + escapeHtml(left) + ' forwarded packet' + (left === 1 ? '' : 's');
+    return ' <span class="sa-chip sa-chip-unmatched" title="' + label +
+      ' in this window carried a region scope this CoreScope instance holds no key for, and match none of this repeater&#39;s declared regions. ' +
+      'So this repeater forwards at least one region it does not declare, which this instance also cannot name.">' +
+      label + ' unexplained</span>';
+  }
+
   // statusScore ranks a row's Status column numerically for sorting — a
   // simple weighted count (notObserved dominates, matching the server's own
   // findings-first ranking) rather than the badge text, which the Status
@@ -210,7 +282,7 @@
       '<td class="sa-name" data-value="' + escapeHtml(nameSortValue) + '">' + nameHtml(row) + (row.role != null && row.role !== '' ? '<span class="text-muted sa-role"> ' + escapeHtml(row.role) + '</span>' : '') + '</td>' +
       '<td data-value="' + statusScore(row) + '">' + issuesHtml + '</td>' +
       '<td data-value="' + escapeHtml(CONFIG_STATES[row.configState].label) + '">' + configStateHtml(row) + '</td>' +
-      '<td data-value="' + row.notObserved.length + '">' + mergedScopeChips(row) + (row.declaredWildcard ? ' <span class="sa-chip sa-chip-wildcard" title="Declares the \'*\' wildcard — allows plain unscoped floods.">*</span>' : '') + ambiguousCaveat(row) + '</td>' +
+      '<td data-value="' + row.notObserved.length + '">' + mergedScopeChips(row) + (row.declaredWildcard ? ' <span class="sa-chip sa-chip-wildcard" title="Declares the \'*\' wildcard — allows plain unscoped floods.">*</span>' : '') + ambiguousCaveat(row) + unmatchedCaveat(row) + '</td>' +
       '<td data-value="' + (isNaN(declaredAtMs) ? '' : declaredAtMs) + '">' + ageHtml(row) + (row.truncated ? ' <span class="ns-truncated" title="Declared list was truncated by the repeater — a missing region here is not necessarily a real absence.">truncated</span>' : '') + '</td>' +
       '</tr>';
   }
@@ -360,7 +432,7 @@
     // Exposed so the helper tests can assert what the Scopes column RENDERS
     // rather than grepping this file, the same reason map.js exposes its label
     // builder (#1356/#1933).
-    window.__meshcoreScopeAuditInternals = { mergedScopeChips: mergedScopeChips, emptyStateHtml: emptyStateHtml, sourcesLineHtml: sourcesLineHtml };
+    window.__meshcoreScopeAuditInternals = { mergedScopeChips: mergedScopeChips, emptyStateHtml: emptyStateHtml, sourcesLineHtml: sourcesLineHtml, unmatchedCaveat: unmatchedCaveat };
   }
 
   registerPage('scope-audit', { init: init, destroy: destroy });

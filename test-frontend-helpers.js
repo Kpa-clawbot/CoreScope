@@ -7219,6 +7219,31 @@ console.log('\n=== scope-audit.js: mergedScopeChips ===');
     assert.ok(h.includes('&lt;img'));
   });
 
+  test('a region verified against the repeater own declaration is green, and says so', () => {
+    const h = chips({ declaredRegions: ['fm-112'], notObserved: [], regionEvidence: { 'fm-112': 23 } });
+    assert.ok(h.includes('sa-chip-observed'), 'still green — it is observed');
+    assert.ok(h.includes('sa-chip-verified'), 'but marked as established differently');
+    assert.ok(h.includes('23'), 'the tooltip states how much evidence there is');
+  });
+
+  test('a region observed by name carries no verified marker', () => {
+    const h = chips({ declaredRegions: ['be'], notObserved: [], regionEvidence: {} });
+    assert.ok(h.includes('sa-chip-observed'));
+    assert.ok(!h.includes('sa-chip-verified'), 'a normally-named region is not a verification');
+  });
+
+  test('a single-hit region stays grey and its tooltip explains why', () => {
+    const h = chips({ declaredRegions: ['fm-112'], notObserved: ['fm-112'], regionEvidence: { 'fm-112': 1 } });
+    assert.ok(h.includes('sa-chip-unobserved'), 'one hit is not enough to turn it green');
+    assert.ok(/one match/i.test(h), 'must say why one hit was not accepted');
+  });
+
+  test('a missing regionEvidence field renders as before (older server)', () => {
+    const h = chips({ declaredRegions: ['be'], notObserved: ['be'] });
+    assert.ok(h.includes('sa-chip-unobserved'));
+    assert.ok(!h.includes('sa-chip-verified'));
+  });
+
   test('a notObserved entry that is not declared cannot invent a chip', () => {
     // Defensive: the server guarantees notObserved is a subset (197 of 197
     // rows checked), but the column must not grow a phantom chip if that ever
@@ -7226,6 +7251,123 @@ console.log('\n=== scope-audit.js: mergedScopeChips ===');
     const h = chips(row(['be'], ['be', 'ghost']));
     assert.strictEqual((h.match(/<span/g) || []).length, 1);
     assert.ok(!h.includes('ghost'));
+  });
+}
+
+// ===== scope-audit.js: unmatchedCaveat =====
+// A declared region this instance holds no hashRegions key for can never turn
+// green, however much traffic the repeater forwards: the ingestor stores such
+// packets with an empty scope_name, so there is no name for the audit to match
+// the declaration against. On live data that explains a large share of all
+// notObserved entries, so the column must be able to say so instead of
+// presenting every grey chip as a confirmed gap.
+console.log('\n=== scope-audit.js: unmatchedCaveat ===');
+{
+  const ctx = makeSandbox();
+  ctx.registerPage = () => {};
+  loadInCtx(ctx, 'public/app.js');
+  loadInCtx(ctx, 'public/scope-audit.js');
+  const caveat = ctx.__meshcoreScopeAuditInternals.unmatchedCaveat;
+
+  test('zero unmatched packets renders nothing at all', () => {
+    assert.strictEqual(caveat({ observedUnmatchedPackets: 0 }), '');
+  });
+
+  test('a missing field renders nothing (older server, field absent)', () => {
+    assert.strictEqual(caveat({}), '');
+  });
+
+  test('a non-zero unexplained count renders a chip carrying the number', () => {
+    const h = caveat({ observedUnmatchedPackets: 148 });
+    assert.ok(h.includes('sa-chip-unmatched'), 'should carry its own class');
+    assert.ok(h.includes('148'), 'with no evidence to subtract, the whole count is unexplained');
+    assert.ok(h.includes('unexplained'), 'the word changed with the meaning');
+  });
+
+  test('singular and plural are both grammatical', () => {
+    assert.ok(caveat({ observedUnmatchedPackets: 1 }).includes('1 forwarded packet '));
+    assert.ok(caveat({ observedUnmatchedPackets: 2 }).includes('2 forwarded packets '));
+  });
+
+  test('the title says what unexplained traffic implies', () => {
+    // The cause is no longer only a hashRegions gap: after verification, what
+    // is left over is traffic for a region the repeater does not declare.
+    const h = caveat({ observedUnmatchedPackets: 5 });
+    assert.ok(/does not declare/i.test(h), 'must state the sharper conclusion');
+  });
+
+  test('traffic fully explained by verification raises no caveat', () => {
+    assert.strictEqual(caveat({ observedUnmatchedPackets: 23, regionEvidence: { 'fm-112': 23 } }), '');
+  });
+
+  test('only the unexplained remainder is reported', () => {
+    const h = caveat({ observedUnmatchedPackets: 30, regionEvidence: { 'fm-112': 23 } });
+    assert.ok(h.includes('7 forwarded packets '), 'want the remainder, not the total');
+  });
+
+  test('evidence the server refused to count is not subtracted either', () => {
+    // A region with a single deriving packet stays in notObserved on purpose:
+    // one match in 65536 is chance, not evidence (scopeVerifyMinCorroboration).
+    // Subtracting it here would call that packet explained while the chip
+    // beside it says the opposite. Keyed on notObserved rather than on the
+    // number, so the threshold lives in one place: the server.
+    const h = caveat({
+      observedUnmatchedPackets: 3,
+      regionEvidence: { 'fm-112': 1 },
+      notObserved: ['fm-112'],
+    });
+    assert.ok(h.includes('3 forwarded packets '), 'all three are still unexplained');
+  });
+
+  test('evidence that did establish a region is still subtracted', () => {
+    const h = caveat({
+      observedUnmatchedPackets: 10,
+      regionEvidence: { 'nl-nb': 3, belml: 1 },
+      notObserved: ['belml'],
+    });
+    assert.ok(h.includes('7 forwarded packets '), 'subtract the verified 3, keep the uncorroborated 1');
+  });
+
+  test('a sampled count is reported as an upper bound', () => {
+    // observedUnmatchedPackets counts every packet; the evidence can only come
+    // from the packets the verifier actually held. Subtracting an undercounted
+    // number from a complete one overstates what is unexplained, so the chip
+    // says at most rather than pretending to an exact figure.
+    const h = caveat({
+      observedUnmatchedPackets: 900,
+      observedUnmatchedSampled: 512,
+      regionEvidence: { 'nl-nb': 40 },
+    });
+    assert.ok(h.includes('at most 860 forwarded packets '), 'want the bound, stated as one');
+  });
+
+  test('an unsampled count keeps its exact wording', () => {
+    const h = caveat({
+      observedUnmatchedPackets: 30,
+      observedUnmatchedSampled: 30,
+      regionEvidence: { 'fm-112': 23 },
+    });
+    assert.ok(h.includes('7 forwarded packets '), 'exact remainder');
+    assert.ok(!/at most/.test(h), 'nothing was sampled away, so do not hedge');
+  });
+
+  test('a non-numeric count renders nothing rather than NaN', () => {
+    assert.strictEqual(caveat({ observedUnmatchedPackets: '12' }), '');
+    assert.strictEqual(caveat({ observedUnmatchedPackets: NaN }), '');
+  });
+
+  test('evidence exceeding the count cannot produce a negative remainder', () => {
+    // One packet can derive to two of a repeater's declared regions, so the
+    // evidence values can sum past the number of distinct packets.
+    assert.strictEqual(caveat({ observedUnmatchedPackets: 4, regionEvidence: { a: 3, b: 3 } }), '');
+  });
+
+  test('the count is not injected raw into markup', () => {
+    // observedUnmatchedPackets is server-supplied. It is a number in every
+    // sane response, but the chip must not become an injection point if that
+    // ever stops holding.
+    const h = caveat({ observedUnmatchedPackets: '1"><script>alert(1)</script>' });
+    assert.ok(!h.includes('<script'), 'must not emit raw markup from a server-supplied value');
   });
 }
 
@@ -7302,5 +7444,72 @@ console.log('\n=== scope-audit.js: sourcesLineHtml ===');
 
   test('states the precedence rule where a reader with data will see it', () => {
     assert.ok(/newest answer per repeater wins/i.test(line));
+  });
+}
+
+// ===== live.js: one WebSocket per viewer =====
+// app.js opens a socket on every page load and fans messages out through
+// onWS()/offWS(). live.js used to ignore that and open a second socket to the
+// same endpoint, and since the broadcast does no per-client filtering, both
+// carried the identical full packet stream. The live map is the page people
+// leave open for hours, so it doubled origin bandwidth for as long as the tab
+// was open.
+console.log('\n=== live.js: one WebSocket per viewer ===');
+{
+  function makeWSSandbox() {
+    const ctx = makeSandbox();
+    ctx.registerPage = () => {};
+    let constructed = 0;
+    const registered = [];
+    ctx.WebSocket = function () { constructed++; };
+    ctx.onWS = (fn) => registered.push(fn);
+    ctx.offWS = (fn) => {
+      const i = registered.indexOf(fn);
+      if (i >= 0) registered.splice(i, 1);
+    };
+    ctx.L = { map: () => ({ setView: () => ({}), on: () => {}, remove: () => {} }) };
+    ctx.IATA_COORDS_GEO = {};
+    ctx.cancelAnimationFrame = () => {};
+    ctx.document.createElementNS = () => ctx.document.createElement();
+    loadInCtx(ctx, 'public/roles.js');
+    try {
+      loadInCtx(ctx, 'public/live.js');
+    } catch (e) {
+      for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
+    }
+    return { ctx, registered, constructedCount: () => constructed };
+  }
+
+  test('the live map subscribes to the shared channel instead of opening a socket', () => {
+    const { ctx, registered, constructedCount } = makeWSSandbox();
+    const connect = ctx.window._liveConnectWS;
+    assert.ok(connect, '_liveConnectWS must be exposed');
+    connect();
+    assert.strictEqual(constructedCount(), 0, 'live.js must not construct a WebSocket of its own');
+    assert.strictEqual(registered.length, 1, 'it must register exactly one listener on the shared channel');
+  });
+
+  test('re-entering the page keeps one listener, and it is the current one', () => {
+    // Navigating away and back re-runs the page init. Two failure modes sit
+    // either side of this: registering again without dropping the old one
+    // doubles every packet, and skipping the registration leaves the previous
+    // visit's closure subscribed, which renders into a page that is gone. That
+    // second one is not theoretical: it was measured against a running
+    // instance, where packets kept arriving and the live counter stayed at 0.
+    const { ctx, registered } = makeWSSandbox();
+    ctx.window._liveConnectWS();
+    const first = registered[0];
+    ctx.window._liveConnectWS();
+    assert.strictEqual(registered.length, 1, 'exactly one listener must remain');
+    assert.notStrictEqual(registered[0], first, 'and it must be the new one, bound to the current page');
+  });
+
+  test('the handler only reacts to packet messages', () => {
+    const { ctx, registered } = makeWSSandbox();
+    ctx.window._liveConnectWS();
+    const handler = registered[0];
+    // Neither of these carries packet data; the handler must not throw on them.
+    assert.doesNotThrow(() => handler({ type: 'stats' }));
+    assert.doesNotThrow(() => handler(null));
   });
 }
