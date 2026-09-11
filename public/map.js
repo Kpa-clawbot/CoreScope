@@ -1820,8 +1820,17 @@
           return false;
         }
       }
-      // Scope config filter (#2001). Unclassified nodes drop out as soon as a
-      // specific state is picked — see scopeFilterAccepts.
+      // Scope config filter (#2001). Applied to every role, not just repeaters:
+      // picking a scope state is a question about repeater configuration, and
+      // the answer should not leave companions and sensors sitting on the map
+      // as if they were part of it. Unclassified nodes therefore drop out too —
+      // see scopeFilterAccepts.
+      //
+      // This deliberately differs from the byte-size filter three lines up,
+      // which gates itself on role === 'repeater' and leaves everything else
+      // visible. Asked and decided (#2006 review): this filter leads. The byte
+      // filter is not changed here — that is its own behaviour change, for its
+      // own PR.
       if (!scopeFilterAccepts(n, filters.scopeState)) return false;
       // Status filter
       if (filters.statusFilter !== 'all') {
