@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -36,6 +37,19 @@ const (
 	ScopeConfigNone     = "none"     // no declared answer; no scoped traffic observed either
 )
 
+// isScopeWildcard recognises both spellings of the flood wildcard. The
+// ingestor treats "*" and "#*" as the same thing (cmd/ingestor/region_keys.go),
+// and the two readers of a declared list have to agree: counting the prefixed
+// form as a named region turns a fully configured repeater into
+// ScopeConfigNoUnscoped, which reads as a fault, and does it on one page only.
+//
+// Shared with the scope audit deliberately. The map and that page classify the
+// same declared list, so the rule lives in one place and
+// TestScopeConfigStateAgreesWithTheAudit holds them to it.
+func isScopeWildcard(region string) bool {
+	return region == "*" || region == "#*"
+}
+
 // nodeScopeConfigState classifies one node for the scope_config_state field.
 //
 // declaredCSV is the node's most recent declared-regions answer (the raw
@@ -54,11 +68,7 @@ func nodeScopeConfigState(declaredCSV string, hasDeclared bool, transportedScope
 		var named []string
 		wildcard := false
 		for _, rgn := range splitRegionsCSV(declaredCSV) {
-			// Both spellings of the wildcard. The ingestor treats "*" and "#*"
-			// as the same thing (cmd/ingestor/region_keys.go:94); counting the
-			// prefixed form as a named region would turn a fully configured
-			// repeater into ScopeConfigNoUnscoped, which reads as a fault.
-			if rgn == "*" || rgn == "#*" {
+			if isScopeWildcard(rgn) {
 				wildcard = true
 				continue
 			}
@@ -102,22 +112,38 @@ func (s *Server) declaredRegionsCSV() (map[string]string, bool) {
 	}
 
 	s.declaredRegionsMu.Lock()
-	defer s.declaredRegionsMu.Unlock()
-	if s.declaredRegionsCache != nil && time.Since(s.declaredRegionsAt) < declaredRegionsTTL {
-		return s.declaredRegionsCache, true
+	cached, at := s.declaredRegionsCache, s.declaredRegionsAt
+	s.declaredRegionsMu.Unlock()
+	if cached != nil && time.Since(at) < declaredRegionsTTL {
+		return cached, true
 	}
 
-	rows, err := s.db.AllCurrentDeclaredRegions()
+	// The query runs outside the mutex, and singleflight collapses the herd at
+	// the TTL boundary into one execution. Holding the lock across it would
+	// serialise every concurrent /api/nodes request behind a full scan of nodes
+	// plus a window function over node_declared_regions — on the busiest
+	// endpoint in the server, every 30s. AGENTS.md: copy under the lock,
+	// process outside it.
+	v, err, _ := s.declaredRegionsSF.Do("declared-regions", func() (interface{}, error) {
+		rows, qerr := s.db.AllCurrentDeclaredRegions()
+		if qerr != nil {
+			return nil, qerr
+		}
+		atomic.AddInt64(&s.declaredRegionsQueries, 1)
+		out := make(map[string]string, len(rows))
+		for _, r := range rows {
+			out[strings.ToLower(r.Target)] = r.RegionsCSV
+		}
+		s.declaredRegionsMu.Lock()
+		// Cached maps are handed to concurrent readers and never written again.
+		s.declaredRegionsCache = out
+		s.declaredRegionsAt = time.Now()
+		s.declaredRegionsMu.Unlock()
+		return out, nil
+	})
 	if err != nil {
 		log.Printf("[nodes] declared-regions lookup failed, scope_config_state omitted: %v", err)
 		return nil, false
 	}
-	out := make(map[string]string, len(rows))
-	for _, r := range rows {
-		out[strings.ToLower(r.Target)] = r.RegionsCSV
-	}
-	// Cached maps are handed to concurrent readers and never written again.
-	s.declaredRegionsCache = out
-	s.declaredRegionsAt = time.Now()
-	return out, true
+	return v.(map[string]string), true
 }

@@ -66,3 +66,39 @@ func TestNodeScopeConfigStateAcceptsHashPrefixedWildcard(t *testing.T) {
 		t.Errorf("nodeScopeConfigState(\"#*\") = %q, want %q", got, ScopeConfigNoScopes)
 	}
 }
+
+// TestScopeConfigStateAgreesWithTheAudit is the one assertion that keeps the
+// map and the Scope Audit from telling an operator two different things about
+// the same repeater. Both sides classify a declared list; they must classify it
+// the same way, on the same input, or one of the two pages is lying.
+//
+// It compares the real functions rather than two copies of the rules: the
+// audit's parse loop and nodeScopeConfigState both run over the same CSV.
+func TestScopeConfigStateAgreesWithTheAudit(t *testing.T) {
+	for _, csv := range []string{
+		"be,*", "*", "be", "", "#be", "#be,*", "#be,#*", "#*", "#be,#*,#nl",
+		" be , * ", "be-vlg,be,*",
+	} {
+		audit := auditConfigStateForCSV(csv)
+		api := nodeScopeConfigState(csv, true, nil)
+		if audit != api {
+			t.Errorf("regions_csv %q: scope audit says %q, /api/nodes says %q", csv, audit, api)
+		}
+	}
+}
+
+// auditConfigStateForCSV replays the audit's own declared-list parse
+// (handleScopeAudit's loop over splitRegionsCSV) and classifies the result, so
+// the comparison above is against what that page actually computes.
+func auditConfigStateForCSV(csv string) string {
+	declaredWildcard := false
+	declaredNamed := make([]string, 0)
+	for _, rgn := range splitRegionsCSV(csv) {
+		if isScopeWildcard(rgn) {
+			declaredWildcard = true
+			continue
+		}
+		declaredNamed = append(declaredNamed, normScope(rgn))
+	}
+	return scopeAuditConfigState(declaredNamed, declaredWildcard)
+}

@@ -50,6 +50,12 @@ type Server struct {
 	declaredRegionsMu    sync.Mutex
 	declaredRegionsCache map[string]string
 	declaredRegionsAt    time.Time
+	// Collapses the TTL-boundary herd so the query runs once, not once per
+	// in-flight request, and never under declaredRegionsMu.
+	declaredRegionsSF singleflight.Group
+	// Counts executions of that query. Read by the test that pins the cache:
+	// the enforceable perf characteristic here is "N requests, one query".
+	declaredRegionsQueries int64
 
 	// Cached /api/stats response — recomputed at most once every 10s
 	statsMu       sync.Mutex

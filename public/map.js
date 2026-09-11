@@ -107,6 +107,18 @@
     return n.scope_config_state === selection;
   }
 
+  // scopeStateLabel is the short name for a state, or '' for anything this
+  // build does not know. Used by the marker alt text so the dot-marker path
+  // carries the state in words too: the label path has a class, an aria-label
+  // and a title, and a bare dot would otherwise be colour and nothing else —
+  // which on the achromat preset is six greys within about 1.3:1 of each other.
+  function scopeStateLabel(state) {
+    for (var i = 0; i < SCOPE_STATES.length; i++) {
+      if (SCOPE_STATES[i].key === state) return SCOPE_STATES[i].label;
+    }
+    return '';
+  }
+
   // scopeTint returns the marker fill for a node's scope state, or null when
   // the node has none — null leaves the role colour in place rather than
   // painting an unclassified node as if it had been measured. An unknown
@@ -1856,7 +1868,8 @@
       var scopeColor = scopeState ? scopeTint(node) : null;
       const icon = useLabel ? makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus, scopeState) : makeMarkerIcon(node.role || 'companion', isStale, isAlsoObserver, mbColor || scopeColor);
       const latLng = L.latLng(node.lat, node.lon);
-      allMarkers.push({ latLng, node, icon, isLabel: useLabel, popupFn: function() { return buildPopup(node); }, alt: (node.name || 'Unknown') + ' (' + (node.role || 'node') + (isAlsoObserver ? ' + observer' : '') + ')' });
+      var scopeAlt = scopeState ? (', scope config ' + scopeStateLabel(scopeState)) : '';
+      allMarkers.push({ latLng, node, icon, isLabel: useLabel, popupFn: function() { return buildPopup(node); }, alt: (node.name || 'Unknown') + ' (' + (node.role || 'node') + (isAlsoObserver ? ' + observer' : '') + ')' + scopeAlt });
     }
 
     // Add observer markers (skip observers already represented as a node marker)
@@ -2547,6 +2560,7 @@
       scopeFilterAccepts: scopeFilterAccepts,
       scopeTint: scopeTint,
       scopeTintEnabled: scopeTintEnabled,
+      scopeStateLabel: scopeStateLabel,
       scopeFilterHtml: scopeFilterHtml,
       // #1356: exposed so the a11y test can assert what the label RENDERS
       // instead of grepping map.js for where two identifiers sit.

@@ -146,5 +146,54 @@ console.log('\n=== map.js: scope-configuration state (#2001) ===');
   });
 }
 
+// --- the label render path -------------------------------------------------
+// makeRepeaterLabelIcon is where the tint actually lands for a repeater with
+// hash labels on, which is the default. The helpers above say what the colour
+// should be; these say the label carries it, in a form that is not colour alone.
+{
+  const internals = makeSandbox().window.__meshcoreMapInternals;
+  const NODE = { public_key: '3e7a1b9c'.repeat(8), hash_size: 2 };
+
+  test('the scope state reaches the label as a class', () => {
+    const html = internals.makeRepeaterLabelIcon(NODE, false, false, null, 'no-flood').html;
+    assert.ok(/class="[^"]*scope-no-flood/.test(html), 'no scope-no-flood class in: ' + html);
+  });
+
+  test('the state is in the aria-label and the hover title, not only the colour', () => {
+    const html = internals.makeRepeaterLabelIcon(NODE, false, false, null, 'none').html;
+    assert.ok(/aria-label="[^"]*scope config No data/.test(html), 'state missing from aria-label: ' + html);
+    assert.ok(/title="No data/.test(html), 'state missing from the hover title: ' + html);
+  });
+
+  // Both controls are off by default, so a default map must render exactly what
+  // it rendered before this feature existed.
+  test('with no scope state the label is byte-identical to the four-argument call', () => {
+    const withArg = internals.makeRepeaterLabelIcon(NODE, false, false, 'confirmed', null).html;
+    const without = internals.makeRepeaterLabelIcon(NODE, false, false, 'confirmed').html;
+    assert.strictEqual(withArg, without);
+    assert.ok(!/scope-/.test(without), 'default label carries a scope class: ' + without);
+    assert.ok(!/title=/.test(without), 'default label carries a title: ' + without);
+  });
+
+  test('an unknown state string adds nothing to the label', () => {
+    const html = internals.makeRepeaterLabelIcon(NODE, false, false, null, 'not-a-state').html;
+    assert.ok(!/scope-/.test(html), 'unknown state produced a class: ' + html);
+  });
+
+  // One marker carries one colour: with the multi-byte overlay on the scope
+  // tint stands down rather than the two fighting over the same surface.
+  test('a dot marker carries the state in words, not only in its fill', () => {
+    assert.strictEqual(internals.scopeStateLabel('no-flood'), 'No flood');
+    assert.strictEqual(internals.scopeStateLabel('none'), 'No data');
+    assert.strictEqual(internals.scopeStateLabel('not-a-state'), '');
+  });
+
+  test('the multi-byte tint wins when both overlays are on', () => {
+    const html = internals.makeRepeaterLabelIcon(NODE, false, false, 'confirmed', null).html;
+    assert.ok(/status-confirmed/.test(html), 'multi-byte class missing: ' + html);
+    assert.ok(!/scope-/.test(html), 'scope class present alongside the multi-byte tint: ' + html);
+  });
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

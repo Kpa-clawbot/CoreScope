@@ -5,7 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gorilla/mux"
 )
@@ -185,5 +189,141 @@ func TestHandleNodesMatchesDeclaredTargetCaseInsensitively(t *testing.T) {
 
 	if got := nodes["pk_mixedcase"]["scope_config_state"]; got != ScopeConfigFull {
 		t.Errorf("scope_config_state = %v for a declared answer in the other case, want %q", got, ScopeConfigFull)
+	}
+}
+
+// TestDeclaredRegionsLookupRunsOncePerWindow is the perf assertion AGENTS.md
+// asks for: the claim is that scope_config_state costs /api/nodes one cached
+// DB round-trip, not one per request, and the enforceable form of that claim is
+// the query count. Twenty concurrent requests inside the TTL window must
+// produce exactly one execution — one for the cold start, none after.
+//
+// Concurrency is the point, not decoration: the version this replaces held the
+// mutex across the query, and a plain sequential loop passes either way.
+func TestDeclaredRegionsLookupRunsOncePerWindow(t *testing.T) {
+	srv, router := setupScopeConfigStateServer(t)
+
+	if _, err := srv.db.conn.Exec(`INSERT INTO nodes
+		(public_key, name, role, lat, lon, last_seen, first_seen, advert_count, configured_scope, configured_scope_at)
+		VALUES ('PK_PERF', 'rp', 'repeater', 51.0, 4.0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1, 'be,*', '2026-01-01T00:00:00Z')`,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	atomic.StoreInt64(&srv.declaredRegionsQueries, 0)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest("GET", "/api/nodes?limit=200", nil)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Errorf("status = %d, want 200", w.Code)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := atomic.LoadInt64(&srv.declaredRegionsQueries); got != 1 {
+		t.Errorf("declared-regions query ran %d times for 20 requests inside the TTL, want 1", got)
+	}
+	// And the field is still correct, so the cache is not just cheap.
+	nodes := nodesByPubkey(t, router, "?limit=200")
+	if got := nodes["PK_PERF"]["scope_config_state"]; got != ScopeConfigFull {
+		t.Errorf("scope_config_state = %v, want %q", got, ScopeConfigFull)
+	}
+}
+
+// TestHandleNodesReportsObservedForUndeclaredForwarder pins the half of the
+// field that does not come from a declared answer. A repeater that never
+// answered but has been seen carrying scoped traffic must read "observed", not
+// "none" — the difference between "has a region configured, we just have not
+// asked which" and "we have nothing at all", which is the distinction the map
+// colours by.
+//
+// The store is built after the rows are seeded, because TransportedScopes is
+// accumulated at load time from transmissions.scope_name joined to the path
+// hops, not read per request.
+func TestHandleNodesReportsObservedForUndeclaredForwarder(t *testing.T) {
+	db := setupTestDB(t)
+	seedTestData(t, db)
+
+	// The columns the two halves of the field read, on a schema old enough to
+	// have neither.
+	for _, stmt := range []string{
+		`ALTER TABLE nodes ADD COLUMN configured_scope TEXT`,
+		`ALTER TABLE nodes ADD COLUMN configured_scope_at TEXT`,
+		`ALTER TABLE transmissions ADD COLUMN scope_name TEXT`,
+	} {
+		if _, err := db.conn.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 64-hex pubkey: the path-hop join matches a truncated hop against the
+	// node's own pubkey prefix, so a short fixture key would match nothing.
+	const pk = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
+	if _, err := db.conn.Exec(`INSERT INTO nodes
+		(public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
+		VALUES (?, 'silent-forwarder', 'repeater', 51.0, 4.0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1)`, pk,
+	); err != nil {
+		t.Fatal(err)
+	}
+	res, err := db.conn.Exec(
+		`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, scope_name)
+		 VALUES ('AA', 'observed-scope-hash', ?, 0, 1, 1, '{}', '#be')`,
+		time.Now().UTC().Format(time.RFC3339),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The hop is the full pubkey, not a truncated wire hop. TransportedScopes
+	// is gated on full-pubkey attribution (#1902 — a 1-byte hop cannot prove
+	// which of the nodes sharing that byte carried the packet), and in
+	// production the full key is produced by hop resolution rather than read
+	// off the wire. Seeding the resolved form exercises the same index entry
+	// that resolution writes. The decoder uppercases hops, so the fixture does
+	// too, which also pins the lower-casing in addTxToPathHopIndex.
+	if _, err := db.conn.Exec(
+		`INSERT INTO observations (transmission_id, observer_idx, direction, snr, rssi, score, path_json, timestamp)
+		 VALUES (?, 0, 'rx', 1.0, -100, 0, ?, ?)`,
+		txID, `["`+strings.ToUpper(pk)+`"]`, time.Now().Unix(),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.detectSchema(context.Background(), db.conn); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &Config{Port: 3000}
+	srv := NewServer(db, cfg, NewHub())
+	store := NewPacketStore(db, nil)
+	if err := store.Load(); err != nil {
+		t.Fatalf("store.Load: %v", err)
+	}
+	if !store.WaitIndexesReady(5 * time.Second) {
+		t.Fatal("background indexes never became ready")
+	}
+	srv.store = store
+	router := mux.NewRouter()
+	srv.RegisterRoutes(router)
+
+	nodes := nodesByPubkey(t, router, "?limit=200")
+	node := nodes[pk]
+	if node == nil {
+		t.Fatalf("seeded repeater missing from the response")
+	}
+	if node["transported_scopes"] == nil {
+		t.Fatalf("fixture did not produce transported_scopes; the test would prove nothing (got %v)", node)
+	}
+	if got := node["scope_config_state"]; got != ScopeConfigObserved {
+		t.Errorf("scope_config_state = %v for a never-asked repeater carrying scoped traffic, want %q", got, ScopeConfigObserved)
 	}
 }
