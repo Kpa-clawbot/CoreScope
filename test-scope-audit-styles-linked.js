@@ -70,7 +70,13 @@ function classRe(className) {
 // selectorsFor returns every selector that targets className, comments
 // stripped: a class named only inside a comment has no rule.
 function selectorsFor(css, className) {
-  const clean = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  // At-rule preludes are dropped rather than skipped, so the rules INSIDE a
+  // @media or @supports block are parsed like any other. Skipping them left
+  // the checker blind to the rule that hid this page's Config column below
+  // 480px: re-adding that rule kept the suite green.
+  const clean = css
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/@(?:media|supports|layer|container)[^{]*\{/g, '');
   const re = classRe(className);
   const out = [];
   for (const chunk of clean.split('}')) {
@@ -113,13 +119,35 @@ const sheets = linkedStylesheets(html);
 const css = sheets.map(p => (fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '')).join('\n');
 const js = fs.readFileSync('public/scope-audit.js', 'utf8');
 
-// Every class the page emits, in any namespace — the set an ancestor
-// requirement is checked against.
-const emitted = new Set(classesUsedBy(js, ['']));
-// Checked classes are this page's own namespaces, minus tokens that cannot be
-// a class name: a dynamically built prefix ('ns-decl-' + state) or a template
-// fragment. Failing on those would say nothing about the page.
+// classAttrClasses reads only class="..." literals, so the ancestor set holds
+// classes that are really rendered. An earlier version accepted every
+// single-quoted lowercase token in the file, which let 'active', 'true',
+// 'number' and 'function' in and made the ancestor gate accept anything.
+function classAttrClasses(src) {
+  const out = new Set();
+  const re = /class="([^"]*)"/g;
+  let m;
+  while ((m = re.exec(src))) {
+    for (const raw of m[1].split(/[\s'"+]+/)) {
+      const t = raw.trim();
+      if (/^[a-z][a-z0-9-]*$/.test(t)) out.add(t);
+    }
+  }
+  return out;
+}
+
+// Checked classes are this page's own namespaces. The filter is defensive:
+// nothing in scope-audit.js builds a class name by concatenation today, but a
+// token like 'ns-decl-' would report as an unstyled class and say nothing.
 const used = classesUsedBy(js, ['ns-', 'sa-']).filter(c => /^[a-z][a-z0-9-]*[a-z0-9]$/.test(c));
+
+// The ancestor set: classes this page renders in markup, plus the page's own
+// namespace tokens it assembles in variables, plus the app shell around it.
+// This answers "does the page render this class at all", not "is it an ancestor
+// of that element" — a rule like `.active .ns-decl` would pass. That is the
+// limit of a static check; the case it exists for is an ancestor the page never
+// renders under any arrangement.
+const emitted = new Set([...classAttrClasses(js), ...classAttrClasses(html), ...used]);
 
 test('index.html links the stylesheets it names', () => {
   const missing = sheets.filter(p => !fs.existsSync(p));
@@ -133,6 +161,27 @@ test('scope-audit.js uses a non-trivial number of its own classes', () => {
 test('every ns-* / sa-* class it writes has a rule that can apply', () => {
   const unstyled = used.filter(c => !ruleApplies(css, c, emitted));
   assert.deepStrictEqual(unstyled, [], 'classes with no applicable rule in any linked stylesheet: ' + unstyled.join(', '));
+});
+
+// The regression that started the follow-up commit: a stylesheet hiding a
+// column of the table this page renders. The page's own CSS gives the table a
+// min-width and a horizontally scrolling wrapper, so hiding columns is never
+// the intended answer here, and the column that gets hidden is whichever one
+// the fork's panel happened to put third.
+test('no linked stylesheet hides a column of the audit table', () => {
+  const clean = css.replace(/\/\*[\s\S]*?\*\//g, '').replace(/@(?:media|supports|layer|container)[^{]*\{/g, '');
+  const offenders = [];
+  for (const chunk of clean.split('}')) {
+    const brace = chunk.indexOf('{');
+    if (brace === -1) continue;
+    const head = chunk.slice(0, brace);
+    const body = chunk.slice(brace + 1);
+    if (!/\.(ns|sa)-table/.test(head)) continue;
+    if (!/nth-child|nth-of-type/.test(head)) continue;
+    if (!/display\s*:\s*none/.test(body)) continue;
+    offenders.push(head.trim().replace(/\s+/g, ' '));
+  }
+  assert.deepStrictEqual(offenders, [], 'column-hiding rules on the audit table: ' + offenders.join(' | '));
 });
 
 // The checker itself, so a broken checker cannot pass the tree.
