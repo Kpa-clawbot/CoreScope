@@ -32,6 +32,7 @@ node test-issue-1409-no-encrypted-flood.js
 node test-analytics-channels-integration.js
 node test-observers-headings.js
 node test-issue-1789-observer-firmware-cols.js
+node test-observer-search-filter.js
 node test-issue-1648-m1-emoji-scan.js
 node test-issue-1648-m2-emoji-scan.js
 node test-issue-1648-m3-emoji-scan.js

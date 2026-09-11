@@ -1594,7 +1594,7 @@
             <button class="multi-select-trigger" id="observerTrigger" title="Show only packets seen by selected observer stations">All Observers ▾</button>
             <div class="multi-select-menu" id="observerMenu">
               <div class="multi-select-search-wrap">
-                <input type="text" id="observerSearchInput" class="multi-select-search" placeholder="Search observers…" autocomplete="off" aria-label="Search observers">
+                <input type="text" id="observerSearchInput" class="multi-select-search" placeholder="Search observers…" autocomplete="off" aria-label="Search observers" title="Matches anywhere in the name. Start with ^ to match only from the beginning, e.g. ^BE">
               </div>
               <div class="multi-select-list" id="observerList"></div>
             </div>
@@ -1713,9 +1713,16 @@
     const obsTrigger = document.getElementById('observerTrigger');
     const selectedObservers = new Set(filters.observer ? filters.observer.split(',') : []);
     function applyObserverSearchFilter() {
-      const term = (obsSearchInput.value || '').trim().toLowerCase();
+      const raw = (obsSearchInput.value || '').trim().toLowerCase();
+      // #1884 — default to substring matching so "brussels" finds "ON4XYZ
+      // Brussels"; a leading ^ opts into prefix-only matching for narrowing
+      // down a shared prefix like "BE".
+      const anchored = raw.startsWith('^');
+      const term = anchored ? raw.slice(1) : raw;
       obsList.querySelectorAll('.multi-select-item[data-obs-name]').forEach((item) => {
-        item.style.display = (!term || item.dataset.obsName.startsWith(term)) ? '' : 'none';
+        const name = item.dataset.obsName;
+        const matches = !term || (anchored ? name.startsWith(term) : name.includes(term));
+        item.style.display = matches ? '' : 'none';
       });
     }
     function buildObserverMenu() {
