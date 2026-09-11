@@ -11,7 +11,11 @@
 .ns-window { margin: 0; }
 
 .ns-declared-meta { font-size: 11px; color: var(--text-muted); margin: 0 0 10px; }
-.ns-declared-meta .ns-truncated { color: var(--status-amber-text); font-weight: 600; }
+/* Flattened from `.ns-declared-meta .ns-truncated` when this file was ported:
+   the Scope Audit renders the marker in its Declared-age cell, with no
+   .ns-declared-meta ancestor, so the scoped form styled nothing there. The
+   standalone rule covers both callers. */
+.ns-truncated { color: var(--status-amber-text); font-weight: 600; }
 .ns-declared-meta .ns-never-asked { color: var(--text-muted); font-style: italic; }
 
 .ns-empty {
@@ -34,7 +38,12 @@
 .ns-decl-yes { background: color-mix(in srgb, var(--status-green) 16%, transparent); color: var(--status-green-text); }
 .ns-decl-quiet { background: color-mix(in srgb, var(--status-yellow) 18%, transparent); color: var(--status-amber-text); }
 .ns-decl-warn { background: color-mix(in srgb, var(--status-red) 16%, transparent); color: var(--danger); }
-.ns-decl-unknown { background: var(--section-bg, var(--card-bg)); color: var(--text-muted); font-weight: 600; text-transform: none; }
+/* The border is load-bearing here and not on its siblings: --section-bg is
+   defined only in the dark blocks, so in the light theme this falls back to
+   --card-bg, which is white on a near-white page ground. Without the outline
+   the "no flood" badge is invisible — the same failure this file is fixing.
+   Matches the sibling chips in scope-audit.css, which all carry it. */
+.ns-decl-unknown { background: var(--section-bg, var(--card-bg)); border: 1px solid var(--border); color: var(--text-muted); font-weight: 600; text-transform: none; }
 
 .ns-routes { font-size: 11px; color: var(--text-muted); margin: 0 0 14px; }
 .ns-routes b { color: var(--text); font-variant-numeric: tabular-nums; }
@@ -42,6 +51,12 @@
 .ns-links { font-size: 12px; margin-top: 4px; }
 .ns-links a { color: var(--link-color); }
 
-@media (max-width: 480px) {
-  .ns-table th:nth-child(3), .ns-table td:nth-child(3) { display: none; }
-}
+/* The fork this file comes from hides the third column of .ns-table at 480px,
+   where .ns-table is the per-node Scopes panel's four-column table and column
+   three is "Last seen". That rule is deliberately NOT ported: the only
+   .ns-table in this repository is the Scope Audit's, whose third column is
+   Config — the badge column this file exists to make visible. Measured at
+   430px with the rule in place: the Config header and every badge under it
+   computed to display:none. The audit table already scrolls horizontally
+   (.sa-table-wrap + .sa-table min-width), so it needs no column hiding. When
+   the panel lands here, it should bring a rule scoped to its own table. */
