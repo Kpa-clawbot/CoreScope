@@ -212,10 +212,8 @@ func TestWatchdog_EscalationWarnThrottled_1810(t *testing.T) {
 		}
 	}
 
-	tick := make(chan time.Time)
-	done := make(chan struct{})
-	defer close(done)
-	go runLivenessWatchdogLoop(tick, done, threshold, emit)
+	tick, stopLoop := startWatchdogTestLoop(t, threshold, emit)
+	defer stopLoop()
 
 	base := time.Now()
 	// First tick: stamps DisconnectedSinceUnix (no escalation yet).
