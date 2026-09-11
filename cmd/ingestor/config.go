@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/geofilter"
@@ -76,6 +77,14 @@ type Config struct {
 	// obsIATAWhitelistCached is the lazily-built uppercase set for O(1) lookups.
 	obsIATAWhitelistCached map[string]bool
 	obsIATAWhitelistOnce   sync.Once
+
+	// IATAWarnIntervalSec throttles the one-line-per-region warning emitted when
+	// ObserverIATAWhitelist rejects a region. 0 => defaultIATAWarnIntervalSec.
+	IATAWarnIntervalSec int `json:"iataWarnIntervalSec,omitempty"`
+
+	// iataWarnLast tracks when each dropped region was last logged.
+	iataWarnMu   sync.Mutex
+	iataWarnLast map[string]time.Time
 
 	// ObserverBlacklist is a list of observer public keys to drop at ingest.
 	// Messages from blacklisted observers are silently discarded â€” no DB writes,
@@ -355,6 +364,51 @@ func (c *Config) IsObserverIATAAllowed(iata string) bool {
 		c.obsIATAWhitelistCached = m
 	})
 	return c.obsIATAWhitelistCached[strings.ToUpper(strings.TrimSpace(iata))]
+}
+
+// defaultIATAWarnIntervalSec is the re-log interval for whitelist drops (6h).
+const defaultIATAWarnIntervalSec = 21600
+
+// IATAWarnInterval returns how often a dropped region is re-logged.
+func (c *Config) IATAWarnInterval() time.Duration {
+	if c == nil || c.IATAWarnIntervalSec <= 0 {
+		return defaultIATAWarnIntervalSec * time.Second
+	}
+	return time.Duration(c.IATAWarnIntervalSec) * time.Second
+}
+
+// ShouldWarnIATADrop reports whether a whitelist drop for this region should be
+// logged now, recording the decision when it returns true.
+//
+// Logging every dropped message is not an option: a foreign feed runs to
+// thousands of messages a day and would flood the container log. But dropping
+// in silence is worse — an allow-list fails in the dangerous direction, where a
+// legitimate but unlisted region simply vanishes with nothing to show for it.
+// So: one line per region, re-logged at most every IATAWarnInterval for as long
+// as that region keeps arriving. The re-log is deliberate — a strict log-once
+// would emit a single edge event that any scrape window eventually rolls past,
+// leaving an actively-dropping region looking identical to a healthy one.
+func (c *Config) ShouldWarnIATADrop(iata string) bool {
+	if c == nil {
+		return false
+	}
+	code := strings.ToUpper(strings.TrimSpace(iata))
+	if code == "" {
+		return false
+	}
+	interval := c.IATAWarnInterval()
+	now := time.Now()
+
+	c.iataWarnMu.Lock()
+	defer c.iataWarnMu.Unlock()
+	if last, ok := c.iataWarnLast[code]; ok && now.Sub(last) < interval {
+		return false
+	}
+	if c.iataWarnLast == nil {
+		c.iataWarnLast = make(map[string]time.Time)
+	}
+	c.iataWarnLast[code] = now
+	return true
 }
 
 // LoadConfig reads configuration from a JSON file, with env var overrides.
