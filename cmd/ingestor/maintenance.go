@@ -21,11 +21,35 @@ import (
 // the prune is served at the next batch boundary instead of after the whole
 // retention day.
 //
-// 250 keeps a batch near ~4k observation deletes at a typical ~16
-// observations per transmission — a few hundred milliseconds — while
-// keeping the number of commits low (a 16k-transmission day is 64
-// transactions, not 16k).
+// The bound is on transmissions, but hold time scales with the rows actually
+// deleted, and each transmission carries an unbounded number of observations.
+// At ~16 observations per transmission a batch is ~4k row deletes and a few
+// hundred milliseconds; an instance with a denser observation ratio gets a
+// proportionally longer hold from the same batch size. 250 also keeps the
+// commit count low (a 16k-transmission day is 64 transactions, not 16k).
 const pruneBatchTransmissions = 250
+
+// pruneAgedTransmissionIDs selects the next batch of transmissions older than
+// the cutoff. Both statements of a batch embed it, so they resolve the same
+// set: nothing modifies `transmissions` between them inside the transaction.
+//
+// The ORDER BY must be satisfiable from idx_transmissions_first_seen. That
+// index carries the rowid as its tiebreaker, so "first_seen, id" is walked
+// straight off it and the LIMIT stays deterministic even when timestamps tie.
+// Ordering by id alone looks equivalent but makes SQLite abandon the index for
+// a rowid SCAN. That is harmless while rows are being deleted — the oldest
+// rows have the lowest rowids and match at once — but the batch that finds
+// nothing, which is the steady state whenever nothing has aged out, walks the
+// whole table under writerMu. TestPruneAgedTransmissionIDsUsesFirstSeenIndex
+// pins the plan.
+const pruneAgedTransmissionIDs = `SELECT id FROM transmissions WHERE first_seen < ? ORDER BY first_seen, id LIMIT ?`
+
+// The two statements of one prune batch. Child observations go first (no
+// CASCADE in SQLite).
+const (
+	pruneObservationsBatch  = `DELETE FROM observations WHERE transmission_id IN (` + pruneAgedTransmissionIDs + `)`
+	pruneTransmissionsBatch = `DELETE FROM transmissions WHERE id IN (` + pruneAgedTransmissionIDs + `)`
+)
 
 // PruneOldPackets deletes transmissions (and their child observations)
 // older than `days`. Returns count of transmissions deleted.
@@ -53,20 +77,10 @@ func (s *Store) PruneOldPackets(days int) (int64, error) {
 		var batch int64
 		// Tagged for writer-perf visibility (#1340).
 		err := s.WriterTx("prune_packets", func(tx *sql.Tx) error {
-			// Both statements resolve the same bounded set: nothing modifies
-			// `transmissions` between them inside this transaction, and
-			// ORDER BY id makes the LIMIT deterministic.
-			//
-			// Delete child observations first (no CASCADE in SQLite).
-			if _, err := tx.Exec(`DELETE FROM observations WHERE transmission_id IN (
-				SELECT id FROM transmissions WHERE first_seen < ? ORDER BY id LIMIT ?
-			)`, cutoff, pruneBatchTransmissions); err != nil {
+			if _, err := tx.Exec(pruneObservationsBatch, cutoff, pruneBatchTransmissions); err != nil {
 				return fmt.Errorf("prune observations: %w", err)
 			}
-
-			res, err := tx.Exec(`DELETE FROM transmissions WHERE id IN (
-				SELECT id FROM transmissions WHERE first_seen < ? ORDER BY id LIMIT ?
-			)`, cutoff, pruneBatchTransmissions)
+			res, err := tx.Exec(pruneTransmissionsBatch, cutoff, pruneBatchTransmissions)
 			if err != nil {
 				return fmt.Errorf("prune transmissions: %w", err)
 			}
@@ -76,12 +90,13 @@ func (s *Store) PruneOldPackets(days int) (int64, error) {
 		if err != nil {
 			return total, err
 		}
-		// A batch that deleted nothing means no rows are left below the
-		// cutoff; every batch before it deleted exactly what it selected.
-		if batch == 0 {
+		total += batch
+		// A short batch proves nothing is left below the cutoff: the subquery
+		// found fewer rows than it was allowed to take. Only a batch that came
+		// back exactly full needs another pass.
+		if batch < pruneBatchTransmissions {
 			break
 		}
-		total += batch
 	}
 	if total > 0 {
 		log.Printf("[prune] deleted %d transmissions older than %d days", total, days)
