@@ -43,6 +43,9 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensureServerIndexes(rw); err != nil {
 		return fmt.Errorf("ensure server indexes: %w", err)
 	}
+	if err := ensureObservationsDedupIndex(rw, logf); err != nil {
+		return fmt.Errorf("ensure observations dedup index: %w", err)
+	}
 	if err := ensureNeighborEdgesTable(rw); err != nil {
 		return fmt.Errorf("ensure neighbor_edges: %w", err)
 	}
@@ -189,9 +192,27 @@ func AssertReady(ro *sql.DB) error {
 	return nil
 }
 
+// Querier is the read surface shared by *sql.DB and *sql.Tx.
+//
+// Not *sql.Conn: it exposes only QueryContext/QueryRowContext, so it does not
+// satisfy this. Widen the interface to the Context variants if a caller ever
+// needs one.
+//
+// It exists so schema probes can run on whichever handle the caller already
+// holds. Taking *sql.DB unconditionally is a deadlock waiting to happen: a
+// caller inside a transaction has the connection checked out, and on a pool
+// capped at one connection — which is what cmd/ingestor runs — a probe against
+// the pool waits forever for the connection its own transaction is holding.
+type Querier interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
 // TableHasColumn reports whether the given table has the given column.
 // Exported because tests and the read-side need it without re-implementing.
-func TableHasColumn(db *sql.DB, table, column string) (bool, error) {
+//
+// Pass the transaction, not the pool, when you are inside one. See Querier.
+func TableHasColumn(db Querier, table, column string) (bool, error) {
 	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {
 		return false, err
