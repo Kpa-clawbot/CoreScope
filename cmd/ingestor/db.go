@@ -194,21 +194,10 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 	// inserts maintain the column inline (see InsertTransmission below).
 	// PREFLIGHT: async=true reason="full-table backfill JOIN (1.9M+ obs × 86k+ tx in prod) — must not block ingestor boot"
 	if err := s.RunAsyncMigration(context.Background(), "tx_last_seen_backfill_v1",
-		func(ctx context.Context, d *sql.DB) error {
-			log.Println("[migration/async] Backfilling transmissions.last_seen from MAX(observations.timestamp)...")
-			res, err := d.ExecContext(ctx, `
-				UPDATE transmissions
-				SET last_seen = COALESCE((
-					SELECT MAX(timestamp) FROM observations WHERE transmission_id = transmissions.id
-				), last_seen)
-				WHERE last_seen = 0
-			`)
-			if err != nil {
-				return err
-			}
-			n, _ := res.RowsAffected()
-			log.Printf("[migration/async] transmissions.last_seen backfill complete: %d rows updated", n)
-			return nil
+		func(ctx context.Context, _ *sql.DB) error {
+			// Chunked: see backfill_tx_last_seen.go. The single unbounded UPDATE
+			// this replaces held the writer lock for the whole table (#1724).
+			return s.logBackfillTxLastSeen(ctx)
 		}); err != nil {
 		log.Printf("[migration/async] scheduling tx_last_seen_backfill_v1 failed: %v", err)
 	}
