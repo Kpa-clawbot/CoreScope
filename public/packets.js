@@ -1592,7 +1592,12 @@
         <div class="filter-group filter-group-dropdowns">
           <div class="multi-select-wrap" id="observerFilterWrap">
             <button class="multi-select-trigger" id="observerTrigger" title="Show only packets seen by selected observer stations">All Observers ▾</button>
-            <div class="multi-select-menu" id="observerMenu"></div>
+            <div class="multi-select-menu" id="observerMenu">
+              <div class="multi-select-search-wrap">
+                <input type="text" id="observerSearchInput" class="multi-select-search" placeholder="Search observers…" autocomplete="off" aria-label="Search observers" title="Matches anywhere in the name. Start with ^ to match only from the beginning, e.g. ^BE">
+              </div>
+              <div class="multi-select-list" id="observerList"></div>
+            </div>
           </div>
           <div id="packetsRegionFilter" class="region-filter-container" style="display:inline-block;vertical-align:middle"></div>
           <div id="packetsAreaFilter" style="display:none;vertical-align:middle"></div>
@@ -1703,8 +1708,23 @@
 
     // --- Observer multi-select ---
     const obsMenu = document.getElementById('observerMenu');
+    const obsList = document.getElementById('observerList');
+    const obsSearchInput = document.getElementById('observerSearchInput');
     const obsTrigger = document.getElementById('observerTrigger');
     const selectedObservers = new Set(filters.observer ? filters.observer.split(',') : []);
+    function applyObserverSearchFilter() {
+      const raw = (obsSearchInput.value || '').trim().toLowerCase();
+      // #1884 — default to substring matching so "brussels" finds "ON4XYZ
+      // Brussels"; a leading ^ opts into prefix-only matching for narrowing
+      // down a shared prefix like "BE".
+      const anchored = raw.startsWith('^');
+      const term = anchored ? raw.slice(1) : raw;
+      obsList.querySelectorAll('.multi-select-item[data-obs-name]').forEach((item) => {
+        const name = item.dataset.obsName;
+        const matches = !term || (anchored ? name.startsWith(term) : name.includes(term));
+        item.style.display = matches ? '' : 'none';
+      });
+    }
     function buildObserverMenu() {
       const allChecked = selectedObservers.size === 0;
       let html = `<label class="multi-select-item"><input type="checkbox" data-obs-id="__all__" ${allChecked ? 'checked' : ''}> All Observers</label>`;
@@ -1716,11 +1736,15 @@
       } else {
         for (const o of observers) {
           const checked = selectedObservers.has(String(o.id)) ? 'checked' : '';
-          html += `<label class="multi-select-item"><input type="checkbox" data-obs-id="${o.id}" ${checked}> ${escapeHtml(o.name || o.id)}</label>`;
+          const name = o.name || String(o.id);
+          html += `<label class="multi-select-item" data-obs-name="${escapeHtml(name.toLowerCase())}"><input type="checkbox" data-obs-id="${o.id}" ${checked}> ${escapeHtml(name)}</label>`;
         }
       }
-      obsMenu.innerHTML = html;
+      obsList.innerHTML = html;
+      applyObserverSearchFilter();
     }
+    obsSearchInput.addEventListener('click', (e) => e.stopPropagation());
+    obsSearchInput.addEventListener('input', applyObserverSearchFilter);
     // #1693 — expose for loadObservers() to refresh on resolve.
     _rebuildObserverMenu = () => { buildObserverMenu(); updateObsTrigger(); };
     function updateObsTrigger() {
@@ -1736,9 +1760,22 @@
     }
     buildObserverMenu();
     updateObsTrigger();
-    obsTrigger.addEventListener('click', (e) => { e.stopPropagation(); obsMenu.classList.toggle('open'); typeMenu.classList.remove('open'); });
+    obsTrigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      obsMenu.classList.toggle('open');
+      typeMenu.classList.remove('open');
+      // #1884 — don't autofocus on touch devices; it raises the on-screen
+      // keyboard over the list the user is about to tap.
+      const isTouch = window.matchMedia('(pointer: coarse)').matches;
+      if (obsMenu.classList.contains('open') && !isTouch) obsSearchInput.focus();
+    });
     obsMenu.addEventListener('change', (e) => {
       const id = e.target.dataset.obsId;
+      // #1884 — obsSearchInput lives inside obsMenu, so its own change
+      // events (blur/Enter) bubble here too; without this guard they run
+      // the else branch below and rebuild the list mid-click, dropping
+      // whatever checkbox the user just pressed.
+      if (!id) return;
       if (id === '__all__') {
         selectedObservers.clear();
       } else {
@@ -1908,6 +1945,8 @@
       var obMenu = document.getElementById('observerMenu');
       if (obMenu) obMenu.querySelectorAll('input[type=checkbox]').forEach(function(cb) { cb.checked = false; });
       document.getElementById('observerTrigger').textContent = 'All Observers ▾';
+      obsSearchInput.value = '';
+      applyObserverSearchFilter();
 
       // Reset type multi-select
       var typeMenu = document.getElementById('typeMenu');
