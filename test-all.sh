@@ -148,6 +148,7 @@ node test-observers-headings.js
 node test-packet-filter-time.js
 node test-packet-filter-ux.js
 node test-packet-filter.js
+node test-packets-local-channels.js
 node test-packets.js
 node test-panel-corner.js
 node test-path-inspector.js

@@ -4,8 +4,8 @@
 `npm run test:unit` and the CI **Run JS unit tests** step invoke it. `npm test`
 and `npm run test:coverage` wrap the same runner with coverage reporting.
 
-The inventory currently covers 278 root suites: 166 standalone suites in the
-runner and 112 suites classified separately by their prerequisites.
+The inventory currently covers 280 root suites: 167 standalone suites in the
+runner and 113 suites classified separately by their prerequisites.
 
 Run `npm run test:unit` from a checkout with Node.js, a POSIX shell, Bash, and
 Python 3 available. The XSS gate's fixture test uses Bash and Python. On
