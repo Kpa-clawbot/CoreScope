@@ -2297,7 +2297,7 @@ func TestGetScopeStats(t *testing.T) {
 // scope_name states (NULL is unscoped, an empty string is unknown scope, a
 // name is a named scope).
 func TestGetScopeStatsAdvertsByRole(t *testing.T) {
-	conn, err := sql.Open("sqlite", ":memory:")
+	conn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("sql.Open: %v", err)
 	}
@@ -2381,7 +2381,7 @@ func TestGetScopeStatsAdvertsByRole(t *testing.T) {
 }
 
 func TestGetScopeStatsAdvertsByRoleEmpty(t *testing.T) {
-	conn, err := sql.Open("sqlite", ":memory:")
+	conn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("sql.Open: %v", err)
 	}
