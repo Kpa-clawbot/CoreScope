@@ -471,7 +471,7 @@
 .spark-bars { display: flex; align-items: flex-end; gap: 2px; height: 28px; }
 .spark-bar { flex: 1; background: var(--accent); border-radius: 1px; min-width: 0; }
 
-.mnc-actions { display: flex; gap: 8px; }
+.mnc-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .mnc-btn {
   padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border);
   background: var(--surface-2); color: var(--text); font: 500 .75rem var(--font);

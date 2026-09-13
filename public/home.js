@@ -339,6 +339,7 @@
           ${obs.length ? `<div class="mnc-observers"><strong>Heard by:</strong> ${obs.map(o => escapeHtml(o.observer_name || o.observer_id)).join(', ')}</div>` : ''}
           ${sparkHtml ? `<div class="mnc-spark">${sparkHtml}</div>` : ''}
           <div class="mnc-actions">
+            <button class="mnc-btn" data-action="node" data-key="${mn.pubkey}">Node page →</button>
             <button class="mnc-btn" data-action="health" data-key="${mn.pubkey}">Full health →</button>
             <button class="mnc-btn" data-action="packets" data-key="${mn.pubkey}">View packets →</button>
           </div>
@@ -356,6 +357,9 @@
             <button class="mnc-remove" data-key="${mn.pubkey}" title="Remove" aria-label="Remove ${escapeAttr(mn.name || truncate(mn.pubkey, 12))} from My Mesh"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
           </div>
           <div class="mnc-status-text">${statusMsg}</div>
+          <div class="mnc-actions">
+            <button class="mnc-btn" data-action="node" data-key="${mn.pubkey}">Node page →</button>
+          </div>
         </div>`;
       }
     }));
@@ -378,6 +382,7 @@
     grid.querySelectorAll('.mnc-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (btn.dataset.action === 'node') window.location.hash = '#/nodes/' + encodeURIComponent(btn.dataset.key);
         if (btn.dataset.action === 'health') loadHealth(btn.dataset.key);
         if (btn.dataset.action === 'packets') window.location.hash = '#/packets/' + btn.dataset.key;
       });
