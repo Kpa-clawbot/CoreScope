@@ -179,7 +179,7 @@ func componentSchemas() map[string]interface{} {
 				"relay_count_24h":          map[string]interface{}{"type": "integer", "description": "Repeater/room only: relay-hop appearances in the last 24 hours."},
 				"unscoped_relay_count_24h": map[string]interface{}{"type": "integer", "description": "Repeater/room only: subset of relay_count_24h that were unscoped floods (route_type FLOOD). A well-configured repeater sets flood.max.unscoped 0, so a non-trivial count flags a base-config problem."},
 				"last_relayed":             str("Repeater/room only: RFC3339 time this node last appeared as a relay hop."),
-				"declared_regions":         map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Repeater/room only (#1862): named regions from this node's newest declared-regions answer, spelled as GET /api/scope-audit declaredRegions spells them (leading '#' stripped, '*' wildcard excluded). Empty array: it answered and named no region. Absent: it never answered, or this database has no declared-regions source. Absence is not evidence the node lacks a region."},
+				"declared_regions":         map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Repeater/room only (#1862): named regions from this node's newest declared-regions answer, spelled as GET /api/scope-audit declaredRegions spells them (leading '#' stripped, '*' wildcard excluded). Empty array: it answered and named no region. Absent: it never answered, this database has no declared-regions source, or the declared-regions lookup failed. Absence is not evidence the node lacks a region."},
 				"relay_window_hours":       map[string]interface{}{"type": "integer", "description": "Repeater/room only, /api/nodes/{pubkey} detail endpoint only: width (hours) of the relay-activity window the relay_count_* values cover."},
 				"traffic_share_score":      score01("#672 Traffic axis: share of non-advert traffic relayed through this repeater. Repeater/room only."),
 				"bridge_score":             score01("#672 Bridge axis: normalized betweenness centrality (chokepoint importance). Repeater/room only."),
@@ -190,6 +190,7 @@ func componentSchemas() map[string]interface{} {
 					"type": "string", "enum": []string{"A", "B", "C", "D", "F"},
 					"description": "Letter grade derived from usefulness_score. Repeater/room only.",
 				},
+				"declared_regions_truncated": map[string]interface{}{"type": "boolean", "description": "Repeater/room only (#1862): present, and true, only when the answer behind declared_regions was flagged as truncated, so that list is partial. GET /api/scope-audit shows the same flag as truncated. Absent otherwise, including for a source that does not record truncation, so absence does not mean the list is complete."},
 			},
 		},
 		"NodeListResponse": map[string]interface{}{

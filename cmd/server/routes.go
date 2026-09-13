@@ -48,7 +48,7 @@ type Server struct {
 	// so /api/nodes does not re-run the merge query pair per request. The
 	// cached map is read by concurrent requests and replaced, never mutated.
 	declaredRegionsMu    sync.Mutex
-	declaredRegionsCache map[string]string
+	declaredRegionsCache map[string]declaredAnswer
 	declaredRegionsAt    time.Time
 	// Collapses the TTL-boundary herd so the query runs once, not once per
 	// in-flight request, and never under declaredRegionsMu.
@@ -1325,7 +1325,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		// state. Two small queries (232 rows on a live instance) and no
 		// window scan — the state is a pure function of the declared list,
 		// see nodeScopeConfigState.
-		var declaredCSV map[string]string
+		var declaredCSV map[string]declaredAnswer
 		declaredOK := false
 		if needsRelay {
 			declaredCSV, declaredOK = s.declaredRegionsCSV()

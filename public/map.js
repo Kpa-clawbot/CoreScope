@@ -196,14 +196,73 @@
 
   // nodeFiltersNarrowed says whether a node filter that also removes
   // non-forwarding roles is active. The observer layer stands down while it
-  // is (see the observer loop in _renderMarkersInner).
+  // is (see observerLayerShown).
   function nodeFiltersNarrowed(f) {
     return (!!f.scopeState && f.scopeState !== 'all') || !!f.regionScope;
   }
 
+  // observerLayerShown decides whether _renderMarkersInner draws the plain
+  // observer pins. #2001: while a specific scope state is picked, the observer
+  // layer stands down. Two reasons: the filter leads (see nodePassesMapFilters),
+  // so leaving unrelated pins on the map contradicts the answer; and a
+  // repeater that is also an observer would otherwise drop out of the filtered
+  // nodes, stop matching displayedNodePubkeys, and reappear as a plain observer
+  // pin: the node the operator just filtered away, back in another guise.
+  // #1862: the region filter narrows the same way, for the same reasons.
+  function observerLayerShown(f) {
+    return !!f.observer && !nodeFiltersNarrowed(f);
+  }
+
+  // nodePassesMapFilters is the marker filter _renderMarkersInner runs over
+  // the loaded nodes. ctx carries the neighbor-filter state
+  // ({ selectedReferenceNode, neighborPubkeys }).
+  function nodePassesMapFilters(n, f, ctx) {
+    if (!n.lat || !n.lon) return false;
+    if (!f[n.role || 'companion']) return false;
+    // Byte size filter (applies only to repeaters). A node with no observed
+    // size is its own bucket: folding it into "1-byte" made that bucket a
+    // mix of measured and merely-unheard nodes.
+    if (f.byteSize !== 'all' && (n.role || 'companion') === 'repeater') {
+      const hi = hashPrefixInfo(n);
+      if (f.byteSize === 'unknown') {
+        if (hi.known) return false;
+      } else if (!hi.known || String(hi.bytes) !== f.byteSize) {
+        return false;
+      }
+    }
+    // Scope config filter (#2001). Applied to every role, not just repeaters:
+    // picking a scope state is a question about repeater configuration, and
+    // the answer should not leave companions and sensors sitting on the map
+    // as if they were part of it. Unclassified nodes therefore drop out too;
+    // see scopeFilterAccepts.
+    //
+    // This deliberately differs from the byte-size filter above, which gates
+    // itself on role === 'repeater' and leaves everything else visible. Asked
+    // and decided (#2006 review): this filter leads. The byte filter is not
+    // changed here; that is its own behaviour change, for its own PR.
+    if (!scopeFilterAccepts(n, f.scopeState)) return false;
+    // Region scope filter (#1862). Same rule as the scope filter above: it
+    // applies to every role, so non-forwarding nodes drop out while a region
+    // is picked.
+    if (!regionFilterAccepts(n, f.regionScope)) return false;
+    // Status filter
+    if (f.statusFilter !== 'all') {
+      const status = getNodeStatus(n); // #1598: relay-aware for infra
+      if (status !== f.statusFilter) return false;
+    }
+    // Neighbor filter: show only the reference node and its direct neighbors
+    if (f.neighbors && ctx.selectedReferenceNode && ctx.neighborPubkeys) {
+      const pk = n.public_key;
+      if (pk !== ctx.selectedReferenceNode && !ctx.neighborPubkeys.has(pk)) return false;
+    }
+    return true;
+  }
+
   // collectRegionCounts builds the picker's option list from the loaded nodes:
   // one pass, one Set per node so a region both declared and observed counts
-  // that node once in total.
+  // that node once in total. Only nodes with a map position count, the same
+  // test nodePassesMapFilters applies first, so a count never promises a
+  // marker the map cannot draw.
   function collectRegionCounts(list) {
     var byRegion = new Map();
     function entry(r) {
@@ -212,6 +271,7 @@
       return e;
     }
     (list || []).forEach(function (n) {
+      if (!n || !n.lat || !n.lon) return;
       var seen = new Set();
       var declared = new Set();
       (Array.isArray(n.declared_regions) ? n.declared_regions : []).forEach(function (r) {
@@ -246,9 +306,9 @@
     for (var i = 0; i < (counts || []).length; i++) { if (counts[i].region === cur) { c = counts[i]; break; } }
     var name = '#' + safeEsc(cur);
     var found = c
-      ? c.total + ' node' + (c.total === 1 ? '' : 's') + ' with evidence for ' + name + ': ' +
+      ? c.total + ' node' + (c.total === 1 ? ' with a map position has' : 's with a map position have') + ' evidence for ' + name + ': ' +
         c.declared + ' declare it, ' + c.observed + ' seen carrying its traffic.'
-      : 'No loaded node has evidence for ' + name + '.';
+      : 'No loaded node with a map position has evidence for ' + name + '.';
     return found + ' Absence here is not proof: most repeaters were never asked for their region list, ' +
       'and a repeater only shows traffic for a region once some passes its way.';
   }
@@ -265,9 +325,14 @@
     };
     var out = '';
     if (Array.isArray(n.declared_regions)) {
+      // Same badge and wording as the Scope Audit's truncated flag
+      // (scope-audit.js), so a partial list is not shown as the whole answer.
+      var truncated = n.declared_regions_truncated === true
+        ? ' <span class="ns-truncated" title="Declared list was truncated by the repeater, so a region missing here is not necessarily a real absence.">truncated</span>'
+        : '';
       out += dt('Declared', 'Named regions from this repeater’s own declared-regions answer, the same list the Scope Audit shows.') +
         '<dd style="margin-left:88px;padding:2px 0;font-size:12px;">' +
-        (n.declared_regions.length ? names(n.declared_regions) : '<span style="color:var(--text-muted);">no named region</span>') + '</dd>';
+        (n.declared_regions.length ? names(n.declared_regions) : '<span style="color:var(--text-muted);">no named region</span>') + truncated + '</dd>';
     }
     if (Array.isArray(n.transported_scopes) && n.transported_scopes.length) {
       out += dt('Observed', 'Region scopes of traffic whose path names this repeater by its full pubkey, over the server’s in-memory packet window.') +
@@ -422,6 +487,11 @@
             <div id="mapPiError" class="path-inspector-error"></div>
             <div id="mapPiResults"></div>
           </div>
+        </div>
+        <div class="mc-region-chip" id="mcRegionChip" role="status" hidden>
+          <span class="mc-region-chip-text" id="mcRegionChipText"></span>
+          <span aria-hidden="true">·</span>
+          <button type="button" class="mc-region-chip-reset" id="mcRegionChipReset" aria-label="Clear the region filter">reset</button>
         </div>
         <button class="map-controls-toggle" id="mapControlsToggle" aria-label="Toggle map controls" aria-expanded="true"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-gear"/></svg></button>
         <div class="map-controls" id="mapControls" role="region" aria-label="Map controls">
@@ -855,13 +925,15 @@
     // in buildRegionFilter; persisted the same way as the scope filter above.
     const regionFilterEl = document.getElementById('mcRegionFilter');
     if (regionFilterEl) {
-      regionFilterEl.addEventListener('change', e => {
-        filters.regionScope = e.target.value;
-        localStorage.setItem('meshcore-map-region-filter', filters.regionScope);
-        updateRegionHint();
-        renderMarkers();
-      });
+      regionFilterEl.addEventListener('change', e => setRegionFilter(e.target.value));
     }
+    // The on-map chip (#2022 review): on a phone the controls panel starts
+    // collapsed, so a stored region would thin the map with no visible cause.
+    const regionChipResetEl = document.getElementById('mcRegionChipReset');
+    if (regionChipResetEl) {
+      regionChipResetEl.addEventListener('click', () => setRegionFilter(''));
+    }
+    updateRegionChip();
 
     // Byte size filter buttons
     document.querySelectorAll('#mcByteFilter .btn').forEach(btn => {
@@ -1780,9 +1852,29 @@
     updateRegionHint();
   }
 
+  function setRegionFilter(region) {
+    filters.regionScope = region;
+    localStorage.setItem('meshcore-map-region-filter', filters.regionScope);
+    const sel = document.getElementById('mcRegionFilter');
+    if (sel && sel.value !== region) sel.value = region;
+    updateRegionHint();
+    renderMarkers();
+  }
+
   function updateRegionHint() {
     const el = document.getElementById('mcRegionHint');
     if (el) el.innerHTML = regionFilterHintHtml(regionCounts, filters.regionScope);
+    updateRegionChip();
+  }
+
+  // updateRegionChip shows the active region on the map itself, as text, and
+  // hides the chip while no region is picked.
+  function updateRegionChip() {
+    const chip = document.getElementById('mcRegionChip');
+    const chipText = document.getElementById('mcRegionChipText');
+    const cur = normRegion(filters.regionScope);
+    if (chipText) chipText.textContent = cur ? 'Region: #' + cur : '';
+    if (chip) chip.hidden = !cur;
   }
 
   let REGION_NAMES = {};
@@ -1959,48 +2051,8 @@
     if (clusterGroup) clusterGroup.clearLayers();
     _currentMarkerData = [];
 
-    const filtered = nodes.filter(n => {
-      if (!n.lat || !n.lon) return false;
-      if (!filters[n.role || 'companion']) return false;
-      // Byte size filter (applies only to repeaters). A node with no observed
-      // size is its own bucket — folding it into "1-byte" made that bucket a
-      // mix of measured and merely-unheard nodes.
-      if (filters.byteSize !== 'all' && (n.role || 'companion') === 'repeater') {
-        const hi = hashPrefixInfo(n);
-        if (filters.byteSize === 'unknown') {
-          if (hi.known) return false;
-        } else if (!hi.known || String(hi.bytes) !== filters.byteSize) {
-          return false;
-        }
-      }
-      // Scope config filter (#2001). Applied to every role, not just repeaters:
-      // picking a scope state is a question about repeater configuration, and
-      // the answer should not leave companions and sensors sitting on the map
-      // as if they were part of it. Unclassified nodes therefore drop out too —
-      // see scopeFilterAccepts.
-      //
-      // This deliberately differs from the byte-size filter three lines up,
-      // which gates itself on role === 'repeater' and leaves everything else
-      // visible. Asked and decided (#2006 review): this filter leads. The byte
-      // filter is not changed here — that is its own behaviour change, for its
-      // own PR.
-      if (!scopeFilterAccepts(n, filters.scopeState)) return false;
-      // Region scope filter (#1862). Same rule as the scope filter above: it
-      // applies to every role, so non-forwarding nodes drop out while a region
-      // is picked.
-      if (!regionFilterAccepts(n, filters.regionScope)) return false;
-      // Status filter
-      if (filters.statusFilter !== 'all') {
-        const status = getNodeStatus(n); // #1598: relay-aware for infra
-        if (status !== filters.statusFilter) return false;
-      }
-      // Neighbor filter: show only the reference node and its direct neighbors
-      if (filters.neighbors && selectedReferenceNode && neighborPubkeys) {
-        const pk = n.public_key;
-        if (pk !== selectedReferenceNode && !neighborPubkeys.has(pk)) return false;
-      }
-      return true;
-    });
+    const filterCtx = { selectedReferenceNode, neighborPubkeys };
+    const filtered = nodes.filter(n => nodePassesMapFilters(n, filters, filterCtx));
 
     const allMarkers = [];
 
@@ -2050,14 +2102,9 @@
     // Add observer markers (skip observers already represented as a node marker)
     // Build set of node pubkeys that are displayed on the map
     const displayedNodePubkeys = new Set(filtered.map(n => (n.public_key || '').toLowerCase()));
-    // #2001 — while a specific scope state is picked, the observer layer stands
-    // down. Two reasons: the filter leads (see the note in the predicate above),
-    // so leaving unrelated pins on the map contradicts the answer; and a
-    // repeater that is also an observer would otherwise drop out of `filtered`,
-    // stop matching displayedNodePubkeys, and reappear as a plain observer pin —
-    // the node the operator just filtered away, back in another guise.
-    // #1862: the region filter narrows the same way, for the same reasons.
-    if (filters.observer && !nodeFiltersNarrowed(filters)) {
+    // #2001/#1862: the observer layer stands down while a node filter narrows
+    // the map; see observerLayerShown.
+    if (observerLayerShown(filters)) {
       for (const obs of observers) {
         if (!obs.lat || !obs.lon) continue;
         // Skip observers whose pubkey matches a displayed node — they're shown as combined markers
@@ -2769,6 +2816,8 @@
       regionFilterHintHtml: regionFilterHintHtml,
       regionsPopupRowsHtml: regionsPopupRowsHtml,
       nodeFiltersNarrowed: nodeFiltersNarrowed,
+      observerLayerShown: observerLayerShown,
+      nodePassesMapFilters: nodePassesMapFilters,
       filters: filters,
       // #1356: exposed so the a11y test can assert what the label RENDERS
       // instead of grepping map.js for where two identifiers sit.

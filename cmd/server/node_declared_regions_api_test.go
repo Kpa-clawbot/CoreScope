@@ -215,3 +215,79 @@ func TestOpenAPINodeSchemaDocumentsDeclaredRegions(t *testing.T) {
 		t.Errorf("declared_regions.items: want type string, got %v", items["type"])
 	}
 }
+
+// TestNodesCarryDeclaredRegionsTruncated: a repeater whose declared list was
+// cut off returns a partial list, and the Scope Audit flags it as such. The
+// node row must carry the same caveat, or the map popup shows a partial list
+// (or "no named region") as the whole answer (#2022 review).
+func TestNodesCarryDeclaredRegionsTruncated(t *testing.T) {
+	srv, router := setupScopeConfigStateServer(t)
+	createDeclaredRegionsTable(t, srv)
+
+	if _, err := srv.db.conn.Exec(`INSERT INTO nodes
+		(public_key, name, role, lat, lon, last_seen, first_seen, advert_count, configured_scope, configured_scope_at)
+		VALUES
+		('pk_trunc',       'trunc-rp',       'repeater',  51.0, 4.0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1, NULL,    NULL),
+		('pk_trunc_empty', 'trunc-empty-rp', 'room',      51.1, 4.1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1, NULL,    NULL),
+		('pk_complete',    'complete-rp',    'repeater',  51.2, 4.2, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1, NULL,    NULL),
+		('pk_cfg_only',    'cfg-rp',         'repeater',  51.3, 4.3, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1, 'be',    '2026-01-01T00:00:00Z'),
+		('pk_newer_cfg',   'newer-rp',       'repeater',  51.4, 4.4, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1, 'be,nl', '2026-03-01T00:00:00Z'),
+		('pk_companion',   'phone',          'companion', 51.5, 4.5, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1, NULL,    NULL)`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	seedSecondSource(t, srv, "pk_trunc", "2026-02-01T00:00:00Z", "#be", 1)
+	seedSecondSource(t, srv, "pk_trunc_empty", "2026-02-01T00:00:00Z", "", 1)
+	seedSecondSource(t, srv, "pk_complete", "2026-02-01T00:00:00Z", "#be", 0)
+	// Older truncated answer, newer answer from the other source: the newest
+	// answer decides, caveat included.
+	seedSecondSource(t, srv, "pk_newer_cfg", "2026-02-01T00:00:00Z", "#be", 1)
+	seedSecondSource(t, srv, "pk_companion", "2026-02-01T00:00:00Z", "#be", 1)
+
+	nodes := nodesByPubkey(t, router, "?limit=200")
+
+	for _, pk := range []string{"pk_trunc", "pk_trunc_empty"} {
+		if _, present := declaredRegionsOf(t, nodes[pk]); !present {
+			t.Errorf("%s: no declared_regions field", pk)
+		}
+		if v, present := nodes[pk]["declared_regions_truncated"]; !present || v != true {
+			t.Errorf("%s: declared_regions_truncated = %v (present %v), want true", pk, v, present)
+		}
+	}
+	for _, pk := range []string{"pk_complete", "pk_cfg_only", "pk_newer_cfg", "pk_companion"} {
+		if v, present := nodes[pk]["declared_regions_truncated"]; present {
+			t.Errorf("%s: declared_regions_truncated = %v, want the field absent", pk, v)
+		}
+	}
+
+	req := httptest.NewRequest("GET", "/api/nodes/pk_trunc", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("detail status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Node map[string]interface{} `json:"node"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if v := resp.Node["declared_regions_truncated"]; v != true {
+		t.Errorf("detail endpoint declared_regions_truncated = %v, want true", v)
+	}
+}
+
+func TestOpenAPINodeSchemaDocumentsDeclaredRegionsTruncated(t *testing.T) {
+	spec := fetchSpec(t)
+	components := asMap(t, spec["components"], "components")
+	schemas := asMap(t, components["schemas"], "components.schemas")
+	props := asMap(t, asMap(t, schemas["Node"], "Node")["properties"], "Node.properties")
+
+	p, ok := props["declared_regions_truncated"]
+	if !ok {
+		t.Fatal("Node.properties.declared_regions_truncated missing")
+	}
+	if pm := asMap(t, p, "declared_regions_truncated"); pm["type"] != "boolean" {
+		t.Errorf("declared_regions_truncated: want type boolean, got %v", pm["type"])
+	}
+}
