@@ -689,10 +689,22 @@ the observer.
 - One entry per packet hash. Values are raw so the client can filter and bin.
 - Only floods (route types 0 and 1). DIRECT packets carry the remaining route,
   not a hop count, and are left out. Packets the node originated are left out.
+- Every observation of every flood packet in the window is read, not only the
+  packet's longest path, so a relay on a shorter branch of the flood counts too.
 - A packet is attributed when the node's path prefix sits at exactly one index
-  and either no other relay-capable node shares that prefix, or the store's
-  resolved path for the packet contains the node. Otherwise it is counted in
-  `ambiguous` and left out (for example a colliding 1-byte prefix).
+  across its observations, and either no other relay-capable node shares that
+  prefix, or the hop resolves to the node under the ingestor's strict rule
+  (every earlier hop identified without a tiebreak, and exactly one candidate
+  is a `neighbor_edges` neighbor of the previous hop, or of the originator for
+  an advert) in at least one observation and to another node in none. The
+  server's resolved-path pick (affinity, GPS distance, advert count) is not
+  used, so the result is the same before and after a restart. Everything else
+  with the node's prefix is counted in `ambiguous` and left out; in practice
+  that is most packets with a colliding 1-byte path hash.
+- Size: for a busy repeater on a 1,669-node mesh over 7 days (2026-09-13)
+  the response held 23,068 entries, 2.3 MB of JSON, 375 KB gzipped. `hash`
+  and `timestamp` are 61% of the raw and 91% of the gzipped bytes; they stay
+  so a client can join entries to packets and bin by time (issue #1812).
 
 ### Query Parameters
 

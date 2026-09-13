@@ -40,13 +40,15 @@ test('histogram has one bucket per hop count from 0 to max', () => {
 });
 
 test('box stats: interpolated quartiles, 1.5 IQR whiskers, outliers counted', () => {
-  const s = H.hopBoxStats([10, 0, 1, 3, 1]);
+  // 8 lies between the 1.5 IQR fence (6) and a 3 IQR fence (9), so the
+  // fence factor decides whether it is an outlier.
+  const s = H.hopBoxStats([8, 0, 1, 3, 1]);
   assert.strictEqual(s.n, 5);
   assert.strictEqual(s.min, 0);
   assert.strictEqual(s.q1, 1);
   assert.strictEqual(s.median, 1);
   assert.strictEqual(s.q3, 3);
-  assert.strictEqual(s.max, 10);
+  assert.strictEqual(s.max, 8);
   assert.strictEqual(s.whiskerLow, 0);
   assert.strictEqual(s.whiskerHigh, 3, 'upper fence is q3 + 1.5*IQR = 6, so the whisker stops at 3');
   assert.strictEqual(s.outliers, 1);

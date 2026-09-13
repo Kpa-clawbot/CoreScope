@@ -87,7 +87,7 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/nodes/{pubkey}/health":    {Summary: "Get node health", Tag: "nodes"},
 		"GET /api/nodes/{pubkey}/paths":     {Summary: "Get node routing paths", Tag: "nodes"},
 		"GET /api/nodes/{pubkey}/analytics": {Summary: "Get node analytics", Description: "Per-node packet counts, timing, and RF stats.", Tag: "nodes"},
-		"GET /api/nodes/{pubkey}/hop_analytics": {Summary: "Get node hop counts", Description: "One entry per flood packet the node forwarded in the window, with the hop count its flood.max check saw (the node's zero-based index in the path) and tags (flood, scoped or unscoped, advert). DIRECT packets are excluded. Packets whose hop position cannot be attributed to this node because of a colliding path prefix are counted in `ambiguous`.", Tag: "nodes",
+		"GET /api/nodes/{pubkey}/hop_analytics": {Summary: "Get node hop counts", Description: "One entry per flood packet the node forwarded in the window, with the hop count its flood.max check saw (the node's zero-based index in the path) and tags (flood, scoped or unscoped, advert). DIRECT packets are excluded. Every observation in the window is read. A colliding path prefix is attributed only when the previous hop's neighbor_edges neighbors leave this node as the one candidate; the server's resolved-path pick is not used. Packets carrying this node's prefix that cannot be attributed are counted in `ambiguous`.", Tag: "nodes",
 			QueryParams: []paramMeta{
 				{Name: "days", Description: "Lookback window in days (default 7, clamped 1-365)", Type: "integer"},
 			}},
