@@ -101,7 +101,9 @@ func (s *Store) backfillTxLastSeen(ctx context.Context) (int64, error) {
 			if err != nil {
 				return fmt.Errorf("backfill batch: %w", err)
 			}
-			updated, _ = res.RowsAffected()
+			if updated, err = res.RowsAffected(); err != nil {
+				return fmt.Errorf("backfill batch rows affected: %w", err)
+			}
 			return nil
 		})
 		if err != nil {
