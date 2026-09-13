@@ -471,6 +471,11 @@ type PacketStore struct {
 	chunkCBMu          sync.Mutex
 	chunkCallbacks     []func(rowsThisChunk, totalRows int)
 
+	// startupLoadDone is closed when RunStartupLoad returns (hot window
+	// plus background fill); see StartupLoadDone.
+	startupLoadDone     chan struct{}
+	startupLoadSignaled atomic.Bool
+
 	// Eviction config and stats
 	retentionHours  float64        // 0 = unlimited
 	maxMemoryMB     int            // 0 = unlimited (packet store memory budget)
@@ -4459,6 +4464,17 @@ func (s *PacketStore) TriggerDistanceIndexBuild() {
 		s.buildDistanceIndex()
 		obsAtBuild := s.totalObs
 		s.mu.Unlock()
+
+		// The distance recomputer's snapshot was computed from the index
+		// as it was before this build. Refresh it before reporting the
+		// index as built, so the handler does not go from 202 to serving
+		// that older snapshot for up to one recompute interval.
+		s.analyticsRecomputerMu.RLock()
+		rc := s.recompDistance
+		s.analyticsRecomputerMu.RUnlock()
+		if rc != nil {
+			rc.RecomputeNow()
+		}
 
 		s.distLazyMu.Lock()
 		s.distLazyBuilding = false
