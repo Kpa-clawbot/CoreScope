@@ -75,6 +75,53 @@ async function spriteRefsResolve(page, label) {
   else pass(`${label}: ${r.count} sprite refs rendered (samples: ${r.refs.join(', ')})`);
 }
 
+async function checkConfiguredScope(page) {
+  const key = 'c1'.repeat(32);
+  const node = { public_key: key, name: 'Configured scope fixture', role: 'repeater' };
+  await page.route('**/api/nodes/' + key, route => route.fulfill({
+    json: { node, recentAdverts: [] },
+  }));
+  await page.route('**/api/nodes/' + key + '/health', route => route.fulfill({ json: {} }));
+  const nodeListUrl = /\/api\/nodes(?:\?.*)?$/;
+  await page.route(nodeListUrl, route => route.fulfill({
+    json: { nodes: [{ ...node, lat: 1, lon: 1 }], total: 1 },
+  }));
+  try {
+    for (const live of [false, true]) {
+      for (const scope of ['#fixture', '', null]) {
+        node.configured_scope = scope;
+        // A fresh document also clears the application's node-detail cache.
+        await page.goto('about:blank');
+        const route = live ? '/live?lat=1&lon=1&zoom=10' : '/nodes/' + key;
+        await page.goto(`${BASE}/#${route}`, { waitUntil: 'domcontentloaded' });
+        if (live) await page.locator('#liveMap .live-node-marker').click();
+        await page.locator(live ? '#nodeDetailContent table' : '#node-stats').waitFor({ state: 'visible', timeout: 8000 });
+        const row = live
+          ? page.locator('#nodeDetailContent tr').filter({ hasText: 'Configured scope' })
+          : page.locator('#row-configured-scope');
+        const label = live ? 'live detail' : 'node detail';
+        if (scope === null) {
+          assert.strictEqual(await row.count(), 0, 'unconfirmed scope must not render a confirmation row');
+          pass(label + ' configured scope: unconfirmed evidence stays absent');
+          continue;
+        }
+        assert.ok(await row.isVisible(), 'confirmed scope row must be visible, including an empty scope');
+        const confirmation = row.getByRole('img', { name: 'confirmed', exact: true });
+        assert.strictEqual(await confirmation.count(), 1, 'confirmation must have an accessible image role and name');
+        assert.ok(await confirmation.isVisible(), 'confirmation icon must be visible');
+        assert.strictEqual(await confirmation.locator('use').getAttribute('href'), '/icons/phosphor-sprite.svg#ph-check');
+        assert.doesNotMatch(await row.textContent(), EMOJI_RE, 'confirmation must follow the Phosphor icon policy');
+        assert.strictEqual((await row.locator('td').nth(1).textContent()).trim(), scope || 'none configured');
+        pass(label + ' configured scope: accessible confirmation and value for ' + (scope || 'none configured'));
+      }
+    }
+  } finally {
+    await page.unroute('**/api/nodes/' + key);
+    await page.unroute('**/api/nodes/' + key + '/health');
+    await page.unroute(nodeListUrl);
+  }
+}
+
 async function main() {
   const requireChromium = process.env.CHROMIUM_REQUIRE === '1';
   let browser;
@@ -95,6 +142,8 @@ async function main() {
 
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const page = await ctx.newPage();
+
+  await checkConfiguredScope(page);
 
   // (a) /analytics
   await checkHeading(page, '/analytics', /Mesh Analytics/, '(a) /analytics');
