@@ -2986,6 +2986,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
     window._analyticsRenderMultiByteAdopters = renderMultiByteAdopters;
     window._analyticsHashStatCardsHtml = hashStatCardsHtml;
     window._analyticsRenderCollisionsFromServer = renderCollisionsFromServer;
+    window._analyticsScopeAdvertsByRoleHtml = scopeAdvertsByRoleHtml;
   }
 
   // ─── Neighbor Graph Tab ─────────────────────────────────────────────────────
@@ -4754,6 +4755,33 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
   }
 
   // ===================== SCOPES =====================
+  // #1979: flood adverts by sender role, split by scope state. Descriptive
+  // only: it shows what each role sent, not why.
+  function scopeAdvertsByRoleHtml(rows) {
+    var html = '<h4 style="margin:16px 0 4px">Flood adverts by node role</h4>' +
+      '<p class="text-muted" style="margin:0 0 8px;font-size:0.85em">' +
+        'Flood adverts (routes 0 and 1) in this window, grouped by the sender\'s role. ' +
+        'Shares are of the row. Unknown scope means scoped, but this instance could not name the region. ' +
+        'This shows what each role sent; it does not show why.' +
+      '</p>';
+    if (!rows || !rows.length) {
+      return html + '<p class="text-muted" style="font-size:0.85em;margin:0">No flood adverts in this window.</p>';
+    }
+    return html +
+      '<table class="data-table analytics-table">' +
+        '<thead><tr><th>Role</th><th>Adverts</th><th>Unscoped</th><th>Unknown scope</th><th>Named scope</th></tr></thead>' +
+        '<tbody>' + rows.map(function(r) {
+          var total = r.unscoped + r.unknownScope + r.named;
+          function cell(n) {
+            return '<td>' + n.toLocaleString() + ' <span class="text-muted">(' + (n / total * 100).toFixed(1) + '%)</span></td>';
+          }
+          return '<tr data-role="' + esc(r.role) + '"><td>' + esc(r.role) + '</td>' +
+            '<td>' + total.toLocaleString() + '</td>' +
+            cell(r.unscoped) + cell(r.unknownScope) + cell(r.named) + '</tr>';
+        }).join('') + '</tbody>' +
+      '</table>';
+  }
+
   async function renderScopesTab(el) {
     var winKey = 'scopes_window';
     var selectedWindow = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(winKey)) || '24h';
@@ -4776,7 +4804,8 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
           '<thead><tr><th>Region</th><th>Messages</th><th>% of Scoped</th></tr></thead>' +
           '<tbody id="scopes-tbody"></tbody>' +
         '</table>' +
-        '<div id="scopes-chart"></div>';
+        '<div id="scopes-chart"></div>' +
+        '<div id="scopes-adverts-by-role"></div>';
 
       // Attach window-button click listeners (once)
       el.querySelectorAll('[data-win]').forEach(function(btn) {
@@ -4905,6 +4934,9 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
         }
         chartEl.innerHTML = chartHtml;
       }
+
+      var advertsEl = document.getElementById('scopes-adverts-by-role');
+      if (advertsEl) advertsEl.innerHTML = scopeAdvertsByRoleHtml(d.advertsByRole);
     }
 
     load(selectedWindow);

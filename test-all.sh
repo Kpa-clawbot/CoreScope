@@ -128,6 +128,7 @@ node test-issue-1849-trace-hashbytes.js
 node test-issue-1868-control-decode.js
 node test-issue-1890-og-url.js
 node test-issue-1956-release-routing.js
+node test-issue-1979-scope-adverts-by-role.js
 node test-issue-2001-map-scope-state.js
 node test-live-anims.js
 node test-live-dt-cap-1524.js
