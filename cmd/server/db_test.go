@@ -2308,7 +2308,7 @@ func TestGetScopeStatsAdvertsByRole(t *testing.T) {
 			scope_name TEXT DEFAULT NULL, from_pubkey TEXT DEFAULT NULL
 		)`,
 		`CREATE TABLE nodes (public_key TEXT PRIMARY KEY, role TEXT)`,
-		`INSERT INTO nodes (public_key, role) VALUES ('rpt', 'repeater'), ('cmp', 'companion'), ('norole', '')`,
+		`INSERT INTO nodes (public_key, role) VALUES ('rpt', 'repeater'), ('cmp', 'companion'), ('sns', 'sensor'), ('norole', '')`,
 	} {
 		if _, err := db.conn.Exec(stmt); err != nil {
 			t.Fatalf("schema: %v", err)
@@ -2325,10 +2325,14 @@ func TestGetScopeStatsAdvertsByRole(t *testing.T) {
 		scope   interface{}
 		fromKey interface{}
 	}{
-		// Repeater: one of each scope state on flood routes.
+		// Totals per role differ from alphabetical order so the test pins
+		// ORDER BY total: repeater 4, unknown 3, companion 2, sensor 2.
+		// companion and sensor tie, which pins the role-name tie-break.
+		// Repeater: every scope state on flood routes, two named.
 		{"r1", now, 1, 4, nil, "rpt"},
 		{"r2", now, 0, 4, "", "rpt"},
 		{"r3", now, 0, 4, "#belgium", "rpt"},
+		{"r8", now, 1, 4, "#belgium", "rpt"},
 		// Excluded: zero-hop adverts are DIRECT/TRANSPORT_DIRECT, not flood.
 		{"r4", now, 2, 4, nil, "rpt"},
 		{"r5", now, 3, 4, "#belgium", "rpt"},
@@ -2336,10 +2340,12 @@ func TestGetScopeStatsAdvertsByRole(t *testing.T) {
 		{"r6", now, 0, 5, "#belgium", "rpt"},
 		// Excluded: outside the window.
 		{"r7", old, 1, 4, nil, "rpt"},
-		// Companion: two unscoped, one named.
+		// Companion: one unscoped, one named.
 		{"c1", now, 1, 4, nil, "cmp"},
-		{"c2", now, 1, 4, nil, "cmp"},
 		{"c3", now, 0, 4, "#belgium", "cmp"},
+		// Sensor: one unscoped, one unknown scope.
+		{"s1", now, 1, 4, nil, "sns"},
+		{"s2", now, 0, 4, "", "sns"},
 		// No node row, and a node row without a role: both "unknown".
 		{"u1", now, 1, 4, nil, "stranger"},
 		{"u2", now, 0, 4, "", "norole"},
@@ -2360,9 +2366,10 @@ func TestGetScopeStatsAdvertsByRole(t *testing.T) {
 	}
 	// Ordered by total adverts descending, then role name.
 	want := []ScopeAdvertRoleCount{
-		{Role: "companion", Unscoped: 2, UnknownScope: 0, Named: 1},
-		{Role: "repeater", Unscoped: 1, UnknownScope: 1, Named: 1},
+		{Role: "repeater", Unscoped: 1, UnknownScope: 1, Named: 2},
 		{Role: "unknown", Unscoped: 1, UnknownScope: 1, Named: 1},
+		{Role: "companion", Unscoped: 1, UnknownScope: 0, Named: 1},
+		{Role: "sensor", Unscoped: 1, UnknownScope: 1, Named: 0},
 	}
 	if !reflect.DeepEqual(stats.AdvertsByRole, want) {
 		t.Errorf("AdvertsByRole = %+v, want %+v", stats.AdvertsByRole, want)

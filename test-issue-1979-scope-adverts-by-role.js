@@ -61,18 +61,34 @@ console.log('\n=== analytics.js: scope adverts by role (#1979) ===');
     assert.deepStrictEqual(bodyRows, ['<tr data-role="repeater">', '<tr data-role="companion">']);
   });
 
-  test('renders the row total and each state with its share of the row', () => {
-    const rep = html.slice(html.indexOf('<tr data-role="repeater">'), html.indexOf('<tr data-role="companion">'));
-    assert.ok(rep.includes('<td>4</td>'), 'repeater total should be 4: ' + rep);
-    assert.ok(rep.includes('3 <span class="text-muted">(75.0%)</span>'), 'unscoped 3 of 4: ' + rep);
-    assert.ok(rep.includes('1 <span class="text-muted">(25.0%)</span>'), 'unknown scope 1 of 4: ' + rep);
-    assert.ok(rep.includes('0 <span class="text-muted">(0.0%)</span>'), 'named 0 of 4: ' + rep);
+  // Cell contents of one body row, in column order.
+  function rowCells(role) {
+    const start = html.indexOf('<tr data-role="' + role + '">');
+    assert.ok(start !== -1, 'row for ' + role);
+    const row = html.slice(start, html.indexOf('</tr>', start));
+    return row.split('<td>').slice(1).map((c) => c.replace(/<\/td>$/, ''));
+  }
+
+  test('renders the row total and each state with its share of the row, by column', () => {
+    assert.deepStrictEqual(rowCells('repeater'), [
+      'repeater',
+      '4',
+      '3 <span class="text-muted">(75.0%)</span>',
+      '1 <span class="text-muted">(25.0%)</span>',
+      '0 <span class="text-muted">(0.0%)</span>',
+    ]);
+    assert.deepStrictEqual(rowCells('companion'), [
+      'companion',
+      '2',
+      '1 <span class="text-muted">(50.0%)</span>',
+      '0 <span class="text-muted">(0.0%)</span>',
+      '1 <span class="text-muted">(50.0%)</span>',
+    ]);
   });
 
-  test('has the three scope-state columns', () => {
-    assert.ok(/<th>Unscoped<\/th>/.test(html), 'Unscoped column');
-    assert.ok(/<th>Unknown scope<\/th>/.test(html), 'Unknown scope column');
-    assert.ok(/<th>Named scope<\/th>/.test(html), 'Named scope column');
+  test('header columns are in the same order as the cells', () => {
+    const heads = (html.match(/<th>[^<]*<\/th>/g) || []).map((th) => th.slice(4, -5));
+    assert.deepStrictEqual(heads, ['Role', 'Adverts', 'Unscoped', 'Unknown scope', 'Named scope']);
   });
 
   test('escapes the role text', () => {

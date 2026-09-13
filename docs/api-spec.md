@@ -1763,7 +1763,7 @@ Scope-based packet statistics over a time window. Requires ingestor `scope_name_
   ],
   "advertsByRole": [
     {
-      "role":         string,        // sender's nodes.role, or "unknown" without a node row or role
+      "role":         string,        // sender's nodes.role, or "unknown" (see notes below)
       "unscoped":     number,        // flood adverts with no scope (scope_name NULL)
       "unknownScope": number,        // scoped, but no region name could be assigned (scope_name "")
       "named":        number         // scoped with a named region
@@ -1784,6 +1784,10 @@ Scope-based packet statistics over a time window. Requires ingestor `scope_name_
 - `advertsByRole` (#1979) counts ADVERT packets on flood routes only (TRANSPORT_FLOOD 0, FLOOD 1) in the window,
   grouped by the sender's current `nodes.role`. Zero-hop adverts (DIRECT/TRANSPORT_DIRECT) are excluded.
   Ordered by total adverts descending, then role. It reports what was sent per role, not why.
+  `role` is `"unknown"` when the advert row has no `from_pubkey` (legacy rows the ingestor's #1143
+  `from_pubkey` backfill has not reached yet), when the sender has no row in `nodes` (including a sender
+  the ingestor's node retention moved to `inactive_nodes`, which within the 7d window only happens with
+  `retention.nodeDays` below 7), or when its `nodes.role` is empty.
 - Cached 30 seconds
 
 > **Note:** On deployments with pre-existing data, `unscoped` will be inflated until the async startup backfill completes, because transport-route rows inserted before the `scope_name_v1` migration ran have `scope_name = NULL` and are indistinguishable from Code1=0000 rows. The backfill goroutine populates them at startup but may take several minutes on large databases.
