@@ -528,7 +528,9 @@ console.log('\n=== packets.js: getDetailPreview ===');
     });
     assert(result.includes('DISCOVER_RESP'), 'should label subtype');
     assert(result.includes('snr') || result.includes('SNR'), 'should render snr');
-    assert(result.includes('0001020304050607'), 'should render pubkey hex');
+    // #1868: unknown pubkey is shortened to its first 8 hex chars.
+    assert(result.includes('pubkey=00010203'), 'should render pubkey prefix');
+    assert(!result.includes('0001020304050607'), 'should not render the full pubkey');
   });
 
   test('getDetailPreview handles CONTROL UNKNOWN subtype', () => {
