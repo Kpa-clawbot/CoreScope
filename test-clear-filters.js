@@ -124,7 +124,10 @@ function extractClearHandler() {
     else if (src[i] === '}') { depth--; if (depth === 0) { fnEnd = i; break; } }
   }
   assert(fnEnd > fnStart, 'could not find end of clear handler');
-  return src.substring(fnStart + 1, fnEnd);
+  // The handler also resets the observer search box (#1884). These cases do
+  // not test it (test-observer-menu-interactions.js does), so give it stand-ins.
+  const searchStubs = "const obsSearchInput = { value: '' }; function applyObserverSearchFilter() {}\n";
+  return searchStubs + src.substring(fnStart + 1, fnEnd);
 }
 
 /**

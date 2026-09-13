@@ -183,18 +183,7 @@ func resolvePathForObsColdLoad(pathJSON, observerID string, tx *StoreTx, pm *pre
 		// observation_count_fallback would still pick a winner for
 		// ambiguous prefixes, which is exactly what we must NOT do.
 		// Hence the explicit candidate-count check here.
-		h := strings.ToLower(hop)
-		candidates := pm.m[h]
-		if len(pm.nonRelay) > 0 && len(candidates) > 0 {
-			filtered := candidates[:0:0]
-			for j := range candidates {
-				if _, isListener := pm.nonRelay[strings.ToLower(candidates[j].PublicKey)]; isListener {
-					continue
-				}
-				filtered = append(filtered, candidates[j])
-			}
-			candidates = filtered
-		}
+		candidates := pm.relayCandidates(hop)
 		if len(candidates) == 1 {
 			pk := strings.ToLower(candidates[0].PublicKey)
 			resolved[i] = &pk

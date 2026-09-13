@@ -335,6 +335,20 @@
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
+  // #1851: region scope from the packet's transport code (scope_name).
+  // null = no transport code, so no chip; '' = a transport code the ingestor
+  // could not match to a single region (no key matched, or several did with no
+  // operator-configured winner); otherwise the matched region name. Chip
+  // classes are the Scope Audit's (scope-audit.css), so a scope looks the same
+  // everywhere.
+  function messageScopeChipHtml(scopeName) {
+    if (scopeName == null) return '';
+    if (scopeName === '') {
+      return '<span class="sa-chip sa-chip-unmatched ch-msg-scope" title="Sent with a region scope that could not be matched to a single region on this instance">unknown scope</span>';
+    }
+    return '<span class="sa-chip sa-chip-declared ch-msg-scope" title="Region scope this message was sent with">' + escapeHtml(scopeName) + '</span>';
+  }
+
   function truncate(str, len) {
     if (!str) return '';
     return str.length > len ? str.slice(0, len) + '…' : str;
@@ -579,7 +593,10 @@
 
     // M5: Cache invalidation — if total candidate count changed, re-decrypt everything
     var totalCandidates = candidates.length;
-    var needFullDecrypt = (totalCandidates !== cachedCount) || opts.forceFullDecrypt;
+    // #1851: a cache written before messages carried scope_name would keep
+    // those messages chipless on the delta path, so decrypt them again.
+    var cacheLacksScope = cachedMsgs.some(function (m) { return !('scope_name' in m); });
+    var needFullDecrypt = (totalCandidates !== cachedCount) || opts.forceFullDecrypt || cacheLacksScope;
 
     // M5: Delta fetch — only decrypt packets newer than lastTs
     if (!needFullDecrypt && cachedMsgs.length > 0 && lastTs) {
@@ -663,6 +680,7 @@
           packetHash: c.packet.hash, packetId: c.packet.id,
           hops: d.path_len || 0, snr: c.packet.snr || null,
           observers: c.packet.observer_name ? [c.packet.observer_name] : [],
+          scope_name: c.packet.scope_name ?? null,
           repeats: 1
         });
         continue;
@@ -679,6 +697,7 @@
           packetHash: c.packet.hash, packetId: c.packet.id,
           hops: 0, snr: c.packet.snr || null,
           observers: c.packet.observer_name ? [c.packet.observer_name] : [],
+          scope_name: c.packet.scope_name ?? null,
           repeats: 1
         });
       } else {
@@ -1417,6 +1436,8 @@
         var pktId = m.data?.id || null;
         var snr = m.data?.snr ?? m.data?.packet?.snr ?? payload.SNR ?? null;
         var observer = m.data?.packet?.observer_name || m.data?.observer || null;
+        // ?? not ||: '' (transport-scoped, region unmatched) must survive.
+        var scopeName = m.data?.scope_name ?? m.data?.packet?.scope_name ?? null;
 
         // Update channel list entry — only once per unique packet hash
         var isFirstObservation = pktHash && !seenHashes.has(pktHash + ':' + channelKey);
@@ -1468,6 +1489,7 @@
               observers: observer ? [observer] : [],
               hops: payload.path_len || 0,
               snr: snr,
+              scope_name: scopeName,
               // #1498: mark as WS-pushed so a later REST replacement
               // (selectChannel / refreshMessages) can merge instead of
               // stomp. Without this flag the REST response wipes any
@@ -2258,6 +2280,8 @@
       if (msg.observers?.length > 1) meta.push(`${msg.observers.length} observers`);
       if (msg.hops > 0) meta.push(`${msg.hops} hops`);
       if (msg.snr !== null && msg.snr !== undefined) meta.push(`SNR ${msg.snr}`);
+      const scopeChip = messageScopeChipHtml(msg.scope_name);
+      if (scopeChip) meta.push(scopeChip);
 
       const safeId = btoa(encodeURIComponent(sender));
       // #1367: emit BOTH the new chat-app class names (.ch-message /

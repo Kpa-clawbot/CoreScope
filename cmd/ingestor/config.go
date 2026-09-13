@@ -25,6 +25,8 @@ type MQTTSource struct {
 	IATAFilter         []string `json:"iataFilter,omitempty"`
 	ConnectTimeoutSec  int      `json:"connectTimeoutSec,omitempty"`
 	Region             string   `json:"region,omitempty"`
+	// ClientID is the MQTT ClientID; empty means corescope-<name>-<random>.
+	ClientID string `json:"clientId,omitempty"`
 }
 
 // ConnectTimeoutOrDefault returns the per-source connect timeout in seconds,

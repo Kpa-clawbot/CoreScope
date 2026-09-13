@@ -23,6 +23,7 @@
 - [GET /api/nodes/:pubkey/health](#get-apinodespubkeyhealth)
 - [GET /api/nodes/:pubkey/paths](#get-apinodespubkeypaths)
 - [GET /api/nodes/:pubkey/analytics](#get-apinodespubkeyanalytics)
+- [GET /api/nodes/:pubkey/hop_analytics](#get-apinodespubkeyhop_analytics)
 - [GET /api/nodes/:pubkey/reach](#get-apinodespubkeyreach)
 - [GET /api/packets](#get-apipackets)
 - [GET /api/packets/timestamps](#get-apipacketstimestamps)
@@ -35,6 +36,7 @@
 - [GET /api/channels/:hash/messages](#get-apichannelshashmessages)
 - [GET /api/analytics/rf](#get-apianalyticsrf)
 - [GET /api/analytics/topology](#get-apianalyticstopology)
+- [GET /api/analytics/retransmissions](#get-apianalyticsretransmissions)
 - [GET /api/analytics/channels](#get-apianalyticschannels)
 - [GET /api/analytics/distance](#get-apianalyticsdistance)
 - [GET /api/analytics/hash-sizes](#get-apianalyticshash-sizes)
@@ -675,6 +677,71 @@ Per-node analytics over a time range.
 
 ---
 
+## GET /api/nodes/:pubkey/hop_analytics
+
+Hop count at this node for every flood packet it forwarded, to help choose
+`flood.max`, `flood.max.unscoped` and `flood.max.advert`. A repeater checks
+those limits against the number of hashes already in the path, then appends
+its own hash, so the hop count is the node's zero-based index in the observed
+path (firmware `src/helpers/RoutingPolicy.h`, `src/Mesh.cpp` `routeRecvPacket`).
+This is not the `hopDistribution` of `/analytics`, which is the path length at
+the observer.
+
+- One entry per packet hash. Values are raw so the client can filter and bin.
+- Only floods (route types 0 and 1). DIRECT packets carry the remaining route,
+  not a hop count, and are left out. Packets the node originated are left out.
+- Every observation of every flood packet in the window is read, not only the
+  packet's longest path, so a relay on a shorter branch of the flood counts too.
+- A packet is attributed when the node's path prefix sits at exactly one index
+  across its observations, and either no other relay-capable node shares that
+  prefix, or the hop resolves to the node under the ingestor's strict rule
+  (every earlier hop identified without a tiebreak, and exactly one candidate
+  is a `neighbor_edges` neighbor of the previous hop, or of the originator for
+  an advert) in at least one observation and to another node in none. The
+  server's resolved-path pick (affinity, GPS distance, advert count) is not
+  used, so the result is the same before and after a restart. Everything else
+  with the node's prefix is counted in `ambiguous` and left out; in practice
+  that is most packets with a colliding 1-byte path hash.
+- Size: for a busy repeater on a 1,669-node mesh over 7 days (2026-09-13)
+  the response held 23,068 entries, 2.3 MB of JSON, 375 KB gzipped. `hash`
+  and `timestamp` are 61% of the raw and 91% of the gzipped bytes; they stay
+  so a client can join entries to packets and bin by time (issue #1812).
+
+### Query Parameters
+
+| Param  | Type   | Default | Description              |
+|--------|--------|---------|--------------------------|
+| `days` | number | `7`     | Lookback window (1-365)  |
+
+### Response `200`
+
+```jsonc
+{
+  "timeRange": { "from": string (ISO), "to": string (ISO), "days": number },
+  "packets": [
+    {
+      "hash":      string,
+      "timestamp": string (ISO),      // first seen
+      "hops":      number,            // 0 = heard straight from the originator
+      "tags":      [string]           // "flood", then "scoped" or "unscoped", then "advert" if an ADVERT
+    }
+  ],
+  "ambiguous": number                 // prefix matched, hop position not attributable to this node
+}
+```
+
+Filters that match the firmware limits: `flood.max` uses all entries,
+`flood.max.unscoped` the entries tagged `unscoped`, `flood.max.advert` the
+entries tagged `advert`.
+
+### Response `404`
+
+```json
+{ "error": "Not found" }
+```
+
+---
+
 ## GET /api/nodes/:pubkey/reach
 
 Per-node RF reach report (two-way link quality). Computes **directional** link counts from raw
@@ -1103,12 +1170,23 @@ Messages for a specific channel.
       "repeats":          number,           // dedup count
       "observers":        [string],         // observer names
       "hops":             number,
-      "snr":              number | null
+      "snr":              number | null,
+      "scope_name":       string | null     // region scope, see below
     }
   ],
   "total": number                           // total deduplicated messages
 }
 ```
+
+`scope_name` is the transmission's region scope (`transmissions.scope_name`), the same field `/api/packets` returns:
+
+| Value | Meaning |
+|-------|---------|
+| `null` | No transport code: the message was not region-scoped. Also `null` when the database has no `scope_name` column yet (ingestor migration not run). |
+| `""` | Transport-scoped, but the ingestor could not match it to a single region: no region key matched, or several matched with no single operator-configured key among them. |
+| `"#name"` | The matched region name. |
+
+The same field is on the WebSocket `packet` broadcast, both top-level and inside `packet`.
 
 ---
 
@@ -1272,6 +1350,93 @@ Network topology analytics.
       "minDist":       number,
       "observer_id":   string,
       "observer_name": string
+    }
+  ]
+}
+```
+
+---
+
+## GET /api/analytics/retransmissions
+
+Retransmission pressure over time (#1699): a collision-pressure **proxy**, not a
+measured collision rate.
+
+For each flood event of a flood-routed packet (`route_type` 0 or 1, TRACE
+excluded) the server takes the union of the paths of all its observations and
+counts the distinct repeaters in it: paths `[A]`, `[A,B,C]` and `[A,D]` give 4.
+Direct routes are excluded because their path is the route still to travel, not
+the forwarders; zero-hop sends are direct routes. A flood event heard only with
+an empty path counts as 0 repeaters.
+
+A transmission is one packet hash, and the same bytes can flood again later:
+those observations are stored on the same transmission. Its observations are
+therefore sorted by time and split into flood events wherever two consecutive
+observations are more than 5 minutes apart. Each event is counted on its own and
+bucketed by its first observation. A firmware node holds a flood for at most
+32 s before forwarding it, plus a random retransmit delay, so a flood that is
+still spreading is not split. Every count in the response (`packets`,
+`one_byte_packets`, `no_repeater_packets`) counts flood events. Observations are
+stored once per observer and path per transmission, so a later event holds only
+the observer and path pairs not already stored for that hash, and its count is a
+lower bound.
+
+Events that start before the store's retention floor (now minus
+`retentionHours`) are left out for every request shape, including explicit
+`window`, `from` and `to`: the store keeps observations older than that only for
+hashes heard again recently, so they do not represent that period.
+
+Hop prefixes are not resolved to nodes. A prefix counts once per flood event,
+whether it repeats across observations or inside one path. A 2- or 3-byte prefix
+that repeats inside one path is one node forwarding the flood again after its
+duplicate filter (a cyclic buffer of 160 hashes) dropped the hash. A repeated
+1-byte prefix can also be two nodes; counting it once keeps the value a lower
+bound, as does merging repeaters that share a prefix across observations. Only
+repeaters that some observer heard are counted, so the value also follows
+observer coverage.
+
+The default shape (no `region`, no window, `bucket=1h`) is served from the
+analytics recomputer; other shapes use the TTL cache, and concurrent requests
+for the same uncached shape share one computation. During startup the default
+shape returns `503` with `Retry-After` until the recomputer completes a pass
+after the hot startup window has loaded, or for at most 60 s after the
+recomputer started, whichever comes first. The history beyond the hot window
+keeps loading in the background after that, so until the first recompute pass
+after that load finishes the default shape can cover less than the retention
+window. `?area=` is not
+supported: the area filter works on resolved node public keys and this metric
+does not resolve prefixes.
+
+### Query Parameters
+
+| Param    | Type   | Default | Description                         |
+|----------|--------|---------|-------------------------------------|
+| `region` | string | none    | Comma-separated IATA codes; only observations from the region's observers feed the union, events none of them heard are skipped. Events are split before this filter. A region with no known observers is not filtered and returns network-wide data, as `/api/analytics/rf` does |
+| `window` | string | none    | `1h`, `24h`, `3d`, `7d` or `30d` (relative to now) |
+| `from`, `to` | string (ISO) | none | Absolute window bounds, take precedence over `window` |
+| `bucket` | string | `1h`    | `5m`, `15m`, `1h`, `6h` or `1d`; other values fall back to `1h` |
+
+### Response `200`
+
+```jsonc
+{
+  "bucket_seconds": number,
+  "window":         string,          // window label, "" for all data
+  "region":         string,
+  "summary": {
+    "packets":             number,   // flood events that started in the window
+    "avg_repeaters":       number,   // mean distinct repeaters per event
+    "observers":           number,   // distinct observers that heard them
+    "one_byte_packets":    number,   // events on 1-byte hop hashes (most ambiguous)
+    "no_repeater_packets": number    // events heard with an empty path only
+  },
+  "buckets": [                       // ascending, empty buckets omitted
+    {
+      "start":         string (ISO), // bucket start, UTC
+      "packets":       number,       // flood events that started in the bucket
+      "repeater_sum":  number,
+      "avg_repeaters": number,
+      "observers":     number
     }
   ]
 }
@@ -1760,6 +1925,14 @@ Scope-based packet statistics over a time window. Requires ingestor `scope_name_
   ],
   "timeSeries": [
     { "t": string (ISO), "scoped": number, "unscoped": number }  // bucket timestamps and counts
+  ],
+  "advertsByRole": [
+    {
+      "role":         string,        // sender's nodes.role, or "unknown" (see notes below)
+      "unscoped":     number,        // flood adverts with no scope (scope_name NULL)
+      "unknownScope": number,        // scoped, but no region name could be assigned (scope_name "")
+      "named":        number         // scoped with a named region
+    }
   ]
 }
 ```
@@ -1773,6 +1946,13 @@ Scope-based packet statistics over a time window. Requires ingestor `scope_name_
   - `1h` window → 5-minute buckets
   - `24h` window → 1-hour buckets
   - `7d` window → 6-hour buckets
+- `advertsByRole` (#1979) counts ADVERT packets on flood routes only (TRANSPORT_FLOOD 0, FLOOD 1) in the window,
+  grouped by the sender's current `nodes.role`. Zero-hop adverts (DIRECT/TRANSPORT_DIRECT) are excluded.
+  Ordered by total adverts descending, then role. It reports what was sent per role, not why.
+  `role` is `"unknown"` when the advert row has no `from_pubkey` (legacy rows the ingestor's #1143
+  `from_pubkey` backfill has not reached yet), when the sender has no row in `nodes` (including a sender
+  the ingestor's node retention moved to `inactive_nodes`, which within the 7d window only happens with
+  `retention.nodeDays` below 7), or when its `nodes.role` is empty.
 - Cached 30 seconds
 
 > **Note:** On deployments with pre-existing data, `unscoped` will be inflated until the async startup backfill completes, because transport-route rows inserted before the `scope_name_v1` migration ran have `scope_name = NULL` and are indistinguishable from Code1=0000 rows. The backfill goroutine populates them at startup but may take several minutes on large databases.
