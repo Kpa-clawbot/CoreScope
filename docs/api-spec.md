@@ -23,6 +23,7 @@
 - [GET /api/nodes/:pubkey/health](#get-apinodespubkeyhealth)
 - [GET /api/nodes/:pubkey/paths](#get-apinodespubkeypaths)
 - [GET /api/nodes/:pubkey/analytics](#get-apinodespubkeyanalytics)
+- [GET /api/nodes/:pubkey/hop_analytics](#get-apinodespubkeyhop_analytics)
 - [GET /api/nodes/:pubkey/reach](#get-apinodespubkeyreach)
 - [GET /api/packets](#get-apipackets)
 - [GET /api/packets/timestamps](#get-apipacketstimestamps)
@@ -666,6 +667,59 @@ Per-node analytics over a time range.
   }
 }
 ```
+
+### Response `404`
+
+```json
+{ "error": "Not found" }
+```
+
+---
+
+## GET /api/nodes/:pubkey/hop_analytics
+
+Hop count at this node for every flood packet it forwarded, to help choose
+`flood.max`, `flood.max.unscoped` and `flood.max.advert`. A repeater checks
+those limits against the number of hashes already in the path, then appends
+its own hash, so the hop count is the node's zero-based index in the observed
+path (firmware `src/helpers/RoutingPolicy.h`, `src/Mesh.cpp` `routeRecvPacket`).
+This is not the `hopDistribution` of `/analytics`, which is the path length at
+the observer.
+
+- One entry per packet hash. Values are raw so the client can filter and bin.
+- Only floods (route types 0 and 1). DIRECT packets carry the remaining route,
+  not a hop count, and are left out. Packets the node originated are left out.
+- A packet is attributed when the node's path prefix sits at exactly one index
+  and either no other relay-capable node shares that prefix, or the store's
+  resolved path for the packet contains the node. Otherwise it is counted in
+  `ambiguous` and left out (for example a colliding 1-byte prefix).
+
+### Query Parameters
+
+| Param  | Type   | Default | Description              |
+|--------|--------|---------|--------------------------|
+| `days` | number | `7`     | Lookback window (1-365)  |
+
+### Response `200`
+
+```jsonc
+{
+  "timeRange": { "from": string (ISO), "to": string (ISO), "days": number },
+  "packets": [
+    {
+      "hash":      string,
+      "timestamp": string (ISO),      // first seen
+      "hops":      number,            // 0 = heard straight from the originator
+      "tags":      [string]           // "flood", then "scoped" or "unscoped", then "advert" if an ADVERT
+    }
+  ],
+  "ambiguous": number                 // prefix matched, hop position not attributable to this node
+}
+```
+
+Filters that match the firmware limits: `flood.max` uses all entries,
+`flood.max.unscoped` the entries tagged `unscoped`, `flood.max.advert` the
+entries tagged `advert`.
 
 ### Response `404`
 

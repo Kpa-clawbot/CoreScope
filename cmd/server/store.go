@@ -6782,6 +6782,31 @@ func (s *PacketStore) InvalidateNodeCache() {
 	s.cacheMu.Unlock()
 }
 
+// relayCandidates returns the nodes whose pubkey starts with hop and that may
+// appear as a path hop.
+//
+// Issue #1290: observer-known listener-only nodes are dropped from the
+// candidate set. By firmware contract a node that advertises `repeat:off` in
+// its MQTT /status will never relay a packet, so it cannot legitimately be a
+// hop in someone else's path. Filtering shrinks ambiguous candidate sets
+// without affecting any upstream caller (only no_match becomes more likely
+// when the only matching prefix belonged to a listener). Empty pm.nonRelay
+// preserves the pre-#1290 behavior exactly (back-compat).
+func (pm *prefixMap) relayCandidates(hop string) []nodeInfo {
+	candidates := pm.m[strings.ToLower(hop)]
+	if len(pm.nonRelay) == 0 || len(candidates) == 0 {
+		return candidates
+	}
+	filtered := candidates[:0:0]
+	for i := range candidates {
+		if _, isListener := pm.nonRelay[strings.ToLower(candidates[i].PublicKey)]; isListener {
+			continue
+		}
+		filtered = append(filtered, candidates[i])
+	}
+	return filtered
+}
+
 func (pm *prefixMap) resolve(hop string) *nodeInfo {
 	h := strings.ToLower(hop)
 	candidates := pm.m[h]
@@ -6824,27 +6849,7 @@ func (pm *prefixMap) resolve(hop string) *nodeInfo {
 // (e.g., the originator, observer, or adjacent hops in the path).
 // graph may be nil, in which case tier-1 is skipped.
 func (pm *prefixMap) resolveWithContext(hop string, contextPubkeys []string, graph *NeighborGraph) (*nodeInfo, string, float64) {
-	h := strings.ToLower(hop)
-	candidates := pm.m[h]
-	// Issue #1290: drop observer-known listener-only nodes from the
-	// candidate set. By firmware contract a node that advertises
-	// `repeat:off` in its MQTT /status will never relay a packet, so it
-	// cannot legitimately be a hop in someone else's path. Filtering
-	// here shrinks ambiguous candidate sets without affecting any
-	// upstream caller (the returned shape and confidence labels are
-	// preserved; only no_match becomes more likely when the only
-	// matching prefix belonged to a listener). Empty pm.nonRelay
-	// preserves the pre-#1290 behavior exactly (back-compat).
-	if len(pm.nonRelay) > 0 && len(candidates) > 0 {
-		filtered := candidates[:0:0]
-		for i := range candidates {
-			if _, isListener := pm.nonRelay[strings.ToLower(candidates[i].PublicKey)]; isListener {
-				continue
-			}
-			filtered = append(filtered, candidates[i])
-		}
-		candidates = filtered
-	}
+	candidates := pm.relayCandidates(hop)
 	if len(candidates) == 0 {
 		return nil, "no_match", 0
 	}
@@ -9622,6 +9627,21 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 	}, nil
 }
 
+// nodeTxsSince returns the node's transmissions first seen after fromISO,
+// from the byNode index (sender, recipient and resolved relay hops).
+// Raw JSON text search is intentionally avoided: a GRP_TXT packet whose message
+// text contains a node's pubkey is not a packet *for* that node.
+// Must be called with s.mu held.
+func (s *PacketStore) nodeTxsSince(pubkey, fromISO string) []*StoreTx {
+	var packets []*StoreTx
+	for _, p := range s.byNode[pubkey] {
+		if p.FirstSeen > fromISO {
+			packets = append(packets, p)
+		}
+	}
+	return packets
+}
+
 // GetNodeAnalytics computes analytics for a single node using in-memory byNode index.
 func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsResponse, error) {
 	node, err := s.db.GetNodeByPubkey(pubkey)
@@ -9636,16 +9656,7 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Collect packets from byNode index (time-filtered).
-	// Raw JSON text search is intentionally avoided: a GRP_TXT packet whose message
-	// text contains a node's pubkey is not a packet *for* that node.
-	indexed := s.byNode[pubkey]
-	var packets []*StoreTx
-	for _, p := range indexed {
-		if p.FirstSeen > fromISO {
-			packets = append(packets, p)
-		}
-	}
+	packets := s.nodeTxsSince(pubkey, fromISO)
 
 	// Activity timeline (hourly buckets)
 	timelineBuckets := map[string]int{}

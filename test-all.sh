@@ -75,6 +75,7 @@ node test-issue-1770-mobile-row-clamp.js
 node test-issue-1849-trace-hashbytes.js
 node test-nodes-export.js
 node test-nodes-export-wiring.js
+node test-node-hop-analytics.js
 
 echo ""
 echo "═══════════════════════════════════════"
