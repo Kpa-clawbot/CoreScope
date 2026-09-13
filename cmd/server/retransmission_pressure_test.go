@@ -557,7 +557,7 @@ func TestStartAnalyticsRecomputers_RetransmissionsGatedOnLoadComplete(t *testing
 	if !store.recompRetransmissions.IsWarmingUp_1659() {
 		t.Fatal("a pass before LoadComplete must not open the retransmissions gate")
 	}
-	store.loadComplete.Store(true)
+	store.signalStartupLoadDone()
 	store.recompRetransmissions.runOnce()
 	if store.recompRetransmissions.IsWarmingUp_1659() {
 		t.Fatal("a pass after LoadComplete must open the retransmissions gate")

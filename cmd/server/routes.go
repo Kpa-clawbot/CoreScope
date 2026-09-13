@@ -296,6 +296,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/nodes/{pubkey}/health", s.handleNodeHealth).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/paths", s.handleNodePaths).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/analytics", s.handleNodeAnalytics).Methods("GET")
+	r.HandleFunc("/api/nodes/{pubkey}/hop_analytics", s.handleNodeHopAnalytics).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/battery", s.handleNodeBattery).Methods("GET")
 	r.HandleFunc("/api/nodes/clock-skew", s.handleFleetClockSkew).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/clock-skew", s.handleNodeClockSkew).Methods("GET")
@@ -2081,13 +2082,7 @@ func (s *Server) handleNodeAnalytics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "Not found")
 		return
 	}
-	days := queryInt(r, "days", 7)
-	if days < 1 {
-		days = 1
-	}
-	if days > 365 {
-		days = 365
-	}
+	days := nodeAnalyticsDays(r)
 
 	if s.store != nil {
 		result, err := s.store.GetNodeAnalytics(pubkey, days)
@@ -2100,6 +2095,29 @@ func (s *Server) handleNodeAnalytics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeError(w, 404, "Not found")
+}
+
+// nodeAnalyticsDays reads the node analytics range picker's ?days= (default 7,
+// clamped to 1-365).
+func nodeAnalyticsDays(r *http.Request) int {
+	return min(max(queryInt(r, "days", 7), 1), 365)
+}
+
+// handleNodeHopAnalytics serves the hop count at this node for each flood
+// packet it forwarded (issue #1812). Separate from /analytics so the hop
+// scan does not slow down the main analytics response.
+func (s *Server) handleNodeHopAnalytics(w http.ResponseWriter, r *http.Request) {
+	pubkey := mux.Vars(r)["pubkey"]
+	if s.cfg.IsBlacklisted(pubkey) || s.isPubkeyHidden(pubkey) || s.store == nil {
+		writeError(w, 404, "Not found")
+		return
+	}
+	result, err := s.store.GetNodeHopAnalytics(pubkey, nodeAnalyticsDays(r))
+	if err != nil || result == nil {
+		writeError(w, 404, "Not found")
+		return
+	}
+	writeJSON(w, result)
 }
 
 func (s *Server) handleNodeClockSkew(w http.ResponseWriter, r *http.Request) {

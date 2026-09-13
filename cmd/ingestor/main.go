@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
@@ -146,7 +147,7 @@ func main() {
 		status := RegisterSourceStatus(tag, source.Broker)
 
 		opts.SetOnConnectHandler(func(c mqtt.Client) {
-			log.Printf("MQTT [%s] connected to %s", tag, source.Broker)
+			log.Printf("MQTT [%s] connected to %s as client %s", tag, source.Broker, opts.ClientID)
 			status.MarkConnect(time.Now())
 			// PR #1216 r1 item 2: clear the stale LastMessageUnix from
 			// before the outage so the watchdog doesn't immediately scream
@@ -609,7 +610,10 @@ func buildMQTTOpts(source MQTTSource) *mqtt.ClientOptions {
 		// (paho default 30s actually — making this explicit so it can't
 		// drift, and so operators reading the code know it's intentional
 		// per the #1335 RCA).
-		SetKeepAlive(30 * time.Second)
+		SetKeepAlive(30 * time.Second).
+		// #2013: an explicit ClientID, fixed here once per source so every
+		// reconnect of this client presents the same identity.
+		SetClientID(mqttClientID(source))
 
 	opts.SetConnectionAttemptHandler(func(broker *url.URL, tlsCfg *tls.Config) *tls.Config {
 		// Look up the per-source liveness state (registered in main) so we
@@ -640,6 +644,38 @@ func buildMQTTOpts(source MQTTSource) *mqtt.ClientOptions {
 		opts.SetTLSConfig(&tls.Config{})
 	}
 	return opts
+}
+
+// mqttClientID returns the configured clientId, or corescope-<name>-<random>
+// with the source name (or broker host) reduced to [0-9A-Za-z-]. The random
+// suffix keeps two instances with the same config from taking over each
+// other's session on a broker that does not assign unique IDs itself.
+func mqttClientID(source MQTTSource) string {
+	if source.ClientID != "" {
+		return source.ClientID
+	}
+	name := source.Name
+	if name == "" {
+		if u, err := url.Parse(source.Broker); err == nil {
+			name = u.Hostname()
+		}
+	}
+	var b strings.Builder
+	b.WriteString("corescope-")
+	for _, r := range name {
+		if r >= '0' && r <= '9' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	if name != "" {
+		b.WriteByte('-')
+	}
+	suffix := make([]byte, 3)
+	rand.Read(suffix)
+	b.WriteString(hex.EncodeToString(suffix))
+	return b.String()
 }
 
 // buildForceReconnectFn builds the watchdog's forced-reconnect action for a

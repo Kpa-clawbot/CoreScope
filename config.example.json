@@ -206,7 +206,8 @@
         "MRY"
       ],
       "region": "SJC",
-      "connectTimeoutSec": 45
+      "connectTimeoutSec": 45,
+      "_comment_clientId": "Optional \"clientId\": the MQTT ClientID this source connects with. Unset (the default) means corescope-<name>-<random>, with the name reduced to letters, digits and '-' (broker host when name is empty) and a new random suffix on every ingestor start. Set it for a fixed identity in broker logs and ACLs, but never give two running ingestors the same value on one broker: they take over each other's session."
     },
     {
       "_comment": "WebSocket MQTT broker (e.g. meshcore-mqtt-broker). Use ws:// for plain WebSocket or wss:// for TLS. Username/password supported.",

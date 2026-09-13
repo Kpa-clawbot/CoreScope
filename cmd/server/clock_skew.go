@@ -220,6 +220,14 @@ func NewClockSkewEngine() *ClockSkewEngine {
 	}
 }
 
+// Invalidate makes the next Recompute run even if the last one is
+// younger than computeInterval.
+func (e *ClockSkewEngine) Invalidate() {
+	e.mu.Lock()
+	e.lastComputed = time.Time{}
+	e.mu.Unlock()
+}
+
 // Recompute recalculates all clock skew data from the packet store.
 // Called periodically or on demand. Holds store RLock externally.
 // Uses read-copy-update: heavy computation runs outside the write lock,
