@@ -146,7 +146,9 @@ node test-node-reach-coverage.js
 node test-nodes-export-wiring.js
 node test-nodes-export.js
 node test-observer-iata-1188.js
+node test-observer-menu-interactions.js
 node test-observer-naive-clock-1478.js
+node test-observer-search-filter.js
 node test-observers-headings.js
 node test-packet-filter-time.js
 node test-packet-filter-ux.js
