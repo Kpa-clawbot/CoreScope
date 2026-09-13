@@ -293,6 +293,7 @@ jobs:
           node test-issue-1770-mobile-row-clamp.js
           node test-a11y-axe-routes-coverage.js
           node test-issue-1956-release-routing.js
+          node test-ws-stale-watchdog-1074.js
 
       - name: 🛡️ Preflight XSS gate — actual --diff check (PR only)
         # The fixture self-test above (test-preflight-xss-gate.js) only

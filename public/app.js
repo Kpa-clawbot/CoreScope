@@ -635,6 +635,18 @@ function buildHexLegend(ranges) {
 let ws = null;
 let wsListeners = [];
 
+// #1074: a half-open connection (a proxy idle timeout, NAT state dropped, a
+// laptop that slept) can keep a WebSocket OPEN for minutes without onclose
+// ever firing, and the page just stops updating. The server writes
+// WS_HEARTBEAT on every 30s ping tick (cmd/server/websocket.go), so a socket
+// that has received nothing for WS_STALE_MS is replaced. 75s tolerates one
+// late or lost heartbeat.
+const WS_STALE_MS = 75000;
+const WS_HEARTBEAT = '{"type":"heartbeat"}';
+let wsLastMessageAt = 0;
+let wsWatchdogTimer = null;
+let wsReconnectTimer = null;
+
 // --- Brand-logo packet-driven pulse (#1173) ---
 // Replaces the legacy live-dot indicator. Class-toggle only (CSS animations); colors come from
 // --logo-accent / --logo-accent-hi tokens. Test seam at window.__corescopeLogo.
@@ -778,20 +790,56 @@ const Logo = (function () {
   return api;
 })();
 
+// Detach before closing: a half-open socket may not fire onclose until the
+// browser gives up on the closing handshake, and a late onclose from a socket
+// already replaced would schedule a second connection.
+function dropWS() {
+  clearTimeout(wsWatchdogTimer);
+  wsWatchdogTimer = null;
+  if (!ws) return;
+  const old = ws;
+  ws = null;
+  old.onopen = old.onclose = old.onerror = old.onmessage = null;
+  try { old.close(); } catch (_) {}
+}
+
+function checkWSLiveness() {
+  if (!ws) return;
+  clearTimeout(wsWatchdogTimer);
+  const silentMs = Date.now() - wsLastMessageAt;
+  if (silentMs < WS_STALE_MS) {
+    wsWatchdogTimer = setTimeout(checkWSLiveness, WS_STALE_MS - silentMs);
+    return;
+  }
+  Logo.setConnected(false);
+  connectWS();
+}
+
 function connectWS() {
+  clearTimeout(wsReconnectTimer);
+  wsReconnectTimer = null;
+  dropWS();
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${proto}//${location.host}`);
-  ws.onopen = () => Logo.setConnected(true);
-  ws.onclose = () => {
+  const sock = new WebSocket(`${proto}//${location.host}`);
+  ws = sock;
+  // Measured from creation, so a handshake that never completes is caught too.
+  wsLastMessageAt = Date.now();
+  wsWatchdogTimer = setTimeout(checkWSLiveness, WS_STALE_MS);
+  sock.onopen = () => Logo.setConnected(true);
+  sock.onclose = () => {
+    clearTimeout(wsWatchdogTimer);
+    wsWatchdogTimer = null;
     Logo.setConnected(false);
     // WS_RECONNECT_MS comes from roles.js and is settable as cacheTTL's
     // sibling `wsReconnectMs`. It used to apply only to the live map's own
     // socket; now that every view shares this one, the operator's setting
     // applies here or nowhere.
-    setTimeout(connectWS, window.WS_RECONNECT_MS || 3000);
+    wsReconnectTimer = setTimeout(connectWS, window.WS_RECONNECT_MS || 3000);
   };
-  ws.onerror = () => ws.close();
-  ws.onmessage = (e) => {
+  sock.onerror = () => sock.close();
+  sock.onmessage = (e) => {
+    wsLastMessageAt = Date.now();
+    if (e.data === WS_HEARTBEAT) return;
     Logo.pulse(e);
     try {
       const msg = JSON.parse(e.data);
@@ -806,6 +854,15 @@ function connectWS() {
       wsListeners.forEach(fn => fn(msg));
     } catch {}
   };
+}
+
+// Timers in a hidden or sleeping tab can run late, so check as soon as the
+// page is back instead of waiting out a watchdog that may be minutes behind.
+function setupWSResumeCheck() {
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) checkWSLiveness();
+  });
+  window.addEventListener('online', checkWSLiveness);
 }
 
 function onWS(fn) { wsListeners.push(fn); }
@@ -1201,6 +1258,7 @@ window.addEventListener('timestamp-mode-changed', () => {
 });
 window.addEventListener('DOMContentLoaded', () => {
   connectWS();
+  setupWSResumeCheck();
   setupPullToReconnect();
 
   // --- Dark Mode ---
