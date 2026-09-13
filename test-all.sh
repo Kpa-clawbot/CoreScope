@@ -172,6 +172,7 @@ node test-top-routes-overlay.js
 node test-traces.js
 node test-url-state.js
 node test-warmup-banner.js
+node test-ws-stale-watchdog-1074.js
 node test-xss-escape-sinks.js
 
 echo "All standalone frontend suites passed"
