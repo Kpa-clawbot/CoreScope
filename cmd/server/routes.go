@@ -1374,7 +1374,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 					// see declaredRegionsCSV.
 					if declaredOK {
 						csv, has := declaredCSV[strings.ToLower(pk)]
-						node["scope_config_state"] = nodeScopeConfigState(csv, has, info.TransportedScopes)
+						enrichNodeDeclaredScope(node, csv, has, info.TransportedScopes)
 					}
 					// #672 4-axis usefulness. traffic_share_score keeps the
 					// raw per-axis Traffic value (#1456); the structural axes
@@ -1577,7 +1577,7 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 			// and the map must not disagree about a repeater's scope state.
 			if declaredCSV, ok := s.declaredRegionsCSV(); ok {
 				csv, has := declaredCSV[strings.ToLower(pubkey)]
-				node["scope_config_state"] = nodeScopeConfigState(csv, has, info.TransportedScopes)
+				enrichNodeDeclaredScope(node, csv, has, info.TransportedScopes)
 			}
 			// #672 4-axis usefulness (see handleNodes for the field
 			// contract). traffic_share_score keeps the raw per-axis

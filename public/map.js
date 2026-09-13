@@ -9,7 +9,7 @@
   let nodes = [];
   let targetNodeKey = null;
   let observers = [];
-  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clustering: localStorage.getItem('meshcore-map-clustering') !== 'false', hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all', multiByteOverlay: localStorage.getItem('meshcore-map-multibyte-overlay') === 'true', scopeState: localStorage.getItem('meshcore-map-scope-filter') || 'all', scopeOverlay: localStorage.getItem('meshcore-map-scope-overlay') === 'true' };
+  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clustering: localStorage.getItem('meshcore-map-clustering') !== 'false', hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all', multiByteOverlay: localStorage.getItem('meshcore-map-multibyte-overlay') === 'true', scopeState: localStorage.getItem('meshcore-map-scope-filter') || 'all', scopeOverlay: localStorage.getItem('meshcore-map-scope-overlay') === 'true', regionScope: localStorage.getItem('meshcore-map-region-filter') || '' };
   let selectedReferenceNode = null;  // pubkey of the reference node for neighbor filtering
   let neighborPubkeys = null;        // Set of pubkeys that are direct neighbors of selected node
   let wsHandler = null;
@@ -156,6 +156,124 @@
       btn('all', 'All', 'Every node, whatever its scope state') +
       SCOPE_STATES.map(function (s) { return btn(s.key, s.label, s.title, true); }).join('') +
       '</div></fieldset>';
+  }
+
+  // #1862 region-scope filter: "show me the repeaters that forward #be".
+  // Reads two fields /api/nodes already carries per repeater/room, so the map
+  // filters what fetchAllNodes loaded and makes no request of its own:
+  //   - declared_regions: the repeater's own declared answer, the list the
+  //     Scope Audit shows as declaredRegions ('#' stripped, '*' left out);
+  //   - transported_scopes: region scopes of traffic whose path names this
+  //     repeater by its full pubkey, the "observed" side #2006 already uses.
+  // Either one is evidence. Neither being present is not evidence of the
+  // opposite: most repeaters have never been asked for their list, and a
+  // repeater that holds a region shows no traffic for it until some passes
+  // its way. The hint under the picker says so.
+
+  // normRegion mirrors the server's normScope (scope_audit.go): strip one
+  // leading '#', nothing else, so the map and the audit spell a region alike.
+  function normRegion(s) {
+    s = s == null ? '' : String(s);
+    return s.charAt(0) === '#' ? s.slice(1) : s;
+  }
+
+  function nodeRegionEvidence(n, region) {
+    var want = normRegion(region);
+    var ev = { declared: false, observed: false };
+    if (!want || !n) return ev;
+    var d = Array.isArray(n.declared_regions) ? n.declared_regions : [];
+    for (var i = 0; i < d.length; i++) { if (normRegion(d[i]) === want) { ev.declared = true; break; } }
+    var t = Array.isArray(n.transported_scopes) ? n.transported_scopes : [];
+    for (var j = 0; j < t.length; j++) { if (normRegion(t[j]) === want) { ev.observed = true; break; } }
+    return ev;
+  }
+
+  function regionFilterAccepts(n, region) {
+    if (!region) return true;
+    var ev = nodeRegionEvidence(n, region);
+    return ev.declared || ev.observed;
+  }
+
+  // nodeFiltersNarrowed says whether a node filter that also removes
+  // non-forwarding roles is active. The observer layer stands down while it
+  // is (see the observer loop in _renderMarkersInner).
+  function nodeFiltersNarrowed(f) {
+    return (!!f.scopeState && f.scopeState !== 'all') || !!f.regionScope;
+  }
+
+  // collectRegionCounts builds the picker's option list from the loaded nodes:
+  // one pass, one Set per node so a region both declared and observed counts
+  // that node once in total.
+  function collectRegionCounts(list) {
+    var byRegion = new Map();
+    function entry(r) {
+      var e = byRegion.get(r);
+      if (!e) { e = { region: r, total: 0, declared: 0, observed: 0 }; byRegion.set(r, e); }
+      return e;
+    }
+    (list || []).forEach(function (n) {
+      var seen = new Set();
+      var declared = new Set();
+      (Array.isArray(n.declared_regions) ? n.declared_regions : []).forEach(function (r) {
+        r = normRegion(r);
+        if (r && !declared.has(r)) { declared.add(r); seen.add(r); entry(r).declared++; }
+      });
+      var observed = new Set();
+      (Array.isArray(n.transported_scopes) ? n.transported_scopes : []).forEach(function (r) {
+        r = normRegion(r);
+        if (r && !observed.has(r)) { observed.add(r); seen.add(r); entry(r).observed++; }
+      });
+      seen.forEach(function (r) { entry(r).total++; });
+    });
+    return Array.from(byRegion.values()).sort(function (a, b) { return a.region < b.region ? -1 : (a.region > b.region ? 1 : 0); });
+  }
+
+  function regionFilterOptionsHtml(counts, current) {
+    var cur = normRegion(current);
+    var list = (counts || []).slice();
+    if (cur && !list.some(function (c) { return c.region === cur; })) list.push({ region: cur, total: 0 });
+    return '<option value=""' + (cur ? '' : ' selected') + '>All regions</option>' +
+      list.map(function (c) {
+        return '<option value="' + safeEsc(c.region) + '"' + (c.region === cur ? ' selected' : '') + '>#' +
+          safeEsc(c.region) + ' (' + c.total + ')</option>';
+      }).join('');
+  }
+
+  function regionFilterHintHtml(counts, current) {
+    var cur = normRegion(current);
+    if (!cur) return '';
+    var c = null;
+    for (var i = 0; i < (counts || []).length; i++) { if (counts[i].region === cur) { c = counts[i]; break; } }
+    var name = '#' + safeEsc(cur);
+    var found = c
+      ? c.total + ' node' + (c.total === 1 ? '' : 's') + ' with evidence for ' + name + ': ' +
+        c.declared + ' declare it, ' + c.observed + ' seen carrying its traffic.'
+      : 'No loaded node has evidence for ' + name + '.';
+    return found + ' Absence here is not proof: most repeaters were never asked for their region list, ' +
+      'and a repeater only shows traffic for a region once some passes its way.';
+  }
+
+  // regionsPopupRowsHtml is the popup's answer to "why is this node on the
+  // map for #be": the declared list and the observed scopes, kept apart
+  // because they are different kinds of evidence.
+  function regionsPopupRowsHtml(n) {
+    var dt = function (label, title) {
+      return '<dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;" title="' + safeEsc(title) + '">' + label + '</dt>';
+    };
+    var names = function (list) {
+      return list.map(function (r) { return '#' + safeEsc(normRegion(r)); }).join(', ');
+    };
+    var out = '';
+    if (Array.isArray(n.declared_regions)) {
+      out += dt('Declared', 'Named regions from this repeater’s own declared-regions answer, the same list the Scope Audit shows.') +
+        '<dd style="margin-left:88px;padding:2px 0;font-size:12px;">' +
+        (n.declared_regions.length ? names(n.declared_regions) : '<span style="color:var(--text-muted);">no named region</span>') + '</dd>';
+    }
+    if (Array.isArray(n.transported_scopes) && n.transported_scopes.length) {
+      out += dt('Observed', 'Region scopes of traffic whose path names this repeater by its full pubkey, over the server’s in-memory packet window.') +
+        '<dd style="margin-left:88px;padding:2px 0;font-size:12px;">' + names(n.transported_scopes) + '</dd>';
+    }
+    return out;
   }
 
   function makeMarkerIcon(role, isStale, isAlsoObserver, colorOverride) {
@@ -341,6 +459,12 @@
             </div>
           </fieldset>
           ${scopeFilterHtml(filters.scopeState)}
+          <fieldset class="mc-section">
+            <legend class="mc-label">Region Scope</legend>
+            <label for="mcRegionFilter" class="sr-only">Show nodes with evidence for a region scope</label>
+            <select id="mcRegionFilter" title="Show nodes that declare a region scope or were seen carrying its traffic">${regionFilterOptionsHtml([], filters.regionScope)}</select>
+            <div id="mcRegionHint" style="font-size:11px;color:var(--text-muted);margin-top:4px;"></div>
+          </fieldset>
           <fieldset class="mc-section">
             <legend class="mc-label">Filters</legend>
             <label for="mcNeighbors"><input type="checkbox" id="mcNeighbors"> Show direct neighbors</label>
@@ -726,6 +850,18 @@
         renderMarkers();
       });
     });
+
+    // Region scope filter (#1862). Options are rebuilt from the loaded nodes
+    // in buildRegionFilter; persisted the same way as the scope filter above.
+    const regionFilterEl = document.getElementById('mcRegionFilter');
+    if (regionFilterEl) {
+      regionFilterEl.addEventListener('change', e => {
+        filters.regionScope = e.target.value;
+        localStorage.setItem('meshcore-map-region-filter', filters.regionScope);
+        updateRegionHint();
+        renderMarkers();
+      });
+    }
 
     // Byte size filter buttons
     document.querySelectorAll('#mcByteFilter .btn').forEach(btn => {
@@ -1518,6 +1654,7 @@
       observers = obsData.observers || [];
 
       buildRoleChecks(data.counts || {});
+      buildRegionFilter();
       buildJumpButtons();
 
       renderMarkers();
@@ -1630,6 +1767,22 @@
       });
       el.appendChild(lbl);
     }
+  }
+
+  // #1862: region counts for the loaded nodes, kept for the hint so a change
+  // of selection does not walk the node list again.
+  let regionCounts = [];
+
+  function buildRegionFilter() {
+    regionCounts = collectRegionCounts(nodes);
+    const sel = document.getElementById('mcRegionFilter');
+    if (sel) sel.innerHTML = regionFilterOptionsHtml(regionCounts, filters.regionScope);
+    updateRegionHint();
+  }
+
+  function updateRegionHint() {
+    const el = document.getElementById('mcRegionHint');
+    if (el) el.innerHTML = regionFilterHintHtml(regionCounts, filters.regionScope);
   }
 
   let REGION_NAMES = {};
@@ -1832,6 +1985,10 @@
       // filter is not changed here — that is its own behaviour change, for its
       // own PR.
       if (!scopeFilterAccepts(n, filters.scopeState)) return false;
+      // Region scope filter (#1862). Same rule as the scope filter above: it
+      // applies to every role, so non-forwarding nodes drop out while a region
+      // is picked.
+      if (!regionFilterAccepts(n, filters.regionScope)) return false;
       // Status filter
       if (filters.statusFilter !== 'all') {
         const status = getNodeStatus(n); // #1598: relay-aware for infra
@@ -1899,7 +2056,8 @@
     // repeater that is also an observer would otherwise drop out of `filtered`,
     // stop matching displayedNodePubkeys, and reappear as a plain observer pin —
     // the node the operator just filtered away, back in another guise.
-    if (filters.observer && filters.scopeState === 'all') {
+    // #1862: the region filter narrows the same way, for the same reasons.
+    if (filters.observer && !nodeFiltersNarrowed(filters)) {
       for (const obs of observers) {
         if (!obs.lat || !obs.lon) continue;
         // Skip observers whose pubkey matches a displayed node — they're shown as combined markers
@@ -2074,6 +2232,7 @@
           ${hashPrefixRow}
           ${mbRow}
           ${scopeRow}
+          ${regionsPopupRowsHtml(node)}
           <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Key</dt>
           <dd style="font-family:var(--mono);font-size:11px;margin-left:88px;padding:2px 0;">${safeEsc(key)}</dd>
           <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Location</dt>
@@ -2601,6 +2760,16 @@
       scopeTintEnabled: scopeTintEnabled,
       scopeStateLabel: scopeStateLabel,
       scopeFilterHtml: scopeFilterHtml,
+      // #1862: the region-scope filter's pure pieces, plus the live filter
+      // state so persistence can be asserted.
+      regionFilterAccepts: regionFilterAccepts,
+      nodeRegionEvidence: nodeRegionEvidence,
+      collectRegionCounts: collectRegionCounts,
+      regionFilterOptionsHtml: regionFilterOptionsHtml,
+      regionFilterHintHtml: regionFilterHintHtml,
+      regionsPopupRowsHtml: regionsPopupRowsHtml,
+      nodeFiltersNarrowed: nodeFiltersNarrowed,
+      filters: filters,
       // #1356: exposed so the a11y test can assert what the label RENDERS
       // instead of grepping map.js for where two identifiers sit.
       makeRepeaterLabelIcon: makeRepeaterLabelIcon,

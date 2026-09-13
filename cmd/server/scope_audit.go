@@ -1118,26 +1118,16 @@ func (s *Server) computeScopeAudit(window, sinceISO string) (*ScopeAuditResponse
 			continue
 		}
 
-		allRegions := splitRegionsCSV(d.RegionsCSV)
-		declaredWildcard := false
-		declaredNamed := make([]string, 0, len(allRegions))
-		declaredSet := make(map[string]bool, len(allRegions))
-		for _, rgn := range allRegions {
-			// isScopeWildcard, not a bare "*" compare: a collector storing the
-			// "#*" spelling would otherwise have it counted as a named region
-			// here and as the wildcard by /api/nodes, and the two pages would
-			// classify the same repeater differently (#2006 review).
-			if isScopeWildcard(rgn) {
-				declaredWildcard = true
-				continue
-			}
-			// normScope mirrors the observed side (scopes.go: agg.scopes keys
-			// are already normScope'd) — regions_csv is not guaranteed to
-			// arrive with '#' already stripped in every case, and comparing
-			// raw here would reintroduce the exact trap normScope exists to
-			// prevent, just on the other side of the comparison.
-			rgn = normScope(rgn)
-			declaredNamed = append(declaredNamed, rgn)
+		// splitDeclaredRegions is shared with /api/nodes (scope_config_state
+		// and declared_regions), so the map and this page read one declared
+		// list the same way. It uses isScopeWildcard rather than a bare "*"
+		// compare (#2006 review), and normScope's the named regions to mirror
+		// the observed side (scopes.go: agg.scopes keys are already
+		// normScope'd): regions_csv is not guaranteed to arrive with '#'
+		// already stripped.
+		declaredNamed, declaredWildcard := splitDeclaredRegions(d.RegionsCSV)
+		declaredSet := make(map[string]bool, len(declaredNamed))
+		for _, rgn := range declaredNamed {
 			declaredSet[rgn] = true
 		}
 
