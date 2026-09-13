@@ -115,6 +115,7 @@ node test-issue-1668-m2-contrast.js
 node test-issue-1668-m3-typography.js
 node test-issue-1668-m4-per-route.js
 node test-issue-1697-mqtt-mobile-e2e.js
+node test-issue-1699-retransmission-chart.js
 node test-issue-1705-subpath-contrast.js
 node test-issue-1753-copy-url-slash.js
 node test-issue-1770-mobile-row-clamp.js
