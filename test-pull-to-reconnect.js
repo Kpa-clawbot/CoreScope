@@ -1,8 +1,8 @@
 /* test-pull-to-reconnect.js — behavioral tests for pull-to-reconnect (#1063)
  * Loads app.js in a vm sandbox, stubs WebSocket + DOM, asserts that:
  *  - pullReconnect() exists as a global helper
- *  - calling it closes the existing WS (which triggers the existing
- *    auto-reconnect path)
+ *  - calling it replaces the existing WS through connectWS(), which
+ *    detaches and closes the old socket (#1074)
  *  - setupPullToReconnect() exists and wires touchstart/touchmove/touchend
  *    listeners on the document
  *  - a pull-down gesture at scrollTop=0 over the threshold triggers
