@@ -50,6 +50,52 @@ func isScopeWildcard(region string) bool {
 	return region == "*" || region == "#*"
 }
 
+// splitDeclaredRegions reads one declared regions_csv into its named regions
+// and whether the flood wildcard was present. It is the single reading of a
+// declared list: the Scope Audit's declaredRegions, /api/nodes'
+// scope_config_state and its declared_regions field (#1862) all come from it,
+// so a repeater cannot be listed under one set of names on the audit page and
+// another on the map. Named regions are normScope'd, because regions_csv
+// arrives with and without the leading '#' depending on the collector, and
+// the wildcard is never a named region (see isScopeWildcard).
+func splitDeclaredRegions(csv string) (named []string, wildcard bool) {
+	all := splitRegionsCSV(csv)
+	named = make([]string, 0, len(all))
+	for _, rgn := range all {
+		if isScopeWildcard(rgn) {
+			wildcard = true
+			continue
+		}
+		named = append(named, normScope(rgn))
+	}
+	return named, wildcard
+}
+
+// enrichNodeDeclaredScope sets the two declared-regions fields on a
+// repeater/room node: scope_config_state (#2001) and declared_regions
+// (#1862). Shared by the list and detail handlers so the node page and the
+// map read one repeater the same way.
+//
+// declared_regions is set only when the node has a declared answer. An empty
+// list means it answered and named no region; an absent field means it was
+// never asked. The map's region filter treats neither as evidence that the
+// repeater lacks a region.
+//
+// declared_regions_truncated is set, to true, only when that answer was
+// flagged as cut off: the list is then partial, which the Scope Audit also
+// shows. Omitted otherwise, since a source that does not record truncation
+// cannot vouch for a complete list either.
+func enrichNodeDeclaredScope(node map[string]interface{}, answer declaredAnswer, hasDeclared bool, transportedScopes []string) {
+	node["scope_config_state"] = nodeScopeConfigState(answer.RegionsCSV, hasDeclared, transportedScopes)
+	if hasDeclared {
+		named, _ := splitDeclaredRegions(answer.RegionsCSV)
+		node["declared_regions"] = named
+		if answer.Truncated {
+			node["declared_regions_truncated"] = true
+		}
+	}
+}
+
 // nodeScopeConfigState classifies one node for the scope_config_state field.
 //
 // declaredCSV is the node's most recent declared-regions answer (the raw
@@ -65,15 +111,7 @@ func isScopeWildcard(region string) bool {
 // Audit's job, and re-labelling the node here would hide it.
 func nodeScopeConfigState(declaredCSV string, hasDeclared bool, transportedScopes []string) string {
 	if hasDeclared {
-		var named []string
-		wildcard := false
-		for _, rgn := range splitRegionsCSV(declaredCSV) {
-			if isScopeWildcard(rgn) {
-				wildcard = true
-				continue
-			}
-			named = append(named, rgn)
-		}
+		named, wildcard := splitDeclaredRegions(declaredCSV)
 		return scopeAuditConfigState(named, wildcard)
 	}
 	if len(transportedScopes) > 0 {
@@ -91,7 +129,17 @@ func nodeScopeConfigState(declaredCSV string, hasDeclared bool, transportedScope
 // disagreeing for longer than either is stale on its own.
 const declaredRegionsTTL = 30 * time.Second
 
-// declaredRegionsCSV maps target pubkey to its newest declared regions_csv,
+// declaredAnswer is one node's newest declared-regions answer as the node
+// endpoints read it: the raw regions_csv, and whether the collector flagged
+// the list as cut off. Truncated is only ever true for a source that records
+// it (see AllCurrentDeclaredRegions); false means "not flagged", not "known
+// complete".
+type declaredAnswer struct {
+	RegionsCSV string
+	Truncated  bool
+}
+
+// declaredRegionsCSV maps target pubkey to its newest declared answer,
 // merged across every collector this database carries, keyed lowercase.
 //
 // Keys are lowercased because the two sides of the join disagree by design:
@@ -106,7 +154,7 @@ const declaredRegionsTTL = 30 * time.Second
 // repeater has answered" is a statement the schema cannot support. An empty map
 // with ok=true means the sources exist and nobody has answered yet, which IS a
 // finding and is what ScopeConfigNone reports.
-func (s *Server) declaredRegionsCSV() (map[string]string, bool) {
+func (s *Server) declaredRegionsCSV() (map[string]declaredAnswer, bool) {
 	if !s.db.hasConfiguredScope && !s.db.hasDeclaredRegionsTable {
 		return nil, false
 	}
@@ -142,9 +190,9 @@ func (s *Server) declaredRegionsCSV() (map[string]string, bool) {
 			return nil, qerr
 		}
 		atomic.AddInt64(&s.declaredRegionsQueries, 1)
-		out := make(map[string]string, len(rows))
+		out := make(map[string]declaredAnswer, len(rows))
 		for _, r := range rows {
-			out[strings.ToLower(r.Target)] = r.RegionsCSV
+			out[strings.ToLower(r.Target)] = declaredAnswer{RegionsCSV: r.RegionsCSV, Truncated: r.Truncated}
 		}
 		s.declaredRegionsMu.Lock()
 		// Cached maps are handed to concurrent readers and never written again.
@@ -157,5 +205,5 @@ func (s *Server) declaredRegionsCSV() (map[string]string, bool) {
 		log.Printf("[nodes] declared-regions lookup failed, scope_config_state omitted: %v", err)
 		return nil, false
 	}
-	return v.(map[string]string), true
+	return v.(map[string]declaredAnswer), true
 }
