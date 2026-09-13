@@ -115,6 +115,7 @@ node test-issue-1668-m2-contrast.js
 node test-issue-1668-m3-typography.js
 node test-issue-1668-m4-per-route.js
 node test-issue-1697-mqtt-mobile-e2e.js
+node test-issue-1699-retransmission-chart.js
 node test-issue-1705-subpath-contrast.js
 node test-issue-1753-copy-url-slash.js
 node test-issue-1770-mobile-row-clamp.js
@@ -125,6 +126,7 @@ node test-issue-1836-crossnav-case-normalization.js
 node test-issue-1843-node-qr-quiet-zone.js
 node test-issue-1846-observers-width.js
 node test-issue-1849-trace-hashbytes.js
+node test-issue-1851-channel-message-scope.js
 node test-issue-1862-map-region-filter.js
 node test-issue-1868-control-decode.js
 node test-issue-1890-og-url.js
@@ -147,7 +149,9 @@ node test-node-reach-coverage.js
 node test-nodes-export-wiring.js
 node test-nodes-export.js
 node test-observer-iata-1188.js
+node test-observer-menu-interactions.js
 node test-observer-naive-clock-1478.js
+node test-observer-search-filter.js
 node test-observers-headings.js
 node test-packet-filter-time.js
 node test-packet-filter-ux.js
