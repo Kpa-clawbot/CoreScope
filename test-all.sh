@@ -125,6 +125,7 @@ node test-issue-1836-crossnav-case-normalization.js
 node test-issue-1843-node-qr-quiet-zone.js
 node test-issue-1846-observers-width.js
 node test-issue-1849-trace-hashbytes.js
+node test-issue-1868-control-decode.js
 node test-issue-1890-og-url.js
 node test-issue-1956-release-routing.js
 node test-issue-2001-map-scope-state.js
