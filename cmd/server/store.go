@@ -2968,6 +2968,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				"path_json":         strOrNil(obs.PathJSON),
 				"direction":         strOrNil(obs.Direction),
 				"observation_count": tx.ObservationCount,
+				"scope_name":        strPtrOrNil(tx.ScopeName),
 			}
 			// Use decode-window resolved path for broadcast (never from struct)
 			if broadcastRP != nil {
@@ -3245,6 +3246,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 			"path_json":         strOrNil(obs.PathJSON),
 			"direction":         strOrNil(obs.Direction),
 			"observation_count": tx.ObservationCount,
+			"scope_name":        strPtrOrNil(tx.ScopeName),
 		}
 		// Use decode-window resolved path for broadcast
 		if obsRPMap != nil {
@@ -5665,6 +5667,7 @@ func (s *PacketStore) GetChannelMessages(channelHash string, limit, offset int, 
 					"observers":        observers,
 					"hops":             hops,
 					"snr":              snrVal,
+					"scope_name":       strPtrOrNil(tx.ScopeName),
 				},
 				Repeats:   1,
 				Observers: observers,
