@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -2245,8 +2246,9 @@ func TestGetScopeStats(t *testing.T) {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		raw_hex TEXT, hash TEXT, first_seen TEXT, route_type INTEGER,
 		payload_type INTEGER, payload_version INTEGER, decoded_json TEXT,
-		scope_name TEXT DEFAULT NULL
+		scope_name TEXT DEFAULT NULL, from_pubkey TEXT DEFAULT NULL
 	)`)
+	db.conn.Exec(`CREATE TABLE IF NOT EXISTS nodes (public_key TEXT PRIMARY KEY, role TEXT)`)
 	// Manually set hasScopeName since we bypassed the detector
 	db.hasScopeName = true
 
@@ -2283,6 +2285,108 @@ func TestGetScopeStats(t *testing.T) {
 	}
 	if len(stats.ByRegion) != 1 || stats.ByRegion[0].Name != "#belgium" || stats.ByRegion[0].Count != 1 {
 		t.Errorf("ByRegion = %+v, want [{#belgium 1}]", stats.ByRegion)
+	}
+}
+
+// TestGetScopeStatsAdvertsByRole covers the #1979 breakdown: flood adverts in
+// the window, grouped by the sender's nodes.role, split by the three
+// scope_name states (NULL is unscoped, an empty string is unknown scope, a
+// name is a named scope).
+func TestGetScopeStatsAdvertsByRole(t *testing.T) {
+	conn, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	conn.SetMaxOpenConns(1)
+	db := &DB{conn: conn, hasScopeName: true}
+	defer db.conn.Close()
+
+	for _, stmt := range []string{
+		`CREATE TABLE transmissions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			hash TEXT, first_seen TEXT, route_type INTEGER, payload_type INTEGER,
+			scope_name TEXT DEFAULT NULL, from_pubkey TEXT DEFAULT NULL
+		)`,
+		`CREATE TABLE nodes (public_key TEXT PRIMARY KEY, role TEXT)`,
+		`INSERT INTO nodes (public_key, role) VALUES ('rpt', 'repeater'), ('cmp', 'companion'), ('norole', '')`,
+	} {
+		if _, err := db.conn.Exec(stmt); err != nil {
+			t.Fatalf("schema: %v", err)
+		}
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	old := time.Now().UTC().Add(-48 * time.Hour).Format(time.RFC3339)
+	rows := []struct {
+		hash    string
+		seen    string
+		route   int
+		ptype   int
+		scope   interface{}
+		fromKey interface{}
+	}{
+		// Repeater: one of each scope state on flood routes.
+		{"r1", now, 1, 4, nil, "rpt"},
+		{"r2", now, 0, 4, "", "rpt"},
+		{"r3", now, 0, 4, "#belgium", "rpt"},
+		// Excluded: zero-hop adverts are DIRECT/TRANSPORT_DIRECT, not flood.
+		{"r4", now, 2, 4, nil, "rpt"},
+		{"r5", now, 3, 4, "#belgium", "rpt"},
+		// Excluded: not an advert.
+		{"r6", now, 0, 5, "#belgium", "rpt"},
+		// Excluded: outside the window.
+		{"r7", old, 1, 4, nil, "rpt"},
+		// Companion: two unscoped, one named.
+		{"c1", now, 1, 4, nil, "cmp"},
+		{"c2", now, 1, 4, nil, "cmp"},
+		{"c3", now, 0, 4, "#belgium", "cmp"},
+		// No node row, and a node row without a role: both "unknown".
+		{"u1", now, 1, 4, nil, "stranger"},
+		{"u2", now, 0, 4, "", "norole"},
+		{"u3", now, 0, 4, "#belgium", nil},
+	}
+	for _, r := range rows {
+		if _, err := db.conn.Exec(
+			`INSERT INTO transmissions (hash, first_seen, route_type, payload_type, scope_name, from_pubkey) VALUES (?, ?, ?, ?, ?, ?)`,
+			r.hash, r.seen, r.route, r.ptype, r.scope, r.fromKey,
+		); err != nil {
+			t.Fatalf("seed %s: %v", r.hash, err)
+		}
+	}
+
+	stats, err := db.GetScopeStats("24h")
+	if err != nil {
+		t.Fatalf("GetScopeStats: %v", err)
+	}
+	// Ordered by total adverts descending, then role name.
+	want := []ScopeAdvertRoleCount{
+		{Role: "companion", Unscoped: 2, UnknownScope: 0, Named: 1},
+		{Role: "repeater", Unscoped: 1, UnknownScope: 1, Named: 1},
+		{Role: "unknown", Unscoped: 1, UnknownScope: 1, Named: 1},
+	}
+	if !reflect.DeepEqual(stats.AdvertsByRole, want) {
+		t.Errorf("AdvertsByRole = %+v, want %+v", stats.AdvertsByRole, want)
+	}
+}
+
+func TestGetScopeStatsAdvertsByRoleEmpty(t *testing.T) {
+	conn, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	conn.SetMaxOpenConns(1)
+	db := &DB{conn: conn, hasScopeName: true}
+	defer db.conn.Close()
+	db.conn.Exec(`CREATE TABLE transmissions (id INTEGER PRIMARY KEY, first_seen TEXT, route_type INTEGER, payload_type INTEGER, scope_name TEXT, from_pubkey TEXT)`)
+	db.conn.Exec(`CREATE TABLE nodes (public_key TEXT PRIMARY KEY, role TEXT)`)
+
+	stats, err := db.GetScopeStats("1h")
+	if err != nil {
+		t.Fatalf("GetScopeStats: %v", err)
+	}
+	// Array fields are [] when empty, never null (docs/api-spec.md conventions).
+	if stats.AdvertsByRole == nil || len(stats.AdvertsByRole) != 0 {
+		t.Errorf("AdvertsByRole = %#v, want empty non-nil slice", stats.AdvertsByRole)
 	}
 }
 

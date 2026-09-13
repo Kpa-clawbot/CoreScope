@@ -16,6 +16,7 @@ node test-aging.js
 node test-issue-1065-gesture-hints-gates.js
 node test-frontend-helpers.js
 node test-issue-2001-map-scope-state.js
+node test-issue-1979-scope-adverts-by-role.js
 node test-scope-audit-styles-linked.js
 node test-fetch-all-nodes-pagination.js
 node test-my-repeaters-dashboard.js
