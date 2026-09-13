@@ -336,13 +336,15 @@
   }
 
   // #1851: region scope from the packet's transport code (scope_name).
-  // null = no transport code, so no chip; '' = a transport code no configured
-  // region key matched; otherwise the matched region name. Chip classes are
-  // the Scope Audit's (scope-audit.css), so a scope looks the same everywhere.
+  // null = no transport code, so no chip; '' = a transport code the ingestor
+  // could not match to a single region (no key matched, or several did with no
+  // operator-configured winner); otherwise the matched region name. Chip
+  // classes are the Scope Audit's (scope-audit.css), so a scope looks the same
+  // everywhere.
   function messageScopeChipHtml(scopeName) {
     if (scopeName == null) return '';
     if (scopeName === '') {
-      return '<span class="sa-chip sa-chip-unmatched ch-msg-scope" title="Sent with a region scope that matches none of the region keys this instance has configured">unknown scope</span>';
+      return '<span class="sa-chip sa-chip-unmatched ch-msg-scope" title="Sent with a region scope that could not be matched to a single region on this instance">unknown scope</span>';
     }
     return '<span class="sa-chip sa-chip-declared ch-msg-scope" title="Region scope this message was sent with">' + escapeHtml(scopeName) + '</span>';
   }
@@ -591,7 +593,10 @@
 
     // M5: Cache invalidation — if total candidate count changed, re-decrypt everything
     var totalCandidates = candidates.length;
-    var needFullDecrypt = (totalCandidates !== cachedCount) || opts.forceFullDecrypt;
+    // #1851: a cache written before messages carried scope_name would keep
+    // those messages chipless on the delta path, so decrypt them again.
+    var cacheLacksScope = cachedMsgs.some(function (m) { return !('scope_name' in m); });
+    var needFullDecrypt = (totalCandidates !== cachedCount) || opts.forceFullDecrypt || cacheLacksScope;
 
     // M5: Delta fetch — only decrypt packets newer than lastTs
     if (!needFullDecrypt && cachedMsgs.length > 0 && lastTs) {

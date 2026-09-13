@@ -1103,12 +1103,23 @@ Messages for a specific channel.
       "repeats":          number,           // dedup count
       "observers":        [string],         // observer names
       "hops":             number,
-      "snr":              number | null
+      "snr":              number | null,
+      "scope_name":       string | null     // region scope, see below
     }
   ],
   "total": number                           // total deduplicated messages
 }
 ```
+
+`scope_name` is the transmission's region scope (`transmissions.scope_name`), the same field `/api/packets` returns:
+
+| Value | Meaning |
+|-------|---------|
+| `null` | No transport code: the message was not region-scoped. Also `null` when the database has no `scope_name` column yet (ingestor migration not run). |
+| `""` | Transport-scoped, but the ingestor could not match it to a single region: no region key matched, or several matched with no single operator-configured key among them. |
+| `"#name"` | The matched region name. |
+
+The same field is on the WebSocket `packet` broadcast, both top-level and inside `packet`.
 
 ---
 
