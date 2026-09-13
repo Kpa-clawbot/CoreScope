@@ -1027,6 +1027,55 @@ console.log('\n=== live.js: node filter ===');
     setFilter([]);
     assert.strictEqual(ctx.localStorage.getItem('live-node-filter'), '');
   });
+
+  // updateNodeFilterUI writes the filter keys into the input. It runs from the
+  // debounced typing handler (which commits the trimmed value) and from every
+  // matching live packet, so it must not overwrite what the user is typing.
+  function withFilterInput(value, focused, fn) {
+    const input = { value };
+    const origGet = ctx.document.getElementById;
+    const origActive = ctx.document.activeElement;
+    ctx.document.getElementById = (id) => (id === 'liveNodeFilterInput' ? input : null);
+    ctx.document.activeElement = focused ? input : null;
+    try { fn(input); } finally {
+      ctx.document.getElementById = origGet;
+      ctx.document.activeElement = origActive;
+      ctx.window._liveSetNodeFilter([]);
+    }
+  }
+
+  // Typing "Dan's Local" slowly: the debounce commits "Dan's"; writing that
+  // back dropped the space and the next word was glued on ("Dan'sLocal").
+  test('node filter keeps a trailing space the user is typing', () => {
+    withFilterInput("Dan's ", true, (input) => {
+      ctx.window._liveSetNodeFilter(["Dan's"]);
+      assert.strictEqual(input.value, "Dan's ", 'input rewritten while typing');
+    });
+  });
+
+  // A matching packet re-renders the filter UI while the user has typed a
+  // character the 200 ms debounce has not committed yet ("ab12" -> "ab123").
+  // The same guard keeps a picked suggestion's name instead of its pubkey.
+  test('node filter does not overwrite a focused input that differs', () => {
+    withFilterInput('ab123', true, (input) => {
+      ctx.window._liveSetNodeFilter(['ab12']);
+      assert.strictEqual(input.value, 'ab123', 'focused input overwritten');
+    });
+  });
+
+  test('node filter writes a different key into an unfocused input', () => {
+    withFilterInput('Dan', false, (input) => {
+      ctx.window._liveSetNodeFilter(['abcd1234', 'ef012345']);
+      assert.strictEqual(input.value, 'abcd1234, ef012345');
+    });
+  });
+
+  test('node filter leaves an unfocused input that differs only by whitespace', () => {
+    withFilterInput('  ab12 ', false, (input) => {
+      ctx.window._liveSetNodeFilter(['ab12']);
+      assert.strictEqual(input.value, '  ab12 ');
+    });
+  });
 }
 
 // ===== Clickable paths (M2 — #771) =====
