@@ -807,7 +807,11 @@ function checkWSLiveness() {
   if (!ws) return;
   clearTimeout(wsWatchdogTimer);
   const silentMs = Date.now() - wsLastMessageAt;
-  if (silentMs < WS_STALE_MS) {
+  // A negative reading means the wall clock stepped back since the last
+  // message, so the silence can no longer be measured: replace the socket
+  // like a stale one rather than re-arm for the size of the step. Date.now()
+  // stays the clock because performance.now() may not count time asleep.
+  if (silentMs >= 0 && silentMs < WS_STALE_MS) {
     wsWatchdogTimer = setTimeout(checkWSLiveness, WS_STALE_MS - silentMs);
     return;
   }
@@ -923,16 +927,11 @@ function pullReconnect() {
   // If WS is connected (readyState OPEN), give a brief "Connected"
   // confirmation but still cycle so the user sees fresh data.
   const wasOpen = ws && ws.readyState === 1;
-  if (wasOpen) {
-    _showPullToast('Connected', true);
-    // Fast cycle: close and let onclose reconnect immediately
-    try { ws.close(); } catch (e) {}
-  } else {
-    _showPullToast('Reconnecting…', true);
-    try { if (ws) ws.close(); } catch (e) {}
-    // onclose handler schedules reconnect; force one now in case ws was null
-    try { connectWS(); } catch (e) {}
-  }
+  _showPullToast(wasOpen ? 'Connected' : 'Reconnecting…', true);
+  // Replace the socket now in both cases: an OPEN socket may be half-open,
+  // and its onclose can take about a minute to fire after close().
+  // connectWS() detaches and closes the old socket itself.
+  try { connectWS(); } catch (e) {}
 }
 
 function _isTouchDevice() {

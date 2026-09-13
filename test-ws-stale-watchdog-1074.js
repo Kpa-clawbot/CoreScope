@@ -28,8 +28,22 @@ function test(name, fn) {
   catch (e) { failed++; console.log(`  ❌ ${name}: ${e.message}\n     ${e.stack.split('\n').slice(1, 3).join('\n     ')}`); }
 }
 
+function inertElement() {
+  return new Proxy(function () {}, {
+    get(_, key) {
+      if (key === Symbol.toPrimitive) return () => '';
+      if (key === Symbol.iterator) return function* () {};
+      return inertElement();
+    },
+    set() { return true; },
+    apply() { return inertElement(); },
+  });
+}
+
 function makeSandbox() {
-  const clock = { now: 1700000000000 };
+  // now drives timers and performance.now(); wallOffset is added to Date.now()
+  // only, so a test can step the wall clock the way NTP or a user can.
+  const clock = { now: 1700000000000, wallOffset: 0 };
   let nextId = 1;
   const timers = new Map(); // id -> { fn, at }
 
@@ -57,7 +71,7 @@ function makeSandbox() {
   }
 
   class FakeDate extends Date {}
-  FakeDate.now = () => clock.now;
+  FakeDate.now = () => clock.now + clock.wallOffset;
 
   const sockets = [];
   function FakeWS(url) {
@@ -126,6 +140,14 @@ function makeSandbox() {
     ctx, clock, timers, advance, sockets, document,
     fireDoc(ev) { (docListeners[ev] || []).forEach((fn) => fn({ type: ev })); },
     fireWin(ev) { (winListeners[ev] || []).forEach((fn) => fn({ type: ev })); },
+    // Runs app.js's real startup listeners, as the browser does. The startup
+    // code wires the whole page shell, so every element lookup gets an inert
+    // stand-in that accepts any property or call.
+    boot() {
+      document.getElementById = document.querySelector = () => inertElement();
+      ctx.getComputedStyle = () => inertElement();
+      (winListeners.DOMContentLoaded || []).forEach((fn) => fn({ type: 'DOMContentLoaded' }));
+    },
   };
 }
 
@@ -216,8 +238,9 @@ function throttledJump(box, ms) {
 
 test('visibilitychange to visible after a long silence reconnects without waiting for the timer', () => {
   const box = makeSandbox();
-  box.ctx.setupWSResumeCheck();
-  box.ctx.connectWS();
+  // The real startup path, so a page that never calls setupWSResumeCheck fails here.
+  box.boot();
+  assert.strictEqual(box.sockets.length, 1, 'startup opens one socket');
   box.sockets[0].open();
 
   box.document.hidden = true;
@@ -278,6 +301,42 @@ test('repeated resume events open one replacement, not one each', () => {
   assert.strictEqual(box.sockets.length, 2, 'the replacement is fresh, so later checks leave it alone');
 });
 
+console.log('\n=== a wall-clock step does not disable the watchdog ===');
+
+test('the clock stepping back an hour as the socket goes silent still replaces it within WS_STALE_MS', () => {
+  const box = makeSandbox();
+  box.ctx.connectWS();
+  const first = box.sockets[0];
+  first.open();
+  for (let i = 0; i < 3; i++) {
+    box.advance(30000);
+    first.message(HEARTBEAT);
+  }
+  box.clock.wallOffset -= 60 * 60 * 1000; // step back, then nothing more arrives
+  box.advance(STALE_MS);
+  assert.strictEqual(first.closed, true, 'the silent socket must be dropped');
+  assert.strictEqual(box.sockets.length, 2, 'one replacement within WS_STALE_MS of the step');
+});
+
+for (const [label, stepMs] of [['forward', 60 * 60 * 1000], ['back', -60 * 60 * 1000]]) {
+  test(`a clock step ${label} on a healthy socket costs at most one extra reconnect`, () => {
+    const box = makeSandbox();
+    box.ctx.connectWS();
+    box.sockets[0].open();
+    box.advance(40000);
+    box.sockets[0].message(HEARTBEAT);
+    box.advance(10000);
+    box.clock.wallOffset += stepMs;
+    for (let i = 0; i < 20; i++) {
+      box.advance(30000);
+      const cur = box.sockets[box.sockets.length - 1];
+      if (cur.readyState === 0) cur.open();
+      cur.message(HEARTBEAT);
+    }
+    assert.ok(box.sockets.length <= 2, 'got ' + box.sockets.length + ' sockets over ten minutes');
+  });
+}
+
 console.log('\n=== timers are cleaned up on close ===');
 
 test('after onclose only the reconnect timer is pending, and it opens one socket', () => {
@@ -306,6 +365,21 @@ test('pullReconnect on a socket that is not open leaves one socket and no stray 
   assert.strictEqual(box.sockets[0].closed, true, 'the previous socket is closed');
   box.advance(3000);
   assert.strictEqual(box.sockets.length, 2, 'the old socket\'s close must not schedule a third socket');
+});
+
+test('pullReconnect on an open socket replaces it at once instead of waiting for onclose', () => {
+  const box = makeSandbox();
+  box.ctx.connectWS();
+  const first = box.sockets[0];
+  first.open();
+  // A half-open socket may not fire onclose for about a minute after close().
+  first.close = function () { this.closed = true; this.readyState = 2; };
+  box.ctx.window.pullReconnect();
+  assert.strictEqual(box.sockets.length, 2, 'the replacement must exist right after the pull');
+  assert.strictEqual(first.closed, true, 'the previous socket is closed');
+  assert.strictEqual(first.onclose, null, 'the previous socket is detached, so a late onclose cannot reconnect again');
+  box.advance(STALE_MS - 1);
+  assert.strictEqual(box.sockets.length, 2, 'exactly one socket results from the pull');
 });
 
 console.log('\n=== Results: ' + passed + ' passed, ' + failed + ' failed ===\n');
