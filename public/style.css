@@ -1104,6 +1104,30 @@ img.brand-logo {
   padding: 3px 4px; text-align: center;
 }
 
+/* Trailing action column (row buttons: neighbours "Map", analytics "View on
+ * map"). These columns carry an empty <th>, so they contribute nothing to the
+ * width distribution, and the global `.data-table td { max-width: 0 }` above
+ * zeroes their max-content contribution too — the auto table algorithm then
+ * hands them whatever is left over, which is routinely narrower than the
+ * button they contain, and `overflow: hidden` silently clips it. Measured on
+ * the node Neighbours table: 40px of column for a 53px button at a 1440px
+ * viewport, 12px in the 420px split panel — clipped on every row at every
+ * desktop width below ~2000px.
+ *
+ * `width: 1%` is the shrink-to-content idiom for auto-layout tables: the
+ * column takes its min-content width and the data columns absorb the rest.
+ * `max-width: none` opts back out of the zeroing; `overflow: visible` means a
+ * future miscalculation shows as a visible overhang rather than a silent crop.
+ */
+.data-table th.col-action,
+.data-table td.col-action {
+  width: 1%;
+  max-width: none;
+  overflow: visible;
+  white-space: nowrap;
+  text-align: right;
+}
+
 /* #1415 / #1458 / #1461 — mobile packets UX overhaul.
  * NOTE: hiding the first dt/dd pair below assumes Payload Type is the
  * first <dt> in .detail-meta (per packets.js renderDetail). Keep that
@@ -3282,6 +3306,38 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .map-controls.collapsed {
   display: none;
 }
+/* #1862: the active region filter, on the map itself, so it stays visible
+   while the controls panel is collapsed (the default on phones). Centred
+   between Leaflet's top-left controls and the top-right toggle. */
+.mc-region-chip {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 128px);
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  color: var(--text);
+  font-size: 12px;
+}
+.mc-region-chip[hidden] { display: none; }
+.mc-region-chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-region-chip-reset {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--link-color);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.mc-region-chip-reset:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .node-detail-map {
   height: 280px;
   min-height: 200px;
@@ -3528,6 +3584,16 @@ button.region-pill-active:hover { opacity: 0.85; color: var(--text-on-accent); }
   box-shadow: 0 4px 16px rgba(0,0,0,0.12); padding: 4px 0; display: none;
 }
 .multi-select-menu.open { display: block; }
+.multi-select-search-wrap {
+  position: sticky; top: 0; z-index: 1; background: var(--card-bg, #fff);
+  padding: 4px 8px 6px; border-bottom: 1px solid var(--border);
+}
+.multi-select-search {
+  width: 100%; box-sizing: border-box; padding: 5px 8px; border-radius: 5px;
+  border: 1px solid var(--border); background: var(--input-bg); color: var(--text);
+  font-size: 13px;
+}
+.multi-select-search:focus { border-color: var(--accent); outline: none; }
 .multi-select-item {
   display: flex; align-items: center; gap: 6px; padding: 6px 12px;
   font-size: 13px; cursor: pointer; color: var(--text); white-space: nowrap;

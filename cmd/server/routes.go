@@ -48,7 +48,7 @@ type Server struct {
 	// so /api/nodes does not re-run the merge query pair per request. The
 	// cached map is read by concurrent requests and replaced, never mutated.
 	declaredRegionsMu    sync.Mutex
-	declaredRegionsCache map[string]string
+	declaredRegionsCache map[string]declaredAnswer
 	declaredRegionsAt    time.Time
 	// Collapses the TTL-boundary herd so the query runs once, not once per
 	// in-flight request, and never under declaredRegionsMu.
@@ -296,6 +296,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/nodes/{pubkey}/health", s.handleNodeHealth).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/paths", s.handleNodePaths).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/analytics", s.handleNodeAnalytics).Methods("GET")
+	r.HandleFunc("/api/nodes/{pubkey}/hop_analytics", s.handleNodeHopAnalytics).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/battery", s.handleNodeBattery).Methods("GET")
 	r.HandleFunc("/api/nodes/clock-skew", s.handleFleetClockSkew).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/clock-skew", s.handleNodeClockSkew).Methods("GET")
@@ -328,6 +329,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/analytics/subpath-detail", s.handleAnalyticsSubpathDetail).Methods("GET")
 	r.HandleFunc("/api/analytics/neighbor-graph", s.handleNeighborGraph).Methods("GET")
 	r.HandleFunc("/api/analytics/relay-airtime-share", s.handleAnalyticsRelayAirtimeShare).Methods("GET")
+	r.HandleFunc("/api/analytics/retransmissions", s.handleAnalyticsRetransmissions).Methods("GET")
 
 	// Other endpoints
 	r.HandleFunc("/api/resolve-hops", s.handleResolveHops).Methods("GET")
@@ -1325,7 +1327,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		// state. Two small queries (232 rows on a live instance) and no
 		// window scan — the state is a pure function of the declared list,
 		// see nodeScopeConfigState.
-		var declaredCSV map[string]string
+		var declaredCSV map[string]declaredAnswer
 		declaredOK := false
 		if needsRelay {
 			declaredCSV, declaredOK = s.declaredRegionsCSV()
@@ -1374,7 +1376,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 					// see declaredRegionsCSV.
 					if declaredOK {
 						csv, has := declaredCSV[strings.ToLower(pk)]
-						node["scope_config_state"] = nodeScopeConfigState(csv, has, info.TransportedScopes)
+						enrichNodeDeclaredScope(node, csv, has, info.TransportedScopes)
 					}
 					// #672 4-axis usefulness. traffic_share_score keeps the
 					// raw per-axis Traffic value (#1456); the structural axes
@@ -1577,7 +1579,7 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 			// and the map must not disagree about a repeater's scope state.
 			if declaredCSV, ok := s.declaredRegionsCSV(); ok {
 				csv, has := declaredCSV[strings.ToLower(pubkey)]
-				node["scope_config_state"] = nodeScopeConfigState(csv, has, info.TransportedScopes)
+				enrichNodeDeclaredScope(node, csv, has, info.TransportedScopes)
 			}
 			// #672 4-axis usefulness (see handleNodes for the field
 			// contract). traffic_share_score keeps the raw per-axis
@@ -2080,13 +2082,7 @@ func (s *Server) handleNodeAnalytics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "Not found")
 		return
 	}
-	days := queryInt(r, "days", 7)
-	if days < 1 {
-		days = 1
-	}
-	if days > 365 {
-		days = 365
-	}
+	days := nodeAnalyticsDays(r)
 
 	if s.store != nil {
 		result, err := s.store.GetNodeAnalytics(pubkey, days)
@@ -2099,6 +2095,29 @@ func (s *Server) handleNodeAnalytics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeError(w, 404, "Not found")
+}
+
+// nodeAnalyticsDays reads the node analytics range picker's ?days= (default 7,
+// clamped to 1-365).
+func nodeAnalyticsDays(r *http.Request) int {
+	return min(max(queryInt(r, "days", 7), 1), 365)
+}
+
+// handleNodeHopAnalytics serves the hop count at this node for each flood
+// packet it forwarded (issue #1812). Separate from /analytics so the hop
+// scan does not slow down the main analytics response.
+func (s *Server) handleNodeHopAnalytics(w http.ResponseWriter, r *http.Request) {
+	pubkey := mux.Vars(r)["pubkey"]
+	if s.cfg.IsBlacklisted(pubkey) || s.isPubkeyHidden(pubkey) || s.store == nil {
+		writeError(w, 404, "Not found")
+		return
+	}
+	result, err := s.store.GetNodeHopAnalytics(pubkey, nodeAnalyticsDays(r))
+	if err != nil || result == nil {
+		writeError(w, 404, "Not found")
+		return
+	}
+	writeJSON(w, result)
 }
 
 func (s *Server) handleNodeClockSkew(w http.ResponseWriter, r *http.Request) {

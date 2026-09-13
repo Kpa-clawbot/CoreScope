@@ -1042,6 +1042,92 @@
     else _docColMenuCloseHandler = handler;
   }
 
+  // --- Locally-added channels in the channel filter ---------------------
+  // Channels the operator adds in their own browser (Channels page → "Add
+  // channel") live only in localStorage — the keys never leave the client
+  // (channel-decrypt.js). The server therefore cannot decrypt their traffic
+  // and files it under the synthetic channel hash "enc_<HH>", which
+  // /api/channels omits. Result: a channel you just added is invisible in
+  // the packets channel picker.
+  //
+  // Fix: derive the same "enc_<HH>" value client-side from the stored key
+  // (SHA-256(key)[0], exactly what the ingestor writes) and offer those
+  // channels as extra options. /api/packets?channel=enc_<HH> already
+  // filters on that value server-side, so no backend change is needed.
+
+  /**
+   * Read the browser's stored channel keys and map each to the server-side
+   * channel-hash value its packets are stored under.
+   * Cost: one SHA-256 per stored key (a handful), once per page init.
+   * @returns {Promise<Array<{value:string,name:string,label:string}>>}
+   */
+  async function collectLocalChannels() {
+    const CD = window.ChannelDecrypt;
+    if (!CD || typeof CD.getStoredKeys !== 'function') return [];
+    let keys;
+    try { keys = CD.getStoredKeys() || {}; } catch (e) { return []; }
+    const out = [];
+    for (const name of Object.keys(keys)) {
+      const keyHex = keys[name];
+      if (!keyHex || typeof keyHex !== 'string') continue;
+      let hashByte;
+      try {
+        const keyBytes = CD.hexToBytes(keyHex);
+        if (!keyBytes || keyBytes.length !== 16) continue;
+        hashByte = await CD.computeChannelHash(keyBytes);
+      } catch (e) { continue; }
+      if (typeof hashByte !== 'number') continue;
+      const label = (typeof CD.getLabel === 'function' && CD.getLabel(name)) || name;
+      out.push({
+        // Uppercase 2-digit hex — matches cmd/ingestor/decoder.go ("%02X").
+        value: 'enc_' + hashByte.toString(16).padStart(2, '0').toUpperCase(),
+        name: name,
+        label: label
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Merge the server channel list with locally-added ones into the two
+   * option groups the picker renders. Pure — unit-tested.
+   * A local channel is dropped when the server already exposes it (same
+   * hash value, or same name because the server holds the key too).
+   * @returns {{server: Array<{value:string,label:string}>, local: Array<{value:string,label:string}>}}
+   */
+  function buildChannelOptions(serverChannels, localChannels) {
+    const byLabel = (a, b) => {
+      const an = (a.label || '').toLowerCase();
+      const bn = (b.label || '').toLowerCase();
+      return an < bn ? -1 : an > bn ? 1 : 0;
+    };
+    const server = [];
+    const seenValues = new Set();
+    const seenNames = new Set();
+    for (const ch of serverChannels || []) {
+      const value = (ch && (ch.hash || ch.name)) || '';
+      if (!value || seenValues.has(value)) continue;
+      seenValues.add(value);
+      seenNames.add(String(ch.name || value).toLowerCase());
+      server.push({ value: value, label: ch.name || value });
+    }
+    const local = [];
+    for (const lc of localChannels || []) {
+      if (!lc || !lc.value) continue;
+      if (seenValues.has(lc.value)) continue;
+      if (seenNames.has(String(lc.name || '').toLowerCase())) continue;
+      seenValues.add(lc.value);
+      local.push({ value: lc.value, label: lc.label || lc.name });
+    }
+    return { server: server.sort(byLabel), local: local.sort(byLabel) };
+  }
+
+  // Exported for test-packets-local-channels.js (no DOM required).
+  if (typeof window !== 'undefined') {
+    window._packetsBuildChannelOptionsForTest = buildChannelOptions;
+    window._packetsCollectLocalChannelsForTest = collectLocalChannels;
+  }
+
   function renderTimestampCell(isoString) {
     if (typeof formatTimestampWithTooltip !== 'function' || typeof getTimestampMode !== 'function') {
       return escapeHtml(typeof timeAgo === 'function' ? timeAgo(isoString) : '—');
@@ -1592,7 +1678,12 @@
         <div class="filter-group filter-group-dropdowns">
           <div class="multi-select-wrap" id="observerFilterWrap">
             <button class="multi-select-trigger" id="observerTrigger" title="Show only packets seen by selected observer stations">All Observers ▾</button>
-            <div class="multi-select-menu" id="observerMenu"></div>
+            <div class="multi-select-menu" id="observerMenu">
+              <div class="multi-select-search-wrap">
+                <input type="text" id="observerSearchInput" class="multi-select-search" placeholder="Search observers…" autocomplete="off" aria-label="Search observers" title="Matches anywhere in the name. Start with ^ to match only from the beginning, e.g. ^BE">
+              </div>
+              <div class="multi-select-list" id="observerList"></div>
+            </div>
           </div>
           <div id="packetsRegionFilter" class="region-filter-container" style="display:inline-block;vertical-align:middle"></div>
           <div id="packetsAreaFilter" style="display:none;vertical-align:middle"></div>
@@ -1703,8 +1794,23 @@
 
     // --- Observer multi-select ---
     const obsMenu = document.getElementById('observerMenu');
+    const obsList = document.getElementById('observerList');
+    const obsSearchInput = document.getElementById('observerSearchInput');
     const obsTrigger = document.getElementById('observerTrigger');
     const selectedObservers = new Set(filters.observer ? filters.observer.split(',') : []);
+    function applyObserverSearchFilter() {
+      const raw = (obsSearchInput.value || '').trim().toLowerCase();
+      // #1884 — default to substring matching so "brussels" finds "ON4XYZ
+      // Brussels"; a leading ^ opts into prefix-only matching for narrowing
+      // down a shared prefix like "BE".
+      const anchored = raw.startsWith('^');
+      const term = anchored ? raw.slice(1) : raw;
+      obsList.querySelectorAll('.multi-select-item[data-obs-name]').forEach((item) => {
+        const name = item.dataset.obsName;
+        const matches = !term || (anchored ? name.startsWith(term) : name.includes(term));
+        item.style.display = matches ? '' : 'none';
+      });
+    }
     function buildObserverMenu() {
       const allChecked = selectedObservers.size === 0;
       let html = `<label class="multi-select-item"><input type="checkbox" data-obs-id="__all__" ${allChecked ? 'checked' : ''}> All Observers</label>`;
@@ -1716,11 +1822,15 @@
       } else {
         for (const o of observers) {
           const checked = selectedObservers.has(String(o.id)) ? 'checked' : '';
-          html += `<label class="multi-select-item"><input type="checkbox" data-obs-id="${o.id}" ${checked}> ${escapeHtml(o.name || o.id)}</label>`;
+          const name = o.name || String(o.id);
+          html += `<label class="multi-select-item" data-obs-name="${escapeHtml(name.toLowerCase())}"><input type="checkbox" data-obs-id="${o.id}" ${checked}> ${escapeHtml(name)}</label>`;
         }
       }
-      obsMenu.innerHTML = html;
+      obsList.innerHTML = html;
+      applyObserverSearchFilter();
     }
+    obsSearchInput.addEventListener('click', (e) => e.stopPropagation());
+    obsSearchInput.addEventListener('input', applyObserverSearchFilter);
     // #1693 — expose for loadObservers() to refresh on resolve.
     _rebuildObserverMenu = () => { buildObserverMenu(); updateObsTrigger(); };
     function updateObsTrigger() {
@@ -1736,9 +1846,22 @@
     }
     buildObserverMenu();
     updateObsTrigger();
-    obsTrigger.addEventListener('click', (e) => { e.stopPropagation(); obsMenu.classList.toggle('open'); typeMenu.classList.remove('open'); });
+    obsTrigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      obsMenu.classList.toggle('open');
+      typeMenu.classList.remove('open');
+      // #1884 — don't autofocus on touch devices; it raises the on-screen
+      // keyboard over the list the user is about to tap.
+      const isTouch = window.matchMedia('(pointer: coarse)').matches;
+      if (obsMenu.classList.contains('open') && !isTouch) obsSearchInput.focus();
+    });
     obsMenu.addEventListener('change', (e) => {
       const id = e.target.dataset.obsId;
+      // #1884 — obsSearchInput lives inside obsMenu, so its own change
+      // events (blur/Enter) bubble here too; without this guard they run
+      // the else branch below and rebuild the list mid-click, dropping
+      // whatever checkbox the user just pressed.
+      if (!id) return;
       if (id === '__all__') {
         selectedObservers.clear();
       } else {
@@ -1798,6 +1921,7 @@
       if (filters.type) localStorage.setItem('meshcore-type-filter', filters.type); else localStorage.removeItem('meshcore-type-filter');
       buildTypeMenu();
       updateTypeTrigger();
+      updatePacketsUrl();
       renderTableRows();
     });
 
@@ -1815,31 +1939,37 @@
         opt.selected = true;
         channelSel.appendChild(opt);
       }
-      api('/channels').then(data => {
+      Promise.all([
+        api('/channels').catch(() => null),
+        collectLocalChannels()
+      ]).then(([data, localChannels]) => {
         const channels = (data && data.channels) || [];
         // Build options via DOM API: channel names are network-supplied
         // and must NOT be interpolated into innerHTML (XSS, #812).
         // Sort alphabetically (case-insensitive) for predictable picker order;
         // the API returns last-activity order which is unstable for a dropdown.
-        const sorted = channels.slice().sort((a, b) => {
-          const an = (a.name || a.hash || '').toLowerCase();
-          const bn = (b.name || b.hash || '').toLowerCase();
-          return an < bn ? -1 : an > bn ? 1 : 0;
-        });
+        const groups = buildChannelOptions(channels, localChannels);
         channelSel.textContent = '';
         const allOpt = document.createElement('option');
         allOpt.value = '';
         allOpt.textContent = 'All Channels';
         channelSel.appendChild(allOpt);
         let matched = false;
-        for (const ch of sorted) {
-          const v = ch.hash || ch.name || '';
-          if (!v) continue;
+        const addOption = (o, parent) => {
           const opt = document.createElement('option');
-          opt.value = v;
-          opt.textContent = ch.name || v;
-          if (v === filters.channel) { opt.selected = true; matched = true; }
-          channelSel.appendChild(opt);
+          opt.value = o.value;
+          opt.textContent = o.label;
+          if (o.value === filters.channel) { opt.selected = true; matched = true; }
+          parent.appendChild(opt);
+        };
+        for (const o of groups.server) addOption(o, channelSel);
+        // Browser-added channels the server can't see, grouped so it's
+        // obvious they come from keys stored in this browser only.
+        if (groups.local.length) {
+          const grp = document.createElement('optgroup');
+          grp.label = 'My Channels (this browser)';
+          for (const o of groups.local) addOption(o, grp);
+          channelSel.appendChild(grp);
         }
         // If current filter isn't in the list (encrypted hash, stale, or
         // race with cache), keep it as a selected option so the UI reflects state.
@@ -1904,15 +2034,16 @@
       document.getElementById('fChannel').value = '';
       document.getElementById('fMyNodes').classList.remove('active');
 
-      // Reset observer multi-select
-      var obMenu = document.getElementById('observerMenu');
-      if (obMenu) obMenu.querySelectorAll('input[type=checkbox]').forEach(function(cb) { cb.checked = false; });
-      document.getElementById('observerTrigger').textContent = 'All Observers ▾';
-
-      // Reset type multi-select
-      var typeMenu = document.getElementById('typeMenu');
-      if (typeMenu) typeMenu.querySelectorAll('input[type=checkbox]').forEach(function(cb) { cb.checked = false; });
-      document.getElementById('typeTrigger').textContent = 'All Types ▾';
+      // Reset observer and type multi-selects (#2012): empty the selection
+      // Sets, not only the checkboxes, or the next pick adds to the old one.
+      selectedObservers.clear();
+      buildObserverMenu();
+      updateObsTrigger();
+      obsSearchInput.value = '';
+      applyObserverSearchFilter();
+      selectedTypes.clear();
+      buildTypeMenu();
+      updateTypeTrigger();
 
       // Reset time window to default
       savedTimeWindowMin = DEFAULT_TIME_WINDOW;
@@ -2895,6 +3026,34 @@
     if (scrollContainer) scrollContainer.scrollTop = savedScrollTop;
   }
 
+  // ADV_TYPE_* values, firmware src/helpers/AdvertDataHelpers.h:7-11. Shared by
+  // the ADVERT app-flags row and CONTROL DISCOVER node type / filter (#1868).
+  const ADV_TYPE_LABELS = {1:'Companion',2:'Repeater',3:'Room Server',4:'Sensor'};
+  function advTypeLabel(t) {
+    return ADV_TYPE_LABELS[t] || ('Unknown(' + t + ')');
+  }
+  // DISCOVER_REQ type_filter holds one bit per ADV_TYPE_* (firmware
+  // examples/simple_repeater/MyMesh.cpp:817 tests filter & (1 << ADV_TYPE_REPEATER)).
+  function ctrlFilterLabels(filter) {
+    return Object.keys(ADV_TYPE_LABELS).filter(t => filter & (1 << t)).map(t => ADV_TYPE_LABELS[t]);
+  }
+  // Filter bits with no label: ADV_TYPE_NONE (bit 0) and the FUTURE 5..15 range
+  // (AdvertDataHelpers.h:7,12). Returned as '0x..' so they are not dropped.
+  function ctrlFilterUnknownHex(filter) {
+    const extra = filter & 0xFF & ~0x1E;
+    return extra ? '0x' + extra.toString(16).padStart(2, '0') : '';
+  }
+  // DISCOVER_RESP snr byte is int8 SNR*4 (firmware docs/payloads.md:280,
+  // examples/simple_repeater/MyMesh.cpp:821, src/Packet.h:92 getSNR() = _snr / 4.0f).
+  function ctrlSnrDb(raw) {
+    return (Number(raw) / 4).toFixed(2);
+  }
+  // DISCOVER_RESP pubkey is 32 bytes or an 8-byte prefix. Resolve via the
+  // HopResolver node index (bulk /api/nodes, no per-packet request).
+  function ctrlPubKeyNode(key) {
+    return (key && window.HopResolver && HopResolver.nodeForKey) ? HopResolver.nodeForKey(key) : null;
+  }
+
   function getDetailPreview(decoded) {
     if (!decoded) return '';
     // Channel messages (GRP_TXT) — show channel name and message text
@@ -2979,7 +3138,11 @@
       const parts = [];
       if (subtype === 'DISCOVER_REQ') {
         if (decoded.ctrlFilter != null) {
-          parts.push(`filter=0x${Number(decoded.ctrlFilter).toString(16).padStart(2, '0')}`);
+          const filter = Number(decoded.ctrlFilter);
+          const labels = ctrlFilterLabels(filter);
+          const unknownBits = ctrlFilterUnknownHex(filter);
+          if (labels.length && unknownBits) labels.push(unknownBits);
+          parts.push(`filter=${labels.length ? labels.join('+') : '0x' + filter.toString(16).padStart(2, '0')}`);
         }
         if (decoded.ctrlTag != null) {
           parts.push(`tag=0x${(Number(decoded.ctrlTag) >>> 0).toString(16).padStart(8, '0')}`);
@@ -2989,16 +3152,17 @@
         }
       } else if (subtype === 'DISCOVER_RESP') {
         if (decoded.ctrlNodeType != null) {
-          parts.push(`type=${Number(decoded.ctrlNodeType)}`);
+          parts.push(`type=${advTypeLabel(Number(decoded.ctrlNodeType))}`);
         }
         if (decoded.ctrlSNR != null) {
-          parts.push(`snr=${Number(decoded.ctrlSNR)}`);
+          parts.push(`snr=${ctrlSnrDb(decoded.ctrlSNR)}dB`);
         }
         if (decoded.ctrlTag != null) {
           parts.push(`tag=0x${(Number(decoded.ctrlTag) >>> 0).toString(16).padStart(8, '0')}`);
         }
         if (decoded.ctrlPubKey) {
-          parts.push(`pubkey=${escapeHtml(decoded.ctrlPubKey)}`);
+          const node = ctrlPubKeyNode(decoded.ctrlPubKey);
+          parts.push(`pubkey=${escapeHtml(node && node.name ? node.name : decoded.ctrlPubKey.slice(0, 8))}`);
         }
       } else if (decoded.ctrlFlags) {
         parts.push(`flags=0x${escapeHtml(decoded.ctrlFlags)}`);
@@ -3171,6 +3335,10 @@
         }
       } catch {}
     }
+
+    // #1868: zero-hop CONTROL has no path to trigger the node index load, but
+    // the DISCOVER_RESP pubkey row resolves its name from that same index.
+    if (decoded.type === 'CONTROL' && decoded.ctrlPubKey) await ensureHopResolver();
 
     // Resolve hops: prefer server-side resolved_path, fall back to client-side HopResolver
     if (pathHops.length) {
@@ -3614,8 +3782,7 @@
       rows += fieldRow(off + 32, 'Timestamp (4B)', decoded.timestampISO || '', 'Unix: ' + (decoded.timestamp || ''));
       rows += fieldRow(off + 36, 'Signature (64B)', truncate(decoded.signature || '', 24), '');
       if (decoded.flags) {
-        const _typeLabels = {1:'Companion',2:'Repeater',3:'Room Server',4:'Sensor'};
-        const _typeName = _typeLabels[decoded.flags.type] || ('Unknown(' + decoded.flags.type + ')');
+        const _typeName = advTypeLabel(decoded.flags.type);
         const _boolFlags = [decoded.flags.hasLocation && 'location', decoded.flags.hasName && 'name'].filter(Boolean);
         const _flagDesc = _typeName + (_boolFlags.length ? ' + ' + _boolFlags.join(', ') : '');
         rows += fieldRow(off + 100, 'App Flags', '0x' + (decoded.flags.raw?.toString(16).padStart(2,'0') || '??'), _flagDesc);
@@ -3661,6 +3828,61 @@
       rows += fieldRow(off + 1, 'Src Public Key (32B)', anonKeyCell, anonName ? '' : 'sender pubkey (unresolved)');
       rows += fieldRow(off + 33, 'MAC (2B)', decoded.mac || '', '');
       rows += fieldRow(off + 35, 'Encrypted Data', truncate(decoded.encryptedData || '', 30), '');
+    } else if (decoded.type === 'CONTROL') {
+      // #1868: layout per firmware docs/payloads.md:259-282, decoded by
+      // cmd/ingestor/decoder.go decodeControl(). Body fields are length-gated
+      // there, so each row is only added when the field is present.
+      const subtype = decoded.ctrlSubtype || 'CONTROL';
+      let subtypeDesc = decoded.ctrlFlags ? 'flags=0x' + escapeHtml(decoded.ctrlFlags) + ', sub_type in upper 4 bits' : '';
+      // prefix_only is flags bit 0 (docs/payloads.md:270, MyMesh.cpp:818): responders send an 8-byte key prefix.
+      if (subtype === 'DISCOVER_REQ' && decoded.ctrlFlags) subtypeDesc += ', prefix_only=' + (parseInt(decoded.ctrlFlags, 16) & 1);
+      rows += fieldRow(off, 'Subtype', escapeHtml(subtype), subtypeDesc);
+      // Payload bytes covered by the rows below; anything past it gets a Raw row.
+      let ctrlEnd = off + 1;
+      if (subtype === 'DISCOVER_REQ') {
+        if (decoded.ctrlFilter != null) {
+          const filter = Number(decoded.ctrlFilter);
+          const labels = ctrlFilterLabels(filter);
+          const unknownBits = ctrlFilterUnknownHex(filter);
+          rows += fieldRow(off + 1, 'Type Filter (1B)', '0x' + filter.toString(16).padStart(2, '0'), (labels.length ? 'Requesting: ' + labels.join(', ') : 'No known types requested') + (unknownBits ? ' +' + unknownBits : ''));
+          ctrlEnd = off + 2;
+        }
+        if (decoded.ctrlTag != null) {
+          rows += fieldRow(off + 2, 'Tag (4B)', '0x' + (Number(decoded.ctrlTag) >>> 0).toString(16).toUpperCase().padStart(8, '0'), '');
+          ctrlEnd = off + 6;
+        }
+        if (decoded.ctrlSince != null) {
+          // since=0 is the firmware default (MyMesh.cpp:814) and matches every responder (:817).
+          const since = Number(decoded.ctrlSince) >>> 0;
+          rows += fieldRow(off + 6, 'Since (4B)', since === 0 ? '0 (no filter)' : String(since), 'Unix epoch');
+          ctrlEnd = off + 10;
+        }
+      } else if (subtype === 'DISCOVER_RESP') {
+        if (decoded.ctrlNodeType != null) {
+          rows += fieldRow(off, 'Node Type', escapeHtml(advTypeLabel(Number(decoded.ctrlNodeType))), 'lower 4 bits of flags');
+        }
+        if (decoded.ctrlSNR != null) {
+          rows += fieldRow(off + 1, 'SNR (1B)', ctrlSnrDb(decoded.ctrlSNR) + ' dB', 'request SNR as heard by the responder, wire value ' + Number(decoded.ctrlSNR) + ' / 4');
+          ctrlEnd = off + 2;
+        }
+        if (decoded.ctrlTag != null) {
+          rows += fieldRow(off + 2, 'Tag (4B)', '0x' + (Number(decoded.ctrlTag) >>> 0).toString(16).toUpperCase().padStart(8, '0'), '');
+          ctrlEnd = off + 6;
+        }
+        if (decoded.ctrlPubKey) {
+          const node = ctrlPubKeyNode(decoded.ctrlPubKey);
+          const pkLen = decoded.ctrlPubKey.length === 64 ? '32B' : '8B prefix';
+          // Unknown key: full hex here (the row preview keeps 8 chars), wrappable.
+          const pkCell = node
+            ? `<a href="#/nodes/${encodeURIComponent(node.public_key)}" class="hop-link hop-named" data-hop-link="true">${escapeHtml(node.name || node.public_key.slice(0, 8))}</a>`
+            : `<span style="word-break:break-all">${escapeHtml(decoded.ctrlPubKey)}</span>`;
+          rows += fieldRow(off + 6, 'Public Key (' + pkLen + ')', pkCell, node ? '' : 'Unknown node');
+          ctrlEnd = off + 6 + Math.floor(decoded.ctrlPubKey.length / 2);
+        }
+      }
+      if (size > ctrlEnd) {
+        rows += fieldRow(ctrlEnd, 'Raw', escapeHtml(truncate(buf.slice(ctrlEnd * 2), 40)), '');
+      }
     } else if (decoded.destHash !== undefined) {
       rows += fieldRow(off, 'Dest Hash (1B)', decoded.destHash || '', '');
       rows += fieldRow(off + 1, 'Src Hash (1B)', decoded.srcHash || '', '');
@@ -3971,6 +4193,7 @@
       renderDecodedPacket,
       kv,
       buildFieldTable,
+      renderDetail,
       sectionRow,
       fieldRow,
       renderTimestampCell,

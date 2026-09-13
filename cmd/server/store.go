@@ -197,6 +197,12 @@ type PacketStore struct {
 	subpathCache      map[string]*cachedResult // params → cached subpaths result
 	rfCacheTTL        time.Duration
 	collisionCacheTTL time.Duration
+
+	// region|window|bucket → retransmission pressure (#1699). Typed, so it
+	// cannot share the map[string]interface{} caches above; nil until first use.
+	retransCache map[string]*retransmissionCacheEntry
+	retransSF    singleflight.Group // collapses concurrent misses on one retransCache key
+
 	// Steady-state analytics recomputers (issue #1240). Each holds the
 	// latest snapshot for the default region="" / zero-window query of
 	// an analytics endpoint in an atomic.Value, refreshed by a
@@ -214,6 +220,7 @@ type PacketStore struct {
 	recompRoles              *analyticsRecomputer
 	recompObserversClockSkew *analyticsRecomputer
 	recompNodesClockSkew     *analyticsRecomputer
+	recompRetransmissions    *analyticsRecomputer
 	cacheHits                int64
 	cacheMisses              int64
 	// Rate-limited invalidation (fixes #533: caches cleared faster than hit)
@@ -470,6 +477,11 @@ type PacketStore struct {
 	loadProgressRows   atomic.Int64
 	chunkCBMu          sync.Mutex
 	chunkCallbacks     []func(rowsThisChunk, totalRows int)
+
+	// startupLoadDone is closed when RunStartupLoad returns (hot window
+	// plus background fill); see StartupLoadDone.
+	startupLoadDone     chan struct{}
+	startupLoadSignaled atomic.Bool
 
 	// Eviction config and stats
 	retentionHours  float64        // 0 = unlimited
@@ -2279,6 +2291,7 @@ func (s *PacketStore) invalidateCachesFor(inv cacheInvalidation) {
 		s.chanCache = make(map[string]*cachedResult)
 		s.distCache = make(map[string]*cachedResult)
 		s.subpathCache = make(map[string]*cachedResult)
+		s.retransCache = nil
 		s.channelsCacheMu.Lock()
 		s.channelsCacheRes = nil
 		s.channelsCacheMu.Unlock()
@@ -2325,6 +2338,7 @@ func (s *PacketStore) applyCacheInvalidation(inv cacheInvalidation) {
 		s.topoCache = make(map[string]*cachedResult)
 		s.distCache = make(map[string]*cachedResult)
 		s.subpathCache = make(map[string]*cachedResult)
+		s.retransCache = nil
 	}
 	if inv.hasNewTransmissions {
 		s.hashCache = make(map[string]*cachedResult)
@@ -2963,6 +2977,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				"path_json":         strOrNil(obs.PathJSON),
 				"direction":         strOrNil(obs.Direction),
 				"observation_count": tx.ObservationCount,
+				"scope_name":        strPtrOrNil(tx.ScopeName),
 			}
 			// Use decode-window resolved path for broadcast (never from struct)
 			if broadcastRP != nil {
@@ -3240,6 +3255,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 			"path_json":         strOrNil(obs.PathJSON),
 			"direction":         strOrNil(obs.Direction),
 			"observation_count": tx.ObservationCount,
+			"scope_name":        strPtrOrNil(tx.ScopeName),
 		}
 		// Use decode-window resolved path for broadcast
 		if obsRPMap != nil {
@@ -4460,6 +4476,17 @@ func (s *PacketStore) TriggerDistanceIndexBuild() {
 		obsAtBuild := s.totalObs
 		s.mu.Unlock()
 
+		// The distance recomputer's snapshot was computed from the index
+		// as it was before this build. Refresh it before reporting the
+		// index as built, so the handler does not go from 202 to serving
+		// that older snapshot for up to one recompute interval.
+		s.analyticsRecomputerMu.RLock()
+		rc := s.recompDistance
+		s.analyticsRecomputerMu.RUnlock()
+		if rc != nil {
+			rc.RecomputeNow()
+		}
+
 		s.distLazyMu.Lock()
 		s.distLazyBuilding = false
 		s.distLazyBuilt = true
@@ -5649,6 +5676,7 @@ func (s *PacketStore) GetChannelMessages(channelHash string, limit, offset int, 
 					"observers":        observers,
 					"hops":             hops,
 					"snr":              snrVal,
+					"scope_name":       strPtrOrNil(tx.ScopeName),
 				},
 				Repeats:   1,
 				Observers: observers,
@@ -6782,6 +6810,31 @@ func (s *PacketStore) InvalidateNodeCache() {
 	s.cacheMu.Unlock()
 }
 
+// relayCandidates returns the nodes whose pubkey starts with hop and that may
+// appear as a path hop.
+//
+// Issue #1290: observer-known listener-only nodes are dropped from the
+// candidate set. By firmware contract a node that advertises `repeat:off` in
+// its MQTT /status will never relay a packet, so it cannot legitimately be a
+// hop in someone else's path. Filtering shrinks ambiguous candidate sets
+// without affecting any upstream caller (only no_match becomes more likely
+// when the only matching prefix belonged to a listener). Empty pm.nonRelay
+// preserves the pre-#1290 behavior exactly (back-compat).
+func (pm *prefixMap) relayCandidates(hop string) []nodeInfo {
+	candidates := pm.m[strings.ToLower(hop)]
+	if len(pm.nonRelay) == 0 || len(candidates) == 0 {
+		return candidates
+	}
+	filtered := candidates[:0:0]
+	for i := range candidates {
+		if _, isListener := pm.nonRelay[strings.ToLower(candidates[i].PublicKey)]; isListener {
+			continue
+		}
+		filtered = append(filtered, candidates[i])
+	}
+	return filtered
+}
+
 func (pm *prefixMap) resolve(hop string) *nodeInfo {
 	h := strings.ToLower(hop)
 	candidates := pm.m[h]
@@ -6824,27 +6877,7 @@ func (pm *prefixMap) resolve(hop string) *nodeInfo {
 // (e.g., the originator, observer, or adjacent hops in the path).
 // graph may be nil, in which case tier-1 is skipped.
 func (pm *prefixMap) resolveWithContext(hop string, contextPubkeys []string, graph *NeighborGraph) (*nodeInfo, string, float64) {
-	h := strings.ToLower(hop)
-	candidates := pm.m[h]
-	// Issue #1290: drop observer-known listener-only nodes from the
-	// candidate set. By firmware contract a node that advertises
-	// `repeat:off` in its MQTT /status will never relay a packet, so it
-	// cannot legitimately be a hop in someone else's path. Filtering
-	// here shrinks ambiguous candidate sets without affecting any
-	// upstream caller (the returned shape and confidence labels are
-	// preserved; only no_match becomes more likely when the only
-	// matching prefix belonged to a listener). Empty pm.nonRelay
-	// preserves the pre-#1290 behavior exactly (back-compat).
-	if len(pm.nonRelay) > 0 && len(candidates) > 0 {
-		filtered := candidates[:0:0]
-		for i := range candidates {
-			if _, isListener := pm.nonRelay[strings.ToLower(candidates[i].PublicKey)]; isListener {
-				continue
-			}
-			filtered = append(filtered, candidates[i])
-		}
-		candidates = filtered
-	}
+	candidates := pm.relayCandidates(hop)
 	if len(candidates) == 0 {
 		return nil, "no_match", 0
 	}
@@ -9622,6 +9655,21 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 	}, nil
 }
 
+// nodeTxsSince returns the node's transmissions first seen after fromISO,
+// from the byNode index (sender, recipient and resolved relay hops).
+// Raw JSON text search is intentionally avoided: a GRP_TXT packet whose message
+// text contains a node's pubkey is not a packet *for* that node.
+// Must be called with s.mu held.
+func (s *PacketStore) nodeTxsSince(pubkey, fromISO string) []*StoreTx {
+	var packets []*StoreTx
+	for _, p := range s.byNode[pubkey] {
+		if p.FirstSeen > fromISO {
+			packets = append(packets, p)
+		}
+	}
+	return packets
+}
+
 // GetNodeAnalytics computes analytics for a single node using in-memory byNode index.
 func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsResponse, error) {
 	node, err := s.db.GetNodeByPubkey(pubkey)
@@ -9636,16 +9684,7 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Collect packets from byNode index (time-filtered).
-	// Raw JSON text search is intentionally avoided: a GRP_TXT packet whose message
-	// text contains a node's pubkey is not a packet *for* that node.
-	indexed := s.byNode[pubkey]
-	var packets []*StoreTx
-	for _, p := range indexed {
-		if p.FirstSeen > fromISO {
-			packets = append(packets, p)
-		}
-	}
+	packets := s.nodeTxsSince(pubkey, fromISO)
 
 	// Activity timeline (hourly buckets)
 	timelineBuckets := map[string]int{}

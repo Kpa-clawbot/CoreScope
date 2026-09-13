@@ -87,6 +87,10 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/nodes/{pubkey}/health":    {Summary: "Get node health", Tag: "nodes"},
 		"GET /api/nodes/{pubkey}/paths":     {Summary: "Get node routing paths", Tag: "nodes"},
 		"GET /api/nodes/{pubkey}/analytics": {Summary: "Get node analytics", Description: "Per-node packet counts, timing, and RF stats.", Tag: "nodes"},
+		"GET /api/nodes/{pubkey}/hop_analytics": {Summary: "Get node hop counts", Description: "One entry per flood packet the node forwarded in the window, with the hop count its flood.max check saw (the node's zero-based index in the path) and tags (flood, scoped or unscoped, advert). DIRECT packets are excluded. Every observation in the window is read. A colliding path prefix is attributed only when the previous hop's neighbor_edges neighbors leave this node as the one candidate; the server's resolved-path pick is not used. Packets carrying this node's prefix that cannot be attributed are counted in `ambiguous`.", Tag: "nodes",
+			QueryParams: []paramMeta{
+				{Name: "days", Description: "Lookback window in days (default 7, clamped 1-365)", Type: "integer"},
+			}},
 		"GET /api/nodes/{pubkey}/neighbors": {Summary: "Get node neighbors", Description: "Returns the queried node's first-hop neighbors with affinity scores and observation metadata (count, SNR, distance, observers). Ambiguous edges carry candidate pubkeys.", Tag: "nodes", Response: schemaRef("NodeNeighborsResponse")},
 
 		"GET /api/scope-audit": {Summary: "Network-wide scope audit", Description: "For every repeater that has answered a declared-regions request: the regions it declares, which of those it has NOT been observed forwarding in the window, which scopes it forwards without declaring, and whether it forwards unscoped floods while omitting the '*' wildcard. '*' is never listed as a region — it governs unscoped floods, not a scope. Repeaters never successfully asked are absent rather than shown as declaring nothing. Rows with missing regions sort first; a short window is weak evidence, since a quiet region simply has no traffic.", Tag: "analytics",
@@ -105,6 +109,14 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/analytics/subpaths-bulk":   {Summary: "Bulk subpath analysis", Tag: "analytics"},
 		"GET /api/analytics/subpath-detail":  {Summary: "Subpath detail", Tag: "analytics"},
 		"GET /api/analytics/neighbor-graph":  {Summary: "Neighbor graph", Description: "Full neighbor affinity graph for visualization.", Tag: "analytics"},
+		"GET /api/analytics/retransmissions": {Summary: "Retransmission pressure over time", Description: "Collision-pressure proxy (#1699): per time bucket, the average number of distinct repeaters in the union of all observed paths of each flood event (route types 0/1, TRACE excluded). A transmission's observations are split into flood events at gaps of more than 5 minutes; each event is bucketed by its first observation, and events before the store retention floor are left out. Hop prefixes are not resolved: a prefix counts once per event, so colliding 1-byte prefixes make this a lower bound. Only repeaters some observer heard are counted, so the value also follows observer coverage; each bucket carries its observer count.", Tag: "analytics",
+			QueryParams: []paramMeta{
+				{Name: "region", Description: "Comma-separated IATA codes; only observations from observers in the region are counted. A region with no known observers is not filtered", Type: "string"},
+				{Name: "window", Description: "Relative window: 1h, 24h, 3d, 7d or 30d", Type: "string"},
+				{Name: "from", Description: "Absolute window start (RFC3339)", Type: "string"},
+				{Name: "to", Description: "Absolute window end (RFC3339)", Type: "string"},
+				{Name: "bucket", Description: "Bucket size: 5m, 15m, 1h, 6h or 1d (default 1h)", Type: "string"},
+			}},
 
 		// Channels
 		"GET /api/channels":                 {Summary: "List channels", Description: "Returns known mesh channels with message counts.", Tag: "channels"},
@@ -179,6 +191,7 @@ func componentSchemas() map[string]interface{} {
 				"relay_count_24h":          map[string]interface{}{"type": "integer", "description": "Repeater/room only: relay-hop appearances in the last 24 hours."},
 				"unscoped_relay_count_24h": map[string]interface{}{"type": "integer", "description": "Repeater/room only: subset of relay_count_24h that were unscoped floods (route_type FLOOD). A well-configured repeater sets flood.max.unscoped 0, so a non-trivial count flags a base-config problem."},
 				"last_relayed":             str("Repeater/room only: RFC3339 time this node last appeared as a relay hop."),
+				"declared_regions":         map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Repeater/room only (#1862): named regions from this node's newest declared-regions answer, spelled as GET /api/scope-audit declaredRegions spells them (leading '#' stripped, '*' wildcard excluded). Empty array: it answered and named no region. Absent: it never answered, this database has no declared-regions source, or the declared-regions lookup failed. Absence is not evidence the node lacks a region."},
 				"relay_window_hours":       map[string]interface{}{"type": "integer", "description": "Repeater/room only, /api/nodes/{pubkey} detail endpoint only: width (hours) of the relay-activity window the relay_count_* values cover."},
 				"traffic_share_score":      score01("#672 Traffic axis: share of non-advert traffic relayed through this repeater. Repeater/room only."),
 				"bridge_score":             score01("#672 Bridge axis: normalized betweenness centrality (chokepoint importance). Repeater/room only."),
@@ -189,6 +202,7 @@ func componentSchemas() map[string]interface{} {
 					"type": "string", "enum": []string{"A", "B", "C", "D", "F"},
 					"description": "Letter grade derived from usefulness_score. Repeater/room only.",
 				},
+				"declared_regions_truncated": map[string]interface{}{"type": "boolean", "description": "Repeater/room only (#1862): present, and true, only when the answer behind declared_regions was flagged as truncated, so that list is partial. GET /api/scope-audit shows the same flag as truncated. Absent otherwise, including for a source that does not record truncation, so absence does not mean the list is complete."},
 			},
 		},
 		"NodeListResponse": map[string]interface{}{
