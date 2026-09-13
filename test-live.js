@@ -1027,6 +1027,38 @@ console.log('\n=== live.js: node filter ===');
     setFilter([]);
     assert.strictEqual(ctx.localStorage.getItem('live-node-filter'), '');
   });
+
+  // Typing "Dan's Local" slowly: the debounced handler commits the trimmed
+  // value "Dan's", and updateNodeFilterUI must not write that back over the
+  // input, or the trailing space the user just typed disappears and the next
+  // word is glued on ("Dan'sLocal").
+  test('node filter keeps a trailing space the user is typing', () => {
+    const setFilter = ctx.window._liveSetNodeFilter;
+    const input = { value: "Dan's " };
+    const origGet = ctx.document.getElementById;
+    ctx.document.getElementById = (id) => (id === 'liveNodeFilterInput' ? input : null);
+    try {
+      setFilter(["Dan's"]);
+      assert.strictEqual(input.value, "Dan's ", 'input rewritten while typing');
+    } finally {
+      ctx.document.getElementById = origGet;
+      setFilter([]);
+    }
+  });
+
+  test('node filter still writes a different key into the input', () => {
+    const setFilter = ctx.window._liveSetNodeFilter;
+    const input = { value: '' };
+    const origGet = ctx.document.getElementById;
+    ctx.document.getElementById = (id) => (id === 'liveNodeFilterInput' ? input : null);
+    try {
+      setFilter(['abcd1234', 'ef012345']);
+      assert.strictEqual(input.value, 'abcd1234, ef012345');
+    } finally {
+      ctx.document.getElementById = origGet;
+      setFilter([]);
+    }
+  });
 }
 
 // ===== Clickable paths (M2 — #771) =====

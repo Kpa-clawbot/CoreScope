@@ -2909,7 +2909,9 @@
     if (nodeFilterKeys.length > 0) {
       if (clearBtn) clearBtn.style.display = '';
       if (countEl) { countEl.textContent = `Showing ${nodeFilterShown} of ${nodeFilterTotal}`; countEl.classList.remove('hidden'); }
-      if (input && input.value !== nodeFilterKeys.join(', ')) input.value = nodeFilterKeys.join(', ');
+      // Compare trimmed: the typed path commits the trimmed value, and writing it
+      // back would drop a trailing space the user is still typing.
+      if (input && input.value.trim() !== nodeFilterKeys.join(', ')) input.value = nodeFilterKeys.join(', ');
     } else {
       if (clearBtn) clearBtn.style.display = 'none';
       if (countEl) countEl.classList.add('hidden');
