@@ -132,6 +132,7 @@ node test-issue-1890-og-url.js
 node test-issue-1956-release-routing.js
 node test-issue-1979-scope-adverts-by-role.js
 node test-issue-2001-map-scope-state.js
+node test-issue-2012-clear-filters-selection.js
 node test-live-anims.js
 node test-live-dt-cap-1524.js
 node test-live-legend-helper.js

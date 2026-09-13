@@ -103,15 +103,20 @@ function stubEl(overrides) {
     const updatePacketsUrl = () => {};
     const applyObserverSearchFilter = () => applyCalls.push('applied');
     const documentStub = { getElementById: () => stubEl({}) };
+    // The handler also empties the multi-select Sets and rebuilds both menus
+    // (#2012); those are tested in test-issue-2012-clear-filters-selection.js.
+    const noop = () => {};
 
     const fn = new Function(
       'filters', 'localStorage', 'document', 'obsSearchInput', 'applyObserverSearchFilter',
       'savedTimeWindowMin', 'DEFAULT_TIME_WINDOW', 'RegionFilter', 'updatePacketsUrl', 'loadPackets',
-      '_observerFilterSet',
+      '_observerFilterSet', 'selectedObservers', 'selectedTypes',
+      'buildObserverMenu', 'updateObsTrigger', 'buildTypeMenu', 'updateTypeTrigger',
       body
     );
     fn(filters, localStorage, documentStub, obsSearchInput, applyObserverSearchFilter,
-      15, 15, RegionFilter, updatePacketsUrl, loadPackets, null);
+      15, 15, RegionFilter, updatePacketsUrl, loadPackets, null, new Set(), new Set(),
+      noop, noop, noop, noop);
 
     assert.strictEqual(obsSearchInput.value, '', 'search box should be cleared');
     assert.deepStrictEqual(applyCalls, ['applied'], 'the filter should be re-applied after clearing');
