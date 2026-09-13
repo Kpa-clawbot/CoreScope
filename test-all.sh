@@ -140,6 +140,7 @@ node test-map-clustering.js
 node test-mqtt-status-panel.js
 node test-my-repeaters-dashboard.js
 node test-naive-banner-tone.js
+node test-node-hop-analytics.js
 node test-node-reach-coverage-debounce.js
 node test-node-reach-coverage.js
 node test-nodes-export-wiring.js

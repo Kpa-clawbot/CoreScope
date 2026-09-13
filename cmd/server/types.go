@@ -576,6 +576,21 @@ type NodeAnalyticsResponse struct {
 	ClockSkew           *NodeClockSkew          `json:"clockSkew,omitempty"`
 }
 
+// NodeHopPacket is one flood packet this node forwarded, with the hop count
+// the node's flood.max check saw for it (issue #1812).
+type NodeHopPacket struct {
+	Hash      string   `json:"hash"`
+	Timestamp string   `json:"timestamp"`
+	Hops      int      `json:"hops"`
+	Tags      []string `json:"tags"`
+}
+
+type NodeHopAnalyticsResponse struct {
+	TimeRange TimeRangeResp   `json:"timeRange"`
+	Packets   []NodeHopPacket `json:"packets"`
+	Ambiguous int             `json:"ambiguous"`
+}
+
 // ─── Analytics — RF ────────────────────────────────────────────────────────────
 
 type PayloadTypeSignal struct {

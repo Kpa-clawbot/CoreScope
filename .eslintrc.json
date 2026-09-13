@@ -35,6 +35,7 @@
     "MAX_HOP_DIST": "readonly",
     "MeshAudio": "readonly",
     "MeshConfigReady": "readonly",
+    "NodeHopAnalytics": "readonly",
     "PAYLOAD_COLORS": "readonly",
     "PAYLOAD_TYPES": "readonly",
     "PERF_SLOW_MS": "readonly",
