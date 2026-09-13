@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -117,35 +118,32 @@ func TestBackfillTxLastSeenRunsInBoundedBatches(t *testing.T) {
 // the batching introduces. A transmission with no observations keeps
 // last_seen = 0, so a loop that re-selects on `last_seen = 0` alone would hand
 // itself the same rows forever. The cursor is what makes each row be visited
-// once; without it this test hangs rather than fails, which is why the batch
-// count is asserted too.
+// once. The unfillable rows fill a whole batch: with fewer than a batch, the
+// short-batch break ends the loop before the cursor is ever used, and the test
+// would pass without it. The deadline turns the resulting loop into a failure.
 func TestBackfillTxLastSeenTerminatesOnRowsItCannotFill(t *testing.T) {
 	store := openBackfillStore(t, "backfill-unfillable.db")
-	seedTxWithObservations(t, store, 5, 0) // no observations: nothing to backfill
+	seedTxWithObservations(t, store, backfillTxLastSeenBatch, 0) // no observations: nothing to backfill
 	want := seedTxWithObservations(t, store, 3, 1)
 
 	ResetWriterStatsForTest()
 
-	done := make(chan struct{})
-	var updated int64
-	var err error
-	go func() {
-		updated, err = store.backfillTxLastSeen(context.Background())
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(20 * time.Second):
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	updated, err := store.backfillTxLastSeen(ctx)
+	if errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("backfillTxLastSeen did not terminate: rows it cannot fill are being re-selected")
 	}
 	if err != nil {
 		t.Fatalf("backfillTxLastSeen: %v", err)
 	}
 	if updated != 3 {
-		t.Fatalf("updated %d, want 3 (the five observation-less rows must not count)", updated)
+		t.Fatalf("updated %d, want 3 (the observation-less rows must not count)", updated)
 	}
-	if got := store.WriterStatsSnapshot()["tx_last_seen_backfill"].Count; got != 1 {
-		t.Fatalf("expected the 8 rows to fit one batch, got %d transactions", got)
+	// 1 full batch of unfillable rows + 1 partial batch, which ends the loop.
+	if got := store.WriterStatsSnapshot()["tx_last_seen_backfill"].Count; got != 2 {
+		t.Fatalf("expected 2 writer transactions for %d rows at batch size %d, got %d",
+			backfillTxLastSeenBatch+3, backfillTxLastSeenBatch, got)
 	}
 	for id, ts := range want {
 		if got := txLastSeen(t, store, id); got != ts {
