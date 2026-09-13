@@ -1884,6 +1884,7 @@
       if (filters.type) localStorage.setItem('meshcore-type-filter', filters.type); else localStorage.removeItem('meshcore-type-filter');
       buildTypeMenu();
       updateTypeTrigger();
+      updatePacketsUrl();
       renderTableRows();
     });
 
