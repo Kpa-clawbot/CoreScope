@@ -105,6 +105,14 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/analytics/subpaths-bulk":   {Summary: "Bulk subpath analysis", Tag: "analytics"},
 		"GET /api/analytics/subpath-detail":  {Summary: "Subpath detail", Tag: "analytics"},
 		"GET /api/analytics/neighbor-graph":  {Summary: "Neighbor graph", Description: "Full neighbor affinity graph for visualization.", Tag: "analytics"},
+		"GET /api/analytics/retransmissions": {Summary: "Retransmission pressure over time", Description: "Collision-pressure proxy (#1699): per time bucket, the average number of distinct repeaters in the union of all observed paths of each flood-routed packet (route types 0/1, TRACE excluded), bucketed by first_seen. Hop prefixes are not resolved: the same prefix in different observations counts once, so colliding 1-byte prefixes make this a lower bound. Only repeaters some observer heard are counted, so the value also follows observer coverage; each bucket carries its observer count.", Tag: "analytics",
+			QueryParams: []paramMeta{
+				{Name: "region", Description: "Comma-separated IATA codes; only observations from observers in the region are counted", Type: "string"},
+				{Name: "window", Description: "Relative window: 1h, 24h, 3d, 7d or 30d", Type: "string"},
+				{Name: "from", Description: "Absolute window start (RFC3339)", Type: "string"},
+				{Name: "to", Description: "Absolute window end (RFC3339)", Type: "string"},
+				{Name: "bucket", Description: "Bucket size: 5m, 15m, 1h, 6h or 1d (default 1h)", Type: "string"},
+			}},
 
 		// Channels
 		"GET /api/channels":                 {Summary: "List channels", Description: "Returns known mesh channels with message counts.", Tag: "channels"},

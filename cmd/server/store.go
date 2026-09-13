@@ -197,6 +197,11 @@ type PacketStore struct {
 	subpathCache      map[string]*cachedResult // params → cached subpaths result
 	rfCacheTTL        time.Duration
 	collisionCacheTTL time.Duration
+
+	// region|window|bucket → retransmission pressure (#1699). Typed, so it
+	// cannot share the map[string]interface{} caches above; nil until first use.
+	retransCache map[string]*retransmissionCacheEntry
+
 	// Steady-state analytics recomputers (issue #1240). Each holds the
 	// latest snapshot for the default region="" / zero-window query of
 	// an analytics endpoint in an atomic.Value, refreshed by a
@@ -214,6 +219,7 @@ type PacketStore struct {
 	recompRoles              *analyticsRecomputer
 	recompObserversClockSkew *analyticsRecomputer
 	recompNodesClockSkew     *analyticsRecomputer
+	recompRetransmissions    *analyticsRecomputer
 	cacheHits                int64
 	cacheMisses              int64
 	// Rate-limited invalidation (fixes #533: caches cleared faster than hit)
@@ -2279,6 +2285,7 @@ func (s *PacketStore) invalidateCachesFor(inv cacheInvalidation) {
 		s.chanCache = make(map[string]*cachedResult)
 		s.distCache = make(map[string]*cachedResult)
 		s.subpathCache = make(map[string]*cachedResult)
+		s.retransCache = nil
 		s.channelsCacheMu.Lock()
 		s.channelsCacheRes = nil
 		s.channelsCacheMu.Unlock()
@@ -2325,6 +2332,7 @@ func (s *PacketStore) applyCacheInvalidation(inv cacheInvalidation) {
 		s.topoCache = make(map[string]*cachedResult)
 		s.distCache = make(map[string]*cachedResult)
 		s.subpathCache = make(map[string]*cachedResult)
+		s.retransCache = nil
 	}
 	if inv.hasNewTransmissions {
 		s.hashCache = make(map[string]*cachedResult)

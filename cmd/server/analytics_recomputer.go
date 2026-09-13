@@ -260,11 +260,18 @@ func (s *PacketStore) StartAnalyticsRecomputers(defaultInterval time.Duration, o
 		"nodes-clock-skew", pickInterval(ov.NodesClockSkew, defaultInterval),
 		func() interface{} { return s.computeFleetClockSkew() },
 	)
+	s.recompRetransmissions = newAnalyticsRecomputer(
+		"retransmissions", defaultInterval,
+		func() interface{} {
+			return s.computeRetransmissionPressure("", TimeWindow{}, retransmissionDefaultBucket)
+		},
+	)
 	all := []*analyticsRecomputer{
 		s.recompTopology, s.recompRF, s.recompDistance,
 		s.recompChannels, s.recompHashCollisions, s.recompHashSizes,
 		s.recompRoles,
 		s.recompObserversClockSkew, s.recompNodesClockSkew,
+		s.recompRetransmissions,
 	}
 	s.analyticsRecomputerMu.Unlock()
 
@@ -280,6 +287,7 @@ func (s *PacketStore) StartAnalyticsRecomputers(defaultInterval time.Duration, o
 	s.recompRF.setWarmupReadyGate_1659(loadCompleteGate)
 	s.recompTopology.setWarmupReadyGate_1659(loadCompleteGate)
 	s.recompChannels.setWarmupReadyGate_1659(loadCompleteGate)
+	s.recompRetransmissions.setWarmupReadyGate_1659(loadCompleteGate)
 
 	for _, rc := range all {
 		rc.Start()
