@@ -201,6 +201,7 @@ type PacketStore struct {
 	// region|window|bucket → retransmission pressure (#1699). Typed, so it
 	// cannot share the map[string]interface{} caches above; nil until first use.
 	retransCache map[string]*retransmissionCacheEntry
+	retransSF    singleflight.Group // collapses concurrent misses on one retransCache key
 
 	// Steady-state analytics recomputers (issue #1240). Each holds the
 	// latest snapshot for the default region="" / zero-window query of

@@ -942,9 +942,10 @@
       'A proxy for collision pressure, not a measured collision rate. ' +
       'It counts only repeaters that at least one observer heard, so observer coverage moves the line too: ' +
       'adding or losing observers (dashed line) changes it without any change on air. ' +
-      'Hop prefixes are not resolved to nodes; repeaters sharing a prefix in different paths count once, so the value is a lower bound, ' +
-      'most of all for packets on 1-byte hashes. Flood routes only (TRACE and direct routes excluded); ' +
-      'packets sit in the bucket where they were first seen, so the newest bucket may still be filling. ' +
+      'Hop prefixes are not resolved to nodes; a prefix counts once per flood, also when two repeaters share it, so the value is a lower bound, ' +
+      'most of all for packets on 1-byte hashes. Flood routes only (TRACE and direct routes excluded). ' +
+      'A packet heard again more than 5 minutes after its previous observation counts as a new flood; ' +
+      'each flood sits in the bucket where it started, so the newest bucket may still be filling. ' +
       'The area filter does not apply to this chart.' +
       '</p>';
     return html;

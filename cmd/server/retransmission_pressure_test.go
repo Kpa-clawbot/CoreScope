@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -38,19 +39,27 @@ func TestRepeaterUnion_OverlappingPathsCountOnce(t *testing.T) {
 	}
 }
 
-// A hop prefix is not a node identity. Across observations the same prefix
-// is taken to be the same repeater (lower bound). Inside ONE path the same
-// prefix twice must be two nodes: a repeater forwards a flood once
-// (firmware Mesh.cpp wasSeen/markSeen before routeRecvPacket).
-func TestRepeaterUnion_AmbiguousPrefixes(t *testing.T) {
-	if got := unionOf(`["12","34","12"]`); got != 3 {
-		t.Errorf("same prefix twice in one path = %d, want 3", got)
+// A hop prefix counts once per flood, wherever and however often it appears.
+// Inside one path a repeated 2- or 3-byte prefix is on live data almost
+// always one known node forwarding twice (the firmware dedup table is a
+// cyclic 160-slot buffer, SimpleMeshTables.h:9,52-57), so it is one
+// repeater. A repeated 1-byte prefix may be two nodes, but counting it once
+// keeps the value a lower bound, like the cross-observation merge.
+func TestRepeaterUnion_PrefixCountsOncePerFlood(t *testing.T) {
+	if got := unionOf(`["12","34","12"]`); got != 2 {
+		t.Errorf("1-byte prefix twice in one path = %d, want 2", got)
+	}
+	if got := unionOf(`["AB01","CD02","AB01"]`); got != 2 {
+		t.Errorf("2-byte prefix twice in one path = %d, want 2", got)
+	}
+	if got := unionOf(`["AB01C3","CD02D4","AB01C3"]`); got != 2 {
+		t.Errorf("3-byte prefix twice in one path = %d, want 2", got)
 	}
 	if got := unionOf(`["12","34"]`, `["56","12"]`); got != 3 {
 		t.Errorf("same prefix in two paths = %d, want 3 (merged, lower bound)", got)
 	}
-	if got := unionOf(`["12","34","12"]`, `["12"]`, `["12","12","12"]`); got != 4 {
-		t.Errorf("max multiplicity across paths = %d, want 4 (12 x3 + 34)", got)
+	if got := unionOf(`["12","34","12"]`, `["12"]`, `["12","12","12"]`); got != 2 {
+		t.Errorf("repeats within and across paths = %d, want 2 (12, 34)", got)
 	}
 }
 
@@ -116,13 +125,21 @@ func rtxTx(id int, route, payload int, firstSeen string, obs ...*StoreObs) *Stor
 	}
 	for _, o := range obs {
 		o.TransmissionID = id
+		if o.Timestamp == "" {
+			o.Timestamp = firstSeen
+		}
 		tx.Observations = append(tx.Observations, o)
 	}
 	return tx
 }
 
+// rtxObs is an observation heard at the transmission's first_seen.
 func rtxObs(observer, path string) *StoreObs {
 	return &StoreObs{ObserverID: observer, PathJSON: path}
+}
+
+func rtxObsAt(observer, path, ts string) *StoreObs {
+	return &StoreObs{ObserverID: observer, PathJSON: path, Timestamp: ts}
 }
 
 func rtxStore(packets ...*StoreTx) *PacketStore {
@@ -232,6 +249,101 @@ func TestComputeRetransmissionPressure_WindowFilter(t *testing.T) {
 	}
 }
 
+// transmissions.hash is UNIQUE, so a re-hearing of the same content hours
+// later is appended to the existing transmission. Each flood event is
+// counted on its own, in the bucket of its first observation. Observations
+// are listed newest first, the order the cold load appends them in.
+func TestComputeRetransmissionPressure_SplitsFloodEvents(t *testing.T) {
+	s := rtxStore(rtxTx(1, RouteFlood, PayloadGRP_TXT, "2026-09-13T10:00:00Z",
+		rtxObsAt("o3", `["D4"]`, "2026-09-13T12:00:00.000Z"),
+		rtxObsAt("o2", `["A1","C3"]`, "2026-09-13T10:00:20.000Z"),
+		rtxObsAt("o1", `["A1","B2"]`, "2026-09-13T10:00:00.000Z"),
+	))
+	r := s.computeRetransmissionPressure("", TimeWindow{}, time.Hour)
+	if r.Summary.Packets != 2 || len(r.Buckets) != 2 {
+		t.Fatalf("result = %+v, want 2 flood events in 2 buckets", r)
+	}
+	if b := bucketByStart(t, r, "2026-09-13T10:00:00Z"); b.Packets != 1 || b.RepeaterSum != 3 || b.Observers != 2 {
+		t.Errorf("10:00 bucket = %+v, want packets 1 sum 3 (A1,B2,C3) observers 2", b)
+	}
+	if b := bucketByStart(t, r, "2026-09-13T12:00:00Z"); b.Packets != 1 || b.RepeaterSum != 1 || b.Observers != 1 {
+		t.Errorf("12:00 bucket = %+v, want packets 1 sum 1 (D4) observers 1", b)
+	}
+	if r.Summary.AvgRepeaters != 2 {
+		t.Errorf("summary avg = %v, want 2", r.Summary.AvgRepeaters)
+	}
+}
+
+// An event ends when the gap to the previous observation exceeds the settle
+// time (5 minutes). The gap is measured observation to observation, so a
+// slow flood whose steps each stay under it remains one event.
+func TestComputeRetransmissionPressure_EventSettleGap(t *testing.T) {
+	events := func(ts ...string) int {
+		var obs []*StoreObs
+		for i, x := range ts {
+			obs = append(obs, rtxObsAt(fmt.Sprintf("o%d", i), `["A1"]`, x))
+		}
+		return rtxStore(rtxTx(1, RouteFlood, PayloadADVERT, ts[0], obs...)).
+			computeRetransmissionPressure("", TimeWindow{}, time.Hour).Summary.Packets
+	}
+	if got := events("2026-09-13T10:00:00Z", "2026-09-13T10:05:00Z"); got != 1 {
+		t.Errorf("gap of exactly 5m = %d events, want 1", got)
+	}
+	if got := events("2026-09-13T10:00:00Z", "2026-09-13T10:05:01Z"); got != 2 {
+		t.Errorf("gap of 5m01s = %d events, want 2", got)
+	}
+	if got := events("2026-09-13T10:00:00Z", "2026-09-13T10:04:00Z", "2026-09-13T10:08:00Z", "2026-09-13T10:12:00Z"); got != 1 {
+		t.Errorf("4m steps over 12m = %d events, want 1", got)
+	}
+}
+
+// The window selects flood events by their first observation, not by the
+// transmission's first_seen: a hash first heard weeks ago and flooded again
+// today counts today.
+func TestComputeRetransmissionPressure_WindowSelectsEvents(t *testing.T) {
+	s := rtxStore(rtxTx(1, RouteFlood, PayloadADVERT, "2026-08-20T10:00:00Z",
+		rtxObsAt("o1", `["A1","B2"]`, "2026-08-20T10:00:00Z"),
+		rtxObsAt("o1", `["C3"]`, "2026-09-13T10:00:00Z"),
+	))
+	r := s.computeRetransmissionPressure("", TimeWindow{Since: "2026-09-13T00:00:00Z"}, time.Hour)
+	if r.Summary.Packets != 1 || len(r.Buckets) != 1 || r.Buckets[0].RepeaterSum != 1 {
+		t.Fatalf("result = %+v, want only the 2026-09-13 event (C3)", r)
+	}
+}
+
+// Flood events that start before the store's retention floor are dropped,
+// for every request shape: the store keeps old observations only for hashes
+// that were heard again recently, so what it holds before the floor is not
+// the traffic of that period.
+func TestComputeRetransmissionPressure_RetentionFloor(t *testing.T) {
+	now := time.Now().UTC()
+	ago := func(d time.Duration) string { return now.Add(-d).Format("2006-01-02T15:04:05.000Z") }
+	s := rtxStore(
+		// Weeks-old first event, recent second event: only the second counts.
+		rtxTx(1, RouteFlood, PayloadADVERT, ago(30*24*time.Hour),
+			rtxObsAt("o1", `["A1","B2"]`, ago(30*24*time.Hour)),
+			rtxObsAt("o1", `["C3"]`, ago(time.Hour))),
+		// An event that starts before the floor is dropped as a whole, not
+		// counted from its first observation after the floor.
+		rtxTx(2, RouteFlood, PayloadADVERT, ago(24*time.Hour+time.Minute),
+			rtxObsAt("o1", `["D4"]`, ago(24*time.Hour+time.Minute)),
+			rtxObsAt("o2", `["E5"]`, ago(24*time.Hour-time.Minute))),
+		rtxTx(3, RouteFlood, PayloadADVERT, ago(2*time.Hour), rtxObsAt("o1", `["F6","A7"]`, ago(2*time.Hour))),
+	)
+	s.retentionHours = 24
+	r := s.computeRetransmissionPressure("", TimeWindow{}, time.Hour)
+	if r.Summary.Packets != 2 || r.Summary.AvgRepeaters != 1.5 {
+		t.Fatalf("summary = %+v, want 2 events (C3; F6,A7) avg 1.5", r.Summary)
+	}
+	if got := s.computeRetransmissionPressure("", TimeWindow{Since: ago(40 * 24 * time.Hour)}, time.Hour).Summary.Packets; got != 2 {
+		t.Errorf("window reaching past the floor = %d events, want 2", got)
+	}
+	s.retentionHours = 0
+	if got := s.computeRetransmissionPressure("", TimeWindow{}, time.Hour).Summary.Packets; got != 4 {
+		t.Errorf("unlimited retention = %d events, want 4", got)
+	}
+}
+
 func TestComputeRetransmissionPressure_RegionFilter(t *testing.T) {
 	s := rtxStore(
 		rtxTx(1, RouteFlood, PayloadADVERT, "2026-09-13T10:00:00Z",
@@ -254,6 +366,39 @@ func TestComputeRetransmissionPressure_RegionFilter(t *testing.T) {
 	}
 	if got := r.Buckets[0].Observers; got != 1 {
 		t.Errorf("observers = %d, want 1", got)
+	}
+}
+
+// Events are split on all observations before the region filter, so a flood
+// the region heard at its start and end stays one event even when the
+// region's own observations are further apart than the settle time.
+func TestComputeRetransmissionPressure_RegionDoesNotSplitEvents(t *testing.T) {
+	s := rtxStore(rtxTx(1, RouteFlood, PayloadADVERT, "2026-09-13T10:00:00Z",
+		rtxObsAt("brussels", `["A1"]`, "2026-09-13T10:00:00Z"),
+		rtxObsAt("amsterdam", `["B2"]`, "2026-09-13T10:04:00Z"),
+		rtxObsAt("brussels", `["A1","C3"]`, "2026-09-13T10:08:00Z"),
+	))
+	s.regionObsCache = map[string]map[string]bool{"BRU": {"brussels": true}}
+	s.regionObsCacheTime = time.Now()
+
+	r := s.computeRetransmissionPressure("BRU", TimeWindow{}, time.Hour)
+	if r.Summary.Packets != 1 || r.Buckets[0].RepeaterSum != 2 {
+		t.Fatalf("region result = %+v, want 1 event with A1, C3", r)
+	}
+}
+
+// A region with no known observers is not filtered, the same as
+// /api/analytics/rf and the other analytics endpoints (resolveRegionObservers
+// returns nil). Pinned so a change is a deliberate, documented one.
+func TestComputeRetransmissionPressure_UnknownRegionIsNotFiltered(t *testing.T) {
+	s := rtxStore(rtxTx(1, RouteFlood, PayloadADVERT, "2026-09-13T10:00:00Z",
+		rtxObs("brussels", `["A1","B2"]`), rtxObs("amsterdam", `["C3"]`)))
+	s.regionObsCache = map[string]map[string]bool{"XXX": nil}
+	s.regionObsCacheTime = time.Now()
+
+	r := s.computeRetransmissionPressure("XXX", TimeWindow{}, time.Hour)
+	if r.Summary.Packets != 1 || r.Summary.Observers != 2 || r.Buckets[0].RepeaterSum != 3 {
+		t.Fatalf("unknown region = %+v, want the network-wide result", r)
 	}
 }
 
@@ -334,6 +479,91 @@ func TestGetRetransmissionPressure_TTLCacheAndInvalidation(t *testing.T) {
 	}
 }
 
+func TestGetRetransmissionPressure_EvictionClearsCache(t *testing.T) {
+	s := rtxStore(rtxTx(1, RouteFlood, PayloadADVERT, "2026-09-13T10:00:00Z", rtxObs("o1", `["A1"]`)))
+	s.rfCacheTTL = time.Hour
+	w := TimeWindow{Since: "2026-09-13T00:00:00Z", Label: "fixture"}
+
+	s.GetRetransmissionPressure("", w, time.Hour)
+	s.packets = append(s.packets, rtxTx(2, RouteFlood, PayloadADVERT, "2026-09-13T10:30:00Z", rtxObs("o1", `["B2"]`)))
+	s.invalidateCachesFor(cacheInvalidation{eviction: true})
+	if got := s.GetRetransmissionPressure("", w, time.Hour); got.Summary.Packets != 2 {
+		t.Fatalf("after eviction invalidation expected 2 packets, got %d", got.Summary.Packets)
+	}
+}
+
+func TestGetRetransmissionPressure_CacheEntryExpires(t *testing.T) {
+	s := rtxStore(rtxTx(1, RouteFlood, PayloadADVERT, "2026-09-13T10:00:00Z", rtxObs("o1", `["A1"]`)))
+	s.rfCacheTTL = time.Hour
+	w := TimeWindow{Since: "2026-09-13T00:00:00Z", Label: "fixture"}
+
+	s.GetRetransmissionPressure("", w, time.Hour)
+	s.packets = append(s.packets, rtxTx(2, RouteFlood, PayloadADVERT, "2026-09-13T10:30:00Z", rtxObs("o1", `["B2"]`)))
+	if got := s.GetRetransmissionPressure("", w, time.Hour); got.Summary.Packets != 1 {
+		t.Fatalf("fresh entry must be served from cache, got %d packets", got.Summary.Packets)
+	}
+	if len(s.retransCache) != 1 {
+		t.Fatalf("cache entries = %d, want 1", len(s.retransCache))
+	}
+	for _, e := range s.retransCache {
+		e.expiresAt = time.Now().Add(-time.Second)
+	}
+	if got := s.GetRetransmissionPressure("", w, time.Hour); got.Summary.Packets != 2 {
+		t.Fatalf("expired entry must be recomputed, got %d packets", got.Summary.Packets)
+	}
+}
+
+// Concurrent requests for the same uncached shape share one compute: every
+// caller gets the result of that single pass (same bucket backing array).
+func TestGetRetransmissionPressure_CollapsesConcurrentMisses(t *testing.T) {
+	s := rtxStore(rtxTx(1, RouteFlood, PayloadADVERT, "2026-09-13T10:00:00Z", rtxObs("o1", `["A1"]`)))
+	s.rfCacheTTL = time.Hour
+	w := TimeWindow{Since: "2026-09-13T00:00:00Z", Label: "fixture"}
+
+	const n = 16
+	results := make([]RetransmissionResponse, n)
+	var wg sync.WaitGroup
+	s.mu.Lock() // park every compute on the store lock
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i] = s.GetRetransmissionPressure("", w, time.Hour)
+		}(i)
+	}
+	time.Sleep(100 * time.Millisecond)
+	s.mu.Unlock()
+	wg.Wait()
+	for i, r := range results {
+		if len(r.Buckets) != 1 {
+			t.Fatalf("result %d = %+v", i, r)
+		}
+		if &r.Buckets[0] != &results[0].Buckets[0] {
+			t.Fatalf("result %d came from a separate compute; concurrent misses must share one", i)
+		}
+	}
+}
+
+// StartAnalyticsRecomputers must wire the #1659 readiness gate on the
+// retransmissions recomputer: a pass before the cold load completes keeps
+// the default shape at 503.
+func TestStartAnalyticsRecomputers_RetransmissionsGatedOnLoadComplete(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	store := NewPacketStore(db, nil)
+	stop := store.StartAnalyticsRecomputers(time.Hour)
+	defer stop()
+
+	if !store.recompRetransmissions.IsWarmingUp_1659() {
+		t.Fatal("a pass before LoadComplete must not open the retransmissions gate")
+	}
+	store.loadComplete.Store(true)
+	store.recompRetransmissions.runOnce()
+	if store.recompRetransmissions.IsWarmingUp_1659() {
+		t.Fatal("a pass after LoadComplete must open the retransmissions gate")
+	}
+}
+
 // --- handler ---
 
 func TestHandleAnalyticsRetransmissions(t *testing.T) {
@@ -395,11 +625,16 @@ func TestHandleAnalyticsRetransmissions_WarmupGate(t *testing.T) {
 // magnitudes (2026-09-13): ~15k flood transmissions/day, ~20 observations
 // each, ~5.3 hops per path. 50k tx x 20 obs = 1M observations, roughly
 // 3.3 days of flood traffic; a 14-day store scales linearly (x4.3).
-func BenchmarkComputeRetransmissionPressure(b *testing.B) {
+//
+// Observations carry timestamps in the store's format, newest first per
+// transmission, which is the order the cold load appends them in
+// (ORDER BY o.timestamp DESC).
+func retransmissionBenchStore() *PacketStore {
 	const nTx, obsPerTx = 50000, 20
 	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	packets := make([]*StoreTx, 0, nTx)
 	for i := 0; i < nTx; i++ {
+		first := base.Add(time.Duration(i) * 6 * time.Second)
 		obs := make([]*StoreObs, 0, obsPerTx)
 		for j := 0; j < obsPerTx; j++ {
 			hops := make([]string, 0, 6)
@@ -407,16 +642,44 @@ func BenchmarkComputeRetransmissionPressure(b *testing.B) {
 				hops = append(hops, fmt.Sprintf("%04X", (i*7+h*131+j*(h+1))%4096))
 			}
 			pj, _ := json.Marshal(hops)
-			obs = append(obs, &StoreObs{ObserverID: fmt.Sprintf("obs%02d", j*3%60), PathJSON: string(pj)})
+			ts := first.Add(time.Duration(obsPerTx-1-j) * time.Second).Format("2006-01-02T15:04:05.000Z")
+			obs = append(obs, &StoreObs{ObserverID: fmt.Sprintf("obs%02d", j*3%60), PathJSON: string(pj), Timestamp: ts})
 		}
-		packets = append(packets, rtxTx(i+1, RouteFlood, PayloadADVERT,
-			base.Add(time.Duration(i)*6*time.Second).Format(time.RFC3339), obs...))
+		packets = append(packets, rtxTx(i+1, RouteFlood, PayloadADVERT, first.Format(time.RFC3339), obs...))
 	}
-	s := rtxStore(packets...)
+	return rtxStore(packets...)
+}
+
+// BenchmarkComputeRetransmissionPressure measures a recompute pass on a
+// store whose observation timestamps were already parsed (the steady state:
+// StoreObs.ParsedTime caches per observation).
+func BenchmarkComputeRetransmissionPressure(b *testing.B) {
+	s := retransmissionBenchStore()
+	s.computeRetransmissionPressure("", TimeWindow{}, time.Hour)
 	runtime.GC() // fixture garbage must not be collected inside the timed loop
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
+		s.computeRetransmissionPressure("", TimeWindow{}, time.Hour)
+	}
+}
+
+// BenchmarkComputeRetransmissionPressureColdTimestamps measures the first
+// pass after startup, when no observation timestamp has been parsed yet.
+func BenchmarkComputeRetransmissionPressureColdTimestamps(b *testing.B) {
+	s := retransmissionBenchStore()
+	runtime.GC()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		for _, tx := range s.packets {
+			for _, o := range tx.Observations {
+				o.tsParseOnce = sync.Once{}
+				o.tsParsed, o.tsParsedOK = time.Time{}, false
+			}
+		}
+		b.StartTimer()
 		s.computeRetransmissionPressure("", TimeWindow{}, time.Hour)
 	}
 }

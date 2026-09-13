@@ -1285,30 +1285,56 @@ Network topology analytics.
 Retransmission pressure over time (#1699): a collision-pressure **proxy**, not a
 measured collision rate.
 
-For each flood-routed packet (`route_type` 0 or 1, TRACE excluded) the server
-takes the union of the paths of all its observations and counts the distinct
-repeaters in it: paths `[A]`, `[A,B,C]` and `[A,D]` give 4. Direct routes are
-excluded because their path is the route still to travel, not the forwarders;
-zero-hop sends are direct routes. A flood packet heard only with an empty path
-counts as 0 repeaters.
+For each flood event of a flood-routed packet (`route_type` 0 or 1, TRACE
+excluded) the server takes the union of the paths of all its observations and
+counts the distinct repeaters in it: paths `[A]`, `[A,B,C]` and `[A,D]` give 4.
+Direct routes are excluded because their path is the route still to travel, not
+the forwarders; zero-hop sends are direct routes. A flood event heard only with
+an empty path counts as 0 repeaters.
 
-Hop prefixes are not resolved to nodes. The same prefix in different
-observations counts as one repeater, so repeaters sharing a 1-byte prefix merge
-and the value is a lower bound. The same prefix k times inside one path counts
-as k repeaters, because a node forwards a flood only once. Only repeaters that
-some observer heard are counted, so the value also follows observer coverage.
+A transmission is one packet hash, and the same bytes can flood again later:
+those observations are stored on the same transmission. Its observations are
+therefore sorted by time and split into flood events wherever two consecutive
+observations are more than 5 minutes apart. Each event is counted on its own and
+bucketed by its first observation. A firmware node holds a flood for at most
+32 s before forwarding it, plus a random retransmit delay, so a flood that is
+still spreading is not split. Every count in the response (`packets`,
+`one_byte_packets`, `no_repeater_packets`) counts flood events. Observations are
+stored once per observer and path per transmission, so a later event holds only
+the observer and path pairs not already stored for that hash, and its count is a
+lower bound.
 
-Packets are bucketed by `first_seen`. The default shape (no `region`, no window,
-`bucket=1h`) is served from the analytics recomputer and returns `503` with
-`Retry-After` until its first pass after startup completes; other shapes use the
-TTL cache. `?area=` is not supported: the area filter works on resolved node
-public keys and this metric does not resolve prefixes.
+Events that start before the store's retention floor (now minus
+`retentionHours`) are left out for every request shape, including explicit
+`window`, `from` and `to`: the store keeps observations older than that only for
+hashes heard again recently, so they do not represent that period.
+
+Hop prefixes are not resolved to nodes. A prefix counts once per flood event,
+whether it repeats across observations or inside one path. A 2- or 3-byte prefix
+that repeats inside one path is one node forwarding the flood again after its
+duplicate filter (a cyclic buffer of 160 hashes) dropped the hash. A repeated
+1-byte prefix can also be two nodes; counting it once keeps the value a lower
+bound, as does merging repeaters that share a prefix across observations. Only
+repeaters that some observer heard are counted, so the value also follows
+observer coverage.
+
+The default shape (no `region`, no window, `bucket=1h`) is served from the
+analytics recomputer; other shapes use the TTL cache, and concurrent requests
+for the same uncached shape share one computation. During startup the default
+shape returns `503` with `Retry-After` until the recomputer completes a pass
+after the hot startup window has loaded, or for at most 60 s after the
+recomputer started, whichever comes first. The history beyond the hot window
+keeps loading in the background after that, so until the first recompute pass
+after that load finishes the default shape can cover less than the retention
+window. `?area=` is not
+supported: the area filter works on resolved node public keys and this metric
+does not resolve prefixes.
 
 ### Query Parameters
 
 | Param    | Type   | Default | Description                         |
 |----------|--------|---------|-------------------------------------|
-| `region` | string | none    | Comma-separated IATA codes; only observations from the region's observers feed the union, packets none of them heard are skipped |
+| `region` | string | none    | Comma-separated IATA codes; only observations from the region's observers feed the union, events none of them heard are skipped. Events are split before this filter. A region with no known observers is not filtered and returns network-wide data, as `/api/analytics/rf` does |
 | `window` | string | none    | `1h`, `24h`, `3d`, `7d` or `30d` (relative to now) |
 | `from`, `to` | string (ISO) | none | Absolute window bounds, take precedence over `window` |
 | `bucket` | string | `1h`    | `5m`, `15m`, `1h`, `6h` or `1d`; other values fall back to `1h` |
@@ -1321,16 +1347,16 @@ public keys and this metric does not resolve prefixes.
   "window":         string,          // window label, "" for all data
   "region":         string,
   "summary": {
-    "packets":             number,   // flood packets in the window
-    "avg_repeaters":       number,   // mean distinct repeaters per packet
+    "packets":             number,   // flood events that started in the window
+    "avg_repeaters":       number,   // mean distinct repeaters per event
     "observers":           number,   // distinct observers that heard them
-    "one_byte_packets":    number,   // packets on 1-byte hop hashes (most ambiguous)
-    "no_repeater_packets": number    // packets heard with an empty path only
+    "one_byte_packets":    number,   // events on 1-byte hop hashes (most ambiguous)
+    "no_repeater_packets": number    // events heard with an empty path only
   },
   "buckets": [                       // ascending, empty buckets omitted
     {
       "start":         string (ISO), // bucket start, UTC
-      "packets":       number,
+      "packets":       number,       // flood events that started in the bucket
       "repeater_sum":  number,
       "avg_repeaters": number,
       "observers":     number

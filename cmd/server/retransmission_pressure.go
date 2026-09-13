@@ -3,11 +3,11 @@ package main
 // retransmission_pressure.go: issue #1699.
 //
 // Network-wide time series of how many distinct repeaters took part in
-// relaying each flood packet, as a proxy for collision pressure. Definition
-// agreed in the #1699 thread: for one transmission, take the union of the
-// paths of ALL its observations and count the distinct repeaters in it
-// (paths [A], [A,B,C], [A,D] -> 4). Per time bucket we report the average of
-// that count over the flood packets first seen in the bucket.
+// relaying each flood, as a proxy for collision pressure. Definition agreed
+// in the #1699 thread: for one flood, take the union of the paths of ALL its
+// observations and count the distinct repeaters in it (paths [A], [A,B,C],
+// [A,D] -> 4). Per time bucket we report the average of that count over the
+// floods that started in the bucket.
 //
 // It is a proxy, not a measured collision rate: a repeater that forwarded a
 // packet no observer heard is invisible, so the number moves with observer
@@ -30,36 +30,59 @@ package main
 //   - A path entry is the first 1-3 bytes of the forwarder's public key; the
 //     width is chosen by the originator and is the same for every hop of one
 //     packet (src/Mesh.cpp:649, src/Packet.h:79-83, src/Identity.h:23-25).
-//   - A node forwards a given flood once: routeRecvPacket runs only after
-//     wasSeen()/markSeen() on the packet hash (e.g. src/Mesh.cpp:121-126), and
-//     that hash excludes the path (src/Packet.cpp:41-50).
+//   - The duplicate filter (wasSeen/markSeen, e.g. src/Mesh.cpp:121-126) is a
+//     cyclic buffer of 160 packet hashes (src/helpers/SimpleMeshTables.h:9,
+//     52-57). Once a hash is overwritten, the node forwards that packet again
+//     if it comes back, so the same node can appear twice in one path.
+//   - A node holds a received flood for at most 32 s before handling it
+//     (MAX_RX_DELAY_MILLIS, src/Dispatcher.cpp:11,243-251), plus a random
+//     retransmit delay of a few airtimes (examples/simple_repeater/
+//     MyMesh.cpp:547-550).
 //
-// Ambiguous prefixes. A 1-byte prefix is shared by many repeaters, and we do
-// NOT resolve hops to public keys here: the resolved-pubkey index is empty
-// for observations whose resolved_path is NULL (on live nearly every 1-byte
-// observation), and context-based resolution of history is refused on
-// purpose elsewhere (resolvePathForObsColdLoad, PR #1643). Counting rule:
-//   - the same prefix in different observations is the same repeater, so
-//     colliding repeaters merge and the count is a lower bound;
-//   - the same prefix k times inside ONE path is k repeaters (a node forwards
-//     a flood once), so a prefix counts as its highest multiplicity in any
-//     single observed path.
-// The share of packets on 1-byte hashes is reported so the undercount can be
-// judged.
+// Flood events. transmissions.hash is UNIQUE and the packet hash excludes the
+// path (src/Packet.cpp:41-50), so when the same bytes are flooded again later
+// the new observations are appended to the existing transmission. The union
+// over all of them would merge separate floods. We sort a transmission's
+// observations by time and start a new event when the gap to the previous
+// observation exceeds retransmissionEventGap; each event is counted on its
+// own, in the bucket of its first observation.
 //
-// Bucketing is by the transmission's first_seen; later observations of the
-// same packet land in the bucket where it was first heard.
+// Retention floor. Events that start before now - retentionHours are dropped
+// for every request shape: the store keeps observations from before the
+// floor only for hashes that were heard again recently, so they are not the
+// traffic of that period.
 //
-// Complexity: one pass over s.packets under s.mu.RLock, O(T + O + H) for T
-// transmissions, O observations of flood packets and H hop entries, with no
-// allocation per observation. Memory: one entry per non-empty bucket plus a
-// per-pass observer index; the union set is reused across transmissions.
-// Served from the analytics recomputer for the default shape and from a
-// TTL cache otherwise, never computed per request on a warm cache.
+// Prefixes are not resolved. A 1-byte prefix is shared by many repeaters, and
+// we do NOT resolve hops to public keys here: the resolved-pubkey index is
+// empty for observations whose resolved_path is NULL (on live nearly every
+// 1-byte observation), and context-based resolution of history is refused on
+// purpose elsewhere (resolvePathForObsColdLoad, PR #1643). Counting rule: a
+// prefix counts once per event, whether it repeats inside one path or across
+// paths. A repeated 2- or 3-byte prefix is one node forwarding twice (see the
+// duplicate filter above). A repeated 1-byte prefix can also be two nodes;
+// counting it once keeps the value a lower bound, as does merging repeaters
+// that share a prefix across paths. The share of 1-byte packets is reported
+// so the undercount can be judged.
+//
+// Region. region filters on the observers of that region, like
+// /api/analytics/rf. Events are split on all observations, so the filter
+// does not change where an event starts. A region with no known observers is
+// not filtered, the same as the other analytics endpoints.
+//
+// Complexity: one pass over s.packets under s.mu.RLock, O(T + O log k + H)
+// for T transmissions, O observations of flood packets (k per transmission,
+// sorted by time) and H hop entries. Timestamps are parsed once per
+// observation and cached (StoreObs.ParsedTime). Memory: one entry per
+// non-empty bucket, a per-pass observer index and scratch reused across
+// transmissions. Served from the analytics recomputer for the default shape
+// and from a TTL cache otherwise, never computed per request on a warm
+// cache; concurrent misses on one key share a single compute.
 
 import (
+	"cmp"
 	"math/bits"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -68,10 +91,10 @@ import (
 // RetransmissionBucket is one time bucket of the series.
 type RetransmissionBucket struct {
 	Start        string  `json:"start"`         // bucket start, RFC3339 UTC
-	Packets      int     `json:"packets"`       // flood packets first seen in the bucket
-	RepeaterSum  int     `json:"repeater_sum"`  // sum of distinct repeaters over those packets
+	Packets      int     `json:"packets"`       // flood events that started in the bucket
+	RepeaterSum  int     `json:"repeater_sum"`  // sum of distinct repeaters over those events
 	AvgRepeaters float64 `json:"avg_repeaters"` // repeater_sum / packets
-	Observers    int     `json:"observers"`     // distinct observers that heard those packets
+	Observers    int     `json:"observers"`     // distinct observers that heard those events
 }
 
 // RetransmissionSummary aggregates the whole response window.
@@ -79,8 +102,8 @@ type RetransmissionSummary struct {
 	Packets           int     `json:"packets"`
 	AvgRepeaters      float64 `json:"avg_repeaters"`
 	Observers         int     `json:"observers"`
-	OneBytePackets    int     `json:"one_byte_packets"`    // packets whose hops are 1-byte hashes (most ambiguous)
-	NoRepeaterPackets int     `json:"no_repeater_packets"` // flood packets heard with an empty path only
+	OneBytePackets    int     `json:"one_byte_packets"`    // events whose hops are 1-byte hashes (most ambiguous)
+	NoRepeaterPackets int     `json:"no_repeater_packets"` // events heard with an empty path only
 }
 
 // RetransmissionResponse is the /api/analytics/retransmissions body.
@@ -103,6 +126,13 @@ const retransmissionCacheMax = 64
 
 const retransmissionDefaultBucket = time.Hour
 
+// retransmissionEventGap is the settle time that separates two flood events
+// of one transmission. It is well above the longest per-hop hold in firmware
+// (32 s plus a retransmit delay, see the file header), so a flood still
+// spreading is not cut. Gaps between re-floods of the same bytes range from
+// minutes to weeks; a re-flood within 5 minutes merges into one event.
+const retransmissionEventGap = 5 * time.Minute
+
 // parseRetransmissionBucket maps the ?bucket= value to a duration. Unknown
 // values fall back to the default, matching how ParseTimeWindow ignores
 // invalid input.
@@ -120,22 +150,19 @@ func parseRetransmissionBucket(v string) time.Duration {
 	return retransmissionDefaultBucket
 }
 
-// repeaterUnion counts distinct repeaters across the observed paths of one
-// transmission (see the counting rule in the file header). Hops are keyed as
-// (byte width, value) so case does not matter and a 1-byte "AB" differs from
-// a 2-byte "AB00". Reuse one value across transmissions via reset().
+// repeaterUnion counts the distinct hop prefixes across the observed paths of
+// one flood event (see the counting rule in the file header). Hops are keyed
+// as (byte width, value) so case does not matter and a 1-byte "AB" differs
+// from a 2-byte "AB00". Reuse one value across events via reset().
 //
 // The set is an open-addressing hash table whose slots are stamped with a
 // generation, so reset() is O(1) instead of clearing the table.
 type repeaterUnion struct {
 	slotKey []uint64
-	slotCnt []int    // highest multiplicity of slotKey[i] within a single path
 	slotGen []uint32 // slot is live when slotGen[i] == gen
 	gen     uint32
 	used    int
-	total   int      // sum of slotCnt over live slots
-	path    []uint64 // scratch: hop keys of the path being added
-	width   int      // byte width of the first hop seen, 0 if none
+	width   int // byte width of the first hop seen, 0 if none
 }
 
 const repeaterUnionMinSlots = 256
@@ -150,13 +177,11 @@ func (u *repeaterUnion) reset() {
 		u.gen = 1
 	}
 	u.used = 0
-	u.total = 0
 	u.width = 0
 }
 
 func (u *repeaterUnion) allocSlots(n int) {
 	u.slotKey = make([]uint64, n)
-	u.slotCnt = make([]int, n)
 	u.slotGen = make([]uint32, n)
 }
 
@@ -173,15 +198,31 @@ func (u *repeaterUnion) slot(k uint64) int {
 // grow doubles the table, keeping the live entries. Load stays below 1/2,
 // so slot() always finds a free index.
 func (u *repeaterUnion) grow() {
-	oldKey, oldCnt, oldGen, gen := u.slotKey, u.slotCnt, u.slotGen, u.gen
+	oldKey, oldGen, gen := u.slotKey, u.slotGen, u.gen
 	u.allocSlots(2 * len(oldKey))
 	u.gen = 1
 	for i := range oldKey {
 		if oldGen[i] == gen {
 			j := u.slot(oldKey[i])
-			u.slotKey[j], u.slotCnt[j], u.slotGen[j] = oldKey[i], oldCnt[i], u.gen
+			u.slotKey[j], u.slotGen[j] = oldKey[i], u.gen
 		}
 	}
+}
+
+func (u *repeaterUnion) add(k uint64) {
+	if u.width == 0 {
+		u.width = int(k >> 32)
+	}
+	i := u.slot(k)
+	if u.slotGen[i] == u.gen {
+		return
+	}
+	if 2*(u.used+1) > len(u.slotKey) {
+		u.grow()
+		i = u.slot(k)
+	}
+	u.slotKey[i], u.slotGen[i] = k, u.gen
+	u.used++
 }
 
 // hopKey parses a hex hop into (width<<32 | value). ok is false for anything
@@ -212,7 +253,6 @@ func hopKey(hop string) (uint64, bool) {
 // into the union. Scans the string directly: hop tokens are plain hex, so no
 // JSON decoder and no allocation are needed.
 func (u *repeaterUnion) addPath(pathJSON string) {
-	u.path = u.path[:0]
 	for i := 0; i < len(pathJSON); i++ {
 		if pathJSON[i] != '"' {
 			continue
@@ -222,38 +262,14 @@ func (u *repeaterUnion) addPath(pathJSON string) {
 			break
 		}
 		if k, ok := hopKey(pathJSON[i+1 : i+1+end]); ok {
-			u.path = append(u.path, k)
+			u.add(k)
 		}
 		i += end + 1
-	}
-	if len(u.path) > 0 && u.width == 0 {
-		u.width = int(u.path[0] >> 32)
-	}
-	for p, k := range u.path {
-		occ := 1
-		for _, prev := range u.path[:p] {
-			if prev == k {
-				occ++
-			}
-		}
-		i := u.slot(k)
-		if u.slotGen[i] != u.gen {
-			if 2*(u.used+1) > len(u.slotKey) {
-				u.grow()
-				i = u.slot(k)
-			}
-			u.slotKey[i], u.slotCnt[i], u.slotGen[i] = k, occ, u.gen
-			u.used++
-			u.total += occ
-		} else if occ > u.slotCnt[i] {
-			u.total += occ - u.slotCnt[i]
-			u.slotCnt[i] = occ
-		}
 	}
 }
 
 func (u *repeaterUnion) count() int {
-	return u.total
+	return u.used
 }
 
 type retransmissionBucketAgg struct {
@@ -278,35 +294,103 @@ func popCount(set []uint64) int {
 	return n
 }
 
-// computeRetransmissionPressure builds the series. region filters on the
-// observers of that region, like /api/analytics/rf: only their observations
-// feed the union, and a packet none of them heard is skipped.
+// timedObs is an observation with its parsed time, for sorting one
+// transmission's observations into flood events.
+type timedObs struct {
+	at  int64 // unix nanoseconds
+	obs *StoreObs
+}
+
+// retransmissionPass accumulates one computeRetransmissionPressure pass.
+type retransmissionPass struct {
+	regionObs      map[string]bool
+	floor          time.Time // events starting before it are dropped; zero = none
+	since, until   time.Time
+	bucketSec      int64
+	aggs           map[int64]*retransmissionBucketAgg
+	obsIndex       map[string]int
+	allObservers   []uint64
+	union          repeaterUnion
+	summary        RetransmissionSummary
+	totalRepeaters int
+}
+
+// addEvent counts one flood event: ev holds its observations in time order.
+func (p *retransmissionPass) addEvent(ev []timedObs) {
+	t := time.Unix(0, ev[0].at)
+	if (!p.floor.IsZero() && t.Before(p.floor)) ||
+		(!p.since.IsZero() && t.Before(p.since)) || (!p.until.IsZero() && t.After(p.until)) {
+		return
+	}
+	start := t.Unix() - t.Unix()%p.bucketSec
+	agg := p.aggs[start]
+	u := &p.union
+	u.reset()
+	heard := false
+	for _, e := range ev {
+		obs := e.obs
+		if p.regionObs != nil && !p.regionObs[obs.ObserverID] {
+			continue
+		}
+		if agg == nil {
+			agg = &retransmissionBucketAgg{}
+			p.aggs[start] = agg
+		}
+		heard = true
+		u.addPath(obs.PathJSON)
+		idx, ok := p.obsIndex[obs.ObserverID]
+		if !ok {
+			idx = len(p.obsIndex)
+			p.obsIndex[obs.ObserverID] = idx
+		}
+		agg.observers = setBit(agg.observers, idx)
+		p.allObservers = setBit(p.allObservers, idx)
+	}
+	if !heard {
+		return
+	}
+	n := u.count()
+	agg.packets++
+	agg.repeaterSum += n
+	p.summary.Packets++
+	p.totalRepeaters += n
+	if n == 0 {
+		p.summary.NoRepeaterPackets++
+	}
+	if u.width == 1 {
+		p.summary.OneBytePackets++
+	}
+}
+
+// computeRetransmissionPressure builds the series (see the file header for
+// flood events, the retention floor, the counting rule and region).
 func (s *PacketStore) computeRetransmissionPressure(region string, window TimeWindow, bucket time.Duration) RetransmissionResponse {
 	if bucket <= 0 {
 		bucket = retransmissionDefaultBucket
 	}
-	var regionObs map[string]bool
-	if region != "" {
-		regionObs = s.resolveRegionObservers(region)
+	p := retransmissionPass{
+		bucketSec: int64(bucket / time.Second),
+		aggs:      make(map[int64]*retransmissionBucketAgg),
+		obsIndex:  make(map[string]int),
 	}
-	var since, until time.Time
+	if region != "" {
+		p.regionObs = s.resolveRegionObservers(region)
+	}
 	if window.Since != "" {
-		since, _ = parseAnyRFC3339(window.Since)
+		p.since, _ = parseAnyRFC3339(window.Since)
 	}
 	if window.Until != "" {
-		until, _ = parseAnyRFC3339(window.Until)
+		p.until, _ = parseAnyRFC3339(window.Until)
 	}
-	bucketSec := int64(bucket / time.Second)
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	aggs := make(map[int64]*retransmissionBucketAgg)
-	obsIndex := make(map[string]int)
-	var allObservers []uint64
-	var u repeaterUnion
-	var summary RetransmissionSummary
-	totalRepeaters := 0
+	if s.retentionHours > 0 {
+		p.floor = time.Now().Add(-time.Duration(s.retentionHours * float64(time.Hour)))
+	}
+	gap := int64(retransmissionEventGap)
+	var timed []timedObs
 
 	for _, tx := range s.packets {
 		if tx.RouteType == nil || (*tx.RouteType != RouteFlood && *tx.RouteType != RouteTransportFlood) {
@@ -315,59 +399,31 @@ func (s *PacketStore) computeRetransmissionPressure(region string, window TimeWi
 		if tx.PayloadType != nil && *tx.PayloadType == PayloadTRACE {
 			continue
 		}
-		t, err := parseAnyRFC3339(tx.FirstSeen)
-		if err != nil {
-			continue
-		}
-		if (!since.IsZero() && t.Before(since)) || (!until.IsZero() && t.After(until)) {
-			continue
-		}
-		start := t.Unix() - t.Unix()%bucketSec
-		agg := aggs[start]
-		u.reset()
-		heard := false
+		timed = timed[:0]
 		for _, obs := range tx.Observations {
-			if regionObs != nil && !regionObs[obs.ObserverID] {
-				continue
+			if at, ok := obs.ParsedTime(); ok {
+				timed = append(timed, timedObs{at: at.UnixNano(), obs: obs})
 			}
-			if agg == nil {
-				agg = &retransmissionBucketAgg{}
-				aggs[start] = agg
+		}
+		slices.SortFunc(timed, func(a, b timedObs) int { return cmp.Compare(a.at, b.at) })
+		for start := 0; start < len(timed); {
+			end := start + 1
+			for end < len(timed) && timed[end].at-timed[end-1].at <= gap {
+				end++
 			}
-			heard = true
-			u.addPath(obs.PathJSON)
-			idx, ok := obsIndex[obs.ObserverID]
-			if !ok {
-				idx = len(obsIndex)
-				obsIndex[obs.ObserverID] = idx
-			}
-			agg.observers = setBit(agg.observers, idx)
-			allObservers = setBit(allObservers, idx)
-		}
-		if !heard {
-			continue
-		}
-		n := u.count()
-		agg.packets++
-		agg.repeaterSum += n
-		summary.Packets++
-		totalRepeaters += n
-		if n == 0 {
-			summary.NoRepeaterPackets++
-		}
-		if u.width == 1 {
-			summary.OneBytePackets++
+			p.addEvent(timed[start:end])
+			start = end
 		}
 	}
 
-	starts := make([]int64, 0, len(aggs))
-	for st := range aggs {
+	starts := make([]int64, 0, len(p.aggs))
+	for st := range p.aggs {
 		starts = append(starts, st)
 	}
 	sort.Slice(starts, func(i, j int) bool { return starts[i] < starts[j] })
 	buckets := make([]RetransmissionBucket, 0, len(starts))
 	for _, st := range starts {
-		a := aggs[st]
+		a := p.aggs[st]
 		buckets = append(buckets, RetransmissionBucket{
 			Start:        time.Unix(st, 0).UTC().Format(time.RFC3339),
 			Packets:      a.packets,
@@ -376,17 +432,18 @@ func (s *PacketStore) computeRetransmissionPressure(region string, window TimeWi
 			Observers:    popCount(a.observers),
 		})
 	}
+	summary := p.summary
 	if summary.Packets > 0 {
-		summary.AvgRepeaters = float64(totalRepeaters) / float64(summary.Packets)
+		summary.AvgRepeaters = float64(p.totalRepeaters) / float64(summary.Packets)
 	}
-	summary.Observers = popCount(allObservers)
+	summary.Observers = popCount(p.allObservers)
 
 	label := window.Label
 	if label == "" && !window.IsZero() {
 		label = window.Since + "/" + window.Until
 	}
 	return RetransmissionResponse{
-		BucketSeconds: int(bucketSec),
+		BucketSeconds: int(p.bucketSec),
 		Window:        label,
 		Region:        region,
 		Summary:       summary,
@@ -398,8 +455,18 @@ func isDefaultRetransmissionShape(region string, window TimeWindow, bucket time.
 	return region == "" && window.IsZero() && bucket == retransmissionDefaultBucket
 }
 
+// retransCacheGet returns a fresh cached result for key. Caller must hold
+// s.cacheMu.
+func (s *PacketStore) retransCacheGet(key string) (RetransmissionResponse, bool) {
+	if e, ok := s.retransCache[key]; ok && time.Now().Before(e.expiresAt) {
+		return e.data, true
+	}
+	return RetransmissionResponse{}, false
+}
+
 // GetRetransmissionPressure serves the default shape from the recomputer
-// snapshot and every other shape from the TTL cache (compute on miss).
+// snapshot and every other shape from the TTL cache (compute on miss,
+// concurrent misses on one key share the compute).
 func (s *PacketStore) GetRetransmissionPressure(region string, window TimeWindow, bucket time.Duration) RetransmissionResponse {
 	if isDefaultRetransmissionShape(region, window, bucket) {
 		s.analyticsRecomputerMu.RLock()
@@ -416,23 +483,33 @@ func (s *PacketStore) GetRetransmissionPressure(region string, window TimeWindow
 	}
 	key := region + "|" + window.CacheKey() + "|" + bucket.String()
 	s.cacheMu.Lock()
-	if e, ok := s.retransCache[key]; ok && time.Now().Before(e.expiresAt) {
+	if r, ok := s.retransCacheGet(key); ok {
 		s.cacheHits++
 		s.cacheMu.Unlock()
-		return e.data
+		return r
 	}
 	s.cacheMisses++
 	s.cacheMu.Unlock()
 
-	result := s.computeRetransmissionPressure(region, window, bucket)
-
-	s.cacheMu.Lock()
-	if s.retransCache == nil || len(s.retransCache) >= retransmissionCacheMax {
-		s.retransCache = make(map[string]*retransmissionCacheEntry)
-	}
-	s.retransCache[key] = &retransmissionCacheEntry{data: result, expiresAt: time.Now().Add(s.rfCacheTTL)}
-	s.cacheMu.Unlock()
-	return result
+	v, _, _ := s.retransSF.Do(key, func() (interface{}, error) {
+		// A caller that joins right after a winner stored its result must
+		// not start a second pass.
+		s.cacheMu.Lock()
+		r, ok := s.retransCacheGet(key)
+		s.cacheMu.Unlock()
+		if ok {
+			return r, nil
+		}
+		result := s.computeRetransmissionPressure(region, window, bucket)
+		s.cacheMu.Lock()
+		if s.retransCache == nil || len(s.retransCache) >= retransmissionCacheMax {
+			s.retransCache = make(map[string]*retransmissionCacheEntry)
+		}
+		s.retransCache[key] = &retransmissionCacheEntry{data: result, expiresAt: time.Now().Add(s.rfCacheTTL)}
+		s.cacheMu.Unlock()
+		return result, nil
+	})
+	return v.(RetransmissionResponse)
 }
 
 func (s *Server) handleAnalyticsRetransmissions(w http.ResponseWriter, r *http.Request) {
