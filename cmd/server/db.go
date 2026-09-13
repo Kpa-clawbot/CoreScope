@@ -3123,6 +3123,38 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 		resp.TimeSeries = []ScopeTimePoint{}
 	}
 
+	// #1979: flood adverts by sender role, split by the three scope_name
+	// states. Flood routes only (TRANSPORT_FLOOD 0, FLOOD 1): zero-hop adverts
+	// go out as DIRECT/TRANSPORT_DIRECT (firmware Mesh::sendZeroHop) and are
+	// not flooded. Role is the sender's current nodes.role.
+	// The unary + on payload_type keeps the planner on the first_seen range
+	// index; the payload_type index would walk every advert ever stored.
+	roleRows, err := db.conn.Query(`
+		SELECT COALESCE(NULLIF(n.role, ''), 'unknown') AS role,
+			SUM(CASE WHEN t.scope_name IS NULL THEN 1 ELSE 0 END) AS unscoped,
+			SUM(CASE WHEN t.scope_name = '' THEN 1 ELSE 0 END) AS unknown_scope,
+			SUM(CASE WHEN t.scope_name != '' THEN 1 ELSE 0 END) AS named
+		FROM transmissions t
+		LEFT JOIN nodes n ON n.public_key = t.from_pubkey
+		WHERE +t.payload_type = ? AND t.route_type IN (0, 1) AND t.first_seen >= ?
+		GROUP BY 1
+		ORDER BY COUNT(*) DESC, 1
+	`, payloadTypeAdvert, since)
+	if err != nil {
+		return nil, fmt.Errorf("scope advertsByRole query: %w", err)
+	}
+	defer roleRows.Close()
+	resp.AdvertsByRole = []ScopeAdvertRoleCount{}
+	for roleRows.Next() {
+		var rc ScopeAdvertRoleCount
+		if roleRows.Scan(&rc.Role, &rc.Unscoped, &rc.UnknownScope, &rc.Named) == nil {
+			resp.AdvertsByRole = append(resp.AdvertsByRole, rc)
+		}
+	}
+	if err := roleRows.Err(); err != nil {
+		return nil, fmt.Errorf("scope advertsByRole iteration: %w", err)
+	}
+
 	return resp, nil
 }
 

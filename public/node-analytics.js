@@ -125,6 +125,11 @@
             <canvas id="hopChart" role="img" aria-label="Hop distribution chart"></canvas>
           </div>
           <div class="analytics-chart-card full">
+            <h4>Hop Count at This Node</h4>
+            <div class="analytics-chart-desc">For each flood packet this node forwarded: how many hops it already had, the number the flood.max, flood.max.unscoped and flood.max.advert limits are checked against. Bars count packets per hop count; the box above spans the middle half of the packets with a line at the median, and the whiskers reach the furthest packet within 1.5 box widths of the box.</div>
+            <div id="hopCountSection"><div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px">Loading hop counts...</div></div>
+          </div>
+          <div class="analytics-chart-card full">
             <h4>Battery Voltage <span id="batteryStatusBadge" style="font-size:11px;font-weight:normal;margin-left:8px"></span></h4>
             <div class="analytics-chart-desc">Battery voltage over time from observer status reports — flat line means full, downward slope means draining</div>
             <canvas id="batteryChart" role="img" aria-label="Battery voltage trend chart"></canvas>
@@ -166,6 +171,7 @@
     buildHopChart(data);
     buildHeatmap(data);
     loadBatteryChart(pubkey, currentDays);
+    NodeHopAnalytics.load(document.getElementById('hopCountSection'), pubkey, currentDays);
   }
 
   function buildActivityChart(data) {
@@ -370,6 +376,7 @@
 
   function destroy() {
     destroyCharts();
+    NodeHopAnalytics.destroy();
     currentPubkey = null;
   }
 

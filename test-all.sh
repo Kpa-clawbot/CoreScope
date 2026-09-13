@@ -126,8 +126,10 @@ node test-issue-1843-node-qr-quiet-zone.js
 node test-issue-1846-observers-width.js
 node test-issue-1849-trace-hashbytes.js
 node test-issue-1851-channel-message-scope.js
+node test-issue-1868-control-decode.js
 node test-issue-1890-og-url.js
 node test-issue-1956-release-routing.js
+node test-issue-1979-scope-adverts-by-role.js
 node test-issue-2001-map-scope-state.js
 node test-live-anims.js
 node test-live-dt-cap-1524.js
@@ -139,6 +141,7 @@ node test-map-clustering.js
 node test-mqtt-status-panel.js
 node test-my-repeaters-dashboard.js
 node test-naive-banner-tone.js
+node test-node-hop-analytics.js
 node test-node-reach-coverage-debounce.js
 node test-node-reach-coverage.js
 node test-nodes-export-wiring.js
@@ -171,6 +174,7 @@ node test-top-routes-overlay.js
 node test-traces.js
 node test-url-state.js
 node test-warmup-banner.js
+node test-ws-stale-watchdog-1074.js
 node test-xss-escape-sinks.js
 
 echo "All standalone frontend suites passed"

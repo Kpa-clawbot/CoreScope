@@ -17,6 +17,7 @@ window.HopResolver = (function() {
   }
   let prefixIdx = {};   // lowercase hex prefix → [node, ...]
   let pubkeyIdx = {};   // full lowercase pubkey → node (O(1) lookup)
+  let pubkeyPrefix8Idx = {}; // lowercase 8-byte (16 hex) pubkey prefix → node, null when ambiguous
   let nodesList = [];
   let observerIataMap = {}; // observer_id → iata
   let iataCoords = {};  // iata → {lat, lon}
@@ -45,12 +46,15 @@ window.HopResolver = (function() {
     nodesList = nodes || [];
     prefixIdx = {};
     pubkeyIdx = {};
+    pubkeyPrefix8Idx = {};
     for (const n of nodesList) {
       if (!n.public_key) continue;
       const pk = n.public_key.toLowerCase();
       // pubkeyIdx includes ALL nodes — used by resolveFromServer for
       // server-confirmed full-pubkey lookups (any node type).
       pubkeyIdx[pk] = n;
+      const p8 = pk.slice(0, 16);
+      pubkeyPrefix8Idx[p8] = (p8 in pubkeyPrefix8Idx) ? null : n;
       // prefixIdx only includes nodes that can appear as path hops.
       if (!canAppearInPath(n.role)) continue;
       for (let len = 1; len <= 3; len++) {
@@ -347,6 +351,16 @@ window.HopResolver = (function() {
     return n && n.name ? n.name : null;
   }
 
+  // #1868: O(1) node lookup by FULL pubkey (64 hex) or by the 8-byte prefix
+  // (16 hex) a CONTROL DISCOVER_RESP carries when the request set prefix_only.
+  // Returns the node, or null when unknown or when the prefix is ambiguous.
+  function nodeForKey(key) {
+    if (!key) return null;
+    const k = String(key).toLowerCase();
+    if (k.length === 16) return pubkeyPrefix8Idx[k] || null;
+    return pubkeyIdx[k] || null;
+  }
+
   /**
    * Resolve hops using server-provided resolved_path (full pubkeys).
    * Returns the same format as resolve() — { [hop]: { name, pubkey, ... } }.
@@ -372,5 +386,5 @@ window.HopResolver = (function() {
     return result;
   }
 
-  return { init: init, resolve: resolve, resolveFromServer: resolveFromServer, ready: ready, haversineKm: haversineKm, setAffinity: setAffinity, getAffinity: getAffinity, nameForKey: nameForKey };
+  return { init: init, resolve: resolve, resolveFromServer: resolveFromServer, ready: ready, haversineKm: haversineKm, setAffinity: setAffinity, getAffinity: getAffinity, nameForKey: nameForKey, nodeForKey: nodeForKey };
 })();
