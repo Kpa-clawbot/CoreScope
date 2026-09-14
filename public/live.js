@@ -2909,7 +2909,12 @@
     if (nodeFilterKeys.length > 0) {
       if (clearBtn) clearBtn.style.display = '';
       if (countEl) { countEl.textContent = `Showing ${nodeFilterShown} of ${nodeFilterTotal}`; countEl.classList.remove('hidden'); }
-      if (input && input.value !== nodeFilterKeys.join(', ')) input.value = nodeFilterKeys.join(', ');
+      // Never overwrite the field while the user is in it: this also runs from the
+      // debounced typing handler (which commits the trimmed value) and from every
+      // matching packet, and a picked suggestion shows the name while the key is
+      // the pubkey. Compare trimmed so a stray space alone is no reason to write.
+      const userIsEditing = document.activeElement === input;
+      if (input && !userIsEditing && input.value.trim() !== nodeFilterKeys.join(', ')) input.value = nodeFilterKeys.join(', ');
     } else {
       if (clearBtn) clearBtn.style.display = 'none';
       if (countEl) countEl.classList.add('hidden');
