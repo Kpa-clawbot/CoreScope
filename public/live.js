@@ -1788,9 +1788,7 @@
       function applyFilterFromInput(rawValue) {
         // Treat input as a single substring query rather than a list of pubkeys.
         // setNodeFilter accepts pubkeys/prefixes/names; commit raw for live filtering.
-        // Strip HTML-significant characters so the raw value can never be used to
-        // inject markup if it is later rendered without encoding.
-        const val = (rawValue || '').trim().replace(/[<>"']/g, '');
+        const val = (rawValue || '').trim();
         setNodeFilter(val ? [val] : []);
         // Update URL without triggering hashchange (which would re-init the page).
         const params = getHashParams ? getHashParams() : new URLSearchParams();
