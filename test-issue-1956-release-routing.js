@@ -68,17 +68,57 @@ function runSteps(source, context, edge, mutateFails = false) {
       if [ "$1" = config ]; then
         [ "$EDGE_CONFIG" != missing ] || return 1
         printf '%s' "$EDGE_CONFIG"
+      elif [ "$1" = manifest ]; then
+        log crane "$@"
+        printf '%s' "$EDGE_MANIFEST"
+      elif [ "$1" = ls ]; then
+        log crane "$@"
+        printf 'edge\\ntmp-v9.8.7-linux-amd64\\ntmp-v9.8.7-linux-arm64\\n'
       else
         log crane "$@"
         [ "$1" != mutate ] || [ "$MUTATE_FAILS" != true ]
       fi
     }
-    gh() { log gh "$@"; }
+    # gh api answers the tag lookup a dispatched republish makes; everything
+    # else (workflow run) only gets logged.
+    gh() {
+      log gh "$@"
+      if [ "$1" = api ]; then
+        case "$*" in
+          *.object.type*) printf 'commit\\n' ;;
+          *.object.sha*)  printf '%s\\n' "$GH_API_SHA" ;;
+        esac
+      fi
+    }
     tar() { log tar "$@"; }
     go() { log go "$GOOS" "$GOARCH" "$CGO_ENABLED" "$CC" "$@"; }
     file() { log file "$@"; echo "$1: ELF 64-bit LSB executable, statically linked"; }
+    # Stand-in for the jq filters the release steps use. Each branch mirrors one
+    # filter, so a filter that changes shape without the test knowing fails here
+    # instead of silently returning nothing.
     jq() {
-      node -e 'const fs=require("fs"); const assert=require("assert/strict"); assert.equal(process.argv[1], ".config.Labels[\\"org.opencontainers.image.revision\\"] // \\\"\\\""); console.log(JSON.parse(fs.readFileSync(0,"utf8")).config.Labels["org.opencontainers.image.revision"] || "")' "$2"
+      node -e '
+        const fs = require("fs");
+        const filter = process.argv[1];
+        const source = process.argv[2];
+        const text = source && fs.existsSync(source) ? fs.readFileSync(source, "utf8") : fs.readFileSync(0, "utf8");
+        const data = text.trim() ? JSON.parse(text) : {};
+        const platform = m => [m.platform.os, m.platform.architecture].join("/") + (m.platform.variant ? "/" + m.platform.variant : "");
+        const runnable = () => (data.manifests || []).filter(m => (m.platform && m.platform.architecture || "unknown") !== "unknown");
+        if (filter.includes("org.opencontainers.image.revision")) {
+          console.log((((data.config || {}).Labels || {})["org.opencontainers.image.revision"]) || "");
+        } else if (filter.trim() === ".mediaType // \\"\\"") {
+          console.log(data.mediaType || "");
+        } else if (filter.includes("\\\\t\\\\(.digest)")) {
+          for (const m of runnable()) console.log(platform(m) + "\\t" + m.digest);
+        } else if (filter.includes("index|manifest.list")) {
+          const isIndex = /index|manifest.list/.test(data.mediaType || "");
+          console.log(isIndex ? runnable().map(platform).sort().join(",") : "single");
+        } else {
+          console.error("unstubbed jq filter: " + filter);
+          process.exit(3);
+        }
+      ' "$2" "\${3:-}"
     }
   `;
   try {
@@ -92,6 +132,18 @@ function runSteps(source, context, edge, mutateFails = false) {
           ...process.env, GITHUB_REF: context.github.ref, GITHUB_SHA: context.github.sha,
           GITHUB_OUTPUT: bashPath(output), COMMAND_LOG: bashPath(log), TMPDIR: bashPath(dir),
           EDGE_CONFIG: edge === null ? 'missing' : JSON.stringify({ config: { Labels: { 'org.opencontainers.image.revision': edge } } }),
+          // :edge is a two-platform index plus the two buildx attestation
+          // manifests, which is what the registry actually holds.
+          EDGE_MANIFEST: JSON.stringify({
+            mediaType: 'application/vnd.oci.image.index.v1+json',
+            manifests: [
+              { digest: 'sha256:' + '1'.repeat(64), platform: { os: 'linux', architecture: 'amd64' } },
+              { digest: 'sha256:' + '2'.repeat(64), platform: { os: 'linux', architecture: 'arm64' } },
+              { digest: 'sha256:' + '3'.repeat(64), platform: { os: 'unknown', architecture: 'unknown' } },
+              { digest: 'sha256:' + '4'.repeat(64), platform: { os: 'unknown', architecture: 'unknown' } }
+            ]
+          }),
+          GH_API_SHA: edge === null ? 'a'.repeat(40) : edge,
           MUTATE_FAILS: String(mutateFails)
         }
       });
@@ -139,7 +191,22 @@ for (const [name, edge] of [['matching', 'a'.repeat(40)], ['missing', null], ['m
   const matching = name === 'matching';
   assert.equal(dispatch.includes('images_published=true'), matching);
   if (!matching) assert.ok(!dispatch.includes('--field') && !dispatch.includes('-f'), 'old-tag fallback must not require new workflow inputs');
-  assert.equal(commands.filter(command => command[0] === 'crane' && command[1] === 'mutate').length, matching ? 1 : 0);
+  // One mutate per runnable platform of the :edge index, never one for the
+  // index itself: `crane mutate` on an index silently drops to one platform,
+  // which is how v3.11.0 shipped amd64-only.
+  const mutates = commands.filter(command => command[0] === 'crane' && command[1] === 'mutate');
+  assert.equal(mutates.length, matching ? 2 : 0, `${name}: one mutate per platform`);
+  if (matching) {
+    assert.deepEqual(mutates.map(command => command.at(-1)).sort(),
+      ['ghcr.io/kpa-clawbot/corescope:tmp-v9.8.7-linux-amd64', 'ghcr.io/kpa-clawbot/corescope:tmp-v9.8.7-linux-arm64'],
+      'each platform is mutated into its own scratch tag');
+    assert.ok(mutates.every(command => command[2].includes('@sha256:')), 'mutate must address a platform by digest, not the index tag');
+    const indexes = commands.filter(command => command[0] === 'crane' && command[1] === 'index');
+    assert.equal(indexes.length, 1, 'the release tag is assembled as one index');
+    assert.deepEqual(indexes[0].slice(1, 3), ['index', 'append']);
+    assert.equal(indexes[0].filter(argument => argument === '-m').length, 2, 'the index carries both platforms');
+    assert.equal(indexes[0].at(-1), 'ghcr.io/kpa-clawbot/corescope:v9.8.7');
+  }
   assert.deepEqual(commands.filter(command => command[0] === 'crane' && command[1] === 'tag').map(command => command.at(-1)), matching ? ['v9.8', 'v9', 'latest'] : []);
   const jobs = route(context(undefined, undefined, { images_published: matching }));
   assert.equal(jobs['release-artifacts'].result, 'success', `${name}: release artifacts must run`);
@@ -200,3 +267,22 @@ const checkout = steps(release).find(step => step.includes('uses: actions/checko
 assert.equal(value(checkout, 'ref', 10), '', 'checkout must retain the dispatched tag/SHA');
 assert.ok(!value(block(deploy, 'push', 2), 'tags', 4), 'fast path must remain the sole tag-triggered image writer');
 console.log('PASS failed retag/Go gates, branch/PR routes, and complete tagged release assets');
+
+// Republishing the images for a tag that already has a release: the tag comes
+// from the dispatch input, the commit is resolved from the tag itself (the
+// workflow file's own ref is master there), and deploy.yml must NOT be
+// dispatched again — the release exists and releases here are immutable.
+{
+  const sha = 'c'.repeat(40);
+  const ctx = context('refs/heads/master', 'workflow_dispatch', { tag: 'v9.8.7' });
+  const { commands } = runSteps(block(fast, 'retag-or-fallback', 2), ctx, sha);
+  assert.equal(ctx.steps.semver.outputs.tag, 'v9.8.7', 'the dispatched tag drives the release tags');
+  assert.equal(ctx.steps.semver.outputs.targetSha, sha, 'the tagged commit is resolved from the tag, not from github.sha');
+  assert.ok(commands.some(command => command[0] === 'gh' && command[1] === 'api'), 'the tag has to be looked up');
+  assert.equal(commands.filter(command => command[0] === 'gh' && command[1] === 'workflow').length, 0,
+    'a republish must not dispatch deploy.yml into an immutable release');
+  assert.equal(commands.filter(command => command[0] === 'crane' && command[1] === 'mutate').length, 2, 'still one mutate per platform');
+  assert.equal(commands.filter(command => command[0] === 'crane' && command[1] === 'index').length, 1, 'still one index');
+  assert.deepEqual(commands.filter(command => command[0] === 'crane' && command[1] === 'tag').map(command => command.at(-1)), ['v9.8', 'v9', 'latest']);
+  console.log('PASS dispatched republish: tags rebuilt, no second release dispatch');
+}
