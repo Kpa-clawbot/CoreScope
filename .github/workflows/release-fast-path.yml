@@ -54,8 +54,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          if [[ -n "${{ inputs.tag }}" ]]; then
-            TAG="${{ inputs.tag }}"
+          if [[ -n "${{ inputs.tag || '' }}" ]]; then
+            TAG="${{ inputs.tag || '' }}"
           else
             TAG="${GITHUB_REF#refs/tags/}"
           fi
@@ -69,7 +69,7 @@ jobs:
           MINOR="${BASH_REMATCH[2]}"
           # On a dispatched run github.sha is the ref the workflow file came
           # from, not the tagged commit, so resolve the tag itself.
-          if [[ -n "${{ inputs.tag }}" ]]; then
+          if [[ -n "${{ inputs.tag || '' }}" ]]; then
             TARGET_SHA="$(gh api "repos/${{ github.repository }}/git/refs/tags/$TAG" --jq '.object.sha')"
             OBJ_TYPE="$(gh api "repos/${{ github.repository }}/git/refs/tags/$TAG" --jq '.object.type')"
             if [[ "$OBJ_TYPE" == "tag" ]]; then
@@ -222,7 +222,7 @@ jobs:
           echo "All release tags carry the same platforms as :edge."
 
       - name: Remove the per-platform scratch tags
-        if: always() && steps.edge.outputs.no_edge == 'false' && steps.edge.outputs.edge_revision == steps.semver.outputs.targetSha
+        if: steps.edge.outputs.no_edge == 'false' && steps.edge.outputs.edge_revision == steps.semver.outputs.targetSha
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -231,7 +231,8 @@ jobs:
           TAG="${{ steps.semver.outputs.tag }}"
           # Best effort: the index already references the manifests by digest,
           # so deleting the scratch tags does not affect it. Leaving them is
-          # only untidy, hence no failure here.
+          # only untidy, hence no failure here. This step is skipped when an
+          # earlier one failed, which keeps the scratch tags around to inspect.
           for T in $(crane ls "$IMAGE" | grep "^tmp-${TAG}-" || true); do
             echo "  crane delete ${IMAGE}:${T}"
             crane delete "${IMAGE}:${T}" || echo "  (could not delete ${T}, leaving it)"
@@ -241,7 +242,7 @@ jobs:
       # deploy.yml. A manual republish skips it: the release exists already and
       # releases here are immutable, so action-gh-release would fail.
       - name: Dispatch release artifacts or full deploy.yml pipeline
-        if: github.event_name == 'push'
+        if: ${{ !inputs.tag }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
