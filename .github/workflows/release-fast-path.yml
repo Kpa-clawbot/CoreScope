@@ -8,10 +8,21 @@ name: Release Fast-Path
 #
 # This workflow is the SOLE consumer of push.tags. deploy.yml's tag
 # trigger has been removed to prevent double-fire.
+#
+# It can also be dispatched by hand with an existing tag, to republish the
+# images for a release whose tags are wrong (v3.11.0 shipped an amd64-only
+# manifest, see below). A manual run never dispatches deploy.yml: the release
+# for that tag already exists and this repository has immutable releases.
 
 on:
   push:
     tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing vX.Y.Z tag to republish container tags for'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -19,7 +30,7 @@ permissions:
   actions: write   # issue #1702: required for the `gh workflow run deploy.yml` dispatch
 
 concurrency:
-  group: release-fast-path-${{ github.ref }}
+  group: release-fast-path-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -39,22 +50,41 @@ jobs:
 
       - name: Parse semver from tag
         id: semver
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF#refs/tags/}"
-          # Expect vMAJOR.MINOR.PATCH (workflow trigger already enforces this).
+          if [[ -n "${{ inputs.tag }}" ]]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          # Expect vMAJOR.MINOR.PATCH (the push trigger already enforces this;
+          # a dispatched tag has to be checked here).
           if [[ ! "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
             echo "Tag $TAG does not match vMAJOR.MINOR.PATCH" >&2
             exit 1
           fi
           MAJOR="${BASH_REMATCH[1]}"
           MINOR="${BASH_REMATCH[2]}"
+          # On a dispatched run github.sha is the ref the workflow file came
+          # from, not the tagged commit, so resolve the tag itself.
+          if [[ -n "${{ inputs.tag }}" ]]; then
+            TARGET_SHA="$(gh api "repos/${{ github.repository }}/git/refs/tags/$TAG" --jq '.object.sha')"
+            OBJ_TYPE="$(gh api "repos/${{ github.repository }}/git/refs/tags/$TAG" --jq '.object.type')"
+            if [[ "$OBJ_TYPE" == "tag" ]]; then
+              TARGET_SHA="$(gh api "repos/${{ github.repository }}/git/tags/$TARGET_SHA" --jq '.object.sha')"
+            fi
+          else
+            TARGET_SHA="${{ github.sha }}"
+          fi
           {
             echo "tag=$TAG"
             echo "vMajor=v$MAJOR"
             echo "vMajorMinor=v$MAJOR.$MINOR"
+            echo "targetSha=$TARGET_SHA"
           } >> "$GITHUB_OUTPUT"
-          echo "Parsed: $TAG → v$MAJOR / v$MAJOR.$MINOR / $TAG"
+          echo "Parsed: $TAG → v$MAJOR / v$MAJOR.$MINOR / $TAG at $TARGET_SHA"
 
       - name: Inspect :edge revision label
         id: edge
@@ -76,17 +106,22 @@ jobs:
           echo "edge_revision=$REV" >> "$GITHUB_OUTPUT"
           echo "no_edge=false"      >> "$GITHUB_OUTPUT"
           echo ":edge org.opencontainers.image.revision = $REV"
-          echo "tag SHA (github.sha)               = ${{ github.sha }}"
+          echo "tagged commit                          = ${{ steps.semver.outputs.targetSha }}"
 
       # ─────────── FAST PATH: SHAs match, metadata-only retag ───────────
       # Issue #1807: a plain `crane tag` keeps the ldflags-baked
       # Version="edge" inside the binary, so /api/stats reports "edge" on
       # tagged releases. Instead of a full rebuild we append a single-file
       # layer (/app/.image-version containing the tag) and set the OCI
-      # version label, then point the remaining tags at that mutated image.
-      # The server reads .image-version at startup (see resolveVersion()).
+      # version label. The server reads .image-version at startup (see
+      # resolveVersion()).
+      #
+      # `crane mutate` works on ONE image, not on an index: pointed at a
+      # multi-arch tag it silently returns the default platform. v3.11.0
+      # shipped amd64-only that way. So mutate each platform child of the
+      # :edge index and reassemble an index from the results.
       - name: Re-tag :edge → :vX.Y.Z + :vX.Y + :vX + :latest (fast path)
-        if: steps.edge.outputs.no_edge == 'false' && steps.edge.outputs.edge_revision == github.sha
+        if: steps.edge.outputs.no_edge == 'false' && steps.edge.outputs.edge_revision == steps.semver.outputs.targetSha
         run: |
           set -euo pipefail
           IMAGE="ghcr.io/kpa-clawbot/corescope"
@@ -100,11 +135,47 @@ jobs:
           printf '%s' "$TAG" > "${LAYER_DIR}/app/.image-version"
           tar --owner=0 --group=0 --mtime='UTC 2020-01-01' \
               -C "$LAYER_DIR" -cf /tmp/image-version-layer.tar app
-          echo "  crane mutate $SRC (+.image-version layer, +version label) → ${IMAGE}:${TAG}"
-          crane mutate "$SRC" \
-            --append /tmp/image-version-layer.tar \
-            --label "org.opencontainers.image.version=${TAG}" \
-            --tag "${IMAGE}:${TAG}"
+
+          crane manifest "$SRC" > /tmp/edge-manifest.json
+          MEDIA="$(jq -r '.mediaType // ""' /tmp/edge-manifest.json)"
+
+          if [[ "$MEDIA" == *".index."* || "$MEDIA" == *".manifest.list."* ]]; then
+            # Attestation manifests carry platform architecture "unknown" and
+            # are rebuilt by buildx, not by us; carrying them over would point
+            # them at the pre-mutation digests, so the release index holds the
+            # runnable platforms only.
+            mapfile -t PLATFORMS < <(jq -r '
+              .manifests[]
+              | select((.platform.architecture // "unknown") != "unknown")
+              | "\(.platform.os)/\(.platform.architecture)\(if .platform.variant then "/" + .platform.variant else "" end)\t\(.digest)"
+            ' /tmp/edge-manifest.json)
+            if [[ "${#PLATFORMS[@]}" -eq 0 ]]; then
+              echo "No runnable platforms in $SRC" >&2
+              exit 1
+            fi
+            MANIFEST_ARGS=()
+            for entry in "${PLATFORMS[@]}"; do
+              PLATFORM="${entry%%$'\t'*}"
+              DIGEST="${entry##*$'\t'}"
+              SAFE="${PLATFORM//\//-}"
+              TMP_TAG="${IMAGE}:tmp-${TAG}-${SAFE}"
+              echo "  crane mutate ${SRC}@${DIGEST} ($PLATFORM) → $TMP_TAG"
+              crane mutate "${IMAGE}@${DIGEST}" \
+                --append /tmp/image-version-layer.tar \
+                --label "org.opencontainers.image.version=${TAG}" \
+                --tag "$TMP_TAG"
+              MANIFEST_ARGS+=(-m "$TMP_TAG")
+            done
+            echo "  crane index append ${MANIFEST_ARGS[*]} → ${IMAGE}:${TAG}"
+            crane index append "${MANIFEST_ARGS[@]}" -t "${IMAGE}:${TAG}"
+          else
+            # Single-platform :edge (nothing to reassemble).
+            echo "  crane mutate $SRC (single platform) → ${IMAGE}:${TAG}"
+            crane mutate "$SRC" \
+              --append /tmp/image-version-layer.tar \
+              --label "org.opencontainers.image.version=${TAG}" \
+              --tag "${IMAGE}:${TAG}"
+          fi
 
           for NEW_TAG in \
               "${{ steps.semver.outputs.vMajorMinor }}" \
@@ -115,14 +186,68 @@ jobs:
           done
           echo "Fast-path complete — release tags point at :edge plus a one-file version layer."
 
-      # Both image routes need the single release-artifacts writer in deploy.yml.
+      # A release tag that resolves to one platform is worse than a slow
+      # release: `docker pull` on the other architecture fails outright.
+      - name: Verify the published tags carry every :edge platform
+        if: steps.edge.outputs.no_edge == 'false' && steps.edge.outputs.edge_revision == steps.semver.outputs.targetSha
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/kpa-clawbot/corescope"
+          TAG="${{ steps.semver.outputs.tag }}"
+          platforms_of() {
+            crane manifest "$1" | jq -r '
+              if (.mediaType // "") | test("index|manifest.list") then
+                [ .manifests[]
+                  | select((.platform.architecture // "unknown") != "unknown")
+                  | "\(.platform.os)/\(.platform.architecture)\(if .platform.variant then "/" + .platform.variant else "" end)" ]
+                | sort | join(",")
+              else
+                "single"
+              end'
+          }
+          WANT="$(platforms_of "${IMAGE}:edge")"
+          echo "  :edge platforms = $WANT"
+          for CHECK in \
+              "$TAG" \
+              "${{ steps.semver.outputs.vMajorMinor }}" \
+              "${{ steps.semver.outputs.vMajor }}" \
+              "latest"; do
+            GOT="$(platforms_of "${IMAGE}:${CHECK}")"
+            echo "  :${CHECK} platforms = $GOT"
+            if [[ "$GOT" != "$WANT" ]]; then
+              echo "::error::${IMAGE}:${CHECK} has platforms [$GOT], expected [$WANT]"
+              exit 1
+            fi
+          done
+          echo "All release tags carry the same platforms as :edge."
+
+      - name: Remove the per-platform scratch tags
+        if: always() && steps.edge.outputs.no_edge == 'false' && steps.edge.outputs.edge_revision == steps.semver.outputs.targetSha
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          IMAGE="ghcr.io/kpa-clawbot/corescope"
+          TAG="${{ steps.semver.outputs.tag }}"
+          # Best effort: the index already references the manifests by digest,
+          # so deleting the scratch tags does not affect it. Leaving them is
+          # only untidy, hence no failure here.
+          for T in $(crane ls "$IMAGE" | grep "^tmp-${TAG}-" || true); do
+            echo "  crane delete ${IMAGE}:${T}"
+            crane delete "${IMAGE}:${T}" || echo "  (could not delete ${T}, leaving it)"
+          done
+
+      # Both image routes need the single release-artifacts writer in
+      # deploy.yml. A manual republish skips it: the release exists already and
+      # releases here are immutable, so action-gh-release would fail.
       - name: Dispatch release artifacts or full deploy.yml pipeline
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           DISPATCH_ARGS=()
-          if [[ "${{ steps.edge.outputs.no_edge == 'false' && steps.edge.outputs.edge_revision == github.sha }}" == 'true' ]]; then
+          if [[ "${{ steps.edge.outputs.no_edge == 'false' && steps.edge.outputs.edge_revision == steps.semver.outputs.targetSha }}" == 'true' ]]; then
             echo "Images published — dispatching Go validation and release artifacts"
             DISPATCH_ARGS+=(--field images_published=true)
           else
