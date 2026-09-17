@@ -219,21 +219,13 @@ npm run test:full-coverage  # backend + instrumented frontend coverage via Playw
 ### Test Files
 ```bash
 # Backend (deterministic, run before every push)
+sh test-all.sh                               # every suite in tests/unit
 node tests/unit/test-packet-filter.js        # filter engine
 node tests/unit/test-aging.js                # node aging system
-node test-regional-filter.js      # regional observer filtering
-node test-decoder.js              # packet decoder
-node test-decoder-spec.js         # spec-driven + golden fixture tests
-node test-server-helpers.js       # extracted server functions
-node test-server-routes.js        # API route tests via supertest
-node test-packet-store.js         # in-memory packet store
-node test-db.js                   # SQLite operations
 node tests/unit/test-frontend-helpers.js     # frontend logic (via vm.createContext)
-node tools/e2e-test.js            # E2E: temp server + synthetic packets
-node tools/frontend-test.js       # frontend smoke: HTML, JS refs, API shapes
 
 # Frontend E2E (requires running server or Playwright)
-node tests/e2e/test-e2e-playwright.js       # 8 Playwright browser tests (default: localhost:3000)
+node tests/e2e/test-e2e-playwright.js       # Playwright browser tests (default: localhost:3000)
 ```
 
 ### Rules
