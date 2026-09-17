@@ -17,19 +17,22 @@ import (
 // continuously, while the test goroutine measures how long it takes to
 // complete W bare mu.Lock()/mu.Unlock() cycles. Each writer cycle must
 // wait for ALL currently-holding RLocks to release. Pre-fix, every reader
-// holds RLock for the entire compute (~ms), so each writer cycle waits
-// behind an active reader → avg cycle hundreds of microseconds to
-// milliseconds. Post-fix, readers hold RLock only long enough to grab
-// slice headers (microseconds), so writer cycles complete unimpeded.
+// holds RLock for the entire compute, so each writer cycle waits behind an
+// active reader. Post-fix, readers hold RLock only long enough to grab
+// slice headers, so writer cycles complete unimpeded.
 //
-// The threshold is calibrated per run, not hardcoded. Eight readers
-// saturating the CPU slow the writer's own cycles down whether or not any
-// lock is held, and an absolute limit cannot tell that apart from a lock
-// held too long: this test failed twice on 2026-09-17 CI at 156µs and
-// 222µs against a flat 150µs limit, on trees that passed on re-run without
-// a single byte changed. So the same measurement runs twice, the second
-// time against a store the writer never locks, and the readers' CPU cost
-// is subtracted by comparison instead of guessed.
+// The threshold comes from measurement, and the gap it has to straddle is
+// enormous (issue #2038). On CI runners:
+//
+//	healthy    156µs, 222µs, 402µs   (three readings, three commits)
+//	regressed  201203µs              (RLock deliberately held across the compute)
+//
+// The old limit was a flat 150µs, which sits *inside* the healthy band, so
+// it failed on two consecutive master commits that passed on re-run without
+// a byte changed. 5ms is 12x above the worst healthy reading and 40x below
+// the regression, which is the widest possible separation from both. The
+// scale of the gap is the point: a #1239 regression is not marginal, it
+// serializes a millisecond-scale compute behind every writer.
 func TestComputeAnalyticsDistanceLockHoldDuration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping concurrency timing test in -short mode")
@@ -39,67 +42,9 @@ func TestComputeAnalyticsDistanceLockHoldDuration(t *testing.T) {
 	defer db.Close()
 	store := NewPacketStore(db, nil)
 
-	hops, paths := distLockFixture()
-	store.mu.Lock()
-	store.distHops = hops
-	store.distPaths = paths
-	store.mu.Unlock()
-
-	// Sanity: result is non-empty.
-	r := store.computeAnalyticsDistance("", "")
-	if r == nil {
-		t.Fatal("expected non-nil result")
-	}
-	if _, ok := r["topHops"]; !ok {
-		t.Fatal("expected topHops in result")
-	}
-
-	// Control: the identical compute, on a second store that the writer
-	// never locks. Same code path, same allocation churn, same number of
-	// runnable goroutines competing for the same cores, and no interaction
-	// whatsoever with the mutex being measured. Whatever this costs is the
-	// price of a busy machine rather than of a lock held too long.
-	//
-	// The two stores share the fixture slices. Both only ever read them,
-	// and the writer's Lock/Unlock cycles mutate nothing.
-	control := NewPacketStore(db, nil)
-	control.mu.Lock()
-	control.distHops = hops
-	control.distPaths = paths
-	control.mu.Unlock()
-
-	baselineMicros := distLockWriterCycles(t, store, control)
-	avgMicros := distLockWriterCycles(t, store, store)
-
-	// A regression under #1239 is not marginal: readers would hold the
-	// RLock across a compute that takes milliseconds at this data scale,
-	// so writer cycles land an order of magnitude or more above the
-	// control. 4x leaves room for the real handoff cost of a correctly
-	// short RLock without letting that regression through.
-	//
-	// The old flat 150µs stays as a floor, so on a quiet machine this test
-	// is exactly as strict as it was before, and it only ever relaxes when
-	// the control proves the machine itself is slow.
-	const maxOverControl = 4
-	const minLimitMicros = 150
-	limit := baselineMicros * maxOverControl
-	if limit < minLimitMicros {
-		limit = minLimitMicros
-	}
-
-	t.Logf("avg writer Lock/Unlock cycle: %dµs with readers on the same store, %dµs with readers on a separate store (control), limit %dµs (max(%dx control, %dµs))",
-		avgMicros, baselineMicros, limit, maxOverControl, minLimitMicros)
-
-	if avgMicros > limit {
-		t.Fatalf("avg writer Lock/Unlock cycle %dµs exceeds %dµs (%dx the %dµs control) — computeAnalyticsDistance is holding the main RLock for too long and blocking writers (issue #1239)",
-			avgMicros, limit, maxOverControl, baselineMicros)
-	}
-}
-
-// distLockFixture builds distHops/distPaths large enough that one compute
-// takes a measurable amount of time (~ms). With region="", compute never
-// dereferences distHopRecord.tx, so dummy zero-value records suffice.
-func distLockFixture() ([]distHopRecord, []distPathRecord) {
+	// Populate distHops/distPaths with enough records that compute takes
+	// a measurable amount of time (~ms). With region="", compute never
+	// dereferences distHopRecord.tx, so dummy zero-value records suffice.
 	const N = 20000
 	hops := make([]distHopRecord, N)
 	for i := 0; i < N; i++ {
@@ -127,22 +72,22 @@ func distLockFixture() ([]distHopRecord, []distPathRecord) {
 			},
 		}
 	}
-	return hops, paths
-}
+	store.mu.Lock()
+	store.distHops = hops
+	store.distPaths = paths
+	store.mu.Unlock()
 
-// distLockWriterCycles returns the average duration of a bare
-// writeTo.mu.Lock/Unlock cycle, in microseconds, while eight goroutines
-// churn readFrom.computeAnalyticsDistance.
-//
-// Passing the same store as both arguments measures what this test is
-// about. Passing a different store as readFrom measures the same work
-// under the same CPU load with the mutex left alone, which is the control.
-func distLockWriterCycles(t *testing.T, writeTo, readFrom *PacketStore) int64 {
-	t.Helper()
+	// Sanity: result is non-empty.
+	r := store.computeAnalyticsDistance("", "")
+	if r == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if _, ok := r["topHops"]; !ok {
+		t.Fatal("expected topHops in result")
+	}
 
+	// Background readers churn computeAnalyticsDistance.
 	const Readers = 8
-	const WriterCycles = 200
-
 	var stop atomic.Bool
 	var readerErrs atomic.Int64
 	var wg sync.WaitGroup
@@ -151,7 +96,7 @@ func distLockWriterCycles(t *testing.T, writeTo, readFrom *PacketStore) int64 {
 		go func() {
 			defer wg.Done()
 			for !stop.Load() {
-				rr := readFrom.computeAnalyticsDistance("", "")
+				rr := store.computeAnalyticsDistance("", "")
 				if rr == nil {
 					readerErrs.Add(1)
 				}
@@ -165,10 +110,12 @@ func distLockWriterCycles(t *testing.T, writeTo, readFrom *PacketStore) int64 {
 	// Let readers ramp up.
 	time.Sleep(50 * time.Millisecond)
 
+	// Measure writer (mu.Lock/Unlock) throughput.
+	const WriterCycles = 200
 	start := time.Now()
 	for i := 0; i < WriterCycles; i++ {
-		writeTo.mu.Lock()
-		writeTo.mu.Unlock()
+		store.mu.Lock()
+		store.mu.Unlock()
 	}
 	elapsed := time.Since(start)
 
@@ -178,5 +125,18 @@ func distLockWriterCycles(t *testing.T, writeTo, readFrom *PacketStore) int64 {
 	if readerErrs.Load() > 0 {
 		t.Fatalf("readers returned empty/invalid results: %d", readerErrs.Load())
 	}
-	return elapsed.Microseconds() / int64(WriterCycles)
+
+	avgMicros := elapsed.Microseconds() / int64(WriterCycles)
+	t.Logf("avg writer Lock/Unlock cycle: %dµs over %d cycles (total %v) with %d concurrent readers, %d hops, %d paths",
+		avgMicros, WriterCycles, elapsed, Readers, N, len(paths))
+
+	// See the measurements in the doc comment: healthy runs land in the
+	// hundreds of microseconds, a regression two orders of magnitude above
+	// that. Anything in between is a genuine change in lock-hold behaviour
+	// and deserves to be looked at, not re-run.
+	const MaxAvgMicros = 5000
+	if avgMicros > MaxAvgMicros {
+		t.Fatalf("avg writer Lock/Unlock cycle %dµs exceeds %dµs threshold — computeAnalyticsDistance is holding the main RLock for too long and blocking writers (issue #1239)",
+			avgMicros, MaxAvgMicros)
+	}
 }
