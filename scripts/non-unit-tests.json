@@ -104,6 +104,7 @@
       "tests/e2e/test-packets-scope-column.js",
       "tests/e2e/test-path-inspector-coverage-e2e.js",
       "tests/e2e/test-rx-coverage-mobile-nav-e2e.js",
+      "tests/e2e/test-rx-coverage-viewport-e2e.js",
       "tests/e2e/test-show-neighbors.js",
       "tests/e2e/test-slideover-1056-e2e.js",
       "tests/e2e/test-slideover-1168-munger-e2e.js",
