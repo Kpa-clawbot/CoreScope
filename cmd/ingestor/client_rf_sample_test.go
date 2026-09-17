@@ -5,10 +5,40 @@ import (
 	"time"
 )
 
+// rfFixtureTime returns a sample timestamp offset seconds from a base two
+// hours in the past, in the layout the handler round-trips.
+//
+// The times have to be anchored to now, not to a calendar date.
+// resolveRxTimeCore (main.go:1527) replaces any timestamp more than 30 days
+// old with the ingest time, so a fixed fixture date stops round-tripping 30
+// days after it is written: the seeded rows land at time.Now() while the query
+// window stays in the past, and every delta disappears. The 2026-08-17
+// fixtures this file used to carry did exactly that on 2026-09-16T10:00Z,
+// which turned all three delta tests red on master and on every open PR.
+// The base is computed once for the whole test binary, not per call: two
+// calls straddling a wall-clock second boundary would otherwise sit 16 s
+// apart instead of 15 s, and TestRfDeltaBreaksOnReboot asserts the exact
+// WallMillis. Truncating to the second keeps the formatted values ending in
+// ".000Z", the shape these fixtures have always had.
+var rfFixtureBase = time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
+
+func rfFixtureTime(offset time.Duration) string {
+	return rfFixtureBase.Add(offset).Format(rxTimeMillisLayout)
+}
+
+// rfFixtureWindow brackets the rfFixtureTime series. Bounds are compared
+// lexicographically against millisecond-precision sampled_at values, so they
+// must themselves be in the millisecond layout: a second-resolution
+// "...:00:00Z" bound would lexicographically exclude "...:00:00.000Z",
+// because `.` sorts before `Z`.
+func rfFixtureWindow() (from, to string) {
+	return rfFixtureTime(-time.Hour), rfFixtureTime(time.Hour)
+}
+
 func TestHandleClientRfSample(t *testing.T) {
 	s := newTestStore(t)
 	msg := map[string]interface{}{
-		"type": "RF_SAMPLE", "timestamp": "2026-08-17T10:00:00.000Z",
+		"type": "RF_SAMPLE", "timestamp": rfFixtureTime(0),
 		"gps":         map[string]interface{}{"lat": 51.2, "lon": 4.4, "acc_m": 8.0},
 		"stationary":  false,
 		"uptime_secs": 84213.0, "noise_floor": -119.0, "rx_air_secs": 20877.0,
@@ -46,7 +76,7 @@ func TestHandleClientRfSampleRejects(t *testing.T) {
 	s := newTestStore(t)
 	base := func() map[string]interface{} {
 		return map[string]interface{}{
-			"timestamp":   "2026-08-17T10:00:00.000Z",
+			"timestamp":   rfFixtureTime(0),
 			"gps":         map[string]interface{}{"lat": 51.2, "lon": 4.4},
 			"uptime_secs": 1.0,
 		}
@@ -89,14 +119,12 @@ func TestRfDeltaBreaksOnReboot(t *testing.T) {
 			"rx_air_secs": rxAir,
 		})
 	}
-	seed("2026-08-17T10:00:00.000Z", 1000, 500)
-	seed("2026-08-17T10:00:15.000Z", 1015, 512) // +12 s of RX air over 15 s
-	seed("2026-08-17T10:00:30.000Z", 10, 3)     // rebooted: uptime dropped
+	seed(rfFixtureTime(0), 1000, 500)
+	seed(rfFixtureTime(15*time.Second), 1015, 512) // +12 s of RX air over 15 s
+	seed(rfFixtureTime(30*time.Second), 10, 3)     // rebooted: uptime dropped
 
-	// Bounds are compared lexicographically against millisecond-precision
-	// sampled_at values, so they must themselves be in the millisecond layout
-	// — "10:00:00Z" would lexicographically exclude "10:00:00.000Z" (`.` < `Z`).
-	deltas, err := s.ClientRfDeltas("aa11", "2026-08-17T00:00:00.000Z", "2026-08-18T00:00:00.000Z")
+	from, to := rfFixtureWindow()
+	deltas, err := s.ClientRfDeltas("aa11", from, to)
 	if err != nil {
 		t.Fatalf("deltas: %v", err)
 	}
@@ -126,10 +154,11 @@ func TestRfDeltaNilWhenEitherEndpointMissingCounter(t *testing.T) {
 		handleClientRfSample(s, "test", "aa11", msg)
 	}
 	five := int64(5)
-	seed("2026-08-17T10:00:00.000Z", 1000, nil) // firmware without the counter
-	seed("2026-08-17T10:00:15.000Z", 1015, &five)
+	seed(rfFixtureTime(0), 1000, nil) // firmware without the counter
+	seed(rfFixtureTime(15*time.Second), 1015, &five)
 
-	deltas, err := s.ClientRfDeltas("aa11", "2026-08-17T00:00:00.000Z", "2026-08-18T00:00:00.000Z")
+	from, to := rfFixtureWindow()
+	deltas, err := s.ClientRfDeltas("aa11", from, to)
 	if err != nil {
 		t.Fatalf("deltas: %v", err)
 	}
@@ -156,10 +185,11 @@ func TestClientRfDeltasNormalizesPubkeyCase(t *testing.T) {
 			"rx_air_secs": rxAir,
 		})
 	}
-	seed("2026-08-17T10:00:00.000Z", 1000, 500)
-	seed("2026-08-17T10:00:15.000Z", 1015, 512)
+	seed(rfFixtureTime(0), 1000, 500)
+	seed(rfFixtureTime(15*time.Second), 1015, 512)
 
-	deltas, err := s.ClientRfDeltas("AA11", "2026-08-17T00:00:00.000Z", "2026-08-18T00:00:00.000Z")
+	from, to := rfFixtureWindow()
+	deltas, err := s.ClientRfDeltas("AA11", from, to)
 	if err != nil {
 		t.Fatalf("deltas: %v", err)
 	}
