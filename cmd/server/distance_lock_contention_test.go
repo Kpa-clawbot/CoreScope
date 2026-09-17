@@ -17,10 +17,22 @@ import (
 // continuously, while the test goroutine measures how long it takes to
 // complete W bare mu.Lock()/mu.Unlock() cycles. Each writer cycle must
 // wait for ALL currently-holding RLocks to release. Pre-fix, every reader
-// holds RLock for the entire compute (~ms), so each writer cycle waits
-// behind an active reader → avg cycle hundreds of microseconds to
-// milliseconds. Post-fix, readers hold RLock only long enough to grab
-// slice headers (microseconds), so writer cycles complete unimpeded.
+// holds RLock for the entire compute, so each writer cycle waits behind an
+// active reader. Post-fix, readers hold RLock only long enough to grab
+// slice headers, so writer cycles complete unimpeded.
+//
+// The threshold comes from measurement, and the gap it has to straddle is
+// enormous (issue #2038). On CI runners:
+//
+//	healthy    156µs, 222µs, 402µs   (three readings, three commits)
+//	regressed  201203µs              (RLock deliberately held across the compute)
+//
+// The old limit was a flat 150µs, which sits *inside* the healthy band, so
+// it failed on two consecutive master commits that passed on re-run without
+// a byte changed. 5ms is 12x above the worst healthy reading and 40x below
+// the regression, which is the widest possible separation from both. The
+// scale of the gap is the point: a #1239 regression is not marginal, it
+// serializes a millisecond-scale compute behind every writer.
 func TestComputeAnalyticsDistanceLockHoldDuration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping concurrency timing test in -short mode")
@@ -118,12 +130,11 @@ func TestComputeAnalyticsDistanceLockHoldDuration(t *testing.T) {
 	t.Logf("avg writer Lock/Unlock cycle: %dµs over %d cycles (total %v) with %d concurrent readers, %d hops, %d paths",
 		avgMicros, WriterCycles, elapsed, Readers, N, len(paths))
 
-	// If readers hold the main RLock for their entire compute, every
-	// writer Lock cycle waits for an active reader to release: avg cycle
-	// >> 100µs at this data scale. After the refactor, readers hold the
-	// main RLock only long enough to snapshot slice headers (<1µs), so
-	// writer cycles complete in tens of microseconds.
-	const MaxAvgMicros = 150
+	// See the measurements in the doc comment: healthy runs land in the
+	// hundreds of microseconds, a regression two orders of magnitude above
+	// that. Anything in between is a genuine change in lock-hold behaviour
+	// and deserves to be looked at, not re-run.
+	const MaxAvgMicros = 5000
 	if avgMicros > MaxAvgMicros {
 		t.Fatalf("avg writer Lock/Unlock cycle %dµs exceeds %dµs threshold — computeAnalyticsDistance is holding the main RLock for too long and blocking writers (issue #1239)",
 			avgMicros, MaxAvgMicros)
