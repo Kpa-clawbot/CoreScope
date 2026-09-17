@@ -24,7 +24,7 @@ Vanilla JS UI, Leaflet maps, live visualization, theming, and all public/ module
 - Use shared helpers from roles.js (ROLE_COLORS, TYPE_COLORS, getNodeStatus, getHealthThresholds)
 - Prefer `n.last_heard || n.last_seen` for display and status
 - No per-packet API calls from frontend — fetch bulk, filter client-side
-- Run `node test-packet-filter.js` and `node test-frontend-helpers.js` after filter/helper changes
+- Run `node tests/unit/test-packet-filter.js` and `node tests/unit/test-frontend-helpers.js` after filter/helper changes
 - Always bump cache busters in the SAME commit as code changes
 
 ## Key Files

@@ -55,7 +55,7 @@ If the fix touches ANY frontend file (`public/*.js`, `public/*.css`, or HTML) AN
 as a user-visible UX behavior (click/hover/navigation/rendering), the PR MUST include a
 browser-level assertion that would have caught the original bug — NOT only unit tests.
 
-- Look for an existing E2E harness first (e.g. `test-e2e-playwright.js`, `e2e/`, `tests/e2e/`,
+- Look for an existing E2E harness first (e.g. `tests/e2e/test-e2e-playwright.js`, `e2e/`, `tests/e2e/`,
   `playwright.config.*`, or whatever the repo uses). Add the assertion there.
 - If no E2E harness exists, ADD a small one rather than skip. A 30-line Playwright fixture
   hitting a public staging URL is acceptable.
