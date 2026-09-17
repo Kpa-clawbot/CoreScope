@@ -90,7 +90,7 @@ Every change must consider performance impact BEFORE implementation. This codeba
 No proof = no merge.
 
 ### 1. No commit without tests
-Every change that touches logic MUST have tests. For Go backend: `cd cmd/server && go test ./...` and `cd cmd/ingestor && go test ./...`, or `make test` for all 14 modules. For frontend: `node test-packet-filter.js && node test-aging.js && node test-frontend-helpers.js`. If you add new logic, add tests. No exceptions.
+Every change that touches logic MUST have tests. For Go backend: `cd cmd/server && go test ./...` and `cd cmd/ingestor && go test ./...`, or `make test` for all 14 modules. For frontend: `node tests/unit/test-packet-filter.js && node tests/unit/test-aging.js && node tests/unit/test-frontend-helpers.js`. If you add new logic, add tests. No exceptions.
 
 The SQLite driver (`github.com/mattn/go-sqlite3`) is cgo. **`CGO_ENABLED=0` still *builds*** — that is the trap. It links a stub, and the binary dies on the first query with `go-sqlite3 requires cgo to work. This is a stub`, so a green build proves nothing. A plain `GOOS=linux go build` likewise cannot cross-compile it. Use `make build` / `make crossbuild` — the latter needs [`zig`](https://ziglang.org/download/) as the cross C compiler and produces static musl binaries. Never re-add `CGO_ENABLED=0`.
 
@@ -202,7 +202,7 @@ All colors MUST use CSS variables. Never hardcode `#hex` values outside of `:roo
 ### Packet Filter (packet-filter.js)
 Standalone module. No dependencies on app globals (copies what it needs). Testable in Node.js:
 ```bash
-node test-packet-filter.js
+node tests/unit/test-packet-filter.js
 ```
 Uses firmware-standard type names (GRP_TXT, TXT_MSG, REQ) with aliases for convenience.
 
@@ -219,21 +219,13 @@ npm run test:full-coverage  # backend + instrumented frontend coverage via Playw
 ### Test Files
 ```bash
 # Backend (deterministic, run before every push)
-node test-packet-filter.js        # filter engine
-node test-aging.js                # node aging system
-node test-regional-filter.js      # regional observer filtering
-node test-decoder.js              # packet decoder
-node test-decoder-spec.js         # spec-driven + golden fixture tests
-node test-server-helpers.js       # extracted server functions
-node test-server-routes.js        # API route tests via supertest
-node test-packet-store.js         # in-memory packet store
-node test-db.js                   # SQLite operations
-node test-frontend-helpers.js     # frontend logic (via vm.createContext)
-node tools/e2e-test.js            # E2E: temp server + synthetic packets
-node tools/frontend-test.js       # frontend smoke: HTML, JS refs, API shapes
+sh test-all.sh                               # every suite in tests/unit
+node tests/unit/test-packet-filter.js        # filter engine
+node tests/unit/test-aging.js                # node aging system
+node tests/unit/test-frontend-helpers.js     # frontend logic (via vm.createContext)
 
 # Frontend E2E (requires running server or Playwright)
-node test-e2e-playwright.js       # 8 Playwright browser tests (default: localhost:3000)
+node tests/e2e/test-e2e-playwright.js       # Playwright browser tests (default: localhost:3000)
 ```
 
 ### Rules
@@ -248,14 +240,14 @@ node test-e2e-playwright.js       # 8 Playwright browser tests (default: localho
 2. Write unit tests for the logic
 3. Write/update Playwright tests if it's a UI change
 4. Run `npm test` — all tests must pass
-5. Run `node test-e2e-playwright.js` against a local server — E2E must pass
+5. Run `node tests/e2e/test-e2e-playwright.js` against a local server — E2E must pass
 6. THEN push to master
 
 ### Testing infrastructure
 - **Backend coverage**: c8 tracks server-side code in-process
 - **Frontend coverage**: Istanbul instruments `public/*.js` → Playwright exercises them → `window.__coverage__` extracted → nyc reports. Instrumented files are generated fresh each CI run, never checked in.
 - **CI pipeline**: backend tests + coverage → instrument frontend → start local server → Playwright E2E + coverage collection → badges update → deploy (only if all pass)
-- **Playwright tests default to localhost:3000** — NEVER run against prod. CI sets `BASE_URL=http://localhost:13581`. Running locally: start your server, then `node test-e2e-playwright.js`
+- **Playwright tests default to localhost:3000** — NEVER run against prod. CI sets `BASE_URL=http://localhost:13581`. Running locally: start your server, then `node tests/e2e/test-e2e-playwright.js`
 - **ARM machines**: Basic Playwright tests work with system chromium (`CHROMIUM_PATH=/usr/bin/chromium-browser`). Heavy coverage collection scripts may crash — use CI for those.
 
 Tests that need live mesh data can use `https://analyzer.00id.net` — all API endpoints are public, no auth required.
@@ -290,7 +282,7 @@ If the same logic exists in two places, it MUST be extracted into a shared funct
 ### Testability
 - **Write functions that are easy to test.** Pure functions (input → output, no side effects) are ideal. If a function reads from the DOM, the DB, and localStorage, it's untestable without mocking everything.
 - **Dependency injection enables testing.** Pass the node list, the map reference, the API function as parameters. Tests can substitute fakes.
-- **Test the real code, not copies.** Don't paste a function into a test file and test the copy. Import/require the actual module. If the module isn't importable (IIFE, browser-only), refactor it so it is — or use `vm.createContext` like `test-frontend-helpers.js` does.
+- **Test the real code, not copies.** Don't paste a function into a test file and test the copy. Import/require the actual module. If the module isn't importable (IIFE, browser-only), refactor it so it is — or use `vm.createContext` like `tests/unit/test-frontend-helpers.js` does.
 - **Every bug fix gets a regression test.** If it broke once, it'll break again. The test proves it stays fixed.
 
 ### Type Safety (without TypeScript)
@@ -372,7 +364,7 @@ One logical change per commit. Each commit is deployable. Each commit has its te
 | Subagent timed out mid-work | 4 | Give clear scope, don't try to run slow pipelines locally |
 
 ## File Naming
-- Tests: `test-{feature}.js` in repo root
+- Tests: `test-{feature}.js` in `tests/unit/` (standalone, listed in `test-all.sh`) or `tests/e2e/` (browser, listed in `scripts/non-unit-tests.json`) — never in repo root
 - No build step, no transpilation — write ES2020 for server, ES5/6 for frontend (broad browser support)
 
 ### Deep Linking

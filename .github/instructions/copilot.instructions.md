@@ -28,7 +28,7 @@ You will pay special attention to the following areas during your review:
 - **Project Architecture**: Does the PR respect the single Node.js server + static frontend architecture? Are changes in the right place?
 
 ### 2. Testing and Validation
-- **No commit without tests**: Is the backend logic change covered by unit tests? Is `test-packet-filter.js` or `test-aging.js` updated if necessary?
+- **No commit without tests**: Is the backend logic change covered by unit tests? Is `tests/unit/test-packet-filter.js` or `tests/unit/test-aging.js` updated if necessary?
 - **Browser Validation**: Has the contributor confirmed the change works in a browser? Is there a screenshot for visual changes?
 - **Cache Busters**: If any `public/` assets (`.js`, `.css`) were modified, has the cache buster in `public/index.html` been bumped in the *same commit*? This is critical.
 

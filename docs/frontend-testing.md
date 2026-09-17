@@ -13,13 +13,17 @@ Windows, use Git Bash and ensure `python3` resolves to Python 3 rather than a
 Microsoft Store alias; set `PYTHONUTF8=1` for the gate's Unicode output.
 No server or browser is started by this runner.
 
-When adding a root `test-*.js` file:
+Tests live in `tests/unit/` (standalone Node, run by `test-all.sh`) and
+`tests/e2e/` (needs a browser, a server or extra tooling). They run from the
+repo root, and refer to it as `REPO_ROOT`. When adding a `test-*.js` file:
 
-1. Add its `node test-name.js` command to `test-all.sh` if it runs standalone.
-2. Otherwise add it to `scripts/non-unit-tests.json`, with a prerequisite or
+1. If it runs standalone, put it in `tests/unit/` and add its
+   `node tests/unit/test-name.js` command to `test-all.sh`.
+2. Otherwise put it in `tests/e2e/` and add it to `scripts/non-unit-tests.json`, with a prerequisite or
    reason explaining why it belongs outside the unit runner. Browser suites
    still need explicit selection in the E2E workflow to become CI gates.
-3. Run `node test-test-inventory.js`. The guard rejects unclassified files,
+3. Run `node tests/unit/test-test-inventory.js`. The guard rejects `test-*.js`
+   files in the repo root, unclassified files,
    duplicate assignments, removed files left in a list, undocumented groups,
    and local/CI entry points that bypass the unit runner.
 
