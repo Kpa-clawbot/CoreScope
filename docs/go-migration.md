@@ -78,9 +78,15 @@ Node.js uses `mqtt://` and `mqtts://` scheme prefixes. The Go MQTT library (paho
 
 Both engines support `retention.nodeDays` (default: 7). Stale nodes are moved to the `inactive_nodes` table on the same schedule. No config change needed.
 
-### `packetStore.maxMemoryMB` (Go ignores this — it's Node-only)
+### `packetStore.maxMemoryMB` (both engines read it)
 
-The Node.js server has a configurable in-memory packet store limit (`packetStore.maxMemoryMB`). The Go server has its own in-memory store that loads all packets from SQLite on startup — it does not read this config value. This is safe to leave in your config; Go simply ignores it.
+Both engines take a memory budget for the in-memory packet store from `packetStore.maxMemoryMB`. In the Go server it does three things:
+
+- **Startup:** the cold load stops once the budget is reached, so the server starts with the newest packets that fit rather than everything in SQLite.
+- **While running:** the store evicts oldest-first when it passes the budget, down to 85% of it.
+- **Go heap:** when neither `GOMEMLIMIT` nor `runtime.maxMemoryMB` is set, `GOMEMLIMIT` is derived from this value plus 50% headroom.
+
+Unset (the default) means no limit: every packet within retention is loaded and none is evicted for memory. An old Node-era value left in a config file is therefore **not** inert — it caps the Go store too. Check it before upgrading, and read `/api/perf` (`packetStore.trackedMB` against `maxMB`) afterwards.
 
 ### `channelKeys` / `channel-rainbow.json` (compatible)
 
@@ -338,7 +344,7 @@ docker start corescope-prod
 |---------|--------|------------|
 | Companion bridge advertisements | `meshcore/advertisement` topic not handled by Go ingestor | Users relying on companion bridge adverts must stay on Node.js or wait for Go support |
 | Companion bridge `self_info` | `meshcore/self_info` topic not handled | Same as above — minimal impact (only affects local node identity) |
-| `packetStore.maxMemoryMB` config | Go doesn't read this setting | Go manages its own memory; no action needed |
+| `packetStore.maxMemoryMB` config | Read by both engines, but Go's store accounts memory differently | Review the value before upgrading — see [`packetStore.maxMemoryMB`](#packetstoremaxmemorymb-both-engines-read-it) |
 | Docker Hub images | Go images not published yet | Build locally with `docker build -f Dockerfile.go` |
 | `manage.sh --engine` flag | Can't toggle engines via manage.sh | Manual image swap required (see [Switch to Go](#switch-to-go)) |
 
@@ -349,7 +355,7 @@ docker start corescope-prod
 | `engine` field in `/api/health` | Not present or `"node"` | Always `"go"` |
 | MQTT URL scheme | Uses `mqtt://` / `mqtts://` natively | Auto-converts to `tcp://` / `ssl://` (transparent) |
 | Process model | Single Node.js process (server + ingestor) | Two binaries: `corescope-ingestor` + `corescope-server` (managed by supervisord) |
-| Memory management | Configurable via `packetStore.maxMemoryMB` | Loads all packets; no configurable limit |
+| Memory management | Configurable via `packetStore.maxMemoryMB` | Same setting: caps the cold load, evicts oldest-first above it, and sets `GOMEMLIMIT` when that is otherwise unset |
 | Startup time | Faster (no compilation) | Slightly slower (loads all packets from DB into memory) |
 
 ---

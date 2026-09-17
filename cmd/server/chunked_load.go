@@ -468,6 +468,7 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 	s.mu.Lock()
 	for _, tx := range s.packets {
 		pickBestObservation(tx)
+		s.trackedBytes += rechargeTx(tx)
 		s.indexByNode(tx)
 	}
 	// Restore the "s.packets sorted oldest-first by FirstSeen" invariant
@@ -592,7 +593,7 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 				s.byPayloadType[pt] = append(s.byPayloadType[pt], tx)
 			}
 			s.trackAdvertPubkey(tx)
-			s.trackedBytes += estimateStoreTxBytes(tx)
+			s.trackedBytes += rechargeTx(tx)
 		}
 
 		if obsID.Valid {
