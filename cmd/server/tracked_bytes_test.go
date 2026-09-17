@@ -164,3 +164,40 @@ func BenchmarkEstimateStoreObsBytes(b *testing.B) {
 		estimateStoreObsBytes(obs)
 	}
 }
+
+// TestTrackedBytes_PathKnownAfterCreate reproduces the load/ingest order: a tx
+// is charged when it is created, before its observations set the path. Once
+// pickBestObservation has run, recharging must pick up the path costs, and
+// eviction must subtract exactly what was charged.
+func TestTrackedBytes_PathKnownAfterCreate(t *testing.T) {
+	store := makeTestStore(0, time.Now().UTC(), 0)
+	store.retentionHours = 1
+
+	tx := &StoreTx{ID: 1, Hash: "aabb", FirstSeen: time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339),
+		obsKeys: map[string]bool{}, observerSet: map[string]bool{}}
+	store.trackedBytes += rechargeTx(tx)
+	bare := store.trackedBytes
+
+	obs := &StoreObs{ID: 1, TransmissionID: 1, ObserverID: "o1", PathJSON: `["a1","b2","c3","d4","e5","f6"]`}
+	tx.Observations = append(tx.Observations, obs)
+	store.trackedBytes += estimateStoreObsBytes(obs)
+	pickBestObservation(tx)
+	store.trackedBytes += rechargeTx(tx)
+	store.packets = append(store.packets, tx)
+	store.byHash[tx.Hash] = tx
+	store.byTxID[tx.ID] = tx
+	store.byObsID[obs.ID] = obs
+
+	if want := estimateStoreTxBytes(tx) + estimateStoreObsBytes(obs); store.trackedBytes != want {
+		t.Fatalf("trackedBytes = %d, want %d (path costs missing?)", store.trackedBytes, want)
+	}
+	if tx.accountedBytes <= bare {
+		t.Fatalf("recharge did not add the path costs: %d <= %d", tx.accountedBytes, bare)
+	}
+	if n := store.EvictStale(); n != 1 {
+		t.Fatalf("evicted %d, want 1", n)
+	}
+	if store.trackedBytes != 0 {
+		t.Fatalf("trackedBytes after evicting everything = %d, want 0", store.trackedBytes)
+	}
+}

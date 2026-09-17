@@ -339,6 +339,7 @@ func main() {
 			store.mu.Lock()
 			for j := i; j < end && j < len(store.packets); j++ {
 				pickBestObservation(store.packets[j])
+				store.trackedBytes += rechargeTx(store.packets[j])
 			}
 			store.mu.Unlock()
 			if end < totalPackets {
