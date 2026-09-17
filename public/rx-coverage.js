@@ -245,12 +245,12 @@
       if (p) { var dd = parseInt(p.get('days'), 10); if ([1, 7, 14, 30].indexOf(dd) >= 0) days = dd; selectedRx = (p.get('rx') || '').toLowerCase(); }
     } catch (e) {}
     container.innerHTML = pageHtml();
-    // Share the main map's saved position and deployment defaults (#2032).
+    // Initialize viewport: explicit URL hash, coverage page's saved position, deployment defaults (#2032).
     var viewport = parseViewportHash(location.hash);
     var explicitViewport = !!viewport;
     if (!viewport) {
       try {
-        var saved = JSON.parse(localStorage.getItem('map-view'));
+        var saved = JSON.parse(localStorage.getItem('rx-coverage-view'));
         if (saved && saved.lat != null && saved.lng != null && saved.zoom != null) {
           viewport = parseViewportHash(new URLSearchParams({ lat: saved.lat, lon: saved.lng, zoom: saved.zoom }).toString());
         }
@@ -276,7 +276,7 @@
     map.on('moveend zoomend', debounce(function () {
       if (destroyed || current !== generation || !map) return;
       var center = map.getCenter();
-      try { localStorage.setItem('map-view', JSON.stringify({ lat: center.lat, lng: center.lng, zoom: map.getZoom() })); } catch (e) {}
+      try { localStorage.setItem('rx-coverage-view', JSON.stringify({ lat: center.lat, lng: center.lng, zoom: map.getZoom() })); } catch (e) {}
       syncHash();
       drawCoverage();
     }, 200));

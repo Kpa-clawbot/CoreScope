@@ -12,7 +12,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 function harness(options = {}) {
   let page;
   const maps = [], requests = [], timers = [];
-  const storage = { 'map-view': options.saved };
+  const storage = { 'rx-coverage-view': options.saved };
   const location = { hash: options.hash || '#/rx-coverage' };
   const context = {
     URLSearchParams, location, Promise, console,
@@ -58,7 +58,8 @@ function harness(options = {}) {
   await h.init(); assert.deepStrictEqual(h.maps[0].center, [0, 0]); assert(!h.requests.includes('/api/config/map')); h.timers.forEach(fn => fn()); await flush();
   assert(!h.requests.some(url => url.includes('bbox=-90,-180')), 'explicit URL viewport must not be fitted to observer');
   h.maps[0].setView([40, 50], 10); h.maps[0].events.moveend();
-  assert.deepStrictEqual(JSON.parse(h.storage['map-view']), { lat: 40, lng: 50, zoom: 10 });
+  assert.deepStrictEqual(JSON.parse(h.storage['rx-coverage-view']), { lat: 40, lng: 50, zoom: 10 });
+  assert.equal(h.storage['map-view'], undefined, 'coverage must not write the main map\'s saved viewport');
   const params = new URLSearchParams(h.location.hash.split('?')[1]);
   for (const [key, value] of Object.entries({ days: '14', rx: 'abcd', lat: '40.00000', lon: '50.00000', zoom: '10' })) assert.equal(params.get(key), value);
   for (const saved of ['broken', 'null', '{}', '{"lat":12,"lng":34,"zoom":"invalid"}', '{"lat":null,"lng":4,"zoom":8}', '{"lat":91,"lng":4,"zoom":8}', '{"lat":"nope","lng":4,"zoom":8}']) {
@@ -85,8 +86,8 @@ function harness(options = {}) {
   const oldTimer = h.timers[0]; h.page.destroy(); h.page.init({ innerHTML: '' }); await flush();
   const before = h.requests.length; oldTimer(); assert.equal(h.requests.length, before);
   h.maps[1].setView([30, 60], 8);
-  const oldHash = h.location.hash, oldSaved = h.storage['map-view'];
-  oldMove(); assert.equal(h.location.hash, oldHash); assert.equal(h.storage['map-view'], oldSaved); assert.equal(h.requests.length, before);
+  const oldHash = h.location.hash, oldSaved = h.storage['rx-coverage-view'];
+  oldMove(); assert.equal(h.location.hash, oldHash); assert.equal(h.storage['rx-coverage-view'], oldSaved); assert.equal(h.requests.length, before);
   let ready;
   h = harness({ ready: new Promise(r => { ready = r; }) });
   h.page.init({ innerHTML: '' }); h.page.destroy(); h.page.init({ innerHTML: '' }); ready(); await flush(); assert.equal(h.maps.length, 1, 'old initialization must not survive destroy/re-entry');

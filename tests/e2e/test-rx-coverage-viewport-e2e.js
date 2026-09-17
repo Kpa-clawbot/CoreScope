@@ -50,9 +50,10 @@ const BASE = process.env.BASE_URL || 'http://localhost:3000';
     assertViewport(await viewport(), { lat: 12, lng: 34, zoom: 6 });
     await page.evaluate(() => window.__rxTestMap.setView([22, 44], 10, { animate: false }));
     await page.waitForFunction(() => Math.abs(Number(new URLSearchParams(location.hash.split('?')[1]).get('lat')) - 22) < 0.001);
-    assertViewport(await page.evaluate(() => JSON.parse(localStorage.getItem('map-view'))), { lat: 22, lng: 44, zoom: 10 });
+    assertViewport(await page.evaluate(() => JSON.parse(localStorage.getItem('rx-coverage-view'))), { lat: 22, lng: 44, zoom: 10 });
+    assert.equal(await page.evaluate(() => localStorage.getItem('map-view')), null, 'coverage must not write the main map\'s saved viewport');
     await page.reload(); await waitMap(); assertViewport(await viewport(), { lat: 22, lng: 44, zoom: 10 });
-    // Remove the shareable URL to independently verify shared saved-map state.
+    // Remove the shareable URL to independently verify this page's saved state.
     await page.goto(BASE + '/#/rx-coverage'); await page.reload(); await waitMap();
     assertViewport(await viewport(), { lat: 22, lng: 44, zoom: 10 });
     await page.goto(BASE + '/#/rx-coverage?days=14&rx=abcd&lat=0&lon=0&zoom=5'); await page.reload(); await waitMap();
