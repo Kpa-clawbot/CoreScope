@@ -228,7 +228,8 @@ corescope/
 │   └── entrypoint-go.sh     # Container entrypoint
 ├── Dockerfile               # Multi-stage Go build + Alpine runtime
 ├── config.example.json      # Example configuration
-├── test-*.js                # Node.js test suite (frontend + legacy)
+├── tests/                   # Node.js test suite: unit/ (test-all.sh) and e2e/ (Playwright)
+├── test-all.sh              # Runs every suite in tests/unit
 └── tools/                   # Generators, E2E tests, utilities
 ```
 
@@ -266,7 +267,7 @@ make test
 npm test
 
 # Playwright E2E (requires running server on localhost:3000)
-node test-e2e-playwright.js
+node tests/e2e/test-e2e-playwright.js
 ```
 
 ### Generate Test Data
