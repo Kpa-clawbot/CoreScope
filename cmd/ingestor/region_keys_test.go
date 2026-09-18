@@ -391,10 +391,10 @@ func TestDeclaredRegionSourcesIgnoresWildcard(t *testing.T) {
 	}
 }
 
-// insertDeclaredRegionsRow seeds one node_declared_regions answer, creating
-// the table first. That table is optional: this ingestor never creates it, and
-// declaredRegionSources probes sqlite_master before reading it. A test that
-// wants the optional source has to bring it.
+// insertDeclaredRegionsRow seeds one node_declared_regions answer. The base
+// schema creates the table (client_regions.go fills it); the CREATE here is
+// kept as IF NOT EXISTS so the fixture also documents the shape the server
+// and declaredRegionSources read.
 func insertDeclaredRegionsRow(t *testing.T, s *Store, target, observedAt, regionsCSV string) {
 	t.Helper()
 	if _, err := s.db.Exec(`
@@ -574,7 +574,7 @@ func TestRegionKeySetConcurrentRefreshAndMatch(t *testing.T) {
 
 // TestDeclaredRegionSourcesReadsConfiguredScope is the upstream-native source:
 // nodes.configured_scope, written by the observer /neighbors ingestion. It is
-// the only source a stock install has, so a derived tier that read only the
+// the only source an install without mobile clients fills, so a derived tier that read only the
 // optional table would be permanently empty here.
 //
 // The stored form carries the leading "#" (normalizeScopeList puts it there),

@@ -748,6 +748,43 @@ func createDeclaredRegionsTable(t *testing.T, srv *Server) {
 	}
 }
 
+// TestDeclaredRegionsTableCreatedAfterStartupIsRead covers the first run of a
+// build whose ingestor creates node_declared_regions: supervisord starts both
+// processes together, so the server's startup probe can run before the table
+// exists. The merge must still find it without a restart.
+func TestDeclaredRegionsTableCreatedAfterStartupIsRead(t *testing.T) {
+	srv, _ := setupScopeAuditServer(t)
+	if srv.db.declaredRegionsTablePresent() {
+		t.Fatal("precondition: the fixture must start without node_declared_regions")
+	}
+	// Created behind the server's back, with no detectSchema re-probe: exactly
+	// what happens when the ingestor creates it after the server started.
+	if _, err := srv.db.conn.Exec(`
+		CREATE TABLE node_declared_regions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			target TEXT NOT NULL,
+			rx_pubkey TEXT NOT NULL,
+			observed_at TEXT NOT NULL,
+			ingested_at TEXT NOT NULL,
+			regions_csv TEXT NOT NULL,
+			truncated INTEGER NOT NULL DEFAULT 0,
+			UNIQUE(target, rx_pubkey, observed_at)
+		)`); err != nil {
+		t.Fatal(err)
+	}
+	if srv.db.hasDeclaredRegionsTable {
+		t.Fatal("precondition: the startup flag must still be false, or this tests nothing")
+	}
+	seedSecondSource(t, srv, testFullPubkeyA, "2026-09-18T09:09:32Z", "*,hu", 0)
+	got, ok := declaredFor(t, srv, testFullPubkeyA)
+	if !ok || got.RegionsCSV != "*,hu" {
+		t.Fatalf("got %+v (found=%v), want the answer from the late-created table", got, ok)
+	}
+	if !srv.db.declaredRegionsTableLate.Load() {
+		t.Error("the late sighting should latch so later calls skip the probe")
+	}
+}
+
 func seedSecondSource(t *testing.T, srv *Server, target, observedAt, regionsCSV string, truncated int) {
 	t.Helper()
 	if _, err := srv.db.conn.Exec(

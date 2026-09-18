@@ -744,11 +744,12 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		return
 	}
 
-	// Mobile client topics: meshcore/client/{PUBLIC_KEY}/packets (RX coverage)
-	// and meshcore/client/{PUBLIC_KEY}/rf (RF environment samples). A roaming
-	// companion reports where it directly heard a node, or its own radio's
-	// counters; both are handled in isolation from the observer/observations
-	// path. EMQX ACL binds parts[2] to the client's own key.
+	// Mobile client topics: meshcore/client/{PUBLIC_KEY}/packets (RX coverage),
+	// meshcore/client/{PUBLIC_KEY}/rf (RF environment samples) and
+	// meshcore/client/{PUBLIC_KEY}/regions (a repeater's declared region list).
+	// A roaming companion reports where it directly heard a node, its own
+	// radio's counters, or what a repeater answered when asked; all are
+	// handled in isolation from the observer/observations path. EMQX ACL binds parts[2] to the client's own key.
 	//
 	// The topic match and the enable-gate MUST be separate: matching on
 	// parts[1]=="client" always returns from this branch, whatever the config
@@ -775,6 +776,13 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		case "rf":
 			if cfg.ClientRfSamplesEnabled() {
 				handleClientRfSample(store, tag, parts[2], msg)
+			}
+		case "regions":
+			// Region-discovery answers ride the same opt-in as coverage: both
+			// are CoreDrive RX uploads, and a deployment that accepts one
+			// client stream has already decided to trust these clients.
+			if cfg.ClientRxCoverageEnabled() {
+				handleClientRegions(store, tag, parts[2], msg)
 			}
 		}
 		return

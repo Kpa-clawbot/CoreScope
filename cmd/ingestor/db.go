@@ -427,6 +427,24 @@ func applySchema(db *sql.DB) error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_crf_prune ON client_rf_samples(sampled_at);
 		CREATE INDEX IF NOT EXISTS idx_crf_track ON client_rf_samples(rx_pubkey, sampled_at);
+
+		-- Region lists repeaters declared when a mobile client asked them over RF
+		-- (meshcore/client/{PUBLIC_KEY}/regions, see client_regions.go). The
+		-- second confirmed-scope source next to nodes.configured_scope: the
+		-- server's Scope Audit and the auto region-key tier both read the newest
+		-- row per target. observed_at is the answer's own instant (canonical UTC
+		-- RFC3339, comparable with configured_scope_at), never the arrival time.
+		CREATE TABLE IF NOT EXISTS node_declared_regions (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			target      TEXT NOT NULL,
+			rx_pubkey   TEXT NOT NULL,
+			observed_at TEXT NOT NULL,
+			ingested_at TEXT NOT NULL,
+			regions_csv TEXT NOT NULL,
+			truncated   INTEGER NOT NULL DEFAULT 0,
+			UNIQUE(target, rx_pubkey, observed_at)
+		);
+		CREATE INDEX IF NOT EXISTS idx_ndr_target ON node_declared_regions(target, observed_at);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("base schema: %w", err)

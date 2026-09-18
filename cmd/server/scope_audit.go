@@ -98,6 +98,26 @@ func splitRegionsCSV(csv string) []string {
 // mirrors the ingestor's own CurrentDeclaredRegions exactly: a drive
 // buffered offline can arrive days late, and ordering by arrival would let
 
+// declaredRegionsTablePresent reports whether node_declared_regions exists,
+// re-probing while it has not been seen. The startup probe alone is not
+// enough: the ingestor creates the table as part of its own schema setup, and
+// supervisord starts both processes together, so a server that probed first
+// would ignore every mobile-client region answer until its next restart.
+// Once seen the answer latches, so the steady state costs nothing; until
+// then it is one sqlite_master lookup per caller, and both callers sit
+// behind 30s caches.
+func (db *DB) declaredRegionsTablePresent() bool {
+	if db.hasDeclaredRegionsTable || db.declaredRegionsTableLate.Load() {
+		return true
+	}
+	var n int
+	if err := db.conn.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'node_declared_regions'`).Scan(&n); err != nil || n == 0 {
+		return false
+	}
+	db.declaredRegionsTableLate.Store(true)
+	return true
+}
+
 type DeclaredRegionsRow struct {
 	Target     string
 	ObservedAt string
@@ -166,7 +186,7 @@ func (db *DB) AllCurrentDeclaredRegions() ([]DeclaredRegionsRow, error) {
 		rows.Close()
 	}
 
-	if db.hasDeclaredRegionsTable {
+	if db.declaredRegionsTablePresent() {
 		rows, err := db.conn.Query(`
 			WITH ranked AS (
 				SELECT target, observed_at, regions_csv, truncated,
