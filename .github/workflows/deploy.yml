@@ -578,6 +578,20 @@ jobs:
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1640-compare-discovery-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 node tests/e2e/test-neighbor-map-btn-clip-e2e.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node tests/e2e/test-rx-coverage-viewport-e2e.js 2>&1 | tee -a e2e-output.txt
+          # Issue #2037: these eight sat in tests/e2e/ with no runner at all.
+          # Measured on upstream master in CI run 35340835178: all eight pass,
+          # 45 seconds together. test-rx-coverage-mobile-nav-e2e.js is the
+          # ninth that passed and is deliberately NOT here: it exits 0 with
+          # "SKIP (clientRxCoverage disabled on this deployment)", which is the
+          # default, so wiring it in would add a vacuous pass rather than a guard.
+          BASE_URL=http://localhost:13581 node tests/e2e/test-1110-live-filter.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node tests/e2e/test-analytics-fluid-charts.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node tests/e2e/test-e2e-1267-mobile-vcr.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1274-legend-coverage-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1648-m5-icons-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node tests/e2e/test-live-dedup.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node tests/e2e/test-nodes-export-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node tests/e2e/test-show-neighbors.js 2>&1 | tee -a e2e-output.txt
 
       # #1616: slide-over focus-restore flake-gate. Runs the slide-over
       # E2E 20 consecutive times against the SAME backend instance so
