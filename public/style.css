@@ -4534,6 +4534,13 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .map-side-pane .pane-toggle { cursor: pointer; padding: 8px; font-size: 14px; text-align: center; }
 .map-side-pane .pane-content { display: none; }
 .map-side-pane.expanded .pane-content { display: block; }
+/* #1998: controls belong to the Leaflet area, outside the inspector gutter. */
+@media (min-width: 641px) {
+  #mapSidePane ~ .map-controls { right: calc(32px + 12px); transition: right 0.2s; }
+  #mapSidePane ~ .map-controls-toggle { right: calc(32px + 10px); transition: right 0.2s; }
+  #mapSidePane.expanded ~ .map-controls { right: calc(320px + 12px); }
+  #mapSidePane.expanded ~ .map-controls-toggle { right: calc(320px + 10px); }
+}
 /* #1236: on mobile the path-inspector side pane was eating 32px of horizontal
    width (flex:0 0 32px) inside #map-wrap, leaving an unused gutter on the
    right of the leaflet canvas. Path Inspector is a desktop-only convenience;
