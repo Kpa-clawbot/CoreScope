@@ -62,6 +62,69 @@ function buildFixture() {
   return nodes;
 }
 
+// #2030: release an old map's asynchronous response only after teardown,
+// including after a replacement map has already finished loading.
+async function checkMapTeardown(browser, stage, revisit) {
+  const page = await browser.newPage();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => {
+    if (message.type() === 'error' && message.text().includes('Map load error')) errors.push(message.text());
+  });
+  await page.route('**/api/**', route => route.fulfill({ json: {} }));
+  await page.goto(BASE + '/#/tools');
+  await page.waitForFunction(() => typeof fetchAllNodes === 'function');
+  await page.evaluate(stage => {
+    window.__pendingMapResponse = null;
+    let first = true;
+    let load = 0;
+    const defer = value => new Promise(resolve => { window.__pendingMapResponse = () => resolve(value); });
+    const originalApi = window.api;
+    window.api = async function (path, options) {
+      if (path === '/config/regions' || path === '/observers') {
+        const value = path === '/observers' ? { observers: [] } : {};
+        if (first && path === stage) { first = false; return defer(value); }
+        return value;
+      }
+      return originalApi(path, options);
+    };
+    window.fetchAllNodes = async function () {
+      const name = ++load === 1 ? 'OLD MAP' : 'CURRENT MAP';
+      const value = { nodes: [{ public_key: name === 'OLD MAP' ? 'aa'.repeat(32) : 'bb'.repeat(32), name, role: 'repeater', lat: 1, lon: 1, last_seen: new Date().toISOString() }], counts: { repeaters: 1 } };
+      if (first && stage === 'nodes') { first = false; return defer(value); }
+      return value;
+    };
+    location.hash = '#/map';
+  }, stage);
+  await page.waitForFunction(() => typeof window.__pendingMapResponse === 'function');
+  await page.evaluate(() => { location.hash = '#/tools'; });
+  await page.waitForSelector('#leaflet-map', { state: 'detached' });
+  if (revisit) {
+    await page.evaluate(() => { location.hash = '#/map'; });
+    await page.waitForSelector('#leaflet-map[data-loaded="true"]');
+  }
+  const before = await page.evaluate(() => ({ nodes: JSON.stringify(window.__mc_nodes), html: document.getElementById('app').innerHTML }));
+  await page.evaluate(async () => {
+    window.__pendingMapResponse();
+    // A rendering turn drains the released async chain; no race-prone sleep.
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  });
+  const after = await page.evaluate(() => ({ nodes: JSON.stringify(window.__mc_nodes), html: document.getElementById('app').innerHTML }));
+  try {
+    assert(errors.length === 0, 'teardown must not log errors: ' + errors.join('; '));
+    assert(after.nodes === before.nodes, 'old response must not overwrite the map node set');
+    if (!revisit) assert(after.html === before.html, 'old response must not change the destination page');
+    else {
+      // A stale completion must not attach a second pane listener either.
+      await page.locator('#mapControlsToggle').click();
+      await page.locator('#mapPaneToggle').click();
+      assert(await page.locator('#mapSidePane').evaluate(el => el.classList.contains('expanded')), 'replacement inspector must toggle exactly once');
+    }
+  } finally {
+    await page.close();
+  }
+}
+
 (async () => {
   const launchOpts = {
     headless: true,
@@ -147,6 +210,11 @@ function buildFixture() {
     assert(hasMarker, 'no marker with _nodeKey for the page-2 node was rendered');
   });
 
+  for (const stage of ['/config/regions', 'nodes', '/observers']) {
+    for (const revisit of [false, true]) {
+      await step('late ' + stage + ' response after ' + (revisit ? 'map replacement' : 'map teardown'), () => checkMapTeardown(browser, stage, revisit));
+    }
+  }
   await browser.close();
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed > 0 ? 1 : 0);

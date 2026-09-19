@@ -176,6 +176,43 @@ async function run() {
       'desktop must show all controls (got ' + data.visibleControls + '/' + data.totalControls + ')');
   });
 
+  // #1998: exercise pointer delivery and actual Leaflet bounds, not selectors
+  // or forced clicks (which hide an overlapping Map Controls button).
+  for (const width of [1400, 800, 641, 640, 375]) {
+    await step('inspector and controls do not overlap at ' + width + 'px', async () => {
+      await p2.setViewportSize({ width, height: 900 });
+      await p2.reload();
+      await p2.waitForSelector('#leaflet-map[data-loaded="true"]');
+      const controls = p2.locator('#mapControls');
+      if (!await controls.isVisible()) await p2.locator('#mapControlsToggle').click();
+      const pane = p2.locator('#mapSidePane');
+      const toggle = p2.locator('#mapPaneToggle');
+      for (const expanded of width > 640 ? [false, true, false] : [false]) {
+        if (width > 640) {
+          if (await pane.evaluate(el => el.classList.contains('expanded')) !== expanded) await toggle.click();
+          await p2.waitForFunction(expected => {
+            const el = document.getElementById('mapSidePane');
+            return Math.abs(el.getBoundingClientRect().width - (expected ? 320 : 32)) < 1;
+          }, expanded);
+          const hit = await toggle.evaluate(el => {
+            const r = el.getBoundingClientRect();
+            return el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
+          });
+          assert(hit, 'inspector toggle center must receive the pointer');
+        } else {
+          assert(!await pane.isVisible(), 'mobile inspector must remain hidden');
+        }
+        const bounds = await p2.evaluate(() => {
+          const map = document.getElementById('leaflet-map').getBoundingClientRect();
+          return ['mapControls', 'mapControlsToggle'].map(id => {
+            const r = document.getElementById(id).getBoundingClientRect();
+            return { id, inside: r.left >= map.left && r.right <= map.right + 1 && r.top >= map.top && r.bottom <= map.bottom + 1 };
+          });
+        });
+        bounds.forEach(b => assert(b.inside, b.id + ' must stay inside the Leaflet area'));
+      }
+    });
+  }
   await browser.close();
 
   console.log('\n' + passed + '/' + (passed + failed) + ' tests passed' +

@@ -602,6 +602,7 @@
       }
     }
     map = L.map('leaflet-map', { zoomControl: true }).setView(initCenter, initZoom);
+    const initializedMap = map;
 
     // If navigated with ?node=PUBKEY, highlight that node after markers load
     targetNodeKey = urlParams.get('node') || null;
@@ -737,7 +738,7 @@
     }
 
     // Fix map size on SPA load
-    setTimeout(() => map.invalidateSize(), 100);
+    setTimeout(() => { if (map === initializedMap) map.invalidateSize(); }, 100);
 
     // Controls toggle
     const toggleBtn = document.getElementById('mapControlsToggle');
@@ -949,6 +950,7 @@
     (async function () {
       try {
         const gf = await api('/config/geo-filter', { ttl: 3600 });
+        if (map !== initializedMap) return;
         if (!gf || !gf.polygon || gf.polygon.length < 3) return;
         const geoColor = getComputedStyle(document.documentElement).getPropertyValue('--geo-filter-color').trim() || '#3b82f6';
         const latlngs = gf.polygon.map(function (p) { return [p[0], p[1]]; });
@@ -998,6 +1000,7 @@
     });
 
     loadNodes().then(() => {
+      if (map !== initializedMap) return;
       // Check for route from packet detail (via sessionStorage)
       const routeHopsJson = sessionStorage.getItem('map-route-hops');
       if (routeHopsJson) {
@@ -1710,19 +1713,26 @@
   }
 
   async function loadNodes() {
+    const loadingMap = map;
+    if (!loadingMap) return;
     try {
       // Load regions from config + observed IATAs
-      try { REGION_NAMES = await api('/config/regions', { ttl: 3600 }); } catch {}
+      let regions = REGION_NAMES;
+      try { regions = await api('/config/regions', { ttl: 3600 }); } catch {}
+      if (map !== loadingMap) return;
+      REGION_NAMES = regions;
 
       const aqs = AreaFilter.areaQueryString();
       // Paginate past the server's per-request node cap (listLimits.nodesMax)
       // so actively-relaying repeaters that last advertised hours ago still
       // appear instead of being truncated by the top-N window. See fetchAllNodes.
       const data = await fetchAllNodes(`&lastHeard=${filters.lastHeard}${aqs}`, { ttl: CLIENT_TTL.nodeList });
-      nodes = data.nodes || [];
+      if (map !== loadingMap) return;
 
       // Load observers for jump buttons + map markers
       const obsData = await api('/observers', { ttl: CLIENT_TTL.observers });
+      if (map !== loadingMap) return;
+      nodes = data.nodes || [];
       observers = obsData.observers || [];
 
       buildRoleChecks(data.counts || {});
@@ -1748,6 +1758,7 @@
           map.setView([targetNode.lat, targetNode.lon], 14);
           // Delay popup open slightly — Leaflet needs the map to settle after setView
           setTimeout(() => {
+            if (map !== loadingMap) return;
             let found = false;
             const findIn = function (layer) {
               if (found || !layer || !layer.eachLayer) return;
@@ -1786,12 +1797,12 @@
       // Don't fitBounds on initial load — respect the Bay Area default or saved view
       // Only fitBounds on subsequent data refreshes if user hasn't manually panned
     } catch (e) {
-      console.error('Map load error:', e);
+      if (map === loadingMap) console.error('Map load error:', e);
     } finally {
       // Always signal data-loaded — even on error — so E2E tests can proceed.
       // Otherwise an api() failure leaves the test waiting forever.
       var mapContainer = document.getElementById('leaflet-map');
-      if (mapContainer) mapContainer.setAttribute('data-loaded', 'true');
+      if (map === loadingMap && mapContainer) mapContainer.setAttribute('data-loaded', 'true');
     }
   }
 
