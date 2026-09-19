@@ -61,6 +61,7 @@ type Config struct {
 	ClientRxCoverage     *ClientRxCoverageConfig     `json:"clientRxCoverage,omitempty"`
 	ClientRxObservations *ClientRxObservationsConfig `json:"clientRxObservations,omitempty"`
 	ClientRfSamples      *ClientRfSamplesConfig      `json:"clientRfSamples,omitempty"`
+	ClientRegions        *ClientRegionsConfig        `json:"clientRegions,omitempty"`
 	GeoFilter            *GeoFilterConfig            `json:"geo_filter,omitempty"`
 	// PathTrust configures the minimum path-hash prefix length trusted as
 	// mapping/topology evidence (issue #1784).
@@ -176,6 +177,17 @@ func (c *Config) ClientRfSamplesEnabled() bool {
 	return c.ClientRfSamples != nil && c.ClientRfSamples.Enabled
 }
 
+// ClientRegionsConfig controls the opt-in region-discovery answer stream.
+type ClientRegionsConfig struct {
+	Enabled bool `json:"enabled"`
+}
+
+// ClientRegionsEnabled reports whether declared-region answers are recorded.
+// Default false.
+func (c *Config) ClientRegionsEnabled() bool {
+	return c.ClientRegions != nil && c.ClientRegions.Enabled
+}
+
 // RetentionConfig controls how long stale nodes are kept before being moved to inactive_nodes.
 type RetentionConfig struct {
 	NodeDays     int `json:"nodeDays"`
@@ -202,6 +214,11 @@ type RetentionConfig struct {
 	// client_rf_samples table; 0 disables. Bounds the table the opt-in RF
 	// sample stream would otherwise grow without limit.
 	ClientRfDays int `json:"clientRfDays"`
+	// ClientRegionsDays is the retention window (by observed_at) for the
+	// node_declared_regions table; 0 disables. Bounds the table the opt-in
+	// region-discovery stream would otherwise grow without limit. Consumed by
+	// Task 6's pruner.
+	ClientRegionsDays int `json:"clientRegionsDays"`
 }
 
 // PacketDaysOrZero returns the configured retention.packetDays or 0
@@ -243,6 +260,15 @@ func (c *Config) ClientRxObsDaysOrZero() int {
 func (c *Config) ClientRfDaysOrZero() int {
 	if c.Retention != nil && c.Retention.ClientRfDays > 0 {
 		return c.Retention.ClientRfDays
+	}
+	return 0
+}
+
+// ClientRegionsDaysOrZero returns retention.clientRegionsDays or 0
+// (disabled) if not set.
+func (c *Config) ClientRegionsDaysOrZero() int {
+	if c.Retention != nil && c.Retention.ClientRegionsDays > 0 {
+		return c.Retention.ClientRegionsDays
 	}
 	return 0
 }

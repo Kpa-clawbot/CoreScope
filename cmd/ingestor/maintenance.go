@@ -183,6 +183,41 @@ func (s *Store) PruneOldClientRfSamples(days int) (int64, error) {
 	return n, nil
 }
 
+// PruneOldClientDeclaredRegions deletes declared-region observation rows
+// (node_declared_regions) older than `days` (by observed_at). Independent of
+// clientRxDays/clientRxObsDays/clientRfDays. 0 disables. Owned by the
+// ingestor writer (#1283). observed_at on this table is stored at
+// millisecond precision via rxTimeMillisLayout, not RFC3339 — the cutoff
+// must be formatted the same way so lexicographic comparison against
+// stored values stays correct.
+func (s *Store) PruneOldClientDeclaredRegions(days int) (int64, error) {
+	if days <= 0 {
+		return 0, nil
+	}
+	n, err := s.pruneOldClientDeclaredRegionsAt(time.Now().UTC().AddDate(0, 0, -days))
+	if err != nil {
+		return 0, err
+	}
+	if n > 0 {
+		log.Printf("[prune] deleted %d node_declared_regions older than %d days", n, days)
+	}
+	return n, nil
+}
+
+// pruneOldClientDeclaredRegionsAt is the cutoff-instant seam behind
+// PruneOldClientDeclaredRegions: it exists so tests can pin the cutoff
+// deterministically instead of racing time.Now() to place a fixture row on a
+// specific side of it.
+func (s *Store) pruneOldClientDeclaredRegionsAt(cutoffInstant time.Time) (int64, error) {
+	cutoff := cutoffInstant.Format(rxTimeMillisLayout)
+	res, err := s.db.Exec(`DELETE FROM node_declared_regions WHERE observed_at < ?`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("prune node_declared_regions: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // SoftDeleteBlacklistedObservers marks observers in the blacklist as
 // inactive=1 so they are hidden from API responses. Owned by ingestor
 // per #1287. Runs once at startup.

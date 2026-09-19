@@ -155,7 +155,7 @@ type declaredAnswer struct {
 // with ok=true means the sources exist and nobody has answered yet, which IS a
 // finding and is what ScopeConfigNone reports.
 func (s *Server) declaredRegionsCSV() (map[string]declaredAnswer, bool) {
-	if !s.db.hasConfiguredScope && !s.db.hasDeclaredRegionsTable {
+	if !s.db.hasConfiguredScope && !s.db.declaredRegionsTablePresent() {
 		return nil, false
 	}
 
