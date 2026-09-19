@@ -321,6 +321,18 @@ func main() {
 		}
 	}
 
+	// Declared-region retention: bounds the opt-in node_declared_regions
+	// table (Task 6), independent of clientRxDays/clientRxObsDays/clientRfDays.
+	// 0 = disabled.
+	clientRegionsDays := cfg.ClientRegionsDaysOrZero()
+	if clientRegionsDays > 0 {
+		if n, err := store.PruneOldClientDeclaredRegions(clientRegionsDays); err != nil {
+			log.Printf("[prune] node_declared_regions: %v", err)
+		} else if n > 0 {
+			log.Printf("[prune] startup pruned %d node_declared_regions older than %d days", n, clientRegionsDays)
+		}
+	}
+
 	vacuumPages := cfg.IncrementalVacuumPages()
 	store.RunIncrementalVacuum(vacuumPages)
 
@@ -386,11 +398,11 @@ func main() {
 	}
 
 	// Daily ticker for client-RX coverage retention (#1727), reused for the
-	// diagnostic client_rx_observations and client_rf_samples retention
-	// (Task 6) rather than starting a second ticker — the three flags are
-	// independent (0 disables each separately), so the ticker itself must
-	// run when any is set.
-	if clientRxDays > 0 || clientRxObsDays > 0 || clientRfDays > 0 {
+	// diagnostic client_rx_observations, client_rf_samples, and
+	// node_declared_regions retention (Task 6) rather than starting a second
+	// ticker — the four flags are independent (0 disables each separately),
+	// so the ticker itself must run when any is set.
+	if clientRxDays > 0 || clientRxObsDays > 0 || clientRfDays > 0 || clientRegionsDays > 0 {
 		clientRxRetentionTicker := time.NewTicker(24 * time.Hour)
 		go func() {
 			for range clientRxRetentionTicker.C {
@@ -415,6 +427,13 @@ func main() {
 						store.RunIncrementalVacuum(vacuumPages)
 					}
 				}
+				if clientRegionsDays > 0 {
+					if n, err := store.PruneOldClientDeclaredRegions(clientRegionsDays); err != nil {
+						log.Printf("[prune] node_declared_regions: %v", err)
+					} else if n > 0 {
+						store.RunIncrementalVacuum(vacuumPages)
+					}
+				}
 			}
 		}()
 		if clientRxDays > 0 {
@@ -425,6 +444,9 @@ func main() {
 		}
 		if clientRfDays > 0 {
 			log.Printf("[prune] auto-prune enabled: client_rf_samples older than %d days will be removed daily", clientRfDays)
+		}
+		if clientRegionsDays > 0 {
+			log.Printf("[prune] auto-prune enabled: node_declared_regions older than %d days will be removed daily", clientRegionsDays)
 		}
 	}
 
@@ -744,11 +766,13 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		return
 	}
 
-	// Mobile client topics: meshcore/client/{PUBLIC_KEY}/packets (RX coverage)
-	// and meshcore/client/{PUBLIC_KEY}/rf (RF environment samples). A roaming
-	// companion reports where it directly heard a node, or its own radio's
-	// counters; both are handled in isolation from the observer/observations
-	// path. EMQX ACL binds parts[2] to the client's own key.
+	// Mobile client topics: meshcore/client/{PUBLIC_KEY}/packets (RX coverage),
+	// meshcore/client/{PUBLIC_KEY}/rf (RF environment samples), and
+	// meshcore/client/{PUBLIC_KEY}/regions (declared-region answers). A
+	// roaming companion reports where it directly heard a node, its own
+	// radio's counters, or a repeater's declared region list; all three are
+	// handled in isolation from the observer/observations path. EMQX ACL
+	// binds parts[2] to the client's own key.
 	//
 	// The topic match and the enable-gate MUST be separate: matching on
 	// parts[1]=="client" always returns from this branch, whatever the config
@@ -775,6 +799,10 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		case "rf":
 			if cfg.ClientRfSamplesEnabled() {
 				handleClientRfSample(store, tag, parts[2], msg)
+			}
+		case "regions":
+			if cfg.ClientRegionsEnabled() {
+				handleClientRegions(store, cfg, tag, parts[2], msg)
 			}
 		}
 		return

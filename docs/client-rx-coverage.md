@@ -82,6 +82,34 @@ Payload — meshcoretomqtt-compatible packet, plus a `gps` object:
 - Subscription: the ingestor's default subscription (`meshcore/#`) already covers this topic. Sources
   configured with an explicit topic list must add `meshcore/client/+/packets`.
 
+### Region answers — `meshcore/client/{PUBLIC_KEY}/regions`
+
+CoreDrive RX can also ask a repeater it hears directly which regions it is configured to flood, and
+publishes the answer here. It is accepted under the same `clientRxCoverage.enabled` switch and lands
+in `node_declared_regions`, which the Scope Audit page and the `autoRegionKeys` tier read alongside
+the observer `/neighbors` source (`nodes.configured_scope`). Newest answer per repeater wins across
+both, by the answer's own `timestamp`, so a buffered upload arriving late cannot overwrite a fresher
+one.
+
+```json
+{
+  "origin": "<companion name>",
+  "origin_id": "<companion pubkey hex>",
+  "timestamp": "2026-09-18T09:09:32.120Z",
+  "type": "REGIONS",
+  "target": "<repeater pubkey, 64 hex>",
+  "regions": ["*", "hu"],
+  "truncated": false
+}
+```
+
+- `regions: []` is stored: the repeater answered that it floods nothing. A missing or non-array
+  `regions` is dropped, never read as an empty answer.
+- `target` must be a full 64-hex pubkey. Names containing a comma, longer than 64 characters, or past
+  the 64th entry are dropped and the answer is flagged truncated.
+- The broker ACL must allow the client to publish to `/regions` as well as `/packets` and `/rf`.
+  Explicit topic lists need `meshcore/client/+/regions` (or `meshcore/client/#`).
+
 ## Capture HARD RULE — only what was heard directly
 
 The app and ingestor record **only the node the companion physically received**, never upstream

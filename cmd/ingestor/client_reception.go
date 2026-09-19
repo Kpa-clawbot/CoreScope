@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"log"
 	"regexp"
@@ -410,4 +411,66 @@ func (s *Store) InsertClientRxObservation(o *ClientRxObservation) (bool, error) 
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
+}
+
+// ClientDeclaredRegions is one repeater's answer to a flood-allowed region
+// list request (ANON_REQ_TYPE_REGIONS), relayed by a mobile companion. Every
+// answer is a row — this table stores observations, never state. An empty
+// RegionsCSV is a valid, deliberate answer ("nothing flood-allowed"); a
+// repeater that did not answer produces no row at all, never a row with an
+// empty list standing in for silence. Truncated is a hint, not a detection:
+// the firmware's exportNamesTo skips names that do not fit and continues, so
+// an overflowing reply has holes rather than a truncated prefix, with no
+// marker distinguishing the two.
+type ClientDeclaredRegions struct {
+	Target        string
+	RxPubkey      string
+	ObservedAt    string
+	IngestedAt    string
+	RegionsCSV    string
+	Truncated     bool
+	Lat, Lon      *float64
+	PosAccM       *float64
+	RepeaterClock *int64
+}
+
+// InsertClientDeclaredRegions writes one declared-region observation.
+// Idempotent via UNIQUE(target, rx_pubkey, observed_at); returns ins=false
+// when the row already existed.
+func (s *Store) InsertClientDeclaredRegions(o *ClientDeclaredRegions) (bool, error) {
+	res, err := s.db.Exec(`
+		INSERT INTO node_declared_regions
+			(target, rx_pubkey, observed_at, ingested_at, regions_csv, truncated, lat, lon, pos_acc_m, repeater_clock)
+		VALUES (?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(target, rx_pubkey, observed_at) DO NOTHING`,
+		o.Target, o.RxPubkey, o.ObservedAt, o.IngestedAt, o.RegionsCSV, boolToInt(o.Truncated), o.Lat, o.Lon, o.PosAccM, o.RepeaterClock)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// CurrentDeclaredRegions returns the most recent declared-region observation
+// for a target, or nil if none exist. "Most recent" is the greatest
+// observed_at, NOT the greatest ingested_at: a drive buffered offline can
+// arrive days late, and ordering by arrival would let that stale reading
+// overwrite a fresher one.
+func (s *Store) CurrentDeclaredRegions(target string) (*ClientDeclaredRegions, error) {
+	target = strings.ToLower(strings.TrimSpace(target))
+	row := s.db.QueryRow(`
+		SELECT target, rx_pubkey, observed_at, ingested_at, regions_csv, truncated, lat, lon, pos_acc_m, repeater_clock
+		FROM node_declared_regions
+		WHERE target = ?
+		ORDER BY observed_at DESC LIMIT 1`, target)
+	var o ClientDeclaredRegions
+	var truncated int
+	if err := row.Scan(&o.Target, &o.RxPubkey, &o.ObservedAt, &o.IngestedAt, &o.RegionsCSV, &truncated, &o.Lat, &o.Lon, &o.PosAccM, &o.RepeaterClock); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	o.Truncated = truncated == 1
+	return &o, nil
 }
