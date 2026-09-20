@@ -165,7 +165,12 @@ async function api(path, { ttl = 0, bust = false } = {}) {
         _apiPerf.log.push({ path, ms: Math.round(ms), time: Date.now() });
         if (_apiPerf.log.length > 200) _apiPerf.log.shift();
         if (ms > 500) console.warn(`[SLOW API] ${path} took ${Math.round(ms)}ms`);
-        if (ttl > 0) _apiCache.set(path, { data, expires: Date.now() + ttl });
+        // #1997: never cache a "not ready yet" body. The lazy distance
+        // index answers 202 with {status:"building"} until it is built, and
+        // res.ok is true for 202, so caching it would serve that placeholder
+        // back to every retry for the whole TTL — the page would stay in its
+        // building state for minutes after the index was ready.
+        if (ttl > 0 && res.status !== 202) _apiCache.set(path, { data, expires: Date.now() + ttl });
         return data;
       }
     } finally {
