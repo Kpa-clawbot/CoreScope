@@ -79,6 +79,7 @@
       "tests/e2e/test-issue-1705-subpath-contrast-e2e.js",
       "tests/e2e/test-issue-1758-ng-filter-rerenders-e2e.js",
       "tests/e2e/test-issue-1799-label-vocab-e2e.js",
+      "tests/e2e/test-issue-1833-legend-toggle-clickable-e2e.js",
       "tests/e2e/test-live-dedup.js",
       "tests/e2e/test-live-fullscreen-1572-e2e.js",
       "tests/e2e/test-live-layout-1178-1179-e2e.js",

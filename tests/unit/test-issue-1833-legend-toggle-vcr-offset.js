@@ -60,6 +60,48 @@ step('.legend-toggle-btn bottom uses var(--vcr-bar-height)', () => {
   );
 });
 
+// #1833 r2: the offset above is only half the contract — it has to resolve
+// against the same box as the .vcr-bar it clears. `position: fixed` anchored
+// it to the viewport while .vcr-bar is absolute inside .live-page, which is
+// --bottom-nav-reserve shorter than the viewport at <=768. The button then
+// landed inside the bar (z-index 1000 vs 500) and ate every click. Pin the
+// anchor so the offset cannot drift from the bar again.
+// A selector can own several blocks (media queries, fullscreen overrides);
+// only the one that actually declares `position` carries the anchor. Scan
+// them all rather than taking the first, which is a `display:none` override.
+function findDeclaration(source, selector, prop) {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(escaped + '\\s*\\{([^}]*)\\}', 'g');
+  const propRe = new RegExp('(?:^|;|\\s)' + prop + '\\s*:\\s*([a-z-]+)\\s*;');
+  let m;
+  while ((m = re.exec(source))) {
+    const hit = m[1].match(propRe);
+    if (hit) return hit[1];
+  }
+  return null;
+}
+
+step('.legend-toggle-btn is absolute, not fixed (shares .live-page with .vcr-bar)', () => {
+  const pos = findDeclaration(css, '.legend-toggle-btn', 'position');
+  assert(pos !== null, 'no .legend-toggle-btn rule declares `position`');
+  assert(
+    pos === 'absolute',
+    '.legend-toggle-btn must be position:absolute so `bottom` resolves against ' +
+    '.live-page like .vcr-bar does (got: ' + pos + ')'
+  );
+});
+
+step('.feed-show-btn uses the same anchor as .legend-toggle-btn (documented pair)', () => {
+  const pos = findDeclaration(css, '.feed-show-btn', 'position');
+  assert(pos !== null, 'no .feed-show-btn rule declares `position`');
+  assert(
+    pos === 'absolute',
+    '.feed-show-btn must share .legend-toggle-btn\'s containing block — the two ' +
+    'dock as one cluster and drift apart by --bottom-nav-reserve otherwise ' +
+    '(got: ' + pos + ')'
+  );
+});
+
 step('sister overlays still track --vcr-bar-height (guard against regression sweep)', () => {
   // Sanity check: the pattern we mirror is the same one already used by
   // .live-feed, .live-overlay[data-position="br"], and .feed-show-btn.
