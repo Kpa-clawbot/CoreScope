@@ -899,11 +899,14 @@ body.live-fullscreen #liveFullscreenToggle:hover,
    * activate/hide button group docks together as a tidy cluster.
    * bottom uses max() to clear the VCR bar when present (#1206).
    * #1833 r2: absolute, not fixed, for the same containing-block reason as
-   * .legend-toggle-btn above — the pair must resolve `bottom` against
-   * .live-page like .vcr-bar does, or they drift apart by
-   * --bottom-nav-reserve. No visual change today (this button is
-   * display:none at <=768, the only band where the reserve is non-zero);
-   * it keeps the documented button pair on one anchor. */
+   * .legend-toggle-btn below — the pair must resolve `bottom` against
+   * .live-page like .vcr-bar does, or they drift by --bottom-nav-reserve.
+   * This button is display:none only at <=640, so it IS shown in the
+   * 641..768 band and was displaced by the full reserve there too. It kept
+   * working by luck rather than design: its --legend-toggle-stack offset
+   * parks it a row above the legend toggle, so the same 56px drop left its
+   * bottom edge ~16px clear of the bar instead of inside it (measured).
+   * Same defect, 16px from the same break. */
   --legend-toggle-stack: calc(var(--legend-toggle-h, 46px) + 10px); /* gap above legend-toggle */
   position: absolute;
   bottom: max(1rem, calc(var(--vcr-bar-height, 0px) + 10px + var(--legend-toggle-stack)));
