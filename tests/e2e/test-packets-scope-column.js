@@ -33,6 +33,13 @@ async function gotoPackets(page) {
   await page.evaluate(() => {
     localStorage.removeItem('packets-visible-cols');
     localStorage.removeItem('packets-known-cols');
+    // The packets page defaults to a 15-minute window (public/packets.js,
+    // savedTimeWindowMin). CI freshens the fixture so its newest packet is
+    // "now" at the START of the job, and the E2E step runs for a quarter of
+    // an hour or more, so a suite that runs late in the list sees an empty
+    // table and "No packets found" through no fault of its own. This suite is
+    // about the Scope column, not about the window, so pin the window wide.
+    localStorage.setItem('meshcore-time-window', '10080');
   });
   await page.reload({ waitUntil: 'networkidle' });
   // Wait for a row that carries real column cells, not merely for any <tr>.
