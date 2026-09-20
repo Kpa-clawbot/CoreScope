@@ -35,7 +35,13 @@ async function gotoPackets(page) {
     localStorage.removeItem('packets-known-cols');
   });
   await page.reload({ waitUntil: 'networkidle' });
-  await page.waitForSelector('#pktTable tbody tr:not([id^=vscroll])', { timeout: 30000 });
+  // Wait for a row that carries real column cells, not merely for any <tr>.
+  // The table renders a full-width placeholder row while it loads, which
+  // satisfies a bare `tbody tr` selector: the suite then read an empty table
+  // and reported "no td.col-scope rendered" / "no packet rows found". That is
+  // the 4-passed-3-failed signature this suite showed intermittently while it
+  // was unwired, and it is a race in the wait, not a product fault.
+  await page.waitForSelector('#pktTable tbody tr:not([id^=vscroll]) td.col-type', { timeout: 30000 });
 }
 
 (async () => {
