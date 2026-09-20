@@ -27,7 +27,29 @@
 const { chromium } = require('playwright');
 
 const BASE = process.env.BASE_URL || 'http://localhost:13581';
-const PREFIXES = '2c,a1';
+// Prefixes are taken from the dataset under test rather than hardcoded: a
+// fixed pair like "2c,a1" resolves to nothing on the CI fixture, and (4) and
+// (5) below then skip, which is the "green but covers nothing" outcome #2037
+// is about. pickPrefixes() reads a real relayed path out of /api/packets, so
+// /api/paths/inspect has something to match.
+let PREFIXES = null;
+
+async function pickPrefixes(page) {
+  const res = await page.request.get(`${BASE}/api/packets?limit=200`);
+  if (!res.ok()) return null;
+  const body = await res.json();
+  const packets = Array.isArray(body) ? body : (body.packets || []);
+  for (const pkt of packets) {
+    let path = pkt.path_json;
+    if (typeof path === 'string') { try { path = JSON.parse(path); } catch { continue; } }
+    // Two hops is the minimum that makes a path worth inspecting, and the
+    // inspector matches on single-byte prefixes of each hop.
+    if (Array.isArray(path) && path.length >= 2) {
+      return path.slice(0, 3).map(h => String(h).slice(0, 2).toLowerCase()).join(',');
+    }
+  }
+  return null;
+}
 
 let passes = 0, failures = 0, skips = 0;
 function pass(msg) { console.log(`  ✓ ${msg}`); passes++; }
@@ -94,6 +116,17 @@ async function main() {
 
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const page = await ctx.newPage();
+
+  PREFIXES = await pickPrefixes(page);
+  if (!PREFIXES) {
+    // Not a skip. Every dataset this runs against, fixture included, carries
+    // relayed packets; none would mean the packets API or the fixture changed
+    // shape, and the inspector cases below would then be silently untested.
+    console.error('  ✗ (0) no relayed path found in /api/packets, so the inspector cannot be exercised');
+    await browser.close();
+    process.exit(1);
+  }
+  console.log(`  · prefixes taken from the dataset: ${PREFIXES}`);
 
   // (1) The side pane exists and starts collapsed.
   await page.goto(`${BASE}/#/map`, { waitUntil: 'domcontentloaded' });
