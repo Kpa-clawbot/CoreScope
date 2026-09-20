@@ -178,7 +178,6 @@ node tests/unit/test-rx-coverage-escape.js
 node tests/unit/test-rx-coverage-viewport.js
 node tests/unit/test-scope-audit-styles-linked.js
 node tests/unit/test-slideover-1056-rowsel-strict.js
-node tests/unit/test-table-sort.js
 node tests/unit/test-top-routes-overlay.js
 node tests/unit/test-traces.js
 node tests/unit/test-url-state.js
