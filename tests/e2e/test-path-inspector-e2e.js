@@ -40,10 +40,34 @@ function countRoutePaths(page) {
   return page.evaluate(() => document.querySelectorAll('#leaflet-map .leaflet-overlay-pane svg path, .leaflet-overlay-pane svg path').length);
 }
 
+// The toggle ships in the page template, but its click handler is attached by
+// initMapSidePane(), which public/map.js calls at the END of loadNodes()
+// (map.js:1795). So the button exists for seconds before it does anything, and
+// a single click on sight is a race that silently no-ops. Measured at ~3s
+// against a populated instance.
+//
+// Clicking for real each attempt rather than dispatching in-page on purpose: a
+// click that cannot land (an overlay eating it, as in #2049) has to fail here,
+// which an element.click() from evaluate would hide.
+async function expandPane(page) {
+  await page.waitForSelector('#mapPaneToggle', { timeout: 15000 });
+  for (let i = 0; i < 20; i++) {
+    const expanded = await page.evaluate(() => {
+      const el = document.getElementById('mapSidePane');
+      return !!el && /\bexpanded\b/.test(el.className);
+    });
+    if (expanded) return;
+    try {
+      await page.click('#mapPaneToggle', { timeout: 1500 });
+    } catch { /* not clickable yet; the next round re-checks */ }
+    await page.waitForTimeout(500);
+  }
+  throw new Error('the pane never expanded after 20 clicks over ~20s');
+}
+
 async function openPaneAndSubmit(page) {
   await page.goto(`${BASE}/#/map`, { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('#mapPaneToggle', { timeout: 15000 });
-  await page.click('#mapPaneToggle');
+  await expandPane(page);
   await page.fill('#mapPiInput', PREFIXES);
   await page.click('#mapPiSubmit');
   // Either outcome means the round trip finished.
@@ -84,11 +108,7 @@ async function main() {
 
   // (2) The toggle expands it.
   try {
-    await page.click('#mapPaneToggle');
-    await page.waitForFunction(() => {
-      const el = document.getElementById('mapSidePane');
-      return !!el && /\bexpanded\b/.test(el.className);
-    }, null, { timeout: 5000 });
+    await expandPane(page);
     pass('(2) clicking the toggle expands the pane');
   } catch {
     const cls = await page.getAttribute('#mapSidePane', 'class').catch(() => '(missing)');

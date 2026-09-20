@@ -65,12 +65,17 @@ async function getJson(page, url) {
       if (!href || !href.startsWith('#/nodes/')) throw new Error('neighbour link malformed: ' + href);
     }
 
-    // The map is built when the NODE has coordinates, not when a link does:
-    // public/node-reach.js only calls NodeReachMap.render if n.lat != null.
-    // The old condition here asked for a map whenever any link had GPS, which
-    // times out on a node that has neighbours with positions but none itself.
+    // Leaflet puts .leaflet-container on the element you hand L.map(), so the
+    // class lands on #nqMap itself. The old selector had a space in it and so
+    // waited for a DESCENDANT carrying the class, which never exists: that is
+    // why this suite timed out here every time it was run.
+    //
+    // The condition is the node's own coordinates, not a link's:
+    // public/node-reach.js calls NodeReachMap.render only when n.lat != null,
+    // so a node with positioned neighbours but no position of its own has no
+    // map to wait for.
     if (reach.node && reach.node.lat != null && reach.node.lon != null) {
-      await page.waitForSelector('#nqMap .leaflet-container', { timeout: 10000 });
+      await page.waitForSelector('#nqMap.leaflet-container', { timeout: 10000 });
     }
   }
 

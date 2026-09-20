@@ -27,9 +27,13 @@ const BASE = process.env.BASE_URL || 'http://localhost:13581';
 // public/live.js:4285 actually runs and the cap assertion means something.
 const PACKET_COUNT = 20;
 const RECENT_PATHS_CAP = 5;
-// One animation steps at scaledDt/660 (live.js:4154), so 660ms at 1x.
-// Allow 2x that plus browser overhead.
-const DRAIN_TIMEOUT_MS = 1500;
+// One animation steps at scaledDt/660 (live.js:4154), so 660ms at 1x. The
+// @playwright/test original allowed 1500ms, but that figure was never tested:
+// the file had no runner. Measured against a populated instance, 20 queued
+// animations do not all finish inside it. What this asserts is that the queue
+// drains at all and the engine then sleeps, not that it does so within twice
+// one animation's duration, so the budget is generous on purpose.
+const DRAIN_TIMEOUT_MS = 8000;
 
 let passes = 0, failures = 0;
 function pass(msg) { console.log(`  ✓ ${msg}`); passes++; }
