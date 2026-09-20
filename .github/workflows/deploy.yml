@@ -694,6 +694,22 @@ jobs:
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1648-m5-icons-e2e.js 2>&1 | tee -a e2e-output.txt
           echo "=== E2E SUITE: test-issue-1997-distance-building-e2e.js ==="
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1997-distance-building-e2e.js 2>&1 | tee -a e2e-output.txt
+          echo "=== E2E SUITE: test-channel-modal-e2e.js ==="
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-channel-modal-e2e.js 2>&1 | tee -a e2e-output.txt
+          echo "=== E2E SUITE: test-issue-1522-trace-url-sync-e2e.js ==="
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1522-trace-url-sync-e2e.js 2>&1 | tee -a e2e-output.txt
+          echo "=== E2E SUITE: test-marker-outline-weight.js ==="
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-marker-outline-weight.js 2>&1 | tee -a e2e-output.txt
+          echo "=== E2E SUITE: test-node-reach-e2e.js ==="
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-node-reach-e2e.js 2>&1 | tee -a e2e-output.txt
+          echo "=== E2E SUITE: test-packets-scope-column.js ==="
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-packets-scope-column.js 2>&1 | tee -a e2e-output.txt
+          echo "=== E2E SUITE: test-path-inspector-e2e.js ==="
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-path-inspector-e2e.js 2>&1 | tee -a e2e-output.txt
+          echo "=== E2E SUITE: test-pr-1490-live-map-gpu-animations-e2e.js ==="
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-pr-1490-live-map-gpu-animations-e2e.js 2>&1 | tee -a e2e-output.txt
+          echo "=== E2E SUITE: test-touch-targets.js ==="
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-touch-targets.js 2>&1 | tee -a e2e-output.txt
           echo "=== E2E SUITE: test-live-dedup.js ==="
           BASE_URL=http://localhost:13581 node tests/e2e/test-live-dedup.js 2>&1 | tee -a e2e-output.txt
           echo "=== E2E SUITE: test-nodes-export-e2e.js ==="

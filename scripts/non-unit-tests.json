@@ -123,11 +123,5 @@
       "tests/e2e/test-path-inspector-e2e.js",
       "tests/e2e/test-pr-1490-live-map-gpu-animations-e2e.js"
     ]
-  },
-  "domIntegration": {
-    "reason": "Requires jsdom, which is not currently declared in package.json. This DOM integration suite is inventoried separately; no new dependency is installed by the unit gate.",
-    "files": [
-      "tests/e2e/test-table-sort.js"
-    ]
   }
 }
