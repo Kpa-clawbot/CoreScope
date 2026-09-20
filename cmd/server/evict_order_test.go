@@ -27,20 +27,34 @@ import (
 // recent chunk with an ancient first_seen.
 func seedReheardDB(t *testing.T, path string, now time.Time) {
 	t.Helper()
-	conn, err := sql.Open("sqlite3", path)
+	conn, err := sql.Open("sqlite3", path+"?_journal_mode=WAL")
 	if err != nil {
 		t.Fatalf("open seed db: %v", err)
 	}
 	defer conn.Close()
 
 	stmts := []string{
-		`CREATE TABLE transmissions (id INTEGER PRIMARY KEY, raw_hex TEXT, hash TEXT UNIQUE,
-			first_seen TEXT, route_type INTEGER, payload_type INTEGER, payload_version INTEGER,
-			decoded_json TEXT, last_seen TEXT)`,
-		`CREATE TABLE observations (id INTEGER PRIMARY KEY, transmission_id INTEGER, observer_id TEXT,
-			observer_name TEXT, direction TEXT, snr REAL, rssi REAL, score INTEGER, path_json TEXT,
-			timestamp INTEGER)`,
-		`CREATE INDEX idx_tx_last_seen ON transmissions(last_seen)`,
+		`CREATE TABLE IF NOT EXISTS transmissions (
+			id INTEGER PRIMARY KEY,
+			raw_hex TEXT, hash TEXT, first_seen TEXT,
+			route_type INTEGER, payload_type INTEGER,
+			payload_version INTEGER, decoded_json TEXT,
+			last_seen TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS observations (
+			id INTEGER PRIMARY KEY,
+			transmission_id INTEGER, observer_id TEXT, observer_name TEXT,
+			direction TEXT, snr REAL, rssi REAL, score INTEGER,
+			path_json TEXT, timestamp TEXT, raw_hex TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS observers (rowid INTEGER PRIMARY KEY, id TEXT, name TEXT, iata TEXT, inactive INTEGER)`,
+		`CREATE TABLE IF NOT EXISTS nodes (
+			public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL,
+			last_seen TEXT, first_seen TEXT, frequency REAL
+		)`,
+		`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER)`,
+		`INSERT INTO schema_version (version) VALUES (1)`,
+		`CREATE INDEX IF NOT EXISTS idx_tx_last_seen ON transmissions(last_seen)`,
 	}
 	for _, s := range stmts {
 		if _, err := conn.Exec(s); err != nil {
