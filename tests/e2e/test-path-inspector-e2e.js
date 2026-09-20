@@ -30,23 +30,37 @@ const BASE = process.env.BASE_URL || 'http://localhost:13581';
 // Prefixes are taken from the dataset under test rather than hardcoded: a
 // fixed pair like "2c,a1" resolves to nothing on the CI fixture, and (4) and
 // (5) below then skip, which is the "green but covers nothing" outcome #2037
-// is about. pickPrefixes() reads a real relayed path out of /api/packets, so
-// /api/paths/inspect has something to match.
+// is about.
 let PREFIXES = null;
 
 async function pickPrefixes(page) {
-  const res = await page.request.get(`${BASE}/api/packets?limit=200`);
-  if (!res.ok()) return null;
-  const body = await res.json();
-  const packets = Array.isArray(body) ? body : (body.packets || []);
-  for (const pkt of packets) {
-    let path = pkt.path_json;
-    if (typeof path === 'string') { try { path = JSON.parse(path); } catch { continue; } }
-    // Two hops is the minimum that makes a path worth inspecting, and the
-    // inspector matches on single-byte prefixes of each hop.
-    if (Array.isArray(path) && path.length >= 2) {
-      return path.slice(0, 3).map(h => String(h).slice(0, 2).toLowerCase()).join(',');
+  // /api/paths/inspect beam-searches the NEIGHBOUR GRAPH, so prefixes only
+  // yield candidates when the nodes behind them are actually connected in it.
+  // Taking them from a packet's recorded path is not enough: those hops need
+  // not form an edge chain the search can walk. So walk the graph itself,
+  // through the same API the product uses.
+  const get = async (path) => {
+    const r = await page.request.get(BASE + path);
+    return r.ok() ? r.json() : null;
+  };
+  const seed = await get('/api/nodes?role=repeater&limit=25');
+  const nodes = (seed && seed.nodes) || [];
+  for (const n of nodes) {
+    const pk = n.public_key;
+    if (!pk) continue;
+    const a = await get(`/api/nodes/${pk}/neighbors`);
+    const aN = (a && a.neighbors) || [];
+    if (!aN.length) continue;
+    // Prefer a neighbour that itself has a neighbour, so the chain is three
+    // hops long and (5) below has two candidates to switch between.
+    for (const hop of aN) {
+      const b = await get(`/api/nodes/${hop.pubkey}/neighbors`);
+      const bN = ((b && b.neighbors) || []).filter(x => x.pubkey !== pk);
+      if (bN.length) {
+        return [pk, hop.pubkey, bN[0].pubkey].map(k => k.slice(0, 2).toLowerCase()).join(',');
+      }
     }
+    return [pk, aN[0].pubkey].map(k => k.slice(0, 2).toLowerCase()).join(',');
   }
   return null;
 }
@@ -119,10 +133,10 @@ async function main() {
 
   PREFIXES = await pickPrefixes(page);
   if (!PREFIXES) {
-    // Not a skip. Every dataset this runs against, fixture included, carries
-    // relayed packets; none would mean the packets API or the fixture changed
+    // Not a skip. Every dataset this runs against, fixture included, has a
+    // neighbour graph; none would mean the graph or the nodes API changed
     // shape, and the inspector cases below would then be silently untested.
-    console.error('  ✗ (0) no relayed path found in /api/packets, so the inspector cannot be exercised');
+    console.error('  ✗ (0) no connected pair found in the neighbour graph, so the inspector cannot be exercised');
     await browser.close();
     process.exit(1);
   }
