@@ -65,8 +65,11 @@ async function getJson(page, url) {
       if (!href || !href.startsWith('#/nodes/')) throw new Error('neighbour link malformed: ' + href);
     }
 
-    // Map must render whenever at least one link has GPS (no swallowed failure).
-    if (reach.links.some(l => l.lat != null && l.lon != null)) {
+    // The map is built when the NODE has coordinates, not when a link does:
+    // public/node-reach.js only calls NodeReachMap.render if n.lat != null.
+    // The old condition here asked for a map whenever any link had GPS, which
+    // times out on a node that has neighbours with positions but none itself.
+    if (reach.node && reach.node.lat != null && reach.node.lon != null) {
       await page.waitForSelector('#nqMap .leaflet-container', { timeout: 10000 });
     }
   }

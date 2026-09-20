@@ -42,8 +42,14 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   });
 
   await step('Add Channel button is visible', async () => {
+    // The visible label is "+ Add" (public/channels.js:746): it was shortened
+    // to fit the header, and the accessible name moved to aria-label. Assert
+    // the accessible name, which is the part a screen reader and this test
+    // actually depend on, not the truncated glyph text.
+    const label = await page.getAttribute('#chAddChannelBtn', 'aria-label');
+    assert(label && /add channel/i.test(label), 'aria-label: ' + label);
     const text = await page.textContent('#chAddChannelBtn');
-    assert(/Add Channel/.test(text), 'button text: ' + text);
+    assert(text && text.trim().length > 0, 'button must still have a visible label');
   });
 
   await step('modal hidden on load', async () => {
@@ -104,20 +110,23 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     }, { timeout: 3000 });
   });
 
-  await step('sidebar renders three sections (My Channels / Network / Encrypted)', async () => {
-    // Wait for channel list to populate from API (or render empty-state).
+  await step('sidebar renders the Network and Encrypted sections', async () => {
+    // My Channels is NOT among these: public/channels.js only emits
+    // .ch-section-mychannels when the visitor has added a channel
+    // (`if (mine.length > 0)`), and this browser profile is fresh. Asserting
+    // it here is what made this step time out for as long as the suite went
+    // unrun. It is asserted after the PSK add below, where it is guaranteed.
     await page.waitForFunction(() => {
       const el = document.getElementById('chList');
       if (!el) return false;
-      return el.querySelector('.ch-section-mychannels') &&
-             el.querySelector('.ch-section-network') &&
-             el.querySelector('.ch-section-encrypted');
+      return el.querySelector('.ch-section-network') && el.querySelector('.ch-section-encrypted');
     }, { timeout: 8000 });
     const headers = await page.$$eval('.ch-section-header', els => els.map(e => e.textContent.trim()));
     const joined = headers.join(' | ');
-    assert(/My Channels/.test(joined), 'My Channels header missing: ' + joined);
-    assert(/Network/.test(joined), 'Network header missing');
-    assert(/Encrypted/.test(joined), 'Encrypted header missing');
+    assert(/Network/.test(joined), 'Network header missing: ' + joined);
+    assert(/Encrypted/.test(joined), 'Encrypted header missing: ' + joined);
+    const mine = await page.$$eval('.ch-section-mychannels', els => els.length);
+    assert(mine === 0, 'a fresh profile must not have a My Channels section, found ' + mine);
   });
 
   await step('Encrypted section is collapsed by default', async () => {
@@ -152,6 +161,17 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     }, { timeout: 5000 });
     const stored = await page.evaluate(() => localStorage.getItem('corescope_channel_keys') || '');
     assert(/cafebabe/i.test(stored), 'expected stored key in localStorage corescope_channel_keys, got: ' + stored);
+  });
+
+  await step('My Channels appears once the visitor has added one', async () => {
+    // The section is conditional (public/channels.js, `if (mine.length > 0)`),
+    // so this is the only point in the suite where it can be demanded.
+    await page.waitForFunction(() => {
+      const el = document.getElementById('chList');
+      return !!el && !!el.querySelector('.ch-section-mychannels');
+    }, { timeout: 8000 });
+    const headers = await page.$$eval('.ch-section-header', els => els.map(e => e.textContent.trim()));
+    assert(/My Channels/.test(headers.join(' | ')), 'My Channels header missing: ' + headers.join(' | '));
   });
 
   await browser.close();
