@@ -41,7 +41,29 @@ async function gotoPackets(page) {
   // and reported "no td.col-scope rendered" / "no packet rows found". That is
   // the 4-passed-3-failed signature this suite showed intermittently while it
   // was unwired, and it is a race in the wait, not a product fault.
-  await page.waitForSelector('#pktTable tbody tr:not([id^=vscroll]) td.col-type', { timeout: 30000 });
+  //
+  // state:'attached', not the default 'visible': every assertion below reads
+  // the DOM through $$eval/evaluate, which sees a cell whose column is hidden
+  // by a preference class. Waiting for visibility asks for more than the
+  // suite needs and times out on a table that is perfectly ready to inspect.
+  try {
+    await page.waitForSelector('#pktTable tbody tr:not([id^=vscroll]) td.col-type',
+      { state: 'attached', timeout: 30000 });
+  } catch (e) {
+    // A bare TimeoutError says nothing about why. Report what the table held.
+    const state = await page.evaluate(() => {
+      const tb = document.querySelector('#pktTable tbody');
+      if (!tb) return { table: false };
+      const trs = Array.from(tb.querySelectorAll('tr'));
+      return {
+        table: true,
+        rows: trs.length,
+        firstRowHtml: trs.length ? trs[0].innerHTML.slice(0, 200) : null,
+        tableClass: document.getElementById('pktTable').className,
+      };
+    }).catch(() => null);
+    throw new Error('packets table never produced a row with td.col-type: ' + JSON.stringify(state));
+  }
 }
 
 (async () => {
