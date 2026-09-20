@@ -1446,7 +1446,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 	// critical section. After this point the new state is fully visible;
 	// before it readers see the old slice (which is still fully indexed).
 	s.mu.Lock()
-	s.packets = append(localPackets, s.packets...)
+	s.packets = mergeChunkIntoPackets(localPackets, s.packets)
 	s.totalObs += localTotalObs
 	s.trackedBytes += localTrackedBytes
 	if localMaxTxID > s.maxTxID {
@@ -4741,6 +4741,47 @@ func (s *PacketStore) EvictStaleWithRP(rpBatch map[int][]string) int {
 // Must be called under s.mu.Lock.
 func (s *PacketStore) EvictStale() int {
 	return s.evictStaleInternal(nil)
+}
+
+// mergeChunkIntoPackets merges a background chunk into the packet slice while
+// keeping the invariant s.packets is declared with: "sorted by first_seen ASC
+// (oldest first; newest at tail)". Retention eviction depends on it, walking
+// from the head and stopping at the first transmission inside the window, so a
+// slice that is out of order is silently under-evicted rather than noisily
+// wrong.
+//
+// The chunk cannot simply be put in front. Chunks are selected by last_seen,
+// so a transmission first heard weeks ago and heard again recently arrives in
+// a recent chunk carrying its old FirstSeen. On a production database 2071 of
+// the 236080 transmissions in a 14 day window have a first_seen more than a
+// day older than their last_seen, 1848 of them more than a week.
+//
+// Linear on purpose: this runs under s.mu once per chunk, and re-sorting the
+// whole slice there would mean sorting hundreds of thousands of packets while
+// ingest waits. The chunk itself is sorted first, which is the only
+// comparison sort involved and is bounded by one chunk. LoadChunked does its
+// own sort once at the end of the initial load; this keeps that invariant true
+// for every chunk merged afterwards.
+func mergeChunkIntoPackets(chunk, existing []*StoreTx) []*StoreTx {
+	less := func(i, j int) bool { return chunk[i].FirstSeen < chunk[j].FirstSeen }
+	if !sort.SliceIsSorted(chunk, less) {
+		sort.SliceStable(chunk, less)
+	}
+
+	out := make([]*StoreTx, 0, len(chunk)+len(existing))
+	i, j := 0, 0
+	for i < len(chunk) && j < len(existing) {
+		if chunk[i].FirstSeen <= existing[j].FirstSeen {
+			out = append(out, chunk[i])
+			i++
+		} else {
+			out = append(out, existing[j])
+			j++
+		}
+	}
+	out = append(out, chunk[i:]...)
+	out = append(out, existing[j:]...)
+	return out
 }
 
 func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
