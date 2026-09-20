@@ -32,6 +32,25 @@
     if (_scopesRefreshTimer) { clearInterval(_scopesRefreshTimer); _scopesRefreshTimer = null; }
   }
 
+  // #1997 — the distance tab's lazy index answers 202 {status:"building"}
+  // until it is built. Retry on the server's own interval rather than
+  // rendering the placeholder as data, and stop the moment the tab changes
+  // or the page goes away, so a pending retry cannot render into a view the
+  // user has left.
+  var _distanceRetryTimer = null;
+  function _stopDistanceRetry() {
+    if (_distanceRetryTimer) { clearTimeout(_distanceRetryTimer); _distanceRetryTimer = null; }
+  }
+  // Exposed for tests: the two decisions worth pinning, kept pure.
+  function _distanceIsBuilding(data) {
+    return !!(data && data.status === 'building' && !data.summary);
+  }
+  function _distanceRetryDelayMs(data) {
+    var s = data && Number(data.retry_after_seconds);
+    if (!isFinite(s) || s <= 0) s = 5;      // server default when it says nothing
+    return Math.min(Math.max(s, 1), 30) * 1000;  // clamp: never hammer, never stall
+  }
+
   // --- Status color helpers (read from CSS variables for theme support) ---
   function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
   function statusGreen() { return cssVar('--status-green') || '#22c55e'; }
@@ -178,6 +197,7 @@
       // #1085 — Roles tab owns its own 60s auto-refresh; stop it on switch.
       if (_currentTab !== 'roles') _stopRolesRefresh();
       if (_currentTab !== 'scopes') _stopScopesRefresh();
+      if (_currentTab !== 'distance') _stopDistanceRetry();
       _updateAnalyticsUrl();
       renderTab(_currentTab);
     });
@@ -3023,10 +3043,33 @@
   }
 
   async function renderDistanceTab(el) {
+    // A new render supersedes any retry still pending from an earlier one,
+    // so the two can never both write into the tab.
+    _stopDistanceRetry();
     try {
       const rqs = RegionFilter.regionQueryString();
       const sep = rqs ? '?' + rqs.slice(1) : '';
       const data = await api('/analytics/distance' + sep, { ttl: CLIENT_TTL.analyticsRF });
+
+      // #1997: the lazy index (#1011) answers 202 {status:"building"} with no
+      // summary until it has been built. Rendering that as data is what threw
+      // "Cannot read properties of undefined (reading 'totalHops')".
+      if (_distanceIsBuilding(data)) {
+        const secs = Math.round(_distanceRetryDelayMs(data) / 1000);
+        el.innerHTML = '<div class="text-center text-muted" id="distanceBuilding" style="padding:40px">' +
+          'Building the distance index…' +
+          '<div style="font-size:12px;margin-top:8px">This runs once per instance. Retrying in ' + secs + 's.</div></div>';
+        _distanceRetryTimer = setTimeout(function () {
+          _distanceRetryTimer = null;
+          // The user may have switched tabs or left while this was pending.
+          if (_currentTab !== 'distance') return;
+          const cur = document.getElementById('analyticsContent');
+          if (!cur) return;
+          renderDistanceTab(cur);
+        }, _distanceRetryDelayMs(data));
+        return;
+      }
+
       const s = data.summary;
       let html = `<div class="analytics-grid">
         <div class="stat-card"><div class="stat-value">${s.totalHops.toLocaleString()}</div><div class="stat-label">Total Hops Analyzed</div></div>
@@ -3112,11 +3155,13 @@
     }
   }
 
-function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
+function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRetry(); _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
 
   // Expose for testing
   if (typeof window !== 'undefined') {
-    window._analyticsDecorateChannels = decorateAnalyticsChannels;
+    window._distanceIsBuilding = _distanceIsBuilding;
+  window._distanceRetryDelayMs = _distanceRetryDelayMs;
+  window._analyticsDecorateChannels = decorateAnalyticsChannels;
     window._analyticsSortChannels = sortChannels;
     window._analyticsLoadChannelSort = loadChannelSort;
     window._analyticsSaveChannelSort = saveChannelSort;

@@ -692,6 +692,8 @@ jobs:
           BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1274-legend-coverage-e2e.js 2>&1 | tee -a e2e-output.txt
           echo "=== E2E SUITE: test-issue-1648-m5-icons-e2e.js ==="
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1648-m5-icons-e2e.js 2>&1 | tee -a e2e-output.txt
+          echo "=== E2E SUITE: test-issue-1997-distance-building-e2e.js ==="
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1997-distance-building-e2e.js 2>&1 | tee -a e2e-output.txt
           echo "=== E2E SUITE: test-live-dedup.js ==="
           BASE_URL=http://localhost:13581 node tests/e2e/test-live-dedup.js 2>&1 | tee -a e2e-output.txt
           echo "=== E2E SUITE: test-nodes-export-e2e.js ==="
