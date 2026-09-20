@@ -7,8 +7,13 @@
  *      with a `max-width` cap so it doesn't dominate the map.
  *   2. The activate/hide toggle button group at the bottom of the map
  *      (`.legend-toggle-btn`, `.feed-show-btn`) must be pinned via
- *      `position: fixed; bottom: 1rem; right: 1rem` so they dock as one
+ *      `position: absolute; bottom: 1rem; right: 1rem` so they dock as one
  *      tidy bottom-right group instead of being scattered/cramped.
+ *      (#1833 r2 changed the anchor from `fixed` to `absolute`: the group
+ *      must resolve its offsets against .live-page, the same box .vcr-bar
+ *      is in, or it drifts into the bar by --bottom-nav-reserve at <=768
+ *      and stops taking clicks. #1107's intent — one docked bottom-right
+ *      cluster — is unchanged; .live-page spans the whole map area.)
  *   3. Theming uses existing CSS variables only — no new hex colors.
  *
  * Source-invariant assertions on public/live.css, same approach as
@@ -87,8 +92,8 @@ assert(legendBtn != null, '.legend-toggle-btn rule block found');
 
 if (legendBtn) {
   assert(
-    /position\s*:\s*fixed/.test(legendBtn),
-    '.legend-toggle-btn uses position: fixed (pinned to viewport)'
+    /position\s*:\s*absolute/.test(legendBtn),
+    '.legend-toggle-btn uses position: absolute (docked to .live-page, #1833 r2)'
   );
   assert(
     /bottom\s*:\s*(1rem|max\(1rem|calc\(\s*var\(--vcr-bar-height)/.test(legendBtn),
@@ -105,8 +110,8 @@ assert(feedShowBtn != null, '.feed-show-btn rule block found');
 
 if (feedShowBtn) {
   assert(
-    /position\s*:\s*fixed/.test(feedShowBtn),
-    '.feed-show-btn uses position: fixed (pinned to viewport)'
+    /position\s*:\s*absolute/.test(feedShowBtn),
+    '.feed-show-btn uses position: absolute (docked to .live-page, #1833 r2)'
   );
   assert(
     /bottom\s*:\s*(1rem|max\(1rem)/.test(feedShowBtn),

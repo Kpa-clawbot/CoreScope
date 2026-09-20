@@ -895,11 +895,20 @@ body.live-fullscreen #liveFullscreenToggle:hover,
 .feed-hide-btn:hover { opacity: 1; color: #fff; background: rgba(239,68,68,0.6); }
 
 .feed-show-btn {
-  /* #1107: pin fixed bottom-right (stacked above legend toggle) so the
+  /* #1107: pin bottom-right (stacked above legend toggle) so the
    * activate/hide button group docks together as a tidy cluster.
-   * bottom uses max() to clear the VCR bar when present (#1206). */
+   * bottom uses max() to clear the VCR bar when present (#1206).
+   * #1833 r2: absolute, not fixed, for the same containing-block reason as
+   * .legend-toggle-btn below — the pair must resolve `bottom` against
+   * .live-page like .vcr-bar does, or they drift by --bottom-nav-reserve.
+   * This button is display:none only at <=640, so it IS shown in the
+   * 641..768 band and was displaced by the full reserve there too. It kept
+   * working by luck rather than design: its --legend-toggle-stack offset
+   * parks it a row above the legend toggle, so the same 56px drop left its
+   * bottom edge ~16px clear of the bar instead of inside it (measured).
+   * Same defect, 16px from the same break. */
   --legend-toggle-stack: calc(var(--legend-toggle-h, 46px) + 10px); /* gap above legend-toggle */
-  position: fixed;
+  position: absolute;
   bottom: max(1rem, calc(var(--vcr-bar-height, 0px) + 10px + var(--legend-toggle-stack)));
   right: 1rem; z-index: 500;
   /* Stack above .legend-toggle-btn using margin-bottom so the `right: 1rem`
@@ -1305,11 +1314,23 @@ input.live-node-filter-input:focus {
 }
 
 /* Legend toggle button — visible at all sizes (#60, #279).
- * #1107: pinned fixed bottom-right so the activate/hide button group
- * docks consistently (with .feed-show-btn) instead of floating loose
- * inside the map container. */
+ * #1107: pinned bottom-right so the activate/hide button group docks
+ * consistently (with .feed-show-btn) instead of floating loose inside
+ * the map container.
+ *
+ * #1833 r2: `position: fixed` resolved this `bottom` against the VIEWPORT,
+ * but the bar it is offsetting past (.vcr-bar) is absolute inside
+ * .live-page — and .live-page is `--bottom-nav-reserve` SHORTER than the
+ * viewport at <=768 (bottom-nav.css sets the token to 56px + safe-area).
+ * The two anchors disagreed by exactly that reserve, so in the 641..768
+ * band (where the legend is still shown; <=640 hides it) the button landed
+ * inside the VCR bar's band. The bar is z-index 1000 against the button's
+ * 500 and takes pointer events, so it swallowed every click and the legend
+ * could not be dismissed — #1833's symptom returning by a different route.
+ * `position: absolute` puts the button in the same containing block as the
+ * bar it clears, so the offset cannot drift from the bar again. */
 .legend-toggle-btn {
-  position: fixed;
+  position: absolute;
   bottom: calc(var(--vcr-bar-height, 58px) + 10px);
   right: 1rem;
   z-index: 500;
