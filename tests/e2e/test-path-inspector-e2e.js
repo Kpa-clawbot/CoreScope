@@ -43,19 +43,21 @@ async function pickPrefixes(page) {
     const r = await page.request.get(BASE + path);
     return r.ok() ? r.json() : null;
   };
+  // A neighbour entry can carry a null pubkey: the graph records the hop by
+  // prefix, and the node behind it need not be known. Those are useless here,
+  // since the chain has to be followed one hop further.
+  const resolved = (r) => ((r && r.neighbors) || []).filter(x => typeof x.pubkey === 'string' && x.pubkey.length >= 2);
+
   const seed = await get('/api/nodes?role=repeater&limit=25');
-  const nodes = (seed && seed.nodes) || [];
+  const nodes = ((seed && seed.nodes) || []).filter(n => typeof n.public_key === 'string' && n.public_key.length >= 2);
   for (const n of nodes) {
     const pk = n.public_key;
-    if (!pk) continue;
-    const a = await get(`/api/nodes/${pk}/neighbors`);
-    const aN = (a && a.neighbors) || [];
+    const aN = resolved(await get(`/api/nodes/${pk}/neighbors`));
     if (!aN.length) continue;
     // Prefer a neighbour that itself has a neighbour, so the chain is three
     // hops long and (5) below has two candidates to switch between.
     for (const hop of aN) {
-      const b = await get(`/api/nodes/${hop.pubkey}/neighbors`);
-      const bN = ((b && b.neighbors) || []).filter(x => x.pubkey !== pk);
+      const bN = resolved(await get(`/api/nodes/${hop.pubkey}/neighbors`)).filter(x => x.pubkey !== pk);
       if (bN.length) {
         return [pk, hop.pubkey, bN[0].pubkey].map(k => k.slice(0, 2).toLowerCase()).join(',');
       }
