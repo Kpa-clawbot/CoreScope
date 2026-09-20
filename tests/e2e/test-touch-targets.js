@@ -37,7 +37,8 @@ const MIN_OVERRIDES = {
   // component rule further down (:890 and :1838), which wins. 44 is what
   // ships, and it is the WCAG 2.5.5 / Apple HIG figure the later rule cites.
   // Pinned at the effective value rather than the aspirational one; the
-  // contradiction itself is reported separately and is not a test problem.
+  // contradiction itself is #2052, and is not a test problem. Remove these
+  // two entries when that is settled either way.
   '.nav-btn': 44,
   '.ch-icon-btn': 44,
 };
