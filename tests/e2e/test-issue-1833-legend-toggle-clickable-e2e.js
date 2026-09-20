@@ -28,9 +28,12 @@
  * tests covered.
  *
  * Asserts, at 720x900 (inside that band):
- *   (a) --bottom-nav-reserve is actually non-zero — i.e. the test is really
- *       exercising the reserve band and not silently passing on a desktop
- *       layout.
+ *   (a) .live-page actually ends short of the viewport bottom — i.e. the
+ *       reserve is applied and the run is really exercising the regressed
+ *       band, not silently passing on a desktop layout. Measured, not read
+ *       off --bottom-nav-reserve: that property is unregistered, so its
+ *       computed value is an unevaluated token sequence ("calc(56px + 0px)")
+ *       with no number in it to test.
  *   (b) both buttons are visible.
  *   (c) each button's bottom edge is at or above the VCR bar's top edge.
  *   (d) elementFromPoint at each button's centre IS that button (or a child)
@@ -107,11 +110,30 @@ async function probe(page, id) {
     const pageRect = livePage.getBoundingClientRect();
     const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
 
+    // --bottom-nav-reserve is an UNREGISTERED custom property, so
+    // getPropertyValue returns the token sequence after var() substitution,
+    // not an evaluated length: bottom-nav.css:45 declares it as
+    // `calc(56px + env(safe-area-inset-bottom, 0px))` and it comes back as
+    // the literal string "calc(56px + 0px)". Both values below are for the
+    // failure message only — nothing asserts on them. The band is proven by
+    // gapBelowLivePage, which is measured.
+    const reserveToken = getComputedStyle(document.documentElement)
+      .getPropertyValue('--bottom-nav-reserve').trim();
+    let reservePx = null;
+    try {
+      const probeEl = document.createElement('div');
+      probeEl.style.cssText =
+        'position:absolute;visibility:hidden;pointer-events:none;width:0;height:var(--bottom-nav-reserve, 0px)';
+      document.body.appendChild(probeEl);
+      reservePx = Math.round(probeEl.getBoundingClientRect().height);
+      probeEl.remove();
+    } catch (_) { /* diagnostics only */ }
+
     return {
       id: btnId,
       position: cs.position,
-      reserve: getComputedStyle(document.documentElement)
-        .getPropertyValue('--bottom-nav-reserve').trim(),
+      reserveToken,
+      reservePx,
       gapBelowLivePage: Math.round(window.innerHeight - pageRect.bottom),
       visible: cs.display !== 'none' && r.width > 0 && r.height > 0,
       display: cs.display,
@@ -162,12 +184,24 @@ async function main() {
   if (!narrowLegend) {
     fail('(setup) #legendToggleBtn / #vcrBar / .live-page not found on /#/live');
   } else {
-    // (a) prove we are in the band that regressed
-    const reservePx = parseFloat(narrowLegend.reserve);
-    if (narrowLegend.gapBelowLivePage > 0 && reservePx > 0) {
-      pass(`(a) reserve band active (--bottom-nav-reserve=${narrowLegend.reserve}, .live-page ends ${narrowLegend.gapBelowLivePage}px above viewport bottom)`);
+    // (a) prove we are in the band that regressed.
+    //
+    // Assert the EFFECT, not the token. `.live-page` ending short of the
+    // viewport is the entire precondition the bug needs, and it is exactly
+    // what (f) depends on, so measuring the gap tests the real thing. The
+    // reserve's declared value is only reported.
+    //
+    // Deliberately `> 0` and not `=== 56`: the gap measures 58px on CI
+    // against a 56px token, and the extra 2px is unexplained (the height is
+    // derived from 100dvh, which need not agree with innerHeight to the
+    // pixel). Pinning the exact number would make this assertion fragile
+    // for no gain — the bug does not care how far short the box ends, only
+    // that it does.
+    const diag = `token="${narrowLegend.reserveToken}", resolved=${narrowLegend.reservePx}px, gap=${narrowLegend.gapBelowLivePage}px`;
+    if (narrowLegend.gapBelowLivePage > 0) {
+      pass(`(a) reserve band active — .live-page ends ${narrowLegend.gapBelowLivePage}px above the viewport bottom (${diag})`);
     } else {
-      fail(`(a) expected a non-zero --bottom-nav-reserve at 720px wide (got "${narrowLegend.reserve}", gap ${narrowLegend.gapBelowLivePage}px) — test is not exercising the regressed band`);
+      fail(`(a) .live-page is flush with the viewport bottom at 720px wide (${diag}) — the reserve is not applied, so this run is not exercising the regressed band`);
     }
   }
 
