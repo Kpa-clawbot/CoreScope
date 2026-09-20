@@ -39,6 +39,19 @@ async function pickPrefixes(page) {
   // Taking them from a packet's recorded path is not enough: those hops need
   // not form an edge chain the search can walk. So walk the graph itself,
   // through the same API the product uses.
+  //
+  // Against a populated instance this works: POST /api/paths/inspect with the
+  // three prefixes picked here returns 10 candidates, where packet-path
+  // prefixes returned none. Against the CI fixture (110 edges over 200 nodes)
+  // it still returns none, so (4) and (5) below skip there. Two things were
+  // ruled out: the prefixes are valid (the endpoint accepts them and answers
+  // 200), and the graph is not empty. What has NOT been established is why
+  // the beam search finds nothing in it, and the most likely remaining
+  // explanation is that the fixture's graph does not contain a chain the
+  // search will score above its thresholds. Seeding one is fixture work, not
+  // a change to this suite. Until then the two cases are exercised only
+  // against an instance with a real graph, and they say so out loud rather
+  // than reporting a pass.
   const get = async (path) => {
     const r = await page.request.get(BASE + path);
     return r.ok() ? r.json() : null;
