@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/gorilla/mux"
 )
 
 // Issue #1999: the packet-detail API returned the transmission's canonical
@@ -155,7 +157,9 @@ func TestPacketDetailExposesPerObservationFrames(t *testing.T) {
 			t.Errorf("observation %d: raw_hex = %q, want its own frame %q", ids[i], got, wantHex)
 		}
 	}
-	// The one without stored bytes keeps the transmission's canonical frame.
+	// The one without stored bytes gets the transmission's canonical frame. On
+	// this path that is new: the DB observation query selects no raw_hex, so
+	// before the fix the field was missing from those observations entirely.
 	if got := byID[ids[3]]; got != "CANON0000" {
 		t.Errorf("observation %d: raw_hex = %q, want the canonical fallback %q", ids[3], got, "CANON0000")
 	}
@@ -167,5 +171,75 @@ func TestPacketDetailExposesPerObservationFrames(t *testing.T) {
 	}
 	if len(distinct) < 3 {
 		t.Errorf("only %d distinct frames across 4 observations (%v) — the canonical frame is still being repeated", len(distinct), byID)
+	}
+}
+
+// TestPacketDetailExposesPerObservationFramesFromStore covers the path almost
+// every real request takes: the transmission IS in the in-memory store.
+//
+// This is the case a DB-fallback-only test misses. enrichObsWithTx already puts
+// the transmission's canonical frame into every observation map, so a backfill
+// that skipped observations which "already have" raw_hex would skip all of them
+// and leave the defect untouched on the main path. A stored frame has to win
+// over that placeholder.
+func TestPacketDetailExposesPerObservationFramesFromStore(t *testing.T) {
+	db := setupTestDB(t)
+	seedTestData(t, db)
+	db.hasObsRawHex = true
+
+	// Seed BEFORE the store loads, so the store holds this transmission and the
+	// handler never reaches its DB fallback.
+	hash, ids := seedDistinctFrames(t, db, "1999aabbccdd0011")
+
+	cfg := &Config{Port: 3000}
+	srv := NewServer(db, cfg, NewHub())
+	store := NewPacketStore(db, nil)
+	if err := store.Load(); err != nil {
+		t.Fatalf("store.Load: %v", err)
+	}
+	if !store.WaitIndexesReady(5 * time.Second) {
+		t.Fatal("background indexes never became ready")
+	}
+	srv.store = store
+	router := mux.NewRouter()
+	srv.RegisterRoutes(router)
+
+	if got := srv.store.GetPacketByHash(hash); got == nil {
+		t.Fatal("precondition failed: the store does not hold the seeded transmission")
+	}
+
+	req := httptest.NewRequest("GET", "/api/packets/"+hash, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("got %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	obsList, _ := body["observations"].([]interface{})
+	if len(obsList) != 4 {
+		t.Fatalf("got %d observations, want 4", len(obsList))
+	}
+
+	byID := map[int]string{}
+	for _, raw := range obsList {
+		m, _ := raw.(map[string]interface{})
+		idF, ok := m["id"].(float64)
+		if !ok {
+			t.Fatalf("observation has no numeric id: %v", m["id"])
+		}
+		hx, _ := m["raw_hex"].(string)
+		byID[int(idF)] = hx
+	}
+
+	for i, wantHex := range []string{"FRAME2HOPS", "FRAME3HOPS", "FRAME1HOP"} {
+		if got := byID[ids[i]]; got != wantHex {
+			t.Errorf("store path, observation %d: raw_hex = %q, want its own frame %q (a canonical value here means the backfill was skipped)", ids[i], got, wantHex)
+		}
+	}
+	if got := byID[ids[3]]; got != "CANON0000" {
+		t.Errorf("store path, observation %d: raw_hex = %q, want the canonical fallback %q", ids[3], got, "CANON0000")
 	}
 }
