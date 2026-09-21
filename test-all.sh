@@ -44,6 +44,7 @@ node tests/unit/test-confidence-indicator.js
 node tests/unit/test-coverage-gate.js
 node tests/unit/test-customizer-v2.js
 node tests/unit/test-drag-manager.js
+node tests/unit/test-direct-rf-heard-by.js
 node tests/unit/test-embed-mode-1369.js
 node tests/unit/test-fetch-all-nodes-pagination.js
 node tests/unit/test-fluid-scaffolding.js
