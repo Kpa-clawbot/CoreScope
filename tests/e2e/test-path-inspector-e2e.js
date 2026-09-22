@@ -9,10 +9,16 @@
  * the standalone page. What it keeps is what nothing else covers:
  *
  *   - the side pane on /#/map: present, collapsed, expands, submits
- *   - Show on Map draws a route, and switching candidates replaces it
- *     rather than stacking (public/map.js clears routeLayer first)
  *   - /#/traces/<hash> still redirects to /#/tools/trace/<hash>
  *   - /#/tools lists both tools
+ *
+ * NOT covered here, deliberately: "Show on Map draws a route" and "switching
+ * candidates replaces it rather than stacking". Both need
+ * /api/paths/inspect to return a candidate, and its beam search finds none in
+ * the CI fixture's neighbour graph. They were written, they worked against a
+ * populated instance, and they skipped in CI — a green suite hiding two
+ * untested assertions, which is the exact shape #2037 is about. Removed
+ * rather than shipped as skips; the fixture work they need is #2060.
  *
  * Ported from the @playwright/test version, which was written against a
  * runner this project does not install and so had never run (#2037). The
@@ -27,10 +33,9 @@
 const { chromium } = require('playwright');
 
 const BASE = process.env.BASE_URL || 'http://localhost:13581';
-// Prefixes are taken from the dataset under test rather than hardcoded: a
-// fixed pair like "2c,a1" resolves to nothing on the CI fixture, and (4) and
-// (5) below then skip, which is the "green but covers nothing" outcome #2037
-// is about.
+// Prefixes are taken from the dataset under test rather than hardcoded, so
+// the submit below exercises a real lookup instead of a constant that resolves
+// to nothing.
 let PREFIXES = null;
 
 async function pickPrefixes(page) {
@@ -40,18 +45,11 @@ async function pickPrefixes(page) {
   // not form an edge chain the search can walk. So walk the graph itself,
   // through the same API the product uses.
   //
-  // Against a populated instance this works: POST /api/paths/inspect with the
-  // three prefixes picked here returns 10 candidates, where packet-path
-  // prefixes returned none. Against the CI fixture (110 edges over 200 nodes)
-  // it still returns none, so (4) and (5) below skip there. Two things were
-  // ruled out: the prefixes are valid (the endpoint accepts them and answers
-  // 200), and the graph is not empty. What has NOT been established is why
-  // the beam search finds nothing in it, and the most likely remaining
-  // explanation is that the fixture's graph does not contain a chain the
-  // search will score above its thresholds. Seeding one is fixture work, not
-  // a change to this suite. Until then the two cases are exercised only
-  // against an instance with a real graph, and they say so out loud rather
-  // than reporting a pass.
+  // Against a populated instance this yields candidates: POST
+  // /api/paths/inspect with the three prefixes picked here returned 10, where
+  // prefixes taken from a packet's recorded path returned none. Against the CI
+  // fixture (110 edges over 200 nodes) it still returns none, which is why the
+  // two drawing assertions are not in this file — see the header and #2060.
   const get = async (path) => {
     const r = await page.request.get(BASE + path);
     return r.ok() ? r.json() : null;
@@ -80,16 +78,9 @@ async function pickPrefixes(page) {
   return null;
 }
 
-let passes = 0, failures = 0, skips = 0;
+let passes = 0, failures = 0;
 function pass(msg) { console.log(`  ✓ ${msg}`); passes++; }
 function fail(msg) { console.error(`  ✗ ${msg}`); failures++; }
-function skip(msg) { console.log(`  ○ SKIP ${msg}`); skips++; }
-
-// Count the polylines Leaflet has drawn. preferCanvas is on for markers, but
-// drawPacketRoute's polylines land in the SVG overlay, so they are countable.
-function countRoutePaths(page) {
-  return page.evaluate(() => document.querySelectorAll('#leaflet-map .leaflet-overlay-pane svg path, .leaflet-overlay-pane svg path').length);
-}
 
 // The toggle ships in the page template, but its click handler is attached by
 // initMapSidePane(), which public/map.js calls at the END of loadNodes()
@@ -148,9 +139,9 @@ async function main() {
 
   PREFIXES = await pickPrefixes(page);
   if (!PREFIXES) {
-    // Not a skip. Every dataset this runs against, fixture included, has a
-    // neighbour graph; none would mean the graph or the nodes API changed
-    // shape, and the inspector cases below would then be silently untested.
+    // A failure, not a skip. Every dataset this runs against, fixture
+    // included, has a neighbour graph; none would mean the graph or the nodes
+    // API changed shape.
     console.error('  ✗ (0) no connected pair found in the neighbour graph, so the inspector cannot be exercised');
     await browser.close();
     process.exit(1);
@@ -185,61 +176,16 @@ async function main() {
     fail('(3) neither results nor an error appeared within 10s of submitting');
   }
 
-  // (4) and (5) need at least one candidate from the fixture.
-  const candidates = await page.evaluate(() =>
-    document.querySelectorAll('#mapPiResults button[data-idx]').length);
-
-  if (candidates === 0) {
-    skip(`(4) Show on Map: the fixture returned no candidates for "${PREFIXES}"`);
-    skip('(5) switching candidates: needs at least two candidates');
-  } else {
-    // (4) Show on Map draws something.
-    const before = await countRoutePaths(page);
-    await page.click('#mapPiResults button[data-idx="0"]');
-    try {
-      await page.waitForFunction((b) =>
-        document.querySelectorAll('.leaflet-overlay-pane svg path').length > b, before, { timeout: 5000 });
-      pass('(4) Show on Map draws the route');
-    } catch {
-      fail(`(4) no polyline appeared after Show on Map (paths before ${before}, after ${await countRoutePaths(page)})`);
-    }
-
-    if (candidates < 2) {
-      skip(`(5) switching candidates: the fixture returned only ${candidates} candidate`);
-    } else {
-      // (5) Switching candidates replaces the route instead of stacking it.
-      // map.js clears routeLayer before drawing, so the count after
-      // 0-then-1 must equal the count for 1 on its own.
-      const after01 = await (async () => {
-        await page.click('#mapPiResults button[data-idx="1"]');
-        await page.waitForTimeout(500);
-        return countRoutePaths(page);
-      })();
-
-      await openPaneAndSubmit(page);
-      const baseline = await countRoutePaths(page);
-      await page.click('#mapPiResults button[data-idx="1"]');
-      await page.waitForTimeout(500);
-      const after1 = await countRoutePaths(page);
-
-      if (after01 === after1) {
-        pass(`(5) switching candidates replaces the route (${after01} paths either way, baseline ${baseline})`);
-      } else {
-        fail(`(5) the prior route was left behind: 0-then-1 drew ${after01} paths, 1 alone drew ${after1}`);
-      }
-    }
-  }
-
-  // (6) The legacy trace URL still redirects.
+  // (4) The legacy trace URL still redirects.
   await page.goto(`${BASE}/#/traces/abc123`, { waitUntil: 'domcontentloaded' });
   try {
     await page.waitForFunction(() => location.hash.indexOf('#/tools/trace/abc123') === 0, null, { timeout: 5000 });
-    pass('(6) /#/traces/<hash> redirects to /#/tools/trace/<hash>');
+    pass('(4) /#/traces/<hash> redirects to /#/tools/trace/<hash>');
   } catch {
-    fail(`(6) no redirect; the URL is ${JSON.stringify(page.url())}`);
+    fail(`(4) no redirect; the URL is ${JSON.stringify(page.url())}`);
   }
 
-  // (7) The tools landing lists both tools.
+  // (5) The tools landing lists both tools.
   await page.goto(`${BASE}/#/tools`, { waitUntil: 'domcontentloaded' });
   try {
     await page.waitForSelector('.tools-landing', { timeout: 8000 });
@@ -247,14 +193,14 @@ async function main() {
       pi: !!document.querySelector('a[href="#/tools/path-inspector"]'),
       trace: !!document.querySelector('a[href*="#/tools/trace"]'),
     }));
-    if (links.pi && links.trace) pass('(7) the tools landing links to both tools');
-    else fail(`(7) the tools landing is missing a link (path-inspector: ${links.pi}, trace: ${links.trace})`);
+    if (links.pi && links.trace) pass('(5) the tools landing links to both tools');
+    else fail(`(5) the tools landing is missing a link (path-inspector: ${links.pi}, trace: ${links.trace})`);
   } catch {
-    fail('(7) .tools-landing never rendered within 8s');
+    fail('(5) .tools-landing never rendered within 8s');
   }
 
   await browser.close();
-  console.log(`\ntest-path-inspector-e2e: ${passes} passed, ${failures} failed, ${skips} skipped`);
+  console.log(`\ntest-path-inspector-e2e: ${passes} passed, ${failures} failed`);
   process.exit(failures ? 1 : 0);
 }
 
