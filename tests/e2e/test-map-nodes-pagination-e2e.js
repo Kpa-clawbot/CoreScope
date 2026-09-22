@@ -26,6 +26,7 @@ const { chromium } = require('playwright');
 
 const BASE = process.env.BASE_URL || 'http://localhost:13581';
 const PAGE_CAP = 500;          // client page size; a node sits past it on page 2
+const FILTERED_INDEX = 450;    // a page-1 row the server drops AFTER the SQL LIMIT
 const PAGE2_KEY = 'page2deadbeef00000000000000000000000000000000000000000000000beef02';
 const PAGE2_NAME = 'PAGE2 RP';
 
@@ -152,13 +153,20 @@ async function checkMapTeardown(browser, stage, revisit) {
       nodesRequests++;
       const limit = Math.min(parseInt(url.searchParams.get('limit') || '50', 10), PAGE_CAP);
       const offset = parseInt(url.searchParams.get('offset') || '0', 10);
-      const slice = fixture.slice(offset, offset + limit);
+      const raw = fixture.slice(offset, offset + limit);
+      // Model handleNodes exactly: the blacklist / hidden-prefix / geo-filter
+      // passes run AFTER the SQL LIMIT, so FILTERED_INDEX is counted by the
+      // limit and by COUNT(*) but removed from the page. Page 1 comes back a
+      // row short WITHOUT being the last page — the shape that stranded every
+      // node behind it once a client stopped on a short page.
+      const slice = raw.filter((_n, i) => offset + i !== FILTERED_INDEX);
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
           nodes: slice,
           total: slice.length, // deliberately wrong per-page total; the helper must ignore it
+          has_more: offset + raw.length < fixture.length, // decided pre-filter, as the server does
           counts: { repeaters: fixture.length, rooms: 0, companions: 0, sensors: 0 },
         }),
       });
@@ -173,15 +181,21 @@ async function checkMapTeardown(browser, stage, revisit) {
   await page.goto(BASE + '/#/map', { waitUntil: 'load', timeout: 60000 });
   await page.waitForSelector('#leaflet-map', { timeout: 15000 });
 
-  await step('map loads all 501 nodes by paginating past the 500-row cap', async () => {
-    // Wait until loadNodes() has populated the app node set.
+  await step('a page shortened by post-LIMIT filtering does not end pagination', async () => {
+    // 500 = 501 fixture nodes minus the one the mock filters out of page 1.
+    // Pre-fix the run stops on that 499-row page and __mc_nodes holds 499.
     await page.waitForFunction(
-      () => Array.isArray(window.__mc_nodes) && window.__mc_nodes.length >= 501,
+      () => Array.isArray(window.__mc_nodes) && window.__mc_nodes.length >= 500,
       { timeout: 15000 }
     );
     const len = await page.evaluate(() => window.__mc_nodes.length);
-    assert(len === 501, 'expected 501 nodes in __mc_nodes, got ' + len);
+    assert(len === 500, 'expected 500 nodes in __mc_nodes (501 minus the filtered row), got ' + len);
     assert(nodesRequests >= 2, 'expected ≥2 /api/nodes page requests, got ' + nodesRequests);
+    const filteredGone = await page.evaluate(
+      (k) => !window.__mc_nodes.some((n) => n.public_key === k),
+      'p1' + String(FILTERED_INDEX).padStart(62, '0')
+    );
+    assert(filteredGone, 'the filtered row must stay filtered, not reappear');
   });
 
   await step('the page-2 node (cut by the cap pre-fix) is present in the node set', async () => {

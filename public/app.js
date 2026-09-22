@@ -237,11 +237,25 @@ async function fetchAllNodes(extraQuery = '', { ttl = 0, pageSize = 500, safetyC
       : (Array.isArray(data) ? data : []);
     accumulated.push.apply(accumulated, page);
     if (offset === 0) counts = (data && data.counts) || {};
-    // Canonical stop: a short page is the end. The server's `total` is a real
-    // COUNT(*) for the query, but the handler overwrites it with the filtered
-    // length under area/geo/blacklist filtering — so we never loop on it, nor
-    // surface it; a short page is the reliable end-of-data signal. See #1606.
-    if (page.length < pageSize) break;
+    // Canonical stop: the server's `has_more`. Neither of the other two signals
+    // can be trusted — the handler rewrites `total` to the filtered length, AND
+    // the same filters (blacklist / hidden prefix / geo-filter / area) drop rows
+    // from the page itself, so a page can be short while later pages still hold
+    // rows. #1606 stopped on a short page, which is correct only on deployments
+    // where nothing is ever filtered; elsewhere one filtered node in page 1
+    // stranded every node behind it. `has_more` is computed server-side before
+    // those filters run.
+    // An empty page always ends it: there is nothing here, and OFFSET means
+    // nothing behind it either. Checked first so a server reporting has_more
+    // against a concurrently-shrinking table cannot spin us to safetyCap.
+    if (page.length === 0) break;
+    if (data && typeof data.has_more === 'boolean') {
+      if (!data.has_more) break;
+      continue;
+    }
+    // Server predates `has_more`: fall back to a zero-length page, the only
+    // remaining end-of-data signal that filtering cannot fake. Costs one extra
+    // request per load against an old server; a short page no longer stops us.
   }
   // Dedup by public_key: the sort window (last_seen DESC by default) can shift
   // under concurrent ingest, repeating a row across a page boundary. Rows

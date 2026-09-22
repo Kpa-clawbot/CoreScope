@@ -208,9 +208,10 @@ func componentSchemas() map[string]interface{} {
 		"NodeListResponse": map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"nodes":  map[string]interface{}{"type": "array", "items": schemaRef("Node")},
-				"total":  map[string]interface{}{"type": "integer", "description": "Total nodes matching the query after filtering."},
-				"counts": map[string]interface{}{"type": "object", "additionalProperties": map[string]interface{}{"type": "integer"}, "description": "Per-role node counts."},
+				"nodes":    map[string]interface{}{"type": "array", "items": schemaRef("Node")},
+				"total":    map[string]interface{}{"type": "integer", "description": "Total nodes matching the query after filtering."},
+				"counts":   map[string]interface{}{"type": "object", "additionalProperties": map[string]interface{}{"type": "integer"}, "description": "Per-role node counts."},
+				"has_more": map[string]interface{}{"type": "boolean", "description": "True when rows exist past this page. Decided before the blacklist / hidden-prefix / geo-filter / area passes, which drop rows from the page and rewrite total — so neither the page length nor total can be used to stop paginating. Paginate until this is false."},
 			},
 		},
 		"NodeDetailResponse": map[string]interface{}{

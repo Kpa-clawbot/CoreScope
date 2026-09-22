@@ -1334,9 +1334,10 @@ func (s *Server) handleDecode(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	limit := queryLimit(r, 50, s.cfg.ListLimits.NodesMax)
+	offset := queryInt(r, "offset", 0)
 	nodes, total, counts, err := s.db.GetNodes(
-		queryLimit(r, 50, s.cfg.ListLimits.NodesMax),
-		queryInt(r, "offset", 0),
+		limit, offset,
 		q.Get("role"), q.Get("search"), q.Get("before"),
 		q.Get("lastHeard"), q.Get("sortBy"), q.Get("region"),
 	)
@@ -1344,6 +1345,14 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	// Whether more rows exist is decided HERE, against the raw SQL page and the
+	// real COUNT(*), because both other candidate signals are destroyed further
+	// down: the geo-filter / blacklist / hidden-prefix / area passes drop rows
+	// from this page AND rewrite `total` to the filtered length. A page that
+	// loses a row is then short without being the last page, so a client that
+	// stops on a short page strands every node behind it (#1606 fixed the
+	// no-filter case only). has_more survives those passes untouched.
+	hasMore := offset+len(nodes) < total
 	if s.store != nil {
 		hashInfo := s.store.GetNodeHashSizeInfo()
 		relayWindow := s.cfg.GetHealthThresholds().RelayActiveHours
@@ -1513,7 +1522,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 			total = len(filtered)
 		}
 	}
-	writeJSON(w, NodeListResponse{Nodes: nodes, Total: total, Counts: counts})
+	writeJSON(w, NodeListResponse{Nodes: nodes, Total: total, Counts: counts, HasMore: hasMore})
 }
 
 func (s *Server) handleNodeSearch(w http.ResponseWriter, r *http.Request) {

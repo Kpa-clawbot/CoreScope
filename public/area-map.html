@@ -239,7 +239,11 @@ async function fetchAllNodesPaged(extra) {
     const d = await r.json();
     const page = Array.isArray(d) ? d : (d.nodes || []);
     out.push.apply(out, page);
-    if (page.length < PAGE) break;
+    // has_more, not page length: /api/nodes filters rows out AFTER the SQL
+    // LIMIT, so a short page can still have pages behind it. Zero-length is
+    // the fallback for a server that predates the flag.
+    if (page.length === 0) break;
+    if (typeof d.has_more === 'boolean' && !d.has_more) break;
   }
   // Dedup by public_key; rows missing one get a unique key so they aren't collapsed.
   const seen = new Map();
