@@ -66,8 +66,19 @@ test('relayed observers are reported as a count, without signal numbers', () => 
 test('a node nobody hears directly still renders the card, with an empty state', () => {
   const html = renderCard([], 35, esc);
   assert.ok(/Heard By &mdash; direct \(0 observers\)/.test(html), 'expected a zero direct heading');
-  assert.ok(/No observer is within radio range of this node\./.test(html),
+  assert.ok(/No observation proves a direct reception here/.test(html),
     'expected the empty state line');
+  // The empty state must not assert that nobody is in range. It cannot know
+  // that: direct-routed traffic carries no sender (firmware Mesh.cpp calls
+  // removeSelfFromPath before retransmitting) and ambiguous relay hops are
+  // left unattributed, so a node can be heard by several observers and still
+  // have no attributable direct reception. Measured on a production instance
+  // when this card shipped: 16 of 40 sampled repeaters showed the empty state
+  // while the same card counted relay observers two lines below.
+  assert.ok(!/No observer is within radio range/i.test(html),
+    'the empty state must not assert that nobody is in range');
+  assert.ok(/not the same as being out of range/i.test(html),
+    'the empty state must say what it cannot conclude, not only what it found');
   assert.ok(/Seen via relay by 35 observers/.test(html), 'expected the relay count');
   assert.ok(!/observer-sort-table/.test(html),
     'an empty direct list must not render a table header with no rows');
