@@ -107,12 +107,36 @@ func directHeardNode(tx *StoreTx, obs *StoreObs, pm *prefixMap) string {
 	if tx == nil || obs == nil || tx.RouteType == nil {
 		return ""
 	}
+	hop := lastPathHop(obs.PathJSON)
 	switch *tx.RouteType {
 	case RouteFlood, RouteTransportFlood:
+		// Handled below: empty path means the originator, otherwise the last
+		// hop is whoever was heard.
+	case RouteDirect, RouteTransportDirect:
+		// A direct route normally says nothing about the transmitter, because
+		// the forwarder calls removeSelfFromPath before retransmitting
+		// (firmware Mesh.cpp) and the path left behind is the REMAINING route.
+		//
+		// The exception is a zero hop. Mesh::sendZeroHop sets ROUTE_TYPE_DIRECT
+		// (its transport overload ROUTE_TYPE_TRANSPORT_DIRECT) and path_len = 0,
+		// commented there as "path_len of zero means Zero Hop". Repeaters send
+		// their periodic local advert that way (simple_repeater/MyMesh.cpp, the
+		// next_local_advert branch and sendSelfAdvertisement with flood=false),
+		// and so do companions. An ADVERT arriving on a direct route with an
+		// empty path therefore cannot have been forwarded: the observer heard
+		// the advertiser's own transmission, and the advert carries its pubkey
+		// in the clear. That is the strongest direct-RF evidence there is.
+		//
+		// Anything else direct still says nothing: a non-empty path is the
+		// remaining route, and advertOriginPubkey returns "" for every payload
+		// type other than ADVERT.
+		if hop == "" {
+			return advertOriginPubkey(tx)
+		}
+		return ""
 	default:
 		return ""
 	}
-	hop := lastPathHop(obs.PathJSON)
 	if hop == "" {
 		return advertOriginPubkey(tx)
 	}

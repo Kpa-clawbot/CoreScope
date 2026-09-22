@@ -128,6 +128,38 @@ func TestDirectHeardNode(t *testing.T) {
 			want:     "",
 		},
 		{
+			// Mesh::sendZeroHop sets ROUTE_TYPE_DIRECT and path_len = 0, and
+			// repeaters send their periodic local advert that way. An ADVERT
+			// arriving direct with an empty path cannot have been forwarded,
+			// so the observer heard the advertiser itself.
+			name:     "zero-hop advert on a direct route credits the advertiser",
+			tx:       dhTx(RouteDirect, PayloadADVERT, advert),
+			pathJSON: "",
+			want:     dhUnique,
+		},
+		{
+			name:     "zero-hop advert on a transport-direct route credits the advertiser",
+			tx:       dhTx(RouteTransportDirect, PayloadADVERT, advert),
+			pathJSON: `[]`,
+			want:     dhUnique,
+		},
+		{
+			// The zero-hop exception is only about adverts. Any other payload
+			// arriving direct with an empty path still identifies nobody.
+			name:     "direct route, empty path, not an advert, credits nobody",
+			tx:       dhTx(RouteDirect, PayloadTXT_MSG, ""),
+			pathJSON: "",
+			want:     "",
+		},
+		{
+			// A direct route with a path is the REMAINING route, so the last
+			// entry is where the packet is going, not who transmitted it.
+			name:     "direct advert with a non-empty path credits nobody",
+			tx:       dhTx(RouteDirect, PayloadADVERT, advert),
+			pathJSON: `["A433","BB11"]`,
+			want:     "",
+		},
+		{
 			name:     "flood advert with empty path credits the originator",
 			tx:       dhTx(RouteFlood, PayloadADVERT, advert),
 			pathJSON: `[]`,
