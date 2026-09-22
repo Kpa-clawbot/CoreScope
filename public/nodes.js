@@ -781,7 +781,7 @@
         ${observers.length || relayObserverCount ? `<div class="node-full-card" id="node-observers">
           ${(() => { const regions = [...new Set(observers.map(o => o.iata).filter(Boolean))]; return regions.length ? `<div style="margin-bottom:8px"><strong>Regions:</strong> ${regions.map(r => '<span class="badge" style="margin:0 2px">' + escapeHtml(r) + '</span>').join(' ')}</div>` : ''; })()}
           <h4 title="Observers that received this node's own transmission off the air. An observer that only saw traffic relayed through this node is counted separately below.">Heard By &mdash; direct (${observers.length} observer${observers.length === 1 ? '' : 's'})</h4>
-          ${observers.length ? '' : '<div class="text-muted" style="font-size:12px;padding:4px 0">No observer is within radio range of this node.</div>'}
+          ${observers.length ? '' : '<div class="text-muted" style="font-size:12px;padding:4px 0" title="Only flood-routed transmissions identify who was heard: a direct route removes the sender from the path before retransmitting (firmware Mesh.cpp, removeSelfFromPath), and an ambiguous relay hop is left unattributed rather than guessed. So an empty list is missing evidence, not proof of missing coverage.">No observation proves a direct reception here, which is not the same as being out of range.</div>'}
           ${observers.length ? `<table class="data-table observer-sort-table" style="font-size:12px">
             <thead><tr>
               <th scope="col" data-sort-key="observer">Observer</th>
@@ -1756,7 +1756,7 @@
         ${observers.length || relayObserverCount ? `<div class="node-detail-section">
           ${(() => { const regions = [...new Set(observers.map(o => o.iata).filter(Boolean))]; return regions.length ? `<div style="margin-bottom:6px;font-size:12px"><strong>Regions:</strong> ${regions.join(', ')}</div>` : ''; })()}
           <h4 title="Observers that received this node's own transmission off the air.">Heard By &mdash; direct (${observers.length} observer${observers.length === 1 ? '' : 's'})</h4>
-          ${observers.length ? '' : '<div class="text-muted" style="font-size:12px;padding:4px 0">No observer is within radio range of this node.</div>'}
+          ${observers.length ? '' : '<div class="text-muted" style="font-size:12px;padding:4px 0" title="Only flood-routed transmissions identify who was heard: a direct route removes the sender from the path before retransmitting (firmware Mesh.cpp, removeSelfFromPath), and an ambiguous relay hop is left unattributed rather than guessed. So an empty list is missing evidence, not proof of missing coverage.">No observation proves a direct reception here, which is not the same as being out of range.</div>'}
           <div class="observer-list">
             ${observers.map(o => {
               const stats = [`${o.packetCount} pkts`];
