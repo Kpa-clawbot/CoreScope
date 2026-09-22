@@ -1237,6 +1237,49 @@ func (s *Server) handlePacketDetail(w http.ResponseWriter, r *http.Request) {
 	if len(observations) == 0 && fromDB && s.db != nil && hash != "" {
 		observations = s.db.GetObservationsForHash(hash)
 	}
+	// #1999: give each observation its OWN wire bytes. Neither the store nor
+	// the DB observation query carries them — both deliberately drop
+	// observations.raw_hex (#881, ~98MB on a 1.7M-observation store) on the
+	// assumption that one content hash means one frame. The firmware hashes
+	// payload and type independently of the relay path, so that is false: on a
+	// production DB, 1844 of the 3000 most recent transmissions with multiple
+	// observations hold genuinely different frames, up to 51 of them for a
+	// single packet. Without this the detail view showed the transmission's
+	// canonical frame for every observation, which can contradict the
+	// path_json shown beside it.
+	//
+	// Done here rather than in enrichObs so it is one query for the whole
+	// request instead of one per observation, and after the store lock is
+	// released. Bytes already present win: a caller that built the map from a
+	// response (or a future path that does retain them) is not overwritten.
+	// The canonical frame, for observations that stored none of their own. The
+	// store path already fills this in (enrichObsWithTx falls back to
+	// tx.RawHex), but the DB-fallback path never has: its observation query
+	// selects no raw_hex at all, so those observations came back with the field
+	// missing entirely. Both paths end up consistent here.
+	// A stored per-observation frame WINS over whatever is already in the map.
+	// On the store path enrichObsWithTx has already put the transmission's
+	// canonical frame there, so skipping observations that "already have"
+	// raw_hex would skip every one of them and leave the bug in place on the
+	// main path. Only where no frame is stored does the canonical value stand.
+	canonicalHex, _ := packet["raw_hex"].(string)
+	if s.db != nil && hash != "" && len(observations) > 0 {
+		byObsID := s.db.ObservationRawHexForHash(hash)
+		for _, obs := range observations {
+			if id, ok := obs["id"].(int); ok {
+				if hx := byObsID[id]; hx != "" {
+					obs["raw_hex"] = hx
+					continue
+				}
+			}
+			if existing, ok := obs["raw_hex"].(string); ok && existing != "" {
+				continue
+			}
+			if canonicalHex != "" {
+				obs["raw_hex"] = canonicalHex
+			}
+		}
+	}
 	observationCount := len(observations)
 	if observationCount == 0 {
 		observationCount = 1
