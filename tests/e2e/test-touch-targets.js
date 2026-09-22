@@ -27,9 +27,37 @@ const { chromium, devices } = require('playwright');
 const REPO = REPO_ROOT;
 const CSS = fs.readFileSync(path.join(REPO, 'public/style.css'), 'utf8');
 
-// Selectors we claim to make 48x48. Each entry: [selector, tag, classes,
-// optional inner-html]. Tag matters because some rules are scoped to
-// `button.ch-item` and some only apply to specific input[type=...].
+// Minimum hit area per selector. 48 is the house default (public/style.css:610
+// states it for the whole group); MIN_OVERRIDES carries the documented
+// exceptions, so a third selector quietly dropping to 44 still fails here.
+const DEFAULT_MIN = 48;
+const MIN_OVERRIDES = {
+  // Both are declared twice in public/style.css: 48px in the touch-target
+  // block (.nav-btn at :561, .ch-icon-btn at :567) and 44px in their own
+  // component rule further down (:890 and :1838), which wins. 44 is what
+  // ships, and it is the WCAG 2.5.5 / Apple HIG figure the later rule cites.
+  // Pinned at the effective value rather than the aspirational one; the
+  // contradiction itself is #2052, and is not a test problem. Remove these
+  // two entries when that is settled either way.
+  '.nav-btn': 44,
+  '.ch-icon-btn': 44,
+};
+
+// Selectors we claim to make DEFAULT_MIN square, except where MIN_OVERRIDES
+// says otherwise. Each entry: [selector, tag, classes, optional inner-html].
+// Tag matters because some rules are scoped to `button.ch-item` and some only
+// apply to specific input[type=...].
+//
+// Not listed, and why:
+//   .compare-btn      the Compare CTA was removed in #1646 (see style.css)
+//   .ch-back-btn      display:none outside the mobile channels layout, so a
+//                     standalone element in this harness measures 0x0
+//   .filter-toggle-btn  hidden on mobile since #1461 (style.css:1161,
+//                     display:none !important); the control actually shown is
+//                     the navbar mirror, which mobile-page-actions.js:70
+//                     builds with class "nav-btn filter-toggle-btn-mirror
+//                     mpa-btn-pill", so the .nav-btn entry above already
+//                     measures it
 const BUTTON_SELECTORS = [
   ['.btn',                   'button', 'btn'],
   ['.btn-icon',              'button', 'btn-icon'],
@@ -43,14 +71,11 @@ const BUTTON_SELECTORS = [
   ['button.ch-item',         'button', 'ch-item'],
   ['.btn-link',              'button', 'btn-link'],
   ['.col-toggle-btn',        'button', 'col-toggle-btn'],
-  ['.filter-toggle-btn',     'button', 'filter-toggle-btn'],
   ['.ch-add-channel-btn',    'button', 'ch-add-channel-btn'],
-  ['.ch-back-btn',           'button', 'ch-back-btn'],
   ['.ch-modal-btn-secondary','button', 'ch-modal-btn-secondary'],
   ['.ch-scroll-btn',         'button', 'ch-scroll-btn'],
   ['.chooser-btn',           'button', 'chooser-btn'],
   ['.clock-filter-btn',      'button', 'clock-filter-btn'],
-  ['.compare-btn',           'button', 'compare-btn'],
   ['.copy-link-btn',         'button', 'copy-link-btn'],
   ['.alab-btn',              'button', 'alab-btn'],
 ];
@@ -150,11 +175,12 @@ async function run() {
       const cs = getComputedStyle(el);
       return { w: r.width, h: r.height, mh: cs.minHeight, mw: cs.minWidth };
     });
-    const okH = dim.h >= 48;
-    const okW = dim.w >= 48;
-    record(`${selector}: rendered ${dim.w.toFixed(1)}x${dim.h.toFixed(1)} (min ${dim.mw}/${dim.mh})`,
+    const min = MIN_OVERRIDES[selector] || DEFAULT_MIN;
+    const okH = dim.h >= min;
+    const okW = dim.w >= min;
+    record(`${selector}: rendered ${dim.w.toFixed(1)}x${dim.h.toFixed(1)} (min ${dim.mw}/${dim.mh}, required ${min})`,
            okH && okW,
-           `expected >=48x48, got ${dim.w}x${dim.h}`);
+           `expected >=${min}x${min}, got ${dim.w}x${dim.h}`);
   }
 
   // --- Form controls: rendered height must be at least 48 CSS px.

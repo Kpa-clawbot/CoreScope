@@ -115,6 +115,12 @@
       "tests/e2e/test-touch-targets.js"
     ]
   },
+  "domIntegration": {
+    "reason": "Requires jsdom. The JS unit gate runs with no node_modules at all (its job has no npm install), so a suite needing a third-party module cannot live in test-all.sh. It runs in the E2E job, which does npm ci, and is invoked by its own deploy.yml line.",
+    "files": [
+      "tests/e2e/test-table-sort.js"
+    ]
+  },
   "playwrightRunner": {
     "reason": "Requires the @playwright/test runner (not plain node), its configuration, Chromium, and a local server. @playwright/test is not currently declared in package.json; these suites are inventoried but not part of the standalone unit gate.",
     "files": [
@@ -122,12 +128,6 @@
       "tests/e2e/test-marker-outline-weight.js",
       "tests/e2e/test-path-inspector-e2e.js",
       "tests/e2e/test-pr-1490-live-map-gpu-animations-e2e.js"
-    ]
-  },
-  "domIntegration": {
-    "reason": "Requires jsdom, which is not currently declared in package.json. This DOM integration suite is inventoried separately; no new dependency is installed by the unit gate.",
-    "files": [
-      "tests/e2e/test-table-sort.js"
     ]
   }
 }

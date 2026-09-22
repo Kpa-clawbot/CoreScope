@@ -33,9 +33,44 @@ async function gotoPackets(page) {
   await page.evaluate(() => {
     localStorage.removeItem('packets-visible-cols');
     localStorage.removeItem('packets-known-cols');
+    // The packets page defaults to a 15-minute window (public/packets.js,
+    // savedTimeWindowMin). CI freshens the fixture so its newest packet is
+    // "now" at the START of the job, and the E2E step runs for a quarter of
+    // an hour or more, so a suite that runs late in the list sees an empty
+    // table and "No packets found" through no fault of its own. This suite is
+    // about the Scope column, not about the window, so pin the window wide.
+    localStorage.setItem('meshcore-time-window', '10080');
   });
   await page.reload({ waitUntil: 'networkidle' });
-  await page.waitForSelector('#pktTable tbody tr:not([id^=vscroll])', { timeout: 30000 });
+  // Wait for a row that carries real column cells, not merely for any <tr>.
+  // The table renders a full-width placeholder row while it loads, which
+  // satisfies a bare `tbody tr` selector: the suite then read an empty table
+  // and reported "no td.col-scope rendered" / "no packet rows found". That is
+  // the 4-passed-3-failed signature this suite showed intermittently while it
+  // was unwired, and it is a race in the wait, not a product fault.
+  //
+  // state:'attached', not the default 'visible': every assertion below reads
+  // the DOM through $$eval/evaluate, which sees a cell whose column is hidden
+  // by a preference class. Waiting for visibility asks for more than the
+  // suite needs and times out on a table that is perfectly ready to inspect.
+  try {
+    await page.waitForSelector('#pktTable tbody tr:not([id^=vscroll]) td.col-type',
+      { state: 'attached', timeout: 30000 });
+  } catch (e) {
+    // A bare TimeoutError says nothing about why. Report what the table held.
+    const state = await page.evaluate(() => {
+      const tb = document.querySelector('#pktTable tbody');
+      if (!tb) return { table: false };
+      const trs = Array.from(tb.querySelectorAll('tr'));
+      return {
+        table: true,
+        rows: trs.length,
+        firstRowHtml: trs.length ? trs[0].innerHTML.slice(0, 200) : null,
+        tableClass: document.getElementById('pktTable').className,
+      };
+    }).catch(() => null);
+    throw new Error('packets table never produced a row with td.col-type: ' + JSON.stringify(state));
+  }
 }
 
 (async () => {

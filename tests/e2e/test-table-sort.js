@@ -234,6 +234,17 @@ test('aria-sort updates when switching columns', () => {
 
 console.log('\nTableSort — visual indicator');
 
+// The sort indicator is a Phosphor sprite since #1648 M2: the direction is
+// carried by the <use href="...#ph-caret-up|down">, not by a text glyph.
+// Reading it through the href keeps this test honest if the icon set changes
+// again, because it then fails rather than passing on an empty textContent.
+function sortArrowDirection(arrow) {
+  const use = arrow && arrow.querySelector('use');
+  const href = use && (use.getAttribute('href') || use.getAttribute('xlink:href'));
+  const m = href && href.match(/#ph-caret-(up|down)$/);
+  return m ? m[1] : null;
+}
+
 test('sort arrow shows on active column', () => {
   const html = makeTable(
     [{key: 'a'}],
@@ -245,7 +256,11 @@ test('sort arrow shows on active column', () => {
 
   const arrow = dom.window.document.querySelector('.sort-arrow');
   assert.ok(arrow, 'sort arrow should exist');
-  assert.ok(arrow.textContent.includes('▲'), 'ascending should show ▲');
+  // #1648 M2 replaced the up/down glyphs with Phosphor sprite refs, so the
+  // direction now lives in the <use href>, not in textContent.
+  assert.strictEqual(sortArrowDirection(arrow), 'up', 'ascending should point the caret up');
+  const activeTh = dom.window.document.querySelector('th[data-sort-key="a"]');
+  assert.strictEqual(activeTh.getAttribute('aria-sort'), 'ascending', 'ascending must be announced');
 });
 
 test('sort arrow changes on direction toggle', () => {
@@ -260,7 +275,8 @@ test('sort arrow changes on direction toggle', () => {
   const th = dom.window.document.querySelector('th[data-sort-key="a"]');
   th.click(); // desc
   const arrow = dom.window.document.querySelector('.sort-arrow');
-  assert.ok(arrow.textContent.includes('▼'), 'descending should show ▼');
+  assert.strictEqual(sortArrowDirection(arrow), 'down', 'descending should point the caret down');
+  assert.strictEqual(th.getAttribute('aria-sort'), 'descending', 'descending must be announced');
 });
 
 console.log('\nTableSort — onSort callback');
