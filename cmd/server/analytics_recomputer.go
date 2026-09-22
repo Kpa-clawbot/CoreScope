@@ -259,6 +259,7 @@ func (s *PacketStore) analyticsRecomputersLocked() []*analyticsRecomputer {
 		s.recompObserversClockSkew, s.recompNodesClockSkew,
 		s.recompRoles,
 		s.recompRetransmissions,
+		s.recompDirectHeard,
 	}
 }
 
@@ -336,6 +337,18 @@ func (s *PacketStore) StartAnalyticsRecomputers(defaultInterval time.Duration, o
 		"retransmissions", defaultInterval,
 		func() interface{} {
 			return s.computeRetransmissionPressure("", TimeWindow{}, retransmissionDefaultBucket)
+		},
+	)
+	// Feeds the node-health "Heard By" card. Not an analytics endpoint,
+	// but it has the same shape: one full pass over the store that no
+	// request can afford, served from an atomic snapshot. See
+	// direct_heard.go.
+	s.recompDirectHeard = newAnalyticsRecomputer(
+		"direct-heard", defaultInterval,
+		func() interface{} {
+			idx := s.computeDirectHeard()
+			s.publishDirectHeard(idx)
+			return idx
 		},
 	)
 	all := s.analyticsRecomputersLocked()

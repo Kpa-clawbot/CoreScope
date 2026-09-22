@@ -221,8 +221,8 @@ func TestAnalyticsRecomputers_PostLoadOrder(t *testing.T) {
 	for i, rc := range list {
 		pos[rc.name] = i
 	}
-	if len(list) != 10 || len(pos) != 10 {
-		t.Fatalf("want 10 distinct recomputers, got %d (%d distinct)", len(list), len(pos))
+	if len(list) != 11 || len(pos) != 11 {
+		t.Fatalf("want 11 distinct recomputers, got %d (%d distinct)", len(list), len(pos))
 	}
 	for _, name := range []string{"rf", "topology", "channels"} {
 		if pos[name] > 2 {

@@ -43,20 +43,37 @@ func TestNodeHealth_CanRelayCaseInsensitive_Issue1290(t *testing.T) {
 
 	// In-memory packet with the MIXED-case observer id so the badge resolver
 	// must lower-case both sides to match against the lower-cased pubkey set.
+	// The packet is a flood ADVERT heard with an empty path, which is what
+	// makes the observer a DIRECT receiver of nodePubkey — only direct rows
+	// carry the badge (see direct_heard.go).
 	snr := 7.0
-	srv.store.mu.Lock()
-	if srv.store.byNode == nil {
-		srv.store.byNode = make(map[string][]*StoreTx)
-	}
-	srv.store.byNode[nodePubkey] = append(srv.store.byNode[nodePubkey], &StoreTx{
+	routeFlood := RouteFlood
+	payloadAdvert := PayloadADVERT
+	tx := &StoreTx{
 		Hash:             "1290casebadge00",
 		FirstSeen:        now,
+		RouteType:        &routeFlood,
+		PayloadType:      &payloadAdvert,
+		DecodedJSON:      `{"type":"ADVERT","pubKey":"` + nodePubkey + `"}`,
 		SNR:              &snr,
 		ObservationCount: 1,
 		ObserverID:       obsIDMixed,
 		ObserverName:     "ListenerOnly",
-	})
+		Observations: []*StoreObs{{
+			ObserverID:   obsIDMixed,
+			ObserverName: "ListenerOnly",
+			PathJSON:     "[]",
+			SNR:          &snr,
+		}},
+	}
+	srv.store.mu.Lock()
+	if srv.store.byNode == nil {
+		srv.store.byNode = make(map[string][]*StoreTx)
+	}
+	srv.store.byNode[nodePubkey] = append(srv.store.byNode[nodePubkey], tx)
+	srv.store.packets = append(srv.store.packets, tx)
 	srv.store.mu.Unlock()
+	srv.store.publishDirectHeard(srv.store.computeDirectHeard())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/nodes/"+nodePubkey+"/health", nil)
 	w := httptest.NewRecorder()

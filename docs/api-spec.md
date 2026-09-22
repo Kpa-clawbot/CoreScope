@@ -408,15 +408,18 @@ Returns a JSON array (not wrapped in an object):
       "avgSnr":             number | null,
       "lastHeard":          string (ISO) | null
     },
+    // Direct-RF only, same shape and rule as GET /api/nodes/:pubkey/health.
     "observers": [
       {
         "observer_id":   string,
         "observer_name": string | null,
         "avgSnr":        number | null,
         "avgRssi":       number | null,
-        "packetCount":   number
+        "packetCount":   number,
+        "can_relay":     boolean | null
       }
-    ]
+    ],
+    "relayObserverCount": number
   }
 ]
 ```
@@ -514,6 +517,12 @@ Detailed health information for a single node.
     "first_seen":   string (ISO),
     "advert_count": number
   },
+  // Observers that received this node's OWN transmission off the air:
+  // a flood packet whose last path hop resolves unambiguously to this
+  // node, or a flood ADVERT it originated that arrived with an empty
+  // path. Only here do avgSnr/avgRssi describe this node's signal.
+  // Direct routes never qualify: their path is the remaining route,
+  // not the travelled one.
   "observers": [
     {
       "observer_id":   string,
@@ -521,9 +530,13 @@ Detailed health information for a single node.
       "packetCount":   number,
       "avgSnr":        number | null,
       "avgRssi":       number | null,
-      "iata":          string | null
+      "can_relay":     boolean | null  // null = observer never reported a repeat field
     }
   ],
+  // Observers that saw traffic through this node without hearing it.
+  // The stats below count that relayed traffic, so this keeps the two
+  // consistent. Most nodes have no observer in radio range at all.
+  "relayObserverCount": number,
   "stats": {
     "totalTransmissions": number,
     "totalObservations":  number,
