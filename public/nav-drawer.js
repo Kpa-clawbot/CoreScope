@@ -39,6 +39,7 @@
   var wired = false;
   var drawerEl = null;
   var backdropEl = null;
+  var versionEl = null;
   var dragging = false;
   var startX = 0;
   var startY = 0;
@@ -197,7 +198,11 @@
     ver.textContent = 'CoreScope';
     footer.appendChild(ver);
     drawerEl.appendChild(footer);
-    fillVersion(ver);
+    // The fetch is NOT started here. buildDom runs on page load, and the
+    // drawer may never open — it cannot open at all at <= NARROW_MAX. Asking
+    // every visitor's browser for /api/health to fill a footer they may never
+    // see is a request for nothing. open() starts it, after the width gate.
+    versionEl = ver;
 
     document.body.appendChild(backdropEl);
     document.body.appendChild(drawerEl);
@@ -225,6 +230,9 @@
   function open() {
     buildDom();
     if (!isWide()) return; // Option A
+    // First open only: fetchVersion caches its promise for the page lifetime,
+    // so re-opening costs nothing.
+    if (versionEl) fillVersion(versionEl);
     if (!drawerWidth) drawerWidth = drawerEl.getBoundingClientRect().width || 320;
     // Capture the previously-focused element BEFORE we move focus, so close()
     // can restore it. Guard against opening twice (don't overwrite on re-open).
