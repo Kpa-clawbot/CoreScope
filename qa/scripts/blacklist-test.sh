@@ -25,7 +25,8 @@
 #   ssh-failed     → cannot reach/control target
 #   restart-stuck  → /api/stats not 200 within RESTART_WAIT_S
 #   hide-failed    → blacklisted pubkey still surfaced via API (§10.1 fail)
-#   retain-failed  → blacklisted pubkey absent from DB (§10.2 fail), or the
+#   retain-failed  → no transmissions.from_pubkey rows (ADVERTs) for the
+#                    blacklisted pubkey in the DB (§10.2 fail), or the
 #                    §10.2 probe could not run at all — no sqlite3 on the target
 #                    able to bind a parameter. The message names what is needed;
 #                    there is no fallback to interpolated SQL.
@@ -189,10 +190,17 @@ sql_hex_literal() {
 # (e.g. "' OR 1=1 --") makes sqlite3 print the .parameter help to STDOUT, exit
 # 0, and leave :pubkey unbound. COUNT(*) then returns 0 — which reads exactly
 # like a passing security fix. -bail does not catch it either.
+#
+# The column is transmissions.from_pubkey (cmd/ingestor/db.go CREATE TABLE and
+# the from_pubkey_v1 migration; asserted by internal/dbschema). The ingestor
+# fills it only for ADVERTs, with hex.EncodeToString output — lowercase. The
+# script's hex gate and the server's nodeBlacklist both accept any case, so the
+# bound value is lowercased inside SQL; the parameter itself is still bound.
+# There is no from_node column: querying it errors on every real database.
 transmission_count_sql() {
   printf '.parameter init\n'
   printf '.parameter set :pubkey "cast(%s as text)"\n' "$(sql_hex_literal "$1")"
-  printf 'SELECT COUNT(*) FROM transmissions WHERE from_node = :pubkey;\n'
+  printf 'SELECT COUNT(*) FROM transmissions WHERE from_pubkey = lower(:pubkey);\n'
 }
 
 # Capability probe: bind a known value and read it back. A version number only
