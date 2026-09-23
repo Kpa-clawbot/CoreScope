@@ -149,3 +149,48 @@ func TestShouldWarnIATADropStillThrottlesKnownCodes(t *testing.T) {
 		t.Error("second sighting inside the interval must be throttled")
 	}
 }
+
+// TestShouldWarnIATADropReclaimsExpiredSlots covers the flaw the cap had on its
+// own: the map never shrank, so the first iataWarnMaxTracked codes ever seen
+// owned it forever and a legitimate region arriving later was permanently
+// demoted to the shared overflow throttle behind whatever transient junk filled
+// it first.
+//
+// Sweeping expired entries at the cap is semantically free — an entry past the
+// interval would be re-logged on its next sighting regardless — so the map ends
+// up holding only regions that are actively arriving.
+func TestShouldWarnIATADropReclaimsExpiredSlots(t *testing.T) {
+	c := &Config{}
+
+	// Fill the map with junk, then age all of it past the interval.
+	for i := 0; i < iataWarnMaxTracked; i++ {
+		c.ShouldWarnIATADrop(fmt.Sprintf("J%05d", i))
+	}
+	stale := time.Now().Add(-2 * c.IATAWarnInterval())
+	c.iataWarnMu.Lock()
+	for k := range c.iataWarnLast {
+		c.iataWarnLast[k] = stale
+	}
+	c.iataWarnMu.Unlock()
+
+	// A legitimate region shows up now. It must get its own slot, not the
+	// shared overflow throttle.
+	if !c.ShouldWarnIATADrop("BRU") {
+		t.Fatal("a new region must warn once")
+	}
+	c.iataWarnMu.Lock()
+	_, tracked := c.iataWarnLast["BRU"]
+	size := len(c.iataWarnLast)
+	c.iataWarnMu.Unlock()
+
+	if !tracked {
+		t.Error("BRU must occupy its own slot once the stale entries were reclaimed")
+	}
+	if size > iataWarnMaxTracked {
+		t.Errorf("map grew to %d past the cap of %d", size, iataWarnMaxTracked)
+	}
+	// And its own throttle applies, rather than the shared one.
+	if c.ShouldWarnIATADrop("BRU") {
+		t.Error("a tracked region must be throttled on its own timestamp")
+	}
+}

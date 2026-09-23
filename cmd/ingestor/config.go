@@ -457,6 +457,20 @@ func (c *Config) ShouldWarnIATADrop(iata string) bool {
 	// exists for while making the overflow itself visible: silently dropping
 	// the warning would reintroduce the bug this PR fixes, one level up.
 	if len(c.iataWarnLast) >= iataWarnMaxTracked {
+		// Sweep first. An entry older than the interval holds nothing back:
+		// the code would be re-logged on its next sighting anyway, so dropping
+		// it changes no behaviour and frees the slot. Without this the first
+		// iataWarnMaxTracked codes ever seen own the map forever, and a
+		// legitimate region that starts arriving later is stuck sharing the
+		// overflow throttle with whatever transient junk got there first.
+		// Only runs at the cap, so the normal path pays nothing.
+		for k, t := range c.iataWarnLast {
+			if now.Sub(t) >= interval {
+				delete(c.iataWarnLast, k)
+			}
+		}
+	}
+	if len(c.iataWarnLast) >= iataWarnMaxTracked {
 		if _, known := c.iataWarnLast[code]; !known {
 			if now.Sub(c.iataWarnOverflowLast) < interval {
 				return false
