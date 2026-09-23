@@ -81,6 +81,13 @@ function makeNodesFetch(total, cap, opts = {}) {
   for (let i = 0; i < total; i++) fixture.push({ public_key: 'pk' + i, name: 'N' + i });
   // Optionally repeat the last row of page 1 as the first row of page 2.
   if (opts.dupAtBoundary) fixture[cap] = fixture[cap - 1];
+  // `dropIndexes` models handleNodes' POST-LIMIT filters (geo-filter,
+  // nodeBlacklist, hiddenNamePrefixes, area): the row is counted by the SQL
+  // LIMIT and by COUNT(*), then removed from the page in Go. The page is a row
+  // short WITHOUT being the last page. `hasMore` mirrors the server field,
+  // which is computed before those filters run; omit it to model a server that
+  // predates the field.
+  const dropped = new Set(opts.dropIndexes || []);
   return {
     calls,
     fetch: (url) => {
@@ -89,10 +96,13 @@ function makeNodesFetch(total, cap, opts = {}) {
       const p = new URLSearchParams(qs);
       const limit = Math.min(parseInt(p.get('limit') || '50', 10), cap);
       const offset = parseInt(p.get('offset') || '0', 10);
-      const page = fixture.slice(offset, offset + limit);
+      const raw = fixture.slice(offset, offset + limit);
+      const page = raw.filter((_n, i) => !dropped.has(offset + i));
+      const body = { nodes: page, counts: { repeaters: total }, total: page.length };
+      if (opts.hasMore) body.has_more = offset + raw.length < total;
       return Promise.resolve({
         ok: true,
-        json: () => Promise.resolve({ nodes: page, counts: { repeaters: total }, total: page.length }),
+        json: () => Promise.resolve(body),
       });
     },
   };
@@ -108,13 +118,57 @@ test('surfaces ALL nodes past the 500 server cap (1200 > 500)', async () => {
   const out = await ctx.fetchAllNodes('');
   assert.strictEqual(out.nodes.length, 1200, 'expected all 1200 nodes, got ' + out.nodes.length);
   assert.strictEqual(out.total, 1200, 'total must be the real deduped count, not the clamped per-page total');
-  assert.strictEqual(m.calls.length, 3, 'expected 3 pages (500+500+200), got ' + m.calls.length);
+  // 4, not 3: this mock emits no has_more, so the 200-row page cannot end the
+  // loop (a short page is exactly what a filtered page looks like) and a
+  // zero-length probe follows. Against a current server has_more ends it at 3.
+  assert.strictEqual(m.calls.length, 4, 'expected 3 data pages + 1 probe, got ' + m.calls.length);
 });
 
-test('stops on a short page rather than the unreliable server total', async () => {
+test('a page shortened by a POST-LIMIT filter does NOT end pagination', async () => {
   const ctx = makeSandbox();
   loadInCtx(ctx, 'public/app.js');
-  // Exactly 1000 → pages 500, 500, then a 0-length page stops the loop.
+  // One node inside page 1 is dropped by handleNodes' blacklist / hidden-prefix
+  // / geo-filter pass, which runs AFTER the SQL LIMIT. Page 1 returns 499 of
+  // 500 while 700 more rows are waiting. Treating that short page as the end
+  // stranded every node past it (map, Nodes page, live, analytics).
+  const m = makeNodesFetch(1200, 500, { dropIndexes: [450] });
+  ctx.fetch = m.fetch;
+  const out = await ctx.fetchAllNodes('');
+  assert.strictEqual(out.nodes.length, 1199, 'expected 1199 surviving nodes, got ' + out.nodes.length);
+  assert.ok(out.nodes.some(n => n.public_key === 'pk700'), 'a page-2 node must be reachable');
+  assert.ok(!out.nodes.some(n => n.public_key === 'pk450'), 'the filtered node must stay filtered');
+});
+
+test('uses the server has_more flag and stops without an extra empty page', async () => {
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/app.js');
+  // Same filtered page, but against a server that reports has_more. Exactly
+  // 1000 rows → two full pages; has_more=false on page 2 ends the loop with no
+  // third request (the short-page fallback needs one to see a zero-length page).
+  const m = makeNodesFetch(1000, 500, { dropIndexes: [10], hasMore: true });
+  ctx.fetch = m.fetch;
+  const out = await ctx.fetchAllNodes('');
+  assert.strictEqual(out.nodes.length, 999, 'expected 999 surviving nodes, got ' + out.nodes.length);
+  assert.strictEqual(m.calls.length, 2, 'has_more must end the loop without a probe page, got ' + m.calls.length);
+});
+
+test('has_more=false ends the loop even on a full page', async () => {
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/app.js');
+  // Guards the inverse of the bug: the flag, not the page length, decides.
+  const m = makeNodesFetch(500, 500, { hasMore: true });
+  ctx.fetch = m.fetch;
+  const out = await ctx.fetchAllNodes('');
+  assert.strictEqual(out.nodes.length, 500);
+  assert.strictEqual(m.calls.length, 1, 'a full final page with has_more=false must not be followed, got ' + m.calls.length);
+});
+
+test('stops on an EMPTY page when the server predates has_more', async () => {
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/app.js');
+  // Exactly 1000 → pages 500, 500, then a 0-length page stops the loop. Without
+  // has_more a zero-length page is the only trustworthy end-of-data signal, so
+  // the probe request is the documented cost of talking to an older server.
   const m = makeNodesFetch(1000, 500);
   ctx.fetch = m.fetch;
   const out = await ctx.fetchAllNodes('');
@@ -171,10 +225,14 @@ test('rows missing public_key are NOT collapsed into one', async () => {
   const ctx = makeSandbox();
   loadInCtx(ctx, 'public/app.js');
   // Two distinct rows both lacking public_key must survive as two entries.
-  ctx.fetch = () => Promise.resolve({
-    ok: true,
-    json: () => Promise.resolve({ nodes: [{ name: 'A' }, { name: 'B' }, { public_key: 'pk1', name: 'C' }] }),
-  });
+  // The stub must stop itself: with the short-page rule gone, a constant body
+  // would be paged until safetyCap. One data page, then empty.
+  let served = false;
+  ctx.fetch = () => {
+    const nodes = served ? [] : [{ name: 'A' }, { name: 'B' }, { public_key: 'pk1', name: 'C' }];
+    served = true;
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({ nodes }) });
+  };
   const out = await ctx.fetchAllNodes('');
   assert.strictEqual(out.nodes.length, 3, 'falsy-key rows must not collapse, got ' + out.nodes.length);
 });

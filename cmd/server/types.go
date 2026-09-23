@@ -435,6 +435,12 @@ type NodeListResponse struct {
 	Nodes  []map[string]interface{} `json:"nodes"`
 	Total  int                      `json:"total"`
 	Counts map[string]int           `json:"counts"`
+	// HasMore reports whether rows exist past this page. Computed from the raw
+	// SQL page before the post-LIMIT filters in handleNodes, which shorten the
+	// page and rewrite Total — so it is the only field a paginating client can
+	// trust to decide whether to ask for another page. Always emitted (no
+	// omitempty): a client must be able to tell "false" from "old server".
+	HasMore bool `json:"has_more"`
 }
 
 type NodeSearchResponse struct {
