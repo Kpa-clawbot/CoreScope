@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -83,5 +84,68 @@ func TestIngestorShouldWarnIATADropEdges(t *testing.T) {
 	cfg := &Config{}
 	if cfg.ShouldWarnIATADrop("   ") {
 		t.Error("blank region should not warn")
+	}
+}
+
+// TestShouldWarnIATADropBoundsItsMap pins the fix for the review blocker on
+// #2008: the throttle key is a topic segment the publisher controls, so an
+// unbounded map is a remote memory sink. Measured on the original branch,
+// 200,000 distinct codes retained 200,000 entries and 15.1 MB of heap.
+func TestShouldWarnIATADropBoundsItsMap(t *testing.T) {
+	c := &Config{}
+
+	// Far more distinct codes than the cap, as a hostile or broken feed would.
+	for i := 0; i < iataWarnMaxTracked*4; i++ {
+		c.ShouldWarnIATADrop(fmt.Sprintf("X%05d", i))
+	}
+
+	c.iataWarnMu.Lock()
+	tracked := len(c.iataWarnLast)
+	c.iataWarnMu.Unlock()
+
+	if tracked > iataWarnMaxTracked {
+		t.Errorf("tracked %d codes, cap is %d — the map grows with publisher-supplied input",
+			tracked, iataWarnMaxTracked)
+	}
+}
+
+// TestShouldWarnIATADropKeepsWarningPastTheCap is the other half: bounding the
+// map must not silence the warning, which would reintroduce the silent-drop bug
+// this feature exists to fix, one level up. Past the cap the warning is
+// throttled on a shared timestamp rather than dropped.
+func TestShouldWarnIATADropKeepsWarningPastTheCap(t *testing.T) {
+	c := &Config{}
+	for i := 0; i < iataWarnMaxTracked; i++ {
+		c.ShouldWarnIATADrop(fmt.Sprintf("F%05d", i))
+	}
+
+	// A brand new code, with the map already full.
+	if !c.ShouldWarnIATADrop("ZZZ") {
+		t.Fatal("a drop past the cap must still warn once, not be swallowed")
+	}
+	// ...and the next one is throttled rather than flooding.
+	if c.ShouldWarnIATADrop("YYY") {
+		t.Error("a second overflow drop inside the interval must be throttled")
+	}
+
+	// After the interval elapses, it speaks again. Rewind the shared timestamp
+	// rather than sleeping.
+	c.iataWarnMu.Lock()
+	c.iataWarnOverflowLast = time.Now().Add(-2 * c.IATAWarnInterval())
+	c.iataWarnMu.Unlock()
+	if !c.ShouldWarnIATADrop("WWW") {
+		t.Error("once the interval has passed the overflow warning must return")
+	}
+}
+
+// TestShouldWarnIATADropStillThrottlesKnownCodes guards the normal path: the
+// cap must not change behaviour for a code already being tracked.
+func TestShouldWarnIATADropStillThrottlesKnownCodes(t *testing.T) {
+	c := &Config{}
+	if !c.ShouldWarnIATADrop("BRU") {
+		t.Fatal("first sighting must warn")
+	}
+	if c.ShouldWarnIATADrop("BRU") {
+		t.Error("second sighting inside the interval must be throttled")
 	}
 }

@@ -88,6 +88,9 @@ type Config struct {
 	// iataWarnLast tracks when each dropped region was last logged.
 	iataWarnMu   sync.Mutex
 	iataWarnLast map[string]time.Time
+	// iataWarnOverflowLast throttles the shared warning used once
+	// iataWarnLast has reached iataWarnMaxTracked.
+	iataWarnOverflowLast time.Time
 
 	// ObserverBlacklist is a list of observer public keys to drop at ingest.
 	// Messages from blacklisted observers are silently discarded â€” no DB writes,
@@ -394,6 +397,13 @@ func (c *Config) IsObserverIATAAllowed(iata string) bool {
 	return c.obsIATAWhitelistCached[strings.ToUpper(strings.TrimSpace(iata))]
 }
 
+// iataWarnMaxTracked bounds the per-region throttle map. The key is
+// publisher-controlled, so it cannot be allowed to grow with traffic. 512 is
+// far above any real deployment's region count (the reference instance has 43
+// observers across a handful of regions) and small enough that a hostile feed
+// buys nothing: the map stops growing and the warning keeps coming.
+const iataWarnMaxTracked = 512
+
 // defaultIATAWarnIntervalSec is the re-log interval for whitelist drops (6h).
 const defaultIATAWarnIntervalSec = 21600
 
@@ -434,6 +444,26 @@ func (c *Config) ShouldWarnIATADrop(iata string) bool {
 	}
 	if c.iataWarnLast == nil {
 		c.iataWarnLast = make(map[string]time.Time)
+	}
+	// The key comes from a topic segment the publisher controls, so an
+	// unbounded map here is a remote memory sink: 200k distinct codes retained
+	// 200k entries and 15.1 MB of heap when this was measured. Nothing in the
+	// codebase constrains an IATA code's shape (it is uppercased and trimmed,
+	// never validated), so rejecting by shape would invent a rule operators
+	// have not agreed to. Bound the map instead.
+	//
+	// Past the cap the drop is still logged, throttled on one shared timestamp
+	// rather than a per-code one. That keeps the flood-protection the feature
+	// exists for while making the overflow itself visible: silently dropping
+	// the warning would reintroduce the bug this PR fixes, one level up.
+	if len(c.iataWarnLast) >= iataWarnMaxTracked {
+		if _, known := c.iataWarnLast[code]; !known {
+			if now.Sub(c.iataWarnOverflowLast) < interval {
+				return false
+			}
+			c.iataWarnOverflowLast = now
+			return true
+		}
 	}
 	c.iataWarnLast[code] = now
 	return true
