@@ -57,7 +57,7 @@ function fakeLink() {
 }
 
 // fillVersion does not return its promise, so settle the microtask queue.
-const settle = () => new Promise((r) => setImmediate(r));
+const settle = () => new Promise((r) => setTimeout(r, 0));
 
 (async () => {
   console.log('\n=== #1985: the nav drawer version footer ===');
