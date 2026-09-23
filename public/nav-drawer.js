@@ -39,6 +39,7 @@
   var wired = false;
   var drawerEl = null;
   var backdropEl = null;
+  var versionEl = null;
   var dragging = false;
   var startX = 0;
   var startY = 0;
@@ -83,6 +84,28 @@
   function phIconHTML(name) {
     return '<svg class="ph-icon" aria-hidden="true" focusable="false">' +
            '<use href="/icons/phosphor-sprite.svg#ph-' + name + '"></use></svg>';
+  }
+
+  // ── Version footer (frontend version display) ───────────────────────────
+  // GET /api/health reports {version, commit, buildTime}. Fetch once and cache
+  // the promise for the page lifetime so re-opening the drawer doesn't refetch.
+  var versionPromise = null;
+  function fetchVersion() {
+    if (versionPromise) return versionPromise;
+    versionPromise = fetch('/api/health', { headers: { Accept: 'application/json' } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; });
+    return versionPromise;
+  }
+  function fillVersion(el) {
+    fetchVersion().then(function (h) {
+      if (!h || !h.version) return; // leave the neutral "CoreScope" label as-is
+      el.textContent = 'CoreScope ' + h.version;
+      var bits = [];
+      if (h.commit) bits.push('commit ' + h.commit);
+      if (h.buildTime) bits.push('built ' + h.buildTime);
+      if (bits.length) el.title = bits.join(' \u00B7 ');
+    });
   }
 
   var EDGE_PX = 44;          // pointerdown must start within left N px (drawer trigger zone)
@@ -164,6 +187,23 @@
     });
     drawerEl.appendChild(list);
 
+    var footer = document.createElement('div');
+    footer.className = 'nav-drawer-footer';
+    var ver = document.createElement('a');
+    ver.className = 'nav-drawer-version';
+    ver.setAttribute('data-nav-drawer-version', '');
+    ver.href = 'https://github.com/Kpa-clawbot/CoreScope/releases';
+    ver.target = '_blank';
+    ver.rel = 'noopener noreferrer';
+    ver.textContent = 'CoreScope';
+    footer.appendChild(ver);
+    drawerEl.appendChild(footer);
+    // The fetch is NOT started here. buildDom runs on page load, and the
+    // drawer may never open — it cannot open at all at <= NARROW_MAX. Asking
+    // every visitor's browser for /api/health to fill a footer they may never
+    // see is a request for nothing. open() starts it, after the width gate.
+    versionEl = ver;
+
     document.body.appendChild(backdropEl);
     document.body.appendChild(drawerEl);
 
@@ -190,6 +230,9 @@
   function open() {
     buildDom();
     if (!isWide()) return; // Option A
+    // First open only: fetchVersion caches its promise for the page lifetime,
+    // so re-opening costs nothing.
+    if (versionEl) fillVersion(versionEl);
     if (!drawerWidth) drawerWidth = drawerEl.getBoundingClientRect().width || 320;
     // Capture the previously-focused element BEFORE we move focus, so close()
     // can restore it. Guard against opening twice (don't overwrite on re-open).
