@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/geofilter"
@@ -79,6 +80,17 @@ type Config struct {
 	// obsIATAWhitelistCached is the lazily-built uppercase set for O(1) lookups.
 	obsIATAWhitelistCached map[string]bool
 	obsIATAWhitelistOnce   sync.Once
+
+	// IATAWarnIntervalSec throttles the one-line-per-region warning emitted when
+	// ObserverIATAWhitelist rejects a region. 0 => defaultIATAWarnIntervalSec.
+	IATAWarnIntervalSec int `json:"iataWarnIntervalSec,omitempty"`
+
+	// iataWarnLast tracks when each dropped region was last logged.
+	iataWarnMu   sync.Mutex
+	iataWarnLast map[string]time.Time
+	// iataWarnOverflowLast throttles the shared warning used once
+	// iataWarnLast has reached iataWarnMaxTracked.
+	iataWarnOverflowLast time.Time
 
 	// ObserverBlacklist is a list of observer public keys to drop at ingest.
 	// Messages from blacklisted observers are silently discarded â€” no DB writes,
@@ -383,6 +395,92 @@ func (c *Config) IsObserverIATAAllowed(iata string) bool {
 		c.obsIATAWhitelistCached = m
 	})
 	return c.obsIATAWhitelistCached[strings.ToUpper(strings.TrimSpace(iata))]
+}
+
+// iataWarnMaxTracked bounds the per-region throttle map. The key is
+// publisher-controlled, so it cannot be allowed to grow with traffic. 512 is
+// far above any real deployment's region count (the reference instance has 43
+// observers across a handful of regions) and small enough that a hostile feed
+// buys nothing: the map stops growing and the warning keeps coming.
+const iataWarnMaxTracked = 512
+
+// defaultIATAWarnIntervalSec is the re-log interval for whitelist drops (6h).
+const defaultIATAWarnIntervalSec = 21600
+
+// IATAWarnInterval returns how often a dropped region is re-logged.
+func (c *Config) IATAWarnInterval() time.Duration {
+	if c == nil || c.IATAWarnIntervalSec <= 0 {
+		return defaultIATAWarnIntervalSec * time.Second
+	}
+	return time.Duration(c.IATAWarnIntervalSec) * time.Second
+}
+
+// ShouldWarnIATADrop reports whether a whitelist drop for this region should be
+// logged now, recording the decision when it returns true.
+//
+// Logging every dropped message is not an option: a foreign feed runs to
+// thousands of messages a day and would flood the container log. But dropping
+// in silence is worse — an allow-list fails in the dangerous direction, where a
+// legitimate but unlisted region simply vanishes with nothing to show for it.
+// So: one line per region, re-logged at most every IATAWarnInterval for as long
+// as that region keeps arriving. The re-log is deliberate — a strict log-once
+// would emit a single edge event that any scrape window eventually rolls past,
+// leaving an actively-dropping region looking identical to a healthy one.
+func (c *Config) ShouldWarnIATADrop(iata string) bool {
+	if c == nil {
+		return false
+	}
+	code := strings.ToUpper(strings.TrimSpace(iata))
+	if code == "" {
+		return false
+	}
+	interval := c.IATAWarnInterval()
+	now := time.Now()
+
+	c.iataWarnMu.Lock()
+	defer c.iataWarnMu.Unlock()
+	if last, ok := c.iataWarnLast[code]; ok && now.Sub(last) < interval {
+		return false
+	}
+	if c.iataWarnLast == nil {
+		c.iataWarnLast = make(map[string]time.Time)
+	}
+	// The key comes from a topic segment the publisher controls, so an
+	// unbounded map here is a remote memory sink: 200k distinct codes retained
+	// 200k entries and 15.1 MB of heap when this was measured. Nothing in the
+	// codebase constrains an IATA code's shape (it is uppercased and trimmed,
+	// never validated), so rejecting by shape would invent a rule operators
+	// have not agreed to. Bound the map instead.
+	//
+	// Past the cap the drop is still logged, throttled on one shared timestamp
+	// rather than a per-code one. That keeps the flood-protection the feature
+	// exists for while making the overflow itself visible: silently dropping
+	// the warning would reintroduce the bug this PR fixes, one level up.
+	if len(c.iataWarnLast) >= iataWarnMaxTracked {
+		// Sweep first. An entry older than the interval holds nothing back:
+		// the code would be re-logged on its next sighting anyway, so dropping
+		// it changes no behaviour and frees the slot. Without this the first
+		// iataWarnMaxTracked codes ever seen own the map forever, and a
+		// legitimate region that starts arriving later is stuck sharing the
+		// overflow throttle with whatever transient junk got there first.
+		// Only runs at the cap, so the normal path pays nothing.
+		for k, t := range c.iataWarnLast {
+			if now.Sub(t) >= interval {
+				delete(c.iataWarnLast, k)
+			}
+		}
+	}
+	if len(c.iataWarnLast) >= iataWarnMaxTracked {
+		if _, known := c.iataWarnLast[code]; !known {
+			if now.Sub(c.iataWarnOverflowLast) < interval {
+				return false
+			}
+			c.iataWarnOverflowLast = now
+			return true
+		}
+	}
+	c.iataWarnLast[code] = now
+	return true
 }
 
 // LoadConfig reads configuration from a JSON file, with env var overrides.
