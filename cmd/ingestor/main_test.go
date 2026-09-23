@@ -129,6 +129,23 @@ func newTestStore(t *testing.T) *Store {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// OpenStore schedules two async migrations (db.go: obs_observer_ts_idx_v1
+	// and tx_last_seen_backfill_v1), and their goroutines log while they run.
+	// Twenty-one places in these tests capture output by pointing the standard
+	// logger at a bytes.Buffer, so a test that does so while its OWN store is
+	// still migrating has two goroutines on one buffer with no synchronisation.
+	// That is the data race the race detector caught on master (#2065): the
+	// writer was RunAsyncMigration's goroutine, the reader
+	// TestHandleMessageDecodeErrorLog_PII_Issue1211 reading buf.String().
+	//
+	// Close() already waits, so the goroutines never outlive the test; the race
+	// is inside one test, not across them. Waiting here rather than only at
+	// cleanup means no test body can observe a migration in flight, which
+	// closes the whole class rather than the one test that happened to fail.
+	//
+	// Cost is a few milliseconds against an empty temp DB. Pinned by
+	// TestNewTestStoreWaitsForBootMigrations.
+	s.WaitForAsyncMigrations()
 	t.Cleanup(func() { s.Close() })
 	return s
 }
