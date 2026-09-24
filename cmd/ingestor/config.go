@@ -310,6 +310,17 @@ func (c *Config) IncrementalVacuumPages() int {
 	return 1024
 }
 
+// AnalysisLimit returns the per-index row cap for the planner stats refresh
+// (#2058). 400 is the value SQLite's own documentation gives for the bounded
+// form of ANALYZE. A negative setting disables the refresh; zero means unset,
+// matching IncrementalVacuumPages above.
+func (c *Config) AnalysisLimit() int {
+	if c.DB != nil && c.DB.AnalysisLimit != 0 {
+		return c.DB.AnalysisLimit
+	}
+	return 400
+}
+
 // ShouldValidateSignatures returns true (default) unless explicitly disabled.
 func (c *Config) ShouldValidateSignatures() bool {
 	if c.ValidateSignatures != nil {

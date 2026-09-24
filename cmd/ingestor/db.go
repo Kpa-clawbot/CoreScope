@@ -1503,6 +1503,62 @@ func (s *Store) RunIncrementalVacuum(pages int) {
 	}
 }
 
+// OptimizeStats refreshes the query planner's cardinality statistics (#2058).
+//
+// Without a sqlite_stat1 table the planner works from built-in guesses, and on
+// the channel queries it guesses wrong: it drives from the plain
+// idx_transmissions_payload_type rather than idx_tx_channel_hash, the partial
+// index (WHERE payload_type = 5) this schema already carries for that exact
+// filter. Reported in #2058 with measurements against a 464,667-transmission
+// database: a plain ANALYZE, with no query or schema change, took GetChannels
+// from 13.19s to 4.25s for one region and 10.44s to 2.45s for another.
+//
+// analysis_limit is what bounds the work. A bare ANALYZE walks every index in
+// full, which is not something to put on a ticker in front of a multi-gigabyte
+// file. PRAGMA optimize then re-analyzes only the tables whose statistics it
+// judges missing or stale, so later calls do less than the first.
+//
+// Note that analysis_limit=0 means *no* limit to SQLite, not "use a default".
+// Config.AnalysisLimit maps an unset config to 400 for that reason, and a
+// negative value here disables the refresh.
+//
+// Returns whether the statistics were refreshed. This function owns its
+// logging; callers need add nothing.
+func (s *Store) OptimizeStats(analysisLimit int) bool {
+	if analysisLimit < 0 {
+		return false
+	}
+	first := !s.hasPlannerStats()
+	start := time.Now()
+	// Tagged for /api/perf writer-lock visibility (#1340).
+	if _, err := s.instrumentedExec("analyze", fmt.Sprintf("PRAGMA analysis_limit=%d", analysisLimit)); err != nil {
+		log.Printf("[analyze] could not set analysis_limit: %v", err)
+		return false
+	}
+	if _, err := s.instrumentedExec("analyze", "PRAGMA optimize"); err != nil {
+		log.Printf("[analyze] PRAGMA optimize failed: %v", err)
+		return false
+	}
+	elapsed := time.Since(start).Round(time.Millisecond)
+	if first {
+		log.Printf("[analyze] planner statistics built in %v (analysis_limit=%d, first run against this database)", elapsed, analysisLimit)
+	} else {
+		log.Printf("[analyze] planner statistics refreshed in %v (analysis_limit=%d)", elapsed, analysisLimit)
+	}
+	return true
+}
+
+// hasPlannerStats reports whether ANALYZE has ever run against this database.
+// Used only to word the log line, so a query error reads as "no stats".
+func (s *Store) hasPlannerStats() bool {
+	var n int
+	if err := s.db.QueryRow(
+		`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='sqlite_stat1'`).Scan(&n); err != nil {
+		return false
+	}
+	return n > 0
+}
+
 // Checkpoint runs a WAL checkpoint (TRUNCATE mode).
 // Returns the number of WAL frames checkpointed (0 if WAL was already empty).
 // TRUNCATE resets the WAL file to zero bytes when all frames are checkpointed;
