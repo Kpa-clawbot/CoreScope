@@ -482,21 +482,21 @@ func main() {
 	log.Printf("[db] WAL checkpoint scheduled every 1h")
 
 	// Daily planner statistics refresh (#2058). Staggered 2 minutes past
-	// startup for the same reason as the checkpoint above: the first run is the
-	// one that has real work to do, and it should not compete with the initial
-	// ingest burst. Bounded by analysis_limit, so it does not grow with the
-	// database the way a bare ANALYZE would.
+	// startup for the same reason as the checkpoint above: it takes the write
+	// lock, and should not compete with the initial ingest burst. Bounded by
+	// analysis_limit, measured at 2.0s on a 9.4 GB database, so it does not grow
+	// with the file the way an unbounded ANALYZE does (242.9s on the same file).
 	{
 		analysisLimit := cfg.AnalysisLimit()
 		if analysisLimit < 0 {
 			log.Printf("[analyze] planner statistics refresh disabled (db.analysisLimit=%d)", analysisLimit)
 		} else {
-			optimizeTicker := time.NewTicker(24 * time.Hour)
+			analyzeTicker := time.NewTicker(24 * time.Hour)
 			go func() {
 				time.Sleep(2 * time.Minute)
-				store.OptimizeStats(analysisLimit)
-				for range optimizeTicker.C {
-					store.OptimizeStats(analysisLimit)
+				store.RefreshPlannerStats(analysisLimit)
+				for range analyzeTicker.C {
+					store.RefreshPlannerStats(analysisLimit)
 				}
 			}()
 			log.Printf("[analyze] planner statistics refresh scheduled every 24h (analysis_limit=%d)", analysisLimit)

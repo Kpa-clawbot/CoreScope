@@ -10,9 +10,9 @@ import (
 
 // #2058: the planner has no cardinality statistics because ANALYZE has never
 // run, so it picks a plain index over the partial index built for the query.
-// These pin the three things that make the refresh work at all: the pragma
-// reaches the connection, sqlite_stat1 actually appears, and a negative limit
-// leaves the database untouched.
+// These pin the three things that make the refresh work at all: the statement is
+// one that actually writes statistics, the pragma reaches the connection, and a
+// negative limit leaves the database untouched.
 
 func hasStat1(t *testing.T, s *Store) bool {
 	t.Helper()
@@ -24,31 +24,34 @@ func hasStat1(t *testing.T, s *Store) bool {
 	return n > 0
 }
 
-func TestOptimizeStatsBuildsPlannerStats_Issue2058(t *testing.T) {
+// This is the guard against going back to PRAGMA optimize, which is what the
+// first draft of this change used. Measured against the 9.4 GB staging database:
+// optimize analyzes only tables the calling connection has itself queried during
+// the session, so from a maintenance call it writes nothing and sqlite_stat1
+// never appears. A fresh store here has queried nothing either, so this test
+// fails on that mistake instead of passing on a no-op.
+func TestRefreshPlannerStatsWritesStatistics_Issue2058(t *testing.T) {
 	s := newTestStore(t)
 	defer s.Close()
 
 	if hasStat1(t, s) {
-		t.Fatal("a fresh store already carries sqlite_stat1, so this test cannot tell whether OptimizeStats did anything")
+		t.Fatal("a fresh store already carries sqlite_stat1, so this test cannot tell whether the refresh did anything")
 	}
 
-	if !s.OptimizeStats(400) {
-		t.Fatal("OptimizeStats reported no refresh")
+	if !s.RefreshPlannerStats(10000) {
+		t.Fatal("RefreshPlannerStats reported no refresh")
 	}
 
-	// The real assertion. "No error" would also hold if PRAGMA optimize had
-	// decided there was nothing worth analyzing, which is the failure mode this
-	// catches: on an empty schema SQLite can skip every table.
 	if !hasStat1(t, s) {
 		t.Error("sqlite_stat1 was not created, so the planner still has no statistics")
 	}
 }
 
-func TestOptimizeStatsAppliesTheLimit_Issue2058(t *testing.T) {
+func TestRefreshPlannerStatsAppliesTheLimit_Issue2058(t *testing.T) {
 	s := newTestStore(t)
 	defer s.Close()
 
-	s.OptimizeStats(250)
+	s.RefreshPlannerStats(250)
 
 	// analysis_limit is per connection. The store runs SetMaxOpenConns(1)
 	// (db.go:142), which is the only reason setting it through Exec is sound
@@ -63,11 +66,11 @@ func TestOptimizeStatsAppliesTheLimit_Issue2058(t *testing.T) {
 	}
 }
 
-func TestOptimizeStatsNegativeLimitIsANoop_Issue2058(t *testing.T) {
+func TestRefreshPlannerStatsNegativeLimitIsANoop_Issue2058(t *testing.T) {
 	s := newTestStore(t)
 	defer s.Close()
 
-	if s.OptimizeStats(-1) {
+	if s.RefreshPlannerStats(-1) {
 		t.Error("a negative limit must not report a refresh")
 	}
 	if hasStat1(t, s) {
@@ -75,15 +78,15 @@ func TestOptimizeStatsNegativeLimitIsANoop_Issue2058(t *testing.T) {
 	}
 }
 
-func TestOptimizeStatsIsRepeatable_Issue2058(t *testing.T) {
+func TestRefreshPlannerStatsIsRepeatable_Issue2058(t *testing.T) {
 	s := newTestStore(t)
 	defer s.Close()
 
 	// The ticker calls this every 24h for the life of the process. A second
 	// call must not error or undo the first, which is the part a single-call
 	// test would not notice.
-	s.OptimizeStats(400)
-	if !s.OptimizeStats(400) {
+	s.RefreshPlannerStats(10000)
+	if !s.RefreshPlannerStats(10000) {
 		t.Fatal("the second refresh reported failure")
 	}
 	if !hasStat1(t, s) {
@@ -98,10 +101,10 @@ func TestAnalysisLimitConfigDefault_Issue2058(t *testing.T) {
 		want int
 	}{
 		// Zero means "no limit" to SQLite, so an unset config must not be
-		// passed through as 0: that would turn the bounded refresh into a full
-		// ANALYZE of every index.
-		{"no db section", &Config{}, 400},
-		{"db section, limit unset", &Config{DB: &dbconfig.DBConfig{}}, 400},
+		// passed through as 0: that would turn a 2 second refresh into the
+		// 242.9s unbounded ANALYZE measured on the staging database.
+		{"no db section", &Config{}, 10000},
+		{"db section, limit unset", &Config{DB: &dbconfig.DBConfig{}}, 10000},
 		{"explicit limit", &Config{DB: &dbconfig.DBConfig{AnalysisLimit: 1000}}, 1000},
 		{"disabled", &Config{DB: &dbconfig.DBConfig{AnalysisLimit: -1}}, -1},
 	}
@@ -111,6 +114,17 @@ func TestAnalysisLimitConfigDefault_Issue2058(t *testing.T) {
 				t.Errorf("AnalysisLimit() = %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+// The default is not a free choice: 400 and 1000 were measured to leave the
+// channel-query plan unchanged on the staging database, so a well-meant edit
+// back to SQLite's documented 400 would quietly return this to a no-op.
+func TestAnalysisLimitDefaultIsHighEnoughToMatter_Issue2058(t *testing.T) {
+	const measuredIneffective = 1000
+	if got := (&Config{}).AnalysisLimit(); got <= measuredIneffective {
+		t.Errorf("default analysis_limit is %d; %d and below were measured to leave the plan unchanged on a 9.4 GB database",
+			got, measuredIneffective)
 	}
 }
 

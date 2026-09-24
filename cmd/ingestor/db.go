@@ -1503,28 +1503,45 @@ func (s *Store) RunIncrementalVacuum(pages int) {
 	}
 }
 
-// OptimizeStats refreshes the query planner's cardinality statistics (#2058).
+// RefreshPlannerStats rebuilds the query planner's cardinality statistics
+// (#2058).
 //
 // Without a sqlite_stat1 table the planner works from built-in guesses, and on
 // the channel queries it guesses wrong: it drives from the plain
 // idx_transmissions_payload_type rather than idx_tx_channel_hash, the partial
 // index (WHERE payload_type = 5) this schema already carries for that exact
-// filter. Reported in #2058 with measurements against a 464,667-transmission
-// database: a plain ANALYZE, with no query or schema change, took GetChannels
-// from 13.19s to 4.25s for one region and 10.44s to 2.45s for another.
+// filter.
 //
-// analysis_limit is what bounds the work. A bare ANALYZE walks every index in
-// full, which is not something to put on a ticker in front of a multi-gigabyte
-// file. PRAGMA optimize then re-analyzes only the tables whose statistics it
-// judges missing or stale, so later calls do less than the first.
+// Measured on the 9.4 GB staging database (1,250,489 transmissions, 14,169,329
+// observations), region-filtered GetChannels, counting page-cache misses
+// because wall time there is dominated by the OS page cache (56.7s cold, 0.80s
+// warm, for the same query and plan):
+//
+//	analysis_limit   ANALYZE    driving index                     page misses
+//	none (no stats)  -          idx_transmissions_payload_type     143,442
+//	400              171ms      idx_transmissions_payload_type     143,449
+//	1000             171ms      idx_transmissions_payload_type     143,450
+//	10000            2.0s       idx_tx_channel_hash                107,429
+//	0 (unbounded)    242.9s     idx_tx_channel_hash                107,429
+//
+// So 10000 buys the whole plan change, and the four-minute unbounded ANALYZE
+// buys nothing beyond it. 400, the value SQLite's documentation offers for the
+// bounded form, changes nothing at all on this data: it samples too few rows to
+// separate the 126,336-row partial index from the 920,700-row plain one.
+//
+// ANALYZE, not PRAGMA optimize. Measured on the same database: optimize is a
+// no-op here, because it only analyzes tables that the calling connection has
+// itself queried during the session, and a maintenance call has queried none.
+// PRAGMA optimize(0x03) returned no statements and sqlite_stat1 was not
+// created.
 //
 // Note that analysis_limit=0 means *no* limit to SQLite, not "use a default".
-// Config.AnalysisLimit maps an unset config to 400 for that reason, and a
+// Config.AnalysisLimit maps an unset config to 10000 for that reason, and a
 // negative value here disables the refresh.
 //
 // Returns whether the statistics were refreshed. This function owns its
 // logging; callers need add nothing.
-func (s *Store) OptimizeStats(analysisLimit int) bool {
+func (s *Store) RefreshPlannerStats(analysisLimit int) bool {
 	if analysisLimit < 0 {
 		return false
 	}
@@ -1535,8 +1552,8 @@ func (s *Store) OptimizeStats(analysisLimit int) bool {
 		log.Printf("[analyze] could not set analysis_limit: %v", err)
 		return false
 	}
-	if _, err := s.instrumentedExec("analyze", "PRAGMA optimize"); err != nil {
-		log.Printf("[analyze] PRAGMA optimize failed: %v", err)
+	if _, err := s.instrumentedExec("analyze", "ANALYZE"); err != nil {
+		log.Printf("[analyze] ANALYZE failed: %v", err)
 		return false
 	}
 	elapsed := time.Since(start).Round(time.Millisecond)
