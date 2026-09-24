@@ -12,6 +12,7 @@ node tests/unit/test-a11y-1705-subpath-hop-prefix-e2e.js
 node tests/unit/test-a11y-1715-dark-role-swatches.js
 node tests/unit/test-a11y-1716-rf-range-btn-active.js
 node tests/unit/test-a11y-1719-contrast-root-causes-e2e.js
+node tests/unit/test-a11y-1996-scope-audit-chips.js
 node tests/unit/test-a11y-axe-1668-selftest.js
 node tests/unit/test-a11y-axe-routes-coverage.js
 node tests/unit/test-aging.js

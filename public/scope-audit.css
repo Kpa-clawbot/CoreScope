@@ -60,7 +60,17 @@
    .sa-chip-unobserved below, which stays neutral. Only the observed side is
    coloured: red on every unobserved region would read as an alarm on rows that
    are often just a quiet region over a short window. */
-.sa-chip-observed { background: color-mix(in srgb, var(--status-green) 16%, transparent); color: var(--status-green-text); }
+/* #1996: the chip's own tint darkens whatever is behind it, so
+   --status-green-text (green-700, #15803d) landed at 4.04:1 on --surface-0 and
+   4.38:1 on white — both under the 4.5:1 the #1719 gate requires. Measured, and
+   it reproduces the ratio in the report exactly.
+   Fixed on the TEXT rather than by thinning the tint: 12% tint would reach
+   4.52:1, two hundredths above the line, which is the kind of margin that fails
+   again on the next surface change. green-800 gives 6.23:1 on white and 5.74:1
+   on --surface-0, and keeps the tint that makes the chip read as a chip.
+   Dark is untouched: --status-green-text is the bright #22c55e there and
+   already passes at 6.48:1 / 5.73:1. */
+.sa-chip-observed { background: color-mix(in srgb, var(--status-green) 16%, transparent); color: var(--sa-chip-observed-fg); }
 
 /* Declared but not observed in this window. Deliberately NOT red: absence over
    a short window is weak evidence, which the page header says in words, so it
