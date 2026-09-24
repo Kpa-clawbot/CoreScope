@@ -6,6 +6,7 @@ package dbconfig
 type DBConfig struct {
 	VacuumOnStartup        bool `json:"vacuumOnStartup"`        // one-time full VACUUM on startup if auto_vacuum is not INCREMENTAL
 	IncrementalVacuumPages int  `json:"incrementalVacuumPages"` // pages returned to OS per reaper cycle (default 1024)
+	AnalysisLimit          int  `json:"analysisLimit"`          // index rows ANALYZE visits per index (default 10000); negative disables the planner stats refresh (#2058)
 
 	// Load controls chunked startup loading (#1009).
 	Load *LoadConfig `json:"load,omitempty"`

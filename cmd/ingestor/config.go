@@ -310,6 +310,21 @@ func (c *Config) IncrementalVacuumPages() int {
 	return 1024
 }
 
+// AnalysisLimit returns the per-index row cap for the planner stats refresh
+// (#2058). A negative setting disables the refresh; zero means unset, matching
+// IncrementalVacuumPages above.
+//
+// 10000 rather than the 400 SQLite's documentation offers: measured on the
+// 9.4 GB staging database, 400 and 1000 leave the channel-query plan exactly as
+// it was, 10000 produces the same plan as an unbounded ANALYZE, and it costs 2.0s
+// against that ANALYZE's 242.9s. The full ladder is in Store.RefreshPlannerStats.
+func (c *Config) AnalysisLimit() int {
+	if c.DB != nil && c.DB.AnalysisLimit != 0 {
+		return c.DB.AnalysisLimit
+	}
+	return 10000
+}
+
 // ShouldValidateSignatures returns true (default) unless explicitly disabled.
 func (c *Config) ShouldValidateSignatures() bool {
 	if c.ValidateSignatures != nil {

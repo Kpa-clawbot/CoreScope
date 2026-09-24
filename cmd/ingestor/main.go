@@ -481,6 +481,28 @@ func main() {
 	}()
 	log.Printf("[db] WAL checkpoint scheduled every 1h")
 
+	// Daily planner statistics refresh (#2058). Staggered 2 minutes past
+	// startup for the same reason as the checkpoint above: it takes the write
+	// lock, and should not compete with the initial ingest burst. Bounded by
+	// analysis_limit, measured at 2.0s on a 9.4 GB database, so it does not grow
+	// with the file the way an unbounded ANALYZE does (242.9s on the same file).
+	{
+		analysisLimit := cfg.AnalysisLimit()
+		if analysisLimit < 0 {
+			log.Printf("[analyze] planner statistics refresh disabled (db.analysisLimit=%d)", analysisLimit)
+		} else {
+			analyzeTicker := time.NewTicker(24 * time.Hour)
+			go func() {
+				time.Sleep(2 * time.Minute)
+				store.RefreshPlannerStats(analysisLimit)
+				for range analyzeTicker.C {
+					store.RefreshPlannerStats(analysisLimit)
+				}
+			}()
+			log.Printf("[analyze] planner statistics refresh scheduled every 24h (analysis_limit=%d)", analysisLimit)
+		}
+	}
+
 	// Daily neighbor_edges retention (#1287 — moved from cmd/server).
 	{
 		nDays := cfg.NeighborEdgesDaysOrDefault()
