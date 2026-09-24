@@ -34,12 +34,25 @@ function test(name, fn) {
 
 console.log('\n── #1470 CSS: --card-bg dark-mode variable ──');
 
+// The @media block nests, so `[^}]*` (used for the flat [data-theme="dark"]
+// block below) stops at the first inner rule. Match braces instead. This used
+// to be a fixed `slice(mediaIdx, mediaIdx + 2000)`, which sat one character
+// from the end of the block: adding a single variable above --card-bg pushed it
+// out of the window and failed this test for a reason unrelated to --card-bg.
+function mediaDarkBlock(css) {
+  const start = css.indexOf('@media (prefers-color-scheme: dark)');
+  assert.ok(start !== -1, '@media dark block not found');
+  let depth = 0;
+  for (let i = start; i < css.length; i++) {
+    if (css[i] === '{') depth++;
+    else if (css[i] === '}' && --depth === 0) return css.slice(start, i + 1);
+  }
+  assert.fail('@media dark block is never closed');
+}
+
 test('@media dark block sets --card-bg to var(--surface-2)', () => {
   const css = read('public/style.css');
-  // Find the @media (prefers-color-scheme: dark) block
-  const mediaIdx = css.indexOf('@media (prefers-color-scheme: dark)');
-  assert.ok(mediaIdx !== -1, '@media dark block not found');
-  const mediaBlock = css.slice(mediaIdx, mediaIdx + 2000);
+  const mediaBlock = mediaDarkBlock(css);
   const m = mediaBlock.match(/--card-bg\s*:\s*([^;]+);/);
   assert.ok(m, '--card-bg not found in @media dark block');
   assert.strictEqual(m[1].trim(), 'var(--surface-2)',
