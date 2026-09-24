@@ -747,7 +747,7 @@
 
         <div class="node-full-card" id="node-packets">
           ${(() => { const validPackets = adverts.filter(p => p.hash && p.timestamp); return `
-          <h4>Recent Packets (${validPackets.length})</h4>
+          <h4 title="Adverts this node originated. The section is limited to adverts because they are the only packet type attributable to an originating node: transmissions.from_pubkey is populated for ADVERTs only, so a relayed CHAN or TXT packet cannot be traced back to its sender without path resolution.">Recent Adverts (${validPackets.length})</h4>
           <div class="node-activity-list">
             ${validPackets.length ? validPackets.map(p => {
               let decoded; try { decoded = JSON.parse(p.decoded_json); } catch {}
@@ -1738,7 +1738,7 @@
 
         <div class="node-detail-section">
           ${(() => { const validPackets = adverts.filter(a => a.hash && a.timestamp); return `
-          <h4>Recent Packets (${validPackets.length})</h4>
+          <h4 title="Adverts this node originated. The section is limited to adverts because they are the only packet type attributable to an originating node: transmissions.from_pubkey is populated for ADVERTs only, so a relayed CHAN or TXT packet cannot be traced back to its sender without path resolution.">Recent Adverts (${validPackets.length})</h4>
           <div id="advertTimeline">
             ${validPackets.length ? validPackets.map(a => {
               let decoded;

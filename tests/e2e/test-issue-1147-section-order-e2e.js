@@ -1,16 +1,22 @@
 /**
- * #1147 — Side panel + full node detail page must render "Recent Packets"
- * directly under Overview, BEFORE Paths/Neighbors/Heard By/Clock Skew.
+ * #1147 — Side panel + full node detail page must render the originated-adverts
+ * section directly under Overview, BEFORE Paths/Neighbors/Heard By/Clock Skew.
  *
  * Operator mental order: identity → packets they originated → paths they
- * relay → adverts → meta. Recent Packets currently appears LAST; this is
- * the regression guard that proves the new ordering.
+ * relay → adverts → meta. That section appeared LAST; this is the regression
+ * guard that proves the new ordering.
+ *
+ * What this suite is about is the ORDER, not the wording. It anchors on the
+ * heading text because that is what the DOM offers, which coupled it to a label
+ * that then changed: #2042 renamed the heading from "Recent Packets" to "Recent
+ * Adverts" (the section only ever held adverts) and this suite failed on the
+ * rename alone. Hence the single constant below rather than twelve literals.
  *
  * Acceptance:
- *   - Full node detail page (#/nodes/<pk>): index of "Recent Packets"
- *     section header < index of "Paths Through This Node" header AND
- *     < index of "Heard By" header AND < index of "Neighbors" header
- *     AND < index of "Clock Skew" header (when present).
+ *   - Full node detail page (#/nodes/<pk>): index of the adverts section header
+ *     < index of "Paths Through This Node" header AND < index of "Heard By"
+ *     header AND < index of "Neighbors" header AND < index of "Clock Skew"
+ *     header (when present).
  *   - Side panel (open from /nodes list): same ordering.
  *
  * Usage: BASE_URL=http://localhost:13581 node test-issue-1147-section-order-e2e.js
@@ -20,6 +26,10 @@
 const { chromium } = require('playwright');
 
 const BASE = process.env.BASE_URL || 'http://localhost:13581';
+
+// The heading that opens the originated-adverts section (public/nodes.js).
+// Both copies, full page and side pane, use the same text.
+const ADVERTS_HEADING = 'Recent Adverts';
 
 let passed = 0, failed = 0;
 async function step(name, fn) {
@@ -61,7 +71,7 @@ function indexOfStarts(headers, prefix) {
   const pubkey = await page.evaluate(async () => {
     const r = await fetch('/api/nodes?limit=20');
     const d = await r.json();
-    // Prefer a node with an advert_count > 0 so Recent Packets has content,
+    // Prefer a node with an advert_count > 0 so the section has content,
     // but ANY node should render the section header (with an empty state).
     const cand = (d.nodes || []).find(n => (n.advert_count || 0) > 0) ||
                  (d.nodes || [])[0];
@@ -71,42 +81,43 @@ function indexOfStarts(headers, prefix) {
   console.log('  → using probe pubkey: ' + pubkey.slice(0, 12) + '…');
 
   // ─── Case 1: Full node detail page ───
-  await step('full page: Recent Packets appears before Paths/Heard By/Neighbors/Clock Skew', async () => {
+  await step(`full page: ${ADVERTS_HEADING} appears before Paths/Heard By/Neighbors/Clock Skew`, async () => {
     await page.goto(BASE + '/#/nodes/' + encodeURIComponent(pubkey), { waitUntil: 'domcontentloaded' });
     // Wait for the body container to render (the full detail uses .node-full-card).
     await page.waitForSelector('.node-full-card', { timeout: 10000 });
-    // Wait until at least one "Recent Packets" header is in the DOM.
-    await page.waitForFunction(() => {
+    // Wait until at least one adverts-section header is in the DOM. The heading
+    // is passed in: this callback runs in the browser and cannot close over it.
+    await page.waitForFunction((heading) => {
       return Array.from(document.querySelectorAll('h4'))
-        .some(h => (h.textContent || '').trim().startsWith('Recent Packets'));
-    }, { timeout: 10000 });
+        .some(h => (h.textContent || '').trim().startsWith(heading));
+    }, ADVERTS_HEADING, { timeout: 10000 });
 
     const headers = await sectionHeaders(page, 'body');
     console.log('    headers (full page): ' + JSON.stringify(headers));
 
-    const iRecent = indexOfStarts(headers, 'Recent Packets');
+    const iRecent = indexOfStarts(headers, ADVERTS_HEADING);
     const iPaths  = indexOfStarts(headers, 'Paths Through This Node');
     const iHeard  = indexOfStarts(headers, 'Heard By');
     const iNeigh  = indexOfStarts(headers, 'Neighbors');
     // Clock Skew is hidden by default but rendered later; only enforce ordering
     // when its container has visible content. Skip if absent.
 
-    assert(iRecent !== -1, 'Recent Packets header not found on full page');
+    assert(iRecent !== -1, `${ADVERTS_HEADING} header not found on full page`);
     assert(iPaths  !== -1, 'Paths Through This Node header not found on full page');
     assert(iRecent < iPaths,
-      `Recent Packets (idx ${iRecent}) must appear BEFORE Paths Through This Node (idx ${iPaths}) on full page`);
+      `${ADVERTS_HEADING} (idx ${iRecent}) must appear BEFORE Paths Through This Node (idx ${iPaths}) on full page`);
     if (iHeard !== -1) {
       assert(iRecent < iHeard,
-        `Recent Packets (idx ${iRecent}) must appear BEFORE Heard By (idx ${iHeard}) on full page`);
+        `${ADVERTS_HEADING} (idx ${iRecent}) must appear BEFORE Heard By (idx ${iHeard}) on full page`);
     }
     if (iNeigh !== -1) {
       assert(iRecent < iNeigh,
-        `Recent Packets (idx ${iRecent}) must appear BEFORE Neighbors (idx ${iNeigh}) on full page`);
+        `${ADVERTS_HEADING} (idx ${iRecent}) must appear BEFORE Neighbors (idx ${iNeigh}) on full page`);
     }
   });
 
   // ─── Case 2: Side panel (opened from /nodes list) ───
-  await step('side panel: Recent Packets appears before Paths/Heard By/Neighbors', async () => {
+  await step(`side panel: ${ADVERTS_HEADING} appears before Paths/Heard By/Neighbors`, async () => {
     await page.goto(BASE + '/#/nodes', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
     await page.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
@@ -126,33 +137,33 @@ function indexOfStarts(headers, prefix) {
 
     // Wait for side panel to render the detail container.
     await page.waitForSelector('.node-detail', { timeout: 10000 });
-    // Wait until Recent Packets header lands in the side panel scope.
-    await page.waitForFunction(() => {
+    // Wait until the adverts-section header lands in the side panel scope.
+    await page.waitForFunction((heading) => {
       const root = document.querySelector('.node-detail');
       if (!root) return false;
       return Array.from(root.querySelectorAll('h4'))
-        .some(h => (h.textContent || '').trim().startsWith('Recent Packets'));
-    }, { timeout: 10000 });
+        .some(h => (h.textContent || '').trim().startsWith(heading));
+    }, ADVERTS_HEADING, { timeout: 10000 });
 
     const headers = await sectionHeaders(page, '.node-detail');
     console.log('    headers (side panel): ' + JSON.stringify(headers));
 
-    const iRecent = indexOfStarts(headers, 'Recent Packets');
+    const iRecent = indexOfStarts(headers, ADVERTS_HEADING);
     const iPaths  = indexOfStarts(headers, 'Paths Through This Node');
     const iHeard  = indexOfStarts(headers, 'Heard By');
     const iNeigh  = indexOfStarts(headers, 'Neighbors');
 
-    assert(iRecent !== -1, 'Recent Packets header not found in side panel');
+    assert(iRecent !== -1, `${ADVERTS_HEADING} header not found in side panel`);
     assert(iPaths  !== -1, 'Paths Through This Node header not found in side panel');
     assert(iRecent < iPaths,
-      `Recent Packets (idx ${iRecent}) must appear BEFORE Paths Through This Node (idx ${iPaths}) in side panel`);
+      `${ADVERTS_HEADING} (idx ${iRecent}) must appear BEFORE Paths Through This Node (idx ${iPaths}) in side panel`);
     if (iHeard !== -1) {
       assert(iRecent < iHeard,
-        `Recent Packets (idx ${iRecent}) must appear BEFORE Heard By (idx ${iHeard}) in side panel`);
+        `${ADVERTS_HEADING} (idx ${iRecent}) must appear BEFORE Heard By (idx ${iHeard}) in side panel`);
     }
     if (iNeigh !== -1) {
       assert(iRecent < iNeigh,
-        `Recent Packets (idx ${iRecent}) must appear BEFORE Neighbors (idx ${iNeigh}) in side panel`);
+        `${ADVERTS_HEADING} (idx ${iRecent}) must appear BEFORE Neighbors (idx ${iNeigh}) in side panel`);
     }
   });
 

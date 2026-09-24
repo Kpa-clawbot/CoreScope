@@ -136,6 +136,7 @@ node tests/unit/test-issue-1890-og-url.js
 node tests/unit/test-issue-1956-release-routing.js
 node tests/unit/test-issue-1979-scope-adverts-by-role.js
 node tests/unit/test-issue-1997-distance-building.js
+node tests/unit/test-issue-2042-recent-adverts-label.js
 node tests/unit/test-issue-2001-map-scope-state.js
 node tests/unit/test-issue-2012-clear-filters-selection.js
 node tests/unit/test-live-anims.js
