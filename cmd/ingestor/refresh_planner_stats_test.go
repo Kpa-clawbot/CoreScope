@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/meshcore-analyzer/dbconfig"
@@ -215,5 +218,50 @@ func TestPlannerStatsSurviveReopen_Issue2058(t *testing.T) {
 	}
 	if second.EnsurePlannerStats(10000) {
 		t.Error("the reopened store rebuilt statistics, so a restart would pay for an ANALYZE it does not need")
+	}
+}
+
+// An operator watching a first deploy sees ingest stop for minutes. The warning
+// is what tells them it is an ANALYZE and not a hang, so it is worth pinning:
+// measured on staging, the build held the write connection 3m43.9s and the
+// observations table took zero rows for four minutes.
+func TestEnsurePlannerStatsWarnsBeforeBuilding_Issue2058(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+
+	var buf bytes.Buffer
+	orig := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(orig)
+
+	s.EnsurePlannerStats(10000)
+
+	out := buf.String()
+	for _, want := range []string{"no planner statistics", "write connection", "Once per database"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the first-build warning does not mention %q; an operator seeing ingest stall gets no explanation.\ngot: %s", want, out)
+		}
+	}
+	if i, j := strings.Index(out, "no planner statistics"), strings.Index(out, "statistics built in"); i == -1 || j == -1 || i > j {
+		t.Errorf("the warning must come before the completion line, so it is visible while the write path is held; got: %s", out)
+	}
+}
+
+// The counterpart: a restart must not log the warning, or every boot looks like
+// it is about to stall.
+func TestEnsurePlannerStatsIsQuietWhenPresent_Issue2058(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+	s.RefreshPlannerStats(10000)
+
+	var buf bytes.Buffer
+	orig := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(orig)
+
+	s.EnsurePlannerStats(10000)
+
+	if out := buf.String(); strings.Contains(out, "no planner statistics") {
+		t.Errorf("warned about building on a database that already has statistics: %s", out)
 	}
 }

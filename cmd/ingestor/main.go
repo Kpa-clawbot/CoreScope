@@ -484,8 +484,10 @@ func main() {
 	// Daily planner statistics refresh (#2058). Staggered 2 minutes past
 	// startup for the same reason as the checkpoint above: it takes the write
 	// lock, and should not compete with the initial ingest burst. Bounded by
-	// analysis_limit, measured at 2.0s on a 9.4 GB database, so it does not grow
-	// with the file the way an unbounded ANALYZE does (242.9s on the same file).
+	// analysis_limit, so it does not grow with the file the way an unbounded ANALYZE
+	// does: 2.0s against 242.9s on a 9.4 GB database, both warm. Cold, on a first
+	// start, it is 3m43.9s and holds the write connection throughout; see
+	// Store.EnsurePlannerStats.
 	{
 		analysisLimit := cfg.AnalysisLimit()
 		if analysisLimit < 0 {
