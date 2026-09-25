@@ -1565,8 +1565,36 @@ func (s *Store) RefreshPlannerStats(analysisLimit int) bool {
 	return true
 }
 
+// EnsurePlannerStats builds planner statistics when the database has none, and
+// reports whether it did (#2058).
+//
+// This exists to close the window the startup stagger opens. The refresh ticker
+// waits 2 minutes before its first run, and a query arriving in that window
+// against a database with no statistics at all gets the plan measured in
+// RefreshPlannerStats above: 143,442 pages read, which timed at 56.7s cold on
+// the 9.4 GB staging file.
+//
+// It fires once per database, not once per restart. sqlite_stat1 is an ordinary
+// table, so once written it stays in the file and a fresh read-only connection
+// reads it back (verified across connection close, and through a mode=ro
+// handle). Every later start therefore costs one query against sqlite_master and
+// leaves the work to the ticker.
+//
+// The trade is a one-time ANALYZE early in startup, measured at 2.0s on a 9.4 GB
+// database. It runs on the ticker's goroutine rather than the startup path, so
+// it delays no boot step; writes serialise through the store's single connection
+// either way (SetMaxOpenConns(1), db.go:142).
+func (s *Store) EnsurePlannerStats(analysisLimit int) bool {
+	if s.hasPlannerStats() {
+		return false
+	}
+	return s.RefreshPlannerStats(analysisLimit)
+}
+
 // hasPlannerStats reports whether ANALYZE has ever run against this database.
-// Used only to word the log line, so a query error reads as "no stats".
+// A query error reads as "no stats", which is the safe direction for both
+// callers: it costs the log line a wrong word, and costs EnsurePlannerStats one
+// ANALYZE that was not needed, rather than skipping one that was.
 func (s *Store) hasPlannerStats() bool {
 	var n int
 	if err := s.db.QueryRow(

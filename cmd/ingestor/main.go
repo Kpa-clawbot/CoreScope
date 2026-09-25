@@ -493,6 +493,11 @@ func main() {
 		} else {
 			analyzeTicker := time.NewTicker(24 * time.Hour)
 			go func() {
+				// Before the stagger, and only on a database that has never been
+				// analyzed: the stagger is a 2 minute window in which the first
+				// query would otherwise run on no statistics at all. A restart
+				// finds sqlite_stat1 already in the file and skips this.
+				store.EnsurePlannerStats(analysisLimit)
 				time.Sleep(2 * time.Minute)
 				store.RefreshPlannerStats(analysisLimit)
 				for range analyzeTicker.C {

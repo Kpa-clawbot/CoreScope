@@ -144,3 +144,76 @@ func TestAnalysisLimitSurvivesTheConfigFile_Issue2058(t *testing.T) {
 		t.Errorf("analysisLimit did not survive the config file: got %d, want 123", got)
 	}
 }
+
+// EnsurePlannerStats closes the 2 minute window the startup stagger opens, and
+// must do so exactly once per database rather than once per restart.
+
+func TestEnsurePlannerStatsBuildsWhenAbsent_Issue2058(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+
+	if !s.EnsurePlannerStats(10000) {
+		t.Fatal("EnsurePlannerStats did not build statistics on a database that has none")
+	}
+	if !hasStat1(t, s) {
+		t.Error("sqlite_stat1 absent after EnsurePlannerStats")
+	}
+}
+
+func TestEnsurePlannerStatsSkipsWhenPresent_Issue2058(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+
+	s.RefreshPlannerStats(10000)
+	// The point of the skip: on every restart after the first this must cost one
+	// sqlite_master query, not an ANALYZE. If it ever returns true here it is
+	// running the 2s refresh on every boot.
+	if s.EnsurePlannerStats(10000) {
+		t.Error("EnsurePlannerStats rebuilt statistics that were already there")
+	}
+}
+
+func TestEnsurePlannerStatsRespectsDisabled_Issue2058(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+
+	if s.EnsurePlannerStats(-1) {
+		t.Error("a negative limit must not build statistics")
+	}
+	if hasStat1(t, s) {
+		t.Error("sqlite_stat1 built despite the refresh being disabled")
+	}
+}
+
+// The whole design rests on this: statistics live in the file, so the boot-time
+// build is a one-off per database. If a future change ever wrote them somewhere
+// per-process, EnsurePlannerStats would silently run a full ANALYZE on every
+// restart and this test is what says so.
+func TestPlannerStatsSurviveReopen_Issue2058(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := dir + "/reopen.db"
+
+	first, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.WaitForAsyncMigrations()
+	if !first.EnsurePlannerStats(10000) {
+		t.Fatal("first store did not build statistics")
+	}
+	first.Close()
+
+	second, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	second.WaitForAsyncMigrations()
+
+	if !hasStat1(t, second) {
+		t.Fatal("statistics did not survive reopening the database")
+	}
+	if second.EnsurePlannerStats(10000) {
+		t.Error("the reopened store rebuilt statistics, so a restart would pay for an ANALYZE it does not need")
+	}
+}
