@@ -317,7 +317,9 @@ func (c *Config) IncrementalVacuumPages() int {
 // 10000 rather than the 400 SQLite's documentation offers: measured on the
 // 9.4 GB staging database, 400 and 1000 leave the channel-query plan exactly as
 // it was, 10000 produces the same plan as an unbounded ANALYZE, and it costs 2.0s
-// against that ANALYZE's 242.9s. The full ladder is in Store.RefreshPlannerStats.
+// against that ANALYZE's 242.9s, both timed warm. The full ladder, and the cold
+// figure that matters at startup, are in Store.RefreshPlannerStats and
+// Store.EnsurePlannerStats.
 func (c *Config) AnalysisLimit() int {
 	if c.DB != nil && c.DB.AnalysisLimit != 0 {
 		return c.DB.AnalysisLimit

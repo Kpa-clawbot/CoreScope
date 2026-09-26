@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/meshcore-analyzer/dbconfig"
@@ -142,5 +145,123 @@ func TestAnalysisLimitSurvivesTheConfigFile_Issue2058(t *testing.T) {
 	}
 	if got := cfg.AnalysisLimit(); got != 123 {
 		t.Errorf("analysisLimit did not survive the config file: got %d, want 123", got)
+	}
+}
+
+// EnsurePlannerStats closes the 2 minute window the startup stagger opens, and
+// must do so exactly once per database rather than once per restart.
+
+func TestEnsurePlannerStatsBuildsWhenAbsent_Issue2058(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+
+	if !s.EnsurePlannerStats(10000) {
+		t.Fatal("EnsurePlannerStats did not build statistics on a database that has none")
+	}
+	if !hasStat1(t, s) {
+		t.Error("sqlite_stat1 absent after EnsurePlannerStats")
+	}
+}
+
+func TestEnsurePlannerStatsSkipsWhenPresent_Issue2058(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+
+	s.RefreshPlannerStats(10000)
+	// The point of the skip: on every restart after the first this must cost one
+	// sqlite_master query, not an ANALYZE. If it ever returns true here it is
+	// running the 2s refresh on every boot.
+	if s.EnsurePlannerStats(10000) {
+		t.Error("EnsurePlannerStats rebuilt statistics that were already there")
+	}
+}
+
+func TestEnsurePlannerStatsRespectsDisabled_Issue2058(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+
+	if s.EnsurePlannerStats(-1) {
+		t.Error("a negative limit must not build statistics")
+	}
+	if hasStat1(t, s) {
+		t.Error("sqlite_stat1 built despite the refresh being disabled")
+	}
+}
+
+// The whole design rests on this: statistics live in the file, so the boot-time
+// build is a one-off per database. If a future change ever wrote them somewhere
+// per-process, EnsurePlannerStats would silently run a full ANALYZE on every
+// restart and this test is what says so.
+func TestPlannerStatsSurviveReopen_Issue2058(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := dir + "/reopen.db"
+
+	first, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.WaitForAsyncMigrations()
+	if !first.EnsurePlannerStats(10000) {
+		t.Fatal("first store did not build statistics")
+	}
+	first.Close()
+
+	second, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	second.WaitForAsyncMigrations()
+
+	if !hasStat1(t, second) {
+		t.Fatal("statistics did not survive reopening the database")
+	}
+	if second.EnsurePlannerStats(10000) {
+		t.Error("the reopened store rebuilt statistics, so a restart would pay for an ANALYZE it does not need")
+	}
+}
+
+// An operator watching a first deploy sees ingest stop for minutes. The warning
+// is what tells them it is an ANALYZE and not a hang, so it is worth pinning:
+// measured on staging, the build held the write connection 3m43.9s and the
+// observations table took zero rows for four minutes.
+func TestEnsurePlannerStatsWarnsBeforeBuilding_Issue2058(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+
+	var buf bytes.Buffer
+	orig := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(orig)
+
+	s.EnsurePlannerStats(10000)
+
+	out := buf.String()
+	for _, want := range []string{"no planner statistics", "write connection", "Once per database"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the first-build warning does not mention %q; an operator seeing ingest stall gets no explanation.\ngot: %s", want, out)
+		}
+	}
+	if i, j := strings.Index(out, "no planner statistics"), strings.Index(out, "statistics built in"); i == -1 || j == -1 || i > j {
+		t.Errorf("the warning must come before the completion line, so it is visible while the write path is held; got: %s", out)
+	}
+}
+
+// The counterpart: a restart must not log the warning, or every boot looks like
+// it is about to stall.
+func TestEnsurePlannerStatsIsQuietWhenPresent_Issue2058(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+	s.RefreshPlannerStats(10000)
+
+	var buf bytes.Buffer
+	orig := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(orig)
+
+	s.EnsurePlannerStats(10000)
+
+	if out := buf.String(); strings.Contains(out, "no planner statistics") {
+		t.Errorf("warned about building on a database that already has statistics: %s", out)
 	}
 }
