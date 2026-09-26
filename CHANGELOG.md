@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [3.12.0] - 2026-09-26
+
+See [docs/release-notes/v3.12.0.md](docs/release-notes/v3.12.0.md) for the full notes. 29 commits since v3.11.0: 15 fix, 5 test, 3 perf, 3 feat, 2 ci, 1 chore.
+
+### Highlights
+- **The first start after this release runs `ANALYZE`, and ingest stalls while it does** (#2058) - measured at 3m43.9s on a 9.4 GB database, once per database, buffered with nothing dropped. It buys 25% fewer pages read on the region-filtered channel query (143,442 to 107,429). Set `db.analysisLimit` negative to skip it. **Operator awareness required**, and worth picking the moment on a busy instance.
+- **`maxMemoryMB` eviction actually triggers** (#2035) - path, decode-cache and dedup-key bytes were unaccounted, so the measured footprint stayed under the configured limit and eviction never fired. Instances relying on that limit will evict where they previously grew.
+- **Reception is attributed more honestly** (#2057, #2063, #2064) - zero-hop adverts count as direct reception, Heard By lists only observers that heard the node on air, and its empty state no longer claims the node is out of range.
+- **Each observation carries its own wire bytes** (#1999) - the packet detail API handed every observation the same canonical frame.
+- **CoreDrive RX region answers are stored** (#2047) - `node_declared_regions` was read but created by nothing, so the Scope Audit described a source that never arrived. Opt-in through `clientRegions`, kept with position, repeater clock and per-collector history.
+- **Eight E2E suites had no runner at all** (#2045, #2053) - the aggregate reported a pass while skipping them.
+
+No manual migration step: `node_declared_regions` (#2047) and `sqlite_stat1` (#2058) are both created at boot.
+
+## [3.11.0] - 2026-09-16
+
+Released and deployed, but it never received a changelog entry at the time; this one is written after the fact and there is no `docs/release-notes/v3.11.0.md`. 52 commits since v3.10.1: 27 fix, 16 feat, 4 test, 2 perf.
+
+### Highlights
+- **Network-wide Scope Audit page** (#1976), with declared-region verification against a repeater's own traffic (#1990), unnameable-traffic accounting (#1987), and opt-in region keys derived from what nodes declare (#1989).
+- **SQLite driver swapped** from `modernc.org/sqlite` to `mattn/go-sqlite3`, cross-built with zig (#1992). This makes the build cgo-dependent.
+- **Map colours and filters repeaters by scope-configuration state** (#2006), and filters repeaters by region name (#1862).
+- Analytics additions: retransmission pressure over time (#1699), scope adverts by node role (#1979), per-node hop-count statistics (#1812).
+- The scope-match tally survives ingestor restarts (#2002).
+
 ## [3.10.1] - 2026-09-04
 
 v3.10.0 was tagged and withdrawn before any container image or release asset was published; nothing was ever available under that number. Same release, next number.

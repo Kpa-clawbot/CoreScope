@@ -806,9 +806,12 @@ jobs:
   # locally, reported success, and pushed nothing.
   #
   # That went unnoticed until v3.10.0, where the tagged commit was
-  # documentation-only. Documentation-only commits skip this workflow (see the
-  # paths-ignore above), so no :edge image was ever built for it, the label
-  # comparison failed, and the fallback ran for the first time.
+  # documentation-only. At that time a trigger-level paths-ignore skipped this
+  # workflow for such commits, so no :edge image was ever built for it, the label
+  # comparison failed, and the fallback ran for the first time. That filter is
+  # gone: the `changes` job now forces code=true for anything that is not a pull
+  # request, so every master commit gets an image and a documentation commit is
+  # safe to tag. See the comment on the `on:` block.
   build-and-publish:
     name: "🏗️ Build & Publish Docker Image"
     needs: [e2e-test, changes]
