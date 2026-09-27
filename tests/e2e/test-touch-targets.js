@@ -27,24 +27,10 @@ const { chromium, devices } = require('playwright');
 const REPO = REPO_ROOT;
 const CSS = fs.readFileSync(path.join(REPO, 'public/style.css'), 'utf8');
 
-// Minimum hit area per selector. 48 is the house default (public/style.css:610
-// states it for the whole group); MIN_OVERRIDES carries the documented
-// exceptions, so a third selector quietly dropping to 44 still fails here.
+// All listed button surfaces use the shared 48px house minimum (#2052).
 const DEFAULT_MIN = 48;
-const MIN_OVERRIDES = {
-  // Both are declared twice in public/style.css: 48px in the touch-target
-  // block (.nav-btn at :561, .ch-icon-btn at :567) and 44px in their own
-  // component rule further down (:890 and :1838), which wins. 44 is what
-  // ships, and it is the WCAG 2.5.5 / Apple HIG figure the later rule cites.
-  // Pinned at the effective value rather than the aspirational one; the
-  // contradiction itself is #2052, and is not a test problem. Remove these
-  // two entries when that is settled either way.
-  '.nav-btn': 44,
-  '.ch-icon-btn': 44,
-};
 
-// Selectors we claim to make DEFAULT_MIN square, except where MIN_OVERRIDES
-// says otherwise. Each entry: [selector, tag, classes, optional inner-html].
+// Each entry: [selector, tag, classes, optional inner-html].
 // Tag matters because some rules are scoped to `button.ch-item` and some only
 // apply to specific input[type=...].
 //
@@ -137,9 +123,9 @@ async function run() {
   } catch (err) {
     // Allow the test to be skipped on hosts where Chromium cannot launch
     // (e.g. some musl-libc dev boxes). CI uses standard glibc Ubuntu runners
-    // where this path is never taken. Set TOUCH_TARGETS_REQUIRE=1 to force
+    // where this path is never taken. Set TOUCH_TARGETS_REQUIRE=1 or CHROMIUM_REQUIRE=1 to force
     // a hard failure even when Chromium is unavailable.
-    if (process.env.TOUCH_TARGETS_REQUIRE === '1') throw err;
+    if (process.env.TOUCH_TARGETS_REQUIRE === '1' || process.env.CHROMIUM_REQUIRE === '1') throw err;
     console.log(`test-touch-targets.js: SKIP (Chromium unavailable: ${err.message.split('\n')[0]})`);
     process.exit(0);
   }
@@ -175,7 +161,7 @@ async function run() {
       const cs = getComputedStyle(el);
       return { w: r.width, h: r.height, mh: cs.minHeight, mw: cs.minWidth };
     });
-    const min = MIN_OVERRIDES[selector] || DEFAULT_MIN;
+    const min = DEFAULT_MIN;
     const okH = dim.h >= min;
     const okW = dim.w >= min;
     record(`${selector}: rendered ${dim.w.toFixed(1)}x${dim.h.toFixed(1)} (min ${dim.mw}/${dim.mh}, required ${min})`,

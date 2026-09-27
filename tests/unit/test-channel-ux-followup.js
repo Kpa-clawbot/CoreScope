@@ -1,7 +1,7 @@
 /**
  * Follow-up UX fixes to #1037 channel modal/sidebar redesign:
  *
- *   1. ✕ remove button must hit a 44×44px touch target (WCAG 2.5.5).
+ *   1. ✕ remove button must hit a 48×48px house touch target (#2052).
  *   2. Channel rows must NOT display "0 messages" — when no messages
  *      have been decrypted yet, omit the count entirely.
  *   3. Modal footer wording: keys removed via ✕ button, not by
@@ -26,12 +26,13 @@ function assert(cond, msg) {
   else { failed++; console.error('  ✗ ' + msg); }
 }
 
-console.log('\n=== Fix 1: ✕ touch target ≥ 44×44px (on shared .ch-icon-btn base) ===');
-const iconBtnRule = (cssSrc.match(/\.ch-icon-btn\s*\{[^}]*\}/) || [''])[0];
-assert(/min-width:\s*44px/.test(iconBtnRule),
-  '.ch-icon-btn declares min-width: 44px');
-assert(/min-height:\s*44px/.test(iconBtnRule),
-  '.ch-icon-btn declares min-height: 44px');
+console.log('\n=== Fix 1: shared touch-target sizing owns channel icon minimums ===');
+// Computed 48x48 hit areas are asserted by test-touch-targets.js. Keep the
+// component rules from silently overriding that shared policy again (#2052).
+const iconBtnRules = cssSrc.match(/(?:^|\n)[^{}]*\.ch-icon-btn\s*\{[^}]*\}/g) || [];
+assert(iconBtnRules.length > 0, '.ch-icon-btn component rules exist');
+assert(iconBtnRules.every(rule => !/min-(?:width|height)\s*:/.test(rule)),
+  '.ch-icon-btn component rules inherit minimum sizes from the shared touch-target group');
 
 console.log('\n=== Fix 2: no "0 messages" in default row ===');
 // renderChannelRow must not emit a literal "0 messages" preview when
