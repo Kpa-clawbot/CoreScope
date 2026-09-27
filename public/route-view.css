@@ -7,8 +7,12 @@
     position: relative;
     top: 0;
     bottom: auto;
-    flex-shrink: 0;
+    flex-shrink: 1;
   }
+  /* A saved/dragged wide panel must yield space when the viewport narrows.
+     Match the resize handle's 220px minimum, except for the 36px collapse. */
+  #map-wrap > .mc-rt-sidebar:not(.mc-rt-collapsed) { min-width: 220px; }
+  body.mc-route-active #leaflet-map { min-width: 160px; }
 }
 
 /* Auto-collapse Map Controls panel when route view opens. The toggle button
