@@ -129,9 +129,9 @@ async function run() {
     const mobile = await browser.newContext({ viewport: { width: 375, height: 812 } });
     const mpage = await mobile.newPage();
     mpage.setDefaultTimeout(15000);
+    // #2054: mobile clamps the desktop fixture window (525600) back to 15.
+    await mpage.addInitScript(() => localStorage.setItem('meshcore-time-window', '180'));
     await mpage.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
-    await mpage.evaluate(() => localStorage.setItem('meshcore-time-window', '525600'));
-    await mpage.reload({ waitUntil: 'load' });
     await mpage.waitForSelector('[data-loaded="true"]', { timeout: 20000 });
     await mpage.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
 
@@ -144,8 +144,8 @@ async function run() {
       'observer column should be hidden in rows at 375px (tier-3, desktop-only per #1415 spec)');
 
     // (b) tap first row → detail panel renders observer + IATA badge
-    const firstRow = await mpage.$('table tbody tr[data-hash]');
-    assert(firstRow, 'no packet row found to tap');
+    const firstRow = mpage.locator('#pktBody tr[data-hash]').first();
+    assert(await firstRow.count() > 0, 'no packet row found to tap');
     await firstRow.click();
     await mpage.waitForSelector('.detail-meta', { timeout: 10000 });
     const detailIata = await mpage.$('.detail-meta .badge-iata');

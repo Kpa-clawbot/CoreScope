@@ -174,6 +174,10 @@ async function main() {
 
   // Stub clipboard so cov3 can observe writes without a real permission.
   await page.addInitScript(() => {
+    // #2054: mobile clamps larger saved windows to 15; keep fixture rows for 3 hours.
+    localStorage.setItem('meshcore-time-window', '180');
+    // First-visit hints have their own suite; the drawer hint covers this swipe target.
+    localStorage.setItem('meshcore-gesture-hints-edge-drawer', 'seen');
     window.__clipboardWrites = [];
     if (!navigator.clipboard) {
       Object.defineProperty(navigator, 'clipboard', {
@@ -249,7 +253,7 @@ async function main() {
         hash: location.hash,
         overlay: !!document.querySelector('.row-action-overlay.row-action-overlay-open'),
       }));
-      const expected = `#/packets?hash=${encodeURIComponent(r2.hash)}`;
+      const expected = `#/packets?timeWindow=180&hash=${encodeURIComponent(r2.hash)}`;
       if (state.hash === expected && !state.overlay) {
         pass(`(cov2) filter button navigated to ${state.hash} and dismissed overlay`);
       } else {
@@ -328,8 +332,8 @@ async function main() {
     await synthSwipe(page, cx - 80, cy, cx + 80, cy);
     await page.waitForTimeout(250);
     const hash = await page.evaluate(() => location.hash);
-    if (hash === '#/packets') pass('(cov5) LTR bottom-nav swipe on #/live navigated back to #/packets');
-    else fail(`(cov5) expected #/packets, got ${hash}`);
+    if (hash === '#/packets?timeWindow=180') pass('(cov5) LTR bottom-nav swipe returned to packets with the saved window');
+    else fail(`(cov5) expected #/packets?timeWindow=180, got ${hash}`);
   }
 
   // ── (cov6) bottom-nav boundary — LTR swipe on first tab (#/home) no-op ──
@@ -363,6 +367,7 @@ async function main() {
   {
     const ctxD = await browser.newContext({ viewport: { width: 1200, height: 900 }, hasTouch: true });
     const pD = await ctxD.newPage();
+    await pD.addInitScript(() => localStorage.setItem('meshcore-time-window', '525600'));
     pD.setDefaultTimeout(15000);
     pD.on('pageerror', (e) => console.error('[pageerror-desktop]', e.message));
     await pD.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
@@ -397,6 +402,10 @@ async function main() {
       viewport: { width: 375, height: 812 }, hasTouch: true, isMobile: true,
     });
     const pP = await ctxP.newPage();
+    await pP.addInitScript(() => {
+      localStorage.setItem('meshcore-time-window', '180');
+      localStorage.setItem('meshcore-gesture-hints-edge-drawer', 'seen');
+    });
     pP.setDefaultTimeout(15000);
     pP.on('pageerror', (e) => console.error('[pageerror-phone2]', e.message));
     await pP.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });

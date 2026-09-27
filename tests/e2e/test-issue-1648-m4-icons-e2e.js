@@ -53,6 +53,8 @@ async function main() {
 
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const page = await ctx.newPage();
+  // #2054: packet-detail icons need fixture rows even after the CI job passes 15 minutes.
+  await page.addInitScript(() => localStorage.setItem('meshcore-time-window', '525600'));
 
   // (a) /map — pane toggle + general sprite presence
   await gotoSpa(page, '/map');
@@ -104,14 +106,14 @@ async function main() {
 
   // (c) /packets — replay button renders Phosphor play sprite
   await gotoSpa(page, '/packets');
-  await page.waitForTimeout(1500);
-  // Click first packet row to render detail with replay button (if any).
+  await page.waitForSelector('#pktLeft[data-loaded="true"]', { state: 'attached' });
+  assert(await page.locator('#pktBody tr[data-hash]').count() > 0,
+    '(c) packet detail icons require a real packet row, not the empty-state row');
+  // Click a real packet row to render detail with replay button.
   await page.evaluate(() => {
     const row = document.querySelector('#pktBody tr[data-hash]');
     if (row) row.click();
   });
-  assert(await page.locator('#pktBody tr[data-hash]').count() > 0,
-    '(c) packet detail icons require a real packet row, not the empty-state row');
   await page.waitForTimeout(800);
   const packets = await page.evaluate(() => {
     const replay = document.querySelector('.replay-live-btn');

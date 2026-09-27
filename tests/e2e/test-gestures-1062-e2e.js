@@ -89,6 +89,12 @@ async function main() {
 
   const ctx = await browser.newContext({ viewport: { width: 360, height: 800 }, hasTouch: true });
   const page = await ctx.newPage();
+  // #2054: fixture rows must survive a long CI job; mobile accepts up to 180 minutes.
+  await page.addInitScript(() => {
+    localStorage.setItem('meshcore-time-window', '180');
+    // The first-visit drawer hint can cover the row's swipe start point.
+    localStorage.setItem('meshcore-gesture-hints-edge-drawer', 'seen');
+  });
   page.setDefaultTimeout(15000);
   page.on('pageerror', (e) => console.error('[pageerror]', e.message));
 
@@ -305,6 +311,10 @@ async function main() {
     reducedMotion: 'reduce',
   });
   const page2 = await ctx2.newPage();
+  await page2.addInitScript(() => {
+    localStorage.setItem('meshcore-time-window', '180');
+    localStorage.setItem('meshcore-gesture-hints-edge-drawer', 'seen');
+  });
   page2.setDefaultTimeout(15000);
   await page2.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
   await page2.waitForSelector('#pktBody tr[data-hash]', { timeout: 10000 }).catch(() => {});
