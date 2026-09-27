@@ -3438,6 +3438,11 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 }
 .analytics-chart-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; padding: var(--space-sm); min-width: 0; }
 .analytics-chart-card.full { grid-column: 1 / -1; }
+/* Keep relay labels, percentage values and a visible track inside narrow cards. */
+.dumbbell-chart { container-type: inline-size; }
+@container (max-width: 480px) {
+  .dumbbell-row, .dumbbell-axis { --relay-airtime-columns: 70px minmax(20px, 1fr) 90px; }
+}
 /* Constrain chart media inside the card (svg/canvas at any depth). The
    `.analytics-chart-card svg, .analytics-chart-card canvas` descendant
    selector is robust to wrapper elements (legends, tooltips, axis

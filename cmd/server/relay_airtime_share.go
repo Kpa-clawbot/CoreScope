@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"log"
 	"sort"
 	"time"
@@ -25,7 +26,7 @@ import (
 // preset 869.6 MHz / BW 62.5 kHz / SF 8 / CR 4/5, with the
 // SF-dependent preamble pulled from internal/lora.PreambleForSF.
 //
-// Aggregated by payload_type. Originator TX is deliberately excluded — a
+// Aggregated by payload_type and ADVERT routing kind. Originator TX is excluded — a
 // never-relayed direct message scores 0, which is the correct framing for a
 // "relay amplification" metric. In-memory only; no SQL, no new index.
 
@@ -121,7 +122,43 @@ func (s *PacketStore) distinctRelayCount(tx *StoreTx) int {
 	return len(s.resolvedPubkeyReverse[tx.ID])
 }
 
-// computeRelayAirtimeShare aggregates relay-airtime-share per payload_type.
+// relayAdvertKind uses the recorded route and original wire header, never the
+// longest observation's display path. Firmware Mesh::sendZeroHop writes an
+// exactly-zero path byte; sendFlood may also start with no path (Mesh.cpp).
+// Only the fixed header (at most six bytes) is decoded, not the payload.
+func relayAdvertKind(tx *StoreTx) string {
+	if tx.RouteType == nil {
+		return "other"
+	}
+	route := *tx.RouteType
+	if route == RouteFlood || route == RouteTransportFlood {
+		return "flood"
+	}
+	if route != RouteDirect && route != RouteTransportDirect {
+		return "other"
+	}
+	headerLen := 2
+	if isTransportRoute(route) {
+		headerLen += 4
+	}
+	if len(tx.RawHex)%2 != 0 || len(tx.RawHex) <= headerLen*2 {
+		return "other"
+	}
+	var header [6]byte
+	if _, err := hex.Decode(header[:headerLen], []byte(tx.RawHex[:headerLen*2])); err != nil {
+		return "other"
+	}
+	if int(header[0]&3) != route || int((header[0]>>2)&15) != PayloadADVERT {
+		return "other"
+	}
+	if header[headerLen-1] == 0 {
+		return "zero_hop"
+	}
+	return "other"
+}
+
+// computeRelayAirtimeShare aggregates by payload_type, splitting only ADVERT
+// by recorded routing. Other payload-mix analytics retain their usual grouping.
 //
 // Returns:
 //
@@ -143,7 +180,12 @@ func (s *PacketStore) computeRelayAirtimeShare(window TimeWindow) map[string]int
 		count int
 		score int64 // sum of ToA(payload) × relays, in nanoseconds
 	}
-	buckets := make(map[int]*bucket)
+	// The additional key has only three possible values, all for ADVERT.
+	type bucketKey struct {
+		payloadType int
+		advertKind  string
+	}
+	buckets := make(map[bucketKey]*bucket)
 	seenHash := make(map[string]bool, len(s.packets))
 	totalCount := 0
 	var totalScore int64
@@ -165,10 +207,14 @@ func (s *PacketStore) computeRelayAirtimeShare(window TimeWindow) map[string]int
 			seenHash[tx.Hash] = true
 		}
 		pt := *tx.PayloadType
-		b := buckets[pt]
+		key := bucketKey{payloadType: pt}
+		if pt == PayloadADVERT {
+			key.advertKind = relayAdvertKind(tx)
+		}
+		b := buckets[key]
 		if b == nil {
 			b = &bucket{}
-			buckets[pt] = b
+			buckets[key] = b
 		}
 		b.count++
 		totalCount++
@@ -185,7 +231,8 @@ func (s *PacketStore) computeRelayAirtimeShare(window TimeWindow) map[string]int
 	}
 
 	rows := make([]map[string]interface{}, 0, len(buckets))
-	for pt, b := range buckets {
+	for key, b := range buckets {
+		pt := key.payloadType
 		name := ptNames[pt]
 		if name == "" {
 			name = "UNK"
@@ -197,17 +244,21 @@ func (s *PacketStore) computeRelayAirtimeShare(window TimeWindow) map[string]int
 		if totalScore > 0 {
 			airtimePct = float64(b.score) / float64(totalScore) * 100.0
 		}
-		rows = append(rows, map[string]interface{}{
+		row := map[string]interface{}{
 			"payload_type": name,
 			"type":         pt,
 			"count":        b.count,
 			"count_pct":    countPct,
 			"score":        b.score,
 			"airtime_pct":  airtimePct,
-		})
+		}
+		if key.advertKind != "" {
+			row["advert_kind"] = key.advertKind
+		}
+		rows = append(rows, row)
 	}
 
-	// Sort descending by airtime_pct; tiebreak count desc, then name asc
+	// Sort descending by airtime_pct; tiebreak count desc, then name/kind asc
 	// for deterministic ordering.
 	sort.SliceStable(rows, func(i, j int) bool {
 		ai, _ := rows[i]["airtime_pct"].(float64)
@@ -222,7 +273,12 @@ func (s *PacketStore) computeRelayAirtimeShare(window TimeWindow) map[string]int
 		}
 		ni, _ := rows[i]["payload_type"].(string)
 		nj, _ := rows[j]["payload_type"].(string)
-		return ni < nj
+		if ni != nj {
+			return ni < nj
+		}
+		ki, _ := rows[i]["advert_kind"].(string)
+		kj, _ := rows[j]["advert_kind"].(string)
+		return ki < kj
 	})
 
 	label := ""

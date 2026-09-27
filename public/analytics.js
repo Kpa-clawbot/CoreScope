@@ -509,7 +509,7 @@
     }
     var totalScore = (data && typeof data.total_score === 'number') ? data.total_score : 0;
     if (totalScore <= 0) {
-      return '<div class="text-muted" style="padding:20px">No relay activity observed in this window (all packets direct).</div>';
+      return '<div class="text-muted" style="padding:20px">No relay activity observed in this window.</div>';
     }
     // Issue #1768 — surface the LoRa preset baked into the ToA score. Share
     // numbers are only meaningful relative to one PHY preset; operators must
@@ -540,6 +540,11 @@
     if (presetCaption) html += presetCaption;
     rows.forEach(function (r, i) {
       var name = r.payload_type || 'UNK';
+      if (name === 'ADVERT') {
+        if (r.advert_kind === 'flood') name = 'Flood adverts';
+        else if (r.advert_kind === 'zero_hop') name = 'Zero-hop adverts';
+        else if (r.advert_kind === 'other') name = 'Other adverts';
+      }
       var cnt = Number(r.count || 0);
       var cpct = Number(r.count_pct || 0);
       var apct = Number(r.airtime_pct || 0);
@@ -560,7 +565,7 @@
         'Count: ' + cnt.toLocaleString() + ' (' + cpct.toFixed(2) + '%)\n' +
         'Airtime: ' + apct.toFixed(2) + '% (score ' + scoreStr + ' · airtime × repeaters)\n' +
         'Score = LoRa Time-on-Air × distinct repeaters. Within-mesh only.';
-      html += '<div class="dumbbell-row" title="' + esc(tip) + '" style="display:grid;grid-template-columns:80px 1fr 180px;align-items:center;gap:10px;font-size:12px">' +
+      html += '<div class="dumbbell-row" title="' + esc(tip) + '" style="display:grid;grid-template-columns:var(--relay-airtime-columns,80px 1fr 180px);align-items:center;gap:10px;font-size:12px">' +
         '<div class="dumbbell-label" style="font-weight:600;color:var(--text)">' + esc(name) + '</div>' +
         '<div class="dumbbell-track" style="position:relative;height:18px;background:var(--bg-elev,rgba(127,127,127,0.12));border-radius:9px">' +
           '<div class="dumbbell-connector" style="position:absolute;top:50%;left:' + loPct.toFixed(3) + '%;width:' + (hiPct - loPct).toFixed(3) + '%;height:2px;background:var(--text-muted,#888);transform:translateY(-50%);opacity:0.5"></div>' +
@@ -575,7 +580,7 @@
       '</div>';
     });
     // Axis legend.
-    html += '<div class="dumbbell-axis" style="display:grid;grid-template-columns:80px 1fr 180px;gap:10px;color:var(--text-muted);font-size:11px;margin-top:4px">' +
+    html += '<div class="dumbbell-axis" style="display:grid;grid-template-columns:var(--relay-airtime-columns,80px 1fr 180px);gap:10px;color:var(--text-muted);font-size:11px;margin-top:4px">' +
       '<div></div>' +
       '<div style="display:flex;justify-content:space-between"><span>0%</span><span>50%</span><span>100%</span></div>' +
       '<div></div>' +

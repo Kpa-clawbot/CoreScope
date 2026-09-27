@@ -834,6 +834,8 @@ async function run() {
         const layout = await chartPage.locator('.dumbbell-chart').evaluate(chart => {
           const box = chart.getBoundingClientRect();
           return {
+            axisFits: [...chart.querySelectorAll('.dumbbell-axis span')].every((label, i, labels) =>
+              i === 0 || labels[i - 1].getBoundingClientRect().right <= label.getBoundingClientRect().left),
             overflow: chart.scrollWidth > chart.clientWidth + 1,
             outside: box.left < -1 || box.right > window.innerWidth + 1,
             rowsFit: [...chart.querySelectorAll('.dumbbell-row')].every(row => {
@@ -844,7 +846,7 @@ async function run() {
             }),
           };
         });
-        assert(!layout.overflow && !layout.outside && layout.rowsFit, `relay chart layout at ${width}px: ${JSON.stringify(layout)}`);
+        assert(!layout.overflow && !layout.outside && layout.rowsFit && layout.axisFits, `relay chart layout at ${width}px: ${JSON.stringify(layout)}`);
       }
     } finally { await chartPage.close(); }
   });
