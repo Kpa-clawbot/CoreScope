@@ -1,6 +1,15 @@
 /* route-view.css — minimal route view layout + styling. */
 
-body.mc-route-active #leaflet-map { left: 320px !important; width: calc(100% - 320px) !important; }
+/* Reserve the timeline's real width in the map's flex row (#2081). Offsetting
+   the map visually covers the Path Inspector instead of making room for it. */
+@media (min-width: 768px) {
+  #map-wrap > .mc-rt-sidebar {
+    position: relative;
+    top: 0;
+    bottom: auto;
+    flex-shrink: 0;
+  }
+}
 
 /* Auto-collapse Map Controls panel when route view opens. The toggle button
    (.map-controls-toggle) stays visible — clicking it expands the panel.
@@ -577,12 +586,6 @@ body.mc-route-active .leaflet-overlay-pane svg path:not(.mc-rt-edge) { display: 
   top: 50%;
   right: -14px;
   transform: translateY(-50%);
-}
-
-/* When sidebar is collapsed, expand map to fill */
-body.mc-route-active:has(.mc-rt-sidebar.mc-rt-collapsed) #leaflet-map {
-  left: 36px !important;
-  width: calc(100% - 36px) !important;
 }
 
 @media (max-width: 767px) {
