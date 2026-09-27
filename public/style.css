@@ -528,8 +528,8 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 }
 
 /* === Touch Targets === */
-/* WCAG 2.5.5 / Apple HIG / Material: 48x48 CSS px minimum touch target for
-   all interactive controls. Targets are achieved with min-height/min-width
+/* House preference: 48x48 CSS px minimum for the controls below (#2052),
+   above WCAG 2.5.5's 44x44 minimum. Targets use min-height/min-width
    plus inline-flex centering so existing visual styling (font-size, padding,
    icon size) is preserved on desktop while the *hit area* grows for touch.
    Issue #1060.
@@ -618,8 +618,7 @@ button.ch-item {
 }
 
 /* Additional button-like controls discovered during PR #1067 review (Issue
-   #1060 follow-up). Same 48x48 minimums + touch-action so all interactive
-   surfaces meet WCAG 2.5.5. */
+   #1060 follow-up). Same 48x48 house minimums + touch-action. */
 .btn-link,
 .col-toggle-btn,
 .filter-toggle-btn,
@@ -900,7 +899,7 @@ img.brand-logo {
 .nav-btn {
   background: none; border: 1px solid var(--border); color: var(--nav-text-muted); padding: 6px 12px;
   border-radius: 6px; cursor: pointer; font-size: 14px; transition: all .15s;
-  min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center;
+  display: inline-flex; align-items: center; justify-content: center;
 }
 .nav-btn:hover { background: var(--nav-bg2); color: var(--nav-text); }
 
@@ -1828,6 +1827,8 @@ button.ch-item.selected { background: var(--selected-bg); }
 }
 .ch-item-body { flex: 1; min-width: 0; }
 .ch-item-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 2px; }
+/* Keep both 48px actions inside narrow user-channel rows (#2052). */
+.ch-item.ch-user-added .ch-item-top { flex-wrap: wrap; }
 .ch-item-name { font-weight: 600; font-size: 14px; }
 .ch-item-time { font-size: 12px; font-weight: var(--fw-medium); color: var(--text-muted); white-space: nowrap; } /* #1668 M3 — was 11px/400 */
 .ch-unread-badge {
@@ -1844,12 +1845,12 @@ button.ch-item.selected { background: var(--selected-bg); }
   line-height: 1.4;
 }
 /* Shared icon button base for sidebar row controls (remove ✕, share ⤴). EMOJI-OK-COMMENT
-   WCAG 2.5.5 / Apple HIG: 44x44 CSS px minimum touch target. */
+   Inherits the shared 48x48 house minimum above. */
 .ch-icon-btn {
   display: inline-flex; align-items: center; justify-content: center;
   background: none; border: none; color: var(--text-muted);
   cursor: pointer; padding: 4px; margin-left: 2px;
-  min-width: 44px; min-height: 44px; box-sizing: border-box;
+  box-sizing: border-box;
   opacity: 0.55; transition: opacity 0.15s, color 0.15s;
   line-height: 1; user-select: none;
 }
@@ -2440,15 +2441,12 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   .ch-header-region .region-pill { padding: 2px 6px; font-size: 11px; }
   .ch-header-region .region-dropdown-trigger { padding: 3px 6px; font-size: 11px; }
 
-  /* Channel list row: name must dominate. The inline share/remove icons
-     were eating >88px because of their 44x44 touch target — push them
-     onto a per-row reveal pattern: show a single ⋮ trigger that toggles
-     the action set. Until then, shrink them to icon-only and let the
-     name grow via flex:1. */
+  /* Keep legacy channel rows compact without reducing the shared hit area.
+     The mobile chat-app renderer uses rows without inline action icons. */
   #chList .ch-item { padding: 10px 12px; gap: 10px; }
   #chList .ch-item-name { flex: 1 1 auto; min-width: 0; }
   #chList .ch-item-top { gap: 6px; }
-  #chList .ch-icon-btn { min-width: 32px; min-height: 32px; padding: 2px 4px; }
+  #chList .ch-icon-btn { padding: 2px 4px; }
   /* #1648 M5: share-btn now renders an inline <svg.ph-icon> from channels.js,
    * so the legacy `font-size: 0` + `::before { content: '<emoji>' }` shim is
    * obsolete. The icon-button class above already sets the touch target;
@@ -4425,7 +4423,6 @@ button.region-pill-active:hover { opacity: 0.85; color: var(--text-on-accent); }
   .tab-btn,
   .filter-bar input,
   .filter-bar select,
-  .nav-btn,
   .region-pill,
   .region-dropdown-trigger,
   .multi-select-trigger,
