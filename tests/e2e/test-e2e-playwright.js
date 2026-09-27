@@ -2233,14 +2233,13 @@ async function run() {
     // Wait for the channels init() to mount and expose the test hook.
     await page.waitForFunction(() => typeof window._channelsProcessWSBatchForTest === 'function', { timeout: 10000 });
 
-    // Snapshot starting state so we can compare deltas.
-    const before = await page.evaluate(() => {
+    // Keep both snapshots and the synchronous batch in one browser turn so
+    // initial channel loading cannot change the registry between snapshots.
+    const { before, after } = await page.evaluate(() => {
       const s = window._channelsGetStateForTest();
-      return { count: s.channels.length, names: s.channels.map(c => c.name || c.channel || '') };
-    });
+      const before = { count: s.channels.length, names: s.channels.map(c => c.name || c.channel || '') };
 
-    // Feed a CHAN-like message with NO payload.channel field (but valid hash).
-    await page.evaluate(() => {
+      // Feed a CHAN-like message with NO payload.channel field (but valid hash).
       window._channelsProcessWSBatchForTest([
         {
           type: 'packet',
@@ -2253,11 +2252,10 @@ async function run() {
           },
         },
       ], null);
-    });
 
-    const after = await page.evaluate(() => {
-      const s = window._channelsGetStateForTest();
-      return { count: s.channels.length, names: s.channels.map(c => c.name || c.channel || '') };
+      const end = window._channelsGetStateForTest();
+      const after = { count: end.channels.length, names: end.channels.map(c => c.name || c.channel || '') };
+      return { before, after };
     });
 
     // No "unknown" channel materialized.
@@ -2274,13 +2272,11 @@ async function run() {
     await page.waitForFunction(() => typeof window._channelsProcessWSBatchForTest === 'function', { timeout: 10000 });
 
     const sentinel = '__test_chan_1468_' + Date.now();
-    const before = await page.evaluate((name) => {
+    // Initial channel loading must not overwrite the sentinel between reads.
+    const { before, after } = await page.evaluate((name) => {
       const s = window._channelsGetStateForTest();
-      return { hasSentinel: s.channels.some(c => (c.name || c.channel) === name) };
-    }, sentinel);
-    assert(!before.hasSentinel, 'pre: sentinel channel does not pre-exist');
+      const before = { hasSentinel: s.channels.some(c => (c.name || c.channel) === name) };
 
-    await page.evaluate((name) => {
       window._channelsProcessWSBatchForTest([
         {
           type: 'packet',
@@ -2293,15 +2289,15 @@ async function run() {
           },
         },
       ], null);
-    }, sentinel);
 
-    const after = await page.evaluate((name) => {
-      const s = window._channelsGetStateForTest();
-      return {
-        hasSentinel: s.channels.some(c => (c.name || c.channel) === name),
-        names: s.channels.map(c => c.name || c.channel || ''),
+      const end = window._channelsGetStateForTest();
+      const after = {
+        hasSentinel: end.channels.some(c => (c.name || c.channel) === name),
+        names: end.channels.map(c => c.name || c.channel || ''),
       };
+      return { before, after };
     }, sentinel);
+    assert(!before.hasSentinel, 'pre: sentinel channel does not pre-exist');
     assert(after.hasSentinel,
       'control: channel WITH payload.channel IS routed into the registry — got ' + JSON.stringify(after.names));
   });
