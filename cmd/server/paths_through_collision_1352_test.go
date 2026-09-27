@@ -91,6 +91,9 @@ func (sc *collisionScenario) reloadStore(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load: %v", err)
 	}
+	if !store.WaitIndexesReady(5 * time.Second) {
+		t.Fatal("background indexes not ready within 5s")
+	}
 	sc.srv.store = store
 	router := mux.NewRouter()
 	sc.srv.RegisterRoutes(router)
@@ -221,6 +224,9 @@ func TestHandleNodePaths_FallbackUniquePrefix_1352(t *testing.T) {
 	store := NewPacketStore(db, nil)
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load: %v", err)
+	}
+	if !store.WaitIndexesReady(5 * time.Second) {
+		t.Fatal("background indexes not ready within 5s")
 	}
 	srv.store = store
 	router := mux.NewRouter()
