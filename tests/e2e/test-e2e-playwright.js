@@ -84,7 +84,7 @@ async function run() {
       ];
       let adverts = routes.map((route, i) => ({ ...route, hash: String(i + 1).repeat(16),
         timestamp: new Date(Date.now() - i * 60000).toISOString(), payload_type: 4,
-        observer_name: 'Fixture observer', snr: 7, rssi: -80, observation_count: 2 }));
+        observer_name: `Fixture observer ${i + 1}`, snr: 7 + i, rssi: -80 - i, observation_count: 2 }));
       await fixturePage.route('**/api/nodes**', async route => {
         const path = new URL(route.request().url()).pathname;
         let body;
@@ -108,7 +108,10 @@ async function run() {
             const groups = await fixturePage.locator(root + ' [data-advert-kind]').evaluateAll(els => els.map(el => ({
               kind: el.dataset.advertKind,
               heading: el.querySelector('h5').textContent.trim(),
-              links: Array.from(el.querySelectorAll('a.ch-analyze-link'), a => a.getAttribute('href')),
+              rows: Array.from(el.querySelectorAll('a.ch-analyze-link'), a => ({
+                href: a.getAttribute('href'),
+                text: a.closest('.node-activity-item, .advert-entry').textContent,
+              })),
               text: el.textContent,
               overflow: el.scrollWidth > el.clientWidth + 1,
             })));
@@ -117,9 +120,14 @@ async function run() {
             const labels = ['Flood adverts', 'Zero-hop adverts', 'Other / unknown adverts'];
             expected.forEach((indices, i) => {
               assert(groups[i].heading === `${labels[i]} (${indices.length})`, `Wrong sample count: ${groups[i].heading}`);
-              assert(JSON.stringify(groups[i].links) === JSON.stringify(indices.map(j => '#/packets/' + adverts[j].hash)), 'Advert order or analyze links changed');
+              assert(JSON.stringify(groups[i].rows.map(row => row.href)) === JSON.stringify(indices.map(j => '#/packets/' + adverts[j].hash)), 'Advert order or analyze links changed');
               assert(!groups[i].overflow, `${labels[i]} overflows at ${width}px`);
-              if (!empty) assert(groups[i].text.includes('Fixture observer') && groups[i].text.includes('SNR 7dB') && groups[i].text.includes('RSSI -80dBm'), 'RF/observer metadata lost');
+              if (empty) assert(groups[i].text.includes('None in this recent sample'), `${labels[i]} empty-state message missing`);
+              indices.forEach((j, rowIndex) => {
+                const advert = adverts[j];
+                const row = groups[i].rows[rowIndex];
+                assert(row.text.includes(advert.observer_name) && row.text.includes(`SNR ${advert.snr}dB`) && row.text.includes(`RSSI ${advert.rssi}dBm`), `RF/observer metadata changed for ${row.href}`);
+              });
             });
             const heading = fullView ? fixturePage.locator('#node-packets h4') : fixturePage.locator('#advertTimeline').locator('..').locator('h4');
             assert(await heading.textContent() === `Recent Adverts (${adverts.length})`, 'Recent Adverts count must reflect sample, not lifetime');
