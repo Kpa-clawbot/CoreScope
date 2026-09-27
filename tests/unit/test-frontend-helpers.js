@@ -2071,6 +2071,43 @@ console.log('\n=== app.js: isTransportRoute + transportBadge ===');
   test('transportBadge(1) returns empty string', () => assert.strictEqual(transportBadge(1), ''));
 }
 
+// #2041: execute the actual IIFE renderer with a test-only export.
+console.log('\n=== Relay airtime advert labels ===');
+{
+  const ctx = makeSandbox();
+  ctx.registerPage = () => {};
+  ctx.getComputedStyle = () => ({ getPropertyValue: () => '' });
+  ctx.esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const source = fs.readFileSync(REPO_ROOT + '/public/analytics.js', 'utf8');
+  vm.runInContext(source.replace("  registerPage('analytics',", "  window.testRelayRenderer = renderRelayAirtimeDumbbell;\n  registerPage('analytics',"), ctx);
+  const render = ctx.window.testRelayRenderer;
+  const rows = [
+    { payload_type: 'ADVERT', type: 4, advert_kind: 'flood', count: 1, count_pct: 25, score: 100, airtime_pct: 50 },
+    { payload_type: 'ADVERT', type: 4, advert_kind: 'zero_hop', count: 1, count_pct: 25, score: 0, airtime_pct: 0 },
+    { payload_type: 'ADVERT', type: 4, advert_kind: 'other', count: 1, count_pct: 25, score: 100, airtime_pct: 50 },
+    { payload_type: 'ACK', type: 3, count: 1, count_pct: 25, score: 0, airtime_pct: 0 },
+  ];
+  test('relay chart labels distinguish all advert kinds and retain zero-score rows', () => {
+    const html = render({ rows, total_score: 200 });
+    for (const label of ['Flood adverts', 'Zero-hop adverts', 'Other adverts', 'ACK']) {
+      assert.ok(html.includes('>' + label + '</div>'), 'missing chart label: ' + label);
+      assert.ok(html.includes('title="' + label + '\n'), 'missing tooltip label: ' + label);
+    }
+    assert.strictEqual((html.match(/class="dumbbell-row"/g) || []).length, 4);
+    assert.ok(html.includes('air 0.0%'), 'zero-relay advert share remains visible');
+  });
+  test('relay chart supports legacy payload labels without changing payload mix', () => {
+    const html = render({ rows: [{ payload_type: 'ADVERT', type: 4, score: 100 }], total_score: 100 });
+    assert.ok(html.includes('>ADVERT</div>'));
+    assert.strictEqual(rows[0].payload_type, 'ADVERT');
+  });
+  test('no relay evidence does not imply all packets were direct', () => {
+    const html = render({ rows: [rows[0]], total_score: 0 });
+    assert.ok(html.includes('No relay activity observed'));
+    assert.ok(!html.includes('all packets direct'), 'flood adverts can have no resolved relays');
+    assert.ok(render({ rows: [] }).includes('No relay-airtime data'));
+  });
+}
 // ===== ANALYTICS.JS: Channel Sort =====
 console.log('\n=== analytics.js: sortChannels ===');
 {
