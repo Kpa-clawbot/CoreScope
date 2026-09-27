@@ -37,6 +37,8 @@
     const out = [];
     const rows = table.querySelectorAll('tbody > tr');
     rows.forEach(r => {
+      // Full-width status/spacer cells are not part of any individual column.
+      if (r.children.length === 1 && r.children[0].colSpan > 1) return;
       // colSpan-aware mapping: walk cells, accumulate colspans.
       let i = 0;
       for (const cell of r.children) {
