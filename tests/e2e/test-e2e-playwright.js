@@ -833,9 +833,14 @@ async function run() {
         assert((await zero.getAttribute('title')).includes('Count: 1 (25.00%)'), 'tooltip retains count');
         const layout = await chartPage.locator('.dumbbell-chart').evaluate(chart => {
           const box = chart.getBoundingClientRect();
+          const axisLabels = [...chart.querySelectorAll('.dumbbell-axis span')];
+          const expectedAxis = ['0%', '50%', '100%'];
           return {
-            axisFits: [...chart.querySelectorAll('.dumbbell-axis span')].every((label, i, labels) =>
-              i === 0 || labels[i - 1].getBoundingClientRect().right <= label.getBoundingClientRect().left),
+            axisFits: axisLabels.length === expectedAxis.length && axisLabels.every((label, i) => {
+              const bounds = label.getBoundingClientRect();
+              return label.textContent.trim() === expectedAxis[i] && bounds.width > 0 && bounds.height > 0 &&
+                (i === 0 || axisLabels[i - 1].getBoundingClientRect().right <= bounds.left);
+            }),
             overflow: chart.scrollWidth > chart.clientWidth + 1,
             outside: box.left < -1 || box.right > window.innerWidth + 1,
             rowsFit: [...chart.querySelectorAll('.dumbbell-row')].every(row => {

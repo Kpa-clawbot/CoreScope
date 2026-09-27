@@ -2096,10 +2096,12 @@ console.log('\n=== Relay airtime advert labels ===');
     assert.strictEqual((html.match(/class="dumbbell-row"/g) || []).length, 4);
     assert.ok(html.includes('air 0.0%'), 'zero-relay advert share remains visible');
   });
-  test('relay chart supports legacy payload labels without changing payload mix', () => {
-    const html = render({ rows: [{ payload_type: 'ADVERT', type: 4, score: 100 }], total_score: 100 });
+  test('relay chart supports legacy payload labels and preserves row input', () => {
+    const legacyRow = { payload_type: 'ADVERT', type: 4, score: 100 };
+    const before = JSON.stringify(legacyRow);
+    const html = render({ rows: [legacyRow], total_score: 100 });
     assert.ok(html.includes('>ADVERT</div>'));
-    assert.strictEqual(rows[0].payload_type, 'ADVERT');
+    assert.strictEqual(JSON.stringify(legacyRow), before);
   });
   test('no relay evidence does not imply all packets were direct', () => {
     const html = render({ rows: [rows[0]], total_score: 0 });
