@@ -34,3 +34,27 @@ classification records that limitation rather than installing them implicitly.
 The existing E2E workflow retains its browser installation, local fixture
 server, coverage collection, and repeat checks. Only use local servers for
 browser tests; inventory membership alone does not mean a suite runs in CI.
+
+## Path Inspector route fixture
+
+`tests/e2e/test-path-inspector-e2e.js` requires the real fixture API. After
+freshening and migrating a disposable copy of `test-fixtures/e2e-fixture.db`,
+seed it **before starting the server**:
+
+```sh
+sqlite3 fixture-copy.db < test-fixtures/path-inspector.sql
+CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-path-inspector-e2e.js
+```
+
+The SQL adds four synthetic GPS repeaters and four persisted neighbor edges.
+Prefixes `f20601,f20602,f20603` produce two paths through different middle
+repeaters. The suite requires trusted hop evidence, clicks both Show on Map
+buttons, checks the real Leaflet segment coordinates, and verifies all previous
+route objects leave the map when the candidate changes. Missing seeds fail;
+there is no candidate-dependent skip. Rerunning the seed is safe, and it does
+not add packets or alter their ordering. CI runs this setup after migration.
+
+The historical claim that low scores remove all candidates is not how the
+current inspector works: scores are floored, and path trust marks evidence.
+An empty candidate list means at least one prefix has no relay candidate.
+Deterministic prefixes avoid relying on whichever graph neighbors sort first.

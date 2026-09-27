@@ -58,6 +58,20 @@ async function openPaneAndSubmit(page) {
   await page.waitForSelector('#mapPiResults button[data-idx="1"]', { timeout: 10000 });
 }
 
+async function assertDesktopLayout(page) {
+  const layout = await page.evaluate(() => ({
+    sidebar: document.querySelector('.mc-rt-sidebar').getBoundingClientRect().toJSON(),
+    map: document.querySelector('#leaflet-map').getBoundingClientRect().toJSON(),
+    inspector: document.querySelector('#mapSidePane').getBoundingClientRect().toJSON(),
+    viewport: innerWidth,
+  }));
+  assert.equal(layout.sidebar.left, 0, 'route sidebar stays on the left');
+  assert.ok(layout.sidebar.right <= layout.map.left + 1, 'map must reserve the route sidebar width');
+  assert.ok(layout.map.right <= layout.inspector.left + 1, 'map must not cover the Path Inspector');
+  assert.ok(layout.map.width > 0, 'map retains usable space');
+  assert.ok(layout.inspector.right <= layout.viewport + 1, 'inspector stays within the viewport');
+}
+
 async function main() {
   const requireChromium = process.env.CHROMIUM_REQUIRE === '1';
   let browser;
@@ -124,6 +138,13 @@ async function main() {
     for (let index = 0; index < 2; index++) {
       const path = data.candidates[index].path.map(pk => POSITIONS[pk]);
       const expected = [path.slice(0, 2), path.slice(1, 3)];
+      if (index === 1) {
+        const receivesClick = await page.locator('#mapPiResults button[data-idx="1"]').evaluate(button => {
+          const rect = button.getBoundingClientRect();
+          return button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+        });
+        assert.ok(receivesClick, '#2081: the rendered map must not intercept the second candidate button');
+      }
       await page.locator(`#mapPiResults button[data-idx="${index}"]`).click();
       await page.waitForFunction(expected => {
         const group = window.__mc_routeLayer;
@@ -145,20 +166,57 @@ async function main() {
         pass('(5) switching candidates draws the other route and removes all prior route objects');
       }
     }
+    await assertDesktopLayout(page);
+
+    // The desktop layout repair must preserve the mobile fixed bottom sheet.
+    await page.setViewportSize({ width: 375, height: 812 });
+    const mobile = await page.locator('.mc-rt-sidebar').evaluate(sidebar => ({
+      position: getComputedStyle(sidebar).position,
+      rect: sidebar.getBoundingClientRect().toJSON(),
+      map: document.querySelector('#leaflet-map').getBoundingClientRect().toJSON(),
+    }));
+    assert.equal(mobile.position, 'fixed');
+    assert.equal(mobile.rect.left, 0);
+    assert.equal(mobile.rect.width, 375);
+    assert.equal(mobile.map.left, 0);
+    assert.equal(mobile.map.width, 375);
+    assert.ok(mobile.rect.bottom <= 812 && mobile.rect.top > 600, 'mobile route details remain a bottom sheet');
+    await page.locator('.mc-rt-mobile-handle').click();
+    assert.equal(await page.locator('.mc-rt-mobile-handle').getAttribute('aria-expanded'), 'true');
+    await page.locator('.mc-rt-mobile-handle').click();
+    pass('(6) mobile route details retain their fixed bottom-sheet layout and toggle');
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.locator('.mc-rt-collapse-btn').click();
+    await assertDesktopLayout(page);
+    assert.equal(await page.locator('.mc-rt-sidebar').evaluate(el => el.getBoundingClientRect().width), 36);
+    await page.locator('.mc-rt-collapse-btn').click();
+    await assertDesktopLayout(page);
+    pass('(7) collapsing and restoring the route sidebar keeps both map and inspector accessible');
+
+    const handle = await page.locator('.mc-rt-resize-handle').boundingBox();
+    // The collapse button overlaps the handle's midpoint; drag its upper half.
+    await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 4);
+    await page.mouse.down();
+    await page.mouse.move(handle.x + handle.width / 2 + 80, handle.y + handle.height / 4, { steps: 4 });
+    await page.mouse.up();
+    assert.equal(await page.locator('.mc-rt-sidebar').evaluate(el => el.getBoundingClientRect().width), 400);
+    await assertDesktopLayout(page);
+    pass('(8) dragging the route sidebar to 400px preserves space for the inspector');
   } catch (err) {
-    fail('(3-5) fixture route coverage: ' + err.message);
+    fail('(3-8) fixture route coverage: ' + err.message);
   }
 
-  // (6) The legacy trace URL still redirects.
+  // (9) The legacy trace URL still redirects.
   await page.goto(`${BASE}/#/traces/abc123`, { waitUntil: 'domcontentloaded' });
   try {
     await page.waitForFunction(() => location.hash.indexOf('#/tools/trace/abc123') === 0, null, { timeout: 5000 });
-    pass('(6) /#/traces/<hash> redirects to /#/tools/trace/<hash>');
+    pass('(9) /#/traces/<hash> redirects to /#/tools/trace/<hash>');
   } catch {
-    fail(`(6) no redirect; the URL is ${JSON.stringify(page.url())}`);
+    fail(`(9) no redirect; the URL is ${JSON.stringify(page.url())}`);
   }
 
-  // (7) The tools landing lists both tools.
+  // (10) The tools landing lists both tools.
   await page.goto(`${BASE}/#/tools`, { waitUntil: 'domcontentloaded' });
   try {
     await page.waitForSelector('.tools-landing', { timeout: 8000 });
@@ -166,10 +224,10 @@ async function main() {
       pi: !!document.querySelector('a[href="#/tools/path-inspector"]'),
       trace: !!document.querySelector('a[href*="#/tools/trace"]'),
     }));
-    if (links.pi && links.trace) pass('(7) the tools landing links to both tools');
-    else fail(`(7) the tools landing is missing a link (path-inspector: ${links.pi}, trace: ${links.trace})`);
+    if (links.pi && links.trace) pass('(10) the tools landing links to both tools');
+    else fail(`(10) the tools landing is missing a link (path-inspector: ${links.pi}, trace: ${links.trace})`);
   } catch {
-    fail('(7) .tools-landing never rendered within 8s');
+    fail('(10) .tools-landing never rendered within 8s');
   }
 
   await browser.close();

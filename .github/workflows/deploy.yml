@@ -452,6 +452,9 @@ jobs:
         # required shape before the server boots.
         run: ./corescope-migrate -db test-fixtures/e2e-fixture.db
 
+      - name: Seed deterministic Path Inspector routes (#2060)
+        run: sqlite3 test-fixtures/e2e-fixture.db < test-fixtures/path-inspector.sql
+
       - name: Start Go server with fixture DB
         run: |
           fuser -k 13581/tcp 2>/dev/null || true
