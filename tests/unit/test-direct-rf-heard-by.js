@@ -110,6 +110,38 @@ test('the listener/repeater badge still renders on direct rows', () => {
     'an observer with no repeat field must get no badge');
 });
 
+test('direct table has only the four supported columns, with aligned values', () => {
+  const html = renderCard([directRow, { ...directRow, avgSnr: null, avgRssi: null }], 0, esc);
+  const headers = [...html.matchAll(/<th\b[^>]*>([^<]*)<\/th>/g)].map(m => m[1]);
+  assert.deepStrictEqual(headers, ['Observer', 'Packets', 'Avg SNR', 'Avg RSSI']);
+  const rows = [...html.matchAll(/<tr>([\s\S]*?)<\/tr>/g)].slice(1);
+  const cells = rows.map(row => [...row[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/g)]
+    .map(m => m[1].replace(/<[^>]*>/g, '').trim()));
+  assert.deepStrictEqual(cells, [
+    ['NearbyObserver repeater', '42', '11.3 dB', '-63 dBm'],
+    ['NearbyObserver repeater', '42', '—', '—'],
+  ]);
+  assert.ok(!/data-sort-key="region"/.test(html), 'unsupported region sort must be absent');
+});
+
+test('both Heard By views ignore unsupported region fields and escape names', () => {
+  const sideStart = src.indexOf('${observers.length || relayObserverCount ? `<div class="node-detail-section">');
+  assert.ok(sideStart >= 0, 'could not find the side-pane Heard By card');
+  const sideEnd = src.indexOf('<div class="node-detail-section" id="panelNeighborsSection">', sideStart);
+  assert.ok(sideEnd > sideStart, 'could not find the end of the side-pane Heard By card');
+  const renderSideCard = new Function('observers', 'relayObserverCount', 'escapeHtml',
+    'return `' + src.slice(sideStart, sideEnd).trimEnd() + '`;');
+  // Even a stale client-supplied region must not revive an unsupported field.
+  const row = { ...directRow, observer_name: '<b>Observer</b>', iata: 'unsupported-region' };
+  for (const render of [renderCard, renderSideCard]) {
+    const html = render([row], 1, esc);
+    assert.ok(!/Regions:|unsupported-region/.test(html), 'unsupported region display must be absent');
+    assert.ok(html.includes('&lt;b&gt;Observer&lt;/b&gt;'), 'observer names must remain escaped');
+    assert.ok(!html.includes('<b>Observer</b>'), 'observer names must not become markup');
+    assert.ok(html.includes('Seen via relay by 1 observer'), 'relay-only count must remain separate');
+  }
+});
+
 // --- the side pane must not drift from the full page -------------------------
 test('the side pane reads relayObserverCount too', () => {
   const occurrences = (src.match(/const relayObserverCount = Number\(h\.relayObserverCount\) \|\| 0;/g) || []).length;

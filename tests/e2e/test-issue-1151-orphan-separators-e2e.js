@@ -62,10 +62,10 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
       node: { public_key: pubkey, name: 'TEST-NODE', role: 'repeater' },
       stats: { totalPackets: 200, packetsToday: 10, avgSnr: null, avgHops: 2, lastHeard: new Date().toISOString() },
       observers: [
-        { observer_id: 'obs-both-null', observer_name: 'BothNull', iata: 'SJC', avgSnr: null, avgRssi: null, packetCount: 110 },
-        { observer_id: 'obs-snr-null',  observer_name: 'SnrNull',  iata: 'SJC', avgSnr: null, avgRssi: -50, packetCount: 55 },
-        { observer_id: 'obs-rssi-null', observer_name: 'RssiNull', iata: 'OAK', avgSnr: 5.5,  avgRssi: null, packetCount: 22 },
-        { observer_id: 'obs-both-set',  observer_name: 'BothSet',  iata: 'OAK', avgSnr: 7.0,  avgRssi: -42, packetCount: 11 },
+        { observer_id: 'obs-both-null', observer_name: 'BothNull', avgSnr: null, avgRssi: null, packetCount: 110, can_relay: null },
+        { observer_id: 'obs-snr-null',  observer_name: 'SnrNull', avgSnr: null, avgRssi: -50, packetCount: 55, can_relay: false },
+        { observer_id: 'obs-rssi-null', observer_name: 'RssiNull', avgSnr: 5.5,  avgRssi: null, packetCount: 22, can_relay: true },
+        { observer_id: 'obs-both-set',  observer_name: 'BothSet', avgSnr: 7.0,  avgRssi: -42, packetCount: 11, can_relay: null },
       ],
       recentPackets: [],
     };
@@ -119,6 +119,48 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
       throw new Error('Found ' + offences.length + ' orphan-separator row(s):\n      ' + detail);
     }
   });
+
+  for (const width of [1400, 390]) {
+    await step('#2062 full Heard By table aligns and sorts supported fields at ' + width + 'px', async () => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(BASE + '/#/nodes/' + encodeURIComponent(pubkey), { waitUntil: 'domcontentloaded' });
+      const card = page.locator('#node-observers');
+      const table = card.locator('table');
+      await table.waitFor({ state: 'visible' });
+      const headers = await table.locator('th').allTextContents();
+      assert(JSON.stringify(headers.map(s => s.trim())) === JSON.stringify(['Observer', 'Packets', 'Avg SNR', 'Avg RSSI']),
+        'expected four supported headers, got ' + JSON.stringify(headers));
+      assert(!/Regions:/.test(await card.innerText()), 'unsupported Regions summary must be absent');
+      assert(await table.locator('[data-sort-key="region"]').count() === 0, 'region sort must be absent');
+      const expected = {
+        BothNull: ['110', '—', '—'], SnrNull: ['55', '—', '-50 dBm'],
+        RssiNull: ['22', '5.5 dB', '—'], BothSet: ['11', '7.0 dB', '-42 dBm'],
+      };
+      for (const [name, values] of Object.entries(expected)) {
+        const row = table.locator('tbody tr').filter({ hasText: name });
+        const cells = await row.locator('td').allTextContents();
+        assert(cells.length === 4 && JSON.stringify(cells.slice(1).map(s => s.trim())) === JSON.stringify(values),
+          name + ' values must align under packet, SNR and RSSI headers: ' + JSON.stringify(cells));
+      }
+      for (const key of ['observer', 'packets', 'snr', 'rssi']) {
+        const header = table.locator('[data-sort-key="' + key + '"]');
+        await header.click();
+        const direction = await header.getAttribute('aria-sort');
+        const values = await table.locator('tbody tr').evaluateAll((rows, sortKey) => {
+          const index = [...rows[0].closest('table').querySelectorAll('th')]
+            .findIndex(th => th.dataset.sortKey === sortKey);
+          return rows.map(row => row.cells[index].dataset.value).filter(value => value !== '');
+        }, key);
+        const sorted = values.slice().sort(key === 'observer' ? (a, b) => a.localeCompare(b) : (a, b) => Number(a) - Number(b));
+        if (direction === 'descending') sorted.reverse();
+        assert(JSON.stringify(values) === JSON.stringify(sorted), key + ' must sort its own column, got ' + JSON.stringify(values));
+      }
+      if (process.env.SCREENSHOT_DIR) {
+        await card.scrollIntoViewIfNeeded();
+        await card.screenshot({ path: require('path').join(process.env.SCREENSHOT_DIR, 'issue-2062-heard-by-' + width + '.png') });
+      }
+    });
+  }
 
   await page.unroute('**/api/nodes/' + encodeURIComponent(pubkey) + '/health');
   await browser.close();
