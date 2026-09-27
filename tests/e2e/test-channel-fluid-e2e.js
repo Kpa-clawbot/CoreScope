@@ -123,15 +123,24 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
         const action = mobile ? '.filter-toggle-btn-mirror' : '[data-share-channel]';
         await target.waitForSelector(action);
         await target.evaluate(() => document.fonts.ready);
-        const controls = await target.locator('.top-nav .nav-btn, #chList .ch-icon-btn').evaluateAll(els =>
-          els.filter(el => el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden')
-            .map(el => {
+        // Mobile page-actions rebuilds the mirror while packets initializes.
+        // Query and measure in one browser turn so a detached selector snapshot
+        // cannot look like missing controls. Bad dimensions still fail below.
+        const controlsHandle = await target.waitForFunction(({ mobile, action }) => {
+          if (mobile && !document.querySelector('#pktLeft[data-loaded="true"] #pktPauseBtn')) return false;
+          const els = Array.from(document.querySelectorAll('.top-nav .nav-btn, #chList .ch-icon-btn'))
+            .filter(el => el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden');
+          if (!els.length || !els.some(el => el.matches(action))) return false;
+          return els.map(el => {
               const r = el.getBoundingClientRect();
               const container = el.closest('.top-nav, .ch-item').getBoundingClientRect();
               return { name: el.id || el.getAttribute('aria-label'), w: r.width, h: r.height,
                 fits: r.left >= container.left - 1 && r.right <= container.right + 1
                   && r.top >= container.top - 1 && r.bottom <= container.bottom + 1 };
-            }));
+            });
+        }, { mobile, action }, { timeout: 8000 });
+        const controls = await controlsHandle.jsonValue();
+        await controlsHandle.dispose();
         assert(controls.length > 0, 'expected visible navbar or channel controls');
         for (const control of controls) {
           assert(control.w >= 48 && control.h >= 48,
