@@ -82,6 +82,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   });
 
   await step('click target row to open side-panel detail', async () => {
+    await page.locator('#nodeSearch').fill(pubkey);
     const sel = '#nodesBody tr[data-action="select"][data-value="' + pubkey + '"]';
     await page.waitForSelector(sel, { timeout: 8000 });
     await page.evaluate((s) => document.querySelector(s).scrollIntoView(), sel);
@@ -124,6 +125,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     await step('#2062 full Heard By table aligns and sorts supported fields at ' + width + 'px', async () => {
       await page.setViewportSize({ width, height: 900 });
       await page.goto(BASE + '/#/nodes/' + encodeURIComponent(pubkey), { waitUntil: 'domcontentloaded' });
+      await page.reload({ waitUntil: 'domcontentloaded' });
       const card = page.locator('#node-observers');
       const table = card.locator('table');
       await table.waitFor({ state: 'visible' });
@@ -144,8 +146,12 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
       }
       for (const key of ['observer', 'packets', 'snr', 'rssi']) {
         const header = table.locator('[data-sort-key="' + key + '"]');
+        const before = await header.getAttribute('aria-sort');
         await header.click();
         const direction = await header.getAttribute('aria-sort');
+        const expectedDirection = before === 'ascending' ? 'descending' :
+          (before === 'descending' || key === 'observer' ? 'ascending' : 'descending');
+        assert(direction === expectedDirection, key + ' click must set ' + expectedDirection + ', got ' + direction);
         const values = await table.locator('tbody tr').evaluateAll((rows, sortKey) => {
           const index = [...rows[0].closest('table').querySelectorAll('th')]
             .findIndex(th => th.dataset.sortKey === sortKey);
@@ -156,8 +162,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
         assert(JSON.stringify(values) === JSON.stringify(sorted), key + ' must sort its own column, got ' + JSON.stringify(values));
       }
       if (process.env.SCREENSHOT_DIR) {
-        await card.scrollIntoViewIfNeeded();
-        await card.screenshot({ path: require('path').join(process.env.SCREENSHOT_DIR, 'issue-2062-heard-by-' + width + '.png') });
+        await page.screenshot({ fullPage: true, path: require('path').join(process.env.SCREENSHOT_DIR, 'issue-2062-heard-by-' + width + '.png') });
       }
     });
   }
