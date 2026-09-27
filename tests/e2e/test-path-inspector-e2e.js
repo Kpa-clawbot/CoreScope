@@ -1,82 +1,25 @@
 #!/usr/bin/env node
-/* Path Inspector — the map side pane, the legacy trace redirect, and the
- * tools landing.
- *
- * Scope note: test-path-inspector-coverage-e2e.js (wired, runs every build)
- * already covers the standalone /#/tools/path-inspector page, including its
- * validation paths and the ?prefixes= deep-link auto-fill. It was written
- * precisely because this file could not run. So this file no longer repeats
- * the standalone page. What it keeps is what nothing else covers:
- *
- *   - the side pane on /#/map: present, collapsed, expands, submits
- *   - /#/traces/<hash> still redirects to /#/tools/trace/<hash>
- *   - /#/tools lists both tools
- *
- * NOT covered here, deliberately: "Show on Map draws a route" and "switching
- * candidates replaces it rather than stacking". Both need
- * /api/paths/inspect to return a candidate, and its beam search finds none in
- * the CI fixture's neighbour graph. They were written, they worked against a
- * populated instance, and they skipped in CI — a green suite hiding two
- * untested assertions, which is the exact shape #2037 is about. Removed
- * rather than shipped as skips; the fixture work they need is #2060.
- *
- * Ported from the @playwright/test version, which was written against a
- * runner this project does not install and so had never run (#2037). The
- * original's "switching candidate clears prior polyline" case ended after
- * the click with a comment and no assertion, which is the same
- * no-coverage-but-green problem #2037 is about; it is a real assertion here.
- *
- * CHROMIUM_REQUIRE=1 makes Chromium-launch failure a HARD FAIL.
+/* Path Inspector — real fixture API, map route drawing/replacement, side pane,
+ * legacy trace redirect and tools landing. Seed test-fixtures/path-inspector.sql
+ * after migrating the fixture and BEFORE starting the server (see #2060).
+ * Missing candidates are failures, never skips or mocked responses.
  */
 'use strict';
 
+const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
 
 const BASE = process.env.BASE_URL || 'http://localhost:13581';
-// Prefixes are taken from the dataset under test rather than hardcoded, so
-// the submit below exercises a real lookup instead of a constant that resolves
-// to nothing.
-let PREFIXES = null;
-
-async function pickPrefixes(page) {
-  // /api/paths/inspect beam-searches the NEIGHBOUR GRAPH, so prefixes only
-  // yield candidates when the nodes behind them are actually connected in it.
-  // Taking them from a packet's recorded path is not enough: those hops need
-  // not form an edge chain the search can walk. So walk the graph itself,
-  // through the same API the product uses.
-  //
-  // Against a populated instance this yields candidates: POST
-  // /api/paths/inspect with the three prefixes picked here returned 10, where
-  // prefixes taken from a packet's recorded path returned none. Against the CI
-  // fixture (110 edges over 200 nodes) it still returns none, which is why the
-  // two drawing assertions are not in this file — see the header and #2060.
-  const get = async (path) => {
-    const r = await page.request.get(BASE + path);
-    return r.ok() ? r.json() : null;
-  };
-  // A neighbour entry can carry a null pubkey: the graph records the hop by
-  // prefix, and the node behind it need not be known. Those are useless here,
-  // since the chain has to be followed one hop further.
-  const resolved = (r) => ((r && r.neighbors) || []).filter(x => typeof x.pubkey === 'string' && x.pubkey.length >= 2);
-
-  const seed = await get('/api/nodes?role=repeater&limit=25');
-  const nodes = ((seed && seed.nodes) || []).filter(n => typeof n.public_key === 'string' && n.public_key.length >= 2);
-  for (const n of nodes) {
-    const pk = n.public_key;
-    const aN = resolved(await get(`/api/nodes/${pk}/neighbors`));
-    if (!aN.length) continue;
-    // Prefer a neighbour that itself has a neighbour, so the chain is three
-    // hops long and (5) below has two candidates to switch between.
-    for (const hop of aN) {
-      const bN = resolved(await get(`/api/nodes/${hop.pubkey}/neighbors`)).filter(x => x.pubkey !== pk);
-      if (bN.length) {
-        return [pk, hop.pubkey, bN[0].pubkey].map(k => k.slice(0, 2).toLowerCase()).join(',');
-      }
-    }
-    return [pk, aN[0].pubkey].map(k => k.slice(0, 2).toLowerCase()).join(',');
-  }
-  return null;
-}
+// Three-byte prefixes meet the default path-trust policy. The middle prefix
+// deliberately matches two repeaters, giving two distinct routes to draw.
+const PREFIXES = 'f20601,f20602,f20603';
+const key = (prefix, suffix = '0') => prefix + suffix.repeat(64 - prefix.length);
+const POSITIONS = {
+  [key('f20601')]: [1, 1],
+  [key('f20602', '1')]: [1.01, 1.01],
+  [key('f20602', '2')]: [0.99, 1.01],
+  [key('f20603')]: [1, 1.02],
+};
 
 let passes = 0, failures = 0;
 function pass(msg) { console.log(`  ✓ ${msg}`); passes++; }
@@ -112,19 +55,14 @@ async function openPaneAndSubmit(page) {
   await expandPane(page);
   await page.fill('#mapPiInput', PREFIXES);
   await page.click('#mapPiSubmit');
-  // Either outcome means the round trip finished.
-  await page.waitForFunction(() => {
-    const r = document.getElementById('mapPiResults');
-    const e = document.getElementById('mapPiError');
-    return (r && r.textContent.trim().length > 0) || (e && e.textContent.trim().length > 0);
-  }, null, { timeout: 10000 });
+  await page.waitForSelector('#mapPiResults button[data-idx="1"]', { timeout: 10000 });
 }
 
 async function main() {
   const requireChromium = process.env.CHROMIUM_REQUIRE === '1';
   let browser;
   try {
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
   } catch (err) {
     if (requireChromium) {
       console.error(`HARD FAIL — Chromium unavailable: ${err.message}`);
@@ -136,17 +74,6 @@ async function main() {
 
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const page = await ctx.newPage();
-
-  PREFIXES = await pickPrefixes(page);
-  if (!PREFIXES) {
-    // A failure, not a skip. Every dataset this runs against, fixture
-    // included, has a neighbour graph; none would mean the graph or the nodes
-    // API changed shape.
-    console.error('  ✗ (0) no connected pair found in the neighbour graph, so the inspector cannot be exercised');
-    await browser.close();
-    process.exit(1);
-  }
-  console.log(`  · prefixes taken from the dataset: ${PREFIXES}`);
 
   // (1) The side pane exists and starts collapsed.
   await page.goto(`${BASE}/#/map`, { waitUntil: 'domcontentloaded' });
@@ -168,24 +95,70 @@ async function main() {
     fail(`(2) the pane did not gain .expanded (class="${cls}")`);
   }
 
-  // (3) Submitting prefixes completes a round trip.
+  // (3) Real API candidates must resolve to both seeded routes. An HTTP 200
+  // with an empty result used to count as coverage for this round trip.
   try {
+    const response = await page.request.post(BASE + '/api/paths/inspect', {
+      data: { prefixes: PREFIXES.split(',') },
+    });
+    assert.equal(response.status(), 200, 'fixture inspector API must be ready');
+    const data = await response.json();
+    assert.equal(data.candidates.length, 2, 'fixture must return two distinct candidates; apply path-inspector.sql before server startup');
+    assert.deepEqual(data.candidates.map(candidate => candidate.path.join(',')).sort(), [
+      [key('f20601'), key('f20602', '1'), key('f20603')].join(','),
+      [key('f20601'), key('f20602', '2'), key('f20603')].join(','),
+    ].sort(), 'both complete fixture routes must be returned, regardless of score order');
+    for (const candidate of data.candidates) {
+      assert.equal(candidate.path.length, 3);
+      assert.equal(candidate.speculative, false, 'seeded graph must support both normal routes');
+      candidate.path.forEach(pk => assert.ok(POSITIONS[pk], 'candidate must use a seeded GPS repeater'));
+      assert.equal(candidate.evidence.perHop.length, 3);
+      assert.ok(candidate.evidence.perHop.every(hop => hop.trusted), 'three-byte hops must satisfy the unchanged trust policy');
+    }
     await openPaneAndSubmit(page);
-    pass('(3) submitting prefixes renders results or an error');
-  } catch {
-    fail('(3) neither results nor an error appeared within 10s of submitting');
+    assert.equal(await page.locator('#mapPiResults button[data-idx]').count(), 2);
+    pass('(3) submitting prefixes renders both real, trusted fixture candidates');
+
+    // (4) Check actual Leaflet polylines, their coordinates and rendered SVG.
+    // No forced clicks: overlays blocking either candidate must fail the test.
+    for (let index = 0; index < 2; index++) {
+      const path = data.candidates[index].path.map(pk => POSITIONS[pk]);
+      const expected = [path.slice(0, 2), path.slice(1, 3)];
+      await page.locator(`#mapPiResults button[data-idx="${index}"]`).click();
+      await page.waitForFunction(expected => {
+        const group = window.__mc_routeLayer;
+        if (!group) return false;
+        const lines = group.getLayers().filter(layer => layer instanceof L.Polyline && !(layer instanceof L.Polygon));
+        return lines.length === 2 && expected.every(points => lines.some(line =>
+          JSON.stringify(line.getLatLngs().map(p => [p.lat, p.lng])) === JSON.stringify(points) &&
+          window.__mc_map.hasLayer(line) && line.getElement() && line.getElement().getAttribute('d')
+        ));
+      }, expected, { timeout: 10000 });
+      if (index === 0) {
+        await page.evaluate(() => { window.__previousInspectorLayers = window.__mc_routeLayer.getLayers(); });
+        pass('(4) Show on Map draws both segments at the first candidate coordinates');
+      } else {
+        const previousRemoved = await page.evaluate(() => window.__previousInspectorLayers.every(layer =>
+          !window.__mc_routeLayer.hasLayer(layer) && !window.__mc_map.hasLayer(layer)
+        ));
+        assert.ok(previousRemoved, 'switching candidates must remove every prior route layer from the map');
+        pass('(5) switching candidates draws the other route and removes all prior route objects');
+      }
+    }
+  } catch (err) {
+    fail('(3-5) fixture route coverage: ' + err.message);
   }
 
-  // (4) The legacy trace URL still redirects.
+  // (6) The legacy trace URL still redirects.
   await page.goto(`${BASE}/#/traces/abc123`, { waitUntil: 'domcontentloaded' });
   try {
     await page.waitForFunction(() => location.hash.indexOf('#/tools/trace/abc123') === 0, null, { timeout: 5000 });
-    pass('(4) /#/traces/<hash> redirects to /#/tools/trace/<hash>');
+    pass('(6) /#/traces/<hash> redirects to /#/tools/trace/<hash>');
   } catch {
-    fail(`(4) no redirect; the URL is ${JSON.stringify(page.url())}`);
+    fail(`(6) no redirect; the URL is ${JSON.stringify(page.url())}`);
   }
 
-  // (5) The tools landing lists both tools.
+  // (7) The tools landing lists both tools.
   await page.goto(`${BASE}/#/tools`, { waitUntil: 'domcontentloaded' });
   try {
     await page.waitForSelector('.tools-landing', { timeout: 8000 });
@@ -193,10 +166,10 @@ async function main() {
       pi: !!document.querySelector('a[href="#/tools/path-inspector"]'),
       trace: !!document.querySelector('a[href*="#/tools/trace"]'),
     }));
-    if (links.pi && links.trace) pass('(5) the tools landing links to both tools');
-    else fail(`(5) the tools landing is missing a link (path-inspector: ${links.pi}, trace: ${links.trace})`);
+    if (links.pi && links.trace) pass('(7) the tools landing links to both tools');
+    else fail(`(7) the tools landing is missing a link (path-inspector: ${links.pi}, trace: ${links.trace})`);
   } catch {
-    fail('(5) .tools-landing never rendered within 8s');
+    fail('(7) .tools-landing never rendered within 8s');
   }
 
   await browser.close();
