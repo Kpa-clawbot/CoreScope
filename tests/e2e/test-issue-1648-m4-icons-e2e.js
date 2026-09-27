@@ -54,7 +54,7 @@ async function main() {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const page = await ctx.newPage();
   // #2054: packet-detail icons need fixture rows even after the CI job passes 15 minutes.
-  await page.addInitScript(() => localStorage.setItem('meshcore-time-window', '525600'));
+  await page.addInitScript(() => localStorage.setItem('meshcore-time-window', '1440'));
 
   // (a) /map — pane toggle + general sprite presence
   await gotoSpa(page, '/map');

@@ -367,7 +367,7 @@ async function main() {
   {
     const ctxD = await browser.newContext({ viewport: { width: 1200, height: 900 }, hasTouch: true });
     const pD = await ctxD.newPage();
-    await pD.addInitScript(() => localStorage.setItem('meshcore-time-window', '525600'));
+    await pD.addInitScript(() => localStorage.setItem('meshcore-time-window', '1440'));
     pD.setDefaultTimeout(15000);
     pD.on('pageerror', (e) => console.error('[pageerror-desktop]', e.message));
     await pD.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
