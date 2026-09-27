@@ -7017,7 +7017,8 @@ console.log('\n=== roles.js: recent advert groups (#2073) ===');
   });
   test('unknown, malformed and contradictory routing is never guessed', () => {
     for (const packet of [null, {}, { route_type: null }, { route_type: '' },
-      { route_type: false }, { route_type: 4 }, { route_type: -1 }, { route_type: 2.5 },
+      { route_type: false }, { route_type: [] }, { route_type: [2], path_json: '[]' },
+      { route_type: {} }, { route_type: 4 }, { route_type: -1 }, { route_type: 2.5 },
       { route_type: 'flood' }, { route_type: 2, path_json: null },
       { route_type: 2, path_json: '' }, { route_type: 2, path_json: 'null' },
       { route_type: 2, path_json: '{}' }, { route_type: 2, path_json: '[' },

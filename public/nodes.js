@@ -749,7 +749,9 @@
           ${(() => { const validPackets = adverts.filter(p => p.hash && p.timestamp); return `
           <h4 title="Adverts this node originated. The section is limited to adverts because they are the only packet type attributable to an originating node: transmissions.from_pubkey is populated for ADVERTs only, so a relayed CHAN or TXT packet cannot be traced back to its sender without path resolution.">Recent Adverts (${validPackets.length})</h4>
           <div class="node-activity-list">
-            ${validPackets.length ? validPackets.map(p => {
+            ${groupRecentAdverts(validPackets).map(group => `<div class="node-advert-group" data-advert-kind="${group.kind}">
+            <h5 title="Count in this recent sample, not the node's lifetime total.">${group.label} (${group.adverts.length})</h5>
+            ${group.adverts.length ? group.adverts.map(p => {
               let decoded; try { decoded = JSON.parse(p.decoded_json); } catch {}
               const typeLabel = p.payload_type === 4 ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Advert' : p.payload_type === 5 ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chat-circle"/></svg> Channel' : p.payload_type === 2 ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-envelope"/></svg> DM' : '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg> Packet';
               const detail = decoded?.text ? ': ' + escapeHtml(truncate(decoded.text, 50)) : decoded?.name ? ' — ' + escapeHtml(decoded.name) : '';
@@ -773,7 +775,8 @@
                 <span>${typeLabel}${detail}${hashSizeBadge}${obsBadge}${obs ? ' via ' + escapeHtml(obs) : ''}${snr}${rssi}</span>
                 <a href="#/packets/${p.hash}" class="ch-analyze-link" style="margin-left:8px;font-size:0.8em">Analyze →</a>
               </div>`;
-            }).join('') : '<div class="text-muted">No recent packets</div>'}
+            }).join('') : '<div class="text-muted">None in this recent sample</div>'}
+            </div>`).join('')}
           </div>
         `; })()}
         </div>
@@ -1737,7 +1740,9 @@
           ${(() => { const validPackets = adverts.filter(a => a.hash && a.timestamp); return `
           <h4 title="Adverts this node originated. The section is limited to adverts because they are the only packet type attributable to an originating node: transmissions.from_pubkey is populated for ADVERTs only, so a relayed CHAN or TXT packet cannot be traced back to its sender without path resolution.">Recent Adverts (${validPackets.length})</h4>
           <div id="advertTimeline">
-            ${validPackets.length ? validPackets.map(a => {
+            ${groupRecentAdverts(validPackets).map(group => `<div class="node-advert-group" data-advert-kind="${group.kind}">
+            <h5 title="Count in this recent sample, not the node's lifetime total.">${group.label} (${group.adverts.length})</h5>
+            ${group.adverts.length ? group.adverts.map(a => {
               let decoded;
               try { decoded = JSON.parse(a.decoded_json); } catch {}
               const pType = PAYLOAD_TYPES[a.payload_type] || 'Packet';
@@ -1754,7 +1759,8 @@
                   <br><a href="#/packets/${a.hash}" class="ch-analyze-link">Analyze →</a>
                 </div>
               </div>`;
-            }).join('') : '<div class="text-muted" style="padding:8px">No recent packets</div>'}
+            }).join('') : '<div class="text-muted">None in this recent sample</div>'}
+            </div>`).join('')}
           </div>
           `; })()}
         </div>

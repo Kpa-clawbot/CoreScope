@@ -101,7 +101,9 @@ async function run() {
             await fixturePage.goto(`${BASE}/#/nodes${full ? '/' + pubkey : ''}`, { waitUntil: 'domcontentloaded' });
             await fixturePage.reload({ waitUntil: 'domcontentloaded' });
             if (!full) await fixturePage.locator(`tr[data-key="${pubkey}"]`).click();
-            const root = full ? '#node-packets' : '#advertTimeline';
+            // On phones a list click opens the full page; only desktop has a side pane.
+            const fullView = full || width <= 640;
+            const root = fullView ? '#node-packets' : '#advertTimeline';
             await fixturePage.locator(root).waitFor();
             const groups = await fixturePage.locator(root + ' [data-advert-kind]').evaluateAll(els => els.map(el => ({
               kind: el.dataset.advertKind,
@@ -119,7 +121,7 @@ async function run() {
               assert(!groups[i].overflow, `${labels[i]} overflows at ${width}px`);
               if (!empty) assert(groups[i].text.includes('Fixture observer') && groups[i].text.includes('SNR 7dB') && groups[i].text.includes('RSSI -80dBm'), 'RF/observer metadata lost');
             });
-            const heading = full ? fixturePage.locator('#node-packets h4') : fixturePage.locator('#advertTimeline').locator('..').locator('h4');
+            const heading = fullView ? fixturePage.locator('#node-packets h4') : fixturePage.locator('#advertTimeline').locator('..').locator('h4');
             assert(await heading.textContent() === `Recent Adverts (${adverts.length})`, 'Recent Adverts count must reflect sample, not lifetime');
             assert((await heading.getAttribute('title')).includes('originated'), 'Existing origin tooltip lost');
           }

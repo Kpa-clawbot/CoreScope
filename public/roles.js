@@ -981,6 +981,55 @@
     };
   };
 
+  /** Classify routing, not distance: a flood received with no hops is still a flood.
+   * Firmware Mesh::sendZeroHop uses DIRECT + path_len=0; transport adds four
+   * bytes before path_len (Packet::writeTo). raw_hex belongs to the transmission,
+   * whereas path_json can describe a different selected observation.
+   */
+  window.classifyRecentAdvert = function (advert) {
+    if (!advert) return 'other';
+    var route = advert.route_type;
+    if (route != null) {
+      if ((typeof route !== 'number' && typeof route !== 'string') || !/^[0-3]$/.test(String(route))) return 'other';
+      route = Number(route);
+    }
+    var emptyPath = false;
+    if (advert.raw_hex != null) {
+      var raw = advert.raw_hex;
+      if (typeof raw !== 'string' || !/^(?:[0-9a-f]{2})+$/i.test(raw)) return 'other';
+      var rawRoute = parseInt(raw.slice(0, 2), 16) & 3;
+      if (route != null && route !== rawRoute) return 'other';
+      route = rawRoute;
+      var pathOffset = (route === 0 || route === 3) ? 10 : 2;
+      if (raw.length < pathOffset + 4) return 'other';
+      var pathLength = parseInt(raw.slice(pathOffset, pathOffset + 2), 16);
+      var hashSize = (pathLength >> 6) + 1;
+      var pathBytes = (pathLength & 63) * hashSize;
+      if (hashSize > 3 || pathBytes > 64 || raw.length < pathOffset + 4 + pathBytes * 2) return 'other';
+      emptyPath = pathLength === 0;
+    } else if (route === 2 || route === 3) {
+      var path = advert.path_json;
+      try { if (typeof path === 'string') path = JSON.parse(path); } catch (_) { return 'other'; }
+      emptyPath = Array.isArray(path) && path.length === 0;
+    }
+    if (route === 0 || route === 1) return 'flood';
+    return (route === 2 || route === 3) && emptyPath ? 'zero-hop' : 'other';
+  };
+
+  // One pass over the API's bounded recent sample; keep input order and rows intact.
+  window.groupRecentAdverts = function (adverts) {
+    var groups = [
+      { kind: 'flood', label: 'Flood adverts', adverts: [] },
+      { kind: 'zero-hop', label: 'Zero-hop adverts', adverts: [] },
+      { kind: 'other', label: 'Other / unknown adverts', adverts: [] },
+    ];
+    adverts.forEach(function (advert) {
+      var kind = window.classifyRecentAdvert(advert);
+      groups[kind === 'flood' ? 0 : kind === 'zero-hop' ? 1 : 2].adverts.push(advert);
+    });
+    return groups.filter(function (group) { return group.kind !== 'other' || group.adverts.length; });
+  };
+
   /** Render a skew sparkline SVG (inline, word-sized) */
   window.renderSkewSparkline = function(samples, w, h) {
     w = w || 120; h = h || 24;

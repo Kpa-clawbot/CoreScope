@@ -2080,6 +2080,7 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 .btn-primary:hover { background: var(--accent-hover); }
 
 /* Advert Timeline */
+.node-advert-group h5 { margin: 8px 0; font-size: 12px; color: var(--text-muted); }
 .advert-entry {
   display: flex; align-items: flex-start; gap: 10px; padding: 8px 0;
   border-bottom: 1px solid var(--border);
