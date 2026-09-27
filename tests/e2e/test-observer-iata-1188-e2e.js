@@ -42,36 +42,39 @@ async function run() {
 
   // #2054: row-dependent tests below opt into a fixture window. Keep the
   // actual first-visit default covered independently of those preferences.
-  await test('Default 15-minute window renders an empty state', async () => {
-    const emptyContext = await browser.newContext({ viewport: { width: 1400, height: 900 } });
-    try {
-      const emptyPage = await emptyContext.newPage();
-      const queries = [];
-      await emptyPage.route('**/api/packets?*', async route => {
-        queries.push(new URL(route.request().url()).searchParams);
-        await route.fulfill({ json: { packets: [], total: 0 } });
-      });
-      const started = Date.now();
-      await emptyPage.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
-      await emptyPage.locator('#pktBody').getByText('No packets found', { exact: true }).waitFor();
-      assert(await emptyPage.inputValue('#fTimeWindow') === '15', 'first visit must select 15 minutes');
-      assert(await emptyPage.evaluate(() => localStorage.getItem('meshcore-time-window')) === null,
-        'fresh context must not inherit a fixture window');
-      assert(queries.length > 0, 'empty state must follow an API request');
-      for (const query of queries) {
-        const since = Date.parse(query.get('since'));
-        assert(since >= started - 15 * 60000 && since <= Date.now() - 15 * 60000,
-          'default request must use the 15-minute cutoff');
-        assert(!query.has('hash'), 'default request must not bypass the cutoff with a hash');
+  for (const width of [1400, 375]) {
+    await test(`Default 15-minute window renders an empty state at ${width}px`, async () => {
+      const emptyContext = await browser.newContext({ viewport: { width, height: 900 } });
+      try {
+        const emptyPage = await emptyContext.newPage();
+        const queries = [];
+        await emptyPage.route('**/api/packets?*', async route => {
+          queries.push(new URL(route.request().url()).searchParams);
+          await route.fulfill({ json: { packets: [], total: 0 } });
+        });
+        const started = Date.now();
+        await emptyPage.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
+        await emptyPage.locator('#pktBody').getByText('No packets found', { exact: true }).waitFor();
+        assert(await emptyPage.inputValue('#fTimeWindow') === '15', 'first visit must select 15 minutes');
+        assert(await emptyPage.evaluate(() => localStorage.getItem('meshcore-time-window')) === null,
+          'fresh context must not inherit a fixture window');
+        assert(queries.length > 0, 'empty state must follow an API request');
+        for (const query of queries) {
+          const since = Date.parse(query.get('since'));
+          assert(since >= started - 15 * 60000 && since <= Date.now() - 15 * 60000,
+            'default request must use the 15-minute cutoff');
+          assert(!query.has('hash'), 'default request must not bypass the cutoff with a hash');
+        }
+        assert(await emptyPage.locator('#pktBody tr[data-hash]').count() === 0,
+          'empty response must not render packet rows');
+        assert(await emptyPage.locator('#pktTable thead th').count() > 0,
+          'empty table must retain its column headings');
+      } finally {
+        await emptyContext.close();
       }
-      assert(await emptyPage.locator('#pktBody tr[data-hash]').count() === 0,
-        'empty response must not render packet rows');
-      assert(await emptyPage.locator('#pktTable thead th').count() > 0,
-        'empty table must retain its column headings');
-    } finally {
-      await emptyContext.close();
+    });
     }
-  });
+
   await test('Packets table renders an IATA badge in an observer cell', async () => {
     await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
     // Wide time window so fixture rows are in scope

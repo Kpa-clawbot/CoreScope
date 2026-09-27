@@ -55,6 +55,52 @@ function expectHidden(pageName, w) {
 
   console.log(`\n=== #1056 fluid tables E2E against ${BASE} ===`);
 
+  await step('#2079: responsive columns preserve full-width status and spacer rows', async () => {
+    const ctx = await browser.newContext({ viewport: { width: 375, height: 900 } });
+    try {
+      const page = await ctx.newPage();
+      await page.goto(BASE + '/#/home', { waitUntil: 'domcontentloaded' });
+      await page.waitForFunction(() => !!window.TableResponsive);
+      const result = await page.evaluate(() => {
+        const table = document.createElement('table');
+        table.id = 'responsiveSpanFixture';
+        table.className = 'data-table';
+        table.innerHTML = '<thead><tr><th>Kept</th><th data-priority="5">Hidden</th>' +
+          '<th data-priority="5">Hidden</th><th>Kept</th></tr></thead>' +
+          '<tbody><tr data-normal><td>A</td><td>B</td><td>C</td><td>D</td></tr>' +
+          '<tr data-status="empty"><td colspan="4">No packets found</td></tr>' +
+          '<tr data-status="error"><td colspan="4">Failed to load packets</td></tr>' +
+          '<tr data-status="spacer"><td colspan="4" style="height:48px;padding:0"></td></tr>' +
+          '<tr data-partial><td>A</td><td colspan="2">Partial span</td><td>D</td></tr></tbody>';
+        document.getElementById('app').appendChild(table);
+        window.TableResponsive.apply(table);
+        return {
+          normalHidden: Array.from(table.querySelector('[data-normal]').children)
+            .map(cell => getComputedStyle(cell).display === 'none'),
+          partialHidden: getComputedStyle(table.querySelector('[data-partial] td[colspan]')).display === 'none',
+          status: Array.from(table.querySelectorAll('[data-status]')).map(row => ({
+            name: row.dataset.status,
+            visible: getComputedStyle(row.firstElementChild).display !== 'none',
+            height: row.firstElementChild.getBoundingClientRect().height,
+          })),
+        };
+      });
+      assert(JSON.stringify(result.normalHidden) === '[false,true,true,false]',
+        'ordinary priority cells must still hide: ' + JSON.stringify(result));
+      assert(result.partialHidden, 'a partial span must retain column-index mapping');
+      for (const row of result.status) {
+        assert(row.visible && row.height > 0, row.name + ' full-width row must remain visible');
+      }
+      assert(result.status.find(row => row.name === 'spacer').height >= 48,
+        'virtual-scroll spacer must retain its height');
+      await page.locator('#responsiveSpanFixture .col-hidden-pill').click();
+      assert(await page.locator('#responsiveSpanFixture .col-hidden').count() === 0,
+        'reveal must still restore ordinary and partial-span cells');
+    } finally {
+      await ctx.close();
+    }
+  });
+
   for (const vp of VIEWPORTS) {
     const ctx = await browser.newContext({ viewport: { width: vp.w, height: vp.h } });
     const page = await ctx.newPage();
