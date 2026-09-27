@@ -65,6 +65,71 @@ async function run() {
 
   console.log(`\nRunning E2E tests against ${BASE}\n`);
 
+  // Synthetic protocol boundaries exercise both real node renderers at desktop/mobile sizes.
+  for (const width of [1280, 375]) {
+    await test(`#2073 recent adverts grouped in both node views at ${width}px`, async () => {
+      const fixtureContext = await browser.newContext({ viewport: { width, height: 900 } });
+      const fixturePage = await fixtureContext.newPage();
+      const pubkey = 'a'.repeat(64);
+      const node = { public_key: pubkey, name: 'Advert fixture', role: 'repeater',
+        last_seen: new Date().toISOString(), advert_count: 900 };
+      const routes = [
+        { route_type: 1, raw_hex: '110000' },
+        { route_type: 2, raw_hex: '120000' },
+        { route_type: 0, raw_hex: '10010203040000' },
+        { route_type: 3, raw_hex: '13010203040000' },
+        { route_type: 2, raw_hex: '1201ab00', path_json: '[]' },
+        { route_type: null, raw_hex: null },
+        { route_type: 2, raw_hex: '1200zz' },
+      ];
+      let adverts = routes.map((route, i) => ({ ...route, hash: String(i + 1).repeat(16),
+        timestamp: new Date(Date.now() - i * 60000).toISOString(), payload_type: 4,
+        observer_name: 'Fixture observer', snr: 7, rssi: -80, observation_count: 2 }));
+      await fixturePage.route('**/api/nodes**', async route => {
+        const path = new URL(route.request().url()).pathname;
+        let body;
+        if (path === '/api/nodes') body = { nodes: [node], total: 1 };
+        else if (path === '/api/nodes/' + pubkey) body = { node, recentAdverts: adverts };
+        else if (path === '/api/nodes/' + pubkey + '/health') body = {};
+        else return route.continue();
+        await route.fulfill({ json: body });
+      });
+      try {
+        for (const empty of [false, true]) {
+          if (empty) adverts = [];
+          for (const full of [false, true]) {
+            await fixturePage.goto(`${BASE}/#/nodes${full ? '/' + pubkey : ''}`, { waitUntil: 'domcontentloaded' });
+            await fixturePage.reload({ waitUntil: 'domcontentloaded' });
+            if (!full) await fixturePage.locator(`tr[data-key="${pubkey}"]`).click();
+            const root = full ? '#node-packets' : '#advertTimeline';
+            await fixturePage.locator(root).waitFor();
+            const groups = await fixturePage.locator(root + ' [data-advert-kind]').evaluateAll(els => els.map(el => ({
+              kind: el.dataset.advertKind,
+              heading: el.querySelector('h5').textContent.trim(),
+              links: Array.from(el.querySelectorAll('a.ch-analyze-link'), a => a.getAttribute('href')),
+              text: el.textContent,
+              overflow: el.scrollWidth > el.clientWidth + 1,
+            })));
+            assert(groups.length === (empty ? 2 : 3), `Expected ${empty ? 2 : 3} advert groups, got ${groups.length}`);
+            const expected = empty ? [[], []] : [[0, 2], [1, 3], [4, 5, 6]];
+            const labels = ['Flood adverts', 'Zero-hop adverts', 'Other / unknown adverts'];
+            expected.forEach((indices, i) => {
+              assert(groups[i].heading === `${labels[i]} (${indices.length})`, `Wrong sample count: ${groups[i].heading}`);
+              assert(JSON.stringify(groups[i].links) === JSON.stringify(indices.map(j => '#/packets/' + adverts[j].hash)), 'Advert order or analyze links changed');
+              assert(!groups[i].overflow, `${labels[i]} overflows at ${width}px`);
+              if (!empty) assert(groups[i].text.includes('Fixture observer') && groups[i].text.includes('SNR 7dB') && groups[i].text.includes('RSSI -80dBm'), 'RF/observer metadata lost');
+            });
+            const heading = full ? fixturePage.locator('#node-packets h4') : fixturePage.locator('#advertTimeline').locator('..').locator('h4');
+            assert(await heading.textContent() === `Recent Adverts (${adverts.length})`, 'Recent Adverts count must reflect sample, not lifetime');
+            assert((await heading.getAttribute('title')).includes('originated'), 'Existing origin tooltip lost');
+          }
+        }
+      } finally {
+        await fixtureContext.close();
+      }
+    });
+  }
+
   // --- Group: Home page (tests 1, 6, 7) ---
 
   // Test 1: Home page loads

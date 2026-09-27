@@ -6982,6 +6982,76 @@ console.log('\n=== map.js: hash size fallback ===');
   });
 }
 
+// ===== Recent advert routing (#2073) =====
+console.log('\n=== roles.js: recent advert groups (#2073) ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  function classify(packet) {
+    assert.strictEqual(typeof ctx.classifyRecentAdvert, 'function', 'shared recent-advert classifier must exist');
+    return ctx.classifyRecentAdvert(packet);
+  }
+  test('flood routes stay flood with empty paths, including transport and string routes', () => {
+    for (const route of [0, 1, '0', '1']) {
+      assert.strictEqual(classify({ route_type: route, path_json: '[]' }), 'flood');
+    }
+    assert.strictEqual(classify({ raw_hex: '110000' }), 'flood');
+    assert.strictEqual(classify({ raw_hex: '10010203040000' }), 'flood');
+  });
+  test('zero-hop requires direct routing and affirmative empty-path evidence', () => {
+    for (const route of [2, 3, '2', '3']) {
+      assert.strictEqual(classify({ route_type: route, path_json: '[]' }), 'zero-hop');
+      assert.strictEqual(classify({ route_type: route, path_json: [] }), 'zero-hop');
+      assert.strictEqual(classify({ route_type: route }), 'other');
+      assert.strictEqual(classify({ route_type: route, path_json: '["ab"]' }), 'other');
+    }
+    assert.strictEqual(classify({ route_type: null, raw_hex: '120000' }), 'zero-hop');
+    assert.strictEqual(classify({ raw_hex: '13010203040000' }), 'zero-hop');
+  });
+  test('raw transmission path takes precedence over observation path', () => {
+    assert.strictEqual(classify({ route_type: 2, raw_hex: '1201ab00', path_json: '[]' }), 'other');
+    assert.strictEqual(classify({ route_type: 2, raw_hex: '120000', path_json: '["ab"]' }), 'zero-hop');
+    assert.strictEqual(classify({ route_type: 3, raw_hex: '130002030401ab00', path_json: '[]' }), 'other');
+    assert.strictEqual(classify({ route_type: 1, raw_hex: '114000' }), 'flood');
+    assert.strictEqual(classify({ route_type: 2, raw_hex: '124000' }), 'other');
+  });
+  test('unknown, malformed and contradictory routing is never guessed', () => {
+    for (const packet of [null, {}, { route_type: null }, { route_type: '' },
+      { route_type: false }, { route_type: 4 }, { route_type: -1 }, { route_type: 2.5 },
+      { route_type: 'flood' }, { route_type: 2, path_json: null },
+      { route_type: 2, path_json: '' }, { route_type: 2, path_json: 'null' },
+      { route_type: 2, path_json: '{}' }, { route_type: 2, path_json: '[' },
+      { route_type: 1, raw_hex: '120000' }, { route_type: 2, raw_hex: '110000' },
+      { route_type: 2, raw_hex: '12' }, { route_type: 2, raw_hex: '120' },
+      { route_type: 2, raw_hex: '1200zz' }, { route_type: 2, raw_hex: '12c000' },
+      { route_type: 2, raw_hex: '1202ab' }, { route_type: 3, raw_hex: '130000' }]) {
+      assert.strictEqual(classify(packet), 'other', JSON.stringify(packet));
+    }
+  });
+  test('grouping preserves every row, per-group order and sample counts without mutation', () => {
+    assert.strictEqual(typeof ctx.groupRecentAdverts, 'function', 'shared recent-advert grouping must exist');
+    const packets = [
+      { hash: 'a', route_type: 2, path_json: '[]' },
+      { hash: 'b', route_type: 1 },
+      { hash: 'c', route_type: null },
+      { hash: 'd', route_type: 0 },
+      { hash: 'e', route_type: 3, path_json: '[]' },
+      { hash: 'f', route_type: 2, path_json: '["ab"]' },
+    ];
+    const before = JSON.stringify(packets);
+    const groups = ctx.groupRecentAdverts(packets);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(groups.map(g => [g.kind, g.label, g.adverts.map(p => p.hash)]))), [
+      ['flood', 'Flood adverts', ['b', 'd']],
+      ['zero-hop', 'Zero-hop adverts', ['a', 'e']],
+      ['other', 'Other / unknown adverts', ['c', 'f']],
+    ]);
+    assert.strictEqual(groups.reduce((n, g) => n + g.adverts.length, 0), packets.length);
+    assert.strictEqual(groups[0].adverts[0], packets[1]);
+    assert.strictEqual(JSON.stringify(packets), before);
+    assert.strictEqual(ctx.groupRecentAdverts([]).reduce((n, g) => n + g.adverts.length, 0), 0);
+  });
+}
+
 // ===== SUMMARY =====
 Promise.allSettled(pendingTests).then(() => {
   console.log(`\n${'═'.repeat(40)}`);
