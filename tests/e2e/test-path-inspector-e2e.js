@@ -68,8 +68,18 @@ async function assertDesktopLayout(page) {
   assert.equal(layout.sidebar.left, 0, 'route sidebar stays on the left');
   assert.ok(layout.sidebar.right <= layout.map.left + 1, 'map must reserve the route sidebar width');
   assert.ok(layout.map.right <= layout.inspector.left + 1, 'map must not cover the Path Inspector');
-  assert.ok(layout.map.width > 0, 'map retains usable space');
+  assert.ok(layout.map.width >= 160, 'map retains at least 160px of usable space');
   assert.ok(layout.inspector.right <= layout.viewport + 1, 'inspector stays within the viewport');
+}
+
+async function resizeSidebar(page, width) {
+  const current = await page.locator('.mc-rt-sidebar').boundingBox();
+  const handle = await page.locator('.mc-rt-resize-handle').boundingBox();
+  // The collapse button overlaps the handle's midpoint; drag its upper half.
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 4);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + handle.width / 2 + width - current.width, handle.y + handle.height / 4, { steps: 4 });
+  await page.mouse.up();
 }
 
 async function main() {
@@ -150,9 +160,19 @@ async function main() {
         const group = window.__mc_routeLayer;
         if (!group) return false;
         const lines = group.getLayers().filter(layer => layer instanceof L.Polyline && !(layer instanceof L.Polygon));
+        const mapRect = window.__mc_map.getContainer().getBoundingClientRect();
+        const visible = line => {
+          const element = line.getElement();
+          if (!element || !element.getAttribute('d')) return false;
+          const style = getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          return style.display !== 'none' && style.visibility === 'visible' && Number(style.opacity) > 0 &&
+            rect.width > 0 && rect.height > 0 && rect.right > mapRect.left && rect.left < mapRect.right &&
+            rect.bottom > mapRect.top && rect.top < mapRect.bottom;
+        };
         return lines.length === 2 && expected.every(points => lines.some(line =>
           JSON.stringify(line.getLatLngs().map(p => [p.lat, p.lng])) === JSON.stringify(points) &&
-          window.__mc_map.hasLayer(line) && line.getElement() && line.getElement().getAttribute('d')
+          window.__mc_map.hasLayer(line) && visible(line)
         ));
       }, expected, { timeout: 10000 });
       if (index === 0) {
@@ -183,8 +203,25 @@ async function main() {
     assert.ok(mobile.rect.bottom <= 812 && mobile.rect.top > 600, 'mobile route details remain a bottom sheet');
     await page.locator('.mc-rt-mobile-handle').click();
     assert.equal(await page.locator('.mc-rt-mobile-handle').getAttribute('aria-expanded'), 'true');
+    await page.waitForFunction(() => document.querySelector('.mc-rt-sidebar').getBoundingClientRect().height >= innerHeight * 0.75 - 1);
+    const expanded = await page.locator('.mc-rt-sidebar').evaluate(sidebar => ({
+      rect: sidebar.getBoundingClientRect().toJSON(),
+      map: document.querySelector('#leaflet-map').getBoundingClientRect().toJSON(),
+    }));
+    assert.equal(expanded.rect.left, 0);
+    assert.equal(expanded.rect.width, 375);
+    assert.ok(Math.abs(expanded.rect.bottom - mobile.rect.bottom) < 1, 'expanded sheet keeps its bottom anchor');
+    assert.ok(expanded.map.height > 0 && expanded.map.height < mobile.map.height, 'expanded sheet leaves a smaller usable map');
+    assert.ok(expanded.map.bottom <= expanded.rect.top + 1, 'map ends above the expanded sheet');
     await page.locator('.mc-rt-mobile-handle').click();
-    pass('(6) mobile route details retain their fixed bottom-sheet layout and toggle');
+    assert.equal(await page.locator('.mc-rt-mobile-handle').getAttribute('aria-expanded'), 'false');
+    await page.waitForFunction(initial => {
+      const sidebar = document.querySelector('.mc-rt-sidebar').getBoundingClientRect();
+      const map = document.querySelector('#leaflet-map').getBoundingClientRect();
+      return Math.abs(sidebar.height - initial.rect.height) < 1 && Math.abs(sidebar.top - initial.rect.top) < 1 &&
+        Math.abs(map.height - initial.map.height) < 1 && Math.abs(map.bottom - initial.map.bottom) < 1;
+    }, mobile);
+    pass('(6) mobile sheet expansion reserves map space and collapse restores both geometries');
 
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.locator('.mc-rt-collapse-btn').click();
@@ -194,29 +231,45 @@ async function main() {
     await assertDesktopLayout(page);
     pass('(7) collapsing and restoring the route sidebar keeps both map and inspector accessible');
 
-    const handle = await page.locator('.mc-rt-resize-handle').boundingBox();
-    // The collapse button overlaps the handle's midpoint; drag its upper half.
-    await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 4);
-    await page.mouse.down();
-    await page.mouse.move(handle.x + handle.width / 2 + 80, handle.y + handle.height / 4, { steps: 4 });
-    await page.mouse.up();
+    await resizeSidebar(page, 400);
     assert.equal(await page.locator('.mc-rt-sidebar').evaluate(el => el.getBoundingClientRect().width), 400);
     await assertDesktopLayout(page);
     pass('(8) dragging the route sidebar to 400px preserves space for the inspector');
+    await resizeSidebar(page, 700);
+    assert.equal(await page.evaluate(() => localStorage.getItem('mc-rt-sidebar-width')), '700');
+    for (const width of [900, 768]) {
+      await page.setViewportSize({ width, height: 900 });
+      await assertDesktopLayout(page);
+      await page.locator('.mc-rt-collapse-btn').click();
+      await assertDesktopLayout(page);
+      assert.equal(await page.locator('.mc-rt-sidebar').evaluate(el => el.getBoundingClientRect().width), 36);
+      await page.locator('.mc-rt-collapse-btn').click();
+      await assertDesktopLayout(page);
+    }
+    // A saved desktop preference must be constrained on a new narrow page too.
+    await openPaneAndSubmit(page);
+    await page.locator('#mapPiResults button[data-idx="0"]').click();
+    await page.waitForSelector('.mc-rt-sidebar');
+    assert.equal(await page.locator('.mc-rt-sidebar').evaluate(el => el.style.width), '700px');
+    await assertDesktopLayout(page);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    assert.equal(await page.locator('.mc-rt-sidebar').evaluate(el => el.getBoundingClientRect().width), 700);
+    await assertDesktopLayout(page);
+    pass('(9) dragged and saved 700px widths adapt at 900/768px and restore on a wider viewport');
   } catch (err) {
-    fail('(3-8) fixture route coverage: ' + err.message);
+    fail('(3-9) fixture route coverage: ' + err.message);
   }
 
-  // (9) The legacy trace URL still redirects.
+  // (10) The legacy trace URL still redirects.
   await page.goto(`${BASE}/#/traces/abc123`, { waitUntil: 'domcontentloaded' });
   try {
     await page.waitForFunction(() => location.hash.indexOf('#/tools/trace/abc123') === 0, null, { timeout: 5000 });
-    pass('(9) /#/traces/<hash> redirects to /#/tools/trace/<hash>');
+    pass('(10) /#/traces/<hash> redirects to /#/tools/trace/<hash>');
   } catch {
-    fail(`(9) no redirect; the URL is ${JSON.stringify(page.url())}`);
+    fail(`(10) no redirect; the URL is ${JSON.stringify(page.url())}`);
   }
 
-  // (10) The tools landing lists both tools.
+  // (11) The tools landing lists both tools.
   await page.goto(`${BASE}/#/tools`, { waitUntil: 'domcontentloaded' });
   try {
     await page.waitForSelector('.tools-landing', { timeout: 8000 });
@@ -224,10 +277,10 @@ async function main() {
       pi: !!document.querySelector('a[href="#/tools/path-inspector"]'),
       trace: !!document.querySelector('a[href*="#/tools/trace"]'),
     }));
-    if (links.pi && links.trace) pass('(10) the tools landing links to both tools');
-    else fail(`(10) the tools landing is missing a link (path-inspector: ${links.pi}, trace: ${links.trace})`);
+    if (links.pi && links.trace) pass('(11) the tools landing links to both tools');
+    else fail(`(11) the tools landing is missing a link (path-inspector: ${links.pi}, trace: ${links.trace})`);
   } catch {
-    fail('(10) .tools-landing never rendered within 8s');
+    fail('(11) .tools-landing never rendered within 8s');
   }
 
   await browser.close();
