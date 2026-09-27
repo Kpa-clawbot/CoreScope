@@ -107,9 +107,11 @@ async function main() {
   await page.waitForTimeout(1500);
   // Click first packet row to render detail with replay button (if any).
   await page.evaluate(() => {
-    const row = document.querySelector('table tbody tr, .pkt-row, .packet-row');
+    const row = document.querySelector('#pktBody tr[data-hash]');
     if (row) row.click();
   });
+  assert(await page.locator('#pktBody tr[data-hash]').count() > 0,
+    '(c) packet detail icons require a real packet row, not the empty-state row');
   await page.waitForTimeout(800);
   const packets = await page.evaluate(() => {
     const replay = document.querySelector('.replay-live-btn');
