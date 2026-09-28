@@ -107,13 +107,13 @@ function setup(hash = '#/packets', initialFilters = {}) {
     'filters', 'observers', 'observerMap', 'SHORT_BY_ID', 'escapeHtml', 'document', 'localStorage',
     'RegionFilter', 'renderTableRows', 'loadPackets',
     '_rebuildObserverMenu', '_observerFilterSet', 'savedTimeWindowMin', 'DEFAULT_TIME_WINDOW',
-    'location', 'history', 'window', '_packetSortColumn', '_packetSortDirection',
+    'location', 'history', 'window', '_packetSortColumn', '_packetSortDirection', 'showFullNames',
     hashParamsSrc + '\n' + urlSrc + '\n' + multiSelectSrc + '\n' + clearSrc + '\n' +
     'updatePacketsUrl(); return { updatePacketsUrl, buildPacketsQuery };'
   );
   const actions = run(filters, observers, observerMap, SHORT_BY_ID, escapeHtml, document, localStorage,
     RegionFilter, noop, noop, null, null, 15, 15,
-    location, history, {}, null, null);
+    location, history, {}, null, null, false);
 
   // Observer rows live in #observerMenu today and in #observerList after
   // #1884; the change listener stays on #observerMenu in both layouts.

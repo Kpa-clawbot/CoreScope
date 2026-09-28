@@ -705,6 +705,8 @@ jobs:
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-marker-outline-weight.js 2>&1 | tee -a e2e-output.txt
           echo "=== E2E SUITE: test-node-reach-e2e.js ==="
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-node-reach-e2e.js 2>&1 | tee -a e2e-output.txt
+          echo "=== E2E SUITE: test-packets-compact-columns-e2e.js ==="
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-packets-compact-columns-e2e.js 2>&1 | tee -a e2e-output.txt
           echo "=== E2E SUITE: test-packets-scope-column.js ==="
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-packets-scope-column.js 2>&1 | tee -a e2e-output.txt
           echo "=== E2E SUITE: test-path-inspector-e2e.js ==="
