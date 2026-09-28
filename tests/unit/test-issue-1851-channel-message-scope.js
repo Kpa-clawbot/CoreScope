@@ -7,6 +7,10 @@
  * and client-side decryption of /api/packets rows), so each route must keep
  * the field, and the render must keep the '' state apart from null.
  *
+ * The same routes must carry hash_size, the path hash size (1-3 bytes) the
+ * sender used, which renders as "1-byte" / "2-bytes" / "3-bytes" right before
+ * the scope chip.
+ *
  * Loads the real public/channels.js in a vm sandbox and reads the HTML it
  * writes into #chMessages.
  */
@@ -29,6 +33,28 @@ function test(name, fn) {
     done();
   } catch (e) { done(e); }
 }
+
+// channels.js calls the global pathHashSize() from app.js. app.js cannot share
+// the channels sandbox (it would replace the api/registerPage stubs), so it
+// runs in its own context and only the real helper is handed over.
+function loadPathHashSize() {
+  const appCtx = {
+    window: { addEventListener() {}, dispatchEvent() {} },
+    document: {
+      readyState: 'loading', addEventListener() {}, getElementById: () => null,
+      querySelector: () => null, querySelectorAll: () => [], createElement: () => ({}), head: { appendChild() {} },
+    },
+    console, addEventListener() {}, URLSearchParams,
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    location: { hash: '' },
+    setTimeout() {}, clearTimeout() {}, setInterval() {}, clearInterval() {},
+    fetch: () => new Promise(() => {}),
+  };
+  vm.createContext(appCtx);
+  vm.runInContext(fs.readFileSync('public/app.js', 'utf8'), appCtx);
+  return appCtx.pathHashSize;
+}
+const pathHashSize = loadPathHashSize();
 
 function makeChannelsSandbox(apiImpl) {
   const dom = {};
@@ -95,6 +121,7 @@ function makeChannelsSandbox(apiImpl) {
     atob: (s) => Buffer.from(String(s), 'base64').toString('utf8'),
     crypto: { subtle: require('crypto').webcrypto.subtle },
     TextEncoder, TextDecoder, Uint8Array,
+    pathHashSize,
   };
   ctx.window.matchMedia = ctx.matchMedia;
   vm.createContext(ctx);
@@ -314,7 +341,7 @@ test('a decrypt cache that already carries scope_name is still served by the del
   const { ctx } = makeChannelsSandbox(packetsApi(fx.packets));
   ctx.ChannelDecrypt.setCache('#secret', fx.packets.map((p, i) => ({
     sender: 'Old', text: 'cached ' + i, timestamp: p.first_seen, packetHash: p.hash, packetId: p.id,
-    hops: 0, snr: null, observers: [], scope_name: null, repeats: 1,
+    hops: 0, snr: null, observers: [], scope_name: null, hash_size: null, repeats: 1,
   })), fx.lastTs, fx.packets.length);
   for (let i = 0; i < 10; i++) await Promise.resolve();
   await ctx.window._channelsSelectChannelForTest('user:#secret', {
@@ -322,6 +349,95 @@ test('a decrypt cache that already carries scope_name is still served by the del
   });
   const state = ctx.window._channelsGetStateForTest();
   assert.deepStrictEqual(Array.from(state.messages, (m) => m.text), ['cached 0', 'cached 1', 'cached 2']);
+});
+
+console.log('\n=== channel message hash size ===');
+
+// Matches the hash-size span and captures its label ("1-byte", "2-bytes", ...).
+const HASH_SIZE = /<span class="ch-msg-hash-size"[^>]*>([^<]*)<\/span>/;
+
+test('REST messages render the hash size right before the scope chip', async () => {
+  const { ctx, dom } = makeChannelsSandbox(listApi((path) => {
+    if (path.indexOf('/channels/general/messages') === 0) {
+      return Promise.resolve({ messages: [
+        { sender: 'Alice', text: 'two', timestamp: '2026-09-01T10:00:00Z', packetHash: 'h1', hash_size: 2, scope_name: '#belgium' },
+        { sender: 'Bob', text: 'three', timestamp: '2026-09-01T10:01:00Z', packetHash: 'h2', hash_size: 3, scope_name: null },
+        { sender: 'Carol', text: 'none', timestamp: '2026-09-01T10:02:00Z', packetHash: 'h3', hash_size: 0, scope_name: '#belgium' },
+        { sender: 'Dave', text: 'older server', timestamp: '2026-09-01T10:03:00Z', packetHash: 'h4' },
+      ] });
+    }
+    return Promise.resolve({});
+  }));
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  await ctx.window._channelsSelectChannelForTest('general');
+  const chunks = messageChunks(dom.chMessages.innerHTML);
+  assert.strictEqual(chunks.length, 4, 'expected 4 rendered messages');
+
+  assert.strictEqual((chunks[0].match(HASH_SIZE) || [])[1], '2-bytes');
+  assert.ok(chunks[0].search(HASH_SIZE) < chunks[0].search(SCOPE_CHIP), 'hash size must come before the scope chip');
+  assert.strictEqual((chunks[1].match(HASH_SIZE) || [])[1], '3-bytes', 'hash size renders without a scope chip too');
+  assert.ok(!/ch-msg-hash-size/.test(chunks[2]), 'hash_size 0 (none encoded) must render nothing');
+  assert.ok(!/ch-msg-hash-size/.test(chunks[3]), 'a message without hash_size must render nothing');
+});
+
+test('WebSocket-appended message takes its hash size from raw_hex', () => {
+  const { ctx, dom } = makeChannelsSandbox(listApi(() => Promise.resolve({ messages: [] })));
+  ctx.window._channelsSetStateForTest({
+    selectedHash: 'general',
+    channels: [{ hash: 'general', name: 'general', messageCount: 0, lastActivityMs: 0 }],
+    messages: [],
+  });
+  const packet = (hash, text, rawHex) => ({
+    type: 'packet',
+    data: {
+      hash, raw_hex: rawHex,
+      decoded: { header: { payloadTypeName: 'GRP_TXT' }, payload: { channel: 'general', text } },
+      packet: { hash, observer_name: 'Obs', raw_hex: rawHex },
+    },
+  });
+  ctx.window._channelsProcessWSBatchForTest([
+    packet('w1', 'Alice: 2-byte flood heard direct', '1540DEADBEEF'),
+    packet('w2', 'Bob: 3-byte transport flood', '141122334481AABBCCDEADBEEF'),
+    packet('w3', 'Carol: no raw_hex', undefined),
+  ], null);
+  const state = ctx.window._channelsGetStateForTest();
+  assert.deepStrictEqual(Array.from(state.messages, (m) => m.hash_size), [2, 3, null]);
+  const chunks = messageChunks(dom.chMessages.innerHTML);
+  assert.strictEqual((chunks[0].match(HASH_SIZE) || [])[1], '2-bytes');
+  assert.strictEqual((chunks[1].match(HASH_SIZE) || [])[1], '3-bytes');
+  assert.ok(!/ch-msg-hash-size/.test(chunks[2]), 'no raw_hex must render no hash size');
+});
+
+test('client-side decrypted messages take their hash size from the /api/packets row', async () => {
+  const fx = encryptedChannelPackets('#secret');
+  fx.packets[0].raw_hex = '1502AABBDEADBEEF';
+  fx.packets[1].raw_hex = '1580DEADBEEF';
+  const { ctx, dom } = makeChannelsSandbox(packetsApi(fx.packets));
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  await ctx.window._channelsSelectChannelForTest('user:#secret', {
+    userKey: fx.keyHex, channelHashByte: fx.channelHash, channelName: '#secret',
+  });
+  const state = ctx.window._channelsGetStateForTest();
+  assert.deepStrictEqual(Array.from(state.messages, (m) => m.hash_size), [1, 3, null]);
+  const chunks = messageChunks(dom.chMessages.innerHTML);
+  assert.strictEqual((chunks[0].match(HASH_SIZE) || [])[1], '1-byte');
+  assert.strictEqual((chunks[1].match(HASH_SIZE) || [])[1], '3-bytes');
+});
+
+test('a decrypt cache written before hash_size existed is decrypted again', async () => {
+  const fx = encryptedChannelPackets('#secret');
+  fx.packets.forEach((p) => { p.raw_hex = '1541AABBDEADBEEF'; });
+  const { ctx } = makeChannelsSandbox(packetsApi(fx.packets));
+  ctx.ChannelDecrypt.setCache('#secret', fx.packets.map((p, i) => ({
+    sender: 'Old', text: 'cached ' + i, timestamp: p.first_seen, packetHash: p.hash, packetId: p.id,
+    hops: 0, snr: null, observers: [], scope_name: null, repeats: 1,
+  })), fx.lastTs, fx.packets.length);
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  await ctx.window._channelsSelectChannelForTest('user:#secret', {
+    userKey: fx.keyHex, channelHashByte: fx.channelHash, channelName: '#secret',
+  });
+  const state = ctx.window._channelsGetStateForTest();
+  assert.deepStrictEqual(Array.from(state.messages, (m) => m.hash_size), [2, 2, 2]);
 });
 
 Promise.all(pending).then(() => {

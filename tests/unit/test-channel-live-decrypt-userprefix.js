@@ -184,6 +184,7 @@ async function run() {
   ctx.formatHashHex = (h) => String(h);
   ctx.formatSecondsAgo = () => '';
   ctx.payloadTypeName = () => 'GRP_TXT';
+  ctx.pathHashSize = () => null;
   ctx.RegionFilter = {
     init() {},
     onChange(fn) { return () => {}; },
