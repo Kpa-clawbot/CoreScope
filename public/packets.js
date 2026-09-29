@@ -774,7 +774,11 @@
     if (m && m[1]) subpath = m[1];
     // Don't double-encode filters.hash when it's already the path segment.
     var skipHash = !!(filters.hash && subpath === '/' + filters.hash);
-    history.replaceState(null, '', '#/packets' + subpath + buildPacketsQuery(savedTimeWindowMin, RegionFilter.getRegionParam(), skipHash));
+    var query = buildPacketsQuery(savedTimeWindowMin, RegionFilter.getRegionParam(), skipHash);
+    // Observation selection belongs to the current detail route, not filters.
+    var obs = subpath ? getHashParams().get('obs') : null;
+    if (obs) query += (query ? '&' : '?') + 'obs=' + encodeURIComponent(obs);
+    history.replaceState(null, '', '#/packets' + subpath + query);
     // Update clear-filters button visibility
     var cb = document.getElementById('clearFiltersBtn');
     if (cb) {
@@ -1174,6 +1178,7 @@
 
     // Read URL params (router strips query from routeParam; read from location.hash)
     var _initUrlParams = getHashParams();
+    directObsId = _initUrlParams.get('obs');
     var _urlTimeWindow = Number(_initUrlParams.get('timeWindow'));
     if (Number.isFinite(_urlTimeWindow) && _urlTimeWindow > 0) {
       savedTimeWindowMin = _urlTimeWindow;
@@ -1277,10 +1282,13 @@
     // If linked directly to a packet by ID, load its detail and filter list
     if (directPacketId) {
       const pktId = Number(directPacketId);
+      const obsTarget = directObsId;
       directPacketId = null;
+      directObsId = null;
       try {
         const data = await api(`/packets/${pktId}`);
         if (gen !== initGeneration) return;
+        selectedObservationId = obsTarget;
         if (data.packet?.hash) {
           filters.hash = data.packet.hash;
           const hashInput = document.getElementById('fHash');
@@ -1300,7 +1308,7 @@
             const newHops = hops.filter(h => !(h in hopNameCache));
             if (newHops.length) await resolveHops(newHops);
           } catch {}
-          await renderDetail(content, data);
+          await renderDetail(content, data, obsTarget);
           initPanelResize();
         }
       } catch {}
