@@ -245,6 +245,7 @@
     "isFavorite": "readonly",
     "isTransportRoute": "readonly",
     "makeColumnsResizable": "readonly",
+    "fitColumnsToContent": "readonly",
     "makeRoleMarkerSVG": "readonly",
     "miniMarkdown": "readonly",
     "module": "readonly",
