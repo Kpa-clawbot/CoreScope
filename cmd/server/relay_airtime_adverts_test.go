@@ -144,7 +144,7 @@ func TestRelayAirtimeShare_AdvertWindowDedupCacheAndZeroRelays(t *testing.T) {
 		t.Fatalf("cache contract changed: %v / %v", result, cached)
 	}
 	rows := result["rows"].([]map[string]interface{})
-	if len(rows) != 2 || result["total_count"] != 2 || rows[1]["advert_kind"] != "zero_hop" || rows[1]["count"] != 1 || rows[1]["score"] != int64(0) || rows[1]["airtime_pct"] != float64(0) || rows[1]["count_pct"] != float64(50) {
+	if len(rows) != 2 || result["total_count"] != 2 || rows[1]["advert_kind"] != "mixed" || rows[1]["count"] != 1 || rows[1]["score"] != int64(0) || rows[1]["airtime_pct"] != float64(0) || rows[1]["count_pct"] != float64(50) {
 		t.Fatalf("zero relay row/window/dedup changed: %v", result)
 	}
 	if store.GetRelayAirtimeShareWithWindow(TimeWindow{})["total_count"] != 3 {
