@@ -206,12 +206,18 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
         await assertSelection('initial load');
         await detailPage.click('#typeTrigger');
         await detailPage.locator('#typeMenu input[data-type-id="' + detail.packet.payload_type + '"]').check();
+        assert(await detailPage.evaluate(() => localStorage.getItem('meshcore-type-filter')) === String(detail.packet.payload_type),
+          'type filter must apply the requested selection');
         await assertSelection('type filter');
         await detailPage.click('#observerTrigger');
         await detailPage.locator('#observerMenu input[data-obs-id=' + JSON.stringify(observation.observer_id) + ']').check();
+        assert(new URLSearchParams(new URL(detailPage.url()).hash.split('?')[1]).get('observer') === String(observation.observer_id),
+          'observer filter must update the URL to the requested observer');
         await assertSelection('observer filter');
         await detailPage.click('#observerTrigger');
         await detailPage.selectOption('#fTimeWindow', '60');
+        assert(new URLSearchParams(new URL(detailPage.url()).hash.split('?')[1]).get('timeWindow') === '60',
+          'time-window filter must update the URL to 60 minutes');
         await assertSelection('time-window filter');
         await detailPage.reload({ waitUntil: 'load' });
         await assertSelection('refresh');
