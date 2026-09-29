@@ -47,13 +47,27 @@ async function gotoPackets(page) {
   await page.waitForSelector('table tbody tr[data-hash]', { timeout: 15000 });
 }
 
+// Click the i-th packet row on its Time cell. A row's centre can land on a
+// hop link (which opens the node page) or on the "+N" path pill (which opens
+// the path popover), and neither selects the row; the Time cell is never
+// interactive. Rows are re-queried on every call because selecting one
+// re-renders the table and detaches handles taken before the click.
+async function clickPacketRow(page, rowSelector, i) {
+  const rows = await page.$$(rowSelector);
+  if (!rows[i]) return false;
+  const cell = await rows[i].$('td.col-time');
+  await (cell || rows[i]).click({ timeout: 3000 }).catch(() => null);
+  return true;
+}
+
 // Click rows until detail pane's Payload Type matches `wantType` (e.g. "Advert"
 // or any non-"Advert"). Returns true on hit, false if exhausted.
 async function findPacketDetailByType(page, predicate, maxRows = 40) {
   await page.waitForTimeout(400);
-  const rows = await page.$$('table tbody tr[data-hash][data-action]');
-  for (let i = 0; i < Math.min(rows.length, maxRows); i++) {
-    await rows[i].click({ timeout: 3000 }).catch(() => null);
+  const ROWS = 'table tbody tr[data-hash][data-action]';
+  const count = (await page.$$(ROWS)).length;
+  for (let i = 0; i < Math.min(count, maxRows); i++) {
+    if (!(await clickPacketRow(page, ROWS, i))) break;
     await page.waitForTimeout(350);
     const meta = await page.evaluate(() => {
       const dts = document.querySelectorAll('dl.detail-meta dt');

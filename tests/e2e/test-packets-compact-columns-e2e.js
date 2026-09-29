@@ -264,10 +264,20 @@ function layout(page) {
 
   await test('Full Names is carried in the URL', async () => {
     await gotoPackets(page);
-    await page.click('#fullNamesToggle');
-    await page.waitForTimeout(300);
-    const hash = await page.evaluate(() => location.hash);
-    assert(/[?&]fullNames=1\b/.test(hash), `toggle did not put fullNames=1 in the URL: ${hash}`);
+    // Don't assume the starting state: the previous test turned Full Names on,
+    // and the in-page setting (not just localStorage) can reach this page's
+    // URL before gotoPackets reloads it. Check both directions instead.
+    const state = () => page.evaluate(() => ({
+      on: document.getElementById('pktTable').classList.contains('pkt-full-names'),
+      inUrl: /[?&]fullNames=1\b/.test(location.hash),
+      hash: location.hash,
+    }));
+    for (let n = 0; n < 2; n++) {
+      await page.click('#fullNamesToggle');
+      await page.waitForTimeout(300);
+      const s = await state();
+      assert(s.on === s.inUrl, `Full Names is ${s.on ? 'on' : 'off'} but the URL says otherwise: ${s.hash}`);
+    }
     // A shared link switches the mode on for a visitor whose own pref is off.
     await page.evaluate(() => { localStorage.setItem('meshcore-full-names', 'false'); });
     await page.goto(BASE + '/#/packets?timeWindow=10080&fullNames=1', { waitUntil: 'domcontentloaded' });
