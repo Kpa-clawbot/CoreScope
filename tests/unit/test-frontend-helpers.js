@@ -7029,28 +7029,28 @@ console.log('\n=== roles.js: recent advert groups (#2073) ===');
     assert.strictEqual(JSON.stringify(adverts), before);
     assert.deepStrictEqual(Array.from(ctx.groupRecentAdverts([]), group => group.kind), ['flood', 'zero-hop']);
   });
-  test('flood routes stay flood with empty paths, including transport and string routes', () => {
+  test('legacy flood routes without accumulated evidence stay unknown', () => {
     for (const route of [0, 1, '0', '1']) {
-      assert.strictEqual(classify({ route_type: route, path_json: '[]' }), 'flood');
+      assert.strictEqual(classify({ route_type: route, path_json: '[]' }), 'other');
     }
-    assert.strictEqual(classify({ raw_hex: '110000' }), 'flood');
-    assert.strictEqual(classify({ raw_hex: '10010203040000' }), 'flood');
+    assert.strictEqual(classify({ raw_hex: '110000' }), 'other');
+    assert.strictEqual(classify({ raw_hex: '10010203040000' }), 'other');
   });
-  test('zero-hop requires direct routing and affirmative empty-path evidence', () => {
+  test('legacy direct routes cannot prove zero-hop from a selected empty path', () => {
     for (const route of [2, 3, '2', '3']) {
-      assert.strictEqual(classify({ route_type: route, path_json: '[]' }), 'zero-hop');
-      assert.strictEqual(classify({ route_type: route, path_json: [] }), 'zero-hop');
+      assert.strictEqual(classify({ route_type: route, path_json: '[]' }), 'other');
+      assert.strictEqual(classify({ route_type: route, path_json: [] }), 'other');
       assert.strictEqual(classify({ route_type: route }), 'other');
       assert.strictEqual(classify({ route_type: route, path_json: '["ab"]' }), 'other');
     }
-    assert.strictEqual(classify({ route_type: null, raw_hex: '120000' }), 'zero-hop');
-    assert.strictEqual(classify({ raw_hex: '13010203040000' }), 'zero-hop');
+    assert.strictEqual(classify({ route_type: null, raw_hex: '120000' }), 'other');
+    assert.strictEqual(classify({ raw_hex: '13010203040000' }), 'other');
   });
-  test('raw transmission path takes precedence over observation path', () => {
+  test('neither canonical transmission nor selected observation path fills missing evidence', () => {
     assert.strictEqual(classify({ route_type: 2, raw_hex: '1201ab00', path_json: '[]' }), 'other');
-    assert.strictEqual(classify({ route_type: 2, raw_hex: '120000', path_json: '["ab"]' }), 'zero-hop');
+    assert.strictEqual(classify({ route_type: 2, raw_hex: '120000', path_json: '["ab"]' }), 'other');
     assert.strictEqual(classify({ route_type: 3, raw_hex: '130002030401ab00', path_json: '[]' }), 'other');
-    assert.strictEqual(classify({ route_type: 1, raw_hex: '114000' }), 'flood');
+    assert.strictEqual(classify({ route_type: 1, raw_hex: '114000' }), 'other');
     assert.strictEqual(classify({ route_type: 2, raw_hex: '124000' }), 'other');
   });
   test('unknown, malformed and contradictory routing is never guessed', () => {
@@ -7070,11 +7070,11 @@ console.log('\n=== roles.js: recent advert groups (#2073) ===');
   test('grouping preserves every row, per-group order and sample counts without mutation', () => {
     assert.strictEqual(typeof ctx.groupRecentAdverts, 'function', 'shared recent-advert grouping must exist');
     const packets = [
-      { hash: 'a', route_type: 2, path_json: '[]' },
-      { hash: 'b', route_type: 1 },
+      { hash: 'a', advert_kind: 'zero_hop', route_type: 2, path_json: '[]' },
+      { hash: 'b', advert_kind: 'flood', route_type: 1 },
       { hash: 'c', route_type: null },
-      { hash: 'd', route_type: 0 },
-      { hash: 'e', route_type: 3, path_json: '[]' },
+      { hash: 'd', advert_kind: 'flood', route_type: 0 },
+      { hash: 'e', advert_kind: 'zero_hop', route_type: 3, path_json: '[]' },
       { hash: 'f', route_type: 2, path_json: '["ab"]' },
     ];
     const before = JSON.stringify(packets);
