@@ -39,6 +39,9 @@ const multiSelectSrc = slice('// --- Observer multi-select ---', '// --- Channel
 const clearSrc = slice('// --- Clear filters button ---', '// Show clear button if page loaded');
 // The real updatePacketsUrl(), which shows or hides the Clear button.
 const urlSrc = slice('function buildPacketsQuery(', 'let filtersBuilt = false;');
+const appSrc = fs.readFileSync(REPO_ROOT + '/public/app.js', 'utf-8');
+const hashParamsSrc = appSrc.match(/function getHashParams\(\) \{[\s\S]*?\n\}/)[0];
+const initParamsSrc = slice('// Parse ?obs=OBSERVER_ID from routeParam', 'app.innerHTML =');
 
 function makeEl(id) {
   const listeners = {};
@@ -69,7 +72,7 @@ function makeEl(id) {
   return el;
 }
 
-function setup() {
+function setup(hash = '#/packets', initialFilters = {}) {
   const elements = {};
   // #observerList and #observerSearchInput are not in packets.js yet. The
   // observer search PR (#1884) renders the observer rows into #observerList
@@ -93,11 +96,11 @@ function setup() {
   const observers = [{ id: 'obsA', name: 'Observer A' }, { id: 'obsB', name: 'Observer B' }];
   const observerMap = new Map(observers.map((o) => [o.id, o]));
   const SHORT_BY_ID = { 4: 'ADVERT', 5: 'GRP_TXT' };
-  const filters = { myNodes: false };
+  const filters = { myNodes: false, ...initialFilters };
   const escapeHtml = (s) => String(s);
   const RegionFilter = { setSelected() {}, getRegionParam: () => '' };
-  const location = { hash: '#/packets' };
-  const history = { replaceState() {} };
+  const location = { hash };
+  const history = { replaceState(_state, _title, url) { location.hash = url; } };
   const noop = () => {};
 
   const run = new Function(
@@ -105,9 +108,10 @@ function setup() {
     'RegionFilter', 'renderTableRows', 'loadPackets',
     '_rebuildObserverMenu', '_observerFilterSet', 'savedTimeWindowMin', 'DEFAULT_TIME_WINDOW',
     'location', 'history', 'window', '_packetSortColumn', '_packetSortDirection',
-    urlSrc + '\n' + multiSelectSrc + '\n' + clearSrc
+    hashParamsSrc + '\n' + urlSrc + '\n' + multiSelectSrc + '\n' + clearSrc + '\n' +
+    'updatePacketsUrl(); return { updatePacketsUrl, buildPacketsQuery };'
   );
-  run(filters, observers, observerMap, SHORT_BY_ID, escapeHtml, document, localStorage,
+  const actions = run(filters, observers, observerMap, SHORT_BY_ID, escapeHtml, document, localStorage,
     RegionFilter, noop, noop, null, null, 15, 15,
     location, history, {}, null, null);
 
@@ -128,7 +132,7 @@ function setup() {
     return boxes(menuId).find((c) => c.dataset[attr] === '__all__');
   }
   return {
-    filters, elements, storage, boxes,
+    filters, elements, storage, boxes, location, ...actions,
     clear: () => elements.clearFiltersBtn.fire('click'),
     pickObserver: (id) => toggle('observerMenu', 'obsId', id, true),
     pickType: (id) => toggle('typeMenu', 'typeId', id, true),
@@ -202,6 +206,79 @@ test('observer only: Clear button is shown once an observer is picked, hidden af
   assert.strictEqual(s.elements.clearFiltersBtn.style.display, '', 'Clear button hidden while only an observer filter is active');
   s.clear();
   assert.strictEqual(s.elements.clearFiltersBtn.style.display, 'none', 'Clear button still shown after Clear');
+});
+
+for (const route of ['#/packets/aabbccddeeff0011', '#/packets/id/42']) {
+  test('#2091: initial URL rewrite preserves observation on ' + route, () => {
+    const s = setup(route + '?obs=123');
+    assert.strictEqual(s.location.hash, route + '?obs=123');
+    assert.strictEqual(s.elements.clearFiltersBtn.style.display, 'none', 'observation is not a filter');
+  });
+}
+
+test('#2091: type and observer changes preserve detail selection and canonical hash', () => {
+  const route = '#/packets/aabbccddeeff0011';
+  const s = setup(route + '?obs=123', { hash: 'aabbccddeeff0011' });
+  s.pickType('4');
+  s.pickObserver('obsA');
+  s.pickObserver('obsB');
+  const params = new URLSearchParams(s.location.hash.split('?')[1]);
+  assert.strictEqual(params.get('obs'), '123');
+  assert.strictEqual(params.getAll('obs').length, 1);
+  assert.strictEqual(params.get('observer'), 'obsA,obsB');
+  assert.strictEqual(params.has('hash'), false, 'path hash must not be duplicated as a filter');
+  assert.strictEqual(s.location.hash.split('?')[0], route);
+});
+
+test('#2091: Clear removes filters but keeps the current observation detail', () => {
+  const route = '#/packets/aabbccddeeff0011';
+  const s = setup(route + '?obs=123', { hash: 'aabbccddeeff0011' });
+  s.pickObserver('obsA');
+  s.pickType('4');
+  s.clear();
+  assert.strictEqual(s.location.hash, route + '?obs=123');
+  assert.strictEqual(s.elements.clearFiltersBtn.style.display, 'none');
+  assert.strictEqual(s.observerAllRow().checked, true);
+  assert.strictEqual(s.typeAllRow().checked, true);
+});
+
+test('#2091: encoded values survive repeated filter rewrites without duplicate obs', () => {
+  const s = setup('#/packets/id/42?obs=row%2B%26%3D%20%3F&obs=discarded', {
+    node: 'node +&=', channel: 'channel +&=', _filterExpr: 'name == "A & B"',
+  });
+  s.pickObserver('obsA');
+  s.updatePacketsUrl();
+  const params = new URLSearchParams(s.location.hash.split('?')[1]);
+  assert.deepStrictEqual(params.getAll('obs'), ['row+&= ?']);
+  assert.strictEqual(params.get('node'), s.filters.node);
+  assert.strictEqual(params.get('channel'), s.filters.channel);
+  assert.strictEqual(params.get('filter'), s.filters._filterExpr);
+  assert.strictEqual(params.get('observer'), 'obsA');
+});
+
+test('#2091: returning to list or selecting another packet does not resurrect stale obs', () => {
+  const s = setup('#/packets/aabbccddeeff0011?obs=123');
+  for (const route of ['#/packets', '#/packets?obs=123', '#/packets/1122334455667788']) {
+    s.location.hash = route;
+    s.pickType('4');
+    assert.strictEqual(new URLSearchParams(s.location.hash.split('?')[1]).has('obs'), false, route);
+  }
+});
+
+test('#2091: list query builder never inherits detail observation', () => {
+  const s = setup('#/packets/aabbccddeeff0011?obs=123');
+  assert.strictEqual(s.buildPacketsQuery(60, 'region +&=', false), '?timeWindow=60&region=region%20%2B%26%3D');
+});
+
+test('#2091: init restores obs from the hash after router strips the query', () => {
+  const readInitialObservation = new Function('location', 'routeParam',
+    'let directObsId = "stale", directPacketId = null, directPacketHash = null; ' +
+    'let savedTimeWindowMin = 15, _pendingUrlRegion = null; const filters = {}, window = {}; ' +
+    hashParamsSrc + '\n' + initParamsSrc + '\nreturn directObsId;');
+  for (const route of ['aabbccddeeff0011', 'id/42']) {
+    assert.strictEqual(readInitialObservation({ hash: '#/packets/' + route + '?obs=123' }, route), '123');
+    assert.strictEqual(readInitialObservation({ hash: '#/packets/' + route }, route), null);
+  }
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

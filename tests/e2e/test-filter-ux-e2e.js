@@ -173,6 +173,60 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     await page.evaluate(() => localStorage.removeItem('corescope_saved_filters_v1'));
   });
 
+  // Reuse the real three-observation transmission seeded by deploy.yml for
+  // #1486. Missing fixture data must fail, never silently skip this regression.
+  for (const routeKind of ['hash', 'id']) {
+    await step('#2091: ' + routeKind + ' observation deep link survives filters and refresh', async () => {
+      const response = await ctx.request.get(BASE + '/api/packets/fae0c9e6d357a814');
+      assert(response.ok(), '#1486 grouped packet fixture is required');
+      const detail = await response.json();
+      assert(detail.packet && detail.observations && detail.observations.length > 1,
+        'fixture must expose a packet with at least two observations');
+      const observation = detail.observations[1];
+      assert(String(observation.id) !== String(detail.observations[0].id), 'observation IDs must differ');
+
+      const detailContext = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+      try {
+        const detailPage = await detailContext.newPage();
+        const route = routeKind === 'hash' ? detail.packet.hash : 'id/' + detail.packet.id;
+        await detailPage.goto(BASE + '/#/packets/' + route + '?obs=' + observation.id,
+          { waitUntil: 'domcontentloaded' });
+
+        async function assertSelection(stage) {
+          await detailPage.waitForSelector('#pktRight .detail-obs-row.observation-current', { state: 'attached' });
+          const selected = await detailPage.locator('#pktRight .observation-current').getAttribute('data-obs-id');
+          assert(selected === String(observation.id), stage + ': selected observation changed to ' + selected);
+          const hash = new URL(detailPage.url()).hash;
+          const params = new URLSearchParams(hash.split('?')[1] || '');
+          assert(params.get('obs') === String(observation.id), stage + ': obs missing from ' + hash);
+          assert(params.getAll('obs').length === 1, stage + ': duplicated observation parameter');
+          if (routeKind === 'hash') assert(!params.has('hash'), stage + ': hash duplicated in query');
+        }
+
+        await assertSelection('initial load');
+        await detailPage.click('#typeTrigger');
+        await detailPage.locator('#typeMenu input[data-type-id="' + detail.packet.payload_type + '"]').check();
+        await assertSelection('type filter');
+        await detailPage.click('#observerTrigger');
+        await detailPage.locator('#observerMenu input[data-obs-id=' + JSON.stringify(observation.observer_id) + ']').check();
+        await assertSelection('observer filter');
+        await detailPage.click('#observerTrigger');
+        await detailPage.selectOption('#fTimeWindow', '60');
+        await assertSelection('time-window filter');
+        await detailPage.reload({ waitUntil: 'load' });
+        await assertSelection('refresh');
+        await detailPage.click('#clearFiltersBtn');
+        await assertSelection('Clear filters');
+        const params = new URLSearchParams(new URL(detailPage.url()).hash.split('?')[1]);
+        assert(!params.has('observer') && !params.has('timeWindow'), 'Clear must still remove filters');
+        await detailPage.reload({ waitUntil: 'load' });
+        await assertSelection('refresh after Clear');
+      } finally {
+        await detailContext.close();
+      }
+    });
+  }
+
   await browser.close();
 
   console.log(`\n=== Results: passed ${passed} failed ${failed} ===`);
