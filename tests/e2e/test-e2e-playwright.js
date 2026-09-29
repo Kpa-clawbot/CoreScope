@@ -65,7 +65,7 @@ async function run() {
 
   console.log(`\nRunning E2E tests against ${BASE}\n`);
 
-  // Synthetic protocol boundaries exercise both real node renderers at desktop/mobile sizes.
+  // API contract fixtures exercise both real node renderers at desktop/mobile sizes.
   for (const width of [1280, 375]) {
     await test(`#2073 recent adverts grouped in both node views at ${width}px`, async () => {
       const fixtureContext = await browser.newContext({ viewport: { width, height: 900 } });
@@ -74,13 +74,17 @@ async function run() {
       const node = { public_key: pubkey, name: 'Advert fixture', role: 'repeater',
         last_seen: new Date().toISOString(), advert_count: 900 };
       const routes = [
-        { route_type: 1, raw_hex: '110000' },
-        { route_type: 2, raw_hex: '120000' },
-        { route_type: 0, raw_hex: '10010203040000' },
-        { route_type: 3, raw_hex: '13010203040000' },
-        { route_type: 2, raw_hex: '1201ab00', path_json: '[]' },
+        { advert_kind: 'flood', route_type: 1, raw_hex: '110000' },
+        { advert_kind: 'zero_hop', route_type: 2, raw_hex: '120000' },
+        { advert_kind: 'flood', route_type: 0, raw_hex: '10010203040000' },
+        { advert_kind: 'zero_hop', route_type: 3, raw_hex: '13010203040000' },
+        { advert_kind: 'other', route_type: 2, raw_hex: '1201ab00', path_json: '[]' },
         { route_type: null, raw_hex: null },
         { route_type: 2, raw_hex: '1200zz' },
+        { advert_kind: 'mixed', route_type: 1, raw_hex: '110000' },
+        { advert_kind: 'mixed', route_type: 2, raw_hex: '120000' },
+        { route_type: 1, raw_hex: '110000' },
+        { advert_kind: 'future_kind', route_type: 2, raw_hex: '120000' },
       ];
       let adverts = routes.map((route, i) => ({ ...route, hash: String(i + 1).repeat(16),
         timestamp: new Date(Date.now() - i * 60000).toISOString(), payload_type: 4,
@@ -115,9 +119,10 @@ async function run() {
               text: el.textContent,
               overflow: el.scrollWidth > el.clientWidth + 1,
             })));
-            assert(groups.length === (empty ? 2 : 3), `Expected ${empty ? 2 : 3} advert groups, got ${groups.length}`);
-            const expected = empty ? [[], []] : [[0, 2], [1, 3], [4, 5, 6]];
-            const labels = ['Flood adverts', 'Zero-hop adverts', 'Other / unknown adverts'];
+            assert(groups.length === (empty ? 2 : 4), `Expected ${empty ? 2 : 4} advert groups, got ${groups.length}`);
+            const expected = empty ? [[], []] : [[0, 2], [7, 8], [1, 3], [4, 5, 6, 9, 10]];
+            const labels = empty ? ['Flood adverts', 'Zero-hop adverts'] : ['Flood adverts', 'Mixed flood / zero-hop adverts', 'Zero-hop adverts', 'Other / unknown adverts'];
+            assert(groups.reduce((count, group) => count + group.rows.length, 0) === adverts.length, 'Each advert must appear exactly once');
             expected.forEach((indices, i) => {
               assert(groups[i].heading === `${labels[i]} (${indices.length})`, `Wrong sample count: ${groups[i].heading}`);
               assert(JSON.stringify(groups[i].rows.map(row => row.href)) === JSON.stringify(indices.map(j => '#/packets/' + adverts[j].hash)), 'Advert order or analyze links changed');
@@ -132,6 +137,8 @@ async function run() {
             const heading = fullView ? fixturePage.locator('#node-packets h4') : fixturePage.locator('#advertTimeline').locator('..').locator('h4');
             assert(await heading.textContent() === `Recent Adverts (${adverts.length})`, 'Recent Adverts count must reflect sample, not lifetime');
             assert((await heading.getAttribute('title')).includes('originated'), 'Existing origin tooltip lost');
+            const explanation = await heading.getAttribute('title');
+            assert(explanation.includes('available observations') && explanation.includes('older history may be incomplete'), 'Grouping must explain the available-evidence limit');
           }
         }
       } finally {

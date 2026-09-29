@@ -6991,6 +6991,44 @@ console.log('\n=== roles.js: recent advert groups (#2073) ===');
     assert.strictEqual(typeof ctx.classifyRecentAdvert, 'function', 'shared recent-advert classifier must exist');
     return ctx.classifyRecentAdvert(packet);
   }
+  test('accumulated mixed evidence wins for the same hash in either arrival order', () => {
+    for (const canonical of [{ route_type: 1, raw_hex: '110000' }, { route_type: 2, raw_hex: '120000' }]) {
+      const advert = { ...canonical, hash: 'same-advert', advert_kind: 'mixed', path_json: '[]' };
+      assert.strictEqual(classify(advert), 'mixed', 'first received frame must not override accumulated evidence');
+      const groups = ctx.groupRecentAdverts([advert]);
+      assert.strictEqual(groups.reduce((n, group) => n + group.adverts.length, 0), 1, 'mixed advert must not be counted twice');
+      const mixed = groups.find(group => group.kind === 'mixed');
+      assert.ok(mixed, 'mixed group must exist');
+      assert.strictEqual(mixed.adverts[0], advert, 'row metadata must be retained');
+      assert.deepStrictEqual(Array.from(groups, group => group.kind), ['flood', 'mixed', 'zero-hop']);
+      assert.strictEqual(mixed.label, 'Mixed flood / zero-hop adverts');
+    }
+  });
+  test('authoritative advert kind does not depend on canonical route or path', () => {
+    for (const [advert_kind, expected] of [['flood', 'flood'], ['zero_hop', 'zero-hop'], ['mixed', 'mixed'], ['other', 'other']]) {
+      assert.strictEqual(classify({ advert_kind }), expected);
+      assert.strictEqual(classify({ advert_kind, route_type: 1, raw_hex: '110000', path_json: '[]' }), expected);
+      assert.strictEqual(classify({ advert_kind, route_type: 2, raw_hex: '120000', path_json: '["ab"]' }), expected);
+    }
+  });
+  test('legacy and unrecognized advert evidence stays unknown despite known-looking frames', () => {
+    for (const advert_kind of [undefined, null, '', 'zero-hop', 'future_kind', 1, false, ['flood']]) {
+      for (const canonical of [{ route_type: 1, raw_hex: '110000' }, { route_type: 2, raw_hex: '120000' }]) {
+        assert.strictEqual(classify({ ...canonical, advert_kind, path_json: '[]', observations: [{ raw_hex: '110000' }, { raw_hex: '120000' }] }), 'other');
+      }
+    }
+  });
+  test('mixed groups preserve per-group order and hide only empty optional groups', () => {
+    const adverts = ['mixed', 'zero_hop', 'flood', 'mixed', 'other'].map((advert_kind, i) => ({ advert_kind, hash: String(i) }));
+    const before = JSON.stringify(adverts);
+    const groups = ctx.groupRecentAdverts(adverts);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(groups.map(group => [group.kind, group.adverts.map(advert => advert.hash)]))), [
+      ['flood', ['2']], ['mixed', ['0', '3']], ['zero-hop', ['1']], ['other', ['4']],
+    ]);
+    assert.strictEqual(groups.reduce((n, group) => n + group.adverts.length, 0), adverts.length);
+    assert.strictEqual(JSON.stringify(adverts), before);
+    assert.deepStrictEqual(Array.from(ctx.groupRecentAdverts([]), group => group.kind), ['flood', 'zero-hop']);
+  });
   test('flood routes stay flood with empty paths, including transport and string routes', () => {
     for (const route of [0, 1, '0', '1']) {
       assert.strictEqual(classify({ route_type: route, path_json: '[]' }), 'flood');
