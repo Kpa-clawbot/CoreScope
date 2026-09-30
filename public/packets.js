@@ -1035,14 +1035,18 @@
     }
   }
 
-  function renderHop(h, observerId) {
+  function renderHop(h, observerId, opts) {
     // Use per-packet cache key if observer context available (ambiguous hops differ by region)
     const cacheKey = hopCacheKey(h, observerId);
     const entry = hopNameCache[cacheKey] || hopNameCache[h];
-    return HopDisplay.renderHop(h, entry, { hexMode: showHexHashes });
+    return HopDisplay.renderHop(h, entry, Object.assign({ hexMode: showHexHashes }, opts || {}));
   }
 
-  function renderPath(hops, observerId) {
+  // #2097 — opts.summary renders the list form: names without a badge on every
+  // hop, and one indicator for the whole path. A row with five 1-byte hops was
+  // five warning triangles, which is noise in a table; the detail pane keeps
+  // the per-hop badges, because that is where the question gets answered.
+  function renderPath(hops, observerId, opts) {
     if (!hops || !hops.length) return '—';
     // #1633 — render-time filter (default OFF). Applies at every consumer
     // because every site funnels through this function (group header, child
@@ -1051,7 +1055,22 @@
       ? window.MC_filterPathHops(hops)
       : hops;
     if (!filtered.length) return '— <span class="text-muted" title="All path hops were 1-byte and are hidden by the customizer toggle">(1-byte filtered)</span>';
-    return filtered.map(h => renderHop(h, observerId)).join('<span class="arrow">→</span>');
+    const summary = !!(opts && opts.summary);
+    const body = filtered
+      .map(h => renderHop(h, observerId, summary ? { badge: false } : null))
+      .join('<span class="arrow">→</span>');
+    if (!summary) return body;
+
+    let uncertain = 0;
+    for (const h of filtered) {
+      const entry = hopNameCache[hopCacheKey(h, observerId)] || hopNameCache[h];
+      if (entry && entry.ambiguous) uncertain++;
+    }
+    if (!uncertain) return body;
+    const label = uncertain + ' of ' + filtered.length + ' hops have more than one candidate';
+    return body + ' <span class="hop-path-warn status-warn" title="' + escapeHtml(label) +
+      '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' +
+      uncertain + '</span>';
   }
 
   let directPacketId = null;
@@ -2419,7 +2438,7 @@
     const groupRegion = headerObserverId ? (observerMap.get(headerObserverId)?.iata || '') : '';
     let groupPath = [];
     try { groupPath = JSON.parse(headerPathJson || '[]'); } catch {}
-    const groupPathStr = renderPath(groupPath, headerObserverId);
+    const groupPathStr = renderPath(groupPath, headerObserverId, { summary: true });
     const groupTypeName = payloadTypeName(p.payload_type);
     const groupTypeClass = payloadTypeColor(p.payload_type);
     const groupSize = p.raw_hex ? Math.floor(p.raw_hex.length / 2) : 0;
@@ -2470,7 +2489,7 @@
             : (childPath.length > 0 ? childPath[0].length / 2 : 0));
         const _cHashSizeTitle = _cIsTrace ? ' title="TRACE path bytes are SNR readings, not hash prefixes — see sidebar decoder for actual hop count"' : '';
         const childRegion = c.observer_id ? (observerMap.get(c.observer_id)?.iata || '') : '';
-        const childPathStr = renderPath(childPath, c.observer_id);
+        const childPathStr = renderPath(childPath, c.observer_id, { summary: true });
         const _childHashStripe = _hashStripeStyle(c.hash || p.hash);
         html += `<tr class="group-child" data-id="${c.id}" data-hash="${c.hash || ''}" data-action="select-observation" data-value="${c.id}" data-parent-hash="${p.hash}" data-entry-idx="${entryIdx}" tabindex="0" role="row"${_childHashStripe ? ' style="' + _childHashStripe + '"' : ''}>
               <td class="col-expand"></td><td class="col-region">${childRegion ? `<span class="badge-region">${childRegion}</span>` : '—'}</td>
@@ -2505,7 +2524,7 @@
     const _flatIsTrace = p.payload_type === 9;
     const hashBytes = _flatIsTrace ? '—' : (((parseInt(p.raw_hex?.slice(_flatPlOff * 2, _flatPlOff * 2 + 2), 16) || 0) >> 6) + 1);
     const _flatHashSizeTitle = _flatIsTrace ? ' title="TRACE path bytes are SNR readings, not hash prefixes — see sidebar decoder for actual hop count"' : '';
-    const pathStr = renderPath(pathHops, p.observer_id);
+    const pathStr = renderPath(pathHops, p.observer_id, { summary: true });
     const detail = getDetailPreview(decoded);
     const _flatHashStripe = _hashStripeStyle(p.hash);
     const _flatStyle = _flatHashStripe + _chanStyle;

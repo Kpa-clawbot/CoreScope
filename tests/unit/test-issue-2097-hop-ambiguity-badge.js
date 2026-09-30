@@ -131,5 +131,51 @@ console.log('\n=== #2097: packets.js never resolves a hop without its observer =
     'resolveHops writes the per-observer cache key that renderHop reads');
 }
 
+console.log('\n=== #2097: a badge belongs to the pill on its left ===');
+
+{
+  // The badge is a sibling after the pill, so in "A [8] -> B [6]" a reader
+  // cannot tell which name the 8 qualifies. Pill and badge must render as one
+  // unbreakable group, with the arrow clearly outside it.
+  const withCtx = HopResolver.resolve(['ef'], null, null, null, null, OBSERVER_ID)['ef'];
+  const html = HopDisplay.renderHop('ef', withCtx, {});
+  assert(/class="hop-group"/.test(html), 'pill and badge are wrapped in one group');
+  const m = html.match(/<span class="hop-group">([\s\S]*)<\/span>$/);
+  assert(m && /hop-link/.test(m[1]) && /hop-conflict-btn/.test(m[1]),
+    'the group contains both the pill and its badge');
+}
+
+{
+  // An unambiguous hop needs no wrapper: the group exists to tie a badge to its
+  // pill, and wrapping every hop would change layout for nothing.
+  const one = HopResolver.resolve(['e7aa'], null, null, null, null, OBSERVER_ID)['e7aa'];
+  const html = HopDisplay.renderHop('e7aa', one, {});
+  assert(!/hop-group/.test(html), 'a hop with no badge is not wrapped');
+}
+
+{
+  // The packets list wants the names without a badge on every hop.
+  const withCtx = HopResolver.resolve(['ef'], null, null, null, null, OBSERVER_ID)['ef'];
+  const plain = HopDisplay.renderHop('ef', withCtx, { badge: false });
+  assert(!/hop-conflict-btn/.test(plain), 'badge:false suppresses the badge');
+  assert(/hop-ambiguous/.test(plain),
+    'the hop keeps its ambiguous class, so CSS can still mark it');
+  assert(/NEAR-|FAR-/.test(plain), 'the name is still rendered');
+}
+
+console.log('\n=== #2097: the list summarises, the detail pane does not ===');
+
+{
+  const src = fs.readFileSync(REPO_ROOT + '/public/packets.js', 'utf8');
+  assert(/function renderPath\(hops, observerId, opts\)/.test(src),
+    'renderPath takes an options object');
+  assert(/summary: true/.test(src),
+    'at least one call site asks for the summarised form');
+  assert(/renderPath\(pathHops, effectivePkt\.observer_id\)/.test(src),
+    'the detail pane calls renderPath without summary, so it keeps per-hop badges');
+  assert(/hop-path-warn/.test(src),
+    'the summarised form emits a single per-path indicator');
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
