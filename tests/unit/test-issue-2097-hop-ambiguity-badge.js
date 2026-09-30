@@ -177,5 +177,46 @@ console.log('\n=== #2097: the list summarises, the detail pane does not ===');
     'the summarised form emits a single per-path indicator');
 }
 
+console.log('\n=== #2097: the observer position anchors the pick ===');
+
+{
+  // Measured on the live deployment: 0 of 42 observers have their IATA code in
+  // /api/iata-coords, so nodeInRegion() always returns null and the 300 km
+  // filter narrows nothing. 27 of 42 do carry their own lat/lon, and resolve()
+  // already accepts them as the backward anchor for pickByAffinity.
+  //
+  // FAR-AWAY is listed first on purpose: with no anchor the resolver has no
+  // context and keeps candidate order, which is the shape of the live bug.
+  const far   = { public_key: 'efbf0eeacc', name: 'FAR-AWAY', role: 'repeater', lat: 50.87, lon: 5.52 };
+  const near1 = { public_key: 'ef0069c0aa', name: 'NEAR-ONE', role: 'repeater', lat: 51.08, lon: 3.78 };
+  const near2 = { public_key: 'ef86f6a5bb', name: 'NEAR-TWO', role: 'repeater', lat: 51.15, lon: 3.70 };
+  HopResolver.init([far, near1, near2], {
+    observers: [{ id: OBSERVER_ID, iata: IATA }],
+    iataCoords: {},   // deliberately empty: this is the live state
+  });
+
+  const OBS_LAT = 51.21, OBS_LON = 3.44;   // the observer that heard it
+
+  const without = HopResolver.resolve(['ef'], null, null, null, null, OBSERVER_ID)['ef'];
+  const withPos = HopResolver.resolve(['ef'], null, null, OBS_LAT, OBS_LON, OBSERVER_ID)['ef'];
+
+  assert(without.name === 'FAR-AWAY',
+    'without an anchor the resolver keeps candidate order (got ' + without.name + ')');
+  assert(withPos.name !== 'FAR-AWAY',
+    'the observer position rules out the distant candidate (got ' + withPos.name + ')');
+  assert(withPos.ambiguous === true,
+    'it is still reported as ambiguous: a better pick is not a certain one');
+  assert((withPos.conflicts || []).length === 3,
+    'every candidate is still listed for the reader');
+}
+
+{
+  const src = fs.readFileSync(REPO_ROOT + '/public/packets.js', 'utf8');
+  assert(/HopResolver\.resolve\(unknown, null, null, obsLat, obsLon, observerId\)/.test(src),
+    'resolveHops passes the observer position as the anchor');
+  assert(/observerMap/.test(src.slice(src.indexOf('async function resolveHops'), src.indexOf('async function resolveHopsForPackets'))),
+    'resolveHops looks the observer up to find its position');
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

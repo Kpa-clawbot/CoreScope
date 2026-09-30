@@ -956,10 +956,16 @@
           api('/observers', { ttl: 60000 }),
           api('/iata-coords', { ttl: 300000 }).catch(() => ({ coords: {} })),
         ]);
+        const obsList = obsData.observers || obsData || [];
         HopResolver.init(nodeData.nodes || [], {
-          observers: obsData.observers || obsData || [],
+          observers: obsList,
           iataCoords: coordData.coords || {},
         });
+        // #2097 — seed the lookup resolveHops() needs for the anchor, in case a
+        // render gets here before loadObservers() has run.
+        if (!observerMap || !observerMap.size) {
+          observerMap = new Map(obsList.map(o => [o.id, o]));
+        }
       } catch (e) {
         // Non-fatal: hops will render as unresolved hex prefixes until a later
         // call succeeds. Log so a paginated /api/nodes failure isn't silent.
@@ -986,7 +992,15 @@
     const unknown = hops.filter(h => !(hopCacheKey(h, observerId) in hopNameCache));
     if (!unknown.length) return;
     await ensureHopResolver();
-    const resolved = HopResolver.resolve(unknown, null, null, null, null, observerId) || {};
+    // #2097 — the observer's own position, as the anchor at the receiving end.
+    // The IATA path is dead weight here: measured on the live deployment, none
+    // of the 42 observers has its code in /api/iata-coords, so nodeInRegion()
+    // always returns null and the 300 km filter narrows nothing. The lat/lon
+    // the observer already reports does work, and resolve() has always taken it.
+    const obs = observerId && observerMap ? observerMap.get(observerId) : null;
+    const obsLat = obs && Number.isFinite(Number(obs.lat)) ? Number(obs.lat) : null;
+    const obsLon = obs && Number.isFinite(Number(obs.lon)) ? Number(obs.lon) : null;
+    const resolved = HopResolver.resolve(unknown, null, null, obsLat, obsLon, observerId) || {};
     for (const h of unknown) {
       const entry = resolved[h] || null;
       hopNameCache[hopCacheKey(h, observerId)] = entry;
