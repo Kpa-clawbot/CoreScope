@@ -108,6 +108,12 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensureTransmissionsLastSeenColumn(rw, logf); err != nil {
 		return fmt.Errorf("ensure transmissions.last_seen: %w", err)
 	}
+	if err := ensureAdvertEvidence(rw); err != nil {
+		return fmt.Errorf("ensure advert route evidence: %w", err)
+	}
+	// Advert evidence is intentionally not required by AssertReady: a legacy
+	// read-only server reports unknown until this table/backfill is available,
+	// and re-probes absence instead of caching the startup race permanently.
 	return nil
 }
 

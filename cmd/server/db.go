@@ -17,6 +17,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/meshcore-analyzer/dbschema"
 	"github.com/meshcore-analyzer/geofilter"
+	"github.com/meshcore-analyzer/packetpath"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -37,6 +38,8 @@ const routeTypeNonTransportSQL = "route_type IN (1, 2)"
 
 // DB wraps a read-only connection to the MeshCore SQLite database.
 type DB struct {
+	advertEvidenceTable     atomic.Bool
+	advertEvidenceReadHook  func() // test-only: immediately before a bulk mask query
 	conn                    *sql.DB
 	path                    string // filesystem path to the database file
 	isV3                    bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
@@ -1290,7 +1293,7 @@ func (db *DB) GetNodeByPubkey(pubkey string) (map[string]interface{}, error) {
 // could attribute its transmissions to a victim by naming itself with the
 // victim's pubkey. Pubkey is unique by design — that's the whole point.
 func (db *DB) GetRecentTransmissionsForNode(pubkey string, limit int) ([]map[string]interface{}, error) {
-	if limit <= 0 {
+	if limit <= 0 || limit > 20 {
 		limit = 20
 	}
 
@@ -1320,6 +1323,20 @@ func (db *DB) GetRecentTransmissionsForNode(pubkey string, limit int) ([]map[str
 				txIDs = append(txIDs, id)
 			}
 			packets = append(packets, p)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	masks, err := db.advertEvidenceForIDs(txIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range packets {
+		if p["payload_type"] == 4 {
+			p["advert_kind"] = packetpath.AdvertKind(masks[p["id"].(int)])
 		}
 	}
 

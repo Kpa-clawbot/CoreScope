@@ -76,6 +76,7 @@ type Store struct {
 	stmtUpdateTxFirstSeen      *sql.Stmt
 	stmtBumpTxLastSeen         *sql.Stmt
 	stmtInsertObservation      *sql.Stmt
+	stmtInsertAdvertEvidence   *sql.Stmt
 	stmtUpsertNode             *sql.Stmt
 	stmtIncrementAdvertCount   *sql.Stmt
 	stmtUpsertObserver         *sql.Stmt
@@ -906,6 +907,10 @@ func applySchema(db *sql.DB) error {
 
 func (s *Store) prepareStatements() error {
 	var err error
+	s.stmtInsertAdvertEvidence, err = s.db.Prepare(insertAdvertEvidenceSQL)
+	if err != nil {
+		return err
+	}
 
 	s.stmtGetTxByHash, err = s.db.Prepare("SELECT id, first_seen FROM transmissions WHERE hash = ?")
 	if err != nil {
@@ -1105,6 +1110,16 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 
 	if !isNew {
 		s.Stats.DuplicateTransmissions.Add(1)
+	}
+	// Capture route evidence BEFORE the observation conflict update can erase
+	// a different route. Duplicate evidence is a read-only indexed probe.
+	if data.PayloadType == 4 {
+		if bit := packetpath.AdvertRouteEvidence(data.RawHex); bit != 0 {
+			if _, err := s.stmtInsertAdvertEvidence.Exec(txID, bit, txID, bit); err != nil {
+				s.Stats.WriteErrors.Add(1)
+				return isNew, fmt.Errorf("record advert route evidence: %w", err)
+			}
+		}
 	}
 
 	// Resolve observer_idx and update last_seen

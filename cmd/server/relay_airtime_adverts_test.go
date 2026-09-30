@@ -9,12 +9,14 @@ import (
 	"time"
 
 	"github.com/meshcore-analyzer/lora"
+	"github.com/meshcore-analyzer/packetpath"
 )
 
 func advertAirtimeTx(id int, route *int, raw string) *StoreTx {
 	tx := makeRelayAirtimeTx(id, PayloadADVERT, 120, 0, fmt.Sprintf("advert-%d", id))
 	tx.RouteType = route
 	tx.RawHex = raw
+	tx.AdvertRouteEvidence = packetpath.AdvertRouteEvidence(raw)
 	return tx
 }
 
@@ -34,14 +36,14 @@ func TestRelayAirtimeShare_AdvertRouting(t *testing.T) {
 		{"three byte zero count", route(2), "1280aa", "[]", "other"},
 		{"direct nonempty original path", route(2), "1201ffaa", "[]", "other"},
 		{"transport direct nonempty original path", route(3), "130000000001ffaa", "[]", "other"},
-		{"unknown route", nil, "1200aa", "[]", "other"},
-		{"invalid route", route(9), "1200aa", "[]", "other"},
+		{"raw evidence without canonical route", nil, "1200aa", "[]", "zero_hop"},
+		{"raw evidence with invalid canonical route", route(9), "1200aa", "[]", "zero_hop"},
 		{"missing raw", route(2), "", "[]", "other"},
 		{"missing path byte", route(2), "12", "[]", "other"},
 		{"truncated transport", route(3), "130000", "[]", "other"},
 		{"missing transport path byte", route(3), "1300000000", "[]", "other"},
 		{"invalid header", route(2), "zz00aa", "[]", "other"},
-		{"conflicting raw route", route(2), "1100aa", "[]", "other"},
+		{"raw evidence overrides canonical route", route(2), "1100aa", "[]", "flood"},
 		{"conflicting raw payload", route(2), "1600aa", "[]", "other"},
 		{"invalid path hex", route(2), "12zzaa", "[]", "other"},
 		{"invalid transport hex", route(3), "13zz00000000aa", "[]", "other"},
@@ -184,6 +186,7 @@ func BenchmarkRelayAirtimeShare30K(b *testing.B) {
 			header += "01020304"
 		}
 		tx.RawHex = header + "00" + strings.Repeat("ab", 120-len(header)/2-1)
+		tx.AdvertRouteEvidence = packetpath.AdvertRouteEvidence(tx.RawHex)
 		packets[i] = tx
 	}
 	store := newRelayAirtimeShareTestStore(packets)

@@ -2082,18 +2082,21 @@ console.log('\n=== Relay airtime advert labels ===');
   vm.runInContext(source.replace("  registerPage('analytics',", "  window.testRelayRenderer = renderRelayAirtimeDumbbell;\n  registerPage('analytics',"), ctx);
   const render = ctx.window.testRelayRenderer;
   const rows = [
-    { payload_type: 'ADVERT', type: 4, advert_kind: 'flood', count: 1, count_pct: 25, score: 100, airtime_pct: 50 },
-    { payload_type: 'ADVERT', type: 4, advert_kind: 'zero_hop', count: 1, count_pct: 25, score: 0, airtime_pct: 0 },
-    { payload_type: 'ADVERT', type: 4, advert_kind: 'other', count: 1, count_pct: 25, score: 100, airtime_pct: 50 },
-    { payload_type: 'ACK', type: 3, count: 1, count_pct: 25, score: 0, airtime_pct: 0 },
+    { payload_type: 'ADVERT', type: 4, advert_kind: 'flood', count: 1, count_pct: 20, score: 100, airtime_pct: 33.333 },
+    { payload_type: 'ADVERT', type: 4, advert_kind: 'zero_hop', count: 1, count_pct: 20, score: 0, airtime_pct: 0 },
+    { payload_type: 'ADVERT', type: 4, advert_kind: 'other', count: 1, count_pct: 20, score: 100, airtime_pct: 33.333 },
+    { payload_type: 'ADVERT', type: 4, advert_kind: 'mixed', count: 1, count_pct: 20, score: 100, airtime_pct: 33.333 },
+    { payload_type: 'ACK', type: 3, count: 1, count_pct: 20, score: 0, airtime_pct: 0 },
   ];
   test('relay chart labels distinguish all advert kinds and retain zero-score rows', () => {
-    const html = render({ rows, total_score: 200 });
-    for (const label of ['Flood adverts', 'Zero-hop adverts', 'Other adverts', 'ACK']) {
+    const html = render({ rows, total_score: 300 });
+    for (const label of ['Flood adverts', 'Zero-hop adverts', 'Other adverts', 'Mixed adverts', 'ACK']) {
       assert.ok(html.includes('>' + label + '</div>'), 'missing chart label: ' + label);
       assert.ok(html.includes('title="' + label + '\n'), 'missing tooltip label: ' + label);
     }
-    assert.strictEqual((html.match(/class="dumbbell-row"/g) || []).length, 4);
+    assert.strictEqual((html.match(/class="dumbbell-row"/g) || []).length, 5);
+    assert.ok(html.includes('Known route evidence'), 'classification must not imply complete history');
+    assert.ok(html.includes('older overwritten observations cannot be recovered'), 'legacy caveat must remain visible');
     assert.ok(html.includes('air 0.0%'), 'zero-relay advert share remains visible');
   });
   test('relay chart supports legacy payload labels and preserves row input', () => {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -342,6 +343,13 @@ func main() {
 	// explicit. Now drain everything the subscription buffered during startup.
 	store.WaitForAsyncMigrations()
 	ingestBuffer.Ready()
+	// History recovery must not join the startup readiness wait above.
+	// Its known evidence is a lower bound: old UPSERTs erased some frames.
+	evidenceCtx, stopEvidenceBackfill := context.WithCancel(context.Background())
+	defer stopEvidenceBackfill()
+	if err := store.RunAsyncMigration(evidenceCtx, "advert_route_evidence_v1", store.backfillAdvertEvidence); err != nil {
+		log.Printf("[migration] scheduling advert evidence backfill: %v", err)
+	}
 	if d := ingestBuffer.Dropped(); d > 0 {
 		log.Printf("[ingest-buffer] write path ready; draining backlog (dropped %d during startup — consider raising ingestBufferSize)", d)
 	} else {
@@ -616,6 +624,7 @@ func main() {
 	<-sig
 
 	log.Println("Shutting down...")
+	stopEvidenceBackfill()
 	retentionTicker.Stop()
 	metricsRetentionTicker.Stop()
 	if packetRetentionTicker != nil {

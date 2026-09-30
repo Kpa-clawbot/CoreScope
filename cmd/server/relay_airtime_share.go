@@ -1,12 +1,12 @@
 package main
 
 import (
-	"encoding/hex"
 	"log"
 	"sort"
 	"time"
 
 	"github.com/meshcore-analyzer/lora"
+	"github.com/meshcore-analyzer/packetpath"
 )
 
 // relay_airtime_share.go — issues #1359 + #1768
@@ -122,41 +122,6 @@ func (s *PacketStore) distinctRelayCount(tx *StoreTx) int {
 	return len(s.resolvedPubkeyReverse[tx.ID])
 }
 
-// relayAdvertKind uses the recorded route and original wire header, never the
-// longest observation's display path. Firmware Mesh::sendZeroHop writes an
-// exactly-zero path byte; sendFlood may also start with no path (Mesh.cpp).
-// Only the fixed header (at most six bytes) is decoded, not the payload.
-func relayAdvertKind(tx *StoreTx) string {
-	if tx.RouteType == nil {
-		return "other"
-	}
-	route := *tx.RouteType
-	if route == RouteFlood || route == RouteTransportFlood {
-		return "flood"
-	}
-	if route != RouteDirect && route != RouteTransportDirect {
-		return "other"
-	}
-	headerLen := 2
-	if isTransportRoute(route) {
-		headerLen += 4
-	}
-	if len(tx.RawHex)%2 != 0 || len(tx.RawHex) <= headerLen*2 {
-		return "other"
-	}
-	var header [6]byte
-	if _, err := hex.Decode(header[:headerLen], []byte(tx.RawHex[:headerLen*2])); err != nil {
-		return "other"
-	}
-	if int(header[0]&3) != route || int((header[0]>>2)&15) != PayloadADVERT {
-		return "other"
-	}
-	if header[headerLen-1] == 0 {
-		return "zero_hop"
-	}
-	return "other"
-}
-
 // computeRelayAirtimeShare aggregates by payload_type, splitting only ADVERT
 // by recorded routing. Other payload-mix analytics retain their usual grouping.
 //
@@ -180,13 +145,22 @@ func (s *PacketStore) computeRelayAirtimeShare(window TimeWindow) map[string]int
 		count int
 		score int64 // sum of ToA(payload) × relays, in nanoseconds
 	}
-	// The additional key has only three possible values, all for ADVERT.
+	// The additional key has four possible values, all for ADVERT.
 	type bucketKey struct {
 		payloadType int
 		advertKind  string
 	}
 	buckets := make(map[bucketKey]*bucket)
-	seenHash := make(map[string]bool, len(s.packets))
+	// Low bits union advert evidence; high bit marks the hash counted below.
+	// Keep the existing first-record score formula, but never first-wins kind.
+	// Evidence describes the hash's known history, like the persisted mask;
+	// the reporting window filters packet eligibility, not its route evidence.
+	seenHash := make(map[string]uint8, len(s.packets))
+	for _, tx := range s.packets {
+		if tx != nil && tx.PayloadType != nil && *tx.PayloadType == PayloadADVERT && tx.Hash != "" {
+			seenHash[tx.Hash] |= tx.AdvertRouteEvidence
+		}
+	}
 	totalCount := 0
 	var totalScore int64
 
@@ -201,15 +175,19 @@ func (s *PacketStore) computeRelayAirtimeShare(window TimeWindow) map[string]int
 		// test fixture have unique hashes so this only collapses true
 		// re-observations of the same packet.
 		if tx.Hash != "" {
-			if seenHash[tx.Hash] {
+			if seenHash[tx.Hash]&128 != 0 {
 				continue
 			}
-			seenHash[tx.Hash] = true
+			seenHash[tx.Hash] |= 128
 		}
 		pt := *tx.PayloadType
 		key := bucketKey{payloadType: pt}
 		if pt == PayloadADVERT {
-			key.advertKind = relayAdvertKind(tx)
+			mask := tx.AdvertRouteEvidence
+			if tx.Hash != "" {
+				mask = seenHash[tx.Hash] & 3
+			}
+			key.advertKind = packetpath.AdvertKind(mask)
 		}
 		b := buckets[key]
 		if b == nil {
@@ -318,12 +296,15 @@ func (s *PacketStore) GetRelayAirtimeShareWithWindow(window TimeWindow) map[stri
 		return out
 	}
 	s.cacheMisses++
+	revision := s.advertEvidenceRevision
 	s.cacheMu.Unlock()
 
 	result := s.computeRelayAirtimeShare(window)
 
 	s.cacheMu.Lock()
-	s.rfCache[cacheKey] = &cachedResult{data: result, expiresAt: time.Now().Add(s.rfCacheTTL)}
+	if revision == s.advertEvidenceRevision {
+		s.rfCache[cacheKey] = &cachedResult{data: result, expiresAt: time.Now().Add(s.rfCacheTTL)}
+	}
 	s.cacheMu.Unlock()
 
 	return result

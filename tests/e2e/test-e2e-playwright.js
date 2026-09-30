@@ -814,11 +814,12 @@ async function run() {
     const chartPage = await context.newPage();
     try {
       await chartPage.route('**/api/analytics/relay-airtime-share*', route => route.fulfill({
-        json: { total_count: 4, total_score: 200, rows: [
-          { payload_type: 'ADVERT', type: 4, advert_kind: 'flood', count: 1, count_pct: 25, score: 100, airtime_pct: 50 },
-          { payload_type: 'ADVERT', type: 4, advert_kind: 'other', count: 1, count_pct: 25, score: 100, airtime_pct: 50 },
-          { payload_type: 'ADVERT', type: 4, advert_kind: 'zero_hop', count: 1, count_pct: 25, score: 0, airtime_pct: 0 },
-          { payload_type: 'ACK', type: 3, count: 1, count_pct: 25, score: 0, airtime_pct: 0 },
+        json: { total_count: 5, total_score: 300, rows: [
+          { payload_type: 'ADVERT', type: 4, advert_kind: 'flood', count: 1, count_pct: 20, score: 100, airtime_pct: 33.333 },
+          { payload_type: 'ADVERT', type: 4, advert_kind: 'other', count: 1, count_pct: 20, score: 100, airtime_pct: 33.333 },
+          { payload_type: 'ADVERT', type: 4, advert_kind: 'zero_hop', count: 1, count_pct: 20, score: 0, airtime_pct: 0 },
+          { payload_type: 'ADVERT', type: 4, advert_kind: 'mixed', count: 1, count_pct: 20, score: 100, airtime_pct: 33.333 },
+          { payload_type: 'ACK', type: 3, count: 1, count_pct: 20, score: 0, airtime_pct: 0 },
         ] },
       }));
       for (const width of [1280, 320]) {
@@ -827,10 +828,11 @@ async function run() {
         await chartPage.reload({ waitUntil: 'domcontentloaded' });
         await chartPage.waitForSelector('.dumbbell-row');
         const labels = await chartPage.locator('.dumbbell-label').allTextContents();
-        assert(JSON.stringify(labels) === JSON.stringify(['Flood adverts', 'Other adverts', 'Zero-hop adverts', 'ACK']), 'advert chart labels: ' + labels.join(', '));
+        assert(JSON.stringify(labels) === JSON.stringify(['Flood adverts', 'Other adverts', 'Zero-hop adverts', 'Mixed adverts', 'ACK']), 'advert chart labels: ' + labels.join(', '));
+        assert((await chartPage.locator('.dumbbell-evidence-note').textContent()).includes('older overwritten observations cannot be recovered'), 'known-evidence caveat is visible');
         const zero = chartPage.locator('.dumbbell-row').filter({ hasText: 'Zero-hop adverts' });
         assert((await zero.textContent()).includes('air 0.0%'), 'zero-relay advert row must remain visible');
-        assert((await zero.getAttribute('title')).includes('Count: 1 (25.00%)'), 'tooltip retains count');
+        assert((await zero.getAttribute('title')).includes('Count: 1 (20.00%)'), 'tooltip retains count');
         const layout = await chartPage.locator('.dumbbell-chart').evaluate(chart => {
           const box = chart.getBoundingClientRect();
           const axisLabels = [...chart.querySelectorAll('.dumbbell-axis span')];
