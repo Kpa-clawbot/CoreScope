@@ -55,6 +55,53 @@
     // can mutate freely without leaking changes back to the input.
     return survivors.length ? restMsgs.concat(survivors) : restMsgs.slice();
   }
+  // #2095 — loadChannels() replaces `channels` with the server snapshot, and
+  // the snapshot knows nothing about state that only ever lived in this tab:
+  // unread counts, and activity the WS handler applied while the request was
+  // in flight. mergeWsAppendedIntoRest above does the same job for `messages`
+  // (#1498); this is its counterpart for `channels`.
+  //
+  // Deliberately enriches ONLY rows the snapshot already contains. Carrying a
+  // missing row over would resurrect channels the region filter just excluded,
+  // which is a worse bug than the one being fixed. A channel genuinely dropped
+  // by a race re-appears on its next packet.
+  //
+  // Returns a fresh array of fresh objects; never aliases or mutates an input.
+  function mergeClientChannelState(freshChannels, prevChannels) {
+    if (!Array.isArray(freshChannels)) return [];
+    if (!Array.isArray(prevChannels) || prevChannels.length === 0) {
+      return freshChannels.map(function (c) { return Object.assign({}, c); });
+    }
+    var prevByHash = new Map();
+    for (var i = 0; i < prevChannels.length; i++) {
+      var p = prevChannels[i];
+      if (p && p.hash) prevByHash.set(p.hash, p);
+    }
+    return freshChannels.map(function (c) {
+      var out = Object.assign({}, c);
+      var prev = out.hash ? prevByHash.get(out.hash) : null;
+      if (!prev) return out;
+      // Unread is counted in this tab and exists nowhere else. Carried when
+      // the property is present, including an explicit 0: dropping that would
+      // leave the row with undefined, which is a different thing from "read".
+      if (Object.prototype.hasOwnProperty.call(prev, 'unread')) out.unread = prev.unread;
+      // The user's own marks, re-derived from storage by mergeUserChannels()
+      // straight after this, but carried here so a row is never briefly wrong.
+      if (prev.userAdded) out.userAdded = true;
+      if (prev.userLabel) out.userLabel = prev.userLabel;
+      // A WS batch that landed while the request was in flight is newer than
+      // the snapshot. Keep the whole set together: a sender without its
+      // message reads as a different message.
+      if ((prev.lastActivityMs || 0) > (out.lastActivityMs || 0)) {
+        out.lastActivityMs = prev.lastActivityMs;
+        out.lastSender = prev.lastSender;
+        out.lastMessage = prev.lastMessage;
+        if ((prev.messageCount || 0) > (out.messageCount || 0)) out.messageCount = prev.messageCount;
+      }
+      return out;
+    });
+  }
+
   let autoScroll = true;
   let nodeCache = {};
   let selectedNode = null;
@@ -1662,10 +1709,18 @@
       if (showEnc) params.push('includeEncrypted=true');
       const qs = params.length ? '?' + params.join('&') : '';
       const data = await api('/channels' + qs, { ttl: CLIENT_TTL.channels });
-      channels = (data.channels || []).map(ch => {
+      const fresh = (data.channels || []).map(ch => {
         ch.lastActivityMs = ch.lastActivity ? new Date(ch.lastActivity).getTime() : 0;
         return ch;
-      }).sort((a, b) => (b.lastActivityMs || 0) - (a.lastActivityMs || 0));
+      });
+      // #2095 — carry client-only state across the replacement, then re-derive
+      // the user's PSK rows from storage. Both must happen BEFORE
+      // reconcileSelectionAfterChannelRefresh(), which evicts the selection
+      // when it cannot find selectedHash: a user:* hash is never in the server
+      // snapshot, so without this a refresh closed the open conversation.
+      channels = mergeClientChannelState(fresh, channels)
+        .sort((a, b) => (b.lastActivityMs || 0) - (a.lastActivityMs || 0));
+      if (typeof ChannelDecrypt !== 'undefined' && ChannelDecrypt) mergeUserChannels();
       renderChannelList();
       reconcileSelectionAfterChannelRefresh();
     } catch (e) {
@@ -2316,6 +2371,7 @@
   window._channelsSelectChannelForTest = selectChannel;
   window._channelsRefreshMessagesForTest = refreshMessages;
   window._channelsMergeWsAppendedIntoRestForTest = mergeWsAppendedIntoRest;
+  window._channelsMergeClientChannelStateForTest = mergeClientChannelState;
   window._channelsLoadChannelsForTest = loadChannels;
   window._channelsBeginMessageRequestForTest = beginMessageRequest;
   window._channelsIsStaleMessageRequestForTest = isStaleMessageRequest;
