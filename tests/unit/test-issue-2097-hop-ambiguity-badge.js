@@ -214,8 +214,11 @@ console.log('\n=== #2097: the observer position anchors the pick ===');
   const src = fs.readFileSync(REPO_ROOT + '/public/packets.js', 'utf8');
   assert(/HopResolver\.resolve\(unknown, null, null, obsLat, obsLon, observerId\)/.test(src),
     'resolveHops passes the observer position as the anchor');
-  assert(/observerMap/.test(src.slice(src.indexOf('async function resolveHops'), src.indexOf('async function resolveHopsForPackets'))),
-    'resolveHops looks the observer up to find its position');
+  const withId = src.match(/HopResolver\.resolve\([^)]*observer_id[^)]*\)/g) || [];
+  assert(withId.every(c => !/null, null, null, null/.test(c)),
+    'no call passes an observer id but drops its position: ' + withId.join(' | '));
+  assert(/function observerPosition\(/.test(src) && /observerPosition\(observerId\)/.test(src),
+    'one helper looks the observer up, used by every resolve path');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -978,6 +978,17 @@
   // #2097 — the cache key carries the observer, because an ambiguous hop
   // resolves differently depending on who heard it. renderHop() has always
   // looked for this key; nothing ever wrote it.
+  // #2097 — the observer's own position, used as the anchor at the receiving
+  // end of the path. The IATA route is dead weight: measured on the live
+  // deployment, none of the 42 observers has its code in /api/iata-coords, so
+  // nodeInRegion() always returns null. lat/lon is reported directly and works.
+  function observerPosition(observerId) {
+    const o = observerId && observerMap ? observerMap.get(observerId) : null;
+    const lat = o && Number.isFinite(Number(o.lat)) ? Number(o.lat) : null;
+    const lon = o && Number.isFinite(Number(o.lon)) ? Number(o.lon) : null;
+    return (lat === null || lon === null) ? [null, null] : [lat, lon];
+  }
+
   function hopCacheKey(h, observerId) {
     return observerId ? h + ':' + observerId : h;
   }
@@ -992,14 +1003,7 @@
     const unknown = hops.filter(h => !(hopCacheKey(h, observerId) in hopNameCache));
     if (!unknown.length) return;
     await ensureHopResolver();
-    // #2097 — the observer's own position, as the anchor at the receiving end.
-    // The IATA path is dead weight here: measured on the live deployment, none
-    // of the 42 observers has its code in /api/iata-coords, so nodeInRegion()
-    // always returns null and the 300 km filter narrows nothing. The lat/lon
-    // the observer already reports does work, and resolve() has always taken it.
-    const obs = observerId && observerMap ? observerMap.get(observerId) : null;
-    const obsLat = obs && Number.isFinite(Number(obs.lat)) ? Number(obs.lat) : null;
-    const obsLon = obs && Number.isFinite(Number(obs.lon)) ? Number(obs.lon) : null;
+    const [obsLat, obsLon] = observerPosition(observerId);
     const resolved = HopResolver.resolve(unknown, null, null, obsLat, obsLon, observerId) || {};
     for (const h of unknown) {
       const entry = resolved[h] || null;
@@ -3416,7 +3420,8 @@
           // #2097 — with the observer: the cache write below stores this under
           // the per-observer key, so it has to have been resolved for that
           // observer or the key promises something the value is not.
-          resolved = HopResolver.resolve(pathHops, null, null, null, null, pkt.observer_id);
+          const [dLat, dLon] = observerPosition(pkt.observer_id);
+          resolved = HopResolver.resolve(pathHops, null, null, dLat, dLon, pkt.observer_id);
         }
         if (resolved) {
           for (const [k, v] of Object.entries(resolved)) {
