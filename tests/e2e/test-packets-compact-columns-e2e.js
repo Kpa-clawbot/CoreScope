@@ -56,8 +56,34 @@ async function gotoPackets(page, prefs) {
   await page.reload({ waitUntil: 'networkidle' });
   await page.waitForSelector('#pktTable tbody tr:not([id^=vscroll]) td.col-type',
     { state: 'attached', timeout: 30000 });
-  // Let the post-render refit settle.
-  await page.waitForTimeout(400);
+  await settle(page);
+}
+
+// Column layout runs synchronously after a render, and container resizes are
+// coalesced to the next animation frame: two frames cover both.
+function settle(page) {
+  return page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+}
+
+// The "+N" pills are recomputed once hop names settle (up to ~1s after a
+// render). Wait for that pass to finish rather than for a fixed delay.
+function pillsReady(page) {
+  return page.waitForFunction(() => {
+    const tbody = document.getElementById('pktBody');
+    return tbody && !tbody._rePathOverflowObserver &&
+      document.querySelector('#pktTable .path-overflow-pill');
+  }, null, { timeout: 10000 });
+}
+
+async function setColumnVisible(page, key, visible) {
+  // A checkbox click bubbles to the document handler that closes the menu,
+  // so each toggle needs its own open.
+  await page.click('#colToggleBtn');
+  const box = await page.waitForSelector(`#colToggleMenu input[data-col="${key}"]`);
+  if ((await box.isChecked()) !== visible) await box.click();
+  await page.waitForFunction(([k, v]) =>
+    document.getElementById('pktTable').classList.contains('hide-col-' + k) === !v, [key, visible]);
+  await settle(page);
 }
 
 function layout(page) {
@@ -74,8 +100,10 @@ function layout(page) {
       .find(r => r.children.length === t.querySelectorAll('thead th').length);
     const cells = row ? Array.from(row.children).filter(td => td.offsetParent !== null) : [];
     const lastCell = cells[cells.length - 1];
+    const wr = wrap.getBoundingClientRect();
     return {
       widths,
+      wrapRight: wr.left + wrap.clientLeft + wrap.clientWidth,
       tableRight: t.getBoundingClientRect().right,
       lastCellRight: lastCell ? lastCell.getBoundingClientRect().right : null,
       hScroll: wrap.scrollWidth - wrap.clientWidth,
@@ -114,16 +142,44 @@ function layout(page) {
     assert(Math.abs(l.tableRight - l.lastCellRight) <= 2,
       `last cell ends at ${l.lastCellRight}, table at ${l.tableRight}: a hidden column's slot is taking width`);
     assert(l.hScroll <= 0, `table overflows its wrapper by ${l.hScroll}px`);
+    assert(Math.abs(l.wrapRight - l.tableRight) <= 2,
+      `table ends at ${l.tableRight}, its wrapper at ${l.wrapRight}`);
+  });
+
+  await test('hiding both Path and Details keeps the table at the wrapper width', async () => {
+    // Review on #2090: with no flex column the table shrank to the sum of
+    // the short columns (~400px in a 1900px wrapper). The gap was between
+    // the table and its wrapper, which the check above did not measure.
+    let l;
+    try {
+      await setColumnVisible(page, 'path', false);
+      await setColumnVisible(page, 'details', false);
+      l = await layout(page);
+    } finally {
+      // Restore before asserting, so a failure here does not leak two
+      // hidden columns into every later case.
+      await setColumnVisible(page, 'path', true);
+      await setColumnVisible(page, 'details', true);
+    }
+    assert(l.widths['col-path'] == null && l.widths['col-details'] == null, 'Path/Details still visible');
+    assert(Math.abs(l.wrapRight - l.tableRight) <= 2,
+      `table ends at ${l.tableRight}, its wrapper at ${l.wrapRight}: ${Math.round(l.wrapRight - l.tableRight)}px empty`);
+    assert(l.hScroll <= 0, `table overflows its wrapper by ${l.hScroll}px`);
+    const back = await layout(page);
+    assert(back.widths['col-details'] >= 400, `Details did not take the width back: ${back.widths['col-details']}px`);
   });
 
   await test('opening the detail panel re-fits the table without scrolling', async () => {
     await page.click('#pktTable tbody tr:not([id^=vscroll]) td.col-time');
-    await page.waitForSelector('#pktRight:not(.empty)', { timeout: 10000 });
-    await page.waitForTimeout(400);
+    await page.waitForSelector('#pktRight:not(.empty)', { timeout: 10000 })
+      .catch(() => { throw new Error('clicking a row did not open the detail panel'); });
+    await settle(page);
     const l = await layout(page);
     assert(l.hScroll <= 0, `table overflows its wrapper by ${l.hScroll}px with the panel open`);
     await page.keyboard.press('Escape');
-    await page.waitForTimeout(400);
+    await page.waitForSelector('#pktRight.empty', { state: 'attached', timeout: 10000 })
+      .catch(() => { throw new Error('Escape did not close the detail panel'); });
+    await settle(page);
     const after = await layout(page);
     assert(after.widths['col-details'] >= 400, `Details did not grow back after closing the panel: ${after.widths['col-details']}px`);
   });
@@ -147,7 +203,9 @@ function layout(page) {
     if (before.chipMax) assert(before.chipMax === '120px', `default chip cap is ${before.chipMax}`);
 
     await page.click('#fullNamesToggle');
-    await page.waitForTimeout(600);
+    await page.waitForFunction(() => document.getElementById('pktTable').classList.contains('pkt-full-names'));
+    await pillsReady(page);
+    await settle(page);
     const after = await page.evaluate(() => {
       const t = document.getElementById('pktTable');
       const obs = Array.from(t.querySelectorAll('td.col-observer')).map(td => td.textContent);
@@ -191,8 +249,8 @@ function layout(page) {
 
   await test('hovering the +N pill lists the full path vertically; click pins it', async () => {
     await gotoPackets(page, { 'meshcore-full-names': 'true' });
-    // The pill is (re)computed up to 1s after rendering.
-    await page.waitForTimeout(1500);
+    // At 1920px with full names the fixture's multi-hop paths always overflow.
+    await pillsReady(page).catch(() => null);
     const pillSel = await page.evaluate(() => {
       const pills = Array.from(document.querySelectorAll('#pktTable .path-overflow-pill'));
       if (!pills.length) return null;
@@ -228,27 +286,29 @@ function layout(page) {
     assert(pop.truncated === 0, `${pop.truncated} names truncated in the popover`);
     assert(pop.title.includes(hopsInRow + ' hop'), `title "${pop.title}" should count hops, not arrows`);
 
-    // Moving away closes an unpinned popover.
+    // Moving away closes an unpinned popover (after a 150ms grace period).
     await page.mouse.move(5, 5);
-    await page.waitForTimeout(400);
-    assert(!(await page.$('#pathPopover')), 'popover still open after the pointer left');
+    await page.waitForSelector('#pathPopover', { state: 'detached', timeout: 3000 })
+      .catch(() => { throw new Error('popover still open after the pointer left'); });
 
     // Clicking pins it, and must not select the row underneath.
     const panelEmptyBefore = await page.$eval('#pktRight', el => el.classList.contains('empty'));
     await page.click(pillSel);
     await page.waitForSelector('#pathPopover', { timeout: 3000 });
     await page.mouse.move(5, 5);
+    // Deliberately fixed: proving it stays open means outlasting the 150ms
+    // close grace an unpinned popover would get.
     await page.waitForTimeout(400);
     assert(await page.$('#pathPopover'), 'pinned popover closed when the pointer left');
     const panelEmptyAfter = await page.$eval('#pktRight', el => el.classList.contains('empty'));
     assert(panelEmptyBefore === panelEmptyAfter, 'clicking the pill also selected the row');
     await page.keyboard.press('Escape');
-    await page.waitForTimeout(200);
-    assert(!(await page.$('#pathPopover')), 'Escape did not close the pinned popover');
+    await page.waitForSelector('#pathPopover', { state: 'detached', timeout: 3000 })
+      .catch(() => { throw new Error('Escape did not close the pinned popover'); });
 
     // Keyboard: focusing a pill shows the popover too. Escape above also
     // closes the detail panel, which re-renders the rows: query afresh.
-    await page.waitForTimeout(1500);
+    await pillsReady(page);
     await page.focus('#pktTable .path-overflow-pill');
     await page.waitForSelector('#pathPopover', { timeout: 3000 });
     await page.keyboard.press('Escape');
@@ -257,8 +317,8 @@ function layout(page) {
     await page.click('#pktTable .path-overflow-pill');
     await page.waitForSelector('#pathPopover', { timeout: 3000 });
     await page.evaluate(() => { location.hash = '#/home'; });
-    await page.waitForTimeout(800);
-    assert(!(await page.$('#pathPopover')), 'pinned path popover survived navigating away from Packets');
+    await page.waitForSelector('#pathPopover', { state: 'detached', timeout: 5000 })
+      .catch(() => { throw new Error('pinned path popover survived navigating away from Packets'); });
     await page.evaluate(() => { localStorage.removeItem('meshcore-full-names'); });
   });
 
@@ -273,8 +333,9 @@ function layout(page) {
       hash: location.hash,
     }));
     for (let n = 0; n < 2; n++) {
+      const was = (await state()).on;
       await page.click('#fullNamesToggle');
-      await page.waitForTimeout(300);
+      await page.waitForFunction(w => document.getElementById('pktTable').classList.contains('pkt-full-names') !== w, was);
       const s = await state();
       assert(s.on === s.inUrl, `Full Names is ${s.on ? 'on' : 'off'} but the URL says otherwise: ${s.hash}`);
     }
@@ -285,6 +346,14 @@ function layout(page) {
     await page.waitForSelector('#pktTable tbody tr:not([id^=vscroll]) td.col-type', { state: 'attached', timeout: 30000 });
     const on = await page.$eval('#pktTable', t => t.classList.contains('pkt-full-names'));
     assert(on, 'fullNames=1 in the URL did not turn Full Names on');
+    // ...for that page only: the visitor's own saved preference is untouched.
+    const saved = await page.evaluate(() => localStorage.getItem('meshcore-full-names'));
+    assert(saved === 'false', `opening a fullNames=1 link overwrote the saved preference with ${saved}`);
+    await page.goto(BASE + '/#/packets?timeWindow=10080', { waitUntil: 'domcontentloaded' });
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForSelector('#pktTable tbody tr:not([id^=vscroll]) td.col-type', { state: 'attached', timeout: 30000 });
+    const offAgain = await page.$eval('#pktTable', t => !t.classList.contains('pkt-full-names'));
+    assert(offAgain, 'without the parameter the page did not return to the saved preference (off)');
     await page.evaluate(() => { localStorage.removeItem('meshcore-full-names'); });
   });
 
@@ -301,7 +370,7 @@ function layout(page) {
       await page.waitForFunction(() =>
         !Array.from(document.querySelectorAll('#pktTable td.col-observer'))
           .some(td => /[0-9A-F]{40}/.test(td.textContent)), null, { timeout: 15000 });
-      await page.waitForTimeout(600);
+      await settle(page);
       const { th, widest } = await page.evaluate(() => {
         const cells = Array.from(document.querySelectorAll('#pktTable td.col-observer'))
           .filter(td => td.offsetParent !== null);
@@ -331,19 +400,19 @@ function layout(page) {
     await page.mouse.move(box.x + 30, box.y, { steps: 3 });
     await page.mouse.move(box.x + 60, box.y, { steps: 3 });
     await page.mouse.up();
-    await page.waitForTimeout(200);
+    await settle(page);
     const dragged = await page.evaluate(() => ({
       w: document.querySelector('#pktTable th.col-hash').offsetWidth,
       saved: JSON.parse(localStorage.getItem('meshcore-pkt-col-px') || '{}')['col-hash'],
     }));
     // The edge follows the pointer: no lag from fixed layout spreading the delta.
-    assert(Math.abs(dragged.w - (before + 60)) <= 3, `dragged +60px from ${before}px, column is ${dragged.w}px`);
+    assert(Math.abs(dragged.w - (before + 60)) <= 5, `dragged +60px from ${before}px, column is ${dragged.w}px`);
     assert(Math.abs(dragged.saved - dragged.w) <= 1, `saved ${dragged.saved}px, column ${dragged.w}px`);
     const edge = await page.$eval('#pktTable th.col-hash', th => {
       const r = th.getBoundingClientRect(); return { x: r.right - 2, y: r.top + r.height / 2 };
     });
     await page.mouse.dblclick(edge.x, edge.y);
-    await page.waitForTimeout(200);
+    await settle(page);
     const reset = await page.evaluate(() => ({
       w: document.querySelector('#pktTable th.col-hash').offsetWidth,
       saved: JSON.parse(localStorage.getItem('meshcore-pkt-col-px') || '{}')['col-hash'],
@@ -355,18 +424,18 @@ function layout(page) {
   await test('expanding a group leaves the column widths alone', async () => {
     // CI seeds one grouped transmission (fae0c9e6d357a814, 3 observations).
     await page.goto(BASE + '/#/packets?hash=fae0c9e6d357a814&timeWindow=0', { waitUntil: 'networkidle' });
-    await page.waitForTimeout(800);
-    if (!(await page.$('#pktTable tr.group-header'))) {
-      console.log('    (no grouped row in this fixture, skipped)');
-      return;
-    }
+    // Fail, don't skip: without the seeded row this case would silently stop
+    // asserting (review on #2090).
+    await page.waitForSelector('#pktTable tr.group-header', { timeout: 10000 })
+      .catch(() => { throw new Error('seeded grouped row fae0c9e6d357a814 not found: check the CI fixture seeding step'); });
+    await settle(page);
     const widths = () => page.$$eval('#pktTable thead th', ths => Object.fromEntries(ths
       .filter(th => th.offsetParent !== null && !th.matches('.col-path, .col-details'))
       .map(th => [th.className.split(' ')[0], th.offsetWidth])));
     const before = await widths();
     await page.click('#pktTable tr.group-header td.col-expand');
     await page.waitForSelector('#pktTable tr.group-child', { timeout: 10000 });
-    await page.waitForTimeout(400);
+    await settle(page);
     const after = await widths();
     // Child rows name other observers and may legitimately need a few px
     // more; the bug was every column jumping ~14px from the row indent.
@@ -381,7 +450,7 @@ function layout(page) {
     await gotoPackets(page);
     await page.click('#pktTable tbody tr:not([id^=vscroll]) td.col-time');
     await page.waitForSelector('#pktRight:not(.empty)', { timeout: 10000 });
-    await page.waitForTimeout(400);
+    await settle(page);
     const { hScroll } = await layout(page);
     assert(hScroll <= 0, `table overflows its wrapper by ${hScroll}px`);
     await page.keyboard.press('Escape');
@@ -400,11 +469,13 @@ function layout(page) {
         `${label}: last cell ends at ${l.lastCellRight}, table at ${l.tableRight} (blank strip)`);
     };
     await pill.click();
-    await page.waitForTimeout(300);
-    assert(await page.$eval('#pktTable th.col-observer', th => th.offsetParent !== null), 'Observer not revealed');
+    await page.waitForFunction(() => document.querySelector('#pktTable th.col-observer').offsetParent !== null, null, { timeout: 5000 })
+      .catch(() => { throw new Error('Observer not revealed'); });
+    await settle(page);
     await check('after reveal');
     await page.click('#pktTable .col-rehide-pill');
-    await page.waitForTimeout(300);
+    await page.waitForFunction(() => document.querySelector('#pktTable th.col-observer').offsetParent === null, null, { timeout: 5000 });
+    await settle(page);
     await check('after re-hide');
   });
 

@@ -1207,10 +1207,13 @@
     var _initUrlParams = getHashParams();
     directObsId = _initUrlParams.get('obs');
     // Full Names is a view mode: a shared link carries it (fullNames=1/0).
+    // It applies to this page only; the visitor's saved preference is theirs,
+    // so opening somebody else's link does not overwrite it.
     var _urlFullNames = _initUrlParams.get('fullNames');
     if (_urlFullNames === '1' || _urlFullNames === '0') {
       showFullNames = _urlFullNames === '1';
-      localStorage.setItem('meshcore-full-names', showFullNames);
+    } else {
+      showFullNames = localStorage.getItem('meshcore-full-names') === 'true';
     }
     var _urlTimeWindow = Number(_initUrlParams.get('timeWindow'));
     if (Number.isFinite(_urlTimeWindow) && _urlTimeWindow > 0) {

@@ -1595,6 +1595,12 @@ body.scroll-locked { overflow: hidden; }
  * column measured on one row clipped the next; fixed-width digits keep
  * same-length values the same width. */
 #pktTable td.col-time, #pktTable td.col-size { font-variant-numeric: tabular-nums; }
+/* fitColumnsToContent sets every #pktTable column width in px. The shared
+ * min-width rules on .col-time (clamp 72-108px), .col-path (140px),
+ * .col-observer (70px) and .col-scope (56px) are written for auto-layout
+ * tables; Chromium ignores cell min-width under table-layout: fixed, other
+ * engines need not. Clear them here so the JS widths are the only input. */
+#pktTable th, #pktTable td { min-width: 0; }
 /* "Full Names" toggle (packets.js): hop chips keep their whole name. The
  * path stays on one line; hops past the edge go behind the "+N" overflow
  * pill (_finalizePathOverflow). Wrapping would make rows taller than the
@@ -2718,6 +2724,10 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 .col-resize-handle:hover::after, .col-resize-handle.active::after {
   background: var(--accent); opacity: 0.6;
 }
+/* fitColumnsToContent: the last visible column takes whatever width is left,
+ * so it has nothing to resize against, and its handle (right: -4px) would
+ * overhang the table and scroll the wrapper sideways. */
+th.fit-last > .col-resize-handle { display: none; }
 
 /* Encrypted channels de-emphasized */
 button.ch-item.ch-item-encrypted { opacity: 0.5; }

@@ -274,6 +274,7 @@ test('#2091: init restores obs from the hash after router strips the query', () 
   const readInitialObservation = new Function('location', 'routeParam',
     'let directObsId = "stale", directPacketId = null, directPacketHash = null; ' +
     'let savedTimeWindowMin = 15, _pendingUrlRegion = null; const filters = {}, window = {}; ' +
+    'let showFullNames = false; const localStorage = { getItem: () => null, setItem() {} }; ' +
     hashParamsSrc + '\n' + initParamsSrc + '\nreturn directObsId;');
   for (const route of ['aabbccddeeff0011', 'id/42']) {
     assert.strictEqual(readInitialObservation({ hash: '#/packets/' + route + '?obs=123' }, route), '123');

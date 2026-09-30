@@ -1319,10 +1319,62 @@ console.log('\n=== app.js: distributeColumnWidths (packets column packing) ===')
     assert.strictEqual(d.total, 720);
   });
 
-  test('no flex columns: fixed widths only', () => {
+  test('no flex columns (Path and Details hidden): the last column takes the slack', () => {
+    // A 109px table in a 2000px wrapper was the review finding on #2090.
     const d = distribute([col(65), col(44)], 0, 2000, 120);
     assert.deepStrictEqual(Array.from(d.flex), []);
-    assert.strictEqual(d.total, 109);
+    assert.deepStrictEqual(Array.from(d.fixed), [65, 1935]);
+    assert.strictEqual(d.total, 2000);
+  });
+
+  test('no flex columns and no room: nothing is added', () => {
+    const d = distribute([col(300, 300), col(300, 300)], 0, 500, 120);
+    assert.deepStrictEqual(Array.from(d.fixed), [300, 300]);
+    assert.strictEqual(d.total, 600);
+  });
+}
+
+console.log('\n=== app.js: measurableRows (shared with makeColumnsResizable) ===');
+{
+  const ctx = loadPacketsSandbox();
+  const cell = (colSpan) => ({ colSpan: colSpan || 1 });
+  const row = (...cells) => ({ children: cells, id: '' });
+  const tableWith = rows => ({ querySelector: sel => (sel === 'tbody' ? { children: rows } : null) });
+
+  test('skips virtual-scroll spacer and loading rows (one colspan cell)', () => {
+    const spacer = row(cell(12));
+    const data = row(cell(), cell(), cell());
+    const rows = ctx.measurableRows(tableWith([spacer, data, spacer]));
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0], data);
+  });
+
+  test('keeps rows whose cells are all single-column, whatever their count', () => {
+    // Other tables (nodes, observers, analytics) can have rows shorter than
+    // the header; those were measured before and still are.
+    const short = row(cell(), cell());
+    const full = row(cell(), cell(), cell());
+    assert.strictEqual(ctx.measurableRows(tableWith([short, full])).length, 2);
+  });
+
+  test('drops any row that contains a spanning cell, not only full-width ones', () => {
+    const partial = row(cell(), cell(2));
+    assert.strictEqual(ctx.measurableRows(tableWith([partial])).length, 0);
+  });
+
+  test('limits to 30 rows by default, as makeColumnsResizable always sampled', () => {
+    const many = Array.from({ length: 50 }, () => row(cell(), cell()));
+    assert.strictEqual(ctx.measurableRows(tableWith(many)).length, 30);
+    assert.strictEqual(ctx.measurableRows(tableWith(many), Infinity).length, 50);
+  });
+
+  test('no tbody: no rows', () => {
+    assert.strictEqual(ctx.measurableRows({ querySelector: () => null }).length, 0);
+  });
+
+  test('style.css clears cell min-width on #pktTable (JS widths are the only input)', () => {
+    const css = fs.readFileSync('public/style.css', 'utf8');
+    assert(/#pktTable th, #pktTable td \{ min-width: 0; \}/.test(css));
   });
 }
 

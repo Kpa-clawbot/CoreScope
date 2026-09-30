@@ -2154,7 +2154,9 @@ function cellContentWidth(cell) {
  * `floor`. Flex columns share what is left, the rounding remainder going to
  * the last one. When even the floors leave less than `flexMin`, the flex
  * columns shrink further, down to `flexHardMin`; below that `total` exceeds
- * `avail` and the caller's wrapper scrolls.
+ * `avail` and the caller's wrapper scrolls. With no flex column (both hidden
+ * by the user), the last fixed column takes the spare width, so the table
+ * still fills `avail`.
  *
  * @param {{w: number, floor: number}[]} fixed
  * @param {number} flexCount
@@ -2185,7 +2187,9 @@ function distributeColumnWidths(fixed, flexCount, avail, flexMin, flexHardMin) {
   const flexW = [];
   for (let i = 0; i < flexCount; i++) flexW.push(share);
   if (flexCount) flexW[flexCount - 1] += Math.max(0, spare - share * flexCount);
-  return { fixed: widths, flex: flexW, total: fixedSum + flexW.reduce((s, w) => s + w, 0) };
+  else if (widths.length) widths[widths.length - 1] += spare;
+  const total = widths.reduce((s, w) => s + w, 0) + flexW.reduce((s, w) => s + w, 0);
+  return { fixed: widths, flex: flexW, total };
 }
 
 /**
@@ -2278,6 +2282,11 @@ function fitColumnsToContent(tableSelector, storageKey, opts) {
     const fixedThs = [];
     const fixedCols = [];
     const flexThs = [];
+    // The last visible column absorbs the slack when no flex column is
+    // shown; `fit-last` hides its drag handle, which overhangs the table's
+    // right edge by a few px and would give the wrapper a scrollbar.
+    const visible = ths.filter(th => th.offsetParent !== null);
+    ths.forEach(th => th.classList.toggle('fit-last', th === visible[visible.length - 1]));
     ths.forEach(th => {
       if (th.offsetParent === null) return;
       const key = colKey(th);
@@ -2325,8 +2334,9 @@ function fitColumnsToContent(tableSelector, storageKey, opts) {
     if (changed) layout();
   }
 
-  if (!table.dataset.resizable) {
-    table.dataset.resizable = '1';
+  // Its own flag: `resizable` is makeColumnsResizable's already-wired guard.
+  if (!table.dataset.fitColumns) {
+    table.dataset.fitColumns = '1';
     ths.forEach(th => {
       const key = colKey(th);
       if (flex.has(key)) return;
@@ -2375,17 +2385,26 @@ function fitColumnsToContent(tableSelector, storageKey, opts) {
 
   // The container changes width when the detail panel opens or is dragged:
   // redistribute only. Responsive hiding changes which columns exist.
+  // Coalesced to one layout per frame: dragging the detail-panel divider
+  // resizes the wrapper on every pointer move, and layout() forces a
+  // synchronous reflow.
   let lastWrapW = wrap.clientWidth;
+  let layoutRaf = 0;
   const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => {
-    if (!table.isConnected || wrap.clientWidth === lastWrapW) return;
-    lastWrapW = wrap.clientWidth;
-    layout();
+    if (layoutRaf) return;
+    layoutRaf = requestAnimationFrame(() => {
+      layoutRaf = 0;
+      if (!table.isConnected || wrap.clientWidth === lastWrapW) return;
+      lastWrapW = wrap.clientWidth;
+      layout();
+    });
   }) : null;
   if (ro) ro.observe(wrap);
   table.addEventListener('table-columns-changed', refit);
 
   function destroy() {
     if (ro) ro.disconnect();
+    if (layoutRaf) cancelAnimationFrame(layoutRaf);
     table.removeEventListener('table-columns-changed', refit);
   }
 
