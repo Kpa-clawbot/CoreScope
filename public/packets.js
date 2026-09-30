@@ -969,14 +969,46 @@
   }
 
   // Resolve hop hex prefixes to node names (cached, client-side)
-  async function resolveHops(hops) {
-    const unknown = hops.filter(h => !(h in hopNameCache));
-    if (unknown.length) {
-      await ensureHopResolver();
-      const resolved = HopResolver.resolve(unknown);
-      Object.assign(hopNameCache, resolved || {});
-      // Cache misses as null so we don't re-query
-      unknown.forEach(h => { if (!(h in hopNameCache)) hopNameCache[h] = null; });
+  // #2097 — the cache key carries the observer, because an ambiguous hop
+  // resolves differently depending on who heard it. renderHop() has always
+  // looked for this key; nothing ever wrote it.
+  function hopCacheKey(h, observerId) {
+    return observerId ? h + ':' + observerId : h;
+  }
+
+  // #2097 — resolve WITH the observer. Every 1-byte prefix on the network is
+  // shared by several nodes, and the observer is what lets HopResolver filter
+  // candidates by region and report the rest as conflicts. Called with the hops
+  // alone, it returns the first candidate with no signal that it guessed, which
+  // is how a repeater 126 km outside the observer's region ended up displayed
+  // as a certainty.
+  async function resolveHops(hops, observerId) {
+    const unknown = hops.filter(h => !(hopCacheKey(h, observerId) in hopNameCache));
+    if (!unknown.length) return;
+    await ensureHopResolver();
+    const resolved = HopResolver.resolve(unknown, null, null, null, null, observerId) || {};
+    for (const h of unknown) {
+      const entry = resolved[h] || null;
+      hopNameCache[hopCacheKey(h, observerId)] = entry;
+      // Bare key as a fallback for any render that has no observer in hand.
+      if (!(h in hopNameCache)) hopNameCache[h] = entry;
+    }
+  }
+
+  // Resolve every hop of every packet, grouped by the observer that heard it,
+  // so each group gets its own regional filtering.
+  async function resolveHopsForPackets(packets) {
+    const groups = new Map();
+    for (const p of packets || []) {
+      const obs = (p && p.observer_id) ? String(p.observer_id) : '';
+      let set = groups.get(obs);
+      if (!set) { set = new Set(); groups.set(obs, set); }
+      try { getParsedPath(p).forEach(h => set.add(h)); } catch {}
+    }
+    // ensureHopResolver() is idempotent and awaited once inside resolveHops;
+    // the resolve itself is local computation, so the loop costs no requests.
+    for (const [obs, set] of groups) {
+      if (set.size) await resolveHops([...set], obs || undefined);
     }
   }
 
@@ -1005,7 +1037,7 @@
 
   function renderHop(h, observerId) {
     // Use per-packet cache key if observer context available (ambiguous hops differ by region)
-    const cacheKey = observerId ? h + ':' + observerId : h;
+    const cacheKey = hopCacheKey(h, observerId);
     const entry = hopNameCache[cacheKey] || hopNameCache[h];
     return HopDisplay.renderHop(h, entry, { hexMode: showHexHashes });
   }
@@ -1306,9 +1338,7 @@
           panel.appendChild(content);
           const pkt = data.packet;
           try {
-            const hops = getParsedPath(pkt);
-            const newHops = hops.filter(h => !(h in hopNameCache));
-            if (newHops.length) await resolveHops(newHops);
+            await resolveHopsForPackets([pkt]);
           } catch {}
           await renderDetail(content, data, obsTarget);
           initPanelResize();
@@ -1364,7 +1394,7 @@
         }
         try { hops.forEach(h => { if (!(h in hopNameCache)) newHops.add(h); }); } catch {}
       }
-      (newHops.size ? resolveHops([...newHops]) : Promise.resolve()).then(() => {
+      (newHops.size ? resolveHopsForPackets(filtered) : Promise.resolve()).then(() => {
         if (groupByHash) {
           // Update existing groups or create new ones
           for (const p of filtered) {
@@ -1565,11 +1595,7 @@
       const hopJob = (async () => {
         try {
           await cacheResolvedPaths(packets);
-          const allHops = new Set();
-          for (const p of packets) {
-            try { getParsedPath(p).forEach(h => allHops.add(h)); } catch {}
-          }
-          if (allHops.size) await resolveHops([...allHops]);
+          await resolveHopsForPackets(packets);
           // Re-render rows so resolved hop names replace hex prefixes.
           if (filtersBuilt) renderTableRows();
         } catch (e) {
@@ -2136,11 +2162,7 @@
         if (p._children) sortGroupChildren(p);
       }
       // Resolve any new hops from updated header paths
-      const newHops = new Set();
-      for (const p of packets) {
-        try { getParsedPath(p).forEach(h => { if (!(h in hopNameCache)) newHops.add(h); }); } catch {}
-      }
-      if (newHops.size) await resolveHops([...newHops]);
+      await resolveHopsForPackets(packets);
       renderTableRows();
     });
 
@@ -3268,9 +3290,7 @@
       // Resolve path hops for detail view
       const pkt = data.packet;
       try {
-        const hops = getParsedPath(pkt);
-        const newHops = hops.filter(h => !(h in hopNameCache));
-        if (newHops.length) await resolveHops(newHops);
+        await resolveHopsForPackets([pkt]);
       } catch {}
       panel.innerHTML = isMobileNow ? '' : (useSlideOver ? '' : ('<div class="panel-resize-handle" id="pktResizeHandle"></div>' + PANEL_CLOSE_HTML));
       const content = document.createElement('div');
@@ -3360,7 +3380,10 @@
           resolved = HopResolver.resolveFromServer(pathHops, serverResolved);
         } else {
           await ensureHopResolver();
-          resolved = HopResolver.resolve(pathHops);
+          // #2097 — with the observer: the cache write below stores this under
+          // the per-observer key, so it has to have been resolved for that
+          // observer or the key promises something the value is not.
+          resolved = HopResolver.resolve(pathHops, null, null, null, null, pkt.observer_id);
         }
         if (resolved) {
           for (const [k, v] of Object.entries(resolved)) {
@@ -4142,12 +4165,7 @@
       }
       // Resolve hops from children: prefer server-side resolved_path
       await cacheResolvedPaths(group?._children || []);
-      const childHops = new Set();
-      for (const c of (group?._children || [])) {
-        try { getParsedPath(c).forEach(h => childHops.add(h)); } catch {}
-      }
-      const newHops = [...childHops].filter(h => !(h in hopNameCache));
-      if (newHops.length) await resolveHops(newHops);
+      await resolveHopsForPackets(group?._children || []);
       expandedHashes.add(hash);
       renderTableRows();
       // Also open detail panel — no extra fetch needed
@@ -4231,10 +4249,7 @@
         await loadObservers();
         const data = await api(`/packets/${param}`);
         if (!data?.packet) { app.innerHTML = `<div style="max-width:800px;margin:0 auto;padding:40px;text-align:center"><h2>Packet not found</h2><p>Packet ${param} doesn't exist.</p><a href="#/packets">← Back to packets</a></div>`; return; }
-        const hops = [];
-        try { hops.push(...getParsedPath(data.packet)); } catch {}
-        const newHops = hops.filter(h => !(h in hopNameCache));
-        if (newHops.length) await resolveHops(newHops);
+        await resolveHopsForPackets([data.packet]);
         const container = document.createElement('div');
         container.style.cssText = 'max-width:800px;margin:0 auto;padding:20px';
         container.innerHTML = `<div style="margin-bottom:16px"><a href="#/packets" style="color:var(--link-color);text-decoration:none">← Back to packets</a></div>`;
