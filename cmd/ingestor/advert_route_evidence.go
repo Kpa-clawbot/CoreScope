@@ -13,6 +13,32 @@ import (
 const insertAdvertEvidenceSQL = `INSERT INTO advert_route_evidence(tx_id,bit)
 	SELECT ?,? WHERE NOT EXISTS (SELECT 1 FROM advert_route_evidence WHERE tx_id=? AND bit=?)`
 
+// Match the UPSERT's exact expression-index key. NULL observer_idx cannot
+// conflict, so the caller skips it. Only an uncheckpointed old row needs work.
+const legacyAdvertObservationSQL = `SELECT raw_hex FROM observations
+	WHERE transmission_id=? AND observer_idx=? AND COALESCE(path_json,'')=?
+	AND id > COALESCE((SELECT obs_cursor FROM advert_evidence_backfill WHERE id=1),0)`
+
+// Caller holds writerMu, including through the subsequent observation UPSERT.
+// The backfill commits evidence and obs_cursor together under that same lock.
+func (s *Store) preserveLegacyAdvertObservation(txID, observerIdx int64, path string) error {
+	if s.advertEvidenceComplete.Load() {
+		return nil
+	}
+	var raw sql.NullString
+	err := s.stmtGetLegacyAdvertObservation.QueryRow(txID, observerIdx, path).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if bit := packetpath.AdvertRouteEvidence(raw.String); bit != 0 {
+		_, err = s.stmtInsertAdvertEvidence.Exec(txID, bit, txID, bit)
+	}
+	return err
+}
+
 // backfillAdvertEvidence recovers only evidence still present in canonical and
 // observation frames. An overwritten middle frame is unrecoverable. Persisted
 // cursors and 500-row transactions make this cancellable/resumable; new traffic
@@ -103,5 +129,8 @@ func (s *Store) backfillAdvertEvidence(ctx context.Context, db *sql.DB) error {
 			}
 		}
 	}
+	// RunAsyncMigration persists "done" after this returns. A crash before
+	// that status write simply re-enables protection and resumes the cursors.
+	s.advertEvidenceComplete.Store(true)
 	return nil
 }

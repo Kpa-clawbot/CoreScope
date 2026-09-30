@@ -169,11 +169,9 @@ func TestAdvertRouteEvidenceBackfillResumeAndLiveUnion(t *testing.T) {
 	go func() { done <- s.backfillAdvertEvidence(context.Background(), s.db) }()
 	// Live processing can overwrite the only surviving zero-hop raw before
 	// the backfill reaches it; its synchronous evidence must preserve it.
-	for _, raw := range []string{"1200aa", "1100aa"} {
-		data := &PacketData{Hash: "history-1200", ObserverID: "fixture-observer", PayloadType: 4, RouteType: int(raw[1]-'0') & 3, RawHex: raw, Timestamp: "2026-01-01T00:00:00Z", PathJSON: "[]"}
-		if _, err := s.InsertTransmission(data); err != nil {
-			t.Fatal(err)
-		}
+	data := &PacketData{Hash: "history-1200", ObserverID: "fixture-observer", PayloadType: 4, RouteType: 1, RawHex: "1100aa", Timestamp: "2026-01-01T00:00:00Z", PathJSON: "[]"}
+	if _, err := s.InsertTransmission(data); err != nil {
+		t.Fatal(err)
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
