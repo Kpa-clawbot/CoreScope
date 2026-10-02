@@ -19,6 +19,10 @@ func TestAdvertRouteEvidenceSurvivesObservationUpsert(t *testing.T) {
 		{"zero_flood", []string{"1200aa", "1100aa"}},
 		{"flood_zero_flood", []string{"1100aa", "1200aa", "1100aa"}},
 		{"zero_flood_zero", []string{"1200aa", "1100aa", "1200aa"}},
+		{"flood_empty_2byte_flood", []string{"1100aa", "1240aa", "1100aa"}},
+		{"empty_3byte_flood_empty", []string{"1280aa", "1100aa", "1280aa"}},
+		{"transport_empty_2byte_flood", []string{"130102030440aa", "100102030400aa"}},
+		{"transport_flood_empty_3byte", []string{"100102030400aa", "130102030480aa"}},
 		{"transport_flood_zero_flood", []string{"100102030400aa", "130102030400aa", "100102030400aa"}},
 		{"transport_zero_flood_zero", []string{"130102030400aa", "100102030400aa", "130102030400aa"}},
 	} {
