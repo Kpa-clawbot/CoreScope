@@ -241,12 +241,13 @@ func TestAdvertRouteEvidenceFailureKeepsCoreIngestion(t *testing.T) {
 			if _, err := s.InsertTransmission(data); err != nil {
 				t.Errorf("analytics failure aborted core ingestion: %v", err)
 			}
+			// The observation UPSERT preserves its original timestamp; tx last_seen advances.
 			var raw, resolved string
 			var ts, lastSeen int64
 			if err := s.db.QueryRow(`SELECT raw_hex,COALESCE(resolved_path,''),timestamp FROM observations`).Scan(&raw, &resolved, &ts); err != nil {
 				t.Fatal(err)
 			}
-			if raw != data.RawHex || resolved != `["bbbbbbbbbb"]` || ts != 1767312000 {
+			if raw != data.RawHex || resolved != `["bbbbbbbbbb"]` || ts != 1767225600 {
 				t.Errorf("core observation not updated: raw=%s resolved=%s timestamp=%d", raw, resolved, ts)
 			}
 			if err := s.db.QueryRow(`SELECT last_seen FROM transmissions`).Scan(&lastSeen); err != nil {
@@ -339,7 +340,7 @@ func TestAdvertRouteEvidenceRejectsUnprovenFrames(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	for _, raw := range []string{"", "12", "1200", "1200a", "12zzaa", "1240aa", "1280aa", "12c0aa", "1201ffaa", "130102030401ffaa", "13zz00000000aa", "1600aa", "1100zz", "1101"} {
+	for _, raw := range []string{"", "12", "1200", "1200a", "12zzaa", "12c0aa", "1201ffaa", "130102030401ffaa", "13zz00000000aa", "1600aa", "1100zz", "1101"} {
 		data := &PacketData{Hash: "unproven-" + raw, PayloadType: 4, RouteType: 2, RawHex: raw, Timestamp: "2026-01-01T00:00:00Z", PathJSON: "[]"}
 		if _, err := s.InsertTransmission(data); err != nil {
 			t.Fatal(err)

@@ -32,8 +32,8 @@ func TestRelayAirtimeShare_AdvertRouting(t *testing.T) {
 		{"flood with hops", route(1), "1101ffaa", "[]", "flood"},
 		{"direct zero hop", route(2), "1200aa", `["ff"]`, "zero_hop"},
 		{"transport direct zero hop", route(3), "130102030400aa", `["ff"]`, "zero_hop"},
-		{"two byte zero count", route(2), "1240aa", "[]", "other"},
-		{"three byte zero count", route(2), "1280aa", "[]", "other"},
+		{"two byte zero count", route(2), "1240aa", "[]", "zero_hop"},
+		{"three byte zero count", route(2), "1280aa", "[]", "zero_hop"},
 		{"direct nonempty original path", route(2), "1201ffaa", "[]", "other"},
 		{"transport direct nonempty original path", route(3), "130000000001ffaa", "[]", "other"},
 		{"raw evidence without canonical route", nil, "1200aa", "[]", "zero_hop"},
@@ -210,12 +210,15 @@ func BenchmarkRelayAirtimeShareRetentionWindow(b *testing.B) {
 		for i := range packets {
 			tx := makeRelayAirtimeTx(i+1, PayloadADVERT, 120, 0, fmt.Sprintf("retained-%d", i))
 			tx.AdvertRouteEvidence = uint8(i%3 + 1)
-			tx.FirstSeen = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(i) * 7 * 24 * time.Hour / time.Duration(size)).Format(time.RFC3339)
+			tx.FirstSeen = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(i) * (7 * 24 * time.Hour / time.Duration(size))).Format(time.RFC3339)
 			packets[i] = tx
 		}
 		store := newRelayAirtimeShareTestStore(packets)
 		for _, hours := range []int{1, 24, 168} {
 			window := TimeWindow{Since: time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC).Add(-time.Duration(hours) * time.Hour).Format(time.RFC3339), Until: "2026-01-08T00:00:00Z"}
+			if got := store.computeRelayAirtimeShare(window)["total_count"]; got != size*hours/168 {
+				b.Fatalf("fixture window %dh selected %v, want%d", hours, got, size*hours/168)
+			}
 			b.Run(fmt.Sprintf("packets_%d/window_%dh", size, hours), func(b *testing.B) {
 				b.ReportAllocs()
 				b.ResetTimer()
@@ -224,5 +227,20 @@ func BenchmarkRelayAirtimeShareRetentionWindow(b *testing.B) {
 				}
 			})
 		}
+	}
+}
+
+func TestRelayAirtimeShareWindowDoesNotMutateStoreSlice(t *testing.T) {
+	first := makeRelayAirtimeTx(1, PayloadACK, 10, 0, "first")
+	excluded := makeRelayAirtimeTx(2, PayloadACK, 10, 0, "excluded")
+	excluded.FirstSeen = "2025-12-01T00:00:00Z"
+	last := makeRelayAirtimeTx(3, PayloadACK, 10, 0, "last")
+	store := newRelayAirtimeShareTestStore([]*StoreTx{first, excluded, last})
+	store.packets = []*StoreTx{first, nil, excluded, last}
+	if got := store.computeRelayAirtimeShare(TimeWindow{Since: "2026-01-01T00:00:00Z"})["total_count"]; got != 2 {
+		t.Fatalf("selected count=%v want2", got)
+	}
+	if len(store.packets) != 4 || store.packets[0] != first || store.packets[1] != nil || store.packets[2] != excluded || store.packets[3] != last {
+		t.Fatal("window filtering mutated retained store")
 	}
 }

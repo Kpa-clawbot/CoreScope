@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/meshcore-analyzer/packetpath"
 )
 
 // insertAdvertTx seeds one advert transmission row - the single place that
@@ -16,6 +18,15 @@ func insertAdvertTx(t *testing.T, db *DB, pubkey, hash string, rt int, ts time.T
 		`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, from_pubkey) VALUES ('00', ?, ?, ?, ?, ?)`,
 		hash, ts.Format("2006-01-02T15:04:05.000Z"), rt, payloadTypeAdvert, pubkey); err != nil {
 		t.Fatalf("insert transmission: %v", err)
+	}
+	// Fixtures represent ingestor output: canonical routing alone is not evidence.
+	if _, err := db.conn.Exec(`CREATE TABLE IF NOT EXISTS advert_route_evidence(id INTEGER PRIMARY KEY AUTOINCREMENT,tx_id INTEGER,bit INTEGER,UNIQUE(tx_id,bit))`); err != nil {
+		t.Fatal(err)
+	}
+	if rt == RouteFlood {
+		if _, err := db.conn.Exec(`INSERT INTO advert_route_evidence(tx_id,bit) SELECT id,1 FROM transmissions WHERE hash=?`, hash); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -28,21 +39,21 @@ func advertTS(hoursAgo float64) string {
 func TestCountFloodAdverts(t *testing.T) {
 	now := time.Now()
 	entries := []floodAdvertEntry{
-		{ts: advertTS(1), rt: advertRouteTypeFlood, hash: "a1"},
-		{ts: advertTS(2), rt: advertRouteTypeFlood, hash: "a1"}, // dup hash: one advert, two rows
-		{ts: advertTS(3), rt: advertRouteTypeFlood, hash: "a2"},
-		{ts: advertTS(4), rt: 0, hash: "a3"},                         // zero-hop (DIRECT): excluded
-		{ts: advertTS(9 * 24), rt: advertRouteTypeFlood, hash: "a4"}, // outside 7d window
-		{ts: "not-a-time", rt: advertRouteTypeFlood, hash: "a5"},     // unparseable: skipped
-		{ts: advertTS(5), rt: -1, hash: "a6"},                        // route type absent: excluded
+		{ts: advertTS(1), mask: packetpath.AdvertFlood, hash: "a1"},
+		{ts: advertTS(2), mask: packetpath.AdvertFlood, hash: "a1"}, // dup hash: one advert, two rows
+		{ts: advertTS(3), mask: packetpath.AdvertFlood, hash: "a2"},
+		{ts: advertTS(4), mask: packetpath.AdvertDirectEmptyPath, hash: "a3"}, // direct-only evidence: excluded
+		{ts: advertTS(9 * 24), mask: packetpath.AdvertFlood, hash: "a4"},      // outside 7d window
+		{ts: "not-a-time", mask: packetpath.AdvertFlood, hash: "a5"},          // unparseable: skipped
+		{ts: advertTS(5), mask: 0, hash: "a6"},                                // no known evidence: excluded
 	}
 	if got := countFloodAdverts(entries, now, 7*24); got != 2 {
 		t.Fatalf("want 2 flood adverts in window, got %d", got)
 	}
 	// Hash-less entries dedup by timestamp instead of collapsing into one.
 	hashless := []floodAdvertEntry{
-		{ts: advertTS(1), rt: advertRouteTypeFlood},
-		{ts: advertTS(2), rt: advertRouteTypeFlood},
+		{ts: advertTS(1), mask: packetpath.AdvertFlood},
+		{ts: advertTS(2), mask: packetpath.AdvertFlood},
 	}
 	if got := countFloodAdverts(hashless, now, 7*24); got != 2 {
 		t.Fatalf("want 2 hash-less flood adverts, got %d", got)
@@ -53,6 +64,9 @@ func TestCountFloodAdverts(t *testing.T) {
 // counting recent flood adverts only (zero-hop and out-of-window excluded).
 func TestNodeDetailIncludesFloodAdvertCount(t *testing.T) {
 	srv, router := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`CREATE TABLE advert_route_evidence(id INTEGER PRIMARY KEY AUTOINCREMENT,tx_id INTEGER,bit INTEGER,UNIQUE(tx_id,bit))`); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now().UTC()
 	ins := func(hash string, rt int, ts time.Time) {
 		insertAdvertTx(t, srv.db, "aabbccdd11223344", hash, rt, ts)
@@ -83,13 +97,13 @@ func TestNodeDetailIncludesFloodAdvertCount(t *testing.T) {
 	}
 	before := fetch()
 
-	ins("fa1", advertRouteTypeFlood, now.Add(-2*time.Hour))
-	ins("fa2", advertRouteTypeFlood, now.Add(-30*time.Hour))
-	ins("za1", 0, now.Add(-1*time.Hour))                       // zero-hop: excluded
-	ins("fa3", advertRouteTypeFlood, now.Add(-9*24*time.Hour)) // outside the 7d window
+	ins("fa1", RouteFlood, now.Add(-2*time.Hour))
+	ins("fa2", RouteFlood, now.Add(-30*time.Hour))
+	ins("za1", 0, now.Add(-1*time.Hour))             // zero-hop: excluded
+	ins("fa3", RouteFlood, now.Add(-9*24*time.Hour)) // outside the 7d window
 	// Inside the SQL date floor (window + 1d slack) but outside the exact 7d
 	// window - only the Go-side check rejects this one.
-	ins("fa4", advertRouteTypeFlood, now.Add(-time.Duration(7.5*24)*time.Hour))
+	ins("fa4", RouteFlood, now.Add(-time.Duration(7.5*24)*time.Hour))
 
 	if got := fetch(); got != before+2 {
 		t.Fatalf("want flood_advert_count_7d = %v+2, got %v", before, got)
@@ -102,7 +116,7 @@ func TestCountFloodAdvertsForNode_RowCapSaturates(t *testing.T) {
 	db := setupTestDB(t)
 	now := time.Now().UTC()
 	for i, h := range []string{"cap1", "cap2", "cap3"} {
-		insertAdvertTx(t, db, "capnode11223344", h, advertRouteTypeFlood, now.Add(-time.Duration(i+1)*time.Hour))
+		insertAdvertTx(t, db, "capnode11223344", h, RouteFlood, now.Add(-time.Duration(i+1)*time.Hour))
 	}
 	n, err := db.CountFloodAdvertsForNode("capnode11223344", 7*24, 2)
 	if err != nil {
@@ -125,7 +139,7 @@ func TestNodeDetailFloodCountAgreesWithRouteEvidence(t *testing.T) {
 				t.Fatal(err)
 			}
 			insertAdvertTx(t, srv.db, pubkey, "mixed-advert", firstRoute, time.Now().Add(-time.Hour))
-			if _, err := srv.db.conn.Exec(`INSERT INTO advert_route_evidence(tx_id,bit) SELECT id,1 FROM transmissions WHERE hash='mixed-advert' UNION ALL SELECT id,2 FROM transmissions WHERE hash='mixed-advert'`); err != nil {
+			if _, err := srv.db.conn.Exec(`INSERT INTO advert_route_evidence(tx_id,bit) SELECT id,1 FROM transmissions WHERE hash='mixed-advert' AND NOT EXISTS(SELECT 1 FROM advert_route_evidence WHERE tx_id=transmissions.id AND bit=1) UNION ALL SELECT id,2 FROM transmissions WHERE hash='mixed-advert'`); err != nil {
 				t.Fatal(err)
 			}
 			w := httptest.NewRecorder()
@@ -150,6 +164,9 @@ func TestNodeDetailLegacyFloodCountIsUnavailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	insertAdvertTx(t, srv.db, "aabbccdd11223344", "legacy-flood", RouteFlood, time.Now().Add(-time.Hour))
+	if _, err := srv.db.conn.Exec(`DROP TABLE advert_route_evidence`); err != nil {
+		t.Fatal(err)
+	}
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, httptest.NewRequest("GET", "/api/nodes/aabbccdd11223344", nil))
 	var response NodeDetailResponse

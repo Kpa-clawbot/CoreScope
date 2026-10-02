@@ -1293,7 +1293,7 @@ func (db *DB) GetNodeByPubkey(pubkey string) (map[string]interface{}, error) {
 // could attribute its transmissions to a victim by naming itself with the
 // victim's pubkey. Pubkey is unique by design — that's the whole point.
 func (db *DB) GetRecentTransmissionsForNode(pubkey string, limit int) ([]map[string]interface{}, error) {
-	if limit <= 0 || limit > 20 {
+	if limit <= 0 {
 		limit = 20
 	}
 

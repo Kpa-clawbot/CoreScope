@@ -1,30 +1,30 @@
 package main
 
-import "time"
+import (
+	"errors"
+	"time"
 
-// advertRouteTypeFlood is ROUTE_TYPE_FLOOD from the MeshCore packet header.
-// Named distinctly from the equivalent constant in the (still open) unscoped-
-// relay PR so the two changes merge independently.
-const advertRouteTypeFlood = 1
+	"github.com/meshcore-analyzer/packetpath"
+)
 
 // floodAdvertEntry is one advert transmission originated by a node, reduced to
-// what the windowed flood-advert count needs: first-seen timestamp, route type
+// what the windowed flood-advert count needs: first-seen timestamp, known route evidence
 // and packet hash (for dedup across re-ingests / multi-observer rows).
 type floodAdvertEntry struct {
 	ts   string
-	rt   int
+	mask uint8
 	hash string
 }
 
-// countFloodAdverts counts distinct flood adverts (route_type ==
-// advertRouteTypeFlood) whose first-seen lies within the past windowHours. Entries
+// countFloodAdverts counts distinct adverts with known flood evidence whose
+// first-seen lies within the past windowHours. Entries
 // with unparseable timestamps are skipped, matching relay-liveness behaviour;
 // entries without a hash fall back to their timestamp as the dedup key.
 func countFloodAdverts(entries []floodAdvertEntry, now time.Time, windowHours float64) int {
 	cutoff := now.Add(-time.Duration(windowHours * float64(time.Hour)))
 	seen := map[string]struct{}{}
 	for _, e := range entries {
-		if e.rt != advertRouteTypeFlood {
+		if e.mask&packetpath.AdvertFlood == 0 {
 			continue
 		}
 		t, ok := parseRelayTS(e.ts)
@@ -40,16 +40,13 @@ func countFloodAdverts(entries []floodAdvertEntry, now time.Time, windowHours fl
 	return len(seen)
 }
 
-// CountFloodAdvertsForNode returns how many distinct FLOOD adverts pubkey
-// originated in the last windowHours - the mesh-wide-airtime kind. Zero-hop
-// adverts (route_type DIRECT) are excluded, so a nearby observer hearing a
-// node's cheap local adverts does not inflate the number.
+// CountFloodAdvertsForNode counts distinct adverts with recorded flood evidence,
+// including mixed and transport-flood frames, independently of the first route.
+// It is a lower bound while backfill is pending or evidence writes have failed.
+// With no evidence table the count is unavailable, not a proven zero.
 //
-// route_type is filtered in SQL so an advert-spamming node cannot truncate
-// the flood count (review feedback on the earlier LIMIT approach). The time
-// floor is a DATE-ONLY string with one day of slack: a date prefix compares
-// lexically the same across every first_seen format parseRelayTS accepts
-// ('T' and ' ' separators alike); the exact window check stays in Go.
+// SQL filters known flood evidence before the row cap. The date-only floor has
+// one day of slack for mixed timestamp formats; the exact window stays in Go.
 //
 // The row cap is a pure safety valve on per-request allocation: it applies to
 // flood adverts inside the floor window only, and 50000 in ~8 days is ~4 per
@@ -61,10 +58,16 @@ func countFloodAdverts(entries []floodAdvertEntry, now time.Time, windowHours fl
 const floodAdvertRowCap = 50000
 
 func (db *DB) CountFloodAdvertsForNode(pubkey string, windowHours float64, rowCap int) (int, error) {
+	if !db.advertEvidencePresent() {
+		return 0, errors.New("advert route evidence unavailable")
+	}
 	floor := time.Now().UTC().Add(-time.Duration(windowHours*float64(time.Hour))).AddDate(0, 0, -1).Format("2006-01-02")
 	rows, err := db.conn.Query(
-		"SELECT COALESCE(first_seen, ''), COALESCE(route_type, -1), COALESCE(hash, '') FROM transmissions WHERE from_pubkey = ? AND payload_type = ? AND route_type = ? AND first_seen >= ? ORDER BY id DESC LIMIT ?",
-		pubkey, payloadTypeAdvert, advertRouteTypeFlood, floor, rowCap)
+		`SELECT COALESCE(first_seen, ''), ?, COALESCE(hash, '') FROM transmissions t
+ WHERE from_pubkey=? AND payload_type=? AND first_seen>=?
+ AND EXISTS(SELECT 1 FROM advert_route_evidence e WHERE e.tx_id=t.id AND e.bit=?)
+ ORDER BY id DESC LIMIT ?`,
+		packetpath.AdvertFlood, pubkey, payloadTypeAdvert, floor, packetpath.AdvertFlood, rowCap)
 	if err != nil {
 		return 0, err
 	}
@@ -72,10 +75,10 @@ func (db *DB) CountFloodAdvertsForNode(pubkey string, windowHours float64, rowCa
 	var entries []floodAdvertEntry
 	for rows.Next() {
 		var e floodAdvertEntry
-		if err := rows.Scan(&e.ts, &e.rt, &e.hash); err != nil {
+		if err := rows.Scan(&e.ts, &e.mask, &e.hash); err != nil {
 			return 0, err
 		}
 		entries = append(entries, e)
 	}
-	return countFloodAdverts(entries, time.Now(), windowHours), nil
+	return countFloodAdverts(entries, time.Now(), windowHours), rows.Err()
 }

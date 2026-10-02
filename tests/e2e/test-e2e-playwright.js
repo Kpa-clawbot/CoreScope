@@ -828,9 +828,9 @@ async function run() {
         await chartPage.reload({ waitUntil: 'domcontentloaded' });
         await chartPage.waitForSelector('.dumbbell-row');
         const labels = await chartPage.locator('.dumbbell-label').allTextContents();
-        assert(JSON.stringify(labels) === JSON.stringify(['Flood adverts', 'Other adverts', 'Zero-hop adverts', 'Mixed adverts', 'ACK']), 'advert chart labels: ' + labels.join(', '));
+        assert(JSON.stringify(labels) === JSON.stringify(['Flood adverts', 'Other adverts', 'Direct adverts (empty path)', 'Mixed adverts', 'ACK']), 'advert chart labels: ' + labels.join(', '));
         assert((await chartPage.locator('.dumbbell-evidence-note').textContent()).includes('older overwritten observations cannot be recovered'), 'known-evidence caveat is visible');
-        const zero = chartPage.locator('.dumbbell-row').filter({ hasText: 'Zero-hop adverts' });
+        const zero = chartPage.locator('.dumbbell-row').filter({ hasText: 'Direct adverts (empty path)' });
         assert((await zero.textContent()).includes('air 0.0%'), 'zero-relay advert row must remain visible');
         assert((await zero.getAttribute('title')).includes('Count: 1 (20.00%)'), 'tooltip retains count');
         const layout = await chartPage.locator('.dumbbell-chart').evaluate(chart => {

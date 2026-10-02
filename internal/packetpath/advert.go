@@ -3,13 +3,15 @@ package packetpath
 import "encoding/hex"
 
 const (
-	AdvertFlood   uint8 = 1
-	AdvertZeroHop uint8 = 2
+	AdvertFlood           uint8 = 1
+	AdvertDirectEmptyPath uint8 = 2
 )
 
 // AdvertRouteEvidence classifies one received wire frame, independently of a
 // canonical transmission's metadata. Mesh::sendZeroHop writes path_len = 0;
-// hash-size flags with a zero count are not that same encoding. Transport
+// Mesh::onRecvPacket -> removeSelfFromPath -> retransmit can also leave an
+// empty remaining path, preserving the hash-size flags. Neither encoding
+// proves an original zero-hop send or RF distance. Transport
 // routes carry four bytes before path_len (firmware Packet.cpp / Mesh.cpp).
 // The fixed buffer bounds both work and allocation to a radio-sized frame.
 func AdvertRouteEvidence(raw string) uint8 {
@@ -39,21 +41,23 @@ func AdvertRouteEvidence(raw string) uint8 {
 	if route == RouteFlood || route == RouteTransportFlood {
 		return AdvertFlood
 	}
-	if path == 0 {
-		return AdvertZeroHop
+	if path&63 == 0 {
+		return AdvertDirectEmptyPath
 	}
 	return 0
 }
 
 // AdvertKind describes the union of known evidence, not exclusive historical
-// use: legacy observations may already have been overwritten before upgrade.
+// use: legacy observations may already have been overwritten before upgrade,
+// or evidence writes may have failed. The API spelling "zero_hop" is retained
+// for compatibility and denotes observed direct empty-path frames only.
 func AdvertKind(evidence uint8) string {
-	switch evidence & (AdvertFlood | AdvertZeroHop) {
+	switch evidence & (AdvertFlood | AdvertDirectEmptyPath) {
 	case AdvertFlood:
 		return "flood"
-	case AdvertZeroHop:
+	case AdvertDirectEmptyPath:
 		return "zero_hop"
-	case AdvertFlood | AdvertZeroHop:
+	case AdvertFlood | AdvertDirectEmptyPath:
 		return "mixed"
 	default:
 		return "other"

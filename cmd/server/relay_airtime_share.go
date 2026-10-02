@@ -151,29 +151,44 @@ func (s *PacketStore) computeRelayAirtimeShare(window TimeWindow) map[string]int
 		advertKind  string
 	}
 	buckets := make(map[bucketKey]*bucket)
-	// Low bits union advert evidence; high bit marks the hash counted below.
-	// Keep the existing first-record score formula, but never first-wins kind.
-	// Evidence describes the hash's known history, like the persisted mask;
-	// the reporting window filters packet eligibility, not its route evidence.
-	seenHash := make(map[string]uint8, len(s.packets))
-	for _, tx := range s.packets {
-		if tx != nil && tx.PayloadType != nil && *tx.PayloadType == PayloadADVERT && tx.Hash != "" {
+	// Filter before allocating the hash map. Reuse the packet slice when every
+	// record is eligible; otherwise copy only the selected pointers. This keeps
+	// short-window scratch space small without a full-window allocation penalty.
+	selected := s.packets
+	filtered := false
+	for i, tx := range s.packets {
+		if tx == nil || tx.PayloadType == nil || !window.Includes(tx.FirstSeen) {
+			if !filtered {
+				selected = append([]*StoreTx(nil), s.packets[:i]...)
+				filtered = true
+			}
+			continue
+		}
+		if filtered {
+			selected = append(selected, tx)
+		}
+	}
+	// Low bits union known evidence; the high bit deduplicates scores below.
+	seenHash := make(map[string]uint8, len(selected))
+	for _, tx := range selected {
+		if *tx.PayloadType == PayloadADVERT && tx.Hash != "" {
 			seenHash[tx.Hash] |= tx.AdvertRouteEvidence
+		}
+	}
+	if filtered {
+		// An eligible hash keeps its known older evidence, but neither hashes
+		// found only outside the window nor their scores enter the result.
+		for _, tx := range s.packets {
+			if tx != nil && tx.PayloadType != nil && *tx.PayloadType == PayloadADVERT && tx.Hash != "" {
+				if mask, eligible := seenHash[tx.Hash]; eligible {
+					seenHash[tx.Hash] = mask | tx.AdvertRouteEvidence
+				}
+			}
 		}
 	}
 	totalCount := 0
 	var totalScore int64
-
-	for _, tx := range s.packets {
-		if tx == nil || tx.PayloadType == nil {
-			continue
-		}
-		if !window.Includes(tx.FirstSeen) {
-			continue
-		}
-		// Dedup per-hash: each distinct packet counted once. ACKs in the
-		// test fixture have unique hashes so this only collapses true
-		// re-observations of the same packet.
+	for _, tx := range selected {
 		if tx.Hash != "" {
 			if seenHash[tx.Hash]&128 != 0 {
 				continue

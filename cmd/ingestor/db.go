@@ -1126,11 +1126,13 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 	}
 	// Capture route evidence BEFORE the observation conflict update can erase
 	// a different route. Duplicate evidence is a read-only indexed probe.
+	// Analytics failures must not drop core observations or liveness updates;
+	// known evidence is a lower bound when an evidence read/write fails.
 	if data.PayloadType == 4 {
 		if bit := packetpath.AdvertRouteEvidence(data.RawHex); bit != 0 {
 			if _, err := s.stmtInsertAdvertEvidence.Exec(txID, bit, txID, bit); err != nil {
 				s.Stats.WriteErrors.Add(1)
-				return isNew, fmt.Errorf("record advert route evidence: %w", err)
+				log.Printf("[db] record advert route evidence (non-fatal): %v", err)
 			}
 		}
 	}
@@ -1157,7 +1159,7 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 	if !isNew && data.PayloadType == 4 && observerIdx != nil && data.RawHex != "" {
 		if err := s.preserveLegacyAdvertObservation(txID, *observerIdx, data.PathJSON); err != nil {
 			s.Stats.WriteErrors.Add(1)
-			return isNew, fmt.Errorf("preserve legacy advert evidence: %w", err)
+			log.Printf("[db] preserve legacy advert evidence (non-fatal): %v", err)
 		}
 	}
 

@@ -2090,12 +2090,15 @@ console.log('\n=== Relay airtime advert labels ===');
   ];
   test('relay chart labels distinguish all advert kinds and retain zero-score rows', () => {
     const html = render({ rows, total_score: 300 });
-    for (const label of ['Flood adverts', 'Zero-hop adverts', 'Other adverts', 'Mixed adverts', 'ACK']) {
+    for (const label of ['Flood adverts', 'Direct adverts (empty path)', 'Other adverts', 'Mixed adverts', 'ACK']) {
       assert.ok(html.includes('>' + label + '</div>'), 'missing chart label: ' + label);
       assert.ok(html.includes('title="' + label + '\n'), 'missing tooltip label: ' + label);
     }
     assert.strictEqual((html.match(/class="dumbbell-row"/g) || []).length, 5);
     assert.ok(html.includes('Known route evidence'), 'classification must not imply complete history');
+    assert.ok(html.includes('Background backfill improves classification automatically'), 'upgrade progress is explained');
+    assert.ok(html.includes('does not prove an original zero-hop send'), 'direct empty paths do not prove origin');
+    assert.ok(html.includes('failed evidence writes may leave gaps'), 'best-effort evidence limitation is explained');
     assert.ok(html.includes('older overwritten observations cannot be recovered'), 'legacy caveat must remain visible');
     assert.ok(html.includes('air 0.0%'), 'zero-relay advert share remains visible');
   });

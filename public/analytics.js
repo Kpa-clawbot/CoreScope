@@ -539,13 +539,13 @@
     var html = '<div class="dumbbell-chart" style="display:flex;flex-direction:column;gap:8px;padding:8px 4px">';
     if (presetCaption) html += presetCaption;
     if (rows.some(function (r) { return r.payload_type === 'ADVERT'; })) {
-      html += '<div class="dumbbell-evidence-note text-muted" style="font-size:11px">Known route evidence: Mixed adverts were observed as both flood and zero-hop. Other adverts have no classified evidence. Available history is a lower bound; older overwritten observations cannot be recovered.</div>';
+      html += '<div class="dumbbell-evidence-note text-muted" style="font-size:11px">Known route evidence: Mixed adverts were observed as both flood and direct with an empty remaining path. An empty path does not prove an original zero-hop send. Other adverts have no classified evidence yet. Background backfill improves classification automatically. Available history is a lower bound; older overwritten observations cannot be recovered, and failed evidence writes may leave gaps.</div>';
     }
     rows.forEach(function (r, i) {
       var name = r.payload_type || 'UNK';
       if (name === 'ADVERT') {
         if (r.advert_kind === 'flood') name = 'Flood adverts';
-        else if (r.advert_kind === 'zero_hop') name = 'Zero-hop adverts';
+        else if (r.advert_kind === 'zero_hop') name = 'Direct adverts (empty path)';
         else if (r.advert_kind === 'mixed') name = 'Mixed adverts';
         else if (r.advert_kind === 'other') name = 'Other adverts';
       }

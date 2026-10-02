@@ -60,7 +60,7 @@ type StoreTx struct {
 	// Cached parsed fields (set once, read many)
 	parsedPath          []string               // cached parsePathJSON result
 	pathParsed          bool                   // whether parsedPath has been set
-	AdvertRouteEvidence uint8                  // union of durable known flood/zero-hop evidence
+	AdvertRouteEvidence uint8                  // union of known flood/direct-empty-path evidence
 	decodedOnce         sync.Once              // guards parsedDecoded
 	parsedDecoded       map[string]interface{} // cached json.Unmarshal of DecodedJSON
 	// Dedup map: "observerID|pathJSON" → true for O(1) duplicate checks
