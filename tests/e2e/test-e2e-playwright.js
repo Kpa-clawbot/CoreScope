@@ -2618,9 +2618,8 @@ async function run() {
       { waitUntil: 'domcontentloaded' });
     await page.reload({ waitUntil: 'load' });
     await page.waitForSelector('#pktRight .detail-obs-row.observation-current[data-obs-id="' + observations[1].id + '"]');
-    const obsRows = await Promise.all(observations.map(o =>
-      page.$('#pktRight .detail-obs-row[data-obs-id="' + o.id + '"]')));
-    assert(obsRows.every(Boolean), 'both observation rows must be rendered');
+    const obsRows = observations.map(o =>
+      page.locator('#pktRight .detail-obs-row[data-obs-id="' + o.id + '"]'));
 
     for (const index of [0, 1, 0]) {
       const id = String(observations[index].id);
