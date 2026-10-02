@@ -747,7 +747,7 @@
 
         <div class="node-full-card" id="node-packets">
           ${(() => { const validPackets = adverts.filter(p => p.hash && p.timestamp); return `
-          <h4 title="Adverts this node originated. The section is limited to adverts because they are the only packet type attributable to an originating node: transmissions.from_pubkey is populated for ADVERTs only, so a relayed CHAN or TXT packet cannot be traced back to its sender without path resolution. Groups use available observations; older history may be incomplete.">Recent Adverts (${validPackets.length})</h4>
+          <h4 title="Adverts this node originated. The section is limited to adverts because they are the only packet type attributable to an originating node: transmissions.from_pubkey is populated for ADVERTs only, so a relayed CHAN or TXT packet cannot be traced back to its sender without path resolution. Groups use available observations; older history may be incomplete. An observed empty direct path cannot prove an origin-local send or RF distance.">Recent Adverts (${validPackets.length})</h4>
           <div class="node-activity-list">
             ${window.groupRecentAdverts(validPackets).map(group => `<div class="node-advert-group" data-advert-kind="${group.kind}">
             <h5 title="Count in this recent sample, not the node's lifetime total.">${group.label} (${group.adverts.length})</h5>
@@ -1738,7 +1738,7 @@
 
         <div class="node-detail-section">
           ${(() => { const validPackets = adverts.filter(a => a.hash && a.timestamp); return `
-          <h4 title="Adverts this node originated. The section is limited to adverts because they are the only packet type attributable to an originating node: transmissions.from_pubkey is populated for ADVERTs only, so a relayed CHAN or TXT packet cannot be traced back to its sender without path resolution. Groups use available observations; older history may be incomplete.">Recent Adverts (${validPackets.length})</h4>
+          <h4 title="Adverts this node originated. The section is limited to adverts because they are the only packet type attributable to an originating node: transmissions.from_pubkey is populated for ADVERTs only, so a relayed CHAN or TXT packet cannot be traced back to its sender without path resolution. Groups use available observations; older history may be incomplete. An observed empty direct path cannot prove an origin-local send or RF distance.">Recent Adverts (${validPackets.length})</h4>
           <div id="advertTimeline">
             ${window.groupRecentAdverts(validPackets).map(group => `<div class="node-advert-group" data-advert-kind="${group.kind}">
             <h5 title="Count in this recent sample, not the node's lifetime total.">${group.label} (${group.adverts.length})</h5>

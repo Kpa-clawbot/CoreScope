@@ -993,8 +993,8 @@
   window.groupRecentAdverts = function (adverts) {
     var groups = [
       { kind: 'flood', label: 'Flood adverts', adverts: [] },
-      { kind: 'mixed', label: 'Mixed flood / zero-hop adverts', adverts: [] },
-      { kind: 'zero-hop', label: 'Zero-hop adverts', adverts: [] },
+      { kind: 'mixed', label: 'Mixed flood / direct (empty path) adverts', adverts: [] },
+      { kind: 'zero-hop', label: 'Direct adverts (empty path)', adverts: [] },
       { kind: 'other', label: 'Other / unknown adverts', adverts: [] },
     ];
     adverts.forEach(function (advert) {
