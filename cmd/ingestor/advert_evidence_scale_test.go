@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -97,16 +96,25 @@ func TestAdvertBackfillScale(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(latencies) == 0 {
+		t.Fatal("live writer produced no samples")
+	}
 	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
-	var rows, txCursor, obsCursor int
+	var rows, txCursor, obsCursor, liveObservations int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM advert_route_evidence`).Scan(&rows); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.db.QueryRow(`SELECT tx_cursor,obs_cursor FROM advert_evidence_backfill`).Scan(&txCursor, &obsCursor); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM observations WHERE transmission_id=(SELECT id FROM transmissions WHERE hash='scale-live')`).Scan(&liveObservations); err != nil {
+		t.Fatal(err)
+	}
+	if liveObservations != len(latencies) || s.Stats.WriteErrors.Load() != 0 {
+		t.Fatalf("live write loss: observations=%d samples=%d write_errors=%d", liveObservations, len(latencies), s.Stats.WriteErrors.Load())
+	}
 	t.Logf("BACKFILL transmissions=1000000 observations=11000000 advert_fraction=10%% frame_bytes=120 elapsed=%s evidence_rows=%d cursors=%d/%d live_samples=%d failures=%d p50=%s p95=%s p99=%s max=%s", elapsed, rows, txCursor, obsCursor, len(latencies), failures, latencies[len(latencies)/2], latencies[len(latencies)*95/100], latencies[len(latencies)*99/100], latencies[len(latencies)-1])
-	if rows < 200000 || failures != 0 {
-		t.Fatal(fmt.Sprint("incomplete result", rows, failures))
+	if rows != 200001 || failures != 0 {
+		t.Fatalf("incomplete result: evidence_rows=%d failures=%d", rows, failures)
 	}
 }
