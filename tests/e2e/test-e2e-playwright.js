@@ -121,7 +121,7 @@ async function run() {
             })));
             assert(groups.length === (empty ? 2 : 4), `Expected ${empty ? 2 : 4} advert groups, got ${groups.length}`);
             const expected = empty ? [[], []] : [[0, 2], [7, 8], [1, 3], [4, 5, 6, 9, 10]];
-            const labels = empty ? ['Flood adverts', 'Zero-hop adverts'] : ['Flood adverts', 'Mixed flood / zero-hop adverts', 'Zero-hop adverts', 'Other / unknown adverts'];
+            const labels = empty ? ['Flood adverts', 'Direct adverts (empty path)'] : ['Flood adverts', 'Mixed flood / direct (empty path) adverts', 'Direct adverts (empty path)', 'Other / unknown adverts'];
             assert(groups.reduce((count, group) => count + group.rows.length, 0) === adverts.length, 'Each advert must appear exactly once');
             expected.forEach((indices, i) => {
               assert(groups[i].heading === `${labels[i]} (${indices.length})`, `Wrong sample count: ${groups[i].heading}`);
@@ -139,6 +139,7 @@ async function run() {
             assert((await heading.getAttribute('title')).includes('originated'), 'Existing origin tooltip lost');
             const explanation = await heading.getAttribute('title');
             assert(explanation.includes('available observations') && explanation.includes('older history may be incomplete'), 'Grouping must explain the available-evidence limit');
+            assert(explanation.includes('observed empty direct path') && explanation.includes('cannot prove an origin-local send or RF distance'), 'Both node views must distinguish an observed path from send origin and distance');
           }
         }
       } finally {

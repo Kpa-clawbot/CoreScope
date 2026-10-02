@@ -7001,7 +7001,7 @@ console.log('\n=== roles.js: recent advert groups (#2073) ===');
       assert.ok(mixed, 'mixed group must exist');
       assert.strictEqual(mixed.adverts[0], advert, 'row metadata must be retained');
       assert.deepStrictEqual(Array.from(groups, group => group.kind), ['flood', 'mixed', 'zero-hop']);
-      assert.strictEqual(mixed.label, 'Mixed flood / zero-hop adverts');
+      assert.strictEqual(mixed.label, 'Mixed flood / direct (empty path) adverts');
     }
   });
   test('authoritative advert kind does not depend on canonical route or path', () => {
@@ -7081,7 +7081,7 @@ console.log('\n=== roles.js: recent advert groups (#2073) ===');
     const groups = ctx.groupRecentAdverts(packets);
     assert.deepStrictEqual(JSON.parse(JSON.stringify(groups.map(g => [g.kind, g.label, g.adverts.map(p => p.hash)]))), [
       ['flood', 'Flood adverts', ['b', 'd']],
-      ['zero-hop', 'Zero-hop adverts', ['a', 'e']],
+      ['zero-hop', 'Direct adverts (empty path)', ['a', 'e']],
       ['other', 'Other / unknown adverts', ['c', 'f']],
     ]);
     assert.strictEqual(groups.reduce((n, g) => n + g.adverts.length, 0), packets.length);
