@@ -5,6 +5,7 @@ const REPO_ROOT = require('path').resolve(__dirname, '..', '..');
  * Usage: node test-e2e-playwright.js
  */
 const { chromium } = require('playwright');
+const { doesNotReject } = require('node:assert/strict');
 
 const BASE = process.env.BASE_URL || 'http://localhost:3000';
 const GO_BASE = process.env.GO_BASE_URL || '';  // e.g. https://analyzer.00id.net:82
@@ -2596,41 +2597,43 @@ async function run() {
 
   // Test: per-observation raw_hex — hex pane updates when switching observations (#881)
   await test('Packet detail hex pane updates per observation', async () => {
-    await gotoPackets(page);
-    await page.waitForTimeout(500);
+    // Reuse the real #1486 transmission, seeded with distinct raw bytes after
+    // migration in deploy.yml. Missing fixture data must fail, never skip.
+    const hash = 'fae0c9e6d357a814';
+    const expectedHex = [
+      '1501aa0102030405060708090a0b0c0d0e0f',
+      '1501bb0102030405060708090a0b0c0d0e0f'
+    ];
+    const response = await context.request.get(BASE + '/api/packets/' + hash);
+    assert(response.ok(), '#2104 requires the #1486 grouped-packet fixture');
+    const detail = await response.json();
+    assert(detail.packet && detail.packet.hash === hash && Array.isArray(detail.observations),
+      'fixture must expose the expected packet and observations');
+    const observations = expectedHex.map(hex => detail.observations.find(o => o.raw_hex === hex));
+    assert(observations.every(Boolean), 'fixture must include both distinct observation raw byte strings');
+    assert(String(observations[0].id) !== String(observations[1].id), 'observation IDs must differ');
 
-    // Try clicking packet rows to find one with multiple observations
-    const rows = await page.$$('table tbody tr[data-action]');
-    let obsRows = [];
-    for (let i = 0; i < Math.min(rows.length, 10); i++) {
-      await rows[i].click({ timeout: 3000 }).catch(() => null);
-      await page.waitForTimeout(600);
-      obsRows = await page.$$('.detail-obs-row');
-      if (obsRows.length >= 2) break;
-    }
+    // Start on B so selecting A must complete a render before selecting B again.
+    await page.goto(BASE + '/#/packets/' + hash + '?obs=' + observations[1].id + '&timeWindow=0',
+      { waitUntil: 'domcontentloaded' });
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForSelector('#pktRight .detail-obs-row.observation-current[data-obs-id="' + observations[1].id + '"]');
+    const obsRows = await Promise.all(observations.map(o =>
+      page.$('#pktRight .detail-obs-row[data-obs-id="' + o.id + '"]')));
+    assert(obsRows.every(Boolean), 'both observation rows must be rendered');
 
-    if (obsRows.length < 2) {
-      console.log('    ⏭ Skipped: no packet with ≥2 observations found in first 10 rows');
-      return;
-    }
-
-    // Click first observation, capture hex dump
-    await obsRows[0].click({ timeout: 5000 });
-    await page.waitForTimeout(500);
-    const hex1 = await page.$eval('.hex-dump', el => el.textContent).catch(() => '');
-
-    // Click second observation, capture hex dump
-    await obsRows[1].click({ timeout: 5000 });
-    await page.waitForTimeout(500);
-    const hex2 = await page.$eval('.hex-dump', el => el.textContent).catch(() => '');
-
-    // If both have content and differ, the feature works
-    if (hex1 && hex2 && hex1 !== hex2) {
-      console.log('    ✓ Hex pane content differs between observations');
-    } else if (hex1 && hex2 && hex1 === hex2) {
-      console.log('    ⏭ Hex same for both observations (likely historical NULL raw_hex — OK)');
-    } else {
-      console.log('    ⏭ Could not capture hex content from both observations');
+    for (const index of [0, 1, 0]) {
+      const id = String(observations[index].id);
+      await doesNotReject(() => obsRows[index].click({ timeout: 5000 }),
+        'Observation ' + id + ' must remain selectable after the detail rerenders');
+      await page.waitForFunction(expectedId => {
+        const selected = document.querySelector('#pktRight .detail-obs-row.observation-current');
+        return selected && selected.dataset.obsId === expectedId;
+      }, id);
+      const selectedId = await page.locator('#pktRight .detail-obs-row.observation-current').getAttribute('data-obs-id');
+      assert(selectedId === id, 'expected selected observation ' + id + ', got ' + selectedId);
+      const hex = (await page.locator('#pktRight .hex-dump').textContent()).replace(/\s+/g, '').toLowerCase();
+      assert(hex === expectedHex[index], 'observation ' + id + ': expected hex ' + expectedHex[index] + ', got ' + hex);
     }
   });
 

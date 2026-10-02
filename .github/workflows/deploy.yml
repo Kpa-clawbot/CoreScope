@@ -391,12 +391,10 @@ jobs:
         #   → header=0x15 (route_type=1, payload_type=5)
         #   → ComputeContentHash(...) = fae0c9e6d357a814
         #
-        # The first_seen / observation timestamps are pinned to a date
-        # within retentionHours but outside the default 15-min UI
-        # window so the row is hidden in the default view (keeping
-        # test-e2e-playwright's first-10-rows hex-pane test
-        # unaffected) and reachable via the explicit ?timeWindow=0
-        # deep-link the #1486 test uses.
+        # Fixed old timestamps keep the row behind the freshly shifted
+        # fixture observations and outside the default 15-min UI window.
+        # The #1486 and #2104 tests reach it via an explicit hash +
+        # ?timeWindow=0 deep-link.
         run: |
           sqlite3 test-fixtures/e2e-fixture.db <<'SQL'
           -- Sort the seeded row LAST in BOTH default packets views:
@@ -404,16 +402,9 @@ jobs:
           --   • grouped view (#default for the packets page) sorts by
           --     MAX(observations.timestamp) DESC → we must keep our obs
           --     timestamps OLDER than every other fixture observation.
-          -- Fixture (after freshen) has obs timestamps spanning
-          --   2026-05-17 16:01:39Z .. 2026-05-28 00:00:00Z (max).
-          --   Note: freshen only shifts transmissions.first_seen forward
-          --   to ~now; observation.timestamp is left alone except for
-          --   the timestamp=0 case.
-          -- Use 2026-05-15 (~2 days older than the oldest fixture obs)
-          -- so our row sorts LAST in the grouped view too, keeping
-          -- test-e2e-playwright's first-10-rows hex-pane test
-          -- unaffected. The #1486 test still reaches the row via the
-          -- explicit hash + ?timeWindow=0 deep-link.
+          -- freshen-fixture.sh shifts fixture observations forward.
+          -- Keep this row at 2026-05-15 so it sorts LAST in the grouped
+          -- view too; the #1486 and #2104 tests use the explicit deep-link.
           INSERT INTO transmissions(id,raw_hex,hash,first_seen,route_type,payload_type,payload_version,decoded_json,channel_hash,from_pubkey)
             VALUES (0,'15000102030405060708090a0b0c0d0e0f','fae0c9e6d357a814','2026-05-15T00:00:00Z',1,5,0,'{"type":"CHAN","channel":"#test","text":"#1486 fixture"}',NULL,NULL);
           INSERT INTO observations(transmission_id,observer_idx,direction,snr,rssi,score,path_json,timestamp,resolved_path) VALUES
@@ -451,6 +442,18 @@ jobs:
         # standalone migrate tool here to bring the fixture up to the
         # required shape before the server boots.
         run: ./corescope-migrate -db test-fixtures/e2e-fixture.db
+
+      - name: 'Seed distinct observation bytes for #2104'
+        # raw_hex exists only after migration. Keep the #1486 payload/hash
+        # while encoding each observation's existing one-hop path.
+        run: |
+          sqlite3 test-fixtures/e2e-fixture.db <<'SQL'
+          UPDATE observations SET raw_hex = CASE observer_idx
+            WHEN 1 THEN '1501aa0102030405060708090a0b0c0d0e0f'
+            WHEN 2 THEN '1501bb0102030405060708090a0b0c0d0e0f'
+            WHEN 3 THEN '1501cc0102030405060708090a0b0c0d0e0f'
+          END WHERE transmission_id = 0 AND observer_idx IN (1,2,3);
+          SQL
 
       - name: Seed deterministic Path Inspector routes (#2060)
         run: sqlite3 test-fixtures/e2e-fixture.db < test-fixtures/path-inspector.sql
