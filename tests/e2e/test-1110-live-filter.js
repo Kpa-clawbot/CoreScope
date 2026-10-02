@@ -70,10 +70,12 @@ async function test(name, fn) {
         assert(await input.isDisabled(), 'node filter must be disabled while initial nodes are pending');
         releaseNodes();
         await loadingPage.waitForFunction(() => !document.getElementById('liveNodeFilterInput').disabled);
-        await input.fill(key);
+        await input.fill(key.slice(0, -1));
         const suggestion = loadingPage.locator(`#liveNodeFilterDropdown:not(.hidden) [data-key="${key}"]`);
         await suggestion.waitFor({ state: 'visible' });
-        await input.press('ArrowDown');
+        const optionKeys = await loadingPage.locator('#liveNodeFilterDropdown [data-key]')
+          .evaluateAll(options => options.map(option => option.getAttribute('data-key')));
+        for (let i = 0; i <= optionKeys.indexOf(key); i++) await input.press('ArrowDown');
         await input.press('Enter');
         const selected = await loadingPage.evaluate(() => window._liveGetNodeFilterKeys());
         assert(selected.length === 1 && selected[0] === key, 'keyboard selection must apply the matching node filter');
