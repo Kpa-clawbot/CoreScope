@@ -201,3 +201,28 @@ func BenchmarkRelayAirtimeShare30K(b *testing.B) {
 		store.computeRelayAirtimeShare(TimeWindow{})
 	}
 }
+
+// Short windows are the allocation worst case: retained history is much larger
+// than the selected 1-hour slice. All adverts exercise the maximum evidence map.
+func BenchmarkRelayAirtimeShareRetentionWindow(b *testing.B) {
+	for _, size := range []int{30000, 300000} {
+		packets := make([]*StoreTx, size)
+		for i := range packets {
+			tx := makeRelayAirtimeTx(i+1, PayloadADVERT, 120, 0, fmt.Sprintf("retained-%d", i))
+			tx.AdvertRouteEvidence = uint8(i%3 + 1)
+			tx.FirstSeen = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(i) * 7 * 24 * time.Hour / time.Duration(size)).Format(time.RFC3339)
+			packets[i] = tx
+		}
+		store := newRelayAirtimeShareTestStore(packets)
+		for _, hours := range []int{1, 24, 168} {
+			window := TimeWindow{Since: time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC).Add(-time.Duration(hours) * time.Hour).Format(time.RFC3339), Until: "2026-01-08T00:00:00Z"}
+			b.Run(fmt.Sprintf("packets_%d/window_%dh", size, hours), func(b *testing.B) {
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					store.computeRelayAirtimeShare(window)
+				}
+			})
+		}
+	}
+}

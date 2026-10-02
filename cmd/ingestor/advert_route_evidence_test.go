@@ -197,25 +197,75 @@ func TestAdvertRouteEvidenceBackfillResumeAndLiveUnion(t *testing.T) {
 	}
 }
 
-func TestAdvertRouteEvidenceWriteFailurePropagates(t *testing.T) {
-	s, err := OpenStore(filepath.Join(t.TempDir(), "write-failure.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	if _, err := s.db.Exec(`DROP TABLE advert_route_evidence`); err != nil {
-		t.Fatal(err)
-	}
-	_, err = s.InsertTransmission(&PacketData{Hash: "write-failure", PayloadType: 4, RouteType: 1, RawHex: "1100aa", PathJSON: "[]"})
-	if err == nil {
-		t.Fatal("evidence write failure must reach caller")
-	}
-	var count int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM observations`).Scan(&count); err != nil {
-		t.Fatal(err)
-	}
-	if count != 0 {
-		t.Fatal("observation persisted after evidence write failed")
+// Analytics is best effort: failure must not prevent the core observation,
+// resolved relay path, relay liveness, or transmission timestamp from landing.
+func TestAdvertRouteEvidenceFailureKeepsCoreIngestion(t *testing.T) {
+	for _, failure := range []string{"incoming-write", "legacy-read", "legacy-write"} {
+		t.Run(failure, func(t *testing.T) {
+			s, err := OpenStore(filepath.Join(t.TempDir(), "write-failure.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			const relay = "bbbbbbbbbb"
+			seedRelayNode(t, s, relay, "Fixture relay", "2026-01-01T00:00:00Z")
+			if err := s.RefreshPrefixIndex(); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.UpsertObserver("fixture-observer", "Fixture observer", "", nil); err != nil {
+				t.Fatal(err)
+			}
+			data := &PacketData{Hash: "write-failure", PayloadType: 4, RouteType: 1, RawHex: "1101bbaa", PathJSON: `["bb"]`, ObserverID: "fixture-observer", Timestamp: "2026-01-01T00:00:00Z"}
+			if _, err := s.InsertTransmission(data); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.db.Exec(`DELETE FROM advert_route_evidence; UPDATE observations SET raw_hex='1200aa',resolved_path=NULL`); err != nil {
+				t.Fatal(err)
+			}
+			stmt := `CREATE TRIGGER fail_evidence BEFORE INSERT ON advert_route_evidence WHEN NEW.bit=1 BEGIN SELECT RAISE(ABORT,'fixture evidence failure'); END`
+			if failure == "legacy-read" {
+				stmt = `DROP TABLE advert_evidence_backfill`
+			}
+			if failure == "legacy-write" {
+				stmt = `CREATE TRIGGER fail_evidence BEFORE INSERT ON advert_route_evidence WHEN NEW.bit=2 BEGIN SELECT RAISE(ABORT,'fixture evidence failure'); END`
+			}
+			if _, err := s.db.Exec(stmt); err != nil {
+				t.Fatal(err)
+			}
+			before := s.Stats.WriteErrors.Load()
+			data.Timestamp = "2026-01-02T00:00:00Z"
+			if _, err := s.InsertTransmission(data); err != nil {
+				t.Errorf("analytics failure aborted core ingestion: %v", err)
+			}
+			var raw, resolved string
+			var ts, lastSeen int64
+			if err := s.db.QueryRow(`SELECT raw_hex,COALESCE(resolved_path,''),timestamp FROM observations`).Scan(&raw, &resolved, &ts); err != nil {
+				t.Fatal(err)
+			}
+			if raw != data.RawHex || resolved != `["bbbbbbbbbb"]` || ts != 1767312000 {
+				t.Errorf("core observation not updated: raw=%s resolved=%s timestamp=%d", raw, resolved, ts)
+			}
+			if err := s.db.QueryRow(`SELECT last_seen FROM transmissions`).Scan(&lastSeen); err != nil {
+				t.Fatal(err)
+			}
+			if lastSeen != 1767312000 || nodeLastSeen(t, s, relay) != data.Timestamp {
+				t.Errorf("core liveness not updated: tx=%d relay=%s", lastSeen, nodeLastSeen(t, s, relay))
+			}
+			if s.Stats.WriteErrors.Load() != before+1 {
+				t.Errorf("analytics failure not counted once: before=%d after=%d", before, s.Stats.WriteErrors.Load())
+			}
+			var mask int
+			if err := s.db.QueryRow(`SELECT COALESCE(SUM(bit),0) FROM advert_route_evidence`).Scan(&mask); err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if failure == "incoming-write" {
+				want = 2
+			}
+			if mask != want {
+				t.Errorf("independent evidence not preserved: mask=%d want %d", mask, want)
+			}
+		})
 	}
 }
 

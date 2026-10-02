@@ -45,7 +45,7 @@ func advertEvidenceFixture(t *testing.T, raw string, bits ...int) (*DB, *sql.DB)
 	return db, w
 }
 
-func TestAdvertRouteEvidenceNodeAPIBoundedKinds(t *testing.T) {
+func TestAdvertRouteEvidenceNodeAPIHonorsRequestedLimit(t *testing.T) {
 	db, w := advertEvidenceFixture(t, "1100aa", 1)
 	for id := 2; id <= 24; id++ {
 		if _, err := w.Exec(`INSERT INTO transmissions(id,hash,raw_hex,first_seen,payload_type,route_type,from_pubkey) SELECT ?,?,'1100aa',first_seen,4,1,'fixture-origin' FROM transmissions WHERE id=1`, id, fmt.Sprintf("node-advert-%d", id)); err != nil {
@@ -64,8 +64,8 @@ func TestAdvertRouteEvidenceNodeAPIBoundedKinds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 20 {
-		t.Fatalf("node recent adverts returned %d, want bounded 20", len(rows))
+	if len(rows) != 24 {
+		t.Fatalf("node recent adverts returned %d, want requested 24 available rows", len(rows))
 	}
 	wants := []string{"other", "flood", "zero_hop", "mixed"}
 	for _, row := range rows {

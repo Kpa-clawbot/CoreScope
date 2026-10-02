@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -109,5 +110,56 @@ func TestCountFloodAdvertsForNode_RowCapSaturates(t *testing.T) {
 	}
 	if n != 2 {
 		t.Fatalf("want saturated count 2, got %d", n)
+	}
+}
+
+func TestNodeDetailFloodCountAgreesWithRouteEvidence(t *testing.T) {
+	for _, firstRoute := range []int{RouteDirect, RouteFlood, RouteTransportFlood} {
+		t.Run(fmt.Sprint(firstRoute), func(t *testing.T) {
+			srv, router := setupTestServer(t)
+			if _, err := srv.db.conn.Exec(`CREATE TABLE IF NOT EXISTS advert_route_evidence(id INTEGER PRIMARY KEY AUTOINCREMENT, tx_id INTEGER, bit INTEGER, UNIQUE(tx_id,bit))`); err != nil {
+				t.Fatal(err)
+			}
+			const pubkey = "aabbccdd11223344"
+			if _, err := srv.db.conn.Exec(`DELETE FROM transmissions WHERE from_pubkey=?`, pubkey); err != nil {
+				t.Fatal(err)
+			}
+			insertAdvertTx(t, srv.db, pubkey, "mixed-advert", firstRoute, time.Now().Add(-time.Hour))
+			if _, err := srv.db.conn.Exec(`INSERT INTO advert_route_evidence(tx_id,bit) SELECT id,1 FROM transmissions WHERE hash='mixed-advert' UNION ALL SELECT id,2 FROM transmissions WHERE hash='mixed-advert'`); err != nil {
+				t.Fatal(err)
+			}
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, httptest.NewRequest("GET", "/api/nodes/"+pubkey, nil))
+			var response NodeDetailResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if w.Code != 200 || len(response.RecentAdverts) != 1 || response.RecentAdverts[0]["advert_kind"] != "mixed" {
+				t.Fatalf("unexpected node response: %d %+v", w.Code, response)
+			}
+			if response.Node["flood_advert_count_7d"] != float64(1) {
+				t.Errorf("mixed advert must contribute one flood count regardless of first route %d: %v", firstRoute, response.Node["flood_advert_count_7d"])
+			}
+		})
+	}
+}
+
+func TestNodeDetailLegacyFloodCountIsUnavailable(t *testing.T) {
+	srv, router := setupTestServer(t)
+	if _, err := srv.db.conn.Exec(`DROP TABLE IF EXISTS advert_route_evidence`); err != nil {
+		t.Fatal(err)
+	}
+	insertAdvertTx(t, srv.db, "aabbccdd11223344", "legacy-flood", RouteFlood, time.Now().Add(-time.Hour))
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest("GET", "/api/nodes/aabbccdd11223344", nil))
+	var response NodeDetailResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	if _, ok := response.Node["flood_advert_count_7d"]; ok {
+		t.Errorf("missing evidence table must not report a proven count: %v", response.Node["flood_advert_count_7d"])
 	}
 }

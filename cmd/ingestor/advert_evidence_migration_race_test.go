@@ -26,7 +26,7 @@ func seedUnbackfilledAdvert(t *testing.T, canonical, observed string) (*Store, s
 	return s, path
 }
 
-func TestAdvertRouteEvidenceLegacyProtectionErrorsKeepOldRaw(t *testing.T) {
+func TestAdvertRouteEvidenceLegacyProtectionErrorsDoNotDropIncomingRaw(t *testing.T) {
 	for _, failure := range []string{"lookup", "write"} {
 		t.Run(failure, func(t *testing.T) {
 			s, _ := seedUnbackfilledAdvert(t, "1100aa", "1200aa")
@@ -39,15 +39,15 @@ func TestAdvertRouteEvidenceLegacyProtectionErrorsKeepOldRaw(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, err := s.InsertTransmission(&PacketData{Hash: "legacy-advert", ObserverID: "fixture-observer", PayloadType: 4, RouteType: 1, RawHex: "1100aa", PathJSON: "[]"})
-			if err == nil || !strings.Contains(err.Error(), "preserve legacy advert evidence") {
-				t.Fatalf("preservation failure not propagated: %v", err)
+			if err != nil {
+				t.Errorf("analytics preservation failure dropped incoming frame: %v", err)
 			}
 			var old string
 			if err := s.db.QueryRow(`SELECT raw_hex FROM observations WHERE id=1`).Scan(&old); err != nil {
 				t.Fatal(err)
 			}
-			if old != "1200aa" {
-				t.Fatalf("failed preservation overwrote old raw with %q", old)
+			if old != "1100aa" {
+				t.Fatalf("failed analytics preservation prevented incoming raw: %q", old)
 			}
 		})
 	}
