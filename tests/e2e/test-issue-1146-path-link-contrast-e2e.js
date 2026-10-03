@@ -199,7 +199,7 @@ async function effectiveBgFor(page, selector) {
         warning: !!chain.querySelector('.hop-unreliable-btn'),
         conflict: !!chain.querySelector('.hop-conflict-btn'),
         siblingAmbiguous: sibling.classList.contains('hop-ambiguous'),
-        hopCount: chain.children.length - chain.querySelectorAll('button').length,
+        hopCount: chain.children.length - chain.querySelectorAll(':scope > button').length,
       };
     }, { selector, targetHopKey, siblingKey });
     assert(result.hopCount === 18, 'Expected all 18 hops in the rendered chain');
