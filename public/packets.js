@@ -1111,9 +1111,12 @@
     }
     if (!uncertain) return body;
     const label = uncertain + ' of ' + filtered.length + ' hops have more than one candidate';
-    return body + ' <span class="hop-path-warn status-warn" title="' + escapeHtml(label) +
+    // Leads the hops: .path-hops clips at its right edge, and a trailing
+    // indicator was the one thing clipped, with no +N pill to show for it.
+    const warn = '<span class="hop-path-warn status-warn" title="' + escapeHtml(label) +
       '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' +
       uncertain + '</span>';
+    return warn + body;
   }
 
   let directPacketId = null;
@@ -2907,7 +2910,7 @@
     var kids = Array.prototype.slice.call(host.children);
     for (var i = 0; i < kids.length; i++) {
       var k = kids[i];
-      if (k.classList.contains('path-overflow-pill')) continue;
+      if (k.classList.contains('path-overflow-pill') || k.classList.contains('hop-path-warn')) continue;
       if (k.classList.contains('arrow')) {
         if (current) segments.push(current);
         current = '';

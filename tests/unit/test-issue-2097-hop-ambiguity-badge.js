@@ -175,6 +175,14 @@ console.log('\n=== #2097: the list summarises, the detail pane does not ===');
     'the detail pane calls renderPath without summary, so it keeps per-hop badges');
   assert(/hop-path-warn/.test(src),
     'the summarised form emits a single per-path indicator');
+  // .path-hops clips at its edge. Trailing the hops, the indicator was what
+  // got clipped: every hop fitted, so no +N pill appeared and the warning
+  // was invisible (#1128 Bug 1 E2E once the path column narrowed).
+  assert(/return warn \+ body;/.test(src),
+    'the indicator leads the path, so the edge clips hops, never the indicator');
+  const seg = (src.match(/function _pathHopSegments\(host\) \{[\s\S]*?\n  \}/) || [''])[0];
+  assert(/hop-path-warn/.test(seg),
+    'the +N popover leaves the indicator out of the hop list');
 }
 
 console.log('\n=== #2097: the observer position anchors the pick ===');
