@@ -41,6 +41,53 @@ async function test(name, fn) {
   page.setDefaultTimeout(10000);
   console.log(`#1110 Live filter E2E against ${BASE}`);
 
+  for (const abortInitialLoad of [false, true]) {
+    await test(`#2094 node filter becomes editable after initial nodes ${abortInitialLoad ? 'fail' : 'load'}`, async () => {
+      const response = await ctx.request.get(BASE + '/api/nodes?limit=1');
+      assert(response.ok(), 'fixture node request must succeed');
+      const { nodes } = await response.json();
+      assert(nodes && nodes[0] && nodes[0].public_key, 'fixture must contain a searchable node');
+      const key = nodes[0].public_key;
+      const loadingPage = await ctx.newPage();
+      loadingPage.setDefaultTimeout(10000);
+      let releaseNodes;
+      const heldNodes = new Promise(resolve => { releaseNodes = resolve; });
+      await loadingPage.route(url => url.pathname === '/api/nodes', async route => {
+        await heldNodes;
+        if (abortInitialLoad) await route.abort();
+        else await route.continue();
+      });
+      try {
+        const initialRequest = loadingPage.waitForRequest(req => new URL(req.url()).pathname === '/api/nodes');
+        await loadingPage.goto(BASE + '#/live', { waitUntil: 'domcontentloaded' });
+        await initialRequest;
+        const input = loadingPage.locator('#liveNodeFilterInput');
+        await input.waitFor({ state: 'visible' });
+        // A real keyboard cannot enter text into a control that is not ready.
+        await input.evaluate(el => el.focus());
+        await loadingPage.keyboard.type('pending');
+        assert(await input.inputValue() === '', 'node filter accepted text before its handlers were ready');
+        assert(await input.isDisabled(), 'node filter must be disabled while initial nodes are pending');
+        releaseNodes();
+        await loadingPage.waitForFunction(() => !document.getElementById('liveNodeFilterInput').disabled);
+        await input.fill(key.slice(0, -1));
+        const suggestion = loadingPage.locator(`#liveNodeFilterDropdown:not(.hidden) [data-key="${key}"]`);
+        await suggestion.waitFor({ state: 'visible' });
+        const optionKeys = await loadingPage.locator('#liveNodeFilterDropdown [data-key]')
+          .evaluateAll(options => options.map(option => option.getAttribute('data-key')));
+        for (let i = 0; i <= optionKeys.indexOf(key); i++) await input.press('ArrowDown');
+        await input.press('Enter');
+        const selected = await loadingPage.evaluate(() => window._liveGetNodeFilterKeys());
+        assert(selected.length === 1 && selected[0] === key, 'keyboard selection must apply the matching node filter');
+        assert(new URLSearchParams(loadingPage.url().split('?')[1]).get('node') === key,
+          'selected node must be preserved in the URL');
+      } finally {
+        releaseNodes();
+        await loadingPage.close();
+      }
+    });
+  }
+
   await test('input matches toolbar styling (theme-aware bg, comparable height)', async () => {
     await page.goto(BASE + '#/live', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#liveNodeFilterInput', { timeout: 10000 });

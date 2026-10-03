@@ -76,6 +76,7 @@ type Store struct {
 	stmtUpdateTxFirstSeen      *sql.Stmt
 	stmtBumpTxLastSeen         *sql.Stmt
 	stmtInsertObservation      *sql.Stmt
+	stmtInsertAdvertEvidence   *sql.Stmt
 	stmtUpsertNode             *sql.Stmt
 	stmtIncrementAdvertCount   *sql.Stmt
 	stmtUpsertObserver         *sql.Stmt
@@ -85,8 +86,12 @@ type Store struct {
 	stmtTouchNodeLastSeen      *sql.Stmt
 	stmtUpsertMetrics          *sql.Stmt
 
+	stmtGetLegacyAdvertObservation *sql.Stmt
+
 	sampleIntervalSec int
 	backfillWg        sync.WaitGroup
+
+	advertEvidenceComplete atomic.Bool // restored from durable migration status
 
 	// prefixIdx holds the prefix → pubkey index used by the
 	// resolved_path writer (#1547). Rebuilt on startup and once per
@@ -213,6 +218,11 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 		log.Printf("[migration/async] scheduling tx_last_seen_backfill_v1 failed: %v", err)
 	}
 
+	// A missing/failed completion lookup leaves preservation enabled. This
+	// lifecycle state is restored on restart, independently of main's startup.
+	var evidenceStatus string
+	_ = db.QueryRow(`SELECT status FROM _async_migrations WHERE name='advert_route_evidence_v1'`).Scan(&evidenceStatus)
+	s.advertEvidenceComplete.Store(evidenceStatus == "done")
 	return s, nil
 }
 
@@ -906,6 +916,14 @@ func applySchema(db *sql.DB) error {
 
 func (s *Store) prepareStatements() error {
 	var err error
+	s.stmtInsertAdvertEvidence, err = s.db.Prepare(insertAdvertEvidenceSQL)
+	if err != nil {
+		return err
+	}
+	s.stmtGetLegacyAdvertObservation, err = s.db.Prepare(legacyAdvertObservationSQL)
+	if err != nil {
+		return err
+	}
 
 	s.stmtGetTxByHash, err = s.db.Prepare("SELECT id, first_seen FROM transmissions WHERE hash = ?")
 	if err != nil {
@@ -1106,6 +1124,18 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 	if !isNew {
 		s.Stats.DuplicateTransmissions.Add(1)
 	}
+	// Capture route evidence BEFORE the observation conflict update can erase
+	// a different route. Duplicate evidence is a read-only indexed probe.
+	// Analytics failures must not drop core observations or liveness updates;
+	// known evidence is a lower bound when an evidence read/write fails.
+	if data.PayloadType == 4 {
+		if bit := packetpath.AdvertRouteEvidence(data.RawHex); bit != 0 {
+			if _, err := s.stmtInsertAdvertEvidence.Exec(txID, bit, txID, bit); err != nil {
+				s.Stats.WriteErrors.Add(1)
+				log.Printf("[db] record advert route evidence (non-fatal): %v", err)
+			}
+		}
+	}
 
 	// Resolve observer_idx and update last_seen
 	var observerIdx *int64
@@ -1119,6 +1149,17 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 			// Per-packet rxTime is stored separately on observations/transmissions
 			// using envelope time (see InsertTransmission above). See #1465.
 			_, _ = s.stmtUpdateObserverLastSeen.Exec(ingestNow, ingestNow, ingestNow, ingestNow, rowid)
+		}
+	}
+
+	// Until backfill commits this observation's evidence, preserve its old
+	// frame before UPSERT can destroy it. writerMu also guards checkpoints.
+	// Run even for malformed incoming raw: the surviving old frame is valid
+	// evidence independently of whether the new frame contributes a bit.
+	if !isNew && data.PayloadType == 4 && observerIdx != nil && data.RawHex != "" {
+		if err := s.preserveLegacyAdvertObservation(txID, *observerIdx, data.PathJSON); err != nil {
+			s.Stats.WriteErrors.Add(1)
+			log.Printf("[db] preserve legacy advert evidence (non-fatal): %v", err)
 		}
 	}
 

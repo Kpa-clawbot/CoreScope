@@ -959,7 +959,26 @@ console.log('\n=== packets.js: buildGroupRowHtml ===');
     };
     const result = api.buildGroupRowHtml(p);
     assert(result.includes('group-header'));
-    assert(result.includes('href="/icons/phosphor-sprite.svg#ph-caret-up"'));  // collapsed arrow
+    assert(result.includes('href="/icons/phosphor-sprite.svg#ph-caret-right"'));  // collapsed arrow
+  });
+
+  test('buildGroupRowHtml draws exactly one chevron in the expand cell', () => {
+    const p = {
+      hash: 'one', count: 3, latest: '2024-01-01T00:00:00Z',
+      observer_id: null, raw_hex: 'aabbcc', payload_type: 0,
+      route_type: 0, decoded_json: '{}', path_json: '[]',
+      observation_count: 3, observer_count: 2
+    };
+    const result = api.buildGroupRowHtml(p);
+    const cell = result.match(/<td class="col-expand"[^>]*>([\s\S]*?)<\/td>/)[1];
+    assert.strictEqual((cell.match(/ph-caret-/g) || []).length, 1);
+    assert(!/[▶▼▲▸]/.test(cell), 'no text glyph alongside the SVG caret');
+  });
+
+  test('style.css adds no ::before glyph to group-header rows', () => {
+    const css = fs.readFileSync('public/style.css', 'utf8');
+    assert(!/\.group-header[^{]*::before/.test(css),
+      'a ::before on .group-header draws a second arrow next to the SVG caret');
   });
 
   test('buildGroupRowHtml shows observation count badge', () => {
@@ -1239,6 +1258,174 @@ console.log('\n=== packets.js: scroll position preserved across renderTableRows 
 
     // scrollTop must be preserved (not reset to 0)
     assert.strictEqual(pktLeftScrollTop, 500, 'scrollTop should be preserved after renderTableRows, got ' + pktLeftScrollTop);
+  });
+}
+
+console.log('\n=== app.js: distributeColumnWidths (packets column packing) ===');
+{
+  const ctx = loadPacketsSandbox();
+  const distribute = ctx.distributeColumnWidths;
+  const col = (w, floor) => ({ w, floor: floor == null ? Math.min(w, 64) : floor });
+  const sum = a => a.reduce((s, w) => s + w, 0);
+
+  test('roomy container: fixed columns keep their content width, flex columns take the rest', () => {
+    // time 65, size 44, hb 29 on a 2000px container: nothing inflates.
+    const d = distribute([col(65), col(44), col(29)], 2, 2000, 120);
+    assert.deepStrictEqual(Array.from(d.fixed), [65, 44, 29]);
+    assert.strictEqual(sum(d.flex), 2000 - 138);
+    assert.strictEqual(d.total, 2000);
+  });
+
+  test('rounding remainder goes to the last flex column', () => {
+    const d = distribute([col(10, 10)], 2, 111, 20);
+    assert.deepStrictEqual(Array.from(d.flex), [50, 51]);
+    assert.strictEqual(d.total, 111);
+  });
+
+  test('tight container: widest fixed columns give way first so flex keeps its minimum', () => {
+    // observer 178 and type 115 absorb the squeeze; the short columns do not move.
+    const d = distribute([col(65), col(44), col(115), col(178)], 2, 600, 120);
+    assert.deepStrictEqual(Array.from(d.flex), [120, 120]);
+    assert.strictEqual(d.fixed[0], 65);
+    assert.strictEqual(d.fixed[1], 44);
+    assert(d.fixed[3] <= 178 && d.fixed[3] >= 64, 'observer capped, not below its floor');
+    assert(d.fixed[2] <= 115, 'type capped at the same level');
+    assert(d.total <= 600, 'fits: total=' + d.total);
+  });
+
+  test('floors are never crossed: overflow instead (caller scrolls)', () => {
+    const d = distribute([col(200, 150), col(200, 150)], 1, 300, 120);
+    assert.deepStrictEqual(Array.from(d.fixed), [150, 150]);
+    assert.deepStrictEqual(Array.from(d.flex), [120]);
+    assert.strictEqual(d.total, 420);
+  });
+
+  test('a dragged column (floor = width) keeps its width under pressure', () => {
+    const d = distribute([col(300, 300), col(200)], 1, 500, 120);
+    assert.strictEqual(d.fixed[0], 300);
+    assert(d.fixed[1] < 200);
+  });
+
+  test('floors leave less than flexMin: flex columns shrink to the hard minimum before overflowing', () => {
+    // ~1100px viewport with the detail panel open: floors 467px, 650px available.
+    const d = distribute([col(467, 467)], 2, 650, 120, 60);
+    assert.deepStrictEqual(Array.from(d.flex), [91, 92]);
+    assert.strictEqual(d.total, 650);
+  });
+
+  test('hard minimum still overflows when even it does not fit', () => {
+    const d = distribute([col(600, 600)], 2, 650, 120, 60);
+    assert.deepStrictEqual(Array.from(d.flex), [60, 60]);
+    assert.strictEqual(d.total, 720);
+  });
+
+  test('no flex columns (Path and Details hidden): the last column takes the slack', () => {
+    // A 109px table in a 2000px wrapper was the review finding on #2090.
+    const d = distribute([col(65), col(44)], 0, 2000, 120);
+    assert.deepStrictEqual(Array.from(d.flex), []);
+    assert.deepStrictEqual(Array.from(d.fixed), [65, 1935]);
+    assert.strictEqual(d.total, 2000);
+  });
+
+  test('no flex columns and no room: nothing is added', () => {
+    const d = distribute([col(300, 300), col(300, 300)], 0, 500, 120);
+    assert.deepStrictEqual(Array.from(d.fixed), [300, 300]);
+    assert.strictEqual(d.total, 600);
+  });
+}
+
+console.log('\n=== app.js: measurableRows (shared with makeColumnsResizable) ===');
+{
+  const ctx = loadPacketsSandbox();
+  const cell = (colSpan) => ({ colSpan: colSpan || 1 });
+  const row = (...cells) => ({ children: cells, id: '' });
+  const tableWith = rows => ({ querySelector: sel => (sel === 'tbody' ? { children: rows } : null) });
+
+  test('skips virtual-scroll spacer and loading rows (one colspan cell)', () => {
+    const spacer = row(cell(12));
+    const data = row(cell(), cell(), cell());
+    const rows = ctx.measurableRows(tableWith([spacer, data, spacer]));
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0], data);
+  });
+
+  test('keeps rows whose cells are all single-column, whatever their count', () => {
+    // Other tables (nodes, observers, analytics) can have rows shorter than
+    // the header; those were measured before and still are.
+    const short = row(cell(), cell());
+    const full = row(cell(), cell(), cell());
+    assert.strictEqual(ctx.measurableRows(tableWith([short, full])).length, 2);
+  });
+
+  test('drops any row that contains a spanning cell, not only full-width ones', () => {
+    const partial = row(cell(), cell(2));
+    assert.strictEqual(ctx.measurableRows(tableWith([partial])).length, 0);
+  });
+
+  test('limits to 30 rows by default, as makeColumnsResizable always sampled', () => {
+    const many = Array.from({ length: 50 }, () => row(cell(), cell()));
+    assert.strictEqual(ctx.measurableRows(tableWith(many)).length, 30);
+    assert.strictEqual(ctx.measurableRows(tableWith(many), Infinity).length, 50);
+  });
+
+  test('no tbody: no rows', () => {
+    assert.strictEqual(ctx.measurableRows({ querySelector: () => null }).length, 0);
+  });
+
+  test('style.css clears cell min-width on #pktTable (JS widths are the only input)', () => {
+    const css = fs.readFileSync('public/style.css', 'utf8');
+    assert(/#pktTable th, #pktTable td \{ min-width: 0; \}/.test(css));
+  });
+}
+
+console.log('\n=== packets.js: Full Names toggle (observer column) ===');
+{
+  const ctx = loadPacketsSandbox();
+  const api = ctx._packetsTestAPI;
+  // Not in observerMap, so obsNameOnly falls back to the id itself.
+  const longName = 'DntnMarina Rptr mrymesh.net';
+  const p = {
+    id: 9, hash: 'fn', timestamp: '', observer_id: longName,
+    raw_hex: 'aabb', payload_type: 0, route_type: 0,
+    decoded_json: '{}', path_json: '[]'
+  };
+  const observerCell = html => html.match(/<td class="col-observer"[^>]*>([\s\S]*?)<\/td>/)[1];
+
+  test('observer name is shortened by default', () => {
+    api._setFullNames(false);
+    const cell = observerCell(api.buildFlatRowHtml(p));
+    assert(!cell.includes(longName), 'expected a truncated name, got ' + cell);
+  });
+
+  test('Full Names shows the observer name untruncated', () => {
+    api._setFullNames(true);
+    const cell = observerCell(api.buildFlatRowHtml(p));
+    assert(cell.includes(longName), 'expected the full name, got ' + cell);
+    api._setFullNames(false);
+  });
+
+  test('Full Names also untruncates grouped rows (10-char cut)', () => {
+    const g = {
+      hash: 'fng', count: 3, latest: '2024-01-01T00:00:00Z',
+      observer_id: longName, raw_hex: 'aabb', payload_type: 0,
+      route_type: 0, decoded_json: '{}', path_json: '[]',
+      observation_count: 3, observer_count: 2
+    };
+    api._setFullNames(false);
+    assert(!observerCell(api.buildGroupRowHtml(g)).includes(longName));
+    api._setFullNames(true);
+    assert(observerCell(api.buildGroupRowHtml(g)).includes(longName));
+    api._setFullNames(false);
+  });
+
+  test('style.css lifts the path chip cap only under .pkt-full-names', () => {
+    const css = fs.readFileSync('public/style.css', 'utf8');
+    assert(/\.path-hops \.hop-named \{[^}]*max-width: 120px/.test(css), 'default 120px cap kept');
+    assert(/#pktTable\.pkt-full-names \.path-hops \.hop-named \{[^}]*max-width: none/.test(css),
+      "no cap under full names: one long name must overflow so the +N pill appears");
+    // Wrapping would make rows taller than the virtual scroller's fixed row
+    // height; overflowing hops go behind the +N pill instead.
+    assert(!/pkt-full-names[^{]*\{[^}]*flex-wrap: wrap/.test(css), 'full names must not wrap the path');
   });
 }
 

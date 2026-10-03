@@ -22,6 +22,7 @@
     "EXTERNAL_URLS": "readonly",
     "FAV_KEY": "readonly",
     "FilterUX": "readonly",
+    "fitColumnsToContent": "readonly",
     "GestureHints": "readonly",
     "HEALTH_THRESHOLDS": "readonly",
     "HashColor": "readonly",

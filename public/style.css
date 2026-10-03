@@ -1590,6 +1590,25 @@ body.scroll-locked { overflow: hidden; }
  * abbreviated 7-char chips + arrow. .path-hops already uses 11px font, so
  * no chip-level font change is needed here. */
 .data-table td.col-path, .data-table th.col-path { min-width: 140px; }
+/* Packets columns are sized to their widest cell (fitColumnsToContent in
+ * app.js). Proportional digits make "20m ago" wider than "13m ago", so a
+ * column measured on one row clipped the next; fixed-width digits keep
+ * same-length values the same width. */
+#pktTable td.col-time, #pktTable td.col-size { font-variant-numeric: tabular-nums; }
+/* fitColumnsToContent sets every #pktTable column width in px. The shared
+ * min-width rules on .col-time (clamp 72-108px), .col-path (140px),
+ * .col-observer (70px) and .col-scope (56px) are written for auto-layout
+ * tables; Chromium ignores cell min-width under table-layout: fixed, other
+ * engines need not. Clear them here so the JS widths are the only input. */
+#pktTable th, #pktTable td { min-width: 0; }
+/* "Full Names" toggle (packets.js): hop chips keep their whole name. The
+ * path stays on one line; hops past the edge go behind the "+N" overflow
+ * pill (_finalizePathOverflow). Wrapping would make rows taller than the
+ * fixed VSCROLL_ROW_HEIGHT the virtual scroller positions rows with. No cap
+ * at all, not even 100%: a single name longer than the column must overflow
+ * so the pill (and its full-path popover) appears, rather than ellipsise
+ * inside its chip with no way to read it. */
+#pktTable.pkt-full-names .path-hops .hop-named { max-width: none; }
 .data-table td.col-path { height: 28px; line-height: 22px; overflow: hidden; }
 
 /* === Modal === */
@@ -2567,11 +2586,15 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 
 /* === Grouped Packet Rows === */
 .group-header { cursor: pointer; font-weight: 600; }
-.group-header td:first-child::before { content: '▶ '; font-size: 10px; color: var(--link-color); transition: transform 0.15s; display: inline-block; }
-.group-header.expanded td:first-child::before { content: '▼ '; }
+/* The expand chevron is the SVG caret packets.js renders into td.col-expand;
+ * a text ::before glyph here drew a second arrow next to it. */
+.group-header td.col-expand { color: var(--link-color); }
 .group-header:hover { background: var(--row-hover); }
 .group-child { font-size: 12px; }
-.group-child td { padding-left: 20px; }
+/* Indent only the first data cell: indenting every cell pushed child rows
+ * out of line with the headers, and made each content-sized column measure
+ * 14px wider once a group was expanded. */
+.group-child td.col-time { padding-left: 20px; }
 .group-child.hidden { display: none; }
 
 /* === Reduced Motion === */
@@ -2701,6 +2724,10 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 .col-resize-handle:hover::after, .col-resize-handle.active::after {
   background: var(--accent); opacity: 0.6;
 }
+/* fitColumnsToContent: the last visible column takes whatever width is left,
+ * so it has nothing to resize against, and its handle (right: -4px) would
+ * overhang the table and scroll the wrapper sideways. */
+th.fit-last > .col-resize-handle { display: none; }
 
 /* Encrypted channels de-emphasized */
 button.ch-item.ch-item-encrypted { opacity: 0.5; }
@@ -3452,6 +3479,11 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 }
 .analytics-chart-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; padding: var(--space-sm); min-width: 0; }
 .analytics-chart-card.full { grid-column: 1 / -1; }
+/* Keep relay labels, percentage values and a visible track inside narrow cards. */
+.dumbbell-chart { container-type: inline-size; }
+@container (max-width: 480px) {
+  .dumbbell-row, .dumbbell-axis { --relay-airtime-columns: 70px minmax(20px, 1fr) 90px; }
+}
 /* Constrain chart media inside the card (svg/canvas at any depth). The
    `.analytics-chart-card svg, .analytics-chart-card canvas` descendant
    selector is robust to wrapper elements (legends, tooltips, axis
@@ -5024,18 +5056,32 @@ body[data-cb-preset="achromat"] {
   border-radius: 8px;
   cursor: pointer;
   user-select: none;
+  /* The pill is the last flex item after the chips that overflow, so on its
+   * own it sits past the clipped edge and never shows. Stick it to the
+   * right edge of .path-hops (overflow: hidden), over the last chip. */
+  position: sticky; right: 0; z-index: 1;
 }
-.path-overflow-pill:hover { color: var(--text); background: var(--bg-hover, var(--surface)); }
+/* Opaque on hover: the pill sits over the last chip, and --bg-hover is a
+ * translucent tint that let the chip show through. */
+.path-overflow-pill:hover { color: var(--text); background: var(--row-hover); border-color: var(--accent); }
 .path-popover {
   position: absolute; z-index: var(--z-popover);
   background: var(--surface); color: var(--text);
   border: 1px solid var(--border); border-radius: 6px;
   box-shadow: 0 8px 24px rgba(0,0,0,0.35);
-  padding: 8px 10px; max-width: min(360px, calc(100vw - 32px)); max-height: 240px; overflow: auto;
+  padding: 8px 10px; max-width: min(480px, calc(100vw - 32px)); max-height: min(420px, 60vh); overflow: auto;
   font-family: var(--mono); font-size: 12px;
 }
 .path-popover .path-popover-title { font-family: var(--font); font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
 .path-popover .hop, .path-popover .hop-named { white-space: nowrap; }
+/* Full path, one hop per line (packets.js _buildPathPopover). Each hop sits
+ * in its own .path-hops so chips keep their table styling, minus the 120px
+ * cap: the popover exists to show the names the table had to cut. */
+.path-popover-list { list-style: none; margin: 0; padding: 0; }
+.path-popover-list li { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+.path-popover-idx { min-width: 2ch; text-align: right; color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.path-popover .path-hops { max-width: none; }
+.path-popover .path-hops .hop-named { max-width: none; }
 .fux-popover-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--surface); }
 .fux-popover-close { background: transparent; border: none; color: var(--text-muted); font-size: 16px; cursor: pointer; padding: 0 4px; }
 .fux-popover-close:hover { color: var(--text); }

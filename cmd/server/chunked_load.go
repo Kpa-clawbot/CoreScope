@@ -433,13 +433,18 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 				ORDER BY t.id ASC, o.timestamp DESC`
 		}
 
+		// Acquire before opening the cursor: a feed waiting for the same
+		// connection must never hold this gate while we hold its cursor.
+		s.advertEvidenceMu.Lock()
 		rows, err := s.db.conn.Query(chunkSQL)
 		if err != nil {
+			s.advertEvidenceMu.Unlock()
 			return fmt.Errorf("chunk %d: query: %w", chunkIdx, err)
 		}
 
 		chunkTxCount, lastID, err := s.scanAndMergeChunk(rows, relayPM, &coldLoadAmbiguousHopsSkipped)
 		rows.Close()
+		s.advertEvidenceMu.Unlock()
 		if err != nil {
 			return fmt.Errorf("chunk %d: scan: %w", chunkIdx, err)
 		}
@@ -617,10 +622,9 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 				RSSI:           nullFloatPtr(rssi),
 				Score:          nullIntPtr(score),
 				PathJSON:       obsPJ,
-				// obs.RawHex deliberately NOT stored: it duplicates the parent
-				// tx.RawHex (same content hash ⇒ same frame) and enrichObs falls
-				// back to tx.RawHex when obs.RawHex == "". obsRawHex is still
-				// scanned to keep scanArgs aligned with the o.raw_hex column.
+				// Raw frames stay in SQLite; hash equality does not imply route
+				// equality. Only compact advert evidence is retained per tx.
+				// Packet-detail queries can read the original observation raw.
 				Timestamp: normalizeTimestamp(nullStrVal(obsTimestamp)),
 			}
 
@@ -670,6 +674,19 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 	if err := rows.Err(); err != nil {
 		return len(seenTxIDs), maxID, err
 	}
+	rows.Close()
+	txs := make([]*StoreTx, 0, len(seenTxIDs))
+	for id := range seenTxIDs {
+		txs = append(txs, s.byTxID[id])
+	}
+	ids := advertTxIDs(txs)
+	s.mu.Unlock()
+	masks, err := s.db.advertEvidenceForIDs(ids)
+	s.mu.Lock()
+	if err != nil {
+		return len(seenTxIDs), maxID, err
+	}
+	s.mergeAdvertEvidence(masks)
 	return len(seenTxIDs), maxID, nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/meshcore-analyzer/lora"
+	"github.com/meshcore-analyzer/packetpath"
 )
 
 // relay_airtime_share.go — issues #1359 + #1768
@@ -25,7 +26,7 @@ import (
 // preset 869.6 MHz / BW 62.5 kHz / SF 8 / CR 4/5, with the
 // SF-dependent preamble pulled from internal/lora.PreambleForSF.
 //
-// Aggregated by payload_type. Originator TX is deliberately excluded — a
+// Aggregated by payload_type and ADVERT routing kind. Originator TX is excluded — a
 // never-relayed direct message scores 0, which is the correct framing for a
 // "relay amplification" metric. In-memory only; no SQL, no new index.
 
@@ -121,7 +122,8 @@ func (s *PacketStore) distinctRelayCount(tx *StoreTx) int {
 	return len(s.resolvedPubkeyReverse[tx.ID])
 }
 
-// computeRelayAirtimeShare aggregates relay-airtime-share per payload_type.
+// computeRelayAirtimeShare aggregates by payload_type, splitting only ADVERT
+// by recorded routing. Other payload-mix analytics retain their usual grouping.
 //
 // Returns:
 //
@@ -143,32 +145,69 @@ func (s *PacketStore) computeRelayAirtimeShare(window TimeWindow) map[string]int
 		count int
 		score int64 // sum of ToA(payload) × relays, in nanoseconds
 	}
-	buckets := make(map[int]*bucket)
-	seenHash := make(map[string]bool, len(s.packets))
+	// The additional key has four possible values, all for ADVERT.
+	type bucketKey struct {
+		payloadType int
+		advertKind  string
+	}
+	buckets := make(map[bucketKey]*bucket)
+	// Filter before allocating the hash map. Reuse the packet slice when every
+	// record is eligible; otherwise copy only the selected pointers. This keeps
+	// short-window scratch space small without a full-window allocation penalty.
+	selected := s.packets
+	filtered := false
+	for i, tx := range s.packets {
+		if tx == nil || tx.PayloadType == nil || !window.Includes(tx.FirstSeen) {
+			if !filtered {
+				selected = append([]*StoreTx(nil), s.packets[:i]...)
+				filtered = true
+			}
+			continue
+		}
+		if filtered {
+			selected = append(selected, tx)
+		}
+	}
+	// Low bits union known evidence; the high bit deduplicates scores below.
+	seenHash := make(map[string]uint8, len(selected))
+	for _, tx := range selected {
+		if *tx.PayloadType == PayloadADVERT && tx.Hash != "" {
+			seenHash[tx.Hash] |= tx.AdvertRouteEvidence
+		}
+	}
+	if filtered {
+		// An eligible hash keeps its known older evidence, but neither hashes
+		// found only outside the window nor their scores enter the result.
+		for _, tx := range s.packets {
+			if tx != nil && tx.PayloadType != nil && *tx.PayloadType == PayloadADVERT && tx.Hash != "" {
+				if mask, eligible := seenHash[tx.Hash]; eligible {
+					seenHash[tx.Hash] = mask | tx.AdvertRouteEvidence
+				}
+			}
+		}
+	}
 	totalCount := 0
 	var totalScore int64
-
-	for _, tx := range s.packets {
-		if tx == nil || tx.PayloadType == nil {
-			continue
-		}
-		if !window.Includes(tx.FirstSeen) {
-			continue
-		}
-		// Dedup per-hash: each distinct packet counted once. ACKs in the
-		// test fixture have unique hashes so this only collapses true
-		// re-observations of the same packet.
+	for _, tx := range selected {
 		if tx.Hash != "" {
-			if seenHash[tx.Hash] {
+			if seenHash[tx.Hash]&128 != 0 {
 				continue
 			}
-			seenHash[tx.Hash] = true
+			seenHash[tx.Hash] |= 128
 		}
 		pt := *tx.PayloadType
-		b := buckets[pt]
+		key := bucketKey{payloadType: pt}
+		if pt == PayloadADVERT {
+			mask := tx.AdvertRouteEvidence
+			if tx.Hash != "" {
+				mask = seenHash[tx.Hash] & 3
+			}
+			key.advertKind = packetpath.AdvertKind(mask)
+		}
+		b := buckets[key]
 		if b == nil {
 			b = &bucket{}
-			buckets[pt] = b
+			buckets[key] = b
 		}
 		b.count++
 		totalCount++
@@ -185,7 +224,8 @@ func (s *PacketStore) computeRelayAirtimeShare(window TimeWindow) map[string]int
 	}
 
 	rows := make([]map[string]interface{}, 0, len(buckets))
-	for pt, b := range buckets {
+	for key, b := range buckets {
+		pt := key.payloadType
 		name := ptNames[pt]
 		if name == "" {
 			name = "UNK"
@@ -197,17 +237,21 @@ func (s *PacketStore) computeRelayAirtimeShare(window TimeWindow) map[string]int
 		if totalScore > 0 {
 			airtimePct = float64(b.score) / float64(totalScore) * 100.0
 		}
-		rows = append(rows, map[string]interface{}{
+		row := map[string]interface{}{
 			"payload_type": name,
 			"type":         pt,
 			"count":        b.count,
 			"count_pct":    countPct,
 			"score":        b.score,
 			"airtime_pct":  airtimePct,
-		})
+		}
+		if key.advertKind != "" {
+			row["advert_kind"] = key.advertKind
+		}
+		rows = append(rows, row)
 	}
 
-	// Sort descending by airtime_pct; tiebreak count desc, then name asc
+	// Sort descending by airtime_pct; tiebreak count desc, then name/kind asc
 	// for deterministic ordering.
 	sort.SliceStable(rows, func(i, j int) bool {
 		ai, _ := rows[i]["airtime_pct"].(float64)
@@ -222,7 +266,12 @@ func (s *PacketStore) computeRelayAirtimeShare(window TimeWindow) map[string]int
 		}
 		ni, _ := rows[i]["payload_type"].(string)
 		nj, _ := rows[j]["payload_type"].(string)
-		return ni < nj
+		if ni != nj {
+			return ni < nj
+		}
+		ki, _ := rows[i]["advert_kind"].(string)
+		kj, _ := rows[j]["advert_kind"].(string)
+		return ki < kj
 	})
 
 	label := ""
@@ -262,12 +311,15 @@ func (s *PacketStore) GetRelayAirtimeShareWithWindow(window TimeWindow) map[stri
 		return out
 	}
 	s.cacheMisses++
+	revision := s.advertEvidenceRevision
 	s.cacheMu.Unlock()
 
 	result := s.computeRelayAirtimeShare(window)
 
 	s.cacheMu.Lock()
-	s.rfCache[cacheKey] = &cachedResult{data: result, expiresAt: time.Now().Add(s.rfCacheTTL)}
+	if revision == s.advertEvidenceRevision {
+		s.rfCache[cacheKey] = &cachedResult{data: result, expiresAt: time.Now().Add(s.rfCacheTTL)}
+	}
 	s.cacheMu.Unlock()
 
 	return result

@@ -80,7 +80,15 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     const tmp = path.join(os.tmpdir(),
       `1058-harness-${wrapperWidth}-${viewportWidth}.html`);
     fs.writeFileSync(tmp, harnessHTML(wrapperWidth));
-    await page.goto('file://' + tmp, { waitUntil: 'domcontentloaded' });
+    // Count only once style.css applies. With a <link rel="stylesheet"> and
+    // no scripts, DOMContentLoaded does not wait for the stylesheet; CI once
+    // counted 1 column at 1300px, which only unstyled (block-flow) cards
+    // give. Wait for 'load', then for the grid rule itself: a real CSS
+    // regression still fails, with a message that says so.
+    await page.goto('file://' + tmp, { waitUntil: 'load' });
+    await page.waitForFunction(() =>
+      getComputedStyle(document.getElementById('grid')).display === 'grid', null, { timeout: 5000 })
+      .catch(() => { throw new Error('.analytics-charts never became display:grid: style.css not applied'); });
   }
 
   // Helper: count distinct column-x-positions of chart cards.

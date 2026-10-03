@@ -1,0 +1,484 @@
+package main
+
+import (
+	"database/sql"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/meshcore-analyzer/lora"
+)
+
+// Writer-side ingestion is exercised in cmd/ingestor. This fixture represents
+// its durable output after F->Z->F (or Z->F->Z), where surviving raw frames
+// alone cannot reconstruct the complete set of known route families.
+func advertEvidenceFixture(t *testing.T, raw string, bits ...int) (*DB, *sql.DB) {
+	t.Helper()
+	path := createTestDBWithResolvedPath(t, 1, []string{"fixture-relay"})
+	w, err := sql.Open("sqlite3", path+"?_journal_mode=WAL&_foreign_keys=on")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { w.Close() })
+	for _, stmt := range []string{
+		`ALTER TABLE transmissions ADD COLUMN from_pubkey TEXT`,
+		`CREATE TABLE advert_route_evidence (id INTEGER PRIMARY KEY AUTOINCREMENT, tx_id INTEGER NOT NULL REFERENCES transmissions(id) ON DELETE CASCADE, bit INTEGER NOT NULL CHECK (bit IN (1,2)), UNIQUE(tx_id,bit))`,
+	} {
+		if _, err := w.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	if _, err := w.Exec(`UPDATE transmissions SET raw_hex=?, route_type=?, first_seen=?, from_pubkey='fixture-origin'; UPDATE observations SET raw_hex=?, timestamp=?`, raw, int(raw[1]-'0')&3, now, raw, now); err != nil {
+		t.Fatal(err)
+	}
+	for _, bit := range bits {
+		if _, err := w.Exec(`INSERT INTO advert_route_evidence(tx_id,bit) VALUES(1,?)`, bit); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db, err := OpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.conn.Close() })
+	return db, w
+}
+
+func TestAdvertRouteEvidenceNodeAPIHonorsRequestedLimit(t *testing.T) {
+	db, w := advertEvidenceFixture(t, "1100aa", 1)
+	for id := 2; id <= 24; id++ {
+		if _, err := w.Exec(`INSERT INTO transmissions(id,hash,raw_hex,first_seen,payload_type,route_type,from_pubkey) SELECT ?,?,'1100aa',first_seen,4,1,'fixture-origin' FROM transmissions WHERE id=1`, id, fmt.Sprintf("node-advert-%d", id)); err != nil {
+			t.Fatal(err)
+		}
+		mask := id % 4
+		for _, bit := range []int{1, 2} {
+			if mask&bit != 0 {
+				if _, err := w.Exec(`INSERT INTO advert_route_evidence(tx_id,bit) VALUES(?,?)`, id, bit); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+	rows, err := db.GetRecentTransmissionsForNode("fixture-origin", 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 24 {
+		t.Fatalf("node recent adverts returned %d, want requested 24 available rows", len(rows))
+	}
+	wants := []string{"other", "flood", "zero_hop", "mixed"}
+	for _, row := range rows {
+		id := row["id"].(int)
+		if row["advert_kind"] != wants[id%4] {
+			t.Errorf("id=%d kind=%v want %s", id, row["advert_kind"], wants[id%4])
+		}
+	}
+}
+
+// Measures the added bulk-load work and an idle feed at a 30K-packet scale.
+// Both paths touch indexed compact evidence, never observation raw frames.
+func BenchmarkAdvertEvidence30K(b *testing.B) {
+	conn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		b.Fatal(err)
+	}
+	conn.SetMaxOpenConns(1)
+	defer conn.Close()
+	if _, err := conn.Exec(`CREATE TABLE advert_route_evidence(id INTEGER PRIMARY KEY AUTOINCREMENT,tx_id INTEGER,bit INTEGER,UNIQUE(tx_id,bit));
+		WITH RECURSIVE ids(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM ids WHERE n<30000)
+		INSERT INTO advert_route_evidence(tx_id,bit) SELECT n,1 FROM ids UNION ALL SELECT n,2 FROM ids`); err != nil {
+		b.Fatal(err)
+	}
+	db := &DB{conn: conn}
+	db.advertEvidenceTable.Store(true)
+	ids := make([]int, 30000)
+	for i := range ids {
+		ids[i] = i + 1
+	}
+	b.Run("bulk_load", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			masks, err := db.advertEvidenceForIDs(ids)
+			if err != nil || len(masks) != 30000 {
+				b.Fatalf("mask load: %d %v", len(masks), err)
+			}
+		}
+	})
+	b.Run("idle_poll", func(b *testing.B) {
+		s := NewPacketStore(db, &PacketStoreConfig{})
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if err := s.pollAdvertEvidence(500); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+func assertAdvertEvidenceViews(t *testing.T, s *PacketStore, want string) {
+	t.Helper()
+	result := s.GetRelayAirtimeShareWithWindow(TimeWindow{})
+	rows := result["rows"].([]map[string]interface{})
+	if len(rows) != 1 || rows[0]["advert_kind"] != want || rows[0]["count"] != 1 || result["total_count"] != 1 {
+		t.Errorf("relay airtime must count one hash as %s: %v", want, result)
+	}
+	if len(s.packets) != 1 {
+		t.Fatalf("loaded %d transmissions, want 1", len(s.packets))
+	}
+	tx := s.packets[0]
+	// Classification must not change the established airtime formula, even
+	// when evidence includes zero-hop and the packet has a resolved relay.
+	wantScore := int64(lora.TimeOnAir(len(tx.RawHex)/2, defaultLoRaPreset())) * int64(s.distinctRelayCount(tx))
+	if result["total_score"] != wantScore {
+		t.Errorf("airtime changed: %v, want %d", result["total_score"], wantScore)
+	}
+	for _, obs := range tx.Observations {
+		if obs.RawHex != "" {
+			t.Error("route evidence must not retain raw frames on StoreObs")
+		}
+	}
+	adverts, err := s.db.GetRecentTransmissionsForNode("fixture-origin", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(adverts) != 1 || adverts[0]["advert_kind"] != want {
+		t.Errorf("node API must agree on %s: %v", want, adverts)
+	}
+}
+
+func TestAdvertRouteEvidenceLoadPaths(t *testing.T) {
+	for _, raw := range []string{"1100aa", "1200aa", "100102030400aa", "130102030400aa"} {
+		for _, mode := range []string{"cold", "chunk", "chunked_startup", "new_transmission"} {
+			t.Run(raw+"/"+mode, func(t *testing.T) {
+				db, _ := advertEvidenceFixture(t, raw, 1, 2)
+				s := NewPacketStore(db, &PacketStoreConfig{})
+				s.useResolvedPathIndex = true
+				s.initResolvedPathIndex()
+				maskReads := 0
+				db.advertEvidenceReadHook = func() {
+					maskReads++
+					if !s.mu.TryRLock() {
+						t.Error("bulk evidence SQL must run outside the global store lock")
+					} else {
+						s.mu.RUnlock()
+					}
+				}
+				switch mode {
+				case "chunked_startup":
+					if err := s.LoadChunked(1); err != nil {
+						t.Fatal(err)
+					}
+				case "cold":
+					if err := s.Load(); err != nil {
+						t.Fatal(err)
+					}
+				case "chunk":
+					if err := s.loadChunk(time.Now().Add(-time.Hour), time.Now()); err != nil {
+						t.Fatal(err)
+					}
+				case "new_transmission":
+					s.IngestNewFromDB(0, 100)
+				}
+				if maskReads == 0 {
+					t.Fatal("load path never fetched durable evidence")
+				}
+				db.advertEvidenceReadHook = nil
+				assertAdvertEvidenceViews(t, s, "mixed")
+			})
+		}
+	}
+}
+
+func TestAdvertRouteEvidencePollRetryAndUnknownTransmission(t *testing.T) {
+	db, w := advertEvidenceFixture(t, "1100aa", 1)
+	s := NewPacketStore(db, &PacketStoreConfig{})
+	if err := s.Load(); err != nil {
+		t.Fatal(err)
+	}
+	before := s.advertEvidenceCursor
+	if _, err := w.Exec(`ALTER TABLE advert_route_evidence RENAME TO evidence_unavailable`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pollAdvertEvidence(1); err == nil {
+		t.Fatal("expected failed feed read")
+	}
+	if s.advertEvidenceCursor != before {
+		t.Fatal("failed feed read advanced cursor")
+	}
+	if _, err := w.Exec(`ALTER TABLE evidence_unavailable RENAME TO advert_route_evidence;
+		INSERT INTO transmissions(id,hash,raw_hex,first_seen,payload_type,route_type,from_pubkey) SELECT 2,'late-advert','1100aa',first_seen,4,1,'fixture-late' FROM transmissions WHERE id=1;
+		INSERT INTO advert_route_evidence(tx_id,bit) VALUES(2,1),(2,2),(1,2)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pollAdvertEvidence(1); err != nil {
+		t.Fatal(err)
+	}
+	if s.advertEvidenceCursor != before+1 {
+		t.Fatal("feed ignored batch limit")
+	}
+	if s.byTxID[2] != nil {
+		t.Fatal("feed should not retain unknown transmissions")
+	}
+	if err := s.pollAdvertEvidence(500); err != nil {
+		t.Fatal(err)
+	}
+	if s.byTxID[1].AdvertRouteEvidence != 3 {
+		t.Fatal("retry missed known transmission's late evidence")
+	}
+	s.IngestNewFromDB(1, 100)
+	if tx := s.byTxID[2]; tx == nil || tx.AdvertRouteEvidence != 3 {
+		t.Fatalf("load after feed consumed unknown event lost mask: %+v", tx)
+	}
+}
+
+func TestAdvertRouteEvidenceStartupHandoffAndChunkMerge(t *testing.T) {
+	db, w := advertEvidenceFixture(t, "1100aa", 1)
+	s := NewPacketStore(db, &PacketStoreConfig{})
+	// Arrives after the startup watermark, before the first packet load.
+	if _, err := w.Exec(`INSERT INTO advert_route_evidence(tx_id,bit) VALUES(1,2)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pollAdvertEvidence(500); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.LoadChunked(1); err != nil {
+		t.Fatal(err)
+	}
+	if s.byTxID[1].AdvertRouteEvidence != 3 {
+		t.Fatal("startup handoff lost pre-load event")
+	}
+	if err := s.loadChunk(time.Now().Add(-time.Hour), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, tx := range s.packets {
+		if tx.AdvertRouteEvidence != 3 {
+			t.Fatal("chunk merge discarded durable bits")
+		}
+	}
+	rows := s.computeRelayAirtimeShare(TimeWindow{})["rows"].([]map[string]interface{})
+	if len(rows) != 1 || rows[0]["advert_kind"] != "mixed" || rows[0]["count"] != 1 {
+		t.Fatalf("chunk merge double-counted mixed hash: %v", rows)
+	}
+}
+
+func TestAdvertRouteEvidenceEvictionReload(t *testing.T) {
+	db, _ := advertEvidenceFixture(t, "1200aa", 1, 2)
+	s := NewPacketStore(db, &PacketStoreConfig{RetentionHours: 1})
+	if err := s.Load(); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	s.packets[0].FirstSeen = time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339)
+	s.packets[0].LatestSeen = s.packets[0].FirstSeen
+	n := s.EvictStale()
+	s.mu.Unlock()
+	if n != 1 || s.byTxID[1] != nil {
+		t.Fatalf("eviction removed %d, want 1", n)
+	}
+	s.IngestNewFromDB(0, 100)
+	if tx := s.byTxID[1]; tx == nil || tx.AdvertRouteEvidence != 3 {
+		t.Fatalf("reload lost persisted mask: %+v", tx)
+	}
+}
+
+func TestAdvertRouteEvidencePollSameObservationID(t *testing.T) {
+	for _, tc := range []struct {
+		name, first, second, kind string
+		firstBit, secondBit       int
+	}{
+		{"flood_zero_flood", "1100aa", "1200aa", "flood", 1, 2},
+		{"zero_flood_zero", "1200aa", "1100aa", "zero_hop", 2, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, w := advertEvidenceFixture(t, tc.first, tc.firstBit)
+			s := NewPacketStore(db, &PacketStoreConfig{})
+			s.useResolvedPathIndex = true
+			s.initResolvedPathIndex()
+			s.rfCacheTTL = time.Hour
+			if err := s.Load(); err != nil {
+				t.Fatal(err)
+			}
+			initial := s.GetRelayAirtimeShareWithWindow(TimeWindow{})
+			if rows := initial["rows"].([]map[string]interface{}); len(rows) != 1 || rows[0]["advert_kind"] != tc.kind {
+				t.Fatalf("initial fixture classification: %v", initial)
+			}
+			unrelated := &cachedResult{expiresAt: time.Now().Add(time.Hour)}
+			s.rfCache["unrelated-rf-result"] = unrelated
+			maxObs, maxTx := db.GetMaxObservationID(), db.GetMaxTransmissionID()
+			// This matches the ingestor's conflict update: neither observation
+			// ID nor timestamp advances, and the final raw matches the first.
+			if _, err := w.Exec(`UPDATE observations SET raw_hex=? WHERE id=1; INSERT INTO advert_route_evidence(tx_id,bit) VALUES(1,?); UPDATE observations SET raw_hex=? WHERE id=1`, tc.second, tc.secondBit, tc.first); err != nil {
+				t.Fatal(err)
+			}
+			s.IngestNewFromDB(maxTx, 100)
+			s.IngestNewObservations(maxObs, 100)
+			assertAdvertEvidenceViews(t, s, "mixed")
+			if s.rfCache["unrelated-rf-result"] != unrelated {
+				t.Error("route evidence invalidated unrelated RF cache")
+			}
+			if db.GetMaxObservationID() != maxObs || db.GetMaxTransmissionID() != maxTx {
+				t.Fatal("fixture unexpectedly created a new observation/transmission")
+			}
+			// A fresh store must recover the same classification from disk.
+			restarted := NewPacketStore(db, &PacketStoreConfig{})
+			restarted.useResolvedPathIndex = true
+			restarted.initResolvedPathIndex()
+			if err := restarted.Load(); err != nil {
+				t.Fatal(err)
+			}
+			assertAdvertEvidenceViews(t, restarted, "mixed")
+		})
+	}
+}
+
+func TestAdvertRouteEvidenceMissingTableIsUnknown(t *testing.T) {
+	db, w := advertEvidenceFixture(t, "1100aa")
+	if _, err := w.Exec(`DROP TABLE advert_route_evidence`); err != nil {
+		t.Fatal(err)
+	}
+	// Reopen after removing the table to exercise legacy read-only detection.
+	legacy, err := OpenDB(db.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer legacy.conn.Close()
+	s := NewPacketStore(legacy, &PacketStoreConfig{})
+	s.useResolvedPathIndex = true
+	s.initResolvedPathIndex()
+	if err := s.Load(); err != nil {
+		t.Fatal(err)
+	}
+	assertAdvertEvidenceViews(t, s, "other")
+	var count int
+	if err := w.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name='advert_route_evidence'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatal("read-only server created legacy evidence table")
+	}
+}
+
+func TestAdvertRouteEvidenceTableAppearsAfterStartup(t *testing.T) {
+	db, w := advertEvidenceFixture(t, "1100aa")
+	var schema string
+	if err := w.QueryRow(`SELECT sql FROM sqlite_master WHERE name='advert_route_evidence'`).Scan(&schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Exec(`DROP TABLE advert_route_evidence`); err != nil {
+		t.Fatal(err)
+	}
+	s := NewPacketStore(db, &PacketStoreConfig{})
+	if err := s.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if s.byTxID[1].AdvertRouteEvidence != 0 {
+		t.Fatal("legacy load invented evidence")
+	}
+	s.GetRelayAirtimeShareWithWindow(TimeWindow{})
+	if _, err := w.Exec(schema + `; INSERT INTO advert_route_evidence(tx_id,bit) VALUES(1,1),(1,2)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pollAdvertEvidence(500); err != nil {
+		t.Fatal(err)
+	}
+	rows := s.GetRelayAirtimeShareWithWindow(TimeWindow{})["rows"].([]map[string]interface{})
+	if len(rows) != 1 || rows[0]["advert_kind"] != "mixed" {
+		t.Fatalf("late migration did not refresh legacy store: %v", rows)
+	}
+}
+
+func TestAdvertRouteEvidencePollRejectsPartialBatch(t *testing.T) {
+	db, w := advertEvidenceFixture(t, "1100aa", 1)
+	w.SetMaxOpenConns(1)
+	s := NewPacketStore(db, &PacketStoreConfig{})
+	if err := s.Load(); err != nil {
+		t.Fatal(err)
+	}
+	before := s.advertEvidenceCursor
+	if _, err := w.Exec(`PRAGMA ignore_check_constraints=ON; INSERT INTO advert_route_evidence(tx_id,bit) VALUES(1,2),(1,3)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pollAdvertEvidence(500); err == nil {
+		t.Fatal("corrupt feed row accepted")
+	}
+	if s.advertEvidenceCursor != before || s.byTxID[1].AdvertRouteEvidence != 1 {
+		t.Fatal("partial failed batch changed evidence or cursor")
+	}
+	if _, err := w.Exec(`DELETE FROM advert_route_evidence WHERE bit=3; PRAGMA ignore_check_constraints=OFF`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pollAdvertEvidence(500); err != nil {
+		t.Fatal(err)
+	}
+	if s.byTxID[1].AdvertRouteEvidence != 3 {
+		t.Fatal("retry lost valid event preceding corrupt row")
+	}
+}
+
+func TestAdvertRouteEvidenceInvalidatesOncePerBatch(t *testing.T) {
+	s := newRelayAirtimeShareTestStore([]*StoreTx{
+		makeRelayAirtimeTx(1, PayloadADVERT, 3, 0, "batch-1"),
+		makeRelayAirtimeTx(2, PayloadADVERT, 3, 0, "batch-2"),
+	})
+	other := &cachedResult{}
+	s.rfCache["unrelated-rf-result"] = other
+	s.rfCache["relay-airtime-share|"] = &cachedResult{}
+	s.rfCache["relay-airtime-share|7d"] = &cachedResult{}
+	masks := map[int]uint8{1: 3, 2: 3}
+	s.mu.Lock()
+	s.mergeAdvertEvidence(masks)
+	s.mergeAdvertEvidence(masks)
+	s.mu.Unlock()
+	if s.advertEvidenceRevision != 1 {
+		t.Fatalf("batch invalidated %d times, want one; unchanged replay must not invalidate", s.advertEvidenceRevision)
+	}
+	if len(s.rfCache) != 1 || s.rfCache["unrelated-rf-result"] != other {
+		t.Fatal("batch must invalidate only relay airtime entries")
+	}
+}
+
+func TestRelayAirtimeShareAdvertDuplicateHashEvidenceUnion(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		flood, direct := RouteFlood, RouteDirect
+		first := advertAirtimeTx(1, &flood, "1100aa")
+		second := advertAirtimeTx(2, &direct, "1200aa")
+		second.Hash = first.Hash
+		packets := []*StoreTx{first, second}
+		if reverse {
+			packets[0], packets[1] = packets[1], packets[0]
+		}
+		s := newRelayAirtimeShareTestStore(packets)
+		// Keep relay evidence identical so only classification changes.
+		s.addToResolvedPubkeyIndex(1, []string{"fixture-relay"})
+		s.addToResolvedPubkeyIndex(2, []string{"fixture-relay"})
+		result := s.computeRelayAirtimeShare(TimeWindow{})
+		rows := result["rows"].([]map[string]interface{})
+		if len(rows) != 1 || rows[0]["advert_kind"] != "mixed" || rows[0]["count"] != 1 || result["total_count"] != 1 {
+			t.Errorf("reverse=%v: duplicate hash must have one mixed bucket: %v", reverse, result)
+		}
+		if result["total_score"] != int64(lora.TimeOnAir(3, defaultLoRaPreset())) {
+			t.Errorf("reverse=%v: duplicate hash inflated score: %v", reverse, result)
+		}
+	}
+}
+
+func TestRelayAirtimeShareAdvertEvidenceIndependentOfReportWindow(t *testing.T) {
+	flood, direct := RouteFlood, RouteDirect
+	inside := advertAirtimeTx(1, &direct, "1200aa")
+	outside := advertAirtimeTx(2, &flood, "1100aa")
+	outside.Hash = inside.Hash
+	outside.FirstSeen = "2025-12-01T00:00:00Z"
+	s := newRelayAirtimeShareTestStore([]*StoreTx{inside, outside})
+	s.addToResolvedPubkeyIndex(inside.ID, []string{"fixture-relay"})
+	s.addToResolvedPubkeyIndex(outside.ID, []string{"fixture-relay", "excluded-relay"})
+	result := s.computeRelayAirtimeShare(TimeWindow{Since: "2026-01-01T00:00:00Z", Until: "2026-01-02T00:00:00Z"})
+	rows := result["rows"].([]map[string]interface{})
+	if len(rows) != 1 || rows[0]["advert_kind"] != "mixed" || result["total_count"] != 1 {
+		t.Fatalf("report window changed known hash evidence: %v", result)
+	}
+	if result["total_score"] != int64(lora.TimeOnAir(3, defaultLoRaPreset())) {
+		t.Fatalf("excluded record contributed airtime score: %v", result)
+	}
+}

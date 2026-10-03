@@ -1987,8 +1987,7 @@ function makeColumnsResizable(tableSelector, storageKey) {
 
   if (!widths) {
     // Measure actual max content width per column by scanning visible rows
-    const tbody = table.querySelector('tbody');
-    const rows = tbody ? Array.from(tbody.querySelectorAll('tr')).slice(0, 30) : [];
+    const rows = measurableRows(table);
 
     // Temporarily set auto layout to measure
     table.style.tableLayout = 'auto';
@@ -2104,4 +2103,311 @@ function makeColumnsResizable(tableSelector, storageKey) {
     th.appendChild(handle);
   });
   } // end addResizeHandles
+}
+
+/**
+ * Body rows that can be measured column by column. Virtual-scroll spacers
+ * and "loading" rows are a single colspan cell; indexing their children by
+ * column puts the spacer's full table width into column 0.
+ */
+function measurableRows(table, limit) {
+  const tbody = table.querySelector('tbody');
+  if (!tbody) return [];
+  return Array.from(tbody.children)
+    .filter(r => !Array.prototype.some.call(r.children, c => c.colSpan > 1))
+    .slice(0, limit || 30);
+}
+
+let _cellMeasureRange = null;
+
+/**
+ * Width a cell needs to show its content on one line, padding included.
+ * Measured from the laid-out content, so it works under table-layout: fixed
+ * without switching the table to auto. Resize handles and the "+N hidden"
+ * pill are absolutely positioned or transient and are left out.
+ */
+function cellContentWidth(cell) {
+  const range = _cellMeasureRange || (_cellMeasureRange = document.createRange());
+  // Span from the leftmost to the rightmost node, so margins between them
+  // (the IATA badge's margin-left) count too.
+  let left = Infinity;
+  let right = -Infinity;
+  for (const n of cell.childNodes) {
+    if (n.nodeType === 1 && n.matches('.col-resize-handle, .col-hidden-pill')) continue;
+    range.selectNode(n);
+    const r = range.getBoundingClientRect();
+    if (!r.width) continue;
+    left = Math.min(left, r.left);
+    right = Math.max(right, r.right);
+  }
+  const w = right > left ? right - left : 0;
+  const cs = getComputedStyle(cell);
+  return Math.ceil(w + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight));
+}
+
+/**
+ * Split `avail` px between content-sized columns and flex columns.
+ *
+ * Each fixed column keeps its content width `w` when there is room. When
+ * there is not, the widest ones are capped at a common level (water-filling)
+ * so the flex columns still get `flexMin` each, but no column goes below its
+ * `floor`. Flex columns share what is left, the rounding remainder going to
+ * the last one. When even the floors leave less than `flexMin`, the flex
+ * columns shrink further, down to `flexHardMin`; below that `total` exceeds
+ * `avail` and the caller's wrapper scrolls. With no flex column (both hidden
+ * by the user), the last fixed column takes the spare width, so the table
+ * still fills `avail`.
+ *
+ * @param {{w: number, floor: number}[]} fixed
+ * @param {number} flexCount
+ * @param {number} avail
+ * @param {number} flexMin
+ * @param {number} [flexHardMin=flexMin]
+ * @returns {{fixed: number[], flex: number[], total: number}}
+ */
+function distributeColumnWidths(fixed, flexCount, avail, flexMin, flexHardMin) {
+  const hardMin = flexHardMin == null ? flexMin : Math.min(flexHardMin, flexMin);
+  const budget = avail - flexCount * flexMin;
+  const sumAt = cap => fixed.reduce((s, c) => s + Math.max(c.floor, Math.min(c.w, cap)), 0);
+  let cap = Infinity;
+  if (sumAt(Infinity) > budget) {
+    // Largest integer cap whose total fits; sumAt is monotonic in cap.
+    let lo = 0;
+    let hi = Math.max(0, ...fixed.map(c => c.w));
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (sumAt(mid) <= budget) lo = mid; else hi = mid - 1;
+    }
+    cap = lo;
+  }
+  const widths = fixed.map(c => Math.max(c.floor, Math.min(c.w, cap)));
+  const fixedSum = widths.reduce((s, w) => s + w, 0);
+  const spare = Math.max(0, avail - fixedSum);
+  const share = flexCount ? Math.max(hardMin, Math.floor(spare / flexCount)) : 0;
+  const flexW = [];
+  for (let i = 0; i < flexCount; i++) flexW.push(share);
+  if (flexCount) flexW[flexCount - 1] += Math.max(0, spare - share * flexCount);
+  else if (widths.length) widths[widths.length - 1] += spare;
+  const total = widths.reduce((s, w) => s + w, 0) + flexW.reduce((s, w) => s + w, 0);
+  return { fixed: widths, flex: flexW, total };
+}
+
+/**
+ * Pixel column sizing for dense tables: every column not listed in
+ * `opts.flex` is sized to its content, and the flex columns split whatever
+ * width the container has left. makeColumnsResizable stores percentages,
+ * which inflate a "17s ago" column to 180px on a wide screen; this keeps
+ * short columns short at every width.
+ *
+ * Every visible column gets an explicit px width and the table gets their
+ * sum as its width. Leaving the flex columns auto would hand a share of the
+ * slack to phantom columns too: a colspan spacer row keeps a slot for each
+ * hidden column, and that slot renders as a blank strip at the right edge.
+ * When the container is too narrow, the widest content-sized columns give
+ * way first (down to `opts.shrinkFloor`, their text ellipsised) so the flex
+ * columns keep `opts.flexMin`; then the flex columns shrink to
+ * `opts.flexHardMin`; past that the wrapper scrolls. A header's CSS
+ * max-width (Scope's 110px) caps its measured width.
+ *
+ * `opts.min` sets floors by column class, for columns whose widest content
+ * may not be on screen at measure time (the expand caret only appears on
+ * grouped rows).
+ *
+ * Content-sized columns have drag handles; dragged widths are saved to
+ * localStorage in px, keyed by column class, and give way under pressure
+ * like measured ones. Double-clicking a handle forgets its width. Flex
+ * columns have no handle: they always share the remaining width.
+ *
+ * Re-measures on its own when the container resizes (the detail panel) and
+ * when the table fires `table-columns-changed` (TableResponsive hiding or
+ * revealing columns). Call refit() after anything else that changes cell
+ * content width: column toggles, name display modes, sorting (the sort
+ * arrow moves to another header). Call grow() after rows render, with the
+ * inserted rows when only some are new.
+ *
+ * @param {string} tableSelector
+ * @param {string} storageKey
+ * @param {{flex: string[], flexMin?: number, flexHardMin?: number, shrinkFloor?: number, min?: Object<string, number>}} opts
+ * @returns {{refit: function(): void, grow: function(Element[]=): void, destroy: function(): void}|null}
+ */
+function fitColumnsToContent(tableSelector, storageKey, opts) {
+  const table = document.querySelector(tableSelector);
+  if (!table) return null;
+  const ths = Array.from(table.querySelectorAll('thead tr:first-child th'));
+  if (ths.length < 2) return null;
+  const wrap = table.parentElement;
+  const flex = new Set(opts.flex);
+  const flexMin = opts.flexMin || 120;
+  const flexHardMin = opts.flexHardMin || 60;
+  const mins = opts.min || {};
+  const shrinkFloor = opts.shrinkFloor || 64;
+  const MIN_DRAG = 28;
+  const colKey = th => Array.from(th.classList).find(c => c.startsWith('col-') && c !== 'col-hidden');
+
+  let dragged = {};
+  try { dragged = JSON.parse(localStorage.getItem(storageKey)) || {}; } catch { dragged = {}; }
+  if (typeof dragged !== 'object' || Array.isArray(dragged)) dragged = {};
+  for (const k of Object.keys(dragged)) {
+    if (flex.has(k) || !Number.isFinite(dragged[k]) || dragged[k] < MIN_DRAG) delete dragged[k];
+  }
+  function saveDragged() {
+    try { localStorage.setItem(storageKey, JSON.stringify(dragged)); } catch { /* quota / private mode */ }
+  }
+
+  table.style.tableLayout = 'fixed';
+
+  // Content widths of the visible fixed columns, from the last measure().
+  let natural = new Map();
+  let borderPx = 0;
+
+  // Content widths per visible fixed column over `rows` (default: every
+  // rendered row; virtual scroll already bounds how many exist).
+  function measure(rows) {
+    rows = (rows || measurableRows(table, Infinity))
+      .filter(r => !Array.prototype.some.call(r.children, c => c.colSpan > 1));
+    const next = new Map();
+    ths.forEach((th, i) => {
+      const key = colKey(th);
+      if (th.offsetParent === null || dragged[key] || flex.has(key)) return;
+      let w = Math.max(mins[key] || 0, cellContentWidth(th));
+      rows.forEach(r => { if (r.children[i]) w = Math.max(w, cellContentWidth(r.children[i])); });
+      const maxW = parseFloat(getComputedStyle(th).maxWidth);
+      if (Number.isFinite(maxW)) w = Math.min(w, maxW);
+      next.set(th, w);
+    });
+    return next;
+  }
+
+  function layout() {
+    const fixedThs = [];
+    const fixedCols = [];
+    const flexThs = [];
+    // The last visible column absorbs the slack when no flex column is
+    // shown; `fit-last` hides its drag handle, which overhangs the table's
+    // right edge by a few px and would give the wrapper a scrollbar.
+    const visible = ths.filter(th => th.offsetParent !== null);
+    ths.forEach(th => th.classList.toggle('fit-last', th === visible[visible.length - 1]));
+    ths.forEach(th => {
+      if (th.offsetParent === null) return;
+      const key = colKey(th);
+      const w = dragged[key] || natural.get(th);
+      if (flex.has(key)) flexThs.push(th);
+      else if (w) {
+        fixedThs.push(th);
+        fixedCols.push({ w, floor: Math.min(w, Math.max(mins[key] || 0, shrinkFloor)) });
+      } else th.style.width = '';
+    });
+    const apply = () => {
+      const d = distributeColumnWidths(fixedCols, flexThs.length, wrap.clientWidth - borderPx, flexMin, flexHardMin);
+      fixedThs.forEach((th, i) => { th.style.width = d.fixed[i] + 'px'; });
+      flexThs.forEach((th, i) => { th.style.width = d.flex[i] + 'px'; });
+      table.style.width = d.total + 'px';
+      return d.total;
+    };
+    // Collapsed borders (the row's coloured left edge) render a few px
+    // beyond the column sum. Learn how many on the first pass and lay out
+    // again without them, so a table that should fit grows no scrollbar.
+    // Bounded: anything bigger is not a border and must not eat the width.
+    const total = apply();
+    const extra = Math.min(8, Math.max(0, table.offsetWidth - total));
+    if (extra !== borderPx) { borderPx = extra; apply(); }
+  }
+
+  function refit() {
+    if (!table.isConnected) return;
+    natural = measure();
+    layout();
+  }
+
+  // After new rows render: widen any column whose content outgrew it (rows
+  // age from "9m ago" to "10m ago", scrolling brings longer names), but never
+  // narrow one, so columns do not jitter as rows scroll past. Pass just the
+  // rows that were inserted when the others are unchanged (virtual-scroll
+  // steps): measuring is ~10 rects per cell.
+  function grow(rows) {
+    if (!table.isConnected) return;
+    if (rows && !rows.length) return;
+    let changed = false;
+    measure(rows).forEach((w, th) => {
+      if (w > (natural.get(th) || 0)) { natural.set(th, w); changed = true; }
+    });
+    if (changed) layout();
+  }
+
+  // Its own flag: `resizable` is makeColumnsResizable's already-wired guard.
+  if (!table.dataset.fitColumns) {
+    table.dataset.fitColumns = '1';
+    ths.forEach(th => {
+      const key = colKey(th);
+      if (flex.has(key)) return;
+      const handle = document.createElement('div');
+      handle.className = 'col-resize-handle';
+      handle.title = 'Drag to resize, double-click to fit the content';
+      handle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const startX = e.clientX;
+        const startW = th.offsetWidth;
+        handle.classList.add('active');
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+        function onMove(e2) {
+          // Re-lay out on every move so the flex columns give the width
+          // back: setting only this <th> lets fixed layout spread the
+          // difference over every column, and the edge lags the pointer.
+          dragged[key] = Math.max(MIN_DRAG, startW + e2.clientX - startX);
+          layout();
+        }
+        function onUp() {
+          handle.classList.remove('active');
+          document.body.style.cursor = '';
+          document.body.style.userSelect = '';
+          if (dragged[key]) saveDragged();
+          refit();
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+      handle.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        delete dragged[key];
+        saveDragged();
+        refit();
+      });
+      // A handle click must not reach the header's sort handler.
+      handle.addEventListener('click', (e) => e.stopPropagation());
+      th.appendChild(handle);
+    });
+  }
+
+  // The container changes width when the detail panel opens or is dragged:
+  // redistribute only. Responsive hiding changes which columns exist.
+  // Coalesced to one layout per frame: dragging the detail-panel divider
+  // resizes the wrapper on every pointer move, and layout() forces a
+  // synchronous reflow.
+  let lastWrapW = wrap.clientWidth;
+  let layoutRaf = 0;
+  const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => {
+    if (layoutRaf) return;
+    layoutRaf = requestAnimationFrame(() => {
+      layoutRaf = 0;
+      if (!table.isConnected || wrap.clientWidth === lastWrapW) return;
+      lastWrapW = wrap.clientWidth;
+      layout();
+    });
+  }) : null;
+  if (ro) ro.observe(wrap);
+  table.addEventListener('table-columns-changed', refit);
+
+  function destroy() {
+    if (ro) ro.disconnect();
+    if (layoutRaf) cancelAnimationFrame(layoutRaf);
+    table.removeEventListener('table-columns-changed', refit);
+  }
+
+  refit();
+  return { refit, grow, destroy };
 }

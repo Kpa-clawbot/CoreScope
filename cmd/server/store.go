@@ -58,10 +58,11 @@ type StoreTx struct {
 	LatestSeen          string // max observation timestamp (or FirstSeen if no observations)
 	UniqueObserverCount int    // cached count of distinct observer IDs
 	// Cached parsed fields (set once, read many)
-	parsedPath    []string               // cached parsePathJSON result
-	pathParsed    bool                   // whether parsedPath has been set
-	decodedOnce   sync.Once              // guards parsedDecoded
-	parsedDecoded map[string]interface{} // cached json.Unmarshal of DecodedJSON
+	parsedPath          []string               // cached parsePathJSON result
+	pathParsed          bool                   // whether parsedPath has been set
+	AdvertRouteEvidence uint8                  // union of known flood/direct-empty-path evidence
+	decodedOnce         sync.Once              // guards parsedDecoded
+	parsedDecoded       map[string]interface{} // cached json.Unmarshal of DecodedJSON
 	// Dedup map: "observerID|pathJSON" → true for O(1) duplicate checks
 	obsKeys     map[string]bool
 	observerSet map[string]bool // unique observer IDs (for UniqueObserverCount)
@@ -172,6 +173,12 @@ func (tx *StoreTx) ParsedDecoded() map[string]interface{} {
 // All other locks are acquired independently (no nesting).
 // When adding new lock acquisitions, respect this ordering.
 type PacketStore struct {
+	// Lock order: advertEvidenceMu -> mu -> cacheMu. The feed and mask
+	// loading share this gate, preventing a late event/chunk-merge race.
+	advertEvidenceMu       sync.Mutex
+	advertEvidenceCursor   int64
+	advertEvidenceRevision uint64 // cacheMu
+
 	mu            sync.RWMutex
 	db            *DB
 	packets       []*StoreTx                 // sorted by first_seen ASC (oldest first; newest at tail)
@@ -731,6 +738,11 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig, cacheTTLs ...map[string]inte
 			ps.invCooldown = v
 		}
 	}
+	// Capture BEFORE loading any packets. Evidence arriving during startup
+	// remains above this watermark; each loaded tx also reads its full mask.
+	if db.advertEvidencePresent() {
+		_ = db.conn.QueryRow(`SELECT COALESCE(MAX(id),0) FROM advert_route_evidence`).Scan(&ps.advertEvidenceCursor)
+	}
 	return ps
 }
 
@@ -738,6 +750,8 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig, cacheTTLs ...map[string]inte
 // When maxMemoryMB > 0, loads only the newest N transmissions that fit
 // within the memory budget, avoiding OOM on large databases.
 func (s *PacketStore) Load() error {
+	s.advertEvidenceMu.Lock()
+	defer s.advertEvidenceMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1006,6 +1020,21 @@ func (s *PacketStore) Load() error {
 			s.trackedBytes += estimateStoreObsBytes(obs)
 		}
 	}
+
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close()
+	ids := advertTxIDs(s.packets)
+	// Keep the evidence gate across read/merge, but do not add SQL work
+	// under the global store lock. Eviction during the read is harmless.
+	s.mu.Unlock()
+	masks, err := s.db.advertEvidenceForIDs(ids)
+	s.mu.Lock()
+	if err != nil {
+		return err
+	}
+	s.mergeAdvertEvidence(masks)
 
 	// Post-load: pick best observation (longest path) for each transmission,
 	// then re-index so relay hops from resolved_path land in byNode.
@@ -1340,6 +1369,17 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 	if len(localPackets) == 0 {
 		return nil
 	}
+	rows.Close()
+	s.advertEvidenceMu.Lock()
+	defer s.advertEvidenceMu.Unlock()
+	ids := advertTxIDs(localPackets)
+	masks, err := s.db.advertEvidenceForIDs(ids)
+	if err != nil {
+		return err
+	}
+	for _, tx := range localPackets {
+		tx.AdvertRouteEvidence = masks[tx.ID]
+	}
 
 	// PR #1187 r3 MUST-FIX 1: index↔slice consistency.
 	//
@@ -1398,10 +1438,21 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 				newObsIDs[k] = true
 			}
 		}
+		evidenceChanged := false
 		for k, v := range batchHashes {
 			if s.byHash[k] == nil {
 				s.byHash[k] = v
+			} else {
+				// A live-loaded copy may already carry newer bits. Union in
+				// both directions before mergeChunkIntoPackets chooses it.
+				if unionAdvertEvidence(s.byHash[k], v.AdvertRouteEvidence) {
+					evidenceChanged = true
+				}
+				v.AdvertRouteEvidence |= s.byHash[k].AdvertRouteEvidence
 			}
+		}
+		if evidenceChanged {
+			s.invalidateAdvertEvidence()
 		}
 		for k, v := range batchTxIDs {
 			if s.byTxID[k] == nil {
@@ -1452,6 +1503,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 	// before it readers see the old slice (which is still fully indexed).
 	s.mu.Lock()
 	s.packets = mergeChunkIntoPackets(localPackets, s.packets)
+	s.invalidateAdvertEvidence()
 	s.totalObs += localTotalObs
 	s.trackedBytes += localTrackedBytes
 	if localMaxTxID > s.maxTxID {
@@ -2778,12 +2830,30 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 	if len(tempRows) == 0 {
 		return nil, sinceID
 	}
+	if err := rows.Err(); err != nil {
+		return nil, sinceID
+	}
+	rows.Close()
+	s.advertEvidenceMu.Lock()
+	defer s.advertEvidenceMu.Unlock()
+	ids := make([]int, 0, txCount)
+	for _, row := range tempRows {
+		if row.payloadType != nil && *row.payloadType == PayloadADVERT && (len(ids) == 0 || ids[len(ids)-1] != row.txID) {
+			ids = append(ids, row.txID)
+		}
+	}
+	masks, err := s.db.advertEvidenceForIDs(ids)
+	if err != nil {
+		log.Printf("[store] load advert evidence: %v", err)
+		return nil, sinceID
+	}
 
 	// Now lock and merge into store
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	newMaxID := sinceID
+	evidenceChanged := false
 	broadcastTxs := make(map[int]*StoreTx) // track new transmissions for broadcast
 	hasNewNodes := false                   // track genuinely new node pubkeys
 	var broadcastOrder []int
@@ -2844,6 +2914,9 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			}
 		}
 
+		if unionAdvertEvidence(tx, masks[r.txID]) {
+			evidenceChanged = true
+		}
 		if r.obsID != nil {
 			oid := *r.obsID
 			// Dedup (O(1) map lookup)
@@ -3052,6 +3125,9 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 	// sees every observation) owns that write too.
 	_ = broadcastRP // resolved path is still computed in-memory (above) for live broadcast; no SQL write.
 
+	if evidenceChanged {
+		s.invalidateAdvertEvidence()
+	}
 	return result, newMaxID
 }
 
@@ -3059,6 +3135,8 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 // store. This catches observations that arrive after IngestNewFromDB has already
 // advanced past the transmission's ID (fixes #174).
 func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]interface{} {
+	// Must run even when observation IDs/timestamps have not changed.
+	s.refreshAdvertEvidence()
 	if limit <= 0 {
 		limit = 500
 	}

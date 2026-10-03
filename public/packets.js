@@ -26,6 +26,17 @@
 
   function thsOf(table) { return Array.from(table.querySelectorAll('thead > tr > th')); }
 
+  // Fire `table-columns-changed` on the table when the set of hidden columns
+  // differs from the last call, so column sizing (fitColumnsToContent) can
+  // re-measure. apply() runs on every tbody mutation; most leave the set
+  // alone and dispatch nothing.
+  function notifyIfChanged(table) {
+    const sig = thsOf(table).map(th => th.classList.contains(HIDDEN_CLASS) ? '1' : '0').join('');
+    if (table.__trHiddenSig === sig) return;
+    table.__trHiddenSig = sig;
+    table.dispatchEvent(new CustomEvent('table-columns-changed'));
+  }
+
   function clearHidden(table) {
     table.querySelectorAll('.' + HIDDEN_CLASS).forEach(el => el.classList.remove(HIDDEN_CLASS));
     const pill = table.querySelector('.' + PILL_CLASS);
@@ -55,6 +66,7 @@
     if (table[REVEAL_FLAG]) {
       // user explicitly requested reveal — clear hidden state and skip
       clearHidden(table);
+      notifyIfChanged(table);
       return;
     }
     clearHidden(table);
@@ -101,6 +113,7 @@
         ev.preventDefault();
         table[REVEAL_FLAG] = true;
         clearHidden(table);
+        notifyIfChanged(table);
         // Add a small "hide again" affordance after reveal so the user isn't stuck.
         const rehide = document.createElement('button');
         rehide.type = 'button';
@@ -127,6 +140,7 @@
       });
       host.appendChild(pill);
     }
+    notifyIfChanged(table);
   }
 
   // Track tables we've wired up so resize triggers re-apply.
@@ -662,6 +676,12 @@
     if (!o) return id;
     return o.name;
   }
+  // Observer name as the table cell shows it: cut to `maxLen` characters
+  // unless the Full Names toggle is on. Escaped, ready for innerHTML.
+  function obsCellName(id, maxLen) {
+    const name = obsNameOnly(id);
+    return escapeHtml(showFullNames ? name : truncate(name, maxLen));
+  }
   // #1189 R1 mesh-operator feedback: in a grouped row the old cell showed ONE
   // observer's IATA + `+N` — operators couldn't tell whether the N additional
   // observers were SAME-region (redundant copies) or CROSS-region (interesting
@@ -743,6 +763,10 @@
   let _packetSortColumn = null;
   let _packetSortDirection = 'desc';
   let showHexHashes = localStorage.getItem('meshcore-hex-hashes') === 'true';
+  // "Full Names": show observer and path hop names untruncated (path chips
+  // lose their 120px cap; hops past the column edge go behind the +N pill).
+  let showFullNames = localStorage.getItem('meshcore-full-names') === 'true';
+  let _colFit = null; // fitColumnsToContent controller for #pktTable
   var _pendingUrlRegion = null;
 
   var DEFAULT_TIME_WINDOW = 15;
@@ -756,6 +780,7 @@
     if (filters.observer) parts.push('observer=' + encodeURIComponent(filters.observer));
     if (filters.channel) parts.push('channel=' + encodeURIComponent(filters.channel));
     if (filters._filterExpr) parts.push('filter=' + encodeURIComponent(filters._filterExpr));
+    if (showFullNames) parts.push('fullNames=1');
     // Sort state (#749) — encode as 'col[:asc]'; default 'time:desc' is omitted.
     if (_packetSortColumn) {
       var sortDefault = _packetSortColumn === 'time' && _packetSortDirection === 'desc';
@@ -1250,6 +1275,15 @@
     // Read URL params (router strips query from routeParam; read from location.hash)
     var _initUrlParams = getHashParams();
     directObsId = _initUrlParams.get('obs');
+    // Full Names is a view mode: a shared link carries it (fullNames=1/0).
+    // It applies to this page only; the visitor's saved preference is theirs,
+    // so opening somebody else's link does not overwrite it.
+    var _urlFullNames = _initUrlParams.get('fullNames');
+    if (_urlFullNames === '1' || _urlFullNames === '0') {
+      showFullNames = _urlFullNames === '1';
+    } else {
+      showFullNames = localStorage.getItem('meshcore-full-names') === 'true';
+    }
     var _urlTimeWindow = Number(_initUrlParams.get('timeWindow'));
     if (Number.isFinite(_urlTimeWindow) && _urlTimeWindow > 0) {
       savedTimeWindowMin = _urlTimeWindow;
@@ -1502,6 +1536,8 @@
     if (wsHandler) offWS(wsHandler);
     wsHandler = null;
     if (_tableSortInstance) { _tableSortInstance.destroy(); _tableSortInstance = null; }
+    if (_colFit) { _colFit.destroy(); _colFit = null; }
+    if (_pathPopoverClose) _pathPopoverClose(false);
     detachVScrollListener();
     clearTimeout(_wsRenderTimer);
     if (_wsRafId) { cancelAnimationFrame(_wsRafId); _wsRafId = null; }
@@ -1545,6 +1581,10 @@
       if (typeof _rebuildObserverMenu === 'function') {
         try { _rebuildObserverMenu(); } catch {}
       }
+      // Rows drawn before observers arrived show raw observer ids (a 64-char
+      // pubkey under Full Names). Redraw them with names and re-measure:
+      // grow() alone would leave the Observer column at the id's width.
+      if (_colFit) renderTableRows().then(() => { if (_colFit) _colFit.refit(); });
     } catch {}
   }
 
@@ -1783,10 +1823,11 @@
             <div class="col-toggle-menu" id="colToggleMenu"></div>
           </div>
           <button class="btn btn-icon${showHexHashes ? ' active' : ''}" id="hexHashToggle" title="Show raw hex hash prefixes instead of resolved node names in the path column">Hex Paths</button>
+          <button class="btn btn-icon${showFullNames ? ' active' : ''}" id="fullNamesToggle" title="Show node names in full in the Observer and Path columns instead of shortening them">Full Names</button>
         </div>
       </div>
       <div class="path-symbols-legend-wrapper">${(window.HopDisplay && HopDisplay.renderPathSymbolsLegend) ? HopDisplay.renderPathSymbolsLegend() : ''}</div>
-      <div class="table-fluid-wrap"><table class="data-table" id="pktTable">
+      <div class="table-fluid-wrap"><table class="data-table${showFullNames ? ' pkt-full-names' : ''}" id="pktTable">
         <thead><tr>
           <th scope="col" class="col-expand" data-priority="1"></th><th scope="col" class="col-region" data-sort-key="region" data-priority="3">Region</th><th scope="col" class="col-time" data-sort-key="time" data-type="date" data-priority="1">Time</th><th scope="col" class="col-hash" data-sort-key="hash" data-priority="3">Hash</th><th scope="col" class="col-size" data-sort-key="size" data-type="numeric" data-priority="4">Size</th>
           <th scope="col" class="col-hashsize" data-sort-key="hb" data-type="numeric" data-priority="5">HB</th>
@@ -2249,6 +2290,7 @@
       });
       localStorage.setItem('packets-visible-cols', JSON.stringify(visibleCols));
       localStorage.setItem('packets-known-cols', JSON.stringify(COL_DEFS.map(c => c.key)));
+      if (_colFit) _colFit.refit();
     }
     colMenu.innerHTML = COL_DEFS.map(c =>
       `<label><input type="checkbox" data-col="${c.key}" ${visibleCols.includes(c.key) ? 'checked' : ''}> ${c.label}</label>`
@@ -2273,6 +2315,17 @@
       localStorage.setItem('meshcore-hex-hashes', showHexHashes);
       this.classList.toggle('active', showHexHashes);
       renderTableRows();
+    });
+
+    document.getElementById('fullNamesToggle').addEventListener('click', function () {
+      showFullNames = !showFullNames;
+      localStorage.setItem('meshcore-full-names', showFullNames);
+      this.classList.toggle('active', showFullNames);
+      pktTable.classList.toggle('pkt-full-names', showFullNames);
+      updatePacketsUrl();
+      // Observer widths follow the names: re-measure once rows are rebuilt
+      // (grow() alone would never shrink the column back).
+      renderTableRows().then(() => { if (_colFit) _colFit.refit(); });
     });
 
     // Node name filter with autocomplete
@@ -2359,7 +2412,7 @@
     if (pktBody) {
       const handler = (e) => {
         // Let hop links navigate naturally without selecting the row
-        if (e.target.closest('[data-hop-link]')) return;
+        if (e.target.closest('[data-hop-link], .path-overflow-pill')) return;
         const row = e.target.closest('tr[data-action]');
         if (!row) return;
         if (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ') return;
@@ -2404,7 +2457,18 @@
     });
 
     renderTableRows();
-    makeColumnsResizable('#pktTable', 'meshcore-pkt-col-widths');
+    // Short columns (time, hash, size, ...) take the pixels their content
+    // needs; the rest of the width goes to Path and Details. The old
+    // percentage layout scaled a "17s ago" column to 180px on wide screens.
+    try { localStorage.removeItem('meshcore-pkt-col-widths'); } catch (_) {}
+    if (_colFit) _colFit.destroy();
+    _colFit = fitColumnsToContent('#pktTable', 'meshcore-pkt-col-px', {
+      flex: ['col-path', 'col-details'],
+      // Floors for content that only grouped rows carry, which may not be
+      // on screen when the table is measured: the caret and a 2-digit
+      // "seen N times" badge.
+      min: { 'col-expand': 32, 'col-rpt': 58 },
+    });
     // #1056: register fluid-column responsive behavior (drops priority>1 cols
     // when narrow, shows "+N hidden" pill, reveals on click). Idempotent.
     if (window.TableResponsive) {
@@ -2428,6 +2492,7 @@
             sortPacketsArray();
             renderTableRows();
             updatePacketsUrl();
+            if (_colFit) _colFit.refit();
           }
         });
         // Apply initial sort state from TableSort
@@ -2439,6 +2504,9 @@
         }
       }
     }
+    // Re-measure now that the sort arrow is in its header and responsive
+    // hiding has run.
+    if (_colFit) _colFit.refit();
   }
 
   // Build HTML for a single grouped packet row
@@ -2474,7 +2542,7 @@
     const _grpHashStripe = _hashStripeStyle(p.hash);
     const _grpStyle = _grpHashStripe + _grpChanStyle;
     let html = `<tr class="${isSingle ? '' : 'group-header'} ${isExpanded ? 'expanded' : ''}" data-hash="${p.hash}" data-action="${isSingle ? 'select-hash' : 'toggle-select'}" data-value="${p.hash}" data-entry-idx="${entryIdx}" tabindex="0" role="row"${_grpStyle ? ' style="' + _grpStyle + '"' : ''}>
-          <td class="col-expand" style="text-align:center;cursor:pointer">${isSingle ? '' : (isExpanded ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-down"/></svg>' : '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-up"/></svg>')}</td>
+          <td class="col-expand" style="text-align:center;cursor:pointer">${isSingle ? '' : (isExpanded ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-down"/></svg>' : '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-right"/></svg>')}</td>
           <td class="col-region">${groupRegion ? `<span class="badge-region">${groupRegion}</span>` : '—'}</td>
           <td class="col-time">${renderTimestampCell(p.latest)}</td>
           <td class="mono col-hash" data-filter-field="hash" data-filter-value="${escapeHtml(p.hash || '')}">${truncate(p.hash || '—', 8)}</td>
@@ -2482,7 +2550,7 @@
           <td class="col-hashsize mono"${_grpHashSizeTitle}>${groupHashBytes}</td>
           <td class="col-type" data-filter-field="type" data-filter-value="${escapeHtml(groupTypeName || '')}">${p.payload_type != null ? `<span class="badge badge-${groupTypeClass}">${groupTypeName}</span>${transportBadge(p.route_type)}` : '—'}</td>
           <td class="col-scope" data-filter-field="scope" data-filter-value="${escapeHtml(p.scope_name || '')}">${scopeCellHtml(p.scope_name)}</td>
-          <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(headerObserverId) || '')}">${isSingle ? escapeHtml(truncate(obsNameOnly(headerObserverId), 16)) + obsIataBadge(p) : escapeHtml(truncate(obsNameOnly(headerObserverId), 10)) + groupedObserverIataBadgesHtml(p)}</td>
+          <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(headerObserverId) || '')}">${isSingle ? obsCellName(headerObserverId, 16) + obsIataBadge(p) : obsCellName(headerObserverId, 10) + groupedObserverIataBadgesHtml(p)}</td>
           <td class="col-path"><span class="path-hops">${groupPathStr}</span></td>
           <td class="col-rpt">${p.observation_count > 1 ? '<span class="badge badge-obs" title="Seen ' + p.observation_count + ' times"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> ' + p.observation_count + '</span>' : (isSingle ? '' : p.count)}</td>
           <td class="col-details"><span class="col-details-clip">${getDetailPreview(getParsedDecoded(p))}</span></td>
@@ -2517,7 +2585,7 @@
               <td class="col-hashsize mono"${_cHashSizeTitle}>${childHashBytes}</td>
               <td class="col-type" data-filter-field="type" data-filter-value="${escapeHtml(typeName || '')}"><span class="badge badge-${typeClass}">${typeName}</span>${transportBadge(c.route_type)}</td>
               <td class="col-scope" data-filter-field="scope" data-filter-value="${escapeHtml(c.scope_name || '')}">${scopeCellHtml(c.scope_name)}</td>
-              <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(c.observer_id) || '')}">${escapeHtml(truncate(obsNameOnly(c.observer_id), 16))}${obsIataBadge(c)}</td>
+              <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(c.observer_id) || '')}">${obsCellName(c.observer_id, 16)}${obsIataBadge(c)}</td>
               <td class="col-path"><span class="path-hops">${childPathStr}</span></td>
               <td class="col-rpt"></td>
               <td class="col-details"><span class="col-details-clip">${getDetailPreview(getParsedDecoded(c))}</span></td>
@@ -2554,7 +2622,7 @@
         <td class="col-hashsize mono"${_flatHashSizeTitle}>${hashBytes}</td>
         <td class="col-type" data-filter-field="type" data-filter-value="${escapeHtml(typeName || '')}"><span class="badge badge-${typeClass}">${typeName}</span>${transportBadge(p.route_type)}</td>
         <td class="col-scope" data-filter-field="scope" data-filter-value="${escapeHtml(p.scope_name || '')}">${scopeCellHtml(p.scope_name)}</td>
-        <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(p.observer_id) || '')}">${escapeHtml(truncate(obsNameOnly(p.observer_id), 16))}${obsIataBadge(p)}</td>
+        <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(p.observer_id) || '')}">${obsCellName(p.observer_id, 16)}${obsIataBadge(p)}</td>
         <td class="col-path"><span class="path-hops">${pathStr}</span></td>
         <td class="col-rpt"></td>
         <td class="col-details"><span class="col-details-clip">${detail}</span></td>
@@ -2693,6 +2761,8 @@
           if (h > 0) { VSCROLL_ROW_HEIGHT = h; _vscrollRowHeightMeasured = true; }
         }
       }
+      if (_colFit) _colFit.grow();
+      _closeStalePathPopover();
       if (window.__PERF_LOG_RENDER) console.log('[perf] renderVisibleRows: full rebuild %d entries, %.2fms', endIdx - startIdx, performance.now() - _rvr_t0);
       _finalizePathOverflow(tbody);
       // #1128 (Bug 1): hop-resolver mutates chip text from hex prefix to a
@@ -2717,13 +2787,18 @@
       const row = bottomSpacer.previousElementSibling;
       if (row && row !== topSpacer) row.remove();
     }
+    // Rows inserted below, collected so column fitting measures only them.
+    const inserted = [];
+    const collect = (from, to) => { for (let r = from; r && r !== to; r = r.nextElementSibling) inserted.push(r); };
     // Prepend rows that scrolled into view at the top
     if (startIdx < prevStart) {
       let html = '';
       for (let i = startIdx; i < Math.min(prevStart, endIdx); i++) {
         html += builder(_displayPackets[i], i);
       }
+      const oldFirst = topSpacer.nextElementSibling;
       topSpacer.insertAdjacentHTML('afterend', html);
+      collect(topSpacer.nextElementSibling, oldFirst);
     }
     // Append rows that scrolled into view at the bottom
     if (endIdx > prevEnd) {
@@ -2731,8 +2806,12 @@
       for (let i = Math.max(prevEnd, startIdx); i < endIdx; i++) {
         html += builder(_displayPackets[i], i);
       }
+      const oldLast = bottomSpacer.previousElementSibling;
       bottomSpacer.insertAdjacentHTML('beforebegin', html);
+      collect(oldLast === topSpacer || !oldLast ? topSpacer.nextElementSibling : oldLast.nextElementSibling, bottomSpacer);
     }
+    if (_colFit) _colFit.grow(inserted);
+    _closeStalePathPopover();
     if (window.__PERF_LOG_RENDER) console.log('[perf] renderVisibleRows: incremental head=%d tail=%d, %.2fms', headRowCount, tailRowCount, performance.now() - _rvr_t0);
     _finalizePathOverflow(tbody);
     _scheduleReFinalizePathOverflow(tbody);
@@ -2755,11 +2834,11 @@
       var hostRight = host.getBoundingClientRect().right;
       if (!hostRight) continue;
       var hidden = 0;
-      // Walk pairs of chip + arrow; count chips (not arrows) whose right edge
-      // is past the host's right edge.
+      // Count hop chips whose right edge is past the host's right edge.
+      // Arrows and a hop's warning buttons are not hops of their own.
       for (var j = 0; j < children.length; j++) {
         var ch = children[j];
-        if (ch.classList.contains('arrow')) continue;
+        if (!ch.classList.contains('hop')) continue;
         var r = ch.getBoundingClientRect();
         if (r.left >= hostRight || r.right > hostRight + 0.5) hidden++;
       }
@@ -2767,10 +2846,10 @@
         var pill = document.createElement('span');
         pill.className = 'path-overflow-pill';
         pill.textContent = '+' + hidden;
-        pill.title = hidden + ' more hop' + (hidden === 1 ? '' : 's') + ' — click to view';
+        // No native title: hovering shows the full-path popover instead.
         pill.setAttribute('role', 'button');
         pill.setAttribute('tabindex', '0');
-        pill.setAttribute('aria-label', hidden + ' more hops');
+        pill.setAttribute('aria-label', hidden + ' more hop' + (hidden === 1 ? '' : 's') + ', show the full path');
         host.appendChild(pill);
       }
       host.dataset.overflowChecked = '1';
@@ -2819,65 +2898,164 @@
     }
   }
 
-  // Delegated click for path overflow pills — show popover of full path.
+  // Split a rendered .path-hops host into hops: each hop is its chip plus
+  // any warning buttons that follow it, up to the next arrow. The overflow
+  // pill itself is left out.
+  function _pathHopSegments(host) {
+    var segments = [];
+    var current = '';
+    var kids = Array.prototype.slice.call(host.children);
+    for (var i = 0; i < kids.length; i++) {
+      var k = kids[i];
+      if (k.classList.contains('path-overflow-pill')) continue;
+      if (k.classList.contains('arrow')) {
+        if (current) segments.push(current);
+        current = '';
+        continue;
+      }
+      current += k.outerHTML;
+    }
+    if (current) segments.push(current);
+    return segments;
+  }
+
+  // The full path as a vertical list, one hop per line, in path order. Each
+  // chip keeps its .path-hops styling; the 120px cap is lifted in CSS.
+  function _buildPathPopover(host) {
+    var segments = _pathHopSegments(host);
+    var pop = document.createElement('div');
+    pop.className = 'path-popover';
+    pop.id = 'pathPopover';
+    pop.setAttribute('role', 'tooltip');
+    var html = '<div class="path-popover-title">Full path · ' + segments.length + ' hop' + (segments.length === 1 ? '' : 's') + '</div><ol class="path-popover-list">';
+    for (var i = 0; i < segments.length; i++) {
+      html += '<li><span class="path-popover-idx">' + (i + 1) + '</span><span class="path-hops">' + segments[i] + '</span></li>';
+    }
+    pop.innerHTML = html + '</ol>';
+    return pop;
+  }
+
+  // Below the pill by default; above it when there is no room below. Kept
+  // inside the viewport horizontally.
+  function _positionPathPopover(pop, pill) {
+    var r = pill.getBoundingClientRect();
+    var popH = pop.getBoundingClientRect().height;
+    var roomBelow = window.innerHeight - r.bottom;
+    var top = (roomBelow < popH + 12 && r.top > popH + 12)
+      ? window.scrollY + r.top - popH - 4
+      : window.scrollY + r.bottom + 4;
+    pop.style.top = top + 'px';
+    pop.style.left = (window.scrollX + r.left) + 'px';
+    var pr = pop.getBoundingClientRect();
+    if (pr.right > window.innerWidth - 8) {
+      pop.style.left = Math.max(8, window.scrollX + window.innerWidth - pr.width - 8) + 'px';
+    }
+  }
+
+  // Set by _wirePathOverflowPopover: closes the open path popover (or only
+  // one whose pill has left the DOM). The popover lives on <body>, outside
+  // the table, so neither row re-renders nor page changes remove it.
+  let _pathPopoverClose = null;
+  function _closeStalePathPopover() { if (_pathPopoverClose) _pathPopoverClose(true); }
+
+  // Delegated handlers for path overflow pills. Hovering or focusing a pill
+  // shows the full path; moving into the popover keeps it open so its hop
+  // links can be clicked. Clicking the pill (or Enter/Space) pins it until
+  // an outside click or Escape; clicking a pinned pill closes it.
   function _wirePathOverflowPopover() {
     if (window.__pathOverflowWired) return;
     window.__pathOverflowWired = true;
+    var HOVER_DELAY_MS = 120;
+    var HIDE_GRACE_MS = 150;
     var existing = null;
+    var anchor = null;
+    var pinned = false;
+    var showTimer = null;
+    var hideTimer = null;
+    _pathPopoverClose = function (onlyIfStale) {
+      if (!existing) return;
+      if (onlyIfStale && anchor && anchor.isConnected) return;
+      dismiss();
+    };
+    function pillOf(el) { return el && el.closest ? el.closest('.path-overflow-pill') : null; }
+    function inPopover(el) { return !!(existing && el && existing.contains(el)); }
     function dismiss() {
+      clearTimeout(showTimer);
+      clearTimeout(hideTimer);
       if (existing) { existing.remove(); existing = null; }
+      if (anchor) { anchor.removeAttribute('aria-describedby'); anchor = null; }
+      pinned = false;
       document.removeEventListener('mousedown', onDoc, true);
-      document.removeEventListener('keydown', onKey, true);
     }
     function onDoc(ev) {
-      if (existing && !existing.contains(ev.target) && !ev.target.classList.contains('path-overflow-pill')) dismiss();
+      if (!inPopover(ev.target) && !pillOf(ev.target)) dismiss();
     }
-    function onKey(ev) { if (ev.key === 'Escape') dismiss(); }
-    document.addEventListener('click', function(ev) {
-      var pill = ev.target.closest && ev.target.closest('.path-overflow-pill');
+    function open(pill, pin) {
+      clearTimeout(showTimer);
+      clearTimeout(hideTimer);
+      if (existing && anchor === pill) { if (pin) pinned = true; return; }
+      dismiss();
+      var host = pill.closest('.path-hops');
+      if (!host || !pill.isConnected) return;
+      var pop = _buildPathPopover(host);
+      document.body.appendChild(pop);
+      _positionPathPopover(pop, pill);
+      existing = pop;
+      anchor = pill;
+      pinned = !!pin;
+      pill.setAttribute('aria-describedby', pop.id);
+      setTimeout(function () { document.addEventListener('mousedown', onDoc, true); }, 0);
+    }
+    function scheduleHide() {
+      clearTimeout(showTimer);
+      if (pinned || !existing) return;
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(dismiss, HIDE_GRACE_MS);
+    }
+    function toggle(pill) {
+      if (existing && anchor === pill && pinned) dismiss();
+      else open(pill, true);
+    }
+    document.addEventListener('mouseover', function (ev) {
+      var pill = pillOf(ev.target);
+      if (pill) {
+        clearTimeout(hideTimer);
+        if (existing && anchor === pill) return;
+        clearTimeout(showTimer);
+        showTimer = setTimeout(function () { open(pill, false); }, HOVER_DELAY_MS);
+      } else if (inPopover(ev.target)) {
+        clearTimeout(hideTimer);
+      }
+    });
+    document.addEventListener('mouseout', function (ev) {
+      if (!pillOf(ev.target) && !inPopover(ev.target)) return;
+      var to = ev.relatedTarget;
+      if (inPopover(to) || (anchor && pillOf(to) === anchor)) return;
+      scheduleHide();
+    });
+    document.addEventListener('focusin', function (ev) {
+      var pill = pillOf(ev.target);
+      if (pill) open(pill, false);
+    });
+    document.addEventListener('focusout', function (ev) {
+      if (pillOf(ev.target) && !inPopover(ev.relatedTarget)) scheduleHide();
+    });
+    // Capture phase: the table row's own click/keyboard handlers on #pktBody
+    // would otherwise select the row first.
+    document.addEventListener('click', function (ev) {
+      var pill = pillOf(ev.target);
       if (!pill) return;
       ev.stopPropagation();
-      var host = pill.closest('.path-hops');
-      if (!host) return;
-      dismiss();
-      var pop = document.createElement('div');
-      pop.className = 'path-popover';
-      // Clone all children except the pill, preserving rendered chips/arrows.
-      var inner = '<div class="path-popover-title">Full path (' + (host.children.length) + ' items)</div><div>';
-      var kids = Array.prototype.slice.call(host.children);
-      for (var i = 0; i < kids.length; i++) {
-        if (kids[i].classList.contains('path-overflow-pill')) continue;
-        inner += kids[i].outerHTML;
-      }
-      inner += '</div>';
-      pop.innerHTML = inner;
-      document.body.appendChild(pop);
-      var r = pill.getBoundingClientRect();
-      // #1128 (Bug 2): position below by default, but flip ABOVE when there
-      // isn't enough room — keeps the popover anchored to the pill instead of
-      // hanging arbitrarily over adjacent rows / off-screen.
-      var pr0 = pop.getBoundingClientRect();
-      var popH = pr0.height;
-      var roomBelow = window.innerHeight - r.bottom;
-      var top;
-      if (roomBelow < popH + 12 && r.top > popH + 12) {
-        top = window.scrollY + r.top - popH - 4;
-      } else {
-        top = window.scrollY + r.bottom + 4;
-      }
-      var left = window.scrollX + r.left;
-      pop.style.top = top + 'px';
-      pop.style.left = left + 'px';
-      var pr = pop.getBoundingClientRect();
-      if (pr.right > window.innerWidth - 8) {
-        pop.style.left = Math.max(8, window.scrollX + window.innerWidth - pr.width - 8) + 'px';
-      }
-      existing = pop;
-      setTimeout(function() {
-        document.addEventListener('mousedown', onDoc, true);
-        document.addEventListener('keydown', onKey, true);
-      }, 0);
-    });
+      toggle(pill);
+    }, true);
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape' && existing) { dismiss(); return; }
+      var pill = pillOf(ev.target);
+      if (!pill || (ev.key !== 'Enter' && ev.key !== ' ')) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      toggle(pill);
+    }, true);
   }
 
   // Attach/detach scroll listener for virtual scrolling
@@ -4276,6 +4454,7 @@
       renderTableRows,
       _setPackets: function(p) { packets = p; },
       _setFilter: function(k, v) { filters[k] = v; },
+      _setFullNames: function(v) { showFullNames = !!v; },
     };
   }
 

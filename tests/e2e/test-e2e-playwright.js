@@ -809,6 +809,68 @@ async function run() {
   });
 
   // Test 8b (#842): time-window picker triggers requests with ?window=… param.
+  // #2041: exercise the overview's actual API-to-renderer path at both sizes.
+  await test('Relay airtime chart splits adverts without hiding zero-relay rows', async () => {
+    const chartPage = await context.newPage();
+    try {
+      await chartPage.route('**/api/analytics/relay-airtime-share*', route => route.fulfill({
+        json: { total_count: 5, total_score: 300, rows: [
+          { payload_type: 'ADVERT', type: 4, advert_kind: 'flood', count: 1, count_pct: 20, score: 100, airtime_pct: 33.333 },
+          { payload_type: 'ADVERT', type: 4, advert_kind: 'other', count: 1, count_pct: 20, score: 100, airtime_pct: 33.333 },
+          { payload_type: 'ADVERT', type: 4, advert_kind: 'zero_hop', count: 1, count_pct: 20, score: 0, airtime_pct: 0 },
+          { payload_type: 'ADVERT', type: 4, advert_kind: 'mixed', count: 1, count_pct: 20, score: 100, airtime_pct: 33.333 },
+          { payload_type: 'ACK', type: 3, count: 1, count_pct: 20, score: 0, airtime_pct: 0 },
+        ] },
+      }));
+      for (const width of [1280, 320]) {
+        await chartPage.setViewportSize({ width, height: 900 });
+        await chartPage.goto(BASE + '/#/analytics');
+        await chartPage.reload({ waitUntil: 'domcontentloaded' });
+        await chartPage.waitForSelector('.dumbbell-row');
+        const labels = await chartPage.locator('.dumbbell-label').allTextContents();
+        assert(JSON.stringify(labels) === JSON.stringify(['Flood adverts', 'Other adverts', 'Direct adverts (empty path)', 'Mixed adverts', 'ACK']), 'advert chart labels: ' + labels.join(', '));
+        assert((await chartPage.locator('.dumbbell-evidence-note').textContent()).includes('older overwritten observations cannot be recovered'), 'known-evidence caveat is visible');
+        const zero = chartPage.locator('.dumbbell-row').filter({ hasText: 'Direct adverts (empty path)' });
+        assert((await zero.textContent()).includes('air 0.0%'), 'zero-relay advert row must remain visible');
+        assert((await zero.getAttribute('title')).includes('Count: 1 (20.00%)'), 'tooltip retains count');
+        const layout = await chartPage.locator('.dumbbell-chart').evaluate(chart => {
+          const box = chart.getBoundingClientRect();
+          const axisLabels = [...chart.querySelectorAll('.dumbbell-axis span')];
+          const expectedAxis = ['0%', '50%', '100%'];
+          return {
+            axisFits: axisLabels.length === expectedAxis.length && axisLabels.every((label, i) => {
+              const bounds = label.getBoundingClientRect();
+              return label.textContent.trim() === expectedAxis[i] && bounds.width > 0 && bounds.height > 0 &&
+                (i === 0 || axisLabels[i - 1].getBoundingClientRect().right <= bounds.left);
+            }),
+            overflow: chart.scrollWidth > chart.clientWidth + 1,
+            outside: box.left < -1 || box.right > window.innerWidth + 1,
+            rowsFit: [...chart.querySelectorAll('.dumbbell-row')].every(row => {
+              const label = row.querySelector('.dumbbell-label').getBoundingClientRect();
+              const track = row.querySelector('.dumbbell-track').getBoundingClientRect();
+              const values = row.querySelector('.dumbbell-values').getBoundingClientRect();
+              return label.right <= track.left && track.width >= 20 && track.right <= values.left && values.right <= box.right + 1;
+            }),
+          };
+        });
+        assert(!layout.overflow && !layout.outside && layout.rowsFit && layout.axisFits, `relay chart layout at ${width}px: ${JSON.stringify(layout)}`);
+      }
+    } finally { await chartPage.close(); }
+  });
+
+  await test('Relay airtime zero-activity state does not infer direct routing', async () => {
+    const chartPage = await context.newPage();
+    try {
+      await chartPage.route('**/api/analytics/relay-airtime-share*', route => route.fulfill({
+        json: { total_count: 1, total_score: 0, rows: [
+          { payload_type: 'ADVERT', type: 4, advert_kind: 'flood', count: 1, count_pct: 100, score: 0, airtime_pct: 0 },
+        ] },
+      }));
+      await chartPage.goto(BASE + '/#/analytics');
+      await chartPage.waitForFunction(() => document.body.textContent.includes('No relay activity observed'));
+      assert(!(await chartPage.locator('body').textContent()).includes('all packets direct'), 'no resolved relays does not imply direct packets');
+    } finally { await chartPage.close(); }
+  });
   await test('Analytics time-window picker refetches with window param', async () => {
     // Picker must be rendered.
     await page.waitForSelector('#analyticsTimeWindow', { timeout: 5000 });
