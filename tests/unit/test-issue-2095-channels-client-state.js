@@ -215,6 +215,49 @@ console.log('\n=== #2095 part 2: loadChannels() keeps client state ===');
     assert.strictEqual(st.messages.length, 1, 'the open conversation was emptied');
   });
 
+  await atest('a refresh keeps unread and activity on a PSK-only row', async () => {
+    // A user:* row is never in the server snapshot, so mergeClientChannelState
+    // has nothing to enrich; mergeUserChannels() rebuilds it from storage and
+    // must carry what the tab counted, or a live PSK message's badge and
+    // preview reset on every region change.
+    storedKeys = { 'MyPSK': 'deadbeef' };
+    storedLabels = {};
+    apiChannels = [{ hash: 'public1', name: 'public1', lastActivity: null }];
+    setState({
+      channels: [{
+        hash: 'user:MyPSK', name: 'MyPSK', userAdded: true, encrypted: true, unread: 4,
+        lastActivityMs: 9000, lastSender: 'ON8AR', lastMessage: 'decrypted text', messageCount: 3,
+      }],
+      messages: [], selectedHash: null,
+    });
+
+    await loadChannels(true);
+
+    const ch = getState().channels.find(c => c.hash === 'user:MyPSK');
+    assert.ok(ch, 'the PSK row disappeared');
+    assert.strictEqual(ch.unread, 4, 'the PSK unread badge reset on refresh');
+    assert.strictEqual(ch.lastActivityMs, 9000);
+    assert.strictEqual(ch.lastSender, 'ON8AR');
+    assert.strictEqual(ch.lastMessage, 'decrypted text', 'the PSK preview went back to the placeholder');
+    assert.strictEqual(ch.messageCount, 3);
+  });
+
+  await atest('a refresh does not keep a PSK row whose key was removed', async () => {
+    // Storage stays the source of truth for which PSK rows exist.
+    storedKeys = {};
+    storedLabels = {};
+    apiChannels = [{ hash: 'public1', name: 'public1', lastActivity: null }];
+    setState({
+      channels: [{ hash: 'user:Gone', name: 'Gone', userAdded: true, unread: 2 }],
+      messages: [], selectedHash: null,
+    });
+
+    await loadChannels(true);
+
+    const hashes = getState().channels.map(c => c.hash);
+    assert.ok(!hashes.includes('user:Gone'), `a removed key came back: ${JSON.stringify(hashes)}`);
+  });
+
   await atest('a refresh still drops a channel the server filtered out', async () => {
     // The fix must not defeat the region filter.
     storedKeys = {};

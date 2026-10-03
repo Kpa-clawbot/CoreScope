@@ -80,26 +80,32 @@
     return freshChannels.map(function (c) {
       var out = Object.assign({}, c);
       var prev = out.hash ? prevByHash.get(out.hash) : null;
-      if (!prev) return out;
-      // Unread is counted in this tab and exists nowhere else. Carried when
-      // the property is present, including an explicit 0: dropping that would
-      // leave the row with undefined, which is a different thing from "read".
-      if (Object.prototype.hasOwnProperty.call(prev, 'unread')) out.unread = prev.unread;
-      // The user's own marks, re-derived from storage by mergeUserChannels()
-      // straight after this, but carried here so a row is never briefly wrong.
-      if (prev.userAdded) out.userAdded = true;
-      if (prev.userLabel) out.userLabel = prev.userLabel;
-      // A WS batch that landed while the request was in flight is newer than
-      // the snapshot. Keep the whole set together: a sender without its
-      // message reads as a different message.
-      if ((prev.lastActivityMs || 0) > (out.lastActivityMs || 0)) {
-        out.lastActivityMs = prev.lastActivityMs;
-        out.lastSender = prev.lastSender;
-        out.lastMessage = prev.lastMessage;
-        if ((prev.messageCount || 0) > (out.messageCount || 0)) out.messageCount = prev.messageCount;
-      }
-      return out;
+      return prev ? carryClientChannelState(out, prev) : out;
     });
+  }
+
+  // Copies the client-only fields of `prev` onto `out` and returns `out`.
+  // Shared by mergeClientChannelState (server-known rows) and
+  // mergeUserChannels (PSK rows, which no server snapshot contains).
+  function carryClientChannelState(out, prev) {
+    // Unread is counted in this tab and exists nowhere else. Carried when
+    // the property is present, including an explicit 0: dropping that would
+    // leave the row with undefined, which is a different thing from "read".
+    if (Object.prototype.hasOwnProperty.call(prev, 'unread')) out.unread = prev.unread;
+    // The user's own marks, re-derived from storage by mergeUserChannels()
+    // straight after this, but carried here so a row is never briefly wrong.
+    if (prev.userAdded) out.userAdded = true;
+    if (prev.userLabel) out.userLabel = prev.userLabel;
+    // A WS batch that landed while the request was in flight is newer than
+    // the snapshot. Keep the whole set together: a sender without its
+    // message reads as a different message.
+    if ((prev.lastActivityMs || 0) > (out.lastActivityMs || 0)) {
+      out.lastActivityMs = prev.lastActivityMs;
+      out.lastSender = prev.lastSender;
+      out.lastMessage = prev.lastMessage;
+      if ((prev.messageCount || 0) > (out.messageCount || 0)) out.messageCount = prev.messageCount;
+    }
+    return out;
   }
 
   let autoScroll = true;
@@ -558,7 +564,16 @@
   // If a stored key matches a server-known channel, mark that channel as
   // userAdded so the close button appears // EMOJI-OK: prior glyph reference — otherwise the user has no way to
   // remove a key they added but that the server already knows about.
-  function mergeUserChannels() {
+  //
+  // `prevChannels` is the list a refresh is replacing. A PSK row is never in
+  // the server snapshot, so this is where its unread and activity survive.
+  function mergeUserChannels(prevChannels) {
+    var prevByHash = new Map();
+    if (Array.isArray(prevChannels)) {
+      for (var k = 0; k < prevChannels.length; k++) {
+        if (prevChannels[k] && prevChannels[k].hash) prevByHash.set(prevChannels[k].hash, prevChannels[k]);
+      }
+    }
     var keys = ChannelDecrypt.getStoredKeys();
     var labels = (typeof ChannelDecrypt.getLabels === 'function') ? ChannelDecrypt.getLabels() : {};
     var names = Object.keys(keys);
@@ -576,7 +591,7 @@
         }
       }
       if (!matched) {
-        channels.push({
+        var row = {
           hash: 'user:' + name,
           name: name,
           userLabel: label,
@@ -586,7 +601,13 @@
           lastMessage: 'Encrypted — click to decrypt',
           encrypted: true,
           userAdded: true
-        });
+        };
+        var prev = prevByHash.get(row.hash);
+        if (prev) {
+          carryClientChannelState(row, prev);
+          row.userLabel = label; // storage wins over the label the row had
+        }
+        channels.push(row);
       }
     }
   }
@@ -1718,9 +1739,10 @@
       // reconcileSelectionAfterChannelRefresh(), which evicts the selection
       // when it cannot find selectedHash: a user:* hash is never in the server
       // snapshot, so without this a refresh closed the open conversation.
-      channels = mergeClientChannelState(fresh, channels)
+      const prevChannels = channels;
+      channels = mergeClientChannelState(fresh, prevChannels)
         .sort((a, b) => (b.lastActivityMs || 0) - (a.lastActivityMs || 0));
-      if (typeof ChannelDecrypt !== 'undefined' && ChannelDecrypt) mergeUserChannels();
+      if (typeof ChannelDecrypt !== 'undefined' && ChannelDecrypt) mergeUserChannels(prevChannels);
       renderChannelList();
       reconcileSelectionAfterChannelRefresh();
     } catch (e) {
