@@ -236,6 +236,38 @@ console.log('\n=== app.js: routeTypeName / payloadTypeName ===');
   test('getPathLenOffset: direct route (2) → 1', () => assert.strictEqual(ctx.getPathLenOffset(2), 1));
 }
 
+console.log('\n=== app.js: pathHashSize ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+
+  // Same cases as TestHashSize in internal/packetpath/path_test.go: the two
+  // implementations must agree. Header byte = (payload_type << 2) | route_type.
+  const cases = [
+    ['flood 1-byte, 2 hops', '1502ABCDDEADBEEF', 1],
+    ['flood 2-byte, 1 hop', '1541ABCDDEADBEEF', 2],
+    ['flood 3-byte, 0 hops (heard direct)', '1580DEADBEEF', 3],
+    ['flood 1-byte, 0 hops (heard direct)', '1500DEADBEEF', 1],
+    ['transport flood 2-byte, 0 hops', '141122334440DEADBEEF', 2],
+    ['direct 2-byte, 1 hop', '1641ABCDDEADBEEF', 2],
+    ['direct zero-hop: size never encoded', '1600DEADBEEF', null],
+    ['transport direct zero-hop', '171122334400DEADBEEF', null],
+    ['reserved size bits 0b11', '15C1ABCDEF01DEADBEEF', null],
+    ['trace: path bytes are SNR', '2542ABCDDEADBEEF', null],
+    ['lowercase hex', '1541abcd', 2],
+    ['too short', '15', null],
+    ['transport too short', '141122', null],
+    ['invalid hex', 'ZZ41', null],
+    ['empty', '', null],
+    ['null', null, null],
+    ['undefined', undefined, null],
+  ];
+  for (const [name, raw, want] of cases) {
+    test('pathHashSize: ' + name, () => assert.strictEqual(ctx.pathHashSize(raw), want));
+  }
+}
+
 console.log('\n=== app.js: scopeCellHtml ===');
 {
   const ctx = makeSandbox();
@@ -2654,6 +2686,12 @@ console.log('\n=== channels.js: WS batch + region snapshot integration ===');
     ctx.atob = (s) => Buffer.from(String(s), 'base64').toString('utf8');
 
     ctx.crypto = { subtle: require('crypto').webcrypto.subtle }; ctx.TextEncoder = TextEncoder; ctx.TextDecoder = TextDecoder; ctx.Uint8Array = Uint8Array;
+    // Real app.js helper, loaded in its own sandbox so app.js does not
+    // replace the api/registerPage stubs above.
+    const appCtx = makeSandbox();
+    loadInCtx(appCtx, 'public/roles.js');
+    loadInCtx(appCtx, 'public/app.js');
+    ctx.pathHashSize = appCtx.pathHashSize;
     loadInCtx(ctx, 'public/channel-decrypt.js');
     loadInCtx(ctx, 'public/channels.js');
     ctx._pageHandlers.init(appEl);

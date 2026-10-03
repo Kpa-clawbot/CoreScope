@@ -12,6 +12,26 @@ function payloadTypeColor(n) { return PAYLOAD_COLORS[n] || 'unknown'; }
 function isTransportRoute(rt) { return rt === 0 || rt === 3; }
 /** Byte offset of path_len in raw_hex: 5 for transport routes (4 bytes of next/last hop codes precede it), 1 otherwise. */
 function getPathLenOffset(routeType) { return isTransportRoute(routeType) ? 5 : 1; }
+/**
+ * Path hash size (1-3 bytes) the originator chose, from raw_hex's path byte, or
+ * null when the packet carries none. Mirrors packetpath.HashSize on the server:
+ * a flood packet always encodes it (firmware sendFlood sets it before the first
+ * hop), a direct packet with path byte 0x00 is sendZeroHop's marker, and TRACE
+ * path bytes are SNR readings.
+ */
+function pathHashSize(rawHex) {
+  if (typeof rawHex !== 'string' || !/^[0-9a-f]{2}/i.test(rawHex)) return null;
+  const header = parseInt(rawHex.slice(0, 2), 16);
+  if (((header >> 2) & 0x0F) === 9) return null;
+  const routeType = header & 0x03;
+  const off = getPathLenOffset(routeType) * 2;
+  const pathHex = rawHex.slice(off, off + 2);
+  if (!/^[0-9a-f]{2}$/i.test(pathHex)) return null;
+  const pathByte = parseInt(pathHex, 16);
+  if (pathByte === 0 && (routeType === 2 || routeType === 3)) return null;
+  const size = (pathByte >> 6) + 1;
+  return size > 3 ? null : size;
+}
 function transportBadge(rt) { return isTransportRoute(rt) ? ' <span class="badge badge-transport" title="' + routeTypeName(rt) + '">T</span>' : ''; }
 
 /**
