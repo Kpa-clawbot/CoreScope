@@ -247,9 +247,18 @@ async function main() {
       await assertDesktopLayout(page);
     }
     // A saved desktop preference must be constrained on a new narrow page too.
+    // The previous route's sidebar survives the hash-only goto to #/map, and
+    // the new one replaces it only after /api/resolve-hops answers. Waiting
+    // for any .mc-rt-sidebar matched the old one, so the checks below could
+    // measure it, or measure it just after its removal: a detached element
+    // has a 0px rect, which is how this failed intermittently in CI.
     await openPaneAndSubmit(page);
+    await page.evaluate(() => { window.__previousRouteSidebar = document.querySelector('.mc-rt-sidebar'); });
     await page.locator('#mapPiResults button[data-idx="0"]').click();
-    await page.waitForSelector('.mc-rt-sidebar');
+    await page.waitForFunction(() => {
+      const sidebar = document.querySelector('.mc-rt-sidebar');
+      return !!sidebar && sidebar !== window.__previousRouteSidebar;
+    }, null, { timeout: 10000 });
     assert.equal(await page.locator('.mc-rt-sidebar').evaluate(el => el.style.width), '700px');
     await assertDesktopLayout(page);
     await page.setViewportSize({ width: 1280, height: 900 });
