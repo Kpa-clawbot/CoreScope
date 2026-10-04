@@ -310,6 +310,10 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	// clientRxCoverage flag is off (a clean 404 rather than the SPA fallback that
 	// an unregistered /api route would hit). See requireClientRxCoverage.
 	r.HandleFunc("/api/nodes/{pubkey}/rx-coverage", s.handleNodeRxCoverage).Methods("GET")
+
+	// Same registered-unconditionally / 404-when-off pattern as coverage above,
+	// gated by requireClientRfSamples instead.
+	r.HandleFunc("/api/rf-noise", s.handleRfNoise).Methods("GET")
 	r.HandleFunc("/api/nodes/resolve", s.handleResolvePrefix).Methods("GET")
 	r.HandleFunc("/api/rx-coverage", s.handleRxCoverage).Methods("GET")
 	r.HandleFunc("/api/rx-leaderboard", s.handleRxLeaderboard).Methods("GET")
@@ -490,6 +494,7 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 		Tiles:               s.cfg.Tiles,
 		Customizer:          CustomizerClientConfig{DisabledTabs: disabledTabs},
 		ClientRxCoverage:    s.cfg.ClientRxCoverageEnabled(),
+		ClientRfSamples:     s.cfg.ClientRfSamplesEnabled(),
 		PathTrust:           &pathTrust,
 	})
 }

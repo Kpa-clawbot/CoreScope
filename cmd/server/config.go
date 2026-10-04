@@ -173,6 +173,13 @@ type Config struct {
 	// ⇒ off; see ClientRxCoverageEnabled.
 	ClientRxCoverage *ClientRxCoverageConfig `json:"clientRxCoverage,omitempty"`
 
+	// ClientRfSamples gates the opt-in RF environment sample stream (companion
+	// radio noise-floor/counters paired with GPS, table client_rf_samples).
+	// This is the same flag cmd/ingestor checks before recording samples;
+	// mirrored here so the server can gate reading them back. Absent/nil ⇒
+	// off; see ClientRfSamplesEnabled.
+	ClientRfSamples *ClientRfSamplesConfig `json:"clientRfSamples,omitempty"`
+
 	ResolvedPath  *ResolvedPathConfig  `json:"resolvedPath,omitempty"`
 	NeighborGraph *NeighborGraphConfig `json:"neighborGraph,omitempty"`
 
@@ -271,6 +278,20 @@ type ClientRxCoverageConfig struct {
 // feature is on. Nil config or absent/nil section ⇒ off (the safe default).
 func (c *Config) ClientRxCoverageEnabled() bool {
 	return c != nil && c.ClientRxCoverage != nil && c.ClientRxCoverage.Enabled
+}
+
+// ClientRfSamplesConfig gates the opt-in RF environment sample stream.
+// Mirrors cmd/ingestor's ClientRfSamplesConfig (same JSON section, read by
+// both binaries from the same config.json).
+type ClientRfSamplesConfig struct {
+	Enabled bool `json:"enabled"`
+}
+
+// ClientRfSamplesEnabled reports whether the opt-in RF environment sample
+// stream is on. Nil config or absent/nil section ⇒ off (the safe default),
+// mirroring ClientRxCoverageEnabled.
+func (c *Config) ClientRfSamplesEnabled() bool {
+	return c != nil && c.ClientRfSamples != nil && c.ClientRfSamples.Enabled
 }
 
 // WSCompressionEnabled returns true when WebSocket permessage-deflate is explicitly enabled.

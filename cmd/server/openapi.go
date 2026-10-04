@@ -93,6 +93,12 @@ func routeDescriptions() map[string]routeMeta {
 			}},
 		"GET /api/nodes/{pubkey}/neighbors": {Summary: "Get node neighbors", Description: "Returns the queried node's first-hop neighbors with affinity scores and observation metadata (count, SNR, distance, observers). Ambiguous edges carry candidate pubkeys.", Tag: "nodes", Response: schemaRef("NodeNeighborsResponse")},
 
+		"GET /api/rf-noise": {Summary: "RF noise-floor hex grid", Description: "GeoJSON hex cells of the LoRa noise floor measured by mobile clients along their tracks, from client_rf_samples. Lower (more negative) dBm is quieter, the opposite direction to the SNR-coloured coverage layer. Stationary samples are excluded: a parked companion logs hundreds of samples at one point and would otherwise define the cell. Gated on clientRfSamples.", Tag: "coverage",
+			QueryParams: []paramMeta{
+				{Name: "bbox", Description: "Bounding box as minLat,minLon,maxLat,maxLon", Type: "string", Required: true},
+				{Name: "z", Description: "Leaflet zoom level; sets the hex resolution", Type: "integer"},
+				{Name: "days", Description: "Look-back window in days (1-30, default 7)", Type: "integer"},
+			}},
 		"GET /api/scope-audit": {Summary: "Network-wide scope audit", Description: "For every repeater that has answered a declared-regions request: the regions it declares, which of those it has NOT been observed forwarding in the window, which scopes it forwards without declaring, and whether it forwards unscoped floods while omitting the '*' wildcard. '*' is never listed as a region — it governs unscoped floods, not a scope. Repeaters never successfully asked are absent rather than shown as declaring nothing. Rows with missing regions sort first; a short window is weak evidence, since a quiet region simply has no traffic.", Tag: "analytics",
 			QueryParams: []paramMeta{
 				{Name: "window", Description: "Time window: 1h, 24h, or 7d (default 24h)", Type: "string"},

@@ -1082,6 +1082,7 @@ type ClientConfigResponse struct {
 	MapDarkTileProvider string                 `json:"mapDarkTileProvider,omitempty"` // deprecated. TODO: remove after v3.5.0
 	Customizer          CustomizerClientConfig `json:"customizer"`
 	ClientRxCoverage    bool                   `json:"clientRxCoverage"`
+	ClientRfSamples     bool                   `json:"clientRfSamples"`
 	PathTrust           *PathTrustConfig       `json:"pathTrust,omitempty"`
 }
 

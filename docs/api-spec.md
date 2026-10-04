@@ -34,6 +34,7 @@
 - [GET /api/observers/:id/analytics](#get-apiobserversidanalytics)
 - [GET /api/channels](#get-apichannels)
 - [GET /api/channels/:hash/messages](#get-apichannelshashmessages)
+- [GET /api/rf-noise](#get-apirf-noise)
 - [GET /api/analytics/rf](#get-apianalyticsrf)
 - [GET /api/analytics/topology](#get-apianalyticstopology)
 - [GET /api/analytics/retransmissions](#get-apianalyticsretransmissions)
@@ -1278,6 +1279,68 @@ RF signal analytics.
 
 ---
 
+## GET /api/rf-noise
+
+RF noise-floor map layer: where the LoRa band is quiet vs. busy, as measured
+by mobile companions' own radio counters along a driver's track. Opt-in, gated
+by `config.json`'s `clientRfSamples.enabled` (the same flag `cmd/ingestor` uses
+to decide whether to record the underlying `client_rf_samples` rows); the
+endpoint 404s when disabled. The response shape mirrors the `/api/rx-coverage`
+hex-grid GeoJSON, but reports noise floor (dBm, negative; **lower is quieter**,
+the opposite direction from the SNR `rx-coverage` colours) instead of signal.
+
+Stationary samples (a parked companion) are excluded from the aggregate
+entirely: a single parked driver can log hundreds of samples at one GPS
+point, which would otherwise dominate a cell's reported noise floor and
+misrepresent what the band looks like from the road.
+
+**Deployment note:** this endpoint is gated only by `clientRfSamples.enabled`
+and has no dependency on `clientRxCoverage.enabled`. Enabling
+`clientRfSamples` without also enabling `clientRxCoverage` leaves
+`/api/rf-noise` live and returning data with no UI to reach it: the
+Coverage page (which hosts the Noise layer toggle) stops at "Coverage is
+not enabled" before the toggle is rendered.
+
+### Query Parameters
+
+| Param  | Type   | Default | Description                                             |
+|--------|--------|---------|-----------------------------------------------------------|
+| `bbox` | string | -       | **Required.** `minLat,minLon,maxLat,maxLon`                |
+| `z`    | number | -       | Leaflet zoom level; selects the hex display resolution     |
+| `days` | number | `7`     | Lookback window by `sampled_at`, clamped to `[1,30]`        |
+
+### Response `200`
+
+```jsonc
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": { "type": "Polygon", "coordinates": [ [ [lon, lat], ... ] ] },
+      "properties": {
+        "cell":                  string,   // hex cell id
+        "count":                 number,   // mobile (non-stationary) samples in this cell
+        "median_noise_floor":    number,   // dBm; median of the cell's samples
+        "quietest_noise_floor":  number,   // dBm; the cell's minimum (best) sample
+        "noisiest_noise_floor":  number    // dBm; the cell's maximum (worst) sample
+      }
+    }
+  ],
+  "truncated": boolean  // true when more cells existed than the response cap; densest cells are kept
+}
+```
+
+### Response `404`
+
+Returned when `clientRfSamples.enabled` is not `true` in `config.json`.
+
+### Response `400`
+
+Returned when `bbox` is missing or malformed.
+
+---
+
 ## GET /api/analytics/topology
 
 Network topology analytics.
@@ -2192,7 +2255,8 @@ Client-side configuration values.
   "wsReconnectMs":      number | null,
   "cacheInvalidateMs":  number | null,
   "externalUrls":       object | null,
-  "propagationBufferMs": number          // default: 5000
+  "propagationBufferMs": number,         // default: 5000
+  "clientRfSamples":    boolean          // opt-in flag; gates /api/rf-noise
 }
 ```
 

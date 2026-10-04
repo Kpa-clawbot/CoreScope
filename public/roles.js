@@ -584,6 +584,7 @@
   // ─── Fetch server overrides ───
   window.MeshConfigReady = fetch('/api/config/client').then(function (r) { return r.json(); }).then(function (cfg) {
     window.MC_CLIENT_RX_COVERAGE = cfg.clientRxCoverage === true;
+    window.MC_CLIENT_RF_SAMPLES = cfg.clientRfSamples === true;
     // Coverage is opt-in: the nav link is NOT in static HTML (so the default-off
     // nav matches upstream and the nav-overflow tests). Inject it after Analytics
     // only when enabled, then nudge applyNavPriority (it re-runs on 'resize').

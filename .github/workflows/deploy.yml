@@ -682,6 +682,8 @@ jobs:
           CHROMIUM_REQUIRE=1 node tests/e2e/test-neighbor-map-btn-clip-e2e.js 2>&1 | tee -a e2e-output.txt
           echo "=== E2E SUITE: test-rx-coverage-viewport-e2e.js ==="
           BASE_URL=http://localhost:13581 node tests/e2e/test-rx-coverage-viewport-e2e.js 2>&1 | tee -a e2e-output.txt
+          echo "=== E2E SUITE: test-rx-coverage-noise-e2e.js ==="
+          BASE_URL=http://localhost:13581 node tests/e2e/test-rx-coverage-noise-e2e.js 2>&1 | tee -a e2e-output.txt
           # Issue #2037: these eight sat in tests/e2e/ with no runner at all.
           # Measured on upstream master in CI run 35340835178: all eight pass,
           # 45 seconds together. test-rx-coverage-mobile-nav-e2e.js is the

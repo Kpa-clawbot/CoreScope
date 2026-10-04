@@ -181,6 +181,7 @@ node tests/unit/test-pull-to-reconnect.js
 node tests/unit/test-repeater-metric-scatter.js
 node tests/unit/test-rx-coverage-config-race.js
 node tests/unit/test-rx-coverage-escape.js
+node tests/unit/test-rx-coverage-noise.js
 node tests/unit/test-rx-coverage-viewport.js
 node tests/unit/test-scope-audit-styles-linked.js
 node tests/unit/test-slideover-1056-rowsel-strict.js
