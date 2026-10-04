@@ -3,6 +3,7 @@ package packetpath
 import (
 	"encoding/hex"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -149,32 +150,30 @@ func TestDecodeHopsForPayload_TraceReturnsError(t *testing.T) {
 	}
 }
 
+// TestHashSize runs the cases shared with pathHashSize in public/app.js
+// (tests/unit/test-frontend-helpers.js reads the same file), so the Go and JS
+// implementations cannot drift apart without one of the two suites failing.
 func TestHashSize(t *testing.T) {
-	// Header byte: (payload_type << 2) | route_type. GRP_TXT=5, TRACE=9.
-	cases := []struct {
-		name string
-		raw  string
-		want int
-	}{
-		{"flood 1-byte, 2 hops", "1502ABCD" + "DEADBEEF", 1},
-		{"flood 2-byte, 1 hop", "1541ABCD" + "DEADBEEF", 2},
-		{"flood 3-byte, 0 hops (heard direct)", "1580" + "DEADBEEF", 3},
-		{"flood 1-byte, 0 hops (heard direct)", "1500" + "DEADBEEF", 1},
-		{"transport flood 2-byte, 0 hops", "14" + "11223344" + "40" + "DEADBEEF", 2},
-		{"direct 2-byte, 1 hop", "1641ABCD" + "DEADBEEF", 2},
-		{"direct zero-hop: size never encoded", "1600" + "DEADBEEF", 0},
-		{"transport direct zero-hop", "17" + "11223344" + "00" + "DEADBEEF", 0},
-		{"reserved size bits 0b11", "15C1ABCDEF01" + "DEADBEEF", 0},
-		{"trace: path bytes are SNR", "2542ABCD" + "DEADBEEF", 0},
-		{"lowercase hex", "1541abcd", 2},
-		{"too short", "15", 0},
-		{"transport too short", "141122", 0},
-		{"invalid hex", "ZZ41", 0},
-		{"empty", "", 0},
+	data, err := os.ReadFile("../../test-fixtures/path-hash-size-cases.json")
+	if err != nil {
+		t.Fatalf("read shared cases: %v", err)
 	}
-	for _, c := range cases {
-		if got := HashSize(c.raw); got != c.want {
-			t.Errorf("%s: HashSize(%q) = %d, want %d", c.name, c.raw, got, c.want)
+	var fixture struct {
+		Cases []struct {
+			Name string `json:"name"`
+			Raw  string `json:"raw"`
+			Want int    `json:"want"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatalf("parse shared cases: %v", err)
+	}
+	if len(fixture.Cases) == 0 {
+		t.Fatal("shared cases file has no cases")
+	}
+	for _, c := range fixture.Cases {
+		if got := HashSize(c.Raw); got != c.Want {
+			t.Errorf("%s: HashSize(%q) = %d, want %d", c.Name, c.Raw, got, c.Want)
 		}
 	}
 }

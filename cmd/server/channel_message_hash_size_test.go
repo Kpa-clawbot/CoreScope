@@ -7,8 +7,10 @@ import (
 )
 
 // The Channels view shows the path hash size (1-3 bytes) each message was
-// sent with. /api/channels/{hash}/messages is served by the DB query when a DB
-// is attached and by the in-memory store otherwise, so both must carry it.
+// sent with, as path_hash_size (not hash_size: nodes already use that key for
+// the size a node is observed to use). /api/channels/{hash}/messages is served
+// by the DB query when a DB is attached and by the in-memory store otherwise,
+// and the DB query has a v3 and a pre-v3 shape, so all three must carry it.
 // 0 = the packet does not encode one (see packetpath.HashSize).
 
 var chHashSizeWant = map[string]float64{
@@ -20,7 +22,13 @@ var chHashSizeWant = map[string]float64{
 
 func setupChannelHashSizeDB(t *testing.T) *DB {
 	t.Helper()
-	db := setupTestDB(t)
+	return seedChannelHashSize(t, setupTestDB(t))
+}
+
+// seedChannelHashSize writes one channel message per chHashSizeWant entry, each
+// heard by one observation, in the observation shape of db's schema.
+func seedChannelHashSize(t *testing.T, db *DB) *DB {
+	t.Helper()
 	if _, err := db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('obs1', 'Observer One', 'BRU')`); err != nil {
 		t.Fatalf("insert observer: %v", err)
 	}
@@ -43,8 +51,13 @@ func setupChannelHashSizeDB(t *testing.T) *DB {
 			t.Fatalf("insert tx %s: %v", r.hash, err)
 		}
 		txID, _ := res.LastInsertId()
-		if _, err := db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-			VALUES (?, 1, 9.5, -90, '[]', ?)`, txID, ts.Unix()); err != nil {
+		obsSQL := `INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+			VALUES (?, 1, 9.5, -90, '[]', ?)`
+		if !db.isV3 {
+			obsSQL = `INSERT INTO observations (transmission_id, observer_id, observer_name, snr, rssi, path_json, timestamp)
+			VALUES (?, 'obs1', 'Observer One', 9.5, -90, '[]', ?)`
+		}
+		if _, err := db.conn.Exec(obsSQL, txID, ts.Unix()); err != nil {
 			t.Fatalf("insert obs %s: %v", r.hash, err)
 		}
 	}
@@ -72,13 +85,13 @@ func assertChannelMessageHashSizes(t *testing.T, messages []map[string]interface
 			t.Errorf("unexpected packetHash %q", h)
 			continue
 		}
-		got, present := decoded["hash_size"]
+		got, present := decoded["path_hash_size"]
 		if !present {
-			t.Errorf("%s: hash_size key missing", h)
+			t.Errorf("%s: path_hash_size key missing", h)
 			continue
 		}
 		if got != want {
-			t.Errorf("%s: hash_size = %#v, want %v", h, got, want)
+			t.Errorf("%s: path_hash_size = %#v, want %v", h, got, want)
 		}
 	}
 }
@@ -86,6 +99,19 @@ func assertChannelMessageHashSizes(t *testing.T, messages []map[string]interface
 func TestDBGetChannelMessagesCarriesHashSize(t *testing.T) {
 	db := setupChannelHashSizeDB(t)
 	defer db.Close()
+	messages, _, err := db.GetChannelMessages("#hashsize", 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertChannelMessageHashSizes(t, messages)
+}
+
+func TestDBGetChannelMessagesCarriesHashSizeV2Schema(t *testing.T) {
+	db := seedChannelHashSize(t, setupTestDBv2(t))
+	defer db.Close()
+	if db.isV3 {
+		t.Fatal("precondition: setupTestDBv2 must give the pre-v3 schema")
+	}
 	messages, _, err := db.GetChannelMessages("#hashsize", 100, 0)
 	if err != nil {
 		t.Fatal(err)

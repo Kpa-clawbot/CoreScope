@@ -1,0 +1,22 @@
+{
+  "_comment": "Shared cases for packetpath.HashSize (internal/packetpath/path_test.go) and pathHashSize (public/app.js, tests/unit/test-frontend-helpers.js). Both must return want for raw; 0 means the packet carries no size. Header byte = (payload_type << 2) | route_type; GRP_TXT=5, TRACE=9.",
+  "cases": [
+    { "name": "flood 1-byte, 2 hops", "raw": "1502ABCDDEADBEEF", "want": 1 },
+    { "name": "flood 2-byte, 1 hop", "raw": "1541ABCDDEADBEEF", "want": 2 },
+    { "name": "flood 3-byte, 0 hops (heard direct)", "raw": "1580DEADBEEF", "want": 3 },
+    { "name": "flood 1-byte, 0 hops (heard direct)", "raw": "1500DEADBEEF", "want": 1 },
+    { "name": "transport flood 2-byte, 0 hops", "raw": "141122334440DEADBEEF", "want": 2 },
+    { "name": "direct 2-byte, 1 hop", "raw": "1641ABCDDEADBEEF", "want": 2 },
+    { "name": "direct zero-hop: size never encoded", "raw": "1600DEADBEEF", "want": 0 },
+    { "name": "direct, 0 hops, size bits set: no hops, no size", "raw": "1640DEADBEEF", "want": 0 },
+    { "name": "transport direct zero-hop", "raw": "171122334400DEADBEEF", "want": 0 },
+    { "name": "transport direct, 0 hops, size bits set", "raw": "171122334480DEADBEEF", "want": 0 },
+    { "name": "reserved size bits 0b11", "raw": "15C1ABCDEF01DEADBEEF", "want": 0 },
+    { "name": "trace: path bytes are SNR", "raw": "2542ABCDDEADBEEF", "want": 0 },
+    { "name": "lowercase hex", "raw": "1541abcd", "want": 2 },
+    { "name": "too short", "raw": "15", "want": 0 },
+    { "name": "transport too short", "raw": "141122", "want": 0 },
+    { "name": "invalid hex", "raw": "ZZ41", "want": 0 },
+    { "name": "empty", "raw": "", "want": 0 }
+  ]
+}

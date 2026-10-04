@@ -2315,7 +2315,7 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 				"hops":             hops,
 				"snr":              nullFloat(snr),
 				"scope_name":       nullStr(scopeName),
-				"hash_size":        packetpath.HashSize(rawHexHead.String),
+				"path_hash_size":   packetpath.HashSize(rawHexHead.String),
 			},
 			Repeats: 1,
 		}

@@ -594,9 +594,9 @@
     // M5: Cache invalidation — if total candidate count changed, re-decrypt everything
     var totalCandidates = candidates.length;
     // #1851: a cache written before messages carried scope_name (or
-    // hash_size) would keep those messages without it on the delta path, so
-    // decrypt them again.
-    var cacheLacksFields = cachedMsgs.some(function (m) { return !('scope_name' in m) || !('hash_size' in m); });
+    // path_hash_size) would keep those messages without it on the delta path,
+    // so decrypt them again.
+    var cacheLacksFields = cachedMsgs.some(function (m) { return !('scope_name' in m) || !('path_hash_size' in m); });
     var needFullDecrypt = (totalCandidates !== cachedCount) || opts.forceFullDecrypt || cacheLacksFields;
 
     // M5: Delta fetch — only decrypt packets newer than lastTs
@@ -682,7 +682,7 @@
           hops: d.path_len || 0, snr: c.packet.snr || null,
           observers: c.packet.observer_name ? [c.packet.observer_name] : [],
           scope_name: c.packet.scope_name ?? null,
-          hash_size: pathHashSize(c.packet.raw_hex),
+          path_hash_size: pathHashSize(c.packet.raw_hex),
           repeats: 1
         });
         continue;
@@ -700,7 +700,7 @@
           hops: 0, snr: c.packet.snr || null,
           observers: c.packet.observer_name ? [c.packet.observer_name] : [],
           scope_name: c.packet.scope_name ?? null,
-          hash_size: pathHashSize(c.packet.raw_hex),
+          path_hash_size: pathHashSize(c.packet.raw_hex),
           repeats: 1
         });
       } else {
@@ -1494,7 +1494,7 @@
               hops: payload.path_len || 0,
               snr: snr,
               scope_name: scopeName,
-              hash_size: hashSize,
+              path_hash_size: hashSize,
               // #1498: mark as WS-pushed so a later REST replacement
               // (selectChannel / refreshMessages) can merge instead of
               // stomp. Without this flag the REST response wipes any
@@ -2285,11 +2285,9 @@
       if (msg.observers?.length > 1) meta.push(`${msg.observers.length} observers`);
       if (msg.hops > 0) meta.push(`${msg.hops} hops`);
       if (msg.snr !== null && msg.snr !== undefined) meta.push(`SNR ${msg.snr}`);
-      // 0 (server) and null (client) both mean the packet encodes no size.
-      if (msg.hash_size) {
-        const hs = Number(msg.hash_size);
-        meta.push(`<span class="ch-msg-hash-size" title="Path hash size the sender used">${hs}-byte${hs !== 1 ? 's' : ''}</span>`);
-      }
+      // Cast first: 0, missing or non-numeric all mean the packet encodes no size.
+      const hs = Number(msg.path_hash_size) || 0;
+      if (hs) meta.push(`<span class="ch-msg-hash-size" title="Path hash size the sender used">${hs}-byte${hs !== 1 ? 's' : ''}</span>`);
       const scopeChip = messageScopeChipHtml(msg.scope_name);
       if (scopeChip) meta.push(scopeChip);
 

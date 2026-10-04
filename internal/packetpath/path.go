@@ -57,9 +57,11 @@ func DecodePathFromRawHex(rawHex string) ([]string, error) {
 //
 // A flood packet always carries it: Mesh::sendFlood sets the path byte to
 // (size-1)<<6 before the first hop, so it holds even at 0 hops. A direct
-// packet with a 0x00 path byte is Mesh::sendZeroHop's "zero hop" marker and
-// says nothing about a size. TRACE path bytes are SNR readings, not hashes.
-// Only the first few bytes are parsed, so this is cheap on hot paths.
+// packet with no hops carries none: Mesh::sendZeroHop writes 0x00, and a
+// direct path that has run out of hops has no hash left to size. That is the
+// same rule cmd/server/decoder.go applies to path.hashSize. TRACE path bytes
+// are SNR readings, not hashes. Only the first few bytes are parsed, so this
+// is cheap on hot paths.
 func HashSize(rawHex string) int {
 	header, ok := hexByteAt(rawHex, 0)
 	if !ok || !PathBytesAreHops(header>>2&0x0F) {
@@ -74,7 +76,7 @@ func HashSize(rawHex string) int {
 	if !ok {
 		return 0
 	}
-	if pathByte == 0 && (routeType == RouteDirect || routeType == RouteTransportDirect) {
+	if pathByte&0x3F == 0 && (routeType == RouteDirect || routeType == RouteTransportDirect) {
 		return 0
 	}
 	size := int(pathByte>>6) + 1

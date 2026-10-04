@@ -7,7 +7,7 @@
  * and client-side decryption of /api/packets rows), so each route must keep
  * the field, and the render must keep the '' state apart from null.
  *
- * The same routes must carry hash_size, the path hash size (1-3 bytes) the
+ * The same routes must carry path_hash_size, the path hash size (1-3 bytes) the
  * sender used, which renders as "1-byte" / "2-bytes" / "3-bytes" right before
  * the scope chip.
  *
@@ -341,7 +341,7 @@ test('a decrypt cache that already carries scope_name is still served by the del
   const { ctx } = makeChannelsSandbox(packetsApi(fx.packets));
   ctx.ChannelDecrypt.setCache('#secret', fx.packets.map((p, i) => ({
     sender: 'Old', text: 'cached ' + i, timestamp: p.first_seen, packetHash: p.hash, packetId: p.id,
-    hops: 0, snr: null, observers: [], scope_name: null, hash_size: null, repeats: 1,
+    hops: 0, snr: null, observers: [], scope_name: null, path_hash_size: 0, repeats: 1,
   })), fx.lastTs, fx.packets.length);
   for (let i = 0; i < 10; i++) await Promise.resolve();
   await ctx.window._channelsSelectChannelForTest('user:#secret', {
@@ -360,9 +360,9 @@ test('REST messages render the hash size right before the scope chip', async () 
   const { ctx, dom } = makeChannelsSandbox(listApi((path) => {
     if (path.indexOf('/channels/general/messages') === 0) {
       return Promise.resolve({ messages: [
-        { sender: 'Alice', text: 'two', timestamp: '2026-09-01T10:00:00Z', packetHash: 'h1', hash_size: 2, scope_name: '#belgium' },
-        { sender: 'Bob', text: 'three', timestamp: '2026-09-01T10:01:00Z', packetHash: 'h2', hash_size: 3, scope_name: null },
-        { sender: 'Carol', text: 'none', timestamp: '2026-09-01T10:02:00Z', packetHash: 'h3', hash_size: 0, scope_name: '#belgium' },
+        { sender: 'Alice', text: 'two', timestamp: '2026-09-01T10:00:00Z', packetHash: 'h1', path_hash_size: 2, scope_name: '#belgium' },
+        { sender: 'Bob', text: 'three', timestamp: '2026-09-01T10:01:00Z', packetHash: 'h2', path_hash_size: 3, scope_name: null },
+        { sender: 'Carol', text: 'none', timestamp: '2026-09-01T10:02:00Z', packetHash: 'h3', path_hash_size: 0, scope_name: '#belgium' },
         { sender: 'Dave', text: 'older server', timestamp: '2026-09-01T10:03:00Z', packetHash: 'h4' },
       ] });
     }
@@ -376,8 +376,25 @@ test('REST messages render the hash size right before the scope chip', async () 
   assert.strictEqual((chunks[0].match(HASH_SIZE) || [])[1], '2-bytes');
   assert.ok(chunks[0].search(HASH_SIZE) < chunks[0].search(SCOPE_CHIP), 'hash size must come before the scope chip');
   assert.strictEqual((chunks[1].match(HASH_SIZE) || [])[1], '3-bytes', 'hash size renders without a scope chip too');
-  assert.ok(!/ch-msg-hash-size/.test(chunks[2]), 'hash_size 0 (none encoded) must render nothing');
-  assert.ok(!/ch-msg-hash-size/.test(chunks[3]), 'a message without hash_size must render nothing');
+  assert.ok(!/ch-msg-hash-size/.test(chunks[2]), 'path_hash_size 0 (none encoded) must render nothing');
+  assert.ok(!/ch-msg-hash-size/.test(chunks[3]), 'a message without path_hash_size must render nothing');
+});
+
+test('path_hash_size is cast to a number before it is tested', async () => {
+  const { ctx, dom } = makeChannelsSandbox(listApi((path) => {
+    if (path.indexOf('/channels/general/messages') === 0) {
+      return Promise.resolve({ messages: [
+        { sender: 'Alice', text: 'string zero', timestamp: '2026-09-01T10:00:00Z', packetHash: 'h1', path_hash_size: '0' },
+        { sender: 'Bob', text: 'string two', timestamp: '2026-09-01T10:01:00Z', packetHash: 'h2', path_hash_size: '2' },
+      ] });
+    }
+    return Promise.resolve({});
+  }));
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  await ctx.window._channelsSelectChannelForTest('general');
+  const chunks = messageChunks(dom.chMessages.innerHTML);
+  assert.ok(!/ch-msg-hash-size/.test(chunks[0]), '"0" must render nothing, not "0-bytes"');
+  assert.strictEqual((chunks[1].match(HASH_SIZE) || [])[1], '2-bytes');
 });
 
 test('WebSocket-appended message takes its hash size from raw_hex', () => {
@@ -401,7 +418,7 @@ test('WebSocket-appended message takes its hash size from raw_hex', () => {
     packet('w3', 'Carol: no raw_hex', undefined),
   ], null);
   const state = ctx.window._channelsGetStateForTest();
-  assert.deepStrictEqual(Array.from(state.messages, (m) => m.hash_size), [2, 3, null]);
+  assert.deepStrictEqual(Array.from(state.messages, (m) => m.path_hash_size), [2, 3, 0]);
   const chunks = messageChunks(dom.chMessages.innerHTML);
   assert.strictEqual((chunks[0].match(HASH_SIZE) || [])[1], '2-bytes');
   assert.strictEqual((chunks[1].match(HASH_SIZE) || [])[1], '3-bytes');
@@ -418,13 +435,13 @@ test('client-side decrypted messages take their hash size from the /api/packets 
     userKey: fx.keyHex, channelHashByte: fx.channelHash, channelName: '#secret',
   });
   const state = ctx.window._channelsGetStateForTest();
-  assert.deepStrictEqual(Array.from(state.messages, (m) => m.hash_size), [1, 3, null]);
+  assert.deepStrictEqual(Array.from(state.messages, (m) => m.path_hash_size), [1, 3, 0]);
   const chunks = messageChunks(dom.chMessages.innerHTML);
   assert.strictEqual((chunks[0].match(HASH_SIZE) || [])[1], '1-byte');
   assert.strictEqual((chunks[1].match(HASH_SIZE) || [])[1], '3-bytes');
 });
 
-test('a decrypt cache written before hash_size existed is decrypted again', async () => {
+test('a decrypt cache written before path_hash_size existed is decrypted again', async () => {
   const fx = encryptedChannelPackets('#secret');
   fx.packets.forEach((p) => { p.raw_hex = '1541AABBDEADBEEF'; });
   const { ctx } = makeChannelsSandbox(packetsApi(fx.packets));
@@ -437,7 +454,7 @@ test('a decrypt cache written before hash_size existed is decrypted again', asyn
     userKey: fx.keyHex, channelHashByte: fx.channelHash, channelName: '#secret',
   });
   const state = ctx.window._channelsGetStateForTest();
-  assert.deepStrictEqual(Array.from(state.messages, (m) => m.hash_size), [2, 2, 2]);
+  assert.deepStrictEqual(Array.from(state.messages, (m) => m.path_hash_size), [2, 2, 2]);
 });
 
 Promise.all(pending).then(() => {
