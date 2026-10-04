@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [3.13.0] - 2026-10-04
+
+See [docs/release-notes/v3.13.0.md](docs/release-notes/v3.13.0.md) for the full notes. 16 commits since v3.12.0: 10 fix, 4 test, 2 feat.
+
+### Highlights
+- **The first start backfills advert route evidence in the background, and flood counts read low until it finishes** (#2088) - measured at 24m 1s on 16.8M observations and 36m 23s on 16.5M on a busier host. Startup and ingest do not wait for it. Runs once per database and resumes after a restart. **Operator awareness required.**
+- **Adverts are split by the route they arrived on** (#2088, #2085) - flood, direct with an empty path, or mixed, in Analytics and on node detail.
+- **Path hops are resolved with the observer that heard them** (#2099) - with one per-path warning in the packets list when hops stay ambiguous.
+- **A compact packets table with a Full Names toggle** (#2090).
+- **Channel unread counts and key-only channels survive a list refresh** (#2096).
+
+No manual migration step: `advert_route_evidence` is created at boot.
+
 ## [3.12.0] - 2026-09-26
 
 See [docs/release-notes/v3.12.0.md](docs/release-notes/v3.12.0.md) for the full notes. 29 commits since v3.11.0: 15 fix, 5 test, 3 perf, 3 feat, 2 ci, 1 chore.
