@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [3.13.1] - 2026-10-04
+
+See [docs/release-notes/v3.13.1.md](docs/release-notes/v3.13.1.md) for the full notes. 1 commit since v3.13.0: 1 fix.
+
+### Highlights
+- **Node-discover replies count as coverage** (#2111) - a CoreDrive RX companion's discover replies were dropped from `client_receptions`, so the coverage page showed nothing for them. On a deployment that has had the fix since August they are 44% of coverage rows over 7 days. Replies received before the upgrade are not recovered.
+
+No manual migration step, no configuration change.
+
 ## [3.13.0] - 2026-10-04
 
 See [docs/release-notes/v3.13.0.md](docs/release-notes/v3.13.0.md) for the full notes. 16 commits since v3.12.0: 10 fix, 4 test, 2 feat.
