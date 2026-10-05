@@ -39,7 +39,13 @@ func advertPubkey(tx *StoreTx) string {
 // RegionNodePubkeys returns the pubkeys of nodes with at least one advert heard
 // by an observer in region (comma-separated IATA codes, case- and
 // space-insensitive), over the adverts the store holds. ok is false when the
-// region names no code, so the caller applies no region filter.
+// region names no code, or there is no database to resolve observers from, so
+// the caller applies the SQL filter or none.
+//
+// Observers are matched by ID through resolveRegionObservers, i.e. against
+// the observers table as it is now, like every other store region filter.
+// The IATA copied onto each observation at ingest goes stale when an operator
+// changes an observer's code.
 //
 // #2101: this replaces a SQL subquery that joined every advert to all of its
 // observations. On a 16.5M-observation database one such count took 155s,
@@ -50,7 +56,7 @@ func advertPubkey(tx *StoreTx) string {
 // the top of store.go).
 func (s *PacketStore) RegionNodePubkeys(region string) (keys []string, ok bool) {
 	codes := normalizeRegionCodes(region)
-	if len(codes) == 0 {
+	if len(codes) == 0 || s.db == nil {
 		return nil, false
 	}
 	cacheKey := strings.Join(codes, ",")
@@ -62,10 +68,8 @@ func (s *PacketStore) RegionNodePubkeys(region string) (keys []string, ok bool) 
 	}
 	s.regionNodesMu.Unlock()
 
-	want := make(map[string]bool, len(codes))
-	for _, c := range codes {
-		want[c] = true
-	}
+	// Its own mutex and a 30s cache; taken before s.mu, never under it.
+	inRegion := s.resolveRegionObservers(cacheKey)
 	seen := make(map[string]bool, 256)
 	keys = make([]string, 0, 256)
 
@@ -73,7 +77,7 @@ func (s *PacketStore) RegionNodePubkeys(region string) (keys []string, ok bool) 
 	for _, tx := range s.byPayloadType[PayloadADVERT] {
 		heard := false
 		for _, obs := range tx.Observations {
-			if want[strings.ToUpper(strings.TrimSpace(obs.ObserverIATA))] {
+			if inRegion[obs.ObserverID] {
 				heard = true
 				break
 			}

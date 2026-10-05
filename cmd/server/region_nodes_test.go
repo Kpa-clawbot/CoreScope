@@ -15,16 +15,32 @@ import (
 // database. The region filter now resolves to a pubkey set from the packet
 // store's in-memory adverts.
 
-func mkRegionAdvert(id int, pubkey string, iatas ...string) *StoreTx {
+// mkRegionAdvert builds an advert heard by the given observer IDs. The
+// per-observation IATA is left as recorded at ingest ("STALE"), so a test only
+// passes when the region is resolved through the observers table.
+func mkRegionAdvert(id int, pubkey string, observerIDs ...string) *StoreTx {
 	pt := PayloadADVERT
 	j, _ := json.Marshal(map[string]interface{}{"pubKey": pubkey})
 	tx := &StoreTx{ID: id, Hash: fmt.Sprintf("radv%d", id), PayloadType: &pt, DecodedJSON: string(j)}
-	for i, iata := range iatas {
+	for i, oid := range observerIDs {
 		tx.Observations = append(tx.Observations, &StoreObs{
-			ID: id*10 + i, TransmissionID: id, ObserverID: fmt.Sprintf("obs-%s-%d", iata, i), ObserverIATA: iata,
+			ID: id*10 + i, TransmissionID: id, ObserverID: oid, ObserverIATA: "STALE",
 		})
 	}
 	return tx
+}
+
+// newRegionTestStore returns a store over a database holding the given
+// observer ID → IATA rows.
+func newRegionTestStore(t testing.TB, observers map[string]string) *PacketStore {
+	t.Helper()
+	db := setupTestDB(t)
+	for id, iata := range observers {
+		if _, err := db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count) VALUES (?, ?, ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1)`, id, id, iata); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return NewPacketStore(db, nil)
 }
 
 func addToStore(ps *PacketStore, txs ...*StoreTx) {
@@ -47,16 +63,17 @@ func sortedKeys(pks []string) []string {
 }
 
 func TestRegionNodePubkeys(t *testing.T) {
-	ps := NewPacketStore(nil, nil)
+	ps := newRegionTestStore(t, map[string]string{"o-sjc": "SJC", "o-sfo": "SFO", "o-sjc2": " sjc "})
 	chanType := PayloadGRP_TXT
 	chanTx := &StoreTx{ID: 90, Hash: "chan90", PayloadType: &chanType, DecodedJSON: `{"pubKey":"pk_chan"}`,
-		Observations: []*StoreObs{{ID: 900, TransmissionID: 90, ObserverID: "o", ObserverIATA: "SJC"}}}
+		Observations: []*StoreObs{{ID: 900, TransmissionID: 90, ObserverID: "o-sjc"}}}
 	addToStore(ps,
-		mkRegionAdvert(1, "pk_sjc", "SJC"),
-		mkRegionAdvert(2, "pk_sfo", "SFO"),
-		mkRegionAdvert(3, "pk_both", "SFO", " sjc "), // one in-region observation is enough
-		mkRegionAdvert(4, "pk_none"),                 // advert never observed
-		chanTx,                                       // not an advert: never counts
+		mkRegionAdvert(1, "pk_sjc", "o-sjc"),
+		mkRegionAdvert(2, "pk_sfo", "o-sfo"),
+		mkRegionAdvert(3, "pk_both", "o-sfo", "o-sjc2"), // one in-region observation is enough
+		mkRegionAdvert(4, "pk_none"),                    // advert never observed
+		mkRegionAdvert(5, "pk_unknown", "o-gone"),       // observer not in the table
+		chanTx, // not an advert: never counts
 	)
 
 	cases := []struct {
@@ -83,12 +100,12 @@ func TestRegionNodePubkeys(t *testing.T) {
 }
 
 func TestRegionNodePubkeysCached(t *testing.T) {
-	ps := NewPacketStore(nil, nil)
-	addToStore(ps, mkRegionAdvert(1, "pk_a", "SJC"))
+	ps := newRegionTestStore(t, map[string]string{"o-sjc": "SJC"})
+	addToStore(ps, mkRegionAdvert(1, "pk_a", "o-sjc"))
 	if got, _ := ps.RegionNodePubkeys("SJC"); len(got) != 1 {
 		t.Fatalf("got %v", got)
 	}
-	addToStore(ps, mkRegionAdvert(2, "pk_b", "SJC"))
+	addToStore(ps, mkRegionAdvert(2, "pk_b", "o-sjc"))
 	if got, _ := ps.RegionNodePubkeys("sjc"); len(got) != 1 {
 		t.Errorf("within the TTL a normalised repeat must be served from cache, got %v", got)
 	}
@@ -165,7 +182,7 @@ func TestHandleNodesRegionUsesStore(t *testing.T) {
 
 	// An advert only the store knows about: if the handler still asked SQL,
 	// the companion could not appear.
-	addToStore(srv.store, mkRegionAdvert(7001, "eeff00112233aabb", "SJC"))
+	addToStore(srv.store, mkRegionAdvert(7001, "eeff00112233aabb", "obs1")) // obs1 is SJC in seedTestData
 	srv.store.regionNodesMu.Lock()
 	srv.store.regionNodesCache = map[string]regionNodesEntry{}
 	srv.store.regionNodesMu.Unlock()
@@ -175,8 +192,8 @@ func TestHandleNodesRegionUsesStore(t *testing.T) {
 }
 
 func TestRegionNodePubkeysCacheIsBounded(t *testing.T) {
-	ps := NewPacketStore(nil, nil)
-	addToStore(ps, mkRegionAdvert(1, "pk_a", "SJC"))
+	ps := newRegionTestStore(t, map[string]string{"o-sjc": "SJC"})
+	addToStore(ps, mkRegionAdvert(1, "pk_a", "o-sjc"))
 	// The region parameter comes from the client, so every distinct value is
 	// a new cache key. The cache must not grow with them.
 	for i := 0; i < 1000; i++ {
@@ -194,15 +211,19 @@ func TestRegionNodePubkeysCacheIsBounded(t *testing.T) {
 // large deployment: 220k adverts (staging held 219,750 on 2026-10-05) from
 // 4,000 nodes, each heard by 8 observers across 10 regions.
 func BenchmarkRegionNodePubkeys(b *testing.B) {
-	ps := NewPacketStore(nil, nil)
 	regions := []string{"ANR", "BRU", "GNE", "HEP", "KJK", "LGG", "MST", "NRW", "OBL", "OST"}
+	observers := make(map[string]string, len(regions))
+	for _, r := range regions {
+		observers["o-"+r] = r
+	}
+	ps := newRegionTestStore(b, observers)
 	txs := make([]*StoreTx, 0, 220000)
 	for i := 0; i < 220000; i++ {
-		iatas := make([]string, 8)
-		for j := range iatas {
-			iatas[j] = regions[(i+j*3)%len(regions)]
+		ids := make([]string, 8)
+		for j := range ids {
+			ids[j] = "o-" + regions[(i+j*3)%len(regions)]
 		}
-		txs = append(txs, mkRegionAdvert(i+1, fmt.Sprintf("pk%04d", i%4000), iatas...))
+		txs = append(txs, mkRegionAdvert(i+1, fmt.Sprintf("pk%04d", i%4000), ids...))
 	}
 	addToStore(ps, txs...)
 	ps.RegionNodePubkeys("BRU") // parse each heard advert's JSON once, as a running server has
@@ -214,5 +235,21 @@ func BenchmarkRegionNodePubkeys(b *testing.B) {
 		if keys, _ := ps.RegionNodePubkeys("BRU"); len(keys) == 0 {
 			b.Fatal("no keys")
 		}
+	}
+}
+
+// An observer's IATA is copied onto each observation at ingest. When the
+// operator changes it, the observers table is the truth, as it was for the SQL
+// filter and is for every other store region filter (resolveRegionObservers).
+func TestRegionNodePubkeysFollowsObserverIATAChange(t *testing.T) {
+	ps := newRegionTestStore(t, map[string]string{"o-1": "SFO"})
+	tx := mkRegionAdvert(1, "pk_moved", "o-1")
+	tx.Observations[0].ObserverIATA = "SJC" // what the observer was when this was ingested
+	addToStore(ps, tx)
+	if got, _ := ps.RegionNodePubkeys("SJC"); len(got) != 0 {
+		t.Errorf("the observer is SFO now, SJC must not match: got %v", got)
+	}
+	if got, _ := ps.RegionNodePubkeys("SFO"); fmt.Sprint(got) != "[pk_moved]" {
+		t.Errorf("SFO must match through the observers table: got %v", got)
 	}
 }
