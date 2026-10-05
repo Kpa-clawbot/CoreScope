@@ -1341,11 +1341,19 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit := queryLimit(r, 50, s.cfg.ListLimits.NodesMax)
 	offset := queryInt(r, "offset", 0)
-	nodes, total, counts, err := s.db.GetNodes(
-		limit, offset,
-		q.Get("role"), q.Get("search"), q.Get("before"),
-		q.Get("lastHeard"), q.Get("sortBy"), q.Get("region"),
-	)
+	nq := NodeQuery{
+		Limit: limit, Offset: offset,
+		Role: q.Get("role"), Search: q.Get("search"), Before: q.Get("before"),
+		LastHeard: q.Get("lastHeard"), SortBy: q.Get("sortBy"), Region: q.Get("region"),
+	}
+	// #2101: resolve the region from the store's in-memory adverts. The SQL
+	// region subquery scans every advert's observations and saturated the
+	// reader pool on large databases; it remains only for a server without
+	// a packet store.
+	if keys, ok := s.regionNodeKeys(nq.Region); ok {
+		nq.RegionPubkeys = keys
+	}
+	nodes, total, counts, err := s.db.GetNodes(nq)
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return

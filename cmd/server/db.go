@@ -1104,8 +1104,29 @@ func (db *DB) ObservationRawHexForHash(hash string) map[int]string {
 	return out
 }
 
+// NodeQuery selects and orders nodes for GetNodes. Region filters by the SQL
+// subquery over adverts and observers; RegionPubkeys, when non-nil, is that
+// filter already resolved to a set of node pubkeys (#2101, see
+// PacketStore.RegionNodePubkeys) and takes its place. An empty, non-nil
+// RegionPubkeys matches no node.
+type NodeQuery struct {
+	Limit, Offset int
+	Role          string
+	Search        string
+	Before        string
+	LastHeard     string
+	SortBy        string
+	Region        string
+	RegionPubkeys []string
+}
+
 // GetNodes returns filtered, paginated node list.
-func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortBy, region string) ([]map[string]interface{}, int, map[string]int, error) {
+func (db *DB) GetNodes(nq NodeQuery) ([]map[string]interface{}, int, map[string]int, error) {
+	limit, offset := nq.Limit, nq.Offset
+	role, search, before, lastHeard, sortBy, region := nq.Role, nq.Search, nq.Before, nq.LastHeard, nq.SortBy, nq.Region
+	if nq.RegionPubkeys != nil {
+		region = ""
+	}
 	var where []string
 	var args []interface{}
 
@@ -1159,6 +1180,21 @@ func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortB
 			)`, joinCond, strings.Join(placeholders, ","))
 			where = append(where, subq)
 			args = append(args, regionArgs...)
+		}
+	}
+	if nq.RegionPubkeys != nil {
+		if len(nq.RegionPubkeys) == 0 {
+			where = append(where, "0")
+		} else {
+			// One JSON parameter rather than one placeholder per key: a region
+			// can hold thousands of nodes, and the IN list stays a primary-key
+			// lookup.
+			keysJSON, err := json.Marshal(nq.RegionPubkeys)
+			if err != nil {
+				return nil, 0, nil, err
+			}
+			where = append(where, "public_key IN (SELECT value FROM json_each(?))")
+			args = append(args, string(keysJSON))
 		}
 	}
 

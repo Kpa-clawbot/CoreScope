@@ -164,6 +164,9 @@ func (tx *StoreTx) ParsedDecoded() map[string]interface{} {
 //     result (hashSizeInfoCache). Acquired independently or
 //     under mu (in EvictStale).
 //
+//  7. regionNodesMu (sync.Mutex)  — guards regionNodesCache. Never held
+//     together with mu: RegionNodePubkeys releases it before scanning.
+//
 // Nesting that occurs today:
 //   - IngestNew:               mu → cacheMu → channelsCacheMu  (1 → 2 → 3, OK)
 //   - IngestObservations:      mu → cacheMu                    (1 → 2, OK)
@@ -262,6 +265,10 @@ type PacketStore struct {
 	areaNodeMu         sync.RWMutex
 	areaNodeCache      map[string]map[string]bool
 	areaNodeCacheTimes map[string]time.Time
+	// Cached normalised region codes → pubkeys of nodes whose adverts were
+	// heard there (#2101), see RegionNodePubkeys.
+	regionNodesMu    sync.Mutex
+	regionNodesCache map[string]regionNodesEntry
 	// Full server config — needed for Areas map in resolveAreaNodes.
 	config *Config
 	// Cached node list + prefix map (rebuilt on demand, shared across analytics)
@@ -711,6 +718,7 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig, cacheTTLs ...map[string]inte
 		useResolvedPathIndex: true,
 		areaNodeCache:        make(map[string]map[string]bool),
 		areaNodeCacheTimes:   make(map[string]time.Time),
+		regionNodesCache:     make(map[string]regionNodesEntry),
 	}
 	ps.initResolvedPathIndex()
 	if cfg != nil {
@@ -1845,19 +1853,7 @@ func (s *PacketStore) addToByNode(tx *StoreTx, pubkey string) bool {
 // trackAdvertPubkey increments the advertPubkeys refcount for ADVERT packets.
 // Must be called under s.mu write lock.
 func (s *PacketStore) trackAdvertPubkey(tx *StoreTx) {
-	if tx.PayloadType == nil || *tx.PayloadType != PayloadADVERT || tx.DecodedJSON == "" {
-		return
-	}
-	d := tx.ParsedDecoded()
-	if d == nil {
-		return
-	}
-	pk := ""
-	if v, ok := d["pubKey"].(string); ok {
-		pk = v
-	} else if v, ok := d["public_key"].(string); ok {
-		pk = v
-	}
+	pk := advertPubkey(tx)
 	if pk != "" {
 		s.advertPubkeys[pk]++
 	}
@@ -1866,19 +1862,7 @@ func (s *PacketStore) trackAdvertPubkey(tx *StoreTx) {
 // untrackAdvertPubkey decrements the advertPubkeys refcount for ADVERT packets.
 // Must be called under s.mu write lock.
 func (s *PacketStore) untrackAdvertPubkey(tx *StoreTx) {
-	if tx.PayloadType == nil || *tx.PayloadType != PayloadADVERT || tx.DecodedJSON == "" {
-		return
-	}
-	d := tx.ParsedDecoded()
-	if d == nil {
-		return
-	}
-	pk := ""
-	if v, ok := d["pubKey"].(string); ok {
-		pk = v
-	} else if v, ok := d["public_key"].(string); ok {
-		pk = v
-	}
+	pk := advertPubkey(tx)
 	if pk != "" {
 		if s.advertPubkeys[pk] <= 1 {
 			delete(s.advertPubkeys, pk)
@@ -3879,14 +3863,7 @@ func (s *PacketStore) computeNodeHomeRegions() map[string]string {
 			continue
 		}
 
-		d := tx.ParsedDecoded()
-		if d == nil {
-			continue
-		}
-		pk, _ := d["pubKey"].(string)
-		if pk == "" {
-			pk, _ = d["public_key"].(string)
-		}
+		pk := advertPubkey(tx)
 		if pk == "" {
 			continue
 		}
