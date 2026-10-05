@@ -253,3 +253,16 @@ func TestRegionNodePubkeysFollowsObserverIATAChange(t *testing.T) {
 		t.Errorf("SFO must match through the observers table: got %v", got)
 	}
 }
+
+// History loaded in the background (loadChunk) carries the observer ID but no
+// IATA on its observations. Matching on the per-observation IATA dropped every
+// node whose adverts came only from those chunks.
+func TestRegionNodePubkeysMatchesChunkLoadedObservations(t *testing.T) {
+	ps := newRegionTestStore(t, map[string]string{"o-1": "SJC"})
+	tx := mkRegionAdvert(1, "pk_history", "o-1")
+	tx.Observations[0].ObserverIATA = "" // as loadChunk leaves it
+	addToStore(ps, tx)
+	if got, _ := ps.RegionNodePubkeys("SJC"); fmt.Sprint(got) != "[pk_history]" {
+		t.Errorf("a chunk-loaded advert must match through its observer ID: got %v", got)
+	}
+}

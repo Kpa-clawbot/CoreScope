@@ -158,7 +158,8 @@ func (tx *StoreTx) ParsedDecoded() map[string]interface{} {
 //     QueryGroupedPackets cache.
 //
 //  5. regionObsMu   (sync.Mutex)  — guards the region→observer mapping
-//     cache (regionObsCache, regionObsCacheTime).
+//     cache (regionObsCache, regionObsCacheTime). Also taken by
+//     RegionNodePubkeys, with neither regionNodesMu nor mu held.
 //
 //  6. hashSizeInfoMu (sync.Mutex)  — guards the cached hash-size-info
 //     result (hashSizeInfoCache). Acquired independently or
