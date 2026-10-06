@@ -74,6 +74,14 @@ var migrations = [][]string{
 			UNIQUE (mail_id, event, at)
 		)`,
 	},
+	{ // v2: sub-project B, settings sync (one document per user)
+		`CREATE TABLE user_settings (
+			user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+			doc TEXT NOT NULL,
+			revision INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
+	},
 }
 
 func (s *Store) migrate() error {
