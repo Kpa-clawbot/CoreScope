@@ -72,6 +72,25 @@ if (typeof window !== 'undefined') {
   window.detectPerfAnomalies = detectPerfAnomalies;
 }
 
+// resetPerfStats — the "Reset Stats" button's server call. Resolves true
+// when the local counters may be cleared. With user management off it is the
+// original fire-and-forget POST (nothing visible changes); with it on, an
+// admin session authorises the call and a refusal is reported.
+async function resetPerfStats(win, fetchFn, alertFn) {
+  if (!win.MC_USER_MGMT) {
+    await fetchFn('/api/perf/reset', { method: 'POST' });
+    return true;
+  }
+  try {
+    var r = await fetchFn('/api/perf/reset', { method: 'POST', headers: win.CSAuth ? win.CSAuth.adminHeaders() : {} });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+  } catch (e) {
+    alertFn('Reset failed: ' + e.message);
+    return false;
+  }
+  return true;
+}
+
 function renderVersionCard(health) {
   if (!health || (!health.version && !health.commit)) return '';
   var ver = health.version && health.version !== 'unknown' ? health.version : null;
@@ -344,13 +363,7 @@ function renderVersionCard(health) {
       el.innerHTML = html;
 
       document.getElementById('perfReset')?.addEventListener('click', async () => {
-        try {
-          var r = await fetch('/api/perf/reset', { method: 'POST', headers: window.CSAuth ? CSAuth.adminHeaders() : {} });
-          if (!r.ok) throw new Error('HTTP ' + r.status);
-        } catch (e) {
-          alert('Reset failed: ' + e.message);
-          return;
-        }
+        if (!(await resetPerfStats(window, fetch, alert))) return;
         if (window._apiPerf) { window._apiPerf = { calls: 0, totalMs: 0, log: [] }; }
         refresh();
       });

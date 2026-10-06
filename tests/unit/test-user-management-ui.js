@@ -33,7 +33,6 @@ function makeEnv(routes) {
     classList: { add() {}, remove() {} },
     setAttribute() {}, addEventListener() {}, appendChild() {},
   });
-  const wrap = mkEl('accountWrap');
   const right = { insertBefore(el) { els[el.id] = el; } };
   const doc = {
     getElementById(id) {
@@ -472,6 +471,51 @@ test('demoting yourself refreshes the session and leaves the page', async () => 
   await tick();
   assert.strictEqual(env.refreshed(), 1);
   assert.strictEqual(env.loc.hash, '#/account');
+});
+
+console.log('perf.js reset');
+
+function loadPerf() {
+  const ctx = { window: { addEventListener() {} }, document: { getElementById() { return null; }, addEventListener() {} },
+    console, Date, Math, Array, Object, String, Number, JSON, RegExp, Error, Promise, Map, Set,
+    parseInt, parseFloat, isNaN, isFinite, setTimeout() {}, clearTimeout() {}, setInterval() { return 0; }, clearInterval() {},
+    performance: { now: () => 0 }, registerPage() {} };
+  ctx.globalThis = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/perf.js'), 'utf8'), ctx);
+  return ctx;
+}
+function fakeFetch(status) {
+  const calls = [];
+  const fn = (url, opts) => { calls.push({ url, opts }); return Promise.resolve({ ok: status < 400, status }); };
+  fn.calls = calls;
+  return fn;
+}
+
+test('feature off: reset is the old plain POST, no alert, local stats cleared', async () => {
+  const ctx = loadPerf();
+  const f = fakeFetch(401);
+  const alerts = [];
+  const ok = await ctx.resetPerfStats({ MC_USER_MGMT: null, CSAuth: { adminHeaders: () => ({}) } }, f, (m) => alerts.push(m));
+  assert.strictEqual(ok, true);
+  assert.strictEqual(alerts.length, 0);
+  assert.strictEqual(JSON.stringify(f.calls[0]), JSON.stringify({ url: '/api/perf/reset', opts: { method: 'POST' } }));
+});
+
+test('feature on: an admin session authorises the reset', async () => {
+  const ctx = loadPerf();
+  const f = fakeFetch(200);
+  const ok = await ctx.resetPerfStats({ MC_USER_MGMT: { enabled: true }, CSAuth: { adminHeaders: () => ({ 'X-CS-CSRF': 'c' }) } }, f, () => {});
+  assert.strictEqual(ok, true);
+  assert.strictEqual(f.calls[0].opts.headers['X-CS-CSRF'], 'c');
+});
+
+test('feature on: a refused reset alerts and keeps the stats', async () => {
+  const ctx = loadPerf();
+  const alerts = [];
+  const ok = await ctx.resetPerfStats({ MC_USER_MGMT: { enabled: true }, CSAuth: { adminHeaders: () => ({}) } }, fakeFetch(403), (m) => alerts.push(m));
+  assert.strictEqual(ok, false);
+  assert.deepStrictEqual(alerts, ['Reset failed: HTTP 403']);
 });
 
 Promise.all(pending).then(() => {
