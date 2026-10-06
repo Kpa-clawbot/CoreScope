@@ -3111,7 +3111,13 @@ func (s *Server) handleAudioLabBuckets(w http.ResponseWriter, r *http.Request) {
 // --- Helpers ---
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
+	writeJSONStatus(w, http.StatusOK, v)
+}
+
+// writeJSONStatus writes v as JSON with the given status code.
+func writeJSONStatus(w http.ResponseWriter, code int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		log.Printf("[routes] JSON encode error: %v", err)
 	}

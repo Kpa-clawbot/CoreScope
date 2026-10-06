@@ -94,14 +94,19 @@ func (a *authService) allow(w http.ResponseWriter, r *http.Request, l *rateLimit
 	}
 	for _, k := range keys {
 		if ok, wait := l.take(k); !ok {
-			secs := int(math.Ceil(wait.Seconds()))
-			if secs < 1 {
-				secs = 1
-			}
-			w.Header().Set("Retry-After", strconv.Itoa(secs))
-			writeError(w, http.StatusTooManyRequests, "too many attempts, try again later")
+			writeTooManyRequests(w, wait)
 			return false
 		}
 	}
 	return true
+}
+
+// writeTooManyRequests answers 429 with a Retry-After of at least 1 s.
+func writeTooManyRequests(w http.ResponseWriter, wait time.Duration) {
+	secs := int(math.Ceil(wait.Seconds()))
+	if secs < 1 {
+		secs = 1
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(secs))
+	writeError(w, http.StatusTooManyRequests, "too many attempts, try again later")
 }

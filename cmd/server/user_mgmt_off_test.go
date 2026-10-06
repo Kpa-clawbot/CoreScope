@@ -15,7 +15,7 @@ func TestUserManagementOffIsUnchanged(t *testing.T) {
 	if srv.auth != nil {
 		t.Fatal("auth built without config")
 	}
-	for _, p := range []string{"/api/auth/me", "/api/admin/users", "/api/account/sessions"} {
+	for _, p := range []string{"/api/auth/me", "/api/admin/users", "/api/account/sessions", "/api/account/settings"} {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, httptest.NewRequest("GET", p, nil))
 		if w.Code != 404 {

@@ -18,9 +18,10 @@ type authService struct {
 	set  *userMgmtSettings
 	ipr  *wsLimiter // only its clientIP rule is used
 
-	login  *rateLimiter
-	signup *rateLimiter // register, forgot, self-service resend
-	hook   *rateLimiter
+	login       *rateLimiter
+	signup      *rateLimiter // register, forgot, self-service resend
+	hook        *rateLimiter
+	settingsPut *rateLimiter // PUT /api/account/settings, per user
 
 	warnIndistinct sync.Once
 	stop           chan struct{}
@@ -31,11 +32,12 @@ type authService struct {
 func newAuthService(set *userMgmtSettings, st *users.Store, m mailer.Mailer) *authService {
 	return &authService{
 		st: st, mail: m, set: set,
-		ipr:    &wsLimiter{trustedProxies: set.trustedProxies},
-		login:  newRateLimiter(10, 15*time.Minute),
-		signup: newRateLimiter(5, time.Hour),
-		hook:   newRateLimiter(600, time.Minute),
-		stop:   make(chan struct{}),
+		ipr:         &wsLimiter{trustedProxies: set.trustedProxies},
+		login:       newRateLimiter(10, 15*time.Minute),
+		signup:      newRateLimiter(5, time.Hour),
+		hook:        newRateLimiter(600, time.Minute),
+		settingsPut: newRateLimiter(60, time.Hour),
+		stop:        make(chan struct{}),
 	}
 }
 
@@ -128,6 +130,7 @@ func (a *authService) prune() {
 	a.login.gc()
 	a.signup.gc()
 	a.hook.gc()
+	a.settingsPut.gc()
 }
 
 func (a *authService) isConfigAdmin(email string) bool { return a.set.adminEmails[email] }

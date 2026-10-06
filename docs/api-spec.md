@@ -103,7 +103,7 @@ They return `total` (the unfiltered/filtered count before pagination).
 
 ## User management (optional)
 
-These routes are registered only when `userManagement.enabled` is true. When it is off they do not exist, and requests to them fall through to the SPA page (HTTP 200, HTML). The webhook route exists only when `mail.webhookSecret` is also set. Sessions use the `cs_session` cookie (HttpOnly, SameSite=Lax). Every state-changing request that authenticates with the cookie needs an `Origin` (or `Referer`) equal to `publicBaseUrl` and the header `X-CS-CSRF: <csrfToken from GET /api/auth/me>`. Errors are `{"error": "<message>"}`. Rate-limited calls answer `429` with `Retry-After`. Request bodies are JSON. On every route except the webhook they are limited to 16 KiB and unknown fields are rejected with `400`; the webhook takes up to 256 KiB of Brevo's payload as is.
+These routes are registered only when `userManagement.enabled` is true. When it is off they do not exist, and requests to them fall through to the SPA page (HTTP 200, HTML). The webhook route exists only when `mail.webhookSecret` is also set. Sessions use the `cs_session` cookie (HttpOnly, SameSite=Lax). Every state-changing request that authenticates with the cookie needs an `Origin` (or `Referer`) equal to `publicBaseUrl` and the header `X-CS-CSRF: <csrfToken from GET /api/auth/me>`. Errors are `{"error": "<message>"}`. Rate-limited calls answer `429` with `Retry-After`. Request bodies are JSON. On every route except the webhook and `PUT /api/account/settings` they are limited to 16 KiB and unknown fields are rejected with `400`; the webhook takes up to 256 KiB of Brevo's payload as is.
 
 | Method and path | Auth | Body and response |
 |---|---|---|
@@ -120,6 +120,9 @@ These routes are registered only when `userManagement.enabled` is true. When it 
 | `POST /api/account/confirm-email` | origin | `{token}` -> `{ok, message}`. `410` expired or used; `409` address now in use |
 | `GET /api/account/sessions` | session | -> `[{id, createdAt, lastSeenAt, expiresAt, userAgent, current}]` |
 | `DELETE /api/account/sessions/{id}` | session | -> `{ok}`. `404` not your session |
+| `GET /api/account/settings` | session | -> `{revision, doc, allowlist}`. `doc` is `{v: 1, keys: {<localStorage key>: <raw string>}}`, or `null` at revision 0. `allowlist` is `[{key, kind, id?}]`: `kind` is `set` (JSON array merged per item; `id` names the field that identifies an item, absent means the item itself) or `scalar` |
+| `PUT /api/account/settings` | session | `{baseRevision, doc}` -> `{revision}`. `409` `{revision, doc}` when `baseRevision` is not the stored revision; `400` for another shape, a key that is never synced (`corescope_channel_*`, `meshcore-api-key`) or a key not in the allowlist; `413` when `doc` is over 256 KiB (body cap 264 KiB); `429` above 60 writes per hour per user |
+| `DELETE /api/account/settings` | session | -> `{ok}`. The next `PUT` with `baseRevision` 0 starts a new document |
 | `DELETE /api/account` | session | `{currentPassword}` -> `{ok, message}`. `409` you are the last admin |
 | `GET /api/admin/users?status=&role=&q=` | admin | -> `[adminUser]`. `status` is `pending`, `active` or `disabled`; `role` is `user` or `admin` |
 | `GET /api/admin/users/{id}` | admin | -> `{user, sessions, mail, audit}` |

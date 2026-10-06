@@ -173,10 +173,21 @@ func (a *authService) adminRow(u users.User, last map[int64]users.MailRecord) ad
 
 // decodeJSON reads a small JSON body into dst, rejecting unknown fields.
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+	return decodeJSONMax(w, r, dst, 16<<10, http.StatusBadRequest)
+}
+
+// decodeJSONMax is decodeJSON with a body cap of limit bytes. A body over
+// the cap answers tooLarge (decodeJSON keeps its historical 400).
+func decodeJSONMax(w http.ResponseWriter, r *http.Request, dst any, limit int64, tooLarge int) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) && tooLarge != http.StatusBadRequest {
+			writeError(w, tooLarge, "request body too large")
+			return false
+		}
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return false
 	}
