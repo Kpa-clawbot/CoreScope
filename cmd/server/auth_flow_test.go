@@ -158,3 +158,17 @@ func TestAuthMailFailureRollsBackRegistration(t *testing.T) {
 	f.fake.SetSendErr(nil)
 	expectStatus(t, f.do("POST", "/api/auth/register", registerRequest{Email: "fay@example.org", DisplayName: "Fay", Password: pw}), 200)
 }
+
+func TestAuthPendingReRegisterNewestWins(t *testing.T) {
+	f := newAuthFixture(t)
+	const p1, p2 = "first password here", "second password here"
+	expectStatus(t, f.do("POST", "/api/auth/register", registerRequest{Email: "vic@example.org", DisplayName: "Squatter", Password: p1}), 200)
+	expectStatus(t, f.do("POST", "/api/auth/register", registerRequest{Email: "vic@example.org", DisplayName: "Victim", Password: p2}), 200)
+	w := f.do("POST", "/api/auth/activate", tokenRequest{Token: f.lastToken(t)})
+	expectStatus(t, w, 200)
+	if me := decode[meResponse](t, w); me.DisplayName != "Victim" {
+		t.Fatalf("displayName = %q, want the newest registration's", me.DisplayName)
+	}
+	expectStatus(t, f.do("POST", "/api/auth/login", loginRequest{Email: "vic@example.org", Password: p1}), 401)
+	f.login(t, "vic@example.org", p2)
+}

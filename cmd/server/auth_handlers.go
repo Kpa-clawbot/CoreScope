@@ -45,9 +45,19 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if existing, err := a.st.GetByEmail(email); err == nil {
 		// Identical response either way (no account enumeration).
 		if existing.Status == users.StatusPending {
-			// Failure is deliberately invisible here: same response as every other branch.
-			_ = a.mailToken(r.Context(), existing, users.PurposeActivate, 48*time.Hour, "", "activate",
-				func(tok string) mailer.Message { return a.activationMail(existing, tok) })
+			// Newest registration wins: whoever clicks the link gets the
+			// password and name of the latest request, so squatting a pending
+			// address cannot plant credentials. Failures stay invisible to
+			// the client (same response as every other branch).
+			if err := a.st.SetPassword(existing.ID, hash); err != nil {
+				log.Printf("[users] register: update pending user #%d: %v", existing.ID, err)
+			} else if err := a.st.SetDisplayName(existing.ID, name); err != nil {
+				log.Printf("[users] register: update pending user #%d: %v", existing.ID, err)
+			} else {
+				existing.DisplayName = name
+				_ = a.mailToken(r.Context(), existing, users.PurposeActivate, 48*time.Hour, "", "activate",
+					func(tok string) mailer.Message { return a.activationMail(existing, tok) })
+			}
 		} else {
 			_ = a.sendMail(r.Context(), existing, "register-notice", a.registerNoticeMail(existing))
 		}
@@ -221,7 +231,11 @@ func (s *Server) handleReset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	_ = a.st.DeleteUserSessions(uid, 0)
+	if err := a.st.DeleteUserSessions(uid, 0); err != nil {
+		log.Printf("[users] reset: end sessions for user #%d: %v", uid, err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
 	a.audit(idPtr(uid), "user.password.reset", idPtr(uid), nil)
 	writeJSON(w, okResponse{OK: true, Message: "Password changed. Log in with your new password."})
 }
