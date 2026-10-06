@@ -1981,9 +1981,20 @@
     return canEdit;
   }
 
+  // Re-applies access on a cached re-render or an auth change. Only with
+  // user management on: with it off the tab behaves exactly as before (the
+  // controls are decided once, by the first server answer). The prune
+  // section follows the saved server polygon, not unsaved drawing.
+  function _gfReapply(container, gf, csAuth) {
+    if (!(csAuth && csAuth.isEnabled())) return false;
+    var saved = gf && gf.polygon ? gf.polygon.length : 0;
+    _gfApplyAuth(container, gf, csAuth, saved);
+    return true;
+  }
+
   function _gfReapplyAuth() {
     // Only once the server answered: after a failed load nothing is editable.
-    if (_gfContainer && _gfServer) _gfApplyAuth(_gfContainer, _gfServer, window.CSAuth, _gfPoints.length);
+    if (_gfContainer && _gfServer) _gfReapply(_gfContainer, _gfServer, window.CSAuth);
   }
 
   function _gfSave(container) {
@@ -1997,6 +2008,7 @@
       body: JSON.stringify({ polygon: _gfPoints, bufferKm: bufferKm })
     }).then(function (r) {
       if (!r.ok) return r.json().then(function (e) { throw new Error(e.error || ('HTTP ' + r.status)); });
+      if (_gfServer) _gfServer = Object.assign({}, _gfServer, { polygon: _gfPoints.slice() });
       _gfMsg(container, 'Saved. Filter is active immediately.', true);
       _gfStatus(container, _gfPoints.length + ' points · bufferKm=' + bufferKm + ' · saved');
     }).catch(function (e) { _gfMsg(container, 'Error: ' + e.message, false); });
@@ -2013,6 +2025,7 @@
     }).then(function (r) {
       if (!r.ok) return r.json().then(function (e) { throw new Error(e.error || ('HTTP ' + r.status)); });
       _gfPoints = []; _gfLoaded = true;
+      if (_gfServer) _gfServer = Object.assign({}, _gfServer, { polygon: null });
       _gfRender();
       _gfStatus(container, 'No geo filter. Click the map to draw a polygon.');
       _gfMsg(container, 'Geo filter removed.', true);
@@ -2138,7 +2151,7 @@
         _gfStatus(container, _gfPoints.length ? _gfPoints.length + ' points (need at least 3).' : 'Click the map to draw a polygon.');
         _gfRender();
       }
-      if (_gfServer) _gfApplyAuth(container, _gfServer, window.CSAuth, _gfPoints.length);
+      if (_gfServer) _gfReapply(container, _gfServer, window.CSAuth);
       setTimeout(function () { if (_gfMap) _gfMap.invalidateSize(); }, 100);
     }
 
@@ -2969,6 +2982,7 @@
     _gfCanEdit: _gfCanEdit,
     _gfAuthHeaders: _gfAuthHeaders,
     _gfApplyAuth: _gfApplyAuth,
+    _gfReapply: _gfReapply,
     // #1496 — full reset (not just STORAGE_KEY). See _resetAll() above.
     resetAll: _resetAll,
     // Exposed for tests — see test-issue-1509-detect-preset.js.

@@ -665,6 +665,40 @@ test('_gfApplyAuth: a write key keeps the editor without a session; prune needs 
   assert.strictEqual(c.els['#cv2-gf-apikey-field'].hidden, false);
 });
 
+// _gfReapply: the cached re-render and later auth changes. Feature off it
+// does nothing (master kept the controls hidden until a reload); feature on
+// it sizes the prune section from the saved server polygon.
+const ADMIN_ON = { isEnabled: () => true, isAdmin: () => true, adminHeaders: () => ({}) };
+const OFF = { isEnabled: () => false, isAdmin: () => false, adminHeaders: () => ({}) };
+const SAVED4 = { writeEnabled: true, polygon: [[1, 1], [1, 2], [2, 2], [2, 1]] };
+console.log('_gfReapply:');
+test('_gfReapply: feature off leaves edit controls and prune hidden on a cached re-render', () => {
+  const { api } = loadCustomizer();
+  const c = gfPanel();
+  assert.strictEqual(api._gfReapply(c, SAVED4, OFF), false);
+  assert.strictEqual(api._gfReapply(c, SAVED4, undefined), false);
+  assert.strictEqual(c.els['#cv2-gf-edit'].style.display, 'none');
+  assert.strictEqual(c.els['#cv2-gf-prune-section'].style.display, 'none');
+  assert.strictEqual(c.els['#cv2-gf-apikey-field'].hidden, false);
+});
+test('_gfReapply: feature on with an admin shows edit controls and prune for a saved polygon', () => {
+  const { api } = loadCustomizer();
+  const c = gfPanel();
+  assert.strictEqual(api._gfReapply(c, { writeEnabled: false, polygon: SAVED4.polygon }, ADMIN_ON), true);
+  assert.strictEqual(c.els['#cv2-gf-edit'].style.display, '');
+  assert.strictEqual(c.els['#cv2-gf-prune-section'].style.display, '');
+  assert.strictEqual(c.els['#cv2-gf-apikey-field'].hidden, true);
+});
+test('_gfReapply: prune follows the saved polygon, not unsaved drawing', () => {
+  const { api } = loadCustomizer();
+  const c = gfPanel();
+  api._gfReapply(c, { writeEnabled: false, polygon: null }, ADMIN_ON);
+  assert.strictEqual(c.els['#cv2-gf-edit'].style.display, '');
+  assert.strictEqual(c.els['#cv2-gf-prune-section'].style.display, 'none');
+  api._gfReapply(c, { writeEnabled: false, polygon: [[1, 1], [1, 2]] }, ADMIN_ON);
+  assert.strictEqual(c.els['#cv2-gf-prune-section'].style.display, 'none');
+});
+
 // ── Summary ──
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);
