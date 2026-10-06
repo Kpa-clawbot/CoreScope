@@ -306,7 +306,7 @@ func (s *Server) handleAdminMailRefresh(w http.ResponseWriter, r *http.Request, 
 	}
 	evs, err := a.mail.Events(r.Context(), rec.ProviderMessageID)
 	if err != nil {
-		log.Printf("[users] admin mail refresh: provider events for user #%d: %v", t.ID, err)
+		log.Printf("[users] admin mail refresh: provider events for user #%d: %s", t.ID, redactAddrs(err))
 		writeError(w, http.StatusBadGateway, "mail provider unavailable")
 		return
 	}

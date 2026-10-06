@@ -30,7 +30,7 @@ func (s *Server) handleBrevoWebhook(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Authenticated but unusable: answer 200 so Brevo does not retry
 		// forever; log for the operator.
-		log.Printf("[users] brevo webhook: ignored payload: %v", err)
+		log.Printf("[users] brevo webhook: ignored payload: %s", redactAddrs(err))
 		writeJSON(w, okResponse{OK: true})
 		return
 	}

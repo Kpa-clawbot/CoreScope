@@ -5,6 +5,7 @@ import (
 	"html"
 	"log"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -82,12 +83,21 @@ func (a *authService) emailChangeNoticeMail(u *users.User, newEmail string) mail
 			"If this was not you, change your password now."}})
 }
 
+var addrRE = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+`)
+
+// redactAddrs renders a mailer/provider error for the server log with every
+// email address replaced by <addr>: provider messages can echo the
+// recipient, and addresses belong only in the audit and mail tables.
+func redactAddrs(err error) string {
+	return addrRE.ReplaceAllString(err.Error(), "<addr>")
+}
+
 // sendMail sends msg and records it in the mail log. The error is logged
 // (without tokens) and returned so the caller can answer 503.
 func (a *authService) sendMail(ctx context.Context, u *users.User, purpose string, msg mailer.Message) error {
 	id, err := a.mail.Send(ctx, msg)
 	if err != nil {
-		log.Printf("[users] mail %s for user #%d failed: %v", purpose, u.ID, err)
+		log.Printf("[users] mail %s for user #%d failed: %s", purpose, u.ID, redactAddrs(err))
 		return err
 	}
 	if _, err := a.st.LogMail(idPtr(u.ID), msg.To, purpose, id); err != nil {
