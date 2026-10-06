@@ -173,7 +173,15 @@ function makeEnv(opts) {
       return Promise.resolve(user);
     },
   };
-  const env = { navigations: 0, pipelines: 0, resets: 0, presetClears: 0, refreshes: 0, nextMe: undefined };
+  const env = { navigations: 0, pipelines: 0, resets: 0, presetClears: 0, refreshes: 0, nextMe: undefined, tileSets: [] };
+  // map-tile-providers.js: the getter falls back to the default when the key
+  // is unset, the setter persists through localStorage (the wrapped setItem).
+  const tileApi = (type, key, def) => ({
+    get: () => ls.getItem(key) || def,
+    set: (id) => { env.tileSets.push([type, id]); win.localStorage.setItem(key, id); return true; },
+  });
+  const darkTiles = tileApi('dark', 'mc-dark-tile-provider', 'carto-dark');
+  const lightTiles = tileApi('light', 'mc-light-tile-provider', 'carto-light');
   const win = {
     localStorage: ls, Storage, CSAuth: auth, MC_USER_MGMT: enabled ? { enabled: true } : null,
     addEventListener(t, f) { (winListeners[t] = winListeners[t] || []).push(f); },
@@ -181,6 +189,8 @@ function makeEnv(opts) {
     navigate() { env.navigations++; },
     _customizerV2: { initDone: opts.customizerReady !== false, runPipeline() { env.pipelines++; }, resetAll() { env.resets++; } },
     MeshCorePresets: { clearPreset() { env.presetClears++; } },
+    MC_getDarkTileProvider: darkTiles.get, MC_setDarkTileProvider: darkTiles.set,
+    MC_getLightTileProvider: lightTiles.get, MC_setLightTileProvider: lightTiles.set,
     matchMedia: (q) => ({ matches: q === '(prefers-color-scheme: dark)' && !!opts.prefersDark }),
   };
   const doc = {
@@ -375,6 +385,33 @@ test('a colour-blind preset removed on another device is cleared through cb-pres
   assert.strictEqual(env.ls.getItem('meshcore-cb-preset'), null);
   assert.strictEqual(env.presetClears, 1);
   assert(!env.events.some((e) => e.type === 'storage' && e.key === 'meshcore-cb-preset'));
+  assert.strictEqual(env.server.puts.length, 0);
+});
+
+// Polish 2: the tile listener ignores a removal, so a removed provider is
+// re-applied as the effective one (the way customize-v2.js resetAll does)
+// and the key stays unset.
+const TILES = { 'mc-dark-tile-provider': 'osm-dark', 'mc-light-tile-provider': 'osm' };
+test('tile providers removed on another device fall back to the effective provider', async () => {
+  const env = makeEnv({ server: serverWith(2, {}), local: synced(TILES, 1) });
+  await env.timers.advance(0);
+  assert.deepStrictEqual(plain(env.tileSets), [['dark', 'carto-dark'], ['light', 'carto-light']]);
+  assert.strictEqual(env.ls.getItem('mc-dark-tile-provider'), null);
+  assert.strictEqual(env.ls.getItem('mc-light-tile-provider'), null);
+  assert.strictEqual(env.t.state.seq, 0, 're-applying the default counted as a change');
+  await env.timers.advance(10000);
+  assert.strictEqual(env.server.puts.length, 0);
+});
+
+test('logout dialog: remove re-applies the effective tile providers', async () => {
+  const env = makeEnv({ server: serverWith(1, TILES), local: synced(TILES, 1) });
+  await env.timers.advance(0);
+  env.t.useDialog(() => Promise.resolve('remove'));
+  (await env.logoutHandler()).afterLogout();
+  assert.deepStrictEqual(plain(env.tileSets), [['dark', 'carto-dark'], ['light', 'carto-light']]);
+  assert.strictEqual(env.ls.getItem('mc-dark-tile-provider'), null);
+  assert.strictEqual(env.ls.getItem('mc-light-tile-provider'), null);
+  await env.timers.advance(10000);
   assert.strictEqual(env.server.puts.length, 0);
 });
 

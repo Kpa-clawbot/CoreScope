@@ -115,6 +115,11 @@
     'meshcore-theme': true, 'meshcore-cb-preset': true,
     'mc-dark-tile-provider': true, 'mc-light-tile-provider': true
   };
+  // The map-tile-providers.js setter and getter of each tile key.
+  var TILE_API = {
+    'mc-dark-tile-provider': { set: 'MC_setDarkTileProvider', get: 'MC_getDarkTileProvider' },
+    'mc-light-tile-provider': { set: 'MC_setLightTileProvider', get: 'MC_getLightTileProvider' }
+  };
 
   // Assigning localStorage.setItem would store a key named "setItem"
   // (Storage has a named-property setter), so the wrap goes on the prototype.
@@ -197,8 +202,11 @@
 
   function setStatus(s) { state.status = s; renderStatus(); }
 
+  // quiet: writes made while applying a default are not the user's changes.
+  var quiet = false;
+
   function watched(storage, k) {
-    return state.active && !!state.policy && storage === window.localStorage && !!state.policy.byKey[k];
+    return !quiet && state.active && !!state.policy && storage === window.localStorage && !!state.policy.byKey[k];
   }
 
   function install() {
@@ -261,15 +269,27 @@
     return /^#\/account(\/|\?|$)/.test(location.hash) || !!document.getElementById('cv2-gf-modal-overlay');
   }
 
+  // applyDefaultTile re-applies the effective provider of a removed tile
+  // key, as customize-v2.js resetAll does: the setter fires the change
+  // event the maps listen to, then the key it persisted is removed again.
+  function applyDefaultTile(k) {
+    var api = TILE_API[k];
+    quiet = true;
+    try { window[api.set](window[api.get]()); } finally { quiet = false; }
+    rawRemove(k);
+  }
+
   // applyListenerKeys hands changed theme, colour-blind preset and map tile
   // keys to their storage listeners. Those listeners ignore a removal, so a
-  // removed theme or preset gets the default the app starts with: the OS
-  // colour scheme (app.js) and no preset (cb-presets.js clearPreset).
+  // removed key gets the default the app starts with: the OS colour scheme
+  // (app.js), no preset (cb-presets.js clearPreset) and the effective tile
+  // provider (applyDefaultTile).
   function applyListenerKeys(changed) {
     changed.forEach(function (k) {
       if (!LISTENER_KEYS[k]) return;
       var v = rawGet(k);
       if (v === undefined && k === 'meshcore-cb-preset') { window.MeshCorePresets.clearPreset(); return; }
+      if (v === undefined && TILE_API[k]) { applyDefaultTile(k); return; }
       if (v === undefined && k === 'meshcore-theme') v = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
       window.dispatchEvent(new StorageEvent('storage', { key: k, newValue: v === undefined ? null : v }));
     });
