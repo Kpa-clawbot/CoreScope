@@ -722,6 +722,77 @@ test('dialog: escaped, first choice focused, Tab trapped, Escape and backdrop di
   assert.strictEqual(await p, 'b');
 });
 
+test('delete while retrying: the pending retry does not recreate the account copy', async () => {
+  const server = serverWith(1, KEYS);
+  const env = makeEnv({ server, local: synced(KEYS, 1) });
+  await env.timers.advance(0);
+  server.fail.PUT = ['network'];
+  env.ls.setItem('meshcore-time-window', '60');
+  await env.timers.advance(2000);
+  assert.strictEqual(env.t.state.status, 'retrying');
+  const puts = server.puts.length;
+  const r = await env.t.deleteRemote();
+  assert.strictEqual(r.ok, true);
+  await env.timers.advance(600000);
+  assert.strictEqual(server.puts.length, puts);
+  assert.strictEqual(env.t.state.hold, true);
+  assert.strictEqual(server.doc, null);
+});
+
+test('delete with a PUT in flight: the late answer does not undo the hold', async () => {
+  const server = serverWith(1, KEYS);
+  const env = makeEnv({ server, local: synced(KEYS, 1) });
+  await env.timers.advance(0);
+  const release = holdNext(env, 'PUT');
+  env.ls.setItem('meshcore-time-window', '60');
+  await env.timers.advance(2000); // PUT sent, answer held
+  const d = env.t.deleteRemote();
+  await release();
+  assert.strictEqual((await d).ok, true);
+  assert.strictEqual(env.t.state.hold, true, 'hold lost when the PUT answer landed');
+  assert.strictEqual(env.t.state.rev, 0);
+  await env.timers.advance(600000);
+  assert.strictEqual(env.t.state.hold, true);
+  assert.strictEqual(server.doc, null);
+  assert.strictEqual(server.deletes, 1);
+  assert.strictEqual(JSON.parse(env.ls.getItem('cs-settings-sync-base')).hold, true);
+});
+
+test('a failed delete puts unsynced changes back on the retry backoff', async () => {
+  const server = serverWith(1, KEYS);
+  const env = makeEnv({ server, local: synced(KEYS, 1) });
+  await env.timers.advance(0);
+  server.fail.PUT = ['network'];
+  env.ls.setItem('meshcore-time-window', '60');
+  await env.timers.advance(2000);
+  server.fail.DELETE = [{ status: 500, data: { error: 'boom' } }];
+  const r = await env.t.deleteRemote();
+  assert.strictEqual(r.status, 500);
+  assert.strictEqual(env.t.state.hold, false);
+  assert.strictEqual(env.t.state.status, 'retrying');
+  assert.strictEqual(env.timers.delays().length, 1, 'no retry scheduled');
+  await env.timers.advance(600000);
+  assert.strictEqual(server.doc.keys['meshcore-time-window'], '60');
+  assert.strictEqual(env.t.state.status, 'ok');
+});
+
+test('delete confirmation focuses Cancel; the dialog focuses opts.focus', async () => {
+  const env = makeEnv({ server: serverWith(1, KEYS), local: synced(KEYS, 1) });
+  await env.timers.advance(0);
+  env.api.mountSection(env.el('syncSection'));
+  let seen = null;
+  env.t.useDialog((opts) => { seen = plain(opts); return Promise.resolve('cancel'); });
+  await env.els.syncDelete.handlers.click();
+  assert.strictEqual(seen.focus, 'cancel');
+  const p = env.t.showDialog(Object.assign({}, seen, { title: 'x' }));
+  const ov = env.doc.body.children[env.doc.body.children.length - 1];
+  const btns = ov.querySelectorAll();
+  assert.strictEqual(btns[0].getAttribute(), 'delete');
+  assert.strictEqual(env.doc.activeElement, btns[1]);
+  ov.handlers.click({ target: ov });
+  assert.strictEqual(await p, null);
+});
+
 test('status texts', async () => {
   const env = makeEnv({ server: serverWith(1, {}), local: synced({}, 1) });
   await env.timers.advance(0);

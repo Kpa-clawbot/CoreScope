@@ -430,9 +430,10 @@
   // ── Dialog, logout and the account-page section ──
 
   // showDialog uses the app's modal pattern (.modal-overlay + .modal, as
-  // the BYOP dialog in packets.js): role=dialog, focus on the first choice,
-  // Tab trapped, Escape or a backdrop click dismiss. Resolves with the
-  // chosen id, or null when dismissed.
+  // the BYOP dialog in packets.js): role=dialog, focus on the choice
+  // opts.focus names (default the first), Tab trapped, Escape or a
+  // backdrop click dismiss. Resolves with the chosen id, or null when
+  // dismissed.
   function showDialog(opts) {
     return new Promise(function (resolve) {
       var prev = document.activeElement;
@@ -464,7 +465,9 @@
         if (btn) close(btn.getAttribute('data-choice'));
         else if (e.target === overlay) close(null);
       });
-      buttons[0].focus();
+      var start = buttons[0];
+      for (var i = 0; i < opts.choices.length; i++) if (opts.choices[i].id === opts.focus) start = buttons[i];
+      start.focus();
     });
   }
   var dialog = showDialog;
@@ -516,18 +519,30 @@
   }
 
   // deleteRemote removes the account's copy; this device keeps its values
-  // and its next change starts a new document.
+  // and its next change starts a new document. A push in flight is waited
+  // for and pending pushes are cancelled first, so no PUT (or its late
+  // answer) recreates the copy or clears the hold. When the DELETE fails,
+  // unsynced changes go back to the retry backoff.
+  function stopPushing() {
+    clearTimeout(state.pushTimer);
+    clearTimeout(state.retryTimer);
+    state.pushTimer = state.retryTimer = null;
+  }
+
   function deleteRemote() {
-    return window.CSAuth.request('DELETE', '/api/account/settings').then(function (r) {
+    var retryIfDirty = function () { if (state.active && state.dirty) retryLater(); };
+    return Promise.resolve(state.pushing).then(function () {
+      stopPushing();
+      return window.CSAuth.request('DELETE', '/api/account/settings');
+    }).then(function (r) {
       if (r.ok) {
-        clearTimeout(state.pushTimer);
-        state.pushTimer = null;
+        stopPushing();
         state.dirty = false;
         saveBase({}, 0, true);
         setStatus('held');
-      }
+      } else retryIfDirty();
       return r;
-    });
+    }, function (e) { retryIfDirty(); throw e; });
   }
 
   function statusText() {
@@ -566,7 +581,8 @@
       return dialog({
         title: 'Delete synced settings',
         text: ['This deletes the copy of your settings stored in your account. The settings on this device stay. Your next change starts a new copy.'],
-        choices: [{ id: 'delete', label: 'Delete synced settings', primary: true }, { id: 'cancel', label: 'Cancel' }]
+        choices: [{ id: 'delete', label: 'Delete synced settings', primary: true }, { id: 'cancel', label: 'Cancel' }],
+        focus: 'cancel' // the destructive choice is never the default
       }).then(function (choice) {
         if (choice !== 'delete') return;
         return deleteRemote().then(function (r) {
