@@ -8,6 +8,11 @@
   var filters = { status: '', role: '', q: '' };
   var openId = null;
   var loadSeq = 0;
+  // The page on screen and whether it was rendered for an admin, so an auth
+  // change can redirect or re-render (null app: page left).
+  var mounted = { app: null, admin: false };
+  var STATUSES = ['pending', 'active', 'disabled'];
+  var ROLES = ['user', 'admin'];
 
   function errText(r) { return (r.data && r.data.error) || ('Request failed (HTTP ' + r.status + ')'); }
   function fmt(iso) { if (!iso) return '—'; try { return new Date(iso).toLocaleString(); } catch (_) { return iso; } }
@@ -24,9 +29,12 @@
     return '<span class="um-chip um-chip-' + escapeHtml(e) + '" title="' + escapeHtml(reason || '') + '">' + escapeHtml(e.replace(/_/g, ' ')) + '</span>';
   }
 
+  // Only known filter values and a numeric id are taken from the address bar.
   function readHash(hash) {
     var p = new URLSearchParams(String(hash || '').split('?')[1] || '');
-    return { status: p.get('status') || '', role: p.get('role') || '', q: p.get('q') || '', id: p.get('id') || '' };
+    var pick = function (v, allowed) { return allowed.indexOf(v) !== -1 ? v : ''; };
+    var id = p.get('id') || '';
+    return { status: pick(p.get('status'), STATUSES), role: pick(p.get('role'), ROLES), q: p.get('q') || '', id: /^\d+$/.test(id) ? id : '' };
   }
   function hashFor(f, id) {
     var p = new URLSearchParams();
@@ -75,7 +83,8 @@
   }
 
   function detailHtml(d) {
-    var html = '<h3>' + escapeHtml(d.user.displayName) + ' — ' + escapeHtml(d.user.email) + '</h3>' +
+    var html = '<button type="button" class="account-btn account-btn-secondary um-detail-close" data-act="close">Close</button>' +
+      '<h3 tabindex="-1">' + escapeHtml(d.user.displayName) + ' — ' + escapeHtml(d.user.email) + '</h3>' +
       '<p class="account-hint">' + escapeHtml(String((d.sessions || []).length)) + ' active session(s). "Opened" depends on tracking pixels: some mail apps load them automatically, others block them.</p>' +
       '<h4>Mail</h4><ol>';
     (d.mail || []).forEach(function (m) {
@@ -124,7 +133,9 @@
     syncHash();
   }
 
-  function showDetail(id) {
+  // focus: opened by the admin (not a deep link or a list reload), so move
+  // keyboard focus to the panel heading.
+  function showDetail(id, focus) {
     openId = id;
     syncHash();
     return CSAuth.request('GET', '/api/admin/users/' + encodeURIComponent(id)).then(function (r) {
@@ -133,6 +144,10 @@
       if (!r.ok) { say(errText(r), false); closeDetail(); return; }
       el.innerHTML = detailHtml(r.data);
       el.hidden = false;
+      if (focus) {
+        var h = el.querySelector('h3');
+        if (h) h.focus();
+      }
     }).catch(netErr);
   }
 
@@ -153,7 +168,15 @@
     if (!btn) return;
     var act = btn.getAttribute('data-act');
     var id = btn.getAttribute('data-id');
-    if (act === 'detail') { showDetail(id); return; }
+    if (act === 'detail') { showDetail(id, true); return; }
+    if (act === 'close') {
+      var was = openId;
+      closeDetail();
+      // ids are numeric (server ids, readHash), safe in the selector.
+      var opener = was && document.querySelector('button[data-act="detail"][data-id="' + was + '"]');
+      if (opener) opener.focus();
+      return;
+    }
     if (act === 'refresh') {
       CSAuth.request('POST', '/api/admin/users/' + encodeURIComponent(id) + '/mail/' + encodeURIComponent(btn.getAttribute('data-mail')) + '/refresh')
         .then(function (r) { say(r.ok ? 'Mail status refreshed.' : errText(r), r.ok); load(); }).catch(netErr);
@@ -184,7 +207,9 @@
         app.innerHTML = '<div class="um-page"><h2>Not found</h2></div>';
         return;
       }
-      if (!CSAuth.isAdmin()) {
+      mounted.app = app;
+      mounted.admin = CSAuth.isAdmin();
+      if (!mounted.admin) {
         app.innerHTML = '<div class="um-page"><h2>Users</h2><p>Admins only. <a href="#/account/login">Log in</a></p></div>';
         return;
       }
@@ -216,6 +241,15 @@
     });
   }
 
-  registerPage('admin', { init: init, destroy: function () { openId = null; loadSeq++; } });
+  // Logout (header, account page or a 401) goes to the login view; a login
+  // or role change that flips admin access re-renders the page.
+  window.addEventListener('cs-auth-changed', function (e) {
+    // A logout that already moved elsewhere (the header goes home) wins.
+    if (!mounted.app || location.hash.split('?')[0] !== '#/admin/users') return;
+    if (!e.detail) { location.hash = '#/account/login'; return; }
+    if (CSAuth.isAdmin() !== mounted.admin) init(mounted.app, 'users');
+  });
+
+  registerPage('admin', { init: init, destroy: function () { openId = null; loadSeq++; mounted.app = null; } });
   window.CSAdminUsers = { _test: { actionsFor: actionsFor, rowHtml: rowHtml, detailHtml: detailHtml, readHash: readHash, hashFor: hashFor } };
 })();

@@ -487,32 +487,39 @@ console.log('admin-users.js');
 function loadAdmin(hash, routes) {
   const els = {};
   const mk = (id) => {
-    const el = { id, value: '', textContent: '', innerHTML: '', hidden: false, handlers: {}, cls: {} };
+    const el = { id, value: '', textContent: '', innerHTML: '', hidden: false, handlers: {}, cls: {}, focused: 0 };
     el.classList = { toggle(c, on) { el.cls[c] = !!on; } };
     el.addEventListener = (t, fn) => { el.handlers[t] = fn; };
+    el.focus = () => { el.focused++; };
+    el.querySelector = (sel) => els[id + ' ' + sel] || (els[id + ' ' + sel] = mk(id + ' ' + sel));
     return el;
   };
-  const doc = { getElementById(id) { return els[id] || (els[id] = mk(id)); } };
+  const doc = {
+    getElementById(id) { return els[id] || (els[id] = mk(id)); },
+    querySelector(sel) { return els[sel] || (els[sel] = mk(sel)); },
+  };
   const pages = {};
   const calls = [];
   const replaced = [];
   const loc = { hash };
   let me = { id: 1, role: 'admin' };
   let refreshed = 0;
+  const listeners = {};
   const CSAuth = {
-    ready() { return Promise.resolve(); }, isEnabled() { return true; }, isAdmin() { return me.role === 'admin'; },
+    ready() { return Promise.resolve(); }, isEnabled() { return true; }, isAdmin() { return !!me && me.role === 'admin'; },
     user() { return me; },
     request(method, p, body) { calls.push({ method, p, body }); return Promise.resolve(routes(method, p, body)); },
     refreshMe() { refreshed++; me = { id: 1, role: 'user' }; return Promise.resolve(); },
   };
-  const ctx = { window: { CSAuth }, document: doc, CSAuth, location: loc, URLSearchParams, Promise, String,
+  const ctx = { window: { CSAuth, addEventListener(t, fn) { listeners[t] = fn; } }, document: doc, CSAuth, location: loc, URLSearchParams, Promise, String,
     history: { replaceState(a, b, h) { replaced.push(h); loc.hash = h; } },
     confirm() { return true; }, debounce(fn) { return fn; },
     escapeHtml: loadEscapeHtml(), registerPage(n, m) { pages[n] = m; }, console };
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/admin-users.js'), 'utf8'), ctx);
   const app = { innerHTML: '', querySelector() { return els.umPage || (els.umPage = mk('umPage')); } };
-  return { t: ctx.window.CSAdminUsers._test, pages, els, calls, replaced, loc, app, refreshed: () => refreshed };
+  return { t: ctx.window.CSAdminUsers._test, pages, els, calls, replaced, loc, app, refreshed: () => refreshed,
+    fire(detail) { me = detail; if (listeners['cs-auth-changed']) listeners['cs-auth-changed']({ detail }); } };
 }
 const tick = () => new Promise((r) => setTimeout(r, 5));
 const U = (o) => Object.assign({ id: 2, email: 'u@x.y', displayName: 'U', role: 'user', status: 'active', configAdmin: false }, o);
@@ -601,6 +608,63 @@ test('demoting yourself refreshes the session and leaves the page', async () => 
   await tick();
   assert.strictEqual(env.refreshed(), 1);
   assert.strictEqual(env.loc.hash, '#/account');
+});
+
+test('readHash accepts only numeric ids and known status and role values', () => {
+  const env = adminEnv();
+  const h = (s) => JSON.parse(JSON.stringify(env.t.readHash('#/admin/users?' + s)));
+  assert.deepStrictEqual(h('status=bogus&role=root&id=7%3Bx&q=x'), { status: '', role: '', q: 'x', id: '' });
+  assert.deepStrictEqual(h('id=abc'), { status: '', role: '', q: '', id: '' });
+  assert.deepStrictEqual(h('status=disabled&role=user&id=12'), { status: 'disabled', role: 'user', q: '', id: '12' });
+});
+
+const clickAct = (env, act, id) => env.els.umPage.handlers.click({ target: { closest: () => ({ getAttribute: (a) => ({ 'data-act': act, 'data-id': id })[a] }) } });
+
+test('detail panel has a Close button; opening focuses the panel, closing returns focus', async () => {
+  const env = loadAdmin('#/admin/users', (m, p) =>
+    OK(p.indexOf('/api/admin/users/7') === 0 ? { user: U({ id: 7 }), sessions: [], mail: [], audit: [] } : []));
+  assert(env.t.detailHtml({ user: U({ id: 7 }), sessions: [], mail: [], audit: [] }).indexOf('data-act="close"') !== -1);
+  env.pages.admin.init(env.app, 'users');
+  await tick();
+  clickAct(env, 'detail', '7');
+  await tick();
+  assert.strictEqual(env.els.umDetail.hidden, false);
+  assert.strictEqual(env.els['umDetail h3'].focused, 1);
+  assert.strictEqual(env.loc.hash, '#/admin/users?id=7');
+  clickAct(env, 'close', null);
+  assert.strictEqual(env.els.umDetail.hidden, true);
+  assert.strictEqual(env.loc.hash, '#/admin/users');
+  assert.strictEqual(env.els['button[data-act="detail"][data-id="7"]'].focused, 1);
+});
+
+test('a deep-linked detail does not steal focus on load', async () => {
+  const env = loadAdmin('#/admin/users?id=7', (m, p) =>
+    OK(p.indexOf('/api/admin/users/7') === 0 ? { user: U({ id: 7 }), sessions: [], mail: [], audit: [] } : []));
+  env.pages.admin.init(env.app, 'users');
+  await tick();
+  assert.strictEqual(env.els.umDetail.hidden, false);
+  assert.strictEqual((env.els['umDetail h3'] || { focused: 0 }).focused, 0);
+});
+
+test('admin page follows auth changes: logout redirects to login, losing admin re-renders', async () => {
+  const env = adminEnv();
+  env.pages.admin.init(env.app, 'users');
+  await tick();
+  env.fire({ id: 1, role: 'user' });
+  await tick();
+  assert(env.app.innerHTML.indexOf('Admins only') !== -1, env.app.innerHTML);
+  env.fire(null);
+  assert.strictEqual(env.loc.hash, '#/account/login');
+});
+
+test('admin page ignores auth changes once left', async () => {
+  const env = adminEnv();
+  env.pages.admin.init(env.app, 'users');
+  await tick();
+  env.pages.admin.destroy();
+  env.loc.hash = '#/home';
+  env.fire(null);
+  assert.strictEqual(env.loc.hash, '#/home');
 });
 
 console.log('perf.js reset');

@@ -59,3 +59,4 @@
 @media (max-width: 760px) { .um-col-optional { display: none; } }
 .account-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
 a.account-btn { display: inline-flex; align-items: center; text-decoration: none; box-sizing: border-box; }
+.um-detail-close { float: right; }
