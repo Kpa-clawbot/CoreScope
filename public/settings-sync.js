@@ -172,6 +172,18 @@
     return { keys: {}, rev: 0, gen: '', hold: false };
   }
 
+  // refreshBase re-reads the stored baseline. localStorage is shared by
+  // every tab of this browser and another tab may have synced since this
+  // one last looked, so the stored copy is the truth, never the one in
+  // memory: merging against an older baseline brings back removals.
+  function refreshBase() {
+    var b = loadBase(state.userId);
+    state.base = b.keys;
+    state.rev = b.rev;
+    state.gen = b.gen;
+    state.hold = b.hold;
+  }
+
   function saveBase(keys, rev, gen, hold) {
     state.base = keys;
     state.rev = rev;
@@ -208,6 +220,7 @@
   function markDirty() {
     state.dirty = true;
     state.seq++;
+    refreshBase();
     if (state.hold) saveBase(state.base, state.rev, state.gen, false); // the next change starts a new document
     schedulePush(PUSH_DELAY_MS);
   }
@@ -279,6 +292,7 @@
   // (the copy was deleted and started again) counts as none, so nothing on
   // this device is taken for a removal made elsewhere.
   function applyProfile(rev, gen, doc) {
+    refreshBase();
     var local = snapshot();
     if (!rev) {
       if (state.rev > 0 || state.hold) {
@@ -306,6 +320,7 @@
     if (!state.active || state.blocked || !state.policy) return Promise.resolve(false);
     if (state.pushing) return state.pushing.then(function () { return state.dirty ? push() : true; });
     attempt = attempt || 0;
+    refreshBase();
     var keys = snapshot(), seq = state.seq, epoch = state.epoch;
     if (state.rev > 0 && sameKeys(keys, state.base)) { synced(seq); return Promise.resolve(true); }
     setStatus('syncing');
@@ -352,15 +367,21 @@
   }
 
   // pull fetches the account's document. An answer is dropped when the
-  // session changed or a push finished (or the baseline moved) while the
-  // GET was out: it describes the account before that push, and applying
-  // it would revert this device's change or mistake the first upload's
-  // revision-0 answer for a deleted copy. The next pull catches up.
+  // session changed or a push finished (or the stored baseline moved, also
+  // by another tab) while the GET was out: it describes the account before
+  // that push, and applying it would revert that change or mistake the
+  // first upload's revision-0 answer for a deleted copy. The next pull
+  // catches up.
   function pull() {
     if (!state.active) return Promise.resolve();
     if (state.pushing) return state.pushing.then(pull);
-    var epoch = state.epoch, puts = state.putsDone, rev = state.rev;
-    var stale = function () { return state.epoch !== epoch || state.putsDone !== puts || state.rev !== rev; };
+    refreshBase();
+    var epoch = state.epoch, puts = state.putsDone, rev = state.rev, gen = state.gen;
+    var stale = function () {
+      if (state.epoch !== epoch || state.putsDone !== puts) return true;
+      refreshBase();
+      return state.rev !== rev || state.gen !== gen;
+    };
     return window.CSAuth.request('GET', '/api/account/settings').then(function (r) {
       if (stale()) return;
       if (!r.ok) { if (r.status !== 401) setStatus('retrying'); return; }
@@ -397,15 +418,11 @@
   function activate(user) {
     if (state.active && state.userId === user.id) return Promise.resolve();
     if (state.active) deactivate();
-    var b = loadBase(user.id);
     state.epoch++;
     state.active = true;
     state.userId = user.id;
     state.policy = null;
-    state.base = b.keys;
-    state.rev = b.rev;
-    state.gen = b.gen;
-    state.hold = b.hold;
+    refreshBase();
     state.firstUpload = false;
     state.dirty = false;
     state.blocked = null;

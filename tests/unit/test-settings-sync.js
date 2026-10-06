@@ -128,10 +128,12 @@ function fakeOverlay(doc) {
 
 // makeEnv loads the real module. opts: local {key: raw}, server,
 // user (default {id: 7}; null = logged out), enabled (default true), hash,
-// customizerReady (default true: the customizer finished its init).
+// customizerReady (default true: the customizer finished its init),
+// shared (a Map: localStorage contents shared with another env, as two tabs
+// of one browser share them; each env keeps its own Storage prototype).
 function makeEnv(opts) {
   opts = opts || {};
-  function Storage() { this.m = new Map(); }
+  function Storage() { this.m = opts.shared || new Map(); }
   Storage.prototype.getItem = function (k) { return this.m.has(k) ? this.m.get(k) : null; };
   Storage.prototype.setItem = function (k, v) { this.m.set(k, String(v)); };
   Storage.prototype.removeItem = function (k) { this.m.delete(k); };
@@ -628,6 +630,46 @@ test('a push answered after logout and login again does not touch the new sessio
   assert.strictEqual(env.t.state.pushing, null);
   assert.strictEqual(env.ls.getItem('cs-settings-sync-rev'), '3');
   assert.strictEqual(JSON.parse(env.ls.getItem('cs-settings-sync-base')).keys['meshcore-time-window'], '15');
+});
+
+// I1 (final review): two tabs share localStorage, so the stored baseline is
+// the truth for both; a tab never merges against its own stale copy.
+test('two tabs: a removal from another device is not undone by a tab with an old baseline', async () => {
+  const keys = { 'meshcore-favorites': J(['a']) };
+  const server = serverWith(2, keys);
+  const shared = new Map();
+  const tab2 = makeEnv({ server, shared, local: synced(keys, 2) });
+  await tab2.timers.advance(0);
+  const tab1 = makeEnv({ server, shared });
+  await tab1.timers.advance(0);
+  tab1.ls.setItem('meshcore-favorites', J(['a', 'X']));
+  await tab1.timers.advance(2000);
+  assert.strictEqual(server.rev, 3);
+  // A phone removes X.
+  server.rev = 4;
+  server.doc = { v: 1, keys: { 'meshcore-favorites': J(['a']) } };
+  await tab2.fireDoc('visibilitychange');
+  assert.strictEqual(shared.get('meshcore-favorites'), J(['a']));
+  assert.strictEqual(server.doc.keys['meshcore-favorites'], J(['a']));
+  assert.strictEqual(server.rev, 4);
+});
+
+test('two tabs: a pull answered after the other tab pushed does not drop that change', async () => {
+  const keys = { 'meshcore-favorites': J(['a']) };
+  const server = serverWith(2, keys);
+  const shared = new Map();
+  const tab2 = makeEnv({ server, shared, local: synced(keys, 2) });
+  await tab2.timers.advance(0);
+  const tab1 = makeEnv({ server, shared });
+  await tab1.timers.advance(0);
+  const release = holdNext(tab2, 'GET');
+  await tab2.fireDoc('visibilitychange'); // GET sent: revision 2, answer held
+  tab1.ls.setItem('meshcore-favorites', J(['a', 'X']));
+  await tab1.timers.advance(2000);
+  assert.strictEqual(server.rev, 3);
+  await release();
+  assert.strictEqual(shared.get('meshcore-favorites'), J(['a', 'X']));
+  assert.strictEqual(server.doc.keys['meshcore-favorites'], J(['a', 'X']));
 });
 
 // ── logout dialog and account section ──
