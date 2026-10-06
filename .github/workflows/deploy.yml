@@ -211,6 +211,13 @@ jobs:
           go test ./...
           echo "--- Decrypt CLI tests passed ---"
 
+      - name: Test user-management modules (users, mailer)
+        run: |
+          set -e -o pipefail
+          cd internal/users && go test -race ./...
+          cd ../mailer && go test -race ./...
+          echo "--- users + mailer tests passed ---"
+
       - name: Test migrate CLI + dbschema
         run: |
           set -e -o pipefail
@@ -352,6 +359,7 @@ jobs:
         run: |
           cd cmd/server
           go build -o ../../corescope-server .
+          go build -tags e2etest -o ../../corescope-server-e2e .
           echo "Go server built successfully"
 
       - name: Build Go migrate tool
@@ -473,6 +481,33 @@ jobs:
               echo "Server failed to start within 30s"
               exit 1
             fi
+            sleep 1
+          done
+
+      - name: Start user-management E2E server (fake mailer)
+        run: |
+          fuser -k 13582/tcp 2>/dev/null || true
+          rm -rf /tmp/cs-um
+          mkdir -p /tmp/cs-um
+          # Own copy of the (already migrated and seeded) fixture; fresh users.db every run.
+          cp test-fixtures/e2e-fixture.db /tmp/cs-um/on.db
+          cat > /tmp/cs-um/config.json <<'JSON'
+          {
+            "port": 13582,
+            "userManagement": {
+              "enabled": true,
+              "dbPath": "/tmp/cs-um/users.db",
+              "adminEmails": ["admin@e2e.test"],
+              "publicBaseUrl": "http://localhost:13582",
+              "mail": { "provider": "fake", "fromEmail": "noreply@e2e.test" }
+            }
+          }
+          JSON
+          ./corescope-server-e2e -config-dir /tmp/cs-um -port 13582 -db /tmp/cs-um/on.db -public public-instrumented &
+          echo $! > .server-um.pid
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:13582/api/healthz > /dev/null 2>&1; then echo "UM server ready after ${i}s"; break; fi
+            if [ "$i" -eq 30 ]; then echo "UM server failed to start within 30s"; exit 1; fi
             sleep 1
           done
 
@@ -728,6 +763,8 @@ jobs:
           BASE_URL=http://localhost:13581 node tests/e2e/test-nodes-export-e2e.js 2>&1 | tee -a e2e-output.txt
           echo "=== E2E SUITE: test-show-neighbors.js ==="
           BASE_URL=http://localhost:13581 node tests/e2e/test-show-neighbors.js 2>&1 | tee -a e2e-output.txt
+          echo "=== E2E SUITE: test-user-management-e2e.js ==="
+          BASE_URL=http://localhost:13582 BASE_URL_OFF=http://localhost:13581 node tests/e2e/test-user-management-e2e.js 2>&1 | tee -a e2e-output.txt
 
       # #1616: slide-over focus-restore flake-gate. Runs the slide-over
       # E2E 20 consecutive times against the SAME backend instance so
@@ -792,6 +829,10 @@ jobs:
           if [ -f .server.pid ]; then
             kill $(cat .server.pid) 2>/dev/null || true
             rm -f .server.pid
+          fi
+          if [ -f .server-um.pid ]; then
+            kill $(cat .server-um.pid) 2>/dev/null || true
+            rm -f .server-um.pid
           fi
 
       - name: Upload E2E badges
