@@ -2971,6 +2971,8 @@
     readOverrides: readOverrides,
     writeOverrides: writeOverrides,
     computeEffective: computeEffective,
+    // Settings sync (settings-sync.js) re-applies overrides that arrived from the account.
+    runPipeline: _runPipeline,
     setOverride: setOverride,
     clearOverride: clearOverride,
     migrateOldKeys: migrateOldKeys,
