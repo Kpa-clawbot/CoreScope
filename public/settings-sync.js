@@ -227,11 +227,18 @@
     proto.removeItem = origRemove;
   }
 
+  // markDirty runs on every allowlisted write (a range input writes many
+  // times per second). It needs only the hold flag, and a held baseline
+  // always has revision 0 and no keys: a stored revision above 0 rules the
+  // hold out without parsing the baseline, which can be 256 KiB. Another
+  // tab may have entered the hold, so the stored revision is read each time.
   function markDirty() {
     state.dirty = true;
     state.seq++;
-    refreshBase();
-    if (state.hold) saveBase(state.base, state.rev, state.gen, false); // the next change starts a new document
+    if (!(Number(rawGet(REV_KEY)) > 0)) {
+      refreshBase();
+      if (state.hold) saveBase(state.base, state.rev, state.gen, false); // the next change starts a new document
+    }
     schedulePush(PUSH_DELAY_MS);
   }
 

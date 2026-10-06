@@ -834,6 +834,39 @@ test('two tabs: a pull answered after the other tab pushed does not drop that ch
   assert.strictEqual(server.doc.keys['meshcore-favorites'], J(['a', 'X']));
 });
 
+// Polish 3: range inputs write many times per second; a write must not
+// parse the stored baseline (up to 256 KiB) to learn the hold flag.
+test('allowlisted writes do not read the stored baseline', async () => {
+  const keys = { 'meshcore-favorites': J(['a']), 'cs-theme-overrides': J({ big: 'x'.repeat(10000) }) };
+  const env = makeEnv({ server: serverWith(1, keys), local: synced(keys, 1) });
+  await env.timers.advance(0);
+  let reads = 0;
+  const get = env.ls.m.get.bind(env.ls.m);
+  env.ls.m.get = (k) => { if (k === 'cs-settings-sync-base') reads++; return get(k); };
+  for (let i = 0; i < 50; i++) env.ls.setItem('meshcore-time-window', String(i));
+  assert.strictEqual(reads, 0);
+  env.ls.m.get = get;
+  await env.timers.advance(2000);
+  assert.strictEqual(env.server.doc.keys['meshcore-time-window'], '49');
+});
+
+test('two tabs: a change in one tab ends the hold the other tab entered', async () => {
+  const server = serverWith(1, KEYS);
+  const shared = new Map();
+  const tab2 = makeEnv({ server, shared, local: synced(KEYS, 1) });
+  await tab2.timers.advance(0);
+  const tab1 = makeEnv({ server, shared });
+  await tab1.timers.advance(0);
+  assert.strictEqual((await tab2.t.deleteRemote()).ok, true);
+  assert.strictEqual(JSON.parse(shared.get('cs-settings-sync-base')).hold, true);
+  tab1.ls.setItem('meshcore-time-window', '60');
+  assert.strictEqual(JSON.parse(shared.get('cs-settings-sync-base')).hold, false);
+  await tab1.timers.advance(2000);
+  assert.strictEqual(server.rev, 1);
+  assert.strictEqual(server.puts[server.puts.length - 1].baseRevision, 0);
+  assert.strictEqual(server.doc.keys['meshcore-time-window'], '60');
+});
+
 // ── logout dialog and account section ──
 const KEYS = { 'meshcore-favorites': J(['a']) };
 
