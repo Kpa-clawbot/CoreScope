@@ -126,11 +126,18 @@ func (s *Server) handleActivate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "wrong password for this account")
 		return
 	}
-	if _, _, err := a.st.ConsumeToken(req.Token, users.PurposeActivate); err != nil {
+	// Activate only on the hash that was just verified: a re-register in
+	// between replaces it, and the newest password must be proven.
+	switch err := a.st.ActivateWithToken(req.Token, u.ID, a.roleFor(u.Email), u.PasswordHash); {
+	case err == nil:
+	case errors.Is(err, users.ErrAccountChanged):
+		writeError(w, http.StatusConflict, "account changed, try again")
+		return
+	case errors.Is(err, users.ErrTokenInvalid), errors.Is(err, users.ErrTokenExpired):
 		writeTokenError(w, err)
 		return
-	}
-	if err := a.st.Activate(u.ID, a.roleFor(u.Email), nil); err != nil {
+	default:
+		log.Printf("[users] activate user #%d: %v", u.ID, err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}

@@ -108,7 +108,7 @@ These routes are registered only when `userManagement.enabled` is true. When it 
 | Method and path | Auth | Body and response |
 |---|---|---|
 | `POST /api/auth/register` | origin | `{email, displayName, password}` -> `{ok, message}`, identical for known addresses. Registering a pending address again replaces its password and name and mails a new link |
-| `POST /api/auth/activate` | origin | `{token, password}` -> me + session cookie. `410` expired, used or already activated; `401` "wrong password for this account" (the link stays usable) |
+| `POST /api/auth/activate` | origin | `{token, password}` -> me + session cookie. `410` expired, used or already activated; `401` "wrong password for this account" (the link stays usable); `409` "account changed, try again" when the account changed between the password check and the activation (for example a re-register) |
 | `POST /api/auth/login` | origin | `{email, password}` -> me + cookie. `401` "incorrect email or password" for every failure, including pending and disabled accounts |
 | `POST /api/auth/logout` | origin | -> `{ok}` |
 | `GET /api/auth/me` | session | -> `{id, email, displayName, role, csrfToken}`. `401` when not logged in |

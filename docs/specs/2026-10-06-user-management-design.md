@@ -222,8 +222,11 @@ error shape.
    - The token is checked without being consumed. The password must match the pending
      account's password. A wrong password answers 401, the link stays usable, and
      attempts are rate-limited per IP and per account.
-   - Then it consumes the token, sets the status to `active`, sets the role to `admin`
-     if the address is in `adminEmails`, and starts a session.
+   - Then, in one transaction, it consumes the token, sets the status to `active` and
+     sets the role to `admin` if the address is in `adminEmails`, and starts a session.
+     The transaction applies only while the account is still pending with the password
+     hash that was checked; if a re-register (or an admin) changed it in between, it
+     answers 409 "account changed, try again" and the link is not consumed.
 5. Pending accounts with an expired token are pruned periodically.
 6. The admin action "resend activation" issues a fresh token and invalidates the old
    one.

@@ -199,3 +199,17 @@ func (f *authFixture) unusedTokens(t *testing.T, uid int64, p users.Purpose) int
 	}
 	return n
 }
+
+// execDB runs raw SQL on users.db behind the store's back (triggers that
+// simulate a concurrent writer or a failing statement).
+func (f *authFixture) execDB(t *testing.T, stmt string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", f.srv.auth.set.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(stmt); err != nil {
+		t.Fatal(err)
+	}
+}

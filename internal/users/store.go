@@ -22,6 +22,10 @@ var (
 	ErrEmailTaken   = errors.New("users: email already registered")
 	ErrTokenInvalid = errors.New("users: token invalid or already used")
 	ErrTokenExpired = errors.New("users: token expired")
+	// ErrAccountChanged: the account is no longer pending with the
+	// password hash the caller verified (a re-register or an admin got
+	// there first).
+	ErrAccountChanged = errors.New("users: account changed since it was read")
 )
 
 // Store is the users.db handle. Safe for concurrent use.

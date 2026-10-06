@@ -105,6 +105,43 @@ func (s *Store) ConsumeToken(raw string, p Purpose) (userID int64, newEmail stri
 	return userID, newEmail, nil
 }
 
+// ActivateWithToken burns an activation token of user id and activates the
+// account with role in one transaction, but only while the user is still
+// pending with verifiedHash, the hash the caller checked the password
+// against. Otherwise it returns ErrAccountChanged and burns nothing.
+// A token of another purpose or user returns ErrTokenInvalid.
+func (s *Store) ActivateWithToken(raw string, id int64, role Role, verifiedHash string) error {
+	hash := HashToken(raw)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	uid, _, err := s.checkToken(tx, hash, PurposeActivate)
+	if err != nil {
+		return err
+	}
+	if uid != id {
+		return ErrTokenInvalid
+	}
+	now := unix(s.now())
+	if err := expectOne(tx.Exec(`UPDATE tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL`, now, hash)); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return ErrTokenInvalid
+		}
+		return err
+	}
+	err = expectOne(tx.Exec(`UPDATE users SET status = 'active', role = ?, activated_at = ?, activated_by = NULL
+		WHERE id = ? AND status = 'pending' AND password_hash = ?`, string(role), now, id, verifiedHash))
+	if errors.Is(err, ErrNotFound) {
+		return ErrAccountChanged
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // InvalidateTokens burns all of a user's unused tokens for purpose p.
 func (s *Store) InvalidateTokens(userID int64, p Purpose) error {
 	_, err := s.db.Exec(`UPDATE tokens SET used_at = ? WHERE user_id = ? AND purpose = ? AND used_at IS NULL`,

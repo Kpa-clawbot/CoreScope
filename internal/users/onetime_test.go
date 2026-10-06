@@ -148,3 +148,75 @@ func TestTokenUserDoesNotConsume(t *testing.T) {
 		t.Fatalf("expired err = %v", err)
 	}
 }
+
+func TestActivateWithTokenActivatesAndBurns(t *testing.T) {
+	st, _ := newTestStore(t)
+	u := mustCreate(t, st, "act@example.org", "Act")
+	raw, _ := st.IssueToken(u.ID, PurposeActivate, time.Hour, "")
+	if err := st.ActivateWithToken(raw, u.ID, RoleAdmin, u.PasswordHash); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := st.GetByID(u.ID)
+	if got.Status != StatusActive || got.Role != RoleAdmin || got.ActivatedAt == nil || got.ActivatedBy != nil {
+		t.Fatalf("after ActivateWithToken: %+v", got)
+	}
+	if _, err := st.TokenUser(raw, PurposeActivate); !errors.Is(err, ErrTokenInvalid) {
+		t.Fatalf("token still usable after activation: %v", err)
+	}
+}
+
+func TestActivateWithTokenHashChangedIsAccountChanged(t *testing.T) {
+	st, _ := newTestStore(t)
+	u := mustCreate(t, st, "race@example.org", "Race")
+	raw, _ := st.IssueToken(u.ID, PurposeActivate, time.Hour, "")
+	verified := u.PasswordHash
+	if err := st.SetPassword(u.ID, "$argon2id$replaced"); err != nil { // a re-register in between
+		t.Fatal(err)
+	}
+	if err := st.ActivateWithToken(raw, u.ID, RoleUser, verified); !errors.Is(err, ErrAccountChanged) {
+		t.Fatalf("err = %v, want ErrAccountChanged", err)
+	}
+	if got, _ := st.GetByID(u.ID); got.Status != StatusPending {
+		t.Fatalf("activated with a stale hash: %+v", got)
+	}
+	if _, err := st.TokenUser(raw, PurposeActivate); err != nil {
+		t.Fatalf("token burned although nothing was activated: %v", err)
+	}
+}
+
+func TestActivateWithTokenNotPendingIsAccountChanged(t *testing.T) {
+	st, _ := newTestStore(t)
+	u := mustCreate(t, st, "manual@example.org", "Manual")
+	raw, _ := st.IssueToken(u.ID, PurposeActivate, time.Hour, "")
+	if err := st.Activate(u.ID, RoleUser, nil); err != nil { // an admin activated in between
+		t.Fatal(err)
+	}
+	if err := st.ActivateWithToken(raw, u.ID, RoleAdmin, u.PasswordHash); !errors.Is(err, ErrAccountChanged) {
+		t.Fatalf("err = %v, want ErrAccountChanged", err)
+	}
+	if got, _ := st.GetByID(u.ID); got.Role != RoleUser {
+		t.Fatalf("role changed on an active account: %+v", got)
+	}
+}
+
+func TestActivateWithTokenRejectsBadTokens(t *testing.T) {
+	st, clk := newTestStore(t)
+	u := mustCreate(t, st, "bad@example.org", "Bad")
+	other := mustCreate(t, st, "other@example.org", "Other")
+	reset, _ := st.IssueToken(u.ID, PurposeReset, time.Hour, "")
+	if err := st.ActivateWithToken(reset, u.ID, RoleUser, u.PasswordHash); !errors.Is(err, ErrTokenInvalid) {
+		t.Fatalf("reset token: err = %v, want ErrTokenInvalid", err)
+	}
+	foreign, _ := st.IssueToken(other.ID, PurposeActivate, time.Hour, "")
+	if err := st.ActivateWithToken(foreign, u.ID, RoleUser, u.PasswordHash); !errors.Is(err, ErrTokenInvalid) {
+		t.Fatalf("other user's token: err = %v, want ErrTokenInvalid", err)
+	}
+	raw, _ := st.IssueToken(u.ID, PurposeActivate, time.Hour, "")
+	clk.Advance(2 * time.Hour)
+	if err := st.ActivateWithToken(raw, u.ID, RoleUser, u.PasswordHash); !errors.Is(err, ErrTokenExpired) {
+		t.Fatalf("expired token: err = %v, want ErrTokenExpired", err)
+	}
+	if got, _ := st.GetByID(u.ID); got.Status != StatusPending {
+		t.Fatalf("activated by a bad token: %+v", got)
+	}
+}

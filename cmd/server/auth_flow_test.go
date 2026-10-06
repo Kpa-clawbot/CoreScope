@@ -216,3 +216,30 @@ func TestAuthActivateDBErrorIs500(t *testing.T) {
 	f.breakTable(t, "users")
 	expectStatus(t, f.do("POST", "/api/auth/activate", activateRequest{Token: tok, Password: pw}), 500)
 }
+
+// A re-register that lands between the password check and the activation
+// replaces the hash; the activation must not go through on the old one.
+func TestAuthActivateHashChangedMidwayIs409(t *testing.T) {
+	f := newAuthFixture(t)
+	expectStatus(t, f.do("POST", "/api/auth/register", registerRequest{Email: "ned@example.org", DisplayName: "Ned", Password: pw}), 200)
+	tok := f.lastToken(t)
+	f.execDB(t, `CREATE TRIGGER race AFTER UPDATE OF used_at ON tokens BEGIN
+		UPDATE users SET password_hash = 'replaced-by-a-re-register' WHERE id = NEW.user_id; END`)
+	w := f.do("POST", "/api/auth/activate", activateRequest{Token: tok, Password: pw})
+	expectStatus(t, w, 409)
+	if !strings.Contains(w.Body.String(), "account changed, try again") {
+		t.Fatalf("body = %s", w.Body.String())
+	}
+	for _, c := range w.Result().Cookies() {
+		if c.Name == sessionCookieName && c.Value != "" {
+			t.Fatal("session cookie set on a refused activation")
+		}
+	}
+	u, _ := f.st.GetByEmail("ned@example.org")
+	if u.Status != users.StatusPending {
+		t.Fatalf("activated on a replaced hash: %+v", u)
+	}
+	if n := f.unusedTokens(t, u.ID, users.PurposeActivate); n != 1 {
+		t.Fatalf("%d usable activation links after a refused activation, want 1", n)
+	}
+}
