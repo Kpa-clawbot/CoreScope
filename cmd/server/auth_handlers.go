@@ -266,13 +266,15 @@ func (s *Server) handleReset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	// A pending email change must not survive the owner's recovery.
-	if err := a.invalidateTokens("reset", uid, users.PurposeEmailChange); err != nil {
+	// Sessions first: a token-store failure below must not leave an
+	// attacker's session alive.
+	if err := a.st.DeleteUserSessions(uid, 0); err != nil {
+		log.Printf("[users] reset: end sessions for user #%d: %v", uid, err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	if err := a.st.DeleteUserSessions(uid, 0); err != nil {
-		log.Printf("[users] reset: end sessions for user #%d: %v", uid, err)
+	// A pending email change must not survive the owner's recovery.
+	if err := a.invalidateTokens("reset", uid, users.PurposeEmailChange); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}

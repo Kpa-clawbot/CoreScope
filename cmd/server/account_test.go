@@ -116,11 +116,30 @@ func TestAccountPasswordChangeKillsPendingLinks(t *testing.T) {
 	f.login(t, "oli@example.org", "new secret pass")
 }
 
+// A token-store failure still answers 500, but only after the other
+// sessions are gone: a thief's session must not outlive the change.
 func TestAccountPasswordChangeTokenStoreFailureIs500(t *testing.T) {
 	f := newAuthFixture(t)
 	c := f.registerAndActivate(t, "pam@example.org", "Pam", pw)
+	thief := f.login(t, "pam@example.org", pw)
 	f.breakTable(t, "tokens")
 	expectStatus(t, f.do("POST", "/api/account/password", passwordChangeRequest{CurrentPassword: pw, NewPassword: "new secret pass"}, as(c)), 500)
+	expectStatus(t, f.do("GET", "/api/auth/me", nil, as(thief)), 401)
+	expectStatus(t, f.do("GET", "/api/auth/me", nil, as(c)), 200)
+}
+
+// Same for reset: the email-change invalidation fails, all sessions are
+// already ended.
+func TestAuthResetTokenStoreFailureEndsSessionsFirst(t *testing.T) {
+	f := newAuthFixture(t)
+	c := f.registerAndActivate(t, "pia@example.org", "Pia", pw)
+	thief := f.login(t, "pia@example.org", pw)
+	_, reset := pendingLinks(t, f, c, "pia@example.org", "attacker@example.org")
+	f.execDB(t, `CREATE TRIGGER down BEFORE UPDATE ON tokens WHEN OLD.purpose = 'email_change' BEGIN
+		SELECT RAISE(ABORT, 'token store down'); END`)
+	expectStatus(t, f.do("POST", "/api/auth/reset", resetRequest{Token: reset, Password: "a brand new secret"}), 500)
+	expectStatus(t, f.do("GET", "/api/auth/me", nil, as(thief)), 401)
+	expectStatus(t, f.do("GET", "/api/auth/me", nil, as(c)), 401)
 }
 
 func TestAccountEmailChangeTakenLooksLikeFree(t *testing.T) {
