@@ -61,6 +61,27 @@ async function registerAndActivate(page, email, name) {
   await page.waitForSelector('#accountToggle .nav-account-label:has-text("' + name + '")');
 }
 
+// axeClean fails on serious or critical WCAG 2 A/AA violations inside sel.
+async function axeClean(pg, sel) {
+  const res = await new AxeBuilder({ page: pg }).include(sel).withTags(['wcag2a', 'wcag2aa']).analyze();
+  const bad = res.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
+  assert(bad.length === 0, sel + ': ' + bad.map((v) => v.id + ' ' + v.nodes.map((n) => n.target.join(' ') + ' ' + ((n.any[0] || {}).message || '')).join(' | ')).join(', '));
+}
+
+// The account's synced keys, read through the page's own session.
+async function accountKeys(pg) {
+  return pg.evaluate(() => window.CSAuth.request('GET', '/api/account/settings').then((r) => (r.data.doc && r.data.doc.keys) || {}));
+}
+
+async function until(fn, label) {
+  const end = Date.now() + 8000;
+  for (;;) {
+    if (await fn()) return;
+    if (Date.now() > end) throw new Error('timed out: ' + label);
+    await new Promise((r) => setTimeout(r, 200));
+  }
+}
+
 (async () => {
   const browser = await chromium.launch({
     headless: true,
@@ -123,6 +144,66 @@ async function registerAndActivate(page, email, name) {
     await user.waitForSelector('#accountToggle .nav-account-label:has-text("E2E User")');
   });
 
+  // Settings sync: two browser contexts are two devices on one account.
+  const SYNC_FAV = 'e2e5e7c0000000000000000000000000000000000000000000000000000000a1';
+  const d1 = await (await browser.newContext()).newPage();
+  const d2 = await (await browser.newContext()).newPage();
+  for (const [pg, tag] of [[d1, 'd1'], [d2, 'd2']]) {
+    pg.setDefaultTimeout(8000);
+    pg.on('pageerror', (e) => console.error('[pageerror ' + tag + ']', e.message));
+  }
+
+  await step('settings sync: device 1 saves a packet time window and a favorite to the account', async () => {
+    await registerAndActivate(d1, 'sync@e2e.test', 'E2E Sync');
+    await d1.goto(BASE + '/#/packets');
+    await d1.waitForSelector('#fTimeWindow');
+    await d1.selectOption('#fTimeWindow', '180');
+    // No favorite star without node rows in view: write the key as nodes.js does.
+    await d1.evaluate((pk) => localStorage.setItem('meshcore-favorites', JSON.stringify([pk])), SYNC_FAV);
+    await until(async () => {
+      const k = await accountKeys(d1);
+      return k['meshcore-time-window'] === '180' && (k['meshcore-favorites'] || '').includes(SYNC_FAV);
+    }, 'account holds the time window and the favorite');
+  });
+
+  await step('settings sync: device 2 logs in and gets both; its channel key stays local', async () => {
+    await d2.goto(BASE + '/#/account/login', { waitUntil: 'domcontentloaded' });
+    await d2.waitForSelector('#loginForm');
+    await d2.evaluate(() => localStorage.setItem('corescope_channel_keys', JSON.stringify({ '#e2e': '00112233445566778899aabbccddeeff' })));
+    await d2.fill('#loginEmail', 'sync@e2e.test');
+    await d2.fill('#loginPassword', PW);
+    await d2.click('#loginForm button[type="submit"]');
+    await d2.waitForSelector('#profileForm');
+    await d2.waitForFunction((pk) => (localStorage.getItem('meshcore-favorites') || '').includes(pk) &&
+      localStorage.getItem('meshcore-time-window') === '180', SYNC_FAV);
+    const k = await accountKeys(d2);
+    assert(!('corescope_channel_keys' in k), 'channel key reached the account');
+  });
+
+  await step('settings sync: a favorite removed on device 1 is gone on device 2', async () => {
+    await d1.evaluate(() => localStorage.setItem('meshcore-favorites', '[]'));
+    await until(async () => !((await accountKeys(d1))['meshcore-favorites'] || '').includes(SYNC_FAV), 'removal reached the account');
+    await d2.evaluate(() => window.CSSettingsSync.syncNow());
+    await d2.waitForFunction((pk) => !(localStorage.getItem('meshcore-favorites') || '').includes(pk), SYNC_FAV);
+  });
+
+  await step('settings sync: axe on the section and the logout dialog; Remove keeps the channel key', async () => {
+    await d2.waitForSelector('#syncStatus');
+    await axeClean(d2, '#syncSection');
+    await d2.click('#accountPageLogout');
+    await d2.waitForSelector('.cs-dialog');
+    assert(await d2.evaluate(() => document.activeElement && document.activeElement.getAttribute('data-choice') === 'keep'), 'Keep is not focused');
+    await axeClean(d2, '.cs-dialog');
+    await d2.click('.cs-dialog [data-choice="remove"]');
+    await d2.waitForSelector('#loginForm');
+    const left = await d2.evaluate(() => ({
+      fav: localStorage.getItem('meshcore-favorites'), tw: localStorage.getItem('meshcore-time-window'),
+      base: localStorage.getItem('cs-settings-sync-base'), ch: localStorage.getItem('corescope_channel_keys'),
+    }));
+    assert(left.fav === null && left.tw === null && left.base === null, 'synced keys left: ' + JSON.stringify(left));
+    assert(left.ch && left.ch.includes('#e2e'), 'channel key removed');
+  });
+
   await step('admin disables the user; the live session is logged out without a reload', async () => {
     await admin.goto(BASE + '/#/admin/users');
     const row = admin.locator('tr[data-email="user@e2e.test"]');
@@ -132,8 +213,9 @@ async function registerAndActivate(page, email, name) {
     // No reload: leave and re-enter the account page; its sessions call answers 401.
     await user.goto(BASE + '/#/home');
     await user.goto(BASE + '/#/account');
-    await user.waitForSelector('.cs-auth-toast.visible:has-text("You were logged out.")');
+    // The 60 s settings pull may log the user out first, so assert the end state only.
     await user.waitForSelector('#accountToggle .nav-account-label:has-text("Log in")');
+    assert(await user.evaluate(() => window.CS_USER === null), 'CS_USER is not null');
   });
 
   await step('axe: no serious or critical violations on the new views', async () => {
@@ -142,9 +224,7 @@ async function registerAndActivate(page, email, name) {
       await pg.waitForSelector(sel);
       await authReady(pg);
       await pg.waitForTimeout(1500);
-      const res = await new AxeBuilder({ page: pg }).include('#app').withTags(['wcag2a', 'wcag2aa']).analyze();
-      const bad = res.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
-      assert(bad.length === 0, route + ': ' + bad.map((v) => v.id + ' ' + v.nodes.map((n) => n.target.join(' ') + ' ' + ((n.any[0] || {}).message || '')).join(' | ')).join(', '));
+      await axeClean(pg, '#app');
     }
   });
 

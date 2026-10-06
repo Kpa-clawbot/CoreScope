@@ -92,5 +92,19 @@ database, and protect it the same way. Deleting it removes all accounts and noth
 - **My account:** change your display name, password or address, see your logged-in
   devices, or delete your account. A new address is confirmed from a link sent to it, and
   your old address gets a notice. Changing your password logs out your other devices.
+- **Settings sync:** while you are logged in, your settings follow you: your nodes,
+  favorites, theme and customizer settings, saved packet filters, and the filter, sort
+  and view choices of each page. Log in on another browser or phone and they are
+  restored; later changes reach your other devices within about a minute, or when you
+  return to the tab. A node or favorite added on one device is never dropped by another,
+  and one you removed stays removed.
+- **Never synced:** channel keys and decrypted messages, the API key, panel and column
+  sizes, collapsed panels and map positions. They stay in the browser where you set them.
+- **Logging out** asks whether to keep your settings on this device (the default) or
+  remove them; your account keeps its copy either way, and channel keys are never
+  removed. An automatic logout (expired session) keeps everything on the device.
+- **My account, Settings sync** shows when your settings were last saved, has *Sync now*,
+  and *Delete synced settings from my account*, which removes the account's copy only.
+  The settings on your devices stay, and your next change starts a new copy.
 
 Admins can see your display name and email address in the Users list.
