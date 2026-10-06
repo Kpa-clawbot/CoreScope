@@ -263,9 +263,9 @@
      --surface-0) without thinning the tint that makes the chip legible. */
   --sa-chip-observed-fg: var(--palette-green-800, #166534);
   /* Text-only yellow/red for surfaces that print status words on light cards
-     (user-management chips): yellow-700 #a16207 is 4.92:1 and red-700 #b91c1c
+     (user-management chips): yellow-800 #854d0e is 6.85:1 on #fff and 6.13:1 on the row-hover tint #eef2ff (yellow-700 #a16207 was 4.4:1 there); red-700 #b91c1c
      is 6.47:1 on #fff. Dark theme keeps the bright hues, like green-text. */
-  --status-yellow-text: #a16207;
+  --status-yellow-text: #854d0e;
   --status-red-text: var(--palette-red-700, #b91c1c);
   --status-yellow: #eab308;
   --status-red: #ef4444;
