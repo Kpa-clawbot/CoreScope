@@ -1,7 +1,8 @@
 # Optional User Management (Sub-project A: Foundation) — Design Spec
 
 **Date:** 2026-10-06
-**Status:** Approved (design). Implementation not started.
+**Status:** Approved (design). Implementation plan:
+`docs/plans/2026-10-06-user-management-a.md` (parts A1–A3). Implementation not started.
 **Scope:** sub-project **A** of a five-part track (see *Roadmap*). B–E get their own
 spec → plan → implementation cycle and build on A.
 
@@ -111,6 +112,9 @@ off.
 }
 ```
 
+- `dbPath` defaults to `users.db` in the same directory as the analyzer database when
+  empty.
+
 - The shape follows the existing opt-in pattern: a pointer sub-struct with
   `Enabled bool`, plus a nil-safe accessor where nil means off (`ClientRxCoverage`,
   `cmd/server/config.go:170,268-277`).
@@ -204,9 +208,11 @@ error shape.
 2. A user is created with status `pending` and an activation mail is sent with
    `{publicBaseUrl}/#/account/activate?token=…`.
 3. If the address is already registered, the response is **identical** to the
-   success case ("check your mail"). The owner of that address gets a mail: "someone
-   tried to register with your address; if it was you, log in or reset your
-   password." This prevents account enumeration.
+   success case ("check your mail"). This prevents account enumeration. What gets
+   mailed depends on the account:
+   - An active or disabled account gets a mail: "someone tried to register with your
+     address; if it was you, log in or reset your password."
+   - A still-pending account gets a fresh activation link instead.
 4. `POST /api/auth/activate {token}`:
    - It sets the status to `active` and sets the role to `admin` if the address is in
      `adminEmails`.
@@ -292,9 +298,10 @@ All of these require role `admin` and live under `/api/admin/users`.
     disabled automatically; the admin decides.
   - The endpoint is authenticated with `webhookSecret`. If it is unset, the endpoint
     is not registered.
-  - The plan must verify which mechanism Brevo's transactional webhooks support
-    (Basic auth credentials in the URL, or a bearer/token header) and use that. The
-    secret is compared in constant time.
+  - Brevo's webhook object supports `"auth": {"type": "bearer", "token": …}`
+    (verified 2026-10-06), so the webhook is created with bearer auth. The server
+    checks `Authorization: Bearer <webhookSecret>` in constant time. The secret
+    must be at least 16 characters.
   - Unknown message IDs are ignored with 200, so Brevo doesn't retry forever. Bodies
     are size-capped.
 - **Pull fallback:** for instances Brevo can't reach, the admin "refresh" action
@@ -350,14 +357,16 @@ logged-in admins.
   makes no extra requests. That makes "off" pixel-identical and keeps older servers
   safe.
 - **Header control:** "Log in" at the right of the top nav. When logged in it shows
-  the display name with a menu: My account, Users (admins only), Log out. On mobile
-  it goes in the nav drawer. Icons are Phosphor, as elsewhere (#1648).
+  the display name with a menu: My account, Users (admins only), Log out. On narrow
+  screens only the icon is shown; it stays in the top bar like the favorites and
+  search buttons, so no drawer entry is needed. Icons are Phosphor, as elsewhere
+  (#1648).
 - **Routes:**
   - `#/account/login`, `#/account/register`, `#/account/activate`, `#/account/forgot`,
     `#/account/reset`, `#/account/confirm-email`
   - `#/account`: profile, password, email, sessions, delete
-  - `#/admin/users`: table with `table-sort`, status and role filters, search, a
-    detail panel, and confirmation dialogs for destructive actions
+  - `#/admin/users`: a table ordered newest first, with status and role filters,
+    search, a detail panel, and confirmation dialogs for destructive actions
 - **State:** on load, if the feature is on, the frontend calls `GET /api/auth/me`
   once. The result is kept in memory (`window.CS_USER`). A 401 from any authed call
   clears it and shows a "you were logged out" toast. The rest of the page keeps
@@ -402,9 +411,9 @@ logged-in admins.
   - Gated endpoints accept the API key or an admin session.
   - The webhook: auth, unknown IDs, and event ingestion setting `email_bouncing`.
 - **"Off is unchanged":**
-  - With the block absent or `enabled: false`: every new route returns 404, no
-    `users.db` file is created, and `/api/config/client` is byte-identical to a
-    golden snapshot.
+  - With the block absent or `enabled: false`: every new route returns 404 and no
+    `users.db` file is created. `/api/config/client` has no `userManagement` key, and
+    it is byte-identical between "block absent" and `enabled: false`.
   - All existing tests pass unchanged.
 - **Read-only invariant:** `readonly_invariant_test.go` is extended. Write-capable
   opens are allowed only inside `internal/users`, and only for the configured
@@ -429,9 +438,9 @@ logged-in admins.
   `cookieAuth` security scheme next to `apiKey`.
 - `AGENTS.md`: restate the invariant as "the server never writes measurement data;
   `users.db` via `internal/users` is the single exception (user management, opt-in)".
-- `README.md:267` and `AGENTS.md:259` ("all API endpoints are public"): qualify that
-  this holds unless user management is enabled, and then only for account and admin
-  endpoints.
+- `README.md` and `AGENTS.md` say "all API endpoints are public, no auth required".
+  Those lines describe the public live instance (analyzer.00id.net), which does not
+  enable the feature, so they stay unchanged.
 
 ## Roadmap (after A)
 
