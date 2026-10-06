@@ -429,6 +429,22 @@
     }
   },
   "_comment_analytics": "Issue #1240 + #1256 + #1265. Each analytics endpoint (topology, rf, distance, channels, hashCollisions, hashSizes, roles, observersClockSkew, nodesClockSkew) is recomputed in the background on the configured interval and served from an atomic-pointer cache. Reads never block on compute. Default 300s (5 min) per endpoint reflects the operator principle: serving slightly stale data quickly beats real-time data slowly. Lower values = fresher data at higher CPU cost. Only the default query (no region/window) is precomputed; region- and window-filtered requests fall back to the legacy on-request compute + 60s TTL cache.",
+  "userManagement": {
+    "enabled": false,
+    "dbPath": "",
+    "adminEmails": ["operator@example.org"],
+    "publicBaseUrl": "https://corescope.example.org",
+    "sessionDays": 30,
+    "trustedProxies": [],
+    "mail": {
+      "provider": "brevo",
+      "brevoApiKey": "",
+      "fromEmail": "noreply@example.org",
+      "fromName": "CoreScope",
+      "webhookSecret": ""
+    }
+  },
+  "_comment_userManagement": "Optional accounts (off by default; see docs/user-guide/accounts.md). When enabled: visitors can register with email + password and activate through a mailed link; addresses in adminEmails become admins; admins manage users at #/admin/users and can use the operator endpoints without the apiKey. The dashboard stays public. dbPath defaults to users.db next to the analyzer database: a separate file, the server never writes measurement data. publicBaseUrl is required and is used for every link in every mail. Mail goes through Brevo's transactional API (a free account is enough); brevoApiKey and webhookSecret may instead come from CORESCOPE_BREVO_API_KEY and CORESCOPE_BREVO_WEBHOOK_SECRET. Set webhookSecret (16+ chars) and point a Brevo transactional webhook at <publicBaseUrl>/api/mail/brevo/webhook with bearer auth to see delivery status per user. trustedProxies (CIDRs) lets login rate limits use X-Forwarded-For behind a reverse proxy. Startup fails if enabled with an incomplete mail setup.",
   "customizer": {
     "disabledTabs": [],
     "_comment_disabledTabs": "Issue #1508. List of customizer-modal tab ids to hide from end users. Useful when operators want to expose only daily-use viewer controls and keep one-shot admin chrome out of the way. Recognized ids: branding, theme, nodes, home, display, geofilter, export. Example: [\"branding\", \"geofilter\", \"export\"] hides the admin tabs and leaves theme/colors/home/display visible. Default [] keeps the legacy behavior (all tabs visible). Operators edit this in config.json directly — there is no in-app UI for this list (by design)."
