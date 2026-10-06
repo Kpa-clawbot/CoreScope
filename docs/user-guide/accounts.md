@@ -97,13 +97,16 @@ database, and protect it the same way. Deleting it removes all accounts and noth
   and view choices of each page. Log in on another browser or phone and they are
   restored; later changes reach your other devices within about a minute, or when you
   return to the tab. A node or favorite added on one device is never dropped by another,
-  and one you removed stays removed.
+  and one you removed stays removed. Saved packet filters are stored in your account as
+  you typed them.
 - **Never synced:** channel keys and decrypted messages, the API key, panel and column
   sizes, collapsed panels and map positions. They stay in the browser where you set them.
 - **Logging out** asks whether to keep your settings on this device (the default) or
   remove them; your account keeps its copy either way, and channel keys are never
-  removed. An automatic logout (expired session) keeps everything on the device.
-- **My account, Settings sync** shows when your settings were last saved, has *Sync now*,
+  removed. An automatic logout (expired session) keeps everything on the device. On a
+  shared computer choose *Remove my settings from this device*: settings kept on the
+  device are added to the account of the next person who logs in there.
+- **My account, Settings sync** shows when your settings were last synced, has *Sync now*,
   and *Delete synced settings from my account*, which removes the account's copy only.
   The settings on your devices stay, and your next change starts a new copy.
 

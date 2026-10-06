@@ -176,6 +176,9 @@ async function until(fn, label) {
     await d2.waitForSelector('#profileForm');
     await d2.waitForFunction((pk) => (localStorage.getItem('meshcore-favorites') || '').includes(pk) &&
       localStorage.getItem('meshcore-time-window') === '180', SYNC_FAV);
+    // Check after a full round trip from device 2 (pull, merge, push), not
+    // just after its first pull.
+    await d2.evaluate(() => window.CSSettingsSync.syncNow());
     const k = await accountKeys(d2);
     assert(!('corescope_channel_keys' in k), 'channel key reached the account');
   });
