@@ -962,6 +962,52 @@ test('logout dialog: remove after a failed push keeps the data and says so', asy
   assert(env.toasts.indexOf('Your latest settings could not be saved to your account, so they stay on this device.') !== -1);
 });
 
+// Polish 4: unpushed changes are judged from storage, which every tab
+// shares, not from this tab's dirty flag.
+test('two tabs: logout remove pushes a change the other tab made seconds earlier', async () => {
+  const server = serverWith(1, KEYS);
+  const shared = new Map();
+  const tab1 = makeEnv({ server, shared, local: synced(KEYS, 1) });
+  await tab1.timers.advance(0);
+  const tab2 = makeEnv({ server, shared });
+  await tab2.timers.advance(0);
+  tab1.ls.setItem('meshcore-time-window', '60'); // tab1 still in its 2 s debounce
+  tab2.t.useDialog(() => Promise.resolve('remove'));
+  const h = await tab2.logoutHandler();
+  assert.strictEqual(server.doc.keys['meshcore-time-window'], '60');
+  h.afterLogout();
+  assert.strictEqual(shared.get('meshcore-time-window'), undefined);
+});
+
+test('two tabs: logout remove keeps the other tab change when its push fails', async () => {
+  const server = serverWith(1, KEYS);
+  const shared = new Map();
+  const tab1 = makeEnv({ server, shared, local: synced(KEYS, 1) });
+  await tab1.timers.advance(0);
+  const tab2 = makeEnv({ server, shared });
+  await tab2.timers.advance(0);
+  tab1.ls.setItem('meshcore-time-window', '60');
+  server.fail.PUT = ['network'];
+  tab2.t.useDialog(() => Promise.resolve('remove'));
+  (await tab2.logoutHandler()).afterLogout();
+  assert.strictEqual(shared.get('meshcore-time-window'), '60');
+  assert.strictEqual(shared.get('meshcore-favorites'), J(['a']));
+  assert(tab2.toasts.indexOf('Your latest settings could not be saved to your account, so they stay on this device.') !== -1);
+});
+
+test('logout remove while held: nothing is pushed, the account copy stays deleted', async () => {
+  const server = serverWith(1, KEYS);
+  const env = makeEnv({ server, local: synced(KEYS, 1) });
+  await env.timers.advance(0);
+  assert.strictEqual((await env.t.deleteRemote()).ok, true);
+  const puts = server.puts.length;
+  env.t.useDialog(() => Promise.resolve('remove'));
+  (await env.logoutHandler()).afterLogout();
+  assert.strictEqual(server.puts.length, puts);
+  assert.strictEqual(server.doc, null);
+  assert.strictEqual(env.ls.getItem('meshcore-favorites'), null);
+});
+
 // M5 (final review): a hanging connection must not hold the logout dialog.
 test('logout dialog: a push that hangs counts as failed after 5 s', async () => {
   for (const choice of ['remove', 'keep']) {

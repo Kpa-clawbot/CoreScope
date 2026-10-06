@@ -582,13 +582,24 @@
   }
   var dialog = showDialog;
 
+  // unpushed says whether storage holds allowlisted values the stored
+  // baseline lacks. Storage is shared by every tab, so this sees a change
+  // another tab made and has not pushed yet. A hold means the account's
+  // copy was deleted and nothing changed since (a change ends the hold).
+  // Without a policy no write was watched yet, so nothing is pending.
+  function unpushed() {
+    if (!state.policy) return false;
+    refreshBase();
+    return !state.hold && !sameKeys(snapshot(), state.base);
+  }
+
   // flush pushes pending changes now. Resolves true when the account holds
   // everything this device has, false when the push failed or took longer
   // than FLUSH_TIMEOUT_MS (a hanging connection must not hold the logout).
   function flush() {
     clearTimeout(state.pushTimer);
     state.pushTimer = null;
-    if (!state.dirty) return Promise.resolve(true);
+    if (!unpushed()) return Promise.resolve(true);
     return new Promise(function (resolve) {
       var timer = setTimeout(function () {
         console.warn('[settings-sync] pending changes were not pushed within ' + FLUSH_TIMEOUT_MS / 1000 + ' s');
