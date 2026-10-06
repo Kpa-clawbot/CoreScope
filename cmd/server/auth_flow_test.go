@@ -208,3 +208,11 @@ func TestAuthActivatePasswordRateLimited(t *testing.T) {
 		t.Fatal("429 without Retry-After")
 	}
 }
+
+func TestAuthActivateDBErrorIs500(t *testing.T) {
+	f := newAuthFixture(t)
+	expectStatus(t, f.do("POST", "/api/auth/register", registerRequest{Email: "max@example.org", DisplayName: "Max", Password: pw}), 200)
+	tok := f.lastToken(t)
+	f.breakTable(t, "users")
+	expectStatus(t, f.do("POST", "/api/auth/activate", activateRequest{Token: tok, Password: pw}), 500)
+}

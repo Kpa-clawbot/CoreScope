@@ -107,6 +107,11 @@ func (s *Server) handleActivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, err := a.st.GetByID(uid)
+	if err != nil && !errors.Is(err, users.ErrNotFound) {
+		log.Printf("[users] activate: load user #%d: %v", uid, err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
 	if err != nil || u.Status != users.StatusPending {
 		writeError(w, http.StatusGone, "this account is already activated, log in instead")
 		return

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -167,4 +168,18 @@ func (f *authFixture) login(t *testing.T, email, password string) *client {
 	expectStatus(t, w, 200)
 	me := decode[meResponse](t, w)
 	return &client{cookie: sessionFrom(t, w), csrf: me.CSRFToken, me: me}
+}
+
+// breakTable renames a users.db table behind the store's back, so the next
+// store call that touches it fails with a DB error (not ErrNotFound).
+func (f *authFixture) breakTable(t *testing.T, table string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", f.srv.auth.set.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`ALTER TABLE ` + table + ` RENAME TO ` + table + `_broken`); err != nil {
+		t.Fatal(err)
+	}
 }
