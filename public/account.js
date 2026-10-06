@@ -11,9 +11,11 @@
   function shell(title, inner) {
     return '<div class="account-page"><div class="account-card"><h2>' + escapeHtml(title) + '</h2>' + inner + '</div></div>';
   }
+  // Inputs carry no name attribute: a native form submission (script not
+  // attached) then sends no field, so a password can never reach the URL.
   function field(id, label, type, autocomplete, extra) {
     return '<label class="account-field" for="' + id + '"><span>' + escapeHtml(label) + '</span>' +
-      '<input id="' + id + '" name="' + id + '" type="' + type + '" autocomplete="' + autocomplete + '" required' + (extra || '') + '></label>';
+      '<input id="' + id + '" type="' + type + '" autocomplete="' + autocomplete + '" required' + (extra || '') + '></label>';
   }
   function submitBtn(label, secondary) {
     return '<button type="submit" class="account-btn ' + (secondary ? 'account-btn-secondary' : 'account-btn-primary') + '">' + escapeHtml(label) + '</button>';
@@ -27,14 +29,14 @@
     el.classList.toggle('err', !ok);
   }
   function errText(r) { return (r.data && r.data.error) || ('Request failed (HTTP ' + r.status + ')'); }
-  function onSubmit(formId, fn) {
+  function onSubmit(formId, fn, msgId) {
     var f = document.getElementById(formId);
     if (!f) return;
     f.addEventListener('submit', function (e) {
       e.preventDefault();
       var btn = f.querySelector('button[type="submit"]');
       if (btn) btn.disabled = true;
-      Promise.resolve(fn(f)).catch(function () { say('Network error, try again.', false); })
+      Promise.resolve(fn(f)).catch(function () { say('Network error, try again.', false, msgId); })
         .then(function () { if (btn) btn.disabled = false; });
     });
   }
@@ -132,13 +134,17 @@
 
     activate: function (app) {
       var token = query().get('token') || '';
+      if (!token) {
+        app.innerHTML = shell('Activate your account', msgBox() + '<p class="account-links"><a href="#/account/login">Log in</a></p>');
+        say('This link is incomplete. Open the link from the mail again.', false);
+        return;
+      }
       app.innerHTML = shell('Activate your account',
         '<form id="activateForm" class="account-form" novalidate>' +
         '<p class="account-hint">Enter the password you chose when you registered.</p>' +
         field('actPassword', 'Your password', 'password', 'current-password') +
         submitBtn('Activate') + msgBox() + '</form>' +
         '<p class="account-links"><a href="#/account/login">Log in</a></p>');
-      if (!token) { say('This link is incomplete. Open the link from the mail again.', false); return; }
       onSubmit('activateForm', function () {
         return CSAuth.request('POST', '/api/auth/activate', { token: token, password: val('actPassword') }).then(function (r) {
           if (r.status === 401) { say('Wrong password for this account', false); return; }
@@ -200,20 +206,20 @@
           if (r.ok) CSAuth.setUser(r.data);
           say(r.ok ? 'Saved.' : errText(r), r.ok, 'profMsg');
         });
-      });
+      }, 'profMsg');
       onSubmit('pwForm', function (form) {
         return CSAuth.request('POST', '/api/account/password', { currentPassword: val('pwCurrent'), newPassword: val('pwNew') }).then(function (r) {
           if (r.ok) form.reset();
           say(r.ok ? r.data.message : errText(r), r.ok, 'pwMsg');
           if (r.ok) loadSessions();
         });
-      });
+      }, 'pwMsg');
       onSubmit('emailForm', function (form) {
         return CSAuth.request('POST', '/api/account/email', { newEmail: val('emailNew'), currentPassword: val('emailPw') }).then(function (r) {
           if (r.ok) form.reset();
           say(r.ok ? r.data.message : errText(r), r.ok, 'emailMsg');
         });
-      });
+      }, 'emailMsg');
       onSubmit('delForm', function () {
         if (!confirm('Delete your account permanently?')) return;
         return CSAuth.request('DELETE', '/api/account', { currentPassword: val('delPw') }).then(function (r) {
@@ -222,7 +228,7 @@
           CSAuth.notify('Your account was deleted.');
           location.hash = '#/home';
         });
-      });
+      }, 'delMsg');
 
       function loadSessions() {
         return CSAuth.request('GET', '/api/account/sessions').then(function (r) {
@@ -230,7 +236,7 @@
           if (!list) return;
           if (!r.ok) { say(errText(r), false, 'sessMsg'); return; }
           list.innerHTML = sessionsHtml(r.data);
-        });
+        }).catch(function () { say('Network error, try again.', false, 'sessMsg'); });
       }
       document.getElementById('sessList').addEventListener('click', function (e) {
         var id = e.target && e.target.getAttribute && e.target.getAttribute('data-sess');
@@ -238,7 +244,7 @@
         CSAuth.request('DELETE', '/api/account/sessions/' + encodeURIComponent(id)).then(function (r) {
           say(r.ok ? 'Device logged out.' : errText(r), r.ok, 'sessMsg');
           loadSessions();
-        });
+        }).catch(function () { say('Network error, try again.', false, 'sessMsg'); });
       });
       loadSessions();
     }

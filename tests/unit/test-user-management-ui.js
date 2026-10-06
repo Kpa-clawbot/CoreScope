@@ -226,8 +226,9 @@ function loadAccount(hash, routes) {
   let pages = {};
   const calls = [];
   const user = { current: null };
+  let override = null;
   const CSAuth = {
-    request(method, p, body) { calls.push({ method, p, body }); return Promise.resolve(routes(p, body)); },
+    request(method, p, body) { calls.push({ method, p, body }); return override ? override(method, p, body) : Promise.resolve(routes(p, body)); },
     setUser(u) { user.current = u; },
     user() { return user.current; },
     notify() {}, refreshMe() { return Promise.resolve(); },
@@ -237,7 +238,7 @@ function loadAccount(hash, routes) {
     escapeHtml: loadEscapeHtml(), registerPage(n, m) { pages[n] = m; }, console };
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/account.js'), 'utf8'), ctx);
-  return { doc, t: ctx.window.CSAccount._test, els, calls, loc, user, pages };
+  return { setRequest(f) { override = f; }, doc, t: ctx.window.CSAccount._test, els, calls, loc, user, pages };
 }
 const submitForm = async (env, formId) => {
   await env.els[formId].handlers.submit({ preventDefault() {} });
@@ -306,6 +307,44 @@ test('reset refuses mismatching passwords without a request', async () => {
   await submitForm(env, 'resetForm');
   assert.strictEqual(env.calls.length, 0);
   assert.strictEqual(env.els.accountMsg.textContent, 'The passwords do not match.');
+});
+
+test('activate without a token renders no form and no password input', () => {
+  const env = loadAccount('#/account/activate', () => ({}));
+  let html = '';
+  env.t.views.activate({ set innerHTML(v) { html = v; } });
+  assert(html.indexOf('<form') === -1 && html.indexOf('type="password"') === -1, html);
+  assert(html.indexOf('href="#/account/login"') !== -1);
+});
+
+test('no account input carries a name attribute (no native submit leak)', () => {
+  const env = loadAccount('#/account', () => ({}));
+  assert(!/<input[^>]* name=/.test(env.t.profileHtml({ email: 'a', role: 'user' })));
+  let html = '';
+  env.t.views.register({ set innerHTML(v) { html = v; } });
+  assert(!/<input[^>]* name=/.test(html));
+});
+
+test('a rejected fetch on a profile form shows the error in its own box', async () => {
+  const env = loadAccount('#/account', () => ({}));
+  env.user.current = { email: 'a@b.c', displayName: 'Ann', role: 'user' };
+  let n = 0;
+  env.calls.length = 0;
+  const req = () => (++n === 1 ? Promise.resolve({ ok: true, status: 200, data: [] }) : Promise.reject(new Error('net')));
+  env.setRequest(req);
+  env.t.views.profile({ set innerHTML(v) {} });
+  await new Promise((r) => setTimeout(r, 5));
+  await submitForm(env, 'pwForm');
+  assert.strictEqual(env.els.pwMsg.textContent, 'Network error, try again.');
+});
+
+test('a rejected sessions load shows the error in sessMsg', async () => {
+  const env = loadAccount('#/account', () => ({}));
+  env.user.current = { email: 'a@b.c', displayName: 'Ann', role: 'user' };
+  env.setRequest(() => Promise.reject(new Error('net')));
+  env.t.views.profile({ set innerHTML(v) {} });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.strictEqual(env.els.sessMsg.textContent, 'Network error, try again.');
 });
 
 test('profile view without a user redirects to login', () => {
