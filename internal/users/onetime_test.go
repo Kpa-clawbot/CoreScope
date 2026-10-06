@@ -119,3 +119,32 @@ func TestPruneStalePending(t *testing.T) {
 		t.Fatal("pending user with a live token was pruned")
 	}
 }
+
+func TestTokenUserDoesNotConsume(t *testing.T) {
+	st, clk := newTestStore(t)
+	u := mustCreate(t, st, "look@example.org", "Look")
+	raw, _ := st.IssueToken(u.ID, PurposeActivate, time.Hour, "")
+	for i := 0; i < 2; i++ {
+		uid, err := st.TokenUser(raw, PurposeActivate)
+		if err != nil || uid != u.ID {
+			t.Fatalf("TokenUser #%d = %d, %v", i, uid, err)
+		}
+	}
+	if _, err := st.TokenUser(raw, PurposeReset); !errors.Is(err, ErrTokenInvalid) {
+		t.Fatalf("purpose mismatch err = %v", err)
+	}
+	if _, err := st.TokenUser("not-a-token", PurposeActivate); !errors.Is(err, ErrTokenInvalid) {
+		t.Fatalf("unknown token err = %v", err)
+	}
+	if uid, _, err := st.ConsumeToken(raw, PurposeActivate); err != nil || uid != u.ID {
+		t.Fatalf("token burned by TokenUser: %d, %v", uid, err)
+	}
+	if _, err := st.TokenUser(raw, PurposeActivate); !errors.Is(err, ErrTokenInvalid) {
+		t.Fatalf("used token err = %v", err)
+	}
+	exp, _ := st.IssueToken(u.ID, PurposeReset, time.Hour, "")
+	clk.Advance(time.Hour)
+	if _, err := st.TokenUser(exp, PurposeReset); !errors.Is(err, ErrTokenExpired) {
+		t.Fatalf("expired err = %v", err)
+	}
+}

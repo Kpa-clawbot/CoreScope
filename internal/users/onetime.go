@@ -44,20 +44,19 @@ func (s *Store) IssueToken(userID int64, p Purpose, ttl time.Duration, newEmail 
 	return raw, tx.Commit()
 }
 
-// ConsumeToken validates and burns a token. A purpose mismatch returns
-// ErrTokenInvalid without burning it. Expired tokens return ErrTokenExpired.
-func (s *Store) ConsumeToken(raw string, p Purpose) (userID int64, newEmail string, err error) {
-	hash := HashToken(raw)
-	tx, err := s.db.Begin()
-	if err != nil {
-		return 0, "", err
-	}
-	defer tx.Rollback()
+// tokenQuerier is satisfied by *sql.DB and *sql.Tx.
+type tokenQuerier interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+// checkToken validates an unused, unexpired token of purpose p by hash
+// without changing anything.
+func (s *Store) checkToken(q tokenQuerier, hash string, p Purpose) (userID int64, newEmail string, err error) {
 	var purpose string
 	var expires int64
 	var ne sql.NullString
 	var used sql.NullInt64
-	err = tx.QueryRow(`SELECT user_id, purpose, new_email, expires_at, used_at FROM tokens WHERE token_hash = ?`, hash).
+	err = q.QueryRow(`SELECT user_id, purpose, new_email, expires_at, used_at FROM tokens WHERE token_hash = ?`, hash).
 		Scan(&userID, &purpose, &ne, &expires, &used)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, "", ErrTokenInvalid
@@ -68,11 +67,33 @@ func (s *Store) ConsumeToken(raw string, p Purpose) (userID int64, newEmail stri
 	if purpose != string(p) || used.Valid {
 		return 0, "", ErrTokenInvalid
 	}
-	now := unix(s.now())
-	if now >= expires {
+	if unix(s.now()) >= expires {
 		return 0, "", ErrTokenExpired
 	}
-	if err := expectOne(tx.Exec(`UPDATE tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL`, now, hash)); err != nil {
+	return userID, ne.String, nil
+}
+
+// TokenUser returns the user a token belongs to with the same checks as
+// ConsumeToken, but does not burn it.
+func (s *Store) TokenUser(raw string, p Purpose) (int64, error) {
+	uid, _, err := s.checkToken(s.db, HashToken(raw), p)
+	return uid, err
+}
+
+// ConsumeToken validates and burns a token. A purpose mismatch returns
+// ErrTokenInvalid without burning it. Expired tokens return ErrTokenExpired.
+func (s *Store) ConsumeToken(raw string, p Purpose) (userID int64, newEmail string, err error) {
+	hash := HashToken(raw)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, "", err
+	}
+	defer tx.Rollback()
+	userID, newEmail, err = s.checkToken(tx, hash, p)
+	if err != nil {
+		return 0, "", err
+	}
+	if err := expectOne(tx.Exec(`UPDATE tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL`, unix(s.now()), hash)); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return 0, "", ErrTokenInvalid
 		}
@@ -81,7 +102,7 @@ func (s *Store) ConsumeToken(raw string, p Purpose) (userID int64, newEmail stri
 	if err := tx.Commit(); err != nil {
 		return 0, "", err
 	}
-	return userID, ne.String, nil
+	return userID, newEmail, nil
 }
 
 // InvalidateTokens burns all of a user's unused tokens for purpose p.
