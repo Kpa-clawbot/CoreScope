@@ -155,8 +155,8 @@ func (s *Server) handleAdminDisable(w http.ResponseWriter, r *http.Request, acto
 	if t == nil || !s.guardRemoval(w, actor, t, false) {
 		return
 	}
-	if t.Status == users.StatusDisabled {
-		writeError(w, http.StatusConflict, "already disabled")
+	if t.Status != users.StatusActive {
+		writeError(w, http.StatusConflict, "only active accounts can be disabled; delete or activate a pending account instead")
 		return
 	}
 	if err := s.auth.st.SetStatus(t.ID, users.StatusDisabled); err != nil {

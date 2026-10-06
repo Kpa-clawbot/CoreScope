@@ -170,3 +170,17 @@ func TestAdminUnknownAndBadID(t *testing.T) {
 	expectStatus(t, f.do("POST", userPath(9999, "/disable"), nil, as(boss)), 404)
 	expectStatus(t, f.do("GET", "/api/admin/users/abc", nil, as(boss)), 400)
 }
+
+// A pending account must go through activation; disable then enable must not
+// be a way around it.
+func TestAdminCannotDisablePending(t *testing.T) {
+	f, boss, _ := adminFixture(t)
+	f.do("POST", "/api/auth/register", registerRequest{Email: "pend@example.org", DisplayName: "Pe", Password: pw})
+	p, _ := f.st.GetByEmail("pend@example.org")
+	expectStatus(t, f.do("POST", userPath(p.ID, "/disable"), nil, as(boss)), 409)
+	got, _ := f.st.GetByID(p.ID)
+	if got.Status != users.StatusPending {
+		t.Fatalf("status = %s, want pending", got.Status)
+	}
+	expectStatus(t, f.do("POST", userPath(p.ID, "/enable"), nil, as(boss)), 409)
+}
