@@ -88,13 +88,34 @@
   // by which point MeshConfigReady has resolved window.MC_CLIENT_RX_COVERAGE.
   var COVERAGE_ROUTE = { route: 'rx-coverage', hash: '#/rx-coverage', label: 'Coverage', ph: 'broadcast' };
 
+  // Optional user management (config `userManagement.enabled`). The top-nav
+  // account control is hidden at <=768px, so the entry lives here. The label
+  // follows the login state; see the cs-auth-changed listener below.
+  // !! Keep in sync with public/nav-drawer.js accountRoute().
+  function accountRoute() {
+    return window.CS_USER
+      ? { route: 'account', hash: '#/account', label: 'My account', ph: 'user-circle' }
+      : { route: 'account', hash: '#/account/login', label: 'Log in', ph: 'user-circle' };
+  }
+
   function moreRoutes() {
-    if (!window.MC_CLIENT_RX_COVERAGE) return MORE_ROUTES;
     var out = MORE_ROUTES.slice();
-    var after = out.findIndex(function (r) { return r.route === 'analytics'; }) + 1;
-    out.splice(after, 0, COVERAGE_ROUTE);
+    if (window.MC_CLIENT_RX_COVERAGE) {
+      var after = out.findIndex(function (r) { return r.route === 'analytics'; }) + 1;
+      out.splice(after, 0, COVERAGE_ROUTE);
+    }
+    if (window.MC_USER_MGMT) out.push(accountRoute());
     return out;
   }
+
+  window.addEventListener('cs-auth-changed', function () {
+    var a = document.querySelector('#' + SHEET_ID + ' [data-bottom-nav-more-route="account"]');
+    if (!a) return;
+    var r = accountRoute();
+    a.setAttribute('href', r.hash);
+    var lb = a.querySelector('.bottom-nav-sheet-label');
+    if (lb) lb.textContent = r.label;
+  });
 
   var SHEET_ID = 'bottomNavMoreSheet';
 

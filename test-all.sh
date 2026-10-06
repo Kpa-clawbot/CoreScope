@@ -189,6 +189,7 @@ node tests/unit/test-slideover-1056-rowsel-strict.js
 node tests/unit/test-top-routes-overlay.js
 node tests/unit/test-traces.js
 node tests/unit/test-url-state.js
+node tests/unit/test-user-management-ui.js
 node tests/unit/test-warmup-banner.js
 node tests/unit/test-ws-stale-watchdog-1074.js
 node tests/unit/test-xss-escape-sinks.js

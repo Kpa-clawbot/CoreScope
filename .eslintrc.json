@@ -12,6 +12,7 @@
     "CACHE_INVALIDATE_MS": "readonly",
     "CLIENT_CONFIG": "readonly",
     "CLIENT_TTL": "readonly",
+    "CSAuth": "readonly",
     "ChannelColorPicker": "readonly",
     "ChannelColors": "readonly",
     "ChannelDecrypt": "readonly",

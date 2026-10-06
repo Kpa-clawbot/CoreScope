@@ -1,0 +1,59 @@
+/* Optional user management: header control, account pages, admin table. */
+.nav-account-wrap { position: relative; }
+.nav-account-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 48px; min-width: 48px; padding: 6px 12px;
+  background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--nav-text-muted); font: inherit; font-size: 14px;
+  text-decoration: none; cursor: pointer; touch-action: manipulation; transition: background .15s, color .15s; }
+.nav-account-btn:hover { background: var(--nav-bg2); color: var(--nav-text); }
+.nav-account-label { max-width: 12ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); }
+.nav-account-menu { position: absolute; right: 0; top: calc(100% + 4px); min-width: 160px; z-index: 1000;
+  background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 4px 0; }
+.nav-account-menu[hidden] { display: none; }
+.nav-account-menu a, .nav-account-menu button { display: flex; align-items: center; width: 100%; text-align: left; padding: 8px 14px; min-height: 48px;
+  color: var(--text); background: none; border: 0; font: inherit; text-decoration: none; cursor: pointer; box-sizing: border-box; }
+.nav-account-menu a:hover, .nav-account-menu button:hover { background: var(--row-hover); }
+
+.account-page { display: flex; justify-content: center; padding: var(--space-md); }
+.account-card { width: 100%; max-width: 520px; background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
+.account-card h2 { margin-top: 0; }
+.account-card h3 { margin: 24px 0 8px; font-size: 1rem; }
+.account-form { display: flex; flex-direction: column; gap: 12px; }
+.account-field { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); color: var(--text-muted); }
+.account-field input { padding: 8px 10px; min-height: 48px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--input-bg); color: var(--text); font: inherit; box-sizing: border-box; }
+/* The global .btn-primary is white on --accent (2.75:1), so account forms use
+   their own buttons: --text-on-accent on --accent-strong, as .tab-btn.active does. */
+.account-btn { align-self: flex-start; min-height: 48px; padding: 8px 20px; border-radius: 6px; font: inherit; cursor: pointer; touch-action: manipulation; }
+.account-btn-primary { background: var(--accent-strong); color: var(--text-on-accent); border: 1px solid var(--accent-strong); }
+.account-btn-primary:hover { background: var(--palette-blue-700, #1d4ed8); }
+.account-btn-secondary { background: var(--surface-1); color: var(--text); border: 1px solid var(--border); }
+.account-btn-secondary:hover { background: var(--row-hover); }
+.account-hint { font-size: var(--fs-sm); color: var(--text-muted); margin: 0; }
+.account-msg { margin: 0; min-height: 1.2em; font-size: var(--fs-sm); }
+.account-msg.ok { color: var(--status-green-text); }
+.account-msg.err { color: var(--status-red-text); }
+.account-links { font-size: var(--fs-sm); }
+.account-links a { color: var(--link-color); }
+.account-sessions { list-style: none; padding: 0; margin: 0; }
+.account-sessions li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: var(--fs-sm); }
+
+.cs-auth-toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 2000; opacity: 0; pointer-events: none;
+  background: var(--card-bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; transition: opacity .2s; }
+.cs-auth-toast.visible { opacity: 1; }
+
+.um-page { padding: var(--space-md); }
+.um-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.um-filters input, .um-filters select { padding: 6px 8px; min-height: 48px; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); color: var(--text); box-sizing: border-box; }
+.um-table-wrap { overflow-x: auto; }
+.um-table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
+.um-table th, .um-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.um-table tr:hover td { background: var(--row-hover); }
+.um-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.um-actions button { min-height: 48px; padding: 4px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-1); color: var(--text); cursor: pointer; touch-action: manipulation; }
+.um-status, .um-chip { display: inline-block; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--border); white-space: nowrap; }
+.um-status-active, .um-chip-delivered, .um-chip-opened, .um-chip-clicked { color: var(--status-green-text); }
+.um-status-pending, .um-chip-sent, .um-chip-deferred, .um-chip-soft_bounce { color: var(--status-yellow-text); }
+.um-status-disabled, .um-chip-hard_bounce, .um-chip-invalid_email, .um-chip-blocked, .um-chip-spam, .um-chip-error, .um-chip-bouncing { color: var(--status-red-text); }
+.um-chip-unsubscribed { color: var(--text-muted); }
+.um-detail { margin-top: 16px; background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.um-detail ol { padding-left: 18px; }
+@media (max-width: 760px) { .um-col-optional { display: none; } }
