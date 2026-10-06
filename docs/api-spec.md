@@ -103,7 +103,7 @@ They return `total` (the unfiltered/filtered count before pagination).
 
 ## User management (optional)
 
-These routes are registered only when `userManagement.enabled` is true. When it is off they do not exist, and requests to them fall through to the SPA page (HTTP 200, HTML). The webhook route exists only when `mail.webhookSecret` is also set. Sessions use the `cs_session` cookie (HttpOnly, SameSite=Lax). Every state-changing request that authenticates with the cookie needs an `Origin` (or `Referer`) equal to `publicBaseUrl` and the header `X-CS-CSRF: <csrfToken from GET /api/auth/me>`. Errors are `{"error": "<message>"}`. Rate-limited calls answer `429` with `Retry-After`. Request bodies are JSON, limited to 16 KiB, unknown fields are rejected with `400`.
+These routes are registered only when `userManagement.enabled` is true. When it is off they do not exist, and requests to them fall through to the SPA page (HTTP 200, HTML). The webhook route exists only when `mail.webhookSecret` is also set. Sessions use the `cs_session` cookie (HttpOnly, SameSite=Lax). Every state-changing request that authenticates with the cookie needs an `Origin` (or `Referer`) equal to `publicBaseUrl` and the header `X-CS-CSRF: <csrfToken from GET /api/auth/me>`. Errors are `{"error": "<message>"}`. Rate-limited calls answer `429` with `Retry-After`. Request bodies are JSON. On every route except the webhook they are limited to 16 KiB and unknown fields are rejected with `400`; the webhook takes up to 256 KiB of Brevo's payload as is.
 
 | Method and path | Auth | Body and response |
 |---|---|---|
@@ -141,9 +141,11 @@ Error codes you can get on the routes above:
 | `400` | Validation failed (email, display name, password, role, filter, id) |
 | `401` | Not logged in, or wrong password on activate or login |
 | `403` | `"CSRF check failed"`, `"request origin not allowed"`, `"admin role required"`, or `"current password is incorrect"` (password change, email change, account delete) |
-| `409` | A state guard: `"only active accounts can be disabled; ..."`, role change on a pending account, disable or delete of yourself, a config admin or the last admin, enable of a non-disabled account |
+| `404` | `"user not found"` (admin `{id}` routes), `"mail not found"` (mail refresh), `"session not found"` (`DELETE /api/account/sessions/{id}`) |
+| `409` | A state guard: `"only active accounts can be disabled; ..."`, role change on a pending account, disable or delete of yourself, disable, delete or demotion of a config admin or the last admin, enable of a non-disabled account, `"this mail has no provider message id"` (mail refresh), `"account changed, try again"` (activate) |
 | `410` | Link expired, invalid or already used |
 | `429` | Rate limit; see `Retry-After` |
+| `502` | `"mail provider unavailable"` (mail refresh) |
 | `503` | `"mail could not be sent, try again later"` |
 
 With user management on, every endpoint that needs `X-API-Key` also accepts an admin session (plus the CSRF header for unsafe methods). A request that sends `X-API-Key` is judged on the key alone. `GET /api/config/client` gains `"userManagement": {"enabled": true}` only when the feature is on.

@@ -46,7 +46,7 @@ incomplete, and the log says what is missing.
 | `publicBaseUrl` | The address visitors use. Every mail link is built from it, never from the request. It must match the browser origin, because state-changing requests from another origin are refused. |
 | `dbPath` | Where accounts are stored. Default: `users.db` next to the analyzer database. |
 | `sessionDays` | Login lifetime, extended while in use. Default 30, maximum 365. |
-| `trustedProxies` | CIDRs of your reverse proxy, so login rate limits can see real client IPs. Without it, limits apply per address only. |
+| `trustedProxies` | CIDRs of your reverse proxy, so the per-IP login limits see real client IPs. Without it, behind a proxy every client shares the proxy's IP for the per-IP limits (they are switched off when that IP is loopback or private). Per-address and per-account limits apply either way. |
 | `mail.webhookSecret` | Enables delivery status (below). At least 16 characters. |
 
 ### 3. The first admin
@@ -84,8 +84,9 @@ database, and protect it the same way. Deleting it removes all accounts and noth
 ## For users
 
 - **Register:** *Log in, Create an account*, then click the link in the mail within 48
-  hours and enter your password to finish. Registering the same address again replaces
-  the password and sends a new link.
+  hours and enter your password to finish. Registering a pending (not yet activated)
+  address again replaces the password and sends a new link. Registering an address that
+  is already activated changes nothing; its owner gets a notice mail instead.
 - **Forgot password:** *Log in, Forgot password?* The link works once, for one hour, and
   logs out all your devices.
 - **My account:** change your display name, password or address, see your logged-in
