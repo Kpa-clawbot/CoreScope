@@ -31,7 +31,8 @@ function makeEnv(routes) {
   const mkEl = (id) => ({
     id: id || '', className: '', innerHTML: '', textContent: '', hidden: false,
     classList: { add() {}, remove() {} },
-    setAttribute() {}, addEventListener() {}, appendChild() {},
+    style: {}, listeners: {}, setAttribute() {}, appendChild() {},
+    addEventListener(t, f) { this.listeners[t] = f; },
   });
   const right = { insertBefore(el) { els[el.id] = el; } };
   const doc = {
@@ -48,7 +49,8 @@ function makeEnv(routes) {
   };
   const calls = [];
   const win = {
-    addEventListener() {},
+    addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); },
+    innerWidth: 1000, listeners: {},
     dispatchEvent(e) { events.push(e); },
     MC_USER_MGMT: { enabled: true },
     MeshConfigReady: Promise.resolve(),
@@ -88,6 +90,25 @@ test('inert when the server does not advertise userManagement', async () => {
   await win.CSAuth.ready();
   assert.strictEqual(win.CSAuth.isEnabled(), false);
   assert.strictEqual(calls.length, 0);
+});
+
+test('account menu opens as fixed, positioned from the toggle rect, and follows a resize', async () => {
+  const env = makeEnv((u) => u === '/api/auth/me' ? { status: 200, body: ME } : null);
+  await env.win.CSAuth.ready();
+  const toggle = { id: 'accountToggle', listeners: {}, setAttribute() {}, addEventListener(t, f) { this.listeners[t] = f; },
+    getBoundingClientRect: () => ({ bottom: 50, right: 900 }) };
+  const menu = { id: 'accountMenu', hidden: true, style: {}, listeners: {}, addEventListener() {} };
+  env.els.accountToggle = toggle; env.els.accountMenu = menu; env.els.accountLogout = { addEventListener() {} };
+  env.win.CSAuth._test.renderControl();
+  toggle.listeners.click({ stopPropagation() {} });
+  assert.strictEqual(menu.hidden, false);
+  assert.strictEqual(menu.style.top, '54px');
+  assert.strictEqual(menu.style.right, '100px');
+  assert.strictEqual(menu.style.left, 'auto');
+  toggle.getBoundingClientRect = () => ({ bottom: 60, right: 800 });
+  env.win.listeners.resize.forEach((f) => f());
+  assert.strictEqual(menu.style.top, '64px');
+  assert.strictEqual(menu.style.right, '200px');
 });
 
 test('login state is loaded from /api/auth/me and announced', async () => {

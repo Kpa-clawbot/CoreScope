@@ -5,7 +5,7 @@
   text-decoration: none; cursor: pointer; touch-action: manipulation; transition: background .15s, color .15s; }
 .nav-account-btn:hover { background: var(--nav-bg2); color: var(--nav-text); }
 .nav-account-label { max-width: 12ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); }
-.nav-account-menu { position: absolute; right: 0; top: calc(100% + 4px); min-width: 160px; z-index: 1000;
+.nav-account-menu { position: fixed; right: 0; top: 100%; min-width: 160px; z-index: 1200;
   background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 4px 0; }
 .nav-account-menu[hidden] { display: none; }
 .nav-account-menu a, .nav-account-menu button { display: flex; align-items: center; width: 100%; text-align: left; padding: 8px 14px; min-height: 48px;

@@ -80,6 +80,17 @@
     if (m && !m.hidden) { m.hidden = true; if (b) b.setAttribute('aria-expanded', 'false'); }
   }
 
+  // The menu is position:fixed (.top-nav clips overflow); place it under the toggle, like the More menu (#1406).
+  function positionMenu() {
+    var m = document.getElementById('accountMenu');
+    var b = document.getElementById('accountToggle');
+    if (!m || !b) return;
+    var r = b.getBoundingClientRect();
+    m.style.top = (r.bottom + 4) + 'px';
+    m.style.right = (window.innerWidth - r.right) + 'px';
+    m.style.left = 'auto';
+  }
+
   function renderControl() {
     if (!state.enabled) return;
     var right = document.querySelector('.top-nav .nav-right');
@@ -109,6 +120,7 @@
     btn.addEventListener('click', function (e) {
       e.stopPropagation();
       var open = menu.hidden;
+      if (open) positionMenu();
       menu.hidden = !open;
       btn.setAttribute('aria-expanded', String(open));
     });
@@ -121,6 +133,10 @@
   }
 
   document.addEventListener('click', closeMenu);
+  window.addEventListener('resize', function () {
+    var m = document.getElementById('accountMenu');
+    if (m && !m.hidden) positionMenu();
+  });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeMenu(); });
 
   state.ready = Promise.resolve(window.MeshConfigReady).then(function () {
