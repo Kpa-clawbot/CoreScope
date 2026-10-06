@@ -109,6 +109,8 @@ async function registerAndActivate(page, email, name) {
     await user.goto(BASE + '/#/account');
     await user.waitForSelector('#profileForm');
     await user.click('#accountPageLogout');
+    // Settings sync is active for a logged-in user: logout asks keep or remove.
+    await user.click('.cs-dialog [data-choice="keep"]');
     await user.waitForSelector('#loginForm');
     assert(await user.evaluate(() => location.hash) === '#/account/login', 'not on the login view after logout');
     assert(await user.evaluate(() => window.CS_USER === null), 'client still holds the user');

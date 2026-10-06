@@ -38,14 +38,6 @@
     return '<button type="submit" class="account-btn ' + (secondary ? 'account-btn-secondary' : 'account-btn-primary') + '">' + escapeHtml(label) + '</button>';
   }
   function msgBox(id) { return '<p class="account-msg" id="' + (id || 'accountMsg') + '" role="status" aria-live="polite"></p>'; }
-  function say(text, ok, id) {
-    var el = document.getElementById(id || 'accountMsg');
-    if (!el) return;
-    el.textContent = text;
-    el.classList.toggle('ok', !!ok);
-    el.classList.toggle('err', !ok);
-  }
-  function errText(r) { return (r.data && r.data.error) || ('Request failed (HTTP ' + r.status + ')'); }
   function onSubmit(formId, fn, msgId) {
     var f = document.getElementById(formId);
     if (!f) return;
@@ -53,7 +45,7 @@
       e.preventDefault();
       var btn = f.querySelector('button[type="submit"]');
       if (btn) btn.disabled = true;
-      Promise.resolve(fn(f)).catch(function () { say('Network error, try again.', false, msgId); })
+      Promise.resolve(fn(f)).catch(function () { CSAuth.say(msgId || 'accountMsg', 'Network error, try again.', false); })
         .then(function () { if (btn) btn.disabled = false; });
     });
   }
@@ -118,6 +110,7 @@
       field('emailPw', 'Current password', 'password', 'current-password') +
       submitBtn('Change address') + msgBox('emailMsg') + '</form>' +
       '<h3>Devices</h3><ul class="account-sessions" id="sessList"></ul>' + msgBox('sessMsg') +
+      (window.CSSettingsSync ? '<h3>Settings sync</h3><div id="syncSection"></div>' : '') +
       '<h3>Delete account</h3><form id="delForm" class="account-form" novalidate>' +
       '<p class="account-hint">This removes your account permanently.</p>' +
       field('delPw', 'Current password', 'password', 'current-password') +
@@ -137,11 +130,11 @@
   function tokenView(app, title, view, path, okText, renew) {
     var token = takeToken(view);
     app.innerHTML = shell(title, msgBox() + '<p class="account-links"><a href="#/account/login">Log in</a></p>');
-    if (!token) { say('This link is incomplete. Open the link from the mail again.', false); return; }
-    say('Working…', true);
+    if (!token) { CSAuth.say('accountMsg', 'This link is incomplete. Open the link from the mail again.', false); return; }
+    CSAuth.say('accountMsg', 'Working…', true);
     return CSAuth.request('POST', path, { token: token }).then(function (r) {
-      if (!r.ok) { say(errText(r), false); if (renew) showGone(r, renew.href, renew.label); return r; }
-      say(okText || (r.data && r.data.message) || 'Done.', true);
+      if (!r.ok) { CSAuth.say('accountMsg', CSAuth.errText(r), false); if (renew) showGone(r, renew.href, renew.label); return r; }
+      CSAuth.say('accountMsg', okText || (r.data && r.data.message) || 'Done.', true);
       return r;
     });
   }
@@ -159,7 +152,7 @@
         '<p class="account-links"><a href="#/account/forgot">Forgot password?</a> · <a href="#/account/register">Create an account</a></p>');
       onSubmit('loginForm', function () {
         return CSAuth.request('POST', '/api/auth/login', { email: val('loginEmail'), password: val('loginPassword') }).then(function (r) {
-          if (!r.ok) { say(errText(r), false); return; }
+          if (!r.ok) { CSAuth.say('accountMsg', CSAuth.errText(r), false); return; }
           CSAuth.setUser(r.data);
           location.hash = '#/account';
         });
@@ -180,7 +173,7 @@
         return CSAuth.request('POST', '/api/auth/register', {
           email: email, displayName: val('regName'), password: val('regPassword')
         }).then(function (r) {
-          if (!r.ok) { say(errText(r), false); return; }
+          if (!r.ok) { CSAuth.say('accountMsg', CSAuth.errText(r), false); return; }
           goCheckMail('register', email);
         });
       });
@@ -196,7 +189,7 @@
       var token = takeToken('activate');
       if (!token) {
         app.innerHTML = shell('Activate your account', msgBox() + '<p class="account-links"><a href="#/account/login">Log in</a></p>');
-        say('This link is incomplete. Open the link from the mail again.', false);
+        CSAuth.say('accountMsg', 'This link is incomplete. Open the link from the mail again.', false);
         return;
       }
       app.innerHTML = shell('Activate your account',
@@ -207,14 +200,14 @@
         '<p class="account-links"><a href="#/account/login">Log in</a></p>');
       onSubmit('activateForm', function () {
         return CSAuth.request('POST', '/api/auth/activate', { token: token, password: val('actPassword') }).then(function (r) {
-          if (r.status === 401) { say('Wrong password for this account', false); return; }
+          if (r.status === 401) { CSAuth.say('accountMsg', 'Wrong password for this account', false); return; }
           if (!r.ok) {
-            say(errText(r), false);
+            CSAuth.say('accountMsg', CSAuth.errText(r), false);
             // An already active account needs a login, not a new registration.
-            if (!/already activated/i.test(errText(r))) showGone(r, '#/account/register', 'Register again to get a new link');
+            if (!/already activated/i.test(CSAuth.errText(r))) showGone(r, '#/account/register', 'Register again to get a new link');
             return;
           }
-          say('Your account is active. You are logged in.', true);
+          CSAuth.say('accountMsg', 'Your account is active. You are logged in.', true);
           CSAuth.setUser(r.data);
           location.hash = '#/account';
         });
@@ -229,7 +222,7 @@
       onSubmit('forgotForm', function () {
         var email = val('forgotEmail');
         return CSAuth.request('POST', '/api/auth/forgot', { email: email }).then(function (r) {
-          if (!r.ok) { say(errText(r), false); return; }
+          if (!r.ok) { CSAuth.say('accountMsg', CSAuth.errText(r), false); return; }
           goCheckMail('forgot', email);
         });
       });
@@ -244,9 +237,9 @@
         submitBtn('Set password') + msgBox() + '</form>' +
         '<p class="account-links"><a href="#/account/login">Log in</a></p>');
       onSubmit('resetForm', function () {
-        if (val('resetPassword') !== val('resetPassword2')) { say('The passwords do not match.', false); return; }
+        if (val('resetPassword') !== val('resetPassword2')) { CSAuth.say('accountMsg', 'The passwords do not match.', false); return; }
         return CSAuth.request('POST', '/api/auth/reset', { token: token, password: val('resetPassword') }).then(function (r) {
-          say(r.ok ? r.data.message : errText(r), r.ok);
+          CSAuth.say('accountMsg', r.ok ? r.data.message : CSAuth.errText(r), r.ok);
           // The reset ended every session, this browser's included.
           if (r.ok) CSAuth.setUser(null);
           if (!r.ok) showGone(r, '#/account/forgot', 'Send a new link');
@@ -267,36 +260,37 @@
       shown.userId = u.id;
       app.innerHTML = profileHtml(u);
       document.getElementById('profName').value = u.displayName;
+      if (window.CSSettingsSync) window.CSSettingsSync.mountSection(document.getElementById('syncSection'));
 
       document.getElementById('accountPageLogout').addEventListener('click', function () {
         return CSAuth.logout('#/account/login').then(function (r) {
-          if (!r.ok) say(errText(r), false, 'logoutMsg');
-        }, function () { say('Network error, try again.', false, 'logoutMsg'); });
+          if (!r.ok && !r.cancelled) CSAuth.say('logoutMsg', CSAuth.errText(r), false);
+        }, function () { CSAuth.say('logoutMsg', 'Network error, try again.', false); });
       });
 
       onSubmit('profileForm', function () {
         return CSAuth.request('PATCH', '/api/account', { displayName: val('profName') }).then(function (r) {
           if (r.ok) CSAuth.setUser(r.data);
-          say(r.ok ? 'Saved.' : errText(r), r.ok, 'profMsg');
+          CSAuth.say('profMsg', r.ok ? 'Saved.' : CSAuth.errText(r), r.ok);
         });
       }, 'profMsg');
       onSubmit('pwForm', function (form) {
         return CSAuth.request('POST', '/api/account/password', { currentPassword: val('pwCurrent'), newPassword: val('pwNew') }).then(function (r) {
           if (r.ok) form.reset();
-          say(r.ok ? r.data.message : errText(r), r.ok, 'pwMsg');
+          CSAuth.say('pwMsg', r.ok ? r.data.message : CSAuth.errText(r), r.ok);
           if (r.ok) loadSessions();
         });
       }, 'pwMsg');
       onSubmit('emailForm', function (form) {
         return CSAuth.request('POST', '/api/account/email', { newEmail: val('emailNew'), currentPassword: val('emailPw') }).then(function (r) {
           if (r.ok) form.reset();
-          say(r.ok ? r.data.message : errText(r), r.ok, 'emailMsg');
+          CSAuth.say('emailMsg', r.ok ? r.data.message : CSAuth.errText(r), r.ok);
         });
       }, 'emailMsg');
       onSubmit('delForm', function () {
         if (!confirm('Delete your account permanently?')) return;
         return CSAuth.request('DELETE', '/api/account', { currentPassword: val('delPw') }).then(function (r) {
-          if (!r.ok) { say(errText(r), false, 'delMsg'); return; }
+          if (!r.ok) { CSAuth.say('delMsg', CSAuth.errText(r), false); return; }
           CSAuth.setUser(null);
           CSAuth.notify('Your account was deleted.');
           location.hash = '#/home';
@@ -307,17 +301,17 @@
         return CSAuth.request('GET', '/api/account/sessions').then(function (r) {
           var list = document.getElementById('sessList');
           if (!list) return;
-          if (!r.ok) { say(errText(r), false, 'sessMsg'); return; }
+          if (!r.ok) { CSAuth.say('sessMsg', CSAuth.errText(r), false); return; }
           list.innerHTML = sessionsHtml(r.data);
-        }).catch(function () { say('Network error, try again.', false, 'sessMsg'); });
+        }).catch(function () { CSAuth.say('sessMsg', 'Network error, try again.', false); });
       }
       document.getElementById('sessList').addEventListener('click', function (e) {
         var id = e.target && e.target.getAttribute && e.target.getAttribute('data-sess');
         if (!id) return;
         CSAuth.request('DELETE', '/api/account/sessions/' + encodeURIComponent(id)).then(function (r) {
-          say(r.ok ? 'Device logged out.' : errText(r), r.ok, 'sessMsg');
+          CSAuth.say('sessMsg', r.ok ? 'Device logged out.' : CSAuth.errText(r), r.ok);
           loadSessions();
-        }).catch(function () { say('Network error, try again.', false, 'sessMsg'); });
+        }).catch(function () { CSAuth.say('sessMsg', 'Network error, try again.', false); });
       });
       loadSessions();
     }

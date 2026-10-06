@@ -49,17 +49,38 @@
     window.dispatchEvent(new CustomEvent('cs-auth-changed', { detail: state.user }));
   }
 
+  // say shows text in the message box id (account pages, settings sync).
+  function say(id, text, ok) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = text;
+    el.classList.toggle('ok', !!ok);
+    el.classList.toggle('err', !ok);
+  }
+  function errText(r) { return (r.data && r.data.error) || ('Request failed (HTTP ' + r.status + ')'); }
+
+  // An optional handler (settings-sync.js) runs first: it may cancel the
+  // logout or hand back afterLogout, which runs once the server ended the
+  // session and before the user is cleared.
+  var logoutHandler = null;
+  function setLogoutHandler(fn) { logoutHandler = fn; }
+
   // logout ends the session on the server. Only when that succeeded does it
   // move to next and then clear the user, so pages listening for
   // 'cs-auth-changed' already see the new view. A refusal keeps the user
-  // and is returned for the caller to show.
+  // and is returned for the caller to show; a cancel returns cancelled.
   function logout(next) {
-    return request('POST', '/api/auth/logout').then(function (r) {
-      if (r.ok) {
-        location.hash = next;
-        setUser(null);
-      }
-      return r;
+    return Promise.resolve(logoutHandler ? logoutHandler() : null).then(function (h) {
+      h = h || {};
+      if (h.cancel) return { ok: false, cancelled: true, status: 0, data: {} };
+      return request('POST', '/api/auth/logout').then(function (r) {
+        if (r.ok) {
+          if (h.afterLogout) h.afterLogout();
+          location.hash = next;
+          setUser(null);
+        }
+        return r;
+      });
     });
   }
 
@@ -127,7 +148,7 @@
     menu.addEventListener('click', closeMenu);
     document.getElementById('accountLogout').addEventListener('click', function () {
       logout('#/home').then(function (r) {
-        if (!r.ok) notify((r.data && r.data.error) || ('Logout failed (HTTP ' + r.status + ')'));
+        if (!r.ok && !r.cancelled) notify((r.data && r.data.error) || ('Logout failed (HTTP ' + r.status + ')'));
       }, function () { notify('Network error, try again.'); });
     });
   }
@@ -150,6 +171,9 @@
     request: request,
     refreshMe: refreshMe,
     logout: logout,
+    setLogoutHandler: setLogoutHandler,
+    say: say,
+    errText: errText,
     setUser: setUser,
     notify: notify,
     ready: function () { return state.ready; },

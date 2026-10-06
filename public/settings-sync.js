@@ -178,7 +178,7 @@
     rawSet(REV_KEY, String(rev));
   }
 
-  function setStatus(s) { state.status = s; }
+  function setStatus(s) { state.status = s; renderStatus(); }
 
   function watched(storage, k) {
     return state.active && !!state.policy && storage === window.localStorage && !!state.policy.byKey[k];
@@ -405,6 +405,7 @@
     state.blocked = null;
     state.backoff = BACKOFF_MIN_MS;
     install();
+    window.CSAuth.setLogoutHandler(onLogout);
     document.addEventListener('visibilitychange', onVisible);
     state.pullTimer = setInterval(function () { if (document.visibilityState === 'visible') pull(); }, PULL_EVERY_MS);
     return pull();
@@ -419,10 +420,160 @@
     state.pushTimer = state.retryTimer = state.pullTimer = null;
     document.removeEventListener('visibilitychange', onVisible);
     uninstall();
+    window.CSAuth.setLogoutHandler(null);
     state.policy = null;
     state.userId = null;
     state.pushing = null;
     setStatus('idle');
+  }
+
+  // ── Dialog, logout and the account-page section ──
+
+  // showDialog uses the app's modal pattern (.modal-overlay + .modal, as
+  // the BYOP dialog in packets.js): role=dialog, focus on the first choice,
+  // Tab trapped, Escape or a backdrop click dismiss. Resolves with the
+  // chosen id, or null when dismissed.
+  function showDialog(opts) {
+    return new Promise(function (resolve) {
+      var prev = document.activeElement;
+      var overlay = document.createElement('div');
+      overlay.className = 'modal-overlay cs-dialog-overlay';
+      overlay.innerHTML = '<div class="modal cs-dialog" role="dialog" aria-modal="true" aria-labelledby="csDialogTitle" aria-describedby="csDialogText">' +
+        '<h3 id="csDialogTitle">' + escapeHtml(opts.title) + '</h3>' +
+        '<div id="csDialogText">' + opts.text.map(function (t) { return '<p class="account-hint">' + escapeHtml(t) + '</p>'; }).join('') + '</div>' +
+        '<div class="cs-dialog-actions">' + opts.choices.map(function (c) {
+          return '<button type="button" class="account-btn ' + (c.primary ? 'account-btn-primary' : 'account-btn-secondary') +
+            '" data-choice="' + escapeHtml(c.id) + '">' + escapeHtml(c.label) + '</button>';
+        }).join('') + '</div></div>';
+      document.body.appendChild(overlay);
+      var buttons = overlay.querySelectorAll('button');
+      function close(choice) {
+        overlay.remove();
+        if (prev && prev.focus) prev.focus();
+        resolve(choice);
+      }
+      overlay.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(null); return; }
+        if (e.key !== 'Tab') return;
+        var first = buttons[0], last = buttons[buttons.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      });
+      overlay.addEventListener('click', function (e) {
+        var btn = e.target.closest && e.target.closest('[data-choice]');
+        if (btn) close(btn.getAttribute('data-choice'));
+        else if (e.target === overlay) close(null);
+      });
+      buttons[0].focus();
+    });
+  }
+  var dialog = showDialog;
+
+  // flush pushes pending changes now. Resolves true when the account holds
+  // everything this device has.
+  function flush() {
+    clearTimeout(state.pushTimer);
+    state.pushTimer = null;
+    if (!state.dirty) return Promise.resolve(true);
+    return push().then(function (ok) { return ok && !state.dirty; });
+  }
+
+  // removeLocal deletes the synced keys in list and the baseline. Channel
+  // keys and the API key are never on the allowlist, so they stay.
+  function removeLocal(list) {
+    list.forEach(function (e) { rawRemove(e.key); });
+    rawRemove(BASE_KEY);
+    rawRemove(REV_KEY);
+  }
+
+  var LOGOUT_TEXT = [
+    'Your settings stay saved in your account.',
+    'Channel keys are never synced and stay on this device. They are not removed, because no copy exists anywhere else.'
+  ];
+
+  // onLogout is CSAuth's logout handler while active (see auth.js logout).
+  function onLogout() {
+    return dialog({
+      title: 'Log out',
+      text: LOGOUT_TEXT,
+      choices: [
+        { id: 'keep', label: 'Keep my settings on this device', primary: true },
+        { id: 'remove', label: 'Remove my settings from this device' },
+        { id: 'cancel', label: 'Cancel' }
+      ]
+    }).then(function (choice) {
+      if (choice !== 'keep' && choice !== 'remove') return { cancel: true };
+      return flush().then(function (saved) {
+        if (choice === 'keep') return {};
+        if (!saved || !state.policy) {
+          // Removing now would lose changes that exist nowhere else.
+          return { afterLogout: function () { window.CSAuth.notify('Your latest settings could not be saved to your account, so they stay on this device.'); } };
+        }
+        var list = state.policy.list;
+        return { afterLogout: function () { removeLocal(list); } };
+      });
+    });
+  }
+
+  // deleteRemote removes the account's copy; this device keeps its values
+  // and its next change starts a new document.
+  function deleteRemote() {
+    return window.CSAuth.request('DELETE', '/api/account/settings').then(function (r) {
+      if (r.ok) {
+        clearTimeout(state.pushTimer);
+        state.pushTimer = null;
+        state.dirty = false;
+        saveBase({}, 0, true);
+        setStatus('held');
+      }
+      return r;
+    });
+  }
+
+  function statusText() {
+    switch (state.status) {
+      case 'ok': return 'Last synced ' + state.lastSyncedAt.toLocaleString();
+      case 'syncing': return 'Syncing…';
+      case 'retrying': return 'Not synced: retrying';
+      case 'too-large': return 'Not synced: your settings are larger than your account can hold. Largest: ' + state.tooLarge.join(', ');
+      case 'rejected': return 'Not synced: the server refused your settings. Reload the page to try again.';
+      case 'held': return 'No settings saved in your account. Your next change starts a new copy.';
+      default: return 'Not synced yet';
+    }
+  }
+
+  function renderStatus() {
+    var el = document.getElementById('syncStatus');
+    if (!el) return;
+    el.textContent = statusText();
+    el.classList.toggle('ok', state.status === 'ok');
+    el.classList.toggle('err', state.status === 'retrying' || state.status === 'too-large' || state.status === 'rejected');
+  }
+
+  function mountSection(el) {
+    el.innerHTML =
+      '<p class="account-msg" id="syncStatus" role="status" aria-live="polite"></p>' +
+      '<div class="account-actions">' +
+      '<button type="button" id="syncNow" class="account-btn account-btn-secondary">Sync now</button>' +
+      '<button type="button" id="syncDelete" class="account-btn account-btn-secondary">Delete synced settings from my account</button>' +
+      '</div>' +
+      '<p class="account-hint">Synced: your nodes, favorites, theme and customizer settings, saved packet filters, and the filter, sort and view choices of each page.</p>' +
+      '<p class="account-hint">Not synced: channel keys and decrypted messages, the API key, panel and column sizes, collapsed panels and map positions.</p>' +
+      '<p class="account-msg" id="syncMsg" role="status" aria-live="polite"></p>';
+    renderStatus();
+    document.getElementById('syncNow').addEventListener('click', function () { return syncNow(); });
+    document.getElementById('syncDelete').addEventListener('click', function () {
+      return dialog({
+        title: 'Delete synced settings',
+        text: ['This deletes the copy of your settings stored in your account. The settings on this device stay. Your next change starts a new copy.'],
+        choices: [{ id: 'delete', label: 'Delete synced settings', primary: true }, { id: 'cancel', label: 'Cancel' }]
+      }).then(function (choice) {
+        if (choice !== 'delete') return;
+        return deleteRemote().then(function (r) {
+          window.CSAuth.say('syncMsg', r.ok ? 'Synced settings deleted from your account.' : window.CSAuth.errText(r), r.ok);
+        }, function () { window.CSAuth.say('syncMsg', 'Network error, try again.', false); });
+      });
+    });
   }
 
   window.addEventListener('cs-auth-changed', function (e) {
@@ -433,7 +584,12 @@
   window.CSAuth.ready().then(function (u) { if (u && window.CSAuth.isEnabled()) activate(u); });
 
   window.CSSettingsSync = {
+    mountSection: mountSection,
     syncNow: syncNow,
-    _test: { mergeDocs: mergeDocs, state: state, activate: activate, deactivate: deactivate, pull: pull, push: push, midEdit: midEdit }
+    _test: {
+      mergeDocs: mergeDocs, state: state, activate: activate, deactivate: deactivate, pull: pull, push: push,
+      midEdit: midEdit, flush: flush, onLogout: onLogout, deleteRemote: deleteRemote, statusText: statusText,
+      showDialog: showDialog, useDialog: function (fn) { dialog = fn; }
+    }
   };
 })();

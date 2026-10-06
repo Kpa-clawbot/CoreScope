@@ -76,3 +76,8 @@ a.account-btn { display: inline-flex; align-items: center; text-decoration: none
   .um-filters input, .um-filters select { min-height: 36px; padding: 3px 8px; }
   .um-actions button { min-height: 36px; padding: 2px 12px; }
 }
+
+/* Settings sync dialogs (settings-sync.js) on the shared .modal. */
+.cs-dialog { display: flex; flex-direction: column; gap: 8px; color: var(--text); }
+.cs-dialog h3 { margin: 0; }
+.cs-dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }

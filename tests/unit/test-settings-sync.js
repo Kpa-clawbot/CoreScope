@@ -2,6 +2,7 @@
  * The real file runs in a vm sandbox with a fake Storage (a real
  * prototype, so the module's Storage.prototype wrap is exercised), a fake
  * CSAuth backed by a fake server, and fake timers. Tests run one by one. */
+/* global setImmediate */
 'use strict';
 const vm = require('vm');
 const fs = require('fs');
@@ -24,6 +25,16 @@ function loadEscapeHtml() {
   const m = src.match(/function escapeHtml\(s\) \{[\s\S]*?\n\}/);
   assert(m, 'escapeHtml not found in app.js');
   return vm.runInNewContext('(' + m[0].replace(/^function escapeHtml/, 'function') + ')');
+}
+
+// CSAuth.say and CSAuth.errText come from the real auth.js, bound to ctx
+// (say reads ctx.document).
+function loadAuthHelpers(ctx) {
+  const src = fs.readFileSync(path.join(ROOT, 'public/auth.js'), 'utf8');
+  const say = src.match(/function say\(id, text, ok\) \{[\s\S]*?\n  \}/);
+  const err = src.match(/function errText\(r\) \{.*\}/);
+  assert(say && err, 'say/errText not found in auth.js');
+  return { say: vm.runInContext('(' + say[0] + ')', ctx), errText: vm.runInContext('(' + err[0] + ')', ctx) };
 }
 
 function fakeTimers() {
@@ -90,6 +101,26 @@ function fakeServer() {
 
 const AUTO_IDS = ['syncStatus', 'syncNow', 'syncDelete', 'syncMsg'];
 
+// fakeOverlay is the element showDialog creates. Its buttons are read back
+// from the rendered HTML; focus() moves doc.activeElement.
+function fakeOverlay(doc) {
+  const node = { className: '', innerHTML: '', handlers: {}, removed: false, buttons: null };
+  node.addEventListener = (t, f) => { node.handlers[t] = f; };
+  node.remove = () => { node.removed = true; };
+  node.closest = () => null;
+  node.querySelectorAll = () => {
+    if (!node.buttons) {
+      node.buttons = [...node.innerHTML.matchAll(/data-choice="([^"]*)"/g)].map((m) => {
+        const b = { getAttribute: () => m[1], focus() { doc.activeElement = b; } };
+        b.closest = () => b;
+        return b;
+      });
+    }
+    return node.buttons;
+  };
+  return node;
+}
+
 // makeEnv loads the real module. opts: local {key: raw}, server,
 // user (default {id: 7}; null = logged out), enabled (default true), hash,
 // customizerReady (default true: the customizer finished its init).
@@ -137,6 +168,9 @@ function makeEnv(opts) {
   };
   const doc = {
     visibilityState: 'visible',
+    activeElement: null,
+    body: { children: [], appendChild(n) { this.children.push(n); } },
+    createElement() { return fakeOverlay(doc); },
     addEventListener(t, f) { docListeners[t] = f; },
     removeEventListener(t, f) { if (docListeners[t] === f) delete docListeners[t]; },
     getElementById(id) { return els[id] || (AUTO_IDS.indexOf(id) !== -1 ? (els[id] = mkEl(id)) : null); },
@@ -151,11 +185,12 @@ function makeEnv(opts) {
     setInterval: timers.setInterval, clearInterval: timers.clearInterval,
   };
   vm.createContext(ctx);
+  Object.assign(auth, loadAuthHelpers(ctx));
   vm.runInContext(SRC, ctx);
+  Object.defineProperty(env, 'logoutHandler', { get: () => logoutHandler });
   Object.assign(env, {
     ls, server, timers, toasts, events, warnings, errors, els, doc, ctx, win, originalSet,
     api: win.CSSettingsSync, t: win.CSSettingsSync._test,
-    get logoutHandler() { return logoutHandler; },
     login(u) { user = u; (winListeners['cs-auth-changed'] || []).forEach((f) => f({ detail: u })); return settle(); },
     logout() { user = null; (winListeners['cs-auth-changed'] || []).forEach((f) => f({ detail: null })); return settle(); },
     fireDoc(t) { if (docListeners[t]) docListeners[t](); return settle(); },
@@ -548,6 +583,155 @@ test('a push answered after logout and login again does not touch the new sessio
   assert.strictEqual(env.t.state.pushing, null);
   assert.strictEqual(env.ls.getItem('cs-settings-sync-rev'), '3');
   assert.strictEqual(JSON.parse(env.ls.getItem('cs-settings-sync-base')).keys['meshcore-time-window'], '15');
+});
+
+// ── logout dialog and account section ──
+const KEYS = { 'meshcore-favorites': J(['a']) };
+
+test('the logout handler is registered only while active', async () => {
+  const off = makeEnv({ enabled: false });
+  await settle();
+  assert.strictEqual(off.logoutHandler, null);
+  const env = makeEnv({ server: serverWith(1, KEYS), local: synced(KEYS, 1) });
+  await env.timers.advance(0);
+  assert.strictEqual(typeof env.logoutHandler, 'function');
+  await env.logout();
+  assert.strictEqual(env.logoutHandler, null);
+});
+
+test('logout dialog: keep first and focused, channel-key text, three choices', async () => {
+  const env = makeEnv({ server: serverWith(1, KEYS), local: synced(KEYS, 1) });
+  await env.timers.advance(0);
+  let seen = null;
+  env.t.useDialog((opts) => { seen = plain(opts); return Promise.resolve('keep'); });
+  await env.logoutHandler();
+  assert.deepStrictEqual(seen.choices.map((c) => c.id), ['keep', 'remove', 'cancel']);
+  assert.strictEqual(seen.choices[0].label, 'Keep my settings on this device');
+  assert.strictEqual(seen.choices[0].primary, true);
+  assert.strictEqual(seen.choices[1].label, 'Remove my settings from this device');
+  assert(seen.text.join(' ').indexOf('Channel keys are never synced') !== -1);
+});
+
+test('logout dialog: keep pushes pending changes first and leaves local data', async () => {
+  const env = makeEnv({ server: serverWith(1, KEYS), local: synced(KEYS, 1) });
+  await env.timers.advance(0);
+  env.ls.setItem('meshcore-time-window', '60'); // still in the 2 s debounce
+  env.t.useDialog(() => Promise.resolve('keep'));
+  const h = plain(await env.logoutHandler());
+  assert.deepStrictEqual(h, {});
+  assert.strictEqual(env.server.puts.length, 1);
+  assert.strictEqual(env.server.doc.keys['meshcore-time-window'], '60');
+  assert.strictEqual(env.ls.getItem('meshcore-time-window'), '60');
+});
+
+test('logout dialog: remove deletes synced keys and the baseline, never channel keys', async () => {
+  const local = Object.assign({ 'meshcore-time-window': '60', corescope_channel_keys: '{"#x":"00"}', 'meshcore-api-key': 'k' }, synced(KEYS, 1));
+  const env = makeEnv({ server: serverWith(1, KEYS), local });
+  await env.timers.advance(0);
+  env.t.useDialog(() => Promise.resolve('remove'));
+  const h = await env.logoutHandler();
+  assert.strictEqual(typeof h.afterLogout, 'function');
+  h.afterLogout();
+  for (const k of ['meshcore-favorites', 'meshcore-time-window', 'cs-settings-sync-base', 'cs-settings-sync-rev']) {
+    assert.strictEqual(env.ls.getItem(k), null, k + ' left behind');
+  }
+  assert.strictEqual(env.ls.getItem('corescope_channel_keys'), '{"#x":"00"}');
+  assert.strictEqual(env.ls.getItem('meshcore-api-key'), 'k');
+});
+
+test('logout dialog: remove after a failed push keeps the data and says so', async () => {
+  const server = serverWith(1, KEYS);
+  const env = makeEnv({ server, local: synced(KEYS, 1) });
+  await env.timers.advance(0);
+  env.ls.setItem('meshcore-time-window', '60');
+  server.fail.PUT = ['network'];
+  env.t.useDialog(() => Promise.resolve('remove'));
+  const h = await env.logoutHandler();
+  h.afterLogout();
+  assert.strictEqual(env.ls.getItem('meshcore-time-window'), '60');
+  assert.strictEqual(env.ls.getItem('meshcore-favorites'), J(['a']));
+  assert(env.toasts.indexOf('Your latest settings could not be saved to your account, so they stay on this device.') !== -1);
+});
+
+test('logout dialog: Cancel, Escape or the backdrop cancel the logout', async () => {
+  const env = makeEnv({ server: serverWith(1, KEYS), local: synced(KEYS, 1) });
+  await env.timers.advance(0);
+  for (const choice of ['cancel', null]) {
+    env.t.useDialog(() => Promise.resolve(choice));
+    assert.deepStrictEqual(plain(await env.logoutHandler()), { cancel: true });
+  }
+});
+
+test('account section: status, Sync now, delete with confirmation', async () => {
+  const env = makeEnv({ server: serverWith(1, KEYS), local: synced(KEYS, 1) });
+  await env.timers.advance(0);
+  const el = env.el('syncSection');
+  env.api.mountSection(el);
+  assert(el.innerHTML.indexOf('id="syncNow"') !== -1 && el.innerHTML.indexOf('id="syncDelete"') !== -1);
+  assert(el.innerHTML.indexOf('Delete synced settings from my account') !== -1);
+  assert(env.els.syncStatus.textContent.indexOf('Last synced ') === 0, env.els.syncStatus.textContent);
+  const g0 = env.server.gets;
+  await env.els.syncNow.handlers.click();
+  await settle();
+  assert.strictEqual(env.server.gets, g0 + 1);
+  env.t.useDialog(() => Promise.resolve('cancel'));
+  await env.els.syncDelete.handlers.click();
+  assert.strictEqual(env.server.deletes, 0);
+  env.t.useDialog(() => Promise.resolve('delete'));
+  await env.els.syncDelete.handlers.click();
+  await settle();
+  assert.strictEqual(env.server.deletes, 1);
+  assert.strictEqual(env.t.state.hold, true);
+  assert.strictEqual(env.els.syncMsg.textContent, 'Synced settings deleted from your account.');
+  assert.strictEqual(env.els.syncStatus.textContent, 'No settings saved in your account. Your next change starts a new copy.');
+  assert.strictEqual(env.ls.getItem('meshcore-favorites'), J(['a']));
+});
+
+test('dialog: escaped, first choice focused, Tab trapped, Escape and backdrop dismiss, focus returns', async () => {
+  const env = makeEnv({ enabled: false });
+  const prev = { focused: 0, focus() { this.focused++; } };
+  const open = (title) => {
+    env.doc.activeElement = prev;
+    const p = env.t.showDialog({ title, text: ['<b>t</b>'], choices: [{ id: 'a', label: 'A', primary: true }, { id: 'b', label: 'B' }] });
+    return { p, ov: env.doc.body.children[env.doc.body.children.length - 1] };
+  };
+  let { p, ov } = open('<img>');
+  assert(ov.innerHTML.indexOf('<img>') === -1 && ov.innerHTML.indexOf('&lt;img&gt;') !== -1);
+  assert(ov.innerHTML.indexOf('<b>') === -1);
+  assert(ov.innerHTML.indexOf('role="dialog"') !== -1 && ov.innerHTML.indexOf('aria-modal="true"') !== -1);
+  const [a, b] = ov.querySelectorAll();
+  assert.strictEqual(env.doc.activeElement, a);
+  const key = (k, shift) => {
+    let prevented = false;
+    ov.handlers.keydown({ key: k, shiftKey: !!shift, preventDefault() { prevented = true; }, stopPropagation() {} });
+    return prevented;
+  };
+  assert(key('Tab', true));
+  assert.strictEqual(env.doc.activeElement, b);
+  assert(key('Tab'));
+  assert.strictEqual(env.doc.activeElement, a);
+  key('Escape');
+  assert.strictEqual(await p, null);
+  assert(ov.removed);
+  assert.strictEqual(prev.focused, 1);
+  ({ p, ov } = open('x'));
+  ov.handlers.click({ target: ov });
+  assert.strictEqual(await p, null);
+  ({ p, ov } = open('x'));
+  ov.handlers.click({ target: ov.querySelectorAll()[1] });
+  assert.strictEqual(await p, 'b');
+});
+
+test('status texts', async () => {
+  const env = makeEnv({ server: serverWith(1, {}), local: synced({}, 1) });
+  await env.timers.advance(0);
+  const st = env.t.state;
+  st.status = 'retrying';
+  assert.strictEqual(env.t.statusText(), 'Not synced: retrying');
+  st.status = 'too-large'; st.tooLarge = ['cs-theme-overrides', 'meshcore-my-nodes'];
+  assert.strictEqual(env.t.statusText(), 'Not synced: your settings are larger than your account can hold. Largest: cs-theme-overrides, meshcore-my-nodes');
+  st.status = 'idle';
+  assert.strictEqual(env.t.statusText(), 'Not synced yet');
 });
 
 (async () => {
