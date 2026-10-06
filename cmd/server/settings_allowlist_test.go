@@ -38,13 +38,13 @@ func TestSettingsAllowlistShape(t *testing.T) {
 			t.Errorf("set %q identity = %q (present %v); want %q", k, got, ok, id)
 		}
 	}
-	if len(settingsAllowlist) != 62 {
-		t.Errorf("allowlist has %d keys; the spec table has 62", len(settingsAllowlist))
+	if len(settingsAllowlist) != 61 {
+		t.Errorf("allowlist has %d keys; the spec table has 61", len(settingsAllowlist))
 	}
 }
 
 func TestSettingsDenied(t *testing.T) {
-	for _, k := range []string{"meshcore-api-key", "corescope_channel_keys", "corescope_channel_labels", "corescope_channel_cache", "corescope_channel_anything"} {
+	for _, k := range []string{"meshcore-api-key", "corescope_channel_keys", "corescope_channel_labels", "corescope_channel_cache", "corescope_channel_anything", "live-channel-colors"} {
 		if !settingsDenied(k) {
 			t.Errorf("settingsDenied(%q) = false", k)
 		}
@@ -61,7 +61,8 @@ func TestSyncedSettingsKeysDropsDeniedKeys(t *testing.T) {
 	t.Cleanup(func() { settingsAllowlist = saved })
 	settingsAllowlist = append(append([]settingsKey{}, saved...),
 		settingsKey{Key: "corescope_channel_keys", Kind: settingsKindScalar},
-		settingsKey{Key: "meshcore-api-key", Kind: settingsKindScalar})
+		settingsKey{Key: "meshcore-api-key", Kind: settingsKindScalar},
+		settingsKey{Key: "live-channel-colors", Kind: settingsKindScalar})
 	got := syncedSettingsKeys()
 	if len(got) != len(saved) {
 		t.Fatalf("syncedSettingsKeys has %d keys; want %d", len(got), len(saved))

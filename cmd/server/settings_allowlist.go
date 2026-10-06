@@ -37,7 +37,7 @@ var settingsAllowlist = append([]settingsKey{
 }, scalarSettings(
 	// customizer, theme, units
 	"cs-theme-overrides", "meshcore-theme", "meshcore-cb-preset", "mc-dark-tile-provider", "mc-light-tile-provider",
-	"meshcore-distance-unit", "meshcore-heatmap-opacity", "meshcore-live-heatmap-opacity", "live-channel-colors",
+	"meshcore-distance-unit", "meshcore-heatmap-opacity", "meshcore-live-heatmap-opacity",
 	// packets
 	"meshcore-observer-filter", "meshcore-type-filter", "meshcore-time-window", "meshcore-hex-hashes",
 	"meshcore-full-names", "meshcore-obs-sort", "meshcore-packets-sort",
@@ -64,10 +64,12 @@ var settingsAllowlist = append([]settingsKey{
 )...)
 
 // settingsDenied reports keys that must never leave the browser: channel
-// keys, labels and decrypted-message caches (#725) and the admin API key.
-// It is checked before the allowlist, so adding one there cannot sync it.
+// keys, labels and decrypted-message caches (#725), the channel colour map
+// (keyed by channel name, and a hashtag channel's name is its key) and the
+// admin API key. It is checked before the allowlist, so adding one there
+// cannot sync it.
 func settingsDenied(key string) bool {
-	return key == "meshcore-api-key" || strings.HasPrefix(key, "corescope_channel_")
+	return key == "meshcore-api-key" || key == "live-channel-colors" || strings.HasPrefix(key, "corescope_channel_")
 }
 
 // syncedSettingsKeys is the allowlist minus denied keys: what GET returns

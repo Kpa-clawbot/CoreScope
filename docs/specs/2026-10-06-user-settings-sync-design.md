@@ -102,7 +102,7 @@ client and server cannot drift. Each entry has a kind:
 | `meshcore-my-nodes` | set (`pubkey`) |
 | `meshcore-favorites` | set (the string itself) |
 | `corescope_saved_filters_v1` | set (`name`) |
-| `cs-theme-overrides`, `meshcore-theme`, `meshcore-cb-preset`, `mc-dark-tile-provider`, `mc-light-tile-provider`, `meshcore-distance-unit`, `meshcore-heatmap-opacity`, `meshcore-live-heatmap-opacity`, `live-channel-colors` | scalar |
+| `cs-theme-overrides`, `meshcore-theme`, `meshcore-cb-preset`, `mc-dark-tile-provider`, `mc-light-tile-provider`, `meshcore-distance-unit`, `meshcore-heatmap-opacity`, `meshcore-live-heatmap-opacity` | scalar |
 | Packets: `meshcore-observer-filter`, `meshcore-type-filter`, `meshcore-time-window`, `meshcore-hex-hashes`, `meshcore-full-names`, `meshcore-obs-sort`, `meshcore-packets-sort` | scalar |
 | Tables: `meshcore-nodes-sort`, `meshcore-observers-sort`, `meshcore-scope-audit-sort`, `meshcore-channel-sort` | scalar |
 | Nodes: `meshcore-nodes-last-heard`, `meshcore-nodes-status-filter`, `meshcore-nodes-silent-for` | scalar |
@@ -118,8 +118,14 @@ longer occurs in `public/`.
 
 **Never synced, enforced by a hard denylist checked before the allowlist:**
 `corescope_channel_keys`, `corescope_channel_labels`, `corescope_channel_cache`, any
-`corescope_channel_*` key, and `meshcore-api-key`. A server test pins that these are
+`corescope_channel_*` key, `live-channel-colors` and `meshcore-api-key`. A server test pins that these are
 refused even if added to the allowlist.
+
+**Deliberately not synced, channel data:** `live-channel-colors` maps a channel hash to
+a colour, and for a user-added channel the hash is `user:` plus the channel name. A
+hashtag channel's name is its key, and a hex PSK channel's name carries 8 hex characters
+of the key, so the map would carry channel keys to the server (#725). The server cannot
+filter inside the value without parsing it, so the key is on the hard denylist.
 
 **Deliberately not synced (device-specific or transient):** `panel-drag-*`,
 `panel-corner-*`, sidebar and column widths, `*-col-widths`, `packets-visible-cols`,
@@ -297,3 +303,6 @@ rules override the sections above where they differ.
    "Sync now" or a reload.
 7. `user_settings.updated_at` is an INTEGER (Unix seconds), like every other timestamp
    in `users.db`.
+8. **`live-channel-colors` is not synced** (final review): it is keyed by channel name,
+   which for hashtag and PSK channels is (part of) the channel key. It moved from the
+   allowlist to the hard denylist; the allowlist has 61 keys.
