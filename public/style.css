@@ -402,7 +402,7 @@
     /* #1719 — keep --skew-badge-no-clock-bg dark enough for #fff text. */
     --skew-badge-no-clock-bg: var(--palette-gray-600, #4b5563);
     --status-yellow-text: #eab308;
-    --status-red-text: #ef4444;
+    --status-red-text: var(--palette-red-400, #f87171);
     --status-yellow: #eab308;
     --status-red: #ef4444;
     --status-orange: #f97316;
@@ -470,7 +470,7 @@
   --sa-chip-observed-fg: #22c55e;
   --skew-badge-no-clock-bg: var(--palette-gray-600, #4b5563);
   --status-yellow-text: #eab308;
-  --status-red-text: #ef4444;
+  --status-red-text: var(--palette-red-400, #f87171);
   --status-yellow: #eab308;
   --status-red: #ef4444;
   --status-orange: #f97316;
