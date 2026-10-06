@@ -332,10 +332,11 @@
   }
 
   // push sends this device's allowlisted values. A 409 merges the returned
-  // document and retries (at most MAX_CONFLICT_RETRIES); network errors,
+  // document and retries (at most MAX_CONFLICT_RETRIES); a 403 is retried
+  // once after onForbidden (retried403 marks that retry); network errors,
   // 5xx and 429 retry with backoff. Resolves true when the account holds
   // this device's values.
-  function push(attempt) {
+  function push(attempt, retried403) {
     if (!state.active || state.blocked || !state.policy) return Promise.resolve(false);
     if (state.pushing) return state.pushing.then(function () { return state.dirty ? push() : true; });
     attempt = attempt || 0;
@@ -359,7 +360,7 @@
         }
         if (r.status === 409 && attempt < MAX_CONFLICT_RETRIES) {
           applyProfile(r.data.revision, r.data.generation, r.data.doc);
-          return push(attempt + 1);
+          return push(attempt + 1, retried403);
         }
         if (r.status === 413) {
           state.blocked = 'too-large';
@@ -373,7 +374,16 @@
           setStatus('rejected');
           return false;
         }
-        if (r.status === 403) { onForbidden(epoch); return false; }
+        if (r.status === 403) {
+          // Held as the push in flight until the retry starts, so no other
+          // push runs while the session is checked.
+          var next = onForbidden(epoch, !retried403).then(function (retry) {
+            if (state.pushing === next) state.pushing = null;
+            return retry ? push(attempt, true) : false;
+          });
+          state.pushing = next;
+          return next;
+        }
         if (r.status !== 401) retryLater(); // 401: auth.js logged out, which deactivates this module
         return false;
       }, function () {
@@ -387,21 +397,28 @@
   }
 
   // onForbidden handles a 403: this tab's CSRF token belongs to an older
-  // session (a logout and login in another tab), so retrying never ends.
-  // It asks who is logged in now. Another user, or nobody, arrives as
-  // cs-auth-changed and re-activates or deactivates this module (the epoch
-  // moves); the same user stops syncing in this tab until a reload.
-  function onForbidden(epoch) {
+  // session (a logout and login in another tab). It asks who is logged in
+  // now, which also stores the session's current token. Another user, or
+  // nobody, arrives as cs-auth-changed and re-activates or deactivates this
+  // module (the epoch moves). For the same user it resolves true when
+  // mayRetry (the request goes again once with the new token); otherwise
+  // this tab stops syncing until a reload, because the next attempt would
+  // get the same answer (an origin misconfiguration, for one).
+  function onForbidden(epoch, mayRetry) {
     clearTimeout(state.retryTimer);
     state.retryTimer = null;
     var stop = function () {
-      if (state.epoch !== epoch) return;
+      if (state.epoch !== epoch) return false;
       state.blocked = 'forbidden';
       setStatus('forbidden');
+      return false;
     };
-    return window.CSAuth.refreshMe().then(stop, function (e) {
+    return window.CSAuth.refreshMe().then(function () {
+      if (state.epoch !== epoch) return false;
+      return mayRetry ? true : stop();
+    }, function (e) {
       console.error('[settings-sync] could not check the session after a 403: ' + (e && e.message));
-      stop();
+      return stop();
     });
   }
 
@@ -424,7 +441,7 @@
     return window.CSAuth.request('GET', '/api/account/settings').then(function (r) {
       if (stale()) return;
       if (!r.ok) {
-        if (r.status === 403) onForbidden(epoch);
+        if (r.status === 403) onForbidden(epoch, false);
         else if (r.status !== 401) setStatus('retrying');
         return;
       }

@@ -545,7 +545,9 @@ test('400 stops pushing until reload and logs the reason', async () => {
 
 // M6 (final review): after a logout and login in another tab this tab's
 // CSRF token is stale and every PUT answers 403; retrying never ends.
-test('403 on a push: same user still logged in stops syncing until a reload', async () => {
+// Polish 1: a login in another tab rotates the CSRF token; refreshMe stores
+// the new one, so the PUT is retried once with it.
+test('403 on a push: same user, retried once with the refreshed token', async () => {
   const server = serverWith(1, {});
   const env = makeEnv({ server, local: synced({}, 1) });
   await env.timers.advance(0);
@@ -553,12 +555,28 @@ test('403 on a push: same user still logged in stops syncing until a reload', as
   env.ls.setItem('meshcore-time-window', '60');
   await env.timers.advance(2000);
   assert.strictEqual(env.refreshes, 1);
+  assert.strictEqual(server.puts.length, 2);
+  assert.strictEqual(server.doc.keys['meshcore-time-window'], '60');
+  assert.strictEqual(env.t.state.blocked, null);
+  assert.strictEqual(env.t.state.status, 'ok');
+});
+
+test('403 on a push: same user, a second 403 stops syncing until a reload', async () => {
+  const server = serverWith(1, {});
+  const env = makeEnv({ server, local: synced({}, 1) });
+  await env.timers.advance(0);
+  server.fail.PUT = [{ status: 403, data: { error: 'missing CSRF token' } }, { status: 403, data: { error: 'bad origin' } }];
+  env.ls.setItem('meshcore-time-window', '60');
+  await env.timers.advance(2000);
+  assert.strictEqual(env.refreshes, 2);
+  assert.strictEqual(server.puts.length, 2);
+  assert.strictEqual(env.t.state.blocked, 'forbidden');
   assert.strictEqual(env.t.state.status, 'forbidden');
   assert.strictEqual(env.t.statusText(), 'Not synced: this tab is out of date. Reload the page to sync again.');
   assert.deepStrictEqual(env.timers.delays(), [], 'a retry is still scheduled');
   env.ls.setItem('meshcore-time-window', '15');
   await env.timers.advance(600000);
-  assert.strictEqual(server.puts.length, 1);
+  assert.strictEqual(server.puts.length, 2);
 });
 
 test('403 on a push: another user logged in since re-activates for that user', async () => {
