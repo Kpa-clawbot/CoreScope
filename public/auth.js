@@ -68,8 +68,19 @@
   // logout ends the session on the server. Only when that succeeded does it
   // move to next and then clear the user, so pages listening for
   // 'cs-auth-changed' already see the new view. A refusal keeps the user
-  // and is returned for the caller to show; a cancel returns cancelled.
+  // and is returned for the caller to show; a cancel returns cancelled. One
+  // logout runs at a time: another call while the dialog is open or the
+  // POST is out returns cancelled.
+  var loggingOut = null;
   function logout(next) {
+    if (loggingOut) return Promise.resolve({ ok: false, cancelled: true, status: 0, data: {} });
+    var done = function () { loggingOut = null; };
+    loggingOut = runLogout(next);
+    loggingOut.then(done, done);
+    return loggingOut;
+  }
+
+  function runLogout(next) {
     return Promise.resolve(logoutHandler ? logoutHandler() : null).then(function (h) {
       h = h || {};
       if (h.cancel) return { ok: false, cancelled: true, status: 0, data: {} };

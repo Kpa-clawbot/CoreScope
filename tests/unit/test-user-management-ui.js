@@ -245,6 +245,29 @@ test('logout handler: afterLogout runs after the POST, before the user is cleare
   assert.strictEqual(env.win.CS_USER, null);
 });
 
+// M4 (final review): a second Log out click while the dialog is open must
+// not stack a second dialog or send a second POST.
+test('logout: a second call while one is running opens no second dialog', async () => {
+  const env = makeEnv((u) => u === '/api/auth/me' ? { status: 200, body: ME } : { status: 200, body: { ok: true } });
+  await env.win.CSAuth.ready();
+  env.calls.length = 0;
+  let dialogs = 0, choose;
+  env.win.CSAuth.setLogoutHandler(() => { dialogs++; return new Promise((r) => { choose = r; }); });
+  const first = env.win.CSAuth.logout('#/account/login');
+  const second = env.win.CSAuth.logout('#/account/login');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.strictEqual(dialogs, 1);
+  assert.strictEqual((await second).cancelled, true);
+  choose({});
+  assert.strictEqual((await first).ok, true);
+  assert.strictEqual(env.calls.filter((c) => c.url === '/api/auth/logout').length, 1);
+  // Finished: the next logout runs again.
+  const third = env.win.CSAuth.logout('#/account/login');
+  assert.strictEqual(dialogs, 2);
+  choose({ cancel: true });
+  assert.strictEqual((await third).cancelled, true);
+});
+
 test('logout handler: a refused POST does not run afterLogout', async () => {
   const env = makeEnv((u) => u === '/api/auth/me' ? { status: 200, body: ME } : { status: 403, body: { error: 'no' } });
   await env.win.CSAuth.ready();
