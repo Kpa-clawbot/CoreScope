@@ -2548,7 +2548,7 @@ func TestBrevoWebhookAuthAndIngest(t *testing.T) {
 	if c := post("Bearer wrong-secret-xxxxxxxx", body); c != 401 {
 		t.Fatalf("wrong auth = %d", c)
 	}
-	if c := post("Bearer "+testHook, "garbage"); c != 400 {
+	if c := post("Bearer "+testHook, "garbage"); c != 200 { // authenticated junk: 200 so Brevo stops retrying
 		t.Fatalf("garbage = %d", c)
 	}
 	if c := post("Bearer "+testHook, body); c != 200 {
@@ -2580,6 +2580,7 @@ package main
 
 import (
 	"io"
+	"log"
 	"net/http"
 
 	"github.com/meshcore-analyzer/mailer"
@@ -2605,7 +2606,10 @@ func (s *Server) handleBrevoWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	evs, err := mailer.ParseBrevoWebhook(body)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid webhook payload")
+		// Authenticated but unusable (e.g. an event type without message-id):
+		// answer 200 so Brevo does not retry forever; log for the operator.
+		log.Printf("[users] brevo webhook: ignored payload: %v", err)
+		writeJSON(w, okResponse{OK: true})
 		return
 	}
 	a.ingestMailEvents(evs)
