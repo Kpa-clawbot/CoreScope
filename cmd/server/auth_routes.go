@@ -23,7 +23,16 @@ func (s *Server) registerAuthRoutes(r *mux.Router) {
 	r.HandleFunc("/api/account/confirm-email", s.requireOrigin(s.handleConfirmEmail)).Methods("POST")
 	r.HandleFunc("/api/account/sessions", s.withUser(s.handleAccountSessions)).Methods("GET")
 	r.HandleFunc("/api/account/sessions/{id}", s.withUser(s.handleAccountSessionDelete)).Methods("DELETE")
-	// Tasks 6–7 add routes here.
+	r.HandleFunc("/api/admin/users", s.withAdmin(s.handleAdminUsers)).Methods("GET")
+	r.HandleFunc("/api/admin/users/{id}", s.withAdmin(s.handleAdminUserDetail)).Methods("GET")
+	r.HandleFunc("/api/admin/users/{id}", s.withAdmin(s.handleAdminDelete)).Methods("DELETE")
+	r.HandleFunc("/api/admin/users/{id}/disable", s.withAdmin(s.handleAdminDisable)).Methods("POST")
+	r.HandleFunc("/api/admin/users/{id}/enable", s.withAdmin(s.handleAdminEnable)).Methods("POST")
+	r.HandleFunc("/api/admin/users/{id}/role", s.withAdmin(s.handleAdminRole)).Methods("POST")
+	r.HandleFunc("/api/admin/users/{id}/resend-activation", s.withAdmin(s.handleAdminResendActivation)).Methods("POST")
+	r.HandleFunc("/api/admin/users/{id}/activate", s.withAdmin(s.handleAdminActivate)).Methods("POST")
+	r.HandleFunc("/api/admin/users/{id}/mail/{mailId}/refresh", s.withAdmin(s.handleAdminMailRefresh)).Methods("POST")
+	// Task 7 adds the webhook route here.
 	if e2eRoutes != nil {
 		e2eRoutes(s, r)
 	}

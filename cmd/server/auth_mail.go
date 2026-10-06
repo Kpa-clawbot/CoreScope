@@ -121,7 +121,9 @@ func (a *authService) ingestMailEvents(evs []mailer.Event) {
 func (a *authService) mailToken(ctx context.Context, u *users.User, tokenPurpose users.Purpose,
 	ttl time.Duration, newEmail, mailPurpose string, build func(token string) mailer.Message) error {
 	tok, err := a.st.IssueToken(u.ID, tokenPurpose, ttl, newEmail)
-	if err == nil {
+	if err != nil {
+		log.Printf("[users] issue %s token for user #%d: %v", tokenPurpose, u.ID, err)
+	} else {
 		err = a.sendMail(ctx, u, mailPurpose, build(tok))
 	}
 	if err != nil {
