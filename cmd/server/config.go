@@ -180,6 +180,11 @@ type Config struct {
 	// off; see ClientRfSamplesEnabled.
 	ClientRfSamples *ClientRfSamplesConfig `json:"clientRfSamples,omitempty"`
 
+	// UserManagement gates optional accounts
+	// (docs/specs/2026-10-06-user-management-design.md). Absent/nil means off;
+	// see UserManagementEnabled.
+	UserManagement *UserManagementConfig `json:"userManagement,omitempty"`
+
 	ResolvedPath  *ResolvedPathConfig  `json:"resolvedPath,omitempty"`
 	NeighborGraph *NeighborGraphConfig `json:"neighborGraph,omitempty"`
 
