@@ -188,6 +188,8 @@ jobs:
           # -race gates PR #1208's atomic.Pointer migration: the race-detector
           # is what makes path_inspect_atomic_race_test.go actually assert.
           go test -timeout 20m -race -coverprofile=server-coverage.out ./... 2>&1 | tee server-test.log
+          # The e2etest build (fake mailer + /__e2e/last-mail) has its own tests.
+          go test -tags e2etest -count=1 -run 'E2E' .
           echo "--- Go Server Coverage ---"
           go tool cover -func=server-coverage.out | tail -1
 

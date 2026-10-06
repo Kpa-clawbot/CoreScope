@@ -5,8 +5,7 @@ package main
 import "testing"
 
 func TestE2ELastMailReturnsNewestFakeMail(t *testing.T) {
-	f := newAuthFixture(t)
-	e2eRoutes(f.srv, f.router)
+	f := newAuthFixture(t) // registerAuthRoutes must add the hook itself
 	expectStatus(t, f.do("GET", "/__e2e/last-mail", nil), 404)
 	f.registerAndActivate(t, "e2e@example.test", "E2E", "correct horse battery")
 	w := f.do("GET", "/__e2e/last-mail", nil)
