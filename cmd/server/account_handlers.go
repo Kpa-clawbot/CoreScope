@@ -70,10 +70,13 @@ func (s *Server) handleAccountPassword(w http.ResponseWriter, r *http.Request, u
 	writeJSON(w, okResponse{OK: true, Message: "Password changed. Your other devices were logged out."})
 }
 
+// handleAccountEmail answers and mails the requester identically whether
+// the new address is free or taken (no enumeration): the old address gets
+// the notice either way, and only a free address gets the confirmation.
 func (s *Server) handleAccountEmail(w http.ResponseWriter, r *http.Request, u *users.User, _ *users.Session) {
 	a := s.auth
 	var req emailChangeRequest
-	if !decodeJSON(w, r, &req) || !checkCurrentPassword(w, u, req.CurrentPassword) {
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	newEmail, err := users.NormalizeEmail(req.NewEmail)
@@ -84,26 +87,40 @@ func (s *Server) handleAccountEmail(w http.ResponseWriter, r *http.Request, u *u
 		writeError(w, http.StatusBadRequest, "that is already your address")
 		return
 	}
-	done := okResponse{OK: true, Message: "Check the new address for a confirmation link."}
+	if !a.allow(w, r, a.signup, "emailchange:#"+strconv.FormatInt(u.ID, 10), "email:"+newEmail) ||
+		!checkCurrentPassword(w, u, req.CurrentPassword) {
+		return
+	}
 	switch _, err := a.st.GetByEmail(newEmail); {
 	case err == nil:
-		writeJSON(w, done) // taken: same answer, nothing sent (no enumeration)
-		return
-	case !errors.Is(err, users.ErrNotFound):
+		// Taken: no confirmation, but the newest request still replaces
+		// any earlier link, as in the free branch.
+		if err := a.invalidateTokens("email change", u.ID, users.PurposeEmailChange); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		// The notice is the only mail here; if it fails, answer like a
+		// failed confirmation in the free branch.
+		if err := a.sendMail(r.Context(), u, "email-change-notice", a.emailChangeNoticeMail(u, newEmail)); err != nil {
+			writeError(w, http.StatusServiceUnavailable, msgMailFailed)
+			return
+		}
+	case errors.Is(err, users.ErrNotFound):
+		err = a.mailToken(r.Context(), u, users.PurposeEmailChange, 24*time.Hour, newEmail, "email-change",
+			func(tok string) mailer.Message { return a.emailChangeConfirmMail(u, newEmail, tok) })
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, msgMailFailed)
+			return
+		}
+		// Best effort: sendMail logs a failure; the confirmation already went out.
+		_ = a.sendMail(r.Context(), u, "email-change-notice", a.emailChangeNoticeMail(u, newEmail))
+	default:
 		log.Printf("[users] email change lookup for user #%d: %v", u.ID, err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	err = a.mailToken(r.Context(), u, users.PurposeEmailChange, 24*time.Hour, newEmail, "email-change",
-		func(tok string) mailer.Message { return a.emailChangeConfirmMail(u, newEmail, tok) })
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, msgMailFailed)
-		return
-	}
-	// Best effort: sendMail logs a failure; the confirmation already went out.
-	_ = a.sendMail(r.Context(), u, "email-change-notice", a.emailChangeNoticeMail(u, newEmail))
 	a.audit(idPtr(u.ID), "user.email.change.requested", idPtr(u.ID), nil)
-	writeJSON(w, done)
+	writeJSON(w, okResponse{OK: true, Message: "Check the new address for a confirmation link."})
 }
 
 // handleConfirmEmail needs no session: the link may be opened on any device.

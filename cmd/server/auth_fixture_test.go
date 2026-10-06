@@ -183,3 +183,19 @@ func (f *authFixture) breakTable(t *testing.T, table string) {
 		t.Fatal(err)
 	}
 }
+
+// unusedTokens counts uid's outstanding links of purpose p, read straight
+// from users.db (the raw tokens are not observable when no mail left).
+func (f *authFixture) unusedTokens(t *testing.T, uid int64, p users.Purpose) int {
+	t.Helper()
+	db, err := sql.Open("sqlite", f.srv.auth.set.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM tokens WHERE user_id = ? AND purpose = ? AND used_at IS NULL`, uid, string(p)).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}

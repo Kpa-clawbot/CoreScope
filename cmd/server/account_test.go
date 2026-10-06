@@ -1,10 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/meshcore-analyzer/users"
 )
 
 func TestAccountProfileAndCSRF(t *testing.T) {
@@ -117,4 +121,63 @@ func TestAccountPasswordChangeTokenStoreFailureIs500(t *testing.T) {
 	c := f.registerAndActivate(t, "pam@example.org", "Pam", pw)
 	f.breakTable(t, "tokens")
 	expectStatus(t, f.do("POST", "/api/account/password", passwordChangeRequest{CurrentPassword: pw, NewPassword: "new secret pass"}, as(c)), 500)
+}
+
+func TestAccountEmailChangeTakenLooksLikeFree(t *testing.T) {
+	f := newAuthFixture(t)
+	c := f.registerAndActivate(t, "quin@example.org", "Quin", pw)
+	f.registerAndActivate(t, "rae@example.org", "Rae", pw)
+	free := f.do("POST", "/api/account/email", emailChangeRequest{NewEmail: "quin.new@example.org", CurrentPassword: pw}, as(c), fromIP("192.0.2.1"))
+	before := len(f.fake.Sent())
+	taken := f.do("POST", "/api/account/email", emailChangeRequest{NewEmail: "rae@example.org", CurrentPassword: pw}, as(c), fromIP("192.0.2.2"))
+	if free.Code != 200 || free.Code != taken.Code || free.Body.String() != taken.Body.String() {
+		t.Fatalf("responses differ: %d %q vs %d %q", free.Code, free.Body, taken.Code, taken.Body)
+	}
+	sent := f.fake.Sent()[before:]
+	if len(sent) != 1 || sent[0].To != "quin@example.org" || !strings.Contains(sent[0].Text, "rae@example.org") {
+		t.Fatalf("taken branch sent %+v, want only the notice to the old address", sent)
+	}
+}
+
+func TestAccountEmailChangeMailFailureLeavesNoLink(t *testing.T) {
+	f := newAuthFixture(t)
+	c := f.registerAndActivate(t, "sam@example.org", "Sam", pw)
+	f.fake.SetSendErr(errors.New("brevo down"))
+	expectStatus(t, f.do("POST", "/api/account/email", emailChangeRequest{NewEmail: "sam.new@example.org", CurrentPassword: pw}, as(c)), 503)
+	if n := f.unusedTokens(t, c.me.ID, users.PurposeEmailChange); n != 0 {
+		t.Fatalf("%d usable email-change links after a failed mail", n)
+	}
+}
+
+func TestAccountEmailChangeRateLimitPerUser(t *testing.T) {
+	f := newAuthFixture(t)
+	c := f.registerAndActivate(t, "tia@example.org", "Tia", pw)
+	change := func(i int) *httptest.ResponseRecorder {
+		return f.do("POST", "/api/account/email", emailChangeRequest{NewEmail: fmt.Sprintf("tia%d@example.org", i), CurrentPassword: pw},
+			as(c), fromIP(fmt.Sprintf("198.51.100.%d", i+1)))
+	}
+	for i := 0; i < 5; i++ {
+		expectStatus(t, change(i), 200)
+	}
+	expectStatus(t, change(5), 429)
+}
+
+func TestAccountEmailChangeRateLimitPerAddress(t *testing.T) {
+	f := newAuthFixture(t)
+	ip := 0
+	change := func(c *client) *httptest.ResponseRecorder {
+		ip++
+		return f.do("POST", "/api/account/email", emailChangeRequest{NewEmail: "target@example.org", CurrentPassword: pw},
+			as(c), fromIP(fmt.Sprintf("198.51.100.%d", ip)))
+	}
+	a := f.registerAndActivate(t, "uli@example.org", "Uli", pw)
+	b := f.registerAndActivate(t, "val@example.org", "Val", pw)
+	d := f.registerAndActivate(t, "wes@example.org", "Wes", pw)
+	for i := 0; i < 3; i++ {
+		expectStatus(t, change(a), 200)
+	}
+	for i := 0; i < 2; i++ {
+		expectStatus(t, change(b), 200)
+	}
+	expectStatus(t, change(d), 429)
 }
