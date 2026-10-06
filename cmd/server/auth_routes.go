@@ -16,7 +16,14 @@ func (s *Server) registerAuthRoutes(r *mux.Router) {
 	r.HandleFunc("/api/auth/me", s.handleMe).Methods("GET")
 	r.HandleFunc("/api/auth/forgot", s.requireOrigin(s.handleForgot)).Methods("POST")
 	r.HandleFunc("/api/auth/reset", s.requireOrigin(s.handleReset)).Methods("POST")
-	// Tasks 5–7 add routes here.
+	r.HandleFunc("/api/account", s.withUser(s.handleAccountPatch)).Methods("PATCH")
+	r.HandleFunc("/api/account", s.withUser(s.handleAccountDelete)).Methods("DELETE")
+	r.HandleFunc("/api/account/password", s.withUser(s.handleAccountPassword)).Methods("POST")
+	r.HandleFunc("/api/account/email", s.withUser(s.handleAccountEmail)).Methods("POST")
+	r.HandleFunc("/api/account/confirm-email", s.requireOrigin(s.handleConfirmEmail)).Methods("POST")
+	r.HandleFunc("/api/account/sessions", s.withUser(s.handleAccountSessions)).Methods("GET")
+	r.HandleFunc("/api/account/sessions/{id}", s.withUser(s.handleAccountSessionDelete)).Methods("DELETE")
+	// Tasks 6–7 add routes here.
 	if e2eRoutes != nil {
 		e2eRoutes(s, r)
 	}
