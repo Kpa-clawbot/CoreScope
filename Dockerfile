@@ -65,6 +65,8 @@ COPY internal/prunequeue/ ../../internal/prunequeue/
 COPY internal/perfio/ ../../internal/perfio/
 COPY internal/mbcapqueue/ ../../internal/mbcapqueue/
 COPY internal/lora/ ../../internal/lora/
+COPY internal/users/ ../../internal/users/
+COPY internal/mailer/ ../../internal/mailer/
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/tmp/zig-cache \

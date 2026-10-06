@@ -44,3 +44,11 @@ require (
 )
 
 replace github.com/meshcore-analyzer/mbcapqueue => ../../internal/mbcapqueue
+
+require github.com/meshcore-analyzer/users v0.0.0
+
+replace github.com/meshcore-analyzer/users => ../../internal/users
+
+require github.com/meshcore-analyzer/mailer v0.0.0
+
+replace github.com/meshcore-analyzer/mailer => ../../internal/mailer
