@@ -168,6 +168,27 @@ func TestAccountEmailChangeMailFailureLeavesNoLink(t *testing.T) {
 	}
 }
 
+// Taken branch: the notice to the old address is the only mail; when it
+// fails the answer is 503, the address stays and no earlier link survives.
+func TestAccountEmailChangeTakenNoticeFailureIs503(t *testing.T) {
+	f := newAuthFixture(t)
+	c := f.registerAndActivate(t, "sol@example.org", "Sol", pw)
+	f.registerAndActivate(t, "tam@example.org", "Tam", pw)
+	expectStatus(t, f.do("POST", "/api/account/email", emailChangeRequest{NewEmail: "sol.new@example.org", CurrentPassword: pw}, as(c), fromIP("192.0.2.1")), 200)
+	f.fake.SetSendErr(errors.New("brevo down"))
+	w := f.do("POST", "/api/account/email", emailChangeRequest{NewEmail: "tam@example.org", CurrentPassword: pw}, as(c), fromIP("192.0.2.2"))
+	expectStatus(t, w, 503)
+	if !strings.Contains(w.Body.String(), msgMailFailed) {
+		t.Fatalf("body = %s", w.Body.String())
+	}
+	if got, _ := f.st.GetByID(c.me.ID); got.Email != "sol@example.org" {
+		t.Fatalf("address changed to %q", got.Email)
+	}
+	if n := f.unusedTokens(t, c.me.ID, users.PurposeEmailChange); n != 0 {
+		t.Fatalf("%d usable email-change links after a failed notice", n)
+	}
+}
+
 func TestAccountEmailChangeRateLimitPerUser(t *testing.T) {
 	f := newAuthFixture(t)
 	c := f.registerAndActivate(t, "tia@example.org", "Tia", pw)
