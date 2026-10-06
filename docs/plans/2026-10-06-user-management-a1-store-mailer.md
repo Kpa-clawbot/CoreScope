@@ -476,10 +476,10 @@ func TestValidateDisplayName(t *testing.T) {
 	if got, err := ValidateDisplayName("  ON8AR Erwin  "); err != nil || got != "ON8AR Erwin" {
 		t.Fatalf("got %q, %v", got, err)
 	}
-	if _, err := ValidateDisplayName("👩‍💻 dev"); err != nil { // ZWJ emoji sequence is allowed
+	if _, err := ValidateDisplayName("👩\u200D💻 dev"); err != nil { // ZWJ emoji sequence is allowed
 		t.Fatalf("ZWJ sequence rejected: %v", err)
 	}
-	bad := []string{"a", strings.Repeat("x", 33), "evil‮eman", "tab\tname", "zero​width", "line sep"}
+	bad := []string{"a", strings.Repeat("x", 33), "evil\u202Eeman", "tab\tname", "zero\u200Bwidth", "line\u2028sep"}
 	for _, in := range bad {
 		if _, err := ValidateDisplayName(in); err == nil {
 			t.Errorf("ValidateDisplayName(%q) accepted", in)
@@ -553,10 +553,10 @@ func ValidateDisplayName(raw string) (string, error) {
 		return "", &ValidationError{Msg: "display name must be 2 to 32 characters"}
 	}
 	for _, r := range n {
-		if r == '‍' {
+		if r == '\u200D' {
 			continue
 		}
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == ' ' || r == ' ' {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029' {
 			return "", &ValidationError{Msg: "display name contains invisible or control characters"}
 		}
 	}
