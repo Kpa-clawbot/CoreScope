@@ -46,3 +46,15 @@ func TestSendMailLogHasNoAddress(t *testing.T) {
 		t.Fatalf("log line = %q", out)
 	}
 }
+
+// Activation needs the account password (handleActivate), so the mail says so.
+func TestActivationMailMentionsPassword(t *testing.T) {
+	a, _ := newTestAuthService(t)
+	u := &users.User{ID: 1, Email: "new@example.org", DisplayName: "New"}
+	m := a.activationMail(u, "tok")
+	for _, body := range []string{m.Text, m.HTML} {
+		if !strings.Contains(body, "enter the password you chose") {
+			t.Fatalf("activation mail does not mention the password: %q", body)
+		}
+	}
+}

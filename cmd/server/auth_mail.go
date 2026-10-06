@@ -50,7 +50,8 @@ func (a *authService) render(to, toName, tag string, c mailContent) mailer.Messa
 func (a *authService) activationMail(u *users.User, token string) mailer.Message {
 	return a.render(u.Email, u.DisplayName, "activate", mailContent{
 		subject: "Activate your account", greeting: "Hello " + u.DisplayName + ",",
-		paragraphs:  []string{"Confirm your address to activate your account. The link works once and expires in 48 hours."},
+		paragraphs: []string{"Confirm your address to activate your account. The link works once and expires in 48 hours.",
+			"When you open the link, enter the password you chose when you registered."},
 		actionLabel: "Activate my account", actionURL: a.link("activate", token)})
 }
 
