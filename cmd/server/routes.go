@@ -127,6 +127,10 @@ type Server struct {
 	// Known-channels catalogue cache (issue #1323). Nil until configured;
 	// when nil the /api/known-channels endpoint returns an empty snapshot.
 	knownChannels *knownChannelsCache
+
+	// Optional user management (docs/specs/2026-10-06-user-management-design.md).
+	// Nil unless userManagement.enabled; see initUserManagement.
+	auth *authService
 }
 
 // PerfStats tracks request performance.
@@ -241,6 +245,11 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	// origin Cache-Control. Operator must add a Bypass Cache rule
 	// for /api/* — see docs/deployment-behind-cdn.md.
 	r.Use(cdnDetectionMiddleware)
+
+	// Optional user management: routes exist only when the feature is on.
+	if s.auth != nil {
+		s.registerAuthRoutes(r)
+	}
 
 	// Config endpoints
 	r.HandleFunc("/api/config/cache", s.handleConfigCache).Methods("GET")
