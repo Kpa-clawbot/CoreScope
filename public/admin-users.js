@@ -14,15 +14,8 @@
   var STATUSES = ['pending', 'active', 'disabled'];
   var ROLES = ['user', 'admin'];
 
-  function errText(r) { return (r.data && r.data.error) || ('Request failed (HTTP ' + r.status + ')'); }
   function fmt(iso) { if (!iso) return '—'; try { return new Date(iso).toLocaleString(); } catch (_) { return iso; } }
-  function say(text, ok) {
-    var el = document.getElementById('umMsg');
-    if (!el) return;
-    el.textContent = text;
-    el.classList.toggle('ok', !!ok);
-    el.classList.toggle('err', !ok);
-  }
+  function say(text, ok) { CSAuth.say('umMsg', text, ok); }
   function netErr() { say('Network error, try again.', false); }
   function chip(event, reason) {
     var e = String(event || 'sent');
@@ -116,7 +109,7 @@
     return CSAuth.request('GET', '/api/admin/users?' + q.toString()).then(function (r) {
       var body = document.getElementById('umBody');
       if (!body || seq !== loadSeq) return;
-      if (!r.ok) { say(errText(r), false); return; }
+      if (!r.ok) { say(CSAuth.errText(r), false); return; }
       var me = CSAuth.user();
       var html = '';
       // The server caps the list at 1000 rows, so a full tbody rebuild is bounded.
@@ -141,7 +134,7 @@
     return CSAuth.request('GET', '/api/admin/users/' + encodeURIComponent(id)).then(function (r) {
       var el = document.getElementById('umDetail');
       if (!el || openId !== id) return;
-      if (!r.ok) { say(errText(r), false); closeDetail(); return; }
+      if (!r.ok) { say(CSAuth.errText(r), false); closeDetail(); return; }
       el.innerHTML = detailHtml(r.data);
       el.hidden = false;
       if (focus) {
@@ -179,13 +172,13 @@
     }
     if (act === 'refresh') {
       CSAuth.request('POST', '/api/admin/users/' + encodeURIComponent(id) + '/mail/' + encodeURIComponent(btn.getAttribute('data-mail')) + '/refresh')
-        .then(function (r) { say(r.ok ? 'Mail status refreshed.' : errText(r), r.ok); load(); }).catch(netErr);
+        .then(function (r) { say(r.ok ? 'Mail status refreshed.' : CSAuth.errText(r), r.ok); load(); }).catch(netErr);
       return;
     }
     if (confirmText[act] && !confirm(confirmText[act])) return;
     var ep = endpoints[act];
     CSAuth.request(ep[0], '/api/admin/users/' + encodeURIComponent(id) + ep[1], ep[2]).then(function (r) {
-      say(r.ok ? 'Done.' : errText(r), r.ok);
+      say(r.ok ? 'Done.' : CSAuth.errText(r), r.ok);
       if (act === 'delete' && r.ok && openId === id) closeDetail();
       var me = CSAuth.user();
       if (r.ok && (act === 'promote' || act === 'demote') && me && String(me.id) === id) {

@@ -660,6 +660,7 @@ function loadAdmin(hash, routes) {
     confirm() { return true; }, debounce(fn) { return fn; },
     escapeHtml: loadEscapeHtml(), registerPage(n, m) { pages[n] = m; }, console };
   vm.createContext(ctx);
+  Object.assign(CSAuth, loadAuthHelpers(ctx));
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/admin-users.js'), 'utf8'), ctx);
   const app = { innerHTML: '', querySelector() { return els.umPage || (els.umPage = mk('umPage')); } };
   return { t: ctx.window.CSAdminUsers._test, pages, els, calls, replaced, loc, app, refreshed: () => refreshed,
