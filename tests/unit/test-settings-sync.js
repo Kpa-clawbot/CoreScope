@@ -324,11 +324,22 @@ test('login on another device merges the profile, applies theme and customizer, 
   assert(env.events.some((e) => e.type === 'storage' && e.key === 'meshcore-theme' && e.newValue === 'dark'));
   assert.strictEqual(env.pipelines, 1);
   assert.strictEqual(env.navigations, 1);
-  assert(env.toasts.indexOf('Settings updated from another device') !== -1);
+  // M3: the first login names the upload, not "updated from another device".
+  assert.deepStrictEqual(env.toasts, ['Your settings are now saved to your account.']);
   // b was only here: pushed on top of revision 4.
   assert.strictEqual(server.puts.length, 1);
   assert.strictEqual(server.puts[0].baseRevision, 4);
   assert.strictEqual(server.doc.keys['meshcore-favorites'], J(['a', 'b']));
+});
+
+test('first login with nothing new here: the first-login toast, nothing pushed', async () => {
+  const server = serverWith(4, { 'meshcore-favorites': J(['a']), 'meshcore-time-window': '180' });
+  const env = makeEnv({ user: null, server, local: { 'meshcore-favorites': J(['a']) } });
+  await env.login({ id: 7 });
+  assert.strictEqual(env.ls.getItem('meshcore-time-window'), '180');
+  assert.strictEqual(env.navigations, 1);
+  assert.strictEqual(server.puts.length, 0);
+  assert.deepStrictEqual(env.toasts, ['Your settings are now saved to your account.']);
 });
 
 test('remote tile providers reach the map through a storage event', async () => {

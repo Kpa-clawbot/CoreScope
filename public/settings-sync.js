@@ -107,6 +107,7 @@
   var BACKOFF_MIN_MS = 2000;
   var BACKOFF_MAX_MS = 300000;
   var MAX_CONFLICT_RETRIES = 3;
+  var FIRST_LOGIN_TEXT = 'Your settings are now saved to your account.';
   // Keys whose change an existing storage listener applies (app.js,
   // cb-presets.js, map-tile-providers.js).
   var LISTENER_KEYS = {
@@ -279,11 +280,11 @@
   // Before the customizer finished its init the pipeline is skipped: it
   // would render without the server defaults, and the init reads the new
   // overrides itself.
-  function afterRemoteChange(changed) {
+  function afterRemoteChange(changed, firstLogin) {
     applyListenerKeys(changed);
     var cz = window._customizerV2;
     if (changed.indexOf('cs-theme-overrides') !== -1 && cz && cz.initDone) cz.runPipeline();
-    window.CSAuth.notify('Settings updated from another device');
+    if (!firstLogin) window.CSAuth.notify('Settings updated from another device');
     if (!midEdit()) window.navigate();
   }
 
@@ -300,9 +301,13 @@
   // write what changed, make it the new baseline. Returns true when this
   // device holds values the account lacks. A baseline of another generation
   // (the copy was deleted and started again) counts as none, so nothing on
-  // this device is taken for a removal made elsewhere.
+  // this device is taken for a removal made elsewhere. On the first login
+  // (no baseline at all) the first-login toast replaces "updated from
+  // another device": after the upload of this device's values, or at once
+  // when there is nothing to upload.
   function applyProfile(rev, gen, doc) {
     refreshBase();
+    var firstLogin = !state.rev && !state.gen && !state.hold;
     var local = snapshot();
     if (!rev) {
       if (state.rev > 0 || state.hold) {
@@ -318,7 +323,9 @@
     var m = mergeDocs(local, profile, state.gen === gen ? state.base : {}, state.policy.list);
     writeLocal(m.keys, m.localChanges);
     saveBase(profile, rev, gen, false);
-    if (m.localChanges.length) afterRemoteChange(m.localChanges);
+    if (m.localChanges.length) afterRemoteChange(m.localChanges, firstLogin);
+    if (firstLogin && m.differsFromProfile) state.firstUpload = true;
+    else if (firstLogin) window.CSAuth.notify(FIRST_LOGIN_TEXT);
     return m.differsFromProfile;
   }
 
@@ -344,7 +351,7 @@
           synced(seq);
           if (state.firstUpload) {
             state.firstUpload = false;
-            window.CSAuth.notify('Your settings are now saved to your account.');
+            window.CSAuth.notify(FIRST_LOGIN_TEXT);
           }
           return true;
         }
