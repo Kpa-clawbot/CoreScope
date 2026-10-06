@@ -16,6 +16,12 @@ func TestRedactAddrs(t *testing.T) {
 		`brevo 400 invalid_parameter: email "Bob.Smith+x@Mail.Example.org" is not valid`: `brevo 400 invalid_parameter: email "<addr>" is not valid`,
 		"to a@b.co and c_d@e-f.example.net failed":                                       "to <addr> and <addr> failed",
 		"brevo 503 service unavailable":                                                  "brevo 503 service unavailable",
+		"rejected john.smith&co@example.org":                                             "rejected <addr>",
+		"rejected jörg.müller@x.de":                                                      "rejected <addr>",
+		"rejected bob@bücher.de":                                                         "rejected <addr>",
+		"rejected bob+newsletter@example.org":                                            "rejected <addr>",
+		"rejected o'neil!#$*/=?^{|}~@example.org, retry":                                 "rejected <addr>, retry",
+		"recipient <ann@example.org>; cc (bea@example.org)":                              "recipient <<addr>>; cc (<addr>)",
 	}
 	for in, want := range cases {
 		if got := redactAddrs(errors.New(in)); got != want {

@@ -83,7 +83,10 @@ func (a *authService) emailChangeNoticeMail(u *users.User, newEmail string) mail
 			"If this was not you, change your password now."}})
 }
 
-var addrRE = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+`)
+// addrRE matches anything around an @ up to whitespace or a character that
+// cannot appear unquoted in an address, so RFC 5322 atext specials and
+// UTF-8 local parts and domains are covered.
+var addrRE = regexp.MustCompile(`[^\s"<>()\[\],;:]+@[^\s"<>()\[\],;:]+`)
 
 // redactAddrs renders a mailer/provider error for the server log with every
 // email address replaced by <addr>: provider messages can echo the
