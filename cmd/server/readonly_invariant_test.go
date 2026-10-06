@@ -248,3 +248,32 @@ func TestOpenDBRefusesMissingDatabase(t *testing.T) {
 		t.Errorf("OpenDB created %q; a read-only open must not write anything", e.Name())
 	}
 }
+
+// TestUsersOpenIsTheOnlyServerWritePath pins the single exception to the
+// read-only invariant (user management, opt-in): cmd/server may open a
+// writable store only via users.Open, exactly once, and always passing the
+// measurement DB path as forbidden.
+func TestUsersOpenIsTheOnlyServerWritePath(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := regexp.MustCompile(`users\.Open\(`)
+	want := regexp.MustCompile(`users\.Open\(set\.dbPath, measurementDBPath\)`)
+	calls, good := 0, 0
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		calls += len(call.FindAll(src, -1))
+		good += len(want.FindAll(src, -1))
+	}
+	if calls != 1 || good != 1 {
+		t.Fatalf("users.Open calls in cmd/server: %d total, %d with the measurement DB forbidden; want exactly 1 and 1", calls, good)
+	}
+}

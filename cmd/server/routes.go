@@ -525,7 +525,15 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 		ClientRxCoverage:    s.cfg.ClientRxCoverageEnabled(),
 		ClientRfSamples:     s.cfg.ClientRfSamplesEnabled(),
 		PathTrust:           &pathTrust,
+		UserManagement:      s.clientUserManagement(),
 	})
+}
+
+func (s *Server) clientUserManagement() *ClientUserManagement {
+	if s.auth == nil {
+		return nil
+	}
+	return &ClientUserManagement{Enabled: true}
 }
 
 func (s *Server) handleConfigAreas(w http.ResponseWriter, r *http.Request) {

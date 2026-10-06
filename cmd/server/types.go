@@ -1084,6 +1084,14 @@ type ClientConfigResponse struct {
 	ClientRxCoverage    bool                   `json:"clientRxCoverage"`
 	ClientRfSamples     bool                   `json:"clientRfSamples"`
 	PathTrust           *PathTrustConfig       `json:"pathTrust,omitempty"`
+	// Present only when user management is on, so the payload is unchanged
+	// for every instance that leaves it off.
+	UserManagement *ClientUserManagement `json:"userManagement,omitempty"`
+}
+
+// ClientUserManagement tells the frontend that accounts exist.
+type ClientUserManagement struct {
+	Enabled bool `json:"enabled"`
 }
 
 // CustomizerClientConfig is the operator-side customizer-modal knobs that

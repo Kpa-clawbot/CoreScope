@@ -367,6 +367,11 @@ func main() {
 	srv := NewServer(database, cfg, hub)
 	srv.configDir = configDir
 	srv.store = store
+	// Optional user management (off by default). Fails startup on a bad
+	// config rather than running with registration that cannot work.
+	if err := srv.initUserManagement(resolvedDB); err != nil {
+		log.Fatalf("[users] %v", err)
+	}
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
 
@@ -543,6 +548,9 @@ func main() {
 
 		// 3. Close WebSocket hub
 		hub.Close()
+
+		// 3b. Close users.db (user management, opt-in; no-op when off).
+		srv.closeUserManagement()
 
 		// 4. Close database (release SQLite WAL lock)
 		if err := dbClose(); err != nil {
