@@ -59,6 +59,9 @@ func TestResolveUserManagementErrors(t *testing.T) {
 		"webhookSecret":  func(u *UserManagementConfig) { u.Mail.WebhookSecret = "short" },
 	}
 	for want, mutate := range cases {
+		if want == "e2etest builds" && fakeMailerAllowed {
+			continue // the e2etest build accepts the fake provider by design
+		}
 		u := validUM()
 		mutate(u)
 		_, err := resolveUserManagement(u, "meshcore.db", noEnv)
