@@ -181,3 +181,22 @@ func TestAccountEmailChangeRateLimitPerAddress(t *testing.T) {
 	}
 	expectStatus(t, change(d), 429)
 }
+
+func TestConfirmEmailForNonActiveUserIs410(t *testing.T) {
+	f := newAuthFixture(t)
+	c := f.registerAndActivate(t, "xan@example.org", "Xan", pw)
+	expectStatus(t, f.do("POST", "/api/account/email", emailChangeRequest{NewEmail: "xan.new@example.org", CurrentPassword: pw}, as(c)), 200)
+	sent := f.fake.Sent()
+	tok, _ := url.QueryUnescape(tokenRE.FindStringSubmatch(sent[len(sent)-2].Text)[1])
+	if err := f.st.SetStatus(c.me.ID, users.StatusDisabled); err != nil { // e.g. a direct DB edit; disable itself burns the link
+		t.Fatal(err)
+	}
+	w := f.do("POST", "/api/account/confirm-email", tokenRequest{Token: tok})
+	expectStatus(t, w, 410)
+	if !strings.Contains(w.Body.String(), "this link is invalid or was already used") {
+		t.Fatalf("body = %s", w.Body.String())
+	}
+	if got, _ := f.st.GetByID(c.me.ID); got.Email != "xan@example.org" {
+		t.Fatalf("address changed for a disabled user: %q", got.Email)
+	}
+}

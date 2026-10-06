@@ -135,6 +135,18 @@ func (s *Server) handleConfirmEmail(w http.ResponseWriter, r *http.Request) {
 		writeTokenError(w, err)
 		return
 	}
+	// Only an active account may change its address; anything else reads
+	// like a dead link.
+	u, err := a.st.GetByID(uid)
+	if err != nil && !errors.Is(err, users.ErrNotFound) {
+		log.Printf("[users] confirm email: load user #%d: %v", uid, err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if err != nil || u.Status != users.StatusActive {
+		writeTokenError(w, users.ErrTokenInvalid)
+		return
+	}
 	if err := a.st.SetEmail(uid, newEmail); err != nil {
 		if errors.Is(err, users.ErrEmailTaken) {
 			writeError(w, http.StatusConflict, "that address is already in use")
