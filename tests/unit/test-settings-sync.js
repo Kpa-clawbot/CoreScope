@@ -70,6 +70,7 @@ const ALLOW = [
   { key: 'meshcore-my-nodes', kind: 'set', id: 'pubkey' },
   { key: 'meshcore-time-window', kind: 'scalar' },
   { key: 'meshcore-theme', kind: 'scalar' },
+  { key: 'meshcore-cb-preset', kind: 'scalar' },
   { key: 'cs-theme-overrides', kind: 'scalar' },
   { key: 'mc-dark-tile-provider', kind: 'scalar' },
   { key: 'mc-light-tile-provider', kind: 'scalar' },
@@ -130,7 +131,8 @@ function fakeOverlay(doc) {
 // user (default {id: 7}; null = logged out), enabled (default true), hash,
 // customizerReady (default true: the customizer finished its init),
 // shared (a Map: localStorage contents shared with another env, as two tabs
-// of one browser share them; each env keeps its own Storage prototype).
+// of one browser share them; each env keeps its own Storage prototype),
+// prefersDark (the OS colour scheme matchMedia reports).
 function makeEnv(opts) {
   opts = opts || {};
   function Storage() { this.m = opts.shared || new Map(); }
@@ -165,13 +167,15 @@ function makeEnv(opts) {
     notify(m) { toasts.push(m); },
     setLogoutHandler(fn) { logoutHandler = fn; },
   };
-  const env = { navigations: 0, pipelines: 0 };
+  const env = { navigations: 0, pipelines: 0, resets: 0, presetClears: 0 };
   const win = {
     localStorage: ls, Storage, CSAuth: auth, MC_USER_MGMT: enabled ? { enabled: true } : null,
     addEventListener(t, f) { (winListeners[t] = winListeners[t] || []).push(f); },
     dispatchEvent(e) { events.push(e); },
     navigate() { env.navigations++; },
-    _customizerV2: { initDone: opts.customizerReady !== false, runPipeline() { env.pipelines++; } },
+    _customizerV2: { initDone: opts.customizerReady !== false, runPipeline() { env.pipelines++; }, resetAll() { env.resets++; } },
+    MeshCorePresets: { clearPreset() { env.presetClears++; } },
+    matchMedia: (q) => ({ matches: q === '(prefers-color-scheme: dark)' && !!opts.prefersDark }),
   };
   const doc = {
     visibilityState: 'visible',
@@ -333,6 +337,28 @@ test('remote tile providers reach the map through a storage event', async () => 
   await env.timers.advance(0);
   assert(env.events.some((e) => e.type === 'storage' && e.key === 'mc-dark-tile-provider' && e.newValue === 'carto-dark'));
   assert(env.events.some((e) => e.type === 'storage' && e.key === 'mc-light-tile-provider' && e.newValue === 'osm'));
+});
+
+// M1 (final review): app.js ignores a storage event without a value, so a
+// remote removal applies the default the app starts with: the OS colour
+// scheme for the theme, no preset (clearPreset) for the colour-blind preset.
+test('a theme removed on another device falls back to the OS colour scheme', async () => {
+  for (const prefersDark of [false, true]) {
+    const env = makeEnv({ prefersDark, server: serverWith(2, {}), local: synced({ 'meshcore-theme': 'dark' }, 1) });
+    await env.timers.advance(0);
+    assert.strictEqual(env.ls.getItem('meshcore-theme'), null);
+    const ev = env.events.filter((e) => e.type === 'storage' && e.key === 'meshcore-theme');
+    assert.deepStrictEqual(ev.map((e) => e.newValue), [prefersDark ? 'dark' : 'light']);
+  }
+});
+
+test('a colour-blind preset removed on another device is cleared through cb-presets', async () => {
+  const env = makeEnv({ server: serverWith(2, {}), local: synced({ 'meshcore-cb-preset': 'wong' }, 1) });
+  await env.timers.advance(0);
+  assert.strictEqual(env.ls.getItem('meshcore-cb-preset'), null);
+  assert.strictEqual(env.presetClears, 1);
+  assert(!env.events.some((e) => e.type === 'storage' && e.key === 'meshcore-cb-preset'));
+  assert.strictEqual(env.server.puts.length, 0);
 });
 
 test('customizer not initialised yet: its pipeline is not run (its init reads the new values)', async () => {
@@ -724,6 +750,33 @@ test('logout dialog: remove deletes synced keys and the baseline, never channel 
   }
   assert.strictEqual(env.ls.getItem('corescope_channel_keys'), '{"#x":"00"}');
   assert.strictEqual(env.ls.getItem('meshcore-api-key'), 'k');
+});
+
+// M2 (final review): removing the keys alone left the theme and the
+// customizer CSS applied until a reload.
+test('logout dialog: remove shows the defaults at once', async () => {
+  const keys = { 'meshcore-theme': 'dark', 'meshcore-cb-preset': 'wong', 'cs-theme-overrides': '{"x":1}' };
+  const env = makeEnv({ server: serverWith(1, keys), local: synced(keys, 1) });
+  await env.timers.advance(0);
+  env.t.useDialog(() => Promise.resolve('remove'));
+  const h = await env.logoutHandler();
+  const p0 = env.pipelines;
+  h.afterLogout();
+  assert.strictEqual(env.resets, 1, 'customizer Reset All teardown not run');
+  assert.strictEqual(env.pipelines, p0 + 1);
+  assert.strictEqual(env.presetClears, 1);
+  assert(env.events.some((e) => e.type === 'storage' && e.key === 'meshcore-theme' && e.newValue === 'light'));
+  assert.strictEqual(env.ls.getItem('cs-theme-overrides'), null);
+  await env.timers.advance(10000);
+  assert.strictEqual(env.server.puts.length, 0, 'the teardown pushed');
+});
+
+test('logout dialog: remove before the customizer finished its init runs no pipeline', async () => {
+  const env = makeEnv({ customizerReady: false, server: serverWith(1, KEYS), local: synced(KEYS, 1) });
+  await env.timers.advance(0);
+  env.t.useDialog(() => Promise.resolve('remove'));
+  (await env.logoutHandler()).afterLogout();
+  assert.strictEqual(env.resets + env.pipelines, 0);
 });
 
 test('logout dialog: remove after a failed push keeps the data and says so', async () => {

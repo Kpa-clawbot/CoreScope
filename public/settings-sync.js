@@ -259,18 +259,28 @@
     return /^#\/account(\/|\?|$)/.test(location.hash) || !!document.getElementById('cv2-gf-modal-overlay');
   }
 
-  // afterRemoteChange makes the running page show values that arrived from
-  // the account: storage listeners for theme, colour-blind preset and map
-  // tiles, the customizer pipeline for its overrides, and a router
-  // re-render for everything a page reads at init. Before the customizer
-  // finished its init the pipeline is skipped: it would render without the
-  // server defaults, and the init reads the new overrides itself.
-  function afterRemoteChange(changed) {
+  // applyListenerKeys hands changed theme, colour-blind preset and map tile
+  // keys to their storage listeners. Those listeners ignore a removal, so a
+  // removed theme or preset gets the default the app starts with: the OS
+  // colour scheme (app.js) and no preset (cb-presets.js clearPreset).
+  function applyListenerKeys(changed) {
     changed.forEach(function (k) {
       if (!LISTENER_KEYS[k]) return;
       var v = rawGet(k);
+      if (v === undefined && k === 'meshcore-cb-preset') { window.MeshCorePresets.clearPreset(); return; }
+      if (v === undefined && k === 'meshcore-theme') v = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
       window.dispatchEvent(new StorageEvent('storage', { key: k, newValue: v === undefined ? null : v }));
     });
+  }
+
+  // afterRemoteChange makes the running page show values that arrived from
+  // the account: the storage listeners, the customizer pipeline for its
+  // overrides, and a router re-render for everything a page reads at init.
+  // Before the customizer finished its init the pipeline is skipped: it
+  // would render without the server defaults, and the init reads the new
+  // overrides itself.
+  function afterRemoteChange(changed) {
+    applyListenerKeys(changed);
     var cz = window._customizerV2;
     if (changed.indexOf('cs-theme-overrides') !== -1 && cz && cz.initDone) cz.runPipeline();
     window.CSAuth.notify('Settings updated from another device');
@@ -504,12 +514,21 @@
     return push().then(function (ok) { return ok && !state.dirty; });
   }
 
-  // removeLocal deletes the synced keys in list and the baseline. Channel
-  // keys and the API key are never on the allowlist, so they stay.
+  // removeLocal deletes the synced keys in list and the baseline, then
+  // shows the defaults at once: the customizer's own Reset All teardown
+  // (it touches only keys removed here) and the theme and preset defaults.
+  // It runs right before the logout clears the user, so the wrap comes off
+  // first: the teardown's writes are not changes to push. Channel keys and
+  // the API key are never on the allowlist, so they stay.
   function removeLocal(list) {
-    list.forEach(function (e) { rawRemove(e.key); });
+    uninstall();
+    var removed = list.map(function (e) { return e.key; }).filter(function (k) { return rawGet(k) !== undefined; });
+    removed.forEach(rawRemove);
     rawRemove(BASE_KEY);
     rawRemove(REV_KEY);
+    var cz = window._customizerV2;
+    if (cz && cz.initDone) { cz.resetAll(); cz.runPipeline(); }
+    applyListenerKeys(removed);
   }
 
   var LOGOUT_TEXT = [
