@@ -260,7 +260,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/config/geo-filter", s.handleConfigGeoFilter).Methods("GET")
 	r.HandleFunc("/api/config/areas", s.handleConfigAreas).Methods("GET")
 	r.HandleFunc("/api/config/areas/polygons", s.handleConfigAreasPolygons).Methods("GET")
-	r.Handle("/api/config/geo-filter", s.requireAPIKey(http.HandlerFunc(s.handlePutConfigGeoFilter))).Methods("PUT")
+	r.Handle("/api/config/geo-filter", s.requireAdmin(http.HandlerFunc(s.handlePutConfigGeoFilter))).Methods("PUT")
 
 	// Readiness endpoint (gated on background init completion)
 	r.HandleFunc("/api/healthz", s.handleHealthz).Methods("GET")
@@ -275,7 +275,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/perf/sqlite", s.handlePerfSqlite).Methods("GET")
 	r.HandleFunc("/api/perf/write-sources", s.handlePerfWriteSources).Methods("GET")
 	r.HandleFunc("/api/mqtt/status", s.handleMqttStatus).Methods("GET")
-	r.Handle("/api/perf/reset", s.requireAPIKey(http.HandlerFunc(s.handlePerfReset))).Methods("POST")
+	r.Handle("/api/perf/reset", s.requireAdmin(http.HandlerFunc(s.handlePerfReset))).Methods("POST")
 	// /api/admin/prune removed in #1283 — pruning is owned by the
 	// ingestor process (scheduled tickers + startup pass). Operators
 	// who want an ad-hoc prune can restart the ingestor.
@@ -283,11 +283,11 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	// /api/admin/prune-geo-filter (#669 M4 / PR #738): server enqueues a
 	// marker file; the ingestor (which holds the writable DB handle)
 	// runs the DELETE. /status reports completion.
-	r.Handle("/api/admin/prune-geo-filter", s.requireAPIKey(http.HandlerFunc(s.handlePruneGeoFilter))).Methods("POST")
-	r.Handle("/api/admin/prune-geo-filter/status", s.requireAPIKey(http.HandlerFunc(s.handlePruneGeoFilterStatus))).Methods("GET")
-	r.Handle("/api/debug/affinity", s.requireAPIKey(http.HandlerFunc(s.handleDebugAffinity))).Methods("GET")
-	r.Handle("/api/dropped-packets", s.requireAPIKey(http.HandlerFunc(s.handleDroppedPackets))).Methods("GET")
-	r.Handle("/api/backup", s.requireAPIKey(http.HandlerFunc(s.handleBackup))).Methods("GET")
+	r.Handle("/api/admin/prune-geo-filter", s.requireAdmin(http.HandlerFunc(s.handlePruneGeoFilter))).Methods("POST")
+	r.Handle("/api/admin/prune-geo-filter/status", s.requireAdmin(http.HandlerFunc(s.handlePruneGeoFilterStatus))).Methods("GET")
+	r.Handle("/api/debug/affinity", s.requireAdmin(http.HandlerFunc(s.handleDebugAffinity))).Methods("GET")
+	r.Handle("/api/dropped-packets", s.requireAdmin(http.HandlerFunc(s.handleDroppedPackets))).Methods("GET")
+	r.Handle("/api/backup", s.requireAdmin(http.HandlerFunc(s.handleBackup))).Methods("GET")
 
 	// Packet endpoints
 	r.HandleFunc("/api/packets/observations", s.handleBatchObservations).Methods("POST")
@@ -459,6 +459,26 @@ func (s *Server) requireAPIKey(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+// requireAdmin gates operator endpoints. It accepts a strong X-API-Key
+// (exactly requireAPIKey's rules) or, when user management is on, the
+// session of an admin; a cookie-authenticated unsafe method must also pass
+// the CSRF check. A request that sends X-API-Key is judged on the key alone.
+// With user management off this is requireAPIKey.
+func (s *Server) requireAdmin(next http.Handler) http.Handler {
+	keyGate := s.requireAPIKey(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.auth != nil && r.Header.Get("X-API-Key") == "" {
+			if u, sess := s.auth.currentUser(w, r); u != nil {
+				if s.auth.adminSessionOK(w, r, u, sess) {
+					next.ServeHTTP(w, r)
+				}
+				return
+			}
+		}
+		keyGate.ServeHTTP(w, r)
 	})
 }
 

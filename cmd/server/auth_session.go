@@ -90,15 +90,34 @@ func (s *Server) withUser(h authedHandler) http.HandlerFunc {
 	}
 }
 
-// withAdmin is withUser plus role admin.
+// adminSessionOK is the one place that decides whether a session user may
+// act as admin: state-changing methods must pass the origin + CSRF check,
+// and the role must be admin. It writes the 403 itself when not.
+func (a *authService) adminSessionOK(w http.ResponseWriter, r *http.Request, u *users.User, sess *users.Session) bool {
+	if !isSafeMethod(r.Method) && !a.csrfOK(r, sess) {
+		writeError(w, http.StatusForbidden, "CSRF check failed")
+		return false
+	}
+	if u.Role != users.RoleAdmin {
+		writeError(w, http.StatusForbidden, "admin role required")
+		return false
+	}
+	return true
+}
+
+// withAdmin requires a logged-in admin (see adminSessionOK).
 func (s *Server) withAdmin(h authedHandler) http.HandlerFunc {
-	return s.withUser(func(w http.ResponseWriter, r *http.Request, u *users.User, sess *users.Session) {
-		if u.Role != users.RoleAdmin {
-			writeError(w, http.StatusForbidden, "admin role required")
+	return func(w http.ResponseWriter, r *http.Request) {
+		u, sess := s.auth.currentUser(w, r)
+		if u == nil {
+			writeError(w, http.StatusUnauthorized, "not logged in")
+			return
+		}
+		if !s.auth.adminSessionOK(w, r, u, sess) {
 			return
 		}
 		h(w, r, u, sess)
-	})
+	}
 }
 
 // requireOrigin guards unauthenticated state-changing endpoints (login CSRF).
