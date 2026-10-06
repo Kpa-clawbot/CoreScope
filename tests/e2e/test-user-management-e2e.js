@@ -51,7 +51,7 @@ async function registerAndActivate(page, email, name) {
   await page.fill('#regName', name);
   await page.fill('#regPassword', PW);
   await page.click('#registerForm button[type="submit"]');
-  await page.waitForSelector('#accountMsg.ok');
+  await page.waitForSelector('#mailSentHeading');
   const { to, token } = await lastMailToken(page);
   assert(to === email, 'activation mail went to ' + to);
   await page.goto(BASE + '/#/account/activate?token=' + encodeURIComponent(token));
