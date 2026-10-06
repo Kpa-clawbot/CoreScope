@@ -107,6 +107,7 @@
   var BACKOFF_MIN_MS = 2000;
   var BACKOFF_MAX_MS = 300000;
   var MAX_CONFLICT_RETRIES = 3;
+  var FLUSH_TIMEOUT_MS = 5000;
   var FIRST_LOGIN_TEXT = 'Your settings are now saved to your account.';
   // Keys whose change an existing storage listener applies (app.js,
   // cb-presets.js, map-tile-providers.js).
@@ -513,12 +514,26 @@
   var dialog = showDialog;
 
   // flush pushes pending changes now. Resolves true when the account holds
-  // everything this device has.
+  // everything this device has, false when the push failed or took longer
+  // than FLUSH_TIMEOUT_MS (a hanging connection must not hold the logout).
   function flush() {
     clearTimeout(state.pushTimer);
     state.pushTimer = null;
     if (!state.dirty) return Promise.resolve(true);
-    return push().then(function (ok) { return ok && !state.dirty; });
+    return new Promise(function (resolve) {
+      var timer = setTimeout(function () {
+        console.warn('[settings-sync] pending changes were not pushed within ' + FLUSH_TIMEOUT_MS / 1000 + ' s');
+        resolve(false);
+      }, FLUSH_TIMEOUT_MS);
+      push().then(function (ok) {
+        clearTimeout(timer);
+        resolve(ok && !state.dirty);
+      }, function (e) {
+        clearTimeout(timer);
+        console.error('[settings-sync] push failed: ' + (e && e.message));
+        resolve(false);
+      });
+    });
   }
 
   // removeLocal deletes the synced keys in list and the baseline, then

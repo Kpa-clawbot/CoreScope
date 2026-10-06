@@ -804,6 +804,29 @@ test('logout dialog: remove after a failed push keeps the data and says so', asy
   assert(env.toasts.indexOf('Your latest settings could not be saved to your account, so they stay on this device.') !== -1);
 });
 
+// M5 (final review): a hanging connection must not hold the logout dialog.
+test('logout dialog: a push that hangs counts as failed after 5 s', async () => {
+  for (const choice of ['remove', 'keep']) {
+    const env = makeEnv({ server: serverWith(1, KEYS), local: synced(KEYS, 1) });
+    await env.timers.advance(0);
+    holdNext(env, 'PUT'); // never released
+    env.ls.setItem('meshcore-time-window', '60');
+    env.t.useDialog(() => Promise.resolve(choice));
+    let h = null;
+    env.logoutHandler().then((r) => { h = r; });
+    await env.timers.advance(4999);
+    assert.strictEqual(h, null, choice + ': resolved before the timeout');
+    await env.timers.advance(1);
+    assert(h, choice + ': still waiting after 5 s');
+    if (choice === 'keep') { assert.deepStrictEqual(plain(h), {}); continue; }
+    h.afterLogout();
+    assert.strictEqual(env.ls.getItem('meshcore-time-window'), '60');
+    assert.strictEqual(env.ls.getItem('meshcore-favorites'), J(['a']));
+    assert(env.toasts.indexOf('Your latest settings could not be saved to your account, so they stay on this device.') !== -1);
+    assert(env.warnings.some((w) => w.indexOf('5 s') !== -1), 'timeout not logged');
+  }
+});
+
 test('logout dialog: Cancel, Escape or the backdrop cancel the logout', async () => {
   const env = makeEnv({ server: serverWith(1, KEYS), local: synced(KEYS, 1) });
   await env.timers.advance(0);
