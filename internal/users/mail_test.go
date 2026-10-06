@@ -98,3 +98,38 @@ func TestDeleteHashesMailAddresses(t *testing.T) {
 		t.Fatalf("second Delete = %v", err)
 	}
 }
+
+func TestPruneStalePendingHashesMailAddresses(t *testing.T) {
+	st, clk := newTestStore(t)
+	u := mustCreate(t, st, "stale@example.org", "Stale")
+	uid := u.ID
+	id, err := st.LogMail(&uid, "stale@example.org", "activate", "<s1@x>")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(72 * time.Hour)
+	if n, err := st.PruneStalePending(48 * time.Hour); err != nil || n != 1 {
+		t.Fatalf("PruneStalePending = %d, %v", n, err)
+	}
+	rec, err := st.MailByID(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.UserID != nil || rec.ToEmail != HashedEmail("stale@example.org") {
+		t.Fatalf("mail record after prune: %+v", rec)
+	}
+}
+
+func TestDeleteHashesEachMailRowOwnAddress(t *testing.T) {
+	st, _ := newTestStore(t)
+	u := mustCreate(t, st, "new@example.org", "Chg")
+	uid := u.ID
+	id, _ := st.LogMail(&uid, "old@example.org", "activate", "<o1@x>")
+	if err := st.Delete(u.ID); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := st.MailByID(id)
+	if rec.ToEmail != HashedEmail("old@example.org") {
+		t.Fatalf("ToEmail = %q", rec.ToEmail)
+	}
+}

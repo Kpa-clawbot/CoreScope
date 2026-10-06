@@ -60,6 +60,12 @@ func VerifyPassword(encoded, password string) (bool, error) {
 	if err != nil || len(want) == 0 {
 		return false, errors.New("users: bad key")
 	}
+	if t < 1 || p < 1 || m < 8*uint32(p) || m > 1<<20 || len(salt) < 8 || len(want) < 16 || len(want) > 64 {
+		return false, errors.New("users: argon2 parameters out of range")
+	}
+	if fmt.Sprintf("m=%d,t=%d,p=%d", m, t, p) != parts[3] {
+		return false, errors.New("users: malformed argon2 parameters")
+	}
 	got := argon2.IDKey([]byte(password), salt, t, m, p, uint32(len(want)))
 	return subtle.ConstantTimeCompare(got, want) == 1, nil
 }

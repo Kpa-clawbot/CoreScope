@@ -35,10 +35,10 @@ func TestValidateDisplayName(t *testing.T) {
 	if got, err := ValidateDisplayName("  ON8AR Erwin  "); err != nil || got != "ON8AR Erwin" {
 		t.Fatalf("got %q, %v", got, err)
 	}
-	if _, err := ValidateDisplayName("👩‍💻 dev"); err != nil { // ZWJ emoji sequence is allowed
+	if _, err := ValidateDisplayName("\U0001F469\u200d\U0001F4BB dev"); err != nil { // ZWJ emoji sequence is allowed
 		t.Fatalf("ZWJ sequence rejected: %v", err)
 	}
-	bad := []string{"a", strings.Repeat("x", 33), "evil‮eman", "tab\tname", "zero​width", "line sep"}
+	bad := []string{"a", strings.Repeat("x", 33), "evil\u202eeman", "tab\tname", "zero\u200bwidth", "line\u2028sep"}
 	for _, in := range bad {
 		if _, err := ValidateDisplayName(in); err == nil {
 			t.Errorf("ValidateDisplayName(%q) accepted", in)

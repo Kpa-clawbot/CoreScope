@@ -32,6 +32,9 @@ func (s *Store) Audit(actor *int64, action string, target *int64, detail map[str
 
 // AuditFor returns entries where userID is the target or the actor, newest first.
 func (s *Store) AuditFor(userID int64, limit int) ([]AuditEntry, error) {
+	if limit <= 0 {
+		limit = 100
+	}
 	rows, err := s.db.Query(`SELECT id, at, actor_user_id, action, target_user_id, detail FROM audit_log
 		WHERE target_user_id = ? OR actor_user_id = ? ORDER BY at DESC, id DESC LIMIT ?`, userID, userID, limit)
 	if err != nil {

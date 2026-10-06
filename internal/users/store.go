@@ -35,6 +35,9 @@ type Store struct {
 // passes the measurement DB path so a misconfigured dbPath can never turn
 // this package into a writer of measurement data.
 func Open(path string, forbidden ...string) (*Store, error) {
+	if strings.ContainsAny(path, "?#") {
+		return nil, fmt.Errorf("users: database path %q must not contain '?' or '#'", path)
+	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("users: resolve %s: %w", path, err)

@@ -1,6 +1,9 @@
 package users
 
 import (
+	"database/sql"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -61,8 +64,11 @@ func (s *Store) CreateSession(userID int64, ttl time.Duration, userAgent string)
 // return ErrNotFound; expired ones are deleted on the way.
 func (s *Store) LookupSession(raw string) (*Session, error) {
 	sess, err := scanSession(s.db.QueryRow(`SELECT `+sessionCols+` FROM sessions WHERE token_hash = ?`, HashToken(raw)))
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("users: lookup session: %w", err)
 	}
 	if !s.now().Before(sess.ExpiresAt) {
 		_, _ = s.db.Exec(`DELETE FROM sessions WHERE id = ?`, sess.ID)

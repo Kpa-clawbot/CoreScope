@@ -136,6 +136,9 @@ func (s *Store) MailByID(id int64) (*MailRecord, error) {
 
 // MailForUser returns a user's mails, newest first, each with its events.
 func (s *Store) MailForUser(userID int64, limit int) ([]MailRecord, error) {
+	if limit <= 0 {
+		limit = 50
+	}
 	rows, err := s.db.Query(`SELECT `+mailCols+` FROM mail_log WHERE user_id = ? ORDER BY sent_at DESC, id DESC LIMIT ?`, userID, limit)
 	if err != nil {
 		return nil, err

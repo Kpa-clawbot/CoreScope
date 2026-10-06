@@ -72,7 +72,10 @@ func (s *Store) ConsumeToken(raw string, p Purpose) (userID int64, newEmail stri
 	if now >= expires {
 		return 0, "", ErrTokenExpired
 	}
-	if _, err := tx.Exec(`UPDATE tokens SET used_at = ? WHERE token_hash = ?`, now, hash); err != nil {
+	if err := expectOne(tx.Exec(`UPDATE tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL`, now, hash)); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return 0, "", ErrTokenInvalid
+		}
 		return 0, "", err
 	}
 	if err := tx.Commit(); err != nil {

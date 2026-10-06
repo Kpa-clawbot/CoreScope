@@ -44,10 +44,10 @@ func ValidateDisplayName(raw string) (string, error) {
 		return "", &ValidationError{Msg: "display name must be 2 to 32 characters"}
 	}
 	for _, r := range n {
-		if r == '‍' {
+		if r == '\u200d' {
 			continue
 		}
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == ' ' || r == ' ' {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029' {
 			return "", &ValidationError{Msg: "display name contains invisible or control characters"}
 		}
 	}

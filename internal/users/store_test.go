@@ -62,3 +62,11 @@ func TestOpenRejectsNewerSchema(t *testing.T) {
 		t.Fatalf("Open with newer schema err = %v", err)
 	}
 }
+
+func TestOpenRejectsDSNCharacters(t *testing.T) {
+	for _, p := range []string{"users?.db", "users#1.db"} {
+		if _, err := Open(filepath.Join(t.TempDir(), p)); err == nil {
+			t.Errorf("Open(%q) accepted", p)
+		}
+	}
+}

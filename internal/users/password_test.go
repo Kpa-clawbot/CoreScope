@@ -62,3 +62,18 @@ func TestHashedEmailIsStableAndOpaque(t *testing.T) {
 func TestBurnPasswordCheckDoesNotPanic(t *testing.T) {
 	BurnPasswordCheck("anything at all")
 }
+
+func TestVerifyPasswordRejectsDangerousParams(t *testing.T) {
+	tail := "$c2FsdHNhbHRzYWx0$aGFzaGhhc2hoYXNoaGFzaA"
+	for _, enc := range []string{
+		"$argon2id$v=19$m=19456,t=0,p=1" + tail,
+		"$argon2id$v=19$m=19456,t=2,p=0" + tail,
+		"$argon2id$v=19$m=1073741824,t=2,p=1" + tail,
+		"$argon2id$v=19$m=19456,t=2,p=1x" + tail,
+		"$argon2id$v=19$m=4,t=2,p=1" + tail,
+	} {
+		if _, err := VerifyPassword(enc, "x"); err == nil {
+			t.Errorf("VerifyPassword(%q) returned no error", enc)
+		}
+	}
+}

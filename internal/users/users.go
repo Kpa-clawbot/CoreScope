@@ -145,14 +145,14 @@ func (s *Store) Delete(id int64) error {
 		return err
 	}
 	defer tx.Rollback()
-	var email string
-	if err := tx.QueryRow(`SELECT email FROM users WHERE id = ?`, id).Scan(&email); err != nil {
+	var exists int
+	if err := tx.QueryRow(`SELECT 1 FROM users WHERE id = ?`, id).Scan(&exists); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
 		return err
 	}
-	if _, err := tx.Exec(`UPDATE mail_log SET to_email = ? WHERE user_id = ?`, HashedEmail(email), id); err != nil {
+	if err := hashMailLogTx(tx, id); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM users WHERE id = ?`, id); err != nil {
@@ -168,7 +168,8 @@ type ListFilter struct {
 	Query  string // substring of email or display name, case-insensitive
 }
 
-// List returns at most 1000 users, newest first.
+// List returns at most 1000 users, newest first. SQLite lower()/LIKE fold
+// ASCII only, so a non-ASCII search is case-sensitive.
 func (s *Store) List(f ListFilter) ([]User, error) {
 	q := `SELECT ` + userCols + ` FROM users WHERE 1=1`
 	var args []any
@@ -217,11 +218,71 @@ func (s *Store) CountActiveAdmins() (int, error) {
 // unused, unexpired activation token left.
 func (s *Store) PruneStalePending(maxAge time.Duration) (int64, error) {
 	now := unix(s.now())
-	res, err := s.db.Exec(`DELETE FROM users WHERE status = 'pending' AND created_at < ?
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query(`SELECT id FROM users WHERE status = 'pending' AND created_at < ?
 		AND NOT EXISTS (SELECT 1 FROM tokens t WHERE t.user_id = users.id AND t.purpose = 'activate'
 			AND t.used_at IS NULL AND t.expires_at > ?)`, now-int64(maxAge/time.Second), now)
 	if err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, id := range ids {
+		if err := hashMailLogTx(tx, id); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`DELETE FROM users WHERE id = ?`, id); err != nil {
+			return 0, err
+		}
+	}
+	return int64(len(ids)), tx.Commit()
+}
+
+// hashMailLogTx replaces the plaintext address of every mail_log row of the
+// user with HashedEmail of that row's own address (rows may predate an email
+// change). Rows already hashed are skipped. The cursor is closed before any
+// UPDATE because the store uses a single connection.
+func hashMailLogTx(tx *sql.Tx, userID int64) error {
+	rows, err := tx.Query(`SELECT id, to_email FROM mail_log WHERE user_id = ? AND to_email NOT LIKE 'sha256:%'`, userID)
+	if err != nil {
+		return err
+	}
+	type row struct {
+		id    int64
+		email string
+	}
+	var list []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.email); err != nil {
+			rows.Close()
+			return err
+		}
+		list = append(list, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, r := range list {
+		if _, err := tx.Exec(`UPDATE mail_log SET to_email = ? WHERE id = ?`, HashedEmail(r.email), r.id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
