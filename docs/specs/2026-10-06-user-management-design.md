@@ -41,8 +41,8 @@ There is no session, cookie, CSRF, rate-limit or mail code anywhere (`public/app
    on disk.
 2. Self-registration with **email + password**, activated by a link sent to that
    address; activated accounts get role `user`.
-3. Roles `user` and `admin`. Admins can disable, enable, delete, promote and demote
-   users, and see the delivery status of the mails sent to them.
+3. Roles `user` and `admin`. Admins can manually activate, disable, enable, delete,
+   promote and demote users, and see the delivery status of the mails sent to them.
 4. A foundation that B–E build on without redesign: sessions, roles, an audit log,
    a mailer.
 
@@ -164,6 +164,7 @@ The schema has its own `schema_version` and forward-only migrations, independent
     raised later)
   - `role` (`user`|`admin`), `status` (`pending`|`active`|`disabled`)
   - `created_at`, `activated_at`, `last_login_at`
+  - `activated_by` (nullable admin user id; null means activated by link)
   - `email_bouncing` BOOLEAN, set on a hard bounce
 - **`sessions`**:
   - `token_hash` PK (SHA-256 of a 256-bit random token; the raw token exists only in
@@ -265,6 +266,16 @@ All of these require role `admin` and live under `/api/admin/users`.
   - The last admin can't be demoted, disabled or deleted.
   - An admin can't disable or delete themselves; they use "my account" for that.
 - `POST …/{id}/resend-activation` works only for pending users.
+- `POST …/{id}/activate` manually activates a pending user, for when mail keeps
+  failing (bounces, spam filters, Brevo outage).
+  - It sets the status to `active` and `activated_at`, applies the `adminEmails` role
+    rule exactly like link activation, and invalidates any outstanding activation
+    tokens.
+  - The address is then **not verified** by the user. The user row records
+    `activated_by` (the admin's id) and the audit log records
+    `user.activate.manual`, so this stays visible in the admin views.
+  - No session is created. The user logs in with the password they chose at
+    registration, or uses "forgot password" once mail works.
 - `POST …/{id}/mail/{mailId}/refresh` pulls the events for that message from the
   provider API.
 - Every action writes an `audit_log` row.
@@ -383,6 +394,8 @@ logged-in admins.
   - The full register → mail → activate → login → me → logout flow.
   - Identical enumeration responses for register and forgot.
   - Reset ends sessions. Disable ends sessions.
+  - Manual activation: only for pending users, invalidates the activation token,
+    records `activated_by` and an audit row, and applies the `adminEmails` rule.
   - Rate limits and 429, including `trustedProxies` handling.
   - CSRF rejection: wrong origin, missing header, wrong token.
   - The admin-only routes return 403 for `user` and 401 for anonymous requests.
