@@ -123,7 +123,11 @@
     active: false, userId: null, policy: null,
     base: {}, rev: 0, hold: false, firstUpload: false,
     dirty: false, seq: 0, pushing: null, pushTimer: null, retryTimer: null, pullTimer: null,
-    backoff: BACKOFF_MIN_MS, blocked: null, status: 'idle', lastSyncedAt: null, tooLarge: []
+    backoff: BACKOFF_MIN_MS, blocked: null, status: 'idle', lastSyncedAt: null, tooLarge: [],
+    // epoch changes on every activate/deactivate: an answer to a request
+    // from an earlier session is dropped. putsDone counts PUT answers, so a
+    // pull can tell a push finished while its GET was out.
+    epoch: 0, putsDone: 0
   };
 
   function rawGet(k) { var v = origGet.call(window.localStorage, k); return v === null ? undefined : v; }
@@ -297,13 +301,14 @@
     if (!state.active || state.blocked || !state.policy) return Promise.resolve(false);
     if (state.pushing) return state.pushing.then(function () { return state.dirty ? push() : true; });
     attempt = attempt || 0;
-    var keys = snapshot(), seq = state.seq, uid = state.userId;
+    var keys = snapshot(), seq = state.seq, epoch = state.epoch;
     if (state.rev > 0 && sameKeys(keys, state.base)) { synced(seq); return Promise.resolve(true); }
     setStatus('syncing');
     var p = window.CSAuth.request('PUT', '/api/account/settings', { baseRevision: state.rev, doc: { v: 1, keys: keys } })
       .then(function (r) {
+        if (state.epoch !== epoch) return false; // logged out (and maybe in again) meanwhile
         state.pushing = null;
-        if (!state.active || state.userId !== uid) return false; // logged out, or another user, meanwhile
+        state.putsDone++;
         if (r.ok) {
           saveBase(keys, r.data.revision, false);
           synced(seq);
@@ -332,20 +337,27 @@
         if (r.status !== 401) retryLater(); // 401: auth.js logged out, which deactivates this module
         return false;
       }, function () {
+        if (state.epoch !== epoch) return false;
         state.pushing = null;
-        if (state.active && state.userId === uid) retryLater();
+        retryLater();
         return false;
       });
     state.pushing = p;
     return p;
   }
 
+  // pull fetches the account's document. An answer is dropped when the
+  // session changed or a push finished (or the baseline moved) while the
+  // GET was out: it describes the account before that push, and applying
+  // it would revert this device's change or mistake the first upload's
+  // revision-0 answer for a deleted copy. The next pull catches up.
   function pull() {
     if (!state.active) return Promise.resolve();
     if (state.pushing) return state.pushing.then(pull);
-    var uid = state.userId;
+    var epoch = state.epoch, puts = state.putsDone, rev = state.rev;
+    var stale = function () { return state.epoch !== epoch || state.putsDone !== puts || state.rev !== rev; };
     return window.CSAuth.request('GET', '/api/account/settings').then(function (r) {
-      if (!state.active || state.userId !== uid) return;
+      if (stale()) return;
       if (!r.ok) { if (r.status !== 401) setStatus('retrying'); return; }
       setPolicy(r.data.allowlist || []);
       if (applyProfile(r.data.revision, r.data.doc)) {
@@ -356,7 +368,7 @@
       if (state.dirty) return push();
       if (r.data.revision) { state.lastSyncedAt = new Date(); setStatus('ok'); }
       else setStatus(state.hold ? 'held' : 'idle');
-    }, function () { if (state.active) setStatus('retrying'); });
+    }, function () { if (!stale()) setStatus('retrying'); });
   }
 
   // syncNow: the account page button. Retries after a 413 (the user may
@@ -381,6 +393,7 @@
     if (state.active && state.userId === user.id) return Promise.resolve();
     if (state.active) deactivate();
     var b = loadBase(user.id);
+    state.epoch++;
     state.active = true;
     state.userId = user.id;
     state.policy = null;
@@ -399,6 +412,7 @@
 
   function deactivate() {
     state.active = false;
+    state.epoch++;
     clearTimeout(state.pushTimer);
     clearTimeout(state.retryTimer);
     clearInterval(state.pullTimer);

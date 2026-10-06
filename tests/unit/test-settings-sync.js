@@ -483,6 +483,73 @@ test('logout makes the module inert: wrap removed, no timers, no requests', asyn
   assert.deepStrictEqual(env.timers.delays(), []);
 });
 
+// holdNext delays the answer to the next request of method until the
+// returned release() is called. The fake server still handles it at send
+// time, so the held answer reflects the account as it was then.
+function holdNext(env, method) {
+  const orig = env.win.CSAuth.request;
+  let release, used = false;
+  const gate = new Promise((r) => { release = r; });
+  env.win.CSAuth.request = function (m, p, b) {
+    const res = orig.call(this, m, p, b);
+    if (m !== method || used) return res;
+    used = true;
+    return gate.then(() => res);
+  };
+  return () => { release(); return settle(); };
+}
+
+test('a pull answered after a successful push does not revert the local change', async () => {
+  const env = makeEnv({ server: serverWith(1, { 'meshcore-time-window': '60' }), local: synced({ 'meshcore-time-window': '60' }, 1) });
+  await env.timers.advance(0);
+  const release = holdNext(env, 'GET');
+  await env.fireDoc('visibilitychange'); // GET sent, answer (revision 1) held
+  env.ls.setItem('meshcore-time-window', '180');
+  await env.timers.advance(2000);
+  assert.strictEqual(env.server.rev, 2);
+  await release();
+  assert.strictEqual(env.ls.getItem('meshcore-time-window'), '180');
+  assert.strictEqual(env.ls.getItem('cs-settings-sync-rev'), '2');
+  assert.strictEqual(env.navigations, 0);
+  assert.strictEqual(env.toasts.indexOf('Settings updated from another device'), -1);
+});
+
+test('a revision-0 pull answered after the first upload does not enter hold', async () => {
+  const env = makeEnv({ user: null, local: { 'meshcore-favorites': J(['a']) } });
+  await settle();
+  const release = holdNext(env, 'GET');
+  const loggedIn = env.login({ id: 7 }); // first GET held
+  env.fireDoc('visibilitychange'); // second GET answered at once: revision 0, first upload
+  await loggedIn;
+  assert.strictEqual(env.server.rev, 1);
+  await release();
+  assert.strictEqual(JSON.parse(env.ls.getItem('cs-settings-sync-base')).hold, false);
+  assert.strictEqual(env.ls.getItem('cs-settings-sync-rev'), '1');
+  assert.strictEqual(env.t.state.status, 'ok');
+});
+
+test('a push answered after logout and login again does not touch the new session', async () => {
+  const env = makeEnv({ server: serverWith(1, {}), local: synced({}, 1) });
+  await env.timers.advance(0);
+  const releaseOld = holdNext(env, 'PUT');
+  env.ls.setItem('meshcore-time-window', '60');
+  await env.timers.advance(2000); // old session PUT held
+  await env.logout();
+  await env.login({ id: 7 });
+  const releaseNew = holdNext(env, 'PUT');
+  env.ls.setItem('meshcore-time-window', '15');
+  await env.timers.advance(2000); // new session PUT held
+  const inFlight = env.t.state.pushing;
+  assert(inFlight);
+  await releaseOld();
+  assert.strictEqual(env.t.state.pushing, inFlight);
+  assert.strictEqual(env.t.state.status, 'syncing');
+  await releaseNew();
+  assert.strictEqual(env.t.state.pushing, null);
+  assert.strictEqual(env.ls.getItem('cs-settings-sync-rev'), '3');
+  assert.strictEqual(JSON.parse(env.ls.getItem('cs-settings-sync-base')).keys['meshcore-time-window'], '15');
+});
+
 (async () => {
   let passed = 0, failed = 0;
   for (const t of tests) {
