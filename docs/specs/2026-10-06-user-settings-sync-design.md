@@ -318,3 +318,11 @@ rules override the sections above where they differ.
    baseline of another generation counts as none. A device that synced the old
    document therefore merges by union instead of dropping its items, and an offline
    retry from the old document gets 409 instead of overwriting the new one.
+10. **Final-review client rules.** The stored baseline is re-read before every merge and
+    push, so tabs of one browser never merge against a stale copy. A 403 on a settings
+    request re-reads `/api/auth/me`: another user or nobody re-activates or deactivates
+    the module, the same user stops syncing in that tab until a reload. The push before
+    logout gives up after 5 seconds and counts as failed. A removed theme or
+    colour-blind preset falls back to the app's default (OS colour scheme, no preset),
+    and "Remove my settings" runs the customizer's Reset All teardown so the page shows
+    the defaults at once.
