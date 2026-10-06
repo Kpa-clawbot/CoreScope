@@ -156,6 +156,60 @@ test('logged-out header is a login link', async () => {
   assert(env.els.accountWrap.innerHTML.indexOf('href="#/account/login"') !== -1);
 });
 
+test('401 from the activate call (wrong password) keeps the session and shows no toast', async () => {
+  const env = makeEnv((u) => u === '/api/auth/me' ? { status: 200, body: ME } : { status: 401, body: { error: 'wrong password for this account' } });
+  await env.win.CSAuth.ready();
+  await env.win.CSAuth.request('POST', '/api/auth/activate', { token: 't', password: 'p' });
+  assert.strictEqual(env.win.CS_USER.displayName, 'Ann');
+  assert.strictEqual(env.els.csAuthToast, undefined);
+});
+
+console.log('mobile nav account entry');
+
+// Slice the real route tables and builders out of the two files; markers
+// failing to match throws instead of silently testing nothing.
+function sliceBetween(file, from, to) {
+  const src = fs.readFileSync(path.join(ROOT, 'public', file), 'utf8');
+  const a = src.indexOf(from), b = src.indexOf(to);
+  assert(a !== -1 && b > a, 'markers moved in ' + file);
+  return src.slice(a, b);
+}
+function loadNav(file, from, to, fn, win) {
+  const sb = { window: Object.assign({ addEventListener() {} }, win), console };
+  vm.createContext(sb);
+  vm.runInContext(sliceBetween(file, from, to) + '\nthis.fn = ' + fn + ';', sb);
+  return sb.fn;
+}
+const NAVS = [
+  { name: 'bottom-nav moreRoutes', file: 'bottom-nav.js', from: 'var MORE_ROUTES = [', to: 'var SHEET_ID', fn: 'moreRoutes' },
+  { name: 'nav-drawer routes', file: 'nav-drawer.js', from: 'var ROUTES = [', to: 'function phIconHTML', fn: 'routes' },
+];
+NAVS.forEach((n) => {
+  const get = (win) => loadNav(n.file, n.from, n.to, n.fn, win)();
+  const acct = (list) => list.filter((r) => r.route === 'account');
+  test(n.name + ': no account entry when user management is off', () => {
+    assert.strictEqual(acct(get({})).length, 0);
+  });
+  test(n.name + ': Log in entry when logged out', () => {
+    const a = acct(get({ MC_USER_MGMT: { enabled: true } }));
+    assert.strictEqual(a.length, 1);
+    assert.strictEqual(a[0].hash, '#/account/login');
+    assert.strictEqual(a[0].label, 'Log in');
+  });
+  test(n.name + ': My account entry when logged in', () => {
+    const a = acct(get({ MC_USER_MGMT: { enabled: true }, CS_USER: { id: 1 } }));
+    assert.strictEqual(a.length, 1);
+    assert.strictEqual(a[0].hash, '#/account');
+    assert.strictEqual(a[0].label, 'My account');
+  });
+  test(n.name + ': coverage insert still present after analytics', () => {
+    const list = get({ MC_CLIENT_RX_COVERAGE: true, MC_USER_MGMT: { enabled: true } });
+    const i = list.findIndex((r) => r.route === 'analytics');
+    assert.strictEqual(list[i + 1].route, 'rx-coverage');
+    assert.strictEqual(list.length, get({}).length + 2);
+  });
+});
+
 Promise.all(pending).then(() => {
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed ? 1 : 0);

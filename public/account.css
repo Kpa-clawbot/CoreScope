@@ -24,7 +24,7 @@
    their own buttons: --text-on-accent on --accent-strong, as .tab-btn.active does. */
 .account-btn { align-self: flex-start; min-height: 48px; padding: 8px 20px; border-radius: 6px; font: inherit; cursor: pointer; touch-action: manipulation; }
 .account-btn-primary { background: var(--accent-strong); color: var(--text-on-accent); border: 1px solid var(--accent-strong); }
-.account-btn-primary:hover { background: var(--palette-blue-700, #1d4ed8); }
+.account-btn-primary:hover { background: var(--palette-blue-700); }
 .account-btn-secondary { background: var(--surface-1); color: var(--text); border: 1px solid var(--border); }
 .account-btn-secondary:hover { background: var(--row-hover); }
 .account-hint { font-size: var(--fs-sm); color: var(--text-muted); margin: 0; }

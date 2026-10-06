@@ -17,7 +17,7 @@
     }
     return fetch(path, opts).then(function (res) {
       return res.json().catch(function () { return {}; }).then(function (data) {
-        if (res.status === 401 && state.user && path !== '/api/auth/login') {
+        if (res.status === 401 && state.user && path !== '/api/auth/login' && path !== '/api/auth/activate') {
           setUser(null);
           notify('You were logged out.');
         }
