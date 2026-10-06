@@ -49,6 +49,20 @@
     window.dispatchEvent(new CustomEvent('cs-auth-changed', { detail: state.user }));
   }
 
+  // logout ends the session on the server. Only when that succeeded does it
+  // move to next and then clear the user, so pages listening for
+  // 'cs-auth-changed' already see the new view. A refusal keeps the user
+  // and is returned for the caller to show.
+  function logout(next) {
+    return request('POST', '/api/auth/logout').then(function (r) {
+      if (r.ok) {
+        location.hash = next;
+        setUser(null);
+      }
+      return r;
+    });
+  }
+
   function refreshMe() {
     return request('GET', '/api/auth/me').then(function (r) {
       setUser(r.ok ? r.data : null);
@@ -100,10 +114,9 @@
     });
     menu.addEventListener('click', closeMenu);
     document.getElementById('accountLogout').addEventListener('click', function () {
-      request('POST', '/api/auth/logout').then(function () {
-        setUser(null);
-        location.hash = '#/home';
-      });
+      logout('#/home').then(function (r) {
+        if (!r.ok) notify((r.data && r.data.error) || ('Logout failed (HTTP ' + r.status + ')'));
+      }, function () { notify('Network error, try again.'); });
     });
   }
 
@@ -120,6 +133,7 @@
   window.CSAuth = {
     request: request,
     refreshMe: refreshMe,
+    logout: logout,
     setUser: setUser,
     notify: notify,
     ready: function () { return state.ready; },

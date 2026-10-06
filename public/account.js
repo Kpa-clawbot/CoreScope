@@ -6,6 +6,23 @@
   'use strict';
 
   function query() { return new URLSearchParams(location.hash.split('?')[1] || ''); }
+  // takeToken reads a link token once and strips it from the address bar, so
+  // it does not linger in history or a bookmark.
+  function takeToken(view) {
+    var token = query().get('token') || '';
+    if (token) history.replaceState(null, '', '#/account/' + view);
+    return token;
+  }
+  // Unknown names, inherited keys included, show the profile.
+  function viewName(routeParam) {
+    var name = routeParam || 'profile';
+    return Object.prototype.hasOwnProperty.call(views, name) ? name : 'profile';
+  }
+  // The view the address bar shows (null when not on an account page).
+  function currentView() {
+    var parts = location.hash.split('?')[0].split('/');
+    return parts[1] === 'account' ? viewName(parts[2]) : null;
+  }
   function val(id) { var el = document.getElementById(id); return el ? el.value : ''; }
 
   function shell(title, inner) {
@@ -55,6 +72,10 @@
   function profileHtml(u) {
     return shell('My account',
       '<p class="account-hint">Signed in as ' + escapeHtml(u.email) + (u.role === 'admin' ? ' (admin)' : '') + '</p>' +
+      '<div class="account-actions">' +
+      '<button type="button" id="accountPageLogout" class="account-btn account-btn-secondary">Log out</button>' +
+      (u.role === 'admin' ? '<a class="account-btn account-btn-secondary" href="#/admin/users">Manage users</a>' : '') +
+      '</div>' + msgBox('logoutMsg') +
       '<h3>Profile</h3><form id="profileForm" class="account-form" novalidate>' +
       field('profName', 'Display name', 'text', 'nickname', ' minlength="2" maxlength="32"') +
       submitBtn('Save') + msgBox('profMsg') + '</form>' +
@@ -83,8 +104,8 @@
     return html;
   }
 
-  function tokenView(app, title, path, okText, renew) {
-    var token = query().get('token') || '';
+  function tokenView(app, title, view, path, okText, renew) {
+    var token = takeToken(view);
     app.innerHTML = shell(title, msgBox() + '<p class="account-links"><a href="#/account/login">Log in</a></p>');
     if (!token) { say('This link is incomplete. Open the link from the mail again.', false); return; }
     say('Working…', true);
@@ -94,6 +115,9 @@
       return r;
     });
   }
+
+  // The profile view on screen, so an auth change can redirect or re-render.
+  var shown = { app: null, userId: null };
 
   var views = {
     login: function (app) {
@@ -133,7 +157,7 @@
     },
 
     activate: function (app) {
-      var token = query().get('token') || '';
+      var token = takeToken('activate');
       if (!token) {
         app.innerHTML = shell('Activate your account', msgBox() + '<p class="account-links"><a href="#/account/login">Log in</a></p>');
         say('This link is incomplete. Open the link from the mail again.', false);
@@ -150,7 +174,8 @@
           if (r.status === 401) { say('Wrong password for this account', false); return; }
           if (!r.ok) {
             say(errText(r), false);
-            showGone(r, '#/account/register', 'Register again to get a new link');
+            // An already active account needs a login, not a new registration.
+            if (!/already activated/i.test(errText(r))) showGone(r, '#/account/register', 'Register again to get a new link');
             return;
           }
           say('Your account is active. You are logged in.', true);
@@ -173,7 +198,7 @@
     },
 
     reset: function (app) {
-      var token = query().get('token') || '';
+      var token = takeToken('reset');
       app.innerHTML = shell('Choose a new password',
         '<form id="resetForm" class="account-form" novalidate>' +
         field('resetPassword', 'New password', 'password', 'new-password', ' minlength="10" maxlength="128"') +
@@ -184,13 +209,15 @@
         if (val('resetPassword') !== val('resetPassword2')) { say('The passwords do not match.', false); return; }
         return CSAuth.request('POST', '/api/auth/reset', { token: token, password: val('resetPassword') }).then(function (r) {
           say(r.ok ? r.data.message : errText(r), r.ok);
+          // The reset ended every session, this browser's included.
+          if (r.ok) CSAuth.setUser(null);
           if (!r.ok) showGone(r, '#/account/forgot', 'Send a new link');
         });
       });
     },
 
     'confirm-email': function (app) {
-      var p = tokenView(app, 'Confirm your new address', '/api/account/confirm-email', null,
+      var p = tokenView(app, 'Confirm your new address', 'confirm-email', '/api/account/confirm-email', null,
         { href: '#/account', label: 'Send a new link from your account page' });
       if (p) p.then(function (r) { if (r && r.ok && CSAuth.user()) CSAuth.refreshMe(); });
     },
@@ -198,8 +225,16 @@
     profile: function (app) {
       var u = CSAuth.user();
       if (!u) { location.hash = '#/account/login'; return; }
+      shown.app = app;
+      shown.userId = u.id;
       app.innerHTML = profileHtml(u);
       document.getElementById('profName').value = u.displayName;
+
+      document.getElementById('accountPageLogout').addEventListener('click', function () {
+        return CSAuth.logout('#/account/login').then(function (r) {
+          if (!r.ok) say(errText(r), false, 'logoutMsg');
+        }, function () { say('Network error, try again.', false, 'logoutMsg'); });
+      });
 
       onSubmit('profileForm', function () {
         return CSAuth.request('PATCH', '/api/account', { displayName: val('profName') }).then(function (r) {
@@ -255,10 +290,19 @@
     app.innerHTML = shell('Accounts', '<p>Loading…</p>');
     CSAuth.ready().then(function () {
       if (!CSAuth.isEnabled()) { app.innerHTML = shell('Accounts', '<p>Accounts are not enabled on this instance.</p>'); return; }
-      var view = views[routeParam || 'profile'] || views.profile;
-      view(app);
+      views[viewName(routeParam)](app);
     });
   }
+
+  // Logout (here, in the header or by a 401) leaves the profile for the
+  // login view; another user logging in re-renders it. A display-name save
+  // is the same user and keeps the form and its message.
+  window.addEventListener('cs-auth-changed', function (e) {
+    if (currentView() !== 'profile' || !shown.app) return;
+    var u = e.detail;
+    if (!u) { location.hash = '#/account/login'; return; }
+    if (u.id !== shown.userId) views.profile(shown.app);
+  });
 
   registerPage('account', { init: init, destroy: function () {} });
   window.CSAccount = { _test: { profileHtml: profileHtml, sessionsHtml: sessionsHtml, renewLinkHtml: renewLinkHtml, views: views } };

@@ -103,14 +103,17 @@ async function registerAndActivate(page, email, name) {
     assert(await user.locator('#accountMenu a[href="#/admin/users"]').count() === 0, 'non-admin sees Users');
   });
 
-  await step('user logs out from the account page and logs in again', async () => {
+  await step('user logs out from the account page (phone width) and logs in again', async () => {
+    // At phone width the header control is hidden: the page button is the only way out.
+    await user.setViewportSize({ width: 375, height: 800 });
     await user.goto(BASE + '/#/account');
     await user.waitForSelector('#profileForm');
-    if (await user.locator('#accountMenu').isHidden()) await user.click('#accountToggle');
-    await user.click('#accountLogout');
-    await user.waitForSelector('#accountToggle .nav-account-label:has-text("Log in")');
-    await user.goto(BASE + '/#/account/login');
+    await user.click('#accountPageLogout');
     await user.waitForSelector('#loginForm');
+    assert(await user.evaluate(() => location.hash) === '#/account/login', 'not on the login view after logout');
+    assert(await user.evaluate(() => window.CS_USER === null), 'client still holds the user');
+    await user.setViewportSize({ width: 1280, height: 720 });
+    await user.waitForSelector('#accountToggle .nav-account-label:has-text("Log in")');
     await user.fill('#loginEmail', 'user@e2e.test');
     await user.fill('#loginPassword', PW);
     await user.click('#loginForm button[type="submit"]');

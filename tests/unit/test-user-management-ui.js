@@ -54,8 +54,9 @@ function makeEnv(routes) {
     MeshConfigReady: Promise.resolve(),
   };
   win.window = win;
+  const loc = { hash: '#/account' };
   const ctx = {
-    window: win, document: doc, console, Promise, JSON, String, Object,
+    window: win, document: doc, console, Promise, JSON, String, Object, location: loc,
     setTimeout, clearTimeout,
     CustomEvent: function (type, init) { this.type = type; this.detail = init && init.detail; },
     escapeHtml: loadEscapeHtml(),
@@ -68,7 +69,7 @@ function makeEnv(routes) {
   ctx.globalThis = ctx;
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/auth.js'), 'utf8'), ctx);
-  return { win, els, events, calls };
+  return { win, els, events, calls, loc };
 }
 
 const ME = { id: 1, email: 'a@b.c', displayName: 'Ann', role: 'user', csrfToken: 'tok123' };
@@ -163,6 +164,30 @@ test('401 from the activate call (wrong password) keeps the session and shows no
   assert.strictEqual(env.els.csAuthToast, undefined);
 });
 
+test('logout posts with CSRF, moves to the next view, then clears the user', async () => {
+  const env = makeEnv((u) => u === '/api/auth/me' ? { status: 200, body: ME } : { status: 200, body: { ok: true } });
+  await env.win.CSAuth.ready();
+  env.calls.length = 0;
+  let hashAtClear = null;
+  env.win.dispatchEvent = (e) => { if (e.type === 'cs-auth-changed') hashAtClear = env.loc.hash; };
+  const r = await env.win.CSAuth.logout('#/account/login');
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(env.calls[0].url, '/api/auth/logout');
+  assert.strictEqual(env.calls[0].opts.method, 'POST');
+  assert.strictEqual(env.calls[0].opts.headers['X-CS-CSRF'], 'tok123');
+  assert.strictEqual(env.win.CS_USER, null);
+  assert.strictEqual(hashAtClear, '#/account/login', 'hash must change before cs-auth-changed fires');
+});
+
+test('a refused logout keeps the user and the view', async () => {
+  const env = makeEnv((u) => u === '/api/auth/me' ? { status: 200, body: ME } : { status: 403, body: { error: 'request origin not allowed' } });
+  await env.win.CSAuth.ready();
+  const r = await env.win.CSAuth.logout('#/account/login');
+  assert.strictEqual(r.status, 403);
+  assert.strictEqual(env.win.CS_USER.displayName, 'Ann');
+  assert.strictEqual(env.loc.hash, '#/account');
+});
+
 console.log('mobile nav account entry');
 
 // Slice the real route tables and builders out of the two files; markers
@@ -225,19 +250,29 @@ function loadAccount(hash, routes) {
   let pages = {};
   const calls = [];
   const user = { current: null };
+  const logouts = [];
+  let logoutResult = { ok: true, status: 200, data: { ok: true } };
   let override = null;
+  const loc = { hash };
+  const replaced = [];
+  const listeners = {};
   const CSAuth = {
     request(method, p, body) { calls.push({ method, p, body }); return override ? override(method, p, body) : Promise.resolve(routes(p, body)); },
     setUser(u) { user.current = u; },
     user() { return user.current; },
+    logout(next) { logouts.push(next); return logoutResult instanceof Error ? Promise.reject(logoutResult) : Promise.resolve(logoutResult); },
+    ready() { return Promise.resolve(); }, isEnabled() { return true; },
     notify() {}, refreshMe() { return Promise.resolve(); },
   };
-  const loc = { hash };
-  const ctx = { window: { CSAuth }, document: doc, CSAuth, location: loc, URLSearchParams, Promise, String,
+  const win = { CSAuth, addEventListener(t, fn) { listeners[t] = fn; } };
+  const ctx = { window: win, document: doc, CSAuth, location: loc, URLSearchParams, Promise, String, Object,
+    history: { replaceState(a, b, h) { replaced.push(h); loc.hash = h; } },
     escapeHtml: loadEscapeHtml(), registerPage(n, m) { pages[n] = m; }, console };
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/account.js'), 'utf8'), ctx);
-  return { setRequest(f) { override = f; }, doc, t: ctx.window.CSAccount._test, els, calls, loc, user, pages };
+  return { setRequest(f) { override = f; }, doc, t: ctx.window.CSAccount._test, els, calls, loc, user, pages, logouts, replaced,
+    setLogout(r) { logoutResult = r; },
+    fire(detail) { user.current = detail; if (listeners['cs-auth-changed']) listeners['cs-auth-changed']({ detail }); } };
 }
 const submitForm = async (env, formId) => {
   await env.els[formId].handlers.submit({ preventDefault() {} });
@@ -277,7 +312,7 @@ test('activate 401 shows the wrong-password message and stays on the form', asyn
   await submitForm(env, 'activateForm');
   assert.strictEqual(env.els.accountMsg.textContent, 'Wrong password for this account');
   assert.strictEqual(env.user.current, null);
-  assert.strictEqual(env.loc.hash, '#/account/activate?token=T');
+  assert.strictEqual(env.loc.hash, '#/account/activate'); // token stripped, form kept
 });
 
 test('activate 410 offers a new registration link', async () => {
@@ -350,6 +385,101 @@ test('profile view without a user redirects to login', () => {
   const env = loadAccount('#/account', () => ({}));
   env.t.views.profile({});
   assert.strictEqual(env.loc.hash, '#/account/login');
+});
+
+test('profile view: Log out button logs out to the login view', async () => {
+  const env = loadAccount('#/account', () => ({ ok: true, status: 200, data: [] }));
+  env.user.current = { id: 1, email: 'a@b.c', displayName: 'Ann', role: 'user' };
+  env.t.views.profile({ set innerHTML(v) {} });
+  await env.els.accountPageLogout.handlers.click();
+  assert.deepStrictEqual(env.logouts, ['#/account/login']);
+});
+
+test('profile view: a refused logout shows the error next to the button', async () => {
+  const env = loadAccount('#/account', () => ({ ok: true, status: 200, data: [] }));
+  env.user.current = { id: 1, email: 'a@b.c', displayName: 'Ann', role: 'user' };
+  env.setLogout({ ok: false, status: 403, data: { error: 'request origin not allowed' } });
+  env.t.views.profile({ set innerHTML(v) {} });
+  await env.els.accountPageLogout.handlers.click();
+  assert.strictEqual(env.els.logoutMsg.textContent, 'request origin not allowed');
+  env.setLogout(new Error('net'));
+  await env.els.accountPageLogout.handlers.click();
+  assert.strictEqual(env.els.logoutMsg.textContent, 'Network error, try again.');
+});
+
+test('profile view: Log out button for everyone, Manage users link for admins only', () => {
+  const env = loadAccount('#/account', () => ({}));
+  const user = env.t.profileHtml({ email: 'a', role: 'user', displayName: 'A' });
+  const admin = env.t.profileHtml({ email: 'a', role: 'admin', displayName: 'A' });
+  assert(user.indexOf('id="accountPageLogout"') !== -1 && admin.indexOf('id="accountPageLogout"') !== -1);
+  assert(user.indexOf('#/admin/users') === -1);
+  assert(admin.indexOf('href="#/admin/users"') !== -1 && admin.indexOf('Manage users') !== -1);
+});
+
+test('profile view follows auth changes: logout redirects, another user re-renders', () => {
+  const env = loadAccount('#/account', () => ({ ok: true, status: 200, data: [] }));
+  env.user.current = { id: 1, email: 'a@b.c', displayName: 'Ann', role: 'user' };
+  let renders = 0;
+  env.t.views.profile({ set innerHTML(v) { renders++; } });
+  env.fire({ id: 1, email: 'a@b.c', displayName: 'Ann B', role: 'user' }); // same user (name saved): no re-render
+  assert.strictEqual(renders, 1);
+  env.fire({ id: 2, email: 'b@b.c', displayName: 'Bob', role: 'user' });
+  assert.strictEqual(renders, 2);
+  assert.strictEqual(env.els.profName.value, 'Bob');
+  env.fire(null);
+  assert.strictEqual(env.loc.hash, '#/account/login');
+});
+
+test('auth changes on other views are ignored', () => {
+  const env = loadAccount('#/account', () => ({ ok: true, status: 200, data: [] }));
+  env.user.current = { id: 1, email: 'a@b.c', displayName: 'Ann', role: 'user' };
+  env.t.views.profile({ set innerHTML(v) {} });
+  env.loc.hash = '#/home';
+  env.fire(null);
+  assert.strictEqual(env.loc.hash, '#/home');
+});
+
+test('unknown and inherited view names fall back to the profile view', async () => {
+  for (const name of ['constructor', '__proto__', 'toString', 'nope']) {
+    const env = loadAccount('#/account/' + name, () => ({}));
+    env.pages.account.init({ set innerHTML(v) {} }, name);
+    await tick();
+    assert.strictEqual(env.loc.hash, '#/account/login', name + ' did not reach the profile view');
+  }
+});
+
+test('tokens are stripped from the hash once read', async () => {
+  const act = loadAccount('#/account/activate?token=T0K', () => ({ ok: true, status: 200, data: { id: 1 } }));
+  act.t.views.activate({ set innerHTML(v) {} });
+  assert.strictEqual(act.loc.hash, '#/account/activate');
+  await submitForm(act, 'activateForm');
+  assert.strictEqual(act.calls[0].body.token, 'T0K');
+  const reset = loadAccount('#/account/reset?token=R1', () => ({ ok: true, status: 200, data: { message: 'ok' } }));
+  reset.t.views.reset({ set innerHTML(v) {} });
+  assert.strictEqual(reset.loc.hash, '#/account/reset');
+  const conf = loadAccount('#/account/confirm-email?token=C1', () => ({ ok: true, status: 200, data: { message: 'ok' } }));
+  conf.t.views['confirm-email']({ set innerHTML(v) {} });
+  assert.strictEqual(conf.loc.hash, '#/account/confirm-email');
+  assert.strictEqual(conf.calls[0].body.token, 'C1');
+});
+
+test('reset success clears the client user (the reset ended every session)', async () => {
+  const env = loadAccount('#/account/reset?token=T', () => ({ ok: true, status: 200, data: { message: 'Password changed.' } }));
+  env.user.current = { id: 1 };
+  env.t.views.reset({ set innerHTML(v) {} });
+  env.doc.getElementById('resetPassword').value = 'abcdefghijkl';
+  env.doc.getElementById('resetPassword2').value = 'abcdefghijkl';
+  await submitForm(env, 'resetForm');
+  assert.strictEqual(env.user.current, null);
+  assert.strictEqual(env.els.accountMsg.textContent, 'Password changed.');
+});
+
+test('activate 410 for an already active account offers no registration link', async () => {
+  const env = loadAccount('#/account/activate?token=T', () => ({ ok: false, status: 410, data: { error: 'this account is already activated, log in instead' } }));
+  env.t.views.activate({ set innerHTML(v) {} });
+  await submitForm(env, 'activateForm');
+  assert.strictEqual(env.els.renewLink, undefined);
+  assert.strictEqual(env.els.accountMsg.textContent, 'this account is already activated, log in instead');
 });
 
 console.log('admin-users.js');
