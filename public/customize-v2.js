@@ -1078,6 +1078,9 @@
   var _gfPolygon = null;
   var _gfClosingLine = null;
   var _gfLoaded = false; // true after initial server load
+  var _gfServer = null; // last /config/geo-filter answer (writeEnabled)
+  var _gfContainer = null; // panel of the open geofilter tab, for auth changes
+  var _gfAuthListening = false;
 
   function esc(s) { var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
   function escAttr(s) { return (s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
@@ -1750,7 +1753,7 @@
           '<label style="font-size:12px;color:var(--text-muted)">Buffer km:</label>' +
           '<input type="number" id="cv2-gf-buffer" value="20" min="0" max="500" style="width:64px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px">' +
         '</div>' +
-        '<div class="cust-field"' + (window.CSAuth && CSAuth.isAdmin() ? ' hidden' : '') + '><label>Server API Key</label>' +
+        '<div class="cust-field" id="cv2-gf-apikey-field"><label>Server API Key</label>' +
           '<input type="password" id="cv2-gf-apikey" placeholder="apiKey from config.json" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px">' +
         '</div>' +
         '<div style="display:flex;gap:8px;margin-top:12px">' +
@@ -1947,9 +1950,9 @@
 
   // Optional user management: a logged-in admin's session (cookie + CSRF
   // header) replaces the API key. Returns null when neither is available.
-  function _gfAuthHeaders(container, base) {
+  function _gfAuthHeaders(container, base, csAuth) {
     var h = Object.assign({}, base || {});
-    if (window.CSAuth && CSAuth.isAdmin()) return Object.assign(h, CSAuth.adminHeaders());
+    if (csAuth && csAuth.isAdmin()) return Object.assign(h, csAuth.adminHeaders());
     var apiKey = (container.querySelector('#cv2-gf-apikey') || {}).value || '';
     if (!apiKey) return null;
     h['X-API-Key'] = apiKey;
@@ -1962,9 +1965,30 @@
     return !!((gf && gf.writeEnabled) || (csAuth && csAuth.isAdmin()));
   }
 
+  // Shows or hides the edit controls, the prune section (needs a polygon)
+  // and the API-key field (not needed with an admin session) for the
+  // current auth state. Runs after the server answer, after CSAuth.ready()
+  // and on every 'cs-auth-changed', so a later login or logout is applied.
+  function _gfApplyAuth(container, gf, csAuth, pointCount) {
+    var canEdit = _gfCanEdit(gf, csAuth);
+    _gfWriteEnabled = canEdit;
+    var editEl = container.querySelector('#cv2-gf-edit');
+    if (editEl) editEl.style.display = canEdit ? '' : 'none';
+    var pruneEl = container.querySelector('#cv2-gf-prune-section');
+    if (pruneEl) pruneEl.style.display = canEdit && pointCount >= 3 ? '' : 'none';
+    var keyField = container.querySelector('#cv2-gf-apikey-field');
+    if (keyField) keyField.hidden = !!(csAuth && csAuth.isAdmin());
+    return canEdit;
+  }
+
+  function _gfReapplyAuth() {
+    // Only once the server answered: after a failed load nothing is editable.
+    if (_gfContainer && _gfServer) _gfApplyAuth(_gfContainer, _gfServer, window.CSAuth, _gfPoints.length);
+  }
+
   function _gfSave(container) {
     if (_gfPoints.length < 3) { _gfMsg(container, 'Need at least 3 polygon points.', false); return; }
-    var headers = _gfAuthHeaders(container, { 'Content-Type': 'application/json' });
+    var headers = _gfAuthHeaders(container, { 'Content-Type': 'application/json' }, window.CSAuth);
     if (!headers) { _gfMsg(container, 'API key required to save.', false); return; }
     var bufferKm = parseFloat((container.querySelector('#cv2-gf-buffer') || {}).value) || 0;
     fetch('/api/config/geo-filter', {
@@ -1979,7 +2003,7 @@
   }
 
   function _gfRemove(container) {
-    var headers = _gfAuthHeaders(container, { 'Content-Type': 'application/json' });
+    var headers = _gfAuthHeaders(container, { 'Content-Type': 'application/json' }, window.CSAuth);
     if (!headers) { _gfMsg(container, 'API key required.', false); return; }
     if (!confirm('Remove geo filter? All nodes will be allowed through.')) return;
     fetch('/api/config/geo-filter', {
@@ -2006,7 +2030,7 @@
   }
 
   function _gfPrunePreview(container) {
-    var headers = _gfAuthHeaders(container, {});
+    var headers = _gfAuthHeaders(container, {}, window.CSAuth);
     if (!headers) { _gfPruneMsg(container, 'API key required.', false); return; }
     var btn = container.querySelector('#cv2-gf-prune-preview');
     if (btn) btn.textContent = 'Loading…';
@@ -2044,7 +2068,7 @@
 
   function _gfPruneConfirm(container) {
     if (!_gfPruneNodes.length) { _gfPruneMsg(container, 'Run preview first.', false); return; }
-    var headers = _gfAuthHeaders(container, { 'Content-Type': 'application/json' });
+    var headers = _gfAuthHeaders(container, { 'Content-Type': 'application/json' }, window.CSAuth);
     if (!headers) { _gfPruneMsg(container, 'API key required.', false); return; }
     var count = _gfPruneNodes.length;
     if (!confirm('Delete ' + count + ' node' + (count !== 1 ? 's' : '') + ' from the database? This cannot be undone.')) return;
@@ -2078,27 +2102,21 @@
 
     if (!_gfLoaded) {
       api('/config/geo-filter', { ttl: 0 }).then(function (gf) {
-        // Show edit controls only on servers that have a write-capable API key configured
-        var canEdit = _gfCanEdit(gf, window.CSAuth);
-        if (canEdit) {
-          _gfWriteEnabled = true;
-          var editEl = container.querySelector('#cv2-gf-edit');
-          if (editEl) editEl.style.display = '';
-        }
+        _gfServer = gf;
         if (gf && gf.polygon && gf.polygon.length >= 3) {
           _gfPoints = gf.polygon.map(function (p) { return [p[0], p[1]]; });
+        } else {
+          _gfPoints = [];
+        }
+        // Edit controls need a write-capable API key on the server or an admin session.
+        var canEdit = _gfApplyAuth(container, gf, window.CSAuth, _gfPoints.length);
+        if (_gfPoints.length >= 3) {
           var buf = container.querySelector('#cv2-gf-buffer');
           if (buf) buf.value = gf.bufferKm || 0;
           _gfRender();
           if (_gfPolygon) _gfMap.fitBounds(_gfPolygon.getBounds(), { padding: [20, 20] });
           _gfStatus(container, gf.polygon.length + ' points · bufferKm=' + (gf.bufferKm || 0));
-          // Show prune section when a polygon is active and write access is available
-          if (canEdit) {
-            var pruneEl = container.querySelector('#cv2-gf-prune-section');
-            if (pruneEl) pruneEl.style.display = '';
-          }
         } else {
-          _gfPoints = [];
           _gfStatus(container, canEdit ? 'No geo filter. Click the map to open the editor.' : 'No geo filter configured.');
           _gfMap.setView([50.5, 4.4], 5);
         }
@@ -2120,7 +2138,17 @@
         _gfStatus(container, _gfPoints.length ? _gfPoints.length + ' points (need at least 3).' : 'Click the map to draw a polygon.');
         _gfRender();
       }
+      if (_gfServer) _gfApplyAuth(container, _gfServer, window.CSAuth, _gfPoints.length);
       setTimeout(function () { if (_gfMap) _gfMap.invalidateSize(); }, 100);
+    }
+
+    // The tab can open before /api/auth/me answers, and a login or logout
+    // can follow without a reload: re-evaluate the editor on both.
+    _gfContainer = container;
+    if (window.CSAuth) CSAuth.ready().then(_gfReapplyAuth);
+    if (!_gfAuthListening) {
+      _gfAuthListening = true;
+      window.addEventListener('cs-auth-changed', _gfReapplyAuth);
     }
 
     _gfMap.on('click', function () { _gfOpenModal(container); });
@@ -2939,6 +2967,8 @@
     isValidHomeUrl: isValidHomeUrl,
     isOverridden: _isOverridden,
     _gfCanEdit: _gfCanEdit,
+    _gfAuthHeaders: _gfAuthHeaders,
+    _gfApplyAuth: _gfApplyAuth,
     // #1496 — full reset (not just STORAGE_KEY). See _resetAll() above.
     resetAll: _resetAll,
     // Exposed for tests — see test-issue-1509-detect-preset.js.

@@ -580,8 +580,6 @@ test('validateShape rejects non-array myNodes', () => {
   assert.ok(!result.valid, 'non-array myNodes should be invalid');
 });
 
-// ── Summary ──
-console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed\n`);
 // ── geofilter editor access (optional user management) ──
 console.log('_gfCanEdit:');
 test('_gfCanEdit: writeEnabled key allows edit', () => {
@@ -598,4 +596,75 @@ test('_gfCanEdit: non-admin session and no key denies edit', () => {
   assert.strictEqual(api._gfCanEdit(null, undefined), false);
 });
 
+
+// _gfAuthHeaders: an admin session replaces the API key (CSRF header, no key).
+function gfContainer(apiKey) {
+  return { querySelector: (sel) => (sel === '#cv2-gf-apikey' ? { value: apiKey } : null) };
+}
+const ADMIN = { isAdmin: () => true, adminHeaders: () => ({ 'X-CS-CSRF': 'csrf1' }) };
+const USER = { isAdmin: () => false, adminHeaders: () => ({}) };
+console.log('_gfAuthHeaders:');
+test('_gfAuthHeaders: admin session sends X-CS-CSRF and no X-API-Key', () => {
+  const { api } = loadCustomizer();
+  const h = api._gfAuthHeaders(gfContainer('typed-key'), { 'Content-Type': 'application/json' }, ADMIN);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(h)), { 'Content-Type': 'application/json', 'X-CS-CSRF': 'csrf1' });
+});
+test('_gfAuthHeaders: non-admin with a typed key sends X-API-Key', () => {
+  const { api } = loadCustomizer();
+  const h = api._gfAuthHeaders(gfContainer('typed-key'), {}, USER);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(h)), { 'X-API-Key': 'typed-key' });
+});
+test('_gfAuthHeaders: no feature and a typed key sends X-API-Key', () => {
+  const { api } = loadCustomizer();
+  const h = api._gfAuthHeaders(gfContainer('typed-key'), {}, undefined);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(h)), { 'X-API-Key': 'typed-key' });
+});
+test('_gfAuthHeaders: neither session nor key returns null', () => {
+  const { api } = loadCustomizer();
+  assert.strictEqual(api._gfAuthHeaders(gfContainer(''), {}, USER), null);
+  assert.strictEqual(api._gfAuthHeaders(gfContainer(''), {}, undefined), null);
+});
+
+// _gfApplyAuth: edit controls, prune section and key field follow the
+// current auth state, so a later login or logout is picked up.
+function gfPanel() {
+  const els = {
+    '#cv2-gf-edit': { style: { display: 'none' } },
+    '#cv2-gf-prune-section': { style: { display: 'none' } },
+    '#cv2-gf-apikey-field': { hidden: false },
+  };
+  return { els, querySelector: (sel) => els[sel] || null };
+}
+console.log('_gfApplyAuth:');
+test('_gfApplyAuth: a login after load shows the editor and hides the key field', () => {
+  const { api } = loadCustomizer();
+  const c = gfPanel();
+  api._gfApplyAuth(c, { writeEnabled: false }, USER, 0);
+  assert.strictEqual(c.els['#cv2-gf-edit'].style.display, 'none');
+  assert.strictEqual(c.els['#cv2-gf-apikey-field'].hidden, false);
+  api._gfApplyAuth(c, { writeEnabled: false }, ADMIN, 4);
+  assert.strictEqual(c.els['#cv2-gf-edit'].style.display, '');
+  assert.strictEqual(c.els['#cv2-gf-prune-section'].style.display, '');
+  assert.strictEqual(c.els['#cv2-gf-apikey-field'].hidden, true);
+});
+test('_gfApplyAuth: a logout hides the editor again when the server has no write key', () => {
+  const { api } = loadCustomizer();
+  const c = gfPanel();
+  api._gfApplyAuth(c, { writeEnabled: false }, ADMIN, 4);
+  api._gfApplyAuth(c, { writeEnabled: false }, USER, 4);
+  assert.strictEqual(c.els['#cv2-gf-edit'].style.display, 'none');
+  assert.strictEqual(c.els['#cv2-gf-prune-section'].style.display, 'none');
+  assert.strictEqual(c.els['#cv2-gf-apikey-field'].hidden, false);
+});
+test('_gfApplyAuth: a write key keeps the editor without a session; prune needs 3 points', () => {
+  const { api } = loadCustomizer();
+  const c = gfPanel();
+  api._gfApplyAuth(c, { writeEnabled: true }, undefined, 2);
+  assert.strictEqual(c.els['#cv2-gf-edit'].style.display, '');
+  assert.strictEqual(c.els['#cv2-gf-prune-section'].style.display, 'none');
+  assert.strictEqual(c.els['#cv2-gf-apikey-field'].hidden, false);
+});
+
+// ── Summary ──
+console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);
