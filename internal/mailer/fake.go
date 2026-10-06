@@ -47,7 +47,7 @@ func (f *Fake) SetEvents(messageID string, evs []Event) {
 	if f.events == nil {
 		f.events = map[string][]Event{}
 	}
-	f.events[messageID] = evs
+	f.events[messageID] = append([]Event(nil), evs...)
 }
 
 // Sent returns a copy of all successfully sent messages.

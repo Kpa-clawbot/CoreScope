@@ -26,7 +26,18 @@ type Brevo struct {
 
 func NewBrevo(apiKey, fromEmail, fromName string) *Brevo {
 	return &Brevo{APIKey: apiKey, FromEmail: fromEmail, FromName: fromName,
-		BaseURL: brevoBaseURL, HTTP: &http.Client{Timeout: 10 * time.Second}}
+		BaseURL: brevoBaseURL, HTTP: newBrevoHTTPClient()}
+}
+
+// newBrevoHTTPClient never follows redirects, so the api-key header cannot be
+// forwarded to another host.
+func newBrevoHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }
 
 type brevoAddress struct {
@@ -38,7 +49,7 @@ type brevoSendRequest struct {
 	Sender      brevoAddress   `json:"sender"`
 	To          []brevoAddress `json:"to"`
 	Subject     string         `json:"subject"`
-	HTMLContent string         `json:"htmlContent"`
+	HTMLContent string         `json:"htmlContent,omitempty"`
 	TextContent string         `json:"textContent,omitempty"`
 	Tags        []string       `json:"tags,omitempty"`
 }
@@ -49,6 +60,9 @@ type brevoError struct {
 }
 
 func (b *Brevo) Send(ctx context.Context, m Message) (string, error) {
+	if m.HTML == "" && m.Text == "" {
+		return "", errors.New("brevo: send: message has no content")
+	}
 	req := brevoSendRequest{
 		Sender:      brevoAddress{Email: b.FromEmail, Name: b.FromName},
 		To:          []brevoAddress{{Email: m.To, Name: m.ToName}},
@@ -113,7 +127,10 @@ func (b *Brevo) Events(ctx context.Context, messageID string) ([]Event, error) {
 	}
 	out := make([]Event, 0, len(resp.Events))
 	for _, e := range resp.Events {
-		at, _ := parseBrevoDate(e.Date)
+		at, err := parseBrevoDate(e.Date)
+		if err != nil {
+			at = time.Now().UTC()
+		}
 		out = append(out, Event{MessageID: e.MessageID, Email: e.Email, Event: NormalizeBrevoEvent(e.Event), Reason: e.Reason, At: at})
 	}
 	return out, nil
@@ -122,7 +139,11 @@ func (b *Brevo) Events(ctx context.Context, messageID string) ([]Event, error) {
 func (b *Brevo) do(r *http.Request) ([]byte, int, error) {
 	r.Header.Set("api-key", b.APIKey)
 	r.Header.Set("Accept", "application/json")
-	resp, err := b.HTTP.Do(r)
+	client := b.HTTP
+	if client == nil {
+		client = newBrevoHTTPClient()
+	}
+	resp, err := client.Do(r)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -141,7 +162,7 @@ func brevoErr(op string, status int, body []byte) error {
 
 func parseBrevoDate(s string) (time.Time, error) {
 	s = strings.TrimSpace(s)
-	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.000-07:00", "2006-01-02 15:04:05"} {
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02 15:04:05"} {
 		if t, err := time.Parse(layout, s); err == nil {
 			return t.UTC(), nil
 		}

@@ -50,7 +50,7 @@ func TestBrevoSendErrorMapping(t *testing.T) {
 	defer srv.Close()
 	b := NewBrevo("bad", "noreply@example.org", "")
 	b.BaseURL = srv.URL
-	_, err := b.Send(context.Background(), Message{To: "a@example.org"})
+	_, err := b.Send(context.Background(), Message{To: "a@example.org", Text: "t"})
 	if err == nil || !strings.Contains(err.Error(), "401") || !strings.Contains(err.Error(), "Key not found") {
 		t.Fatalf("err = %v", err)
 	}
@@ -98,5 +98,39 @@ func TestNormalizeBrevoEvent(t *testing.T) {
 		if got := NormalizeBrevoEvent(in); got != want {
 			t.Errorf("NormalizeBrevoEvent(%q) = %q; want %q", in, got, want)
 		}
+	}
+}
+
+func TestBrevoDoesNotFollowRedirects(t *testing.T) {
+	var leaked string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked = r.Header.Get("api-key")
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"messageId":"<x>"}`))
+	}))
+	defer target.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/smtp/email", http.StatusFound)
+	}))
+	defer srv.Close()
+	b := NewBrevo("secret-key", "noreply@example.org", "")
+	b.BaseURL = srv.URL
+	if _, err := b.Send(context.Background(), Message{To: "a@example.org", Text: "t"}); err == nil {
+		t.Fatal("Send followed a redirect")
+	}
+	if leaked != "" {
+		t.Fatalf("api-key reached the redirect target: %q", leaked)
+	}
+}
+
+func TestBrevoSendRejectsEmptyContentAndNilClient(t *testing.T) {
+	b := &Brevo{APIKey: "k", FromEmail: "f@example.org", BaseURL: "http://127.0.0.1:1"}
+	if _, err := b.Send(context.Background(), Message{To: "a@example.org"}); err == nil ||
+		!strings.Contains(err.Error(), "no content") {
+		t.Fatalf("err = %v", err)
+	}
+	// nil HTTP client must not panic (connection error expected).
+	if _, err := b.Send(context.Background(), Message{To: "a@example.org", Text: "t"}); err == nil {
+		t.Fatal("expected connection error")
 	}
 }
