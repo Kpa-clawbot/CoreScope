@@ -57,6 +57,16 @@
         .then(function () { if (btn) btn.disabled = false; });
     });
   }
+  // Replaces the whole view with a confirmation the user cannot miss, and
+  // moves focus to its heading for screen readers.
+  function showMailSent(app, intro, hint, links) {
+    app.innerHTML = '<div class="account-page"><div class="account-card">' +
+      '<h2 id="mailSentHeading" tabindex="-1">Check your mailbox</h2>' +
+      '<p>' + intro + '</p>' + (hint ? '<p class="account-hint">' + hint + '</p>' : '') +
+      '<p class="account-links">' + links + '</p></div></div>';
+    var h = document.getElementById('mailSentHeading');
+    if (h && h.focus) h.focus();
+  }
   function fmtDate(iso) { try { return new Date(iso).toLocaleString(); } catch (_) { return iso; } }
 
   // An expired or used link answers 410: offer the way to get a new one.
@@ -145,13 +155,17 @@
         '<p class="account-hint">At least 10 characters. Others see your display name, never your email.</p>' +
         submitBtn('Create account') + msgBox() + '</form>' +
         '<p class="account-links">Already registered? <a href="#/account/login">Log in</a></p>');
-      onSubmit('registerForm', function (form) {
+      onSubmit('registerForm', function () {
+        var email = val('regEmail');
         return CSAuth.request('POST', '/api/auth/register', {
-          email: val('regEmail'), displayName: val('regName'), password: val('regPassword')
+          email: email, displayName: val('regName'), password: val('regPassword')
         }).then(function (r) {
           if (!r.ok) { say(errText(r), false); return; }
-          form.reset();
-          say(r.data.message || 'Check your inbox for the activation link.', true);
+          showMailSent(app,
+            'If <strong>' + escapeHtml(email) + '</strong> can be used, we sent an activation link to it. ' +
+            'The link works once and expires in 48 hours. Open it and enter the password you just chose.',
+            'No mail after a few minutes? Check your spam folder, or register again to get a new link.',
+            '<a href="#/account/login">Log in</a> · <a href="#/account/register">Register again</a>');
         });
       });
     },
@@ -191,8 +205,12 @@
         field('forgotEmail', 'Email', 'email', 'username') +
         submitBtn('Send reset link') + msgBox() + '</form>');
       onSubmit('forgotForm', function () {
-        return CSAuth.request('POST', '/api/auth/forgot', { email: val('forgotEmail') }).then(function (r) {
-          say(r.ok ? r.data.message : errText(r), r.ok);
+        var email = val('forgotEmail');
+        return CSAuth.request('POST', '/api/auth/forgot', { email: email }).then(function (r) {
+          if (!r.ok) { say(errText(r), false); return; }
+          showMailSent(app,
+            'If an account exists for <strong>' + escapeHtml(email) + '</strong>, we sent a link to reset your password. It expires in 1 hour.',
+            '', '<a href="#/account/login">Back to log in</a>');
         });
       });
     },

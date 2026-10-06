@@ -359,6 +359,49 @@ test('no account input carries a name attribute (no native submit leak)', () => 
   assert(!/<input[^>]* name=/.test(html));
 });
 
+const flush = () => new Promise((r) => setTimeout(r, 5));
+
+test('register success replaces the form with a confirmation and escapes the email', async () => {
+  const payload = '<img src=x onerror=alert(1)>@e.c';
+  const env = loadAccount('#/account/register', () => ({ ok: true, status: 200, data: { message: 'x' } }));
+  let html = '';
+  env.t.views.register({ set innerHTML(v) { html = v; } });
+  env.doc.getElementById('regEmail').value = payload;
+  await submitForm(env, 'registerForm');
+  await flush();
+  assert(html.indexOf('Check your mailbox') !== -1, html);
+  assert(html.indexOf('<form') === -1, 'form still present');
+  assert(html.indexOf('<img') === -1 && html.indexOf('&lt;img') !== -1, html);
+  assert(html.indexOf('expires in 48 hours') !== -1);
+  assert(html.indexOf('href="#/account/login"') !== -1 && html.indexOf('href="#/account/register"') !== -1);
+  assert(html.indexOf('tabindex="-1"') !== -1);
+});
+
+test('forgot success replaces the form with a confirmation and escapes the email', async () => {
+  const payload = '<img src=x onerror=alert(1)>@e.c';
+  const env = loadAccount('#/account/forgot', () => ({ ok: true, status: 200, data: { message: 'x' } }));
+  let html = '';
+  env.t.views.forgot({ set innerHTML(v) { html = v; } });
+  env.doc.getElementById('forgotEmail').value = payload;
+  await submitForm(env, 'forgotForm');
+  await flush();
+  assert(html.indexOf('Check your mailbox') !== -1, html);
+  assert(html.indexOf('<form') === -1, 'form still present');
+  assert(html.indexOf('<img') === -1 && html.indexOf('&lt;img') !== -1, html);
+  assert(html.indexOf('Back to log in') !== -1);
+});
+
+test('register 400 keeps the form and shows the error', async () => {
+  const env = loadAccount('#/account/register', () => ({ ok: false, status: 400, data: { error: 'Bad password' } }));
+  let html = '';
+  env.t.views.register({ set innerHTML(v) { html = v; } });
+  await submitForm(env, 'registerForm');
+  await flush();
+  assert(html.indexOf('<form') !== -1 && html.indexOf('Check your mailbox') === -1);
+  assert.strictEqual(env.els.accountMsg.textContent, 'Bad password');
+});
+
+
 test('a rejected fetch on a profile form shows the error in its own box', async () => {
   const env = loadAccount('#/account', () => ({}));
   env.user.current = { email: 'a@b.c', displayName: 'Ann', role: 'user' };
