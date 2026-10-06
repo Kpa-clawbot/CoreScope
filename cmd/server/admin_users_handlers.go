@@ -159,6 +159,10 @@ func (s *Server) handleAdminDisable(w http.ResponseWriter, r *http.Request, acto
 		writeError(w, http.StatusConflict, "only active accounts can be disabled; delete or activate a pending account instead")
 		return
 	}
+	if err := s.auth.invalidateTokens("disable", t.ID, users.PurposeActivate, users.PurposeReset, users.PurposeEmailChange); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
 	if err := s.auth.st.SetStatus(t.ID, users.StatusDisabled); err != nil {
 		adminStoreFail(w, "disable", t.ID, err)
 		return

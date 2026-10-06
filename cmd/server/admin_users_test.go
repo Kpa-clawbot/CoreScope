@@ -184,3 +184,18 @@ func TestAdminCannotDisablePending(t *testing.T) {
 	}
 	expectStatus(t, f.do("POST", userPath(p.ID, "/enable"), nil, as(boss)), 409)
 }
+
+func TestAdminDisableKillsPendingLinks(t *testing.T) {
+	f, boss, uma := adminFixture(t)
+	confirm, reset := pendingLinks(t, f, uma, "uma@example.org", "attacker@example.org")
+	expectStatus(t, f.do("POST", userPath(uma.me.ID, "/disable"), nil, as(boss)), 200)
+	expectStatus(t, f.do("POST", userPath(uma.me.ID, "/enable"), nil, as(boss)), 200)
+	expectStatus(t, f.do("POST", "/api/account/confirm-email", tokenRequest{Token: confirm}), 410)
+	expectStatus(t, f.do("POST", "/api/auth/reset", resetRequest{Token: reset, Password: "another new secret"}), 410)
+}
+
+func TestAdminDisableTokenStoreFailureIs500(t *testing.T) {
+	f, boss, uma := adminFixture(t)
+	f.breakTable(t, "tokens")
+	expectStatus(t, f.do("POST", userPath(uma.me.ID, "/disable"), nil, as(boss)), 500)
+}

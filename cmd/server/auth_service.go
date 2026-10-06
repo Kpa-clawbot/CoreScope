@@ -147,3 +147,15 @@ func (a *authService) audit(actor *int64, action string, target *int64, detail m
 }
 
 func idPtr(id int64) *int64 { return &id }
+
+// invalidateTokens burns uid's outstanding links of each purpose. A failure
+// is logged (user id only) and returned; callers answer 500.
+func (a *authService) invalidateTokens(op string, uid int64, ps ...users.Purpose) error {
+	for _, p := range ps {
+		if err := a.st.InvalidateTokens(uid, p); err != nil {
+			log.Printf("[users] %s: invalidate %s tokens for user #%d: %v", op, p, uid, err)
+			return err
+		}
+	}
+	return nil
+}

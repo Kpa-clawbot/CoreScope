@@ -57,6 +57,10 @@ func (s *Server) handleAccountPassword(w http.ResponseWriter, r *http.Request, u
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	if err := a.invalidateTokens("password change", u.ID, users.PurposeEmailChange, users.PurposeReset); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
 	if err := a.st.DeleteUserSessions(u.ID, sess.ID); err != nil {
 		log.Printf("[users] password change: end other sessions for user #%d: %v", u.ID, err)
 		writeError(w, http.StatusInternalServerError, "internal error")
