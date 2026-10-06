@@ -118,7 +118,8 @@ off.
 - The shape follows the existing opt-in pattern: a pointer sub-struct with
   `Enabled bool`, plus a nil-safe accessor where nil means off (`ClientRxCoverage`,
   `cmd/server/config.go:170,268-277`).
-- **Off:** no routes are registered (requests get the router's 404), `users.db` is
+- **Off:** no routes are registered (requests fall through to the SPA page, 200 HTML,
+  like any unknown path, rather than a router 404), `users.db` is
   not opened or created, and `/api/config/client` does not contain the
   `userManagement` field at all, so its payload is byte-identical to today.
 - **On:** startup fails with a clear error unless all of the following hold:
@@ -134,7 +135,9 @@ off.
   `CORESCOPE_BREVO_API_KEY` and `CORESCOPE_BREVO_WEBHOOK_SECRET`. The environment
   value wins.
 - `trustedProxies`: CIDRs whose `X-Forwarded-For` is trusted for rate limiting. When
-  it is empty, the TCP peer address is used.
+  it is empty, the TCP peer address is used, with the same rule as the `/ws` limiter
+  (`clientIP` in `cmd/server/ws_limits.go`): a loopback or private peer means clients
+  cannot be told apart, so per-IP limits are off (see *Security*).
 - `adminEmails` are compared case-insensitively after trimming.
 - `config.example.json` gets the block with a `_comment` in the file's existing
   style.
@@ -146,10 +149,10 @@ Each unit has one job and can be tested on its own.
 | Unit | Responsibility | Depends on |
 |---|---|---|
 | `internal/users` | `users.db`: open, migrate, CRUD for users, sessions, tokens, audit log, mail log. Password hashing. No HTTP. | `modernc.org/sqlite`, `golang.org/x/crypto/argon2` |
-| `internal/mailer` | `Mailer` interface `Send(ctx, Message) (messageID string, err error)`. `Status(ctx, messageID) ([]Event, error)`. A Brevo implementation and an in-memory fake for tests. | `net/http` |
+| `internal/mailer` | `Mailer` interface `Send(ctx, Message) (messageID string, err error)`. `Events(ctx, messageID) ([]Event, error)` (pull). A Brevo implementation and an in-memory fake for tests. | `net/http` |
 | `cmd/server/auth_*.go` | HTTP handlers, session middleware, role checks, CSRF, rate limiting, mail templates, the Brevo webhook. | `internal/users`, `internal/mailer` |
 | `public/account.js` | Login, register, activate, forgot, reset and "my account" views. The header account control. | existing helpers |
-| `public/admin-users.js` | The admin user table and actions. | `table-sort`, existing dialogs |
+| `public/admin-users.js` | The admin user table and actions. | existing helpers |
 
 New dependency: `golang.org/x/crypto`, a Go-team module. No new frontend
 dependencies and no build step (AGENTS.md).
@@ -212,11 +215,15 @@ error shape.
    mailed depends on the account:
    - An active or disabled account gets a mail: "someone tried to register with your
      address; if it was you, log in or reset your password."
-   - A still-pending account gets a fresh activation link instead.
-4. `POST /api/auth/activate {token}`:
-   - It sets the status to `active` and sets the role to `admin` if the address is in
-     `adminEmails`.
-   - It consumes the token and starts a session.
+   - A still-pending account stores the newest password and display name and gets a
+     fresh activation link instead (newest registration wins). A squatter therefore
+     cannot activate the owner into the squatter's password.
+4. `POST /api/auth/activate {token, password}`:
+   - The token is checked without being consumed. The password must match the pending
+     account's password. A wrong password answers 401, the link stays usable, and
+     attempts are rate-limited per IP and per account.
+   - Then it consumes the token, sets the status to `active`, sets the role to `admin`
+     if the address is in `adminEmails`, and starts a session.
 5. Pending accounts with an expired token are pruned periodically.
 6. The admin action "resend activation" issues a fresh token and invalidates the old
    one.
@@ -231,7 +238,7 @@ error shape.
     `Secure` is set when `publicBaseUrl` is https.
   - The session expires after `sessionDays`. It is extended (sliding) when
     `last_seen_at` is older than one day.
-- `POST /api/auth/logout` deletes the session row and clears the cookie.
+- `POST /api/auth/logout` (checked by `Origin` only, see *Security*) deletes the session row and clears the cookie.
 - `GET /api/auth/me` returns `{id, email, displayName, role, csrfToken}`, or 401.
 
 ### Forgot and reset the password
@@ -239,16 +246,17 @@ error shape.
 - `POST /api/auth/forgot {email}`. The response is always the same. A mail is sent
   only if an `active` account exists.
 - `POST /api/auth/reset {token, password}` sets the password, consumes the token and
-  **ends all sessions** of that user.
+  **ends all sessions** of that user. It also ends outstanding email-change links.
 
 ### My account
 
 - `PATCH /api/account {displayName?}`.
 - `POST /api/account/password {currentPassword, newPassword}`. It ends all other
-  sessions.
+  sessions and ends outstanding email-change and reset links.
 - `POST /api/account/email {newEmail, currentPassword}`. A confirmation link goes to
-  the new address, and the change applies only after the click. The old address is
-  told that a change was requested.
+  the new address, and the change applies only after the click. The request is
+  rate-limited per user and per new address. The old address is always told that a
+  change was requested, also when the new address is already taken (no enumeration).
 - `GET /api/account/sessions` lists the sessions as device and last seen.
   `DELETE /api/account/sessions/{id}` revokes one.
 - `DELETE /api/account {currentPassword}` deletes the account, its sessions and
@@ -264,11 +272,14 @@ All of these require role `admin` and live under `/api/admin/users`.
   (`last_event`, `last_reason`, `email_bouncing`).
 - `GET /api/admin/users/{id}` returns the user, their sessions (count, last seen),
   their mail log with events, and the audit entries that concern them.
-- `POST …/{id}/disable` sets the status to `disabled` and ends all their sessions
-  immediately. `POST …/{id}/enable` reverses it.
+- `POST …/{id}/disable` works only for active accounts (for a pending one, delete or
+  activate instead). It sets the status to `disabled`, ends all their sessions
+  immediately and ends all their outstanding links. `POST …/{id}/enable` reverses it.
 - `DELETE …/{id}` is a hard delete, the same as self-delete.
 - `POST …/{id}/role {role}`. These guards apply:
-  - A config admin can't be demoted, disabled or deleted.
+  - A config admin (an account that is admin **and** listed in `adminEmails`) can't be
+    demoted, disabled or deleted. A pending account on a listed address can be deleted.
+  - A role change on a pending account answers 409.
   - The last admin can't be demoted, disabled or deleted.
   - An admin can't disable or delete themselves; they use "my account" for that.
 - `POST …/{id}/resend-activation` works only for pending users.
@@ -283,7 +294,7 @@ All of these require role `admin` and live under `/api/admin/users`.
   - No session is created. The user logs in with the password they chose at
     registration, or uses "forgot password" once mail works.
 - `POST …/{id}/mail/{mailId}/refresh` pulls the events for that message from the
-  provider API.
+  provider API and writes the audit row `user.mail.refresh`.
 - Every action writes an `audit_log` row.
 
 ### Mail delivery status (Brevo feedback)
@@ -332,6 +343,9 @@ logged-in admins.
     `publicBaseUrl`'s origin, **and**
   - a header `X-CS-CSRF` equal to the session's `csrf_token`.
 
+  The exception is logout: it is checked by `Origin` only, without `X-CS-CSRF`,
+  because a forced logout is low impact.
+
   Requests authenticated by `X-API-Key` are exempt, because they carry no ambient
   credential. CORS stays as it is: no credentialed CORS, and
   `corsAllowedOrigins` doesn't widen auth.
@@ -343,8 +357,16 @@ logged-in admins.
 
   The client IP is taken from `X-Forwarded-For` only when the peer is in
   `trustedProxies`. A limit returns 429 with `Retry-After`.
+
+  With `trustedProxies` empty, the rule of the `/ws` limiter applies
+  (`clientIP`, `cmd/server/ws_limits.go`). A loopback or private TCP peer means IPs
+  cannot be told apart, so per-IP limits are off. Per-address and per-account keys
+  still apply, and a startup warning says so. The webhook limiter is per-IP only, so
+  it is off too. The buckets are capped at 100000 keys. At the cap, new keys are
+  refused until buckets refill.
 - **Logs:** tokens, passwords, password hashes and cookies are never logged.
   Addresses are logged only in audit and mail tables, not in the server log.
+  Mail-provider error texts are redacted (email addresses replaced) before logging.
 - **Headers:** auth responses send `Cache-Control: no-store`.
 - **Output:** all user-supplied strings (display name, email) are rendered through
   the existing escape helpers (`test-xss-escape-sinks.js`, `test-preflight-xss-gate.js`).
@@ -357,22 +379,25 @@ logged-in admins.
   makes no extra requests. That makes "off" pixel-identical and keeps older servers
   safe.
 - **Header control:** "Log in" at the right of the top nav. When logged in it shows
-  the display name with a menu: My account, Users (admins only), Log out. On narrow
-  screens only the icon is shown; it stays in the top bar like the favorites and
-  search buttons, so no drawer entry is needed. Icons are Phosphor, as elsewhere
+  the display name with a menu: My account, Users (admins only), Log out. On phones
+  (<=768px) the top-bar control is hidden, so a conditional "Log in" / "My account"
+  entry is in the bottom-nav More sheet and the nav drawer. Icons are Phosphor, as elsewhere
   (#1648).
 - **Routes:**
   - `#/account/login`, `#/account/register`, `#/account/activate`, `#/account/forgot`,
     `#/account/reset`, `#/account/confirm-email`
   - `#/account`: profile, password, email, sessions, delete
-  - `#/admin/users`: a table ordered newest first, with status and role filters,
-    search, a detail panel, and confirmation dialogs for destructive actions
+  - `#/admin/users`: a table ordered newest first by the server (no table-sort), with
+    status and role filters, search, a detail panel, and `confirm()` dialogs for
+    destructive actions. The filters and the open detail are deep-linked
+    (`#/admin/users?status=&role=&q=&id=`).
 - **State:** on load, if the feature is on, the frontend calls `GET /api/auth/me`
   once. The result is kept in memory (`window.CS_USER`). A 401 from any authed call
   clears it and shows a "you were logged out" toast. The rest of the page keeps
   working anonymously.
 - **Language and mails:** the UI is English, like the rest of CoreScope. Mails are
-  English, sent as both HTML and text, branded with the instance name from the
+  English, sent as both HTML and text. The subject prefix and the sender
+  name come from `userManagement.mail.fromName` (default "CoreScope"), not the
   branding config.
 - **Accessibility:** the new views must pass the existing axe and contrast tests and
   the touch-target rules.
