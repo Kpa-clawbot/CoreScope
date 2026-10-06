@@ -7,7 +7,8 @@ var e2eRoutes func(s *Server, r *mux.Router)
 
 // registerAuthRoutes adds every user-management route. Called by
 // RegisterRoutes only when s.auth != nil, so with the feature off these
-// paths are plain 404s.
+// paths are not registered and fall through to the SPA handler like any
+// unknown path.
 func (s *Server) registerAuthRoutes(r *mux.Router) {
 	r.HandleFunc("/api/auth/register", s.requireOrigin(s.handleRegister)).Methods("POST")
 	r.HandleFunc("/api/auth/activate", s.requireOrigin(s.handleActivate)).Methods("POST")

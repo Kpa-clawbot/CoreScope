@@ -439,8 +439,10 @@ logged-in admins.
   - Gated endpoints accept the API key or an admin session.
   - The webhook: auth, unknown IDs, and event ingestion setting `email_bouncing`.
 - **"Off is unchanged":**
-  - With the block absent or `enabled: false`: every new route returns 404 and no
-    `users.db` file is created. `/api/config/client` has no `userManagement` key, and
+  - With the block absent or `enabled: false`: no new route is registered (the unit
+    test's API-only router answers 404; the real server falls through to the SPA
+    page) and no `users.db` file is created. `/api/config/client` has no
+    `userManagement` key, and
     it is byte-identical between "block absent" and `enabled: false`.
   - All existing tests pass unchanged.
 - **Read-only invariant:** `readonly_invariant_test.go` is extended. Write-capable
