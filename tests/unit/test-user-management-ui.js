@@ -210,6 +210,110 @@ NAVS.forEach((n) => {
   });
 });
 
+console.log('account.js');
+
+function loadAccount(hash, routes) {
+  const els = {};
+  const mk = () => {
+    const el = { value: '', textContent: '', handlers: {}, cls: {}, html: '' };
+    el.classList = { toggle(c, on) { el.cls[c] = !!on; } };
+    el.addEventListener = (t, fn) => { el.handlers[t] = fn; };
+    el.querySelector = () => null;
+    el.insertAdjacentHTML = (pos, html) => { els.renewLink = { html }; };
+    return el;
+  };
+  const doc = { getElementById(id) { return els[id] || (id === 'renewLink' ? null : (els[id] = mk())); } };
+  let pages = {};
+  const calls = [];
+  const user = { current: null };
+  const CSAuth = {
+    request(method, p, body) { calls.push({ method, p, body }); return Promise.resolve(routes(p, body)); },
+    setUser(u) { user.current = u; },
+    user() { return user.current; },
+    notify() {}, refreshMe() { return Promise.resolve(); },
+  };
+  const loc = { hash };
+  const ctx = { window: { CSAuth }, document: doc, CSAuth, location: loc, URLSearchParams, Promise, String,
+    escapeHtml: loadEscapeHtml(), registerPage(n, m) { pages[n] = m; }, console };
+  vm.createContext(ctx);
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/account.js'), 'utf8'), ctx);
+  return { doc, t: ctx.window.CSAccount._test, els, calls, loc, user, pages };
+}
+const submitForm = async (env, formId) => {
+  await env.els[formId].handlers.submit({ preventDefault() {} });
+};
+
+test('profile view escapes email and session fields', () => {
+  const env = loadAccount('#/account', () => ({}));
+  const payload = '<img src=x onerror=alert(1)>';
+  const html = env.t.profileHtml({ email: payload, role: 'admin', displayName: payload });
+  assert(html.indexOf('<img') === -1, 'raw tag in profile HTML');
+  assert(html.indexOf('&lt;img src=x onerror=alert(1)&gt;') !== -1);
+  const sess = env.t.sessionsHtml([{ id: '1"><b>', userAgent: payload, lastSeenAt: 'x', current: false }]);
+  assert(sess.indexOf('<img') === -1 && sess.indexOf('<b>') === -1, 'raw tag in sessions HTML: ' + sess);
+});
+
+test('sessions list marks the current device without a logout button', () => {
+  const env = loadAccount('#/account', () => ({}));
+  const h = env.t.sessionsHtml([{ id: 1, userAgent: 'A', lastSeenAt: '2026-01-01T00:00:00Z', current: true },
+    { id: 2, userAgent: '', lastSeenAt: '2026-01-01T00:00:00Z', current: false }]);
+  assert.strictEqual((h.match(/data-sess=/g) || []).length, 1);
+  assert(h.indexOf('data-sess="2"') !== -1 && h.indexOf('Unknown device') !== -1);
+});
+
+test('activate posts token and password, logs in on success', async () => {
+  const env = loadAccount('#/account/activate?token=T0K', () => ({ ok: true, status: 200, data: { id: 1, displayName: 'Ann' } }));
+  env.t.views.activate({});
+  env.doc.getElementById('actPassword').value = 'hunter2hunter2';
+  await submitForm(env, 'activateForm');
+  assert.strictEqual(JSON.stringify(env.calls[0]), JSON.stringify({ method: 'POST', p: '/api/auth/activate', body: { token: 'T0K', password: 'hunter2hunter2' } }));
+  assert.strictEqual(env.user.current.displayName, 'Ann');
+  assert.strictEqual(env.loc.hash, '#/account');
+});
+
+test('activate 401 shows the wrong-password message and stays on the form', async () => {
+  const env = loadAccount('#/account/activate?token=T', () => ({ ok: false, status: 401, data: { error: 'wrong password for this account' } }));
+  env.t.views.activate({});
+  await submitForm(env, 'activateForm');
+  assert.strictEqual(env.els.accountMsg.textContent, 'Wrong password for this account');
+  assert.strictEqual(env.user.current, null);
+  assert.strictEqual(env.loc.hash, '#/account/activate?token=T');
+});
+
+test('activate 410 offers a new registration link', async () => {
+  const env = loadAccount('#/account/activate?token=T', () => ({ ok: false, status: 410, data: { error: 'this link has expired' } }));
+  env.t.views.activate({});
+  await submitForm(env, 'activateForm');
+  assert(env.els.renewLink.html.indexOf('href="#/account/register"') !== -1);
+  assert(env.els.renewLink.html.indexOf('Register again to get a new link') !== -1);
+});
+
+test('reset 410 offers the forgot-password link', async () => {
+  const env = loadAccount('#/account/reset?token=T', () => ({ ok: false, status: 410, data: { error: 'this link has expired' } }));
+  env.t.views.reset({});
+  env.doc.getElementById('resetPassword').value = 'abcdefghijkl';
+  env.doc.getElementById('resetPassword2').value = 'abcdefghijkl';
+  await submitForm(env, 'resetForm');
+  assert.strictEqual(JSON.stringify(env.calls[0].body), JSON.stringify({ token: 'T', password: 'abcdefghijkl' }));
+  assert(env.els.renewLink.html.indexOf('href="#/account/forgot"') !== -1);
+});
+
+test('reset refuses mismatching passwords without a request', async () => {
+  const env = loadAccount('#/account/reset?token=T', () => ({ ok: true, status: 200, data: {} }));
+  env.t.views.reset({});
+  env.doc.getElementById('resetPassword').value = 'abcdefghijkl';
+  env.doc.getElementById('resetPassword2').value = 'different-pass';
+  await submitForm(env, 'resetForm');
+  assert.strictEqual(env.calls.length, 0);
+  assert.strictEqual(env.els.accountMsg.textContent, 'The passwords do not match.');
+});
+
+test('profile view without a user redirects to login', () => {
+  const env = loadAccount('#/account', () => ({}));
+  env.t.views.profile({});
+  assert.strictEqual(env.loc.hash, '#/account/login');
+});
+
 Promise.all(pending).then(() => {
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed ? 1 : 0);
