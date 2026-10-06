@@ -66,3 +66,13 @@
 .account-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
 a.account-btn { display: inline-flex; align-items: center; text-decoration: none; box-sizing: border-box; }
 .um-detail-close { float: right; }
+
+/* Compact controls on precise pointers; touch keeps the 48px targets above. */
+@media (pointer: fine) {
+  .nav-account-btn { min-height: 36px; min-width: 36px; padding: 3px 10px; }
+  .nav-account-menu a, .nav-account-menu button { min-height: 36px; padding: 4px 14px; }
+  .account-field input { min-height: 36px; padding: 4px 10px; }
+  .account-btn { min-height: 36px; padding: 4px 16px; }
+  .um-filters input, .um-filters select { min-height: 36px; padding: 3px 8px; }
+  .um-actions button { min-height: 36px; padding: 2px 12px; }
+}
