@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/meshcore-analyzer/mailer"
 	"github.com/meshcore-analyzer/users"
@@ -110,4 +111,24 @@ func (a *authService) ingestMailEvents(evs []mailer.Event) {
 			}
 		}
 	}
+}
+
+// mailToken issues a one-time token for u, builds the mail around it and
+// sends it. If issuing or sending fails the purpose's outstanding tokens are
+// invalidated, so no usable link exists for a mail that never left; the
+// caller answers 503. newEmail is stored only for users.PurposeEmailChange.
+// mailPurpose is the label recorded in the mail log.
+func (a *authService) mailToken(ctx context.Context, u *users.User, tokenPurpose users.Purpose,
+	ttl time.Duration, newEmail, mailPurpose string, build func(token string) mailer.Message) error {
+	tok, err := a.st.IssueToken(u.ID, tokenPurpose, ttl, newEmail)
+	if err == nil {
+		err = a.sendMail(ctx, u, mailPurpose, build(tok))
+	}
+	if err != nil {
+		if ierr := a.st.InvalidateTokens(u.ID, tokenPurpose); ierr != nil {
+			log.Printf("[users] invalidate %s tokens for user #%d: %v", tokenPurpose, u.ID, ierr)
+		}
+		return err
+	}
+	return nil
 }
