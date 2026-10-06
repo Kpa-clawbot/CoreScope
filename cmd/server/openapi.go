@@ -60,7 +60,7 @@ func routeDescriptions() map[string]routeMeta {
 
 		// User management (optional; routes exist only when userManagement.enabled)
 		"POST /api/auth/register":                          {Summary: "Register an account", Description: "Creates a pending account and mails an activation link. The response is identical whether or not the address is already registered.", Tag: "users"},
-		"POST /api/auth/activate":                          {Summary: "Activate an account", Description: "Consumes the mailed activation token, activates the account and starts a session.", Tag: "users"},
+		"POST /api/auth/activate":                          {Summary: "Activate an account", Description: "Request body {token, password}: the mailed activation token and the account password chosen at (the newest) registration. A wrong password answers 401 and leaves the token usable; attempts are rate-limited per account. On success consumes the token, activates the account and starts a session.", Tag: "users"},
 		"POST /api/auth/login":                             {Summary: "Log in", Description: "Email + password. Sets the cs_session cookie. Rate-limited per IP and per address.", Tag: "users"},
 		"POST /api/auth/logout":                            {Summary: "Log out", Tag: "users"},
 		"GET /api/auth/me":                                 {Summary: "Current user", Description: "Returns the logged-in user and the CSRF token, or 401.", Tag: "users", Session: true},

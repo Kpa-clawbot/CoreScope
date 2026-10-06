@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/meshcore-analyzer/mailer"
@@ -45,10 +46,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if existing, err := a.st.GetByEmail(email); err == nil {
 		// Identical response either way (no account enumeration).
 		if existing.Status == users.StatusPending {
-			// Newest registration wins: whoever clicks the link gets the
-			// password and name of the latest request, so squatting a pending
-			// address cannot plant credentials. Failures stay invisible to
-			// the client (same response as every other branch).
+			// Newest registration wins: the account takes the password and
+			// name of the latest request, and activation demands that
+			// password, so a squatter cannot plant credentials and the owner
+			// can recover a squatted address. Failures stay invisible to the
+			// client (same response as every other branch).
 			if err := a.st.SetPassword(existing.ID, hash); err != nil {
 				log.Printf("[users] register: update pending user #%d: %v", existing.ID, err)
 			} else if err := a.st.SetDisplayName(existing.ID, name); err != nil {
@@ -86,20 +88,41 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, okResponse{OK: true, Message: msgCheckMail})
 }
 
+// handleActivate needs the token and the account password: a re-register
+// of a pending address replaces the password, so whoever clicks must prove
+// they know the newest one (a squatter's link cannot log the owner into an
+// account carrying the squatter's password).
 func (s *Server) handleActivate(w http.ResponseWriter, r *http.Request) {
 	a := s.auth
-	var req tokenRequest
+	var req activateRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	uid, _, err := a.st.ConsumeToken(req.Token, users.PurposeActivate)
+	uid, err := a.st.TokenUser(req.Token, users.PurposeActivate)
 	if err != nil {
 		writeTokenError(w, err)
+		return
+	}
+	if !a.allow(w, r, a.login, "activate:#"+strconv.FormatInt(uid, 10)) {
 		return
 	}
 	u, err := a.st.GetByID(uid)
 	if err != nil || u.Status != users.StatusPending {
 		writeError(w, http.StatusGone, "this account is already activated, log in instead")
+		return
+	}
+	ok, err := users.VerifyPassword(u.PasswordHash, req.Password)
+	if err != nil {
+		log.Printf("[users] activate: verify password for user #%d: %v", u.ID, err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "wrong password for this account")
+		return
+	}
+	if _, _, err := a.st.ConsumeToken(req.Token, users.PurposeActivate); err != nil {
+		writeTokenError(w, err)
 		return
 	}
 	if err := a.st.Activate(u.ID, a.roleFor(u.Email), nil); err != nil {

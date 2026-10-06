@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -21,7 +22,7 @@ func TestAuthRegisterActivateLoginLogout(t *testing.T) {
 	// Pending accounts cannot log in.
 	expectStatus(t, f.do("POST", "/api/auth/login", loginRequest{Email: "alice@example.org", Password: pw}), 401)
 
-	w = f.do("POST", "/api/auth/activate", tokenRequest{Token: f.lastToken(t)})
+	w = f.do("POST", "/api/auth/activate", activateRequest{Token: f.lastToken(t), Password: pw})
 	expectStatus(t, w, 200)
 	me := decode[meResponse](t, w)
 	ck := sessionFrom(t, w)
@@ -70,7 +71,7 @@ func TestAuthActivateAdminFromConfig(t *testing.T) {
 		t.Fatalf("config admin activated as %q", c.me.Role)
 	}
 	// Activation links are single-use.
-	expectStatus(t, f.do("POST", "/api/auth/activate", tokenRequest{Token: "bogus"}), 410)
+	expectStatus(t, f.do("POST", "/api/auth/activate", activateRequest{Token: "bogus", Password: pw}), 410)
 }
 
 func TestAuthLoginGenericFailure(t *testing.T) {
@@ -164,11 +165,46 @@ func TestAuthPendingReRegisterNewestWins(t *testing.T) {
 	const p1, p2 = "first password here", "second password here"
 	expectStatus(t, f.do("POST", "/api/auth/register", registerRequest{Email: "vic@example.org", DisplayName: "Squatter", Password: p1}), 200)
 	expectStatus(t, f.do("POST", "/api/auth/register", registerRequest{Email: "vic@example.org", DisplayName: "Victim", Password: p2}), 200)
-	w := f.do("POST", "/api/auth/activate", tokenRequest{Token: f.lastToken(t)})
+	link := f.lastToken(t)
+	// The squatter cannot use the victim's link: it needs the newest password.
+	w := f.do("POST", "/api/auth/activate", activateRequest{Token: link, Password: p1})
+	expectStatus(t, w, 401)
+	w = f.do("POST", "/api/auth/activate", activateRequest{Token: link, Password: p2})
 	expectStatus(t, w, 200)
 	if me := decode[meResponse](t, w); me.DisplayName != "Victim" {
 		t.Fatalf("displayName = %q, want the newest registration's", me.DisplayName)
 	}
 	expectStatus(t, f.do("POST", "/api/auth/login", loginRequest{Email: "vic@example.org", Password: p1}), 401)
 	f.login(t, "vic@example.org", p2)
+}
+
+func TestAuthActivateWrongPasswordKeepsToken(t *testing.T) {
+	f := newAuthFixture(t)
+	expectStatus(t, f.do("POST", "/api/auth/register", registerRequest{Email: "kim@example.org", DisplayName: "Kim", Password: pw}), 200)
+	tok := f.lastToken(t)
+	w := f.do("POST", "/api/auth/activate", activateRequest{Token: tok, Password: "not the password"})
+	expectStatus(t, w, 401)
+	if !strings.Contains(w.Body.String(), "wrong password for this account") {
+		t.Fatalf("body = %s", w.Body.String())
+	}
+	if u, _ := f.st.GetByEmail("kim@example.org"); u.Status != users.StatusPending {
+		t.Fatalf("activated with a wrong password: %+v", u)
+	}
+	expectStatus(t, f.do("POST", "/api/auth/activate", activateRequest{Token: tok, Password: pw}), 200)
+}
+
+func TestAuthActivatePasswordRateLimited(t *testing.T) {
+	f := newAuthFixture(t)
+	expectStatus(t, f.do("POST", "/api/auth/register", registerRequest{Email: "lou@example.org", DisplayName: "Lou", Password: pw}), 200)
+	tok := f.lastToken(t)
+	for i := 0; i < 10; i++ {
+		ip := fromIP(fmt.Sprintf("198.51.100.%d", i+1))
+		expectStatus(t, f.do("POST", "/api/auth/activate", activateRequest{Token: tok, Password: "guess guess guess"}, ip), 401)
+	}
+	// Per-account bucket: a fresh IP is still limited for this account.
+	w := f.do("POST", "/api/auth/activate", activateRequest{Token: tok, Password: pw}, fromIP("198.51.100.99"))
+	expectStatus(t, w, 429)
+	if w.Header().Get("Retry-After") == "" {
+		t.Fatal("429 without Retry-After")
+	}
 }

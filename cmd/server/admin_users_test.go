@@ -88,7 +88,7 @@ func TestAdminManualActivate(t *testing.T) {
 	if got.Status != users.StatusActive || got.ActivatedBy == nil || *got.ActivatedBy != boss.me.ID {
 		t.Fatalf("after manual activate: %+v", got)
 	}
-	expectStatus(t, f.do("POST", "/api/auth/activate", tokenRequest{Token: link}), 410)
+	expectStatus(t, f.do("POST", "/api/auth/activate", activateRequest{Token: link, Password: pw}), 410)
 	expectStatus(t, f.do("POST", userPath(late.ID, "/activate"), nil, as(boss)), 409)
 	if !hasAudit(t, f, late.ID, "user.activate.manual") {
 		t.Fatal("no user.activate.manual audit row")
@@ -106,8 +106,8 @@ func TestAdminResendActivation(t *testing.T) {
 	if fresh == old {
 		t.Fatal("no new link sent")
 	}
-	expectStatus(t, f.do("POST", "/api/auth/activate", tokenRequest{Token: old}), 410)
-	expectStatus(t, f.do("POST", "/api/auth/activate", tokenRequest{Token: fresh}), 200)
+	expectStatus(t, f.do("POST", "/api/auth/activate", activateRequest{Token: old, Password: pw}), 410)
+	expectStatus(t, f.do("POST", "/api/auth/activate", activateRequest{Token: fresh, Password: pw}), 200)
 	expectStatus(t, f.do("POST", userPath(uma.me.ID, "/resend-activation"), nil, as(boss)), 409)
 }
 

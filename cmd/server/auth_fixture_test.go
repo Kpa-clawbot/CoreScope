@@ -155,7 +155,7 @@ func (f *authFixture) registerAndActivate(t *testing.T, email, name, password st
 	t.Helper()
 	w := f.do("POST", "/api/auth/register", registerRequest{Email: email, DisplayName: name, Password: password})
 	expectStatus(t, w, 200)
-	w = f.do("POST", "/api/auth/activate", tokenRequest{Token: f.lastToken(t)})
+	w = f.do("POST", "/api/auth/activate", activateRequest{Token: f.lastToken(t), Password: password})
 	expectStatus(t, w, 200)
 	me := decode[meResponse](t, w)
 	return &client{cookie: sessionFrom(t, w), csrf: me.CSRFToken, me: me}

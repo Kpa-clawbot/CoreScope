@@ -41,6 +41,11 @@ type tokenRequest struct {
 	Token string `json:"token"`
 }
 
+type activateRequest struct {
+	Token    string `json:"token"`
+	Password string `json:"password"`
+}
+
 type resetRequest struct {
 	Token    string `json:"token"`
 	Password string `json:"password"`
