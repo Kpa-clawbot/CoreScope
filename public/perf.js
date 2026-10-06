@@ -344,7 +344,13 @@ function renderVersionCard(health) {
       el.innerHTML = html;
 
       document.getElementById('perfReset')?.addEventListener('click', async () => {
-        await fetch('/api/perf/reset', { method: 'POST' });
+        try {
+          var r = await fetch('/api/perf/reset', { method: 'POST', headers: window.CSAuth ? CSAuth.adminHeaders() : {} });
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+        } catch (e) {
+          alert('Reset failed: ' + e.message);
+          return;
+        }
         if (window._apiPerf) { window._apiPerf = { calls: 0, totalMs: 0, log: [] }; }
         refresh();
       });

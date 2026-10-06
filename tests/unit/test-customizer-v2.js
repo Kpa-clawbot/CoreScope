@@ -582,4 +582,20 @@ test('validateShape rejects non-array myNodes', () => {
 
 // ── Summary ──
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed\n`);
+// ── geofilter editor access (optional user management) ──
+console.log('_gfCanEdit:');
+test('_gfCanEdit: writeEnabled key allows edit', () => {
+  const { api } = loadCustomizer();
+  assert.strictEqual(api._gfCanEdit({ writeEnabled: true }, undefined), true);
+});
+test('_gfCanEdit: admin session allows edit without writeEnabled', () => {
+  const { api } = loadCustomizer();
+  assert.strictEqual(api._gfCanEdit({ writeEnabled: false }, { isAdmin: () => true }), true);
+});
+test('_gfCanEdit: non-admin session and no key denies edit', () => {
+  const { api } = loadCustomizer();
+  assert.strictEqual(api._gfCanEdit({ writeEnabled: false }, { isAdmin: () => false }), false);
+  assert.strictEqual(api._gfCanEdit(null, undefined), false);
+});
+
 process.exit(failed > 0 ? 1 : 0);
