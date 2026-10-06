@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/meshcore-analyzer/mailer"
@@ -198,4 +199,18 @@ func TestAdminDisableTokenStoreFailureIs500(t *testing.T) {
 	f, boss, uma := adminFixture(t)
 	f.breakTable(t, "tokens")
 	expectStatus(t, f.do("POST", userPath(uma.me.ID, "/disable"), nil, as(boss)), 500)
+}
+
+func TestAdminRoleChangeOnPendingIs409(t *testing.T) {
+	f, boss, _ := adminFixture(t)
+	f.do("POST", "/api/auth/register", registerRequest{Email: "pend@example.org", DisplayName: "Pend", Password: pw})
+	p, _ := f.st.GetByEmail("pend@example.org")
+	w := f.do("POST", userPath(p.ID, "/role"), roleRequest{Role: users.RoleAdmin}, as(boss))
+	expectStatus(t, w, 409)
+	if !strings.Contains(w.Body.String(), "activate the account first") {
+		t.Fatalf("body = %s", w.Body.String())
+	}
+	if got, _ := f.st.GetByID(p.ID); got.Role != users.RoleUser {
+		t.Fatalf("role changed on a pending user: %+v", got)
+	}
 }

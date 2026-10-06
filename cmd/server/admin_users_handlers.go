@@ -219,6 +219,12 @@ func (s *Server) handleAdminRole(w http.ResponseWriter, r *http.Request, actor *
 		writeError(w, http.StatusBadRequest, "role must be user or admin")
 		return
 	}
+	// Activation sets the role from adminEmails, so a change now would be
+	// silently lost.
+	if t.Status == users.StatusPending {
+		writeError(w, http.StatusConflict, "activate the account first")
+		return
+	}
 	if req.Role == t.Role {
 		s.writeAdminRow(w, t.ID)
 		return
