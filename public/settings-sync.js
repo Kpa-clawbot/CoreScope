@@ -372,6 +372,7 @@
           setStatus('rejected');
           return false;
         }
+        if (r.status === 403) { onForbidden(epoch); return false; }
         if (r.status !== 401) retryLater(); // 401: auth.js logged out, which deactivates this module
         return false;
       }, function () {
@@ -382,6 +383,25 @@
       });
     state.pushing = p;
     return p;
+  }
+
+  // onForbidden handles a 403: this tab's CSRF token belongs to an older
+  // session (a logout and login in another tab), so retrying never ends.
+  // It asks who is logged in now. Another user, or nobody, arrives as
+  // cs-auth-changed and re-activates or deactivates this module (the epoch
+  // moves); the same user stops syncing in this tab until a reload.
+  function onForbidden(epoch) {
+    clearTimeout(state.retryTimer);
+    state.retryTimer = null;
+    var stop = function () {
+      if (state.epoch !== epoch) return;
+      state.blocked = 'forbidden';
+      setStatus('forbidden');
+    };
+    return window.CSAuth.refreshMe().then(stop, function (e) {
+      console.error('[settings-sync] could not check the session after a 403: ' + (e && e.message));
+      stop();
+    });
   }
 
   // pull fetches the account's document. An answer is dropped when the
@@ -402,7 +422,11 @@
     };
     return window.CSAuth.request('GET', '/api/account/settings').then(function (r) {
       if (stale()) return;
-      if (!r.ok) { if (r.status !== 401) setStatus('retrying'); return; }
+      if (!r.ok) {
+        if (r.status === 403) onForbidden(epoch);
+        else if (r.status !== 401) setStatus('retrying');
+        return;
+      }
       setPolicy(r.data.allowlist || []);
       if (applyProfile(r.data.revision, r.data.generation, r.data.doc)) {
         state.dirty = true;
@@ -616,6 +640,7 @@
       case 'retrying': return 'Not synced: retrying';
       case 'too-large': return 'Not synced: your settings are larger than your account can hold. Largest: ' + state.tooLarge.join(', ');
       case 'rejected': return 'Not synced: the server refused your settings. Reload the page to try again.';
+      case 'forbidden': return 'Not synced: this tab is out of date. Reload the page to sync again.';
       case 'held': return 'No settings saved in your account. Your next change starts a new copy.';
       default: return 'Not synced yet';
     }
@@ -626,7 +651,7 @@
     if (!el) return;
     el.textContent = statusText();
     el.classList.toggle('ok', state.status === 'ok');
-    el.classList.toggle('err', state.status === 'retrying' || state.status === 'too-large' || state.status === 'rejected');
+    el.classList.toggle('err', state.status === 'retrying' || state.status === 'too-large' || state.status === 'rejected' || state.status === 'forbidden');
   }
 
   function mountSection(el) {

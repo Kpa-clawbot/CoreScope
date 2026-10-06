@@ -166,8 +166,14 @@ function makeEnv(opts) {
     },
     notify(m) { toasts.push(m); },
     setLogoutHandler(fn) { logoutHandler = fn; },
+    // env.nextMe: the user /api/auth/me reports now (undefined: unchanged).
+    refreshMe() {
+      env.refreshes++;
+      if (env.nextMe !== undefined) { user = env.nextMe; (winListeners['cs-auth-changed'] || []).forEach((f) => f({ detail: user })); }
+      return Promise.resolve(user);
+    },
   };
-  const env = { navigations: 0, pipelines: 0, resets: 0, presetClears: 0 };
+  const env = { navigations: 0, pipelines: 0, resets: 0, presetClears: 0, refreshes: 0, nextMe: undefined };
   const win = {
     localStorage: ls, Storage, CSAuth: auth, MC_USER_MGMT: enabled ? { enabled: true } : null,
     addEventListener(t, f) { (winListeners[t] = winListeners[t] || []).push(f); },
@@ -514,6 +520,49 @@ test('400 stops pushing until reload and logs the reason', async () => {
   await env.api.syncNow();
   await env.timers.advance(10000);
   assert.strictEqual(server.puts.length, 1);
+});
+
+// M6 (final review): after a logout and login in another tab this tab's
+// CSRF token is stale and every PUT answers 403; retrying never ends.
+test('403 on a push: same user still logged in stops syncing until a reload', async () => {
+  const server = serverWith(1, {});
+  const env = makeEnv({ server, local: synced({}, 1) });
+  await env.timers.advance(0);
+  server.fail.PUT = [{ status: 403, data: { error: 'missing CSRF token' } }];
+  env.ls.setItem('meshcore-time-window', '60');
+  await env.timers.advance(2000);
+  assert.strictEqual(env.refreshes, 1);
+  assert.strictEqual(env.t.state.status, 'forbidden');
+  assert.strictEqual(env.t.statusText(), 'Not synced: this tab is out of date. Reload the page to sync again.');
+  assert.deepStrictEqual(env.timers.delays(), [], 'a retry is still scheduled');
+  env.ls.setItem('meshcore-time-window', '15');
+  await env.timers.advance(600000);
+  assert.strictEqual(server.puts.length, 1);
+});
+
+test('403 on a push: another user logged in since re-activates for that user', async () => {
+  const server = serverWith(1, {});
+  const env = makeEnv({ server, local: synced({}, 1) });
+  await env.timers.advance(0);
+  server.fail.PUT = [{ status: 403, data: { error: 'missing CSRF token' } }];
+  env.nextMe = { id: 8 };
+  env.ls.setItem('meshcore-time-window', '60');
+  await env.timers.advance(2000);
+  assert.strictEqual(env.refreshes, 1);
+  assert.strictEqual(env.t.state.userId, 8);
+  assert.notStrictEqual(env.t.state.status, 'forbidden');
+  assert.strictEqual(env.t.state.blocked, null);
+});
+
+test('403 on a pull: logged out since deactivates', async () => {
+  const server = serverWith(1, {});
+  const env = makeEnv({ server, local: synced({}, 1) });
+  await env.timers.advance(0);
+  server.fail.GET = [{ status: 403, data: { error: 'forbidden' } }];
+  env.nextMe = null;
+  await env.fireDoc('visibilitychange');
+  assert.strictEqual(env.refreshes, 1);
+  assert.strictEqual(env.t.state.active, false);
 });
 
 test('account copy deleted elsewhere: values stay, no upload until the next change', async () => {
