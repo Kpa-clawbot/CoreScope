@@ -65,16 +65,19 @@ CREATE TABLE user_settings (
   user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   doc        TEXT    NOT NULL,
   revision   INTEGER NOT NULL,
+  generation TEXT    NOT NULL,
   updated_at TEXT    NOT NULL
 )
 ```
 
 Store methods:
-- `GetSettings(userID) (doc string, revision int64, err)`: revision 0 and an empty
-  doc when no row exists.
-- `PutSettings(userID, baseRevision int64, doc string) (newRevision int64, err)`:
-  in one transaction, writes only when the stored revision equals `baseRevision`
-  (0 = no row yet); otherwise returns `ErrSettingsConflict`. New revision = base + 1.
+- `GetSettings(userID) (doc string, version SettingsVersion, err)`: the zero version
+  (revision 0, empty generation) and an empty doc when no row exists.
+- `PutSettings(userID, base SettingsVersion, doc string) (SettingsVersion, err)`: in
+  one transaction. Without a row, `base.Revision` must be 0 and the write creates a
+  new generation (16 random bytes, hex). With a row, `base` must equal the stored
+  revision and generation. Otherwise it returns the stored version and
+  `ErrSettingsConflict`. New revision = base + 1, same generation.
 - `DeleteSettings(userID) error`.
 - Account deletion removes the row (cascade, and `Store.Delete` covers it explicitly
   in a test). Disabling keeps it.
@@ -138,11 +141,12 @@ all `sessionStorage`.
 
 Both routes are registered only when user management is on, behind `withUser`.
 
-- `GET /api/account/settings` → `200 {revision, doc, allowlist}`. `doc` is `null` at
-  revision 0.
-- `PUT /api/account/settings` body `{baseRevision, doc}`:
-  - `200 {revision}` on success.
-  - `409 {revision, doc}` when `baseRevision` is stale; the body carries the current
+- `GET /api/account/settings` → `200 {revision, generation, doc, allowlist}`. `doc` is
+  `null` and `generation` empty at revision 0.
+- `PUT /api/account/settings` body `{baseRevision, baseGeneration, doc}`:
+  - `200 {revision, generation}` on success.
+  - `409 {revision, generation, doc}` when `baseRevision` or (with a stored document)
+    `baseGeneration` is stale; the body carries the current
     document so the client can merge without another GET.
   - `400` when `doc` is not the documented shape or contains a key that is denylisted
     or not allowlisted.
@@ -164,8 +168,9 @@ are wrapped. A write to an allowlisted key marks the document dirty and schedule
 push 2 seconds later (debounced). Any other key passes straight through. Writes made
 by the module itself while applying a remote document do not mark it dirty.
 
-**Per-device baseline.** The module stores the last synced document and its revision
-locally under `cs-settings-sync-base` and `cs-settings-sync-rev`. These two keys are
+**Per-device baseline.** The module stores the last synced document, its generation
+and its revision locally under `cs-settings-sync-base` and `cs-settings-sync-rev`. A
+baseline whose generation is not the profile's counts as no baseline (union merge). These two keys are
 never synced.
 
 **Three-way merge** of local state L, profile P and baseline B, per key:
@@ -306,3 +311,10 @@ rules override the sections above where they differ.
 8. **`live-channel-colors` is not synced** (final review): it is keyed by channel name,
    which for hashtag and PSK channels is (part of) the channel key. It moved from the
    allowlist to the hard denylist; the allowlist has 61 keys.
+9. **Each document has a generation** (final review): revisions restart at 1 after
+   "Delete synced settings", so a revision alone cannot tell the new document from the
+   old one. The first write creates a random generation; GET, PUT and 409 carry it; a
+   PUT on a stored document must name it. The client stores it in the baseline, and a
+   baseline of another generation counts as none. A device that synced the old
+   document therefore merges by union instead of dropping its items, and an offline
+   retry from the old document gets 409 instead of overwriting the new one.

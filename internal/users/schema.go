@@ -79,6 +79,7 @@ var migrations = [][]string{
 			user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
 			doc TEXT NOT NULL,
 			revision INTEGER NOT NULL,
+			generation TEXT NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`,
 	},

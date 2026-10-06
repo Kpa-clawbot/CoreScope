@@ -23,24 +23,30 @@ type settingsDoc struct {
 	Keys map[string]string `json:"keys"`
 }
 
+// Generation identifies one document: revisions restart at 1 after a
+// DELETE, and the generation tells the new document from the old one.
 type settingsGetResponse struct {
-	Revision  int64         `json:"revision"`
-	Doc       *settingsDoc  `json:"doc"`
-	Allowlist []settingsKey `json:"allowlist"`
+	Revision   int64         `json:"revision"`
+	Generation string        `json:"generation"`
+	Doc        *settingsDoc  `json:"doc"`
+	Allowlist  []settingsKey `json:"allowlist"`
 }
 
 type settingsPutRequest struct {
-	BaseRevision int64        `json:"baseRevision"`
-	Doc          *settingsDoc `json:"doc"`
+	BaseRevision   int64        `json:"baseRevision"`
+	BaseGeneration string       `json:"baseGeneration"`
+	Doc            *settingsDoc `json:"doc"`
 }
 
-type settingsRevisionResponse struct {
-	Revision int64 `json:"revision"`
+type settingsPutResponse struct {
+	Revision   int64  `json:"revision"`
+	Generation string `json:"generation"`
 }
 
 type settingsConflictResponse struct {
-	Revision int64        `json:"revision"`
-	Doc      *settingsDoc `json:"doc"`
+	Revision   int64        `json:"revision"`
+	Generation string       `json:"generation"`
+	Doc        *settingsDoc `json:"doc"`
 }
 
 // validateSettingsDoc checks the documented shape, then every key: denied
@@ -78,31 +84,31 @@ func encodeSettingsDoc(d *settingsDoc) (string, error) {
 
 // loadSettings reads the stored document (nil at revision 0). On failure
 // it writes 500 and returns ok=false.
-func (s *Server) loadSettings(w http.ResponseWriter, uid int64) (int64, *settingsDoc, bool) {
-	raw, rev, err := s.auth.st.GetSettings(uid)
+func (s *Server) loadSettings(w http.ResponseWriter, uid int64) (users.SettingsVersion, *settingsDoc, bool) {
+	raw, v, err := s.auth.st.GetSettings(uid)
 	if err != nil {
 		log.Printf("[users] settings read for user #%d: %v", uid, err)
 		writeError(w, http.StatusInternalServerError, "internal error")
-		return 0, nil, false
+		return users.SettingsVersion{}, nil, false
 	}
-	if rev == 0 {
-		return 0, nil, true
+	if v.Revision == 0 {
+		return users.SettingsVersion{}, nil, true
 	}
 	var doc settingsDoc
 	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
 		log.Printf("[users] settings for user #%d do not decode (%d bytes): %v", uid, len(raw), err)
 		writeError(w, http.StatusInternalServerError, "internal error")
-		return 0, nil, false
+		return users.SettingsVersion{}, nil, false
 	}
-	return rev, &doc, true
+	return v, &doc, true
 }
 
 func (s *Server) handleSettingsGet(w http.ResponseWriter, _ *http.Request, u *users.User, _ *users.Session) {
-	rev, doc, ok := s.loadSettings(w, u.ID)
+	v, doc, ok := s.loadSettings(w, u.ID)
 	if !ok {
 		return
 	}
-	writeJSON(w, settingsGetResponse{Revision: rev, Doc: doc, Allowlist: syncedSettingsKeys()})
+	writeJSON(w, settingsGetResponse{Revision: v.Revision, Generation: v.Generation, Doc: doc, Allowlist: syncedSettingsKeys()})
 }
 
 func (s *Server) handleSettingsPut(w http.ResponseWriter, r *http.Request, u *users.User, _ *users.Session) {
@@ -130,13 +136,13 @@ func (s *Server) handleSettingsPut(w http.ResponseWriter, r *http.Request, u *us
 		writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("settings are larger than %d KiB", settingsDocMaxBytes>>10))
 		return
 	}
-	rev, err := a.st.PutSettings(u.ID, req.BaseRevision, raw)
+	v, err := a.st.PutSettings(u.ID, users.SettingsVersion{Revision: req.BaseRevision, Generation: req.BaseGeneration}, raw)
 	if errors.Is(err, users.ErrSettingsConflict) {
 		cur, doc, ok := s.loadSettings(w, u.ID)
 		if !ok {
 			return
 		}
-		writeJSONStatus(w, http.StatusConflict, settingsConflictResponse{Revision: cur, Doc: doc})
+		writeJSONStatus(w, http.StatusConflict, settingsConflictResponse{Revision: cur.Revision, Generation: cur.Generation, Doc: doc})
 		return
 	}
 	if err != nil {
@@ -144,7 +150,7 @@ func (s *Server) handleSettingsPut(w http.ResponseWriter, r *http.Request, u *us
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	writeJSON(w, settingsRevisionResponse{Revision: rev})
+	writeJSON(w, settingsPutResponse{Revision: v.Revision, Generation: v.Generation})
 }
 
 func (s *Server) handleSettingsDelete(w http.ResponseWriter, _ *http.Request, u *users.User, _ *users.Session) {

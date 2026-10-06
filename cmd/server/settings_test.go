@@ -55,8 +55,8 @@ func TestSettingsGetWithoutDocument(t *testing.T) {
 		t.Fatalf("doc not null at revision 0: %s", w.Body.String())
 	}
 	got := decode[settingsGetResponse](t, w)
-	if got.Revision != 0 || got.Doc != nil || len(got.Allowlist) != len(settingsAllowlist) {
-		t.Fatalf("GET = rev %d doc %v allowlist %d", got.Revision, got.Doc, len(got.Allowlist))
+	if got.Revision != 0 || got.Generation != "" || got.Doc != nil || len(got.Allowlist) != len(settingsAllowlist) {
+		t.Fatalf("GET = rev %d generation %q doc %v allowlist %d", got.Revision, got.Generation, got.Doc, len(got.Allowlist))
 	}
 }
 
@@ -65,21 +65,44 @@ func TestSettingsPutGetAndConflict(t *testing.T) {
 	c := f.registerAndActivate(t, "sync2@example.org", "Sync Two", pw)
 	w := f.do("PUT", settingsPath, settingsPutRequest{BaseRevision: 0, Doc: settingsDocWith("meshcore-favorites", `["aa"]`)}, as(c))
 	expectStatus(t, w, 200)
-	if rev := decode[settingsRevisionResponse](t, w).Revision; rev != 1 {
-		t.Fatalf("first revision = %d", rev)
+	first := decode[settingsPutResponse](t, w)
+	if first.Revision != 1 || len(first.Generation) != 32 {
+		t.Fatalf("first write = %+v; want revision 1 and a generation", first)
 	}
 	// A second device still at revision 0 gets 409 with the current document.
 	w = f.do("PUT", settingsPath, settingsPutRequest{BaseRevision: 0, Doc: settingsDocWith("meshcore-theme", "dark")}, as(c))
 	expectStatus(t, w, 409)
 	conf := decode[settingsConflictResponse](t, w)
-	if conf.Revision != 1 || conf.Doc == nil || conf.Doc.Keys["meshcore-favorites"] != `["aa"]` {
+	if conf.Revision != 1 || conf.Generation != first.Generation || conf.Doc == nil || conf.Doc.Keys["meshcore-favorites"] != `["aa"]` {
 		t.Fatalf("409 body = %+v", conf)
 	}
-	w = f.do("PUT", settingsPath, settingsPutRequest{BaseRevision: 1, Doc: settingsDocWith("meshcore-favorites", `["aa"]`, "meshcore-theme", "dark")}, as(c))
+	w = f.do("PUT", settingsPath, settingsPutRequest{BaseRevision: 1, BaseGeneration: first.Generation, Doc: settingsDocWith("meshcore-favorites", `["aa"]`, "meshcore-theme", "dark")}, as(c))
 	expectStatus(t, w, 200)
+	if second := decode[settingsPutResponse](t, w); second.Revision != 2 || second.Generation != first.Generation {
+		t.Fatalf("second write = %+v; want revision 2 in generation %s", second, first.Generation)
+	}
 	got := decode[settingsGetResponse](t, f.do("GET", settingsPath, nil, as(c)))
-	if got.Revision != 2 || got.Doc.Keys["meshcore-theme"] != "dark" || got.Doc.V != 1 {
+	if got.Revision != 2 || got.Generation != first.Generation || got.Doc.Keys["meshcore-theme"] != "dark" || got.Doc.V != 1 {
 		t.Fatalf("GET after two writes = %+v", got)
+	}
+}
+
+// After DELETE the revisions restart at 1. A device that synced the old
+// document must get 409 even when its revision matches the new document's.
+func TestSettingsStaleGenerationConflicts(t *testing.T) {
+	f := newAuthFixture(t)
+	c := f.registerAndActivate(t, "sync11@example.org", "Sync Eleven", pw)
+	old := decode[settingsPutResponse](t, f.do("PUT", settingsPath, settingsPutRequest{Doc: settingsDocWith("meshcore-theme", "dark")}, as(c)))
+	expectStatus(t, f.do("DELETE", settingsPath, nil, as(c)), 200)
+	cur := decode[settingsPutResponse](t, f.do("PUT", settingsPath, settingsPutRequest{Doc: settingsDocWith("meshcore-theme", "light")}, as(c)))
+	if cur.Revision != old.Revision || cur.Generation == old.Generation {
+		t.Fatalf("new document %+v; old %+v", cur, old)
+	}
+	w := f.do("PUT", settingsPath, settingsPutRequest{BaseRevision: old.Revision, BaseGeneration: old.Generation, Doc: settingsDocWith("meshcore-theme", "stale")}, as(c))
+	expectStatus(t, w, 409)
+	conf := decode[settingsConflictResponse](t, w)
+	if conf.Revision != cur.Revision || conf.Generation != cur.Generation || conf.Doc.Keys["meshcore-theme"] != "light" {
+		t.Fatalf("409 body = %+v", conf)
 	}
 }
 
@@ -99,9 +122,10 @@ func TestSettingsRejectsBadShapeAndKeys(t *testing.T) {
 	f := newAuthFixture(t)
 	c := f.registerAndActivate(t, "sync4@example.org", "Sync Four", pw)
 	type extraFieldReq struct {
-		BaseRevision int64        `json:"baseRevision"`
-		Doc          *settingsDoc `json:"doc"`
-		Extra        int          `json:"extra"`
+		BaseRevision   int64        `json:"baseRevision"`
+		BaseGeneration string       `json:"baseGeneration"`
+		Doc            *settingsDoc `json:"doc"`
+		Extra          int          `json:"extra"`
 	}
 	type numberDoc struct {
 		V    int            `json:"v"`
@@ -172,9 +196,9 @@ func TestSettingsRateLimitPerUser(t *testing.T) {
 	c := f.registerAndActivate(t, "sync7@example.org", "Sync Seven", pw)
 	d := f.registerAndActivate(t, "sync8@example.org", "Sync Eight", pw)
 	f.srv.auth.settingsPut = newRateLimiter(2, time.Hour)
-	expectStatus(t, f.do("PUT", settingsPath, settingsPutRequest{BaseRevision: 0, Doc: settingsDocWith()}, as(c)), 200)
-	expectStatus(t, f.do("PUT", settingsPath, settingsPutRequest{BaseRevision: 1, Doc: settingsDocWith()}, as(c)), 200)
-	w := f.do("PUT", settingsPath, settingsPutRequest{BaseRevision: 2, Doc: settingsDocWith()}, as(c))
+	v := decode[settingsPutResponse](t, f.do("PUT", settingsPath, settingsPutRequest{BaseRevision: 0, Doc: settingsDocWith()}, as(c)))
+	expectStatus(t, f.do("PUT", settingsPath, settingsPutRequest{BaseRevision: 1, BaseGeneration: v.Generation, Doc: settingsDocWith()}, as(c)), 200)
+	w := f.do("PUT", settingsPath, settingsPutRequest{BaseRevision: 2, BaseGeneration: v.Generation, Doc: settingsDocWith()}, as(c))
 	expectStatus(t, w, 429)
 	if w.Header().Get("Retry-After") == "" {
 		t.Fatal("429 without Retry-After")
@@ -204,7 +228,7 @@ func TestSettingsDeleteAndAccountDelete(t *testing.T) {
 	// The next change starts a new document.
 	expectStatus(t, f.do("PUT", settingsPath, settingsPutRequest{Doc: settingsDocWith("meshcore-theme", "light")}, as(c)), 200)
 	expectStatus(t, f.do("DELETE", "/api/account", passwordConfirmRequest{CurrentPassword: pw}, as(c)), 200)
-	if _, rev, err := f.st.GetSettings(c.me.ID); err != nil || rev != 0 {
-		t.Fatalf("settings after account delete: rev %d, %v", rev, err)
+	if _, v, err := f.st.GetSettings(c.me.ID); err != nil || v.Revision != 0 {
+		t.Fatalf("settings after account delete: %+v, %v", v, err)
 	}
 }

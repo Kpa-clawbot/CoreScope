@@ -121,7 +121,7 @@
 
   var state = {
     active: false, userId: null, policy: null,
-    base: {}, rev: 0, hold: false, firstUpload: false,
+    base: {}, rev: 0, gen: '', hold: false, firstUpload: false,
     dirty: false, seq: 0, pushing: null, pushTimer: null, retryTimer: null, pullTimer: null,
     backoff: BACKOFF_MIN_MS, blocked: null, status: 'idle', lastSyncedAt: null, tooLarge: [],
     // epoch changes on every activate/deactivate: an answer to a request
@@ -159,22 +159,25 @@
   }
 
   // The baseline is the last document this device and the account agreed
-  // on. It belongs to one user: another user's baseline counts as none.
+  // on. It belongs to one user: another user's baseline counts as none. gen
+  // is the account document's generation: revisions restart at 1 after a
+  // delete, so a revision alone does not say which document it belongs to.
   function loadBase(userId) {
     try {
       var b = JSON.parse(rawGet(BASE_KEY) || 'null');
       if (b && b.user === userId && b.keys && typeof b.keys === 'object') {
-        return { keys: b.keys, rev: Number(rawGet(REV_KEY)) || 0, hold: !!b.hold };
+        return { keys: b.keys, rev: Number(rawGet(REV_KEY)) || 0, gen: typeof b.gen === 'string' ? b.gen : '', hold: !!b.hold };
       }
     } catch (e) { /* a damaged baseline counts as none */ }
-    return { keys: {}, rev: 0, hold: false };
+    return { keys: {}, rev: 0, gen: '', hold: false };
   }
 
-  function saveBase(keys, rev, hold) {
+  function saveBase(keys, rev, gen, hold) {
     state.base = keys;
     state.rev = rev;
+    state.gen = gen;
     state.hold = hold;
-    rawSet(BASE_KEY, JSON.stringify({ user: state.userId, keys: keys, hold: hold }));
+    rawSet(BASE_KEY, JSON.stringify({ user: state.userId, keys: keys, gen: gen, hold: hold }));
     rawSet(REV_KEY, String(rev));
   }
 
@@ -205,7 +208,7 @@
   function markDirty() {
     state.dirty = true;
     state.seq++;
-    if (state.hold) saveBase(state.base, state.rev, false); // the next change starts a new document
+    if (state.hold) saveBase(state.base, state.rev, state.gen, false); // the next change starts a new document
     schedulePush(PUSH_DELAY_MS);
   }
 
@@ -272,23 +275,25 @@
 
   // applyProfile brings the account's document into this device: merge,
   // write what changed, make it the new baseline. Returns true when this
-  // device holds values the account lacks.
-  function applyProfile(rev, doc) {
+  // device holds values the account lacks. A baseline of another generation
+  // (the copy was deleted and started again) counts as none, so nothing on
+  // this device is taken for a removal made elsewhere.
+  function applyProfile(rev, gen, doc) {
     var local = snapshot();
     if (!rev) {
       if (state.rev > 0 || state.hold) {
         // The account's copy was deleted, here or on another device. Keep
         // this device as it is; its next change starts a new document.
-        saveBase({}, 0, true);
+        saveBase({}, 0, '', true);
         return false;
       }
       state.firstUpload = true; // first login: this device's values form the first document
       return Object.keys(local).length > 0;
     }
     var profile = pick((doc && doc.keys) || {});
-    var m = mergeDocs(local, profile, state.base, state.policy.list);
+    var m = mergeDocs(local, profile, state.gen === gen ? state.base : {}, state.policy.list);
     writeLocal(m.keys, m.localChanges);
-    saveBase(profile, rev, false);
+    saveBase(profile, rev, gen, false);
     if (m.localChanges.length) afterRemoteChange(m.localChanges);
     return m.differsFromProfile;
   }
@@ -304,13 +309,13 @@
     var keys = snapshot(), seq = state.seq, epoch = state.epoch;
     if (state.rev > 0 && sameKeys(keys, state.base)) { synced(seq); return Promise.resolve(true); }
     setStatus('syncing');
-    var p = window.CSAuth.request('PUT', '/api/account/settings', { baseRevision: state.rev, doc: { v: 1, keys: keys } })
+    var p = window.CSAuth.request('PUT', '/api/account/settings', { baseRevision: state.rev, baseGeneration: state.gen, doc: { v: 1, keys: keys } })
       .then(function (r) {
         if (state.epoch !== epoch) return false; // logged out (and maybe in again) meanwhile
         state.pushing = null;
         state.putsDone++;
         if (r.ok) {
-          saveBase(keys, r.data.revision, false);
+          saveBase(keys, r.data.revision, r.data.generation, false);
           synced(seq);
           if (state.firstUpload) {
             state.firstUpload = false;
@@ -319,7 +324,7 @@
           return true;
         }
         if (r.status === 409 && attempt < MAX_CONFLICT_RETRIES) {
-          applyProfile(r.data.revision, r.data.doc);
+          applyProfile(r.data.revision, r.data.generation, r.data.doc);
           return push(attempt + 1);
         }
         if (r.status === 413) {
@@ -360,7 +365,7 @@
       if (stale()) return;
       if (!r.ok) { if (r.status !== 401) setStatus('retrying'); return; }
       setPolicy(r.data.allowlist || []);
-      if (applyProfile(r.data.revision, r.data.doc)) {
+      if (applyProfile(r.data.revision, r.data.generation, r.data.doc)) {
         state.dirty = true;
         state.seq++;
         return push();
@@ -399,6 +404,7 @@
     state.policy = null;
     state.base = b.keys;
     state.rev = b.rev;
+    state.gen = b.gen;
     state.hold = b.hold;
     state.firstUpload = false;
     state.dirty = false;
@@ -538,7 +544,7 @@
       if (r.ok) {
         stopPushing();
         state.dirty = false;
-        saveBase({}, 0, true);
+        saveBase({}, 0, '', true);
         setStatus('held');
       } else retryIfDirty();
       return r;

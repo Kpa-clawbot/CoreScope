@@ -76,23 +76,28 @@ const ALLOW = [
 ];
 
 // fakeServer keeps one account document with the semantics of
-// cmd/server/settings_handlers.go. fail[METHOD] queues canned answers
-// ('network' rejects the request).
+// cmd/server/settings_handlers.go and internal/users/settings.go: the first
+// write starts a new generation, later writes must name it. fail[METHOD]
+// queues canned answers ('network' rejects the request).
 function fakeServer() {
-  const s = { rev: 0, doc: null, puts: [], gets: 0, deletes: 0, fail: { GET: [], PUT: [], DELETE: [] } };
+  const s = { rev: 0, gen: '', gens: 0, doc: null, puts: [], gets: 0, deletes: 0, fail: { GET: [], PUT: [], DELETE: [] } };
   s.handle = (method, p, body) => {
     if (method === 'PUT') s.puts.push(body);
     if (method === 'GET') s.gets++;
     if (s.fail[method].length) return s.fail[method].shift();
-    if (method === 'GET') return { status: 200, data: { revision: s.rev, doc: s.doc, allowlist: ALLOW } };
+    if (method === 'GET') return { status: 200, data: { revision: s.rev, generation: s.gen, doc: s.doc, allowlist: ALLOW } };
     if (method === 'PUT') {
-      if (body.baseRevision !== s.rev) return { status: 409, data: { revision: s.rev, doc: s.doc } };
+      if (body.baseRevision !== s.rev || (s.rev && body.baseGeneration !== s.gen)) {
+        return { status: 409, data: { revision: s.rev, generation: s.gen, doc: s.doc } };
+      }
+      if (!s.rev) s.gen = 'gen' + (++s.gens);
       s.rev++;
       s.doc = body.doc;
-      return { status: 200, data: { revision: s.rev } };
+      return { status: 200, data: { revision: s.rev, generation: s.gen } };
     }
     s.deletes++;
     s.rev = 0;
+    s.gen = '';
     s.doc = null;
     return { status: 200, data: { ok: true } };
   };
@@ -265,9 +270,11 @@ test('merge: a set value that is not a JSON list merges as a scalar, with a warn
 });
 
 // ── engine ──
-const BASE = (user, keys, rev, hold) => ({ 'cs-settings-sync-base': J({ user, keys, hold: !!hold }), 'cs-settings-sync-rev': String(rev) });
-const synced = (keys, rev) => Object.assign({}, keys, BASE(7, keys, rev));
-const serverWith = (rev, keys) => { const s = fakeServer(); s.rev = rev; s.doc = rev ? { v: 1, keys } : null; return s; };
+// Tests that do not name a generation use 'g0' on both sides: the device
+// synced the account's current document.
+const BASE = (user, keys, rev, hold, gen) => ({ 'cs-settings-sync-base': J({ user, keys, hold: !!hold, gen: gen === undefined ? (rev ? 'g0' : '') : gen }), 'cs-settings-sync-rev': String(rev) });
+const synced = (keys, rev, gen) => Object.assign({}, keys, BASE(7, keys, rev, false, gen));
+const serverWith = (rev, keys, gen) => { const s = fakeServer(); s.rev = rev; s.gen = rev ? (gen || 'g0') : ''; s.doc = rev ? { v: 1, keys } : null; return s; };
 
 test('feature off: no request and no interception', async () => {
   const env = makeEnv({ enabled: false });
@@ -288,7 +295,8 @@ test('first login with an empty profile uploads this device (never channel keys)
   const env = makeEnv({ user: null, local: { 'meshcore-favorites': J(['a']), 'meshcore-time-window': '60', corescope_channel_keys: '{"#x":"00"}', 'meshcore-api-key': 'k' } });
   await env.login({ id: 7 });
   assert.strictEqual(env.server.puts.length, 1);
-  assert.deepStrictEqual(env.server.puts[0], { baseRevision: 0, doc: { v: 1, keys: { 'meshcore-favorites': J(['a']), 'meshcore-time-window': '60' } } });
+  assert.deepStrictEqual(env.server.puts[0], { baseRevision: 0, baseGeneration: '', doc: { v: 1, keys: { 'meshcore-favorites': J(['a']), 'meshcore-time-window': '60' } } });
+  assert.strictEqual(JSON.parse(env.ls.getItem('cs-settings-sync-base')).gen, env.server.gen);
   assert.deepStrictEqual(env.toasts, ['Your settings are now saved to your account.']);
   assert.strictEqual(env.ls.getItem('cs-settings-sync-rev'), '1');
   assert.strictEqual(JSON.parse(env.ls.getItem('cs-settings-sync-base')).user, 7);
@@ -393,7 +401,7 @@ test('409 more than three times falls back to the retry backoff', async () => {
   const server = serverWith(1, keys);
   const env = makeEnv({ server, local: synced(keys, 1) });
   await env.timers.advance(0);
-  const conflict = { status: 409, data: { revision: 1, doc: { v: 1, keys } } };
+  const conflict = { status: 409, data: { revision: 1, generation: 'g0', doc: { v: 1, keys } } };
   server.fail.PUT = [conflict, conflict, conflict, conflict];
   env.ls.setItem('meshcore-favorites', J(['a', 'b']));
   await env.timers.advance(2000);
@@ -480,7 +488,44 @@ test('account copy deleted elsewhere: values stay, no upload until the next chan
   env.ls.setItem('meshcore-favorites', J(['a', 'b']));
   await env.timers.advance(2000);
   assert.strictEqual(env.server.puts.length, 1);
-  assert.deepStrictEqual(env.server.puts[0], { baseRevision: 0, doc: { v: 1, keys: { 'meshcore-favorites': J(['a', 'b']) } } });
+  assert.deepStrictEqual(env.server.puts[0], { baseRevision: 0, baseGeneration: '', doc: { v: 1, keys: { 'meshcore-favorites': J(['a', 'b']) } } });
+});
+
+// C2 (final review): revisions restart at 1 after a delete, so the baseline
+// carries the document's generation; a baseline of another generation
+// counts as none (union, nothing dropped).
+test('a copy deleted and started again elsewhere: the old baseline drops nothing here', async () => {
+  // Synced revision 5 of generation g0, then closed. Meanwhile the copy was
+  // deleted and a new phone uploaded [p] as revision 1 of generation g9.
+  const server = serverWith(1, { 'meshcore-favorites': J(['p']) }, 'g9');
+  const env = makeEnv({ server, local: synced({ 'meshcore-favorites': J(['a', 'b']) }, 5) });
+  await env.timers.advance(0);
+  assert.strictEqual(env.ls.getItem('meshcore-favorites'), J(['p', 'a', 'b']));
+  assert.strictEqual(server.puts.length, 1);
+  assert.strictEqual(server.puts[0].baseRevision, 1);
+  assert.strictEqual(server.puts[0].baseGeneration, 'g9');
+  assert.strictEqual(server.doc.keys['meshcore-favorites'], J(['p', 'a', 'b']));
+  assert.strictEqual(JSON.parse(env.ls.getItem('cs-settings-sync-base')).gen, 'g9');
+});
+
+test('an offline retry from an old generation at the same revision gets 409 and merges', async () => {
+  const server = serverWith(2, { 'meshcore-favorites': J(['a']) });
+  const env = makeEnv({ server, local: synced({ 'meshcore-favorites': J(['a']) }, 2) });
+  env.doc.visibilityState = 'hidden'; // no pulls: only the retry talks to the server
+  await env.timers.advance(0);
+  server.fail.PUT = ['network'];
+  env.ls.setItem('meshcore-favorites', J(['a', 'b']));
+  await env.timers.advance(2000);
+  assert.strictEqual(env.t.state.status, 'retrying');
+  // Meanwhile: deleted, and a new copy reached revision 2 again.
+  server.gen = 'g9';
+  server.doc = { v: 1, keys: { 'meshcore-favorites': J(['c', 'd']) } };
+  await env.timers.advance(2000);
+  const tried = server.puts[1];
+  assert.deepStrictEqual([tried.baseRevision, tried.baseGeneration], [2, 'g0']);
+  assert.strictEqual(server.rev, 3);
+  assert.strictEqual(server.doc.keys['meshcore-favorites'], J(['c', 'd', 'a', 'b']));
+  assert.strictEqual(env.ls.getItem('meshcore-favorites'), J(['c', 'd', 'a', 'b']));
 });
 
 test("another user's baseline counts as none: nothing is removed", async () => {
