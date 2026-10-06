@@ -253,7 +253,7 @@ function loadAccount(hash, routes) {
   const logouts = [];
   let logoutResult = { ok: true, status: 200, data: { ok: true } };
   let override = null;
-  const loc = { hash };
+  const loc = { hash, replace(h) { loc.hash = h; } };
   const replaced = [];
   const listeners = {};
   const CSAuth = {
@@ -361,34 +361,45 @@ test('no account input carries a name attribute (no native submit leak)', () => 
 
 const flush = () => new Promise((r) => setTimeout(r, 5));
 
-test('register success replaces the form with a confirmation and escapes the email', async () => {
+const render = (env, name) => { let html = ''; env.t.views[name]({ set innerHTML(v) { html = v; } }); return html; };
+
+test('register success goes to check-mail, which shows the escaped email and no form', async () => {
   const payload = '<img src=x onerror=alert(1)>@e.c';
   const env = loadAccount('#/account/register', () => ({ ok: true, status: 200, data: { message: 'x' } }));
-  let html = '';
-  env.t.views.register({ set innerHTML(v) { html = v; } });
+  env.t.views.register({ set innerHTML(v) {} });
   env.doc.getElementById('regEmail').value = payload;
   await submitForm(env, 'registerForm');
   await flush();
+  assert.strictEqual(env.loc.hash, '#/account/check-mail');
+  const html = render(env, 'check-mail');
   assert(html.indexOf('Check your mailbox') !== -1, html);
-  assert(html.indexOf('<form') === -1, 'form still present');
+  assert(html.indexOf('<form') === -1, 'form present');
   assert(html.indexOf('<img') === -1 && html.indexOf('&lt;img') !== -1, html);
   assert(html.indexOf('expires in 48 hours') !== -1);
   assert(html.indexOf('href="#/account/login"') !== -1 && html.indexOf('href="#/account/register"') !== -1);
-  assert(html.indexOf('tabindex="-1"') !== -1);
+  assert(html.indexOf('tabindex="-1"') !== -1 && html.indexOf('ph-envelope-simple') !== -1);
+  assert(env.els.mailSentHeading, 'heading not looked up for focus');
 });
 
-test('forgot success replaces the form with a confirmation and escapes the email', async () => {
+test('check-mail without state (refresh) shows generic text and no address', () => {
+  const env = loadAccount('#/account/check-mail', () => ({ ok: true, status: 200, data: {} }));
+  const html = render(env, 'check-mail');
+  assert(html.indexOf('If the address can be used, we sent you a link. Check your mailbox.') !== -1, html);
+  assert(html.indexOf('<strong>') === -1 && html.indexOf('<form') === -1);
+});
+
+test('forgot success goes to check-mail with the escaped email and 1 hour text', async () => {
   const payload = '<img src=x onerror=alert(1)>@e.c';
   const env = loadAccount('#/account/forgot', () => ({ ok: true, status: 200, data: { message: 'x' } }));
-  let html = '';
-  env.t.views.forgot({ set innerHTML(v) { html = v; } });
+  env.t.views.forgot({ set innerHTML(v) {} });
   env.doc.getElementById('forgotEmail').value = payload;
   await submitForm(env, 'forgotForm');
   await flush();
-  assert(html.indexOf('Check your mailbox') !== -1, html);
-  assert(html.indexOf('<form') === -1, 'form still present');
+  assert.strictEqual(env.loc.hash, '#/account/check-mail');
+  const html = render(env, 'check-mail');
+  assert(html.indexOf('Check your mailbox') !== -1 && html.indexOf('<form') === -1, html);
   assert(html.indexOf('<img') === -1 && html.indexOf('&lt;img') !== -1, html);
-  assert(html.indexOf('Back to log in') !== -1);
+  assert(html.indexOf('expires in 1 hour') !== -1 && html.indexOf('Back to log in') !== -1);
 });
 
 test('register 400 keeps the form and shows the error', async () => {
@@ -398,6 +409,7 @@ test('register 400 keeps the form and shows the error', async () => {
   await submitForm(env, 'registerForm');
   await flush();
   assert(html.indexOf('<form') !== -1 && html.indexOf('Check your mailbox') === -1);
+  assert.strictEqual(env.loc.hash, '#/account/register');
   assert.strictEqual(env.els.accountMsg.textContent, 'Bad password');
 });
 

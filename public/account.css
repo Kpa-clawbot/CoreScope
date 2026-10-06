@@ -33,6 +33,12 @@
 .account-msg.err { color: var(--status-red-text); }
 .account-links { font-size: var(--fs-sm); }
 .account-links a { color: var(--link-color); }
+.account-mail { text-align: center; padding: 32px 20px; }
+.account-card.account-mail .account-mail-icon { display: block; width: 4.5rem; height: 4.5rem; font-size: 4.5rem; margin: 0 auto 12px; color: var(--accent-strong); }
+.account-mail-title { margin: 0 0 12px; font-size: var(--fs-2xl); }
+.account-mail-title:focus { outline: none; }
+.account-mail-intro { font-size: var(--fs-lg); margin: 0 0 12px; }
+.account-mail .account-links { font-size: var(--fs-md); }
 .account-sessions { list-style: none; padding: 0; margin: 0; }
 .account-sessions li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: var(--fs-sm); }
 

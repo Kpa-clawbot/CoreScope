@@ -1,6 +1,6 @@
 /* Account pages for optional user management.
- *   #/account/login | register | activate?token= | forgot | reset?token= | confirm-email?token=
- *   #/account                     — profile, password, address, sessions, delete
+ *   #/account/login | register | activate?token= | forgot | reset?token= | confirm-email?token= | check-mail
+ *   #/account                   — profile, password, address, sessions, delete
  * Every dynamic string goes through escapeHtml; messages use textContent. */
 (function () {
   'use strict';
@@ -57,15 +57,35 @@
         .then(function () { if (btn) btn.disabled = false; });
     });
   }
-  // Replaces the whole view with a confirmation the user cannot miss, and
-  // moves focus to its heading for screen readers.
-  function showMailSent(app, intro, hint, links) {
-    app.innerHTML = '<div class="account-page"><div class="account-card">' +
-      '<h2 id="mailSentHeading" tabindex="-1">Check your mailbox</h2>' +
-      '<p>' + intro + '</p>' + (hint ? '<p class="account-hint">' + hint + '</p>' : '') +
+  // What the check-mail view shows. Module-level, never in the URL: a refresh
+  // finds it empty and shows the generic text.
+  var mailSent = null;
+  // location.replace swaps the form's history entry, so Back skips it, and
+  // fires hashchange for the router.
+  function goCheckMail(kind, email) {
+    mailSent = { kind: kind, email: email };
+    location.replace('#/account/check-mail');
+  }
+  function checkMailHtml(sent) {
+    var who = sent ? '<strong>' + escapeHtml(sent.email) + '</strong>' : '';
+    var intro, hint = '', links;
+    if (!sent) {
+      intro = 'If the address can be used, we sent you a link. Check your mailbox.';
+      links = '<a href="#/account/login">Log in</a>';
+    } else if (sent.kind === 'forgot') {
+      intro = 'If an account exists for ' + who + ', we sent a link to reset your password. It expires in 1 hour.';
+      links = '<a href="#/account/login">Back to log in</a>';
+    } else {
+      intro = 'If ' + who + ' can be used, we sent an activation link to it. ' +
+        'The link works once and expires in 48 hours. Open it and enter the password you just chose.';
+      hint = 'No mail after a few minutes? Check your spam folder, or register again to get a new link.';
+      links = '<a href="#/account/login">Log in</a> · <a href="#/account/register">Register again</a>';
+    }
+    return '<div class="account-page"><div class="account-card account-mail">' +
+      '<svg class="ph-icon account-mail-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-envelope-simple"/></svg>' +
+      '<h2 class="account-mail-title" id="mailSentHeading" tabindex="-1">Check your mailbox</h2>' +
+      '<p class="account-mail-intro">' + intro + '</p>' + (hint ? '<p class="account-hint">' + hint + '</p>' : '') +
       '<p class="account-links">' + links + '</p></div></div>';
-    var h = document.getElementById('mailSentHeading');
-    if (h && h.focus) h.focus();
   }
   function fmtDate(iso) { try { return new Date(iso).toLocaleString(); } catch (_) { return iso; } }
 
@@ -161,13 +181,15 @@
           email: email, displayName: val('regName'), password: val('regPassword')
         }).then(function (r) {
           if (!r.ok) { say(errText(r), false); return; }
-          showMailSent(app,
-            'If <strong>' + escapeHtml(email) + '</strong> can be used, we sent an activation link to it. ' +
-            'The link works once and expires in 48 hours. Open it and enter the password you just chose.',
-            'No mail after a few minutes? Check your spam folder, or register again to get a new link.',
-            '<a href="#/account/login">Log in</a> · <a href="#/account/register">Register again</a>');
+          goCheckMail('register', email);
         });
       });
+    },
+
+    'check-mail': function (app) {
+      app.innerHTML = checkMailHtml(mailSent);
+      var h = document.getElementById('mailSentHeading');
+      if (h && h.focus) h.focus();
     },
 
     activate: function (app) {
@@ -208,9 +230,7 @@
         var email = val('forgotEmail');
         return CSAuth.request('POST', '/api/auth/forgot', { email: email }).then(function (r) {
           if (!r.ok) { say(errText(r), false); return; }
-          showMailSent(app,
-            'If an account exists for <strong>' + escapeHtml(email) + '</strong>, we sent a link to reset your password. It expires in 1 hour.',
-            '', '<a href="#/account/login">Back to log in</a>');
+          goCheckMail('forgot', email);
         });
       });
     },
@@ -323,5 +343,5 @@
   });
 
   registerPage('account', { init: init, destroy: function () {} });
-  window.CSAccount = { _test: { profileHtml: profileHtml, sessionsHtml: sessionsHtml, renewLinkHtml: renewLinkHtml, views: views } };
+  window.CSAccount = { _test: { profileHtml: profileHtml, sessionsHtml: sessionsHtml, renewLinkHtml: renewLinkHtml, views: views, checkMailHtml: checkMailHtml } };
 })();
