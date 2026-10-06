@@ -273,3 +273,27 @@ section and the logout dialog.
 - How the router re-renders the current page without a full reload (read `app.js`).
 - Detecting "mid-edit" for deferring a re-render: start with open account forms and
   the geofilter editor; extend only if a test or a user report shows a gap.
+
+## Amendments from the implementation plan (approved 2026-10-06)
+
+The plan (`docs/plans/2026-10-06-user-settings-sync.md`) found gaps in this spec. These
+rules override the sections above where they differ.
+
+1. **Deleting the account copy holds.** After "Delete synced settings from my account",
+   a device that has synced before does not re-upload under the first-login rule; it
+   keeps its local values and uploads only on its next local change. The first-login
+   upload applies only to a device without a baseline for this user.
+2. **The baseline belongs to one user.** `cs-settings-sync-base` stores the user id with
+   the document. A baseline for another user is ignored and replaced, so user B never
+   merges against user A's baseline on a shared browser.
+3. **"Remove my settings" needs a successful final push.** If pushing pending changes
+   fails at logout, nothing is removed and a toast says why.
+4. **The logout dialog has a Cancel button.** Escape and a backdrop click also cancel.
+5. **Three existing files get small hooks** (decision 5 cannot hold fully):
+   `auth.js` (a logout hook so the dialog can run first), `customize-v2.js` (expose the
+   theme pipeline so a synced `cs-theme-overrides` is applied), and `account.js` (mount
+   the "Settings sync" section).
+6. **429 is handled like a network error** (backoff). **A 413 blocks pushing** until
+   "Sync now" or a reload.
+7. `user_settings.updated_at` is an INTEGER (Unix seconds), like every other timestamp
+   in `users.db`.
