@@ -323,7 +323,8 @@
     var profile = pick((doc && doc.keys) || {});
     var m = mergeDocs(local, profile, state.gen === gen ? state.base : {}, state.policy.list);
     writeLocal(m.keys, m.localChanges);
-    saveBase(profile, rev, gen, false);
+    // The baseline can be 256 KiB: an unchanged pull does not rewrite it.
+    if (state.rev !== rev || state.gen !== gen || state.hold || !sameKeys(profile, state.base)) saveBase(profile, rev, gen, false);
     if (m.localChanges.length) afterRemoteChange(m.localChanges, firstLogin);
     if (firstLogin && m.differsFromProfile) state.firstUpload = true;
     else if (firstLogin) window.CSAuth.notify(FIRST_LOGIN_TEXT);

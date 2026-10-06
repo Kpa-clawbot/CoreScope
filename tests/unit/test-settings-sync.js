@@ -475,6 +475,27 @@ test('network errors, 5xx and 429 back off from 2 s doubling to 5 min; success r
   assert.strictEqual(server.doc.keys['meshcore-time-window'], '60');
 });
 
+// M7 (final review): the baseline is up to 256 KiB; an unchanged pull
+// must not rewrite it every minute.
+test('a pull with nothing new does not rewrite the baseline', async () => {
+  const keys = { 'meshcore-favorites': J(['a']) };
+  const shared = new Map();
+  const set = shared.set.bind(shared);
+  let baseWrites = 0;
+  shared.set = (k, v) => { if (k === 'cs-settings-sync-base') baseWrites++; return set(k, v); };
+  const server = serverWith(1, keys);
+  const env = makeEnv({ server, shared, local: synced(keys, 1) });
+  baseWrites = 0;
+  await env.timers.advance(180000);
+  assert(server.gets >= 4, 'gets ' + server.gets);
+  assert.strictEqual(baseWrites, 0);
+  server.rev = 2;
+  server.doc = { v: 1, keys: { 'meshcore-favorites': J(['a', 'b']) } };
+  await env.timers.advance(60000);
+  assert.strictEqual(baseWrites, 1);
+  assert.strictEqual(shared.get('cs-settings-sync-rev'), '2');
+});
+
 test('tab focus pulls; the minute pull runs only while visible', async () => {
   const env = makeEnv({ server: serverWith(1, {}), local: synced({}, 1) });
   await env.timers.advance(0);
