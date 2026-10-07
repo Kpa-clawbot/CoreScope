@@ -124,6 +124,12 @@ FROM alpine:3.20
 
 RUN apk add --no-cache mosquitto mosquitto-clients supervisor caddy wget
 
+# Unprivileged user for the Go services. The entrypoint re-creates it with
+# the uid/gid of the mounted data directory, so files written by the
+# container keep the host owner's ids.
+RUN addgroup -S -g 1000 corescope && \
+    adduser -S -u 1000 -G corescope -h /app -s /sbin/nologin corescope
+
 WORKDIR /app
 
 # Go binaries (statically linked; they do not use this image's libc)
@@ -147,7 +153,8 @@ COPY docker/Caddyfile /etc/caddy/Caddyfile
 
 # Data directory
 RUN mkdir -p /app/data /var/lib/mosquitto /data/caddy && \
-    chown -R mosquitto:mosquitto /var/lib/mosquitto
+    chown -R mosquitto:mosquitto /var/lib/mosquitto && \
+    chown corescope:corescope /app /app/data
 
 # Entrypoint
 COPY docker/entrypoint-go.sh /entrypoint.sh
