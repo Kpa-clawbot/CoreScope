@@ -14,13 +14,14 @@ import (
 
 // UserManagementConfig is the "userManagement" block of config.json.
 type UserManagementConfig struct {
-	Enabled        bool           `json:"enabled"`
-	DBPath         string         `json:"dbPath,omitempty"`
-	AdminEmails    []string       `json:"adminEmails,omitempty"`
-	PublicBaseURL  string         `json:"publicBaseUrl,omitempty"`
-	SessionDays    int            `json:"sessionDays,omitempty"`
-	TrustedProxies []string       `json:"trustedProxies,omitempty"`
-	Mail           UserMailConfig `json:"mail"`
+	Enabled          bool                    `json:"enabled"`
+	DBPath           string                  `json:"dbPath,omitempty"`
+	AdminEmails      []string                `json:"adminEmails,omitempty"`
+	PublicBaseURL    string                  `json:"publicBaseUrl,omitempty"`
+	SessionDays      int                     `json:"sessionDays,omitempty"`
+	TrustedProxies   []string                `json:"trustedProxies,omitempty"`
+	Mail             UserMailConfig          `json:"mail"`
+	ChannelProposals *ChannelProposalsConfig `json:"channelProposals,omitempty"`
 }
 
 // UserMailConfig is userManagement.mail.
@@ -30,6 +31,49 @@ type UserMailConfig struct {
 	FromEmail     string `json:"fromEmail,omitempty"`
 	FromName      string `json:"fromName,omitempty"`
 	WebhookSecret string `json:"webhookSecret,omitempty"`
+}
+
+// ChannelProposalsConfig is userManagement.channelProposals
+// (docs/specs/2026-10-07-channel-proposals-design.md). Off by default.
+type ChannelProposalsConfig struct {
+	Enabled       bool `json:"enabled"`
+	MaxPending    int  `json:"maxPending,omitempty"`
+	MaxApproved   int  `json:"maxApproved,omitempty"`
+	PerUserPerDay int  `json:"perUserPerDay,omitempty"`
+}
+
+// proposalSettings is the resolved form; the zero value means off.
+type proposalSettings struct {
+	enabled       bool
+	maxPending    int // pending proposals of every kind
+	maxApproved   int // approved hashtag channels; bounds the ingestor's key set
+	perUserPerDay int
+}
+
+const (
+	defaultMaxPendingProposals    = 100
+	defaultMaxApprovedChannels    = 128
+	defaultProposalsPerUserPerDay = 5
+)
+
+func positiveOr(v, def int) int {
+	if v <= 0 {
+		return def
+	}
+	return v
+}
+
+// resolveProposals fills the defaults for absent, zero or negative limits.
+func resolveProposals(c *ChannelProposalsConfig) proposalSettings {
+	if c == nil || !c.Enabled {
+		return proposalSettings{}
+	}
+	return proposalSettings{
+		enabled:       true,
+		maxPending:    positiveOr(c.MaxPending, defaultMaxPendingProposals),
+		maxApproved:   positiveOr(c.MaxApproved, defaultMaxApprovedChannels),
+		perUserPerDay: positiveOr(c.PerUserPerDay, defaultProposalsPerUserPerDay),
+	}
 }
 
 // UserManagementEnabled reports whether optional accounts are on. Nil config
@@ -51,6 +95,7 @@ type userMgmtSettings struct {
 	fromEmail      string
 	fromName       string
 	webhookSecret  string
+	proposals      proposalSettings
 }
 
 const defaultSessionDays = 30
@@ -126,6 +171,7 @@ func resolveUserManagement(u *UserManagementConfig, measurementDBPath string, ge
 	if set.webhookSecret != "" && len(set.webhookSecret) < 16 {
 		return nil, errors.New("userManagement.mail.webhookSecret must be at least 16 characters")
 	}
+	set.proposals = resolveProposals(u.ChannelProposals)
 	return set, nil
 }
 

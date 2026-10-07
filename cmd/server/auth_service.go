@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/meshcore-analyzer/mailer"
@@ -23,6 +24,13 @@ type authService struct {
 	hook        *rateLimiter
 	settingsPut *rateLimiter // PUT /api/account/settings, per user
 
+	// approved is the snapshot of approved hashtag channel names, filled at
+	// construction and reloaded from users.db after every proposal decision.
+	// approvedMu serialises the reloads so an older read never replaces a
+	// newer one.
+	approvedMu sync.Mutex
+	approved   atomic.Pointer[[]string]
+
 	warnIndistinct sync.Once
 	stop           chan struct{}
 	stopOnce       sync.Once
@@ -31,7 +39,7 @@ type authService struct {
 }
 
 func newAuthService(set *userMgmtSettings, st *users.Store, m mailer.Mailer) *authService {
-	return &authService{
+	a := &authService{
 		st: st, mail: m, set: set,
 		ipr:         &wsLimiter{trustedProxies: set.trustedProxies},
 		login:       newRateLimiter(10, 15*time.Minute),
@@ -40,6 +48,8 @@ func newAuthService(set *userMgmtSettings, st *users.Store, m mailer.Mailer) *au
 		settingsPut: newRateLimiter(60, time.Hour),
 		stop:        make(chan struct{}),
 	}
+	a.refreshApproved()
+	return a
 }
 
 // initUserManagement builds s.auth when the feature is on. Call it after
@@ -133,6 +143,9 @@ func (a *authService) prune() {
 	if _, err := a.st.PruneAudit([]string{"user.login", "user.login.failed"}, 90*24*time.Hour); err != nil {
 		log.Printf("[users] prune login audit: %v", err)
 	}
+	if _, err := a.st.PruneProposals(proposalRetention); err != nil {
+		log.Printf("[users] prune proposals: %v", err)
+	}
 	a.login.gc()
 	a.signup.gc()
 	a.hook.gc()
@@ -140,6 +153,33 @@ func (a *authService) prune() {
 }
 
 func (a *authService) isConfigAdmin(email string) bool { return a.set.adminEmails[email] }
+
+// refreshApproved reloads the approved hashtag channel names from users.db,
+// oldest approval first and capped at maxApproved like the ingestor. The
+// mutex spans the read and the store, so concurrent decisions cannot leave
+// an older read in place. A failure is logged and keeps the previous
+// snapshot. No-op with proposals off.
+func (a *authService) refreshApproved() {
+	if !a.set.proposals.enabled {
+		return
+	}
+	a.approvedMu.Lock()
+	defer a.approvedMu.Unlock()
+	list, err := a.st.ApprovedSubjects(users.KindHashtagChannel, a.set.proposals.maxApproved)
+	if err != nil {
+		log.Printf("[users] load approved channels: %v", err)
+		return
+	}
+	a.approved.Store(&list)
+}
+
+// approvedChannels returns the current snapshot; never nil.
+func (a *authService) approvedChannels() []string {
+	if p := a.approved.Load(); p != nil {
+		return *p
+	}
+	return []string{}
+}
 
 // roleFor is the role an address gets on activation.
 func (a *authService) roleFor(email string) users.Role {

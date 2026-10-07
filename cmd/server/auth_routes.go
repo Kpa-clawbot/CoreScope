@@ -38,6 +38,9 @@ func (s *Server) registerAuthRoutes(r *mux.Router) {
 	r.HandleFunc("/api/admin/users/{id}/mail/{mailId}/refresh", s.withAdmin(s.handleAdminMailRefresh)).Methods("POST")
 	r.HandleFunc("/api/admin/audit", s.withAdmin(s.handleAdminAudit)).Methods("GET")
 	r.HandleFunc("/api/admin/stats", s.withAdmin(s.handleAdminStats)).Methods("GET")
+	if s.auth.set.proposals.enabled {
+		s.registerProposalRoutes(r)
+	}
 	// The webhook exists only when a secret is configured.
 	if s.auth.set.webhookSecret != "" {
 		r.HandleFunc("/api/mail/brevo/webhook", s.handleBrevoWebhook).Methods("POST")

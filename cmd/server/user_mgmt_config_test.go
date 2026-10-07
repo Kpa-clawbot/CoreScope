@@ -81,3 +81,34 @@ func TestUserManagementEnabled(t *testing.T) {
 		t.Fatal("enabled not reported")
 	}
 }
+
+func TestResolveChannelProposals(t *testing.T) {
+	u := validUM()
+	set, err := resolveUserManagement(u, "meshcore.db", noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.proposals != (proposalSettings{}) {
+		t.Fatalf("absent block = %+v; want off", set.proposals)
+	}
+	u.ChannelProposals = &ChannelProposalsConfig{Enabled: true}
+	set, _ = resolveUserManagement(u, "meshcore.db", noEnv)
+	if set.proposals != (proposalSettings{enabled: true, maxPending: 100, maxApproved: 128, perUserPerDay: 5}) {
+		t.Fatalf("defaults = %+v", set.proposals)
+	}
+	u.ChannelProposals = &ChannelProposalsConfig{Enabled: true, MaxPending: 3, MaxApproved: 7, PerUserPerDay: 1}
+	set, _ = resolveUserManagement(u, "meshcore.db", noEnv)
+	if set.proposals != (proposalSettings{enabled: true, maxPending: 3, maxApproved: 7, perUserPerDay: 1}) {
+		t.Fatalf("explicit = %+v", set.proposals)
+	}
+	u.ChannelProposals = &ChannelProposalsConfig{Enabled: true, MaxPending: -1, MaxApproved: -1, PerUserPerDay: -1}
+	set, _ = resolveUserManagement(u, "meshcore.db", noEnv)
+	if set.proposals != (proposalSettings{enabled: true, maxPending: 100, maxApproved: 128, perUserPerDay: 5}) {
+		t.Fatalf("negative values = %+v; want defaults", set.proposals)
+	}
+	u.ChannelProposals = &ChannelProposalsConfig{Enabled: false, MaxApproved: 7}
+	set, _ = resolveUserManagement(u, "meshcore.db", noEnv)
+	if set.proposals.enabled {
+		t.Fatal("enabled false resolved as on")
+	}
+}

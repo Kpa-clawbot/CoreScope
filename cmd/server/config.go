@@ -185,6 +185,13 @@ type Config struct {
 	// see UserManagementEnabled.
 	UserManagement *UserManagementConfig `json:"userManagement,omitempty"`
 
+	// HashChannels and ChannelKeys are the ingestor's channel configuration,
+	// read here for the names only: a channel proposal for a configured name
+	// is refused (see configuredChannelNames). ChannelKeys drops the key
+	// values while unmarshalling, so the server never holds key material.
+	HashChannels []string        `json:"hashChannels,omitempty"`
+	ChannelKeys  channelKeyNames `json:"channelKeys,omitempty"`
+
 	ResolvedPath  *ResolvedPathConfig  `json:"resolvedPath,omitempty"`
 	NeighborGraph *NeighborGraphConfig `json:"neighborGraph,omitempty"`
 
@@ -1100,4 +1107,50 @@ func (c *Config) AnalyticsRecomputeIntervals() AnalyticsRecomputeIntervals {
 	out.ObserversClockSkew = get("observersClockSkew")
 	out.NodesClockSkew = get("nodesClockSkew")
 	return out
+}
+
+// channelKeyNames is config.json channelKeys ({name: hexKey}) reduced to the
+// names; the key values are discarded during unmarshalling.
+type channelKeyNames []string
+
+func (n *channelKeyNames) UnmarshalJSON(b []byte) error {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		return err
+	}
+	names := make(channelKeyNames, 0, len(m))
+	for name := range m {
+		names = append(names, name)
+	}
+	*n = names
+	return nil
+}
+
+// configuredChannelNames is the set of channel names the ingestor already
+// decrypts from config.json, normalised as cmd/ingestor's loadChannelKeys
+// does: hashChannels trimmed and prefixed with '#', channelKeys names as
+// written except the well-known casing fix (public becomes Public).
+// Case-sensitive, like the ingestor's key map.
+func (c *Config) configuredChannelNames() map[string]bool {
+	names := map[string]bool{}
+	if c == nil {
+		return names
+	}
+	for _, raw := range c.HashChannels {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		if !strings.HasPrefix(name, "#") {
+			name = "#" + name
+		}
+		names[name] = true
+	}
+	for _, name := range c.ChannelKeys {
+		if strings.EqualFold(name, "public") {
+			name = "Public"
+		}
+		names[name] = true
+	}
+	return names
 }
