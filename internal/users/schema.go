@@ -86,6 +86,21 @@ var migrations = [][]string{
 	{ // v3: sub-project C, global audit list ordered and filtered by time
 		`CREATE INDEX audit_at ON audit_log(at)`,
 	},
+	{ // v4: sub-project D, proposals (one generic table; this version ships the kind 'hashtag_channel')
+		`CREATE TABLE proposals (
+			id INTEGER PRIMARY KEY,
+			kind TEXT NOT NULL,
+			subject TEXT NOT NULL,
+			status TEXT NOT NULL CHECK (status IN ('pending','approved','rejected','revoked')),
+			proposer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+			reviewer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+			note TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			decided_at INTEGER
+		)`,
+		`CREATE UNIQUE INDEX proposals_kind_subject ON proposals(kind, subject)`,
+		`CREATE INDEX proposals_status ON proposals(status)`,
+	},
 }
 
 func (s *Store) migrate() error {

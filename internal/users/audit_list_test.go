@@ -186,8 +186,8 @@ func TestMigrateV2DatabaseToV3(t *testing.T) {
 		t.Fatalf("Open v2 db: %v", err)
 	}
 	defer st.Close()
-	if v, err := st.SchemaVersion(); err != nil || v != 3 {
-		t.Fatalf("SchemaVersion = %d, %v; want 3", v, err)
+	if v, err := st.SchemaVersion(); err != nil || v != len(migrations) {
+		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, len(migrations))
 	}
 	if !hasIndex(t, st, "audit_at") {
 		t.Fatal("audit_at index missing after migration")
