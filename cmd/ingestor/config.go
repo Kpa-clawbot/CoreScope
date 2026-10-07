@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -110,6 +111,11 @@ type Config struct {
 	// (#1608). Received messages are drained once the write path is ready.
 	// 0 / unset => default. Bounded memory.
 	IngestBufferSize int `json:"ingestBufferSize,omitempty"`
+
+	// UserManagement is the part of the shared userManagement block the
+	// ingestor reads: where users.db is and whether approved hashtag channels
+	// are decrypted. Everything else in the block belongs to the server.
+	UserManagement *UserManagementConfig `json:"userManagement,omitempty"`
 }
 
 // NeighborEdgesDaysOrDefault returns the configured pruning window or 5.
@@ -612,6 +618,50 @@ const autoRegionKeysDefaultMaxDerived = 256
 // with a companion app, or a 24h observer report), so minutes-scale staleness
 // is irrelevant and a tighter interval only burns queries.
 const autoRegionKeysDefaultRefreshMinutes = 15
+
+// UserManagementConfig is the ingestor's view of userManagement.
+type UserManagementConfig struct {
+	Enabled          bool                    `json:"enabled"`
+	DBPath           string                  `json:"dbPath,omitempty"`
+	ChannelProposals *ChannelProposalsConfig `json:"channelProposals,omitempty"`
+}
+
+// ChannelProposalsConfig is the ingestor's view of
+// userManagement.channelProposals.
+type ChannelProposalsConfig struct {
+	Enabled     bool `json:"enabled"`
+	MaxApproved int  `json:"maxApproved,omitempty"`
+}
+
+const defaultMaxApprovedChannels = 128
+
+// ApprovedChannelsEnabled reports whether approved hashtag channels from
+// users.db are decrypted: user management and channel proposals both on.
+func (c *Config) ApprovedChannelsEnabled() bool {
+	u := c.UserManagement
+	return u != nil && u.Enabled && u.ChannelProposals != nil && u.ChannelProposals.Enabled
+}
+
+// ApprovedChannelsMax caps the approved keys read from users.db; absent,
+// zero or negative means the default, as on the server.
+func (c *Config) ApprovedChannelsMax() int {
+	u := c.UserManagement
+	if u == nil || u.ChannelProposals == nil || u.ChannelProposals.MaxApproved <= 0 {
+		return defaultMaxApprovedChannels
+	}
+	return u.ChannelProposals.MaxApproved
+}
+
+// UsersDBPath resolves users.db with the server's rule: userManagement.dbPath,
+// else users.db next to the analyzer database.
+func (c *Config) UsersDBPath() string {
+	if c.UserManagement != nil {
+		if p := strings.TrimSpace(c.UserManagement.DBPath); p != "" {
+			return p
+		}
+	}
+	return filepath.Join(filepath.Dir(c.DBPath), "users.db")
+}
 
 // AutoRegionKeysEnabled reports whether region keys may be derived from
 // declared-region answers. Default false.

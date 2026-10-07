@@ -56,6 +56,11 @@ scripts/           — Tooling (coverage collector, fixture capture, frontend in
   `TestUsersOpenIsTheOnlyServerWritePath` pins the one call site. Account data
   never goes into the analyzer DB, and measurement writes never go through
   `internal/users`.
+- **The ingestor reads `users.db`, never writes it.** With
+  `userManagement.channelProposals.enabled` the ingestor opens `users.db`
+  read-only (`mode=ro`, raw SQL, no `internal/users` import) once a minute
+  for the approved hashtag channel names. `TestChannelKeySetIsReadOnly` pins
+  the read-only open.
 - Enforcement: `cmd/server/readonly_invariant_test.go` reflect-asserts that
   `PruneOldPackets`, `PruneOldMetrics`, and `RemoveStaleObservers` are NOT
   methods on the server's `*DB`. If you need a new write, add it to

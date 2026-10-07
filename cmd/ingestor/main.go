@@ -103,6 +103,19 @@ func main() {
 		log.Printf("No channel keys loaded — GRP_TXT packets will not be decrypted")
 	}
 
+	keySet := newChannelKeySet(channelKeys, cfg.UsersDBPath(), cfg.ApprovedChannelsMax())
+	if cfg.ApprovedChannelsEnabled() {
+		log.Printf("[proposals] reading approved channels from %s", cfg.UsersDBPath())
+		keySet.refresh()
+		go func() {
+			t := time.NewTicker(approvedChannelsRefresh)
+			defer t.Stop()
+			for range t.C {
+				keySet.refresh()
+			}
+		}()
+	}
+
 	regionSet := newRegionKeySet(cfg)
 	if cfg.AutoRegionKeysEnabled() {
 		// Fill the derived tier before the first packet is matched, so a
@@ -190,7 +203,7 @@ func main() {
 			markReceiptForTag(tag, time.Now())
 			status.MarkPacket(time.Now())
 			ingestBuffer.Submit(func() {
-				handleMessage(store, tag, src, m, channelKeys, regionSet, cfg)
+				handleMessage(store, tag, src, m, keySet.Snapshot(), regionSet, cfg)
 			})
 		})
 
