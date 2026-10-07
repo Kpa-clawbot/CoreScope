@@ -133,6 +133,7 @@ These routes are registered only when `userManagement.enabled` is true. When it 
 | `POST /api/admin/users/{id}/resend-activation` | admin | -> adminUser. Pending accounts only |
 | `POST /api/admin/users/{id}/activate` | admin | -> adminUser. Pending accounts only; the address stays unverified |
 | `POST /api/admin/users/{id}/mail/{mailId}/refresh` | admin | -> mail record with `events`, pulled from the provider. `502` provider unavailable |
+| `GET /api/admin/audit?action=&user=&from=&to=&before=&limit=` | admin | -> `{entries, next}`, newest first. `action` is one action or a group ending in `.*` (`user.login.*`); `user` matches actor or target; `from`/`to` are RFC 3339 and inclusive; pass `next` as `before` for the next page (`null` on the last page); `limit` defaults to 100, capped at 500. Entry: `{id, at, action, actor, target, detail}`, with actor and target `{id, displayName, email}`, `{id, deleted: true}` or `null` (system). Login rows are kept 90 days. `400` on an invalid parameter |
 | `POST /api/mail/brevo/webhook` | `Authorization: Bearer <webhookSecret>` | Brevo transactional event payload -> `{ok}`. `401` on a wrong secret |
 
 `adminUser` = `{id, email, displayName, role, status, createdAt, activatedAt, activatedManually, activatedBy, lastLoginAt, emailBouncing, configAdmin, lastMail}`. `status` is `pending`, `active` or `disabled`.
