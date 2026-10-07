@@ -112,7 +112,7 @@
     var a = document.querySelector('#' + SHEET_ID + ' [data-bottom-nav-more-route="account"]');
     if (!a) return;
     var r = accountRoute();
-    a.setAttribute('href', r.hash);
+    a.setAttribute('href', escapeHtml(r.hash));
     var lb = a.querySelector('.bottom-nav-sheet-label');
     if (lb) lb.textContent = r.label;
   });
@@ -239,7 +239,7 @@
     moreRoutes().forEach(function (r) {
       var a = document.createElement('a');
       a.className = 'bottom-nav-sheet-item';
-      a.setAttribute('href', r.hash);
+      a.setAttribute('href', escapeHtml(r.hash));
       a.setAttribute('role', 'menuitem');
       a.setAttribute('data-bottom-nav-more-route', r.route);
       a.setAttribute('data-route', r.route);
