@@ -680,6 +680,7 @@
             <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="flex:0 0 auto;text-decoration:none;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Analytics</a>
             <a href="#/nodes/${encodeURIComponent(n.public_key)}/reach" class="btn-primary" style="flex:0 0 auto;text-decoration:none;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Reach</a>
             <a href="#/observers/${encodeURIComponent(n.public_key.toUpperCase())}" class="btn-primary" title="View this pubkey as an observer" style="flex:0 0 auto;text-decoration:none;font-size:12px;padding:4px 10px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> Observer →</a>
+            <span class="node-notify-slot" id="nodeNotifySlotFull"></span>
           </div>
         </div>
 
@@ -822,6 +823,7 @@
         </div>
 
         <div class="node-full-card skew-detail-section" id="node-clock-skew" style="display:none"></div>`;
+      if (window.CSNotify) window.CSNotify.mount(document.getElementById('nodeNotifySlotFull'), n.public_key);
 
       // Map
       if (hasLoc) {
@@ -1712,6 +1714,7 @@
           <button class="btn-primary node-detail-btn" data-pubkey="${encodeURIComponent(n.public_key)}" aria-label="View details for ${escapeHtml(n.name || n.public_key)}" style="font-size:11px;padding:2px 8px;margin-left:8px;cursor:pointer"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Details</button>
           <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="display:inline-block;margin-left:4px;text-decoration:none;font-size:11px;padding:2px 8px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Analytics</a>
           <a href="#/nodes/${encodeURIComponent(n.public_key)}/reach" class="btn-primary" style="display:inline-block;margin-left:4px;text-decoration:none;font-size:11px;padding:2px 8px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-broadcast"/></svg> Reach</a>
+          <span class="node-notify-slot" id="nodeNotifySlot"></span>
         </div>
         ${renderStatusExplanation(n)}
 
@@ -1794,6 +1797,7 @@
 
         <div class="node-detail-section skew-detail-section" id="node-clock-skew" style="display:none"></div>
       </div>`;
+    if (window.CSNotify) window.CSNotify.mount(document.getElementById('nodeNotifySlot'), n.public_key);
 
     // Init map
     if (hasLoc) {

@@ -86,3 +86,10 @@ a.account-btn { display: inline-flex; align-items: center; text-decoration: none
 .cs-dialog { display: flex; flex-direction: column; gap: 8px; color: var(--text); }
 .cs-dialog h3 { margin: 0; }
 .cs-dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+
+/* Node notifications toggle (notifications.js) on the node side pane and full page. */
+.node-notify-slot { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-left: 4px; }
+.node-notify-slot:empty { display: none; }
+.node-notify-btn[aria-pressed="true"] { box-shadow: inset 0 0 0 2px var(--status-green-text); }
+.node-notify-hint { color: var(--text-muted); font-size: var(--fs-sm); }
+.node-notify-hint:empty { display: none; }
