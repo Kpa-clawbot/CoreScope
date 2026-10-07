@@ -91,6 +91,8 @@ test('readHash keeps only known actions, numeric users and known periods', () =>
   assert.deepStrictEqual(rh('#/admin?tab=audit&action=user.login.failed&user=12&period=7d'),
     { action: 'user.login.failed', user: '12', period: '7d' });
   assert.deepStrictEqual(rh('#/admin?tab=audit&action=drop&user=1x&period=1y'), { action: '', user: '', period: '' });
+  assert.strictEqual(rh('#/admin?tab=audit&user=0').user, '', 'user=0 is not an account id');
+  assert.strictEqual(rh('#/admin?tab=audit&user=007').user, '', 'leading zeros are rejected');
   assert.strictEqual(rh('#/admin?tab=audit&action=user.login.*').action, 'user.login.*');
 });
 
@@ -176,6 +178,13 @@ test('filter changes rewrite the hash with replaceState and reload; the user id 
   await tick();
   assert.strictEqual(env.calls.length, n, 'invalid input must not reload');
   assert.strictEqual(env.els.auditUser.value, '12');
+  for (const bad of ['0', '007']) {
+    env.els.auditUser.value = bad;
+    env.els.auditUser.handlers.change(ev);
+    await tick();
+    assert.strictEqual(env.calls.length, n, bad + ' must not reload');
+    assert.strictEqual(env.els.auditUser.value, '12', bad + ' must be reset');
+  }
   env.els.auditUser.handlers.change({ target: { value: '' } });
   await tick();
   assert.strictEqual(env.loc.hash, '#/admin?tab=audit&action=user.login.failed&period=7d');

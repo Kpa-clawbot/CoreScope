@@ -32,12 +32,15 @@
     return null;
   }
 
+  // Account ids start at 1; '0' and leading zeros are not ids.
+  function isUserId(v) { return /^[1-9]\d*$/.test(v); }
+
   function readHash(hash) {
     var p = new URLSearchParams(String(hash || '').split('?')[1] || '');
     var a = known(ACTIONS, p.get('action'));
     var per = known(PERIODS, p.get('period'));
     var user = p.get('user') || '';
-    return { action: a ? a[0] : '', user: /^\d+$/.test(user) ? user : '', period: per ? per[0] : '' };
+    return { action: a ? a[0] : '', user: isUserId(user) ? user : '', period: per ? per[0] : '' };
   }
 
   function hashFor(f) {
@@ -133,7 +136,7 @@
     document.getElementById('auditPeriod').addEventListener('change', function (ev) { setFilter('period', ev.target.value); });
     document.getElementById('auditUser').addEventListener('change', function (ev) {
       var v = String(ev.target.value || '').trim();
-      if (v === '' || /^\d+$/.test(v)) setFilter('user', v);
+      if (v === '' || isUserId(v)) setFilter('user', v);
       else ev.target.value = state.filters.user;
     });
     document.getElementById('auditMore').addEventListener('click', function () { load(true); });
