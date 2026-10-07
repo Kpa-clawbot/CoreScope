@@ -376,6 +376,30 @@ test('mount fetches five sources, a timer tick (visible only) skips healthz, Ref
   assert.strictEqual(timer.cleared, true);
 });
 
+test('Refresh and Retry start no second full refresh while one is in flight; the button is disabled until it settles', async () => {
+  const held = [];
+  const env = overviewEnv((p) => (p === '/api/healthz' ? new Promise((r) => { held.push(r); }) : allOk(p)));
+  const ov = env.ctx.CSAdminOverview;
+  ov.mount(env.dom.mk('c'));
+  await tick();
+  const hz = () => env.calls.filter((p) => p === '/api/healthz').length;
+  assert.strictEqual(hz(), 1);
+  assert.strictEqual(env.els.aoRefresh.disabled, true, 'disabled while the mount refresh runs');
+  env.els.aoRefresh.handlers.click();
+  env.els.aoRefresh.handlers.click();
+  env.els.aoBody.handlers.click({ target: { closest: () => ({}) } }); // Retry
+  await tick();
+  assert.strictEqual(hz(), 1, 'clicks during a full refresh start no other');
+  held.shift()(OK({ ready: true }));
+  await tick();
+  assert.strictEqual(env.els.aoRefresh.disabled, false, 'enabled once it settles');
+  env.els.aoRefresh.handlers.click();
+  env.els.aoRefresh.handlers.click();
+  await tick();
+  assert.strictEqual(hz(), 2, 'two rapid clicks make one /api/healthz request');
+  ov.unmount();
+});
+
 console.log('admin.js');
 
 function loadShell(hash, opts) {

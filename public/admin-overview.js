@@ -16,7 +16,7 @@
     ['stats', '/api/admin/stats'], ['health', '/api/health'], ['healthz', '/api/healthz'],
     ['mqtt', '/api/mqtt/status'], ['observers', '/api/observers']
   ];
-  var state = { timer: null, seq: 0, healthz: null };
+  var state = { timer: null, seq: 0, healthz: null, busy: null };
 
   function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
 
@@ -169,25 +169,46 @@
     });
   }
 
+  // Open, Refresh and Retry: one full refresh at a time (each one walks the
+  // packet store for /api/healthz). Clicks while it runs are ignored and the
+  // Refresh button stays disabled until it settles.
+  function fullRefresh() {
+    if (state.busy) return state.busy;
+    var btn = document.getElementById('aoRefresh');
+    if (btn) btn.disabled = true;
+    var p = refresh(true);
+    var settle = function () {
+      if (state.busy !== p) return;
+      state.busy = null;
+      var b = document.getElementById('aoRefresh');
+      if (b) b.disabled = false;
+    };
+    p.then(settle, settle);
+    state.busy = p;
+    return p;
+  }
+
   function mount(container) {
     container.innerHTML = '<div class="admin-overview"><div class="admin-toolbar">' +
       '<button type="button" class="account-btn account-btn-secondary" id="aoRefresh">Refresh</button>' +
       '<span class="account-hint" id="aoUpdated"></span></div><div id="aoBody"><p>Loading…</p></div></div>';
-    document.getElementById('aoRefresh').addEventListener('click', function () { refresh(true); });
+    document.getElementById('aoRefresh').addEventListener('click', function () { fullRefresh(); });
     document.getElementById('aoBody').addEventListener('click', function (e) {
-      if (e.target.closest('button[data-act="retry"]')) refresh(true);
+      if (e.target.closest('button[data-act="retry"]')) fullRefresh();
     });
     clearInterval(state.timer);
     state.timer = setInterval(function () {
       if (document.visibilityState === 'visible') refresh(false);
     }, REFRESH_MS);
-    return refresh(true);
+    state.busy = null;
+    return fullRefresh();
   }
 
   function unmount() {
     clearInterval(state.timer);
     state.timer = null;
     state.healthz = null;
+    state.busy = null;
     state.seq++;
   }
 
