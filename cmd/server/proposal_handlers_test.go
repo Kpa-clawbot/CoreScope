@@ -289,8 +289,17 @@ func TestChannelKeyNamesKeepsNoKeyMaterial(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"channelKeys":null}`), &none); err != nil || len(none.ChannelKeys) != 0 {
 		t.Fatalf("null channelKeys = %v, %v", none.ChannelKeys, err)
 	}
-	if err := json.Unmarshal([]byte(`{"channelKeys":["#x"]}`), &none); err == nil {
-		t.Fatal("channelKeys as an array accepted")
+	// A non-object channelKeys is ignored, never a parse error: LoadConfig
+	// would otherwise drop the whole config and start on defaults.
+	for _, bad := range []string{`["#x"]`, `"#x"`, `42`} {
+		var c Config
+		raw := `{"port":8123,"apiKey":"` + testAPIKey + `","channelKeys":` + bad + `,"hashChannels":["mesh"]}`
+		if err := json.Unmarshal([]byte(raw), &c); err != nil {
+			t.Fatalf("channelKeys %s: %v", bad, err)
+		}
+		if c.Port != 8123 || c.APIKey != testAPIKey || len(c.HashChannels) != 1 || len(c.ChannelKeys) != 0 {
+			t.Fatalf("channelKeys %s: config = port %d, apiKey %q, hashChannels %v, channelKeys %v", bad, c.Port, c.APIKey, c.HashChannels, c.ChannelKeys)
+		}
 	}
 }
 

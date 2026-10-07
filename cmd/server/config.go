@@ -1110,13 +1110,18 @@ func (c *Config) AnalyticsRecomputeIntervals() AnalyticsRecomputeIntervals {
 }
 
 // channelKeyNames is config.json channelKeys ({name: hexKey}) reduced to the
-// names; the key values are discarded during unmarshalling.
+// names; the key values are discarded during unmarshalling. A value that is
+// not an object is ignored with a log line instead of failing: LoadConfig
+// falls back to pure defaults on any parse error, and this field must not
+// change config loading for deployments without channel proposals.
 type channelKeyNames []string
 
 func (n *channelKeyNames) UnmarshalJSON(b []byte) error {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(b, &m); err != nil {
-		return err
+		log.Printf("[config] channelKeys is not an object; ignoring it for channel-proposal checks")
+		*n = nil
+		return nil
 	}
 	names := make(channelKeyNames, 0, len(m))
 	for name := range m {
