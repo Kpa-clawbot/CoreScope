@@ -135,6 +135,7 @@ node tests/unit/test-issue-1849-trace-hashbytes.js
 node tests/unit/test-issue-1851-channel-message-scope.js
 node tests/unit/test-issue-1862-map-region-filter.js
 node tests/unit/test-issue-1868-control-decode.js
+node tests/unit/test-packet-detail-channel-escape.js
 node tests/unit/test-packet-detail-hash-size.js
 node tests/unit/test-issue-1890-og-url.js
 node tests/unit/test-issue-1956-release-routing.js

@@ -3632,7 +3632,7 @@
       const meta = [chLabel, hopLabel, snrLabel].filter(Boolean).join(' · ');
       messageHtml = `<div class="detail-message" style="padding:12px;margin:8px 0;background:var(--card-bg);border-radius:8px;border-left:3px solid var(--accent)">
         <div style="font-size:1.1em">${escapeHtml(decoded.text)}</div>
-        ${meta ? `<div style="font-size:0.85em;color:var(--text-muted);margin-top:4px">${meta}</div>` : ''}
+        ${meta ? `<div style="font-size:0.85em;color:var(--text-muted);margin-top:4px">${escapeHtml(meta)}</div>` : ''}
       </div>`;
     } else if (decoded.type === 'GRP_TXT' && decoded.channelHash != null) {
       const hashHex = decoded.channelHashHex || decoded.channelHash.toString(16).padStart(2, '0').toUpperCase();
