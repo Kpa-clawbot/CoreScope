@@ -1039,6 +1039,10 @@ func (s *Server) handlePerfReset(w http.ResponseWriter, r *http.Request) {
 
 // --- Packet Handlers ---
 
+// maxMultiNodePubkeys caps the comma-separated `nodes=` list on GET
+// /api/packets. No UI page sends more than a handful.
+const maxMultiNodePubkeys = 50
+
 func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 	// Multi-node filter: comma-separated pubkeys (Node.js parity)
 	if nodesParam := r.URL.Query().Get("nodes"); nodesParam != "" {
@@ -1049,6 +1053,13 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 			if pk != "" {
 				cleaned = append(cleaned, pk)
 			}
+		}
+		// Each entry costs one SQLite lookup (resolveNodePubkey) while the
+		// packet store's read lock is held. A 1 MB URL fits ~15k pubkeys,
+		// which is seconds of work per request, so cap the list.
+		if len(cleaned) > maxMultiNodePubkeys {
+			writeError(w, 400, fmt.Sprintf("too many nodes (max %d)", maxMultiNodePubkeys))
+			return
 		}
 		order := "DESC"
 		if r.URL.Query().Get("order") == "asc" {
