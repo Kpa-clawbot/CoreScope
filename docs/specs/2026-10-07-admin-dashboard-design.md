@@ -220,6 +220,11 @@ These rules override the sections above where they differ.
    it walks every packet under a read lock. The timer refreshes `/api/admin/stats`,
    `/api/health`, `/api/mqtt/status` and `/api/observers`.
 7. **Timing.** Login audit rows (`user.login` and `user.login.failed`) are written
-   asynchronously after the response is decided, best-effort, so neither the extra write
-   nor a locked `users.db` changes response timing. A row can be lost if the process
-   stops right after a login.
+   asynchronously after the response is decided, best-effort, so the login response does
+   not wait for the audit write, also not on a locked `users.db`. Residual: `users.db`
+   uses a single connection, so the background INSERT can delay the next `users.db`
+   request by one commit (longer if the database is locked). A known address writes a
+   row and an unknown one does not, so a request sent right after a login could in
+   principle measure that commit. The login rate limits (10 per 15 minutes per address,
+   and per IP when IPs can be told apart) keep this from being a useful signal. A row can
+   be lost if the process stops right after a login.
