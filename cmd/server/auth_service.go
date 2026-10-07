@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -100,7 +101,7 @@ func (s *Server) closeUserManagement() {
 
 func (a *authService) logStartup() {
 	log.Printf("[users] user management enabled: db=%s, %d config admin(s), webhook=%v",
-		a.set.dbPath, len(a.set.adminEmails), a.set.webhookSecret != "")
+		absForLog(a.set.dbPath), len(a.set.adminEmails), a.set.webhookSecret != "")
 	admins, err := a.st.List(users.ListFilter{Role: users.RoleAdmin})
 	if err != nil {
 		log.Printf("[users] list admins: %v", err)
@@ -221,4 +222,13 @@ func (a *authService) invalidateTokens(op string, uid int64, ps ...users.Purpose
 		}
 	}
 	return nil
+}
+
+// absForLog resolves path for a log line, so a relative users.db path shows
+// which file it means; the path as given when it cannot be resolved.
+func absForLog(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
 }

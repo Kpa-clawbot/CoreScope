@@ -362,3 +362,20 @@ func TestApprovedChannelsConfig(t *testing.T) {
 		t.Fatal("negative maxApproved must fall back to 128")
 	}
 }
+
+// The startup line shows the absolute users.db path, so a relative path
+// resolved against another working directory than the server's is visible.
+func TestApprovedChannelsSourceLogIsAbsolute(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+	logApprovedChannelsSource("users.db")
+	want, err := filepath.Abs("users.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "[proposals] reading approved channels from "+want+"\n") {
+		t.Fatalf("log line = %q, want the absolute path %q", buf.String(), want)
+	}
+}

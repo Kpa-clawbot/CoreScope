@@ -105,7 +105,7 @@ func main() {
 
 	keySet := newChannelKeySet(channelKeys, cfg.UsersDBPath(), cfg.ApprovedChannelsMax())
 	if cfg.ApprovedChannelsEnabled() {
-		log.Printf("[proposals] reading approved channels from %s", cfg.UsersDBPath())
+		logApprovedChannelsSource(cfg.UsersDBPath())
 		keySet.refresh()
 		go func() {
 			t := time.NewTicker(approvedChannelsRefresh)

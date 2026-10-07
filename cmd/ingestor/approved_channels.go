@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -140,4 +141,14 @@ func (s *channelKeySet) Close() {
 	if s.db != nil {
 		s.db.Close()
 	}
+}
+
+// logApprovedChannelsSource logs the users.db file the approved channels are
+// read from, resolved to an absolute path so a relative one shows which file
+// it means; the path as given when it cannot be resolved.
+func logApprovedChannelsSource(path string) {
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	log.Printf("[proposals] reading approved channels from %s", path)
 }
