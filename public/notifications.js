@@ -52,7 +52,8 @@
     var title = on ? 'You get a mail when this node goes offline, comes back or reports a low battery. Click to stop.'
                    : 'Get a mail when this node goes offline, comes back or reports a low battery.';
     var html = '<button type="button" class="btn-primary node-notify-btn" data-notify-toggle aria-pressed="' + (on ? 'true' : 'false') + '"' +
-      (state === 'full' ? ' disabled' : '') + ' title="' + escapeHtml(title) + '">' + escapeHtml(on ? 'Notifying' : 'Notify me') + '</button>';
+      (state === 'full' ? ' disabled' : '') + ' title="' + escapeHtml(title) + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-envelope-simple"/></svg> ' +
+      escapeHtml(on ? 'Notifying' : 'Notify me') + '</button>';
     if (state === 'full') {
       html += ' <small class="node-notify-hint">' +
         escapeHtml('You watch the maximum of ' + data.limits.maxWatches + ' nodes; remove one on your account page.') + '</small>';

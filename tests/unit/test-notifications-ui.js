@@ -117,6 +117,8 @@ test('toggle states and markup: off, on, full, hidden', () => {
   assert(off.indexOf('aria-pressed="false"') !== -1 && off.indexOf('Notify me') !== -1 && off.indexOf(' disabled') === -1, off);
   const on = N.toggleHtml('on', STATE());
   assert(on.indexOf('aria-pressed="true"') !== -1 && on.indexOf('Notifying') !== -1, on);
+  // An icon like the neighbouring node-page buttons, so it gets their height.
+  assert(off.indexOf('<svg class="ph-icon" aria-hidden="true">') !== -1 && on.indexOf('#ph-envelope-simple') !== -1, off);
   const full = N.toggleHtml('full', STATE({ limits: { maxWatches: XSS } }));
   assert(full.indexOf(' disabled') !== -1 && full.indexOf('<img') === -1 && full.indexOf('&lt;img') !== -1, full);
   assert.strictEqual(N.toggleHtml('hidden', null), '');
