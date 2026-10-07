@@ -197,6 +197,8 @@ func notifySkipReason(u users.User, p users.NotifyPrefs, userMails, totalMails i
 // from mail_log over the last 24 hours (this tick's mails included). A user
 // with changes but no preferences row was evaluated with the defaults; the
 // row (and so the unsubscribe token) is created before the first mail.
+// Once ctx is cancelled (shutdown) the remaining users are not mailed;
+// their changes are already stored, like any other skipped change.
 func (n *notifier) deliver(ctx context.Context, now time.Time, changes map[int64][]notifyChange,
 	accounts map[int64]users.User, prefs map[int64]users.NotifyPrefs) {
 	if len(changes) == 0 {
@@ -212,7 +214,11 @@ func (n *notifier) deliver(ctx context.Context, now time.Time, changes map[int64
 		ids = append(ids, uid)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	for _, uid := range ids {
+	for i, uid := range ids {
+		if ctx.Err() != nil {
+			log.Printf("[notify] shutting down: %d user(s) with changes not mailed", len(ids)-i)
+			return
+		}
 		u := accounts[uid]
 		p, ok := prefs[uid]
 		if !ok {

@@ -590,3 +590,32 @@ func TestNotifierNormalisesMixedCaseWatches(t *testing.T) {
 		t.Fatalf("mail = %+v; want one Alpha offline line", m)
 	}
 }
+
+// cancelAfterSend cancels the tick's context once a mail went out, like a
+// shutdown arriving mid-delivery.
+type cancelAfterSend struct {
+	mailer.Mailer
+	cancel context.CancelFunc
+}
+
+func (c cancelAfterSend) Send(ctx context.Context, m mailer.Message) (string, error) {
+	id, err := c.Mailer.Send(ctx, m)
+	c.cancel()
+	return id, err
+}
+
+func TestNotifierStopsDeliveringAfterShutdown(t *testing.T) {
+	f := newNotifyFixture(t, defaultNotifySettings())
+	f.watcher(t, "pat@example.org", "Pat", evPkA)
+	f.watcher(t, "quinn@example.org", "Quinn", evPkA)
+	f.setNode(evPkA, "Alpha", "companion", time.Hour, nil)
+	f.tick()
+	f.clk.Advance(25 * time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.n.a.mail = cancelAfterSend{Mailer: f.n.a.mail, cancel: cancel}
+	f.n.tick(ctx)
+	if m := f.notifyMails(); len(m) != 1 {
+		t.Fatalf("mails after a shutdown mid-delivery = %d; want 1", len(m))
+	}
+}
