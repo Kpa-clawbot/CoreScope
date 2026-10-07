@@ -565,6 +565,7 @@ test('rows escape subject, names, emails and notes; actions follow the status', 
   const t = propT();
   const html = t.rowHtml(PR({ subject: '#' + XSS, note: XSS, proposer: { id: 2, displayName: XSS, email: XSS } }));
   assert(html.indexOf('<img') === -1, html);
+  assert(html.indexOf('data-subject="#&lt;') !== -1, html);
   assert(html.indexOf('data-act="approve"') !== -1 && html.indexOf('data-act="reject"') !== -1 && html.indexOf('data-act="revoke"') === -1);
   assert(html.indexOf('data-note="5"') !== -1);
   const appr = t.rowHtml(PR({ status: 'approved', decidedAt: '2026-10-07T11:00:00Z', reviewer: { id: 1, displayName: 'Ada', email: 'ada@example.org' } }));
@@ -621,6 +622,27 @@ test('revoke needs no confirmation; a refused action shows the server error', as
   await env.ctx.CSAdminProposals.mount(env.dom.mk('c'));
   await env.ctx.CSAdminProposals._test.act('5', 'revoke', () => { throw new Error('asked to confirm a revoke'); });
   assert.strictEqual(env.els.propAdminMsg.textContent, "not possible in the proposal's current state");
+  assert.strictEqual(env.els.propAdminMsg.ok, false);
+});
+
+test('a double click sends one POST', async () => {
+  const env = propEnv('#/admin?tab=proposals', (p) => (p.endsWith('/reject') ? OK(PR({ status: 'rejected' })) : OK([PR()])));
+  await env.ctx.CSAdminProposals.mount(env.dom.mk('c'));
+  const a = env.ctx.CSAdminProposals._test.act('5', 'reject', () => true);
+  const b = env.ctx.CSAdminProposals._test.act('5', 'reject', () => true);
+  await Promise.all([a, b]);
+  assert.strictEqual(env.calls.filter((p) => p.endsWith('/reject')).length, 1);
+  await env.ctx.CSAdminProposals._test.act('5', 'reject', () => true);
+  assert.strictEqual(env.calls.filter((p) => p.endsWith('/reject')).length, 2, 'guard released after settling');
+});
+
+test('a refused decision reloads the list and keeps the error message', async () => {
+  const env = propEnv('#/admin?tab=proposals', (p) => (p.endsWith('/reject')
+    ? { ok: false, status: 409, data: { error: 'already decided' } } : OK([PR()])));
+  await env.ctx.CSAdminProposals.mount(env.dom.mk('c'));
+  await env.ctx.CSAdminProposals._test.act('5', 'reject', () => true);
+  assert.deepStrictEqual(env.calls, ['/api/admin/proposals?status=pending', '/api/admin/proposals/5/reject', '/api/admin/proposals?status=pending']);
+  assert.strictEqual(env.els.propAdminMsg.textContent, 'already decided');
   assert.strictEqual(env.els.propAdminMsg.ok, false);
 });
 

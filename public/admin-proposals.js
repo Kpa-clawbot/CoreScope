@@ -10,7 +10,7 @@
   var ACTIONS = { pending: ['approve', 'reject'], approved: ['revoke'] };
   var LABELS = { approve: 'Approve', reject: 'Reject', revoke: 'Revoke' };
   var DONE = { approve: 'approved', reject: 'rejected', revoke: 'revoked' };
-  var state = { status: 'pending', seq: 0, byId: {} };
+  var state = { status: 'pending', seq: 0, byId: {}, busy: {} };
 
   function readHash(hash) {
     var s = new URLSearchParams(String(hash || '').split('?')[1] || '').get('status');
@@ -65,17 +65,29 @@
     }).catch(function () { if (seq === state.seq) say('Network error, try again.', false); });
   }
 
+  function setBusy(id, on) {
+    var body = document.getElementById('propAdminBody');
+    if (!body || !body.querySelectorAll) return;
+    var btns = body.querySelectorAll('[data-act][data-id="' + id + '"]');
+    for (var i = 0; i < btns.length; i++) btns[i].disabled = on;
+  }
+
   function act(id, action, confirmFn) {
     var p = state.byId[id];
-    if (!p) return Promise.resolve();
+    if (!p || state.busy[id]) return Promise.resolve();
     if (action === 'approve' && !confirmFn(approveWarning(p.subject))) return Promise.resolve();
     var noteEl = document.querySelector('[data-note="' + id + '"]');
     var note = noteEl ? String(noteEl.value || '').trim() : '';
+    state.busy[id] = true;
+    setBusy(id, true);
     return CSAuth.request('POST', '/api/admin/proposals/' + encodeURIComponent(id) + '/' + action, { note: note }).then(function (r) {
-      if (!r.ok) { say(CSAuth.errText(r), false); return; }
+      if (!r.ok) { say(CSAuth.errText(r), false); return load(); }
       say(p.subject + ': ' + DONE[action], true);
       return load();
-    }).catch(function () { say('Network error, try again.', false); });
+    }).catch(function () { say('Network error, try again.', false); }).then(function () {
+      delete state.busy[id];
+      setBusy(id, false);
+    });
   }
 
   function setStatus(v) {
@@ -105,7 +117,7 @@
     return load();
   }
 
-  function unmount() { state.seq++; state.byId = {}; }
+  function unmount() { state.seq++; state.byId = {}; state.busy = {}; }
 
   window.CSAdminProposals = { mount: mount, unmount: unmount,
     _test: { readHash: readHash, hashFor: hashFor, apiPath: apiPath, rowHtml: rowHtml, refHtml: refHtml,
