@@ -34,4 +34,31 @@ elif [ "${DISABLE_CADDY:-false}" = "true" ]; then
   SUPERVISORD_CONF="/etc/supervisor/conf.d/supervisord-no-caddy.conf"
 fi
 
+# Run the Go services as the unprivileged "corescope" user (supervisord
+# itself stays root so it can start mosquitto and caddy). Match the user's
+# uid/gid to the owner of the mounted data directory so the services can
+# write there and files they create carry the host owner's ids. Files that a
+# previous root-run container left behind are handed to that owner too.
+DATA_UID=$(stat -c %u /app/data 2>/dev/null || echo 0)
+DATA_GID=$(stat -c %g /app/data 2>/dev/null || echo 0)
+if [ "$DATA_UID" != "0" ]; then
+  if [ "$(id -u corescope)" != "$DATA_UID" ] || [ "$(id -g corescope)" != "$DATA_GID" ]; then
+    deluser corescope 2>/dev/null || true
+    delgroup corescope 2>/dev/null || true
+    GRP=$(getent group "$DATA_GID" | cut -d: -f1)
+    if [ -z "$GRP" ]; then
+      addgroup -S -g "$DATA_GID" corescope
+      GRP=corescope
+    fi
+    adduser -S -u "$DATA_UID" -G "$GRP" -h /app -s /sbin/nologin corescope
+  fi
+  find /app/data -not -user "$DATA_UID" -exec chown "$DATA_UID:$DATA_GID" {} + 2>/dev/null || true
+else
+  chown -R corescope:corescope /app/data
+fi
+# The geo-filter save writes config.json.tmp next to /app/config.json.
+chown corescope /app
+chown -h corescope /app/config.json /app/theme.json 2>/dev/null || true
+echo "[entrypoint] Go services run as uid=$(id -u corescope) gid=$(id -g corescope)"
+
 exec /usr/bin/supervisord -c "$SUPERVISORD_CONF"
