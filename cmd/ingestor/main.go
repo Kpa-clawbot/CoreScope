@@ -1857,6 +1857,12 @@ func handleNeighborsReport(store *Store, tag string, observerID string, msg map[
 		originID = observerID
 	}
 	originID = strings.ToLower(originID)
+	// The report is unauthenticated: any publisher can name any key. Only a
+	// 64-hex node key can match a nodes row, so drop anything else here
+	// instead of running UPDATEs that can never match.
+	if !targetPubkeyRe.MatchString(originID) {
+		originID = ""
+	}
 	if self, ok := msg["self"].(map[string]interface{}); ok && originID != "" {
 		if sc, ok := self["scopes"].(string); ok {
 			if err := store.UpdateNodeConfiguredScope(originID, sc, reportedAt); err != nil {
@@ -1877,7 +1883,7 @@ func handleNeighborsReport(store *Store, tag string, observerID string, msg map[
 		}
 		pubkey, _ := n["pubkey"].(string)
 		pubkey = strings.ToLower(pubkey)
-		if pubkey == "" {
+		if !targetPubkeyRe.MatchString(pubkey) {
 			continue
 		}
 		scopes, _ := n["scopes"].(string)
