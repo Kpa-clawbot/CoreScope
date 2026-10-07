@@ -79,6 +79,14 @@
     return html + '</div>';
   }
 
+  // Notification figures; the server sends them only with notifications on.
+  function notifyStatsHtml(n) {
+    if (!n) return '';
+    return '<h4>Notifications</h4><dl class="admin-stats">' +
+      stat('notifyMails', 'Mails, 24 hours', n.mailsLast24h + ' of ' + n.maxMailsPerDay) +
+      stat('notifyWatches', 'Watched nodes', n.watches) + stat('notifyUsers', 'Users watching', n.watchingUsers) + '</dl>';
+  }
+
   function usersCardHtml(r) {
     var head = '<section class="admin-card" id="aoUsers" aria-labelledby="aoUsersH"><h3 id="aoUsersH">Users</h3>';
     if (!r || r.error) return head + failedHtml('user figures') + '</section>';
@@ -94,7 +102,7 @@
       stat('mailDelivered', 'Delivered', m.delivered) + stat('mailBounced', 'Bounced', m.bounced) +
       stat('mailBlocked', 'Blocked', m.blocked) + stat('mailSpam', 'Spam', m.spam) +
       stat('mailPending', 'Pending', m.pending) + stat('mailOther', 'Other', m.other) +
-      '</dl></section>';
+      '</dl>' + notifyStatsHtml(s.notify) + '</section>';
   }
 
   function systemCardHtml(res, nowMs) {

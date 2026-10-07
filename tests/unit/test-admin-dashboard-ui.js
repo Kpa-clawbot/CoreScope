@@ -670,6 +670,19 @@ test('an unknown id does nothing; unmount drops a late answer', async () => {
   assert.strictEqual(env.calls.length, 1);
 });
 
+test('Users card shows notification figures only when the server sends them', () => {
+  const t = ovT();
+  assert.strictEqual(t.usersCardHtml({ data: STATS }).indexOf('Notifications'), -1);
+  const h = t.usersCardHtml({ data: Object.assign({}, STATS, { notify: { mailsLast24h: 7, maxMailsPerDay: 300, watches: 12, watchingUsers: 3 } }) });
+  assert(h.indexOf('<h4>Notifications</h4>') !== -1, h);
+  assert(h.indexOf('data-stat="notifyMails">7 of 300<') !== -1 && h.indexOf('data-stat="notifyWatches">12<') !== -1 &&
+    h.indexOf('data-stat="notifyUsers">3<') !== -1, h);
+});
+
+test('the audit action filter offers notification settings', () => {
+  assert.strictEqual(auditT().readHash('#/admin?tab=audit&action=notify.*').action, 'notify.*');
+});
+
 Promise.all(pending).then(() => {
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed ? 1 : 0);

@@ -93,3 +93,9 @@ a.account-btn { display: inline-flex; align-items: center; text-decoration: none
 .node-notify-btn[aria-pressed="true"] { box-shadow: inset 0 0 0 2px var(--status-green-text); }
 .node-notify-hint { color: var(--text-muted); font-size: var(--fs-sm); }
 .node-notify-hint:empty { display: none; }
+
+/* Notifications section (notifications.js) on the account page. */
+.account-check { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); }
+.account-fieldset { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; }
+.account-watches { list-style: none; padding: 0; margin: 0 0 8px; }
+.account-watches li { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: var(--fs-sm); }

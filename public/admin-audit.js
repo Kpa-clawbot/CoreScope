@@ -21,7 +21,8 @@
     ['user.password.*', 'Password changes and resets'],
     ['user.email.*', 'Address changes'],
     ['user.mail.refresh', 'Mail status refreshed'],
-    ['proposal.*', 'Channel proposals']
+    ['proposal.*', 'Channel proposals'],
+    ['notify.*', 'Notification settings']
   ];
   var DAY_MS = 24 * 60 * 60 * 1000;
   var PERIODS = [['', 'Any time', 0], ['24h', 'Last 24 hours', DAY_MS], ['7d', 'Last 7 days', 7 * DAY_MS], ['30d', 'Last 30 days', 30 * DAY_MS]];

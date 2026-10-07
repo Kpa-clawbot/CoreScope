@@ -93,7 +93,108 @@
     });
   }
 
+  var EVENT_LABELS = {
+    'node.offline': 'A watched node goes offline or comes back',
+    'node.battery': 'A watched node reports a low battery or recovers',
+    'foreign.new': 'A new foreign node appears (admin)',
+    'observer.offline': 'An observer goes offline or comes back (admin)'
+  };
+
+  function eventsHtml(data) {
+    return (data.availableEvents || []).map(function (e) {
+      var id = 'notifyEv-' + e.replace(/\./g, '-');
+      return '<label class="account-check" for="' + escapeHtml(id) + '"><input type="checkbox" id="' + escapeHtml(id) +
+        '" data-notify-event="' + escapeHtml(e) + '"' + ((data.events || []).indexOf(e) !== -1 ? ' checked' : '') + '> ' +
+        escapeHtml(EVENT_LABELS[e] || e) + '</label>';
+    }).join('');
+  }
+
+  function watchesHtml(data) {
+    if (!data.watches.length) return '<p class="account-hint">You watch no nodes yet. Use Notify me on a node page, or Watch my nodes below.</p>';
+    return '<ul class="account-watches">' + data.watches.map(function (w) {
+      return '<li data-pubkey="' + escapeHtml(w.pubkey) + '"><span><a href="#/nodes/' + encodeURIComponent(w.pubkey) + '">' +
+        escapeHtml(w.name || w.pubkey.slice(0, 12)) + '</a>' + (w.known ? '' : ' <small>(no longer in the database)</small>') + '</span>' +
+        '<button type="button" class="account-btn account-btn-secondary" data-unwatch="' + escapeHtml(w.pubkey) + '">Remove</button></li>';
+    }).join('') + '</ul>';
+  }
+
+  function sectionHtml(data) {
+    var lim = data.limits || {};
+    return '<form id="notifyForm" class="account-form" novalidate>' +
+      '<label class="account-check" for="notifyEnabled"><input type="checkbox" id="notifyEnabled"' + (data.enabled ? ' checked' : '') + '> Send me notification mails</label>' +
+      '<fieldset class="account-fieldset"><legend>Events</legend>' + eventsHtml(data) + '</fieldset>' +
+      '<p class="account-hint">' + escapeHtml('At most ' + lim.perUserPerDay + ' mails per 24 hours; sent in the last 24 hours: ' + lim.mailsLast24h + '.') + '</p>' +
+      '<button type="submit" class="account-btn account-btn-primary">Save</button></form>' +
+      '<h4>' + escapeHtml('Watched nodes (' + data.watches.length + ' of ' + lim.maxWatches + ')') + '</h4>' +
+      '<div id="notifyWatches">' + watchesHtml(data) + '</div>' +
+      '<button type="button" class="account-btn account-btn-secondary" id="notifyMyNodes">Watch my nodes</button>';
+  }
+
+  function sayIn(msgId, text, ok) { window.CSAuth.say(msgId, text, ok); }
+  function failed(msgId) { return function () { sayIn(msgId, 'Network error, try again.', false); }; }
+
+  // draw renders the section from data and binds its controls. Controls are
+  // found by id: they are unique on the account page. busy guards against a
+  // second request while one is in flight.
+  function draw(el, msgId, data) {
+    var busy = false;
+    function guarded(fn) {
+      if (busy) return Promise.resolve();
+      busy = true;
+      return fn().then(function () { busy = false; }, function () { busy = false; });
+    }
+    el.innerHTML = sectionHtml(data);
+    document.getElementById('notifyForm').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var events = (data.availableEvents || []).filter(function (ev) {
+        var box = document.getElementById('notifyEv-' + ev.replace(/\./g, '-'));
+        return !!(box && box.checked);
+      });
+      var en = document.getElementById('notifyEnabled');
+      return guarded(function () {
+        return window.CSAuth.request('PUT', '/api/account/notifications', { enabled: !!(en && en.checked), events: events }).then(function (r) {
+          if (!r.ok) { sayIn(msgId, window.CSAuth.errText(r), false); return; }
+          draw(el, msgId, store(r.data));
+          sayIn(msgId, 'Saved.', true);
+        }, failed(msgId));
+      });
+    });
+    document.getElementById('notifyWatches').addEventListener('click', function (e) {
+      var pk = e.target && e.target.getAttribute && e.target.getAttribute('data-unwatch');
+      if (!pk) return;
+      return guarded(function () {
+        return window.CSAuth.request('DELETE', '/api/account/notifications/watches/' + encodeURIComponent(pk)).then(function (r) {
+          if (!r.ok) { sayIn(msgId, window.CSAuth.errText(r), false); return; }
+          draw(el, msgId, store(r.data));
+          sayIn(msgId, 'Removed.', true);
+        }, failed(msgId));
+      });
+    });
+    document.getElementById('notifyMyNodes').addEventListener('click', function () {
+      return guarded(function () {
+        return window.CSAuth.request('POST', '/api/account/notifications/watch-my-nodes').then(function (r) {
+          if (!r.ok) { sayIn(msgId, window.CSAuth.errText(r), false); return; }
+          var d = r.data;
+          draw(el, msgId, store(d.account));
+          sayIn(msgId, (d.added + d.already + d.skipped) === 0
+            ? 'Your synced My nodes list is empty. Add nodes to My nodes on the Nodes page and turn on settings sync.'
+            : 'Added ' + d.added + ', already watched ' + d.already + ', skipped ' + d.skipped + '.', true);
+        }, failed(msgId));
+      });
+    });
+  }
+
+  // mountSection loads the caller's state (always fresh) into el.
+  function mountSection(el, msgId) {
+    if (!el || !enabled() || !currentUser()) return Promise.resolve();
+    return window.CSAuth.request('GET', '/api/account/notifications').then(function (r) {
+      if (!r.ok) { sayIn(msgId, window.CSAuth.errText(r), false); return; }
+      draw(el, msgId, store(r.data));
+    }, failed(msgId));
+  }
+
   window.addEventListener('cs-auth-changed', function () { cache.userId = null; cache.promise = null; });
 
-  window.CSNotify = { enabled: enabled, load: load, store: store, toggleState: toggleState, toggleHtml: toggleHtml, mount: mount };
+  window.CSNotify = { enabled: enabled, load: load, store: store, toggleState: toggleState, toggleHtml: toggleHtml, mount: mount,
+    sectionHtml: sectionHtml, mountSection: mountSection };
 })();

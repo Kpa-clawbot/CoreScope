@@ -176,6 +176,77 @@ test('nodes.js mounts the toggle on both views; roles.js and index.html wire the
   assert(src('public/index.html').indexOf('<script src="notifications.js?v=__BUST__"></script>') !== -1);
 });
 
+console.log('notifications.js: account section');
+
+test('section escapes names and shows events, watches and limits', () => {
+  const N = load().N;
+  const html = N.sectionHtml(STATE({ availableEvents: ['node.offline', 'node.battery', 'foreign.new', 'observer.offline'],
+    events: ['node.offline', 'foreign.new'], limits: { maxWatches: 50, perUserPerDay: 20, mailsLast24h: 3 },
+    watches: [{ pubkey: PK, name: XSS, known: true }, { pubkey: 'cd'.repeat(32), name: '', known: false }] }));
+  assert(html.indexOf('<img') === -1 && html.indexOf('&lt;img') !== -1, 'name not escaped');
+  assert(html.indexOf('id="notifyEv-foreign-new" data-notify-event="foreign.new" checked') !== -1, html);
+  assert(html.indexOf('id="notifyEv-node-battery" data-notify-event="node.battery">') !== -1, html);
+  assert(html.indexOf('id="notifyEnabled" checked') !== -1);
+  assert(html.indexOf('no longer in the database') !== -1);
+  assert(html.indexOf('Watched nodes (2 of 50)') !== -1);
+  assert(html.indexOf('At most 20 mails per 24 hours; sent in the last 24 hours: 3.') !== -1);
+  assert(html.indexOf('data-unwatch="' + PK + '"') !== -1 && html.indexOf('href="#/nodes/' + PK + '"') !== -1);
+  assert(N.sectionHtml(STATE()).indexOf('You watch no nodes yet') !== -1);
+});
+
+test('Save sends enabled and the checked events; the answer redraws', async () => {
+  const env = load({ routes: (m) => ({ ok: true, status: 200, data: m === 'GET' ? STATE() : STATE({ enabled: false, events: ['node.battery'] }) }) });
+  await env.N.mountSection(env.document.getElementById('notifySection'), 'notifyMsg');
+  assert(env.els.notifySection.innerHTML.indexOf('notifyForm') !== -1);
+  env.document.getElementById('notifyEnabled').checked = false;
+  env.document.getElementById('notifyEv-node-offline').checked = false;
+  env.document.getElementById('notifyEv-node-battery').checked = true;
+  await env.els.notifyForm.handlers.submit({ preventDefault() {} });
+  assert.deepStrictEqual(plain(env.calls[1]), { method: 'PUT', p: '/api/account/notifications', body: { enabled: false, events: ['node.battery'] } });
+  assert.strictEqual(env.els.notifyMsg.textContent, 'Saved.');
+  assert(env.els.notifySection.innerHTML.indexOf('id="notifyEnabled">') !== -1, 'not redrawn from the answer');
+});
+
+test('Remove unwatches; Watch my nodes reports the counts', async () => {
+  const env = load({ routes: (m, p) => {
+    if (m === 'GET') return { ok: true, status: 200, data: STATE({ watches: [{ pubkey: PK, name: 'N', known: true }] }) };
+    if (m === 'DELETE') return { ok: true, status: 200, data: STATE() };
+    return { ok: true, status: 200, data: { added: 2, already: 1, skipped: 3, account: STATE() } };
+  } });
+  await env.N.mountSection(env.document.getElementById('notifySection'), 'notifyMsg');
+  await env.els.notifyWatches.handlers.click({ target: { getAttribute: (n) => (n === 'data-unwatch' ? PK : null) } });
+  assert.deepStrictEqual(plain(env.calls[1]), { method: 'DELETE', p: '/api/account/notifications/watches/' + PK });
+  assert.strictEqual(env.els.notifyMsg.textContent, 'Removed.');
+  await env.els.notifyMyNodes.handlers.click();
+  assert.deepStrictEqual(plain(env.calls[2]), { method: 'POST', p: '/api/account/notifications/watch-my-nodes' });
+  assert.strictEqual(env.els.notifyMsg.textContent, 'Added 2, already watched 1, skipped 3.');
+});
+
+test('Watch my nodes with an empty synced list says how to fill it', async () => {
+  const env = load({ routes: (m) => ({ ok: true, status: 200, data: m === 'GET' ? STATE() : { added: 0, already: 0, skipped: 0, account: STATE() } }) });
+  await env.N.mountSection(env.document.getElementById('notifySection'), 'notifyMsg');
+  await env.els.notifyMyNodes.handlers.click();
+  assert(env.els.notifyMsg.textContent.indexOf('My nodes list is empty') !== -1, env.els.notifyMsg.textContent);
+});
+
+test('a failed load shows the server message', async () => {
+  const env = load({ routes: () => ({ ok: false, status: 500, data: { error: 'internal error' } }) });
+  await env.N.mountSection(env.document.getElementById('notifySection'), 'notifyMsg');
+  assert.strictEqual(env.els.notifyMsg.textContent, 'internal error');
+});
+
+test('a second click while a request is in flight sends nothing', async () => {
+  let release;
+  const gate = new Promise((res) => { release = res; });
+  const env = load({ routes: (m) => (m === 'GET' ? { ok: true, status: 200, data: STATE() } : gate.then(() => ({ ok: true, status: 200, data: STATE() }))) });
+  await env.N.mountSection(env.document.getElementById('notifySection'), 'notifyMsg');
+  const a = env.els.notifyForm.handlers.submit({ preventDefault() {} });
+  const b = env.els.notifyForm.handlers.submit({ preventDefault() {} });
+  release();
+  await Promise.all([a, b]);
+  assert.strictEqual(env.calls.filter((c) => c.method === 'PUT').length, 1);
+});
+
 Promise.all(pending).then(() => {
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed > 0 ? 1 : 0);

@@ -1,6 +1,7 @@
 /* Account pages for optional user management.
  *   #/account/login | register | activate?token= | forgot | reset?token= | confirm-email?token= | check-mail
- *   #/account                   : profile, password, address, sessions, my proposals, delete
+ *   #/account                   : profile, password, address, sessions, my proposals, notifications, delete
+ *   #/account/unsubscribe?token= : confirm turning notification mails off (link from a notification mail)
  * Every dynamic string goes through escapeHtml; messages use textContent. */
 (function () {
   'use strict';
@@ -111,6 +112,7 @@
       submitBtn('Change address') + msgBox('emailMsg') + '</form>' +
       '<h3>Devices</h3><ul class="account-sessions" id="sessList"></ul>' + msgBox('sessMsg') +
       (window.CSProposals && window.CSProposals.enabled() ? '<h3>My proposals</h3><div id="propList"></div>' + msgBox('propMsg') : '') +
+      (window.CSNotify && window.CSNotify.enabled() ? '<h3 id="notifications">Notifications</h3><div id="notifySection"></div>' + msgBox('notifyMsg') : '') +
       (window.CSSettingsSync ? '<h3>Settings sync</h3><div id="syncSection"></div>' : '') +
       '<h3>Delete account</h3><form id="delForm" class="account-form" novalidate>' +
       '<p class="account-hint">This removes your account permanently.</p>' +
@@ -254,6 +256,27 @@
       if (p) p.then(function (r) { if (r && r.ok && CSAuth.user()) CSAuth.refreshMe(); });
     },
 
+    unsubscribe: function (app) {
+      var token = takeToken('unsubscribe');
+      app.innerHTML = shell('Stop notification mails',
+        '<p class="account-hint">This turns off all node notification mails for the account the link was sent to. You can turn them back on from your account page.</p>' +
+        '<button type="button" id="unsubBtn" class="account-btn account-btn-primary">Turn notifications off</button>' + msgBox() +
+        '<p class="account-links"><a href="#/account?section=notifications">Notification settings</a></p>');
+      var btn = document.getElementById('unsubBtn');
+      if (!token) {
+        btn.disabled = true;
+        CSAuth.say('accountMsg', 'This link is incomplete. Open the link from the mail again.', false);
+        return;
+      }
+      btn.addEventListener('click', function () {
+        btn.disabled = true;
+        return CSAuth.request('POST', '/api/notifications/unsubscribe?token=' + encodeURIComponent(token)).then(function (r) {
+          CSAuth.say('accountMsg', r.ok ? r.data.message : CSAuth.errText(r), r.ok);
+          if (!r.ok) btn.disabled = false;
+        }, function () { btn.disabled = false; CSAuth.say('accountMsg', 'Network error, try again.', false); });
+      });
+    },
+
     profile: function (app) {
       var u = CSAuth.user();
       if (!u) { location.hash = '#/account/login'; return; }
@@ -263,6 +286,12 @@
       document.getElementById('profName').value = u.displayName;
       if (window.CSSettingsSync) window.CSSettingsSync.mountSection(document.getElementById('syncSection'));
       if (window.CSProposals && window.CSProposals.enabled()) window.CSProposals.loadMine(document.getElementById('propList'), 'propMsg');
+      if (window.CSNotify && window.CSNotify.enabled()) {
+        window.CSNotify.mountSection(document.getElementById('notifySection'), 'notifyMsg').then(function () {
+          var h = query().get('section') === 'notifications' && document.getElementById('notifications');
+          if (h && h.scrollIntoView) h.scrollIntoView();
+        });
+      }
 
       document.getElementById('accountPageLogout').addEventListener('click', function () {
         return CSAuth.logout('#/account/login').then(function (r) {

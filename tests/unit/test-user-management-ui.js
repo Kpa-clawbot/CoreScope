@@ -946,6 +946,37 @@ test('feature on: a refused reset alerts and keeps the stats', async () => {
   assert.deepStrictEqual(alerts, ['Reset failed: HTTP 403']);
 });
 
+test('profile has the Notifications section only with notifications on', () => {
+  const u = { email: 'a@example.org', role: 'user', displayName: 'A' };
+  assert.strictEqual(loadAccount('#/account', () => ({})).t.profileHtml(u).indexOf('notifySection'), -1);
+  const on = loadAccount('#/account', () => ({}), { CSNotify: { enabled: () => true } });
+  assert(on.t.profileHtml(u).indexOf('<h3 id="notifications">Notifications</h3><div id="notifySection"></div>') !== -1);
+});
+
+test('unsubscribe view posts the token only after the confirm click', async () => {
+  const msg = 'Notifications are off. Turn them back on from your account page.';
+  const env = loadAccount('#/account/unsubscribe?token=T%2B1', () => ({ ok: true, status: 200, data: { ok: true, message: msg } }));
+  env.t.views.unsubscribe({});
+  assert.strictEqual(env.loc.hash, '#/account/unsubscribe', 'token left in the address bar');
+  assert.strictEqual(env.calls.length, 0, 'posted before the click');
+  await env.els.unsubBtn.handlers.click();
+  assert.strictEqual(env.calls[0].method, 'POST');
+  assert.strictEqual(env.calls[0].p, '/api/notifications/unsubscribe?token=T%2B1');
+  assert.strictEqual(env.els.accountMsg.textContent, msg);
+});
+
+test('unsubscribe view: no token, and a dead token', async () => {
+  const none = loadAccount('#/account/unsubscribe', () => ({}));
+  none.t.views.unsubscribe({});
+  assert.strictEqual(none.els.unsubBtn.disabled, true);
+  assert(none.els.accountMsg.textContent.indexOf('incomplete') !== -1);
+  const dead = loadAccount('#/account/unsubscribe?token=x', () => ({ ok: false, status: 410, data: { error: 'this link is invalid or was already used' } }));
+  dead.t.views.unsubscribe({});
+  await dead.els.unsubBtn.handlers.click();
+  assert.strictEqual(dead.els.accountMsg.textContent, 'this link is invalid or was already used');
+  assert.strictEqual(dead.els.unsubBtn.disabled, false);
+});
+
 Promise.all(pending).then(() => {
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed ? 1 : 0);
