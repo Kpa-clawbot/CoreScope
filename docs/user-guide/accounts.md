@@ -161,14 +161,19 @@ watched node changes state. Admins can also watch the instance.
   add a new foreign node (once per node) and an observer going offline
   (`observerStaleMinutes`) or back (`observerOnlineMinutes`).
 - A check runs every `intervalMinutes` (the first one an interval after startup, and only
-  once the packet store is loaded). All changes for one user in one check go into one
+  after the startup load). All changes for one user in one check go into one
   mail. The first check of a newly watched node stores its state without a mail; states
   are kept in `users.db`, so a restart does not mail again.
 - While ingest is stale (the newest packet in the packet store is older than 30 minutes,
   for example when the MQTT broker or the ingestor is down), the offline checks for
   nodes and observers pause: their states stay as they were and nothing is mailed for
   them. Battery and foreign-node checks go on. The server log says when the pause
-  starts and ends.
+  starts and ends. After the feed comes back, offline reports wait one silent window
+  (the role's silent hours for nodes, `observerStaleMinutes` for observers): until then
+  older evidence counts as heard at the moment the feed came back, so the outage itself
+  mails nobody. A node that died during the outage is reported up to one window late.
+  The server keeps this grace in memory: a restart after the recovery and inside that
+  window loses it.
 - Limits: `perUserPerDay` mails per user and `maxMailsPerDay` in total, both over a
   rolling 24 hours. A change over a limit, for an account that is not active, for a
   bouncing address or while the user has notifications off is recorded and never mailed

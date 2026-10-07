@@ -48,6 +48,11 @@ type notifyInput struct {
 	// and a silent feed look the same. node.offline and observer.offline
 	// are then not compared (states unchanged, no changes).
 	IngestStale bool
+	// IngestResumedAt: when the last stale period ended (zero: none since
+	// startup). For a node or observer whose stored state is good, evidence
+	// older than this counts as heard at this time, so nothing goes offline
+	// until a full silent window has passed after the feed came back.
+	IngestResumedAt time.Time
 }
 
 // notifyChange is one transition for one user.
@@ -105,8 +110,9 @@ func nodeLabel(n notifyNode, known bool, pk string) string {
 // nodeOnlineState is good when the node was heard within its role's silent
 // window, like roles.js getNodeStatus: the latest of last_seen, the packet
 // store's last heard and, for repeaters and rooms, the last relay hop. A
-// node missing from the analyzer database is bad.
-func nodeOnlineState(pk string, n notifyNode, known bool, in *notifyInput) string {
+// node missing from the analyzer database is bad. While prev is good, the
+// latest evidence is never older than in.IngestResumedAt (the outage grace).
+func nodeOnlineState(pk string, n notifyNode, known bool, prev string, in *notifyInput) string {
 	if !known {
 		return users.NotifyBad
 	}
@@ -118,6 +124,9 @@ func nodeOnlineState(pk string, n notifyNode, known bool, in *notifyInput) strin
 		if t, ok := in.Relayed[pk]; ok && t.After(last) {
 			last = t
 		}
+	}
+	if prev == users.NotifyGood && last.Before(in.IngestResumedAt) {
+		last = in.IngestResumedAt
 	}
 	_, silentMs := in.Health.GetHealthMs(strings.ToLower(n.Role))
 	if last.IsZero() || in.Now.Sub(last) >= time.Duration(silentMs)*time.Millisecond {
@@ -141,9 +150,13 @@ func batteryState(mv, lowMv int, prev string) string {
 }
 
 // observerState: bad when last_seen is older than observerStaleMinutes,
-// good again within observerOnlineMinutes.
-func observerState(o notifyObserver, h HealthThresholds, now time.Time, prev string) string {
+// good again within observerOnlineMinutes. While prev is good, last_seen
+// is never older than resumed (the outage grace, zero for none).
+func observerState(o notifyObserver, h HealthThresholds, now, resumed time.Time, prev string) string {
 	t, ok := parseRelayTS(o.LastSeen)
+	if prev == users.NotifyGood && !resumed.IsZero() && (!ok || t.Before(resumed)) {
+		t, ok = resumed, true
+	}
 	if !ok {
 		return users.NotifyBad
 	}
@@ -234,7 +247,8 @@ func evaluateNotifications(in notifyInput) notifyResult {
 			n, known := in.Nodes[pk]
 			name := nodeLabel(n, known, pk)
 			if p.Has(users.NotifyNodeOffline) && !in.IngestStale {
-				compare(users.NotifyKey{UserID: p.UserID, Event: users.NotifyNodeOffline, Subject: pk}, name, nodeOnlineState(pk, n, known, &in), nil)
+				k := users.NotifyKey{UserID: p.UserID, Event: users.NotifyNodeOffline, Subject: pk}
+				compare(k, name, nodeOnlineState(pk, n, known, prev[k], &in), nil)
 			}
 			if p.Has(users.NotifyNodeBattery) && known && n.BatteryMv != nil {
 				k := users.NotifyKey{UserID: p.UserID, Event: users.NotifyNodeBattery, Subject: pk}
@@ -269,7 +283,7 @@ func evaluateNotifications(in notifyInput) notifyResult {
 				if name == "" {
 					name = o.ID
 				}
-				compare(k, name, observerState(o, in.Health, in.Now, prev[k]), nil)
+				compare(k, name, observerState(o, in.Health, in.Now, in.IngestResumedAt, prev[k]), nil)
 			}
 		}
 	}

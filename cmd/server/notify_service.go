@@ -21,8 +21,11 @@ type notifier struct {
 	src notifySource
 	now func() time.Time
 	// ingestStale is the last tick's verdict, so the pause and the resume
-	// are each logged once. Only the loop goroutine touches it.
-	ingestStale bool
+	// are each logged once; ingestResumedAt is when the last stale period
+	// ended (the offline grace, see notifyInput). In memory only: a restart
+	// inside the grace loses it. Only the loop goroutine touches them.
+	ingestStale     bool
+	ingestResumedAt time.Time
 }
 
 func newNotifier(a *authService, src notifySource, now func() time.Time) *notifier {
@@ -50,6 +53,7 @@ func (n *notifier) checkIngest(now time.Time) bool {
 		}
 		log.Printf("[notify] ingest stale since %s; offline checks paused", since)
 	case !stale && n.ingestStale:
+		n.ingestResumedAt = now
 		log.Printf("[notify] ingest fresh again; offline checks resumed")
 	}
 	n.ingestStale = stale
@@ -193,7 +197,7 @@ func (n *notifier) tick(ctx context.Context) {
 	heard, lock := n.src.lastHeard(pubkeys)
 	res := evaluateNotifications(notifyInput{Now: now, Health: n.src.health(), LowMv: n.src.lowBatteryMv(),
 		Accounts: accounts, Prefs: prefs, Watches: watches, States: states, Nodes: nodes,
-		Heard: heard, Relayed: n.src.lastRelayed(infra), Observers: observers, IngestStale: stale})
+		Heard: heard, Relayed: n.src.lastRelayed(infra), Observers: observers, IngestStale: stale, IngestResumedAt: n.ingestResumedAt})
 	if err := st.DeleteNotifyStates(res.Drop); err != nil {
 		log.Printf("[notify] delete dropped states, nothing mailed this time: %v", err)
 		return

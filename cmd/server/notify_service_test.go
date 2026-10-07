@@ -653,11 +653,44 @@ func TestNotifierPausesOfflineChecksWhileIngestIsStale(t *testing.T) {
 
 	f.src.newestAt = f.clk.Now // feed back, Alpha still silent
 	logs = captureLog(f.tick)
-	if m := f.notifyMails(); len(m) != 1 || !strings.Contains(m[0].Text, "Alpha: offline") {
-		t.Fatalf("mails after ingest resumed = %+v; want Alpha offline", m)
+	if m := f.notifyMails(); len(m) != 0 {
+		t.Fatalf("mailed %d on the first tick after recovery; offline waits one silent window", len(m))
 	}
 	if n := strings.Count(logs, "[notify] ingest fresh again; offline checks resumed"); n != 1 {
 		t.Fatalf("resume logged %d times; want once:\n%s", n, logs)
+	}
+	f.clk.Advance(23 * time.Hour)
+	f.tick()
+	if m := f.notifyMails(); len(m) != 0 {
+		t.Fatalf("mailed %d inside the window after recovery", len(m))
+	}
+	f.clk.Advance(time.Hour + time.Minute) // a full companion window after recovery
+	f.tick()
+	if m := f.notifyMails(); len(m) != 1 || !strings.Contains(m[0].Text, "Alpha: offline") {
+		t.Fatalf("mails one window after recovery = %+v; want Alpha offline", m)
+	}
+}
+
+// A store that is already stale at startup gets the same grace once fresh.
+func TestNotifierGraceWhenStaleAtStartup(t *testing.T) {
+	f := newNotifyFixture(t, defaultNotifySettings())
+	f.watcher(t, "pat@example.org", "Pat", evPkA)
+	f.setNode(evPkA, "Alpha", "companion", time.Hour, nil)
+	f.tick()                                   // baseline: online (states persist in users.db)
+	f.n = newNotifier(f.n.a, f.src, f.clk.Now) // restart
+	f.clk.Advance(25 * time.Hour)
+	old := f.clk.t.Add(-25 * time.Hour)
+	f.src.newestAt = func() time.Time { return old }
+	f.tick() // stale at startup
+	f.src.newestAt = f.clk.Now
+	f.tick()
+	if m := f.notifyMails(); len(m) != 0 {
+		t.Fatalf("mailed %d right after a stale startup recovered", len(m))
+	}
+	f.clk.Advance(24*time.Hour + time.Minute)
+	f.tick()
+	if m := f.notifyMails(); len(m) != 1 {
+		t.Fatalf("mails one window after recovery = %d; want 1", len(m))
 	}
 }
 

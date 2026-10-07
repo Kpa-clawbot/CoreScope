@@ -505,3 +505,48 @@ func TestEvaluateIngestStalePausesOfflineChecks(t *testing.T) {
 		t.Fatalf("observer check after ingest resumed = %q; want bad", s)
 	}
 }
+
+// After a feed outage, evidence older than the recovery counts as heard at
+// the recovery: no node or observer goes offline until a full silent window
+// has passed since then. A state that is already bad is not lifted by it.
+func TestEvaluateGraceAfterIngestResumes(t *testing.T) {
+	in := evInput()
+	in.Prefs = append(in.Prefs, users.NotifyPrefs{UserID: evAdmin, Enabled: true, Events: []string{users.NotifyObserverOffline}})
+	in.Watches = append(in.Watches, users.NotifyWatch{UserID: evUser, Pubkey: evPkB})
+	in.Nodes[evPkA] = notifyNode{Pubkey: evPkA, Name: "Alpha", Role: "companion", LastSeen: evAgo(25 * time.Hour)}
+	in.Nodes[evPkB] = notifyNode{Pubkey: evPkB, Name: "Bravo", Role: "companion", LastSeen: evAgo(48 * time.Hour)}
+	in.Observers = []notifyObserver{{ID: "OBS1", Name: "Roof", LastSeen: evAgo(25 * time.Hour)}, {ID: "OBS2", Name: "Mast", LastSeen: evAgo(48 * time.Hour)}}
+	in.States = []users.NotifyState{
+		evStateRow(evUser, users.NotifyNodeOffline, evPkA, users.NotifyGood),
+		evStateRow(evUser, users.NotifyNodeOffline, evPkB, users.NotifyBad),
+		evStateRow(evAdmin, users.NotifyObserverOffline, "OBS1", users.NotifyGood),
+		evStateRow(evAdmin, users.NotifyObserverOffline, "OBS2", users.NotifyBad),
+	}
+	in.IngestResumedAt = evNow.Add(-10 * time.Minute)
+	if res := evaluateNotifications(in); len(res.Changes) != 0 || len(res.States) != 0 {
+		t.Fatalf("10 minutes after recovery: changes %+v, states %+v; want none", res.Changes, res.States)
+	}
+
+	// One silent window (24 h companions, observerStaleMinutes 1440) plus a
+	// minute after recovery, still no new evidence: offline.
+	in.Now = in.IngestResumedAt.Add(24*time.Hour + time.Minute)
+	res := evaluateNotifications(in)
+	if ch := res.Changes[evUser]; len(ch) != 1 || ch[0].Subject != evPkA || ch[0].To != users.NotifyBad {
+		t.Fatalf("node changes after the window = %+v; want Alpha offline", ch)
+	}
+	if ch := res.Changes[evAdmin]; len(ch) != 1 || ch[0].Subject != "OBS1" || ch[0].To != users.NotifyBad {
+		t.Fatalf("observer changes after the window = %+v; want Roof offline", ch)
+	}
+
+	// A node heard after the recovery behaves as without the grace.
+	in.Now = evNow
+	in.Nodes[evPkB] = notifyNode{Pubkey: evPkB, Name: "Bravo", Role: "companion", LastSeen: evAgo(5 * time.Minute)}
+	in.Observers[1].LastSeen = evAgo(5 * time.Minute)
+	res = evaluateNotifications(in)
+	if ch := res.Changes[evUser]; len(ch) != 1 || ch[0].Subject != evPkB || ch[0].To != users.NotifyGood {
+		t.Fatalf("node heard after recovery = %+v; want Bravo back online", ch)
+	}
+	if ch := res.Changes[evAdmin]; len(ch) != 1 || ch[0].Subject != "OBS2" || ch[0].To != users.NotifyGood {
+		t.Fatalf("observer heard after recovery = %+v; want Mast back online", ch)
+	}
+}

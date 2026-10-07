@@ -295,3 +295,13 @@ except where a ruling below changes one.
   and returned with the map). The lock time at live scale was an estimate; staging and
   live now report the measured value every interval. Code changes follow only if it is
   high.
+- F6 (I4, second round). Pausing alone only moved the false mails to the first check
+  after recovery. The notifier keeps `IngestResumedAt` in memory, set when a stale
+  period ends (also when the store was stale at startup and becomes fresh), and passes
+  it to the evaluator. For `node.offline` and `observer.offline` with a stored good
+  state, evidence older than `IngestResumedAt` counts as heard at that time, so no
+  offline transition fires until a full silent window (per role; `observerStaleMinutes`
+  for observers) has passed after recovery. A stored bad state is not lifted by it. A
+  node that died during the outage is reported up to one window late; the grace is lost
+  when the server restarts after the recovery and inside that window. A watched node
+  missing from the analyzer database is still offline at once (no evidence to defer).
