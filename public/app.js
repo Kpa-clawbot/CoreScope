@@ -1281,7 +1281,7 @@ function navigate() {
       else { app.setAttribute('tabindex', '-1'); app.focus({ preventScroll: true }); }
     });
   } else {
-    app.innerHTML = `<div style="padding:40px;text-align:center;color:#6b7280"><h2>${route}</h2><p>Page not yet implemented.</p></div>`;
+    app.innerHTML = `<div style="padding:40px;text-align:center;color:#6b7280"><h2>${escapeHtml(route)}</h2><p>Page not yet implemented.</p></div>`;
   }
 }
 
