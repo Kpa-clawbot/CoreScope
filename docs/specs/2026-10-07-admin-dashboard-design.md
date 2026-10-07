@@ -201,3 +201,24 @@ own card.
 **Playwright** (e2etest build). An admin opens the overview and sees the user figures and
 a failed login in "Needs attention", follows it to the audit tab and sees the row; the
 old `#/admin/users` link lands on the Users tab. Axe on all three tabs.
+
+## Amendments from the implementation plan (approved 2026-10-07)
+
+These rules override the sections above where they differ.
+
+1. **Registrations** in the Users card are counted from `user.register` audit rows, not
+   from `users.created_at`: the janitor prunes pending accounts after 48 hours, so the
+   users table forgets them.
+2. **Mail buckets** add a sixth bucket, `other`, for error and unknown events.
+3. **Admins** counts active admins only.
+4. **The attention rules are computed by the server** and returned in the stats
+   (`stuckPending`, `bouncing`, `guessing`); the browser only adds the MQTT rule from
+   `/api/mqtt/status`. A source that never delivered a message counts as down. The MQTT
+   link goes to `#/observers`, where the MQTT status panel lives.
+5. **Audit entries** use `at` for the time, like the existing per-user audit JSON.
+6. **`/api/healthz` is read on open and on "Refresh" only**, not on the 60-second timer:
+   it walks every packet under a read lock. The timer refreshes `/api/admin/stats`,
+   `/api/health`, `/api/mqtt/status` and `/api/observers`.
+7. **Timing.** Writing a `user.login.failed` row for an existing account makes that
+   response marginally slower than one for an unknown address. Argon2 dominates the
+   response time, so this is accepted.
