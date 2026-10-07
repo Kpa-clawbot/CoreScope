@@ -35,6 +35,16 @@ async function authReady(page) {
   await page.evaluate(() => window.CSAuth.ready());
 }
 
+// Resolves once the full node page has rendered its paths section, which
+// needs a network round trip started after CSNotify.mount ran: a positive
+// signal that the page settled before asserting that something is absent.
+async function nodePageRendered(page) {
+  await page.waitForFunction(() => {
+    const el = document.getElementById('fullPathsContent');
+    return !!el && !el.querySelector('.spinner');
+  });
+}
+
 async function lastMailToken(page) {
   const r = await page.request.get(BASE + '/__e2e/last-mail');
   assert(r.ok(), 'last-mail HTTP ' + r.status());
@@ -63,6 +73,10 @@ async function registerAndActivate(page, email, name) {
 
 // axeClean fails on serious or critical WCAG 2 A/AA violations inside sel.
 async function axeClean(pg, sel) {
+  // A finite animation in flight (the 150 ms .page-enter fade) blends colours
+  // and fails color-contrast at random; wait until those have finished.
+  await pg.waitForFunction(() => document.getAnimations().every((a) =>
+    a.playState !== 'running' || !a.effect || a.effect.getComputedTiming().endTime === Infinity));
   const res = await new AxeBuilder({ page: pg }).include(sel).withTags(['wcag2a', 'wcag2aa']).analyze();
   const bad = res.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
   assert(bad.length === 0, sel + ': ' + bad.map((v) => v.id + ' ' + v.nodes.map((n) => n.target.join(' ') + ' ' + ((n.any[0] || {}).message || '')).join(' | ')).join(', '));
@@ -361,7 +375,7 @@ async function until(fn, label) {
     await anon.goto(BASE + '/#/nodes/' + encodeURIComponent(watchKey));
     await anon.waitForSelector('#nodeNotifySlotFull', { state: 'attached' });
     await authReady(anon);
-    await anon.waitForTimeout(500);
+    await nodePageRendered(anon);
     assert((await anon.locator('[data-notify-toggle]').count()) === 0, 'toggle shown while logged out');
     await anon.context().close();
   });
@@ -407,7 +421,8 @@ async function until(fn, label) {
     assert(!body.userManagement, 'userManagement present while off');
     await off.goto(BASE_OFF + '/#/nodes/' + encodeURIComponent(watchKey));
     await off.waitForSelector('#nodeNotifySlotFull', { state: 'attached' });
-    await off.waitForTimeout(500);
+    await authReady(off);
+    await nodePageRendered(off);
     assert((await off.locator('[data-notify-toggle]').count()) === 0, 'toggle shown while the feature is off');
   });
 
