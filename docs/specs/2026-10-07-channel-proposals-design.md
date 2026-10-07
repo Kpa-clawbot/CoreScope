@@ -192,3 +192,46 @@ by `maxApproved` (default 128).
 - Frontend unit (vm): propose flow states, admin tab actions, escaping of names.
 - Playwright (e2etest build): a user proposes `#e2e-test`, the admin approves it, the
   channel appears in the list; revoke removes it from the approved list.
+
+## Amendments from the implementation plan
+
+1. Store signatures carry the limits: `Propose(kind, subject, userID, ProposalLimits)`,
+   `Decide(id, action, reviewerID, note, maxApproved)` and `ApprovedSubjects(kind, limit)`.
+   The limit checks run inside the state-change transaction.
+2. The per-user daily limit counts the proposals a user created or re-opened in the last
+   24 hours in `users.db`, so it survives a restart.
+3. Name rules: a name of only ZWJ is refused like an empty one; Public is refused in any
+   case (`#public`, `#Public`, `public`, `Public`).
+4. With `maxApproved` lowered below the number of approved channels, the server and the
+   ingestor both use the oldest approvals (by decision time) up to the cap.
+5. An ingestor read error never removes keys: only a successful read changes the set.
+6. The channel list escapes channel names in its data attributes and CSS selectors,
+   since approved names may contain `"`, `<` and `\`.
+7. `users.db` path: the server and the ingestor keep their existing `DB_PATH`
+   precedence. Both log the resolved path at startup (server
+   `[users] user management enabled: db=<path>`, ingestor
+   `[proposals] reading approved channels from <path>`), and the operator docs advise
+   setting `userManagement.dbPath` explicitly. If the two disagree on a non-Docker setup,
+   the ingestor reads another `users.db`; the log lines make that visible.
+8. A proposal for a name the instance already decrypts from `config.json` is refused
+   with 409 "already decrypted on this instance". The server reads only the names:
+   `hashChannels` normalised as the ingestor does (trimmed, `#` prefixed) and the names
+   of `channelKeys` (key values are discarded while parsing). Since a proposal subject
+   always starts with `#`, only `#`-prefixed `channelKeys` names can match. The
+   comparison is case-sensitive, like the ingestor's key map.
+9. A non-object `channelKeys` is ignored for this check with the log line
+   `[config] channelKeys is not an object; ignoring it for channel-proposal checks`,
+   instead of failing config loading.
+10. Proposing a revoked name again replaces the proposer; the original proposer stays in
+    the audit log and no longer sees the proposal under My proposals.
+11. Approved channels without traffic are listed in `/api/channels` and on the Channels
+    page regardless of the region filter, so a regional view may show a channel with no
+    regional traffic.
+12. The server reloads its approved-name snapshot from `users.db` under a mutex after
+    every decision (approve, reject and revoke), instead of changing it in place, so two
+    concurrent decisions cannot leave it stale. The reject case costs one small read and
+    keeps a single code path.
+13. The hidden and control character check exists twice by design: in `internal/users`
+    (display names) and in `internal/channel` (channel names). They are separate Go
+    modules and the ingestor must not import `internal/users`. Tests pin both copies;
+    the browser mirror in `public/channel-proposals.js` is inherent to live validation.

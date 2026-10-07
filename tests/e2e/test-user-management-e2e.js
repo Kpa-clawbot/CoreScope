@@ -9,7 +9,7 @@
  *   (cd cmd/server && go build -o ../../corescope-server . && go build -tags e2etest -o ../../corescope-server-e2e .)
  *   # config.json for the on-server (in $CFGDIR): port 13582, userManagement {enabled: true,
  *   #   dbPath "users.db", adminEmails ["admin@e2e.test"], publicBaseUrl "http://localhost:13582",
- *   #   mail {provider "fake", fromEmail "noreply@e2e.test"}}
+ *   #   mail {provider "fake", fromEmail "noreply@e2e.test"}, channelProposals {enabled: true}}
  *   corescope-server -port 13581 -db "$TMP/off.db" -public public &
  *   (cd "$CFGDIR" && corescope-server-e2e -config-dir . -port 13582 -db "$TMP/on.db" -public <repo>/public) &
  *   BASE_URL=http://localhost:13582 BASE_URL_OFF=http://localhost:13581 node tests/e2e/test-user-management-e2e.js
@@ -274,6 +274,82 @@ async function until(fn, label) {
       await pg.waitForTimeout(1500);
       await axeClean(pg, '#app');
     }
+  });
+
+  const proposer = await (await browser.newContext()).newPage();
+  proposer.setDefaultTimeout(8000);
+  proposer.on('pageerror', (e) => console.error('[pageerror proposer]', e.message));
+  await step('proposals: no Propose button in the Add Channel dialog while logged out', async () => {
+    await proposer.goto(BASE + '/#/channels', { waitUntil: 'domcontentloaded' });
+    await authReady(proposer);
+    await proposer.click('#chAddChannelBtn');
+    await proposer.waitForSelector('#chHashtagName');
+    assert(await proposer.locator('#chHashtagProposeBtn').isHidden(), 'Propose button visible while logged out');
+  });
+
+  await step('proposals: a user proposes #e2e-test from the Add Channel dialog', async () => {
+    await registerAndActivate(proposer, 'proposer@e2e.test', 'E2E Proposer');
+    await proposer.goto(BASE + '/#/channels');
+    await proposer.click('#chAddChannelBtn');
+    await proposer.waitForSelector('#chHashtagProposeBtn:not([hidden])');
+    await proposer.fill('#chHashtagName', 'public');
+    await until(async () => (await proposer.textContent('#chHashtagProposeMsg')).indexOf('built-in') !== -1, 'live validation');
+    await proposer.fill('#chHashtagName', 'e2e-test');
+    await proposer.click('#chHashtagProposeBtn');
+    await until(async () => (await proposer.textContent('#chHashtagProposeMsg')) === 'Proposed #e2e-test, an admin will review it.', 'propose result');
+  });
+
+  await step('proposals: My proposals on the account page shows it waiting', async () => {
+    await proposer.goto(BASE + '/#/account');
+    await proposer.waitForSelector('#propList li[data-subject="#e2e-test"]');
+    assert((await proposer.textContent('#propList')).indexOf('Waiting for review') !== -1, 'status not shown');
+  });
+
+  await step('proposals: the admin approves it on the Proposals tab after the warning', async () => {
+    const warnings = [];
+    const onDialog = (d) => warnings.push(d.message());
+    admin.on('dialog', onDialog);
+    try {
+      await admin.goto(BASE + '/#/admin?tab=proposals&status=pending');
+      await admin.waitForSelector('#propAdminBody tr[data-subject="#e2e-test"]');
+      await admin.click('#propAdminBody tr[data-subject="#e2e-test"] button[data-act="approve"]');
+      await until(async () => (await admin.textContent('#propAdminMsg')) === '#e2e-test: approved', 'approve result');
+    } finally {
+      admin.off('dialog', onDialog);
+    }
+    assert(warnings.some((m) => /every visitor/.test(m)), 'no readability warning: ' + warnings.join(' | '));
+  });
+
+  await step('proposals: the approved channel, without traffic, is listed on the Channels page with its marker', async () => {
+    const body = await (await proposer.request.get(BASE + '/api/channels')).json();
+    assert(Array.isArray(body.approvedChannels) && body.approvedChannels.indexOf('#e2e-test') !== -1, JSON.stringify(body.approvedChannels));
+    assert(!(body.channels || []).some((c) => c && c.name === '#e2e-test'), '#e2e-test has traffic in the fixture');
+    await proposer.goto(BASE + '/#/channels');
+    // The client caches /api/channels for 15 s: reload to fetch the list after the approval.
+    await proposer.reload();
+    await proposer.waitForSelector('#chList .ch-item[data-hash="#e2e-test"] .ch-approved-badge');
+  });
+
+  await step('proposals: revoke removes it from the approved list', async () => {
+    await admin.goto(BASE + '/#/admin?tab=proposals&status=approved');
+    await admin.waitForSelector('#propAdminBody tr[data-subject="#e2e-test"]');
+    await admin.click('#propAdminBody tr[data-subject="#e2e-test"] button[data-act="revoke"]');
+    await until(async () => (await admin.textContent('#propAdminMsg')) === '#e2e-test: revoked', 'revoke result');
+    const body = await (await admin.request.get(BASE + '/api/channels')).json();
+    assert(Array.isArray(body.approvedChannels) && body.approvedChannels.indexOf('#e2e-test') === -1, JSON.stringify(body.approvedChannels));
+  });
+
+  await step('axe: no serious or critical violations on the Proposals tab', async () => {
+    await admin.goto(BASE + '/#/admin?tab=proposals&status=all');
+    await admin.waitForSelector('#propAdminBody tr[data-subject="#e2e-test"]');
+    await admin.mouse.move(0, 0);
+    await admin.waitForTimeout(1500);
+    await axeClean(admin, '#app');
+  });
+
+  await step('feature off: /api/channels carries no approvedChannels', async () => {
+    const body = await (await off.request.get(BASE_OFF + '/api/channels')).json();
+    assert(!('approvedChannels' in body), 'approvedChannels present while off');
   });
 
   await browser.close();

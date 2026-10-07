@@ -79,7 +79,7 @@ tracking pixels automatically, and others block them.
 
 ### The admin area
 
-*Admin* in the account menu (on phones: the account page) opens three tabs:
+*Admin* in the account menu (on phones: the account page) opens three tabs (four with channel proposals on):
 
 - **Overview**: a *Needs attention* list when something applies (pending accounts older
   than 24 hours, addresses whose mail bounces, accounts with 5 or more failed logins in
@@ -92,8 +92,48 @@ tracking pixels automatically, and others block them.
   Successful and failed logins are recorded without IP address and deleted after 90
   days; a failed login for an address that has no account is not recorded. Other
   actions are kept.
+- **Proposals** (only with channel proposals on): proposed hashtag channels by status,
+  with *Approve*, *Reject* and *Revoke* and an optional note that the proposer sees.
+  Approving asks first, because the channel becomes readable for every visitor.
 
 Old `#/admin/users` links still work and open the Users tab.
+
+### Channel proposals (optional)
+
+Hashtag channels are public by construction: the key is derived from the name, so
+anyone who knows the name can read the channel. CoreScope decrypts only the hashtag
+channels in `hashChannels`. With channel proposals on, logged-in users propose a
+hashtag channel from *Channels, Add channel, Propose for everyone*, and admins decide
+on the *Proposals* tab.
+
+```json
+"userManagement": {
+  "channelProposals": { "enabled": true, "maxPending": 100, "maxApproved": 128, "perUserPerDay": 5 }
+}
+```
+
+- An approved channel is decrypted by the ingestor from its next refresh (once a
+  minute, no restart) and listed for every visitor on the Channels page, also before
+  it has traffic and regardless of the region filter. Messages received before the
+  approval stay encrypted.
+- Revoking stops decryption of new messages from the next refresh; stored messages
+  stay. A channel that is also in `hashChannels` or `channelKeys` stays decrypted.
+- A name in `hashChannels`, or a `channelKeys` name written with its leading `#`, cannot
+  be proposed: the answer is "already decrypted on this instance". The comparison is
+  case-sensitive.
+- A rejected name cannot be proposed again until 90 days after the decision; a revoked
+  one can be proposed again at once, and the new proposer then replaces the old one (the
+  audit log keeps both). Rejected and revoked proposals are deleted 90 days after the
+  decision.
+- `maxApproved` bounds the decryption work: every approved key is tried on every group
+  message. `perUserPerDay` and `maxPending` limit proposals (HTTP 429).
+- The ingestor reads `users.db` read-only, from `userManagement.dbPath` or next to the
+  analyzer database. Set `dbPath` explicitly when the server and the ingestor are not
+  given the same analyzer database path (for example `DB_PATH` set for one of them).
+  Both log the path they use at startup (server: `[users] user management enabled:
+  db=...`, ingestor: `[proposals] reading approved channels from ...`).
+- Names: at most 31 bytes including the `#` (MeshCore stores 32 with the terminator),
+  no invisible or control characters, case-sensitive, not Public.
 
 ### Backups
 
@@ -118,6 +158,10 @@ database, and protect it the same way. Deleting it removes all accounts and noth
   return to the tab. A node or favorite added on one device is never dropped by another,
   and one you removed stays removed. Saved packet filters are stored in your account as
   you typed them.
+- **Propose a channel** (when the operator turned channel proposals on): *Channels, Add
+  channel*, type the hashtag name, *Propose for everyone*. *My account, My proposals*
+  shows the status and the admin's note. Approved channels are readable for every
+  visitor of the instance.
 - **Never synced:** channel keys and decrypted messages, the API key, panel and column
   sizes, collapsed panels and map positions. They stay in the browser where you set them.
 - **Logging out** asks whether to keep your settings on this device (the default) or

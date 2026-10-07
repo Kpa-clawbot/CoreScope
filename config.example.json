@@ -442,9 +442,16 @@
       "fromEmail": "noreply@example.org",
       "fromName": "CoreScope",
       "webhookSecret": ""
+    },
+    "channelProposals": {
+      "enabled": false,
+      "maxPending": 100,
+      "maxApproved": 128,
+      "perUserPerDay": 5
     }
   },
   "_comment_userManagement": "Optional accounts (off by default; see docs/user-guide/accounts.md). When enabled: visitors can register with email + password and activate through a mailed link; addresses in adminEmails become admins; admins manage users at #/admin/users and can use the operator endpoints without the apiKey. The dashboard stays public. dbPath defaults to users.db next to the analyzer database: a separate file, the server never writes measurement data. publicBaseUrl is required and is used for every link in every mail. Mail goes through Brevo's transactional API (a free account is enough); brevoApiKey and webhookSecret may instead come from CORESCOPE_BREVO_API_KEY and CORESCOPE_BREVO_WEBHOOK_SECRET. Set webhookSecret (16+ chars) and point a Brevo transactional webhook at <publicBaseUrl>/api/mail/brevo/webhook with bearer auth to see delivery status per user. trustedProxies (CIDRs) lets login rate limits use X-Forwarded-For behind a reverse proxy. Startup fails if enabled with an incomplete mail setup.",
+  "_comment_channelProposals": "Optional, needs userManagement.enabled (docs/user-guide/accounts.md, Channel proposals). Logged-in users propose hashtag channels; admins approve, reject or revoke them on the Proposals tab. An approved channel is decrypted by the ingestor from its next refresh (once a minute, no restart) and listed for every visitor on the Channels page. maxApproved bounds the decryption work (every approved key is tried on every group message); perUserPerDay and maxPending limit proposals. The ingestor reads users.db read-only from userManagement.dbPath, or next to the analyzer database; set dbPath explicitly when the server and the ingestor are not given the same analyzer database path.",
   "customizer": {
     "disabledTabs": [],
     "_comment_disabledTabs": "Issue #1508. List of customizer-modal tab ids to hide from end users. Useful when operators want to expose only daily-use viewer controls and keep one-shot admin chrome out of the way. Recognized ids: branding, theme, nodes, home, display, geofilter, export. Example: [\"branding\", \"geofilter\", \"export\"] hides the admin tabs and leaves theme/colors/home/display visible. Default [] keeps the legacy behavior (all tabs visible). Operators edit this in config.json directly — there is no in-app UI for this list (by design)."
