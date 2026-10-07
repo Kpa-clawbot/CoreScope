@@ -66,6 +66,70 @@ async function run() {
 
   console.log(`\nRunning E2E tests against ${BASE}\n`);
 
+  for (const [view, width, full] of [
+    ['desktop side pane', 1280, false],
+    ['desktop full view', 1280, true],
+    ['mobile full view', 375, true],
+  ]) {
+    await test(`#2131 packet count help in ${view}`, async () => {
+      const fixtureContext = await browser.newContext({
+        viewport: { width, height: 900 }, hasTouch: width < 640,
+      });
+      const fixturePage = await fixtureContext.newPage();
+      const pubkey = 'b'.repeat(64);
+      const node = { public_key: pubkey, name: 'Packet count fixture', role: 'repeater',
+        last_seen: new Date().toISOString(), advert_count: 900 };
+      const stats = { totalTransmissions: 233, totalPackets: 500, totalObservations: 12278 };
+      await fixturePage.route('**/api/nodes**', async route => {
+        const path = new URL(route.request().url()).pathname;
+        let body;
+        if (path === '/api/nodes') body = { nodes: [node], total: 1 };
+        else if (path === '/api/nodes/' + pubkey) body = { node, recentAdverts: [] };
+        else if (path === '/api/nodes/' + pubkey + '/health') body = { stats };
+        else return route.continue();
+        await route.fulfill({ json: body });
+      });
+      try {
+        await fixturePage.goto(`${BASE}/#/nodes${full ? '/' + pubkey : ''}`, { waitUntil: 'domcontentloaded' });
+        if (!full) await fixturePage.locator(`tr[data-key="${pubkey}"]`).click();
+        const label = fixturePage.locator(full ? '#nodeFullBody td:first-child' : '#nodesRight dt')
+          .filter({ hasText: 'Total Packets' });
+        await label.waitFor();
+        const count = await label.evaluate(el => el.nextElementSibling.innerText.trim());
+        assert(count === (full ? '233 (seen 12278×)' : '233'), `Packet counts changed: ${count}`);
+
+        const help = label.getByRole('button', { name: 'Total Packets help', exact: true });
+        assert(await help.count() === 1, `Total Packets help is missing in ${view}`);
+        const descriptionId = await help.getAttribute('aria-describedby');
+        assert(descriptionId, 'Packet count help must have an accessible description');
+        const tooltip = fixturePage.locator('#' + descriptionId);
+        assert(await tooltip.count() === 1, 'Packet count description must reference one tooltip');
+        await fixturePage.mouse.move(0, 0);
+        assert(!await tooltip.isVisible(), 'Packet count tooltip should start closed');
+        if (width < 640) {
+          await help.tap();
+        } else {
+          await help.focus();
+          await fixturePage.keyboard.press('Shift+Tab');
+          await fixturePage.keyboard.press('Tab');
+          assert(await help.evaluate(el => el === document.activeElement), 'Packet count help must be keyboard reachable');
+        }
+        assert(await tooltip.isVisible(), `Packet count help is not visible after ${width < 640 ? 'tap' : 'keyboard focus'}`);
+        const explanation = await tooltip.innerText();
+        assert(/distinct transmissions/i.test(explanation), 'Help must explain the Total Packets count');
+        assert(/originator/i.test(explanation) && /destination/i.test(explanation) && /resolved relay/i.test(explanation),
+          'Help must explain that counted traffic can involve this node in different roles');
+        assert(/seen/i.test(explanation) && /one transmission can have multiple observations/i.test(explanation),
+          'Help must explain why seen observations can exceed transmissions');
+        const box = await tooltip.boundingBox();
+        assert(box && box.x >= 0 && box.x + box.width <= width && box.y >= 0 && box.y + box.height <= 900,
+          `Packet count help is clipped in ${view}`);
+      } finally {
+        await fixtureContext.close();
+      }
+    });
+  }
+
   // API contract fixtures exercise both real node renderers at desktop/mobile sizes.
   for (const width of [1280, 375]) {
     await test(`#2073 recent adverts grouped in both node views at ${width}px`, async () => {
