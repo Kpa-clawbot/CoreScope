@@ -287,7 +287,7 @@ section and the logout dialog.
 
 ## Amendments from the implementation plan (approved 2026-10-06)
 
-The plan (`docs/plans/2026-10-06-user-settings-sync.md`) found gaps in this spec. These
+Writing the implementation plan found gaps in this spec. These
 rules override the sections above where they differ.
 
 1. **Deleting the account copy holds.** After "Delete synced settings from my account",
