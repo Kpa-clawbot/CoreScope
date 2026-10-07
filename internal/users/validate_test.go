@@ -32,7 +32,7 @@ func TestNormalizeEmail(t *testing.T) {
 }
 
 func TestValidateDisplayName(t *testing.T) {
-	if got, err := ValidateDisplayName("  ON8AR Erwin  "); err != nil || got != "ON8AR Erwin" {
+	if got, err := ValidateDisplayName("  Jane Doe  "); err != nil || got != "Jane Doe" {
 		t.Fatalf("got %q, %v", got, err)
 	}
 	if _, err := ValidateDisplayName("\U0001F469\u200d\U0001F4BB dev"); err != nil { // ZWJ emoji sequence is allowed
