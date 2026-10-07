@@ -94,6 +94,14 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request, _ *use
 		writeError(w, http.StatusBadRequest, "invalid role filter")
 		return
 	}
+	switch q.Get("bouncing") {
+	case "":
+	case "1":
+		f.Bouncing = true
+	default:
+		writeError(w, http.StatusBadRequest, "invalid bouncing filter")
+		return
+	}
 	list, err := s.auth.st.List(f)
 	if err != nil {
 		log.Printf("[users] admin list: %v", err)

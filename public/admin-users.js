@@ -4,8 +4,7 @@
  * goes through escapeHtml.
  * Deep link: #/admin?tab=users&status=&role=&q=&bouncing=1&id= (read on
  * mount, written back with replaceState so filter changes add no history
- * entries). The bouncing filter is applied in the browser to the list the
- * server returns (at most 1000 rows). */
+ * entries). Every filter, bouncing included, is applied by the server. */
 (function () {
   'use strict';
   var filters = { status: '', role: '', q: '', bouncing: false };
@@ -108,16 +107,16 @@
     if (filters.status) q.set('status', filters.status);
     if (filters.role) q.set('role', filters.role);
     if (filters.q) q.set('q', filters.q);
+    if (filters.bouncing) q.set('bouncing', '1');
     var seq = ++loadSeq;
     return CSAuth.request('GET', '/api/admin/users?' + q.toString()).then(function (r) {
       var body = document.getElementById('umBody');
       if (!body || seq !== loadSeq) return;
       if (!r.ok) { say(CSAuth.errText(r), false); return; }
       var me = CSAuth.user();
-      var list = filters.bouncing ? r.data.filter(function (u) { return u.emailBouncing; }) : r.data;
       var html = '';
       // The server caps the list at 1000 rows, so a full tbody rebuild is bounded.
-      list.forEach(function (u) { html += rowHtml(u, me); });
+      r.data.forEach(function (u) { html += rowHtml(u, me); });
       body.innerHTML = html || '<tr><td colspan="8">No users match.</td></tr>';
       if (openId) showDetail(openId);
     }).catch(netErr);

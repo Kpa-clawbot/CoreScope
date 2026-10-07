@@ -163,9 +163,10 @@ func (s *Store) Delete(id int64) error {
 
 // ListFilter narrows List. Zero values mean "any".
 type ListFilter struct {
-	Status Status
-	Role   Role
-	Query  string // substring of email or display name, case-insensitive
+	Status   Status
+	Role     Role
+	Query    string // substring of email or display name, case-insensitive
+	Bouncing bool   // only addresses whose mail bounces
 }
 
 // List returns at most 1000 users, newest first. SQLite lower()/LIKE fold
@@ -180,6 +181,9 @@ func (s *Store) List(f ListFilter) ([]User, error) {
 	if f.Role != "" {
 		q += ` AND role = ?`
 		args = append(args, string(f.Role))
+	}
+	if f.Bouncing {
+		q += ` AND email_bouncing != 0`
 	}
 	if t := strings.TrimSpace(f.Query); t != "" {
 		like := "%" + escapeLike(strings.ToLower(t)) + "%"

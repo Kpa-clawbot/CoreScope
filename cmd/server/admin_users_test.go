@@ -49,6 +49,25 @@ func TestAdminListAndDetail(t *testing.T) {
 	}
 }
 
+func TestAdminListBouncingFilter(t *testing.T) {
+	f, boss, uma := adminFixture(t)
+	if err := f.st.SetEmailBouncing(uma.me.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	w := f.do("GET", "/api/admin/users?bouncing=1", nil, as(boss))
+	expectStatus(t, w, 200)
+	rows := decode[[]adminUserJSON](t, w)
+	if len(rows) != 1 || rows[0].Email != "uma@example.org" || !rows[0].EmailBouncing {
+		t.Fatalf("bouncing rows = %+v", rows)
+	}
+	if all := decode[[]adminUserJSON](t, f.do("GET", "/api/admin/users", nil, as(boss))); len(all) != 2 {
+		t.Fatalf("unfiltered rows = %d, want 2", len(all))
+	}
+	for _, v := range []string{"0", "yes", "true"} {
+		expectStatus(t, f.do("GET", "/api/admin/users?bouncing="+v, nil, as(boss)), 400)
+	}
+}
+
 func TestAdminDisableEnable(t *testing.T) {
 	f, boss, uma := adminFixture(t)
 	expectStatus(t, f.do("POST", userPath(uma.me.ID, "/disable"), nil, as(boss)), 200)

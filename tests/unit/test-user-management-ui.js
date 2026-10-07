@@ -753,17 +753,26 @@ test('mount reads the hash into the request and detail; filter changes use repla
   assert(env.replaced.length >= 1);
 });
 
-test('bouncing filter is applied in the browser and kept in the hash', async () => {
-  const env = loadAdmin('#/admin?tab=users&bouncing=1', () => OK([U({ id: 2, email: 'b@x.y', emailBouncing: true }), U({ id: 3, email: 'c@x.y' })]));
+test('bouncing filter is sent to the server as bouncing=1 and kept in the hash', async () => {
+  const env = loadAdmin('#/admin?tab=users&bouncing=1', (m, p) =>
+    OK(p.indexOf('bouncing=1') !== -1 ? [U({ id: 2, email: 'b@x.y', emailBouncing: true })] : [U({ id: 2, email: 'b@x.y', emailBouncing: true }), U({ id: 3, email: 'c@x.y' })]));
   env.um.mount(env.app);
   await tick();
-  assert(env.calls.some((c) => c.p === '/api/admin/users?'), JSON.stringify(env.calls));
+  assert(env.calls.some((c) => c.p === '/api/admin/users?bouncing=1'), JSON.stringify(env.calls));
   assert.strictEqual(env.els.umBouncing.checked, true);
   assert(env.els.umBody.innerHTML.indexOf('b@x.y') !== -1 && env.els.umBody.innerHTML.indexOf('c@x.y') === -1, env.els.umBody.innerHTML);
   env.els.umBouncing.handlers.change({ target: { checked: false } });
   await tick();
   assert.strictEqual(env.loc.hash, '#/admin?tab=users');
+  assert.strictEqual(env.calls[env.calls.length - 1].p, '/api/admin/users?');
   assert(env.els.umBody.innerHTML.indexOf('c@x.y') !== -1);
+});
+
+test('the browser does not drop rows the server returned for the bouncing filter', async () => {
+  const env = loadAdmin('#/admin?tab=users&bouncing=1', () => OK([U({ id: 4, email: 'd@x.y', emailBouncing: false })]));
+  env.um.mount(env.app);
+  await tick();
+  assert(env.els.umBody.innerHTML.indexOf('d@x.y') !== -1, 'the server is the filter: ' + env.els.umBody.innerHTML);
 });
 
 test('a rejected list fetch shows an error in umMsg', async () => {
