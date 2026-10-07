@@ -246,6 +246,127 @@ test('unmount drops a response that arrives later', async () => {
   assert.strictEqual(env.els.auditBody.innerHTML, '');
 });
 
+console.log('admin-overview.js');
+
+const STATS = { total: 3, active: 2, pending: 1, disabled: 0, admins: 1, stuckPending: 1, bouncing: 2, new7d: 3, new30d: 3,
+  newPerDay: [{ day: '2026-10-06', count: 1 }, { day: '2026-10-07', count: 2 }], active7d: 2, active30d: 2, logins24h: 4,
+  failedLogins24h: 6, mail7d: { delivered: 1, bounced: 0, blocked: 0, spam: 0, pending: 2, other: 0 },
+  guessing: [{ userId: 7, displayName: 'Eve', failed: 6 }] };
+const MQTT = { sources: [
+  { name: 'ok', connected: true, lastPacketUnix: NOW / 1000 - 60 },
+  { name: 'off', connected: false, lastPacketUnix: NOW / 1000 - 60 },
+  { name: 'quiet', connected: true, lastPacketUnix: NOW / 1000 - 11 * 60 },
+  { name: 'never', connected: true, lastPacketUnix: 0 }] };
+const HEALTH = { version: 'v9.9.9', commit: 'abc1234', uptimeHuman: '1h 2m' };
+const OBS = { observers: [{ online: true }, { online: false }] };
+const observersStub = { ObserversSummary: { computeCounts: (list) => ({ online: list.filter((o) => o.online).length, total: list.length }) } };
+const overviewEnv = (routes) => loadTab(['public/mqtt-status-panel.js', 'public/admin-overview.js'], '#/admin', routes, observersStub);
+const allOk = (p) => OK({ '/api/admin/stats': STATS, '/api/health': HEALTH, '/api/healthz': { ready: true },
+  '/api/mqtt/status': MQTT, '/api/observers': OBS }[p]);
+const ovT = () => overviewEnv(allOk).ctx.CSAdminOverview._test;
+const resOf = (o) => Object.assign({ stats: { data: STATS }, health: { data: HEALTH }, healthz: { data: { ready: true } },
+  mqtt: { data: MQTT }, observers: { data: OBS } }, o);
+
+test('attention items from fixed data: stuck, bouncing, guessing, three MQTT sources down', () => {
+  const items = ovT().attentionItems(resOf({}), NOW);
+  assert.deepStrictEqual([...items.map((i) => i.href)], ['#/admin?tab=users&status=pending', '#/admin?tab=users&bouncing=1',
+    '#/admin?tab=audit&action=user.login.failed&user=7', '#/observers', '#/observers', '#/observers']);
+  const mqttText = items.slice(3).map((i) => i.text).join(' | ');
+  assert(mqttText.indexOf('off') !== -1 && mqttText.indexOf('quiet') !== -1 && mqttText.indexOf('never') !== -1, mqttText);
+  assert(mqttText.indexOf(' ok ') === -1, mqttText);
+  assert(items[2].text.indexOf('6 failed logins') !== -1 && items[2].text.indexOf('Eve') !== -1, items[2].text);
+});
+
+test('mqttDown: not connected, never a message, or older than 10 minutes', () => {
+  const t = ovT();
+  assert.strictEqual(t.mqttDown({ connected: true, lastPacketUnix: NOW / 1000 - 9 * 60 }, NOW), false);
+  assert.strictEqual(t.mqttDown({ connected: true, lastPacketUnix: NOW / 1000 - 11 * 60 }, NOW), true);
+  assert.strictEqual(t.mqttDown({ connected: true, lastPacketUnix: 0 }, NOW), true);
+  assert.strictEqual(t.mqttDown({ connected: false, lastPacketUnix: NOW / 1000 }, NOW), true);
+});
+
+test('nothing to report renders no attention section; failed sources add no items', () => {
+  const t = ovT();
+  const calm = Object.assign({}, STATS, { stuckPending: 0, bouncing: 0, guessing: [] });
+  assert.strictEqual(t.attentionItems(resOf({ stats: { data: calm }, mqtt: { data: { sources: [MQTT.sources[0]] } } }), NOW).length, 0);
+  assert.strictEqual(t.attentionItems(resOf({ stats: { error: true }, mqtt: { error: true } }), NOW).length, 0);
+  assert.strictEqual(t.attentionHtml([]), '');
+});
+
+test('names, source names and versions are escaped', () => {
+  const t = ovT();
+  const res = resOf({ stats: { data: Object.assign({}, STATS, { guessing: [{ userId: 7, displayName: XSS, failed: 5 }] }) },
+    mqtt: { data: { sources: [{ name: XSS, connected: false, lastPacketUnix: 0 }] } },
+    health: { data: { version: XSS, commit: XSS, uptimeHuman: XSS } } });
+  const html = t.render(res, NOW);
+  assert(html.indexOf('<img') === -1, 'raw markup: ' + html);
+  assert(html.indexOf('&lt;img src=x onerror=alert(1)&gt;') !== -1);
+});
+
+test('an empty instance renders zeros and no attention section', () => {
+  const t = ovT();
+  const zero = { total: 0, active: 0, pending: 0, disabled: 0, admins: 0, stuckPending: 0, bouncing: 0, new7d: 0, new30d: 0,
+    newPerDay: [{ day: '2026-10-07', count: 0 }], active7d: 0, active30d: 0, logins24h: 0, failedLogins24h: 0,
+    mail7d: { delivered: 0, bounced: 0, blocked: 0, spam: 0, pending: 0, other: 0 }, guessing: [] };
+  const html = t.render(resOf({ stats: { data: zero }, mqtt: { data: { sources: [] } }, observers: { data: { observers: [] } } }), NOW);
+  assert(html.indexOf('adminAttention') === -1, html);
+  assert(html.indexOf('data-stat="total">0<') !== -1);
+  assert(html.indexOf('No MQTT sources reported.') !== -1);
+});
+
+test('fetchAll keeps each source on its own; healthz 503 warming up is data, not an error', async () => {
+  const t = ovT();
+  // Functions, so the rejected promise only exists for the stats request.
+  const answers = {
+    '/api/admin/stats': () => Promise.reject(new Error('net')),
+    '/api/health': () => OK(HEALTH),
+    '/api/healthz': () => ({ ok: false, status: 503, data: { ready: false, reason: 'loading' } }),
+    '/api/mqtt/status': () => ({ ok: false, status: 500, data: {} }),
+    '/api/observers': () => OK(OBS),
+  };
+  const res = await t.fetchAll((m, p) => Promise.resolve().then(answers[p]));
+  assert.strictEqual(res.stats.error, true);
+  assert.strictEqual(res.healthz.data.ready, false);
+  assert.strictEqual(res.mqtt.error, true);
+  const html = t.render(res, NOW);
+  assert(html.indexOf('Could not load user figures') !== -1);
+  assert(html.indexOf('Could not load MQTT status') !== -1);
+  assert(html.indexOf('warming up') !== -1);
+  assert(html.indexOf('v9.9.9') !== -1);
+  assert(html.indexOf('Could not load server health') === -1 && html.indexOf('Could not load observers') === -1);
+});
+
+test('mount fetches five sources, a timer tick (visible only) skips healthz, Refresh and Retry read it, unmount stops the timer', async () => {
+  const env = overviewEnv(allOk);
+  const ov = env.ctx.CSAdminOverview;
+  ov.mount(env.dom.mk('c'));
+  await tick();
+  assert.strictEqual(env.calls.length, 5);
+  assert(env.els.aoBody.innerHTML.indexOf('data-stat="total">3<') !== -1, env.els.aoBody.innerHTML);
+  assert(env.els.aoBody.innerHTML.indexOf('data-stat="observersOnline">1<') !== -1);
+  const timer = env.timers[env.timers.length - 1];
+  assert.strictEqual(timer.ms, 60000);
+  env.dom.document.visibilityState = 'hidden';
+  timer.fn();
+  await tick();
+  assert.strictEqual(env.calls.length, 5);
+  env.dom.document.visibilityState = 'visible';
+  timer.fn();
+  await tick();
+  assert.strictEqual(env.calls.length, 9); // the timer skips /api/healthz
+  assert.strictEqual(env.calls.filter((p) => p === '/api/healthz').length, 1);
+  assert(env.els.aoBody.innerHTML.indexOf('>ready<') !== -1, 'last healthz result kept');
+  env.els.aoBody.handlers.click({ target: { closest: () => ({}) } }); // Retry
+  await tick();
+  assert.strictEqual(env.calls.length, 14);
+  assert.strictEqual(env.calls.filter((p) => p === '/api/healthz').length, 2);
+  env.els.aoRefresh.handlers.click();
+  await tick();
+  assert.strictEqual(env.calls.length, 19);
+  ov.unmount();
+  assert.strictEqual(timer.cleared, true);
+});
+
 Promise.all(pending).then(() => {
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed ? 1 : 0);
