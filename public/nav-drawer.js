@@ -96,7 +96,7 @@
     var a = document.querySelector('[data-nav-drawer-item="account"]');
     if (!a) return;
     var r = accountRoute();
-    a.setAttribute('href', r.hash);
+    a.setAttribute('href', escapeHtml(r.hash));
     var lb = a.querySelector('.nav-drawer-label');
     if (lb) lb.textContent = r.label;
   });
@@ -187,7 +187,7 @@
     routes().forEach(function (r) {
       var a = document.createElement('a');
       a.className = 'nav-drawer-item';
-      a.setAttribute('href', r.hash);
+      a.setAttribute('href', escapeHtml(r.hash));
       a.setAttribute('data-nav-drawer-item', r.route);
       a.setAttribute('data-route', r.route);
 
