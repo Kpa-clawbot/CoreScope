@@ -1,6 +1,6 @@
 /* Account pages for optional user management.
  *   #/account/login | register | activate?token= | forgot | reset?token= | confirm-email?token= | check-mail
- *   #/account                   : profile, password, address, sessions, delete
+ *   #/account                   : profile, password, address, sessions, my proposals, delete
  * Every dynamic string goes through escapeHtml; messages use textContent. */
 (function () {
   'use strict';
@@ -110,6 +110,7 @@
       field('emailPw', 'Current password', 'password', 'current-password') +
       submitBtn('Change address') + msgBox('emailMsg') + '</form>' +
       '<h3>Devices</h3><ul class="account-sessions" id="sessList"></ul>' + msgBox('sessMsg') +
+      (window.CSProposals && window.CSProposals.enabled() ? '<h3>My proposals</h3><div id="propList"></div>' + msgBox('propMsg') : '') +
       (window.CSSettingsSync ? '<h3>Settings sync</h3><div id="syncSection"></div>' : '') +
       '<h3>Delete account</h3><form id="delForm" class="account-form" novalidate>' +
       '<p class="account-hint">This removes your account permanently.</p>' +
@@ -261,6 +262,7 @@
       app.innerHTML = profileHtml(u);
       document.getElementById('profName').value = u.displayName;
       if (window.CSSettingsSync) window.CSSettingsSync.mountSection(document.getElementById('syncSection'));
+      if (window.CSProposals && window.CSProposals.enabled()) window.CSProposals.loadMine(document.getElementById('propList'), 'propMsg');
 
       document.getElementById('accountPageLogout').addEventListener('click', function () {
         return CSAuth.logout('#/account/login').then(function (r) {

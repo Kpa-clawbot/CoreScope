@@ -574,6 +574,23 @@ test('profile view mounts the settings sync section only when the module is load
   assert.strictEqual(without.t.profileHtml({ email: 'a', role: 'user', displayName: 'A' }).indexOf('syncSection'), -1);
 });
 
+test('profile view shows My proposals only when channel proposals are on', () => {
+  const loaded = [];
+  const env = loadAccount('#/account', () => ({ ok: true, status: 200, data: [] }),
+    { CSProposals: { enabled: () => true, loadMine(el, msgId) { loaded.push([el, msgId]); } } });
+  env.user.current = { id: 1, email: 'a@b.c', displayName: 'Ann', role: 'user' };
+  const app = { innerHTML: '' };
+  env.t.views.profile(app);
+  assert(app.innerHTML.indexOf('<h3>My proposals</h3><div id="propList"></div>') !== -1, app.innerHTML);
+  assert.strictEqual(loaded.length, 1);
+  assert.strictEqual(loaded[0][0], env.els.propList);
+  assert.strictEqual(loaded[0][1], 'propMsg');
+  const off = loadAccount('#/account', () => ({}), { CSProposals: { enabled: () => false, loadMine() { throw new Error('loaded while off'); } } });
+  assert.strictEqual(off.t.profileHtml({ email: 'a', role: 'user', displayName: 'A' }).indexOf('propList'), -1);
+  const absent = loadAccount('#/account', () => ({}));
+  assert.strictEqual(absent.t.profileHtml({ email: 'a', role: 'user', displayName: 'A' }).indexOf('propList'), -1);
+});
+
 test('profile view: Log out button for everyone, Admin link for admins only', () => {
   const env = loadAccount('#/account', () => ({}));
   const user = env.t.profileHtml({ email: 'a', role: 'user', displayName: 'A' });

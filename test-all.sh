@@ -31,6 +31,7 @@ node tests/unit/test-channel-issue-1101.js
 node tests/unit/test-channel-live-decrypt-userprefix.js
 node tests/unit/test-channel-live-decrypt.js
 node tests/unit/test-channel-modal-ux.js
+node tests/unit/test-channel-proposals-ui.js
 node tests/unit/test-channel-psk-ux.js
 node tests/unit/test-channel-qr-wiring.js
 node tests/unit/test-channel-qr.js

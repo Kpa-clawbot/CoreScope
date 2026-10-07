@@ -60,6 +60,11 @@
 .um-status-pending, .um-chip-sent, .um-chip-deferred, .um-chip-soft_bounce { color: var(--status-yellow-text); }
 .um-status-disabled, .um-chip-hard_bounce, .um-chip-invalid_email, .um-chip-blocked, .um-chip-spam, .um-chip-error, .um-chip-bouncing { color: var(--status-red-text); }
 .um-chip-unsubscribed { color: var(--text-muted); }
+.um-status-approved { color: var(--status-green-tint-text); }
+.um-status-rejected, .um-status-revoked { color: var(--status-red-text); }
+.account-proposals { list-style: none; padding: 0; margin: 0; }
+.account-proposals li { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: var(--fs-sm); }
+.account-proposals li .account-hint { flex-basis: 100%; margin: 0; }
 .um-detail { margin-top: 16px; background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
 .um-detail ol { padding-left: 18px; }
 @media (max-width: 760px) { .um-col-optional { display: none; } }
