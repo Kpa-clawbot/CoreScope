@@ -78,3 +78,17 @@ func TestLogStartupShowsAbsoluteUsersDBPath(t *testing.T) {
 		t.Fatalf("log line = %q, want the absolute path %q", buf.String(), want)
 	}
 }
+
+func TestRenderLinesAndFooter(t *testing.T) {
+	a, _ := newTestAuthService(t)
+	m := a.render("x@example.org", "X", "notify", mailContent{subject: "S", greeting: "Hi",
+		lines:  []mailLine{{text: "<b>n</b>: offline", url: "https://e.org/#/nodes/ab"}},
+		footer: &mailLine{text: "Stop these mails:", url: "https://e.org/#/account/unsubscribe?token=t"}})
+	if !strings.Contains(m.HTML, `<ul><li><a href="https://e.org/#/nodes/ab">&lt;b&gt;n&lt;/b&gt;: offline</a></li></ul>`) ||
+		!strings.Contains(m.Text, "- <b>n</b>: offline\n  https://e.org/#/nodes/ab\n") ||
+		!strings.Contains(m.HTML, `Stop these mails: <a href="https://e.org/#/account/unsubscribe?token=t">`) ||
+		!strings.Contains(m.Text, "Stop these mails:\nhttps://e.org/#/account/unsubscribe?token=t\n") ||
+		strings.Contains(m.Text, "If that was not you") {
+		t.Fatalf("rendered = %q / %q", m.HTML, m.Text)
+	}
+}

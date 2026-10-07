@@ -112,3 +112,31 @@ func TestResolveChannelProposals(t *testing.T) {
 		t.Fatal("enabled false resolved as on")
 	}
 }
+
+func TestResolveNotifications(t *testing.T) {
+	u := validUM()
+	set, err := resolveUserManagement(u, "meshcore.db", noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.notify != (notifySettings{}) {
+		t.Fatalf("absent block = %+v; want off", set.notify)
+	}
+	defaults := notifySettings{enabled: true, interval: 5 * time.Minute, perUserPerDay: 20, maxMailsPerDay: 300, maxWatchesPerUser: 50}
+	u.Notifications = &NotificationsConfig{Enabled: true}
+	if set, _ = resolveUserManagement(u, "meshcore.db", noEnv); set.notify != defaults {
+		t.Fatalf("defaults = %+v", set.notify)
+	}
+	u.Notifications = &NotificationsConfig{Enabled: true, IntervalMinutes: 1, PerUserPerDay: 3, MaxMailsPerDay: 9, MaxWatchesPerUser: 2}
+	if set, _ = resolveUserManagement(u, "meshcore.db", noEnv); set.notify != (notifySettings{enabled: true, interval: time.Minute, perUserPerDay: 3, maxMailsPerDay: 9, maxWatchesPerUser: 2}) {
+		t.Fatalf("explicit = %+v", set.notify)
+	}
+	u.Notifications = &NotificationsConfig{Enabled: true, IntervalMinutes: -5, PerUserPerDay: -1, MaxWatchesPerUser: -2}
+	if set, _ = resolveUserManagement(u, "meshcore.db", noEnv); set.notify != defaults {
+		t.Fatalf("zero and negative values = %+v; want defaults", set.notify)
+	}
+	u.Notifications = &NotificationsConfig{Enabled: false, PerUserPerDay: 3}
+	if set, _ = resolveUserManagement(u, "meshcore.db", noEnv); set.notify.enabled {
+		t.Fatal("enabled false resolved as on")
+	}
+}

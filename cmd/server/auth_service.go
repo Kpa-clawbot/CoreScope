@@ -32,10 +32,14 @@ type authService struct {
 	approvedMu sync.Mutex
 	approved   atomic.Pointer[[]string]
 
+	// notify evaluates node notifications; nil unless
+	// userManagement.notifications.enabled.
+	notify *notifier
+
 	warnIndistinct sync.Once
 	stop           chan struct{}
 	stopOnce       sync.Once
-	wg             sync.WaitGroup // the janitor
+	wg             sync.WaitGroup // the janitor and the notifier
 	auditWG        sync.WaitGroup // in-flight auditAsync writes
 }
 
@@ -81,6 +85,16 @@ func (s *Server) initUserManagement(measurementDBPath string) error {
 		defer s.auth.wg.Done()
 		s.auth.janitor(time.Hour)
 	}()
+	if set.notify.enabled {
+		s.auth.notify = newNotifier(s.auth, serverNotifySource{s: s}, time.Now)
+		s.auth.wg.Add(1)
+		go func() {
+			defer s.auth.wg.Done()
+			s.auth.notify.loop(s.auth.stop, set.notify.interval)
+		}()
+		log.Printf("[notify] node notifications enabled: every %s, at most %d mails per user and %d in total per 24 hours",
+			set.notify.interval, set.notify.perUserPerDay, set.notify.maxMailsPerDay)
+	}
 	return nil
 }
 

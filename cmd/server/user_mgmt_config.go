@@ -22,6 +22,7 @@ type UserManagementConfig struct {
 	TrustedProxies   []string                `json:"trustedProxies,omitempty"`
 	Mail             UserMailConfig          `json:"mail"`
 	ChannelProposals *ChannelProposalsConfig `json:"channelProposals,omitempty"`
+	Notifications    *NotificationsConfig    `json:"notifications,omitempty"`
 }
 
 // UserMailConfig is userManagement.mail.
@@ -76,6 +77,47 @@ func resolveProposals(c *ChannelProposalsConfig) proposalSettings {
 	}
 }
 
+// NotificationsConfig is userManagement.notifications
+// (docs/specs/2026-10-07-node-notifications-design.md). Off by default.
+type NotificationsConfig struct {
+	Enabled           bool `json:"enabled"`
+	IntervalMinutes   int  `json:"intervalMinutes,omitempty"`
+	PerUserPerDay     int  `json:"perUserPerDay,omitempty"`
+	MaxMailsPerDay    int  `json:"maxMailsPerDay,omitempty"`
+	MaxWatchesPerUser int  `json:"maxWatchesPerUser,omitempty"`
+}
+
+// notifySettings is the resolved form; the zero value means off.
+type notifySettings struct {
+	enabled           bool
+	interval          time.Duration // between evaluations, at least a minute
+	perUserPerDay     int           // notification mails per user per 24 hours
+	maxMailsPerDay    int           // notification mails per instance per 24 hours
+	maxWatchesPerUser int
+}
+
+const (
+	defaultNotifyIntervalMinutes = 5
+	defaultNotifyPerUserPerDay   = 20
+	defaultNotifyMaxMailsPerDay  = 300 // Brevo's free tier
+	defaultNotifyMaxWatches      = 50
+)
+
+// resolveNotifications fills the defaults for absent, zero or negative
+// values. The interval is in whole minutes, so its floor is one minute.
+func resolveNotifications(c *NotificationsConfig) notifySettings {
+	if c == nil || !c.Enabled {
+		return notifySettings{}
+	}
+	return notifySettings{
+		enabled:           true,
+		interval:          time.Duration(positiveOr(c.IntervalMinutes, defaultNotifyIntervalMinutes)) * time.Minute,
+		perUserPerDay:     positiveOr(c.PerUserPerDay, defaultNotifyPerUserPerDay),
+		maxMailsPerDay:    positiveOr(c.MaxMailsPerDay, defaultNotifyMaxMailsPerDay),
+		maxWatchesPerUser: positiveOr(c.MaxWatchesPerUser, defaultNotifyMaxWatches),
+	}
+}
+
 // UserManagementEnabled reports whether optional accounts are on. Nil config
 // or absent section means off (the default).
 func (c *Config) UserManagementEnabled() bool {
@@ -96,6 +138,7 @@ type userMgmtSettings struct {
 	fromName       string
 	webhookSecret  string
 	proposals      proposalSettings
+	notify         notifySettings
 }
 
 const defaultSessionDays = 30
@@ -172,6 +215,7 @@ func resolveUserManagement(u *UserManagementConfig, measurementDBPath string, ge
 		return nil, errors.New("userManagement.mail.webhookSecret must be at least 16 characters")
 	}
 	set.proposals = resolveProposals(u.ChannelProposals)
+	set.notify = resolveNotifications(u.Notifications)
 	return set, nil
 }
 
