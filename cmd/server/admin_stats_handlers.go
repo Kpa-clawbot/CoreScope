@@ -30,6 +30,15 @@ type guessedAccountJSON struct {
 	Failed      int    `json:"failed"`
 }
 
+// adminNotifyJSON: notification figures, counts only (watch lists are
+// private). Present only with notifications on.
+type adminNotifyJSON struct {
+	MailsLast24h   int `json:"mailsLast24h"`
+	MaxMailsPerDay int `json:"maxMailsPerDay"`
+	Watches        int `json:"watches"`
+	WatchingUsers  int `json:"watchingUsers"`
+}
+
 type adminStatsJSON struct {
 	Total           int                  `json:"total"`
 	Active          int                  `json:"active"`
@@ -47,6 +56,7 @@ type adminStatsJSON struct {
 	FailedLogins24h int                  `json:"failedLogins24h"`
 	Mail7d          mailCountsJSON       `json:"mail7d"`
 	Guessing        []guessedAccountJSON `json:"guessing"`
+	Notify          *adminNotifyJSON     `json:"notify,omitempty"`
 }
 
 func adminStatsFrom(st users.Stats) adminStatsJSON {
@@ -72,5 +82,21 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, _ *http.Request, _ *use
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	writeJSON(w, adminStatsFrom(st))
+	out := adminStatsFrom(st)
+	if s.auth.notify != nil {
+		total, _, err := s.auth.st.NotifyMailCounts(s.auth.notify.now().Add(-24 * time.Hour))
+		if err != nil {
+			log.Printf("[users] admin stats notification mails: %v", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		watches, watching, err := s.auth.st.NotifyWatchStats()
+		if err != nil {
+			log.Printf("[users] admin stats watches: %v", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		out.Notify = &adminNotifyJSON{MailsLast24h: total, MaxMailsPerDay: s.auth.set.notify.maxMailsPerDay, Watches: watches, WatchingUsers: watching}
+	}
+	writeJSON(w, out)
 }

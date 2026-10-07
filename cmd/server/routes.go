@@ -533,7 +533,7 @@ func (s *Server) clientUserManagement() *ClientUserManagement {
 	if s.auth == nil {
 		return nil
 	}
-	return &ClientUserManagement{Enabled: true, ChannelProposals: s.auth.set.proposals.enabled}
+	return &ClientUserManagement{Enabled: true, ChannelProposals: s.auth.set.proposals.enabled, Notifications: s.auth.notify != nil}
 }
 
 func (s *Server) handleConfigAreas(w http.ResponseWriter, r *http.Request) {

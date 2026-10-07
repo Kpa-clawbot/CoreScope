@@ -1093,10 +1093,11 @@ type ClientConfigResponse struct {
 }
 
 // ClientUserManagement tells the frontend that accounts exist, and whether
-// channel proposals are on.
+// channel proposals and node notifications are on.
 type ClientUserManagement struct {
 	Enabled          bool `json:"enabled"`
 	ChannelProposals bool `json:"channelProposals,omitempty"`
+	Notifications    bool `json:"notifications,omitempty"`
 }
 
 // CustomizerClientConfig is the operator-side customizer-modal knobs that
