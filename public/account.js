@@ -96,7 +96,7 @@
       '<p class="account-hint">Signed in as ' + escapeHtml(u.email) + (u.role === 'admin' ? ' (admin)' : '') + '</p>' +
       '<div class="account-actions">' +
       '<button type="button" id="accountPageLogout" class="account-btn account-btn-secondary">Log out</button>' +
-      (u.role === 'admin' ? '<a class="account-btn account-btn-secondary" href="#/admin/users">Manage users</a>' : '') +
+      (u.role === 'admin' ? '<a class="account-btn account-btn-secondary" href="#/admin">Admin</a>' : '') +
       '</div>' + msgBox('logoutMsg') +
       '<h3>Profile</h3><form id="profileForm" class="account-form" novalidate>' +
       field('profName', 'Display name', 'text', 'nickname', ' minlength="2" maxlength="32"') +

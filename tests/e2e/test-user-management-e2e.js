@@ -108,20 +108,20 @@ async function until(fn, label) {
   admin.setDefaultTimeout(8000);
   admin.on('dialog', (d) => d.accept());
   admin.on('pageerror', (e) => console.error('[pageerror admin]', e.message));
-  await step('config admin registers, activates with a password, sees the Users entry', async () => {
+  await step('config admin registers, activates with a password, sees the Admin entry', async () => {
     await registerAndActivate(admin, 'admin@e2e.test', 'E2E Admin');
     await admin.click('#accountToggle');
-    assert(await admin.locator('#accountMenu a[href="#/admin/users"]').isVisible(), 'no Users menu entry');
+    assert(await admin.locator('#accountMenu a[href="#/admin"]').isVisible(), 'no Admin menu entry');
   });
 
   const user = await (await browser.newContext()).newPage();
   user.setDefaultTimeout(8000);
   user.on('pageerror', (e) => console.error('[pageerror user]', e.message));
-  await step('second user registers and activates; no Users entry for a non-admin', async () => {
+  await step('second user registers and activates; no Admin entry for a non-admin', async () => {
     await registerAndActivate(user, 'user@e2e.test', 'E2E User');
     await user.click('#accountToggle');
     assert(await user.locator('#accountMenu').isVisible(), 'account menu did not open');
-    assert(await user.locator('#accountMenu a[href="#/admin/users"]').count() === 0, 'non-admin sees Users');
+    assert(await user.locator('#accountMenu a[href="#/admin"]').count() === 0, 'non-admin sees Admin');
   });
 
   await step('user logs out from the account page (phone width) and logs in again', async () => {

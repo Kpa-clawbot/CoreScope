@@ -6,11 +6,12 @@ logging in only adds things.
 
 - Visitors can register with an email address, a display name and a password, and
   activate the account through a link mailed to that address.
-- **Admins** manage users (activate, disable, delete, promote) and can use the operator
+- **Admins** get an admin area (account menu, *Admin*) with an overview, the user list
+  (activate, disable, delete, promote) and the audit log, and can use the operator
   actions (geofilter save, prune, backup, perf reset) without the API key.
 
 With the feature off (the default) the account routes are not registered: requests to
-`/api/auth/*`, `/api/account/*` and `/api/admin/users/*` fall through to the normal page,
+`/api/auth/*`, `/api/account/*` and `/api/admin/*` fall through to the normal page,
 and no login or account control appears in the interface.
 
 ## For operators
@@ -53,7 +54,7 @@ incomplete, and the log says what is missing.
 
 Register at `#/account/register` with an address from `adminEmails`, click the activation
 link and enter the password you chose. You are now admin and can promote others in
-**Users**.
+**Admin, Users**.
 
 ### 4. Delivery status (optional)
 
@@ -72,9 +73,27 @@ tracking pixels automatically, and others block them.
 
 ### When mail fails
 
-- In **Users**, *Resend mail* sends a fresh activation link to a pending account.
+- In **Admin, Users**, *Resend mail* sends a fresh activation link to a pending account.
 - *Activate* activates a pending account by hand. The address is then unverified; the
   row shows "manual" and the audit log records who did it.
+
+### The admin area
+
+*Admin* in the account menu (on phones: the account page) opens three tabs:
+
+- **Overview**: a *Needs attention* list when something applies (pending accounts older
+  than 24 hours, addresses whose mail bounces, accounts with 5 or more failed logins in
+  24 hours, MQTT sources that are disconnected or silent for 10 minutes), user figures
+  (accounts, registrations, active users, logins, mail of the last 7 days) and the system
+  status (version, uptime, MQTT sources, observers). It refreshes every minute while the
+  tab is visible. Each item links to the matching user list or audit entries.
+- **Users**: the user list. *Bouncing mail only* shows addresses whose mail bounces.
+- **Audit**: every recorded action, newest first, filtered by action, period or user.
+  Successful and failed logins are recorded without IP address and deleted after 90
+  days; a failed login for an address that has no account is not recorded. Other
+  actions are kept.
+
+Old `#/admin/users` links still work and open the Users tab.
 
 ### Backups
 
@@ -110,4 +129,5 @@ database, and protect it the same way. Deleting it removes all accounts and noth
   and *Delete synced settings from my account*, which removes the account's copy only.
   The settings on your devices stay, and your next change starts a new copy.
 
-Admins can see your display name and email address in the Users list.
+Admins can see your display name and email address in the Users list, and when you
+logged in or someone failed to log in to your account (kept 90 days, no IP address).

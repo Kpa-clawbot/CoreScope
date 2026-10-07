@@ -1,16 +1,16 @@
-/* #/admin/users: admin user management (optional user management).
- * Table with filters, per-row actions, and a detail panel with the mail
- * delivery timeline and audit log. Every dynamic value goes through escapeHtml.
- * Deep link: #/admin/users?status=&role=&q=&id= (read in init, written back
- * with replaceState so filter changes add no history entries). */
+/* Users tab of #/admin (optional user management): table with filters,
+ * per-row actions, and a detail panel with the mail delivery timeline and
+ * audit log. Mounted by admin.js after its admin check. Every dynamic value
+ * goes through escapeHtml.
+ * Deep link: #/admin?tab=users&status=&role=&q=&bouncing=1&id= (read on
+ * mount, written back with replaceState so filter changes add no history
+ * entries). The bouncing filter is applied in the browser to the list the
+ * server returns (at most 1000 rows). */
 (function () {
   'use strict';
-  var filters = { status: '', role: '', q: '' };
+  var filters = { status: '', role: '', q: '', bouncing: false };
   var openId = null;
   var loadSeq = 0;
-  // The page on screen and whether it was rendered for an admin, so an auth
-  // change can redirect or re-render (null app: page left).
-  var mounted = { app: null, admin: false };
   var STATUSES = ['pending', 'active', 'disabled'];
   var ROLES = ['user', 'admin'];
 
@@ -27,16 +27,18 @@
     var p = new URLSearchParams(String(hash || '').split('?')[1] || '');
     var pick = function (v, allowed) { return allowed.indexOf(v) !== -1 ? v : ''; };
     var id = p.get('id') || '';
-    return { status: pick(p.get('status'), STATUSES), role: pick(p.get('role'), ROLES), q: p.get('q') || '', id: /^\d+$/.test(id) ? id : '' };
+    return { status: pick(p.get('status'), STATUSES), role: pick(p.get('role'), ROLES), q: p.get('q') || '',
+      bouncing: p.get('bouncing') === '1', id: /^\d+$/.test(id) ? id : '' };
   }
   function hashFor(f, id) {
     var p = new URLSearchParams();
+    p.set('tab', 'users');
     if (f.status) p.set('status', f.status);
     if (f.role) p.set('role', f.role);
     if (f.q) p.set('q', f.q);
+    if (f.bouncing) p.set('bouncing', '1');
     if (id) p.set('id', id);
-    var s = p.toString();
-    return '#/admin/users' + (s ? '?' + s : '');
+    return '#/admin?' + p.toString();
   }
   function syncHash() {
     var h = hashFor(filters, openId);
@@ -111,9 +113,10 @@
       if (!body || seq !== loadSeq) return;
       if (!r.ok) { say(CSAuth.errText(r), false); return; }
       var me = CSAuth.user();
+      var list = filters.bouncing ? r.data.filter(function (u) { return u.emailBouncing; }) : r.data;
       var html = '';
       // The server caps the list at 1000 rows, so a full tbody rebuild is bounded.
-      r.data.forEach(function (u) { html += rowHtml(u, me); });
+      list.forEach(function (u) { html += rowHtml(u, me); });
       body.innerHTML = html || '<tr><td colspan="8">No users match.</td></tr>';
       if (openId) showDetail(openId);
     }).catch(netErr);
@@ -192,57 +195,37 @@
     }).catch(netErr);
   }
 
-  function init(app, routeParam) {
-    app.innerHTML = '<div class="um-page"><p>Loading…</p></div>';
-    var ready = window.CSAuth ? CSAuth.ready() : Promise.resolve();
-    ready.then(function () {
-      if (routeParam !== 'users' || !window.CSAuth || !CSAuth.isEnabled()) {
-        app.innerHTML = '<div class="um-page"><h2>Not found</h2></div>';
-        return;
-      }
-      mounted.app = app;
-      mounted.admin = CSAuth.isAdmin();
-      if (!mounted.admin) {
-        app.innerHTML = '<div class="um-page"><h2>Users</h2><p>Admins only. <a href="#/account/login">Log in</a></p></div>';
-        return;
-      }
-      var h = readHash(location.hash);
-      filters = { status: h.status, role: h.role, q: h.q };
-      openId = h.id || null;
-      app.innerHTML = '<div class="um-page"><h2>Users</h2>' +
-        '<div class="um-filters">' +
-        '<label>Search <input id="umQ" type="search" autocomplete="off"></label>' +
-        '<label>Status <select id="umStatus"><option value="">any</option><option>pending</option><option>active</option><option>disabled</option></select></label>' +
-        '<label>Role <select id="umRole"><option value="">any</option><option>user</option><option>admin</option></select></label>' +
-        '</div><p class="account-msg" id="umMsg" role="status" aria-live="polite"></p>' +
-        '<div class="um-table-wrap"><table class="um-table"><thead><tr>' +
-        '<th scope="col">Name</th><th scope="col">Email</th><th scope="col">Role</th><th scope="col">Status</th><th scope="col">Last mail</th>' +
-        '<th scope="col" class="um-col-optional">Created</th><th scope="col" class="um-col-optional">Last login</th><th scope="col">Actions</th>' +
-        '</tr></thead><tbody id="umBody"></tbody></table></div>' +
-        '<section class="um-detail" id="umDetail" hidden></section></div>';
-      document.getElementById('umQ').value = filters.q;
-      document.getElementById('umStatus').value = filters.status;
-      document.getElementById('umRole').value = filters.role;
-      var deb = debounce(function () { filters.q = document.getElementById('umQ').value.trim(); syncHash(); load(); }, 250);
-      document.getElementById('umQ').addEventListener('input', deb);
-      document.getElementById('umStatus').addEventListener('change', function (e) { filters.status = e.target.value; syncHash(); load(); });
-      document.getElementById('umRole').addEventListener('change', function (e) { filters.role = e.target.value; syncHash(); load(); });
-      app.querySelector('.um-page').addEventListener('click', onAction);
-      load();
-    }).catch(function () {
-      app.innerHTML = '<div class="um-page"><h2>Users</h2><p>Network error, reload the page.</p></div>';
-    });
+  function mount(container) {
+    var h = readHash(location.hash);
+    filters = { status: h.status, role: h.role, q: h.q, bouncing: h.bouncing };
+    openId = h.id || null;
+    container.innerHTML = '<div class="um-users">' +
+      '<div class="um-filters">' +
+      '<label>Search <input id="umQ" type="search" autocomplete="off"></label>' +
+      '<label>Status <select id="umStatus"><option value="">any</option><option>pending</option><option>active</option><option>disabled</option></select></label>' +
+      '<label>Role <select id="umRole"><option value="">any</option><option>user</option><option>admin</option></select></label>' +
+      '<label><input id="umBouncing" type="checkbox"> Bouncing mail only</label>' +
+      '</div><p class="account-msg" id="umMsg" role="status" aria-live="polite"></p>' +
+      '<div class="um-table-wrap"><table class="um-table"><thead><tr>' +
+      '<th scope="col">Name</th><th scope="col">Email</th><th scope="col">Role</th><th scope="col">Status</th><th scope="col">Last mail</th>' +
+      '<th scope="col" class="um-col-optional">Created</th><th scope="col" class="um-col-optional">Last login</th><th scope="col">Actions</th>' +
+      '</tr></thead><tbody id="umBody"></tbody></table></div>' +
+      '<section class="um-detail" id="umDetail" hidden></section></div>';
+    document.getElementById('umQ').value = filters.q;
+    document.getElementById('umStatus').value = filters.status;
+    document.getElementById('umRole').value = filters.role;
+    document.getElementById('umBouncing').checked = filters.bouncing;
+    var deb = debounce(function () { filters.q = document.getElementById('umQ').value.trim(); syncHash(); load(); }, 250);
+    document.getElementById('umQ').addEventListener('input', deb);
+    document.getElementById('umStatus').addEventListener('change', function (e) { filters.status = e.target.value; syncHash(); load(); });
+    document.getElementById('umRole').addEventListener('change', function (e) { filters.role = e.target.value; syncHash(); load(); });
+    document.getElementById('umBouncing').addEventListener('change', function (e) { filters.bouncing = !!e.target.checked; syncHash(); load(); });
+    container.querySelector('.um-users').addEventListener('click', onAction);
+    return load();
   }
 
-  // Logout (header, account page or a 401) goes to the login view; a login
-  // or role change that flips admin access re-renders the page.
-  window.addEventListener('cs-auth-changed', function (e) {
-    // A logout that already moved elsewhere (the header goes home) wins.
-    if (!mounted.app || location.hash.split('?')[0] !== '#/admin/users') return;
-    if (!e.detail) { location.hash = '#/account/login'; return; }
-    if (CSAuth.isAdmin() !== mounted.admin) init(mounted.app, 'users');
-  });
+  function unmount() { openId = null; loadSeq++; }
 
-  registerPage('admin', { init: init, destroy: function () { openId = null; loadSeq++; mounted.app = null; } });
-  window.CSAdminUsers = { _test: { actionsFor: actionsFor, rowHtml: rowHtml, detailHtml: detailHtml, readHash: readHash, hashFor: hashFor } };
+  window.CSAdminUsers = { mount: mount, unmount: unmount,
+    _test: { actionsFor: actionsFor, rowHtml: rowHtml, detailHtml: detailHtml, readHash: readHash, hashFor: hashFor } };
 })();

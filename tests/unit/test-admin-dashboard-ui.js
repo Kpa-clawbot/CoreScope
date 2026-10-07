@@ -367,6 +367,131 @@ test('mount fetches five sources, a timer tick (visible only) skips healthz, Ref
   assert.strictEqual(timer.cleared, true);
 });
 
+console.log('admin.js');
+
+function loadShell(hash, opts) {
+  opts = opts || {};
+  const dom = makeDom();
+  const loc = { hash };
+  const replaced = [];
+  const pages = {};
+  const listeners = {};
+  const me = { current: opts.me === undefined ? { id: 1, role: 'admin' } : opts.me };
+  const mods = {};
+  ['CSAdminOverview', 'CSAdminUsers', 'CSAdminAudit'].forEach((n) => {
+    mods[n] = { mounted: 0, unmounted: 0, el: null, mount(el) { this.mounted++; this.el = el; }, unmount() { this.unmounted++; } };
+  });
+  const CSAuth = { ready: () => Promise.resolve(), isEnabled: () => opts.enabled !== false,
+    isAdmin: () => !!me.current && me.current.role === 'admin' };
+  const ctx = Object.assign({ document: dom.document, location: loc, URLSearchParams, Promise, String, console, CSAuth,
+    history: { replaceState(a, b, h) { replaced.push(h); loc.hash = h; } }, escapeHtml: loadEscapeHtml(),
+    registerPage(n, m) { pages[n] = m; }, addEventListener(t, fn) { listeners[t] = fn; } }, mods);
+  ctx.window = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(src('public/admin.js'), ctx);
+  return { t: ctx.CSAdmin._test, page: pages.admin, app: { innerHTML: '' }, loc, replaced, mods, els: dom.els,
+    fire(detail) { me.current = detail; if (listeners['cs-auth-changed']) listeners['cs-auth-changed']({ detail }); } };
+}
+
+test('readTab defaults to overview; legacyRewrite maps #/admin/users only', () => {
+  const t = loadShell('#/admin').t;
+  assert.strictEqual(t.readTab('#/admin').id, 'overview');
+  assert.strictEqual(t.readTab('#/admin?tab=bogus').id, 'overview');
+  assert.strictEqual(t.readTab('#/admin?tab=audit&user=3').id, 'audit');
+  assert.strictEqual(t.legacyRewrite('#/admin/users?status=pending&id=7'), '#/admin?tab=users&status=pending&id=7');
+  assert.strictEqual(t.legacyRewrite('#/admin/users'), '#/admin?tab=users');
+  assert.strictEqual(t.legacyRewrite('#/admin?tab=users'), null);
+});
+
+test('tab links: one active link with aria-current', () => {
+  const html = loadShell('#/admin').t.tabsHtml('audit');
+  assert.strictEqual((html.match(/aria-current="page"/g) || []).length, 1);
+  assert(html.indexOf('class="tab-btn active" href="#/admin?tab=audit" aria-current="page"') !== -1, html);
+  assert(html.indexOf('href="#/admin?tab=overview"') !== -1 && html.indexOf('href="#/admin?tab=users"') !== -1);
+});
+
+test('#/admin mounts the overview tab into #adminTab', async () => {
+  const env = loadShell('#/admin');
+  await env.page.init(env.app, null);
+  assert.strictEqual(env.mods.CSAdminOverview.mounted, 1);
+  assert.strictEqual(env.mods.CSAdminOverview.el, env.els.adminTab);
+  assert(env.app.innerHTML.indexOf('<h2>Admin</h2>') !== -1);
+});
+
+test('the old #/admin/users link is rewritten with replaceState and opens the Users tab with its detail id', async () => {
+  const env = loadShell('#/admin/users?status=pending&id=7');
+  await env.page.init(env.app, 'users');
+  assert.deepStrictEqual(env.replaced, ['#/admin?tab=users&status=pending&id=7']);
+  assert.strictEqual(env.mods.CSAdminUsers.mounted, 1);
+  assert.strictEqual(env.mods.CSAdminOverview.mounted, 0);
+});
+
+test('feature off, or an unknown sub-route, is Not found', async () => {
+  const off = loadShell('#/admin', { enabled: false });
+  await off.page.init(off.app, null);
+  assert(off.app.innerHTML.indexOf('Not found') !== -1);
+  const sub = loadShell('#/admin/other');
+  await sub.page.init(sub.app, 'other');
+  assert(sub.app.innerHTML.indexOf('Not found') !== -1);
+  assert.strictEqual(off.mods.CSAdminOverview.mounted + sub.mods.CSAdminOverview.mounted, 0);
+});
+
+test('a non-admin sees Admins only and no tab is mounted', async () => {
+  const env = loadShell('#/admin?tab=audit', { me: { id: 2, role: 'user' } });
+  await env.page.init(env.app, null);
+  assert(env.app.innerHTML.indexOf('Admins only') !== -1);
+  assert.strictEqual(env.mods.CSAdminAudit.mounted, 0);
+});
+
+test('auth changes: losing admin unmounts the tab and shows Admins only; logout goes to the login view', async () => {
+  const env = loadShell('#/admin?tab=audit');
+  await env.page.init(env.app, null);
+  env.fire({ id: 1, role: 'user' });
+  await tick();
+  assert.strictEqual(env.mods.CSAdminAudit.unmounted, 1);
+  assert(env.app.innerHTML.indexOf('Admins only') !== -1, env.app.innerHTML);
+  env.fire(null);
+  assert.strictEqual(env.loc.hash, '#/account/login');
+});
+
+test('destroy unmounts the tab; later auth changes are ignored', async () => {
+  const env = loadShell('#/admin?tab=users');
+  await env.page.init(env.app, null);
+  env.page.destroy();
+  assert.strictEqual(env.mods.CSAdminUsers.unmounted, 1);
+  env.loc.hash = '#/home';
+  env.fire(null);
+  assert.strictEqual(env.loc.hash, '#/home');
+});
+
+test('a tab switch (router destroy, then init on the new hash) unmounts the old tab', async () => {
+  const env = loadShell('#/admin?tab=overview');
+  await env.page.init(env.app, null);
+  env.page.destroy();
+  env.loc.hash = '#/admin?tab=audit';
+  await env.page.init(env.app, null);
+  assert.strictEqual(env.mods.CSAdminOverview.unmounted, 1);
+  assert.strictEqual(env.mods.CSAdminAudit.mounted, 1);
+  assert.strictEqual(env.mods.CSAdminAudit.unmounted, 0);
+});
+
+test('init without a destroy in between still unmounts the mounted tab', async () => {
+  const env = loadShell('#/admin?tab=users');
+  await env.page.init(env.app, null);
+  env.loc.hash = '#/admin?tab=overview';
+  await env.page.init(env.app, null);
+  assert.strictEqual(env.mods.CSAdminUsers.unmounted, 1);
+  assert.strictEqual(env.mods.CSAdminOverview.mounted, 1);
+});
+
+test('destroy before CSAuth.ready resolves: no tab is mounted', async () => {
+  const env = loadShell('#/admin');
+  const p = env.page.init(env.app, null);
+  env.page.destroy();
+  await p;
+  assert.strictEqual(env.mods.CSAdminOverview.mounted, 0);
+});
+
 Promise.all(pending).then(() => {
   console.log('\n' + passed + ' passed, ' + failed + ' failed');
   process.exit(failed ? 1 : 0);
