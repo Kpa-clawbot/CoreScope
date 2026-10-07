@@ -56,7 +56,7 @@
 .um-actions { display: flex; flex-wrap: wrap; gap: 4px; }
 .um-actions button { min-height: 48px; padding: 4px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-1); color: var(--text); cursor: pointer; touch-action: manipulation; }
 .um-status, .um-chip { display: inline-block; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--border); white-space: nowrap; }
-.um-status-active, .um-chip-delivered, .um-chip-opened, .um-chip-clicked { color: var(--status-green-text); }
+.um-status-active, .um-chip-delivered, .um-chip-opened, .um-chip-clicked { color: var(--status-green-tint-text); }
 .um-status-pending, .um-chip-sent, .um-chip-deferred, .um-chip-soft_bounce { color: var(--status-yellow-text); }
 .um-status-disabled, .um-chip-hard_bounce, .um-chip-invalid_email, .um-chip-blocked, .um-chip-spam, .um-chip-error, .um-chip-bouncing { color: var(--status-red-text); }
 .um-chip-unsubscribed { color: var(--text-muted); }

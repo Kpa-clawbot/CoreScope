@@ -259,7 +259,7 @@ async function until(fn, label) {
     for (const [route, sel] of [['/#/admin', '#aoUsers [data-stat="total"]'], ['/#/admin?tab=users', '.um-table'], ['/#/admin?tab=audit', '#auditBody tr']]) {
       await admin.goto(BASE + route);
       await admin.waitForSelector(sel);
-      await admin.mouse.move(0, 0); // a hovered row tints its cells and is not what this step checks
+      await admin.mouse.move(0, 0); // parked to avoid hover noise; status text on the hover tint is AA (contrast unit test)
       await admin.waitForTimeout(1500);
       await axeClean(admin, '#app');
     }

@@ -354,6 +354,11 @@ test('includes sectionBg mapping', () => {
   assert.strictEqual(api.THEME_CSS_MAP.sectionBg, '--section-bg');
 });
 
+test('includes the green text-on-tint mapping for the admin tables', () => {
+  const { api } = loadCustomizer();
+  assert.strictEqual(api.THEME_CSS_MAP.statusGreenTintText, '--status-green-tint-text');
+});
+
 test('matches all keys from old app.js varMap', () => {
   const { api } = loadCustomizer();
   const expectedKeys = [
