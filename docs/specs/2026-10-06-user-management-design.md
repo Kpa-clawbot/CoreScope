@@ -1,8 +1,7 @@
-# Optional User Management (Sub-project A: Foundation) — Design Spec
+# Optional User Management (Sub-project A: Foundation), Design Spec
 
 **Date:** 2026-10-06
-**Status:** Approved (design). Implementation plan:
-`docs/plans/2026-10-06-user-management-a.md` (parts A1–A3). Implementation not started.
+**Status:** Approved (design), implemented on this branch.
 **Scope:** sub-project **A** of a five-part track (see *Roadmap*). B–E get their own
 spec → plan → implementation cycle and build on A.
 
