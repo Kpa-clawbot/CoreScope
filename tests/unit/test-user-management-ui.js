@@ -651,7 +651,7 @@ test('activate 410 for an already active account offers no registration link', a
 
 console.log('admin-users.js');
 
-function loadAdmin(hash, routes) {
+function loadAdmin(hash, routes, opts) {
   const els = {};
   const mk = (id) => {
     const el = { id, value: '', checked: false, textContent: '', innerHTML: '', hidden: false, handlers: {}, cls: {}, focused: 0 };
@@ -678,14 +678,14 @@ function loadAdmin(hash, routes) {
   };
   const ctx = { window: { CSAuth }, document: doc, CSAuth, location: loc, URLSearchParams, Promise, String,
     history: { replaceState(a, b, h) { replaced.push(h); loc.hash = h; } },
-    confirm() { return true; }, debounce(fn) { return fn; },
+    confirm() { return true; }, debounce: (opts && opts.debounce) || function (fn) { return fn; },
     escapeHtml: loadEscapeHtml(), console };
   vm.createContext(ctx);
   Object.assign(CSAuth, loadAuthHelpers(ctx));
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/admin-users.js'), 'utf8'), ctx);
   const app = { innerHTML: '', querySelector() { return els.umPage || (els.umPage = mk('umPage')); } };
   const um = ctx.window.CSAdminUsers;
-  return { t: um._test, um, els, calls, replaced, loc, app, refreshed: () => refreshed };
+  return { t: um._test, um, els, doc, calls, replaced, loc, app, refreshed: () => refreshed };
 }
 const tick = () => new Promise((r) => setTimeout(r, 5));
 const U = (o) => Object.assign({ id: 2, email: 'u@x.y', displayName: 'U', role: 'user', status: 'active', configAdmin: false }, o);
@@ -837,6 +837,42 @@ test('unmount drops a list response that arrives later', async () => {
   release(OK([U({ email: 'late@x.y' })]));
   await tick();
   assert.strictEqual(env.els.umBody.innerHTML, '');
+});
+
+test('a search typed just before unmount does nothing when its debounce fires', async () => {
+  const timers = [];
+  const debounce = (fn) => function () { timers.push(fn); };
+  const env = loadAdmin('#/admin?tab=users', () => OK([]), { debounce });
+  env.um.mount(env.app);
+  await tick();
+  const n = env.calls.length;
+  env.els.umQ.value = 'late';
+  env.els.umQ.handlers.input();
+  env.um.unmount();
+  const getEl = env.doc.getElementById;
+  env.doc.getElementById = (id) => (id === 'umQ' ? null : getEl(id));
+  assert.doesNotThrow(() => timers.forEach((fn) => fn()));
+  await tick();
+  assert.strictEqual(env.calls.length, n, 'no request after unmount');
+  assert.strictEqual(env.loc.hash, '#/admin?tab=users', 'hash untouched after unmount');
+});
+
+test('a search from a previous mount does nothing after a remount', async () => {
+  const timers = [];
+  const debounce = (fn) => function () { timers.push(fn); };
+  const env = loadAdmin('#/admin?tab=users', () => OK([]), { debounce });
+  env.um.mount(env.app);
+  await tick();
+  env.els.umQ.handlers.input();
+  const stale = timers.pop();
+  env.um.unmount();
+  env.um.mount(env.app);
+  await tick();
+  const n = env.calls.length;
+  env.els.umQ.value = 'old';
+  stale();
+  await tick();
+  assert.strictEqual(env.calls.length, n, 'stale debounce must not load');
 });
 
 console.log('perf.js reset');

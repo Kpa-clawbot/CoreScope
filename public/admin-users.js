@@ -11,6 +11,7 @@
   var filters = { status: '', role: '', q: '', bouncing: false };
   var openId = null;
   var loadSeq = 0;
+  var mountSeq = 0;
   var STATUSES = ['pending', 'active', 'disabled'];
   var ROLES = ['user', 'admin'];
 
@@ -215,7 +216,12 @@
     document.getElementById('umStatus').value = filters.status;
     document.getElementById('umRole').value = filters.role;
     document.getElementById('umBouncing').checked = filters.bouncing;
-    var deb = debounce(function () { filters.q = document.getElementById('umQ').value.trim(); syncHash(); load(); }, 250);
+    var token = ++mountSeq;
+    var deb = debounce(function () {
+      var q = document.getElementById('umQ');
+      if (token !== mountSeq || !q) return;
+      filters.q = q.value.trim(); syncHash(); load();
+    }, 250);
     document.getElementById('umQ').addEventListener('input', deb);
     document.getElementById('umStatus').addEventListener('change', function (e) { filters.status = e.target.value; syncHash(); load(); });
     document.getElementById('umRole').addEventListener('change', function (e) { filters.role = e.target.value; syncHash(); load(); });
@@ -224,7 +230,7 @@
     return load();
   }
 
-  function unmount() { openId = null; loadSeq++; }
+  function unmount() { openId = null; loadSeq++; mountSeq++; }
 
   window.CSAdminUsers = { mount: mount, unmount: unmount,
     _test: { actionsFor: actionsFor, rowHtml: rowHtml, detailHtml: detailHtml, readHash: readHash, hashFor: hashFor } };
