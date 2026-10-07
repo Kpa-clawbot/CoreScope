@@ -119,8 +119,8 @@ on the *Proposals* tab.
 - Revoking stops decryption of new messages from the next refresh; stored messages
   stay. A channel that is also in `hashChannels` or `channelKeys` stays decrypted.
 - A name in `hashChannels`, or a `channelKeys` name written with its leading `#`, cannot
-  be proposed: the answer is "already decrypted on this instance". The comparison is
-  case-sensitive.
+  be proposed: the answer is "this channel is already decrypted on this instance". The
+  comparison is case-sensitive.
 - A rejected name cannot be proposed again until 90 days after the decision; a revoked
   one can be proposed again at once, and the new proposer then replaces the old one (the
   audit log keeps both). Rejected and revoked proposals are deleted 90 days after the
@@ -130,10 +130,11 @@ on the *Proposals* tab.
 - The ingestor reads `users.db` read-only, from `userManagement.dbPath` or next to the
   analyzer database. Set `dbPath` explicitly when the server and the ingestor are not
   given the same analyzer database path (for example `DB_PATH` set for one of them).
-  Both log the path they use at startup (server: `[users] user management enabled:
-  db=...`, ingestor: `[proposals] reading approved channels from ...`).
+  Both log the absolute path they use at startup (server: `[users] user management
+  enabled: db=...`, ingestor: `[proposals] reading approved channels from ...`).
 - Names: at most 31 bytes including the `#` (MeshCore stores 32 with the terminator),
-  no invisible or control characters, case-sensitive, not Public.
+  no invisible or control characters (blank fillers such as U+3164 and spaces other than
+  the plain space count as invisible), case-sensitive, not Public. Emoji work.
 
 ### Backups
 

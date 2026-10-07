@@ -208,16 +208,16 @@ by `maxApproved` (default 128).
 6. The channel list escapes channel names in its data attributes and CSS selectors,
    since approved names may contain `"`, `<` and `\`.
 7. `users.db` path: the server and the ingestor keep their existing `DB_PATH`
-   precedence. Both log the resolved path at startup (server
+   precedence. Both log the resolved (absolute) path at startup (server
    `[users] user management enabled: db=<path>`, ingestor
    `[proposals] reading approved channels from <path>`), and the operator docs advise
    setting `userManagement.dbPath` explicitly. If the two disagree on a non-Docker setup,
    the ingestor reads another `users.db`; the log lines make that visible.
 8. A proposal for a name the instance already decrypts from `config.json` is refused
-   with 409 "already decrypted on this instance". The server reads only the names:
-   `hashChannels` normalised as the ingestor does (trimmed, `#` prefixed) and the names
-   of `channelKeys` (key values are discarded while parsing). Since a proposal subject
-   always starts with `#`, only `#`-prefixed `channelKeys` names can match. The
+   with 409 "this channel is already decrypted on this instance". The server reads only
+   the names: `hashChannels` normalised as the ingestor does (trimmed, `#` prefixed) and
+   the names of `channelKeys` (key values are discarded while parsing). Since a proposal
+   subject always starts with `#`, only `#`-prefixed `channelKeys` names can match. The
    comparison is case-sensitive, like the ingestor's key map.
 9. A non-object `channelKeys` is ignored for this check with the log line
    `[config] channelKeys is not an object; ignoring it for channel-proposal checks`,
@@ -235,3 +235,16 @@ by `maxApproved` (default 128).
     (display names) and in `internal/channel` (channel names). They are separate Go
     modules and the ingestor must not import `internal/users`. Tests pin both copies;
     the browser mirror in `public/channel-proposals.js` is inherent to live validation.
+    Since amendment 14 the channel copy is stricter than the display-name copy.
+14. Name rules, tightened before release: besides control, bidi, separator and Cf
+    characters, a channel name may not contain the invisible fillers of Unicode
+    `Other_Default_Ignorable_Code_Point` (for example U+3164, U+115F, U+FFA0, U+034F),
+    U+2800 BRAILLE PATTERN BLANK, or any space separator (Zs) other than the ASCII space,
+    so interior NBSP and U+3000 are refused. ZWJ (U+200D) and variation selectors such
+    as U+FE0F stay allowed, so emoji like `#❤️` keep working. The message is the existing
+    "the name contains invisible or control characters". Reason: `#mesh` followed by
+    U+3164 passed for a configured `#mesh`, and the ingestor drops any stored name the
+    current rule refuses, so tightening after release would silently stop decrypting
+    already approved channels. The browser mirror lists Go's
+    `Other_Default_Ignorable_Code_Point` table explicitly (JS has no property escape for
+    it); Go and JS give the same verdict for every code point.
