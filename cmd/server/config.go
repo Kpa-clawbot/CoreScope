@@ -991,9 +991,15 @@ func SaveGeoFilter(configDir string, gf *GeoFilterConfig) error {
 	}
 	out = append(out, '\n')
 
-	// Atomic write: temp file + rename.
+	// Atomic write: temp file + rename. Keep the original file's mode:
+	// config.json holds the API key and broker passwords, and an operator
+	// who made it 0600 should not find it 0644 after a geo-filter save.
+	mode := os.FileMode(0644)
+	if fi, err := os.Stat(configPath); err == nil {
+		mode = fi.Mode().Perm()
+	}
 	tmp := configPath + ".tmp"
-	if err := os.WriteFile(tmp, out, 0644); err != nil {
+	if err := os.WriteFile(tmp, out, mode); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
 	if err := os.Rename(tmp, configPath); err != nil {
