@@ -122,7 +122,7 @@ func (s *Store) PruneAudit(actions []string, maxAge time.Duration) (int64, error
 		args = append(args, a)
 	}
 	args = append(args, unix(s.now())-int64(maxAge/time.Second))
-	ph := strings.TrimSuffix(strings.Repeat("?,", len(actions)), ",")
+	ph := placeholders(len(actions))
 	res, err := s.db.Exec(`DELETE FROM audit_log WHERE action IN (`+ph+`) AND at < ?`, args...)
 	if err != nil {
 		return 0, err

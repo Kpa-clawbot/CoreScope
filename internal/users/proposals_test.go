@@ -360,8 +360,8 @@ func TestMigrateV3DatabaseToV4(t *testing.T) {
 		t.Fatalf("Open v3 db: %v", err)
 	}
 	defer st.Close()
-	if v, err := st.SchemaVersion(); err != nil || v != 4 {
-		t.Fatalf("SchemaVersion = %d, %v; want 4", v, err)
+	if v, err := st.SchemaVersion(); err != nil || v != len(migrations) {
+		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, len(migrations))
 	}
 	if !hasIndex(t, st, "proposals_kind_subject") || !hasIndex(t, st, "proposals_status") {
 		t.Fatal("proposals indexes missing after migration")

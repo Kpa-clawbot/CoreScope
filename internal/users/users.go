@@ -229,7 +229,7 @@ func (s *Store) UsersByID(ids []int64) (map[int64]User, error) {
 	for i, id := range ids {
 		args[i] = id
 	}
-	ph := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	ph := placeholders(len(ids))
 	rows, err := s.db.Query(`SELECT `+userCols+` FROM users WHERE id IN (`+ph+`)`, args...)
 	if err != nil {
 		return nil, err

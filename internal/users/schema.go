@@ -101,6 +101,29 @@ var migrations = [][]string{
 		`CREATE UNIQUE INDEX proposals_kind_subject ON proposals(kind, subject)`,
 		`CREATE INDEX proposals_status ON proposals(status)`,
 	},
+	{ // v5: sub-project E, node notifications
+		`CREATE TABLE notification_prefs (
+			user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			events TEXT NOT NULL DEFAULT '',
+			unsub_token TEXT NOT NULL UNIQUE,
+			updated_at INTEGER NOT NULL
+		)`,
+		`CREATE TABLE notification_watches (
+			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			pubkey TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY (user_id, pubkey)
+		)`,
+		`CREATE TABLE notification_state (
+			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			event TEXT NOT NULL,
+			subject TEXT NOT NULL,
+			state TEXT NOT NULL,
+			changed_at INTEGER NOT NULL,
+			PRIMARY KEY (user_id, event, subject)
+		)`,
+	},
 }
 
 func (s *Store) migrate() error {
