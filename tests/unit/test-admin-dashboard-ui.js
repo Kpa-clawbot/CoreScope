@@ -55,9 +55,10 @@ function loadTab(files, hash, routes, extra) {
   const loc = { hash };
   const replaced = [];
   const calls = [];
+  const bodies = [];
   const timers = [];
   const CSAuth = {
-    request(method, p) { calls.push(p); return Promise.resolve().then(() => routes(p)); },
+    request(method, p, body) { calls.push(p); bodies.push(body); return Promise.resolve().then(() => routes(p, body)); },
     say(id, text, ok) { const el = dom.document.getElementById(id); el.textContent = text; el.ok = !!ok; },
     errText(r) { return (r.data && r.data.error) || ('Request failed (HTTP ' + r.status + ')'); },
   };
@@ -71,7 +72,7 @@ function loadTab(files, hash, routes, extra) {
   ctx.window = ctx;
   vm.createContext(ctx);
   [].concat(files).forEach((f) => vm.runInContext(src(f), ctx));
-  return { ctx, dom, els: dom.els, loc, replaced, calls, timers };
+  return { ctx, dom, els: dom.els, loc, replaced, calls, bodies, timers };
 }
 
 const NOW = Date.UTC(2026, 9, 7, 12, 0, 0);
@@ -94,6 +95,10 @@ test('readHash keeps only known actions, numeric users and known periods', () =>
   assert.strictEqual(rh('#/admin?tab=audit&user=0').user, '', 'user=0 is not an account id');
   assert.strictEqual(rh('#/admin?tab=audit&user=007').user, '', 'leading zeros are rejected');
   assert.strictEqual(rh('#/admin?tab=audit&action=user.login.*').action, 'user.login.*');
+});
+
+test('the audit action filter offers channel proposals', () => {
+  assert.strictEqual(auditT().readHash('#/admin?tab=audit&action=proposal.*').action, 'proposal.*');
 });
 
 test('hashFor writes tab=audit and only the set filters', () => {
@@ -411,12 +416,13 @@ function loadShell(hash, opts) {
   const listeners = {};
   const me = { current: opts.me === undefined ? { id: 1, role: 'admin' } : opts.me };
   const mods = {};
-  ['CSAdminOverview', 'CSAdminUsers', 'CSAdminAudit'].forEach((n) => {
+  ['CSAdminOverview', 'CSAdminUsers', 'CSAdminAudit', 'CSAdminProposals'].forEach((n) => {
     mods[n] = { mounted: 0, unmounted: 0, el: null, mount(el) { this.mounted++; this.el = el; }, unmount() { this.unmounted++; } };
   });
   const CSAuth = { ready: () => Promise.resolve(), isEnabled: () => opts.enabled !== false,
     isAdmin: () => !!me.current && me.current.role === 'admin' };
   const ctx = Object.assign({ document: dom.document, location: loc, URLSearchParams, Promise, String, console, CSAuth,
+    MC_USER_MGMT: opts.proposals ? { enabled: true, channelProposals: true } : null,
     history: { replaceState(a, b, h) { replaced.push(h); loc.hash = h; } }, escapeHtml: loadEscapeHtml(),
     registerPage(n, m) { pages[n] = m; }, addEventListener(t, fn) { listeners[t] = fn; } }, mods);
   ctx.window = ctx;
@@ -523,6 +529,112 @@ test('destroy before CSAuth.ready resolves: no tab is mounted', async () => {
   env.page.destroy();
   await p;
   assert.strictEqual(env.mods.CSAdminOverview.mounted, 0);
+});
+
+test('the Proposals tab exists only when channel proposals are on', async () => {
+  const off = loadShell('#/admin?tab=proposals');
+  assert.strictEqual(off.t.readTab('#/admin?tab=proposals').id, 'overview');
+  assert.strictEqual(off.t.tabsHtml('overview').indexOf('tab=proposals'), -1);
+  const on = loadShell('#/admin?tab=proposals&status=pending', { proposals: true });
+  assert.strictEqual(on.t.readTab(on.loc.hash).id, 'proposals');
+  assert(on.t.tabsHtml('proposals').indexOf('class="tab-btn active" href="#/admin?tab=proposals" aria-current="page"') !== -1);
+  await on.page.init(on.app, null);
+  assert.strictEqual(on.mods.CSAdminProposals.mounted, 1);
+  assert.strictEqual(on.mods.CSAdminProposals.el, on.els.adminTab);
+});
+
+console.log('admin-proposals.js');
+
+const PR = (o) => Object.assign({ id: 5, kind: 'hashtag_channel', subject: '#mycity', status: 'pending', note: '',
+  createdAt: '2026-10-07T10:00:00Z', decidedAt: null, proposer: { id: 2, displayName: 'Pat', email: 'pat@example.org' }, reviewer: null }, o);
+const propEnv = (hash, routes) => loadTab(['public/channel-proposals.js', 'public/admin-proposals.js'], hash, routes);
+const propT = () => propEnv('', () => OK([])).ctx.CSAdminProposals._test;
+
+test('readHash defaults to pending and keeps known statuses; paths follow the status', () => {
+  const t = propT();
+  assert.strictEqual(t.readHash('#/admin?tab=proposals'), 'pending');
+  assert.strictEqual(t.readHash('#/admin?tab=proposals&status=revoked'), 'revoked');
+  assert.strictEqual(t.readHash('#/admin?tab=proposals&status=all'), 'all');
+  assert.strictEqual(t.readHash('#/admin?tab=proposals&status=bogus'), 'pending');
+  assert.strictEqual(t.hashFor('approved'), '#/admin?tab=proposals&status=approved');
+  assert.strictEqual(t.apiPath('all'), '/api/admin/proposals');
+  assert.strictEqual(t.apiPath('pending'), '/api/admin/proposals?status=pending');
+});
+
+test('rows escape subject, names, emails and notes; actions follow the status', () => {
+  const t = propT();
+  const html = t.rowHtml(PR({ subject: '#' + XSS, note: XSS, proposer: { id: 2, displayName: XSS, email: XSS } }));
+  assert(html.indexOf('<img') === -1, html);
+  assert(html.indexOf('data-act="approve"') !== -1 && html.indexOf('data-act="reject"') !== -1 && html.indexOf('data-act="revoke"') === -1);
+  assert(html.indexOf('data-note="5"') !== -1);
+  const appr = t.rowHtml(PR({ status: 'approved', decidedAt: '2026-10-07T11:00:00Z', reviewer: { id: 1, displayName: 'Ada', email: 'ada@example.org' } }));
+  assert(appr.indexOf('data-act="revoke"') !== -1 && appr.indexOf('data-act="approve"') === -1 && appr.indexOf('Ada') !== -1);
+  const done = t.rowHtml(PR({ status: 'rejected' }));
+  assert(done.indexOf('data-act=') === -1 && done.indexOf('data-note=') === -1);
+  assert(t.rowHtml(PR({ proposer: null })).indexOf('deleted account') !== -1);
+  assert(t.refHtml({ id: 9, deleted: true }).indexOf('deleted account') !== -1);
+});
+
+test('mount loads the status from the hash and renders the rows', async () => {
+  const env = propEnv('#/admin?tab=proposals&status=approved', () => OK([PR({ status: 'approved' })]));
+  await env.ctx.CSAdminProposals.mount(env.dom.mk('c'));
+  assert.deepStrictEqual(env.calls, ['/api/admin/proposals?status=approved']);
+  assert.strictEqual(env.els.propAdminStatus.value, 'approved');
+  assert(env.els.propAdminBody.innerHTML.indexOf('data-subject="#mycity"') !== -1, env.els.propAdminBody.innerHTML);
+  const empty = propEnv('#/admin?tab=proposals', () => OK([]));
+  await empty.ctx.CSAdminProposals.mount(empty.dom.mk('c'));
+  assert(empty.els.propAdminBody.innerHTML.indexOf('No proposals.') !== -1);
+});
+
+test('a status change rewrites the hash and reloads', async () => {
+  const env = propEnv('#/admin?tab=proposals', () => OK([]));
+  await env.ctx.CSAdminProposals.mount(env.dom.mk('c'));
+  await env.els.propAdminStatus.handlers.change({ target: { value: 'all' } });
+  assert.deepStrictEqual(env.replaced, ['#/admin?tab=proposals&status=all']);
+  assert.strictEqual(env.calls[env.calls.length - 1], '/api/admin/proposals');
+});
+
+test('approve asks for confirmation with the readability warning; cancel sends nothing', async () => {
+  const env = propEnv('#/admin?tab=proposals', () => OK([PR()]));
+  await env.ctx.CSAdminProposals.mount(env.dom.mk('c'));
+  const asked = [];
+  await env.ctx.CSAdminProposals._test.act('5', 'approve', (m) => { asked.push(m); return false; });
+  assert.strictEqual(asked.length, 1);
+  assert(asked[0].indexOf('#mycity') !== -1 && /every visitor/.test(asked[0]), asked[0]);
+  assert.strictEqual(env.calls.filter((p) => p.indexOf('/approve') !== -1).length, 0);
+});
+
+test('approve with a note posts it, says so and reloads the list', async () => {
+  const env = propEnv('#/admin?tab=proposals', (p) => (p.endsWith('/approve') ? OK(PR({ status: 'approved' })) : OK([PR()])));
+  await env.ctx.CSAdminProposals.mount(env.dom.mk('c'));
+  env.dom.document.querySelector('[data-note="5"]').value = ' fine ';
+  await env.ctx.CSAdminProposals._test.act('5', 'approve', () => true);
+  assert.deepStrictEqual(env.calls, ['/api/admin/proposals?status=pending', '/api/admin/proposals/5/approve', '/api/admin/proposals?status=pending']);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(env.bodies[1])), { note: 'fine' });
+  assert.strictEqual(env.els.propAdminMsg.textContent, '#mycity: approved');
+  assert.strictEqual(env.els.propAdminMsg.ok, true);
+});
+
+test('revoke needs no confirmation; a refused action shows the server error', async () => {
+  const env = propEnv('#/admin?tab=proposals&status=approved', (p) => (p.endsWith('/revoke')
+    ? { ok: false, status: 409, data: { error: "not possible in the proposal's current state" } } : OK([PR({ status: 'approved' })])));
+  await env.ctx.CSAdminProposals.mount(env.dom.mk('c'));
+  await env.ctx.CSAdminProposals._test.act('5', 'revoke', () => { throw new Error('asked to confirm a revoke'); });
+  assert.strictEqual(env.els.propAdminMsg.textContent, "not possible in the proposal's current state");
+  assert.strictEqual(env.els.propAdminMsg.ok, false);
+});
+
+test('an unknown id does nothing; unmount drops a late answer', async () => {
+  let release;
+  const env = propEnv('#/admin?tab=proposals', () => new Promise((r) => { release = () => r(OK([PR()])); }));
+  const p = env.ctx.CSAdminProposals.mount(env.dom.mk('c'));
+  await tick();
+  env.ctx.CSAdminProposals.unmount();
+  release();
+  await p;
+  assert.strictEqual(env.els.propAdminBody.innerHTML, '', 'late answer rendered after unmount');
+  await env.ctx.CSAdminProposals._test.act('77', 'reject', () => true);
+  assert.strictEqual(env.calls.length, 1);
 });
 
 Promise.all(pending).then(() => {

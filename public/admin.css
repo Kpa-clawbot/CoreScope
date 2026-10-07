@@ -17,3 +17,5 @@
 .admin-tabs .tab-btn { display: inline-flex; align-items: center; min-height: 48px; text-decoration: none; box-sizing: border-box; }
 .um-filters input[type="checkbox"] { min-height: 0; }
 @media (pointer: fine) { .admin-tabs .tab-btn { min-height: 36px; } }
+.um-note { min-height: 36px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); color: var(--text); max-width: 16em; box-sizing: border-box; }
+.admin-proposals td .account-btn { margin: 2px 0; }

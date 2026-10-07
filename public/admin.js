@@ -4,6 +4,7 @@
  *   overview  window.CSAdminOverview (admin-overview.js)
  *   users     window.CSAdminUsers    (admin-users.js)
  *   audit     window.CSAdminAudit    (admin-audit.js)
+ *   proposals window.CSAdminProposals (admin-proposals.js), only with channel proposals on
  * Deep link: #/admin?tab=<tab>&<tab filters>. The old #/admin/users?... is
  * rewritten to #/admin?tab=users&... with replaceState. Access relies on
  * the server's withAdmin check and CSAuth.isAdmin(); the shell adds no
@@ -13,8 +14,11 @@
   var TABS = [
     { id: 'overview', label: 'Overview', mod: 'CSAdminOverview' },
     { id: 'users', label: 'Users', mod: 'CSAdminUsers' },
-    { id: 'audit', label: 'Audit', mod: 'CSAdminAudit' }
+    { id: 'audit', label: 'Audit', mod: 'CSAdminAudit' },
+    { id: 'proposals', label: 'Proposals', mod: 'CSAdminProposals', when: proposalsOn }
   ];
+  function proposalsOn() { return !!(window.MC_USER_MGMT && window.MC_USER_MGMT.channelProposals); }
+  function visibleTabs() { return TABS.filter(function (t) { return !t.when || t.when(); }); }
   // The page on screen, whether it was rendered for an admin, and the
   // mounted tab, so an auth change can redirect or re-render.
   var mounted = { app: null, admin: false, tab: null };
@@ -24,8 +28,9 @@
 
   function readTab(hash) {
     var t = new URLSearchParams(String(hash || '').split('?')[1] || '').get('tab');
-    for (var i = 0; i < TABS.length; i++) if (TABS[i].id === t) return TABS[i];
-    return TABS[0];
+    var tabs = visibleTabs();
+    for (var i = 0; i < tabs.length; i++) if (tabs[i].id === t) return tabs[i];
+    return tabs[0];
   }
 
   // #/admin/users?x=1 becomes #/admin?tab=users&x=1; any other hash: null.
@@ -37,7 +42,7 @@
 
   function tabsHtml(active) {
     var html = '<nav class="admin-tabs" aria-label="Admin sections">';
-    TABS.forEach(function (t) {
+    visibleTabs().forEach(function (t) {
       var on = t.id === active;
       html += '<a class="tab-btn' + (on ? ' active' : '') + '" href="#/admin?tab=' + t.id + '"' +
         (on ? ' aria-current="page"' : '') + '>' + t.label + '</a>';
