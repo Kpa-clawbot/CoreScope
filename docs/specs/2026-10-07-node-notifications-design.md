@@ -269,3 +269,9 @@ except where a ruling below changes one.
   `/api/healthz` readiness. Readiness alone can come while the newest packets are still
   loading, which would mail "offline" and then "back online" for a node whose recent
   packets were not loaded yet.
+- F2 (I2). Node and observer names in a notification mail pass one sanitiser
+  (`mailSafeText`): control characters (CR, LF and tab included) and bidi overrides and
+  isolates (U+202A-U+202E, U+2066-U+2069) become a space, runs of spaces collapse and
+  the ends are trimmed. It applies to the plain-text and the HTML part; the HTML part is
+  still escaped. A name that is empty afterwards falls back to the key prefix or the
+  observer id.

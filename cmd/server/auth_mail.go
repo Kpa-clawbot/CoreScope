@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/meshcore-analyzer/mailer"
 	"github.com/meshcore-analyzer/users"
@@ -33,6 +34,20 @@ func (a *authService) link(page, token string) string {
 	return a.set.baseURL.String() + "/#/account/" + page + "?token=" + url.QueryEscape(token)
 }
 
+// mailSafeText makes a name chosen by someone else safe for one line of a
+// mail: control characters (line breaks and tabs included) and bidi
+// overrides and isolates (U+202A-U+202E, U+2066-U+2069) become a space,
+// runs of spaces collapse and the ends are trimmed. The HTML part escapes
+// the result as usual.
+func mailSafeText(s string) string {
+	return strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || (r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069) {
+			return ' '
+		}
+		return r
+	}, s)), " ")
+}
+
 func (a *authService) render(to, toName, tag string, c mailContent) mailer.Message {
 	var text, h strings.Builder
 	text.WriteString(c.greeting + "\n\n")
@@ -44,6 +59,7 @@ func (a *authService) render(to, toName, tag string, c mailContent) mailer.Messa
 	if len(c.lines) > 0 {
 		h.WriteString("<ul>")
 		for _, l := range c.lines {
+			l.text = mailSafeText(l.text)
 			text.WriteString("- " + l.text + "\n  " + l.url + "\n")
 			h.WriteString(`<li><a href="` + html.EscapeString(l.url) + `">` + html.EscapeString(l.text) + `</a></li>`)
 		}

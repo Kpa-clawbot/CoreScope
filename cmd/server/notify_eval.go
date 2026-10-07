@@ -86,10 +86,11 @@ func notifyInfra(role string) bool {
 	return r == "repeater" || r == "room"
 }
 
-// nodeLabel is the node's name, or the first 8 hex characters of its key.
+// nodeLabel is the node's name made safe for a mail line (mailSafeText),
+// or the first 8 hex characters of its key.
 func nodeLabel(n notifyNode, known bool, pk string) string {
-	if known && strings.TrimSpace(n.Name) != "" {
-		return n.Name
+	if name := mailSafeText(n.Name); known && name != "" {
+		return name
 	}
 	if len(pk) > 8 {
 		return pk[:8]
@@ -260,8 +261,8 @@ func evaluateNotifications(in notifyInput) notifyResult {
 		if p.Has(users.NotifyObserverOffline) {
 			for _, o := range in.Observers {
 				k := users.NotifyKey{UserID: p.UserID, Event: users.NotifyObserverOffline, Subject: o.ID}
-				name := o.Name
-				if strings.TrimSpace(name) == "" {
+				name := mailSafeText(o.Name)
+				if name == "" {
 					name = o.ID
 				}
 				compare(k, name, observerState(o, in.Health, in.Now, prev[k]), nil)

@@ -382,6 +382,60 @@ func TestNotifyMailEscapesNodeNames(t *testing.T) {
 	}
 }
 
+// Names come from whoever owns a node or runs an observer: a line break
+// must not forge a line in the mail, a bidi override must not reorder it.
+func TestNotifyMailSanitisesNames(t *testing.T) {
+	f := newNotifyFixture(t, defaultNotifySettings())
+	f.watcher(t, "pat@example.org", "Pat", evPkA)
+	admin := f.registerAndActivate(t, "admin@example.org", "Ada", pw)
+	if _, err := f.st.SetNotifyPrefs(admin.me.ID, true, []string{users.NotifyObserverOffline}); err != nil {
+		t.Fatal(err)
+	}
+	f.setNode(evPkA, "x\r\nAccount suspended, sign in: https://evil.example\t\u202egnp.exe", "companion", time.Hour, nil)
+	seen := f.clk.t.Add(-time.Minute).Format(time.RFC3339)
+	f.src.obs = []notifyObserver{{ID: "OBS1", Name: "Roof\n\u2066Fake line\u2069", LastSeen: seen}, {ID: "OBS2", Name: "\n\u202e", LastSeen: seen}}
+	f.tick()
+	f.clk.Advance(25 * time.Hour)
+	f.tick()
+	m := f.notifyMails()
+	if len(m) != 2 {
+		t.Fatalf("mails = %d, want 2", len(m))
+	}
+	for _, msg := range m {
+		for _, part := range []string{msg.Text, msg.HTML} {
+			for _, bad := range []string{"\r", "\t", "\u202e", "\u2066", "\u2069", "\nAccount", "\nFake"} {
+				if strings.Contains(part, bad) {
+					t.Fatalf("mail part contains %q:\n%s", bad, part)
+				}
+			}
+		}
+	}
+	body := m[0].Text + m[1].Text
+	for _, want := range []string{"- x Account suspended, sign in: https://evil.example gnp.exe: offline,",
+		"- Roof Fake line: observer offline,", "- OBS2: observer offline,"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("text lacks %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestMailSafeText(t *testing.T) {
+	cases := map[string]string{
+		"plain":                  "plain",
+		"  a \n\n b\r\tc  ":      "a b c",
+		"a\u202eb\u2066c\u2069d": "a b c d",
+		"a\u202ab\u202dc":        "a b c",
+		"a\u0085b\x7fc":          "a b c",
+		"\n\u202a":               "",
+		"Zo\u00eb \u00e9":        "Zo\u00eb \u00e9",
+	}
+	for in, want := range cases {
+		if got := mailSafeText(in); got != want {
+			t.Errorf("mailSafeText(%q) = %q; want %q", in, got, want)
+		}
+	}
+}
+
 func TestNotifyChangeText(t *testing.T) {
 	at := time.Date(2026, 10, 7, 9, 5, 0, 0, time.UTC)
 	cases := []struct {
