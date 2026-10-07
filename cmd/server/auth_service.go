@@ -127,6 +127,10 @@ func (a *authService) prune() {
 	if _, err := a.st.PruneMail(90 * 24 * time.Hour); err != nil {
 		log.Printf("[users] prune mail log: %v", err)
 	}
+	// Login rows only; every other audit action is kept (admin-dashboard spec).
+	if _, err := a.st.PruneAudit([]string{"user.login", "user.login.failed"}, 90*24*time.Hour); err != nil {
+		log.Printf("[users] prune login audit: %v", err)
+	}
 	a.login.gc()
 	a.signup.gc()
 	a.hook.gc()

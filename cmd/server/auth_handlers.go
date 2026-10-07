@@ -150,15 +150,29 @@ func (s *Server) handleActivate(w http.ResponseWriter, r *http.Request) {
 }
 
 // startSession creates a session, sets the cookie and answers with /me.
-func (a *authService) startSession(w http.ResponseWriter, r *http.Request, u *users.User) {
+// It reports whether the session was started.
+func (a *authService) startSession(w http.ResponseWriter, r *http.Request, u *users.User) bool {
 	raw, sess, err := a.st.CreateSession(u.ID, a.set.sessionTTL, r.UserAgent())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal error")
-		return
+		return false
 	}
 	_ = a.st.TouchLogin(u.ID)
 	a.setSessionCookie(w, raw, sess.ExpiresAt)
 	writeJSON(w, meFrom(u, sess))
+	return true
+}
+
+// loginFailReason is the audit reason of a refused login for an existing
+// account. A wrong password wins over the account state.
+func loginFailReason(passwordOK bool, st users.Status) string {
+	if !passwordOK {
+		return "wrong_password"
+	}
+	if st == users.StatusPending {
+		return "pending"
+	}
+	return "disabled"
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -187,6 +201,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	ok, err := users.VerifyPassword(u.PasswordHash, req.Password)
 	if err != nil || !ok || u.Status != users.StatusActive {
 		writeError(w, http.StatusUnauthorized, msgBadLogin)
+		// After the answer is decided; a failed write is logged by a.audit.
+		a.audit(nil, "user.login.failed", idPtr(u.ID), map[string]string{"reason": loginFailReason(err == nil && ok, u.Status)})
 		return
 	}
 	// Config wins: an address in adminEmails is always admin.
@@ -196,7 +212,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			a.audit(nil, "user.role.config", idPtr(u.ID), map[string]string{"role": "admin"})
 		}
 	}
-	a.startSession(w, r, u)
+	if a.startSession(w, r, u) {
+		a.audit(nil, "user.login", idPtr(u.ID), nil)
+	}
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
