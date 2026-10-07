@@ -72,10 +72,14 @@ async function run() {
     ['mobile full view', 375, true],
   ]) {
     await test(`#2131 packet count help in ${view}`, async () => {
+      const height = width < 640 ? 667 : 900;
       const fixtureContext = await browser.newContext({
-        viewport: { width, height: 900 }, hasTouch: width < 640,
+        viewport: { width, height }, hasTouch: width < 640,
       });
       const fixturePage = await fixtureContext.newPage();
+      await fixturePage.addInitScript(() => {
+        window.addEventListener('theme-refresh', () => { window.__packetCountThemeReady = true; }, { once: true });
+      });
       const pubkey = 'b'.repeat(64);
       const node = { public_key: pubkey, name: 'Packet count fixture', role: 'repeater',
         last_seen: new Date().toISOString(), advert_count: 900 };
@@ -90,6 +94,9 @@ async function run() {
         await route.fulfill({ json: body });
       });
       try {
+        // Initial theme refresh rebuilds node details; finish it before testing focus.
+        await fixturePage.goto(`${BASE}/#/home`, { waitUntil: 'domcontentloaded' });
+        await fixturePage.waitForFunction(() => window.__packetCountThemeReady);
         await fixturePage.goto(`${BASE}/#/nodes${full ? '/' + pubkey : ''}`, { waitUntil: 'domcontentloaded' });
         if (!full) await fixturePage.locator(`tr[data-key="${pubkey}"]`).click();
         const label = fixturePage.locator(full ? '#nodeFullBody td:first-child' : '#nodesRight dt')
@@ -109,6 +116,9 @@ async function run() {
         if (width < 640) {
           await help.tap();
         } else {
+          await help.hover();
+          assert(await tooltip.isVisible(), 'Packet count help must open on hover');
+          await fixturePage.mouse.move(0, 0);
           await help.focus();
           await fixturePage.keyboard.press('Shift+Tab');
           await fixturePage.keyboard.press('Tab');
@@ -122,8 +132,24 @@ async function run() {
         assert(/seen/i.test(explanation) && /one transmission can have multiple observations/i.test(explanation),
           'Help must explain why seen observations can exceed transmissions');
         const box = await tooltip.boundingBox();
-        assert(box && box.x >= 0 && box.x + box.width <= width && box.y >= 0 && box.y + box.height <= 900,
+        assert(box && box.x >= 0 && box.x + box.width <= width && box.y >= 0 && box.y + box.height <= height,
           `Packet count help is clipped in ${view}`);
+        const clippedBy = await tooltip.evaluate(el => {
+          const rect = el.getBoundingClientRect();
+          for (let parent = el.parentElement; parent; parent = parent.parentElement) {
+            const style = getComputedStyle(parent);
+            const bounds = parent.getBoundingClientRect();
+            if ((/hidden|auto|scroll|clip/.test(style.overflowX) && (rect.left < bounds.left - 1 || rect.right > bounds.right + 1)) ||
+                (/hidden|auto|scroll|clip/.test(style.overflowY) && (rect.top < bounds.top - 1 || rect.bottom > bounds.bottom + 1))) {
+              return parent.id || parent.className || parent.tagName;
+            }
+          }
+          return null;
+        });
+        assert(!clippedBy, `Packet count help is clipped by ${clippedBy} in ${view}`);
+        if (width < 640) await label.locator('..').locator('td').nth(1).tap();
+        else await fixturePage.keyboard.press('Tab');
+        assert(!await tooltip.isVisible(), 'Packet count help must close when focus or touch moves away');
       } finally {
         await fixtureContext.close();
       }

@@ -230,7 +230,7 @@ async function findPacketDetailByType(page, predicate, maxRows = 40) {
           assert(text.includes(snr), observer.observer_name + ' must retain SNR ' + snr + ', got: ' + text);
         }
         for (const [label, value] of [['Total Packets', '1005'], ['Packets Today', '7'], ['Avg Hops', '2']]) {
-          const metric = stats.getByText(label, { exact: true });
+          const metric = stats.locator(view.full ? 'td:first-child' : 'dt').filter({ hasText: label });
           const actual = await metric.evaluate(el => el.nextElementSibling.textContent.trim());
           assert(actual === value, label + ' must remain ' + value + ', got: ' + actual);
         }
