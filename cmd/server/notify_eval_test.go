@@ -462,3 +462,46 @@ func TestEvaluateDisabledUserUpdatesStatesSilently(t *testing.T) {
 		t.Fatalf("re-enabling mailed old changes: %+v", res)
 	}
 }
+
+// While ingest is stale nobody can tell a silent node from a silent
+// MQTT feed: offline comparisons pause with their states unchanged;
+// battery and foreign nodes go on.
+func TestEvaluateIngestStalePausesOfflineChecks(t *testing.T) {
+	in := evInput()
+	in.IngestStale = true
+	in.Watches = append(in.Watches, users.NotifyWatch{UserID: evUser, Pubkey: evPkB})
+	in.Prefs = append(in.Prefs, users.NotifyPrefs{UserID: evAdmin, Enabled: true, Events: []string{users.NotifyForeignNew, users.NotifyObserverOffline}})
+	in.Nodes[evPkA] = notifyNode{Pubkey: evPkA, Name: "Alpha", Role: "companion", LastSeen: evAgo(48 * time.Hour), BatteryMv: evMv(3100)}
+	in.Nodes[evPkF] = notifyNode{Pubkey: evPkF, Name: "Foxtrot", Foreign: true}
+	in.Observers = []notifyObserver{{ID: "OBS1", Name: "Roof", LastSeen: evAgo(48 * time.Hour)}}
+	in.States = []users.NotifyState{
+		evStateRow(evUser, users.NotifyNodeOffline, evPkA, users.NotifyGood),
+		evStateRow(evUser, users.NotifyNodeBattery, evPkA, users.NotifyGood),
+		evStateRow(evAdmin, users.NotifyObserverOffline, "OBS1", users.NotifyGood),
+		evStateRow(evAdmin, users.NotifyForeignNew, foreignBaselineSubject, users.NotifyGood),
+	}
+	res := evaluateNotifications(in)
+	for _, k := range []struct {
+		uid            int64
+		event, subject string
+	}{{evUser, users.NotifyNodeOffline, evPkA}, {evUser, users.NotifyNodeOffline, evPkB}, {evAdmin, users.NotifyObserverOffline, "OBS1"}} {
+		if s, ok := evState(res, k.uid, k.event, k.subject); ok {
+			t.Errorf("%s %s written as %q while ingest is stale", k.event, k.subject, s)
+		}
+	}
+	if ch := res.Changes[evUser]; len(ch) != 1 || ch[0].Event != users.NotifyNodeBattery || ch[0].To != users.NotifyBad {
+		t.Fatalf("user changes = %+v; want only the battery", ch)
+	}
+	if ch := res.Changes[evAdmin]; len(ch) != 1 || ch[0].Event != users.NotifyForeignNew || ch[0].Subject != evPkF {
+		t.Fatalf("admin changes = %+v; want only the foreign node", ch)
+	}
+
+	in.IngestStale = false
+	res = evaluateNotifications(in)
+	if s, _ := evState(res, evUser, users.NotifyNodeOffline, evPkA); s != users.NotifyBad {
+		t.Fatalf("offline check after ingest resumed = %q; want bad", s)
+	}
+	if s, _ := evState(res, evAdmin, users.NotifyObserverOffline, "OBS1"); s != users.NotifyBad {
+		t.Fatalf("observer check after ingest resumed = %q; want bad", s)
+	}
+}

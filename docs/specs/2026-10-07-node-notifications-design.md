@@ -280,3 +280,12 @@ except where a ruling below changes one.
   reset and address-change mail share the provider's daily quota (Brevo free tier: 300
   for the whole account) and would fail at the provider on a day notifications used all
   of it. 100 leaves room for that mail and for other senders on the same account.
+- F4 (I4). While ingest is stale (the newest transmission in the packet store, read in
+  O(1) from the tail of `PacketStore.packets`, is older than 30 minutes, or the store is
+  empty), `node.offline` and `observer.offline` are not compared: no state is written or
+  changed and nothing is mailed for them. `node.battery` and `foreign.new` go on. The
+  evaluator stays pure (`notifyInput.IngestStale`); the notifier logs
+  `[notify] ingest stale since <time>; offline checks paused` once per stale period and
+  `[notify] ingest fresh again; offline checks resumed` when it ends. Without this, an
+  MQTT or ingestor outage longer than a role's silent window mailed every watcher
+  "offline" and later "back online".

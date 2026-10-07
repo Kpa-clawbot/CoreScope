@@ -20,6 +20,9 @@ type notifier struct {
 	a   *authService
 	src notifySource
 	now func() time.Time
+	// ingestStale is the last tick's verdict, so the pause and the resume
+	// are each logged once. Only the loop goroutine touches it.
+	ingestStale bool
 }
 
 func newNotifier(a *authService, src notifySource, now func() time.Time) *notifier {
@@ -28,6 +31,30 @@ func newNotifier(a *authService, src notifySource, now func() time.Time) *notifi
 
 // notifySendTimeout bounds one mail send inside a tick.
 const notifySendTimeout = 30 * time.Second
+
+// notifyIngestStaleAfter: when the newest packet in the store is older,
+// offline checks pause (an MQTT or ingestor outage would otherwise mail
+// every watcher "offline" and later "back online").
+const notifyIngestStaleAfter = 30 * time.Minute
+
+// checkIngest reports whether ingest is stale at now and logs when that
+// verdict changes.
+func (n *notifier) checkIngest(now time.Time) bool {
+	newest := n.src.newestPacket()
+	stale := newest.IsZero() || now.Sub(newest) > notifyIngestStaleAfter
+	switch {
+	case stale && !n.ingestStale:
+		since := "(no packets)"
+		if !newest.IsZero() {
+			since = newest.UTC().Format(time.RFC3339)
+		}
+		log.Printf("[notify] ingest stale since %s; offline checks paused", since)
+	case !stale && n.ingestStale:
+		log.Printf("[notify] ingest fresh again; offline checks resumed")
+	}
+	n.ingestStale = stale
+	return stale
+}
 
 // loop evaluates every interval until stop closes. The first evaluation
 // runs one interval after startup. A tick in flight sees its context
@@ -76,6 +103,8 @@ func (n *notifier) tick(ctx context.Context) {
 	if !n.src.ready() {
 		return
 	}
+	now := n.now()
+	stale := n.checkIngest(now)
 	st := n.a.st
 	prefs, err := st.AllNotifyPrefs()
 	if err != nil {
@@ -158,10 +187,9 @@ func (n *notifier) tick(ctx context.Context) {
 			return
 		}
 	}
-	now := n.now()
 	res := evaluateNotifications(notifyInput{Now: now, Health: n.src.health(), LowMv: n.src.lowBatteryMv(),
 		Accounts: accounts, Prefs: prefs, Watches: watches, States: states, Nodes: nodes,
-		Heard: n.src.lastHeard(pubkeys), Relayed: n.src.lastRelayed(infra), Observers: observers})
+		Heard: n.src.lastHeard(pubkeys), Relayed: n.src.lastRelayed(infra), Observers: observers, IngestStale: stale})
 	if err := st.DeleteNotifyStates(res.Drop); err != nil {
 		log.Printf("[notify] delete dropped states, nothing mailed this time: %v", err)
 		return

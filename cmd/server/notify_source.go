@@ -16,6 +16,7 @@ type notifySource interface {
 	lastHeard(pubkeys []string) map[string]time.Time
 	lastRelayed(pubkeys []string) map[string]time.Time
 	observers() ([]notifyObserver, error)
+	newestPacket() time.Time // zero when the store holds no packet
 }
 
 type serverNotifySource struct{ s *Server }
@@ -57,6 +58,13 @@ func (src serverNotifySource) lastRelayed(pubkeys []string) map[string]time.Time
 		return map[string]time.Time{}
 	}
 	return relayTimes(src.s.store.GetRepeaterRelayInfoMap(src.s.cfg.GetHealthThresholds().RelayActiveHours), pubkeys)
+}
+
+func (src serverNotifySource) newestPacket() time.Time {
+	if src.s.store == nil {
+		return time.Time{}
+	}
+	return src.s.store.NewestFirstSeen()
 }
 
 func (src serverNotifySource) observers() ([]notifyObserver, error) {
@@ -177,4 +185,18 @@ func (s *PacketStore) LastHeardMap(pubkeys []string) map[string]time.Time {
 		}
 	}
 	return out
+}
+
+// NewestFirstSeen is the FirstSeen of the newest transmission in the
+// store, zero when there is none or it does not parse. O(1): s.packets is
+// kept sorted by FirstSeen with the newest at the tail.
+func (s *PacketStore) NewestFirstSeen() time.Time {
+	s.mu.RLock()
+	var ts string
+	if n := len(s.packets); n > 0 && s.packets[n-1] != nil {
+		ts = s.packets[n-1].FirstSeen
+	}
+	s.mu.RUnlock()
+	t, _ := parseRelayTS(ts)
+	return t
 }

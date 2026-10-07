@@ -21,6 +21,7 @@ type fakeNotifySource struct {
 	heard          map[string]time.Time
 	relayed        map[string]time.Time
 	obs            []notifyObserver
+	newestAt       func() time.Time // newest packet in the store; nil means none
 	panicNext      bool
 	heardAsked     []string
 	foreignAsked   int
@@ -56,6 +57,12 @@ func (f *fakeNotifySource) lastHeard(pks []string) map[string]time.Time {
 	return f.heard
 }
 func (f *fakeNotifySource) lastRelayed([]string) map[string]time.Time { return f.relayed }
+func (f *fakeNotifySource) newestPacket() time.Time {
+	if f.newestAt == nil {
+		return time.Time{}
+	}
+	return f.newestAt()
+}
 func (f *fakeNotifySource) observers() ([]notifyObserver, error) {
 	f.observersAsked++
 	return f.obs, nil
@@ -87,7 +94,7 @@ func newNotifyFixture(t *testing.T, ns notifySettings) *notifyFixture {
 	clk := &notifyClock{t: time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)}
 	a.st.SetClock(clk.Now)
 	src := &fakeNotifySource{isReady: true, hs: (&Config{}).GetHealthThresholds(), low: 3300,
-		nodeMap: map[string]notifyNode{}, heard: map[string]time.Time{}, relayed: map[string]time.Time{}}
+		nodeMap: map[string]notifyNode{}, heard: map[string]time.Time{}, relayed: map[string]time.Time{}, newestAt: clk.Now}
 	if ns.enabled {
 		a.notify = newNotifier(a, src, clk.Now)
 	}
@@ -617,5 +624,50 @@ func TestNotifierStopsDeliveringAfterShutdown(t *testing.T) {
 	f.n.tick(ctx)
 	if m := f.notifyMails(); len(m) != 1 {
 		t.Fatalf("mails after a shutdown mid-delivery = %d; want 1", len(m))
+	}
+}
+
+func TestNotifierPausesOfflineChecksWhileIngestIsStale(t *testing.T) {
+	f := newNotifyFixture(t, defaultNotifySettings())
+	f.watcher(t, "pat@example.org", "Pat", evPkA)
+	f.setNode(evPkA, "Alpha", "companion", time.Hour, nil)
+	f.tick() // baseline: online
+	lastPacket := f.clk.t
+	f.src.newestAt = func() time.Time { return lastPacket }
+
+	logs := captureLog(func() {
+		f.clk.Advance(25 * time.Hour) // feed down for a day: Alpha looks offline
+		f.tick()
+		f.clk.Advance(5 * time.Minute)
+		f.tick()
+	})
+	if m := f.notifyMails(); len(m) != 0 {
+		t.Fatalf("mailed %d while ingest is stale", len(m))
+	}
+	paused := "[notify] ingest stale since " + lastPacket.UTC().Format(time.RFC3339) + "; offline checks paused"
+	if n := strings.Count(logs, paused); n != 1 {
+		t.Fatalf("pause logged %d times; want once:\n%s", n, logs)
+	}
+
+	f.src.newestAt = f.clk.Now // feed back, Alpha still silent
+	logs = captureLog(f.tick)
+	if m := f.notifyMails(); len(m) != 1 || !strings.Contains(m[0].Text, "Alpha: offline") {
+		t.Fatalf("mails after ingest resumed = %+v; want Alpha offline", m)
+	}
+	if n := strings.Count(logs, "[notify] ingest fresh again; offline checks resumed"); n != 1 {
+		t.Fatalf("resume logged %d times; want once:\n%s", n, logs)
+	}
+}
+
+func TestNotifierTreatsAnEmptyStoreAsStale(t *testing.T) {
+	f := newNotifyFixture(t, defaultNotifySettings())
+	f.watcher(t, "pat@example.org", "Pat", evPkA)
+	f.setNode(evPkA, "Alpha", "companion", time.Hour, nil)
+	f.src.newestAt = nil
+	if logs := captureLog(f.tick); !strings.Contains(logs, "[notify] ingest stale since (no packets); offline checks paused") {
+		t.Fatalf("log = %q", logs)
+	}
+	if s, err := f.st.AllNotifyStates(); err != nil || len(s) != 0 {
+		t.Fatalf("states with no packets in the store = %+v, %v", s, err)
 	}
 }

@@ -44,6 +44,10 @@ type notifyInput struct {
 	Heard     map[string]time.Time  // newest packet involving the node in the packet store (node page "Last Heard")
 	Relayed   map[string]time.Time  // last relay hop, used for repeaters and rooms only (#1598)
 	Observers []notifyObserver      // nil unless an admin chose observer.offline
+	// IngestStale: the newest packet in the store is old, so a silent node
+	// and a silent feed look the same. node.offline and observer.offline
+	// are then not compared (states unchanged, no changes).
+	IngestStale bool
 }
 
 // notifyChange is one transition for one user.
@@ -229,7 +233,7 @@ func evaluateNotifications(in notifyInput) notifyResult {
 		for _, pk := range watched[p.UserID] {
 			n, known := in.Nodes[pk]
 			name := nodeLabel(n, known, pk)
-			if p.Has(users.NotifyNodeOffline) {
+			if p.Has(users.NotifyNodeOffline) && !in.IngestStale {
 				compare(users.NotifyKey{UserID: p.UserID, Event: users.NotifyNodeOffline, Subject: pk}, name, nodeOnlineState(pk, n, known, &in), nil)
 			}
 			if p.Has(users.NotifyNodeBattery) && known && n.BatteryMv != nil {
@@ -258,7 +262,7 @@ func evaluateNotifications(in notifyInput) notifyResult {
 				}
 			}
 		}
-		if p.Has(users.NotifyObserverOffline) {
+		if p.Has(users.NotifyObserverOffline) && !in.IngestStale {
 			for _, o := range in.Observers {
 				k := users.NotifyKey{UserID: p.UserID, Event: users.NotifyObserverOffline, Subject: o.ID}
 				name := mailSafeText(o.Name)

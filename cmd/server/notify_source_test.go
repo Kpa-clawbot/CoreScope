@@ -136,3 +136,13 @@ func TestServerNotifySourceReadyWaitsForTheStartupLoad(t *testing.T) {
 		t.Fatal("ready without a packet store")
 	}
 }
+
+func TestPacketStoreNewestFirstSeen(t *testing.T) {
+	if got := (&PacketStore{}).NewestFirstSeen(); !got.IsZero() {
+		t.Fatalf("empty store = %v", got)
+	}
+	s := &PacketStore{packets: []*StoreTx{{FirstSeen: "2026-10-07T10:00:00Z"}, {FirstSeen: "2026-10-07T11:30:00.000Z"}}}
+	if got := s.NewestFirstSeen(); !got.Equal(time.Date(2026, 10, 7, 11, 30, 0, 0, time.UTC)) {
+		t.Fatalf("NewestFirstSeen = %v", got)
+	}
+}

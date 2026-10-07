@@ -164,6 +164,11 @@ watched node changes state. Admins can also watch the instance.
   once the packet store is loaded). All changes for one user in one check go into one
   mail. The first check of a newly watched node stores its state without a mail; states
   are kept in `users.db`, so a restart does not mail again.
+- While ingest is stale (the newest packet in the packet store is older than 30 minutes,
+  for example when the MQTT broker or the ingestor is down), the offline checks for
+  nodes and observers pause: their states stay as they were and nothing is mailed for
+  them. Battery and foreign-node checks go on. The server log says when the pause
+  starts and ends.
 - Limits: `perUserPerDay` mails per user and `maxMailsPerDay` in total, both over a
   rolling 24 hours. A change over a limit, for an account that is not active, for a
   bouncing address or while the user has notifications off is recorded and never mailed
