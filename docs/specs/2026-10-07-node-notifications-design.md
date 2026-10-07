@@ -261,3 +261,11 @@ except where a ruling below changes one.
   clock before writing the blocking `mail_log` row; the frontend unit test reads
   elements through the test document; the toggle computes its state on its own line
   before the HTML sink (XSS gate); gofmt runs only on touched files.
+
+### Amendments from the final review
+
+- F1 (I1). "Packet store loaded" (amendment 3) means the whole startup load: the hot
+  window and the background fill (`PacketStore.StartupLoadDone`), on top of the
+  `/api/healthz` readiness. Readiness alone can come while the newest packets are still
+  loading, which would mail "offline" and then "back online" for a node whose recent
+  packets were not loaded yet.

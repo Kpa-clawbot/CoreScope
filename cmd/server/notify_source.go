@@ -20,9 +20,22 @@ type notifySource interface {
 
 type serverNotifySource struct{ s *Server }
 
-// ready follows /api/healthz: the store load, the best-observation pick and
-// the neighbor graph are done.
-func (src serverNotifySource) ready() bool              { return readiness.Load() != 0 }
+// ready needs /api/healthz readiness (best-observation pick and neighbor
+// graph done) and the finished startup load: hot window and background
+// fill. Readiness alone can come while the newest packets are still
+// loading.
+func (src serverNotifySource) ready() bool {
+	if readiness.Load() == 0 || src.s.store == nil {
+		return false
+	}
+	select {
+	case <-src.s.store.StartupLoadDone():
+		return true
+	default:
+		return false
+	}
+}
+
 func (src serverNotifySource) health() HealthThresholds { return src.s.cfg.GetHealthThresholds() }
 func (src serverNotifySource) lowBatteryMv() int        { return src.s.cfg.LowBatteryMv() }
 

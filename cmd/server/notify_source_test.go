@@ -112,3 +112,27 @@ func TestServerNotifySourceWithoutStore(t *testing.T) {
 		t.Fatal("defaults not taken from the config")
 	}
 }
+
+// The startup load (hot window plus background fill) must be finished, not
+// only /api/healthz readiness: readiness can be reached while the newest
+// packets are still loading, which would mail "offline" then "back online".
+func TestServerNotifySourceReadyWaitsForTheStartupLoad(t *testing.T) {
+	readiness.Store(1)
+	defer readiness.Store(0)
+	store := &PacketStore{clockSkew: &ClockSkewEngine{}}
+	src := serverNotifySource{s: &Server{cfg: &Config{}, store: store}}
+	if src.ready() {
+		t.Fatal("ready before the startup load finished")
+	}
+	store.signalStartupLoadDone()
+	if !src.ready() {
+		t.Fatal("not ready after readiness and the startup load")
+	}
+	readiness.Store(0)
+	if src.ready() {
+		t.Fatal("ready without readiness")
+	}
+	if (serverNotifySource{s: &Server{cfg: &Config{}}}).ready() {
+		t.Fatal("ready without a packet store")
+	}
+}
