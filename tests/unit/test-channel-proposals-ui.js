@@ -88,6 +88,15 @@ test('ZWJ emoji accepted; bidi, zero-width, BOM, controls and separators refused
   ['#a‮b', '#a​b', '#a﻿b', '﻿abc', '#a\tb', '#a b', '#a\u0007b', '#‎'].forEach((s) => bad(s, BAD));
 });
 
+// Same cases as TestValidateHashtagNameAccepts/Refuses in
+// internal/channel/hashtag_test.go (Other_Default_Ignorable, U+2800, Zs).
+test('VS16 emoji accepted; invisible fillers and non-ASCII spaces refused', () => {
+  ok('#❤️', '#❤️');
+  ok('#a️b', '#a️b');
+  ['#meshㅤ', '#ㅤ', '#⠀', '#aᅟb', '#aᅠb', '#ﾠ', '#me͏sh', '#a឴b',
+    '#my city', '#a　b', '#a b', '#a b', '#a b', '# a'].forEach((s) => bad(s, BAD));
+});
+
 test('empty and ZWJ-only names refused', () => {
   ['', '   ', '#', ' # ', '#‍'].forEach((s) => bad(s, EMPTY));
   bad(null, EMPTY);

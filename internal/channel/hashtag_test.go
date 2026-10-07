@@ -28,6 +28,8 @@ func TestValidateHashtagNameAccepts(t *testing.T) {
 		{"#👩\u200d💻", "#👩\u200d💻"},
 		{"#publicity", "#publicity"},
 		{`#a"<b>`, `#a"<b>`},
+		{"#❤️", "#❤️"},
+		{"#a️b", "#a️b"},
 	}
 	for _, c := range cases {
 		got, err := ValidateHashtagName(c.in)
@@ -61,6 +63,20 @@ func TestValidateHashtagNameRefuses(t *testing.T) {
 		{"#a\u2028b", wantInvisible},
 		{"#a\u0007b", wantInvisible},
 		{"#\u200e", wantInvisible},
+		{"#mesh\u3164", wantInvisible},
+		{"#\u3164", wantInvisible},
+		{"#\u2800", wantInvisible},
+		{"#a\u115fb", wantInvisible},
+		{"#a\u1160b", wantInvisible},
+		{"#\uffa0", wantInvisible},
+		{"#me\u034fsh", wantInvisible},
+		{"#a\u17b4b", wantInvisible},
+		{"#my\u00a0city", wantInvisible},
+		{"#a\u3000b", wantInvisible},
+		{"#a\u2009b", wantInvisible},
+		{"#a\u1680b", wantInvisible},
+		{"#a\u202fb", wantInvisible},
+		{"#\u00a0a", wantInvisible},
 		{"#a\xffb", wantInvalid},
 	}
 	for _, c := range cases {

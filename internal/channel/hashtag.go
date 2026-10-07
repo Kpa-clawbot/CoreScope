@@ -47,14 +47,26 @@ func ValidateHashtagName(raw string) (string, error) {
 	if strings.EqualFold(s, "#public") {
 		return "", &NameError{Msg: nameMsgPublic}
 	}
-	// Mirrors the display-name rule in internal/users/validate.go; keep both in sync.
 	for _, r := range s {
 		if r == zwj {
 			continue
 		}
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029' {
+		if invisibleNameRune(r) {
 			return "", &NameError{Msg: nameMsgInvisible}
 		}
 	}
 	return s, nil
+}
+
+// invisibleNameRune is a stricter variant of the display-name rule in
+// internal/users/validate.go: on top of control, format (Cf) and line or
+// paragraph separators it refuses the invisible fillers that are not Cf
+// (Other_Default_Ignorable_Code_Point such as U+3164, and U+2800 BRAILLE
+// PATTERN BLANK) and every space separator other than ASCII space, so a name
+// cannot pass for another one. Variation selectors such as U+FE0F stay
+// allowed for emoji. The caller skips ZWJ before asking.
+func invisibleNameRune(r rune) bool {
+	return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029' ||
+		unicode.Is(unicode.Other_Default_Ignorable_Code_Point, r) || r == '\u2800' ||
+		(r != ' ' && unicode.Is(unicode.Zs, r))
 }

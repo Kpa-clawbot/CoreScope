@@ -14,7 +14,12 @@
   var GO_SPACE = '[\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]';
   var TRIM_RE = new RegExp('^' + GO_SPACE + '+|' + GO_SPACE + '+$', 'g');
   var BAD_RE = null;
-  try { BAD_RE = new RegExp('[\\p{Cc}\\p{Cf}\\u2028\\u2029]', 'u'); } catch (e) { BAD_RE = null; } // old engines: the server still checks
+  // Go's invisibleNameRune: Cc, Cf, U+2028/9, Other_Default_Ignorable_Code_Point
+  // (no \p{} for it in JS, so Go's unicode table spelled out), U+2800, and
+  // every Zs except ASCII space. Variation selectors (U+FE0F) stay allowed.
+  var ODI = '\\u034f\\u115f\\u1160\\u17b4\\u17b5\\u2065\\u3164\\uffa0\\ufff0-\\ufff8' +
+    '\\u{e0000}\\u{e0002}-\\u{e001f}\\u{e0080}-\\u{e00ff}\\u{e01f0}-\\u{e0fff}';
+  try { BAD_RE = new RegExp('[\\p{Cc}\\p{Cf}\\u2028\\u2029\\u2800' + ODI + ']|(?! )\\p{Zs}', 'u'); } catch (e) { BAD_RE = null; } // old engines: the server still checks
   var MSG = {
     empty: 'enter a channel name after #',
     long: 'a channel name is at most 31 bytes including the # (MeshCore stores 32 with the terminator)',
