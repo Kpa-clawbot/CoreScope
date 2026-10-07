@@ -122,7 +122,7 @@ func TestResolveNotifications(t *testing.T) {
 	if set.notify != (notifySettings{}) {
 		t.Fatalf("absent block = %+v; want off", set.notify)
 	}
-	defaults := notifySettings{enabled: true, interval: 5 * time.Minute, perUserPerDay: 20, maxMailsPerDay: 300, maxWatchesPerUser: 50}
+	defaults := notifySettings{enabled: true, interval: 5 * time.Minute, perUserPerDay: 20, maxMailsPerDay: 100, maxWatchesPerUser: 50}
 	u.Notifications = &NotificationsConfig{Enabled: true}
 	if set, _ = resolveUserManagement(u, "meshcore.db", noEnv); set.notify != defaults {
 		t.Fatalf("defaults = %+v", set.notify)

@@ -149,7 +149,7 @@ watched node changes state. Admins can also watch the instance.
 
 ```json
 "userManagement": {
-  "notifications": { "enabled": true, "intervalMinutes": 5, "perUserPerDay": 20, "maxMailsPerDay": 300, "maxWatchesPerUser": 50 }
+  "notifications": { "enabled": true, "intervalMinutes": 5, "perUserPerDay": 20, "maxMailsPerDay": 100, "maxWatchesPerUser": 50 }
 }
 ```
 
@@ -165,10 +165,14 @@ watched node changes state. Admins can also watch the instance.
   mail. The first check of a newly watched node stores its state without a mail; states
   are kept in `users.db`, so a restart does not mail again.
 - Limits: `perUserPerDay` mails per user and `maxMailsPerDay` in total, both over a
-  rolling 24 hours (Brevo's free tier allows 300 a day). A change over a limit, for an
-  account that is not active, for a bouncing address or while the user has
-  notifications off is recorded and never mailed later. `maxWatchesPerUser` bounds each
-  watch list.
+  rolling 24 hours. A change over a limit, for an account that is not active, for a
+  bouncing address or while the user has notifications off is recorded and never mailed
+  later. `maxWatchesPerUser` bounds each watch list.
+- `maxMailsPerDay` counts notification mail only; activation, password-reset and
+  address-change mail are not counted and are not limited by it. They share the mail
+  provider's daily quota, though (Brevo's free tier allows 300 a day for the whole
+  account), so keep `maxMailsPerDay` well below that quota. The default 100 leaves 200
+  a day for account mail and for any other sender on the same provider account.
 - Every mail carries a one-click unsubscribe link and `List-Unsubscribe` headers; the
   link turns notification mails off for that account and nothing else. The account page
   turns them back on.

@@ -99,8 +99,11 @@ type notifySettings struct {
 const (
 	defaultNotifyIntervalMinutes = 5
 	defaultNotifyPerUserPerDay   = 20
-	defaultNotifyMaxMailsPerDay  = 300 // Brevo's free tier
-	defaultNotifyMaxWatches      = 50
+	// defaultNotifyMaxMailsPerDay counts notification mail only. A third of
+	// Brevo's free 300 a day, so activation, reset and address-change mail
+	// (and other senders on the same account) still fit in the quota.
+	defaultNotifyMaxMailsPerDay = 100
+	defaultNotifyMaxWatches     = 50
 )
 
 // resolveNotifications fills the defaults for absent, zero or negative

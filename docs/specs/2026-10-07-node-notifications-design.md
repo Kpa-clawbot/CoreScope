@@ -275,3 +275,8 @@ except where a ruling below changes one.
   the ends are trimmed. It applies to the plain-text and the HTML part; the HTML part is
   still escaped. A name that is empty afterwards falls back to the key prefix or the
   observer id.
+- F3 (I3). The default `maxMailsPerDay` is 100, not 300 (decision 7 and the Config
+  example). It counts notification mail only (`mail_log` purpose `notify`); activation,
+  reset and address-change mail share the provider's daily quota (Brevo free tier: 300
+  for the whole account) and would fail at the provider on a day notifications used all
+  of it. 100 leaves room for that mail and for other senders on the same account.
