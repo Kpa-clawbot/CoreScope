@@ -1131,7 +1131,7 @@
       }
       var header = '<div style="font-weight:600;font-size:12px;margin-top:6px">Hash ' + shortHash + '  ·  ' + obsCount + ' observer' + (obsCount !== 1 ? 's' : '') + '  ·  median corrected: ' + medianLabel + '</div>';
       var lines = (ev.observers || []).map(function(o) {
-        var name = o.observerName || o.observerID;
+        var name = escapeHtml(o.observerName || o.observerID);
         return '<div style="font-size:11px;padding-left:16px;font-family:var(--mono)">' +
           name + '   raw=' + formatSkew(o.rawSkewSec) + '  corrected=' + formatSkew(o.correctedSkewSec) + '  (observer offset ' + formatSkew(o.observerOffsetSec) + ')' +
           '</div>';

@@ -2068,7 +2068,7 @@
       }
       listEl.innerHTML = _gfPruneNodes.map(function (n) {
         var coords = n.lat != null ? (' · ' + n.lat.toFixed(4) + ', ' + n.lon.toFixed(4)) : '';
-        return '<div>' + (n.name || n.pubkey.slice(0, 12)) + coords + '</div>';
+        return '<div>' + esc(n.name || n.pubkey.slice(0, 12)) + coords + '</div>';
       }).join('');
       confirmBtn.textContent = 'Delete ' + count + ' node' + (count !== 1 ? 's' : '');
       resultEl.style.display = '';
