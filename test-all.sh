@@ -38,6 +38,7 @@ node tests/unit/test-channel-qr.js
 node tests/unit/test-channel-sidebar-layout.js
 node tests/unit/test-channel-ux-followup.js
 node tests/unit/test-channel-ux-round2.js
+node tests/unit/test-channels-approved-ui.js
 node tests/unit/test-channels-merge-1498-unit.js
 node tests/unit/test-clear-filters.js
 node tests/unit/test-color-picker-ux.js

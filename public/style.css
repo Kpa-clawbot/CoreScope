@@ -1902,6 +1902,7 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 .ch-remove-btn:hover, .ch-remove-btn:focus { background: #8b3838; color: white; }
 .ch-share-btn:hover,  .ch-share-btn:focus  { color: var(--link-color, #3b82f6); }
 .ch-user-badge { font-size: 12px; font-weight: var(--fw-medium); margin-left: 2px; opacity: 0.85; flex-shrink: 0; } /* #1668 M3 r1 — chip floor, mirror row chips (adv #2) */
+.ch-approved-badge { font-size: 11px; font-weight: var(--fw-medium); color: var(--text-muted); border: 1px solid var(--border); border-radius: 8px; padding: 0 6px; margin-left: 4px; flex-shrink: 0; }
 .ch-item-preview { font-size: 13px; font-weight: var(--fw-medium); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } /* #1668 M3 — was 12px/400 */
 
 .ch-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
@@ -4985,6 +4986,10 @@ body[data-cb-preset="achromat"] {
   border-radius: 6px; cursor: pointer; font-size: 13px;
 }
 .ch-modal-btn-secondary[disabled] { opacity: .5; cursor: not-allowed; }
+.ch-modal-btn-secondary[hidden] { display: none; } /* the base rule's inline-flex would override [hidden] */
+.ch-propose-msg { font-size: 12px; margin-top: 4px; }
+.ch-propose-msg.ok { color: var(--status-green-tint-text); }
+.ch-propose-msg.err { color: var(--status-red-text); }
 .ch-hashtag-row .ch-hashtag-prefix {
   font-family: var(--mono, monospace); font-size: 14px; color: var(--text-muted); padding: 0 2px;
 }
