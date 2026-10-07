@@ -87,6 +87,9 @@ tracking pixels automatically, and others block them.
   (accounts, registrations, active users, logins, mail of the last 7 days) and the system
   status (version, uptime, MQTT sources, observers). It refreshes every minute while the
   tab is visible. Each item links to the matching user list or audit entries.
+  With node notifications on, the Users card also shows the notification mails of the
+  last 24 hours against `maxMailsPerDay`, and how many nodes are watched by how many
+  users (counts only; watch lists are private).
 - **Users**: the user list. *Bouncing mail only* shows addresses whose mail bounces.
 - **Audit**: every recorded action, newest first, filtered by action, period or user.
   Successful and failed logins are recorded without IP address and deleted after 90
@@ -139,6 +142,38 @@ on the *Proposals* tab.
   Names that need the zero-width non-joiner (U+200C), as some Persian and Urdu
   spellings do, are refused as well.
 
+### Node notifications (optional)
+
+With node notifications on, logged-in users choose nodes to watch and get a mail when a
+watched node changes state. Admins can also watch the instance.
+
+```json
+"userManagement": {
+  "notifications": { "enabled": true, "intervalMinutes": 5, "perUserPerDay": 20, "maxMailsPerDay": 300, "maxWatchesPerUser": 50 }
+}
+```
+
+- Events: a watched node goes offline or comes back, using the node page's thresholds:
+  offline once it has not been heard for the `healthThresholds` silent hours of its role
+  (heard is the latest of its last advert, the packet store's newest packet involving
+  it, and for repeaters and rooms its last relay hop). A watched node also reports a
+  battery below `batteryThresholds.lowMv`, and recovers at `lowMv + 100` mV. Admins can
+  add a new foreign node (once per node) and an observer going offline
+  (`observerStaleMinutes`) or back (`observerOnlineMinutes`).
+- A check runs every `intervalMinutes` (the first one an interval after startup, and only
+  once the packet store is loaded). All changes for one user in one check go into one
+  mail. The first check of a newly watched node stores its state without a mail; states
+  are kept in `users.db`, so a restart does not mail again.
+- Limits: `perUserPerDay` mails per user and `maxMailsPerDay` in total, both over a
+  rolling 24 hours (Brevo's free tier allows 300 a day). A change over a limit, for an
+  account that is not active, for a bouncing address or while the user has
+  notifications off is recorded and never mailed later. `maxWatchesPerUser` bounds each
+  watch list.
+- Every mail carries a one-click unsubscribe link and `List-Unsubscribe` headers; the
+  link turns notification mails off for that account and nothing else. The account page
+  turns them back on.
+- Watch lists are private: admins see counts on the overview, not lists.
+
 ### Backups
 
 `users.db` holds password hashes and addresses. Back it up together with the analyzer
@@ -166,6 +201,10 @@ database, and protect it the same way. Deleting it removes all accounts and noth
   channel*, type the hashtag name, *Propose for everyone*. *My account, My proposals*
   shows the status and the admin's note. Approved channels are readable for every
   visitor of the instance.
+- **Node notifications** (when the operator turned them on): *Notify me* on a node's
+  page watches it; *My account, Notifications* lists your watched nodes, turns mails on
+  or off, chooses the events, and *Watch my nodes* copies your synced My nodes. You get
+  at most one mail per check, and every mail has a link that turns the mails off.
 - **Never synced:** channel keys and decrypted messages, the API key, panel and column
   sizes, collapsed panels and map positions. They stay in the browser where you set them.
 - **Logging out** asks whether to keep your settings on this device (the default) or

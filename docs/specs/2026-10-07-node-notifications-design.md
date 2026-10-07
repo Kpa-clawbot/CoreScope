@@ -192,3 +192,72 @@ the state table holds at most 5,000 rows per event type.
 - Frontend unit (vm): toggle states, account section, escaping.
 - Playwright (e2etest build): a user watches a node, the account page lists it, the
   unsubscribe link turns notifications off.
+
+## Amendments from the implementation plan
+
+The plan (`docs/plans/2026-10-07-node-notifications.md`, untracked) decided these points
+where the spec was silent or did not match the code; all 18 were accepted as written,
+except where a ruling below changes one.
+
+1. "Per day" is a rolling 24 hours counted from `mail_log`, like the proposal limit.
+2. Offline uses the node page's three timestamps: `nodes.last_seen`, the packet store's
+   newest packet involving the node, and for repeaters and rooms `last_relayed`.
+3. No evaluation runs while the packet store is still loading after a restart; the first
+   one runs one interval after startup.
+4. `foreign.new` keeps a per-admin baseline row (subject `*`): the first evaluation after
+   opting in stores the current foreign nodes without mailing.
+5. Without a previous state, a battery between `lowMv` and `lowMv + 100` and an observer
+   between `observerOnlineMinutes` and `observerStaleMinutes` start as good.
+6. A watched node missing from the analyzer database is offline (one change) and not
+   evaluated for battery; the watch stays.
+7. States are written before mails are sent; a failed state write sends nothing and the
+   next check tries again; a failed send is not retried.
+8. States exist only for chosen events; leaving an event out deletes its states. Admin
+   events are evaluated only while the account is an admin.
+9. Preferences rows are created lazily (GET or PUT of the notification state, a watch
+   add, `watch-my-nodes`) with notifications on and the two node events. Changed by
+   ruling R1: users without a row are evaluated too.
+10. The unsubscribe GET only redirects to `#/account/unsubscribe?token=`; the POST takes
+    the token from the query string without a session or Origin check, answers 200 also
+    when notifications were already off, and 410 for an unknown token. The token is
+    stored raw, never rotates and only turns notifications off.
+11. `watch-my-nodes` answers `{added, already, skipped, account}`.
+12. The watch routes answer the full notification state; watching an already watched
+    node and unwatching an unwatched one answer 200.
+13. An admin event chosen by a non-admin answers 403; an unknown event answers 400.
+14. Pubkeys are 64 hex characters, lowercased on input; anything else answers 400.
+15. Mail: one subject line with the number of changes, one linked line per change, a
+    "Manage notifications" button and a footer with the one-click unsubscribe link;
+    every existing mail renders byte-identical.
+16. The admin overview's Users card shows mails in the last 24 hours against
+    `maxMailsPerDay`, watched nodes and watching users; the audit filter gains
+    `notify.*`.
+17. The e2etest build gains `GET /__e2e/unsubscribe-link?email=` so Playwright can follow
+    an unsubscribe link without waiting for a real state change.
+18. Foreign `told` rows are never pruned; they are bounded by the foreign nodes the
+    instance has seen.
+
+### Rulings during the implementation
+
+- R1. Users without a preferences row are evaluated with the default preferences
+  (enabled, node events). Users with notifications off keep being evaluated: their
+  states are written and nothing is mailed, so turning notifications on again never
+  mails old changes.
+- R2. Inactive and bouncing accounts are skipped at send time, not in the evaluator;
+  their states are still written, so the skipped changes are never mailed later.
+- R3. Offline takes the later of `last_seen` and the packet store's last heard (more
+  lenient than `roles.js` `last_heard || last_seen`); in a rare case the mail says
+  online while the node page says stale.
+- R4. Admin events of a user who is no longer an admin: their states are deleted, like
+  opting out, so a re-promotion starts with a fresh baseline and no burst of mails. A
+  demoted and re-promoted admin misses the foreign nodes seen in between.
+- R5. The server lowercases pubkeys at the route boundary before storing a watch (PUT
+  and DELETE of a watch, `watch-my-nodes`); `nodes.public_key` is lowercase.
+- R6. The Notify-me toggle waits for the first `/api/auth/me` round trip before it
+  decides whether a user is logged in; a failed state GET hides the toggle silently.
+- R7. `DB.NotifyNodes` reuses the existing SQL placeholder helper; `internal/users`
+  gets one placeholder helper shared by the new and the two existing inline copies.
+- R8. Test and tooling details without behaviour change: the limit test advances the
+  clock before writing the blocking `mail_log` row; the frontend unit test reads
+  elements through the test document; the toggle computes its state on its own line
+  before the HTML sink (XSS gate); gofmt runs only on touched files.

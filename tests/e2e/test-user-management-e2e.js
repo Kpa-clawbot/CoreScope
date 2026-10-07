@@ -9,7 +9,7 @@
  *   (cd cmd/server && go build -o ../../corescope-server . && go build -tags e2etest -o ../../corescope-server-e2e .)
  *   # config.json for the on-server (in $CFGDIR): port 13582, userManagement {enabled: true,
  *   #   dbPath "users.db", adminEmails ["admin@e2e.test"], publicBaseUrl "http://localhost:13582",
- *   #   mail {provider "fake", fromEmail "noreply@e2e.test"}, channelProposals {enabled: true}}
+ *   #   mail {provider "fake", fromEmail "noreply@e2e.test"}, channelProposals {enabled: true}, notifications {enabled: true}}
  *   corescope-server -port 13581 -db "$TMP/off.db" -public public &
  *   (cd "$CFGDIR" && corescope-server-e2e -config-dir . -port 13582 -db "$TMP/on.db" -public <repo>/public) &
  *   BASE_URL=http://localhost:13582 BASE_URL_OFF=http://localhost:13581 node tests/e2e/test-user-management-e2e.js
@@ -350,6 +350,65 @@ async function until(fn, label) {
   await step('feature off: /api/channels carries no approvedChannels', async () => {
     const body = await (await off.request.get(BASE_OFF + '/api/channels')).json();
     assert(!('approvedChannels' in body), 'approvedChannels present while off');
+  });
+
+  let watchKey = null;
+  await step('notifications: no Notify me toggle on a node page while logged out', async () => {
+    const body = await (await proposer.request.get(BASE + '/api/nodes?limit=1')).json();
+    watchKey = body.nodes[0].public_key;
+    const anon = await (await browser.newContext()).newPage();
+    anon.setDefaultTimeout(8000);
+    await anon.goto(BASE + '/#/nodes/' + encodeURIComponent(watchKey));
+    await anon.waitForSelector('#nodeNotifySlotFull', { state: 'attached' });
+    await authReady(anon);
+    await anon.waitForTimeout(500);
+    assert((await anon.locator('[data-notify-toggle]').count()) === 0, 'toggle shown while logged out');
+    await anon.context().close();
+  });
+
+  await step('notifications: a user turns on Notify me on a node page', async () => {
+    await proposer.goto(BASE + '/#/nodes/' + encodeURIComponent(watchKey));
+    await proposer.waitForSelector('#nodeNotifySlotFull [data-notify-toggle][aria-pressed="false"]');
+    await proposer.click('#nodeNotifySlotFull [data-notify-toggle]');
+    await proposer.waitForSelector('#nodeNotifySlotFull [data-notify-toggle][aria-pressed="true"]');
+  });
+
+  await step('notifications: the #/account?section=notifications deep link shows the watched node', async () => {
+    await proposer.goto(BASE + '/#/account?section=notifications');
+    await proposer.waitForSelector('#notifySection li[data-pubkey="' + watchKey + '"]');
+    assert(await proposer.isChecked('#notifyEnabled'), 'notifications are not on by default');
+    await until(() => proposer.evaluate(() => {
+      const r = document.getElementById('notifications').getBoundingClientRect();
+      return r.top >= -1 && r.top < window.innerHeight;
+    }), 'deep link scrolls to the Notifications heading');
+    await axeClean(proposer, '#notifySection');
+  });
+
+  await step('notifications: the unsubscribe link turns notifications off', async () => {
+    const r = await proposer.request.get(BASE + '/__e2e/unsubscribe-link?email=' + encodeURIComponent('proposer@e2e.test'));
+    assert(r.ok(), 'unsubscribe-link HTTP ' + r.status());
+    const { link } = await r.json();
+    const anon = await (await browser.newContext()).newPage();
+    anon.setDefaultTimeout(8000);
+    await anon.goto(link);
+    await anon.waitForSelector('#unsubBtn:not([disabled])');
+    await axeClean(anon, '#app');
+    await anon.click('#unsubBtn');
+    await until(async () => (await anon.textContent('#accountMsg')).indexOf('Notifications are off') !== -1, 'unsubscribe result');
+    await anon.context().close();
+    await proposer.goto(BASE + '/#/account?section=notifications');
+    await proposer.reload();
+    await proposer.waitForSelector('#notifyEnabled');
+    assert(!(await proposer.isChecked('#notifyEnabled')), 'still on after the unsubscribe link');
+  });
+
+  await step('feature off: no userManagement block, so no notifications flag, and no toggle on the node page', async () => {
+    const body = await (await off.request.get(BASE_OFF + '/api/config/client')).json();
+    assert(!body.userManagement, 'userManagement present while off');
+    await off.goto(BASE_OFF + '/#/nodes/' + encodeURIComponent(watchKey));
+    await off.waitForSelector('#nodeNotifySlotFull', { state: 'attached' });
+    await off.waitForTimeout(500);
+    assert((await off.locator('[data-notify-toggle]').count()) === 0, 'toggle shown while the feature is off');
   });
 
   await browser.close();
