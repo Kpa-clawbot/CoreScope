@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"strings"
 	"testing"
 	"time"
@@ -122,5 +124,43 @@ func TestJanitorPrunesOldLoginAudit(t *testing.T) {
 	}
 	if got := strings.Join(acts, ","); got != "user.password.change,user.activate,user.register" {
 		t.Fatalf("after prune: %s", got)
+	}
+}
+
+// A locked users.db must not hold the login answer: the audit row is
+// written in the background and lands once the lock is gone. A synchronous
+// write would block on the lock and then fail, leaving no row.
+func TestLoginAnswersBeforeTheAuditWrite(t *testing.T) {
+	f := newAuthFixture(t)
+	dave := f.registerAndActivate(t, "dave@example.org", "Dave", pw)
+
+	db, err := sql.Open("sqlite", f.srv.auth.set.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(context.Background(), "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+
+	w := f.serve("POST", "/api/auth/login", loginRequest{Email: "dave@example.org", Password: "wrong password!"})
+	if w.Code != 401 {
+		t.Fatalf("status %d; want 401", w.Code)
+	}
+	if _, err := conn.ExecContext(context.Background(), "ROLLBACK"); err != nil {
+		t.Fatal(err)
+	}
+	f.srv.auth.waitAudits()
+	got, err := f.st.AuditList(users.AuditFilter{Actions: []string{"user.login.failed"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].TargetUserID == nil || *got[0].TargetUserID != dave.me.ID {
+		t.Fatalf("login rows after the lock = %+v; want one for dave", got)
 	}
 }

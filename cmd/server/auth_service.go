@@ -27,6 +27,7 @@ type authService struct {
 	stop           chan struct{}
 	stopOnce       sync.Once
 	wg             sync.WaitGroup // the janitor
+	auditWG        sync.WaitGroup // in-flight auditAsync writes
 }
 
 func newAuthService(set *userMgmtSettings, st *users.Store, m mailer.Mailer) *authService {
@@ -80,6 +81,7 @@ func (s *Server) closeUserManagement() {
 	s.auth.stopOnce.Do(func() {
 		close(s.auth.stop)
 		s.auth.wg.Wait()
+		s.auth.waitAudits()
 		if err := s.auth.st.Close(); err != nil {
 			log.Printf("[users] close: %v", err)
 		}
@@ -152,6 +154,20 @@ func (a *authService) audit(actor *int64, action string, target *int64, detail m
 		log.Printf("[users] audit %s: %v", action, err)
 	}
 }
+
+// auditAsync writes an audit row in the background, so neither the write
+// nor a locked users.db delays the response. Best-effort: a failure is
+// logged by a.audit, and a row is lost if the process stops first.
+func (a *authService) auditAsync(actor *int64, action string, target *int64, detail map[string]string) {
+	a.auditWG.Add(1)
+	go func() {
+		defer a.auditWG.Done()
+		a.audit(actor, action, target, detail)
+	}()
+}
+
+// waitAudits blocks until every auditAsync write has finished.
+func (a *authService) waitAudits() { a.auditWG.Wait() }
 
 func idPtr(id int64) *int64 { return &id }
 

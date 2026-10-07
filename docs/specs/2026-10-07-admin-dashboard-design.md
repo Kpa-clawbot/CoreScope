@@ -219,6 +219,7 @@ These rules override the sections above where they differ.
 6. **`/api/healthz` is read on open and on "Refresh" only**, not on the 60-second timer:
    it walks every packet under a read lock. The timer refreshes `/api/admin/stats`,
    `/api/health`, `/api/mqtt/status` and `/api/observers`.
-7. **Timing.** Writing a `user.login.failed` row for an existing account makes that
-   response marginally slower than one for an unknown address. Argon2 dominates the
-   response time, so this is accepted.
+7. **Timing.** Login audit rows (`user.login` and `user.login.failed`) are written
+   asynchronously after the response is decided, best-effort, so neither the extra write
+   nor a locked `users.db` changes response timing. A row can be lost if the process
+   stops right after a login.

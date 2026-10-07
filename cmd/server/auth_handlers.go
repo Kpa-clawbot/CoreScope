@@ -201,8 +201,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	ok, err := users.VerifyPassword(u.PasswordHash, req.Password)
 	if err != nil || !ok || u.Status != users.StatusActive {
 		writeError(w, http.StatusUnauthorized, msgBadLogin)
-		// After the answer is decided; a failed write is logged by a.audit.
-		a.audit(nil, "user.login.failed", idPtr(u.ID), map[string]string{"reason": loginFailReason(err == nil && ok, u.Status)})
+		// In the background after the answer is decided, so the write never
+		// changes response timing.
+		a.auditAsync(nil, "user.login.failed", idPtr(u.ID), map[string]string{"reason": loginFailReason(err == nil && ok, u.Status)})
 		return
 	}
 	// Config wins: an address in adminEmails is always admin.
@@ -213,7 +214,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if a.startSession(w, r, u) {
-		a.audit(nil, "user.login", idPtr(u.ID), nil)
+		a.auditAsync(nil, "user.login", idPtr(u.ID), nil)
 	}
 }
 
