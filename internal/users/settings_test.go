@@ -136,9 +136,6 @@ func TestSettingsSurviveDisable(t *testing.T) {
 
 // A users.db written by a v1 binary gains user_settings and keeps its rows.
 func TestMigrateV1DatabaseToV2(t *testing.T) {
-	if len(migrations) != 2 {
-		t.Fatalf("len(migrations) = %d; this test pins the v1 to v2 step", len(migrations))
-	}
 	path := filepath.Join(t.TempDir(), "users.db")
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -161,8 +158,8 @@ func TestMigrateV1DatabaseToV2(t *testing.T) {
 		t.Fatalf("Open v1 db: %v", err)
 	}
 	defer st.Close()
-	if v, err := st.SchemaVersion(); err != nil || v != 2 {
-		t.Fatalf("SchemaVersion = %d, %v; want 2", v, err)
+	if v, err := st.SchemaVersion(); err != nil || v != len(migrations) {
+		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, len(migrations))
 	}
 	u, err := st.GetByEmail("old@example.org")
 	if err != nil {

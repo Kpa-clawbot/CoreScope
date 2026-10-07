@@ -83,6 +83,9 @@ var migrations = [][]string{
 			updated_at INTEGER NOT NULL
 		)`,
 	},
+	{ // v3: sub-project C, global audit list ordered and filtered by time
+		`CREATE INDEX audit_at ON audit_log(at)`,
+	},
 }
 
 func (s *Store) migrate() error {

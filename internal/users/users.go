@@ -214,6 +214,33 @@ func (s *Store) CountActiveAdmins() (int, error) {
 	return n, err
 }
 
+// UsersByID loads the users with the given ids in one query. Ids that no
+// longer exist are absent from the map.
+func (s *Store) UsersByID(ids []int64) (map[int64]User, error) {
+	out := make(map[int64]User, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	rows, err := s.db.Query(`SELECT `+userCols+` FROM users WHERE id IN (`+ph+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[u.ID] = *u
+	}
+	return out, rows.Err()
+}
+
 // PruneStalePending deletes pending accounts older than maxAge that have no
 // unused, unexpired activation token left.
 func (s *Store) PruneStalePending(maxAge time.Duration) (int64, error) {
