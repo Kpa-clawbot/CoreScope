@@ -46,12 +46,13 @@ type brevoAddress struct {
 }
 
 type brevoSendRequest struct {
-	Sender      brevoAddress   `json:"sender"`
-	To          []brevoAddress `json:"to"`
-	Subject     string         `json:"subject"`
-	HTMLContent string         `json:"htmlContent,omitempty"`
-	TextContent string         `json:"textContent,omitempty"`
-	Tags        []string       `json:"tags,omitempty"`
+	Sender      brevoAddress      `json:"sender"`
+	To          []brevoAddress    `json:"to"`
+	Subject     string            `json:"subject"`
+	HTMLContent string            `json:"htmlContent,omitempty"`
+	TextContent string            `json:"textContent,omitempty"`
+	Tags        []string          `json:"tags,omitempty"`
+	Headers     map[string]string `json:"headers,omitempty"`
 }
 
 type brevoError struct {
@@ -69,6 +70,7 @@ func (b *Brevo) Send(ctx context.Context, m Message) (string, error) {
 		Subject:     m.Subject,
 		HTMLContent: m.HTML,
 		TextContent: m.Text,
+		Headers:     m.Headers,
 	}
 	if m.Tag != "" {
 		req.Tags = []string{m.Tag}

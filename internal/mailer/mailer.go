@@ -14,7 +14,8 @@ type Message struct {
 	Subject string
 	HTML    string
 	Text    string
-	Tag     string // provider tag, e.g. "activate"
+	Tag     string            // provider tag, e.g. "activate"
+	Headers map[string]string // extra mail headers, e.g. List-Unsubscribe; nil for none
 }
 
 // Canonical delivery event names stored by CoreScope, independent of provider.

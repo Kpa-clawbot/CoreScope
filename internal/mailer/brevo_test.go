@@ -134,3 +134,41 @@ func TestBrevoSendRejectsEmptyContentAndNilClient(t *testing.T) {
 		t.Fatal("expected connection error")
 	}
 }
+func TestBrevoSendPassesHeaders(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		json.Unmarshal(b, &body)
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"messageId":"<m1>"}`))
+	}))
+	defer srv.Close()
+	b := NewBrevo("k", "noreply@example.org", "CoreScope")
+	b.BaseURL = srv.URL
+	hdr := map[string]string{
+		"List-Unsubscribe":      "<https://scope.example.org/api/notifications/unsubscribe?token=t>",
+		"List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+	}
+	if _, err := b.Send(context.Background(), Message{To: "a@example.org", Text: "t", Headers: hdr}); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := body["headers"].(map[string]any)
+	if !ok || got["List-Unsubscribe"] != hdr["List-Unsubscribe"] || got["List-Unsubscribe-Post"] != "List-Unsubscribe=One-Click" || len(got) != 2 {
+		t.Fatalf("headers in the request = %#v", body["headers"])
+	}
+	body = nil
+	if _, err := b.Send(context.Background(), Message{To: "a@example.org", Text: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := body["headers"]; present {
+		t.Fatalf("headers key sent without headers: %#v", body)
+	}
+}
+
+func TestFakeKeepsHeaders(t *testing.T) {
+	f := &Fake{}
+	f.Send(context.Background(), Message{To: "a@example.org", Text: "t", Headers: map[string]string{"List-Unsubscribe": "<x>"}})
+	if m, _, _ := f.Last(); m.Headers["List-Unsubscribe"] != "<x>" {
+		t.Fatalf("fake lost the headers: %+v", m)
+	}
+}
