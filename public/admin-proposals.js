@@ -40,8 +40,8 @@
     return '<tr data-id="' + id + '" data-subject="' + escapeHtml(p.subject) + '" data-status="' + escapeHtml(p.status) + '">' +
       '<td>' + escapeHtml(p.subject) + '</td>' +
       '<td>' + window.CSProposals.statusChip(p.status) + '</td>' +
-      '<td>' + refHtml(p.proposer) + '<br><small>' + escapeHtml(window.CSProposals.fmtDate(p.createdAt)) + '</small></td>' +
-      '<td>' + decided + (p.note ? '<br><small>' + escapeHtml(p.note) + '</small>' : '') + '</td>' +
+      '<td class="um-col-optional">' + refHtml(p.proposer) + '<br><small>' + escapeHtml(window.CSProposals.fmtDate(p.createdAt)) + '</small></td>' +
+      '<td class="um-col-optional">' + decided + (p.note ? '<br><small>' + escapeHtml(p.note) + '</small>' : '') + '</td>' +
       '<td>' + (acts ? '<input type="text" class="um-note" data-note="' + id + '" maxlength="500" placeholder="Note (optional)" aria-label="Note for ' +
         escapeHtml(p.subject) + '"> ' + acts : '') + '</td></tr>';
   }
@@ -105,7 +105,7 @@
       '<div class="um-filters"><label>Status <select id="propAdminStatus">' + optionsHtml() + '</select></label></div>' +
       '<p class="account-msg" id="propAdminMsg" role="status" aria-live="polite"></p>' +
       '<div class="um-table-wrap"><table class="um-table"><thead><tr>' +
-      '<th scope="col">Channel</th><th scope="col">Status</th><th scope="col">Proposed by</th><th scope="col">Decision</th><th scope="col">Actions</th>' +
+      '<th scope="col">Channel</th><th scope="col">Status</th><th scope="col" class="um-col-optional">Proposed by</th><th scope="col" class="um-col-optional">Decision</th><th scope="col">Actions</th>' +
       '</tr></thead><tbody id="propAdminBody"></tbody></table></div></div>';
     document.getElementById('propAdminStatus').value = state.status;
     document.getElementById('propAdminStatus').addEventListener('change', function (ev) { return setStatus(ev.target.value); });

@@ -576,6 +576,17 @@ test('rows escape subject, names, emails and notes; actions follow the status', 
   assert(t.refHtml({ id: 9, deleted: true }).indexOf('deleted account') !== -1);
 });
 
+test('Proposed by and Decision are optional columns, so Actions fits a phone', async () => {
+  const optional = (html) => (html.match(/class="um-col-optional"/g) || []).length;
+  const appr = propT().rowHtml(PR({ status: 'approved', decidedAt: '2026-10-07T11:00:00Z', reviewer: { id: 1, displayName: 'Ada', email: 'ada@example.org' } }));
+  assert.strictEqual(optional(appr), 2, appr);
+  assert(/<td class="um-col-optional">.*Pat/.test(propT().rowHtml(PR())));
+  const env = propEnv('#/admin?tab=proposals', () => OK([]));
+  const c = env.dom.mk('c');
+  await env.ctx.CSAdminProposals.mount(c);
+  assert(c.innerHTML.indexOf('<th scope="col" class="um-col-optional">Proposed by</th><th scope="col" class="um-col-optional">Decision</th><th scope="col">Actions</th>') !== -1, c.innerHTML);
+});
+
 test('mount loads the status from the hash and renders the rows', async () => {
   const env = propEnv('#/admin?tab=proposals&status=approved', () => OK([PR({ status: 'approved' })]));
   await env.ctx.CSAdminProposals.mount(env.dom.mk('c'));
