@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -1159,14 +1160,37 @@ var muxBraceParam = regexp.MustCompile(`\{([^}]+)\}`)
 var perfHexFallback = regexp.MustCompile(`[0-9a-f]{8,}`)
 
 // handleBatchObservations returns observations for multiple hashes in a single request.
+// Request-body caps for the unauthenticated POST endpoints. The other write
+// handlers already cap their bodies (geo-filter PUT 1 MB, paths/inspect 4 KB).
+const (
+	decodeBodyLimit            = 4 << 10  // /api/decode
+	batchObservationsBodyLimit = 64 << 10 // /api/packets/observations
+)
+
+// isBodyTooLarge reports whether a JSON decode error came from
+// http.MaxBytesReader hitting its cap, so the handler can answer 413
+// instead of a generic 400.
+func isBodyTooLarge(err error) bool {
+	var mbe *http.MaxBytesError
+	return errors.As(err, &mbe)
+}
+
 // POST /api/packets/observations with JSON body: {"hashes": ["abc123", "def456", ...]}
 // Response: {"results": {"abc123": [...observations...], "def456": [...], ...}}
 // Limited to 200 hashes per request to prevent abuse.
 func (s *Server) handleBatchObservations(w http.ResponseWriter, r *http.Request) {
+	// Cap the body before decoding. json.Decoder buffers the whole value in
+	// memory, so without a cap one unauthenticated request can hold an
+	// arbitrarily large buffer. 200 hashes of 64 hex chars is ~14 KB.
+	r.Body = http.MaxBytesReader(w, r.Body, batchObservationsBodyLimit)
 	var body struct {
 		Hashes []string `json:"hashes"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if isBodyTooLarge(err) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		writeError(w, 400, "invalid JSON body")
 		return
 	}
@@ -1309,10 +1333,20 @@ func (s *Server) handlePacketDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDecode(w http.ResponseWriter, r *http.Request) {
+	// Cap the body before decoding. A MeshCore packet is at most ~256 bytes
+	// (header + path + MAX_PACKET_PAYLOAD=184), i.e. ~512 hex chars, so 4 KB
+	// leaves room for whitespace and JSON framing. Without this cap the
+	// handler buffered the whole body and hex-decoded it before the payload
+	// size check ran.
+	r.Body = http.MaxBytesReader(w, r.Body, decodeBodyLimit)
 	var body struct {
 		Hex string `json:"hex"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if isBodyTooLarge(err) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
 		writeError(w, 400, "invalid JSON body")
 		return
 	}
