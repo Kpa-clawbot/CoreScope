@@ -202,7 +202,7 @@ func evaluateNotifications(in notifyInput) notifyResult {
 	}
 	sort.Slice(defaulted, func(i, j int) bool { return defaulted[i] < defaulted[j] })
 	for _, uid := range defaulted {
-		prefs = append(prefs, users.NotifyPrefs{UserID: uid, Enabled: true, Events: users.NodeNotifyEvents})
+		prefs = append(prefs, users.DefaultNotifyPrefs(uid))
 	}
 	mailing := false // Enabled of the user being evaluated
 	store := func(k users.NotifyKey, state string) {

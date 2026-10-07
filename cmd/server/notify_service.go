@@ -216,7 +216,7 @@ func (n *notifier) deliver(ctx context.Context, now time.Time, changes map[int64
 		u := accounts[uid]
 		p, ok := prefs[uid]
 		if !ok {
-			p = users.NotifyPrefs{UserID: uid, Enabled: true, Events: users.NodeNotifyEvents}
+			p = users.DefaultNotifyPrefs(uid)
 		}
 		if why := notifySkipReason(u, p, perUser[uid], total, n.a.set.notify); why != "" {
 			log.Printf("[notify] user #%d: %d change(s) not mailed: %s", uid, len(changes[uid]), why)

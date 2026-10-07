@@ -57,6 +57,13 @@ type NotifyPrefs struct {
 	UpdatedAt  time.Time
 }
 
+// DefaultNotifyPrefs is what a user without a preferences row gets:
+// notifications on, the node events chosen, no unsubscribe token yet.
+// NotifyPrefsFor stores these values when it creates the row.
+func DefaultNotifyPrefs(userID int64) NotifyPrefs {
+	return NotifyPrefs{UserID: userID, Enabled: true, Events: append([]string(nil), NodeNotifyEvents...)}
+}
+
 // Has reports whether the user chose event.
 func (p NotifyPrefs) Has(event string) bool {
 	for _, e := range p.Events {
@@ -143,8 +150,9 @@ func (s *Store) NotifyPrefsFor(userID int64) (NotifyPrefs, error) {
 	if err != nil {
 		return NotifyPrefs{}, err
 	}
+	d := DefaultNotifyPrefs(userID)
 	if _, err := s.db.Exec(`INSERT OR IGNORE INTO notification_prefs (user_id, enabled, events, unsub_token, updated_at)
-		VALUES (?, 1, ?, ?, ?)`, userID, strings.Join(NodeNotifyEvents, ","), tok, unix(s.now())); err != nil {
+		VALUES (?, ?, ?, ?, ?)`, userID, d.Enabled, strings.Join(d.Events, ","), tok, unix(s.now())); err != nil {
 		return NotifyPrefs{}, err
 	}
 	p, err := s.getPrefs(userID)

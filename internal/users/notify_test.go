@@ -328,3 +328,21 @@ func TestNotifyMailCounts(t *testing.T) {
 		t.Fatalf("NotifyMailCounts = %d, %v, %v; want 4, {a: 2, b: 1}", total, per, err)
 	}
 }
+
+func TestDefaultNotifyPrefs(t *testing.T) {
+	p := DefaultNotifyPrefs(7)
+	if p.UserID != 7 || !p.Enabled || !reflect.DeepEqual(p.Events, NodeNotifyEvents) || p.UnsubToken != "" {
+		t.Fatalf("DefaultNotifyPrefs = %+v", p)
+	}
+	p.Events[0] = "changed"
+	if NodeNotifyEvents[0] != NotifyNodeOffline {
+		t.Fatal("DefaultNotifyPrefs shares NodeNotifyEvents")
+	}
+	st, _ := newTestStore(t)
+	u := mustCreate(t, st, "d@example.org", "D")
+	got := mustPrefs(t, st, u.ID)
+	want := DefaultNotifyPrefs(u.ID)
+	if got.Enabled != want.Enabled || !reflect.DeepEqual(got.Events, want.Events) {
+		t.Fatalf("NotifyPrefsFor created %+v; want the defaults %+v", got, want)
+	}
+}
