@@ -19,3 +19,5 @@
 @media (pointer: fine) { .admin-tabs .tab-btn { min-height: 36px; } }
 .um-note { min-height: 36px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); color: var(--text); max-width: 16em; box-sizing: border-box; }
 .admin-proposals td .account-btn { margin: 2px 0; }
+/* Same breakpoint as .um-col-optional: the note input shrinks with its cell so Actions fits at 375 px. */
+@media (max-width: 760px) { .um-note { width: 100%; } }
