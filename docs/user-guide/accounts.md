@@ -134,7 +134,10 @@ on the *Proposals* tab.
   enabled: db=...`, ingestor: `[proposals] reading approved channels from ...`).
 - Names: at most 31 bytes including the `#` (MeshCore stores 32 with the terminator),
   no invisible or control characters (blank fillers such as U+3164 and spaces other than
-  the plain space count as invisible), case-sensitive, not Public. Emoji work.
+  the plain space count as invisible), case-sensitive, not Public. Emoji work, except
+  subdivision flags (England, Scotland, Wales), which use invisible tag characters.
+  Names that need the zero-width non-joiner (U+200C), as some Persian and Urdu
+  spellings do, are refused as well.
 
 ### Backups
 

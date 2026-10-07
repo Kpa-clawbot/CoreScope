@@ -248,3 +248,8 @@ by `maxApproved` (default 128).
     already approved channels. The browser mirror lists Go's
     `Other_Default_Ignorable_Code_Point` table explicitly (JS has no property escape for
     it); Go and JS give the same verdict for every code point.
+15. ZWNJ and tag characters stay refused (operator decision, 2026-10-07). Both are Cf, so
+    names that need the zero-width non-joiner (U+200C, some Persian and Urdu spellings)
+    and subdivision flags built from tag characters (England, Scotland, Wales) cannot be
+    proposed. The user guide says so. Allowing them later only widens the rule, so no
+    approved name is stranded by that change.
