@@ -289,3 +289,9 @@ except where a ruling below changes one.
   `[notify] ingest fresh again; offline checks resumed` when it ends. Without this, an
   MQTT or ingestor outage longer than a role's silent window mailed every watcher
   "offline" and later "back online".
+- F5 (I5). Every tick that evaluates logs one line:
+  `[notify] tick: users=N changes=M mails=K took=Xms lock=Yms`, where `lock` is how long
+  `PacketStore.LastHeardMap` held the store's read lock (timed inside the locked section
+  and returned with the map). The lock time at live scale was an estimate; staging and
+  live now report the measured value every interval. Code changes follow only if it is
+  high.

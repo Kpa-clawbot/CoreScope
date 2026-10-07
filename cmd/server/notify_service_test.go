@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ type fakeNotifySource struct {
 	relayed        map[string]time.Time
 	obs            []notifyObserver
 	newestAt       func() time.Time // newest packet in the store; nil means none
+	lock           time.Duration    // what lastHeard reports as its lock time
 	panicNext      bool
 	heardAsked     []string
 	foreignAsked   int
@@ -52,9 +54,9 @@ func (f *fakeNotifySource) nodes(pubkeys []string, withForeign bool) (map[string
 	}
 	return out, nil
 }
-func (f *fakeNotifySource) lastHeard(pks []string) map[string]time.Time {
+func (f *fakeNotifySource) lastHeard(pks []string) (map[string]time.Time, time.Duration) {
 	f.heardAsked = append([]string(nil), pks...)
-	return f.heard
+	return f.heard, f.lock
 }
 func (f *fakeNotifySource) lastRelayed([]string) map[string]time.Time { return f.relayed }
 func (f *fakeNotifySource) newestPacket() time.Time {
@@ -669,5 +671,24 @@ func TestNotifierTreatsAnEmptyStoreAsStale(t *testing.T) {
 	}
 	if s, err := f.st.AllNotifyStates(); err != nil || len(s) != 0 {
 		t.Fatalf("states with no packets in the store = %+v, %v", s, err)
+	}
+}
+
+func TestNotifierLogsOneLinePerTick(t *testing.T) {
+	f := newNotifyFixture(t, defaultNotifySettings())
+	f.watcher(t, "pat@example.org", "Pat", evPkA, evPkB)
+	f.watcher(t, "quinn@example.org", "Quinn", evPkB)
+	f.setNode(evPkA, "Alpha", "companion", time.Hour, nil)
+	f.setNode(evPkB, "Bravo", "companion", time.Hour, nil)
+	f.src.lock = 1500 * time.Microsecond
+	logs := captureLog(f.tick)
+	if !regexp.MustCompile(`\[notify\] tick: users=2 changes=0 mails=0 took=\d+\.\d\dms lock=1\.50ms`).MatchString(logs) {
+		t.Fatalf("first tick log = %q", logs)
+	}
+	f.clk.Advance(25 * time.Hour)
+	f.src.newestAt = f.clk.Now
+	logs = captureLog(f.tick)
+	if n := strings.Count(logs, "[notify] tick:"); n != 1 || !strings.Contains(logs, "users=2 changes=3 mails=2 ") {
+		t.Fatalf("second tick log (%d lines) = %q", n, logs)
 	}
 }

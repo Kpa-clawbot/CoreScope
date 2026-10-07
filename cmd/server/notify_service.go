@@ -98,11 +98,14 @@ func (n *notifier) safeTick(ctx context.Context) {
 // changes. Users without a preferences row and users with notifications
 // off are evaluated too (the evaluator gives the first the defaults and
 // keeps the second's states current without changes). A failed read or
-// state write ends the tick without mail; the next tick starts over.
+// state write ends the tick without mail; the next tick starts over. A
+// tick that evaluates logs one line with its counts, its duration and how
+// long LastHeardMap held the packet store's read lock.
 func (n *notifier) tick(ctx context.Context) {
 	if !n.src.ready() {
 		return
 	}
+	started := time.Now()
 	now := n.now()
 	stale := n.checkIngest(now)
 	st := n.a.st
@@ -187,9 +190,10 @@ func (n *notifier) tick(ctx context.Context) {
 			return
 		}
 	}
+	heard, lock := n.src.lastHeard(pubkeys)
 	res := evaluateNotifications(notifyInput{Now: now, Health: n.src.health(), LowMv: n.src.lowBatteryMv(),
 		Accounts: accounts, Prefs: prefs, Watches: watches, States: states, Nodes: nodes,
-		Heard: n.src.lastHeard(pubkeys), Relayed: n.src.lastRelayed(infra), Observers: observers, IngestStale: stale})
+		Heard: heard, Relayed: n.src.lastRelayed(infra), Observers: observers, IngestStale: stale})
 	if err := st.DeleteNotifyStates(res.Drop); err != nil {
 		log.Printf("[notify] delete dropped states, nothing mailed this time: %v", err)
 		return
@@ -200,8 +204,16 @@ func (n *notifier) tick(ctx context.Context) {
 			return
 		}
 	}
-	n.deliver(ctx, now, res.Changes, accounts, byUser)
+	mails := n.deliver(ctx, now, res.Changes, accounts, byUser)
+	changes := 0
+	for _, list := range res.Changes {
+		changes += len(list)
+	}
+	log.Printf("[notify] tick: users=%d changes=%d mails=%d took=%.2fms lock=%.2fms",
+		len(accounts), changes, mails, msFloat(time.Since(started)), msFloat(lock))
 }
+
+func msFloat(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
 
 // notifySkipReason says why a user's changes are not mailed; "" means send.
 // Skipped changes are already stored and are never mailed later.
@@ -226,17 +238,19 @@ func notifySkipReason(u users.User, p users.NotifyPrefs, userMails, totalMails i
 // with changes but no preferences row was evaluated with the defaults; the
 // row (and so the unsubscribe token) is created before the first mail.
 // Once ctx is cancelled (shutdown) the remaining users are not mailed;
-// their changes are already stored, like any other skipped change.
+// their changes are already stored, like any other skipped change. It
+// returns the number of mails sent.
 func (n *notifier) deliver(ctx context.Context, now time.Time, changes map[int64][]notifyChange,
-	accounts map[int64]users.User, prefs map[int64]users.NotifyPrefs) {
+	accounts map[int64]users.User, prefs map[int64]users.NotifyPrefs) int {
 	if len(changes) == 0 {
-		return
+		return 0
 	}
 	total, perUser, err := n.a.st.NotifyMailCounts(now.Add(-24 * time.Hour))
 	if err != nil {
 		log.Printf("[notify] count mails, nothing mailed this time: %v", err)
-		return
+		return 0
 	}
+	sent := 0
 	ids := make([]int64, 0, len(changes))
 	for uid := range changes {
 		ids = append(ids, uid)
@@ -245,7 +259,7 @@ func (n *notifier) deliver(ctx context.Context, now time.Time, changes map[int64
 	for i, uid := range ids {
 		if ctx.Err() != nil {
 			log.Printf("[notify] shutting down: %d user(s) with changes not mailed", len(ids)-i)
-			return
+			return sent
 		}
 		u := accounts[uid]
 		p, ok := prefs[uid]
@@ -270,7 +284,9 @@ func (n *notifier) deliver(ctx context.Context, now time.Time, changes map[int64
 		}
 		total++
 		perUser[uid]++
+		sent++
 	}
+	return sent
 }
 
 // notifyMail is the one mail for all of a user's changes in one evaluation.

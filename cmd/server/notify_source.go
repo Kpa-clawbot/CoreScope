@@ -13,7 +13,7 @@ type notifySource interface {
 	health() HealthThresholds
 	lowBatteryMv() int
 	nodes(pubkeys []string, withForeign bool) (map[string]notifyNode, error)
-	lastHeard(pubkeys []string) map[string]time.Time
+	lastHeard(pubkeys []string) (map[string]time.Time, time.Duration) // and how long the store lock was held
 	lastRelayed(pubkeys []string) map[string]time.Time
 	observers() ([]notifyObserver, error)
 	newestPacket() time.Time // zero when the store holds no packet
@@ -44,9 +44,9 @@ func (src serverNotifySource) nodes(pubkeys []string, withForeign bool) (map[str
 	return src.s.db.NotifyNodes(pubkeys, withForeign)
 }
 
-func (src serverNotifySource) lastHeard(pubkeys []string) map[string]time.Time {
+func (src serverNotifySource) lastHeard(pubkeys []string) (map[string]time.Time, time.Duration) {
 	if src.s.store == nil {
-		return map[string]time.Time{}
+		return map[string]time.Time{}, 0
 	}
 	return src.s.store.LastHeardMap(pubkeys)
 }
@@ -165,11 +165,13 @@ func (db *DB) NotifyNodes(pubkeys []string, withForeign bool) (map[string]notify
 
 // LastHeardMap returns, per pubkey with packets in the store, the newest
 // FirstSeen among them: the node page's "Last Heard" (GetNodeHealth) in
-// bulk. One read lock, O(packets of the given nodes), string compares
-// only; parsing happens after the lock is released.
-func (s *PacketStore) LastHeardMap(pubkeys []string) map[string]time.Time {
+// bulk, and how long the read lock was held (logged once per tick). One
+// read lock, O(packets of the given nodes), string compares only; parsing
+// happens after the lock is released.
+func (s *PacketStore) LastHeardMap(pubkeys []string) (map[string]time.Time, time.Duration) {
 	latest := make(map[string]string, len(pubkeys))
 	s.mu.RLock()
+	locked := time.Now()
 	for _, pk := range pubkeys {
 		for _, tx := range s.byNode[pk] {
 			if tx != nil && tx.FirstSeen > latest[pk] {
@@ -177,6 +179,7 @@ func (s *PacketStore) LastHeardMap(pubkeys []string) map[string]time.Time {
 			}
 		}
 	}
+	held := time.Since(locked)
 	s.mu.RUnlock()
 	out := make(map[string]time.Time, len(latest))
 	for pk, ts := range latest {
@@ -184,7 +187,7 @@ func (s *PacketStore) LastHeardMap(pubkeys []string) map[string]time.Time {
 			out[pk] = t
 		}
 	}
-	return out
+	return out, held
 }
 
 // NewestFirstSeen is the FirstSeen of the newest transmission in the

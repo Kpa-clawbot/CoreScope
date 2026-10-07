@@ -60,9 +60,12 @@ func TestPacketStoreLastHeardMap(t *testing.T) {
 		evPkA: {{FirstSeen: "2026-10-07T10:00:00Z"}, {FirstSeen: "2026-10-07T11:30:00.000Z"}, nil, {FirstSeen: "2026-10-07T09:00:00Z"}},
 		evPkB: {{FirstSeen: "not a time"}},
 	}}
-	got := s.LastHeardMap([]string{evPkA, evPkB, evPkF})
+	got, lock := s.LastHeardMap([]string{evPkA, evPkB, evPkF})
 	if len(got) != 1 || !got[evPkA].Equal(time.Date(2026, 10, 7, 11, 30, 0, 0, time.UTC)) {
 		t.Fatalf("LastHeardMap = %v", got)
+	}
+	if lock < 0 || lock > time.Second {
+		t.Fatalf("lock time = %v", lock)
 	}
 }
 
@@ -105,7 +108,7 @@ func TestNotifyObserversFrom(t *testing.T) {
 
 func TestServerNotifySourceWithoutStore(t *testing.T) {
 	src := serverNotifySource{s: &Server{cfg: &Config{}}}
-	if len(src.lastHeard([]string{evPkA})) != 0 || len(src.lastRelayed([]string{evPkA})) != 0 {
+	if heard, lock := src.lastHeard([]string{evPkA}); len(heard) != 0 || lock != 0 || len(src.lastRelayed([]string{evPkA})) != 0 {
 		t.Fatal("a server without a packet store reported times")
 	}
 	if src.lowBatteryMv() != 3300 || src.health().InfraSilentHours != 72 {
