@@ -533,7 +533,7 @@ func (s *Server) clientUserManagement() *ClientUserManagement {
 	if s.auth == nil {
 		return nil
 	}
-	return &ClientUserManagement{Enabled: true}
+	return &ClientUserManagement{Enabled: true, ChannelProposals: s.auth.set.proposals.enabled}
 }
 
 func (s *Server) handleConfigAreas(w http.ResponseWriter, r *http.Request) {
@@ -2715,6 +2715,16 @@ func (s *Server) handleResolveHops(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, ResolveHopsResponse{Resolved: resolved})
 }
 
+// approvedChannelsField is the approvedChannels value of /api/channels: nil
+// (absent) unless channel proposals are on.
+func (s *Server) approvedChannelsField() *[]string {
+	if s.auth == nil || !s.auth.set.proposals.enabled {
+		return nil
+	}
+	list := s.auth.approvedChannels()
+	return &list
+}
+
 func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 	region := r.URL.Query().Get("region")
 	includeEncrypted := r.URL.Query().Get("includeEncrypted") == "true"
@@ -2733,7 +2743,7 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 				channels = append(channels, encrypted...)
 			}
 		}
-		writeJSON(w, ChannelListResponse{Channels: channels})
+		writeJSON(w, ChannelListResponse{Channels: channels, ApprovedChannels: s.approvedChannelsField()})
 		return
 	}
 	if s.store != nil {
@@ -2741,10 +2751,10 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 		if includeEncrypted {
 			channels = append(channels, s.store.GetEncryptedChannels(region)...)
 		}
-		writeJSON(w, ChannelListResponse{Channels: channels})
+		writeJSON(w, ChannelListResponse{Channels: channels, ApprovedChannels: s.approvedChannelsField()})
 		return
 	}
-	writeJSON(w, ChannelListResponse{Channels: []map[string]interface{}{}})
+	writeJSON(w, ChannelListResponse{Channels: []map[string]interface{}{}, ApprovedChannels: s.approvedChannelsField()})
 }
 
 func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request) {

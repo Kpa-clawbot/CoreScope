@@ -930,6 +930,9 @@ type ChannelResp struct {
 
 type ChannelListResponse struct {
 	Channels []map[string]interface{} `json:"channels"`
+	// ApprovedChannels is set only when channel proposals are on (then
+	// always, [] included); nil keeps the response unchanged when off.
+	ApprovedChannels *[]string `json:"approvedChannels,omitempty"`
 }
 
 type ChannelMessageResp struct {
@@ -1089,9 +1092,11 @@ type ClientConfigResponse struct {
 	UserManagement *ClientUserManagement `json:"userManagement,omitempty"`
 }
 
-// ClientUserManagement tells the frontend that accounts exist.
+// ClientUserManagement tells the frontend that accounts exist, and whether
+// channel proposals are on.
 type ClientUserManagement struct {
-	Enabled bool `json:"enabled"`
+	Enabled          bool `json:"enabled"`
+	ChannelProposals bool `json:"channelProposals,omitempty"`
 }
 
 // CustomizerClientConfig is the operator-side customizer-modal knobs that
