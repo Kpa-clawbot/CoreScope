@@ -173,7 +173,8 @@ watched node changes state. Admins can also watch the instance.
   older evidence counts as heard at the moment the feed came back, so the outage itself
   mails nobody. A node that died during the outage is reported up to one window late.
   The server keeps this grace in memory: a restart after the recovery and inside that
-  window loses it.
+  window loses it, and so does a server that starts after an outage that already ended
+  before its first check (for example a reboot of the whole host after a long outage).
 - Limits: `perUserPerDay` mails per user and `maxMailsPerDay` in total, both over a
   rolling 24 hours. A change over a limit, for an account that is not active, for a
   bouncing address or while the user has notifications off is recorded and never mailed

@@ -303,5 +303,8 @@ except where a ruling below changes one.
   offline transition fires until a full silent window (per role; `observerStaleMinutes`
   for observers) has passed after recovery. A stored bad state is not lifted by it. A
   node that died during the outage is reported up to one window late; the grace is lost
-  when the server restarts after the recovery and inside that window. A watched node
+  when the server restarts after the recovery and inside that window, and when the
+  server starts after an outage that ended before its first check (no stale check is
+  ever seen; seeding the grace at every start would delay real offline reports by a
+  silent window after each deploy). A watched node
   missing from the analyzer database is still offline at once (no evidence to defer).
