@@ -257,6 +257,33 @@ func TestWriteNotifyStatesUpsertsAndSkipsDeletedUsers(t *testing.T) {
 	}
 }
 
+func TestDeleteNotifyStatesRemovesOnlyTheKeys(t *testing.T) {
+	st, clk := newTestStore(t)
+	u := mustCreate(t, st, "a@example.org", "A")
+	now := clk.Now()
+	if err := st.WriteNotifyStates([]NotifyState{
+		nState(u.ID, NotifyNodeOffline, nPkA, NotifyGood, now),
+		nState(u.ID, NotifyForeignNew, "*", NotifyGood, now),
+		nState(u.ID, NotifyForeignNew, nPkB, NotifyTold, now),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteNotifyStates(nil); err != nil {
+		t.Fatalf("empty delete: %v", err)
+	}
+	if err := st.DeleteNotifyStates([]NotifyKey{
+		{u.ID, NotifyForeignNew, "*"},
+		{u.ID, NotifyForeignNew, nPkB},
+		{u.ID, NotifyObserverOffline, "OBS1"}, // no such row
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := statesByKey(t, st)
+	if _, ok := got[NotifyKey{u.ID, NotifyNodeOffline, nPkA}]; len(got) != 1 || !ok {
+		t.Fatalf("states after delete = %+v", got)
+	}
+}
+
 func TestNotifyRowsCascadeOnUserDelete(t *testing.T) {
 	st, clk := newTestStore(t)
 	u := mustCreate(t, st, "a@example.org", "A")

@@ -386,6 +386,30 @@ func (s *Store) WriteNotifyStates(list []NotifyState) error {
 	return tx.Commit()
 }
 
+// DeleteNotifyStates deletes the rows of keys in one transaction; keys
+// without a row are ignored.
+func (s *Store) DeleteNotifyStates(keys []NotifyKey) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(`DELETE FROM notification_state WHERE user_id = ? AND event = ? AND subject = ?`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, k := range keys {
+		if _, err := stmt.Exec(k.UserID, k.Event, k.Subject); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // NotifyMailCounts counts notification mails sent at or after since: in
 // total (deleted accounts included) and per existing user.
 func (s *Store) NotifyMailCounts(since time.Time) (total int, perUser map[int64]int, err error) {
