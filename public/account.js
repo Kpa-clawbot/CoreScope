@@ -1,6 +1,6 @@
 /* Account pages for optional user management.
  *   #/account/login | register | activate?token= | forgot | reset?token= | confirm-email?token= | check-mail
- *   #/account                   — profile, password, address, sessions, delete
+ *   #/account                   : profile, password, address, sessions, delete
  * Every dynamic string goes through escapeHtml; messages use textContent. */
 (function () {
   'use strict';

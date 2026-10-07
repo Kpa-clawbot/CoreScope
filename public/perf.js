@@ -72,7 +72,7 @@ if (typeof window !== 'undefined') {
   window.detectPerfAnomalies = detectPerfAnomalies;
 }
 
-// resetPerfStats — the "Reset Stats" button's server call. Resolves true
+// resetPerfStats: the "Reset Stats" button's server call. Resolves true
 // when the local counters may be cleared. With user management off it is the
 // original fire-and-forget POST (nothing visible changes); with it on, an
 // admin session authorises the call and a refusal is reported.

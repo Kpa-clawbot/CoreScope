@@ -448,7 +448,7 @@ logged-in admins.
   opens are allowed only inside `internal/users`, and only for the configured
   `dbPath`. All existing prohibitions on the measurement DB stay.
 - **Playwright E2E** (server started with the feature on, the fake mailer, and a
-  test-only endpoint that returns the last mail's link — compiled in only under a
+  test-only endpoint that returns the last mail's link, compiled in only under a
   test build tag):
   - Register, activate, log in and log out.
   - An admin disables a user, and that user's next action shows "logged out".

@@ -9,7 +9,7 @@ import (
 // migrations[i] upgrades the schema from version i to i+1. Forward-only:
 // never edit a shipped entry, append a new one.
 var migrations = [][]string{
-	{ // v1 — sub-project A
+	{ // v1: sub-project A
 		`CREATE TABLE users (
 			id INTEGER PRIMARY KEY,
 			email TEXT NOT NULL UNIQUE,

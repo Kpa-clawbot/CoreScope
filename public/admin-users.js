@@ -1,4 +1,4 @@
-/* #/admin/users — admin user management (optional user management).
+/* #/admin/users: admin user management (optional user management).
  * Table with filters, per-row actions, and a detail panel with the mail
  * delivery timeline and audit log. Every dynamic value goes through escapeHtml.
  * Deep link: #/admin/users?status=&role=&q=&id= (read in init, written back
