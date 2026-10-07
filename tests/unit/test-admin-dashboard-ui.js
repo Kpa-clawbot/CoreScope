@@ -193,6 +193,48 @@ test('a refused or failed request shows its error in auditMsg', async () => {
   assert.strictEqual(broken.els.auditMsg.textContent, 'Network error, try again.');
 });
 
+test('a successful load clears an earlier error', async () => {
+  let fail = true;
+  const env = auditEnv('#/admin?tab=audit', () => fail ? { ok: false, status: 500, data: { error: 'boom' } } : OK({ entries: [E()], next: null }));
+  env.ctx.CSAdminAudit.mount(env.dom.mk('c'));
+  await tick();
+  assert.strictEqual(env.els.auditMsg.textContent, 'boom');
+  fail = false;
+  env.els.auditPeriod.handlers.change({ target: { value: '7d' } });
+  await tick();
+  assert.strictEqual(env.els.auditMsg.textContent, '');
+});
+
+test('a filter change clears stale rows and the cursor; the old response is dropped', async () => {
+  const held = [];
+  const env = auditEnv('#/admin?tab=audit', (p) => p.indexOf('from=') !== -1
+    ? OK({ entries: [E({ id: 50 })], next: null })
+    : (held.length ? Promise.resolve(OK({ entries: [E({ id: 10 })], next: 9 })) : new Promise((r) => { held.push(r); })));
+  env.ctx.CSAdminAudit.mount(env.dom.mk('c'));
+  await tick();
+  env.els.auditPeriod.handlers.change({ target: { value: '7d' } });
+  assert.strictEqual(env.els.auditMore.hidden, true);
+  assert.strictEqual(env.els.auditBody.innerHTML, '');
+  await tick();
+  assert.strictEqual(rows(env.els.auditBody.innerHTML), 1);
+  held[0](OK({ entries: [E({ id: 10 }), E({ id: 9 })], next: 9 }));
+  await tick();
+  assert.strictEqual(rows(env.els.auditBody.innerHTML), 1, 'stale response must be dropped');
+  assert.strictEqual(env.els.auditMore.hidden, true);
+});
+
+test('a failed filter request leaves no stale rows', async () => {
+  let fail = false;
+  const env = auditEnv('#/admin?tab=audit', () => fail ? { ok: false, status: 500, data: { error: 'boom' } } : OK({ entries: [E()], next: 9 }));
+  env.ctx.CSAdminAudit.mount(env.dom.mk('c'));
+  await tick();
+  fail = true;
+  env.els.auditPeriod.handlers.change({ target: { value: '7d' } });
+  await tick();
+  assert.strictEqual(env.els.auditBody.innerHTML, '');
+  assert.strictEqual(env.els.auditMore.hidden, true);
+});
+
 test('unmount drops a response that arrives later', async () => {
   let release;
   const env = auditEnv('#/admin?tab=audit', () => new Promise((r) => { release = r; }));

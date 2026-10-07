@@ -88,6 +88,7 @@
 
   function load(more) {
     var seq = ++state.seq;
+    CSAuth.say('auditMsg', '', true);
     return CSAuth.request('GET', apiPath(state.filters, more ? state.next : null, Date.now())).then(function (r) {
       var body = document.getElementById('auditBody');
       if (!body || seq !== state.seq) return;
@@ -106,6 +107,9 @@
     state.filters[key] = value;
     var h = hashFor(state.filters);
     if (h !== location.hash) history.replaceState(null, '', h);
+    state.next = null;
+    document.getElementById('auditMore').hidden = true;
+    document.getElementById('auditBody').innerHTML = '';
     return load(false);
   }
 
