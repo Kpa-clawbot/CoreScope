@@ -105,7 +105,7 @@ the rest of A–E. Rate limits use the existing token buckets (per IP and per us
 
 ### Companions
 
-- `POST /api/account/companions/challenge {pubkey}` → `200 {challenge, expiresAt}`.
+- `POST /api/account/companions/challenge {pubkey}` → `200 {challenge, expiresAt, host}`. `host` is the host of `userManagement.publicBaseUrl`; the client signs it as-is, so a client that reaches CoreScope under another name still signs what the server verifies.
   32 random bytes as hex, valid for 5 minutes, single use, bound to user and pubkey.
 - `POST /api/account/companions {pubkey, challenge, signature, name}`:
   1. Look up the challenge by hash. Missing, expired, or bound to another user or
