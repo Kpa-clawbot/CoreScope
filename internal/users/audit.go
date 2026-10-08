@@ -49,11 +49,21 @@ func (s *Store) Audit(actor *int64, action string, target *int64, detail map[str
 	return err
 }
 
-// AuditFor returns entries where userID is the target or the actor, newest first.
+// AuditFor returns entries where userID is the target or the actor, newest
+// first, at most limit (default 100).
 func (s *Store) AuditFor(userID int64, limit int) ([]AuditEntry, error) {
 	if limit <= 0 {
 		limit = 100
 	}
+	return s.auditFor(userID, limit)
+}
+
+// AuditAllFor is AuditFor without a cap (the account export).
+func (s *Store) AuditAllFor(userID int64) ([]AuditEntry, error) {
+	return s.auditFor(userID, noLimit)
+}
+
+func (s *Store) auditFor(userID int64, limit int) ([]AuditEntry, error) {
 	rows, err := s.db.Query(`SELECT id, at, actor_user_id, action, target_user_id, detail FROM audit_log
 		WHERE target_user_id = ? OR actor_user_id = ? ORDER BY at DESC, id DESC LIMIT ?`, userID, userID, limit)
 	if err != nil {

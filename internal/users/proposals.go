@@ -237,10 +237,20 @@ func (s *Store) ListProposals(f ProposalFilter) ([]Proposal, error) {
 	return s.queryProposals(q, args...)
 }
 
-// ProposalsByUser returns the user's proposals, newest first.
+// ProposalsByUser returns the user's proposals, newest first, at most
+// ProposalListMax.
 func (s *Store) ProposalsByUser(userID int64) ([]Proposal, error) {
+	return s.proposalsByUser(userID, ProposalListMax)
+}
+
+// AllProposalsByUser is ProposalsByUser without the cap (the account export).
+func (s *Store) AllProposalsByUser(userID int64) ([]Proposal, error) {
+	return s.proposalsByUser(userID, noLimit)
+}
+
+func (s *Store) proposalsByUser(userID int64, limit int) ([]Proposal, error) {
 	return s.queryProposals(`SELECT `+proposalCols+` FROM proposals WHERE proposer_id = ?
-		ORDER BY created_at DESC, id DESC LIMIT ?`, userID, ProposalListMax)
+		ORDER BY created_at DESC, id DESC LIMIT ?`, userID, limit)
 }
 
 func (s *Store) queryProposals(q string, args ...any) ([]Proposal, error) {

@@ -162,6 +162,16 @@ func (s *Store) NotifyPrefsFor(userID int64) (NotifyPrefs, error) {
 	return *p, nil
 }
 
+// StoredNotifyPrefs returns the user's stored preferences, or nil when
+// none were ever created. Unlike NotifyPrefsFor it never writes.
+func (s *Store) StoredNotifyPrefs(userID int64) (*NotifyPrefs, error) {
+	p, err := s.getPrefs(userID)
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	return p, err
+}
+
 // SetNotifyPrefs stores enabled and events (unknown events dropped,
 // canonical order) and deletes the state rows of events no longer chosen,
 // so choosing an event again starts with a silent first evaluation. The

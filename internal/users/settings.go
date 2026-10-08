@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // ErrSettingsConflict: PutSettings was given a base version that is not
@@ -43,6 +44,31 @@ func (s *Store) GetSettings(userID int64) (string, SettingsVersion, error) {
 		return "", SettingsVersion{}, err
 	}
 	return doc, v, nil
+}
+
+// SettingsRecord is a stored settings document with its version and the
+// time of its last write.
+type SettingsRecord struct {
+	Doc       string
+	Version   SettingsVersion
+	UpdatedAt time.Time
+}
+
+// SettingsRecordFor returns the user's stored settings, or nil when the
+// user has none.
+func (s *Store) SettingsRecordFor(userID int64) (*SettingsRecord, error) {
+	var r SettingsRecord
+	var updated int64
+	err := s.db.QueryRow(`SELECT doc, revision, generation, updated_at FROM user_settings WHERE user_id = ?`, userID).
+		Scan(&r.Doc, &r.Version.Revision, &r.Version.Generation, &updated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	r.UpdatedAt = fromUnix(updated)
+	return &r, nil
 }
 
 // PutSettings stores doc and returns the new version. Without a stored

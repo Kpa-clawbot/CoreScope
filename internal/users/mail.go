@@ -134,11 +134,21 @@ func (s *Store) MailByID(id int64) (*MailRecord, error) {
 	return m, nil
 }
 
-// MailForUser returns a user's mails, newest first, each with its events.
+// MailForUser returns a user's mails, newest first, each with its events,
+// at most limit (default 50).
 func (s *Store) MailForUser(userID int64, limit int) ([]MailRecord, error) {
 	if limit <= 0 {
 		limit = 50
 	}
+	return s.mailForUser(userID, limit)
+}
+
+// MailAllForUser is MailForUser without a cap (the account export).
+func (s *Store) MailAllForUser(userID int64) ([]MailRecord, error) {
+	return s.mailForUser(userID, noLimit)
+}
+
+func (s *Store) mailForUser(userID int64, limit int) ([]MailRecord, error) {
 	rows, err := s.db.Query(`SELECT `+mailCols+` FROM mail_log WHERE user_id = ? ORDER BY sent_at DESC, id DESC LIMIT ?`, userID, limit)
 	if err != nil {
 		return nil, err

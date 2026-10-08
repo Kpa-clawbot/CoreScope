@@ -28,6 +28,9 @@ var (
 	ErrAccountChanged = errors.New("users: account changed since it was read")
 )
 
+// noLimit is SQLite's LIMIT value for "every row" (the account export).
+const noLimit = -1
+
 // Store is the users.db handle. Safe for concurrent use.
 type Store struct {
 	db  *sql.DB
