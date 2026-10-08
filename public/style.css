@@ -1081,9 +1081,12 @@ img.brand-logo {
   text-align: left; text-transform: inherit; letter-spacing: inherit;
 }
 .node-packet-count-help .sort-help-tip {
-  top: auto; bottom: 130%; left: 0; transform: none;
+  top: auto; bottom: 100%; left: 0; transform: none; pointer-events: auto;
   font-weight: normal; text-transform: none; letter-spacing: normal;
 }
+.node-packet-count-help.help-dismissed .sort-help-tip { display: none; }
+/* Avoid touch target expansion redirecting nearby table-cell taps into the help button. */
+.node-packet-count-help.help-touch .sort-help-tip { pointer-events: none; }
 .filter-bar .btn:hover { background: var(--row-hover); }
 .filter-bar .btn.active { background: var(--accent-strong); color: var(--text-on-accent); border-color: var(--accent-strong); }
 .filter-bar .col-toggle-btn { height: 34px; min-height: 34px; }

@@ -491,9 +491,11 @@
   let directNode = null; // set when navigating directly to #/nodes/:pubkey
 
   let regionChangeHandler = null;
+  let packetCountHelpCleanup = null;
 
   function init(app, routeParam) {
     directNode = routeParam || null;
+    packetCountHelpCleanup = setupPacketCountHelp(app);
 
     if (directNode) {
       // Full-screen single node view (desktop + mobile).
@@ -636,6 +638,71 @@
 
   function renderPacketCountLabel(id) {
     return `<button type="button" class="sort-help node-packet-count-help" aria-label="Total Packets help" aria-describedby="${id}">Total Packets <span aria-hidden="true">ⓘ</span><span class="sort-help-tip" id="${id}" role="tooltip">Total Packets counts distinct transmissions involving this node as an originator, destination, or resolved relay. The seen count totals observations of those transmissions; one transmission can have multiple observations.</span></button>`;
+  }
+
+  function setupPacketCountHelp(app) {
+    let activeHelp = null;
+    let frame = 0;
+
+    function position() {
+      if (!activeHelp || !activeHelp.isConnected) { activeHelp = null; return; }
+      const tip = activeHelp.querySelector('.sort-help-tip');
+      if (!tip.offsetHeight) return;
+      const trigger = activeHelp.getBoundingClientRect();
+      const bounds = activeHelp.closest('#nodesRight, #nodeFullBody').getBoundingClientRect();
+      const top = Math.max(0, bounds.top);
+      const bottom = Math.min(window.innerHeight, bounds.bottom);
+      const left = Math.max(0, bounds.left);
+      const right = Math.min(window.innerWidth, bounds.right);
+      if (trigger.bottom <= top || trigger.top >= bottom) {
+        activeHelp.classList.add('help-dismissed');
+        return;
+      }
+      tip.style.maxWidth = (right - left) + 'px';
+      tip.style.left = Math.max(left - trigger.left, Math.min(0, right - trigger.left - tip.offsetWidth)) + 'px';
+      const height = tip.offsetHeight;
+      const preferredTop = trigger.top - height < top ? trigger.bottom : trigger.top - height;
+      tip.style.top = (Math.max(top, Math.min(preferredTop, bottom - height)) - trigger.top) + 'px';
+      tip.style.bottom = 'auto';
+    }
+
+    function open(event) {
+      const help = event.target.closest('.node-packet-count-help');
+      if (!help || help.contains(event.relatedTarget)) return;
+      activeHelp = help;
+      help.classList.remove('help-dismissed');
+      if (event.type === 'pointerover') help.classList.toggle('help-touch', event.pointerType === 'touch');
+      position();
+    }
+
+    function schedule() {
+      if (!activeHelp || frame) return;
+      frame = requestAnimationFrame(() => { frame = 0; position(); });
+    }
+
+    function dismiss(event) {
+      if (event.key !== 'Escape' || !activeHelp || !activeHelp.isConnected ||
+          !activeHelp.querySelector('.sort-help-tip').offsetHeight) return;
+      activeHelp.classList.add('help-dismissed');
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+
+    app.addEventListener('pointerover', open);
+    app.addEventListener('focusin', open);
+    app.addEventListener('scroll', schedule, true);
+    window.addEventListener('resize', schedule);
+    // Capture also dismisses hover-only help before the page's Escape shortcuts.
+    document.addEventListener('keydown', dismiss, true);
+    return () => {
+      app.removeEventListener('pointerover', open);
+      app.removeEventListener('focusin', open);
+      app.removeEventListener('scroll', schedule, true);
+      window.removeEventListener('resize', schedule);
+      document.removeEventListener('keydown', dismiss, true);
+      cancelAnimationFrame(frame);
+      activeHelp = null;
+    };
   }
 
   async function loadFullNode(pubkey) {
@@ -1077,6 +1144,7 @@
   }
 
   function destroy() {
+    if (packetCountHelpCleanup) { packetCountHelpCleanup(); packetCountHelpCleanup = null; }
     if (wsHandler) offWS(wsHandler);
     wsHandler = null;
     removeDetailMap();
