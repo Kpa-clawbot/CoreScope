@@ -600,6 +600,15 @@ test('profile view: Log out button for everyone, Admin link for admins only', ()
   assert(admin.indexOf('href="#/admin">Admin</a>') !== -1, admin);
 });
 
+test('profile view: Download my data links to the export route, before Delete account', () => {
+  const env = loadAccount('#/account', () => ({}));
+  const html = env.t.profileHtml({ email: 'a', role: 'user', displayName: 'A' });
+  const link = '<a class="account-btn account-btn-secondary" id="accountExport" href="/api/account/export" download>Download my data</a>';
+  assert(html.indexOf(link) !== -1, html);
+  assert(html.indexOf('<h3>My data</h3>') !== -1, 'no My data heading');
+  assert(html.indexOf('id="accountExport"') < html.indexOf('id="delForm"'), 'export link after the delete form');
+});
+
 test('profile view follows auth changes: logout redirects, another user re-renders', () => {
   const env = loadAccount('#/account', () => ({ ok: true, status: 200, data: [] }));
   env.user.current = { id: 1, email: 'a@b.c', displayName: 'Ann', role: 'user' };

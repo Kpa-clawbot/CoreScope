@@ -101,6 +101,12 @@ test('the audit action filter offers channel proposals', () => {
   assert.strictEqual(auditT().readHash('#/admin?tab=audit&action=proposal.*').action, 'proposal.*');
 });
 
+test('the audit action filter offers data export and users.db backup', () => {
+  const t = auditT();
+  assert.strictEqual(t.readHash('#/admin?tab=audit&action=user.export').action, 'user.export');
+  assert.strictEqual(t.readHash('#/admin?tab=audit&action=user.backup').action, 'user.backup');
+});
+
 test('hashFor writes tab=audit and only the set filters', () => {
   const t = auditT();
   assert.strictEqual(t.hashFor({ action: 'user.login.*', user: '12', period: '' }), '#/admin?tab=audit&action=user.login.*&user=12');

@@ -191,8 +191,42 @@ watched node changes state. Admins can also watch the instance.
 
 ### Backups
 
-`users.db` holds password hashes and addresses. Back it up together with the analyzer
-database, and protect it the same way. Deleting it removes all accounts and nothing else.
+`users.db` holds password hashes and addresses. The server keeps its own snapshots of
+it: at startup when the newest snapshot is older than 24 hours (or there is none), then
+every 24 hours. A snapshot is a complete copy named `users-<YYYYMMDD-HHMMSS>.db` (UTC),
+readable by the server's user only, in `backups/` next to `users.db`. After each new
+snapshot the oldest ones beyond `keep` are deleted; other files in that directory are
+never touched. A failed snapshot is logged (`[users] backup failed: ...`) and the next
+run tries again.
+
+```json
+"userManagement": {
+  "backup": { "enabled": true, "dir": "", "keep": 7 }
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `backup.enabled` | Default `true`, also when the block is absent. `false` turns the snapshots off. |
+| `backup.dir` | Where snapshots go. Empty: `backups/` next to `users.db`. A relative path is relative to the server's working directory. |
+| `backup.keep` | How many snapshots are kept. Default 7, also for 0 or less. |
+
+Snapshots on the same disk are lost with that disk. To keep a copy elsewhere, log in as
+an admin and open `/api/admin/users-backup` in the same browser: it downloads a fresh
+snapshot (`corescope-users-<YYYYMMDD-HHMMSS>.db`) and records it in the audit log
+(`user.backup`). Store the download encrypted: it holds every password hash and address.
+The analyzer database has its own backup route, `GET /api/backup`.
+
+**Restore** (not automated):
+
+1. Stop the server.
+2. Copy the snapshot over `users.db`, and delete `users.db-wal` and `users.db-shm` if
+   they exist.
+3. Start the server.
+
+A snapshot made by a newer CoreScope version is refused at startup ("database schema
+version N is newer than this binary supports"): run that version or newer. Deleting
+`users.db` removes all accounts and nothing else.
 
 ## For users
 
@@ -205,6 +239,13 @@ database, and protect it the same way. Deleting it removes all accounts and noth
 - **My account:** change your display name, password or address, see your logged-in
   devices, or delete your account. A new address is confirmed from a link sent to it, and
   your old address gets a notice. Changing your password logs out your other devices.
+- **Download my data:** *My account, My data, Download my data* saves one JSON file with
+  your profile (including when and by whom the account was activated), logged-in devices,
+  synced settings, proposals, notification settings and watched nodes, and the history of
+  your account and of the mail sent to you (including the address each mail went to).
+  Password hashes and login, link and unsubscribe tokens are not in it. Other accounts in
+  your history appear as a number only. Each download is recorded in the audit log
+  (`user.export`).
 - **Settings sync:** while you are logged in, your settings follow you: your nodes,
   favorites, theme and customizer settings, saved packet filters, and the filter, sort
   and view choices of each page. Log in on another browser or phone and they are

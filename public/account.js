@@ -114,6 +114,9 @@
       (window.CSProposals && window.CSProposals.enabled() ? '<h3>My proposals</h3><div id="propList"></div>' + msgBox('propMsg') : '') +
       (window.CSNotify && window.CSNotify.enabled() ? '<h3 id="notifications">Notifications</h3><div id="notifySection"></div>' + msgBox('notifyMsg') : '') +
       (window.CSSettingsSync ? '<h3>Settings sync</h3><div id="syncSection"></div>' : '') +
+      '<h3>My data</h3>' +
+      '<p class="account-hint">One JSON file with everything this instance stores about your account: profile, devices, synced settings, proposals, notifications, and your account and mail history. Passwords and login tokens are not included.</p>' +
+      '<div class="account-actions"><a class="account-btn account-btn-secondary" id="accountExport" href="/api/account/export" download>Download my data</a></div>' +
       '<h3>Delete account</h3><form id="delForm" class="account-form" novalidate>' +
       '<p class="account-hint">This removes your account permanently.</p>' +
       field('delPw', 'Current password', 'password', 'current-password') +

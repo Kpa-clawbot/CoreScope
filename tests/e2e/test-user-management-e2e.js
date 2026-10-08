@@ -416,6 +416,19 @@ async function until(fn, label) {
     assert(!(await proposer.isChecked('#notifyEnabled')), 'still on after the unsubscribe link');
   });
 
+  await step('data export: the account page links to the export, which returns the user\'s own data', async () => {
+    await proposer.goto(BASE + '/#/account');
+    await proposer.waitForSelector('#accountExport');
+    assert(await proposer.getAttribute('#accountExport', 'href') === '/api/account/export', 'export link href');
+    const r = await proposer.request.get(BASE + '/api/account/export');
+    assert(r.ok(), 'export HTTP ' + r.status());
+    const cd = r.headers()['content-disposition'] || '';
+    assert(/^attachment; filename="corescope-account-\d{4}-\d{2}-\d{2}\.json"$/.test(cd), 'content-disposition ' + cd);
+    const body = await r.json();
+    assert(body.formatVersion === 1, 'formatVersion ' + body.formatVersion);
+    assert(body.profile && body.profile.email === 'proposer@e2e.test', 'export profile ' + JSON.stringify(body.profile));
+  });
+
   await step('feature off: no userManagement block, so no notifications flag, and no toggle on the node page', async () => {
     const body = await (await off.request.get(BASE_OFF + '/api/config/client')).json();
     assert(!body.userManagement, 'userManagement present while off');

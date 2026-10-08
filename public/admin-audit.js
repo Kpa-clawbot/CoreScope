@@ -21,6 +21,8 @@
     ['user.password.*', 'Password changes and resets'],
     ['user.email.*', 'Address changes'],
     ['user.mail.refresh', 'Mail status refreshed'],
+    ['user.export', 'Data exports'],
+    ['user.backup', 'users.db downloads'],
     ['proposal.*', 'Channel proposals'],
     ['notify.*', 'Notification settings']
   ];
