@@ -1,13 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
+	"strconv"
 	"testing"
 	"time"
+
+	"github.com/meshcore-analyzer/users"
 )
 
 var backupNow = time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
@@ -189,5 +194,59 @@ func TestInitUserManagementBacksUpAtStartup(t *testing.T) {
 	srv.closeUserManagement()
 	if names := snapshotNames(t, filepath.Join(dir, "backups")); len(names) != 1 {
 		t.Fatalf("snapshots after startup = %v; want 1", names)
+	}
+}
+
+var usersBackupFilenameRE = regexp.MustCompile(`^attachment; filename="corescope-users-\d{8}-\d{6}\.db"$`)
+
+func TestAdminUsersBackupDownload(t *testing.T) {
+	f, boss, uma := adminFixture(t)
+	tmp := t.TempDir()
+	for _, k := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(k, tmp)
+	}
+	expectStatus(t, f.do("GET", "/api/admin/users-backup", nil), 401)
+	expectStatus(t, f.do("GET", "/api/admin/users-backup", nil, as(uma)), 403)
+
+	w := f.do("GET", "/api/admin/users-backup", nil, as(boss))
+	expectStatus(t, w, 200)
+	if ct := w.Header().Get("Content-Type"); ct != "application/octet-stream" {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q", cc)
+	}
+	if cd := w.Header().Get("Content-Disposition"); !usersBackupFilenameRE.MatchString(cd) {
+		t.Errorf("Content-Disposition = %q", cd)
+	}
+	body := w.Body.Bytes()
+	if !bytes.HasPrefix(body, []byte("SQLite format 3\x00")) {
+		t.Fatalf("body is not a SQLite file (%d bytes)", len(body))
+	}
+	if cl := w.Header().Get("Content-Length"); cl != strconv.Itoa(len(body)) {
+		t.Errorf("Content-Length = %q; body is %d bytes", cl, len(body))
+	}
+	path := filepath.Join(t.TempDir(), "download.db")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("users in the download = %d, %v; want 2", n, err)
+	}
+	if left, _ := os.ReadDir(tmp); len(left) != 0 {
+		t.Fatalf("temporary files left in the temp dir: %d", len(left))
+	}
+	entries, err := f.st.AuditList(users.AuditFilter{Actions: []string{"user.backup"}})
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("user.backup rows = %d, %v; want 1", len(entries), err)
+	}
+	if e := entries[0]; e.ActorUserID == nil || *e.ActorUserID != boss.me.ID || e.TargetUserID != nil {
+		t.Fatalf("user.backup row = %+v", e)
 	}
 }

@@ -2,12 +2,15 @@ package main
 
 import (
 	"errors"
+	"io"
 	"io/fs"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -125,4 +128,48 @@ func (a *authService) maybeBackup(now time.Time) {
 		log.Printf("[users] backup rotation failed: %v", err)
 	}
 	log.Printf("[users] backup written: %s (%d bytes, kept %d)", absForLog(path), size, kept)
+}
+
+// handleAdminUsersBackup streams a fresh users.db snapshot from a temp
+// directory, removed afterwards. The file holds password hashes and
+// addresses: admin only, audited as user.backup.
+func (s *Server) handleAdminUsersBackup(w http.ResponseWriter, _ *http.Request, admin *users.User, _ *users.Session) {
+	a := s.auth
+	tmpDir, err := os.MkdirTemp("", "corescope-users-")
+	if err != nil {
+		log.Printf("[users] backup download: temp dir: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	defer func() {
+		if err := os.RemoveAll(tmpDir); err != nil {
+			log.Printf("[users] backup download cleanup: %v", err)
+		}
+	}()
+	name := "corescope-users-" + time.Now().UTC().Format(usersBackupLayout) + ".db"
+	path := filepath.Join(tmpDir, name)
+	if err := a.st.Snapshot(path); err != nil {
+		log.Printf("[users] backup download: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		log.Printf("[users] backup download: open snapshot: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	defer f.Close() // runs before the RemoveAll above (LIFO), which Windows needs
+	if fi, err := f.Stat(); err == nil {
+		w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
+	}
+	a.audit(idPtr(admin.ID), "user.backup", nil, nil)
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	if _, err := io.Copy(w, f); err != nil {
+		log.Printf("[users] backup download stream: %v", err)
+	}
 }
