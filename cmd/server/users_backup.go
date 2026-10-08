@@ -87,19 +87,27 @@ func writeUsersBackup(st *users.Store, dir string, now time.Time) (string, int64
 }
 
 // rotateUsersBackups deletes the oldest snapshots beyond keep and returns
-// how many remain.
-func rotateUsersBackups(dir string, keep int) (int, error) {
+// how many remain. It never deletes justWritten, which a future-dated name
+// (a clock that ran ahead) would otherwise push out as the oldest.
+func rotateUsersBackups(dir string, keep int, justWritten string) (int, error) {
 	names, err := listUsersBackups(dir)
 	if err != nil {
 		return 0, err
 	}
-	for len(names) > keep {
-		if err := os.Remove(filepath.Join(dir, names[0])); err != nil {
-			return len(names), err
+	kept := len(names)
+	for _, n := range names {
+		if kept <= keep {
+			break
 		}
-		names = names[1:]
+		if n == justWritten {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, n)); err != nil {
+			return kept, err
+		}
+		kept--
 	}
-	return len(names), nil
+	return kept, nil
 }
 
 // maybeBackup takes a snapshot when one is due and then rotates. The
@@ -123,7 +131,7 @@ func (a *authService) maybeBackup(now time.Time) {
 		log.Printf("[users] backup failed: %v", err)
 		return
 	}
-	kept, err := rotateUsersBackups(b.dir, b.keep)
+	kept, err := rotateUsersBackups(b.dir, b.keep, filepath.Base(path))
 	if err != nil {
 		log.Printf("[users] backup rotation failed: %v", err)
 	}

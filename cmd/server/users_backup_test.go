@@ -129,6 +129,17 @@ func TestUsersBackupFutureSnapshotDoesNotBlock(t *testing.T) {
 	}
 }
 
+func TestUsersBackupRotationNeverDeletesTheNewSnapshot(t *testing.T) {
+	a, dir := backupService(t, 1)
+	future := usersBackupFile(backupNow.Add(48 * time.Hour))
+	writeBackupFile(t, dir, future)
+	a.maybeBackup(backupNow)
+	want := []string{usersBackupFile(backupNow)}
+	if names := snapshotNames(t, dir); !reflect.DeepEqual(names, want) {
+		t.Fatalf("snapshots = %v; want %v", names, want)
+	}
+}
+
 func TestUsersBackupRotationKeepsNewestAndForeignFiles(t *testing.T) {
 	a, dir := backupService(t, 3)
 	var old []string // oldest first
