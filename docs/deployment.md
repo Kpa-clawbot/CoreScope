@@ -78,6 +78,8 @@ docker run -d --name corescope \
 | `-e DISABLE_MOSQUITTO=true` | No | Skip the internal Mosquitto broker (use your own) |
 | `-e DISABLE_CADDY=true` | No | Skip the built-in Caddy reverse proxy |
 | `-e MQTT_BROKER=mqtt://host:1883` | No | Override MQTT broker URL |
+| `-e RUN_AS_UID=1000` | No | Run the Go services as this uid instead of root — see [Running the Go services unprivileged](#running-the-go-services-unprivileged) |
+| `-e RUN_AS_GID=1000` | No | Group for `RUN_AS_UID` (defaults to it) |
 
 #### `/app/data/.env` convenience file
 
@@ -141,6 +143,63 @@ docker run -d --name corescope ... # same flags as before
 ```
 
 Data is preserved in the volume — updates are non-destructive.
+
+### Running the Go services unprivileged
+
+`corescope-server` and `corescope-ingestor` can run as a normal user instead of
+root, so that a code-execution bug in either one does not land as root in a
+container that has your data directory and `config.json` mounted. `supervisord`
+itself stays root, because mosquitto and caddy still need to bind their ports.
+
+Which user the two Go services run as is decided at start time:
+
+| `/app/data` owner on the host | `RUN_AS_UID` | Services run as |
+|-------------------------------|--------------|-----------------|
+| root (the default when Docker created the directory) | unset | root — as in earlier releases |
+| a normal user, e.g. uid 1000 | unset | that uid |
+| anything | set | `RUN_AS_UID` / `RUN_AS_GID` |
+
+So an existing deployment keeps running exactly as before an upgrade, and the
+container never changes the owner of a file on your host unless you asked for it
+with `RUN_AS_UID`.
+
+**To switch an existing deployment over**, give the data directory to the user
+you want the services to run as, then restart:
+
+```bash
+docker stop corescope
+sudo chown -R 1000:1000 /your/data     # uid of your own account is usually 1000
+docker start corescope
+```
+
+Or let the container do the one-time hand-over for you — setting `RUN_AS_UID` is
+taken as permission to `chown` leftover root-owned files in the data directory:
+
+```bash
+docker run -d --name corescope \
+  -e RUN_AS_UID=1000 -e RUN_AS_GID=1000 \
+  -v /your/data:/app/data \
+  ... # same flags as before
+  ghcr.io/kpa-clawbot/corescope:latest
+```
+
+Check which user it picked:
+
+```bash
+docker logs corescope 2>&1 | grep '\[entrypoint\] Go services run as'
+# [entrypoint] Go services run as corescope (uid=1000 gid=1000)
+```
+
+Notes:
+
+- If the data directory is owned by a normal user but still holds root-owned
+  files from an earlier root run, the log says so and names the `chown` to run.
+  Nothing is changed for you in that case.
+- `RUN_AS_GID` defaults to `RUN_AS_UID` when omitted.
+- If the uid already belongs to an account inside the image (`caddy` is 100,
+  `mosquitto` 101), that account is used as-is and the log notes it.
+- With `RUN_AS_UID` set to a uid the container cannot use, startup fails rather
+  than silently falling back to root.
 
 ---
 
