@@ -40,7 +40,8 @@ Two things block this today:
 | 5 | Conflicts | The newest valid proof wins. Whoever holds the key owns the companion (devices change hands). The previous owner gets an audit row, and a mail when notifications are enabled. |
 | 6 | Attribution | A read-time join `client_receptions.rx_pubkey → companion_links`. All coverage of a linked companion counts for its current owner, including rows from before the link. The ingestor and the RX payload contract do not change. |
 | 7 | My nodes | Linking also adds the pubkey to the user's `meshcore-my-nodes`. Unlinking does **not** remove it: that list is the user's own choice. |
-| 8 | Per-user API keys | Out of scope. The token table gets a `kind` and `scopes` so a later `api_key` kind (named, shown once, own scopes, revoked separately) is a small addition. The RX device token is never reused for external access. |
+| 8 | Linked-only ingest | Opt-in admin setting `clientRxCoverage.requireLinkedCompanion`. When it is on, the ingestor drops every `meshcore/client/<pubkey>/…` message whose pubkey is not in `companion_links`. It is a filter, not a security boundary (see *Linked-only ingest*). |
+| 9 | Per-user API keys | Out of scope. The token table gets a `kind` and `scopes` so a later `api_key` kind (named, shown once, own scopes, revoked separately) is a small addition. The RX device token is never reused for external access. |
 
 ## Non-goals
 
@@ -132,6 +133,28 @@ the rest of A–E. Rate limits use the existing token buckets (per IP and per us
   session; without one it answers 401. The existing response shape is unchanged.
 - The coverage page shows a "My coverage" toggle only to logged-in users.
 
+### Linked-only ingest
+
+- Config: `clientRxCoverage.requireLinkedCompanion` (bool, default false). It only
+  takes effect with `userManagement.enabled`. If user management is off, the server
+  and the ingestor log a startup warning and ignore the setting.
+- Ingestor: before any client handler runs (packets, rf, regions), it checks the
+  topic pubkey against an in-memory set of linked pubkeys read from `users.db`.
+  - The set refreshes every 60 s, which picks up unlinks.
+  - On a miss, the ingestor re-reads the set at most once per 5 s before dropping.
+    A companion that was just linked is therefore accepted within seconds, and
+    an RX client can publish right after a successful link.
+  - Dropped messages are counted per reason in the ingestor stats file
+    (`client_unlinked_dropped`), never logged per message.
+- `/api/config/client` gains `clientRxRequireLinkedCompanion: true` when the setting
+  is in effect. The field is omitted otherwise. RX reads it to hold its queue
+  instead of publishing data that would be dropped.
+- **It is not a security boundary.** All RX clients share one broker account, so
+  anyone with that password can publish under a linked pubkey. The setting keeps
+  honest unlinked clients out. Real enforcement needs per-user publish credentials
+  (the later "publish token" sub-project).
+- Unlinking does not delete coverage that is already stored.
+
 ### CORS
 
 For origins in `corsAllowedOrigins`, and only on the bearer-scoped routes above, the
@@ -176,6 +199,12 @@ Tokens, challenges and signatures are never logged.
   - `rx-coverage?mine=1`.
   - CORS headers only for allowlisted origins and only on scoped routes.
   - Everything answers 404 with the feature off.
+- `cmd/ingestor`: with `requireLinkedCompanion` off, nothing changes. With it on:
+  linked pubkeys pass, unlinked pubkeys are dropped and counted, a link made after
+  the last refresh is accepted through the miss refresh, the 5 s cap holds under a
+  flood of unknown pubkeys, an unlink is honoured after the periodic refresh, and
+  user management off means the setting is ignored with a warning.
+- `/api/config/client`: the field is present only when the setting is in effect.
 - e2e: log in on the account page, see a seeded device token under Devices and a
   linked companion under Companions, then unlink it.
 
@@ -183,4 +212,5 @@ Tokens, challenges and signatures are never logged.
 
 Opt-in through `userManagement.enabled`, like A–E. Deployments where RX runs on
 another origin add that origin to `corsAllowedOrigins`. An RX build without account
-support is unaffected.
+support is unaffected, **except** under `requireLinkedCompanion`: then its data is
+dropped. Turn that setting on only once the RX clients in use support linking.
