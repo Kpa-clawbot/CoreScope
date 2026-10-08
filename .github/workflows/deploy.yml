@@ -38,8 +38,12 @@ env:
   STAGING_SERVICE: staging-go
   STAGING_CONTAINER: corescope-staging-go
 
-# Pipeline (sequential, fail-fast):
-#   go-test → e2e-test → build-and-publish → deploy → publish-badges
+# Pipeline. The test jobs and the image build run side by side; only the GHCR
+# push waits for all of them:
+#   changes ─┬─ go-test ─────────────────────────┐
+#            ├─ race-test (ingestor changes only) ─┤
+#            ├─ e2e-shard ×3 ── e2e-test (gate) ───┼─ build-and-publish → deploy, publish
+#            └─ image-check (two-arch build) ──────┘
 #   PRs stop after build-and-publish (no GHCR push). Master continues to deploy + badges.
 
 jobs:
@@ -329,10 +333,24 @@ jobs:
   # ───────────────────────────────────────────────────────────────
   # 2. Playwright E2E Tests (against Go server with fixture DB)
   # ───────────────────────────────────────────────────────────────
-  e2e-test:
-    name: "🎭 Playwright E2E Tests"
-    needs: [go-test, changes]
+  # Three shards on three runners, each with its own server and fixture copy,
+  # so no shard shares a browser, a CPU or server state with another. One
+  # runner per shard rather than parallel suites on one runner: the gesture and
+  # animation suites are timing-sensitive and would flake under CPU contention.
+  #
+  # It needs only `changes`, not go-test: this job builds its own binaries and
+  # uses nothing go-test produces. build-and-publish still needs both, so
+  # nothing reaches GHCR unless every test job passed.
+  e2e-shard:
+    name: "🎭 Playwright E2E shard ${{ matrix.shard }}/3"
+    needs: [changes]
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        shard: [1, 2, 3]
+    env:
+      SHARD: ${{ matrix.shard }}
+      E2E_SHARDS: 3
     defaults:
       run:
         shell: bash
@@ -361,8 +379,16 @@ jobs:
         run: |
           cd cmd/server
           go build -o ../../corescope-server .
-          go build -tags e2etest -o ../../corescope-server-e2e .
           echo "Go server built successfully"
+
+      # Only test-user-management-e2e.js uses the e2etest build and its server,
+      # and it runs on shard 3. Moving that suite means moving these two too;
+      # it fails loudly (nothing on port 13582) rather than skipping.
+      - name: Build Go server (e2etest tag, user management)
+        if: matrix.shard == 3
+        run: |
+          cd cmd/server
+          go build -tags e2etest -o ../../corescope-server-e2e .
 
       - name: Build Go migrate tool
         run: |
@@ -487,6 +513,7 @@ jobs:
           done
 
       - name: Start user-management E2E server (fake mailer)
+        if: matrix.shard == 3
         run: |
           fuser -k 13582/tcp 2>/dev/null || true
           rm -rf /tmp/cs-um
@@ -515,8 +542,24 @@ jobs:
 
       - name: Run Playwright E2E tests (fail-fast)
         run: |
-          echo "=== E2E SUITE: test-e2e-playwright.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-e2e-playwright.js 2>&1 | tee e2e-output.txt
+          # suite <shard> <file> [VAR=value ...]: runs tests/e2e/<file> with
+          # exactly those variables, but only on its own shard. The shard numbers
+          # balance the measured suite times; give a new suite the shard whose
+          # total is lowest. Anything but a number in 1..E2E_SHARDS (a missing
+          # number, 01, 4) fails the step, so a typo cannot silently drop a suite.
+          B=http://localhost:13581
+          suite() {
+            local shard=$1 file=$2
+            shift 2
+            if ! [[ "$shard" =~ ^[1-9][0-9]*$ ]] || [ "$shard" -gt "$E2E_SHARDS" ]; then
+              echo "::error::$file is assigned to shard $shard, outside 1..$E2E_SHARDS"
+              exit 1
+            fi
+            [ "$shard" -eq "$SHARD" ] || return 0
+            echo "=== E2E SUITE: $file ===" | tee -a e2e-output.txt
+            env "$@" node "tests/e2e/$file" 2>&1 | tee -a e2e-output.txt
+          }
+          suite 2 test-e2e-playwright.js BASE_URL=$B
           # M5+M6 of #1668 — axe-core CI gate.
           # M5: color-contrast on desktop dark+light.
           # M6: expanded ruleset (image-alt, label, aria-required-attr,
@@ -526,285 +569,164 @@ jobs:
           #     color-contrast on mobile too).
           # Allowlist: tests/a11y-allowlist.yaml (0 entries — hard pass policy).
           # Per-viewport summary printed at the end; any net>0 fails the build.
-          BASE_URL=http://localhost:13581 AXE_SCREENSHOT_DIR=/tmp/axe-1668 \
-            echo "=== E2E SUITE: test-a11y-axe-1668.js ==="
-            node tests/e2e/test-a11y-axe-1668.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-filter-ux-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-filter-ux-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-channel-issue-1087-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-channel-issue-1087-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-channel-issue-1111-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-channel-issue-1111-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-map-modal-fluid-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-map-modal-fluid-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-map-nodes-pagination-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-map-nodes-pagination-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-observer-iata-1188-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-observer-iata-1188-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1639-observers-sort-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1639-observers-sort-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1758-ng-filter-rerenders-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1758-ng-filter-rerenders-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-nav-fluid-1055-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-nav-fluid-1055-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-nav-priority-1102-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-nav-priority-1102-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-nav-priority-1311-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-nav-priority-1311-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-nav-priority-1391-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-nav-priority-1391-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1413-nav-overlap-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1413-nav-overlap-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1400-nav-vertical-clip.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1400-nav-vertical-clip.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-nav-more-floor-1139-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-nav-more-floor-1139-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-bottom-nav-1061-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-bottom-nav-1061-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-gestures-1062-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-gestures-1062-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-gestures-1185-scroll-discriminator-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-gestures-1185-scroll-discriminator-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-gesture-hints-1065-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-gesture-hints-1065-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-touch-gestures-coverage-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-touch-gestures-coverage-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-channel-fluid-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-channel-fluid-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-table-fluid-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-table-fluid-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-charts-fluid-1058-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-charts-fluid-1058-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-slideover-1056-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-slideover-1056-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1692-packets-init-parallel-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1692-packets-init-parallel-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-slideover-1168-munger-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-slideover-1168-munger-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-logo-pulse-1173-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-logo-pulse-1173-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1122-packets-filter-ux-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1122-packets-filter-ux-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1128-packets-layout-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1128-packets-layout-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1128-multi-viewport-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1128-multi-viewport-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1136-live-region-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1136-live-region-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-live-multibyte-only-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-live-multibyte-only-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1150-404-state-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1150-404-state-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1146-path-link-contrast-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1146-path-link-contrast-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1705-subpath-contrast-e2e.js ==="
-          CHROMIUM_REQUIRE=1 node tests/e2e/test-issue-1705-subpath-contrast-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1147-section-order-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1147-section-order-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1151-orphan-separators-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1151-orphan-separators-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1486-collapse-reopens-detail-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1486-collapse-reopens-detail-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-logo-rebrand-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-logo-rebrand-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-logo-theme-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-logo-theme-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-logo-default-sage-teal-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-logo-default-sage-teal-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1109-hamburger-dropdown-visible-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1109-hamburger-dropdown-visible-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-live-layout-1178-1179-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-live-layout-1178-1179-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1205-live-controls-anchor-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1205-live-controls-anchor-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-live-mql-leak-1180-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-live-mql-leak-1180-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1204-live-panel-structure-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1204-live-panel-structure-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1234-live-chrome-pass2-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1234-live-chrome-pass2-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1206-vcr-overlap-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1206-vcr-overlap-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1833-legend-toggle-clickable-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1833-legend-toggle-clickable-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1244-live-vcr-row-hints-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1244-live-vcr-row-hints-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1510-live-nav-pin-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1510-live-nav-pin-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-live-fullscreen-1572-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-live-fullscreen-1572-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1599-replay-freeze-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1599-replay-freeze-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1648-m1-icons-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1648-m1-icons-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1648-m2-icons-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1648-m2-icons-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1648-m3-icons-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1648-m3-icons-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1648-m4-icons-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1648-m4-icons-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1657-analytics-channels-group-sprites-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1657-analytics-channels-group-sprites-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1224-channels-mobile-ux-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1224-channels-mobile-ux-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1367-channels-chat-app-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1367-channels-chat-app-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1236-map-mobile-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1236-map-mobile-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1329-map-controls-accordion-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1329-map-controls-accordion-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1273-qr-overlay-height-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1273-qr-overlay-height-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1281-location-row-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1281-location-row-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1279-legend-p2-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1279-legend-p2-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1799-label-vocab-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1799-label-vocab-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-home-coverage-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-home-coverage-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-path-inspector-coverage-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-path-inspector-coverage-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1206-resize-observer-leak-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1206-resize-observer-leak-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-nav-drawer-1064-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-nav-drawer-1064-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-audio-live-1297-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-audio-live-1297-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-audio-lab-1297-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-audio-lab-1297-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-channel-decrypt-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-channel-decrypt-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-channel-qr-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-channel-qr-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-channel-color-picker-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-channel-color-picker-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-customize-theme-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-customize-theme-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-customize-branding-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-customize-branding-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-customize-display-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-customize-display-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-customize-export-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-customize-export-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-drag-manager-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-drag-manager-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1567-corner-clears-drag-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1567-corner-clears-drag-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1306-collisions-terminology-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1306-collisions-terminology-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1374-route-map-a11y-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1374-route-map-a11y-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-channels-list-render-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-channels-list-render-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-channels-selection-flow-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-channels-selection-flow-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-channels-add-modal-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-channels-add-modal-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-channels-share-color-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-channels-share-color-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-channels-ws-batch-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-channels-ws-batch-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-channels-ws-race-1498-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-channels-ws-race-1498-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1487-byop-modal-layout-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1487-byop-modal-layout-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1630-reach-mobile-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1630-reach-mobile-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-node-reach-coverage-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-node-reach-coverage-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1640-compare-discovery-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1640-compare-discovery-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-neighbor-map-btn-clip-e2e.js ==="
-          CHROMIUM_REQUIRE=1 node tests/e2e/test-neighbor-map-btn-clip-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-rx-coverage-viewport-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-rx-coverage-viewport-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-rx-coverage-noise-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-rx-coverage-noise-e2e.js 2>&1 | tee -a e2e-output.txt
+          suite 1 test-a11y-axe-1668.js BASE_URL=$B AXE_SCREENSHOT_DIR=/tmp/axe-1668
+          suite 2 test-filter-ux-e2e.js BASE_URL=$B
+          suite 1 test-channel-issue-1087-e2e.js BASE_URL=$B
+          suite 1 test-channel-issue-1111-e2e.js BASE_URL=$B
+          suite 2 test-map-modal-fluid-e2e.js BASE_URL=$B
+          suite 2 test-map-nodes-pagination-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-observer-iata-1188-e2e.js BASE_URL=$B
+          suite 2 test-issue-1639-observers-sort-e2e.js BASE_URL=$B
+          suite 2 test-issue-1758-ng-filter-rerenders-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-nav-fluid-1055-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-nav-priority-1102-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-nav-priority-1311-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-nav-priority-1391-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 1 test-issue-1413-nav-overlap-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-issue-1400-nav-vertical-clip.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-nav-more-floor-1139-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-bottom-nav-1061-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-gestures-1062-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 1 test-gestures-1185-scroll-discriminator-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-gesture-hints-1065-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-touch-gestures-coverage-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-channel-fluid-e2e.js BASE_URL=$B
+          suite 2 test-table-fluid-e2e.js BASE_URL=$B
+          suite 3 test-charts-fluid-1058-e2e.js BASE_URL=$B
+          suite 3 test-slideover-1056-e2e.js BASE_URL=$B
+          suite 3 test-issue-1692-packets-init-parallel-e2e.js BASE_URL=$B
+          suite 2 test-slideover-1168-munger-e2e.js BASE_URL=$B
+          suite 3 test-logo-pulse-1173-e2e.js BASE_URL=$B
+          suite 2 test-issue-1122-packets-filter-ux-e2e.js BASE_URL=$B
+          suite 3 test-issue-1128-packets-layout-e2e.js BASE_URL=$B
+          suite 3 test-issue-1128-multi-viewport-e2e.js BASE_URL=$B
+          suite 2 test-issue-1136-live-region-e2e.js BASE_URL=$B
+          suite 1 test-live-multibyte-only-e2e.js BASE_URL=$B
+          suite 3 test-issue-1150-404-state-e2e.js BASE_URL=$B
+          suite 2 test-issue-1146-path-link-contrast-e2e.js BASE_URL=$B
+          suite 1 test-issue-1705-subpath-contrast-e2e.js CHROMIUM_REQUIRE=1
+          suite 2 test-issue-1147-section-order-e2e.js BASE_URL=$B
+          suite 3 test-issue-1151-orphan-separators-e2e.js BASE_URL=$B
+          suite 3 test-issue-1486-collapse-reopens-detail-e2e.js BASE_URL=$B
+          suite 1 test-logo-rebrand-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-logo-theme-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-logo-default-sage-teal-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-issue-1109-hamburger-dropdown-visible-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-live-layout-1178-1179-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-issue-1205-live-controls-anchor-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-live-mql-leak-1180-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-issue-1204-live-panel-structure-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-issue-1234-live-chrome-pass2-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 1 test-issue-1206-vcr-overlap-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 1 test-issue-1833-legend-toggle-clickable-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-issue-1244-live-vcr-row-hints-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-issue-1510-live-nav-pin-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-live-fullscreen-1572-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-issue-1599-replay-freeze-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-issue-1648-m1-icons-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-issue-1648-m2-icons-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-issue-1648-m3-icons-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 1 test-issue-1648-m4-icons-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 1 test-issue-1657-analytics-channels-group-sprites-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-issue-1224-channels-mobile-ux-e2e.js BASE_URL=$B
+          suite 3 test-issue-1367-channels-chat-app-e2e.js BASE_URL=$B
+          suite 3 test-issue-1236-map-mobile-e2e.js BASE_URL=$B
+          suite 3 test-issue-1329-map-controls-accordion-e2e.js BASE_URL=$B
+          suite 1 test-issue-1273-qr-overlay-height-e2e.js BASE_URL=$B
+          suite 3 test-issue-1281-location-row-e2e.js BASE_URL=$B
+          suite 1 test-issue-1279-legend-p2-e2e.js BASE_URL=$B
+          suite 2 test-issue-1799-label-vocab-e2e.js BASE_URL=$B
+          suite 2 test-home-coverage-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-path-inspector-coverage-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-issue-1206-resize-observer-leak-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-nav-drawer-1064-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-audio-live-1297-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-audio-lab-1297-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 1 test-channel-decrypt-e2e.js BASE_URL=$B
+          suite 2 test-channel-qr-e2e.js BASE_URL=$B
+          suite 3 test-channel-color-picker-e2e.js BASE_URL=$B
+          suite 1 test-customize-theme-e2e.js BASE_URL=$B
+          suite 3 test-customize-branding-e2e.js BASE_URL=$B
+          suite 2 test-customize-display-e2e.js BASE_URL=$B
+          suite 3 test-customize-export-e2e.js BASE_URL=$B
+          suite 2 test-drag-manager-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 1 test-issue-1567-corner-clears-drag-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-issue-1306-collisions-terminology-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-issue-1374-route-map-a11y-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-channels-list-render-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 1 test-channels-selection-flow-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-channels-add-modal-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 1 test-channels-share-color-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-channels-ws-batch-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-channels-ws-race-1498-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-issue-1487-byop-modal-layout-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-issue-1630-reach-mobile-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 1 test-node-reach-coverage-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-issue-1640-compare-discovery-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-neighbor-map-btn-clip-e2e.js CHROMIUM_REQUIRE=1
+          suite 3 test-rx-coverage-viewport-e2e.js BASE_URL=$B
+          suite 1 test-rx-coverage-noise-e2e.js BASE_URL=$B
           # Issue #2037: these eight sat in tests/e2e/ with no runner at all.
           # Measured on upstream master in CI run 35340835178: all eight pass,
           # 45 seconds together. test-rx-coverage-mobile-nav-e2e.js is the
           # ninth that passed and is deliberately NOT here: it exits 0 with
           # "SKIP (clientRxCoverage disabled on this deployment)", which is the
           # default, so wiring it in would add a vacuous pass rather than a guard.
-          echo "=== E2E SUITE: test-1110-live-filter.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-1110-live-filter.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-analytics-fluid-charts.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-analytics-fluid-charts.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-e2e-1267-mobile-vcr.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-e2e-1267-mobile-vcr.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1274-legend-coverage-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1274-legend-coverage-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1648-m5-icons-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1648-m5-icons-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1997-distance-building-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1997-distance-building-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-channel-modal-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-channel-modal-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-issue-1522-trace-url-sync-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-issue-1522-trace-url-sync-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-marker-outline-weight.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-marker-outline-weight.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-node-reach-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-node-reach-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-packets-compact-columns-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-packets-compact-columns-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-packets-scope-column.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-packets-scope-column.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-path-inspector-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-path-inspector-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-pr-1490-live-map-gpu-animations-e2e.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-pr-1490-live-map-gpu-animations-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-table-sort.js ==="
-          node tests/e2e/test-table-sort.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-touch-targets.js ==="
-          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node tests/e2e/test-touch-targets.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-live-dedup.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-live-dedup.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-nodes-export-e2e.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-nodes-export-e2e.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-show-neighbors.js ==="
-          BASE_URL=http://localhost:13581 node tests/e2e/test-show-neighbors.js 2>&1 | tee -a e2e-output.txt
-          echo "=== E2E SUITE: test-user-management-e2e.js ==="
-          BASE_URL=http://localhost:13582 BASE_URL_OFF=http://localhost:13581 node tests/e2e/test-user-management-e2e.js 2>&1 | tee -a e2e-output.txt
+          suite 2 test-1110-live-filter.js BASE_URL=$B
+          suite 3 test-analytics-fluid-charts.js BASE_URL=$B
+          suite 3 test-e2e-1267-mobile-vcr.js BASE_URL=$B
+          suite 2 test-issue-1274-legend-coverage-e2e.js BASE_URL=$B
+          suite 3 test-issue-1648-m5-icons-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-issue-1997-distance-building-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 1 test-channel-modal-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 1 test-issue-1522-trace-url-sync-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-marker-outline-weight.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-node-reach-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-packets-compact-columns-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-packets-scope-column.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-path-inspector-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-pr-1490-live-map-gpu-animations-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-table-sort.js
+          suite 1 test-touch-targets.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-live-dedup.js BASE_URL=$B
+          suite 1 test-nodes-export-e2e.js BASE_URL=$B
+          suite 2 test-show-neighbors.js BASE_URL=$B
+          suite 3 test-user-management-e2e.js BASE_URL=http://localhost:13582 BASE_URL_OFF=$B
 
       # #1616: slide-over focus-restore flake-gate. Runs the slide-over
-      # E2E 20 consecutive times against the SAME backend instance so
-      # the Chromium-headless focus race documented in #1172/#1616 has
-      # a 20× shot at firing. Any single non-zero exit aborts. This is
-      # the architectural-fix gate — if it ever turns red post-merge,
-      # the focused-but-hidden state has crept back in.
+      # E2E 3 more times against the SAME backend instance (it already
+      # ran once in the list above) so the Chromium-headless focus race
+      # documented in #1172/#1616 gets repeated shots at firing. Any
+      # single non-zero exit aborts. This is the architectural-fix gate:
+      # if it ever turns red post-merge, the focused-but-hidden state has
+      # crept back in.
       #
-      # PERMANENT step. Adds ~3-4 min to the e2e-test job in exchange
-      # for closing out a flake family that was blocking ~8 unrelated
-      # PRs at a time. If profiling pressures the budget later, drop
-      # repeat count first; do not delete.
+      # PERMANENT step, on shard 3 (the shard that runs the slide-over
+      # suite). Adds ~70s to that shard in exchange for closing out a
+      # flake family that was blocking ~8 unrelated PRs at a time. If
+      # profiling pressures the budget later, drop repeat count first;
+      # do not delete.
       - name: Slide-over E2E flake-gate (#1616, --repeat-each=3)
+        if: matrix.shard == 3
         run: |
           set -e
           for i in $(seq 1 3); do
-            echo "--- slide-over E2E run $i/20 ---"
+            echo "--- slide-over E2E run $i/3 ---"
             echo "=== E2E SUITE: test-slideover-1056-e2e.js ==="
             BASE_URL=http://localhost:13581 node tests/e2e/test-slideover-1056-e2e.js 2>&1 | tee -a slideover-repeat-output.txt
           done
           echo "3 passed"
 
+      # Shard 2 runs test-e2e-playwright.js, the one suite that writes
+      # .nyc_output, so the coverage collection and its badge live there too.
       - name: Collect frontend coverage (parallel)
-        if: success() && github.event_name == 'push'
+        if: success() && github.event_name == 'push' && matrix.shard == 2
         run: |
           BASE_URL=http://localhost:13581 node scripts/collect-frontend-coverage.js 2>&1 | tee fe-coverage-output.txt || true
 
-      - name: Generate frontend coverage badges
+      - name: Generate frontend coverage badge
         if: success()
         run: |
-          # Aggregate per-suite PASS/FAIL across every test-*-e2e.js summary.
-          # The previous regex (grep -oP '[0-9]+(?=/)' | tail -1) caught a
-          # stray digits-before-slash like the '2' in '2/3 tests passed' from
-          # some sub-output and stamped the badge as '2 passed'. See #1296.
-          eval "$(bash scripts/aggregate-e2e-pass.sh e2e-output.txt)"
-          E2E_PASS=${PASS:-0}
-          E2E_FAIL=${FAIL:-0}
-
           mkdir -p .badges
           if [ -f .nyc_output/frontend-coverage.json ] || [ -f .nyc_output/e2e-coverage.json ]; then
             npx nyc report --reporter=text-summary --reporter=text 2>&1 | tee fe-report.txt
@@ -816,14 +738,6 @@ jobs:
             echo "{\"schemaVersion\":1,\"label\":\"frontend coverage\",\"message\":\"${FE_COVERAGE}%\",\"color\":\"${FE_COLOR}\"}" > .badges/frontend-coverage.json
             echo "## Frontend: ${FE_COVERAGE}% coverage" >> $GITHUB_STEP_SUMMARY
           fi
-          if [ "${E2E_FAIL:-0}" -gt 0 ]; then
-            E2E_MSG="${E2E_PASS:-0} passed, ${E2E_FAIL} failed"
-            E2E_COLOR="red"
-          else
-            E2E_MSG="${E2E_PASS:-0} passed"
-            E2E_COLOR="brightgreen"
-          fi
-          echo "{\"schemaVersion\":1,\"label\":\"e2e tests\",\"message\":\"${E2E_MSG}\",\"color\":\"${E2E_COLOR}\"}" > .badges/e2e-tests.json
 
       - name: Stop test server
         if: always()
@@ -837,8 +751,72 @@ jobs:
             rm -f .server-um.pid
           fi
 
-      - name: Upload E2E badges
+      - name: Upload shard results
         if: success()
+        uses: actions/upload-artifact@v6
+        with:
+          name: e2e-shard-${{ matrix.shard }}
+          path: |
+            e2e-output.txt
+            .badges/
+          retention-days: 1
+          if-no-files-found: ignore
+          include-hidden-files: true
+
+  # The gate the rest of the pipeline (and branch protection) sees under the
+  # old single-job name. It folds the shard outputs into the same e2e-badges
+  # artifact the publish job reads.
+  #
+  # !cancelled() is what makes it a gate. Without it a failed shard would SKIP
+  # this job, and branch protection counts a skipped required check as
+  # passing. With it, the job runs and fails on its first step instead.
+  e2e-test:
+    name: "🎭 Playwright E2E Tests"
+    needs: [e2e-shard, changes]
+    runs-on: ubuntu-latest
+    if: ${{ !cancelled() && needs.changes.outputs.code == 'true' && !(startsWith(github.ref, 'refs/tags/v') && inputs.images_published) }}
+    steps:
+      - name: Require every shard to have passed
+        run: |
+          result="${{ needs['e2e-shard'].result }}"
+          echo "e2e-shard: $result"
+          [ "$result" = success ] || { echo "::error::E2E shards did not all pass (result: $result)"; exit 1; }
+
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Download shard results
+        uses: actions/download-artifact@v6
+        with:
+          pattern: e2e-shard-*
+          path: shards/
+
+      - name: Generate E2E badges
+        run: |
+          set -e
+          ls shards
+          [ "$(ls -d shards/e2e-shard-* | wc -l)" -eq 3 ] || { echo "::error::expected results from 3 shards"; exit 1; }
+          cat shards/e2e-shard-*/e2e-output.txt > e2e-output.txt
+          mkdir -p .badges
+          cp shards/e2e-shard-*/.badges/*.json .badges/ 2>/dev/null || true
+          # Aggregate per-suite PASS/FAIL across every test-*-e2e.js summary.
+          # The previous regex (grep -oP '[0-9]+(?=/)' | tail -1) caught a
+          # stray digits-before-slash like the '2' in '2/3 tests passed' from
+          # some sub-output and stamped the badge as '2 passed'. See #1296.
+          eval "$(bash scripts/aggregate-e2e-pass.sh e2e-output.txt)"
+          E2E_PASS=${PASS:-0}
+          E2E_FAIL=${FAIL:-0}
+          if [ "${E2E_FAIL:-0}" -gt 0 ]; then
+            E2E_MSG="${E2E_PASS:-0} passed, ${E2E_FAIL} failed"
+            E2E_COLOR="red"
+          else
+            E2E_MSG="${E2E_PASS:-0} passed"
+            E2E_COLOR="brightgreen"
+          fi
+          echo "{\"schemaVersion\":1,\"label\":\"e2e tests\",\"message\":\"${E2E_MSG}\",\"color\":\"${E2E_COLOR}\"}" > .badges/e2e-tests.json
+          echo "E2E: ${E2E_MSG} ($(grep -c '^=== E2E SUITE' e2e-output.txt) suite runs)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload E2E badges
         uses: actions/upload-artifact@v6
         with:
           name: e2e-badges
@@ -848,28 +826,29 @@ jobs:
           include-hidden-files: true
 
   # ───────────────────────────────────────────────────────────────
-  # 3. Build & Publish Docker Image
+  # 3a. Two-arch image build — beside the tests, never publishes
   # ───────────────────────────────────────────────────────────────
-  # The five GHCR steps below publish on a push to master (the :edge image) and
-  # on a tag ref. The tag half is not decoration: release-fast-path.yml re-tags
-  # :edge to :vX.Y.Z when the :edge revision label matches the tagged commit,
-  # and dispatches THIS workflow when it does not. That fallback previously
-  # produced no image at all, because a workflow_dispatch is not a push and
-  # every publishing step was gated on github.event_name == 'push'. It built
-  # locally, reported success, and pushed nothing.
+  # Since the SQLite driver became cgo, the container build depends on a zig
+  # cross-toolchain and static musl linking. Builds both architectures and
+  # actually runs the arm64 binaries under QEMU, on every event: for a PR it is
+  # the only image check (the GHCR push below is push/tag-only, so without it
+  # the first signal would arrive on master); for a push it fills the layer
+  # cache that the push then reuses.
   #
-  # That went unnoticed until v3.10.0, where the tagged commit was
-  # documentation-only. At that time a trigger-level paths-ignore skipped this
-  # workflow for such commits, so no :edge image was ever built for it, the label
-  # comparison failed, and the fallback ran for the first time. That filter is
-  # gone: the `changes` job now forces code=true for anything that is not a pull
-  # request, so every master commit gets an image and a documentation commit is
-  # safe to tag. See the comment on the `on:` block.
-  build-and-publish:
-    name: "🏗️ Build & Publish Docker Image"
-    needs: [e2e-test, changes]
+  # It needs only `changes`, so its minutes overlap the test jobs instead of
+  # following them. It cannot publish anything, so running it before the tests
+  # pass is safe. The build metadata is computed here once and handed to
+  # build-and-publish: BUILD_TIME is a build arg of the Go layers, so a second
+  # timestamp would miss the cache and rebuild everything.
+  image-check:
+    name: "🧱 Two-arch image build"
+    needs: [changes]
     runs-on: ubuntu-latest
     if: needs.changes.outputs.code == 'true' && !(startsWith(github.ref, 'refs/tags/v') && inputs.images_published)
+    outputs:
+      build_time: ${{ steps.meta.outputs.build_time }}
+      git_commit: ${{ steps.meta.outputs.git_commit }}
+      app_version: ${{ steps.meta.outputs.app_version }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -889,37 +868,26 @@ jobs:
           echo "app_version=$APP_VERSION" >> "$GITHUB_OUTPUT"
           echo "Build: version=$APP_VERSION commit=$GIT_COMMIT time=$BUILD_TIME"
 
-      - name: Build Go Docker image (local staging)
-        run: |
-          GIT_COMMIT="${{ steps.meta.outputs.git_commit }}" \
-          APP_VERSION="${{ steps.meta.outputs.app_version }}" \
-          BUILD_TIME="${{ steps.meta.outputs.build_time }}" \
-          docker compose -f "$STAGING_COMPOSE_FILE" -p corescope-staging build "$STAGING_SERVICE"
-          echo "Built Go staging image ✅"
+      # The staging compose file used to be built here as well. That image was
+      # never used: the runner is discarded, and the deploy job pulls :edge from
+      # GHCR on its own runner. It rebuilt the same Dockerfile as the step
+      # below for two minutes. Validating the compose file is what is left.
+      - name: Validate staging compose file
+        run: docker compose -f "$STAGING_COMPOSE_FILE" -p corescope-staging config --quiet
 
-      # Needed by the PR two-arch gate below as well as the GHCR push, so the
-      # condition covers both rather than push/tag only.
       - name: Set up Docker Buildx
-        if: ${{ github.event_name == 'pull_request' || github.event_name == 'push' || startsWith(github.ref, 'refs/tags/v') }}
         uses: docker/setup-buildx-action@v3
 
       - name: Set up QEMU (arm64 runtime stage + arm64 smoke)
-        if: ${{ github.event_name == 'pull_request' || github.event_name == 'push' || startsWith(github.ref, 'refs/tags/v') }}
         uses: docker/setup-qemu-action@v3
 
-      # Since the SQLite driver became cgo, the container build depends on a zig
-      # cross-toolchain and static musl linking. The GHCR step below is
-      # push/tag-only, so without this a PR never exercises either, and the
-      # first signal would arrive on master. Builds both architectures and
-      # actually runs the arm64 binaries under QEMU.
       - name: Two-arch build (no publish)
-        if: ${{ github.event_name == 'pull_request' }}
         uses: docker/build-push-action@v6
         with:
           context: .
           push: false
           platforms: linux/amd64,linux/arm64
-          tags: corescope:pr-${{ github.event.pull_request.number }}
+          tags: corescope:check-${{ github.run_id }}
           build-args: |
             APP_VERSION=${{ steps.meta.outputs.app_version }}
             GIT_COMMIT=${{ steps.meta.outputs.git_commit }}
@@ -928,7 +896,6 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Smoke the arm64 binaries under QEMU
-        if: ${{ github.event_name == 'pull_request' }}
         run: |
           set -e
           # Export the arm64 binaries so the runner's own `file` can confirm
@@ -948,6 +915,66 @@ jobs:
             /bin-under-test/corescope-decrypt --version
           rm -rf ./arm64-image
           echo "arm64 static binaries run under QEMU ✅"
+
+  # ───────────────────────────────────────────────────────────────
+  # 3b. Publish Docker Image — only after every test job passed
+  # ───────────────────────────────────────────────────────────────
+  # The GHCR steps below publish on a push to master (the :edge image) and
+  # on a tag ref. The tag half is not decoration: release-fast-path.yml re-tags
+  # :edge to :vX.Y.Z when the :edge revision label matches the tagged commit,
+  # and dispatches THIS workflow when it does not. That fallback previously
+  # produced no image at all, because a workflow_dispatch is not a push and
+  # every publishing step was gated on github.event_name == 'push'. It built
+  # locally, reported success, and pushed nothing.
+  #
+  # That went unnoticed until v3.10.0, where the tagged commit was
+  # documentation-only. At that time a trigger-level paths-ignore skipped this
+  # workflow for such commits, so no :edge image was ever built for it, the label
+  # comparison failed, and the fallback ran for the first time. That filter is
+  # gone: the `changes` job now forces code=true for anything that is not a pull
+  # request, so every master commit gets an image and a documentation commit is
+  # safe to tag. See the comment on the `on:` block.
+  #
+  # On a pull request only the first step runs; the job stays so that its
+  # check still means "tests and image build all passed".
+  #
+  # !cancelled() plus the first step make that true for failures too: without
+  # them a failed needed job would SKIP this job, and branch protection counts
+  # a skipped required check as passing. race-test is skipped when no ingestor
+  # Go file changed, so for it skipped is accepted; a master push always runs it.
+  build-and-publish:
+    name: "🏗️ Build & Publish Docker Image"
+    needs: [go-test, race-test, e2e-test, image-check, changes]
+    runs-on: ubuntu-latest
+    if: ${{ !cancelled() && needs.changes.outputs.code == 'true' && !(startsWith(github.ref, 'refs/tags/v') && inputs.images_published) }}
+    steps:
+      - name: Require every test job and the image check to have passed
+        run: |
+          fail=0
+          require() {
+            echo "$1: $2"
+            case " $3 " in
+              *" $2 "*) ;;
+              *) echo "::error::$1 result is $2"; fail=1 ;;
+            esac
+          }
+          require go-test "${{ needs['go-test'].result }}" "success"
+          require race-test "${{ needs['race-test'].result }}" "success skipped"
+          require e2e-test "${{ needs['e2e-test'].result }}" "success"
+          require image-check "${{ needs['image-check'].result }}" "success"
+          exit $fail
+
+      - name: Checkout code
+        if: ${{ github.event_name == 'push' || startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        if: ${{ github.event_name == 'push' || startsWith(github.ref, 'refs/tags/v') }}
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up QEMU (arm64 runtime stage)
+        if: ${{ github.event_name == 'push' || startsWith(github.ref, 'refs/tags/v') }}
+        uses: docker/setup-qemu-action@v3
 
       - name: Log in to GHCR
         if: ${{ github.event_name == 'push' || startsWith(github.ref, 'refs/tags/v') }}
@@ -970,6 +997,7 @@ jobs:
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=edge,branch=master
 
+      # Same build args as image-check, so every layer is a cache hit.
       - name: Build and push to GHCR
         if: ${{ github.event_name == 'push' || startsWith(github.ref, 'refs/tags/v') }}
         uses: docker/build-push-action@v6
@@ -980,11 +1008,11 @@ jobs:
           tags: ${{ steps.docker-meta.outputs.tags }}
           labels: ${{ steps.docker-meta.outputs.labels }}
           build-args: |
-            APP_VERSION=${{ steps.meta.outputs.app_version }}
-            GIT_COMMIT=${{ steps.meta.outputs.git_commit }}
-            BUILD_TIME=${{ steps.meta.outputs.build_time }}
+            APP_VERSION=${{ needs.image-check.outputs.app_version }}
+            GIT_COMMIT=${{ needs.image-check.outputs.git_commit }}
+            BUILD_TIME=${{ needs.image-check.outputs.build_time }}
+          # No cache-to: image-check exported these same layers minutes ago.
           cache-from: type=gha
-          cache-to: type=gha,mode=max
 
   # ───────────────────────────────────────────────────────────────
   # 4. Release Artifacts (tags only)

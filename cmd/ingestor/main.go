@@ -895,9 +895,10 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 	// is region-independent and should be accepted from all observers regardless of
 	// which IATA regions are configured for packet ingestion.
 	if len(parts) >= 4 && parts[3] == "status" {
-		observerID := parts[2]
+		observerID := clampObserverField(parts[2], maxObserverIDLen)
 		name, _ := msg["origin"].(string)
-		iata := parts[1]
+		name = clampObserverField(name, maxObserverTextLen)
+		iata := clampObserverField(parts[1], maxObserverIATALen)
 		meta := extractObserverMeta(msg)
 		// A replayed status message is the broker handing us the observer's
 		// last published snapshot — it is not evidence the observer is alive
@@ -992,10 +993,10 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		observerID := ""
 		region := ""
 		if len(parts) > 2 {
-			observerID = parts[2]
+			observerID = clampObserverField(parts[2], maxObserverIDLen)
 		}
 		if len(parts) > 1 {
-			region = parts[1]
+			region = clampObserverField(parts[1], maxObserverIATALen)
 		}
 		// Fallback to source-level region config when topic has no region (#788)
 		if region == "" && source.Region != "" {
@@ -1143,6 +1144,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		// Upsert observer
 		if observerID != "" {
 			origin, _ := msg["origin"].(string)
+			origin = clampObserverField(origin, maxObserverTextLen)
 			// Use effective region: payload > topic > source config (#788)
 			effectiveRegion := region
 			if mqttMsg.Region != "" {
@@ -1401,26 +1403,32 @@ func extractObserverMeta(msg map[string]interface{}) *ObserverMeta {
 	hasData := false
 
 	if v, ok := msg["model"].(string); ok && v != "" {
+		v = clampObserverField(v, maxObserverTextLen)
 		meta.Model = &v
 		hasData = true
 	}
 	if v, ok := msg["firmware"].(string); ok && v != "" {
+		v = clampObserverField(v, maxObserverTextLen)
 		meta.Firmware = &v
 		hasData = true
 	}
 	if v, ok := msg["firmware_version"].(string); ok && v != "" {
+		v = clampObserverField(v, maxObserverTextLen)
 		meta.Firmware = &v
 		hasData = true
 	}
 	if v, ok := msg["client_version"].(string); ok && v != "" {
+		v = clampObserverField(v, maxObserverTextLen)
 		meta.ClientVersion = &v
 		hasData = true
 	}
 	if v, ok := msg["clientVersion"].(string); ok && v != "" {
+		v = clampObserverField(v, maxObserverTextLen)
 		meta.ClientVersion = &v
 		hasData = true
 	}
 	if v, ok := msg["radio"].(string); ok && v != "" {
+		v = clampObserverField(v, maxObserverTextLen)
 		meta.Radio = &v
 		hasData = true
 	}
@@ -1857,6 +1865,12 @@ func handleNeighborsReport(store *Store, tag string, observerID string, msg map[
 		originID = observerID
 	}
 	originID = strings.ToLower(originID)
+	// The report is unauthenticated: any publisher can name any key. Only a
+	// 64-hex node key can match a nodes row, so drop anything else here
+	// instead of running UPDATEs that can never match.
+	if !targetPubkeyRe.MatchString(originID) {
+		originID = ""
+	}
 	if self, ok := msg["self"].(map[string]interface{}); ok && originID != "" {
 		if sc, ok := self["scopes"].(string); ok {
 			if err := store.UpdateNodeConfiguredScope(originID, sc, reportedAt); err != nil {
@@ -1877,7 +1891,7 @@ func handleNeighborsReport(store *Store, tag string, observerID string, msg map[
 		}
 		pubkey, _ := n["pubkey"].(string)
 		pubkey = strings.ToLower(pubkey)
-		if pubkey == "" {
+		if !targetPubkeyRe.MatchString(pubkey) {
 			continue
 		}
 		scopes, _ := n["scopes"].(string)

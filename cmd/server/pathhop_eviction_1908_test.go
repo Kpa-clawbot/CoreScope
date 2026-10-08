@@ -44,9 +44,11 @@ func TestPathHopEviction1908(t *testing.T) {
 				addTxToPathHopIndex(store.byPathHop, tx)
 				store.indexResolvedPathHops(tx, []string{shared, pk}, hopsSeen)
 			}
-			// Repeated observations can append the same resolved association again.
-			store.indexResolvedPathHops(store.packets[0], []string{shared, expiredOnly}, hopsSeen)
-			store.indexResolvedPathHops(store.packets[7], []string{shared}, hopsSeen)
+			// Repeated observations no longer append the same resolved
+			// association again (#2108), but eviction must still drop every
+			// occurrence from a bucket that holds one, so seed duplicates directly.
+			store.byPathHop[shared] = append(store.byPathHop[shared], store.packets[0], store.packets[7])
+			store.byPathHop[expiredOnly] = append(store.byPathHop[expiredOnly], store.packets[0])
 			addTxToPathHopIndex(store.byPathHop, store.packets[0])
 
 			// Keep the original backing arrays observable: a shortened slice must

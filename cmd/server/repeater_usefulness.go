@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -11,13 +12,10 @@ import (
 // repeater as a relay hop. Issue #672 (Traffic axis only — bridge,
 // coverage, and redundancy axes are deferred to follow-up work).
 //
-// Numerator:   count of non-advert StoreTx entries indexed under
-//
-//	pubkey in byPathHop.
-//
-// Denominator: total non-advert StoreTx entries in the store
-//
-//	(sum of byPayloadType for all keys != payloadTypeAdvert).
+// Numerator: the number of distinct non-advert transmissions indexed under
+// pubkey in byPathHop (countDistinctNonAdvert, #2108). Denominator: total
+// non-advert transmissions in the store (sum of byPayloadType for all keys
+// != payloadTypeAdvert).
 //
 // Returns 0 when there is no non-advert traffic, the pubkey is empty,
 // or the repeater never appears as a relay hop. Scores are clamped to
@@ -48,17 +46,8 @@ func (s *PacketStore) GetRepeaterUsefulnessScore(pubkey string) float64 {
 		return 0
 	}
 
-	// Numerator: this repeater's non-advert hop appearances.
-	relayed := 0
-	for _, tx := range s.byPathHop[key] {
-		if tx == nil {
-			continue
-		}
-		if tx.PayloadType != nil && *tx.PayloadType == payloadTypeAdvert {
-			continue
-		}
-		relayed++
-	}
+	// Numerator: the distinct non-advert transmissions this repeater relayed.
+	relayed, _ := countDistinctNonAdvert(s.byPathHop[key], nil)
 
 	score := float64(relayed) / float64(totalNonAdvert)
 	if score < 0 {
@@ -68,6 +57,55 @@ func (s *PacketStore) GetRepeaterUsefulnessScore(pubkey string) float64 {
 		return 1
 	}
 	return score
+}
+
+// countDistinctNonAdvert returns the number of distinct non-advert
+// transmissions in list, a byPathHop bucket. The index holds a transmission
+// once per key (#2108); counting distinct transmissions keeps traffic share
+// a fraction of transmissions even if a bucket ever held duplicates, since
+// the denominator counts each transmission once. ids is caller-owned
+// scratch (may be nil), returned for reuse.
+//
+// Cost: O(len(list)) with no allocation once ids has grown. Buckets are
+// appended in ingest order, so their IDs are usually strictly increasing,
+// which already proves them distinct; only otherwise (background chunks
+// load older transmissions after newer ones) are the IDs sorted,
+// O(n log n) on a flat slice. A map per bucket was measured ~10x slower
+// on the bulk pass (BenchmarkTrafficShareScoreMap_2108).
+func countDistinctNonAdvert(list []*StoreTx, ids []int) (int, []int) {
+	ids = ids[:0]
+	ascending := true
+	for _, tx := range list {
+		if tx == nil || (tx.PayloadType != nil && *tx.PayloadType == payloadTypeAdvert) {
+			continue
+		}
+		if n := len(ids); n > 0 && tx.ID <= ids[n-1] {
+			ascending = false
+		}
+		ids = append(ids, tx.ID)
+	}
+	if ascending || len(ids) < 2 {
+		return len(ids), ids
+	}
+	slices.Sort(ids)
+	n := 1
+	for i := 1; i < len(ids); i++ {
+		if ids[i] != ids[i-1] {
+			n++
+		}
+	}
+	return n, ids
+}
+
+// countNonAdvert returns the number of non-advert entries in list.
+func countNonAdvert(list []*StoreTx) int {
+	n := 0
+	for _, tx := range list {
+		if tx != nil && (tx.PayloadType == nil || *tx.PayloadType != payloadTypeAdvert) {
+			n++
+		}
+	}
+	return n
 }
 
 // RepeaterNodeStats bundles relay-activity and usefulness data for a single node.
@@ -90,7 +128,7 @@ func (s *PacketStore) GetRepeaterNodeStatsBatch(pubkeys []string, windowHours fl
 
 	type nodeSnap struct {
 		entries []relayEntry
-		relayed int // non-advert count in full-key list only (for usefulness score)
+		relayed int // distinct non-advert txs in full-key list only (for usefulness score)
 	}
 
 	s.mu.RLock()
@@ -103,15 +141,12 @@ func (s *PacketStore) GetRepeaterNodeStatsBatch(pubkeys []string, windowHours fl
 	}
 
 	snaps := make(map[string]nodeSnap, len(pubkeys))
+	var ids []int
 	for _, pk := range pubkeys {
 		key := strings.ToLower(pk)
 		entries := s.collectRelayEntriesLocked(key)
-		relayed := 0
-		for _, tx := range s.byPathHop[key] {
-			if tx != nil && (tx.PayloadType == nil || *tx.PayloadType != payloadTypeAdvert) {
-				relayed++
-			}
-		}
+		var relayed int
+		relayed, ids = countDistinctNonAdvert(s.byPathHop[key], ids)
 		snaps[pk] = nodeSnap{entries: entries, relayed: relayed}
 	}
 
