@@ -26,6 +26,9 @@ var (
 	// password hash the caller verified (a re-register or an admin got
 	// there first).
 	ErrAccountChanged = errors.New("users: account changed since it was read")
+	// ErrNoScopes: a device session must name what it may do; an empty
+	// scope list would mean full (web) access.
+	ErrNoScopes = errors.New("users: a device session needs at least one scope")
 )
 
 // noLimit is SQLite's LIMIT value for "every row" (the account export).
