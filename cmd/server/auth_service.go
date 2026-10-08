@@ -133,6 +133,7 @@ func (a *authService) janitor(every time.Duration) {
 	defer t.Stop()
 	for {
 		a.prune()
+		a.maybeBackup(time.Now())
 		select {
 		case <-a.stop:
 			return

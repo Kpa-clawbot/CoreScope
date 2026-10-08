@@ -140,3 +140,38 @@ func TestResolveNotifications(t *testing.T) {
 		t.Fatal("enabled false resolved as on")
 	}
 }
+
+func TestResolveUsersBackup(t *testing.T) {
+	u := validUM()
+	meas := filepath.Join("data", "meshcore.db")
+	defaults := backupSettings{enabled: true, dir: filepath.Join("data", "backups"), keep: 7}
+	set, err := resolveUserManagement(u, meas, noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.backup != defaults {
+		t.Fatalf("absent block = %+v; want %+v", set.backup, defaults)
+	}
+	u.DBPath = filepath.Join("accounts", "users.db")
+	if set, _ = resolveUserManagement(u, meas, noEnv); set.backup.dir != filepath.Join("accounts", "backups") {
+		t.Fatalf("dir follows dbPath: %q", set.backup.dir)
+	}
+	u.DBPath = ""
+	off, on := false, true
+	u.Backup = &UsersBackupConfig{Enabled: &off, Dir: "x", Keep: 3}
+	if set, _ = resolveUserManagement(u, meas, noEnv); set.backup != (backupSettings{}) {
+		t.Fatalf("enabled false = %+v; want off", set.backup)
+	}
+	u.Backup = &UsersBackupConfig{Dir: " bk ", Keep: 3}
+	if set, _ = resolveUserManagement(u, meas, noEnv); set.backup != (backupSettings{enabled: true, dir: "bk", keep: 3}) {
+		t.Fatalf("enabled omitted = %+v; want on with dir bk, keep 3", set.backup)
+	}
+	u.Backup = &UsersBackupConfig{Enabled: &on, Dir: "  ", Keep: -1}
+	if set, _ = resolveUserManagement(u, meas, noEnv); set.backup != defaults {
+		t.Fatalf("blank dir and negative keep = %+v; want defaults", set.backup)
+	}
+	u.Backup = &UsersBackupConfig{Keep: 0}
+	if set, _ = resolveUserManagement(u, meas, noEnv); set.backup.keep != 7 {
+		t.Fatalf("keep 0 = %d; want 7", set.backup.keep)
+	}
+}

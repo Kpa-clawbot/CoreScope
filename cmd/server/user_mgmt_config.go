@@ -23,6 +23,7 @@ type UserManagementConfig struct {
 	Mail             UserMailConfig          `json:"mail"`
 	ChannelProposals *ChannelProposalsConfig `json:"channelProposals,omitempty"`
 	Notifications    *NotificationsConfig    `json:"notifications,omitempty"`
+	Backup           *UsersBackupConfig      `json:"backup,omitempty"`
 }
 
 // UserMailConfig is userManagement.mail.
@@ -121,6 +122,41 @@ func resolveNotifications(c *NotificationsConfig) notifySettings {
 	}
 }
 
+// UsersBackupConfig is userManagement.backup: scheduled users.db
+// snapshots (docs/specs/2026-10-08-account-export-and-users-backup-design.md).
+// On by default: an absent block, or one without "enabled", means on.
+type UsersBackupConfig struct {
+	Enabled *bool  `json:"enabled,omitempty"`
+	Dir     string `json:"dir,omitempty"`
+	Keep    int    `json:"keep,omitempty"`
+}
+
+// backupSettings is the resolved form; the zero value means off.
+type backupSettings struct {
+	enabled bool
+	dir     string // relative paths resolve against the working directory, like dbPath
+	keep    int    // snapshots kept after each run
+}
+
+const defaultBackupKeep = 7
+
+// resolveBackup fills the defaults: dir "backups" next to users.db, keep 7
+// for an absent, zero or negative value. Only "enabled": false turns it off.
+func resolveBackup(c *UsersBackupConfig, dbPath string) backupSettings {
+	if c != nil && c.Enabled != nil && !*c.Enabled {
+		return backupSettings{}
+	}
+	b := backupSettings{enabled: true, dir: filepath.Join(filepath.Dir(dbPath), "backups"), keep: defaultBackupKeep}
+	if c == nil {
+		return b
+	}
+	if d := strings.TrimSpace(c.Dir); d != "" {
+		b.dir = d
+	}
+	b.keep = positiveOr(c.Keep, defaultBackupKeep)
+	return b
+}
+
 // UserManagementEnabled reports whether optional accounts are on. Nil config
 // or absent section means off (the default).
 func (c *Config) UserManagementEnabled() bool {
@@ -142,6 +178,7 @@ type userMgmtSettings struct {
 	webhookSecret  string
 	proposals      proposalSettings
 	notify         notifySettings
+	backup         backupSettings
 }
 
 const defaultSessionDays = 30
@@ -219,6 +256,7 @@ func resolveUserManagement(u *UserManagementConfig, measurementDBPath string, ge
 	}
 	set.proposals = resolveProposals(u.ChannelProposals)
 	set.notify = resolveNotifications(u.Notifications)
+	set.backup = resolveBackup(u.Backup, set.dbPath)
 	return set, nil
 }
 
