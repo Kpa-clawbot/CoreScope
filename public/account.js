@@ -118,7 +118,7 @@
       '<p class="account-hint">One JSON file with everything this instance stores about your account: profile, devices, synced settings, proposals, notifications, and your account and mail history. Passwords and login tokens are not included.</p>' +
       '<div class="account-actions"><a class="account-btn account-btn-secondary" id="accountExport" href="/api/account/export" download>Download my data</a></div>' +
       '<h3>Delete account</h3><form id="delForm" class="account-form" novalidate>' +
-      '<p class="account-hint">This removes your account permanently.</p>' +
+      '<p class="account-hint">This removes your account permanently. Server backups can still hold a copy for a few days until they rotate out.</p>' +
       field('delPw', 'Current password', 'password', 'current-password') +
       submitBtn('Delete my account', true) + msgBox('delMsg') + '</form>');
   }
