@@ -149,6 +149,20 @@ func (s *Store) InvalidateTokens(userID int64, p Purpose) error {
 	return err
 }
 
+// PendingEmailChange returns the new address of the user's unused,
+// unexpired email change, or "" when there is none. Only the address is
+// returned, never the token or its hash.
+func (s *Store) PendingEmailChange(userID int64) (string, error) {
+	var ne sql.NullString
+	err := s.db.QueryRow(`SELECT new_email FROM tokens
+		WHERE user_id = ? AND purpose = ? AND used_at IS NULL AND expires_at > ?
+		ORDER BY expires_at DESC LIMIT 1`, userID, string(PurposeEmailChange), unix(s.now())).Scan(&ne)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return ne.String, err
+}
+
 // PruneTokens deletes tokens that expired more than keep ago.
 func (s *Store) PruneTokens(keep time.Duration) (int64, error) {
 	res, err := s.db.Exec(`DELETE FROM tokens WHERE expires_at < ?`, unix(s.now())-int64(keep/time.Second))

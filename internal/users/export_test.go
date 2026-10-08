@@ -122,3 +122,40 @@ func TestStoredNotifyPrefsNeverCreates(t *testing.T) {
 		t.Fatalf("after NotifyPrefsFor = %+v, %v; want %+v", p, err, want)
 	}
 }
+
+func TestPendingEmailChange(t *testing.T) {
+	st, clk := newTestStore(t)
+	u := mustCreate(t, st, "a@example.org", "Aaa")
+	if got, err := st.PendingEmailChange(u.ID); err != nil || got != "" {
+		t.Fatalf("none issued = %q, %v; want empty", got, err)
+	}
+	if _, err := st.IssueToken(u.ID, PurposeReset, time.Hour, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.IssueToken(u.ID, PurposeEmailChange, time.Hour, "first@example.org"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.IssueToken(u.ID, PurposeEmailChange, time.Hour, "second@example.org"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.PendingEmailChange(u.ID); err != nil || got != "second@example.org" {
+		t.Fatalf("pending = %q, %v; want the newest address", got, err)
+	}
+	clk.Advance(2 * time.Hour)
+	if got, err := st.PendingEmailChange(u.ID); err != nil || got != "" {
+		t.Fatalf("after expiry = %q, %v; want empty", got, err)
+	}
+	if _, err := st.IssueToken(u.ID, PurposeEmailChange, time.Hour, "third@example.org"); err != nil {
+		t.Fatal(err)
+	}
+	other := mustCreate(t, st, "b@example.org", "Bbb")
+	if got, err := st.PendingEmailChange(other.ID); err != nil || got != "" {
+		t.Fatalf("other user = %q, %v; want empty", got, err)
+	}
+	if err := st.InvalidateTokens(u.ID, PurposeEmailChange); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.PendingEmailChange(u.ID); err != nil || got != "" {
+		t.Fatalf("after invalidation = %q, %v; want empty", got, err)
+	}
+}

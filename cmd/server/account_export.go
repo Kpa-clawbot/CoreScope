@@ -13,7 +13,8 @@ import (
 // accountExport is GET /api/account/export: everything users.db holds about
 // the logged-in account (docs/specs/2026-10-08-account-export-and-users-backup-design.md).
 // Credentials are left out on purpose: the password hash, session, link and
-// unsubscribe tokens. Other accounts appear as ids only (activatedBy, audit).
+// unsubscribe tokens; of a pending email change only the new address is
+// exported. Other accounts appear as ids only (activatedBy, audit).
 type accountExport struct {
 	FormatVersion int                 `json:"formatVersion"`
 	ExportedAt    string              `json:"exportedAt"`
@@ -30,6 +31,7 @@ type accountExport struct {
 type exportProfile struct {
 	ID            int64        `json:"id"`
 	Email         string       `json:"email"`
+	PendingEmail  *string      `json:"pendingEmail"` // unconfirmed email change: the address only
 	DisplayName   string       `json:"displayName"`
 	Role          users.Role   `json:"role"`
 	Status        users.Status `json:"status"`
@@ -108,6 +110,13 @@ func (a *authService) buildAccountExport(u *users.User, now time.Time) (*account
 		Notifications: exportNotifications{Watches: []exportWatch{}},
 		Audit:         []exportAuditEntry{},
 		Mail:          []exportMail{},
+	}
+	pending, err := a.st.PendingEmailChange(u.ID)
+	if err != nil {
+		return nil, fmt.Errorf("pending email: %w", err)
+	}
+	if pending != "" {
+		x.Profile.PendingEmail = &pending
 	}
 	sessions, err := a.st.ListSessions(u.ID)
 	if err != nil {

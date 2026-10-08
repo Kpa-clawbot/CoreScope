@@ -47,6 +47,10 @@ func TestAccountExportSections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	change, err := st.IssueToken(uid, users.PurposeEmailChange, time.Hour, "uma-new@example.org")
+	if err != nil {
+		t.Fatal(err)
+	}
 	full, err := st.GetByID(uid)
 	if err != nil {
 		t.Fatal(err)
@@ -73,6 +77,9 @@ func TestAccountExportSections(t *testing.T) {
 	if p.ID != uid || p.Email != "uma@example.org" || p.DisplayName != "Uma" || p.Role != users.RoleUser ||
 		p.Status != users.StatusActive || p.CreatedAt == "" || p.EmailBouncing {
 		t.Fatalf("profile = %+v", p)
+	}
+	if p.PendingEmail == nil || *p.PendingEmail != "uma-new@example.org" {
+		t.Fatalf("pendingEmail = %v; want the unconfirmed address", p.PendingEmail)
 	}
 	if full.ActivatedAt == nil || p.ActivatedAt == nil || *p.ActivatedAt != rfc3339(*full.ActivatedAt) || p.ActivatedBy != nil {
 		t.Fatalf("activation (link): profile = %+v, stored at %v", p, full.ActivatedAt)
@@ -124,6 +131,8 @@ func TestAccountExportSections(t *testing.T) {
 		"unsubscribe token":  prefs.UnsubToken,
 		"reset token":        reset,
 		"reset token hash":   users.HashToken(reset),
+		"email change token": change,
+		"email change hash":  users.HashToken(change),
 	}
 	for name, v := range secrets {
 		if v == "" {
@@ -170,13 +179,26 @@ func TestAccountExportEmptySectionsAndNoWrites(t *testing.T) {
 	w := f.do("GET", "/api/account/export", nil, as(uma))
 	expectStatus(t, w, 200)
 	body := w.Body.String()
-	for _, want := range []string{`"settings":null`, `"proposals":[]`, `"prefs":null`, `"watches":[]`} {
+	for _, want := range []string{`"settings":null`, `"proposals":[]`, `"prefs":null`, `"watches":[]`, `"pendingEmail":null`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("export lacks %s: %s", want, body)
 		}
 	}
 	if p, err := f.st.StoredNotifyPrefs(uma.me.ID); err != nil || p != nil {
 		t.Fatalf("the export created notification prefs: %+v, %v", p, err)
+	}
+}
+
+func TestAccountExportNoEventsIsEmptyList(t *testing.T) {
+	f := newAuthFixture(t)
+	uma := f.registerAndActivate(t, "uma@example.org", "Uma", pw)
+	if _, err := f.st.SetNotifyPrefs(uma.me.ID, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	w := f.do("GET", "/api/account/export", nil, as(uma))
+	expectStatus(t, w, 200)
+	if body := w.Body.String(); !strings.Contains(body, `"prefs":{"enabled":false,"events":[]}`) {
+		t.Fatalf("prefs without events: %s", body)
 	}
 }
 
