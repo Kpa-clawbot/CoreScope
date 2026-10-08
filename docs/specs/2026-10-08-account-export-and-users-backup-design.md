@@ -128,3 +128,27 @@ analyzer hot path is touched.
 - Frontend unit (vm): the button renders for a logged-in user and links to the route.
 - Playwright (e2etest build): the account page shows the button; fetching the export as
   the logged-in user returns JSON with the user's address.
+
+## Amendments
+
+Added after the final review of the implementation (2026-10-08):
+
+- Rotation never deletes the snapshot it just wrote. Without this, future-dated names
+  (a clock that ran ahead) numbering `keep` or more pushed the new snapshot out right
+  after it was written. The logged `kept <k>` is the number actually left.
+- Each backup run deletes orphaned temporary snapshots in the backup directory: regular
+  files named exactly `users-<YYYYMMDD-HHMMSS>.db.tmp` last modified more than 24 hours
+  ago. Other files stay untouched.
+- Export `profile.pendingEmail`: the new address of an unused, unexpired email change, or
+  null. The token and its hash stay out. `notifications.prefs.events` is `[]` when no
+  event is chosen (pinned by a test; the store already returned an empty list).
+- `notification_state` (which notifications were already sent) is not exported: it is
+  the server's operational state, not data the user gave. The user guide says so.
+- Docs: snapshots are taken "about every 24 hours" (hourly check). The Backups section
+  states what a restore brings back (accounts deleted after the snapshot including
+  self-deletions, old passwords, revoked sessions, used links) and the procedure:
+  list `user.delete` / `user.delete.self` audit rows newer than the snapshot from the
+  current `users.db` before overwriting, then with the server stopped disable those
+  accounts and `DELETE FROM sessions; DELETE FROM tokens;`, and delete the accounts again
+  in the admin area after start. Deleted accounts remain in snapshots for up to `keep`
+  days and in downloaded copies. An existing `backup.dir` is not tightened to 0700.
