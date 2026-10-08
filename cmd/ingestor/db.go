@@ -2321,10 +2321,19 @@ func (s *Store) UpdateNodeConfiguredScope(pubkey, scope, reportedAt string) erro
 	// chronological, not lexicographic (see normalizeReportTS). Stored values
 	// are therefore always canonical or empty.
 	reportedAt = normalizeReportTS(reportedAt)
+	// The report's timestamp is chosen by the publisher. Last-write-wins
+	// below means a report stamped far in the future would be written once
+	// and then block every genuine later report, so drop those.
+	if reportTooFarInFuture(reportedAt) {
+		return nil
+	}
 	// Canonicalise the scope syntax for the same reason: a value that is stored
 	// differently from default_scope cannot be compared against it (see
 	// normalizeScopeList).
 	scope = normalizeScopeList(scope)
+	if len(scope) > maxConfiguredScopeLen {
+		return nil
+	}
 	// Last-write-wins: skip if the stored confirmation is newer-or-equal.
 	if reportedAt != "" {
 		var curAt sql.NullString
