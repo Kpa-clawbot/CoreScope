@@ -111,9 +111,15 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensureAdvertEvidence(rw); err != nil {
 		return fmt.Errorf("ensure advert route evidence: %w", err)
 	}
+	if err := ensureKeyBackfill(rw); err != nil {
+		return fmt.Errorf("ensure key backfill: %w", err)
+	}
 	// Advert evidence is intentionally not required by AssertReady: a legacy
 	// read-only server reports unknown until this table/backfill is available,
 	// and re-probes absence instead of caching the startup race permanently.
+	// tx_rewrite_feed (#2107) follows the same rule for the same reason: a
+	// server without it simply never sees in-place rewrites until restart,
+	// which is exactly the behaviour before the feed existed.
 	return nil
 }
 

@@ -350,6 +350,13 @@ func main() {
 	if err := store.RunAsyncMigration(evidenceCtx, "advert_route_evidence_v1", store.backfillAdvertEvidence); err != nil {
 		log.Printf("[migration] scheduling advert evidence backfill: %v", err)
 	}
+	// #2107: re-decide unresolved GRP_TXT and scope rows whenever the key set
+	// grows. Starts after the write path is ready, like the evidence backfill
+	// above; it yields the writer between bounded batches.
+	keyBackfillCtx, stopKeyBackfill := context.WithCancel(context.Background())
+	defer stopKeyBackfill()
+	keyBackfill := newKeyBackfiller(store, channelKeys, regionSet)
+	keyBackfillDone := keyBackfill.Start(keyBackfillCtx)
 	if d := ingestBuffer.Dropped(); d > 0 {
 		log.Printf("[ingest-buffer] write path ready; draining backlog (dropped %d during startup — consider raising ingestBufferSize)", d)
 	} else {
@@ -469,6 +476,7 @@ func main() {
 			for range regionRefreshTicker.C {
 				regionSet.refreshFromStore(store)
 				logScopeMatchCounters()
+				keyBackfill.Kick() // no-op unless the refresh brought a new key
 			}
 		}()
 		log.Printf("[regions] auto-derived region keys enabled: refreshing every %v, cap %d", interval, cfg.AutoRegionKeysMaxDerived())
@@ -625,6 +633,12 @@ func main() {
 
 	log.Println("Shutting down...")
 	stopEvidenceBackfill()
+	stopKeyBackfill()
+	select { // let an in-flight batch commit or roll back cleanly
+	case <-keyBackfillDone:
+	case <-time.After(5 * time.Second):
+		log.Printf("[key-backfill] still running at shutdown; its last committed batch is where it resumes")
+	}
 	retentionTicker.Stop()
 	metricsRetentionTicker.Stop()
 	if packetRetentionTicker != nil {
