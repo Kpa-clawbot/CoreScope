@@ -27,6 +27,7 @@ func (s *Server) registerAuthRoutes(r *mux.Router) {
 	r.HandleFunc("/api/account/settings", s.withUser(s.handleSettingsGet)).Methods("GET")
 	r.HandleFunc("/api/account/settings", s.withUser(s.handleSettingsPut)).Methods("PUT")
 	r.HandleFunc("/api/account/settings", s.withUser(s.handleSettingsDelete)).Methods("DELETE")
+	r.HandleFunc("/api/account/export", s.withUser(s.handleAccountExport)).Methods("GET")
 	r.HandleFunc("/api/admin/users", s.withAdmin(s.handleAdminUsers)).Methods("GET")
 	r.HandleFunc("/api/admin/users/{id}", s.withAdmin(s.handleAdminUserDetail)).Methods("GET")
 	r.HandleFunc("/api/admin/users/{id}", s.withAdmin(s.handleAdminDelete)).Methods("DELETE")
