@@ -45,7 +45,7 @@ const steps = source => source.split(/(?=^      - name:)/m).slice(1);
 function evaluate(expression, context) {
   if (!expression) return true;
   return vm.runInNewContext(expression.replace(/^\$\{\{|\}\}$/g, '').trim(), {
-    ...context, startsWith: (text, prefix) => text.startsWith(prefix)
+    ...context, startsWith: (text, prefix) => text.startsWith(prefix), cancelled: () => false
   });
 }
 const expand = (script, context) => script.replace(/\$\{\{(.*?)\}\}/g, (_, expression) => String(evaluate(expression, context)));
@@ -169,13 +169,31 @@ function context(ref = 'refs/tags/v9.8.7', event = 'workflow_dispatch', inputs =
 
 // Honor the real job conditions AND implicit success() for needs. This catches
 // release-artifacts accidentally depending on the skipped image or E2E jobs.
-function route(ctx, failedJob) {
-  for (const name of ['changes', 'go-test', 'e2e-shard', 'e2e-test', 'image-check', 'build-and-publish', 'release-artifacts', 'deploy', 'publish']) {
+// A job whose `if:` calls cancelled() drops the implicit success(): it runs
+// whatever its needs did, and its own "Require ..." step (the real shell from
+// the workflow, needs results expanded) decides between success and failure.
+// That is what keeps a gate red rather than skipped, which branch protection
+// would count as passing.
+function route(ctx, failedJob, ingestor = 'true') {
+  for (const name of ['changes', 'go-test', 'race-test', 'e2e-shard', 'e2e-test', 'image-check', 'build-and-publish', 'release-artifacts', 'deploy', 'publish']) {
     const job = block(deploy, name, 2);
     assert.ok(job, `missing ${name} job`);
     const needs = value(job, 'needs', 4).replace(/[\[\]\s]/g, '').split(',').filter(Boolean);
-    const run = needs.every(need => ctx.needs[need].result === 'success') && evaluate(value(job, 'if', 4), ctx);
-    ctx.needs[name] = { result: run ? (name === failedJob ? 'failure' : 'success') : 'skipped', outputs: { code: 'true' } };
+    const condition = value(job, 'if', 4);
+    const gate = /cancelled\(\)/.test(condition);
+    const run = (gate || needs.every(need => ctx.needs[need].result === 'success')) && evaluate(condition, ctx);
+    let result = run ? 'success' : 'skipped';
+    if (run && gate) {
+      const require = steps(job).find(step => value(step, '- name', 6).startsWith('Require'));
+      assert.ok(require, `${name}: a gate job must start with a Require step`);
+      // Like GitHub, only declared needs are visible; anything else reads empty.
+      const visible = Object.fromEntries(needs.map(need => [need, ctx.needs[need]]));
+      const missing = new Proxy(visible, { get: (target, key) => target[key] || { result: '' } });
+      const check = spawnSync(bash, ['--noprofile', '--norc', '-e', '-o', 'pipefail'], { input: expand(value(require, 'run', 8), { ...ctx, needs: missing }), encoding: 'utf8' });
+      if (check.status !== 0) result = 'failure';
+    }
+    if (run && name === failedJob) result = 'failure';
+    ctx.needs[name] = { result, outputs: { code: 'true', ingestor } };
   }
   return ctx.needs;
 }
@@ -246,10 +264,20 @@ for (const [ref, event] of [['refs/heads/master', 'push'], ['refs/heads/master',
   assert.equal(value(checkSteps[0], 'platforms', 10), 'linux/amd64,linux/arm64', 'the image check must cover both shipped architectures');
   assert.equal(value(checkSteps[0], 'if', 8), '', 'the image check runs on every event');
   assert.equal(jobs['image-check'].result, 'success', `${event}: image check runs`);
-  // Nothing publishes unless every test job and the image check passed.
-  for (const failed of ['go-test', 'e2e-shard', 'e2e-test', 'image-check']) {
-    assert.equal(route(context(ref, event), failed)['build-and-publish'].result, 'skipped', `${event}: failed ${failed} must block build-and-publish`);
+  // Nothing publishes unless every test job and the image check passed, and
+  // the required checks go red rather than skipped (a skipped required check
+  // counts as passing in branch protection).
+  for (const failed of ['go-test', 'race-test', 'e2e-shard', 'e2e-test', 'image-check']) {
+    const failedJobs = route(context(ref, event), failed);
+    assert.equal(failedJobs['build-and-publish'].result, 'failure', `${event}: failed ${failed} must fail build-and-publish, not skip it`);
+    assert.equal(failedJobs.publish.result, 'skipped', `${event}: failed ${failed} must not publish badges`);
   }
+  assert.equal(route(context(ref, event), 'e2e-shard')['e2e-test'].result, 'failure', `${event}: a failed shard must fail the E2E gate, not skip it`);
+  assert.equal(route(context(ref, event))['build-and-publish'].result, 'success', `${event}: all green passes the gate`);
+  // race-test only runs when ingestor Go files changed; skipped is fine there.
+  const noRace = route(context(ref, event), undefined, 'false');
+  assert.equal(noRace['race-test'].result, 'skipped');
+  assert.equal(noRace['build-and-publish'].result, 'success', `${event}: a skipped race-test must not block`);
 }
 assert.equal(route(context(), 'go-test')['release-artifacts'].result, 'skipped', 'failed Go validation must block release');
 const dispatchInput = block(deploy, 'images_published', 6);

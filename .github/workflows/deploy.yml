@@ -41,7 +41,7 @@ env:
 # Pipeline. The test jobs and the image build run side by side; only the GHCR
 # push waits for all of them:
 #   changes ─┬─ go-test ─────────────────────────┐
-#            ├─ race-test (ingestor changes only)  │
+#            ├─ race-test (ingestor changes only) ─┤
 #            ├─ e2e-shard ×3 ── e2e-test (gate) ───┼─ build-and-publish → deploy, publish
 #            └─ image-check (two-arch build) ──────┘
 #   PRs stop after build-and-publish (no GHCR push). Master continues to deploy + badges.
@@ -379,8 +379,16 @@ jobs:
         run: |
           cd cmd/server
           go build -o ../../corescope-server .
-          go build -tags e2etest -o ../../corescope-server-e2e .
           echo "Go server built successfully"
+
+      # Only test-user-management-e2e.js uses the e2etest build and its server,
+      # and it runs on shard 3. Moving that suite means moving these two too;
+      # it fails loudly (nothing on port 13582) rather than skipping.
+      - name: Build Go server (e2etest tag, user management)
+        if: matrix.shard == 3
+        run: |
+          cd cmd/server
+          go build -tags e2etest -o ../../corescope-server-e2e .
 
       - name: Build Go migrate tool
         run: |
@@ -505,6 +513,7 @@ jobs:
           done
 
       - name: Start user-management E2E server (fake mailer)
+        if: matrix.shard == 3
         run: |
           fuser -k 13582/tcp 2>/dev/null || true
           rm -rf /tmp/cs-um
@@ -536,17 +545,17 @@ jobs:
           # suite <shard> <file> [VAR=value ...]: runs tests/e2e/<file> with
           # exactly those variables, but only on its own shard. The shard numbers
           # balance the measured suite times; give a new suite the shard whose
-          # total is lowest. A number outside 1..E2E_SHARDS fails the step, so a
-          # typo cannot silently drop a suite.
+          # total is lowest. Anything but a number in 1..E2E_SHARDS (a missing
+          # number, 01, 4) fails the step, so a typo cannot silently drop a suite.
           B=http://localhost:13581
           suite() {
             local shard=$1 file=$2
             shift 2
-            if [ "$shard" -lt 1 ] || [ "$shard" -gt "$E2E_SHARDS" ]; then
+            if ! [[ "$shard" =~ ^[1-9][0-9]*$ ]] || [ "$shard" -gt "$E2E_SHARDS" ]; then
               echo "::error::$file is assigned to shard $shard, outside 1..$E2E_SHARDS"
               exit 1
             fi
-            [ "$shard" = "$SHARD" ] || return 0
+            [ "$shard" -eq "$SHARD" ] || return 0
             echo "=== E2E SUITE: $file ===" | tee -a e2e-output.txt
             env "$@" node "tests/e2e/$file" 2>&1 | tee -a e2e-output.txt
           }
@@ -617,9 +626,6 @@ jobs:
           suite 2 test-issue-1648-m1-icons-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-issue-1648-m2-icons-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-issue-1648-m3-icons-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
-          # Shard 1 on purpose: its distance-tab check only counts once the lazy
-          # distance index (#1011) is built, and the a11y suite above is what
-          # first requests it. On another shard the check silently skipped.
           suite 1 test-issue-1648-m4-icons-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 1 test-issue-1657-analytics-channels-group-sprites-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-issue-1224-channels-mobile-ux-e2e.js BASE_URL=$B
@@ -688,18 +694,18 @@ jobs:
           suite 3 test-user-management-e2e.js BASE_URL=http://localhost:13582 BASE_URL_OFF=$B
 
       # #1616: slide-over focus-restore flake-gate. Runs the slide-over
-      # E2E 20 consecutive times against the SAME backend instance so
-      # the Chromium-headless focus race documented in #1172/#1616 has
-      # a 20× shot at firing. Any single non-zero exit aborts. This is
-      # the architectural-fix gate — if it ever turns red post-merge,
-      # the focused-but-hidden state has crept back in.
+      # E2E 3 more times against the SAME backend instance (it already
+      # ran once in the list above) so the Chromium-headless focus race
+      # documented in #1172/#1616 gets repeated shots at firing. Any
+      # single non-zero exit aborts. This is the architectural-fix gate:
+      # if it ever turns red post-merge, the focused-but-hidden state has
+      # crept back in.
       #
-      # PERMANENT step. Adds ~3-4 min to the e2e-test job in exchange
-      # for closing out a flake family that was blocking ~8 unrelated
-      # PRs at a time. If profiling pressures the budget later, drop
-      # repeat count first; do not delete.
-      #
-      # Shard 3, the shard that also runs the slide-over suite once.
+      # PERMANENT step, on shard 3 (the shard that runs the slide-over
+      # suite). Adds ~70s to that shard in exchange for closing out a
+      # flake family that was blocking ~8 unrelated PRs at a time. If
+      # profiling pressures the budget later, drop repeat count first;
+      # do not delete.
       - name: Slide-over E2E flake-gate (#1616, --repeat-each=3)
         if: matrix.shard == 3
         run: |
@@ -758,14 +764,24 @@ jobs:
           include-hidden-files: true
 
   # The gate the rest of the pipeline (and branch protection) sees under the
-  # old single-job name. It runs only when all three shards passed, and folds
-  # their outputs into the same e2e-badges artifact the publish job reads.
+  # old single-job name. It folds the shard outputs into the same e2e-badges
+  # artifact the publish job reads.
+  #
+  # !cancelled() is what makes it a gate. Without it a failed shard would SKIP
+  # this job, and branch protection counts a skipped required check as
+  # passing. With it, the job runs and fails on its first step instead.
   e2e-test:
     name: "🎭 Playwright E2E Tests"
     needs: [e2e-shard, changes]
     runs-on: ubuntu-latest
-    if: needs.changes.outputs.code == 'true' && !(startsWith(github.ref, 'refs/tags/v') && inputs.images_published)
+    if: ${{ !cancelled() && needs.changes.outputs.code == 'true' && !(startsWith(github.ref, 'refs/tags/v') && inputs.images_published) }}
     steps:
+      - name: Require every shard to have passed
+        run: |
+          result="${{ needs['e2e-shard'].result }}"
+          echo "e2e-shard: $result"
+          [ "$result" = success ] || { echo "::error::E2E shards did not all pass (result: $result)"; exit 1; }
+
       - name: Checkout code
         uses: actions/checkout@v5
 
@@ -919,14 +935,35 @@ jobs:
   # request, so every master commit gets an image and a documentation commit is
   # safe to tag. See the comment on the `on:` block.
   #
-  # On a pull request every step here is skipped; the job stays so that its
+  # On a pull request only the first step runs; the job stays so that its
   # check still means "tests and image build all passed".
+  #
+  # !cancelled() plus the first step make that true for failures too: without
+  # them a failed needed job would SKIP this job, and branch protection counts
+  # a skipped required check as passing. race-test is skipped when no ingestor
+  # Go file changed, so for it skipped is accepted; a master push always runs it.
   build-and-publish:
     name: "🏗️ Build & Publish Docker Image"
-    needs: [go-test, e2e-test, image-check, changes]
+    needs: [go-test, race-test, e2e-test, image-check, changes]
     runs-on: ubuntu-latest
-    if: needs.changes.outputs.code == 'true' && !(startsWith(github.ref, 'refs/tags/v') && inputs.images_published)
+    if: ${{ !cancelled() && needs.changes.outputs.code == 'true' && !(startsWith(github.ref, 'refs/tags/v') && inputs.images_published) }}
     steps:
+      - name: Require every test job and the image check to have passed
+        run: |
+          fail=0
+          require() {
+            echo "$1: $2"
+            case " $3 " in
+              *" $2 "*) ;;
+              *) echo "::error::$1 result is $2"; fail=1 ;;
+            esac
+          }
+          require go-test "${{ needs['go-test'].result }}" "success"
+          require race-test "${{ needs['race-test'].result }}" "success skipped"
+          require e2e-test "${{ needs['e2e-test'].result }}" "success"
+          require image-check "${{ needs['image-check'].result }}" "success"
+          exit $fail
+
       - name: Checkout code
         if: ${{ github.event_name == 'push' || startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/checkout@v5
@@ -974,8 +1011,8 @@ jobs:
             APP_VERSION=${{ needs.image-check.outputs.app_version }}
             GIT_COMMIT=${{ needs.image-check.outputs.git_commit }}
             BUILD_TIME=${{ needs.image-check.outputs.build_time }}
+          # No cache-to: image-check exported these same layers minutes ago.
           cache-from: type=gha
-          cache-to: type=gha,mode=max
 
   # ───────────────────────────────────────────────────────────────
   # 4. Release Artifacts (tags only)
