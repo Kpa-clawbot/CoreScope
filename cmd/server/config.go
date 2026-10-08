@@ -969,6 +969,26 @@ func SaveGeoFilter(configDir string, gf *GeoFilterConfig) error {
 		return fmt.Errorf("config.json not found in %s", configDir)
 	}
 
+	// Follow a symlink at configPath to the file it points at before the
+	// tmp+rename below. In the Docker image /app/config.json is a symlink to
+	// the bind-mounted /app/data/config.json (docker/entrypoint-go.sh), and
+	// os.Rename onto the link path would replace the link with a regular
+	// file inside the container: the mounted file would keep the old
+	// geo_filter, the saved one would be invisible on the host and would go
+	// away with the container. Resolving first keeps the write atomic and
+	// the result where the operator (and the next container) will read it.
+	//
+	// Unlike the stats file (writeStatsAtomic, refs #1170), replacing a
+	// symlink at the destination is not wanted here: this path is not
+	// world-writable, and the link is one the image itself creates. Only a
+	// regular file is followed, so a link to a device or a fifo is left
+	// alone and handled as before.
+	if resolved, err := filepath.EvalSymlinks(configPath); err == nil && resolved != configPath {
+		if fi, err := os.Lstat(resolved); err == nil && fi.Mode().IsRegular() {
+			configPath = resolved
+		}
+	}
+
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
