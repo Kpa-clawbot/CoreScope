@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNormalizePubkey(t *testing.T) {
@@ -78,5 +79,26 @@ func TestLinkChallengeBindingAndExpiry(t *testing.T) {
 	}
 	if err := st.ConsumeLinkChallenge(a.ID, pk, ch); !errors.Is(err, ErrChallengeMissing) {
 		t.Fatalf("expired challenge not consumed: %v", err)
+	}
+}
+
+func TestPruneLinkChallenges(t *testing.T) {
+	st, clk := newTestStore(t)
+	a := mustCreate(t, st, "a@example.org", "A")
+	pk := strings.Repeat("ab", 32)
+	old, _, _ := st.CreateLinkChallenge(a.ID, pk)
+	clk.Advance(3 * time.Minute)
+	fresh, _, _ := st.CreateLinkChallenge(a.ID, pk)
+	clk.Advance(3 * time.Minute) // old expired, fresh has 2 minutes left
+
+	n, err := st.PruneLinkChallenges()
+	if err != nil || n != 1 {
+		t.Fatalf("PruneLinkChallenges = %d, %v", n, err)
+	}
+	if err := st.ConsumeLinkChallenge(a.ID, pk, old); !errors.Is(err, ErrChallengeMissing) {
+		t.Fatalf("pruned challenge err = %v", err)
+	}
+	if err := st.ConsumeLinkChallenge(a.ID, pk, fresh); err != nil {
+		t.Fatalf("live challenge pruned: %v", err)
 	}
 }

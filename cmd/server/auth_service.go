@@ -149,6 +149,9 @@ func (a *authService) prune() {
 	if _, err := a.st.PruneExpiredSessions(); err != nil {
 		log.Printf("[users] prune sessions: %v", err)
 	}
+	if _, err := a.st.PruneLinkChallenges(); err != nil {
+		log.Printf("[users] prune link challenges: %v", err)
+	}
 	if _, err := a.st.PruneTokens(7 * 24 * time.Hour); err != nil {
 		log.Printf("[users] prune tokens: %v", err)
 	}

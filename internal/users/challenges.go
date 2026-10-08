@@ -68,3 +68,12 @@ func (s *Store) ConsumeLinkChallenge(userID int64, pubkey, challenge string) err
 	}
 	return nil
 }
+
+// PruneLinkChallenges deletes challenges that have expired.
+func (s *Store) PruneLinkChallenges() (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM link_challenges WHERE expires_at <= ?`, unix(s.now()))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
