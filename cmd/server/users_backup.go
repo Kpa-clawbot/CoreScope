@@ -24,8 +24,17 @@ const (
 )
 
 // usersBackupName matches the snapshot files this code writes and rotates.
-// Nothing else in the directory is ever touched.
+// Apart from orphaned temporary files (usersBackupTemp), nothing else in
+// the directory is ever touched.
 var usersBackupName = regexp.MustCompile(`^users-\d{8}-\d{6}\.db$`)
+
+// usersBackupTemp matches the temporary name a snapshot is written under.
+// One is only left behind when the process died mid-write.
+var usersBackupTemp = regexp.MustCompile(`^users-\d{8}-\d{6}\.db\.tmp$`)
+
+// usersBackupTempMaxAge is how old an orphaned temporary snapshot must be
+// before the sweep removes it; no snapshot write takes this long.
+const usersBackupTempMaxAge = 24 * time.Hour
 
 func usersBackupFile(t time.Time) string { return "users-" + t.UTC().Format(usersBackupLayout) + ".db" }
 
@@ -86,6 +95,37 @@ func writeUsersBackup(st *users.Store, dir string, now time.Time) (string, int64
 	return path, fi.Size(), nil
 }
 
+// sweepUsersBackupTemps removes orphaned temporary snapshots (regular files
+// named like usersBackupTemp, modified more than usersBackupTempMaxAge
+// before now) and returns how many it removed. A missing dir has none.
+func sweepUsersBackupTemps(dir string, now time.Time) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, e := range entries {
+		if !e.Type().IsRegular() || !usersBackupTemp.MatchString(e.Name()) {
+			continue
+		}
+		fi, err := e.Info()
+		if err != nil {
+			return removed, err
+		}
+		if now.Sub(fi.ModTime()) <= usersBackupTempMaxAge {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil {
+			return removed, err
+		}
+		removed++
+	}
+	return removed, nil
+}
+
 // rotateUsersBackups deletes the oldest snapshots beyond keep and returns
 // how many remain. It never deletes justWritten, which a future-dated name
 // (a clock that ran ahead) would otherwise push out as the oldest.
@@ -110,13 +150,19 @@ func rotateUsersBackups(dir string, keep int, justWritten string) (int, error) {
 	return kept, nil
 }
 
-// maybeBackup takes a snapshot when one is due and then rotates. The
+// maybeBackup sweeps orphaned temporary files, takes a snapshot when one
+// is due and then rotates. The
 // janitor calls it every hour, the first time at startup. A failure is
 // logged and leaves the existing snapshots; the next run tries again.
 func (a *authService) maybeBackup(now time.Time) {
 	b := a.set.backup
 	if !b.enabled {
 		return
+	}
+	if n, err := sweepUsersBackupTemps(b.dir, now); err != nil {
+		log.Printf("[users] backup temp sweep failed: %v", err)
+	} else if n > 0 {
+		log.Printf("[users] backup removed %d orphaned temporary file(s)", n)
 	}
 	names, err := listUsersBackups(b.dir)
 	if err != nil {

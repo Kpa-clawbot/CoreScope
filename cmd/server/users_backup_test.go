@@ -164,6 +164,42 @@ func TestUsersBackupRotationKeepsNewestAndForeignFiles(t *testing.T) {
 	}
 }
 
+func TestUsersBackupSweepsOldTempFiles(t *testing.T) {
+	a, dir := backupService(t, 7)
+	setAge := func(name string, age time.Duration) {
+		t.Helper()
+		at := backupNow.Add(-age)
+		if err := os.Chtimes(filepath.Join(dir, name), at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orphan := usersBackupFile(backupNow.Add(-30*time.Hour)) + ".tmp"
+	recent := usersBackupFile(backupNow.Add(-time.Hour)) + ".tmp"
+	foreign := []string{"other.db.tmp", "users-20261001-000000.db.tmp.bak", "users-before-upgrade.db.tmp"}
+	for _, n := range append([]string{orphan, recent}, foreign...) {
+		writeBackupFile(t, dir, n)
+		setAge(n, 25*time.Hour)
+	}
+	setAge(recent, time.Hour)
+	dirLike := usersBackupFile(backupNow.Add(-40*time.Hour)) + ".tmp"
+	if err := os.Mkdir(filepath.Join(dir, dirLike), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	setAge(dirLike, 25*time.Hour)
+	// A fresh snapshot: no new one is due, the sweep still runs.
+	writeBackupFile(t, dir, usersBackupFile(backupNow.Add(-time.Hour)))
+
+	a.maybeBackup(backupNow)
+	if _, err := os.Stat(filepath.Join(dir, orphan)); !os.IsNotExist(err) {
+		t.Errorf("orphaned temp file older than 24h still there: %v", err)
+	}
+	for _, n := range append([]string{recent, dirLike}, foreign...) {
+		if _, err := os.Stat(filepath.Join(dir, n)); err != nil {
+			t.Errorf("%s was touched: %v", n, err)
+		}
+	}
+}
+
 func TestUsersBackupFailureKeepsOldSnapshots(t *testing.T) {
 	a, dir := backupService(t, 1)
 	stale := usersBackupFile(backupNow.Add(-48 * time.Hour))
