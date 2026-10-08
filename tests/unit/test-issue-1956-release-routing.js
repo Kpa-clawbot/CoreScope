@@ -170,7 +170,7 @@ function context(ref = 'refs/tags/v9.8.7', event = 'workflow_dispatch', inputs =
 // Honor the real job conditions AND implicit success() for needs. This catches
 // release-artifacts accidentally depending on the skipped image or E2E jobs.
 function route(ctx, failedJob) {
-  for (const name of ['changes', 'go-test', 'e2e-test', 'build-and-publish', 'release-artifacts', 'deploy', 'publish']) {
+  for (const name of ['changes', 'go-test', 'e2e-shard', 'e2e-test', 'image-check', 'build-and-publish', 'release-artifacts', 'deploy', 'publish']) {
     const job = block(deploy, name, 2);
     assert.ok(job, `missing ${name} job`);
     const needs = value(job, 'needs', 4).replace(/[\[\]\s]/g, '').split(',').filter(Boolean);
@@ -212,7 +212,7 @@ for (const [name, edge] of [['matching', 'a'.repeat(40)], ['missing', null], ['m
   const jobs = route(context(undefined, undefined, { images_published: matching }));
   assert.equal(jobs['release-artifacts'].result, 'success', `${name}: release artifacts must run`);
   assert.equal(jobs['go-test'].result, 'success', `${name}: release still requires Go validation`);
-  for (const job of ['e2e-test', 'build-and-publish']) assert.equal(jobs[job].result, matching ? 'skipped' : 'success', `${name}: ${job}`);
+  for (const job of ['e2e-shard', 'e2e-test', 'image-check', 'build-and-publish']) assert.equal(jobs[job].result, matching ? 'skipped' : 'success', `${name}: ${job}`);
   assert.equal(jobs.deploy.result, 'skipped');
   assert.equal(jobs.publish.result, 'skipped');
   console.log(`PASS ${name} edge: one artifact dispatch, correct image route`);
@@ -226,19 +226,30 @@ for (const [ref, event] of [['refs/heads/master', 'push'], ['refs/heads/master',
   const jobs = route(context(ref, event, { images_published: true }));
   assert.equal(jobs['release-artifacts'].result, 'skipped', `${event}: no GitHub release`);
   assert.equal(jobs['build-and-publish'].result, 'success', `${event}: tag-only input must not skip branch/PR checks`);
-  // There is more than one build-push-action step now: a PR-only two-arch build
-  // that must NOT publish, and the GHCR push. Pin the pushing one by `push: true`
-  // rather than by being first in the job.
+  // Exactly one build-push-action step publishes, and it lives in the job that
+  // waits for every test job. Pin it by `push: true`.
   const buildSteps = steps(block(deploy, 'build-and-publish', 2)).filter(step => step.includes('uses: docker/build-push-action'));
   const publishing = buildSteps.filter(step => value(step, 'push', 10) === 'true');
   assert.equal(publishing.length, 1, 'exactly one step may publish to GHCR');
+  assert.equal(buildSteps.length, 1, 'build-and-publish only pushes; the check build lives in image-check');
   assert.equal(Boolean(evaluate(value(publishing[0], 'if', 8), context(ref, event))), event === 'push', `${event}: GHCR publishing`);
-  // The cross-toolchain gate: since the SQLite driver became cgo, a PR must
-  // still build both architectures, and must do it without publishing.
-  const prBuild = buildSteps.filter(step => value(step, 'push', 10) === 'false');
-  assert.equal(prBuild.length, 1, 'PRs must get exactly one non-publishing two-arch build');
-  assert.equal(value(prBuild[0], 'platforms', 10), 'linux/amd64,linux/arm64', 'the PR gate must cover both shipped architectures');
-  assert.equal(Boolean(evaluate(value(prBuild[0], 'if', 8), context(ref, event))), event === 'pull_request', `${event}: PR-only two-arch gate`);
+  // The publish reuses image-check's metadata: BUILD_TIME is a build arg of
+  // the Go layers, so a fresh timestamp would miss the cache and rebuild.
+  for (const arg of ['APP_VERSION', 'GIT_COMMIT', 'BUILD_TIME']) {
+    assert.ok(value(publishing[0], 'build-args', 10).includes(`${arg}=\${{ needs.image-check.outputs.`), `${arg} must come from image-check`);
+  }
+  // The cross-toolchain gate: since the SQLite driver became cgo, every
+  // event must build both architectures, without publishing, beside the tests.
+  const checkSteps = steps(block(deploy, 'image-check', 2)).filter(step => step.includes('uses: docker/build-push-action'));
+  assert.equal(checkSteps.length, 1, 'image-check runs exactly one build');
+  assert.equal(value(checkSteps[0], 'push', 10), 'false', 'the image check must never publish');
+  assert.equal(value(checkSteps[0], 'platforms', 10), 'linux/amd64,linux/arm64', 'the image check must cover both shipped architectures');
+  assert.equal(value(checkSteps[0], 'if', 8), '', 'the image check runs on every event');
+  assert.equal(jobs['image-check'].result, 'success', `${event}: image check runs`);
+  // Nothing publishes unless every test job and the image check passed.
+  for (const failed of ['go-test', 'e2e-shard', 'e2e-test', 'image-check']) {
+    assert.equal(route(context(ref, event), failed)['build-and-publish'].result, 'skipped', `${event}: failed ${failed} must block build-and-publish`);
+  }
 }
 assert.equal(route(context(), 'go-test')['release-artifacts'].result, 'skipped', 'failed Go validation must block release');
 const dispatchInput = block(deploy, 'images_published', 6);
