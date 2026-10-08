@@ -34,31 +34,88 @@ elif [ "${DISABLE_CADDY:-false}" = "true" ]; then
   SUPERVISORD_CONF="/etc/supervisor/conf.d/supervisord-no-caddy.conf"
 fi
 
-# Run the Go services as the unprivileged "corescope" user (supervisord
-# itself stays root so it can start mosquitto and caddy). Match the user's
-# uid/gid to the owner of the mounted data directory so the services can
-# write there and files they create carry the host owner's ids. Files that a
-# previous root-run container left behind are handed to that owner too.
-DATA_UID=$(stat -c %u /app/data 2>/dev/null || echo 0)
-DATA_GID=$(stat -c %g /app/data 2>/dev/null || echo 0)
-if [ "$DATA_UID" != "0" ]; then
-  if [ "$(id -u corescope)" != "$DATA_UID" ] || [ "$(id -g corescope)" != "$DATA_GID" ]; then
-    deluser corescope 2>/dev/null || true
-    delgroup corescope 2>/dev/null || true
-    GRP=$(getent group "$DATA_GID" | cut -d: -f1)
-    if [ -z "$GRP" ]; then
-      addgroup -S -g "$DATA_GID" corescope
+# Decide which user runs the two Go services. supervisord itself stays root so
+# that mosquitto and caddy can still bind their ports. The uid is taken from,
+# in order:
+#
+#   1. RUN_AS_UID / RUN_AS_GID, when set
+#   2. the owner of the mounted /app/data, when that is not root
+#   3. root — what every earlier release did
+#
+# Nothing on the host is given a new owner unless RUN_AS_UID was set
+# explicitly: only that case takes over files an earlier root-run container
+# left in the data directory. Otherwise we adapt to the data directory as we
+# find it and say so in the log.
+CORESCOPE_SERVICE_USER=root
+RUN_AS_UID="${RUN_AS_UID:-}"
+RUN_AS_GID="${RUN_AS_GID:-}"
+UID_SOURCE=""
+
+if [ -n "$RUN_AS_UID" ]; then
+  UID_SOURCE=explicit
+  RUN_AS_GID="${RUN_AS_GID:-$RUN_AS_UID}"
+else
+  DATA_UID=$(stat -c %u /app/data 2>/dev/null || echo 0)
+  DATA_GID=$(stat -c %g /app/data 2>/dev/null || echo 0)
+  if [ "$DATA_UID" != "0" ]; then
+    UID_SOURCE=data-dir
+    RUN_AS_UID="$DATA_UID"
+    RUN_AS_GID="$DATA_GID"
+  fi
+fi
+
+if [ -n "$UID_SOURCE" ]; then
+  # Re-use whichever account already holds that uid; only create one if none
+  # does, and never delete the baked-in account before that is known.
+  ACCOUNT=$(getent passwd "$RUN_AS_UID" | cut -d: -f1)
+  if [ -z "$ACCOUNT" ]; then
+    getent passwd corescope >/dev/null 2>&1 && deluser corescope >/dev/null 2>&1
+    getent group corescope >/dev/null 2>&1 && delgroup corescope >/dev/null 2>&1
+    GRP=$(getent group "$RUN_AS_GID" | cut -d: -f1)
+    if [ -z "$GRP" ] && addgroup -S -g "$RUN_AS_GID" corescope 2>/dev/null; then
       GRP=corescope
     fi
-    adduser -S -u "$DATA_UID" -G "$GRP" -h /app -s /sbin/nologin corescope
+    if [ -n "$GRP" ] && adduser -S -u "$RUN_AS_UID" -G "$GRP" -h /app \
+         -s /sbin/nologin corescope 2>/dev/null; then
+      ACCOUNT=corescope
+    fi
   fi
-  find /app/data -not -user "$DATA_UID" -exec chown "$DATA_UID:$DATA_GID" {} + 2>/dev/null || true
+
+  if [ -z "$ACCOUNT" ]; then
+    echo "[entrypoint] no account available for uid=$RUN_AS_UID gid=$RUN_AS_GID"
+    if [ "$UID_SOURCE" = explicit ]; then
+      echo "[entrypoint] RUN_AS_UID was set explicitly — not falling back to root"
+      exit 1
+    fi
+    echo "[entrypoint] Go services stay root"
+  else
+    CORESCOPE_SERVICE_USER="$ACCOUNT"
+    if [ "$(id -g "$ACCOUNT")" != "$RUN_AS_GID" ]; then
+      echo "[entrypoint] note: uid $RUN_AS_UID belongs to the existing account" \
+           "'$ACCOUNT', whose primary group is $(id -g "$ACCOUNT") and not $RUN_AS_GID"
+    fi
+    # /app belongs to the image, not to the mount: the server writes
+    # config.json.tmp there when the geo filter is saved.
+    chown "$RUN_AS_UID:$(id -g "$ACCOUNT")" /app
+    if [ "$UID_SOURCE" = explicit ]; then
+      # The operator asked for this uid, so hand over the files an earlier
+      # root-run container left behind.
+      find /app/data ! -user "$RUN_AS_UID" \
+        -exec chown "$RUN_AS_UID:$RUN_AS_GID" {} + 2>/dev/null || true
+    elif find /app/data ! -user "$RUN_AS_UID" 2>/dev/null | head -1 | grep -q .; then
+      echo "[entrypoint] WARNING: /app/data holds files not owned by uid $RUN_AS_UID;"
+      echo "[entrypoint]          CoreScope cannot write those. On the host, run:"
+      echo "[entrypoint]            chown -R $RUN_AS_UID:$RUN_AS_GID <data dir>"
+      echo "[entrypoint]          or start with RUN_AS_UID=$RUN_AS_UID to hand them over."
+    fi
+  fi
 else
-  chown -R corescope:corescope /app/data
+  echo "[entrypoint] /app/data is root-owned — Go services stay root, as before."
+  echo "[entrypoint] To run them unprivileged, chown the data directory on the host,"
+  echo "[entrypoint] or set RUN_AS_UID (see docs/deployment.md)."
 fi
-# The geo-filter save writes config.json.tmp next to /app/config.json.
-chown corescope /app
-chown -h corescope /app/config.json /app/theme.json 2>/dev/null || true
-echo "[entrypoint] Go services run as uid=$(id -u corescope) gid=$(id -g corescope)"
+
+export CORESCOPE_SERVICE_USER
+echo "[entrypoint] Go services run as $CORESCOPE_SERVICE_USER (uid=$(id -u "$CORESCOPE_SERVICE_USER") gid=$(id -g "$CORESCOPE_SERVICE_USER"))"
 
 exec /usr/bin/supervisord -c "$SUPERVISORD_CONF"

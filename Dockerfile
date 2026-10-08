@@ -124,11 +124,15 @@ FROM alpine:3.20
 
 RUN apk add --no-cache mosquitto mosquitto-clients supervisor caddy wget
 
-# Unprivileged user for the Go services. The entrypoint re-creates it with
-# the uid/gid of the mounted data directory, so files written by the
-# container keep the host owner's ids.
+# Unprivileged account for the Go services. Whether it is used is decided at
+# start time by the entrypoint — see "Running the Go services unprivileged"
+# in docs/deployment.md.
 RUN addgroup -S -g 1000 corescope && \
     adduser -S -u 1000 -G corescope -h /app -s /sbin/nologin corescope
+
+# Default: the services run as root, exactly as in earlier releases. The
+# entrypoint overrides this when it switches to the unprivileged account.
+ENV CORESCOPE_SERVICE_USER=root
 
 WORKDIR /app
 
