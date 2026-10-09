@@ -37,7 +37,7 @@ Two things block this today:
 | 2 | Token storage | A row in the existing `sessions` table with `kind = 'device'`, so it shows under **Devices** on the account page and is revoked the same way. |
 | 3 | Token scope | Narrow and server-enforced: `/api/auth/me`, `/api/auth/logout`, `/api/account/companions*`, `/api/account/settings`. Everything else answers 403 to a bearer token. |
 | 4 | Ownership proof | The companion signs a server challenge with its own Ed25519 identity key (MeshCore companion `CMD_SIGN_*`). No signature, no link. |
-| 5 | Conflicts | The newest valid proof wins. Whoever holds the key owns the companion (devices change hands). The previous owner gets an audit row, and a mail when notifications are enabled. |
+| 5 | Conflicts | The newest valid proof wins. Whoever holds the key owns the companion (devices change hands). The previous owner gets an audit row and a mail; the mail is a security notice, sent whatever the node notification settings are (not to an inactive account or a bouncing address). |
 | 6 | Attribution | A read-time join `client_receptions.rx_pubkey → companion_links`. All coverage of a linked companion counts for its current owner, including rows from before the link. The ingestor and the RX payload contract do not change. |
 | 7 | My nodes | Linking also adds the pubkey to the user's `meshcore-my-nodes`. Unlinking does **not** remove it: that list is the user's own choice. |
 | 8 | Linked-only ingest | Opt-in admin setting `clientRxCoverage.requireLinkedCompanion`. When it is on, the ingestor drops every `meshcore/client/<pubkey>/…` message whose pubkey is not in `companion_links`. It is a filter, not a security boundary (see *Linked-only ingest*). |
@@ -118,8 +118,9 @@ the rest of A–E. Rate limits use the existing token buckets (per IP and per us
      `"corescope-link:" + host + ":" + challenge`, where `host` is the host of
      `userManagement.publicBaseUrl`. This uses `internal/sigvalidate`. Invalid → 400.
   3. Upsert `companion_links`. If the pubkey belonged to another user, write an
-     audit row for both users, and mail the previous owner if notifications are
-     enabled for them.
+     audit row for both users, and mail the previous owner (a security notice:
+     node notification settings do not apply; no mail to an inactive account or
+     a bouncing address).
   4. Add `{pubkey, name, addedAt}` to the user's `meshcore-my-nodes`, unless it is
      already there. This is a server-side read-modify-write of the settings document
      that bumps its revision, so open web clients pick it up through the normal

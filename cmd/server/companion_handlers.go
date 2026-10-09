@@ -132,23 +132,12 @@ func (a *authService) companionLinked(u *users.User, link *users.CompanionLink, 
 }
 
 // mailCompanionTransfer tells the previous owner that their companion now
-// belongs to another account, when node notifications are on for the
-// instance and for them (the same opt-in as watched-node mails), and the
-// account is active with a working address.
+// belongs to another account. It is a security notice, so node
+// notification settings do not apply; only an inactive account or a
+// bouncing address gets no mail.
 func (a *authService) mailCompanionTransfer(prevID int64, pubkey, name string) {
-	if !a.set.notify.enabled {
-		return
-	}
 	prev, err := a.st.GetByID(prevID)
 	if err != nil || prev.Status != users.StatusActive || prev.EmailBouncing {
-		return
-	}
-	p, err := a.st.NotifyPrefsFor(prevID)
-	if err != nil {
-		log.Printf("[users] companion transfer mail for user #%d: preferences: %v", prevID, err)
-		return
-	}
-	if !p.Enabled {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), notifySendTimeout)

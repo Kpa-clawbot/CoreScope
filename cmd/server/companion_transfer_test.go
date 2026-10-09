@@ -41,13 +41,19 @@ func TestCompanionTransfer(t *testing.T) {
 	}
 }
 
-func TestCompanionTransferMailNeedsNotifications(t *testing.T) {
+// The transfer mail is a security notice: it goes out whatever the node
+// notification settings are, only not to an inactive or bouncing address.
+func TestCompanionTransferMailIgnoresNotificationSettings(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
 		instance, user bool
+		bouncing       bool
+		wantMails      int
 	}{
-		{"instance off", false, true},
-		{"user opted out", true, false},
+		{"instance notifications off", false, true, false, 1},
+		{"user opted out", true, false, false, 1},
+		{"both off", false, false, false, 1},
+		{"address bouncing", true, true, true, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newAuthFixture(t)
@@ -62,13 +68,18 @@ func TestCompanionTransferMailNeedsNotifications(t *testing.T) {
 			aliceTok := f.deviceToken(t, "alice@example.org", pw, "Pixel").Token
 			bobTok := f.deviceToken(t, "bob@example.org", pw, "iPhone").Token
 			expectStatus(t, f.linkCompanion(t, aliceTok, companionKey, "Car"), http.StatusOK)
+			if tc.bouncing {
+				if err := f.st.SetEmailBouncing(alice.me.ID, true); err != nil {
+					t.Fatal(err)
+				}
+			}
 			sent := len(f.fake.Sent())
 			expectStatus(t, f.linkCompanion(t, bobTok, companionKey, "Bike"), http.StatusOK)
-			if n := len(f.fake.Sent()) - sent; n != 0 {
-				t.Fatalf("%d transfer mail(s) sent", n)
-			}
 			if !hasCompanionAudit(t, f, alice.me.ID, "companion.transfer", pubHex(companionKey)) {
-				t.Fatal("audit row missing without a mail")
+				t.Fatal("no companion.transfer audit row")
+			}
+			if n := len(f.fake.Sent()) - sent; n != tc.wantMails {
+				t.Fatalf("%d transfer mail(s) sent, want %d", n, tc.wantMails)
 			}
 		})
 	}
