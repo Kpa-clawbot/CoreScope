@@ -1095,6 +1095,14 @@ function debounce(fn, ms) {
   return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
 }
 
+/* Visible-only throttle for background refreshes (nav stats).
+ * Returns trigger(); calling it runs fn() at most once per opts.minIntervalMs,
+ * and never while the tab is hidden. opts.now and opts.isHidden are injectable
+ * for tests. */
+function createVisibleThrottle(fn, opts) {
+  return function trigger() { fn(); return true; };
+}
+
 /* Debounced WS helper — batches rapid messages, calls fn with array of msgs */
 function debouncedOnWS(fn, ms) {
   if (typeof ms === 'undefined') ms = 250;
