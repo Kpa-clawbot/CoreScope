@@ -1,9 +1,7 @@
 package users
 
 import (
-	"database/sql"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -147,7 +145,7 @@ func TestUsersByID(t *testing.T) {
 func hasIndex(t *testing.T, st *Store, name string) bool {
 	t.Helper()
 	var n int
-	if err := st.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?`, name).Scan(&n); err != nil {
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM pg_indexes WHERE schemaname=current_schema() AND indexname=$1`, name).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n == 1
@@ -160,32 +158,9 @@ func TestFreshDatabaseHasAuditTimeIndex(t *testing.T) {
 	}
 }
 
-// A users.db written by a v2 binary gains the audit_at index and keeps its rows.
+// A native account schema at v2 binary gains the audit_at index and keeps its rows.
 func TestMigrateV2DatabaseToV3(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "users.db")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stmts := []string{
-		`CREATE TABLE schema_version (version INTEGER NOT NULL)`,
-		`INSERT INTO schema_version (version) VALUES (2)`,
-	}
-	stmts = append(stmts, migrations[0]...)
-	stmts = append(stmts, migrations[1]...)
-	stmts = append(stmts, `INSERT INTO audit_log (at, action, detail) VALUES (1, 'user.register', '{}')`)
-	for _, s := range stmts {
-		if _, err := db.Exec(s); err != nil {
-			t.Fatalf("build v2 db: %v", err)
-		}
-	}
-	db.Close()
-
-	st, err := Open(path)
-	if err != nil {
-		t.Fatalf("Open v2 db: %v", err)
-	}
-	defer st.Close()
+	st := migratedTestStore(t, 2, `INSERT INTO audit_log (at,action,detail) VALUES (1,'user.register','{}')`)
 	if v, err := st.SchemaVersion(); err != nil || v != len(migrations) {
 		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, len(migrations))
 	}

@@ -43,7 +43,13 @@ func main() {
 	}
 
 	configPath := flag.String("config", "config.json", "path to config file")
+	databaseURL := flag.String("database-url", "", "PostgreSQL telemetry writer URL")
+	stateDir := flag.String("state-dir", "", "local queue and statistics directory")
+	legacyDB := flag.String("db", "", "removed SQLite path; use the offline importer")
 	flag.Parse()
+	if *legacyDB != "" {
+		log.Fatal("-db is no longer supported; import SQLite offline and configure -database-url")
+	}
 
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 	log.SetPrefix("[ingestor] ")
@@ -74,12 +80,21 @@ func main() {
 
 	sources := cfg.ResolvedSources()
 
-	store, err := OpenStoreWithInterval(cfg.DBPath, cfg.MetricsSampleInterval())
+	if *databaseURL != "" {
+		cfg.DatabaseURL = *databaseURL
+	}
+	if *stateDir != "" {
+		cfg.StateDir = *stateDir
+	}
+	if cfg.DatabaseURL == "" {
+		log.Fatal("databaseURL or CORESCOPE_DATABASE_URL is required; migrate legacy SQLite files offline")
+	}
+	store, err := OpenStoreWithState(cfg.DatabaseURL, cfg.StateDir, cfg.MetricsSampleInterval())
 	if err != nil {
 		log.Fatalf("db: %v", err)
 	}
 	defer store.Close()
-	log.Printf("SQLite opened: %s", cfg.DBPath)
+	log.Print("PostgreSQL telemetry writer connected")
 
 	// Async backfill: path_json from raw_hex (#888) — must not block MQTT startup
 	store.BackfillPathJSONAsync()
@@ -94,7 +109,6 @@ func main() {
 	go store.BackfillFromPubkey(5000, 100*time.Millisecond, nil)
 
 	// Check auto_vacuum mode and optionally migrate (#919)
-	store.CheckAutoVacuum(cfg)
 
 	channelKeys := loadChannelKeys(cfg, *configPath)
 	if len(channelKeys) > 0 {
@@ -103,9 +117,9 @@ func main() {
 		log.Printf("No channel keys loaded — GRP_TXT packets will not be decrypted")
 	}
 
-	keySet := newChannelKeySet(channelKeys, cfg.UsersDBPath(), cfg.ApprovedChannelsMax())
+	keySet := newChannelKeySet(channelKeys, cfg.ApprovedChannelsURL(), cfg.ApprovedChannelsMax())
 	if cfg.ApprovedChannelsEnabled() {
-		logApprovedChannelsSource(cfg.UsersDBPath())
+		logApprovedChannelsSource(cfg.ApprovedChannelsURL())
 		keySet.refresh()
 		go func() {
 			t := time.NewTicker(approvedChannelsRefresh)
@@ -129,7 +143,7 @@ func main() {
 
 	// Subscribe-early + buffer (#1608): the MQTT subscription is brought up
 	// before startup maintenance so no packets are missed while the single
-	// SQLite writer is blocked (e.g. a large CREATE INDEX migration). Received
+	// serialized writer is busy with a bounded data backfill. Received
 	// messages are buffered here and drained once Ready() is called below.
 	ingestBuffer := NewIngestBuffer(cfg.IngestBufferSizeOrDefault())
 	ingestBuffer.Start()
@@ -347,12 +361,8 @@ func main() {
 		}
 	}
 
-	vacuumPages := cfg.IncrementalVacuumPages()
-	store.RunIncrementalVacuum(vacuumPages)
-
 	// Gate open: the synchronous startup writes above cannot return until the
-	// single SQLite writer is free, which means any blocking async migration
-	// (e.g. the CREATE INDEX) has finished. WaitForAsyncMigrations() makes that
+	// single serialized writer is free. WaitForAsyncMigrations() makes that
 	// explicit. Now drain everything the subscription buffered during startup.
 	store.WaitForAsyncMigrations()
 	ingestBuffer.Ready()
@@ -374,7 +384,7 @@ func main() {
 	go func() {
 		for range retentionTicker.C {
 			store.MoveStaleNodes(nodeDays)
-			store.RunIncrementalVacuum(vacuumPages)
+
 		}
 	}()
 
@@ -384,11 +394,11 @@ func main() {
 		time.Sleep(90 * time.Second) // stagger after metrics prune
 		store.RemoveStaleObservers(observerDays)
 		store.PurgeStaleObservers(observerPurgeDays)
-		store.RunIncrementalVacuum(vacuumPages)
+
 		for range observerRetentionTicker.C {
 			store.RemoveStaleObservers(observerDays)
 			store.PurgeStaleObservers(observerPurgeDays)
-			store.RunIncrementalVacuum(vacuumPages)
+
 		}
 	}()
 
@@ -398,7 +408,7 @@ func main() {
 		for range metricsRetentionTicker.C {
 			store.PruneOldMetrics(metricsDays)
 			store.PruneDroppedPackets(metricsDays)
-			store.RunIncrementalVacuum(vacuumPages)
+
 		}
 	}()
 
@@ -411,7 +421,7 @@ func main() {
 				if n, err := store.PruneOldPackets(packetDays); err != nil {
 					log.Printf("[prune] error: %v", err)
 				} else if n > 0 {
-					store.RunIncrementalVacuum(vacuumPages)
+
 				}
 			}
 		}()
@@ -431,28 +441,28 @@ func main() {
 					if n, err := store.PruneOldClientReceptions(clientRxDays); err != nil {
 						log.Printf("[prune] error: %v", err)
 					} else if n > 0 {
-						store.RunIncrementalVacuum(vacuumPages)
+
 					}
 				}
 				if clientRxObsDays > 0 {
 					if n, err := store.PruneOldClientRxObservations(clientRxObsDays); err != nil {
 						log.Printf("[prune] client_rx_observations: %v", err)
 					} else if n > 0 {
-						store.RunIncrementalVacuum(vacuumPages)
+
 					}
 				}
 				if clientRfDays > 0 {
 					if n, err := store.PruneOldClientRfSamples(clientRfDays); err != nil {
 						log.Printf("[prune] client_rf_samples: %v", err)
 					} else if n > 0 {
-						store.RunIncrementalVacuum(vacuumPages)
+
 					}
 				}
 				if clientRegionsDays > 0 {
 					if n, err := store.PruneOldClientDeclaredRegions(clientRegionsDays); err != nil {
 						log.Printf("[prune] node_declared_regions: %v", err)
 					} else if n > 0 {
-						store.RunIncrementalVacuum(vacuumPages)
+
 					}
 				}
 			}
@@ -487,56 +497,7 @@ func main() {
 		log.Printf("[regions] auto-derived region keys enabled: refreshing every %v, cap %d", interval, cfg.AutoRegionKeysMaxDerived())
 	}
 
-	// Hourly WAL checkpoint to prevent unbounded WAL growth.
-	// TRUNCATE resets the WAL file to zero bytes when all frames are flushed;
-	// if the server's read connection holds frames, remaining pages stay in the
-	// WAL until the next tick. Staggered 30s after startup to avoid competing
-	// with the initial burst of ingest writes.
-	walCheckpointTicker := time.NewTicker(1 * time.Hour)
-	go func() {
-		time.Sleep(30 * time.Second)
-		store.Checkpoint()
-		for range walCheckpointTicker.C {
-			store.Checkpoint()
-		}
-	}()
-	log.Printf("[db] WAL checkpoint scheduled every 1h")
-
-	// Daily planner statistics refresh (#2058), in two parts.
-	//
-	// The routine refresh is staggered 2 minutes past startup for the same reason
-	// as the checkpoint above: it takes the write lock, and by then the initial
-	// ingest burst has passed, so it also sees the rows that burst added.
-	//
-	// The build in front of it deliberately does compete with that burst, because
-	// a database with no statistics at all has nothing better to offer the queries
-	// arriving in those 2 minutes. It only runs once per database; see
-	// Store.EnsurePlannerStats, which also carries what that costs.
-	//
-	// Bounded by analysis_limit either way, so neither grows with the file the way
-	// an unbounded ANALYZE does: 2.0s against 242.9s on a 9.4 GB database, both
-	// timed warm. Cold, on a first start, it is 3m43.9s.
-	{
-		analysisLimit := cfg.AnalysisLimit()
-		if analysisLimit < 0 {
-			log.Printf("[analyze] planner statistics refresh disabled (db.analysisLimit=%d)", analysisLimit)
-		} else {
-			analyzeTicker := time.NewTicker(24 * time.Hour)
-			go func() {
-				// Before the stagger, and only on a database that has never been
-				// analyzed: the stagger is a 2 minute window in which the first
-				// query would otherwise run on no statistics at all. A restart
-				// finds sqlite_stat1 already in the file and skips this.
-				store.EnsurePlannerStats(analysisLimit)
-				time.Sleep(2 * time.Minute)
-				store.RefreshPlannerStats(analysisLimit)
-				for range analyzeTicker.C {
-					store.RefreshPlannerStats(analysisLimit)
-				}
-			}()
-			log.Printf("[analyze] planner statistics refresh scheduled every 24h (analysis_limit=%d)", analysisLimit)
-		}
-	}
+	// PostgreSQL autovacuum, checkpoints and planner statistics are owned by the database service.
 
 	// Daily neighbor_edges retention (#1287 — moved from cmd/server).
 	{
@@ -645,7 +606,6 @@ func main() {
 	}
 	statsTicker.Stop()
 	pruneQueueTicker.Stop()
-	walCheckpointTicker.Stop()
 	stopWatchdog()
 	// A deploy is a SIGTERM, which is exactly the case that used to lose
 	// the tally: save before the process goes away rather than leaving up

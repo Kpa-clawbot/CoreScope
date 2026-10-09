@@ -14,12 +14,9 @@ package main
 
 import (
 	"encoding/json"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 // createTestDBWithLastSeen seeds a DB with the post-fix schema (last_seen
@@ -49,15 +46,14 @@ func createTestDBWithLastSeen(t *testing.T, dbPath string, numTx, obsPerTx int, 
 // loads zero rows; the post-fix code (filtering on last_seen) must load
 // all 1000.
 func Test1690_ColdLoad_TimeAxis(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
+	dbPath := postgresTestDSN(t)
 
 	nowSec := time.Now().UTC().Unix()
 	createTestDBWithLastSeen(t, dbPath, 1000, 1, nowSec,
 		30*24*time.Hour, // first_seen = 30d ago
 		30*time.Minute)  // last_seen = 30min ago
 
-	db, err := OpenDB(dbPath)
+	db, err := openFixtureReader(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}
@@ -86,8 +82,7 @@ func Test1690_ColdLoad_TimeAxis(t *testing.T) {
 // loadBackgroundChunks runs, backgroundLoadDone must be FALSE and
 // backgroundLoadFailed must be TRUE because actual coverage is < 90%.
 func Test1690_BackgroundLoadHonesty(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
+	dbPath := postgresTestDSN(t)
 
 	nowSec := time.Now().UTC().Unix()
 	// 5000 rows; chunkSize=500 + maxMemoryMB=1 (→ maxPackets ≈ 1000) so
@@ -96,7 +91,7 @@ func Test1690_BackgroundLoadHonesty(t *testing.T) {
 	createTestDBWithLastSeen(t, dbPath, 5000, 1, nowSec,
 		30*time.Minute, 30*time.Minute)
 
-	db, err := OpenDB(dbPath)
+	db, err := openFixtureReader(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}
@@ -132,14 +127,13 @@ func Test1690_BackgroundLoadHonesty(t *testing.T) {
 // Test1690_PerfStats_NewFields asserts the typed perf payload exposes the
 // retention/coverage fields needed for prod observability.
 func Test1690_PerfStats_NewFields(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
+	dbPath := postgresTestDSN(t)
 
 	nowSec := time.Now().UTC().Unix()
 	createTestDBWithLastSeen(t, dbPath, 10, 1, nowSec,
 		30*time.Minute, 30*time.Minute)
 
-	db, err := OpenDB(dbPath)
+	db, err := openFixtureReader(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}

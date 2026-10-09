@@ -20,7 +20,7 @@ const NeighborEdgesBuilderInterval = 60 * time.Second
 
 // neighborBuilderMaxBatch caps how many observation rows a single
 // delta tick may process (#1339). With max_open_conns=1, an unbounded
-// scan on a multi-million-row table holds the SQLite write lock for
+// scan on a multi-million-row table holds the writer lock for
 // minutes and starves MQTT ingest. The cap keeps each tick bounded;
 // if a backlog accumulates, successive ticks drain it 50k rows at a
 // time without ever blocking ingest for long.
@@ -197,9 +197,9 @@ func (s *Store) buildAndPersistNeighborEdges(trust *packetpath.TrustConfig) (int
 	FROM observations o
 	JOIN transmissions t ON t.id = o.transmission_id
 	LEFT JOIN observers obs ON obs.rowid = o.observer_idx
-	WHERE o.timestamp > ?
+	WHERE o.timestamp > $1
 	ORDER BY o.timestamp
-	LIMIT ?`, watermarkEpoch, neighborBuilderMaxBatch)
+	LIMIT $2`, watermarkEpoch, neighborBuilderMaxBatch)
 	if err != nil {
 		return 0, fmt.Errorf("scan observations: %w", err)
 	}
@@ -254,36 +254,56 @@ func (s *Store) buildAndPersistNeighborEdges(trust *packetpath.TrustConfig) (int
 		return 0, nil
 	}
 
-	// Wrap the whole edge-persist tx under writer-perf instrumentation
-	// (#1340). Slow neighbor-builder ticks (the #1339 root cause) now
-	// show up on /api/perf under component=neighbor_builder.
-	var inserted int
-	err = s.WriterTx("neighbor_builder", func(tx *sql.Tx) error {
-		stmt, err := tx.Prepare(`INSERT INTO neighbor_edges (node_a, node_b, count, last_seen)
-			VALUES (?, ?, 1, ?)
-			ON CONFLICT(node_a, node_b) DO UPDATE SET
-			  count = count + 1,
-			  last_seen = MAX(last_seen, excluded.last_seen)`)
-		if err != nil {
-			return fmt.Errorf("prepare: %w", err)
+	// Aggregate repeated pairs before taking the writer lock. Counts and the
+	// latest timestamp are additive; the working set is bounded by this scan's
+	// candidate slice. SQL batches cap parameters and server round trips.
+	type countedEdge struct {
+		a, b, ts string
+		count    int
+	}
+	counts := make(map[[2]string]*countedEdge)
+	for _, e := range edges {
+		key := [2]string{e.a, e.b}
+		if current := counts[key]; current != nil {
+			current.count++
+			if e.ts > current.ts {
+				current.ts = e.ts
+			}
+		} else {
+			counts[key] = &countedEdge{e.a, e.b, e.ts, 1}
 		}
-		defer stmt.Close()
-		var firstErr error
-		for _, e := range edges {
-			if _, err := stmt.Exec(e.a, e.b, e.ts); err != nil && firstErr == nil {
-				firstErr = err
+	}
+	err = s.WriterTx("neighbor_builder", func(tx *sql.Tx) error {
+		const batchSize = 1000
+		values := make([]string, 0, batchSize)
+		args := make([]any, 0, batchSize*4)
+		flush := func() error {
+			if len(values) == 0 {
+				return nil
+			}
+			_, err := tx.Exec(`INSERT INTO neighbor_edges(node_a,node_b,count,last_seen) VALUES `+strings.Join(values, ",")+`
+    ON CONFLICT(node_a,node_b) DO UPDATE SET count=neighbor_edges.count+excluded.count,
+    last_seen=CASE WHEN neighbor_edges.last_seen IS NULL OR excluded.last_seen IS NULL THEN NULL ELSE GREATEST(neighbor_edges.last_seen,excluded.last_seen) END`, args...)
+			values = values[:0]
+			args = args[:0]
+			return err
+		}
+		for _, e := range counts {
+			n := len(args)
+			values = append(values, fmt.Sprintf("($%d,$%d,$%d,$%d)", n+1, n+2, n+3, n+4))
+			args = append(args, e.a, e.b, e.count, e.ts)
+			if len(values) == batchSize {
+				if err := flush(); err != nil {
+					return err
+				}
 			}
 		}
-		if firstErr != nil {
-			return fmt.Errorf("upsert: %w", firstErr)
-		}
-		inserted = len(edges)
-		return nil
+		return flush()
 	})
 	if err != nil {
 		return 0, err
 	}
-	return inserted, nil
+	return len(edges), nil
 }
 
 // canonEdge orders the pair so node_a <= node_b (matches the existing

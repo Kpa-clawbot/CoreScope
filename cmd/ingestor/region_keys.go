@@ -74,7 +74,7 @@ func regionNameAcceptable(name string) (string, bool) {
 //     (#1865). Always present; the column is part of the schema.
 //   - node_declared_regions, an optional table a deployment may fill by other
 //     means. Absent on a stock install, so its absence is not an error: the
-//     probe below asks sqlite_master first rather than letting "no such table"
+//     probe below asks information_schema first rather than letting "no such table"
 //     abort a refresh that the first source could still answer.
 //
 // A node counts once per name however many times it declares it, so the
@@ -129,7 +129,7 @@ func (s *Store) declaredRegionSources() ([]declaredRegionStat, error) {
 	rows.Close()
 
 	var present string
-	if err := s.db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='node_declared_regions'`).Scan(&present); err == nil && present != "" {
+	if err := s.db.QueryRow(`SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='node_declared_regions'`).Scan(&present); err == nil && present != "" {
 		ndr, err := s.db.Query(`
 			WITH ranked AS (
 				SELECT target, observed_at, regions_csv,

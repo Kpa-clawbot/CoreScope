@@ -223,8 +223,7 @@ func TestAuthActivateHashChangedMidwayIs409(t *testing.T) {
 	f := newAuthFixture(t)
 	expectStatus(t, f.do("POST", "/api/auth/register", registerRequest{Email: "ned@example.org", DisplayName: "Ned", Password: pw}), 200)
 	tok := f.lastToken(t)
-	f.execDB(t, `CREATE TRIGGER race AFTER UPDATE OF used_at ON tokens BEGIN
-		UPDATE users SET password_hash = 'replaced-by-a-re-register' WHERE id = NEW.user_id; END`)
+	f.execDB(t, `CREATE FUNCTION race() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN UPDATE users SET password_hash='replaced-by-a-re-register' WHERE id=NEW.user_id; RETURN NEW; END $$; CREATE TRIGGER race AFTER UPDATE OF used_at ON tokens FOR EACH ROW EXECUTE FUNCTION race()`)
 	w := f.do("POST", "/api/auth/activate", activateRequest{Token: tok, Password: pw})
 	expectStatus(t, w, 409)
 	if !strings.Contains(w.Body.String(), "account changed, try again") {

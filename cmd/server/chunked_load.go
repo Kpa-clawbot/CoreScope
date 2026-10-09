@@ -22,7 +22,7 @@ package main
 //     logging / tests.
 //
 // Concurrency: each chunk acquires s.mu.Lock() ONLY while merging the
-// chunk's rows into store-shared maps. SQLite reads run lock-free so
+// chunk's rows into store-shared maps. Database reads run without the store lock so
 // HTTP handlers (which take s.mu.RLock) stay responsive.
 
 import (
@@ -102,7 +102,7 @@ func (s *PacketStore) chunkedLoadInit() {
 
 // StartupLoadDone returns a channel closed once RunStartupLoad has
 // returned: LoadChunked AND the background fill loader are finished,
-// whether they succeeded or not. Nothing more is loaded from SQLite
+// whether they succeeded or not. Nothing more is loaded from the database
 // after it closes. LoadComplete() is not a substitute: it flips at the
 // end of the hot window, before the background fill starts.
 func (s *PacketStore) StartupLoadDone() <-chan struct{} {
@@ -265,7 +265,7 @@ func (s *PacketStore) RunStartupLoad(chunkSize int) error {
 	return nil
 }
 
-// LoadChunked streams transmissions + observations from SQLite into
+// LoadChunked streams transmissions + observations from PostgreSQL into
 // the in-memory store in id-ordered chunks of `chunkSize` rows. Pass
 // 0 to use the default (10000).
 //
@@ -327,7 +327,7 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 		// the prior `t2.first_seen >= cutoff` query loaded only hashes
 		// first-inserted within the window (0.3% of DB on prod).
 		//
-		// Test/legacy DBs without the column (PRAGMA-detected as
+		// Test/legacy DBs without the column (schema-detected as
 		// hasLastSeen=false) fall back to the legacy first_seen axis to
 		// keep existing fixtures green. Production goes through
 		// dbschema.AssertReady which fail-fasts when the column is
@@ -368,7 +368,7 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 
 	chunkIdx := 0
 	totalLoaded := 0
-	// Start the id cursor BELOW the minimum possible row id so the
+	// Start the id cursor below the legacy fixture's zero ID so the
 	// first chunk's `t2.id > cursorID` predicate includes id=0. The
 	// e2e fixture seed for issue #1486 inserts the grouped-packet row
 	// with id=0 (so it sorts LAST in the default packets view via
@@ -376,12 +376,12 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 	// 0 silently excluded that row, leaving the page with no
 	// tr[data-hash] and timing out the playwright wait. Legacy Load()
 	// had no id cursor and loaded id=0 unconditionally — we restore
-	// that semantic by starting one below SQLite's minimum rowid (-1).
+	// that semantic by starting at -1.
 	var cursorID int64 = -1
 
 	// Relay-hop fallback inputs, fetched ONCE before the chunk-query loop.
 	// getCachedNodesAndPM issues its own DB query, so calling it while a
-	// chunk cursor is open would deadlock on a single-connection SQLite
+	// chunk cursor is open would deadlock on a single-connection database
 	// pool. resolved_path is never persisted post-#1287, so scanAndMergeChunk
 	// re-resolves relay hops from path_json using these snapshots.
 	// PR #1643 R1 munger #1: cold load uses unique_prefix-only gate, so
@@ -417,7 +417,7 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 			chunkSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 					t.payload_type, t.payload_version, t.decoded_json,
 					o.id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,
-					o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRawHexCol + rpCol + scopeNameCol + `
+					o.snr, o.rssi, o.score, o.path_json, to_char(to_timestamp(o.timestamp) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')` + obsRawHexCol + rpCol + scopeNameCol + `
 				FROM (SELECT * FROM transmissions t2 ` + whereClause + ` ORDER BY t2.id ASC LIMIT ` + fmt.Sprintf("%d", chunkSize) + `) AS t
 				LEFT JOIN observations o ON o.transmission_id = t.id
 				LEFT JOIN observers obs ON obs.rowid = o.observer_idx
@@ -542,7 +542,7 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 		var obsID sql.NullInt64
 		var observerID, observerName, observerIATA, direction, pathJSON, obsTimestamp sql.NullString
 		var snr, rssi sql.NullFloat64
-		var score sql.NullInt64
+		var score sql.NullFloat64
 		var obsRawHex sql.NullString
 		var resolvedPathStr sql.NullString
 		var scopeName sql.NullString
@@ -620,9 +620,9 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 				Direction:      nullStrVal(direction),
 				SNR:            nullFloatPtr(snr),
 				RSSI:           nullFloatPtr(rssi),
-				Score:          nullIntPtr(score),
+				Score:          nullFloatPtr(score),
 				PathJSON:       obsPJ,
-				// Raw frames stay in SQLite; hash equality does not imply route
+				// Raw frames stay in the database; hash equality does not imply route
 				// equality. Only compact advert evidence is retained per tx.
 				// Packet-detail queries can read the original observation raw.
 				Timestamp: normalizeTimestamp(nullStrVal(obsTimestamp)),

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/gorilla/mux"
+	"github.com/meshcore-analyzer/pgutil/pgtest"
 )
 
 func TestUserManagementOffIsUnchanged(t *testing.T) {
@@ -73,30 +74,29 @@ func TestAuthRoutesThroughRealRouterAreNoStore(t *testing.T) {
 }
 
 func TestInitUserManagementRefusesMeasurementDB(t *testing.T) {
-	dir := t.TempDir()
-	measurement := filepath.Join(dir, "meshcore.db")
-	os.WriteFile(measurement, nil, 0o644)
-	srv := &Server{cfg: &Config{UserManagement: &UserManagementConfig{
-		Enabled: true, DBPath: measurement, PublicBaseURL: testBase,
-		Mail: UserMailConfig{BrevoAPIKey: "k", FromEmail: "noreply@example.org"},
-	}}}
-	err := srv.initUserManagement(measurement)
-	if err == nil || !strings.Contains(err.Error(), "measurement database") {
+	a, _ := newTestAuthService(t)
+	u := validUM()
+	u.DatabaseURL = a.set.databaseURL
+	srv := &Server{cfg: &Config{UserManagement: u}}
+	if err := srv.initUserManagement(u.DatabaseURL); err == nil || !strings.Contains(err.Error(), "measurement database") {
 		t.Fatalf("err = %v", err)
 	}
 }
 
-func TestInitUserManagementCreatesUsersDB(t *testing.T) {
-	dir := t.TempDir()
-	srv := &Server{cfg: &Config{UserManagement: &UserManagementConfig{
-		Enabled: true, PublicBaseURL: testBase,
-		Mail: UserMailConfig{BrevoAPIKey: "k", FromEmail: "noreply@example.org"},
-	}}}
-	if err := srv.initUserManagement(filepath.Join(dir, "meshcore.db")); err != nil {
+func TestInitUserManagementRequiresBootstrappedDatabase(t *testing.T) {
+	u := validUM()
+	u.DatabaseURL = pgtest.NewDatabase(t)
+	srv := &Server{cfg: &Config{UserManagement: u}}
+	if err := srv.initUserManagement(pgtest.NewDatabase(t)); err == nil {
+		t.Fatal("runtime created missing account schema")
+	}
+	db, err := openFixtureSQL(u.DatabaseURL)
+	if err != nil {
 		t.Fatal(err)
 	}
-	defer srv.closeUserManagement()
-	if _, err := os.Stat(filepath.Join(dir, "users.db")); err != nil {
-		t.Fatalf("users.db not created next to the measurement DB: %v", err)
+	defer db.Close()
+	var tables int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public'`).Scan(&tables); err != nil || tables != 0 {
+		t.Fatalf("runtime created tables: %d, %v", tables, err)
 	}
 }

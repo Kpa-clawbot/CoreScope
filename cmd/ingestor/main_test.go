@@ -125,7 +125,7 @@ func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := dir + "/test.db"
-	s, err := OpenStore(dbPath)
+	s, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1135,7 +1135,7 @@ func TestHandleMessageAdvert_EmptyScopeSkipsDefaultScopeUpdate(t *testing.T) {
 
 	// Pre-seed the node with a non-empty default_scope so we can detect an
 	// erroneous overwrite with "".
-	if _, err := store.db.Exec(`INSERT INTO nodes (public_key, name, default_scope) VALUES (?, 'Node1', '#belgium')`, pubkey); err != nil {
+	if _, err := store.db.Exec(`INSERT INTO nodes (public_key, name, default_scope) VALUES ($1, 'Node1', '#belgium')`, pubkey); err != nil {
 		t.Fatalf("seed node: %v", err)
 	}
 
@@ -1147,7 +1147,7 @@ func TestHandleMessageAdvert_EmptyScopeSkipsDefaultScopeUpdate(t *testing.T) {
 	handleMessage(store, "test", source, msg, nil, nil, &Config{})
 
 	var got sql.NullString
-	if err := store.db.QueryRow(`SELECT default_scope FROM nodes WHERE public_key = ?`, pubkey).Scan(&got); err != nil {
+	if err := store.db.QueryRow(`SELECT default_scope FROM nodes WHERE public_key = $1`, pubkey).Scan(&got); err != nil {
 		t.Fatalf("read default_scope: %v", err)
 	}
 	if !got.Valid || got.String != "#belgium" {
@@ -1188,7 +1188,7 @@ func TestHandleMessageAdvert_MatchedScopeUpdatesDefaultScope(t *testing.T) {
 	code1 := fmt.Sprintf("%02X%02X", byte(code&0xFF), byte(code>>8))
 	rawHex := "10" + code1 + "000000" + advertBytes
 
-	if _, err := store.db.Exec(`INSERT INTO nodes (public_key, name, default_scope) VALUES (?, 'Node1', '#old')`, pubkey); err != nil {
+	if _, err := store.db.Exec(`INSERT INTO nodes (public_key, name, default_scope) VALUES ($1, 'Node1', '#old')`, pubkey); err != nil {
 		t.Fatalf("seed node: %v", err)
 	}
 
@@ -1199,7 +1199,7 @@ func TestHandleMessageAdvert_MatchedScopeUpdatesDefaultScope(t *testing.T) {
 	handleMessage(store, "test", source, msg, nil, regionKeySetFromKeys(map[string][]byte{"#de": regionKey}), &Config{})
 
 	var got sql.NullString
-	if err := store.db.QueryRow(`SELECT default_scope FROM nodes WHERE public_key = ?`, pubkey).Scan(&got); err != nil {
+	if err := store.db.QueryRow(`SELECT default_scope FROM nodes WHERE public_key = $1`, pubkey).Scan(&got); err != nil {
 		t.Fatalf("read default_scope: %v", err)
 	}
 	if !got.Valid || got.String != "#de" {

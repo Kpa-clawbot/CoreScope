@@ -31,7 +31,7 @@ func TestUsefulnessAxes_HandleNodesSurface(t *testing.T) {
 	for _, pk := range pks {
 		if _, err := db.conn.Exec(`INSERT INTO nodes
 			(public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-			VALUES (?, ?, 'repeater', 37.5, -122.0, ?, ?, 10)`,
+			VALUES ($1, $2, 'repeater', 37.5, -122.0, $3, $4, 10)`,
 			pk, "node-"+pk[:4], recent, recent); err != nil {
 			t.Fatal(err)
 		}
@@ -43,7 +43,7 @@ func TestUsefulnessAxes_HandleNodesSurface(t *testing.T) {
 	clientPK := "eeee000000000000000000000000000000000000000000000000000000000000"
 	if _, err := db.conn.Exec(`INSERT INTO nodes
 		(public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES (?, 'client-eeee', 'client', 37.5, -122.0, ?, ?, 10)`,
+		VALUES ($1, 'client-eeee', 'client', 37.5, -122.0, $2, $3, 10)`,
 		clientPK, recent, recent); err != nil {
 		t.Fatal(err)
 	}

@@ -36,19 +36,19 @@ func setupSubpathWindowDB(t *testing.T) *DB {
 
 	// Observer
 	db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
-		VALUES ('obs1', 'Observer One', 'SJC', ?, '2025-01-01T00:00:00Z', 100)`, recent)
+		VALUES ('obs1', 'Observer One', 'SJC', $1, '2025-01-01T00:00:00Z', 100)`, recent)
 
 	// Recent transmission with path ["aa","bb"]
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('01', 'recent_hash_window_001', ?, 1, 4, '{}')`, recent)
+		VALUES ('01', 'recent_hash_window_001', $1, 1, 4, '{}')`, recent)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (1, 1, 10.0, -90, '["aa","bb"]', ?)`, recentEpoch)
+		VALUES (1, 1, 10.0, -90, '["aa","bb"]', $1)`, recentEpoch)
 
 	// Old transmission (30d ago) with disjoint path ["cc","dd"]
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('02', 'old_hash_window_002', ?, 1, 4, '{}')`, old)
+		VALUES ('02', 'old_hash_window_002', $1, 1, 4, '{}')`, old)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (2, 1, 10.0, -90, '["cc","dd"]', ?)`, oldEpoch)
+		VALUES (2, 1, 10.0, -90, '["cc","dd"]', $1)`, oldEpoch)
 
 	return db
 }

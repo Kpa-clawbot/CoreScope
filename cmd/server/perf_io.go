@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -36,14 +37,20 @@ type PerfIOResponse struct {
 // drift between the publisher (ingestor) and the consumer (server) (#1167).
 type PerfIOSample = perfio.Sample
 
-// PerfSqliteResponse holds SQLite-specific perf metrics.
-type PerfSqliteResponse struct {
-	WalSizeMB    float64 `json:"walSizeMB"`
-	WalSize      int64   `json:"walSize"`
-	PageCount    int64   `json:"pageCount"`
-	PageSize     int64   `json:"pageSize"`
-	CacheSize    int64   `json:"cacheSize"`
-	CacheHitRate float64 `json:"cacheHitRate"`
+// PerfPostgresResponse combines sampled database metrics with live pool usage.
+type PerfPostgresResponse struct {
+	Engine                string   `json:"engine"`
+	DatabaseBytes         *int64   `json:"databaseBytes"`
+	OpenConnections       int      `json:"openConnections"`
+	InUseConnections      int      `json:"inUseConnections"`
+	IdleConnections       int      `json:"idleConnections"`
+	ConnectionWaitCount   int64    `json:"connectionWaitCount"`
+	ConnectionWaitMs      float64  `json:"connectionWaitMs"`
+	CacheHitRate          *float64 `json:"cacheHitRate"`
+	SampledAt             string   `json:"sampledAt,omitempty"`
+	SampleIntervalSeconds int      `json:"sampleIntervalSeconds"`
+	Stale                 bool     `json:"stale"`
+	Error                 string   `json:"error,omitempty"`
 }
 
 // procIOSample is a snapshot of /proc/self/io counters.
@@ -246,36 +253,20 @@ func readIngestorIOSample() *PerfIOSample {
 	return st.ProcIO
 }
 
-// handlePerfSqlite returns SQLite WAL size + cache hit-rate stats.
-func (s *Server) handlePerfSqlite(w http.ResponseWriter, r *http.Request) {
-	resp := PerfSqliteResponse{}
+// handlePerfPostgres reports read-only, database-scoped PostgreSQL metrics.
+func (s *Server) handlePerfPostgres(w http.ResponseWriter, r *http.Request) {
+	resp := PerfPostgresResponse{Engine: "postgresql", SampleIntervalSeconds: int(postgresStatsTTL / time.Second), Stale: true, Error: "database diagnostics unavailable"}
 	if s.db != nil && s.db.conn != nil {
-		var pageCount, pageSize int64
-		_ = s.db.conn.QueryRow("PRAGMA page_count").Scan(&pageCount)
-		_ = s.db.conn.QueryRow("PRAGMA page_size").Scan(&pageSize)
-		var cacheSize int64
-		_ = s.db.conn.QueryRow("PRAGMA cache_size").Scan(&cacheSize)
-		resp.PageCount = pageCount
-		resp.PageSize = pageSize
-		resp.CacheSize = cacheSize
-
-		// Cache hit rate: derived from PacketStore cache (rw_cache). We don't
-		// have a direct SQLite cache counter through the driver, so we
-		// surface the closest available proxy — the in-process row cache.
-		if s.store != nil {
-			cs := s.store.GetCacheStatsTyped()
-			total := cs.Hits + cs.Misses
-			if total > 0 {
-				resp.CacheHitRate = float64(cs.Hits) / float64(total)
-			}
+		sample, err := s.db.postgresStats(r.Context())
+		resp.CacheHitRate = sample.CacheHitRate
+		resp.SampledAt, resp.Stale = postgresSampleStamp(sample), err != nil
+		if !sample.SampledAt.IsZero() {
+			resp.DatabaseBytes, resp.Error = &sample.DatabaseBytes, ""
 		}
-
-		if s.db.path != "" && s.db.path != ":memory:" {
-			if info, err := os.Stat(s.db.path + "-wal"); err == nil {
-				resp.WalSize = info.Size()
-				resp.WalSizeMB = float64(info.Size()) / 1048576
-			}
-		}
+		pool := s.db.conn.Stats()
+		resp.OpenConnections, resp.InUseConnections, resp.IdleConnections = pool.OpenConnections, pool.InUse, pool.Idle
+		resp.ConnectionWaitCount = pool.WaitCount
+		resp.ConnectionWaitMs = float64(pool.WaitDuration) / float64(time.Millisecond)
 	}
 	writeJSON(w, resp)
 }
@@ -297,7 +288,7 @@ type IngestorStats struct {
 	// ProcIO is the ingestor's own /proc/self/io rates (since its previous
 	// sample). Optional — older ingestor builds don't publish this. See #1120.
 	ProcIO *PerfIOSample `json:"procIO,omitempty"`
-	// WriterPerf is the per-component SQLite writer-lock latency
+	// WriterPerf is the per-component serialized-writer latency
 	// snapshot (#1340). Optional — older ingestor builds don't
 	// publish this. Surfaced under .writer_perf by
 	// handlePerfWriteSources.
@@ -340,7 +331,7 @@ func IngestorStatsPath() string {
 	if p := os.Getenv("CORESCOPE_INGESTOR_STATS"); p != "" {
 		return p
 	}
-	return "/tmp/corescope-ingestor-stats.json"
+	return filepath.Join(runtimeStateDir, "ingestor-stats.json")
 }
 
 // readIngestorSourceLiveness returns the per-source receipt/write-path
@@ -482,7 +473,7 @@ func (s *Server) handlePerfWriteSources(w http.ResponseWriter, r *http.Request) 
 	}
 	out["sources"] = sources
 	out["sampleAt"] = st.SampledAt
-	// Surface per-component SQLite writer-lock latency histograms
+	// Surface per-component serialized-writer latency histograms
 	// (#1340) under .writer_perf so operators can see when a
 	// component (e.g. neighbor_builder) is starving the writer.
 	// Empty map when the ingestor is too old to publish this field.

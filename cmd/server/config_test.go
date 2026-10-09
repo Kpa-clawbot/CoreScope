@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -320,33 +321,45 @@ func TestGetHealthMs(t *testing.T) {
 	}
 }
 
-func TestResolveDBPath(t *testing.T) {
-	t.Run("DBPath set", func(t *testing.T) {
-		cfg := &Config{DBPath: "/explicit/path.db"}
-		got := cfg.ResolveDBPath("/base")
-		if got != "/explicit/path.db" {
-			t.Errorf("expected /explicit/path.db, got %s", got)
-		}
-	})
+func TestResolveDatabaseURL(t *testing.T) {
+	t.Setenv("CORESCOPE_READER_DATABASE_URL", "")
+	t.Setenv("DB_PATH", "")
+	t.Setenv("CORESCOPE_DATABASE_URL", "")
+	cfg := &Config{DatabaseURL: "postgresql://reader@localhost/telemetry"}
+	if got, err := cfg.ResolveDatabaseURL(); err != nil || got != cfg.DatabaseURL {
+		t.Fatalf("config URL: %v", err)
+	}
+	t.Setenv("CORESCOPE_DATABASE_URL", "postgresql://reader@localhost/envdb")
+	if got, err := cfg.ResolveDatabaseURL(); err != nil || got != "postgresql://reader@localhost/envdb" {
+		t.Fatalf("environment URL: %v", err)
+	}
+	t.Setenv("CORESCOPE_READER_DATABASE_URL", "postgresql://reader@localhost/role")
+	if got, err := cfg.ResolveDatabaseURL(); err != nil || got != "postgresql://reader@localhost/role" {
+		t.Fatalf("reader URL precedence: %v", err)
+	}
+	t.Setenv("CORESCOPE_READER_DATABASE_URL", "")
+	cfg.DBPath = "private.db"
+	if _, err := cfg.ResolveDatabaseURL(); err == nil || strings.Contains(err.Error(), cfg.DBPath) {
+		t.Fatalf("legacy path must be rejected without echoing input: %v", err)
+	}
+	cfg.DBPath = ""
+	t.Setenv("CORESCOPE_DATABASE_URL", "")
+	cfg.DatabaseURL = ""
+	if _, err := cfg.ResolveDatabaseURL(); err == nil {
+		t.Fatal("missing URL accepted")
+	}
+}
 
-	t.Run("env var", func(t *testing.T) {
-		cfg := &Config{}
-		t.Setenv("DB_PATH", "/env/path.db")
-		got := cfg.ResolveDBPath("/base")
-		if got != "/env/path.db" {
-			t.Errorf("expected /env/path.db, got %s", got)
-		}
-	})
-
-	t.Run("default", func(t *testing.T) {
-		cfg := &Config{}
-		t.Setenv("DB_PATH", "")
-		got := cfg.ResolveDBPath("/base")
-		expected := filepath.Join("/base", "data", "meshcore.db")
-		if got != expected {
-			t.Errorf("expected %s, got %s", expected, got)
-		}
-	})
+func TestResolveStateDir(t *testing.T) {
+	t.Setenv("CORESCOPE_STATE_DIR", "")
+	cfg := &Config{}
+	if got := cfg.ResolveStateDir("base"); got != filepath.Join("base", "data") {
+		t.Fatal(got)
+	}
+	t.Setenv("CORESCOPE_STATE_DIR", "queues")
+	if got := cfg.ResolveStateDir("base"); got != filepath.Join("base", "queues") {
+		t.Fatal(got)
+	}
 }
 
 func TestPropagationBufferMs(t *testing.T) {

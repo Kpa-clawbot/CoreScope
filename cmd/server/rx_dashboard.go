@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -99,7 +100,7 @@ func (s *Server) batchResolveHeardKeys(keys []string) map[string][2]string {
 			// so this stays injection-safe regardless of how hexPrefixRe later
 			// evolves. The per-prefix LIMIT 2 lives in a subquery because a bare
 			// LIMIT on a UNION ALL term is a SQLite syntax error.
-			parts[j] = "SELECT * FROM (SELECT ? AS pfx, public_key, COALESCE(name,'') AS nm FROM nodes WHERE public_key LIKE ? LIMIT 2)"
+			parts[j] = fmt.Sprintf("SELECT * FROM (SELECT $%d::text AS pfx, public_key, COALESCE(name,'') AS nm FROM nodes WHERE public_key LIKE $%d LIMIT 2) AS matched", len(args)+1, len(args)+2)
 			args = append(args, k, k+"%")
 		}
 		rows, err := s.db.conn.Query(strings.Join(parts, " UNION ALL "), args...)
@@ -158,24 +159,24 @@ func (s *Server) resolveHeardKey(heardKey string) (string, string) {
 // by heard node (prefix/pubkey), contributing client (rx_pubkey), and time window
 // (days; 0 = all time). Powers the global and per-observer coverage maps.
 func (s *Server) queryCoverageFiltered(node, rx string, days int, b bbox) ([]coverageRow, error) {
-	where := []string{"lat BETWEEN ? AND ?", "lon BETWEEN ? AND ?"}
+	where := []string{"lat BETWEEN $1 AND $2", "lon BETWEEN $3 AND $4"}
 	args := []interface{}{b.MinLat, b.MaxLat, b.MinLon, b.MaxLon}
 	if node != "" {
 		// Sargable heard_key IN-list (see coverageHeardKeyCandidates) so the
 		// (heard_key, …) composite index is used instead of a substr() scan (#5).
 		cands := coverageHeardKeyCandidates(node)
-		where = append(where, "heard_key IN ("+sqlPlaceholders(len(cands))+")")
+		where = append(where, "heard_key IN ("+sqlPlaceholders(len(cands), len(args)+1)+")")
 		for _, c := range cands {
 			args = append(args, c)
 		}
 	}
 	if rx != "" {
-		where = append(where, "rx_pubkey = ?")
+		where = append(where, fmt.Sprintf("rx_pubkey = $%d", len(args)+1))
 		args = append(args, strings.ToLower(rx))
 	}
 	if days > 0 {
 		since := time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339)
-		where = append(where, "rx_at >= ?")
+		where = append(where, fmt.Sprintf("rx_at >= $%d", len(args)+1))
 		args = append(args, since)
 	}
 	rows, err := s.db.conn.Query("SELECT lat, lon, snr, rssi, heard_key, rx_at FROM client_receptions WHERE "+strings.Join(where, " AND "), args...)
@@ -275,9 +276,9 @@ func (s *Server) rxLeaderboard(ctx context.Context, days, limit int) ([]LeaderOb
 		FROM client_receptions cr
 		LEFT JOIN nodes n ON n.public_key = cr.rx_pubkey
 		LEFT JOIN client_observers co ON co.pubkey = cr.rx_pubkey
-		WHERE cr.rx_at >= ?
-		ORDER BY cr.rx_at DESC
-		LIMIT ?`, since, leaderboardScanCap)
+		WHERE cr.rx_at >= $1
+		ORDER BY cr.rx_at DESC NULLS LAST
+		LIMIT $2`, since, leaderboardScanCap)
 	if err != nil {
 		return nil, err
 	}

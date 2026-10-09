@@ -23,7 +23,7 @@ import (
 func TestRunMultibyteCapPersist_AppliesSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
-	store, err := OpenStore(dbPath)
+	store, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestRunMultibyteCapPersist_AppliesSnapshot(t *testing.T) {
 func TestRunMultibyteCapPersist_NoSnapshot_NoOp(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
-	store, err := OpenStore(dbPath)
+	store, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestRunMultibyteCapPersist_RoundTrip(t *testing.T) {
 	dbPath := filepath.Join(dir, "test.db")
 
 	// --- Phase 1: open store, seed, persist snapshot ---
-	store, err := OpenStore(dbPath)
+	store, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestRunMultibyteCapPersist_RoundTrip(t *testing.T) {
 	}
 
 	// --- Phase 2: fresh Store, verify persisted state survived ---
-	store2, err := OpenStore(dbPath)
+	store2, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore (reopen): %v", err)
 	}
@@ -211,7 +211,7 @@ func TestRunMultibyteCapPersist_RoundTrip(t *testing.T) {
 func TestRunMultibyteCapPersist_MalformedSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
-	store, err := OpenStore(dbPath)
+	store, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestRunMultibyteCapPersist_MalformedSnapshot(t *testing.T) {
 func TestRunMultibyteCapPersist_MissingSchemaColumns(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
-	store, err := OpenStore(dbPath)
+	store, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestRunMultibyteCapPersist_MissingSchemaColumns(t *testing.T) {
 		`ALTER TABLE inactive_nodes DROP COLUMN multibyte_sup`,
 		`ALTER TABLE inactive_nodes DROP COLUMN multibyte_evidence`,
 	} {
-		if _, err := store.db.Exec(stmt); err != nil {
+		if _, err := testAdmin(t, store).Exec(stmt); err != nil {
 			t.Fatalf("simulate legacy DB (%q): %v", stmt, err)
 		}
 	}
@@ -315,7 +315,7 @@ func TestRunMultibyteCapPersist_MissingSchemaColumns(t *testing.T) {
 func TestRunMultibyteCapPersist_PreservesConfirmedOnUnknown(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
-	store, err := OpenStore(dbPath)
+	store, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}

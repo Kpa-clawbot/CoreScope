@@ -1,4 +1,4 @@
-package dbschema
+package legacy
 
 // WriterDSN builds the DSN every writer must open the database with.
 //

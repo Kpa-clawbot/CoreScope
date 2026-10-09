@@ -10,6 +10,7 @@ import (
 func validUM() *UserManagementConfig {
 	return &UserManagementConfig{
 		Enabled:       true,
+		DatabaseURL:   "postgresql://accounts@localhost/users",
 		AdminEmails:   []string{" Boss@Example.org "},
 		PublicBaseURL: "https://scope.example.org/",
 		Mail:          UserMailConfig{BrevoAPIKey: "xkeysib-abc", FromEmail: "noreply@example.org"},
@@ -19,12 +20,12 @@ func validUM() *UserManagementConfig {
 func noEnv(string) string { return "" }
 
 func TestResolveUserManagementDefaults(t *testing.T) {
-	set, err := resolveUserManagement(validUM(), filepath.Join("data", "meshcore.db"), noEnv)
+	set, err := resolveUserManagement(validUM(), "data", noEnv)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if set.dbPath != filepath.Join("data", "users.db") {
-		t.Errorf("dbPath = %q", set.dbPath)
+	if set.databaseURL != validUM().DatabaseURL {
+		t.Errorf("dbPath = %q", set.databaseURL)
 	}
 	if !set.adminEmails["boss@example.org"] {
 		t.Errorf("adminEmails not normalized: %v", set.adminEmails)
@@ -38,10 +39,13 @@ func TestResolveUserManagementDefaults(t *testing.T) {
 }
 
 func TestResolveUserManagementEnvWins(t *testing.T) {
-	env := map[string]string{"CORESCOPE_BREVO_API_KEY": "from-env", "CORESCOPE_BREVO_WEBHOOK_SECRET": "env-secret-0123456789"}
+	env := map[string]string{"CORESCOPE_USERS_DATABASE_URL": "postgresql://accounts@localhost/from_env", "CORESCOPE_BREVO_API_KEY": "from-env", "CORESCOPE_BREVO_WEBHOOK_SECRET": "env-secret-0123456789"}
 	set, err := resolveUserManagement(validUM(), "meshcore.db", func(k string) string { return env[k] })
 	if err != nil {
 		t.Fatal(err)
+	}
+	if set.databaseURL != env["CORESCOPE_USERS_DATABASE_URL"] {
+		t.Fatal("account database environment override not applied")
 	}
 	if set.brevoAPIKey != "from-env" || set.webhookSecret != "env-secret-0123456789" {
 		t.Fatalf("env not applied: %q %q", set.brevoAPIKey, set.webhookSecret)
@@ -143,7 +147,7 @@ func TestResolveNotifications(t *testing.T) {
 
 func TestResolveUsersBackup(t *testing.T) {
 	u := validUM()
-	meas := filepath.Join("data", "meshcore.db")
+	meas := "data"
 	defaults := backupSettings{enabled: true, dir: filepath.Join("data", "backups"), keep: 7}
 	set, err := resolveUserManagement(u, meas, noEnv)
 	if err != nil {
@@ -152,9 +156,9 @@ func TestResolveUsersBackup(t *testing.T) {
 	if set.backup != defaults {
 		t.Fatalf("absent block = %+v; want %+v", set.backup, defaults)
 	}
-	u.DBPath = filepath.Join("accounts", "users.db")
-	if set, _ = resolveUserManagement(u, meas, noEnv); set.backup.dir != filepath.Join("accounts", "backups") {
-		t.Fatalf("dir follows dbPath: %q", set.backup.dir)
+	u.DBPath = "private-users.db"
+	if _, err := resolveUserManagement(u, meas, noEnv); err == nil || strings.Contains(err.Error(), u.DBPath) {
+		t.Fatalf("legacy account path must be refused: %v", err)
 	}
 	u.DBPath = ""
 	off, on := false, true

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"flag"
 	"fmt"
 	"log"
@@ -86,18 +85,22 @@ func main() {
 	}
 
 	var (
-		configDir string
-		port      int
-		dbPath    string
-		publicDir string
-		pollMs    int
+		configDir   string
+		port        int
+		legacyDB    string
+		databaseURL string
+		stateDir    string
+		publicDir   string
+		pollMs      int
 	)
 
 	flag.StringVar(&configDir, "config-dir", ".", "Directory containing config.json")
 	flag.IntVar(&port, "port", 0, "HTTP port (overrides config)")
-	flag.StringVar(&dbPath, "db", "", "SQLite database path (overrides config/env)")
+	flag.StringVar(&legacyDB, "db", "", "Removed: import SQLite and use -database-url")
+	flag.StringVar(&databaseURL, "database-url", "", "PostgreSQL telemetry reader URL (overrides config/env)")
+	flag.StringVar(&stateDir, "state-dir", "", "Local directory for queues and sidecars")
 	flag.StringVar(&publicDir, "public", "public", "Directory to serve static files from")
-	flag.IntVar(&pollMs, "poll-ms", 1000, "SQLite poll interval for WebSocket broadcast (ms)")
+	flag.IntVar(&pollMs, "poll-ms", 1000, "Database poll interval for WebSocket broadcast (ms)")
 	flag.Parse()
 
 	// Load config
@@ -113,8 +116,8 @@ func main() {
 	if cfg.Port == 0 {
 		cfg.Port = 3000
 	}
-	if dbPath != "" {
-		cfg.DBPath = dbPath
+	if legacyDB != "" {
+		log.Fatal("[config] -db is no longer supported; import SQLite and use -database-url")
 	}
 	if cfg.APIKey == "" {
 		log.Printf("[security] WARNING: no apiKey configured — write endpoints are BLOCKED (set apiKey in config.json to enable them)")
@@ -157,9 +160,19 @@ func main() {
 		warnIfMemlimitUnderprovisioned(limit)
 	}
 
-	// Resolve DB path
-	resolvedDB := cfg.ResolveDBPath(configDir)
-	log.Printf("[config] port=%d db=%s public=%s", cfg.Port, resolvedDB, publicDir)
+	// Resolve connection separately from local state. Never log a database URL.
+	resolvedDB, err := cfg.ResolveDatabaseURL()
+	if databaseURL != "" && cfg.DBPath == "" && os.Getenv("DB_PATH") == "" {
+		resolvedDB, err = databaseURL, nil
+	}
+	if err != nil {
+		log.Fatalf("[config] %v", err)
+	}
+	runtimeStateDir = cfg.ResolveStateDir(configDir)
+	if stateDir != "" {
+		runtimeStateDir = stateDir
+	}
+	log.Printf("[config] port=%d database=postgresql public=%s", cfg.Port, publicDir)
 	if len(cfg.NodeBlacklist) > 0 {
 		log.Printf("[config] nodeBlacklist: %d node(s) will be hidden from API", len(cfg.NodeBlacklist))
 		for _, pk := range cfg.NodeBlacklist {
@@ -172,8 +185,9 @@ func main() {
 	// Open database
 	database, err := OpenDB(resolvedDB)
 	if err != nil {
-		log.Fatalf("[db] failed to open %s: %v", resolvedDB, err)
+		log.Fatalf("[db] failed to open PostgreSQL: %v", err)
 	}
+	database.stateDir = runtimeStateDir
 	var dbCloseOnce sync.Once
 	dbClose := func() error {
 		var err error
@@ -181,13 +195,6 @@ func main() {
 		return err
 	}
 	defer dbClose()
-
-	// Verify DB has expected tables
-	var tableName string
-	err = database.conn.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='transmissions'").Scan(&tableName)
-	if err == sql.ErrNoRows {
-		log.Fatalf("[db] table 'transmissions' not found — is this a CoreScope database?")
-	}
 
 	stats, err := database.GetStats()
 	if err != nil {
@@ -205,7 +212,7 @@ func main() {
 	// column/index/table is missing, the operator must restart the
 	// ingestor (which owns dbschema.Apply) before this server can start.
 	if err := dbschema.AssertReady(database.conn); err != nil {
-		log.Fatalf("[db] schema not ready (ingestor must run migrations first): %v", err)
+		log.Fatalf("[db] schema not ready (run the PostgreSQL migration/bootstrap command first): %v", err)
 	}
 
 	// In-memory packet store
@@ -285,7 +292,6 @@ func main() {
 	// loaded above, before the packet load. Per #1287 schema migrations
 	// all live in the ingestor; the server only reads the snapshot and
 	// then refreshes it via the recompNeighborGraph slot every 60s.
-	dbPath = database.path
 	database.hasResolvedPath = true // dbschema.AssertReady above already verified observations.resolved_path exists
 
 	// WaitGroup for background init steps that gate /api/healthz readiness.
@@ -392,7 +398,7 @@ func main() {
 		})
 	}
 
-	// Start SQLite poller for WebSocket broadcast
+	// Start PostgreSQL poller for WebSocket broadcast
 	poller := NewPoller(database, hub, time.Duration(pollMs)*time.Millisecond)
 	poller.store = store
 	go poller.Start()
@@ -534,7 +540,7 @@ func main() {
 
 		// 1c. Stop steady-state analytics recomputers (issue #1240).
 		// Must happen before dbClose so any in-flight compute that
-		// reaches into SQLite has finished.
+		// queries PostgreSQL has finished.
 		if stopAnalyticsRecomp != nil {
 			stopAnalyticsRecomp()
 		}
@@ -552,7 +558,7 @@ func main() {
 		// 3b. Close users.db (user management, opt-in; no-op when off).
 		srv.closeUserManagement()
 
-		// 4. Close database (release SQLite WAL lock)
+		// 4. Close the database connection pool
 		if err := dbClose(); err != nil {
 			log.Printf("[server] DB close error: %v", err)
 		}
@@ -566,8 +572,8 @@ func main() {
 	// process. The server reads the results via the periodic
 	// recompNeighborGraph / fetchResolvedPathForObs paths.
 
-	// Migrate old content hashes in background (one-time, idempotent).
-	go migrateContentHashesAsync(store, 5000, 100*time.Millisecond)
+	// Verify loaded content hashes without issuing telemetry writes.
+	go verifyContentHashesAsync(store, 5000, 100*time.Millisecond)
 
 	if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("[server] %v", err)

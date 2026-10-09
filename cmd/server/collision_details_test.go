@@ -21,14 +21,14 @@ func TestCollisionDetailsIncludeNodePairs(t *testing.T) {
 
 	// Add advert transmissions with hash_size=3 path bytes (0x80 = bits 10 → size 3)
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('0180aabb11ccdd', 'col_hash_01', ?, 1, 4, '{"pubKey":"aabb11ccdd001122","name":"Node Alpha","type":"ADVERT"}')`, recent)
+		VALUES ('0180aabb11ccdd', 'col_hash_01', $1, 1, 4, '{"pubKey":"aabb11ccdd001122","name":"Node Alpha","type":"ADVERT"}')`, recent)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (1, 1, 10.0, -91, '["aabb11"]', ?)`, recentEpoch)
+		VALUES (1, 1, 10.0, -91, '["aabb11"]', $1)`, recentEpoch)
 
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('0180aabb11eeff', 'col_hash_02', ?, 1, 4, '{"pubKey":"aabb11eeff334455","name":"Node Beta","type":"ADVERT"}')`, recent)
+		VALUES ('0180aabb11eeff', 'col_hash_02', $1, 1, 4, '{"pubKey":"aabb11eeff334455","name":"Node Beta","type":"ADVERT"}')`, recent)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (2, 1, 9.0, -93, '["aabb11"]', ?)`, recentEpoch)
+		VALUES (2, 1, 9.0, -93, '["aabb11"]', $1)`, recentEpoch)
 
 	store := NewPacketStore(db, nil)
 	store.Load()
@@ -102,9 +102,9 @@ func TestCollisionDetailsEmptyWhenNoCollisions(t *testing.T) {
 	db.conn.Exec(`INSERT INTO nodes (public_key, name, role) VALUES ('aabb11ccdd001122', 'Solo Node', 'repeater')`)
 
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('0180aabb11ccdd', 'solo_hash_01', ?, 1, 4, '{"pubKey":"aabb11ccdd001122","name":"Solo Node","type":"ADVERT"}')`, recent)
+		VALUES ('0180aabb11ccdd', 'solo_hash_01', $1, 1, 4, '{"pubKey":"aabb11ccdd001122","name":"Solo Node","type":"ADVERT"}')`, recent)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (1, 1, 10.0, -91, '["aabb11"]', ?)`, recentEpoch)
+		VALUES (1, 1, 10.0, -91, '["aabb11"]', $1)`, recentEpoch)
 
 	store := NewPacketStore(db, nil)
 	store.Load()

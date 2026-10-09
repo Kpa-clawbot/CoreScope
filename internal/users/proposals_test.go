@@ -1,9 +1,7 @@
 package users
 
 import (
-	"database/sql"
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +11,7 @@ import (
 // literal (it does not import this package). Its test checks the literal is
 // still in this file; TestApprovedSubjects checks it still agrees with
 // ApprovedSubjects.
-const ingestorApprovedQuery = `SELECT subject FROM proposals WHERE kind = 'hashtag_channel' AND status = 'approved' ORDER BY decided_at, id LIMIT ?`
+const ingestorApprovedQuery = `SELECT subject FROM approved_channels WHERE kind = 'hashtag_channel' ORDER BY decided_at, id LIMIT $1`
 
 func mustPropose(t *testing.T, st *Store, subject string, uid int64) *Proposal {
 	t.Helper()
@@ -333,33 +331,9 @@ func TestProposalSurvivesProposerDeletion(t *testing.T) {
 	}
 }
 
-// A users.db written by a v3 binary gains the proposals table and keeps its rows.
+// A native account schema at v3 binary gains the proposals table and keeps its rows.
 func TestMigrateV3DatabaseToV4(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "users.db")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stmts := []string{
-		`CREATE TABLE schema_version (version INTEGER NOT NULL)`,
-		`INSERT INTO schema_version (version) VALUES (3)`,
-	}
-	for _, m := range migrations[:3] {
-		stmts = append(stmts, m...)
-	}
-	stmts = append(stmts, `INSERT INTO users (email, display_name, password_hash, created_at) VALUES ('old@example.org', 'Old', 'x', 1)`)
-	for _, s := range stmts {
-		if _, err := db.Exec(s); err != nil {
-			t.Fatalf("build v3 db: %v", err)
-		}
-	}
-	db.Close()
-
-	st, err := Open(path)
-	if err != nil {
-		t.Fatalf("Open v3 db: %v", err)
-	}
-	defer st.Close()
+	st := migratedTestStore(t, 3, `INSERT INTO users (email,display_name,password_hash,created_at) VALUES ('old@example.org','Old','x',1)`)
 	if v, err := st.SchemaVersion(); err != nil || v != len(migrations) {
 		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, len(migrations))
 	}

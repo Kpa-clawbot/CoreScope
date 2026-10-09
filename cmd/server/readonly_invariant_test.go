@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,8 +8,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 // TestServerSourceHasNoCachedRWCalls enforces issue #1287: after the
@@ -47,8 +44,8 @@ func TestServerSourceHasNoCachedRWCalls(t *testing.T) {
 		// server publishes via internal/mbcapqueue).
 		// Shapes are normalised before matching (see nodeTableWritePattern):
 		// optional OR-conflict clause, optional quoting, optional alias.
-		nodeTableWritePattern(`UPDATE(\s+OR\s+\w+)?`, `SET`),
-		nodeTableWritePattern(`INSERT\s+(OR\s+\w+\s+)?INTO`, ``),
+		nodeTableWritePattern(`UPDATE(\s+OR\s+\w+)$1`, `SET`),
+		nodeTableWritePattern(`INSERT\s+(OR\s+\w+\s+)$1INTO`, ``),
 		nodeTableWritePattern(`REPLACE\s+INTO`, ``),
 		nodeTableWritePattern(`DELETE\s+FROM`, ``),
 		regexp.MustCompile(`\bpersistMultibyteCapability\s*\(`),
@@ -124,8 +121,7 @@ func TestServerDBHasNoWriteMethods(t *testing.T) {
 // second RW handle. After the fix, server-side writes are impossible
 // because there is no helper to open a writable connection.
 func TestServerDBConnIsReadOnly(t *testing.T) {
-	dir := t.TempDir()
-	path := dir + "/ro_invariant.db"
+	path := postgresTestDSN(t)
 
 	// Bootstrap a minimal DB with the ingestor-style WAL opener so the
 	// server can attach in read-only mode.
@@ -133,7 +129,7 @@ func TestServerDBConnIsReadOnly(t *testing.T) {
 		t.Fatalf("bootstrap: %v", err)
 	}
 
-	d, err := OpenDB(path)
+	d, err := openFixtureReader(t, path)
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}
@@ -150,8 +146,8 @@ func TestServerDBConnIsReadOnly(t *testing.T) {
 // Kept in *_test.go so it does NOT add any write capability to the
 // production server binary.
 func bootstrapMinimalDB(tb testing.TB, path string) error {
-	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000", path)
-	rw, err := sql.Open("sqlite3", dsn)
+	dsn := path
+	rw, err := openFixtureSQL(dsn)
 	if err != nil {
 		return err
 	}
@@ -259,7 +255,7 @@ func TestUsersOpenIsTheOnlyServerWritePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	call := regexp.MustCompile(`users\.Open\(`)
-	want := regexp.MustCompile(`users\.Open\(set\.dbPath, measurementDBPath\)`)
+	want := regexp.MustCompile(`users\.Open\(set\.databaseURL, measurementDatabaseURL\)`)
 	calls, good := 0, 0
 	for _, e := range entries {
 		name := e.Name()

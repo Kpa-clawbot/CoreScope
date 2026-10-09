@@ -71,8 +71,8 @@ func TestConfigBlacklistEmptyEntries(t *testing.T) {
 
 func TestBlacklistFiltersHandleNodes(t *testing.T) {
 	db := setupTestDB(t)
-	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role, last_seen) VALUES ('goodnode', 'GoodNode', 'companion', datetime('now'))")
-	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role, last_seen) VALUES ('badnode', 'BadNode', 'companion', datetime('now'))")
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES ('goodnode', 'GoodNode', 'companion', to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')) ON CONFLICT DO NOTHING")
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES ('badnode', 'BadNode', 'companion', to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')) ON CONFLICT DO NOTHING")
 
 	cfg := &Config{
 		NodeBlacklist: []string{"badnode"},
@@ -105,7 +105,7 @@ func TestBlacklistFiltersHandleNodes(t *testing.T) {
 
 func TestBlacklistFiltersNodeDetail(t *testing.T) {
 	db := setupTestDB(t)
-	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role, last_seen) VALUES ('badnode', 'BadNode', 'companion', datetime('now'))")
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES ('badnode', 'BadNode', 'companion', to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')) ON CONFLICT DO NOTHING")
 
 	cfg := &Config{
 		NodeBlacklist: []string{"badnode"},
@@ -124,8 +124,8 @@ func TestBlacklistFiltersNodeDetail(t *testing.T) {
 
 func TestBlacklistFiltersNodeSearch(t *testing.T) {
 	db := setupTestDB(t)
-	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role, last_seen) VALUES ('badnode', 'TrollNode', 'companion', datetime('now'))")
-	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role, last_seen) VALUES ('goodnode', 'GoodNode', 'companion', datetime('now'))")
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES ('badnode', 'TrollNode', 'companion', to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')) ON CONFLICT DO NOTHING")
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES ('goodnode', 'GoodNode', 'companion', to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')) ON CONFLICT DO NOTHING")
 
 	cfg := &Config{
 		NodeBlacklist: []string{"badnode"},
@@ -155,7 +155,7 @@ func TestBlacklistFiltersNodeSearch(t *testing.T) {
 
 func TestNoBlacklistPassesAll(t *testing.T) {
 	db := setupTestDB(t)
-	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role, last_seen) VALUES ('somenode', 'SomeNode', 'companion', datetime('now'))")
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES ('somenode', 'SomeNode', 'companion', to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')) ON CONFLICT DO NOTHING")
 
 	cfg := &Config{}
 	srv := NewServer(db, cfg, NewHub())
@@ -234,7 +234,7 @@ func TestBlacklistFiltersNeighborGraph(t *testing.T) {
 
 func TestBlacklistFiltersResolveHops(t *testing.T) {
 	db := setupTestDB(t)
-	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role, last_seen) VALUES ('badnode', 'BadNode', 'companion', datetime('now'))")
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES ('badnode', 'BadNode', 'companion', to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')) ON CONFLICT DO NOTHING")
 
 	cfg := &Config{
 		NodeBlacklist: []string{"badnode"},

@@ -146,11 +146,11 @@ func (s *Server) requireClientRfSamples(w http.ResponseWriter, r *http.Request) 
 // queryRfNoiseRows returns raw RF-environment samples within a bbox, over a
 // time window (days; 0 = all time). Read-only (server RO connection).
 func (s *Server) queryRfNoiseRows(days int, b bbox) ([]rfNoiseRow, error) {
-	where := []string{"lat BETWEEN ? AND ?", "lon BETWEEN ? AND ?", "noise_floor IS NOT NULL"}
+	where := []string{"lat BETWEEN $1 AND $2", "lon BETWEEN $3 AND $4", "noise_floor IS NOT NULL"}
 	args := []interface{}{b.MinLat, b.MaxLat, b.MinLon, b.MaxLon}
 	if days > 0 {
 		since := time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339)
-		where = append(where, "sampled_at >= ?")
+		where = append(where, "sampled_at >= $5")
 		args = append(args, since)
 	}
 	rows, err := s.db.conn.Query(`

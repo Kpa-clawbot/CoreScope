@@ -36,7 +36,7 @@ func TestNodeHealth_CanRelayCaseInsensitive_Issue1290(t *testing.T) {
 	}
 	if _, err := srv.store.db.conn.Exec(
 		`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count, can_relay, can_relay_seen)
-		 VALUES (?, 'ListenerOnly', 'SJC', ?, '2026-01-01T00:00:00Z', 1, 0, 1)`,
+		 VALUES ($1, 'ListenerOnly', 'SJC', $2, '2026-01-01T00:00:00Z', 1, 0, 1)`,
 		obsIDLower, now); err != nil {
 		t.Fatalf("seed observer: %v", err)
 	}

@@ -1,8 +1,8 @@
-// corescope-decrypt decrypts and exports hashtag channel messages from a CoreScope SQLite database.
+// corescope-decrypt decrypts and exports hashtag channel messages from PostgreSQL.
 //
 // Usage:
 //
-//	corescope-decrypt --channel "#wardriving" --db meshcore.db [--format json|html] [--output file]
+//	corescope-decrypt --channel "#wardriving" [--format json|html] [--output file]
 package main
 
 import (
@@ -18,8 +18,9 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/meshcore-analyzer/channel"
+	"github.com/meshcore-analyzer/dbschema"
+	"github.com/meshcore-analyzer/pgutil"
 )
 
 // Version info (set via ldflags).
@@ -47,7 +48,12 @@ type Observer struct {
 
 func main() {
 	channelName := flag.String("channel", "", "Channel name (e.g. \"#wardriving\")")
-	dbPath := flag.String("db", "", "Path to CoreScope SQLite database")
+	defaultURL := os.Getenv("CORESCOPE_READER_DATABASE_URL")
+	if defaultURL == "" {
+		defaultURL = os.Getenv("CORESCOPE_DATABASE_URL")
+	}
+	databaseURL := flag.String("database-url", defaultURL, "PostgreSQL reader URL (prefer CORESCOPE_READER_DATABASE_URL)")
+	legacyDB := flag.String("db", "", "Removed: import SQLite with corescope-migrate before exporting")
 	format := flag.String("format", "json", "Output format: json, html, irc (or log)")
 	output := flag.String("output", "", "Output file (default: stdout)")
 	showVersion := flag.Bool("version", false, "Print version and exit")
@@ -56,12 +62,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, `corescope-decrypt — Decrypt and export MeshCore hashtag channel messages
 
 USAGE
-  corescope-decrypt --channel NAME --db PATH [--format FORMAT] [--output FILE]
+  corescope-decrypt --channel NAME [--format FORMAT] [--output FILE]
 
 FLAGS
   --channel NAME   Channel name to decrypt (e.g. "#wardriving", "wardriving")
                    The "#" prefix is added automatically if missing.
-  --db PATH        Path to a CoreScope SQLite database file (read-only access).
+  --database-url   PostgreSQL reader URL. Prefer CORESCOPE_READER_DATABASE_URL
+                   or CORESCOPE_DATABASE_URL to keep credentials out of argv.
   --format FORMAT  Output format (default: json):
                      json  — Machine-readable JSON array with full metadata
                      html  — Self-contained HTML viewer with search and sorting
@@ -72,17 +79,17 @@ FLAGS
 
 EXAMPLES
   # Export #wardriving messages as JSON
-  corescope-decrypt --channel "#wardriving" --db /app/data/meshcore.db
+  corescope-decrypt --channel "#wardriving"
 
   # Generate an interactive HTML viewer
-  corescope-decrypt --channel wardriving --db meshcore.db --format html --output wardriving.html
+  corescope-decrypt --channel wardriving --format html --output wardriving.html
 
   # Greppable IRC log
-  corescope-decrypt --channel "#MeshCore" --db meshcore.db --format irc --output meshcore.log
+  corescope-decrypt --channel "#MeshCore" --format irc --output meshcore.log
   grep "KE6QR" meshcore.log
 
   # From the Docker container
-  docker exec corescope-prod /app/corescope-decrypt --channel "#wardriving" --db /app/data/meshcore.db
+  docker exec corescope-prod /app/corescope-decrypt --channel "#wardriving"
 
 RETROACTIVE DECRYPTION
   MeshCore hashtag channels use symmetric encryption — the key is derived from the
@@ -107,7 +114,10 @@ LIMITATIONS
 		os.Exit(0)
 	}
 
-	if *channelName == "" || *dbPath == "" {
+	if *legacyDB != "" {
+		log.Fatal("SQLite runtime access has been removed; use corescope-migrate -from-sqlite during the documented offline upgrade")
+	}
+	if *channelName == "" || *databaseURL == "" {
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -121,7 +131,7 @@ LIMITATIONS
 	key := channel.DeriveKey(ch)
 	chHash := channel.ChannelHash(key)
 
-	db, err := sql.Open("sqlite3", "file:"+*dbPath+"?mode=ro")
+	db, err := openExportDB(*databaseURL)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
@@ -276,9 +286,26 @@ func extractGRPPayload(rawHex string) ([]byte, error) {
 	return buf[offset:], nil
 }
 
+func openExportDB(databaseURL string) (*sql.DB, error) {
+	db, err := pgutil.Open(databaseURL, true)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(4)
+	if err := pgutil.AssertReadOnly(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := dbschema.AssertReady(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
 func getPathFromDB(db *sql.DB, txID int) []string {
 	var decodedJSON sql.NullString
-	err := db.QueryRow(`SELECT decoded_json FROM transmissions WHERE id = ?`, txID).Scan(&decodedJSON)
+	err := db.QueryRow(`SELECT decoded_json FROM transmissions WHERE id = $1`, txID).Scan(&decodedJSON)
 	if err != nil || !decodedJSON.Valid {
 		return nil
 	}
@@ -298,9 +325,9 @@ func getObservers(db *sql.DB, txID int) []Observer {
 	rows, err := db.Query(`
 		SELECT o.name, obs.snr, obs.rssi, obs.timestamp
 		FROM observations obs
-		LEFT JOIN observers o ON o.id = CAST(obs.observer_idx AS TEXT)
-		WHERE obs.transmission_id = ?
-		ORDER BY obs.timestamp
+		LEFT JOIN observers o ON o.rowid = obs.observer_idx
+		WHERE obs.transmission_id = $1
+		ORDER BY obs.timestamp, obs.id
 	`, txID)
 	if err != nil {
 		return nil

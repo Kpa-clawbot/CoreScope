@@ -1,8 +1,9 @@
 package main
 
 // parity_test.go — Golden fixture shape tests.
-// Validates that Go API responses match the shape of Node.js API responses.
-// Shapes were captured from the production Node.js server and stored in
+// Validates the public API shape contract captured from the original server.
+// PostgreSQL diagnostics deliberately replace SQLite-only metrics; telemetry
+// and account response contracts remain unchanged. Shapes are stored in
 // testdata/golden/shapes.json.
 
 import (
@@ -200,7 +201,7 @@ func TestParityShapes(t *testing.T) {
 
 			mismatches := validateShape(body, spec, ep.path)
 			if len(mismatches) > 0 {
-				t.Errorf("Go %s has %d shape mismatches vs Node.js golden:\n  %s",
+				t.Errorf("Go %s has %d shape mismatches vs golden contract:\n  %s",
 					ep.path, len(mismatches), strings.Join(mismatches, "\n  "))
 			}
 		})
@@ -231,7 +232,7 @@ func TestParityNodeDetail(t *testing.T) {
 
 	mismatches := validateShape(body, spec, "/api/nodes/{pubkey}")
 	if len(mismatches) > 0 {
-		t.Errorf("Go node detail has %d shape mismatches vs Node.js golden:\n  %s",
+		t.Errorf("Go node detail has %d shape mismatches vs golden contract:\n  %s",
 			len(mismatches), strings.Join(mismatches, "\n  "))
 	}
 }
@@ -441,7 +442,7 @@ func TestParityWSMultiObserverGolden(t *testing.T) {
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('BEEF', 'goldenstarburst237', ?, 1, 4, '{"pubKey":"aabbccdd11223344","type":"ADVERT"}')`, now); err != nil {
+		VALUES ('BEEF', 'goldenstarburst237', $1, 1, 4, '{"pubKey":"aabbccdd11223344","type":"ADVERT"}')`, now); err != nil {
 		t.Fatalf("insert tx failed: %v", err)
 	}
 	var txID int
@@ -450,9 +451,9 @@ func TestParityWSMultiObserverGolden(t *testing.T) {
 	}
 	ts := time.Now().Unix()
 	if _, err := db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (?, 1, 11.0, -88, '["p1"]', ?),
-		       (?, 2, 9.0, -92, '["p1","p2"]', ?),
-		       (?, 1, 7.0, -96, '["p1","p2","p3"]', ?)`,
+		VALUES ($1, 1, 11.0, -88, '["p1"]', $2),
+		       ($3, 2, 9.0, -92, '["p1","p2"]', $4),
+		       ($5, 1, 7.0, -96, '["p1","p2","p3"]', $6)`,
 		txID, ts, txID, ts+1, txID, ts+2); err != nil {
 		t.Fatalf("insert obs failed: %v", err)
 	}

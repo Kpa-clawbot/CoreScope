@@ -3,13 +3,16 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/meshcore-analyzer/pgutil/pgtest"
 )
 
-// sqliteMagic is the 16-byte file header identifying a valid SQLite 3 database.
-// See https://www.sqlite.org/fileformat.html#magic_header_string
-const sqliteMagic = "SQLite format 3\x00"
+// postgresMagic is the signature of a PostgreSQL custom-format archive.
+const postgresMagic = "PGDMP"
 
 func TestBackupRequiresAPIKey(t *testing.T) {
 	_, router := setupTestServerWithAPIKey(t, "test-secret-key-strong-enough")
@@ -22,9 +25,18 @@ func TestBackupRequiresAPIKey(t *testing.T) {
 	}
 }
 
-func TestBackupReturnsValidSQLiteSnapshot(t *testing.T) {
+func TestBackupRestoresNativePostgresSnapshot(t *testing.T) {
 	const apiKey = "test-secret-key-strong-enough"
-	_, router := setupTestServerWithAPIKey(t, apiKey)
+	srv, router := setupTestServerWithAPIKey(t, apiKey)
+	srv.db = setupTestDBAtURL(t, pgtest.NewDatabase(t))
+	seedTestData(t, srv.db)
+	writerURL := srv.db.path
+	reader, err := openFixtureReader(t, writerURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	srv.db = reader
 
 	req := httptest.NewRequest("GET", "/api/backup", nil)
 	req.Header.Set("X-API-Key", apiKey)
@@ -41,15 +53,31 @@ func TestBackupReturnsValidSQLiteSnapshot(t *testing.T) {
 	}
 
 	cd := w.Header().Get("Content-Disposition")
-	if !strings.HasPrefix(cd, "attachment;") || !strings.Contains(cd, "filename=\"corescope-backup-") || !strings.HasSuffix(cd, ".db\"") {
-		t.Errorf("expected Content-Disposition attachment with corescope-backup-<ts>.db filename, got %q", cd)
+	if !strings.HasPrefix(cd, "attachment;") || !strings.Contains(cd, "filename=\"corescope-backup-") || !strings.HasSuffix(cd, ".dump\"") {
+		t.Errorf("expected Content-Disposition attachment with corescope-backup-<ts>.dump filename, got %q", cd)
 	}
 
 	body := w.Body.Bytes()
-	if len(body) < len(sqliteMagic) {
-		t.Fatalf("backup body too short (%d bytes) — expected SQLite file", len(body))
+	if len(body) < len(postgresMagic) {
+		t.Fatalf("backup body too short (%d bytes) — expected PostgreSQL file", len(body))
 	}
-	if got := string(body[:len(sqliteMagic)]); got != sqliteMagic {
-		t.Fatalf("expected SQLite magic header %q, got %q", sqliteMagic, got)
+	if got := string(body[:len(postgresMagic)]); got != postgresMagic {
+		t.Fatalf("expected PostgreSQL magic header %q, got %q", postgresMagic, got)
 	}
+	path := filepath.Join(t.TempDir(), "telemetry.dump")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restored := restorePostgresTestBackup(t, path)
+	var transmissions, observations int
+	if err := restored.QueryRow(`SELECT COUNT(*) FROM transmissions`).Scan(&transmissions); err != nil {
+		t.Fatal(err)
+	}
+	if err := restored.QueryRow(`SELECT COUNT(*) FROM observations`).Scan(&observations); err != nil {
+		t.Fatal(err)
+	}
+	if transmissions != 3 || observations != 4 {
+		t.Fatalf("restored counts = %d/%d", transmissions, observations)
+	}
+
 }

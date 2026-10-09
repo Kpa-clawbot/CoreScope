@@ -1,31 +1,7 @@
-// Async migration helper — runs schema/backfill work that may take minutes on
-// large prod tables WITHOUT blocking ingestor startup.
-//
-// MIGRATION ANNOTATION CONVENTION (read this before touching migrations):
-//
-//   Sync schema/data migrations (CREATE INDEX, ALTER TABLE, UPDATE ... WHERE)
-//   that run inline during OpenStore() block the ingestor from accepting
-//   packets until they finish. On an empty dev DB they return in milliseconds;
-//   at prod scale (1.9M+ observations, 80K+ adverts) they can pin the boot
-//   for minutes and trigger restart loops. This regression class has bitten us
-//   repeatedly (#791 resolved_path backfill, #1483 obs_observer_ts_idx_v1).
-//
-//   ANY new CREATE INDEX / ALTER TABLE / data-rewrite migration MUST EITHER:
-//     1. Run via Store.RunAsyncMigration(...) below (preferred for backfills
-//        and any work that may touch >1K rows). The migration is recorded as
-//        `pending_async` immediately, returns to the caller (boot proceeds),
-//        and completes in a goroutine. Status flips to `done` (or `failed`
-//        with an error message) when fn returns.
-//     2. Carry the preflight annotation comment immediately above the
-//        migration block, e.g.
-//             // PREFLIGHT: async=true reason="<one-line justification>"
-//        Use this for migrations that are genuinely cheap at any scale
-//        (e.g. ALTER TABLE ADD COLUMN, CREATE INDEX on a known-bounded
-//        table). The annotation is grepped by
-//        ~/.openclaw/skills/pr-preflight/scripts/check-async-migrations.sh
-//        — its absence on a touched migration block is a hard-fail gate.
-//
-//   See MIGRATIONS.md in the repo root for the full policy and examples.
+// Async data backfills resume through durable bookkeeping. Schema DDL belongs
+// exclusively to the offline migration command; runtime callbacks must not
+// create or alter tables/indexes. Long backfills use bounded transactions and
+// yield between batches so live ingestion can continue.
 
 package main
 
@@ -36,19 +12,16 @@ import (
 	"log"
 )
 
-// ensureAsyncMigrationsTable creates the bookkeeping table used by
-// RunAsyncMigration / AsyncMigrationStatus. Idempotent.
+// ensureAsyncMigrationsTable checks bootstrap-owned bookkeeping without DDL.
 func ensureAsyncMigrationsTable(db *sql.DB) error {
-	_, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS _async_migrations (
-			name       TEXT PRIMARY KEY,
-			status     TEXT NOT NULL,             -- pending_async | done | failed
-			started_at TEXT NOT NULL DEFAULT (datetime('now')),
-			ended_at   TEXT,
-			error      TEXT
-		)
-	`)
-	return err
+	var present bool
+	if err := db.QueryRow(`SELECT to_regclass('_async_migrations') IS NOT NULL`).Scan(&present); err != nil {
+		return err
+	}
+	if !present {
+		return fmt.Errorf("missing migration bookkeeping; run the offline migration command")
+	}
+	return nil
 }
 
 // RunAsyncMigration registers `name` as a pending async migration and
@@ -70,7 +43,7 @@ func (s *Store) RunAsyncMigration(ctx context.Context, name string, fn func(cont
 	}
 
 	var existing string
-	row := s.db.QueryRow(`SELECT status FROM _async_migrations WHERE name = ?`, name)
+	row := s.db.QueryRow(`SELECT status FROM _async_migrations WHERE name = $1`, name)
 	switch err := row.Scan(&existing); err {
 	case nil:
 		if existing == "done" {
@@ -79,13 +52,13 @@ func (s *Store) RunAsyncMigration(ctx context.Context, name string, fn func(cont
 		// pending_async or failed → reset and retry.
 		if _, err := s.db.Exec(`
 			UPDATE _async_migrations
-			SET status = 'pending_async', started_at = datetime('now'), ended_at = NULL, error = NULL
-			WHERE name = ?`, name); err != nil {
+			SET status = 'pending_async', started_at = to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS'), ended_at = NULL, error = NULL
+			WHERE name = $1`, name); err != nil {
 			return fmt.Errorf("reset async migration %q: %w", name, err)
 		}
 	case sql.ErrNoRows:
 		if _, err := s.db.Exec(`
-			INSERT INTO _async_migrations (name, status) VALUES (?, 'pending_async')`,
+			INSERT INTO _async_migrations (name, status) VALUES ($1, 'pending_async')`,
 			name); err != nil {
 			return fmt.Errorf("register async migration %q: %w", name, err)
 		}
@@ -105,8 +78,8 @@ func (s *Store) RunAsyncMigration(ctx context.Context, name string, fn func(cont
 			if runErr != nil {
 				if _, err := s.db.Exec(`
 					UPDATE _async_migrations
-					SET status = 'failed', ended_at = datetime('now'), error = ?
-					WHERE name = ?`, runErr.Error(), name); err != nil {
+					SET status = 'failed', ended_at = to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS'), error = $1
+					WHERE name = $2`, runErr.Error(), name); err != nil {
 					log.Printf("[async-migration] failed to record failure for %q: %v", name, err)
 				}
 				log.Printf("[async-migration] %q FAILED: %v", name, runErr)
@@ -114,8 +87,8 @@ func (s *Store) RunAsyncMigration(ctx context.Context, name string, fn func(cont
 			}
 			if _, err := s.db.Exec(`
 				UPDATE _async_migrations
-				SET status = 'done', ended_at = datetime('now'), error = NULL
-				WHERE name = ?`, name); err != nil {
+				SET status = 'done', ended_at = to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS'), error = NULL
+				WHERE name = $1`, name); err != nil {
 				log.Printf("[async-migration] failed to mark %q done: %v", name, err)
 				return
 			}
@@ -136,7 +109,7 @@ func (s *Store) AsyncMigrationStatus(name string) (string, error) {
 		return "", err
 	}
 	var status string
-	err := s.db.QueryRow(`SELECT status FROM _async_migrations WHERE name = ?`, name).Scan(&status)
+	err := s.db.QueryRow(`SELECT status FROM _async_migrations WHERE name = $1`, name).Scan(&status)
 	return status, err
 }
 

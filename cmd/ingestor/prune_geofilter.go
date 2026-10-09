@@ -1,7 +1,7 @@
 // Package main: ingestor-side processor for prune-request marker files
 // written by the read-only server (see internal/prunequeue).
 //
-// The server cannot DELETE because it opens SQLite mode=ro (#1283/#1289).
+// The server cannot DELETE because it uses a restricted PostgreSQL reader (#1283/#1289).
 // Instead, the server writes request-<id>.json under <dataDir>/prune-requests/
 // and the ingestor consumes it here.
 package main
@@ -22,7 +22,7 @@ func (s *Store) DeleteNodesByPubkeys(pubkeys []string) (int64, error) {
 	if len(pubkeys) == 0 {
 		return 0, nil
 	}
-	// Chunk to keep statements under SQLite's variable limit (default 999).
+	// Bound each delete batch and the number of bind parameters.
 	const chunk = 500
 	var total int64
 	for start := 0; start < len(pubkeys); start += chunk {
@@ -31,8 +31,11 @@ func (s *Store) DeleteNodesByPubkeys(pubkeys []string) (int64, error) {
 			end = len(pubkeys)
 		}
 		batch := pubkeys[start:end]
-		placeholders := strings.Repeat("?,", len(batch))
-		placeholders = placeholders[:len(placeholders)-1]
+		slots := make([]string, len(batch))
+		for i := range slots {
+			slots[i] = fmt.Sprintf("$%d", i+1)
+		}
+		placeholders := strings.Join(slots, ",")
 		args := make([]interface{}, len(batch))
 		for i, pk := range batch {
 			args[i] = pk
@@ -59,7 +62,7 @@ func (s *Store) DeleteNodesByPubkeys(pubkeys []string) (int64, error) {
 }
 
 // RunPendingPruneRequests scans the prune-requests/ directory next to the
-// SQLite database and processes any request-<id>.json markers written by
+// state directory and processes any request-<id>.json markers written by
 // the server. Each request is honored verbatim — the server is responsible
 // for the TOCTOU snapshot (only pubkeys that were still outside the
 // geofilter at confirm time). After running DELETE, the ingestor writes

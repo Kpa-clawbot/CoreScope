@@ -40,8 +40,8 @@ func TestLoadConfigMissingFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("missing config should not error (zero-config mode), got: %v", err)
 	}
-	if cfg.DBPath != "data/meshcore.db" {
-		t.Errorf("dbPath=%s, want data/meshcore.db", cfg.DBPath)
+	if cfg.DBPath != "" || cfg.DatabaseURL != "" || cfg.StateDir != "data" {
+		t.Errorf("unexpected database/state defaults")
 	}
 	// Should default to localhost MQTT
 	if len(cfg.MQTTSources) != 1 {
@@ -193,8 +193,8 @@ func TestLoadConfigDefaultDBPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.DBPath != "data/meshcore.db" {
-		t.Errorf("dbPath=%s, want data/meshcore.db", cfg.DBPath)
+	if cfg.DBPath != "" || cfg.DatabaseURL != "" || cfg.StateDir != "data" {
+		t.Errorf("unexpected database/state defaults")
 	}
 }
 

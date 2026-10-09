@@ -2,8 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -50,7 +53,7 @@ func TestStatsFileWriter_PublishesProcIO(t *testing.T) {
 	statsPath := filepath.Join(dir, "ingestor-stats.json")
 	t.Setenv("CORESCOPE_INGESTOR_STATS", statsPath)
 
-	store, err := OpenStore(filepath.Join(dir, "test.db"))
+	store, err := openPostgresTestStore(t, filepath.Join(dir, "test.db"))
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -129,6 +132,9 @@ func TestWriteStatsAtomic_SymlinkAtDestIsReplaced(t *testing.T) {
 	// Pre-plant a symlink at the destination path.
 	path := filepath.Join(dir, "stats.json")
 	if err := os.Symlink(target, path); err != nil {
+		if runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(1314)) {
+			t.Skip("Windows account cannot create symlinks; this security fixture must run on Linux CI")
+		}
 		t.Fatalf("symlink: %v", err)
 	}
 

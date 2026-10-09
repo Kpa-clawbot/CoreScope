@@ -67,11 +67,11 @@ func setupCollisionScenario(t *testing.T, withGPS bool) *collisionScenario {
 	}
 
 	mustExec(t, db, `INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES (?, 'NodeA', 'repeater', ?, ?, ?, '2026-01-01', 1)`, sc.nodeAPK, aLat, aLon, recent)
+		VALUES ($1, 'NodeA', 'repeater', $2, $3, $4, '2026-01-01', 1)`, sc.nodeAPK, aLat, aLon, recent)
 	mustExec(t, db, `INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES (?, 'NodeB', 'repeater', ?, ?, ?, '2026-01-01', 1)`, sc.nodeBPK, bLat, bLon, recent)
+		VALUES ($1, 'NodeB', 'repeater', $2, $3, $4, '2026-01-01', 1)`, sc.nodeBPK, bLat, bLon, recent)
 	mustExec(t, db, `INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES (?, 'NodeC', 'repeater', ?, ?, ?, '2026-01-01', 1)`, sc.nodeCPK, cLat, cLon, recent)
+		VALUES ($1, 'NodeC', 'repeater', $2, $3, $4, '2026-01-01', 1)`, sc.nodeCPK, cLat, cLon, recent)
 
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
@@ -133,9 +133,9 @@ func (sc *collisionScenario) query(t *testing.T, pk string) NodePathsResponse {
 // must include the tx. paths-through-A and paths-through-C must exclude it.
 func TestHandleNodePaths_PrefixCollision_1352(t *testing.T) {
 	sc := setupCollisionScenario(t, false /* only B has GPS */)
-	mustExec(t, sc.db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (42, 'DEAD', 'hash_1352', ?)`, sc.recent)
+	mustExec(t, sc.db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (42, 'DEAD', 'hash_1352', $1)`, sc.recent)
 	mustExec(t, sc.db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)
-		VALUES (42, NULL, '["c0"]', ?, ?)`, sc.recentEpoch, `["`+sc.nodeBPK+`"]`)
+		VALUES (42, NULL, '["c0"]', $1, $2)`, sc.recentEpoch, `["`+sc.nodeBPK+`"]`)
 	sc.reloadStore(t)
 
 	respA := sc.query(t, sc.nodeAPK)
@@ -173,9 +173,9 @@ func TestHandleNodePaths_PrefixCollision_1352(t *testing.T) {
 // all three = 3. Fixed: ≤1, and we tighten further to ≤1 explicitly.
 func TestHandleNodePaths_PrefixCollision_1352_FallbackBranch(t *testing.T) {
 	sc := setupCollisionScenario(t, true /* all three have GPS */)
-	mustExec(t, sc.db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (43, 'BEEF', 'hash_1352_fb', ?)`, sc.recent)
+	mustExec(t, sc.db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (43, 'BEEF', 'hash_1352_fb', $1)`, sc.recent)
 	mustExec(t, sc.db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)
-		VALUES (43, NULL, '["c0"]', ?, NULL)`, sc.recentEpoch)
+		VALUES (43, NULL, '["c0"]', $1, NULL)`, sc.recentEpoch)
 	sc.reloadStore(t)
 
 	a := sc.query(t, sc.nodeAPK).TotalTransmissions
@@ -213,10 +213,10 @@ func TestHandleNodePaths_FallbackUniquePrefix_1352(t *testing.T) {
 	pk := "abcdef0123456789"
 
 	mustExec(t, db, `INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES (?, 'UniqueNode', 'repeater', 37.78, -122.4, ?, '2026-01-01', 1)`, pk, recent)
-	mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (44, 'CAFE', 'hash_1352_unique', ?)`, recent)
+		VALUES ($1, 'UniqueNode', 'repeater', 37.78, -122.4, $2, '2026-01-01', 1)`, pk, recent)
+	mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (44, 'CAFE', 'hash_1352_unique', $1)`, recent)
 	mustExec(t, db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)
-		VALUES (44, NULL, '["ab"]', ?, NULL)`, recentEpoch)
+		VALUES (44, NULL, '["ab"]', $1, NULL)`, recentEpoch)
 
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
@@ -274,14 +274,14 @@ func TestHandleNodePaths_FallbackPreconfirmed_1352(t *testing.T) {
 	// tx 50: best obs has NULL resolved_path (fallback branch). A SECOND
 	// obs persists resolved_path = [B] which populates the byPathHop index
 	// for B's full pubkey AND lets confirmedBySQL hit via INSTR.
-	mustExec(t, sc.db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (50, 'F00D', 'hash_1352_pre', ?)`, sc.recent)
+	mustExec(t, sc.db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (50, 'F00D', 'hash_1352_pre', $1)`, sc.recent)
 	mustExec(t, sc.db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)
-		VALUES (50, NULL, '["c0"]', ?, NULL)`, sc.recentEpoch)
+		VALUES (50, NULL, '["c0"]', $1, NULL)`, sc.recentEpoch)
 	// Second observation (different observer) — same tx, persisted resolved_path = [B].
 	// This populates byPathHop[B] during Load(), so confirmedByFullKey is true
 	// when paths-through-B is queried.
 	mustExec(t, sc.db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)
-		VALUES (50, 1, '["c0"]', ?, ?)`, sc.recentEpoch+1, `["`+sc.nodeBPK+`"]`)
+		VALUES (50, 1, '["c0"]', $1, $2)`, sc.recentEpoch+1, `["`+sc.nodeBPK+`"]`)
 	sc.reloadStore(t)
 
 	respA := sc.query(t, sc.nodeAPK)
@@ -324,9 +324,9 @@ func TestHandleNodePaths_FallbackPreconfirmed_1352(t *testing.T) {
 func TestHandleNodePaths_FallbackUnresolvableHop_1352(t *testing.T) {
 	sc := setupCollisionScenario(t, false /* only B has GPS */)
 
-	mustExec(t, sc.db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (60, 'FEED', 'hash_1352_unres', ?)`, sc.recent)
+	mustExec(t, sc.db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (60, 'FEED', 'hash_1352_unres', $1)`, sc.recent)
 	mustExec(t, sc.db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)
-		VALUES (60, NULL, '["c0"]', ?, NULL)`, sc.recentEpoch)
+		VALUES (60, NULL, '["c0"]', $1, NULL)`, sc.recentEpoch)
 	sc.reloadStore(t)
 
 	// Query A (no GPS): biased resolver in the fallback branch picks B via

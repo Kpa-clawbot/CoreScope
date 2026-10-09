@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -257,12 +258,18 @@ func prefixOrEmpty(s string, n int) string {
 	return ""
 }
 
-// sqlPlaceholders returns "?,?,…" with n placeholders (n >= 1).
-func sqlPlaceholders(n int) string {
-	if n <= 1 {
-		return "?"
+// sqlPlaceholders builds native PostgreSQL positional parameters for an IN-list.
+// The optional first index supports lists following other bound predicates.
+func sqlPlaceholders(n int, first ...int) string {
+	start := 1
+	if len(first) > 0 {
+		start = first[0]
 	}
-	return strings.Repeat("?,", n-1) + "?"
+	parts := make([]string, n)
+	for i := range parts {
+		parts[i] = fmt.Sprintf("$%d", start+i)
+	}
+	return strings.Join(parts, ",")
 }
 
 // queryCoverageRows returns raw coverage rows where the directly-heard node
@@ -279,7 +286,7 @@ func (s *Server) queryCoverageRows(pubkey string, b bbox) ([]coverageRow, error)
 		SELECT lat, lon, snr, rssi, heard_key, rx_at
 		FROM client_receptions
 		WHERE heard_key IN (`+sqlPlaceholders(len(cands))+`)
-		  AND lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?`, args...)
+		  AND lat BETWEEN `+fmt.Sprintf("$%d AND $%d AND lon BETWEEN $%d AND $%d", len(cands)+1, len(cands)+2, len(cands)+3, len(cands)+4), args...)
 	if err != nil {
 		return nil, err
 	}

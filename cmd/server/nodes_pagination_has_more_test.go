@@ -40,7 +40,7 @@ func TestNodesHasMoreSurvivesPostLimitFiltering(t *testing.T) {
 		lastSeen := fmt.Sprintf("2026-06-0%dT00:00:00Z", 7-i)
 		if _, err := srv.db.conn.Exec(`INSERT INTO nodes
 			(public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-			VALUES (?, ?, 'repeater', 0, 0, ?, '2026-06-01T00:00:00Z', 1)`,
+			VALUES ($1, $2, 'repeater', 0, 0, $3, '2026-06-01T00:00:00Z', 1)`,
 			fmt.Sprintf("deadbeef0000200%d", i), name, lastSeen); err != nil {
 			t.Fatalf("insert %d: %v", i, err)
 		}

@@ -13,7 +13,7 @@ import (
 )
 
 func TestIssue1690_LastSeenUpdatedOnObservation(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestIssue1690_LastSeenUpdatedOnObservation(t *testing.T) {
 
 	// Sanity: confirm the seed last_seen is the 7d-ago time.
 	var seededLastSeen int64
-	if err := s.db.QueryRow(`SELECT COALESCE(last_seen, 0) FROM transmissions WHERE hash = ?`, hash).Scan(&seededLastSeen); err != nil {
+	if err := s.db.QueryRow(`SELECT COALESCE(last_seen, 0) FROM transmissions WHERE hash = $1`, hash).Scan(&seededLastSeen); err != nil {
 		t.Fatalf("seed select last_seen: %v (column missing? post-fix must add it)", err)
 	}
 	weekAgoUnix, _ := time.Parse(time.RFC3339, weekAgo)
@@ -71,7 +71,7 @@ func TestIssue1690_LastSeenUpdatedOnObservation(t *testing.T) {
 	}
 
 	var ls int64
-	if err := s.db.QueryRow(`SELECT last_seen FROM transmissions WHERE hash = ?`, hash).Scan(&ls); err != nil {
+	if err := s.db.QueryRow(`SELECT last_seen FROM transmissions WHERE hash = $1`, hash).Scan(&ls); err != nil {
 		t.Fatalf("post-insert select last_seen: %v", err)
 	}
 	// The post-fix writer must bump last_seen to at least the new observation's

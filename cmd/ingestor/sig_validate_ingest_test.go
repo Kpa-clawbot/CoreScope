@@ -47,7 +47,7 @@ func makeAppdata(name string) []byte {
 
 func TestSigValidation_ValidAdvertStored(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	store, err := OpenStoreWithInterval(dbPath, 300)
+	store, err := openPostgresTestStoreInterval(t, dbPath, 300)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestSigValidation_ValidAdvertStored(t *testing.T) {
 
 func TestSigValidation_TamperedSignatureDropped(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	store, err := OpenStoreWithInterval(dbPath, 300)
+	store, err := openPostgresTestStoreInterval(t, dbPath, 300)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestSigValidation_TamperedSignatureDropped(t *testing.T) {
 
 func TestSigValidation_TruncatedAppdataDropped(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	store, err := OpenStoreWithInterval(dbPath, 300)
+	store, err := openPostgresTestStoreInterval(t, dbPath, 300)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestSigValidation_TruncatedAppdataDropped(t *testing.T) {
 
 func TestSigValidation_DisabledByConfig(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	store, err := OpenStoreWithInterval(dbPath, 300)
+	store, err := openPostgresTestStoreInterval(t, dbPath, 300)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestSigValidation_DisabledByConfig(t *testing.T) {
 
 func TestSigValidation_DropCounterIncrements(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	store, err := OpenStoreWithInterval(dbPath, 300)
+	store, err := openPostgresTestStoreInterval(t, dbPath, 300)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestSigValidation_DropCounterIncrements(t *testing.T) {
 func TestSigValidation_LogContainsFields(t *testing.T) {
 	// This test verifies the dropped_packets row has all required fields
 	dbPath := t.TempDir() + "/test.db"
-	store, err := OpenStoreWithInterval(dbPath, 300)
+	store, err := openPostgresTestStoreInterval(t, dbPath, 300)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,15 +289,15 @@ func TestSigValidation_LogContainsFields(t *testing.T) {
 
 func TestPruneDroppedPackets(t *testing.T) {
 	dbPath := t.TempDir() + "/test.db"
-	store, err := OpenStoreWithInterval(dbPath, 300)
+	store, err := openPostgresTestStoreInterval(t, dbPath, 300)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 
 	// Insert an old dropped packet
-	store.db.Exec(`INSERT INTO dropped_packets (hash, reason, dropped_at) VALUES ('old', 'test', datetime('now', '-60 days'))`)
-	store.db.Exec(`INSERT INTO dropped_packets (hash, reason, dropped_at) VALUES ('new', 'test', datetime('now'))`)
+	store.db.Exec(`INSERT INTO dropped_packets (hash, reason, dropped_at) VALUES ('old', 'test', to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC' - interval '60 days','YYYY-MM-DD HH24:MI:SS'))`)
+	store.db.Exec(`INSERT INTO dropped_packets (hash, reason, dropped_at) VALUES ('new', 'test', to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS'))`)
 
 	n, err := store.PruneDroppedPackets(30)
 	if err != nil {

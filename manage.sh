@@ -91,6 +91,58 @@ dc_staging() {
   fi
 }
 
+# Read the owner credential inside the database container, never from argv.
+pg_exec() {
+  local environment="$1" database="$2"
+  shift 2
+  case "$environment" in
+    prod) dc_prod exec -T postgres sh -c 'export PGHOST=127.0.0.1 PGPORT=5432 PGUSER=corescope_owner PGPASSWORD="$CORESCOPE_OWNER_PASSWORD" PGDATABASE="$1"; shift; exec "$@"' sh "$database" "$@" ;;
+    staging) dc_staging exec -T postgres sh -c 'export PGHOST=127.0.0.1 PGPORT=5432 PGUSER=corescope_owner PGPASSWORD="$CORESCOPE_OWNER_PASSWORD" PGDATABASE="$1"; shift; exec "$@"' sh "$database" "$@" ;;
+    *) err "Unknown PostgreSQL environment"; return 1 ;;
+  esac
+}
+
+pg_empty() {
+  local count
+  count=$(pg_exec "$1" "$2" psql -X -A -t -v ON_ERROR_STOP=1 -c "SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND c.relkind IN ('r','p','v','m','S','f')") || return 1
+  [ "$count" = 0 ]
+}
+
+pg_dump_file() {
+  local environment="$1" database="$2" destination="$3" temporary="$3.partial"
+  if [ -e "$destination" ]; then err "Backup target already exists: $destination"; return 1; fi
+  (
+    umask 077
+    set -o noclobber
+    exec 3>"$temporary" || exit 1
+    trap 'rm -f -- "$temporary"' EXIT HUP INT TERM
+    pg_exec "$environment" "$database" pg_dump --format=custom --no-password --no-owner --no-privileges >&3 || exit 1
+    exec 3>&-
+    sync -f "$temporary" || exit 1
+    ln -- "$temporary" "$destination" || exit 1
+    rm -- "$temporary" || exit 1
+    trap - EXIT HUP INT TERM
+  )
+}
+
+pg_restore_file() {
+  local environment="$1" database="$2" archive="$3"
+  if [ "$(head -c 5 "$archive")" != PGDMP ]; then err "SQLite files require docs/postgresql-upgrade.md; expected a PostgreSQL archive."; return 1; fi
+  pg_empty "$environment" "$database" || { err "Refusing to overwrite a nonempty PostgreSQL destination."; return 1; }
+  pg_exec "$environment" "$database" pg_restore --no-password --exit-on-error --single-transaction --no-owner --no-privileges --dbname="$database" < "$archive" || return 1
+  pg_exec "$environment" "$database" psql -X -v ON_ERROR_STOP=1 < docker/postgres-grants.sql >/dev/null || return 1
+  pg_exec "$environment" "$database" psql -X -v ON_ERROR_STOP=1 -c ANALYZE >/dev/null || return 1
+}
+
+require_database_credentials() {
+  local key value
+  if [ -z "$POSTGRES_ADMIN_PASSWORD" ]; then err "Set PostgreSQL credentials in .env before starting; see .env.example."; return 1; fi
+  for key in CORESCOPE_OWNER_PASSWORD CORESCOPE_READER_PASSWORD CORESCOPE_WRITER_PASSWORD CORESCOPE_ACCOUNTS_PASSWORD CORESCOPE_CHANNELS_PASSWORD; do
+    value=$(printenv "$key" || true)
+    if ! [[ "$value" =~ ^[a-fA-F0-9]{32,}$ ]]; then err "Set $key in .env to at least 32 hexadecimal characters; see docs/postgresql-upgrade.md."; return 1; fi
+  done
+}
+
 confirm() {
   read -p "   $1 [y/N] " -n 1 -r
   echo
@@ -287,7 +339,7 @@ write_env_managed_values() {
   local seen_data=0
   local seen_disable_mosquitto=0
 
-  : > "$tmp_file"
+  (umask 077; set -o noclobber; : > "$tmp_file") || return 1
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       PROD_HTTP_PORT=*)
@@ -761,6 +813,7 @@ cmd_setup() {
 
   write_env_managed_values "$selected_http" "$selected_https" "$selected_mqtt" "$selected_data_dir" "$selected_disable_mosquitto"
   log "Saved negotiated ports to .env"
+  require_database_credentials
   show_env_port_summary "$selected_http" "$selected_https" "$selected_mqtt" "$selected_data_dir" "$selected_disable_mosquitto"
 
   echo "   Resolved port mapping:"
@@ -878,16 +931,25 @@ cmd_setup() {
 
 # ─── Staging Helpers ──────────────────────────────────────────────────────
 
-# Copy production DB to staging data directory
+# Copy telemetry into an empty staging database; accounts stay independent.
 prepare_staging_db() {
   mkdir -p "$STAGING_DATA"
-  if [ -f "$PROD_DATA/meshcore.db" ]; then
-    info "Copying production database to staging..."
-    cp "$PROD_DATA/meshcore.db" "$STAGING_DATA/meshcore.db" 2>/dev/null || true
-    log "Database snapshot copied to ${STAGING_DATA}/meshcore.db"
-  else
-    warn "No production database found at ${PROD_DATA}/meshcore.db — staging starts empty."
-  fi
+  dc_staging up -d postgres
+  local attempt
+  for attempt in $(seq 1 30); do
+    if pg_exec staging corescope_telemetry psql -X -A -t -c 'SELECT 1' >/dev/null 2>&1; then break; fi
+    [ "$attempt" -lt 30 ] || { err "Staging PostgreSQL did not become ready"; return 1; }
+    sleep 1
+  done
+  if ! pg_empty staging corescope_telemetry; then info "Keeping existing staging PostgreSQL data; automatic replacement is refused."; return 0; fi
+  local copy_dir
+  copy_dir=$(mktemp -d)
+  chmod 700 "$copy_dir"
+  pg_dump_file prod corescope_telemetry "$copy_dir/telemetry.dump" || return 1
+  pg_restore_file staging corescope_telemetry "$copy_dir/telemetry.dump" || return 1
+  rm -f -- "$copy_dir/telemetry.dump"
+  rmdir -- "$copy_dir"
+  log "Telemetry restored into the empty staging database. Staging accounts remain independent."
 }
 
 # Copy config.prod.json → config.staging.json with siteName change
@@ -1029,6 +1091,7 @@ ensure_config() {
 }
 
 cmd_start() {
+  require_database_credentials
   local WITH_STAGING=false
   if [ "$1" = "--with-staging" ]; then
     WITH_STAGING=true
@@ -1046,14 +1109,16 @@ cmd_start() {
   # Always check prod config
   ensure_config "$PROD_DATA"
 
+  # Compose completes PostgreSQL/bootstrap dependencies before staging copies data.
+  info "Starting production container (corescope-prod) on ports ${PROD_HTTP_PORT:-80}/${PROD_HTTPS_PORT:-443}..."
+  dc_prod up -d prod
+
   if $WITH_STAGING; then
     # Prepare staging data and config
     prepare_staging_db
     prepare_staging_config
 
-    info "Starting production container (corescope-prod) on ports ${PROD_HTTP_PORT:-80}/${PROD_HTTPS_PORT:-443}..."
     info "Starting staging container (${STAGING_CONTAINER}) on port ${STAGING_GO_HTTP_PORT:-82}..."
-    dc_prod up -d prod
     dc_staging up -d staging-go
     if is_true "${DISABLE_MOSQUITTO:-false}"; then
       log "Production started on ports ${PROD_HTTP_PORT:-80}/${PROD_HTTPS_PORT:-443} (MQTT disabled)"
@@ -1063,8 +1128,6 @@ cmd_start() {
       log "Staging started on port ${STAGING_GO_HTTP_PORT:-82} (MQTT: ${STAGING_GO_MQTT_PORT:-1885})"
     fi
   else
-    info "Starting production container (corescope-prod) on ports ${PROD_HTTP_PORT:-80}/${PROD_HTTPS_PORT:-443}..."
-    dc_prod up -d prod
     log "Production started. Staging NOT running (use --with-staging to start both)."
   fi
 }
@@ -1200,18 +1263,11 @@ cmd_status() {
   echo ""
 
   # Disk usage
-  if [ -d "$PROD_DATA" ] && [ -f "$PROD_DATA/meshcore.db" ]; then
-    local db_size
-    db_size=$(du -h "$PROD_DATA/meshcore.db" 2>/dev/null | cut -f1)
-    info "Production DB: ${db_size}"
-  fi
-  if [ -d "$STAGING_DATA" ] && [ -f "$STAGING_DATA/meshcore.db" ]; then
-    local staging_db_size
-    staging_db_size=$(du -h "$STAGING_DATA/meshcore.db" 2>/dev/null | cut -f1)
-    info "Staging DB: ${staging_db_size}"
-  fi
+  local database size
+  for database in corescope_telemetry corescope_accounts; do
+    if size=$(pg_exec prod "$database" psql -X -A -t -c 'SELECT pg_size_pretty(pg_database_size(current_database()))' 2>/dev/null); then info "Production $database: $size"; else warn "PostgreSQL size unavailable for $database"; fi
+  done
 
-  echo ""
 }
 
 # ─── Logs ─────────────────────────────────────────────────────────────────
@@ -1269,18 +1325,8 @@ cmd_promote() {
     exit 0
   fi
 
-  # Backup production DB
-  info "Backing up production database..."
   local BACKUP_DIR="./backups/pre-promotion-$(date +%Y%m%d-%H%M%S)"
-  mkdir -p "$BACKUP_DIR"
-  if [ -f "$PROD_DATA/meshcore.db" ]; then
-    cp "$PROD_DATA/meshcore.db" "$BACKUP_DIR/"
-  elif container_running "corescope-prod"; then
-    docker cp corescope-prod:/app/data/meshcore.db "$BACKUP_DIR/"
-  else
-    warn "Could not backup production database."
-  fi
-  log "Backup saved to ${BACKUP_DIR}/"
+  cmd_backup "$BACKUP_DIR"
 
   # Restart prod with latest image
   info "Restarting production with latest image..."
@@ -1298,7 +1344,7 @@ cmd_promote() {
     if [ "$i" -eq 30 ]; then
       err "Production failed health check after 30s"
       warn "Check logs: ./manage.sh logs prod"
-      warn "Rollback: cp ${BACKUP_DIR}/meshcore.db ${PROD_DATA}/ && ./manage.sh restart prod"
+      warn "Native archives are in $BACKUP_DIR. Restore only into a fresh target; see docs/postgresql-upgrade.md."
       exit 1
     fi
     sleep 1
@@ -1366,145 +1412,48 @@ cmd_update() {
 # ─── Backup ───────────────────────────────────────────────────────────────
 
 cmd_backup() {
-  TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-  BACKUP_DIR="${1:-./backups/corescope-${TIMESTAMP}}"
-  mkdir -p "$BACKUP_DIR"
-
-  info "Backing up to ${BACKUP_DIR}/"
-
-  # Database
-  # Always use bind mount path (from .env or default)
-  DB_PATH="$PROD_DATA/meshcore.db"
-  if [ -f "$DB_PATH" ]; then
-    cp "$DB_PATH" "$BACKUP_DIR/meshcore.db"
-    log "Database ($(du -h "$BACKUP_DIR/meshcore.db" | cut -f1))"
-  elif container_running "corescope-prod"; then
-    docker cp corescope-prod:/app/data/meshcore.db "$BACKUP_DIR/meshcore.db" 2>/dev/null && \
-      log "Database (via docker cp)" || warn "Could not backup database"
-  else
-    warn "Database not found (container not running?)"
-  fi
-
-  # Config (now lives in data dir)
-  if [ -f "$PROD_DATA/config.json" ]; then
-    cp "$PROD_DATA/config.json" "$BACKUP_DIR/config.json"
-    log "config.json"
-  elif [ -f config.json ]; then
-    cp config.json "$BACKUP_DIR/config.json"
-    log "config.json (legacy repo root)"
-  fi
-
-  # Caddyfile
-  if [ -f caddy-config/Caddyfile ]; then
-    cp caddy-config/Caddyfile "$BACKUP_DIR/Caddyfile"
-    log "Caddyfile"
-  fi
-
-  # Theme
-  # Always use bind mount path (from .env or default)
-  THEME_PATH="$PROD_DATA/theme.json"
-  if [ -f "$THEME_PATH" ]; then
-    cp "$THEME_PATH" "$BACKUP_DIR/theme.json"
-    log "theme.json"
-  elif [ -f theme.json ]; then
-    cp theme.json "$BACKUP_DIR/theme.json"
-    log "theme.json"
-  fi
-
-  # Summary
-  TOTAL=$(du -sh "$BACKUP_DIR" | cut -f1)
-  FILES=$(ls "$BACKUP_DIR" | wc -l)
-  echo ""
-  log "Backup complete: ${FILES} files, ${TOTAL} total → ${BACKUP_DIR}/"
+  local timestamp backup_dir source name
+  timestamp=$(date +%Y%m%d-%H%M%S)
+  backup_dir="$1"
+  [ -n "$backup_dir" ] || backup_dir="./backups/corescope-$timestamp"
+  umask 077
+  mkdir -p "$backup_dir"
+  info "Writing native PostgreSQL archives to $backup_dir/"
+  pg_dump_file prod corescope_telemetry "$backup_dir/telemetry.dump" || return 1
+  pg_dump_file prod corescope_accounts "$backup_dir/accounts.dump" || return 1
+  for name in config.json theme.json; do
+    source="$PROD_DATA/$name"
+    [ -f "$source" ] || source="$name"
+    if [ -f "$source" ]; then cp -- "$source" "$backup_dir/$name"; chmod 600 "$backup_dir/$name"; fi
+  done
+  if [ -f caddy-config/Caddyfile ]; then cp -- caddy-config/Caddyfile "$backup_dir/Caddyfile"; chmod 600 "$backup_dir/Caddyfile"; fi
+  log "Both database archives and available configuration saved. Keep the bundle private and encrypted off-host."
 }
 
 # ─── Restore ──────────────────────────────────────────────────────────────
 
 cmd_restore() {
-  if [ -z "$1" ]; then
-    err "Usage: ./manage.sh restore <backup-dir-or-db-file>"
-    if [ -d "./backups" ]; then
-      echo ""
-      echo "   Available backups:"
-      ls -dt ./backups/meshcore-* ./backups/corescope-* 2>/dev/null | head -10 | while read d; do
-        if [ -d "$d" ]; then
-          echo "     $d/ ($(ls "$d" | wc -l) files)"
-        elif [ -f "$d" ]; then
-          echo "     $d ($(du -h "$d" | cut -f1))"
-        fi
-      done
-    fi
-    exit 1
-  fi
-
-  # Accept either a directory (full backup) or a single .db file
-  if [ -d "$1" ]; then
-    DB_FILE="$1/meshcore.db"
-    CONFIG_FILE="$1/config.json"
-    CADDY_FILE="$1/Caddyfile"
-    THEME_FILE="$1/theme.json"
-  elif [ -f "$1" ]; then
-    DB_FILE="$1"
-    CONFIG_FILE=""
-    CADDY_FILE=""
-    THEME_FILE=""
-  else
-    err "Not found: $1"
-    exit 1
-  fi
-
-  if [ ! -f "$DB_FILE" ]; then
-    err "No meshcore.db found in $1"
-    exit 1
-  fi
-
-  echo ""
-  info "Will restore from: $1"
-  [ -f "$DB_FILE" ] && echo "   • Database"
-  [ -n "$CONFIG_FILE" ] && [ -f "$CONFIG_FILE" ] && echo "   • config.json"
-  [ -n "$CADDY_FILE" ] && [ -f "$CADDY_FILE" ] && echo "   • Caddyfile"
-  [ -n "$THEME_FILE" ] && [ -f "$THEME_FILE" ] && echo "   • theme.json"
-  echo ""
-
-  if ! confirm "Continue? (current state will be backed up first)"; then
-    echo "   Aborted."
-    exit 0
-  fi
-
-  # Backup current state first
-  info "Backing up current state..."
-  cmd_backup "./backups/corescope-pre-restore-$(date +%Y%m%d-%H%M%S)"
-
-  dc_prod stop prod 2>/dev/null || true
-
-  # Restore database
-  mkdir -p "$PROD_DATA"
-  DEST_DB="$PROD_DATA/meshcore.db"
-  cp "$DB_FILE" "$DEST_DB"
-  log "Database restored"
-
-  # Restore config if present
-  if [ -n "$CONFIG_FILE" ] && [ -f "$CONFIG_FILE" ]; then
-    cp "$CONFIG_FILE" "$PROD_DATA/config.json"
-    log "config.json restored to ${PROD_DATA}/"
-  fi
-
-  # Restore Caddyfile if present
-  if [ -n "$CADDY_FILE" ] && [ -f "$CADDY_FILE" ]; then
-    mkdir -p caddy-config
-    cp "$CADDY_FILE" caddy-config/Caddyfile
-    log "Caddyfile restored"
-  fi
-
-  # Restore theme if present
-  if [ -n "$THEME_FILE" ] && [ -f "$THEME_FILE" ]; then
-    DEST_THEME="$PROD_DATA/theme.json"
-    cp "$THEME_FILE" "$DEST_THEME"
-    log "theme.json restored"
-  fi
-
-  dc_prod up -d prod
-  log "Restored and restarted."
+  local bundle="$1" file source destination stamp
+  if [ ! -d "$bundle" ]; then err "Usage: ./manage.sh restore <native-backup-directory>. SQLite files require docs/postgresql-upgrade.md."; return 1; fi
+  for file in telemetry.dump accounts.dump; do
+    if [ ! -f "$bundle/$file" ] || [ "$(head -c 5 "$bundle/$file")" != PGDMP ]; then err "Backup must contain native telemetry.dump and accounts.dump; SQLite files are not accepted."; return 1; fi
+  done
+  if container_running corescope-prod; then err "Stop CoreScope before restoring; leave target PostgreSQL running."; return 1; fi
+  if ! pg_empty prod corescope_telemetry || ! pg_empty prod corescope_accounts; then err "Restore requires empty PostgreSQL databases. Preserve the current cluster and configure a fresh destination."; return 1; fi
+  if ! confirm "Restore both native archives into these empty databases?"; then return 0; fi
+  pg_restore_file prod corescope_telemetry "$bundle/telemetry.dump" || return 1
+  pg_restore_file prod corescope_accounts "$bundle/accounts.dump" || return 1
+  mkdir -p "$PROD_DATA" caddy-config
+  stamp="$(date +%Y%m%d-%H%M%S)-$$"
+  for file in config.json theme.json Caddyfile; do
+    source="$bundle/$file"
+    [ -f "$source" ] || continue
+    destination="$PROD_DATA/$file"
+    [ "$file" != Caddyfile ] || destination=caddy-config/Caddyfile
+    if [ -f "$destination" ]; then cp -- "$destination" "$destination.pre-restore-$stamp"; fi
+    cp -- "$source" "$destination"
+  done
+  log "Native archives restored. Services remain stopped: review restored accounts, sessions and tokens before ./manage.sh start."
 }
 
 # ─── MQTT Test ────────────────────────────────────────────────────────────
@@ -1563,7 +1512,7 @@ cmd_help() {
   echo ""
   printf '%b\n' "  ${BOLD}Run${NC}"
   echo "    start              Start production container"
-  echo "    start --with-staging  Start production + staging-go (copies prod DB + config)"
+  echo "    start --with-staging  Start production + staging-go (clones into empty staging telemetry + config)"
   echo "    stop [prod|staging|all]  Stop specific or all containers (default: all)"
   echo "    restart [prod|staging|all]  Restart specific or all containers"
   echo "    status             Show health, stats, and service status"
@@ -1572,8 +1521,8 @@ cmd_help() {
   printf '%b\n' "  ${BOLD}Maintain${NC}"
   echo "    update [version]   Update to version (no arg=latest tag, 'latest'=master tip, or e.g. v3.1.0)"
   echo "    promote            Promote staging → production (backup + restart)"
-  echo "    backup [dir]       Full backup: database + config + theme"
-  echo "    restore <d>        Restore from backup dir or .db file"
+  echo "    backup [dir]       Native PostgreSQL archives + config + theme"
+  echo "    restore <d>        Restore native archives into empty PostgreSQL databases"
   echo "    mqtt-test          Check if MQTT data is flowing"
   echo ""
   echo "Prod uses docker-compose.yml; staging uses ${STAGING_COMPOSE_FILE}."

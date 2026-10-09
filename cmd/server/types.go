@@ -261,25 +261,21 @@ type PerfPacketStoreStats struct {
 	LoadCoverageRatio float64 `json:"loadCoverageRatio"`
 }
 
-type WalPages struct {
-	Total        int `json:"total"`
-	Checkpointed int `json:"checkpointed"`
-	Busy         int `json:"busy"`
-}
-
-type SqliteRowCounts struct {
+type DatabaseRowCounts struct {
 	Transmissions int `json:"transmissions"`
 	Observations  int `json:"observations"`
 	Nodes         int `json:"nodes"`
 	Observers     int `json:"observers"`
 }
 
-type SqliteStats struct {
-	DbSizeMB   float64          `json:"dbSizeMB"`
-	WalSizeMB  float64          `json:"walSizeMB"`
-	FreelistMB float64          `json:"freelistMB"`
-	WalPages   *WalPages        `json:"walPages"`
-	Rows       *SqliteRowCounts `json:"rows"`
+type PostgresStats struct {
+	Engine                string             `json:"engine"`
+	DbSizeMB              *float64           `json:"dbSizeMB"`
+	Rows                  *DatabaseRowCounts `json:"rows"`
+	SampledAt             string             `json:"sampledAt,omitempty"`
+	SampleIntervalSeconds int                `json:"sampleIntervalSeconds"`
+	Stale                 bool               `json:"stale"`
+	Error                 string             `json:"error,omitempty"`
 }
 
 type PerfResponse struct {
@@ -290,7 +286,7 @@ type PerfResponse struct {
 	SlowQueries   []SlowQuery                   `json:"slowQueries"`
 	Cache         PerfCacheStats                `json:"cache"`
 	PacketStore   *PerfPacketStoreStats         `json:"packetStore"`
-	Sqlite        *SqliteStats                  `json:"sqlite"`
+	Postgres      *PostgresStats                `json:"postgres"`
 	GoRuntime     *GoRuntimeStats               `json:"goRuntime,omitempty"`
 	// MemoryBreakdown is populated only for /api/perf?mem=1 (an O(tx+obs)
 	// walk, opt-in so the normal hot endpoint stays cheap). It sizes the

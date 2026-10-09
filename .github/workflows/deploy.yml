@@ -23,10 +23,17 @@ on:
         description: 'Release fast path already published the tag images'
         type: boolean
         default: false
+      postgres_benchmark:
+        description: Run only the isolated PostgreSQL benchmark (no publish or deploy)
+        type: boolean
+        default: false
+      candidate_sha:
+        description: Full candidate commit for postgres_benchmark
+        type: string
+        default: ''
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
@@ -47,12 +54,21 @@ env:
 #   PRs stop after build-and-publish (no GHCR push). Master continues to deploy + badges.
 
 jobs:
+  postgres-benchmark:
+    name: Isolated PostgreSQL comparison
+    if: github.event_name == 'workflow_dispatch' && inputs.postgres_benchmark
+    permissions:
+      contents: read
+    uses: ./.github/workflows/postgres-benchmark.yml
+    with:
+      candidate_sha: ${{ inputs.candidate_sha }}
+
   # ───────────────────────────────────────────────────────────────
   # 0. Change scope — decides whether the expensive jobs below run.
   # ───────────────────────────────────────────────────────────────
   changes:
     name: "🔎 Change scope"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       code: ${{ steps.scope.outputs.code }}
       ingestor: ${{ steps.scope.outputs.ingestor }}
@@ -66,6 +82,12 @@ jobs:
         id: scope
         run: |
           set -euo pipefail
+          if [ "${{ inputs.postgres_benchmark }}" = "true" ]; then
+            echo "code=false" >> "$GITHUB_OUTPUT"
+            echo "ingestor=false" >> "$GITHUB_OUTPUT"
+            echo "benchmark-only dispatch"
+            exit 0
+          fi
           # Only pull requests are scoped. Pushes and dispatches always count as
           # code, so master keeps producing an :edge image and tag builds are
           # never skipped.
@@ -117,17 +139,37 @@ jobs:
   # set) whose safety is an argument until something checks it.
   race-test:
     name: "🏁 Race detector (ingestor)"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes]
     if: needs.changes.outputs.ingestor == 'true'
+    services: &postgres_test_services
+      postgres:
+        image: postgres:18.6-alpine3.24
+        env:
+          POSTGRES_PASSWORD: "ci-${{ github.run_id }}-${{ github.run_attempt }}"
+          POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+        ports: ["127.0.0.1:5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      CORESCOPE_TEST_POSTGRES_URL: "postgresql://postgres:ci-${{ github.run_id }}-${{ github.run_attempt }}@127.0.0.1:5432/postgres?sslmode=disable"
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: "ci-${{ github.run_id }}-${{ github.run_attempt }}"
+      PGSSLMODE: disable
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Set up Go 1.27
+      - name: Install pinned PostgreSQL 18.6 clients
+        run: &install_postgres_clients bash scripts/install-postgres-ci.sh client
+
+      - name: Set up Go 1.27.2
         uses: actions/setup-go@v6
         with:
-          go-version: '1.27'
+          go-version: '1.27.2'
           # All modules: a -race build of a cgo package is the slowest thing in
           # this pipeline, and setup-go caches ~/.cache/go-build as well as the
           # module cache, so a key that misses on an unrelated module hurts most
@@ -145,9 +187,17 @@ jobs:
   # ───────────────────────────────────────────────────────────────
   go-test:
     name: "✅ Go Build & Test"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
+    services: *postgres_test_services
+    env:
+      CORESCOPE_TEST_POSTGRES_URL: "postgresql://postgres:ci-${{ github.run_id }}-${{ github.run_attempt }}@127.0.0.1:5432/postgres?sslmode=disable"
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: "ci-${{ github.run_id }}-${{ github.run_attempt }}"
+      PGSSLMODE: disable
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -157,21 +207,27 @@ jobs:
       - name: Clean Go module cache
         run: rm -rf ~/go/pkg/mod 2>/dev/null || true
 
-      - name: Set up Go 1.27
+      - name: Install pinned PostgreSQL 18.6 clients
+        run: *install_postgres_clients
+
+
+      - name: Set up Go 1.27.2
         uses: actions/setup-go@v6
         with:
-          go-version: '1.27'
-          # All modules, not just two: the cgo SQLite build is expensive to
+          go-version: '1.27.2'
+          # All modules: the offline SQLite importer is expensive to
           # redo, and setup-go caches ~/.cache/go-build as well as the module
           # cache, so a key that misses on an unrelated module hurts.
           cache-dependency-path: "**/go.sum"
 
+      - name: Test PostgreSQL benchmark controls
+        run: python3 -m unittest discover -s scripts/postgres-benchmark -p 'test_*.py'
+
       - name: Enforce gofmt + go vet (issue #1859)
         run: |
           set -e
-          # gofmt: every tracked *.go file except the misnamed Dockerfile.go,
-          # which is a Dockerfile (FROM ...) that gofmt cannot parse.
-          unformatted=$(gofmt -l $(git ls-files '*.go' | grep -vi 'Dockerfile.go'))
+          # Every tracked Go source file must be formatted.
+          unformatted=$(gofmt -l $(git ls-files '*.go'))
           if [ -n "$unformatted" ]; then
             echo "::error::gofmt required on these files:"
             echo "$unformatted"
@@ -188,7 +244,7 @@ jobs:
         run: |
           set -e -o pipefail
           cd cmd/server
-          go build .
+          CGO_ENABLED=0 go build .
           # -race gates PR #1208's atomic.Pointer migration: the race-detector
           # is what makes path_inspect_atomic_race_test.go actually assert.
           go test -timeout 20m -race -coverprofile=server-coverage.out ./... 2>&1 | tee server-test.log
@@ -201,7 +257,7 @@ jobs:
         run: |
           set -e -o pipefail
           cd cmd/ingestor
-          go build .
+          CGO_ENABLED=0 go build .
           go test -timeout 20m -coverprofile=ingestor-coverage.out ./... 2>&1 | tee ingestor-test.log
           echo "--- Go Ingestor Coverage ---"
           go tool cover -func=ingestor-coverage.out | tail -1
@@ -213,7 +269,7 @@ jobs:
           go test ./...
           echo "--- Channel library tests passed ---"
           cd ../../cmd/decrypt
-          go build -ldflags="-s -w" -o corescope-decrypt .
+          CGO_ENABLED=0 go build -ldflags="-s -w" -o corescope-decrypt .
           go test ./...
           echo "--- Decrypt CLI tests passed ---"
 
@@ -229,10 +285,12 @@ jobs:
           set -e -o pipefail
           # Neither module had CI test execution before the mattn/go-sqlite3
           # migration; both open the database, and dbschema owns the migrations.
-          cd internal/dbschema
+          cd internal/pgutil
+          go test ./...
+          cd ../dbschema
           go test ./...
           cd ../../cmd/migrate
-          go build -o /dev/null .
+          CGO_ENABLED=1 go build -o /dev/null .
           go test ./...
           echo "--- migrate + dbschema tests passed ---"
 
@@ -344,17 +402,24 @@ jobs:
   e2e-shard:
     name: "🎭 Playwright E2E shard ${{ matrix.shard }}/3"
     needs: [changes]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         shard: [1, 2, 3]
     env:
+      CORESCOPE_TEST_POSTGRES_URL: "postgresql://postgres:ci-${{ github.run_id }}-${{ github.run_attempt }}@127.0.0.1:5432/postgres?sslmode=disable"
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: "ci-${{ github.run_id }}-${{ github.run_attempt }}"
+      PGSSLMODE: disable
       SHARD: ${{ matrix.shard }}
       E2E_SHARDS: 3
     defaults:
       run:
         shell: bash
     if: needs.changes.outputs.code == 'true' && !(startsWith(github.ref, 'refs/tags/v') && inputs.images_published)
+    services: *postgres_test_services
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -369,16 +434,20 @@ jobs:
       - name: Clean Go module cache
         run: rm -rf ~/go/pkg/mod 2>/dev/null || true
 
-      - name: Set up Go 1.27
+      - name: Install pinned PostgreSQL 18.6 clients
+        run: *install_postgres_clients
+
+
+      - name: Set up Go 1.27.2
         uses: actions/setup-go@v6
         with:
-          go-version: '1.27'
+          go-version: '1.27.2'
           cache-dependency-path: "**/go.sum"
 
       - name: Build Go server
         run: |
           cd cmd/server
-          go build -o ../../corescope-server .
+          CGO_ENABLED=0 go build -o ../../corescope-server .
           echo "Go server built successfully"
 
       # Only test-user-management-e2e.js uses the e2etest build and its server,
@@ -388,12 +457,12 @@ jobs:
         if: matrix.shard == 3
         run: |
           cd cmd/server
-          go build -tags e2etest -o ../../corescope-server-e2e .
+          CGO_ENABLED=0 go build -tags e2etest -o ../../corescope-server-e2e .
 
       - name: Build Go migrate tool
         run: |
           cd cmd/migrate
-          go build -o ../../corescope-migrate .
+          CGO_ENABLED=1 go build -o ../../corescope-migrate .
           echo "Go migrate tool built successfully"
 
       - name: Install npm dependencies
@@ -407,8 +476,17 @@ jobs:
       - name: Instrument frontend JS for coverage
         run: sh scripts/instrument-frontend.sh
 
+      - name: Prepare disposable legacy fixture copy
+        run: |
+          mkdir -p "$RUNNER_TEMP/corescope-fixture"
+          cd cmd/migrate
+          go run ../../scripts/prepare-postgres-fixture.go \
+            -source ../../test-fixtures/e2e-fixture.db \
+            -destination "$RUNNER_TEMP/corescope-fixture/fixture.sqlite"
+          echo "E2E_SQLITE=$RUNNER_TEMP/corescope-fixture/fixture.sqlite" >> "$GITHUB_ENV"
+
       - name: Freshen fixture timestamps
-        run: bash tools/freshen-fixture.sh test-fixtures/e2e-fixture.db
+        run: bash tools/freshen-fixture.sh "$E2E_SQLITE"
 
       - name: Seed grouped-packet row for #1486 collapse test
         # The committed fixture has 499 packets, each with exactly ONE
@@ -417,11 +495,9 @@ jobs:
         # (toggle-select) row. Insert a NEW transmission with 3
         # observations.
         #
-        # The server's async hash-migrate (cmd/server/hash_migrate.go)
-        # recomputes `transmissions.hash` from `raw_hex` via
-        # ComputeContentHash(), so the inserted hash MUST equal that
-        # function's output for the chosen raw_hex — otherwise the row
-        # gets relabelled and the E2E can't find it.
+        # Fixture hashes are normalized offline before PostgreSQL import.
+        # The read-only server verifies them and never rewrites telemetry.
+        # This seeded hash must equal the shared runtime ContentHash output.
         #
         # raw_hex 15000102030405060708090a0b0c0d0e0f
         #   → header=0x15 (route_type=1, payload_type=5)
@@ -432,7 +508,7 @@ jobs:
         # The #1486 and #2104 tests reach it via an explicit hash +
         # ?timeWindow=0 deep-link.
         run: |
-          sqlite3 test-fixtures/e2e-fixture.db <<'SQL'
+          sqlite3 "$E2E_SQLITE" <<'SQL'
           -- Sort the seeded row LAST in BOTH default packets views:
           --   • flat view sorts by transmissions.id DESC → id=0 puts it last
           --   • grouped view (#default for the packets page) sorts by
@@ -470,20 +546,11 @@ jobs:
             (-1000000,1,'rx',7.0,-88,0,'[]',CAST(strftime('%s','now') AS INTEGER),'[]');
           SQL
 
-      - name: Migrate fixture DB to current schema (#1287)
-        # Server now ASSERTs schema is migrated and refuses to start
-        # otherwise (cmd/server/main.go: dbschema.AssertReady). In prod
-        # the ingestor owns dbschema.Apply, but CI starts only the
-        # server against the committed e2e fixture — so we run the
-        # standalone migrate tool here to bring the fixture up to the
-        # required shape before the server boots.
-        run: ./corescope-migrate -db test-fixtures/e2e-fixture.db
-
       - name: 'Seed distinct observation bytes for #2104'
         # raw_hex exists only after migration. Keep the #1486 payload/hash
         # while encoding each observation's existing one-hop path.
         run: |
-          sqlite3 test-fixtures/e2e-fixture.db <<'SQL'
+          sqlite3 "$E2E_SQLITE" <<'SQL'
           UPDATE observations SET raw_hex = CASE observer_idx
             WHEN 1 THEN '1501aa0102030405060708090a0b0c0d0e0f'
             WHEN 2 THEN '1501bb0102030405060708090a0b0c0d0e0f'
@@ -492,13 +559,42 @@ jobs:
           SQL
 
       - name: Seed deterministic Path Inspector routes (#2060)
-        run: sqlite3 test-fixtures/e2e-fixture.db < test-fixtures/path-inspector.sql
+        run: sqlite3 "$E2E_SQLITE" < test-fixtures/path-inspector.sql
+
+      - name: Normalize fixture hashes using the runtime parser
+        run: |
+          cd cmd/migrate
+          go run ../../scripts/migrate-fixture-hashes.go "$E2E_SQLITE"
+
+      - name: Import fixture and grant restricted runtime roles
+        run: |
+          set -euo pipefail
+          for key in CORESCOPE_OWNER_PASSWORD CORESCOPE_READER_PASSWORD CORESCOPE_WRITER_PASSWORD CORESCOPE_ACCOUNTS_PASSWORD CORESCOPE_CHANNELS_PASSWORD; do
+            printf -v "$key" '%s' "$(openssl rand -hex 32)"
+            export "$key"
+            echo "::add-mask::$(printenv "$key")"
+          done
+          sh docker/postgres-init.sh
+          owner_url="postgresql://corescope_owner:$CORESCOPE_OWNER_PASSWORD@127.0.0.1:5432/corescope_telemetry?sslmode=disable"
+          owner_accounts="postgresql://corescope_owner:$CORESCOPE_OWNER_PASSWORD@127.0.0.1:5432/corescope_accounts?sslmode=disable"
+          CORESCOPE_DATABASE_URL="$owner_url" CORESCOPE_USERS_DATABASE_URL="$owner_accounts" \
+            ./corescope-migrate -offline -from-sqlite "$E2E_SQLITE" -state-dir "$RUNNER_TEMP/corescope-import"
+          for database in corescope_telemetry corescope_accounts; do
+            PGUSER=corescope_owner PGPASSWORD="$CORESCOPE_OWNER_PASSWORD" PGDATABASE="$database" \
+              psql -X -v ON_ERROR_STOP=1 -f docker/postgres-grants.sql
+          done
+          echo "CORESCOPE_READER_DATABASE_URL=postgresql://corescope_reader:$CORESCOPE_READER_PASSWORD@127.0.0.1:5432/corescope_telemetry?sslmode=disable" >> "$GITHUB_ENV"
+          echo "CORESCOPE_USERS_DATABASE_URL=postgresql://corescope_accounts:$CORESCOPE_ACCOUNTS_PASSWORD@127.0.0.1:5432/corescope_accounts?sslmode=disable" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/corescope-state"
+          # Retain the masked owner password for the later restore step only.
+          umask 077
+          printf '%s' "$CORESCOPE_OWNER_PASSWORD" > "$RUNNER_TEMP/corescope-e2e-owner-password"
 
       - name: Start Go server with fixture DB
         run: |
           fuser -k 13581/tcp 2>/dev/null || true
           sleep 1
-          ./corescope-server -port 13581 -db test-fixtures/e2e-fixture.db -public public-instrumented &
+          env -u PGPASSWORD -u PGUSER -u CORESCOPE_TEST_POSTGRES_URL ./corescope-server -port 13581 -state-dir "$RUNNER_TEMP/corescope-state" -public public-instrumented &
           echo $! > .server.pid
           for i in $(seq 1 30); do
             if curl -sf http://localhost:13581/api/healthz > /dev/null 2>&1; then
@@ -518,14 +614,12 @@ jobs:
           fuser -k 13582/tcp 2>/dev/null || true
           rm -rf /tmp/cs-um
           mkdir -p /tmp/cs-um
-          # Own copy of the (already migrated and seeded) fixture; fresh users.db every run.
-          cp test-fixtures/e2e-fixture.db /tmp/cs-um/on.db
+          # Shared read-only telemetry; the account writer has its own logical database.
           cat > /tmp/cs-um/config.json <<'JSON'
           {
             "port": 13582,
             "userManagement": {
               "enabled": true,
-              "dbPath": "/tmp/cs-um/users.db",
               "adminEmails": ["admin@e2e.test"],
               "publicBaseUrl": "http://localhost:13582",
               "mail": { "provider": "fake", "fromEmail": "noreply@e2e.test" },
@@ -534,7 +628,7 @@ jobs:
             }
           }
           JSON
-          ./corescope-server-e2e -config-dir /tmp/cs-um -port 13582 -db /tmp/cs-um/on.db -public public-instrumented &
+          env -u PGPASSWORD -u PGUSER -u CORESCOPE_TEST_POSTGRES_URL ./corescope-server-e2e -config-dir /tmp/cs-um -port 13582 -state-dir /tmp/cs-um -public public-instrumented &
           echo $! > .server-um.pid
           for i in $(seq 1 30); do
             if curl -sf http://localhost:13582/api/healthz > /dev/null 2>&1; then echo "UM server ready after ${i}s"; break; fi
@@ -695,6 +789,57 @@ jobs:
           suite 2 test-show-neighbors.js BASE_URL=$B
           suite 3 test-user-management-e2e.js BASE_URL=http://localhost:13582 BASE_URL_OFF=$B
 
+      - name: Restore native HTTP backups and verify browser sessions
+        if: matrix.shard == 3
+        run: |
+          set -euo pipefail
+          export E2E_BACKUP_DIR="$RUNNER_TEMP/corescope-http-backup"
+          export BASE_URL=http://localhost:13582
+          echo "=== E2E SUITE: test-postgres-backup-e2e.js capture ===" | tee -a e2e-output.txt
+          node tests/e2e/test-postgres-backup-e2e.js capture 2>&1 | tee -a e2e-output.txt
+          for pidfile in .server.pid .server-um.pid; do
+            pid=$(cat "$pidfile")
+            kill "$pid"
+            for attempt in $(seq 1 30); do
+              kill -0 "$pid" 2>/dev/null || break
+              sleep 1
+            done
+            ! kill -0 "$pid" 2>/dev/null || { echo 'Fixture server did not stop' >&2; exit 1; }
+          done
+          # Fresh databases, same deployment roles, no overwrite or role widening.
+          psql -X -v ON_ERROR_STOP=1 -d postgres <<'SQL'
+          CREATE DATABASE corescope_restore_telemetry OWNER corescope_owner TEMPLATE template0 ENCODING 'UTF8' LOCALE 'C';
+          CREATE DATABASE corescope_restore_accounts OWNER corescope_owner TEMPLATE template0 ENCODING 'UTF8' LOCALE 'C';
+          REVOKE ALL ON DATABASE corescope_restore_telemetry FROM PUBLIC;
+          REVOKE ALL ON DATABASE corescope_restore_accounts FROM PUBLIC;
+          GRANT CONNECT ON DATABASE corescope_restore_telemetry TO corescope_reader, corescope_writer;
+          GRANT CONNECT ON DATABASE corescope_restore_accounts TO corescope_accounts, corescope_channels;
+          SQL
+          for kind in telemetry accounts; do
+            PGUSER=corescope_owner PGPASSWORD="$(cat "$RUNNER_TEMP/corescope-e2e-owner-password")" \
+              pg_restore --no-owner --no-privileges --exit-on-error --single-transaction \
+              --dbname="corescope_restore_$kind" "$E2E_BACKUP_DIR/$kind.dump"
+            PGUSER=corescope_owner PGPASSWORD="$(cat "$RUNNER_TEMP/corescope-e2e-owner-password")" \
+              psql -X -v ON_ERROR_STOP=1 -d "corescope_restore_$kind" -f docker/postgres-grants.sql
+            PGUSER=corescope_owner PGPASSWORD="$(cat "$RUNNER_TEMP/corescope-e2e-owner-password")" \
+              psql -X -v ON_ERROR_STOP=1 -d "corescope_restore_$kind" -c 'ANALYZE'
+          done
+          export CORESCOPE_READER_DATABASE_URL="${CORESCOPE_READER_DATABASE_URL/\/corescope_telemetry/\/corescope_restore_telemetry}"
+          export CORESCOPE_USERS_DATABASE_URL="${CORESCOPE_USERS_DATABASE_URL/\/corescope_accounts/\/corescope_restore_accounts}"
+          env -u PGPASSWORD -u PGUSER -u CORESCOPE_TEST_POSTGRES_URL ./corescope-server -port 13581 -state-dir "$RUNNER_TEMP/corescope-state" -public public-instrumented &
+          echo $! > .server.pid
+          env -u PGPASSWORD -u PGUSER -u CORESCOPE_TEST_POSTGRES_URL ./corescope-server-e2e -config-dir /tmp/cs-um -port 13582 -state-dir /tmp/cs-um -public public-instrumented &
+          echo $! > .server-um.pid
+          for port in 13581 13582; do
+            for attempt in $(seq 1 30); do
+              curl -sf "http://localhost:$port/api/healthz" >/dev/null && break
+              [ "$attempt" -lt 30 ] || { echo 'Restored server did not become ready' >&2; exit 1; }
+              sleep 1
+            done
+          done
+          echo "=== E2E SUITE: test-postgres-backup-e2e.js verify ===" | tee -a e2e-output.txt
+          node tests/e2e/test-postgres-backup-e2e.js verify 2>&1 | tee -a e2e-output.txt
+
       # #1616: slide-over focus-restore flake-gate. Runs the slide-over
       # E2E 3 more times against the SAME backend instance (it already
       # ran once in the list above) so the Chromium-headless focus race
@@ -775,7 +920,7 @@ jobs:
   e2e-test:
     name: "🎭 Playwright E2E Tests"
     needs: [e2e-shard, changes]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: ${{ !cancelled() && needs.changes.outputs.code == 'true' && !(startsWith(github.ref, 'refs/tags/v') && inputs.images_published) }}
     steps:
       - name: Require every shard to have passed
@@ -830,7 +975,7 @@ jobs:
   # ───────────────────────────────────────────────────────────────
   # 3a. Two-arch image build — beside the tests, never publishes
   # ───────────────────────────────────────────────────────────────
-  # Since the SQLite driver became cgo, the container build depends on a zig
+  # The offline SQLite importer uses cgo, so the container build needs a zig
   # cross-toolchain and static musl linking. Builds both architectures and
   # actually runs the arm64 binaries under QEMU, on every event: for a PR it is
   # the only image check (the GHCR push below is push/tag-only, so without it
@@ -845,7 +990,7 @@ jobs:
   image-check:
     name: "🧱 Two-arch image build"
     needs: [changes]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: needs.changes.outputs.code == 'true' && !(startsWith(github.ref, 'refs/tags/v') && inputs.images_published)
     outputs:
       build_time: ${{ steps.meta.outputs.build_time }}
@@ -875,7 +1020,11 @@ jobs:
       # GHCR on its own runner. It rebuilt the same Dockerfile as the step
       # below for two minutes. Validating the compose file is what is left.
       - name: Validate staging compose file
-        run: docker compose -f "$STAGING_COMPOSE_FILE" -p corescope-staging config --quiet
+        run: |
+          for key in POSTGRES_ADMIN_PASSWORD CORESCOPE_OWNER_PASSWORD CORESCOPE_READER_PASSWORD CORESCOPE_WRITER_PASSWORD CORESCOPE_ACCOUNTS_PASSWORD CORESCOPE_CHANNELS_PASSWORD; do
+            export "$key=$(openssl rand -hex 32)"
+          done
+          docker compose -f "$STAGING_COMPOSE_FILE" -p corescope-staging config --quiet
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -897,26 +1046,50 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Load amd64 image for packaged Compose smoke (no publish)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          platforms: linux/amd64
+          tags: corescope-pg-smoke:${{ github.sha }}
+          build-args: |
+            APP_VERSION=${{ steps.meta.outputs.app_version }}
+            GIT_COMMIT=${{ steps.meta.outputs.git_commit }}
+            BUILD_TIME=${{ steps.meta.outputs.build_time }}
+          cache-from: type=gha
+
       - name: Smoke the arm64 binaries under QEMU
+        env:
+          APP_VERSION: ${{ steps.meta.outputs.app_version }}
+          GIT_COMMIT: ${{ steps.meta.outputs.git_commit }}
+          BUILD_TIME: ${{ steps.meta.outputs.build_time }}
         run: |
           set -e
           # Export the arm64 binaries so the runner's own `file` can confirm
           # they are static, then execute one under QEMU. Cheap: the build above
           # already populated the layer cache.
           docker buildx build . --platform linux/arm64 \
-            --build-arg APP_VERSION=smoke --cache-from type=gha \
+            --build-arg APP_VERSION="$APP_VERSION" \
+            --build-arg GIT_COMMIT="$GIT_COMMIT" \
+            --build-arg BUILD_TIME="$BUILD_TIME" --cache-from type=gha \
             --output type=local,dest=./arm64-image
-          for b in corescope-server corescope-ingestor corescope-decrypt; do
+          for b in corescope-server corescope-ingestor corescope-decrypt corescope-migrate; do
             file "./arm64-image/app/$b" | tee /dev/stderr | grep -q 'statically linked' \
               || { echo "::error::$b is not statically linked"; exit 1; }
             file "./arm64-image/app/$b" | grep -q 'ARM aarch64' \
               || { echo "::error::$b is not an arm64 binary"; exit 1; }
           done
-          docker run --rm --platform linux/arm64 \
-            -v "$PWD/arm64-image/app:/bin-under-test:ro" alpine:3.20 \
+          docker run --rm --platform linux/arm64 --network none \
+            -v "$PWD/arm64-image/app:/bin-under-test:ro" alpine:3.24 \
             /bin-under-test/corescope-decrypt --version
           rm -rf ./arm64-image
-          echo "arm64 static binaries run under QEMU ✅"
+          echo "All four arm64 binaries are static; decrypt --version ran under QEMU."
+
+      - name: Exercise packaged PostgreSQL Compose startup
+        timeout-minutes: 10
+        run: timeout --kill-after=150s 7m bash scripts/test-postgres-compose.sh "corescope-pg-smoke:$GITHUB_SHA"
 
   # ───────────────────────────────────────────────────────────────
   # 3b. Publish Docker Image — only after every test job passed
@@ -945,10 +1118,13 @@ jobs:
   # a skipped required check as passing. race-test is skipped when no ingestor
   # Go file changed, so for it skipped is accepted; a master push always runs it.
   build-and-publish:
+    permissions:
+      contents: read
+      packages: write
     name: "🏗️ Build & Publish Docker Image"
     needs: [go-test, race-test, e2e-test, image-check, changes]
-    runs-on: ubuntu-latest
-    if: ${{ !cancelled() && needs.changes.outputs.code == 'true' && !(startsWith(github.ref, 'refs/tags/v') && inputs.images_published) }}
+    runs-on: ubuntu-24.04
+    if: ${{ !cancelled() && needs.changes.outputs.code == 'true' && !(startsWith(github.ref, 'refs/tags/v') && inputs.images_published) && !inputs.postgres_benchmark }}
     steps:
       - name: Require every test job and the image check to have passed
         run: |
@@ -1022,49 +1198,57 @@ jobs:
   release-artifacts:
     name: "📦 Release Artifacts"
     needs: [go-test, changes]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
-    if: startsWith(github.ref, 'refs/tags/v') && needs.changes.outputs.code == 'true'
+    if: (startsWith(github.ref, 'refs/tags/v') && needs.changes.outputs.code == 'true') && !inputs.postgres_benchmark
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Set up Go 1.27
+      - name: Set up Go 1.27.2
         uses: actions/setup-go@v6
         with:
-          go-version: '1.27'
+          go-version: '1.27.2'
           cache-dependency-path: |
             cmd/decrypt/go.sum
-            internal/channel/go.sum
+            cmd/migrate/go.sum
+            internal/**/go.sum
 
-      # The SQLite driver is cgo now (github.com/mattn/go-sqlite3), so the Go
-      # toolchain alone cannot cross-compile these. zig cc is the C compiler
-      # that can target both architectures; musl makes the result static.
+      # The offline importer alone needs cgo and a cross C compiler.
       - name: Set up Zig
         uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
 
-      - name: Build corescope-decrypt (static, linux/amd64)
+      - name: Build static release tools for both architectures
         run: |
-          cd cmd/decrypt
-          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 CC="zig cc -target x86_64-linux-musl" go build -trimpath -tags netgo,osusergo,sqlite_omit_load_extension -ldflags="-s -w -extldflags '-static -Wl,-s' -X main.version=${{ github.ref_name }}" -o ../../corescope-decrypt-linux-amd64 .
-
-      - name: Build corescope-decrypt (static, linux/arm64)
-        run: |
-          cd cmd/decrypt
-          CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC="zig cc -target aarch64-linux-musl" go build -trimpath -tags netgo,osusergo,sqlite_omit_load_extension -ldflags="-s -w -extldflags '-static -Wl,-s' -X main.version=${{ github.ref_name }}" -o ../../corescope-decrypt-linux-arm64 .
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            case "$arch" in amd64) target=x86_64-linux-musl ;; arm64) target=aarch64-linux-musl ;; esac
+            (
+              cd cmd/decrypt
+              CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -tags netgo,osusergo \
+                -ldflags="-s -w -X main.version=$GITHUB_REF_NAME" -o "../../corescope-decrypt-linux-$arch" .
+            )
+            (
+              cd cmd/migrate
+              CGO_ENABLED=1 GOOS=linux GOARCH="$arch" CC="zig cc -target $target" \
+                go build -trimpath -tags netgo,osusergo,sqlite_omit_load_extension \
+                -ldflags="-s -w -extldflags '-static -Wl,-s'" -o "../../corescope-migrate-linux-$arch" .
+            )
+          done
 
       - name: Verify release binaries are static and runnable
         run: |
           set -e
-          for f in corescope-decrypt-linux-amd64 corescope-decrypt-linux-arm64; do
+          for f in corescope-{decrypt,migrate}-linux-{amd64,arm64}; do
             file "$f" | grep -q 'statically linked' || { echo "::error::$f is not statically linked"; exit 1; }
           done
           # amd64 runs natively on the runner; arm64 is only checked structurally
           # here (the container image job exercises arm64 under QEMU).
           ./corescope-decrypt-linux-amd64 --version
+          ./corescope-migrate-linux-amd64 -help
 
       - name: Locate the release notes for this tag
         id: notes
@@ -1101,6 +1285,8 @@ jobs:
           files: |
             corescope-decrypt-linux-amd64
             corescope-decrypt-linux-arm64
+            corescope-migrate-linux-amd64
+            corescope-migrate-linux-arm64
 
   # ───────────────────────────────────────────────────────────────
   # 4b. Deploy Staging (master only)
@@ -1125,7 +1311,8 @@ jobs:
     # variable is set while the runner is still missing the job fails in ten
     # minutes rather than blocking the branch again.
     if: |
-      vars.ENABLE_STAGING_DEPLOY == 'true'
+      !inputs.postgres_benchmark
+      && vars.ENABLE_STAGING_DEPLOY == 'true'
       && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
       && github.ref == 'refs/heads/master'
     needs: [build-and-publish]
@@ -1216,14 +1403,14 @@ jobs:
   # ───────────────────────────────────────────────────────────────
   publish:
     name: "📝 Publish Badges & Summary"
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && !inputs.postgres_benchmark
     # Was needs: [deploy]. The badges are built from the go-test and e2e-test
     # artifacts and never needed the deploy step; depending on it meant the
     # coverage badges stopped updating whenever the self-hosted runner was
     # unavailable. build-and-publish already transitively requires both test
     # jobs, so ordering is unchanged.
     needs: [build-and-publish]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v5

@@ -13,8 +13,26 @@
 # deploy that keeps the built-in broker, see
 # `docker-compose.example.yml`.
 
+name: corescope
+
 services:
+  postgres:
+    extends:
+      file: docker/postgres.compose.yml
+      service: postgres
+    volumes:
+      - ${PROD_POSTGRES_DATA_DIR:-~/corescope-postgres}:/var/lib/postgresql
+  bootstrap:
+    extends:
+      file: docker/postgres.compose.yml
+      service: bootstrap
+    image: corescope:latest
+    volumes:
+      - ${PROD_DATA_DIR:-~/meshcore-data}:/app/data:ro
   prod:
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
     build:
       context: .
       args:
@@ -36,6 +54,11 @@ services:
       - ${PROD_DATA_DIR:-~/meshcore-data}:/app/data
       - caddy-data:/data/caddy
     environment:
+      - CORESCOPE_STATE_DIR=/app/data
+      - CORESCOPE_READER_DATABASE_URL=postgresql://corescope_reader:${CORESCOPE_READER_PASSWORD:?Set CORESCOPE_READER_PASSWORD}@postgres/corescope_telemetry?sslmode=disable
+      - CORESCOPE_WRITER_DATABASE_URL=postgresql://corescope_writer:${CORESCOPE_WRITER_PASSWORD:?Set CORESCOPE_WRITER_PASSWORD}@postgres/corescope_telemetry?sslmode=disable
+      - CORESCOPE_USERS_DATABASE_URL=postgresql://corescope_accounts:${CORESCOPE_ACCOUNTS_PASSWORD:?Set CORESCOPE_ACCOUNTS_PASSWORD}@postgres/corescope_accounts?sslmode=disable
+      - CORESCOPE_APPROVED_CHANNELS_DATABASE_URL=postgresql://corescope_channels:${CORESCOPE_CHANNELS_PASSWORD:?Set CORESCOPE_CHANNELS_PASSWORD}@postgres/corescope_accounts?sslmode=disable
       - NODE_ENV=production
       - DISABLE_MOSQUITTO=true
     healthcheck:

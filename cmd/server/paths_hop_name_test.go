@@ -29,14 +29,14 @@ func TestHandleNodePaths_HopName_CanonicalPathShowsTarget_1144(t *testing.T) {
 	siblingPK := "37bb000011112222" // has GPS — biased resolver picks this without fix
 
 	mustExec(t, db, `INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES (?, 'CJS SF Mission', 'repeater', 0, 0, ?, '2026-01-01', 1)`, targetPK, recent)
+		VALUES ($1, 'CJS SF Mission', 'repeater', 0, 0, $2, '2026-01-01', 1)`, targetPK, recent)
 	mustExec(t, db, `INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES (?, 'Templeton Hills', 'repeater', 35.5, -120.7, ?, '2026-01-01', 1)`, siblingPK, recent)
+		VALUES ($1, 'Templeton Hills', 'repeater', 35.5, -120.7, $2, '2026-01-01', 1)`, siblingPK, recent)
 
 	// TX: resolved_path = [targetPK] → canonical path (Option A) → lookupNode(targetPK)
-	mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (1, 'AA', 'hash1144', ?)`, recent)
+	mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (1, 'AA', 'hash1144', $1)`, recent)
 	mustExec(t, db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)
-		VALUES (1, NULL, '["37"]', ?, ?)`, recentEpoch, `["`+targetPK+`"]`)
+		VALUES (1, NULL, '["37"]', $1, $2)`, recentEpoch, `["`+targetPK+`"]`)
 
 	cfg := &Config{Port: 3000}
 	hub := NewHub()

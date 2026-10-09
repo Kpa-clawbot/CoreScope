@@ -3,15 +3,18 @@
  *   BASE_URL      server with userManagement on + fake mailer (-tags e2etest build)
  *   BASE_URL_OFF  the regular fixture server (feature off)
  *
- * Local run (never point the servers at the tracked fixture; migrate a copy):
- *   cp test-fixtures/e2e-fixture.db "$TMP/on.db"; cp test-fixtures/e2e-fixture.db "$TMP/off.db"
- *   corescope-migrate -db "$TMP/on.db"; corescope-migrate -db "$TMP/off.db"
+ * Local run: prepare/freshen a disposable copy of the tracked SQLite fixture,
+ * apply the CI synthetic seeds and migrate-fixture-hashes.go, then import it
+ * with corescope-migrate -offline -from-sqlite <copy>. Use owner URLs only for
+ * migration; grant a read-only telemetry role and a separate account writer.
  *   (cd cmd/server && go build -o ../../corescope-server . && go build -tags e2etest -o ../../corescope-server-e2e .)
  *   # config.json for the on-server (in $CFGDIR): port 13582, userManagement {enabled: true,
- *   #   dbPath "users.db", adminEmails ["admin@e2e.test"], publicBaseUrl "http://localhost:13582",
+ *   #   adminEmails ["admin@e2e.test"], publicBaseUrl "http://localhost:13582",
  *   #   mail {provider "fake", fromEmail "noreply@e2e.test"}, channelProposals {enabled: true}, notifications {enabled: true}}
- *   corescope-server -port 13581 -db "$TMP/off.db" -public public &
- *   (cd "$CFGDIR" && corescope-server-e2e -config-dir . -port 13582 -db "$TMP/on.db" -public <repo>/public) &
+ *   # Set CORESCOPE_READER_DATABASE_URL for both processes and
+ *   # CORESCOPE_USERS_DATABASE_URL for the on-server only (fresh account DB).
+ *   corescope-server -port 13581 -state-dir "$TMP/off-state" -public public &
+ *   (cd "$CFGDIR" && corescope-server-e2e -config-dir . -port 13582 -state-dir "$TMP/on-state" -public <repo>/public) &
  *   BASE_URL=http://localhost:13582 BASE_URL_OFF=http://localhost:13581 node tests/e2e/test-user-management-e2e.js
  * Set CHROMIUM_PATH to a Chrome/Chromium binary if Playwright's own is not installed.
  */

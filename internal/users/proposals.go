@@ -3,6 +3,7 @@ package users
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -116,8 +117,13 @@ func (s *Store) Propose(kind, subject string, userID int64, lim ProposalLimits) 
 		return nil, err
 	}
 	defer tx.Rollback()
+	// ponytail: serialize the small proposal queue across processes; replace
+	// with per-kind locks only if measured proposal throughput requires it.
+	if _, err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtextextended(current_schema(),7289041403))`); err != nil {
+		return nil, err
+	}
 	now := unix(s.now())
-	cur, err := scanProposal(tx.QueryRow(`SELECT `+proposalCols+` FROM proposals WHERE kind = ? AND subject = ?`, kind, subject))
+	cur, err := scanProposal(tx.QueryRow(`SELECT `+proposalCols+` FROM proposals WHERE kind = $1 AND subject = $2`, kind, subject))
 	switch {
 	case errors.Is(err, ErrNotFound):
 		cur = nil
@@ -132,7 +138,7 @@ func (s *Store) Propose(kind, subject string, userID int64, lim ProposalLimits) 
 	}
 	if lim.PerUserPerDay > 0 {
 		var n int
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM proposals WHERE proposer_id = ? AND created_at > ?`,
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM proposals WHERE proposer_id = $1 AND created_at > $2`,
 			userID, now-secs(24*time.Hour)).Scan(&n); err != nil {
 			return nil, err
 		}
@@ -151,22 +157,19 @@ func (s *Store) Propose(kind, subject string, userID int64, lim ProposalLimits) 
 	}
 	var id int64
 	if cur == nil {
-		res, err := tx.Exec(`INSERT INTO proposals (kind, subject, status, proposer_id, created_at) VALUES (?, ?, 'pending', ?, ?)`,
-			kind, subject, userID, now)
+		err := tx.QueryRow(`INSERT INTO proposals (kind, subject, status, proposer_id, created_at) VALUES ($1, $2, 'pending', $3, $4) RETURNING id`,
+			kind, subject, userID, now).Scan(&id)
 		if err != nil {
-			return nil, err
-		}
-		if id, err = res.LastInsertId(); err != nil {
 			return nil, err
 		}
 	} else {
 		id = cur.ID
-		if _, err := tx.Exec(`UPDATE proposals SET status = 'pending', proposer_id = ?, reviewer_id = NULL, note = '',
-			created_at = ?, decided_at = NULL WHERE id = ?`, userID, now, id); err != nil {
+		if _, err := tx.Exec(`UPDATE proposals SET status = 'pending', proposer_id = $1, reviewer_id = NULL, note = '',
+			created_at = $2, decided_at = NULL WHERE id = $3`, userID, now, id); err != nil {
 			return nil, err
 		}
 	}
-	p, err := scanProposal(tx.QueryRow(`SELECT `+proposalCols+` FROM proposals WHERE id = ?`, id))
+	p, err := scanProposal(tx.QueryRow(`SELECT `+proposalCols+` FROM proposals WHERE id = $1`, id))
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +186,12 @@ func (s *Store) Decide(id int64, action ProposalAction, reviewerID int64, note s
 		return nil, err
 	}
 	defer tx.Rollback()
-	p, err := scanProposal(tx.QueryRow(`SELECT `+proposalCols+` FROM proposals WHERE id = ?`, id))
+	// ponytail: serialize the small proposal queue across processes; replace
+	// with per-kind locks only if measured proposal throughput requires it.
+	if _, err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtextextended(current_schema(),7289041403))`); err != nil {
+		return nil, err
+	}
+	p, err := scanProposal(tx.QueryRow(`SELECT `+proposalCols+` FROM proposals WHERE id = $1`, id))
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +208,7 @@ func (s *Store) Decide(id int64, action ProposalAction, reviewerID int64, note s
 	}
 	if to == ProposalApproved && maxApproved > 0 {
 		var n int
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM proposals WHERE kind = ? AND status = 'approved'`, p.Kind).Scan(&n); err != nil {
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM proposals WHERE kind = $1 AND status = 'approved'`, p.Kind).Scan(&n); err != nil {
 			return nil, err
 		}
 		if n >= maxApproved {
@@ -208,7 +216,7 @@ func (s *Store) Decide(id int64, action ProposalAction, reviewerID int64, note s
 		}
 	}
 	now := s.now()
-	if _, err := tx.Exec(`UPDATE proposals SET status = ?, reviewer_id = ?, note = ?, decided_at = ? WHERE id = ?`,
+	if _, err := tx.Exec(`UPDATE proposals SET status = $1, reviewer_id = $2, note = $3, decided_at = $4 WHERE id = $5`,
 		string(to), reviewerID, note, unix(now), id); err != nil {
 		return nil, err
 	}
@@ -225,14 +233,14 @@ func (s *Store) ListProposals(f ProposalFilter) ([]Proposal, error) {
 	q := `SELECT ` + proposalCols + ` FROM proposals WHERE 1=1`
 	var args []any
 	if f.Status != "" {
-		q += ` AND status = ?`
+		q += fmt.Sprintf(` AND status = $%d`, len(args)+1)
 		args = append(args, string(f.Status))
 	}
 	if f.Kind != "" {
-		q += ` AND kind = ?`
+		q += fmt.Sprintf(` AND kind = $%d`, len(args)+1)
 		args = append(args, f.Kind)
 	}
-	q += ` ORDER BY created_at DESC, id DESC LIMIT ?`
+	q += fmt.Sprintf(` ORDER BY created_at DESC, id DESC LIMIT $%d`, len(args)+1)
 	args = append(args, ProposalListMax)
 	return s.queryProposals(q, args...)
 }
@@ -248,9 +256,9 @@ func (s *Store) AllProposalsByUser(userID int64) ([]Proposal, error) {
 	return s.proposalsByUser(userID, noLimit)
 }
 
-func (s *Store) proposalsByUser(userID int64, limit int) ([]Proposal, error) {
-	return s.queryProposals(`SELECT `+proposalCols+` FROM proposals WHERE proposer_id = ?
-		ORDER BY created_at DESC, id DESC LIMIT ?`, userID, limit)
+func (s *Store) proposalsByUser(userID int64, limit any) ([]Proposal, error) {
+	return s.queryProposals(`SELECT `+proposalCols+` FROM proposals WHERE proposer_id = $1
+		ORDER BY created_at DESC, id DESC LIMIT $2`, userID, limit)
 }
 
 func (s *Store) queryProposals(q string, args ...any) ([]Proposal, error) {
@@ -274,10 +282,10 @@ func (s *Store) queryProposals(q string, args ...any) ([]Proposal, error) {
 // first, at most limit (0 = all). Never nil. cmd/ingestor runs the same
 // query as raw SQL (see ingestorApprovedQuery in proposals_test.go).
 func (s *Store) ApprovedSubjects(kind string, limit int) ([]string, error) {
-	q := `SELECT subject FROM proposals WHERE kind = ? AND status = 'approved' ORDER BY decided_at, id`
+	q := `SELECT subject FROM proposals WHERE kind = $1 AND status = 'approved' ORDER BY decided_at, id`
 	args := []any{kind}
 	if limit > 0 {
-		q += ` LIMIT ?`
+		q += ` LIMIT $2`
 		args = append(args, limit)
 	}
 	rows, err := s.db.Query(q, args...)
@@ -299,7 +307,7 @@ func (s *Store) ApprovedSubjects(kind string, limit int) ([]string, error) {
 // PruneProposals deletes rejected and revoked proposals decided more than
 // maxAge ago. Pending and approved rows are kept however old they are.
 func (s *Store) PruneProposals(maxAge time.Duration) (int64, error) {
-	res, err := s.db.Exec(`DELETE FROM proposals WHERE status IN ('rejected','revoked') AND decided_at < ?`,
+	res, err := s.db.Exec(`DELETE FROM proposals WHERE status IN ('rejected','revoked') AND decided_at < $1`,
 		unix(s.now())-secs(maxAge))
 	if err != nil {
 		return 0, err

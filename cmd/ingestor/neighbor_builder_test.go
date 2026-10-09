@@ -21,7 +21,7 @@ func TestNeighborEdgesBuilderUpsertsFromObservations(t *testing.T) {
 	// Open via the ingestor's normal opener so applySchema and
 	// dbschema.Apply both run (the builder requires neighbor_edges +
 	// observers.iata etc.).
-	store, err := OpenStore(dbPath)
+	store, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestNeighborEdgesBuilderUpsertsFromObservations(t *testing.T) {
 
 	// Seed two nodes whose pubkey prefixes will be used as hops.
 	if _, err := store.db.Exec(
-		`INSERT INTO nodes (public_key, name) VALUES (?, ?), (?, ?)`,
+		`INSERT INTO nodes (public_key, name) VALUES ($1, $2), ($3, $4)`,
 		"aaaaaaaaaa", "from-node",
 		"bbbbbbbbbb", "first-hop",
 	); err != nil {
@@ -38,31 +38,31 @@ func TestNeighborEdgesBuilderUpsertsFromObservations(t *testing.T) {
 
 	// Seed one observer.
 	if _, err := store.db.Exec(
-		`INSERT INTO observers (id, name) VALUES (?, ?)`,
+		`INSERT INTO observers (id, name) VALUES ($1, $2)`,
 		"obs-1", "observer-1",
 	); err != nil {
 		t.Fatal(err)
 	}
 	var obsRowid int64
-	if err := store.db.QueryRow(`SELECT rowid FROM observers WHERE id = ?`, "obs-1").Scan(&obsRowid); err != nil {
+	if err := store.db.QueryRow(`SELECT rowid FROM observers WHERE id = $1`, "obs-1").Scan(&obsRowid); err != nil {
 		t.Fatal(err)
 	}
 
 	// Insert one ADVERT transmission with from_pubkey = aaaaa…
-	res, err := store.db.Exec(
+	var txID int64
+	err = store.db.QueryRow(
 		`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, from_pubkey)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
 		"", "h1", "2026-01-01T00:00:00Z", 0, payloadADVERT, 0, "{}", "aaaaaaaaaa",
-	)
+	).Scan(&txID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	txID, _ := res.LastInsertId()
 
 	// Insert one observation whose path[0] = "bb" (2-hex prefix unique
 	// to bbbbb… in the nodes table). Expected edge: a↔b.
 	if _, err := store.db.Exec(
-		`INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp) VALUES ($1, $2, $3, $4)`,
 		txID, obsRowid, `["bb"]`, int64(1735689600),
 	); err != nil {
 		t.Fatal(err)
@@ -77,7 +77,7 @@ func TestNeighborEdgesBuilderUpsertsFromObservations(t *testing.T) {
 	}
 
 	var got int
-	if err := store.db.QueryRow(`SELECT COUNT(*) FROM neighbor_edges WHERE node_a = ? AND node_b = ?`, "aaaaaaaaaa", "bbbbbbbbbb").Scan(&got); err != nil {
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM neighbor_edges WHERE node_a = $1 AND node_b = $2`, "aaaaaaaaaa", "bbbbbbbbbb").Scan(&got); err != nil {
 		t.Fatal(err)
 	}
 	if got != 1 {
@@ -97,14 +97,14 @@ func TestNeighborEdgesBuilderUpsertsFromAnonReqEphemeralPubKey(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "build.db")
 
-	store, err := OpenStore(dbPath)
+	store, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
 	defer store.Close()
 
 	if _, err := store.db.Exec(
-		`INSERT INTO nodes (public_key, name) VALUES (?, ?), (?, ?)`,
+		`INSERT INTO nodes (public_key, name) VALUES ($1, $2), ($3, $4)`,
 		"aaaaaaaaaa", "sender",
 		"bbbbbbbbbb", "first-hop",
 	); err != nil {
@@ -112,31 +112,31 @@ func TestNeighborEdgesBuilderUpsertsFromAnonReqEphemeralPubKey(t *testing.T) {
 	}
 
 	if _, err := store.db.Exec(
-		`INSERT INTO observers (id, name) VALUES (?, ?)`,
+		`INSERT INTO observers (id, name) VALUES ($1, $2)`,
 		"obs-1", "observer-1",
 	); err != nil {
 		t.Fatal(err)
 	}
 	var obsRowid int64
-	if err := store.db.QueryRow(`SELECT rowid FROM observers WHERE id = ?`, "obs-1").Scan(&obsRowid); err != nil {
+	if err := store.db.QueryRow(`SELECT rowid FROM observers WHERE id = $1`, "obs-1").Scan(&obsRowid); err != nil {
 		t.Fatal(err)
 	}
 
 	// ANON_REQ transmission: from_pubkey left NULL (as real ingest does —
 	// only ADVERT populates it at write time), sender identity carried in
 	// decoded_json.ephemeralPubKey instead.
-	res, err := store.db.Exec(
+	var txID int64
+	err = store.db.QueryRow(
 		`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
 		"", "h2", "2026-01-01T00:00:00Z", 0, payloadAnonReq, 0, `{"ephemeralPubKey":"aaaaaaaaaa"}`,
-	)
+	).Scan(&txID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	txID, _ := res.LastInsertId()
 
 	if _, err := store.db.Exec(
-		`INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp) VALUES ($1, $2, $3, $4)`,
 		txID, obsRowid, `["bb"]`, int64(1735689600),
 	); err != nil {
 		t.Fatal(err)
@@ -151,7 +151,7 @@ func TestNeighborEdgesBuilderUpsertsFromAnonReqEphemeralPubKey(t *testing.T) {
 	}
 
 	var got int
-	if err := store.db.QueryRow(`SELECT COUNT(*) FROM neighbor_edges WHERE node_a = ? AND node_b = ?`, "aaaaaaaaaa", "bbbbbbbbbb").Scan(&got); err != nil {
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM neighbor_edges WHERE node_a = $1 AND node_b = $2`, "aaaaaaaaaa", "bbbbbbbbbb").Scan(&got); err != nil {
 		t.Fatal(err)
 	}
 	if got != 1 {
@@ -169,14 +169,14 @@ func TestNeighborEdgesBuilderExcludesOtherNonAdvertTypes(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "build.db")
 
-	store, err := OpenStore(dbPath)
+	store, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
 	defer store.Close()
 
 	if _, err := store.db.Exec(
-		`INSERT INTO nodes (public_key, name) VALUES (?, ?), (?, ?)`,
+		`INSERT INTO nodes (public_key, name) VALUES ($1, $2), ($3, $4)`,
 		"aaaaaaaaaa", "sender",
 		"bbbbbbbbbb", "first-hop",
 	); err != nil {
@@ -184,29 +184,29 @@ func TestNeighborEdgesBuilderExcludesOtherNonAdvertTypes(t *testing.T) {
 	}
 
 	if _, err := store.db.Exec(
-		`INSERT INTO observers (id, name) VALUES (?, ?)`,
+		`INSERT INTO observers (id, name) VALUES ($1, $2)`,
 		"obs-1", "observer-1",
 	); err != nil {
 		t.Fatal(err)
 	}
 	var obsRowid int64
-	if err := store.db.QueryRow(`SELECT rowid FROM observers WHERE id = ?`, "obs-1").Scan(&obsRowid); err != nil {
+	if err := store.db.QueryRow(`SELECT rowid FROM observers WHERE id = $1`, "obs-1").Scan(&obsRowid); err != nil {
 		t.Fatal(err)
 	}
 
 	const payloadREQ = 2
-	res, err := store.db.Exec(
+	var txID int64
+	err = store.db.QueryRow(
 		`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, from_pubkey)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
 		"", "h3", "2026-01-01T00:00:00Z", 0, payloadREQ, 0, "{}", "aaaaaaaaaa",
-	)
+	).Scan(&txID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	txID, _ := res.LastInsertId()
 
 	if _, err := store.db.Exec(
-		`INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp) VALUES ($1, $2, $3, $4)`,
 		txID, obsRowid, `["bb"]`, int64(1735689600),
 	); err != nil {
 		t.Fatal(err)
@@ -217,7 +217,7 @@ func TestNeighborEdgesBuilderExcludesOtherNonAdvertTypes(t *testing.T) {
 	}
 
 	var got int
-	if err := store.db.QueryRow(`SELECT COUNT(*) FROM neighbor_edges WHERE node_a = ? AND node_b = ?`, "aaaaaaaaaa", "bbbbbbbbbb").Scan(&got); err != nil {
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM neighbor_edges WHERE node_a = $1 AND node_b = $2`, "aaaaaaaaaa", "bbbbbbbbbb").Scan(&got); err != nil {
 		t.Fatal(err)
 	}
 	if got != 0 {
@@ -240,30 +240,30 @@ func trustAllPrefixes() *packetpath.TrustConfig {
 func seedTrustFixture(t *testing.T, store *Store, hop string) {
 	t.Helper()
 	if _, err := store.db.Exec(
-		`INSERT INTO nodes (public_key, name) VALUES (?, ?), (?, ?)`,
+		`INSERT INTO nodes (public_key, name) VALUES ($1, $2), ($3, $4)`,
 		"aaaaaaaaaa", "from-node",
 		"bbbbbbbbbb", "first-hop",
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec(`INSERT INTO observers (id, name) VALUES (?, ?)`, "obs-1", "observer-1"); err != nil {
+	if _, err := store.db.Exec(`INSERT INTO observers (id, name) VALUES ($1, $2)`, "obs-1", "observer-1"); err != nil {
 		t.Fatal(err)
 	}
 	var obsRowid int64
-	if err := store.db.QueryRow(`SELECT rowid FROM observers WHERE id = ?`, "obs-1").Scan(&obsRowid); err != nil {
+	if err := store.db.QueryRow(`SELECT rowid FROM observers WHERE id = $1`, "obs-1").Scan(&obsRowid); err != nil {
 		t.Fatal(err)
 	}
-	res, err := store.db.Exec(
+	var txID int64
+	err := store.db.QueryRow(
 		`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, from_pubkey)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
 		"", "h1", "2026-01-01T00:00:00Z", 0, payloadADVERT, 0, "{}", "aaaaaaaaaa",
-	)
+	).Scan(&txID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	txID, _ := res.LastInsertId()
 	if _, err := store.db.Exec(
-		`INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp) VALUES ($1, $2, $3, $4)`,
 		txID, obsRowid, `["`+hop+`"]`, int64(1735689600),
 	); err != nil {
 		t.Fatal(err)
@@ -279,7 +279,7 @@ func seedTrustFixture(t *testing.T, store *Store, hop string) {
 // one byte) a later-joining repeater sharing that byte turns today's
 // "unique" resolution into a wrong edge.
 func TestNeighborEdgesBuilderPathTrustExcludesOneByte(t *testing.T) {
-	store, err := OpenStore(filepath.Join(t.TempDir(), "trust1.db"))
+	store, err := openPostgresTestStore(t, filepath.Join(t.TempDir(), "trust1.db"))
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestNeighborEdgesBuilderPathTrustExcludesOneByte(t *testing.T) {
 
 	var got int
 	if err := store.db.QueryRow(
-		`SELECT COUNT(*) FROM neighbor_edges WHERE node_a = ? AND node_b = ?`,
+		`SELECT COUNT(*) FROM neighbor_edges WHERE node_a = $1 AND node_b = $2`,
 		"aaaaaaaaaa", "bbbbbbbbbb").Scan(&got); err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestNeighborEdgesBuilderPathTrustExcludesOneByte(t *testing.T) {
 // so the threshold narrows the evidence base rather than disabling the
 // builder.
 func TestNeighborEdgesBuilderPathTrustAllowsTwoByte(t *testing.T) {
-	store, err := OpenStore(filepath.Join(t.TempDir(), "trust2.db"))
+	store, err := openPostgresTestStore(t, filepath.Join(t.TempDir(), "trust2.db"))
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -324,7 +324,7 @@ func TestNeighborEdgesBuilderPathTrustAllowsTwoByte(t *testing.T) {
 
 	var got int
 	if err := store.db.QueryRow(
-		`SELECT COUNT(*) FROM neighbor_edges WHERE node_a = ? AND node_b = ?`,
+		`SELECT COUNT(*) FROM neighbor_edges WHERE node_a = $1 AND node_b = $2`,
 		"aaaaaaaaaa", "bbbbbbbbbb").Scan(&got); err != nil {
 		t.Fatal(err)
 	}

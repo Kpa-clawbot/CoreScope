@@ -1,20 +1,19 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"sync/atomic"
 	"time"
 
 	"github.com/meshcore-analyzer/channel"
+	"github.com/meshcore-analyzer/pgutil"
 )
 
 // Approved hashtag channels (docs/specs/2026-10-07-channel-proposals-design.md).
-// The server owns users.db; the ingestor only reads it, read-only, with raw
+// The server owns account data; the ingestor only reads its approved view
 // SQL, once per approvedChannelsRefresh, and never writes it (AGENTS.md,
 // read/write separation).
 
@@ -22,9 +21,9 @@ const approvedChannelsRefresh = time.Minute
 
 // approvedChannelsQuery is pinned in internal/users/proposals_test.go
 // (ingestorApprovedQuery), which checks it against ApprovedSubjects.
-const approvedChannelsQuery = `SELECT subject FROM proposals WHERE kind = 'hashtag_channel' AND status = 'approved' ORDER BY decided_at, id LIMIT ?`
+const approvedChannelsQuery = `SELECT subject FROM approved_channels WHERE kind = 'hashtag_channel' ORDER BY decided_at, id LIMIT $1`
 
-var errUsersDBMissing = errors.New("users.db not found")
+var errUsersDBMissing = errors.New("approved channel database URL is not configured")
 
 // channelKeySet hands each message the current channel key map. Snapshots
 // are never mutated after they are stored, so decoders read them without a
@@ -53,7 +52,7 @@ func (s *channelKeySet) Snapshot() map[string]string { return *s.cur.Load() }
 
 // refresh re-reads the approved names and swaps in configured + approved.
 // A failed read keeps the current snapshot: only a successful read changes
-// the set, so a locked or missing users.db never drops a key.
+// the set, so an unavailable or incomplete account store never drops a key.
 func (s *channelKeySet) refresh() {
 	names, err := s.readApproved()
 	if err != nil {
@@ -64,7 +63,7 @@ func (s *channelKeySet) refresh() {
 		return
 	}
 	if s.failing {
-		log.Printf("[channels] approved channels readable again from %s", s.path)
+		log.Print("[channels] approved channels readable again")
 		s.failing = false
 	}
 	next, added := mergeApprovedKeys(s.configured, names)
@@ -77,20 +76,47 @@ func (s *channelKeySet) refresh() {
 
 func (s *channelKeySet) readApproved() ([]string, error) {
 	if s.db == nil {
-		if _, err := os.Stat(s.path); err != nil {
-			if os.IsNotExist(err) {
-				return nil, fmt.Errorf("%w at %s", errUsersDBMissing, s.path)
-			}
-			return nil, err
+		if s.path == "" {
+			return nil, errUsersDBMissing
 		}
-		db, err := sql.Open("sqlite3", usersDBReadOnlyDSN(s.path))
+		db, err := pgutil.Open(s.path, true)
 		if err != nil {
 			return nil, err
+		}
+		if err = pgutil.AssertReadOnly(db); err != nil {
+			db.Close()
+			return nil, err
+		}
+		var credentialAccess bool
+		if err = db.QueryRow(`SELECT EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relkind IN ('r','p','m','f') AND c.relname <> 'corescope_schema' AND has_table_privilege(c.oid,'SELECT'))`).Scan(&credentialAccess); err != nil {
+			db.Close()
+			return nil, err
+		}
+		if credentialAccess {
+			db.Close()
+			return nil, errors.New("approved-channel reader has account-table access")
 		}
 		db.SetMaxOpenConns(1)
 		s.db = db
 	}
-	rows, err := s.db.Query(approvedChannelsQuery, s.max)
+	// Read the gate and projection in one snapshot. The readiness marker is the
+	// only base table this role can read; an import must not expose partial keys.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var version int
+	var ready bool
+	if err := tx.QueryRowContext(ctx, `SELECT version,ready FROM corescope_schema WHERE kind='accounts'`).Scan(&version, &ready); err != nil {
+		return nil, errors.New("approved-channel account schema is not initialized")
+	}
+	if version != 1 || !ready {
+		return nil, errors.New("approved-channel account schema is incomplete or unsupported")
+	}
+	rows, err := tx.QueryContext(ctx, approvedChannelsQuery, s.max)
 	if err != nil {
 		return nil, err
 	}
@@ -103,13 +129,16 @@ func (s *channelKeySet) readApproved() ([]string, error) {
 		}
 		out = append(out, name)
 	}
-	return out, rows.Err()
-}
-
-// usersDBReadOnlyDSN opens users.db read-only: this process must never
-// take a write lock on the server's file.
-func usersDBReadOnlyDSN(path string) string {
-	return "file:" + path + "?mode=ro&_busy_timeout=5000"
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // mergeApprovedKeys returns a new map: the configured keys plus a derived key
@@ -143,12 +172,7 @@ func (s *channelKeySet) Close() {
 	}
 }
 
-// logApprovedChannelsSource logs the users.db file the approved channels are
-// read from, resolved to an absolute path so a relative one shows which file
-// it means; the path as given when it cannot be resolved.
-func logApprovedChannelsSource(path string) {
-	if abs, err := filepath.Abs(path); err == nil {
-		path = abs
-	}
-	log.Printf("[proposals] reading approved channels from %s", path)
+// Connection strings contain credentials and must never appear in logs.
+func logApprovedChannelsSource(databaseURL string) {
+	log.Print("[proposals] reading approved channels with restricted PostgreSQL reader")
 }

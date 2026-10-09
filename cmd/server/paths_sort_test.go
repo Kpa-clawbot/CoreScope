@@ -39,7 +39,7 @@ func TestHandleNodePaths_SortByRecency_1145(t *testing.T) {
 	// Only the target node needs to be in the nodes table.
 	// Relay pubkeys appear only in resolved_path; they don't need a nodes row.
 	mustExec(t, db, `INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES (?, 'Target', 'repeater', 0, 0, '2026-05-01T00:00:00Z', '2026-01-01T00:00:00Z', 1)`, targetPK)
+		VALUES ($1, 'Target', 'repeater', 0, 0, '2026-05-01T00:00:00Z', '2026-01-01T00:00:00Z', 1)`, targetPK)
 
 	// -- Path A (via relay1): 3 txs, last seen 2026-01-03 → group sig "relay1PK→targetPK" --
 	for txID, ts := range map[int]string{
@@ -47,17 +47,17 @@ func TestHandleNodePaths_SortByRecency_1145(t *testing.T) {
 		2: "2026-01-02T00:00:00Z",
 		3: "2026-01-03T00:00:00Z",
 	} {
-		mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (?, 'AA', ?, ?)`,
+		mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES ($1, 'AA', $2, $3)`,
 			txID, "hashA"+string(rune('0'+txID)), ts)
 		mustExec(t, db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)
-			VALUES (?, NULL, '["11", "aa"]', ?, ?)`,
+			VALUES ($1, NULL, '["11", "aa"]', $2, $3)`,
 			txID, epoch(ts), `["`+relay1PK+`", "`+targetPK+`"]`)
 	}
 
 	// -- Path B (via relay2): 1 tx, last seen 2026-05-01 → group sig "relay2PK→targetPK" --
 	mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (4, 'BB', 'hashB1', '2026-05-01T00:00:00Z')`)
 	mustExec(t, db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)
-		VALUES (4, NULL, '["22", "aa"]', ?, ?)`,
+		VALUES (4, NULL, '["22", "aa"]', $1, $2)`,
 		epoch("2026-05-01T00:00:00Z"), `["`+relay2PK+`", "`+targetPK+`"]`)
 
 	// -- Path C (direct — target is sole hop): 2 txs, last seen 2026-03-02 --
@@ -65,10 +65,10 @@ func TestHandleNodePaths_SortByRecency_1145(t *testing.T) {
 		5: "2026-03-01T00:00:00Z",
 		6: "2026-03-02T00:00:00Z",
 	} {
-		mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (?, 'CC', ?, ?)`,
+		mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES ($1, 'CC', $2, $3)`,
 			txID, "hashC"+string(rune('0'+txID)), ts)
 		mustExec(t, db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)
-			VALUES (?, NULL, '["aa"]', ?, ?)`,
+			VALUES ($1, NULL, '["aa"]', $2, $3)`,
 			txID, epoch(ts), `["`+targetPK+`"]`)
 	}
 
@@ -130,7 +130,7 @@ func TestHandleNodePaths_SortCountTiebreaker_1145(t *testing.T) {
 	}
 
 	mustExec(t, db, `INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES (?, 'Tgt', 'repeater', 0, 0, ?, '2026-01-01T00:00:00Z', 1)`, targetPK, sameTS)
+		VALUES ($1, 'Tgt', 'repeater', 0, 0, $2, '2026-01-01T00:00:00Z', 1)`, targetPK, sameTS)
 
 	// Path X: 3 txs, all at sameTS → higher count
 	for txID, ts := range map[int]string{
@@ -138,17 +138,17 @@ func TestHandleNodePaths_SortCountTiebreaker_1145(t *testing.T) {
 		11: "2026-04-15T11:30:00Z",
 		12: sameTS,
 	} {
-		mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (?, 'XX', ?, ?)`,
+		mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES ($1, 'XX', $2, $3)`,
 			txID, "hashX"+string(rune('0'+txID)), ts)
 		mustExec(t, db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)
-			VALUES (?, NULL, '["aa", "cc"]', ?, ?)`,
+			VALUES ($1, NULL, '["aa", "cc"]', $2, $3)`,
 			txID, epoch(ts), `["`+relay1PK+`", "`+targetPK+`"]`)
 	}
 
 	// Path Y: 1 tx, at sameTS → lower count
-	mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (20, 'YY', 'hashY1', ?)`, sameTS)
+	mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (20, 'YY', 'hashY1', $1)`, sameTS)
 	mustExec(t, db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)
-		VALUES (20, NULL, '["bb", "cc"]', ?, ?)`,
+		VALUES (20, NULL, '["bb", "cc"]', $1, $2)`,
 		epoch(sameTS), `["`+relay2PK+`", "`+targetPK+`"]`)
 
 	cfg := &Config{Port: 3000}

@@ -1,0 +1,119 @@
+name: PostgreSQL paired benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact 40-character candidate commit
+        type: string
+        required: true
+  workflow_call:
+    inputs:
+      candidate_sha:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: postgres-benchmark-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    name: Five paired runs (128K transmissions / 2.048M observations)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CGO_ENABLED: '1'
+      GOMAXPROCS: '3'
+    steps:
+      - name: Validate exact candidate and runner capacity
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'candidate_sha must be a full lowercase commit SHA' >&2; exit 1; }
+          [[ $(nproc) -ge 4 ]] || { echo 'At least four CPUs are required' >&2; exit 1; }
+          awk '/MemTotal:/ {exit !($2 >= 8*1024*1024)}' /proc/meminfo || { echo 'At least 8 GiB RAM is required' >&2; exit 1; }
+          test -f /sys/fs/cgroup/cgroup.controllers
+          echo "BENCH_OUTPUT=$RUNNER_TEMP/corescope-bench-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+          echo "SMOKE_OUTPUT=$RUNNER_TEMP/corescope-bench-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-smoke" >> "$GITHUB_ENV"
+
+      - name: Checkout the exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify candidate and workflow snapshot
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$GITHUB_SHA" = "$CANDIDATE_SHA" || { echo 'Dispatch this workflow from the candidate commit/branch so workflow and code match' >&2; exit 1; }
+          git cat-file -e 9dbc287579a237ffa744dd0c91fa7227d09763ac^{commit}
+
+      - name: Test benchmark controls
+        run: python3 -m unittest discover -s scripts/postgres-benchmark -p 'test_*.py'
+
+      - name: Use the same compiler for both revisions
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.2'
+          cache-dependency-path: '**/go.sum'
+
+      - name: Install exact PostgreSQL 18.6 binaries
+        run: bash scripts/install-postgres-ci.sh server
+
+      - name: Provision owned cgroup and run primary comparison
+        run: |
+          set -euo pipefail
+          delegated="/sys/fs/cgroup/corescope-benchmark-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          test ! -e "$delegated"
+          sudo mkdir "$delegated"
+          printf '+cpu +memory\n' | sudo tee "$delegated/cgroup.subtree_control" >/dev/null
+          sudo mkdir "$delegated/coordinator"
+          sudo chown "$(id -u):$(id -g)" "$delegated" "$delegated/cgroup.procs" "$delegated/cgroup.subtree_control" "$delegated/coordinator" "$delegated/coordinator/cgroup.procs"
+          # The coordinator/generator live in a sibling of the measured app+DB
+          # group. The common ancestor is delegated so unprivileged child moves
+          # work; the runner validates the 3 CPU / 6 GiB measured envelope.
+          printf '%s\n' "$$" | sudo tee "$delegated/coordinator/cgroup.procs" >/dev/null
+          # Prove the controller and Linux prerequisites before preparing corpus B.
+          python3 scripts/postgres-benchmark/run.py --repo . \
+            --candidate-sha "$CANDIDATE_SHA" --corpus S --pairs 1 --profile smoke \
+            --warmup 2 --seconds 10 --postgres-version 18.6 --go-version 1.27.2 \
+            --postgres-bin /usr/lib/postgresql/18/bin \
+            --output "$SMOKE_OUTPUT" --cgroup "$delegated"
+          python3 scripts/postgres-benchmark/run.py --repo . \
+            --candidate-sha "$CANDIDATE_SHA" --corpus B --pairs 5 --profile primary \
+            --postgres-version 18.6 --go-version 1.27.2 \
+            --postgres-bin /usr/lib/postgresql/18/bin \
+            --output "$BENCH_OUTPUT" --cgroup "$delegated"
+
+      - name: Upload only sanitized public evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-benchmark-${{ inputs.candidate_sha }}
+          path: |
+            ${{ env.SMOKE_OUTPUT }}/public/
+            ${{ env.BENCH_OUTPUT }}/public/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Remove only this run's cgroup
+        if: always()
+        run: |
+          set -euo pipefail
+          delegated="/sys/fs/cgroup/corescope-benchmark-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          if [ -d "$delegated" ]; then
+            test "$(realpath "$delegated")" = "$delegated"
+            if [ -f "$delegated/cgroup.kill" ]; then echo 1 | sudo tee "$delegated/cgroup.kill" >/dev/null; fi
+            for attempt in $(seq 1 10); do
+              sudo find "$delegated" -depth -type d -exec rmdir {} \; 2>/dev/null || true
+              test ! -d "$delegated" && break
+              sleep 1
+            done
+            test ! -d "$delegated"
+          fi

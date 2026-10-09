@@ -1,7 +1,8 @@
-package main
+package legacy
 
 import (
 	"database/sql"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -11,8 +12,12 @@ import (
 // The ingestor must normalize any legacy uppercase rows on boot so
 // the lookup remains correct.
 func TestPublicKeyLowercaseNormalizationMigration(t *testing.T) {
-	dbPath := tempDBPath(t)
-	s, err := OpenStore(dbPath)
+	dbPath := filepath.Join(t.TempDir(), "legacy.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	s := struct{ db *sql.DB }{db}
+	if err == nil {
+		err = ApplyBase(db)
+	}
 	if err != nil {
 		t.Fatalf("first OpenStore: %v", err)
 	}
@@ -31,14 +36,18 @@ func TestPublicKeyLowercaseNormalizationMigration(t *testing.T) {
 	if pk != "AABBCCDDEEFF11223344" {
 		t.Fatalf("pre-check: expected uppercase, got %s", pk)
 	}
-	s.Close()
+	s.db.Close()
 
 	// Reopen — the boot-time migration should normalize the row.
-	s2, err := OpenStore(dbPath)
+	db2, err := sql.Open("sqlite3", dbPath)
+	s2 := struct{ db *sql.DB }{db2}
+	if err == nil {
+		err = Normalize(db2, nil)
+	}
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer s2.Close()
+	defer s2.db.Close()
 
 	// The uppercase row should be gone.
 	var still int

@@ -1,12 +1,13 @@
 // Package dbconfig provides the shared DBConfig struct used by both the server
-// and ingestor binaries for SQLite vacuum and maintenance settings (#919, #921).
+// and ingestor binaries for startup loading and legacy maintenance settings.
 package dbconfig
 
-// DBConfig controls SQLite vacuum and maintenance behavior (#919).
+// DBConfig controls startup loading. The three former SQLite controls remain
+// decodable for old config files; PostgreSQL maintenance does not use them.
 type DBConfig struct {
-	VacuumOnStartup        bool `json:"vacuumOnStartup"`        // one-time full VACUUM on startup if auto_vacuum is not INCREMENTAL
-	IncrementalVacuumPages int  `json:"incrementalVacuumPages"` // pages returned to OS per reaper cycle (default 1024)
-	AnalysisLimit          int  `json:"analysisLimit"`          // index rows ANALYZE visits per index (default 10000); negative disables the planner stats refresh (#2058)
+	VacuumOnStartup        bool `json:"vacuumOnStartup"`        // Deprecated: PostgreSQL autovacuum owns maintenance.
+	IncrementalVacuumPages int  `json:"incrementalVacuumPages"` // Deprecated: retained for legacy configuration decoding.
+	AnalysisLimit          int  `json:"analysisLimit"`          // Deprecated: PostgreSQL owns planner statistics.
 
 	// Load controls chunked startup loading (#1009).
 	Load *LoadConfig `json:"load,omitempty"`

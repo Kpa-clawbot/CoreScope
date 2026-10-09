@@ -1,30 +1,21 @@
 package users
 
 import (
+	"context"
 	"errors"
-	"fmt"
-	"io/fs"
-	"os"
+	"github.com/meshcore-analyzer/pgutil"
 )
 
-// Snapshot writes a consistent copy of users.db to path with VACUUM INTO
-// (the technique of GET /api/backup) and makes it readable by the owner
-// only: it holds password hashes and addresses. path must not exist; an
-// empty file there is refused too, although VACUUM INTO would accept it.
-// On failure no file is left at path.
+// Snapshot writes a consistent PostgreSQL custom-format archive readable only
+// by its owner. Restore with pg_restore; the destination must not exist.
 func (s *Store) Snapshot(path string) error {
-	if _, err := os.Lstat(path); err == nil {
-		return fmt.Errorf("users: snapshot target %s already exists", path)
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("users: snapshot target %s: %w", path, err)
+	return s.SnapshotContext(context.Background(), path)
+}
+
+// SnapshotContext cancels the dump when the caller disconnects or times out.
+func (s *Store) SnapshotContext(ctx context.Context, path string) error {
+	if err := s.db.PingContext(ctx); err != nil {
+		return errors.New("users: account database is not available for snapshot")
 	}
-	if _, err := s.db.Exec(`VACUUM INTO ?`, path); err != nil {
-		os.Remove(path)
-		return fmt.Errorf("users: snapshot: %w", err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		os.Remove(path)
-		return fmt.Errorf("users: snapshot mode: %w", err)
-	}
-	return nil
+	return pgutil.Dump(ctx, s.databaseURL, path)
 }

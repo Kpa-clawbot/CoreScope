@@ -25,7 +25,7 @@ func TestAdvertBackfillScale(t *testing.T) {
 	} else if !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	s, err := OpenStore(path)
+	s, err := openPostgresTestStore(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,17 +42,17 @@ func TestAdvertBackfillScale(t *testing.T) {
 	{
 		raw := "1100" + strings.Repeat("ab", 118)
 		for start := 1; start <= 1000000; start += 10000 {
-			_, err = s.db.Exec(`WITH RECURSIVE ids(n) AS (VALUES(?) UNION ALL SELECT n+1 FROM ids WHERE n<?)
+			_, err = s.db.Exec(`WITH RECURSIVE ids(n) AS (VALUES($1) UNION ALL SELECT n+1 FROM ids WHERE n<$2)
     INSERT INTO transmissions(id,hash,raw_hex,first_seen,payload_type,route_type,last_seen)
-    SELECT n,'scale-'||n,?,'2026-10-01T00:00:00Z',CASE WHEN n%10=0 THEN 4 ELSE 3 END,1,1790812800 FROM ids`, start, start+9999, raw)
+    SELECT n,'scale-'||n,$3,'2026-10-01T00:00:00Z',CASE WHEN n%10=0 THEN 4 ELSE 3 END,1,1790812800 FROM ids`, start, start+9999, raw)
 			if err != nil {
 				t.Fatal(err)
 			}
 		}
 		for start := 1; start <= 11000000; start += 10000 {
-			_, err = s.db.Exec(`WITH RECURSIVE ids(n) AS (VALUES(?) UNION ALL SELECT n+1 FROM ids WHERE n<?)
+			_, err = s.db.Exec(`WITH RECURSIVE ids(n) AS (VALUES($1) UNION ALL SELECT n+1 FROM ids WHERE n<$2)
     INSERT INTO observations(id,transmission_id,raw_hex,path_json,timestamp)
-    SELECT n,((n-1)%1000000)+1,CASE WHEN ((n-1)/1000000)%2=0 THEN ? ELSE ? END,'[]',1790812800 FROM ids`, start, start+9999, raw, "12"+raw[2:])
+    SELECT n,((n-1)%1000000)+1,CASE WHEN ((n-1)/1000000)%2=0 THEN $3 ELSE $4 END,'[]',1790812800 FROM ids`, start, start+9999, raw, "12"+raw[2:])
 			if err != nil {
 				t.Fatal(err)
 			}

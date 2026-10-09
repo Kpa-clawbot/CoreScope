@@ -48,7 +48,7 @@ const MIN_USE_REFS = {
   'map.js': 10,
   'node-analytics.js': 4,
   'traces.js': 1,
-  'perf.js': 9,
+  'perf.js': 8, // PostgreSQL replaces the SQLite-only WAL-size warning card.
   'audio-lab.js': 5,
 };
 

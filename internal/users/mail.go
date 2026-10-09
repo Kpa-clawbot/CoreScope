@@ -56,12 +56,13 @@ func (s *Store) LogMail(userID *int64, to, purpose, messageID string) (int64, er
 	if messageID != "" {
 		mid = messageID
 	}
-	res, err := s.db.Exec(`INSERT INTO mail_log (user_id, to_email, purpose, provider_message_id, sent_at, last_event, last_event_at)
-		VALUES (?, ?, ?, ?, ?, 'sent', ?)`, nullInt(userID), to, purpose, mid, now, now)
+	var id int64
+	err := s.db.QueryRow(`INSERT INTO mail_log (user_id, to_email, purpose, provider_message_id, sent_at, last_event, last_event_at)
+		VALUES ($1, $2, $3, $4, $5, 'sent', $6) RETURNING id`, nullInt(userID), to, purpose, mid, now, now).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	return id, nil
 }
 
 // RecordMailEvent appends a provider event to the mail with that provider
@@ -75,7 +76,7 @@ func (s *Store) RecordMailEvent(messageID, event string, at time.Time, reason st
 	defer tx.Rollback()
 	var id, lastAt int64
 	var uid sql.NullInt64
-	err = tx.QueryRow(`SELECT id, user_id, last_event_at FROM mail_log WHERE provider_message_id = ?`, messageID).
+	err = tx.QueryRow(`SELECT id, user_id, last_event_at FROM mail_log WHERE provider_message_id = $1 FOR UPDATE`, messageID).
 		Scan(&id, &uid, &lastAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
@@ -83,12 +84,12 @@ func (s *Store) RecordMailEvent(messageID, event string, at time.Time, reason st
 	if err != nil {
 		return nil, false, err
 	}
-	if _, err := tx.Exec(`INSERT OR IGNORE INTO mail_events (mail_id, event, at, reason) VALUES (?, ?, ?, ?)`,
+	if _, err := tx.Exec(`INSERT INTO mail_events (mail_id, event, at, reason) VALUES ($1, $2, $3, $4) ON CONFLICT (mail_id,event,at) DO NOTHING`,
 		id, event, unix(at), reason); err != nil {
 		return nil, false, err
 	}
 	if unix(at) >= lastAt {
-		if _, err := tx.Exec(`UPDATE mail_log SET last_event = ?, last_event_at = ?, last_reason = ? WHERE id = ?`,
+		if _, err := tx.Exec(`UPDATE mail_log SET last_event = $1, last_event_at = $2, last_reason = $3 WHERE id = $4`,
 			event, unix(at), reason, id); err != nil {
 			return nil, false, err
 		}
@@ -104,7 +105,7 @@ func (s *Store) RecordMailEvent(messageID, event string, at time.Time, reason st
 }
 
 func (s *Store) eventsFor(mailID int64) ([]MailEvent, error) {
-	rows, err := s.db.Query(`SELECT event, at, reason FROM mail_events WHERE mail_id = ? ORDER BY at, rowid`, mailID)
+	rows, err := s.db.Query(`SELECT event, at, reason FROM mail_events WHERE mail_id = $1 ORDER BY at, id`, mailID)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +125,7 @@ func (s *Store) eventsFor(mailID int64) ([]MailEvent, error) {
 
 // MailByID returns one record with its events.
 func (s *Store) MailByID(id int64) (*MailRecord, error) {
-	m, err := scanMail(s.db.QueryRow(`SELECT `+mailCols+` FROM mail_log WHERE id = ?`, id))
+	m, err := scanMail(s.db.QueryRow(`SELECT `+mailCols+` FROM mail_log WHERE id = $1`, id))
 	if err != nil {
 		return nil, err
 	}
@@ -148,8 +149,8 @@ func (s *Store) MailAllForUser(userID int64) ([]MailRecord, error) {
 	return s.mailForUser(userID, noLimit)
 }
 
-func (s *Store) mailForUser(userID int64, limit int) ([]MailRecord, error) {
-	rows, err := s.db.Query(`SELECT `+mailCols+` FROM mail_log WHERE user_id = ? ORDER BY sent_at DESC, id DESC LIMIT ?`, userID, limit)
+func (s *Store) mailForUser(userID int64, limit any) ([]MailRecord, error) {
+	rows, err := s.db.Query(`SELECT `+mailCols+` FROM mail_log WHERE user_id = $1 ORDER BY sent_at DESC, id DESC LIMIT $2`, userID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +196,7 @@ func (s *Store) LatestMailByUser() (map[int64]MailRecord, error) {
 
 // PruneMail deletes mail records (and their events) older than maxAge.
 func (s *Store) PruneMail(maxAge time.Duration) (int64, error) {
-	res, err := s.db.Exec(`DELETE FROM mail_log WHERE sent_at < ?`, unix(s.now())-int64(maxAge/time.Second))
+	res, err := s.db.Exec(`DELETE FROM mail_log WHERE sent_at < $1`, unix(s.now())-int64(maxAge/time.Second))
 	if err != nil {
 		return 0, err
 	}

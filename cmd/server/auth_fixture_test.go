@@ -2,19 +2,18 @@ package main
 
 import (
 	"bytes"
-	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"regexp"
 	"testing"
 	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/meshcore-analyzer/mailer"
+	"github.com/meshcore-analyzer/pgutil/pgtest"
 	"github.com/meshcore-analyzer/users"
 )
 
@@ -25,10 +24,11 @@ const (
 )
 
 type authFixture struct {
-	srv    *Server
-	router *mux.Router
-	fake   *mailer.Fake
-	st     *users.Store
+	ownerURL string
+	srv      *Server
+	router   *mux.Router
+	fake     *mailer.Fake
+	st       *users.Store
 }
 
 // client is a browser: its session cookie and CSRF token.
@@ -39,9 +39,32 @@ type client struct {
 }
 
 func newTestAuthService(t *testing.T, adminEmails ...string) (*authService, *mailer.Fake) {
+	a, fake, _ := newTestAuthServiceWithURL(t, pgtest.NewSchema(t), adminEmails...)
+	return a, fake
+}
+
+func newTestBackupAuthService(t *testing.T, adminEmails ...string) (*authService, *mailer.Fake) {
+	a, fake, _ := newTestAuthServiceWithURL(t, pgtest.NewDatabase(t), adminEmails...)
+	return a, fake
+}
+
+func newTestAuthServiceWithURL(t *testing.T, ownerURL string, adminEmails ...string) (*authService, *mailer.Fake, string) {
 	t.Helper()
+	owner, err := openFixtureSQL(ownerURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	if err := users.Apply(owner); err != nil {
+		t.Fatal(err)
+	}
+	runtimeURL := pgtest.Writer(t, ownerURL)
+	u, _ := url.Parse(runtimeURL)
+	if _, err := owner.Exec(`REVOKE INSERT,UPDATE,DELETE ON corescope_schema,schema_version FROM "` + u.User.Username() + `"`); err != nil {
+		t.Fatal(err)
+	}
 	set := &userMgmtSettings{
-		dbPath: filepath.Join(t.TempDir(), "users.db"), adminEmails: map[string]bool{},
+		databaseURL: runtimeURL, adminEmails: map[string]bool{},
 		sessionTTL: 30 * 24 * time.Hour, provider: "fake",
 		fromEmail: "noreply@example.org", fromName: "CoreScope", webhookSecret: testHook,
 	}
@@ -50,7 +73,7 @@ func newTestAuthService(t *testing.T, adminEmails ...string) (*authService, *mai
 	for _, e := range adminEmails {
 		set.adminEmails[e] = true
 	}
-	st, err := users.Open(set.dbPath)
+	st, err := users.Open(set.databaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,17 +83,25 @@ func newTestAuthService(t *testing.T, adminEmails ...string) (*authService, *mai
 		a.waitAudits()
 		st.Close()
 	})
-	return a, fake
+	return a, fake, ownerURL
 }
 
 // newAuthFixture builds a Server with auth on and only the auth routes.
 func newAuthFixture(t *testing.T, adminEmails ...string) *authFixture {
+	return newAuthFixtureWithURL(t, pgtest.NewSchema(t), adminEmails...)
+}
+
+func newBackupAuthFixture(t *testing.T, adminEmails ...string) *authFixture {
+	return newAuthFixtureWithURL(t, pgtest.NewDatabase(t), adminEmails...)
+}
+
+func newAuthFixtureWithURL(t *testing.T, databaseURL string, adminEmails ...string) *authFixture {
 	t.Helper()
-	a, fake := newTestAuthService(t, adminEmails...)
+	a, fake, ownerURL := newTestAuthServiceWithURL(t, databaseURL, adminEmails...)
 	srv := &Server{cfg: &Config{APIKey: testAPIKey}, perfStats: NewPerfStats(), auth: a}
 	r := mux.NewRouter()
 	srv.registerAuthRoutes(r)
-	return &authFixture{srv: srv, router: r, fake: fake, st: a.st}
+	return &authFixture{srv: srv, router: r, fake: fake, st: a.st, ownerURL: ownerURL}
 }
 
 type reqMod func(*http.Request)
@@ -187,7 +218,7 @@ func (f *authFixture) login(t *testing.T, email, password string) *client {
 // store call that touches it fails with a DB error (not ErrNotFound).
 func (f *authFixture) breakTable(t *testing.T, table string) {
 	t.Helper()
-	db, err := sql.Open("sqlite", f.srv.auth.set.dbPath)
+	db, err := openFixtureSQL(f.ownerURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,13 +232,13 @@ func (f *authFixture) breakTable(t *testing.T, table string) {
 // from users.db (the raw tokens are not observable when no mail left).
 func (f *authFixture) unusedTokens(t *testing.T, uid int64, p users.Purpose) int {
 	t.Helper()
-	db, err := sql.Open("sqlite", f.srv.auth.set.dbPath)
+	db, err := openFixtureSQL(f.ownerURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 	var n int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM tokens WHERE user_id = ? AND purpose = ? AND used_at IS NULL`, uid, string(p)).Scan(&n); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM tokens WHERE user_id = $1 AND purpose = $2 AND used_at IS NULL`, uid, string(p)).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n
@@ -217,7 +248,7 @@ func (f *authFixture) unusedTokens(t *testing.T, uid int64, p users.Purpose) int
 // simulate a concurrent writer or a failing statement).
 func (f *authFixture) execDB(t *testing.T, stmt string) {
 	t.Helper()
-	db, err := sql.Open("sqlite", f.srv.auth.set.dbPath)
+	db, err := openFixtureSQL(f.ownerURL)
 	if err != nil {
 		t.Fatal(err)
 	}

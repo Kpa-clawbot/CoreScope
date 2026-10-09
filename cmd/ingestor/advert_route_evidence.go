@@ -9,24 +9,24 @@ import (
 	"github.com/meshcore-analyzer/packetpath"
 )
 
-// Unlike INSERT OR IGNORE, a duplicate must not write sqlite_sequence.
+// The indexed existence probe avoids consuming an identity on duplicates.
 const insertAdvertEvidenceSQL = `INSERT INTO advert_route_evidence(tx_id,bit)
-	SELECT ?,? WHERE NOT EXISTS (SELECT 1 FROM advert_route_evidence WHERE tx_id=? AND bit=?)`
+	SELECT $1,$2 WHERE NOT EXISTS (SELECT 1 FROM advert_route_evidence WHERE tx_id=$3 AND bit=$4)`
 
 // Match the UPSERT's exact expression-index key. NULL observer_idx cannot
 // conflict, so the caller skips it. Only an uncheckpointed old row needs work.
 const legacyAdvertObservationSQL = `SELECT raw_hex FROM observations
-	WHERE transmission_id=? AND observer_idx=? AND COALESCE(path_json,'')=?
+	WHERE transmission_id=$1 AND observer_idx=$2 AND COALESCE(path_json,'')=$3
 	AND id > COALESCE((SELECT obs_cursor FROM advert_evidence_backfill WHERE id=1),0)`
 
 // Caller holds writerMu, including through the subsequent observation UPSERT.
 // The backfill commits evidence and obs_cursor together under that same lock.
-func (s *Store) preserveLegacyAdvertObservation(txID, observerIdx int64, path string) error {
+func (s *Store) preserveLegacyAdvertObservation(tx *sql.Tx, txID, observerIdx int64, path string) error {
 	if s.advertEvidenceComplete.Load() {
 		return nil
 	}
 	var raw sql.NullString
-	err := s.stmtGetLegacyAdvertObservation.QueryRow(txID, observerIdx, path).Scan(&raw)
+	err := tx.Stmt(s.stmtGetLegacyAdvertObservation).QueryRow(txID, observerIdx, path).Scan(&raw)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -34,7 +34,7 @@ func (s *Store) preserveLegacyAdvertObservation(txID, observerIdx int64, path st
 		return err
 	}
 	if bit := packetpath.AdvertRouteEvidence(raw.String); bit != 0 {
-		_, err = s.stmtInsertAdvertEvidence.Exec(txID, bit, txID, bit)
+		_, err = tx.Stmt(s.stmtInsertAdvertEvidence).Exec(txID, bit, txID, bit)
 	}
 	return err
 }
@@ -44,12 +44,12 @@ func (s *Store) preserveLegacyAdvertObservation(txID, observerIdx int64, path st
 // cursors and 500-row transactions make this cancellable/resumable; new traffic
 // records evidence synchronously, so rows beyond either scan need no replay.
 func (s *Store) backfillAdvertEvidence(ctx context.Context, db *sql.DB) error {
-	if _, err := db.ExecContext(ctx, `INSERT OR IGNORE INTO advert_evidence_backfill(id) VALUES(1)`); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO advert_evidence_backfill(id) VALUES(1) ON CONFLICT DO NOTHING`); err != nil {
 		return err
 	}
 	for _, source := range []struct{ cursor, table, query string }{
-		{"tx_cursor", "transmissions", `SELECT id,id,COALESCE(raw_hex,''),payload_type FROM transmissions WHERE id>? AND id<=? ORDER BY id LIMIT 500`},
-		{"obs_cursor", "observations", `SELECT o.id,o.transmission_id,COALESCE(o.raw_hex,''),t.payload_type FROM observations o JOIN transmissions t ON t.id=o.transmission_id WHERE o.id>? AND o.id<=? ORDER BY o.id LIMIT 500`},
+		{"tx_cursor", "transmissions", `SELECT id,id,COALESCE(raw_hex,''),payload_type FROM transmissions WHERE id>$1 AND id<=$2 ORDER BY id LIMIT 500`},
+		{"obs_cursor", "observations", `SELECT o.id,o.transmission_id,COALESCE(o.raw_hex,''),t.payload_type FROM observations o JOIN transmissions t ON t.id=o.transmission_id WHERE o.id>$1 AND o.id<=$2 ORDER BY o.id LIMIT 500`},
 	} {
 		// A finite horizon prevents live traffic from extending this scan.
 		var upper int64
@@ -101,17 +101,17 @@ func (s *Store) backfillAdvertEvidence(ctx context.Context, db *sql.DB) error {
 			err = func() error {
 				writerMu.Lock()
 				defer writerMu.Unlock()
-				tx, err := db.BeginTx(ctx, nil)
+				tx, err := beginWriteContext(ctx, db)
 				if err != nil {
 					return err
 				}
 				defer tx.Rollback()
 				for _, item := range batch {
-					if _, err := tx.ExecContext(ctx, insertAdvertEvidenceSQL+` AND EXISTS(SELECT 1 FROM transmissions WHERE id=?)`, item.txID, item.bit, item.txID, item.bit, item.txID); err != nil {
+					if _, err := tx.ExecContext(ctx, insertAdvertEvidenceSQL+` AND EXISTS(SELECT 1 FROM transmissions WHERE id=$5)`, item.txID, item.bit, item.txID, item.bit, item.txID); err != nil {
 						return err
 					}
 				}
-				if _, err := tx.ExecContext(ctx, `UPDATE advert_evidence_backfill SET `+source.cursor+`=? WHERE id=1`, lastID); err != nil {
+				if _, err := tx.ExecContext(ctx, `UPDATE advert_evidence_backfill SET `+source.cursor+`=$1 WHERE id=1`, lastID); err != nil {
 					return err
 				}
 				return tx.Commit()

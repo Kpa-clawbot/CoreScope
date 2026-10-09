@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -217,7 +218,7 @@ func (s *Server) reachNodeScopes(ctx context.Context, pubkey string) (string, st
 		args[i] = &vals[i]
 	}
 	row := s.db.conn.QueryRowContext(ctx,
-		"SELECT "+strings.Join(cols, ", ")+" FROM nodes WHERE public_key = ?", pubkey)
+		"SELECT "+strings.Join(cols, ", ")+" FROM nodes WHERE public_key = $1", pubkey)
 	if err := row.Scan(args...); err != nil {
 		return "", "", ""
 	}
@@ -335,7 +336,7 @@ type reachState struct {
 	// buildSem bounds how many cold-cache reach scans run at the same time.
 	// singleflight only collapses identical keys; distinct (pubkey, days)
 	// keys each start a scan, and the endpoint is unauthenticated, so
-	// without a cap a handful of requests can hold every SQLite reader.
+	// without a cap a handful of requests can hold every database reader.
 	buildSemOnce sync.Once
 	buildSem     chan struct{}
 	// sf dedups concurrent cold-cache requests for the same key so N
@@ -760,15 +761,15 @@ func (s *Server) scanReachRows(ctx context.Context, tokens map[string]bool, sinc
 	}
 	sort.Strings(toks)
 	for _, tok := range toks {
-		likes = append(likes, "o.path_json LIKE ?")
+		likes = append(likes, fmt.Sprintf("o.path_json ILIKE $%d ESCAPE ''", len(args)+1))
 		args = append(args, "%\""+tok+"\"%")
 	}
 	q := `SELECT LOWER(COALESCE(obs.id,'')), LOWER(COALESCE(t.from_pubkey,'')), COALESCE(t.payload_type,0), o.path_json, o.snr
 	      FROM observations o
 	      JOIN transmissions t ON t.id = o.transmission_id
 	      LEFT JOIN observers obs ON obs.rowid = o.observer_idx
-	      WHERE o.timestamp >= ? AND (` + strings.Join(likes, " OR ") + `)
-	      LIMIT ?`
+	      WHERE o.timestamp >= $1 AND (` + strings.Join(likes, " OR ") + `)
+	      LIMIT ` + fmt.Sprintf("$%d", len(args)+1)
 	args = append(args, reachScanRowLimit)
 	rows, err := s.db.conn.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -811,7 +812,7 @@ func (s *Server) scanReachRows(ctx context.Context, tokens map[string]bool, sinc
 }
 
 // reachMaxConcurrentBuilds is the number of cold-cache reach scans allowed at
-// once. Two keeps half of the default 4-connection SQLite pool free for
+// once. Two keeps half of the default 4-connection PostgreSQL pool free for
 // every other handler while a scan runs.
 const reachMaxConcurrentBuilds = 2
 

@@ -4,33 +4,30 @@ Pre-built images are published to GHCR for `linux/amd64` and `linux/arm64` (Rasp
 
 ## Quick Start
 
-### Docker run
+### Complete Compose checkout
+
+PostgreSQL 18.6 runs as a separate service. Existing SQLite installations must complete the [offline upgrade](docs/postgresql-upgrade.md) before starting this version.
+
+Set `CORESCOPE_REF` to the reviewed application revision, then retain the complete checkout: the Compose variants require `docker/postgres.compose.yml` and its initialization scripts.
 
 ```bash
-docker run -d --name corescope \
-  -p 80:80 \
-  -v corescope-data:/app/data \
-  -e DISABLE_CADDY=true \
-  ghcr.io/kpa-clawbot/corescope:latest
+git clone https://github.com/Kpa-clawbot/CoreScope.git
+cd CoreScope
+git checkout --detach "$CORESCOPE_REF"
+cp .env.example .env
+chmod 600 .env
+# Fill every PostgreSQL password field with a different openssl rand -hex 32 value.
+# Set CORESCOPE_IMAGE in .env to the matching reviewed image tag or digest.
+docker compose -f docker-compose.example.yml up -d
 ```
 
-Open `http://localhost` — done.
-
-### Docker Compose
-
-```bash
-curl -sL https://raw.githubusercontent.com/Kpa-clawbot/CoreScope/master/docker-compose.example.yml \
-  -o docker-compose.yml
-docker compose up -d
-```
+The PostgreSQL initializer creates separate telemetry/account databases and roles. Bootstrap installs schemas and grants; the application starts only when bootstrap succeeds. Open `http://localhost` and verify `/api/healthz` plus real packet ingestion. The default HTTP port is 80; adjust `HTTP_PORT` when using the example variant.
 
 ## Image Tags
 
 | Tag | Description |
 |-----|-------------|
-| `v3.4.1` | Pinned release (recommended for production) |
-| `v3.4` | Latest patch in v3.4.x |
-| `v3` | Latest minor+patch in v3.x |
+| Reviewed release tag or image digest | Pin the application and its matching repository files together |
 | `latest` | Latest release tag |
 | `edge` | Built from master — unstable, for testing |
 
@@ -40,7 +37,7 @@ Settings can be overridden via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DISABLE_CADDY` | `false` | Skip internal Caddy (set `true` behind a reverse proxy) |
+| `DISABLE_CADDY` | Variant-specific; `true` in the example | Skip internal Caddy (set `true` behind a reverse proxy) |
 | `DISABLE_MOSQUITTO` | `true` in `docker-compose.staging.yml`; `false` elsewhere | Skip internal MQTT broker. Default flipped to `true` for the staging deploy in v3.7+ because a standalone `mqtt-broker` container owns MQTT on that host — see "Standalone MQTT broker (staging)" below. |
 | `HTTP_PORT` | `80` | Host port mapping |
 | `DATA_DIR` | `./data` | Host path for persistent data |
@@ -50,18 +47,15 @@ For advanced configuration, mount a `config.json` into `/app/data/config.json`. 
 ## Updating
 
 ```bash
-docker compose pull
-docker compose up -d
+docker compose -f docker-compose.example.yml pull
+docker compose -f docker-compose.example.yml up -d
 ```
 
 ## Data
 
-All persistent data lives in `/app/data`:
-- `meshcore.db` — SQLite database (packets, nodes)
-- `config.json` — custom config (optional)
-- `theme.json` — custom theme (optional)
+PostgreSQL persists telemetry and accounts in its own host directory (`POSTGRES_DATA_DIR`, or the production/staging equivalent). `/app/data` holds config, theme, queues, statistics and account backup files. Keep these locations separate and preserve the private `.env` with your recovery material.
 
-**Backup:** `cp data/meshcore.db ~/backup/`
+Use native `pg_dump` archives, the authenticated backup endpoints, or `./manage.sh backup <directory>`. Do not copy live PostgreSQL storage or a legacy SQLite file as a current backup. `./manage.sh restore <directory>` accepts native archives only, refuses nonempty targets and leaves the application stopped for validation. See the [backup and account recovery boundaries](docs/postgresql-upgrade.md#native-backups-and-restores).
 
 ## TLS
 
@@ -134,13 +128,13 @@ your fork or ensure the network exists.
 
 If you're currently deploying with `manage.sh` (git clone + local build), you have two options going forward:
 
-### Option A: Keep using manage.sh (no changes needed)
+### Option A: Keep using manage.sh
 
-`manage.sh update` continues to work exactly as before — it fetches the latest tag, builds locally, and restarts. Nothing breaks.
+Complete the PostgreSQL migration and configure the private database credentials before using `manage.sh start` or `update`. Its backup, restore, staging-copy and status commands use PostgreSQL clients from the selected database container. Restores require empty destinations; existing staging data is retained.
 
 ```bash
 ./manage.sh update          # latest release
-./manage.sh update v3.5.0   # specific version
+./manage.sh update "$CORESCOPE_REF"   # reviewed version
 ```
 
 ### Option B: Switch to pre-built images (recommended)
@@ -154,16 +148,18 @@ Pre-built images skip the build step entirely — faster updates, no Go toolchai
    ./manage.sh stop
    ```
 
-2. Your data is in `~/meshcore-data/` (or whatever `PROD_DATA_DIR` is set to). It's untouched — the database, config, and theme files persist.
+2. Preserve `PROD_DATA_DIR`, the separate PostgreSQL directory, credentials and the native backup pair. For a SQLite instance, perform the offline upgrade first.
 
-3. Copy `docker-compose.example.yml` to where you want to run from:
+3. Keep the complete pinned checkout and choose the matching image in `.env`:
    ```bash
-   cp docker-compose.example.yml ~/docker-compose.yml
+   # CORESCOPE_IMAGE=<reviewed tag or digest>
+   # DATA_DIR=<existing state directory>
+   # POSTGRES_DATA_DIR=<existing PostgreSQL directory>
    ```
 
 4. Start with the pre-built image:
    ```bash
-   cd ~ && docker compose up -d
+   docker compose -f docker-compose.example.yml up -d
    ```
 
 5. Verify it picked up your existing data:
@@ -185,7 +181,7 @@ docker compose pull && docker compose up -d
 | `./manage.sh start` | `docker compose up -d` |
 | `./manage.sh logs` | `docker compose logs -f` |
 | `./manage.sh status` | `docker compose ps` |
-| `./manage.sh setup` | Copy `docker-compose.example.yml`, edit env vars |
+| `./manage.sh setup` | Retain the full checkout, configure private credentials and select the Compose variant |
 
 `manage.sh` remains available for advanced use cases (building from source, custom patches, development). Pre-built images are recommended for most production deployments.
 

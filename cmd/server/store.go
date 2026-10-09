@@ -82,7 +82,7 @@ type StoreObs struct {
 	Direction      string
 	SNR            *float64
 	RSSI           *float64
-	Score          *int
+	Score          *float64
 	PathJSON       string
 	RawHex         string
 	Timestamp      string
@@ -450,9 +450,9 @@ type PacketStore struct {
 	// Hot startup atomic gates — see contract below.
 	//
 	// Contract / ordering invariant (PR #1187):
-	//   * hashMigrationComplete (set by migrateContentHashesAsync) gates
-	//     content-hash–dependent code paths (e.g. dedup correctness on the
-	//     write side). Set true ONLY after the migration loop finishes.
+	//   * hashMigrationComplete (set by verifyContentHashesAsync) gates
+	//     the diagnostic that all loaded content hashes match the current
+	//     formula. Only the ingestor or offline migration can repair hashes.
 	//   * backgroundLoadDone is set true exactly once, after
 	//     loadBackgroundChunks finishes its loop AND its post-load index
 	//     rebuild. It gates "hot startup has finished filling
@@ -501,7 +501,7 @@ type PacketStore struct {
 	// perf payload for prod observability.
 	loadCoverageRatio float64
 
-	// Async hash migration state: set after migrateContentHashesAsync completes.
+	// Loaded content-hash verification state; retained API field name.
 	hashMigrationComplete atomic.Bool
 
 	// Chunked startup load state (#1009). LoadChunked closes
@@ -773,7 +773,7 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig, cacheTTLs ...map[string]inte
 	return ps
 }
 
-// Load reads transmissions + observations from SQLite into memory.
+// Load reads transmissions + observations from PostgreSQL into memory.
 // When maxMemoryMB > 0, loads only the newest N transmissions that fit
 // within the memory budget, avoiding OOM on large databases.
 func (s *PacketStore) Load() error {
@@ -876,7 +876,7 @@ func (s *PacketStore) Load() error {
 		loadSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
 				o.id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,
-				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRawHexCol + rpCol + scopeNameCol + `
+				o.snr, o.rssi, o.score, o.path_json, to_char(to_timestamp(o.timestamp) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')` + obsRawHexCol + rpCol + scopeNameCol + `
 			FROM transmissions t
 			LEFT JOIN observations o ON o.transmission_id = t.id
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx` + filterClause + `
@@ -900,7 +900,7 @@ func (s *PacketStore) Load() error {
 	// which would silently mis-attribute hops). Fetched BEFORE opening
 	// the rows cursor below: getCachedNodesAndPM issues its own DB query,
 	// which would deadlock against the still-open cursor on a single-
-	// connection SQLite pool. Load holds s.mu.Lock(), so calling
+	// connection database pool. Load holds s.mu.Lock(), so calling
 	// getCachedNodesAndPM directly is safe.
 	_, relayPM := s.getCachedNodesAndPM()
 	var coldLoadAmbiguousHopsSkipped int
@@ -920,7 +920,7 @@ func (s *PacketStore) Load() error {
 		var obsID sql.NullInt64
 		var observerID, observerName, observerIATA, direction, pathJSON, obsTimestamp sql.NullString
 		var snr, rssi sql.NullFloat64
-		var score sql.NullInt64
+		var score sql.NullFloat64
 		var obsRawHex sql.NullString
 		var resolvedPathStr sql.NullString
 		var scopeName sql.NullString
@@ -994,7 +994,7 @@ func (s *PacketStore) Load() error {
 				Direction:      nullStrVal(direction),
 				SNR:            nullFloatPtr(snr),
 				RSSI:           nullFloatPtr(rssi),
-				Score:          nullIntPtr(score),
+				Score:          nullFloatPtr(score),
 				PathJSON:       obsPJ,
 				Timestamp:      normalizeTimestamp(nullStrVal(obsTimestamp)),
 			}
@@ -1125,7 +1125,7 @@ func (s *PacketStore) Load() error {
 	return nil
 }
 
-// loadChunk queries a [from, to) time window from SQLite without holding the
+// loadChunk queries a [from, to) time window from PostgreSQL without holding the
 // write lock, builds local data structures, then merges them into the store
 // under s.mu.Lock(). It is the building block for the background loader.
 //
@@ -1186,10 +1186,10 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 	var filterClause string
 	var qArgs []interface{}
 	if s.db.hasLastSeen {
-		filterClause = "\n\t\t\tWHERE t.last_seen >= ? AND t.last_seen < ?"
+		filterClause = "\n\t\t\tWHERE t.last_seen >= $1 AND t.last_seen < $2"
 		qArgs = []interface{}{fromUnix, toUnix}
 	} else {
-		filterClause = "\n\t\t\tWHERE t.first_seen >= ? AND t.first_seen < ?"
+		filterClause = "\n\t\t\tWHERE t.first_seen >= $1 AND t.first_seen < $2"
 		qArgs = []interface{}{fromStr, toStr}
 	}
 
@@ -1198,7 +1198,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 		chunkSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
 				o.id, obs.id, obs.name, o.direction,
-				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRawHexCol + rpCol + scopeNameCol + `
+				o.snr, o.rssi, o.score, o.path_json, to_char(to_timestamp(o.timestamp) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')` + obsRawHexCol + rpCol + scopeNameCol + `
 			FROM transmissions t
 			LEFT JOIN observations o ON o.transmission_id = t.id
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx` + filterClause + `
@@ -1222,7 +1222,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 	// (affinity-tier resolution against ≤168h-old observations would
 	// silently mis-attribute hops). Fetched BEFORE opening the rows
 	// cursor below: getCachedNodesAndPM issues its own DB query, which
-	// would deadlock against the open cursor on a single-connection SQLite
+	// would deadlock against the open cursor on a single-connection database
 	// pool.
 	s.mu.RLock()
 	_, relayPM := s.getCachedNodesAndPM()
@@ -1264,7 +1264,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 		var obsID sql.NullInt64
 		var observerID, observerName, direction, pathJSON, obsTimestamp sql.NullString
 		var snr, rssi sql.NullFloat64
-		var score sql.NullInt64
+		var score sql.NullFloat64
 		var obsRawHex sql.NullString
 		var resolvedPathStr sql.NullString
 		var scopeName sql.NullString
@@ -1330,7 +1330,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 				Direction:      nullStrVal(direction),
 				SNR:            nullFloatPtr(snr),
 				RSSI:           nullFloatPtr(rssi),
-				Score:          nullIntPtr(score),
+				Score:          nullFloatPtr(score),
 				PathJSON:       obsPJ,
 				Timestamp:      normalizeTimestamp(nullStrVal(obsTimestamp)),
 			}
@@ -1602,10 +1602,10 @@ func (s *PacketStore) loadBackgroundChunks() {
 	var countQuery string
 	var countArg interface{}
 	if s.db.hasLastSeen {
-		countQuery = `SELECT COUNT(*) FROM transmissions WHERE last_seen >= ?`
+		countQuery = `SELECT COUNT(*) FROM transmissions WHERE last_seen >= $1`
 		countArg = retentionFloor
 	} else {
-		countQuery = `SELECT COUNT(*) FROM transmissions WHERE first_seen >= ?`
+		countQuery = `SELECT COUNT(*) FROM transmissions WHERE first_seen >= $1`
 		countArg = retentionFloorStr
 	}
 	if err := s.db.conn.QueryRow(countQuery, countArg).Scan(&totalInDB); err != nil {
@@ -1897,7 +1897,7 @@ func (s *PacketStore) untrackAdvertPubkey(tx *StoreTx) {
 // QueryPackets returns filtered, paginated packets from memory.
 func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 	// SQL fallback: if the query window predates the in-memory window, delegate
-	// to the DB layer which covers the full SQLite retention period.
+	// to the DB layer which covers the full database retention period.
 	s.mu.RLock()
 	oldest := s.oldestLoaded
 	s.mu.RUnlock()
@@ -2177,7 +2177,7 @@ func (s *PacketStore) GetStoreStats() (*Stats, error) {
 		defer wg.Done()
 		nodeErr = s.db.conn.QueryRow(
 			`SELECT
-				(SELECT COUNT(*) FROM nodes WHERE last_seen > ?) AS active_nodes,
+				(SELECT COUNT(*) FROM nodes WHERE last_seen > $1) AS active_nodes,
 				(SELECT COUNT(*) FROM nodes) AS all_nodes,
 				(SELECT COUNT(*) FROM observers WHERE inactive IS NULL OR inactive = 0) AS observers`,
 			sevenDaysAgo,
@@ -2221,9 +2221,9 @@ func (s *PacketStore) refreshObsCounts(oneHourAgo, oneDayAgo int64) (int, int, e
 		var lastHour, last24h int
 		if qErr := s.db.conn.QueryRow(
 			`SELECT
-				COALESCE(SUM(CASE WHEN timestamp > ? THEN 1 ELSE 0 END), 0),
-				COALESCE(SUM(CASE WHEN timestamp > ? THEN 1 ELSE 0 END), 0)
-			FROM observations WHERE timestamp > ?`,
+				COALESCE(SUM(CASE WHEN timestamp > $1 THEN 1 ELSE 0 END), 0),
+				COALESCE(SUM(CASE WHEN timestamp > $2 THEN 1 ELSE 0 END), 0)
+			FROM observations WHERE timestamp > $3`,
 			oneHourAgo, oneDayAgo, oneDayAgo,
 		).Scan(&lastHour, &last24h); qErr != nil {
 			return nil, qErr
@@ -2708,7 +2708,7 @@ func (s *PacketStore) QueryMultiNodePackets(pubkeys []string, limit, offset int,
 	return &PacketResult{Packets: packets, Total: total}
 }
 
-// IngestNewFromDB loads new transmissions from SQLite into memory and returns
+// IngestNewFromDB loads new transmissions from PostgreSQL into memory and returns
 // broadcast-ready maps plus the new max transmission ID.
 func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interface{}, int) {
 	if limit <= 0 {
@@ -2732,11 +2732,11 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		querySQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
 				o.id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,
-				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRHCol + scopeNameCol + `
+				o.snr, o.rssi, o.score, o.path_json, to_char(to_timestamp(o.timestamp) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')` + obsRHCol + scopeNameCol + `
 			FROM transmissions t
 			LEFT JOIN observations o ON o.transmission_id = t.id
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
-			WHERE t.id > ?
+			WHERE t.id > $1
 			ORDER BY t.id ASC, o.timestamp DESC`
 	} else {
 		querySQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
@@ -2746,7 +2746,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			FROM transmissions t
 			LEFT JOIN observations o ON o.transmission_id = t.id
 			LEFT JOIN observers obs ON obs.id = o.observer_id
-			WHERE t.id > ?
+			WHERE t.id > $1
 			ORDER BY t.id ASC, o.timestamp DESC`
 	}
 
@@ -2767,7 +2767,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		obsRawHex                                                          string
 		scopeName                                                          *string
 		snr, rssi                                                          *float64
-		score                                                              *int
+		score                                                              *float64
 	}
 
 	var tempRows []tempRow
@@ -2781,7 +2781,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		var obsIDVal sql.NullInt64
 		var observerID, observerName, observerIATA, direction, pathJSON, obsTimestamp sql.NullString
 		var snrVal, rssiVal sql.NullFloat64
-		var scoreVal sql.NullInt64
+		var scoreVal sql.NullFloat64
 		var obsRawHex sql.NullString
 		var scopeName sql.NullString
 
@@ -2825,7 +2825,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			scopeName:    nullStrPtr(scopeName),
 			snr:          nullFloatPtr(snrVal),
 			rssi:         nullFloatPtr(rssiVal),
-			score:        nullIntPtr(scoreVal),
+			score:        nullFloatPtr(scoreVal),
 		}
 		if obsIDVal.Valid {
 			oid := int(obsIDVal.Int64)
@@ -3155,20 +3155,20 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 	}
 	if s.db.isV3 {
 		querySQL = `SELECT o.id, o.transmission_id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,
-				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRHCol2 + `
+				o.snr, o.rssi, o.score, o.path_json, to_char(to_timestamp(o.timestamp) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')` + obsRHCol2 + `
 			FROM observations o
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
-			WHERE o.id > ?
+			WHERE o.id > $1
 			ORDER BY o.id ASC
-			LIMIT ?`
+			LIMIT $2`
 	} else {
 		querySQL = `SELECT o.id, o.transmission_id, o.observer_id, o.observer_name, COALESCE(obs.iata, ''), o.direction,
 				o.snr, o.rssi, o.score, o.path_json, o.timestamp` + obsRHCol2 + `
 			FROM observations o
 			LEFT JOIN observers obs ON obs.id = o.observer_id
-			WHERE o.id > ?
+			WHERE o.id > $1
 			ORDER BY o.id ASC
-			LIMIT ?`
+			LIMIT $2`
 	}
 
 	rows, err := s.db.conn.Query(querySQL, sinceObsID, limit)
@@ -3186,7 +3186,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 		observerIATA string
 		direction    string
 		snr, rssi    *float64
-		score        *int
+		score        *float64
 		pathJSON     string
 		rawHex       string
 		timestamp    string
@@ -3197,7 +3197,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 		var oid, txID int
 		var observerID, observerName, observerIATA, direction, pathJSON, ts sql.NullString
 		var snr, rssi sql.NullFloat64
-		var score sql.NullInt64
+		var score sql.NullFloat64
 		var obsRawHex sql.NullString
 
 		scanArgs3 := []interface{}{&oid, &txID, &observerID, &observerName, &observerIATA, &direction,
@@ -3218,7 +3218,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 			direction:    nullStrVal(direction),
 			snr:          nullFloatPtr(snr),
 			rssi:         nullFloatPtr(rssi),
-			score:        nullIntPtr(score),
+			score:        nullFloatPtr(score),
 			pathJSON:     nullStrVal(pathJSON),
 			rawHex:       nullStrVal(obsRawHex),
 			timestamp:    nullStrVal(ts),
@@ -3950,7 +3950,7 @@ func (s *PacketStore) enrichObsWithTx(obs *StoreObs, tx *StoreTx) map[string]int
 		"direction":     strOrNil(obs.Direction),
 		"snr":           floatPtrOrNil(obs.SNR),
 		"rssi":          floatPtrOrNil(obs.RSSI),
-		"score":         intPtrOrNil(obs.Score),
+		"score":         floatPtrOrNil(obs.Score),
 		"path_json":     strOrNil(obs.PathJSON),
 	}
 	// On-demand SQL fetch for resolved_path
@@ -9287,12 +9287,12 @@ func (s *PacketStore) loadMultibyteCapFromDB() {
 // RunMultibyteCapPersist consumes the file and writes confirmed /
 // suspected entries to the DB.
 //
-// INVARIANT (#1289/#1324): the server is the read path and opens
-// SQLite mode=ro. It MUST NOT execute any UPDATE on
+// INVARIANT (#1289/#1324): the server is the read path and uses a
+// restricted PostgreSQL reader. It MUST NOT execute any UPDATE on
 // nodes.multibyte_* — see readonly_invariant_test.go. This helper is
 // the only side-effect path for capability data leaving the server.
 func (s *PacketStore) publishMultibyteCapSnapshot(entries []MultiByteCapEntry) {
-	if s.db == nil || s.db.path == "" {
+	if s.db == nil || s.db.stateDir == "" {
 		return
 	}
 	out := make([]mbcapqueue.Entry, 0, len(entries))
@@ -9303,7 +9303,7 @@ func (s *PacketStore) publishMultibyteCapSnapshot(entries []MultiByteCapEntry) {
 			Evidence:  e.Evidence,
 		})
 	}
-	if err := mbcapqueue.WriteSnapshot(s.db.path, mbcapqueue.Snapshot{Entries: out}); err != nil {
+	if err := mbcapqueue.WriteSnapshot(s.db.statePath(), mbcapqueue.Snapshot{Entries: out}); err != nil {
 		log.Printf("[multibyte] publish snapshot: %v", err)
 	}
 }
@@ -9549,7 +9549,7 @@ func (s *PacketStore) GetBulkHealth(limit int, region, area string) []map[string
 	if regionNodeKeys != nil || areaNodes != nil {
 		queryLimit = 10000
 	}
-	rows, err := s.db.conn.Query("SELECT public_key, name, role, lat, lon FROM nodes ORDER BY last_seen DESC LIMIT ?", queryLimit)
+	rows, err := s.db.conn.Query("SELECT public_key, name, role, lat, lon FROM nodes ORDER BY last_seen DESC NULLS LAST LIMIT $1", queryLimit)
 	if err != nil {
 		return []map[string]interface{}{}
 	}

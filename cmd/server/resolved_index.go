@@ -158,7 +158,7 @@ func (s *PacketStore) confirmResolvedPathContains(txID int, pubkey string) bool 
 	needle := `"` + strings.ToLower(pubkey) + `"`
 	var count int
 	err := s.db.conn.QueryRow(
-		`SELECT COUNT(*) FROM observations WHERE transmission_id = ? AND INSTR(LOWER(resolved_path), ?) > 0`,
+		`SELECT COUNT(*) FROM observations WHERE transmission_id = $1 AND strpos(LOWER(resolved_path), $2) > 0`,
 		txID, needle,
 	).Scan(&count)
 	if err != nil {
@@ -167,14 +167,14 @@ func (s *PacketStore) confirmResolvedPathContains(txID int, pubkey string) bool 
 	return count > 0
 }
 
-// fetchResolvedPathsForTx fetches resolved_path from SQLite for all observations
+// fetchResolvedPathsForTx fetches resolved_path from PostgreSQL for all observations
 // of a transmission. Used for on-demand API responses and eviction cleanup.
 func (s *PacketStore) fetchResolvedPathsForTx(txID int) map[int][]*string {
 	if s.db == nil || s.db.conn == nil {
 		return nil
 	}
 	rows, err := s.db.conn.Query(
-		`SELECT id, resolved_path FROM observations WHERE transmission_id = ? AND resolved_path IS NOT NULL`,
+		`SELECT id, resolved_path FROM observations WHERE transmission_id = $1 AND resolved_path IS NOT NULL`,
 		txID,
 	)
 	if err != nil {
@@ -215,7 +215,7 @@ func (s *PacketStore) fetchResolvedPathForObs(obsID int) []*string {
 
 	var rpJSON sql.NullString
 	err := s.db.conn.QueryRow(
-		`SELECT resolved_path FROM observations WHERE id = ?`, obsID,
+		`SELECT resolved_path FROM observations WHERE id = $1`, obsID,
 	).Scan(&rpJSON)
 	if err != nil || !rpJSON.Valid {
 		return nil
@@ -337,14 +337,14 @@ func (s *PacketStore) lruDelete(obsID int) {
 // resolvedPubkeysForEvictionBatch fetches resolved pubkeys for multiple txIDs
 // from SQL in a single batched query. Returns a map from txID to unique pubkeys.
 // MUST be called WITHOUT holding s.mu — this is the whole point of the batch approach.
-// Chunks queries to stay under SQLite's 500-parameter limit.
+// Chunks queries to bound each lookup and its result set.
 func (s *PacketStore) resolvedPubkeysForEvictionBatch(txIDs []int) map[int][]string {
 	result := make(map[int][]string, len(txIDs))
 	if len(txIDs) == 0 || s.db == nil || s.db.conn == nil {
 		return result
 	}
 
-	const chunkSize = 499 // SQLite SQLITE_MAX_VARIABLE_NUMBER default is 999; stay well under
+	const chunkSize = 499 // Retain the existing bounded lookup batch.
 	for start := 0; start < len(txIDs); start += chunkSize {
 		end := start + chunkSize
 		if end > len(txIDs) {
@@ -352,19 +352,12 @@ func (s *PacketStore) resolvedPubkeysForEvictionBatch(txIDs []int) map[int][]str
 		}
 		chunk := txIDs[start:end]
 
-		// Build query with placeholders
-		placeholders := make([]byte, 0, len(chunk)*2)
 		args := make([]interface{}, len(chunk))
 		for i, id := range chunk {
-			if i > 0 {
-				placeholders = append(placeholders, ',')
-			}
-			placeholders = append(placeholders, '?')
 			args[i] = id
 		}
-
 		query := "SELECT transmission_id, resolved_path FROM observations WHERE transmission_id IN (" +
-			string(placeholders) + ") AND resolved_path IS NOT NULL"
+			sqlPlaceholders(len(chunk)) + ") AND resolved_path IS NOT NULL"
 
 		rows, err := s.db.conn.Query(query, args...)
 		if err != nil {

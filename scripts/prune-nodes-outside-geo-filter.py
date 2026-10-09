@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
+Offline legacy SQLite tooling; use the Admin Geo Filter workflow for PostgreSQL.
+Operate only on a stopped, disposable recovery copy.
+
 Delete nodes from the database that fall outside the configured geo_filter polygon + bufferKm.
 Nodes with no GPS coordinates are always kept.
 
 Usage:
-  python3 prune-nodes-outside-geo-filter.py [db_path] [--config config.json] [--dry-run]
+  python3 prune-nodes-outside-geo-filter.py --legacy-sqlite-offline [db_path] [--config config.json] [--dry-run]
 
   db_path         Path to meshcore.db   (default: /app/data/meshcore.db)
   --config PATH   Path to config.json   (default: /app/config.json)
@@ -165,4 +168,7 @@ def main():
 
 
 if __name__ == '__main__':
+    if '--legacy-sqlite-offline' not in sys.argv:
+        sys.exit('Offline legacy SQLite tooling only. Use the Admin Geo Filter workflow for PostgreSQL. Pass --legacy-sqlite-offline only for a stopped, disposable recovery copy.')
+    sys.argv.remove('--legacy-sqlite-offline')
     main()

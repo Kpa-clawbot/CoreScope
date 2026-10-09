@@ -39,19 +39,19 @@ func TestObservers_CanRelayTriState_Issue1290(t *testing.T) {
 	// Legacy: never received repeat field. can_relay=DEFAULT 1, seen=0.
 	if _, err := srv.store.db.conn.Exec(
 		`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
-		 VALUES ('legacy-obs', 'Legacy', 'SJC', ?, '2026-01-01T00:00:00Z', 1)`, now); err != nil {
+		 VALUES ('legacy-obs', 'Legacy', 'SJC', $1, '2026-01-01T00:00:00Z', 1)`, now); err != nil {
 		t.Fatalf("seed legacy: %v", err)
 	}
 	// Repeater: ingestor wrote can_relay=1, seen=1.
 	if _, err := srv.store.db.conn.Exec(
 		`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count, can_relay, can_relay_seen)
-		 VALUES ('rep-obs', 'Repeater', 'SFO', ?, '2026-01-01T00:00:00Z', 1, 1, 1)`, now); err != nil {
+		 VALUES ('rep-obs', 'Repeater', 'SFO', $1, '2026-01-01T00:00:00Z', 1, 1, 1)`, now); err != nil {
 		t.Fatalf("seed repeater: %v", err)
 	}
 	// Listener: ingestor wrote can_relay=0, seen=1.
 	if _, err := srv.store.db.conn.Exec(
 		`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count, can_relay, can_relay_seen)
-		 VALUES ('lst-obs', 'Listener', 'OAK', ?, '2026-01-01T00:00:00Z', 1, 0, 1)`, now); err != nil {
+		 VALUES ('lst-obs', 'Listener', 'OAK', $1, '2026-01-01T00:00:00Z', 1, 0, 1)`, now); err != nil {
 		t.Fatalf("seed listener: %v", err)
 	}
 

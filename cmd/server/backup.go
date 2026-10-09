@@ -7,29 +7,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
+
+	"github.com/meshcore-analyzer/pgutil"
 )
 
-// handleBackup streams a consistent SQLite snapshot of the analyzer DB.
-//
-// Requires API-key authentication (mounted via requireAPIKey in routes.go).
-//
-// Strategy: SQLite's `VACUUM INTO 'path'` produces an atomic, defragmented
-// copy of the current database into a new file. It runs at READ ISOLATION
-// against the source DB (works on our read-only connection) and never
-// blocks concurrent writers — the ingestor keeps writing to the WAL while
-// the snapshot is taken from a consistent read transaction.
-//
-// Response:
-//
-//	200 OK
-//	Content-Type: application/octet-stream
-//	Content-Disposition: attachment; filename="corescope-backup-<unix>.db"
-//	<body: complete SQLite database file>
-//
-// The temp file is removed after the response is fully written, regardless
-// of whether the client successfully consumed the stream.
+// handleBackup stages a consistent PostgreSQL custom-format pg_dump snapshot.
+// pgutil passes credentials through the child environment, bounds its lifetime,
+// removes partial output, and returns redacted errors.
 func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	if s.db == nil || s.db.conn == nil {
 		writeError(w, http.StatusServiceUnavailable, "database unavailable")
@@ -56,12 +41,9 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	snapshotPath := filepath.Join(tmpDir, fmt.Sprintf("corescope-backup-%d.db", ts))
+	snapshotPath := filepath.Join(tmpDir, fmt.Sprintf("corescope-backup-%d.dump", ts))
 
-	// SQLite parses the path literal — escape any single quotes defensively.
-	// (mkdtemp output won't contain quotes, but be paranoid for future-proofing.)
-	escaped := strings.ReplaceAll(snapshotPath, "'", "''")
-	if _, err := s.db.conn.ExecContext(r.Context(), fmt.Sprintf("VACUUM INTO '%s'", escaped)); err != nil {
+	if err := pgutil.Dump(r.Context(), s.db.path, snapshotPath); err != nil {
 		writeError(w, http.StatusInternalServerError, "snapshot failed: "+err.Error())
 		return
 	}
@@ -78,8 +60,9 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", stat.Size()))
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"corescope-backup-%d.db\"", ts))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"corescope-backup-%d.dump\"", ts))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 
 	if _, err := io.Copy(w, f); err != nil {

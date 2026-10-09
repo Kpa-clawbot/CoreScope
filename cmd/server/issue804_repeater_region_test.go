@@ -34,19 +34,19 @@ func TestIssue804_AnalyticsAttributesByRepeaterRegion(t *testing.T) {
 
 	// Observers: one in PDX, one in SJC
 	db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
-		VALUES ('obs-pdx', 'Obs PDX', 'PDX', ?, '2026-01-01T00:00:00Z', 100)`, recent)
+		VALUES ('obs-pdx', 'Obs PDX', 'PDX', $1, '2026-01-01T00:00:00Z', 100)`, recent)
 	db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
-		VALUES ('obs-sjc', 'Obs SJC', 'SJC', ?, '2026-01-01T00:00:00Z', 100)`, recent)
+		VALUES ('obs-sjc', 'Obs SJC', 'SJC', $1, '2026-01-01T00:00:00Z', 100)`, recent)
 
 	// PDX-Repeater node (lives in Portland)
 	pdxPK := "pdx0000000000001"
 	db.conn.Exec(`INSERT INTO nodes (public_key, name, role)
-		VALUES (?, 'PDX-Repeater', 'repeater')`, pdxPK)
+		VALUES ($1, 'PDX-Repeater', 'repeater')`, pdxPK)
 
 	// SJC-Repeater node (lives in San Jose) — sanity baseline
 	sjcPK := "sjc0000000000001"
 	db.conn.Exec(`INSERT INTO nodes (public_key, name, role)
-		VALUES (?, 'SJC-Repeater', 'repeater')`, sjcPK)
+		VALUES ($1, 'SJC-Repeater', 'repeater')`, sjcPK)
 
 	pdxDecoded := `{"pubKey":"` + pdxPK + `","name":"PDX-Repeater","type":"ADVERT","flags":{"isRepeater":true}}`
 	sjcDecoded := `{"pubKey":"` + sjcPK + `","name":"SJC-Repeater","type":"ADVERT","flags":{"isRepeater":true}}`
@@ -56,31 +56,31 @@ func TestIssue804_AnalyticsAttributesByRepeaterRegion(t *testing.T) {
 	//    raw_hex header 0x12 = route_type 2 (direct), payload_type 4
 	//    pathByte 0x40 (hashSize bits=01 → 2, hop_count=0)
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('1240aabbccdd', 'pdx_zh_direct', ?, 2, 4, ?)`, recent, pdxDecoded)
+		VALUES ('1240aabbccdd', 'pdx_zh_direct', $1, 2, 4, $2)`, recent, pdxDecoded)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (1, 1, 12.0, -85, '[]', ?)`, recentEpoch)
+		VALUES (1, 1, 12.0, -85, '[]', $1)`, recentEpoch)
 
 	// 2) PDX-Repeater FLOOD advert with hashSize=2 (reliable).
 	//    Heard ONLY by obs-SJC via a relay path (this is the polluting case).
 	//    raw_hex header 0x11 = route_type 1 (flood), payload_type 4
 	//    pathByte 0x41 (hashSize bits=01 → 2, hop_count=1)
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('1141aabbccdd', 'pdx_flood', ?, 1, 4, ?)`, recent, pdxDecoded)
+		VALUES ('1141aabbccdd', 'pdx_flood', $1, 1, 4, $2)`, recent, pdxDecoded)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (2, 2, 8.0, -95, '["aa11"]', ?)`, recentEpoch)
+		VALUES (2, 2, 8.0, -95, '["aa11"]', $1)`, recentEpoch)
 
 	// 3) SJC-Repeater zero-hop DIRECT advert heard only by obs-SJC.
 	//    Establishes SJC as the repeater's home region.
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('1240ccddeeff', 'sjc_zh_direct', ?, 2, 4, ?)`, recent, sjcDecoded)
+		VALUES ('1240ccddeeff', 'sjc_zh_direct', $1, 2, 4, $2)`, recent, sjcDecoded)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (3, 2, 14.0, -82, '[]', ?)`, recentEpoch)
+		VALUES (3, 2, 14.0, -82, '[]', $1)`, recentEpoch)
 
 	// 4) SJC-Repeater FLOOD advert with hashSize=2, heard by obs-SJC.
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('1141ccddeeff', 'sjc_flood', ?, 1, 4, ?)`, recent, sjcDecoded)
+		VALUES ('1141ccddeeff', 'sjc_flood', $1, 1, 4, $2)`, recent, sjcDecoded)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (4, 2, 11.0, -88, '["cc22"]', ?)`, recentEpoch)
+		VALUES (4, 2, 11.0, -88, '["cc22"]', $1)`, recentEpoch)
 
 	store := NewPacketStore(db, nil)
 	store.Load()

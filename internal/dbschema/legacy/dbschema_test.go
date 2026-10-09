@@ -1,4 +1,4 @@
-package dbschema
+package legacy
 
 import (
 	"database/sql"

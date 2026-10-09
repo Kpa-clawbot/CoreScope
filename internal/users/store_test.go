@@ -1,72 +1,101 @@
 package users
 
 import (
-	"os"
-	"path/filepath"
+	"github.com/meshcore-analyzer/pgutil/pgtest"
+	"net/url"
 	"strings"
+	"sync"
 	"testing"
 )
 
 func TestOpenCreatesSchemaAndIsIdempotent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sub", "users.db")
-	st, err := Open(path)
-	if err != nil {
-		t.Fatalf("first Open: %v", err)
+	dsn := pgtest.NewSchema(t)
+	db := testOwner(t, dsn)
+	if err := Apply(db); err != nil {
+		t.Fatal(err)
 	}
-	v, err := st.SchemaVersion()
-	if err != nil || v != len(migrations) {
-		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, len(migrations))
-	}
-	st.Close()
-
-	st2, err := Open(path)
-	if err != nil {
-		t.Fatalf("second Open: %v", err)
-	}
-	defer st2.Close()
-	if v2, _ := st2.SchemaVersion(); v2 != len(migrations) {
-		t.Fatalf("version after reopen = %d", v2)
+	runtimeDSN := testRuntimeURL(t, dsn)
+	for i := 0; i < 2; i++ {
+		st, err := Open(runtimeDSN)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v, err := st.SchemaVersion(); err != nil || v != CurrentSchemaVersion {
+			t.Fatalf("schema=%d,%v", v, err)
+		}
+		st.Close()
+		if err := Apply(db); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestOpenRefusesForbiddenPath(t *testing.T) {
-	dir := t.TempDir()
-	measurement := filepath.Join(dir, "meshcore.db")
-	if err := os.WriteFile(measurement, []byte{}, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	_, err := Open(measurement, measurement)
-	if err == nil || !strings.Contains(err.Error(), "measurement database") {
-		t.Fatalf("Open(measurement) err = %v; want refusal", err)
-	}
-	// A relative spelling of the same file is refused too.
-	wd, _ := os.Getwd()
-	defer os.Chdir(wd)
-	os.Chdir(dir)
-	if _, err := Open("meshcore.db", measurement); err == nil {
-		t.Fatal("relative path to the measurement DB was not refused")
+	dsn := pgtest.NewSchema(t)
+	alias, _ := url.Parse(dsn)
+	q := alias.Query()
+	q.Set("application_name", "different-client")
+	q.Set("search_path", "public")
+	alias.RawQuery = q.Encode()
+	if st, err := Open(dsn, alias.String()); err == nil || !strings.Contains(err.Error(), "measurement database") {
+		if st != nil {
+			st.Close()
+		}
+		t.Fatal("the same effective database was not refused")
 	}
 }
 
 func TestOpenRejectsNewerSchema(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "users.db")
-	st, err := Open(path)
-	if err != nil {
+	dsn := pgtest.NewSchema(t)
+	db := testOwner(t, dsn)
+	if err := Apply(db); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.db.Exec(`UPDATE schema_version SET version = 999`); err != nil {
+	runtimeDSN := testRuntimeURL(t, dsn)
+	if _, err := db.Exec(`UPDATE schema_version SET version=999`); err != nil {
 		t.Fatal(err)
 	}
-	st.Close()
-	if _, err := Open(path); err == nil || !strings.Contains(err.Error(), "newer") {
-		t.Fatalf("Open with newer schema err = %v", err)
+	if st, err := Open(runtimeDSN); err == nil || !strings.Contains(err.Error(), "newer") {
+		if st != nil {
+			st.Close()
+		}
+		t.Fatalf("Open with newer schema error=%v", err)
+	}
+	if err := Apply(db); err == nil {
+		t.Fatal("bootstrap accepted a newer schema")
 	}
 }
 
 func TestOpenRejectsDSNCharacters(t *testing.T) {
-	for _, p := range []string{"users?.db", "users#1.db"} {
-		if _, err := Open(filepath.Join(t.TempDir(), p)); err == nil {
-			t.Errorf("Open(%q) accepted", p)
+	for _, dsn := range []string{"users.db", "users?.db", "file:users.db", "postgresql://u:p@host/a?host=elsewhere", "postgresql://u:p@host1,host2/a"} {
+		if st, err := Open(dsn); err == nil {
+			st.Close()
+			t.Fatal("unsupported database address accepted")
 		}
+	}
+}
+
+func TestApplyConcurrentAndIncomplete(t *testing.T) {
+	dsn := pgtest.NewSchema(t)
+	db := testOwner(t, dsn)
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := Apply(db); err != nil {
+				t.Errorf("concurrent bootstrap: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if _, err := db.Exec(`UPDATE corescope_schema SET ready=false`); err != nil {
+		t.Fatal(err)
+	}
+	if err := AssertReady(db); err == nil {
+		t.Fatal("incomplete import accepted")
+	}
+	if err := Apply(db); err == nil {
+		t.Fatal("bootstrap completed an unverified import")
 	}
 }

@@ -110,7 +110,7 @@ func TestRunAsyncMigration_PanicCapture(t *testing.T) {
 	}
 
 	var errMsg sql.NullString
-	if err := s.db.QueryRow(`SELECT error FROM _async_migrations WHERE name = ?`, name).Scan(&errMsg); err != nil {
+	if err := s.db.QueryRow(`SELECT error FROM _async_migrations WHERE name = $1`, name).Scan(&errMsg); err != nil {
 		t.Fatalf("error column lookup: %v", err)
 	}
 	if !errMsg.Valid || errMsg.String == "" {
@@ -160,7 +160,7 @@ func TestRunAsyncMigration_RestartSafetyFailedIsRetried(t *testing.T) {
 	if err := ensureAsyncMigrationsTable(s.db); err != nil {
 		t.Fatalf("ensure table: %v", err)
 	}
-	if _, err := s.db.Exec(`INSERT INTO _async_migrations (name, status, error) VALUES (?, 'failed', 'simulated prior crash')`, name); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO _async_migrations (name, status, error) VALUES ($1, 'failed', 'simulated prior crash')`, name); err != nil {
 		t.Fatalf("seed failed row: %v", err)
 	}
 
@@ -181,7 +181,7 @@ func TestRunAsyncMigration_RestartSafetyFailedIsRetried(t *testing.T) {
 
 	// And the error column must be cleared on success.
 	var errCol sql.NullString
-	if err := s.db.QueryRow(`SELECT error FROM _async_migrations WHERE name = ?`, name).Scan(&errCol); err != nil {
+	if err := s.db.QueryRow(`SELECT error FROM _async_migrations WHERE name = $1`, name).Scan(&errCol); err != nil {
 		t.Fatalf("error col: %v", err)
 	}
 	if errCol.Valid && errCol.String != "" {
@@ -200,7 +200,7 @@ func TestRunAsyncMigration_RestartSafetyPendingIsRetried(t *testing.T) {
 	if err := ensureAsyncMigrationsTable(s.db); err != nil {
 		t.Fatalf("ensure table: %v", err)
 	}
-	if _, err := s.db.Exec(`INSERT INTO _async_migrations (name, status) VALUES (?, 'pending_async')`, name); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO _async_migrations (name, status) VALUES ($1, 'pending_async')`, name); err != nil {
 		t.Fatalf("seed pending row: %v", err)
 	}
 
@@ -243,7 +243,7 @@ func TestRunAsyncMigration_FnErrorRecorded(t *testing.T) {
 	}
 
 	var errCol sql.NullString
-	if err := s.db.QueryRow(`SELECT error FROM _async_migrations WHERE name = ?`, name).Scan(&errCol); err != nil {
+	if err := s.db.QueryRow(`SELECT error FROM _async_migrations WHERE name = $1`, name).Scan(&errCol); err != nil {
 		t.Fatalf("error col: %v", err)
 	}
 	if !errCol.Valid || errCol.String == "" {

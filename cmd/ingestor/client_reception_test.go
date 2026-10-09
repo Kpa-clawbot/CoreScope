@@ -54,16 +54,18 @@ func TestPruneOldClientReceptions(t *testing.T) {
 // this is a regression guard.
 func TestPruneClientRxObservationsUsesIndex(t *testing.T) {
 	s := newTestStore(t)
-	rows, err := s.db.Query(`EXPLAIN QUERY PLAN DELETE FROM client_rx_observations WHERE rx_at < ?`, "2026-01-01T00:00:00Z")
+	if _, err := s.db.Exec(`SET enable_seqscan=off`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.db.Query(`EXPLAIN (COSTS OFF) DELETE FROM client_rx_observations WHERE rx_at < $1`, "2026-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
 	plan := ""
 	for rows.Next() {
-		var id, parent, notused int
 		var detail string
-		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+		if err := rows.Scan(&detail); err != nil {
 			t.Fatal(err)
 		}
 		plan += detail + "\n"
@@ -125,12 +127,12 @@ func TestPruneOldClientRxObservations(t *testing.T) {
 		t.Fatalf("expected 2 observations remaining (recent + boundary), got %d", remaining)
 	}
 	var recentSurvived int
-	s.db.QueryRow(`SELECT COUNT(*) FROM client_rx_observations WHERE pkt_hash = ?`, "hash-recent").Scan(&recentSurvived)
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_rx_observations WHERE pkt_hash = $1`, "hash-recent").Scan(&recentSurvived)
 	if recentSurvived != 1 {
 		t.Fatalf("the recent row must survive the prune; got %d", recentSurvived)
 	}
 	var boundarySurvived int
-	s.db.QueryRow(`SELECT COUNT(*) FROM client_rx_observations WHERE pkt_hash = ?`, "hash-boundary").Scan(&boundarySurvived)
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_rx_observations WHERE pkt_hash = $1`, "hash-boundary").Scan(&boundarySurvived)
 	if boundarySurvived != 1 {
 		t.Fatalf("boundary row (500ms after cutoff instant) must survive; an RFC3339 (no-ms) cutoff would wrongly delete it because '.' < 'Z' lexicographically — got %d", boundarySurvived)
 	}
@@ -139,7 +141,7 @@ func TestPruneOldClientRxObservations(t *testing.T) {
 func TestClientReceptionsTableExists(t *testing.T) {
 	s := newTestStore(t)
 	cols := map[string]bool{}
-	rows, err := s.db.Query(`PRAGMA table_info(client_receptions)`)
+	rows, err := s.db.Query(`SELECT ordinal_position::int,column_name,CASE data_type WHEN 'bigint' THEN 'INTEGER' WHEN 'double precision' THEN 'REAL' ELSE upper(data_type) END,CASE is_nullable WHEN 'NO' THEN 1 ELSE 0 END,column_default,0 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='client_receptions' ORDER BY ordinal_position`)
 	if err != nil {
 		t.Fatalf("PRAGMA failed: %v", err)
 	}
@@ -168,12 +170,13 @@ func crI(i int) *int         { return &i }
 // per-node coverage query (sargable heard_key IN-list + bbox, mirroring
 // cmd/server coverageHeardKeyCandidates) seeks the heard_key composite index
 // rather than scanning the table. Without idx_client_recept_heard_geo the plan
-// is "SCAN client_receptions".
+// is "Seq Scan on client_receptions".
 func TestClientReceptionsCoverageQueryUsesIndex(t *testing.T) {
 	s := newTestStore(t)
-	q := `EXPLAIN QUERY PLAN SELECT lat, lon, snr, rssi, heard_key, rx_at
+	q := `EXPLAIN (COSTS OFF) SELECT lat, lon, snr, rssi, heard_key, rx_at
 		FROM client_receptions
-		WHERE heard_key IN (?,?,?) AND lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?`
+		WHERE heard_key IN ($1,$2,$3) AND lat BETWEEN $4 AND $5 AND lon BETWEEN $6 AND $7`
+	s.db.Exec(`SET enable_seqscan=off`)
 	rows, err := s.db.Query(q, "aabbccddeeff00112233", "aabbcc", "aabb", 50.0, 52.0, 3.0, 4.0)
 	if err != nil {
 		t.Fatal(err)
@@ -181,17 +184,16 @@ func TestClientReceptionsCoverageQueryUsesIndex(t *testing.T) {
 	defer rows.Close()
 	plan := ""
 	for rows.Next() {
-		var id, parent, notused int
 		var detail string
-		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+		if err := rows.Scan(&detail); err != nil {
 			t.Fatal(err)
 		}
 		plan += detail + "\n"
 	}
-	if !strings.Contains(plan, "USING INDEX idx_client_recept") {
+	if !strings.Contains(plan, "idx_client_recept") {
 		t.Fatalf("coverage query should use a client_recept index, plan was:\n%s", plan)
 	}
-	if strings.Contains(plan, "SCAN client_receptions") {
+	if strings.Contains(plan, "Seq Scan on client_receptions") {
 		t.Fatalf("coverage query should not full-scan, plan was:\n%s", plan)
 	}
 }
@@ -201,16 +203,18 @@ func TestClientReceptionsCoverageQueryUsesIndex(t *testing.T) {
 // index rather than full-scanning under the writer lock (polish review).
 func TestClientReceptionsRetentionUsesRxAtIndex(t *testing.T) {
 	s := newTestStore(t)
-	rows, err := s.db.Query(`EXPLAIN QUERY PLAN DELETE FROM client_receptions WHERE rx_at < ?`, "2026-01-01T00:00:00Z")
+	if _, err := s.db.Exec(`SET enable_seqscan=off`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.db.Query(`EXPLAIN (COSTS OFF) DELETE FROM client_receptions WHERE rx_at < $1`, "2026-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
 	plan := ""
 	for rows.Next() {
-		var id, parent, notused int
 		var detail string
-		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+		if err := rows.Scan(&detail); err != nil {
 			t.Fatal(err)
 		}
 		plan += detail + "\n"
@@ -230,22 +234,24 @@ func TestClientReceptionsRetentionUsesRxAtIndex(t *testing.T) {
 // index-backed).
 func TestRxLeaderboardQueryIsIndexBacked(t *testing.T) {
 	s := newTestStore(t)
-	rows, err := s.db.Query(`EXPLAIN QUERY PLAN
+	if _, err := s.db.Exec(`SET enable_seqscan=off`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.db.Query(`EXPLAIN (COSTS OFF)
 		SELECT cr.rx_pubkey, COUNT(*), COUNT(DISTINCT cr.heard_key)
 		FROM client_receptions cr
-		WHERE cr.rx_at >= ?
+		WHERE cr.rx_at >= $1
 		GROUP BY cr.rx_pubkey
 		ORDER BY COUNT(*) DESC
-		LIMIT ?`, "2026-01-01T00:00:00Z", 100)
+		LIMIT $2`, "2026-01-01T00:00:00Z", 100)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
 	plan := ""
 	for rows.Next() {
-		var id, parent, notused int
 		var detail string
-		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+		if err := rows.Scan(&detail); err != nil {
 			t.Fatal(err)
 		}
 		plan += detail + "\n"
@@ -254,7 +260,7 @@ func TestRxLeaderboardQueryIsIndexBacked(t *testing.T) {
 	// The concern is a bare table-heap scan, not which specific index wins. The
 	// plan must stay index-backed (covering or search) — a regression to a bare
 	// "SCAN cr" without an index fails here.
-	if !strings.Contains(plan, "INDEX") {
+	if !strings.Contains(strings.ToLower(plan), "index") {
 		t.Fatalf("leaderboard SELECT must stay index-backed (no full table-heap scan), plan was:\n%s", plan)
 	}
 }
@@ -380,7 +386,7 @@ func TestHandleClientPacketRelayedAdvertWritesReception(t *testing.T) {
 	handleClientPacket(s, &Config{}, "test", testCompanionPK, msg, nil, nil)
 
 	var obsName string
-	s.db.QueryRow(`SELECT name FROM client_observers WHERE pubkey=?`, testCompanionPK).Scan(&obsName)
+	s.db.QueryRow(`SELECT name FROM client_observers WHERE pubkey=$1`, testCompanionPK).Scan(&obsName)
 	if obsName != "MyMob" {
 		t.Fatalf("expected client_observers name 'MyMob', got %q", obsName)
 	}
@@ -390,7 +396,7 @@ func TestHandleClientPacketRelayedAdvertWritesReception(t *testing.T) {
 	// The 0-hop advert→full-pubkey branch is covered by TestDeriveHeardKey.
 	var n, keylen int
 	var src string
-	if err := s.db.QueryRow(`SELECT COUNT(*), COALESCE(MAX(heard_keylen),0), COALESCE(MAX(src),'') FROM client_receptions WHERE rx_pubkey=?`, testCompanionPK).Scan(&n, &keylen, &src); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*), COALESCE(MAX(heard_keylen),0), COALESCE(MAX(src),'') FROM client_receptions WHERE rx_pubkey=$1`, testCompanionPK).Scan(&n, &keylen, &src); err != nil {
 		t.Fatal(err)
 	}
 	if n != 1 || keylen < 2 || src != "rxlog" {
@@ -401,7 +407,7 @@ func TestHandleClientPacketRelayedAdvertWritesReception(t *testing.T) {
 	const companion2 = "b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3"
 	handleClientPacket(s, &Config{}, "test", companion2, map[string]interface{}{"raw": advertHex, "direction": "rx"}, nil, nil)
 	var n2 int
-	s.db.QueryRow(`SELECT COUNT(*) FROM client_receptions WHERE rx_pubkey=?`, companion2).Scan(&n2)
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_receptions WHERE rx_pubkey=$1`, companion2).Scan(&n2)
 	if n2 != 0 {
 		t.Fatalf("packet without gps must be dropped, got %d rows", n2)
 	}
@@ -432,7 +438,7 @@ func TestHandleClientPacketZeroHopAdvertWritesReception(t *testing.T) {
 	var keylen int
 	var snr sql.NullFloat64
 	var lat, lon float64
-	if err := s.db.QueryRow(`SELECT heard_key, heard_keylen, src, snr, lat, lon FROM client_receptions WHERE rx_pubkey=?`, testCompanionPK).
+	if err := s.db.QueryRow(`SELECT heard_key, heard_keylen, src, snr, lat, lon FROM client_receptions WHERE rx_pubkey=$1`, testCompanionPK).
 		Scan(&heardKey, &keylen, &src, &snr, &lat, &lon); err != nil {
 		t.Fatalf("expected a 0-hop advert reception: %v", err)
 	}
@@ -560,7 +566,7 @@ func TestHandleClientPacketDiscoverRespWritesReception(t *testing.T) {
 
 	var heardKey, src string
 	var keylen int
-	if err := s.db.QueryRow(`SELECT heard_key, heard_keylen, src FROM client_receptions WHERE rx_pubkey=?`, "aa11").
+	if err := s.db.QueryRow(`SELECT heard_key, heard_keylen, src FROM client_receptions WHERE rx_pubkey=$1`, "aa11").
 		Scan(&heardKey, &keylen, &src); err != nil {
 		t.Fatalf("expected a discover-response reception: %v", err)
 	}
@@ -709,7 +715,7 @@ func TestClientObservationScopeNameFromTransportCode(t *testing.T) {
 	// same content dedups across scopes), so raw and raw2 below share one
 	// pkt_hash — distinguish the two inserted rows by rx_at, not pkt_hash.
 	var code1, code2, scopeName sql.NullString
-	if err := s.db.QueryRow(`SELECT code1, code2, scope_name FROM client_rx_observations WHERE rx_at = ?`, ts1).
+	if err := s.db.QueryRow(`SELECT code1, code2, scope_name FROM client_rx_observations WHERE rx_at = $1`, ts1).
 		Scan(&code1, &code2, &scopeName); err != nil {
 		t.Fatal(err)
 	}
@@ -735,7 +741,7 @@ func TestClientObservationScopeNameFromTransportCode(t *testing.T) {
 	handleClientPacket(s, cfgWithObservations(), "test", "aa11", msg2, nil, regionKeySetFromKeys(regionKeys))
 
 	var code1b, scopeNameB sql.NullString
-	if err := s.db.QueryRow(`SELECT code1, scope_name FROM client_rx_observations WHERE rx_at = ?`, ts2).
+	if err := s.db.QueryRow(`SELECT code1, scope_name FROM client_rx_observations WHERE rx_at = $1`, ts2).
 		Scan(&code1b, &scopeNameB); err != nil {
 		t.Fatal(err)
 	}

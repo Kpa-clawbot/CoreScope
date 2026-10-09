@@ -11,13 +11,7 @@ const { spawnSync } = require('node:child_process');
 const read = name => fs.readFileSync(path.join(REPO_ROOT, '.github/workflows', name), 'utf8').replace(/\r/g, '');
 const fast = read('release-fast-path.yml');
 const deploy = read('deploy.yml');
-let bash = process.env.BASH_PATH || 'bash';
-if (!process.env.BASH_PATH && process.platform === 'win32') {
-  // Prefer Git Bash over Windows' WSL launcher; CI uses the native Linux bash.
-  const git = spawnSync('git', ['--exec-path'], { encoding: 'utf8' });
-  const gitBash = path.resolve((git.stdout || '').trim(), '../../../bin/bash.exe');
-  if (git.status === 0 && fs.existsSync(gitBash)) bash = gitBash;
-}
+const bash = require('../../scripts/bash-path')();
 
 // Extract known YAML blocks, retaining the actual expressions and shell code.
 // Full YAML syntax is separately checked by actionlint; no YAML dependency here.
@@ -56,11 +50,11 @@ function runSteps(source, context, edge, mutateFails = false) {
   const output = path.join(dir, 'output');
   const log = path.join(dir, 'commands');
   fs.writeFileSync(log, '');
-  fs.mkdirSync(path.join(dir, 'cmd/decrypt'), { recursive: true });
+  for (const name of ['decrypt', 'migrate']) fs.mkdirSync(path.join(dir, 'cmd', name), { recursive: true });
   // go() only logs, so nothing real is produced; the release job's own
   // static/runnable verification step still needs these to exist.
-  for (const arch of ['amd64', 'arm64']) {
-    fs.writeFileSync(path.join(dir, `corescope-decrypt-linux-${arch}`),
+  for (const arch of ['amd64', 'arm64']) for (const name of ['decrypt', 'migrate']) {
+    fs.writeFileSync(path.join(dir, `corescope-${name}-linux-${arch}`),
       '#!/bin/sh\necho "corescope-decrypt stub"\n', { mode: 0o755 });
   }
   const stubs = `
@@ -130,7 +124,7 @@ function runSteps(source, context, edge, mutateFails = false) {
       const result = spawnSync(bash, ['--noprofile', '--norc', '-e', '-o', 'pipefail'], {
         input: stubs + '\n' + expand(script, context), cwd: dir, encoding: 'utf8', timeout: 15000,
         env: {
-          ...process.env, GITHUB_REF: context.github.ref, GITHUB_SHA: context.github.sha,
+          ...process.env, CC: '', GITHUB_REF: context.github.ref, GITHUB_REF_NAME: context.github.ref_name, GITHUB_SHA: context.github.sha,
           GITHUB_OUTPUT: bashPath(output), COMMAND_LOG: bashPath(log), TMPDIR: bashPath(dir),
           EDGE_CONFIG: edge === null ? 'missing' : JSON.stringify({ config: { Labels: { 'org.opencontainers.image.revision': edge } } }),
           // :edge is a two-platform index plus the two buildx attestation
@@ -259,7 +253,14 @@ for (const [ref, event] of [['refs/heads/master', 'push'], ['refs/heads/master',
   // The cross-toolchain gate: since the SQLite driver became cgo, every
   // event must build both architectures, without publishing, beside the tests.
   const checkSteps = steps(block(deploy, 'image-check', 2)).filter(step => step.includes('uses: docker/build-push-action'));
-  assert.equal(checkSteps.length, 1, 'image-check runs exactly one build');
+  assert.equal(checkSteps.length, 2, 'image-check has one two-arch build and one cached amd64 load');
+  for (const step of checkSteps) assert.equal(value(step, 'push', 10), 'false', 'neither image-check build may publish');
+  assert.equal(value(checkSteps[1], 'platforms', 10), 'linux/amd64', 'Compose smoke must load the native runner architecture only');
+  assert.equal(value(checkSteps[1], 'load', 10), 'true', 'Compose smoke requires a locally loaded image');
+  assert.equal(value(checkSteps[1], 'context', 10), value(checkSteps[0], 'context', 10), 'smoke must build the same source');
+  assert.equal(value(checkSteps[1], 'build-args', 10), value(checkSteps[0], 'build-args', 10), 'smoke must reuse identical version/commit/time metadata');
+  assert.equal(value(checkSteps[1], 'cache-from', 10), value(checkSteps[0], 'cache-from', 10), 'smoke must reuse the validated build cache');
+  assert.equal(value(checkSteps[1], 'if', 8), '', 'packaged smoke must run on every image-check event');
   assert.equal(value(checkSteps[0], 'push', 10), 'false', 'the image check must never publish');
   assert.equal(value(checkSteps[0], 'platforms', 10), 'linux/amd64,linux/arm64', 'the image check must cover both shipped architectures');
   assert.equal(value(checkSteps[0], 'if', 8), '', 'the image check runs on every event');
@@ -286,21 +287,25 @@ assert.equal(value(dispatchInput, 'default', 8), 'false', 'manual and fallback d
 
 const release = block(deploy, 'release-artifacts', 2);
 const builds = runSteps(release, context(), null).commands.filter(command => command[0] === 'go');
-// CGO_ENABLED=1 since the SQLite driver became github.com/mattn/go-sqlite3, and
-// CC must be zig targeting musl — that is what makes the artifact static and
-// cross-buildable. A silent revert to the Go-only toolchain fails here.
+// Exercise the actual shell: native PostgreSQL tools use pure Go; the offline
+// importer alone retains SQLite/cgo and a static musl cross-compiler.
 assert.deepEqual(builds.map(command => command.slice(1, 5)), [
+  ['linux', 'amd64', '0', ''],
   ['linux', 'amd64', '1', 'zig cc -target x86_64-linux-musl'],
+  ['linux', 'arm64', '0', ''],
   ['linux', 'arm64', '1', 'zig cc -target aarch64-linux-musl'],
 ]);
 for (const command of builds) {
-  assert.ok(command.includes("-ldflags=-s -w -extldflags '-static -Wl,-s' -X main.version=v9.8.7"), 'binary version must come from tag, and the artifact must stay static');
-  assert.ok(command.includes('-tags'), 'netgo/osusergo/sqlite_omit_load_extension must survive');
+  const importer = command.includes('netgo,osusergo,sqlite_omit_load_extension');
+  assert.ok(command.includes(importer
+    ? "-ldflags=-s -w -extldflags '-static -Wl,-s'"
+    : '-ldflags=-s -w -X main.version=v9.8.7'), 'static linking/version flags must match the tool');
+  assert.ok(command.includes('-tags'), 'runtime resolver tags must survive');
 }
 const upload = steps(release).filter(step => step.includes('uses: softprops/action-gh-release@v2'));
 assert.equal(upload.length, 1, 'publish both architectures together, before the release becomes immutable');
 assert.equal(value(upload[0], 'fail_on_unmatched_files', 10), 'true', 'missing assets must prevent publication');
-assert.deepEqual(value(upload[0], 'files', 10).trim().split('\n').map(line => line.trim()), ['corescope-decrypt-linux-amd64', 'corescope-decrypt-linux-arm64']);
+assert.deepEqual(value(upload[0], 'files', 10).trim().split('\n').map(line => line.trim()), ['corescope-decrypt-linux-amd64', 'corescope-decrypt-linux-arm64', 'corescope-migrate-linux-amd64', 'corescope-migrate-linux-arm64']);
 assert.equal(value(upload[0], 'draft', 10), '', 'standard release action must finalize after both uploads');
 assert.equal(value(upload[0], 'prerelease', 10), '', 'standard release action must upload before publishing');
 const checkout = steps(release).find(step => step.includes('uses: actions/checkout@'));
@@ -326,3 +331,18 @@ console.log('PASS failed retag/Go gates, branch/PR routes, and complete tagged r
   assert.deepEqual(commands.filter(command => command[0] === 'crane' && command[1] === 'tag').map(command => command.at(-1)), ['v9.8', 'v9', 'latest']);
   console.log('PASS dispatched republish: tags rebuilt, no second release dispatch');
 }
+
+// Benchmark dispatches cannot publish or deploy, even on trusted master with
+// staging enabled. Ordinary dispatch routing above remains unchanged.
+for (const ref of ['refs/heads/master', 'refs/heads/codex/postgres', 'refs/tags/v9.8.7']) {
+  const ctx = context(ref, 'workflow_dispatch', { postgres_benchmark: true, candidate_sha: 'a'.repeat(40) });
+  ctx.vars.ENABLE_STAGING_DEPLOY = 'true';
+  const jobs = route(ctx);
+  for (const name of ['build-and-publish', 'release-artifacts', 'deploy', 'publish']) {
+    assert.equal(jobs[name].result, 'skipped', 'benchmark dispatch must skip ' + name);
+  }
+  assert.equal(evaluate(value(block(deploy, 'postgres-benchmark', 2), 'if', 4), ctx), true);
+}
+const benchmarkCall = block(deploy, 'postgres-benchmark', 2);
+assert.ok(!benchmarkCall.includes('secrets:') && !benchmarkCall.includes('environment:'), 'benchmark must receive no deployment secrets/environment');
+console.log('PASS benchmark-only dispatch cannot publish or deploy');

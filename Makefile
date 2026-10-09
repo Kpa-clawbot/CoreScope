@@ -1,13 +1,8 @@
 # corescope build entry point.
 #
-# This repo is 14 Go modules wired with `replace ../../internal/*` and no
-# go.work, so every recipe changes into its module. The build flags live here
-# because the SQLite driver is cgo now (github.com/mattn/go-sqlite3) and the
-# flags stopped being something you can safely retype at each call site.
-#
-# Cross-compilation uses `zig cc` as the C toolchain, targeting musl so the
-# binaries are fully static and run on the alpine runtime image (or scratch)
-# with no libc dependency at all.
+# Each Go module resolves internal dependencies through local replace directives.
+# Runtime binaries use pure Go. Only the offline SQLite importer needs cgo;
+# its Linux cross-build uses zig cc with musl for a fully static binary.
 #
 # Quick reference:
 #   make build                    # all four binaries for the host
@@ -21,21 +16,17 @@ GIT_VERSION       ?= $(shell git describe --tags --match "v*" 2>/dev/null || ech
 GIT_COMMIT        ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 BUILD_TIME        ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
-GOENV_GOOS        := $(shell $(GO) env GOOS)
-GOENV_GOARCH      := $(shell $(GO) env GOARCH)
+GOENV_GOOS        := $(shell "$(GO)" env GOOS)
+GOENV_GOARCH      := $(shell "$(GO)" env GOARCH)
 GOOS              ?= $(GOENV_GOOS)
 GOARCH            ?= $(GOENV_GOARCH)
 
-# Exported: a bare make variable never reaches the go toolchain.
-export CGO_ENABLED ?= 1
-
-# netgo/osusergo keep the pure-Go resolver and user lookup the binaries had
-# under CGO_ENABLED=0, so enabling cgo for SQLite does not quietly switch DNS
-# resolution to the C resolver. sqlite_omit_load_extension drops the dlopen
-# path, which is what lets -extldflags -static link cleanly. -Wl,-s on the
-# cross builds strips the musl objects zig links in: Go's own -s -w does not
-# reach them, and they account for well over half the binary.
-GO_BUILD_TAGS     ?= netgo,osusergo,sqlite_omit_load_extension
+CGO_server       := 0
+CGO_ingestor     := 0
+CGO_decrypt      := 0
+CGO_migrate      := 1
+GO_BUILD_TAGS    ?= netgo,osusergo
+TAGS_migrate    := ,sqlite_omit_load_extension
 GO_BUILD_FLAGS    ?= -trimpath
 GO_LDFLAGS_OPTIMS ?= -s -w
 
@@ -53,6 +44,7 @@ LDFLAGS_migrate   :=
 # zig target triples for the platforms we ship. musl, so the result is static.
 ZIG_TARGET_linux_amd64 := x86_64-linux-musl
 ZIG_TARGET_linux_arm64 := aarch64-linux-musl
+comma             := ,
 CROSS_PLATFORMS   := linux/amd64 linux/arm64
 
 DOCKER_IMAGE      ?= ghcr.io/kpa-clawbot/corescope
@@ -73,8 +65,8 @@ build: $(addprefix build-,$(CMDS))
 
 build-%:
 	@mkdir -p $(DIST)
-	cd cmd/$* && GOOS=$(GOOS) GOARCH=$(GOARCH) $(GO) build \
-		-tags $(GO_BUILD_TAGS) $(GO_BUILD_FLAGS) \
+	cd cmd/$* && CGO_ENABLED=$(CGO_$*) GOOS=$(GOOS) GOARCH=$(GOARCH) "$(GO)" build \
+		-tags $(GO_BUILD_TAGS)$(TAGS_$*) $(GO_BUILD_FLAGS) \
 		-ldflags "$(GO_LDFLAGS_OPTIMS) $(LDFLAGS_$*)" \
 		-o ../../$(DIST)/corescope-$* .
 
@@ -89,10 +81,10 @@ define CROSSBUILD_RULE
 .PHONY: crossbuild-$(2)-$(3)-$(4)
 crossbuild-$(2)-$(3)-$(4):
 	@mkdir -p $$(DIST)
-	@command -v zig >/dev/null || { echo "zig not found: needed to cross-compile cgo. See https://ziglang.org/download/"; exit 1; }
-	cd cmd/$(2) && CGO_ENABLED=1 GOOS=$(3) GOARCH=$(4) CC="zig cc -target $(1)" \
-		$$(GO) build -tags $$(GO_BUILD_TAGS) $$(GO_BUILD_FLAGS) \
-			-ldflags '$$(GO_LDFLAGS_OPTIMS) -extldflags "-static -Wl,-s" $$(LDFLAGS_$(2))' \
+	$(if $(filter migrate,$(2)),@command -v zig >/dev/null || { echo "zig not found: needed to cross-compile the offline importer. See https://ziglang.org/download/"; exit 1; },@:)
+	cd cmd/$(2) && CGO_ENABLED=$$(CGO_$(2)) GOOS=$(3) GOARCH=$(4) $(if $(filter migrate,$(2)),CC="zig cc -target $(1)",) \
+		"$$(GO)" build -tags $$(GO_BUILD_TAGS)$$(TAGS_$(2)) $$(GO_BUILD_FLAGS) \
+			-ldflags '$$(GO_LDFLAGS_OPTIMS) $(if $(filter migrate,$(2)),-extldflags "-static -Wl$(comma)-s",) $$(LDFLAGS_$(2))' \
 			-o ../../$$(DIST)/corescope-$(2)-$(3)-$(4) .
 endef
 
@@ -103,13 +95,13 @@ $(foreach c,$(CMDS),\
 # -- checks --------------------------------------------------------------------
 
 test:
-	bash scripts/allmod.sh test ./...
+	CGO_ENABLED=1 bash scripts/allmod.sh test ./...
 
 vet:
 	bash scripts/allmod.sh vet ./...
 
 fmt-check:
-	@unformatted=$$(gofmt -l $$(git ls-files '*.go' | grep -vi 'Dockerfile.go')); \
+	@unformatted=$$(gofmt -l $$(git ls-files '*.go')); \
 	if [ -n "$$unformatted" ]; then echo "gofmt required on:"; echo "$$unformatted"; exit 1; fi; \
 	echo "gofmt: clean"
 

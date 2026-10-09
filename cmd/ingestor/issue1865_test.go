@@ -14,10 +14,10 @@ import (
 // seedNode inserts a node into both nodes and inactive_nodes (lowercase key).
 func seedNode(t *testing.T, store *Store, pubkey string) {
 	t.Helper()
-	if _, err := store.db.Exec(`INSERT INTO nodes (public_key, name) VALUES (?, ?)`, pubkey, "n_"+pubkey[:4]); err != nil {
+	if _, err := store.db.Exec(`INSERT INTO nodes (public_key, name) VALUES ($1, $2)`, pubkey, "n_"+pubkey[:4]); err != nil {
 		t.Fatalf("seed node %s: %v", pubkey, err)
 	}
-	if _, err := store.db.Exec(`INSERT INTO inactive_nodes (public_key, name) VALUES (?, ?)`, pubkey, "n_"+pubkey[:4]); err != nil {
+	if _, err := store.db.Exec(`INSERT INTO inactive_nodes (public_key, name) VALUES ($1, $2)`, pubkey, "n_"+pubkey[:4]); err != nil {
 		t.Fatalf("seed inactive node %s: %v", pubkey, err)
 	}
 }
@@ -26,7 +26,7 @@ func configuredScope(t *testing.T, store *Store, pubkey string) (sql.NullString,
 	t.Helper()
 	var sc, at sql.NullString
 	if err := store.db.QueryRow(
-		`SELECT configured_scope, configured_scope_at FROM nodes WHERE public_key = ?`, pubkey,
+		`SELECT configured_scope, configured_scope_at FROM nodes WHERE public_key = $1`, pubkey,
 	).Scan(&sc, &at); err != nil {
 		t.Fatalf("read configured_scope for %s: %v", pubkey, err)
 	}
@@ -35,7 +35,7 @@ func configuredScope(t *testing.T, store *Store, pubkey string) (sql.NullString,
 
 func openNeighborsStore(t *testing.T) *Store {
 	t.Helper()
-	store, err := OpenStore(filepath.Join(t.TempDir(), "test.db"))
+	store, err := openPostgresTestStore(t, filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestUpdateNodeConfiguredScopeLastWriteWins(t *testing.T) {
 	}
 	// inactive_nodes mirrored.
 	var inactive sql.NullString
-	if err := store.db.QueryRow(`SELECT configured_scope FROM inactive_nodes WHERE public_key = ?`, pk).Scan(&inactive); err != nil {
+	if err := store.db.QueryRow(`SELECT configured_scope FROM inactive_nodes WHERE public_key = $1`, pk).Scan(&inactive); err != nil {
 		t.Fatal(err)
 	}
 	if inactive.String != "#de" {

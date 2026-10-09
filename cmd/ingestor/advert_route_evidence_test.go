@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -28,7 +29,7 @@ func TestAdvertRouteEvidenceSurvivesObservationUpsert(t *testing.T) {
 	} {
 		t.Run(sequence.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "evidence.db")
-			s, err := OpenStore(path)
+			s, err := openPostgresTestStore(t, path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -64,7 +65,7 @@ func TestAdvertRouteEvidenceSurvivesObservationUpsert(t *testing.T) {
 			if canonical != sequence.raws[0] {
 				t.Fatalf("canonical raw changed: %s", canonical)
 			}
-			if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='advert_route_evidence'`).Scan(&count); err != nil {
+			if err := s.db.QueryRow(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='advert_route_evidence'`).Scan(&count); err != nil {
 				t.Fatal(err)
 			}
 			if count != 1 {
@@ -94,14 +95,14 @@ func TestAdvertRouteEvidenceSurvivesObservationUpsert(t *testing.T) {
 				t.Fatal("duplicate traffic appended route evidence")
 			}
 			var sequenceID int64
-			if err := s.db.QueryRow(`SELECT seq FROM sqlite_sequence WHERE name='advert_route_evidence'`).Scan(&sequenceID); err != nil {
+			if err := s.db.QueryRow(`SELECT last_value FROM advert_route_evidence_id_seq`).Scan(&sequenceID); err != nil {
 				t.Fatal(err)
 			}
 			if sequenceID != maxID {
 				t.Fatalf("duplicate traffic advanced evidence sequence: %d, want %d", sequenceID, maxID)
 			}
 			s.Close()
-			s, err = OpenStore(path)
+			s, err = openPostgresTestStore(t, path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -121,7 +122,7 @@ func TestAdvertRouteEvidenceSurvivesObservationUpsert(t *testing.T) {
 }
 
 func TestAdvertRouteEvidenceBackfillResumeAndLiveUnion(t *testing.T) {
-	s, err := OpenStore(filepath.Join(t.TempDir(), "backfill.db"))
+	s, err := openPostgresTestStore(t, filepath.Join(t.TempDir(), "backfill.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,10 +137,10 @@ func TestAdvertRouteEvidenceBackfillResumeAndLiveUnion(t *testing.T) {
 		t.Fatal(err)
 	}
 	for id := 1; id <= 1200; id++ {
-		if _, err := tx.Exec(`INSERT INTO transmissions(id,hash,raw_hex,first_seen,payload_type,route_type) VALUES(?,?, '1100aa','2026-01-01T00:00:00Z',4,1)`, id, fmt.Sprintf("history-%d", id)); err != nil {
+		if _, err := tx.Exec(`INSERT INTO transmissions(id,hash,raw_hex,first_seen,payload_type,route_type) VALUES($1,$2, '1100aa','2026-01-01T00:00:00Z',4,1)`, id, fmt.Sprintf("history-%d", id)); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := tx.Exec(`INSERT INTO observations(transmission_id,observer_idx,raw_hex,path_json,timestamp) VALUES(?,(SELECT rowid FROM observers WHERE id='fixture-observer'),'1200aa','[]',1)`, id); err != nil {
+		if _, err := tx.Exec(`INSERT INTO observations(transmission_id,observer_idx,raw_hex,path_json,timestamp) VALUES($1,(SELECT rowid FROM observers WHERE id='fixture-observer'),'1200aa','[]',1)`, id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -153,7 +154,7 @@ func TestAdvertRouteEvidenceBackfillResumeAndLiveUnion(t *testing.T) {
 	}
 	// Abort after one committed batch; the failed batch must not move its
 	// persisted cursor, so a retry can recover every remaining frame.
-	if _, err := s.db.Exec(`CREATE TRIGGER fail_evidence_batch BEFORE INSERT ON advert_route_evidence WHEN NEW.tx_id=501 BEGIN SELECT RAISE(ABORT,'fixture failure'); END`); err != nil {
+	if _, err := testAdmin(t, s).Exec(`CREATE OR REPLACE FUNCTION fail_evidence_batch_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.tx_id=501 THEN RAISE EXCEPTION 'fixture failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER fail_evidence_batch BEFORE INSERT ON advert_route_evidence FOR EACH ROW EXECUTE FUNCTION fail_evidence_batch_fn()`); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.backfillAdvertEvidence(context.Background(), s.db); err == nil {
@@ -166,7 +167,7 @@ func TestAdvertRouteEvidenceBackfillResumeAndLiveUnion(t *testing.T) {
 	if cursor != 500 {
 		t.Fatalf("cursor=%d after failure, want committed batch boundary 500", cursor)
 	}
-	if _, err := s.db.Exec(`DROP TRIGGER fail_evidence_batch`); err != nil {
+	if _, err := testAdmin(t, s).Exec(`DROP TRIGGER fail_evidence_batch ON advert_route_evidence`); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
@@ -187,13 +188,13 @@ func TestAdvertRouteEvidenceBackfillResumeAndLiveUnion(t *testing.T) {
 		t.Fatalf("got %d evidence rows, want two per history transmission", count)
 	}
 	var before, after int64
-	if err := s.db.QueryRow(`SELECT seq FROM sqlite_sequence WHERE name='advert_route_evidence'`).Scan(&before); err != nil {
+	if err := s.db.QueryRow(`SELECT last_value FROM advert_route_evidence_id_seq`).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.backfillAdvertEvidence(context.Background(), s.db); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.db.QueryRow(`SELECT seq FROM sqlite_sequence WHERE name='advert_route_evidence'`).Scan(&after); err != nil {
+	if err := s.db.QueryRow(`SELECT last_value FROM advert_route_evidence_id_seq`).Scan(&after); err != nil {
 		t.Fatal(err)
 	}
 	if before != after {
@@ -206,7 +207,7 @@ func TestAdvertRouteEvidenceBackfillResumeAndLiveUnion(t *testing.T) {
 func TestAdvertRouteEvidenceFailureKeepsCoreIngestion(t *testing.T) {
 	for _, failure := range []string{"incoming-write", "legacy-read", "legacy-write"} {
 		t.Run(failure, func(t *testing.T) {
-			s, err := OpenStore(filepath.Join(t.TempDir(), "write-failure.db"))
+			s, err := openPostgresTestStore(t, filepath.Join(t.TempDir(), "write-failure.db"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -226,14 +227,14 @@ func TestAdvertRouteEvidenceFailureKeepsCoreIngestion(t *testing.T) {
 			if _, err := s.db.Exec(`DELETE FROM advert_route_evidence; UPDATE observations SET raw_hex='1200aa',resolved_path=NULL`); err != nil {
 				t.Fatal(err)
 			}
-			stmt := `CREATE TRIGGER fail_evidence BEFORE INSERT ON advert_route_evidence WHEN NEW.bit=1 BEGIN SELECT RAISE(ABORT,'fixture evidence failure'); END`
+			stmt := `CREATE OR REPLACE FUNCTION fail_evidence_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.bit=1 THEN RAISE EXCEPTION 'fixture evidence failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER fail_evidence BEFORE INSERT ON advert_route_evidence FOR EACH ROW EXECUTE FUNCTION fail_evidence_fn()`
 			if failure == "legacy-read" {
 				stmt = `DROP TABLE advert_evidence_backfill`
 			}
 			if failure == "legacy-write" {
-				stmt = `CREATE TRIGGER fail_evidence BEFORE INSERT ON advert_route_evidence WHEN NEW.bit=2 BEGIN SELECT RAISE(ABORT,'fixture evidence failure'); END`
+				stmt = `CREATE OR REPLACE FUNCTION fail_evidence_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.bit=2 THEN RAISE EXCEPTION 'fixture evidence failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER fail_evidence BEFORE INSERT ON advert_route_evidence FOR EACH ROW EXECUTE FUNCTION fail_evidence_fn()`
 			}
-			if _, err := s.db.Exec(stmt); err != nil {
+			if _, err := testAdmin(t, s).Exec(stmt); err != nil {
 				t.Fatal(err)
 			}
 			before := s.Stats.WriteErrors.Load()
@@ -275,7 +276,7 @@ func TestAdvertRouteEvidenceFailureKeepsCoreIngestion(t *testing.T) {
 }
 
 func TestAdvertRouteEvidenceConstraintsAndFeedIndex(t *testing.T) {
-	s, err := OpenStore(filepath.Join(t.TempDir(), "constraints.db"))
+	s, err := openPostgresTestStore(t, filepath.Join(t.TempDir(), "constraints.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,17 +289,26 @@ func TestAdvertRouteEvidenceConstraintsAndFeedIndex(t *testing.T) {
 		`INSERT INTO advert_route_evidence(tx_id,bit) VALUES(1,3)`,
 		`INSERT INTO advert_route_evidence(tx_id,bit) VALUES(999,2)`,
 	} {
-		if _, err := s.db.Exec(stmt); err == nil {
+		if _, err := testAdmin(t, s).Exec(stmt); err == nil {
 			t.Errorf("constraint accepted: %s", stmt)
 		}
 	}
-	var id, parent, unused int
-	var detail string
-	if err := s.db.QueryRow(`EXPLAIN QUERY PLAN SELECT id,tx_id,bit FROM advert_route_evidence WHERE id>1 ORDER BY id LIMIT 500`).Scan(&id, &parent, &unused, &detail); err != nil {
+	s.db.Exec(`SET enable_seqscan=off`)
+	rows, err := s.db.Query(`EXPLAIN (COSTS OFF) SELECT id,tx_id,bit FROM advert_route_evidence WHERE id>1 ORDER BY id LIMIT 500`)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if detail != "SEARCH advert_route_evidence USING INTEGER PRIMARY KEY (rowid>?)" {
-		t.Fatalf("feed must seek by primary key: %s", detail)
+	var plan string
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatal(err)
+		}
+		plan += line
+	}
+	rows.Close()
+	if !strings.Contains(plan, "advert_route_evidence_pkey") {
+		t.Fatalf("feed must seek by primary key: %s", plan)
 	}
 	if _, err := s.db.Exec(`DELETE FROM observations; DELETE FROM transmissions`); err != nil {
 		t.Fatal(err)
@@ -316,7 +326,7 @@ func TestAdvertRouteEvidenceConstraintsAndFeedIndex(t *testing.T) {
 }
 
 func BenchmarkAdvertEvidenceRepeatedWrite(b *testing.B) {
-	s, err := OpenStore(filepath.Join(b.TempDir(), "repeat.db"))
+	s, err := openPostgresTestStore(b, filepath.Join(b.TempDir(), "repeat.db"))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -335,7 +345,7 @@ func BenchmarkAdvertEvidenceRepeatedWrite(b *testing.B) {
 }
 
 func TestAdvertRouteEvidenceRejectsUnprovenFrames(t *testing.T) {
-	s, err := OpenStore(filepath.Join(t.TempDir(), "evidence.db"))
+	s, err := openPostgresTestStore(t, filepath.Join(t.TempDir(), "evidence.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +357,7 @@ func TestAdvertRouteEvidenceRejectsUnprovenFrames(t *testing.T) {
 		}
 	}
 	var count int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='advert_route_evidence'`).Scan(&count); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='advert_route_evidence'`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {

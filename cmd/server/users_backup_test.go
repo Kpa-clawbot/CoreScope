@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"database/sql"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/meshcore-analyzer/pgutil/pgtest"
 	"github.com/meshcore-analyzer/users"
 )
 
@@ -21,7 +21,7 @@ var backupNow = time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 // created directory.
 func backupService(t *testing.T, keep int) (*authService, string) {
 	t.Helper()
-	a, _ := newTestAuthService(t)
+	a, _ := newTestBackupAuthService(t)
 	dir := filepath.Join(t.TempDir(), "backups")
 	a.set.backup = backupSettings{enabled: true, dir: dir, keep: keep}
 	return a, dir
@@ -53,13 +53,10 @@ func TestUsersBackupWrittenWhenNoneExists(t *testing.T) {
 	}
 	a.maybeBackup(backupNow)
 	names := snapshotNames(t, dir)
-	if len(names) != 1 || names[0] != usersBackupFile(backupNow) || names[0] != "users-20261008-120000.db" {
+	if len(names) != 1 || names[0] != usersBackupFile(backupNow) || names[0] != "users-20261008-120000.dump" {
 		t.Fatalf("snapshots = %v", names)
 	}
-	db, err := sql.Open("sqlite", filepath.Join(dir, names[0]))
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := restorePostgresTestBackup(t, filepath.Join(dir, names[0]))
 	defer db.Close()
 	var n int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM users WHERE email = 'a@example.org'`).Scan(&n); err != nil || n != 1 {
@@ -229,25 +226,27 @@ func TestUsersBackupDisabled(t *testing.T) {
 }
 
 func TestInitUserManagementBacksUpAtStartup(t *testing.T) {
-	dir := t.TempDir()
-	srv := &Server{cfg: &Config{UserManagement: &UserManagementConfig{
-		Enabled: true, PublicBaseURL: testBase,
-		Mail: UserMailConfig{BrevoAPIKey: "k", FromEmail: "noreply@example.org"},
-	}}}
-	if err := srv.initUserManagement(filepath.Join(dir, "meshcore.db")); err != nil {
+	a, _ := newTestBackupAuthService(t)
+	dir := filepath.Join(t.TempDir(), "backups")
+	u := validUM()
+	u.DatabaseURL = a.set.databaseURL
+	u.Backup = &UsersBackupConfig{Dir: dir}
+	srv := &Server{cfg: &Config{UserManagement: u}}
+	if err := srv.initUserManagement(pgtest.NewDatabase(t)); err != nil {
 		t.Fatal(err)
 	}
-	// The janitor's first pass (prune, then backup) runs before it sees stop.
 	srv.closeUserManagement()
-	if names := snapshotNames(t, filepath.Join(dir, "backups")); len(names) != 1 {
+	if names := snapshotNames(t, dir); len(names) != 1 {
 		t.Fatalf("snapshots after startup = %v; want 1", names)
 	}
 }
 
-var usersBackupFilenameRE = regexp.MustCompile(`^attachment; filename="corescope-users-\d{8}-\d{6}\.db"$`)
+var usersBackupFilenameRE = regexp.MustCompile(`^attachment; filename="corescope-users-\d{8}-\d{6}\.dump"$`)
 
 func TestAdminUsersBackupDownload(t *testing.T) {
-	f, boss, uma := adminFixture(t)
+	f := newBackupAuthFixture(t, "boss@example.org")
+	boss := f.registerAndActivate(t, "boss@example.org", "Boss", pw)
+	uma := f.registerAndActivate(t, "uma@example.org", "Uma", pw)
 	tmp := t.TempDir()
 	for _, k := range []string{"TMPDIR", "TMP", "TEMP"} {
 		t.Setenv(k, tmp)
@@ -267,20 +266,17 @@ func TestAdminUsersBackupDownload(t *testing.T) {
 		t.Errorf("Content-Disposition = %q", cd)
 	}
 	body := w.Body.Bytes()
-	if !bytes.HasPrefix(body, []byte("SQLite format 3\x00")) {
-		t.Fatalf("body is not a SQLite file (%d bytes)", len(body))
+	if !bytes.HasPrefix(body, []byte("PGDMP")) {
+		t.Fatalf("body is not a PostgreSQL custom archive (%d bytes)", len(body))
 	}
 	if cl := w.Header().Get("Content-Length"); cl != strconv.Itoa(len(body)) {
 		t.Errorf("Content-Length = %q; body is %d bytes", cl, len(body))
 	}
-	path := filepath.Join(t.TempDir(), "download.db")
+	path := filepath.Join(t.TempDir(), "download.dump")
 	if err := os.WriteFile(path, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := restorePostgresTestBackup(t, path)
 	defer db.Close()
 	var n int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n); err != nil || n != 2 {

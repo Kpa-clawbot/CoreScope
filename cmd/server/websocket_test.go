@@ -285,7 +285,7 @@ func TestPollerBroadcastsMultipleObservations(t *testing.T) {
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('FACE', 'starbursthash237a', ?, 1, 4, '{"pubKey":"aabbccdd11223344","type":"ADVERT"}')`, now); err != nil {
+		VALUES ('FACE', 'starbursthash237a', $1, 1, 4, '{"pubKey":"aabbccdd11223344","type":"ADVERT"}')`, now); err != nil {
 		t.Fatalf("insert tx failed: %v", err)
 	}
 	var txID int
@@ -294,9 +294,9 @@ func TestPollerBroadcastsMultipleObservations(t *testing.T) {
 	}
 	ts := time.Now().Unix()
 	if _, err := db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (?, 1, 14.0, -82, '["aa"]', ?),
-		       (?, 2, 10.5, -90, '["aa","bb"]', ?),
-		       (?, 1, 7.0, -96, '["aa","bb","cc"]', ?)`,
+		VALUES ($1, 1, 14.0, -82, '["aa"]', $2),
+		       ($3, 2, 10.5, -90, '["aa","bb"]', $4),
+		       ($5, 1, 7.0, -96, '["aa","bb","cc"]', $6)`,
 		txID, ts, txID, ts+1, txID, ts+2); err != nil {
 		t.Fatalf("insert observations failed: %v", err)
 	}
@@ -367,8 +367,8 @@ func TestIngestNewObservationsBroadcast(t *testing.T) {
 	maxObs := db.GetMaxObservationID()
 	now := time.Now().Unix()
 	if _, err := db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (1, 2, 6.0, -100, '["aa","zz"]', ?),
-		       (1, 1, 5.0, -101, '["aa","yy"]', ?)`, now, now+1); err != nil {
+		VALUES (1, 2, 6.0, -100, '["aa","zz"]', $1),
+		       (1, 1, 5.0, -101, '["aa","yy"]', $2)`, now, now+1); err != nil {
 		t.Fatalf("insert new observations failed: %v", err)
 	}
 

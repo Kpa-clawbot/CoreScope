@@ -54,16 +54,17 @@ func setupChannelScopeDB(t *testing.T) *DB {
 	}
 	for i, r := range rows {
 		ts := now.Add(time.Duration(i-3) * time.Minute)
-		res, err := db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash, scope_name)
-			VALUES ('AABB', ?, ?, ?, 5, ?, '#scopetest', ?)`,
+		var txID int64
+		err := db.conn.QueryRow(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash, scope_name)
+			VALUES ('AABB', $1, $2, $3, 5, $4, '#scopetest', $5) RETURNING id`,
 			r.hash, ts.Format(time.RFC3339), r.routeType,
-			`{"type":"CHAN","channel":"#scopetest","text":"`+r.text+`"}`, r.scope)
+			`{"type":"CHAN","channel":"#scopetest","text":"`+r.text+`"}`, r.scope).Scan(&txID)
 		if err != nil {
 			t.Fatalf("insert tx %s: %v", r.hash, err)
 		}
-		txID, _ := res.LastInsertId()
+
 		if _, err := db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-			VALUES (?, 1, 9.5, -90, '[]', ?)`, txID, ts.Unix()); err != nil {
+			VALUES ($1, 1, 9.5, -90, '[]', $2)`, txID, ts.Unix()); err != nil {
 			t.Fatalf("insert obs %s: %v", r.hash, err)
 		}
 	}
@@ -229,15 +230,16 @@ func TestBroadcastMapsCarryScopeName(t *testing.T) {
 	t.Run("IngestNewFromDB", func(t *testing.T) {
 		txMax := store.MaxTransmissionID()
 		now := time.Now().UTC()
-		res, err := db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash, scope_name)
-			VALUES ('AABB', 'cccccccccccccc04', ?, 0, 5, '{"type":"CHAN","channel":"#scopetest","text":"Dave: live"}', '#scopetest', '#belgium')`,
-			now.Format(time.RFC3339))
+		var txID int64
+		err := db.conn.QueryRow(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash, scope_name)
+			VALUES ('AABB', 'cccccccccccccc04', $1, 0, 5, '{"type":"CHAN","channel":"#scopetest","text":"Dave: live"}', '#scopetest', '#belgium') RETURNING id`,
+			now.Format(time.RFC3339)).Scan(&txID)
 		if err != nil {
 			t.Fatalf("insert tx: %v", err)
 		}
-		txID, _ := res.LastInsertId()
+
 		if _, err := db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-			VALUES (?, 1, 7.0, -95, '[]', ?)`, txID, now.Unix()); err != nil {
+			VALUES ($1, 1, 7.0, -95, '[]', $2)`, txID, now.Unix()); err != nil {
 			t.Fatalf("insert obs: %v", err)
 		}
 		maps, _ := store.IngestNewFromDB(txMax, 100)
@@ -247,11 +249,11 @@ func TestBroadcastMapsCarryScopeName(t *testing.T) {
 	t.Run("IngestNewObservations", func(t *testing.T) {
 		obsMax := db.GetMaxObservationID()
 		var txID int
-		if err := db.conn.QueryRow(`SELECT id FROM transmissions WHERE hash = ?`, chScopeHashUnknown).Scan(&txID); err != nil {
+		if err := db.conn.QueryRow(`SELECT id FROM transmissions WHERE hash = $1`, chScopeHashUnknown).Scan(&txID); err != nil {
 			t.Fatalf("lookup tx: %v", err)
 		}
 		if _, err := db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-			VALUES (?, 1, 3.0, -110, '["aa"]', ?)`, txID, time.Now().Unix()); err != nil {
+			VALUES ($1, 1, 3.0, -110, '["aa"]', $2)`, txID, time.Now().Unix()); err != nil {
 			t.Fatalf("insert obs: %v", err)
 		}
 		maps := store.IngestNewObservations(obsMax, 100)

@@ -635,7 +635,9 @@ func TestDecryptChannelMessageBadCiphertextHex(t *testing.T) {
 
 func TestCheckpointDoesNotPanic(t *testing.T) {
 	store := newTestStore(t)
-	store.Checkpoint()
+	if _, err := store.db.Exec(`CHECKPOINT`); err == nil {
+		t.Fatal("runtime role may force server checkpoints")
+	}
 }
 
 func TestLogStatsDoesNotPanic(t *testing.T) {
@@ -762,7 +764,7 @@ func TestOpenStoreInvalidPath(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 	f.Close()
-	_, err = OpenStore(filepath.Join(f.Name(), "db.sqlite"))
+	_, err = openPostgresTestStore(t, filepath.Join(f.Name(), "db.sqlite"))
 	if err == nil {
 		t.Error("should error on impossible path")
 	}
@@ -1025,28 +1027,28 @@ func TestApplySchemaMigrationsOnFreshDB(t *testing.T) {
 
 	// Check that migrations were recorded
 	var count int
-	if err := store.db.QueryRow("SELECT COUNT(*) FROM _migrations").Scan(&count); err != nil {
+	if err := store.db.QueryRow("SELECT COUNT(*) FROM corescope_schema WHERE kind='telemetry' AND ready=true").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count < 3 {
-		t.Errorf("expected at least 3 migrations recorded, got %d", count)
+	if count != 1 {
+		t.Errorf("expected one ready telemetry schema, got %d", count)
 	}
 
 	// Check observations table exists with dedup index
 	var tblName string
-	err := store.db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='observations'").Scan(&tblName)
+	err := store.db.QueryRow("SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='observations'").Scan(&tblName)
 	if err != nil {
 		t.Error("observations table should exist")
 	}
 
 	// Check inactive_nodes table exists
-	err = store.db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='inactive_nodes'").Scan(&tblName)
+	err = store.db.QueryRow("SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='inactive_nodes'").Scan(&tblName)
 	if err != nil {
 		t.Error("inactive_nodes table should exist")
 	}
 
 	// Check packets_v view exists
-	err = store.db.QueryRow("SELECT name FROM sqlite_master WHERE type='view' AND name='packets_v'").Scan(&tblName)
+	err = store.db.QueryRow("SELECT table_name FROM information_schema.views WHERE table_schema=current_schema() AND table_name='packets_v'").Scan(&tblName)
 	if err != nil {
 		t.Error("packets_v view should exist")
 	}
@@ -1058,14 +1060,14 @@ func TestOpenStoreExistingDB(t *testing.T) {
 	dbPath := dir + "/test.db"
 
 	// Open and close
-	s1, err := OpenStore(dbPath)
+	s1, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s1.Close()
 
 	// Re-open — should skip migrations (already applied)
-	s2, err := OpenStore(dbPath)
+	s2, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1078,7 +1080,7 @@ func TestMoveStaleNodesReplace(t *testing.T) {
 
 	pk := "stale_node_replace_0000000000000000000000000001"
 	// Insert into inactive_nodes first
-	if _, err := store.db.Exec("INSERT INTO inactive_nodes (public_key, name, role, last_seen, first_seen) VALUES (?, 'Old', 'companion', '2019-01-01T00:00:00Z', '2019-01-01T00:00:00Z')", pk); err != nil {
+	if _, err := store.db.Exec("INSERT INTO inactive_nodes (public_key, name, role, last_seen, first_seen) VALUES ($1, 'Old', 'companion', '2019-01-01T00:00:00Z', '2019-01-01T00:00:00Z')", pk); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1095,7 +1097,7 @@ func TestMoveStaleNodesReplace(t *testing.T) {
 
 	// Should have replaced the inactive node
 	var name string
-	if err := store.db.QueryRow("SELECT name FROM inactive_nodes WHERE public_key = ?", pk).Scan(&name); err != nil {
+	if err := store.db.QueryRow("SELECT name FROM inactive_nodes WHERE public_key = $1", pk).Scan(&name); err != nil {
 		t.Fatal(err)
 	}
 	if name != "StaleNode" {
@@ -1165,7 +1167,7 @@ func TestRemoveStaleObservers(t *testing.T) {
 	}
 	// Override last_seen to 30 days ago
 	cutoff := time.Now().UTC().AddDate(0, 0, -30).Format(time.RFC3339)
-	_, err = store.db.Exec("UPDATE observers SET last_seen = ? WHERE id = ?", cutoff, "obs-old")
+	_, err = store.db.Exec("UPDATE observers SET last_seen = $1 WHERE id = $2", cutoff, "obs-old")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1195,7 +1197,7 @@ func TestRemoveStaleObservers(t *testing.T) {
 
 	// Check that the old observer is marked inactive
 	var inactive int
-	if err := store.db.QueryRow("SELECT inactive FROM observers WHERE id = ?", "obs-old").Scan(&inactive); err != nil {
+	if err := store.db.QueryRow("SELECT inactive FROM observers WHERE id = $1", "obs-old").Scan(&inactive); err != nil {
 		t.Fatal(err)
 	}
 	if inactive != 1 {
@@ -1204,7 +1206,7 @@ func TestRemoveStaleObservers(t *testing.T) {
 
 	// Check that the recent observer is still active
 	var newInactive int
-	if err := store.db.QueryRow("SELECT inactive FROM observers WHERE id = ?", "obs-new").Scan(&newInactive); err != nil {
+	if err := store.db.QueryRow("SELECT inactive FROM observers WHERE id = $1", "obs-new").Scan(&newInactive); err != nil {
 		t.Fatal(err)
 	}
 	if newInactive != 0 {
@@ -1233,7 +1235,7 @@ func TestRemoveStaleObserversKeepForever(t *testing.T) {
 		t.Fatal(err)
 	}
 	cutoff := time.Now().UTC().AddDate(0, 0, -365).Format(time.RFC3339)
-	_, err = store.db.Exec("UPDATE observers SET last_seen = ? WHERE id = ?", cutoff, "obs-ancient")
+	_, err = store.db.Exec("UPDATE observers SET last_seen = $1 WHERE id = $2", cutoff, "obs-ancient")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1257,7 +1259,7 @@ func TestRemoveStaleObserversKeepForever(t *testing.T) {
 
 	// Observer should NOT be marked inactive
 	var inactive int
-	if err := store.db.QueryRow("SELECT inactive FROM observers WHERE id = ?", "obs-ancient").Scan(&inactive); err != nil {
+	if err := store.db.QueryRow("SELECT inactive FROM observers WHERE id = $1", "obs-ancient").Scan(&inactive); err != nil {
 		t.Fatal(err)
 	}
 	if inactive != 0 {
@@ -1274,7 +1276,7 @@ func TestRemoveStaleObserversReactivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	cutoff := time.Now().UTC().AddDate(0, 0, -30).Format(time.RFC3339)
-	_, err = store.db.Exec("UPDATE observers SET last_seen = ? WHERE id = ?", cutoff, "obs-test")
+	_, err = store.db.Exec("UPDATE observers SET last_seen = $1 WHERE id = $2", cutoff, "obs-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1289,7 +1291,7 @@ func TestRemoveStaleObserversReactivation(t *testing.T) {
 
 	// Verify it's inactive
 	var inactive int
-	if err := store.db.QueryRow("SELECT inactive FROM observers WHERE id = ?", "obs-test").Scan(&inactive); err != nil {
+	if err := store.db.QueryRow("SELECT inactive FROM observers WHERE id = $1", "obs-test").Scan(&inactive); err != nil {
 		t.Fatal(err)
 	}
 	if inactive != 1 {
@@ -1302,7 +1304,7 @@ func TestRemoveStaleObserversReactivation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := store.db.QueryRow("SELECT inactive FROM observers WHERE id = ?", "obs-test").Scan(&inactive); err != nil {
+	if err := store.db.QueryRow("SELECT inactive FROM observers WHERE id = $1", "obs-test").Scan(&inactive); err != nil {
 		t.Fatal(err)
 	}
 	if inactive != 0 {

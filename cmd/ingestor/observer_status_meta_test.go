@@ -53,7 +53,7 @@ func TestStatusMessageMetadataPersisted_Issue1044(t *testing.T) {
 	}
 
 	// Now drive the meta through UpsertObserver and verify the row.
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
