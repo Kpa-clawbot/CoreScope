@@ -1,4 +1,5 @@
 import importlib.util
+from contextlib import ExitStack
 import csv
 import errno
 import io
@@ -96,6 +97,189 @@ class HarnessTests(unittest.TestCase):
                 bench.build(root, "baseline", binaries, {}, logs)
             controls = [call.args[0] for call in command.call_args_list if pathlib.Path(call.args[0][0]).name == "baseline-ingestor.test"]
             self.assertTrue(any("-test.run=^TestCoreScopeBenchmark.+" in args for args in controls), "new Go generator regressions must execute, not only compile")
+
+    def selection_source(self, root):
+        path = root / "cmd/server/storage_config.go"
+        path.parent.mkdir(parents=True)
+        path.write_text("package main\nfunc bind() { dbconfig.OpenSelection(path) }\n")
+
+    def test_builds_migrator_once_only_when_archived_server_requires_selection(self):
+        for selected in (False, True):
+            with self.subTest(selected=selected), tempfile.TemporaryDirectory() as directory:
+                root = pathlib.Path(directory)
+                binaries, logs = root / "binaries", root / "logs"
+                binaries.mkdir(); logs.mkdir()
+                if selected:
+                    self.selection_source(root)
+                # A legacy migrator alone is not the persisted-selection capability.
+                (root / "cmd/migrate").mkdir(parents=True)
+                with mock.patch.object(bench, "production_hash", return_value="stable"), mock.patch.object(bench, "command") as command:
+                    bench.build(root, "candidate", binaries, {}, logs)
+                builds = [call for call in command.call_args_list if call.kwargs.get("cwd") == root / "cmd/migrate"]
+                self.assertEqual(len(builds), int(selected), "only the selection-aware revision needs one native setup binary")
+                if selected:
+                    self.assertEqual(builds[0].args[0], ["go", "build", "-trimpath", "-o", binaries / "candidate-migrate", "."])
+
+    def test_server_uses_the_same_private_state_directory_as_selection_setup(self):
+        state = pathlib.Path("private/state")
+        config, _ = bench.server_settings("candidate", pathlib.Path("private/telemetry.sqlite"), state, {})
+        self.assertEqual(config.get("stateDir"), str(state))
+
+    def selection_fixture(self, root):
+        config = root / "config"
+        config.mkdir()
+        source = config / "telemetry.sqlite"
+        with bench.sqlite3.connect(source) as db:
+            db.executescript("CREATE TABLE _migrations(name TEXT PRIMARY KEY);"
+                             "INSERT INTO _migrations VALUES('existing_a'),('existing_b');"
+                             "CREATE TABLE observers(id TEXT PRIMARY KEY, last_seen TEXT);"
+                             "INSERT INTO observers(rowid,id,last_seen) VALUES(4,'one','2026-10-09'),(19,'two',NULL);")
+        db.close()
+        tables = [dict(name="_migrations", columns=["name"]), dict(name="observers", columns=["rowid", "id", "last_seen"])]
+        return config, source, tables, bench.validate(source, tables)
+
+    def test_selection_setup_preserves_all_rows_and_only_adds_known_marker(self):
+        marker = "observers_identity_autoincrement_v1"
+        for selected in (False, True):
+            with self.subTest(selected=selected), tempfile.TemporaryDirectory() as directory:
+                root = pathlib.Path(directory)
+                config, source, tables, before = self.selection_fixture(root)
+                if selected:
+                    self.selection_source(root)
+                def migrate(args, **kwargs):
+                    self.assertEqual(args, [root / "candidate-migrate", "-storage-action=adopt", "-backend=sqlite", "-offline",
+                                            "-selection-file", str(config / "state/storage-selection.json"),
+                                            "-config-dir", str(config), "-sqlite-path", str(source)])
+                    self.assertEqual(kwargs["env"], {"CGO_ENABLED": "1"})
+                    self.assertEqual(kwargs["budget"], "owned-budget")
+                    with bench.sqlite3.connect(source) as db:
+                        db.execute("INSERT INTO _migrations VALUES (?)", (marker,))
+                    db.close()
+                with mock.patch.object(bench, "command", side_effect=migrate) as command:
+                    proof = bench.prepare_storage(root, root / "candidate-migrate", config, tables, before,
+                                                  {"CGO_ENABLED": "1"}, root / "setup.log", "owned-budget")
+                self.assertEqual(command.call_count, int(selected))
+                self.assertEqual(proof["before"], before)
+                self.assertEqual(proof["after"], bench.validate(source, tables))
+                self.assertEqual(proof["migrations_before"], ["existing_a", "existing_b"])
+                self.assertEqual(proof["required"], selected)
+                self.assertEqual(bench.comparable_validation(source, proof["after"], proof), before)
+
+    def test_setup_and_post_replay_reject_data_or_ledger_changes(self):
+        for extra in ("DELETE FROM _migrations WHERE name='existing_a'",
+                      "INSERT INTO _migrations VALUES('unknown_extra')",
+                      "DELETE FROM _migrations WHERE name='observers_identity_autoincrement_v1'",
+                      "UPDATE observers SET rowid=20 WHERE id='two'",
+                      "UPDATE observers SET last_seen='changed' WHERE id='one'"):
+            with self.subTest(extra=extra), tempfile.TemporaryDirectory() as directory:
+                root = pathlib.Path(directory)
+                self.selection_source(root)
+                config, source, tables, before = self.selection_fixture(root)
+                def migrate(*args, **kwargs):
+                    with bench.sqlite3.connect(source) as db:
+                        db.execute("INSERT INTO _migrations VALUES('observers_identity_autoincrement_v1')")
+                        db.execute(extra)
+                    db.close()
+                with mock.patch.object(bench, "command", side_effect=migrate):
+                    with self.assertRaisesRegex(RuntimeError, "setup changed|migration ledger"):
+                        bench.prepare_storage(root, root / "candidate-migrate", config, tables, before, {}, root / "setup.log")
+        # The approved marker is not a license for later unaccounted ledger changes.
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            config, source, tables, before = self.selection_fixture(root)
+            proof = dict(required=False, migrations_before=["existing_a", "existing_b"], before=before)
+            with bench.sqlite3.connect(source) as db:
+                db.execute("INSERT INTO _migrations VALUES('late_unexpected')")
+            db.close()
+            with self.assertRaisesRegex(RuntimeError, "migration ledger"):
+                bench.comparable_validation(source, bench.validate(source, tables), proof)
+
+    def test_failed_adoption_cannot_be_treated_as_prepared(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.selection_source(root)
+            config, _, tables, before = self.selection_fixture(root)
+            with mock.patch.object(bench, "command", side_effect=RuntimeError("native adoption failed")):
+                with self.assertRaisesRegex(RuntimeError, "native adoption failed"):
+                    bench.prepare_storage(root, root / "candidate-migrate", config, tables, before, {}, root / "setup.log")
+
+    def test_controller_adopts_before_startup_clock_and_never_starts_after_failure(self):
+        for failure in (False, True):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory, ExitStack() as patches:
+                root = pathlib.Path(directory)
+                output = root / "corescope-bench-routing"
+                order = []
+                def command(args, **kwargs):
+                    if args[0] == "go": return "go version go1.27.2"
+                    if args[0] == "cc": return "native compiler"
+                    if args[0] == "cp":
+                        bench.shutil.copy2(args[2], args[3])
+                        return ""
+                    self.assertEqual(pathlib.Path(args[0]).name, "candidate-migrate")
+                    order.append("adopt")
+                    if failure: raise RuntimeError("native adoption failed")
+                    source = pathlib.Path(args[args.index("-sqlite-path") + 1])
+                    with bench.sqlite3.connect(source) as db:
+                        db.execute("INSERT INTO _migrations VALUES('observers_identity_autoincrement_v1')")
+                    db.close()
+                    return ""
+                def worker(binary, config, mode, *args, **kwargs):
+                    if mode == "prepare":
+                        with bench.sqlite3.connect(config["sqlite"]) as db:
+                            db.executescript("CREATE TABLE transmissions(id INTEGER,last_seen INTEGER);"
+                                             "INSERT INTO transmissions VALUES(1,100);"
+                                             "CREATE TABLE observations(transmission_id INTEGER);"
+                                             "INSERT INTO observations VALUES(1);"
+                                             "CREATE TABLE _migrations(name TEXT PRIMARY KEY);"
+                                             "INSERT INTO _migrations VALUES('existing');")
+                        db.close()
+                    elif mode == "events":
+                        pathlib.Path(config["events_file"]).write_text('{"unchanged":"stream"}\n')
+                    else: self.fail("worker started before storage preparation was checked")
+                def clock():
+                    order.append("clock")
+                    return len(order)
+                def spawn(*args, **kwargs):
+                    order.append("server")
+                    self.assertIn("adopt", order)
+                    return mock.Mock(poll=mock.Mock(return_value=0), bench_log=None)
+                def startup(server, url, output, expected, launched, *args):
+                    # Check the actual timestamp supplied to startup, not the
+                    # setup helper's independent duration clock.
+                    self.assertGreater(launched, order.index("adopt") + 1)
+                    raise RuntimeError("stop at timed server startup")
+                budget = mock.Mock(info={}, path=None)
+                patches.enter_context(mock.patch.object(bench.sys, "platform", "linux"))
+                for name, value in (("geteuid", 1000), ("sched_getaffinity", {0,1,2,3}), ("sysconf", 1048576)):
+                    patches.enter_context(mock.patch.object(bench.os, name, return_value=value, create=True))
+                patches.enter_context(mock.patch.object(bench.shutil, "which", return_value="tool"))
+                patches.enter_context(mock.patch.object(bench.time, "monotonic_ns", side_effect=clock))
+                for name, value in (("capacity_preflight", {}), ("verify_harness", "verified"), ("build", "stable"),
+                                    ("corpus", dict(transmissions=1, observations=1)), ("Budget", budget),
+                                    ("pair_order", [(0, "candidate")]), ("retained_counts", dict(transmissions=1, observations=1))):
+                    patches.enter_context(mock.patch.object(bench, name, return_value=value))
+                patches.enter_context(mock.patch.object(bench, "TABLES", ["transmissions", "observations", "_migrations"]))
+                patches.enter_context(mock.patch.object(bench, "archive", side_effect=lambda repo, revision, target: self.selection_source(target)))
+                patches.enter_context(mock.patch.object(bench, "Resources"))
+                patches.enter_context(mock.patch.object(bench, "finish"))
+                patches.enter_context(mock.patch.object(bench, "worker", side_effect=worker))
+                patches.enter_context(mock.patch.object(bench, "command", side_effect=command))
+                launch = patches.enter_context(mock.patch.object(bench, "spawn", side_effect=spawn))
+                timed_start = patches.enter_context(mock.patch.object(bench, "startup", side_effect=startup))
+                with self.assertRaisesRegex(RuntimeError, "native adoption failed" if failure else "stop at timed server startup"):
+                    bench.main(["--baseline-sha", "2" * 40, "--candidate-sha", "1" * 40, "--harness-sha", "3" * 40,
+                                "--profile", "smoke", "--pairs", "1", "--corpus", "S", "--output", str(output)])
+                self.assertEqual(launch.call_count, 0 if failure else 1)
+                self.assertEqual(timed_start.call_count, 0 if failure else 1)
+                result = json.loads((output / "public/manifest.json").read_text())
+                self.assertEqual((result["status"], result["comparison_eligible"]), ("failed", False))
+
+    def test_native_setup_failure_is_visible_without_private_details(self):
+        diagnostic = bench.safe_diagnostics('[migrate] storage selection is pending; resume or abort\n'
+                                            '[migrate] failed at /tmp/private/config.json token=private-value\n')
+        self.assertTrue(any("storage selection is pending" in line for line in diagnostic))
+        self.assertNotIn("/tmp/private", str(diagnostic))
+        self.assertNotIn("private-value", str(diagnostic))
 
     def resource_fixture(self, root, missing=None):
         group = root / "private-cgroup-path"

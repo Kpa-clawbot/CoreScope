@@ -125,7 +125,24 @@ under the common seven-day retention, 2048 MiB store and 3072 MiB server limits.
 S/B coverage overrides are refused. All 18 tables undergo ordered logical
 digest checks before and after replay; the source and recorded input must remain
 unchanged. Operational receipt times alone are excluded from post-run parity.
-Schemas, indexes, application code and maintenance algorithms are not rewritten.
+The harness never rewrites production sources or issues its own schema migrations.
+
+Revisions whose archived server explicitly opens a persisted storage selection
+also build their native migrator once. Before either timed server startup, it
+adopts that leg's disposable SQLite copy with accounts disabled and no PostgreSQL
+service or credentials. Setup runs inside the same resource budget, in the
+separate `storage_setup` phase; startup still measures a new process with warm OS
+cache. The baseline-generated corpus and paired source files stay unchanged.
+
+Native adoption may add the required `observers_identity_autoincrement_v1`
+physical-layout marker. `storage-setup-validation.json` records adoption and
+full-row verification time, plus full before/after counts and digests. Every
+original migration entry and every
+application row (including observer rowids) must remain identical; unknown or
+missing ledger entries fail. After replay, `validation-after.json` retains full
+native digests, while `validation-after-comparable.json` accounts only for that
+verified marker. The ledger is checked again before paired comparison. No table
+is excluded, and adoption failures stop the run before server startup.
 
 ## Diagnostics and artifacts
 

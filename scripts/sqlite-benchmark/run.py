@@ -5,6 +5,7 @@ Both archived revisions use native CGO SQLite. A successful invocation means
 validation completed; it does not establish a general speed or capacity claim.
 """
 import argparse
+from contextlib import closing
 import csv
 import decimal
 import datetime
@@ -37,6 +38,7 @@ RESOURCE_COUNTERS = ("cgroup.procs", "memory.current", "memory.events", "cpu.sta
 # Common to both engines: B itself accounts for about 1,222 MiB before replay.
 SERVER_MEMORY_MIB = 3072
 PACKET_STORE_MIB = 2048
+SQLITE_IDENTITY_MARKER = "observers_identity_autoincrement_v1"
 TABLES = ["nodes", "inactive_nodes", "observers", "transmissions", "observations", "observer_metrics", "neighbor_edges", "dropped_packets", "client_receptions", "client_observers", "client_rx_observations", "client_rf_samples", "node_declared_regions", "scope_match_totals", "_migrations", "_async_migrations", "advert_route_evidence", "advert_evidence_backfill"]
 # These are operational receipt/creation times, not packet timestamps. Full
 # pre-run parity includes them; only post-replay logical parity excludes them.
@@ -176,6 +178,8 @@ def safe_diagnostics(text):
     out = []
     for line in text.splitlines():
         line = line.strip()
+        if line.startswith("[migrate] "):
+            line = "error: " + line.removeprefix("[migrate] ")
         if not re.match(r"(?:--- FAIL:|FAIL\b|panic:|fatal error:|[^\s]*\.go:\d+(?::\d+)?:|ERROR:|FATAL:|error:|benchmark:)", line):
             codes = re.findall(r"SQLSTATE [0-9A-Z]{5}", line)
             if codes:
@@ -472,7 +476,7 @@ def free_port():
 
 
 def table_manifest(source):
-    with sqlite3.connect(f"file:{source}?mode=ro", uri=True) as db:
+    with closing(sqlite3.connect(f"file:{source}?mode=ro", uri=True)) as db:
         manifest = []
         for table in TABLES:
             columns = [row[1] for row in db.execute(f'PRAGMA table_info("{table}")')]
@@ -486,7 +490,7 @@ def table_manifest(source):
 
 def validate(source, manifest, logical=False):
     result = {}
-    with sqlite3.connect(f"file:{source}?mode=ro", uri=True) as db:
+    with closing(sqlite3.connect(f"file:{source}?mode=ro", uri=True)) as db:
         for table in manifest:
             name = table["name"]
             columns = [c for c in table["columns"] if not logical or c not in VOLATILE.get(name, set())]
@@ -497,6 +501,54 @@ def validate(source, manifest, logical=False):
                 count += 1
             result[name] = dict(rows=count, sha256=digest.hexdigest())
     return result
+
+
+def requires_storage_selection(root):
+    source = root / "cmd/server/storage_config.go"
+    return source.is_file() and "dbconfig.OpenSelection(" in source.read_text(encoding="utf-8")
+
+
+def migration_names(source):
+    db = sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)
+    try:
+        if [row[1] for row in db.execute("PRAGMA table_info(_migrations)")] != ["name"]:
+            raise RuntimeError("unsupported benchmark migration ledger schema")
+        names = [row[0] for row in db.execute("SELECT name FROM _migrations ORDER BY name")]
+        if any(not isinstance(name, str) for name in names):
+            raise RuntimeError("unsupported benchmark migration ledger value")
+        return names
+    finally:
+        db.close()
+
+
+def comparable_validation(source, full, setup):
+    # Only this exact physical-layout marker may differ. Every original entry,
+    # extra entry and full application-table digest remains checked.
+    expected = list(setup["migrations_before"])
+    if setup["required"] and SQLITE_IDENTITY_MARKER not in expected:
+        expected.append(SQLITE_IDENTITY_MARKER)
+    if migration_names(source) != sorted(expected):
+        raise RuntimeError("unexpected migration ledger change during storage setup or replay")
+    return dict(full, _migrations=setup["before"]["_migrations"])
+
+
+def prepare_storage(root, binary, config_dir, tables, before, env, log, budget=None):
+    source = config_dir / "telemetry.sqlite"
+    required = requires_storage_selection(root)
+    proof = dict(required=required, before=before, migrations_before=migration_names(source), elapsed_ns=0)
+    started = time.monotonic_ns()
+    if required:
+        command([binary, "-storage-action=adopt", "-backend=sqlite", "-offline",
+                 "-selection-file", str(config_dir / "state/storage-selection.json"),
+                 "-config-dir", str(config_dir), "-sqlite-path", str(source)],
+                cwd=root, env=env, log=log, budget=budget)
+        proof["after"] = validate(source, tables)
+        proof["elapsed_ns"] = time.monotonic_ns() - started
+    else:
+        proof["after"] = before
+    if comparable_validation(source, proof["after"], proof) != before:
+        raise RuntimeError("storage setup changed canonical application data")
+    return proof
 
 
 class Resources:
@@ -600,7 +652,7 @@ def wait_file(path, processes, seconds=120):
 
 
 def server_settings(variant, sqlite_path, state_dir, run_env):
-    config = dict(hashChannels=[f"#bench-{i:02d}" for i in range(20)], dbPath=str(sqlite_path), port=free_port(), packetStore=dict(retentionHours=168, maxMemoryMB=PACKET_STORE_MIB, hotStartupHours=0), runtime=dict(maxMemoryMB=SERVER_MEMORY_MIB), clientRxCoverage=dict(enabled=True), userManagement=dict(enabled=False))
+    config = dict(hashChannels=[f"#bench-{i:02d}" for i in range(20)], dbPath=str(sqlite_path), stateDir=str(state_dir), port=free_port(), packetStore=dict(retentionHours=168, maxMemoryMB=PACKET_STORE_MIB, hotStartupHours=0), runtime=dict(maxMemoryMB=SERVER_MEMORY_MIB), clientRxCoverage=dict(enabled=True), userManagement=dict(enabled=False))
     env = dict(run_env, GOMEMLIMIT=f"{SERVER_MEMORY_MIB}MiB", ENABLE_PPROF="false")
     return config, env
 
@@ -776,6 +828,8 @@ def build(root, variant, binaries, env, logs):
         if package == "ingestor":
             command([binaries / (variant + "-ingestor.test"), "-test.run=^TestCoreScopeBenchmark.+", "-test.count=1", "-test.timeout=3m"], cwd=root / "cmd" / package, env=env, log=logs / (variant + "-generator-controls.log"))
     command(["go", "build", "-trimpath", "-o", binaries / (variant + "-server"), "."], cwd=root / "cmd/server", env=env, log=logs / (variant + "-server-binary.log"))
+    if requires_storage_selection(root):
+        command(["go", "build", "-trimpath", "-o", binaries / (variant + "-migrate"), "."], cwd=root / "cmd/migrate", env=env, log=logs / (variant + "-migrate-binary.log"))
     if production_hash(root) != before:
         raise RuntimeError("build changed production sources")
     return before
@@ -934,6 +988,7 @@ def main(argv=None):
             roots[variant] = runtime / variant
             archive(args.repo.resolve(), revision, roots[variant])
             manifest[variant + "_production_hash_before"] = build(roots[variant], variant, binaries, env, logs)
+            manifest[variant + "_storage_selection_required"] = requires_storage_selection(roots[variant])
         manifest["comparison_kind"] = "A/A controller qualification" if manifest["baseline_production_hash_before"] == manifest["candidate_production_hash_before"] else "source-pinned SQLite before/after"
         epoch = int(time.time())
         canonical = runtime / "corpus.sqlite"
@@ -983,8 +1038,9 @@ def main(argv=None):
                 raise RuntimeError("paired event stream changed before replay")
             run_env = dict(env, CORESCOPE_INGESTOR_STATS=str(state_dir / "ingestor-stats.json"))
             with Resources(run_dir / "resources.csv", budget, [sqlite_path]) as resources:
-                with sqlite3.connect(sqlite_path) as db:
+                with closing(sqlite3.connect(sqlite_path)) as db:
                     db.execute("ANALYZE")
+                    db.commit()
                 pre = validate(sqlite_path, tables)
                 if pre != paired_validation:
                     raise RuntimeError("initial revision state differs from canonical corpus")
@@ -993,6 +1049,10 @@ def main(argv=None):
                 coverage_scope = "predeclared bounded cache" if declared else "complete retained corpus"
                 app_config, server_env = server_settings(variant, sqlite_path, state_dir, run_env)
                 write_json(config_dir / "config.json", app_config)
+                resources.phase = "storage_setup"
+                setup = prepare_storage(roots[variant], binaries / (variant + "-migrate"), config_dir, tables, pre,
+                                        run_env, run_dir / "storage-setup.log", budget)
+                write_json(run_dir / "storage-setup-validation.json", setup)
                 server_args = ["-config-dir", str(config_dir), "-public", str(roots[variant] / "public"), "-port", str(app_config["port"]), "-poll-ms", "1000"]
                 config["base_url"] = f"http://127.0.0.1:{app_config['port']}"
                 resources.phase = "startup_full"
@@ -1042,8 +1102,10 @@ def main(argv=None):
                 resources.phase = "post_validation"
                 post = validate(sqlite_path, tables, logical=True)
                 write_json(run_dir / "validation-after.json", post)
+                comparable_post = comparable_validation(sqlite_path, post, setup)
+                write_json(run_dir / "validation-after-comparable.json", comparable_post)
                 finish(worker(binaries / (variant + "-ingestor.test"), config, "handler", run_env, run_dir / "handler.log", budget), timeout=180)
-                after_by_pair.setdefault(pair, {})[variant] = post
+                after_by_pair.setdefault(pair, {})[variant] = comparable_post
                 if len(after_by_pair[pair]) == 2:
                     verify_completed_pair(output, pair, Path(config["events_file"]), event_hash)
                 if len(after_by_pair[pair]) == 2 and after_by_pair[pair]["baseline"] != after_by_pair[pair]["candidate"]:
