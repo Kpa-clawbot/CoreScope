@@ -1100,7 +1100,18 @@ function debounce(fn, ms) {
  * and never while the tab is hidden. opts.now and opts.isHidden are injectable
  * for tests. */
 function createVisibleThrottle(fn, opts) {
-  return function trigger() { fn(); return true; };
+  const minIntervalMs = opts.minIntervalMs;
+  const now = opts.now || Date.now;
+  const isHidden = opts.isHidden || function () { return typeof document !== 'undefined' && !!document.hidden; };
+  let last = -Infinity;
+  return function trigger() {
+    if (isHidden()) return false;
+    const t = now();
+    if (t - last < minIntervalMs) return false;
+    last = t;
+    fn();
+    return true;
+  };
 }
 
 /* Debounced WS helper — batches rapid messages, calls fn with array of msgs */
@@ -1893,9 +1904,15 @@ window.addEventListener('DOMContentLoaded', () => {
       }
     } catch {}
   }
-  updateNavStats();
-  setInterval(updateNavStats, 15000);
-  debouncedOnWS(function () { updateNavStats(); });
+  // One refresh per 15 s at most, none in hidden tabs: the timer, live packets
+  // and returning to the tab all go through the same throttle.
+  const refreshNavStats = createVisibleThrottle(updateNavStats, { minIntervalMs: 15000 });
+  refreshNavStats();
+  setInterval(refreshNavStats, 15000);
+  debouncedOnWS(function () { refreshNavStats(); });
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) refreshNavStats();
+  });
 
   // --- Theme Customization ---
   // Fetch theme config and apply via customizer v2 pipeline
