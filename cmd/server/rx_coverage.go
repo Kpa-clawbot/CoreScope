@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -257,12 +258,18 @@ func prefixOrEmpty(s string, n int) string {
 	return ""
 }
 
-// sqlPlaceholders returns "?,?,…" with n placeholders (n >= 1).
-func sqlPlaceholders(n int) string {
-	if n <= 1 {
-		return "?"
+// sqlPlaceholders builds native PostgreSQL positional parameters for an IN-list.
+// The optional first index supports lists following other bound predicates.
+func (db *DB) sqlPlaceholders(n int, first ...int) string {
+	start := 1
+	if len(first) > 0 {
+		start = first[0]
 	}
-	return strings.Repeat("?,", n-1) + "?"
+	parts := make([]string, n)
+	for i := range parts {
+		parts[i] = fmt.Sprintf("%s", db.parameter(start+i))
+	}
+	return strings.Join(parts, ",")
 }
 
 // queryCoverageRows returns raw coverage rows where the directly-heard node
@@ -275,11 +282,14 @@ func (s *Server) queryCoverageRows(pubkey string, b bbox) ([]coverageRow, error)
 		args = append(args, c)
 	}
 	args = append(args, b.MinLat, b.MaxLat, b.MinLon, b.MaxLon)
+	// A cached generic plan can treat a wide bbox as selective and scan the
+	// entire geo index before filtering the heard key. Plan this SELECT with
+	// its actual bounds; Exec still uses server-bound extended-protocol values.
 	rows, err := s.db.conn.Query(`
 		SELECT lat, lon, snr, rssi, heard_key, rx_at
 		FROM client_receptions
-		WHERE heard_key IN (`+sqlPlaceholders(len(cands))+`)
-		  AND lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?`, args...)
+		WHERE heard_key IN (`+s.db.sqlPlaceholders(len(cands))+`)
+		  AND lat BETWEEN `+fmt.Sprintf("%s AND %s AND lon BETWEEN %s AND %s", s.db.parameter(len(cands)+1), s.db.parameter(len(cands)+2), s.db.parameter(len(cands)+3), s.db.parameter(len(cands)+4)), s.db.planWithValues(args)...)
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +310,7 @@ func (s *Server) mobileRxStats(pubkey string) (count, clients int) {
 	}
 	s.db.conn.QueryRow(`
 		SELECT COUNT(*), COUNT(DISTINCT rx_pubkey) FROM client_receptions
-		WHERE heard_key IN (`+sqlPlaceholders(len(cands))+`)`, args...).Scan(&count, &clients)
+		WHERE heard_key IN (`+s.db.sqlPlaceholders(len(cands))+`)`, args...).Scan(&count, &clients)
 	return count, clients
 }
 

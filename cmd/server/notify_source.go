@@ -143,7 +143,7 @@ func (db *DB) NotifyNodes(pubkeys []string, withForeign bool) (map[string]notify
 		for j, pk := range chunk {
 			args[j] = pk
 		}
-		rows, err := db.conn.Query(notifyNodeCols+` WHERE public_key IN (`+sqlPlaceholders(len(chunk))+`)`, args...)
+		rows, err := db.conn.Query(notifyNodeCols+` WHERE public_key IN (`+db.sqlPlaceholders(len(chunk))+`)`, args...)
 		if err != nil {
 			return nil, err
 		}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -44,7 +45,7 @@ type IngestorStatsSnapshot struct {
 	// the server's /api/perf/io endpoint under .ingestor (#1120 — "Both
 	// ingestor and server"). Optional; absent on non-Linux hosts.
 	ProcIO *PerfIOSample `json:"procIO,omitempty"`
-	// WriterPerf is the per-component SQLite writer-lock latency
+	// WriterPerf is the per-component serialized writer-lock latency
 	// snapshot (#1340) — wait_ms / hold_ms / contention_total tagged
 	// by component (neighbor_builder, mqtt_handler, prune_packets,
 	// prune_observers, prune_metrics, vacuum). Surfaced by the server
@@ -106,15 +107,17 @@ type SourceLivenessSnapshot struct {
 // statsFilePath returns the writable path the ingestor will publish stats to.
 // Override via env CORESCOPE_INGESTOR_STATS for tests / non-default deploys.
 //
-// SECURITY: the default lives in /tmp which is world-writable. The writer uses
-// O_NOFOLLOW + 0o600 so a pre-planted symlink cannot be used to clobber an
-// arbitrary file via this path. Operators who want stronger guarantees should
-// point CORESCOPE_INGESTOR_STATS at a private directory (e.g. /var/lib/corescope/).
+// The default lives in the private state directory. The writer retains
+// O_NOFOLLOW and private permissions for an explicitly overridden path.
 func statsFilePath() string {
 	if p := os.Getenv("CORESCOPE_INGESTOR_STATS"); p != "" {
 		return p
 	}
-	return "/tmp/corescope-ingestor-stats.json"
+	stateDir := os.Getenv("CORESCOPE_STATE_DIR")
+	if stateDir == "" {
+		stateDir = "data"
+	}
+	return filepath.Join(stateDir, "ingestor-stats.json")
 }
 
 // writeStatsAtomic writes b to path via a tmp-then-rename, refusing to follow
@@ -258,6 +261,9 @@ func StartStatsFileWriter(s *Store, interval time.Duration) (stop func()) {
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		path := statsFilePath()
+		if os.Getenv("CORESCOPE_INGESTOR_STATS") == "" && s.stateDir != "" {
+			path = filepath.Join(s.stateDir, "ingestor-stats.json")
+		}
 		// Track previous procIO sample so we can compute per-second deltas
 		// across ticks (#1120 follow-up: ingestor /proc/self/io exposure).
 		prevIO := readProcSelfIOFn()

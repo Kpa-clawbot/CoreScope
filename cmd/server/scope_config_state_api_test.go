@@ -271,19 +271,20 @@ func TestHandleNodesReportsObservedForUndeclaredForwarder(t *testing.T) {
 	const pk = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
 	if _, err := db.conn.Exec(`INSERT INTO nodes
 		(public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES (?, 'silent-forwarder', 'repeater', 51.0, 4.0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1)`, pk,
+		VALUES ($1, 'silent-forwarder', 'repeater', 51.0, 4.0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1)`, pk,
 	); err != nil {
 		t.Fatal(err)
 	}
-	res, err := db.conn.Exec(
+	var txID int64
+	err := db.conn.QueryRow(
 		`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, scope_name)
-		 VALUES ('AA', 'observed-scope-hash', ?, 0, 1, 1, '{}', '#be')`,
+		 VALUES ('AA', 'observed-scope-hash', $1, 0, 1, 1, '{}', '#be') RETURNING id`,
 		time.Now().UTC().Format(time.RFC3339),
-	)
+	).Scan(&txID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	txID, err := res.LastInsertId()
+
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +297,7 @@ func TestHandleNodesReportsObservedForUndeclaredForwarder(t *testing.T) {
 	// too, which also pins the lower-casing in addTxToPathHopIndex.
 	if _, err := db.conn.Exec(
 		`INSERT INTO observations (transmission_id, observer_idx, direction, snr, rssi, score, path_json, timestamp)
-		 VALUES (?, 0, 'rx', 1.0, -100, 0, ?, ?)`,
+		 VALUES ($1, 0, 'rx', 1.0, -100, 0, $2, $3)`,
 		txID, `["`+strings.ToUpper(pk)+`"]`, time.Now().Unix(),
 	); err != nil {
 		t.Fatal(err)
@@ -358,7 +359,7 @@ func TestScopeAuditAndNodesAgreeEndToEnd(t *testing.T) {
 	for pk, csv := range cases {
 		if _, err := srv.db.conn.Exec(`INSERT INTO nodes
 			(public_key, name, role, lat, lon, last_seen, first_seen, advert_count, configured_scope, configured_scope_at)
-			VALUES (?, ?, 'repeater', 51.0, 4.0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1, ?, '2026-01-01T00:00:00Z')`,
+			VALUES ($1, $2, 'repeater', 51.0, 4.0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1, $3, '2026-01-01T00:00:00Z')`,
 			pk, "rp-"+pk, csv,
 		); err != nil {
 			t.Fatal(err)

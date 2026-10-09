@@ -55,7 +55,7 @@ func TestStaleStatusPayloadDoesNotCreateObserver(t *testing.T) {
 		nil, nil, &Config{})
 
 	var count int
-	if err := store.db.QueryRow(`SELECT COUNT(*) FROM observers WHERE id = ?`, "obs-purged").Scan(&count); err != nil {
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM observers WHERE id = $1`, "obs-purged").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 0 {
@@ -82,7 +82,7 @@ func TestOfflineStatusIsNotLiveness(t *testing.T) {
 func TestStaleStatusPayloadDoesNotReactivateInactiveObserver(t *testing.T) {
 	store := newTestStore(t)
 	seedObserver(t, store, "obs-zombie", 60)
-	if _, err := store.db.Exec(`UPDATE observers SET inactive = 1 WHERE id = ?`, "obs-zombie"); err != nil {
+	if _, err := store.db.Exec(`UPDATE observers SET inactive = 1 WHERE id = $1`, "obs-zombie"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -92,7 +92,7 @@ func TestStaleStatusPayloadDoesNotReactivateInactiveObserver(t *testing.T) {
 		nil, nil, &Config{})
 
 	var inactive int
-	if err := store.db.QueryRow(`SELECT inactive FROM observers WHERE id = ?`, "obs-zombie").Scan(&inactive); err != nil {
+	if err := store.db.QueryRow(`SELECT inactive FROM observers WHERE id = $1`, "obs-zombie").Scan(&inactive); err != nil {
 		t.Fatal(err)
 	}
 	if inactive != 1 {
@@ -172,7 +172,7 @@ func TestStaleStatusPayloadStillUpdatesMetadata(t *testing.T) {
 		nil, nil, &Config{})
 
 	var firmware string
-	if err := store.db.QueryRow(`SELECT firmware FROM observers WHERE id = ?`, "obs-zombie").Scan(&firmware); err != nil {
+	if err := store.db.QueryRow(`SELECT firmware FROM observers WHERE id = $1`, "obs-zombie").Scan(&firmware); err != nil {
 		t.Fatal(err)
 	}
 	if firmware != "v1.14.1" {
@@ -193,7 +193,7 @@ func TestStaleStatusPayloadDoesNotInsertMetricsSample(t *testing.T) {
 
 	var count int
 	if err := store.db.QueryRow(
-		`SELECT COUNT(*) FROM observer_metrics WHERE observer_id = ?`, "obs-zombie",
+		`SELECT COUNT(*) FROM observer_metrics WHERE observer_id = $1`, "obs-zombie",
 	).Scan(&count); err != nil {
 		t.Fatal(err)
 	}

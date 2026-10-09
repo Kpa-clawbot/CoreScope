@@ -8,14 +8,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/mailer"
+	"github.com/meshcore-analyzer/pgutil/pgtest"
 	"github.com/meshcore-analyzer/users"
+	"modernc.org/sqlite"
 )
 
 const (
@@ -25,10 +28,11 @@ const (
 )
 
 type authFixture struct {
-	srv    *Server
-	router *mux.Router
-	fake   *mailer.Fake
-	st     *users.Store
+	ownerURL string
+	srv      *Server
+	router   *mux.Router
+	fake     *mailer.Fake
+	st       *users.Store
 }
 
 // client is a browser: its session cookie and CSRF token.
@@ -38,10 +42,73 @@ type client struct {
 	me     meResponse
 }
 
+// Account owners must use the same SQLite library as users.Store, not the
+// telemetry driver: https://sqlite.org/howtocorrupt.html#multiple_copies_of_sqlite_linked_into_the_same_application
+func openAccountFixtureSQL(target string) (*sql.DB, error) {
+	if strings.HasPrefix(target, "postgres://") || strings.HasPrefix(target, "postgresql://") {
+		return openFixtureSQL(target)
+	}
+	uri, err := dbconfig.SQLiteURI(target, url.Values{"mode": {"rw"}, "_pragma": {"busy_timeout(5000)"}})
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", uri)
+	if err == nil {
+		db.SetMaxOpenConns(1)
+	}
+	return db, err
+}
+
+// Account fixture owners share the live users.Store file. Mixing SQLite
+// implementations in one process bypasses their per-library lock bookkeeping.
+func TestAccountFixtureUsesAccountSQLiteDriver(t *testing.T) {
+	if testBackend(t) != dbconfig.SQLite {
+		t.Skip("SQLite account driver boundary")
+	}
+	f := newAuthFixture(t)
+	db, err := openAccountFixtureSQL(f.ownerURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, ok := db.Driver().(*sqlite.Driver); !ok {
+		t.Fatalf("account fixture uses %T; users.Store uses modernc.org/sqlite", db.Driver())
+	}
+	if err := db.Ping(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func newTestAuthService(t *testing.T, adminEmails ...string) (*authService, *mailer.Fake) {
+	a, fake, _ := newTestAuthServiceWithURL(t, postgresTestDSN(t), adminEmails...)
+	return a, fake
+}
+
+func newTestBackupAuthService(t *testing.T, adminEmails ...string) (*authService, *mailer.Fake) {
+	a, fake, _ := newTestAuthServiceWithURL(t, testDatabaseDSN(t), adminEmails...)
+	return a, fake
+}
+
+func newTestAuthServiceWithURL(t *testing.T, ownerURL string, adminEmails ...string) (*authService, *mailer.Fake, string) {
 	t.Helper()
+	runtimeURL := ownerURL
+	if testBackend(t) == dbconfig.Postgres {
+		owner, err := openAccountFixtureSQL(ownerURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer owner.Close()
+		if err := users.Apply(owner); err != nil {
+			t.Fatal(err)
+		}
+		runtimeURL = pgtest.Writer(t, ownerURL)
+		u, _ := url.Parse(runtimeURL)
+		if _, err := owner.Exec(`REVOKE INSERT,UPDATE,DELETE ON corescope_schema,schema_version FROM "` + u.User.Username() + `"`); err != nil {
+			t.Fatal(err)
+		}
+	}
 	set := &userMgmtSettings{
-		dbPath: filepath.Join(t.TempDir(), "users.db"), adminEmails: map[string]bool{},
+		databaseURL: runtimeURL, adminEmails: map[string]bool{},
 		sessionTTL: 30 * 24 * time.Hour, provider: "fake",
 		fromEmail: "noreply@example.org", fromName: "CoreScope", webhookSecret: testHook,
 	}
@@ -50,7 +117,7 @@ func newTestAuthService(t *testing.T, adminEmails ...string) (*authService, *mai
 	for _, e := range adminEmails {
 		set.adminEmails[e] = true
 	}
-	st, err := users.Open(set.dbPath)
+	st, err := users.Open(set.databaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,17 +127,25 @@ func newTestAuthService(t *testing.T, adminEmails ...string) (*authService, *mai
 		a.waitAudits()
 		st.Close()
 	})
-	return a, fake
+	return a, fake, ownerURL
 }
 
 // newAuthFixture builds a Server with auth on and only the auth routes.
 func newAuthFixture(t *testing.T, adminEmails ...string) *authFixture {
+	return newAuthFixtureWithURL(t, postgresTestDSN(t), adminEmails...)
+}
+
+func newBackupAuthFixture(t *testing.T, adminEmails ...string) *authFixture {
+	return newAuthFixtureWithURL(t, testDatabaseDSN(t), adminEmails...)
+}
+
+func newAuthFixtureWithURL(t *testing.T, databaseURL string, adminEmails ...string) *authFixture {
 	t.Helper()
-	a, fake := newTestAuthService(t, adminEmails...)
+	a, fake, ownerURL := newTestAuthServiceWithURL(t, databaseURL, adminEmails...)
 	srv := &Server{cfg: &Config{APIKey: testAPIKey}, perfStats: NewPerfStats(), auth: a}
 	r := mux.NewRouter()
 	srv.registerAuthRoutes(r)
-	return &authFixture{srv: srv, router: r, fake: fake, st: a.st}
+	return &authFixture{srv: srv, router: r, fake: fake, st: a.st, ownerURL: ownerURL}
 }
 
 type reqMod func(*http.Request)
@@ -187,7 +262,7 @@ func (f *authFixture) login(t *testing.T, email, password string) *client {
 // store call that touches it fails with a DB error (not ErrNotFound).
 func (f *authFixture) breakTable(t *testing.T, table string) {
 	t.Helper()
-	db, err := sql.Open("sqlite", f.srv.auth.set.dbPath)
+	db, err := openAccountFixtureSQL(f.ownerURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,13 +276,13 @@ func (f *authFixture) breakTable(t *testing.T, table string) {
 // from users.db (the raw tokens are not observable when no mail left).
 func (f *authFixture) unusedTokens(t *testing.T, uid int64, p users.Purpose) int {
 	t.Helper()
-	db, err := sql.Open("sqlite", f.srv.auth.set.dbPath)
+	db, err := openAccountFixtureSQL(f.ownerURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 	var n int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM tokens WHERE user_id = ? AND purpose = ? AND used_at IS NULL`, uid, string(p)).Scan(&n); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM tokens WHERE user_id = $1 AND purpose = $2 AND used_at IS NULL`, uid, string(p)).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n
@@ -217,7 +292,7 @@ func (f *authFixture) unusedTokens(t *testing.T, uid int64, p users.Purpose) int
 // simulate a concurrent writer or a failing statement).
 func (f *authFixture) execDB(t *testing.T, stmt string) {
 	t.Helper()
-	db, err := sql.Open("sqlite", f.srv.auth.set.dbPath)
+	db, err := openAccountFixtureSQL(f.ownerURL)
 	if err != nil {
 		t.Fatal(err)
 	}

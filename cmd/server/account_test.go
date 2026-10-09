@@ -135,8 +135,7 @@ func TestAuthResetTokenStoreFailureEndsSessionsFirst(t *testing.T) {
 	c := f.registerAndActivate(t, "pia@example.org", "Pia", pw)
 	thief := f.login(t, "pia@example.org", pw)
 	_, reset := pendingLinks(t, f, c, "pia@example.org", "attacker@example.org")
-	f.execDB(t, `CREATE TRIGGER down BEFORE UPDATE ON tokens WHEN OLD.purpose = 'email_change' BEGIN
-		SELECT RAISE(ABORT, 'token store down'); END`)
+	f.execDB(t, testNativeSQL(`CREATE TRIGGER down BEFORE UPDATE ON tokens WHEN OLD.purpose='email_change' BEGIN SELECT RAISE(ABORT,'token store down'); END`, `CREATE FUNCTION down() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'token store down'; END $$; CREATE TRIGGER down BEFORE UPDATE ON tokens FOR EACH ROW WHEN (OLD.purpose='email_change') EXECUTE FUNCTION down()`))
 	expectStatus(t, f.do("POST", "/api/auth/reset", resetRequest{Token: reset, Password: "a brand new secret"}), 500)
 	expectStatus(t, f.do("GET", "/api/auth/me", nil, as(thief)), 401)
 	expectStatus(t, f.do("GET", "/api/auth/me", nil, as(c)), 401)

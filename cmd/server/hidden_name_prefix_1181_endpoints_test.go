@@ -23,7 +23,7 @@ func TestHiddenNamePrefix_1181_NodeHealth(t *testing.T) {
 	pk := "deadbeef00001184"
 	if _, err := srv.db.conn.Exec(`INSERT INTO nodes
 		(public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES (?, ?, ?, 0, 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 1)`,
+		VALUES ($1, $2, $3, 0, 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 1)`,
 		pk, "🚫 health me", "companion"); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestHiddenNamePrefix_1181_BulkHealth(t *testing.T) {
 	pk := "deadbeef00001185"
 	if _, err := srv.db.conn.Exec(`INSERT INTO nodes
 		(public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES (?, ?, ?, 0, 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 1)`,
+		VALUES ($1, $2, $3, 0, 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 1)`,
 		pk, "🚫 bulk me", "companion"); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestHiddenNamePrefix_1181_Paths(t *testing.T) {
 	pk := "deadbeef00001186"
 	if _, err := srv.db.conn.Exec(`INSERT INTO nodes
 		(public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES (?, ?, ?, 0, 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 1)`,
+		VALUES ($1, $2, $3, 0, 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 1)`,
 		pk, "🚫 paths me", "companion"); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestHiddenNamePrefix_1181_Analytics(t *testing.T) {
 	pk := "deadbeef00001187"
 	if _, err := srv.db.conn.Exec(`INSERT INTO nodes
 		(public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES (?, ?, ?, 0, 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 1)`,
+		VALUES ($1, $2, $3, 0, 0, '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 1)`,
 		pk, "🚫 analytics me", "companion"); err != nil {
 		t.Fatalf("insert: %v", err)
 	}

@@ -33,11 +33,11 @@ func seedDistinctFrames(t *testing.T, db *DB, hash string) (string, []int) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := db.conn.Exec(`INSERT INTO transmissions
 		(raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('CANON0000', ?, ?, 1, 5, '{"type":"CHAN"}')`, hash, now); err != nil {
+		VALUES ('CANON0000', $1, $2, 1, 5, '{"type":"CHAN"}')`, hash, now); err != nil {
 		t.Fatalf("insert transmission: %v", err)
 	}
 	var txID int
-	if err := db.conn.QueryRow("SELECT id FROM transmissions WHERE hash = ?", hash).Scan(&txID); err != nil {
+	if err := db.conn.QueryRow("SELECT id FROM transmissions WHERE hash = $1", hash).Scan(&txID); err != nil {
 		t.Fatalf("lookup tx id: %v", err)
 	}
 
@@ -52,14 +52,15 @@ func seedDistinctFrames(t *testing.T, db *DB, hash string) (string, []int) {
 	}
 	var ids []int
 	for i, f := range frames {
-		res, err := db.conn.Exec(`INSERT INTO observations
+		var id int64
+		err := db.conn.QueryRow(`INSERT INTO observations
 			(transmission_id, observer_idx, snr, rssi, path_json, timestamp, raw_hex)
-			VALUES (?, 1, 5.0, -90, ?, ?, ?)`,
-			txID, f.pathJSON, time.Now().Unix()-int64(i), f.rawHex)
+			VALUES ($1, 1, 5.0, -90, $2, $3, $4) RETURNING id`,
+			txID, f.pathJSON, time.Now().Unix()-int64(i), f.rawHex).Scan(&id)
 		if err != nil {
 			t.Fatalf("insert observation %d: %v", i, err)
 		}
-		id, err := res.LastInsertId()
+
 		if err != nil {
 			t.Fatalf("last insert id: %v", err)
 		}

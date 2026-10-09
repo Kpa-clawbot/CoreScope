@@ -295,9 +295,9 @@ func TestEvictStale_CleansResolvedPathNodeIndexes(t *testing.T) {
 	tx.Observations = append(tx.Observations, obs)
 
 	// Insert into DB so on-demand SQL fetch works during eviction
-	db.conn.Exec("INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (?, '', ?, ?)",
+	db.conn.Exec("INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES ($1, '', $2, $3)",
 		txID, tx.Hash, tx.FirstSeen)
-	db.conn.Exec("INSERT INTO observations (id, transmission_id, observer_idx, path_json, timestamp, resolved_path) VALUES (?, ?, 1, ?, ?, ?)",
+	db.conn.Exec("INSERT INTO observations (id, transmission_id, observer_idx, path_json, timestamp, resolved_path) VALUES ($1, $2, 1, $3, $4, $5)",
 		obsID, txID, `["aa"]`, now.Add(-48*time.Hour).Unix(), `["`+relayPK+`"]`)
 
 	store.packets = append(store.packets, tx)

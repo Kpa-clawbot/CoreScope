@@ -1,136 +1,109 @@
-// migrate-fixture-hashes recomputes content hashes in a fixture DB using the
-// current ComputeContentHash formula.  Run once; idempotent.
+// migrate-fixture-hashes updates only an explicit disposable legacy SQLite fixture.
+// Run from cmd/migrate before offline PostgreSQL import. It shares the runtime
+// packet identity algorithm and refuses collisions instead of dropping records.
 package main
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
+	"path/filepath"
+	"runtime"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/meshcore-analyzer/packetpath"
 )
 
-func computeContentHash(rawHex string) string {
-	buf, err := hex.DecodeString(rawHex)
-	if err != nil || len(buf) < 2 {
-		if len(rawHex) >= 16 {
-			return rawHex[:16]
-		}
-		return rawHex
+func main() {
+	if len(os.Args) != 2 {
+		log.Fatal("usage: migrate-fixture-hashes <disposable-sqlite-fixture>")
 	}
-
-	headerByte := buf[0]
-	offset := 1
-	routeType := int(headerByte & 0x03)
-	if routeType == 2 || routeType == 3 { // transport
-		offset += 4
+	if err := migrateFixtureHashes(os.Args[1]); err != nil {
+		log.Fatal(err)
 	}
-	if offset >= len(buf) {
-		if len(rawHex) >= 16 {
-			return rawHex[:16]
-		}
-		return rawHex
-	}
-	pathByte := buf[offset]
-	offset++
-	hashSize := int((pathByte>>6)&0x3) + 1
-	hashCount := int(pathByte & 0x3F)
-	pathBytes := hashSize * hashCount
-
-	payloadStart := offset + pathBytes
-	if payloadStart > len(buf) {
-		if len(rawHex) >= 16 {
-			return rawHex[:16]
-		}
-		return rawHex
-	}
-
-	payload := buf[payloadStart:]
-	payloadType := (headerByte >> 2) & 0x0F
-	toHash := []byte{payloadType}
-
-	// TRACE = payload type 7
-	if int(payloadType) == 7 {
-		toHash = append(toHash, pathByte, 0x00)
-	}
-	toHash = append(toHash, payload...)
-
-	h := sha256.Sum256(toHash)
-	return hex.EncodeToString(h[:])[:16]
 }
 
-func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "usage: %s <db-path>\n", os.Args[0])
-		os.Exit(1)
-	}
-	dbPath := os.Args[1]
-
-	db, err := sql.Open("sqlite3", dbPath)
+func migrateFixtureHashes(path string) error {
+	info, err := os.Stat(path)
 	if err != nil {
-		log.Fatal(err)
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("fixture must be an existing regular file")
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	absolute = filepath.ToSlash(absolute)
+	if runtime.GOOS == "windows" {
+		absolute = "/" + absolute
+	}
+	u := url.URL{Scheme: "file", Path: absolute}
+	q := url.Values{"mode": {"rw"}, "_foreign_keys": {"on"}, "_synchronous": {"FULL"}}
+	u.RawQuery = q.Encode()
+	db, err := sql.Open("sqlite3", u.String())
+	if err != nil {
+		return err
 	}
 	defer db.Close()
-
-	rows, err := db.Query("SELECT id, raw_hex, hash FROM transmissions")
-	if err != nil {
-		log.Fatal(err)
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`PRAGMA trusted_schema=OFF`); err != nil {
+		return err
 	}
-
+	rows, err := db.Query(`SELECT id,raw_hex,hash FROM transmissions ORDER BY id LIMIT 10001`)
+	if err != nil {
+		return err
+	}
 	type update struct {
-		id      int
-		newHash string
+		id   int64
+		hash string
 	}
 	var updates []update
-
+	seen := make(map[string]int64)
+	count := 0
 	for rows.Next() {
-		var id int
-		var rawHex, oldHash string
-		if err := rows.Scan(&id, &rawHex, &oldHash); err != nil {
-			log.Printf("scan: %v", err)
-			continue
+		var id int64
+		var raw, old string
+		if err := rows.Scan(&id, &raw, &old); err != nil {
+			rows.Close()
+			return err
 		}
-		newHash := computeContentHash(rawHex)
-		if newHash != oldHash {
-			updates = append(updates, update{id, newHash})
+		count++
+		if count > 10000 {
+			rows.Close()
+			return fmt.Errorf("fixture exceeds 10000 transmissions; this is not a production repair tool")
 		}
+		hash := packetpath.ContentHash(raw)
+		if previous, exists := seen[hash]; exists {
+			rows.Close()
+			return fmt.Errorf("content-hash collision between fixture IDs %d and %d requires explicit review; no rows changed", previous, id)
+		}
+		seen[hash] = id
+		if hash != old {
+			updates = append(updates, update{id, hash})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
 	}
 	rows.Close()
-
-	if len(updates) == 0 {
-		fmt.Println("All hashes already match current formula.")
-		return
-	}
-
 	tx, err := db.Begin()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	stmt, err := tx.Prepare("UPDATE transmissions SET hash = ? WHERE id = ?")
-	if err != nil {
-		log.Fatal(err)
-	}
-	merged := 0
+	defer tx.Rollback()
 	for _, u := range updates {
-		if _, err := stmt.Exec(u.newHash, u.id); err != nil {
-			// UNIQUE constraint = duplicate (same content, different old hash).
-			// Move observations to the surviving tx, then delete the dup.
-			log.Printf("update id %d: %v — merging duplicate", u.id, err)
-			// Find surviving tx id
-			var survID int
-			if err2 := tx.QueryRow("SELECT id FROM transmissions WHERE hash = ?", u.newHash).Scan(&survID); err2 == nil {
-				tx.Exec("UPDATE observations SET transmission_id = ? WHERE transmission_id = ?", survID, u.id)
-				tx.Exec("DELETE FROM transmissions WHERE id = ?", u.id)
-				merged++
-			}
+		if _, err := tx.Exec(`UPDATE transmissions SET hash=? WHERE id=?`, u.hash, u.id); err != nil {
+			return fmt.Errorf("fixture hash update failed; no changes committed: %w", err)
 		}
 	}
-	stmt.Close()
 	if err := tx.Commit(); err != nil {
-		log.Fatal(err)
+		return err
 	}
-	fmt.Printf("Migrated %d hashes, merged %d duplicates.\n", len(updates)-merged, merged)
+	fmt.Printf("Updated %d fixture hashes; preserved %d transmissions and every observation.\n", len(updates), count)
+	return nil
 }

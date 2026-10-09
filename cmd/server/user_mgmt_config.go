@@ -15,6 +15,7 @@ import (
 // UserManagementConfig is the "userManagement" block of config.json.
 type UserManagementConfig struct {
 	Enabled          bool                    `json:"enabled"`
+	DatabaseURL      string                  `json:"databaseURL,omitempty"`
 	DBPath           string                  `json:"dbPath,omitempty"`
 	AdminEmails      []string                `json:"adminEmails,omitempty"`
 	PublicBaseURL    string                  `json:"publicBaseUrl,omitempty"`
@@ -134,19 +135,19 @@ type UsersBackupConfig struct {
 // backupSettings is the resolved form; the zero value means off.
 type backupSettings struct {
 	enabled bool
-	dir     string // relative paths resolve against the working directory, like dbPath
+	dir     string // relative paths resolve against the working directory
 	keep    int    // snapshots kept after each run
 }
 
 const defaultBackupKeep = 7
 
-// resolveBackup fills the defaults: dir "backups" next to users.db, keep 7
+// resolveBackup defaults to "backups" under the state directory, keep 7
 // for an absent, zero or negative value. Only "enabled": false turns it off.
-func resolveBackup(c *UsersBackupConfig, dbPath string) backupSettings {
+func resolveBackup(c *UsersBackupConfig, stateDir string) backupSettings {
 	if c != nil && c.Enabled != nil && !*c.Enabled {
 		return backupSettings{}
 	}
-	b := backupSettings{enabled: true, dir: filepath.Join(filepath.Dir(dbPath), "backups"), keep: defaultBackupKeep}
+	b := backupSettings{enabled: true, dir: filepath.Join(stateDir, "backups"), keep: defaultBackupKeep}
 	if c == nil {
 		return b
 	}
@@ -165,7 +166,7 @@ func (c *Config) UserManagementEnabled() bool {
 
 // userMgmtSettings is the validated, resolved form the auth service runs on.
 type userMgmtSettings struct {
-	dbPath         string
+	databaseURL    string
 	adminEmails    map[string]bool
 	baseURL        *url.URL // no trailing slash, no query or fragment
 	secureCookie   bool
@@ -189,13 +190,17 @@ var fakeMailerAllowed bool
 // resolveUserManagement validates the block and fills defaults. It refuses
 // configurations where nobody could activate an account, so the server
 // fails at startup instead of running half-working.
-func resolveUserManagement(u *UserManagementConfig, measurementDBPath string, getenv func(string) string) (*userMgmtSettings, error) {
+func resolveUserManagement(u *UserManagementConfig, stateDir string, getenv func(string) string) (*userMgmtSettings, error) {
 	set := &userMgmtSettings{adminEmails: map[string]bool{}}
 
-	set.dbPath = strings.TrimSpace(u.DBPath)
-	if set.dbPath == "" {
-		set.dbPath = filepath.Join(filepath.Dir(measurementDBPath), "users.db")
+	set.databaseURL = envOrValue(getenv, "CORESCOPE_USERS_DATABASE_URL", u.DatabaseURL)
+	if set.databaseURL == "" {
+		set.databaseURL = strings.TrimSpace(u.DBPath)
 	}
+	if set.databaseURL == "" {
+		set.databaseURL = filepath.Join(stateDir, "users.db")
+	}
+
 	for _, raw := range u.AdminEmails {
 		e, err := users.NormalizeEmail(raw)
 		if err != nil {
@@ -256,7 +261,7 @@ func resolveUserManagement(u *UserManagementConfig, measurementDBPath string, ge
 	}
 	set.proposals = resolveProposals(u.ChannelProposals)
 	set.notify = resolveNotifications(u.Notifications)
-	set.backup = resolveBackup(u.Backup, set.dbPath)
+	set.backup = resolveBackup(u.Backup, stateDir)
 	return set, nil
 }
 

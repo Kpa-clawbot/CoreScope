@@ -16,15 +16,21 @@ func newResolvedPathStore(t *testing.T) *PacketStore {
 	t.Helper()
 	db := setupTestDB(t)
 	t.Cleanup(func() { db.Close() })
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := db.conn.Exec(query, args...); err != nil {
+			t.Fatalf("seed resolved path fixture: %v", err)
+		}
+	}
 	now := time.Now().UTC()
 	recent := now.Add(-1 * time.Hour).Format(time.RFC3339)
 	recentEpoch := now.Add(-1 * time.Hour).Unix()
-	db.conn.Exec(`INSERT INTO observers (id, name, last_seen, first_seen, packet_count) VALUES ('obs1','O1',?, '2026-01-01T00:00:00Z', 100)`, recent)
-	db.conn.Exec(`INSERT INTO observers (id, name, last_seen, first_seen, packet_count) VALUES ('obs2','O2',?, '2026-01-01T00:00:00Z', 100)`, recent)
-	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen, first_seen, advert_count) VALUES ('aabbccdd11223344','R','repeater',?, '2026-01-01T00:00:00Z', 1)`, recent)
-	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json) VALUES ('AABB','testhash00000001',?,1,4,'{"pubKey":"aabbccdd11223344","type":"ADVERT"}')`, recent)
-	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp) VALUES (1,1,12.5,-90,'["aa","bb","cc"]',?)`, recentEpoch)
-	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp, resolved_path) VALUES (1,2,8.0,-95,'["aa","bb"]',?,'["aabbccdd11223344","eeff00112233aabb"]')`, recentEpoch-100)
+	exec(`INSERT INTO observers (id, name, last_seen, first_seen, packet_count) VALUES ('obs1','O1',`+db.parameter(1)+`, '2026-01-01T00:00:00Z', 100)`, recent)
+	exec(`INSERT INTO observers (id, name, last_seen, first_seen, packet_count) VALUES ('obs2','O2',`+db.parameter(1)+`, '2026-01-01T00:00:00Z', 100)`, recent)
+	exec(`INSERT INTO nodes (public_key, name, role, last_seen, first_seen, advert_count) VALUES ('aabbccdd11223344','R','repeater',`+db.parameter(1)+`, '2026-01-01T00:00:00Z', 1)`, recent)
+	exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json) VALUES ('AABB','testhash00000001',`+db.parameter(1)+`,1,4,'{"pubKey":"aabbccdd11223344","type":"ADVERT"}')`, recent)
+	exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp) VALUES (1,1,12.5,-90,'["aa","bb","cc"]',`+db.parameter(1)+`)`, recentEpoch)
+	exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp, resolved_path) VALUES (1,2,8.0,-95,'["aa","bb"]',`+db.parameter(1)+`,'["aabbccdd11223344","eeff00112233aabb"]')`, recentEpoch-100)
 
 	store := NewPacketStore(db, nil)
 	if err := store.Load(); err != nil {

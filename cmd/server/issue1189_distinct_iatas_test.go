@@ -27,22 +27,22 @@ func TestQueryGroupedPacketsReturnsDistinctIATAs(t *testing.T) {
 
 	// Observers: SJC + SFO + a third with no IATA (should be excluded).
 	db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
-		VALUES ('obsA', 'A', 'SJC', ?, '2026-01-01T00:00:00Z', 10)`, now.Format(time.RFC3339))
+		VALUES ('obsA', 'A', 'SJC', $1, '2026-01-01T00:00:00Z', 10)`, now.Format(time.RFC3339))
 	db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
-		VALUES ('obsB', 'B', 'SFO', ?, '2026-01-01T00:00:00Z', 10)`, now.Format(time.RFC3339))
+		VALUES ('obsB', 'B', 'SFO', $1, '2026-01-01T00:00:00Z', 10)`, now.Format(time.RFC3339))
 	db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
-		VALUES ('obsC', 'C', '',    ?, '2026-01-01T00:00:00Z', 10)`, now.Format(time.RFC3339))
+		VALUES ('obsC', 'C', '',    $1, '2026-01-01T00:00:00Z', 10)`, now.Format(time.RFC3339))
 
 	// One transmission with 3 observations (SJC, SFO, no-IATA).
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('AABB', 'deadbeefcafef00d', ?, 1, 4, '{}')`, now.Format(time.RFC3339))
+		VALUES ('AABB', 'deadbeefcafef00d', $1, 1, 4, '{}')`, now.Format(time.RFC3339))
 	// v3 schema: observer_idx = observers.rowid (auto-assigned 1,2,3 in insert order).
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (1, 1, 12.0, -80, '["aa"]', ?)`, recentEpoch)
+		VALUES (1, 1, 12.0, -80, '["aa"]', $1)`, recentEpoch)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (1, 2,  8.0, -90, '["aa"]', ?)`, recentEpoch-30)
+		VALUES (1, 2,  8.0, -90, '["aa"]', $1)`, recentEpoch-30)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (1, 3,  5.0, -95, '["aa"]', ?)`, recentEpoch-60)
+		VALUES (1, 3,  5.0, -95, '["aa"]', $1)`, recentEpoch-60)
 
 	result, err := db.QueryGroupedPackets(PacketQuery{Limit: 50})
 	if err != nil {
@@ -79,11 +79,11 @@ func TestQueryGroupedPacketsDistinctIATAsEmptyWhenNoIATA(t *testing.T) {
 	recentEpoch := now.Add(-1 * time.Hour).Unix()
 
 	db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
-		VALUES ('obsX', 'X', '', ?, '2026-01-01T00:00:00Z', 1)`, now.Format(time.RFC3339))
+		VALUES ('obsX', 'X', '', $1, '2026-01-01T00:00:00Z', 1)`, now.Format(time.RFC3339))
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('AA', '1111222233334444', ?, 1, 4, '{}')`, now.Format(time.RFC3339))
+		VALUES ('AA', '1111222233334444', $1, 1, 4, '{}')`, now.Format(time.RFC3339))
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (1, 1, 10.0, -85, '[]', ?)`, recentEpoch)
+		VALUES (1, 1, 10.0, -85, '[]', $1)`, recentEpoch)
 
 	result, err := db.QueryGroupedPackets(PacketQuery{Limit: 50})
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -113,17 +114,27 @@ func TestJSONOutputParseable(t *testing.T) {
 	}
 }
 
-// Integration test against fixture DB (skipped if DB not found)
+// Exercise the actual CLI against the checked-in, captured packet fixture.
 func TestFixtureDecrypt(t *testing.T) {
-	dbPath := "../../test-fixtures/e2e-fixture.db"
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		t.Skip("fixture DB not found")
+	dbPath, err := filepath.Abs("../../test-fixtures/e2e-fixture.db")
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// We know the fixture has #wardriving messages with channelHash 0x81
-	key := channel.DeriveKey("#wardriving")
-	ch := channel.ChannelHash(key)
-	if ch != 0x81 {
-		t.Fatalf("unexpected channel hash: %02X", ch)
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Fatal("checked-in fixture database is required")
+	}
+	base := t.TempDir()
+	out, diagnostic, err := runDecryptCLI(t, base, "--channel", "#wardriving", "--db", dbPath, "--state-dir", base)
+	if err != nil {
+		t.Fatalf("fixture export failed: %v; %s", err, diagnostic)
+	}
+	var messages []ChannelMessage
+	if err := json.Unmarshal(out, &messages); err != nil || len(messages) == 0 {
+		t.Fatalf("fixture export produced no valid messages: %v", err)
+	}
+	for _, message := range messages {
+		if message.Channel != "#wardriving" || message.RawHex == "" || message.Timestamp == "" {
+			t.Fatal("fixture export lost message fields")
+		}
 	}
 }

@@ -37,39 +37,15 @@ func TestGetChannelMessagesPerfLargeChannel(t *testing.T) {
 	const numTx = 1500
 	const obsPerTx = 50
 
-	tx, err := db.conn.Begin()
-	if err != nil {
-		t.Fatal(err)
-	}
-	txStmt, err := tx.Prepare(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
-		VALUES (?, ?, ?, 1, 5, ?, '#perf')`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	obsStmt, err := tx.Prepare(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (?, 1, 10.0, -90, '[]', ?)`)
-	if err != nil {
-		t.Fatal(err)
-	}
 	base := time.Now().UTC().Add(-24 * time.Hour)
-	for i := 0; i < numTx; i++ {
-		ts := base.Add(time.Duration(i) * time.Second).Format(time.RFC3339)
-		hash := fmt.Sprintf("perfhash%08d", i)
+	copyTestRows(t, db.conn, "transmissions", []string{"id", "raw_hex", "hash", "first_seen", "route_type", "payload_type", "decoded_json", "channel_hash"}, numTx, func(i int) []any {
 		body := fmt.Sprintf(`{"type":"CHAN","channel":"#perf","text":"Sender%d: msg %d","sender":"Sender%d"}`, i%10, i, i%10)
-		res, err := txStmt.Exec(fmt.Sprintf("%04X", i), hash, ts, body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		txID, _ := res.LastInsertId()
-		for o := 0; o < obsPerTx; o++ {
-			if _, err := obsStmt.Exec(txID, base.Unix()+int64(i*100+o)); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatal(err)
-	}
+		return []any{i + 1, fmt.Sprintf("%04X", i), fmt.Sprintf("perfhash%08d", i), base.Add(time.Duration(i) * time.Second).Format(time.RFC3339), 1, 5, body, "#perf"}
+	})
+	copyTestRows(t, db.conn, "observations", []string{"id", "transmission_id", "observer_idx", "snr", "rssi", "path_json", "timestamp"}, numTx*obsPerTx, func(n int) []any {
+		i, o := n/obsPerTx, n%obsPerTx
+		return []any{n + 1, i + 1, 1, 10.0, -90.0, "[]", base.Unix() + int64(i*100+o)}
+	})
 
 	// Warm-up call to amortize first-run prepare cost.
 	if _, _, err := db.GetChannelMessages("#perf", 50, 0); err != nil {

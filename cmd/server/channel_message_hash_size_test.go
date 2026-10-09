@@ -44,18 +44,19 @@ func seedChannelHashSize(t *testing.T, db *DB) *DB {
 	}
 	for i, r := range rows {
 		ts := now.Add(time.Duration(i-len(rows)) * time.Minute)
-		res, err := db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
-			VALUES (?, ?, ?, ?, 5, '{"type":"CHAN","channel":"#hashsize","text":"Alice: msg"}', '#hashsize')`,
-			r.rawHex, r.hash, ts.Format(time.RFC3339), r.routeType)
+		var txID int64
+		err := db.conn.QueryRow(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+			VALUES ($1, $2, $3, $4, 5, '{"type":"CHAN","channel":"#hashsize","text":"Alice: msg"}', '#hashsize') RETURNING id`,
+			r.rawHex, r.hash, ts.Format(time.RFC3339), r.routeType).Scan(&txID)
 		if err != nil {
 			t.Fatalf("insert tx %s: %v", r.hash, err)
 		}
-		txID, _ := res.LastInsertId()
+
 		obsSQL := `INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-			VALUES (?, 1, 9.5, -90, '[]', ?)`
+			VALUES ($1, 1, 9.5, -90, '[]', $2)`
 		if !db.isV3 {
 			obsSQL = `INSERT INTO observations (transmission_id, observer_id, observer_name, snr, rssi, path_json, timestamp)
-			VALUES (?, 'obs1', 'Observer One', 9.5, -90, '[]', ?)`
+			VALUES ($1, 'obs1', 'Observer One', 9.5, -90, '[]', $2)`
 		}
 		if _, err := db.conn.Exec(obsSQL, txID, ts.Unix()); err != nil {
 			t.Fatalf("insert obs %s: %v", r.hash, err)

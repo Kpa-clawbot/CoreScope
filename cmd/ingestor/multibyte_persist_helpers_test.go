@@ -57,22 +57,9 @@ func logContains(buf *syncBuffer, substr string) bool {
 // columnExists reports whether the named column exists on the table.
 func columnExists(t *testing.T, db *sql.DB, table, col string) bool {
 	t.Helper()
-	rows, err := db.Query("PRAGMA table_info(" + table + ")")
-	if err != nil {
-		t.Fatalf("PRAGMA table_info(%s): %v", table, err)
+	var found bool
+	if err := db.QueryRow(testNativeSQL(`SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)`, `SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1 AND column_name=$2)`), table, col).Scan(&found); err != nil {
+		t.Fatal(err)
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid int
-		var name, ctype string
-		var notnull, pk int
-		var dfltValue sql.NullString
-		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
-			t.Fatalf("scan PRAGMA: %v", err)
-		}
-		if name == col {
-			return true
-		}
-	}
-	return false
+	return found
 }

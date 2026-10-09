@@ -66,7 +66,7 @@ func TestAllProposalsByUserHasNoCap(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i <= ProposalListMax; i++ {
-		if _, err := tx.Exec(`INSERT INTO proposals (kind, subject, status, proposer_id, created_at) VALUES (?, ?, 'rejected', ?, ?)`,
+		if _, err := tx.Exec(`INSERT INTO proposals (kind, subject, status, proposer_id, created_at) VALUES ($1, $2, 'rejected', $3, $4)`,
 			KindHashtagChannel, fmt.Sprintf("#p%d", i), u.ID, unix(clk.Now())); err != nil {
 			tx.Rollback()
 			t.Fatal(err)

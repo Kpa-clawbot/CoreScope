@@ -1,9 +1,7 @@
 package users
 
 import (
-	"database/sql"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -44,7 +42,7 @@ func TestSettingsPutRevisions(t *testing.T) {
 		t.Fatalf("GetSettings = %q, %+v, %v", doc, got, err)
 	}
 	var at int64
-	if err := st.db.QueryRow(`SELECT updated_at FROM user_settings WHERE user_id = ?`, u.ID).Scan(&at); err != nil || at != unix(clk.Now()) {
+	if err := st.db.QueryRow(`SELECT updated_at FROM user_settings WHERE user_id = $1`, u.ID).Scan(&at); err != nil || at != unix(clk.Now()) {
 		t.Fatalf("updated_at = %d, %v; want %d", at, err, unix(clk.Now()))
 	}
 }
@@ -134,32 +132,11 @@ func TestSettingsSurviveDisable(t *testing.T) {
 	}
 }
 
-// A users.db written by a v1 binary gains user_settings and keeps its rows.
+// A native account schema at v1 binary gains user_settings and keeps its rows.
 func TestMigrateV1DatabaseToV2(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "users.db")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stmts := append([]string{
-		`CREATE TABLE schema_version (version INTEGER NOT NULL)`,
-		`INSERT INTO schema_version (version) VALUES (1)`,
-	}, migrations[0]...)
-	stmts = append(stmts, `INSERT INTO users (email, display_name, password_hash, created_at) VALUES ('old@example.org', 'Old', 'x', 1)`)
-	for _, s := range stmts {
-		if _, err := db.Exec(s); err != nil {
-			t.Fatalf("build v1 db: %v", err)
-		}
-	}
-	db.Close()
-
-	st, err := Open(path)
-	if err != nil {
-		t.Fatalf("Open v1 db: %v", err)
-	}
-	defer st.Close()
-	if v, err := st.SchemaVersion(); err != nil || v != len(migrations) {
-		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, len(migrations))
+	st := migratedTestStore(t, 1, `INSERT INTO users (email,display_name,password_hash,created_at) VALUES ('old@example.org','Old','x',1)`)
+	if v, err := st.SchemaVersion(); err != nil || v != schemaVersion(t) {
+		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, schemaVersion(t))
 	}
 	u, err := st.GetByEmail("old@example.org")
 	if err != nil {

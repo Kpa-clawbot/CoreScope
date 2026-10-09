@@ -1,8 +1,8 @@
-// corescope-decrypt decrypts and exports hashtag channel messages from a CoreScope SQLite database.
+// corescope-decrypt decrypts and exports hashtag channel messages from CoreScope storage.
 //
 // Usage:
 //
-//	corescope-decrypt --channel "#wardriving" --db meshcore.db [--format json|html] [--output file]
+//	corescope-decrypt --channel "#wardriving" [--format json|html] [--output file]
 package main
 
 import (
@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/meshcore-analyzer/channel"
+	"github.com/meshcore-analyzer/dbconfig"
 )
 
 // Version info (set via ldflags).
@@ -47,7 +47,11 @@ type Observer struct {
 
 func main() {
 	channelName := flag.String("channel", "", "Channel name (e.g. \"#wardriving\")")
-	dbPath := flag.String("db", "", "Path to CoreScope SQLite database")
+	databaseURL := flag.String("database-url", "", "PostgreSQL reader URL (prefer CORESCOPE_READER_DATABASE_URL)")
+	dbPath := flag.String("db", "", "Existing SQLite database path (default: data/meshcore.db)")
+	backend := flag.String("backend", "", "Bootstrap backend: sqlite or postgres (installed selection wins)")
+	stateDir := flag.String("state-dir", "", "Installation state directory (CORESCOPE_STATE_DIR)")
+	configPath := flag.String("config", "", "Storage config file (default: config.json, then data/config.json)")
 	format := flag.String("format", "json", "Output format: json, html, irc (or log)")
 	output := flag.String("output", "", "Output file (default: stdout)")
 	showVersion := flag.Bool("version", false, "Print version and exit")
@@ -56,12 +60,17 @@ func main() {
 		fmt.Fprintf(os.Stderr, `corescope-decrypt — Decrypt and export MeshCore hashtag channel messages
 
 USAGE
-  corescope-decrypt --channel NAME --db PATH [--format FORMAT] [--output FILE]
+  corescope-decrypt --channel NAME [--format FORMAT] [--output FILE]
 
 FLAGS
   --channel NAME   Channel name to decrypt (e.g. "#wardriving", "wardriving")
                    The "#" prefix is added automatically if missing.
-  --db PATH        Path to a CoreScope SQLite database file (read-only access).
+  --db PATH        Existing SQLite database (default: data/meshcore.db).
+  --backend NAME   Bootstrap choice: sqlite or postgres.
+  --state-dir DIR  Find the installed storage selection in this directory.
+  --config FILE    Read storage settings from this config file.
+  --database-url   PostgreSQL reader URL. Prefer CORESCOPE_READER_DATABASE_URL
+                   or CORESCOPE_DATABASE_URL to keep credentials out of argv.
   --format FORMAT  Output format (default: json):
                      json  — Machine-readable JSON array with full metadata
                      html  — Self-contained HTML viewer with search and sorting
@@ -70,19 +79,22 @@ FLAGS
   --output FILE    Write output to FILE instead of stdout.
   --version        Print version and exit.
 
+  The installed selection takes precedence over bootstrap paths and backend flags.
+  Export holds a shared selection lease and never creates or migrates a database.
+
 EXAMPLES
   # Export #wardriving messages as JSON
-  corescope-decrypt --channel "#wardriving" --db /app/data/meshcore.db
+  corescope-decrypt --channel "#wardriving"
 
   # Generate an interactive HTML viewer
-  corescope-decrypt --channel wardriving --db meshcore.db --format html --output wardriving.html
+  corescope-decrypt --channel wardriving --format html --output wardriving.html
 
   # Greppable IRC log
-  corescope-decrypt --channel "#MeshCore" --db meshcore.db --format irc --output meshcore.log
+  corescope-decrypt --channel "#MeshCore" --format irc --output meshcore.log
   grep "KE6QR" meshcore.log
 
   # From the Docker container
-  docker exec corescope-prod /app/corescope-decrypt --channel "#wardriving" --db /app/data/meshcore.db
+  docker exec corescope-prod /app/corescope-decrypt --channel "#wardriving"
 
 RETROACTIVE DECRYPTION
   MeshCore hashtag channels use symmetric encryption — the key is derived from the
@@ -107,7 +119,7 @@ LIMITATIONS
 		os.Exit(0)
 	}
 
-	if *channelName == "" || *dbPath == "" {
+	if *channelName == "" {
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -121,14 +133,21 @@ LIMITATIONS
 	key := channel.DeriveKey(ch)
 	chHash := channel.ChannelHash(key)
 
-	db, err := sql.Open("sqlite3", "file:"+*dbPath+"?mode=ro")
+	raw, err := exportStorageInputs(".", exportOptions{Backend: dbconfig.Backend(*backend), DBPath: *dbPath, DatabaseURL: *databaseURL, StateDir: *stateDir, ConfigPath: *configPath}, os.Getenv)
+	if err != nil {
+		log.Fatalf("Storage configuration: %v", err)
+	}
+	db, lease, err := openSelectedExport(raw)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
+	}
+	if lease != nil {
+		defer lease.Close()
 	}
 	defer db.Close()
 
 	// Query all GRP_TXT packets
-	rows, err := db.Query(`SELECT id, hash, raw_hex, first_seen FROM transmissions WHERE payload_type = 5`)
+	rows, err := db.Query(exportTransmissionsSQL)
 	if err != nil {
 		log.Fatalf("Query failed: %v", err)
 	}
@@ -278,7 +297,7 @@ func extractGRPPayload(rawHex string) ([]byte, error) {
 
 func getPathFromDB(db *sql.DB, txID int) []string {
 	var decodedJSON sql.NullString
-	err := db.QueryRow(`SELECT decoded_json FROM transmissions WHERE id = ?`, txID).Scan(&decodedJSON)
+	err := db.QueryRow(exportPathSQL, txID).Scan(&decodedJSON)
 	if err != nil || !decodedJSON.Valid {
 		return nil
 	}
@@ -295,13 +314,7 @@ func getPathFromDB(db *sql.DB, txID int) []string {
 }
 
 func getObservers(db *sql.DB, txID int) []Observer {
-	rows, err := db.Query(`
-		SELECT o.name, obs.snr, obs.rssi, obs.timestamp
-		FROM observations obs
-		LEFT JOIN observers o ON o.id = CAST(obs.observer_idx AS TEXT)
-		WHERE obs.transmission_id = ?
-		ORDER BY obs.timestamp
-	`, txID)
+	rows, err := db.Query(exportObserversSQL, txID)
 	if err != nil {
 		return nil
 	}

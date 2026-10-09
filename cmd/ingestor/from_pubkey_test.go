@@ -10,7 +10,7 @@ import (
 )
 
 func TestInsertTransmission_FromPubkeyPopulatedForAdvert(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,14 +34,14 @@ func TestInsertTransmission_FromPubkeyPopulatedForAdvert(t *testing.T) {
 	}
 
 	var got sql.NullString
-	s.db.QueryRow("SELECT from_pubkey FROM transmissions WHERE hash = ?", data.Hash).Scan(&got)
+	s.db.QueryRow("SELECT from_pubkey FROM transmissions WHERE hash = $1", data.Hash).Scan(&got)
 	if !got.Valid || got.String != pk {
 		t.Fatalf("from_pubkey = %v (valid=%v), want %q", got.String, got.Valid, pk)
 	}
 }
 
 func TestInsertTransmission_FromPubkeyNullForNonAdvert(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestInsertTransmission_FromPubkeyNullForNonAdvert(t *testing.T) {
 	}
 
 	var got sql.NullString
-	s.db.QueryRow("SELECT from_pubkey FROM transmissions WHERE hash = ?", data.Hash).Scan(&got)
+	s.db.QueryRow("SELECT from_pubkey FROM transmissions WHERE hash = $1", data.Hash).Scan(&got)
 	if got.Valid {
 		t.Fatalf("from_pubkey for non-ADVERT must be NULL, got %q", got.String)
 	}

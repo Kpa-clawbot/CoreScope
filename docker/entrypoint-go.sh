@@ -1,4 +1,5 @@
 #!/bin/sh
+set -eu
 
 # Config lives in the data directory (bind-mounted from host)
 # The Go server already searches /app/data/config.json via LoadConfig
@@ -20,6 +21,8 @@ if [ -f /app/data/.env ]; then
   . /app/data/.env
   set +a
 fi
+
+/app/storage.sh start
 
 SUPERVISORD_CONF="/etc/supervisor/conf.d/supervisord.conf"
 if [ "${DISABLE_MOSQUITTO:-false}" = "true" ] && [ "${DISABLE_CADDY:-false}" = "true" ]; then

@@ -397,22 +397,9 @@ func TestDeclaredRegionSourcesIgnoresWildcard(t *testing.T) {
 // wants the optional source has to bring it.
 func insertDeclaredRegionsRow(t *testing.T, s *Store, target, observedAt, regionsCSV string) {
 	t.Helper()
-	if _, err := s.db.Exec(`
-		CREATE TABLE IF NOT EXISTS node_declared_regions (
-			id          INTEGER PRIMARY KEY AUTOINCREMENT,
-			target      TEXT NOT NULL,
-			rx_pubkey   TEXT NOT NULL,
-			observed_at TEXT NOT NULL,
-			ingested_at TEXT NOT NULL,
-			regions_csv TEXT NOT NULL,
-			truncated   INTEGER NOT NULL DEFAULT 0,
-			UNIQUE(target, rx_pubkey, observed_at)
-		)`); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := s.db.Exec(
 		`INSERT INTO node_declared_regions (target, rx_pubkey, observed_at, ingested_at, regions_csv, truncated)
-		 VALUES (?, 'rx', ?, ?, ?, 0)`, target, observedAt, observedAt, regionsCSV); err != nil {
+		 VALUES ($1, 'rx', $2, $3, $4, 0)`, target, observedAt, observedAt, regionsCSV); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -639,7 +626,7 @@ func TestDeclaredRegionSourcesMergesBothSources(t *testing.T) {
 func seedNodeWithConfiguredScope(t *testing.T, s *Store, pubkey, scopes, at string) {
 	t.Helper()
 	if _, err := s.db.Exec(
-		`INSERT INTO nodes (public_key, configured_scope, configured_scope_at) VALUES (?, ?, ?)`,
+		`INSERT INTO nodes (public_key, configured_scope, configured_scope_at) VALUES ($1, $2, $3)`,
 		pubkey, scopes, at); err != nil {
 		t.Fatal(err)
 	}

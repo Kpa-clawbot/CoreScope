@@ -19,7 +19,6 @@ package main
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,13 +30,12 @@ import (
 // when hotStartupHours == 0 the bg loader has no work to do; healthz
 // must NOT be stuck on backgroundLoadComplete=false.
 func TestRunStartupLoad_HotStartupHoursZero_SetsDoneImmediately(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
+	dbPath := postgresTestDSN(t)
 	nowSec := time.Now().UTC().Unix()
 	createTestDBWithLastSeen(t, dbPath, 10, 1, nowSec,
 		30*time.Minute, 30*time.Minute)
 
-	db, err := OpenDB(dbPath)
+	db, err := openFixtureReader(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}
@@ -67,13 +65,12 @@ func TestRunStartupLoad_HotStartupHoursZero_SetsDoneImmediately(t *testing.T) {
 // implementation left done=false, leaving healthz wedged on the
 // failure path (dij #1 / adv #7).
 func TestRunStartupLoad_LoadChunkedError_SetsFailedTerminal(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
+	dbPath := postgresTestDSN(t)
 	nowSec := time.Now().UTC().Unix()
 	createTestDBWithLastSeen(t, dbPath, 5, 1, nowSec,
 		30*time.Minute, 30*time.Minute)
 
-	db, err := OpenDB(dbPath)
+	db, err := openFixtureReader(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}
@@ -107,12 +104,11 @@ func TestRunStartupLoad_LoadChunkedError_SetsFailedTerminal(t *testing.T) {
 // loadBackgroundChunks must reach its coverage block (totalInDB==0 →
 // ratio=1.0) and set done=true rather than leaving the store stuck.
 func TestRunStartupLoad_EmptyDB_SetsDoneTerminal(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
+	dbPath := postgresTestDSN(t)
 	createTestDBWithLastSeen(t, dbPath, 0, 0, time.Now().UTC().Unix(),
 		30*time.Minute, 30*time.Minute)
 
-	db, err := OpenDB(dbPath)
+	db, err := openFixtureReader(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}
@@ -152,13 +148,12 @@ func TestRunStartupLoad_EmptyDB_SetsDoneTerminal(t *testing.T) {
 // tBgEntry >= tLastChunk monotonically. The runtime invariant in
 // loadBackgroundChunks remains as the deterministic backstop.
 func TestRunStartupLoad_BgLoaderRunsAfterLoadChunkedSets_OldestLoaded(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
+	dbPath := postgresTestDSN(t)
 	nowSec := time.Now().UTC().Unix()
 	createTestDBWithLastSeen(t, dbPath, 50, 1, nowSec,
 		30*time.Minute, 30*time.Minute)
 
-	db, err := OpenDB(dbPath)
+	db, err := openFixtureReader(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}
@@ -223,14 +218,13 @@ func TestRunStartupLoad_BgLoaderRunsAfterLoadChunkedSets_OldestLoaded(t *testing
 // fails and the terminal state is still failed=true,done=true with a
 // non-empty error.
 func TestRunStartupLoad_LoadChunkedError_MidLoad(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
+	dbPath := postgresTestDSN(t)
 	nowSec := time.Now().UTC().Unix()
 	// Seed enough rows so a small chunk size yields >1 chunk.
 	createTestDBWithLastSeen(t, dbPath, 200, 1, nowSec,
 		30*time.Minute, 30*time.Minute)
 
-	db, err := OpenDB(dbPath)
+	db, err := openFixtureReader(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}
@@ -270,8 +264,7 @@ func TestRunStartupLoad_LoadChunkedError_MidLoad(t *testing.T) {
 // must fire so future refactors cannot silently re-introduce the
 // #1809 race.
 func TestLoadBackgroundChunks_PanicsOnOldestLoadedEmpty_Invariant(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
+	dbPath := postgresTestDSN(t)
 	// Reuse the existing schema-only fixture helper (0 rows) so this
 	// test does not introduce a new inline CREATE TABLE block (pr-preflight
 	// async-migration gate). The fixture provides exactly the bare schema
@@ -279,7 +272,7 @@ func TestLoadBackgroundChunks_PanicsOnOldestLoadedEmpty_Invariant(t *testing.T) 
 	createTestDBWithLastSeen(t, dbPath, 0, 0, time.Now().UTC().Unix(),
 		30*time.Minute, 30*time.Minute)
 
-	db, err := OpenDB(dbPath)
+	db, err := openFixtureReader(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}

@@ -34,20 +34,20 @@ func TestChannelMessages_TimestampUsesLatestSeen(t *testing.T) {
 	_ = laterEpoch
 
 	db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
-		VALUES ('obsA', 'ObsA', 'SJC', ?, '2026-01-01T00:00:00Z', 10)`, firstSeen)
+		VALUES ('obsA', 'ObsA', 'SJC', $1, '2026-01-01T00:00:00Z', 10)`, firstSeen)
 	db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
-		VALUES ('obsB', 'ObsB', 'LAX', ?, '2026-01-01T00:00:00Z', 10)`, firstSeen)
+		VALUES ('obsB', 'ObsB', 'LAX', $1, '2026-01-01T00:00:00Z', 10)`, firstSeen)
 
 	// One transmission with two observations: T0 (7h ago) and T1 (5m ago).
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
-		VALUES ('AA01', 'hash_repeated_msg', ?, 1, 5,
+		VALUES ('AA01', 'hash_repeated_msg', $1, 1, 5,
 			'{"type":"CHAN","channel":"#test","text":"Heartbeat: ping","sender":"Heartbeat","sender_timestamp":`+
 		strconv.FormatInt(firstSeenEpoch, 10)+`}',
 		'#test')`, firstSeen)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (1, 1, 10.0, -90, '["aa"]', ?)`, firstSeenEpoch)
+		VALUES (1, 1, 10.0, -90, '["aa"]', $1)`, firstSeenEpoch)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (1, 2, 11.0, -88, '["bb"]', ?)`, laterEpoch)
+		VALUES (1, 2, 11.0, -88, '["bb"]', $1)`, laterEpoch)
 
 	store := NewPacketStore(db, nil)
 	store.Load()
@@ -102,14 +102,14 @@ func TestChannelMessages_TimestampNotSenderTimestamp(t *testing.T) {
 	badSenderTs := int64(946684800) // 2000-01-01 UTC
 
 	db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
-		VALUES ('obsX', 'ObsX', 'SJC', ?, '2026-01-01T00:00:00Z', 1)`, firstSeen)
+		VALUES ('obsX', 'ObsX', 'SJC', $1, '2026-01-01T00:00:00Z', 1)`, firstSeen)
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
-		VALUES ('BB01', 'hash_bad_clock', ?, 1, 5,
+		VALUES ('BB01', 'hash_bad_clock', $1, 1, 5,
 			'{"type":"CHAN","channel":"#bad","text":"Alice: ping","sender":"Alice","sender_timestamp":`+
 		strconv.FormatInt(badSenderTs, 10)+`}',
 		'#bad')`, firstSeen)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (1, 1, 10.0, -90, '["aa"]', ?)`, firstSeenEpoch)
+		VALUES (1, 1, 10.0, -90, '["aa"]', $1)`, firstSeenEpoch)
 
 	store := NewPacketStore(db, nil)
 	store.Load()
@@ -143,13 +143,13 @@ func TestChannelMessages_TimestampIsUTCZ(t *testing.T) {
 	ep := now.Add(-30 * time.Minute).Unix()
 
 	db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
-		VALUES ('obsZ', 'ObsZ', 'SJC', ?, '2026-01-01T00:00:00Z', 1)`, fs)
+		VALUES ('obsZ', 'ObsZ', 'SJC', $1, '2026-01-01T00:00:00Z', 1)`, fs)
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
-		VALUES ('ZZ01', 'hash_zone_check', ?, 1, 5,
+		VALUES ('ZZ01', 'hash_zone_check', $1, 1, 5,
 			'{"type":"CHAN","channel":"#zone","text":"Carol: ping","sender":"Carol"}',
 		'#zone')`, fs)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (1, 1, 11.0, -89, '["zz"]', ?)`, ep)
+		VALUES (1, 1, 11.0, -89, '["zz"]', $1)`, ep)
 
 	store := NewPacketStore(db, nil)
 	store.Load()
@@ -197,30 +197,30 @@ func TestChannelMessages_OrderedByLatestSeen_InMemory(t *testing.T) {
 	tNewestStr := tNewest.Format(time.RFC3339)
 
 	db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
-		VALUES ('obsO', 'ObsO', 'SJC', ?, '2026-01-01T00:00:00Z', 10)`, tOldStr)
+		VALUES ('obsO', 'ObsO', 'SJC', $1, '2026-01-01T00:00:00Z', 10)`, tOldStr)
 
 	// tx-A: FirstSeen 24h ago, LatestSeen NOW (T-1m). Old insertion order.
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
-		VALUES ('AAAA', 'order_hash_a', ?, 1, 5,
+		VALUES ('AAAA', 'order_hash_a', $1, 1, 5,
 			'{"type":"CHAN","channel":"#ord","text":"Alpha: hb","sender":"Alpha"}', '#ord')`, tOldStr)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (1, 1, 10.0, -90, '["aa"]', ?)`, tOld.Unix())
+		VALUES (1, 1, 10.0, -90, '["aa"]', $1)`, tOld.Unix())
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (1, 1, 11.0, -88, '["aa"]', ?)`, tFresh.Unix())
+		VALUES (1, 1, 11.0, -88, '["aa"]', $1)`, tFresh.Unix())
 
 	// tx-B: FirstSeen 1h ago, LatestSeen 1h ago. OLDEST.
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
-		VALUES ('BBBB', 'order_hash_b', ?, 1, 5,
+		VALUES ('BBBB', 'order_hash_b', $1, 1, 5,
 			'{"type":"CHAN","channel":"#ord","text":"Bravo: msg","sender":"Bravo"}', '#ord')`, tMidStr)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (2, 1, 9.0, -91, '["bb"]', ?)`, tMid.Unix())
+		VALUES (2, 1, 9.0, -91, '["bb"]', $1)`, tMid.Unix())
 
 	// tx-C: FirstSeen 30m ago, LatestSeen 30m ago. Middle.
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
-		VALUES ('CCCC', 'order_hash_c', ?, 1, 5,
+		VALUES ('CCCC', 'order_hash_c', $1, 1, 5,
 			'{"type":"CHAN","channel":"#ord","text":"Charlie: msg","sender":"Charlie"}', '#ord')`, tNewestStr)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (3, 1, 9.0, -91, '["cc"]', ?)`, tNewest.Unix())
+		VALUES (3, 1, 9.0, -91, '["cc"]', $1)`, tNewest.Unix())
 
 	store := NewPacketStore(db, nil)
 	store.Load()
@@ -276,34 +276,34 @@ func TestChannelMessages_OrderedByLatestSeen_DB(t *testing.T) {
 	tNewestStr := tNewest.Format(time.RFC3339)
 
 	db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
-		VALUES ('obsD', 'ObsD', 'SJC', ?, '2026-01-01T00:00:00Z', 10)`, tOldStr)
+		VALUES ('obsD', 'ObsD', 'SJC', $1, '2026-01-01T00:00:00Z', 10)`, tOldStr)
 
 	// tx-A: FirstSeen 24h ago, observations at T-24h and T-1m (LatestSeen
 	// = T-1m, the FRESHEST). Despite the freshest LatestSeen, a
 	// FirstSeen-DESC selection would push it OFF a small page.
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
-		VALUES ('AADB', 'order_db_hash_a', ?, 1, 5,
+		VALUES ('AADB', 'order_db_hash_a', $1, 1, 5,
 			'{"type":"CHAN","channel":"#ordb","text":"Alpha: hb","sender":"Alpha"}', '#ordb')`, tOldStr)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (1, 1, 10.0, -90, '["aa"]', ?)`, tOld.Unix())
+		VALUES (1, 1, 10.0, -90, '["aa"]', $1)`, tOld.Unix())
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (1, 1, 11.0, -88, '["aa"]', ?)`, tFresh.Unix())
+		VALUES (1, 1, 11.0, -88, '["aa"]', $1)`, tFresh.Unix())
 
 	// tx-B: FirstSeen 1h ago, LatestSeen 1h ago. OLDEST LatestSeen.
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
-		VALUES ('BBDB', 'order_db_hash_b', ?, 1, 5,
+		VALUES ('BBDB', 'order_db_hash_b', $1, 1, 5,
 			'{"type":"CHAN","channel":"#ordb","text":"Bravo: msg","sender":"Bravo"}', '#ordb')`, tMidStr)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (2, 1, 9.0, -91, '["bb"]', ?)`, tMid.Unix())
+		VALUES (2, 1, 9.0, -91, '["bb"]', $1)`, tMid.Unix())
 
 	// tx-C: FirstSeen 30m ago, LatestSeen 30m ago. Middle LatestSeen.
 	// With FirstSeen-DESC selection + limit=2, page = [tx-C, tx-B] and
 	// tx-A is EXCLUDED — that's the selection bug fix #2 gates.
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
-		VALUES ('CCDB', 'order_db_hash_c', ?, 1, 5,
+		VALUES ('CCDB', 'order_db_hash_c', $1, 1, 5,
 			'{"type":"CHAN","channel":"#ordb","text":"Charlie: msg","sender":"Charlie"}', '#ordb')`, tNewestStr)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (3, 1, 9.0, -91, '["cc"]', ?)`, tNewest.Unix())
+		VALUES (3, 1, 9.0, -91, '["cc"]', $1)`, tNewest.Unix())
 
 	msgs, total, err := db.GetChannelMessages("#ordb", 2, 0)
 	if err != nil {

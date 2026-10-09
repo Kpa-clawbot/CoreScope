@@ -287,16 +287,16 @@ func TestNodeHopPackets_UniquenessIsPerPrefixLength(t *testing.T) {
 func hopInsertNode(t *testing.T, db *DB, pk, name string, adverts int) {
 	t.Helper()
 	mustExec(t, db, `INSERT INTO nodes (public_key, name, role, last_seen, first_seen, advert_count)
-		VALUES (?, ?, 'repeater', ?, '2026-01-01', ?)`, pk, name, time.Now().UTC().Format(time.RFC3339), adverts)
+		VALUES ($1, $2, 'repeater', $3, '2026-01-01', $4)`, pk, name, time.Now().UTC().Format(time.RFC3339), adverts)
 }
 
 func hopInsertTx(t *testing.T, db *DB, id int, hash string, routeType, payloadType int, paths ...string) {
 	t.Helper()
 	ts := time.Now().Add(-1 * time.Hour)
-	mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen, route_type, payload_type) VALUES (?, 'AA', ?, ?, ?, ?)`,
+	mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen, route_type, payload_type) VALUES ($1, 'AA', $2, $3, $4, $5)`,
 		id, hash, ts.UTC().Format(time.RFC3339), routeType, payloadType)
 	for _, p := range paths {
-		mustExec(t, db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path) VALUES (?, NULL, ?, ?, NULL)`,
+		mustExec(t, db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path) VALUES ($1, NULL, $2, $3, NULL)`,
 			id, p, ts.Unix())
 	}
 }
@@ -352,7 +352,7 @@ func TestNodeHopAnalytics_SameResultAfterRestart(t *testing.T) {
 	db := setupTestDB(t)
 	mustExec(t, db, `CREATE TABLE neighbor_edges (node_a TEXT NOT NULL, node_b TEXT NOT NULL,
 		count INTEGER DEFAULT 1, last_seen TEXT, PRIMARY KEY (node_a, node_b))`)
-	mustExec(t, db, `INSERT INTO neighbor_edges (node_a, node_b, count, last_seen) VALUES (?, ?, 50, ?)`,
+	mustExec(t, db, `INSERT INTO neighbor_edges (node_a, node_b, count, last_seen) VALUES ($1, $2, 50, $3)`,
 		hopOther, hopTarget, time.Now().UTC().Format(time.RFC3339))
 	hopInsertNode(t, db, hopTarget, "Target", 1)
 	hopInsertNode(t, db, hopCollider, "Collider", 500)
@@ -403,14 +403,14 @@ func TestHandleNodeHopAnalytics(t *testing.T) {
 	hopInsertNode(t, db, hopOther, "Other", 1)
 	hopInsertNode(t, db, hopCollider, "Collider", 1)
 
-	mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen, route_type, payload_type) VALUES (1, 'AA', 'hop_recent_2', ?, 1, 5)`, recent)
-	mustExec(t, db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp) VALUES (1, NULL, '["77AA","77AA","AB12"]', ?)`, recentEpoch)
-	mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen, route_type, payload_type) VALUES (2, 'BB', 'hop_recent_1byte', ?, 0, 4)`, recent)
-	mustExec(t, db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp) VALUES (2, NULL, '["AB"]', ?)`, recentEpoch)
-	mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen, route_type, payload_type) VALUES (3, 'CC', 'hop_scoped_advert', ?, 0, 4)`, recent)
-	mustExec(t, db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp) VALUES (3, NULL, '["AB12"]', ?)`, recentEpoch)
-	mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen, route_type, payload_type) VALUES (4, 'DD', 'hop_old', ?, 1, 5)`, old)
-	mustExec(t, db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp) VALUES (4, NULL, '["AB12"]', ?)`, oldEpoch)
+	mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen, route_type, payload_type) VALUES (1, 'AA', 'hop_recent_2', $1, 1, 5)`, recent)
+	mustExec(t, db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp) VALUES (1, NULL, '["77AA","77AA","AB12"]', $1)`, recentEpoch)
+	mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen, route_type, payload_type) VALUES (2, 'BB', 'hop_recent_1byte', $1, 0, 4)`, recent)
+	mustExec(t, db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp) VALUES (2, NULL, '["AB"]', $1)`, recentEpoch)
+	mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen, route_type, payload_type) VALUES (3, 'CC', 'hop_scoped_advert', $1, 0, 4)`, recent)
+	mustExec(t, db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp) VALUES (3, NULL, '["AB12"]', $1)`, recentEpoch)
+	mustExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen, route_type, payload_type) VALUES (4, 'DD', 'hop_old', $1, 1, 5)`, old)
+	mustExec(t, db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp) VALUES (4, NULL, '["AB12"]', $1)`, oldEpoch)
 
 	srv := NewServer(db, &Config{Port: 3000}, NewHub())
 	router := mux.NewRouter()

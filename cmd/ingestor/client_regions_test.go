@@ -442,7 +442,7 @@ func TestDeclaredRegionsDifferentReportersPersistBoth(t *testing.T) {
 	}
 
 	var n int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM node_declared_regions WHERE target = ? AND observed_at = ?`, "bb11", at).Scan(&n); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM node_declared_regions WHERE target = $1 AND observed_at = $2`, "bb11", at).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	if n != 2 {
@@ -480,16 +480,20 @@ func TestCurrentDeclaredRegionsNormalizesTargetCase(t *testing.T) {
 // index seek on idx_ndr_prune rather than a full table scan.
 func TestPruneClientDeclaredRegionsUsesIndex(t *testing.T) {
 	s := newTestStore(t)
-	rows, err := s.db.Query(`EXPLAIN QUERY PLAN DELETE FROM node_declared_regions WHERE observed_at < ?`, "2026-01-01T00:00:00Z")
+	if testBackendValue() == "postgres" {
+		if _, err := s.db.Exec(`SET enable_seqscan=off`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := s.db.Query(testNativeSQL(`EXPLAIN QUERY PLAN DELETE FROM node_declared_regions WHERE observed_at < $1`, `EXPLAIN (COSTS OFF) DELETE FROM node_declared_regions WHERE observed_at < $1`), "2026-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
 	plan := ""
 	for rows.Next() {
-		var id, parent, notused int
 		var detail string
-		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+		if err := scanTestPlan(rows, &detail); err != nil {
 			t.Fatal(err)
 		}
 		plan += detail + "\n"
@@ -592,7 +596,7 @@ func TestPruneOldClientDeclaredRegionsAtMillisecondBoundary(t *testing.T) {
 		t.Fatalf("expected 1 row pruned (1ms before the cutoff), got %d", n)
 	}
 	var boundarySurvived int
-	s.db.QueryRow(`SELECT COUNT(*) FROM node_declared_regions WHERE observed_at = ?`, boundary).Scan(&boundarySurvived)
+	s.db.QueryRow(`SELECT COUNT(*) FROM node_declared_regions WHERE observed_at = $1`, boundary).Scan(&boundarySurvived)
 	if boundarySurvived != 1 {
 		t.Fatalf("boundary row (1ms after a cutoff with a non-zero millisecond component) must survive; an RFC3339 (no-ms) cutoff would wrongly delete it because '.' < 'Z' lexicographically — got %d", boundarySurvived)
 	}

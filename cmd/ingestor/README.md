@@ -1,25 +1,25 @@
 # MeshCore MQTT Ingestor (Go)
 
-Standalone MQTT ingestion service for CoreScope. Connects to MQTT brokers, decodes raw MeshCore packets, and writes to the same SQLite database used by the Node.js web server.
+Standalone MQTT ingestion service for CoreScope. Connects to MQTT brokers, decodes raw MeshCore packets, and writes to PostgreSQL. The separate Go API server uses a restricted reader credential.
 
-This is the first step of a larger Go rewrite — separating MQTT ingestion from the web server.
+The migration command owns schema changes. The ingestor only connects to an initialized, ready telemetry schema.
 
 ## Architecture
 
 ```
-MQTT Broker(s)  →  Go Ingestor  →  SQLite DB  ←  Node.js Web Server
+MQTT Broker(s)  →  Go Ingestor  →  PostgreSQL  ←  Go API Server
                     (this binary)     (shared)
 ```
 
-- **Single static binary** — no runtime dependencies, no CGO
-- **SQLite** via `github.com/mattn/go-sqlite3` (cgo; cross-compiled with `zig cc`, see the root `Makefile`)
+- **Single binary** — PostgreSQL runtime driver is pure Go
+- **PostgreSQL 18** via pgx through `database/sql`
 - **MQTT** via `github.com/eclipse/paho.mqtt.golang`
-- Runs **alongside** the Node.js server — they share the DB file
-- Does NOT serve HTTP/WebSocket — that stays in Node.js
+- Runs alongside the Go API server with separate writer and reader roles
+- Does not serve HTTP/WebSocket — that stays in the Go API server
 
 ## Build
 
-Requires Go 1.22+.
+Requires Go 1.25+.
 
 ```bash
 cd cmd/ingestor
@@ -38,16 +38,19 @@ GOOS=linux GOARCH=amd64 go build -o corescope-ingestor .
 ./corescope-ingestor -config /path/to/config.json
 ```
 
-The config file uses the same format as the Node.js `config.json`. The ingestor reads the `mqttSources` array (or legacy `mqtt` object) and `dbPath` fields.
+The ingestor reads `mqttSources` (or the legacy `mqtt` object), `databaseURL` and `stateDir`. `-database-url` and `-state-dir` override configuration. `dbPath` and `-db` are never interpreted as database URLs: import existing SQLite snapshots offline first. Do not place connection URLs in command logs.
 
 ### Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DB_PATH` | SQLite database path | `data/meshcore.db` |
+| `CORESCOPE_WRITER_DATABASE_URL` | Ingestor-specific PostgreSQL writer URL; overrides the generic URL | required when no generic/config URL exists |
+| `CORESCOPE_DATABASE_URL` | Generic PostgreSQL URL for standalone runs | config `databaseURL` |
+| `CORESCOPE_STATE_DIR` | Local queue/statistics directory shared with the API server | `data` |
+| `CORESCOPE_APPROVED_CHANNELS_DATABASE_URL` | Separate restricted account reader for `approved_channels` view | config `userManagement.approvedChannelsDatabaseURL` |
 | `MQTT_BROKER` | Single MQTT broker URL (overrides config) | — |
 | `MQTT_TOPIC` | MQTT topic (used with `MQTT_BROKER`) | `meshcore/#` |
-| `CORESCOPE_INGESTOR_STATS` | Path to the per-second stats JSON file consumed by the server's `/api/perf/io` and `/api/perf/write-sources` endpoints (#1120) | `/tmp/corescope-ingestor-stats.json` |
+| `CORESCOPE_INGESTOR_STATS` | Path to the per-second stats JSON file consumed by the server's `/api/perf/io` and `/api/perf/write-sources` endpoints (#1120) | `<stateDir>/ingestor-stats.json` |
 
 ### Stats file (`CORESCOPE_INGESTOR_STATS`)
 
@@ -60,17 +63,15 @@ the Perf page so operators can self-diagnose write-volume anomalies.
 The writer uses `O_NOFOLLOW | O_CREAT | O_TRUNC` mode `0o600`, so a
 pre-planted symlink at the path cannot be used to clobber an arbitrary file.
 
-**Security note:** the default lives in `/tmp`, which is world-writable on
-most hosts (sticky bit only protects deletion, not creation). On
-shared/multi-tenant hosts, override `CORESCOPE_INGESTOR_STATS` to point at a
-private directory (e.g. `/var/lib/corescope/ingestor-stats.json`) that only
-the corescope user can write to.
+The state directory is created privately and stores small queue/statistics files.
+Database URLs never become filesystem paths.
 
 ### Minimal Config
 
 ```json
 {
-  "dbPath": "data/meshcore.db",
+  "databaseURL": "postgres://telemetry_writer@localhost/telemetry",
+  "stateDir": "data",
   "mqttSources": [
     {
       "name": "local",
@@ -81,7 +82,7 @@ the corescope user can write to.
 }
 ```
 
-### Full Config (same as Node.js)
+### Full Config
 
 The ingestor reads these fields from the existing `config.json`:
 
@@ -93,13 +94,14 @@ The ingestor reads these fields from the existing `config.json`:
   - `iataFilter` — optional regional filter
   - `clientId`: optional MQTT ClientID. Default `corescope-<name>-<random>`, new suffix per ingestor start. Two running ingestors must not share a value on one broker
 - `mqtt` — legacy single-broker config (auto-converted to `mqttSources`)
-- `dbPath` — SQLite DB path (default: `data/meshcore.db`)
+- `databaseURL` — restricted telemetry writer URL; schema-owner credentials are refused
+- `stateDir` — local queue/statistics directory (default: `data`)
 
 ## Test
 
 ```bash
 cd cmd/ingestor
-go test -v ./...
+CORESCOPE_TEST_POSTGRES_URL=postgres://test_admin@localhost/postgres go test -v ./...
 ```
 
 ## What It Does
@@ -109,7 +111,7 @@ go test -v ./...
 3. Receives raw hex packets via JSON messages (`{ "raw": "...", "SNR": ..., "RSSI": ... }`)
 4. Decodes MeshCore packet headers, paths, and payloads (ported from `decoder.js`)
 5. Computes content hashes (path-independent, SHA-256-based)
-6. Writes to SQLite: `transmissions` + `observations` tables
+6. Writes atomically to PostgreSQL: `transmissions` + `observations` tables
 7. Upserts `nodes` from decoded ADVERT packets (with validation)
 8. Upserts `observers` from MQTT topic metadata
 
@@ -147,3 +149,10 @@ cmd/ingestor/
   util.go          — shared utilities
   go.mod / go.sum  — Go module definition
 ```
+
+PostgreSQL autovacuum, automatic analyze and checkpoints are managed by the
+PostgreSQL service, not by runtime owner privileges. The previous SQLite
+`db.vacuumOnStartup`, `db.incrementalVacuumPages` and `db.analysisLimit`
+settings have no PostgreSQL effect. The migration/restore procedure must run
+`ANALYZE` after bulk imports; runtime credentials cannot alter planner targets.
+Packet retention remains bounded to 250 transmissions per transaction.

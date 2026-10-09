@@ -11,18 +11,24 @@ import (
 func seedUnbackfilledAdvert(t *testing.T, canonical, observed string) (*Store, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "legacy-advert.db")
-	s, err := OpenStore(path)
+	s, err := openPostgresTestStore(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := s.UpsertObserver("fixture-observer", "Fixture observer", "", nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`INSERT INTO transmissions(id,hash,raw_hex,first_seen,payload_type,route_type) VALUES(1,'legacy-advert',?,'2026-01-01T00:00:00Z',4,?);
-		INSERT INTO observations(id,transmission_id,observer_idx,raw_hex,path_json,timestamp) VALUES(1,1,(SELECT rowid FROM observers WHERE id='fixture-observer'),?,'[]',1)`, canonical, int(canonical[1]-'0')&3, observed); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO transmissions(id,hash,raw_hex,first_seen,payload_type,route_type) VALUES(1,'legacy-advert',$1,'2026-01-01T00:00:00Z',4,$2)`, canonical, int(canonical[1]-'0')&3); err != nil {
 		s.Close()
 		t.Fatal(err)
 	}
+	if _, err := s.db.Exec(`INSERT INTO observations(id,transmission_id,observer_idx,raw_hex,path_json,timestamp) VALUES(1,1,(SELECT rowid FROM observers WHERE id='fixture-observer'),$1,'[]',1)`, observed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testAdmin(t, s).Exec(testNativeSQL(`UPDATE sqlite_sequence SET seq=1 WHERE name='observations'`, `SELECT setval('observations_id_seq',1,true)`)); err != nil {
+		t.Fatal(err)
+	}
+
 	return s, path
 }
 
@@ -33,9 +39,9 @@ func TestAdvertRouteEvidenceLegacyProtectionErrorsDoNotDropIncomingRaw(t *testin
 			defer s.Close()
 			stmt := `DROP TABLE advert_evidence_backfill`
 			if failure == "write" {
-				stmt = `CREATE TRIGGER fail_old_evidence BEFORE INSERT ON advert_route_evidence WHEN NEW.bit=2 BEGIN SELECT RAISE(ABORT,'fixture old evidence failure'); END`
+				stmt = testNativeSQL(`CREATE TRIGGER fail_old_evidence BEFORE INSERT ON advert_route_evidence WHEN NEW.bit=2 BEGIN SELECT RAISE(ABORT,'fixture old evidence failure'); END`, `CREATE OR REPLACE FUNCTION fail_old_evidence_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.bit=2 THEN RAISE EXCEPTION 'fixture old evidence failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER fail_old_evidence BEFORE INSERT ON advert_route_evidence FOR EACH ROW EXECUTE FUNCTION fail_old_evidence_fn()`)
 			}
-			if _, err := s.db.Exec(stmt); err != nil {
+			if _, err := testAdmin(t, s).Exec(stmt); err != nil {
 				t.Fatal(err)
 			}
 			_, err := s.InsertTransmission(&PacketData{Hash: "legacy-advert", ObserverID: "fixture-observer", PayloadType: 4, RouteType: 1, RawHex: "1100aa", PathJSON: "[]"})
@@ -75,19 +81,23 @@ func TestAdvertRouteEvidenceLegacyCoalescedPathAndIndex(t *testing.T) {
 	if mask != 3 {
 		t.Fatalf("coalesced path lookup lost old evidence: mask=%d", mask)
 	}
-	rows, err := s.db.Query(`EXPLAIN QUERY PLAN `+legacyAdvertObservationSQL, 1, 1, "")
+	if testBackendValue() == "postgres" {
+		if _, err := s.db.Exec(`SET enable_seqscan=off`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := s.db.Query(testNativeSQL(`EXPLAIN QUERY PLAN `, `EXPLAIN (COSTS OFF) `)+legacyAdvertObservationSQL, 1, 1, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
 	indexed := false
 	for rows.Next() {
-		var id, parent, unused int
 		var detail string
-		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+		if err := scanTestPlan(rows, &detail); err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(detail, "SEARCH observations USING INDEX idx_observations_dedup") {
+		if strings.Contains(detail, "idx_observations_dedup") {
 			indexed = true
 		}
 	}
@@ -111,7 +121,7 @@ func TestAdvertRouteEvidenceCompletionSkipsLookupAfterRestart(t *testing.T) {
 	}
 	s.Close()
 	var err error
-	s, err = OpenStore(path)
+	s, err = openPostgresTestStore(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +130,7 @@ func TestAdvertRouteEvidenceCompletionSkipsLookupAfterRestart(t *testing.T) {
 	}
 	// Any accidental legacy lookup now fails. Completed stores must incur
 	// no extra SQL on this steady-state overwrite path.
-	if _, err := s.db.Exec(`DROP TABLE advert_evidence_backfill`); err != nil {
+	if _, err := testAdmin(t, s).Exec(`DROP TABLE advert_evidence_backfill`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.InsertTransmission(&PacketData{Hash: "legacy-advert", ObserverID: "fixture-observer", PayloadType: 4, RouteType: 1, RawHex: "1100aa", PathJSON: "[]"}); err != nil {
@@ -129,7 +139,7 @@ func TestAdvertRouteEvidenceCompletionSkipsLookupAfterRestart(t *testing.T) {
 }
 
 func BenchmarkAdvertEvidenceLegacyPreservation(b *testing.B) {
-	s, err := OpenStore(filepath.Join(b.TempDir(), "legacy-preservation.db"))
+	s, err := openPostgresTestStore(b, filepath.Join(b.TempDir(), "legacy-preservation.db"))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -151,7 +161,7 @@ func BenchmarkAdvertEvidenceLegacyPreservation(b *testing.B) {
 			if state != "pending" {
 				cursor = 1
 			}
-			if _, err := s.db.Exec(`INSERT INTO advert_evidence_backfill(id,obs_cursor) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET obs_cursor=excluded.obs_cursor`, cursor); err != nil {
+			if _, err := s.db.Exec(`INSERT INTO advert_evidence_backfill(id,obs_cursor) VALUES(1,$1) ON CONFLICT(id) DO UPDATE SET obs_cursor=excluded.obs_cursor`, cursor); err != nil {
 				b.Fatal(err)
 			}
 			s.advertEvidenceComplete.Store(state == "complete")
@@ -160,7 +170,17 @@ func BenchmarkAdvertEvidenceLegacyPreservation(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if err := s.preserveLegacyAdvertObservation(1, observerIdx, "[]"); err != nil {
+				if err := func() error {
+					tx, e := beginWrite(s.db, s.Backend())
+					if e != nil {
+						return e
+					}
+					defer tx.Rollback()
+					if e = s.preserveLegacyAdvertObservation(tx, 1, observerIdx, "[]"); e != nil {
+						return e
+					}
+					return tx.Commit()
+				}(); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -196,7 +216,7 @@ func TestAdvertRouteEvidencePreservesLegacyConflictBeforeBackfill(t *testing.T) 
 				if restart {
 					s.Close()
 					var err error
-					s, err = OpenStore(path)
+					s, err = openPostgresTestStore(t, path)
 					if err != nil {
 						t.Fatal(err)
 					}

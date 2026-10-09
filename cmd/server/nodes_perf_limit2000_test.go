@@ -41,7 +41,7 @@ func TestHandleNodesLimit2000ColdMiss(t *testing.T) {
 	}
 	stmt, err := tx.Prepare(`INSERT INTO nodes
 		(public_key, name, role, lat, lon, last_seen, first_seen, advert_count, foreign_advert)
-		VALUES (?, ?, ?, 0, 0, ?, '2026-01-01T00:00:00Z', 1, 0)`)
+		VALUES ($1, $2, $3, 0, 0, $4, '2026-01-01T00:00:00Z', 1, 0)`)
 	if err != nil {
 		t.Fatal(err)
 	}

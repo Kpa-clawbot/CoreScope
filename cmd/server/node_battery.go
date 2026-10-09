@@ -53,9 +53,9 @@ func (db *DB) GetNodeBatteryHistory(pubkey, since string) ([]NodeBatterySample, 
 	rows, err := db.conn.Query(`
 		SELECT timestamp, battery_mv
 		FROM observer_metrics
-		WHERE LOWER(observer_id) = ?
+		WHERE LOWER(observer_id) = `+db.parameter(1)+`
 		  AND battery_mv IS NOT NULL
-		  AND timestamp >= ?
+		  AND timestamp >= `+db.parameter(2)+`
 		ORDER BY timestamp ASC`, pk, since)
 	if err != nil {
 		return nil, err

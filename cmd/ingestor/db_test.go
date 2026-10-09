@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/meshcore-analyzer/packetpath"
+	"github.com/meshcore-analyzer/pgutil"
 )
 
 func tempDBPath(t *testing.T) string {
@@ -33,14 +34,14 @@ func tempDBPath(t *testing.T) string {
 }
 
 func TestOpenStore(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
 
 	// Verify tables exist
-	rows, err := s.db.Query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+	rows, err := s.db.Query(testNativeSQL(`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`, "SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema() ORDER BY table_name"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +70,7 @@ func TestOpenStore(t *testing.T) {
 
 	// Verify packets_v view exists
 	var viewCount int
-	err = s.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='view' AND name='packets_v'").Scan(&viewCount)
+	err = s.db.QueryRow(testNativeSQL(`SELECT COUNT(*) FROM sqlite_master WHERE type='view' AND name='packets_v'`, "SELECT COUNT(*) FROM information_schema.views WHERE table_schema=current_schema() AND table_name='packets_v'")).Scan(&viewCount)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +80,7 @@ func TestOpenStore(t *testing.T) {
 }
 
 func TestInsertTransmission(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +130,7 @@ func TestInsertTransmission(t *testing.T) {
 }
 
 func TestPacketsViewQueryable(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +178,7 @@ func TestPacketsViewQueryable(t *testing.T) {
 }
 
 func TestUpsertNode(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +217,7 @@ func TestUpsertNode(t *testing.T) {
 }
 
 func TestUpsertObserver(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +238,7 @@ func TestUpsertObserver(t *testing.T) {
 }
 
 func TestUpsertObserverWithMeta(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,21 +299,21 @@ func TestUpsertObserverWithMeta(t *testing.T) {
 
 	// Verify typeof returns correct SQLite types
 	var typBattery, typUptime, typNoise string
-	s.db.QueryRow("SELECT typeof(battery_mv), typeof(uptime_secs), typeof(noise_floor) FROM observers WHERE id = 'obs1'").
+	s.db.QueryRow(testNativeSQL(`SELECT typeof(battery_mv), typeof(uptime_secs), typeof(noise_floor) FROM observers WHERE id = 'obs1'`, "SELECT pg_typeof(battery_mv)::text, pg_typeof(uptime_secs)::text, pg_typeof(noise_floor)::text FROM observers WHERE id = 'obs1'")).
 		Scan(&typBattery, &typUptime, &typNoise)
-	if typBattery != "integer" {
+	if typBattery != testNativeSQL("integer", "bigint") {
 		t.Errorf("typeof(battery_mv)=%s, want integer", typBattery)
 	}
-	if typUptime != "integer" {
+	if typUptime != testNativeSQL("integer", "bigint") {
 		t.Errorf("typeof(uptime_secs)=%s, want integer", typUptime)
 	}
-	if typNoise != "real" {
+	if typNoise != testNativeSQL("real", "double precision") {
 		t.Errorf("typeof(noise_floor)=%s, want real", typNoise)
 	}
 }
 
 func TestUpsertObserverMetaPreservesExisting(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,14 +454,14 @@ func TestExtractObserverMeta(t *testing.T) {
 }
 
 func TestSchemaNoiseFloorIsReal(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
 
 	// Check column type affinity via PRAGMA
-	rows, err := s.db.Query("PRAGMA table_info(observers)")
+	rows, err := s.db.Query(testNativeSQL(`SELECT cid,name,type,"notnull",dflt_value,pk FROM pragma_table_info('observers') ORDER BY cid`, `SELECT ordinal_position::int,column_name,CASE data_type WHEN 'bigint' THEN 'INTEGER' WHEN 'double precision' THEN 'REAL' ELSE upper(data_type) END,CASE is_nullable WHEN 'NO' THEN 1 ELSE 0 END,column_default,0 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='observers' ORDER BY ordinal_position`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -486,7 +487,7 @@ func TestSchemaNoiseFloorIsReal(t *testing.T) {
 }
 
 func TestInsertTransmissionWithObserver(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -522,7 +523,7 @@ func TestInsertTransmissionWithObserver(t *testing.T) {
 // #463: Verify that inserting a packet updates the observer's last_seen,
 // so low-traffic observers don't incorrectly appear offline.
 func TestInsertTransmissionUpdatesObserverLastSeen(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -534,11 +535,11 @@ func TestInsertTransmissionUpdatesObserverLastSeen(t *testing.T) {
 	}
 	// Backdate last_seen to 2 hours ago
 	oldTime := "2026-03-24T22:00:00Z"
-	s.db.Exec("UPDATE observers SET last_seen = ? WHERE id = ?", oldTime, "obs1")
+	s.db.Exec("UPDATE observers SET last_seen = $1 WHERE id = $2", oldTime, "obs1")
 
 	// Verify it was backdated
 	var lastSeenBefore string
-	s.db.QueryRow("SELECT last_seen FROM observers WHERE id = ?", "obs1").Scan(&lastSeenBefore)
+	s.db.QueryRow("SELECT last_seen FROM observers WHERE id = $1", "obs1").Scan(&lastSeenBefore)
 	if lastSeenBefore != oldTime {
 		t.Fatalf("expected last_seen=%s, got %s", oldTime, lastSeenBefore)
 	}
@@ -562,7 +563,7 @@ func TestInsertTransmissionUpdatesObserverLastSeen(t *testing.T) {
 
 	// Verify last_seen was updated to INGEST time, not envelope time (#1465).
 	var lastSeenAfter string
-	s.db.QueryRow("SELECT last_seen FROM observers WHERE id = ?", "obs1").Scan(&lastSeenAfter)
+	s.db.QueryRow("SELECT last_seen FROM observers WHERE id = $1", "obs1").Scan(&lastSeenAfter)
 	if lastSeenAfter == oldTime {
 		t.Error("observer last_seen was NOT updated after packet insertion — low-traffic observers will appear offline")
 	}
@@ -578,7 +579,7 @@ func TestInsertTransmissionUpdatesObserverLastSeen(t *testing.T) {
 }
 
 func TestLastPacketAtUpdatedOnPacketOnly(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -590,7 +591,7 @@ func TestLastPacketAtUpdatedOnPacketOnly(t *testing.T) {
 	}
 
 	var lastPacketAt sql.NullString
-	s.db.QueryRow("SELECT last_packet_at FROM observers WHERE id = ?", "obs1").Scan(&lastPacketAt)
+	s.db.QueryRow("SELECT last_packet_at FROM observers WHERE id = $1", "obs1").Scan(&lastPacketAt)
 	if lastPacketAt.Valid {
 		t.Fatalf("expected last_packet_at to be NULL after UpsertObserver, got %s", lastPacketAt.String)
 	}
@@ -612,7 +613,7 @@ func TestLastPacketAtUpdatedOnPacketOnly(t *testing.T) {
 	}
 	after := time.Now().Unix()
 
-	s.db.QueryRow("SELECT last_packet_at FROM observers WHERE id = ?", "obs1").Scan(&lastPacketAt)
+	s.db.QueryRow("SELECT last_packet_at FROM observers WHERE id = $1", "obs1").Scan(&lastPacketAt)
 	if !lastPacketAt.Valid {
 		t.Fatal("expected last_packet_at to be non-NULL after InsertTransmission")
 	}
@@ -634,14 +635,14 @@ func TestLastPacketAtUpdatedOnPacketOnly(t *testing.T) {
 	}
 
 	var lastPacketAtAfterStatus sql.NullString
-	s.db.QueryRow("SELECT last_packet_at FROM observers WHERE id = ?", "obs1").Scan(&lastPacketAtAfterStatus)
+	s.db.QueryRow("SELECT last_packet_at FROM observers WHERE id = $1", "obs1").Scan(&lastPacketAtAfterStatus)
 	if !lastPacketAtAfterStatus.Valid || lastPacketAtAfterStatus.String != lastPacketAt.String {
 		t.Errorf("UpsertObserver should not change last_packet_at; expected %s, got %v", lastPacketAt.String, lastPacketAtAfterStatus)
 	}
 }
 
 func TestEndToEndIngest(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -677,7 +678,7 @@ func TestEndToEndIngest(t *testing.T) {
 
 	// Verify node was created
 	var nodeName string
-	err = s.db.QueryRow("SELECT name FROM nodes WHERE public_key = ?", decoded.Payload.PubKey).Scan(&nodeName)
+	err = s.db.QueryRow("SELECT name FROM nodes WHERE public_key = $1", decoded.Payload.PubKey).Scan(&nodeName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -687,7 +688,7 @@ func TestEndToEndIngest(t *testing.T) {
 }
 
 func TestInsertTransmissionEmptyHash(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -711,7 +712,7 @@ func TestInsertTransmissionEmptyHash(t *testing.T) {
 }
 
 func TestInsertTransmissionEmptyTimestamp(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -729,14 +730,14 @@ func TestInsertTransmissionEmptyTimestamp(t *testing.T) {
 	}
 
 	var firstSeen string
-	s.db.QueryRow("SELECT first_seen FROM transmissions WHERE hash = ?", data.Hash).Scan(&firstSeen)
+	s.db.QueryRow("SELECT first_seen FROM transmissions WHERE hash = $1", data.Hash).Scan(&firstSeen)
 	if firstSeen == "" {
 		t.Error("first_seen should be set even with empty timestamp")
 	}
 }
 
 func TestInsertTransmissionEarlierFirstSeen(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -765,14 +766,14 @@ func TestInsertTransmissionEarlierFirstSeen(t *testing.T) {
 	}
 
 	var firstSeen string
-	s.db.QueryRow("SELECT first_seen FROM transmissions WHERE hash = ?", data.Hash).Scan(&firstSeen)
+	s.db.QueryRow("SELECT first_seen FROM transmissions WHERE hash = $1", data.Hash).Scan(&firstSeen)
 	if firstSeen != "2026-03-25T06:00:00Z" {
 		t.Errorf("first_seen=%s, want 2026-03-25T06:00:00Z (earlier timestamp)", firstSeen)
 	}
 }
 
 func TestInsertTransmissionLaterFirstSeenNotUpdated(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -800,14 +801,14 @@ func TestInsertTransmissionLaterFirstSeenNotUpdated(t *testing.T) {
 	}
 
 	var firstSeen string
-	s.db.QueryRow("SELECT first_seen FROM transmissions WHERE hash = ?", data.Hash).Scan(&firstSeen)
+	s.db.QueryRow("SELECT first_seen FROM transmissions WHERE hash = $1", data.Hash).Scan(&firstSeen)
 	if firstSeen != "2026-03-25T06:00:00Z" {
 		t.Errorf("first_seen=%s should not change to later time", firstSeen)
 	}
 }
 
 func TestInsertTransmissionNilSNRRSSI(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -926,7 +927,7 @@ func TestBuildPacketDataNilSNRRSSI(t *testing.T) {
 }
 
 func TestUpsertNodeEmptyLastSeen(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -949,14 +950,14 @@ func TestUpsertNodeEmptyLastSeen(t *testing.T) {
 func TestOpenStoreTwice(t *testing.T) {
 	// Opening same DB twice tests the "observations already exists" path in applySchema
 	path := tempDBPath(t)
-	s1, err := OpenStore(path)
+	s1, err := openPostgresTestStore(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s1.Close()
 
 	// Second open — observations table already exists
-	s2, err := OpenStore(path)
+	s2, err := openPostgresTestStore(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -971,7 +972,7 @@ func TestOpenStoreTwice(t *testing.T) {
 }
 
 func TestInsertTransmissionDedupObservation(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1005,7 +1006,7 @@ func TestInsertTransmissionDedupObservation(t *testing.T) {
 }
 
 func TestSchemaCompatibility(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1013,7 +1014,7 @@ func TestSchemaCompatibility(t *testing.T) {
 
 	// Verify column names match what Node.js expects
 	expectedTxCols := []string{"id", "raw_hex", "hash", "first_seen", "route_type", "payload_type", "payload_version", "decoded_json", "created_at"}
-	rows, _ := s.db.Query("PRAGMA table_info(transmissions)")
+	rows, _ := s.db.Query(testNativeSQL(`SELECT cid,name,type,"notnull",dflt_value,pk FROM pragma_table_info('transmissions') ORDER BY cid`, `SELECT ordinal_position::int,column_name,CASE data_type WHEN 'bigint' THEN 'INTEGER' WHEN 'double precision' THEN 'REAL' ELSE upper(data_type) END,CASE is_nullable WHEN 'NO' THEN 1 ELSE 0 END,column_default,0 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='transmissions' ORDER BY ordinal_position`))
 	var txCols []string
 	for rows.Next() {
 		var cid int
@@ -1041,7 +1042,7 @@ func TestSchemaCompatibility(t *testing.T) {
 
 	// Verify observations columns
 	expectedObsCols := []string{"id", "transmission_id", "observer_idx", "direction", "snr", "rssi", "score", "path_json", "timestamp"}
-	rows, _ = s.db.Query("PRAGMA table_info(observations)")
+	rows, _ = s.db.Query(testNativeSQL(`SELECT cid,name,type,"notnull",dflt_value,pk FROM pragma_table_info('observations') ORDER BY cid`, `SELECT ordinal_position::int,column_name,CASE data_type WHEN 'bigint' THEN 'INTEGER' WHEN 'double precision' THEN 'REAL' ELSE upper(data_type) END,CASE is_nullable WHEN 'NO' THEN 1 ELSE 0 END,column_default,0 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='observations' ORDER BY ordinal_position`))
 	var obsCols []string
 	for rows.Next() {
 		var cid int
@@ -1069,7 +1070,7 @@ func TestSchemaCompatibility(t *testing.T) {
 }
 
 func TestConcurrentWrites(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1167,7 +1168,7 @@ func TestConcurrentWrites(t *testing.T) {
 }
 
 func TestDBStats(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1231,7 +1232,7 @@ func TestDBStats(t *testing.T) {
 }
 
 func TestLoadTestThroughput(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1372,7 +1373,7 @@ func TestLoadTestThroughput(t *testing.T) {
 }
 
 func TestUpdateNodeTelemetry(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1420,7 +1421,7 @@ func TestUpdateNodeTelemetry(t *testing.T) {
 }
 
 func TestTelemetryMigrationAddsColumns(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1437,9 +1438,9 @@ func TestTelemetryMigrationAddsColumns(t *testing.T) {
 	}
 
 	var count int
-	s.db.QueryRow("SELECT COUNT(*) FROM _migrations WHERE name = 'node_telemetry_v1'").Scan(&count)
+	s.db.QueryRow(testNativeSQL(`SELECT COUNT(*) FROM _migrations WHERE name='observers_identity_autoincrement_v1'`, "SELECT COUNT(*) FROM corescope_schema WHERE kind='telemetry' AND ready=true")).Scan(&count)
 	if count != 1 {
-		t.Errorf("migration node_telemetry_v1 should be recorded, count=%d", count)
+		t.Errorf("canonical telemetry schema should be ready, count=%d", count)
 	}
 }
 
@@ -1591,7 +1592,7 @@ func TestObsTimestampIndexMigration(t *testing.T) {
 	// Case 1: new DB — OpenStore should create idx_observations_timestamp as part
 	// of the observations table schema.
 	t.Run("NewDB", func(t *testing.T) {
-		s, err := OpenStore(tempDBPath(t))
+		s, err := openPostgresTestStore(t, tempDBPath(t))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1599,7 +1600,7 @@ func TestObsTimestampIndexMigration(t *testing.T) {
 
 		var count int
 		err = s.db.QueryRow(
-			"SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_observations_timestamp'",
+			testNativeSQL(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_observations_timestamp'`, "SELECT COUNT(*) FROM pg_indexes WHERE schemaname=current_schema() AND indexname='idx_observations_timestamp'"),
 		).Scan(&count)
 		if err != nil {
 			t.Fatal(err)
@@ -1622,83 +1623,35 @@ func TestObsTimestampIndexMigration(t *testing.T) {
 
 	// Case 2: existing DB that has the observations table but lacks the index
 	// and lacks the _migrations entry — simulates an older installation.
-	t.Run("MigrationPath", func(t *testing.T) {
-		path := tempDBPath(t)
-
-		// Build a bare-bones DB that mimics an old installation:
-		// observations table exists but idx_observations_timestamp does NOT.
-		db, err := sql.Open("sqlite3", path)
+	t.Run("MissingIndexIsRefused", func(t *testing.T) {
+		key := tempDBPath(t)
+		store, err := openPostgresTestStore(t, key)
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = db.Exec(`
-			CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY);
-			CREATE TABLE IF NOT EXISTS transmissions (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				raw_hex TEXT NOT NULL,
-				hash TEXT NOT NULL UNIQUE,
-				first_seen TEXT NOT NULL,
-				route_type INTEGER,
-				payload_type INTEGER,
-				payload_version INTEGER,
-				decoded_json TEXT,
-				created_at TEXT DEFAULT (datetime('now'))
-			);
-			CREATE TABLE IF NOT EXISTS observations (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				transmission_id INTEGER NOT NULL REFERENCES transmissions(id),
-				observer_idx INTEGER,
-				direction TEXT,
-				snr REAL,
-				rssi REAL,
-				score INTEGER,
-				path_json TEXT,
-				timestamp INTEGER NOT NULL
-			);
-		`)
-		if err != nil {
-			db.Close()
+		owner := testAdmin(t, store)
+		if _, err := owner.Exec(`DROP INDEX idx_observations_timestamp`); err != nil {
 			t.Fatal(err)
 		}
-		// Confirm the index is absent before OpenStore runs.
-		var preCount int
-		db.QueryRow(
-			"SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_observations_timestamp'",
-		).Scan(&preCount)
-		db.Close()
-		if preCount != 0 {
-			t.Fatalf("pre-condition failed: idx_observations_timestamp should not exist yet, got count=%d", preCount)
+		store.Close()
+		if store.Backend() == "sqlite" {
+			next, err := openPostgresTestStore(t, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer next.Close()
+			var count int
+			if err = next.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_observations_timestamp'`).Scan(&count); err != nil || count != 1 {
+				t.Fatalf("SQLite writer did not restore its index: %d %v", count, err)
+			}
+			return
 		}
-
-		// Now open via OpenStore — the migration should add the index.
-		s, err := OpenStore(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer s.Close()
-
-		var idxCount int
-		err = s.db.QueryRow(
-			"SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_observations_timestamp'",
-		).Scan(&idxCount)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if idxCount != 1 {
-			t.Error("idx_observations_timestamp should exist after migration on old DB")
-		}
-
-		var migCount int
-		err = s.db.QueryRow(
-			"SELECT COUNT(*) FROM _migrations WHERE name='obs_timestamp_index_v1'",
-		).Scan(&migCount)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if migCount != 1 {
-			t.Errorf("migration obs_timestamp_index_v1 should be recorded, got count=%d", migCount)
+		if next, err := openPostgresTestStore(t, key); err == nil {
+			next.Close()
+			t.Fatal("runtime accepted missing canonical index")
 		}
 	})
+
 }
 
 func TestBuildPacketDataScoreAndDirection(t *testing.T) {
@@ -1739,7 +1692,7 @@ func TestBuildPacketDataNilScoreDirection(t *testing.T) {
 }
 
 func TestInsertTransmissionWithScoreAndDirection(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1805,7 +1758,7 @@ func TestRoundToInterval(t *testing.T) {
 }
 
 func TestInsertMetrics(t *testing.T) {
-	store, err := OpenStore(tempDBPath(t))
+	store, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1849,7 +1802,7 @@ func TestInsertMetrics(t *testing.T) {
 }
 
 func TestInsertMetricsIdempotent(t *testing.T) {
-	store, err := OpenStoreWithInterval(tempDBPath(t), 300)
+	store, err := openPostgresTestStoreInterval(t, tempDBPath(t), 300)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1879,7 +1832,7 @@ func TestInsertMetricsIdempotent(t *testing.T) {
 }
 
 func TestInsertMetricsNullFields(t *testing.T) {
-	store, err := OpenStore(tempDBPath(t))
+	store, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1908,7 +1861,7 @@ func TestInsertMetricsNullFields(t *testing.T) {
 }
 
 func TestPruneOldMetrics(t *testing.T) {
-	store, err := OpenStore(tempDBPath(t))
+	store, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1917,8 +1870,8 @@ func TestPruneOldMetrics(t *testing.T) {
 	// Insert old and new metrics directly
 	oldTs := time.Now().UTC().AddDate(0, 0, -40).Format(time.RFC3339)
 	newTs := time.Now().UTC().Format(time.RFC3339)
-	store.db.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor) VALUES (?, ?, ?)", "obs1", oldTs, -110.0)
-	store.db.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor) VALUES (?, ?, ?)", "obs1", newTs, -112.0)
+	store.db.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor) VALUES ($1, $2, $3)", "obs1", oldTs, -110.0)
+	store.db.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor) VALUES ($1, $2, $3)", "obs1", newTs, -112.0)
 
 	n, err := store.PruneOldMetrics(30)
 	if err != nil {
@@ -1975,7 +1928,7 @@ func TestExtractObserverMetaNewFields(t *testing.T) {
 // idx_observations_dedup CREATE UNIQUE INDEX statements elsewhere in this file.)
 
 func TestInsertObservationSNRFillIn(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2058,7 +2011,7 @@ func TestInsertObservationSNRFillIn(t *testing.T) {
 // TestPerObservationRawHex verifies that two MQTT packets for the same hash
 // from different observers store distinct raw_hex per observation (#881).
 func TestPerObservationRawHex(t *testing.T) {
-	store, err := OpenStore(tempDBPath(t))
+	store, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2210,14 +2163,14 @@ func TestBuildPacketData_NonTracePathJSON(t *testing.T) {
 func TestScopeNameMigration(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
-	store, err := OpenStore(dbPath)
+	store, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
 	defer store.Close()
 
 	// Verify column exists
-	rows, err := store.db.Query("PRAGMA table_info(transmissions)")
+	rows, err := store.db.Query(testNativeSQL(`SELECT cid,name,type,"notnull",dflt_value,pk FROM pragma_table_info('transmissions') ORDER BY cid`, `SELECT ordinal_position::int,column_name,CASE data_type WHEN 'bigint' THEN 'INTEGER' WHEN 'double precision' THEN 'REAL' ELSE upper(data_type) END,CASE is_nullable WHEN 'NO' THEN 1 ELSE 0 END,column_default,0 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='transmissions' ORDER BY ordinal_position`))
 	if err != nil {
 		t.Fatalf("PRAGMA: %v", err)
 	}
@@ -2266,7 +2219,7 @@ func TestScopeNameMigration(t *testing.T) {
 }
 
 func TestTransportCodesStored(t *testing.T) {
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2307,7 +2260,7 @@ func TestTransportCodesStored(t *testing.T) {
 	}
 
 	var c1, c2 *string
-	if err := s.db.QueryRow(`SELECT code1, code2 FROM transmissions WHERE hash = ?`,
+	if err := s.db.QueryRow(`SELECT code1, code2 FROM transmissions WHERE hash = $1`,
 		ComputeContentHash(rawScoped)).Scan(&c1, &c2); err != nil {
 		t.Fatalf("read scoped: %v", err)
 	}
@@ -2315,7 +2268,7 @@ func TestTransportCodesStored(t *testing.T) {
 		t.Errorf("scoped codes = %v/%v, want AABB/CCDD", c1, c2)
 	}
 
-	if err := s.db.QueryRow(`SELECT code1, code2 FROM transmissions WHERE hash = ?`,
+	if err := s.db.QueryRow(`SELECT code1, code2 FROM transmissions WHERE hash = $1`,
 		ComputeContentHash(rawUnscoped)).Scan(&c1, &c2); err != nil {
 		t.Fatalf("read unscoped: %v", err)
 	}
@@ -2323,7 +2276,7 @@ func TestTransportCodesStored(t *testing.T) {
 		t.Errorf("unscoped codes = %v/%v, want NULL/NULL", c1, c2)
 	}
 
-	if err := s.db.QueryRow(`SELECT code1, code2 FROM transmissions WHERE hash = ?`,
+	if err := s.db.QueryRow(`SELECT code1, code2 FROM transmissions WHERE hash = $1`,
 		ComputeContentHash(rawZeroCodes)).Scan(&c1, &c2); err != nil {
 		t.Fatalf("read zero-codes: %v", err)
 	}
@@ -2349,7 +2302,7 @@ func TestBackfillTransportCodes(t *testing.T) {
 	}{{rawScoped, 0}, {rawFlood, 1}} {
 		if _, err := s.db.Exec(
 			`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
-			 VALUES (?,?,?,?,?)`,
+			 VALUES ($1,$2,$3,$4,$5)`,
 			tc.raw, ComputeContentHash(tc.raw), "2026-08-01T00:00:00Z", tc.routeType, 5); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
@@ -2359,7 +2312,7 @@ func TestBackfillTransportCodes(t *testing.T) {
 	s.backfillWg.Wait()
 
 	var c1 *string
-	if err := s.db.QueryRow(`SELECT code1 FROM transmissions WHERE hash = ?`,
+	if err := s.db.QueryRow(`SELECT code1 FROM transmissions WHERE hash = $1`,
 		ComputeContentHash(rawScoped)).Scan(&c1); err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -2367,7 +2320,7 @@ func TestBackfillTransportCodes(t *testing.T) {
 		t.Errorf("backfilled code1 = %v, want AABB", c1)
 	}
 
-	if err := s.db.QueryRow(`SELECT code1 FROM transmissions WHERE hash = ?`,
+	if err := s.db.QueryRow(`SELECT code1 FROM transmissions WHERE hash = $1`,
 		ComputeContentHash(rawFlood)).Scan(&c1); err != nil {
 		t.Fatalf("read flood: %v", err)
 	}
@@ -2415,14 +2368,14 @@ func TestBackfillTransportCodes_MultiBatchWithUndecodableRow(t *testing.T) {
 	// good2}, batch 2 = {good3, good4, good5}, batch 3 = {good6}.
 	if _, err := s.db.Exec(
 		`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
-		 VALUES (?,?,?,?,?)`,
+		 VALUES ($1,$2,$3,$4,$5)`,
 		badRaw, ComputeContentHash(badRaw), "2026-08-01T00:00:00Z", 0, 5); err != nil {
 		t.Fatalf("seed bad row: %v", err)
 	}
 	for _, raw := range goodRaws {
 		if _, err := s.db.Exec(
 			`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
-			 VALUES (?,?,?,?,?)`,
+			 VALUES ($1,$2,$3,$4,$5)`,
 			raw, ComputeContentHash(raw), "2026-08-01T00:00:00Z", 0, 5); err != nil {
 			t.Fatalf("seed good row: %v", err)
 		}
@@ -2439,7 +2392,7 @@ func TestBackfillTransportCodes_MultiBatchWithUndecodableRow(t *testing.T) {
 	for i, raw := range goodRaws {
 		wantCode1 := fmt.Sprintf("%04X", i+1)
 		var c1 *string
-		if err := s.db.QueryRow(`SELECT code1 FROM transmissions WHERE hash = ?`,
+		if err := s.db.QueryRow(`SELECT code1 FROM transmissions WHERE hash = $1`,
 			ComputeContentHash(raw)).Scan(&c1); err != nil {
 			t.Fatalf("read good row %d: %v", i, err)
 		}
@@ -2449,7 +2402,7 @@ func TestBackfillTransportCodes_MultiBatchWithUndecodableRow(t *testing.T) {
 	}
 
 	var badC1 *string
-	if err := s.db.QueryRow(`SELECT code1 FROM transmissions WHERE hash = ?`,
+	if err := s.db.QueryRow(`SELECT code1 FROM transmissions WHERE hash = $1`,
 		ComputeContentHash(badRaw)).Scan(&badC1); err != nil {
 		t.Fatalf("read bad row: %v", err)
 	}
@@ -2470,7 +2423,7 @@ func TestBackfillTransportCodes_ErrorWithholdsGuardRow(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 
-	store1, err := OpenStore(dbPath)
+	store1, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -2478,7 +2431,7 @@ func TestBackfillTransportCodes_ErrorWithholdsGuardRow(t *testing.T) {
 	raw := "14" + "AABB" + "CCDD" + "00" + strings.Repeat("11", 32)
 	if _, err := store1.db.Exec(
 		`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
-		 VALUES (?,?,?,?,?)`,
+		 VALUES ($1,$2,$3,$4,$5)`,
 		raw, ComputeContentHash(raw), "2026-08-01T00:00:00Z", 0, 5); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -2490,7 +2443,7 @@ func TestBackfillTransportCodes_ErrorWithholdsGuardRow(t *testing.T) {
 		t.Fatal("backfillTransportCodes on a closed store returned nil error, want non-nil")
 	}
 
-	store2, err := OpenStore(dbPath)
+	store2, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -2508,7 +2461,7 @@ func TestBackfillTransportCodes_ErrorWithholdsGuardRow(t *testing.T) {
 	store2.backfillWg.Wait()
 
 	var c1 *string
-	if err := store2.db.QueryRow(`SELECT code1 FROM transmissions WHERE hash = ?`,
+	if err := store2.db.QueryRow(`SELECT code1 FROM transmissions WHERE hash = $1`,
 		ComputeContentHash(raw)).Scan(&c1); err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -2526,7 +2479,7 @@ func TestBackfillTransportCodes_ErrorWithholdsGuardRow(t *testing.T) {
 func TestUpdateNodeDefaultScope(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
-	store, err := OpenStore(dbPath)
+	store, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -2592,7 +2545,7 @@ func TestUpdateNodeDefaultScope(t *testing.T) {
 
 func TestBackfillPathJsonFromRawHex(t *testing.T) {
 	dbPath := tempDBPath(t)
-	s, err := OpenStore(dbPath)
+	s, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2601,26 +2554,26 @@ func TestBackfillPathJsonFromRawHex(t *testing.T) {
 	// raw_hex: header 0x05 (route FLOOD, payload 0x01), path byte 0x42 (hash_size=2, count=2),
 	// hops: AABB, CCDD, then some payload bytes
 	rawHex := "0542AABBCCDD0000000000000000000000000000"
-	s.db.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, payload_type) VALUES (?, 'h1', '2025-01-01T00:00:00Z', 1)`, rawHex)
+	s.db.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, payload_type) VALUES ($1, 'h1', '2025-01-01T00:00:00Z', 1)`, rawHex)
 
 	// Insert observation with raw_hex but empty path_json
-	s.db.Exec(`INSERT INTO observations (transmission_id, timestamp, raw_hex, path_json) VALUES (1, 1000, ?, '[]')`, rawHex)
+	s.db.Exec(`INSERT INTO observations (transmission_id, timestamp, raw_hex, path_json) VALUES (1, 1000, $1, '[]')`, rawHex)
 	// Insert observation with raw_hex and NULL path_json
-	s.db.Exec(`INSERT INTO observations (transmission_id, timestamp, raw_hex, path_json) VALUES (1, 1001, ?, NULL)`, rawHex)
+	s.db.Exec(`INSERT INTO observations (transmission_id, timestamp, raw_hex, path_json) VALUES (1, 1001, $1, NULL)`, rawHex)
 	// Insert observation with existing path_json (should NOT be overwritten)
-	s.db.Exec(`INSERT INTO observations (transmission_id, timestamp, raw_hex, path_json) VALUES (1, 1002, ?, '["XX","YY"]')`, rawHex)
+	s.db.Exec(`INSERT INTO observations (transmission_id, timestamp, raw_hex, path_json) VALUES (1, 1002, $1, '["XX","YY"]')`, rawHex)
 
 	// Insert a TRACE transmission (payload_type = 0x09) — should be skipped
 	traceRaw := "2604302D0D2359FEE7B100000000006733D63367"
-	s.db.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, payload_type) VALUES (?, 'h2', '2025-01-01T00:00:00Z', 9)`, traceRaw)
-	s.db.Exec(`INSERT INTO observations (transmission_id, timestamp, raw_hex, path_json) VALUES (2, 1003, ?, '[]')`, traceRaw)
+	s.db.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, payload_type) VALUES ($1, 'h2', '2025-01-01T00:00:00Z', 9)`, traceRaw)
+	s.db.Exec(`INSERT INTO observations (transmission_id, timestamp, raw_hex, path_json) VALUES (2, 1003, $1, '[]')`, traceRaw)
 
 	// Remove the migration marker so it runs again on reopen
 	s.db.Exec(`DELETE FROM _migrations WHERE name = 'backfill_path_json_from_raw_hex_v1'`)
 	s.Close()
 
 	// Reopen — backfill is now async, must trigger explicitly
-	s2, err := OpenStore(dbPath)
+	s2, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2672,107 +2625,6 @@ func TestBackfillPathJsonFromRawHex(t *testing.T) {
 	}
 }
 
-func TestCleanupLegacyNullHashTimestamp(t *testing.T) {
-	path := tempDBPath(t)
-
-	// Create a bare-bones DB with legacy bad data
-	db, err := sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000")
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.Exec(`CREATE TABLE IF NOT EXISTS transmissions (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		raw_hex TEXT NOT NULL,
-		hash TEXT NOT NULL,
-		first_seen TEXT NOT NULL,
-		route_type INTEGER,
-		payload_type INTEGER,
-		payload_version INTEGER,
-		decoded_json TEXT,
-		created_at TEXT DEFAULT (datetime('now')),
-		channel_hash TEXT DEFAULT NULL
-	)`)
-	db.Exec(`CREATE TABLE IF NOT EXISTS observations (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		transmission_id INTEGER NOT NULL REFERENCES transmissions(id),
-		observer_idx INTEGER,
-		direction TEXT,
-		snr REAL,
-		rssi REAL,
-		score INTEGER,
-		path_json TEXT,
-		timestamp INTEGER NOT NULL
-	)`)
-	db.Exec(`CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY)`)
-	db.Exec(`CREATE TABLE IF NOT EXISTS nodes (public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL, last_seen TEXT, first_seen TEXT, advert_count INTEGER DEFAULT 0, battery_mv INTEGER, temperature_c REAL)`)
-	db.Exec(`CREATE TABLE IF NOT EXISTS observers (id TEXT PRIMARY KEY, name TEXT, iata TEXT, last_seen TEXT, first_seen TEXT, packet_count INTEGER DEFAULT 0, model TEXT, firmware TEXT, client_version TEXT, radio TEXT, battery_mv INTEGER, uptime_secs INTEGER, noise_floor REAL, inactive INTEGER DEFAULT 0, last_packet_at TEXT DEFAULT NULL)`)
-
-	// Insert good transmission
-	db.Exec(`INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (1, 'aabb', 'abc123', '2024-01-01T00:00:00Z')`)
-	db.Exec(`INSERT INTO observations (transmission_id, observer_idx, timestamp) VALUES (1, 1, 1704067200)`)
-
-	// Insert bad: empty hash
-	db.Exec(`INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (2, 'ccdd', '', '2024-01-01T00:00:00Z')`)
-	db.Exec(`INSERT INTO observations (transmission_id, observer_idx, timestamp) VALUES (2, 1, 1704067200)`)
-
-	// Insert bad: empty first_seen
-	db.Exec(`INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (3, 'eeff', 'def456', '')`)
-	db.Exec(`INSERT INTO observations (transmission_id, observer_idx, timestamp) VALUES (3, 2, 1704067200)`)
-
-	db.Close()
-
-	// Now open via OpenStore which should run the migration
-	s, err := OpenStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-
-	// Good transmission should remain
-	var count int
-	s.db.QueryRow("SELECT COUNT(*) FROM transmissions WHERE id = 1").Scan(&count)
-	if count != 1 {
-		t.Error("good transmission should not be deleted")
-	}
-
-	// Bad transmissions should be gone
-	s.db.QueryRow("SELECT COUNT(*) FROM transmissions WHERE id = 2").Scan(&count)
-	if count != 0 {
-		t.Errorf("transmission with empty hash should be deleted, got count=%d", count)
-	}
-	s.db.QueryRow("SELECT COUNT(*) FROM transmissions WHERE id = 3").Scan(&count)
-	if count != 0 {
-		t.Errorf("transmission with empty first_seen should be deleted, got count=%d", count)
-	}
-
-	// Observations for bad transmissions should be gone
-	s.db.QueryRow("SELECT COUNT(*) FROM observations WHERE transmission_id IN (2, 3)").Scan(&count)
-	if count != 0 {
-		t.Errorf("observations for bad transmissions should be deleted, got count=%d", count)
-	}
-
-	// Observation for good transmission should remain
-	s.db.QueryRow("SELECT COUNT(*) FROM observations WHERE transmission_id = 1").Scan(&count)
-	if count != 1 {
-		t.Error("observation for good transmission should remain")
-	}
-
-	// Migration marker should exist
-	var migCount int
-	s.db.QueryRow("SELECT COUNT(*) FROM _migrations WHERE name = 'cleanup_legacy_null_hash_ts'").Scan(&migCount)
-	if migCount != 1 {
-		t.Error("migration marker cleanup_legacy_null_hash_ts should be recorded")
-	}
-
-	// Idempotent: opening again should not error
-	s.Close()
-	s2, err := OpenStore(path)
-	if err != nil {
-		t.Fatal("second open should not fail:", err)
-	}
-	s2.Close()
-}
-
 func TestBuildPacketDataRegionFromPayload(t *testing.T) {
 	msg := &MQTTPacketMessage{Raw: "0102030405060708", Region: "PDX"}
 	decoded := &DecodedPacket{
@@ -2806,88 +2658,10 @@ func TestBackfillPathJSONAsync(t *testing.T) {
 	dbPath := filepath.Join(dir, "async_test.db")
 
 	// Bootstrap schema manually so we can insert test data BEFORE OpenStore
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	db, err := pgutil.Open(testPostgresURL(t, dbPath), false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Create tables manually (minimal schema for this test)
-	_, err = db.Exec(`
-		CREATE TABLE _migrations (name TEXT PRIMARY KEY);
-		CREATE TABLE transmissions (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			raw_hex TEXT NOT NULL,
-			hash TEXT NOT NULL UNIQUE,
-			first_seen TEXT NOT NULL,
-			route_type INTEGER,
-			payload_type INTEGER,
-			payload_version INTEGER,
-			decoded_json TEXT,
-			created_at TEXT DEFAULT (datetime('now')),
-			channel_hash TEXT
-		);
-		CREATE TABLE observers (
-			id TEXT PRIMARY KEY,
-			name TEXT,
-			iata TEXT,
-			last_seen TEXT,
-			first_seen TEXT,
-			packet_count INTEGER DEFAULT 0,
-			model TEXT,
-			firmware TEXT,
-			client_version TEXT,
-			radio TEXT,
-			battery_mv INTEGER,
-			uptime_secs INTEGER,
-			noise_floor REAL,
-			inactive INTEGER DEFAULT 0,
-			last_packet_at TEXT
-		);
-		CREATE TABLE nodes (
-			public_key TEXT PRIMARY KEY,
-			name TEXT, role TEXT, lat REAL, lon REAL,
-			last_seen TEXT, first_seen TEXT, advert_count INTEGER DEFAULT 0,
-			battery_mv INTEGER, temperature_c REAL
-		);
-		CREATE TABLE inactive_nodes (
-			public_key TEXT PRIMARY KEY,
-			name TEXT, role TEXT, lat REAL, lon REAL,
-			last_seen TEXT, first_seen TEXT, advert_count INTEGER DEFAULT 0,
-			battery_mv INTEGER, temperature_c REAL
-		);
-		CREATE TABLE observations (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			transmission_id INTEGER NOT NULL REFERENCES transmissions(id),
-			observer_idx INTEGER,
-			direction TEXT,
-			snr REAL, rssi REAL, score INTEGER,
-			path_json TEXT,
-			timestamp INTEGER NOT NULL,
-			raw_hex TEXT
-		);
-		CREATE UNIQUE INDEX idx_observations_dedup ON observations(transmission_id, observer_idx, COALESCE(path_json, ''));
-		CREATE INDEX idx_observations_transmission_id ON observations(transmission_id);
-		CREATE INDEX idx_observations_observer_idx ON observations(observer_idx);
-		CREATE INDEX idx_observations_timestamp ON observations(timestamp);
-		CREATE TABLE observer_metrics (
-			observer_id TEXT NOT NULL,
-			timestamp TEXT NOT NULL,
-			noise_floor REAL, tx_air_secs INTEGER, rx_air_secs INTEGER,
-			recv_errors INTEGER, battery_mv INTEGER,
-			packets_sent INTEGER, packets_recv INTEGER,
-			PRIMARY KEY (observer_id, timestamp)
-		);
-		CREATE TABLE dropped_packets (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			hash TEXT, raw_hex TEXT, reason TEXT NOT NULL,
-			observer_id TEXT, observer_name TEXT,
-			node_pubkey TEXT, node_name TEXT,
-			dropped_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		);
-	`)
-	if err != nil {
-		t.Fatal("bootstrap schema:", err)
-	}
-
 	// Mark all migrations as done EXCEPT the path_json backfill
 	for _, m := range []string{
 		"advert_count_unique_v1", "noise_floor_real_v1", "node_telemetry_v1",
@@ -2896,19 +2670,19 @@ func TestBackfillPathJSONAsync(t *testing.T) {
 		"dropped_packets_v1", "observations_raw_hex_v1", "observers_last_packet_at_v1",
 		"cleanup_legacy_null_hash_ts",
 	} {
-		db.Exec(`INSERT INTO _migrations (name) VALUES (?)`, m)
+		db.Exec(`INSERT INTO _migrations (name) VALUES ($1)`, m)
 	}
 
 	// Insert a transmission + observations with NULL path_json and valid raw_hex
 	// raw_hex "0102AABBCCDD0000" has 2-hop path decodable by packetpath
 	rawHex := "41020304AABBCCDD05060708"
-	_, err = db.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, payload_type) VALUES (?, 'hash1', '2025-01-01T00:00:00Z', 4)`, rawHex)
+	_, err = db.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, payload_type) VALUES ($1, 'hash1', '2025-01-01T00:00:00Z', 4)`, rawHex)
 	if err != nil {
 		t.Fatal("insert tx:", err)
 	}
 	// Insert 100 observations needing backfill
 	for i := 0; i < 100; i++ {
-		_, err = db.Exec(`INSERT INTO observations (transmission_id, observer_idx, timestamp, raw_hex, path_json) VALUES (1, ?, ?, ?, NULL)`,
+		_, err = db.Exec(`INSERT INTO observations (transmission_id, observer_idx, timestamp, raw_hex, path_json) VALUES (1, $1, $2, $3, NULL)`,
 			i+1, 1700000000+i, rawHex)
 		if err != nil {
 			// dedup index might fire — use unique observer_idx
@@ -2919,7 +2693,7 @@ func TestBackfillPathJSONAsync(t *testing.T) {
 
 	// Now open store via OpenStore — this must return QUICKLY (non-blocking)
 	start := time.Now()
-	store, err := OpenStoreWithInterval(dbPath, 300)
+	store, err := openPostgresTestStoreInterval(t, dbPath, 300)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatal("OpenStore:", err)
@@ -2967,7 +2741,7 @@ func TestBackfillPathJSONAsync(t *testing.T) {
 func TestBackfillPathJSONAsyncMethodExists(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "method_test.db")
-	store, err := OpenStoreWithInterval(dbPath, 300)
+	store, err := openPostgresTestStoreInterval(t, dbPath, 300)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2995,73 +2769,10 @@ func TestBackfillPathJSONAsync_BracketRowsTerminate(t *testing.T) {
 
 	// Bootstrap a minimal schema directly so we can seed pre-existing '[]' rows
 	// before OpenStore runs.
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	db, err := pgutil.Open(testPostgresURL(t, dbPath), false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = db.Exec(`
-		CREATE TABLE _migrations (name TEXT PRIMARY KEY);
-		CREATE TABLE transmissions (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			raw_hex TEXT NOT NULL,
-			hash TEXT NOT NULL UNIQUE,
-			first_seen TEXT NOT NULL,
-			route_type INTEGER,
-			payload_type INTEGER,
-			payload_version INTEGER,
-			decoded_json TEXT,
-			created_at TEXT DEFAULT (datetime('now')),
-			channel_hash TEXT
-		);
-		CREATE TABLE observers (
-			id TEXT PRIMARY KEY, name TEXT, iata TEXT,
-			last_seen TEXT, first_seen TEXT, packet_count INTEGER DEFAULT 0,
-			model TEXT, firmware TEXT, client_version TEXT, radio TEXT,
-			battery_mv INTEGER, uptime_secs INTEGER, noise_floor REAL,
-			inactive INTEGER DEFAULT 0, last_packet_at TEXT
-		);
-		CREATE TABLE nodes (
-			public_key TEXT PRIMARY KEY, name TEXT, role TEXT,
-			lat REAL, lon REAL, last_seen TEXT, first_seen TEXT,
-			advert_count INTEGER DEFAULT 0, battery_mv INTEGER, temperature_c REAL
-		);
-		CREATE TABLE inactive_nodes (
-			public_key TEXT PRIMARY KEY, name TEXT, role TEXT,
-			lat REAL, lon REAL, last_seen TEXT, first_seen TEXT,
-			advert_count INTEGER DEFAULT 0, battery_mv INTEGER, temperature_c REAL
-		);
-		CREATE TABLE observations (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			transmission_id INTEGER NOT NULL REFERENCES transmissions(id),
-			observer_idx INTEGER, direction TEXT,
-			snr REAL, rssi REAL, score INTEGER,
-			path_json TEXT,
-			timestamp INTEGER NOT NULL,
-			raw_hex TEXT
-		);
-		CREATE UNIQUE INDEX idx_observations_dedup ON observations(transmission_id, observer_idx, COALESCE(path_json, ''));
-		CREATE INDEX idx_observations_transmission_id ON observations(transmission_id);
-		CREATE INDEX idx_observations_observer_idx ON observations(observer_idx);
-		CREATE INDEX idx_observations_timestamp ON observations(timestamp);
-		CREATE TABLE observer_metrics (
-			observer_id TEXT NOT NULL, timestamp TEXT NOT NULL,
-			noise_floor REAL, tx_air_secs INTEGER, rx_air_secs INTEGER,
-			recv_errors INTEGER, battery_mv INTEGER,
-			packets_sent INTEGER, packets_recv INTEGER,
-			PRIMARY KEY (observer_id, timestamp)
-		);
-		CREATE TABLE dropped_packets (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			hash TEXT, raw_hex TEXT, reason TEXT NOT NULL,
-			observer_id TEXT, observer_name TEXT,
-			node_pubkey TEXT, node_name TEXT,
-			dropped_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		);
-	`)
-	if err != nil {
-		t.Fatal("bootstrap schema:", err)
-	}
-
 	// Mark all migrations done EXCEPT backfill_path_json_from_raw_hex_v1.
 	for _, m := range []string{
 		"advert_count_unique_v1", "noise_floor_real_v1", "node_telemetry_v1",
@@ -3070,20 +2781,20 @@ func TestBackfillPathJSONAsync_BracketRowsTerminate(t *testing.T) {
 		"dropped_packets_v1", "observations_raw_hex_v1", "observers_last_packet_at_v1",
 		"cleanup_legacy_null_hash_ts",
 	} {
-		db.Exec(`INSERT INTO _migrations (name) VALUES (?)`, m)
+		db.Exec(`INSERT INTO _migrations (name) VALUES ($1)`, m)
 	}
 
 	// raw_hex producing ZERO hops via DecodePathFromRawHex:
 	// DIRECT route (type=2), payload_type=2, version=0 → header 0x0A; path byte 0x00.
 	// (See internal/packetpath/path_test.go: TestDecodePathFromRawHex_ZeroHops.)
 	rawHex := "0A00DEADBEEF"
-	_, err = db.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, payload_type) VALUES (?, 'h_brackets', '2025-01-01T00:00:00Z', 2)`, rawHex)
+	_, err = db.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, payload_type) VALUES ($1, 'h_brackets', '2025-01-01T00:00:00Z', 2)`, rawHex)
 	if err != nil {
 		t.Fatal("insert tx:", err)
 	}
 	const seedCount = 100
 	for i := 0; i < seedCount; i++ {
-		_, err = db.Exec(`INSERT INTO observations (transmission_id, observer_idx, timestamp, raw_hex, path_json) VALUES (1, ?, ?, ?, '[]')`,
+		_, err = db.Exec(`INSERT INTO observations (transmission_id, observer_idx, timestamp, raw_hex, path_json) VALUES (1, $1, $2, $3, '[]')`,
 			i+1, 1700000000+i, rawHex)
 		if err != nil {
 			t.Fatalf("insert obs %d: %v", i, err)
@@ -3091,7 +2802,7 @@ func TestBackfillPathJSONAsync_BracketRowsTerminate(t *testing.T) {
 	}
 	db.Close()
 
-	store, err := OpenStoreWithInterval(dbPath, 300)
+	store, err := openPostgresTestStoreInterval(t, dbPath, 300)
 	if err != nil {
 		t.Fatal("OpenStore:", err)
 	}
@@ -3133,14 +2844,14 @@ func TestSchemaMultibyteSupColumns(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 
-	store, err := OpenStore(dbPath)
+	store, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
 	defer store.Close()
 
 	for _, table := range []string{"nodes", "inactive_nodes"} {
-		rows, err := store.db.Query("PRAGMA table_info(" + table + ")")
+		rows, err := store.db.Query(testNativeSQL(`SELECT cid,name,type,"notnull",dflt_value,pk FROM pragma_table_info($1) ORDER BY cid`, `SELECT ordinal_position::int,column_name,data_type,CASE is_nullable WHEN 'NO' THEN 1 ELSE 0 END,column_default,0 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1`), table)
 		if err != nil {
 			t.Fatalf("PRAGMA table_info(%s): %v", table, err)
 		}
@@ -3173,7 +2884,7 @@ func TestSchemaMultibyteSupColumns(t *testing.T) {
 	// in the legacy _migrations marker table — so we just re-assert the
 	// columns exist and the second OpenStore is a no-op.
 	store.Close()
-	store2, err := OpenStore(dbPath)
+	store2, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore (second open): %v", err)
 	}
@@ -3189,7 +2900,7 @@ func TestSchemaMultibyteSupColumns(t *testing.T) {
 func TestUpdateNodeDefaultScope_EmptyScopeIsNoop(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
-	store, err := OpenStore(dbPath)
+	store, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -3243,7 +2954,7 @@ func TestInsertClientRxObservation(t *testing.T) {
 	// a swap is detectable.
 	var gotLat, gotLon, gotSNR, gotPosAccM float64
 	var gotRSSI int
-	if err := s.db.QueryRow(`SELECT lat, lon, snr, rssi, pos_acc_m FROM client_rx_observations WHERE pkt_hash = ?`, o.PktHash).
+	if err := s.db.QueryRow(`SELECT lat, lon, snr, rssi, pos_acc_m FROM client_rx_observations WHERE pkt_hash = $1`, o.PktHash).
 		Scan(&gotLat, &gotLon, &gotSNR, &gotRSSI, &gotPosAccM); err != nil {
 		t.Fatalf("read back geometry: %v", err)
 	}
@@ -3273,7 +2984,7 @@ func TestInsertClientRxObservation(t *testing.T) {
 		t.Fatalf("second copy: ins=%v err=%v", ins, err)
 	}
 	var n int
-	s.db.QueryRow(`SELECT COUNT(*) FROM client_rx_observations WHERE pkt_hash = ?`, o.PktHash).Scan(&n)
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_rx_observations WHERE pkt_hash = $1`, o.PktHash).Scan(&n)
 	if n != 2 {
 		t.Errorf("rows for pkt_hash = %d, want 2", n)
 	}
@@ -3331,7 +3042,7 @@ func TestInsertClientRfSample(t *testing.T) {
 		SELECT lat, lon, pos_acc_m, stationary, uptime_secs, battery_mv, queue_len,
 		       errors, noise_floor, last_rssi, last_snr, tx_air_secs, rx_air_secs,
 		       recv, sent, flood_rx, direct_rx, flood_tx, direct_tx, recv_errors
-		FROM client_rf_samples WHERE sampled_at = ?`, o.SampledAt).Scan(
+		FROM client_rf_samples WHERE sampled_at = $1`, o.SampledAt).Scan(
 		&gotLat, &gotLon, &gotPosAccM, &gotStationary, &gotUptimeSecs, &gotBatteryMV, &gotQueueLen,
 		&gotErrors, &gotNoiseFloor, &gotLastRSSI, &gotLastSNR, &gotTxAirSecs, &gotRxAirSecs,
 		&gotRecv, &gotSent, &gotFloodRx, &gotDirectRx, &gotFloodTx, &gotDirectTx, &gotRecvErrors); err != nil {
@@ -3406,7 +3117,7 @@ func TestInsertClientRfSample(t *testing.T) {
 		t.Fatalf("insert second sample: ins=%v err=%v", ins, err)
 	}
 	var gotRecvErrors2 *int64
-	if err := s.db.QueryRow(`SELECT recv_errors FROM client_rf_samples WHERE sampled_at = ?`, o2.SampledAt).
+	if err := s.db.QueryRow(`SELECT recv_errors FROM client_rf_samples WHERE sampled_at = $1`, o2.SampledAt).
 		Scan(&gotRecvErrors2); err != nil {
 		t.Fatalf("read second sample: %v", err)
 	}
@@ -3423,16 +3134,20 @@ func TestInsertClientRfSample(t *testing.T) {
 // this is a regression guard.
 func TestPruneClientRfSamplesUsesIndex(t *testing.T) {
 	s := newTestStore(t)
-	rows, err := s.db.Query(`EXPLAIN QUERY PLAN DELETE FROM client_rf_samples WHERE sampled_at < ?`, "2026-01-01T00:00:00Z")
+	if testBackendValue() == "postgres" {
+		if _, err := s.db.Exec(`SET enable_seqscan=off`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := s.db.Query(testNativeSQL(`EXPLAIN QUERY PLAN DELETE FROM client_rf_samples WHERE sampled_at < $1`, `EXPLAIN (COSTS OFF) DELETE FROM client_rf_samples WHERE sampled_at < $1`), "2026-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
 	plan := ""
 	for rows.Next() {
-		var id, parent, notused int
 		var detail string
-		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+		if err := scanTestPlan(rows, &detail); err != nil {
 			t.Fatal(err)
 		}
 		plan += detail + "\n"
@@ -3492,7 +3207,7 @@ func TestPruneOldClientRfSamples(t *testing.T) {
 		t.Fatalf("expected 2 samples remaining (recent + boundary), got %d", remaining)
 	}
 	var boundarySurvived int
-	s.db.QueryRow(`SELECT COUNT(*) FROM client_rf_samples WHERE sampled_at = ?`, boundary).Scan(&boundarySurvived)
+	s.db.QueryRow(`SELECT COUNT(*) FROM client_rf_samples WHERE sampled_at = $1`, boundary).Scan(&boundarySurvived)
 	if boundarySurvived != 1 {
 		t.Fatalf("boundary row (500ms after cutoff instant) must survive; an RFC3339 (no-ms) cutoff would wrongly delete it because '.' < 'Z' lexicographically — got %d", boundarySurvived)
 	}

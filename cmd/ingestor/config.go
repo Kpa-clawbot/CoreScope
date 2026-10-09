@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -46,8 +45,10 @@ type MQTTLegacy struct {
 	Topic  string `json:"topic"`
 }
 
-// Config holds the ingestor configuration, compatible with the Node.js config.json format.
+// Config holds the shared Go-service configuration and ingestor-only settings.
 type Config struct {
+	DatabaseURL          string                      `json:"databaseURL"`
+	StateDir             string                      `json:"stateDir"`
 	DBPath               string                      `json:"dbPath"`
 	MQTT                 *MQTTLegacy                 `json:"mqtt,omitempty"`
 	MQTTSources          []MQTTSource                `json:"mqttSources,omitempty"`
@@ -107,7 +108,7 @@ type Config struct {
 	NeighborEdgesMaxAgeDays int `json:"neighborEdgesMaxAgeDays,omitempty"`
 
 	// IngestBufferSize caps the in-memory queue (number of MQTT messages) held
-	// while the single SQLite writer is blocked by startup migrations/prunes
+	// while the single serialized writer is blocked by startup migrations/prunes
 	// (#1608). Received messages are drained once the write path is ready.
 	// 0 / unset => default. Bounded memory.
 	IngestBufferSize int `json:"ingestBufferSize,omitempty"`
@@ -305,10 +306,10 @@ type RuntimeConfig struct {
 	MaxMemoryMB int `json:"maxMemoryMB"`
 }
 
-// DBConfig is the shared SQLite vacuum/maintenance config (#919, #921).
+// DBConfig shares startup-load settings and accepts obsolete SQLite config keys.
 type DBConfig = dbconfig.DBConfig
 
-// IncrementalVacuumPages returns the configured pages per vacuum or 1024 default.
+// IncrementalVacuumPages preserves legacy config decoding; PostgreSQL does not use it.
 func (c *Config) IncrementalVacuumPages() int {
 	if c.DB != nil && c.DB.IncrementalVacuumPages > 0 {
 		return c.DB.IncrementalVacuumPages
@@ -316,16 +317,8 @@ func (c *Config) IncrementalVacuumPages() int {
 	return 1024
 }
 
-// AnalysisLimit returns the per-index row cap for the planner stats refresh
-// (#2058). A negative setting disables the refresh; zero means unset, matching
-// IncrementalVacuumPages above.
-//
-// 10000 rather than the 400 SQLite's documentation offers: measured on the
-// 9.4 GB staging database, 400 and 1000 leave the channel-query plan exactly as
-// it was, 10000 produces the same plan as an unbounded ANALYZE, and it costs 2.0s
-// against that ANALYZE's 242.9s, both timed warm. The full ladder, and the cold
-// figure that matters at startup, are in Store.RefreshPlannerStats and
-// Store.EnsurePlannerStats.
+// AnalysisLimit preserves the old SQLite setting for configuration compatibility.
+// PostgreSQL owns planner statistics; runtime maintenance does not use this limit.
 func (c *Config) AnalysisLimit() int {
 	if c.DB != nil && c.DB.AnalysisLimit != 0 {
 		return c.DB.AnalysisLimit
@@ -541,10 +534,23 @@ func LoadConfig(path string) (*Config, error) {
 		}}
 	}
 
-	// Default DB path
-	if cfg.DBPath == "" {
-		cfg.DBPath = "data/meshcore.db"
+	if v := os.Getenv("CORESCOPE_DATABASE_URL"); v != "" {
+		cfg.DatabaseURL = v
 	}
+	if v := os.Getenv("CORESCOPE_WRITER_DATABASE_URL"); v != "" {
+		cfg.DatabaseURL = v
+	}
+	if v := os.Getenv("CORESCOPE_STATE_DIR"); v != "" {
+		cfg.StateDir = v
+	}
+	if v := os.Getenv("CORESCOPE_APPROVED_CHANNELS_DATABASE_URL"); v != "" {
+		if cfg.UserManagement == nil {
+			cfg.UserManagement = &UserManagementConfig{}
+		}
+		cfg.UserManagement.ApprovedChannelsDatabaseURL = v
+	}
+	// Legacy DBPath is never interpreted as a connection string.
+	// Default DB path
 
 	// Normalize: convert legacy single mqtt config to mqttSources
 	if len(cfg.MQTTSources) == 0 && cfg.MQTT != nil && cfg.MQTT.Broker != "" {
@@ -621,9 +627,11 @@ const autoRegionKeysDefaultRefreshMinutes = 15
 
 // UserManagementConfig is the ingestor's view of userManagement.
 type UserManagementConfig struct {
-	Enabled          bool                    `json:"enabled"`
-	DBPath           string                  `json:"dbPath,omitempty"`
-	ChannelProposals *ChannelProposalsConfig `json:"channelProposals,omitempty"`
+	DatabaseURL                 string                  `json:"databaseURL,omitempty"`
+	Enabled                     bool                    `json:"enabled"`
+	ApprovedChannelsDatabaseURL string                  `json:"approvedChannelsDatabaseURL,omitempty"`
+	DBPath                      string                  `json:"dbPath,omitempty"`
+	ChannelProposals            *ChannelProposalsConfig `json:"channelProposals,omitempty"`
 }
 
 // ChannelProposalsConfig is the ingestor's view of
@@ -652,15 +660,12 @@ func (c *Config) ApprovedChannelsMax() int {
 	return u.ChannelProposals.MaxApproved
 }
 
-// UsersDBPath resolves users.db with the server's rule: userManagement.dbPath,
-// else users.db next to the analyzer database.
-func (c *Config) UsersDBPath() string {
-	if c.UserManagement != nil {
-		if p := strings.TrimSpace(c.UserManagement.DBPath); p != "" {
-			return p
-		}
+// ApprovedChannelsURL is a separate restricted account-reader credential.
+func (c *Config) ApprovedChannelsURL() string {
+	if c.UserManagement == nil {
+		return ""
 	}
-	return filepath.Join(filepath.Dir(c.DBPath), "users.db")
+	return strings.TrimSpace(c.UserManagement.ApprovedChannelsDatabaseURL)
 }
 
 // AutoRegionKeysEnabled reports whether region keys may be derived from

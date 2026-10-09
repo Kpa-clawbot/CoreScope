@@ -18,129 +18,47 @@ Comprehensive guide to deploying and operating CoreScope. For a quick start, see
 
 ## System Requirements
 
-| Resource | Minimum | Recommended |
-|----------|---------|-------------|
-| RAM | 256 MB | 512 MB+ |
-| Disk | 500 MB (image + DB) | 2 GB+ for long-term data |
-| CPU | 1 core | 2+ cores |
-| Architecture | `linux/amd64`, `linux/arm64` | — |
-| Docker | 20.10+ | Latest stable |
+The supplied images support `linux/amd64` and `linux/arm64`. Use Docker with the Compose plugin. SQLite is the default; PostgreSQL18.6 is an optional separate service. Budget for the application and database together: earlier SQLite memory figures do not size a PostgreSQL installation. Measure the retained dataset, packet cache, database indexes/WAL and backup storage before choosing capacity.
 
-CoreScope runs well on Raspberry Pi 4/5 (ARM64). The Go server uses ~300 MB RAM for 56K+ packets.
-
----
+For migration, retain the original data plus recovery and normalized snapshots while PostgreSQL builds its own data and indexes. Required disk space and downtime must be measured on a representative copy. See [offline upgrade and recovery](postgresql-upgrade.md).
 
 ## Docker Deployment
 
-### Quick Start (one command)
+### Complete Compose checkout
 
-```bash
-docker run -d --name corescope \
-  -p 80:80 \
-  -v corescope-data:/app/data \
-  ghcr.io/kpa-clawbot/corescope:latest
+Use [DEPLOY.md](../DEPLOY.md#quick-start) to clone and pin the complete repository, populate the private `.env` and select a matching reviewed image. Keep the matching checkout, including optional PostgreSQL overrides and their initialization scripts.
+
+```sh
+docker compose -f docker-compose.example.yml up -d
+docker compose -f docker-compose.example.yml ps
 ```
 
-Open `http://localhost` — you'll see an empty dashboard ready to receive packets.
+The default app validates/adopts existing SQLite storage or initializes a provably fresh install before starting. The optional `docker-compose.example.postgres.yml` override adds PostgreSQL and owner bootstrap. An installed selection is authoritative; a missing connection or an interrupted conversion never permits SQLite fallback.
 
-No `config.json` is required. The server starts with sensible defaults:
-- HTTP on port 3000 (Caddy proxies port 80 → 3000 internally)
-- Internal Mosquitto MQTT broker on port 1883
-- Ingestor connects to `mqtt://localhost:1883` automatically
-- SQLite database at `/app/data/meshcore.db`
+The application container runs the server and ingestor, optional Mosquitto, and optional Caddy. When selected, PostgreSQL runs separately. Its runtime services receive restricted roles; the owner belongs only to setup/conversion.
 
-### Full `docker run` Reference (recommended)
+| Setting | Purpose |
+|---|---|
+| `HTTP_PORT` | Example deployment's host HTTP port (default 80) |
+| `DATA_DIR` | Application state: config, theme, queues, statistics and account backups |
+| `POSTGRES_DATA_DIR` | Separate PostgreSQL storage; never copy live files as a logical backup |
+| `CORESCOPE_IMAGE` | Reviewed application image tag or digest matching the checkout |
+| `DISABLE_MOSQUITTO` | Use an external broker when true |
+| `DISABLE_CADDY` | Use an external reverse proxy when true |
+| `CORESCOPE_*_PASSWORD` | Distinct owner and runtime credentials; only for PostgreSQL, merge `.env.postgres.example` |
 
-The bare `docker run` command is the primary deployment method. One image, documented parameters — run it however you want.
-
-```bash
-docker run -d --name corescope \
-  --restart=unless-stopped \
-  -p 80:80 -p 443:443 -p 1883:1883 \
-  -e DISABLE_MOSQUITTO=false \
-  -e DISABLE_CADDY=false \
-  -v /your/data:/app/data \
-  -v /your/Caddyfile:/etc/caddy/Caddyfile:ro \
-  -v /your/caddy-data:/data/caddy \
-  ghcr.io/kpa-clawbot/corescope:latest
-```
-
-#### Parameters
-
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `-p 80:80` | Yes | HTTP web UI |
-| `-p 443:443` | No | HTTPS (only if using built-in Caddy with a domain) |
-| `-p 1883:1883` | No | MQTT broker (expose if external gateways connect directly) |
-| `-v /your/data:/app/data` | Yes | Persistent data: SQLite DB, config.json, theme.json |
-| `-v /your/Caddyfile:/etc/caddy/Caddyfile:ro` | No | Custom Caddyfile for HTTPS |
-| `-v /your/caddy-data:/data/caddy` | No | Caddy TLS certificate storage |
-| `-e DISABLE_MOSQUITTO=true` | No | Skip the internal Mosquitto broker (use your own) |
-| `-e DISABLE_CADDY=true` | No | Skip the built-in Caddy reverse proxy |
-| `-e MQTT_BROKER=mqtt://host:1883` | No | Override MQTT broker URL |
-
-#### `/app/data/.env` convenience file
-
-Instead of passing `-e` flags, you can drop a `.env` file in your data volume:
-
-```bash
-# /your/data/.env
-DISABLE_MOSQUITTO=true
-DISABLE_CADDY=true
-MQTT_BROKER=mqtt://my-broker:1883
-```
-
-The entrypoint sources this file before starting services. This works with any launch method (`docker run`, compose, or manage.sh).
-
-### Docker Compose (legacy alternative)
-
-Docker Compose files are maintained for backward compatibility but are no longer the recommended approach.
-
-```bash
-curl -sL https://raw.githubusercontent.com/Kpa-clawbot/CoreScope/master/docker-compose.example.yml \
-  -o docker-compose.yml
-docker compose up -d
-```
-
-#### Compose environment variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `HTTP_PORT` | `80` | Host port for the web UI |
-| `DATA_DIR` | `./data` | Host path for persistent data |
-| `DISABLE_MOSQUITTO` | `false` | Set `true` to use an external MQTT broker |
-| `DISABLE_CADDY` | `false` | Set `true` to skip the built-in Caddy proxy |
-
-### manage.sh (legacy alternative)
-
-The `manage.sh` wrapper script provides a setup wizard and convenience commands. It uses Docker Compose internally. See [DEPLOY.md](../DEPLOY.md) for usage. New deployments should prefer bare `docker run`.
-
-### Image tags
-
-| Tag | Use case |
-|-----|----------|
-| `v3.4.1` | Pinned release — recommended for production |
-| `v3.4` | Latest patch in the v3.4.x series |
-| `v3` | Latest minor+patch in v3.x |
-| `latest` | Latest release tag |
-| `edge` | Built from master on every push — unstable |
+The production and staging variants use their own directory/port variables listed in `.env.example`. `manage.sh` operates those variants; `./manage.sh start --with-staging` clones telemetry only into an empty staging database and keeps staging accounts independent.
 
 ### Updating
 
-```bash
-docker compose pull
-docker compose up -d
+Preserve a native backup and private configuration, pin the new checkout and matching image, then use the same Compose variant:
+
+```sh
+docker compose -f docker-compose.example.yml pull
+docker compose -f docker-compose.example.yml up -d
 ```
 
-For `docker run` users:
-
-```bash
-docker pull ghcr.io/kpa-clawbot/corescope:latest
-docker stop corescope && docker rm corescope
-docker run -d --name corescope ... # same flags as before
-```
-
-Data is preserved in the volume — updates are non-destructive.
+A backend change in either direction requires the [offline storage switch](storage.md), not only an image update. Ordinary updates keep the recorded choice. Keep the previous application and recovery files until validation is complete.
 
 ---
 
@@ -148,9 +66,11 @@ Data is preserved in the volume — updates are non-destructive.
 
 CoreScope uses a layered configuration system (highest priority wins):
 
-1. **Environment variables** — `MQTT_BROKER`, `DB_PATH`, etc.
+1. **Environment variables** — `MQTT_BROKER`, `CORESCOPE_READER_DATABASE_URL`, etc.
 2. **`/app/data/config.json`** — full config file (volume-mounted)
-3. **Built-in defaults** — work out of the box with no config
+3. **Built-in defaults** — SQLite for a provably fresh installation; PostgreSQL requires its role URLs
+
+After setup, `storage-selection.json` overrides bootstrap backend/path hints. Credentials and TLS remain private config/environment settings. Keep the same shared state directory on restart and update.
 
 ### Environment variable overrides
 
@@ -158,21 +78,17 @@ CoreScope uses a layered configuration system (highest priority wins):
 |----------|---------|-------------|
 | `MQTT_BROKER` | `mqtt://localhost:1883` | MQTT broker URL (overrides config file) |
 | `MQTT_TOPIC` | `meshcore/#` | MQTT topic subscription pattern |
-| `DB_PATH` | `data/meshcore.db` | SQLite database path |
+| `CORESCOPE_READER_DATABASE_URL` | Required for PostgreSQL | Restricted telemetry reader URL |
+| `CORESCOPE_WRITER_DATABASE_URL` | Required for PostgreSQL | Restricted telemetry writer URL |
+| `CORESCOPE_USERS_DATABASE_URL` | Required when accounts are enabled | Separate account database writer URL |
+| `CORESCOPE_APPROVED_CHANNELS_DATABASE_URL` | Required when proposals are enabled | Restricted approved-channel view reader URL |
+| `CORESCOPE_STATE_DIR` | `data` for native binaries | Shared filesystem state, separate from database URLs |
 | `DISABLE_MOSQUITTO` | `false` | Skip the internal Mosquitto broker |
 | `DISABLE_CADDY` | `false` | Skip the built-in Caddy reverse proxy |
 
 ### config.json
 
-For advanced configuration, create a `config.json` and mount it at `/app/data/config.json`:
-
-```bash
-docker run -d --name corescope \
-  -p 80:80 \
-  -v corescope-data:/app/data \
-  -v ./config.json:/app/data/config.json:ro \
-  ghcr.io/kpa-clawbot/corescope:latest
-```
+Place `config.json` in the mounted state directory (`DATA_DIR` in the example deployment). Use private environment configuration for database passwords; do not publish rendered Compose configuration or URLs. Supported keys include `db.backend`, SQLite `dbPath`/`DB_PATH` and `userManagement.dbPath`, optional PostgreSQL role URLs, and `stateDir`. Explicit relative SQLite paths use the process working directory; containers use `/app`. Keep container databases/state inside `/app/data` so the bind mount persists them. Set `CORESCOPE_STATE_DIR=/app/data/<subdirectory>` in the private `.env` when using a custom container state directory; every service shares it.
 
 See `config.example.json` in the repository for all available options including:
 - MQTT sources (multiple brokers)
@@ -236,13 +152,7 @@ CoreScope receives MeshCore packets via MQTT. The container ships with an intern
 
 The built-in Mosquitto broker listens on port 1883 inside the container. Point your MeshCore gateways at it:
 
-```bash
-# Expose MQTT port for external gateways
-docker run -d --name corescope \
-  -p 80:80 -p 1883:1883 \
-  -v corescope-data:/app/data \
-  ghcr.io/kpa-clawbot/corescope:latest
-```
+Publish `1883:1883` on the application service in your Compose override when external gateways need to reach the built-in broker. Keep `DISABLE_MOSQUITTO=false`. The database service must remain on the internal network.
 
 ### External broker
 
@@ -250,12 +160,12 @@ To use your own MQTT broker (Mosquitto, EMQX, HiveMQ, etc.):
 
 1. Disable the internal broker:
    ```bash
-   -e DISABLE_MOSQUITTO=true
+   DISABLE_MOSQUITTO=true
    ```
 
 2. Point the ingestor at your broker:
    ```bash
-   -e MQTT_BROKER=mqtt://your-broker:1883
+   MQTT_BROKER=mqtt://your-broker:1883
    ```
 
    Or via `config.json`:
@@ -340,15 +250,7 @@ The container includes Caddy for automatic Let's Encrypt certificates:
    }
    ```
 
-2. Mount it and expose TLS ports:
-   ```bash
-   docker run -d --name corescope \
-     -p 80:80 -p 443:443 \
-     -v corescope-data:/app/data \
-     -v caddy-certs:/data/caddy \
-     -v ./Caddyfile:/etc/caddy/Caddyfile:ro \
-     ghcr.io/kpa-clawbot/corescope:latest
-   ```
+2. Set `DISABLE_CADDY=false` for the application service, publish ports 80 and 443, mount the Caddyfile at `/etc/caddy/Caddyfile:ro` and persist certificate storage at `/data/caddy`. Make these changes in the same Compose deployment so the PostgreSQL dependency and role configuration remain intact.
 
 Caddy handles certificate issuance and renewal automatically.
 
@@ -544,41 +446,19 @@ docker stats corescope
 
 ## Backup & Restore
 
-### Backup
+Use native SQLite snapshots for SQLite or custom-format PostgreSQL archives for PostgreSQL. The authenticated `GET /api/backup` and admin `GET /api/admin/users-backup` endpoints download `.dump` files. The server needs PostgreSQL 18 `pg_dump` on `PATH`; the supplied image includes it.
 
-All persistent data lives in `/app/data`. The critical file is the SQLite database:
+For the production variant managed by `manage.sh`:
 
-```bash
-# Copy from the Docker volume
-docker cp corescope:/app/data/meshcore.db ./backup-$(date +%Y%m%d).db
-
-# Or if using a bind mount
-cp ./data/meshcore.db ./backup-$(date +%Y%m%d).db
+```sh
+./manage.sh backup ./backups/instance
 ```
 
-Optional files to back up:
-- `config.json` — custom configuration
-- `theme.json` — custom theme/branding
+This saves `telemetry.dump`, `accounts.dump` and available config/theme/Caddy files. Each archive is consistent, but two sequential dumps are not a shared cross-database snapshot; stop both writers for a coordinated pair. Preserve credentials, queues/state and TLS material separately. Encrypt private backups off-host.
 
-### Restore
+`./manage.sh restore <backup-directory>` requires the application stopped and fresh/empty native targets. SQLite restores stage and validate the full state bundle in a new empty state directory. PostgreSQL restores require both databases empty. It reapplies runtime grants and leaves the application stopped for validation. It never replaces a nonempty PostgreSQL database or overwrites an existing SQLite state directory. Use a fresh PostgreSQL storage location while retaining the previous cluster for recovery.
 
-```bash
-# Stop the container
-docker stop corescope
-
-# Replace the database
-docker cp ./backup.db corescope:/app/data/meshcore.db
-
-# Restart
-docker start corescope
-```
-
-### Automated backups
-
-```bash
-# cron: daily backup at 3 AM, keep 7 days
-0 3 * * * docker cp corescope:/app/data/meshcore.db /backups/corescope-$(date +\%Y\%m\%d).db && find /backups -name "corescope-*.db" -mtime +7 -delete
-```
+Account backups contain password hashes, addresses, sessions and tokens. Restoration can revive deleted accounts or revoked credentials. Review the [account recovery procedure](user-guide/accounts.md#backups) before reopening the service. See [native backup and cutover boundaries](postgresql-upgrade.md#native-backups-and-restores) for downloaded archives and rollback.
 
 ---
 
@@ -627,16 +507,16 @@ The in-memory packet store grows with retained packets. Configure retention limi
 
 `packetStore.maxMemoryMB` bounds the store **and the caches that belong to it** — the decoded-packet cache and per-packet index entries, not just the stored rows. It is enforced in two places: the startup load stops at the budget, and the store evicts oldest-first when it exceeds it. Leaving it unset means no limit. Actual usage is on `/api/perf` as `packetStore.trackedMB`, next to `maxMB`.
 
-### Database locked errors
+### Database readiness or privilege errors
 
-SQLite doesn't support concurrent writers well. Ensure only one CoreScope instance accesses the database file. If running multiple containers, each needs its own database.
+Confirm the PostgreSQL service is healthy, the owner bootstrap/import finished, and each process uses its intended runtime role. An incomplete import stays closed until resume verifies every requested store. Do not grant owner privileges to runtime processes or manually flip readiness markers. The ingestor owns telemetry writes and retention; multiple active ingestors targeting one store are refused.
 
 ### Container unhealthy
 
 Check logs: `docker compose logs --tail 50`. Common causes:
 - Port 3000 already in use inside the container
-- Database file permissions (must be writable by the container user)
-- Corrupted database — restore from backup
+- Missing/wrong runtime credentials, privilege grants or schema readiness
+- Database failure — investigate logs and restore a verified archive into a fresh target
 
 ### ARM / Raspberry Pi issues
 

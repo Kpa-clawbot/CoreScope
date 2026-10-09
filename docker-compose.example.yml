@@ -1,10 +1,9 @@
-# CoreScope — simple single-container deployment using the pre-built
-# image from GHCR.
+# CoreScope — SQLite by default, using the pre-built
+# application image from GHCR.
 #
 # AUDIENCE: third-party operators running a self-hosted CoreScope on
-# ONE host. Ships with the built-in Mosquitto broker DISABLED by
-# default (DISABLE_MOSQUITTO defaults to `false` here, meaning
-# mosquitto RUNS in-container — the historical shape); flip to `true`
+# ONE host. Ships with the built-in Mosquitto broker enabled
+# (DISABLE_MOSQUITTO defaults to `false`); flip to `true`
 # if you already have an external MQTT broker to point CoreScope at.
 #
 # For the CoreScope maintainers' internal staging deployment (with a
@@ -12,17 +11,22 @@
 # `meshcore-net`), see `docker-compose.staging.yml`.
 #
 # Usage: docker compose -f docker-compose.example.yml up -d
+# Optional PostgreSQL: add -f docker-compose.example.postgres.yml after setup.
 # Docs:  https://github.com/Kpa-clawbot/CoreScope/blob/master/DEPLOY.md
+
+name: corescope
 
 services:
   corescope:
-    image: ghcr.io/kpa-clawbot/corescope:latest
+    image: ${CORESCOPE_IMAGE:-ghcr.io/kpa-clawbot/corescope:latest}
     ports:
       - "${HTTP_PORT:-80}:80"
     volumes:
       - ${DATA_DIR:-./data}:/app/data
     environment:
-      - DISABLE_CADDY=${DISABLE_CADDY:-true}
+      - CORESCOPE_DB_BACKEND=sqlite
+      - CORESCOPE_STATE_DIR=${CORESCOPE_STATE_DIR:-/app/data}
+      - DISABLE_CADDY=${DISABLE_CADDY:-false}
       - DISABLE_MOSQUITTO=${DISABLE_MOSQUITTO:-false}
     restart: unless-stopped
     healthcheck:

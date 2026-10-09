@@ -3,6 +3,7 @@ package users
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -69,56 +70,53 @@ func scanUser(row rowScanner) (*User, error) {
 
 // CreatePending inserts a new pending user. email must already be normalized.
 func (s *Store) CreatePending(email, displayName, passwordHash string) (*User, error) {
-	res, err := s.db.Exec(`INSERT INTO users (email, display_name, password_hash, role, status, created_at)
-		VALUES (?, ?, ?, 'user', 'pending', ?)`, email, displayName, passwordHash, unix(s.now()))
+	var id int64
+	err := s.db.QueryRow(`INSERT INTO users (email, display_name, password_hash, role, status, created_at)
+		VALUES (`+s.p(1)+`, `+s.p(2)+`, `+s.p(3)+`, 'user', 'pending', `+s.p(4)+`) RETURNING id`, email, displayName, passwordHash, unix(s.now())).Scan(&id)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrEmailTaken
 		}
 		return nil, err
 	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return nil, err
-	}
 	return s.GetByID(id)
 }
 
 func (s *Store) GetByID(id int64) (*User, error) {
-	return scanUser(s.db.QueryRow(`SELECT `+userCols+` FROM users WHERE id = ?`, id))
+	return scanUser(s.db.QueryRow(`SELECT `+userCols+` FROM users WHERE id = `+s.p(1), id))
 }
 
 // GetByEmail looks up a normalized address.
 func (s *Store) GetByEmail(email string) (*User, error) {
-	return scanUser(s.db.QueryRow(`SELECT `+userCols+` FROM users WHERE email = ?`, email))
+	return scanUser(s.db.QueryRow(`SELECT `+userCols+` FROM users WHERE email = `+s.p(1), email))
 }
 
 // Activate moves a pending user to active with role. by is the admin who
 // activated manually, nil for link activation. ErrNotFound if not pending.
 func (s *Store) Activate(id int64, role Role, by *int64) error {
-	return expectOne(s.db.Exec(`UPDATE users SET status = 'active', role = ?, activated_at = ?, activated_by = ?
-		WHERE id = ? AND status = 'pending'`, string(role), unix(s.now()), nullInt(by), id))
+	return expectOne(s.db.Exec(`UPDATE users SET status = 'active', role = `+s.p(1)+`, activated_at = `+s.p(2)+`, activated_by = `+s.p(3)+`
+		WHERE id = `+s.p(4)+` AND status = 'pending'`, string(role), unix(s.now()), nullInt(by), id))
 }
 
 func (s *Store) SetStatus(id int64, st Status) error {
-	return expectOne(s.db.Exec(`UPDATE users SET status = ? WHERE id = ?`, string(st), id))
+	return expectOne(s.db.Exec(`UPDATE users SET status = `+s.p(1)+` WHERE id = `+s.p(2), string(st), id))
 }
 
 func (s *Store) SetRole(id int64, r Role) error {
-	return expectOne(s.db.Exec(`UPDATE users SET role = ? WHERE id = ?`, string(r), id))
+	return expectOne(s.db.Exec(`UPDATE users SET role = `+s.p(1)+` WHERE id = `+s.p(2), string(r), id))
 }
 
 func (s *Store) SetPassword(id int64, hash string) error {
-	return expectOne(s.db.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, hash, id))
+	return expectOne(s.db.Exec(`UPDATE users SET password_hash = `+s.p(1)+` WHERE id = `+s.p(2), hash, id))
 }
 
 func (s *Store) SetDisplayName(id int64, name string) error {
-	return expectOne(s.db.Exec(`UPDATE users SET display_name = ? WHERE id = ?`, name, id))
+	return expectOne(s.db.Exec(`UPDATE users SET display_name = `+s.p(1)+` WHERE id = `+s.p(2), name, id))
 }
 
 // SetEmail changes the address (normalized) and clears the bounce flag.
 func (s *Store) SetEmail(id int64, email string) error {
-	err := expectOne(s.db.Exec(`UPDATE users SET email = ?, email_bouncing = 0 WHERE id = ?`, email, id))
+	err := expectOne(s.db.Exec(`UPDATE users SET email = `+s.p(1)+`, email_bouncing = 0 WHERE id = `+s.p(2), email, id))
 	if isUniqueViolation(err) {
 		return ErrEmailTaken
 	}
@@ -130,11 +128,11 @@ func (s *Store) SetEmailBouncing(id int64, v bool) error {
 	if v {
 		b = 1
 	}
-	return expectOne(s.db.Exec(`UPDATE users SET email_bouncing = ? WHERE id = ?`, b, id))
+	return expectOne(s.db.Exec(`UPDATE users SET email_bouncing = `+s.p(1)+` WHERE id = `+s.p(2), b, id))
 }
 
 func (s *Store) TouchLogin(id int64) error {
-	return expectOne(s.db.Exec(`UPDATE users SET last_login_at = ? WHERE id = ?`, unix(s.now()), id))
+	return expectOne(s.db.Exec(`UPDATE users SET last_login_at = `+s.p(1)+` WHERE id = `+s.p(2), unix(s.now()), id))
 }
 
 // Delete removes a user; sessions and tokens cascade. Mail-log rows survive
@@ -146,16 +144,16 @@ func (s *Store) Delete(id int64) error {
 	}
 	defer tx.Rollback()
 	var exists int
-	if err := tx.QueryRow(`SELECT 1 FROM users WHERE id = ?`, id).Scan(&exists); err != nil {
+	if err := tx.QueryRow(`SELECT 1 FROM users WHERE id = `+s.p(1)+s.forUpdate(), id).Scan(&exists); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
 		return err
 	}
-	if err := hashMailLogTx(tx, id); err != nil {
+	if err := s.hashMailLogTx(tx, id); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM users WHERE id = ?`, id); err != nil {
+	if _, err := tx.Exec(`DELETE FROM users WHERE id = `+s.p(1), id); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -169,17 +167,16 @@ type ListFilter struct {
 	Bouncing bool   // only addresses whose mail bounces
 }
 
-// List returns at most 1000 users, newest first. SQLite lower()/LIKE fold
-// ASCII only, so a non-ASCII search is case-sensitive.
+// List returns at most 1000 users, newest first, with case-insensitive search.
 func (s *Store) List(f ListFilter) ([]User, error) {
 	q := `SELECT ` + userCols + ` FROM users WHERE 1=1`
 	var args []any
 	if f.Status != "" {
-		q += ` AND status = ?`
+		q += fmt.Sprintf(` AND status = %s`, s.p(len(args)+1))
 		args = append(args, string(f.Status))
 	}
 	if f.Role != "" {
-		q += ` AND role = ?`
+		q += fmt.Sprintf(` AND role = %s`, s.p(len(args)+1))
 		args = append(args, string(f.Role))
 	}
 	if f.Bouncing {
@@ -187,7 +184,7 @@ func (s *Store) List(f ListFilter) ([]User, error) {
 	}
 	if t := strings.TrimSpace(f.Query); t != "" {
 		like := "%" + escapeLike(strings.ToLower(t)) + "%"
-		q += ` AND (email LIKE ? ESCAPE '\' OR lower(display_name) LIKE ? ESCAPE '\')`
+		q += fmt.Sprintf(` AND (email LIKE %s ESCAPE '\' OR lower(display_name) LIKE %s ESCAPE '\')`, s.p(len(args)+1), s.p(len(args)+2))
 		args = append(args, like, like)
 	}
 	q += ` ORDER BY created_at DESC, id DESC LIMIT 1000`
@@ -229,7 +226,7 @@ func (s *Store) UsersByID(ids []int64) (map[int64]User, error) {
 	for i, id := range ids {
 		args[i] = id
 	}
-	ph := placeholders(len(ids))
+	ph := s.placeholders(len(ids))
 	rows, err := s.db.Query(`SELECT `+userCols+` FROM users WHERE id IN (`+ph+`)`, args...)
 	if err != nil {
 		return nil, err
@@ -254,9 +251,9 @@ func (s *Store) PruneStalePending(maxAge time.Duration) (int64, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.Query(`SELECT id FROM users WHERE status = 'pending' AND created_at < ?
+	rows, err := tx.Query(`SELECT id FROM users WHERE status = 'pending' AND created_at < `+s.p(1)+`
 		AND NOT EXISTS (SELECT 1 FROM tokens t WHERE t.user_id = users.id AND t.purpose = 'activate'
-			AND t.used_at IS NULL AND t.expires_at > ?)`, now-int64(maxAge/time.Second), now)
+			AND t.used_at IS NULL AND t.expires_at > `+s.p(2)+`) ORDER BY id`+s.forUpdate(), now-int64(maxAge/time.Second), now)
 	if err != nil {
 		return 0, err
 	}
@@ -273,23 +270,36 @@ func (s *Store) PruneStalePending(maxAge time.Duration) (int64, error) {
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
+	var removed int64
 	for _, id := range ids {
-		if err := hashMailLogTx(tx, id); err != nil {
+		// The locking SELECT may have waited for a concurrent IssueToken.
+		// Recheck with a fresh READ COMMITTED snapshot after owning the user
+		// lock; its original NOT EXISTS snapshot cannot see that new token.
+		var eligible bool
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM users WHERE id=`+s.p(1)+` AND status='pending' AND created_at<`+s.p(2)+`
+			AND NOT EXISTS(SELECT 1 FROM tokens WHERE user_id=`+s.p(1)+` AND purpose='activate' AND used_at IS NULL AND expires_at>`+s.p(3)+`))`, id, now-int64(maxAge/time.Second), now).Scan(&eligible); err != nil {
 			return 0, err
 		}
-		if _, err := tx.Exec(`DELETE FROM users WHERE id = ?`, id); err != nil {
+		if !eligible {
+			continue
+		}
+		if err := s.hashMailLogTx(tx, id); err != nil {
 			return 0, err
 		}
+		if _, err := tx.Exec(`DELETE FROM users WHERE id = `+s.p(1), id); err != nil {
+			return 0, err
+		}
+		removed++
 	}
-	return int64(len(ids)), tx.Commit()
+	return removed, tx.Commit()
 }
 
 // hashMailLogTx replaces the plaintext address of every mail_log row of the
 // user with HashedEmail of that row's own address (rows may predate an email
 // change). Rows already hashed are skipped. The cursor is closed before any
 // UPDATE because the store uses a single connection.
-func hashMailLogTx(tx *sql.Tx, userID int64) error {
-	rows, err := tx.Query(`SELECT id, to_email FROM mail_log WHERE user_id = ? AND to_email NOT LIKE 'sha256:%'`, userID)
+func (s *Store) hashMailLogTx(tx *sql.Tx, userID int64) error {
+	rows, err := tx.Query(`SELECT id, to_email FROM mail_log WHERE user_id = `+s.p(1)+` AND to_email NOT LIKE 'sha256:%'`, userID)
 	if err != nil {
 		return err
 	}
@@ -311,7 +321,7 @@ func hashMailLogTx(tx *sql.Tx, userID int64) error {
 		return err
 	}
 	for _, r := range list {
-		if _, err := tx.Exec(`UPDATE mail_log SET to_email = ? WHERE id = ?`, HashedEmail(r.email), r.id); err != nil {
+		if _, err := tx.Exec(`UPDATE mail_log SET to_email = `+s.p(1)+` WHERE id = `+s.p(2), HashedEmail(r.email), r.id); err != nil {
 			return err
 		}
 	}

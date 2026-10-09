@@ -1,9 +1,7 @@
 package users
 
 import (
-	"database/sql"
 	"errors"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -42,32 +40,11 @@ func statesByKey(t *testing.T, st *Store) map[NotifyKey]NotifyState {
 	return out
 }
 
-// A users.db written by a v4 binary gains the notification tables and keeps its rows.
+// A native account schema at v4 binary gains the notification tables and keeps its rows.
 func TestMigrateV4DatabaseToV5(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "users.db")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stmts := []string{`CREATE TABLE schema_version (version INTEGER NOT NULL)`, `INSERT INTO schema_version (version) VALUES (4)`}
-	for _, m := range migrations[:4] {
-		stmts = append(stmts, m...)
-	}
-	stmts = append(stmts, `INSERT INTO users (email, display_name, password_hash, created_at) VALUES ('old@example.org', 'Old', 'x', 1)`)
-	for _, s := range stmts {
-		if _, err := db.Exec(s); err != nil {
-			t.Fatalf("build v4 db: %v", err)
-		}
-	}
-	db.Close()
-
-	st, err := Open(path)
-	if err != nil {
-		t.Fatalf("Open v4 db: %v", err)
-	}
-	defer st.Close()
-	if v, err := st.SchemaVersion(); err != nil || v != len(migrations) {
-		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, len(migrations))
+	st := migratedTestStore(t, 4, `INSERT INTO users (email,display_name,password_hash,created_at) VALUES ('old@example.org','Old','x',1)`)
+	if v, err := st.SchemaVersion(); err != nil || v != schemaVersion(t) {
+		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, schemaVersion(t))
 	}
 	if len(migrations) < 5 {
 		t.Fatal("migration v5 missing")

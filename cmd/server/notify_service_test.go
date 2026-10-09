@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -91,7 +90,7 @@ type notifyFixture struct {
 // admin@example.org is a config admin.
 func newNotifyFixture(t *testing.T, ns notifySettings) *notifyFixture {
 	t.Helper()
-	a, fake := newTestAuthService(t, "admin@example.org")
+	a, fake, ownerURL := newTestAuthServiceWithURL(t, postgresTestDSN(t), "admin@example.org")
 	a.set.notify = ns
 	clk := &notifyClock{t: time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)}
 	a.st.SetClock(clk.Now)
@@ -103,7 +102,7 @@ func newNotifyFixture(t *testing.T, ns notifySettings) *notifyFixture {
 	srv := &Server{cfg: &Config{APIKey: testAPIKey}, perfStats: NewPerfStats(), auth: a}
 	r := mux.NewRouter()
 	srv.registerAuthRoutes(r)
-	return &notifyFixture{authFixture: &authFixture{srv: srv, router: r, fake: fake, st: a.st}, n: a.notify, src: src, clk: clk}
+	return &notifyFixture{authFixture: &authFixture{srv: srv, router: r, fake: fake, st: a.st, ownerURL: ownerURL}, n: a.notify, src: src, clk: clk}
 }
 
 // watcher registers and activates a user with default prefs watching pubkeys.
@@ -312,13 +311,13 @@ func TestNotifierStateWriteFailureSendsNothing(t *testing.T) {
 	f.watcher(t, "pat@example.org", "Pat", evPkA)
 	f.setNode(evPkA, "Alpha", "companion", time.Hour, nil)
 	f.tick()
-	f.execDB(t, `CREATE TRIGGER notify_state_fail BEFORE UPDATE ON notification_state BEGIN SELECT RAISE(ABORT, 'boom'); END`)
+	f.execDB(t, testNativeSQL(`CREATE TRIGGER notify_state_fail BEFORE UPDATE ON notification_state BEGIN SELECT RAISE(ABORT,'boom'); END`, `CREATE FUNCTION notify_state_fail() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'boom'; END $$; CREATE TRIGGER notify_state_fail BEFORE UPDATE ON notification_state FOR EACH ROW EXECUTE FUNCTION notify_state_fail()`))
 	f.clk.Advance(25 * time.Hour)
 	f.tick()
 	if m := f.notifyMails(); len(m) != 0 {
 		t.Fatalf("mailed although the states were not written: %+v", m)
 	}
-	f.execDB(t, `DROP TRIGGER notify_state_fail`)
+	f.execDB(t, testNativeSQL(`DROP TRIGGER notify_state_fail`, `DROP TRIGGER notify_state_fail ON notification_state`))
 	f.tick()
 	if m := f.notifyMails(); len(m) != 1 {
 		t.Fatalf("mails after the write works again = %d; want 1", len(m))
@@ -499,13 +498,16 @@ func TestNotifySkipReason(t *testing.T) {
 
 func TestInitUserManagementStartsTheNotifierOnlyWhenEnabled(t *testing.T) {
 	for _, on := range []bool{false, true} {
-		um := &UserManagementConfig{Enabled: true, PublicBaseURL: testBase,
-			Mail: UserMailConfig{BrevoAPIKey: "k", FromEmail: "noreply@example.org"}}
+		a, _ := newTestAuthService(t)
+		um := validUM()
+		um.DatabaseURL = a.set.databaseURL
+		backupOff := false
+		um.Backup = &UsersBackupConfig{Enabled: &backupOff}
 		if on {
 			um.Notifications = &NotificationsConfig{Enabled: true}
 		}
 		srv := &Server{cfg: &Config{UserManagement: um}}
-		if err := srv.initUserManagement(filepath.Join(t.TempDir(), "meshcore.db")); err != nil {
+		if err := srv.initUserManagement(testDatabaseDSN(t)); err != nil {
 			t.Fatal(err)
 		}
 		if (srv.auth.notify != nil) != on {

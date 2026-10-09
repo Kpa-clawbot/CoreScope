@@ -4,6 +4,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gorilla/mux"
 )
@@ -13,6 +14,9 @@ import (
 // ingest appends to under the write lock. Run with -race.
 func TestNodePathsDoesNotReadObservationsUnlocked(t *testing.T) {
 	store := newResolvedPathStore(t)
+	if !store.WaitIndexesReady(5 * time.Second) {
+		t.Fatal("background indexes not ready within 5s")
+	}
 	srv := NewServer(store.db, &Config{Port: 3000}, NewHub())
 	srv.store = store
 	router := mux.NewRouter()
@@ -26,6 +30,10 @@ func TestNodePathsDoesNotReadObservationsUnlocked(t *testing.T) {
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
+	defer func() {
+		close(stop)
+		wg.Wait()
+	}()
 	go func() { // stands in for ingest adding an observation to the tx
 		defer wg.Done()
 		for i := 0; ; i++ {
@@ -50,6 +58,4 @@ func TestNodePathsDoesNotReadObservationsUnlocked(t *testing.T) {
 			t.Fatalf("paths: status %d: %s", w.Code, w.Body.String())
 		}
 	}
-	close(stop)
-	wg.Wait()
 }

@@ -67,7 +67,7 @@ func TestGetChannels_DB_NoUnknownBucket_1373(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		_, err := db.conn.Exec(`INSERT INTO transmissions
 			(raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
-			VALUES (?, ?, '2026-05-25T12:00:00Z', 1, 5,
+			VALUES ($1, $2, '2026-05-25T12:00:00Z', 1, 5,
 			'{"type":"CHAN","channel":"","text":"","sender":""}', NULL)`,
 			"AA", sqlHashFor(i))
 		if err != nil {
@@ -79,7 +79,7 @@ func TestGetChannels_DB_NoUnknownBucket_1373(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		_, err := db.conn.Exec(`INSERT INTO transmissions
 			(raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
-			VALUES (?, ?, '2026-05-25T12:00:00Z', 1, 5,
+			VALUES ($1, $2, '2026-05-25T12:00:00Z', 1, 5,
 			'{"type":"CHAN","channel":"#real","text":"Alice: hi","sender":"Alice"}', '#real')`,
 			"BB", sqlHashFor(100+i))
 		if err != nil {

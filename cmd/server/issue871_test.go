@@ -19,7 +19,7 @@ func TestIssue871_NoNullHashOrTimestamp(t *testing.T) {
 	// Insert bad legacy data: packet with empty hash
 	now := time.Now().UTC().Add(-30 * time.Minute).Format(time.RFC3339)
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('DEAD', '', ?, 1, 4, '{}')`, now)
+		VALUES ('DEAD', '', $1, 1, 4, '{}')`, now)
 	// Insert bad legacy data: packet with NULL first_seen (timestamp)
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
 		VALUES ('BEEF', 'aa11bb22cc33dd44', NULL, 1, 4, '{}')`)

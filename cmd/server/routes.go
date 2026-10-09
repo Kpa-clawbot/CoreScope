@@ -273,7 +273,9 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/scope-audit", s.handleScopeAudit).Methods("GET") // #1975
 	r.HandleFunc("/api/perf", s.handlePerf).Methods("GET")
 	r.HandleFunc("/api/perf/io", s.handlePerfIO).Methods("GET")
-	r.HandleFunc("/api/perf/sqlite", s.handlePerfSqlite).Methods("GET")
+	r.HandleFunc("/api/perf/database", s.handlePerfPostgres).Methods("GET")
+	r.HandleFunc("/api/perf/postgres", s.handlePerfPostgres).Methods("GET")
+	r.HandleFunc("/api/perf/sqlite", s.handlePerfPostgres).Methods("GET") // legacy diagnostic route alias
 	r.HandleFunc("/api/perf/write-sources", s.handlePerfWriteSources).Methods("GET")
 	r.HandleFunc("/api/mqtt/status", s.handleMqttStatus).Methods("GET")
 	r.Handle("/api/perf/reset", s.requireAdmin(http.HandlerFunc(s.handlePerfReset))).Methods("POST")
@@ -404,7 +406,7 @@ func (s *Server) perfMiddleware(next http.Handler) http.Handler {
 		key := r.URL.Path
 		if route := mux.CurrentRoute(r); route != nil {
 			if tmpl, err := route.GetPathTemplate(); err == nil {
-				key = muxBraceParam.ReplaceAllString(tmpl, ":$1")
+				key = muxBraceParam.ReplaceAllString(tmpl, ":"+s.db.parameter(1))
 			}
 		}
 		if key == r.URL.Path {
@@ -1029,22 +1031,28 @@ func (s *Server) handlePerf(w http.ResponseWriter, r *http.Request) {
 		breakdownNote = memBreakdownNote
 	}
 
-	// SQLite stats
-	var sqliteStats *SqliteStats
+	// PostgreSQL diagnostics reuse the bounded database sample.
+	var postgresStats, sqliteStats, databaseStats *PostgresStats
 	if s.db != nil {
 		ss := s.db.GetDBSizeStatsTyped()
-		sqliteStats = &ss
+		databaseStats = &ss
+		if ss.Engine == "sqlite" {
+			sqliteStats = &ss
+		} else {
+			postgresStats = &ss
+		}
 	}
 
 	writeJSON(w, PerfResponse{
-		Uptime:              uptimeSec,
-		TotalRequests:       totalRequests,
-		AvgMs:               safeAvg(totalMs, float64(totalRequests)),
-		Endpoints:           summary,
-		SlowQueries:         slowQueries,
-		Cache:               perfCS,
-		PacketStore:         pktStoreStats,
-		Sqlite:              sqliteStats,
+		Uptime:        uptimeSec,
+		TotalRequests: totalRequests,
+		AvgMs:         safeAvg(totalMs, float64(totalRequests)),
+		Endpoints:     summary,
+		SlowQueries:   slowQueries,
+		Cache:         perfCS,
+		PacketStore:   pktStoreStats,
+		Postgres:      postgresStats,
+		Sqlite:        sqliteStats, Database: databaseStats,
 		MemoryBreakdown:     memBreakdown,
 		MemoryBreakdownNote: breakdownNote,
 		GoRuntime: func() *GoRuntimeStats {
@@ -1092,7 +1100,7 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 				cleaned = append(cleaned, pk)
 			}
 		}
-		// Each entry costs one SQLite lookup (resolveNodePubkey) while the
+		// Each entry costs one database lookup (resolveNodePubkey) while the
 		// packet store's read lock is held. A 1 MB URL fits ~15k pubkeys,
 		// which is seconds of work per request, so cap the list.
 		if len(cleaned) > maxMultiNodePubkeys {
@@ -1282,7 +1290,7 @@ func (s *Server) handlePacketDetail(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// DB fallback: in-memory PacketStore prunes old entries, but the SQLite
+	// DB fallback: in-memory PacketStore prunes old entries, but the database
 	// DB retains them and is the source for /api/nodes recentAdverts. Without
 	// this fallback, links from node-detail pages 404 once the packet ages out.
 	if packet == nil && s.db != nil {
@@ -3677,7 +3685,7 @@ func (s *Server) handleScopeStats(w http.ResponseWriter, r *http.Request) {
 // geo_filter. Nodes with no GPS fix are always kept. Requires geo_filter to be
 // configured.
 //
-// Since #1283/#1289 the server opens SQLite read-only, so the actual DELETE is
+// Since #1283/#1289 the server opens telemetry read-only, so the actual DELETE is
 // performed by the ingestor. The server writes a request marker file (see
 // internal/prunequeue); the ingestor's maintenance loop consumes it and writes a
 // result marker. The confirm response is 202 Accepted with a request id;
@@ -3761,13 +3769,13 @@ func (s *Server) handlePruneGeoFilter(w http.ResponseWriter, r *http.Request) {
 		Reason:      "geo-prune",
 		Pubkeys:     pubkeys,
 	}
-	if err := prunequeue.WriteRequest(s.db.path, req); err != nil {
+	if err := prunequeue.WriteRequest(s.db.statePath(), req); err != nil {
 		log.Printf("[geo-prune] failed to enqueue request %s: %v", id, err)
 		writeError(w, http.StatusInternalServerError, "failed to enqueue prune request")
 		return
 	}
 	log.Printf("[geo-prune] enqueued request %s for %d node(s) (queue dir=%s)",
-		id, len(pubkeys), prunequeue.QueueDir(s.db.path))
+		id, len(pubkeys), prunequeue.QueueDir(s.db.statePath()))
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
@@ -3793,7 +3801,7 @@ func (s *Server) handlePruneGeoFilterStatus(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	res, err := prunequeue.ReadResult(s.db.path, id)
+	res, err := prunequeue.ReadResult(s.db.statePath(), id)
 	if err != nil {
 		if strings.Contains(err.Error(), "invalid prune request id") {
 			writeError(w, http.StatusBadRequest, "invalid id")
@@ -3818,7 +3826,7 @@ func (s *Server) handlePruneGeoFilterStatus(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	pending, err := prunequeue.RequestExists(s.db.path, id)
+	pending, err := prunequeue.RequestExists(s.db.statePath(), id)
 	if err != nil {
 		if strings.Contains(err.Error(), "invalid prune request id") {
 			writeError(w, http.StatusBadRequest, "invalid id")

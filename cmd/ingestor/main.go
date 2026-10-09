@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/meshcore-analyzer/dbconfig"
 )
 
 func main() {
@@ -43,6 +45,10 @@ func main() {
 	}
 
 	configPath := flag.String("config", "config.json", "path to config file")
+	databaseURL := flag.String("database-url", "", "PostgreSQL telemetry writer URL")
+	stateDir := flag.String("state-dir", "", "local queue and statistics directory")
+	legacyDB := flag.String("db", "", "SQLite telemetry path (bootstrap override)")
+	backend := flag.String("backend", "", "Storage backend: sqlite or postgres (bootstrap choice)")
 	flag.Parse()
 
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
@@ -74,12 +80,32 @@ func main() {
 
 	sources := cfg.ResolvedSources()
 
-	store, err := OpenStoreWithInterval(cfg.DBPath, cfg.MetricsSampleInterval())
+	base, err := os.Getwd()
+	if err != nil {
+		log.Fatal("resolve working directory")
+	}
+	rawStorage, err := cfg.storageInputs(base, storageFlags{Backend: dbconfig.Backend(*backend), DBPath: *legacyDB, DatabaseURL: *databaseURL, StateDir: *stateDir}, os.Getenv)
+	if err != nil {
+		log.Fatalf("storage: %v", err)
+	}
+	storage, selectionLease, err := resolveRuntimeStorage(rawStorage)
+	if errors.Is(err, dbconfig.ErrSelectionMissing) {
+		if err = adoptLegacyStorage(rawStorage); err == nil {
+			storage, selectionLease, err = resolveRuntimeStorage(rawStorage)
+		}
+	}
+	if err != nil {
+		log.Fatalf("storage: %v", err)
+	}
+	defer selectionLease.Close()
+	cfg.StateDir = storage.StateDir
+	store, err := openStoreStorage(storage, cfg.DB, cfg.MetricsSampleInterval())
+
 	if err != nil {
 		log.Fatalf("db: %v", err)
 	}
 	defer store.Close()
-	log.Printf("SQLite opened: %s", cfg.DBPath)
+	log.Printf("%s telemetry writer connected", storage.Backend)
 
 	// Async backfill: path_json from raw_hex (#888) — must not block MQTT startup
 	store.BackfillPathJSONAsync()
@@ -103,9 +129,9 @@ func main() {
 		log.Printf("No channel keys loaded — GRP_TXT packets will not be decrypted")
 	}
 
-	keySet := newChannelKeySet(channelKeys, cfg.UsersDBPath(), cfg.ApprovedChannelsMax())
+	keySet := newChannelKeySetStorage(channelKeys, storage, cfg.ApprovedChannelsMax())
 	if cfg.ApprovedChannelsEnabled() {
-		logApprovedChannelsSource(cfg.UsersDBPath())
+		log.Printf("[channels] approved channel storage: %s", storage.Backend)
 		keySet.refresh()
 		go func() {
 			t := time.NewTicker(approvedChannelsRefresh)
@@ -129,7 +155,7 @@ func main() {
 
 	// Subscribe-early + buffer (#1608): the MQTT subscription is brought up
 	// before startup maintenance so no packets are missed while the single
-	// SQLite writer is blocked (e.g. a large CREATE INDEX migration). Received
+	// serialized writer is busy with a bounded data backfill. Received
 	// messages are buffered here and drained once Ready() is called below.
 	ingestBuffer := NewIngestBuffer(cfg.IngestBufferSizeOrDefault())
 	ingestBuffer.Start()
@@ -351,8 +377,7 @@ func main() {
 	store.RunIncrementalVacuum(vacuumPages)
 
 	// Gate open: the synchronous startup writes above cannot return until the
-	// single SQLite writer is free, which means any blocking async migration
-	// (e.g. the CREATE INDEX) has finished. WaitForAsyncMigrations() makes that
+	// single serialized writer is free. WaitForAsyncMigrations() makes that
 	// explicit. Now drain everything the subscription buffered during startup.
 	store.WaitForAsyncMigrations()
 	ingestBuffer.Ready()
@@ -385,10 +410,12 @@ func main() {
 		store.RemoveStaleObservers(observerDays)
 		store.PurgeStaleObservers(observerPurgeDays)
 		store.RunIncrementalVacuum(vacuumPages)
+
 		for range observerRetentionTicker.C {
 			store.RemoveStaleObservers(observerDays)
 			store.PurgeStaleObservers(observerPurgeDays)
 			store.RunIncrementalVacuum(vacuumPages)
+
 		}
 	}()
 
@@ -487,55 +514,59 @@ func main() {
 		log.Printf("[regions] auto-derived region keys enabled: refreshing every %v, cap %d", interval, cfg.AutoRegionKeysMaxDerived())
 	}
 
-	// Hourly WAL checkpoint to prevent unbounded WAL growth.
-	// TRUNCATE resets the WAL file to zero bytes when all frames are flushed;
-	// if the server's read connection holds frames, remaining pages stay in the
-	// WAL until the next tick. Staggered 30s after startup to avoid competing
-	// with the initial burst of ingest writes.
-	walCheckpointTicker := time.NewTicker(1 * time.Hour)
-	go func() {
-		time.Sleep(30 * time.Second)
-		store.Checkpoint()
-		for range walCheckpointTicker.C {
+	// PostgreSQL maintenance remains owned by its database service.
+	if storage.Backend == dbconfig.SQLite {
+		// Hourly WAL checkpoint to prevent unbounded WAL growth.
+		// TRUNCATE resets the WAL file to zero bytes when all frames are flushed;
+		// if the server's read connection holds frames, remaining pages stay in the
+		// WAL until the next tick. Staggered 30s after startup to avoid competing
+		// with the initial burst of ingest writes.
+		walCheckpointTicker := time.NewTicker(1 * time.Hour)
+		go func() {
+			time.Sleep(30 * time.Second)
 			store.Checkpoint()
-		}
-	}()
-	log.Printf("[db] WAL checkpoint scheduled every 1h")
+			for range walCheckpointTicker.C {
+				store.Checkpoint()
+			}
+		}()
+		log.Printf("[db] WAL checkpoint scheduled every 1h")
 
-	// Daily planner statistics refresh (#2058), in two parts.
-	//
-	// The routine refresh is staggered 2 minutes past startup for the same reason
-	// as the checkpoint above: it takes the write lock, and by then the initial
-	// ingest burst has passed, so it also sees the rows that burst added.
-	//
-	// The build in front of it deliberately does compete with that burst, because
-	// a database with no statistics at all has nothing better to offer the queries
-	// arriving in those 2 minutes. It only runs once per database; see
-	// Store.EnsurePlannerStats, which also carries what that costs.
-	//
-	// Bounded by analysis_limit either way, so neither grows with the file the way
-	// an unbounded ANALYZE does: 2.0s against 242.9s on a 9.4 GB database, both
-	// timed warm. Cold, on a first start, it is 3m43.9s.
-	{
-		analysisLimit := cfg.AnalysisLimit()
-		if analysisLimit < 0 {
-			log.Printf("[analyze] planner statistics refresh disabled (db.analysisLimit=%d)", analysisLimit)
-		} else {
-			analyzeTicker := time.NewTicker(24 * time.Hour)
-			go func() {
-				// Before the stagger, and only on a database that has never been
-				// analyzed: the stagger is a 2 minute window in which the first
-				// query would otherwise run on no statistics at all. A restart
-				// finds sqlite_stat1 already in the file and skips this.
-				store.EnsurePlannerStats(analysisLimit)
-				time.Sleep(2 * time.Minute)
-				store.RefreshPlannerStats(analysisLimit)
-				for range analyzeTicker.C {
+		// Daily planner statistics refresh (#2058), in two parts.
+		//
+		// The routine refresh is staggered 2 minutes past startup for the same reason
+		// as the checkpoint above: it takes the write lock, and by then the initial
+		// ingest burst has passed, so it also sees the rows that burst added.
+		//
+		// The build in front of it deliberately does compete with that burst, because
+		// a database with no statistics at all has nothing better to offer the queries
+		// arriving in those 2 minutes. It only runs once per database; see
+		// Store.EnsurePlannerStats, which also carries what that costs.
+		//
+		// Bounded by analysis_limit either way, so neither grows with the file the way
+		// an unbounded ANALYZE does: 2.0s against 242.9s on a 9.4 GB database, both
+		// timed warm. Cold, on a first start, it is 3m43.9s.
+		{
+			analysisLimit := cfg.AnalysisLimit()
+			if analysisLimit < 0 {
+				log.Printf("[analyze] planner statistics refresh disabled (db.analysisLimit=%d)", analysisLimit)
+			} else {
+				analyzeTicker := time.NewTicker(24 * time.Hour)
+				go func() {
+					// Before the stagger, and only on a database that has never been
+					// analyzed: the stagger is a 2 minute window in which the first
+					// query would otherwise run on no statistics at all. A restart
+					// finds sqlite_stat1 already in the file and skips this.
+					store.EnsurePlannerStats(analysisLimit)
+					time.Sleep(2 * time.Minute)
 					store.RefreshPlannerStats(analysisLimit)
-				}
-			}()
-			log.Printf("[analyze] planner statistics refresh scheduled every 24h (analysis_limit=%d)", analysisLimit)
+					for range analyzeTicker.C {
+						store.RefreshPlannerStats(analysisLimit)
+					}
+				}()
+				log.Printf("[analyze] planner statistics refresh scheduled every 24h (analysis_limit=%d)", analysisLimit)
+			}
 		}
+
 	}
 
 	// Daily neighbor_edges retention (#1287 — moved from cmd/server).
@@ -645,7 +676,6 @@ func main() {
 	}
 	statsTicker.Stop()
 	pruneQueueTicker.Stop()
-	walCheckpointTicker.Stop()
 	stopWatchdog()
 	// A deploy is a SIGTERM, which is exactly the case that used to lose
 	// the tally: save before the process goes away rather than leaving up

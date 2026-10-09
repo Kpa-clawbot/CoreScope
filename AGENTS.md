@@ -13,10 +13,12 @@ Go backend + static frontend. No build step. No framework. No bundler.
 cmd/server/        — Go API server (REST + WebSocket broadcast + static file serving)
   main.go          — Entry point, flags, SPA handler
   routes.go        — All /api/* endpoints
-  store.go         — In-memory packet store + analytics + SQLite queries
+  store.go         — In-memory packet store + analytics + PostgreSQL queries
   config.go        — Configuration loading
   decoder.go       — MeshCore packet decoder
-cmd/ingestor/      — Go MQTT ingestor (separate binary, writes to shared SQLite DB)
+cmd/ingestor/      — Go MQTT ingestor (separate binary, writes telemetry to PostgreSQL)
+cmd/migrate/       — Offline schema bootstrap and verified SQLite upgrade importer
+internal/pgutil/   — PostgreSQL connections, role checks, native backup helpers
 public/            — Frontend (vanilla JS, one file per page) — ACTIVE, NOT DEPRECATED
   app.js           — SPA router, shared globals, theme loading
   roles.js         — ROLE_COLORS, TYPE_COLORS, health thresholds, shared helpers
@@ -34,33 +36,34 @@ public/            — Frontend (vanilla JS, one file per page) — ACTIVE, NOT 
   live.css         — Live page styles
   home.css         — Home page styles
   index.html       — SPA shell, script/style tags with __BUST__ placeholder (auto-replaced at server startup)
-test-fixtures/     — Real data SQLite fixture from staging (used for E2E tests)
+test-fixtures/     — Legacy SQLite fixture; prepare and import into PostgreSQL for E2E
 scripts/           — Tooling (coverage collector, fixture capture, frontend instrumentation)
 ```
 
 ### Data Flow
-1. MQTT brokers → Go ingestor (`cmd/ingestor/`) ingests packets → decodes → writes to SQLite
-2. Go server (`cmd/server/`) polls SQLite for new packets, broadcasts via WebSocket
+1. MQTT brokers → Go ingestor (`cmd/ingestor/`) ingests packets → decodes → writes to PostgreSQL
+2. Go server (`cmd/server/`) polls PostgreSQL for new packets, broadcasts via WebSocket
 3. Frontend fetches via REST API (`/api/*`), filters/sorts client-side
 
 ### Read/Write Separation Invariant (#1283)
-- **All DB writes live in `cmd/ingestor/`.** INSERT / UPDATE / DELETE / VACUUM /
-  schema migrations / retention all run in the ingestor process.
-- **`cmd/server/` never writes measurement data.** It opens the analyzer DB with
-  `mode=ro` and must not acquire a write lock on it. Adding a write-side helper
-  (e.g. a `cachedRW`-style RW connection) regresses this invariant and races the
-  ingestor → SQLITE_BUSY.
-- **Single exception: `users.db` (optional user management).** When
-  `userManagement.enabled`, the server owns a *separate* SQLite file through
-  `internal/users` only. `users.Open` refuses the analyzer DB path, and
-  `TestUsersOpenIsTheOnlyServerWritePath` pins the one call site. Account data
-  never goes into the analyzer DB, and measurement writes never go through
-  `internal/users`.
-- **The ingestor reads `users.db`, never writes it.** With
-  `userManagement.channelProposals.enabled` the ingestor opens `users.db`
-  read-only (`mode=ro`, raw SQL, no `internal/users` import) once a minute
-  for the approved hashtag channel names. `TestChannelKeySetIsReadOnly` pins
-  the read-only open.
+- **Runtime telemetry writes live in `cmd/ingestor/`.** INSERT / UPDATE /
+  DELETE and retention use a restricted writer role. PostgreSQL handles
+  autovacuum; offline `cmd/migrate/` owns schema installation and upgrades.
+- **`cmd/server/` never writes measurement data.** Its telemetry connection
+  uses a SELECT-only role and read-only transactions. Do not add a write-side
+  connection or grant the reader schema/owner privileges.
+- **Single exception: the separate accounts database (optional user
+  management).** When `userManagement.enabled`, the server writes accounts
+  through `internal/users` only. `users.Open` rejects the actual telemetry
+  database, including URL aliases, and `TestUsersOpenIsTheOnlyServerWritePath`
+  pins the one call site. Account and measurement databases stay separate.
+- **The ingestor reads approved channel names, never account rows.** With
+  `userManagement.channelProposals.enabled`, its dedicated role may SELECT
+  only `approved_channels` and the readiness marker. It uses a read-only
+  snapshot and retains the last good keys if readiness or refresh fails.
+- **Runtime roles never run DDL or mark an import ready.** Bootstrap/import
+  uses separate owner credentials. Tests must cover denied writes and
+  cross-database access with the real runtime grants.
 - Enforcement: `cmd/server/readonly_invariant_test.go` reflect-asserts that
   `PruneOldPackets`, `PruneOldMetrics`, and `RemoveStaleObservers` are NOT
   methods on the server's `*DB`. If you need a new write, add it to
@@ -102,9 +105,21 @@ Every change must consider performance impact BEFORE implementation. This codeba
 No proof = no merge.
 
 ### 1. No commit without tests
-Every change that touches logic MUST have tests. For Go backend: `cd cmd/server && go test ./...` and `cd cmd/ingestor && go test ./...`, or `make test` for all 14 modules. For frontend: `node tests/unit/test-packet-filter.js && node tests/unit/test-aging.js && node tests/unit/test-frontend-helpers.js`. If you add new logic, add tests. No exceptions.
+Every change that touches logic MUST have tests. For Go backend: `cd cmd/server && go test ./...` and `cd cmd/ingestor && go test ./...`, or `make test` for all Go modules. For frontend: `node tests/unit/test-packet-filter.js && node tests/unit/test-aging.js && node tests/unit/test-frontend-helpers.js`. If you add new logic, add tests. No exceptions.
 
-The SQLite driver (`github.com/mattn/go-sqlite3`) is cgo. **`CGO_ENABLED=0` still *builds*** — that is the trap. It links a stub, and the binary dies on the first query with `go-sqlite3 requires cgo to work. This is a stub`, so a green build proves nothing. A plain `GOOS=linux go build` likewise cannot cross-compile it. Use `make build` / `make crossbuild` — the latter needs [`zig`](https://ziglang.org/download/) as the cross C compiler and produces static musl binaries. Never re-add `CGO_ENABLED=0`.
+The PostgreSQL runtime uses native Go (`pgx`). SQLite is retained only for
+the offline upgrade importer and legacy test fixtures. The importer still
+requires cgo (`github.com/mattn/go-sqlite3`); `CGO_ENABLED=0` links a stub
+that fails on the first SQLite query. Use `make build` / `make crossbuild`
+for the complete release, including the importer. Cross-building that
+importer requires [`zig`](https://ziglang.org/download/) or another suitable
+C cross compiler. Validate a real import, not just a successful build.
+
+Database integration tests require a disposable PostgreSQL 18 instance and
+`CORESCOPE_TEST_POSTGRES_URL` with test schema/database/role creation rights.
+They fail when the database is unavailable rather than silently skipping.
+Never point tests at a live instance. Runtime credentials stay in deployment
+environment variables and must not appear in logs or committed fixtures.
 
 ### 2. No commit without browser validation
 After pushing, verify the change works in an actual browser. Use `browser profile=openclaw` against the running instance. Take a screenshot if the change is visual. If you can't validate it, say so — don't claim it works.

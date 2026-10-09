@@ -13,6 +13,8 @@
 # deploy that keeps the built-in broker, see
 # `docker-compose.example.yml`.
 
+name: corescope
+
 services:
   prod:
     build:
@@ -36,6 +38,8 @@ services:
       - ${PROD_DATA_DIR:-~/meshcore-data}:/app/data
       - caddy-data:/data/caddy
     environment:
+      - CORESCOPE_DB_BACKEND=sqlite
+      - CORESCOPE_STATE_DIR=${CORESCOPE_STATE_DIR:-/app/data}
       - NODE_ENV=production
       - DISABLE_MOSQUITTO=true
     healthcheck:

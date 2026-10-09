@@ -20,6 +20,7 @@ package main
 // #1975 come from a 1179-repeater instance.
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -104,14 +105,14 @@ func splitRegionsCSV(csv string) []string {
 // supervisord starts both processes together, so a server that probed first
 // would ignore every mobile-client region answer until its next restart.
 // Once seen the answer latches, so the steady state costs nothing; until
-// then it is one sqlite_master lookup per caller, and both callers sit
+// then it is one schema catalog lookup per caller, and both callers sit
 // behind 30s caches.
 func (db *DB) declaredRegionsTablePresent() bool {
 	if db.hasDeclaredRegionsTable || db.declaredRegionsTableLate.Load() {
 		return true
 	}
 	var n int
-	if err := db.conn.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'node_declared_regions'`).Scan(&n); err != nil || n == 0 {
+	if err := db.conn.QueryRow(db.nativeSQL("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_declared_regions'", `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='node_declared_regions'`)).Scan(&n); err != nil || n == 0 {
 		return false
 	}
 	db.declaredRegionsTableLate.Store(true)
@@ -190,7 +191,7 @@ func (db *DB) AllCurrentDeclaredRegions() ([]DeclaredRegionsRow, error) {
 		rows, err := db.conn.Query(`
 			WITH ranked AS (
 				SELECT target, observed_at, regions_csv, truncated,
-					ROW_NUMBER() OVER (PARTITION BY target ORDER BY observed_at DESC) AS rn
+					ROW_NUMBER() OVER (PARTITION BY target ORDER BY observed_at DESC NULLS LAST) AS rn
 				FROM node_declared_regions
 			)
 			SELECT target, observed_at, regions_csv, truncated
@@ -251,7 +252,7 @@ func (db *DB) scopeAuditNodeIdentities(pubkeys []string) map[string]scopeAuditNo
 	placeholders := make([]string, len(pubkeys))
 	args := make([]interface{}, len(pubkeys))
 	for i, k := range pubkeys {
-		placeholders[i] = "?"
+		placeholders[i] = fmt.Sprintf("%s", db.parameter(i+1))
 		args[i] = strings.ToLower(k)
 	}
 	rows, err := db.conn.Query(
@@ -374,7 +375,7 @@ func scopeAuditPrefixIndex(targets []string) map[int]map[string][]string {
 // belt-and-braces: one path can carry the same target on several hops.
 // It applies the SAME three conditions scopeConformanceQuery does —
 // minForwarderHopHexLen, scopeConformanceForwarderRouteTypesSQL, and the
-// explicit json_valid guard against a single malformed path_json row
+// explicit JSON-array guard against a single malformed path_json row
 // erroring the whole query — but does not join against any target list:
 // attribution to a specific declared target happens in Go
 // (ScopeAuditForwarding), against the small in-memory prefix index built by
@@ -384,12 +385,20 @@ var scopeAuditForwarderScanQuery = `
 	SELECT t.id, je.value
 	FROM transmissions t
 	JOIN observations o ON o.transmission_id = t.id
-	JOIN json_each(o.path_json) je
-	WHERE t.first_seen >= ?
+	CROSS JOIN LATERAL json_array_elements_text(CASE WHEN o.path_json IS JSON ARRAY THEN o.path_json::json ELSE '[]'::json END) je
+	WHERE t.first_seen >= $1
 	  AND ` + scopeConformanceForwarderRouteTypesSQL + `
 	  AND o.path_json IS NOT NULL
-	  AND json_valid(o.path_json)
-	  AND json_array_length(o.path_json) > 0
+	  AND LENGTH(je.value) >= ` + fmt.Sprint(minForwarderHopHexLen) + `
+`
+var sqliteScopeAuditForwarderScanQuery = `
+	SELECT t.id, je.value
+	FROM transmissions t
+	JOIN observations o ON o.transmission_id = t.id
+	JOIN json_each(CASE WHEN json_valid(o.path_json) THEN CASE WHEN json_type(o.path_json)='array' THEN o.path_json ELSE '[]' END ELSE '[]' END) je
+	WHERE t.first_seen >= $1
+	  AND ` + scopeConformanceForwarderRouteTypesSQL + `
+	  AND o.path_json IS NOT NULL
 	  AND LENGTH(je.value) >= ` + fmt.Sprint(minForwarderHopHexLen) + `
 `
 
@@ -456,7 +465,7 @@ var scopeAuditForwarderScanQuery = `
 var scopeAuditWindowMetaQuery = `
 	SELECT t.id, t.scope_name, t.first_seen
 	FROM transmissions t
-	WHERE t.first_seen >= ?
+	WHERE t.first_seen >= $1
 	  AND ` + scopeConformanceForwarderRouteTypesSQL + `
 `
 
@@ -566,6 +575,10 @@ type scopeAuditSeenKey struct {
 // the only thing keeping one transmission from counting several times for the
 // same target; TestScopeAuditForwardingCountsOneTransmissionOncePerTarget pins
 // it.
+func (db *DB) beginScopeAuditSnapshot(ctx context.Context) (*sql.Tx, error) {
+	return db.conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+}
+
 func (s *PacketStore) ScopeAuditForwarding(sinceISO string, targets []string) (map[string]*scopeAuditTargetAgg, error) {
 	byLen := scopeAuditPrefixIndex(targets)
 	result := make(map[string]*scopeAuditTargetAgg, len(targets))
@@ -575,7 +588,7 @@ func (s *PacketStore) ScopeAuditForwarding(sinceISO string, targets []string) (m
 	// transmission arriving between them would otherwise appear in the hop scan
 	// with no metadata to attribute it by — rare, but the fix is a shared
 	// snapshot rather than a rule about what to do with the leftovers.
-	tx, err := s.db.conn.Begin()
+	tx, err := s.db.beginScopeAuditSnapshot(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("scope audit forwarder scan begin: %w", err)
 	}
@@ -586,7 +599,7 @@ func (s *PacketStore) ScopeAuditForwarding(sinceISO string, targets []string) (m
 		return nil, err
 	}
 
-	rows, err := tx.Query(scopeAuditForwarderScanQuery, sinceISO)
+	rows, err := tx.Query(s.db.nativeSQL(sqliteScopeAuditForwarderScanQuery, scopeAuditForwarderScanQuery), sinceISO)
 	if err != nil {
 		return nil, fmt.Errorf("scope audit forwarder scan: %w", err)
 	}

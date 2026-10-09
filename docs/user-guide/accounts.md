@@ -45,7 +45,8 @@ incomplete, and the log says what is missing.
 |---|---|
 | `adminEmails` | Addresses that become admin on activation. They cannot be demoted, disabled or deleted from the UI. Remove an address here first. |
 | `publicBaseUrl` | The address visitors use. Every mail link is built from it, never from the request. It must match the browser origin, because state-changing requests from another origin are refused. |
-| `dbPath` | Where accounts are stored. Default: `users.db` next to the analyzer database. |
+| `dbPath` | SQLite account file, default `users.db` beside telemetry. The installed target remains recorded while accounts are disabled. |
+| `databaseURL` | When PostgreSQL is selected, use a separate account database and restricted writer via `CORESCOPE_USERS_DATABASE_URL`. |
 | `sessionDays` | Login lifetime, extended while in use. Default 30, maximum 365. |
 | `trustedProxies` | CIDRs of your reverse proxy, so the per-IP login limits see real client IPs. Without it, behind a proxy every client shares the proxy's IP for the per-IP limits (they are switched off when that IP is loopback or private). Per-address and per-account limits apply either way. |
 | `mail.webhookSecret` | Enables delivery status (below). At least 16 characters. |
@@ -130,11 +131,7 @@ on the *Proposals* tab.
   decision.
 - `maxApproved` bounds the decryption work: every approved key is tried on every group
   message. `perUserPerDay` and `maxPending` limit proposals (HTTP 429).
-- The ingestor reads `users.db` read-only, from `userManagement.dbPath` or next to the
-  analyzer database. Set `dbPath` explicitly when the server and the ingestor are not
-  given the same analyzer database path (for example `DB_PATH` set for one of them).
-  Both log the absolute path they use at startup (server: `[users] user management
-  enabled: db=...`, ingestor: `[proposals] reading approved channels from ...`).
+- The ingestor reads only the `approved_channels` view through `CORESCOPE_APPROVED_CHANNELS_DATABASE_URL`. This role can check account readiness and read approved channels, but cannot read users, password hashes, sessions or tokens. It connects to the same account database as the server with a separate restricted credential.
 - Names: at most 31 bytes including the `#` (MeshCore stores 32 with the terminator),
   no invisible or control characters (blank fillers such as U+3164 and spaces other than
   the plain space count as invisible), case-sensitive, not Public. Emoji work, except
@@ -163,7 +160,7 @@ watched node changes state. Admins can also watch the instance.
 - A check runs every `intervalMinutes` (the first one an interval after startup, and only
   after the startup load). All changes for one user in one check go into one
   mail. The first check of a newly watched node stores its state without a mail; states
-  are kept in `users.db`, so a restart does not mail again.
+  are kept in the account database, so a restart does not mail again.
 - While ingest is stale (the newest packet in the packet store is older than 30 minutes,
   for example when the MQTT broker or the ingestor is down), the offline checks for
   nodes and observers pause: their states stay as they were and nothing is mailed for
@@ -191,12 +188,12 @@ watched node changes state. Admins can also watch the instance.
 
 ### Backups
 
-`users.db` holds password hashes and addresses. The server keeps its own snapshots of
+The separate SQLite account file or PostgreSQL account database holds password hashes and addresses. The server keeps its own snapshots of
 it: at startup when the newest snapshot is older than 24 hours (or there is none), then
-about every 24 hours (the check runs hourly). A snapshot is a complete copy named `users-<YYYYMMDD-HHMMSS>.db` (UTC),
-readable by the server's user only, in `backups/` next to `users.db`. After each new
+about every 24 hours (the check runs hourly). A native snapshot is named `users-<YYYYMMDD-HHMMSS>.db` for SQLite or `.dump` for PostgreSQL (UTC),
+readable by the server's user only, in `backups/` under the configured `stateDir`. After each new
 snapshot the oldest ones beyond `keep` are deleted, never the one just written.
-Temporary files of an interrupted snapshot (`users-<YYYYMMDD-HHMMSS>.db.tmp`) are
+Temporary files of an interrupted snapshot (`users-<YYYYMMDD-HHMMSS>.db.tmp` or `.dump.tmp`) are
 deleted once they are older than 24 hours; other files in that directory are never
 touched. A failed snapshot is logged (`[users] backup failed: ...`) and the next run
 tries again.
@@ -218,16 +215,16 @@ delete that copy.
 | Key | Meaning |
 |---|---|
 | `backup.enabled` | Default `true`, also when the block is absent. `false` turns the snapshots off. |
-| `backup.dir` | Where snapshots go. Empty: `backups/` next to `users.db`. A relative path is relative to the server's working directory. |
+| `backup.dir` | Where snapshots go. Empty: `backups/` under `stateDir`. A relative path is relative to the server's working directory. |
 | `backup.keep` | How many snapshots are kept. Default 7, also for 0 or less. |
 
 Snapshots on the same disk are lost with that disk. To keep a copy elsewhere, log in as
 an admin and open `/api/admin/users-backup` in the same browser: it downloads a fresh
-snapshot (`corescope-users-<YYYYMMDD-HHMMSS>.db`) and records it in the audit log
+snapshot (`corescope-users-<YYYYMMDD-HHMMSS>.db` or `.dump`, matching the backend) and records it in the audit log
 (`user.backup`). Store the download encrypted: it holds every password hash and address.
 The analyzer database has its own backup route, `GET /api/backup`.
 
-**What a restore brings back.** `users.db` returns to the moment of the snapshot:
+**What a restore brings back.** The account database returns to the moment of the snapshot:
 
 - accounts deleted after it, including accounts users deleted themselves;
 - old passwords of users who changed them since;
@@ -237,36 +234,41 @@ The analyzer database has its own backup route, `GET /api/backup`.
 
 The audit log is replaced too, so note the deletions before you overwrite it.
 
-**Restore** (not automated). The commands use the `sqlite3` command-line tool; replace
-`2026-10-08 12:00:00` with the snapshot's time from its file name (UTC).
+For SQLite, restore the native `.db` snapshot only while all account writers are stopped, into a new account target; keep the current file and WAL siblings for audit/recovery. Use the matching installation state and [native storage restore procedure](../storage.md#native-backups-and-restore). Do not replace a live main file or treat an old snapshot as a reverse migration after new writes. The deletion query below can use `datetime(at, 'unixepoch')` and an integer Unix cutoff on SQLite; the session/token cleanup applies to both engines.
 
-1. Stop the server.
-2. List the accounts deleted since the snapshot, from the current `users.db`:
+**PostgreSQL restore:** use a fresh account database while the server and every account writer are stopped. Keep the old database intact for recovery and audit review. Supply PostgreSQL connection credentials through private libpq environment settings (`PGHOST`, `PGUSER`, `PGDATABASE` and a protected password source), never command arguments.
 
-   ```sh
-   sqlite3 users.db "SELECT target_user_id, action, datetime(at, 'unixepoch') FROM audit_log
-     WHERE action IN ('user.delete', 'user.delete.self')
-       AND at >= CAST(strftime('%s', '2026-10-08 12:00:00') AS INTEGER);"
+1. On the current database, record accounts deleted since the snapshot. Replace the timestamp with the snapshot's UTC time:
+
+   ```sql
+   SELECT target_user_id, action, to_timestamp(at)
+   FROM audit_log
+   WHERE action IN ('user.delete', 'user.delete.self')
+     AND at >= EXTRACT(EPOCH FROM TIMESTAMPTZ '2026-10-08 12:00:00+00');
    ```
 
-3. Copy the snapshot over `users.db`, and delete `users.db-wal` and `users.db-shm` if
-   they exist.
-4. Still with the server stopped, disable the accounts from step 2 (replace `12, 34`
-   with their ids) and clear all sessions and links, so everyone logs in again:
+2. Point the owner connection at an empty account database and restore:
 
    ```sh
-   sqlite3 users.db "UPDATE users SET status = 'disabled' WHERE id IN (12, 34);
-     DELETE FROM sessions; DELETE FROM tokens;"
+   pg_restore --no-owner --no-privileges --exit-on-error --single-transaction --dbname="$PGDATABASE" account-backup.dump
+   psql -X -v ON_ERROR_STOP=1 -f docker/postgres-grants.sql
+   psql -X -v ON_ERROR_STOP=1 -c 'ANALYZE'
    ```
 
-5. Start the server.
-6. Delete the accounts from step 2 again in the admin area. Deleting there, not in
-   `sqlite3`, also replaces the addresses in the mail history with a hash and records
-   the deletion in the audit log.
+3. Still with the server stopped, disable the previously deleted accounts and clear sessions and one-time links. Replace the example IDs with the recorded IDs:
 
-A snapshot made by a newer CoreScope version is refused at startup ("database schema
-version N is newer than this binary supports"): run that version or newer. Deleting
-`users.db` removes all accounts and nothing else.
+   ```sql
+   BEGIN;
+   UPDATE users SET status = 'disabled' WHERE id IN (12, 34);
+   DELETE FROM sessions;
+   DELETE FROM tokens;
+   COMMIT;
+   ```
+
+4. Check schema readiness with the matching `corescope-migrate -check-ready` binary and the owner account URL. Keep the matching selection and restricted runtime target identities, validate the restored stores, then start the server. A different target must be explicitly adopted/selected through the offline operator workflow, not silently substituted by editing a URL.
+5. Delete those accounts again through the admin area. Application deletion also replaces addresses in mail history with a hash and records the deletion in the audit log.
+
+Keep notification delivery paused until its restored state has been reviewed; old notification preferences and unsubscribe links also return. A newer schema is refused by older binaries. Never delete or overwrite the current database just to make restoration succeed. See [native backups and restores](../postgresql-upgrade.md#native-backups-and-restores) for the two-database recovery procedure.
 
 ## For users
 

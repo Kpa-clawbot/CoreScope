@@ -13,11 +13,11 @@ func staleObserver(t *testing.T, s *Store, id string) int64 {
 		t.Fatal(err)
 	}
 	old := time.Now().UTC().AddDate(0, 0, -90).Format(time.RFC3339)
-	if _, err := s.db.Exec(`UPDATE observers SET last_seen = ?, inactive = 1 WHERE id = ?`, old, id); err != nil {
+	if _, err := s.db.Exec(`UPDATE observers SET last_seen = $1, inactive = 1 WHERE id = $2`, old, id); err != nil {
 		t.Fatal(err)
 	}
 	var rowid int64
-	if err := s.db.QueryRow(`SELECT rowid FROM observers WHERE id = ?`, id).Scan(&rowid); err != nil {
+	if err := s.db.QueryRow(`SELECT rowid FROM observers WHERE id = $1`, id).Scan(&rowid); err != nil {
 		t.Fatal(err)
 	}
 	return rowid
@@ -26,7 +26,7 @@ func staleObserver(t *testing.T, s *Store, id string) int64 {
 func observerExists(t *testing.T, s *Store, id string) bool {
 	t.Helper()
 	var n int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM observers WHERE id = ?`, id).Scan(&n); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM observers WHERE id = $1`, id).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n > 0
@@ -56,13 +56,13 @@ func TestPurgeStaleObserversKeepsObserverWithObservations(t *testing.T) {
 	rowid := staleObserver(t, store, "obs-referenced")
 
 	if _, err := store.db.Exec(
-		`INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (1, 'AA', 'h1', ?)`,
+		`INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (1, 'AA', 'h1', $1)`,
 		time.Now().UTC().Format(time.RFC3339),
 	); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.db.Exec(
-		`INSERT INTO observations (transmission_id, observer_idx, timestamp) VALUES (1, ?, 0)`, rowid,
+		`INSERT INTO observations (transmission_id, observer_idx, timestamp) VALUES (1, $1, 0)`, rowid,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestPurgeStaleObserversKeepsObserverWithMetrics(t *testing.T) {
 	staleObserver(t, store, "obs-metrics")
 
 	if _, err := store.db.Exec(
-		`INSERT INTO observer_metrics (observer_id, timestamp) VALUES ('obs-metrics', ?)`,
+		`INSERT INTO observer_metrics (observer_id, timestamp) VALUES ('obs-metrics', $1)`,
 		time.Now().UTC().Format(time.RFC3339),
 	); err != nil {
 		t.Fatal(err)
@@ -143,7 +143,7 @@ func TestPurgeStaleObserversKeepsActiveObserver(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := time.Now().UTC().AddDate(0, 0, -90).Format(time.RFC3339)
-	if _, err := store.db.Exec(`UPDATE observers SET last_seen = ? WHERE id = ?`, old, "obs-active"); err != nil {
+	if _, err := store.db.Exec(`UPDATE observers SET last_seen = $1 WHERE id = $2`, old, "obs-active"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -166,7 +166,7 @@ func TestPurgeStaleObserversKeepsObserverInsideWindow(t *testing.T) {
 	}
 	recent := time.Now().UTC().AddDate(0, 0, -20).Format(time.RFC3339)
 	if _, err := store.db.Exec(
-		`UPDATE observers SET last_seen = ?, inactive = 1 WHERE id = ?`, recent, "obs-recent",
+		`UPDATE observers SET last_seen = $1, inactive = 1 WHERE id = $2`, recent, "obs-recent",
 	); err != nil {
 		t.Fatal(err)
 	}

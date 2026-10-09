@@ -1,4 +1,4 @@
-/* Tests for perf.js Disk I/O + Write Sources + SQLite sections (#1120) */
+/* Tests for perf.js Disk I/O + Write Sources + PostgreSQL sections (#1120) */
 'use strict';
 const vm = require('vm');
 const fs = require('fs');
@@ -45,12 +45,12 @@ function loadPerf() {
   return sb;
 }
 
-function stubFetch(sb, perfData, healthData, ioData, sqliteData, sourcesData) {
+function stubFetch(sb, perfData, healthData, ioData, postgresData, sourcesData) {
   sb.ctx.fetch = (url) => {
     if (url === '/api/perf') return Promise.resolve({ json: () => Promise.resolve(perfData) });
     if (url === '/api/health') return Promise.resolve({ json: () => Promise.resolve(healthData) });
     if (url === '/api/perf/io') return Promise.resolve({ json: () => Promise.resolve(ioData) });
-    if (url === '/api/perf/sqlite') return Promise.resolve({ json: () => Promise.resolve(sqliteData) });
+    if (url === '/api/perf/database') return Promise.resolve({ json: () => Promise.resolve(postgresData) });
     if (url === '/api/perf/write-sources') return Promise.resolve({ json: () => Promise.resolve(sourcesData) });
     return Promise.resolve({ json: () => Promise.resolve({}) });
   };
@@ -58,7 +58,7 @@ function stubFetch(sb, perfData, healthData, ioData, sqliteData, sourcesData) {
 
 const basePerf = {
   totalRequests: 100, avgMs: 5, uptime: 3600,
-  slowQueries: [], endpoints: {}, cache: null, packetStore: null, sqlite: null
+  slowQueries: [], endpoints: {}, cache: null, packetStore: null, postgres: null
 };
 const goRuntime = {
   goroutines: 17, numGC: 31, pauseTotalMs: 2.1, lastPauseMs: 0.03,
@@ -70,9 +70,9 @@ const ioData = {
   readBytesPerSec: 1024, writeBytesPerSec: 2048,
   syscallsRead: 10, syscallsWrite: 20
 };
-const sqliteData = {
-  walSizeMB: 12.3, walSize: 12900000, pageCount: 4096, pageSize: 4096,
-  cacheSize: 2000, cacheHitRate: 0.987
+const postgresData = {
+  engine: 'postgresql', databaseBytes: 12900000, openConnections: 4, inUseConnections: 2,
+  idleConnections: 2, connectionWaitCount: 3, connectionWaitMs: 1.25, cacheHitRate: 0.987
 };
 const sourcesData = {
   sources: { tx_inserted: 25, obs_inserted: 1787, backfill_path_json: 0, node_upserts: 329, observer_upserts: 1823, walCommits: 100 },
@@ -82,9 +82,29 @@ const sourcesData = {
 console.log('\n🧪 perf.js — Disk I/O + Write Sources (#1120)\n');
 
 (async () => {
+await test('Selected SQLite renders native diagnostics without PostgreSQL labels', async () => {
+  const sb = loadPerf();
+  const fetched = [];
+  const sqlite = {engine:'sqlite', dbSizeMB:12, walSizeMB:2, freelistMB:1,
+    rows:{transmissions:3, observations:4, nodes:2, observers:1}};
+  sb.ctx.fetch = url => {
+    fetched.push(url);
+    const data = url === '/api/perf' ? {...basePerf, database:sqlite, sqlite} :
+      url === '/api/perf/database' ? {engine:'sqlite', pageCount:300, pageSize:4096, cacheSize:-2000, walSizeMB:2, journalMode:'wal', plannerStats:true} : null;
+    return Promise.resolve({json:()=>Promise.resolve(data)});
+  };
+  sb.pages.perf.init({set innerHTML(v) {}});
+  await new Promise(r=>setTimeout(r,30));
+  const html=sb.getHtml();
+  assert.ok(fetched.includes('/api/perf/database'), 'must fetch selected-backend diagnostics');
+  assert.ok(!fetched.includes('/api/perf/postgres'), 'must not assume a PostgreSQL installation');
+  assert.ok(html.includes('SQLite data') && html.includes('WAL Size') && html.includes('Planner Statistics'),html);
+  assert.ok(!html.includes('PostgreSQL'), 'SQLite must not render PostgreSQL labels');
+});
+
 await test('Renders Disk I/O section', async () => {
   const sb = loadPerf();
-  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, sqliteData, sourcesData);
+  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, postgresData, sourcesData);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 100));
   const html = sb.getHtml();
@@ -94,7 +114,7 @@ await test('Renders Disk I/O section', async () => {
 
 await test('Renders Write Sources section with non-zero rates', async () => {
   const sb = loadPerf();
-  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, sqliteData, sourcesData);
+  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, postgresData, sourcesData);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 100));
   const html = sb.getHtml();
@@ -103,13 +123,15 @@ await test('Renders Write Sources section with non-zero rates', async () => {
   assert.ok(html.includes('obs_inserted'), 'should list obs_inserted source');
 });
 
-await test('Renders SQLite section with WAL + cache hit rate', async () => {
+await test('Renders PostgreSQL connection and cache statistics', async () => {
   const sb = loadPerf();
-  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, sqliteData, sourcesData);
+  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, postgresData, sourcesData);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 100));
   const html = sb.getHtml();
-  assert.ok(/WAL/i.test(html), 'should show WAL info');
+  assert.ok(html.includes('PostgreSQL'), 'should name the active database engine');
+  assert.ok(html.includes('Connections in use'), 'should show PostgreSQL pool utilization');
+  assert.ok(!html.includes('WAL Size') && !html.includes('Page Count'), 'must not invent SQLite metrics');
   assert.ok(/Cache Hit/i.test(html) || /cacheHitRate/i.test(html), 'should show cache hit rate');
 });
 
@@ -118,7 +140,7 @@ await test('Renders SQLite section with WAL + cache hit rate', async () => {
 await test('Renders cancelledWriteBytesPerSec for server process', async () => {
   const sb = loadPerf();
   const io = { ...ioData, cancelledWriteBytesPerSec: 4096 };
-  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, io, sqliteData, sourcesData);
+  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, io, postgresData, sourcesData);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 100));
   const html = sb.getHtml();
@@ -139,7 +161,7 @@ await test('Renders ingestor row alongside server row in Disk I/O', async () => 
       syscallsWrite: 0,
     },
   };
-  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, io, sqliteData, sourcesData);
+  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, io, postgresData, sourcesData);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 100));
   const html = sb.getHtml();
@@ -147,34 +169,25 @@ await test('Renders ingestor row alongside server row in Disk I/O', async () => 
   assert.ok(/1\.0\s*MB/.test(html), 'should render ingestor write 1 MB/s');
 });
 
-await test('WAL >100 MB fires ⚠️ flag', async () => {
+await test('Unavailable PostgreSQL cache statistics render as unknown', async () => {
   const sb = loadPerf();
-  const sql = { ...sqliteData, walSizeMB: 150, walSize: 150 * 1048576 };
-  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, sql, sourcesData);
+  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, { ...postgresData, cacheHitRate: null }, sourcesData);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 100));
-  const html = sb.getHtml();
-  // The warning appears in the WAL Size card; assert proximity by extracting
-  // the WAL Size card's text content.
-  const walSection = html.match(/150\.0MB\s*<svg\b[^>]*><use\b[^>]*#ph-warning"/);
-  assert.ok(walSection, 'expected ⚠️ next to 150MB WAL value, html=' + html.slice(html.indexOf('WAL Size') - 200, html.indexOf('WAL Size') + 200));
+  assert.ok(sb.getHtml().includes('—</div><div class="perf-label">Database Block Cache Hit Rate'), 'missing metrics must not become zero');
 });
 
-await test('WAL <100 MB does NOT fire ⚠️ flag', async () => {
+await test('PostgreSQL numeric string metrics render without an exception', async () => {
   const sb = loadPerf();
-  const sql = { ...sqliteData, walSizeMB: 12.3 };
-  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, sql, sourcesData);
+  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, { ...postgresData, cacheHitRate: '0.987', connectionWaitMs: '1.25' }, sourcesData);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 100));
-  const html = sb.getHtml();
-  const walIdx = html.indexOf('WAL Size');
-  const slice = html.slice(Math.max(0, walIdx - 200), walIdx);
-  assert.ok(!/12\.3MB\s*<svg\b[^>]*><use\b[^>]*#ph-warning"/.test(slice), 'expected NO warning icon next to 12.3MB WAL value');
+  assert.ok(sb.getHtml().includes('98.7%') && sb.getHtml().includes('1.3ms'), 'string metrics must format numerically');
 });
 
 await test('Cache hit <90% fires ⚠️ flag', async () => {
   const sb = loadPerf();
-  const sql = { ...sqliteData, cacheHitRate: 0.85 };
+  const sql = { ...postgresData, cacheHitRate: 0.85 };
   stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, sql, sourcesData);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 100));
@@ -184,7 +197,7 @@ await test('Cache hit <90% fires ⚠️ flag', async () => {
 
 await test('Cache hit ≥90% does NOT fire ⚠️ flag', async () => {
   const sb = loadPerf();
-  const sql = { ...sqliteData, cacheHitRate: 0.987 };
+  const sql = { ...postgresData, cacheHitRate: 0.987 };
   stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, sql, sourcesData);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 100));
@@ -194,31 +207,28 @@ await test('Cache hit ≥90% does NOT fire ⚠️ flag', async () => {
 
 // === #1167 must-fix #7: threshold boundary cases ===
 
-await test('WAL exactly 100 MB does NOT fire ⚠️ (boundary, strict >)', async () => {
+await test('Unavailable database diagnostics do not invent a PostgreSQL panel', async () => {
   const sb = loadPerf();
-  const sql = { ...sqliteData, walSizeMB: 100 };
-  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, sql, sourcesData);
+  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, null, sourcesData);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 100));
-  const html = sb.getHtml();
-  const walIdx = html.indexOf('WAL Size');
-  const slice = html.slice(Math.max(0, walIdx - 200), walIdx);
-  assert.ok(!/100\.0MB\s*<svg\b[^>]*><use\b[^>]*#ph-warning"/.test(slice), 'expected NO warning icon at exactly 100 MB WAL (boundary), slice=' + slice);
+  assert.ok(!sb.getHtml().includes('PostgreSQL connections'), 'unavailable statistics should stay unavailable');
 });
 
-await test('WAL infinitesimally over 100 MB DOES fire ⚠️', async () => {
+await test('PostgreSQL data panel reports counts without SQLite storage fields', async () => {
   const sb = loadPerf();
-  const sql = { ...sqliteData, walSizeMB: 100.01 };
-  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, sql, sourcesData);
+  const postgres = { engine: 'postgresql', dbSizeMB: 42, rows: { transmissions: 30000, observations: 90000, nodes: 2000, observers: 32 } };
+  stubFetch(sb, { ...basePerf, goRuntime, postgres }, goHealth, ioData, postgresData, sourcesData);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 100));
   const html = sb.getHtml();
-  assert.ok(/100\.0MB\s*<svg\b[^>]*><use\b[^>]*#ph-warning"/.test(html), 'expected warning icon next to 100.0MB WAL value (just over threshold)');
+  assert.ok(html.includes('PostgreSQL data') && html.includes('42MB') && html.includes((30000).toLocaleString()), 'native storage figures missing');
+  assert.ok(!html.includes('Freelist') && !html.includes('WAL Size'), 'SQLite-only metrics must not survive the conversion');
 });
 
 await test('Cache hit exactly 90% does NOT fire ⚠️ (boundary, strict <)', async () => {
   const sb = loadPerf();
-  const sql = { ...sqliteData, cacheHitRate: 0.90 };
+  const sql = { ...postgresData, cacheHitRate: 0.90 };
   stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, sql, sourcesData);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 100));
@@ -228,7 +238,7 @@ await test('Cache hit exactly 90% does NOT fire ⚠️ (boundary, strict <)', as
 
 await test('Cache hit infinitesimally below 90% DOES fire ⚠️', async () => {
   const sb = loadPerf();
-  const sql = { ...sqliteData, cacheHitRate: 0.8999 };
+  const sql = { ...postgresData, cacheHitRate: 0.8999 };
   stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, sql, sourcesData);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 100));
@@ -236,6 +246,24 @@ await test('Cache hit infinitesimally below 90% DOES fire ⚠️', async () => {
   assert.ok(/90\.0%\s*<svg\b[^>]*><use\b[^>]*#ph-warning"/.test(html), 'expected warning icon next to 90.0% cache hit value (just under threshold)');
 });
 
+await test('Stale PostgreSQL sample is labelled and retains verified counts', async () => {
+  const sb = loadPerf();
+  const postgres = { engine: 'postgresql', dbSizeMB: 42, rows: { transmissions: 30000, observations: 90000, nodes: 2000, observers: 32 }, sampledAt: '2026-01-01T12:00:00Z', sampleIntervalSeconds: 30, stale: true, error: 'unavailable' };
+  stubFetch(sb, { ...basePerf, goRuntime, postgres }, goHealth, ioData, { ...postgresData, sampledAt: postgres.sampledAt, sampleIntervalSeconds: 30, stale: true, cacheHitRate: null }, sourcesData);
+  await sb.pages.perf.init({ set innerHTML(v) {} });
+  await new Promise(r => setTimeout(r, 100));
+  assert.ok(sb.getHtml().includes('42MB') && sb.getHtml().includes('Last verified PostgreSQL sample'), 'stale data must remain labelled as a prior verified sample');
+});
+
+await test('Initial PostgreSQL sampling failure does not invent zero storage', async () => {
+  const sb = loadPerf();
+  const postgres = { engine: 'postgresql', dbSizeMB: null, rows: null, stale: true, error: 'unavailable' };
+  stubFetch(sb, { ...basePerf, goRuntime, postgres }, goHealth, ioData, { ...postgresData, databaseBytes: null, cacheHitRate: null, stale: true }, sourcesData);
+  await sb.pages.perf.init({ set innerHTML(v) {} });
+  await new Promise(r => setTimeout(r, 100));
+  assert.ok(sb.getHtml().includes('PostgreSQL storage unavailable'), 'failed first sample must be explicit');
+  assert.ok(!sb.getHtml().includes('0MB</div><div class="perf-label">DB Size'), 'unknown storage must not become zero');
+});
 await test('Backfill anomaly: rate >10× its stable rolling baseline shows a warning', async () => {
   // The current detector compares a source with its own rolling baseline.
   // Prime a 60-second baseline at 1/s, then jump to 1000/s for the next tick.
@@ -246,7 +274,7 @@ await test('Backfill anomaly: rate >10× its stable rolling baseline shows a war
     { sources: { tx_inserted: 405, backfill_path_json: 1060 }, sampleAt: '2026-01-01T00:01:01Z' },
   ];
   for (const sample of samples) {
-    stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, sqliteData, sample);
+    stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, postgresData, sample);
     await sb.pages.perf.init({ set innerHTML(v) {} });
     await new Promise(r => setTimeout(r, 50));
   }
@@ -266,10 +294,10 @@ await test('Backfill anomaly: insufficient history suppresses the warning', asyn
   const t1 = '2026-01-01T00:00:01Z';
   const phase1 = { sources: { tx_inserted: 5, backfill_path_json: 0 }, sampleAt: t0 };
   const phase2 = { sources: { tx_inserted: 6, backfill_path_json: 1000 }, sampleAt: t1 };
-  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, sqliteData, phase1);
+  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, postgresData, phase1);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 50));
-  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, sqliteData, phase2);
+  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, postgresData, phase2);
   await sb.pages.perf.init({ set innerHTML(v) {} });
   await new Promise(r => setTimeout(r, 50));
   const html = sb.getHtml();

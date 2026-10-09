@@ -1,0 +1,28 @@
+# Optional PostgreSQL storage. Combine with the matching SQLite-default base
+# using -f base.yml -f this-file.yml. No profiles: unused PG credentials and
+# services are absent from the base model. Changing files is not a conversion;
+# use the documented offline storage switch before changing an installed backend.
+services:
+  postgres:
+    extends:
+      file: docker/postgres.compose.yml
+      service: postgres
+    volumes:
+      - ${POSTGRES_DATA_DIR:-./postgres-data}:/var/lib/postgresql
+  bootstrap:
+    extends:
+      file: docker/postgres.compose.yml
+      service: bootstrap
+    image: ${CORESCOPE_IMAGE:-ghcr.io/kpa-clawbot/corescope:latest}
+    volumes:
+      - ${DATA_DIR:-./data}:/app/data
+  corescope:
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    environment:
+      CORESCOPE_DB_BACKEND: postgres
+      CORESCOPE_READER_DATABASE_URL: postgresql://corescope_reader:${CORESCOPE_READER_PASSWORD:?Set CORESCOPE_READER_PASSWORD}@postgres:5432/corescope_telemetry?sslmode=disable&search_path=public
+      CORESCOPE_WRITER_DATABASE_URL: postgresql://corescope_writer:${CORESCOPE_WRITER_PASSWORD:?Set CORESCOPE_WRITER_PASSWORD}@postgres:5432/corescope_telemetry?sslmode=disable&search_path=public
+      CORESCOPE_USERS_DATABASE_URL: postgresql://corescope_accounts:${CORESCOPE_ACCOUNTS_PASSWORD:?Set CORESCOPE_ACCOUNTS_PASSWORD}@postgres:5432/corescope_accounts?sslmode=disable&search_path=public
+      CORESCOPE_APPROVED_CHANNELS_DATABASE_URL: postgresql://corescope_channels:${CORESCOPE_CHANNELS_PASSWORD:?Set CORESCOPE_CHANNELS_PASSWORD}@postgres:5432/corescope_accounts?sslmode=disable&search_path=public

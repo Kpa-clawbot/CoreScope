@@ -20,19 +20,19 @@ func TestGetNodeBatteryHistory_FromObserverMetrics(t *testing.T) {
 	// node + observer with matching pubkey (cases differ on purpose)
 	pkLower := "deadbeefcafef00d11223344"
 	idUpper := strings.ToUpper(pkLower)
-	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen, first_seen) VALUES (?, 'BatNode', 'repeater', ?, ?)`,
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen, first_seen) VALUES ($1, 'BatNode', 'repeater', $2, $3)`,
 		pkLower, now.Format(time.RFC3339), now.Add(-72*time.Hour).Format(time.RFC3339))
-	db.conn.Exec(`INSERT INTO observers (id, name, last_seen, first_seen) VALUES (?, 'BatNode', ?, ?)`,
+	db.conn.Exec(`INSERT INTO observers (id, name, last_seen, first_seen) VALUES ($1, 'BatNode', $2, $3)`,
 		idUpper, now.Format(time.RFC3339), now.Add(-72*time.Hour).Format(time.RFC3339))
 
 	// 3 metrics samples: 3700, 3500, 3200 mV
 	for i, mv := range []int{3700, 3500, 3200} {
 		ts := now.Add(time.Duration(-2+i) * time.Hour).Format(time.RFC3339)
-		db.conn.Exec(`INSERT INTO observer_metrics (observer_id, timestamp, battery_mv) VALUES (?, ?, ?)`,
+		db.conn.Exec(`INSERT INTO observer_metrics (observer_id, timestamp, battery_mv) VALUES ($1, $2, $3)`,
 			idUpper, ts, mv)
 	}
 	// One sample with NULL battery should be skipped
-	db.conn.Exec(`INSERT INTO observer_metrics (observer_id, timestamp) VALUES (?, ?)`,
+	db.conn.Exec(`INSERT INTO observer_metrics (observer_id, timestamp) VALUES ($1, $2)`,
 		idUpper, now.Add(-3*time.Hour).Format(time.RFC3339))
 
 	since := now.Add(-24 * time.Hour).Format(time.RFC3339)
@@ -57,11 +57,11 @@ func TestNodeBatteryEndpoint(t *testing.T) {
 	now := time.Now().UTC()
 	pkLower := "aabbccdd11223344"
 	idUpper := strings.ToUpper(pkLower)
-	db.conn.Exec(`INSERT INTO observers (id, name, last_seen, first_seen) VALUES (?, 'TestRepeater', ?, ?)`,
+	db.conn.Exec(`INSERT INTO observers (id, name, last_seen, first_seen) VALUES ($1, 'TestRepeater', $2, $3)`,
 		idUpper, now.Format(time.RFC3339), now.Add(-72*time.Hour).Format(time.RFC3339))
 	for i, mv := range []int{3800, 3600, 3200} {
 		ts := now.Add(time.Duration(-2+i) * time.Hour).Format(time.RFC3339)
-		db.conn.Exec(`INSERT INTO observer_metrics (observer_id, timestamp, battery_mv) VALUES (?, ?, ?)`,
+		db.conn.Exec(`INSERT INTO observer_metrics (observer_id, timestamp, battery_mv) VALUES ($1, $2, $3)`,
 			idUpper, ts, mv)
 	}
 

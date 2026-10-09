@@ -11,13 +11,7 @@ const { spawnSync } = require('node:child_process');
 const read = name => fs.readFileSync(path.join(REPO_ROOT, '.github/workflows', name), 'utf8').replace(/\r/g, '');
 const fast = read('release-fast-path.yml');
 const deploy = read('deploy.yml');
-let bash = process.env.BASH_PATH || 'bash';
-if (!process.env.BASH_PATH && process.platform === 'win32') {
-  // Prefer Git Bash over Windows' WSL launcher; CI uses the native Linux bash.
-  const git = spawnSync('git', ['--exec-path'], { encoding: 'utf8' });
-  const gitBash = path.resolve((git.stdout || '').trim(), '../../../bin/bash.exe');
-  if (git.status === 0 && fs.existsSync(gitBash)) bash = gitBash;
-}
+const bash = require('../../scripts/bash-path')();
 
 // Extract known YAML blocks, retaining the actual expressions and shell code.
 // Full YAML syntax is separately checked by actionlint; no YAML dependency here.
@@ -45,7 +39,8 @@ const steps = source => source.split(/(?=^      - name:)/m).slice(1);
 function evaluate(expression, context) {
   if (!expression) return true;
   return vm.runInNewContext(expression.replace(/^\$\{\{|\}\}$/g, '').trim(), {
-    ...context, startsWith: (text, prefix) => text.startsWith(prefix), cancelled: () => false
+    ...context, startsWith: (text, prefix) => text.startsWith(prefix), cancelled: () => false,
+    contains: (text, part) => String(text ?? '').toLowerCase().includes(String(part).toLowerCase())
   });
 }
 const expand = (script, context) => script.replace(/\$\{\{(.*?)\}\}/g, (_, expression) => String(evaluate(expression, context)));
@@ -56,11 +51,11 @@ function runSteps(source, context, edge, mutateFails = false) {
   const output = path.join(dir, 'output');
   const log = path.join(dir, 'commands');
   fs.writeFileSync(log, '');
-  fs.mkdirSync(path.join(dir, 'cmd/decrypt'), { recursive: true });
+  for (const name of ['decrypt', 'migrate']) fs.mkdirSync(path.join(dir, 'cmd', name), { recursive: true });
   // go() only logs, so nothing real is produced; the release job's own
   // static/runnable verification step still needs these to exist.
-  for (const arch of ['amd64', 'arm64']) {
-    fs.writeFileSync(path.join(dir, `corescope-decrypt-linux-${arch}`),
+  for (const arch of ['amd64', 'arm64']) for (const name of ['decrypt', 'migrate']) {
+    fs.writeFileSync(path.join(dir, `corescope-${name}-linux-${arch}`),
       '#!/bin/sh\necho "corescope-decrypt stub"\n', { mode: 0o755 });
   }
   const stubs = `
@@ -130,7 +125,7 @@ function runSteps(source, context, edge, mutateFails = false) {
       const result = spawnSync(bash, ['--noprofile', '--norc', '-e', '-o', 'pipefail'], {
         input: stubs + '\n' + expand(script, context), cwd: dir, encoding: 'utf8', timeout: 15000,
         env: {
-          ...process.env, GITHUB_REF: context.github.ref, GITHUB_SHA: context.github.sha,
+          ...process.env, CC: '', GITHUB_REF: context.github.ref, GITHUB_REF_NAME: context.github.ref_name, GITHUB_SHA: context.github.sha,
           GITHUB_OUTPUT: bashPath(output), COMMAND_LOG: bashPath(log), TMPDIR: bashPath(dir),
           EDGE_CONFIG: edge === null ? 'missing' : JSON.stringify({ config: { Labels: { 'org.opencontainers.image.revision': edge } } }),
           // :edge is a two-platform index plus the two buildx attestation
@@ -175,7 +170,7 @@ function context(ref = 'refs/tags/v9.8.7', event = 'workflow_dispatch', inputs =
 // That is what keeps a gate red rather than skipped, which branch protection
 // would count as passing.
 function route(ctx, failedJob, ingestor = 'true') {
-  for (const name of ['changes', 'go-test', 'race-test', 'e2e-shard', 'e2e-test', 'image-check', 'build-and-publish', 'release-artifacts', 'deploy', 'publish']) {
+  for (const name of ['changes', 'go-backend', 'go-test', 'race-backend', 'race-test', 'e2e-shard', 'e2e-test', 'image-check', 'build-and-publish', 'release-artifacts', 'deploy', 'publish']) {
     const job = block(deploy, name, 2);
     assert.ok(job, `missing ${name} job`);
     const needs = value(job, 'needs', 4).replace(/[\[\]\s]/g, '').split(',').filter(Boolean);
@@ -196,6 +191,17 @@ function route(ctx, failedJob, ingestor = 'true') {
     ctx.needs[name] = { result, outputs: { code: 'true', ingestor } };
   }
   return ctx.needs;
+}
+
+// SQLite must have no PostgreSQL service; selected PG must get the pinned one.
+const serviceImage = value(block(deploy, 'postgres', 6), 'image', 8);
+assert.equal(evaluate(serviceImage.startsWith('${{') ? serviceImage : JSON.stringify(serviceImage), { matrix: { backend: 'sqlite' } }), '', 'default SQLite CI starts a PostgreSQL service');
+assert.equal(evaluate(serviceImage.startsWith('${{') ? serviceImage : JSON.stringify(serviceImage), { matrix: { backend: 'postgres' } }), 'postgres:18.6-alpine3.24');
+for (const [gate, worker] of [['go-test','go-backend'], ['race-test','race-backend']]) {
+  const definition = block(deploy, worker, 2);
+  assert.ok(definition.includes('backend: [sqlite, postgres]'), `${worker} must exercise both native backends`);
+  assert.equal(value(definition, 'CORESCOPE_TEST_BACKEND', 6), '${{ matrix.backend }}');
+  assert.ok(value(block(deploy, gate, 2), 'needs', 4).includes(worker), `${gate} does not wait for both backends`);
 }
 
 for (const [name, edge] of [['matching', 'a'.repeat(40)], ['missing', null], ['mismatched', 'b'.repeat(40)]]) {
@@ -259,7 +265,14 @@ for (const [ref, event] of [['refs/heads/master', 'push'], ['refs/heads/master',
   // The cross-toolchain gate: since the SQLite driver became cgo, every
   // event must build both architectures, without publishing, beside the tests.
   const checkSteps = steps(block(deploy, 'image-check', 2)).filter(step => step.includes('uses: docker/build-push-action'));
-  assert.equal(checkSteps.length, 1, 'image-check runs exactly one build');
+  assert.equal(checkSteps.length, 2, 'image-check has one two-arch build and one cached amd64 load');
+  for (const step of checkSteps) assert.equal(value(step, 'push', 10), 'false', 'neither image-check build may publish');
+  assert.equal(value(checkSteps[1], 'platforms', 10), 'linux/amd64', 'Compose smoke must load the native runner architecture only');
+  assert.equal(value(checkSteps[1], 'load', 10), 'true', 'Compose smoke requires a locally loaded image');
+  assert.equal(value(checkSteps[1], 'context', 10), value(checkSteps[0], 'context', 10), 'smoke must build the same source');
+  assert.equal(value(checkSteps[1], 'build-args', 10), value(checkSteps[0], 'build-args', 10), 'smoke must reuse identical version/commit/time metadata');
+  assert.equal(value(checkSteps[1], 'cache-from', 10), value(checkSteps[0], 'cache-from', 10), 'smoke must reuse the validated build cache');
+  assert.equal(value(checkSteps[1], 'if', 8), '', 'packaged smoke must run on every image-check event');
   assert.equal(value(checkSteps[0], 'push', 10), 'false', 'the image check must never publish');
   assert.equal(value(checkSteps[0], 'platforms', 10), 'linux/amd64,linux/arm64', 'the image check must cover both shipped architectures');
   assert.equal(value(checkSteps[0], 'if', 8), '', 'the image check runs on every event');
@@ -280,27 +293,34 @@ for (const [ref, event] of [['refs/heads/master', 'push'], ['refs/heads/master',
   assert.equal(noRace['build-and-publish'].result, 'success', `${event}: a skipped race-test must not block`);
 }
 assert.equal(route(context(), 'go-test')['release-artifacts'].result, 'skipped', 'failed Go validation must block release');
+assert.equal(route(context(), 'go-backend')['go-test'].result, 'failure', 'failed backend matrix must fail the stable Go gate');
+assert.equal(route(context(), 'race-backend')['race-test'].result, 'failure', 'failed race matrix must fail the stable race gate');
 const dispatchInput = block(deploy, 'images_published', 6);
 assert.equal(value(dispatchInput, 'type', 8), 'boolean', 'dispatch flag must retain boolean semantics');
 assert.equal(value(dispatchInput, 'default', 8), 'false', 'manual and fallback dispatches must build images by default');
 
 const release = block(deploy, 'release-artifacts', 2);
 const builds = runSteps(release, context(), null).commands.filter(command => command[0] === 'go');
-// CGO_ENABLED=1 since the SQLite driver became github.com/mattn/go-sqlite3, and
-// CC must be zig targeting musl — that is what makes the artifact static and
-// cross-buildable. A silent revert to the Go-only toolchain fails here.
+// Exercise the actual release shell: both tools support native SQLite and use
+// the same static musl cross-compiler for both architectures.
 assert.deepEqual(builds.map(command => command.slice(1, 5)), [
   ['linux', 'amd64', '1', 'zig cc -target x86_64-linux-musl'],
+  ['linux', 'amd64', '1', 'zig cc -target x86_64-linux-musl'],
+  ['linux', 'arm64', '1', 'zig cc -target aarch64-linux-musl'],
   ['linux', 'arm64', '1', 'zig cc -target aarch64-linux-musl'],
 ]);
 for (const command of builds) {
-  assert.ok(command.includes("-ldflags=-s -w -extldflags '-static -Wl,-s' -X main.version=v9.8.7"), 'binary version must come from tag, and the artifact must stay static');
-  assert.ok(command.includes('-tags'), 'netgo/osusergo/sqlite_omit_load_extension must survive');
+  const importer = command.some(arg => arg.includes('corescope-migrate-linux-'));
+  assert.ok(command.includes('netgo,osusergo,sqlite_omit_load_extension'), 'SQLite extension loading must be omitted for static linking');
+  assert.ok(command.includes(importer
+    ? "-ldflags=-s -w -extldflags '-static -Wl,-s'"
+    : "-ldflags=-s -w -extldflags '-static -Wl,-s' -X main.version=v9.8.7"), 'static linking/version flags must match the tool');
+  assert.ok(command.includes('-tags'), 'runtime resolver tags must survive');
 }
 const upload = steps(release).filter(step => step.includes('uses: softprops/action-gh-release@v2'));
 assert.equal(upload.length, 1, 'publish both architectures together, before the release becomes immutable');
 assert.equal(value(upload[0], 'fail_on_unmatched_files', 10), 'true', 'missing assets must prevent publication');
-assert.deepEqual(value(upload[0], 'files', 10).trim().split('\n').map(line => line.trim()), ['corescope-decrypt-linux-amd64', 'corescope-decrypt-linux-arm64']);
+assert.deepEqual(value(upload[0], 'files', 10).trim().split('\n').map(line => line.trim()), ['corescope-decrypt-linux-amd64', 'corescope-decrypt-linux-arm64', 'corescope-migrate-linux-amd64', 'corescope-migrate-linux-arm64']);
 assert.equal(value(upload[0], 'draft', 10), '', 'standard release action must finalize after both uploads');
 assert.equal(value(upload[0], 'prerelease', 10), '', 'standard release action must upload before publishing');
 const checkout = steps(release).find(step => step.includes('uses: actions/checkout@'));
@@ -326,3 +346,132 @@ console.log('PASS failed retag/Go gates, branch/PR routes, and complete tagged r
   assert.deepEqual(commands.filter(command => command[0] === 'crane' && command[1] === 'tag').map(command => command.at(-1)), ['v9.8', 'v9', 'latest']);
   console.log('PASS dispatched republish: tags rebuilt, no second release dispatch');
 }
+
+// Benchmark dispatches cannot publish or deploy, even on trusted master with
+// staging enabled. Ordinary dispatch routing above remains unchanged.
+for (const ref of ['refs/heads/master', 'refs/heads/codex/postgres', 'refs/tags/v9.8.7']) {
+  const ctx = context(ref, 'workflow_dispatch', { postgres_benchmark: true, candidate_sha: 'a'.repeat(40) });
+  ctx.vars.ENABLE_STAGING_DEPLOY = 'true';
+  const jobs = route(ctx);
+  for (const name of ['build-and-publish', 'release-artifacts', 'deploy', 'publish']) {
+    assert.equal(jobs[name].result, 'skipped', 'benchmark dispatch must skip ' + name);
+  }
+  assert.equal(evaluate(value(block(deploy, 'postgres-benchmark', 2), 'if', 4), ctx), true);
+}
+const benchmarkCall = block(deploy, 'postgres-benchmark', 2);
+assert.ok(!benchmarkCall.includes('secrets:') && !benchmarkCall.includes('environment:'), 'benchmark must receive no deployment secrets/environment');
+console.log('PASS benchmark-only dispatch cannot publish or deploy');
+
+// PR benchmarks are deliberate opt-ins and consume the head repository/SHA,
+// while ordinary CI continues to test GitHub's merge ref.
+const benchmarkWorkflow = read('postgres-benchmark.yml');
+const prBenchmark = context('refs/pull/1/merge', 'pull_request');
+prBenchmark.github.workflow_sha = 'c'.repeat(40);
+prBenchmark.github.event = { pull_request: {
+  body: '- [x] Run PostgreSQL comparison',
+  head: { sha: 'b'.repeat(40), repo: { full_name: 'contributor/project' } }
+} };
+for (const [body, code, expected] of [
+  ['- [x] Run PostgreSQL comparison', 'true', true],
+  ['- [X] Run PostgreSQL comparison', 'true', true],
+  ['- [ ] Run PostgreSQL comparison', 'true', false],
+  ['', 'true', false],
+  [null, 'true', false],
+  ['- [x] Run PostgreSQL comparison', 'false', false]
+]) {
+  prBenchmark.github.event.pull_request.body = body;
+  prBenchmark.needs.changes = { result: 'success', outputs: { code } };
+  assert.equal(evaluate(value(benchmarkCall, 'if', 4), prBenchmark), expected, 'PR checkbox/code-scope routing');
+}
+assert.equal(value(benchmarkCall, 'needs', 4), '[changes]', 'PR benchmarks must wait for code scope');
+const dispatchBenchmark = context('refs/heads/candidate', 'workflow_dispatch', { postgres_benchmark: true, candidate_sha: 'a'.repeat(40) });
+dispatchBenchmark.needs.changes = { result: 'success', outputs: { code: 'false' } };
+assert.equal(evaluate(value(benchmarkCall, 'if', 4), dispatchBenchmark), true, 'benchmark-only dispatch must survive its normal code=false output');
+assert.equal(evaluate(value(block(benchmarkCall, 'with', 4), 'candidate_sha', 6), prBenchmark), prBenchmark.github.event.pull_request.head.sha, 'benchmark candidate must be the PR head, not merge SHA');
+assert.equal(value(block(benchmarkCall, 'permissions', 4), 'contents', 6), 'read');
+const benchmarkSteps = steps(block(benchmarkWorkflow, 'benchmark', 2));
+const candidateCheckout = benchmarkSteps.find(step => value(step, '- name', 6) === 'Checkout the exact candidate');
+assert.equal(value(candidateCheckout, 'persist-credentials', 10), 'false');
+assert.equal(evaluate(value(candidateCheckout, 'repository', 10), prBenchmark), 'contributor/project');
+assert.equal(evaluate(value(candidateCheckout, 'repository', 10), context()), 'example/corescope');
+assert.equal(value(candidateCheckout, 'ref', 10), '${{ inputs.candidate_sha }}');
+assert.equal(value(block(benchmarkWorkflow, 'permissions', 0), 'contents', 2), 'read');
+
+// Execute the real snapshot guard with only Git's external boundary stubbed.
+// A PR's merge SHA differs from the benchmark head; mismatched code/workflows
+// must still fail before package installation or benchmark execution.
+const snapshotStep = benchmarkSteps.find(step => value(step, '- name', 6) === 'Verify candidate and workflow snapshot');
+function snapshotGuard({ candidate = 'b'.repeat(40), checkout = candidate, expected = candidate, merge = 'a'.repeat(40), matches = true } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'corescope-benchmark-guard-'));
+  const log = path.join(dir, 'git-calls');
+  fs.writeFileSync(log, '');
+  try {
+    const stubs = `
+      git() {
+        printf '%s\\n' "$*" >> "$CHECK_LOG"
+        case "$1" in
+          rev-parse) printf '%s\\n' "$CHECKOUT_SHA" ;;
+          fetch|cat-file) return 0 ;;
+          diff) [ "$WORKFLOW_MATCHES" = true ] ;;
+          *) return 99 ;;
+        esac
+      }
+    `;
+    const result = spawnSync(bash, ['--noprofile', '--norc'], {
+      input: stubs + value(snapshotStep, 'run', 8), cwd: dir, encoding: 'utf8',
+      env: { ...process.env, CANDIDATE_SHA: candidate, CHECKOUT_SHA: checkout,
+        EXPECTED_SHA: expected, GITHUB_SHA: merge, WORKFLOW_SHA: 'c'.repeat(40),
+        GITHUB_REPOSITORY: 'example/corescope', GITHUB_SERVER_URL: 'https://github.com',
+        WORKFLOW_MATCHES: String(matches), CHECK_LOG: bashPath(log) }
+    });
+    return { status: result.status, error: result.stderr, calls: fs.readFileSync(log, 'utf8') };
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
+const acceptedHead = snapshotGuard();
+assert.equal(acceptedHead.status, 0, 'PR head must be accepted despite a distinct merge SHA: ' + acceptedHead.error);
+assert.ok(acceptedHead.calls.includes('fetch --no-tags --depth=1 https://github.com/example/corescope.git ' + 'c'.repeat(40)), 'verify the actual caller workflow commit');
+for (const path of ['.github/workflows/deploy.yml', '.github/workflows/postgres-benchmark.yml', 'scripts/postgres-benchmark', 'scripts/install-postgres-ci.sh']) {
+  assert.ok(acceptedHead.calls.includes(path), 'snapshot comparison omitted ' + path);
+}
+assert.notEqual(snapshotGuard({ matches: false }).status, 0, 'different workflow/harness content accepted');
+assert.notEqual(snapshotGuard({ checkout: 'd'.repeat(40) }).status, 0, 'wrong checkout accepted');
+assert.notEqual(snapshotGuard({ expected: 'd'.repeat(40) }).status, 0, 'candidate differs from event head');
+assert.equal(snapshotGuard({ candidate: 'a'.repeat(40), merge: 'a'.repeat(40) }).status, 0, 'ordinary exact-SHA dispatch failed');
+const snapshotEnv = block(snapshotStep, 'env', 8);
+assert.equal(evaluate(value(snapshotEnv, 'EXPECTED_SHA', 10), prBenchmark), 'b'.repeat(40));
+assert.equal(evaluate(value(snapshotEnv, 'EXPECTED_SHA', 10), context()), 'a'.repeat(40));
+assert.equal(evaluate(value(snapshotEnv, 'WORKFLOW_SHA', 10), prBenchmark), 'c'.repeat(40));
+console.log('PASS opted-in PR benchmark uses exact head and matching workflow/harness, without persisted credentials');
+
+// Execute the real restore-URL transformation. A role and its database can have
+// the same name; replacing the first matching substring silently changes login.
+const restoreStep = steps(block(deploy, 'e2e-shard', 2)).find(step => value(step, '- name', 6) === 'Restore native HTTP backups and verify browser sessions');
+const restoreScript = value(restoreStep, 'run', 8);
+const switchURLs = restoreScript.split('# Switch restored database URLs.\n')[1]?.split('# End restored database URLs.')[0];
+assert.ok(switchURLs, 'missing restore URL transformation');
+const sourceURLs = {
+  CORESCOPE_USERS_DATABASE_URL: 'postgresql://corescope_accounts:p%40ss%2F%3A%3F%23@db.example.invalid:5433/corescope_accounts?sslmode=verify-full&application_name=corescope_accounts',
+  CORESCOPE_READER_DATABASE_URL: 'postgresql://corescope_reader:p%2540%3A%2F@[::1]:5432/corescope_telemetry?sslmode=require&application_name=reader%3Bsmoke'
+};
+sourceURLs.CORESCOPE_WRITER_DATABASE_URL = sourceURLs.CORESCOPE_READER_DATABASE_URL.replace('corescope_reader:', 'corescope_writer:');
+sourceURLs.CORESCOPE_APPROVED_CHANNELS_DATABASE_URL = sourceURLs.CORESCOPE_USERS_DATABASE_URL.replace('corescope_accounts:', 'corescope_channels:');
+sourceURLs.CORESCOPE_DATABASE_URL = sourceURLs.CORESCOPE_READER_DATABASE_URL.replace('corescope_reader:', 'corescope_owner:');
+sourceURLs.CORESCOPE_USERS_OWNER_DATABASE_URL = sourceURLs.CORESCOPE_USERS_DATABASE_URL.replace('corescope_accounts:', 'corescope_owner:');
+const rewritten = spawnSync(bash, ['--noprofile', '--norc', '-e', '-o', 'pipefail'], {
+  input: (process.platform === 'win32' ? 'python3(){ python "$@"; }\n' : '') + switchURLs +
+    '\nprintf "%s\\n" ' + Object.keys(sourceURLs).map(key => '"$' + key + '"').join(' ') + '\n',
+  encoding: 'utf8', env: { ...process.env, ...sourceURLs }
+});
+assert.equal(rewritten.status, 0, rewritten.stderr);
+const resultURLs = rewritten.stdout.trim().split('\n');
+for (const [index, key] of Object.keys(sourceURLs).entries()) {
+  const original = new URL(sourceURLs[key]);
+  const restored = new URL(resultURLs[index]);
+  for (const field of ['protocol', 'username', 'password', 'host', 'search', 'hash']) {
+    assert.equal(restored[field], original[field], 'restore URL changed ' + field);
+  }
+  assert.equal(restored.pathname, /USERS|APPROVED_CHANNELS/.test(key) ? '/corescope_restore_accounts' : '/corescope_restore_telemetry');
+}
+console.log('PASS native backup restore changes only database URL paths');
+const goMatrix = block(deploy, 'go-backend', 2);
+assert(goMatrix.includes('cd internal/dbconfig') && goMatrix.includes('cd ../sqliteutil'), 'new shared storage modules need their own explicit tests');

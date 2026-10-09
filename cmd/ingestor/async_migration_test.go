@@ -110,7 +110,7 @@ func TestRunAsyncMigration_PanicCapture(t *testing.T) {
 	}
 
 	var errMsg sql.NullString
-	if err := s.db.QueryRow(`SELECT error FROM _async_migrations WHERE name = ?`, name).Scan(&errMsg); err != nil {
+	if err := s.db.QueryRow(`SELECT error FROM _async_migrations WHERE name = $1`, name).Scan(&errMsg); err != nil {
 		t.Fatalf("error column lookup: %v", err)
 	}
 	if !errMsg.Valid || errMsg.String == "" {
@@ -157,10 +157,10 @@ func TestRunAsyncMigration_RestartSafetyFailedIsRetried(t *testing.T) {
 	s := newTestStore(t)
 	const name = "test_restart_failed_v1"
 
-	if err := ensureAsyncMigrationsTable(s.db); err != nil {
+	if err := ensureAsyncMigrationsTable(s.db, s.Backend()); err != nil {
 		t.Fatalf("ensure table: %v", err)
 	}
-	if _, err := s.db.Exec(`INSERT INTO _async_migrations (name, status, error) VALUES (?, 'failed', 'simulated prior crash')`, name); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO _async_migrations (name, status, error) VALUES ($1, 'failed', 'simulated prior crash')`, name); err != nil {
 		t.Fatalf("seed failed row: %v", err)
 	}
 
@@ -181,7 +181,7 @@ func TestRunAsyncMigration_RestartSafetyFailedIsRetried(t *testing.T) {
 
 	// And the error column must be cleared on success.
 	var errCol sql.NullString
-	if err := s.db.QueryRow(`SELECT error FROM _async_migrations WHERE name = ?`, name).Scan(&errCol); err != nil {
+	if err := s.db.QueryRow(`SELECT error FROM _async_migrations WHERE name = $1`, name).Scan(&errCol); err != nil {
 		t.Fatalf("error col: %v", err)
 	}
 	if errCol.Valid && errCol.String != "" {
@@ -197,10 +197,10 @@ func TestRunAsyncMigration_RestartSafetyPendingIsRetried(t *testing.T) {
 	s := newTestStore(t)
 	const name = "test_restart_pending_v1"
 
-	if err := ensureAsyncMigrationsTable(s.db); err != nil {
+	if err := ensureAsyncMigrationsTable(s.db, s.Backend()); err != nil {
 		t.Fatalf("ensure table: %v", err)
 	}
-	if _, err := s.db.Exec(`INSERT INTO _async_migrations (name, status) VALUES (?, 'pending_async')`, name); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO _async_migrations (name, status) VALUES ($1, 'pending_async')`, name); err != nil {
 		t.Fatalf("seed pending row: %v", err)
 	}
 
@@ -243,7 +243,7 @@ func TestRunAsyncMigration_FnErrorRecorded(t *testing.T) {
 	}
 
 	var errCol sql.NullString
-	if err := s.db.QueryRow(`SELECT error FROM _async_migrations WHERE name = ?`, name).Scan(&errCol); err != nil {
+	if err := s.db.QueryRow(`SELECT error FROM _async_migrations WHERE name = $1`, name).Scan(&errCol); err != nil {
 		t.Fatalf("error col: %v", err)
 	}
 	if !errCol.Valid || errCol.String == "" {
@@ -295,5 +295,22 @@ func TestRunAsyncMigration_ConcurrentSameNameSerialized(t *testing.T) {
 	// number (5 callers, each may have scheduled before any reached done).
 	if got := atomic.LoadInt32(&calls); got < 1 || got > 5 {
 		t.Fatalf("fn invoked %d times, want 1..5 inclusive (bounded by caller count)", got)
+	}
+}
+
+func TestAsyncMigrationMinimalSQLiteStore(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	s := &Store{db: db}
+	if err := s.RunAsyncMigration(context.Background(), "minimal", func(context.Context, *sql.DB) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	s.WaitForAsyncMigrations()
+	if status, err := s.AsyncMigrationStatus("minimal"); err != nil || status != "done" {
+		t.Fatal(status, err)
 	}
 }

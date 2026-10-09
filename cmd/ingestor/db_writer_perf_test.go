@@ -30,7 +30,7 @@ func TestWriterStarvationVisibleInPerf(t *testing.T) {
 	// follower samples can't move p99 above 50s.
 	ResetWriterStatsForTest()
 
-	s, err := OpenStore(tempDBPath(t))
+	s, err := openPostgresTestStore(t, tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestWriterStarvationVisibleInPerf(t *testing.T) {
 	go func() {
 		defer close(blockerDone)
 		err := s.WriterTx("neighbor_builder", func(tx *sql.Tx) error {
-			if _, err := tx.Exec(`UPDATE nodes SET name = name WHERE 0`); err != nil {
+			if _, err := tx.Exec(`UPDATE nodes SET name = name WHERE false`); err != nil {
 				return err
 			}
 			close(blockStarted)
@@ -59,7 +59,11 @@ func TestWriterStarvationVisibleInPerf(t *testing.T) {
 	}()
 
 	// Wait for the blocker to be inside its transaction.
-	<-blockStarted
+	select {
+	case <-blockStarted:
+	case <-blockerDone:
+		t.Fatal("blocker failed before acquiring its transaction")
+	}
 	// Small safety margin so the blocker is firmly holding the conn.
 	time.Sleep(100 * time.Millisecond)
 
@@ -74,7 +78,7 @@ func TestWriterStarvationVisibleInPerf(t *testing.T) {
 			defer wg.Done()
 			_, err := s.WriterExec(
 				"mqtt_handler",
-				`INSERT OR IGNORE INTO _migrations (name) VALUES (?)`,
+				`INSERT INTO _migrations (name) VALUES ($1) ON CONFLICT DO NOTHING`,
 				fmt.Sprintf("writer_starvation_test_%d", i),
 			)
 			if err != nil {

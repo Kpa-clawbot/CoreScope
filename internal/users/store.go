@@ -1,20 +1,18 @@
-// Package users is CoreScope's optional account store (user management,
-// docs/specs/2026-10-06-user-management-design.md). It owns users.db, a
-// SQLite file separate from the measurement database. cmd/server never
-// writes measurement data (#1283); this package is the single, opt-in
-// exception, and Open refuses to touch the measurement database by path.
+// Package users owns optional account state, separate from telemetry. One
+// account implementation uses native SQLite or PostgreSQL storage (#1283).
 package users
 
 import (
+	"context"
 	"database/sql"
 	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/meshcore-analyzer/dbconfig"
+	"github.com/meshcore-analyzer/pgutil"
+	"modernc.org/sqlite"
 )
 
 var (
@@ -28,61 +26,121 @@ var (
 	ErrAccountChanged = errors.New("users: account changed since it was read")
 )
 
-// noLimit is SQLite's LIMIT value for "every row" (the account export).
-const noLimit = -1
-
-// Store is the users.db handle. Safe for concurrent use.
+// Store owns a separate account database. Safe for concurrent use.
 type Store struct {
-	db  *sql.DB
-	now func() time.Time
+	db      *sql.DB
+	target  string
+	backend dbconfig.Backend
+	now     func() time.Time
 }
 
-// Open opens (creating if needed) the users database at path and applies
-// pending migrations. forbidden lists paths Open must refuse; the server
-// passes the measurement DB path so a misconfigured dbPath can never turn
-// this package into a writer of measurement data.
-func Open(path string, forbidden ...string) (*Store, error) {
-	if strings.ContainsAny(path, "?#") {
-		return nil, fmt.Errorf("users: database path %q must not contain '?' or '#'", path)
+// OpenStorage consumes the resolved installation choice. Missing PostgreSQL
+// settings never cause a SQLite fallback, and inactive settings are ignored.
+func OpenStorage(storage dbconfig.Storage) (*Store, error) {
+	switch storage.Backend {
+	case dbconfig.SQLite:
+		return openSQLiteMode(storage.UsersDBPath, false, storage.DBPath)
+	case dbconfig.Postgres:
+		return openPostgres(storage.UsersDatabaseURL, storage.ReaderDatabaseURL, storage.WriterDatabaseURL)
+	default:
+		return nil, errors.New("users: account storage backend must be selected")
 	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return nil, fmt.Errorf("users: resolve %s: %w", path, err)
+}
+
+// Open retains compatibility for an unambiguous SQLite path or PostgreSQL URL.
+// Application startup should pass its resolved choice to OpenStorage instead.
+func Open(target string, forbidden ...string) (*Store, error) {
+	if strings.HasPrefix(strings.ToLower(target), "postgres:") || strings.HasPrefix(strings.ToLower(target), "postgresql:") {
+		return openPostgres(target, forbidden...)
 	}
-	for _, f := range forbidden {
-		if strings.TrimSpace(f) != "" && samePath(abs, f) {
-			return nil, fmt.Errorf("users: refusing to open %s: it is the measurement database", path)
+	return openSQLite(target, forbidden...)
+}
+
+// openPostgres connects using the account runtime role, never applying migrations.
+// Every forbidden URL is checked against the effective PostgreSQL database,
+// so alternate hostnames, credentials or search paths cannot bypass isolation.
+func openPostgres(databaseURL string, forbidden ...string) (*Store, error) {
+	if _, err := pgutil.ParseConfig(databaseURL); err != nil {
+		return nil, err
+	}
+	for _, other := range forbidden {
+		if strings.TrimSpace(other) == "" {
+			continue
+		}
+		same, err := pgutil.SameDatabase(context.Background(), databaseURL, other)
+		if err != nil {
+			return nil, err
+		}
+		if same {
+			return nil, errors.New("users: refusing to open the measurement database")
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		return nil, fmt.Errorf("users: create dir for %s: %w", path, err)
-	}
-	db, err := sql.Open("sqlite", abs+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)")
+	db, err := pgutil.Open(databaseURL, false)
 	if err != nil {
-		return nil, fmt.Errorf("users: open %s: %w", path, err)
+		return nil, err
 	}
-	// Account traffic is tiny; one connection removes SQLITE_BUSY between
-	// our own writers and keeps the per-connection pragmas in force.
+	// Account traffic is small. Keep baseline per-process concurrency while
+	// database locks also protect transactions across independent processes.
 	db.SetMaxOpenConns(1)
-	s := &Store{db: db, now: time.Now}
-	if err := s.migrate(); err != nil {
+	db.SetMaxIdleConns(1)
+	if err := AssertReady(db); err != nil {
 		db.Close()
 		return nil, err
 	}
-	return s, nil
+	if err := assertRuntimePrivileges(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return &Store{db: db, target: databaseURL, backend: dbconfig.Postgres, now: time.Now}, nil
 }
 
-func samePath(abs, other string) bool {
-	oa, err := filepath.Abs(other)
+// Backend identifies the native snapshot/query format without exposing targets.
+func (s *Store) Backend() dbconfig.Backend { return s.backend }
+
+func (s *Store) p(position int) string { return s.backend.Parameter(position) }
+
+func (s *Store) noLimit() any {
+	if s.backend == dbconfig.SQLite {
+		return -1
+	}
+	return nil
+}
+
+func (s *Store) forUpdate() string {
+	if s.backend == dbconfig.Postgres {
+		return " FOR UPDATE"
+	}
+	return ""
+}
+
+func assertRuntimePrivileges(db *sql.DB) error {
+	var elevated bool
+	err := db.QueryRow(`SELECT
+		EXISTS (SELECT 1 FROM pg_roles WHERE rolname=current_user AND (rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls))
+		OR has_database_privilege(current_database(),'CREATE')
+		OR has_schema_privilege(current_schema(),'CREATE')
+		OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON c.relnamespace=n.oid
+			WHERE n.nspname=current_schema() AND pg_has_role(c.relowner,'USAGE'))
+		OR has_table_privilege('corescope_schema','INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER')
+		OR has_table_privilege('schema_version','INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER')`).Scan(&elevated)
 	if err != nil {
-		return false
+		return errors.New("users: cannot verify account runtime role privileges")
 	}
-	a, errA := os.Stat(abs)
-	b, errB := os.Stat(oa)
-	if errA == nil && errB == nil {
-		return os.SameFile(a, b)
+	if elevated {
+		return errors.New("users: account runtime role must be separate from the migration owner and cannot modify schema metadata")
 	}
-	return strings.EqualFold(filepath.Clean(abs), filepath.Clean(oa))
+	return nil
+}
+
+// lockUser serializes account-level read/modify/write operations, including
+// the initial insert where no settings, tokens or watch rows exist yet.
+func (s *Store) lockUser(tx *sql.Tx, id int64) error {
+	var found int64
+	err := tx.QueryRow(`SELECT id FROM users WHERE id=`+s.p(1)+s.forUpdate(), id).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
 }
 
 // Close closes the database.
@@ -126,5 +184,10 @@ func expectOne(res sql.Result, err error) error {
 }
 
 func isUniqueViolation(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
+	var pgerr *pgconn.PgError
+	if errors.As(err, &pgerr) {
+		return pgerr.Code == "23505"
+	}
+	var sqliteErr *sqlite.Error
+	return errors.As(err, &sqliteErr) && (sqliteErr.Code() == 2067 || sqliteErr.Code() == 1555)
 }

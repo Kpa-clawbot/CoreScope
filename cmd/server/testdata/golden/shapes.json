@@ -1461,31 +1461,14 @@
           }
         }
       },
-      "sqlite": {
+      "postgres": {
         "type": "object",
         "keys": {
+          "engine": {
+            "type": "string"
+          },
           "dbSizeMB": {
             "type": "number"
-          },
-          "walSizeMB": {
-            "type": "number"
-          },
-          "freelistMB": {
-            "type": "number"
-          },
-          "walPages": {
-            "type": "object",
-            "keys": {
-              "total": {
-                "type": "number"
-              },
-              "checkpointed": {
-                "type": "number"
-              },
-              "busy": {
-                "type": "number"
-              }
-            }
           },
           "rows": {
             "type": "object",
@@ -1503,6 +1486,15 @@
                 "type": "number"
               }
             }
+          },
+          "sampledAt": {
+            "type": "string"
+          },
+          "sampleIntervalSeconds": {
+            "type": "number"
+          },
+          "stale": {
+            "type": "boolean"
           }
         }
       },

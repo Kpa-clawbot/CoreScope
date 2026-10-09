@@ -16,7 +16,7 @@ func (db *DB) advertEvidencePresent() bool {
 		return true
 	}
 	var exists int
-	if err := db.conn.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='advert_route_evidence'`).Scan(&exists); err != nil {
+	if err := db.conn.QueryRow(db.nativeSQL("SELECT 1 FROM sqlite_master WHERE type='table' AND name='advert_route_evidence'", `SELECT 1 FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='advert_route_evidence'`)).Scan(&exists); err != nil {
 		return false
 	}
 	db.advertEvidenceTable.Store(true)
@@ -39,7 +39,7 @@ func (db *DB) advertEvidenceForIDs(ids []int) (map[int]uint8, error) {
 		for i, id := range ids[start:end] {
 			args[i] = id
 		}
-		query := `SELECT tx_id,SUM(bit) FROM advert_route_evidence WHERE tx_id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(args)), ",") + `) GROUP BY tx_id`
+		query := `SELECT tx_id,SUM(bit) FROM advert_route_evidence WHERE tx_id IN (` + db.sqlPlaceholders(len(args)) + `) GROUP BY tx_id`
 		if db.advertEvidenceReadHook != nil {
 			db.advertEvidenceReadHook()
 		}
@@ -121,7 +121,7 @@ func (s *PacketStore) pollAdvertEvidence(limit int) error {
 	if limit <= 0 || limit > 500 {
 		limit = 500
 	}
-	rows, err := s.db.conn.Query(`SELECT id,tx_id,bit FROM advert_route_evidence WHERE id>? ORDER BY id LIMIT ?`, s.advertEvidenceCursor, limit)
+	rows, err := s.db.conn.Query(`SELECT id,tx_id,bit FROM advert_route_evidence WHERE id>`+s.db.parameter(1)+` ORDER BY id LIMIT `+s.db.parameter(2), s.advertEvidenceCursor, limit)
 	if err != nil {
 		return err
 	}

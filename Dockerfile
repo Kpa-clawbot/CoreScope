@@ -2,11 +2,9 @@
 # Build stage always runs natively on the builder's arch ($BUILDPLATFORM) and
 # cross-compiles to $TARGETOS/$TARGETARCH. No QEMU for compilation.
 #
-# The SQLite driver is github.com/mattn/go-sqlite3, which is cgo, so the Go
-# toolchain alone can no longer cross-compile this: it needs a C compiler that
-# can target the other architecture. `zig cc` is that compiler. Targeting musl
-# makes the result fully static (see -extldflags below), so the runtime stage
-# has no libc dependency on the base image at all.
+# All four binaries support native SQLite and PostgreSQL. SQLite requires cgo;
+# the upstream Zig cross-compiler targets musl so both release architectures
+# remain fully static and independent of the runtime image libc.
 #
 # BUILDPLATFORM is auto-set by buildx; default to linux/amd64 so plain
 # `docker build` (without buildx) doesn't fail on an empty platform string.
@@ -20,9 +18,8 @@ ARG BUILD_TIME=unknown
 ARG TARGETOS
 ARG TARGETARCH
 
-# Keep these in step with the Makefile: netgo/osusergo preserve the pure-Go
-# resolver and user lookup the binaries had under CGO_ENABLED=0, and
-# sqlite_omit_load_extension drops the dlopen path so -static links cleanly.
+# Keep these in step with the Makefile. netgo/osusergo retain Go DNS/user
+# lookup; sqlite_omit_load_extension permits static linking.
 ENV GO_BUILD_TAGS=netgo,osusergo,sqlite_omit_load_extension \
     ZIG_GLOBAL_CACHE_DIR=/tmp/zig-cache
 
@@ -42,8 +39,7 @@ RUN apk add --no-cache curl xz && \
     ln -s /opt/zig/zig /usr/local/bin/zig && rm /tmp/zig.tar.xz && \
     zig version
 
-# zigcc resolves TARGETARCH to a zig target triple once, so the three build
-# steps below stay readable and cannot disagree with each other.
+# zigcc selects the native SQLite C target from the requested image architecture.
 RUN printf '%s\n' '#!/bin/sh' \
     'case "$TARGETARCH" in' \
     '  amd64) t=x86_64-linux-musl ;;' \
@@ -68,6 +64,8 @@ COPY internal/lora/ ../../internal/lora/
 COPY internal/users/ ../../internal/users/
 COPY internal/channel/ ../../internal/channel/
 COPY internal/mailer/ ../../internal/mailer/
+COPY internal/pgutil/ ../../internal/pgutil/
+COPY internal/sqliteutil/ ../../internal/sqliteutil/
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/tmp/zig-cache \
@@ -93,6 +91,7 @@ COPY internal/dbschema/ ../../internal/dbschema/
 COPY internal/prunequeue/ ../../internal/prunequeue/
 COPY internal/perfio/ ../../internal/perfio/
 COPY internal/mbcapqueue/ ../../internal/mbcapqueue/
+COPY internal/pgutil/ ../../internal/pgutil/
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/tmp/zig-cache \
@@ -110,6 +109,9 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 WORKDIR /build/decrypt
 COPY cmd/decrypt/go.mod cmd/decrypt/go.sum ./
 COPY internal/channel/ ../../internal/channel/
+COPY internal/dbschema/ ../../internal/dbschema/
+COPY internal/pgutil/ ../../internal/pgutil/
+COPY internal/dbconfig/ ../../internal/dbconfig/
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/tmp/zig-cache \
@@ -123,15 +125,36 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     -ldflags "-s -w -extldflags '-static -Wl,-s' -X main.version=${APP_VERSION}" \
     -o /corescope-decrypt .
 
-# Runtime image
-FROM alpine:3.20
+# Offline bootstrap and verified conversion CLI for both storage engines.
+WORKDIR /build/migrate
+COPY cmd/migrate/go.mod cmd/migrate/go.sum ./
+COPY internal/packetpath/ ../../internal/packetpath/
+COPY internal/dbschema/ ../../internal/dbschema/
+COPY internal/users/ ../../internal/users/
+COPY internal/pgutil/ ../../internal/pgutil/
+COPY internal/sqliteutil/ ../../internal/sqliteutil/
+COPY internal/dbconfig/ ../../internal/dbconfig/
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+COPY cmd/migrate/ ./
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/tmp/zig-cache \
+    GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -tags ${GO_BUILD_TAGS} \
+    -ldflags "-s -w -extldflags '-static -Wl,-s'" \
+    -o /corescope-migrate .
 
-RUN apk add --no-cache mosquitto mosquitto-clients supervisor caddy wget
+# The client major matches PostgreSQL 18 for native backup/restore support.
+FROM alpine:3.24
+
+RUN apk add --no-cache mosquitto mosquitto-clients supervisor caddy wget postgresql18-client sqlite jq
 
 WORKDIR /app
 
 # Go binaries (statically linked; they do not use this image's libc)
-COPY --from=builder /corescope-server /corescope-ingestor /corescope-decrypt /app/
+COPY --from=builder /corescope-server /corescope-ingestor /corescope-decrypt /corescope-migrate /app/
 
 # Frontend assets + config
 COPY public/ ./public/
@@ -155,7 +178,8 @@ RUN mkdir -p /app/data /var/lib/mosquitto /data/caddy && \
 
 # Entrypoint
 COPY docker/entrypoint-go.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY docker/storage.sh docker/postgres-bootstrap.sh docker/postgres-grants.sql /app/
+RUN chmod +x /entrypoint.sh /app/storage.sh /app/postgres-bootstrap.sh
 
 EXPOSE 80 443 1883
 
