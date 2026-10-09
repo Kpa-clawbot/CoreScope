@@ -8,13 +8,12 @@ import (
 	"testing"
 
 	"github.com/meshcore-analyzer/dbschema"
-	"github.com/meshcore-analyzer/pgutil/pgtest"
 )
 
 func dateSource(t *testing.T, declared string, values []any) string {
 	t.Helper()
 	source := telemetrySource(t)
-	db, err := sql.Open(importSQLiteDriver, sqliteURL(source, "rw"))
+	db, err := openSQLite(source, "rw")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +61,7 @@ func TestImportPreservesDeclaredDateTextAndResume(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			dsn := pgtest.NewSchema(t)
+			dsn := postgresSchema(t)
 			target := openImportDB(t, dsn)
 			options := importOptions{Source: source, DatabaseURL: dsn, StateDir: t.TempDir(), Kind: "telemetry", BatchSize: 2}
 			options.afterBatch = func() error {
@@ -137,7 +136,7 @@ func TestImportRefusesNumericStorageInDeclaredDateColumn(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		dsn := pgtest.NewSchema(t)
+		dsn := postgresSchema(t)
 		report, err := importSQLite(context.Background(), importOptions{Source: source, DatabaseURL: dsn, StateDir: t.TempDir(), Kind: "telemetry"})
 		if err == nil || !strings.Contains(err.Error(), "non-text value") || report.Verified {
 			t.Fatalf("non-text date storage was silently coerced: verified=%v error=%v", report.Verified, err)

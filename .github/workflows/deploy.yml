@@ -142,14 +142,18 @@ jobs:
   # The server has -race in its own step already; this closes the same gap for
   # the ingestor, which carries an atomic.Pointer snapshot (the region key
   # set) whose safety is an argument until something checks it.
-  race-test:
-    name: "🏁 Race detector (ingestor)"
+  race-backend:
+    name: "Race detector (ingestor, ${{ matrix.backend }})"
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [sqlite, postgres]
     runs-on: ubuntu-24.04
     needs: [changes]
     if: needs.changes.outputs.ingestor == 'true'
     services: &postgres_test_services
       postgres:
-        image: postgres:18.6-alpine3.24
+        image: ${{ matrix.backend == 'postgres' && 'postgres:18.6-alpine3.24' || '' }}
         env:
           POSTGRES_PASSWORD: "ci-${{ github.run_id }}-${{ github.run_attempt }}"
           POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
@@ -158,7 +162,9 @@ jobs:
           --health-cmd "pg_isready -h 127.0.0.1 -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
-      CORESCOPE_TEST_POSTGRES_URL: "postgresql://postgres:ci-${{ github.run_id }}-${{ github.run_attempt }}@127.0.0.1:5432/postgres?sslmode=disable"
+      CORESCOPE_TEST_BACKEND: ${{ matrix.backend }}
+      CORESCOPE_DB_BACKEND: ${{ matrix.backend }}
+      CORESCOPE_TEST_POSTGRES_URL: ${{ matrix.backend == 'postgres' && format('postgresql://postgres:ci-{0}-{1}@127.0.0.1:5432/postgres?sslmode=disable', github.run_id, github.run_attempt) || '' }}
       PGHOST: 127.0.0.1
       PGPORT: 5432
       PGUSER: postgres
@@ -169,6 +175,7 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Install pinned PostgreSQL 18.6 clients
+        if: matrix.backend == 'postgres'
         run: &install_postgres_clients bash scripts/install-postgres-ci.sh client
 
       - name: Set up Go 1.27.2
@@ -187,17 +194,45 @@ jobs:
           cd cmd/ingestor
           go test -timeout 30m -race ./...
 
+  race-test:
+    name: "🏁 Race detector (ingestor)"
+    runs-on: ubuntu-24.04
+    needs: [race-backend, changes]
+    if: ${{ !cancelled() && needs.changes.outputs.ingestor == 'true' }}
+    steps:
+      - name: Require both native race matrices
+        run: |
+          result="${{ needs['race-backend'].result }}"
+          [ "$result" = success ] || { echo "::error::Race matrices did not all pass ($result)"; exit 1; }
+
+  go-test:
+    name: "✅ Go Build & Test"
+    runs-on: ubuntu-24.04
+    needs: [go-backend, changes]
+    if: ${{ !cancelled() && needs.changes.outputs.code == 'true' }}
+    steps:
+      - name: Require both native storage matrices
+        run: |
+          result="${{ needs['go-backend'].result }}"
+          [ "$result" = success ] || { echo "::error::Storage matrices did not all pass ($result)"; exit 1; }
+
   # ───────────────────────────────────────────────────────────────
   # 1. Go Build & Test
   # ───────────────────────────────────────────────────────────────
-  go-test:
-    name: "✅ Go Build & Test"
+  go-backend:
+    name: "Go Build & Test (${{ matrix.backend }})"
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [sqlite, postgres]
     runs-on: ubuntu-24.04
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
     services: *postgres_test_services
     env:
-      CORESCOPE_TEST_POSTGRES_URL: "postgresql://postgres:ci-${{ github.run_id }}-${{ github.run_attempt }}@127.0.0.1:5432/postgres?sslmode=disable"
+      CORESCOPE_TEST_BACKEND: ${{ matrix.backend }}
+      CORESCOPE_DB_BACKEND: ${{ matrix.backend }}
+      CORESCOPE_TEST_POSTGRES_URL: ${{ matrix.backend == 'postgres' && format('postgresql://postgres:ci-{0}-{1}@127.0.0.1:5432/postgres?sslmode=disable', github.run_id, github.run_attempt) || '' }}
       PGHOST: 127.0.0.1
       PGPORT: 5432
       PGUSER: postgres
@@ -213,6 +248,7 @@ jobs:
         run: rm -rf ~/go/pkg/mod 2>/dev/null || true
 
       - name: Install pinned PostgreSQL 18.6 clients
+        if: matrix.backend == 'postgres'
         run: *install_postgres_clients
 
 
@@ -249,7 +285,7 @@ jobs:
         run: |
           set -e -o pipefail
           cd cmd/server
-          CGO_ENABLED=0 go build .
+          CGO_ENABLED=1 go build .
           # -race gates PR #1208's atomic.Pointer migration: the race-detector
           # is what makes path_inspect_atomic_race_test.go actually assert.
           go test -timeout 20m -race -coverprofile=server-coverage.out ./... 2>&1 | tee server-test.log
@@ -262,7 +298,7 @@ jobs:
         run: |
           set -e -o pipefail
           cd cmd/ingestor
-          CGO_ENABLED=0 go build .
+          CGO_ENABLED=1 go build .
           go test -timeout 20m -coverprofile=ingestor-coverage.out ./... 2>&1 | tee ingestor-test.log
           echo "--- Go Ingestor Coverage ---"
           go tool cover -func=ingestor-coverage.out | tail -1
@@ -274,7 +310,7 @@ jobs:
           go test ./...
           echo "--- Channel library tests passed ---"
           cd ../../cmd/decrypt
-          CGO_ENABLED=0 go build -ldflags="-s -w" -o corescope-decrypt .
+          CGO_ENABLED=1 go build -ldflags="-s -w" -o corescope-decrypt .
           go test ./...
           echo "--- Decrypt CLI tests passed ---"
 
@@ -285,19 +321,31 @@ jobs:
           cd ../mailer && go test -race ./...
           echo "--- users + mailer tests passed ---"
 
+      - name: Test shared selection and native SQLite snapshot modules
+        if: matrix.backend == 'sqlite'
+        run: |
+          set -euo pipefail
+          cd internal/dbconfig && go test -race ./...
+          cd ../sqliteutil && go test -race ./...
+
       - name: Test migrate CLI + dbschema
         run: |
           set -e -o pipefail
           # Neither module had CI test execution before the mattn/go-sqlite3
           # migration; both open the database, and dbschema owns the migrations.
-          cd internal/pgutil
-          go test ./...
-          cd ../dbschema
+          if [ "$CORESCOPE_TEST_BACKEND" = postgres ]; then
+            (cd internal/pgutil && go test ./...)
+          fi
+          cd internal/dbschema
           go test ./...
           cd ../../cmd/migrate
           CGO_ENABLED=1 go build -o /dev/null .
           go test ./...
           echo "--- migrate + dbschema tests passed ---"
+
+      - name: Validate default and optional Compose models
+        if: matrix.backend == 'sqlite'
+        run: node scripts/test-storage-compose.js
 
       - name: Verify Dockerfile COPY invariants (issue #1316)
         run: bash scripts/check-dockerfile-internal-pkgs.sh
@@ -355,7 +403,7 @@ jobs:
           echo "✅ All .proto files are syntactically valid"
 
       - name: Generate Go coverage badges
-        if: success()
+        if: success() && matrix.backend == 'sqlite'
         run: |
           mkdir -p .badges
 
@@ -384,7 +432,7 @@ jobs:
           echo "| Ingestor | ${INGESTOR_COV}% |" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload Go coverage badges
-        if: success()
+        if: success() && matrix.backend == 'sqlite'
         uses: actions/upload-artifact@v6
         with:
           name: go-badges
@@ -405,14 +453,17 @@ jobs:
   # uses nothing go-test produces. build-and-publish still needs both, so
   # nothing reaches GHCR unless every test job passed.
   e2e-shard:
-    name: "🎭 Playwright E2E shard ${{ matrix.shard }}/3"
+    name: "🎭 Playwright E2E (${{ matrix.backend }}) shard ${{ matrix.shard }}/3"
     needs: [changes]
     runs-on: ubuntu-24.04
     strategy:
       matrix:
         shard: [1, 2, 3]
+        backend: [sqlite, postgres]
     env:
-      CORESCOPE_TEST_POSTGRES_URL: "postgresql://postgres:ci-${{ github.run_id }}-${{ github.run_attempt }}@127.0.0.1:5432/postgres?sslmode=disable"
+      CORESCOPE_TEST_BACKEND: ${{ matrix.backend }}
+      CORESCOPE_DB_BACKEND: ${{ matrix.backend }}
+      CORESCOPE_TEST_POSTGRES_URL: ${{ matrix.backend == 'postgres' && format('postgresql://postgres:ci-{0}-{1}@127.0.0.1:5432/postgres?sslmode=disable', github.run_id, github.run_attempt) || '' }}
       PGHOST: 127.0.0.1
       PGPORT: 5432
       PGUSER: postgres
@@ -440,6 +491,7 @@ jobs:
         run: rm -rf ~/go/pkg/mod 2>/dev/null || true
 
       - name: Install pinned PostgreSQL 18.6 clients
+        if: matrix.backend == 'postgres'
         run: *install_postgres_clients
 
 
@@ -452,7 +504,7 @@ jobs:
       - name: Build Go server
         run: |
           cd cmd/server
-          CGO_ENABLED=0 go build -o ../../corescope-server .
+          CGO_ENABLED=1 go build -o ../../corescope-server .
           echo "Go server built successfully"
 
       # Only test-user-management-e2e.js uses the e2etest build and its server,
@@ -462,7 +514,7 @@ jobs:
         if: matrix.shard == 3
         run: |
           cd cmd/server
-          CGO_ENABLED=0 go build -tags e2etest -o ../../corescope-server-e2e .
+          CGO_ENABLED=1 go build -tags e2etest -o ../../corescope-server-e2e .
 
       - name: Build Go migrate tool
         run: |
@@ -572,6 +624,7 @@ jobs:
           go run ../../scripts/migrate-fixture-hashes.go "$E2E_SQLITE"
 
       - name: Import fixture and grant restricted runtime roles
+        if: matrix.backend == 'postgres'
         run: |
           set -euo pipefail
           for key in CORESCOPE_OWNER_PASSWORD CORESCOPE_READER_PASSWORD CORESCOPE_WRITER_PASSWORD CORESCOPE_ACCOUNTS_PASSWORD CORESCOPE_CHANNELS_PASSWORD; do
@@ -588,18 +641,36 @@ jobs:
             PGUSER=corescope_owner PGPASSWORD="$CORESCOPE_OWNER_PASSWORD" PGDATABASE="$database" \
               psql -X -v ON_ERROR_STOP=1 -f docker/postgres-grants.sql
           done
-          echo "CORESCOPE_READER_DATABASE_URL=postgresql://corescope_reader:$CORESCOPE_READER_PASSWORD@127.0.0.1:5432/corescope_telemetry?sslmode=disable" >> "$GITHUB_ENV"
-          echo "CORESCOPE_USERS_DATABASE_URL=postgresql://corescope_accounts:$CORESCOPE_ACCOUNTS_PASSWORD@127.0.0.1:5432/corescope_accounts?sslmode=disable" >> "$GITHUB_ENV"
+          export CORESCOPE_DATABASE_URL="$owner_url" CORESCOPE_USERS_OWNER_DATABASE_URL="$owner_accounts"
+          export CORESCOPE_READER_DATABASE_URL="postgresql://corescope_reader:$CORESCOPE_READER_PASSWORD@127.0.0.1:5432/corescope_telemetry?sslmode=disable&search_path=public"
+          export CORESCOPE_WRITER_DATABASE_URL="postgresql://corescope_writer:$CORESCOPE_WRITER_PASSWORD@127.0.0.1:5432/corescope_telemetry?sslmode=disable&search_path=public"
+          export CORESCOPE_USERS_DATABASE_URL="postgresql://corescope_accounts:$CORESCOPE_ACCOUNTS_PASSWORD@127.0.0.1:5432/corescope_accounts?sslmode=disable&search_path=public"
+          export CORESCOPE_APPROVED_CHANNELS_DATABASE_URL="postgresql://corescope_channels:$CORESCOPE_CHANNELS_PASSWORD@127.0.0.1:5432/corescope_accounts?sslmode=disable&search_path=public"
+          for key in CORESCOPE_DATABASE_URL CORESCOPE_USERS_OWNER_DATABASE_URL CORESCOPE_READER_DATABASE_URL CORESCOPE_WRITER_DATABASE_URL CORESCOPE_USERS_DATABASE_URL CORESCOPE_APPROVED_CHANNELS_DATABASE_URL; do
+            printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
+          done
           mkdir -p "$RUNNER_TEMP/corescope-state"
+          ./corescope-migrate -storage-action=adopt -backend=postgres -offline \
+            -selection-file "$RUNNER_TEMP/corescope-state/storage-selection.json"
           # Retain the masked owner password for the later restore step only.
           umask 077
           printf '%s' "$CORESCOPE_OWNER_PASSWORD" > "$RUNNER_TEMP/corescope-e2e-owner-password"
+
+      - name: Adopt prepared SQLite fixture without a PostgreSQL service
+        if: matrix.backend == 'sqlite'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/corescope-state"
+          ./corescope-migrate -storage-action=setup -backend=sqlite -offline \
+            -selection-file "$RUNNER_TEMP/corescope-state/storage-selection.json" \
+            -sqlite-path "$E2E_SQLITE" -users-sqlite-path "$RUNNER_TEMP/corescope-state/users.db"
+          printf 'DB_PATH=%s\n' "$E2E_SQLITE" >> "$GITHUB_ENV"
 
       - name: Start Go server with fixture DB
         run: |
           fuser -k 13581/tcp 2>/dev/null || true
           sleep 1
-          env -u PGPASSWORD -u PGUSER -u CORESCOPE_TEST_POSTGRES_URL ./corescope-server -port 13581 -state-dir "$RUNNER_TEMP/corescope-state" -public public-instrumented &
+          env -u PGPASSWORD -u PGUSER -u CORESCOPE_TEST_POSTGRES_URL -u CORESCOPE_DATABASE_URL -u CORESCOPE_USERS_OWNER_DATABASE_URL ./corescope-server -port 13581 -state-dir "$RUNNER_TEMP/corescope-state" -public public-instrumented &
           echo $! > .server.pid
           for i in $(seq 1 30); do
             if curl -sf http://localhost:13581/api/healthz > /dev/null 2>&1; then
@@ -633,7 +704,14 @@ jobs:
             }
           }
           JSON
-          env -u PGPASSWORD -u PGUSER -u CORESCOPE_TEST_POSTGRES_URL ./corescope-server-e2e -config-dir /tmp/cs-um -port 13582 -state-dir /tmp/cs-um -public public-instrumented &
+          if [ "$CORESCOPE_TEST_BACKEND" = sqlite ]; then
+            ./corescope-migrate -storage-action=setup -backend=sqlite -offline -config-dir /tmp/cs-um \
+              -selection-file /tmp/cs-um/storage-selection.json -sqlite-path "$E2E_SQLITE" -users-sqlite-path /tmp/cs-um/users.db
+          else
+            ./corescope-migrate -storage-action=adopt -backend=postgres -offline -config-dir /tmp/cs-um \
+              -selection-file /tmp/cs-um/storage-selection.json
+          fi
+          env -u PGPASSWORD -u PGUSER -u CORESCOPE_TEST_POSTGRES_URL -u CORESCOPE_DATABASE_URL -u CORESCOPE_USERS_OWNER_DATABASE_URL ./corescope-server-e2e -config-dir /tmp/cs-um -port 13582 -state-dir /tmp/cs-um -public public-instrumented &
           echo $! > .server-um.pid
           for i in $(seq 1 30); do
             if curl -sf http://localhost:13582/api/healthz > /dev/null 2>&1; then echo "UM server ready after ${i}s"; break; fi
@@ -811,6 +889,7 @@ jobs:
             done
             ! kill -0 "$pid" 2>/dev/null || { echo 'Fixture server did not stop' >&2; exit 1; }
           done
+          if [ "$CORESCOPE_TEST_BACKEND" = postgres ]; then
           # Fresh databases, same deployment roles, no overwrite or role widening.
           psql -X -v ON_ERROR_STOP=1 -d postgres <<'SQL'
           CREATE DATABASE corescope_restore_telemetry OWNER corescope_owner TEMPLATE template0 ENCODING 'UTF8' LOCALE 'C';
@@ -836,6 +915,10 @@ jobs:
           for key, database in (
               ("CORESCOPE_READER_DATABASE_URL", "corescope_restore_telemetry"),
               ("CORESCOPE_USERS_DATABASE_URL", "corescope_restore_accounts"),
+              ("CORESCOPE_WRITER_DATABASE_URL", "corescope_restore_telemetry"),
+              ("CORESCOPE_APPROVED_CHANNELS_DATABASE_URL", "corescope_restore_accounts"),
+              ("CORESCOPE_DATABASE_URL", "corescope_restore_telemetry"),
+              ("CORESCOPE_USERS_OWNER_DATABASE_URL", "corescope_restore_accounts"),
           ):
               raw = os.environ[key]
               try:
@@ -849,10 +932,33 @@ jobs:
           )
           while IFS= read -r assignment; do export "$assignment"; done <<< "$restore_urls"
           unset restore_urls assignment
+          # End restored database URLs.
+          else
+            mkdir -m 700 "$RUNNER_TEMP/corescope-restored-sqlite"
+            for kind in telemetry accounts; do
+              cp "$E2E_BACKUP_DIR/$kind.db" "$RUNNER_TEMP/corescope-restored-sqlite/$kind.db"
+              test "$(sqlite3 -readonly "$RUNNER_TEMP/corescope-restored-sqlite/$kind.db" 'PRAGMA quick_check')" = ok
+            done
+            export DB_PATH="$RUNNER_TEMP/corescope-restored-sqlite/telemetry.db"
+          fi
+          # A restore uses new verified selection records; changing only role URLs
+          # must never silently replace the recorded old targets.
+          restored_state="$RUNNER_TEMP/corescope-restored-state"
+          restored_accounts_state="$RUNNER_TEMP/corescope-restored-accounts-state"
+          mkdir -m 700 "$restored_state" "$restored_accounts_state"
+          for selection in "$restored_state/storage-selection.json" "$restored_accounts_state/storage-selection.json"; do
+            if [ "$CORESCOPE_TEST_BACKEND" = sqlite ]; then
+              ./corescope-migrate -storage-action=adopt -backend=sqlite -offline \
+                -selection-file "$selection" -sqlite-path "$DB_PATH" \
+                -users-sqlite-path "$RUNNER_TEMP/corescope-restored-sqlite/accounts.db"
+            else
+              ./corescope-migrate -storage-action=adopt -backend=postgres -offline -selection-file "$selection"
+            fi
+          done
           # Restart restored servers.
-          env -u PGPASSWORD -u PGUSER -u CORESCOPE_TEST_POSTGRES_URL ./corescope-server -port 13581 -state-dir "$RUNNER_TEMP/corescope-state" -public public-instrumented &
+          env -u PGPASSWORD -u PGUSER -u CORESCOPE_TEST_POSTGRES_URL -u CORESCOPE_DATABASE_URL -u CORESCOPE_USERS_OWNER_DATABASE_URL ./corescope-server -port 13581 -state-dir "$restored_state" -public public-instrumented &
           echo $! > .server.pid
-          env -u PGPASSWORD -u PGUSER -u CORESCOPE_TEST_POSTGRES_URL ./corescope-server-e2e -config-dir /tmp/cs-um -port 13582 -state-dir /tmp/cs-um -public public-instrumented &
+          env -u PGPASSWORD -u PGUSER -u CORESCOPE_TEST_POSTGRES_URL -u CORESCOPE_DATABASE_URL -u CORESCOPE_USERS_OWNER_DATABASE_URL ./corescope-server-e2e -config-dir /tmp/cs-um -port 13582 -state-dir "$restored_accounts_state" -public public-instrumented &
           echo $! > .server-um.pid
           for port in 13581 13582; do
             for attempt in $(seq 1 30); do
@@ -926,7 +1032,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v6
         with:
-          name: e2e-shard-${{ matrix.shard }}
+          name: e2e-shard-${{ matrix.backend }}-${{ matrix.shard }}
           path: |
             e2e-output.txt
             .badges/
@@ -966,7 +1072,7 @@ jobs:
         run: |
           set -e
           ls shards
-          [ "$(ls -d shards/e2e-shard-* | wc -l)" -eq 3 ] || { echo "::error::expected results from 3 shards"; exit 1; }
+          [ "$(ls -d shards/e2e-shard-* | wc -l)" -eq 6 ] || { echo "::error::expected results from 3 shards for each backend"; exit 1; }
           cat shards/e2e-shard-*/e2e-output.txt > e2e-output.txt
           mkdir -p .badges
           cp shards/e2e-shard-*/.badges/*.json .badges/ 2>/dev/null || true
@@ -999,7 +1105,7 @@ jobs:
   # ───────────────────────────────────────────────────────────────
   # 3a. Two-arch image build — beside the tests, never publishes
   # ───────────────────────────────────────────────────────────────
-  # The offline SQLite importer uses cgo, so the container build needs a zig
+  # Native SQLite support uses cgo, so the container build needs a zig
   # cross-toolchain and static musl linking. Builds both architectures and
   # actually runs the arm64 binaries under QEMU, on every event: for a PR it is
   # the only image check (the GHCR push below is push/tag-only, so without it
@@ -1113,7 +1219,9 @@ jobs:
 
       - name: Exercise packaged PostgreSQL Compose startup
         timeout-minutes: 10
-        run: timeout --kill-after=150s 7m bash scripts/test-postgres-compose.sh "corescope-pg-smoke:$GITHUB_SHA"
+        run: |
+          timeout --kill-after=150s 10m bash scripts/test-postgres-compose.sh "corescope-pg-smoke:$GITHUB_SHA" sqlite
+          timeout --kill-after=150s 10m bash scripts/test-postgres-compose.sh "corescope-pg-smoke:$GITHUB_SHA" postgres
 
   # ───────────────────────────────────────────────────────────────
   # 3b. Publish Docker Image — only after every test job passed
@@ -1239,7 +1347,7 @@ jobs:
             cmd/migrate/go.sum
             internal/**/go.sum
 
-      # The offline importer alone needs cgo and a cross C compiler.
+      # Both release tools support native SQLite and need a cross C compiler.
       - name: Set up Zig
         uses: mlugg/setup-zig@v2
         with:
@@ -1252,8 +1360,9 @@ jobs:
             case "$arch" in amd64) target=x86_64-linux-musl ;; arm64) target=aarch64-linux-musl ;; esac
             (
               cd cmd/decrypt
-              CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -tags netgo,osusergo \
-                -ldflags="-s -w -X main.version=$GITHUB_REF_NAME" -o "../../corescope-decrypt-linux-$arch" .
+              CGO_ENABLED=1 GOOS=linux GOARCH="$arch" CC="zig cc -target $target" \
+                go build -trimpath -tags netgo,osusergo,sqlite_omit_load_extension \
+                -ldflags="-s -w -extldflags '-static -Wl,-s' -X main.version=$GITHUB_REF_NAME" -o "../../corescope-decrypt-linux-$arch" .
             )
             (
               cd cmd/migrate

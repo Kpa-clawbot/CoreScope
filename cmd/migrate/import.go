@@ -120,7 +120,7 @@ func prepareSource(ctx context.Context, o importOptions, tables []importTable, a
 	if err := snapshotSource(ctx, raw, normalized); err != nil {
 		return manifest, "", err
 	}
-	db, err := sql.Open(importSQLiteDriver, sqliteURL(normalized, "rw"))
+	db, err := openSQLite(normalized, "rw")
 	if err != nil {
 		return manifest, "", err
 	}
@@ -240,7 +240,7 @@ func importSQLite(ctx context.Context, o importOptions) (importReport, error) {
 	if err != nil {
 		return report, err
 	}
-	source, err := sql.Open(importSQLiteDriver, sqliteURL(path, "ro"))
+	source, err := openSQLite(path, "ro")
 	if err != nil {
 		return report, err
 	}
@@ -390,7 +390,7 @@ func columnNames(table importTable) ([]string, []string) {
 	return names, quoted
 }
 
-func orderBy(db *sql.DB, table importTable, postgres bool) (string, error) {
+func orderBy(db *sql.DB, table importTable, postgres, hiddenMailID bool) (string, error) {
 	// Sort by logical primary key with identical byte collation in both engines.
 	rows, err := db.Query(`SELECT a.attname FROM pg_index i JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=ANY(i.indkey)
   WHERE i.indrelid=to_regclass($1) AND i.indisprimary ORDER BY array_position(i.indkey,a.attnum)`, table.Name)
@@ -421,7 +421,7 @@ func orderBy(db *sql.DB, table importTable, postgres bool) (string, error) {
 			}
 		}
 		expr := quote(name)
-		if table.Name == "mail_events" && name == "id" && !postgres {
+		if table.Name == "mail_events" && name == "id" && hiddenMailID {
 			expr = "rowid"
 		}
 		if colType == "TEXT" {
@@ -518,7 +518,7 @@ func hashRow(h hash.Hash, values []any) {
 func digestTarget(ctx context.Context, db *sql.DB, table importTable) (tableReport, error) {
 	report := tableReport{Table: table.Name}
 	_, quoted := columnNames(table)
-	order, err := orderBy(db, table, true)
+	order, err := orderBy(db, table, true, false)
 	if err != nil {
 		return report, err
 	}
@@ -614,12 +614,20 @@ func copyTable(ctx context.Context, source, owner *sql.DB, conn *pgx.Conn, table
 		return nil
 	}
 	if exists != 0 {
-		order, err := orderBy(owner, table, false)
+		hiddenMailID := false
+		if o.Kind == "accounts" && table.Name == "mail_events" {
+			var explicit int
+			if err := source.QueryRow(`SELECT count(*) FROM pragma_table_info('mail_events') WHERE name='id'`).Scan(&explicit); err != nil {
+				return report, err
+			}
+			hiddenMailID = explicit == 0
+		}
+		order, err := orderBy(owner, table, false, hiddenMailID)
 		if err != nil {
 			return report, err
 		}
 		expressions := append([]string(nil), quoted...)
-		if o.Kind == "accounts" && table.Name == "mail_events" {
+		if hiddenMailID {
 			expressions[0] = "rowid"
 		}
 		// SQLite's unary + preserves the stored value/type while removing declared
@@ -707,16 +715,21 @@ func reseed(ctx context.Context, source *sql.DB, conn *pgx.Conn, tables []import
 		return err
 	}
 	if hasSequence > 0 {
-		rows, err := source.Query(`SELECT name,seq FROM sqlite_sequence`)
+		rows, err := source.Query(`SELECT name,MAX(seq),count(*) FROM sqlite_sequence GROUP BY name`)
 		if err != nil {
 			return err
 		}
 		for rows.Next() {
 			var name string
 			var n int64
-			if err := rows.Scan(&name, &n); err != nil {
+			var count int
+			if err := rows.Scan(&name, &n, &count); err != nil {
 				rows.Close()
 				return err
+			}
+			if count != 1 || n < 0 {
+				rows.Close()
+				return errors.New("source SQLite sequence state is invalid or duplicated")
 			}
 			highWater[name] = n
 		}
@@ -726,15 +739,7 @@ func reseed(ctx context.Context, source *sql.DB, conn *pgx.Conn, tables []import
 		}
 		rows.Close()
 	}
-	references := map[string][][2]string{}
-	if kind == "telemetry" {
-		references["observers"] = [][2]string{{"observations", "observer_idx"}}
-		references["transmissions"] = [][2]string{{"observations", "transmission_id"}, {"advert_route_evidence", "tx_id"}, {"advert_evidence_backfill", "tx_cursor"}}
-		references["observations"] = [][2]string{{"advert_evidence_backfill", "obs_cursor"}}
-	} else {
-		references["users"] = [][2]string{{"audit_log", "actor_user_id"}, {"audit_log", "target_user_id"}, {"users", "activated_by"}, {"sessions", "user_id"}, {"tokens", "user_id"}, {"mail_log", "user_id"}, {"proposals", "proposer_id"}, {"proposals", "reviewer_id"}}
-		references["mail_log"] = [][2]string{{"mail_events", "mail_id"}}
-	}
+	references := identityReferences(kind)
 	for _, table := range tables {
 		for _, col := range table.Columns {
 			if !col.Identity {

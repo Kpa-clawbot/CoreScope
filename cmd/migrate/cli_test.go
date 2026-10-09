@@ -8,11 +8,10 @@ import (
 	"testing"
 
 	"github.com/meshcore-analyzer/dbschema"
-	"github.com/meshcore-analyzer/pgutil/pgtest"
 )
 
 func TestCheckReadyDoesNotBootstrap(t *testing.T) {
-	dsn := pgtest.NewSchema(t)
+	dsn := postgresSchema(t)
 	t.Setenv("CORESCOPE_DATABASE_URL", dsn)
 	t.Setenv("CORESCOPE_USERS_DATABASE_URL", "")
 	var output bytes.Buffer
@@ -39,7 +38,7 @@ func TestCheckReadyDoesNotBootstrap(t *testing.T) {
 
 func TestCLIImportRequiresOfflineAndDoesNotFinalizeOnAccountFailure(t *testing.T) {
 	source := telemetrySource(t)
-	telemetry, accounts := pgtest.NewDatabase(t), pgtest.NewDatabase(t)
+	telemetry, accounts := postgresDatabase(t), postgresDatabase(t)
 	t.Setenv("CORESCOPE_DATABASE_URL", telemetry)
 	t.Setenv("CORESCOPE_USERS_DATABASE_URL", accounts)
 	var output bytes.Buffer
@@ -57,7 +56,7 @@ func TestCLIImportRequiresOfflineAndDoesNotFinalizeOnAccountFailure(t *testing.T
 }
 
 func TestCheckImportMarkerBindsExactSource(t *testing.T) {
-	dsn, source := pgtest.NewSchema(t), telemetrySource(t)
+	dsn, source := postgresSchema(t), telemetrySource(t)
 	t.Setenv("CORESCOPE_DATABASE_URL", dsn)
 	t.Setenv("CORESCOPE_USERS_DATABASE_URL", "")
 	var output bytes.Buffer
@@ -93,7 +92,7 @@ func TestWALModeCleanShutdownImportAndGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.Close()
-	dsn := pgtest.NewSchema(t)
+	dsn := postgresSchema(t)
 	t.Setenv("CORESCOPE_DATABASE_URL", dsn)
 	t.Setenv("CORESCOPE_USERS_DATABASE_URL", "")
 	var output bytes.Buffer

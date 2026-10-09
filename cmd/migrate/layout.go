@@ -100,13 +100,23 @@ func sqliteColumns(db *sql.DB, table string) ([]importColumn, error) {
 }
 
 func validateSource(db *sql.DB, kind string, tables []importTable) error {
+	var accountVersion int
+	if kind == "accounts" {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*),COALESCE(MAX(version),0) FROM schema_version`).Scan(&n, &accountVersion); err != nil {
+			return errors.New("account source must contain its supported schema_version")
+		}
+		if n != 1 || accountVersion < 0 || accountVersion > users.SQLiteSchemaVersion {
+			return fmt.Errorf("unsupported account schema version %d (supported 0 through %d)", accountVersion, users.SQLiteSchemaVersion)
+		}
+	}
 	allowed := map[string]map[string]bool{}
 	for _, table := range tables {
 		cols := map[string]bool{}
 		for _, col := range table.Columns {
 			cols[col.Name] = true
 		}
-		if kind == "accounts" && table.Name == "mail_events" {
+		if kind == "accounts" && table.Name == "mail_events" && accountVersion < users.SQLiteSchemaVersion {
 			delete(cols, "id")
 		}
 		allowed[table.Name] = cols
@@ -172,13 +182,10 @@ func validateSource(db *sql.DB, kind string, tables []importTable) error {
 	if kind == "telemetry" {
 		return legacy.CheckLegacySource(db)
 	}
-	var n, version int
-	if err := db.QueryRow(`SELECT COUNT(*),COALESCE(MAX(version),0) FROM schema_version`).Scan(&n, &version); err != nil {
-		return errors.New("account source must contain schema_version (supported versions 0 through 5)")
+	if accountVersion == users.SQLiteSchemaVersion {
+		return users.AssertSQLiteReady(db)
 	}
-	if n != 1 || version < 0 || version > users.CurrentSchemaVersion {
-		return fmt.Errorf("unsupported account schema version %d (supported 0 through %d)", version, users.CurrentSchemaVersion)
-	}
+	version := accountVersion
 	// A declared version must contain its complete historical shape. Otherwise
 	// treating an absent table as empty could conceal a damaged account source.
 	expected, err := sql.Open("sqlite3", ":memory:")
@@ -230,6 +237,9 @@ func normalizeSource(db *sql.DB, kind, rawPath string, tables []importTable) err
 		if err := db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil {
 			return err
 		}
+		if version == users.SQLiteSchemaVersion {
+			return nil
+		}
 		for i, migration := range users.LegacyMigrations()[version:] {
 			tx, err := db.Begin()
 			if err != nil {
@@ -257,7 +267,11 @@ func normalizeSource(db *sql.DB, kind, rawPath string, tables []importTable) err
 	// Mutation inventory of legacy.Normalize: only these columns can change
 	// existing rows. Duplicate/invalid-row deletion paths were refused above.
 	// Restore changed tuples by rowid, without rewriting the observation corpus.
-	if _, err := db.Exec(`ATTACH DATABASE ? AS recovery`, sqliteURL(rawPath, "ro")); err != nil {
+	recoveryURI, err := sqliteURL(rawPath, "ro")
+	if err != nil {
+		return err
+	}
+	if _, err := db.Exec(`ATTACH DATABASE ? AS recovery`, recoveryURI); err != nil {
 		return err
 	}
 	defer db.Exec(`DETACH DATABASE recovery`)

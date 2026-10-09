@@ -54,10 +54,12 @@ func TestPruneOldClientReceptions(t *testing.T) {
 // this is a regression guard.
 func TestPruneClientRxObservationsUsesIndex(t *testing.T) {
 	s := newTestStore(t)
-	if _, err := s.db.Exec(`SET enable_seqscan=off`); err != nil {
-		t.Fatal(err)
+	if testBackendValue() == "postgres" {
+		if _, err := s.db.Exec(`SET enable_seqscan=off`); err != nil {
+			t.Fatal(err)
+		}
 	}
-	rows, err := s.db.Query(`EXPLAIN (COSTS OFF) DELETE FROM client_rx_observations WHERE rx_at < $1`, "2026-01-01T00:00:00Z")
+	rows, err := s.db.Query(testNativeSQL(`EXPLAIN QUERY PLAN DELETE FROM client_rx_observations WHERE rx_at < $1`, `EXPLAIN (COSTS OFF) DELETE FROM client_rx_observations WHERE rx_at < $1`), "2026-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +67,7 @@ func TestPruneClientRxObservationsUsesIndex(t *testing.T) {
 	plan := ""
 	for rows.Next() {
 		var detail string
-		if err := rows.Scan(&detail); err != nil {
+		if err := scanTestPlan(rows, &detail); err != nil {
 			t.Fatal(err)
 		}
 		plan += detail + "\n"
@@ -141,7 +143,7 @@ func TestPruneOldClientRxObservations(t *testing.T) {
 func TestClientReceptionsTableExists(t *testing.T) {
 	s := newTestStore(t)
 	cols := map[string]bool{}
-	rows, err := s.db.Query(`SELECT ordinal_position::int,column_name,CASE data_type WHEN 'bigint' THEN 'INTEGER' WHEN 'double precision' THEN 'REAL' ELSE upper(data_type) END,CASE is_nullable WHEN 'NO' THEN 1 ELSE 0 END,column_default,0 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='client_receptions' ORDER BY ordinal_position`)
+	rows, err := s.db.Query(testNativeSQL(`SELECT cid,name,type,"notnull",dflt_value,pk FROM pragma_table_info('client_receptions') ORDER BY cid`, `SELECT ordinal_position::int,column_name,CASE data_type WHEN 'bigint' THEN 'INTEGER' WHEN 'double precision' THEN 'REAL' ELSE upper(data_type) END,CASE is_nullable WHEN 'NO' THEN 1 ELSE 0 END,column_default,0 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='client_receptions' ORDER BY ordinal_position`))
 	if err != nil {
 		t.Fatalf("PRAGMA failed: %v", err)
 	}
@@ -173,9 +175,11 @@ func crI(i int) *int         { return &i }
 // is "Seq Scan on client_receptions".
 func TestClientReceptionsCoverageQueryUsesIndex(t *testing.T) {
 	s := newTestStore(t)
-	q := `EXPLAIN (COSTS OFF) SELECT lat, lon, snr, rssi, heard_key, rx_at
+	q := testNativeSQL(`EXPLAIN QUERY PLAN SELECT lat, lon, snr, rssi, heard_key, rx_at
 		FROM client_receptions
-		WHERE heard_key IN ($1,$2,$3) AND lat BETWEEN $4 AND $5 AND lon BETWEEN $6 AND $7`
+		WHERE heard_key IN ($1,$2,$3) AND lat BETWEEN $4 AND $5 AND lon BETWEEN $6 AND $7`, `EXPLAIN (COSTS OFF) SELECT lat, lon, snr, rssi, heard_key, rx_at
+		FROM client_receptions
+		WHERE heard_key IN ($1,$2,$3) AND lat BETWEEN $4 AND $5 AND lon BETWEEN $6 AND $7`)
 	s.db.Exec(`SET enable_seqscan=off`)
 	rows, err := s.db.Query(q, "aabbccddeeff00112233", "aabbcc", "aabb", 50.0, 52.0, 3.0, 4.0)
 	if err != nil {
@@ -185,7 +189,7 @@ func TestClientReceptionsCoverageQueryUsesIndex(t *testing.T) {
 	plan := ""
 	for rows.Next() {
 		var detail string
-		if err := rows.Scan(&detail); err != nil {
+		if err := scanTestPlan(rows, &detail); err != nil {
 			t.Fatal(err)
 		}
 		plan += detail + "\n"
@@ -203,10 +207,12 @@ func TestClientReceptionsCoverageQueryUsesIndex(t *testing.T) {
 // index rather than full-scanning under the writer lock (polish review).
 func TestClientReceptionsRetentionUsesRxAtIndex(t *testing.T) {
 	s := newTestStore(t)
-	if _, err := s.db.Exec(`SET enable_seqscan=off`); err != nil {
-		t.Fatal(err)
+	if testBackendValue() == "postgres" {
+		if _, err := s.db.Exec(`SET enable_seqscan=off`); err != nil {
+			t.Fatal(err)
+		}
 	}
-	rows, err := s.db.Query(`EXPLAIN (COSTS OFF) DELETE FROM client_receptions WHERE rx_at < $1`, "2026-01-01T00:00:00Z")
+	rows, err := s.db.Query(testNativeSQL(`EXPLAIN QUERY PLAN DELETE FROM client_receptions WHERE rx_at < $1`, `EXPLAIN (COSTS OFF) DELETE FROM client_receptions WHERE rx_at < $1`), "2026-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +220,7 @@ func TestClientReceptionsRetentionUsesRxAtIndex(t *testing.T) {
 	plan := ""
 	for rows.Next() {
 		var detail string
-		if err := rows.Scan(&detail); err != nil {
+		if err := scanTestPlan(rows, &detail); err != nil {
 			t.Fatal(err)
 		}
 		plan += detail + "\n"
@@ -234,16 +240,24 @@ func TestClientReceptionsRetentionUsesRxAtIndex(t *testing.T) {
 // index-backed).
 func TestRxLeaderboardQueryIsIndexBacked(t *testing.T) {
 	s := newTestStore(t)
-	if _, err := s.db.Exec(`SET enable_seqscan=off`); err != nil {
-		t.Fatal(err)
+	if testBackendValue() == "postgres" {
+		if _, err := s.db.Exec(`SET enable_seqscan=off`); err != nil {
+			t.Fatal(err)
+		}
 	}
-	rows, err := s.db.Query(`EXPLAIN (COSTS OFF)
+	rows, err := s.db.Query(testNativeSQL(`EXPLAIN QUERY PLAN
 		SELECT cr.rx_pubkey, COUNT(*), COUNT(DISTINCT cr.heard_key)
 		FROM client_receptions cr
 		WHERE cr.rx_at >= $1
 		GROUP BY cr.rx_pubkey
 		ORDER BY COUNT(*) DESC
-		LIMIT $2`, "2026-01-01T00:00:00Z", 100)
+		LIMIT $2`, `EXPLAIN (COSTS OFF)
+		SELECT cr.rx_pubkey, COUNT(*), COUNT(DISTINCT cr.heard_key)
+		FROM client_receptions cr
+		WHERE cr.rx_at >= $1
+		GROUP BY cr.rx_pubkey
+		ORDER BY COUNT(*) DESC
+		LIMIT $2`), "2026-01-01T00:00:00Z", 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +265,7 @@ func TestRxLeaderboardQueryIsIndexBacked(t *testing.T) {
 	plan := ""
 	for rows.Next() {
 		var detail string
-		if err := rows.Scan(&detail); err != nil {
+		if err := scanTestPlan(rows, &detail); err != nil {
 			t.Fatal(err)
 		}
 		plan += detail + "\n"

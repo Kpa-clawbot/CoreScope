@@ -6,13 +6,13 @@
 [![Frontend Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Kpa-clawbot/CoreScope/master/.badges/frontend-coverage.json)](https://github.com/Kpa-clawbot/CoreScope/actions/workflows/deploy.yml)
 [![Deploy](https://github.com/Kpa-clawbot/CoreScope/actions/workflows/deploy.yml/badge.svg)](https://github.com/Kpa-clawbot/CoreScope/actions/workflows/deploy.yml)
 
-> MeshCore packet analysis with a Go backend, PostgreSQL persistence, real-time WebSocket updates and channel decryption.
+> MeshCore packet analysis with a Go backend, SQLite persistence by default, with optional PostgreSQL, real-time WebSocket updates and channel decryption.
 
 Self-hosted, open-source MeshCore packet analyzer. Collects MeshCore packets via MQTT, decodes them in real time, and presents a full web UI with live packet feed, interactive maps, channel chat, packet tracing, and per-node analytics.
 
 ## ⚡ Performance
 
-The Go backend combines a packet cache with PostgreSQL persistence and SQL-backed analytics. The ingestor owns telemetry writes; the server uses a restricted telemetry reader and a separate optional account writer. Existing SQLite instances require the [offline PostgreSQL upgrade](docs/postgresql-upgrade.md).
+The Go backend combines a packet cache with SQLite or PostgreSQL storage and SQL-backed analytics. SQLite is the default. The ingestor owns telemetry writes; the server reads telemetry and uses a separate optional account store. Ordinary updates keep the recorded backend. Use the [offline storage workflow](docs/storage.md) to change engines without discarding existing data.
 
 Budget for the application and PostgreSQL together, including retained data, indexes, WAL and the packet cache. Historical SQLite measurements in [PERFORMANCE.md](PERFORMANCE.md) are baseline context, not PostgreSQL results. Use the [paired benchmark workflow](.github/workflows/postgres-benchmark.yml) for an exact candidate comparison.
 
@@ -66,26 +66,26 @@ Full experience on your phone — proper touch controls, iOS safe area support, 
 
 ## Quick Start
 
-### Pre-built image with PostgreSQL
+### Pre-built image — SQLite by default
 
-Retain the complete repository at the same reviewed revision as the image. The Compose variants require the common PostgreSQL service and initialization scripts.
+Retain the complete repository at the same reviewed revision as the image. The optional PostgreSQL overrides use the matching shared initialization scripts.
 
 ```bash
 git clone https://github.com/Kpa-clawbot/CoreScope.git
 cd CoreScope
 git checkout --detach "$CORESCOPE_REF"
-cp .env.example .env
+test -f .env || cp .env.example .env
 chmod 600 .env
-# Fill each PostgreSQL password field with a different openssl rand -hex 32 value.
+# No PostgreSQL service or credentials are needed for the default SQLite install.
 # Set CORESCOPE_IMAGE to the matching reviewed image tag or digest.
 docker compose -f docker-compose.example.yml up -d
 ```
 
-Open `http://localhost`. Bootstrap creates separate telemetry and account databases and grants restricted runtime roles before the application starts. Existing SQLite data requires the [offline upgrade](docs/postgresql-upgrade.md) first. See [DEPLOY.md](DEPLOY.md) for ports, MQTT, HTTPS and native backups.
+Open `http://localhost` and verify `/api/healthz` plus actual ingestion. Packaged setup validates existing SQLite data or initializes a provably fresh installation before the application starts. Keep the existing `DATA_DIR` on updates. For a new PostgreSQL install, merge `.env.postgres.example` into the private `.env` and add `-f docker-compose.example.postgres.yml`; existing installations use the verified [storage switch](docs/storage.md). See [DEPLOY.md](DEPLOY.md) for ports, MQTT, HTTPS and backups.
 
 ### Build from source
 
-Use the same complete checkout and private `.env`, then run `./manage.sh setup`. The wizard configures, builds and starts the source deployment. PostgreSQL credentials must already be filled in.
+Use the same complete checkout and private `.env`, then run `./manage.sh setup`. The wizard offers SQLite (default) or PostgreSQL, configures, builds and starts the deployment. It keeps an existing recorded backend; PostgreSQL credentials are generated only for a new empty database directory, preserving existing private settings.
 
 ```bash
 ./manage.sh status
@@ -129,7 +129,9 @@ Copy `config.example.json` to `config.json` and edit:
 | `mqttSources` | External MQTT broker connections (optional) |
 | `channelKeys` | Channel decryption keys (hex). Hashtag channels auto-derived via SHA256 |
 | `defaultRegion` | Default IATA region code for the UI |
-| `databaseURL` | PostgreSQL telemetry URL; prefer the per-process environment credentials below |
+| `db.backend` | Initial choice: `sqlite` (default) or `postgres`; the installation record wins after setup |
+| `dbPath` | SQLite telemetry path; `DB_PATH` is its environment override |
+| `databaseURL` | Optional PostgreSQL telemetry URL; prefer the per-process role credentials below |
 | `stateDir` | Filesystem directory for queues, statistics and account backups (default: `data`) |
 
 ### Environment Variables
@@ -137,6 +139,7 @@ Copy `config.example.json` to `config.json` and edit:
 | Variable | Description |
 |----------|-------------|
 | `PORT` | Override config port |
+| `CORESCOPE_DB_BACKEND` | Bootstrap choice only; use an offline switch to change an installed backend |
 | `CORESCOPE_READER_DATABASE_URL` | Server telemetry reader URL |
 | `CORESCOPE_WRITER_DATABASE_URL` | Ingestor telemetry writer URL |
 | `CORESCOPE_USERS_DATABASE_URL` | Optional account writer URL in a separate database |
@@ -148,14 +151,14 @@ Copy `config.example.json` to `config.json` and edit:
 ```mermaid
 flowchart LR
     MQTT[MQTT observers] --> Ingestor[Go ingestor]
-    Ingestor -->|telemetry writer| Telemetry[(PostgreSQL telemetry)]
+    Ingestor -->|telemetry writer| Telemetry[(SQLite or PostgreSQL telemetry)]
     Telemetry -->|read-only role| Server[Go API server]
     Server <-->|account writer| Accounts[(Separate account database)]
     Accounts -->|approved-channel view| Ingestor
     Server <-->|REST and WebSocket| Browser
 ```
 
-**Two-process model:** The ingestor handles MQTT, decoding, telemetry writes and retention. The HTTP server loads its packet cache and serves REST/WebSocket requests using a read-only telemetry role. Accounts use a separate PostgreSQL database and writer role. Supervisord runs the application processes with Caddy and optional Mosquitto; PostgreSQL runs as a separate service. Bootstrap/import credentials are not runtime credentials.
+**Two-process model:** The ingestor handles MQTT, decoding, telemetry writes and retention. The HTTP server loads its packet cache and serves REST/WebSocket requests using a read-only telemetry role. Accounts use a separate SQLite file or PostgreSQL database. Supervisord runs the application processes with Caddy and optional Mosquitto; PostgreSQL runs as a separate service only when selected. Bootstrap/conversion credentials are not runtime credentials.
 
 ## MQTT Setup
 
@@ -175,14 +178,14 @@ corescope/
 │   │   ├── main.go          # Entry point
 │   │   ├── routes.go        # 40+ API endpoint handlers
 │   │   ├── store.go         # In-memory packet store (5 indexes)
-│   │   ├── db.go            # Read-only PostgreSQL access
+│   │   ├── db.go            # Read-only native storage access
 │   │   ├── decoder.go       # MeshCore packet decoder
 │   │   ├── websocket.go     # WebSocket broadcast
 │   │   └── *_test.go        # Server tests
 │   └── ingestor/            # Go MQTT ingestor
 │       ├── main.go          # MQTT subscription + packet processing
 │       ├── decoder.go       # Packet decoder (shared logic)
-│       ├── db.go            # PostgreSQL writer and retention path
+│       ├── db.go            # Native writer and retention path
 │       └── *_test.go        # Ingestor tests
 ├── proto/                   # Protobuf API definitions
 ├── public/                  # Vanilla JS frontend (no build step)
@@ -227,10 +230,12 @@ that runs on Alpine or scratch. The container build does the same thing — see
 
 ### Test Suite
 
-Go suites exercise real PostgreSQL, role boundaries, concurrency, migration and native backup/restore. The standalone frontend list remains `test-all.sh`; Playwright covers the imported fixture and accounts on/off. CI pins Go 1.27.2 and PostgreSQL 18.6.
+Default Go suites exercise native SQLite without a PostgreSQL service. The explicit PostgreSQL matrix covers role boundaries, concurrency, migration and native backup/restore. The standalone frontend list remains `test-all.sh`; Playwright covers the imported fixture and accounts on/off. CI pins Go 1.27.2 and PostgreSQL 18.6.
 
 ```bash
-# Point this at an isolated PostgreSQL 18 administrator database.
+# Default SQLite tests need no service. For the separate PostgreSQL matrix:
+export CORESCOPE_TEST_BACKEND=postgres
+# Point this at an isolated PostgreSQL18 administrator database.
 # Keep the URL in private environment configuration; pg_dump/pg_restore 18 must be on PATH.
 # CORESCOPE_TEST_POSTGRES_URL is required; database tests do not silently skip.
 # Go backend tests
@@ -255,7 +260,7 @@ node tools/generate-packets.js --api --count 200
 
 ### Migrating from Node.js
 
-Historical Node.js/SQLite deployments must first reach a supported SQLite layout using the last SQLite release, then follow the [offline PostgreSQL upgrade](docs/postgresql-upgrade.md). Preserve the original data, configuration and keys; a container/image update alone does not perform this conversion.
+Historical Node.js/SQLite deployments must first reach a supported SQLite layout using the prior version's explicit upgrade procedure. They can keep SQLite. Use the [offline storage switch](docs/storage.md) only when changing engines. Preserve original data, configuration and keys; a container/image update does not perform a backend conversion.
 
 ## Contributing
 

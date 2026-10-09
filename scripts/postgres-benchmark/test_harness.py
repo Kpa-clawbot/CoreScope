@@ -36,6 +36,26 @@ class MemoryPeakFile(io.BytesIO):
 
 
 class HarnessTests(unittest.TestCase):
+    def test_selected_postgres_setup_is_offline_and_keeps_owner_out_of_argv(self):
+        owner = "postgres://bench_owner:private@127.0.0.1:25432/bench_p00"
+        runtime = {"CORESCOPE_WRITER_DATABASE_URL": "writer", "CORESCOPE_READER_DATABASE_URL": "reader"}
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            with mock.patch.object(bench, "command") as command:
+                bench.record_postgres_selection(root / "bin", root, root / "state", runtime, owner, root / "setup.log", None)
+            args = [str(value) for value in command.call_args.args[0]]
+            self.assertIn("-storage-action=adopt", args)
+            self.assertIn("-backend=postgres", args)
+            self.assertIn("-offline", args)
+            self.assertIn(str(root / "state" / "storage-selection.json"), args)
+            self.assertNotIn(owner, " ".join(args))
+            self.assertEqual(command.call_args.kwargs["env"]["CORESCOPE_DATABASE_URL"], owner)
+            self.assertEqual(command.call_args.kwargs["env"]["CORESCOPE_WRITER_DATABASE_URL"], "writer")
+            self.assertNotIn("CORESCOPE_DATABASE_URL", runtime)
+            with mock.patch.object(bench, "command", side_effect=RuntimeError("selection refused")):
+                with self.assertRaisesRegex(RuntimeError, "selection refused"):
+                    bench.record_postgres_selection(root / "bin", root, root / "state", runtime, owner, root / "setup.log", None)
+
     def test_default_common_rate_and_emitted_worker_configs(self):
         parse = bench.argparse.ArgumentParser.parse_args
         for extra, expected_rate in (([], 50), (["--ingest-rate", "100"], 100)):

@@ -17,10 +17,9 @@ import (
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
-	postgresSchema "github.com/meshcore-analyzer/dbschema"
+	postgresSchemaAPI "github.com/meshcore-analyzer/dbschema"
 	dbschema "github.com/meshcore-analyzer/dbschema/legacy"
 	"github.com/meshcore-analyzer/packetpath"
-	"github.com/meshcore-analyzer/pgutil/pgtest"
 )
 
 // fixtureCandidates lists possible locations of the committed e2e
@@ -44,7 +43,7 @@ func locateFixture(t *testing.T) string {
 
 func TestCommittedFixtureRequiresExplicitDuplicateRepair(t *testing.T) {
 	source := locateFixture(t)
-	_, err := importSQLite(context.Background(), importOptions{Source: source, DatabaseURL: pgtest.NewSchema(t), StateDir: t.TempDir(), Kind: "telemetry"})
+	_, err := importSQLite(context.Background(), importOptions{Source: source, DatabaseURL: postgresSchema(t), StateDir: t.TempDir(), Kind: "telemetry"})
 	if err == nil || !strings.Contains(err.Error(), "duplicate observation identity") {
 		t.Fatalf("raw legacy fixture must require explicit duplicate repair: %v", err)
 	}
@@ -60,7 +59,7 @@ func TestPostgresImportCommittedFixture(t *testing.T) {
 	if err := snapshotSource(context.Background(), original, source); err != nil {
 		t.Fatal(err)
 	}
-	legacyDB, err := sql.Open("sqlite3", sqliteURL(source, "rw"))
+	legacyDB, err := openSQLite(source, "rw")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +78,7 @@ func TestPostgresImportCommittedFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	legacyDB.Close()
-	dsn := pgtest.NewSchema(t)
+	dsn := postgresSchema(t)
 	report, err := importSQLite(context.Background(), importOptions{Source: source, DatabaseURL: dsn, StateDir: t.TempDir(), Kind: "telemetry", BatchSize: 64})
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +90,7 @@ func TestPostgresImportCommittedFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	db := openImportDB(t, dsn)
-	if err := postgresSchema.AssertReady(db); err != nil {
+	if err := postgresSchemaAPI.AssertReady(db); err != nil {
 		t.Fatal(err)
 	}
 	var transmissions, observations int
@@ -131,7 +130,7 @@ func TestFixturePreparationToolKeepsOriginalAndRefusesOverwrite(t *testing.T) {
 	if output, err := exec.Command("go", "run", "../../scripts/migrate-fixture-hashes.go", destination).CombinedOutput(); err != nil {
 		t.Fatalf("prepared fixture hash normalization: %v: %s", err, output)
 	}
-	db, err := sql.Open("sqlite3", sqliteURL(destination, "ro"))
+	db, err := openSQLite(destination, "ro")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +167,7 @@ func TestFixtureHashToolUsesSharedRuntimeIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hash fixture: %v: %s", err, output)
 	}
-	db, err = sql.Open("sqlite3", sqliteURL(file, "ro"))
+	db, err = openSQLite(file, "ro")
 	if err != nil {
 		t.Fatal(err)
 	}

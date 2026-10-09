@@ -157,8 +157,9 @@ func TestResolveUsersBackup(t *testing.T) {
 		t.Fatalf("absent block = %+v; want %+v", set.backup, defaults)
 	}
 	u.DBPath = "private-users.db"
-	if _, err := resolveUserManagement(u, meas, noEnv); err == nil || strings.Contains(err.Error(), u.DBPath) {
-		t.Fatalf("legacy account path must be refused: %v", err)
+	u.DatabaseURL = ""
+	if set, err := resolveUserManagement(u, meas, noEnv); err != nil || set.databaseURL != u.DBPath {
+		t.Fatalf("legacy account path lost: %v", err)
 	}
 	u.DBPath = ""
 	off, on := false, true

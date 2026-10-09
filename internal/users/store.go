@@ -1,6 +1,5 @@
-// Package users is CoreScope's optional PostgreSQL account store. Account
-// state lives in a separate database from telemetry; runtime connections
-// never bootstrap schemas or write telemetry (#1283).
+// Package users owns optional account state, separate from telemetry. One
+// account implementation uses native SQLite or PostgreSQL storage (#1283).
 package users
 
 import (
@@ -11,7 +10,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/pgutil"
+	"modernc.org/sqlite"
 )
 
 var (
@@ -25,20 +26,40 @@ var (
 	ErrAccountChanged = errors.New("users: account changed since it was read")
 )
 
-// A SQL NULL limit means every row for full account exports.
-var noLimit any = nil
-
 // Store owns a separate account database. Safe for concurrent use.
 type Store struct {
-	db          *sql.DB
-	databaseURL string
-	now         func() time.Time
+	db      *sql.DB
+	target  string
+	backend dbconfig.Backend
+	now     func() time.Time
 }
 
-// Open connects using the account runtime role, never applying migrations.
+// OpenStorage consumes the resolved installation choice. Missing PostgreSQL
+// settings never cause a SQLite fallback, and inactive settings are ignored.
+func OpenStorage(storage dbconfig.Storage) (*Store, error) {
+	switch storage.Backend {
+	case dbconfig.SQLite:
+		return openSQLiteMode(storage.UsersDBPath, false, storage.DBPath)
+	case dbconfig.Postgres:
+		return openPostgres(storage.UsersDatabaseURL, storage.ReaderDatabaseURL, storage.WriterDatabaseURL)
+	default:
+		return nil, errors.New("users: account storage backend must be selected")
+	}
+}
+
+// Open retains compatibility for an unambiguous SQLite path or PostgreSQL URL.
+// Application startup should pass its resolved choice to OpenStorage instead.
+func Open(target string, forbidden ...string) (*Store, error) {
+	if strings.HasPrefix(strings.ToLower(target), "postgres:") || strings.HasPrefix(strings.ToLower(target), "postgresql:") {
+		return openPostgres(target, forbidden...)
+	}
+	return openSQLite(target, forbidden...)
+}
+
+// openPostgres connects using the account runtime role, never applying migrations.
 // Every forbidden URL is checked against the effective PostgreSQL database,
 // so alternate hostnames, credentials or search paths cannot bypass isolation.
-func Open(databaseURL string, forbidden ...string) (*Store, error) {
+func openPostgres(databaseURL string, forbidden ...string) (*Store, error) {
 	if _, err := pgutil.ParseConfig(databaseURL); err != nil {
 		return nil, err
 	}
@@ -70,7 +91,26 @@ func Open(databaseURL string, forbidden ...string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db, databaseURL: databaseURL, now: time.Now}, nil
+	return &Store{db: db, target: databaseURL, backend: dbconfig.Postgres, now: time.Now}, nil
+}
+
+// Backend identifies the native snapshot/query format without exposing targets.
+func (s *Store) Backend() dbconfig.Backend { return s.backend }
+
+func (s *Store) p(position int) string { return s.backend.Parameter(position) }
+
+func (s *Store) noLimit() any {
+	if s.backend == dbconfig.SQLite {
+		return -1
+	}
+	return nil
+}
+
+func (s *Store) forUpdate() string {
+	if s.backend == dbconfig.Postgres {
+		return " FOR UPDATE"
+	}
+	return ""
 }
 
 func assertRuntimePrivileges(db *sql.DB) error {
@@ -94,9 +134,9 @@ func assertRuntimePrivileges(db *sql.DB) error {
 
 // lockUser serializes account-level read/modify/write operations, including
 // the initial insert where no settings, tokens or watch rows exist yet.
-func lockUser(tx *sql.Tx, id int64) error {
+func (s *Store) lockUser(tx *sql.Tx, id int64) error {
 	var found int64
-	err := tx.QueryRow(`SELECT id FROM users WHERE id=$1 FOR UPDATE`, id).Scan(&found)
+	err := tx.QueryRow(`SELECT id FROM users WHERE id=`+s.p(1)+s.forUpdate(), id).Scan(&found)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -145,5 +185,9 @@ func expectOne(res sql.Result, err error) error {
 
 func isUniqueViolation(err error) bool {
 	var pgerr *pgconn.PgError
-	return errors.As(err, &pgerr) && pgerr.Code == "23505"
+	if errors.As(err, &pgerr) {
+		return pgerr.Code == "23505"
+	}
+	var sqliteErr *sqlite.Error
+	return errors.As(err, &sqliteErr) && (sqliteErr.Code() == 2067 || sqliteErr.Code() == 1555)
 }

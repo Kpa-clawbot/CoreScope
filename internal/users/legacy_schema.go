@@ -1,7 +1,7 @@
 package users
 
-// LegacyMigrations contains only immutable SQLite upgrade metadata for the offline
-// importer. Runtime account connections never execute these statements.
+// legacyMigrations is the original append-only SQLite upgrade history shared by
+// native account upgrades and the offline importer. Keep these five definitions unchanged.
 var legacyMigrations = [][]string{
 	{ // v1: sub-project A
 		`CREATE TABLE users (

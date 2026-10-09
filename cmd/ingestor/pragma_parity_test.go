@@ -5,12 +5,16 @@ import "testing"
 // Durable settings are measured through the runtime connection, not logs.
 func TestOpenStoreDurability(t *testing.T) {
 	s := newTestStore(t)
-	for _, setting := range []string{"fsync", "full_page_writes", "synchronous_commit"} {
+	settings := map[string]string{"SHOW fsync": "on", "SHOW full_page_writes": "on", "SHOW synchronous_commit": "on"}
+	if s.Backend() == "sqlite" {
+		settings = map[string]string{"PRAGMA journal_mode": "wal", "PRAGMA synchronous": "2", "PRAGMA foreign_keys": "1"}
+	}
+	for setting, want := range settings {
 		var got string
-		if err := s.db.QueryRow("SHOW " + setting).Scan(&got); err != nil {
+		if err := s.db.QueryRow(setting).Scan(&got); err != nil {
 			t.Fatal(err)
 		}
-		if got != "on" {
+		if got != want {
 			t.Errorf("%s=%s; require on", setting, got)
 		}
 	}

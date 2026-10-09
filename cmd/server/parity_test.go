@@ -42,6 +42,12 @@ func loadShapes(t *testing.T) map[string]shapeSpec {
 	if err := json.Unmarshal(data, &shapes); err != nil {
 		t.Fatalf("cannot parse shapes.json: %v", err)
 	}
+	if testBackendValue() == "sqlite" {
+		perf := shapes["perf"]
+		perf.Keys["sqlite"] = perf.Keys["postgres"]
+		delete(perf.Keys, "postgres")
+		shapes["perf"] = perf
+	}
 	return shapes
 }
 

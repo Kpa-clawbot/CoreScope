@@ -1,9 +1,11 @@
 package main
 
 import (
+	"github.com/meshcore-analyzer/dbconfig"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -60,7 +62,7 @@ func newAuthService(set *userMgmtSettings, st *users.Store, m mailer.Mailer) *au
 // initUserManagement builds s.auth when the feature is on. Call it after
 // NewServer and before RegisterRoutes. measurementDatabaseURL is passed to
 // users.Open as a forbidden database, so accounts cannot share telemetry storage.
-func (s *Server) initUserManagement(measurementDatabaseURL string) error {
+func (s *Server) initUserManagement(measurementTarget string) error {
 	if !s.cfg.UserManagementEnabled() {
 		return nil
 	}
@@ -68,7 +70,21 @@ func (s *Server) initUserManagement(measurementDatabaseURL string) error {
 	if err != nil {
 		return err
 	}
-	st, err := users.Open(set.databaseURL, measurementDatabaseURL)
+	storage := dbconfig.Storage{Backend: dbconfig.SQLite, DBPath: measurementTarget, UsersDBPath: set.databaseURL, StateDir: runtimeStateDir}
+	if strings.HasPrefix(measurementTarget, "postgres://") || strings.HasPrefix(measurementTarget, "postgresql://") {
+		storage = dbconfig.Storage{Backend: dbconfig.Postgres, ReaderDatabaseURL: measurementTarget, UsersDatabaseURL: set.databaseURL, StateDir: runtimeStateDir}
+	}
+	return s.initUserManagementStorage(storage)
+}
+func (s *Server) initUserManagementStorage(storage dbconfig.Storage) error {
+	if !s.cfg.UserManagementEnabled() {
+		return nil
+	}
+	set, err := resolveUserManagement(s.cfg.UserManagement, storage.StateDir, os.Getenv)
+	if err != nil {
+		return err
+	}
+	st, err := users.OpenStorage(storage)
 	if err != nil {
 		return err
 	}
@@ -114,8 +130,8 @@ func (s *Server) closeUserManagement() {
 }
 
 func (a *authService) logStartup() {
-	log.Printf("[users] user management enabled: PostgreSQL, %d config admin(s), webhook=%v",
-		len(a.set.adminEmails), a.set.webhookSecret != "")
+	log.Printf("[users] user management enabled: %s, %d config admin(s), webhook=%v",
+		a.st.Backend(), len(a.set.adminEmails), a.set.webhookSecret != "")
 	admins, err := a.st.List(users.ListFilter{Role: users.RoleAdmin})
 	if err != nil {
 		log.Printf("[users] list admins: %v", err)

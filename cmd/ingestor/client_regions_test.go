@@ -480,10 +480,12 @@ func TestCurrentDeclaredRegionsNormalizesTargetCase(t *testing.T) {
 // index seek on idx_ndr_prune rather than a full table scan.
 func TestPruneClientDeclaredRegionsUsesIndex(t *testing.T) {
 	s := newTestStore(t)
-	if _, err := s.db.Exec(`SET enable_seqscan=off`); err != nil {
-		t.Fatal(err)
+	if testBackendValue() == "postgres" {
+		if _, err := s.db.Exec(`SET enable_seqscan=off`); err != nil {
+			t.Fatal(err)
+		}
 	}
-	rows, err := s.db.Query(`EXPLAIN (COSTS OFF) DELETE FROM node_declared_regions WHERE observed_at < $1`, "2026-01-01T00:00:00Z")
+	rows, err := s.db.Query(testNativeSQL(`EXPLAIN QUERY PLAN DELETE FROM node_declared_regions WHERE observed_at < $1`, `EXPLAIN (COSTS OFF) DELETE FROM node_declared_regions WHERE observed_at < $1`), "2026-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -491,7 +493,7 @@ func TestPruneClientDeclaredRegionsUsesIndex(t *testing.T) {
 	plan := ""
 	for rows.Next() {
 		var detail string
-		if err := rows.Scan(&detail); err != nil {
+		if err := scanTestPlan(rows, &detail); err != nil {
 			t.Fatal(err)
 		}
 		plan += detail + "\n"

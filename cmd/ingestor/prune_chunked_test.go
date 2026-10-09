@@ -250,17 +250,19 @@ func TestPruneAgedTransmissionIDsHasOrderedIndex(t *testing.T) {
 		"observations delete":  pruneObservationsBatch,
 		"transmissions delete": pruneTransmissionsBatch,
 	} {
-		if _, err := store.db.Exec(`SET enable_seqscan=off; SET enable_bitmapscan=off`); err != nil {
-			t.Fatal(err)
+		if testBackendValue() == "postgres" {
+			if _, err := store.db.Exec(`SET enable_seqscan=off; SET enable_bitmapscan=off`); err != nil {
+				t.Fatal(err)
+			}
 		}
-		rows, err := store.db.Query("EXPLAIN (COSTS OFF) "+q, cutoff, pruneBatchTransmissions)
+		rows, err := store.db.Query(testNativeSQL(`EXPLAIN QUERY PLAN `, "EXPLAIN (COSTS OFF) ")+q, cutoff, pruneBatchTransmissions)
 		if err != nil {
-			t.Fatalf("%s: EXPLAIN (COSTS OFF): %v", name, err)
+			t.Fatalf(testNativeSQL(`%s: EXPLAIN QUERY PLAN: %v`, "%s: EXPLAIN (COSTS OFF): %v"), name, err)
 		}
 		var steps []string
 		for rows.Next() {
 			var detail string
-			if err := rows.Scan(&detail); err != nil {
+			if err := scanTestPlan(rows, &detail); err != nil {
 				rows.Close()
 				t.Fatalf("%s: scan plan row: %v", name, err)
 			}

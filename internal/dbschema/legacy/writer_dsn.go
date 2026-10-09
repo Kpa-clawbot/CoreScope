@@ -1,5 +1,11 @@
 package legacy
 
+import (
+	"net/url"
+
+	"github.com/meshcore-analyzer/dbconfig"
+)
+
 // WriterDSN builds the DSN every writer must open the database with.
 //
 // It lives here because this package is the one thing cmd/ingestor and
@@ -24,12 +30,13 @@ package legacy
 //   - _cache_size=-2000 — 2000 KiB of page cache per connection. This is
 //     SQLite's own default, pinned so it cannot drift: the page cache is a C
 //     allocation and therefore sits outside GOMEMLIMIT.
-func WriterDSN(path string) string {
-	return path +
-		"?_journal_mode=WAL" +
-		"&_synchronous=FULL" +
-		"&_auto_vacuum=incremental" +
-		"&_foreign_keys=on" +
-		"&_busy_timeout=5000" +
-		"&_cache_size=-2000"
+func WriterDSN(path string) (string, error) {
+	return dbconfig.SQLiteURI(path, url.Values{
+		"_journal_mode": {"WAL"},
+		"_synchronous":  {"FULL"},
+		"_auto_vacuum":  {"incremental"},
+		"_foreign_keys": {"on"},
+		"_busy_timeout": {"5000"},
+		"_cache_size":   {"-2000"},
+	})
 }

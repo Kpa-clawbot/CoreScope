@@ -134,7 +134,7 @@ func (s *Store) ClientRfDeltas(rxPubkey, from, to string) ([]ClientRfDelta, erro
 		       LAG(recv)        OVER w AS prev_recv,
 		       LAG(recv_errors) OVER w AS prev_errs
 		FROM client_rf_samples
-		WHERE rx_pubkey = $1 AND sampled_at >= $2 AND sampled_at < $3
+		WHERE rx_pubkey = `+s.parameter(1)+` AND sampled_at >= `+s.parameter(2)+` AND sampled_at < `+s.parameter(3)+`
 		WINDOW w AS (ORDER BY sampled_at)
 		ORDER BY sampled_at`, rxPubkey, from, to)
 	if err != nil {

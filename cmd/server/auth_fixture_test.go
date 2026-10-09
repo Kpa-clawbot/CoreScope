@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/mailer"
 	"github.com/meshcore-analyzer/pgutil/pgtest"
 	"github.com/meshcore-analyzer/users"
@@ -39,29 +40,32 @@ type client struct {
 }
 
 func newTestAuthService(t *testing.T, adminEmails ...string) (*authService, *mailer.Fake) {
-	a, fake, _ := newTestAuthServiceWithURL(t, pgtest.NewSchema(t), adminEmails...)
+	a, fake, _ := newTestAuthServiceWithURL(t, postgresTestDSN(t), adminEmails...)
 	return a, fake
 }
 
 func newTestBackupAuthService(t *testing.T, adminEmails ...string) (*authService, *mailer.Fake) {
-	a, fake, _ := newTestAuthServiceWithURL(t, pgtest.NewDatabase(t), adminEmails...)
+	a, fake, _ := newTestAuthServiceWithURL(t, testDatabaseDSN(t), adminEmails...)
 	return a, fake
 }
 
 func newTestAuthServiceWithURL(t *testing.T, ownerURL string, adminEmails ...string) (*authService, *mailer.Fake, string) {
 	t.Helper()
-	owner, err := openFixtureSQL(ownerURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer owner.Close()
-	if err := users.Apply(owner); err != nil {
-		t.Fatal(err)
-	}
-	runtimeURL := pgtest.Writer(t, ownerURL)
-	u, _ := url.Parse(runtimeURL)
-	if _, err := owner.Exec(`REVOKE INSERT,UPDATE,DELETE ON corescope_schema,schema_version FROM "` + u.User.Username() + `"`); err != nil {
-		t.Fatal(err)
+	runtimeURL := ownerURL
+	if testBackend(t) == dbconfig.Postgres {
+		owner, err := openFixtureSQL(ownerURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer owner.Close()
+		if err := users.Apply(owner); err != nil {
+			t.Fatal(err)
+		}
+		runtimeURL = pgtest.Writer(t, ownerURL)
+		u, _ := url.Parse(runtimeURL)
+		if _, err := owner.Exec(`REVOKE INSERT,UPDATE,DELETE ON corescope_schema,schema_version FROM "` + u.User.Username() + `"`); err != nil {
+			t.Fatal(err)
+		}
 	}
 	set := &userMgmtSettings{
 		databaseURL: runtimeURL, adminEmails: map[string]bool{},
@@ -88,11 +92,11 @@ func newTestAuthServiceWithURL(t *testing.T, ownerURL string, adminEmails ...str
 
 // newAuthFixture builds a Server with auth on and only the auth routes.
 func newAuthFixture(t *testing.T, adminEmails ...string) *authFixture {
-	return newAuthFixtureWithURL(t, pgtest.NewSchema(t), adminEmails...)
+	return newAuthFixtureWithURL(t, postgresTestDSN(t), adminEmails...)
 }
 
 func newBackupAuthFixture(t *testing.T, adminEmails ...string) *authFixture {
-	return newAuthFixtureWithURL(t, pgtest.NewDatabase(t), adminEmails...)
+	return newAuthFixtureWithURL(t, testDatabaseDSN(t), adminEmails...)
 }
 
 func newAuthFixtureWithURL(t *testing.T, databaseURL string, adminEmails ...string) *authFixture {

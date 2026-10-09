@@ -37,6 +37,7 @@ func TestPostgresInitialDiagnosticFailureIsExplicit(t *testing.T) {
 }
 
 func TestPostgresBlockCacheRatioNullAndZero(t *testing.T) {
+	postgresOnly(t)
 	db := setupTestDB(t)
 	nineTenths, zero, one := 0.9, 0.0, 1.0
 	for _, tc := range []struct {

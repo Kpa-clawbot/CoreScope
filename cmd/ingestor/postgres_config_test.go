@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/meshcore-analyzer/dbconfig"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,11 +34,11 @@ func TestPostgresConfigurationPrecedence(t *testing.T) {
 	}
 }
 
-func TestOpenStoreRejectsLegacyPathsWithoutCreatingFiles(t *testing.T) {
+func TestSelectedPostgresCannotFallBackToSQLiteFiles(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing", "database.db")
-	if s, err := OpenStore(path); err == nil {
+	if s, err := OpenStoreStorage(dbconfig.Storage{Backend: dbconfig.Postgres, DBPath: path}, nil); err == nil {
 		s.Close()
-		t.Fatal("SQLite path accepted as DSN")
+		t.Fatal("missing PostgreSQL URL fell back to SQLite")
 	}
 	if _, err := os.Stat(filepath.Dir(path)); !os.IsNotExist(err) {
 		t.Fatal("legacy path created a directory")

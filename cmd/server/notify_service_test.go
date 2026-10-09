@@ -10,7 +10,6 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/meshcore-analyzer/mailer"
-	"github.com/meshcore-analyzer/pgutil/pgtest"
 	"github.com/meshcore-analyzer/users"
 )
 
@@ -91,7 +90,7 @@ type notifyFixture struct {
 // admin@example.org is a config admin.
 func newNotifyFixture(t *testing.T, ns notifySettings) *notifyFixture {
 	t.Helper()
-	a, fake, ownerURL := newTestAuthServiceWithURL(t, pgtest.NewSchema(t), "admin@example.org")
+	a, fake, ownerURL := newTestAuthServiceWithURL(t, postgresTestDSN(t), "admin@example.org")
 	a.set.notify = ns
 	clk := &notifyClock{t: time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)}
 	a.st.SetClock(clk.Now)
@@ -312,13 +311,13 @@ func TestNotifierStateWriteFailureSendsNothing(t *testing.T) {
 	f.watcher(t, "pat@example.org", "Pat", evPkA)
 	f.setNode(evPkA, "Alpha", "companion", time.Hour, nil)
 	f.tick()
-	f.execDB(t, `CREATE FUNCTION notify_state_fail() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'boom'; END $$; CREATE TRIGGER notify_state_fail BEFORE UPDATE ON notification_state FOR EACH ROW EXECUTE FUNCTION notify_state_fail()`)
+	f.execDB(t, testNativeSQL(`CREATE TRIGGER notify_state_fail BEFORE UPDATE ON notification_state BEGIN SELECT RAISE(ABORT,'boom'); END`, `CREATE FUNCTION notify_state_fail() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'boom'; END $$; CREATE TRIGGER notify_state_fail BEFORE UPDATE ON notification_state FOR EACH ROW EXECUTE FUNCTION notify_state_fail()`))
 	f.clk.Advance(25 * time.Hour)
 	f.tick()
 	if m := f.notifyMails(); len(m) != 0 {
 		t.Fatalf("mailed although the states were not written: %+v", m)
 	}
-	f.execDB(t, `DROP TRIGGER notify_state_fail ON notification_state`)
+	f.execDB(t, testNativeSQL(`DROP TRIGGER notify_state_fail`, `DROP TRIGGER notify_state_fail ON notification_state`))
 	f.tick()
 	if m := f.notifyMails(); len(m) != 1 {
 		t.Fatalf("mails after the write works again = %d; want 1", len(m))
@@ -508,7 +507,7 @@ func TestInitUserManagementStartsTheNotifierOnlyWhenEnabled(t *testing.T) {
 			um.Notifications = &NotificationsConfig{Enabled: true}
 		}
 		srv := &Server{cfg: &Config{UserManagement: um}}
-		if err := srv.initUserManagement(pgtest.NewDatabase(t)); err != nil {
+		if err := srv.initUserManagement(testDatabaseDSN(t)); err != nil {
 			t.Fatal(err)
 		}
 		if (srv.auth.notify != nil) != on {

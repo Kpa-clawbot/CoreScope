@@ -1,8 +1,8 @@
 # corescope build entry point.
 #
 # Each Go module resolves internal dependencies through local replace directives.
-# Runtime binaries use pure Go. Only the offline SQLite importer needs cgo;
-# its Linux cross-build uses zig cc with musl for a fully static binary.
+# SQLite and PostgreSQL are supported by the same binaries. Native SQLite
+# needs cgo; Linux cross-builds use zig cc with musl for fully static binaries.
 #
 # Quick reference:
 #   make build                    # all four binaries for the host
@@ -21,12 +21,11 @@ GOENV_GOARCH      := $(shell "$(GO)" env GOARCH)
 GOOS              ?= $(GOENV_GOOS)
 GOARCH            ?= $(GOENV_GOARCH)
 
-CGO_server       := 0
-CGO_ingestor     := 0
-CGO_decrypt      := 0
+CGO_server       := 1
+CGO_ingestor     := 1
+CGO_decrypt      := 1
 CGO_migrate      := 1
-GO_BUILD_TAGS    ?= netgo,osusergo
-TAGS_migrate    := ,sqlite_omit_load_extension
+GO_BUILD_TAGS    ?= netgo,osusergo,sqlite_omit_load_extension
 GO_BUILD_FLAGS    ?= -trimpath
 GO_LDFLAGS_OPTIMS ?= -s -w
 
@@ -66,7 +65,7 @@ build: $(addprefix build-,$(CMDS))
 build-%:
 	@mkdir -p $(DIST)
 	cd cmd/$* && CGO_ENABLED=$(CGO_$*) GOOS=$(GOOS) GOARCH=$(GOARCH) "$(GO)" build \
-		-tags $(GO_BUILD_TAGS)$(TAGS_$*) $(GO_BUILD_FLAGS) \
+		-tags $(GO_BUILD_TAGS) $(GO_BUILD_FLAGS) \
 		-ldflags "$(GO_LDFLAGS_OPTIMS) $(LDFLAGS_$*)" \
 		-o ../../$(DIST)/corescope-$* .
 
@@ -81,10 +80,10 @@ define CROSSBUILD_RULE
 .PHONY: crossbuild-$(2)-$(3)-$(4)
 crossbuild-$(2)-$(3)-$(4):
 	@mkdir -p $$(DIST)
-	$(if $(filter migrate,$(2)),@command -v zig >/dev/null || { echo "zig not found: needed to cross-compile the offline importer. See https://ziglang.org/download/"; exit 1; },@:)
-	cd cmd/$(2) && CGO_ENABLED=$$(CGO_$(2)) GOOS=$(3) GOARCH=$(4) $(if $(filter migrate,$(2)),CC="zig cc -target $(1)",) \
-		"$$(GO)" build -tags $$(GO_BUILD_TAGS)$$(TAGS_$(2)) $$(GO_BUILD_FLAGS) \
-			-ldflags '$$(GO_LDFLAGS_OPTIMS) $(if $(filter migrate,$(2)),-extldflags "-static -Wl$(comma)-s",) $$(LDFLAGS_$(2))' \
+	@command -v zig >/dev/null || { echo "zig not found: needed to cross-compile native SQLite. See https://ziglang.org/download/"; exit 1; }
+	cd cmd/$(2) && CGO_ENABLED=$$(CGO_$(2)) GOOS=$(3) GOARCH=$(4) CC="zig cc -target $(1)" \
+		"$$(GO)" build -tags $$(GO_BUILD_TAGS) $$(GO_BUILD_FLAGS) \
+			-ldflags '$$(GO_LDFLAGS_OPTIMS) -extldflags "-static -Wl$(comma)-s" $$(LDFLAGS_$(2))' \
 			-o ../../$$(DIST)/corescope-$(2)-$(3)-$(4) .
 endef
 

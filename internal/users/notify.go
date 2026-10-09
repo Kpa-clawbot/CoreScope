@@ -3,7 +3,7 @@ package users
 import (
 	"database/sql"
 	"errors"
-	"fmt"
+	"github.com/meshcore-analyzer/dbconfig"
 	"sort"
 	"strings"
 	"time"
@@ -114,14 +114,14 @@ func canonicalEvents(list []string) []string {
 	return out
 }
 
-func placeholders(n int, offset ...int) string {
+func (s *Store) placeholders(n int, offset ...int) string {
 	start := 1
 	if len(offset) > 0 {
 		start += offset[0]
 	}
 	out := make([]string, n)
 	for i := range out {
-		out[i] = fmt.Sprintf("$%d", start+i)
+		out[i] = s.p(start + i)
 	}
 	return strings.Join(out, ",")
 }
@@ -146,7 +146,7 @@ func scanPrefs(row rowScanner) (*NotifyPrefs, error) {
 }
 
 func (s *Store) getPrefs(userID int64) (*NotifyPrefs, error) {
-	return scanPrefs(s.db.QueryRow(`SELECT `+prefsCols+` FROM notification_prefs WHERE user_id = $1`, userID))
+	return scanPrefs(s.db.QueryRow(`SELECT `+prefsCols+` FROM notification_prefs WHERE user_id = `+s.p(1), userID))
 }
 
 // NotifyPrefsFor returns the user's preferences, creating the default row
@@ -164,7 +164,7 @@ func (s *Store) NotifyPrefsFor(userID int64) (NotifyPrefs, error) {
 	}
 	d := DefaultNotifyPrefs(userID)
 	if _, err := s.db.Exec(`INSERT INTO notification_prefs (user_id, enabled, events, unsub_token, updated_at)
-		VALUES ($1, $2, $3, $4, $5) ON CONFLICT(user_id) DO NOTHING`, userID, 1, strings.Join(d.Events, ","), tok, unix(s.now())); err != nil {
+		VALUES (`+s.p(1)+`, `+s.p(2)+`, `+s.p(3)+`, `+s.p(4)+`, `+s.p(5)+`) ON CONFLICT(user_id) DO NOTHING`, userID, 1, strings.Join(d.Events, ","), tok, unix(s.now())); err != nil {
 		return NotifyPrefs{}, err
 	}
 	p, err := s.getPrefs(userID)
@@ -202,14 +202,14 @@ func (s *Store) SetNotifyPrefs(userID int64, enabled bool, events []string) (Not
 		return NotifyPrefs{}, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`UPDATE notification_prefs SET enabled = $1, events = $2, updated_at = $3 WHERE user_id = $4`,
+	if _, err := tx.Exec(`UPDATE notification_prefs SET enabled = `+s.p(1)+`, events = `+s.p(2)+`, updated_at = `+s.p(3)+` WHERE user_id = `+s.p(4),
 		en, strings.Join(ev, ","), unix(s.now()), userID); err != nil {
 		return NotifyPrefs{}, err
 	}
-	q := `DELETE FROM notification_state WHERE user_id = $1`
+	q := `DELETE FROM notification_state WHERE user_id = ` + s.p(1)
 	args := []any{userID}
 	if len(ev) > 0 {
-		q += ` AND event NOT IN (` + placeholders(len(ev), 1) + `)`
+		q += ` AND event NOT IN (` + s.placeholders(len(ev), 1) + `)`
 		for _, e := range ev {
 			args = append(args, e)
 		}
@@ -236,7 +236,7 @@ func (s *Store) DisableNotifyByToken(token string) (userID int64, wasEnabled boo
 	}
 	defer tx.Rollback()
 	var en int
-	err = tx.QueryRow(`SELECT user_id,enabled FROM notification_prefs WHERE unsub_token=$1 FOR UPDATE`, token).Scan(&userID, &en)
+	err = tx.QueryRow(`SELECT user_id,enabled FROM notification_prefs WHERE unsub_token=`+s.p(1)+s.forUpdate(), token).Scan(&userID, &en)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, false, ErrTokenInvalid
 	}
@@ -244,7 +244,7 @@ func (s *Store) DisableNotifyByToken(token string) (userID int64, wasEnabled boo
 		return 0, false, err
 	}
 	if en != 0 {
-		if _, err = tx.Exec(`UPDATE notification_prefs SET enabled=0,updated_at=$1 WHERE user_id=$2`, unix(s.now()), userID); err != nil {
+		if _, err = tx.Exec(`UPDATE notification_prefs SET enabled=0,updated_at=`+s.p(1)+` WHERE user_id=`+s.p(2), unix(s.now()), userID); err != nil {
 			return 0, false, err
 		}
 	}
@@ -279,11 +279,11 @@ func (s *Store) AddWatches(userID int64, pubkeys []string, max int) (added, alre
 		return 0, 0, 0, err
 	}
 	defer tx.Rollback()
-	if err := lockUser(tx, userID); err != nil {
+	if err := s.lockUser(tx, userID); err != nil {
 		return 0, 0, 0, err
 	}
 	have := map[string]bool{}
-	rows, err := tx.Query(`SELECT pubkey FROM notification_watches WHERE user_id = $1`, userID)
+	rows, err := tx.Query(`SELECT pubkey FROM notification_watches WHERE user_id = `+s.p(1), userID)
 	if err != nil {
 		return 0, 0, 0, err
 	}
@@ -307,7 +307,7 @@ func (s *Store) AddWatches(userID int64, pubkeys []string, max int) (added, alre
 		case max > 0 && len(have) >= max:
 			overLimit++
 		default:
-			if _, err := tx.Exec(`INSERT INTO notification_watches (user_id, pubkey, created_at) VALUES ($1, $2, $3)`, userID, pk, now); err != nil {
+			if _, err := tx.Exec(`INSERT INTO notification_watches (user_id, pubkey, created_at) VALUES (`+s.p(1)+`, `+s.p(2)+`, `+s.p(3)+`)`, userID, pk, now); err != nil {
 				return 0, 0, 0, err
 			}
 			have[pk] = true
@@ -341,15 +341,15 @@ func (s *Store) RemoveWatch(userID int64, pubkey string) error {
 		return err
 	}
 	defer tx.Rollback()
-	if err := lockUser(tx, userID); errors.Is(err, ErrNotFound) {
+	if err := s.lockUser(tx, userID); errors.Is(err, ErrNotFound) {
 		return nil
 	} else if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM notification_watches WHERE user_id = $1 AND pubkey = $2`, userID, pubkey); err != nil {
+	if _, err := tx.Exec(`DELETE FROM notification_watches WHERE user_id = `+s.p(1)+` AND pubkey = `+s.p(2), userID, pubkey); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM notification_state WHERE user_id = $1 AND subject = $2 AND event IN ($3, $4)`,
+	if _, err := tx.Exec(`DELETE FROM notification_state WHERE user_id = `+s.p(1)+` AND subject = `+s.p(2)+` AND event IN (`+s.p(3)+`, `+s.p(4)+`)`,
 		userID, pubkey, NotifyNodeOffline, NotifyNodeBattery); err != nil {
 		return err
 	}
@@ -377,7 +377,7 @@ func (s *Store) queryWatches(q string, args ...any) ([]NotifyWatch, error) {
 
 // WatchesFor returns the user's watches, oldest first.
 func (s *Store) WatchesFor(userID int64) ([]NotifyWatch, error) {
-	return s.queryWatches(`SELECT user_id, pubkey, created_at FROM notification_watches WHERE user_id = $1 ORDER BY created_at, pubkey`, userID)
+	return s.queryWatches(`SELECT user_id, pubkey, created_at FROM notification_watches WHERE user_id = `+s.p(1)+` ORDER BY created_at, pubkey`, userID)
 }
 
 // AllWatches returns every watch, by user and pubkey.
@@ -414,8 +414,12 @@ func (s *Store) WriteNotifyStates(list []NotifyState) error {
 		return err
 	}
 	defer tx.Rollback()
+	lock := ""
+	if s.backend == dbconfig.Postgres {
+		lock = " FOR KEY SHARE"
+	}
 	stmt, err := tx.Prepare(`INSERT INTO notification_state (user_id, event, subject, state, changed_at)
-		SELECT id, $2, $3, $4, $5 FROM users WHERE id=$1 FOR KEY SHARE
+		SELECT id, ` + s.p(2) + `, ` + s.p(3) + `, ` + s.p(4) + `, ` + s.p(5) + ` FROM users WHERE id=` + s.p(1) + lock + `
 		ON CONFLICT (user_id, event, subject) DO UPDATE SET state = excluded.state, changed_at = excluded.changed_at`)
 	if err != nil {
 		return err
@@ -443,7 +447,7 @@ func (s *Store) DeleteNotifyStates(keys []NotifyKey) error {
 		return err
 	}
 	defer tx.Rollback()
-	stmt, err := tx.Prepare(`DELETE FROM notification_state WHERE user_id = $1 AND event = $2 AND subject = $3`)
+	stmt, err := tx.Prepare(`DELETE FROM notification_state WHERE user_id = ` + s.p(1) + ` AND event = ` + s.p(2) + ` AND subject = ` + s.p(3))
 	if err != nil {
 		return err
 	}
@@ -460,7 +464,7 @@ func (s *Store) DeleteNotifyStates(keys []NotifyKey) error {
 // total (deleted accounts included) and per existing user.
 func (s *Store) NotifyMailCounts(since time.Time) (total int, perUser map[int64]int, err error) {
 	perUser = map[int64]int{}
-	rows, err := s.db.Query(`SELECT user_id, COUNT(*) FROM mail_log WHERE purpose = $1 AND sent_at >= $2 GROUP BY user_id`,
+	rows, err := s.db.Query(`SELECT user_id, COUNT(*) FROM mail_log WHERE purpose = `+s.p(1)+` AND sent_at >= `+s.p(2)+` GROUP BY user_id`,
 		NotifyMailPurpose, unix(since))
 	if err != nil {
 		return 0, nil, err

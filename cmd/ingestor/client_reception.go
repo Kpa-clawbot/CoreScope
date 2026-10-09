@@ -128,7 +128,7 @@ func (s *Store) UpsertClientObserver(pubkey, name, ts string) error {
 		return nil
 	}
 	_, err := s.db.Exec(`
-		INSERT INTO client_observers (pubkey, name, last_seen) VALUES ($1,$2,$3)
+		INSERT INTO client_observers (pubkey, name, last_seen) VALUES (`+s.parameter(1)+`,`+s.parameter(2)+`,`+s.parameter(3)+`)
 		ON CONFLICT(pubkey) DO UPDATE SET name = excluded.name, last_seen = excluded.last_seen`,
 		strings.ToLower(pubkey), name, ts)
 	return err
@@ -258,7 +258,7 @@ func (s *Store) InsertClientReception(r *ClientReception) (bool, error) {
 	res, err := s.db.Exec(`
 		INSERT INTO client_receptions
 			(rx_pubkey, heard_key, heard_keylen, rssi, snr, lat, lon, pos_acc_m, rx_at, ingested_at, src)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		VALUES (`+s.parameter(1)+`,`+s.parameter(2)+`,`+s.parameter(3)+`,`+s.parameter(4)+`,`+s.parameter(5)+`,`+s.parameter(6)+`,`+s.parameter(7)+`,`+s.parameter(8)+`,`+s.parameter(9)+`,`+s.parameter(10)+`,`+s.parameter(11)+`)
 		ON CONFLICT(rx_pubkey, heard_key, rx_at) DO NOTHING`,
 		r.RxPubkey, r.HeardKey, r.HeardKeyLen, r.RSSI, r.SNR, r.Lat, r.Lon, r.PosAccM, r.RxAt, r.IngestedAt, r.Src)
 	if err != nil {
@@ -299,7 +299,7 @@ func (s *Store) InsertClientRfSample(o *ClientRfSample) (bool, error) {
 			 uptime_secs, battery_mv, queue_len, errors, noise_floor, last_rssi,
 			 last_snr, tx_air_secs, rx_air_secs, recv, sent, flood_rx, direct_rx,
 			 flood_tx, direct_tx, recv_errors)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+		VALUES (`+s.parameter(1)+`,`+s.parameter(2)+`,`+s.parameter(3)+`,`+s.parameter(4)+`,`+s.parameter(5)+`,`+s.parameter(6)+`,`+s.parameter(7)+`,`+s.parameter(8)+`,`+s.parameter(9)+`,`+s.parameter(10)+`,`+s.parameter(11)+`,`+s.parameter(12)+`,`+s.parameter(13)+`,`+s.parameter(14)+`,`+s.parameter(15)+`,`+s.parameter(16)+`,`+s.parameter(17)+`,`+s.parameter(18)+`,`+s.parameter(19)+`,`+s.parameter(20)+`,`+s.parameter(21)+`,`+s.parameter(22)+`,`+s.parameter(23)+`)
 		ON CONFLICT(rx_pubkey, sampled_at) DO NOTHING`,
 		o.RxPubkey, o.SampledAt, o.IngestedAt, o.Lat, o.Lon, o.PosAccM, boolToInt(o.Stationary),
 		o.UptimeSecs, o.BatteryMV, o.QueueLen, o.Errors, o.NoiseFloor, o.LastRSSI,
@@ -418,7 +418,7 @@ func (s *Store) InsertClientRxObservation(o *ClientRxObservation) (bool, error) 
 			(rx_pubkey, rx_at, ingested_at, pkt_hash, route_type, payload_type,
 			 code1, code2, scope_name, hash_size, hop_count, path_json, forwarder,
 			 snr, rssi, lat, lon, pos_acc_m)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+		VALUES (`+s.parameter(1)+`,`+s.parameter(2)+`,`+s.parameter(3)+`,`+s.parameter(4)+`,`+s.parameter(5)+`,`+s.parameter(6)+`,`+s.parameter(7)+`,`+s.parameter(8)+`,`+s.parameter(9)+`,`+s.parameter(10)+`,`+s.parameter(11)+`,`+s.parameter(12)+`,`+s.parameter(13)+`,`+s.parameter(14)+`,`+s.parameter(15)+`,`+s.parameter(16)+`,`+s.parameter(17)+`,`+s.parameter(18)+`)
 		ON CONFLICT(rx_pubkey, pkt_hash, rx_at) DO NOTHING`,
 		o.RxPubkey, o.RxAt, o.IngestedAt, o.PktHash, o.RouteType, o.PayloadType,
 		o.Code1, o.Code2, o.ScopeName, o.HashSize, o.HopCount, o.PathJSON, o.Forwarder,
@@ -458,7 +458,7 @@ func (s *Store) InsertClientDeclaredRegions(o *ClientDeclaredRegions) (bool, err
 	res, err := s.db.Exec(`
 		INSERT INTO node_declared_regions
 			(target, rx_pubkey, observed_at, ingested_at, regions_csv, truncated, lat, lon, pos_acc_m, repeater_clock)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		VALUES (`+s.parameter(1)+`,`+s.parameter(2)+`,`+s.parameter(3)+`,`+s.parameter(4)+`,`+s.parameter(5)+`,`+s.parameter(6)+`,`+s.parameter(7)+`,`+s.parameter(8)+`,`+s.parameter(9)+`,`+s.parameter(10)+`)
 		ON CONFLICT(target, rx_pubkey, observed_at) DO NOTHING`,
 		o.Target, o.RxPubkey, o.ObservedAt, o.IngestedAt, o.RegionsCSV, boolToInt(o.Truncated), o.Lat, o.Lon, o.PosAccM, o.RepeaterClock)
 	if err != nil {
@@ -478,7 +478,7 @@ func (s *Store) CurrentDeclaredRegions(target string) (*ClientDeclaredRegions, e
 	row := s.db.QueryRow(`
 		SELECT target, rx_pubkey, observed_at, ingested_at, regions_csv, truncated, lat, lon, pos_acc_m, repeater_clock
 		FROM node_declared_regions
-		WHERE target = $1
+		WHERE target = `+s.parameter(1)+`
 		ORDER BY observed_at DESC LIMIT 1`, target)
 	var o ClientDeclaredRegions
 	var truncated int

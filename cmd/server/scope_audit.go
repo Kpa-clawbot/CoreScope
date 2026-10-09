@@ -112,7 +112,7 @@ func (db *DB) declaredRegionsTablePresent() bool {
 		return true
 	}
 	var n int
-	if err := db.conn.QueryRow(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='node_declared_regions'`).Scan(&n); err != nil || n == 0 {
+	if err := db.conn.QueryRow(db.nativeSQL("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='node_declared_regions'", `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='node_declared_regions'`)).Scan(&n); err != nil || n == 0 {
 		return false
 	}
 	db.declaredRegionsTableLate.Store(true)
@@ -252,7 +252,7 @@ func (db *DB) scopeAuditNodeIdentities(pubkeys []string) map[string]scopeAuditNo
 	placeholders := make([]string, len(pubkeys))
 	args := make([]interface{}, len(pubkeys))
 	for i, k := range pubkeys {
-		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		placeholders[i] = fmt.Sprintf("%s", db.parameter(i+1))
 		args[i] = strings.ToLower(k)
 	}
 	rows, err := db.conn.Query(
@@ -386,6 +386,16 @@ var scopeAuditForwarderScanQuery = `
 	FROM transmissions t
 	JOIN observations o ON o.transmission_id = t.id
 	CROSS JOIN LATERAL json_array_elements_text(CASE WHEN o.path_json IS JSON ARRAY THEN o.path_json::json ELSE '[]'::json END) je
+	WHERE t.first_seen >= $1
+	  AND ` + scopeConformanceForwarderRouteTypesSQL + `
+	  AND o.path_json IS NOT NULL
+	  AND LENGTH(je.value) >= ` + fmt.Sprint(minForwarderHopHexLen) + `
+`
+var sqliteScopeAuditForwarderScanQuery = `
+	SELECT t.id, je.value
+	FROM transmissions t
+	JOIN observations o ON o.transmission_id = t.id
+	JOIN json_each(CASE WHEN json_valid(o.path_json) THEN CASE WHEN json_type(o.path_json)='array' THEN o.path_json ELSE '[]' END ELSE '[]' END) je
 	WHERE t.first_seen >= $1
 	  AND ` + scopeConformanceForwarderRouteTypesSQL + `
 	  AND o.path_json IS NOT NULL
@@ -589,7 +599,7 @@ func (s *PacketStore) ScopeAuditForwarding(sinceISO string, targets []string) (m
 		return nil, err
 	}
 
-	rows, err := tx.Query(scopeAuditForwarderScanQuery, sinceISO)
+	rows, err := tx.Query(s.db.nativeSQL(sqliteScopeAuditForwarderScanQuery, scopeAuditForwarderScanQuery), sinceISO)
 	if err != nil {
 		return nil, fmt.Errorf("scope audit forwarder scan: %w", err)
 	}

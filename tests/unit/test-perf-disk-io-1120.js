@@ -50,7 +50,7 @@ function stubFetch(sb, perfData, healthData, ioData, postgresData, sourcesData) 
     if (url === '/api/perf') return Promise.resolve({ json: () => Promise.resolve(perfData) });
     if (url === '/api/health') return Promise.resolve({ json: () => Promise.resolve(healthData) });
     if (url === '/api/perf/io') return Promise.resolve({ json: () => Promise.resolve(ioData) });
-    if (url === '/api/perf/postgres') return Promise.resolve({ json: () => Promise.resolve(postgresData) });
+    if (url === '/api/perf/database') return Promise.resolve({ json: () => Promise.resolve(postgresData) });
     if (url === '/api/perf/write-sources') return Promise.resolve({ json: () => Promise.resolve(sourcesData) });
     return Promise.resolve({ json: () => Promise.resolve({}) });
   };
@@ -82,6 +82,26 @@ const sourcesData = {
 console.log('\n🧪 perf.js — Disk I/O + Write Sources (#1120)\n');
 
 (async () => {
+await test('Selected SQLite renders native diagnostics without PostgreSQL labels', async () => {
+  const sb = loadPerf();
+  const fetched = [];
+  const sqlite = {engine:'sqlite', dbSizeMB:12, walSizeMB:2, freelistMB:1,
+    rows:{transmissions:3, observations:4, nodes:2, observers:1}};
+  sb.ctx.fetch = url => {
+    fetched.push(url);
+    const data = url === '/api/perf' ? {...basePerf, database:sqlite, sqlite} :
+      url === '/api/perf/database' ? {engine:'sqlite', pageCount:300, pageSize:4096, cacheSize:-2000, walSizeMB:2, journalMode:'wal', plannerStats:true} : null;
+    return Promise.resolve({json:()=>Promise.resolve(data)});
+  };
+  sb.pages.perf.init({set innerHTML(v) {}});
+  await new Promise(r=>setTimeout(r,30));
+  const html=sb.getHtml();
+  assert.ok(fetched.includes('/api/perf/database'), 'must fetch selected-backend diagnostics');
+  assert.ok(!fetched.includes('/api/perf/postgres'), 'must not assume a PostgreSQL installation');
+  assert.ok(html.includes('SQLite data') && html.includes('WAL Size') && html.includes('Planner Statistics'),html);
+  assert.ok(!html.includes('PostgreSQL'), 'SQLite must not render PostgreSQL labels');
+});
+
 await test('Renders Disk I/O section', async () => {
   const sb = loadPerf();
   stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, postgresData, sourcesData);

@@ -170,7 +170,7 @@ function context(ref = 'refs/tags/v9.8.7', event = 'workflow_dispatch', inputs =
 // That is what keeps a gate red rather than skipped, which branch protection
 // would count as passing.
 function route(ctx, failedJob, ingestor = 'true') {
-  for (const name of ['changes', 'go-test', 'race-test', 'e2e-shard', 'e2e-test', 'image-check', 'build-and-publish', 'release-artifacts', 'deploy', 'publish']) {
+  for (const name of ['changes', 'go-backend', 'go-test', 'race-backend', 'race-test', 'e2e-shard', 'e2e-test', 'image-check', 'build-and-publish', 'release-artifacts', 'deploy', 'publish']) {
     const job = block(deploy, name, 2);
     assert.ok(job, `missing ${name} job`);
     const needs = value(job, 'needs', 4).replace(/[\[\]\s]/g, '').split(',').filter(Boolean);
@@ -191,6 +191,17 @@ function route(ctx, failedJob, ingestor = 'true') {
     ctx.needs[name] = { result, outputs: { code: 'true', ingestor } };
   }
   return ctx.needs;
+}
+
+// SQLite must have no PostgreSQL service; selected PG must get the pinned one.
+const serviceImage = value(block(deploy, 'postgres', 6), 'image', 8);
+assert.equal(evaluate(serviceImage.startsWith('${{') ? serviceImage : JSON.stringify(serviceImage), { matrix: { backend: 'sqlite' } }), '', 'default SQLite CI starts a PostgreSQL service');
+assert.equal(evaluate(serviceImage.startsWith('${{') ? serviceImage : JSON.stringify(serviceImage), { matrix: { backend: 'postgres' } }), 'postgres:18.6-alpine3.24');
+for (const [gate, worker] of [['go-test','go-backend'], ['race-test','race-backend']]) {
+  const definition = block(deploy, worker, 2);
+  assert.ok(definition.includes('backend: [sqlite, postgres]'), `${worker} must exercise both native backends`);
+  assert.equal(value(definition, 'CORESCOPE_TEST_BACKEND', 6), '${{ matrix.backend }}');
+  assert.ok(value(block(deploy, gate, 2), 'needs', 4).includes(worker), `${gate} does not wait for both backends`);
 }
 
 for (const [name, edge] of [['matching', 'a'.repeat(40)], ['missing', null], ['mismatched', 'b'.repeat(40)]]) {
@@ -282,25 +293,28 @@ for (const [ref, event] of [['refs/heads/master', 'push'], ['refs/heads/master',
   assert.equal(noRace['build-and-publish'].result, 'success', `${event}: a skipped race-test must not block`);
 }
 assert.equal(route(context(), 'go-test')['release-artifacts'].result, 'skipped', 'failed Go validation must block release');
+assert.equal(route(context(), 'go-backend')['go-test'].result, 'failure', 'failed backend matrix must fail the stable Go gate');
+assert.equal(route(context(), 'race-backend')['race-test'].result, 'failure', 'failed race matrix must fail the stable race gate');
 const dispatchInput = block(deploy, 'images_published', 6);
 assert.equal(value(dispatchInput, 'type', 8), 'boolean', 'dispatch flag must retain boolean semantics');
 assert.equal(value(dispatchInput, 'default', 8), 'false', 'manual and fallback dispatches must build images by default');
 
 const release = block(deploy, 'release-artifacts', 2);
 const builds = runSteps(release, context(), null).commands.filter(command => command[0] === 'go');
-// Exercise the actual shell: native PostgreSQL tools use pure Go; the offline
-// importer alone retains SQLite/cgo and a static musl cross-compiler.
+// Exercise the actual release shell: both tools support native SQLite and use
+// the same static musl cross-compiler for both architectures.
 assert.deepEqual(builds.map(command => command.slice(1, 5)), [
-  ['linux', 'amd64', '0', ''],
   ['linux', 'amd64', '1', 'zig cc -target x86_64-linux-musl'],
-  ['linux', 'arm64', '0', ''],
+  ['linux', 'amd64', '1', 'zig cc -target x86_64-linux-musl'],
+  ['linux', 'arm64', '1', 'zig cc -target aarch64-linux-musl'],
   ['linux', 'arm64', '1', 'zig cc -target aarch64-linux-musl'],
 ]);
 for (const command of builds) {
-  const importer = command.includes('netgo,osusergo,sqlite_omit_load_extension');
+  const importer = command.some(arg => arg.includes('corescope-migrate-linux-'));
+  assert.ok(command.includes('netgo,osusergo,sqlite_omit_load_extension'), 'SQLite extension loading must be omitted for static linking');
   assert.ok(command.includes(importer
     ? "-ldflags=-s -w -extldflags '-static -Wl,-s'"
-    : '-ldflags=-s -w -X main.version=v9.8.7'), 'static linking/version flags must match the tool');
+    : "-ldflags=-s -w -extldflags '-static -Wl,-s' -X main.version=v9.8.7"), 'static linking/version flags must match the tool');
   assert.ok(command.includes('-tags'), 'runtime resolver tags must survive');
 }
 const upload = steps(release).filter(step => step.includes('uses: softprops/action-gh-release@v2'));
@@ -433,15 +447,19 @@ console.log('PASS opted-in PR benchmark uses exact head and matching workflow/ha
 // the same name; replacing the first matching substring silently changes login.
 const restoreStep = steps(block(deploy, 'e2e-shard', 2)).find(step => value(step, '- name', 6) === 'Restore native HTTP backups and verify browser sessions');
 const restoreScript = value(restoreStep, 'run', 8);
-const switchURLs = restoreScript.split('# Switch restored database URLs.\n')[1]?.split('# Restart restored servers.')[0];
+const switchURLs = restoreScript.split('# Switch restored database URLs.\n')[1]?.split('# End restored database URLs.')[0];
 assert.ok(switchURLs, 'missing restore URL transformation');
 const sourceURLs = {
   CORESCOPE_USERS_DATABASE_URL: 'postgresql://corescope_accounts:p%40ss%2F%3A%3F%23@db.example.invalid:5433/corescope_accounts?sslmode=verify-full&application_name=corescope_accounts',
   CORESCOPE_READER_DATABASE_URL: 'postgresql://corescope_reader:p%2540%3A%2F@[::1]:5432/corescope_telemetry?sslmode=require&application_name=reader%3Bsmoke'
 };
+sourceURLs.CORESCOPE_WRITER_DATABASE_URL = sourceURLs.CORESCOPE_READER_DATABASE_URL.replace('corescope_reader:', 'corescope_writer:');
+sourceURLs.CORESCOPE_APPROVED_CHANNELS_DATABASE_URL = sourceURLs.CORESCOPE_USERS_DATABASE_URL.replace('corescope_accounts:', 'corescope_channels:');
+sourceURLs.CORESCOPE_DATABASE_URL = sourceURLs.CORESCOPE_READER_DATABASE_URL.replace('corescope_reader:', 'corescope_owner:');
+sourceURLs.CORESCOPE_USERS_OWNER_DATABASE_URL = sourceURLs.CORESCOPE_USERS_DATABASE_URL.replace('corescope_accounts:', 'corescope_owner:');
 const rewritten = spawnSync(bash, ['--noprofile', '--norc', '-e', '-o', 'pipefail'], {
   input: (process.platform === 'win32' ? 'python3(){ python "$@"; }\n' : '') + switchURLs +
-    '\nprintf "%s\\n" "$CORESCOPE_USERS_DATABASE_URL" "$CORESCOPE_READER_DATABASE_URL"\n',
+    '\nprintf "%s\\n" ' + Object.keys(sourceURLs).map(key => '"$' + key + '"').join(' ') + '\n',
   encoding: 'utf8', env: { ...process.env, ...sourceURLs }
 });
 assert.equal(rewritten.status, 0, rewritten.stderr);
@@ -452,6 +470,8 @@ for (const [index, key] of Object.keys(sourceURLs).entries()) {
   for (const field of ['protocol', 'username', 'password', 'host', 'search', 'hash']) {
     assert.equal(restored[field], original[field], 'restore URL changed ' + field);
   }
-  assert.equal(restored.pathname, key === 'CORESCOPE_USERS_DATABASE_URL' ? '/corescope_restore_accounts' : '/corescope_restore_telemetry');
+  assert.equal(restored.pathname, /USERS|APPROVED_CHANNELS/.test(key) ? '/corescope_restore_accounts' : '/corescope_restore_telemetry');
 }
 console.log('PASS native backup restore changes only database URL paths');
+const goMatrix = block(deploy, 'go-backend', 2);
+assert(goMatrix.includes('cd internal/dbconfig') && goMatrix.includes('cd ../sqliteutil'), 'new shared storage modules need their own explicit tests');

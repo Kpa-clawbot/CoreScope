@@ -45,7 +45,7 @@ func (s *Store) Audit(actor *int64, action string, target *int64, detail map[str
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(`INSERT INTO audit_log (at, actor_user_id, action, target_user_id, detail) VALUES ($1, $2, $3, $4, $5)`,
+	_, err = s.db.Exec(`INSERT INTO audit_log (at, actor_user_id, action, target_user_id, detail) VALUES (`+s.p(1)+`, `+s.p(2)+`, `+s.p(3)+`, `+s.p(4)+`, `+s.p(5)+`)`,
 		unix(s.now()), nullInt(actor), action, nullInt(target), string(b))
 	return err
 }
@@ -61,12 +61,12 @@ func (s *Store) AuditFor(userID int64, limit int) ([]AuditEntry, error) {
 
 // AuditAllFor is AuditFor without a cap (the account export).
 func (s *Store) AuditAllFor(userID int64) ([]AuditEntry, error) {
-	return s.auditFor(userID, noLimit)
+	return s.auditFor(userID, s.noLimit())
 }
 
 func (s *Store) auditFor(userID int64, limit any) ([]AuditEntry, error) {
 	rows, err := s.db.Query(`SELECT id, at, actor_user_id, action, target_user_id, detail FROM audit_log
-		WHERE target_user_id = $1 OR actor_user_id = $2 ORDER BY at DESC, id DESC LIMIT $3`, userID, userID, limit)
+		WHERE target_user_id = `+s.p(1)+` OR actor_user_id = `+s.p(2)+` ORDER BY at DESC, id DESC LIMIT `+s.p(3), userID, userID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -81,29 +81,29 @@ func (s *Store) AuditList(f AuditFilter) ([]AuditEntry, error) {
 		var ors []string
 		for _, a := range f.Actions {
 			if group, ok := strings.CutSuffix(a, ".*"); ok {
-				ors = append(ors, fmt.Sprintf(`action = $%d OR action LIKE $%d ESCAPE '\'`, len(args)+1, len(args)+2))
+				ors = append(ors, fmt.Sprintf(`action = %s OR action LIKE %s ESCAPE '\'`, s.p(len(args)+1), s.p(len(args)+2)))
 				args = append(args, group, escapeLike(group)+".%")
 			} else {
-				ors = append(ors, fmt.Sprintf(`action = $%d`, len(args)+1))
+				ors = append(ors, fmt.Sprintf(`action = %s`, s.p(len(args)+1)))
 				args = append(args, a)
 			}
 		}
 		q += ` AND (` + strings.Join(ors, ` OR `) + `)`
 	}
 	if f.UserID != nil {
-		q += fmt.Sprintf(` AND (actor_user_id = $%d OR target_user_id = $%d)`, len(args)+1, len(args)+2)
+		q += fmt.Sprintf(` AND (actor_user_id = %s OR target_user_id = %s)`, s.p(len(args)+1), s.p(len(args)+2))
 		args = append(args, *f.UserID, *f.UserID)
 	}
 	if f.From != nil {
-		q += fmt.Sprintf(` AND at >= $%d`, len(args)+1)
+		q += fmt.Sprintf(` AND at >= %s`, s.p(len(args)+1))
 		args = append(args, unix(*f.From))
 	}
 	if f.To != nil {
-		q += fmt.Sprintf(` AND at <= $%d`, len(args)+1)
+		q += fmt.Sprintf(` AND at <= %s`, s.p(len(args)+1))
 		args = append(args, unix(*f.To))
 	}
 	if f.BeforeID > 0 {
-		q += fmt.Sprintf(` AND id < $%d`, len(args)+1)
+		q += fmt.Sprintf(` AND id < %s`, s.p(len(args)+1))
 		args = append(args, f.BeforeID)
 	}
 	limit := f.Limit
@@ -113,7 +113,7 @@ func (s *Store) AuditList(f AuditFilter) ([]AuditEntry, error) {
 	if limit > AuditListMax {
 		limit = AuditListMax
 	}
-	q += fmt.Sprintf(` ORDER BY id DESC LIMIT $%d`, len(args)+1)
+	q += fmt.Sprintf(` ORDER BY id DESC LIMIT %s`, s.p(len(args)+1))
 	args = append(args, limit)
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
@@ -133,8 +133,8 @@ func (s *Store) PruneAudit(actions []string, maxAge time.Duration) (int64, error
 		args = append(args, a)
 	}
 	args = append(args, unix(s.now())-int64(maxAge/time.Second))
-	ph := placeholders(len(actions))
-	res, err := s.db.Exec(`DELETE FROM audit_log WHERE action IN (`+ph+`) AND at < $`+fmt.Sprint(len(args)), args...)
+	ph := s.placeholders(len(actions))
+	res, err := s.db.Exec(`DELETE FROM audit_log WHERE action IN (`+ph+`) AND at < `+s.p(len(args)), args...)
 	if err != nil {
 		return 0, err
 	}

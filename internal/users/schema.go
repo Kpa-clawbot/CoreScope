@@ -135,12 +135,15 @@ func Tables() []string {
 	return []string{"users", "sessions", "tokens", "audit_log", "mail_log", "mail_events", "user_settings", "proposals", "notification_prefs", "notification_watches", "notification_state"}
 }
 
-// Apply installs account schema using the migration owner's connection. Runtime
-// Open never runs DDL. An advisory transaction lock serializes simultaneous
+// Apply installs PostgreSQL accounts using the migration owner's connection.
+// PostgreSQL runtime Open never runs DDL. An advisory transaction lock serializes simultaneous
 // bootstraps, and all DDL plus the readiness marker commit atomically.
 func Apply(db *sql.DB) error {
 	return apply(db, true)
 }
+
+func ApplyPostgres(db *sql.DB) error       { return Apply(db) }
+func AssertPostgresReady(db *sql.DB) error { return AssertReady(db) }
 
 // ApplyForImport creates the schema with readiness false in the same commit.
 // Only the offline importer's verified completion may change it to true.

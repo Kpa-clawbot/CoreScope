@@ -48,8 +48,8 @@ func (s *Store) backfillAdvertEvidence(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	for _, source := range []struct{ cursor, table, query string }{
-		{"tx_cursor", "transmissions", `SELECT id,id,COALESCE(raw_hex,''),payload_type FROM transmissions WHERE id>$1 AND id<=$2 ORDER BY id LIMIT 500`},
-		{"obs_cursor", "observations", `SELECT o.id,o.transmission_id,COALESCE(o.raw_hex,''),t.payload_type FROM observations o JOIN transmissions t ON t.id=o.transmission_id WHERE o.id>$1 AND o.id<=$2 ORDER BY o.id LIMIT 500`},
+		{"tx_cursor", "transmissions", `SELECT id,id,COALESCE(raw_hex,''),payload_type FROM transmissions WHERE id>` + s.parameter(1) + ` AND id<=` + s.parameter(2) + ` ORDER BY id LIMIT 500`},
+		{"obs_cursor", "observations", `SELECT o.id,o.transmission_id,COALESCE(o.raw_hex,''),t.payload_type FROM observations o JOIN transmissions t ON t.id=o.transmission_id WHERE o.id>` + s.parameter(1) + ` AND o.id<=` + s.parameter(2) + ` ORDER BY o.id LIMIT 500`},
 	} {
 		// A finite horizon prevents live traffic from extending this scan.
 		var upper int64
@@ -101,17 +101,17 @@ func (s *Store) backfillAdvertEvidence(ctx context.Context, db *sql.DB) error {
 			err = func() error {
 				writerMu.Lock()
 				defer writerMu.Unlock()
-				tx, err := beginWriteContext(ctx, db)
+				tx, err := beginWriteContext(ctx, db, s.Backend())
 				if err != nil {
 					return err
 				}
 				defer tx.Rollback()
 				for _, item := range batch {
-					if _, err := tx.ExecContext(ctx, insertAdvertEvidenceSQL+` AND EXISTS(SELECT 1 FROM transmissions WHERE id=$5)`, item.txID, item.bit, item.txID, item.bit, item.txID); err != nil {
+					if _, err := tx.ExecContext(ctx, insertAdvertEvidenceSQL+` AND EXISTS(SELECT 1 FROM transmissions WHERE id=`+s.parameter(5)+`)`, item.txID, item.bit, item.txID, item.bit, item.txID); err != nil {
 						return err
 					}
 				}
-				if _, err := tx.ExecContext(ctx, `UPDATE advert_evidence_backfill SET `+source.cursor+`=$1 WHERE id=1`, lastID); err != nil {
+				if _, err := tx.ExecContext(ctx, `UPDATE advert_evidence_backfill SET `+source.cursor+`=`+s.parameter(1)+` WHERE id=1`, lastID); err != nil {
 					return err
 				}
 				return tx.Commit()

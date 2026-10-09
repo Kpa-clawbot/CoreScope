@@ -2,10 +2,14 @@ package legacy
 
 import (
 	"database/sql"
+	"net/url"
+	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/meshcore-analyzer/dbconfig"
 )
 
 // TestWriterDSNPragmas pins what every writer connection actually gets.
@@ -16,7 +20,11 @@ import (
 // pragma unconditionally, so if it ever drops out of the DSN the durability
 // change is silent.
 func TestWriterDSNPragmas(t *testing.T) {
-	db, err := sql.Open("sqlite3", WriterDSN(filepath.Join(t.TempDir(), "w.db")))
+	dsn, err := WriterDSN(filepath.Join(t.TempDir(), "w.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,5 +47,54 @@ func TestWriterDSNPragmas(t *testing.T) {
 		if got != want.value {
 			t.Errorf("PRAGMA %s = %q, want %q (%s)", want.pragma, got, want.value, want.why)
 		}
+	}
+}
+
+func TestWriterDSNLiteralPathAndReadOnlyURI(t *testing.T) {
+	names := []string{"literal #100%20 space µ.db"}
+	if runtime.GOOS != "windows" {
+		names = append(names, "literal ? query.db")
+	}
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), name)
+			dsn, err := WriterDSN(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			db, err := sql.Open("sqlite3", dsn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = db.Exec(`CREATE TABLE kept(value TEXT);INSERT INTO kept VALUES('same file')`); err != nil {
+				db.Close()
+				t.Fatal(err)
+			}
+			if err = db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(path); err != nil {
+				t.Fatal("literal filename was not created", err)
+			}
+			dsn, err = dbconfig.SQLiteURI(path, url.Values{"mode": {"ro"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ro, err := sql.Open("sqlite3", dsn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ro.Close()
+			var value string
+			if err = ro.QueryRow(`SELECT value FROM kept`).Scan(&value); err != nil || value != "same file" {
+				t.Fatalf("read-only URI opened another file: %q %v", value, err)
+			}
+			if _, err = ro.Exec(`INSERT INTO kept VALUES('forbidden')`); err == nil {
+				t.Fatal("read-only URI allowed writes")
+			}
+		})
+	}
+	if _, err := WriterDSN(""); err == nil {
+		t.Fatal("empty path accepted")
 	}
 }

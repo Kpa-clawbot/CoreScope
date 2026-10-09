@@ -64,7 +64,7 @@ jobs:
             .github/workflows/deploy.yml .github/workflows/postgres-benchmark.yml \
             scripts/postgres-benchmark scripts/install-postgres-ci.sh \
             || { echo 'Workflow or benchmark harness differs from candidate; update the candidate before rerunning' >&2; exit 1; }
-          git cat-file -e 9dbc287579a237ffa744dd0c91fa7227d09763ac^{commit}
+          git cat-file -e 3e21b179ecccae005aa5f6f45bc095353c94b343^{commit}
 
       - name: Test benchmark controls
         run: python3 -m unittest discover -s scripts/postgres-benchmark -p 'test_*.py'

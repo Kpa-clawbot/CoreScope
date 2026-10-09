@@ -5,15 +5,13 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"errors"
-	"fmt"
 	"io"
 	"net/url"
 	"os"
-	"path/filepath"
-	"runtime"
-	"time"
 
 	"github.com/mattn/go-sqlite3"
+	"github.com/meshcore-analyzer/dbconfig"
+	"github.com/meshcore-analyzer/sqliteutil"
 )
 
 const importSQLiteDriver = "corescope_sqlite_import"
@@ -28,138 +26,39 @@ func init() {
 	}})
 }
 
-// snapshotSource creates an offline recovery copy without modifying the input.
-// The backup API preserves hidden rowids used by observer links and mail event
-// ordering. VACUUM INTO may renumber them and is not a safe migration snapshot.
-func snapshotSource(ctx context.Context, source, destination string) (err error) {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	sourceDB, err := sql.Open(importSQLiteDriver, sqliteURL(source, "ro"))
-	if err != nil {
-		return err
-	}
-	defer sourceDB.Close()
-	sourceDB.SetMaxOpenConns(1)
-	if _, err := sourceDB.ExecContext(ctx, `PRAGMA trusted_schema=OFF`); err != nil {
-		return err
-	}
-	var schemaVersion int
-	if err := sourceDB.QueryRowContext(ctx, `PRAGMA schema_version`).Scan(&schemaVersion); err != nil {
-		return fmt.Errorf("read SQLite source: %w", err)
-	}
+// snapshotSource adds offline source immutability checks to the shared native
+// backup. Snapshot itself is also used by live backups that permit writers.
+func snapshotSource(ctx context.Context, source, destination string) error {
 	before, err := sourceFingerprintContext(ctx, source)
 	if err != nil {
 		return err
 	}
-	reserved, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("create new recovery snapshot: %w", err)
-	}
-	if err := reserved.Close(); err != nil {
-		_ = os.Remove(destination)
+	if err := sqliteutil.Snapshot(ctx, source, destination); err != nil {
 		return err
-	}
-	defer func() {
-		if err != nil {
-			for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
-				_ = os.Remove(destination + suffix)
-			}
-		}
-	}()
-	destinationDB, err := sql.Open(importSQLiteDriver, sqliteURL(destination, "rw"))
-	if err != nil {
-		return err
-	}
-	defer destinationDB.Close()
-	destinationDB.SetMaxOpenConns(1)
-	src, err := sourceDB.Conn(ctx)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-	dst, err := destinationDB.Conn(ctx)
-	if err != nil {
-		return err
-	}
-	defer dst.Close()
-	err = src.Raw(func(sourceDriver any) error {
-		return dst.Raw(func(destinationDriver any) (err error) {
-			backup, err := destinationDriver.(*sqlite3.SQLiteConn).Backup("main", sourceDriver.(*sqlite3.SQLiteConn), "main")
-			if err != nil {
-				return err
-			}
-			defer func() {
-				if finishErr := backup.Finish(); err == nil {
-					err = finishErr
-				}
-			}()
-			remaining, progressAt := -1, time.Now()
-			for {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				done, err := backup.Step(256)
-				if err != nil {
-					return err
-				}
-				if done {
-					return nil
-				}
-				if current := backup.Remaining(); current != remaining {
-					remaining, progressAt = current, time.Now()
-					continue
-				}
-				if time.Since(progressAt) > 10*time.Second {
-					return errors.New("SQLite snapshot made no progress; stop all instance writers before retrying")
-				}
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(10 * time.Millisecond):
-				}
-			}
-		})
-	})
-	if err != nil {
-		return fmt.Errorf("copy SQLite recovery snapshot: %w", err)
-	}
-	var check string
-	if err := dst.QueryRowContext(ctx, `PRAGMA quick_check`).Scan(&check); err != nil {
-		return err
-	}
-	if check != "ok" {
-		return errors.New("SQLite recovery snapshot failed integrity verification")
 	}
 	after, err := sourceFingerprintContext(ctx, source)
-	if err != nil {
-		return err
-	}
-	if after != before {
+	if err != nil || before != after {
+		for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+			_ = os.Remove(destination + suffix)
+		}
+		if err != nil {
+			return err
+		}
 		return errors.New("SQLite source changed during snapshot; stop all instance writers before retrying")
-	}
-	if err := dst.Close(); err != nil {
-		return err
-	}
-	if err := destinationDB.Close(); err != nil {
-		return err
 	}
 	return nil
 }
 
-func sqliteURL(path, mode string) string {
-	abs, err := filepath.Abs(path)
+func sqliteURL(path, mode string) (string, error) {
+	return dbconfig.SQLiteURI(path, url.Values{"mode": {mode}, "_busy_timeout": {"5000"}})
+}
+
+func openSQLite(path, mode string) (*sql.DB, error) {
+	uri, err := sqliteURL(path, mode)
 	if err != nil {
-		abs = path
+		return nil, err
 	}
-	abs = filepath.ToSlash(abs)
-	if runtime.GOOS == "windows" {
-		abs = "/" + abs
-	}
-	u := url.URL{Scheme: "file", Path: abs}
-	q := url.Values{"mode": {mode}, "_busy_timeout": {"5000"}}
-	u.RawQuery = q.Encode()
-	return u.String()
+	return sql.Open(importSQLiteDriver, uri)
 }
 
 // Hash the main file and committed-write log without loading either into RAM.

@@ -2,6 +2,7 @@ package users
 
 import (
 	"errors"
+	"github.com/meshcore-analyzer/dbconfig"
 	"strings"
 	"testing"
 	"time"
@@ -272,7 +273,11 @@ func TestApprovedSubjects(t *testing.T) {
 	if empty, err := st.ApprovedSubjects("nothing", 0); err != nil || empty == nil || len(empty) != 0 {
 		t.Fatalf("no rows = %#v, %v; want a non-nil empty slice", empty, err)
 	}
-	rows, err := st.db.Query(ingestorApprovedQuery, 2)
+	ingestorQuery := ingestorApprovedQuery
+	if st.backend == dbconfig.SQLite {
+		ingestorQuery = `SELECT subject FROM proposals WHERE kind = 'hashtag_channel' AND status = 'approved' ORDER BY decided_at, id LIMIT ?1`
+	}
+	rows, err := st.db.Query(ingestorQuery, 2)
 	if err != nil {
 		t.Fatalf("ingestor query: %v", err)
 	}
@@ -334,8 +339,8 @@ func TestProposalSurvivesProposerDeletion(t *testing.T) {
 // A native account schema at v3 binary gains the proposals table and keeps its rows.
 func TestMigrateV3DatabaseToV4(t *testing.T) {
 	st := migratedTestStore(t, 3, `INSERT INTO users (email,display_name,password_hash,created_at) VALUES ('old@example.org','Old','x',1)`)
-	if v, err := st.SchemaVersion(); err != nil || v != len(migrations) {
-		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, len(migrations))
+	if v, err := st.SchemaVersion(); err != nil || v != schemaVersion(t) {
+		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, schemaVersion(t))
 	}
 	if !hasIndex(t, st, "proposals_kind_subject") || !hasIndex(t, st, "proposals_status") {
 		t.Fatal("proposals indexes missing after migration")

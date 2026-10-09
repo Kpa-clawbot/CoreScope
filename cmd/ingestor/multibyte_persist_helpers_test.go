@@ -58,7 +58,7 @@ func logContains(buf *syncBuffer, substr string) bool {
 func columnExists(t *testing.T, db *sql.DB, table, col string) bool {
 	t.Helper()
 	var found bool
-	if err := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1 AND column_name=$2)`, table, col).Scan(&found); err != nil {
+	if err := db.QueryRow(testNativeSQL(`SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)`, `SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1 AND column_name=$2)`), table, col).Scan(&found); err != nil {
 		t.Fatal(err)
 	}
 	return found

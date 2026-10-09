@@ -18,7 +18,7 @@ Comprehensive guide to deploying and operating CoreScope. For a quick start, see
 
 ## System Requirements
 
-The supplied images support `linux/amd64` and `linux/arm64`. Use Docker with the Compose plugin and PostgreSQL 18.6. Budget for the application and database together: earlier SQLite memory figures do not size a PostgreSQL installation. Measure the retained dataset, packet cache, database indexes/WAL and backup storage before choosing capacity.
+The supplied images support `linux/amd64` and `linux/arm64`. Use Docker with the Compose plugin. SQLite is the default; PostgreSQL18.6 is an optional separate service. Budget for the application and database together: earlier SQLite memory figures do not size a PostgreSQL installation. Measure the retained dataset, packet cache, database indexes/WAL and backup storage before choosing capacity.
 
 For migration, retain the original data plus recovery and normalized snapshots while PostgreSQL builds its own data and indexes. Required disk space and downtime must be measured on a representative copy. See [offline upgrade and recovery](postgresql-upgrade.md).
 
@@ -26,16 +26,16 @@ For migration, retain the original data plus recovery and normalized snapshots w
 
 ### Complete Compose checkout
 
-Use [DEPLOY.md](../DEPLOY.md#quick-start) to clone and pin the complete repository, populate the private `.env` and select a matching reviewed image. A downloaded YAML alone is insufficient: it extends `docker/postgres.compose.yml` and mounts the committed initialization script.
+Use [DEPLOY.md](../DEPLOY.md#quick-start) to clone and pin the complete repository, populate the private `.env` and select a matching reviewed image. Keep the matching checkout, including optional PostgreSQL overrides and their initialization scripts.
 
 ```sh
 docker compose -f docker-compose.example.yml up -d
 docker compose -f docker-compose.example.yml ps
 ```
 
-The PostgreSQL service creates separate telemetry and account databases. The one-shot bootstrap installs schemas and grants before CoreScope starts. Existing SQLite files require a completed offline import; startup refuses a manually initialized empty replacement.
+The default app validates/adopts existing SQLite storage or initializes a provably fresh install before starting. The optional `docker-compose.example.postgres.yml` override adds PostgreSQL and owner bootstrap. An installed selection is authoritative; a missing connection or an interrupted conversion never permits SQLite fallback.
 
-The application container runs the server and ingestor, optional Mosquitto, and optional Caddy. PostgreSQL runs separately. Runtime services receive restricted roles; the schema owner belongs only to bootstrap/import.
+The application container runs the server and ingestor, optional Mosquitto, and optional Caddy. When selected, PostgreSQL runs separately. Its runtime services receive restricted roles; the owner belongs only to setup/conversion.
 
 | Setting | Purpose |
 |---|---|
@@ -45,7 +45,7 @@ The application container runs the server and ingestor, optional Mosquitto, and 
 | `CORESCOPE_IMAGE` | Reviewed application image tag or digest matching the checkout |
 | `DISABLE_MOSQUITTO` | Use an external broker when true |
 | `DISABLE_CADDY` | Use an external reverse proxy when true |
-| `CORESCOPE_*_PASSWORD` | Distinct owner and runtime credentials; populate every field in `.env.example` |
+| `CORESCOPE_*_PASSWORD` | Distinct owner and runtime credentials; only for PostgreSQL, merge `.env.postgres.example` |
 
 The production and staging variants use their own directory/port variables listed in `.env.example`. `manage.sh` operates those variants; `./manage.sh start --with-staging` clones telemetry only into an empty staging database and keeps staging accounts independent.
 
@@ -58,7 +58,7 @@ docker compose -f docker-compose.example.yml pull
 docker compose -f docker-compose.example.yml up -d
 ```
 
-A SQLite-to-PostgreSQL upgrade requires the [offline cutover](postgresql-upgrade.md), not only an image update. Keep the previous application and recovery files until validation is complete.
+A backend change in either direction requires the [offline storage switch](storage.md), not only an image update. Ordinary updates keep the recorded choice. Keep the previous application and recovery files until validation is complete.
 
 ---
 
@@ -68,7 +68,9 @@ CoreScope uses a layered configuration system (highest priority wins):
 
 1. **Environment variables** — `MQTT_BROKER`, `CORESCOPE_READER_DATABASE_URL`, etc.
 2. **`/app/data/config.json`** — full config file (volume-mounted)
-3. **Built-in defaults** — database URLs and credentials are still required
+3. **Built-in defaults** — SQLite for a provably fresh installation; PostgreSQL requires its role URLs
+
+After setup, `storage-selection.json` overrides bootstrap backend/path hints. Credentials and TLS remain private config/environment settings. Keep the same shared state directory on restart and update.
 
 ### Environment variable overrides
 
@@ -76,8 +78,8 @@ CoreScope uses a layered configuration system (highest priority wins):
 |----------|---------|-------------|
 | `MQTT_BROKER` | `mqtt://localhost:1883` | MQTT broker URL (overrides config file) |
 | `MQTT_TOPIC` | `meshcore/#` | MQTT topic subscription pattern |
-| `CORESCOPE_READER_DATABASE_URL` | Required by server | Restricted telemetry reader URL |
-| `CORESCOPE_WRITER_DATABASE_URL` | Required by ingestor | Restricted telemetry writer URL |
+| `CORESCOPE_READER_DATABASE_URL` | Required for PostgreSQL | Restricted telemetry reader URL |
+| `CORESCOPE_WRITER_DATABASE_URL` | Required for PostgreSQL | Restricted telemetry writer URL |
 | `CORESCOPE_USERS_DATABASE_URL` | Required when accounts are enabled | Separate account database writer URL |
 | `CORESCOPE_APPROVED_CHANNELS_DATABASE_URL` | Required when proposals are enabled | Restricted approved-channel view reader URL |
 | `CORESCOPE_STATE_DIR` | `data` for native binaries | Shared filesystem state, separate from database URLs |
@@ -86,7 +88,7 @@ CoreScope uses a layered configuration system (highest priority wins):
 
 ### config.json
 
-Place `config.json` in the mounted state directory (`DATA_DIR` in the example deployment). Use private environment configuration for database passwords; do not publish rendered Compose configuration or URLs. Supported native keys are `databaseURL`, `userManagement.databaseURL` and `stateDir`; legacy `dbPath`/`DB_PATH` settings are refused.
+Place `config.json` in the mounted state directory (`DATA_DIR` in the example deployment). Use private environment configuration for database passwords; do not publish rendered Compose configuration or URLs. Supported keys include `db.backend`, SQLite `dbPath`/`DB_PATH` and `userManagement.dbPath`, optional PostgreSQL role URLs, and `stateDir`. Explicit relative SQLite paths use the process working directory; containers use `/app`. Keep container databases/state inside `/app/data` so the bind mount persists them. Set `CORESCOPE_STATE_DIR=/app/data/<subdirectory>` in the private `.env` when using a custom container state directory; every service shares it.
 
 See `config.example.json` in the repository for all available options including:
 - MQTT sources (multiple brokers)
@@ -444,7 +446,7 @@ docker stats corescope
 
 ## Backup & Restore
 
-Use native custom-format PostgreSQL archives. The authenticated `GET /api/backup` and admin `GET /api/admin/users-backup` endpoints download `.dump` files. The server needs PostgreSQL 18 `pg_dump` on `PATH`; the supplied image includes it.
+Use native SQLite snapshots for SQLite or custom-format PostgreSQL archives for PostgreSQL. The authenticated `GET /api/backup` and admin `GET /api/admin/users-backup` endpoints download `.dump` files. The server needs PostgreSQL 18 `pg_dump` on `PATH`; the supplied image includes it.
 
 For the production variant managed by `manage.sh`:
 
@@ -454,7 +456,7 @@ For the production variant managed by `manage.sh`:
 
 This saves `telemetry.dump`, `accounts.dump` and available config/theme/Caddy files. Each archive is consistent, but two sequential dumps are not a shared cross-database snapshot; stop both writers for a coordinated pair. Preserve credentials, queues/state and TLS material separately. Encrypt private backups off-host.
 
-`./manage.sh restore <backup-directory>` requires the application stopped and both target databases empty. It reapplies runtime grants and leaves the application stopped for validation. It never replaces a nonempty PostgreSQL database or accepts a SQLite file. Use a fresh PostgreSQL storage location while retaining the previous cluster for recovery.
+`./manage.sh restore <backup-directory>` requires the application stopped and fresh/empty native targets. SQLite restores stage and validate the full state bundle in a new empty state directory. PostgreSQL restores require both databases empty. It reapplies runtime grants and leaves the application stopped for validation. It never replaces a nonempty PostgreSQL database or overwrites an existing SQLite state directory. Use a fresh PostgreSQL storage location while retaining the previous cluster for recovery.
 
 Account backups contain password hashes, addresses, sessions and tokens. Restoration can revive deleted accounts or revoked credentials. Review the [account recovery procedure](user-guide/accounts.md#backups) before reopening the service. See [native backup and cutover boundaries](postgresql-upgrade.md#native-backups-and-restores) for downloaded archives and rollback.
 

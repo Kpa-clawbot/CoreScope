@@ -55,7 +55,7 @@ func (s *Store) SaveScopeMatchTotals() error {
 	_, err := s.db.Exec(`
 		INSERT INTO scope_match_totals
 			(id, since_unix, unique_matches, explicit_over_derived, ambiguous, none_matches, updated_unix)
-		VALUES (1, $1, $2, $3, $4, $5, $6)
+		VALUES (1, `+s.parameter(1)+`, `+s.parameter(2)+`, `+s.parameter(3)+`, `+s.parameter(4)+`, `+s.parameter(5)+`, `+s.parameter(6)+`)
 		ON CONFLICT(id) DO UPDATE SET
 			since_unix = excluded.since_unix,
 			unique_matches = excluded.unique_matches,

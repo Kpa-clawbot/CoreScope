@@ -254,8 +254,8 @@ func TestUsersOpenIsTheOnlyServerWritePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	call := regexp.MustCompile(`users\.Open\(`)
-	want := regexp.MustCompile(`users\.Open\(set\.databaseURL, measurementDatabaseURL\)`)
+	call := regexp.MustCompile(`users\.OpenStorage\(`)
+	want := regexp.MustCompile(`users\.OpenStorage\(storage\)`)
 	calls, good := 0, 0
 	for _, e := range entries {
 		name := e.Name()

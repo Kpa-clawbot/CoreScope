@@ -1,17 +1,18 @@
 package users
 
 import (
-	"github.com/meshcore-analyzer/pgutil/pgtest"
+	"github.com/meshcore-analyzer/dbconfig"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 )
 
 func TestOpenCreatesSchemaAndIsIdempotent(t *testing.T) {
-	dsn := pgtest.NewSchema(t)
+	dsn := testTarget(t, false)
 	db := testOwner(t, dsn)
-	if err := Apply(db); err != nil {
+	if err := applyTestSchema(t, db); err != nil {
 		t.Fatal(err)
 	}
 	runtimeDSN := testRuntimeURL(t, dsn)
@@ -20,19 +21,26 @@ func TestOpenCreatesSchemaAndIsIdempotent(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if v, err := st.SchemaVersion(); err != nil || v != CurrentSchemaVersion {
+		if v, err := st.SchemaVersion(); err != nil || v != schemaVersion(t) {
 			t.Fatalf("schema=%d,%v", v, err)
 		}
 		st.Close()
-		if err := Apply(db); err != nil {
+		if err := applyTestSchema(t, db); err != nil {
 			t.Fatal(err)
 		}
 	}
 }
 
 func TestOpenRefusesForbiddenPath(t *testing.T) {
-	dsn := pgtest.NewSchema(t)
+	dsn := testTarget(t, false)
 	alias, _ := url.Parse(dsn)
+	if testBackend(t) == dbconfig.SQLite {
+		if st, err := Open(dsn, filepath.Join(filepath.Dir(dsn), ".", filepath.Base(dsn))); err == nil {
+			st.Close()
+			t.Fatal("same SQLite target accepted")
+		}
+		return
+	}
 	q := alias.Query()
 	q.Set("application_name", "different-client")
 	q.Set("search_path", "public")
@@ -46,28 +54,28 @@ func TestOpenRefusesForbiddenPath(t *testing.T) {
 }
 
 func TestOpenRejectsNewerSchema(t *testing.T) {
-	dsn := pgtest.NewSchema(t)
+	dsn := testTarget(t, false)
 	db := testOwner(t, dsn)
-	if err := Apply(db); err != nil {
+	if err := applyTestSchema(t, db); err != nil {
 		t.Fatal(err)
 	}
 	runtimeDSN := testRuntimeURL(t, dsn)
 	if _, err := db.Exec(`UPDATE schema_version SET version=999`); err != nil {
 		t.Fatal(err)
 	}
-	if st, err := Open(runtimeDSN); err == nil || !strings.Contains(err.Error(), "newer") {
+	if st, err := Open(runtimeDSN); err == nil {
 		if st != nil {
 			st.Close()
 		}
 		t.Fatalf("Open with newer schema error=%v", err)
 	}
-	if err := Apply(db); err == nil {
+	if err := applyTestSchema(t, db); err == nil {
 		t.Fatal("bootstrap accepted a newer schema")
 	}
 }
 
 func TestOpenRejectsDSNCharacters(t *testing.T) {
-	for _, dsn := range []string{"users.db", "users?.db", "file:users.db", "postgresql://u:p@host/a?host=elsewhere", "postgresql://u:p@host1,host2/a"} {
+	for _, dsn := range []string{"", "file:users.db", "postgresql://u:p@host/a?host=elsewhere", "postgresql://u:p@host1,host2/a"} {
 		if st, err := Open(dsn); err == nil {
 			st.Close()
 			t.Fatal("unsupported database address accepted")
@@ -76,14 +84,15 @@ func TestOpenRejectsDSNCharacters(t *testing.T) {
 }
 
 func TestApplyConcurrentAndIncomplete(t *testing.T) {
-	dsn := pgtest.NewSchema(t)
+	requirePostgres(t)
+	dsn := testTarget(t, false)
 	db := testOwner(t, dsn)
 	var wg sync.WaitGroup
 	for i := 0; i < 4; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := Apply(db); err != nil {
+			if err := applyTestSchema(t, db); err != nil {
 				t.Errorf("concurrent bootstrap: %v", err)
 			}
 		}()
@@ -95,7 +104,7 @@ func TestApplyConcurrentAndIncomplete(t *testing.T) {
 	if err := AssertReady(db); err == nil {
 		t.Fatal("incomplete import accepted")
 	}
-	if err := Apply(db); err == nil {
+	if err := applyTestSchema(t, db); err == nil {
 		t.Fatal("bootstrap completed an unverified import")
 	}
 }

@@ -10,17 +10,16 @@ import (
 	"testing"
 
 	"github.com/meshcore-analyzer/dbschema"
-	"github.com/meshcore-analyzer/pgutil/pgtest"
 )
 
 func TestResumeRefusesDifferentDestination(t *testing.T) {
-	o := importOptions{Source: telemetrySource(t), DatabaseURL: pgtest.NewSchema(t), StateDir: t.TempDir(), Kind: "telemetry", BatchSize: 1, afterBatch: func() error { return context.Canceled }}
+	o := importOptions{Source: telemetrySource(t), DatabaseURL: postgresSchema(t), StateDir: t.TempDir(), Kind: "telemetry", BatchSize: 1, afterBatch: func() error { return context.Canceled }}
 	if _, err := importSQLite(context.Background(), o); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	o.Resume = true
 	o.afterBatch = nil
-	o.DatabaseURL = pgtest.NewSchema(t)
+	o.DatabaseURL = postgresSchema(t)
 	if _, err := importSQLite(context.Background(), o); err == nil {
 		t.Fatal("resume accepted a different PostgreSQL destination")
 	}
@@ -29,7 +28,7 @@ func TestResumeRefusesDifferentDestination(t *testing.T) {
 func TestResumeAndFinalizationRejectTargetCorruption(t *testing.T) {
 	for _, partial := range []bool{false, true} {
 		t.Run(map[bool]string{false: "finalization", true: "resume"}[partial], func(t *testing.T) {
-			o := importOptions{Source: telemetrySource(t), DatabaseURL: pgtest.NewSchema(t), StateDir: t.TempDir(), Kind: "telemetry", BatchSize: 1}
+			o := importOptions{Source: telemetrySource(t), DatabaseURL: postgresSchema(t), StateDir: t.TempDir(), Kind: "telemetry", BatchSize: 1}
 			if partial {
 				o.afterBatch = func() error { return context.Canceled }
 			}
@@ -75,7 +74,7 @@ func TestImportPreservesRawCaseJSONAndFractionalScore(t *testing.T) {
 		}
 	}
 	db.Close()
-	dsn := pgtest.NewSchema(t)
+	dsn := postgresSchema(t)
 	if _, err := importSQLite(context.Background(), importOptions{Source: source, DatabaseURL: dsn, StateDir: t.TempDir(), Kind: "telemetry"}); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +104,7 @@ func TestImportRejectsUnexpectedViewsTriggersAndFutureAccounts(t *testing.T) {
 			t.Fatal(err)
 		}
 		db.Close()
-		dsn := pgtest.NewSchema(t)
+		dsn := postgresSchema(t)
 		_, err = importSQLite(context.Background(), importOptions{Source: source, DatabaseURL: dsn, StateDir: t.TempDir(), Kind: "accounts"})
 		if err == nil {
 			t.Fatal("unsupported source accepted")
@@ -127,7 +126,7 @@ func TestAccountsReseedDeletedHistoricalReferences(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.Close()
-	dsn := pgtest.NewSchema(t)
+	dsn := postgresSchema(t)
 	if _, err := importSQLite(context.Background(), importOptions{Source: source, DatabaseURL: dsn, StateDir: t.TempDir(), Kind: "accounts"}); err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +155,7 @@ func TestImportRefusesLegacyV2WithUpgradeGuidance(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.Close()
-	_, err = importSQLite(context.Background(), importOptions{Source: source, DatabaseURL: pgtest.NewSchema(t), StateDir: t.TempDir(), Kind: "telemetry"})
+	_, err = importSQLite(context.Background(), importOptions{Source: source, DatabaseURL: postgresSchema(t), StateDir: t.TempDir(), Kind: "telemetry"})
 	if err == nil || !strings.Contains(err.Error(), "upgrade") {
 		t.Fatal("v2 refusal lacks explicit upgrade guidance")
 	}
@@ -179,7 +178,7 @@ func TestAccountVersionMatrixAndMissingDeclaredTable(t *testing.T) {
 				}
 				db.Close()
 			}
-			report, err := importSQLite(context.Background(), importOptions{Source: source, DatabaseURL: pgtest.NewSchema(t), StateDir: t.TempDir(), Kind: "accounts"})
+			report, err := importSQLite(context.Background(), importOptions{Source: source, DatabaseURL: postgresSchema(t), StateDir: t.TempDir(), Kind: "accounts"})
 			if err != nil || !report.Verified {
 				t.Fatalf("account version %d: %v", version, err)
 			}
@@ -195,7 +194,7 @@ func TestAccountVersionMatrixAndMissingDeclaredTable(t *testing.T) {
 			t.Fatal(err)
 		}
 		db.Close()
-		if _, err := importSQLite(context.Background(), importOptions{Source: source, DatabaseURL: pgtest.NewSchema(t), StateDir: t.TempDir(), Kind: "accounts"}); err == nil {
+		if _, err := importSQLite(context.Background(), importOptions{Source: source, DatabaseURL: postgresSchema(t), StateDir: t.TempDir(), Kind: "accounts"}); err == nil {
 			t.Fatal("incomplete declared account schema was accepted")
 		}
 	})
@@ -216,7 +215,7 @@ func TestNormalizeDoesNotRewriteObservationRows(t *testing.T) {
 	if err := snapshotSource(context.Background(), raw, working); err != nil {
 		t.Fatal(err)
 	}
-	db, err = sql.Open("sqlite3", sqliteURL(working, "rw"))
+	db, err = openSQLite(working, "rw")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +242,7 @@ func TestNormalizeDoesNotRewriteObservationRows(t *testing.T) {
 }
 
 func TestImportPopulatesPlannerStatsBeforeReadiness(t *testing.T) {
-	dsn := pgtest.NewSchema(t)
+	dsn := postgresSchema(t)
 	if _, err := importSQLite(context.Background(), importOptions{Source: telemetrySource(t), DatabaseURL: dsn, StateDir: t.TempDir(), Kind: "telemetry"}); err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +277,7 @@ func TestReservedNameDoesNotHideSourceTrigger(t *testing.T) {
 		}
 	}
 	db.Close()
-	db, err = sql.Open("sqlite3", sqliteURL(source, "ro"))
+	db, err = openSQLite(source, "ro")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +287,7 @@ func TestReservedNameDoesNotHideSourceTrigger(t *testing.T) {
 		t.Fatalf("tampered schema fixture: count=%d err=%v", count, err)
 	}
 	db.Close()
-	if _, err := importSQLite(context.Background(), importOptions{Source: source, DatabaseURL: pgtest.NewSchema(t), StateDir: t.TempDir(), Kind: "accounts"}); err == nil {
+	if _, err := importSQLite(context.Background(), importOptions{Source: source, DatabaseURL: postgresSchema(t), StateDir: t.TempDir(), Kind: "accounts"}); err == nil {
 		t.Fatal("reserved-name trigger bypassed source validation")
 	}
 }

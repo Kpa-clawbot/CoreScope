@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/dbschema"
 	"github.com/meshcore-analyzer/pgutil"
 	"github.com/meshcore-analyzer/pgutil/pgtest"
@@ -22,6 +23,9 @@ func openPostgresTestStore(t testing.TB, key string) (*Store, error) {
 	return openPostgresTestStoreInterval(t, key, 300)
 }
 func openPostgresTestStoreInterval(t testing.TB, key string, interval int) (*Store, error) {
+	if testBackend(t) == dbconfig.SQLite {
+		return OpenStoreWithInterval(key, interval)
+	}
 	stateDir := filepath.Dir(key)
 	if strings.HasPrefix(key, "postgres") {
 		stateDir = t.TempDir()
@@ -32,6 +36,9 @@ func openPostgresTestStoreInterval(t testing.TB, key string, interval int) (*Sto
 // A historical fixture path is only a test key. Runtime OpenStore accepts
 // PostgreSQL URLs exclusively, with a real restricted writer credential.
 func testPostgresURL(t testing.TB, key string) string {
+	if testBackend(t) != dbconfig.Postgres {
+		t.Skip("PostgreSQL matrix not selected")
+	}
 	t.Helper()
 	if strings.HasPrefix(key, "postgres://") || strings.HasPrefix(key, "postgresql://") {
 		return key
@@ -79,6 +86,9 @@ func testPostgresURL(t testing.TB, key string) string {
 }
 
 func testAdmin(t testing.TB, s *Store) *sql.DB {
+	if s.Backend() == dbconfig.SQLite {
+		return s.db
+	}
 	t.Helper()
 	var schema string
 	if err := s.db.QueryRow(`SELECT current_schema()`).Scan(&schema); err != nil {

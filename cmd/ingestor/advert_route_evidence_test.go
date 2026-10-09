@@ -65,7 +65,7 @@ func TestAdvertRouteEvidenceSurvivesObservationUpsert(t *testing.T) {
 			if canonical != sequence.raws[0] {
 				t.Fatalf("canonical raw changed: %s", canonical)
 			}
-			if err := s.db.QueryRow(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='advert_route_evidence'`).Scan(&count); err != nil {
+			if err := s.db.QueryRow(testNativeSQL(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='advert_route_evidence'`, `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='advert_route_evidence'`)).Scan(&count); err != nil {
 				t.Fatal(err)
 			}
 			if count != 1 {
@@ -95,7 +95,7 @@ func TestAdvertRouteEvidenceSurvivesObservationUpsert(t *testing.T) {
 				t.Fatal("duplicate traffic appended route evidence")
 			}
 			var sequenceID int64
-			if err := s.db.QueryRow(`SELECT last_value FROM advert_route_evidence_id_seq`).Scan(&sequenceID); err != nil {
+			if err := s.db.QueryRow(testNativeSQL(`SELECT seq FROM sqlite_sequence WHERE name='advert_route_evidence'`, `SELECT last_value FROM advert_route_evidence_id_seq`)).Scan(&sequenceID); err != nil {
 				t.Fatal(err)
 			}
 			if sequenceID != maxID {
@@ -154,7 +154,7 @@ func TestAdvertRouteEvidenceBackfillResumeAndLiveUnion(t *testing.T) {
 	}
 	// Abort after one committed batch; the failed batch must not move its
 	// persisted cursor, so a retry can recover every remaining frame.
-	if _, err := testAdmin(t, s).Exec(`CREATE OR REPLACE FUNCTION fail_evidence_batch_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.tx_id=501 THEN RAISE EXCEPTION 'fixture failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER fail_evidence_batch BEFORE INSERT ON advert_route_evidence FOR EACH ROW EXECUTE FUNCTION fail_evidence_batch_fn()`); err != nil {
+	if _, err := testAdmin(t, s).Exec(testNativeSQL(`CREATE TRIGGER fail_evidence_batch BEFORE INSERT ON advert_route_evidence WHEN NEW.tx_id=501 BEGIN SELECT RAISE(ABORT,'fixture failure'); END`, `CREATE OR REPLACE FUNCTION fail_evidence_batch_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.tx_id=501 THEN RAISE EXCEPTION 'fixture failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER fail_evidence_batch BEFORE INSERT ON advert_route_evidence FOR EACH ROW EXECUTE FUNCTION fail_evidence_batch_fn()`)); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.backfillAdvertEvidence(context.Background(), s.db); err == nil {
@@ -167,7 +167,7 @@ func TestAdvertRouteEvidenceBackfillResumeAndLiveUnion(t *testing.T) {
 	if cursor != 500 {
 		t.Fatalf("cursor=%d after failure, want committed batch boundary 500", cursor)
 	}
-	if _, err := testAdmin(t, s).Exec(`DROP TRIGGER fail_evidence_batch ON advert_route_evidence`); err != nil {
+	if _, err := testAdmin(t, s).Exec(testNativeSQL(`DROP TRIGGER fail_evidence_batch`, `DROP TRIGGER fail_evidence_batch ON advert_route_evidence`)); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
@@ -188,13 +188,13 @@ func TestAdvertRouteEvidenceBackfillResumeAndLiveUnion(t *testing.T) {
 		t.Fatalf("got %d evidence rows, want two per history transmission", count)
 	}
 	var before, after int64
-	if err := s.db.QueryRow(`SELECT last_value FROM advert_route_evidence_id_seq`).Scan(&before); err != nil {
+	if err := s.db.QueryRow(testNativeSQL(`SELECT seq FROM sqlite_sequence WHERE name='advert_route_evidence'`, `SELECT last_value FROM advert_route_evidence_id_seq`)).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.backfillAdvertEvidence(context.Background(), s.db); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.db.QueryRow(`SELECT last_value FROM advert_route_evidence_id_seq`).Scan(&after); err != nil {
+	if err := s.db.QueryRow(testNativeSQL(`SELECT seq FROM sqlite_sequence WHERE name='advert_route_evidence'`, `SELECT last_value FROM advert_route_evidence_id_seq`)).Scan(&after); err != nil {
 		t.Fatal(err)
 	}
 	if before != after {
@@ -227,12 +227,12 @@ func TestAdvertRouteEvidenceFailureKeepsCoreIngestion(t *testing.T) {
 			if _, err := s.db.Exec(`DELETE FROM advert_route_evidence; UPDATE observations SET raw_hex='1200aa',resolved_path=NULL`); err != nil {
 				t.Fatal(err)
 			}
-			stmt := `CREATE OR REPLACE FUNCTION fail_evidence_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.bit=1 THEN RAISE EXCEPTION 'fixture evidence failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER fail_evidence BEFORE INSERT ON advert_route_evidence FOR EACH ROW EXECUTE FUNCTION fail_evidence_fn()`
+			stmt := testNativeSQL(`CREATE TRIGGER fail_evidence BEFORE INSERT ON advert_route_evidence WHEN NEW.bit=1 BEGIN SELECT RAISE(ABORT,'fixture evidence failure'); END`, `CREATE OR REPLACE FUNCTION fail_evidence_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.bit=1 THEN RAISE EXCEPTION 'fixture evidence failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER fail_evidence BEFORE INSERT ON advert_route_evidence FOR EACH ROW EXECUTE FUNCTION fail_evidence_fn()`)
 			if failure == "legacy-read" {
 				stmt = `DROP TABLE advert_evidence_backfill`
 			}
 			if failure == "legacy-write" {
-				stmt = `CREATE OR REPLACE FUNCTION fail_evidence_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.bit=2 THEN RAISE EXCEPTION 'fixture evidence failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER fail_evidence BEFORE INSERT ON advert_route_evidence FOR EACH ROW EXECUTE FUNCTION fail_evidence_fn()`
+				stmt = testNativeSQL(`CREATE TRIGGER fail_evidence BEFORE INSERT ON advert_route_evidence WHEN NEW.bit=2 BEGIN SELECT RAISE(ABORT,'fixture evidence failure'); END`, `CREATE OR REPLACE FUNCTION fail_evidence_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.bit=2 THEN RAISE EXCEPTION 'fixture evidence failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER fail_evidence BEFORE INSERT ON advert_route_evidence FOR EACH ROW EXECUTE FUNCTION fail_evidence_fn()`)
 			}
 			if _, err := testAdmin(t, s).Exec(stmt); err != nil {
 				t.Fatal(err)
@@ -293,21 +293,23 @@ func TestAdvertRouteEvidenceConstraintsAndFeedIndex(t *testing.T) {
 			t.Errorf("constraint accepted: %s", stmt)
 		}
 	}
-	s.db.Exec(`SET enable_seqscan=off`)
-	rows, err := s.db.Query(`EXPLAIN (COSTS OFF) SELECT id,tx_id,bit FROM advert_route_evidence WHERE id>1 ORDER BY id LIMIT 500`)
+	if s.Backend() == "postgres" {
+		s.db.Exec(`SET enable_seqscan=off`)
+	}
+	rows, err := s.db.Query(testNativeSQL(`EXPLAIN QUERY PLAN SELECT id,tx_id,bit FROM advert_route_evidence WHERE id>1 ORDER BY id LIMIT 500`, `EXPLAIN (COSTS OFF) SELECT id,tx_id,bit FROM advert_route_evidence WHERE id>1 ORDER BY id LIMIT 500`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var plan string
 	for rows.Next() {
 		var line string
-		if err := rows.Scan(&line); err != nil {
+		if err := scanTestPlan(rows, &line); err != nil {
 			t.Fatal(err)
 		}
 		plan += line
 	}
 	rows.Close()
-	if !strings.Contains(plan, "advert_route_evidence_pkey") {
+	if !strings.Contains(plan, testNativeSQL("INTEGER PRIMARY KEY", "advert_route_evidence_pkey")) {
 		t.Fatalf("feed must seek by primary key: %s", plan)
 	}
 	if _, err := s.db.Exec(`DELETE FROM observations; DELETE FROM transmissions`); err != nil {
@@ -357,7 +359,7 @@ func TestAdvertRouteEvidenceRejectsUnprovenFrames(t *testing.T) {
 		}
 	}
 	var count int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='advert_route_evidence'`).Scan(&count); err != nil {
+	if err := s.db.QueryRow(testNativeSQL(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='advert_route_evidence'`, `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='advert_route_evidence'`)).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {

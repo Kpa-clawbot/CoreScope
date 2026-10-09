@@ -10,7 +10,6 @@ import (
 	"github.com/meshcore-analyzer/dbschema"
 	"github.com/meshcore-analyzer/dbschema/legacy"
 	"github.com/meshcore-analyzer/pgutil"
-	"github.com/meshcore-analyzer/pgutil/pgtest"
 	"github.com/meshcore-analyzer/users"
 )
 
@@ -57,7 +56,7 @@ func TestImportTelemetryPreservesIDsNullsAndHighWater(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dsn := pgtest.NewSchema(t)
+	dsn := postgresSchema(t)
 	report, err := importSQLite(context.Background(), importOptions{Source: source, DatabaseURL: dsn, StateDir: t.TempDir(), Kind: "telemetry", BatchSize: 2})
 	if err != nil {
 		t.Fatalf("import valid telemetry: %v", err)
@@ -106,7 +105,7 @@ func TestImportTelemetryPreservesIDsNullsAndHighWater(t *testing.T) {
 
 func TestImportInterruptResumeAndWrongSource(t *testing.T) {
 	source := telemetrySource(t)
-	dsn, state := pgtest.NewSchema(t), t.TempDir()
+	dsn, state := postgresSchema(t), t.TempDir()
 	options := importOptions{Source: source, DatabaseURL: dsn, StateDir: state, Kind: "telemetry", BatchSize: 1, afterBatch: func() error { return context.Canceled }}
 	if _, err := importSQLite(context.Background(), options); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected cancellation after committed batch, got %v", err)
@@ -154,7 +153,7 @@ func TestImportInterruptResumeAndWrongSource(t *testing.T) {
 
 func TestImportRefusesUnknownSourceAndOccupiedTarget(t *testing.T) {
 	for _, unknown := range []bool{false, true} {
-		source, dsn := telemetrySource(t), pgtest.NewSchema(t)
+		source, dsn := telemetrySource(t), postgresSchema(t)
 		if unknown {
 			db, err := sql.Open("sqlite3", source)
 			if err != nil {
@@ -221,7 +220,7 @@ func accountSource(t *testing.T, version int) string {
 }
 
 func TestImportLegacyAccountsPreservesAuthenticationAndEventOrder(t *testing.T) {
-	source, dsn := accountSource(t, 1), pgtest.NewSchema(t)
+	source, dsn := accountSource(t, 1), postgresSchema(t)
 	report, err := importSQLite(context.Background(), importOptions{Source: source, DatabaseURL: dsn, StateDir: t.TempDir(), Kind: "accounts", BatchSize: 1})
 	if err != nil {
 		t.Fatal(err)

@@ -143,7 +143,7 @@ func TestLoginAnswersBeforeTheAuditWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	if _, err := conn.ExecContext(context.Background(), "BEGIN; LOCK TABLE audit_log IN SHARE MODE"); err != nil {
+	if _, err := conn.ExecContext(context.Background(), testNativeSQL("BEGIN IMMEDIATE", "BEGIN; LOCK TABLE audit_log IN SHARE MODE")); err != nil {
 		t.Fatal(err)
 	}
 

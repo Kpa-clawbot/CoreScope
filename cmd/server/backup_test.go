@@ -7,12 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/meshcore-analyzer/pgutil/pgtest"
 )
 
 // postgresMagic is the signature of a PostgreSQL custom-format archive.
-const postgresMagic = "PGDMP"
+var postgresMagic = testNativeSQL("SQLite format 3\x00", "PGDMP")
 
 func TestBackupRequiresAPIKey(t *testing.T) {
 	_, router := setupTestServerWithAPIKey(t, "test-secret-key-strong-enough")
@@ -28,7 +26,7 @@ func TestBackupRequiresAPIKey(t *testing.T) {
 func TestBackupRestoresNativePostgresSnapshot(t *testing.T) {
 	const apiKey = "test-secret-key-strong-enough"
 	srv, router := setupTestServerWithAPIKey(t, apiKey)
-	srv.db = setupTestDBAtURL(t, pgtest.NewDatabase(t))
+	srv.db = setupTestDBAtURL(t, testDatabaseDSN(t))
 	seedTestData(t, srv.db)
 	writerURL := srv.db.path
 	reader, err := openFixtureReader(t, writerURL)
@@ -53,7 +51,7 @@ func TestBackupRestoresNativePostgresSnapshot(t *testing.T) {
 	}
 
 	cd := w.Header().Get("Content-Disposition")
-	if !strings.HasPrefix(cd, "attachment;") || !strings.Contains(cd, "filename=\"corescope-backup-") || !strings.HasSuffix(cd, ".dump\"") {
+	if !strings.HasPrefix(cd, "attachment;") || !strings.Contains(cd, "filename=\"corescope-backup-") || !strings.HasSuffix(cd, testNativeSQL(".db\"", ".dump\"")) {
 		t.Errorf("expected Content-Disposition attachment with corescope-backup-<ts>.dump filename, got %q", cd)
 	}
 

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/meshcore-analyzer/pgutil/pgtest"
 	"github.com/meshcore-analyzer/users"
 )
 
@@ -50,7 +49,7 @@ func TestImportRejectsGeneratedAccountColumnsBeforeNormalization(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				dsn, state := pgtest.NewSchema(t), t.TempDir()
+				dsn, state := postgresSchema(t), t.TempDir()
 				report, err := importSQLite(context.Background(), importOptions{Source: source, DatabaseURL: dsn, StateDir: state, Kind: "accounts"})
 				if err == nil || !strings.Contains(err.Error(), "generated or hidden") {
 					t.Errorf("generated source must be explicitly refused before normalization: verified=%v error=%v", report.Verified, err)
@@ -63,7 +62,7 @@ func TestImportRejectsGeneratedAccountColumnsBeforeNormalization(t *testing.T) {
 				if err := users.AssertReady(target); err == nil {
 					t.Error("unsupported source became runtime-ready")
 				}
-				normalized, err := sql.Open("sqlite3", sqliteURL(filepath.Join(state, "accounts", "normalized.sqlite"), "ro"))
+				normalized, err := openSQLite(filepath.Join(state, "accounts", "normalized.sqlite"), "ro")
 				if err != nil {
 					t.Fatal(err)
 				}

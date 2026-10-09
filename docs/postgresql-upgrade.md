@@ -1,8 +1,10 @@
+> PostgreSQL is optional. Normal installs and updates keep SQLite by default. Use [storage operations](storage.md) for the current setup and verified bidirectional switch. This page retains the lower-level forward-import and PostgreSQL-native recovery details; adding a Compose override alone is not a conversion.
+
 # PostgreSQL installation and offline upgrade
 
-CoreScope uses PostgreSQL for telemetry and optional accounts. The tested database version is PostgreSQL 18.6. Keep the application checkout, image, shared Compose file, bootstrap scripts and configuration example from the same reviewed revision.
+When selected, PostgreSQL stores telemetry and optional accounts. The tested database version is PostgreSQL 18.6. Keep the application checkout, image, shared Compose file, bootstrap scripts and configuration example from the same reviewed revision.
 
-Existing SQLite instances need a planned outage. Stop **both** the ingestor and server: the account janitor, sessions, proposals and notification evaluator also write data. MQTT messages arriving during this window may be lost unless the broker and publishers provide a separately verified replay mechanism.
+Switching an existing SQLite instance to PostgreSQL needs a planned outage. Stop **both** the ingestor and server: the account janitor, sessions, proposals and notification evaluator also write data. MQTT messages arriving during this window may be lost unless the broker and publishers provide a separately verified replay mechanism.
 
 For an existing instance, the upgrade path is:
 
@@ -24,9 +26,9 @@ The supplied deployment creates `corescope_telemetry` and `corescope_accounts` o
 | `corescope_accounts` | Account data writes; no schema or readiness-marker writes. |
 | `corescope_channels` | Ingestor reads of the approved-channel view; no access to passwords or sessions. |
 
-Preserve an existing private `.env` and merge only missing settings from `.env.example`; do not replace its paths, ports, broker settings or passwords. For a new PostgreSQL data directory, fill each missing password field with a different value from `openssl rand -hex 32` and keep `.env` permissions at `0600`. PostgreSQL creates roles only on first initialization: editing `.env` later does **not** rotate their passwords. If an interrupted installation has lost its matching `.env`, recover that file or perform a coordinated administrator password rotation with all application services stopped; do not delete the PostgreSQL volume to fix authentication. The Compose files supply runtime URLs; credentials do not belong in Git, screenshots, issue reports or command arguments. On native installations, use private environment configuration with `CORESCOPE_READER_DATABASE_URL`, `CORESCOPE_WRITER_DATABASE_URL`, `CORESCOPE_USERS_DATABASE_URL` and `CORESCOPE_APPROVED_CHANNELS_DATABASE_URL`.
+Preserve an existing private `.env` and merge only missing PostgreSQL settings from `.env.postgres.example`; do not replace its paths, ports, broker settings or passwords. For a new PostgreSQL data directory, fill each missing password field with a different value from `openssl rand -hex 32` and keep `.env` permissions at `0600`. PostgreSQL creates roles only on first initialization: editing `.env` later does **not** rotate their passwords. If an interrupted installation has lost its matching `.env`, recover that file or perform a coordinated administrator password rotation with all application services stopped; do not delete the PostgreSQL volume to fix authentication. The Compose files supply runtime URLs; credentials do not belong in Git, screenshots, issue reports or command arguments. On native installations, use private environment configuration with `CORESCOPE_READER_DATABASE_URL`, `CORESCOPE_WRITER_DATABASE_URL`, `CORESCOPE_USERS_DATABASE_URL` and `CORESCOPE_APPROVED_CHANNELS_DATABASE_URL`.
 
-`databaseURL` replaces `dbPath`; `CORESCOPE_DATABASE_URL` is the per-process fallback. Remove legacy `dbPath`, `userManagement.dbPath` and `DB_PATH` settings after preserving their old values for recovery. `stateDir` / `CORESCOPE_STATE_DIR` is a separate filesystem directory for queues, statistics and account backups. A database URL is never a directory name.
+Before initial adoption, configure the intended PostgreSQL URLs explicitly; `CORESCOPE_DATABASE_URL` is the per-process fallback. Once recorded, the selected targets override stale `dbPath`, `userManagement.dbPath` and `DB_PATH` bootstrap hints, so removing those hints is unnecessary. `stateDir` / `CORESCOPE_STATE_DIR` is a separate, stable filesystem directory for the selection, queues, statistics and account backups. A database URL is never a directory name.
 
 Main runtime pool limits are four server telemetry connections, one ingestor connection and one account connection. Bootstrap, identity checks and backups open additional connections. Connection attempts default to a ten-second upper bound; a shorter URL `connect_timeout` is retained. Native application dumps also have a ten-minute deadline. Backend credentials and pool limits are not theme/customizer controls.
 
@@ -36,7 +38,7 @@ Main runtime pool limits are four server telemetry connections, one ingestor con
 |---|---|
 | Telemetry v3 with `observations.observer_idx` and the known optional columns | Supported. Missing supported columns/tables are added only to a working copy. |
 | Telemetry v2 with `observer_id`, or an older Node-era layout | Refused. Upgrade a recovery copy using the last SQLite release, review the result, then import it. |
-| Account `schema_version` 0–5 | Supported, including empty version 0. Each declared version must have its complete historical shape. |
+| Account `schema_version` 0–6 | Supported, including empty version 0. Each declared version must have its complete historical shape. |
 | No account database has ever existed | Omit `-users-from-sqlite`; the configured account destination is initialized empty. |
 | Accounts currently disabled, but a users database exists | Import it with `-users-from-sqlite` so accounts, audit records and tokens remain available if re-enabled. |
 | Unknown/newer columns, tables, views, triggers or virtual tables | Refused, with no silent field or record loss. |
@@ -50,7 +52,7 @@ Identity sequences are reseeded above imported IDs, available `sqlite_sequence` 
 
 1. While still using the **old checkout and its original `.env`**, record the Compose file, project name, application service/container, image tag **and image ID**, and the actual telemetry/account SQLite paths. Read the old `dbPath`, `userManagement.dbPath` and `DB_PATH` values before removing them. A custom `stateDir` does not prove where either database lives.
 2. Stop the old deployment with its own command, before switching checkout or configuration. For example, from that checkout, use `docker compose -f "$OLD_COMPOSE" -p "$OLD_PROJECT" stop "$OLD_SERVICE"` with the recorded values; old `manage.sh` installations can use their existing `./manage.sh stop`. Verify the old application container is stopped, and stop any separately launched server, ingestor or maintenance writer. The new Compose project may have a different name and may require settings the old one never used.
-3. Make a private, quiescent recovery bundle containing the old Compose files/scripts, `.env`, image identity, configuration/theme, keys and **whole state/source directories**, including SQLite `-wal` and `-shm` siblings. Keep an untouched original. Do not use the new PostgreSQL-only `manage.sh backup` to back up SQLite. Restore the preserved old configuration and image together if rolling back.
+3. Make a private, quiescent recovery bundle containing the old Compose files/scripts, `.env`, image identity, configuration/theme, keys and **whole state/source directories**, including SQLite `-wal` and `-shm` siblings. Keep an untouched original. Before first adoption, use the old deployment's backup procedure or those quiescent copies; the new `manage.sh backup` requires a validated selection and will not guess an unrecorded backend. Restore the preserved old configuration and image together if rolling back.
 4. Select new, empty PostgreSQL storage and allocate a private migration-state directory. It will hold a WAL-aware recovery snapshot, normalized working snapshot and source/destination manifest for each store. Snapshot creation uses SQLite's backup API so hidden observer/mail-event row IDs do not change.
 5. Measure free space against the actual source, both snapshot copies, PostgreSQL data/indexes, WAL and temporary work. The required space and duration depend on the data; no fixed multiplier or downtime estimate is guaranteed.
 
@@ -64,13 +66,13 @@ The common path below uses `docker-compose.example.yml`. Keep the complete pinne
 
 Preserve/merge `.env`; do not regenerate passwords after PostgreSQL has initialized. In the example variant, set `DATA_DIR` to the **existing absolute host state directory**, `POSTGRES_DATA_DIR` to the selected PostgreSQL storage and `CORESCOPE_IMAGE` to the matching reviewed image. `PROD_DATA_DIR` and `STAGING_DATA_DIR` do not control this variant. Set these before running bootstrap. Keep PostgreSQL storage separate from state/recovery directories.
 
-Inside the supplied container, the selected host `DATA_DIR` is always `/app/data` and the runtime state directory is `/app/data`. Keep config/theme/queues there; remove legacy database-path settings from the active config and any `/app/data/.env` only after saving their original values in the recovery bundle. Preserve unrelated configuration and broker/mail credentials.
+Inside the supplied container, the selected host `DATA_DIR` is always `/app/data` and the runtime state directory defaults to `/app/data`. Keep any configured `CORESCOPE_STATE_DIR` subdirectory stable and preserve config/theme/queues and the original database-path settings in the recovery bundle. Preserve unrelated configuration and broker/mail credentials.
 
 Confirm the exact source mounts before initializing schemas. This check does not start the application or PostgreSQL:
 
 ```sh
 set -eu
-docker compose -f docker-compose.example.yml run --rm --no-deps \
+docker compose -f docker-compose.example.yml -f docker-compose.example.postgres.yml run --rm --no-deps \
   --entrypoint /bin/sh bootstrap -eu -c \
   'test -f /app/data/config.json; test -f /app/data/meshcore.db; test -f /app/data/users.db'
 ```
@@ -81,17 +83,17 @@ Remove the `users.db` check and import flag only when no account source exists, 
 
 ```sh
 set -eu
-docker compose -f docker-compose.example.yml up -d --wait postgres
+docker compose -f docker-compose.example.yml -f docker-compose.example.postgres.yml up -d --wait postgres
 install -d -m 700 migration-state
 
-docker compose -f docker-compose.example.yml run --rm \
-  --entrypoint /app/corescope-migrate \
-  -v "$PWD/migration-state:/migration" bootstrap \
+docker compose -f docker-compose.example.yml -f docker-compose.example.postgres.yml run --rm \
+  --entrypoint /bin/sh \
+  -v "$PWD/migration-state:/migration" bootstrap -eu -c 'export CORESCOPE_USERS_DATABASE_URL="$CORESCOPE_USERS_OWNER_DATABASE_URL"; exec /app/corescope-migrate "$@"' sh \
   -offline -from-sqlite /app/data/meshcore.db \
   -users-from-sqlite /app/data/users.db -state-dir /migration
 ```
 
-The bootstrap service supplies owner URLs through its environment. Its PostgreSQL health check only proves the server is accepting connections; successful importer authentication is still required. The importer copies in bounded batches, commits progress with each batch, verifies counts and logical digests in primary-key order, reseeds identities and analyzes the imported tables. Both requested imports must verify before readiness finalization begins.
+The current bootstrap service supplies the account owner as `CORESCOPE_USERS_OWNER_DATABASE_URL` and keeps `CORESCOPE_USERS_DATABASE_URL` for runtime. For the legacy commands on this page that omit `-storage-action`, run through `/bin/sh -eu -c 'export CORESCOPE_USERS_DATABASE_URL="$CORESCOPE_USERS_OWNER_DATABASE_URL"; exec /app/corescope-migrate "$@"' sh ...` in the bootstrap container, replacing `...` with the listed non-secret flags. Prefer the current storage-switch workflow above for routine operations. Its PostgreSQL health check only proves the server is accepting connections; successful importer authentication is still required. The importer copies in bounded batches, commits progress with each batch, verifies counts and logical digests in primary-key order, reseeds identities and analyzes the imported tables. Both requested imports must verify before readiness finalization begins.
 
 Success is exit status zero, a JSON report with `"verified":true` for each imported store, followed by:
 
@@ -114,22 +116,22 @@ If an old source needed an explicit repair/upgrade, the verified import belongs 
 
 ```sh
 set -eu
-docker compose -f docker-compose.example.yml run --rm \
-  --entrypoint /app/corescope-migrate bootstrap \
+docker compose -f docker-compose.example.yml -f docker-compose.example.postgres.yml run --rm \
+  --entrypoint /bin/sh bootstrap -eu -c 'export CORESCOPE_USERS_DATABASE_URL="$CORESCOPE_USERS_OWNER_DATABASE_URL"; exec /app/corescope-migrate "$@"' sh \
   -check-import-kind=telemetry -from-sqlite /app/data/meshcore.db
 
-docker compose -f docker-compose.example.yml run --rm \
-  --entrypoint /app/corescope-migrate bootstrap \
+docker compose -f docker-compose.example.yml -f docker-compose.example.postgres.yml run --rm \
+  --entrypoint /bin/sh bootstrap -eu -c 'export CORESCOPE_USERS_DATABASE_URL="$CORESCOPE_USERS_OWNER_DATABASE_URL"; exec /app/corescope-migrate "$@"' sh \
   -check-import-kind=accounts -users-from-sqlite /app/data/users.db
 
-docker compose -f docker-compose.example.yml run --rm \
-  --entrypoint /app/corescope-migrate bootstrap -check-ready
+docker compose -f docker-compose.example.yml -f docker-compose.example.postgres.yml run --rm \
+  --entrypoint /bin/sh bootstrap -eu -c 'export CORESCOPE_USERS_DATABASE_URL="$CORESCOPE_USERS_OWNER_DATABASE_URL"; exec /app/corescope-migrate "$@"' sh -check-ready
 
-docker compose -f docker-compose.example.yml run --rm bootstrap
-docker compose -f docker-compose.example.yml up -d corescope
+docker compose -f docker-compose.example.yml -f docker-compose.example.postgres.yml run --rm bootstrap
+docker compose -f docker-compose.example.yml -f docker-compose.example.postgres.yml up -d corescope
 ```
 
-Skip the account-source check only when there was no account source. The source checks print `<store> verified import matches the retained SQLite source`; readiness prints `<store> PostgreSQL schema is ready` for both configured destinations. Normal bootstrap checks retained `/app/data/meshcore.db` and `/app/data/users.db`, then grants restricted runtime privileges. A manually initialized empty database does not satisfy this upgrade guard. Custom source paths require the explicit checks above because automatic bootstrap only checks those two default paths. Absent and zero-length WAL sidecars share a fingerprint; every nonempty WAL byte remains significant.
+Skip the account-source check only when there was no account source. The source checks print `<store> verified import matches the retained SQLite source`; readiness prints `<store> PostgreSQL schema is ready` for both configured destinations. These legacy source checks verify the retained files explicitly. Current packaged startup uses the authoritative installation selection and the new guarded setup action; publish a validated PostgreSQL selection with the current storage workflow before starting the application. Do not manually substitute an empty PostgreSQL target for a SQLite installation. Absent and zero-length WAL sidecars share a fingerprint; every nonempty WAL byte remains significant.
 
 The example publishes HTTP port 80 through bundled Caddy. Open the configured host port and verify `/api/healthz` plus actual packet ingestion. If you explicitly disable Caddy, your proxy or port mapping must instead reach container port 3000.
 
@@ -139,7 +141,7 @@ For native installations, invoke `corescope-migrate` with owner URLs in `CORESCO
 
 Verify packet and observation counts, representative raw/null values, observers and paths, live ingestion/WebSocket visibility, retention, account login, existing sessions/CSRF, proposals, notifications and account export. Test accounts enabled and disabled as applicable. Restore a native backup into fresh isolated databases and exercise the API/login there before declaring recovery proven.
 
-Rollback **before PostgreSQL accepts new writes**: stop the new application with its new Compose project, leave its PostgreSQL storage and migration evidence intact, then return to the preserved old checkout/Compose project, original `.env`, pinned SQLite image and untouched source/state directories. Restore the old database-path settings from that bundle; the PostgreSQL configuration cannot be passed to the SQLite release. Confirm the new writers are stopped before starting the old application. Once PostgreSQL has accepted new telemetry or account changes, the old SQLite copy is stale. There is no automatic lossless reverse converter; stop and decide explicitly how to handle the new data before reverting.
+Rollback **before PostgreSQL accepts new writes**: stop the new application with its new Compose project, leave its PostgreSQL storage and migration evidence intact, then return to the preserved old checkout/Compose project, original `.env`, pinned SQLite image and untouched source/state directories. Restore the old database-path settings from that bundle; the PostgreSQL configuration cannot be passed to the SQLite release. Confirm the new writers are stopped before starting the old application. Once PostgreSQL has accepted new telemetry or account changes, the old SQLite copy is stale. Use the verified PostgreSQL-to-SQLite storage switch to retain new data; returning to an old pre-cutover copy would discard those writes.
 
 Keep at least one verified recovery copy. If you later archive the old SQLite files outside the active state directory, move their WAL siblings with them and preserve the import report and original fingerprint evidence. Do not remove the only rollback copy to reclaim space.
 
@@ -155,7 +157,7 @@ For the **example Compose variant**, use its PostgreSQL container directly. This
 
 ```sh
 pg_owner() {
-  docker compose -f docker-compose.example.yml exec -T postgres sh -eu -c '
+  docker compose -f docker-compose.example.yml -f docker-compose.example.postgres.yml exec -T postgres sh -eu -c '
     export PGHOST=127.0.0.1 PGUSER=corescope_owner PGSSLMODE=disable
     export PGPASSWORD="$CORESCOPE_OWNER_PASSWORD"
     exec "$@"
@@ -168,7 +170,7 @@ For a coordinated backup pair, stop the application, create a new private backup
 ```sh
 set -eu
 umask 077
-docker compose -f docker-compose.example.yml stop corescope
+docker compose -f docker-compose.example.yml -f docker-compose.example.postgres.yml stop corescope
 BACKUP_DIR=$(mktemp -d "$PWD/corescope-backup.XXXXXX")
 for store in telemetry accounts; do
   pg_owner pg_dump --no-password --format=custom --no-owner --no-privileges \
@@ -176,14 +178,14 @@ for store in telemetry accounts; do
   mv "$BACKUP_DIR/$store.dump.partial" "$BACKUP_DIR/$store.dump"
 done
 # Preserve matching .env, config/theme, keys and remaining state privately too.
-docker compose -f docker-compose.example.yml up -d corescope
+docker compose -f docker-compose.example.yml -f docker-compose.example.postgres.yml up -d corescope
 ```
 
 Restore into **new empty PostgreSQL storage**, keeping the previous storage intact. With the original Compose file/project and `.env`, stop `corescope` and then `postgres` before changing any storage path. Record the old `POSTGRES_DATA_DIR`, select a new empty path in `.env`, use matching recovered credentials, and keep `corescope` stopped. Restore the matching config/theme and remaining state from the private bundle before bootstrap; preserve their previous copies. Set `BACKUP_DIR` to the verified backup bundle. Before either restore, check that both destinations are empty:
 
 ```sh
 set -eu
-docker compose -f docker-compose.example.yml up -d --wait postgres
+docker compose -f docker-compose.example.yml -f docker-compose.example.postgres.yml up -d --wait postgres
 for store in telemetry accounts; do
   test -f "$BACKUP_DIR/$store.dump"
   objects=$(pg_owner psql -X -v ON_ERROR_STOP=1 -At --dbname="corescope_$store" \
@@ -195,9 +197,9 @@ for store in telemetry accounts; do
     --exit-on-error --single-transaction --dbname="corescope_$store" \
     < "$BACKUP_DIR/$store.dump"
 done
-docker compose -f docker-compose.example.yml run --rm bootstrap
-docker compose -f docker-compose.example.yml run --rm \
-  --entrypoint /app/corescope-migrate bootstrap -check-ready
+docker compose -f docker-compose.example.yml -f docker-compose.example.postgres.yml run --rm bootstrap
+docker compose -f docker-compose.example.yml -f docker-compose.example.postgres.yml run --rm \
+  --entrypoint /bin/sh bootstrap -eu -c 'export CORESCOPE_USERS_DATABASE_URL="$CORESCOPE_USERS_OWNER_DATABASE_URL"; exec /app/corescope-migrate "$@"' sh -check-ready
 ```
 
 If one restore fails, the other database may already have restored successfully: keep services stopped and preserve both the failure evidence and old storage. Do not retry into an occupied database. After successful grants/readiness and the account checks below, validate the restored instance in isolation before starting it for normal traffic.

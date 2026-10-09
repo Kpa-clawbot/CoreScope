@@ -197,9 +197,9 @@ func (s *Store) buildAndPersistNeighborEdges(trust *packetpath.TrustConfig) (int
 	FROM observations o
 	JOIN transmissions t ON t.id = o.transmission_id
 	LEFT JOIN observers obs ON obs.rowid = o.observer_idx
-	WHERE o.timestamp > $1
+	WHERE o.timestamp > `+s.parameter(1)+`
 	ORDER BY o.timestamp
-	LIMIT $2`, watermarkEpoch, neighborBuilderMaxBatch)
+	LIMIT `+s.parameter(2), watermarkEpoch, neighborBuilderMaxBatch)
 	if err != nil {
 		return 0, fmt.Errorf("scan observations: %w", err)
 	}
@@ -281,16 +281,18 @@ func (s *Store) buildAndPersistNeighborEdges(trust *packetpath.TrustConfig) (int
 			if len(values) == 0 {
 				return nil
 			}
-			_, err := tx.Exec(`INSERT INTO neighbor_edges(node_a,node_b,count,last_seen) VALUES `+strings.Join(values, ",")+`
+			_, err := tx.Exec(`INSERT INTO neighbor_edges(node_a,node_b,count,last_seen) VALUES `+strings.Join(values, ",")+s.nativeSQL(`
     ON CONFLICT(node_a,node_b) DO UPDATE SET count=neighbor_edges.count+excluded.count,
-    last_seen=CASE WHEN neighbor_edges.last_seen IS NULL OR excluded.last_seen IS NULL THEN NULL ELSE GREATEST(neighbor_edges.last_seen,excluded.last_seen) END`, args...)
+    last_seen=CASE WHEN neighbor_edges.last_seen IS NULL OR excluded.last_seen IS NULL THEN NULL ELSE MAX(neighbor_edges.last_seen,excluded.last_seen) END`, `
+    ON CONFLICT(node_a,node_b) DO UPDATE SET count=neighbor_edges.count+excluded.count,
+    last_seen=CASE WHEN neighbor_edges.last_seen IS NULL OR excluded.last_seen IS NULL THEN NULL ELSE GREATEST(neighbor_edges.last_seen,excluded.last_seen) END`), args...)
 			values = values[:0]
 			args = args[:0]
 			return err
 		}
 		for _, e := range counts {
 			n := len(args)
-			values = append(values, fmt.Sprintf("($%d,$%d,$%d,$%d)", n+1, n+2, n+3, n+4))
+			values = append(values, fmt.Sprintf("(%s,%s,%s,%s)", s.parameter(n+1), s.parameter(n+2), s.parameter(n+3), s.parameter(n+4)))
 			args = append(args, e.a, e.b, e.count, e.ts)
 			if len(values) == batchSize {
 				if err := flush(); err != nil {

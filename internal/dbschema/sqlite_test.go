@@ -3,19 +3,25 @@ package dbschema
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/mattn/go-sqlite3"
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/dbschema/legacy"
 )
 
 func sqliteTestDB(t *testing.T) (*sql.DB, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "telemetry.db")
-	db, err := sql.Open("sqlite3", legacy.WriterDSN(path))
+	dsn, err := legacy.WriterDSN(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,6 +34,40 @@ func sqliteExec(t *testing.T, db *sql.DB, query string, args ...any) {
 	t.Helper()
 	if _, err := db.Exec(query, args...); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSQLiteSchemaOwnsAsyncMigrationLedger(t *testing.T) {
+	db, _ := sqliteTestDB(t)
+	if err := ApplySQLite(db, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO _async_migrations(name,status,error) VALUES('retained','failed','exact error')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureSQLiteAsyncMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	var status, started, detail string
+	if err := db.QueryRow(`SELECT status,started_at,error FROM _async_migrations WHERE name='retained'`).Scan(&status, &started, &detail); err != nil || status != "failed" || started == "" || detail != "exact error" {
+		t.Fatal("async ledger changed", err)
+	}
+}
+
+func TestSQLitePendingConversionCannotBeAdoptedOrOpened(t *testing.T) {
+	db, _ := sqliteTestDB(t)
+	if err := ApplySQLite(db, nil); err != nil {
+		t.Fatal(err)
+	}
+	sqliteExec(t, db, `CREATE TABLE corescope_reverse_progress(table_name TEXT PRIMARY KEY,rows_copied INTEGER NOT NULL,sha256 TEXT NOT NULL,complete INTEGER NOT NULL)`)
+	for _, check := range []func() error{func() error { return ApplySQLite(db, nil) }, func() error { return AssertSQLiteReady(db) }, func() error { return dbconfig.AssertSQLiteImportComplete(db) }} {
+		if err := check(); !errors.Is(err, dbconfig.ErrSQLiteImportIncomplete) {
+			t.Fatal("incomplete target accepted", err)
+		}
+	}
+	var count int
+	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name='corescope_reverse_progress'`).Scan(&count); err != nil || count != 1 {
+		t.Fatal("pending marker changed", err)
 	}
 }
 

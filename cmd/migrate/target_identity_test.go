@@ -11,11 +11,10 @@ import (
 	"testing"
 
 	"github.com/meshcore-analyzer/pgutil"
-	"github.com/meshcore-analyzer/pgutil/pgtest"
 )
 
 func TestImportIdentityUsesConfiguredEndpoint(t *testing.T) {
-	dsn := pgtest.NewSchema(t)
+	dsn := postgresSchema(t)
 	u, err := url.Parse(dsn)
 	if err != nil {
 		t.Fatal("parse test URL")

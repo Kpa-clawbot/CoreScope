@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"runtime"
 	"time"
 
 	"github.com/meshcore-analyzer/dbschema"
@@ -64,6 +65,9 @@ const (
 // returned alongside it — those rows are gone, so reporting 0 would be
 // wrong.
 func (s *Store) PruneOldPackets(days int) (int64, error) {
+	return s.pruneOldPackets(days, runtime.Gosched)
+}
+func (s *Store) pruneOldPackets(days int, betweenBatches func()) (int64, error) {
 	if days <= 0 {
 		return 0, nil
 	}
@@ -94,6 +98,8 @@ func (s *Store) PruneOldPackets(days int) (int64, error) {
 		if batch < pruneBatchTransmissions {
 			break
 		}
+		// Yield only after the transaction commits and releases the writer.
+		betweenBatches()
 	}
 	if total > 0 {
 		log.Printf("[prune] deleted %d transmissions older than %d days", total, days)
@@ -114,13 +120,13 @@ func (s *Store) PruneOldClientReceptions(days int) (int64, error) {
 
 	var n int64
 	err := s.WriterTx("prune_client_receptions", func(tx *sql.Tx) error {
-		res, err := tx.Exec(`DELETE FROM client_receptions WHERE rx_at < $1`, cutoff)
+		res, err := tx.Exec(`DELETE FROM client_receptions WHERE rx_at < `+s.parameter(1), cutoff)
 		if err != nil {
 			return fmt.Errorf("prune client_receptions: %w", err)
 		}
 		n, _ = res.RowsAffected()
 		// Drop companion name rows not refreshed within the window.
-		if _, err := tx.Exec(`DELETE FROM client_observers WHERE last_seen < $1`, cutoff); err != nil {
+		if _, err := tx.Exec(`DELETE FROM client_observers WHERE last_seen < `+s.parameter(1), cutoff); err != nil {
 			return fmt.Errorf("prune client_observers: %w", err)
 		}
 		return nil
@@ -146,7 +152,7 @@ func (s *Store) PruneOldClientRxObservations(days int) (int64, error) {
 		return 0, nil
 	}
 	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format(rxTimeMillisLayout)
-	res, err := s.db.Exec(`DELETE FROM client_rx_observations WHERE rx_at < $1`, cutoff)
+	res, err := s.db.Exec(`DELETE FROM client_rx_observations WHERE rx_at < `+s.parameter(1), cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("prune client_rx_observations: %w", err)
 	}
@@ -169,7 +175,7 @@ func (s *Store) PruneOldClientRfSamples(days int) (int64, error) {
 		return 0, nil
 	}
 	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format(rxTimeMillisLayout)
-	res, err := s.db.Exec(`DELETE FROM client_rf_samples WHERE sampled_at < $1`, cutoff)
+	res, err := s.db.Exec(`DELETE FROM client_rf_samples WHERE sampled_at < `+s.parameter(1), cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("prune client_rf_samples: %w", err)
 	}
@@ -207,7 +213,7 @@ func (s *Store) PruneOldClientDeclaredRegions(days int) (int64, error) {
 // specific side of it.
 func (s *Store) pruneOldClientDeclaredRegionsAt(cutoffInstant time.Time) (int64, error) {
 	cutoff := cutoffInstant.Format(rxTimeMillisLayout)
-	res, err := s.db.Exec(`DELETE FROM node_declared_regions WHERE observed_at < $1`, cutoff)
+	res, err := s.db.Exec(`DELETE FROM node_declared_regions WHERE observed_at < `+s.parameter(1), cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("prune node_declared_regions: %w", err)
 	}
@@ -237,7 +243,7 @@ func (s *Store) PruneNeighborEdges(maxAgeDays int) (int64, error) {
 		return 0, nil
 	}
 	cutoff := time.Now().UTC().Add(-time.Duration(maxAgeDays) * 24 * time.Hour).Format(time.RFC3339)
-	res, err := s.db.Exec("DELETE FROM neighbor_edges WHERE last_seen < $1", cutoff)
+	res, err := s.db.Exec("DELETE FROM neighbor_edges WHERE last_seen < "+s.parameter(1), cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("prune neighbor_edges: %w", err)
 	}
@@ -299,7 +305,7 @@ func (s *Store) BackfillFromPubkey(chunkSize int, yieldDuration time.Duration, p
 	}
 	log.Printf("[backfill] from_pubkey starting: %d ADVERT rows", total)
 
-	stmt, err := s.db.Prepare("UPDATE transmissions SET from_pubkey = $1 WHERE id = $2")
+	stmt, err := s.db.Prepare("UPDATE transmissions SET from_pubkey = " + s.parameter(1) + " WHERE id = " + s.parameter(2))
 	if err != nil {
 		log.Printf("[backfill] from_pubkey prepare: %v", err)
 		return
@@ -309,7 +315,7 @@ func (s *Store) BackfillFromPubkey(chunkSize int, yieldDuration time.Duration, p
 	var processed int64
 	for {
 		rows, err := s.db.Query(
-			"SELECT id, decoded_json FROM transmissions WHERE from_pubkey IS NULL AND payload_type = 4 LIMIT $1",
+			"SELECT id, decoded_json FROM transmissions WHERE from_pubkey IS NULL AND payload_type = 4 LIMIT "+s.parameter(1),
 			chunkSize)
 		if err != nil {
 			log.Printf("[backfill] from_pubkey select: %v", err)
@@ -333,7 +339,7 @@ func (s *Store) BackfillFromPubkey(chunkSize int, yieldDuration time.Duration, p
 			break
 		}
 
-		tx, err := beginWrite(s.db)
+		tx, err := beginWrite(s.db, s.Backend())
 		if err != nil {
 			log.Printf("[backfill] from_pubkey begin tx: %v", err)
 			return

@@ -269,6 +269,8 @@ type DatabaseRowCounts struct {
 }
 
 type PostgresStats struct {
+	WalSizeMB             *float64           `json:"walSizeMB,omitempty"`
+	FreelistMB            *float64           `json:"freelistMB,omitempty"`
 	Engine                string             `json:"engine"`
 	DbSizeMB              *float64           `json:"dbSizeMB"`
 	Rows                  *DatabaseRowCounts `json:"rows"`
@@ -287,6 +289,8 @@ type PerfResponse struct {
 	Cache         PerfCacheStats                `json:"cache"`
 	PacketStore   *PerfPacketStoreStats         `json:"packetStore"`
 	Postgres      *PostgresStats                `json:"postgres"`
+	Sqlite        *PostgresStats                `json:"sqlite,omitempty"`
+	Database      *PostgresStats                `json:"database,omitempty"`
 	GoRuntime     *GoRuntimeStats               `json:"goRuntime,omitempty"`
 	// MemoryBreakdown is populated only for /api/perf?mem=1 (an O(tx+obs)
 	// walk, opt-in so the normal hot endpoint stays cheap). It sizes the

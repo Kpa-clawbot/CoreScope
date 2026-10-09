@@ -6,7 +6,7 @@ Pre-built images are published to GHCR for `linux/amd64` and `linux/arm64` (Rasp
 
 ### Complete Compose checkout
 
-PostgreSQL 18.6 runs as a separate service. Existing SQLite installations must complete the [offline upgrade](docs/postgresql-upgrade.md) before starting this version.
+SQLite is the default and runs inside the application container. PostgreSQL18.6 is optional. Existing installations keep their recorded backend; changing it is a verified [offline storage switch](docs/storage.md), not an image update.
 
 Set `CORESCOPE_REF` to the reviewed application revision, then retain the complete checkout: the Compose variants require `docker/postgres.compose.yml` and its initialization scripts.
 
@@ -16,13 +16,20 @@ cd CoreScope
 git checkout --detach "$CORESCOPE_REF"
 test -f .env || cp .env.example .env
 chmod 600 .env
-# New PostgreSQL storage only: fill missing password fields with distinct
-# openssl rand -hex 32 values. Preserve an existing .env and merge missing keys.
+# SQLite needs no database credentials. Preserve an existing .env and DATA_DIR.
 # Set CORESCOPE_IMAGE in .env to the matching reviewed image tag or digest.
 docker compose -f docker-compose.example.yml up -d
 ```
 
-The PostgreSQL initializer creates separate telemetry/account databases and roles. Bootstrap installs schemas and grants; the application starts only when bootstrap succeeds. Open `http://localhost` and verify `/api/healthz` plus real packet ingestion. The default HTTP port is 80; adjust `HTTP_PORT` when using the example variant.
+Packaged setup validates an existing SQLite installation or initializes a provably fresh one before starting the application. Open `http://localhost` and verify `/api/healthz` plus real packet ingestion. The default HTTP port is 80; adjust `HTTP_PORT` when using the example variant.
+
+For a **new PostgreSQL installation**, merge `.env.postgres.example` into the private `.env`, generate distinct passwords only for the first empty PostgreSQL directory, and run:
+
+```sh
+docker compose -f docker-compose.example.yml -f docker-compose.example.postgres.yml up -d
+```
+
+The optional overlay adds PostgreSQL and owner bootstrap. Runtime services receive only restricted role credentials. Adding/removing an overlay does not convert existing data; use [storage switching](docs/storage.md). Keep the same overlay on PostgreSQL updates.
 
 ## Image Tags
 
@@ -54,9 +61,9 @@ docker compose -f docker-compose.example.yml up -d
 
 ## Data
 
-PostgreSQL persists telemetry and accounts in its own host directory (`POSTGRES_DATA_DIR`, or the production/staging equivalent). `/app/data` holds config, theme, queues, statistics and account backup files. Keep these locations separate and preserve the private `.env` with your recovery material.
+SQLite stores telemetry and accounts as separate files under the data mount. When selected, PostgreSQL persists them in its own host directory (`POSTGRES_DATA_DIR`, or the production/staging equivalent). `/app/data` holds config, theme, queues, statistics and account backup files. Keep these locations separate and preserve the private `.env` with your recovery material.
 
-Use native `pg_dump` archives or the authenticated backup endpoints. `./manage.sh backup <directory>` and `restore` operate the production Compose variant managed by that script; they do not select `docker-compose.example.yml`. The [backup and restore instructions](docs/postgresql-upgrade.md#native-backups-and-restores) include the example variant. Do not copy live PostgreSQL storage or a legacy SQLite file as a current backup.
+Use native SQLite snapshots or PostgreSQL `pg_dump` archives, selected automatically by the recorded backend, or the authenticated backup endpoints. `./manage.sh backup <directory>` and `restore` operate the production Compose variant managed by that script; they do not select `docker-compose.example.yml`. The [backup and restore instructions](docs/postgresql-upgrade.md#native-backups-and-restores) include the example variant. Do not copy live PostgreSQL storage or a SQLite main file while ignoring its WAL. Preserve the private state archive and configuration with the native backup pair.
 
 ## TLS
 
@@ -131,7 +138,7 @@ If you're currently deploying with `manage.sh` (git clone + local build), you ha
 
 ### Option A: Keep using manage.sh
 
-Complete the PostgreSQL migration and configure the private database credentials before using `manage.sh start` or `update`. Its backup, restore, staging-copy and status commands use PostgreSQL clients from the selected database container. Restores require empty destinations; existing staging data is retained.
+`manage.sh setup` offers SQLite (default) or PostgreSQL. Start/update use the recorded selection, and storage changes require `./manage.sh storage switch sqlite|postgres` with writers stopped. Backups/restores use the selected engine's native tools; existing staging data is retained, and only telemetry is cloned into a fresh staging installation. See [storage operations](docs/storage.md).
 
 ```bash
 ./manage.sh update          # latest release
@@ -149,7 +156,7 @@ Pre-built images skip the build step entirely — faster updates, no Go toolchai
    ./manage.sh stop
    ```
 
-2. Preserve `PROD_DATA_DIR`, the separate PostgreSQL directory, credentials and the native backup pair. For a SQLite instance, perform the offline upgrade first.
+2. Preserve `PROD_DATA_DIR`, the separate PostgreSQL directory, credentials and the native backup pair. Keep the selected backend and its recovery files; use an explicit offline switch only when changing engines.
 
 3. Keep the complete pinned checkout and choose the matching image in `.env`:
    ```bash

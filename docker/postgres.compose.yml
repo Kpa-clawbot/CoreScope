@@ -29,6 +29,12 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      CORESCOPE_DATABASE_URL: postgresql://corescope_owner:${CORESCOPE_OWNER_PASSWORD:?Set CORESCOPE_OWNER_PASSWORD}@postgres/corescope_telemetry?sslmode=disable
-      CORESCOPE_USERS_DATABASE_URL: postgresql://corescope_owner:${CORESCOPE_OWNER_PASSWORD:?Set CORESCOPE_OWNER_PASSWORD}@postgres/corescope_accounts?sslmode=disable
+      CORESCOPE_DB_BACKEND: postgres
+      CORESCOPE_STATE_DIR: ${CORESCOPE_STATE_DIR:-/app/data}
+      CORESCOPE_DATABASE_URL: postgresql://corescope_owner:${CORESCOPE_OWNER_PASSWORD:?Set CORESCOPE_OWNER_PASSWORD}@postgres:5432/corescope_telemetry?sslmode=disable&search_path=public
+      CORESCOPE_USERS_OWNER_DATABASE_URL: postgresql://corescope_owner:${CORESCOPE_OWNER_PASSWORD:?Set CORESCOPE_OWNER_PASSWORD}@postgres:5432/corescope_accounts?sslmode=disable&search_path=public
+      CORESCOPE_READER_DATABASE_URL: postgresql://corescope_reader:${CORESCOPE_READER_PASSWORD:?Set CORESCOPE_READER_PASSWORD}@postgres:5432/corescope_telemetry?sslmode=disable&search_path=public
+      CORESCOPE_WRITER_DATABASE_URL: postgresql://corescope_writer:${CORESCOPE_WRITER_PASSWORD:?Set CORESCOPE_WRITER_PASSWORD}@postgres:5432/corescope_telemetry?sslmode=disable&search_path=public
+      CORESCOPE_USERS_DATABASE_URL: postgresql://corescope_accounts:${CORESCOPE_ACCOUNTS_PASSWORD:?Set CORESCOPE_ACCOUNTS_PASSWORD}@postgres:5432/corescope_accounts?sslmode=disable&search_path=public
+      CORESCOPE_APPROVED_CHANNELS_DATABASE_URL: postgresql://corescope_channels:${CORESCOPE_CHANNELS_PASSWORD:?Set CORESCOPE_CHANNELS_PASSWORD}@postgres:5432/corescope_accounts?sslmode=disable&search_path=public
       CORESCOPE_OWNER_PASSWORD: ${CORESCOPE_OWNER_PASSWORD:?Set CORESCOPE_OWNER_PASSWORD}

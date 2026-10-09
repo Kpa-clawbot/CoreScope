@@ -41,7 +41,7 @@ func (s *Server) handleResolvePrefix(w http.ResponseWriter, r *http.Request) {
 	}
 	// LIMIT 2: we only need to know unique vs ambiguous. nodes.public_key is the
 	// PK and stored lowercase; pfx is validated hex so the LIKE pattern is safe.
-	rows, err := s.db.conn.Query(`SELECT public_key, COALESCE(name,'') FROM nodes WHERE public_key LIKE $1 LIMIT 2`, pfx+"%")
+	rows, err := s.db.conn.Query(`SELECT public_key, COALESCE(name,'') FROM nodes WHERE public_key LIKE `+s.db.parameter(1)+` LIMIT 2`, pfx+"%")
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return

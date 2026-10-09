@@ -41,7 +41,7 @@ func TestOpenStore(t *testing.T) {
 	defer s.Close()
 
 	// Verify tables exist
-	rows, err := s.db.Query("SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema() ORDER BY table_name")
+	rows, err := s.db.Query(testNativeSQL(`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`, "SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema() ORDER BY table_name"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestOpenStore(t *testing.T) {
 
 	// Verify packets_v view exists
 	var viewCount int
-	err = s.db.QueryRow("SELECT COUNT(*) FROM information_schema.views WHERE table_schema=current_schema() AND table_name='packets_v'").Scan(&viewCount)
+	err = s.db.QueryRow(testNativeSQL(`SELECT COUNT(*) FROM sqlite_master WHERE type='view' AND name='packets_v'`, "SELECT COUNT(*) FROM information_schema.views WHERE table_schema=current_schema() AND table_name='packets_v'")).Scan(&viewCount)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,15 +299,15 @@ func TestUpsertObserverWithMeta(t *testing.T) {
 
 	// Verify typeof returns correct SQLite types
 	var typBattery, typUptime, typNoise string
-	s.db.QueryRow("SELECT pg_typeof(battery_mv)::text, pg_typeof(uptime_secs)::text, pg_typeof(noise_floor)::text FROM observers WHERE id = 'obs1'").
+	s.db.QueryRow(testNativeSQL(`SELECT typeof(battery_mv), typeof(uptime_secs), typeof(noise_floor) FROM observers WHERE id = 'obs1'`, "SELECT pg_typeof(battery_mv)::text, pg_typeof(uptime_secs)::text, pg_typeof(noise_floor)::text FROM observers WHERE id = 'obs1'")).
 		Scan(&typBattery, &typUptime, &typNoise)
-	if typBattery != "bigint" {
+	if typBattery != testNativeSQL("integer", "bigint") {
 		t.Errorf("typeof(battery_mv)=%s, want integer", typBattery)
 	}
-	if typUptime != "bigint" {
+	if typUptime != testNativeSQL("integer", "bigint") {
 		t.Errorf("typeof(uptime_secs)=%s, want integer", typUptime)
 	}
-	if typNoise != "double precision" {
+	if typNoise != testNativeSQL("real", "double precision") {
 		t.Errorf("typeof(noise_floor)=%s, want real", typNoise)
 	}
 }
@@ -461,7 +461,7 @@ func TestSchemaNoiseFloorIsReal(t *testing.T) {
 	defer s.Close()
 
 	// Check column type affinity via PRAGMA
-	rows, err := s.db.Query(`SELECT ordinal_position::int,column_name,CASE data_type WHEN 'bigint' THEN 'INTEGER' WHEN 'double precision' THEN 'REAL' ELSE upper(data_type) END,CASE is_nullable WHEN 'NO' THEN 1 ELSE 0 END,column_default,0 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='observers' ORDER BY ordinal_position`)
+	rows, err := s.db.Query(testNativeSQL(`SELECT cid,name,type,"notnull",dflt_value,pk FROM pragma_table_info('observers') ORDER BY cid`, `SELECT ordinal_position::int,column_name,CASE data_type WHEN 'bigint' THEN 'INTEGER' WHEN 'double precision' THEN 'REAL' ELSE upper(data_type) END,CASE is_nullable WHEN 'NO' THEN 1 ELSE 0 END,column_default,0 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='observers' ORDER BY ordinal_position`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1014,7 +1014,7 @@ func TestSchemaCompatibility(t *testing.T) {
 
 	// Verify column names match what Node.js expects
 	expectedTxCols := []string{"id", "raw_hex", "hash", "first_seen", "route_type", "payload_type", "payload_version", "decoded_json", "created_at"}
-	rows, _ := s.db.Query(`SELECT ordinal_position::int,column_name,CASE data_type WHEN 'bigint' THEN 'INTEGER' WHEN 'double precision' THEN 'REAL' ELSE upper(data_type) END,CASE is_nullable WHEN 'NO' THEN 1 ELSE 0 END,column_default,0 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='transmissions' ORDER BY ordinal_position`)
+	rows, _ := s.db.Query(testNativeSQL(`SELECT cid,name,type,"notnull",dflt_value,pk FROM pragma_table_info('transmissions') ORDER BY cid`, `SELECT ordinal_position::int,column_name,CASE data_type WHEN 'bigint' THEN 'INTEGER' WHEN 'double precision' THEN 'REAL' ELSE upper(data_type) END,CASE is_nullable WHEN 'NO' THEN 1 ELSE 0 END,column_default,0 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='transmissions' ORDER BY ordinal_position`))
 	var txCols []string
 	for rows.Next() {
 		var cid int
@@ -1042,7 +1042,7 @@ func TestSchemaCompatibility(t *testing.T) {
 
 	// Verify observations columns
 	expectedObsCols := []string{"id", "transmission_id", "observer_idx", "direction", "snr", "rssi", "score", "path_json", "timestamp"}
-	rows, _ = s.db.Query(`SELECT ordinal_position::int,column_name,CASE data_type WHEN 'bigint' THEN 'INTEGER' WHEN 'double precision' THEN 'REAL' ELSE upper(data_type) END,CASE is_nullable WHEN 'NO' THEN 1 ELSE 0 END,column_default,0 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='observations' ORDER BY ordinal_position`)
+	rows, _ = s.db.Query(testNativeSQL(`SELECT cid,name,type,"notnull",dflt_value,pk FROM pragma_table_info('observations') ORDER BY cid`, `SELECT ordinal_position::int,column_name,CASE data_type WHEN 'bigint' THEN 'INTEGER' WHEN 'double precision' THEN 'REAL' ELSE upper(data_type) END,CASE is_nullable WHEN 'NO' THEN 1 ELSE 0 END,column_default,0 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='observations' ORDER BY ordinal_position`))
 	var obsCols []string
 	for rows.Next() {
 		var cid int
@@ -1438,7 +1438,7 @@ func TestTelemetryMigrationAddsColumns(t *testing.T) {
 	}
 
 	var count int
-	s.db.QueryRow("SELECT COUNT(*) FROM corescope_schema WHERE kind='telemetry' AND ready=true").Scan(&count)
+	s.db.QueryRow(testNativeSQL(`SELECT COUNT(*) FROM _migrations WHERE name='observers_identity_autoincrement_v1'`, "SELECT COUNT(*) FROM corescope_schema WHERE kind='telemetry' AND ready=true")).Scan(&count)
 	if count != 1 {
 		t.Errorf("canonical telemetry schema should be ready, count=%d", count)
 	}
@@ -1600,7 +1600,7 @@ func TestObsTimestampIndexMigration(t *testing.T) {
 
 		var count int
 		err = s.db.QueryRow(
-			"SELECT COUNT(*) FROM pg_indexes WHERE schemaname=current_schema() AND indexname='idx_observations_timestamp'",
+			testNativeSQL(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_observations_timestamp'`, "SELECT COUNT(*) FROM pg_indexes WHERE schemaname=current_schema() AND indexname='idx_observations_timestamp'"),
 		).Scan(&count)
 		if err != nil {
 			t.Fatal(err)
@@ -1634,6 +1634,18 @@ func TestObsTimestampIndexMigration(t *testing.T) {
 			t.Fatal(err)
 		}
 		store.Close()
+		if store.Backend() == "sqlite" {
+			next, err := openPostgresTestStore(t, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer next.Close()
+			var count int
+			if err = next.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_observations_timestamp'`).Scan(&count); err != nil || count != 1 {
+				t.Fatalf("SQLite writer did not restore its index: %d %v", count, err)
+			}
+			return
+		}
 		if next, err := openPostgresTestStore(t, key); err == nil {
 			next.Close()
 			t.Fatal("runtime accepted missing canonical index")
@@ -2158,7 +2170,7 @@ func TestScopeNameMigration(t *testing.T) {
 	defer store.Close()
 
 	// Verify column exists
-	rows, err := store.db.Query(`SELECT ordinal_position::int,column_name,CASE data_type WHEN 'bigint' THEN 'INTEGER' WHEN 'double precision' THEN 'REAL' ELSE upper(data_type) END,CASE is_nullable WHEN 'NO' THEN 1 ELSE 0 END,column_default,0 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='transmissions' ORDER BY ordinal_position`)
+	rows, err := store.db.Query(testNativeSQL(`SELECT cid,name,type,"notnull",dflt_value,pk FROM pragma_table_info('transmissions') ORDER BY cid`, `SELECT ordinal_position::int,column_name,CASE data_type WHEN 'bigint' THEN 'INTEGER' WHEN 'double precision' THEN 'REAL' ELSE upper(data_type) END,CASE is_nullable WHEN 'NO' THEN 1 ELSE 0 END,column_default,0 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='transmissions' ORDER BY ordinal_position`))
 	if err != nil {
 		t.Fatalf("PRAGMA: %v", err)
 	}
@@ -2839,7 +2851,7 @@ func TestSchemaMultibyteSupColumns(t *testing.T) {
 	defer store.Close()
 
 	for _, table := range []string{"nodes", "inactive_nodes"} {
-		rows, err := store.db.Query(`SELECT ordinal_position::int,column_name,data_type,CASE is_nullable WHEN 'NO' THEN 1 ELSE 0 END,column_default,0 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1`, table)
+		rows, err := store.db.Query(testNativeSQL(`SELECT cid,name,type,"notnull",dflt_value,pk FROM pragma_table_info($1) ORDER BY cid`, `SELECT ordinal_position::int,column_name,data_type,CASE is_nullable WHEN 'NO' THEN 1 ELSE 0 END,column_default,0 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1`), table)
 		if err != nil {
 			t.Fatalf("PRAGMA table_info(%s): %v", table, err)
 		}
@@ -3122,10 +3134,12 @@ func TestInsertClientRfSample(t *testing.T) {
 // this is a regression guard.
 func TestPruneClientRfSamplesUsesIndex(t *testing.T) {
 	s := newTestStore(t)
-	if _, err := s.db.Exec(`SET enable_seqscan=off`); err != nil {
-		t.Fatal(err)
+	if testBackendValue() == "postgres" {
+		if _, err := s.db.Exec(`SET enable_seqscan=off`); err != nil {
+			t.Fatal(err)
+		}
 	}
-	rows, err := s.db.Query(`EXPLAIN (COSTS OFF) DELETE FROM client_rf_samples WHERE sampled_at < $1`, "2026-01-01T00:00:00Z")
+	rows, err := s.db.Query(testNativeSQL(`EXPLAIN QUERY PLAN DELETE FROM client_rf_samples WHERE sampled_at < $1`, `EXPLAIN (COSTS OFF) DELETE FROM client_rf_samples WHERE sampled_at < $1`), "2026-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3133,7 +3147,7 @@ func TestPruneClientRfSamplesUsesIndex(t *testing.T) {
 	plan := ""
 	for rows.Next() {
 		var detail string
-		if err := rows.Scan(&detail); err != nil {
+		if err := scanTestPlan(rows, &detail); err != nil {
 			t.Fatal(err)
 		}
 		plan += detail + "\n"

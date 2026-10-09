@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/meshcore-analyzer/dbschema"
-	"github.com/meshcore-analyzer/pgutil/pgtest"
 	"github.com/meshcore-analyzer/users"
 )
 
@@ -64,8 +63,8 @@ func mixedImport(t *testing.T, startAccounts, readyTelemetry bool) [2]importOpti
 	t.Helper()
 	state := filepath.Join(t.TempDir(), "migration state")
 	options := [2]importOptions{
-		{Source: telemetrySource(t), DatabaseURL: pgtest.NewDatabase(t), StateDir: state, Kind: "telemetry"},
-		{Source: accountSource(t, 5), DatabaseURL: pgtest.NewDatabase(t), StateDir: state, Kind: "accounts"},
+		{Source: telemetrySource(t), DatabaseURL: postgresDatabase(t), StateDir: state, Kind: "telemetry"},
+		{Source: accountSource(t, 5), DatabaseURL: postgresDatabase(t), StateDir: state, Kind: "accounts"},
 	}
 	for i, o := range options {
 		if i == 1 && !startAccounts {
@@ -260,7 +259,7 @@ func TestCLIResumeStartsUntouchedSecondStore(t *testing.T) {
 }
 
 func TestResumePreparationArtifactsArePreserved(t *testing.T) {
-	o := importOptions{Source: telemetrySource(t), DatabaseURL: pgtest.NewSchema(t), StateDir: t.TempDir(), Kind: "telemetry", Resume: true}
+	o := importOptions{Source: telemetrySource(t), DatabaseURL: postgresSchema(t), StateDir: t.TempDir(), Kind: "telemetry", Resume: true}
 	recovery := filepath.Join(o.StateDir, o.Kind, "recovery.sqlite")
 	if err := os.MkdirAll(filepath.Dir(recovery), 0o700); err != nil {
 		t.Fatal(err)
@@ -315,7 +314,7 @@ func TestReadyResumeRefusesChangedEvidenceWithoutWrites(t *testing.T) {
 	}
 	for name, statement := range changes {
 		t.Run(name, func(t *testing.T) {
-			o := importOptions{Source: telemetrySource(t), DatabaseURL: pgtest.NewSchema(t), StateDir: t.TempDir(), Kind: "telemetry"}
+			o := importOptions{Source: telemetrySource(t), DatabaseURL: postgresSchema(t), StateDir: t.TempDir(), Kind: "telemetry"}
 			if _, err := importSQLite(context.Background(), o); err != nil {
 				t.Fatal(err)
 			}

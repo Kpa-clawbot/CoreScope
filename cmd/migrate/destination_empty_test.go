@@ -4,12 +4,10 @@ import (
 	"context"
 	"strings"
 	"testing"
-
-	"github.com/meshcore-analyzer/pgutil/pgtest"
 )
 
 func TestFreshImportRefusesStandaloneSequence(t *testing.T) {
-	dsn := pgtest.NewSchema(t)
+	dsn := postgresSchema(t)
 	db := openImportDB(t, dsn)
 	if _, err := db.Exec(`CREATE SEQUENCE retained_sequence START WITH 77`); err != nil {
 		t.Fatal(err)

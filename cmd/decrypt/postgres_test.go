@@ -1,14 +1,23 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/dbschema"
 	"github.com/meshcore-analyzer/pgutil"
 	"github.com/meshcore-analyzer/pgutil/pgtest"
 )
 
 func TestPostgresExportReadsPathAndObservers(t *testing.T) {
+	if backend := os.Getenv("CORESCOPE_TEST_BACKEND"); backend != "postgres" {
+		if backend != "" && backend != "sqlite" {
+			t.Fatal("CORESCOPE_TEST_BACKEND must be sqlite or postgres")
+		}
+		t.Skip("PostgreSQL matrix is not selected")
+	}
 	dsn := pgtest.NewSchema(t)
 	writer, err := pgutil.Open(dsn, false)
 	if err != nil {
@@ -32,12 +41,24 @@ func TestPostgresExportReadsPathAndObservers(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { reader.Close() })
-	path := getPathFromDB(reader, 1)
-	if len(path) != 2 || path[0] != "ab" || path[1] != "cd" {
-		t.Fatalf("PostgreSQL path query lost data: %v", path)
+	assertExportMetadata(t, reader)
+	if _, err := reader.Exec(`DELETE FROM observations`); err == nil {
+		t.Fatal("PostgreSQL export reader permitted a write")
 	}
-	observers := getObservers(reader, 1)
-	if len(observers) != 1 || observers[0].Name != "Example observer" || observers[0].SNR != 1.5 {
-		t.Fatalf("PostgreSQL observer query lost data: %+v", observers)
+	base := t.TempDir()
+	readerURL := pgtest.ReadOnly(t, dsn)
+	recordExportStorage(t, dbconfig.Storage{Backend: dbconfig.Postgres, StateDir: base, ReaderDatabaseURL: readerURL})
+	selected, lease, err := openSelectedExport(dbconfig.StorageInputs{BaseDir: base, DBPath: filepath.Join(base, "stale.db"), Backend: dbconfig.SQLite, ReaderDatabaseURL: readerURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertExportMetadata(t, selected)
+	selected.Close()
+	lease.Close()
+	if _, err := writer.Exec(`UPDATE corescope_schema SET ready=false`); err != nil {
+		t.Fatal(err)
+	}
+	if db, lease, err := openSelectedExport(dbconfig.StorageInputs{BaseDir: base, StateDir: base, ReaderDatabaseURL: readerURL}); err == nil || db != nil || lease != nil {
+		t.Fatal("export accepted an incomplete PostgreSQL import")
 	}
 }

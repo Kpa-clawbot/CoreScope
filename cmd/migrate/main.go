@@ -34,11 +34,19 @@ func runCommand(ctx context.Context, args []string, out io.Writer) error {
 	usersURL := flags.String("users-database-url", "", "PostgreSQL accounts owner URL (prefer CORESCOPE_USERS_DATABASE_URL)")
 	source := flags.String("from-sqlite", "", "offline telemetry SQLite source")
 	accountSource := flags.String("users-from-sqlite", "", "offline account SQLite source")
-	stateDir := flags.String("state-dir", "state/migration", "private migration snapshots and resume manifests")
+	stateDir := flags.String("state-dir", "", "private migration snapshots and resume manifests (storage actions default beside selection; legacy imports use state/migration)")
 	offline := flags.Bool("offline", false, "confirm telemetry and account writers are stopped")
 	resume := flags.Bool("resume", false, "resume the same source/state/destination import")
 	checkReady := flags.Bool("check-ready", false, "check readiness without changing any schema or data")
 	checkImportKind := flags.String("check-import-kind", "", "read-only completed-import guard: telemetry or accounts, with its SQLite source path")
+	action := flags.String("storage-action", "", "installation status, setup, adopt, init, switch, resume or abort")
+	selectionFile := flags.String("selection-file", "", "absolute stable storage-selection.json path")
+	backend := flags.String("backend", "", "bootstrap backend, or explicit switch destination: sqlite or postgres")
+	sqlitePath := flags.String("sqlite-path", "", "bootstrap or new destination telemetry SQLite path")
+	usersSQLitePath := flags.String("users-sqlite-path", "", "bootstrap or new destination account SQLite path")
+	jobID := flags.String("job-id", "", "exact pending storage switch job to resume or abort")
+	configFile := flags.String("config", "", "explicit configuration file for storage setup")
+	configDir := flags.String("config-dir", ".", "configuration discovery directory; relative data paths still use the working directory")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			flags.SetOutput(out)
@@ -49,6 +57,15 @@ func runCommand(ctx context.Context, args []string, out io.Writer) error {
 	}
 	if flags.NArg() != 0 {
 		return errors.New("unexpected positional migration argument; use -help")
+	}
+	if *action != "" {
+		if *source != "" || *accountSource != "" || *resume || *checkReady || *checkImportKind != "" {
+			return errors.New("storage actions cannot be combined with legacy import flags")
+		}
+		return runStorageAction(ctx, storageOptions{Action: *action, SelectionFile: *selectionFile, Backend: *backend, SQLitePath: *sqlitePath, UsersSQLitePath: *usersSQLitePath, OwnerURL: *databaseURL, UsersOwnerURL: *usersURL, StateDir: *stateDir, JobID: *jobID, Offline: *offline, ConfigFile: *configFile, ConfigDir: *configDir}, out)
+	}
+	if *stateDir == "" {
+		*stateDir = "state/migration"
 	}
 	if *databaseURL == "" {
 		*databaseURL = os.Getenv("CORESCOPE_DATABASE_URL")

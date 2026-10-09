@@ -7,6 +7,7 @@
 #
 # Idempotent: safe to cancel and re-run at any point.
 # Each step checks what's already done and skips it.
+set +x
 set -e
 
 IMAGE_NAME="corescope"
@@ -64,7 +65,7 @@ NC='\033[0m'
 
 log()  { printf '%b\n' "${GREEN}✓${NC} $1"; }
 warn() { printf '%b\n' "${YELLOW}⚠${NC} $1"; }
-err()  { printf '%b\n' "${RED}✗${NC} $1"; }
+err()  { printf '%b\n' "${RED}✗${NC} $1" >&2; }
 info() { printf '%b\n' "${CYAN}→${NC} $1"; }
 step() { printf '%b\n' "\n${BOLD}[$1/$TOTAL_STEPS] $2${NC}"; }
 
@@ -75,36 +76,151 @@ is_true() {
   esac
 }
 
-dc_prod() {
-  if is_true "${DISABLE_MOSQUITTO:-false}"; then
-    $DC -f docker-compose.no-mosquitto.yml "$@"
-  else
-    $DC "$@"
-  fi
+# The base files require no PostgreSQL credentials and are also the read-only
+# discovery boundary before the recorded backend is known.
+dc_prod_base() {
+  local file=docker-compose.yml
+  if is_true "${DISABLE_MOSQUITTO:-false}"; then file=docker-compose.no-mosquitto.yml; fi
+  $DC -f "$file" "$@"
 }
 
-dc_staging() {
-  if is_true "${DISABLE_MOSQUITTO:-false}"; then
-    $DC -f docker-compose.staging.no-mosquitto.yml -p corescope-staging "$@"
-  else
-    $DC -f "$STAGING_COMPOSE_FILE" -p corescope-staging "$@"
-  fi
+dc_staging_base() {
+  local file="$STAGING_COMPOSE_FILE"
+  if is_true "${DISABLE_MOSQUITTO:-false}"; then file=docker-compose.staging.no-mosquitto.yml; fi
+  $DC -f "$file" -p corescope-staging "$@"
 }
 
-# Read the owner credential inside the database container, never from argv.
-pg_exec() {
-  local environment="$1" database="$2"
-  shift 2
+dc_postgres() {
+  local environment="$1" file override
+  shift
+  require_database_credentials || return 1
   case "$environment" in
-    prod) dc_prod exec -T postgres sh -c 'export PGHOST=127.0.0.1 PGPORT=5432 PGUSER=corescope_owner PGPASSWORD="$CORESCOPE_OWNER_PASSWORD" PGDATABASE="$1"; shift; exec "$@"' sh "$database" "$@" ;;
-    staging) dc_staging exec -T postgres sh -c 'export PGHOST=127.0.0.1 PGPORT=5432 PGUSER=corescope_owner PGPASSWORD="$CORESCOPE_OWNER_PASSWORD" PGDATABASE="$1"; shift; exec "$@"' sh "$database" "$@" ;;
-    *) err "Unknown PostgreSQL environment"; return 1 ;;
+    prod)
+      file=docker-compose.yml; override=docker-compose.postgres.yml
+      if is_true "${DISABLE_MOSQUITTO:-false}"; then file=docker-compose.no-mosquitto.yml; fi
+      $DC -f "$file" -f "$override" "$@"
+      ;;
+    staging)
+      file="$STAGING_COMPOSE_FILE"; override=docker-compose.staging.postgres.yml
+      if is_true "${DISABLE_MOSQUITTO:-false}"; then file=docker-compose.staging.no-mosquitto.yml; fi
+      $DC -f "$file" -f "$override" -p corescope-staging "$@"
+      ;;
+    *) err "Unknown storage environment"; return 1 ;;
   esac
 }
 
+storage_at() {
+  local environment="$1" data_directory="$2" service
+  local volumes=()
+  shift 2
+  if [ -n "$data_directory" ]; then volumes=(-v "$data_directory:/app/data"); fi
+  case "$environment" in prod) service=prod ;; staging) service=staging-go ;; *) err "Unknown storage environment"; return 1 ;; esac
+  "dc_${environment}_base" run --rm --no-deps "${volumes[@]}" --entrypoint /app/storage.sh "$service" "$@"
+}
+
+storage_action() {
+  local environment="$1"
+  shift
+  storage_at "$environment" "" "$@"
+}
+
+storage_field() {
+  storage_action "$1" field "$2"
+}
+
+selected_backend() {
+  local environment="$1" state backend job
+  state=$(storage_field "$environment" state) || { err "Cannot read storage selection. Build the current image with setup; keep the existing data and selection intact."; return 1; }
+  case "$state" in
+    ready) backend=$(storage_field "$environment" backend) || return 1 ;;
+    unrecorded)
+      # The packaged entrypoint performs explicit guarded setup. This hint
+      # selects its Compose dependencies; it never authorizes fresh data itself.
+      backend=${CORESCOPE_DB_BACKEND:-sqlite}
+      ;;
+    pending)
+      job=$(storage_field "$environment" job_id) || return 1
+      err "Storage switch $job is pending; keep services stopped and use storage resume or abort."; return 1
+      ;;
+    *) err "Storage selection is invalid; preserve it and inspect storage status."; return 1 ;;
+  esac
+  case "$backend" in sqlite|postgres) printf '%s\n' "$backend" ;; *) err "Choose sqlite or postgres during setup."; return 1 ;; esac
+}
+
+dc_prod() {
+  local backend
+  backend=$(selected_backend prod) || return 1
+  case "$backend" in sqlite) dc_prod_base "$@" ;; postgres) dc_postgres prod "$@" ;; esac
+}
+
+dc_staging() {
+  local backend
+  backend=$(selected_backend staging) || return 1
+  case "$backend" in sqlite) dc_staging_base "$@" ;; postgres) dc_postgres staging "$@" ;; esac
+}
+
+require_managed_postgres() {
+  storage_action "$1" managed-postgres
+}
+
+sqlite_source_exists() {
+  local environment="$1" kind="$2" source service
+  if [ "$kind" = accounts ] && [ "$(storage_field "$environment" has_accounts)" = false ]; then return 3; fi
+  source=$(storage_field "$environment" "$kind.sqlite_path") || return 1
+  service=prod; [ "$environment" != staging ] || service=staging-go
+  "dc_${environment}_base" run --rm --no-deps --entrypoint /bin/sh "$service" -eu -c '
+    if [ -f "$1" ]; then exit 0; fi
+    # A nonnil recorded target is initialized. Missing it is data loss, not
+    # an intentionally absent optional store, even when no sidecar survives.
+    exit 1
+  ' sh "$source"
+}
+
+sqlite_dump_file() {
+  local environment="$1" kind="$2" destination="$3" temporary="$3.partial" source directory service
+  case "$kind" in telemetry|accounts) ;; *) err "Unknown SQLite store"; return 1 ;; esac
+  [ "$(basename "$destination")" = "$kind.db" ] || { err "Use the native store filename $kind.db"; return 1; }
+  source=$(storage_field "$environment" "$kind.sqlite_path") || return 1
+  [ ! -e "$destination" ] || { err "Backup target already exists: $destination"; return 1; }
+  directory=$(cd "$(dirname "$destination")" && pwd -P) || return 1
+  service=prod; [ "$environment" != staging ] || service=staging-go
+  (
+    umask 077
+    set -o noclobber
+    : > "$temporary" || exit 1
+    trap 'rm -f -- "$temporary"' EXIT HUP INT TERM
+    # SQLite's native backup includes committed WAL frames and preserves rowids.
+    # The source is read-only; a fixed output name avoids dot-command quoting.
+    "dc_${environment}_base" run --rm --no-deps -v "$directory:/backup" --entrypoint sqlite3 "$service" \
+      -readonly -cmd '.timeout 5000' "$source" ".backup '/backup/$kind.db.partial'" || exit 1
+    sync -f "$temporary" || exit 1
+    ln -- "$temporary" "$destination" || exit 1
+    rm -- "$temporary" || exit 1
+    trap - EXIT HUP INT TERM
+  )
+}
+
+# Read the owner credential inside the database container, never from argv.
+pg_container_exec() {
+  local environment="$1" database="$2"
+  shift 2
+  case "$database" in corescope_telemetry|corescope_accounts) ;; *) err "Unsupported managed database target"; return 1 ;; esac
+  dc_postgres "$environment" exec -T postgres sh -c 'export PGHOST=127.0.0.1 PGPORT=5432 PGUSER=corescope_owner PGPASSWORD="$CORESCOPE_OWNER_PASSWORD" PGDATABASE="$1"; shift; exec "$@"' sh "$database" "$@"
+}
+
+pg_exec() {
+  require_managed_postgres "$1" || return 1
+  if [ "$2" = corescope_accounts ] && [ "$(storage_field "$1" has_accounts)" != true ]; then
+    err "No initialized account database is selected; managed account operations were refused."
+    return 1
+  fi
+  pg_container_exec "$@"
+}
+
 pg_empty() {
-  local count
-  count=$(pg_exec "$1" "$2" psql -X -A -t -v ON_ERROR_STOP=1 -c "SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND c.relkind IN ('r','p','v','m','S','f')") || return 1
+  local count execute=pg_exec
+  [ "${3:-}" != fresh-staging ] || execute=pg_container_exec
+  count=$("$execute" "$1" "$2" psql -X -A -t -v ON_ERROR_STOP=1 -c "SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND c.relkind IN ('r','p','v','m','S','f')") || return 1
   [ "$count" = 0 ]
 }
 
@@ -126,12 +242,13 @@ pg_dump_file() {
 }
 
 pg_restore_file() {
-  local environment="$1" database="$2" archive="$3"
+  local environment="$1" database="$2" archive="$3" scope="${4:-}" execute=pg_exec
+  [ "$scope" != fresh-staging ] || execute=pg_container_exec
   if [ "$(head -c 5 "$archive")" != PGDMP ]; then err "SQLite files require docs/postgresql-upgrade.md; expected a PostgreSQL archive."; return 1; fi
-  pg_empty "$environment" "$database" || { err "Refusing to overwrite a nonempty PostgreSQL destination."; return 1; }
-  pg_exec "$environment" "$database" pg_restore --no-password --exit-on-error --single-transaction --no-owner --no-privileges --dbname="$database" < "$archive" || return 1
-  pg_exec "$environment" "$database" psql -X -v ON_ERROR_STOP=1 < docker/postgres-grants.sql >/dev/null || return 1
-  pg_exec "$environment" "$database" psql -X -v ON_ERROR_STOP=1 -c ANALYZE >/dev/null || return 1
+  pg_empty "$environment" "$database" "$scope" || { err "Refusing to overwrite a nonempty PostgreSQL destination."; return 1; }
+  "$execute" "$environment" "$database" pg_restore --no-password --exit-on-error --single-transaction --no-owner --no-privileges --dbname="$database" < "$archive" || return 1
+  "$execute" "$environment" "$database" psql -X -v ON_ERROR_STOP=1 < docker/postgres-grants.sql >/dev/null || return 1
+  "$execute" "$environment" "$database" psql -X -v ON_ERROR_STOP=1 -c ANALYZE >/dev/null || return 1
 }
 
 require_database_credentials() {
@@ -141,6 +258,57 @@ require_database_credentials() {
     value=$(printenv "$key" || true)
     if ! [[ "$value" =~ ^[a-fA-F0-9]{32,}$ ]]; then err "Set $key in .env to at least 32 hexadecimal characters; see docs/postgresql-upgrade.md."; return 1; fi
   done
+}
+
+# Update only one private bootstrap setting, preserving unrelated .env content.
+write_private_env() {
+  local key="$1" value="$2" temporary
+  umask 077
+  temporary=$(mktemp .env.tmp.XXXXXX) || return 1
+  if [ -f .env ]; then
+    awk -F= -v key="$key" '$1 != key { print }' .env > "$temporary" || { rm -f -- "$temporary"; return 1; }
+  fi
+  printf '%s=%s\n' "$key" "$value" >> "$temporary"
+  chmod 600 "$temporary"
+  mv -- "$temporary" .env
+  export "$key=$value"
+}
+
+prepare_database_credentials() {
+  local directory="${PROD_POSTGRES_DATA_DIR:-$HOME/corescope-postgres}" key value occupied=false
+  if [ -d "$directory" ] && [ -n "$(find "$directory" -mindepth 1 -maxdepth 1 -print -quit)" ]; then occupied=true; fi
+  for key in POSTGRES_ADMIN_PASSWORD CORESCOPE_OWNER_PASSWORD CORESCOPE_READER_PASSWORD CORESCOPE_WRITER_PASSWORD CORESCOPE_ACCOUNTS_PASSWORD CORESCOPE_CHANNELS_PASSWORD; do
+    value=$(printenv "$key" || true)
+    if [ -z "$value" ]; then
+      if $occupied; then err "Existing PostgreSQL storage needs its matching private .env; changing passwords does not rotate existing roles. Keep the volume intact."; return 1; fi
+      value=$(openssl rand -hex 32) || return 1
+      write_private_env "$key" "$value" || return 1
+    fi
+  done
+  require_database_credentials
+}
+
+choose_storage() {
+  local state backend reply
+  state=$(storage_field prod state) || return 1
+  if [ "$state" = ready ]; then
+    backend=$(storage_field prod backend) || return 1
+    info "Keeping recorded $backend storage. Use storage switch for an explicit offline backend change."
+    return 0
+  fi
+  if [ "$state" != unrecorded ]; then selected_backend prod >/dev/null; return 1; fi
+  echo "Storage for this installation:"
+  echo "  1) SQLite (default; no separate database service)"
+  echo "  2) PostgreSQL (separate local service and private role credentials)"
+  read -r -p "Choose [1]: " reply
+  case "${reply:-1}" in
+    1|sqlite) backend=sqlite ;;
+    2|postgres) backend=postgres ;;
+    *) err "Choose 1 (SQLite) or 2 (PostgreSQL)."; return 1 ;;
+  esac
+  write_private_env CORESCOPE_DB_BACKEND "$backend" || return 1
+  if [ "$backend" = postgres ]; then prepare_database_credentials || return 1; fi
+  info "Setup will validate existing stores before adopting them, or initialize only a provably fresh $backend installation."
 }
 
 confirm() {
@@ -813,7 +981,6 @@ cmd_setup() {
 
   write_env_managed_values "$selected_http" "$selected_https" "$selected_mqtt" "$selected_data_dir" "$selected_disable_mosquitto"
   log "Saved negotiated ports to .env"
-  require_database_credentials
   show_env_port_summary "$selected_http" "$selected_https" "$selected_mqtt" "$selected_data_dir" "$selected_disable_mosquitto"
 
   echo "   Resolved port mapping:"
@@ -846,15 +1013,17 @@ cmd_setup() {
   if [ -n "$IMAGE_EXISTS" ] && is_done "build"; then
     log "Image already built."
     if confirm "Rebuild? (only needed if you updated the code)"; then
-      dc_prod build prod
+      dc_prod_base build prod
       log "Image rebuilt."
     fi
   else
     info "This takes 1-2 minutes the first time..."
-    dc_prod build prod
+    dc_prod_base build prod
     log "Image built."
   fi
   mark_done "build"
+
+  choose_storage || return 1
 
   # ── Step 5: Start container ──
   step 5 "Starting container"
@@ -867,18 +1036,18 @@ cmd_setup() {
     fi
   fi
 
-  # Detect existing data directories
-  if [ -d "$PROD_DATA" ] && [ -f "$PROD_DATA/meshcore.db" ]; then
-    info "Found existing data at $PROD_DATA/ — will use bind mount."
-  fi
-
-  if docker ps --format '{{.Names}}' | grep -q "^corescope-prod$"; then
-    log "Container already running."
+  local backend
+  backend=$(selected_backend prod) || return 1
+  dc_prod_base stop prod || return 1
+  if [ "$backend" = postgres ]; then
+    require_database_credentials || return 1
+    dc_postgres prod up -d --wait postgres || return 1
+    dc_postgres prod run --rm --no-deps --entrypoint /app/storage.sh bootstrap setup -backend=postgres || return 1
   else
-    mkdir -p "$PROD_DATA"
-    dc_prod up -d prod
-    log "Container started."
+    storage_action prod setup -backend=sqlite || return 1
   fi
+  dc_prod up -d prod || return 1
+  log "Validated storage and application started."
   mark_done "container"
 
   # ── Step 6: Verify ──
@@ -933,23 +1102,52 @@ cmd_setup() {
 
 # Copy telemetry into an empty staging database; accounts stay independent.
 prepare_staging_db() {
+  local backend state path destination copy_dir attempt contents
   mkdir -p "$STAGING_DATA"
-  dc_staging up -d postgres
-  local attempt
-  for attempt in $(seq 1 30); do
-    if pg_exec staging corescope_telemetry psql -X -A -t -c 'SELECT 1' >/dev/null 2>&1; then break; fi
-    [ "$attempt" -lt 30 ] || { err "Staging PostgreSQL did not become ready"; return 1; }
-    sleep 1
-  done
-  if ! pg_empty staging corescope_telemetry; then info "Keeping existing staging PostgreSQL data; automatic replacement is refused."; return 0; fi
-  local copy_dir
+  if container_running "$STAGING_CONTAINER"; then info "Keeping running staging data."; return 0; fi
+  state=$(storage_field staging state) || return 1
+  if [ "$state" = ready ]; then info "Keeping recorded staging storage; automatic replacement is refused."; return 0; fi
+  [ "$state" = unrecorded ] || { err "Staging recovery must finish before cloning data."; return 1; }
+  contents=$(find "$STAGING_DATA" -mindepth 1 -maxdepth 1 ! -name config.json ! -name theme.json ! -name Caddyfile ! -name .env -print -quit)
+  if [ -n "$contents" ]; then info "Keeping existing staging files; packaged setup will validate them before startup."; return 0; fi
+  backend=$(selected_backend prod) || return 1
+  prepare_staging_config
   copy_dir=$(mktemp -d)
   chmod 700 "$copy_dir"
-  pg_dump_file prod corescope_telemetry "$copy_dir/telemetry.dump" || return 1
-  pg_restore_file staging corescope_telemetry "$copy_dir/telemetry.dump" || return 1
-  rm -f -- "$copy_dir/telemetry.dump"
+  if [ "$backend" = sqlite ]; then
+    path=$(storage_field prod telemetry.sqlite_path) || return 1
+    case "$path" in /app/data/*) ;; *) err "Managed staging requires telemetry inside the persistent data mount."; return 1 ;; esac
+    destination=$(realpath -m -- "$STAGING_DATA/${path#/app/data/}") || return 1
+    case "$destination" in "$(realpath -m -- "$STAGING_DATA")"/*) ;; *) err "Staging target escaped its data directory."; return 1 ;; esac
+    [ ! -e "$destination" ] || { err "Staging telemetry already exists."; return 1; }
+    sqlite_dump_file prod telemetry "$copy_dir/telemetry.db" || return 1
+    mkdir -p "$(dirname "$destination")"
+    cp -- "$copy_dir/telemetry.db" "$destination" || return 1
+    chmod 600 "$destination"
+    # Only telemetry is cloned. A new account target is independently initialized.
+    storage_action staging setup -backend=sqlite -sqlite-path "$path" -users-sqlite-path /app/data/users.db || return 1
+  else
+    # Explicit fresh staging only: start the local database, never bootstrap its
+    # schema before checking emptiness and restoring the native telemetry dump.
+    dc_postgres staging up -d postgres
+    for attempt in $(seq 1 30); do
+      if pg_container_exec staging corescope_telemetry psql -X -A -t -c 'SELECT 1' >/dev/null 2>&1; then break; fi
+      [ "$attempt" -lt 30 ] || { err "Staging PostgreSQL did not become ready"; return 1; }
+      sleep 1
+    done
+    if ! pg_empty staging corescope_telemetry fresh-staging; then
+      info "Keeping existing staging PostgreSQL data; validating its adoption before startup."
+      rmdir "$copy_dir"
+      dc_postgres staging run --rm bootstrap
+      return $?
+    fi
+    pg_dump_file prod corescope_telemetry "$copy_dir/telemetry.dump" || return 1
+    pg_restore_file staging corescope_telemetry "$copy_dir/telemetry.dump" fresh-staging || return 1
+    dc_postgres staging run --rm bootstrap || return 1
+  fi
+  rm -f -- "$copy_dir/telemetry.db" "$copy_dir/telemetry.dump"
   rmdir -- "$copy_dir"
-  log "Telemetry restored into the empty staging database. Staging accounts remain independent."
+  log "Telemetry cloned into fresh staging storage. Staging accounts remain independent."
 }
 
 # Copy config.prod.json → config.staging.json with siteName change
@@ -1091,7 +1289,6 @@ ensure_config() {
 }
 
 cmd_start() {
-  require_database_credentials
   local WITH_STAGING=false
   if [ "$1" = "--with-staging" ]; then
     WITH_STAGING=true
@@ -1138,19 +1335,19 @@ cmd_stop() {
   case "$TARGET" in
     prod)
       info "Stopping production container (corescope-prod)..."
-      dc_prod stop prod
+      dc_prod_base stop prod
       log "Production stopped."
       ;;
     staging)
       info "Stopping staging container (${STAGING_CONTAINER})..."
-      dc_staging rm -sf staging-go 2>/dev/null || true
+      dc_staging_base rm -sf staging-go 2>/dev/null || true
       docker rm -f "$STAGING_CONTAINER" meshcore-staging-go corescope-staging meshcore-staging 2>/dev/null || true
       log "Staging stopped and cleaned up."
       ;;
     all)
       info "Stopping all containers..."
-      dc_prod stop prod
-      dc_staging rm -sf staging-go 2>/dev/null || true
+      dc_prod_base stop prod
+      dc_staging_base rm -sf staging-go 2>/dev/null || true
       docker rm -f "$STAGING_CONTAINER" meshcore-staging-go corescope-staging meshcore-staging 2>/dev/null || true
       log "All containers stopped."
       ;;
@@ -1172,7 +1369,7 @@ cmd_restart() {
     staging)
       info "Restarting staging container (${STAGING_CONTAINER})..."
       # Stop and remove old container
-      dc_staging rm -sf staging-go 2>/dev/null || true
+      dc_staging_base rm -sf staging-go 2>/dev/null || true
       docker rm -f "$STAGING_CONTAINER" 2>/dev/null || true
       # Wait for container to be fully gone and memory to be reclaimed
       # This prevents OOM when old + new containers overlap on small VMs
@@ -1195,7 +1392,7 @@ cmd_restart() {
     all)
       info "Restarting all containers..."
       dc_prod up -d --force-recreate prod
-      dc_staging rm -sf staging-go 2>/dev/null || true
+      dc_staging_base rm -sf staging-go 2>/dev/null || true
       docker rm -f "$STAGING_CONTAINER" 2>/dev/null || true
       dc_staging up -d staging-go
       log "All containers restarted."
@@ -1262,11 +1459,20 @@ cmd_status() {
   fi
   echo ""
 
-  # Disk usage
-  local database size
-  for database in corescope_telemetry corescope_accounts; do
-    if size=$(pg_exec prod "$database" psql -X -A -t -c 'SELECT pg_size_pretty(pg_database_size(current_database()))' 2>/dev/null); then info "Production $database: $size"; else warn "PostgreSQL size unavailable for $database"; fi
-  done
+  local backend database size target
+  storage_action prod status || return 1
+  backend=$(selected_backend prod) || return 1
+  if [ "$backend" = postgres ]; then
+    for database in corescope_telemetry corescope_accounts; do
+      if [ "$database" = corescope_accounts ] && [ "$(storage_field prod has_accounts)" = false ]; then continue; fi
+      if size=$(pg_exec prod "$database" psql -X -A -t -c 'SELECT pg_size_pretty(pg_database_size(current_database()))' 2>/dev/null); then info "Production $database: $size"; else warn "PostgreSQL size unavailable for $database"; fi
+    done
+  else
+    for database in telemetry accounts; do
+      target=$(storage_field prod "$database.sqlite_path") || continue
+      if size=$(dc_prod_base run --rm --no-deps --entrypoint /bin/sh prod -c 'stat -c %s "$1"' sh "$target" 2>/dev/null); then info "Production SQLite $database: $size bytes (main file; WAL may be additional)"; fi
+    done
+  fi
 
 }
 
@@ -1397,7 +1603,7 @@ cmd_update() {
   migrate_config auto
 
   info "Rebuilding image..."
-  dc_prod build prod
+  dc_prod_base build prod
 
   info "Restarting with new image..."
   dc_prod up -d --force-recreate prod
@@ -1411,38 +1617,208 @@ cmd_update() {
 
 # ─── Backup ───────────────────────────────────────────────────────────────
 
+backup_state() {
+  local destination="$1" backend="$2" data_root target relative database_root
+  local excludes=()
+  data_root=$(cd "$PROD_DATA" && pwd -P) || return 1
+  destination=$(realpath -m -- "$destination") || return 1
+  case "$destination" in "$data_root"|"$data_root"/*) err "Choose a backup directory outside the live data directory."; return 1 ;; esac
+  if [ "$backend" = sqlite ]; then
+    for target in telemetry accounts; do
+      if [ "$target" = accounts ] && [ "$(storage_field prod has_accounts)" = false ]; then continue; fi
+      relative=$(storage_field prod "$target.sqlite_path") || return 1
+      case "$relative" in
+        /app/data/*)
+          relative=${relative#/app/data/}
+          excludes+=("--exclude=./$relative" "--exclude=./$relative-wal" "--exclude=./$relative-shm" "--exclude=./$relative-journal")
+          ;;
+      esac
+    done
+  else
+    database_root=$(realpath -m -- "${PROD_POSTGRES_DATA_DIR:-$HOME/corescope-postgres}") || return 1
+    case "$database_root" in
+      "$data_root") err "PostgreSQL storage and application state must use separate directories."; return 1 ;;
+      "$data_root"/*) excludes+=("--exclude=./${database_root#"$data_root"/}") ;;
+    esac
+  fi
+  # Preserve queues, selection/history, settings and custom files as recovery
+  # material. The selected live databases are supplied only by native snapshots.
+  (
+    umask 077
+    set -o noclobber
+    exec 3>"$destination/state.tar.partial" || exit 1
+    trap 'rm -f -- "$destination/state.tar.partial"' EXIT HUP INT TERM
+    tar -C "$data_root" "${excludes[@]}" -cf - . >&3 || exit 1
+    exec 3>&-
+    sync -f "$destination/state.tar.partial" || exit 1
+    ln -- "$destination/state.tar.partial" "$destination/state.tar" || exit 1
+    rm -- "$destination/state.tar.partial" || exit 1
+    trap - EXIT HUP INT TERM
+  )
+}
+
 cmd_backup() {
-  local timestamp backup_dir source name
+  local timestamp backup_dir source name backend status has_accounts
   timestamp=$(date +%Y%m%d-%H%M%S)
-  backup_dir="$1"
+  backup_dir="${1:-./backups/corescope-$timestamp}"
   [ -n "$backup_dir" ] || backup_dir="./backups/corescope-$timestamp"
+  backend=$(selected_backend prod) || return 1
+  [ "$(storage_field prod state)" = ready ] || { err "Complete validated setup before taking a native backup."; return 1; }
   umask 077
+  if [ -d "$backup_dir" ] && [ -n "$(find "$backup_dir" -mindepth 1 -maxdepth 1 -print -quit)" ]; then err "Choose a new empty backup directory; prior recovery files were preserved."; return 1; fi
   mkdir -p "$backup_dir"
-  info "Writing native PostgreSQL archives to $backup_dir/"
-  pg_dump_file prod corescope_telemetry "$backup_dir/telemetry.dump" || return 1
-  pg_dump_file prod corescope_accounts "$backup_dir/accounts.dump" || return 1
+  chmod 700 "$backup_dir"
+  case "$backend" in
+    sqlite)
+      info "Writing native SQLite snapshots to $backup_dir/"
+      sqlite_dump_file prod telemetry "$backup_dir/telemetry.db" || return 1
+      if sqlite_source_exists prod accounts; then
+        sqlite_dump_file prod accounts "$backup_dir/accounts.db" || return 1
+      else
+        status=$?
+        [ "$status" = 3 ] || { err "Account storage is inaccessible or incomplete; backup refused."; return 1; }
+        : > "$backup_dir/accounts.absent"
+      fi
+      ;;
+    postgres)
+      info "Writing native PostgreSQL archives to $backup_dir/"
+      has_accounts=$(storage_field prod has_accounts) || return 1
+      case "$has_accounts" in true|false) ;; *) err "Cannot read the recorded account target."; return 1 ;; esac
+      pg_dump_file prod corescope_telemetry "$backup_dir/telemetry.dump" || return 1
+      if [ "$has_accounts" = true ]; then
+        pg_dump_file prod corescope_accounts "$backup_dir/accounts.dump" || return 1
+      else
+        : > "$backup_dir/accounts.absent"
+      fi
+      ;;
+  esac
+  backup_state "$backup_dir" "$backend" || return 1
+  printf '%s\n' "$backend" > "$backup_dir/backend.txt"
   for name in config.json theme.json; do
     source="$PROD_DATA/$name"
     [ -f "$source" ] || source="$name"
     if [ -f "$source" ]; then cp -- "$source" "$backup_dir/$name"; chmod 600 "$backup_dir/$name"; fi
   done
+  if [ -f .env ]; then cp -- .env "$backup_dir/compose.env"; chmod 600 "$backup_dir/compose.env"; fi
   if [ -f caddy-config/Caddyfile ]; then cp -- caddy-config/Caddyfile "$backup_dir/Caddyfile"; chmod 600 "$backup_dir/Caddyfile"; fi
-  log "Both database archives and available configuration saved. Keep the bundle private and encrypted off-host."
+  log "Native $backend backups and available configuration saved. Keep the bundle private and encrypted off-host."
 }
 
 # ─── Restore ──────────────────────────────────────────────────────────────
 
-cmd_restore() {
-  local bundle="$1" file source destination stamp
-  if [ ! -d "$bundle" ]; then err "Usage: ./manage.sh restore <native-backup-directory>. SQLite files require docs/postgresql-upgrade.md."; return 1; fi
-  for file in telemetry.dump accounts.dump; do
-    if [ ! -f "$bundle/$file" ] || [ "$(head -c 5 "$bundle/$file")" != PGDMP ]; then err "Backup must contain native telemetry.dump and accounts.dump; SQLite files are not accepted."; return 1; fi
+stage_backup_state() {
+  local bundle="$1" destination="$2" stage
+  bundle=$(cd "$bundle" && pwd -P) || return 1
+  [ -f "$bundle/state.tar" ] || { err "This restore requires the matching private state archive; use the native recovery guide for older snapshots."; return 1; }
+  mkdir -p "$(dirname "$destination")"
+  stage=$(mktemp -d "$destination.restore-XXXXXXXX") || return 1
+  chmod 700 "$stage"
+  # Managed archives contain relative regular files/directories only. Keep an
+  # unsupported archive and its staged recovery material for manual inspection.
+  tar -tf "$bundle/state.tar" > "$stage/.restore-names" || return 1
+  LC_ALL=C tar -tvf "$bundle/state.tar" > "$stage/.restore-types" || return 1
+  if ! awk '/^\// || /(^|\/)\.\.(\/|$)/ { bad=1 } END { exit bad }' "$stage/.restore-names" ||
+     ! awk 'substr($0,1,1)!="-" && substr($0,1,1)!="d" { bad=1 } END { exit bad }' "$stage/.restore-types"; then
+    err "State archive contains unsupported paths or links. Preserve it for manual recovery."
+    return 1
+  fi
+  rm -- "$stage/.restore-names" "$stage/.restore-types"
+  tar --no-same-owner --no-same-permissions -xf "$bundle/state.tar" -C "$stage" || return 1
+  printf '%s\n' "$stage"
+}
+
+restore_sqlite_bundle() {
+  local bundle="$1" destination stage state backend kind target relative result device
+  bundle=$(cd "$bundle" && pwd -P) || return 1
+  [ -f "$bundle/state.tar" ] || { err "This restore requires the matching private state archive; use the native recovery guide for older snapshots."; return 1; }
+  if container_running corescope-prod; then err "Stop CoreScope before restoring."; return 1; fi
+  destination=$(realpath -m -- "$PROD_DATA") || return 1
+  if [ -L "$PROD_DATA" ] || { [ -d "$destination" ] && [ -n "$(find "$destination" -mindepth 1 -maxdepth 1 -print -quit)" ]; }; then
+    err "SQLite restore requires a new empty state directory. Preserve the current directory and select a fresh PROD_DATA_DIR."
+    return 1
+  fi
+  if ! confirm "Restore both native SQLite snapshots and state into this empty directory?"; then return 0; fi
+  stage=$(stage_backup_state "$bundle" "$destination") || return 1
+  state=$(storage_at prod "$stage" field state) || return 1
+  backend=$(storage_at prod "$stage" field backend) || return 1
+  [ "$state" = ready ] && [ "$backend" = sqlite ] || { err "State archive is not a complete SQLite installation snapshot."; return 1; }
+  if [ "$(storage_at prod "$stage" field has_accounts)" = true ] && [ -e "$bundle/accounts.absent" ]; then
+    err "The selection records initialized accounts; an absence marker cannot replace their native snapshot."
+    return 1
+  fi
+  for kind in telemetry accounts; do
+    if [ "$kind" = accounts ] && [ "$(storage_at prod "$stage" field has_accounts)" = false ]; then
+      [ -f "$bundle/accounts.absent" ] && [ ! -e "$bundle/accounts.db" ] || { err "Account backup and selection disagree."; return 1; }
+      continue
+    fi
+    target=$(storage_at prod "$stage" field "$kind.sqlite_path") || return 1
+    case "$target" in /app/data/*) ;; *) err "Managed restore requires SQLite targets inside the persistent data mount."; return 1 ;; esac
+    relative=${target#/app/data/}
+    target=$(realpath -m -- "$stage/$relative") || return 1
+    case "$target" in "$stage"/*) ;; *) err "SQLite target escaped the staged state directory."; return 1 ;; esac
+    [ ! -e "$target" ] && [ ! -e "$target-wal" ] && [ ! -e "$target-shm" ] || { err "State archive already contains a selected database; native snapshot restore was refused."; return 1; }
+    if [ "$kind" = accounts ] && [ -f "$bundle/accounts.absent" ]; then
+      [ ! -e "$bundle/accounts.db" ] || { err "Account backup metadata is inconsistent."; return 1; }
+      continue
+    fi
+    [ -f "$bundle/$kind.db" ] && [ "$(head -c 15 "$bundle/$kind.db")" = 'SQLite format 3' ] || { err "A native SQLite snapshot is missing or invalid."; return 1; }
+    result=$(dc_prod_base run --rm --no-deps -v "$bundle:/backup:ro" --entrypoint sqlite3 prod -readonly "/backup/$kind.db" 'PRAGMA quick_check') || return 1
+    [ "$result" = ok ] || { err "SQLite snapshot integrity check failed."; return 1; }
+    mkdir -p "$(dirname "$target")"
+    cp -- "$bundle/$kind.db" "$target" || return 1
+    chmod 600 "$target"
   done
+  # Validate both schemas on the staged mount before publishing any restored
+  # selection or starting a process. This also handles supported old schemas.
+  storage_at prod "$stage" setup -backend=sqlite || return 1
+  device=$(stat -c %d "$stage") || return 1
+  [ ! -e "$destination" ] || { [ -d "$destination" ] && [ "$(stat -c %d "$destination")" = "$device" ] && [ -z "$(find "$destination" -mindepth 1 -maxdepth 1 -print -quit)" ]; } || {
+    err "Restore destination changed or is a separate mount; staged recovery remains at $stage."
+    return 1
+  }
+  mv -T -- "$stage" "$destination" || { err "Restore publication failed; preserve staged recovery at $stage."; return 1; }
+  log "SQLite state restored. Services remain stopped: review restored accounts, sessions and tokens before start."
+}
+
+cmd_restore() {
+  local bundle="$1" file source destination stamp has_accounts stage database
+  local databases=(corescope_telemetry)
+  if [ ! -d "$bundle" ]; then err "Usage: ./manage.sh restore <native-backup-directory>; see docs/storage.md for older standalone snapshots."; return 1; fi
+  local backend
+  backend=$(cat "$bundle/backend.txt" 2>/dev/null || printf postgres)
+  case "$backend" in
+    sqlite) restore_sqlite_bundle "$bundle"; return $? ;;
+    postgres) ;;
+    *) err "Unknown backup backend."; return 1 ;;
+  esac
   if container_running corescope-prod; then err "Stop CoreScope before restoring; leave target PostgreSQL running."; return 1; fi
-  if ! pg_empty prod corescope_telemetry || ! pg_empty prod corescope_accounts; then err "Restore requires empty PostgreSQL databases. Preserve the current cluster and configure a fresh destination."; return 1; fi
-  if ! confirm "Restore both native archives into these empty databases?"; then return 0; fi
-  pg_restore_file prod corescope_telemetry "$bundle/telemetry.dump" || return 1
-  pg_restore_file prod corescope_accounts "$bundle/accounts.dump" || return 1
+  require_managed_postgres prod || return 1
+  has_accounts=$(storage_field prod has_accounts) || return 1
+  case "$has_accounts" in
+    true)
+      [ ! -e "$bundle/accounts.absent" ] || { err "The selection records initialized accounts; their native archive is required."; return 1; }
+      databases+=(corescope_accounts)
+      ;;
+    false)
+      [ -f "$bundle/accounts.absent" ] && [ ! -e "$bundle/accounts.dump" ] || { err "Account backup and selection disagree."; return 1; }
+      destination=$(realpath -m -- "$PROD_DATA") || return 1
+      stage=$(stage_backup_state "$bundle" "$destination") || return 1
+      storage_at prod "$stage" managed-postgres || return 1
+      [ "$(storage_at prod "$stage" field has_accounts)" = false ] || { err "Account absence marker disagrees with the retained backup selection."; return 1; }
+      ;;
+    *) err "Cannot read the recorded account target."; return 1 ;;
+  esac
+  for database in "${databases[@]}"; do
+    file="${database#corescope_}.dump"
+    if [ ! -f "$bundle/$file" ] || [ "$(head -c 5 "$bundle/$file")" != PGDMP ]; then err "Backup must contain a native $file; SQLite files are not accepted."; return 1; fi
+  done
+  for database in "${databases[@]}"; do
+    if ! pg_empty prod "$database"; then err "Restore requires empty PostgreSQL databases. Preserve the current cluster and configure a fresh destination."; return 1; fi
+  done
+  if ! confirm "Restore the selected native archives into these empty databases?"; then return 0; fi
+  for database in "${databases[@]}"; do
+    pg_restore_file prod "$database" "$bundle/${database#corescope_}.dump" || return 1
+  done
   mkdir -p "$PROD_DATA" caddy-config
   stamp="$(date +%Y%m%d-%H%M%S)-$$"
   for file in config.json theme.json Caddyfile; do
@@ -1500,6 +1876,68 @@ cmd_reset() {
 
 # ─── Help ─────────────────────────────────────────────────────────────────
 
+cmd_storage() {
+  local action="${1:-status}" argument="${2:-}" state source destination target requires_postgres=false
+  local STORAGE_OPERATION="$action" extra=()
+  case "$action" in
+    status) storage_action prod status; return $? ;;
+    switch)
+      case "$argument" in sqlite|postgres) ;; *) err "Usage: ./manage.sh storage switch sqlite|postgres"; return 1 ;; esac
+      state=$(storage_field prod state) || return 1
+      [ "$state" = ready ] || { err "Finish setup or explicitly resume/abort the pending job before another switch."; return 1; }
+      source=$(storage_field prod backend) || return 1
+      [ "$source" != "$argument" ] || { info "Already using recorded $source storage."; return 0; }
+      [ "$source" != postgres ] || require_managed_postgres prod || return 1
+      prepare_database_credentials || return 1
+      if ! confirm "Stop production writers and run the verified offline switch to $argument?"; then return 0; fi
+      dc_prod_base stop prod || return 1
+      # Starting only PostgreSQL leaves the conversion destination uninitialized.
+      dc_postgres prod up -d --wait postgres || return 1
+      if [ "$argument" = sqlite ]; then
+        destination="$(storage_field prod state_dir)/sqlite-$(date -u +%Y%m%d-%H%M%S)-$$" || return 1
+        extra=(-sqlite-path "$destination/meshcore.db" -users-sqlite-path "$destination/users.db")
+      fi
+      if ! dc_postgres prod run --rm --no-deps --entrypoint /app/storage.sh bootstrap switch "-backend=$argument" "${extra[@]}"; then
+        err "Switch failed. Services remain stopped; preserve source/recovery files and inspect storage status for its resume/abort job ID."
+        return 1
+      fi
+      write_private_env CORESCOPE_DB_BACKEND "$argument" || return 1
+      [ "$argument" != sqlite ] || dc_postgres prod stop postgres || return 1
+      log "Verified backend switch completed. Services remain stopped; inspect storage status and run start when ready."
+      ;;
+    resume|abort)
+      [[ "$argument" =~ ^[0-9a-f]{32}$ ]] || { err "Use storage $action <job-id> from storage status."; return 1; }
+      state=$(storage_field prod state) || return 1
+      [ "$state" = pending ] || { err "No pending storage job matches this recovery action."; return 1; }
+      [ "$(storage_field prod job_id)" = "$argument" ] || { err "Job ID does not match the pending switch."; return 1; }
+      if [ "$action" = abort ]; then
+        if ! confirm "Keep writers stopped and abort storage job $argument?"; then return 0; fi
+        dc_prod_base stop prod || return 1
+        storage_action prod abort "-job-id=$argument" || return 1
+        log "Storage job aborted before publication. Source, staged targets and recovery files remain; inspect status before setup/start."
+        return 0
+      fi
+      source=$(storage_field prod source_backend) || { err "Recovery source identity is unavailable; inspect storage status."; return 1; }
+      target=$(storage_field prod target_backend) || { err "Recovery target identity is unavailable; inspect storage status."; return 1; }
+      case "$source:$target" in :sqlite|:postgres|sqlite:sqlite|sqlite:postgres|postgres:sqlite|postgres:postgres) ;; *) err "The job has no bound target yet. Preserve recovery files, abort this job, then start a new setup/switch."; return 1 ;; esac
+      if [ "$source" = postgres ] || [ "$target" = postgres ]; then requires_postgres=true; require_database_credentials || return 1; fi
+      if ! confirm "Keep writers stopped and $action storage job $argument?"; then return 0; fi
+      dc_prod_base stop prod || return 1
+      if $requires_postgres; then
+        dc_postgres prod up -d --wait postgres || return 1
+        dc_postgres prod run --rm --no-deps --entrypoint /app/storage.sh bootstrap "$action" "-job-id=$argument" || return 1
+      else
+        storage_action prod "$action" "-job-id=$argument" || return 1
+      fi
+      source=$(storage_field prod backend) || return 1
+      write_private_env CORESCOPE_DB_BACKEND "$source" || return 1
+      if $requires_postgres && [ "$source" = sqlite ]; then dc_postgres prod stop postgres || return 1; fi
+      log "Storage recovery completed. Original and staged recovery files remain; validate before start."
+      ;;
+    *) err "Usage: ./manage.sh storage status|switch sqlite|postgres|resume JOB_ID|abort JOB_ID"; return 1 ;;
+  esac
+}
+
 cmd_help() {
   echo ""
   echo "CoreScope — Management Script"
@@ -1521,8 +1959,11 @@ cmd_help() {
   printf '%b\n' "  ${BOLD}Maintain${NC}"
   echo "    update [version]   Update to version (no arg=latest tag, 'latest'=master tip, or e.g. v3.1.0)"
   echo "    promote            Promote staging → production (backup + restart)"
-  echo "    backup [dir]       Native PostgreSQL archives + config + theme"
-  echo "    restore <d>        Restore native archives into empty PostgreSQL databases"
+  echo "    backup [dir]       Native selected-backend snapshots + private state/config"
+  echo "    restore <d>        Restore native backups into fresh/empty targets"
+  echo "    storage status     Show recorded backend and pending recovery job"
+  echo "    storage switch sqlite|postgres  Verified offline conversion; keeps recovery copies"
+  echo "    storage resume|abort JOB_ID     Explicit interrupted-switch recovery"
   echo "    mqtt-test          Check if MQTT data is flowing"
   echo ""
   echo "Prod uses docker-compose.yml; staging uses ${STAGING_COMPOSE_FILE}."
@@ -1533,6 +1974,7 @@ cmd_help() {
 
 case "${1:-help}" in
   setup)     cmd_setup ;;
+  storage)   shift; cmd_storage "$@" ;;
   start)     cmd_start "$2" ;;
   stop)      cmd_stop "$2" ;;
   restart)   cmd_restart "$2" ;;

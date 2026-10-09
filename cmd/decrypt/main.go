@@ -1,4 +1,4 @@
-// corescope-decrypt decrypts and exports hashtag channel messages from PostgreSQL.
+// corescope-decrypt decrypts and exports hashtag channel messages from CoreScope storage.
 //
 // Usage:
 //
@@ -19,8 +19,7 @@ import (
 	"time"
 
 	"github.com/meshcore-analyzer/channel"
-	"github.com/meshcore-analyzer/dbschema"
-	"github.com/meshcore-analyzer/pgutil"
+	"github.com/meshcore-analyzer/dbconfig"
 )
 
 // Version info (set via ldflags).
@@ -48,12 +47,11 @@ type Observer struct {
 
 func main() {
 	channelName := flag.String("channel", "", "Channel name (e.g. \"#wardriving\")")
-	defaultURL := os.Getenv("CORESCOPE_READER_DATABASE_URL")
-	if defaultURL == "" {
-		defaultURL = os.Getenv("CORESCOPE_DATABASE_URL")
-	}
-	databaseURL := flag.String("database-url", defaultURL, "PostgreSQL reader URL (prefer CORESCOPE_READER_DATABASE_URL)")
-	legacyDB := flag.String("db", "", "Removed: import SQLite with corescope-migrate before exporting")
+	databaseURL := flag.String("database-url", "", "PostgreSQL reader URL (prefer CORESCOPE_READER_DATABASE_URL)")
+	dbPath := flag.String("db", "", "Existing SQLite database path (default: data/meshcore.db)")
+	backend := flag.String("backend", "", "Bootstrap backend: sqlite or postgres (installed selection wins)")
+	stateDir := flag.String("state-dir", "", "Installation state directory (CORESCOPE_STATE_DIR)")
+	configPath := flag.String("config", "", "Storage config file (default: config.json, then data/config.json)")
 	format := flag.String("format", "json", "Output format: json, html, irc (or log)")
 	output := flag.String("output", "", "Output file (default: stdout)")
 	showVersion := flag.Bool("version", false, "Print version and exit")
@@ -67,6 +65,10 @@ USAGE
 FLAGS
   --channel NAME   Channel name to decrypt (e.g. "#wardriving", "wardriving")
                    The "#" prefix is added automatically if missing.
+  --db PATH        Existing SQLite database (default: data/meshcore.db).
+  --backend NAME   Bootstrap choice: sqlite or postgres.
+  --state-dir DIR  Find the installed storage selection in this directory.
+  --config FILE    Read storage settings from this config file.
   --database-url   PostgreSQL reader URL. Prefer CORESCOPE_READER_DATABASE_URL
                    or CORESCOPE_DATABASE_URL to keep credentials out of argv.
   --format FORMAT  Output format (default: json):
@@ -76,6 +78,9 @@ FLAGS
                      log   — Alias for irc
   --output FILE    Write output to FILE instead of stdout.
   --version        Print version and exit.
+
+  The installed selection takes precedence over bootstrap paths and backend flags.
+  Export holds a shared selection lease and never creates or migrates a database.
 
 EXAMPLES
   # Export #wardriving messages as JSON
@@ -114,10 +119,7 @@ LIMITATIONS
 		os.Exit(0)
 	}
 
-	if *legacyDB != "" {
-		log.Fatal("SQLite runtime access has been removed; use corescope-migrate -from-sqlite during the documented offline upgrade")
-	}
-	if *channelName == "" || *databaseURL == "" {
+	if *channelName == "" {
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -131,14 +133,21 @@ LIMITATIONS
 	key := channel.DeriveKey(ch)
 	chHash := channel.ChannelHash(key)
 
-	db, err := openExportDB(*databaseURL)
+	raw, err := exportStorageInputs(".", exportOptions{Backend: dbconfig.Backend(*backend), DBPath: *dbPath, DatabaseURL: *databaseURL, StateDir: *stateDir, ConfigPath: *configPath}, os.Getenv)
+	if err != nil {
+		log.Fatalf("Storage configuration: %v", err)
+	}
+	db, lease, err := openSelectedExport(raw)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
+	}
+	if lease != nil {
+		defer lease.Close()
 	}
 	defer db.Close()
 
 	// Query all GRP_TXT packets
-	rows, err := db.Query(`SELECT id, hash, raw_hex, first_seen FROM transmissions WHERE payload_type = 5`)
+	rows, err := db.Query(exportTransmissionsSQL)
 	if err != nil {
 		log.Fatalf("Query failed: %v", err)
 	}
@@ -286,26 +295,9 @@ func extractGRPPayload(rawHex string) ([]byte, error) {
 	return buf[offset:], nil
 }
 
-func openExportDB(databaseURL string) (*sql.DB, error) {
-	db, err := pgutil.Open(databaseURL, true)
-	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(4)
-	if err := pgutil.AssertReadOnly(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := dbschema.AssertReady(db); err != nil {
-		db.Close()
-		return nil, err
-	}
-	return db, nil
-}
-
 func getPathFromDB(db *sql.DB, txID int) []string {
 	var decodedJSON sql.NullString
-	err := db.QueryRow(`SELECT decoded_json FROM transmissions WHERE id = $1`, txID).Scan(&decodedJSON)
+	err := db.QueryRow(exportPathSQL, txID).Scan(&decodedJSON)
 	if err != nil || !decodedJSON.Valid {
 		return nil
 	}
@@ -322,13 +314,7 @@ func getPathFromDB(db *sql.DB, txID int) []string {
 }
 
 func getObservers(db *sql.DB, txID int) []Observer {
-	rows, err := db.Query(`
-		SELECT o.name, obs.snr, obs.rssi, obs.timestamp
-		FROM observations obs
-		LEFT JOIN observers o ON o.rowid = obs.observer_idx
-		WHERE obs.transmission_id = $1
-		ORDER BY obs.timestamp, obs.id
-	`, txID)
+	rows, err := db.Query(exportObserversSQL, txID)
 	if err != nil {
 		return nil
 	}

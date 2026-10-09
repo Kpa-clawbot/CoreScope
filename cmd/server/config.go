@@ -39,7 +39,7 @@ type ListLimitsConfig struct {
 type Config struct {
 	Port        int               `json:"port"`
 	APIKey      string            `json:"apiKey"`
-	DBPath      string            `json:"dbPath,omitempty"` // rejected legacy SQLite setting
+	DBPath      string            `json:"dbPath,omitempty"` // legacy SQLite path; an installed selection is authoritative
 	DatabaseURL string            `json:"databaseURL"`
 	StateDir    string            `json:"stateDir"`
 	ListLimits  *ListLimitsConfig `json:"listLimits"`
@@ -495,10 +495,13 @@ func LoadConfig(baseDirs ...string) (*Config, error) {
 	for _, p := range paths {
 		data, err := os.ReadFile(p)
 		if err != nil {
-			continue
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("cannot read %s; refusing configuration fallback", filepath.Base(p))
 		}
 		if err := json.Unmarshal(data, cfg); err != nil {
-			continue
+			return nil, fmt.Errorf("%s is malformed or has invalid field types; refusing configuration fallback", filepath.Base(p))
 		}
 		cfg.NormalizeTimestampConfig()
 		cfg.migrateDeprecatedConfig()

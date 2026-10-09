@@ -36,7 +36,7 @@ func newGeneration() (string, error) {
 func (s *Store) GetSettings(userID int64) (string, SettingsVersion, error) {
 	var doc string
 	var v SettingsVersion
-	err := s.db.QueryRow(`SELECT doc, revision, generation FROM user_settings WHERE user_id = $1`, userID).Scan(&doc, &v.Revision, &v.Generation)
+	err := s.db.QueryRow(`SELECT doc, revision, generation FROM user_settings WHERE user_id = `+s.p(1), userID).Scan(&doc, &v.Revision, &v.Generation)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", SettingsVersion{}, nil
 	}
@@ -59,7 +59,7 @@ type SettingsRecord struct {
 func (s *Store) SettingsRecordFor(userID int64) (*SettingsRecord, error) {
 	var r SettingsRecord
 	var updated int64
-	err := s.db.QueryRow(`SELECT doc, revision, generation, updated_at FROM user_settings WHERE user_id = $1`, userID).
+	err := s.db.QueryRow(`SELECT doc, revision, generation, updated_at FROM user_settings WHERE user_id = `+s.p(1), userID).
 		Scan(&r.Doc, &r.Version.Revision, &r.Version.Generation, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -82,11 +82,11 @@ func (s *Store) PutSettings(userID int64, base SettingsVersion, doc string) (Set
 		return SettingsVersion{}, err
 	}
 	defer tx.Rollback()
-	if err := lockUser(tx, userID); err != nil {
+	if err := s.lockUser(tx, userID); err != nil {
 		return SettingsVersion{}, err
 	}
 	var cur SettingsVersion
-	err = tx.QueryRow(`SELECT revision, generation FROM user_settings WHERE user_id = $1`, userID).Scan(&cur.Revision, &cur.Generation)
+	err = tx.QueryRow(`SELECT revision, generation FROM user_settings WHERE user_id = `+s.p(1), userID).Scan(&cur.Revision, &cur.Generation)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return SettingsVersion{}, err
 	}
@@ -102,7 +102,7 @@ func (s *Store) PutSettings(userID int64, base SettingsVersion, doc string) (Set
 		return cur, ErrSettingsConflict
 	}
 	next.Revision = cur.Revision + 1
-	if _, err := tx.Exec(`INSERT INTO user_settings (user_id, doc, revision, generation, updated_at) VALUES ($1, $2, $3, $4, $5)
+	if _, err := tx.Exec(`INSERT INTO user_settings (user_id, doc, revision, generation, updated_at) VALUES (`+s.p(1)+`, `+s.p(2)+`, `+s.p(3)+`, `+s.p(4)+`, `+s.p(5)+`)
 		ON CONFLICT(user_id) DO UPDATE SET doc = excluded.doc, revision = excluded.revision, generation = excluded.generation, updated_at = excluded.updated_at`,
 		userID, doc, next.Revision, next.Generation, unix(s.now())); err != nil {
 		return SettingsVersion{}, err
@@ -118,12 +118,12 @@ func (s *Store) DeleteSettings(userID int64) error {
 		return err
 	}
 	defer tx.Rollback()
-	if err = lockUser(tx, userID); errors.Is(err, ErrNotFound) {
+	if err = s.lockUser(tx, userID); errors.Is(err, ErrNotFound) {
 		return nil
 	} else if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(`DELETE FROM user_settings WHERE user_id=$1`, userID); err != nil {
+	if _, err = tx.Exec(`DELETE FROM user_settings WHERE user_id=`+s.p(1), userID); err != nil {
 		return err
 	}
 	return tx.Commit()

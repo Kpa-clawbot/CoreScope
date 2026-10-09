@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/users"
 )
 
@@ -26,18 +27,22 @@ const (
 // usersBackupName matches the snapshot files this code writes and rotates.
 // Apart from orphaned temporary files (usersBackupTemp), nothing else in
 // the directory is ever touched.
-var usersBackupName = regexp.MustCompile(`^users-\d{8}-\d{6}\.dump$`)
+var usersBackupName = regexp.MustCompile(`^users-\d{8}-\d{6}\.(?:db|dump)$`)
 
 // usersBackupTemp matches the temporary name a snapshot is written under.
 // One is only left behind when the process died mid-write.
-var usersBackupTemp = regexp.MustCompile(`^users-\d{8}-\d{6}\.dump\.tmp$`)
+var usersBackupTemp = regexp.MustCompile(`^users-\d{8}-\d{6}\.(?:db|dump)\.tmp$`)
 
 // usersBackupTempMaxAge is how old an orphaned temporary snapshot must be
 // before the sweep removes it; no snapshot write takes this long.
 const usersBackupTempMaxAge = 24 * time.Hour
 
-func usersBackupFile(t time.Time) string {
-	return "users-" + t.UTC().Format(usersBackupLayout) + ".dump"
+func usersBackupFile(t time.Time, backend ...dbconfig.Backend) string {
+	extension := ".dump"
+	if len(backend) > 0 && backend[0] == dbconfig.SQLite {
+		extension = ".db"
+	}
+	return "users-" + t.UTC().Format(usersBackupLayout) + extension
 }
 
 // listUsersBackups returns the snapshot file names in dir, oldest first
@@ -66,7 +71,7 @@ func listUsersBackups(dir string) ([]string, error) {
 // back) are skipped so they cannot stop the backups.
 func usersBackupDue(names []string, now time.Time) bool {
 	for i := len(names) - 1; i >= 0; i-- {
-		t, err := time.Parse(usersBackupLayout, strings.TrimSuffix(strings.TrimPrefix(names[i], "users-"), ".dump"))
+		t, err := time.Parse(usersBackupLayout, strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(names[i], "users-"), ".dump"), ".db"))
 		if err != nil || t.After(now) {
 			continue
 		}
@@ -81,7 +86,7 @@ func writeUsersBackup(st *users.Store, dir string, now time.Time) (string, int64
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", 0, err
 	}
-	path := filepath.Join(dir, usersBackupFile(now))
+	path := filepath.Join(dir, usersBackupFile(now, st.Backend()))
 	tmp := path + ".tmp"
 	if err := st.Snapshot(tmp); err != nil {
 		return "", 0, err
@@ -202,7 +207,7 @@ func (s *Server) handleAdminUsersBackup(w http.ResponseWriter, r *http.Request, 
 			log.Printf("[users] backup download cleanup: %v", err)
 		}
 	}()
-	name := "corescope-users-" + time.Now().UTC().Format(usersBackupLayout) + ".dump"
+	name := "corescope-" + usersBackupFile(time.Now(), a.st.Backend())
 	path := filepath.Join(tmpDir, name)
 	if err := a.st.SnapshotContext(r.Context(), path); err != nil {
 		log.Printf("[users] backup download: %v", err)

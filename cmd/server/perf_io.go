@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/perfio"
 )
 
@@ -39,6 +40,13 @@ type PerfIOSample = perfio.Sample
 
 // PerfPostgresResponse combines sampled database metrics with live pool usage.
 type PerfPostgresResponse struct {
+	WalSize               *int64   `json:"walSize,omitempty"`
+	WalSizeMB             *float64 `json:"walSizeMB,omitempty"`
+	PageCount             *int64   `json:"pageCount,omitempty"`
+	PageSize              *int64   `json:"pageSize,omitempty"`
+	CacheSize             *int64   `json:"cacheSize,omitempty"`
+	JournalMode           *string  `json:"journalMode,omitempty"`
+	PlannerStats          *bool    `json:"plannerStats,omitempty"`
 	Engine                string   `json:"engine"`
 	DatabaseBytes         *int64   `json:"databaseBytes"`
 	OpenConnections       int      `json:"openConnections"`
@@ -257,7 +265,18 @@ func readIngestorIOSample() *PerfIOSample {
 func (s *Server) handlePerfPostgres(w http.ResponseWriter, r *http.Request) {
 	resp := PerfPostgresResponse{Engine: "postgresql", SampleIntervalSeconds: int(postgresStatsTTL / time.Second), Stale: true, Error: "database diagnostics unavailable"}
 	if s.db != nil && s.db.conn != nil {
+		if s.db.Backend() == dbconfig.SQLite {
+			resp.Engine = "sqlite"
+		}
 		sample, err := s.db.postgresStats(r.Context())
+		if sample.SQLite != nil {
+			native := sample.SQLite
+			walMB := float64(native.WalSize) / 1048576
+			resp.WalSize, resp.WalSizeMB = &native.WalSize, &walMB
+			resp.PageCount, resp.PageSize, resp.CacheSize = &native.PageCount, &native.PageSize, &native.CacheSize
+			resp.JournalMode, resp.PlannerStats = &native.JournalMode, &native.PlannerStats
+		}
+
 		resp.CacheHitRate = sample.CacheHitRate
 		resp.SampledAt, resp.Stale = postgresSampleStamp(sample), err != nil
 		if !sample.SampledAt.IsZero() {

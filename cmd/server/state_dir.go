@@ -1,6 +1,9 @@
 package main
 
-import "path/filepath"
+import (
+	"github.com/meshcore-analyzer/dbconfig"
+	"path/filepath"
+)
 
 // runtimeStateDir is set once before the server's background workers start.
 var runtimeStateDir = "data"
@@ -10,6 +13,9 @@ func (db *DB) statePath() string {
 	dir := db.stateDir
 	if dir == "" {
 		dir = runtimeStateDir
+	}
+	if db.Backend() == dbconfig.SQLite {
+		return filepath.Join(dir, filepath.Base(db.path))
 	}
 	return filepath.Join(dir, "meshcore")
 }

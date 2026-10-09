@@ -104,15 +104,47 @@ func TestLoadConfigNoFiles(t *testing.T) {
 
 func TestLoadConfigInvalidJSON(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "config.json"), []byte("{invalid"), 0644)
-
-	cfg, err := LoadConfig(dir)
-	if err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{invalid"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	// Should return defaults when JSON is invalid
-	if cfg.Port != 3000 {
-		t.Errorf("expected default port 3000, got %d", cfg.Port)
+	if cfg, err := LoadConfig(dir); err == nil || cfg != nil {
+		t.Fatal("malformed primary config fell back to defaults")
+	}
+}
+
+func TestLoadConfigNeverUsesFallbackAfterExistingConfigError(t *testing.T) {
+	for _, kind := range []string{"invalid JSON", "invalid field type", "unreadable file"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.Mkdir(filepath.Join(dir, "data"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "data", "config.json"), []byte(`{"stateDir":"unintended-installation","dbPath":"other.db"}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			primary := filepath.Join(dir, "config.json")
+			switch kind {
+			case "invalid JSON":
+				if err := os.WriteFile(primary, []byte(`{"stateDir":`), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "invalid field type":
+				if err := os.WriteFile(primary, []byte(`{"databaseURL":"postgresql://user:private-password@host/database","port":"invalid"}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "unreadable file":
+				if err := os.Mkdir(primary, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg, err := LoadConfig(dir)
+			if err == nil || cfg != nil {
+				t.Fatal("existing config error selected fallback storage")
+			}
+			if strings.Contains(err.Error(), "private-password") {
+				t.Fatal("config error exposed credentials")
+			}
+		})
 	}
 }
 

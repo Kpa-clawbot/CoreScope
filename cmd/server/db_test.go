@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -28,7 +29,119 @@ func setupTestDBAtURL(t testing.TB, dsn string) *DB {
 	conn.SetMaxOpenConns(1)
 
 	// Create schema matching MeshCore Analyzer v3
-	schema := `
+	schema := testNativeSQL(`
+		CREATE TABLE nodes (
+			public_key TEXT PRIMARY KEY,
+			name TEXT,
+			role TEXT,
+			lat REAL,
+			lon REAL,
+			last_seen TEXT,
+			first_seen TEXT,
+			advert_count INTEGER DEFAULT 0,
+			battery_mv INTEGER,
+			temperature_c REAL,
+			foreign_advert INTEGER DEFAULT 0
+		);
+
+		CREATE TABLE observers (
+			id TEXT PRIMARY KEY,
+			name TEXT,
+			iata TEXT,
+			last_seen TEXT,
+			first_seen TEXT,
+			packet_count INTEGER DEFAULT 0,
+			model TEXT,
+			firmware TEXT,
+			client_version TEXT,
+			radio TEXT,
+			battery_mv INTEGER,
+			uptime_secs INTEGER,
+			noise_floor REAL,
+			inactive INTEGER DEFAULT 0,
+			last_packet_at TEXT DEFAULT NULL,
+			clock_skew_seconds INTEGER DEFAULT NULL,
+			clock_skew_count_24h INTEGER DEFAULT 0,
+			clock_last_naive_at TEXT DEFAULT NULL
+		);
+
+		CREATE TABLE transmissions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			raw_hex TEXT NOT NULL,
+			hash TEXT NOT NULL UNIQUE,
+			first_seen TEXT NOT NULL,
+			route_type INTEGER,
+			payload_type INTEGER,
+			payload_version INTEGER,
+			decoded_json TEXT,
+			channel_hash TEXT DEFAULT NULL,
+			from_pubkey TEXT DEFAULT NULL,
+			created_at TEXT DEFAULT (datetime('now'))
+		);
+
+		CREATE TABLE observations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			transmission_id INTEGER NOT NULL REFERENCES transmissions(id),
+			observer_idx INTEGER,
+			direction TEXT,
+			snr REAL,
+			rssi REAL,
+			score INTEGER,
+			path_json TEXT,
+			timestamp INTEGER NOT NULL,
+			resolved_path TEXT,
+			raw_hex TEXT
+		);
+
+		CREATE TABLE IF NOT EXISTS observer_metrics (
+			observer_id TEXT NOT NULL,
+			timestamp TEXT NOT NULL,
+			noise_floor REAL,
+			tx_air_secs INTEGER,
+			rx_air_secs INTEGER,
+			recv_errors INTEGER,
+			battery_mv INTEGER,
+			packets_sent INTEGER,
+			packets_recv INTEGER,
+			PRIMARY KEY (observer_id, timestamp)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_observer_metrics_timestamp ON observer_metrics(timestamp);
+
+		-- Auto-populate from_pubkey for ADVERT rows so existing test fixtures
+		-- (which only set decoded_json) still attribute correctly under #1143's
+		-- exact-match column. Production migration handles legacy data; the
+		-- ingestor sets the column at write time.
+		--
+		-- m4 alignment: prod ingest leaves from_pubkey NULL when pubKey is
+		-- missing or empty (cmd/ingestor/db.go ~1289 guards PubKey != empty-string).
+		-- The trigger mirrors that: only assign when json_extract yields a
+		-- non-empty string. json_extract returns NULL for missing keys, so
+		-- the explicit IS NOT NULL AND <> empty-string guard catches the empty-string
+		-- case too. UPDATE only when we have something to write.
+		CREATE TRIGGER IF NOT EXISTS test_from_pubkey_advert
+		AFTER INSERT ON transmissions
+		FOR EACH ROW
+		WHEN NEW.from_pubkey IS NULL AND NEW.payload_type = 4 AND NEW.decoded_json IS NOT NULL
+			AND json_extract(NEW.decoded_json, '$.pubKey') IS NOT NULL
+			AND json_extract(NEW.decoded_json, '$.pubKey') <> ''
+		BEGIN
+			UPDATE transmissions
+			SET from_pubkey = json_extract(NEW.decoded_json, '$.pubKey')
+			WHERE id = NEW.id;
+		END;
+		CREATE INDEX IF NOT EXISTS idx_transmissions_from_pubkey ON transmissions(from_pubkey);
+
+		-- Mirror prod indexes from internal/dbschema/dbschema.go so query plans
+		-- in tests match prod. idx_observations_transmission_id is required by
+		-- GetChannelMessages's grouped MAX(timestamp) per tx aggregate
+		-- (issue #1366 / PR #1368): without it the perf test on 1500 tx × 50 obs
+		-- blows the 1.5s budget under -race.
+		CREATE INDEX IF NOT EXISTS idx_observations_transmission_id ON observations(transmission_id);
+		CREATE INDEX IF NOT EXISTS idx_observations_timestamp ON observations(timestamp);
+		CREATE INDEX IF NOT EXISTS idx_observations_tx_ts ON observations(transmission_id, timestamp);
+		CREATE INDEX IF NOT EXISTS idx_transmissions_channel_hash ON transmissions(channel_hash);
+	`, `
 		CREATE TABLE nodes (
 			public_key TEXT PRIMARY KEY,
 			name TEXT,
@@ -138,12 +251,12 @@ func setupTestDBAtURL(t testing.TB, dsn string) *DB {
 		CREATE INDEX IF NOT EXISTS idx_observations_timestamp ON observations(timestamp);
 		CREATE INDEX IF NOT EXISTS idx_observations_tx_ts ON observations(transmission_id, timestamp);
 		CREATE INDEX IF NOT EXISTS idx_transmissions_channel_hash ON transmissions(channel_hash);
-	`
+	`)
 	if _, err := conn.Exec(schema); err != nil {
 		t.Fatal(err)
 	}
 
-	return &DB{conn: conn, path: dsn, stateDir: t.TempDir(), isV3: true, hasResolvedPath: true}
+	return &DB{backend: testBackendValue(), conn: conn, path: dsn, stateDir: t.TempDir(), isV3: true, hasResolvedPath: true}
 }
 
 func seedTestData(t *testing.T, db *DB) {
@@ -189,6 +302,33 @@ func seedTestData(t *testing.T, db *DB) {
 		VALUES (2, 1, 15.0, -85, '[]', $1)`, yesterdayEpoch)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp, resolved_path)
 		VALUES (3, 1, 10.0, -92, '["cc"]', $1, '["1122334455667788"]')`, yesterdayEpoch)
+}
+
+// The topology endpoint takes uniqueNodes from CountActiveNodes, so it must
+// count what GetStats reports as totalNodes: nodes seen in the last 7 days.
+func TestCountActiveNodes(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	now := time.Now().UTC()
+	for i, seen := range []time.Time{now.Add(-time.Hour), now.Add(-6 * 24 * time.Hour), now.Add(-8 * 24 * time.Hour)} {
+		db.conn.Exec(`INSERT INTO nodes (public_key, name, last_seen) VALUES (`+db.parameter(1)+`, `+db.parameter(2)+`, `+db.parameter(3)+`)`,
+			"pk"+strconv.Itoa(i), "n"+strconv.Itoa(i), seen.Format(time.RFC3339))
+	}
+
+	got, err := db.CountActiveNodes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 2 {
+		t.Errorf("CountActiveNodes = %d, want 2 (the node seen 8 days ago is not active)", got)
+	}
+	stats, err := db.GetStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != stats.TotalNodes {
+		t.Errorf("CountActiveNodes = %d, GetStats().TotalNodes = %d", got, stats.TotalNodes)
+	}
 }
 
 func TestGetStats(t *testing.T) {
@@ -239,7 +379,7 @@ func TestGetDBSizeStats(t *testing.T) {
 
 	stats := db.GetDBSizeStats()
 	// In-memory DB has dbSizeMB=0 and walSizeMB=0
-	if stats["dbSizeMB"].(float64) <= 0 {
+	if stats["dbSizeMB"].(float64) < 0 || (testBackendValue() == "postgres" && stats["dbSizeMB"].(float64) == 0) {
 		t.Errorf("expected positive PostgreSQL database size, got %v", stats["dbSizeMB"])
 	}
 
@@ -260,10 +400,13 @@ func TestGetDBSizeStats(t *testing.T) {
 		t.Errorf("expected 2 observers rows, got %d", rows["observers"])
 	}
 
-	if stats["engine"] != "postgresql" {
+	if stats["engine"] != testNativeSQL("sqlite", "postgresql") {
 		t.Fatal("database engine not identified")
 	}
 	for _, obsolete := range []string{"freelistMB", "walPages", "walSizeMB"} {
+		if testBackendValue() == "sqlite" {
+			continue
+		}
 		if _, ok := stats[obsolete]; ok {
 			t.Fatalf("invented SQLite metric %s", obsolete)
 		}
@@ -1200,7 +1343,73 @@ func setupTestDBV2(t *testing.T) *DB {
 	}
 	conn.SetMaxOpenConns(1)
 
-	schema := `
+	schema := testNativeSQL(`
+		CREATE TABLE nodes (
+			public_key TEXT PRIMARY KEY,
+			name TEXT,
+			role TEXT,
+			lat REAL,
+			lon REAL,
+			last_seen TEXT,
+			first_seen TEXT,
+			advert_count INTEGER DEFAULT 0,
+			battery_mv INTEGER,
+			temperature_c REAL,
+			foreign_advert INTEGER DEFAULT 0
+		);
+
+		CREATE TABLE observers (
+			id TEXT PRIMARY KEY,
+			name TEXT,
+			iata TEXT,
+			last_seen TEXT,
+			first_seen TEXT,
+			packet_count INTEGER DEFAULT 0,
+			last_packet_at TEXT DEFAULT NULL,
+			inactive INTEGER DEFAULT 0
+		);
+
+		CREATE TABLE transmissions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			raw_hex TEXT NOT NULL,
+			hash TEXT NOT NULL UNIQUE,
+			first_seen TEXT NOT NULL,
+			route_type INTEGER,
+			payload_type INTEGER,
+			payload_version INTEGER,
+			decoded_json TEXT,
+			channel_hash TEXT DEFAULT NULL,
+			from_pubkey TEXT DEFAULT NULL,
+			created_at TEXT DEFAULT (datetime('now'))
+		);
+
+		CREATE TABLE observations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			transmission_id INTEGER NOT NULL REFERENCES transmissions(id),
+			observer_id TEXT,
+			observer_name TEXT,
+			direction TEXT,
+			snr REAL,
+			rssi REAL,
+			score INTEGER,
+			path_json TEXT,
+			timestamp INTEGER NOT NULL,
+			raw_hex TEXT
+		);
+
+		CREATE TRIGGER IF NOT EXISTS test_from_pubkey_advert
+		AFTER INSERT ON transmissions
+		FOR EACH ROW
+		WHEN NEW.from_pubkey IS NULL AND NEW.payload_type = 4 AND NEW.decoded_json IS NOT NULL
+			AND json_extract(NEW.decoded_json, '$.pubKey') IS NOT NULL
+			AND json_extract(NEW.decoded_json, '$.pubKey') <> ''
+		BEGIN
+			UPDATE transmissions
+			SET from_pubkey = json_extract(NEW.decoded_json, '$.pubKey')
+			WHERE id = NEW.id;
+		END;
+		CREATE INDEX IF NOT EXISTS idx_transmissions_from_pubkey ON transmissions(from_pubkey);
+	`, `
 		CREATE TABLE nodes (
 			public_key TEXT PRIMARY KEY,
 			name TEXT,
@@ -1264,12 +1473,12 @@ func setupTestDBV2(t *testing.T) *DB {
 		CREATE TRIGGER test_from_pubkey_advert BEFORE INSERT ON transmissions
 		FOR EACH ROW EXECUTE FUNCTION test_from_pubkey_advert();
 		CREATE INDEX IF NOT EXISTS idx_transmissions_from_pubkey ON transmissions(from_pubkey);
-	`
+	`)
 	if _, err := conn.Exec(schema); err != nil {
 		t.Fatal(err)
 	}
 
-	return &DB{conn: conn, isV3: false}
+	return &DB{backend: testBackendValue(), conn: conn, isV3: false}
 }
 
 func TestGetNodesRegionFilterV2(t *testing.T) {
@@ -1452,7 +1661,7 @@ func TestOpenDBValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = conn.Exec(`CREATE TABLE transmissions (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, hash TEXT)`)
+	_, err = conn.Exec(testNativeSQL(`CREATE TABLE transmissions (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT)`, `CREATE TABLE transmissions (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, hash TEXT)`))
 	if err != nil {
 		conn.Close()
 		t.Fatal(err)
@@ -1494,7 +1703,7 @@ func TestDetectSchemaScopeName(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn.SetMaxOpenConns(1)
-	if _, err := conn.Exec(`CREATE TABLE transmissions (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, hash TEXT, scope_name TEXT)`); err != nil {
+	if _, err := conn.Exec(testNativeSQL(`CREATE TABLE transmissions (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT, scope_name TEXT)`, `CREATE TABLE transmissions (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, hash TEXT, scope_name TEXT)`)); err != nil {
 		conn.Close()
 		t.Fatalf("create transmissions: %v", err)
 	}
@@ -1502,7 +1711,7 @@ func TestDetectSchemaScopeName(t *testing.T) {
 		conn.Close()
 		t.Fatalf("create nodes: %v", err)
 	}
-	if _, err := conn.Exec(`CREATE TABLE observations (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY)`); err != nil {
+	if _, err := conn.Exec(testNativeSQL(`CREATE TABLE observations (id INTEGER PRIMARY KEY AUTOINCREMENT)`, `CREATE TABLE observations (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY)`)); err != nil {
 		conn.Close()
 		t.Fatalf("create observations: %v", err)
 	}
@@ -1529,9 +1738,9 @@ func TestDetectSchemaScopeName(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn2.SetMaxOpenConns(1)
-	conn2.Exec(`CREATE TABLE transmissions (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, hash TEXT)`)
+	conn2.Exec(testNativeSQL(`CREATE TABLE transmissions (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT)`, `CREATE TABLE transmissions (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, hash TEXT)`))
 	conn2.Exec(`CREATE TABLE nodes (public_key TEXT PRIMARY KEY)`)
-	conn2.Exec(`CREATE TABLE observations (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY)`)
+	conn2.Exec(testNativeSQL(`CREATE TABLE observations (id INTEGER PRIMARY KEY AUTOINCREMENT)`, `CREATE TABLE observations (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY)`))
 	ensurePreparable(t, conn2)
 	conn2.Close()
 
@@ -2215,7 +2424,7 @@ func TestPerObservationRawHexEnrich(t *testing.T) {
 
 	// Check enriched observations
 	for _, obs := range tx.Observations {
-		m := store.enrichObs(obs)
+		m := store.enrichObsWithTx(obs, store.byTxID[obs.TransmissionID])
 		rh, _ := m["raw_hex"].(string)
 		if obs.RawHex != "" {
 			// Observer A: should get per-observation raw_hex
@@ -2237,16 +2446,21 @@ func TestGetScopeStats(t *testing.T) {
 		t.Fatalf("sql.Open: %v", err)
 	}
 	conn.SetMaxOpenConns(1)
-	db := &DB{conn: conn}
+	db := &DB{backend: testBackendValue(), conn: conn}
 	defer db.conn.Close()
 
 	// Create minimal schema
-	db.conn.Exec(`CREATE TABLE IF NOT EXISTS transmissions (
+	db.conn.Exec(testNativeSQL(`CREATE TABLE IF NOT EXISTS transmissions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		raw_hex TEXT, hash TEXT, first_seen TEXT, route_type INTEGER,
+		payload_type INTEGER, payload_version INTEGER, decoded_json TEXT,
+		scope_name TEXT DEFAULT NULL, from_pubkey TEXT DEFAULT NULL
+	)`, `CREATE TABLE IF NOT EXISTS transmissions (
 		id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
 		raw_hex TEXT, hash TEXT, first_seen TEXT, route_type INTEGER,
 		payload_type INTEGER, payload_version INTEGER, decoded_json TEXT,
 		scope_name TEXT DEFAULT NULL, from_pubkey TEXT DEFAULT NULL
-	)`)
+	)`))
 	db.conn.Exec(`CREATE TABLE IF NOT EXISTS nodes (public_key TEXT PRIMARY KEY, role TEXT)`)
 	// Manually set hasScopeName since we bypassed the detector
 	db.hasScopeName = true
@@ -2297,15 +2511,19 @@ func TestGetScopeStatsAdvertsByRole(t *testing.T) {
 		t.Fatalf("sql.Open: %v", err)
 	}
 	conn.SetMaxOpenConns(1)
-	db := &DB{conn: conn, hasScopeName: true}
+	db := &DB{backend: testBackendValue(), conn: conn, hasScopeName: true}
 	defer db.conn.Close()
 
 	for _, stmt := range []string{
-		`CREATE TABLE transmissions (
+		testNativeSQL(`CREATE TABLE transmissions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			hash TEXT, first_seen TEXT, route_type INTEGER, payload_type INTEGER,
+			scope_name TEXT DEFAULT NULL, from_pubkey TEXT DEFAULT NULL
+		)`, `CREATE TABLE transmissions (
 			id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
 			hash TEXT, first_seen TEXT, route_type INTEGER, payload_type INTEGER,
 			scope_name TEXT DEFAULT NULL, from_pubkey TEXT DEFAULT NULL
-		)`,
+		)`),
 		`CREATE TABLE nodes (public_key TEXT PRIMARY KEY, role TEXT)`,
 		`INSERT INTO nodes (public_key, role) VALUES ('rpt', 'repeater'), ('cmp', 'companion'), ('sns', 'sensor'), ('norole', '')`,
 	} {
@@ -2381,9 +2599,9 @@ func TestGetScopeStatsAdvertsByRoleEmpty(t *testing.T) {
 		t.Fatalf("sql.Open: %v", err)
 	}
 	conn.SetMaxOpenConns(1)
-	db := &DB{conn: conn, hasScopeName: true}
+	db := &DB{backend: testBackendValue(), conn: conn, hasScopeName: true}
 	defer db.conn.Close()
-	db.conn.Exec(`CREATE TABLE transmissions (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, first_seen TEXT, route_type INTEGER, payload_type INTEGER, scope_name TEXT, from_pubkey TEXT)`)
+	db.conn.Exec(testNativeSQL(`CREATE TABLE transmissions (id INTEGER PRIMARY KEY AUTOINCREMENT, first_seen TEXT, route_type INTEGER, payload_type INTEGER, scope_name TEXT, from_pubkey TEXT)`, `CREATE TABLE transmissions (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, first_seen TEXT, route_type INTEGER, payload_type INTEGER, scope_name TEXT, from_pubkey TEXT)`))
 	db.conn.Exec(`CREATE TABLE nodes (public_key TEXT PRIMARY KEY, role TEXT)`)
 
 	stats, err := db.GetScopeStats("1h")
@@ -2468,11 +2686,11 @@ func TestDetectSchemaFailsLoudOnProbeError(t *testing.T) {
 	}
 	conn.SetMaxOpenConns(1)
 	// v3-shaped: observations carries observer_idx.
-	if _, err := conn.Exec(`CREATE TABLE observations (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, observer_idx INTEGER)`); err != nil {
+	if _, err := conn.Exec(testNativeSQL(`CREATE TABLE observations (id INTEGER PRIMARY KEY AUTOINCREMENT, observer_idx INTEGER)`, `CREATE TABLE observations (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, observer_idx INTEGER)`)); err != nil {
 		conn.Close()
 		t.Fatal(err)
 	}
-	conn.Exec(`CREATE TABLE transmissions (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY)`)
+	conn.Exec(testNativeSQL(`CREATE TABLE transmissions (id INTEGER PRIMARY KEY AUTOINCREMENT)`, `CREATE TABLE transmissions (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY)`))
 	conn.Exec(`CREATE TABLE nodes (public_key TEXT PRIMARY KEY)`)
 	conn.Close()
 
@@ -2502,8 +2720,8 @@ func TestDetectSchemaV3AndV2(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.SetMaxOpenConns(1)
-	c.Exec(`CREATE TABLE observations (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, observer_idx INTEGER)`)
-	c.Exec(`CREATE TABLE transmissions (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, hash TEXT)`)
+	c.Exec(testNativeSQL(`CREATE TABLE observations (id INTEGER PRIMARY KEY AUTOINCREMENT, observer_idx INTEGER)`, `CREATE TABLE observations (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, observer_idx INTEGER)`))
+	c.Exec(testNativeSQL(`CREATE TABLE transmissions (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT)`, `CREATE TABLE transmissions (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, hash TEXT)`))
 	c.Exec(`CREATE TABLE nodes (public_key TEXT PRIMARY KEY)`)
 	ensurePreparable(t, c)
 	c.Close()
@@ -2522,8 +2740,8 @@ func TestDetectSchemaV3AndV2(t *testing.T) {
 		t.Fatal(err)
 	}
 	c2.SetMaxOpenConns(1)
-	c2.Exec(`CREATE TABLE observations (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, observer_id INTEGER)`)
-	c2.Exec(`CREATE TABLE transmissions (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, hash TEXT)`)
+	c2.Exec(testNativeSQL(`CREATE TABLE observations (id INTEGER PRIMARY KEY AUTOINCREMENT, observer_id INTEGER)`, `CREATE TABLE observations (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, observer_id INTEGER)`))
+	c2.Exec(testNativeSQL(`CREATE TABLE transmissions (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT)`, `CREATE TABLE transmissions (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, hash TEXT)`))
 	c2.Exec(`CREATE TABLE nodes (public_key TEXT PRIMARY KEY)`)
 	ensurePreparable(t, c2)
 	c2.Close()

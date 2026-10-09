@@ -2,6 +2,7 @@ package users
 
 import (
 	"fmt"
+	"github.com/meshcore-analyzer/dbconfig"
 	"strings"
 	"testing"
 	"time"
@@ -145,7 +146,11 @@ func TestUsersByID(t *testing.T) {
 func hasIndex(t *testing.T, st *Store, name string) bool {
 	t.Helper()
 	var n int
-	if err := st.db.QueryRow(`SELECT COUNT(*) FROM pg_indexes WHERE schemaname=current_schema() AND indexname=$1`, name).Scan(&n); err != nil {
+	q := `SELECT COUNT(*) FROM pg_indexes WHERE schemaname=current_schema() AND indexname=$1`
+	if st.backend == dbconfig.SQLite {
+		q = `SELECT COUNT(*) FROM sqlite_schema WHERE type='index' AND name=?1`
+	}
+	if err := st.db.QueryRow(q, name).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n == 1
@@ -161,8 +166,8 @@ func TestFreshDatabaseHasAuditTimeIndex(t *testing.T) {
 // A native account schema at v2 binary gains the audit_at index and keeps its rows.
 func TestMigrateV2DatabaseToV3(t *testing.T) {
 	st := migratedTestStore(t, 2, `INSERT INTO audit_log (at,action,detail) VALUES (1,'user.register','{}')`)
-	if v, err := st.SchemaVersion(); err != nil || v != len(migrations) {
-		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, len(migrations))
+	if v, err := st.SchemaVersion(); err != nil || v != schemaVersion(t) {
+		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, schemaVersion(t))
 	}
 	if !hasIndex(t, st, "audit_at") {
 		t.Fatal("audit_at index missing after migration")

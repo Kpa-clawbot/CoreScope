@@ -10,21 +10,20 @@ import (
 	"sort"
 	"testing"
 	"time"
-
-	"github.com/meshcore-analyzer/dbschema"
 )
 
 // A generic plan estimates an unknown bbox as tiny. With a wide viewport it
 // instead visits all 128K receptions through the geo index, rejecting 127936
 // rows after fetching them. The first five custom plans hide this regression.
 func TestCoverageQueriesKeepValueSpecificPlans(t *testing.T) {
+	postgresOnly(t)
 	dsn := postgresTestDSN(t)
 	writer, err := openFixtureSQL(dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer writer.Close()
-	if err := dbschema.Apply(writer, nil); err != nil {
+	if err := applyTestSchema(t, writer); err != nil {
 		t.Fatal(err)
 	}
 	keys := make([]string, 2000)

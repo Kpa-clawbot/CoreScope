@@ -40,7 +40,7 @@ func TestLoadConfigMissingFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("missing config should not error (zero-config mode), got: %v", err)
 	}
-	if cfg.DBPath != "" || cfg.DatabaseURL != "" || cfg.StateDir != "data" {
+	if cfg.DBPath != "" || cfg.DatabaseURL != "" || cfg.StateDir != "" {
 		t.Errorf("unexpected database/state defaults")
 	}
 	// Should default to localhost MQTT
@@ -193,7 +193,7 @@ func TestLoadConfigDefaultDBPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.DBPath != "" || cfg.DatabaseURL != "" || cfg.StateDir != "data" {
+	if cfg.DBPath != "" || cfg.DatabaseURL != "" || cfg.StateDir != "" {
 		t.Errorf("unexpected database/state defaults")
 	}
 }

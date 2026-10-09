@@ -9,10 +9,12 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/pgutil"
+	"github.com/meshcore-analyzer/sqliteutil"
 )
 
-// handleBackup stages a consistent PostgreSQL custom-format pg_dump snapshot.
+// handleBackup stages a consistent native SQLite file or PostgreSQL archive.
 // pgutil passes credentials through the child environment, bounds its lifetime,
 // removes partial output, and returns redacted errors.
 func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
@@ -41,9 +43,18 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	snapshotPath := filepath.Join(tmpDir, fmt.Sprintf("corescope-backup-%d.dump", ts))
+	extension := ".dump"
+	if s.db.Backend() == dbconfig.SQLite {
+		extension = ".db"
+	}
+	snapshotPath := filepath.Join(tmpDir, fmt.Sprintf("corescope-backup-%d%s", ts, extension))
 
-	if err := pgutil.Dump(r.Context(), s.db.path, snapshotPath); err != nil {
+	if s.db.Backend() == dbconfig.SQLite {
+		err = sqliteutil.Snapshot(r.Context(), s.db.path, snapshotPath)
+	} else {
+		err = pgutil.Dump(r.Context(), s.db.path, snapshotPath)
+	}
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "snapshot failed: "+err.Error())
 		return
 	}
@@ -60,7 +71,7 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", stat.Size()))
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"corescope-backup-%d.dump\"", ts))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"corescope-backup-%d%s\"", ts, extension))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)

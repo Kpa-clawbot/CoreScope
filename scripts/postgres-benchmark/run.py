@@ -29,7 +29,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-BASELINE = "9dbc287579a237ffa744dd0c91fa7227d09763ac"
+BASELINE = "3e21b179ecccae005aa5f6f45bc095353c94b343"
 FIRMWARE = "a366955cb2f67b8e6842d4f00d2b6a554dddd88a"
 HERE = Path(__file__).resolve().parent
 PROCESSES = []
@@ -700,6 +700,14 @@ def server_settings(backend, sqlite_path, state_dir, run_env):
     return config, env
 
 
+def record_postgres_selection(binaries, config_dir, state_dir, run_env, owner_url, log, budget):
+    """Adopt the verified imported target before measuring runtime startup."""
+    command([binaries / "migrate", "-storage-action=adopt", "-backend=postgres", "-offline",
+             "-selection-file", state_dir / "storage-selection.json", "-config-dir", config_dir],
+            cwd=config_dir, env=dict(run_env, CORESCOPE_DATABASE_URL=owner_url),
+            log=log, timeout=180, budget=budget)
+
+
 def retained_counts(source, since_epoch):
     db = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
     try:
@@ -1021,6 +1029,8 @@ def main(argv=None):
                 retained_expected = retained_counts(sqlite_path, int(time.time())-168*3600) if args.corpus in ("S", "B") else None
                 app_config, server_env = server_settings(backend, sqlite_path, state_dir, run_env)
                 write_json(config_dir / "config.json", app_config)
+                if backend == "postgres":
+                    record_postgres_selection(binaries, config_dir, state_dir, run_env, urls["owner"], run_dir / "selection.log", budget)
                 resources.phase="startup_full"
                 launched_ns=time.monotonic_ns()
                 server = spawn([binaries / (backend + "-server"), "-config-dir", config_dir, "-public", roots[backend] / "public", "-port", app_config["port"], "-poll-ms", 1000], cwd=roots[backend], env=server_env, log=run_dir / "server.log", budget=budget)

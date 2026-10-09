@@ -1,4 +1,4 @@
-# CoreScope — application and PostgreSQL deployment using the pre-built
+# CoreScope — SQLite by default, using the pre-built
 # application image from GHCR.
 #
 # AUDIENCE: third-party operators running a self-hosted CoreScope on
@@ -11,39 +11,21 @@
 # `meshcore-net`), see `docker-compose.staging.yml`.
 #
 # Usage: docker compose -f docker-compose.example.yml up -d
+# Optional PostgreSQL: add -f docker-compose.example.postgres.yml after setup.
 # Docs:  https://github.com/Kpa-clawbot/CoreScope/blob/master/DEPLOY.md
 
 name: corescope
 
 services:
-  postgres:
-    extends:
-      file: docker/postgres.compose.yml
-      service: postgres
-    volumes:
-      - ${POSTGRES_DATA_DIR:-./postgres-data}:/var/lib/postgresql
-  bootstrap:
-    extends:
-      file: docker/postgres.compose.yml
-      service: bootstrap
-    image: ${CORESCOPE_IMAGE:-ghcr.io/kpa-clawbot/corescope:latest}
-    volumes:
-      - ${DATA_DIR:-./data}:/app/data:ro
   corescope:
-    depends_on:
-      bootstrap:
-        condition: service_completed_successfully
     image: ${CORESCOPE_IMAGE:-ghcr.io/kpa-clawbot/corescope:latest}
     ports:
       - "${HTTP_PORT:-80}:80"
     volumes:
       - ${DATA_DIR:-./data}:/app/data
     environment:
-      - CORESCOPE_STATE_DIR=/app/data
-      - CORESCOPE_READER_DATABASE_URL=postgresql://corescope_reader:${CORESCOPE_READER_PASSWORD:?Set CORESCOPE_READER_PASSWORD}@postgres/corescope_telemetry?sslmode=disable
-      - CORESCOPE_WRITER_DATABASE_URL=postgresql://corescope_writer:${CORESCOPE_WRITER_PASSWORD:?Set CORESCOPE_WRITER_PASSWORD}@postgres/corescope_telemetry?sslmode=disable
-      - CORESCOPE_USERS_DATABASE_URL=postgresql://corescope_accounts:${CORESCOPE_ACCOUNTS_PASSWORD:?Set CORESCOPE_ACCOUNTS_PASSWORD}@postgres/corescope_accounts?sslmode=disable
-      - CORESCOPE_APPROVED_CHANNELS_DATABASE_URL=postgresql://corescope_channels:${CORESCOPE_CHANNELS_PASSWORD:?Set CORESCOPE_CHANNELS_PASSWORD}@postgres/corescope_accounts?sslmode=disable
+      - CORESCOPE_DB_BACKEND=sqlite
+      - CORESCOPE_STATE_DIR=${CORESCOPE_STATE_DIR:-/app/data}
       - DISABLE_CADDY=${DISABLE_CADDY:-false}
       - DISABLE_MOSQUITTO=${DISABLE_MOSQUITTO:-false}
     restart: unless-stopped

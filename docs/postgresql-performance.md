@@ -1,5 +1,10 @@
 # PostgreSQL conversion performance
 
+> Historical measurement of candidate `ce023e0`, before optional backend selection
+> and upstream's #2147 concurrency fix. It does not measure the current dual-backend
+> implementation. Keep these results separate from the new comparison against
+> upstream `3e21b17`.
+
 The PostgreSQL conversion reduced retention-related ingestion delays in this
 test. Median writes and several reads were slower, and CPU, memory and storage
 costs increased. These results describe the implemented conversion under one

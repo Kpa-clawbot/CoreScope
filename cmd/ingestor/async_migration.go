@@ -1,5 +1,5 @@
 // Async data backfills resume through durable bookkeeping. Schema DDL belongs
-// exclusively to the offline migration command; runtime callbacks must not
+// to the SQLite writer or PostgreSQL owner; PostgreSQL callbacks must not
 // create or alter tables/indexes. Long backfills use bounded transactions and
 // yield between batches so live ingestion can continue.
 
@@ -9,19 +9,21 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/meshcore-analyzer/dbconfig"
+	"github.com/meshcore-analyzer/dbschema"
 	"log"
 )
 
-// ensureAsyncMigrationsTable checks bootstrap-owned bookkeeping without DDL.
-func ensureAsyncMigrationsTable(db *sql.DB) error {
-	var present bool
-	if err := db.QueryRow(`SELECT to_regclass('_async_migrations') IS NOT NULL`).Scan(&present); err != nil {
+// SQLite owns its ledger; PostgreSQL checks the bootstrap-owned ledger without DDL.
+func ensureAsyncMigrationsTable(db *sql.DB, backend dbconfig.Backend) error {
+	if backend == dbconfig.SQLite {
+		return dbschema.EnsureSQLiteAsyncMigrations(db)
+	}
+	rows, err := db.Query(`SELECT name FROM _async_migrations LIMIT 0`)
+	if err != nil {
 		return err
 	}
-	if !present {
-		return fmt.Errorf("missing migration bookkeeping; run the offline migration command")
-	}
-	return nil
+	return rows.Close()
 }
 
 // RunAsyncMigration registers `name` as a pending async migration and
@@ -38,27 +40,30 @@ func ensureAsyncMigrationsTable(db *sql.DB) error {
 //   - The caller's WaitGroup tracks the goroutine so tests/shutdown can
 //     wait via Store.WaitForAsyncMigrations().
 func (s *Store) RunAsyncMigration(ctx context.Context, name string, fn func(context.Context, *sql.DB) error) error {
-	if err := ensureAsyncMigrationsTable(s.db); err != nil {
+	if err := ensureAsyncMigrationsTable(s.db, s.Backend()); err != nil {
 		return fmt.Errorf("ensure _async_migrations: %w", err)
 	}
 
 	var existing string
-	row := s.db.QueryRow(`SELECT status FROM _async_migrations WHERE name = $1`, name)
+	row := s.db.QueryRow(`SELECT status FROM _async_migrations WHERE name = `+s.parameter(1), name)
 	switch err := row.Scan(&existing); err {
 	case nil:
 		if existing == "done" {
 			return nil // already complete, nothing to do
 		}
 		// pending_async or failed → reset and retry.
-		if _, err := s.db.Exec(`
+		if _, err := s.db.Exec(s.nativeSQL(`
+			UPDATE _async_migrations
+			SET status = 'pending_async', started_at = datetime('now'), ended_at = NULL, error = NULL
+			WHERE name = ?1`, `
 			UPDATE _async_migrations
 			SET status = 'pending_async', started_at = to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS'), ended_at = NULL, error = NULL
-			WHERE name = $1`, name); err != nil {
+			WHERE name = `+s.parameter(1)), name); err != nil {
 			return fmt.Errorf("reset async migration %q: %w", name, err)
 		}
 	case sql.ErrNoRows:
 		if _, err := s.db.Exec(`
-			INSERT INTO _async_migrations (name, status) VALUES ($1, 'pending_async')`,
+			INSERT INTO _async_migrations (name, status) VALUES (`+s.parameter(1)+`, 'pending_async')`,
 			name); err != nil {
 			return fmt.Errorf("register async migration %q: %w", name, err)
 		}
@@ -76,19 +81,25 @@ func (s *Store) RunAsyncMigration(ctx context.Context, name string, fn func(cont
 				log.Printf("[async-migration] %q panic recovered: %v", name, r)
 			}
 			if runErr != nil {
-				if _, err := s.db.Exec(`
+				if _, err := s.db.Exec(s.nativeSQL(`
 					UPDATE _async_migrations
-					SET status = 'failed', ended_at = to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS'), error = $1
-					WHERE name = $2`, runErr.Error(), name); err != nil {
+					SET status = 'failed', ended_at = datetime('now'), error = ?1
+					WHERE name = ?2`, `
+					UPDATE _async_migrations
+					SET status = 'failed', ended_at = to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS'), error = `+s.parameter(1)+`
+					WHERE name = `+s.parameter(2)), runErr.Error(), name); err != nil {
 					log.Printf("[async-migration] failed to record failure for %q: %v", name, err)
 				}
 				log.Printf("[async-migration] %q FAILED: %v", name, runErr)
 				return
 			}
-			if _, err := s.db.Exec(`
+			if _, err := s.db.Exec(s.nativeSQL(`
+				UPDATE _async_migrations
+				SET status = 'done', ended_at = datetime('now'), error = NULL
+				WHERE name = ?1`, `
 				UPDATE _async_migrations
 				SET status = 'done', ended_at = to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS'), error = NULL
-				WHERE name = $1`, name); err != nil {
+				WHERE name = `+s.parameter(1)), name); err != nil {
 				log.Printf("[async-migration] failed to mark %q done: %v", name, err)
 				return
 			}
@@ -105,11 +116,11 @@ func (s *Store) RunAsyncMigration(ctx context.Context, name string, fn func(cont
 // (one of "pending_async", "done", "failed") or sql.ErrNoRows if no such
 // migration has been registered.
 func (s *Store) AsyncMigrationStatus(name string) (string, error) {
-	if err := ensureAsyncMigrationsTable(s.db); err != nil {
+	if err := ensureAsyncMigrationsTable(s.db, s.Backend()); err != nil {
 		return "", err
 	}
 	var status string
-	err := s.db.QueryRow(`SELECT status FROM _async_migrations WHERE name = $1`, name).Scan(&status)
+	err := s.db.QueryRow(`SELECT status FROM _async_migrations WHERE name = `+s.parameter(1), name).Scan(&status)
 	return status, err
 }
 

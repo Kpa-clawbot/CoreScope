@@ -296,8 +296,8 @@ func TestPruneDroppedPackets(t *testing.T) {
 	defer store.Close()
 
 	// Insert an old dropped packet
-	store.db.Exec(`INSERT INTO dropped_packets (hash, reason, dropped_at) VALUES ('old', 'test', to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC' - interval '60 days','YYYY-MM-DD HH24:MI:SS'))`)
-	store.db.Exec(`INSERT INTO dropped_packets (hash, reason, dropped_at) VALUES ('new', 'test', to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS'))`)
+	store.db.Exec(testNativeSQL(`INSERT INTO dropped_packets (hash, reason, dropped_at) VALUES ('old', 'test', datetime('now','-60 days'))`, `INSERT INTO dropped_packets (hash, reason, dropped_at) VALUES ('old', 'test', to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC' - interval '60 days','YYYY-MM-DD HH24:MI:SS'))`))
+	store.db.Exec(testNativeSQL(`INSERT INTO dropped_packets (hash, reason, dropped_at) VALUES ('new', 'test', datetime('now'))`, `INSERT INTO dropped_packets (hash, reason, dropped_at) VALUES ('new', 'test', to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS'))`))
 
 	n, err := store.PruneDroppedPackets(30)
 	if err != nil {

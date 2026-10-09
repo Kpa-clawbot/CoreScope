@@ -49,6 +49,7 @@ require github.com/meshcore-analyzer/mbcapqueue v0.0.0
 replace github.com/meshcore-analyzer/mbcapqueue => ../../internal/mbcapqueue
 
 require (
+	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/meshcore-analyzer/channel v0.0.0
 	github.com/meshcore-analyzer/pgutil v0.0.0
 )

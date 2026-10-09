@@ -27,7 +27,35 @@ func setupTestDBv2(t *testing.T) *DB {
 	}
 	// Force single connection so all goroutines share the same in-memory DB
 	conn.SetMaxOpenConns(1)
-	schema := `
+	schema := testNativeSQL(`
+		CREATE TABLE nodes (
+			public_key TEXT PRIMARY KEY, name TEXT, role TEXT,
+			lat DOUBLE PRECISION, lon DOUBLE PRECISION, last_seen TEXT, first_seen TEXT, advert_count INTEGER DEFAULT 0,
+			battery_mv INTEGER, temperature_c DOUBLE PRECISION, foreign_advert INTEGER DEFAULT 0
+		);
+		CREATE TABLE observers (id TEXT PRIMARY KEY, name TEXT, iata TEXT, last_seen TEXT, first_seen TEXT,
+			packet_count INTEGER DEFAULT 0, model TEXT, firmware TEXT,
+			client_version TEXT, radio TEXT, battery_mv INTEGER, uptime_secs INTEGER, noise_floor DOUBLE PRECISION,
+			inactive INTEGER DEFAULT 0
+		);
+		CREATE TABLE transmissions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, raw_hex TEXT NOT NULL,
+			hash TEXT NOT NULL UNIQUE, first_seen TEXT NOT NULL,
+			route_type INTEGER, payload_type INTEGER, payload_version INTEGER,
+			decoded_json TEXT, channel_hash TEXT DEFAULT NULL, from_pubkey TEXT DEFAULT NULL, created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+		);
+		CREATE TABLE observations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			transmission_id INTEGER NOT NULL REFERENCES transmissions(id),
+			observer_id TEXT, observer_name TEXT, direction TEXT,
+			snr DOUBLE PRECISION, rssi DOUBLE PRECISION, score INTEGER, path_json TEXT, timestamp INTEGER NOT NULL, raw_hex TEXT
+		);
+		CREATE TRIGGER test_from_pubkey_advert AFTER INSERT ON transmissions
+ WHEN NEW.from_pubkey IS NULL AND NEW.payload_type=4 AND
+ CASE WHEN json_valid(NEW.decoded_json) THEN json_type(NEW.decoded_json)='object' ELSE 0 END
+ BEGIN UPDATE transmissions SET from_pubkey=NULLIF(json_extract(NEW.decoded_json,'$.pubKey'),'') WHERE id=NEW.id; END;
+		CREATE INDEX IF NOT EXISTS idx_transmissions_from_pubkey ON transmissions(from_pubkey);
+	`, `
 		CREATE TABLE nodes (
 			public_key TEXT PRIMARY KEY, name TEXT, role TEXT,
 			lat DOUBLE PRECISION, lon DOUBLE PRECISION, last_seen TEXT, first_seen TEXT, advert_count INTEGER DEFAULT 0,
@@ -61,11 +89,11 @@ func setupTestDBv2(t *testing.T) *DB {
 		CREATE TRIGGER test_from_pubkey_advert BEFORE INSERT ON transmissions
 		FOR EACH ROW EXECUTE FUNCTION test_from_pubkey_advert();
 		CREATE INDEX IF NOT EXISTS idx_transmissions_from_pubkey ON transmissions(from_pubkey);
-	`
+	`)
 	if _, err := conn.Exec(schema); err != nil {
 		t.Fatal(err)
 	}
-	return &DB{conn: conn, isV3: false}
+	return &DB{backend: testBackendValue(), conn: conn, isV3: false}
 }
 
 func seedV2Data(t *testing.T, db *DB) {
@@ -1371,7 +1399,7 @@ func TestBuildTransmissionWhereRFC3339(t *testing.T) {
 		// PR #1187 r2: RFC3339 since/until MUST use observations.timestamp
 		// subquery so re-observed packets (older first_seen but recent
 		// observation) are still included. Anything else breaks semantics.
-		if !strings.Contains(where[0], "observations") || !strings.Contains(where[0], "timestamp >= $1") {
+		if !strings.Contains(where[0], "observations") || !strings.Contains(where[0], "timestamp >= "+db.parameter(1)+"") {
 			t.Errorf("expected observations.timestamp subquery for RFC3339 since, got %q", where[0])
 		}
 	})
@@ -1385,7 +1413,7 @@ func TestBuildTransmissionWhereRFC3339(t *testing.T) {
 		if len(args) != 1 {
 			t.Errorf("expected 1 arg, got %d", len(args))
 		}
-		if !strings.Contains(where[0], "observations") || !strings.Contains(where[0], "timestamp <= $1") {
+		if !strings.Contains(where[0], "observations") || !strings.Contains(where[0], "timestamp <= "+db.parameter(1)+"") {
 			t.Errorf("expected observations.timestamp subquery for RFC3339 until, got %q", where[0])
 		}
 	})
@@ -1871,7 +1899,7 @@ func TestEnrichObs(t *testing.T) {
 		t.Skip("no observations loaded")
 	}
 
-	enriched := store.enrichObs(obs)
+	enriched := store.enrichObsWithTx(obs, store.byTxID[obs.TransmissionID])
 	if enriched["observer_id"] == nil {
 		t.Error("expected observer_id")
 	}
@@ -4234,7 +4262,7 @@ func TestGetDBSizeStatsMemory(t *testing.T) {
 	seedTestData(t, db)
 
 	stats := db.GetDBSizeStats()
-	if stats["dbSizeMB"].(float64) <= 0 {
+	if stats["dbSizeMB"].(float64) < 0 || (testBackendValue() == "postgres" && stats["dbSizeMB"].(float64) == 0) {
 		t.Errorf("expected positive PostgreSQL database size, got %v", stats["dbSizeMB"])
 	}
 }
@@ -4556,7 +4584,7 @@ func TestBuildTransmissionWhereMultiObserver(t *testing.T) {
 			t.Fatalf("expected 1 WHERE clause, got %d", len(where))
 		}
 		clause := where[0]
-		if !strings.Contains(clause, "IN ($1,$2)") {
+		if !strings.Contains(clause, "IN ("+db.parameter(1)+","+db.parameter(2)+")") {
 			t.Errorf("expected IN ($1,$2) in clause, got: %s", clause)
 		}
 		if len(args) != 2 {
@@ -4584,7 +4612,7 @@ func TestBuildTransmissionWhereMultiObserver(t *testing.T) {
 		if len(where) != 1 {
 			t.Fatalf("expected 1 WHERE clause, got %d", len(where))
 		}
-		if !strings.Contains(where[0], "IN ($1)") {
+		if !strings.Contains(where[0], "IN ("+db.parameter(1)+")") {
 			t.Errorf("expected IN ($1) for single observer, got: %s", where[0])
 		}
 		if len(args) != 1 || args[0] != "obs1" {

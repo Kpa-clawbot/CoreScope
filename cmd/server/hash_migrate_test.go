@@ -14,8 +14,9 @@ func TestVerifyContentHashesDoesNotWrite(t *testing.T) {
 	correctHash := ComputeContentHash(rawHex)
 	wrongHash := "deadbeef12345678"
 
-	_, err := db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
-		VALUES ($1, $2, to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), 0, 2)`, rawHex, wrongHash)
+	_, err := db.conn.Exec(testNativeSQL(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
+		VALUES ($1, $2, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 0, 2)`, `INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
+		VALUES ($1, $2, to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), 0, 2)`), rawHex, wrongHash)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,8 +58,9 @@ func TestMigrateContentHashesAsync_NoOp(t *testing.T) {
 	rawHex := "0A00D69FD7A5A7475DB07337749AE61FA53A4788E976"
 	correctHash := ComputeContentHash(rawHex)
 
-	_, err := db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
-		VALUES ($1, $2, to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), 0, 2)`, rawHex, correctHash)
+	_, err := db.conn.Exec(testNativeSQL(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
+		VALUES ($1, $2, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 0, 2)`, `INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
+		VALUES ($1, $2, to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), 0, 2)`), rawHex, correctHash)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,8 +95,9 @@ func TestMigrateContentHashesAsyncDoesNotClaimCompletionWhenWritesFail(t *testin
 
 	rawHex := "0A00D69FD7A5A7475DB07337749AE61FA53A4788E976"
 	wrongHash := "deadbeef12345678"
-	if _, err := db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
-		VALUES ($1, $2, to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), 0, 2)`, rawHex, wrongHash); err != nil {
+	if _, err := db.conn.Exec(testNativeSQL(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
+		VALUES ($1, $2, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 0, 2)`, `INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
+		VALUES ($1, $2, to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), 0, 2)`), rawHex, wrongHash); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Load(); err != nil {

@@ -45,7 +45,8 @@ incomplete, and the log says what is missing.
 |---|---|
 | `adminEmails` | Addresses that become admin on activation. They cannot be demoted, disabled or deleted from the UI. Remove an address here first. |
 | `publicBaseUrl` | The address visitors use. Every mail link is built from it, never from the request. It must match the browser origin, because state-changing requests from another origin are refused. |
-| `databaseURL` | Required separate PostgreSQL account database, using the restricted account writer. Prefer `CORESCOPE_USERS_DATABASE_URL` in private environment configuration. |
+| `dbPath` | SQLite account file, default `users.db` beside telemetry. The installed target remains recorded while accounts are disabled. |
+| `databaseURL` | When PostgreSQL is selected, use a separate account database and restricted writer via `CORESCOPE_USERS_DATABASE_URL`. |
 | `sessionDays` | Login lifetime, extended while in use. Default 30, maximum 365. |
 | `trustedProxies` | CIDRs of your reverse proxy, so the per-IP login limits see real client IPs. Without it, behind a proxy every client shares the proxy's IP for the per-IP limits (they are switched off when that IP is loopback or private). Per-address and per-account limits apply either way. |
 | `mail.webhookSecret` | Enables delivery status (below). At least 16 characters. |
@@ -187,12 +188,12 @@ watched node changes state. Admins can also watch the instance.
 
 ### Backups
 
-The separate PostgreSQL account database holds password hashes and addresses. The server keeps its own snapshots of
+The separate SQLite account file or PostgreSQL account database holds password hashes and addresses. The server keeps its own snapshots of
 it: at startup when the newest snapshot is older than 24 hours (or there is none), then
-about every 24 hours (the check runs hourly). A snapshot is a native PostgreSQL custom-format archive named `users-<YYYYMMDD-HHMMSS>.dump` (UTC),
+about every 24 hours (the check runs hourly). A native snapshot is named `users-<YYYYMMDD-HHMMSS>.db` for SQLite or `.dump` for PostgreSQL (UTC),
 readable by the server's user only, in `backups/` under the configured `stateDir`. After each new
 snapshot the oldest ones beyond `keep` are deleted, never the one just written.
-Temporary files of an interrupted snapshot (`users-<YYYYMMDD-HHMMSS>.dump.tmp`) are
+Temporary files of an interrupted snapshot (`users-<YYYYMMDD-HHMMSS>.db.tmp` or `.dump.tmp`) are
 deleted once they are older than 24 hours; other files in that directory are never
 touched. A failed snapshot is logged (`[users] backup failed: ...`) and the next run
 tries again.
@@ -219,7 +220,7 @@ delete that copy.
 
 Snapshots on the same disk are lost with that disk. To keep a copy elsewhere, log in as
 an admin and open `/api/admin/users-backup` in the same browser: it downloads a fresh
-snapshot (`corescope-users-<YYYYMMDD-HHMMSS>.dump`) and records it in the audit log
+snapshot (`corescope-users-<YYYYMMDD-HHMMSS>.db` or `.dump`, matching the backend) and records it in the audit log
 (`user.backup`). Store the download encrypted: it holds every password hash and address.
 The analyzer database has its own backup route, `GET /api/backup`.
 
@@ -233,7 +234,9 @@ The analyzer database has its own backup route, `GET /api/backup`.
 
 The audit log is replaced too, so note the deletions before you overwrite it.
 
-**Restore** into a fresh account database while the server and every account writer are stopped. Keep the old database intact for recovery and audit review. Supply PostgreSQL connection credentials through private libpq environment settings (`PGHOST`, `PGUSER`, `PGDATABASE` and a protected password source), never command arguments.
+For SQLite, restore the native `.db` snapshot only while all account writers are stopped, into a new account target; keep the current file and WAL siblings for audit/recovery. Use the matching installation state and [native storage restore procedure](../storage.md#native-backups-and-restore). Do not replace a live main file or treat an old snapshot as a reverse migration after new writes. The deletion query below can use `datetime(at, 'unixepoch')` and an integer Unix cutoff on SQLite; the session/token cleanup applies to both engines.
+
+**PostgreSQL restore:** use a fresh account database while the server and every account writer are stopped. Keep the old database intact for recovery and audit review. Supply PostgreSQL connection credentials through private libpq environment settings (`PGHOST`, `PGUSER`, `PGDATABASE` and a protected password source), never command arguments.
 
 1. On the current database, record accounts deleted since the snapshot. Replace the timestamp with the snapshot's UTC time:
 
@@ -262,7 +265,7 @@ The audit log is replaced too, so note the deletions before you overwrite it.
    COMMIT;
    ```
 
-4. Check schema readiness with the matching `corescope-migrate -check-ready` binary and the owner account URL. Update the restricted runtime URLs to the restored destination and start the server.
+4. Check schema readiness with the matching `corescope-migrate -check-ready` binary and the owner account URL. Keep the matching selection and restricted runtime target identities, validate the restored stores, then start the server. A different target must be explicitly adopted/selected through the offline operator workflow, not silently substituted by editing a URL.
 5. Delete those accounts again through the admin area. Application deletion also replaces addresses in mail history with a hash and records the deletion in the audit log.
 
 Keep notification delivery paused until its restored state has been reviewed; old notification preferences and unsubscribe links also return. A newer schema is refused by older binaries. Never delete or overwrite the current database just to make restoration succeed. See [native backups and restores](../postgresql-upgrade.md#native-backups-and-restores) for the two-database recovery procedure.

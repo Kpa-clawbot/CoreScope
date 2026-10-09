@@ -1,5 +1,5 @@
 /**
- * Native PostgreSQL backup and restored-browser-session proof.
+ * Native SQLite/PostgreSQL backup and restored-browser-session proof.
  * Run test-user-management-e2e.js first to create its synthetic accounts.
  *
  * BASE_URL=http://localhost:13582 E2E_BACKUP_DIR=<private absolute directory>
@@ -22,6 +22,9 @@ const { chromium } = require('playwright');
 const BASE = process.env.BASE_URL || 'http://localhost:13582';
 const DIR = process.env.E2E_BACKUP_DIR || '';
 const MODE = process.argv[2];
+const BACKEND = process.env.CORESCOPE_TEST_BACKEND || 'postgres';
+assert(['sqlite','postgres'].includes(BACKEND), 'explicit supported backup backend required');
+const EXTENSION = BACKEND === 'sqlite' ? 'db' : 'dump';
 const HASH = 'fae0c9e6d357a814';
 const ACCOUNTS = ['admin@e2e.test', 'sync@e2e.test'];
 let passed = 0;
@@ -103,16 +106,17 @@ async function telemetry(page) {
 
     const anonymous = await (await browser.newContext()).newPage();
     // Telemetry falls back to the API-key gate; account backups use withAdmin.
-    for (const [route, filename, anonymousStatus] of [['/api/backup', 'telemetry.dump', 403], ['/api/admin/users-backup', 'accounts.dump', 401]]) {
+    for (const [route, filename, anonymousStatus] of [['/api/backup', 'telemetry.' + EXTENSION, 403], ['/api/admin/users-backup', 'accounts.' + EXTENSION, 401]]) {
       assert.equal((await anonymous.request.get(BASE + route)).status(), anonymousStatus, route + ' anonymous denial');
       assert.equal((await pages[1].request.get(BASE + route)).status(), 403, route + ' non-admin denial');
       const response = await pages[0].request.get(BASE + route);
       assert.equal(response.status(), 200, route + ' admin download');
-      assert.match(response.headers()['content-disposition'], /^attachment; filename="corescope-[^"]+\.dump"$/);
+      assert.match(response.headers()['content-disposition'], new RegExp('^attachment; filename="corescope-[^"]+\\.' + EXTENSION + '"$'));
       assert.equal(response.headers()['content-type'], 'application/octet-stream');
       assert.equal(response.headers()['cache-control'], 'no-store');
       const body = await response.body();
-      assert.equal(body.subarray(0, 5).toString(), 'PGDMP', route + ' native archive magic');
+      const magic = BACKEND === 'sqlite' ? 'SQLite format 3\0' : 'PGDMP';
+      assert.equal(body.subarray(0, Buffer.byteLength(magic)).toString(), magic, route + ' native archive magic');
       if (MODE === 'capture') fs.writeFileSync(path.join(DIR, filename), body, { mode: 0o600, flag: 'wx' });
       pass(MODE + ': protected native ' + filename + ' download');
     }

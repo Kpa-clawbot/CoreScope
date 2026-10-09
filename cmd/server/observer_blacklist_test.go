@@ -48,8 +48,8 @@ func TestConfigIsObserverBlacklistedNil(t *testing.T) {
 
 func TestObserverBlacklistFiltersHandleObservers(t *testing.T) {
 	db := setupTestDB(t)
-	db.conn.Exec("INSERT INTO observers (id, name, iata, last_seen) VALUES ('goodobs', 'GoodObs', 'SFO', to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')) ON CONFLICT DO NOTHING")
-	db.conn.Exec("INSERT INTO observers (id, name, iata, last_seen) VALUES ('badobs', 'BadObs', 'LAX', to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')) ON CONFLICT DO NOTHING")
+	db.conn.Exec(testNativeSQL(`INSERT INTO observers (id, name, iata, last_seen) VALUES ('goodobs', 'GoodObs', 'SFO', strftime('%Y-%m-%dT%H:%M:%SZ','now')) ON CONFLICT DO NOTHING`, "INSERT INTO observers (id, name, iata, last_seen) VALUES ('goodobs', 'GoodObs', 'SFO', to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')) ON CONFLICT DO NOTHING"))
+	db.conn.Exec(testNativeSQL(`INSERT INTO observers (id, name, iata, last_seen) VALUES ('badobs', 'BadObs', 'LAX', strftime('%Y-%m-%dT%H:%M:%SZ','now')) ON CONFLICT DO NOTHING`, "INSERT INTO observers (id, name, iata, last_seen) VALUES ('badobs', 'BadObs', 'LAX', to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')) ON CONFLICT DO NOTHING"))
 
 	cfg := &Config{
 		ObserverBlacklist: []string{"badobs"},
@@ -89,7 +89,7 @@ func TestObserverBlacklistFiltersHandleObservers(t *testing.T) {
 
 func TestObserverBlacklistFiltersObserverDetail(t *testing.T) {
 	db := setupTestDB(t)
-	db.conn.Exec("INSERT INTO observers (id, name, iata, last_seen) VALUES ('badobs', 'BadObs', 'LAX', to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')) ON CONFLICT DO NOTHING")
+	db.conn.Exec(testNativeSQL(`INSERT INTO observers (id, name, iata, last_seen) VALUES ('badobs', 'BadObs', 'LAX', strftime('%Y-%m-%dT%H:%M:%SZ','now')) ON CONFLICT DO NOTHING`, "INSERT INTO observers (id, name, iata, last_seen) VALUES ('badobs', 'BadObs', 'LAX', to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')) ON CONFLICT DO NOTHING"))
 
 	cfg := &Config{
 		ObserverBlacklist: []string{"badobs"},
@@ -108,7 +108,7 @@ func TestObserverBlacklistFiltersObserverDetail(t *testing.T) {
 
 func TestNoObserverBlacklistPassesAll(t *testing.T) {
 	db := setupTestDB(t)
-	db.conn.Exec("INSERT INTO observers (id, name, iata, last_seen) VALUES ('someobs', 'SomeObs', 'SFO', to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')) ON CONFLICT DO NOTHING")
+	db.conn.Exec(testNativeSQL(`INSERT INTO observers (id, name, iata, last_seen) VALUES ('someobs', 'SomeObs', 'SFO', strftime('%Y-%m-%dT%H:%M:%SZ','now')) ON CONFLICT DO NOTHING`, "INSERT INTO observers (id, name, iata, last_seen) VALUES ('someobs', 'SomeObs', 'SFO', to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')) ON CONFLICT DO NOTHING"))
 
 	cfg := &Config{}
 	srv := NewServer(db, cfg, NewHub())

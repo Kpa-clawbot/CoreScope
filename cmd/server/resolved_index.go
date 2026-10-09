@@ -158,7 +158,7 @@ func (s *PacketStore) confirmResolvedPathContains(txID int, pubkey string) bool 
 	needle := `"` + strings.ToLower(pubkey) + `"`
 	var count int
 	err := s.db.conn.QueryRow(
-		`SELECT COUNT(*) FROM observations WHERE transmission_id = $1 AND strpos(LOWER(resolved_path), $2) > 0`,
+		`SELECT COUNT(*) FROM observations WHERE transmission_id = `+s.db.parameter(1)+` AND `+s.db.nativeSQL("instr", "strpos")+`(LOWER(resolved_path), `+s.db.parameter(2)+`) > 0`,
 		txID, needle,
 	).Scan(&count)
 	if err != nil {
@@ -173,8 +173,9 @@ func (s *PacketStore) fetchResolvedPathsForTx(txID int) map[int][]*string {
 	if s.db == nil || s.db.conn == nil {
 		return nil
 	}
+	s.beforeCacheLoad("resolvedPath")
 	rows, err := s.db.conn.Query(
-		`SELECT id, resolved_path FROM observations WHERE transmission_id = $1 AND resolved_path IS NOT NULL`,
+		`SELECT id, resolved_path FROM observations WHERE transmission_id = `+s.db.parameter(1)+` AND resolved_path IS NOT NULL`,
 		txID,
 	)
 	if err != nil {
@@ -213,9 +214,10 @@ func (s *PacketStore) fetchResolvedPathForObs(obsID int) []*string {
 	}
 	s.lruMu.RUnlock()
 
+	s.beforeCacheLoad("resolvedPath")
 	var rpJSON sql.NullString
 	err := s.db.conn.QueryRow(
-		`SELECT resolved_path FROM observations WHERE id = $1`, obsID,
+		`SELECT resolved_path FROM observations WHERE id = `+s.db.parameter(1), obsID,
 	).Scan(&rpJSON)
 	if err != nil || !rpJSON.Valid {
 		return nil
@@ -230,7 +232,26 @@ func (s *PacketStore) fetchResolvedPathForObs(obsID int) []*string {
 	return rp
 }
 
-// fetchResolvedPathForTxBest returns the best observation's resolved_path for a tx.
+// rpObs is the part of an observation that the best-resolved-path pick
+// needs, copied while s.mu is held. The path is kept as its JSON string and
+// parsed by bestResolvedPath, so the parse runs after s.mu is released.
+type rpObs struct {
+	id       int
+	pathJSON string
+}
+
+// snapshotRPObs copies what bestResolvedPath needs from tx. Caller holds s.mu.
+func snapshotRPObs(tx *StoreTx) []rpObs {
+	out := make([]rpObs, len(tx.Observations))
+	for i, o := range tx.Observations {
+		out[i] = rpObs{id: o.ID, pathJSON: o.PathJSON}
+	}
+	return out
+}
+
+// bestResolvedPath returns the best observation's resolved_path for a tx,
+// given a snapshot of its observations (snapshotRPObs), so it runs without
+// s.mu.
 //
 // "Best" = the longest path_json among observations that actually have a stored
 // resolved_path. Earlier versions picked the longest-path obs unconditionally
@@ -239,41 +260,43 @@ func (s *PacketStore) fetchResolvedPathForObs(obsID int) []*string {
 // callers (e.g. /api/nodes/{pk}/health.recentPackets) lost the field. Fixes
 // #810 by checking all observations and falling back to the longest sibling
 // that has a stored path.
-func (s *PacketStore) fetchResolvedPathForTxBest(tx *StoreTx) []*string {
-	if tx == nil || len(tx.Observations) == 0 {
+func (s *PacketStore) bestResolvedPath(txID int, observations []rpObs) []*string {
+	if len(observations) == 0 {
 		return nil
 	}
+	lens := make([]int, len(observations))
+	for i, obs := range observations {
+		lens[i] = pathLen(obs.pathJSON)
+	}
 	// Fast path: try the longest-path obs first via the LRU/SQL helper.
-	longest := tx.Observations[0]
-	longestLen := pathLen(longest.PathJSON)
-	for _, obs := range tx.Observations[1:] {
-		if l := pathLen(obs.PathJSON); l > longestLen {
-			longest = obs
-			longestLen = l
+	longest := 0
+	for i := 1; i < len(observations); i++ {
+		if lens[i] > lens[longest] {
+			longest = i
 		}
 	}
-	if rp := s.fetchResolvedPathForObs(longest.ID); rp != nil {
+	if rp := s.fetchResolvedPathForObs(observations[longest].id); rp != nil {
 		return rp
 	}
 	// Fallback: longest-path obs has no stored resolved_path. Query all
 	// observations for this tx and pick the one with the longest path_json
 	// that actually has a stored resolved_path.
-	rpMap := s.fetchResolvedPathsForTx(tx.ID)
+	rpMap := s.fetchResolvedPathsForTx(txID)
 	if len(rpMap) == 0 {
 		return nil
 	}
 	var bestRP []*string
 	bestObsID := 0
 	bestLen := -1
-	for _, obs := range tx.Observations {
-		rp, ok := rpMap[obs.ID]
+	for i, obs := range observations {
+		rp, ok := rpMap[obs.id]
 		if !ok || rp == nil {
 			continue
 		}
-		if l := pathLen(obs.PathJSON); l > bestLen {
-			bestLen = l
+		if lens[i] > bestLen {
+			bestLen = lens[i]
 			bestRP = rp
-			bestObsID = obs.ID
+			bestObsID = obs.id
 		}
 	}
 	// Populate LRU so repeat lookups for this tx don't re-issue the multi-row
@@ -284,6 +307,43 @@ func (s *PacketStore) fetchResolvedPathForTxBest(tx *StoreTx) []*string {
 		s.lruMu.Unlock()
 	}
 	return bestRP
+}
+
+// rpJob is one resolved_path lookup for a response map. Code holding s.mu
+// collects jobs; applyResolvedPaths runs them after s.mu is released, so the
+// SQL never waits for a pool connection while the store lock is held (#2146).
+type rpJob struct {
+	m map[string]interface{}
+	// forTx picks the best observation of transmission txID from txObs;
+	// otherwise the job looks up observation obsID.
+	forTx bool
+	txID  int
+	txObs []rpObs
+	obsID int
+}
+
+func txRPJob(m map[string]interface{}, tx *StoreTx) rpJob {
+	return rpJob{m: m, forTx: true, txID: tx.ID, txObs: snapshotRPObs(tx)}
+}
+
+func obsRPJob(m map[string]interface{}, obsID int) rpJob {
+	return rpJob{m: m, obsID: obsID}
+}
+
+// applyResolvedPaths sets "resolved_path" on each job's map. Must be called
+// without s.mu held.
+func (s *PacketStore) applyResolvedPaths(jobs []rpJob) {
+	for _, j := range jobs {
+		var rp []*string
+		if j.forTx {
+			rp = s.bestResolvedPath(j.txID, j.txObs)
+		} else {
+			rp = s.fetchResolvedPathForObs(j.obsID)
+		}
+		if rp != nil {
+			j.m["resolved_path"] = rp
+		}
+	}
 }
 
 // --- Simple LRU cache for resolved paths ---
@@ -357,7 +417,7 @@ func (s *PacketStore) resolvedPubkeysForEvictionBatch(txIDs []int) map[int][]str
 			args[i] = id
 		}
 		query := "SELECT transmission_id, resolved_path FROM observations WHERE transmission_id IN (" +
-			sqlPlaceholders(len(chunk)) + ") AND resolved_path IS NOT NULL"
+			s.db.sqlPlaceholders(len(chunk)) + ") AND resolved_path IS NOT NULL"
 
 		rows, err := s.db.conn.Query(query, args...)
 		if err != nil {

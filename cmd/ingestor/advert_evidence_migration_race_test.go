@@ -25,7 +25,7 @@ func seedUnbackfilledAdvert(t *testing.T, canonical, observed string) (*Store, s
 	if _, err := s.db.Exec(`INSERT INTO observations(id,transmission_id,observer_idx,raw_hex,path_json,timestamp) VALUES(1,1,(SELECT rowid FROM observers WHERE id='fixture-observer'),$1,'[]',1)`, observed); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := testAdmin(t, s).Exec(`SELECT setval('observations_id_seq',1,true)`); err != nil {
+	if _, err := testAdmin(t, s).Exec(testNativeSQL(`UPDATE sqlite_sequence SET seq=1 WHERE name='observations'`, `SELECT setval('observations_id_seq',1,true)`)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -39,7 +39,7 @@ func TestAdvertRouteEvidenceLegacyProtectionErrorsDoNotDropIncomingRaw(t *testin
 			defer s.Close()
 			stmt := `DROP TABLE advert_evidence_backfill`
 			if failure == "write" {
-				stmt = `CREATE OR REPLACE FUNCTION fail_old_evidence_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.bit=2 THEN RAISE EXCEPTION 'fixture old evidence failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER fail_old_evidence BEFORE INSERT ON advert_route_evidence FOR EACH ROW EXECUTE FUNCTION fail_old_evidence_fn()`
+				stmt = testNativeSQL(`CREATE TRIGGER fail_old_evidence BEFORE INSERT ON advert_route_evidence WHEN NEW.bit=2 BEGIN SELECT RAISE(ABORT,'fixture old evidence failure'); END`, `CREATE OR REPLACE FUNCTION fail_old_evidence_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.bit=2 THEN RAISE EXCEPTION 'fixture old evidence failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER fail_old_evidence BEFORE INSERT ON advert_route_evidence FOR EACH ROW EXECUTE FUNCTION fail_old_evidence_fn()`)
 			}
 			if _, err := testAdmin(t, s).Exec(stmt); err != nil {
 				t.Fatal(err)
@@ -81,10 +81,12 @@ func TestAdvertRouteEvidenceLegacyCoalescedPathAndIndex(t *testing.T) {
 	if mask != 3 {
 		t.Fatalf("coalesced path lookup lost old evidence: mask=%d", mask)
 	}
-	if _, err := s.db.Exec(`SET enable_seqscan=off`); err != nil {
-		t.Fatal(err)
+	if testBackendValue() == "postgres" {
+		if _, err := s.db.Exec(`SET enable_seqscan=off`); err != nil {
+			t.Fatal(err)
+		}
 	}
-	rows, err := s.db.Query(`EXPLAIN (COSTS OFF) `+legacyAdvertObservationSQL, 1, 1, "")
+	rows, err := s.db.Query(testNativeSQL(`EXPLAIN QUERY PLAN `, `EXPLAIN (COSTS OFF) `)+legacyAdvertObservationSQL, 1, 1, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +94,7 @@ func TestAdvertRouteEvidenceLegacyCoalescedPathAndIndex(t *testing.T) {
 	indexed := false
 	for rows.Next() {
 		var detail string
-		if err := rows.Scan(&detail); err != nil {
+		if err := scanTestPlan(rows, &detail); err != nil {
 			t.Fatal(err)
 		}
 		if strings.Contains(detail, "idx_observations_dedup") {
@@ -169,7 +171,7 @@ func BenchmarkAdvertEvidenceLegacyPreservation(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				if err := func() error {
-					tx, e := beginWrite(s.db)
+					tx, e := beginWrite(s.db, s.Backend())
 					if e != nil {
 						return e
 					}

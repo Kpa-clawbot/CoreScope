@@ -2,6 +2,7 @@ package users
 
 import (
 	"errors"
+	"github.com/meshcore-analyzer/dbconfig"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,6 +26,7 @@ func TestOpenRejectsCredentialsInErrors(t *testing.T) {
 }
 
 func TestOpenRefusesSchemaOwner(t *testing.T) {
+	requirePostgres(t)
 	dsn := pgtest.NewSchema(t)
 	db, err := pgutil.Open(dsn, false)
 	if err != nil {
@@ -43,9 +45,9 @@ func TestOpenRefusesSchemaOwner(t *testing.T) {
 	}
 }
 
-func TestPostgresSettingsCASAcrossPools(t *testing.T) {
+func TestSettingsCASAcrossPools(t *testing.T) {
 	st, _ := newTestStore(t)
-	other, err := Open(st.databaseURL)
+	other, err := Open(st.target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,9 +80,9 @@ func TestPostgresSettingsCASAcrossPools(t *testing.T) {
 	}
 }
 
-func TestPostgresProposalQuotaAcrossPools(t *testing.T) {
+func TestProposalQuotaAcrossPools(t *testing.T) {
 	st, _ := newTestStore(t)
-	other, err := Open(st.databaseURL)
+	other, err := Open(st.target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,6 +116,7 @@ func TestPostgresProposalQuotaAcrossPools(t *testing.T) {
 }
 
 func TestOpenRequiresBootstrap(t *testing.T) {
+	requirePostgres(t)
 	dsn := pgtest.NewSchema(t)
 	st, err := Open(dsn)
 	if st != nil {
@@ -124,9 +127,9 @@ func TestOpenRequiresBootstrap(t *testing.T) {
 	}
 }
 
-func TestPostgresSingleUseAndLatestTokenAcrossPools(t *testing.T) {
+func TestSingleUseAndLatestTokenAcrossPools(t *testing.T) {
 	st, _ := newTestStore(t)
-	other, err := Open(st.databaseURL)
+	other, err := Open(st.target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,9 +173,9 @@ func TestPostgresSingleUseAndLatestTokenAcrossPools(t *testing.T) {
 	}
 }
 
-func TestPostgresWatchAndApprovalQuotasAcrossPools(t *testing.T) {
+func TestWatchAndApprovalQuotasAcrossPools(t *testing.T) {
 	st, _ := newTestStore(t)
-	other, err := Open(st.databaseURL)
+	other, err := Open(st.target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,6 +236,7 @@ func raceStores(first, second *Store, fn func(*Store, int)) {
 }
 
 func TestApplyForImportCannotAppearReady(t *testing.T) {
+	requirePostgres(t)
 	dsn := pgtest.NewSchema(t)
 	db := testOwner(t, dsn)
 	if err := ApplyForImport(db); err != nil {
@@ -256,6 +260,7 @@ func TestApplyForImportCannotAppearReady(t *testing.T) {
 }
 
 func TestAccountRuntimeCannotAlterSchemaOrReadiness(t *testing.T) {
+	requirePostgres(t)
 	st, _ := newTestStore(t)
 	for _, stmt := range []string{`CREATE TABLE forbidden(id int)`, `ALTER TABLE users ADD COLUMN forbidden int`, `UPDATE corescope_schema SET ready=false`, `DELETE FROM schema_version`} {
 		if _, err := st.db.Exec(stmt); err == nil {
@@ -266,12 +271,14 @@ func TestAccountRuntimeCannotAlterSchemaOrReadiness(t *testing.T) {
 
 func TestNativeAccountTextUsesBinaryCollation(t *testing.T) {
 	st, _ := newTestStore(t)
-	var nonBinary int
-	if err := st.db.QueryRow(`SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema() AND data_type='text' AND collation_name IS DISTINCT FROM 'C'`).Scan(&nonBinary); err != nil {
-		t.Fatal(err)
-	}
-	if nonBinary != 0 {
-		t.Fatalf("%d account text columns inherit locale-dependent collation", nonBinary)
+	if testBackend(t) == dbconfig.Postgres {
+		var nonBinary int
+		if err := st.db.QueryRow(`SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema() AND data_type='text' AND collation_name IS DISTINCT FROM 'C'`).Scan(&nonBinary); err != nil {
+			t.Fatal(err)
+		}
+		if nonBinary != 0 {
+			t.Fatalf("%d account text columns inherit locale-dependent collation", nonBinary)
+		}
 	}
 	for _, email := range []string{"a@example.org", "B@example.org", "ä@example.org"} {
 		mustCreate(t, st, email, "Case")
@@ -295,10 +302,11 @@ func TestNativeAccountTextUsesBinaryCollation(t *testing.T) {
 }
 
 func TestPendingPruneRechecksTokenAfterConcurrentIssue(t *testing.T) {
+	requirePostgres(t)
 	st, clk := newTestStore(t)
 	u := mustCreate(t, st, "pending-race@example.org", "Pending")
 	clk.Advance(8 * 24 * time.Hour)
-	other, err := pgutil.Open(st.databaseURL, false)
+	other, err := pgutil.Open(st.target, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +316,7 @@ func TestPendingPruneRechecksTokenAfterConcurrentIssue(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	if err := lockUser(tx, u.ID); err != nil {
+	if err := st.lockUser(tx, u.ID); err != nil {
 		t.Fatal(err)
 	}
 	type result struct {
@@ -347,9 +355,10 @@ func TestPendingPruneRechecksTokenAfterConcurrentIssue(t *testing.T) {
 }
 
 func TestNotifyStatesSkipConcurrentAccountDeletion(t *testing.T) {
+	requirePostgres(t)
 	st, clk := newTestStore(t)
 	u := mustCreate(t, st, "delete-race@example.org", "Deleted")
-	other, err := pgutil.Open(st.databaseURL, false)
+	other, err := pgutil.Open(st.target, false)
 	if err != nil {
 		t.Fatal(err)
 	}

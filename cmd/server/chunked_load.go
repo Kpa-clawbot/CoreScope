@@ -414,10 +414,13 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 
 		var chunkSQL string
 		if s.db.isV3 {
-			chunkSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
+			chunkSQL = s.db.nativeSQL(`SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 					t.payload_type, t.payload_version, t.decoded_json,
 					o.id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,
-					o.snr, o.rssi, o.score, o.path_json, to_char(to_timestamp(o.timestamp) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')` + obsRawHexCol + rpCol + scopeNameCol + `
+					o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')`, `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
+					t.payload_type, t.payload_version, t.decoded_json,
+					o.id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,
+					o.snr, o.rssi, o.score, o.path_json, to_char(to_timestamp(o.timestamp) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`) + obsRawHexCol + rpCol + scopeNameCol + `
 				FROM (SELECT * FROM transmissions t2 ` + whereClause + ` ORDER BY t2.id ASC LIMIT ` + fmt.Sprintf("%d", chunkSize) + `) AS t
 				LEFT JOIN observations o ON o.transmission_id = t.id
 				LEFT JOIN observers obs ON obs.rowid = o.observer_idx

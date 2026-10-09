@@ -273,6 +273,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/scope-audit", s.handleScopeAudit).Methods("GET") // #1975
 	r.HandleFunc("/api/perf", s.handlePerf).Methods("GET")
 	r.HandleFunc("/api/perf/io", s.handlePerfIO).Methods("GET")
+	r.HandleFunc("/api/perf/database", s.handlePerfPostgres).Methods("GET")
 	r.HandleFunc("/api/perf/postgres", s.handlePerfPostgres).Methods("GET")
 	r.HandleFunc("/api/perf/sqlite", s.handlePerfPostgres).Methods("GET") // legacy diagnostic route alias
 	r.HandleFunc("/api/perf/write-sources", s.handlePerfWriteSources).Methods("GET")
@@ -405,7 +406,7 @@ func (s *Server) perfMiddleware(next http.Handler) http.Handler {
 		key := r.URL.Path
 		if route := mux.CurrentRoute(r); route != nil {
 			if tmpl, err := route.GetPathTemplate(); err == nil {
-				key = muxBraceParam.ReplaceAllString(tmpl, ":$1")
+				key = muxBraceParam.ReplaceAllString(tmpl, ":"+s.db.parameter(1))
 			}
 		}
 		if key == r.URL.Path {
@@ -1031,21 +1032,27 @@ func (s *Server) handlePerf(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// PostgreSQL diagnostics reuse the bounded database sample.
-	var postgresStats *PostgresStats
+	var postgresStats, sqliteStats, databaseStats *PostgresStats
 	if s.db != nil {
 		ss := s.db.GetDBSizeStatsTyped()
-		postgresStats = &ss
+		databaseStats = &ss
+		if ss.Engine == "sqlite" {
+			sqliteStats = &ss
+		} else {
+			postgresStats = &ss
+		}
 	}
 
 	writeJSON(w, PerfResponse{
-		Uptime:              uptimeSec,
-		TotalRequests:       totalRequests,
-		AvgMs:               safeAvg(totalMs, float64(totalRequests)),
-		Endpoints:           summary,
-		SlowQueries:         slowQueries,
-		Cache:               perfCS,
-		PacketStore:         pktStoreStats,
-		Postgres:            postgresStats,
+		Uptime:        uptimeSec,
+		TotalRequests: totalRequests,
+		AvgMs:         safeAvg(totalMs, float64(totalRequests)),
+		Endpoints:     summary,
+		SlowQueries:   slowQueries,
+		Cache:         perfCS,
+		PacketStore:   pktStoreStats,
+		Postgres:      postgresStats,
+		Sqlite:        sqliteStats, Database: databaseStats,
 		MemoryBreakdown:     memBreakdown,
 		MemoryBreakdownNote: breakdownNote,
 		GoRuntime: func() *GoRuntimeStats {
@@ -1949,12 +1956,23 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	}
 	candidates = filtered
 
+	// The canonical resolved_path lookup below runs without s.mu, so it reads
+	// a snapshot of each surviving candidate's observations instead of
+	// tx.Observations, which ingest appends to under the write lock. Taken in
+	// a short read lock of its own so only the survivors are copied.
+	s.store.mu.RLock()
+	rpSnapshots := make(map[int][]rpObs, len(candidates))
+	for _, tx := range candidates {
+		rpSnapshots[tx.ID] = snapshotRPObs(tx)
+	}
+	s.store.mu.RUnlock()
+
 	// #1278: Read the CANONICAL persisted resolved_path for each surviving
-	// candidate OUTSIDE s.mu (fetchResolvedPathForTxBest takes lruMu; the
+	// candidate OUTSIDE s.mu (bestResolvedPath takes lruMu; the
 	// lock-ordering contract forbids acquiring lruMu under s.mu).
 	//
 	// Option A from the issue: the packets page renders each tx via
-	// fetchResolvedPathForTxBest. For /api/nodes/{pk}/paths to stay
+	// bestResolvedPath. For /api/nodes/{pk}/paths to stay
 	// CONSISTENT with the packets page, BOTH the containsTarget membership
 	// decision AND the displayed hop names must come from that same
 	// canonical resolved_path — not a re-resolution biased by passing the
@@ -1965,7 +1983,7 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	// there's no canonical answer to be consistent with.
 	canonicalRP := make(map[int][]*string, len(candidates))
 	for _, tx := range candidates {
-		if rp := s.store.fetchResolvedPathForTxBest(tx); rp != nil {
+		if rp := s.store.bestResolvedPath(tx.ID, rpSnapshots[tx.ID]); rp != nil {
 			canonicalRP[tx.ID] = rp
 		}
 	}

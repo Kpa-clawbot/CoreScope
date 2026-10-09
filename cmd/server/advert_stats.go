@@ -63,10 +63,13 @@ func (db *DB) CountFloodAdvertsForNode(pubkey string, windowHours float64, rowCa
 	}
 	floor := time.Now().UTC().Add(-time.Duration(windowHours*float64(time.Hour))).AddDate(0, 0, -1).Format("2006-01-02")
 	rows, err := db.conn.Query(
-		`SELECT COALESCE(first_seen, ''), $1::integer, COALESCE(hash, '') FROM transmissions t
- WHERE from_pubkey=$2 AND payload_type=$3 AND first_seen>=$4
- AND EXISTS(SELECT 1 FROM advert_route_evidence e WHERE e.tx_id=t.id AND e.bit=$5)
- ORDER BY id DESC LIMIT $6`,
+		db.nativeSQL(`SELECT COALESCE(first_seen, ''), CAST(?1 AS INTEGER), COALESCE(hash, '') FROM transmissions t
+ WHERE from_pubkey=?2 AND payload_type=?3 AND first_seen>=?4
+ AND EXISTS(SELECT 1 FROM advert_route_evidence e WHERE e.tx_id=t.id AND e.bit=?5)
+ ORDER BY id DESC LIMIT ?6`, `SELECT COALESCE(first_seen, ''), `+db.parameter(1)+`::integer, COALESCE(hash, '') FROM transmissions t
+ WHERE from_pubkey=`+db.parameter(2)+` AND payload_type=`+db.parameter(3)+` AND first_seen>=`+db.parameter(4)+`
+ AND EXISTS(SELECT 1 FROM advert_route_evidence e WHERE e.tx_id=t.id AND e.bit=`+db.parameter(5)+`)
+ ORDER BY id DESC LIMIT `+db.parameter(6)),
 		packetpath.AdvertFlood, pubkey, payloadTypeAdvert, floor, packetpath.AdvertFlood, rowCap)
 	if err != nil {
 		return 0, err

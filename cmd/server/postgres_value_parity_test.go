@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/meshcore-analyzer/dbschema"
 )
 
 func openPostgresValueFixture(t *testing.T) (*DB, *sql.DB) {
@@ -20,7 +19,7 @@ func openPostgresValueFixture(t *testing.T) (*DB, *sql.DB) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { writer.Close() })
-	if err := dbschema.Apply(writer, nil); err != nil {
+	if err := applyTestSchema(t, writer); err != nil {
 		t.Fatal(err)
 	}
 	reader, err := openFixtureReader(t, dsn)

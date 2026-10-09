@@ -13,10 +13,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/meshcore-analyzer/dbschema"
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/geofilter"
 	"github.com/meshcore-analyzer/packetpath"
-	"github.com/meshcore-analyzer/pgutil"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -35,8 +34,9 @@ const routeTypeTransportSQL = "route_type IN (0, 3)"
 // per MeshCore protocol (#1838).
 const routeTypeNonTransportSQL = "route_type IN (1, 2)"
 
-// DB wraps a read-only connection to the CoreScope PostgreSQL database.
+// DB wraps a read-only connection to the selected telemetry database.
 type DB struct {
+	backend                 dbconfig.Backend
 	advertEvidenceTable     atomic.Bool
 	advertEvidenceReadHook  func() // test-only: immediately before a bulk mask query
 	conn                    *sql.DB
@@ -135,38 +135,14 @@ type channelMessagesCacheEntry struct {
 	exp   time.Time
 }
 
-// OpenDB opens a restricted PostgreSQL reader. Schema creation and writes are
-// exclusively bootstrap/ingestor responsibilities. The session flag is defense
-// in depth; effective grants are checked so changing it cannot enable writes.
-func OpenDB(databaseURL string) (*DB, error) {
-	conn, err := pgutil.Open(databaseURL, true)
-	if err != nil {
-		return nil, err
+// OpenDB preserves unambiguous legacy path/URL callers. Runtime main uses
+// explicit Storage from the shared selection record.
+func OpenDB(target string) (*DB, error) {
+	storage := dbconfig.Storage{Backend: dbconfig.SQLite, DBPath: target}
+	if strings.HasPrefix(target, "postgres://") || strings.HasPrefix(target, "postgresql://") {
+		storage = dbconfig.Storage{Backend: dbconfig.Postgres, ReaderDatabaseURL: target}
 	}
-	conn.SetMaxOpenConns(4)
-	if err := pgutil.AssertReadOnly(conn); err != nil {
-		conn.Close()
-		return nil, err
-	}
-	d := &DB{conn: conn, path: databaseURL}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	sc, err := conn.Conn(ctx)
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("schema detection: acquire connection: %w", err)
-	}
-	derr := d.detectSchema(ctx, sc)
-	_ = sc.Close()
-	if derr != nil {
-		conn.Close()
-		return nil, fmt.Errorf("schema detection failed: %w", derr)
-	}
-	if err := d.prepareStatements(); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("prepare statements: %w", err)
-	}
-	return d, nil
+	return OpenStorage(storage)
 }
 
 // stmtQueryRow returns a QueryRow-like helper that uses the prepared statement
@@ -194,15 +170,15 @@ func (db *DB) prepareStatements() error {
 
 	db.stmtCountTransmissions = prepare("SELECT COUNT(*) FROM transmissions")
 	db.stmtCountObservations = prepare("SELECT COUNT(*) FROM observations")
-	db.stmtCountNodesActive = prepare("SELECT COUNT(*) FROM nodes WHERE last_seen > $1")
+	db.stmtCountNodesActive = prepare("SELECT COUNT(*) FROM nodes WHERE last_seen > " + db.parameter(1))
 	db.stmtCountNodesAll = prepare("SELECT COUNT(*) FROM nodes")
 	db.stmtCountObservers = prepare("SELECT COUNT(*) FROM observers WHERE inactive IS NULL OR inactive = 0")
-	db.stmtCountObsLastHour = prepare("SELECT COUNT(*) FROM observations WHERE timestamp > $1")
-	db.stmtCountObsLastDay = prepare("SELECT COUNT(*) FROM observations WHERE timestamp > $1")
-	db.stmtNodeLookup = prepare("SELECT public_key FROM nodes WHERE public_key = $1 OR name = $2 LIMIT 1")
-	db.stmtTxByHash = prepare("SELECT id FROM transmissions WHERE hash = $1")
-	db.stmtCountNodesByRole = prepare("SELECT COUNT(*) FROM nodes WHERE role = $1 AND last_seen > $2")
-	db.stmtCountNodesByRoleAll = prepare("SELECT COUNT(*) FROM nodes WHERE role = $1")
+	db.stmtCountObsLastHour = prepare("SELECT COUNT(*) FROM observations WHERE timestamp > " + db.parameter(1))
+	db.stmtCountObsLastDay = prepare("SELECT COUNT(*) FROM observations WHERE timestamp > " + db.parameter(1))
+	db.stmtNodeLookup = prepare("SELECT public_key FROM nodes WHERE public_key = " + db.parameter(1) + " OR name = " + db.parameter(2) + " LIMIT 1")
+	db.stmtTxByHash = prepare("SELECT id FROM transmissions WHERE hash = " + db.parameter(1))
+	db.stmtCountNodesByRole = prepare("SELECT COUNT(*) FROM nodes WHERE role = " + db.parameter(1) + " AND last_seen > " + db.parameter(2))
+	db.stmtCountNodesByRoleAll = prepare("SELECT COUNT(*) FROM nodes WHERE role = " + db.parameter(1))
 	db.stmtMaxTxID = prepare("SELECT COALESCE(MAX(id), 0) FROM transmissions")
 	db.stmtMaxObsID = prepare("SELECT COALESCE(MAX(id), 0) FROM observations")
 	return err
@@ -235,7 +211,7 @@ func (db *DB) Close() error {
 // restarted (#1901). Detection is now all-or-nothing — on any probe error the
 // caller aborts startup so the supervisor can retry.
 func (db *DB) detectSchema(ctx context.Context, q rowQuerier) error {
-	obs, err := schemaColumns(ctx, q, "observations")
+	obs, err := schemaColumns(ctx, q, "observations", db.Backend())
 	if err != nil {
 		return fmt.Errorf("probe observations: %w", err)
 	}
@@ -243,14 +219,14 @@ func (db *DB) detectSchema(ctx context.Context, q rowQuerier) error {
 	db.hasResolvedPath = obs["resolved_path"]
 	db.hasObsRawHex = obs["raw_hex"]
 
-	tx, err := schemaColumns(ctx, q, "transmissions")
+	tx, err := schemaColumns(ctx, q, "transmissions", db.Backend())
 	if err != nil {
 		return fmt.Errorf("probe transmissions: %w", err)
 	}
 	db.hasScopeName = tx["scope_name"]
 	db.hasLastSeen = tx["last_seen"]
 
-	nodes, err := schemaColumns(ctx, q, "nodes")
+	nodes, err := schemaColumns(ctx, q, "nodes", db.Backend())
 	if err != nil {
 		return fmt.Errorf("probe nodes: %w", err)
 	}
@@ -262,7 +238,7 @@ func (db *DB) detectSchema(ctx context.Context, q rowQuerier) error {
 	// install, so schemaColumns returns nothing and the flag stays false;
 	// present on deployments that collect the same fact by another route.
 	// A missing table is not an error here.
-	ndr, ndrErr := schemaColumns(ctx, q, "node_declared_regions")
+	ndr, ndrErr := schemaColumns(ctx, q, "node_declared_regions", db.Backend())
 	db.hasDeclaredRegionsTable = ndrErr == nil && len(ndr) > 0
 
 	if db.isV3 {
@@ -280,10 +256,14 @@ type rowQuerier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-// schemaColumns reads only the selected PostgreSQL schema's visible columns.
-func schemaColumns(ctx context.Context, q rowQuerier, table string) (map[string]bool, error) {
-	rows, err := q.QueryContext(ctx, `SELECT column_name FROM information_schema.columns
-		WHERE table_schema = current_schema() AND table_name = $1`, table)
+// schemaColumns reads visible columns through the selected native catalog.
+func schemaColumns(ctx context.Context, q rowQuerier, table string, backend ...dbconfig.Backend) (map[string]bool, error) {
+	query := `SELECT column_name FROM information_schema.columns
+  WHERE table_schema = current_schema() AND table_name = $1`
+	if len(backend) > 0 && backend[0] == dbconfig.SQLite {
+		query = `SELECT name FROM pragma_table_info(?1)`
+	}
+	rows, err := q.QueryContext(ctx, query, table)
 	if err != nil {
 		return nil, err
 	}
@@ -476,6 +456,16 @@ type Stats struct {
 	PacketsLast24h     int `json:"packetsLast24h"`
 }
 
+// CountActiveNodes counts nodes seen in the last 7 days: GetStats' totalNodes
+// on its own, without GetStats' whole-table counts.
+func (db *DB) CountActiveNodes() (int, error) {
+	// Node.js uses 7-day active nodes for totalNodes
+	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
+	var n int
+	err := db.stmtQueryRow(db.stmtCountNodesActive, "SELECT COUNT(*) FROM nodes WHERE last_seen > "+db.parameter(1), sevenDaysAgo).Scan(&n)
+	return n, err
+}
+
 // GetStats returns aggregate counts (matches Node.js db.getStats shape).
 func (db *DB) GetStats() (*Stats, error) {
 	s := &Stats{}
@@ -486,22 +476,20 @@ func (db *DB) GetStats() (*Stats, error) {
 	s.TotalPackets = s.TotalTransmissions
 
 	db.stmtQueryRow(db.stmtCountObservations, "SELECT COUNT(*) FROM observations").Scan(&s.TotalObservations)
-	// Node.js uses 7-day active nodes for totalNodes
-	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
-	db.stmtQueryRow(db.stmtCountNodesActive, "SELECT COUNT(*) FROM nodes WHERE last_seen > $1", sevenDaysAgo).Scan(&s.TotalNodes)
+	s.TotalNodes, _ = db.CountActiveNodes()
 	db.stmtQueryRow(db.stmtCountNodesAll, "SELECT COUNT(*) FROM nodes").Scan(&s.TotalNodesAllTime)
 	db.stmtQueryRow(db.stmtCountObservers, "SELECT COUNT(*) FROM observers WHERE inactive IS NULL OR inactive = 0").Scan(&s.TotalObservers)
 
 	oneHourAgo := time.Now().Add(-1 * time.Hour).Unix()
-	db.stmtQueryRow(db.stmtCountObsLastHour, "SELECT COUNT(*) FROM observations WHERE timestamp > $1", oneHourAgo).Scan(&s.PacketsLastHour)
+	db.stmtQueryRow(db.stmtCountObsLastHour, "SELECT COUNT(*) FROM observations WHERE timestamp > "+db.parameter(1), oneHourAgo).Scan(&s.PacketsLastHour)
 
 	oneDayAgo := time.Now().Add(-24 * time.Hour).Unix()
-	db.stmtQueryRow(db.stmtCountObsLastDay, "SELECT COUNT(*) FROM observations WHERE timestamp > $1", oneDayAgo).Scan(&s.PacketsLast24h)
+	db.stmtQueryRow(db.stmtCountObsLastDay, "SELECT COUNT(*) FROM observations WHERE timestamp > "+db.parameter(1), oneDayAgo).Scan(&s.PacketsLast24h)
 
 	return s, nil
 }
 
-// GetDBSizeStats retains the legacy map caller while using PostgreSQL metrics.
+// GetDBSizeStats retains the legacy map caller with native database metrics.
 func (db *DB) GetDBSizeStats() map[string]interface{} {
 	stats := db.GetDBSizeStatsTyped()
 	var size any
@@ -514,12 +502,17 @@ func (db *DB) GetDBSizeStats() map[string]interface{} {
 			"observations": stats.Rows.Observations, "nodes": stats.Rows.Nodes,
 			"observers": stats.Rows.Observers}
 	}
-	return map[string]interface{}{
+	result := map[string]interface{}{
 		"engine": stats.Engine, "dbSizeMB": size, "rows": rows, "error": stats.Error,
 	}
+	if stats.Engine == "sqlite" {
+		result["walSizeMB"] = stats.WalSizeMB
+		result["freelistMB"] = stats.FreelistMB
+	}
+	return result
 }
 
-// GetDBSizeStatsTyped reports native PostgreSQL database size and table counts.
+// GetDBSizeStatsTyped reports native database size and table counts.
 // WAL is cluster-wide and cannot be attributed to this database by a reader.
 func (db *DB) GetDBSizeStatsTyped() PostgresStats {
 	sample, err := db.postgresStats(context.Background())
@@ -527,12 +520,20 @@ func (db *DB) GetDBSizeStatsTyped() PostgresStats {
 		Engine: "postgresql", SampledAt: postgresSampleStamp(sample),
 		SampleIntervalSeconds: int(postgresStatsTTL / time.Second), Stale: err != nil,
 	}
+	if db.Backend() == dbconfig.SQLite {
+		result.Engine = "sqlite"
+	}
 	if sample.SampledAt.IsZero() {
 		result.Error = "database diagnostics unavailable"
 		return result
 	}
 	mb := math.Round(float64(sample.DatabaseBytes)/1048576*10) / 10
 	result.DbSizeMB, result.Rows = &mb, &sample.Rows
+	if sample.SQLite != nil {
+		walMB := float64(sample.SQLite.WalSize) / 1048576
+		freeMB := float64(sample.SQLite.FreelistCount*sample.SQLite.PageSize) / 1048576
+		result.WalSizeMB, result.FreelistMB = &walMB, &freeMB
+	}
 	return result
 }
 
@@ -542,7 +543,7 @@ func (db *DB) GetRoleCounts() map[string]int {
 	counts := map[string]int{}
 	for _, role := range []string{"repeater", "room", "companion", "sensor"} {
 		var c int
-		db.stmtQueryRow(db.stmtCountNodesByRole, "SELECT COUNT(*) FROM nodes WHERE role = $1 AND last_seen > $2", role, sevenDaysAgo).Scan(&c)
+		db.stmtQueryRow(db.stmtCountNodesByRole, "SELECT COUNT(*) FROM nodes WHERE role = "+db.parameter(1)+" AND last_seen > "+db.parameter(2), role, sevenDaysAgo).Scan(&c)
 		counts[role+"s"] = c
 	}
 	return counts
@@ -553,7 +554,7 @@ func (db *DB) GetAllRoleCounts() map[string]int {
 	counts := map[string]int{}
 	for _, role := range []string{"repeater", "room", "companion", "sensor"} {
 		var c int
-		db.stmtQueryRow(db.stmtCountNodesByRoleAll, "SELECT COUNT(*) FROM nodes WHERE role = $1", role).Scan(&c)
+		db.stmtQueryRow(db.stmtCountNodesByRoleAll, "SELECT COUNT(*) FROM nodes WHERE role = "+db.parameter(1), role).Scan(&c)
 		counts[role+"s"] = c
 	}
 	return counts
@@ -617,8 +618,8 @@ func (db *DB) QueryPackets(q PacketQuery) (*PacketResult, error) {
 	// is what the packets page is showing. The `since=` filter still uses
 	// first_seen / observation timestamp, preserving "received-by-radio since X."
 	selectCols, observerJoin := db.transmissionBaseSQL()
-	querySQL := fmt.Sprintf("SELECT %s FROM transmissions t %s %s ORDER BY t.id %s LIMIT $%d OFFSET $%d",
-		selectCols, observerJoin, w, q.Order, len(args)+1, len(args)+2)
+	querySQL := fmt.Sprintf("SELECT %s FROM transmissions t %s %s ORDER BY t.id %s LIMIT %s OFFSET %s",
+		selectCols, observerJoin, w, q.Order, db.parameter(len(args)+1), db.parameter(len(args)+2))
 
 	qArgs := make([]interface{}, len(args))
 	copy(qArgs, args)
@@ -676,35 +677,47 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 	}
 	var querySQL string
 	if db.isV3 {
-		querySQL = fmt.Sprintf(`SELECT t.hash, t.first_seen, t.raw_hex, t.decoded_json, t.payload_type, t.route_type,
+		querySQL = fmt.Sprintf(db.nativeSQL(`SELECT t.hash, t.first_seen, t.raw_hex, t.decoded_json, t.payload_type, t.route_type,
+			COALESCE((SELECT COUNT(*) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS count,
+			COALESCE((SELECT COUNT(DISTINCT oi.observer_idx) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS observer_count,
+			COALESCE((SELECT MAX(strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', oi.timestamp, 'unixepoch')) FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen) AS latest,
+			obs.id AS observer_id, obs.name AS observer_name, COALESCE(obs.iata, '') AS observer_iata,
+			o.snr, o.rssi, o.path_json,
+			COALESCE((SELECT group_concat(DISTINCT obi.iata) FROM observations oi JOIN observers obi ON obi.rowid = oi.observer_idx WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas`, `SELECT t.hash, t.first_seen, t.raw_hex, t.decoded_json, t.payload_type, t.route_type,
 			COALESCE((SELECT COUNT(*) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS count,
 			COALESCE((SELECT COUNT(DISTINCT oi.observer_idx) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS observer_count,
 			COALESCE((SELECT MAX(to_char(to_timestamp(oi.timestamp) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')) FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen) AS latest,
 			obs.id AS observer_id, obs.name AS observer_name, COALESCE(obs.iata, '') AS observer_iata,
 			o.snr, o.rssi, o.path_json,
-			COALESCE((SELECT string_agg(DISTINCT obi.iata, ',') FROM observations oi JOIN observers obi ON obi.rowid = oi.observer_idx WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas`+scopeNameCol+`
+			COALESCE((SELECT string_agg(DISTINCT obi.iata, ',') FROM observations oi JOIN observers obi ON obi.rowid = oi.observer_idx WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas`)+scopeNameCol+`
 		FROM transmissions t
 		LEFT JOIN observations o ON o.id = (
 			SELECT id FROM observations WHERE transmission_id = t.id
 			ORDER BY length(COALESCE(path_json,'')) DESC NULLS LAST LIMIT 1
 		)
 		LEFT JOIN observers obs ON obs.rowid = o.observer_idx
-		%s ORDER BY latest DESC NULLS LAST LIMIT $%d OFFSET $%d`, w, len(args)+1, len(args)+2)
+		%s ORDER BY latest DESC NULLS LAST LIMIT %s OFFSET %s`, w, db.parameter(len(args)+1), db.parameter(len(args)+2))
 	} else {
-		querySQL = fmt.Sprintf(`SELECT t.hash, t.first_seen, t.raw_hex, t.decoded_json, t.payload_type, t.route_type,
+		querySQL = fmt.Sprintf(db.nativeSQL(`SELECT t.hash, t.first_seen, t.raw_hex, t.decoded_json, t.payload_type, t.route_type,
+			COALESCE((SELECT COUNT(*) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS count,
+			COALESCE((SELECT COUNT(DISTINCT oi.observer_id) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS observer_count,
+			COALESCE((SELECT CAST(MAX(oi.timestamp) AS TEXT) FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen) AS latest,
+			o.observer_id, o.observer_name, COALESCE(obs2.iata, '') AS observer_iata,
+			o.snr, o.rssi, o.path_json,
+			COALESCE((SELECT group_concat(DISTINCT obi.iata) FROM observations oi JOIN observers obi ON obi.id = oi.observer_id WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas`, `SELECT t.hash, t.first_seen, t.raw_hex, t.decoded_json, t.payload_type, t.route_type,
 			COALESCE((SELECT COUNT(*) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS count,
 			COALESCE((SELECT COUNT(DISTINCT oi.observer_id) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS observer_count,
 			COALESCE((SELECT MAX(oi.timestamp)::text FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen) AS latest,
 			o.observer_id, o.observer_name, COALESCE(obs2.iata, '') AS observer_iata,
 			o.snr, o.rssi, o.path_json,
-			COALESCE((SELECT string_agg(DISTINCT obi.iata, ',') FROM observations oi JOIN observers obi ON obi.id = oi.observer_id WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas`+scopeNameCol+`
+			COALESCE((SELECT string_agg(DISTINCT obi.iata, ',') FROM observations oi JOIN observers obi ON obi.id = oi.observer_id WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas`)+scopeNameCol+`
 		FROM transmissions t
 		LEFT JOIN observations o ON o.id = (
 			SELECT id FROM observations WHERE transmission_id = t.id
 			ORDER BY length(COALESCE(path_json,'')) DESC NULLS LAST LIMIT 1
 		)
 		LEFT JOIN observers obs2 ON obs2.id = o.observer_id
-		%s ORDER BY latest DESC NULLS LAST LIMIT $%d OFFSET $%d`, w, len(args)+1, len(args)+2)
+		%s ORDER BY latest DESC NULLS LAST LIMIT %s OFFSET %s`, w, db.parameter(len(args)+1), db.parameter(len(args)+2))
 	}
 
 	qArgs := make([]interface{}, len(args))
@@ -788,38 +801,38 @@ func (db *DB) buildPacketWhere(q PacketQuery) ([]string, []interface{}) {
 	var args []interface{}
 
 	if q.Type != nil {
-		where = append(where, fmt.Sprintf("payload_type = $%d", len(args)+1))
+		where = append(where, fmt.Sprintf("payload_type = %s", db.parameter(len(args)+1)))
 		args = append(args, *q.Type)
 	}
 	if q.Route != nil {
-		where = append(where, fmt.Sprintf("route_type = $%d", len(args)+1))
+		where = append(where, fmt.Sprintf("route_type = %s", db.parameter(len(args)+1)))
 		args = append(args, *q.Route)
 	}
 	if q.Observer != "" {
-		where = append(where, fmt.Sprintf("observer_id = $%d", len(args)+1))
+		where = append(where, fmt.Sprintf("observer_id = %s", db.parameter(len(args)+1)))
 		args = append(args, q.Observer)
 	}
 	if q.Hash != "" {
-		where = append(where, fmt.Sprintf("hash = $%d", len(args)+1))
+		where = append(where, fmt.Sprintf("hash = %s", db.parameter(len(args)+1)))
 		args = append(args, strings.ToLower(q.Hash))
 	}
 	if q.Since != "" {
-		where = append(where, fmt.Sprintf("timestamp > $%d", len(args)+1))
+		where = append(where, fmt.Sprintf("timestamp > %s", db.parameter(len(args)+1)))
 		args = append(args, q.Since)
 	}
 	if q.Until != "" {
-		where = append(where, fmt.Sprintf("timestamp < $%d", len(args)+1))
+		where = append(where, fmt.Sprintf("timestamp < %s", db.parameter(len(args)+1)))
 		args = append(args, q.Until)
 	}
 	if q.Region != "" {
-		where = append(where, fmt.Sprintf("observer_id IN (SELECT id FROM observers WHERE iata = $%d)", len(args)+1))
+		where = append(where, fmt.Sprintf("observer_id IN (SELECT id FROM observers WHERE iata = %s)", db.parameter(len(args)+1)))
 		args = append(args, q.Region)
 	}
 	if q.Node != "" {
 		pk := db.resolveNodePubkey(q.Node)
 		// #1143: exact-match on the dedicated from_pubkey column instead of
 		// LIKE-on-JSON substring (adversarial spoof + same-name false positives).
-		where = append(where, fmt.Sprintf("from_pubkey = $%d", len(args)+1))
+		where = append(where, fmt.Sprintf("from_pubkey = %s", db.parameter(len(args)+1)))
 		args = append(args, pk)
 	}
 	return where, args
@@ -832,15 +845,15 @@ func (db *DB) buildTransmissionWhere(q PacketQuery) ([]string, []interface{}) {
 	var args []interface{}
 
 	if q.Type != nil {
-		where = append(where, fmt.Sprintf("t.payload_type = $%d", len(args)+1))
+		where = append(where, fmt.Sprintf("t.payload_type = %s", db.parameter(len(args)+1)))
 		args = append(args, *q.Type)
 	}
 	if q.Route != nil {
-		where = append(where, fmt.Sprintf("t.route_type = $%d", len(args)+1))
+		where = append(where, fmt.Sprintf("t.route_type = %s", db.parameter(len(args)+1)))
 		args = append(args, *q.Route)
 	}
 	if q.Hash != "" {
-		where = append(where, fmt.Sprintf("t.hash = $%d", len(args)+1))
+		where = append(where, fmt.Sprintf("t.hash = %s", db.parameter(len(args)+1)))
 		args = append(args, strings.ToLower(q.Hash))
 	}
 	if q.Since != "" {
@@ -849,36 +862,36 @@ func (db *DB) buildTransmissionWhere(q PacketQuery) ([]string, []interface{}) {
 		// but which have observations inside the window) are still included.
 		// Non-RFC3339 falls back to t.first_seen string compare.
 		if ts, err := time.Parse(time.RFC3339Nano, q.Since); err == nil {
-			where = append(where, fmt.Sprintf("t.id IN (SELECT DISTINCT transmission_id FROM observations WHERE timestamp >= $%d)", len(args)+1))
+			where = append(where, fmt.Sprintf("t.id IN (SELECT DISTINCT transmission_id FROM observations WHERE timestamp >= %s)", db.parameter(len(args)+1)))
 			args = append(args, ts.Unix())
 		} else {
-			where = append(where, fmt.Sprintf("t.first_seen > $%d", len(args)+1))
+			where = append(where, fmt.Sprintf("t.first_seen > %s", db.parameter(len(args)+1)))
 			args = append(args, q.Since)
 		}
 	}
 	if q.Until != "" {
 		if ts, err := time.Parse(time.RFC3339Nano, q.Until); err == nil {
-			where = append(where, fmt.Sprintf("t.id IN (SELECT DISTINCT transmission_id FROM observations WHERE timestamp <= $%d)", len(args)+1))
+			where = append(where, fmt.Sprintf("t.id IN (SELECT DISTINCT transmission_id FROM observations WHERE timestamp <= %s)", db.parameter(len(args)+1)))
 			args = append(args, ts.Unix())
 		} else {
-			where = append(where, fmt.Sprintf("t.first_seen < $%d", len(args)+1))
+			where = append(where, fmt.Sprintf("t.first_seen < %s", db.parameter(len(args)+1)))
 			args = append(args, q.Until)
 		}
 	}
 	if q.Node != "" {
 		pk := db.resolveNodePubkey(q.Node)
 		// #1143: exact-match on dedicated from_pubkey column.
-		where = append(where, fmt.Sprintf("t.from_pubkey = $%d", len(args)+1))
+		where = append(where, fmt.Sprintf("t.from_pubkey = %s", db.parameter(len(args)+1)))
 		args = append(args, pk)
 	}
 	if q.Channel != "" {
 		// channel_hash column is indexed for payload_type = 5; filter is exact match.
-		where = append(where, fmt.Sprintf("t.channel_hash = $%d", len(args)+1))
+		where = append(where, fmt.Sprintf("t.channel_hash = %s", db.parameter(len(args)+1)))
 		args = append(args, q.Channel)
 	}
 	if q.Observer != "" {
 		ids := strings.Split(q.Observer, ",")
-		placeholders := sqlPlaceholders(len(ids), len(args)+1)
+		placeholders := db.sqlPlaceholders(len(ids), len(args)+1)
 		if db.isV3 {
 			where = append(where, "EXISTS (SELECT 1 FROM observations oi JOIN observers obi ON obi.rowid = oi.observer_idx WHERE oi.transmission_id = t.id AND obi.id IN ("+placeholders+"))")
 		} else {
@@ -890,9 +903,9 @@ func (db *DB) buildTransmissionWhere(q PacketQuery) ([]string, []interface{}) {
 	}
 	if q.Region != "" {
 		if db.isV3 {
-			where = append(where, fmt.Sprintf("EXISTS (SELECT 1 FROM observations oi JOIN observers obi ON obi.rowid = oi.observer_idx WHERE oi.transmission_id = t.id AND obi.iata = $%d)", len(args)+1))
+			where = append(where, fmt.Sprintf("EXISTS (SELECT 1 FROM observations oi JOIN observers obi ON obi.rowid = oi.observer_idx WHERE oi.transmission_id = t.id AND obi.iata = %s)", db.parameter(len(args)+1)))
 		} else {
-			where = append(where, fmt.Sprintf("EXISTS (SELECT 1 FROM observations oi JOIN observers obi ON obi.id = oi.observer_id WHERE oi.transmission_id = t.id AND obi.iata = $%d)", len(args)+1))
+			where = append(where, fmt.Sprintf("EXISTS (SELECT 1 FROM observations oi JOIN observers obi ON obi.id = oi.observer_id WHERE oi.transmission_id = t.id AND obi.iata = %s)", db.parameter(len(args)+1)))
 		}
 		args = append(args, q.Region)
 	}
@@ -901,7 +914,7 @@ func (db *DB) buildTransmissionWhere(q PacketQuery) ([]string, []interface{}) {
 
 func (db *DB) resolveNodePubkey(nodeIDOrName string) string {
 	var pk string
-	err := db.stmtQueryRow(db.stmtNodeLookup, "SELECT public_key FROM nodes WHERE public_key = $1 OR name = $2 LIMIT 1", nodeIDOrName, nodeIDOrName).Scan(&pk)
+	err := db.stmtQueryRow(db.stmtNodeLookup, "SELECT public_key FROM nodes WHERE public_key = "+db.parameter(1)+" OR name = "+db.parameter(2)+" LIMIT 1", nodeIDOrName, nodeIDOrName).Scan(&pk)
 	if err != nil {
 		return nodeIDOrName
 	}
@@ -911,7 +924,7 @@ func (db *DB) resolveNodePubkey(nodeIDOrName string) string {
 // GetTransmissionByID fetches from transmissions table with observer data.
 func (db *DB) GetTransmissionByID(id int) (map[string]interface{}, error) {
 	selectCols, observerJoin := db.transmissionBaseSQL()
-	querySQL := fmt.Sprintf("SELECT %s FROM transmissions t %s WHERE t.id = $1", selectCols, observerJoin)
+	querySQL := fmt.Sprintf("SELECT %s FROM transmissions t %s WHERE t.id = "+db.parameter(1), selectCols, observerJoin)
 
 	rows, err := db.conn.Query(querySQL, id)
 	if err != nil {
@@ -927,7 +940,7 @@ func (db *DB) GetTransmissionByID(id int) (map[string]interface{}, error) {
 // GetPacketByHash fetches a transmission by content hash with observer data.
 func (db *DB) GetPacketByHash(hash string) (map[string]interface{}, error) {
 	selectCols, observerJoin := db.transmissionBaseSQL()
-	querySQL := fmt.Sprintf("SELECT %s FROM transmissions t %s WHERE t.hash = $1", selectCols, observerJoin)
+	querySQL := fmt.Sprintf("SELECT %s FROM transmissions t %s WHERE t.hash = "+db.parameter(1), selectCols, observerJoin)
 
 	rows, err := db.conn.Query(querySQL, strings.ToLower(hash))
 	if err != nil {
@@ -945,7 +958,7 @@ func (db *DB) GetPacketByHash(hash string) (map[string]interface{}, error) {
 // when the in-memory PacketStore has pruned the entry but the DB still has it.
 func (db *DB) GetObservationsForHash(hash string) []map[string]interface{} {
 	var txID int
-	err := db.stmtQueryRow(db.stmtTxByHash, "SELECT id FROM transmissions WHERE hash = $1", strings.ToLower(hash)).Scan(&txID)
+	err := db.stmtQueryRow(db.stmtTxByHash, "SELECT id FROM transmissions WHERE hash = "+db.parameter(1), strings.ToLower(hash)).Scan(&txID)
 	if err != nil {
 		return nil
 	}
@@ -975,13 +988,13 @@ func (db *DB) ObservationRawHexForHash(hash string) map[int]string {
 		return nil
 	}
 	var txID int
-	if err := db.stmtQueryRow(db.stmtTxByHash, "SELECT id FROM transmissions WHERE hash = $1",
+	if err := db.stmtQueryRow(db.stmtTxByHash, "SELECT id FROM transmissions WHERE hash = "+db.parameter(1),
 		strings.ToLower(hash)).Scan(&txID); err != nil {
 		return nil
 	}
 	rows, err := db.conn.Query(
 		`SELECT id, raw_hex FROM observations
-		 WHERE transmission_id = $1 AND raw_hex IS NOT NULL AND raw_hex <> ''`, txID)
+		 WHERE transmission_id = `+db.parameter(1)+` AND raw_hex IS NOT NULL AND raw_hex <> ''`, txID)
 	if err != nil {
 		return nil
 	}
@@ -1030,15 +1043,15 @@ func (db *DB) GetNodes(nq NodeQuery) ([]map[string]interface{}, int, map[string]
 	var args []interface{}
 
 	if role != "" {
-		where = append(where, fmt.Sprintf("role = $%d", len(args)+1))
+		where = append(where, fmt.Sprintf("role = %s", db.parameter(len(args)+1)))
 		args = append(args, role)
 	}
 	if search != "" {
-		where = append(where, fmt.Sprintf("name ILIKE $%d ESCAPE ''", len(args)+1))
+		where = append(where, fmt.Sprintf(db.nativeSQL("name LIKE %s", "name ILIKE %s ESCAPE ''"), db.parameter(len(args)+1)))
 		args = append(args, "%"+search+"%")
 	}
 	if before != "" {
-		where = append(where, fmt.Sprintf("first_seen <= $%d", len(args)+1))
+		where = append(where, fmt.Sprintf("first_seen <= %s", db.parameter(len(args)+1)))
 		args = append(args, before)
 	}
 	if lastHeard != "" {
@@ -1048,7 +1061,7 @@ func (db *DB) GetNodes(nq NodeQuery) ([]map[string]interface{}, int, map[string]
 		}
 		if ms, ok := durations[lastHeard]; ok {
 			since := time.Now().Add(-time.Duration(ms) * time.Millisecond).Format(time.RFC3339)
-			where = append(where, fmt.Sprintf("last_seen > $%d", len(args)+1))
+			where = append(where, fmt.Sprintf("last_seen > %s", db.parameter(len(args)+1)))
 			args = append(args, since)
 		}
 	}
@@ -1059,7 +1072,7 @@ func (db *DB) GetNodes(nq NodeQuery) ([]map[string]interface{}, int, map[string]
 			placeholders := make([]string, len(codes))
 			regionArgs := make([]interface{}, len(codes))
 			for i, c := range codes {
-				placeholders[i] = fmt.Sprintf("$%d", len(args)+i+1)
+				placeholders[i] = fmt.Sprintf("%s", db.parameter(len(args)+i+1))
 				regionArgs[i] = c
 			}
 			joinCond := "obs.rowid = o.observer_idx"
@@ -1092,7 +1105,7 @@ func (db *DB) GetNodes(nq NodeQuery) ([]map[string]interface{}, int, map[string]
 			if err != nil {
 				return nil, 0, nil, err
 			}
-			where = append(where, fmt.Sprintf("public_key IN (SELECT value FROM json_array_elements_text($%d::json))", len(args)+1))
+			where = append(where, fmt.Sprintf(db.nativeSQL("public_key IN (SELECT value FROM json_each(%s))", "public_key IN (SELECT value FROM json_array_elements_text(%s::json))"), db.parameter(len(args)+1)))
 			args = append(args, string(keysJSON))
 		}
 	}
@@ -1117,7 +1130,7 @@ func (db *DB) GetNodes(nq NodeQuery) ([]map[string]interface{}, int, map[string]
 	var total int
 	db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM nodes %s", w), args...).Scan(&total)
 
-	querySQL := fmt.Sprintf("SELECT %s FROM nodes %s ORDER BY %s LIMIT $%d OFFSET $%d", db.nodeSelectCols(), w, order, len(args)+1, len(args)+2)
+	querySQL := fmt.Sprintf("SELECT %s FROM nodes %s ORDER BY %s LIMIT %s OFFSET %s", db.nodeSelectCols(), w, order, db.parameter(len(args)+1), db.parameter(len(args)+2))
 	qArgs := append(args, limit, offset)
 
 	rows, err := db.conn.Query(querySQL, qArgs...)
@@ -1143,7 +1156,7 @@ func (db *DB) SearchNodes(query string, limit int) ([]map[string]interface{}, er
 	if limit <= 0 {
 		limit = 10
 	}
-	rows, err := db.conn.Query(fmt.Sprintf("SELECT %s FROM nodes WHERE name ILIKE $1 ESCAPE '' OR public_key ILIKE $2 ESCAPE '' ORDER BY last_seen DESC NULLS LAST LIMIT $3", db.nodeSelectCols()),
+	rows, err := db.conn.Query(fmt.Sprintf(db.nativeSQL("SELECT %s FROM nodes WHERE name LIKE ?1 OR public_key LIKE ?2 ORDER BY last_seen DESC NULLS LAST LIMIT ?3", "SELECT %s FROM nodes WHERE name ILIKE "+db.parameter(1)+" ESCAPE '' OR public_key ILIKE "+db.parameter(2)+" ESCAPE '' ORDER BY last_seen DESC NULLS LAST LIMIT "+db.parameter(3)), db.nodeSelectCols()),
 		"%"+query+"%", query+"%", limit)
 	if err != nil {
 		return nil, err
@@ -1181,7 +1194,7 @@ func (db *DB) GetNodeByPrefix(prefix string) (map[string]interface{}, bool, erro
 		}
 	}
 	rows, err := db.conn.Query(
-		fmt.Sprintf("SELECT %s FROM nodes WHERE public_key ILIKE $1 ESCAPE '' LIMIT 2", db.nodeSelectCols()),
+		fmt.Sprintf(db.nativeSQL("SELECT %s FROM nodes WHERE public_key LIKE ?1 LIMIT 2", "SELECT %s FROM nodes WHERE public_key ILIKE "+db.parameter(1)+" ESCAPE '' LIMIT 2"), db.nodeSelectCols()),
 		prefix+"%",
 	)
 	if err != nil {
@@ -1210,7 +1223,7 @@ func (db *DB) GetNodeByPrefix(prefix string) (map[string]interface{}, bool, erro
 
 // GetNodeByPubkey returns a single node.
 func (db *DB) GetNodeByPubkey(pubkey string) (map[string]interface{}, error) {
-	rows, err := db.conn.Query(fmt.Sprintf("SELECT %s FROM nodes WHERE public_key = $1", db.nodeSelectCols()), pubkey)
+	rows, err := db.conn.Query(fmt.Sprintf("SELECT %s FROM nodes WHERE public_key = "+db.parameter(1), db.nodeSelectCols()), pubkey)
 	if err != nil {
 		return nil, err
 	}
@@ -1237,7 +1250,7 @@ func (db *DB) GetRecentTransmissionsForNode(pubkey string, limit int) ([]map[str
 	// #1345: order by ingest id, not first_seen (=rxTime). Buffered observer
 	// uploads with old rxTime would otherwise displace fresh activity from
 	// the "recent transmissions for node" list.
-	querySQL := fmt.Sprintf("SELECT %s FROM transmissions t %s WHERE t.from_pubkey = $1 ORDER BY t.id DESC LIMIT $2",
+	querySQL := fmt.Sprintf("SELECT %s FROM transmissions t %s WHERE t.from_pubkey = "+db.parameter(1)+" ORDER BY t.id DESC LIMIT "+db.parameter(2),
 		selectCols, observerJoin)
 	args := []interface{}{pubkey, limit}
 
@@ -1302,18 +1315,23 @@ func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]
 	placeholders := make([]string, len(txIDs))
 	args := make([]interface{}, len(txIDs))
 	for i, id := range txIDs {
-		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		placeholders[i] = fmt.Sprintf("%s", db.parameter(i+1))
 		args[i] = id
 	}
 
 	var querySQL string
 	if db.isV3 {
-		querySQL = fmt.Sprintf(`SELECT o.transmission_id, o.id, obs.id AS observer_id, obs.name AS observer_name, COALESCE(obs.iata, '') AS observer_iata,
+		querySQL = fmt.Sprintf(db.nativeSQL(`SELECT o.transmission_id, o.id, obs.id AS observer_id, obs.name AS observer_name, COALESCE(obs.iata, '') AS observer_iata,
+			o.direction, o.snr, o.rssi, o.path_json, strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', o.timestamp, 'unixepoch') AS obs_timestamp
+			FROM observations o
+			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
+			WHERE o.transmission_id IN (%s)
+			ORDER BY o.timestamp DESC`, `SELECT o.transmission_id, o.id, obs.id AS observer_id, obs.name AS observer_name, COALESCE(obs.iata, '') AS observer_iata,
 			o.direction, o.snr, o.rssi, o.path_json, to_char(to_timestamp(o.timestamp) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS obs_timestamp
 			FROM observations o
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
 			WHERE o.transmission_id IN (%s)
-			ORDER BY o.timestamp DESC`, strings.Join(placeholders, ","))
+			ORDER BY o.timestamp DESC`), strings.Join(placeholders, ","))
 	} else {
 		querySQL = fmt.Sprintf(`SELECT o.transmission_id, o.id, o.observer_id, o.observer_name, COALESCE(obs.iata, '') AS observer_iata,
 			o.direction, o.snr, o.rssi, o.path_json, o.timestamp AS obs_timestamp
@@ -1371,10 +1389,10 @@ func (db *DB) GetObservers() ([]Observer, error) {
 	// and the server returns CanRelay=nil so the UI shows no badge.
 	canRelayClause := "COALESCE(can_relay, 1)"
 	canRelaySeenClause := "0"
-	if hasCol, _ := dbschema.TableHasColumn(db.conn, "observers", "can_relay"); !hasCol {
+	if hasCol, _ := db.tableHasColumn("observers", "can_relay"); !hasCol {
 		canRelayClause = "1"
 	}
-	if hasCol, _ := dbschema.TableHasColumn(db.conn, "observers", "can_relay_seen"); hasCol {
+	if hasCol, _ := db.tableHasColumn("observers", "can_relay_seen"); hasCol {
 		canRelaySeenClause = "COALESCE(can_relay_seen, 0)"
 	}
 	rows, err := db.conn.Query(`SELECT id, name, iata, last_seen, first_seen, packet_count,
@@ -1434,7 +1452,7 @@ func (db *DB) GetObservers() ([]Observer, error) {
 func (db *DB) GetNonRelayObserverPubkeys() ([]string, error) {
 	// Graceful no-op when can_relay column is absent (legacy DB / older
 	// test fixture). Avoids noisy schema-degradation log spam.
-	if hasCol, _ := dbschema.TableHasColumn(db.conn, "observers", "can_relay"); !hasCol {
+	if hasCol, _ := db.tableHasColumn("observers", "can_relay"); !hasCol {
 		return nil, nil
 	}
 	rows, err := db.conn.Query(`SELECT LOWER(id) FROM observers
@@ -1460,7 +1478,7 @@ func (db *DB) GetNonRelayObserverPubkeys() ([]string, error) {
 // this to render tri-state — observers NOT in this set are "unknown"
 // and the UI shows no badge.
 func (db *DB) GetCanRelaySeenObserverPubkeys() ([]string, error) {
-	if hasCol, _ := dbschema.TableHasColumn(db.conn, "observers", "can_relay_seen"); !hasCol {
+	if hasCol, _ := db.tableHasColumn("observers", "can_relay_seen"); !hasCol {
 		return nil, nil
 	}
 	rows, err := db.conn.Query(`SELECT LOWER(id) FROM observers
@@ -1489,17 +1507,17 @@ func (db *DB) GetObserverByID(id string) (*Observer, error) {
 	var canRelay, canRelaySeen int
 	canRelayClause := "COALESCE(can_relay, 1)"
 	canRelaySeenClause := "0"
-	if hasCol, _ := dbschema.TableHasColumn(db.conn, "observers", "can_relay"); !hasCol {
+	if hasCol, _ := db.tableHasColumn("observers", "can_relay"); !hasCol {
 		canRelayClause = "1"
 	}
-	if hasCol, _ := dbschema.TableHasColumn(db.conn, "observers", "can_relay_seen"); hasCol {
+	if hasCol, _ := db.tableHasColumn("observers", "can_relay_seen"); hasCol {
 		canRelaySeenClause = "COALESCE(can_relay_seen, 0)"
 	}
 	err := db.conn.QueryRow(`SELECT id, name, iata, last_seen, first_seen, packet_count,
 		model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, last_packet_at,
 		clock_skew_seconds, clock_skew_count_24h, clock_last_naive_at,
 		`+canRelayClause+`, `+canRelaySeenClause+`
-		FROM observers WHERE id = $1`, id).
+		FROM observers WHERE id = `+db.parameter(1), id).
 		Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount,
 			&o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor, &o.LastPacketAt,
 			&clockSkewSec, &clockSkewCount, &o.ClockLastNaiveAt, &canRelay, &canRelaySeen)
@@ -1539,7 +1557,7 @@ func (db *DB) GetObserverIdsForRegion(regionParam string) ([]string, error) {
 	placeholders := make([]string, len(codes))
 	args := make([]interface{}, len(codes))
 	for i, c := range codes {
-		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		placeholders[i] = fmt.Sprintf("%s", db.parameter(i+1))
 		args[i] = c
 	}
 	rows, err := db.conn.Query(fmt.Sprintf("SELECT id FROM observers WHERE UPPER(TRIM(iata)) IN (%s)", strings.Join(placeholders, ",")), args...)
@@ -1658,22 +1676,35 @@ func (db *DB) GetNetworkStatus(healthThresholds HealthThresholds) (map[string]in
 func (db *DB) GetTraces(hash string) ([]map[string]interface{}, error) {
 	var querySQL string
 	if db.isV3 {
-		querySQL = `SELECT obs.id AS observer_id, obs.name AS observer_name,
+		querySQL = db.nativeSQL(`SELECT obs.id AS observer_id, obs.name AS observer_name,
+			strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch') AS timestamp,
+			o.snr, o.rssi, o.path_json
+			FROM observations o
+			JOIN transmissions t ON t.id = o.transmission_id
+			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
+			WHERE t.hash = ?1
+			ORDER BY o.timestamp ASC`, `SELECT obs.id AS observer_id, obs.name AS observer_name,
 			to_char(to_timestamp(o.timestamp) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS timestamp,
 			o.snr, o.rssi, o.path_json
 			FROM observations o
 			JOIN transmissions t ON t.id = o.transmission_id
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
-			WHERE t.hash = $1
-			ORDER BY o.timestamp ASC`
+			WHERE t.hash = `+db.parameter(1)+`
+			ORDER BY o.timestamp ASC`)
 	} else {
-		querySQL = `SELECT o.observer_id, o.observer_name,
+		querySQL = db.nativeSQL(`SELECT o.observer_id, o.observer_name,
+			strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch') AS timestamp,
+			o.snr, o.rssi, o.path_json
+			FROM observations o
+			JOIN transmissions t ON t.id = o.transmission_id
+			WHERE t.hash = ?1
+			ORDER BY o.timestamp ASC`, `SELECT o.observer_id, o.observer_name,
 			to_char(to_timestamp(o.timestamp) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS timestamp,
 			o.snr, o.rssi, o.path_json
 			FROM observations o
 			JOIN transmissions t ON t.id = o.transmission_id
-			WHERE t.hash = $1
-			ORDER BY o.timestamp ASC`
+			WHERE t.hash = `+db.parameter(1)+`
+			ORDER BY o.timestamp ASC`)
 	}
 	rows, err := db.conn.Query(querySQL, strings.ToLower(hash))
 	if err != nil {
@@ -1775,7 +1806,7 @@ func (db *DB) GetChannels(region ...string) ([]map[string]interface{}, error) {
 		if len(regionCodes) > 0 {
 			placeholders := make([]string, len(regionCodes))
 			for i, code := range regionCodes {
-				placeholders[i] = fmt.Sprintf("$%d", i+1)
+				placeholders[i] = fmt.Sprintf("%s", db.parameter(i+1))
 				args = append(args, code)
 			}
 			regionPlaceholder := strings.Join(placeholders, ",")
@@ -1924,7 +1955,7 @@ func (db *DB) GetEncryptedChannels(region ...string) ([]map[string]interface{}, 
 		if len(regionCodes) > 0 {
 			placeholders := make([]string, len(regionCodes))
 			for i, code := range regionCodes {
-				placeholders[i] = fmt.Sprintf("$%d", i+1)
+				placeholders[i] = fmt.Sprintf("%s", db.parameter(i+1))
 				args = append(args, code)
 			}
 			regionPlaceholder := strings.Join(placeholders, ",")
@@ -2061,7 +2092,7 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 	if len(regionCodes) > 0 {
 		placeholders := make([]string, len(regionCodes))
 		for i, code := range regionCodes {
-			placeholders[i] = fmt.Sprintf("$%d", i+2)
+			placeholders[i] = fmt.Sprintf("%s", db.parameter(i+2))
 			regionArgs = append(regionArgs, code)
 		}
 		regionPlaceholders = strings.Join(placeholders, ",")
@@ -2088,7 +2119,7 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 
 	// 1) Total count (after region filter, before pagination).
 	countSQL := `SELECT COUNT(*) FROM transmissions t
-		WHERE t.channel_hash = $1 AND t.payload_type = 5` + regionFilter
+		WHERE t.channel_hash = ` + db.parameter(1) + ` AND t.payload_type = 5` + regionFilter
 	countArgs := []interface{}{channelHash}
 	countArgs = append(countArgs, regionArgs...)
 	var total int
@@ -2118,16 +2149,16 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 	pageSQL := `SELECT t.id,
 		COALESCE((SELECT MAX(timestamp) FROM observations WHERE transmission_id = t.id), 0) AS latest_obs_epoch
 		FROM transmissions t
-		WHERE t.channel_hash = $1 AND t.payload_type = 5
+		WHERE t.channel_hash = ` + db.parameter(1) + ` AND t.payload_type = 5
 		ORDER BY latest_obs_epoch DESC NULLS LAST, t.id DESC
-		LIMIT ` + fmt.Sprintf("$%d OFFSET $%d", len(regionArgs)+2, len(regionArgs)+3)
+		LIMIT ` + fmt.Sprintf("%s OFFSET %s", db.parameter(len(regionArgs)+2), db.parameter(len(regionArgs)+3))
 	if len(regionCodes) > 0 {
 		pageSQL = `SELECT t.id,
 			COALESCE((SELECT MAX(timestamp) FROM observations WHERE transmission_id = t.id), 0) AS latest_obs_epoch
 			FROM transmissions t
-			WHERE t.channel_hash = $1 AND t.payload_type = 5` + regionFilter + `
+			WHERE t.channel_hash = ` + db.parameter(1) + ` AND t.payload_type = 5` + regionFilter + `
 			ORDER BY latest_obs_epoch DESC NULLS LAST, t.id DESC
-			LIMIT ` + fmt.Sprintf("$%d OFFSET $%d", len(regionArgs)+2, len(regionArgs)+3)
+			LIMIT ` + fmt.Sprintf("%s OFFSET %s", db.parameter(len(regionArgs)+2), db.parameter(len(regionArgs)+3))
 	}
 	pageArgs := []interface{}{channelHash}
 	pageArgs = append(pageArgs, regionArgs...)
@@ -2159,7 +2190,7 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 	idPlaceholders := make([]string, len(pageIDs))
 	obsArgs := make([]interface{}, len(pageIDs))
 	for i, id := range pageIDs {
-		idPlaceholders[i] = fmt.Sprintf("$%d", i+1)
+		idPlaceholders[i] = fmt.Sprintf("%s", db.parameter(i+1))
 		obsArgs[i] = id
 	}
 	// #1851: scope_name lives on the transmission row, so appending it as the
@@ -2379,12 +2410,12 @@ func (db *DB) GetObserverPacketCounts(sinceEpoch int64) map[string]int {
 		rows, err = db.conn.Query(`SELECT obs.id, COUNT(*) as cnt
 			FROM observations o
 			JOIN observers obs ON obs.rowid = o.observer_idx
-			WHERE o.timestamp > $1
+			WHERE o.timestamp > `+db.parameter(1)+`
 			GROUP BY obs.id`, sinceEpoch)
 	} else {
 		rows, err = db.conn.Query(`SELECT o.observer_id, COUNT(*) as cnt
 			FROM observations o
-			WHERE o.observer_id IS NOT NULL AND o.timestamp > $1
+			WHERE o.observer_id IS NOT NULL AND o.timestamp > `+db.parameter(1)+`
 			GROUP BY o.observer_id`, sinceEpoch)
 	}
 	if err != nil {
@@ -2432,7 +2463,7 @@ func (db *DB) GetNodeLocationsByKeys(keys []string) map[string]map[string]interf
 	placeholders := make([]string, len(keys))
 	args := make([]interface{}, len(keys))
 	for i, k := range keys {
-		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		placeholders[i] = fmt.Sprintf("%s", db.parameter(i+1))
 		args[i] = strings.ToLower(k)
 	}
 	// #1481 P0-3: drop LOWER(public_key) — that wrap is non-sargable and
@@ -2478,17 +2509,17 @@ func (db *DB) QueryMultiNodePackets(pubkeys []string, limit, offset int, order, 
 	for _, pk := range pubkeys {
 		resolved := db.resolveNodePubkey(pk)
 		args = append(args, resolved)
-		placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
+		placeholders = append(placeholders, fmt.Sprintf("%s", db.parameter(len(args))))
 	}
 	pkWhere := "t.from_pubkey IN (" + strings.Join(placeholders, ",") + ")"
 
 	var timeFilters []string
 	if since != "" {
-		timeFilters = append(timeFilters, fmt.Sprintf("t.first_seen >= $%d", len(args)+1))
+		timeFilters = append(timeFilters, fmt.Sprintf("t.first_seen >= %s", db.parameter(len(args)+1)))
 		args = append(args, since)
 	}
 	if until != "" {
-		timeFilters = append(timeFilters, fmt.Sprintf("t.first_seen <= $%d", len(args)+1))
+		timeFilters = append(timeFilters, fmt.Sprintf("t.first_seen <= %s", db.parameter(len(args)+1)))
 		args = append(args, until)
 	}
 
@@ -2502,8 +2533,8 @@ func (db *DB) QueryMultiNodePackets(pubkeys []string, limit, offset int, order, 
 
 	selectCols, observerJoin := db.transmissionBaseSQL()
 	// #1345: order by ingest id (see QueryPackets comment above).
-	querySQL := fmt.Sprintf("SELECT %s FROM transmissions t %s %s ORDER BY t.id %s LIMIT $%d OFFSET $%d",
-		selectCols, observerJoin, w, order, len(args)+1, len(args)+2)
+	querySQL := fmt.Sprintf("SELECT %s FROM transmissions t %s %s ORDER BY t.id %s LIMIT %s OFFSET %s",
+		selectCols, observerJoin, w, order, db.parameter(len(args)+1), db.parameter(len(args)+2))
 
 	qArgs := make([]interface{}, len(args))
 	copy(qArgs, args)
@@ -2714,31 +2745,41 @@ func (db *DB) GetObserverMetrics(observerID, since, until, resolution string, sa
 		// Use LAST value per bucket (latest timestamp) instead of MAX to preserve
 		// reboot semantics: if a device reboots mid-bucket, the last sample is the
 		// post-reboot baseline, not the pre-reboot high-water mark.
-		query = `SELECT ts, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv FROM (
+		query = db.nativeSQL(`SELECT ts, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv FROM (
+			SELECT
+				strftime('%Y-%m-%dT%H:00:00Z', timestamp) as ts,
+				noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv,
+				ROW_NUMBER() OVER (PARTITION BY observer_id, strftime('%Y-%m-%dT%H:00:00Z', timestamp) ORDER BY timestamp DESC) as rn
+			FROM observer_metrics WHERE observer_id = ?1`, `SELECT ts, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv FROM (
 			SELECT
 				to_char(timestamp::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:00:00"Z"') as ts,
 				noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv,
 				ROW_NUMBER() OVER (PARTITION BY observer_id, to_char(timestamp::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:00:00"Z"') ORDER BY timestamp DESC) as rn
-			FROM observer_metrics WHERE observer_id = $1`
+			FROM observer_metrics WHERE observer_id = `+db.parameter(1))
 	case "1d":
 		bucketSizeSec = 86400
-		query = `SELECT ts, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv FROM (
+		query = db.nativeSQL(`SELECT ts, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv FROM (
+			SELECT
+				strftime('%Y-%m-%dT00:00:00Z', timestamp) as ts,
+				noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv,
+				ROW_NUMBER() OVER (PARTITION BY observer_id, strftime('%Y-%m-%dT00:00:00Z', timestamp) ORDER BY timestamp DESC) as rn
+			FROM observer_metrics WHERE observer_id = ?1`, `SELECT ts, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv FROM (
 			SELECT
 				to_char(timestamp::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"00:00:00"Z"') as ts,
 				noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv,
 				ROW_NUMBER() OVER (PARTITION BY observer_id, to_char(timestamp::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"00:00:00"Z"') ORDER BY timestamp DESC) as rn
-			FROM observer_metrics WHERE observer_id = $1`
+			FROM observer_metrics WHERE observer_id = `+db.parameter(1))
 	default: // "5m" or raw
 		query = `SELECT timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv
-			FROM observer_metrics WHERE observer_id = $1`
+			FROM observer_metrics WHERE observer_id = ` + db.parameter(1)
 	}
 
 	if since != "" {
-		query += fmt.Sprintf(" AND timestamp >= $%d", len(args)+1)
+		query += fmt.Sprintf(" AND timestamp >= %s", db.parameter(len(args)+1))
 		args = append(args, since)
 	}
 	if until != "" {
-		query += fmt.Sprintf(" AND timestamp <= $%d", len(args)+1)
+		query += fmt.Sprintf(" AND timestamp <= %s", db.parameter(len(args)+1))
 		args = append(args, until)
 	}
 
@@ -2914,7 +2955,7 @@ func (db *DB) GetMetricsSummary(since string) ([]MetricsSummaryRow, error) {
 			SELECT observer_id, noise_floor, battery_mv,
 				ROW_NUMBER() OVER (PARTITION BY observer_id ORDER BY timestamp DESC) as rn
 			FROM observer_metrics
-			WHERE timestamp >= $1
+			WHERE timestamp >= ` + db.parameter(1) + `
 		)
 		SELECT m.observer_id, o.name, COALESCE(o.iata, '') as iata,
 			r.noise_floor as current_nf,
@@ -2925,7 +2966,7 @@ func (db *DB) GetMetricsSummary(since string) ([]MetricsSummaryRow, error) {
 		FROM observer_metrics m
 		LEFT JOIN observers o ON o.id = m.observer_id
 		LEFT JOIN ranked r ON r.observer_id = m.observer_id AND r.rn = 1
-		WHERE m.timestamp >= $2
+		WHERE m.timestamp >= ` + db.parameter(2) + `
 		GROUP BY m.observer_id, o.name, o.iata, r.noise_floor, r.battery_mv
 		ORDER BY max_nf DESC NULLS LAST
 	`
@@ -2950,7 +2991,7 @@ func (db *DB) GetMetricsSummary(since string) ([]MetricsSummaryRow, error) {
 	// Fetch sparkline data (noise_floor series) for all observers in one query
 	if len(result) > 0 {
 		sparkQuery := `SELECT observer_id, noise_floor FROM observer_metrics
-			WHERE timestamp >= $1 ORDER BY observer_id, timestamp ASC`
+			WHERE timestamp >= ` + db.parameter(1) + ` ORDER BY observer_id, timestamp ASC`
 		sparkRows, err := db.conn.Query(sparkQuery, since)
 		if err != nil {
 			return nil, err
@@ -2992,17 +3033,17 @@ func (db *DB) GetDroppedPackets(limit int, observerID, nodePubkey string) ([]map
 	var conditions []string
 	var args []interface{}
 	if observerID != "" {
-		conditions = append(conditions, fmt.Sprintf("observer_id = $%d", len(args)+1))
+		conditions = append(conditions, fmt.Sprintf("observer_id = %s", db.parameter(len(args)+1)))
 		args = append(args, observerID)
 	}
 	if nodePubkey != "" {
-		conditions = append(conditions, fmt.Sprintf("node_pubkey = $%d", len(args)+1))
+		conditions = append(conditions, fmt.Sprintf("node_pubkey = %s", db.parameter(len(args)+1)))
 		args = append(args, nodePubkey)
 	}
 	if len(conditions) > 0 {
 		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
-	query += fmt.Sprintf(" ORDER BY dropped_at DESC NULLS LAST LIMIT $%d", len(args)+1)
+	query += fmt.Sprintf(" ORDER BY dropped_at DESC NULLS LAST LIMIT %s", db.parameter(len(args)+1))
 	args = append(args, limit)
 
 	rows, err := db.conn.Query(query, args...)
@@ -3100,16 +3141,16 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 	case "1h":
 		since = time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
 		// 5-minute buckets
-		bucketExpr = `to_char(date_bin('5 minutes', (CASE WHEN pg_input_is_valid(first_seen, 'timestamp with time zone') THEN first_seen::timestamptz END), '2000-01-01T00:00:00Z'::timestamptz) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`
+		bucketExpr = db.nativeSQL(`strftime('%Y-%m-%dT%H:', first_seen) || printf('%02d', (CAST(strftime('%M', first_seen) AS INTEGER) / 5) * 5) || ':00Z'`, `to_char(date_bin('5 minutes', (CASE WHEN pg_input_is_valid(first_seen, 'timestamp with time zone') THEN first_seen::timestamptz END), '2000-01-01T00:00:00Z'::timestamptz) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`)
 	case "7d":
 		since = time.Now().Add(-7 * 24 * time.Hour).UTC().Format(time.RFC3339)
 		// 6-hour buckets
-		bucketExpr = `to_char(date_bin('6 hours', (CASE WHEN pg_input_is_valid(first_seen, 'timestamp with time zone') THEN first_seen::timestamptz END), '2000-01-01T00:00:00Z'::timestamptz) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`
+		bucketExpr = db.nativeSQL(`strftime('%Y-%m-%dT', first_seen) || printf('%02d', (CAST(strftime('%H', first_seen) AS INTEGER) / 6) * 6) || ':00:00Z'`, `to_char(date_bin('6 hours', (CASE WHEN pg_input_is_valid(first_seen, 'timestamp with time zone') THEN first_seen::timestamptz END), '2000-01-01T00:00:00Z'::timestamptz) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`)
 	default: // "24h"
 		window = "24h"
 		since = time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
 		// 1-hour buckets
-		bucketExpr = `to_char((CASE WHEN pg_input_is_valid(first_seen, 'timestamp with time zone') THEN first_seen::timestamptz END) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:00:00"Z"')`
+		bucketExpr = db.nativeSQL(`strftime('%Y-%m-%dT%H:00:00Z', first_seen)`, `to_char((CASE WHEN pg_input_is_valid(first_seen, 'timestamp with time zone') THEN first_seen::timestamptz END) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:00:00"Z"')`)
 	}
 
 	resp := &ScopeStatsResponse{Window: window}
@@ -3122,7 +3163,7 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 			COALESCE(SUM(CASE WHEN scope_name IS NULL THEN 1 ELSE 0 END), 0) AS unscoped,
 			COALESCE(SUM(CASE WHEN scope_name = '' THEN 1 ELSE 0 END), 0) AS unknown_scope
 		FROM transmissions
-		WHERE `+routeTypeTransportSQL+` AND first_seen >= $1
+		WHERE `+routeTypeTransportSQL+` AND first_seen >= `+db.parameter(1)+`
 	`, since)
 	if err := row.Scan(
 		&resp.Summary.TransportTotal,
@@ -3140,7 +3181,7 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 	var nonTransportUnscoped int
 	if err := db.conn.QueryRow(`
 		SELECT COUNT(*) FROM transmissions
-		WHERE `+routeTypeNonTransportSQL+` AND first_seen >= $1
+		WHERE `+routeTypeNonTransportSQL+` AND first_seen >= `+db.parameter(1)+`
 	`, since).Scan(&nonTransportUnscoped); err != nil {
 		return nil, fmt.Errorf("scope non-transport count query: %w", err)
 	}
@@ -3150,7 +3191,7 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 	rows, err := db.conn.Query(`
 		SELECT scope_name, COUNT(*) AS cnt
 		FROM transmissions
-		WHERE `+routeTypeTransportSQL+` AND scope_name IS NOT NULL AND scope_name != '' AND first_seen >= $1
+		WHERE `+routeTypeTransportSQL+` AND scope_name IS NOT NULL AND scope_name != '' AND first_seen >= `+db.parameter(1)+`
 		GROUP BY scope_name
 		ORDER BY cnt DESC NULLS LAST
 	`, since)
@@ -3177,7 +3218,7 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 			COUNT(scope_name) AS scoped,
 			SUM(CASE WHEN scope_name IS NULL THEN 1 ELSE 0 END) AS unscoped
 		FROM transmissions
-		WHERE `+routeTypeTransportSQL+` AND first_seen >= $1
+		WHERE `+routeTypeTransportSQL+` AND first_seen >= `+db.parameter(1)+`
 		GROUP BY bucket
 		ORDER BY bucket
 	`, bucketExpr)
@@ -3212,7 +3253,7 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 			SUM(CASE WHEN t.scope_name != '' THEN 1 ELSE 0 END) AS named
 		FROM transmissions t
 		LEFT JOIN nodes n ON n.public_key = t.from_pubkey
-		WHERE +t.payload_type = $1 AND t.route_type IN (0, 1) AND t.first_seen >= $2
+		WHERE +t.payload_type = `+db.parameter(1)+` AND t.route_type IN (0, 1) AND t.first_seen >= `+db.parameter(2)+`
 		GROUP BY 1
 		ORDER BY COUNT(*) DESC NULLS LAST, 1
 	`, payloadTypeAdvert, since)

@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
-	"github.com/jackc/pgx/v5"
 )
 
 // coverageRow is one raw reception read from client_receptions.
@@ -261,14 +260,14 @@ func prefixOrEmpty(s string, n int) string {
 
 // sqlPlaceholders builds native PostgreSQL positional parameters for an IN-list.
 // The optional first index supports lists following other bound predicates.
-func sqlPlaceholders(n int, first ...int) string {
+func (db *DB) sqlPlaceholders(n int, first ...int) string {
 	start := 1
 	if len(first) > 0 {
 		start = first[0]
 	}
 	parts := make([]string, n)
 	for i := range parts {
-		parts[i] = fmt.Sprintf("$%d", start+i)
+		parts[i] = fmt.Sprintf("%s", db.parameter(start+i))
 	}
 	return strings.Join(parts, ",")
 }
@@ -289,8 +288,8 @@ func (s *Server) queryCoverageRows(pubkey string, b bbox) ([]coverageRow, error)
 	rows, err := s.db.conn.Query(`
 		SELECT lat, lon, snr, rssi, heard_key, rx_at
 		FROM client_receptions
-		WHERE heard_key IN (`+sqlPlaceholders(len(cands))+`)
-		  AND lat BETWEEN `+fmt.Sprintf("$%d AND $%d AND lon BETWEEN $%d AND $%d", len(cands)+1, len(cands)+2, len(cands)+3, len(cands)+4), append([]any{pgx.QueryExecModeExec}, args...)...)
+		WHERE heard_key IN (`+s.db.sqlPlaceholders(len(cands))+`)
+		  AND lat BETWEEN `+fmt.Sprintf("%s AND %s AND lon BETWEEN %s AND %s", s.db.parameter(len(cands)+1), s.db.parameter(len(cands)+2), s.db.parameter(len(cands)+3), s.db.parameter(len(cands)+4)), s.db.planWithValues(args)...)
 	if err != nil {
 		return nil, err
 	}
@@ -311,7 +310,7 @@ func (s *Server) mobileRxStats(pubkey string) (count, clients int) {
 	}
 	s.db.conn.QueryRow(`
 		SELECT COUNT(*), COUNT(DISTINCT rx_pubkey) FROM client_receptions
-		WHERE heard_key IN (`+sqlPlaceholders(len(cands))+`)`, args...).Scan(&count, &clients)
+		WHERE heard_key IN (`+s.db.sqlPlaceholders(len(cands))+`)`, args...).Scan(&count, &clients)
 	return count, clients
 }
 

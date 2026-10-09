@@ -7,15 +7,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/meshcore-analyzer/pgutil/pgtest"
 )
 
 func TestOperatorCustomSourcePathsAndOptionalAccounts(t *testing.T) {
 	for _, existingAccounts := range []bool{false, true} {
 		t.Run(map[bool]string{false: "no previous accounts", true: "preserve existing accounts"}[existingAccounts], func(t *testing.T) {
-			t.Setenv("CORESCOPE_DATABASE_URL", pgtest.NewDatabase(t))
-			accounts := pgtest.NewDatabase(t)
+			t.Setenv("CORESCOPE_DATABASE_URL", postgresDatabase(t))
+			accounts := postgresDatabase(t)
 			t.Setenv("CORESCOPE_USERS_DATABASE_URL", accounts)
 			dir := filepath.Join(t.TempDir(), "custom state and sources")
 			if err := os.Mkdir(dir, 0o700); err != nil {

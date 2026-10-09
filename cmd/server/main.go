@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/meshcore-analyzer/dbschema"
+	"github.com/meshcore-analyzer/dbconfig"
 )
 
 // Set via -ldflags at build time
@@ -88,6 +88,7 @@ func main() {
 		configDir   string
 		port        int
 		legacyDB    string
+		backend     string
 		databaseURL string
 		stateDir    string
 		publicDir   string
@@ -96,7 +97,8 @@ func main() {
 
 	flag.StringVar(&configDir, "config-dir", ".", "Directory containing config.json")
 	flag.IntVar(&port, "port", 0, "HTTP port (overrides config)")
-	flag.StringVar(&legacyDB, "db", "", "Removed: import SQLite and use -database-url")
+	flag.StringVar(&legacyDB, "db", "", "SQLite telemetry path (bootstrap override)")
+	flag.StringVar(&backend, "backend", "", "Storage backend: sqlite or postgres (bootstrap choice)")
 	flag.StringVar(&databaseURL, "database-url", "", "PostgreSQL telemetry reader URL (overrides config/env)")
 	flag.StringVar(&stateDir, "state-dir", "", "Local directory for queues and sidecars")
 	flag.StringVar(&publicDir, "public", "public", "Directory to serve static files from")
@@ -106,7 +108,7 @@ func main() {
 	// Load config
 	cfg, err := LoadConfig(configDir)
 	if err != nil {
-		log.Printf("[config] warning: %v (using defaults)", err)
+		log.Fatalf("[config] %v", err)
 	}
 
 	// CLI flags override config
@@ -116,9 +118,7 @@ func main() {
 	if cfg.Port == 0 {
 		cfg.Port = 3000
 	}
-	if legacyDB != "" {
-		log.Fatal("[config] -db is no longer supported; import SQLite and use -database-url")
-	}
+
 	if cfg.APIKey == "" {
 		log.Printf("[security] WARNING: no apiKey configured — write endpoints are BLOCKED (set apiKey in config.json to enable them)")
 	} else if IsWeakAPIKey(cfg.APIKey) {
@@ -160,19 +160,18 @@ func main() {
 		warnIfMemlimitUnderprovisioned(limit)
 	}
 
-	// Resolve connection separately from local state. Never log a database URL.
-	resolvedDB, err := cfg.ResolveDatabaseURL()
-	if databaseURL != "" && cfg.DBPath == "" && os.Getenv("DB_PATH") == "" {
-		resolvedDB, err = databaseURL, nil
-	}
+	rawStorage, err := cfg.storageInputs(configDir, storageFlags{Backend: dbconfig.Backend(backend), DBPath: legacyDB, DatabaseURL: databaseURL, StateDir: stateDir}, os.Getenv)
 	if err != nil {
 		log.Fatalf("[config] %v", err)
 	}
-	runtimeStateDir = cfg.ResolveStateDir(configDir)
-	if stateDir != "" {
-		runtimeStateDir = stateDir
+	storage, selectionLease, err := resolveRuntimeStorage(rawStorage)
+	if err != nil {
+		log.Fatalf("[storage] %v", err)
 	}
-	log.Printf("[config] port=%d database=postgresql public=%s", cfg.Port, publicDir)
+	defer selectionLease.Close()
+	runtimeStateDir = storage.StateDir
+	log.Printf("[config] port=%d database=%s public=%s", cfg.Port, storage.Backend, publicDir)
+
 	if len(cfg.NodeBlacklist) > 0 {
 		log.Printf("[config] nodeBlacklist: %d node(s) will be hidden from API", len(cfg.NodeBlacklist))
 		for _, pk := range cfg.NodeBlacklist {
@@ -183,9 +182,9 @@ func main() {
 	}
 
 	// Open database
-	database, err := OpenDB(resolvedDB)
+	database, err := OpenStorage(storage)
 	if err != nil {
-		log.Fatalf("[db] failed to open PostgreSQL: %v", err)
+		log.Fatalf("[db] failed to open selected database: %v", err)
 	}
 	database.stateDir = runtimeStateDir
 	var dbCloseOnce sync.Once
@@ -211,8 +210,8 @@ func main() {
 	// (#1287). The server NEVER migrates — it only reads. If a required
 	// column/index/table is missing, the operator must restart the
 	// ingestor (which owns dbschema.Apply) before this server can start.
-	if err := dbschema.AssertReady(database.conn); err != nil {
-		log.Fatalf("[db] schema not ready (run the PostgreSQL migration/bootstrap command first): %v", err)
+	if err := database.AssertReady(); err != nil {
+		log.Fatalf("[db] schema not ready (run the selected backend setup/writer first): %v", err)
 	}
 
 	// In-memory packet store
@@ -375,7 +374,7 @@ func main() {
 	srv.store = store
 	// Optional user management (off by default). Fails startup on a bad
 	// config rather than running with registration that cannot work.
-	if err := srv.initUserManagement(resolvedDB); err != nil {
+	if err := srv.initUserManagementStorage(storage); err != nil {
 		log.Fatalf("[users] %v", err)
 	}
 	router := mux.NewRouter()

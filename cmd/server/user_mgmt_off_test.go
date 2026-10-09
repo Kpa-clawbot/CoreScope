@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/gorilla/mux"
-	"github.com/meshcore-analyzer/pgutil/pgtest"
 )
 
 func TestUserManagementOffIsUnchanged(t *testing.T) {
@@ -84,10 +83,11 @@ func TestInitUserManagementRefusesMeasurementDB(t *testing.T) {
 }
 
 func TestInitUserManagementRequiresBootstrappedDatabase(t *testing.T) {
+	postgresOnly(t)
 	u := validUM()
-	u.DatabaseURL = pgtest.NewDatabase(t)
+	u.DatabaseURL = testDatabaseDSN(t)
 	srv := &Server{cfg: &Config{UserManagement: u}}
-	if err := srv.initUserManagement(pgtest.NewDatabase(t)); err == nil {
+	if err := srv.initUserManagement(testDatabaseDSN(t)); err == nil {
 		t.Fatal("runtime created missing account schema")
 	}
 	db, err := openFixtureSQL(u.DatabaseURL)
@@ -96,7 +96,7 @@ func TestInitUserManagementRequiresBootstrappedDatabase(t *testing.T) {
 	}
 	defer db.Close()
 	var tables int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public'`).Scan(&tables); err != nil || tables != 0 {
+	if err := db.QueryRow(testNativeSQL(`SELECT COUNT(*) FROM sqlite_master WHERE type='table'`, `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public'`)).Scan(&tables); err != nil || tables != 0 {
 		t.Fatalf("runtime created tables: %d, %v", tables, err)
 	}
 }

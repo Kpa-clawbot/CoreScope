@@ -135,8 +135,8 @@ func TestSettingsSurviveDisable(t *testing.T) {
 // A native account schema at v1 binary gains user_settings and keeps its rows.
 func TestMigrateV1DatabaseToV2(t *testing.T) {
 	st := migratedTestStore(t, 1, `INSERT INTO users (email,display_name,password_hash,created_at) VALUES ('old@example.org','Old','x',1)`)
-	if v, err := st.SchemaVersion(); err != nil || v != len(migrations) {
-		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, len(migrations))
+	if v, err := st.SchemaVersion(); err != nil || v != schemaVersion(t) {
+		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, schemaVersion(t))
 	}
 	u, err := st.GetByEmail("old@example.org")
 	if err != nil {

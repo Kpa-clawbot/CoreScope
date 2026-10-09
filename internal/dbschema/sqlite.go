@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/dbschema/legacy"
 )
 
@@ -24,6 +25,9 @@ func AssertPostgresReady(db *sql.DB) error        { return AssertReady(db) }
 // are checked before historical migrations can perform cleanup. Older v2 or
 // unknown layouts require an explicit supported offline upgrade first.
 func ApplySQLite(db *sql.DB, logf Logger) error {
+	if err := dbconfig.AssertSQLiteImportComplete(db); err != nil {
+		return err
+	}
 	migrated, cols, err := sqliteObserverLayout(db)
 	if err != nil {
 		return err
@@ -65,6 +69,9 @@ func ApplySQLite(db *sql.DB, logf Logger) error {
 	if err := legacy.Apply(db, legacy.Logger(logf)); err != nil {
 		return err
 	}
+	if err := EnsureSQLiteAsyncMigrations(db); err != nil {
+		return err
+	}
 	// The identity migration's corpus/FK scans run once. Ordinary restarts
 	// retain existing schema maintenance without rescanning all observations.
 	if !needsIdentity {
@@ -73,9 +80,26 @@ func ApplySQLite(db *sql.DB, logf Logger) error {
 	return migrateSQLiteObserverIdentity(db)
 }
 
+// EnsureSQLiteAsyncMigrations retains the upstream ingestor's exact ledger
+// layout. Setup and reverse conversion need the complete schema before the
+// ingestor starts; that process also calls this same idempotent entrypoint.
+func EnsureSQLiteAsyncMigrations(db *sql.DB) error {
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS _async_migrations (
+  name TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  started_at TEXT NOT NULL DEFAULT (datetime('now')),
+  ended_at TEXT,
+  error TEXT
+ )`)
+	return err
+}
+
 // AssertSQLiteReady only reads schema metadata. It is safe on a mode=ro handle;
 // it never applies migrations or marks a partially initialized target ready.
 func AssertSQLiteReady(db *sql.DB) error {
+	if err := dbconfig.AssertSQLiteImportComplete(db); err != nil {
+		return err
+	}
 	if err := legacy.AssertReady(db); err != nil {
 		return err
 	}

@@ -129,7 +129,7 @@ func (s *Store) declaredRegionSources() ([]declaredRegionStat, error) {
 	rows.Close()
 
 	var present string
-	if err := s.db.QueryRow(`SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='node_declared_regions'`).Scan(&present); err == nil && present != "" {
+	if err := s.db.QueryRow(s.nativeSQL("SELECT name FROM sqlite_master WHERE type='table' AND name='node_declared_regions'", `SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='node_declared_regions'`)).Scan(&present); err == nil && present != "" {
 		ndr, err := s.db.Query(`
 			WITH ranked AS (
 				SELECT target, observed_at, regions_csv,

@@ -9,7 +9,7 @@ const { spawnSync } = require('child_process');
 const root = path.resolve(__dirname, '../..');
 const source = fs.readFileSync(path.join(root, 'manage.sh'), 'utf8').replace(/\r/g, '');
 const bash = require('../../scripts/bash-path')();
-const functions = ['pg_exec', 'pg_empty', 'pg_dump_file', 'pg_restore_file', 'cmd_backup', 'cmd_restore', 'prepare_staging_db', 'prepare_staging_config', 'write_env_managed_values', 'is_true', 'cmd_start']
+const functions = ['pg_container_exec', 'pg_exec', 'pg_empty', 'pg_dump_file', 'pg_restore_file', 'sqlite_source_exists', 'sqlite_dump_file', 'backup_state', 'stage_backup_state', 'restore_sqlite_bundle', 'cmd_backup', 'cmd_restore', 'prepare_staging_db', 'prepare_staging_config', 'write_env_managed_values', 'is_true', 'cmd_start']
   .map(name => source.match(new RegExp(`^${name}\\(\\)\\s*\\{[\\s\\S]*?^}`, 'm'))?.[0] || '').join('\n');
 const quote = value => "'" + value.replace(/'/g, "'\\''") + "'";
 const posix = value => value.replace(/\\/g, '/');
@@ -33,8 +33,13 @@ for (const endpoint of ['http://127.0.0.1:3000/api/healthz', 'http://127.0.0.1:8
   assert(smoke.includes(endpoint), `packaged smoke does not exercise ${endpoint}`);
 }
 assert(smoke.includes('proxy_health.get("ready") is True'), 'packaged smoke does not validate readiness through Caddy');
+const nilPreparation=smoke.slice(smoke.indexOf('phase=nil-account-adoption'),smoke.indexOf('phase=startup'));
+assert(nilPreparation.includes('-storage-action=adopt')&&nilPreparation.includes('-users-sqlite-path /app/data/uninitialized-users.db'), 'packaged smoke lacks native adoption of telemetry without accounts');
+assert(nilPreparation.includes('bootstrap switch -backend=postgres'),'packaged nil-account fixture bypasses the verified switch');
+const firstAccount=smoke.slice(smoke.indexOf('phase=first-account-setup'),smoke.indexOf('phase=recreation'));
+assert(firstAccount.indexOf('stop corescope')>=0&&firstAccount.indexOf('stop corescope')<firstAccount.indexOf('bootstrap setup -backend=postgres'),'first-account setup must stop the owned writer/selection lease before setup');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'corescope-pg-ops-'));
-function run(command, occupied = '0', failRestore = '0', prodReady = '1') {
+function run(command, occupied = '0', failRestore = '0', prodReady = '1', backend = 'postgres', hasAccounts = 'true', backupAccounts = hasAccounts) {
   const setup = `
 set -e
 PROD_DATA=${quote(posix(path.join(temp, 'state')))}
@@ -42,11 +47,32 @@ STAGING_DATA=${quote(posix(path.join(temp, 'staging')))}
 OCCUPIED=${quote(occupied)}
 FAIL_RESTORE=${quote(failRestore)}
 PROD_READY=${quote(prodReady)}
+BACKEND=${quote(backend)}
+HAS_ACCOUNTS=${quote(hasAccounts)}
+BACKUP_HAS_ACCOUNTS=${quote(backupAccounts)}
 CALLS=${quote(posix(path.join(temp, 'calls')))}
 CORESCOPE_OWNER_PASSWORD='must-not-appear-in-argv'
 log(){ :; }; info(){ :; }; warn(){ :; }; err(){ printf '%s\\n' "$*" >&2; }
 confirm(){ return 0; }; container_running(){ return 1; }
 docker(){ return 0; }; require_database_credentials(){ :; }
+selected_backend(){ printf '%s\\n' "$BACKEND"; }
+require_managed_postgres(){ [ "$BACKEND" = postgres ]; }
+storage_field(){ case "$2" in has_accounts) echo "$HAS_ACCOUNTS";;state) if [ "$1" = staging ]; then echo unrecorded; else echo ready; fi;;backend) echo "$BACKEND";;telemetry.sqlite_path) echo '/app/data/custom telemetry.db';;accounts.sqlite_path) echo '/app/data/users.db';;state_dir) echo '/app/data';;esac; }
+storage_action(){ :; }
+storage_at(){ shift 2; if [ "$1" = field ]; then if [ "$2" = has_accounts ]; then echo "$BACKUP_HAS_ACCOUNTS"; else storage_field prod "$2"; fi; elif [ "$1" = managed-postgres ]; then [ "$BACKEND" = postgres ]; fi; }
+dc_staging_base(){ dc_prod_base "$@"; }
+dc_prod_base(){
+ printf 'base %s\\n' "$*" >> "$CALLS"
+ case "$*" in
+  *'--entrypoint sqlite3'*)
+   case "$*" in *'PRAGMA quick_check'*) printf 'ok\\n'; return;;esac
+   local destination='' previous='' part
+   for part in "$@"; do [ "$previous" != -v ] || destination="\${part%:/backup}"; previous="$part"; done
+   case "$*" in *telemetry.db.partial*) printf 'SQLite format 3\\0native WAL snapshot' >| "$destination/telemetry.db.partial";;*accounts.db.partial*) printf 'SQLite format 3\\0native accounts snapshot' >| "$destination/accounts.db.partial";;esac
+   ;;
+  *) :;;
+ esac
+}
 preflight_validate_prod_ports(){ return 0; }; migrate_config(){ :; }; ensure_config(){ :; }
 database_reply(){
  case "$*" in
@@ -64,6 +90,7 @@ dc_prod(){
  fi
  database_reply "$@"
 }
+dc_postgres(){ local environment="$1"; shift; "dc_$environment" "$@"; }
 dc_staging(){ printf 'staging %s\\n' "$*" >> "$CALLS"; database_reply "$@"; }
 ${functions}
 ${command}
@@ -77,6 +104,38 @@ try {
   fs.writeFileSync(path.join(temp, 'docker/postgres-grants.sql'), 'SELECT 1;');
   fs.writeFileSync(path.join(temp, 'state/meshcore.db'), 'SQLite format 3\0legacy recovery');
   fs.writeFileSync(path.join(temp, 'state/config.json'), '{"siteName":"test"}');
+  const sqliteBackup = path.join(temp, 'sqlite-backup');
+  const sqlite = run(`cmd_backup ${quote(posix(sqliteBackup))}`, '0', '0', '1', 'sqlite');
+  assert.strictEqual(sqlite.status, 0, sqlite.stderr || sqlite.error?.message);
+  for (const name of ['telemetry.db','accounts.db']) assert(fs.existsSync(path.join(sqliteBackup,name)), 'SQLite native snapshot missing: '+name);
+  assert(fs.readFileSync(path.join(sqliteBackup,'telemetry.db')).includes(Buffer.from('native WAL snapshot')), 'backup copied the live main file instead of taking a native snapshot');
+  const sqliteCalls = fs.readFileSync(path.join(temp,'calls'),'utf8');
+  assert(sqliteCalls.includes('--entrypoint sqlite3') && sqliteCalls.includes('-readonly') && sqliteCalls.includes('/app/data/custom telemetry.db'), 'backup ignored the selected path or read-only boundary');
+  assert(!sqliteCalls.includes('pg_dump'), 'SQLite backup contacted PostgreSQL');
+  assert(fs.existsSync(path.join(sqliteBackup,'config.json')), 'SQLite backup omitted configuration');
+  assert(fs.existsSync(path.join(sqliteBackup,'state.tar')), 'SQLite backup omitted persistent selection/queue/state recovery archive');
+  const missingRecorded = run(`
+    storage_field(){ case "$2" in has_accounts) echo true;;state) echo ready;;backend) echo sqlite;;*) printf '%s/missing-recorded.db\\n' "$PROD_DATA";;esac; }
+    sqlite_dump_file(){ :; }
+    dc_prod_base(){ while [ "$1" != -c ]; do shift; done; shift; bash -eu -c "$@"; }
+    cmd_backup ${quote(posix(path.join(temp,'missing-recorded-backup')))}
+  `, '0','0','1','sqlite');
+  assert.notStrictEqual(missingRecorded.status,0,'backup labelled a missing recorded account database as intentionally absent');
+  const badAccounts = path.join(temp,'bad-account-backup');
+  fs.cpSync(sqliteBackup,badAccounts,{recursive:true});
+  fs.unlinkSync(path.join(badAccounts,'accounts.db'));
+  fs.writeFileSync(path.join(badAccounts,'accounts.absent'),'');
+  const badRestore = run(`PROD_DATA=${quote(posix(path.join(temp,'bad-restored-state')))}; cmd_restore ${quote(posix(badAccounts))}`,'0','0','1','sqlite');
+  assert.notStrictEqual(badRestore.status,0,'restore skipped initialized accounts based on an absence marker');
+  const restoredSQLite = path.join(temp,'restored-sqlite');
+  const sqliteRestore = run(`PROD_DATA=${quote(posix(restoredSQLite))}; cmd_restore ${quote(posix(sqliteBackup))}`, '0', '0', '1', 'sqlite');
+  assert.strictEqual(sqliteRestore.status,0,sqliteRestore.stderr || sqliteRestore.error?.message);
+  assert(fs.readFileSync(path.join(restoredSQLite,'custom telemetry.db')).includes(Buffer.from('native WAL snapshot')), 'SQLite restore ignored the recorded target');
+  assert(fs.existsSync(path.join(restoredSQLite,'users.db')), 'SQLite restore lost accounts');
+  assert(fs.existsSync(path.join(restoredSQLite,'config.json')), 'SQLite restore lost persistent state');
+  const repeatedSQLite = run(`PROD_DATA=${quote(posix(restoredSQLite))}; cmd_restore ${quote(posix(sqliteBackup))}`, '0', '0', '1', 'sqlite');
+  assert.notStrictEqual(repeatedSQLite.status,0,'SQLite restore overwrote existing state');
+  fs.writeFileSync(path.join(temp,'calls'),'');
   const backup = path.join(temp, 'backup');
   const made = run(`cmd_backup ${quote(posix(backup))}`);
   assert.strictEqual(made.status, 0, made.stderr || made.error?.message);
@@ -96,8 +155,49 @@ try {
   const calls = fs.readFileSync(path.join(temp, 'calls'), 'utf8');
   assert(calls.includes('pg_restore'), 'native restore was not invoked');
   assert(!calls.includes('must-not-appear-in-argv'), 'database password appeared in command arguments');
+  const nilBackup=path.join(temp,'nil-account-backup');
+  fs.writeFileSync(path.join(temp,'calls'),'');
+  const nilMade=run(`cmd_backup ${quote(posix(nilBackup))}`,'0','0','1','postgres','false');
+  assert.strictEqual(nilMade.status,0,nilMade.stderr||nilMade.error?.message);
+  assert(fs.existsSync(path.join(nilBackup,'accounts.absent')),'nullable account target was not recorded as absent');
+  assert(!fs.existsSync(path.join(nilBackup,'accounts.dump')),'backup dumped an unselected account database');
+  assert(!fs.readFileSync(path.join(temp,'calls'),'utf8').includes('corescope_accounts'),'nil-account backup contacted the account database');
+  fs.writeFileSync(path.join(temp,'calls'),'');
+  const nilRestore=run(`cmd_restore ${quote(posix(nilBackup))}`,'0','0','1','postgres','false');
+  assert.strictEqual(nilRestore.status,0,nilRestore.stderr||nilRestore.error?.message);
+  const nilCalls=fs.readFileSync(path.join(temp,'calls'),'utf8');
+  assert(nilCalls.includes('pg_restore'),'telemetry-only restore did not restore telemetry');
+  assert(!nilCalls.includes('corescope_accounts'),'telemetry-only restore read or wrote the unselected account database');
+  for(const [bundle,selected,recorded] of [[nilBackup,'true','false'],[nilBackup,'false','true'],[backup,'false','true']]){
+    fs.writeFileSync(path.join(temp,'calls'),'');
+    const mismatch=run(`cmd_restore ${quote(posix(bundle))}`,'0','0','1','postgres',selected,recorded);
+    assert.notStrictEqual(mismatch.status,0,'restore accepted account snapshot/selection disagreement');
+    assert(!fs.readFileSync(path.join(temp,'calls'),'utf8').includes('pg_restore'),'mismatched selection reached restore writes');
+  }
+  const legacyBundle=path.join(temp,'legacy-two-dump-backup');
+  fs.cpSync(backup,legacyBundle,{recursive:true});fs.unlinkSync(path.join(legacyBundle,'state.tar'));
+  const legacyBundleRestore=run(`cmd_restore ${quote(posix(legacyBundle))}`);
+  assert.strictEqual(legacyBundleRestore.status,0,'existing two-archive PG backup support regressed: '+legacyBundleRestore.stderr);
+  const absentWithoutSelection=path.join(temp,'absence-without-selection');
+  fs.cpSync(nilBackup,absentWithoutSelection,{recursive:true});fs.unlinkSync(path.join(absentWithoutSelection,'state.tar'));
+  fs.writeFileSync(path.join(temp,'calls'),'');
+  const unprovedAbsence=run(`cmd_restore ${quote(posix(absentWithoutSelection))}`,'0','0','1','postgres','false');
+  assert.notStrictEqual(unprovedAbsence.status,0,'restore trusted a bare absence marker without its retained selection');
+  assert(!fs.readFileSync(path.join(temp,'calls'),'utf8').includes('pg_restore'),'unproved account absence reached restore writes');
+  fs.writeFileSync(path.join(temp,'calls'),'');
+  const unselectedSQL=run('pg_exec prod corescope_accounts psql -c SELECT','0','0','1','postgres','false');
+  assert.notStrictEqual(unselectedSQL.status,0,'generic managed executor contacted an unselected account target');
+  assert(!fs.readFileSync(path.join(temp,'calls'),'utf8').includes('corescope_accounts'),'unselected database reached the container boundary');
   const legacy = run(`cmd_restore ${quote(posix(path.join(temp, 'state/meshcore.db')))}`);
   assert.notStrictEqual(legacy.status, 0, 'SQLite restore accepted without offline import');
+  fs.writeFileSync(path.join(temp, 'calls'), '');
+  const sqliteStage = run('require_managed_postgres(){ :; }; prepare_staging_db', '0', '0', '1', 'sqlite');
+  assert.strictEqual(sqliteStage.status,0,sqliteStage.stderr || sqliteStage.error?.message);
+  assert(fs.existsSync(path.join(temp,'staging/custom telemetry.db')), 'SQLite staging did not clone native telemetry');
+  assert(!fs.existsSync(path.join(temp,'staging/users.db')), 'staging copied production accounts');
+  assert(!fs.readFileSync(path.join(temp,'calls'),'utf8').includes('pg_dump'), 'SQLite staging required PostgreSQL');
+  // The independent PG cases below use another fresh staging directory.
+  fs.renameSync(path.join(temp,'staging'),path.join(temp,'staging-sqlite-retained'));
   fs.writeFileSync(path.join(temp, 'calls'), '');
   const staged = run('prepare_staging_db');
   assert.strictEqual(staged.status, 0, staged.stderr || staged.error?.message);

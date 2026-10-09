@@ -218,7 +218,7 @@ func (s *Server) reachNodeScopes(ctx context.Context, pubkey string) (string, st
 		args[i] = &vals[i]
 	}
 	row := s.db.conn.QueryRowContext(ctx,
-		"SELECT "+strings.Join(cols, ", ")+" FROM nodes WHERE public_key = $1", pubkey)
+		"SELECT "+strings.Join(cols, ", ")+" FROM nodes WHERE public_key = "+s.db.parameter(1), pubkey)
 	if err := row.Scan(args...); err != nil {
 		return "", "", ""
 	}
@@ -736,6 +736,23 @@ func (s *Server) getDegreeSnapshot(ctx context.Context) *degreeSnapshot {
 	return snap
 }
 
+// reachScanSQL builds the windowed reach scan. Arguments are the window
+// start, one LIKE pattern per token, and the hard row limit.
+// SQLite CROSS JOIN keeps the timestamp window as the outer loop (#2155).
+// PostgreSQL retains its ordinary JOIN syntax and native planner.
+func (db *DB) reachScanSQL(nTokens int) string {
+	likes := make([]string, nTokens)
+	for i := range likes {
+		likes[i] = fmt.Sprintf(db.nativeSQL("o.path_json LIKE %s", "o.path_json ILIKE %s ESCAPE ''"), db.parameter(i+2))
+	}
+	return `SELECT LOWER(COALESCE(obs.id,'')), LOWER(COALESCE(t.from_pubkey,'')), COALESCE(t.payload_type,0), o.path_json, o.snr
+	      FROM observations o
+	      ` + db.nativeSQL("CROSS JOIN", "JOIN") + ` transmissions t ON t.id = o.transmission_id
+	      LEFT JOIN observers obs ON obs.rowid = o.observer_idx
+	      WHERE o.timestamp >= ` + db.parameter(1) + ` AND (` + strings.Join(likes, " OR ") + `)
+	      LIMIT ` + db.parameter(nTokens+2)
+}
+
 // scanReachRows reads windowed observations whose path contains any reliable
 // token, with the originator + observer + snr needed for attribution. Observer
 // id and originator pubkey are lowercased in SQL (not per row), the path slice
@@ -750,7 +767,6 @@ func (s *Server) scanReachRows(ctx context.Context, tokens map[string]bool, sinc
 	if len(tokens) == 0 {
 		return nil, nil // defensive: an empty LIKE chain would render `AND ()` (SQL error)
 	}
-	likes := make([]string, 0, len(tokens))
 	args := []interface{}{sinceEpoch}
 	// Sort tokens so the generated SQL text is byte-stable across requests
 	// with the same token set — preserves the driver's prepared-statement
@@ -761,17 +777,10 @@ func (s *Server) scanReachRows(ctx context.Context, tokens map[string]bool, sinc
 	}
 	sort.Strings(toks)
 	for _, tok := range toks {
-		likes = append(likes, fmt.Sprintf("o.path_json ILIKE $%d ESCAPE ''", len(args)+1))
 		args = append(args, "%\""+tok+"\"%")
 	}
-	q := `SELECT LOWER(COALESCE(obs.id,'')), LOWER(COALESCE(t.from_pubkey,'')), COALESCE(t.payload_type,0), o.path_json, o.snr
-	      FROM observations o
-	      JOIN transmissions t ON t.id = o.transmission_id
-	      LEFT JOIN observers obs ON obs.rowid = o.observer_idx
-	      WHERE o.timestamp >= $1 AND (` + strings.Join(likes, " OR ") + `)
-	      LIMIT ` + fmt.Sprintf("$%d", len(args)+1)
 	args = append(args, reachScanRowLimit)
-	rows, err := s.db.conn.QueryContext(ctx, q, args...)
+	rows, err := s.db.conn.QueryContext(ctx, s.db.reachScanSQL(len(toks)), args...)
 	if err != nil {
 		log.Printf("[reach] scan query failed: %v", err)
 		return nil, err

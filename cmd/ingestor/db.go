@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/dbschema"
 	"github.com/meshcore-analyzer/packetpath"
 	"github.com/meshcore-analyzer/pgutil"
@@ -65,8 +67,9 @@ func (s *DBStats) SnapshotBackfills() map[string]int64 {
 	return out
 }
 
-// Store wraps the PostgreSQL database for packet ingestion.
+// Store wraps the selected native database for packet ingestion.
 type Store struct {
+	backend  dbconfig.Backend
 	db       *sql.DB
 	path     string // compatibility anchor for local file queues; never a database URL
 	stateDir string
@@ -123,13 +126,51 @@ const relayTouchDebounce = 5 * time.Minute
 // an extra UPDATE, never a missed one.
 const relayTouchedMaxEntries = 50000
 
-// OpenStore connects with a restricted telemetry writer credential.
+// OpenStore preserves native path/URL callers; runtime uses selected Storage.
 func OpenStore(databaseURL string) (*Store, error) { return OpenStoreWithInterval(databaseURL, 300) }
 func OpenStoreWithInterval(databaseURL string, sampleIntervalSec int) (*Store, error) {
-	return OpenStoreWithState(databaseURL, "data", sampleIntervalSec)
+	return OpenStoreWithState(databaseURL, "", sampleIntervalSec)
 }
-func OpenStoreWithState(databaseURL, stateDir string, sampleIntervalSec int) (*Store, error) {
-	db, err := pgutil.Open(databaseURL, false)
+func OpenStoreWithState(target, stateDir string, sampleIntervalSec int) (*Store, error) {
+	storage := dbconfig.Storage{Backend: dbconfig.SQLite, DBPath: target, StateDir: stateDir}
+	if strings.HasPrefix(target, "postgres:") || strings.HasPrefix(target, "postgresql:") {
+		storage = dbconfig.Storage{Backend: dbconfig.Postgres, WriterDatabaseURL: target, StateDir: stateDir}
+	}
+	return openStore(storage, nil, sampleIntervalSec, true)
+}
+func openStoreStorage(storage dbconfig.Storage, cfg *DBConfig, sampleIntervalSec int) (*Store, error) {
+	return openStore(storage, cfg, sampleIntervalSec, false)
+}
+func openStore(storage dbconfig.Storage, cfg *DBConfig, sampleIntervalSec int, create bool) (*Store, error) {
+	var db *sql.DB
+	var err error
+	stateDir := storage.StateDir
+	switch storage.Backend {
+	case dbconfig.SQLite:
+		if storage.DBPath == "" || strings.Contains(storage.DBPath, "://") || strings.HasPrefix(storage.DBPath, "postgres:") || strings.HasPrefix(storage.DBPath, "postgresql:") {
+			return nil, fmt.Errorf("SQLite telemetry requires a filesystem path")
+		}
+		if create {
+			if err = os.MkdirAll(filepath.Dir(storage.DBPath), 0700); err != nil {
+				return nil, err
+			}
+		}
+		var dsn string
+		dsn, err = sqliteTelemetryWriterDSN(storage.DBPath, create)
+		if err == nil {
+			db, err = sql.Open("sqlite3", dsn)
+		}
+		if stateDir == "" {
+			stateDir = filepath.Dir(storage.DBPath)
+		}
+	case dbconfig.Postgres:
+		db, err = pgutil.Open(storage.WriterDatabaseURL, false)
+		if stateDir == "" {
+			stateDir = "data"
+		}
+	default:
+		return nil, fmt.Errorf("telemetry requires an explicitly selected storage backend")
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -141,19 +182,36 @@ func OpenStoreWithState(databaseURL, stateDir string, sampleIntervalSec int) (*S
 	}()
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	var synchronous string
-	if err = db.QueryRow(`SHOW synchronous_commit`).Scan(&synchronous); err != nil {
-		return nil, err
-	}
-	if synchronous != "on" {
-		return nil, fmt.Errorf("telemetry writer requires synchronous_commit=on")
-	}
+	if storage.Backend == dbconfig.SQLite {
+		if !create {
+			if err = validateExistingTelemetry(db); err != nil {
+				return nil, err
+			}
+		}
+		if err = dbschema.ApplySQLite(db, log.Printf); err != nil {
+			return nil, err
+		}
+		if !create {
+			if _, err = db.Exec(`PRAGMA auto_vacuum=INCREMENTAL; PRAGMA journal_mode=WAL`); err != nil {
+				return nil, err
+			}
+		}
 
-	if err = dbschema.AssertReady(db); err != nil {
-		return nil, err
-	}
-	if err = dbschema.AssertWriter(db); err != nil {
-		return nil, err
+	} else {
+		var synchronous string
+		if err = db.QueryRow(`SHOW synchronous_commit`).Scan(&synchronous); err != nil {
+			return nil, err
+		}
+		if synchronous != "on" {
+			return nil, fmt.Errorf("telemetry writer requires synchronous_commit=on")
+		}
+
+		if err = dbschema.AssertReady(db); err != nil {
+			return nil, err
+		}
+		if err = dbschema.AssertWriter(db); err != nil {
+			return nil, err
+		}
 	}
 	if stateDir == "" {
 		stateDir = "data"
@@ -161,12 +219,39 @@ func OpenStoreWithState(databaseURL, stateDir string, sampleIntervalSec int) (*S
 	if err = os.MkdirAll(stateDir, 0700); err != nil {
 		return nil, fmt.Errorf("create state directory: %w", err)
 	}
-	s := &Store{db: db, path: filepath.Join(stateDir, "meshcore"), stateDir: stateDir, sampleIntervalSec: sampleIntervalSec}
+	anchor := filepath.Join(stateDir, "meshcore")
+	if storage.Backend == dbconfig.SQLite {
+		anchor = filepath.Join(stateDir, filepath.Base(storage.DBPath))
+	}
+	s := &Store{db: db, path: anchor, stateDir: stateDir, backend: storage.Backend, sampleIntervalSec: sampleIntervalSec}
 	if err = s.prepareStatements(); err != nil {
 		return nil, fmt.Errorf("prepare writer statements: %w", err)
 	}
 	if err = s.LoadScopeMatchTotals(); err != nil {
 		log.Printf("[regions] restoring scope-match tally: %v", err)
+	}
+
+	if s.Backend() == dbconfig.SQLite {
+		var present int
+		if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='index' AND name='idx_observations_observer_idx_timestamp'`).Scan(&present); err != nil {
+			return nil, err
+		}
+		// Completion metadata must not hide a missing physical index after recovery.
+		if present == 0 {
+			if _, err := db.Exec(`UPDATE _async_migrations SET status='pending_async' WHERE name='obs_observer_ts_idx_v1' AND status='done'`); err != nil {
+				return nil, err
+			}
+		}
+		// PREFLIGHT: async=true reason="upstream composite observation index; keep its potentially large build off the startup goroutine"
+		if err := s.RunAsyncMigration(context.Background(), "obs_observer_ts_idx_v1", func(ctx context.Context, d *sql.DB) error {
+			if err := dbschema.EnsureSQLiteObserverTimeIndex(ctx, d); err != nil {
+				return err
+			}
+			_, err := d.ExecContext(ctx, `INSERT INTO _migrations(name) VALUES('obs_observer_ts_idx_v1') ON CONFLICT DO NOTHING`)
+			return err
+		}); err != nil {
+			return nil, err
+		}
 	}
 	var evidenceStatus string
 	_ = db.QueryRow(`SELECT status FROM _async_migrations WHERE name='advert_route_evidence_v1'`).Scan(&evidenceStatus)
@@ -195,20 +280,20 @@ func (s *Store) prepareStatements() error {
 		return err
 	}
 
-	s.stmtGetTxByHash, err = s.db.Prepare("SELECT id, first_seen FROM transmissions WHERE hash = $1")
+	s.stmtGetTxByHash, err = s.db.Prepare("SELECT id, first_seen FROM transmissions WHERE hash = " + s.parameter(1))
 	if err != nil {
 		return err
 	}
 
 	s.stmtInsertTransmission, err = s.db.Prepare(`
 		INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, channel_hash, scope_name, from_pubkey, last_seen, code1, code2)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id
+		VALUES (` + s.parameter(1) + `, ` + s.parameter(2) + `, ` + s.parameter(3) + `, ` + s.parameter(4) + `, ` + s.parameter(5) + `, ` + s.parameter(6) + `, ` + s.parameter(7) + `, ` + s.parameter(8) + `, ` + s.parameter(9) + `, ` + s.parameter(10) + `, ` + s.parameter(11) + `, ` + s.parameter(12) + `, ` + s.parameter(13) + `) RETURNING id
 	`)
 	if err != nil {
 		return err
 	}
 
-	s.stmtUpdateTxFirstSeen, err = s.db.Prepare("UPDATE transmissions SET first_seen = $1 WHERE id = $2")
+	s.stmtUpdateTxFirstSeen, err = s.db.Prepare("UPDATE transmissions SET first_seen = " + s.parameter(1) + " WHERE id = " + s.parameter(2))
 	if err != nil {
 		return err
 	}
@@ -223,19 +308,19 @@ func (s *Store) prepareStatements() error {
 	// "tx_last_seen_backfill_v1".
 	// PREFLIGHT: async=true reason="prepared-statement row-level UPDATE BY PRIMARY KEY (transmissions.id) — single-row touch per observation, indexed by PK, constant-time at any scale. Not a migration."
 	s.stmtTouchNodeLastSeen, err = s.db.Prepare(
-		"UPDATE nodes SET last_seen = $1 WHERE public_key = $2 AND (last_seen IS NULL OR last_seen < $3)")
+		"UPDATE nodes SET last_seen = " + s.parameter(1) + " WHERE public_key = " + s.parameter(2) + " AND (last_seen IS NULL OR last_seen < " + s.parameter(3) + ")")
 	if err != nil {
 		return fmt.Errorf("preparing touch node last_seen: %w", err)
 	}
 
-	s.stmtBumpTxLastSeen, err = s.db.Prepare("UPDATE transmissions SET last_seen = $1 WHERE id = $2 AND last_seen < $3")
+	s.stmtBumpTxLastSeen, err = s.db.Prepare("UPDATE transmissions SET last_seen = " + s.parameter(1) + " WHERE id = " + s.parameter(2) + " AND last_seen < " + s.parameter(3))
 	if err != nil {
 		return err
 	}
 
 	s.stmtInsertObservation, err = s.db.Prepare(`
 		INSERT INTO observations (transmission_id, observer_idx, direction, snr, rssi, score, path_json, timestamp, raw_hex, resolved_path)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		VALUES (` + s.parameter(1) + `, ` + s.parameter(2) + `, ` + s.parameter(3) + `, ` + s.parameter(4) + `, ` + s.parameter(5) + `, ` + s.parameter(6) + `, ` + s.parameter(7) + `, ` + s.parameter(8) + `, ` + s.parameter(9) + `, ` + s.parameter(10) + `)
 		ON CONFLICT(transmission_id, observer_idx, COALESCE(path_json, '')) DO UPDATE SET
 			snr           = COALESCE(excluded.snr,           observations.snr),
 			rssi          = COALESCE(excluded.rssi,          observations.rssi),
@@ -247,50 +332,76 @@ func (s *Store) prepareStatements() error {
 		return err
 	}
 
-	s.stmtUpsertNode, err = s.db.Prepare(`
+	s.stmtUpsertNode, err = s.db.Prepare(s.nativeSQL(`
 		INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
 		ON CONFLICT(public_key) DO UPDATE SET
-			name = COALESCE($8, nodes.name),
-			role = COALESCE($9, nodes.role),
-			lat = COALESCE($10, nodes.lat),
-			lon = COALESCE($11, nodes.lon),
-			last_seen = GREATEST(LEAST(COALESCE(nodes.last_seen, ''), $12), $13)
-	`)
+			name = COALESCE(?8, nodes.name),
+			role = COALESCE(?9, nodes.role),
+			lat = COALESCE(?10, nodes.lat),
+			lon = COALESCE(?11, nodes.lon),
+			last_seen = MAX(MIN(COALESCE(nodes.last_seen, ''), ?12), ?13)
+	`, `
+		INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen)
+		VALUES (`+s.parameter(1)+`, `+s.parameter(2)+`, `+s.parameter(3)+`, `+s.parameter(4)+`, `+s.parameter(5)+`, `+s.parameter(6)+`, `+s.parameter(7)+`)
+		ON CONFLICT(public_key) DO UPDATE SET
+			name = COALESCE(`+s.parameter(8)+`, nodes.name),
+			role = COALESCE(`+s.parameter(9)+`, nodes.role),
+			lat = COALESCE(`+s.parameter(10)+`, nodes.lat),
+			lon = COALESCE(`+s.parameter(11)+`, nodes.lon),
+			last_seen = GREATEST(LEAST(COALESCE(nodes.last_seen, ''), `+s.parameter(12)+`), `+s.parameter(13)+`)
+	`))
 	if err != nil {
 		return err
 	}
 
 	s.stmtIncrementAdvertCount, err = s.db.Prepare(`
-		UPDATE nodes SET advert_count = advert_count + 1 WHERE public_key = $1
+		UPDATE nodes SET advert_count = advert_count + 1 WHERE public_key = ` + s.parameter(1) + `
 	`)
 	if err != nil {
 		return err
 	}
 
-	s.stmtUpsertObserver, err = s.db.Prepare(`
+	s.stmtUpsertObserver, err = s.db.Prepare(s.nativeSQL(`
 		INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, can_relay, can_relay_seen)
-		VALUES ($1, $2, $3, $4, $5, 1, $6, $7, $8, $9, $10, $11, $12, COALESCE($13, 1), CASE WHEN $14::bigint IS NULL THEN 0 ELSE 1 END)
+		VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, ?8, ?9, ?10, ?11, ?12, COALESCE(?13, 1), CASE WHEN CAST(?14 AS INTEGER) IS NULL THEN 0 ELSE 1 END)
 		ON CONFLICT(id) DO UPDATE SET
-			name = COALESCE($15, observers.name),
-			iata = COALESCE($16, observers.iata),
-			last_seen = GREATEST(LEAST(COALESCE(observers.last_seen, ''), $17), $18),
+			name = COALESCE(?15, observers.name),
+			iata = COALESCE(?16, observers.iata),
+			last_seen = MAX(MIN(COALESCE(observers.last_seen, ''), ?17), ?18),
 			packet_count = observers.packet_count + 1,
-			model = COALESCE($19, observers.model),
-			firmware = COALESCE($20, observers.firmware),
-			client_version = COALESCE($21, observers.client_version),
-			radio = COALESCE($22, observers.radio),
-			battery_mv = COALESCE($23, observers.battery_mv),
-			uptime_secs = COALESCE($24, observers.uptime_secs),
-			noise_floor = COALESCE($25, observers.noise_floor),
-			can_relay = COALESCE($26, observers.can_relay),
-			can_relay_seen = CASE WHEN $27::bigint IS NULL THEN observers.can_relay_seen ELSE 1 END
-	`)
+			model = COALESCE(?19, observers.model),
+			firmware = COALESCE(?20, observers.firmware),
+			client_version = COALESCE(?21, observers.client_version),
+			radio = COALESCE(?22, observers.radio),
+			battery_mv = COALESCE(?23, observers.battery_mv),
+			uptime_secs = COALESCE(?24, observers.uptime_secs),
+			noise_floor = COALESCE(?25, observers.noise_floor),
+			can_relay = COALESCE(?26, observers.can_relay),
+			can_relay_seen = CASE WHEN CAST(?27 AS INTEGER) IS NULL THEN observers.can_relay_seen ELSE 1 END
+	`, `
+		INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, can_relay, can_relay_seen)
+		VALUES (`+s.parameter(1)+`, `+s.parameter(2)+`, `+s.parameter(3)+`, `+s.parameter(4)+`, `+s.parameter(5)+`, 1, `+s.parameter(6)+`, `+s.parameter(7)+`, `+s.parameter(8)+`, `+s.parameter(9)+`, `+s.parameter(10)+`, `+s.parameter(11)+`, `+s.parameter(12)+`, COALESCE(`+s.parameter(13)+`, 1), CASE WHEN `+s.parameter(14)+`::bigint IS NULL THEN 0 ELSE 1 END)
+		ON CONFLICT(id) DO UPDATE SET
+			name = COALESCE(`+s.parameter(15)+`, observers.name),
+			iata = COALESCE(`+s.parameter(16)+`, observers.iata),
+			last_seen = GREATEST(LEAST(COALESCE(observers.last_seen, ''), `+s.parameter(17)+`), `+s.parameter(18)+`),
+			packet_count = observers.packet_count + 1,
+			model = COALESCE(`+s.parameter(19)+`, observers.model),
+			firmware = COALESCE(`+s.parameter(20)+`, observers.firmware),
+			client_version = COALESCE(`+s.parameter(21)+`, observers.client_version),
+			radio = COALESCE(`+s.parameter(22)+`, observers.radio),
+			battery_mv = COALESCE(`+s.parameter(23)+`, observers.battery_mv),
+			uptime_secs = COALESCE(`+s.parameter(24)+`, observers.uptime_secs),
+			noise_floor = COALESCE(`+s.parameter(25)+`, observers.noise_floor),
+			can_relay = COALESCE(`+s.parameter(26)+`, observers.can_relay),
+			can_relay_seen = CASE WHEN `+s.parameter(27)+`::bigint IS NULL THEN observers.can_relay_seen ELSE 1 END
+	`))
 	if err != nil {
 		return err
 	}
 
-	s.stmtGetObserverRowid, err = s.db.Prepare("SELECT rowid FROM observers WHERE id = $1")
+	s.stmtGetObserverRowid, err = s.db.Prepare("SELECT rowid FROM observers WHERE id = " + s.parameter(1))
 	if err != nil {
 		return err
 	}
@@ -298,20 +409,24 @@ func (s *Store) prepareStatements() error {
 	// Args: ingestNow, rxTime, ingestNow, rxTime, rowid
 	// MIN(existing, ingestNow) clamps any future value already in the DB before
 	// taking MAX with rxTime, so the guard never locks in a past bug's stale future.
-	s.stmtUpdateObserverLastSeen, err = s.db.Prepare(`
+	s.stmtUpdateObserverLastSeen, err = s.db.Prepare(s.nativeSQL(`
 		UPDATE observers SET
-			last_seen      = GREATEST(LEAST(COALESCE(last_seen, ''), $1), $2),
-			last_packet_at = GREATEST(LEAST(COALESCE(last_packet_at, ''), $3), $4)
-		WHERE rowid = $5`)
+			last_seen      = MAX(MIN(COALESCE(last_seen, ''), ?1), ?2),
+			last_packet_at = MAX(MIN(COALESCE(last_packet_at, ''), ?3), ?4)
+		WHERE rowid = ?5`, `
+		UPDATE observers SET
+			last_seen      = GREATEST(LEAST(COALESCE(last_seen, ''), `+s.parameter(1)+`), `+s.parameter(2)+`),
+			last_packet_at = GREATEST(LEAST(COALESCE(last_packet_at, ''), `+s.parameter(3)+`), `+s.parameter(4)+`)
+		WHERE rowid = `+s.parameter(5)))
 	if err != nil {
 		return err
 	}
 
 	s.stmtUpdateNodeTelemetry, err = s.db.Prepare(`
 		UPDATE nodes SET
-			battery_mv = COALESCE($1, battery_mv),
-			temperature_c = COALESCE($2, temperature_c)
-		WHERE public_key = $3
+			battery_mv = COALESCE(` + s.parameter(1) + `, battery_mv),
+			temperature_c = COALESCE(` + s.parameter(2) + `, temperature_c)
+		WHERE public_key = ` + s.parameter(3) + `
 	`)
 	if err != nil {
 		return err
@@ -319,7 +434,7 @@ func (s *Store) prepareStatements() error {
 
 	s.stmtUpsertMetrics, err = s.db.Prepare(`
 		INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		VALUES (` + s.parameter(1) + `, ` + s.parameter(2) + `, ` + s.parameter(3) + `, ` + s.parameter(4) + `, ` + s.parameter(5) + `, ` + s.parameter(6) + `, ` + s.parameter(7) + `, ` + s.parameter(8) + `, ` + s.parameter(9) + `)
  ON CONFLICT(observer_id,timestamp) DO UPDATE SET noise_floor=excluded.noise_floor,
  tx_air_secs=excluded.tx_air_secs,rx_air_secs=excluded.rx_air_secs,recv_errors=excluded.recv_errors,
  battery_mv=excluded.battery_mv,packets_sent=excluded.packets_sent,packets_recv=excluded.packets_recv
@@ -345,7 +460,7 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 		writerMu.Unlock()
 		recordWriterTiming("mqtt_handler", wait, time.Since(holdStart), "InsertTransmission")
 	}()
-	tx, err := beginWrite(s.db)
+	tx, err := beginWrite(s.db, s.Backend())
 	if err != nil {
 		return false, err
 	}
@@ -427,15 +542,19 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 
 // beginWrite serializes ID allocation before any statement can consume an
 // identity value. A transaction lock releases only after commit or rollback.
-func beginWrite(db *sql.DB) (*sql.Tx, error) { return beginWriteContext(context.Background(), db) }
-func beginWriteContext(ctx context.Context, db *sql.DB) (*sql.Tx, error) {
+func beginWrite(db *sql.DB, backend ...dbconfig.Backend) (*sql.Tx, error) {
+	return beginWriteContext(context.Background(), db, backend...)
+}
+func beginWriteContext(ctx context.Context, db *sql.DB, backend ...dbconfig.Backend) (*sql.Tx, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended(current_schema(),$1))`, dbschema.WriterLockKey); err != nil {
-		tx.Rollback()
-		return nil, err
+	if len(backend) == 0 || backend[0] == dbconfig.Postgres {
+		if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended(current_schema(),$1))`, dbschema.WriterLockKey); err != nil {
+			tx.Rollback()
+			return nil, err
+		}
 	}
 	return tx, nil
 }
@@ -492,7 +611,7 @@ func (s *Store) MarkNodeForeign(pubKey string) error {
 	if pubKey == "" {
 		return nil
 	}
-	_, err := s.db.Exec(`UPDATE nodes SET foreign_advert = 1 WHERE public_key = $1`, pubKey)
+	_, err := s.db.Exec(`UPDATE nodes SET foreign_advert = 1 WHERE public_key = `+s.parameter(1), pubKey)
 	if err != nil {
 		s.Stats.WriteErrors.Add(1)
 	}
@@ -570,7 +689,7 @@ func (s *Store) UpsertObserverAt(id, name, iata string, meta *ObserverMeta, last
 	s.Stats.ObserverUpserts.Add(1)
 
 	// Reactivate if this observer was previously marked inactive
-	s.db.Exec(`UPDATE observers SET inactive = 0 WHERE id = $1 AND inactive = 1`, id)
+	s.db.Exec(`UPDATE observers SET inactive = 0 WHERE id = `+s.parameter(1)+` AND inactive = 1`, id)
 	return nil
 }
 
@@ -591,20 +710,33 @@ func (s *Store) UpsertObserverRetained(id, name, iata string, meta *ObserverMeta
 	normalizedIATA := strings.TrimSpace(strings.ToUpper(iata))
 	model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor, canRelay := observerMetaColumns(meta)
 
-	_, err := s.db.Exec(`
+	_, err := s.db.Exec(s.nativeSQL(`
 		UPDATE observers SET
-			name = COALESCE($1, name),
-			iata = COALESCE($2, iata),
-			model = COALESCE($3, model),
-			firmware = COALESCE($4, firmware),
-			client_version = COALESCE($5, client_version),
-			radio = COALESCE($6, radio),
-			battery_mv = COALESCE($7, battery_mv),
-			uptime_secs = COALESCE($8, uptime_secs),
-			noise_floor = COALESCE($9, noise_floor),
-			can_relay = COALESCE($10, can_relay),
-			can_relay_seen = CASE WHEN $11::bigint IS NULL THEN can_relay_seen ELSE 1 END
-		WHERE id = $12`,
+			name = COALESCE(?1, name),
+			iata = COALESCE(?2, iata),
+			model = COALESCE(?3, model),
+			firmware = COALESCE(?4, firmware),
+			client_version = COALESCE(?5, client_version),
+			radio = COALESCE(?6, radio),
+			battery_mv = COALESCE(?7, battery_mv),
+			uptime_secs = COALESCE(?8, uptime_secs),
+			noise_floor = COALESCE(?9, noise_floor),
+			can_relay = COALESCE(?10, can_relay),
+			can_relay_seen = CASE WHEN CAST(?11 AS INTEGER) IS NULL THEN can_relay_seen ELSE 1 END
+		WHERE id = ?12`, `
+		UPDATE observers SET
+			name = COALESCE(`+s.parameter(1)+`, name),
+			iata = COALESCE(`+s.parameter(2)+`, iata),
+			model = COALESCE(`+s.parameter(3)+`, model),
+			firmware = COALESCE(`+s.parameter(4)+`, firmware),
+			client_version = COALESCE(`+s.parameter(5)+`, client_version),
+			radio = COALESCE(`+s.parameter(6)+`, radio),
+			battery_mv = COALESCE(`+s.parameter(7)+`, battery_mv),
+			uptime_secs = COALESCE(`+s.parameter(8)+`, uptime_secs),
+			noise_floor = COALESCE(`+s.parameter(9)+`, noise_floor),
+			can_relay = COALESCE(`+s.parameter(10)+`, can_relay),
+			can_relay_seen = CASE WHEN `+s.parameter(11)+`::bigint IS NULL THEN can_relay_seen ELSE 1 END
+		WHERE id = `+s.parameter(12)),
 		name, normalizedIATA, model, firmware, clientVersion, radio,
 		batteryMv, uptimeSecs, noiseFloor, canRelay, canRelay, id,
 	)
@@ -725,7 +857,7 @@ func (s *Store) InsertMetrics(data *MetricsData) error {
 func (s *Store) PruneOldMetrics(retentionDays int) (int64, error) {
 	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays).Format(time.RFC3339)
 	// Tagged for /api/perf writer-lock visibility (#1340).
-	result, err := s.instrumentedExec("prune_metrics", `DELETE FROM observer_metrics WHERE timestamp < $1`, cutoff)
+	result, err := s.instrumentedExec("prune_metrics", `DELETE FROM observer_metrics WHERE timestamp < `+s.parameter(1), cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("prune metrics: %w", err)
 	}
@@ -772,7 +904,7 @@ func (s *Store) BackfillPathJSONAsync() {
 				-- to prevent the infinite re-UPDATE loop fixed in #1119.
 				AND (o.path_json IS NULL OR o.path_json = '')
 				AND t.payload_type != 9
-				LIMIT $1`, batchSize)
+				LIMIT `+s.parameter(1), batchSize)
 			if err != nil {
 				log.Printf("[backfill] path_json query error: %v", err)
 				errored = true
@@ -796,7 +928,7 @@ func (s *Store) BackfillPathJSONAsync() {
 			for _, r := range batch {
 				hops, err := packetpath.DecodePathFromRawHex(r.rawHex)
 				if err != nil || len(hops) == 0 {
-					if _, execErr := s.db.Exec(`UPDATE observations SET path_json = '[]' WHERE id = $1`, r.id); execErr != nil {
+					if _, execErr := s.db.Exec(`UPDATE observations SET path_json = '[]' WHERE id = `+s.parameter(1), r.id); execErr != nil {
 						log.Printf("[backfill] write error (id=%d): %v", r.id, execErr)
 					} else {
 						s.Stats.IncBackfill("path_json")
@@ -804,7 +936,7 @@ func (s *Store) BackfillPathJSONAsync() {
 					continue
 				}
 				b, _ := json.Marshal(hops)
-				if _, execErr := s.db.Exec(`UPDATE observations SET path_json = $1 WHERE id = $2`, string(b), r.id); execErr != nil {
+				if _, execErr := s.db.Exec(`UPDATE observations SET path_json = `+s.parameter(1)+` WHERE id = `+s.parameter(2), string(b), r.id); execErr != nil {
 					log.Printf("[backfill] write error (id=%d): %v", r.id, execErr)
 				} else {
 					updated++
@@ -935,9 +1067,9 @@ func (s *Store) backfillTransportCodes(batchSize int) (int, error) {
 	for {
 		rows, err := s.db.Query(`
 			SELECT id, raw_hex FROM transmissions
-			WHERE id > $1 AND code1 IS NULL AND route_type IN (0, 3)
+			WHERE id > `+s.parameter(1)+` AND code1 IS NULL AND route_type IN (0, 3)
 			ORDER BY id
-			LIMIT $2`, lastID, batchSize)
+			LIMIT `+s.parameter(2), lastID, batchSize)
 		if err != nil {
 			return total, fmt.Errorf("transport_codes select: %w", err)
 		}
@@ -968,11 +1100,11 @@ func (s *Store) backfillTransportCodes(batchSize int) (int, error) {
 		}
 
 		if len(items) > 0 {
-			tx, err := beginWrite(s.db)
+			tx, err := beginWrite(s.db, s.Backend())
 			if err != nil {
 				return total, fmt.Errorf("transport_codes begin: %w", err)
 			}
-			stmt, err := tx.Prepare(`UPDATE transmissions SET code1 = $1, code2 = $2 WHERE id = $3`)
+			stmt, err := tx.Prepare(`UPDATE transmissions SET code1 = ` + s.parameter(1) + `, code2 = ` + s.parameter(2) + ` WHERE id = ` + s.parameter(3))
 			if err != nil {
 				tx.Rollback()
 				return total, fmt.Errorf("transport_codes prepare: %w", err)
@@ -1095,17 +1227,17 @@ func (s *Store) compactRelayTouched(now time.Time) {
 // Returns the number of nodes moved.
 func (s *Store) MoveStaleNodes(nodeDays int) (int64, error) {
 	cutoff := time.Now().UTC().AddDate(0, 0, -nodeDays).Format(time.RFC3339)
-	tx, err := beginWrite(s.db)
+	tx, err := beginWrite(s.db, s.Backend())
 	if err != nil {
 		return 0, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	_, err = tx.Exec(`INSERT INTO inactive_nodes (public_key,name,role,lat,lon,last_seen,first_seen,advert_count,battery_mv,temperature_c,foreign_advert,default_scope,configured_scope,configured_scope_at,multibyte_sup,multibyte_evidence) SELECT public_key,name,role,lat,lon,last_seen,first_seen,advert_count,battery_mv,temperature_c,foreign_advert,default_scope,configured_scope,configured_scope_at,multibyte_sup,multibyte_evidence FROM nodes WHERE last_seen < $1 ON CONFLICT(public_key) DO UPDATE SET name=excluded.name,role=excluded.role,lat=excluded.lat,lon=excluded.lon,last_seen=excluded.last_seen,first_seen=excluded.first_seen,advert_count=excluded.advert_count,battery_mv=excluded.battery_mv,temperature_c=excluded.temperature_c,foreign_advert=excluded.foreign_advert,default_scope=excluded.default_scope,configured_scope=excluded.configured_scope,configured_scope_at=excluded.configured_scope_at,multibyte_sup=excluded.multibyte_sup,multibyte_evidence=excluded.multibyte_evidence`, cutoff)
+	_, err = tx.Exec(`INSERT INTO inactive_nodes (public_key,name,role,lat,lon,last_seen,first_seen,advert_count,battery_mv,temperature_c,foreign_advert,default_scope,configured_scope,configured_scope_at,multibyte_sup,multibyte_evidence) SELECT public_key,name,role,lat,lon,last_seen,first_seen,advert_count,battery_mv,temperature_c,foreign_advert,default_scope,configured_scope,configured_scope_at,multibyte_sup,multibyte_evidence FROM nodes WHERE last_seen < `+s.parameter(1)+` ON CONFLICT(public_key) DO UPDATE SET name=excluded.name,role=excluded.role,lat=excluded.lat,lon=excluded.lon,last_seen=excluded.last_seen,first_seen=excluded.first_seen,advert_count=excluded.advert_count,battery_mv=excluded.battery_mv,temperature_c=excluded.temperature_c,foreign_advert=excluded.foreign_advert,default_scope=excluded.default_scope,configured_scope=excluded.configured_scope,configured_scope_at=excluded.configured_scope_at,multibyte_sup=excluded.multibyte_sup,multibyte_evidence=excluded.multibyte_evidence`, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("insert inactive: %w", err)
 	}
-	result, err := tx.Exec(`DELETE FROM nodes WHERE last_seen < $1`, cutoff)
+	result, err := tx.Exec(`DELETE FROM nodes WHERE last_seen < `+s.parameter(1), cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("delete stale: %w", err)
 	}
@@ -1130,7 +1262,7 @@ func (s *Store) RemoveStaleObservers(observerDays int) (int64, error) {
 	}
 	cutoff := time.Now().UTC().AddDate(0, 0, -observerDays).Format(time.RFC3339)
 	// Tagged for /api/perf writer-lock visibility (#1340).
-	result, err := s.instrumentedExec("prune_observers", `UPDATE observers SET inactive = 1 WHERE last_seen < $1 AND (inactive IS NULL OR inactive = 0)`, cutoff)
+	result, err := s.instrumentedExec("prune_observers", `UPDATE observers SET inactive = 1 WHERE last_seen < `+s.parameter(1)+` AND (inactive IS NULL OR inactive = 0)`, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("mark stale observers inactive: %w", err)
 	}
@@ -1165,7 +1297,7 @@ func (s *Store) PurgeStaleObservers(purgeDays int) (int64, error) {
 	result, err := s.instrumentedExec("purge_observers", `
 		DELETE FROM observers
 		WHERE inactive = 1
-		  AND last_seen < $1
+		  AND last_seen < `+s.parameter(1)+`
 		  AND NOT EXISTS (SELECT 1 FROM observations o WHERE o.observer_idx = observers.rowid)
 		  AND NOT EXISTS (SELECT 1 FROM observer_metrics m WHERE m.observer_id = observers.id)
 		  AND NOT EXISTS (SELECT 1 FROM dropped_packets d WHERE d.observer_id = observers.id)`, cutoff)
@@ -1193,7 +1325,7 @@ type DroppedPacket struct {
 // InsertDroppedPacket records a rejected packet in the dropped_packets table.
 func (s *Store) InsertDroppedPacket(dp *DroppedPacket) error {
 	_, err := s.db.Exec(
-		`INSERT INTO dropped_packets (hash, raw_hex, reason, observer_id, observer_name, node_pubkey, node_name) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		`INSERT INTO dropped_packets (hash, raw_hex, reason, observer_id, observer_name, node_pubkey, node_name) VALUES (`+s.parameter(1)+`, `+s.parameter(2)+`, `+s.parameter(3)+`, `+s.parameter(4)+`, `+s.parameter(5)+`, `+s.parameter(6)+`, `+s.parameter(7)+`)`,
 		dp.Hash, dp.RawHex, dp.Reason, dp.ObserverID, dp.ObserverName, dp.NodePubKey, dp.NodeName,
 	)
 	if err != nil {
@@ -1210,7 +1342,7 @@ func (s *Store) PruneDroppedPackets(retentionDays int) (int64, error) {
 		return 0, nil
 	}
 	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays).Format(time.RFC3339)
-	result, err := s.db.Exec(`DELETE FROM dropped_packets WHERE dropped_at < $1`, cutoff)
+	result, err := s.db.Exec(`DELETE FROM dropped_packets WHERE dropped_at < `+s.parameter(1), cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("prune dropped packets: %w", err)
 	}
@@ -1289,15 +1421,15 @@ func (s *Store) UpdateNodeDefaultScope(pubkey, scope string) error {
 	}
 	// Short-circuit: skip if already stored.
 	var cur sql.NullString
-	row := s.db.QueryRow(`SELECT default_scope FROM nodes WHERE public_key = $1`, pubkey)
+	row := s.db.QueryRow(`SELECT default_scope FROM nodes WHERE public_key = `+s.parameter(1), pubkey)
 	if row.Scan(&cur) == nil && cur.Valid && cur.String == scope {
 		return nil
 	}
-	if _, err := s.db.Exec(`UPDATE nodes SET default_scope = $1 WHERE public_key = $2`, scope, pubkey); err != nil {
+	if _, err := s.db.Exec(`UPDATE nodes SET default_scope = `+s.parameter(1)+` WHERE public_key = `+s.parameter(2), scope, pubkey); err != nil {
 		return err
 	}
 	// Mirror to inactive_nodes (node may be there if recently moved by retention).
-	_, err := s.db.Exec(`UPDATE inactive_nodes SET default_scope = $1 WHERE public_key = $2`, scope, pubkey)
+	_, err := s.db.Exec(`UPDATE inactive_nodes SET default_scope = `+s.parameter(1)+` WHERE public_key = `+s.parameter(2), scope, pubkey)
 	return err
 }
 
@@ -1396,19 +1528,19 @@ func (s *Store) UpdateNodeConfiguredScope(pubkey, scope, reportedAt string) erro
 	// Last-write-wins: skip if the stored confirmation is newer-or-equal.
 	if reportedAt != "" {
 		var curAt sql.NullString
-		row := s.db.QueryRow(`SELECT configured_scope_at FROM nodes WHERE public_key = $1`, pubkey)
+		row := s.db.QueryRow(`SELECT configured_scope_at FROM nodes WHERE public_key = `+s.parameter(1), pubkey)
 		if row.Scan(&curAt) == nil && curAt.Valid && curAt.String != "" && curAt.String >= reportedAt {
 			return nil
 		}
 	}
 	if _, err := s.db.Exec(
-		`UPDATE nodes SET configured_scope = $1, configured_scope_at = $2 WHERE public_key = $3`,
+		`UPDATE nodes SET configured_scope = `+s.parameter(1)+`, configured_scope_at = `+s.parameter(2)+` WHERE public_key = `+s.parameter(3),
 		scope, reportedAt, pubkey); err != nil {
 		return err
 	}
 	// Mirror to inactive_nodes (node may be there if recently moved by retention).
 	_, err := s.db.Exec(
-		`UPDATE inactive_nodes SET configured_scope = $1, configured_scope_at = $2 WHERE public_key = $3`,
+		`UPDATE inactive_nodes SET configured_scope = `+s.parameter(1)+`, configured_scope_at = `+s.parameter(2)+` WHERE public_key = `+s.parameter(3),
 		scope, reportedAt, pubkey)
 	return err
 }
@@ -1433,12 +1565,12 @@ func (s *Store) RecordNaiveSkew(observerID string, deltaSec int64, now time.Time
 	// increments it.
 	_, err := s.db.Exec(`
 		INSERT INTO observers (id, clock_skew_seconds, clock_skew_count_24h, clock_last_naive_at)
-		VALUES ($1, $2, 1, $3)
+		VALUES (`+s.parameter(1)+`, `+s.parameter(2)+`, 1, `+s.parameter(3)+`)
 		ON CONFLICT(id) DO UPDATE SET
 			clock_skew_seconds = excluded.clock_skew_seconds,
 			clock_last_naive_at = excluded.clock_last_naive_at,
 			clock_skew_count_24h = CASE
-				WHEN observers.clock_last_naive_at IS NULL OR observers.clock_last_naive_at < $4
+				WHEN observers.clock_last_naive_at IS NULL OR observers.clock_last_naive_at < `+s.parameter(4)+`
 					THEN 1
 				ELSE COALESCE(observers.clock_skew_count_24h, 0) + 1
 			END
@@ -1796,7 +1928,7 @@ func (s *Store) WriterTx(component string, fn func(*sql.Tx) error) error {
 	writerMu.Lock()
 	wait := time.Since(waitStart)
 	holdStart := time.Now()
-	tx, err := beginWrite(s.db)
+	tx, err := beginWrite(s.db, s.Backend())
 	if err != nil {
 		hold := time.Since(holdStart)
 		writerMu.Unlock()

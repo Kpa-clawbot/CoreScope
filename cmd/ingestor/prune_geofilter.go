@@ -33,7 +33,7 @@ func (s *Store) DeleteNodesByPubkeys(pubkeys []string) (int64, error) {
 		batch := pubkeys[start:end]
 		slots := make([]string, len(batch))
 		for i := range slots {
-			slots[i] = fmt.Sprintf("$%d", i+1)
+			slots[i] = fmt.Sprintf("%s", s.parameter(i+1))
 		}
 		placeholders := strings.Join(slots, ",")
 		args := make([]interface{}, len(batch))

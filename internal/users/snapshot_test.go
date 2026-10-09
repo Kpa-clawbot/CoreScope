@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/pgutil"
-	"github.com/meshcore-analyzer/pgutil/pgtest"
 )
 
 func TestSnapshotCopiesRows(t *testing.T) {
-	st, clk := newTestStoreAt(t, pgtest.NewDatabase(t))
+	st, clk := newTestStoreAt(t, testTarget(t, true))
 	u := mustCreate(t, st, "a@example.org", "Aaa")
 	if err := st.Activate(u.ID, RoleUser, nil); err != nil {
 		t.Fatal(err)
@@ -44,20 +44,23 @@ func TestSnapshotCopiesRows(t *testing.T) {
 	if err := st.Snapshot(path); err != nil {
 		t.Fatal(err)
 	}
-	target := pgtest.NewDatabase(t)
-	env, err := pgutil.CommandEnv(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// --dbname is needed for restore mode; use a credential-free database name.
-	cfg, err := pgutil.ParseConfig(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("pg_restore", "--no-password", "--exit-on-error", "--no-owner", "--no-privileges", "--dbname="+cfg.Database, path)
-	cmd.Env = env
-	if err := cmd.Run(); err != nil {
-		t.Fatal("native account restore failed")
+	target := path
+	if st.backend == dbconfig.Postgres {
+		target = testTarget(t, true)
+		env, err := pgutil.CommandEnv(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// --dbname is needed for restore mode; use a credential-free database name.
+		cfg, err := pgutil.ParseConfig(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("pg_restore", "--no-password", "--exit-on-error", "--no-owner", "--no-privileges", "--dbname="+cfg.Database, path)
+		cmd.Env = env
+		if err := cmd.Run(); err != nil {
+			t.Fatal("native account restore failed")
+		}
 	}
 	cp, err := Open(testRuntimeURL(t, target))
 	if err != nil {
@@ -69,8 +72,8 @@ func TestSnapshotCopiesRows(t *testing.T) {
 	if err != nil || got.ID != u.ID || got.DisplayName != "Aaa" {
 		t.Fatalf("user in snapshot = %+v, %v", got, err)
 	}
-	if v, err := cp.SchemaVersion(); err != nil || v != len(migrations) {
-		t.Fatalf("snapshot schema version = %d, %v; want %d", v, err, len(migrations))
+	if v, err := cp.SchemaVersion(); err != nil || v != schemaVersion(t) {
+		t.Fatalf("snapshot schema version = %d, %v; want %d", v, err, schemaVersion(t))
 	}
 	if e, err := cp.AuditAllFor(u.ID); err != nil || len(e) != 1 {
 		t.Fatalf("audit in snapshot = %d, %v", len(e), err)
@@ -93,7 +96,7 @@ func TestSnapshotFileMode(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix file modes")
 	}
-	st, _ := newTestStoreAt(t, pgtest.NewDatabase(t))
+	st, _ := newTestStoreAt(t, testTarget(t, true))
 	path := filepath.Join(t.TempDir(), "snap.dump")
 	if err := st.Snapshot(path); err != nil {
 		t.Fatal(err)
@@ -108,7 +111,7 @@ func TestSnapshotFileMode(t *testing.T) {
 }
 
 func TestSnapshotRefusesExistingTarget(t *testing.T) {
-	st, _ := newTestStoreAt(t, pgtest.NewDatabase(t))
+	st, _ := newTestStoreAt(t, testTarget(t, true))
 	path := filepath.Join(t.TempDir(), "snap.dump")
 	// Existing empty files must also be preserved.
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
@@ -124,7 +127,7 @@ func TestSnapshotRefusesExistingTarget(t *testing.T) {
 }
 
 func TestSnapshotFailureLeavesNoFile(t *testing.T) {
-	st, _ := newTestStoreAt(t, pgtest.NewDatabase(t))
+	st, _ := newTestStoreAt(t, testTarget(t, true))
 	st.Close()
 	path := filepath.Join(t.TempDir(), "snap.dump")
 	if err := st.Snapshot(path); err == nil {
@@ -136,7 +139,7 @@ func TestSnapshotFailureLeavesNoFile(t *testing.T) {
 }
 
 func TestSnapshotCanceledLeavesNoFile(t *testing.T) {
-	st, _ := newTestStoreAt(t, pgtest.NewDatabase(t))
+	st, _ := newTestStoreAt(t, testTarget(t, true))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	path := filepath.Join(t.TempDir(), "cancel.dump")

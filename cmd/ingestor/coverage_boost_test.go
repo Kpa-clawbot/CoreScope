@@ -1027,7 +1027,7 @@ func TestApplySchemaMigrationsOnFreshDB(t *testing.T) {
 
 	// Check that migrations were recorded
 	var count int
-	if err := store.db.QueryRow("SELECT COUNT(*) FROM corescope_schema WHERE kind='telemetry' AND ready=true").Scan(&count); err != nil {
+	if err := store.db.QueryRow(testNativeSQL(`SELECT COUNT(*) FROM _migrations WHERE name='observers_identity_autoincrement_v1'`, "SELECT COUNT(*) FROM corescope_schema WHERE kind='telemetry' AND ready=true")).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {
@@ -1036,19 +1036,19 @@ func TestApplySchemaMigrationsOnFreshDB(t *testing.T) {
 
 	// Check observations table exists with dedup index
 	var tblName string
-	err := store.db.QueryRow("SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='observations'").Scan(&tblName)
+	err := store.db.QueryRow(testNativeSQL(`SELECT name FROM sqlite_master WHERE type='table' AND name='observations'`, "SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='observations'")).Scan(&tblName)
 	if err != nil {
 		t.Error("observations table should exist")
 	}
 
 	// Check inactive_nodes table exists
-	err = store.db.QueryRow("SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='inactive_nodes'").Scan(&tblName)
+	err = store.db.QueryRow(testNativeSQL(`SELECT name FROM sqlite_master WHERE type='table' AND name='inactive_nodes'`, "SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='inactive_nodes'")).Scan(&tblName)
 	if err != nil {
 		t.Error("inactive_nodes table should exist")
 	}
 
 	// Check packets_v view exists
-	err = store.db.QueryRow("SELECT table_name FROM information_schema.views WHERE table_schema=current_schema() AND table_name='packets_v'").Scan(&tblName)
+	err = store.db.QueryRow(testNativeSQL(`SELECT name FROM sqlite_master WHERE type='view' AND name='packets_v'`, "SELECT table_name FROM information_schema.views WHERE table_schema=current_schema() AND table_name='packets_v'")).Scan(&tblName)
 	if err != nil {
 		t.Error("packets_v view should exist")
 	}

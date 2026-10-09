@@ -43,8 +43,8 @@ func statesByKey(t *testing.T, st *Store) map[NotifyKey]NotifyState {
 // A native account schema at v4 binary gains the notification tables and keeps its rows.
 func TestMigrateV4DatabaseToV5(t *testing.T) {
 	st := migratedTestStore(t, 4, `INSERT INTO users (email,display_name,password_hash,created_at) VALUES ('old@example.org','Old','x',1)`)
-	if v, err := st.SchemaVersion(); err != nil || v != len(migrations) {
-		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, len(migrations))
+	if v, err := st.SchemaVersion(); err != nil || v != schemaVersion(t) {
+		t.Fatalf("SchemaVersion = %d, %v; want %d", v, err, schemaVersion(t))
 	}
 	if len(migrations) < 5 {
 		t.Fatal("migration v5 missing")

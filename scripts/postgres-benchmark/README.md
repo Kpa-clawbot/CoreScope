@@ -97,7 +97,12 @@ python3 scripts/postgres-benchmark/run.py --repo . \
   --output /tmp/corescope-bench-supplemental-50eps
 ```
 
-The baseline is fixed to `9dbc287579a237ffa744dd0c91fa7227d09763ac`. Floating
+The baseline is fixed to `3e21b179ecccae005aa5f6f45bc095353c94b343`, including
+upstream's store-lock and reach-query fixes (#2147, #2155). Earlier reports used `9dbc287`; their results
+are historical and must not be pooled with this comparison. The candidate's
+verified PostgreSQL import is explicitly adopted into its persistent selection
+before either timed startup; selection setup is outside the startup measurement.
+Floating
 revisions and existing output directories are refused. Primary defaults to
 60 seconds of warmup and 180 measured seconds per backend, with 50 offered
 ingest events/second and 20 HTTP requests/second: 12,000 scheduled ingest events

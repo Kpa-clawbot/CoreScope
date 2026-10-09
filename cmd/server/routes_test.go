@@ -552,7 +552,7 @@ func TestPerfEndpoint(t *testing.T) {
 	}
 
 	// Verify sqlite stats
-	sqliteStats, ok := body["postgres"].(map[string]interface{})
+	sqliteStats, ok := body[testNativeSQL("sqlite", "postgres")].(map[string]interface{})
 	if !ok {
 		t.Fatal("expected postgres object in perf response")
 	}
@@ -2030,7 +2030,7 @@ func TestHandlerErrorPaths(t *testing.T) {
 	srv.RegisterRoutes(router)
 
 	t.Run("stats error", func(t *testing.T) {
-		if _, err := db.conn.Exec("DROP TABLE IF EXISTS transmissions CASCADE"); err != nil {
+		if _, err := db.conn.Exec(testNativeSQL("DROP TABLE IF EXISTS transmissions", "DROP TABLE IF EXISTS transmissions CASCADE")); err != nil {
 			t.Fatal(err)
 		}
 		req := httptest.NewRequest("GET", "/api/stats", nil)
@@ -2051,7 +2051,7 @@ func TestHandlerErrorChannels(t *testing.T) {
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
 
-	if _, err := db.conn.Exec("DROP TABLE IF EXISTS transmissions CASCADE"); err != nil {
+	if _, err := db.conn.Exec(testNativeSQL("DROP TABLE IF EXISTS transmissions", "DROP TABLE IF EXISTS transmissions CASCADE")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2149,7 +2149,7 @@ func TestHandlerErrorPackets(t *testing.T) {
 	srv.RegisterRoutes(router)
 
 	// Drop transmissions table to trigger error in transmission-centric query
-	if _, err := db.conn.Exec("DROP TABLE IF EXISTS transmissions CASCADE"); err != nil {
+	if _, err := db.conn.Exec(testNativeSQL("DROP TABLE IF EXISTS transmissions", "DROP TABLE IF EXISTS transmissions CASCADE")); err != nil {
 		t.Fatal(err)
 	}
 

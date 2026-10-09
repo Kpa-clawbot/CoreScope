@@ -109,11 +109,13 @@ func ResolveStorage(in StorageInputs) (Storage, error) {
 			return Storage{}, err
 		}
 		path = in.UsersDBPath
-		if path == "" {
+		if path == "" && in.ExistingBackend == "" {
 			path = filepath.Join(filepath.Dir(out.DBPath), "users.db")
 		}
-		if out.UsersDBPath, err = storagePath(in.BaseDir, path); err != nil {
-			return Storage{}, err
+		if path != "" {
+			if out.UsersDBPath, err = storagePath(in.BaseDir, path); err != nil {
+				return Storage{}, err
+			}
 		}
 		same := out.DBPath == out.UsersDBPath
 		if runtime.GOOS == "windows" {

@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/meshcore-analyzer/pgutil/pgtest"
 	"github.com/meshcore-analyzer/users"
 )
 
@@ -53,7 +52,7 @@ func TestUsersBackupWrittenWhenNoneExists(t *testing.T) {
 	}
 	a.maybeBackup(backupNow)
 	names := snapshotNames(t, dir)
-	if len(names) != 1 || names[0] != usersBackupFile(backupNow) || names[0] != "users-20261008-120000.dump" {
+	if len(names) != 1 || names[0] != testUsersBackupFile(backupNow) || names[0] != testNativeSQL("users-20261008-120000.db", "users-20261008-120000.dump") {
 		t.Fatalf("snapshots = %v", names)
 	}
 	db := restorePostgresTestBackup(t, filepath.Join(dir, names[0]))
@@ -73,7 +72,7 @@ func TestUsersBackupFileMode(t *testing.T) {
 	}
 	a, dir := backupService(t, 7)
 	a.maybeBackup(backupNow)
-	fi, err := os.Stat(filepath.Join(dir, usersBackupFile(backupNow)))
+	fi, err := os.Stat(filepath.Join(dir, testUsersBackupFile(backupNow)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +90,7 @@ func TestUsersBackupFileMode(t *testing.T) {
 
 func TestUsersBackupSkippedWhenFresh(t *testing.T) {
 	a, dir := backupService(t, 7)
-	fresh := usersBackupFile(backupNow.Add(-time.Hour))
+	fresh := testUsersBackupFile(backupNow.Add(-time.Hour))
 	writeBackupFile(t, dir, fresh)
 	a.maybeBackup(backupNow)
 	a.maybeBackup(backupNow.Add(22 * time.Hour))
@@ -102,20 +101,20 @@ func TestUsersBackupSkippedWhenFresh(t *testing.T) {
 
 func TestUsersBackupWrittenWhenStale(t *testing.T) {
 	a, dir := backupService(t, 7)
-	stale := usersBackupFile(backupNow.Add(-25 * time.Hour))
+	stale := testUsersBackupFile(backupNow.Add(-25 * time.Hour))
 	writeBackupFile(t, dir, stale)
 	a.maybeBackup(backupNow)
-	if names := snapshotNames(t, dir); !reflect.DeepEqual(names, []string{stale, usersBackupFile(backupNow)}) {
+	if names := snapshotNames(t, dir); !reflect.DeepEqual(names, []string{stale, testUsersBackupFile(backupNow)}) {
 		t.Fatalf("snapshots = %v", names)
 	}
 }
 
 func TestUsersBackupFutureSnapshotDoesNotBlock(t *testing.T) {
 	a, dir := backupService(t, 7)
-	future := usersBackupFile(backupNow.Add(48 * time.Hour))
+	future := testUsersBackupFile(backupNow.Add(48 * time.Hour))
 	writeBackupFile(t, dir, future)
 	a.maybeBackup(backupNow)
-	want := []string{usersBackupFile(backupNow), future}
+	want := []string{testUsersBackupFile(backupNow), future}
 	if names := snapshotNames(t, dir); !reflect.DeepEqual(names, want) {
 		t.Fatalf("snapshots = %v; want %v", names, want)
 	}
@@ -128,10 +127,10 @@ func TestUsersBackupFutureSnapshotDoesNotBlock(t *testing.T) {
 
 func TestUsersBackupRotationNeverDeletesTheNewSnapshot(t *testing.T) {
 	a, dir := backupService(t, 1)
-	future := usersBackupFile(backupNow.Add(48 * time.Hour))
+	future := testUsersBackupFile(backupNow.Add(48 * time.Hour))
 	writeBackupFile(t, dir, future)
 	a.maybeBackup(backupNow)
-	want := []string{usersBackupFile(backupNow)}
+	want := []string{testUsersBackupFile(backupNow)}
 	if names := snapshotNames(t, dir); !reflect.DeepEqual(names, want) {
 		t.Fatalf("snapshots = %v; want %v", names, want)
 	}
@@ -141,16 +140,16 @@ func TestUsersBackupRotationKeepsNewestAndForeignFiles(t *testing.T) {
 	a, dir := backupService(t, 3)
 	var old []string // oldest first
 	for i := 5; i >= 1; i-- {
-		n := usersBackupFile(backupNow.Add(-time.Duration(i) * 25 * time.Hour))
+		n := testUsersBackupFile(backupNow.Add(-time.Duration(i) * 25 * time.Hour))
 		writeBackupFile(t, dir, n)
 		old = append(old, n)
 	}
-	foreign := []string{"notes.txt", "users-before-upgrade.db", "users.db", usersBackupFile(backupNow.Add(-300*time.Hour)) + ".tmp"}
+	foreign := []string{"notes.txt", "users-before-upgrade.db", "users.db", testUsersBackupFile(backupNow.Add(-300*time.Hour)) + ".tmp"}
 	for _, n := range foreign {
 		writeBackupFile(t, dir, n)
 	}
 	a.maybeBackup(backupNow)
-	want := []string{old[3], old[4], usersBackupFile(backupNow)}
+	want := []string{old[3], old[4], testUsersBackupFile(backupNow)}
 	if names := snapshotNames(t, dir); !reflect.DeepEqual(names, want) {
 		t.Fatalf("after rotation = %v; want %v", names, want)
 	}
@@ -170,21 +169,21 @@ func TestUsersBackupSweepsOldTempFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	orphan := usersBackupFile(backupNow.Add(-30*time.Hour)) + ".tmp"
-	recent := usersBackupFile(backupNow.Add(-time.Hour)) + ".tmp"
+	orphan := testUsersBackupFile(backupNow.Add(-30*time.Hour)) + ".tmp"
+	recent := testUsersBackupFile(backupNow.Add(-time.Hour)) + ".tmp"
 	foreign := []string{"other.db.tmp", "users-20261001-000000.db.tmp.bak", "users-before-upgrade.db.tmp"}
 	for _, n := range append([]string{orphan, recent}, foreign...) {
 		writeBackupFile(t, dir, n)
 		setAge(n, 25*time.Hour)
 	}
 	setAge(recent, time.Hour)
-	dirLike := usersBackupFile(backupNow.Add(-40*time.Hour)) + ".tmp"
+	dirLike := testUsersBackupFile(backupNow.Add(-40*time.Hour)) + ".tmp"
 	if err := os.Mkdir(filepath.Join(dir, dirLike), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	setAge(dirLike, 25*time.Hour)
 	// A fresh snapshot: no new one is due, the sweep still runs.
-	writeBackupFile(t, dir, usersBackupFile(backupNow.Add(-time.Hour)))
+	writeBackupFile(t, dir, testUsersBackupFile(backupNow.Add(-time.Hour)))
 
 	a.maybeBackup(backupNow)
 	if _, err := os.Stat(filepath.Join(dir, orphan)); !os.IsNotExist(err) {
@@ -199,7 +198,7 @@ func TestUsersBackupSweepsOldTempFiles(t *testing.T) {
 
 func TestUsersBackupFailureKeepsOldSnapshots(t *testing.T) {
 	a, dir := backupService(t, 1)
-	stale := usersBackupFile(backupNow.Add(-48 * time.Hour))
+	stale := testUsersBackupFile(backupNow.Add(-48 * time.Hour))
 	writeBackupFile(t, dir, stale)
 	a.st.Close() // every store call fails from here; the fixture's cleanup closes again, which is a no-op
 	a.maybeBackup(backupNow)
@@ -232,7 +231,7 @@ func TestInitUserManagementBacksUpAtStartup(t *testing.T) {
 	u.DatabaseURL = a.set.databaseURL
 	u.Backup = &UsersBackupConfig{Dir: dir}
 	srv := &Server{cfg: &Config{UserManagement: u}}
-	if err := srv.initUserManagement(pgtest.NewDatabase(t)); err != nil {
+	if err := srv.initUserManagement(testDatabaseDSN(t)); err != nil {
 		t.Fatal(err)
 	}
 	srv.closeUserManagement()
@@ -241,7 +240,7 @@ func TestInitUserManagementBacksUpAtStartup(t *testing.T) {
 	}
 }
 
-var usersBackupFilenameRE = regexp.MustCompile(`^attachment; filename="corescope-users-\d{8}-\d{6}\.dump"$`)
+var usersBackupFilenameRE = regexp.MustCompile(`^attachment; filename="corescope-users-\d{8}-\d{6}\.(?:db|dump)"$`)
 
 func TestAdminUsersBackupDownload(t *testing.T) {
 	f := newBackupAuthFixture(t, "boss@example.org")
@@ -266,7 +265,7 @@ func TestAdminUsersBackupDownload(t *testing.T) {
 		t.Errorf("Content-Disposition = %q", cd)
 	}
 	body := w.Body.Bytes()
-	if !bytes.HasPrefix(body, []byte("PGDMP")) {
+	if !bytes.HasPrefix(body, []byte(postgresMagic)) {
 		t.Fatalf("body is not a PostgreSQL custom archive (%d bytes)", len(body))
 	}
 	if cl := w.Header().Get("Content-Length"); cl != strconv.Itoa(len(body)) {
@@ -293,3 +292,5 @@ func TestAdminUsersBackupDownload(t *testing.T) {
 		t.Fatalf("user.backup row = %+v", e)
 	}
 }
+
+func testUsersBackupFile(stamp time.Time) string { return usersBackupFile(stamp, testBackendValue()) }

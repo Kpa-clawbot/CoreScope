@@ -67,7 +67,7 @@ func TestLogStartupRedactsDatabaseURL(t *testing.T) {
 	log.SetOutput(&buf)
 	defer log.SetOutput(prev)
 	a.logStartup()
-	if !strings.Contains(buf.String(), "PostgreSQL") || strings.Contains(buf.String(), "secret") || strings.Contains(buf.String(), "hidden") {
+	if !strings.Contains(buf.String(), string(a.st.Backend())) || strings.Contains(buf.String(), "secret") || strings.Contains(buf.String(), "hidden") {
 		t.Fatalf("unsafe startup log: %q", buf.String())
 	}
 }

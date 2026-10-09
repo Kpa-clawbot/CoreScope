@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/meshcore-analyzer/pgutil/pgtest"
 	"github.com/meshcore-analyzer/users"
 )
 
@@ -27,7 +26,7 @@ func newProposalFixture(t *testing.T, ps proposalSettings) *authFixture {
 
 func newProposalFixtureWithConfig(t *testing.T, ps proposalSettings, cfg *Config) *authFixture {
 	t.Helper()
-	a, fake, ownerURL := newTestAuthServiceWithURL(t, pgtest.NewSchema(t), "admin@example.org")
+	a, fake, ownerURL := newTestAuthServiceWithURL(t, postgresTestDSN(t), "admin@example.org")
 	a.set.proposals = ps
 	srv := &Server{cfg: cfg, perfStats: NewPerfStats(), auth: a}
 	r := mux.NewRouter()

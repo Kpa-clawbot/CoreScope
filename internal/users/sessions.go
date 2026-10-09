@@ -49,7 +49,7 @@ func (s *Store) CreateSession(userID int64, ttl time.Duration, userAgent string)
 	now := s.now()
 	var id int64
 	err = s.db.QueryRow(`INSERT INTO sessions (token_hash, user_id, csrf_token, created_at, expires_at, last_seen_at, user_agent)
-		VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`, hash, userID, csrf, unix(now), unix(now.Add(ttl)), unix(now), userAgent).Scan(&id)
+		VALUES (`+s.p(1)+`, `+s.p(2)+`, `+s.p(3)+`, `+s.p(4)+`, `+s.p(5)+`, `+s.p(6)+`, `+s.p(7)+`) RETURNING id`, hash, userID, csrf, unix(now), unix(now.Add(ttl)), unix(now), userAgent).Scan(&id)
 	if err != nil {
 		return "", nil, err
 	}
@@ -60,7 +60,7 @@ func (s *Store) CreateSession(userID int64, ttl time.Duration, userAgent string)
 // LookupSession resolves a raw cookie token. Unknown and expired sessions
 // return ErrNotFound; expired ones are deleted on the way.
 func (s *Store) LookupSession(raw string) (*Session, error) {
-	sess, err := scanSession(s.db.QueryRow(`SELECT `+sessionCols+` FROM sessions WHERE token_hash = $1`, HashToken(raw)))
+	sess, err := scanSession(s.db.QueryRow(`SELECT `+sessionCols+` FROM sessions WHERE token_hash = `+s.p(1), HashToken(raw)))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -68,7 +68,7 @@ func (s *Store) LookupSession(raw string) (*Session, error) {
 		return nil, fmt.Errorf("users: lookup session: %w", err)
 	}
 	if !s.now().Before(sess.ExpiresAt) {
-		_, _ = s.db.Exec(`DELETE FROM sessions WHERE id = $1`, sess.ID)
+		_, _ = s.db.Exec(`DELETE FROM sessions WHERE id = `+s.p(1), sess.ID)
 		return nil, ErrNotFound
 	}
 	return sess, nil
@@ -77,29 +77,29 @@ func (s *Store) LookupSession(raw string) (*Session, error) {
 // ExtendSession marks the session seen now and moves its expiry to now+ttl.
 func (s *Store) ExtendSession(id int64, ttl time.Duration) error {
 	now := s.now()
-	return expectOne(s.db.Exec(`UPDATE sessions SET last_seen_at = $1, expires_at = $2 WHERE id = $3`,
+	return expectOne(s.db.Exec(`UPDATE sessions SET last_seen_at = `+s.p(1)+`, expires_at = `+s.p(2)+` WHERE id = `+s.p(3),
 		unix(now), unix(now.Add(ttl)), id))
 }
 
 func (s *Store) DeleteSessionByToken(raw string) error {
-	_, err := s.db.Exec(`DELETE FROM sessions WHERE token_hash = $1`, HashToken(raw))
+	_, err := s.db.Exec(`DELETE FROM sessions WHERE token_hash = `+s.p(1), HashToken(raw))
 	return err
 }
 
 // DeleteSession revokes one session, only if it belongs to userID.
 func (s *Store) DeleteSession(userID, sessionID int64) error {
-	return expectOne(s.db.Exec(`DELETE FROM sessions WHERE id = $1 AND user_id = $2`, sessionID, userID))
+	return expectOne(s.db.Exec(`DELETE FROM sessions WHERE id = `+s.p(1)+` AND user_id = `+s.p(2), sessionID, userID))
 }
 
 // DeleteUserSessions revokes all of a user's sessions except exceptID (0 = none kept).
 func (s *Store) DeleteUserSessions(userID, exceptID int64) error {
-	_, err := s.db.Exec(`DELETE FROM sessions WHERE user_id = $1 AND id != $2`, userID, exceptID)
+	_, err := s.db.Exec(`DELETE FROM sessions WHERE user_id = `+s.p(1)+` AND id != `+s.p(2), userID, exceptID)
 	return err
 }
 
 // ListSessions returns a user's sessions, most recently seen first.
 func (s *Store) ListSessions(userID int64) ([]Session, error) {
-	rows, err := s.db.Query(`SELECT `+sessionCols+` FROM sessions WHERE user_id = $1 ORDER BY last_seen_at DESC, id DESC`, userID)
+	rows, err := s.db.Query(`SELECT `+sessionCols+` FROM sessions WHERE user_id = `+s.p(1)+` ORDER BY last_seen_at DESC, id DESC`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +116,7 @@ func (s *Store) ListSessions(userID int64) ([]Session, error) {
 }
 
 func (s *Store) PruneExpiredSessions() (int64, error) {
-	res, err := s.db.Exec(`DELETE FROM sessions WHERE expires_at <= $1`, unix(s.now()))
+	res, err := s.db.Exec(`DELETE FROM sessions WHERE expires_at <= `+s.p(1), unix(s.now()))
 	if err != nil {
 		return 0, err
 	}

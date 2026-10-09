@@ -76,7 +76,7 @@ func (s *Store) RunMultibyteCapPersist() (MultibyteCapPersistStats, error) {
 		return stats, nil
 	}
 
-	tx, err := beginWrite(s.db)
+	tx, err := beginWrite(s.db, s.Backend())
 	if err != nil {
 		return stats, err
 	}
@@ -85,19 +85,19 @@ func (s *Store) RunMultibyteCapPersist() (MultibyteCapPersistStats, error) {
 	// inactive_nodes. The pre-#1386 implementation issued one UPDATE
 	// against each table per entry — 50% guaranteed-empty. We now
 	// look up the table once, then issue the matching UPDATE.
-	stmtN, err := tx.Prepare(`UPDATE nodes SET multibyte_sup=$1, multibyte_evidence=$2 WHERE public_key=$3`)
+	stmtN, err := tx.Prepare(`UPDATE nodes SET multibyte_sup=` + s.parameter(1) + `, multibyte_evidence=` + s.parameter(2) + ` WHERE public_key=` + s.parameter(3))
 	if err != nil {
 		return stats, err
 	}
 	defer stmtN.Close()
-	stmtI, err := tx.Prepare(`UPDATE inactive_nodes SET multibyte_sup=$1, multibyte_evidence=$2 WHERE public_key=$3`)
+	stmtI, err := tx.Prepare(`UPDATE inactive_nodes SET multibyte_sup=` + s.parameter(1) + `, multibyte_evidence=` + s.parameter(2) + ` WHERE public_key=` + s.parameter(3))
 	if err != nil {
 		return stats, err
 	}
 	defer stmtI.Close()
 	// Membership probe: one indexed PK lookup. Cheap; avoids the
 	// guaranteed-miss second UPDATE.
-	stmtProbe, err := tx.Prepare(`SELECT 1 FROM nodes WHERE public_key=$1 LIMIT 1`)
+	stmtProbe, err := tx.Prepare(`SELECT 1 FROM nodes WHERE public_key=` + s.parameter(1) + ` LIMIT 1`)
 	if err != nil {
 		return stats, err
 	}
@@ -188,7 +188,7 @@ func containsCI(s, sub string) bool {
 // internal/dbschema migration (#1386).
 func (s *Store) hasMultibyteSupColumns() bool {
 	var found bool
-	_ = s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='nodes' AND column_name='multibyte_sup')`).Scan(&found)
+	_ = s.db.QueryRow(s.nativeSQL(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('nodes') WHERE name='multibyte_sup')`, `SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='nodes' AND column_name='multibyte_sup')`)).Scan(&found)
 	return found
 }
 

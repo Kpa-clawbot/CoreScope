@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -60,6 +61,39 @@ func TestNeighborEdgesBuilderDeltaScan(t *testing.T) {
 	// Seed the same 100K logical rows in one transaction without per-row RPCs.
 	seed := func(prefix string, start int64, count int) {
 		t.Helper()
+		if store.Backend() == "sqlite" {
+			tx, err := store.db.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			parents, err := tx.Prepare(`INSERT INTO transmissions(raw_hex,hash,first_seen,route_type,payload_type,payload_version,decoded_json,from_pubkey) VALUES('',?1,?2,0,?3,0,'{}','aaaaaaaaaa')`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer parents.Close()
+			children, err := tx.Prepare(`INSERT INTO observations(transmission_id,observer_idx,path_json,timestamp) VALUES(?1,?2,'["bb"]',?3)`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer children.Close()
+			for i := 0; i < count; i++ {
+				stamp := start + int64(i)
+				res, err := parents.Exec(fmt.Sprint(prefix, i), time.Unix(stamp, 0).UTC().Format(time.RFC3339), payloadADVERT)
+				if err != nil {
+					t.Fatal(err)
+				}
+				id, _ := res.LastInsertId()
+				if _, err = children.Exec(id, obsRowid, stamp); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+
 		_, err := store.db.Exec(`WITH inserted AS (
    INSERT INTO transmissions(raw_hex,hash,first_seen,route_type,payload_type,payload_version,decoded_json,from_pubkey)
    SELECT '',$1::text||n::text,to_char(to_timestamp($2::bigint+n) AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),0,$3,0,'{}','aaaaaaaaaa'

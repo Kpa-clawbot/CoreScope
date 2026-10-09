@@ -543,9 +543,6 @@ func LoadConfig(path string) (*Config, error) {
 	if v := os.Getenv("CORESCOPE_STATE_DIR"); v != "" {
 		cfg.StateDir = v
 	}
-	if cfg.StateDir == "" {
-		cfg.StateDir = "data"
-	}
 	if v := os.Getenv("CORESCOPE_APPROVED_CHANNELS_DATABASE_URL"); v != "" {
 		if cfg.UserManagement == nil {
 			cfg.UserManagement = &UserManagementConfig{}
@@ -630,6 +627,7 @@ const autoRegionKeysDefaultRefreshMinutes = 15
 
 // UserManagementConfig is the ingestor's view of userManagement.
 type UserManagementConfig struct {
+	DatabaseURL                 string                  `json:"databaseURL,omitempty"`
 	Enabled                     bool                    `json:"enabled"`
 	ApprovedChannelsDatabaseURL string                  `json:"approvedChannelsDatabaseURL,omitempty"`
 	DBPath                      string                  `json:"dbPath,omitempty"`

@@ -193,13 +193,14 @@ var fakeMailerAllowed bool
 func resolveUserManagement(u *UserManagementConfig, stateDir string, getenv func(string) string) (*userMgmtSettings, error) {
 	set := &userMgmtSettings{adminEmails: map[string]bool{}}
 
-	if u.DBPath != "" {
-		return nil, errors.New("userManagement.dbPath is no longer supported; import the accounts database and configure userManagement.databaseURL")
-	}
 	set.databaseURL = envOrValue(getenv, "CORESCOPE_USERS_DATABASE_URL", u.DatabaseURL)
 	if set.databaseURL == "" {
-		return nil, errors.New("userManagement.databaseURL or CORESCOPE_USERS_DATABASE_URL is required for the separate PostgreSQL accounts database")
+		set.databaseURL = strings.TrimSpace(u.DBPath)
 	}
+	if set.databaseURL == "" {
+		set.databaseURL = filepath.Join(stateDir, "users.db")
+	}
+
 	for _, raw := range u.AdminEmails {
 		e, err := users.NormalizeEmail(raw)
 		if err != nil {
