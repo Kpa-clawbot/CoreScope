@@ -67,7 +67,7 @@ Manual dispatch remains available: use `deploy.yml` with
 `postgres_benchmark=true` and the full `candidate_sha`, from the matching
 candidate branch/commit. That dispatch runs the comparison alone and skips normal
 publishing/deployment jobs. Both entry points run the small pilot first and then
-five primary pairs; upload only the sanitized `public/` outputs.
+five supplemental pairs; upload only the sanitized `public/` outputs.
 
 ## Commands
 
@@ -82,27 +82,42 @@ Pilot on the same Linux host intended for the comparison:
 ```sh
 python3 scripts/postgres-benchmark/run.py --repo . \
   --candidate-sha <full-40-character-commit> --corpus S --pairs 1 \
-  --profile smoke --ingest-rate 10 --http-rate 5 \
+  --profile smoke --ingest-rate 50 --http-rate 20 \
   --output /tmp/corescope-bench-pilot
 ```
 
-Smoke results are explicitly ineligible for a primary comparison. Primary:
+Smoke results are explicitly ineligible for a primary comparison. The current
+supplemental comparison uses the five-pair `primary` execution mode:
 
 ```sh
 python3 scripts/postgres-benchmark/run.py --repo . \
   --candidate-sha <full-40-character-commit> --corpus B --pairs 5 \
+  --ingest-rate 50 --http-rate 20 \
   --profile primary --cgroup "$CORESCOPE_BENCH_CGROUP" \
-  --output /tmp/corescope-bench-primary
+  --output /tmp/corescope-bench-supplemental-50eps
 ```
 
 The baseline is fixed to `9dbc287579a237ffa744dd0c91fa7227d09763ac`. Floating
 revisions and existing output directories are refused. Primary defaults to
-60 seconds of warmup and 180 measured seconds per backend, with 100 offered
-ingest events/second and 20 HTTP requests/second. Five alternating A/B pairs
+60 seconds of warmup and 180 measured seconds per backend, with 50 offered
+ingest events/second and 20 HTTP requests/second: 12,000 scheduled ingest events
+per backend. Five alternating A/B pairs
 therefore spend 40 minutes in load windows, plus preparation, imports,
 validation, startup and drain time. The longer design profile is explicit:
 `--warmup 120 --seconds 600`. Record and compare identical locked settings;
 changing rates after a pilot produces a separately identified experiment.
+
+The initial 100-event/s B qualification at candidate `7b2c19a`
+([Actions run 37897747657](https://github.com/Kpa-clawbot/CoreScope/actions/runs/37897747657))
+failed its SQLite leg with 82 dropped schedules. All drops fell
+at 205.92–206.76 seconds, after retention was scheduled at 195 seconds; that pass took
+11.7446 seconds and ingestion queue wait reached 11.054 seconds. The bounded
+1,024-event queue was full. Durable effects matched the 23,918 completed events,
+but the missing events keep that run failed. Its artifacts remain separate.
+The supplemental 50-event/s rate gives the same queue 20.48 seconds of offered
+work, versus 10.24 seconds at 100/s. This gives the observed maintenance burst
+headroom; the Linux run must still prove zero drops, including during warmup.
+The manifest records the actual offered rate. Do not pool the two experiments.
 
 Both engines use a 2,048 MiB packet-store allowance and a 3,072 MiB server Go
 memory limit. The ingestor remains at 512 MiB and the whole application/database
@@ -114,11 +129,12 @@ qualification: the unchanged baseline loaded all 112,000 retained transmissions
 and 1,792,000 observations, then its own memory accounting triggered a 25%
 eviction. The corrected corpus accounts for about 1,222 MiB before replay.
 A conservative check using the baseline's actual estimators bounds all 24,000
-primary replay events at another 190 MiB, even counting every event as a new
-transmission plus observation with padded field widths. The new common store
+events from the original 100-event/s profile at another 190 MiB, even counting
+every event as a new transmission plus observation with padded field widths.
+That bound also covers the current 12,000-event profile. The common store
 allowance leaves more than 630 MiB above that bound. This is capacity evidence,
 not a performance result; measurements from the earlier profile must not be
-pooled with this one. Rates, corpus sizes, durability and count gates stay fixed.
+pooled with this one. Corpus sizes, durability and count gates stay fixed.
 
 ## Data and correctness
 

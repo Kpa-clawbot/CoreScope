@@ -16,9 +16,51 @@ spec.loader.exec_module(bench)
 
 
 class HarnessTests(unittest.TestCase):
+    def test_default_common_rate_and_emitted_worker_configs(self):
+        parse = bench.argparse.ArgumentParser.parse_args
+        for extra, expected_rate in (([], 50), (["--ingest-rate", "100"], 100)):
+            parsed = []
+            def capture(parser, argv):
+                parsed.append(parse(parser, argv))
+                raise RuntimeError("stop after parsing")
+            with mock.patch.object(bench.argparse.ArgumentParser, "parse_args", capture):
+                with self.assertRaisesRegex(RuntimeError, "stop after parsing"):
+                    bench.main(["--candidate-sha", "1" * 40, "--output", "corescope-bench-test", *extra])
+            args = parsed[0]
+            self.assertEqual((args.ingest_rate, args.http_rate, args.pairs), (expected_rate, 20, 5))
+            self.assertEqual((args.warmup, args.seconds), (None, None))
+            # Exercise the actual JSON controls consumed by both compiled workers.
+            emitted = []
+            with tempfile.TemporaryDirectory() as directory:
+                root = pathlib.Path(directory)
+                for backend in ("sqlite", "postgres"):
+                    controls = root / backend
+                    controls.mkdir()
+                    config = dict(control_dir=str(controls), warmup=60, seconds=180,
+                                  ingest_rate=args.ingest_rate, http_rate=args.http_rate)
+                    with mock.patch.object(bench, "spawn") as spawn:
+                        bench.worker(root / (backend + "-ingestor.test"), config, "replay", {}, root / (backend + ".log"))
+                    written = json.loads(pathlib.Path(spawn.call_args.kwargs["env"]["CORESCOPE_BENCH_CONFIG"]).read_text())
+                    written.pop("control_dir")
+                    emitted.append(written)
+            self.assertEqual(emitted[0], emitted[1])
+            self.assertEqual(emitted[0], dict(mode="replay", warmup=60, seconds=180,
+                                             ingest_rate=expected_rate, http_rate=20))
+            self.assertEqual((emitted[0]["warmup"] + emitted[0]["seconds"]) * emitted[0]["ingest_rate"],
+                             12000 if expected_rate == 50 else 24000)
+
+    def test_workflow_declares_the_common_supplemental_rate(self):
+        workflow = (HERE.parent.parent / ".github/workflows/postgres-benchmark.yml").read_text()
+        commands = re.findall(r"(?m)^\s*python3 scripts/postgres-benchmark/run\.py (.+)", workflow.replace("\\\n", " "))
+        self.assertEqual(len(commands), 2)
+        for command in commands:
+            self.assertIn("--ingest-rate 50", command)
+            self.assertIn("--http-rate 20", command)
+        self.assertIn("supplemental", workflow.lower())
+
     def test_common_server_memory_profile_retains_b_and_replay_headroom(self):
-        # Native baseline B qualification tracked 1221.7 MiB. A conservative
-        # actual-estimator bound counts every primary event as a new tx + obs.
+        # Native baseline B qualification tracked 1221.7 MiB. The original
+        # 100/s envelope conservatively bounds the current 50/s experiment too.
         required_store_mib = 1221.7 + 24000 * 8279 / 1048576
         settings = []
         for backend in ("sqlite", "postgres"):

@@ -862,7 +862,7 @@ def main(argv=None):
     parser.add_argument("--seed", type=int, default=20261008)
     parser.add_argument("--warmup", type=int)
     parser.add_argument("--seconds", type=int)
-    parser.add_argument("--ingest-rate", type=int, default=100)
+    parser.add_argument("--ingest-rate", type=int, default=50)
     parser.add_argument("--http-rate", type=int, default=20)
     args = parser.parse_args(argv)
     check_revisions(args.baseline_sha, args.candidate_sha)
