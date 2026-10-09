@@ -189,6 +189,35 @@ watched node changes state. Admins can also watch the instance.
   turns them back on.
 - Watch lists are private: admins see counts on the overview, not lists.
 
+### Companion linking (CoreDrive RX)
+
+With user management on, a user logs in from the CoreDrive RX app with their email and password.
+RX then holds a **device token** instead of a cookie: it shows under *My account, Devices* as
+"CoreDrive RX – <device name>", lasts 90 days from its last use, and *Log out* there revokes it.
+The token is limited to the account routes RX needs (`/api/auth/me`, `/api/auth/logout`,
+`/api/account/settings`, `/api/account/companions*`); anything else answers 403.
+
+RX then links the companion it is connected to: the companion signs a server challenge with its
+own key, so only whoever holds the device can link it. The newest proof wins: a companion that
+changes hands moves to the new owner, and the previous owner gets an audit entry and a mail (a
+security notice: it goes out whatever their notification settings are). A linked companion is added to the user's *My nodes*; its coverage counts
+as theirs (*My coverage* on the coverage page). Links are private to their owner and to admins
+(*Admin, user detail* lists them).
+
+- **RX on another origin** (for example a hosted RX build): add that origin to
+  `corsAllowedOrigins`. For listed origins, and only on the device-token routes above, the server
+  then also allows `POST, PUT, DELETE` and the `Authorization` and `Content-Type` headers.
+  `Access-Control-Allow-Credentials` stays off; RX sends the token as a bearer header, not a
+  cookie. Same-origin RX needs no CORS setting.
+- A bearer header only counts on a request without the session cookie: with the cookie, the
+  cookie decides. So an auth proxy in front of CoreScope that adds its own
+  `Authorization: Bearer` does not break browser logins, and RX sends its calls without cookies.
+- The signed message contains the host of `publicBaseUrl`, so RX must log in on that address.
+- **Linked companions only:** `clientRxCoverage.requireLinkedCompanion` makes the ingestor drop
+  client data from companions nobody linked. It is a filter, not a security boundary, and it drops
+  everything from RX builds without account support: upgrade the RX clients first. See
+  [Client RX Coverage, Linked companions only](../client-rx-coverage.md#linked-companions-only-optional).
+
 ### Backups
 
 `users.db` holds password hashes and addresses. The server keeps its own snapshots of
@@ -303,6 +332,12 @@ version N is newer than this binary supports"): run that version or newer. Delet
   page watches it; *My account, Notifications* lists your watched nodes, turns mails on
   or off, chooses the events, and *Watch my nodes* copies your synced My nodes. You get
   at most one mail per check, and every mail has a link that turns the mails off.
+- **Companions:** log in from the CoreDrive RX app while it is connected to your
+  companion, and it is linked to your account: it shows under *My account, Companions*
+  (name, short key, linked since, last seen) and is added to My nodes. The app shows
+  under *Devices* as "CoreDrive RX – <device name>"; *Log out* there signs the app out.
+  *Unlink* removes the link but leaves the companion in My nodes and its coverage on the
+  map. On the coverage page, *My coverage* shows only what your linked companions heard.
 - **Never synced:** channel keys and decrypted messages, the API key, panel and column
   sizes, collapsed panels and map positions. They stay in the browser where you set them.
 - **Logging out** asks whether to keep your settings on this device (the default) or
