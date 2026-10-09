@@ -232,22 +232,6 @@ func (s *PacketStore) fetchResolvedPathForObs(obsID int) []*string {
 	return rp
 }
 
-// fetchResolvedPathForTxBest returns the best observation's resolved_path for a tx.
-//
-// "Best" = the longest path_json among observations that actually have a stored
-// resolved_path. Earlier versions picked the longest-path obs unconditionally
-// and queried SQL for that single ID — if the longest-path obs had NULL
-// resolved_path while a shorter sibling had one, the call returned nil and
-// callers (e.g. /api/nodes/{pk}/health.recentPackets) lost the field. Fixes
-// #810 by checking all observations and falling back to the longest sibling
-// that has a stored path.
-func (s *PacketStore) fetchResolvedPathForTxBest(tx *StoreTx) []*string {
-	if tx == nil {
-		return nil
-	}
-	return s.bestResolvedPath(tx.ID, snapshotRPObs(tx))
-}
-
 // rpObs is the part of an observation that the best-resolved-path pick
 // needs, copied while s.mu is held.
 type rpObs struct {
@@ -255,6 +239,7 @@ type rpObs struct {
 	pathLen int
 }
 
+// snapshotRPObs copies what bestResolvedPath needs from tx. Caller holds s.mu.
 func snapshotRPObs(tx *StoreTx) []rpObs {
 	out := make([]rpObs, len(tx.Observations))
 	for i, o := range tx.Observations {
@@ -263,8 +248,17 @@ func snapshotRPObs(tx *StoreTx) []rpObs {
 	return out
 }
 
-// bestResolvedPath is fetchResolvedPathForTxBest on a snapshot of the
-// transmission's observations, so it can run without s.mu.
+// bestResolvedPath returns the best observation's resolved_path for a tx,
+// given a snapshot of its observations (snapshotRPObs), so it runs without
+// s.mu.
+//
+// "Best" = the longest path_json among observations that actually have a stored
+// resolved_path. Earlier versions picked the longest-path obs unconditionally
+// and queried SQL for that single ID — if the longest-path obs had NULL
+// resolved_path while a shorter sibling had one, the call returned nil and
+// callers (e.g. /api/nodes/{pk}/health.recentPackets) lost the field. Fixes
+// #810 by checking all observations and falling back to the longest sibling
+// that has a stored path.
 func (s *PacketStore) bestResolvedPath(txID int, observations []rpObs) []*string {
 	if len(observations) == 0 {
 		return nil
