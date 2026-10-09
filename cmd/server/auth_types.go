@@ -177,10 +177,11 @@ type auditJSON struct {
 }
 
 type adminUserDetailJSON struct {
-	User     adminUserJSON `json:"user"`
-	Sessions []sessionJSON `json:"sessions"`
-	Mail     []mailJSON    `json:"mail"`
-	Audit    []auditJSON   `json:"audit"`
+	User       adminUserJSON   `json:"user"`
+	Sessions   []sessionJSON   `json:"sessions"`
+	Companions []companionJSON `json:"companions"`
+	Mail       []mailJSON      `json:"mail"`
+	Audit      []auditJSON     `json:"audit"`
 }
 
 func rfc3339(t time.Time) string { return t.UTC().Format(time.RFC3339) }
