@@ -849,6 +849,50 @@ type ScopeAuditResponse struct {
 	Repeaters []ScopeAuditRow `json:"repeaters"`
 }
 
+// ScopeTransportRow is one repeater seen forwarding in the window, in the
+// transport view of the scope audit (#2142, ?mode=transport). Unlike
+// ScopeAuditRow it does not require a declared-regions answer: "transported"
+// means seen carrying, not configured for, and the declared side is reported
+// where it exists (asked) and left null where it does not.
+type ScopeTransportRow struct {
+	PublicKey string  `json:"publicKey"`
+	Name      *string `json:"name"` // null = no nodes row held for this key
+	Role      *string `json:"role"`
+
+	// Transported lists the named region scopes this repeater was seen
+	// forwarding in the window, most packets first.
+	Transported      []ScopeObservation `json:"transported"`
+	UnscopedPackets  int64              `json:"unscopedPackets"`  // plain floods forwarded
+	UnmatchedPackets int64              `json:"unmatchedPackets"` // scoped, but no region key held here
+	AmbiguousHops    int64              `json:"ambiguousHops"`    // hops shared with another repeater's prefix, credited to neither
+
+	// Asked is whether a declared-regions answer exists for this repeater.
+	// DeclaredRegions is null when it does not, [] when it answered with no
+	// named region. NotObserved (declared, not seen carried) is null when not
+	// asked.
+	Asked            bool     `json:"asked"`
+	DeclaredRegions  []string `json:"declaredRegions"`
+	DeclaredWildcard bool     `json:"declaredWildcard"`
+	ConfigState      string   `json:"configState,omitempty"`
+	DeclaredAt       string   `json:"declaredAt,omitempty"`
+	NotObserved      []string `json:"notObserved"`
+
+	// CarriesRegion is set only when the request named a region: whether
+	// this repeater was seen carrying it in the window.
+	CarriesRegion *bool `json:"carriesRegion,omitempty"`
+}
+
+// ScopeTransportResponse is GET /api/scope-audit?mode=transport.
+type ScopeTransportResponse struct {
+	Mode      string              `json:"mode"` // "transport"
+	Window    string              `json:"window"`
+	Since     string              `json:"since"`
+	Region    string              `json:"region,omitempty"` // normalised region filter, when given
+	Carrying  *int                `json:"carrying,omitempty"`
+	NotCarry  *int                `json:"notCarrying,omitempty"`
+	Repeaters []ScopeTransportRow `json:"repeaters"`
+}
+
 // NodeScopesResponse is the payload for GET /api/nodes/{pubkey}/scopes: the
 // observed-forwarding side (ScopeConformance, embedded BY VALUE so its three
 // scope states sit at the JSON top level — unmatched and unscoped are
@@ -997,6 +1041,11 @@ func (s *Server) handleScopeAudit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sinceISO := time.Now().Add(-lookback).UTC().Format(time.RFC3339)
+
+	if r.URL.Query().Get("mode") == "transport" {
+		writeJSON(w, &ScopeTransportResponse{Mode: "transport", Window: window, Since: sinceISO, Repeaters: []ScopeTransportRow{}})
+		return
+	}
 
 	if cached, ok := s.scopeAuditCached(window); ok {
 		writeJSON(w, cached)
