@@ -47,3 +47,23 @@ func TestRequireLinkedCompanionWarnsWithoutUserManagement(t *testing.T) {
 		t.Fatalf("no startup warning, log: %q", buf.String())
 	}
 }
+
+// CoreDrive RX shows its login only when the server says it supports companion
+// linking: a CoreScope with user management but without these routes answers the
+// device-token POST with the SPA page.
+func TestClientConfigAnnouncesCompanionLinking(t *testing.T) {
+	srv, router := setupTestServer(t)
+	get := func() string {
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest("GET", "/api/config/client", nil))
+		return w.Body.String()
+	}
+	if strings.Contains(get(), "companionLinking") {
+		t.Fatal("companionLinking present with user management off")
+	}
+	a, _ := newTestAuthService(t)
+	srv.auth = a
+	if !strings.Contains(get(), `"companionLinking":true`) {
+		t.Fatalf("companionLinking missing with user management on: %s", get())
+	}
+}

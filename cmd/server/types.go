@@ -1097,11 +1097,14 @@ type ClientConfigResponse struct {
 }
 
 // ClientUserManagement tells the frontend that accounts exist, and whether
-// channel proposals and node notifications are on.
+// channel proposals and node notifications are on. CompanionLinking says the
+// device-token and companion routes exist: CoreDrive RX shows its login only
+// then, because an older CoreScope answers those paths with the SPA page.
 type ClientUserManagement struct {
 	Enabled          bool `json:"enabled"`
 	ChannelProposals bool `json:"channelProposals,omitempty"`
 	Notifications    bool `json:"notifications,omitempty"`
+	CompanionLinking bool `json:"companionLinking,omitempty"`
 }
 
 // CustomizerClientConfig is the operator-side customizer-modal knobs that

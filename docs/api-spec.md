@@ -155,7 +155,7 @@ Error codes you can get on the routes above:
 | `502` | `"mail provider unavailable"` (mail refresh) |
 | `503` | `"mail could not be sent, try again later"` |
 
-With user management on, every endpoint that needs `X-API-Key` also accepts an admin session (plus the CSRF header for unsafe methods). A request that sends `X-API-Key` is judged on the key alone. `GET /api/config/client` gains `"userManagement": {"enabled": true}` only when the feature is on.
+With user management on, every endpoint that needs `X-API-Key` also accepts an admin session (plus the CSRF header for unsafe methods). A request that sends `X-API-Key` is judged on the key alone. `GET /api/config/client` gains `"userManagement": {"enabled": true}` only when the feature is on; that block also carries `"companionLinking": true` on servers with the device-token and companion routes, which CoreDrive RX checks before it shows its login (an older server answers those paths with the SPA page).
 
 ---
 
