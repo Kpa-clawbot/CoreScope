@@ -56,12 +56,17 @@ env:
 jobs:
   postgres-benchmark:
     name: Isolated PostgreSQL comparison
-    if: github.event_name == 'workflow_dispatch' && inputs.postgres_benchmark
+    needs: [changes]
+    if: |
+      (github.event_name == 'workflow_dispatch' && inputs.postgres_benchmark)
+      || (github.event_name == 'pull_request'
+          && needs.changes.outputs.code == 'true'
+          && contains(github.event.pull_request.body, '[x] Run PostgreSQL comparison'))
     permissions:
       contents: read
     uses: ./.github/workflows/postgres-benchmark.yml
     with:
-      candidate_sha: ${{ inputs.candidate_sha }}
+      candidate_sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.candidate_sha }}
 
   # ───────────────────────────────────────────────────────────────
   # 0. Change scope — decides whether the expensive jobs below run.
@@ -824,8 +829,27 @@ jobs:
             PGUSER=corescope_owner PGPASSWORD="$(cat "$RUNNER_TEMP/corescope-e2e-owner-password")" \
               psql -X -v ON_ERROR_STOP=1 -d "corescope_restore_$kind" -c 'ANALYZE'
           done
-          export CORESCOPE_READER_DATABASE_URL="${CORESCOPE_READER_DATABASE_URL/\/corescope_telemetry/\/corescope_restore_telemetry}"
-          export CORESCOPE_USERS_DATABASE_URL="${CORESCOPE_USERS_DATABASE_URL/\/corescope_accounts/\/corescope_restore_accounts}"
+          # Switch restored database URLs.
+          restore_urls=$(python3 - <<'PY'
+          import os
+          from urllib.parse import urlsplit, urlunsplit
+          for key, database in (
+              ("CORESCOPE_READER_DATABASE_URL", "corescope_restore_telemetry"),
+              ("CORESCOPE_USERS_DATABASE_URL", "corescope_restore_accounts"),
+          ):
+              raw = os.environ[key]
+              try:
+                  parsed = urlsplit(raw)
+              except ValueError:
+                  raise SystemExit("Invalid restore database URL") from None
+              if parsed.scheme not in ("postgres", "postgresql") or not parsed.netloc or "\n" in raw or "\r" in raw:
+                  raise SystemExit("Invalid restore database URL")
+              print(key + "=" + urlunsplit(parsed._replace(path="/" + database)))
+          PY
+          )
+          while IFS= read -r assignment; do export "$assignment"; done <<< "$restore_urls"
+          unset restore_urls assignment
+          # Restart restored servers.
           env -u PGPASSWORD -u PGUSER -u CORESCOPE_TEST_POSTGRES_URL ./corescope-server -port 13581 -state-dir "$RUNNER_TEMP/corescope-state" -public public-instrumented &
           echo $! > .server.pid
           env -u PGPASSWORD -u PGUSER -u CORESCOPE_TEST_POSTGRES_URL ./corescope-server-e2e -config-dir /tmp/cs-um -port 13582 -state-dir /tmp/cs-um -public public-instrumented &

@@ -39,7 +39,8 @@ const steps = source => source.split(/(?=^      - name:)/m).slice(1);
 function evaluate(expression, context) {
   if (!expression) return true;
   return vm.runInNewContext(expression.replace(/^\$\{\{|\}\}$/g, '').trim(), {
-    ...context, startsWith: (text, prefix) => text.startsWith(prefix), cancelled: () => false
+    ...context, startsWith: (text, prefix) => text.startsWith(prefix), cancelled: () => false,
+    contains: (text, part) => String(text ?? '').toLowerCase().includes(String(part).toLowerCase())
   });
 }
 const expand = (script, context) => script.replace(/\$\{\{(.*?)\}\}/g, (_, expression) => String(evaluate(expression, context)));
@@ -346,3 +347,111 @@ for (const ref of ['refs/heads/master', 'refs/heads/codex/postgres', 'refs/tags/
 const benchmarkCall = block(deploy, 'postgres-benchmark', 2);
 assert.ok(!benchmarkCall.includes('secrets:') && !benchmarkCall.includes('environment:'), 'benchmark must receive no deployment secrets/environment');
 console.log('PASS benchmark-only dispatch cannot publish or deploy');
+
+// PR benchmarks are deliberate opt-ins and consume the head repository/SHA,
+// while ordinary CI continues to test GitHub's merge ref.
+const benchmarkWorkflow = read('postgres-benchmark.yml');
+const prBenchmark = context('refs/pull/1/merge', 'pull_request');
+prBenchmark.github.workflow_sha = 'c'.repeat(40);
+prBenchmark.github.event = { pull_request: {
+  body: '- [x] Run PostgreSQL comparison',
+  head: { sha: 'b'.repeat(40), repo: { full_name: 'contributor/project' } }
+} };
+for (const [body, code, expected] of [
+  ['- [x] Run PostgreSQL comparison', 'true', true],
+  ['- [X] Run PostgreSQL comparison', 'true', true],
+  ['- [ ] Run PostgreSQL comparison', 'true', false],
+  ['', 'true', false],
+  [null, 'true', false],
+  ['- [x] Run PostgreSQL comparison', 'false', false]
+]) {
+  prBenchmark.github.event.pull_request.body = body;
+  prBenchmark.needs.changes = { result: 'success', outputs: { code } };
+  assert.equal(evaluate(value(benchmarkCall, 'if', 4), prBenchmark), expected, 'PR checkbox/code-scope routing');
+}
+assert.equal(value(benchmarkCall, 'needs', 4), '[changes]', 'PR benchmarks must wait for code scope');
+const dispatchBenchmark = context('refs/heads/candidate', 'workflow_dispatch', { postgres_benchmark: true, candidate_sha: 'a'.repeat(40) });
+dispatchBenchmark.needs.changes = { result: 'success', outputs: { code: 'false' } };
+assert.equal(evaluate(value(benchmarkCall, 'if', 4), dispatchBenchmark), true, 'benchmark-only dispatch must survive its normal code=false output');
+assert.equal(evaluate(value(block(benchmarkCall, 'with', 4), 'candidate_sha', 6), prBenchmark), prBenchmark.github.event.pull_request.head.sha, 'benchmark candidate must be the PR head, not merge SHA');
+assert.equal(value(block(benchmarkCall, 'permissions', 4), 'contents', 6), 'read');
+const benchmarkSteps = steps(block(benchmarkWorkflow, 'benchmark', 2));
+const candidateCheckout = benchmarkSteps.find(step => value(step, '- name', 6) === 'Checkout the exact candidate');
+assert.equal(value(candidateCheckout, 'persist-credentials', 10), 'false');
+assert.equal(evaluate(value(candidateCheckout, 'repository', 10), prBenchmark), 'contributor/project');
+assert.equal(evaluate(value(candidateCheckout, 'repository', 10), context()), 'example/corescope');
+assert.equal(value(candidateCheckout, 'ref', 10), '${{ inputs.candidate_sha }}');
+assert.equal(value(block(benchmarkWorkflow, 'permissions', 0), 'contents', 2), 'read');
+
+// Execute the real snapshot guard with only Git's external boundary stubbed.
+// A PR's merge SHA differs from the benchmark head; mismatched code/workflows
+// must still fail before package installation or benchmark execution.
+const snapshotStep = benchmarkSteps.find(step => value(step, '- name', 6) === 'Verify candidate and workflow snapshot');
+function snapshotGuard({ candidate = 'b'.repeat(40), checkout = candidate, expected = candidate, merge = 'a'.repeat(40), matches = true } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'corescope-benchmark-guard-'));
+  const log = path.join(dir, 'git-calls');
+  fs.writeFileSync(log, '');
+  try {
+    const stubs = `
+      git() {
+        printf '%s\\n' "$*" >> "$CHECK_LOG"
+        case "$1" in
+          rev-parse) printf '%s\\n' "$CHECKOUT_SHA" ;;
+          fetch|cat-file) return 0 ;;
+          diff) [ "$WORKFLOW_MATCHES" = true ] ;;
+          *) return 99 ;;
+        esac
+      }
+    `;
+    const result = spawnSync(bash, ['--noprofile', '--norc'], {
+      input: stubs + value(snapshotStep, 'run', 8), cwd: dir, encoding: 'utf8',
+      env: { ...process.env, CANDIDATE_SHA: candidate, CHECKOUT_SHA: checkout,
+        EXPECTED_SHA: expected, GITHUB_SHA: merge, WORKFLOW_SHA: 'c'.repeat(40),
+        GITHUB_REPOSITORY: 'example/corescope', GITHUB_SERVER_URL: 'https://github.com',
+        WORKFLOW_MATCHES: String(matches), CHECK_LOG: bashPath(log) }
+    });
+    return { status: result.status, error: result.stderr, calls: fs.readFileSync(log, 'utf8') };
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
+const acceptedHead = snapshotGuard();
+assert.equal(acceptedHead.status, 0, 'PR head must be accepted despite a distinct merge SHA: ' + acceptedHead.error);
+assert.ok(acceptedHead.calls.includes('fetch --no-tags --depth=1 https://github.com/example/corescope.git ' + 'c'.repeat(40)), 'verify the actual caller workflow commit');
+for (const path of ['.github/workflows/deploy.yml', '.github/workflows/postgres-benchmark.yml', 'scripts/postgres-benchmark', 'scripts/install-postgres-ci.sh']) {
+  assert.ok(acceptedHead.calls.includes(path), 'snapshot comparison omitted ' + path);
+}
+assert.notEqual(snapshotGuard({ matches: false }).status, 0, 'different workflow/harness content accepted');
+assert.notEqual(snapshotGuard({ checkout: 'd'.repeat(40) }).status, 0, 'wrong checkout accepted');
+assert.notEqual(snapshotGuard({ expected: 'd'.repeat(40) }).status, 0, 'candidate differs from event head');
+assert.equal(snapshotGuard({ candidate: 'a'.repeat(40), merge: 'a'.repeat(40) }).status, 0, 'ordinary exact-SHA dispatch failed');
+const snapshotEnv = block(snapshotStep, 'env', 8);
+assert.equal(evaluate(value(snapshotEnv, 'EXPECTED_SHA', 10), prBenchmark), 'b'.repeat(40));
+assert.equal(evaluate(value(snapshotEnv, 'EXPECTED_SHA', 10), context()), 'a'.repeat(40));
+assert.equal(evaluate(value(snapshotEnv, 'WORKFLOW_SHA', 10), prBenchmark), 'c'.repeat(40));
+console.log('PASS opted-in PR benchmark uses exact head and matching workflow/harness, without persisted credentials');
+
+// Execute the real restore-URL transformation. A role and its database can have
+// the same name; replacing the first matching substring silently changes login.
+const restoreStep = steps(block(deploy, 'e2e-shard', 2)).find(step => value(step, '- name', 6) === 'Restore native HTTP backups and verify browser sessions');
+const restoreScript = value(restoreStep, 'run', 8);
+const switchURLs = restoreScript.split('# Switch restored database URLs.\n')[1]?.split('# Restart restored servers.')[0];
+assert.ok(switchURLs, 'missing restore URL transformation');
+const sourceURLs = {
+  CORESCOPE_USERS_DATABASE_URL: 'postgresql://corescope_accounts:p%40ss%2F%3A%3F%23@db.example.invalid:5433/corescope_accounts?sslmode=verify-full&application_name=corescope_accounts',
+  CORESCOPE_READER_DATABASE_URL: 'postgresql://corescope_reader:p%2540%3A%2F@[::1]:5432/corescope_telemetry?sslmode=require&application_name=reader%3Bsmoke'
+};
+const rewritten = spawnSync(bash, ['--noprofile', '--norc', '-e', '-o', 'pipefail'], {
+  input: (process.platform === 'win32' ? 'python3(){ python "$@"; }\n' : '') + switchURLs +
+    '\nprintf "%s\\n" "$CORESCOPE_USERS_DATABASE_URL" "$CORESCOPE_READER_DATABASE_URL"\n',
+  encoding: 'utf8', env: { ...process.env, ...sourceURLs }
+});
+assert.equal(rewritten.status, 0, rewritten.stderr);
+const resultURLs = rewritten.stdout.trim().split('\n');
+for (const [index, key] of Object.keys(sourceURLs).entries()) {
+  const original = new URL(sourceURLs[key]);
+  const restored = new URL(resultURLs[index]);
+  for (const field of ['protocol', 'username', 'password', 'host', 'search', 'hash']) {
+    assert.equal(restored[field], original[field], 'restore URL changed ' + field);
+  }
+  assert.equal(restored.pathname, key === 'CORESCOPE_USERS_DATABASE_URL' ? '/corescope_restore_accounts' : '/corescope_restore_telemetry');
+}
+console.log('PASS native backup restore changes only database URL paths');

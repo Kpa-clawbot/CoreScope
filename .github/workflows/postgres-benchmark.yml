@@ -43,15 +43,27 @@ jobs:
       - name: Checkout the exact candidate
         uses: actions/checkout@v5
         with:
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ inputs.candidate_sha }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Verify candidate and workflow snapshot
+        env:
+          EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          test "$GITHUB_SHA" = "$CANDIDATE_SHA" || { echo 'Dispatch this workflow from the candidate commit/branch so workflow and code match' >&2; exit 1; }
+          test "$EXPECTED_SHA" = "$CANDIDATE_SHA" || { echo 'Candidate must match the PR head or dispatched workflow commit' >&2; exit 1; }
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'A full workflow commit SHA is required' >&2; exit 1; }
+          # PR workflows run from a merge ref, while the experiment measures the
+          # exact head. Refuse a merge that changes the executed workflow/harness.
+          git fetch --no-tags --depth=1 "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$WORKFLOW_SHA"
+          git diff --quiet "$WORKFLOW_SHA" "$CANDIDATE_SHA" -- \
+            .github/workflows/deploy.yml .github/workflows/postgres-benchmark.yml \
+            scripts/postgres-benchmark scripts/install-postgres-ci.sh \
+            || { echo 'Workflow or benchmark harness differs from candidate; update the candidate before rerunning' >&2; exit 1; }
           git cat-file -e 9dbc287579a237ffa744dd0c91fa7227d09763ac^{commit}
 
       - name: Test benchmark controls

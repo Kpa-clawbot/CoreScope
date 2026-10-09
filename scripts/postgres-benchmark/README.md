@@ -35,6 +35,39 @@ pilot. **No empirical database comparison is included in this change.**
   second guard uses eight times the *measured* canonical file size before each
   restore/import. These are conservative guards, not dataset-size claims.
 
+## GitHub Actions opt-in
+
+The existing CI workflow can run the comparison for a pull request. Add this
+checked item to the PR body **before pushing the reviewed candidate**:
+
+```markdown
+- [x] Run PostgreSQL comparison
+```
+
+The checkbox is evaluated on the normal PR events: opened, reopened and head
+updates. Editing the body alone does not launch or cancel CI. Without the checked
+item, the benchmark is skipped. A documentation-only PR also skips it through
+the change-scope gate.
+
+The comparison checks out the PR's exact head SHA from its head repository,
+including forks. It does not benchmark GitHub's synthetic merge commit. The
+executed workflow and benchmark harness must match that head; mismatches fail
+before running the experiment. The job has read-only repository access, persists
+no checkout credentials, inherits no deployment secrets and cannot publish or
+deploy. Other PR checks continue normally.
+
+Wait for the comparison to finish, then **uncheck the item before pushing a
+documentation-only results/report update**. Change scope covers the full PR diff,
+so a PR that still contains implementation changes would otherwise request
+another primary run. Existing PR concurrency can also cancel an unfinished run
+when a new commit arrives.
+
+Manual dispatch remains available: use `deploy.yml` with
+`postgres_benchmark=true` and the full `candidate_sha`, from the matching
+candidate branch/commit. That dispatch runs the comparison alone and skips normal
+publishing/deployment jobs. Both entry points run the small pilot first and then
+five primary pairs; upload only the sanitized `public/` outputs.
+
 ## Commands
 
 First run the portable controls and compile/protocol checks:
