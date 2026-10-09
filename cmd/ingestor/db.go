@@ -1602,6 +1602,7 @@ func (s *Store) RefreshPlannerStats(analysisLimit int) bool {
 		return false
 	}
 	elapsed := time.Since(start).Round(time.Millisecond)
+	s.recordPlannerStatsRefresh(time.Now())
 	if first {
 		log.Printf("[analyze] planner statistics built in %v (analysis_limit=%d, first run against this database)", elapsed, analysisLimit)
 	} else {
@@ -1634,10 +1635,11 @@ func (s *Store) RefreshPlannerStats(analysisLimit int) bool {
 // dropped. Hence the warning below, so an operator watching a first deploy can
 // tell this apart from a hang.
 //
-// That cost belongs to the first ANALYZE, not to running it here. The refresh
-// ticker would pay exactly the same 3m44s two minutes later; this only moves it
-// earlier, where it overlaps the startup burst the ingest buffer is already
-// sized for.
+// That cost belongs to the first ANALYZE, not to running it here. The daily
+// refresh would otherwise pay exactly the same 3m44s two minutes later; this
+// moves it earlier, where it overlaps the startup burst the ingest buffer is
+// already sized for. It also records the refresh time, so the daily refresh
+// then waits 24 hours (#2146).
 func (s *Store) EnsurePlannerStats(analysisLimit int) bool {
 	if s.hasPlannerStats() {
 		return false
@@ -1646,6 +1648,69 @@ func (s *Store) EnsurePlannerStats(analysisLimit int) bool {
 		"ANALYZE holds the single write connection until it finishes (3m43.9s measured on 9.4 GB, cold), " +
 		"so ingest will buffer and catch up. Once per database, not once per restart.")
 	return s.RefreshPlannerStats(analysisLimit)
+}
+
+// plannerStatsInterval is how often the planner statistics are refreshed, and
+// plannerStatsStagger how long after startup the first refresh waits at least.
+const (
+	plannerStatsInterval = 24 * time.Hour
+	plannerStatsStagger  = 2 * time.Minute
+)
+
+// nextPlannerStatsRefresh returns how long to wait before the next refresh,
+// given when the previous one succeeded (zero if never): until it is
+// plannerStatsInterval old, but at least plannerStatsStagger and at most
+// plannerStatsInterval.
+//
+// Before #2146 the first refresh ran plannerStatsStagger after every start.
+// On a cold page cache that ANALYZE took 6 to 9 minutes on a 10-11 GB
+// database, holding the single write connection, so each restart stalled
+// ingest that long for statistics that were hours old at most.
+func nextPlannerStatsRefresh(last, now time.Time) time.Duration {
+	if last.IsZero() {
+		return plannerStatsStagger
+	}
+	d := last.Add(plannerStatsInterval).Sub(now)
+	if d < plannerStatsStagger {
+		return plannerStatsStagger
+	}
+	if d > plannerStatsInterval {
+		return plannerStatsInterval
+	}
+	return d
+}
+
+// plannerStatsStampPath is the file next to the database that records when
+// the planner statistics were last refreshed.
+func (s *Store) plannerStatsStampPath() string {
+	return s.path + ".planner-stats-refreshed"
+}
+
+// lastPlannerStatsRefresh returns when RefreshPlannerStats last succeeded on
+// this database, or the zero time when that is not recorded.
+func (s *Store) lastPlannerStatsRefresh() time.Time {
+	b, err := os.ReadFile(s.plannerStatsStampPath())
+	if err != nil {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(string(b)))
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// recordPlannerStatsRefresh writes when the statistics were refreshed. A
+// failed write only costs one refresh too many after the next restart.
+func (s *Store) recordPlannerStatsRefresh(at time.Time) {
+	tmp := s.plannerStatsStampPath() + ".tmp"
+	if err := os.WriteFile(tmp, []byte(at.UTC().Format(time.RFC3339)), 0o644); err != nil {
+		log.Printf("[analyze] could not record the refresh time: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, s.plannerStatsStampPath()); err != nil {
+		log.Printf("[analyze] could not record the refresh time: %v", err)
+	}
 }
 
 // hasPlannerStats reports whether ANALYZE has ever run against this database.
