@@ -36,7 +36,9 @@ func (a *authService) currentUser(w http.ResponseWriter, r *http.Request) (*user
 		return nil, nil
 	}
 	sess, err := a.st.LookupSession(c.Value)
-	if err != nil {
+	// A device token is a bearer credential only: sent as the cookie it
+	// must not pass as a browser session.
+	if err != nil || sess.Kind != users.SessionKindWeb {
 		return nil, nil
 	}
 	u, err := a.st.GetByID(sess.UserID)

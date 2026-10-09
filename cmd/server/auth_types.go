@@ -75,6 +75,8 @@ type roleRequest struct {
 
 type sessionJSON struct {
 	ID         int64  `json:"id"`
+	Kind       string `json:"kind"`  // "web" or "device"
+	Label      string `json:"label"` // device name; "" for web sessions
 	CreatedAt  string `json:"createdAt"`
 	LastSeenAt string `json:"lastSeenAt"`
 	ExpiresAt  string `json:"expiresAt"`
@@ -146,7 +148,7 @@ func meFrom(u *users.User, sess *users.Session) meResponse {
 }
 
 func sessionToJSON(s users.Session, currentID int64) sessionJSON {
-	return sessionJSON{ID: s.ID, CreatedAt: rfc3339(s.CreatedAt), LastSeenAt: rfc3339(s.LastSeenAt),
+	return sessionJSON{ID: s.ID, Kind: s.Kind, Label: s.Label, CreatedAt: rfc3339(s.CreatedAt), LastSeenAt: rfc3339(s.LastSeenAt),
 		ExpiresAt: rfc3339(s.ExpiresAt), UserAgent: s.UserAgent, Current: s.ID == currentID}
 }
 
