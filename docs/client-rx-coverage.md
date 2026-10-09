@@ -53,8 +53,13 @@ linked companions only:
 - `/api/config/client` then carries `clientRxRequireLinkedCompanion: true`, and RX holds its queue
   until its companion is linked instead of publishing data that would be dropped.
 - It needs `userManagement.enabled`. Without it the server and the ingestor log a startup warning
-  and ignore the setting. A `users.db` from before companion linking (no `companion_links` table)
-  counts as no linked companions, with one warning.
+  and ignore the setting.
+- Until the ingestor has read the linked companions once, it filters nothing: a `users.db` from
+  before companion linking (no `companion_links` table), or one it cannot open (check
+  `userManagement.dbPath` in the ingestor's config), logs one warning and lets all client data
+  through until the list can be read. After the first successful read, a failed read keeps the
+  last list. `client_unlinked_dropped` staying at 0 while unlinked clients publish is the sign
+  that the filter has not loaded.
 - Unlinking does not delete coverage that is already stored.
 
 **It is a filter, not a security boundary.** All RX clients share one broker account, so anyone

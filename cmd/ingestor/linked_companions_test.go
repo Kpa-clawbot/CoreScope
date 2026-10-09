@@ -145,7 +145,7 @@ func TestLinkedCompanionSetUnlinkHonouredAfterPeriodicRefresh(t *testing.T) {
 	}
 }
 
-func TestLinkedCompanionSetMissingTableIsEmptyAndWarnsOnce(t *testing.T) {
+func TestLinkedCompanionSetMissingTablePassesAndWarnsOnce(t *testing.T) {
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
