@@ -735,6 +735,26 @@ func (s *Server) getDegreeSnapshot(ctx context.Context) *degreeSnapshot {
 	return snap
 }
 
+// reachScanSQL is the reach scan for nTokens path tokens. Arguments: the
+// window start (epoch seconds), one LIKE pattern per token, the row limit.
+//
+// CROSS JOIN fixes the join order in SQLite: observations is the outer loop,
+// read through idx_observations_timestamp for the window. With a plain JOIN
+// the planner scanned every transmission and probed observations per row
+// (3.2-3.3 s against 1.8-2.0 s on an 18M-observation database, #2146).
+func reachScanSQL(nTokens int) string {
+	likes := make([]string, nTokens)
+	for i := range likes {
+		likes[i] = "o.path_json LIKE ?"
+	}
+	return `SELECT LOWER(COALESCE(obs.id,'')), LOWER(COALESCE(t.from_pubkey,'')), COALESCE(t.payload_type,0), o.path_json, o.snr
+	      FROM observations o
+	      CROSS JOIN transmissions t ON t.id = o.transmission_id
+	      LEFT JOIN observers obs ON obs.rowid = o.observer_idx
+	      WHERE o.timestamp >= ? AND (` + strings.Join(likes, " OR ") + `)
+	      LIMIT ?`
+}
+
 // scanReachRows reads windowed observations whose path contains any reliable
 // token, with the originator + observer + snr needed for attribution. Observer
 // id and originator pubkey are lowercased in SQL (not per row), the path slice
@@ -749,7 +769,6 @@ func (s *Server) scanReachRows(ctx context.Context, tokens map[string]bool, sinc
 	if len(tokens) == 0 {
 		return nil, nil // defensive: an empty LIKE chain would render `AND ()` (SQL error)
 	}
-	likes := make([]string, 0, len(tokens))
 	args := []interface{}{sinceEpoch}
 	// Sort tokens so the generated SQL text is byte-stable across requests
 	// with the same token set — preserves the driver's prepared-statement
@@ -760,17 +779,10 @@ func (s *Server) scanReachRows(ctx context.Context, tokens map[string]bool, sinc
 	}
 	sort.Strings(toks)
 	for _, tok := range toks {
-		likes = append(likes, "o.path_json LIKE ?")
 		args = append(args, "%\""+tok+"\"%")
 	}
-	q := `SELECT LOWER(COALESCE(obs.id,'')), LOWER(COALESCE(t.from_pubkey,'')), COALESCE(t.payload_type,0), o.path_json, o.snr
-	      FROM observations o
-	      JOIN transmissions t ON t.id = o.transmission_id
-	      LEFT JOIN observers obs ON obs.rowid = o.observer_idx
-	      WHERE o.timestamp >= ? AND (` + strings.Join(likes, " OR ") + `)
-	      LIMIT ?`
 	args = append(args, reachScanRowLimit)
-	rows, err := s.db.conn.QueryContext(ctx, q, args...)
+	rows, err := s.db.conn.QueryContext(ctx, reachScanSQL(len(toks)), args...)
 	if err != nil {
 		log.Printf("[reach] scan query failed: %v", err)
 		return nil, err
