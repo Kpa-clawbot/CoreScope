@@ -92,8 +92,10 @@ type StoreObs struct {
 	// fallback chain on every read; for /api/observers/{id}/analytics
 	// that fires 60k+ times per request under RLock. ParsedTime returns
 	// the parsed value once, caching for the lifetime of the StoreObs.
-	tsParseOnce sync.Once
+	// Keep time.Time before sync.Once and the bool to avoid padding that
+	// pushes each observation into a larger allocation class on 64-bit Go.
 	tsParsed    time.Time
+	tsParseOnce sync.Once
 	tsParsedOK  bool
 }
 
