@@ -50,6 +50,39 @@ type deviceTokenResponse struct {
 	User      deviceTokenUser `json:"user"`
 }
 
+type companionChallengeRequest struct {
+	Pubkey string `json:"pubkey"`
+}
+
+type companionChallengeResponse struct {
+	Challenge string `json:"challenge"`
+	ExpiresAt string `json:"expiresAt"`
+	// Host is what the client signs: the host of userManagement.publicBaseUrl,
+	// the same one linkMessage verifies against.
+	Host string `json:"host"`
+}
+
+type companionLinkRequest struct {
+	Pubkey    string `json:"pubkey"`
+	Challenge string `json:"challenge"`
+	Signature string `json:"signature"`
+	Name      string `json:"name"`
+}
+
+type companionLinkResponse struct {
+	Pubkey   string `json:"pubkey"`
+	Name     string `json:"name"`
+	LinkedAt string `json:"linkedAt"`
+	MyNodes  string `json:"myNodes"` // myNodesAdded, myNodesPresent, myNodesFull or myNodesFailed
+}
+
+type companionJSON struct {
+	Pubkey     string  `json:"pubkey"`
+	Name       string  `json:"name"`
+	LinkedAt   string  `json:"linkedAt"`
+	LastSeenAt *string `json:"lastSeenAt"` // newest client_receptions.rx_at, or null
+}
+
 type emailRequest struct {
 	Email string `json:"email"`
 }
