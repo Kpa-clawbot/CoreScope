@@ -1,9 +1,15 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
+	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -162,4 +168,77 @@ func TestScopeTransport_CachedSeparatelyFromDeclaredView(t *testing.T) {
 	if len(transport.Repeaters) != 2 {
 		t.Fatalf("transport view = %d rows after the declared view was cached, want 2", len(transport.Repeaters))
 	}
+}
+
+// BenchmarkComputeScopeTransport: a fleet of 1,200 repeaters (#1975 quotes an
+// instance with 1,179) and 30k flood transmissions in the last 24h, each
+// forwarded along a 4-hop path of 3-byte prefixes, a third of them scoped to
+// one of eight regions. Reports the response size too, as #2142 asks.
+func BenchmarkComputeScopeTransport(b *testing.B) {
+	log.SetOutput(io.Discard)
+	b.Cleanup(func() { log.SetOutput(os.Stderr) })
+	conn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		b.Fatal(err)
+	}
+	conn.SetMaxOpenConns(1)
+	for _, ddl := range []string{
+		`CREATE TABLE transmissions (id INTEGER PRIMARY KEY AUTOINCREMENT, raw_hex TEXT NOT NULL, hash TEXT NOT NULL UNIQUE,
+			first_seen TEXT NOT NULL, route_type INTEGER, payload_type INTEGER, code1 TEXT, code2 TEXT, scope_name TEXT)`,
+		`CREATE INDEX idx_transmissions_first_seen ON transmissions(first_seen)`,
+		`CREATE TABLE observations (id INTEGER PRIMARY KEY AUTOINCREMENT, transmission_id INTEGER NOT NULL, path_json TEXT, timestamp INTEGER NOT NULL)`,
+		`CREATE INDEX idx_obs_tx ON observations(transmission_id)`,
+		`CREATE TABLE nodes (public_key TEXT PRIMARY KEY, name TEXT, role TEXT, configured_scope TEXT, configured_scope_at TEXT)`,
+	} {
+		if _, err := conn.Exec(ddl); err != nil {
+			b.Fatal(err)
+		}
+	}
+	db := &DB{conn: conn}
+	if err := db.detectSchema(context.Background(), conn); err != nil {
+		b.Fatal(err)
+	}
+	const fleet = 1200
+	pks := make([]string, fleet)
+	conn.Exec("BEGIN")
+	for i := range pks {
+		pks[i] = fmt.Sprintf("%06x", i*13+0x100000) + strings.Repeat("ab", 29)
+		scope := sql.NullString{}
+		if i%7 == 0 {
+			scope = sql.NullString{String: "be,be-van,*", Valid: true}
+		}
+		conn.Exec(`INSERT INTO nodes (public_key, name, role, configured_scope, configured_scope_at) VALUES (?, ?, 'repeater', ?, ?)`,
+			pks[i], fmt.Sprintf("Repeater %d", i), scope, time.Now().UTC().Format(time.RFC3339))
+	}
+	regions := []string{"#be", "#be-van", "#be-ant", "#be-gnt", "#be-lge", "#nl", "#nl-ams", "#de"}
+	now := time.Now().UTC()
+	for i := 0; i < 30000; i++ {
+		var scope interface{}
+		route := RouteFlood
+		if i%3 == 0 {
+			route, scope = 0, regions[i%len(regions)]
+		}
+		res, _ := conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, code1, code2, scope_name)
+			VALUES ('AA', ?, ?, ?, 1, '1234', '00', ?)`, fmt.Sprintf("bench%d", i), now.Add(-time.Duration(i)*2*time.Second).Format(time.RFC3339), route, scope)
+		id, _ := res.LastInsertId()
+		path := fmt.Sprintf(`["%s","%s","%s","%s"]`, strings.ToUpper(pks[i%fleet][:6]), strings.ToUpper(pks[(i*7)%fleet][:6]),
+			strings.ToUpper(pks[(i*11)%fleet][:6]), strings.ToUpper(pks[(i*17)%fleet][:6]))
+		conn.Exec(`INSERT INTO observations (transmission_id, path_json, timestamp) VALUES (?, ?, ?)`, id, path, now.Unix())
+	}
+	conn.Exec("COMMIT")
+	cfg := &Config{Port: 3000}
+	srv := NewServer(db, cfg, NewHub())
+	srv.store = newTestStoreWithDB(b, db, cfg)
+	since := now.Add(-24 * time.Hour).Format(time.RFC3339)
+	b.ResetTimer()
+	var resp *ScopeTransportResponse
+	for i := 0; i < b.N; i++ {
+		if resp, err = srv.computeScopeTransport("24h", since); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	body, _ := json.Marshal(resp)
+	b.ReportMetric(float64(len(resp.Repeaters)), "rows")
+	b.ReportMetric(float64(len(body))/1024, "response-KB")
 }
