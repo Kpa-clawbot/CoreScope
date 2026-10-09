@@ -62,6 +62,9 @@ func newAuthService(set *userMgmtSettings, st *users.Store, m mailer.Mailer) *au
 // users.Open as a forbidden path, so users.db can never be the analyzer DB.
 func (s *Server) initUserManagement(measurementDBPath string) error {
 	if !s.cfg.UserManagementEnabled() {
+		if s.cfg.ClientRxRequireLinkedCompanionSet() {
+			log.Printf("[users] clientRxCoverage.requireLinkedCompanion is set but userManagement is off: the setting is ignored")
+		}
 		return nil
 	}
 	set, err := resolveUserManagement(s.cfg.UserManagement, measurementDBPath, os.Getenv)
