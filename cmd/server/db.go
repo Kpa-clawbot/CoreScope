@@ -3223,6 +3223,16 @@ func (db *DB) GetSignatureDropCount() int64 {
 	return count
 }
 
+// scopeStatsByRegionQuery counts named-region transport transmissions in the
+// window, per region.
+var scopeStatsByRegionQuery = `
+		SELECT scope_name, COUNT(*) AS cnt
+		FROM transmissions
+		WHERE ` + routeTypeTransportSQL + ` AND scope_name IS NOT NULL AND scope_name != '' AND first_seen >= ?
+		GROUP BY scope_name
+		ORDER BY cnt DESC
+	`
+
 func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 	if !db.hasScopeName {
 		return nil, fmt.Errorf("scope_name column not present — run ingestor to apply migrations")
@@ -3281,13 +3291,7 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 	resp.Summary.Unscoped += nonTransportUnscoped
 
 	// Per-region counts (named regions only)
-	rows, err := db.conn.Query(`
-		SELECT scope_name, COUNT(*) AS cnt
-		FROM transmissions
-		WHERE `+routeTypeTransportSQL+` AND scope_name IS NOT NULL AND scope_name != '' AND first_seen >= ?
-		GROUP BY scope_name
-		ORDER BY cnt DESC
-	`, since)
+	rows, err := db.conn.Query(scopeStatsByRegionQuery, since)
 	if err != nil {
 		return nil, fmt.Errorf("scope byRegion query: %w", err)
 	}
