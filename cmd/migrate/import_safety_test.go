@@ -50,7 +50,7 @@ func TestResumeAndFinalizationRejectTargetCorruption(t *testing.T) {
 				o.afterBatch = nil
 				_, err = importSQLite(context.Background(), o)
 			} else {
-				err = finalizeImport(context.Background(), o.DatabaseURL, o.Kind)
+				_, err = finalizeImport(context.Background(), o.DatabaseURL, o.Kind)
 			}
 			if err == nil {
 				t.Fatal("corrupted target was accepted")

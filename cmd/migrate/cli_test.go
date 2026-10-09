@@ -71,7 +71,7 @@ func TestCheckImportMarkerBindsExactSource(t *testing.T) {
 	if err := runCommand(context.Background(), args, &output); err == nil {
 		t.Fatal("unfinalized import passed bootstrap guard")
 	}
-	if err := finalizeImport(context.Background(), dsn, "telemetry"); err != nil {
+	if _, err := finalizeImport(context.Background(), dsn, "telemetry"); err != nil {
 		t.Fatal(err)
 	}
 	if err := runCommand(context.Background(), args, &output); err != nil {

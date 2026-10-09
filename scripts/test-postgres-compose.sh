@@ -57,7 +57,7 @@ PY
   if [[ $(realpath -e "$work") == "$temp_root"/corescope-pg-smoke-* && ! -L "$work" ]]; then
     if $cleanup_ok; then
       sudo rm -rf -- "$work/state" "$work/postgres" || result=1
-      rm -f -- "$work/.env" "$work/compose.json" "$work/override.yml" "$work/packet.json" "$work/stats.json" "$work/states.json" "$work/health.json" "$work/actions.raw.log" "$work/container.raw.log" || result=1
+      rm -f -- "$work/.env" "$work/compose.json" "$work/override.yml" "$work/packet.json" "$work/stats.json" "$work/states.json" "$work/health.json" "$work/proxy-health.json" "$work/actions.raw.log" "$work/container.raw.log" || result=1
     fi
     if [ "$result" -eq 0 ]; then
       rm -f -- "$work/failure.log"
@@ -83,7 +83,10 @@ for key in POSTGRES_ADMIN_PASSWORD CORESCOPE_OWNER_PASSWORD CORESCOPE_READER_PAS
 done
 unset password
 export CORESCOPE_IMAGE="$image" DATA_DIR="$work/state" POSTGRES_DATA_DIR="$work/postgres"
-export DISABLE_MOSQUITTO=false DISABLE_CADDY=true
+export DISABLE_MOSQUITTO=false
+# Exercise the example's default Caddy/port-80 path, including when the runner
+# environment has its own Caddy preference. The owned .env contains only secrets.
+unset DISABLE_CADDY
 mkdir "$work/state"
 python3 - "$repo" "$work" <<'PY'
 import json,re,sys
@@ -128,6 +131,7 @@ assert config["name"]==work.name.lower()
 assert set(config["services"])=={"postgres","bootstrap","corescope"}
 assert set(config["networks"])=={"default"}
 assert config["networks"]["default"]["internal"] is True
+assert config["services"]["corescope"]["environment"]["DISABLE_CADDY"] == "false", "smoke must use the default Caddy listener"
 allowed={(work/"state").resolve(),(repo/"docker/postgres-init.sh").resolve()}
 for service in config["services"].values():
     assert not service.get("ports"), "smoke must publish no ports"
@@ -178,14 +182,16 @@ phase=mqtt-ingestion
 timeout 10s "${dc[@]}" exec -T corescope mosquitto_pub -h 127.0.0.1 -q 1 -r -t meshcore/SJC/ci-smoke/packets -s < "$work/packet.json" >> "$work/actions.raw.log" 2>&1
 for attempt in $(seq 1 30); do
   if timeout 5s "${dc[@]}" exec -T corescope wget -qO- http://127.0.0.1:3000/api/healthz > "$work/health.json" 2>> "$work/actions.raw.log" &&
-     timeout 5s "${dc[@]}" exec -T corescope wget -qO- http://127.0.0.1:3000/api/stats > "$work/stats.json" 2>> "$work/actions.raw.log" &&
+     timeout 5s "${dc[@]}" exec -T corescope wget -qO- http://127.0.0.1:80/api/healthz > "$work/proxy-health.json" 2>> "$work/actions.raw.log" &&
+     timeout 5s "${dc[@]}" exec -T corescope wget -qO- http://127.0.0.1:80/api/stats > "$work/stats.json" 2>> "$work/actions.raw.log" &&
      python3 - "$work" "$GITHUB_SHA" <<'PY'
 import json,sys
 from pathlib import Path
 root=Path(sys.argv[1])
 health=json.loads((root/"health.json").read_text())
+proxy_health=json.loads((root/"proxy-health.json").read_text())
 stats=json.loads((root/"stats.json").read_text())
-sys.exit(0 if health.get("ready") is True and stats.get("totalTransmissions")==1 and stats.get("totalObservations")==1 and stats.get("commit")==sys.argv[2][:7] else 1)
+sys.exit(0 if health.get("ready") is True and proxy_health.get("ready") is True and stats.get("totalTransmissions")==1 and stats.get("totalObservations")==1 and stats.get("commit")==sys.argv[2][:7] else 1)
 PY
   then break; fi
   [ "$attempt" -lt 30 ] || { echo 'Published fixture did not become visible through the packaged API.' >&2; exit 1; }
@@ -202,4 +208,4 @@ SELECT (SELECT count(*)=1 FROM transmissions)
  AND NOT has_schema_privilege('corescope_writer','public','CREATE');
 SQL
 ) == t ]]
-echo 'Packaged Compose bootstrap, restricted PostgreSQL runtime, MQTT ingestion, API visibility and pg_dump availability passed.'
+echo 'Packaged Compose bootstrap, restricted PostgreSQL runtime, MQTT ingestion, direct and Caddy HTTP readiness, API visibility and pg_dump availability passed.'

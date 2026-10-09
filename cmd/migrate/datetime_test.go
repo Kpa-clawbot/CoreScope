@@ -86,7 +86,7 @@ func TestImportPreservesDeclaredDateTextAndResume(t *testing.T) {
 			if err != nil || !report.Verified {
 				t.Fatalf("resume date import: verified=%v error=%v", report.Verified, err)
 			}
-			if err := finalizeImport(context.Background(), dsn, "telemetry"); err != nil {
+			if _, err := finalizeImport(context.Background(), dsn, "telemetry"); err != nil {
 				t.Fatal(err)
 			}
 			if err := dbschema.AssertReady(target); err != nil {

@@ -14,6 +14,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -52,6 +53,8 @@ type sourceManifest struct {
 
 const importerLock int64 = 7289041410
 
+const importDestinationObjects = `SELECT count(*) FROM pg_class WHERE relnamespace=current_schema()::regnamespace AND relkind IN ('r','p','v','m','S','f')`
+
 func fingerprint(ctx context.Context, path string) (string, error) {
 	fp, err := sourceFingerprintContext(ctx, path)
 	if err != nil {
@@ -60,7 +63,7 @@ func fingerprint(ctx context.Context, path string) (string, error) {
 	return fmt.Sprintf("%x:%x", fp[0], fp[1]), nil
 }
 
-func prepareSource(ctx context.Context, o importOptions, tables []importTable) (sourceManifest, string, error) {
+func prepareSource(ctx context.Context, o importOptions, tables []importTable, allowNew bool) (sourceManifest, string, error) {
 	var manifest sourceManifest
 	if o.Source == "" || o.StateDir == "" {
 		return manifest, "", errors.New("source and state directory are required for import")
@@ -98,7 +101,14 @@ func prepareSource(ctx context.Context, o importOptions, tables []importTable) (
 	if !errors.Is(err, os.ErrNotExist) {
 		return manifest, "", err
 	}
-	if o.Resume {
+	entries, err := os.ReadDir(dir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return manifest, "", err
+	}
+	if len(entries) != 0 {
+		return manifest, "", errors.New("preparation stopped before a complete manifest; preserve this state directory and the original SQLite files, then use a new state directory for this store only after confirming its PostgreSQL destination is empty")
+	}
+	if !allowNew {
 		return manifest, "", errors.New("no complete migration state manifest exists to resume")
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -176,7 +186,8 @@ func importSQLite(ctx context.Context, o importOptions) (importReport, error) {
 	if err != nil {
 		return report, err
 	}
-	if _, err := pgutil.ParseConfig(o.DatabaseURL); err != nil {
+	config, err := pgutil.ParseConfig(o.DatabaseURL)
+	if err != nil {
 		return report, err
 	}
 	owner, err := pgutil.Open(o.DatabaseURL, false)
@@ -185,22 +196,19 @@ func importSQLite(ctx context.Context, o importOptions) (importReport, error) {
 	}
 	defer owner.Close()
 	owner.SetMaxOpenConns(1)
-	var database, schema, address string
+	var database, schema string
 	var databaseOID, schemaOID int64
-	var port int
 	if err := owner.QueryRowContext(ctx, `SELECT current_database(),current_schema(),
  (SELECT oid::bigint FROM pg_database WHERE datname=current_database()),
- (SELECT oid::bigint FROM pg_namespace WHERE nspname=current_schema()),
- COALESCE(inet_server_addr()::text,'local'),COALESCE(inet_server_port(),0)`).Scan(&database, &schema, &databaseOID, &schemaOID, &address, &port); err != nil {
+ (SELECT oid::bigint FROM pg_namespace WHERE nspname=current_schema())`).Scan(&database, &schema, &databaseOID, &schemaOID); err != nil {
 		return report, err
 	}
-	identity, _ := json.Marshal([]any{database, schema, databaseOID, schemaOID, address, port})
+	// Container IPs can change while their persistent volume and configured DNS
+	// endpoint remain the same. Bind resume to that endpoint and logical OIDs;
+	// the destination's random import run ID is verified separately below.
+	identity, _ := json.Marshal([]any{database, schema, databaseOID, schemaOID, config.Host, config.Port})
 	identityHash := sha256.Sum256(identity)
 	o.targetDigest = hex.EncodeToString(identityHash[:])
-	config, err := pgutil.ParseConfig(o.DatabaseURL)
-	if err != nil {
-		return report, err
-	}
 	conn, err := pgx.ConnectConfig(ctx, config)
 	if err != nil {
 		return report, errors.New("connect to PostgreSQL import destination failed")
@@ -211,7 +219,24 @@ func importSQLite(ctx context.Context, o importOptions) (importReport, error) {
 	if err := lockImport(ctx, conn); err != nil {
 		return report, err
 	}
-	manifest, path, err := prepareSource(ctx, o, tables)
+	allowNew := !o.Resume
+	if o.Resume {
+		var hasImport bool
+		if err := conn.QueryRow(ctx, `SELECT to_regclass('corescope_import') IS NOT NULL`).Scan(&hasImport); err != nil {
+			return report, err
+		}
+		if !hasImport {
+			var occupied int
+			if err := conn.QueryRow(ctx, importDestinationObjects).Scan(&occupied); err != nil {
+				return report, err
+			}
+			if occupied != 0 {
+				return report, errors.New("resume destination has no import marker and is not empty; existing data was not changed")
+			}
+			allowNew = true
+		}
+	}
+	manifest, path, err := prepareSource(ctx, o, tables, allowNew)
 	if err != nil {
 		return report, err
 	}
@@ -231,7 +256,7 @@ func importSQLite(ctx context.Context, o importOptions) (importReport, error) {
 	}
 	if !exists {
 		var occupied int
-		if err := conn.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema=current_schema()`).Scan(&occupied); err != nil {
+		if err := conn.QueryRow(ctx, importDestinationObjects).Scan(&occupied); err != nil {
 			return report, err
 		}
 		if occupied != 0 {
@@ -278,25 +303,49 @@ func importSQLite(ctx context.Context, o importOptions) (importReport, error) {
 	if version != 1 {
 		return report, errors.New("unsupported PostgreSQL schema version for import")
 	}
+	var recordedReport importReport
 	if ready {
-		return report, errors.New("import destination is already live; do not resume after cutover")
+		// A process can stop between the two databases' readiness commits. Keep
+		// this completed store unchanged, but never trust readiness by itself.
+		tx, err := conn.Begin(ctx)
+		if err != nil {
+			return report, err
+		}
+		defer tx.Rollback(context.Background())
+		lockTables := []string{"corescope_import", "corescope_import_progress", "corescope_schema"}
+		for _, table := range tables {
+			lockTables = append(lockTables, quote(table.Name))
+		}
+		if _, err := tx.Exec(ctx, `LOCK TABLE `+strings.Join(lockTables, ",")+` IN SHARE MODE`); err != nil {
+			return report, err
+		}
+		var verified bool
+		var reportText string
+		if err := tx.QueryRow(ctx, `SELECT verified,report FROM corescope_import WHERE id=1`).Scan(&verified, &reportText); err != nil {
+			return report, err
+		}
+		if !verified || json.Unmarshal([]byte(reportText), &recordedReport) != nil || !recordedReport.Verified || recordedReport.Kind != o.Kind || len(recordedReport.Tables) != len(tables) {
+			return report, errors.New("ready destination has no complete verified import report; resume refused")
+		}
 	}
 	for _, table := range tables {
-		got, err := copyTable(ctx, source, owner, conn, table, o)
+		got, err := copyTable(ctx, source, owner, conn, table, o, ready)
 		if err != nil {
 			return report, fmt.Errorf("import %s: %w", table.Name, err)
 		}
 		report.Tables = append(report.Tables, got)
 	}
-	if err := reseed(ctx, source, conn, tables, o.Kind); err != nil {
+	if err := reseed(ctx, source, conn, tables, o.Kind, ready); err != nil {
 		return report, err
 	}
 	// COPY does not populate planner statistics. Prepare only this store's
 	// imported tables before declaring verification complete; the cost belongs
 	// to migration timing, never to the steady-state ingestion benchmark.
-	for _, table := range tables {
-		if _, err := conn.Exec(ctx, `ANALYZE `+quote(table.Name)); err != nil {
-			return report, fmt.Errorf("analyze imported %s: %w", table.Name, err)
+	if !ready {
+		for _, table := range tables {
+			if _, err := conn.Exec(ctx, `ANALYZE `+quote(table.Name)); err != nil {
+				return report, fmt.Errorf("analyze imported %s: %w", table.Name, err)
+			}
 		}
 	}
 	// Source stays frozen through verification, not merely while snapshotting.
@@ -305,7 +354,7 @@ func importSQLite(ctx context.Context, o importOptions) (importReport, error) {
 		return report, err
 	}
 	if current != manifest.SourceDigest {
-		return report, errors.New("original SQLite source changed during import; target remains unready")
+		return report, errors.New("original SQLite source changed during import; keep services stopped")
 	}
 	normalized, err := fingerprint(ctx, path)
 	if err != nil {
@@ -315,6 +364,12 @@ func importSQLite(ctx context.Context, o importOptions) (importReport, error) {
 		return report, errors.New("normalized snapshot changed during import")
 	}
 	report.Verified = true
+	if ready {
+		if !slices.Equal(report.Tables, recordedReport.Tables) {
+			return report, errors.New("ready destination differs from its verified import report; resume refused")
+		}
+		return report, nil
+	}
 	data, err := json.Marshal(report)
 	if err != nil {
 		return report, err
@@ -495,7 +550,7 @@ func digestTarget(ctx context.Context, db *sql.DB, table importTable) (tableRepo
 	return report, rows.Err()
 }
 
-func copyTable(ctx context.Context, source, owner *sql.DB, conn *pgx.Conn, table importTable, o importOptions) (tableReport, error) {
+func copyTable(ctx context.Context, source, owner *sql.DB, conn *pgx.Conn, table importTable, o importOptions, verifyOnly bool) (tableReport, error) {
 	report := tableReport{Table: table.Name}
 	var copied int64
 	var storedDigest string
@@ -503,6 +558,9 @@ func copyTable(ctx context.Context, source, owner *sql.DB, conn *pgx.Conn, table
 	err := conn.QueryRow(ctx, `SELECT rows_copied,sha256,complete FROM corescope_import_progress WHERE table_name=$1`, table.Name).Scan(&copied, &storedDigest, &complete)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return report, err
+	}
+	if verifyOnly && !complete {
+		return report, errors.New("ready destination lacks complete import progress; resume refused")
 	}
 	existing, err := digestTarget(ctx, owner, table)
 	if err != nil {
@@ -626,8 +684,10 @@ func copyTable(ctx context.Context, source, owner *sql.DB, conn *pgx.Conn, table
 	if report.Rows < copied {
 		return report, errors.New("source table shorter than committed progress")
 	}
-	if err := flush(true); err != nil {
-		return report, err
+	if !verifyOnly {
+		if err := flush(true); err != nil {
+			return report, err
+		}
 	}
 	report.SHA256 = hex.EncodeToString(h.Sum(nil))
 	final, err := digestTarget(ctx, owner, table)
@@ -640,7 +700,7 @@ func copyTable(ctx context.Context, source, owner *sql.DB, conn *pgx.Conn, table
 	return report, nil
 }
 
-func reseed(ctx context.Context, source *sql.DB, conn *pgx.Conn, tables []importTable, kind string) error {
+func reseed(ctx context.Context, source *sql.DB, conn *pgx.Conn, tables []importTable, kind string, verifyOnly bool) error {
 	highWater := map[string]int64{}
 	var hasSequence int
 	if err := source.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name='sqlite_sequence'`).Scan(&hasSequence); err != nil {
@@ -700,7 +760,21 @@ func reseed(ctx context.Context, source *sql.DB, conn *pgx.Conn, tables []import
 			if !called {
 				high = 1
 			}
-			if _, err := conn.Exec(ctx, `SELECT setval(pg_get_serial_sequence($1,$2),$3,$4)`, table.Name, col.Name, high, called); err != nil {
+			if verifyOnly {
+				var sequence string
+				if err := conn.QueryRow(ctx, `SELECT pg_get_serial_sequence($1,$2)`, table.Name, col.Name).Scan(&sequence); err != nil {
+					return err
+				}
+				var actual int64
+				var wasCalled bool
+				// pg_get_serial_sequence returns a safely quoted qualified identifier.
+				if err := conn.QueryRow(ctx, `SELECT last_value,is_called FROM `+sequence).Scan(&actual, &wasCalled); err != nil {
+					return err
+				}
+				if actual != high || wasCalled != called {
+					return fmt.Errorf("ready destination sequence for %s changed since import; resume refused", table.Name)
+				}
+			} else if _, err := conn.Exec(ctx, `SELECT setval(pg_get_serial_sequence($1,$2),$3,$4)`, table.Name, col.Name, high, called); err != nil {
 				return err
 			}
 		}
@@ -708,46 +782,48 @@ func reseed(ctx context.Context, source *sql.DB, conn *pgx.Conn, tables []import
 	return nil
 }
 
-func finalizeImport(ctx context.Context, databaseURL, kind string) error {
+// finalizeImport reports whether this call committed a closed-to-ready transition.
+// The caller may roll back only transitions it owns if another store fails.
+func finalizeImport(ctx context.Context, databaseURL, kind string) (bool, error) {
 	tables, err := layouts(kind)
 	if err != nil {
-		return err
+		return false, err
 	}
 	db, err := pgutil.Open(databaseURL, false)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer db.Close()
 	config, err := pgutil.ParseConfig(databaseURL)
 	if err != nil {
-		return err
+		return false, err
 	}
 	conn, err := pgx.ConnectConfig(ctx, config)
 	if err != nil {
-		return errors.New("connect to PostgreSQL finalization destination failed")
+		return false, errors.New("connect to PostgreSQL finalization destination failed")
 	}
 	defer conn.Close(context.Background())
 	if err := lockImport(ctx, conn); err != nil {
-		return err
+		return false, err
 	}
 	var verified bool
 	var recordedKind, reportText string
 	if err := conn.QueryRow(ctx, `SELECT kind,verified,report FROM corescope_import WHERE id=1`).Scan(&recordedKind, &verified, &reportText); err != nil {
-		return err
+		return false, err
 	}
 	if !verified || recordedKind != kind {
-		return errors.New("cannot finalize an unverified or mismatched import")
+		return false, errors.New("cannot finalize an unverified or mismatched import")
 	}
 	var report importReport
 	if err := json.Unmarshal([]byte(reportText), &report); err != nil {
-		return err
+		return false, err
 	}
 	if !report.Verified || report.Kind != kind || len(report.Tables) != len(tables) {
-		return errors.New("incomplete verification manifest")
+		return false, errors.New("incomplete verification manifest")
 	}
 	tx, err := conn.Begin(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback(context.Background())
 	var lockTables []string
@@ -755,25 +831,35 @@ func finalizeImport(ctx context.Context, databaseURL, kind string) error {
 		lockTables = append(lockTables, quote(table.Name))
 	}
 	if _, err := tx.Exec(ctx, `LOCK TABLE `+strings.Join(lockTables, ",")+` IN SHARE MODE`); err != nil {
-		return err
+		return false, err
 	}
 	for i, table := range tables {
 		got, err := digestTarget(ctx, db, table)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if got != report.Tables[i] {
-			return fmt.Errorf("final verification failed for %s; target remains unready", table.Name)
+			return false, fmt.Errorf("final verification failed for %s; target remains unready", table.Name)
 		}
+	}
+	var ready bool
+	if err := tx.QueryRow(ctx, `SELECT ready FROM corescope_schema WHERE kind=$1 AND version=1`, kind).Scan(&ready); err != nil {
+		return false, errors.New("missing or unsupported readiness marker")
+	}
+	if ready {
+		return false, nil
 	}
 	result, err := tx.Exec(ctx, `UPDATE corescope_schema SET ready=true WHERE kind=$1 AND version=1`, kind)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if result.RowsAffected() != 1 {
-		return errors.New("missing or unsupported readiness marker")
+		return false, errors.New("missing or unsupported readiness marker")
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func lockImport(ctx context.Context, conn *pgx.Conn) error {

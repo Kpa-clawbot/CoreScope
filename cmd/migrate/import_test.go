@@ -69,7 +69,7 @@ func TestImportTelemetryPreservesIDsNullsAndHighWater(t *testing.T) {
 	if err := dbschema.AssertReady(db); err == nil {
 		t.Fatal("import accepted before explicit cutover finalization")
 	}
-	if err := finalizeImport(context.Background(), dsn, "telemetry"); err != nil {
+	if _, err := finalizeImport(context.Background(), dsn, "telemetry"); err != nil {
 		t.Fatal(err)
 	}
 	if err := dbschema.AssertReady(db); err != nil {
@@ -233,7 +233,7 @@ func TestImportLegacyAccountsPreservesAuthenticationAndEventOrder(t *testing.T) 
 	if err := users.AssertReady(db); err == nil {
 		t.Fatal("accounts accepted before finalization")
 	}
-	if err := finalizeImport(context.Background(), dsn, "accounts"); err != nil {
+	if _, err := finalizeImport(context.Background(), dsn, "accounts"); err != nil {
 		t.Fatal(err)
 	}
 	if err := users.AssertReady(db); err != nil {

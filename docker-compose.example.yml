@@ -2,9 +2,8 @@
 # application image from GHCR.
 #
 # AUDIENCE: third-party operators running a self-hosted CoreScope on
-# ONE host. Ships with the built-in Mosquitto broker DISABLED by
-# default (DISABLE_MOSQUITTO defaults to `false` here, meaning
-# mosquitto RUNS in-container — the historical shape); flip to `true`
+# ONE host. Ships with the built-in Mosquitto broker enabled
+# (DISABLE_MOSQUITTO defaults to `false`); flip to `true`
 # if you already have an external MQTT broker to point CoreScope at.
 #
 # For the CoreScope maintainers' internal staging deployment (with a
@@ -45,7 +44,7 @@ services:
       - CORESCOPE_WRITER_DATABASE_URL=postgresql://corescope_writer:${CORESCOPE_WRITER_PASSWORD:?Set CORESCOPE_WRITER_PASSWORD}@postgres/corescope_telemetry?sslmode=disable
       - CORESCOPE_USERS_DATABASE_URL=postgresql://corescope_accounts:${CORESCOPE_ACCOUNTS_PASSWORD:?Set CORESCOPE_ACCOUNTS_PASSWORD}@postgres/corescope_accounts?sslmode=disable
       - CORESCOPE_APPROVED_CHANNELS_DATABASE_URL=postgresql://corescope_channels:${CORESCOPE_CHANNELS_PASSWORD:?Set CORESCOPE_CHANNELS_PASSWORD}@postgres/corescope_accounts?sslmode=disable
-      - DISABLE_CADDY=${DISABLE_CADDY:-true}
+      - DISABLE_CADDY=${DISABLE_CADDY:-false}
       - DISABLE_MOSQUITTO=${DISABLE_MOSQUITTO:-false}
     restart: unless-stopped
     healthcheck:

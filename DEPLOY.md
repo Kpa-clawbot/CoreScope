@@ -14,9 +14,10 @@ Set `CORESCOPE_REF` to the reviewed application revision, then retain the comple
 git clone https://github.com/Kpa-clawbot/CoreScope.git
 cd CoreScope
 git checkout --detach "$CORESCOPE_REF"
-cp .env.example .env
+test -f .env || cp .env.example .env
 chmod 600 .env
-# Fill every PostgreSQL password field with a different openssl rand -hex 32 value.
+# New PostgreSQL storage only: fill missing password fields with distinct
+# openssl rand -hex 32 values. Preserve an existing .env and merge missing keys.
 # Set CORESCOPE_IMAGE in .env to the matching reviewed image tag or digest.
 docker compose -f docker-compose.example.yml up -d
 ```
@@ -37,7 +38,7 @@ Settings can be overridden via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DISABLE_CADDY` | Variant-specific; `true` in the example | Skip internal Caddy (set `true` behind a reverse proxy) |
+| `DISABLE_CADDY` | `false` in the example | Caddy forwards published port 80 to the Go server on 3000. If disabled, also change your proxy/port mapping to target 3000. |
 | `DISABLE_MOSQUITTO` | `true` in `docker-compose.staging.yml`; `false` elsewhere | Skip internal MQTT broker. Default flipped to `true` for the staging deploy in v3.7+ because a standalone `mqtt-broker` container owns MQTT on that host — see "Standalone MQTT broker (staging)" below. |
 | `HTTP_PORT` | `80` | Host port mapping |
 | `DATA_DIR` | `./data` | Host path for persistent data |
@@ -55,11 +56,11 @@ docker compose -f docker-compose.example.yml up -d
 
 PostgreSQL persists telemetry and accounts in its own host directory (`POSTGRES_DATA_DIR`, or the production/staging equivalent). `/app/data` holds config, theme, queues, statistics and account backup files. Keep these locations separate and preserve the private `.env` with your recovery material.
 
-Use native `pg_dump` archives, the authenticated backup endpoints, or `./manage.sh backup <directory>`. Do not copy live PostgreSQL storage or a legacy SQLite file as a current backup. `./manage.sh restore <directory>` accepts native archives only, refuses nonempty targets and leaves the application stopped for validation. See the [backup and account recovery boundaries](docs/postgresql-upgrade.md#native-backups-and-restores).
+Use native `pg_dump` archives or the authenticated backup endpoints. `./manage.sh backup <directory>` and `restore` operate the production Compose variant managed by that script; they do not select `docker-compose.example.yml`. The [backup and restore instructions](docs/postgresql-upgrade.md#native-backups-and-restores) include the example variant. Do not copy live PostgreSQL storage or a legacy SQLite file as a current backup.
 
 ## TLS
 
-Option A — **External reverse proxy** (recommended): Run with `DISABLE_CADDY=true`, put nginx/traefik/Cloudflare in front.
+Option A — **External reverse proxy**: Keep the default internal Caddy and proxy to the published HTTP port. Alternatively, set `DISABLE_CADDY=true` and have the proxy reach container port 3000; change the Compose port mapping from `:80` to `:3000` if the proxy runs on the host. Setting the flag alone leaves the existing port-80 mapping without a listener.
 
 Option B — **Built-in Caddy**: Mount a custom Caddyfile at `/etc/caddy/Caddyfile` and expose ports 80+443.
 
@@ -169,18 +170,19 @@ Pre-built images skip the build step entirely — faster updates, no Go toolchai
 
 **Updates after migration:**
 ```bash
-docker compose pull && docker compose up -d
+docker compose -f docker-compose.example.yml pull
+docker compose -f docker-compose.example.yml up -d
 ```
 
 ### What about manage.sh features?
 
 | manage.sh command | Pre-built equivalent |
 |---|---|
-| `./manage.sh update` | `docker compose pull && docker compose up -d` |
-| `./manage.sh stop` | `docker compose down` |
-| `./manage.sh start` | `docker compose up -d` |
-| `./manage.sh logs` | `docker compose logs -f` |
-| `./manage.sh status` | `docker compose ps` |
+| `./manage.sh update` | `docker compose -f docker-compose.example.yml pull` then `up -d` with the same file |
+| `./manage.sh stop` | `docker compose -f docker-compose.example.yml stop corescope` |
+| `./manage.sh start` | `docker compose -f docker-compose.example.yml up -d` |
+| `./manage.sh logs` | `docker compose -f docker-compose.example.yml logs -f` |
+| `./manage.sh status` | `docker compose -f docker-compose.example.yml ps` |
 | `./manage.sh setup` | Retain the full checkout, configure private credentials and select the Compose variant |
 
 `manage.sh` remains available for advanced use cases (building from source, custom patches, development). Pre-built images are recommended for most production deployments.

@@ -87,7 +87,7 @@ func TestPostgresImportCommittedFixture(t *testing.T) {
 	if !report.Verified {
 		t.Fatal("committed fixture import was not verified")
 	}
-	if err := finalizeImport(context.Background(), dsn, "telemetry"); err != nil {
+	if _, err := finalizeImport(context.Background(), dsn, "telemetry"); err != nil {
 		t.Fatal(err)
 	}
 	db := openImportDB(t, dsn)

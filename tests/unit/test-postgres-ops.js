@@ -11,9 +11,29 @@ const source = fs.readFileSync(path.join(root, 'manage.sh'), 'utf8').replace(/\r
 const bash = require('../../scripts/bash-path')();
 const functions = ['pg_exec', 'pg_empty', 'pg_dump_file', 'pg_restore_file', 'cmd_backup', 'cmd_restore', 'prepare_staging_db', 'prepare_staging_config', 'write_env_managed_values', 'is_true', 'cmd_start']
   .map(name => source.match(new RegExp(`^${name}\\(\\)\\s*\\{[\\s\\S]*?^}`, 'm'))?.[0] || '').join('\n');
-const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'corescope-pg-ops-'));
 const quote = value => "'" + value.replace(/'/g, "'\\''") + "'";
 const posix = value => value.replace(/\\/g, '/');
+// The example's published HTTP port must reach a listener in the default
+// supervisor selection. A healthy private port 3000 alone does not prove this.
+const example = fs.readFileSync(path.join(root, 'docker-compose.example.yml'), 'utf8');
+const disableCaddy = example.match(/DISABLE_CADDY=\$\{DISABLE_CADDY:-(true|false)\}/)?.[1];
+assert(disableCaddy, 'example must declare its Caddy default');
+const supervisor = fs.readFileSync(path.join(root, 'docker', disableCaddy === 'true' ? 'supervisord-go-no-caddy.conf' : 'supervisord-go.conf'), 'utf8');
+const listeners = new Set([Number(supervisor.match(/corescope-server[^\n]* -port (\d+)/)?.[1])]);
+if (supervisor.includes('[program:caddy]')) {
+  const caddy = fs.readFileSync(path.join(root, 'docker/Caddyfile'), 'utf8');
+  listeners.add(Number(caddy.match(/^:(\d+)\s*\{/m)?.[1]));
+  assert(listeners.has(Number(caddy.match(/^\s*reverse_proxy localhost:(\d+)/m)?.[1])), 'Caddy upstream does not reach the application');
+}
+const publishedPort = Number(example.match(/HTTP_PORT:-\d+\}:(\d+)/)?.[1]);
+assert(listeners.has(publishedPort), 'default example publishes HTTP to a port with no running listener');
+const smoke = fs.readFileSync(path.join(root, 'scripts/test-postgres-compose.sh'), 'utf8');
+assert(!/\bDISABLE_CADDY=true\b/.test(smoke), 'packaged smoke bypasses the example default HTTP listener');
+for (const endpoint of ['http://127.0.0.1:3000/api/healthz', 'http://127.0.0.1:80/api/healthz', 'http://127.0.0.1:80/api/stats']) {
+  assert(smoke.includes(endpoint), `packaged smoke does not exercise ${endpoint}`);
+}
+assert(smoke.includes('proxy_health.get("ready") is True'), 'packaged smoke does not validate readiness through Caddy');
+const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'corescope-pg-ops-'));
 function run(command, occupied = '0', failRestore = '0', prodReady = '1') {
   const setup = `
 set -e

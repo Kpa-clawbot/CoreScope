@@ -68,8 +68,10 @@ func runCommand(ctx context.Context, args []string, out io.Writer) error {
 			return errors.New("telemetry and accounts require separate PostgreSQL databases")
 		}
 	}
-	type store struct{ kind, dsn, source string }
-	stores := []store{{"telemetry", *databaseURL, *source}, {"accounts", *usersURL, *accountSource}}
+	type store struct {
+		kind, dsn, source string
+	}
+	stores := []store{{kind: "telemetry", dsn: *databaseURL, source: *source}, {kind: "accounts", dsn: *usersURL, source: *accountSource}}
 	if *checkImportKind != "" {
 		if *checkReady || *resume {
 			return errors.New("-check-import-kind cannot be combined with -check-ready or -resume")
@@ -161,11 +163,14 @@ func runCommand(ctx context.Context, args []string, out io.Writer) error {
 		}
 		fmt.Fprintf(out, "%s PostgreSQL schema initialized\n", s.kind)
 	}
-	for i, s := range imported {
-		if err := finalizeImport(ctx, s.dsn, s.kind); err != nil {
+	var opened []store
+	for _, s := range imported {
+		didOpen, err := finalizeImport(ctx, s.dsn, s.kind)
+		if err != nil {
 			// There is no cross-database transaction. Writers stay offline throughout
-			// cutover; close any earlier readiness gate if a later finalization fails.
-			for _, prior := range imported[:i] {
+			// cutover; close only gates this invocation actually opened. Another
+			// finalizer can open a gate after our earlier import verification.
+			for _, prior := range opened {
 				db, openErr := pgutil.Open(prior.dsn, false)
 				if openErr == nil {
 					_, resetErr := db.Exec(`UPDATE corescope_schema SET ready=false WHERE kind=$1`, prior.kind)
@@ -178,6 +183,9 @@ func runCommand(ctx context.Context, args []string, out io.Writer) error {
 				}
 			}
 			return err
+		}
+		if didOpen {
+			opened = append(opened, s)
 		}
 	}
 	for _, s := range imported {
