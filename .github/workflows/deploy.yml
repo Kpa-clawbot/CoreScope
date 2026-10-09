@@ -23,13 +23,30 @@ on:
         description: 'Release fast path already published the tag images'
         type: boolean
         default: false
+      sqlite_benchmark:
+        description: 'Run only the native SQLite benchmark (never deploy or publish)'
+        type: boolean
+        default: false
+      sqlite_profile:
+        description: 'Smoke only, five B pairs, or separate B profiling'
+        type: choice
+        options: [smoke, primary, diagnostic]
+        default: smoke
+      baseline_sha:
+        description: 'Exact baseline commit (empty uses the reviewed SQLite baseline)'
+        type: string
+      candidate_sha:
+        description: 'Exact application candidate commit (empty uses this workflow ref)'
+        type: string
+      harness_sha:
+        description: 'Exact harness commit (empty uses this workflow ref)'
+        type: string
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ inputs.sqlite_benchmark && format('sqlite-benchmark-dispatch-{0}', github.run_id) || format('ci-{0}', github.event.pull_request.number || github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -47,6 +64,17 @@ env:
 #   PRs stop after build-and-publish (no GHCR push). Master continues to deploy + badges.
 
 jobs:
+  sqlite-benchmark:
+    if: github.event_name == 'workflow_dispatch' && inputs.sqlite_benchmark
+    permissions:
+      contents: read
+    uses: ./.github/workflows/sqlite-benchmark.yml
+    with:
+      profile: ${{ inputs.sqlite_profile }}
+      baseline_sha: ${{ inputs.baseline_sha }}
+      candidate_sha: ${{ inputs.candidate_sha }}
+      harness_sha: ${{ inputs.harness_sha }}
+
   # ───────────────────────────────────────────────────────────────
   # 0. Change scope — decides whether the expensive jobs below run.
   # ───────────────────────────────────────────────────────────────
@@ -58,15 +86,24 @@ jobs:
       ingestor: ${{ steps.scope.outputs.ingestor }}
     steps:
       - name: Checkout code
+        if: ${{ !inputs.sqlite_benchmark }}
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Decide whether anything but documentation changed
         id: scope
+        env:
+          BENCHMARK_ONLY: ${{ inputs.sqlite_benchmark }}
         run: |
           set -euo pipefail
-          # Only pull requests are scoped. Pushes and dispatches always count as
+          if [ "$BENCHMARK_ONLY" = "true" ]; then
+            echo "code=false" >> "$GITHUB_OUTPUT"
+            echo "ingestor=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Only pull requests are scoped. Pushes and other dispatches count as
           # code, so master keeps producing an :edge image and tag builds are
           # never skipped.
           if [ "${{ github.event_name }}" != "pull_request" ]; then
@@ -948,7 +985,10 @@ jobs:
     name: "🏗️ Build & Publish Docker Image"
     needs: [go-test, race-test, e2e-test, image-check, changes]
     runs-on: ubuntu-latest
-    if: ${{ !cancelled() && needs.changes.outputs.code == 'true' && !(startsWith(github.ref, 'refs/tags/v') && inputs.images_published) }}
+    permissions:
+      contents: read
+      packages: write
+    if: ${{ !inputs.sqlite_benchmark && !cancelled() && needs.changes.outputs.code == 'true' && !(startsWith(github.ref, 'refs/tags/v') && inputs.images_published) }}
     steps:
       - name: Require every test job and the image check to have passed
         run: |
@@ -1025,7 +1065,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    if: startsWith(github.ref, 'refs/tags/v') && needs.changes.outputs.code == 'true'
+    if: ${{ !inputs.sqlite_benchmark && startsWith(github.ref, 'refs/tags/v') && needs.changes.outputs.code == 'true' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -1125,7 +1165,8 @@ jobs:
     # variable is set while the runner is still missing the job fails in ten
     # minutes rather than blocking the branch again.
     if: |
-      vars.ENABLE_STAGING_DEPLOY == 'true'
+      !inputs.sqlite_benchmark
+      && vars.ENABLE_STAGING_DEPLOY == 'true'
       && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
       && github.ref == 'refs/heads/master'
     needs: [build-and-publish]
@@ -1216,7 +1257,7 @@ jobs:
   # ───────────────────────────────────────────────────────────────
   publish:
     name: "📝 Publish Badges & Summary"
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && !inputs.sqlite_benchmark
     # Was needs: [deploy]. The badges are built from the go-test and e2e-test
     # artifacts and never needed the deploy step; depending on it meant the
     # coverage badges stopped updating whenever the self-hosted runner was
