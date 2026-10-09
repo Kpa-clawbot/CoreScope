@@ -564,6 +564,12 @@ func copyTable(ctx context.Context, source, owner *sql.DB, conn *pgx.Conn, table
 		if o.Kind == "accounts" && table.Name == "mail_events" {
 			expressions[0] = "rowid"
 		}
+		// SQLite's unary + preserves the stored value/type while removing declared
+		// column metadata. Otherwise the driver parses DATE/DATETIME/TIMESTAMP
+		// values into time.Time before copy/resume hashing can preserve their text.
+		for i, expression := range expressions {
+			expressions[i] = "+" + expression
+		}
 		rows, err := source.QueryContext(ctx, `SELECT `+strings.Join(expressions, ",")+` FROM `+quote(table.Name)+` ORDER BY `+order)
 		if err != nil {
 			return report, err
