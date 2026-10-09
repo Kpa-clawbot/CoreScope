@@ -13,6 +13,7 @@ func (s *Server) registerAuthRoutes(r *mux.Router) {
 	r.HandleFunc("/api/auth/register", s.requireOrigin(s.handleRegister)).Methods("POST")
 	r.HandleFunc("/api/auth/activate", s.requireOrigin(s.handleActivate)).Methods("POST")
 	r.HandleFunc("/api/auth/login", s.requireOrigin(s.handleLogin)).Methods("POST")
+	r.HandleFunc("/api/auth/device-token", s.handleDeviceToken).Methods("POST")
 	r.HandleFunc("/api/auth/logout", s.requireOrigin(s.handleLogout)).Methods("POST")
 	r.HandleFunc("/api/auth/me", s.handleMe).Methods("GET")
 	r.HandleFunc("/api/auth/forgot", s.requireOrigin(s.handleForgot)).Methods("POST")

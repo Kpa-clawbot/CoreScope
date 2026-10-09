@@ -14,6 +14,10 @@ const (
 	csrfHeader        = "X-CS-CSRF"
 )
 
+// deviceScopeRX is the scope of CoreDrive RX device tokens: the routes
+// bearerScopeFor lists.
+const deviceScopeRX = "rx"
+
 func (a *authService) setSessionCookie(w http.ResponseWriter, raw string, expires time.Time) {
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookieName, Value: raw, Path: "/",

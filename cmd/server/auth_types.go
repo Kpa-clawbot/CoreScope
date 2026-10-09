@@ -33,6 +33,23 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 
+type deviceTokenRequest struct {
+	Email      string `json:"email"`
+	Password   string `json:"password"`
+	DeviceName string `json:"deviceName"`
+}
+
+type deviceTokenUser struct {
+	ID          int64  `json:"id"`
+	DisplayName string `json:"displayName"`
+}
+
+type deviceTokenResponse struct {
+	Token     string          `json:"token"`
+	ExpiresAt string          `json:"expiresAt"`
+	User      deviceTokenUser `json:"user"`
+}
+
 type emailRequest struct {
 	Email string `json:"email"`
 }
