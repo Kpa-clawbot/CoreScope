@@ -1905,13 +1905,17 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	// We lean on resolved_path (from neighbor affinity graph) to disambiguate.
 	//
 	// Collect candidate IDs and index membership under the read lock, then release
-	// the lock before running SQL queries (confirmResolvedPathContains does disk I/O).
+	// the lock before reading the stored resolved paths (disk I/O).
 	type candidateCheck struct {
 		tx         *StoreTx
 		hasReverse bool
 		inIndex    bool
 	}
 	checks := make([]candidateCheck, len(candidates))
+	// The stored resolved paths are read after s.mu is released, so they get
+	// a snapshot of each candidate's observations instead of tx.Observations,
+	// which ingest appends to under the write lock.
+	rpSnapshots := make(map[int][]rpObs, len(candidates))
 	for i, tx := range candidates {
 		cc := candidateCheck{tx: tx}
 		if !s.store.useResolvedPathIndex {
@@ -1929,17 +1933,28 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 			// If not in index at all, it's a definite no
 		}
 		checks[i] = cc
+		if cc.inIndex || cc.hasReverse {
+			rpSnapshots[tx.ID] = snapshotRPObs(tx)
+		}
 	}
 	s.store.mu.RUnlock()
 
-	// Now run SQL checks outside the lock for candidates that need confirmation.
+	// One batched read of the stored resolved paths serves both the
+	// collision check and the canonical path below (#2146). It replaces one
+	// query per index hit plus one or two per survivor.
+	summaries, sumErr := s.store.summarizeStoredResolvedPaths(rpSnapshots, lowerPK)
+	if sumErr != nil {
+		log.Printf("[paths] stored resolved_path read failed: %v", sumErr)
+	}
 	confirmedBySQL := make(map[int]bool)
 	filtered := candidates[:0]
 	for _, cc := range checks {
 		if cc.inIndex {
 			filtered = append(filtered, cc.tx)
 		} else if cc.hasReverse {
-			if s.store.confirmResolvedPathContains(cc.tx.ID, lowerPK) {
+			// On a failed read keep the candidate, as the per-transmission
+			// check did.
+			if sumErr != nil || summaries[cc.tx.ID].mentions {
 				filtered = append(filtered, cc.tx)
 				confirmedBySQL[cc.tx.ID] = true
 			}
@@ -1948,20 +1963,8 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	}
 	candidates = filtered
 
-	// The canonical resolved_path lookup below runs without s.mu, so it reads
-	// a snapshot of each surviving candidate's observations instead of
-	// tx.Observations, which ingest appends to under the write lock. Taken in
-	// a short read lock of its own so only the survivors are copied.
-	s.store.mu.RLock()
-	rpSnapshots := make(map[int][]rpObs, len(candidates))
-	for _, tx := range candidates {
-		rpSnapshots[tx.ID] = snapshotRPObs(tx)
-	}
-	s.store.mu.RUnlock()
-
-	// #1278: Read the CANONICAL persisted resolved_path for each surviving
-	// candidate OUTSIDE s.mu (bestResolvedPath takes lruMu; the
-	// lock-ordering contract forbids acquiring lruMu under s.mu).
+	// #1278: Use the CANONICAL persisted resolved_path for each surviving
+	// candidate, the one bestResolvedPath returns.
 	//
 	// Option A from the issue: the packets page renders each tx via
 	// bestResolvedPath. For /api/nodes/{pk}/paths to stay
@@ -1975,7 +1978,17 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	// there's no canonical answer to be consistent with.
 	canonicalRP := make(map[int][]*string, len(candidates))
 	for _, tx := range candidates {
-		if rp := s.store.bestResolvedPath(tx.ID, rpSnapshots[tx.ID]); rp != nil {
+		sum := summaries[tx.ID]
+		if sum == nil || !sum.found {
+			continue
+		}
+		rp := unmarshalResolvedPath(sum.bestRaw)
+		if rp == nil {
+			// Unparseable stored JSON: let bestResolvedPath fall back to the
+			// next candidate, as it always has.
+			rp = s.store.bestResolvedPath(tx.ID, rpSnapshots[tx.ID])
+		}
+		if rp != nil {
 			canonicalRP[tx.ID] = rp
 		}
 	}

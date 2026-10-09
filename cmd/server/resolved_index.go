@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"hash/fnv"
 	"log"
+	"sort"
 	"strings"
 )
 
@@ -165,6 +166,94 @@ func (s *PacketStore) confirmResolvedPathContains(txID int, pubkey string) bool 
 		return true // on error, keep the candidate
 	}
 	return count > 0
+}
+
+// resolvedPathBatchSize bounds the IN list of summarizeStoredResolvedPaths.
+const resolvedPathBatchSize = 500
+
+// storedPathSummary is what /api/nodes/{pk}/paths needs from a
+// transmission's stored resolved paths.
+type storedPathSummary struct {
+	// mentions: some stored path names the pubkey, by the same rule as
+	// confirmResolvedPathContains (case-insensitive match on the quoted key,
+	// over every observation in the database).
+	mentions bool
+	// found and bestRaw: the stored path bestResolvedPath would pick, still
+	// as JSON. bestLen and bestIdx rank the candidates while rows stream in.
+	found   bool
+	bestRaw string
+	bestLen int
+	bestIdx int
+}
+
+// summarizeStoredResolvedPaths reads the stored resolved_path of every
+// observation of the transmissions in snapshots, one query per
+// resolvedPathBatchSize transmissions, and folds each row into that
+// transmission's summary as it arrives, so at most one path per transmission
+// is kept in memory. It replaces one confirmResolvedPathContains query per
+// index hit and one or two bestResolvedPath lookups per survivor (#2146).
+//
+// The best path follows bestResolvedPath: the observation with the longest
+// path_json in the snapshot that has a non-empty stored path, the earliest in
+// snapshot order on a tie. Must be called without s.mu held.
+func (s *PacketStore) summarizeStoredResolvedPaths(snapshots map[int][]rpObs, pubkey string) (map[int]*storedPathSummary, error) {
+	out := make(map[int]*storedPathSummary, len(snapshots))
+	ids := make([]int, 0, len(snapshots))
+	for id := range snapshots {
+		ids = append(ids, id)
+		out[id] = &storedPathSummary{bestLen: -1}
+	}
+	if s.db == nil || s.db.conn == nil || len(ids) == 0 {
+		return out, nil
+	}
+	sort.Ints(ids)
+	needle := `"` + strings.ToLower(pubkey) + `"`
+	for start := 0; start < len(ids); start += resolvedPathBatchSize {
+		chunk := ids[start:min(start+resolvedPathBatchSize, len(ids))]
+		args := make([]interface{}, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		s.beforeCacheLoad("resolvedPathBatch")
+		rows, err := s.db.conn.Query(`SELECT transmission_id, id, resolved_path FROM observations
+			WHERE transmission_id IN (?`+strings.Repeat(",?", len(chunk)-1)+`) AND resolved_path IS NOT NULL`, args...)
+		if err != nil {
+			return out, err
+		}
+		for rows.Next() {
+			var txID, obsID int
+			var raw string
+			if rows.Scan(&txID, &obsID, &raw) != nil {
+				continue
+			}
+			sum := out[txID]
+			if sum == nil {
+				continue
+			}
+			if !sum.mentions && strings.Contains(strings.ToLower(raw), needle) {
+				sum.mentions = true
+			}
+			if raw == "" {
+				continue
+			}
+			for idx, o := range snapshots[txID] {
+				if o.id != obsID {
+					continue
+				}
+				l := pathLen(o.pathJSON)
+				if l > sum.bestLen || (l == sum.bestLen && idx < sum.bestIdx) {
+					sum.found, sum.bestRaw, sum.bestLen, sum.bestIdx = true, raw, l, idx
+				}
+				break
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return out, err
+		}
+	}
+	return out, nil
 }
 
 // fetchResolvedPathsForTx fetches resolved_path from SQLite for all observations
