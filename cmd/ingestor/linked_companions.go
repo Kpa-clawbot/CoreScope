@@ -171,3 +171,14 @@ func (s *linkedCompanionSet) Close() {
 		s.db = nil
 	}
 }
+
+// allowClientPubkey applies the linked-only filter to a client topic's
+// pubkey segment. A drop is counted, never logged: a flood would otherwise
+// fill the log.
+func (s *Store) allowClientPubkey(pubkey string) bool {
+	if s.linkedCompanions == nil || s.linkedCompanions.Allow(pubkey) {
+		return true
+	}
+	s.Stats.ClientUnlinkedDropped.Add(1)
+	return false
+}

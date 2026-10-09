@@ -857,6 +857,11 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 			log.Printf("MQTT [%s] client %.8s blacklisted, dropping", tag, parts[2])
 			return
 		}
+		// Linked-only ingest (clientRxCoverage.requireLinkedCompanion): an
+		// unlinked companion is dropped before any client handler runs.
+		if !store.allowClientPubkey(parts[2]) {
+			return
+		}
 		switch parts[3] {
 		case "packets":
 			if cfg.ClientRxCoverageEnabled() {

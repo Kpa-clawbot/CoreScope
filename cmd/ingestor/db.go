@@ -28,6 +28,9 @@ type DBStats struct {
 	ObserverUpserts        atomic.Int64
 	WriteErrors            atomic.Int64
 	SignatureDrops         atomic.Int64
+	// ClientUnlinkedDropped counts meshcore/client/<pubkey>/... messages
+	// dropped by the linked-only filter (clientRxCoverage.requireLinkedCompanion).
+	ClientUnlinkedDropped atomic.Int64
 	// RelayTouches counts nodes.last_seen refreshes driven by relay
 	// participation rather than an ADVERT (#1598).
 	RelayTouches atomic.Int64
@@ -73,6 +76,10 @@ type Store struct {
 	// plannerStatsAt is when RefreshPlannerStats last succeeded in this
 	// process, in Unix nanoseconds (0: not yet).
 	plannerStatsAt atomic.Int64
+
+	// linkedCompanions is the linked-only ingest filter
+	// (linked_companions.go); nil means off.
+	linkedCompanions *linkedCompanionSet
 
 	stmtGetTxByHash            *sql.Stmt
 	stmtInsertTransmission     *sql.Stmt
