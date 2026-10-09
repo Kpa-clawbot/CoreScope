@@ -1874,7 +1874,7 @@ func TestEnrichObs(t *testing.T) {
 		t.Skip("no observations loaded")
 	}
 
-	enriched := store.enrichObs(obs)
+	enriched := store.enrichObsWithTx(obs, store.byTxID[obs.TransmissionID])
 	if enriched["observer_id"] == nil {
 		t.Error("expected observer_id")
 	}

@@ -1927,8 +1927,15 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 	}
 	atomic.AddInt64(&s.queryCount, 1)
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	result, jobs := s.queryPacketsLocked(q)
+	s.mu.RUnlock()
+	s.applyResolvedPaths(jobs)
+	return result
+}
 
+// queryPacketsLocked is the in-memory part of QueryPackets. Caller holds
+// s.mu and runs the returned resolved_path jobs after releasing it.
+func (s *PacketStore) queryPacketsLocked(q PacketQuery) (*PacketResult, []rpJob) {
 	if q.Limit <= 0 {
 		q.Limit = 50
 	}
@@ -1957,7 +1964,7 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 	// for ASC read forwards. Both are O(page_size) — no sort copy needed.
 	start := q.Offset
 	if start >= total {
-		return &PacketResult{Packets: []map[string]interface{}{}, Total: total}
+		return &PacketResult{Packets: []map[string]interface{}{}, Total: total}, nil
 	}
 	pageSize := q.Limit
 	if start+pageSize > total {
@@ -1965,9 +1972,12 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 	}
 
 	packets := make([]map[string]interface{}, 0, pageSize)
+	var jobs []rpJob
 	if q.Order == "ASC" {
 		for _, tx := range results[start : start+pageSize] {
-			packets = append(packets, s.txToMapWithRP(tx, q.ExpandObservations))
+			var m map[string]interface{}
+			m, jobs = txToMapRPJobs(jobs, tx, q.ExpandObservations)
+			packets = append(packets, m)
 		}
 	} else {
 		// DESC: newest items are at the tail; page 0 = last pageSize items reversed
@@ -1977,10 +1987,12 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 			startIdx = 0
 		}
 		for i := endIdx - 1; i >= startIdx; i-- {
-			packets = append(packets, s.txToMapWithRP(results[i], q.ExpandObservations))
+			var m map[string]interface{}
+			m, jobs = txToMapRPJobs(jobs, results[i], q.ExpandObservations)
+			packets = append(packets, m)
 		}
 	}
-	return &PacketResult{Packets: packets, Total: total}
+	return &PacketResult{Packets: packets, Total: total}, jobs
 }
 
 // QueryGroupedPackets returns transmissions grouped by hash (already 1:1).
@@ -2580,53 +2592,63 @@ func (s *PacketStore) GetStoreMemoryBreakdown() *StoreMemoryBreakdown {
 // GetTransmissionByID returns a transmission by its DB ID, formatted as a map.
 func (s *PacketStore) GetTransmissionByID(id int) map[string]interface{} {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	tx := s.byTxID[id]
 	if tx == nil {
+		s.mu.RUnlock()
 		return nil
 	}
-	return s.txToMapWithRP(tx, true)
+	m, jobs := txToMapRPJobs(nil, tx, true)
+	s.mu.RUnlock()
+	s.applyResolvedPaths(jobs)
+	return m
 }
 
 // GetPacketByHash returns a transmission by content hash.
 func (s *PacketStore) GetPacketByHash(hash string) map[string]interface{} {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	tx := s.byHash[strings.ToLower(hash)]
 	if tx == nil {
+		s.mu.RUnlock()
 		return nil
 	}
-	return s.txToMapWithRP(tx, true)
+	m, jobs := txToMapRPJobs(nil, tx, true)
+	s.mu.RUnlock()
+	s.applyResolvedPaths(jobs)
+	return m
 }
 
 // GetPacketByID returns an observation (enriched with transmission fields) by observation ID.
 func (s *PacketStore) GetPacketByID(id int) map[string]interface{} {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	obs := s.byObsID[id]
 	if obs == nil {
+		s.mu.RUnlock()
 		return nil
 	}
-	return s.enrichObs(obs)
+	m, job := s.enrichObsRPJob(obs)
+	s.mu.RUnlock()
+	s.applyResolvedPaths([]rpJob{job})
+	return m
 }
 
 // GetObservationsForHash returns all observations for a hash, enriched with transmission fields.
 func (s *PacketStore) GetObservationsForHash(hash string) []map[string]interface{} {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	tx := s.byHash[strings.ToLower(hash)]
 	if tx == nil {
+		s.mu.RUnlock()
 		return []map[string]interface{}{}
 	}
 
 	result := make([]map[string]interface{}, 0, len(tx.Observations))
+	jobs := make([]rpJob, 0, len(tx.Observations))
 	for _, obs := range tx.Observations {
-		result = append(result, s.enrichObs(obs))
+		m, job := s.enrichObsRPJob(obs)
+		result = append(result, m)
+		jobs = append(jobs, job)
 	}
+	s.mu.RUnlock()
+	s.applyResolvedPaths(jobs)
 	return result
 }
 
@@ -2654,10 +2676,18 @@ func (s *PacketStore) GetTimestamps(since string) []string {
 // QueryMultiNodePackets filters packets matching any of the given pubkeys.
 func (s *PacketStore) QueryMultiNodePackets(pubkeys []string, limit, offset int, order, since, until string) *PacketResult {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	result, jobs := s.queryMultiNodePacketsLocked(pubkeys, limit, offset, order, since, until)
+	s.mu.RUnlock()
+	s.applyResolvedPaths(jobs)
+	return result
+}
 
+// queryMultiNodePacketsLocked is the in-memory part of QueryMultiNodePackets.
+// Caller holds s.mu and runs the returned resolved_path jobs after releasing
+// it.
+func (s *PacketStore) queryMultiNodePacketsLocked(pubkeys []string, limit, offset int, order, since, until string) (*PacketResult, []rpJob) {
 	if len(pubkeys) == 0 {
-		return &PacketResult{Packets: []map[string]interface{}{}, Total: 0}
+		return &PacketResult{Packets: []map[string]interface{}{}, Total: 0}, nil
 	}
 	if limit <= 0 {
 		limit = 50
@@ -2696,7 +2726,7 @@ func (s *PacketStore) QueryMultiNodePackets(pubkeys []string, limit, offset int,
 	// filtered is oldest-first (built by iterating s.packets forward).
 	// Apply same DESC/ASC pagination logic as QueryPackets.
 	if offset >= total {
-		return &PacketResult{Packets: []map[string]interface{}{}, Total: total}
+		return &PacketResult{Packets: []map[string]interface{}{}, Total: total}, nil
 	}
 	pageSize := limit
 	if offset+pageSize > total {
@@ -2704,9 +2734,12 @@ func (s *PacketStore) QueryMultiNodePackets(pubkeys []string, limit, offset int,
 	}
 
 	packets := make([]map[string]interface{}, 0, pageSize)
+	var jobs []rpJob
 	if order == "ASC" {
 		for _, tx := range filtered[offset : offset+pageSize] {
-			packets = append(packets, s.txToMapWithRP(tx))
+			var m map[string]interface{}
+			m, jobs = txToMapRPJobs(jobs, tx)
+			packets = append(packets, m)
 		}
 	} else {
 		endIdx := total - offset
@@ -2715,10 +2748,12 @@ func (s *PacketStore) QueryMultiNodePackets(pubkeys []string, limit, offset int,
 			startIdx = 0
 		}
 		for i := endIdx - 1; i >= startIdx; i-- {
-			packets = append(packets, s.txToMapWithRP(filtered[i]))
+			var m map[string]interface{}
+			m, jobs = txToMapRPJobs(jobs, filtered[i])
+			packets = append(packets, m)
 		}
 	}
-	return &PacketResult{Packets: packets, Total: total}
+	return &PacketResult{Packets: packets, Total: total}, jobs
 }
 
 // IngestNewFromDB loads new transmissions from SQLite into memory and returns
@@ -3994,26 +4029,39 @@ func (s *PacketStore) computeNodeHomeRegions() map[string]string {
 	return out
 }
 
-// enrichObs returns a map with observation fields + transmission fields.
-// Looks up the transmission in s.byTxID itself — safe only when the caller
-// already holds s.mu (directly, or via a defer'd RLock spanning the call).
+// enrichObsRPJob returns a map with observation fields + transmission fields,
+// plus the resolved_path lookup as a job for applyResolvedPaths. Looks up the
+// transmission in s.byTxID itself, so the caller must hold s.mu, and must run
+// the job after releasing it.
 // Callers that snapshot observations under RLock and then release it before
 // iterating (e.g. handleObserverAnalytics, #1830) must use enrichObsWithTx
 // with a tx pointer resolved during that same snapshot instead.
-func (s *PacketStore) enrichObs(obs *StoreObs) map[string]interface{} {
-	return s.enrichObsWithTx(obs, s.byTxID[obs.TransmissionID])
+func (s *PacketStore) enrichObsRPJob(obs *StoreObs) (map[string]interface{}, rpJob) {
+	m := enrichObsFields(obs, s.byTxID[obs.TransmissionID])
+	return m, obsRPJob(m, obs.ID)
 }
 
-// enrichObsWithTx is enrichObs with the transmission pointer already
-// resolved by the caller, instead of looking it up in s.byTxID here. #1830:
+// enrichObsWithTx is enrichObsRPJob with the transmission pointer already
+// resolved by the caller, instead of looking it up in s.byTxID here, and with
+// the resolved_path fetched inline. #1830:
 // s.byTxID is guarded by s.mu (writes from ingest/eviction); reading it
 // without holding at least RLock races with those writers — Go maps can
 // panic with "concurrent map read and map write" during a rehash, not just
 // fail under -race. Callers that need to read byTxID after releasing their
 // RLock (to keep JSON decode / enrichment off the hot lock, per #1481)
 // should resolve the *StoreTx for each observation during their RLock-held
-// snapshot and pass it in here.
+// snapshot and pass it in here. Must be called without s.mu held.
 func (s *PacketStore) enrichObsWithTx(obs *StoreObs, tx *StoreTx) map[string]interface{} {
+	m := enrichObsFields(obs, tx)
+	if rp := s.fetchResolvedPathForObs(obs.ID); rp != nil {
+		m["resolved_path"] = rp
+	}
+	return m
+}
+
+// enrichObsFields returns the observation fields plus, when tx is non-nil,
+// the transmission fields. It runs no SQL.
+func enrichObsFields(obs *StoreObs, tx *StoreTx) map[string]interface{} {
 	m := map[string]interface{}{
 		"id":            obs.ID,
 		"timestamp":     strOrNil(obs.Timestamp),
@@ -4025,11 +4073,6 @@ func (s *PacketStore) enrichObsWithTx(obs *StoreObs, tx *StoreTx) map[string]int
 		"rssi":          floatPtrOrNil(obs.RSSI),
 		"score":         intPtrOrNil(obs.Score),
 		"path_json":     strOrNil(obs.PathJSON),
-	}
-	// On-demand SQL fetch for resolved_path
-	rp := s.fetchResolvedPathForObs(obs.ID)
-	if rp != nil {
-		m["resolved_path"] = rp
 	}
 
 	if tx != nil {
@@ -4103,28 +4146,23 @@ func txToMap(tx *StoreTx, includeObservations ...bool) map[string]interface{} {
 	return m
 }
 
-// txToMapWithRP is like txToMap but also fetches resolved_path on demand from the store.
-func (s *PacketStore) txToMapWithRP(tx *StoreTx, includeObservations ...bool) map[string]interface{} {
+// txToMapRPJobs is txToMap plus the resolved_path lookups for the
+// transmission and, when included, its observation sub-maps, appended to
+// jobs. Caller holds s.mu; run the jobs with applyResolvedPaths after
+// releasing it.
+func txToMapRPJobs(jobs []rpJob, tx *StoreTx, includeObservations ...bool) (map[string]interface{}, []rpJob) {
 	m := txToMap(tx, includeObservations...)
-	// On-demand SQL fetch for resolved_path
-	rp := s.fetchResolvedPathForTxBest(tx)
-	if rp != nil {
-		m["resolved_path"] = rp
-	}
-	// Also add resolved_path to observation sub-maps if present
+	jobs = append(jobs, txRPJob(m, tx))
 	if len(includeObservations) > 0 && includeObservations[0] {
 		if obsList, ok := m["observations"].([]map[string]interface{}); ok {
 			for i, o := range tx.Observations {
 				if i < len(obsList) {
-					obsRP := s.fetchResolvedPathForObs(o.ID)
-					if obsRP != nil {
-						obsList[i]["resolved_path"] = obsRP
-					}
+					jobs = append(jobs, obsRPJob(obsList[i], o.ID))
 				}
 			}
 		}
 	}
-	return m
+	return m, jobs
 }
 
 func strOrNil(s string) interface{} {
@@ -9781,8 +9819,6 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 	directHeard := s.loadDirectHeard()
 
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	packets := s.byNode[pubkey]
 	todayStart := time.Now().UTC().Truncate(24 * time.Hour).Format(time.RFC3339)
 
@@ -9847,11 +9883,15 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 		recentLimit = len(packets)
 	}
 	recentPackets := make([]map[string]interface{}, 0, recentLimit)
+	var rpJobs []rpJob
 	for i := len(packets) - 1; i >= len(packets)-recentLimit; i-- {
-		p := s.txToMapWithRP(packets[i])
+		var p map[string]interface{}
+		p, rpJobs = txToMapRPJobs(rpJobs, packets[i])
 		delete(p, "observations")
 		recentPackets = append(recentPackets, p)
 	}
+	s.mu.RUnlock()
+	s.applyResolvedPaths(rpJobs)
 
 	return map[string]interface{}{
 		"node": node,
