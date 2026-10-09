@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/meshcore-analyzer/mailer"
 	"github.com/meshcore-analyzer/sigvalidate"
 	"github.com/meshcore-analyzer/users"
 )
@@ -85,13 +87,19 @@ func (s *Server) handleCompanionLink(w http.ResponseWriter, r *http.Request, u *
 		writeError(w, http.StatusBadRequest, "signature does not verify for this pubkey")
 		return
 	}
+	// The previous owner's own name for the companion, for the transfer
+	// mail: the new owner's label is theirs and is not passed on.
+	var prevName string
+	if old, err := a.st.GetCompanionLink(pk); err == nil && old.UserID != u.ID {
+		prevName = old.Name
+	}
 	link, prev, err := a.st.UpsertCompanionLink(u.ID, pk, req.Name)
 	if err != nil {
 		log.Printf("[users] link companion for user #%d: %v", u.ID, err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	a.companionLinked(u, link, prev)
+	a.companionLinked(u, link, prev, prevName)
 	myNodes, err := a.addToMyNodes(u.ID, link.Pubkey, link.Name, time.Now())
 	if err != nil {
 		log.Printf("[users] add linked companion to my nodes for user #%d: %v", u.ID, err)
@@ -100,9 +108,69 @@ func (s *Server) handleCompanionLink(w http.ResponseWriter, r *http.Request, u *
 	writeJSON(w, companionLinkResponse{Pubkey: link.Pubkey, Name: link.Name, LinkedAt: rfc3339(link.LinkedAt), MyNodes: myNodes})
 }
 
-// companionLinked writes the audit row of a link.
-func (a *authService) companionLinked(u *users.User, link *users.CompanionLink, _ int64) {
-	a.auditAsync(idPtr(u.ID), "companion.link", idPtr(u.ID), map[string]string{"pubkey": link.Pubkey})
+// companionTransferMailPurpose labels the transfer mail in mail_log.
+const companionTransferMailPurpose = "companion.transfer"
+
+// companionLinked writes the audit rows of a link. For a transfer (prev is
+// the previous owner, prevName their name for the companion) both users
+// get a companion.transfer row and the previous owner a mail. Everything
+// runs in the background, tracked by auditWG so waitAudits (tests,
+// shutdown) covers the mail too.
+func (a *authService) companionLinked(u *users.User, link *users.CompanionLink, prev int64, prevName string) {
+	if prev == 0 {
+		a.auditAsync(idPtr(u.ID), "companion.link", idPtr(u.ID), map[string]string{"pubkey": link.Pubkey})
+		return
+	}
+	detail := map[string]string{"pubkey": link.Pubkey, "from": strconv.FormatInt(prev, 10), "to": strconv.FormatInt(u.ID, 10)}
+	a.auditAsync(idPtr(u.ID), "companion.transfer", idPtr(u.ID), detail)
+	a.auditAsync(idPtr(u.ID), "companion.transfer", idPtr(prev), detail)
+	a.auditWG.Add(1)
+	go func() {
+		defer a.auditWG.Done()
+		a.mailCompanionTransfer(prev, link.Pubkey, prevName)
+	}()
+}
+
+// mailCompanionTransfer tells the previous owner that their companion now
+// belongs to another account, when node notifications are on for the
+// instance and for them (the same opt-in as watched-node mails), and the
+// account is active with a working address.
+func (a *authService) mailCompanionTransfer(prevID int64, pubkey, name string) {
+	if !a.set.notify.enabled {
+		return
+	}
+	prev, err := a.st.GetByID(prevID)
+	if err != nil || prev.Status != users.StatusActive || prev.EmailBouncing {
+		return
+	}
+	p, err := a.st.NotifyPrefsFor(prevID)
+	if err != nil {
+		log.Printf("[users] companion transfer mail for user #%d: preferences: %v", prevID, err)
+		return
+	}
+	if !p.Enabled {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), notifySendTimeout)
+	defer cancel()
+	_ = a.sendMail(ctx, prev, companionTransferMailPurpose, a.companionTransferMail(prev, pubkey, name)) // failure logged by sendMail
+}
+
+func (a *authService) companionTransferMail(u *users.User, pubkey, name string) mailer.Message {
+	what := pubkey[:12]
+	if name := mailSafeText(name); name != "" {
+		what = name + " (" + what + ")"
+	}
+	return a.render(u.Email, u.DisplayName, "companion", mailContent{
+		subject:  "Your companion was linked to another account",
+		greeting: "Hello " + u.DisplayName + ",",
+		paragraphs: []string{
+			"Your companion " + what + " was just linked to another account on " + a.set.baseURL.Host +
+				". That account proved it holds the companion's private key, so the companion and its coverage now count for that account, not yours.",
+			"If you passed the companion on, nothing needs to be done. If not, its key is in someone else's hands.",
+		},
+		actionLabel: "Your companions", actionURL: a.set.baseURL.String() + "/#/account?section=companions",
+	})
 }
 
 func (s *Server) handleCompanionList(w http.ResponseWriter, _ *http.Request, u *users.User, _ *users.Session) {
