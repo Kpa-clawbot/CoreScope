@@ -233,17 +233,18 @@ func (s *PacketStore) fetchResolvedPathForObs(obsID int) []*string {
 }
 
 // rpObs is the part of an observation that the best-resolved-path pick
-// needs, copied while s.mu is held.
+// needs, copied while s.mu is held. The path is kept as its JSON string and
+// parsed by bestResolvedPath, so the parse runs after s.mu is released.
 type rpObs struct {
-	id      int
-	pathLen int
+	id       int
+	pathJSON string
 }
 
 // snapshotRPObs copies what bestResolvedPath needs from tx. Caller holds s.mu.
 func snapshotRPObs(tx *StoreTx) []rpObs {
 	out := make([]rpObs, len(tx.Observations))
 	for i, o := range tx.Observations {
-		out[i] = rpObs{id: o.ID, pathLen: pathLen(o.PathJSON)}
+		out[i] = rpObs{id: o.ID, pathJSON: o.PathJSON}
 	}
 	return out
 }
@@ -263,14 +264,18 @@ func (s *PacketStore) bestResolvedPath(txID int, observations []rpObs) []*string
 	if len(observations) == 0 {
 		return nil
 	}
+	lens := make([]int, len(observations))
+	for i, obs := range observations {
+		lens[i] = pathLen(obs.pathJSON)
+	}
 	// Fast path: try the longest-path obs first via the LRU/SQL helper.
-	longest := observations[0]
-	for _, obs := range observations[1:] {
-		if obs.pathLen > longest.pathLen {
-			longest = obs
+	longest := 0
+	for i := 1; i < len(observations); i++ {
+		if lens[i] > lens[longest] {
+			longest = i
 		}
 	}
-	if rp := s.fetchResolvedPathForObs(longest.id); rp != nil {
+	if rp := s.fetchResolvedPathForObs(observations[longest].id); rp != nil {
 		return rp
 	}
 	// Fallback: longest-path obs has no stored resolved_path. Query all
@@ -283,13 +288,13 @@ func (s *PacketStore) bestResolvedPath(txID int, observations []rpObs) []*string
 	var bestRP []*string
 	bestObsID := 0
 	bestLen := -1
-	for _, obs := range observations {
+	for i, obs := range observations {
 		rp, ok := rpMap[obs.id]
 		if !ok || rp == nil {
 			continue
 		}
-		if obs.pathLen > bestLen {
-			bestLen = obs.pathLen
+		if lens[i] > bestLen {
+			bestLen = lens[i]
 			bestRP = rp
 			bestObsID = obs.id
 		}

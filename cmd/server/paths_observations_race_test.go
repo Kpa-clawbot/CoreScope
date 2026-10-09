@@ -20,12 +20,13 @@ func TestNodePathsDoesNotReadObservationsUnlocked(t *testing.T) {
 
 	store.mu.RLock()
 	tx := store.byHash["testhash00000001"]
+	base := tx.Observations
 	store.mu.RUnlock()
 
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go func() { // stands in for ingest adding observations to the tx
+	go func() { // stands in for ingest adding an observation to the tx
 		defer wg.Done()
 		for i := 0; ; i++ {
 			select {
@@ -33,8 +34,10 @@ func TestNodePathsDoesNotReadObservationsUnlocked(t *testing.T) {
 				return
 			default:
 			}
+			// A fresh slice each time, one longer than base, so the writes
+			// race with an unlocked reader without the slice growing.
 			store.mu.Lock()
-			tx.Observations = append(tx.Observations, &StoreObs{ID: 1_000_000 + i, TransmissionID: tx.ID, PathJSON: `["aa"]`})
+			tx.Observations = append(base[:len(base):len(base)], &StoreObs{ID: 1_000_000 + i, TransmissionID: tx.ID, PathJSON: `["aa"]`})
 			store.mu.Unlock()
 		}
 	}()
