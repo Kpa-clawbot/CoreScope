@@ -206,11 +206,26 @@
     render(container);
   }
 
-  /** Override selected regions (e.g. from URL param). Persists to localStorage and re-renders. */
+  /** True when two selections (Set or null = all) hold the same codes. */
+  function sameSelection(a, b) {
+    var aEmpty = !a || a.size === 0, bEmpty = !b || b.size === 0;
+    if (aEmpty || bEmpty) return aEmpty && bEmpty;
+    if (a.size !== b.size) return false;
+    var same = true;
+    a.forEach(function (c) { if (!b.has(c)) same = false; });
+    return same;
+  }
+
+  /** Override selected regions (e.g. from URL param or a quick pick). Persists
+   *  to localStorage, re-renders, and notifies onChange listeners when the
+   *  selection actually changed, exactly as a click in the control does. */
   function setSelected(codesArray) {
-    _selected = (codesArray && codesArray.length > 0) ? new Set(codesArray) : null;
+    var next = (codesArray && codesArray.length > 0) ? new Set(codesArray) : null;
+    var changed = !sameSelection(_selected, next);
+    _selected = next;
     saveToStorage();
     if (_container) render(_container);
+    if (changed) _listeners.forEach(function (fn) { fn(getSelected()); });
   }
 
   /**
