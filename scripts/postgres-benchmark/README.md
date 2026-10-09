@@ -104,6 +104,22 @@ validation, startup and drain time. The longer design profile is explicit:
 `--warmup 120 --seconds 600`. Record and compare identical locked settings;
 changing rates after a pilot produces a separately identified experiment.
 
+Both engines use a 2,048 MiB packet-store allowance and a 3,072 MiB server Go
+memory limit. The ingestor remains at 512 MiB and the whole application/database
+cgroup remains capped at 3 CPUs / 6 GiB. These are common settings for full
+startup, hot startup and replay; the manifest records them.
+
+The earlier 1,024 MiB store / 1,536 MiB server profile failed B capacity
+qualification: the unchanged baseline loaded all 112,000 retained transmissions
+and 1,792,000 observations, then its own memory accounting triggered a 25%
+eviction. The corrected corpus accounts for about 1,222 MiB before replay.
+A conservative check using the baseline's actual estimators bounds all 24,000
+primary replay events at another 190 MiB, even counting every event as a new
+transmission plus observation with padded field widths. The new common store
+allowance leaves more than 630 MiB above that bound. This is capacity evidence,
+not a performance result; measurements from the earlier profile must not be
+pooled with this one. Rates, corpus sizes, durability and count gates stay fixed.
+
 ## Data and correctness
 
 The immutable baseline creates the complete canonical SQLite schema and seeds
@@ -113,6 +129,17 @@ B/L use 50%×4, 20%×22, 20%×23 and 10%×50. Inputs include missing observers,
 nullable and fractional signal values, integral scores, resolved/unresolved paths, and
 one-, two-, and three-byte hop hashes. S/B have seven retained days and one
 expired day. The current day includes a real hot-startup window.
+
+Every generated observation also has a unique normalized observer/path key
+within its transmission, matching the unchanged server's in-memory identity.
+NULL observer positions and fanout counts stay fixed. If short path prefixes
+collide for two NULL observations, the generator deterministically tries the next
+valid node/path variant, up to 64 attempts, preserving the wire payload/hash and
+route/hop/hash-size shape. Exhaustion fails generation. This avoids accidental
+duplicate rows that SQLite's nullable unique index permits but the loader merges.
+Compiled generator controls, including the complete repeating B/L path key space,
+run during both builds before corpus generation. The full retained-count gate
+continues to compare every eligible row.
 
 Scores in the timed corpus and replay are integral values supported by both
 revisions. The unchanged SQLite server silently drops fractional-score rows;

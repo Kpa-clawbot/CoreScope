@@ -34,6 +34,9 @@ FIRMWARE = "a366955cb2f67b8e6842d4f00d2b6a554dddd88a"
 HERE = Path(__file__).resolve().parent
 PROCESSES = []
 RESOURCE_COUNTERS = ("cgroup.procs", "memory.current", "memory.events", "cpu.stat", "io.stat")
+# Common to both engines: B itself accounts for about 1,222 MiB before replay.
+SERVER_MEMORY_MIB = 3072
+PACKET_STORE_MIB = 2048
 TABLES = ["nodes", "inactive_nodes", "observers", "transmissions", "observations", "observer_metrics", "neighbor_edges", "dropped_packets", "client_receptions", "client_observers", "client_rx_observations", "client_rf_samples", "node_declared_regions", "scope_match_totals", "_migrations", "_async_migrations", "advert_route_evidence", "advert_evidence_backfill"]
 # These are operational receipt/creation times, not packet timestamps. Full
 # pre-run parity includes them; only post-replay logical parity excludes them.
@@ -668,6 +671,14 @@ def wait_file(path, processes, seconds=120):
     raise TimeoutError("benchmark start barrier timeout")
 
 
+def server_settings(backend, sqlite_path, state_dir, run_env):
+    config = dict(hashChannels=[f"#bench-{i:02d}" for i in range(20)], dbPath=str(sqlite_path), stateDir=str(state_dir), port=free_port(), packetStore=dict(retentionHours=168, maxMemoryMB=PACKET_STORE_MIB, hotStartupHours=0), runtime=dict(maxMemoryMB=SERVER_MEMORY_MIB), clientRxCoverage=dict(enabled=True), userManagement=dict(enabled=False))
+    if backend == "postgres":
+        config.pop("dbPath")
+    env = dict(run_env, GOMEMLIMIT=f"{SERVER_MEMORY_MIB}MiB", CORESCOPE_DATABASE_URL=run_env.get("CORESCOPE_READER_DATABASE_URL", ""))
+    return config, env
+
+
 def retained_counts(source, since_epoch):
     db = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
     try:
@@ -817,6 +828,9 @@ def build(root, backend, binaries, env, logs):
     write_json(overlay, {"Replace": replacements})
     for package in ("ingestor", "server"):
         command(["go", "test", "-overlay", overlay, "-c", "-o", binaries / (backend + "-" + package + ".test"), "."], cwd=root / "cmd" / package, env=env, log=logs / (backend + "-" + package + "-build.log"))
+        if package == "ingestor":
+            command([binaries / (backend + "-ingestor.test"), "-test.run=^TestCoreScopeBenchmark.+", "-test.count=1", "-test.timeout=3m"],
+                    cwd=root / "cmd" / package, env=env, log=logs / (backend + "-generator-controls.log"))
     command(["go", "build", "-trimpath", "-o", binaries / (backend + "-server"), "."], cwd=root / "cmd/server", env=env, log=logs / (backend + "-server-binary.log"))
     if backend == "postgres":
         command(["go", "build", "-trimpath", "-o", binaries / "migrate", "."], cwd=root / "cmd/migrate", env=env, log=logs / "migrate-build.log")
@@ -925,7 +939,7 @@ def main(argv=None):
         seconds = args.seconds if args.seconds is not None else (180 if args.profile == "primary" else 10)
         if warmup < 0 or seconds < 1 or args.ingest_rate < 1 or args.http_rate < 1 or (warmup+seconds)*max(args.ingest_rate,args.http_rate)>1_000_000:
             raise ValueError("invalid workload duration or offered rate")
-        manifest["workload"] = dict(warmup_seconds=warmup, measured_seconds=seconds, ingest_rate=args.ingest_rate, http_rate=args.http_rate, queue_limit=1024, http_concurrency=64, server_memory_mib=1536, ingestor_memory_mib=512, packet_store_mib=1024, retention_hours=168, sql_reader_pool=4, sql_writer_pool=1)
+        manifest["workload"] = dict(warmup_seconds=warmup, measured_seconds=seconds, ingest_rate=args.ingest_rate, http_rate=args.http_rate, queue_limit=1024, http_concurrency=64, server_memory_mib=SERVER_MEMORY_MIB, ingestor_memory_mib=512, packet_store_mib=PACKET_STORE_MIB, retention_hours=168, sql_reader_pool=4, sql_writer_pool=1)
         write_json(output / "manifest.json", manifest)
         after_by_pair = {}
         paired_sources = {}
@@ -984,11 +998,8 @@ def main(argv=None):
                     raise RuntimeError("initial backend state differs from the canonical corpus")
                 write_json(run_dir / "validation-before.json", pre)
                 retained_expected = retained_counts(sqlite_path, int(time.time())-168*3600) if args.corpus in ("S", "B") else None
-                app_config = dict(hashChannels=[f"#bench-{i:02d}" for i in range(20)], dbPath=str(sqlite_path), stateDir=str(state_dir), port=free_port(), packetStore=dict(retentionHours=168, maxMemoryMB=1024, hotStartupHours=0), runtime=dict(maxMemoryMB=1536), clientRxCoverage=dict(enabled=True), userManagement=dict(enabled=False))
-                if backend == "postgres":
-                    app_config.pop("dbPath")
+                app_config, server_env = server_settings(backend, sqlite_path, state_dir, run_env)
                 write_json(config_dir / "config.json", app_config)
-                server_env = dict(run_env, GOMEMLIMIT="1536MiB", CORESCOPE_DATABASE_URL=run_env.get("CORESCOPE_READER_DATABASE_URL", ""))
                 resources.phase="startup_full"
                 launched_ns=time.monotonic_ns()
                 server = spawn([binaries / (backend + "-server"), "-config-dir", config_dir, "-public", roots[backend] / "public", "-port", app_config["port"], "-poll-ms", 1000], cwd=roots[backend], env=server_env, log=run_dir / "server.log", budget=budget)

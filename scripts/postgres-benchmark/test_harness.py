@@ -16,6 +16,34 @@ spec.loader.exec_module(bench)
 
 
 class HarnessTests(unittest.TestCase):
+    def test_common_server_memory_profile_retains_b_and_replay_headroom(self):
+        # Native baseline B qualification tracked 1221.7 MiB. A conservative
+        # actual-estimator bound counts every primary event as a new tx + obs.
+        required_store_mib = 1221.7 + 24000 * 8279 / 1048576
+        settings = []
+        for backend in ("sqlite", "postgres"):
+            with mock.patch.object(bench, "free_port", return_value=12345):
+                config, env = bench.server_settings(backend, pathlib.Path("corpus.sqlite"), pathlib.Path("state"), {})
+            self.assertGreater(config["packetStore"]["maxMemoryMB"], required_store_mib)
+            self.assertEqual(config["packetStore"], {"retentionHours": 168, "maxMemoryMB": 2048, "hotStartupHours": 0})
+            self.assertEqual(config["runtime"]["maxMemoryMB"], 3072)
+            self.assertEqual(env["GOMEMLIMIT"], "3072MiB")
+            self.assertEqual("dbPath" in config, backend == "sqlite")
+            config.pop("dbPath", None)
+            settings.append((config, env))
+        self.assertEqual(settings[0], settings[1], "capacity settings must be common to both engines")
+
+    def test_build_runs_compiled_generator_controls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            binaries, logs = root / "binaries", root / "logs"
+            binaries.mkdir(); logs.mkdir()
+            with mock.patch.object(bench, "production_hash", return_value="stable"), mock.patch.object(bench, "command") as command:
+                bench.build(root, "sqlite", binaries, {}, logs)
+            controls = [call.args[0] for call in command.call_args_list if pathlib.Path(call.args[0][0]).name == "sqlite-ingestor.test"]
+            self.assertEqual(len(controls), 1, "new Go generator regressions must execute, not only compile")
+            self.assertIn("-test.run=^TestCoreScopeBenchmark.+", controls[0])
+
     def resource_fixture(self, root, missing=None):
         group = root / "private-cgroup-path"
         group.mkdir()

@@ -119,6 +119,98 @@ func (f *benchFixture) packet(index, variant int, stamp int64) (*PacketData, err
 	return p, nil
 }
 
+type benchGeneratedObservation struct {
+	Packet        *PacketData
+	ObserverIndex any
+	PathVariant   int
+}
+
+func (f *benchFixture) observation(index, ordinal int, stamp int64, used map[string]bool) (benchGeneratedObservation, error) {
+	observerIndex := ordinal%f.c.Shape.Observers + 1
+	result := benchGeneratedObservation{ObserverIndex: observerIndex}
+	observerID := f.public[observerIndex-1]
+	if ordinal%17 == 16 {
+		result.ObserverIndex, observerID = nil, ""
+	}
+	// Keep every observation and NULL identity. A path-prefix collision for
+	// the same identity needs a different valid wire path, not different JSON
+	// spelling. The bound stays below packet()'s special replay variants.
+	for attempt := 0; attempt < 64; attempt++ {
+		result.PathVariant = ordinal + attempt
+		packet, err := f.packet(index, result.PathVariant, stamp)
+		if err != nil {
+			return result, err
+		}
+		key := observerID + "|" + packet.PathJSON
+		if !used[key] {
+			used[key] = true
+			result.Packet = packet
+			return result, nil
+		}
+	}
+	return result, fmt.Errorf("no unique observer/path identity after 64 valid path variants")
+}
+
+func TestCoreScopeBenchmarkObservationKeyspace(t *testing.T) {
+	for _, shape := range []struct {
+		name             string
+		nodes, observers int
+	}{{"B", 2000, 128}, {"L", 5000, 512}} {
+		t.Run(shape.name, func(t *testing.T) {
+			c := benchConfig{Corpus: shape.name, Seed: 20261008, Epoch: 1791451200, Shape: benchShape{Nodes: shape.nodes, Observers: shape.observers, Days: 8}}
+			f := benchFixtureFor(c)
+			// The path recipe depends on index modulo Nodes and modulo 3;
+			// route/fanout periods 5/10 divide both node counts. Thus these
+			// 6,000/15,000 positions cover the complete B/L path key space.
+			corrections, missing := 0, 0
+			for index := 0; index < 3*shape.nodes; index++ {
+				used := make(map[string]bool)
+				count := benchFanout(c, index)
+				if count > shape.observers {
+					t.Fatal("known observer identities would repeat within a transmission")
+				}
+				// Known observer IDs are distinct. Only NULL identities can
+				// share a key, so exercise every such pair with real decoding.
+				for ordinal := 16; ordinal < count; ordinal += 17 {
+					original, err := f.packet(index, ordinal, c.Epoch)
+					if err != nil {
+						t.Fatal(err)
+					}
+					got, err := f.observation(index, ordinal, c.Epoch, used)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if got.ObserverIndex != nil || got.Packet.Hash != original.Hash || got.Packet.RawHex[:4] != original.RawHex[:4] {
+						t.Fatal("path correction changed observer, payload identity, route or hop/hash shape")
+					}
+					if got.PathVariant != ordinal {
+						corrections++
+						if got.Packet.PathJSON == original.PathJSON {
+							t.Fatal("retry did not change the real decoded path")
+						}
+					}
+					missing++
+				}
+			}
+			if corrections == 0 || missing != 3*shape.nodes*6/10 {
+				t.Fatalf("NULL collision coverage: corrections=%d NULLs=%d", corrections, missing)
+			}
+		})
+	}
+}
+
+func TestCoreScopeBenchmarkObservationRetryBound(t *testing.T) {
+	c := benchConfig{Corpus: "B", Seed: 20261008, Epoch: 1791451200, Shape: benchShape{Nodes: 2000, Observers: 128}}
+	f := benchFixtureFor(c)
+	used := make(map[string]bool)
+	for prefix := 0; prefix < 256; prefix++ {
+		used[fmt.Sprintf(`|["%02X"]`, prefix)] = true
+	}
+	if _, err := f.observation(9, 16, c.Epoch, used); err == nil {
+		t.Fatal("exhausted path space must fail rather than drop an observation or loop forever")
+	}
+}
+
 func TestCoreScopeBenchmarkProtocol(t *testing.T) {
 	c := benchConfig{Seed: 20261008, Epoch: 1791451200, Shape: benchShape{Nodes: 80, Observers: 8, Transmissions: 100, Days: 8}}
 	f := benchFixtureFor(c)

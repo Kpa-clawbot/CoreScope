@@ -70,6 +70,39 @@ func TestCoreScopeBenchmarkSmallCorpus(t *testing.T) {
 	}
 }
 
+func TestCoreScopeBenchmarkNullableObservationIdentity(t *testing.T) {
+	dir := t.TempDir()
+	// This includes the first collision in the real B key space without
+	// requiring a two-million-row fixture for the regression itself.
+	c := benchConfig{Corpus: "B", Seed: 20261008, Epoch: 1791451200, SQLite: filepath.Join(dir, "corpus.sqlite"), Output: dir,
+		Shape: benchShape{Transmissions: 610, Observations: 9760, Nodes: 2000, Observers: 128, Days: 8}}
+	if err := benchPrepare(c); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite3", c.SQLite+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var rows, missing, duplicateKeys int
+	if err := db.QueryRow(`SELECT count(*),sum(observer_idx IS NULL) FROM observations`).Scan(&rows, &missing); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 9760 || missing != 366 {
+		t.Fatalf("generator changed fanout/NULL coverage: observations=%d, NULL observers=%d", rows, missing)
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM (
+		SELECT o.transmission_id,coalesce(obs.id,''),o.path_json FROM observations o
+		LEFT JOIN observers obs ON obs.rowid=o.observer_idx
+		GROUP BY o.transmission_id,coalesce(obs.id,''),o.path_json HAVING count(*)>1
+	)`).Scan(&duplicateKeys); err != nil {
+		t.Fatal(err)
+	}
+	if duplicateKeys != 0 {
+		t.Fatalf("%d generated observer/path keys would be dropped by the unchanged upstream loader", duplicateKeys)
+	}
+}
+
 func benchOpen(c benchConfig) (*Store, error) { return OpenStore(c.SQLite) }
 func benchSettings(s *Store) (map[string]string, error) {
 	out := map[string]string{}
@@ -172,22 +205,20 @@ func benchPrepare(c benchConfig) error {
 			return e
 		}
 		bits := packetpath.AdvertRouteEvidence(p.RawHex)
+		observationKeys := make(map[string]bool, count)
 		for o := 0; o < count; o++ {
-			seen, e := f.packet(i, o, at)
+			generated, e := f.observation(i, o, at, observationKeys)
 			if e != nil {
 				return e
 			}
-			var observer any = (o % c.Shape.Observers) + 1
-			if o%17 == 16 {
-				observer = nil
-			}
+			seen, observer := generated.Packet, generated.ObserverIndex
 			var snr any = float64((i+o)%20) - 10.5
 			if o%11 == 10 {
 				snr = nil
 			}
 			var resolved any
 			if i%3 != 0 && seen.PathJSON != "[]" {
-				b, _ := json.Marshal([]string{f.public[(i+o*7+1)%len(f.public)]})
+				b, _ := json.Marshal([]string{f.public[(i+generated.PathVariant*7+1)%len(f.public)]})
 				resolved = string(b)
 			}
 			if _, e = observation.Exec(i+1, observer, "rx", snr, -100.5+float64(o%25), p.Score, seen.PathJSON, at+int64(o), seen.RawHex, resolved); e != nil {
