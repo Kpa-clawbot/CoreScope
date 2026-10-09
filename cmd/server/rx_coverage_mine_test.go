@@ -44,6 +44,8 @@ func TestRxCoverageMine(t *testing.T) {
 	}
 	// Coverage is not in a device token's scope.
 	expectStatus(t, get(q+"&mine=1", bearer(tok)), http.StatusForbidden)
+	// A foreign bearer header next to the cookie does not hide the session.
+	expectStatus(t, get(q+"&mine=1", as(alice), bearer("id-token-from-a-proxy")), http.StatusOK)
 }
 
 func TestRxCoverageMineWithoutUserManagement(t *testing.T) {

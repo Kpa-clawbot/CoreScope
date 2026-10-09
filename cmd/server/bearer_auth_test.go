@@ -51,10 +51,39 @@ func TestBearerRejectsWebAndBadTokens(t *testing.T) {
 			t.Errorf("bearer %q = %d, want 401", tok, w.Code)
 		}
 	}
-	// A bearer header is judged alone: a valid cookie next to it does not help.
-	if w := f.do("GET", "/api/auth/me", nil, as(alice), bearer("nonsense")); w.Code != http.StatusUnauthorized {
-		t.Fatalf("bad bearer + good cookie = %d, want 401", w.Code)
+}
+
+// A bearer header only counts without a session cookie: an auth proxy that
+// adds its own Authorization: Bearer must not break cookie logins.
+func TestBearerIgnoredWithCookie(t *testing.T) {
+	f := newAuthFixture(t, "admin@example.org")
+	admin := f.registerAndActivate(t, "admin@example.org", "Admin", pw)
+	alice := f.registerAndActivate(t, "alice@example.org", "Alice", pw)
+	proxy := bearer("id-token-from-a-proxy")
+
+	w := f.do("GET", "/api/auth/me", nil, as(alice), proxy)
+	expectStatus(t, w, http.StatusOK)
+	if me := decode[meResponse](t, w); me.ID != alice.me.ID || me.CSRFToken == "" {
+		t.Fatalf("me with cookie + foreign bearer = %+v", me)
 	}
+	expectStatus(t, f.do("GET", "/api/account/sessions", nil, as(alice), proxy), http.StatusOK)
+	expectStatus(t, f.do("GET", "/api/admin/users", nil, as(admin), proxy), http.StatusOK)
+
+	// Writes take the cookie path, so the CSRF check applies.
+	put := settingsPutRequest{Doc: &settingsDoc{V: 1, Keys: map[string]string{"meshcore-theme": "dark"}}}
+	expectStatus(t, f.do("PUT", "/api/account/settings", put, as(alice), proxy), http.StatusOK)
+	noCSRF := &client{cookie: alice.cookie}
+	expectStatus(t, f.do("PUT", "/api/account/settings", put, as(noCSRF), proxy), http.StatusForbidden)
+
+	// A device token next to a cookie is not used either: the cookie decides.
+	tok := f.deviceToken(t, "alice@example.org", pw, "Pixel").Token
+	expired := &client{cookie: &http.Cookie{Name: sessionCookieName, Value: "stale"}}
+	expectStatus(t, f.do("GET", "/api/auth/me", nil, as(expired), bearer(tok)), http.StatusUnauthorized)
+
+	// Logout ends the cookie session and leaves the device token alone.
+	expectStatus(t, f.do("POST", "/api/auth/logout", nil, as(alice), bearer(tok)), http.StatusOK)
+	expectStatus(t, f.do("GET", "/api/auth/me", nil, as(alice)), http.StatusUnauthorized)
+	expectStatus(t, f.do("GET", "/api/auth/me", nil, bearer(tok)), http.StatusOK)
 }
 
 func TestBearerLogoutRevokesDevice(t *testing.T) {

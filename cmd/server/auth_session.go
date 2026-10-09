@@ -37,8 +37,13 @@ func bearerCORSPath(path string) bool {
 }
 
 // bearerToken returns the token of an "Authorization: Bearer" header and
-// whether the request carried such a header at all.
+// whether the request is to be judged on it. A request that carries the
+// session cookie is not: the cookie decides, so an auth proxy that adds its
+// own Authorization header does not break browser logins.
 func bearerToken(r *http.Request) (string, bool) {
+	if c, err := r.Cookie(sessionCookieName); err == nil && c.Value != "" {
+		return "", false
+	}
 	const prefix = "Bearer "
 	h := r.Header.Get("Authorization")
 	if len(h) < len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {
@@ -143,8 +148,9 @@ func isSafeMethod(m string) bool { return m == http.MethodGet || m == http.Metho
 type authedHandler func(w http.ResponseWriter, r *http.Request, u *users.User, sess *users.Session)
 
 // withUser requires a logged-in active user. A request with an
-// Authorization: Bearer header is judged on that device token alone
-// (scope check, no CSRF: browsers never attach it on their own).
+// Authorization: Bearer header and no session cookie is judged on that
+// device token alone (scope check, no CSRF: browsers never attach it on
+// their own).
 // Otherwise the cookie session is used, and state-changing methods must
 // pass the origin + CSRF-token check.
 func (s *Server) withUser(h authedHandler) http.HandlerFunc {

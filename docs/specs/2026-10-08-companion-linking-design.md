@@ -97,7 +97,11 @@ the rest of A–E. Rate limits use the existing token buckets (per IP and per us
   it is capped at 64 characters.
 - Authentication: `Authorization: Bearer <token>`. `withUser` accepts either a
   cookie session (with the CSRF check for writes) or a bearer token (no CSRF,
-  scope check). A bearer token on a route outside its scope answers 403.
+  scope check). A bearer token on a route outside its scope answers 403. The
+  bearer header only counts on a request without the `cs_session` cookie: with
+  the cookie, the cookie decides, so an auth proxy that adds its own
+  `Authorization: Bearer` does not break browser logins. RX therefore sends its
+  API calls with `credentials: 'omit'`.
 - `POST /api/auth/logout` with a bearer token revokes that device row.
 - `GET /api/account/sessions` returns `kind` and `label`. The **Devices** list shows
   a device token as "CoreDrive RX – <label>" with its last use, and the existing
