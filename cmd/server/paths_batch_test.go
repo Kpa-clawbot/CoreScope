@@ -155,3 +155,19 @@ func TestHandleNodePaths_CanonicalPathDecidesIndexHits(t *testing.T) {
 		t.Errorf("want no per-transmission resolved_path queries, got %d", queries)
 	}
 }
+
+// An observation already in the resolved-path LRU is served from it, as
+// bestResolvedPath does, even when the stored path changed since.
+func TestLoadCanonicalResolvedPathsUsesLRU(t *testing.T) {
+	s, snapshots := newPathsBatchStore(t)
+	s.apiResolvedPathLRU = make(map[int][]*string)
+	cached := "cached00cached00"
+	s.lruMu.Lock()
+	s.lruPut(11, []*string{&cached}) // longest observation of tx 7
+	s.lruMu.Unlock()
+	got := s.loadCanonicalResolvedPaths(map[int][]rpObs{7: snapshots[7]})
+	want := s.bestResolvedPath(7, snapshots[7])
+	if !reflect.DeepEqual(got[7], want) || len(want) != 1 || *want[0] != cached {
+		t.Fatalf("batched %v, bestResolvedPath %v, want the LRU entry", derefAll(got[7]), derefAll(want))
+	}
+}

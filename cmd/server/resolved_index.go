@@ -173,9 +173,10 @@ const resolvedPathBatchSize = 500
 
 // loadCanonicalResolvedPaths returns, per transmission in snapshots, the
 // resolved path bestResolvedPath returns, without bestResolvedPath's one or
-// two queries per transmission (#2146). It reads the stored path of each
-// transmission's longest observation in one query per resolvedPathBatchSize
-// transmissions. A transmission whose longest observation has no usable
+// two queries per transmission (#2146). It takes the path of each
+// transmission's longest observation from the resolved-path LRU, as
+// bestResolvedPath does, and reads the rest in one query per
+// resolvedPathBatchSize transmissions. A transmission whose longest observation has no usable
 // stored path, or whose batch failed, goes through bestResolvedPath itself,
 // so the answer is the same. Transmissions with no stored path are absent.
 // Must be called without s.mu held.
@@ -198,10 +199,18 @@ func (s *PacketStore) loadCanonicalResolvedPaths(snapshots map[int][]rpObs) map[
 	if s.db == nil || s.db.conn == nil {
 		return out
 	}
+	// The LRU first, as bestResolvedPath does, so /paths shows the same path
+	// as the packets page for an observation that page already cached.
 	ids := make([]int, 0, len(longestTx))
-	for id := range longestTx {
+	s.lruMu.RLock()
+	for id, txID := range longestTx {
+		if rp, ok := s.apiResolvedPathLRU[id]; ok && rp != nil {
+			out[txID] = rp
+			continue
+		}
 		ids = append(ids, id)
 	}
+	s.lruMu.RUnlock()
 	sort.Ints(ids)
 	for start := 0; start < len(ids); start += resolvedPathBatchSize {
 		chunk := ids[start:min(start+resolvedPathBatchSize, len(ids))]

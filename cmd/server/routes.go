@@ -1954,10 +1954,11 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	// there's no canonical answer to be consistent with.
 	canonicalRP := s.store.loadCanonicalResolvedPaths(rpSnapshots)
 
-	// Collision check for index hits. A candidate with a canonical path needs
-	// none: the aggregation below keeps it only if that path names the node,
-	// and if no stored path names it the canonical one does not either. Only
-	// a hit without a canonical path is checked against SQL, as before.
+	// Collision check for candidates found through the resolved-pubkey hash
+	// index (hasReverse). A candidate with a canonical path needs none: the
+	// aggregation below keeps it only if that path names the node, and if no
+	// stored path names it the canonical one does not either. Only one without
+	// a canonical path is checked against SQL, as before.
 	confirmedBySQL := make(map[int]bool)
 	filtered := candidates[:0]
 	for _, cc := range checks {
