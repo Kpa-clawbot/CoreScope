@@ -256,6 +256,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/config/cache", s.handleConfigCache).Methods("GET")
 	r.HandleFunc("/api/config/client", s.handleConfigClient).Methods("GET")
 	r.HandleFunc("/api/config/regions", s.handleConfigRegions).Methods("GET")
+	r.HandleFunc("/api/config/region-quick-picks", s.handleConfigRegionQuickPicks).Methods("GET")
 	r.HandleFunc("/api/config/theme", s.handleConfigTheme).Methods("GET")
 	r.HandleFunc("/api/config/map", s.handleConfigMap).Methods("GET")
 	r.HandleFunc("/api/config/geo-filter", s.handleConfigGeoFilter).Methods("GET")
@@ -589,6 +590,15 @@ func (s *Server) handleConfigRegions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, regions)
+}
+
+// RegionQuickPicksResponse is GET /api/config/region-quick-picks.
+type RegionQuickPicksResponse struct {
+	QuickPicks []RegionQuickPick `json:"quickPicks"`
+}
+
+func (s *Server) handleConfigRegionQuickPicks(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, RegionQuickPicksResponse{QuickPicks: []RegionQuickPick{}})
 }
 
 func (s *Server) handleConfigTheme(w http.ResponseWriter, r *http.Request) {

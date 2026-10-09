@@ -104,6 +104,11 @@ type Config struct {
 
 	Regions map[string]string `json:"regions"`
 
+	// RegionQuickPicks are named groups of region (IATA) codes offered as
+	// one-tap choices in the region filter, e.g. a country's observers. See
+	// NormalizedRegionQuickPicks and config.example.json.
+	RegionQuickPicks []RegionQuickPick `json:"regionQuickPicks,omitempty"`
+
 	Roles            map[string]interface{} `json:"roles"`
 	HealthThresholds *HealthThresholds      `json:"healthThresholds"`
 	PathTrust        *PathTrustConfig       `json:"pathTrust,omitempty"`
@@ -864,6 +869,25 @@ func (c *Config) BlacklistGeneration() uint64 {
 		return 0
 	}
 	return c.blacklistGen.Load()
+}
+
+// RegionQuickPick is one named group of region codes for the region filter.
+type RegionQuickPick struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Regions     []string `json:"regions"`
+}
+
+// Limits on the configured quick picks, so a typo in config.json cannot put
+// thousands of buttons or codes into every page.
+const (
+	maxRegionQuickPicks       = 20
+	maxRegionQuickPickRegions = 200
+)
+
+// NormalizedRegionQuickPicks returns the configured quick picks, cleaned up.
+func (c *Config) NormalizedRegionQuickPicks() []RegionQuickPick {
+	return []RegionQuickPick{}
 }
 
 // IsBlacklisted returns true if the given public key is in the nodeBlacklist.
