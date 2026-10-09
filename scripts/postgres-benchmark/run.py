@@ -93,18 +93,26 @@ def percentiles(values):
 
 
 def visibility(ingest, messages):
-    sent = {e["hash"]: e["completed_ns"] for e in ingest if e.get("new_transmission") and not e.get("error") and not e.get("dropped")}
-    received, duplicate_receipts = {}, 0
+    sent = {e["hash"]: e for e in ingest if e.get("new_transmission") and not e.get("error") and not e.get("dropped")}
+    measured = {key: event for key, event in sent.items() if event.get("measured")}
+    received, duplicate_receipts, duplicate_receipts_all = {}, 0, 0
     for message in messages:
         key = message.get("hash")
         if key not in sent:
             continue
         if key in received:
-            duplicate_receipts += 1
+            duplicate_receipts_all += 1
+            duplicate_receipts += int(key in measured)
         received[key] = min(received.get(key, message["received_ns"]), message["received_ns"])
     missing = sorted(set(sent) - set(received))
-    lags = [received[key] - committed for key, committed in sent.items() if key in received]
-    return dict(verified=not missing, sentinels=len(sent), received=len(received), missing=len(missing), missing_hashes=missing[:100], duplicate_hash_receipts=duplicate_receipts, visible_before_ingest_return=sum(x < 0 for x in lags), lag_ns=percentiles(lags), samples_ns=lags)
+    lags = [received[key] - event["completed_ns"] for key, event in measured.items() if key in received]
+    return dict(verified=not missing, verification_scope="full stream including warmup", sample_scope="measured events only",
+                sentinels=len(sent), received=len(received), missing=len(missing), missing_hashes=missing[:100],
+                measured_sentinels=len(measured), measured_received=len(measured.keys() & received.keys()), measured_missing=len(measured.keys() - received.keys()),
+                duplicate_hash_receipts=duplicate_receipts, duplicate_hash_receipts_all=duplicate_receipts_all,
+                visible_before_ingest_return=sum(x < 0 for x in lags),
+                visible_before_ingest_return_all=sum(received[key] < event["completed_ns"] for key, event in sent.items() if key in received),
+                lag_ns=percentiles(lags), samples_ns=lags)
 
 
 def json_lines(path):
@@ -183,12 +191,47 @@ def safe_diagnostics(text):
     return out[-10:]
 
 
+def postgres_startup_errors(text):
+    # Only fixed error kinds and known SQLSTATE codes are public. Server log
+    # text, directories, connection strings and arbitrary values stay private.
+    codes = {"08001", "08006", "22023", "42501", "53100", "53200", "53300", "53400",
+             "55000", "58000", "58030", "58P01", "58P02", "F0000", "F0001", "XX000", "XX001", "XX002"}
+    errors = []
+    for line in text.splitlines():
+        match = re.search(r"(?:^|\]\s+)(FATAL|PANIC|ERROR):\s*(?:([0-9A-Z]{5}):\s*)?(.*)", line)
+        if not match:
+            continue
+        severity, code, message = match.groups()
+        message = message.lower()
+        kind = "unclassified_postgres_startup_error"
+        if "could not create lock file" in message and ".s.pgsql." in message and "permission denied" in message:
+            kind = "unix_socket_lock_permission_denied"
+        elif "could not bind" in message and "address already in use" in message:
+            kind = "socket_address_in_use"
+        elif "could not create any tcp/ip sockets" in message:
+            kind = "tcp_listener_unavailable"
+        elif "could not create any unix-domain sockets" in message:
+            kind = "unix_socket_unavailable"
+        elif "shared memory" in message:
+            kind = "shared_memory_unavailable"
+        elif "invalid value for parameter" in message or "configuration file" in message:
+            kind = "invalid_server_configuration"
+        elif "data directory" in message:
+            kind = "data_directory_unavailable"
+        errors.append(dict(severity=severity, sqlstate=code if code in codes else None, kind=kind))
+    return errors[-10:] or [dict(severity="UNKNOWN", sqlstate=None, kind="unclassified_postgres_startup_error")]
+
+
 def record_failure(log, exit_code):
     log = Path(log)
     with open(log, "rb") as stream:
         stream.seek(max(0, log.stat().st_size - 8192))
         tail = stream.read(8192).decode("utf-8", errors="replace")
     result = dict(log=log.name, exit_code=exit_code, diagnostics=safe_diagnostics(tail), policy="At most 10 sanitized diagnostic lines from the final 8 KiB; raw logs and event bodies excluded")
+    if log.name == "postgres.log":
+        result["postgres_errors"] = postgres_startup_errors(tail)
+        result["diagnostics"] = ["{severity}: {sqlstate} {kind}".format(**error) for error in result["postgres_errors"]]
+        result["policy"] = "Only allowlisted PostgreSQL startup error kinds and SQLSTATE codes; raw messages excluded"
     write_json(log.with_name("failure-" + log.stem + ".json"), result)
     return result
 
@@ -214,7 +257,7 @@ def public_bundle(output, repository=None):
     output = Path(output).resolve()
     public = output / "public"
     public.mkdir(exist_ok=True)
-    patterns = ["manifest.json", "resource-preflight.json", "summary*.csv", "paired-summary.json", "report.md", "logs/failure-*.json", "corpus/*.json", "pair-*/corpus-offset.json", "pair-*/events.json", "pair-*/*/failure-*.json", "pair-*/*/*.jsonl", "pair-*/*/resources.csv", "pair-*/*/processes.csv", "pair-*/*/resource-final.json", "pair-*/*/resource-error.json", "pair-*/*/*validation*.json", "pair-*/*/startup*.json", "pair-*/*/migration.json", "pair-*/*/retention*.json", "pair-*/*/handler.json", "pair-*/*/database-settings.json", "pair-*/*/reader-settings.json", "pair-*/*/http-workload.json", "pair-*/*/visibility.json", "pair-*/*/plans/*"]
+    patterns = ["manifest.json", "resource-preflight.json", "postgres-preflight.json", "summary*.csv", "paired-summary.json", "report.md", "logs/failure-*.json", "corpus/*.json", "pair-*/corpus-offset.json", "pair-*/events.json", "pair-*/*/failure-*.json", "pair-*/*/*.jsonl", "pair-*/*/resources.csv", "pair-*/*/processes.csv", "pair-*/*/resource-final.json", "pair-*/*/resource-error.json", "pair-*/*/*validation*.json", "pair-*/*/startup*.json", "pair-*/*/migration.json", "pair-*/*/retention*.json", "pair-*/*/handler.json", "pair-*/*/database-settings.json", "pair-*/*/reader-settings.json", "pair-*/*/http-workload.json", "pair-*/*/visibility.json", "pair-*/*/plans/*"]
     for pattern in patterns:
         for source in sorted(output.glob(pattern)):
             if not source.is_file() or source.is_symlink():
@@ -443,16 +486,17 @@ class Postgres:
         self.env = dict({k:v for k,v in os.environ.items() if not k.startswith("PG")}, PGHOST="127.0.0.1", PGPORT=str(self.port), PGUSER="bench_admin", PGDATABASE="postgres")
 
     def start(self):
-        self.proc = spawn([self.bin / "postgres", "-D", self.data, "-h", "127.0.0.1", "-p", self.port, "-c", "fsync=on", "-c", "synchronous_commit=on", "-c", "full_page_writes=on", "-c", "shared_buffers=256MB", "-c", "max_connections=32"], cwd=self.root, env=self.env, log=self.logs / "postgres.log", budget=self.budget)
+        self.proc = spawn([self.bin / "postgres", "-D", self.data, "-h", "127.0.0.1", "-p", self.port, "-c", "unix_socket_directories=", "-c", "log_line_prefix=", "-c", "log_error_verbosity=verbose", "-c", "fsync=on", "-c", "synchronous_commit=on", "-c", "full_page_writes=on", "-c", "shared_buffers=256MB", "-c", "max_connections=32"], cwd=self.root, env=self.env, log=self.logs / "postgres.log", budget=self.budget)
         for _ in range(200):
             if self.proc.poll() is not None:
-                record_failure(self.proc.bench_log.name, self.proc.returncode)
-                raise RuntimeError("private PostgreSQL failed to start")
+                failure = record_failure(self.proc.bench_log.name, self.proc.returncode)
+                raise RuntimeError("private PostgreSQL failed to start: " + "; ".join(failure["diagnostics"]))
             if subprocess.run([str(self.bin / "pg_isready"), "-q"], env=self.env).returncode == 0:
                 self.sql("SELECT 1")
                 return
             time.sleep(.1)
-        raise TimeoutError("private PostgreSQL readiness timeout")
+        record_failure(self.proc.bench_log.name, None)
+        raise TimeoutError("private PostgreSQL readiness timeout; see failure-postgres.json")
 
     def stop(self):
         stop(self.proc)
@@ -728,7 +772,7 @@ def summarize(output):
         if (directory/"handler.json").exists():
             obj=json.loads((directory/"handler.json").read_text());add(pair,backend,"handler-control","200-valid-envelopes",obj["samples_ns"])
         if (directory/"visibility.json").exists():
-            obj=json.loads((directory/"visibility.json").read_text());add(pair,backend,"websocket","new-transmission-sentinels",obj["samples_ns"],obj["missing"])
+            obj=json.loads((directory/"visibility.json").read_text());add(pair,backend,"websocket","new-transmission-sentinels",obj["samples_ns"],obj["measured_missing"])
     if rows:
         with open(output/"summary.csv","w",newline="") as stream:
             writer=csv.DictWriter(stream,fieldnames=list(rows[0]));writer.writeheader();writer.writerows(rows)
@@ -848,6 +892,14 @@ def main(argv=None):
             detail = record_resource_failure(output / "resource-preflight.json", error, status="failed")
             raise RuntimeError("resource preflight failed: " + json.dumps(detail, sort_keys=True)) from error
         write_json(output / "resource-preflight.json", dict(status="passed", enforced=bool(budget.path), counters=list(RESOURCE_COUNTERS) if budget.path else []))
+        try:
+            pg = Postgres(runtime, args.postgres_bin, budget, logs)
+            pg.start()
+            pg.stop()
+        except BaseException as error:
+            write_json(output / "postgres-preflight.json", dict(status="failed", error_type=type(error).__name__))
+            raise
+        write_json(output / "postgres-preflight.json", dict(status="passed", transport="loopback_tcp", readiness="SELECT 1", stopped=True))
         roots = {}
         for backend, revision in (("sqlite", BASELINE), ("postgres", args.candidate_sha)):
             root = runtime / backend
@@ -867,7 +919,6 @@ def main(argv=None):
         write_json(prepare_dir / "validation.json", canonical_validation)
         manifest.update(epoch=epoch, canonical_file_sha256=sha256(canonical), table_manifest=tables)
         manifest["binary_sha256"] = {p.name: sha256(p) for p in binaries.iterdir() if p.is_file() and not p.name.endswith(".json")}
-        pg = Postgres(runtime, args.postgres_bin, budget, logs)
         warmup = args.warmup if args.warmup is not None else (60 if args.profile == "primary" else 2)
         seconds = args.seconds if args.seconds is not None else (180 if args.profile == "primary" else 10)
         if warmup < 0 or seconds < 1 or args.ingest_rate < 1 or args.http_rate < 1 or (warmup+seconds)*max(args.ingest_rate,args.http_rate)>1_000_000:

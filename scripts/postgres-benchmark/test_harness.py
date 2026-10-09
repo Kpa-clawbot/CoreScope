@@ -110,6 +110,76 @@ class HarnessTests(unittest.TestCase):
         command = next(line for line in workflow.splitlines() if "printf '+" in line and '"$delegated/cgroup.subtree_control"' in line)
         self.assertTrue({"cpu", "memory", "io"}.issubset(set(re.findall(r"\+([a-z]+)", command))))
 
+    def test_private_postgres_launch_uses_only_loopback_tcp_and_durable_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            pg = bench.Postgres.__new__(bench.Postgres)
+            pg.root, pg.bin, pg.data, pg.logs = root, root / "bin", root / "pgdata", root
+            pg.port, pg.env, pg.budget = 25433, {"PGHOST": "127.0.0.1"}, object()
+            pg.sql = mock.Mock(return_value="1\n")
+            with mock.patch.object(bench, "spawn", return_value=types.SimpleNamespace(poll=lambda: None)) as spawn, \
+                    mock.patch.object(bench.subprocess, "run", return_value=types.SimpleNamespace(returncode=0)):
+                pg.start()
+            args = spawn.call_args.args[0]
+            settings = dict(args[i+1].split("=", 1) for i, arg in enumerate(args[:-1]) if arg == "-c")
+            self.assertEqual(settings.get("unix_socket_directories"), "")
+            self.assertEqual(args[args.index("-h")+1], "127.0.0.1")
+            for setting in ("fsync", "synchronous_commit", "full_page_writes"):
+                self.assertEqual(settings[setting], "on")
+            self.assertEqual(settings["shared_buffers"], "256MB")
+            self.assertEqual(settings["max_connections"], "32")
+            self.assertEqual(settings.get("log_error_verbosity"), "verbose")
+            pg.sql.assert_called_once_with("SELECT 1")
+
+    def test_postgres_timestamped_failure_keeps_only_allowlisted_diagnostics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            logs = root / "logs"
+            logs.mkdir()
+            path = logs / "postgres.log"
+            path.write_text('2026-10-09 05:08:18.001 UTC [123] FATAL:  42501: could not create lock file "/private/socket/.s.PGSQL.5432.lock": Permission denied\n'
+                            '2026-10-09 05:08:18.002 UTC [123] DETAIL: postgres://private:secret@private.example/data\n'
+                            '2026-10-09 05:08:18.003 UTC [123] FATAL: arbitrary private body\n')
+            result = bench.record_failure(path, 1)
+            self.assertIn("42501", json.dumps(result))
+            self.assertEqual(result["postgres_errors"][0], {"severity": "FATAL", "sqlstate": "42501", "kind": "unix_socket_lock_permission_denied"})
+            for private in ("/private", "secret", "private.example", "arbitrary private body"):
+                self.assertNotIn(private, json.dumps(result))
+            bench.public_bundle(root)
+            self.assertTrue((root / "public/logs/failure-postgres.json").is_file())
+
+    def test_failed_postgres_launch_precedes_archiving_and_building(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            budget, _ = self.resource_fixture(root)
+            postgres_bin = root / "pg-bin"
+            postgres_bin.mkdir()
+            for tool in ("postgres", "initdb", "psql", "pg_isready"):
+                (postgres_bin / tool).touch()
+            output = root / "corescope-bench-pg-preflight"
+            pg = mock.Mock()
+            pg.start.side_effect = RuntimeError("private PostgreSQL failed to start")
+            def version(args, **kwargs):
+                return "go version go1.27.2" if args[0] == "go" else "PostgreSQL 18.6"
+            with mock.patch.object(bench.sys, "platform", "linux"), \
+                    mock.patch.object(bench.os, "geteuid", return_value=1000, create=True), \
+                    mock.patch.object(bench.os, "sysconf", return_value=4096, create=True), \
+                    mock.patch.object(bench.shutil, "which", return_value="tool"), \
+                    mock.patch.object(bench.shutil, "disk_usage", return_value=types.SimpleNamespace(free=32 * 1024**3)), \
+                    mock.patch.object(bench, "command", side_effect=version), \
+                    mock.patch.object(bench, "Budget", return_value=budget), \
+                    mock.patch.object(bench, "Postgres", return_value=pg), \
+                    mock.patch.object(bench, "archive") as archive, \
+                    mock.patch.object(bench, "build", side_effect=AssertionError("must launch PostgreSQL before building")) as build:
+                with self.assertRaisesRegex(RuntimeError, "private PostgreSQL failed"):
+                    bench.main(["--candidate-sha", "1" * 40, "--profile", "smoke", "--pairs", "1", "--corpus", "S",
+                                "--output", str(output), "--postgres-bin", str(postgres_bin)])
+            archive.assert_not_called()
+            build.assert_not_called()
+            pg.start.assert_called_once()
+            pg.stop.assert_called()
+            self.assertEqual(json.loads((output / "public/postgres-preflight.json").read_text())["status"], "failed")
+
     def test_corpus_counts_are_exact(self):
         for name, transmissions, observations in [("S", 30_000, 90_000), ("B", 128_000, 2_048_000), ("L", 1_000_000, 16_000_000)]:
             shape = bench.corpus(name)
@@ -175,12 +245,42 @@ class HarnessTests(unittest.TestCase):
             self.assertEqual(files, {"manifest.json", "pair-00/sqlite/requests.jsonl"})
 
     def test_visibility_is_bound_to_durable_sent_hashes(self):
-        sent = [{"hash":"a", "completed_ns":100, "new_transmission":True}, {"hash":"b", "completed_ns":200, "new_transmission":True}]
+        sent = [{"hash":"a", "completed_ns":100, "new_transmission":True, "measured":True}, {"hash":"b", "completed_ns":200, "new_transmission":True, "measured":True}]
         result = bench.visibility(sent,[{"hash":"a","received_ns":90},{"hash":"a","received_ns":110},{"hash":"unrelated","received_ns":300}])
         self.assertFalse(result["verified"])
         self.assertEqual(result["missing_hashes"],["b"])
         self.assertEqual(result["duplicate_hash_receipts"],1)
         self.assertEqual(result["visible_before_ingest_return"],1)
+        self.assertIsNone(result["lag_ns"]["p99"])
+
+    def test_visibility_headline_excludes_warmup_but_keeps_earliest_negative_lags(self):
+        sent = [{"hash": "warm", "completed_ns": 100, "new_transmission": True, "measured": False},
+                {"hash": "measured", "completed_ns": 200, "new_transmission": True, "measured": True}]
+        received = [{"hash": "warm", "received_ns": 90}, {"hash": "warm", "received_ns": 95},
+                    {"hash": "warm", "received_ns": 99}, {"hash": "measured", "received_ns": 190},
+                    {"hash": "measured", "received_ns": 220}]
+        result = bench.visibility(sent, received)
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["samples_ns"], [-10])
+        self.assertEqual(result["lag_ns"]["samples"], 1)
+        self.assertEqual(result["duplicate_hash_receipts"], 1)
+        self.assertEqual(result["duplicate_hash_receipts_all"], 3)
+        self.assertEqual(result["visible_before_ingest_return"], 1)
+        self.assertEqual(result["visible_before_ingest_return_all"], 2)
+
+    def test_missing_warmup_sentinel_still_fails_verification(self):
+        sent = [{"hash": "warm", "completed_ns": 100, "new_transmission": True, "measured": False},
+                {"hash": "measured", "completed_ns": 200, "new_transmission": True, "measured": True}]
+        result = bench.visibility(sent, [{"hash": "measured", "received_ns": 230}])
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["missing_hashes"], ["warm"])
+        self.assertEqual(result["measured_missing"], 0)
+        self.assertEqual(result["samples_ns"], [30])
+
+    def test_warmup_does_not_make_sparse_visibility_p99_reportable(self):
+        sent = [{"hash": str(i), "completed_ns": 100, "new_transmission": True, "measured": i == 1000} for i in range(1001)]
+        result = bench.visibility(sent, [{"hash": str(i), "received_ns": 110} for i in range(1001)])
+        self.assertEqual(result["lag_ns"]["samples"], 1)
         self.assertIsNone(result["lag_ns"]["p99"])
 
     def test_cgroup_launch_preserves_arguments_without_shell_interpolation(self):
