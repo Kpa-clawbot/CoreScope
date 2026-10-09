@@ -45,6 +45,9 @@ type analyticsRecomputer struct {
 	startOnce sync.Once
 	stopOnce  sync.Once
 
+	// pauseWhenIdle: see AnalyticsConfig.PauseWhenIdle.
+	pauseWhenIdle bool
+
 	// Stats (atomic).
 	computeRuns   atomic.Int64
 	lastComputeNs atomic.Int64 // duration of last compute in nanoseconds
@@ -238,6 +241,9 @@ type AnalyticsRecomputeIntervals struct {
 	Roles              time.Duration
 	ObserversClockSkew time.Duration
 	NodesClockSkew     time.Duration
+
+	// PauseWhenIdle is applied to every recomputer (AnalyticsConfig.PauseWhenIdle).
+	PauseWhenIdle bool
 }
 
 func pickInterval(override, def time.Duration) time.Duration {

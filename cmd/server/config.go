@@ -1062,6 +1062,11 @@ func (c *Config) IsObserverBlacklisted(id string) bool {
 type AnalyticsConfig struct {
 	DefaultIntervalSeconds   int            `json:"defaultIntervalSeconds,omitempty"`
 	RecomputeIntervalSeconds map[string]int `json:"recomputeIntervalSeconds,omitempty"`
+	// PauseWhenIdle skips a scheduled recompute when nothing has read that
+	// endpoint's snapshot since the previous recompute. The first read
+	// after a pause is served the existing snapshot at once and starts a
+	// refresh. Off by default (always recompute on the interval).
+	PauseWhenIdle bool `json:"pauseWhenIdle,omitempty"`
 	// LoRaPreset is the assumed PHY preset used by the relay-airtime-share
 	// metric to compute true Time-on-Air (issue #1768). Defaults to the
 	// EU MeshCore deployment: 869.6 MHz / BW 62.5 kHz / SF 8 / CR 4/5.
@@ -1086,6 +1091,11 @@ func (c *Config) AnalyticsDefaultRecomputeInterval() time.Duration {
 		return time.Duration(c.Analytics.DefaultIntervalSeconds) * time.Second
 	}
 	return 5 * time.Minute
+}
+
+// AnalyticsPauseWhenIdle reports whether idle analytics recomputes are skipped.
+func (c *Config) AnalyticsPauseWhenIdle() bool {
+	return false
 }
 
 // AnalyticsRecomputeIntervals returns the per-endpoint override map.
