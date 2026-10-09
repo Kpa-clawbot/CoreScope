@@ -84,7 +84,10 @@ jobs:
           delegated="/sys/fs/cgroup/corescope-benchmark-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           test ! -e "$delegated"
           sudo mkdir "$delegated"
-          printf '+cpu +memory\n' | sudo tee "$delegated/cgroup.subtree_control" >/dev/null
+          for controller in cpu memory io; do
+            grep -qw "$controller" "$delegated/cgroup.controllers" || { echo "Required cgroup controller unavailable: $controller" >&2; exit 1; }
+          done
+          printf '+cpu +memory +io\n' | sudo tee "$delegated/cgroup.subtree_control" >/dev/null
           sudo mkdir "$delegated/coordinator"
           sudo chown "$(id -u):$(id -g)" "$delegated" "$delegated/cgroup.procs" "$delegated/cgroup.subtree_control" "$delegated/coordinator" "$delegated/coordinator/cgroup.procs"
           # The coordinator/generator live in a sibling of the measured app+DB

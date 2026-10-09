@@ -21,8 +21,9 @@ pilot. **No empirical database comparison is included in this change.**
   `pg_isready`, and never contacts an existing PostgreSQL service.
 - Run as a non-root user. PostgreSQL starts on a newly selected loopback port
   with a private data directory and synthetic, local roles.
-- Primary runs require a delegated cgroup v2 parent with CPU and memory
-  controllers enabled. The runner creates its own child and writes its limits
+- Primary runs require a delegated cgroup v2 parent with CPU, memory and I/O
+  controllers enabled. Required resource counters are checked before builds.
+  The runner creates its own child and writes its limits
   before any application/database child executes. All descendants inherit the
   same **3 CPU / 6 GiB** application budget. The coordinator and event generator
   stay outside that child.

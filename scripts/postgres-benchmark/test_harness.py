@@ -1,8 +1,13 @@
 import importlib.util
+import csv
+import errno
+import json
 import pathlib
+import re
 import tempfile
 import types
 import unittest
+from unittest import mock
 
 HERE = pathlib.Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("bench", HERE / "run.py")
@@ -11,6 +16,100 @@ spec.loader.exec_module(bench)
 
 
 class HarnessTests(unittest.TestCase):
+    def resource_fixture(self, root, missing=None):
+        group = root / "private-cgroup-path"
+        group.mkdir()
+        for name, value in {"memory.current": "0", "memory.events": "oom 0\n", "cpu.stat": "usage_usec 0\n",
+                            "io.stat": "8:0 rbytes=1024 wbytes=2048\n", "cgroup.procs": ""}.items():
+            if name != missing:
+                (group / name).write_text(value)
+        budget = bench.Budget.__new__(bench.Budget)
+        budget.path = group
+        budget.info = {"enforced": True, "memory_peak_reset": False}
+        budget.close = mock.Mock()
+        run = root / "pair-00" / "sqlite"
+        run.mkdir(parents=True)
+        return budget, run
+
+    def test_sampler_failure_identifies_counter_without_private_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            budget, run = self.resource_fixture(root, missing="io.stat")
+            with self.assertRaisesRegex(RuntimeError, "io.stat"):
+                with bench.Resources(run / "resources.csv", budget, []) as resource:
+                    resource.thread.join(timeout=2)
+            evidence = json.loads((run / "resource-error.json").read_text())
+            self.assertEqual(evidence["error_type"], "FileNotFoundError")
+            self.assertEqual(evidence["errno"], errno.ENOENT)
+            self.assertEqual(evidence["counter"], "io.stat")
+            self.assertNotIn("private-cgroup-path", json.dumps(evidence))
+            bench.public_bundle(root)
+            self.assertTrue((root / "public/pair-00/sqlite/resource-error.json").is_file())
+
+    def test_sampler_failure_does_not_replace_workload_exception(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            budget, run = self.resource_fixture(root, missing="io.stat")
+            with self.assertRaisesRegex(ValueError, "independent workload failure"):
+                with bench.Resources(run / "resources.csv", budget, []) as resource:
+                    resource.thread.join(timeout=2)
+                    raise ValueError("independent workload failure")
+            self.assertEqual(json.loads((run / "resource-error.json").read_text())["counter"], "io.stat")
+
+    def test_successful_resource_sample_keeps_io_metrics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            budget, run = self.resource_fixture(pathlib.Path(directory))
+            resource = bench.Resources(run / "resources.csv", budget, [])
+            with mock.patch.object(resource.done, "wait", side_effect=lambda _: resource.done.set()):
+                resource.sample()
+            self.assertIsNone(resource.error)
+            with open(run / "resources.csv", newline="") as stream:
+                rows = list(csv.DictReader(stream))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["io_stat"], "8:0 rbytes=1024 wbytes=2048")
+
+    def test_final_resource_write_failure_does_not_replace_workload_exception(self):
+        with tempfile.TemporaryDirectory() as directory:
+            budget, run = self.resource_fixture(pathlib.Path(directory))
+            with mock.patch.object(bench, "write_json", side_effect=PermissionError(errno.EACCES, "private detail", str(run / "resource-final.json"))):
+                with self.assertRaisesRegex(ValueError, "independent workload failure"):
+                    with bench.Resources(run / "resources.csv", budget, []):
+                        raise ValueError("independent workload failure")
+
+    def test_missing_counter_fails_before_archiving_or_building(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            budget, _ = self.resource_fixture(root, missing="io.stat")
+            postgres_bin = root / "pg-bin"
+            postgres_bin.mkdir()
+            for tool in ("postgres", "initdb", "psql", "pg_isready"):
+                (postgres_bin / tool).touch()
+            output = root / "corescope-bench-preflight"
+            def version(args, **kwargs):
+                return "go version go1.27.2" if args[0] == "go" else "PostgreSQL 18.6"
+            with mock.patch.object(bench.sys, "platform", "linux"), \
+                    mock.patch.object(bench.os, "geteuid", return_value=1000, create=True), \
+                    mock.patch.object(bench.os, "sysconf", return_value=4096, create=True), \
+                    mock.patch.object(bench.shutil, "which", return_value="tool"), \
+                    mock.patch.object(bench.shutil, "disk_usage", return_value=types.SimpleNamespace(free=32 * 1024**3)), \
+                    mock.patch.object(bench, "command", side_effect=version), \
+                    mock.patch.object(bench, "Budget", return_value=budget), \
+                    mock.patch.object(bench, "archive") as archive, \
+                    mock.patch.object(bench, "build", side_effect=AssertionError("must preflight before building")) as build:
+                with self.assertRaisesRegex(RuntimeError, "io.stat"):
+                    bench.main(["--candidate-sha", "1" * 40, "--profile", "smoke", "--pairs", "1", "--corpus", "S",
+                                "--output", str(output), "--postgres-bin", str(postgres_bin)])
+            archive.assert_not_called()
+            build.assert_not_called()
+            evidence = json.loads((output / "public/resource-preflight.json").read_text())
+            self.assertEqual(evidence["counter"], "io.stat")
+            self.assertFalse(json.loads((output / "public/manifest.json").read_text())["comparison_eligible"])
+
+    def test_workflow_delegates_every_required_resource_controller(self):
+        workflow = (HERE.parents[1] / ".github/workflows/postgres-benchmark.yml").read_text()
+        command = next(line for line in workflow.splitlines() if "printf '+" in line and '"$delegated/cgroup.subtree_control"' in line)
+        self.assertTrue({"cpu", "memory", "io"}.issubset(set(re.findall(r"\+([a-z]+)", command))))
+
     def test_corpus_counts_are_exact(self):
         for name, transmissions, observations in [("S", 30_000, 90_000), ("B", 128_000, 2_048_000), ("L", 1_000_000, 16_000_000)]:
             shape = bench.corpus(name)

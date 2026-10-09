@@ -33,6 +33,7 @@ BASELINE = "9dbc287579a237ffa744dd0c91fa7227d09763ac"
 FIRMWARE = "a366955cb2f67b8e6842d4f00d2b6a554dddd88a"
 HERE = Path(__file__).resolve().parent
 PROCESSES = []
+RESOURCE_COUNTERS = ("cgroup.procs", "memory.current", "memory.events", "cpu.stat", "io.stat")
 TABLES = ["nodes", "inactive_nodes", "observers", "transmissions", "observations", "observer_metrics", "neighbor_edges", "dropped_packets", "client_receptions", "client_observers", "client_rx_observations", "client_rf_samples", "node_declared_regions", "scope_match_totals", "_migrations", "_async_migrations", "advert_route_evidence", "advert_evidence_backfill"]
 # These are operational receipt/creation times, not packet timestamps. Full
 # pre-run parity includes them; only post-replay logical parity excludes them.
@@ -192,12 +193,28 @@ def record_failure(log, exit_code):
     return result
 
 
+def record_resource_failure(path, error, **context):
+    filename = getattr(error, "filename", None)
+    name = Path(filename).name if filename else None
+    known = (*RESOURCE_COUNTERS, "memory.peak", "smaps_rollup", "comm", "resources.csv", "processes.csv", "resource-final.json", "resource-error.json")
+    detail = dict(error_type=type(error).__name__, errno=getattr(error, "errno", None),
+                  counter=name if name in known else None, **context)
+    try:
+        write_json(path, detail)
+    except OSError as write_error:
+        # A full/unwritable output filesystem must not replace the original
+        # workload exception with another cleanup exception.
+        detail["evidence_write_error_type"] = type(write_error).__name__
+        detail["evidence_write_errno"] = write_error.errno
+    return detail
+
+
 def public_bundle(output, repository=None):
     """Explicit whitelist: never export databases, event bodies or controls."""
     output = Path(output).resolve()
     public = output / "public"
     public.mkdir(exist_ok=True)
-    patterns = ["manifest.json", "summary*.csv", "paired-summary.json", "report.md", "logs/failure-*.json", "corpus/*.json", "pair-*/corpus-offset.json", "pair-*/events.json", "pair-*/*/failure-*.json", "pair-*/*/*.jsonl", "pair-*/*/resources.csv", "pair-*/*/processes.csv", "pair-*/*/resource-final.json", "pair-*/*/*validation*.json", "pair-*/*/startup*.json", "pair-*/*/migration.json", "pair-*/*/retention*.json", "pair-*/*/handler.json", "pair-*/*/database-settings.json", "pair-*/*/reader-settings.json", "pair-*/*/http-workload.json", "pair-*/*/visibility.json", "pair-*/*/plans/*"]
+    patterns = ["manifest.json", "resource-preflight.json", "summary*.csv", "paired-summary.json", "report.md", "logs/failure-*.json", "corpus/*.json", "pair-*/corpus-offset.json", "pair-*/events.json", "pair-*/*/failure-*.json", "pair-*/*/*.jsonl", "pair-*/*/resources.csv", "pair-*/*/processes.csv", "pair-*/*/resource-final.json", "pair-*/*/resource-error.json", "pair-*/*/*validation*.json", "pair-*/*/startup*.json", "pair-*/*/migration.json", "pair-*/*/retention*.json", "pair-*/*/handler.json", "pair-*/*/database-settings.json", "pair-*/*/reader-settings.json", "pair-*/*/http-workload.json", "pair-*/*/visibility.json", "pair-*/*/plans/*"]
     for pattern in patterns:
         for source in sorted(output.glob(pattern)):
             if not source.is_file() or source.is_symlink():
@@ -317,6 +334,12 @@ class Budget:
             self.path.rmdir()
             self.path = None
             raise
+
+    def preflight(self):
+        if self.path:
+            for name in RESOURCE_COUNTERS:
+                (self.path / name).read_text()
+            self.info["resource_counters"] = list(RESOURCE_COUNTERS)
 
     def arguments(self, args):
         if not self.path:
@@ -566,16 +589,23 @@ class Resources:
         self.thread.start()
         return self
 
-    def __exit__(self, *args):
-        self.done.set()
-        self.thread.join(timeout=10)
-        if self.thread.is_alive():
-            raise RuntimeError("resource sampler failed to stop")
-        if self.error:
-            raise RuntimeError("resource sampler failed") from self.error
-        if self.budget.path:
-            c=self.budget.path
-            write_json(self.path.parent/"resource-final.json",dict(memory_peak_bytes=int((c/"memory.peak").read_text()) if self.budget.info.get("memory_peak_reset") else None,cpu_stat=(c/"cpu.stat").read_text(),io_stat=(c/"io.stat").read_text(),memory_events=(c/"memory.events").read_text(),budget=self.budget.info))
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            self.done.set()
+            self.thread.join(timeout=10)
+            if self.thread.is_alive():
+                raise TimeoutError("resource sampler failed to stop")
+            if self.error:
+                raise self.error
+            if self.budget.path:
+                c=self.budget.path
+                write_json(self.path.parent/"resource-final.json",dict(memory_peak_bytes=int((c/"memory.peak").read_text()) if self.budget.info.get("memory_peak_reset") else None,cpu_stat=(c/"cpu.stat").read_text(),io_stat=(c/"io.stat").read_text(),memory_events=(c/"memory.events").read_text(),budget=self.budget.info))
+        except BaseException as error:
+            detail = record_resource_failure(self.path.parent/"resource-error.json", error, phase=self.phase,
+                                             workload_error_type=exc_type.__name__ if exc_type else None)
+            if exc_value is None:
+                raise RuntimeError("resource sampler failed: " + json.dumps(detail, sort_keys=True)) from error
+        return False
 
 
 def wait_file(path, processes, seconds=120):
@@ -812,6 +842,12 @@ def main(argv=None):
     manifest = dict(status="incomplete", baseline_sha=BASELINE, candidate_sha=args.candidate_sha, seed=args.seed, corpus=args.corpus, shape=corpus(args.corpus), firmware_reference=FIRMWARE, harness_sha256=hashlib.sha256(b"".join(bytes.fromhex(sha256(p)) for p in sorted(HERE.rglob("*")) if p.is_file() and "__pycache__" not in p.parts)).hexdigest(), host=dict(system=platform.system(), kernel=platform.release(), architecture=platform.machine(), cpus=os.cpu_count(), ram_bytes=os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")), postgres_version=version, go_version=command(["go", "version"]).strip(), compiler=command(["cc", "--version"]).splitlines()[0], resource_budget=budget.info, cache_policy=dict(startup="new application process after full validation; OS cache warm", mixed="warmup then application-warm measurement", sql="channel application cache explicitly cleared; OS cache warm"), os_cold="not measured", comparison_eligible=False, extended_120s_600s_profile="not run unless explicitly requested by duration flags", order=pair_order(args.pairs))
     write_json(output / "manifest.json", manifest)
     try:
+        try:
+            budget.preflight()
+        except OSError as error:
+            detail = record_resource_failure(output / "resource-preflight.json", error, status="failed")
+            raise RuntimeError("resource preflight failed: " + json.dumps(detail, sort_keys=True)) from error
+        write_json(output / "resource-preflight.json", dict(status="passed", enforced=bool(budget.path), counters=list(RESOURCE_COUNTERS) if budget.path else []))
         roots = {}
         for backend, revision in (("sqlite", BASELINE), ("postgres", args.candidate_sha)):
             root = runtime / backend
