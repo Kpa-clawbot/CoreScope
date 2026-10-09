@@ -1948,12 +1948,23 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	}
 	candidates = filtered
 
+	// The canonical resolved_path lookup below runs without s.mu, so it reads
+	// a snapshot of each surviving candidate's observations instead of
+	// tx.Observations, which ingest appends to under the write lock. Taken in
+	// a short read lock of its own so only the survivors are copied.
+	s.store.mu.RLock()
+	rpSnapshots := make(map[int][]rpObs, len(candidates))
+	for _, tx := range candidates {
+		rpSnapshots[tx.ID] = snapshotRPObs(tx)
+	}
+	s.store.mu.RUnlock()
+
 	// #1278: Read the CANONICAL persisted resolved_path for each surviving
-	// candidate OUTSIDE s.mu (fetchResolvedPathForTxBest takes lruMu; the
+	// candidate OUTSIDE s.mu (bestResolvedPath takes lruMu; the
 	// lock-ordering contract forbids acquiring lruMu under s.mu).
 	//
 	// Option A from the issue: the packets page renders each tx via
-	// fetchResolvedPathForTxBest. For /api/nodes/{pk}/paths to stay
+	// bestResolvedPath. For /api/nodes/{pk}/paths to stay
 	// CONSISTENT with the packets page, BOTH the containsTarget membership
 	// decision AND the displayed hop names must come from that same
 	// canonical resolved_path — not a re-resolution biased by passing the
@@ -1964,7 +1975,7 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	// there's no canonical answer to be consistent with.
 	canonicalRP := make(map[int][]*string, len(candidates))
 	for _, tx := range candidates {
-		if rp := s.store.fetchResolvedPathForTxBest(tx); rp != nil {
+		if rp := s.store.bestResolvedPath(tx.ID, rpSnapshots[tx.ID]); rp != nil {
 			canonicalRP[tx.ID] = rp
 		}
 	}

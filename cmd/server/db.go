@@ -502,6 +502,16 @@ type Stats struct {
 	PacketsLast24h     int `json:"packetsLast24h"`
 }
 
+// CountActiveNodes counts nodes seen in the last 7 days: GetStats' totalNodes
+// on its own, without GetStats' whole-table counts.
+func (db *DB) CountActiveNodes() (int, error) {
+	// Node.js uses 7-day active nodes for totalNodes
+	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
+	var n int
+	err := db.stmtQueryRow(db.stmtCountNodesActive, "SELECT COUNT(*) FROM nodes WHERE last_seen > ?", sevenDaysAgo).Scan(&n)
+	return n, err
+}
+
 // GetStats returns aggregate counts (matches Node.js db.getStats shape).
 func (db *DB) GetStats() (*Stats, error) {
 	s := &Stats{}
@@ -512,9 +522,7 @@ func (db *DB) GetStats() (*Stats, error) {
 	s.TotalPackets = s.TotalTransmissions
 
 	db.stmtQueryRow(db.stmtCountObservations, "SELECT COUNT(*) FROM observations").Scan(&s.TotalObservations)
-	// Node.js uses 7-day active nodes for totalNodes
-	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
-	db.stmtQueryRow(db.stmtCountNodesActive, "SELECT COUNT(*) FROM nodes WHERE last_seen > ?", sevenDaysAgo).Scan(&s.TotalNodes)
+	s.TotalNodes, _ = db.CountActiveNodes()
 	db.stmtQueryRow(db.stmtCountNodesAll, "SELECT COUNT(*) FROM nodes").Scan(&s.TotalNodesAllTime)
 	db.stmtQueryRow(db.stmtCountObservers, "SELECT COUNT(*) FROM observers WHERE inactive IS NULL OR inactive = 0").Scan(&s.TotalObservers)
 

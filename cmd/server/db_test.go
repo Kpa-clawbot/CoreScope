@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -188,6 +189,33 @@ func seedTestData(t *testing.T, db *DB) {
 		VALUES (2, 1, 15.0, -85, '[]', ?)`, yesterdayEpoch)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp, resolved_path)
 		VALUES (3, 1, 10.0, -92, '["cc"]', ?, '["1122334455667788"]')`, yesterdayEpoch)
+}
+
+// The topology endpoint takes uniqueNodes from CountActiveNodes, so it must
+// count what GetStats reports as totalNodes: nodes seen in the last 7 days.
+func TestCountActiveNodes(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	now := time.Now().UTC()
+	for i, seen := range []time.Time{now.Add(-time.Hour), now.Add(-6 * 24 * time.Hour), now.Add(-8 * 24 * time.Hour)} {
+		db.conn.Exec(`INSERT INTO nodes (public_key, name, last_seen) VALUES (?, ?, ?)`,
+			"pk"+strconv.Itoa(i), "n"+strconv.Itoa(i), seen.Format(time.RFC3339))
+	}
+
+	got, err := db.CountActiveNodes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 2 {
+		t.Errorf("CountActiveNodes = %d, want 2 (the node seen 8 days ago is not active)", got)
+	}
+	stats, err := db.GetStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != stats.TotalNodes {
+		t.Errorf("CountActiveNodes = %d, GetStats().TotalNodes = %d", got, stats.TotalNodes)
+	}
 }
 
 func TestGetStats(t *testing.T) {
@@ -2220,7 +2248,7 @@ func TestPerObservationRawHexEnrich(t *testing.T) {
 
 	// Check enriched observations
 	for _, obs := range tx.Observations {
-		m := store.enrichObs(obs)
+		m := store.enrichObsWithTx(obs, store.byTxID[obs.TransmissionID])
 		rh, _ := m["raw_hex"].(string)
 		if obs.RawHex != "" {
 			// Observer A: should get per-observation raw_hex

@@ -13,7 +13,7 @@ import (
 
 // TestHandleNodePaths_AnchorBiasInconsistency_Issue1278 reproduces #1278:
 // /api/nodes/{pk}/paths returns a tx whose CANONICAL persisted resolved_path
-// (the one the packets page reads via fetchResolvedPathForTxBest) does NOT
+// (the one the packets page reads via bestResolvedPath) does NOT
 // contain the queried pubkey.
 //
 // Two nodes share the 1-byte prefix "c0":
@@ -63,7 +63,7 @@ func TestHandleNodePaths_AnchorBiasInconsistency_Issue1278(t *testing.T) {
 		t.Fatalf("insert obs1: %v", err)
 	}
 	// obs2: LONGER path_json (two hops, first hop is what packets page shows
-	// as resolved_path[0]). fetchResolvedPathForTxBest picks this obs as
+	// as resolved_path[0]). bestResolvedPath picks this obs as
 	// canonical because it has the longer path_json. Its resolved_path
 	// picks nodeGPS for "c0", NOT nodeNoGPS.
 	if _, err := db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)

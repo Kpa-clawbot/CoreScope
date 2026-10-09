@@ -10,7 +10,7 @@ import (
 )
 
 // TestRepro810 reproduces #810: when the longest-path observation has NULL
-// resolved_path but a shorter-path observation has one, fetchResolvedPathForTxBest
+// resolved_path but a shorter-path observation has one, bestResolvedPath
 // returns nil → /api/nodes/{pk}/health.recentPackets[].resolved_path is missing
 // while /api/packets shows it.
 func TestRepro810(t *testing.T) {

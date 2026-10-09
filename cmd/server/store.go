@@ -262,6 +262,9 @@ type PacketStore struct {
 	regionObsMu        sync.Mutex
 	regionObsCache     map[string]map[string]bool
 	regionObsCacheTime time.Time
+	// Regions looked up since the last background refresh; that refresh
+	// re-queries only these.
+	regionObsUsed map[string]bool
 	// Cached area key → node pubkey set (30s per-key TTL)
 	areaNodeMu         sync.RWMutex
 	areaNodeCache      map[string]map[string]bool
@@ -276,6 +279,16 @@ type PacketStore struct {
 	nodeCache     []nodeInfo
 	nodePM        *prefixMap
 	nodeCacheTime time.Time
+	// nodeCacheGen counts InvalidateNodeCache calls, guarded by cacheMu. A
+	// background rebuild stores its result only if the generation it started
+	// under is still current.
+	nodeCacheGen uint64
+	// cacheRefresh limits the node, region-observer and area-node caches to
+	// one background refresh per key (#2146).
+	cacheRefresh cacheRefresher
+	// cacheLoadHook, when set, runs right before one of those caches queries
+	// SQL. Tests only.
+	cacheLoadHook func(kind string)
 	// Per-store dedupe set for one-shot schema-degradation warnings. Field
 	// (not package-level) so each test gets a fresh state — see #1199 item 5.
 	schemaDegradationLogged sync.Map
@@ -1913,9 +1926,17 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 		}
 	}
 	atomic.AddInt64(&s.queryCount, 1)
+	nodePK := s.resolveQueryNode(q.Node)
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	result, jobs := s.queryPacketsLocked(q, nodePK)
+	s.mu.RUnlock()
+	s.applyResolvedPaths(jobs)
+	return result
+}
 
+// queryPacketsLocked is the in-memory part of QueryPackets. Caller holds
+// s.mu and runs the returned resolved_path jobs after releasing it.
+func (s *PacketStore) queryPacketsLocked(q PacketQuery, nodePK string) (*PacketResult, []rpJob) {
 	if q.Limit <= 0 {
 		q.Limit = 50
 	}
@@ -1923,7 +1944,7 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 		q.Order = "DESC"
 	}
 
-	results := s.filterPackets(q)
+	results := s.filterPackets(q, nodePK)
 	total := len(results)
 
 	// #1345: order by ingest id, not insertion-into-s.packets order. After
@@ -1944,7 +1965,7 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 	// for ASC read forwards. Both are O(page_size) — no sort copy needed.
 	start := q.Offset
 	if start >= total {
-		return &PacketResult{Packets: []map[string]interface{}{}, Total: total}
+		return &PacketResult{Packets: []map[string]interface{}{}, Total: total}, nil
 	}
 	pageSize := q.Limit
 	if start+pageSize > total {
@@ -1952,9 +1973,12 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 	}
 
 	packets := make([]map[string]interface{}, 0, pageSize)
+	var jobs []rpJob
 	if q.Order == "ASC" {
 		for _, tx := range results[start : start+pageSize] {
-			packets = append(packets, s.txToMapWithRP(tx, q.ExpandObservations))
+			var m map[string]interface{}
+			m, jobs = txToMapRPJobs(jobs, tx, q.ExpandObservations)
+			packets = append(packets, m)
 		}
 	} else {
 		// DESC: newest items are at the tail; page 0 = last pageSize items reversed
@@ -1964,10 +1988,12 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 			startIdx = 0
 		}
 		for i := endIdx - 1; i >= startIdx; i-- {
-			packets = append(packets, s.txToMapWithRP(results[i], q.ExpandObservations))
+			var m map[string]interface{}
+			m, jobs = txToMapRPJobs(jobs, results[i], q.ExpandObservations)
+			packets = append(packets, m)
 		}
 	}
-	return &PacketResult{Packets: packets, Total: total}
+	return &PacketResult{Packets: packets, Total: total}, jobs
 }
 
 // QueryGroupedPackets returns transmissions grouped by hash (already 1:1).
@@ -2012,8 +2038,9 @@ func (s *PacketStore) QueryGroupedPackets(q PacketQuery) *PacketResult {
 	s.groupedCacheMu.Unlock()
 
 	// Collect StoreTx pointers under read lock; sort outside it.
+	nodePK := s.resolveQueryNode(q.Node)
 	s.mu.RLock()
-	results := s.filterPackets(q)
+	results := s.filterPackets(q, nodePK)
 	txs := make([]*StoreTx, len(results))
 	copy(txs, results)
 	s.mu.RUnlock()
@@ -2567,53 +2594,63 @@ func (s *PacketStore) GetStoreMemoryBreakdown() *StoreMemoryBreakdown {
 // GetTransmissionByID returns a transmission by its DB ID, formatted as a map.
 func (s *PacketStore) GetTransmissionByID(id int) map[string]interface{} {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	tx := s.byTxID[id]
 	if tx == nil {
+		s.mu.RUnlock()
 		return nil
 	}
-	return s.txToMapWithRP(tx, true)
+	m, jobs := txToMapRPJobs(nil, tx, true)
+	s.mu.RUnlock()
+	s.applyResolvedPaths(jobs)
+	return m
 }
 
 // GetPacketByHash returns a transmission by content hash.
 func (s *PacketStore) GetPacketByHash(hash string) map[string]interface{} {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	tx := s.byHash[strings.ToLower(hash)]
 	if tx == nil {
+		s.mu.RUnlock()
 		return nil
 	}
-	return s.txToMapWithRP(tx, true)
+	m, jobs := txToMapRPJobs(nil, tx, true)
+	s.mu.RUnlock()
+	s.applyResolvedPaths(jobs)
+	return m
 }
 
 // GetPacketByID returns an observation (enriched with transmission fields) by observation ID.
 func (s *PacketStore) GetPacketByID(id int) map[string]interface{} {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	obs := s.byObsID[id]
 	if obs == nil {
+		s.mu.RUnlock()
 		return nil
 	}
-	return s.enrichObs(obs)
+	m, job := s.enrichObsRPJob(obs)
+	s.mu.RUnlock()
+	s.applyResolvedPaths([]rpJob{job})
+	return m
 }
 
 // GetObservationsForHash returns all observations for a hash, enriched with transmission fields.
 func (s *PacketStore) GetObservationsForHash(hash string) []map[string]interface{} {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	tx := s.byHash[strings.ToLower(hash)]
 	if tx == nil {
+		s.mu.RUnlock()
 		return []map[string]interface{}{}
 	}
 
 	result := make([]map[string]interface{}, 0, len(tx.Observations))
+	jobs := make([]rpJob, 0, len(tx.Observations))
 	for _, obs := range tx.Observations {
-		result = append(result, s.enrichObs(obs))
+		m, job := s.enrichObsRPJob(obs)
+		result = append(result, m)
+		jobs = append(jobs, job)
 	}
+	s.mu.RUnlock()
+	s.applyResolvedPaths(jobs)
 	return result
 }
 
@@ -2640,19 +2677,26 @@ func (s *PacketStore) GetTimestamps(since string) []string {
 
 // QueryMultiNodePackets filters packets matching any of the given pubkeys.
 func (s *PacketStore) QueryMultiNodePackets(pubkeys []string, limit, offset int, order, since, until string) *PacketResult {
+	resolved := make([]string, len(pubkeys))
+	for i, pk := range pubkeys {
+		resolved[i] = s.resolveQueryNode(pk)
+	}
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	result, jobs := s.queryMultiNodePacketsLocked(resolved, limit, offset, order, since, until)
+	s.mu.RUnlock()
+	s.applyResolvedPaths(jobs)
+	return result
+}
 
-	if len(pubkeys) == 0 {
-		return &PacketResult{Packets: []map[string]interface{}{}, Total: 0}
+// queryMultiNodePacketsLocked is the in-memory part of QueryMultiNodePackets,
+// for pubkeys already resolved by resolveQueryNode. Caller holds s.mu and runs
+// the returned resolved_path jobs after releasing it.
+func (s *PacketStore) queryMultiNodePacketsLocked(resolved []string, limit, offset int, order, since, until string) (*PacketResult, []rpJob) {
+	if len(resolved) == 0 {
+		return &PacketResult{Packets: []map[string]interface{}{}, Total: 0}, nil
 	}
 	if limit <= 0 {
 		limit = 50
-	}
-
-	resolved := make([]string, len(pubkeys))
-	for i, pk := range pubkeys {
-		resolved[i] = s.db.resolveNodePubkey(pk)
 	}
 
 	// Use byNode index instead of scanning all packets (O(indexed) vs O(all×pubkeys×json)).
@@ -2683,7 +2727,7 @@ func (s *PacketStore) QueryMultiNodePackets(pubkeys []string, limit, offset int,
 	// filtered is oldest-first (built by iterating s.packets forward).
 	// Apply same DESC/ASC pagination logic as QueryPackets.
 	if offset >= total {
-		return &PacketResult{Packets: []map[string]interface{}{}, Total: total}
+		return &PacketResult{Packets: []map[string]interface{}{}, Total: total}, nil
 	}
 	pageSize := limit
 	if offset+pageSize > total {
@@ -2691,9 +2735,12 @@ func (s *PacketStore) QueryMultiNodePackets(pubkeys []string, limit, offset int,
 	}
 
 	packets := make([]map[string]interface{}, 0, pageSize)
+	var jobs []rpJob
 	if order == "ASC" {
 		for _, tx := range filtered[offset : offset+pageSize] {
-			packets = append(packets, s.txToMapWithRP(tx))
+			var m map[string]interface{}
+			m, jobs = txToMapRPJobs(jobs, tx)
+			packets = append(packets, m)
 		}
 	} else {
 		endIdx := total - offset
@@ -2702,10 +2749,12 @@ func (s *PacketStore) QueryMultiNodePackets(pubkeys []string, limit, offset int,
 			startIdx = 0
 		}
 		for i := endIdx - 1; i >= startIdx; i-- {
-			packets = append(packets, s.txToMapWithRP(filtered[i]))
+			var m map[string]interface{}
+			m, jobs = txToMapRPJobs(jobs, filtered[i])
+			packets = append(packets, m)
 		}
 	}
-	return &PacketResult{Packets: packets, Total: total}
+	return &PacketResult{Packets: packets, Total: total}, jobs
 }
 
 // IngestNewFromDB loads new transmissions from SQLite into memory and returns
@@ -3478,8 +3527,18 @@ func (s *PacketStore) MaxObservationID() int {
 
 // --- Internal filter/query helpers ---
 
+// resolveQueryNode maps a node filter (pubkey or name) to a pubkey. It runs
+// SQL, so callers resolve before taking s.mu (#2146). Empty stays empty.
+func (s *PacketStore) resolveQueryNode(node string) string {
+	if node == "" {
+		return ""
+	}
+	return s.db.resolveNodePubkey(node)
+}
+
 // filterPackets applies PacketQuery filters to the in-memory packet list.
-func (s *PacketStore) filterPackets(q PacketQuery) []*StoreTx {
+// nodePK is q.Node resolved by resolveQueryNode. Caller holds s.mu.
+func (s *PacketStore) filterPackets(q PacketQuery, nodePK string) []*StoreTx {
 	// Fast path: single-key index lookups
 	if q.Hash != "" && q.Type == nil && q.Route == nil && q.Observer == "" &&
 		q.Region == "" && q.Area == "" && q.Node == "" && q.Channel == "" && q.Since == "" && q.Until == "" {
@@ -3544,11 +3603,9 @@ func (s *PacketStore) filterPackets(q PacketQuery) []*StoreTx {
 	}
 
 	// Pre-compute node filter parameters.
-	var nodePK string
 	var nodeHashSet map[string]bool
 	hasNode := q.Node != ""
 	if hasNode {
-		nodePK = s.db.resolveNodePubkey(q.Node)
 		indexed := s.byNode[nodePK]
 		nodeHashSet = make(map[string]bool, len(indexed))
 		for _, tx := range indexed {
@@ -3705,50 +3762,103 @@ func (s *PacketStore) transmissionsForObserver(observerIDs string, from []*Store
 	return result
 }
 
+// regionObsTTL is how long the region → observer cache is served before one
+// background refresh re-queries it.
+const regionObsTTL = 30 * time.Second
+
 // resolveRegionObservers returns a set of observer IDs for a given IATA region.
-// Results are cached for 30 seconds to avoid repeated DB queries.
-// Uses its own mutex (regionObsMu) so callers holding s.mu won't deadlock.
+// Callers often hold s.mu, so a cache past its TTL is served as-is while one
+// background refresh re-queries it (#2146). A region seen for the first time
+// is queried inline, without holding regionObsMu.
 func (s *PacketStore) resolveRegionObservers(region string) map[string]bool {
 	s.regionObsMu.Lock()
-	defer s.regionObsMu.Unlock()
+	m, cached := s.regionObsCache[region]
+	stale := time.Since(s.regionObsCacheTime) >= regionObsTTL
+	s.markRegionObsUsed(region)
+	s.regionObsMu.Unlock()
 
-	if s.regionObsCache != nil && time.Since(s.regionObsCacheTime) < 30*time.Second {
-		if m, ok := s.regionObsCache[region]; ok {
-			return m
+	if cached {
+		if stale {
+			s.cacheRefresh.start("regionObs", s.refreshRegionObs)
 		}
-		return s.fetchAndCacheRegionObs(region)
-	}
-	// Cache expired — rebuild.
-	s.regionObsCache = make(map[string]map[string]bool)
-	s.regionObsCacheTime = time.Now()
-
-	// Fetch for the requested region and cache it.
-	return s.fetchAndCacheRegionObs(region)
-}
-
-// fetchAndCacheRegionObs fetches observer IDs for a region from the DB and stores in cache.
-// Caller must hold regionObsMu.
-func (s *PacketStore) fetchAndCacheRegionObs(region string) map[string]bool {
-	if m, ok := s.regionObsCache[region]; ok {
 		return m
 	}
+
+	m = s.queryRegionObs(region)
+	s.regionObsMu.Lock()
+	if s.regionObsCache == nil {
+		s.regionObsCache = make(map[string]map[string]bool)
+		s.regionObsCacheTime = time.Now()
+	}
+	s.regionObsCache[region] = m
+	s.regionObsMu.Unlock()
+	return m
+}
+
+// markRegionObsUsed records a lookup so the next refresh re-queries the
+// region. Caller must hold regionObsMu.
+func (s *PacketStore) markRegionObsUsed(region string) {
+	if s.regionObsUsed == nil {
+		s.regionObsUsed = make(map[string]bool)
+	}
+	s.regionObsUsed[region] = true
+}
+
+// refreshRegionObs re-queries the regions looked up since the previous
+// refresh and replaces the cache with them. Regions nobody asked for are
+// dropped, which bounds the cache: the region comes from the query string.
+func (s *PacketStore) refreshRegionObs() {
+	s.regionObsMu.Lock()
+	regions := make([]string, 0, len(s.regionObsUsed))
+	for r := range s.regionObsUsed {
+		regions = append(regions, r)
+	}
+	s.regionObsUsed = nil
+	s.regionObsMu.Unlock()
+
+	fresh := make(map[string]map[string]bool, len(regions))
+	for _, r := range regions {
+		fresh[r] = s.queryRegionObs(r)
+	}
+
+	s.regionObsMu.Lock()
+	// Regions first looked up while this refresh ran keep their entry.
+	for r := range s.regionObsUsed {
+		if _, ok := fresh[r]; !ok {
+			if m, ok := s.regionObsCache[r]; ok {
+				fresh[r] = m
+			}
+		}
+	}
+	s.regionObsCache = fresh
+	s.regionObsCacheTime = time.Now()
+	s.regionObsMu.Unlock()
+}
+
+// queryRegionObs loads the observer IDs for a region from SQLite. It returns
+// nil when the region has no observers or the query fails.
+func (s *PacketStore) queryRegionObs(region string) map[string]bool {
+	s.beforeCacheLoad("regionObs")
 	ids, err := s.db.GetObserverIdsForRegion(region)
 	if err != nil || len(ids) == 0 {
-		s.regionObsCache[region] = nil
 		return nil
 	}
 	m := make(map[string]bool, len(ids))
 	for _, id := range ids {
 		m[id] = true
 	}
-	s.regionObsCache[region] = m
 	return m
 }
 
+// areaNodeTTL is how long an area's node set is served before one background
+// refresh re-queries it.
+const areaNodeTTL = 30 * time.Second
+
 // resolveAreaNodes returns a set of node pubkeys whose GPS coordinates fall
 // inside the named area polygon. Returns nil if the area key is not in config.
-// Results are cached per-key for 30 seconds. Uses its own RWMutex so callers
-// holding s.mu won't deadlock.
+// Results are cached per key. Callers often hold s.mu, so an entry past its
+// TTL is served as-is while one background refresh re-queries it (#2146).
+// Uses its own RWMutex so callers holding s.mu won't deadlock.
 func (s *PacketStore) resolveAreaNodes(areaKey string) map[string]bool {
 	if s.config == nil || s.config.Areas == nil {
 		return nil
@@ -3758,16 +3868,23 @@ func (s *PacketStore) resolveAreaNodes(areaKey string) map[string]bool {
 		return nil
 	}
 
-	// Fast path: serve from cache if the per-key TTL is still valid.
 	s.areaNodeMu.RLock()
-	if t, ok := s.areaNodeCacheTimes[areaKey]; ok && time.Since(t) < 30*time.Second {
-		m := s.areaNodeCache[areaKey]
-		s.areaNodeMu.RUnlock()
+	t, cached := s.areaNodeCacheTimes[areaKey]
+	m := s.areaNodeCache[areaKey]
+	s.areaNodeMu.RUnlock()
+	if cached {
+		if time.Since(t) >= areaNodeTTL {
+			s.cacheRefresh.start("areaNodes:"+areaKey, func() { s.loadAreaNodes(areaKey, entry) })
+		}
 		return m
 	}
-	s.areaNodeMu.RUnlock()
+	return s.loadAreaNodes(areaKey, entry)
+}
 
-	// Slow path: query the DB outside any lock, then write back under Lock.
+// loadAreaNodes queries the node set for an area outside any lock and stores
+// it under areaNodeMu.
+func (s *PacketStore) loadAreaNodes(areaKey string, entry AreaEntry) map[string]bool {
+	s.beforeCacheLoad("areaNodes")
 	pks, err := s.db.GetNodePubkeysInArea(entry)
 	var m map[string]bool
 	if err == nil && len(pks) > 0 {
@@ -3779,7 +3896,7 @@ func (s *PacketStore) resolveAreaNodes(areaKey string) map[string]bool {
 
 	s.areaNodeMu.Lock()
 	// Re-check in case another goroutine already refreshed while we queried.
-	if t, ok := s.areaNodeCacheTimes[areaKey]; !ok || time.Since(t) >= 30*time.Second {
+	if t, ok := s.areaNodeCacheTimes[areaKey]; !ok || time.Since(t) >= areaNodeTTL {
 		s.areaNodeCache[areaKey] = m
 		s.areaNodeCacheTimes[areaKey] = time.Now()
 	} else {
@@ -3816,6 +3933,23 @@ func iataMatchesRegion(iata, regionParam string) bool {
 	return false
 }
 
+// observerIATAs returns observer ID → normalised IATA code. It reads the
+// observers table, so callers load it before taking s.mu (#2146).
+func (s *PacketStore) observerIATAs() map[string]string {
+	obsIATA := make(map[string]string, 64)
+	if s.db == nil {
+		return obsIATA
+	}
+	if observers, err := s.db.GetObservers(); err == nil {
+		for _, o := range observers {
+			if o.IATA != nil && *o.IATA != "" {
+				obsIATA[o.ID] = strings.TrimSpace(strings.ToUpper(*o.IATA))
+			}
+		}
+	}
+	return obsIATA
+}
+
 // computeNodeHomeRegions returns a pubkey → IATA map deriving each node's
 // HOME region from zero-hop DIRECT adverts. A zero-hop direct advert is the
 // most authoritative location signal because the path byte is set locally on
@@ -3825,24 +3959,13 @@ func iataMatchesRegion(iata, regionParam string) bool {
 // When a node has zero-hop direct adverts heard by observers from multiple
 // regions, the most-frequently-observed region wins (geographic plurality).
 //
+// obsIATA is the observer → IATA map from observerIATAs, loaded before s.mu.
 // Caller must hold s.mu (read or write). Returns empty map (not nil) if no
 // observers are loaded or no zero-hop direct adverts have been seen.
 //
 // #804: feeds analytics region-attribution so a multi-byte repeater whose
 // flood adverts get relayed across regions is still attributed to its home.
-func (s *PacketStore) computeNodeHomeRegions() map[string]string {
-	// Build observer → IATA map. observers table is small (≪ packets), so a
-	// single DB read here is acceptable; resolveRegionObservers does similar.
-	obsIATA := make(map[string]string, 64)
-	if s.db != nil {
-		if observers, err := s.db.GetObservers(); err == nil {
-			for _, o := range observers {
-				if o.IATA != nil && *o.IATA != "" {
-					obsIATA[o.ID] = strings.TrimSpace(strings.ToUpper(*o.IATA))
-				}
-			}
-		}
-	}
+func (s *PacketStore) computeNodeHomeRegions(obsIATA map[string]string) map[string]string {
 	if len(obsIATA) == 0 {
 		return map[string]string{}
 	}
@@ -3921,26 +4044,39 @@ func (s *PacketStore) computeNodeHomeRegions() map[string]string {
 	return out
 }
 
-// enrichObs returns a map with observation fields + transmission fields.
-// Looks up the transmission in s.byTxID itself — safe only when the caller
-// already holds s.mu (directly, or via a defer'd RLock spanning the call).
+// enrichObsRPJob returns a map with observation fields + transmission fields,
+// plus the resolved_path lookup as a job for applyResolvedPaths. Looks up the
+// transmission in s.byTxID itself, so the caller must hold s.mu, and must run
+// the job after releasing it.
 // Callers that snapshot observations under RLock and then release it before
 // iterating (e.g. handleObserverAnalytics, #1830) must use enrichObsWithTx
 // with a tx pointer resolved during that same snapshot instead.
-func (s *PacketStore) enrichObs(obs *StoreObs) map[string]interface{} {
-	return s.enrichObsWithTx(obs, s.byTxID[obs.TransmissionID])
+func (s *PacketStore) enrichObsRPJob(obs *StoreObs) (map[string]interface{}, rpJob) {
+	m := enrichObsFields(obs, s.byTxID[obs.TransmissionID])
+	return m, obsRPJob(m, obs.ID)
 }
 
-// enrichObsWithTx is enrichObs with the transmission pointer already
-// resolved by the caller, instead of looking it up in s.byTxID here. #1830:
+// enrichObsWithTx is enrichObsRPJob with the transmission pointer already
+// resolved by the caller, instead of looking it up in s.byTxID here, and with
+// the resolved_path fetched inline. #1830:
 // s.byTxID is guarded by s.mu (writes from ingest/eviction); reading it
 // without holding at least RLock races with those writers — Go maps can
 // panic with "concurrent map read and map write" during a rehash, not just
 // fail under -race. Callers that need to read byTxID after releasing their
 // RLock (to keep JSON decode / enrichment off the hot lock, per #1481)
 // should resolve the *StoreTx for each observation during their RLock-held
-// snapshot and pass it in here.
+// snapshot and pass it in here. Must be called without s.mu held.
 func (s *PacketStore) enrichObsWithTx(obs *StoreObs, tx *StoreTx) map[string]interface{} {
+	m := enrichObsFields(obs, tx)
+	if rp := s.fetchResolvedPathForObs(obs.ID); rp != nil {
+		m["resolved_path"] = rp
+	}
+	return m
+}
+
+// enrichObsFields returns the observation fields plus, when tx is non-nil,
+// the transmission fields. It runs no SQL.
+func enrichObsFields(obs *StoreObs, tx *StoreTx) map[string]interface{} {
 	m := map[string]interface{}{
 		"id":            obs.ID,
 		"timestamp":     strOrNil(obs.Timestamp),
@@ -3952,11 +4088,6 @@ func (s *PacketStore) enrichObsWithTx(obs *StoreObs, tx *StoreTx) map[string]int
 		"rssi":          floatPtrOrNil(obs.RSSI),
 		"score":         intPtrOrNil(obs.Score),
 		"path_json":     strOrNil(obs.PathJSON),
-	}
-	// On-demand SQL fetch for resolved_path
-	rp := s.fetchResolvedPathForObs(obs.ID)
-	if rp != nil {
-		m["resolved_path"] = rp
 	}
 
 	if tx != nil {
@@ -4030,28 +4161,23 @@ func txToMap(tx *StoreTx, includeObservations ...bool) map[string]interface{} {
 	return m
 }
 
-// txToMapWithRP is like txToMap but also fetches resolved_path on demand from the store.
-func (s *PacketStore) txToMapWithRP(tx *StoreTx, includeObservations ...bool) map[string]interface{} {
+// txToMapRPJobs is txToMap plus the resolved_path lookups for the
+// transmission and, when included, its observation sub-maps, appended to
+// jobs. Caller holds s.mu; run the jobs with applyResolvedPaths after
+// releasing it.
+func txToMapRPJobs(jobs []rpJob, tx *StoreTx, includeObservations ...bool) (map[string]interface{}, []rpJob) {
 	m := txToMap(tx, includeObservations...)
-	// On-demand SQL fetch for resolved_path
-	rp := s.fetchResolvedPathForTxBest(tx)
-	if rp != nil {
-		m["resolved_path"] = rp
-	}
-	// Also add resolved_path to observation sub-maps if present
+	jobs = append(jobs, txRPJob(m, tx))
 	if len(includeObservations) > 0 && includeObservations[0] {
 		if obsList, ok := m["observations"].([]map[string]interface{}); ok {
 			for i, o := range tx.Observations {
 				if i < len(obsList) {
-					obsRP := s.fetchResolvedPathForObs(o.ID)
-					if obsRP != nil {
-						obsList[i]["resolved_path"] = obsRP
-					}
+					jobs = append(jobs, obsRPJob(obsList[i], o.ID))
 				}
 			}
 		}
 	}
-	return m
+	return m, jobs
 }
 
 func strOrNil(s string) interface{} {
@@ -6978,17 +7104,36 @@ func buildPrefixMap(nodes []nodeInfo) *prefixMap {
 	return pm
 }
 
-// getCachedNodesAndPM returns cached node list and prefix map, rebuilding if stale.
-// Must be called with s.mu held (RLock or Lock).
+// nodeCacheTTL is how long getCachedNodesAndPM serves its node list before it
+// starts a background rebuild.
+const nodeCacheTTL = 30 * time.Second
+
+// getCachedNodesAndPM returns the cached node list and prefix map. Callers
+// often hold s.mu, so a cache past its TTL is served as-is while one
+// background rebuild runs the SQL (#2146). Only a cache that was never built
+// or was invalidated is rebuilt inline.
 func (s *PacketStore) getCachedNodesAndPM() ([]nodeInfo, *prefixMap) {
 	s.cacheMu.Lock()
-	if s.nodeCache != nil && time.Since(s.nodeCacheTime) < 30*time.Second {
-		nodes, pm := s.nodeCache, s.nodePM
-		s.cacheMu.Unlock()
-		return nodes, pm
-	}
+	nodes, pm, builtAt := s.nodeCache, s.nodePM, s.nodeCacheTime
 	s.cacheMu.Unlock()
 
+	if builtAt.IsZero() {
+		return s.rebuildNodeCache()
+	}
+	if time.Since(builtAt) >= nodeCacheTTL {
+		s.cacheRefresh.start("nodes", func() { s.rebuildNodeCache() })
+	}
+	return nodes, pm
+}
+
+// rebuildNodeCache loads the node list and prefix map from SQLite and stores
+// them, unless InvalidateNodeCache ran while it was loading.
+func (s *PacketStore) rebuildNodeCache() ([]nodeInfo, *prefixMap) {
+	s.cacheMu.Lock()
+	gen := s.nodeCacheGen
+	s.cacheMu.Unlock()
+
+	s.beforeCacheLoad("nodes")
 	nodes := s.getAllNodes()
 	pm := buildPrefixMap(nodes)
 	// Issue #1290: exclude observers that advertised `repeat:off` from
@@ -7004,20 +7149,24 @@ func (s *PacketStore) getCachedNodesAndPM() ([]nodeInfo, *prefixMap) {
 	}
 
 	s.cacheMu.Lock()
-	s.nodeCache = nodes
-	s.nodePM = pm
-	s.nodeCacheTime = time.Now()
+	if s.nodeCacheGen == gen {
+		s.nodeCache = nodes
+		s.nodePM = pm
+		s.nodeCacheTime = time.Now()
+	}
 	s.cacheMu.Unlock()
 
 	return nodes, pm
 }
 
-// InvalidateNodeCache forces the next getCachedNodesAndPM call to rebuild.
+// InvalidateNodeCache forces the next getCachedNodesAndPM call to rebuild
+// inline.
 func (s *PacketStore) InvalidateNodeCache() {
 	s.cacheMu.Lock()
 	s.nodeCache = nil
 	s.nodePM = nil
 	s.nodeCacheTime = time.Time{}
+	s.nodeCacheGen++
 	s.cacheMu.Unlock()
 }
 
@@ -7368,18 +7517,26 @@ func (s *PacketStore) GetAnalyticsTopologyWithWindow(region, area string, window
 }
 
 func (s *PacketStore) computeAnalyticsTopology(region, area string, window TimeWindow) map[string]interface{} {
+	// These may query SQLite, so they run before s.mu (#2146).
 	var areaNodes map[string]bool
 	if area != "" {
 		areaNodes = s.resolveAreaNodes(area)
 	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	var regionObs map[string]bool
 	if region != "" {
 		regionObs = s.resolveRegionObservers(region)
 	}
+	// Use DB 7-day active node count (matches /api/stats totalNodes). Only
+	// that count: GetStats also scans transmissions and observations.
+	uniqueNodes := 0
+	if s.db != nil {
+		if n, err := s.db.CountActiveNodes(); err == nil {
+			uniqueNodes = n
+		}
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	allNodes, pm := s.getCachedNodesAndPM()
 	_ = allNodes // only pm is needed for topology
@@ -7859,14 +8016,6 @@ func (s *PacketStore) computeAnalyticsTopology(region, area string, window TimeW
 		bestPathList = bestPathList[:50]
 	}
 
-	// Use DB 7-day active node count (matches /api/stats totalNodes)
-	uniqueNodes := 0
-	if s.db != nil {
-		if stats, err := s.db.GetStats(); err == nil {
-			uniqueNodes = stats.TotalNodes
-		}
-	}
-
 	return map[string]interface{}{
 		"uniqueNodes":      uniqueNodes,
 		"avgHops":          avgHops,
@@ -8331,9 +8480,7 @@ func (s *PacketStore) computeAnalyticsHashSizesWithCapability(region, area strin
 }
 
 func (s *PacketStore) computeAnalyticsHashSizes(region, area string) map[string]interface{} {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
+	// These may query SQLite, so they run before s.mu (#2146).
 	var regionObs map[string]bool
 	if region != "" {
 		regionObs = s.resolveRegionObservers(region)
@@ -8342,12 +8489,16 @@ func (s *PacketStore) computeAnalyticsHashSizes(region, area string) map[string]
 	if area != "" {
 		areaNodes = s.resolveAreaNodes(area)
 	}
+	obsIATA := s.observerIATAs()
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	// #804: derive each node's HOME region from zero-hop direct adverts (the
 	// most authoritative location signal — those packets cannot have been
 	// relayed). When non-empty, multi-byte node attribution prefers this
 	// over observer-region. Falls back to observer-region when unknown.
-	nodeHomeRegion := s.computeNodeHomeRegions()
+	nodeHomeRegion := s.computeNodeHomeRegions(obsIATA)
 	attributionMethod := "observer"
 	if region != "" && len(nodeHomeRegion) > 0 {
 		attributionMethod = "repeater"
@@ -9504,6 +9655,48 @@ func (s *PacketStore) computeMultiByteCapability(adopterHashSizes map[string]int
 
 // --- Bulk Health (in-memory) ---
 
+// bulkHealthNode is one nodes-table row for GetBulkHealth.
+type bulkHealthNode struct {
+	pk, name, role string
+	lat, lon       interface{}
+}
+
+// bulkHealthNodes reads the most recently seen nodes for GetBulkHealth,
+// keeping only areaNodes when set. With a region or area filter it reads up
+// to 10000 rows so the caller does not under-fill after its exclusions;
+// otherwise it stops at limit.
+func (s *PacketStore) bulkHealthNodes(limit int, regionFilter bool, areaNodes map[string]bool) ([]bulkHealthNode, error) {
+	filtered := regionFilter || areaNodes != nil
+	queryLimit := limit
+	if filtered {
+		queryLimit = 10000
+	}
+	rows, err := s.db.conn.Query("SELECT public_key, name, role, lat, lon FROM nodes ORDER BY last_seen DESC LIMIT ?", queryLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var nodes []bulkHealthNode
+	for rows.Next() {
+		var pk string
+		var name, role sql.NullString
+		var lat, lon sql.NullFloat64
+		rows.Scan(&pk, &name, &role, &lat, &lon)
+		if areaNodes != nil && !areaNodes[pk] {
+			continue
+		}
+		nodes = append(nodes, bulkHealthNode{
+			pk: pk, name: nullStrVal(name), role: nullStrVal(role),
+			lat: nullFloat(lat), lon: nullFloat(lon),
+		})
+		if !filtered && len(nodes) >= limit {
+			break
+		}
+	}
+	return nodes, nil
+}
+
 func (s *PacketStore) GetBulkHealth(limit int, region, area string) []map[string]interface{} {
 	var areaNodes map[string]bool
 	if area != "" {
@@ -9514,13 +9707,23 @@ func (s *PacketStore) GetBulkHealth(limit int, region, area string) []map[string
 	directHeard := s.loadDirectHeard()
 	nonRelaySet, seenSet := s.canRelaySets()
 
+	// SQL, so before s.mu (#2146). The region filter needs the store, so it
+	// is applied to these rows under the lock below.
+	var regionObs map[string]bool
+	if region != "" {
+		regionObs = s.resolveRegionObservers(region)
+	}
+	nodes, err := s.bulkHealthNodes(limit, regionObs != nil, areaNodes)
+	if err != nil {
+		return []map[string]interface{}{}
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	// Region filtering
 	var regionNodeKeys map[string]bool
 	if region != "" {
-		regionObs := s.resolveRegionObservers(region)
 		if regionObs != nil {
 			regionalHashes := make(map[string]bool)
 			for obsID := range regionObs {
@@ -9544,40 +9747,14 @@ func (s *PacketStore) GetBulkHealth(limit int, region, area string) []map[string
 		}
 	}
 
-	// Get nodes from DB — fetch more when filtering so we don't under-fill after exclusions
-	queryLimit := limit
-	if regionNodeKeys != nil || areaNodes != nil {
-		queryLimit = 10000
-	}
-	rows, err := s.db.conn.Query("SELECT public_key, name, role, lat, lon FROM nodes ORDER BY last_seen DESC LIMIT ?", queryLimit)
-	if err != nil {
-		return []map[string]interface{}{}
-	}
-	defer rows.Close()
-
-	type dbNode struct {
-		pk, name, role string
-		lat, lon       interface{}
-	}
-	var nodes []dbNode
-	for rows.Next() {
-		var pk string
-		var name, role sql.NullString
-		var lat, lon sql.NullFloat64
-		rows.Scan(&pk, &name, &role, &lat, &lon)
-		if regionNodeKeys != nil && !regionNodeKeys[pk] {
-			continue
+	if regionNodeKeys != nil {
+		kept := nodes[:0]
+		for _, n := range nodes {
+			if regionNodeKeys[n.pk] {
+				kept = append(kept, n)
+			}
 		}
-		if areaNodes != nil && !areaNodes[pk] {
-			continue
-		}
-		nodes = append(nodes, dbNode{
-			pk: pk, name: nullStrVal(name), role: nullStrVal(role),
-			lat: nullFloat(lat), lon: nullFloat(lon),
-		})
-		if regionNodeKeys == nil && areaNodes == nil && len(nodes) >= limit {
-			break
-		}
+		nodes = kept
 	}
 	// Only cap to limit in the global (no-filter) case; area/region returns full filtered set
 	if regionNodeKeys != nil && areaNodes == nil && len(nodes) > limit {
@@ -9683,10 +9860,10 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 	// Loaded before taking s.mu so the lock order stays s.mu →
 	// analyticsRecomputerMu everywhere (computeDirectHeard takes s.mu).
 	directHeard := s.loadDirectHeard()
+	// SQL, so also before s.mu (#2146).
+	nonRelaySet, seenSet := s.canRelaySets()
 
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	packets := s.byNode[pubkey]
 	todayStart := time.Now().UTC().Truncate(24 * time.Hour).Format(time.RFC3339)
 
@@ -9727,7 +9904,6 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 		}
 	}
 
-	nonRelaySet, seenSet := s.canRelaySets()
 	directByObs := directHeard[strings.ToLower(pubkey)]
 	observerRows := buildDirectObserverRows(directByObs, nonRelaySet, seenSet)
 	relayObserverCount := relayOnlyObserverCount(relayObservers, directByObs)
@@ -9751,11 +9927,15 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 		recentLimit = len(packets)
 	}
 	recentPackets := make([]map[string]interface{}, 0, recentLimit)
+	var rpJobs []rpJob
 	for i := len(packets) - 1; i >= len(packets)-recentLimit; i-- {
-		p := s.txToMapWithRP(packets[i])
+		var p map[string]interface{}
+		p, rpJobs = txToMapRPJobs(rpJobs, packets[i])
 		delete(p, "observations")
 		recentPackets = append(recentPackets, p)
 	}
+	s.mu.RUnlock()
+	s.applyResolvedPaths(rpJobs)
 
 	return map[string]interface{}{
 		"node": node,
