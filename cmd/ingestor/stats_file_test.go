@@ -2,8 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -129,6 +132,10 @@ func TestWriteStatsAtomic_SymlinkAtDestIsReplaced(t *testing.T) {
 	// Pre-plant a symlink at the destination path.
 	path := filepath.Join(dir, "stats.json")
 	if err := os.Symlink(target, path); err != nil {
+		// ERROR_PRIVILEGE_NOT_HELD: Windows requires symlink privileges or Developer Mode.
+		if runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(1314)) {
+			t.Skipf("symlink privilege unavailable: %v", err)
+		}
 		t.Fatalf("symlink: %v", err)
 	}
 
