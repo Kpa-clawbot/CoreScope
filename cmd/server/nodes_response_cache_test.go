@@ -116,7 +116,7 @@ func TestHandleNodes_GeoFilterChangeDropsCache(t *testing.T) {
 }
 
 // expireNodesCacheForTest drops every cached /api/nodes response.
-func (s *Server) expireNodesCacheForTest() {}
+func (s *Server) expireNodesCacheForTest() { s.invalidateNodesCache() }
 
 // nodesBenchServer serves 1,100 nodes (a production instance lists about
 // 1,085), half of them repeaters.
@@ -180,5 +180,33 @@ func BenchmarkHandleNodesUnique(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		benchGet(b, router, fmt.Sprintf("/api/nodes?limit=500&offset=0&lastHeard=30d&search=&n=%d", i))
+	}
+}
+
+func TestHandleNodes_FilterListChangesMissCache(t *testing.T) {
+	srv, router := setupTestServer(t)
+	builds := countNodeBuilds(srv)
+	getNodes(t, router, "/api/nodes?limit=50")
+	srv.cfg.SetHiddenNamePrefixes([]string{"zz-hidden"})
+	getNodes(t, router, "/api/nodes?limit=50")
+	srv.cfg.SetNodeBlacklist([]string{"0000000000000000"})
+	getNodes(t, router, "/api/nodes?limit=50")
+	if got := atomic.LoadInt32(builds); got != 3 {
+		t.Fatalf("expected hidden-prefix and blacklist changes to miss the cache, got %d builds", got)
+	}
+}
+
+func TestNodesCache_BoundedByBytes(t *testing.T) {
+	srv := &Server{}
+	body := make([]byte, nodesCacheMaxBytes/5) // under the per-entry limit
+	for i := 0; i < 20; i++ {
+		srv.storeNodesResponse(fmt.Sprintf("q%d", i), body)
+		if srv.nodesCacheBytes > nodesCacheMaxBytes {
+			t.Fatalf("cache holds %d bytes after %d inserts, limit %d", srv.nodesCacheBytes, i+1, nodesCacheMaxBytes)
+		}
+	}
+	srv.storeNodesResponse("huge", make([]byte, nodesCacheMaxBytes/4+1))
+	if _, ok := srv.cachedNodesResponse("huge"); ok {
+		t.Fatal("expected an oversized response not to be cached")
 	}
 }

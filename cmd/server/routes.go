@@ -68,6 +68,13 @@ type Server struct {
 	// queries against a 4-connection pool.
 	statsSF singleflight.Group
 
+	// /api/nodes responses, encoded, keyed by the canonical query string and
+	// kept for nodesResponseTTL. Identical queries in that window share one
+	// build (nodesSF collapses concurrent misses). setGeoFilter drops them.
+	nodesCacheMu    sync.Mutex
+	nodesCache      map[string]nodesCacheEntry
+	nodesCacheBytes int // sum of len(body) over nodesCache; bounded by nodesCacheMaxBytes
+	nodesSF         singleflight.Group
 	// Test-only hook fired each time handleNodes builds a response (not when
 	// one is served from cache). Nil in production. See nodes_response_cache_test.go.
 	nodesComputeHook func()
@@ -222,8 +229,10 @@ func (s *Server) getGeoFilter() *GeoFilterConfig {
 // setGeoFilter atomically swaps the geo_filter config; used by PUT /api/config/geo-filter.
 func (s *Server) setGeoFilter(gf *GeoFilterConfig) {
 	s.cfgMu.Lock()
-	defer s.cfgMu.Unlock()
 	s.cfg.GeoFilter = gf
+	s.cfgMu.Unlock()
+	// Cached /api/nodes pages were filtered with the old polygon.
+	s.invalidateNodesCache()
 }
 
 // RegisterRoutes sets up all HTTP routes on the given router.
@@ -1423,7 +1432,97 @@ func (s *Server) handleDecode(w http.ResponseWriter, r *http.Request) {
 
 // --- Node Handlers ---
 
+// nodesResponseTTL is how long an /api/nodes response is reused for an
+// identical query. Relay and usefulness data under it is already cached for
+// 15 s (#1257), and the client keeps its own node list for 90 s.
+const nodesResponseTTL = 15 * time.Second
+
+// nodesCacheMaxBytes bounds the encoded /api/nodes responses held at once. A
+// full-list response is a few MB, so an entry count alone would not bound the
+// heap if many distinct queries arrived inside one TTL.
+const nodesCacheMaxBytes = 32 << 20
+
+type nodesCacheEntry struct {
+	body []byte
+	exp  time.Time
+}
+
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
+	// Encode() sorts by key, so parameter order does not split the cache. The
+	// blacklist and hidden-prefix generations are part of the key so a change
+	// to either misses the cache at once (same pattern as #1629).
+	key := fmt.Sprintf("%d|%d|%s", s.cfg.BlacklistGeneration(), s.cfg.HiddenNamePrefixesGeneration(), r.URL.Query().Encode())
+	if body, ok := s.cachedNodesResponse(key); ok {
+		writeJSONBytes(w, body)
+		return
+	}
+	v, err, _ := s.nodesSF.Do(key, func() (interface{}, error) {
+		if body, ok := s.cachedNodesResponse(key); ok {
+			return body, nil
+		}
+		resp, err := s.buildNodesResponse(r)
+		if err != nil {
+			return nil, err
+		}
+		body, err := json.Marshal(resp)
+		if err != nil {
+			return nil, err
+		}
+		body = append(body, '\n') // byte-identical to json.Encoder output
+		s.storeNodesResponse(key, body)
+		return body, nil
+	})
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSONBytes(w, v.([]byte))
+}
+
+func (s *Server) cachedNodesResponse(key string) ([]byte, bool) {
+	s.nodesCacheMu.Lock()
+	defer s.nodesCacheMu.Unlock()
+	e, ok := s.nodesCache[key]
+	if !ok || time.Now().After(e.exp) {
+		return nil, false
+	}
+	return e.body, true
+}
+
+func (s *Server) storeNodesResponse(key string, body []byte) {
+	if len(body) > nodesCacheMaxBytes/4 {
+		return // one oversized response must not evict everything else
+	}
+	s.nodesCacheMu.Lock()
+	defer s.nodesCacheMu.Unlock()
+	now := time.Now()
+	for k, e := range s.nodesCache { // drop expired entries first
+		if now.After(e.exp) {
+			s.nodesCacheBytes -= len(e.body)
+			delete(s.nodesCache, k)
+		}
+	}
+	if old, ok := s.nodesCache[key]; ok {
+		s.nodesCacheBytes -= len(old.body)
+	}
+	if s.nodesCache == nil || len(s.nodesCache) >= maxCacheEntries || s.nodesCacheBytes+len(body) > nodesCacheMaxBytes {
+		s.nodesCache = make(map[string]nodesCacheEntry)
+		s.nodesCacheBytes = 0
+	}
+	s.nodesCache[key] = nodesCacheEntry{body: body, exp: now.Add(nodesResponseTTL)}
+	s.nodesCacheBytes += len(body)
+}
+
+// invalidateNodesCache drops every cached /api/nodes response.
+func (s *Server) invalidateNodesCache() {
+	s.nodesCacheMu.Lock()
+	s.nodesCache = nil
+	s.nodesCacheBytes = 0
+	s.nodesCacheMu.Unlock()
+}
+
+// buildNodesResponse builds one /api/nodes page from the request's query.
+func (s *Server) buildNodesResponse(r *http.Request) (NodeListResponse, error) {
 	if s.nodesComputeHook != nil {
 		s.nodesComputeHook()
 	}
@@ -1444,8 +1543,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	nodes, total, counts, err := s.db.GetNodes(nq)
 	if err != nil {
-		writeError(w, 500, err.Error())
-		return
+		return NodeListResponse{}, err
 	}
 	// Whether more rows exist is decided HERE, against the raw SQL page and the
 	// real COUNT(*), because both other candidate signals are destroyed further
@@ -1624,7 +1722,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 			total = len(filtered)
 		}
 	}
-	writeJSON(w, NodeListResponse{Nodes: nodes, Total: total, Counts: counts, HasMore: hasMore})
+	return NodeListResponse{Nodes: nodes, Total: total, Counts: counts, HasMore: hasMore}, nil
 }
 
 func (s *Server) handleNodeSearch(w http.ResponseWriter, r *http.Request) {
@@ -3189,6 +3287,15 @@ func writeJSONStatus(w http.ResponseWriter, code int, v interface{}) {
 	w.WriteHeader(code)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		log.Printf("[routes] JSON encode error: %v", err)
+	}
+}
+
+// writeJSONBytes writes an already-encoded JSON body with status 200.
+func writeJSONBytes(w http.ResponseWriter, body []byte) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(body); err != nil {
+		log.Printf("[routes] JSON write error: %v", err)
 	}
 }
 
