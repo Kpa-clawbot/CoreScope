@@ -109,6 +109,21 @@ func TestSQLiteFreshAndReadOnlyReadiness(t *testing.T) {
 	}
 }
 
+func TestSQLiteFreshSchemaDoesNotSuppressInitialPlannerAnalysis(t *testing.T) {
+	db, _ := sqliteTestDB(t)
+	for range 2 {
+		if err := ApplySQLite(db, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The ingestor uses sqlite_stat1's presence to decide whether its initial
+	// whole-database ANALYZE is required. A table-only refresh must not mask it.
+	var tables int
+	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name='sqlite_stat1'`).Scan(&tables); err != nil || tables != 0 {
+		t.Fatalf("fresh database appears fully analyzed: tables=%d err=%v", tables, err)
+	}
+}
+
 func TestSQLiteObserverIdentityPreservesOldRowsAndReferences(t *testing.T) {
 	db, _ := sqliteTestDB(t)
 	if err := legacy.ApplyBase(db); err != nil {

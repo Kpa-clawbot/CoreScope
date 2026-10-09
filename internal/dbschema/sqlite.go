@@ -74,10 +74,26 @@ func ApplySQLite(db *sql.DB, logf Logger) error {
 	}
 	// The identity migration's corpus/FK scans run once. Ordinary restarts
 	// retain existing schema maintenance without rescanning all observations.
-	if !needsIdentity {
-		return AssertSQLiteReady(db)
+	if needsIdentity {
+		if err := migrateSQLiteObserverIdentity(db); err != nil {
+			return err
+		}
 	}
-	return migrateSQLiteObserverIdentity(db)
+	// Rebuilding observers drops its sqlite_stat1 entries and can turn the
+	// recent-packet aggregate into a scan/sort of the observation window.
+	// Refresh only observers, also repairing previously rebuilt databases.
+	// Do not create sqlite_stat1 on a fresh database: its absence tells the
+	// ingestor that the initial whole-database analysis still needs to run.
+	var analyzed int
+	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='sqlite_stat1'`).Scan(&analyzed); err != nil {
+		return err
+	}
+	if analyzed != 0 {
+		if _, err := db.Exec(`ANALYZE observers`); err != nil {
+			return fmt.Errorf("refresh SQLite observer planner statistics: %w", err)
+		}
+	}
+	return AssertSQLiteReady(db)
 }
 
 // EnsureSQLiteAsyncMigrations retains the upstream ingestor's exact ledger

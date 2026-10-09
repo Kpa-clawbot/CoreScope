@@ -2401,23 +2401,25 @@ func (db *DB) GetMaxObservationID() int {
 	return maxID
 }
 
+// observerPacketCountsSQL is shared with the native planner regression.
+func (db *DB) observerPacketCountsSQL() string {
+	if db.isV3 {
+		return `SELECT obs.id, COUNT(*) as cnt
+			FROM observations o
+			JOIN observers obs ON obs.rowid = o.observer_idx
+			WHERE o.timestamp > ` + db.parameter(1) + `
+			GROUP BY obs.id`
+	}
+	return `SELECT o.observer_id, COUNT(*) as cnt
+			FROM observations o
+			WHERE o.observer_id IS NOT NULL AND o.timestamp > ` + db.parameter(1) + `
+			GROUP BY o.observer_id`
+}
+
 // GetObserverPacketCounts returns packetsLastHour for all observers (batch query).
 func (db *DB) GetObserverPacketCounts(sinceEpoch int64) map[string]int {
 	counts := make(map[string]int)
-	var rows *sql.Rows
-	var err error
-	if db.isV3 {
-		rows, err = db.conn.Query(`SELECT obs.id, COUNT(*) as cnt
-			FROM observations o
-			JOIN observers obs ON obs.rowid = o.observer_idx
-			WHERE o.timestamp > `+db.parameter(1)+`
-			GROUP BY obs.id`, sinceEpoch)
-	} else {
-		rows, err = db.conn.Query(`SELECT o.observer_id, COUNT(*) as cnt
-			FROM observations o
-			WHERE o.observer_id IS NOT NULL AND o.timestamp > `+db.parameter(1)+`
-			GROUP BY o.observer_id`, sinceEpoch)
-	}
+	rows, err := db.conn.Query(db.observerPacketCountsSQL(), sinceEpoch)
 	if err != nil {
 		return counts
 	}
