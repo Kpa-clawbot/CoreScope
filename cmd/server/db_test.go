@@ -2654,3 +2654,19 @@ func TestGetDBSizeStatsTypedCachesRowCounts(t *testing.T) {
 		t.Fatalf("after the TTL the count must be refreshed: got %d, want %d", got, first+1)
 	}
 }
+
+// A failed count is not cached, so the next /api/perf counts again.
+func TestGetDBSizeStatsTypedDoesNotCacheFailedCounts(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	if _, err := db.conn.Exec(`DROP TABLE observers`); err != nil {
+		t.Fatal(err)
+	}
+	db.GetDBSizeStatsTyped()
+	db.rowCountsMu.Lock()
+	cached := db.rowCounts != nil
+	db.rowCountsMu.Unlock()
+	if cached {
+		t.Fatal("row counts with a failed COUNT(*) must not be cached")
+	}
+}

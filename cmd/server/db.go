@@ -649,9 +649,12 @@ func (db *DB) cachedRowCounts() *SqliteRowCounts {
 		return db.rowCounts
 	}
 	rows := &SqliteRowCounts{}
+	failed := false
 	for _, table := range []string{"transmissions", "observations", "nodes", "observers"} {
 		var count int
-		db.conn.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count)
+		if err := db.conn.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
+			failed = true
+		}
 		switch table {
 		case "transmissions":
 			rows.Transmissions = count
@@ -663,7 +666,10 @@ func (db *DB) cachedRowCounts() *SqliteRowCounts {
 			rows.Observers = count
 		}
 	}
-	db.rowCounts, db.rowCountsAt = rows, time.Now()
+	// A failed count is served once, as before, but not cached.
+	if !failed {
+		db.rowCounts, db.rowCountsAt = rows, time.Now()
+	}
 	return rows
 }
 
