@@ -18,6 +18,69 @@ const (
 // bearerScopeFor lists.
 const deviceScopeRX = "rx"
 
+// bearerScopeFor returns the scope a device token needs on path, or ""
+// when no device token may use it (spec: /api/auth/me, /api/auth/logout,
+// /api/account/companions*, /api/account/settings).
+func bearerScopeFor(path string) string {
+	switch {
+	case path == "/api/auth/me", path == "/api/auth/logout", path == "/api/account/settings",
+		path == "/api/account/companions", strings.HasPrefix(path, "/api/account/companions/"):
+		return deviceScopeRX
+	}
+	return ""
+}
+
+// bearerCORSPath reports whether path takes cross-origin writes from an
+// allowlisted origin: the device-token login and the bearer routes.
+func bearerCORSPath(path string) bool {
+	return path == "/api/auth/device-token" || bearerScopeFor(path) != ""
+}
+
+// bearerToken returns the token of an "Authorization: Bearer" header and
+// whether the request carried such a header at all.
+func bearerToken(r *http.Request) (string, bool) {
+	const prefix = "Bearer "
+	h := r.Header.Get("Authorization")
+	if len(h) < len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {
+		return "", false
+	}
+	return strings.TrimSpace(h[len(prefix):]), true
+}
+
+// bearerUser resolves a device token for r. The code is 0 on success, 401
+// for an unknown, expired or web token or an inactive account, and 403
+// when the token's scope does not cover the route. A use more than a day
+// after the last one extends the token by DeviceSessionTTL (sliding).
+func (a *authService) bearerUser(r *http.Request, tok string) (*users.User, *users.Session, int) {
+	if tok == "" {
+		return nil, nil, http.StatusUnauthorized
+	}
+	sess, err := a.st.LookupSession(tok)
+	// A web token as a bearer would skip the CSRF check: refused.
+	if err != nil || sess.Kind != users.SessionKindDevice {
+		return nil, nil, http.StatusUnauthorized
+	}
+	u, err := a.st.GetByID(sess.UserID)
+	if err != nil || u.Status != users.StatusActive {
+		return nil, nil, http.StatusUnauthorized
+	}
+	if need := bearerScopeFor(r.URL.Path); need == "" || !sess.HasScope(need) {
+		return nil, nil, http.StatusForbidden
+	}
+	if time.Since(sess.LastSeenAt) > 24*time.Hour {
+		_ = a.st.ExtendSession(sess.ID, users.DeviceSessionTTL)
+	}
+	return u, sess, 0
+}
+
+func writeBearerFail(w http.ResponseWriter, code int) {
+	if code == http.StatusForbidden {
+		writeError(w, http.StatusForbidden, "this token is not allowed on this route")
+		return
+	}
+	writeError(w, http.StatusUnauthorized, "invalid or expired token")
+}
+
 func (a *authService) setSessionCookie(w http.ResponseWriter, raw string, expires time.Time) {
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookieName, Value: raw, Path: "/",
@@ -79,10 +142,22 @@ func isSafeMethod(m string) bool { return m == http.MethodGet || m == http.Metho
 
 type authedHandler func(w http.ResponseWriter, r *http.Request, u *users.User, sess *users.Session)
 
-// withUser requires a logged-in active user; state-changing methods must
-// also pass the origin + CSRF-token check.
+// withUser requires a logged-in active user. A request with an
+// Authorization: Bearer header is judged on that device token alone
+// (scope check, no CSRF: browsers never attach it on their own).
+// Otherwise the cookie session is used, and state-changing methods must
+// pass the origin + CSRF-token check.
 func (s *Server) withUser(h authedHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if tok, ok := bearerToken(r); ok {
+			u, sess, code := s.auth.bearerUser(r, tok)
+			if code != 0 {
+				writeBearerFail(w, code)
+				return
+			}
+			h(w, r, u, sess)
+			return
+		}
 		u, sess := s.auth.currentUser(w, r)
 		if u == nil {
 			writeError(w, http.StatusUnauthorized, "not logged in")
@@ -114,6 +189,10 @@ func (a *authService) adminSessionOK(w http.ResponseWriter, r *http.Request, u *
 // withAdmin requires a logged-in admin (see adminSessionOK).
 func (s *Server) withAdmin(h authedHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := bearerToken(r); ok {
+			writeBearerFail(w, http.StatusForbidden)
+			return
+		}
 		u, sess := s.auth.currentUser(w, r)
 		if u == nil {
 			writeError(w, http.StatusUnauthorized, "not logged in")

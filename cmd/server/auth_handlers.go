@@ -256,21 +256,44 @@ func (s *Server) handleDeviceToken(w http.ResponseWriter, r *http.Request) {
 	a.auditAsync(nil, "user.login", idPtr(u.ID), map[string]string{"via": "device", "device": sess.Label})
 }
 
+// handleLogout ends the caller's session: with a bearer header it revokes
+// that device token, otherwise it ends the cookie session (origin-checked,
+// as before).
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(sessionCookieName); err == nil && c.Value != "" {
-		_ = s.auth.st.DeleteSessionByToken(c.Value)
+	a := s.auth
+	if tok, ok := bearerToken(r); ok {
+		_, sess, code := a.bearerUser(r, tok)
+		if code != 0 {
+			writeBearerFail(w, code)
+			return
+		}
+		if err := a.st.DeleteSession(sess.UserID, sess.ID); err != nil && !errors.Is(err, users.ErrNotFound) {
+			log.Printf("[users] revoke device session #%d: %v", sess.ID, err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		writeJSON(w, okResponse{OK: true})
+		return
 	}
-	s.auth.clearSessionCookie(w)
+	if !a.originOK(r) {
+		writeError(w, http.StatusForbidden, "request origin not allowed")
+		return
+	}
+	if c, err := r.Cookie(sessionCookieName); err == nil && c.Value != "" {
+		_ = a.st.DeleteSessionByToken(c.Value)
+	}
+	a.clearSessionCookie(w)
 	writeJSON(w, okResponse{OK: true})
 }
 
-func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
-	u, sess := s.auth.currentUser(w, r)
-	if u == nil {
-		writeError(w, http.StatusUnauthorized, "not logged in")
-		return
+// handleMe answers the caller; a device token gets no CSRF token (it never
+// needs one).
+func (s *Server) handleMe(w http.ResponseWriter, _ *http.Request, u *users.User, sess *users.Session) {
+	me := meFrom(u, sess)
+	if sess.Kind == users.SessionKindDevice {
+		me.CSRFToken = ""
 	}
-	writeJSON(w, meFrom(u, sess))
+	writeJSON(w, me)
 }
 
 func (s *Server) handleForgot(w http.ResponseWriter, r *http.Request) {
