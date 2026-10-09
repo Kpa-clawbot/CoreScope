@@ -171,6 +171,8 @@ def safe_diagnostics(text):
     out = []
     for line in text.splitlines():
         line = line.strip()
+        if line.startswith("[migrate] "):
+            line = "migrate: " + line[len("[migrate] "):]
         if not re.match(r"(?:--- FAIL:|FAIL\b|panic:|fatal error:|[^\s]*\.go:\d+(?::\d+)?:|ERROR:|FATAL:|error:|benchmark:|migrate:)", line):
             codes = re.findall(r"SQLSTATE [0-9A-Z]{5}", line)
             if codes:

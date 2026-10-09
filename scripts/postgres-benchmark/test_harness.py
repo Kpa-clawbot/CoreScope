@@ -336,6 +336,17 @@ class HarnessTests(unittest.TestCase):
             self.assertLessEqual(sum(len(x) for x in result["diagnostics"]), 2400)
             self.assertIn("--- FAIL: TestCoreScopeBenchmark (1s)", result["diagnostics"])
 
+    def test_shipping_migrate_prefix_retains_safe_failure_reason(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = pathlib.Path(directory) / "migration.log"
+            log.write_text("[migrate] import dropped_packets: column dropped_at: non-text value in a text column\n"
+                           "[migrate] connection failed postgres://owner:private-secret@private.example/db at /private/state/file\n")
+            result = bench.record_failure(log, 1)
+            diagnostic = json.dumps(result)
+            self.assertIn("import dropped_packets: column dropped_at: non-text value in a text column", diagnostic)
+            for private in ("private-secret", "private.example", "/private/state"):
+                self.assertNotIn(private, diagnostic)
+
     def test_finish_records_failed_child_before_raising(self):
         with tempfile.TemporaryDirectory() as directory:
             log = pathlib.Path(directory) / "replay.log"
