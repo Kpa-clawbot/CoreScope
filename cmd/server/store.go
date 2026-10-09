@@ -1926,8 +1926,9 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 		}
 	}
 	atomic.AddInt64(&s.queryCount, 1)
+	nodePK := s.resolveQueryNode(q.Node)
 	s.mu.RLock()
-	result, jobs := s.queryPacketsLocked(q)
+	result, jobs := s.queryPacketsLocked(q, nodePK)
 	s.mu.RUnlock()
 	s.applyResolvedPaths(jobs)
 	return result
@@ -1935,7 +1936,7 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 
 // queryPacketsLocked is the in-memory part of QueryPackets. Caller holds
 // s.mu and runs the returned resolved_path jobs after releasing it.
-func (s *PacketStore) queryPacketsLocked(q PacketQuery) (*PacketResult, []rpJob) {
+func (s *PacketStore) queryPacketsLocked(q PacketQuery, nodePK string) (*PacketResult, []rpJob) {
 	if q.Limit <= 0 {
 		q.Limit = 50
 	}
@@ -1943,7 +1944,7 @@ func (s *PacketStore) queryPacketsLocked(q PacketQuery) (*PacketResult, []rpJob)
 		q.Order = "DESC"
 	}
 
-	results := s.filterPackets(q)
+	results := s.filterPackets(q, nodePK)
 	total := len(results)
 
 	// #1345: order by ingest id, not insertion-into-s.packets order. After
@@ -2037,8 +2038,9 @@ func (s *PacketStore) QueryGroupedPackets(q PacketQuery) *PacketResult {
 	s.groupedCacheMu.Unlock()
 
 	// Collect StoreTx pointers under read lock; sort outside it.
+	nodePK := s.resolveQueryNode(q.Node)
 	s.mu.RLock()
-	results := s.filterPackets(q)
+	results := s.filterPackets(q, nodePK)
 	txs := make([]*StoreTx, len(results))
 	copy(txs, results)
 	s.mu.RUnlock()
@@ -2675,27 +2677,26 @@ func (s *PacketStore) GetTimestamps(since string) []string {
 
 // QueryMultiNodePackets filters packets matching any of the given pubkeys.
 func (s *PacketStore) QueryMultiNodePackets(pubkeys []string, limit, offset int, order, since, until string) *PacketResult {
+	resolved := make([]string, len(pubkeys))
+	for i, pk := range pubkeys {
+		resolved[i] = s.resolveQueryNode(pk)
+	}
 	s.mu.RLock()
-	result, jobs := s.queryMultiNodePacketsLocked(pubkeys, limit, offset, order, since, until)
+	result, jobs := s.queryMultiNodePacketsLocked(resolved, limit, offset, order, since, until)
 	s.mu.RUnlock()
 	s.applyResolvedPaths(jobs)
 	return result
 }
 
-// queryMultiNodePacketsLocked is the in-memory part of QueryMultiNodePackets.
-// Caller holds s.mu and runs the returned resolved_path jobs after releasing
-// it.
-func (s *PacketStore) queryMultiNodePacketsLocked(pubkeys []string, limit, offset int, order, since, until string) (*PacketResult, []rpJob) {
-	if len(pubkeys) == 0 {
+// queryMultiNodePacketsLocked is the in-memory part of QueryMultiNodePackets,
+// for pubkeys already resolved by resolveQueryNode. Caller holds s.mu and runs
+// the returned resolved_path jobs after releasing it.
+func (s *PacketStore) queryMultiNodePacketsLocked(resolved []string, limit, offset int, order, since, until string) (*PacketResult, []rpJob) {
+	if len(resolved) == 0 {
 		return &PacketResult{Packets: []map[string]interface{}{}, Total: 0}, nil
 	}
 	if limit <= 0 {
 		limit = 50
-	}
-
-	resolved := make([]string, len(pubkeys))
-	for i, pk := range pubkeys {
-		resolved[i] = s.db.resolveNodePubkey(pk)
 	}
 
 	// Use byNode index instead of scanning all packets (O(indexed) vs O(all×pubkeys×json)).
@@ -3526,8 +3527,18 @@ func (s *PacketStore) MaxObservationID() int {
 
 // --- Internal filter/query helpers ---
 
+// resolveQueryNode maps a node filter (pubkey or name) to a pubkey. It runs
+// SQL, so callers resolve before taking s.mu (#2146). Empty stays empty.
+func (s *PacketStore) resolveQueryNode(node string) string {
+	if node == "" {
+		return ""
+	}
+	return s.db.resolveNodePubkey(node)
+}
+
 // filterPackets applies PacketQuery filters to the in-memory packet list.
-func (s *PacketStore) filterPackets(q PacketQuery) []*StoreTx {
+// nodePK is q.Node resolved by resolveQueryNode. Caller holds s.mu.
+func (s *PacketStore) filterPackets(q PacketQuery, nodePK string) []*StoreTx {
 	// Fast path: single-key index lookups
 	if q.Hash != "" && q.Type == nil && q.Route == nil && q.Observer == "" &&
 		q.Region == "" && q.Area == "" && q.Node == "" && q.Channel == "" && q.Since == "" && q.Until == "" {
@@ -3592,11 +3603,9 @@ func (s *PacketStore) filterPackets(q PacketQuery) []*StoreTx {
 	}
 
 	// Pre-compute node filter parameters.
-	var nodePK string
 	var nodeHashSet map[string]bool
 	hasNode := q.Node != ""
 	if hasNode {
-		nodePK = s.db.resolveNodePubkey(q.Node)
 		indexed := s.byNode[nodePK]
 		nodeHashSet = make(map[string]bool, len(indexed))
 		for _, tx := range indexed {
@@ -3924,6 +3933,23 @@ func iataMatchesRegion(iata, regionParam string) bool {
 	return false
 }
 
+// observerIATAs returns observer ID → normalised IATA code. It reads the
+// observers table, so callers load it before taking s.mu (#2146).
+func (s *PacketStore) observerIATAs() map[string]string {
+	obsIATA := make(map[string]string, 64)
+	if s.db == nil {
+		return obsIATA
+	}
+	if observers, err := s.db.GetObservers(); err == nil {
+		for _, o := range observers {
+			if o.IATA != nil && *o.IATA != "" {
+				obsIATA[o.ID] = strings.TrimSpace(strings.ToUpper(*o.IATA))
+			}
+		}
+	}
+	return obsIATA
+}
+
 // computeNodeHomeRegions returns a pubkey → IATA map deriving each node's
 // HOME region from zero-hop DIRECT adverts. A zero-hop direct advert is the
 // most authoritative location signal because the path byte is set locally on
@@ -3933,24 +3959,13 @@ func iataMatchesRegion(iata, regionParam string) bool {
 // When a node has zero-hop direct adverts heard by observers from multiple
 // regions, the most-frequently-observed region wins (geographic plurality).
 //
+// obsIATA is the observer → IATA map from observerIATAs, loaded before s.mu.
 // Caller must hold s.mu (read or write). Returns empty map (not nil) if no
 // observers are loaded or no zero-hop direct adverts have been seen.
 //
 // #804: feeds analytics region-attribution so a multi-byte repeater whose
 // flood adverts get relayed across regions is still attributed to its home.
-func (s *PacketStore) computeNodeHomeRegions() map[string]string {
-	// Build observer → IATA map. observers table is small (≪ packets), so a
-	// single DB read here is acceptable; resolveRegionObservers does similar.
-	obsIATA := make(map[string]string, 64)
-	if s.db != nil {
-		if observers, err := s.db.GetObservers(); err == nil {
-			for _, o := range observers {
-				if o.IATA != nil && *o.IATA != "" {
-					obsIATA[o.ID] = strings.TrimSpace(strings.ToUpper(*o.IATA))
-				}
-			}
-		}
-	}
+func (s *PacketStore) computeNodeHomeRegions(obsIATA map[string]string) map[string]string {
 	if len(obsIATA) == 0 {
 		return map[string]string{}
 	}
@@ -7502,18 +7517,25 @@ func (s *PacketStore) GetAnalyticsTopologyWithWindow(region, area string, window
 }
 
 func (s *PacketStore) computeAnalyticsTopology(region, area string, window TimeWindow) map[string]interface{} {
+	// These may query SQLite, so they run before s.mu (#2146).
 	var areaNodes map[string]bool
 	if area != "" {
 		areaNodes = s.resolveAreaNodes(area)
 	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	var regionObs map[string]bool
 	if region != "" {
 		regionObs = s.resolveRegionObservers(region)
 	}
+	// Use DB 7-day active node count (matches /api/stats totalNodes)
+	uniqueNodes := 0
+	if s.db != nil {
+		if stats, err := s.db.GetStats(); err == nil {
+			uniqueNodes = stats.TotalNodes
+		}
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	allNodes, pm := s.getCachedNodesAndPM()
 	_ = allNodes // only pm is needed for topology
@@ -7993,14 +8015,6 @@ func (s *PacketStore) computeAnalyticsTopology(region, area string, window TimeW
 		bestPathList = bestPathList[:50]
 	}
 
-	// Use DB 7-day active node count (matches /api/stats totalNodes)
-	uniqueNodes := 0
-	if s.db != nil {
-		if stats, err := s.db.GetStats(); err == nil {
-			uniqueNodes = stats.TotalNodes
-		}
-	}
-
 	return map[string]interface{}{
 		"uniqueNodes":      uniqueNodes,
 		"avgHops":          avgHops,
@@ -8465,9 +8479,7 @@ func (s *PacketStore) computeAnalyticsHashSizesWithCapability(region, area strin
 }
 
 func (s *PacketStore) computeAnalyticsHashSizes(region, area string) map[string]interface{} {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
+	// These may query SQLite, so they run before s.mu (#2146).
 	var regionObs map[string]bool
 	if region != "" {
 		regionObs = s.resolveRegionObservers(region)
@@ -8476,12 +8488,16 @@ func (s *PacketStore) computeAnalyticsHashSizes(region, area string) map[string]
 	if area != "" {
 		areaNodes = s.resolveAreaNodes(area)
 	}
+	obsIATA := s.observerIATAs()
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	// #804: derive each node's HOME region from zero-hop direct adverts (the
 	// most authoritative location signal — those packets cannot have been
 	// relayed). When non-empty, multi-byte node attribution prefers this
 	// over observer-region. Falls back to observer-region when unknown.
-	nodeHomeRegion := s.computeNodeHomeRegions()
+	nodeHomeRegion := s.computeNodeHomeRegions(obsIATA)
 	attributionMethod := "observer"
 	if region != "" && len(nodeHomeRegion) > 0 {
 		attributionMethod = "repeater"
@@ -9817,6 +9833,8 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 	// Loaded before taking s.mu so the lock order stays s.mu →
 	// analyticsRecomputerMu everywhere (computeDirectHeard takes s.mu).
 	directHeard := s.loadDirectHeard()
+	// SQL, so also before s.mu (#2146).
+	nonRelaySet, seenSet := s.canRelaySets()
 
 	s.mu.RLock()
 	packets := s.byNode[pubkey]
@@ -9859,7 +9877,6 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 		}
 	}
 
-	nonRelaySet, seenSet := s.canRelaySets()
 	directByObs := directHeard[strings.ToLower(pubkey)]
 	observerRows := buildDirectObserverRows(directByObs, nonRelaySet, seenSet)
 	relayObserverCount := relayOnlyObserverCount(relayObservers, directByObs)
