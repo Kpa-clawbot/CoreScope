@@ -279,6 +279,12 @@ func TestPruneAgedTransmissionIDsUsesFirstSeenIndex(t *testing.T) {
 		if strings.Contains(plan, "SCAN transmissions") {
 			t.Errorf("%s: plan scans transmissions, so the empty terminating batch walks the whole table under writerMu: %s", name, plan)
 		}
+		if strings.Contains(plan, "SCAN observations") {
+			t.Errorf("%s: child work must seek by transmission or row ID, not scan observations: %s", name, plan)
+		}
+		if q != pruneAgedTransmissionIDs && !strings.Contains(plan, "transmission_id=?") {
+			t.Errorf("%s: child lookup does not use a transmission-key index: %s", name, plan)
+		}
 		if strings.Contains(plan, "TEMP B-TREE") {
 			t.Errorf("%s: plan sorts in a temp b-tree instead of walking the index in order: %s", name, plan)
 		}
