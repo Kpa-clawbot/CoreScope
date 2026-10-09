@@ -1,6 +1,7 @@
 import importlib.util
 import csv
 import errno
+import io
 import json
 import pathlib
 import re
@@ -13,6 +14,25 @@ HERE = pathlib.Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("bench", HERE / "run.py")
 bench = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bench)
+
+
+class MemoryPeakFile(io.BytesIO):
+    """Model cgroup v2's reset scope: one open file description."""
+    def __init__(self, state, mode):
+        super().__init__()
+        self.state, self.binary, self.peak = state, "b" in mode, state.lifetime
+        state.handles.append(self)
+
+    def write(self, value):
+        if self.state.reject_reset:
+            raise OSError(errno.EINVAL, "reset unsupported")
+        self.peak = self.state.current
+        return len(value)
+
+    def read(self, size=-1):
+        value = b"" if self.tell() else str(self.peak).encode() + b"\n"
+        self.seek(len(value), io.SEEK_CUR)
+        return value if self.binary else value.decode()
 
 
 class HarnessTests(unittest.TestCase):
@@ -93,13 +113,81 @@ class HarnessTests(unittest.TestCase):
                             "io.stat": "8:0 rbytes=1024 wbytes=2048\n", "cgroup.procs": ""}.items():
             if name != missing:
                 (group / name).write_text(value)
-        budget = bench.Budget.__new__(bench.Budget)
+        budget = bench.Budget(None, False)
         budget.path = group
         budget.info = {"enforced": True, "memory_peak_reset": False}
         budget.close = mock.Mock()
         run = root / "pair-00" / "sqlite"
         run.mkdir(parents=True)
         return budget, run
+
+    def memory_peak_counter(self, budget, reject_reset=False):
+        (budget.path / "memory.reclaim").touch()
+        state = types.SimpleNamespace(current=0, lifetime=9000, handles=[], reject_reset=reject_reset)
+        real_open = pathlib.Path.open
+        def open_file(path, mode="r", *args, **kwargs):
+            if path == budget.path / "memory.peak":
+                return MemoryPeakFile(state, mode)
+            return real_open(path, mode, *args, **kwargs)
+        return state, mock.patch.object(pathlib.Path, "open", open_file)
+
+    def test_memory_peak_is_reset_per_leg_for_samples_and_final_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            budget, run = self.resource_fixture(pathlib.Path(directory))
+            state, counter = self.memory_peak_counter(budget)
+            def sample_peak(value):
+                state.current = value
+                state.lifetime = max(state.lifetime, value)
+                for handle in state.handles:
+                    if not handle.closed:
+                        handle.peak = max(handle.peak, value)
+                resource = bench.Resources(run / "resources.csv", budget, [])
+                with mock.patch.object(resource.done, "wait", side_effect=lambda _: resource.done.set()):
+                    resource.sample()
+                self.assertIsNone(resource.error)
+                with open(run / "resources.csv", newline="") as stream:
+                    row = next(csv.DictReader(stream))
+                # Use the real final-write path after the sampler has stopped.
+                with mock.patch.object(resource.thread, "join"):
+                    resource.__exit__(None, None, None)
+                final = json.loads((run / "resource-final.json").read_text())
+                self.assertTrue(final["budget"]["memory_peak_reset"])
+                self.assertEqual(int(row["cgroup_memory_peak_bytes"]), value)
+                self.assertEqual(final["memory_peak_bytes"], value)
+                self.assertTrue(all(handle.closed for handle in state.handles))
+            with counter:
+                budget.reset()
+                sample_peak(3000)
+                state.current = 0
+                budget.reset()
+                sample_peak(1000)
+
+    def test_memory_peak_descriptor_closes_on_failure_and_unsupported_reset(self):
+        for unsupported in (False, True):
+            with self.subTest(unsupported=unsupported), tempfile.TemporaryDirectory() as directory:
+                budget, run = self.resource_fixture(pathlib.Path(directory))
+                state, counter = self.memory_peak_counter(budget, reject_reset=unsupported)
+                with counter:
+                    budget.reset()
+                    self.assertEqual(budget.info["memory_peak_reset"], not unsupported)
+                    with self.assertRaisesRegex(ValueError, "workload failure"):
+                        with bench.Resources(run / "resources.csv", budget, []):
+                            raise ValueError("workload failure")
+                self.assertTrue(all(handle.closed for handle in state.handles))
+                final = json.loads((run / "resource-final.json").read_text())
+                self.assertEqual(final["memory_peak_bytes"], None if unsupported else 0)
+
+    def test_memory_peak_descriptor_closes_if_no_resource_context_is_entered(self):
+        with tempfile.TemporaryDirectory() as directory:
+            budget, _ = self.resource_fixture(pathlib.Path(directory))
+            state, counter = self.memory_peak_counter(budget)
+            with counter, mock.patch.object(pathlib.Path, "rmdir"):
+                budget.reset()
+                first = state.handles[0]
+                budget.reset()
+                self.assertTrue(first.closed)
+                bench.Budget.close(budget)
+            self.assertTrue(all(handle.closed for handle in state.handles))
 
     def test_sampler_failure_identifies_counter_without_private_path(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -339,6 +339,7 @@ def archive(repo, revision, destination):
 class Budget:
     def __init__(self, parent, required):
         self.path = None
+        self._memory_peak_file = None
         self.required = required
         self.info = {"enforced": False, "cpu_limit": None, "memory_limit_bytes": None}
         if not parent:
@@ -405,6 +406,8 @@ class Budget:
             raise RuntimeError("application/database process failed to enter the benchmark cgroup")
 
     def reset(self):
+        self.close_memory_peak()
+        self.info["memory_peak_reset"] = False
         if not self.path:
             return
         if (self.path / "cgroup.procs").read_text().strip():
@@ -424,12 +427,27 @@ class Budget:
             raise RuntimeError("more than 64 MiB of inactive prior-backend cgroup memory remains")
         self.info["inactive_charge_reset_bytes"] = remaining
         try:
-            (self.path / "memory.peak").write_text("0")
+            # Linux resets memory.peak only for subsequent reads through this
+            # same open file description, not later opens of the counter.
+            self._memory_peak_file = (self.path / "memory.peak").open("r+b", buffering=0)
+            self._memory_peak_file.write(b"0")
             self.info["memory_peak_reset"] = True
         except OSError:
-            self.info["memory_peak_reset"] = False
+            self.close_memory_peak()
+
+    def memory_peak(self):
+        if self._memory_peak_file is None:
+            return None
+        self._memory_peak_file.seek(0)
+        return int(self._memory_peak_file.read())
+
+    def close_memory_peak(self):
+        if self._memory_peak_file is not None:
+            self._memory_peak_file.close()
+            self._memory_peak_file = None
 
     def close(self):
+        self.close_memory_peak()
         if self.path:
             if (self.path / "cgroup.procs").read_text().strip():
                 raise RuntimeError("owned benchmark processes remain; refusing cgroup removal")
@@ -599,8 +617,9 @@ class Resources:
                 if self.budget.path:
                     c = self.budget.path
                     row["cgroup_memory_bytes"] = (c / "memory.current").read_text().strip()
-                    if self.budget.info.get("memory_peak_reset"):
-                        row["cgroup_memory_peak_bytes"]=(c/"memory.peak").read_text().strip()
+                    peak = self.budget.memory_peak()
+                    if peak is not None:
+                        row["cgroup_memory_peak_bytes"] = peak
                     cpu = dict(line.split() for line in (c / "cpu.stat").read_text().splitlines())
                     row["cgroup_cpu_usec"] = cpu.get("usage_usec", "not measured")
                     row["io_stat"] = (c / "io.stat").read_text().strip()
@@ -648,12 +667,14 @@ class Resources:
                 raise self.error
             if self.budget.path:
                 c=self.budget.path
-                write_json(self.path.parent/"resource-final.json",dict(memory_peak_bytes=int((c/"memory.peak").read_text()) if self.budget.info.get("memory_peak_reset") else None,cpu_stat=(c/"cpu.stat").read_text(),io_stat=(c/"io.stat").read_text(),memory_events=(c/"memory.events").read_text(),budget=self.budget.info))
+                write_json(self.path.parent/"resource-final.json",dict(memory_peak_bytes=self.budget.memory_peak(),cpu_stat=(c/"cpu.stat").read_text(),io_stat=(c/"io.stat").read_text(),memory_events=(c/"memory.events").read_text(),budget=self.budget.info))
         except BaseException as error:
             detail = record_resource_failure(self.path.parent/"resource-error.json", error, phase=self.phase,
                                              workload_error_type=exc_type.__name__ if exc_type else None)
             if exc_value is None:
                 raise RuntimeError("resource sampler failed: " + json.dumps(detail, sort_keys=True)) from error
+        finally:
+            self.budget.close_memory_peak()
         return False
 
 

@@ -7,10 +7,10 @@ drivers. Fixture construction happens outside measured ingestion.
 
 ## Status
 
-The generator, protocol vectors, bounded fixture/handler test, and harness unit
-checks have been exercised locally. The Linux controller, full S/B corpora,
-paired runtime profiles, and resource enforcement still need an isolated Linux
-pilot. **No empirical database comparison is included in this change.**
+The generator, protocol vectors, fixture/handler controls and Linux S/B runs
+have been exercised. The [performance report](../../docs/postgresql-performance.md)
+identifies measured revisions, results and limitations. A completed run qualifies
+only its exact candidate and workload; source changes require remeasurement.
 
 ## Prerequisites
 
@@ -116,7 +116,7 @@ at 205.92–206.76 seconds, after retention was scheduled at 195 seconds; that p
 but the missing events keep that run failed. Its artifacts remain separate.
 The supplemental 50-event/s rate gives the same queue 20.48 seconds of offered
 work, versus 10.24 seconds at 100/s. This gives the observed maintenance burst
-headroom; the Linux run must still prove zero drops, including during warmup.
+headroom; every comparison must still prove zero drops, including during warmup.
 The manifest records the actual offered rate. Do not pool the two experiments.
 
 Both engines use a 2,048 MiB packet-store allowance and a 3,072 MiB server Go
@@ -221,6 +221,10 @@ effects, rather than trusting the void callback return.
 - Whole application/database cgroup CPU, memory and I/O; per-process RSS/PSS,
   database/WAL storage, and remaining filesystem headroom. RSS is not used as a
   substitute for shared-memory-aware PSS/cgroup memory.
+  The optional kernel `memory.peak` counter is reset and read through one held
+  descriptor per backend leg, including preparation and migration. It is not a
+  measured-window-only peak; use windowed `memory.current` samples for that
+  comparison. Kernels without reset support leave this counter unmeasured.
 - Actual compiled retention and advert-preservation query plans in a separate
   diagnostic phase. PostgreSQL uses `EXPLAIN (ANALYZE, BUFFERS, SETTINGS, FORMAT
   JSON)`; SQLite uses `EXPLAIN QUERY PLAN`. Plan collection is outside headlines.
