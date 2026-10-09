@@ -157,7 +157,12 @@ func (s *Server) resolveHeardKey(heardKey string) (string, string) {
 // queryCoverageFiltered returns coverage rows within a bbox, optionally filtered
 // by heard node (prefix/pubkey), contributing client (rx_pubkey), and time window
 // (days; 0 = all time). Powers the global and per-observer coverage maps.
-func (s *Server) queryCoverageFiltered(node, rx string, days int, b bbox) ([]coverageRow, error) {
+// rxIn, when non-nil, keeps only receptions by those companions (rx_pubkey,
+// lowercase); an empty non-nil rxIn matches nothing.
+func (s *Server) queryCoverageFiltered(node, rx string, rxIn []string, days int, b bbox) ([]coverageRow, error) {
+	if rxIn != nil && len(rxIn) == 0 {
+		return nil, nil
+	}
 	where := []string{"lat BETWEEN ? AND ?", "lon BETWEEN ? AND ?"}
 	args := []interface{}{b.MinLat, b.MaxLat, b.MinLon, b.MaxLon}
 	if node != "" {
@@ -172,6 +177,12 @@ func (s *Server) queryCoverageFiltered(node, rx string, days int, b bbox) ([]cov
 	if rx != "" {
 		where = append(where, "rx_pubkey = ?")
 		args = append(args, strings.ToLower(rx))
+	}
+	if len(rxIn) > 0 {
+		where = append(where, "rx_pubkey IN ("+sqlPlaceholders(len(rxIn))+")")
+		for _, pk := range rxIn {
+			args = append(args, pk)
+		}
 	}
 	if days > 0 {
 		since := time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339)
@@ -206,6 +217,13 @@ func (s *Server) handleRxCoverage(w http.ResponseWriter, r *http.Request) {
 	if !s.requireClientRxCoverage(w, r) {
 		return
 	}
+	var mine []string
+	if r.URL.Query().Get("mine") == "1" {
+		var ok bool
+		if mine, ok = s.myCompanionPubkeys(w, r); !ok {
+			return
+		}
+	}
 	b, ok := parseBBox(r.URL.Query().Get("bbox"))
 	if !ok {
 		http.Error(w, "bbox required as minLat,minLon,maxLat,maxLon", http.StatusBadRequest)
@@ -218,7 +236,7 @@ func (s *Server) handleRxCoverage(w http.ResponseWriter, r *http.Request) {
 	days := clampDays(atoiDefault(r.URL.Query().Get("days"), 7))
 	z, _ := strconv.Atoi(r.URL.Query().Get("z"))
 	node, rx := r.URL.Query().Get("node"), r.URL.Query().Get("rx")
-	rows, err := s.queryCoverageFiltered(node, rx, days, b)
+	rows, err := s.queryCoverageFiltered(node, rx, mine, days, b)
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
@@ -226,8 +244,9 @@ func (s *Server) handleRxCoverage(w http.ResponseWriter, r *http.Request) {
 	fc := aggregateCoverage(rows, zoomToHexRes(z), s.heardKeyResolverFor(rows))
 	// "Nothing received" cells need the track, so only with the RF sample
 	// stream on; with ?node= the question would be "this node not heard",
-	// which these cells do not answer.
-	if r.URL.Query().Get("gaps") == "1" && node == "" && s.cfg.ClientRfSamplesEnabled() {
+	// which these cells do not answer. Not with ?mine=1 either: the track
+	// query cannot narrow to a set of companions yet.
+	if r.URL.Query().Get("gaps") == "1" && node == "" && mine == nil && s.cfg.ClientRfSamplesEnabled() {
 		track, err := s.queryTrackPoints(rx, days, b)
 		if err != nil {
 			http.Error(w, "query failed", http.StatusInternalServerError)
@@ -237,6 +256,37 @@ func (s *Server) handleRxCoverage(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(fc)
+}
+
+// myCompanionPubkeys resolves ?mine=1 to the caller's linked companions
+// (never nil, so an empty list filters everything out). Browser session
+// only: 404 with user management off, 403 for a bearer token (coverage is
+// outside its scope), 401 without a session.
+func (s *Server) myCompanionPubkeys(w http.ResponseWriter, r *http.Request) ([]string, bool) {
+	if s.auth == nil {
+		http.NotFound(w, r)
+		return nil, false
+	}
+	if _, ok := bearerToken(r); ok {
+		writeBearerFail(w, http.StatusForbidden)
+		return nil, false
+	}
+	u, _ := s.auth.currentUser(w, r)
+	if u == nil {
+		writeError(w, http.StatusUnauthorized, "not logged in")
+		return nil, false
+	}
+	links, err := s.auth.st.ListCompanionLinks(u.ID)
+	if err != nil {
+		log.Printf("[users] coverage mine for user #%d: %v", u.ID, err)
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return nil, false
+	}
+	out := make([]string, 0, len(links))
+	for _, l := range links {
+		out = append(out, l.Pubkey)
+	}
+	return out, true
 }
 
 // --- Leaderboard (top mobile observers) ---

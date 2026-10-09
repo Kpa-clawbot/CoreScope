@@ -47,13 +47,13 @@ func TestQueryCoverageFiltered(t *testing.T) {
 	srv := &Server{db: db}
 	bb := bbox{MinLat: 50, MinLon: 3, MaxLat: 52, MaxLon: 4}
 
-	if rows, _ := srv.queryCoverageFiltered("", "", 7, bb); len(rows) != 2 {
+	if rows, _ := srv.queryCoverageFiltered("", "", nil, 7, bb); len(rows) != 2 {
 		t.Fatalf("global 7d: want 2, got %d", len(rows))
 	}
-	if rows, _ := srv.queryCoverageFiltered("", "compa", 7, bb); len(rows) != 1 {
+	if rows, _ := srv.queryCoverageFiltered("", "compa", nil, 7, bb); len(rows) != 1 {
 		t.Fatalf("observer compa 7d: want 1, got %d", len(rows))
 	}
-	if rows, _ := srv.queryCoverageFiltered("", "", 0, bb); len(rows) != 3 {
+	if rows, _ := srv.queryCoverageFiltered("", "", nil, 0, bb); len(rows) != 3 {
 		t.Fatalf("global all-time: want 3, got %d", len(rows))
 	}
 }
