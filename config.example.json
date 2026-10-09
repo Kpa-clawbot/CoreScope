@@ -409,6 +409,8 @@
 
   "analytics": {
     "defaultIntervalSeconds": 300,
+    "pauseWhenIdle": false,
+    "_comment_pauseWhenIdle": "Opt-in. When true, a scheduled recompute is skipped if nothing has read that endpoint's snapshot since the previous recompute, so an instance whose analytics pages are rarely open stops recomputing (and allocating) for them every interval. The first read after a pause is served the existing snapshot at once, which can be older than the interval, and starts a refresh; reads after that see fresh data. Default false: every endpoint is recomputed on its interval whether read or not (#1240).",
     "recomputeIntervalSeconds": {
       "topology": 300,
       "rf": 300,

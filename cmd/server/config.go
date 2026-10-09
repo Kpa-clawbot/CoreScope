@@ -1095,14 +1095,14 @@ func (c *Config) AnalyticsDefaultRecomputeInterval() time.Duration {
 
 // AnalyticsPauseWhenIdle reports whether idle analytics recomputes are skipped.
 func (c *Config) AnalyticsPauseWhenIdle() bool {
-	return false
+	return c != nil && c.Analytics != nil && c.Analytics.PauseWhenIdle
 }
 
 // AnalyticsRecomputeIntervals returns the per-endpoint override map.
 // Returns the zero value (all defaults) if the analytics block is
 // absent or empty.
 func (c *Config) AnalyticsRecomputeIntervals() AnalyticsRecomputeIntervals {
-	out := AnalyticsRecomputeIntervals{}
+	out := AnalyticsRecomputeIntervals{PauseWhenIdle: c.AnalyticsPauseWhenIdle()}
 	if c == nil || c.Analytics == nil || c.Analytics.RecomputeIntervalSeconds == nil {
 		return out
 	}

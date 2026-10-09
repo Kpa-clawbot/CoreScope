@@ -45,8 +45,14 @@ type analyticsRecomputer struct {
 	startOnce sync.Once
 	stopOnce  sync.Once
 
-	// pauseWhenIdle: see AnalyticsConfig.PauseWhenIdle.
-	pauseWhenIdle bool
+	// pauseWhenIdle: see AnalyticsConfig.PauseWhenIdle. A tick with no
+	// Load since the previous compute is skipped and the recomputer is
+	// marked paused; the next Load serves the existing snapshot and sends
+	// on kick, and the loop recomputes then.
+	pauseWhenIdle    bool
+	readSinceCompute atomic.Bool
+	paused           atomic.Bool
+	kick             chan struct{} // buffered(1): a paused recomputer was read
 
 	// Stats (atomic).
 	computeRuns   atomic.Int64
@@ -74,6 +80,7 @@ func newAnalyticsRecomputer(name string, interval time.Duration, compute func() 
 		stop:         make(chan struct{}),
 		done:         make(chan struct{}),
 		recomputeReq: make(chan chan struct{}),
+		kick:         make(chan struct{}, 1),
 	}
 }
 
@@ -103,7 +110,16 @@ func (r *analyticsRecomputer) loop() {
 	for {
 		select {
 		case <-t.C:
+			if r.pauseWhenIdle && !r.readSinceCompute.Load() {
+				r.paused.Store(true)
+				continue
+			}
 			r.runOnce()
+		case <-r.kick:
+			if r.paused.Load() {
+				r.runOnce()
+				t.Reset(r.interval)
+			}
 		case ack := <-r.recomputeReq:
 			r.runOnce()
 			t.Reset(r.interval)
@@ -130,6 +146,9 @@ func (r *analyticsRecomputer) runOnce() {
 	// started on a partially loaded store must not end the warm-up,
 	// even if the load finishes while it runs.
 	ready := r.warmupReadyGateOpen_1659()
+	// Reads from here on count towards the next tick (pauseWhenIdle).
+	r.readSinceCompute.Store(false)
+	r.paused.Store(false)
 	t0 := time.Now()
 	result := r.compute()
 	r.lastComputeNs.Store(int64(time.Since(t0)))
@@ -195,8 +214,19 @@ func recomputeWhenLoaded(loaded, stop <-chan struct{}, rcs []*analyticsRecompute
 
 // Load returns the most recently computed snapshot, or nil if Start
 // has not been called (or the very first compute returned nil).
-// Never blocks beyond a single atomic load.
+// Never blocks: beyond the atomic load, a paused recomputer (pauseWhenIdle)
+// gets a non-blocking send on kick, and the snapshot it already holds is
+// returned while the refresh runs.
 func (r *analyticsRecomputer) Load() interface{} {
+	if r.pauseWhenIdle {
+		r.readSinceCompute.Store(true)
+		if r.paused.Load() {
+			select {
+			case r.kick <- struct{}{}:
+			default: // a refresh is already queued
+			}
+		}
+	}
 	v := r.cache.Load()
 	if v == nil {
 		return nil
@@ -358,6 +388,9 @@ func (s *PacketStore) StartAnalyticsRecomputers(defaultInterval time.Duration, o
 		},
 	)
 	all := s.analyticsRecomputersLocked()
+	for _, rc := range all {
+		rc.pauseWhenIdle = ov.PauseWhenIdle
+	}
 	s.analyticsRecomputerMu.Unlock()
 
 	// Issue #1659 (PR #1688 r1, munger #5): wire the loader readiness
