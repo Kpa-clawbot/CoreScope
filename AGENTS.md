@@ -59,8 +59,11 @@ scripts/           — Tooling (coverage collector, fixture capture, frontend in
 - **The ingestor reads `users.db`, never writes it.** With
   `userManagement.channelProposals.enabled` the ingestor opens `users.db`
   read-only (`mode=ro`, raw SQL, no `internal/users` import) once a minute
-  for the approved hashtag channel names. `TestChannelKeySetIsReadOnly` pins
-  the read-only open.
+  for the approved hashtag channel names. With
+  `clientRxCoverage.requireLinkedCompanion` it reads `companion_links` the same
+  way (`SELECT pubkey`, every 60 s, plus at most one re-read per 5 s on a miss).
+  `TestChannelKeySetIsReadOnly` and `TestLinkedCompanionSetIsReadOnly` pin the
+  read-only open.
 - Enforcement: `cmd/server/readonly_invariant_test.go` reflect-asserts that
   `PruneOldPackets`, `PruneOldMetrics`, and `RemoveStaleObservers` are NOT
   methods on the server's `*DB`. If you need a new write, add it to

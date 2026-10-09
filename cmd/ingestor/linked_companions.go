@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -181,4 +182,36 @@ func (s *Store) allowClientPubkey(pubkey string) bool {
 	}
 	s.Stats.ClientUnlinkedDropped.Add(1)
 	return false
+}
+
+// newLinkedCompanionFilter returns the linked-only filter, already read
+// once, when clientRxCoverage.requireLinkedCompanion is in effect, else nil.
+// The setting without userManagement.enabled is ignored with a startup
+// warning, as on the server.
+func newLinkedCompanionFilter(cfg *Config) *linkedCompanionSet {
+	if !cfg.RequireLinkedCompanionSet() {
+		return nil
+	}
+	if !cfg.RequireLinkedCompanion() {
+		log.Printf("[companions] WARNING: clientRxCoverage.requireLinkedCompanion is ignored: it needs userManagement.enabled")
+		return nil
+	}
+	shown := cfg.UsersDBPath()
+	if abs, err := filepath.Abs(shown); err == nil {
+		shown = abs
+	}
+	log.Printf("[companions] only linked companions may publish client data; reading companion_links from %s", shown)
+	s := newLinkedCompanionSet(cfg.UsersDBPath())
+	s.refresh()
+	return s
+}
+
+// refreshLoop re-reads the set every linkedCompanionsRefresh for the life of
+// the process, which picks up unlinks.
+func (s *linkedCompanionSet) refreshLoop() {
+	t := time.NewTicker(linkedCompanionsRefresh)
+	defer t.Stop()
+	for range t.C {
+		s.refresh()
+	}
 }

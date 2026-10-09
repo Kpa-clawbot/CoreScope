@@ -116,6 +116,13 @@ func main() {
 		}()
 	}
 
+	// Linked-only ingest (clientRxCoverage.requireLinkedCompanion): nil when
+	// off or ignored. Installed before any MQTT source connects.
+	if lc := newLinkedCompanionFilter(cfg); lc != nil {
+		store.linkedCompanions = lc
+		go lc.refreshLoop()
+	}
+
 	regionSet := newRegionKeySet(cfg)
 	if cfg.AutoRegionKeysEnabled() {
 		// Fill the derived tier before the first packet is matched, so a
