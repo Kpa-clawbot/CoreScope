@@ -70,6 +70,9 @@ type Store struct {
 	db    *sql.DB
 	path  string // filesystem path to the SQLite DB (used to resolve queue dirs)
 	Stats DBStats
+	// plannerStatsAt is when RefreshPlannerStats last succeeded in this
+	// process, in Unix nanoseconds (0: not yet).
+	plannerStatsAt atomic.Int64
 
 	stmtGetTxByHash            *sql.Stmt
 	stmtInsertTransmission     *sql.Stmt
@@ -1687,22 +1690,30 @@ func (s *Store) plannerStatsStampPath() string {
 }
 
 // lastPlannerStatsRefresh returns when RefreshPlannerStats last succeeded on
-// this database, or the zero time when that is not recorded.
+// this database, or the zero time when that is not known: the later of the
+// time this process remembers and the time recorded in the file.
 func (s *Store) lastPlannerStatsRefresh() time.Time {
+	var last time.Time
+	if ns := s.plannerStatsAt.Load(); ns != 0 {
+		last = time.Unix(0, ns)
+	}
 	b, err := os.ReadFile(s.plannerStatsStampPath())
 	if err != nil {
-		return time.Time{}
+		return last
 	}
 	t, err := time.Parse(time.RFC3339, strings.TrimSpace(string(b)))
-	if err != nil {
-		return time.Time{}
+	if err != nil || t.Before(last) {
+		return last
 	}
 	return t
 }
 
-// recordPlannerStatsRefresh writes when the statistics were refreshed. A
-// failed write only costs one refresh too many after the next restart.
+// recordPlannerStatsRefresh remembers when the statistics were refreshed and
+// writes it next to the database for the next start. If the write fails, this
+// process still waits the full interval; only the first refresh after the
+// next restart comes early.
 func (s *Store) recordPlannerStatsRefresh(at time.Time) {
+	s.plannerStatsAt.Store(at.UnixNano())
 	tmp := s.plannerStatsStampPath() + ".tmp"
 	if err := os.WriteFile(tmp, []byte(at.UTC().Format(time.RFC3339)), 0o644); err != nil {
 		log.Printf("[analyze] could not record the refresh time: %v", err)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"testing"
 	"time"
 )
@@ -21,7 +22,7 @@ func TestNextPlannerStatsRefresh(t *testing.T) {
 	}{
 		{"never refreshed", time.Time{}, plannerStatsStagger},
 		{"refreshed an hour ago", now.Add(-time.Hour), 23 * time.Hour},
-		{"refreshed 23h59m ago", now.Add(-(24*time.Hour - time.Minute)), plannerStatsStagger},
+		{"refreshed 23h59m ago: 1 minute left, raised to the stagger", now.Add(-(24*time.Hour - time.Minute)), plannerStatsStagger},
 		{"refreshed two days ago", now.Add(-48 * time.Hour), plannerStatsStagger},
 		{"stamp in the future", now.Add(time.Hour), plannerStatsInterval},
 	}
@@ -64,5 +65,38 @@ func TestRefreshPlannerStatsDisabledRecordsNothing(t *testing.T) {
 	s.RefreshPlannerStats(-1)
 	if !s.lastPlannerStatsRefresh().IsZero() {
 		t.Fatal("a disabled refresh must not record a time")
+	}
+}
+
+// When the time cannot be written next to the database, the running process
+// still waits the full interval instead of refreshing again 2 minutes later.
+func TestFailedRecordStillWaitsTheInterval(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+	// A directory where the temporary file should go makes the write fail.
+	if err := os.Mkdir(s.plannerStatsStampPath()+".tmp", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !s.RefreshPlannerStats(100) {
+		t.Fatal("refresh failed")
+	}
+	if _, err := os.Stat(s.plannerStatsStampPath()); err == nil {
+		t.Fatal("test setup: the stamp file was written anyway")
+	}
+	if d := nextPlannerStatsRefresh(s.lastPlannerStatsRefresh(), time.Now()); d < 23*time.Hour {
+		t.Fatalf("next refresh in %v after a failed write, want about 24h", d)
+	}
+}
+
+// Building statistics on a new database records the time too, so the routine
+// refresh does not run a second ANALYZE 2 minutes later.
+func TestEnsurePlannerStatsRecordsWhen(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+	if !s.EnsurePlannerStats(100) {
+		t.Fatal("want a build on a database without statistics")
+	}
+	if s.lastPlannerStatsRefresh().IsZero() {
+		t.Fatal("the build did not record its time")
 	}
 }
