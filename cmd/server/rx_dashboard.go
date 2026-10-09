@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // scanCoverageRows reads (lat,lon,snr,rssi,heard_key,rx_at) rows into coverageRow values.
@@ -179,7 +181,8 @@ func (s *Server) queryCoverageFiltered(node, rx string, days int, b bbox) ([]cov
 		where = append(where, fmt.Sprintf("rx_at >= $%d", len(args)+1))
 		args = append(args, since)
 	}
-	rows, err := s.db.conn.Query("SELECT lat, lon, snr, rssi, heard_key, rx_at FROM client_receptions WHERE "+strings.Join(where, " AND "), args...)
+	// As in queryCoverageRows, choose the plan using the actual bbox and filters.
+	rows, err := s.db.conn.Query("SELECT lat, lon, snr, rssi, heard_key, rx_at FROM client_receptions WHERE "+strings.Join(where, " AND "), append([]any{pgx.QueryExecModeExec}, args...)...)
 	if err != nil {
 		return nil, err
 	}

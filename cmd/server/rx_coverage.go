@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
+	"github.com/jackc/pgx/v5"
 )
 
 // coverageRow is one raw reception read from client_receptions.
@@ -282,11 +283,14 @@ func (s *Server) queryCoverageRows(pubkey string, b bbox) ([]coverageRow, error)
 		args = append(args, c)
 	}
 	args = append(args, b.MinLat, b.MaxLat, b.MinLon, b.MaxLon)
+	// A cached generic plan can treat a wide bbox as selective and scan the
+	// entire geo index before filtering the heard key. Plan this SELECT with
+	// its actual bounds; Exec still uses server-bound extended-protocol values.
 	rows, err := s.db.conn.Query(`
 		SELECT lat, lon, snr, rssi, heard_key, rx_at
 		FROM client_receptions
 		WHERE heard_key IN (`+sqlPlaceholders(len(cands))+`)
-		  AND lat BETWEEN `+fmt.Sprintf("$%d AND $%d AND lon BETWEEN $%d AND $%d", len(cands)+1, len(cands)+2, len(cands)+3, len(cands)+4), args...)
+		  AND lat BETWEEN `+fmt.Sprintf("$%d AND $%d AND lon BETWEEN $%d AND $%d", len(cands)+1, len(cands)+2, len(cands)+3, len(cands)+4), append([]any{pgx.QueryExecModeExec}, args...)...)
 	if err != nil {
 		return nil, err
 	}
