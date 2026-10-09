@@ -7526,11 +7526,12 @@ func (s *PacketStore) computeAnalyticsTopology(region, area string, window TimeW
 	if region != "" {
 		regionObs = s.resolveRegionObservers(region)
 	}
-	// Use DB 7-day active node count (matches /api/stats totalNodes)
+	// Use DB 7-day active node count (matches /api/stats totalNodes). Only
+	// that count: GetStats also scans transmissions and observations.
 	uniqueNodes := 0
 	if s.db != nil {
-		if stats, err := s.db.GetStats(); err == nil {
-			uniqueNodes = stats.TotalNodes
+		if n, err := s.db.CountActiveNodes(); err == nil {
+			uniqueNodes = n
 		}
 	}
 
