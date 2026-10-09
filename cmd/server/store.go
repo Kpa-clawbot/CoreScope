@@ -9654,6 +9654,48 @@ func (s *PacketStore) computeMultiByteCapability(adopterHashSizes map[string]int
 
 // --- Bulk Health (in-memory) ---
 
+// bulkHealthNode is one nodes-table row for GetBulkHealth.
+type bulkHealthNode struct {
+	pk, name, role string
+	lat, lon       interface{}
+}
+
+// bulkHealthNodes reads the most recently seen nodes for GetBulkHealth,
+// keeping only areaNodes when set. With a region or area filter it reads up
+// to 10000 rows so the caller does not under-fill after its exclusions;
+// otherwise it stops at limit.
+func (s *PacketStore) bulkHealthNodes(limit int, regionFilter bool, areaNodes map[string]bool) ([]bulkHealthNode, error) {
+	filtered := regionFilter || areaNodes != nil
+	queryLimit := limit
+	if filtered {
+		queryLimit = 10000
+	}
+	rows, err := s.db.conn.Query("SELECT public_key, name, role, lat, lon FROM nodes ORDER BY last_seen DESC LIMIT ?", queryLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var nodes []bulkHealthNode
+	for rows.Next() {
+		var pk string
+		var name, role sql.NullString
+		var lat, lon sql.NullFloat64
+		rows.Scan(&pk, &name, &role, &lat, &lon)
+		if areaNodes != nil && !areaNodes[pk] {
+			continue
+		}
+		nodes = append(nodes, bulkHealthNode{
+			pk: pk, name: nullStrVal(name), role: nullStrVal(role),
+			lat: nullFloat(lat), lon: nullFloat(lon),
+		})
+		if !filtered && len(nodes) >= limit {
+			break
+		}
+	}
+	return nodes, nil
+}
+
 func (s *PacketStore) GetBulkHealth(limit int, region, area string) []map[string]interface{} {
 	var areaNodes map[string]bool
 	if area != "" {
@@ -9664,13 +9706,23 @@ func (s *PacketStore) GetBulkHealth(limit int, region, area string) []map[string
 	directHeard := s.loadDirectHeard()
 	nonRelaySet, seenSet := s.canRelaySets()
 
+	// SQL, so before s.mu (#2146). The region filter needs the store, so it
+	// is applied to these rows under the lock below.
+	var regionObs map[string]bool
+	if region != "" {
+		regionObs = s.resolveRegionObservers(region)
+	}
+	nodes, err := s.bulkHealthNodes(limit, regionObs != nil, areaNodes)
+	if err != nil {
+		return []map[string]interface{}{}
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	// Region filtering
 	var regionNodeKeys map[string]bool
 	if region != "" {
-		regionObs := s.resolveRegionObservers(region)
 		if regionObs != nil {
 			regionalHashes := make(map[string]bool)
 			for obsID := range regionObs {
@@ -9694,40 +9746,14 @@ func (s *PacketStore) GetBulkHealth(limit int, region, area string) []map[string
 		}
 	}
 
-	// Get nodes from DB — fetch more when filtering so we don't under-fill after exclusions
-	queryLimit := limit
-	if regionNodeKeys != nil || areaNodes != nil {
-		queryLimit = 10000
-	}
-	rows, err := s.db.conn.Query("SELECT public_key, name, role, lat, lon FROM nodes ORDER BY last_seen DESC LIMIT ?", queryLimit)
-	if err != nil {
-		return []map[string]interface{}{}
-	}
-	defer rows.Close()
-
-	type dbNode struct {
-		pk, name, role string
-		lat, lon       interface{}
-	}
-	var nodes []dbNode
-	for rows.Next() {
-		var pk string
-		var name, role sql.NullString
-		var lat, lon sql.NullFloat64
-		rows.Scan(&pk, &name, &role, &lat, &lon)
-		if regionNodeKeys != nil && !regionNodeKeys[pk] {
-			continue
+	if regionNodeKeys != nil {
+		kept := nodes[:0]
+		for _, n := range nodes {
+			if regionNodeKeys[n.pk] {
+				kept = append(kept, n)
+			}
 		}
-		if areaNodes != nil && !areaNodes[pk] {
-			continue
-		}
-		nodes = append(nodes, dbNode{
-			pk: pk, name: nullStrVal(name), role: nullStrVal(role),
-			lat: nullFloat(lat), lon: nullFloat(lon),
-		})
-		if regionNodeKeys == nil && areaNodes == nil && len(nodes) >= limit {
-			break
-		}
+		nodes = kept
 	}
 	// Only cap to limit in the global (no-filter) case; area/region returns full filtered set
 	if regionNodeKeys != nil && areaNodes == nil && len(nodes) > limit {
