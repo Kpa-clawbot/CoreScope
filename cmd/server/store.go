@@ -262,6 +262,9 @@ type PacketStore struct {
 	regionObsMu        sync.Mutex
 	regionObsCache     map[string]map[string]bool
 	regionObsCacheTime time.Time
+	// Regions looked up since the last background refresh; that refresh
+	// re-queries only these.
+	regionObsUsed map[string]bool
 	// Cached area key → node pubkey set (30s per-key TTL)
 	areaNodeMu         sync.RWMutex
 	areaNodeCache      map[string]map[string]bool
@@ -276,6 +279,16 @@ type PacketStore struct {
 	nodeCache     []nodeInfo
 	nodePM        *prefixMap
 	nodeCacheTime time.Time
+	// nodeCacheGen counts InvalidateNodeCache calls, guarded by cacheMu. A
+	// background rebuild stores its result only if the generation it started
+	// under is still current.
+	nodeCacheGen uint64
+	// cacheRefresh limits the node, region-observer and area-node caches to
+	// one background refresh per key (#2146).
+	cacheRefresh cacheRefresher
+	// cacheLoadHook, when set, runs right before one of those caches queries
+	// SQL. Tests only.
+	cacheLoadHook func(kind string)
 	// Per-store dedupe set for one-shot schema-degradation warnings. Field
 	// (not package-level) so each test gets a fresh state — see #1199 item 5.
 	schemaDegradationLogged sync.Map
@@ -3705,50 +3718,103 @@ func (s *PacketStore) transmissionsForObserver(observerIDs string, from []*Store
 	return result
 }
 
+// regionObsTTL is how long the region → observer cache is served before one
+// background refresh re-queries it.
+const regionObsTTL = 30 * time.Second
+
 // resolveRegionObservers returns a set of observer IDs for a given IATA region.
-// Results are cached for 30 seconds to avoid repeated DB queries.
-// Uses its own mutex (regionObsMu) so callers holding s.mu won't deadlock.
+// Callers often hold s.mu, so a cache past its TTL is served as-is while one
+// background refresh re-queries it (#2146). A region seen for the first time
+// is queried inline, without holding regionObsMu.
 func (s *PacketStore) resolveRegionObservers(region string) map[string]bool {
 	s.regionObsMu.Lock()
-	defer s.regionObsMu.Unlock()
+	m, cached := s.regionObsCache[region]
+	stale := time.Since(s.regionObsCacheTime) >= regionObsTTL
+	s.markRegionObsUsed(region)
+	s.regionObsMu.Unlock()
 
-	if s.regionObsCache != nil && time.Since(s.regionObsCacheTime) < 30*time.Second {
-		if m, ok := s.regionObsCache[region]; ok {
-			return m
+	if cached {
+		if stale {
+			s.cacheRefresh.start("regionObs", s.refreshRegionObs)
 		}
-		return s.fetchAndCacheRegionObs(region)
-	}
-	// Cache expired — rebuild.
-	s.regionObsCache = make(map[string]map[string]bool)
-	s.regionObsCacheTime = time.Now()
-
-	// Fetch for the requested region and cache it.
-	return s.fetchAndCacheRegionObs(region)
-}
-
-// fetchAndCacheRegionObs fetches observer IDs for a region from the DB and stores in cache.
-// Caller must hold regionObsMu.
-func (s *PacketStore) fetchAndCacheRegionObs(region string) map[string]bool {
-	if m, ok := s.regionObsCache[region]; ok {
 		return m
 	}
+
+	m = s.queryRegionObs(region)
+	s.regionObsMu.Lock()
+	if s.regionObsCache == nil {
+		s.regionObsCache = make(map[string]map[string]bool)
+		s.regionObsCacheTime = time.Now()
+	}
+	s.regionObsCache[region] = m
+	s.regionObsMu.Unlock()
+	return m
+}
+
+// markRegionObsUsed records a lookup so the next refresh re-queries the
+// region. Caller must hold regionObsMu.
+func (s *PacketStore) markRegionObsUsed(region string) {
+	if s.regionObsUsed == nil {
+		s.regionObsUsed = make(map[string]bool)
+	}
+	s.regionObsUsed[region] = true
+}
+
+// refreshRegionObs re-queries the regions looked up since the previous
+// refresh and replaces the cache with them. Regions nobody asked for are
+// dropped, which bounds the cache: the region comes from the query string.
+func (s *PacketStore) refreshRegionObs() {
+	s.regionObsMu.Lock()
+	regions := make([]string, 0, len(s.regionObsUsed))
+	for r := range s.regionObsUsed {
+		regions = append(regions, r)
+	}
+	s.regionObsUsed = nil
+	s.regionObsMu.Unlock()
+
+	fresh := make(map[string]map[string]bool, len(regions))
+	for _, r := range regions {
+		fresh[r] = s.queryRegionObs(r)
+	}
+
+	s.regionObsMu.Lock()
+	// Regions first looked up while this refresh ran keep their entry.
+	for r := range s.regionObsUsed {
+		if _, ok := fresh[r]; !ok {
+			if m, ok := s.regionObsCache[r]; ok {
+				fresh[r] = m
+			}
+		}
+	}
+	s.regionObsCache = fresh
+	s.regionObsCacheTime = time.Now()
+	s.regionObsMu.Unlock()
+}
+
+// queryRegionObs loads the observer IDs for a region from SQLite. It returns
+// nil when the region has no observers or the query fails.
+func (s *PacketStore) queryRegionObs(region string) map[string]bool {
+	s.beforeCacheLoad("regionObs")
 	ids, err := s.db.GetObserverIdsForRegion(region)
 	if err != nil || len(ids) == 0 {
-		s.regionObsCache[region] = nil
 		return nil
 	}
 	m := make(map[string]bool, len(ids))
 	for _, id := range ids {
 		m[id] = true
 	}
-	s.regionObsCache[region] = m
 	return m
 }
 
+// areaNodeTTL is how long an area's node set is served before one background
+// refresh re-queries it.
+const areaNodeTTL = 30 * time.Second
+
 // resolveAreaNodes returns a set of node pubkeys whose GPS coordinates fall
 // inside the named area polygon. Returns nil if the area key is not in config.
-// Results are cached per-key for 30 seconds. Uses its own RWMutex so callers
-// holding s.mu won't deadlock.
+// Results are cached per key. Callers often hold s.mu, so an entry past its
+// TTL is served as-is while one background refresh re-queries it (#2146).
+// Uses its own RWMutex so callers holding s.mu won't deadlock.
 func (s *PacketStore) resolveAreaNodes(areaKey string) map[string]bool {
 	if s.config == nil || s.config.Areas == nil {
 		return nil
@@ -3758,16 +3824,23 @@ func (s *PacketStore) resolveAreaNodes(areaKey string) map[string]bool {
 		return nil
 	}
 
-	// Fast path: serve from cache if the per-key TTL is still valid.
 	s.areaNodeMu.RLock()
-	if t, ok := s.areaNodeCacheTimes[areaKey]; ok && time.Since(t) < 30*time.Second {
-		m := s.areaNodeCache[areaKey]
-		s.areaNodeMu.RUnlock()
+	t, cached := s.areaNodeCacheTimes[areaKey]
+	m := s.areaNodeCache[areaKey]
+	s.areaNodeMu.RUnlock()
+	if cached {
+		if time.Since(t) >= areaNodeTTL {
+			s.cacheRefresh.start("areaNodes:"+areaKey, func() { s.loadAreaNodes(areaKey, entry) })
+		}
 		return m
 	}
-	s.areaNodeMu.RUnlock()
+	return s.loadAreaNodes(areaKey, entry)
+}
 
-	// Slow path: query the DB outside any lock, then write back under Lock.
+// loadAreaNodes queries the node set for an area outside any lock and stores
+// it under areaNodeMu.
+func (s *PacketStore) loadAreaNodes(areaKey string, entry AreaEntry) map[string]bool {
+	s.beforeCacheLoad("areaNodes")
 	pks, err := s.db.GetNodePubkeysInArea(entry)
 	var m map[string]bool
 	if err == nil && len(pks) > 0 {
@@ -3779,7 +3852,7 @@ func (s *PacketStore) resolveAreaNodes(areaKey string) map[string]bool {
 
 	s.areaNodeMu.Lock()
 	// Re-check in case another goroutine already refreshed while we queried.
-	if t, ok := s.areaNodeCacheTimes[areaKey]; !ok || time.Since(t) >= 30*time.Second {
+	if t, ok := s.areaNodeCacheTimes[areaKey]; !ok || time.Since(t) >= areaNodeTTL {
 		s.areaNodeCache[areaKey] = m
 		s.areaNodeCacheTimes[areaKey] = time.Now()
 	} else {
@@ -6978,17 +7051,36 @@ func buildPrefixMap(nodes []nodeInfo) *prefixMap {
 	return pm
 }
 
-// getCachedNodesAndPM returns cached node list and prefix map, rebuilding if stale.
-// Must be called with s.mu held (RLock or Lock).
+// nodeCacheTTL is how long getCachedNodesAndPM serves its node list before it
+// starts a background rebuild.
+const nodeCacheTTL = 30 * time.Second
+
+// getCachedNodesAndPM returns the cached node list and prefix map. Callers
+// often hold s.mu, so a cache past its TTL is served as-is while one
+// background rebuild runs the SQL (#2146). Only a cache that was never built
+// or was invalidated is rebuilt inline.
 func (s *PacketStore) getCachedNodesAndPM() ([]nodeInfo, *prefixMap) {
 	s.cacheMu.Lock()
-	if s.nodeCache != nil && time.Since(s.nodeCacheTime) < 30*time.Second {
-		nodes, pm := s.nodeCache, s.nodePM
-		s.cacheMu.Unlock()
-		return nodes, pm
-	}
+	nodes, pm, builtAt := s.nodeCache, s.nodePM, s.nodeCacheTime
 	s.cacheMu.Unlock()
 
+	if builtAt.IsZero() {
+		return s.rebuildNodeCache()
+	}
+	if time.Since(builtAt) >= nodeCacheTTL {
+		s.cacheRefresh.start("nodes", func() { s.rebuildNodeCache() })
+	}
+	return nodes, pm
+}
+
+// rebuildNodeCache loads the node list and prefix map from SQLite and stores
+// them, unless InvalidateNodeCache ran while it was loading.
+func (s *PacketStore) rebuildNodeCache() ([]nodeInfo, *prefixMap) {
+	s.cacheMu.Lock()
+	gen := s.nodeCacheGen
+	s.cacheMu.Unlock()
+
+	s.beforeCacheLoad("nodes")
 	nodes := s.getAllNodes()
 	pm := buildPrefixMap(nodes)
 	// Issue #1290: exclude observers that advertised `repeat:off` from
@@ -7004,20 +7096,24 @@ func (s *PacketStore) getCachedNodesAndPM() ([]nodeInfo, *prefixMap) {
 	}
 
 	s.cacheMu.Lock()
-	s.nodeCache = nodes
-	s.nodePM = pm
-	s.nodeCacheTime = time.Now()
+	if s.nodeCacheGen == gen {
+		s.nodeCache = nodes
+		s.nodePM = pm
+		s.nodeCacheTime = time.Now()
+	}
 	s.cacheMu.Unlock()
 
 	return nodes, pm
 }
 
-// InvalidateNodeCache forces the next getCachedNodesAndPM call to rebuild.
+// InvalidateNodeCache forces the next getCachedNodesAndPM call to rebuild
+// inline.
 func (s *PacketStore) InvalidateNodeCache() {
 	s.cacheMu.Lock()
 	s.nodeCache = nil
 	s.nodePM = nil
 	s.nodeCacheTime = time.Time{}
+	s.nodeCacheGen++
 	s.cacheMu.Unlock()
 }
 
