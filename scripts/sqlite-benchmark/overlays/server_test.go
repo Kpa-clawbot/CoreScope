@@ -22,6 +22,7 @@ import (
 
 type benchCorpusInfo struct {
 	Node      string `json:"node"`
+	PathsNode string `json:"paths_node"`
 	Dense     string `json:"dense_observer"`
 	Sparse    string `json:"sparse_observer"`
 	NewPacket string `json:"new_packet"`
@@ -68,7 +69,7 @@ func TestCoreScopeBenchmarkServer(t *testing.T) {
 }
 
 func TestCoreScopeBenchmarkControlConcurrentEndpoints(t *testing.T) {
-	info := benchCorpusInfo{Node: strings.Repeat("a", 64), Dense: "dense", Sparse: "sparse", NewPacket: "new", OldPacket: "old"}
+	info := benchCorpusInfo{Node: strings.Repeat("a", 64), PathsNode: strings.Repeat("b", 64), Dense: "dense", Sparse: "sparse", NewPacket: "new", OldPacket: "old"}
 	endpoints := benchEndpoints(benchConfig{Epoch: 1791451200}, info)
 	if len(endpoints) != 100 {
 		t.Fatalf("workload weight=%d", len(endpoints))
@@ -77,6 +78,9 @@ func TestCoreScopeBenchmarkControlConcurrentEndpoints(t *testing.T) {
 		found := false
 		for _, endpoint := range endpoints {
 			if endpoint.Class == want {
+				if want == "paths" && endpoint.Path != "/api/nodes/"+info.PathsNode+"/paths" {
+					t.Fatal("paths workload did not use the verified corpus target")
+				}
 				found = true
 			}
 		}
@@ -177,7 +181,7 @@ func benchEndpoints(c benchConfig, info benchCorpusInfo) []benchEndpoint {
 		{15, []benchEndpoint{{"channels", "/api/channels"}, {"messages_0", "/api/channels/%23bench-00/messages?limit=50&offset=0"}, {"messages_1000", "/api/channels/%23bench-00/messages?limit=50&offset=1000"}}},
 		{5, []benchEndpoint{{"observers", "/api/observers"}}},
 		{10, []benchEndpoint{{"metrics_dense_24h", "/api/observers/" + info.Dense + "/metrics?since=" + since24 + "&until=" + until + "&resolution=5m"}, {"metrics_sparse_7d", "/api/observers/" + info.Sparse + "/metrics?since=" + since7 + "&until=" + until + "&resolution=1h"}}},
-		{20, []benchEndpoint{{"paths", "/api/nodes/" + info.Node + "/paths"}, {"reach", "/api/nodes/" + info.Node + "/reach"}, {"neighbors", "/api/nodes/" + info.Node + "/neighbors"}, {"rx_coverage", "/api/nodes/" + info.Node + "/rx-coverage?bbox=19,29,22,32&z=14"}}},
+		{20, []benchEndpoint{{"paths", "/api/nodes/" + info.PathsNode + "/paths"}, {"reach", "/api/nodes/" + info.Node + "/reach"}, {"neighbors", "/api/nodes/" + info.Node + "/neighbors"}, {"rx_coverage", "/api/nodes/" + info.Node + "/rx-coverage?bbox=19,29,22,32&z=14"}}},
 		{15, []benchEndpoint{{"packets_memory", "/api/packets?limit=50"}, {"packet_detail_memory", "/api/packets/" + info.NewPacket}, {"packet_detail_sql", "/api/packets/" + info.OldPacket}}},
 		{10, []benchEndpoint{{"analytics_rf", "/api/analytics/rf"}, {"analytics_topology", "/api/analytics/topology"}, {"analytics_channels", "/api/analytics/channels"}, {"analytics_rf_filtered", "/api/analytics/rf?region=AAA"}}},
 		{5, []benchEndpoint{{"stats", "/api/stats"}, {"healthz", "/api/healthz"}}},

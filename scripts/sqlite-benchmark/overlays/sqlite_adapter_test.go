@@ -45,6 +45,7 @@ func TestCoreScopeBenchmarkSmallCorpus(t *testing.T) {
 	if invalid != 0 {
 		t.Fatalf("%d fractional scores would make the unchanged baseline silently discard corpus rows", invalid)
 	}
+	assertBenchPathCoverage(t, c, db)
 	// The handler returns void, so prove its durable effects rather than
 	// treating delivery to the callback as a successful ingestion.
 	db.Close()
@@ -101,6 +102,40 @@ func TestCoreScopeBenchmarkNullableObservationIdentity(t *testing.T) {
 	if duplicateKeys != 0 {
 		t.Fatalf("%d generated observer/path keys would be dropped by the unchanged upstream loader", duplicateKeys)
 	}
+	assertBenchPathCoverage(t, c, db)
+}
+
+// Check the generated data independently of the generator's counters. Full and
+// chunked loading can visit equally long observations in opposite ID orders.
+// Both canonical choices need actual retained routes for the requested node.
+func assertBenchPathCoverage(t *testing.T, c benchConfig, db *sql.DB) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(c.Output, "corpus.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var info struct {
+		Node      string `json:"node"`
+		PathsNode string `json:"paths_node"`
+	}
+	if err := json.Unmarshal(data, &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.PathsNode == "" {
+		info.PathsNode = info.Node
+	}
+	var first, last int
+	err = db.QueryRow(`WITH ranked AS (
+		SELECT json_extract(o.resolved_path,'$[0]') AS pubkey,
+		row_number() OVER (PARTITION BY t.id ORDER BY json_array_length(o.path_json) DESC,o.id ASC) AS first_rank,
+		row_number() OVER (PARTITION BY t.id ORDER BY json_array_length(o.path_json) DESC,o.id DESC) AS last_rank
+		FROM observations o JOIN transmissions t ON t.id=o.transmission_id
+		WHERE o.resolved_path IS NOT NULL AND json_array_length(o.path_json)>0 AND t.first_seen>?
+	) SELECT COALESCE(SUM(first_rank=1),0),COALESCE(SUM(last_rank=1),0) FROM ranked WHERE pubkey=?`,
+		time.Unix(c.Epoch-7*86400, 0).UTC().Format(time.RFC3339), info.PathsNode).Scan(&first, &last)
+	if err != nil || first == 0 || last == 0 {
+		t.Fatalf("paths target has no retained canonical route for a load order: first=%d last=%d err=%v", first, last, err)
+	}
 }
 
 func benchOpen(c benchConfig) (*Store, error) { return OpenStore(c.SQLite) }
@@ -147,6 +182,10 @@ func benchExplain(s *Store, query string, args ...any) (any, error) {
 	return result, rows.Err()
 }
 
+func benchNodeRole(index int) string {
+	return [...]string{"repeater", "companion", "room", "sensor"}[index%4]
+}
+
 func benchPrepare(c benchConfig) error {
 	if _, e := os.Stat(c.SQLite); !os.IsNotExist(e) {
 		return fmt.Errorf("corpus path must be new")
@@ -166,7 +205,7 @@ func benchPrepare(c benchConfig) error {
 	stamp := time.Unix(c.Epoch, 0).UTC().Format(time.RFC3339)
 	exec := func(q string, args ...any) error { _, e := tx.Exec(q, args...); return e }
 	for i, pk := range f.public {
-		role := []string{"repeater", "companion", "room", "sensor"}[i%4]
+		role := benchNodeRole(i)
 		if e := exec(`INSERT INTO nodes(public_key,name,role,lat,lon,first_seen,last_seen,advert_count) VALUES(?,?,?,?,?,?,?,0)`, pk, fmt.Sprintf("Synthetic %04d", i), role, 20+float64(i%2000)/10000, 30+float64(i%2000)/10000, stamp, stamp); e != nil {
 			return e
 		}
@@ -192,6 +231,7 @@ func benchPrepare(c benchConfig) error {
 	}
 	defer evidence.Close()
 	var observationCount int64
+	firstPaths, lastPaths := make(map[string]int), make(map[string]int)
 	countsByDay := make([]int, c.Shape.Days)
 	var newest, oldest string
 	for i := 0; i < c.Shape.Transmissions; i++ {
@@ -206,6 +246,7 @@ func benchPrepare(c benchConfig) error {
 		}
 		bits := packetpath.AdvertRouteEvidence(p.RawHex)
 		observationKeys := make(map[string]bool, count)
+		longestBytes, firstPath, lastPath := -1, "", ""
 		for o := 0; o < count; o++ {
 			generated, e := f.observation(i, o, at, observationKeys)
 			if e != nil {
@@ -217,15 +258,30 @@ func benchPrepare(c benchConfig) error {
 				snr = nil
 			}
 			var resolved any
+			var resolvedPK string
 			if i%3 != 0 && seen.PathJSON != "[]" {
-				b, _ := json.Marshal([]string{f.public[(i+generated.PathVariant*7+1)%len(f.public)]})
+				resolvedPK = f.public[(i+generated.PathVariant*7+1)%len(f.public)]
+				b, _ := json.Marshal([]string{resolvedPK})
 				resolved = string(b)
+			}
+			// Corpus variants keep one prefix width per transmission. JSON
+			// length therefore orders hop counts without decoding the path again.
+			if resolvedPK != "" {
+				if size := len(seen.PathJSON); size > longestBytes {
+					longestBytes, firstPath, lastPath = size, resolvedPK, resolvedPK
+				} else if size == longestBytes {
+					lastPath = resolvedPK
+				}
 			}
 			if _, e = observation.Exec(i+1, observer, "rx", snr, -100.5+float64(o%25), p.Score, seen.PathJSON, at+int64(o), seen.RawHex, resolved); e != nil {
 				return e
 			}
 			observationCount++
 			bits |= packetpath.AdvertRouteEvidence(seen.RawHex)
+		}
+		if at > c.Epoch-7*86400 && firstPath != "" {
+			firstPaths[firstPath]++
+			lastPaths[lastPath]++
 		}
 		if p.PayloadType == 4 {
 			for _, bit := range []uint8{1, 2} {
@@ -326,7 +382,21 @@ func benchPrepare(c benchConfig) error {
 	if _, e := s.db.Exec(`ANALYZE`); e != nil {
 		return e
 	}
-	summary := map[string]any{"transmissions": c.Shape.Transmissions, "observations": observationCount, "transmissions_by_day": countsByDay, "nodes": c.Shape.Nodes, "observers": c.Shape.Observers, "channels": 20, "rx_rows": c.Shape.Transmissions, "dense_observer": f.public[0], "sparse_observer": f.public[c.Shape.Observers-1], "node": f.public[0], "new_packet": newest, "old_packet": oldest, "epoch": c.Epoch, "protocol_source": "meshcore-dev/MeshCore@a366955cb2f67b8e6842d4f00d2b6a554dddd88a"}
+	// The B fanout recipe can leave node zero absent from every canonical
+	// best observation even though it occurs in other stored observations.
+	// Select a deterministic repeater with retained routes under both tie
+	// orders used by full/chunked loading. Existing reach/RX targets stay fixed.
+	pathsNode := ""
+	for i, pk := range f.public {
+		if benchNodeRole(i) == "repeater" && firstPaths[pk] > 0 && lastPaths[pk] > 0 {
+			pathsNode = pk
+			break
+		}
+	}
+	if pathsNode == "" {
+		return fmt.Errorf("corpus has no retained repeater paths under both observation tie orders")
+	}
+	summary := map[string]any{"transmissions": c.Shape.Transmissions, "observations": observationCount, "transmissions_by_day": countsByDay, "nodes": c.Shape.Nodes, "observers": c.Shape.Observers, "channels": 20, "rx_rows": c.Shape.Transmissions, "dense_observer": f.public[0], "sparse_observer": f.public[c.Shape.Observers-1], "node": f.public[0], "paths_node": pathsNode, "paths_first_order_count": firstPaths[pathsNode], "paths_last_order_count": lastPaths[pathsNode], "new_packet": newest, "old_packet": oldest, "epoch": c.Epoch, "protocol_source": "meshcore-dev/MeshCore@a366955cb2f67b8e6842d4f00d2b6a554dddd88a"}
 	b, e := json.MarshalIndent(summary, "", "  ")
 	if e != nil {
 		return e

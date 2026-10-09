@@ -88,6 +88,13 @@ baseline's actual schema, decoder, ingestion APIs and SQLite adapter. The
 firmware reference is MeshCore `a366955cb2f67b8e6842d4f00d2b6a554dddd88a`.
 Protocol construction and encryption reuse the existing tested helpers.
 
+The paths request uses a separately recorded `paths_node`: the first synthetic
+repeater with retained canonical longest paths under both ascending and
+descending observation-ID tie orders. Small native S/B controls verify this
+coverage against the generated SQL data. Reach and RX coverage retain their
+original node target. This avoids measuring empty path responses when fanout
+and loading order select a different representative observation.
+
 B/L fanouts are 50%×4, 20%×22, 20%×23 and 10%×50 (mean 16). Nullable observers,
 fractional signal values, integral scores, and one-/two-/three-byte hop hashes
 are included. Observation identities are unique under both SQLite and the
