@@ -2332,8 +2332,8 @@ func TestSubpathPrecomputedIndex(t *testing.T) {
 	}
 
 	// After Load(), the precomputed index must be populated.
-	if len(store.spIndex) == 0 {
-		t.Fatal("expected spIndex to be populated after Load()")
+	if len(store.spTxIndex) == 0 {
+		t.Fatal("expected spTxIndex to be populated after Load()")
 	}
 	if store.spTotalPaths == 0 {
 		t.Fatal("expected spTotalPaths > 0 after Load()")
@@ -2349,11 +2349,11 @@ func TestSubpathPrecomputedIndex(t *testing.T) {
 		"eeff,0011,2233": 1,
 	}
 	for key, want := range expectedRaw {
-		got, ok := store.spIndex[key]
+		txs, ok := store.spTxIndex[key]
 		if !ok {
-			t.Errorf("expected spIndex[%q] to exist", key)
-		} else if got != want {
-			t.Errorf("spIndex[%q] = %d, want %d", key, got, want)
+			t.Errorf("expected spTxIndex[%q] to exist", key)
+		} else if got := len(txs); got != want {
+			t.Errorf("len(spTxIndex[%q]) = %d, want %d", key, got, want)
 		}
 	}
 	if store.spTotalPaths != 3 {
@@ -2389,20 +2389,16 @@ func TestSubpathTxIndexPopulated(t *testing.T) {
 		t.Fatal("indexes never became ready")
 	}
 
-	// spTxIndex must be populated alongside spIndex
+	// spTxIndex must be populated after Load()
 	if len(store.spTxIndex) == 0 {
 		t.Fatal("expected spTxIndex to be populated after Load()")
 	}
 
-	// Every key in spIndex must also exist in spTxIndex with matching count
-	for key, count := range store.spIndex {
-		txs, ok := store.spTxIndex[key]
-		if !ok {
-			t.Errorf("spTxIndex missing key %q that exists in spIndex", key)
-			continue
-		}
-		if len(txs) != count {
-			t.Errorf("spTxIndex[%q] has %d txs, spIndex count is %d", key, len(txs), count)
+	// len(spTxIndex[key]) is the subpath's count, so no key may be kept
+	// with an empty transaction list.
+	for key, txs := range store.spTxIndex {
+		if len(txs) == 0 {
+			t.Errorf("spTxIndex[%q] is empty; empty keys must be deleted", key)
 		}
 	}
 

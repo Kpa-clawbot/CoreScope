@@ -19,7 +19,7 @@ func makeTestStore(count int, startTime time.Time, intervalMin int) *PacketStore
 		byNode:        make(map[string][]*StoreTx),
 		nodeHashes:    make(map[string]map[string]bool),
 		byPayloadType: make(map[int][]*StoreTx),
-		spIndex:       make(map[string]int),
+		spTxIndex:     make(map[string][]*StoreTx),
 		distHops:      make([]distHopRecord, 0),
 		distPaths:     make([]distPathRecord, 0),
 		rfCache:       make(map[string]*cachedResult),
@@ -84,7 +84,7 @@ func makeTestStore(count int, startTime time.Time, intervalMin int) *PacketStore
 		store.distPaths = append(store.distPaths, distPathRecord{tx: tx, Hash: hash})
 
 		// Subpath index
-		addTxToSubpathIndex(store.spIndex, tx)
+		addTxToSubpathIndex(store.spTxIndex, tx)
 
 		// Track bytes for self-accounting
 		store.trackedBytes += rechargeTx(tx)
@@ -261,7 +261,7 @@ func TestEvictStale_CleansResolvedPathNodeIndexes(t *testing.T) {
 		byNode:               make(map[string][]*StoreTx),
 		nodeHashes:           make(map[string]map[string]bool),
 		byPayloadType:        make(map[int][]*StoreTx),
-		spIndex:              make(map[string]int),
+		spTxIndex:            make(map[string][]*StoreTx),
 		distHops:             make([]distHopRecord, 0),
 		distPaths:            make([]distPathRecord, 0),
 		rfCache:              make(map[string]*cachedResult),
