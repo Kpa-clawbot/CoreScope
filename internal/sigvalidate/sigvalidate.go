@@ -25,3 +25,16 @@ func ValidateAdvert(pubKey, signature []byte, timestamp uint32, appdata []byte) 
 
 	return ed25519.Verify(ed25519.PublicKey(pubKey), message, signature), nil
 }
+
+// VerifyMessage verifies an Ed25519 signature over an arbitrary message.
+// pubKey must be 32 bytes, signature 64 bytes. Companion linking uses it:
+// a companion signs a server challenge with its identity key.
+func VerifyMessage(pubKey, signature, message []byte) (bool, error) {
+	if len(pubKey) != 32 {
+		return false, fmt.Errorf("invalid pubkey length: %d", len(pubKey))
+	}
+	if len(signature) != 64 {
+		return false, fmt.Errorf("invalid signature length: %d", len(signature))
+	}
+	return ed25519.Verify(ed25519.PublicKey(pubKey), message, signature), nil
+}
