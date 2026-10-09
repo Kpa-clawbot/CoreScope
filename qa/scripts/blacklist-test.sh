@@ -15,10 +15,12 @@
 #   TARGET_CONFIG_PATH    — absolute path to config.json on the target
 #   TARGET_CONTAINER      — docker container name on the target
 # Optional env:
+#   CORESCOPE_DB_BACKEND   — target's selected backend: sqlite (default) or postgres
+#   TARGET_DB_PATH        — selected SQLite path on the target for the native reader
 #   CORESCOPE_READER_DATABASE_URL — private local PostgreSQL reader URL for §10.2
 #   PGSERVICE / PGDATABASE — alternatively configure private native libpq settings
 #   CORESCOPE_QA_PYTHON   — Python 3 executable for URL parsing (default python3)
-#   ADMIN_API_TOKEN       — if /api/admin/transmissions exists, use it instead of the PostgreSQL probe
+#   ADMIN_API_TOKEN       — if /api/admin/transmissions exists, use it instead of the DB probe
 #                            (read from env, not argv — never appears in ps)
 #   CURL_TIMEOUT          — per-request curl timeout, seconds (default 60)
 #   RESTART_WAIT_S        — max wait for /api/stats after restart (default 120)
@@ -29,9 +31,9 @@
 #   hide-failed    → blacklisted pubkey still surfaced via API (§10.1 fail)
 #   retain-failed  → no transmissions.from_pubkey rows (ADVERTs) for the
 #                    blacklisted pubkey in the DB (§10.2 fail), or the
-#                    §10.2 probe cannot verify a ready, restricted PostgreSQL
-#                    reader. Native parameter binding is mandatory; there is no
-#                    interpolated SQL or SQLite runtime fallback.
+#                    §10.2 probe cannot verify its selected native reader.
+#                    Native parameter binding is mandatory; neither an
+#                    interpolated query nor another backend is a fallback.
 #   teardown-failed→ post-test removal did not restore listing
 #
 # Exit code = number of failures (0 = pass).
@@ -164,6 +166,7 @@ node_visible() {
 # Queries and hex-only parameter values travel on stdin; connection credentials
 # stay in private libpq environment/service settings, never process arguments.
 POSTGRES_RUNNER=""  # local | container | host
+SQL_BACKEND="${CORESCOPE_DB_BACKEND:-sqlite}"
 POSTGRES_PROBE_TOKEN="corescope-probe-ok"
 RETAIN_COUNT=""
 POSTGRES_CONNECT_PY="$(cat "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/postgres-connect.py")"
@@ -171,6 +174,7 @@ POSTGRES_CONNECT_PY="$(cat "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/postgr
 # A psql meta-command argument whose only variable bytes are [0-9a-f]. od -v
 # prevents repeated long values collapsing to '*'. Empty input binds as ''.
 sql_hex_literal() {
+  [[ "$SQL_BACKEND" != sqlite ]] || printf x
   printf "'%s'" "$(printf '%s' "$1" | od -An -v -tx1 | tr -d ' \n')"
 }
 
@@ -198,7 +202,7 @@ BEGIN
 END $qa$;
 SQL
 }
-transmission_count_sql() {
+postgres_transmission_count_sql() {
   postgres_read_guard
   printf '%s\n' "SELECT COUNT(*) FROM transmissions WHERE from_pubkey = lower(convert_from(decode(\$1,'hex'),'UTF8'))"
   printf '\\bind %s\n\\g\nCOMMIT;\n' "$(sql_hex_literal "$1")"
@@ -257,6 +261,73 @@ postgres_error_summary() {
     echo 'Check PostgreSQL 18 client availability and private reader connection settings.' >&2
   fi
 }
+
+# Native SQLite CLI bindings from the original SQLite QA path (#1977). The
+# blob-to-text cast keeps spaces/newlines out of dot-command argument parsing.
+# -readonly forbids persistent writes; .parameter uses only a temporary table.
+SQLITE_ARGS=(-readonly -batch -bail -init /dev/null -noheader -list)
+SQLITE_PROBE_TOKEN="corescope-probe-ok"
+SQLITE_RUNNER=""
+sqlite_transmission_count_sql() {
+  printf '.parameter init\n'
+  printf '.parameter set :pubkey "cast(%s as text)"\n' "$(sql_hex_literal "$1")"
+  printf 'SELECT COUNT(*) FROM transmissions WHERE from_pubkey = lower(:pubkey);\n'
+}
+transmission_count_sql() {
+  case "$SQL_BACKEND" in
+    sqlite) sqlite_transmission_count_sql "$1" ;;
+    postgres) postgres_transmission_count_sql "$1" ;;
+    *) echo 'Unsupported QA database backend' >&2; return 2 ;;
+  esac
+}
+sqlite_probe_sql() {
+  printf '.parameter init\n'
+  printf '.parameter set :probe "cast(%s as text)"\n' "$(sql_hex_literal "$SQLITE_PROBE_TOKEN")"
+  printf 'SELECT :probe;\n'
+}
+resolve_sqlite_runner() {
+  local probe out
+  probe=$(sqlite_probe_sql)
+  SQLITE_RUNNER=""
+  if out=$(ssh_t "docker exec -i $(printf %q "$TARGET_CONTAINER") sqlite3 ${SQLITE_ARGS[*]} :memory:" \
+      <<<"$probe" 2>>"$TMP/sqlite-probe.err" | tr -d '\r') && [[ "$out" == "$SQLITE_PROBE_TOKEN" ]]; then
+    SQLITE_RUNNER=container; return 0
+  fi
+  if out=$(ssh_t "sqlite3 ${SQLITE_ARGS[*]} :memory:" <<<"$probe" 2>>"$TMP/sqlite-probe.err" | tr -d '\r') && [[ "$out" == "$SQLITE_PROBE_TOKEN" ]]; then
+    SQLITE_RUNNER=host; return 0
+  fi
+  return 1
+}
+run_sqlite() {
+  case "$SQLITE_RUNNER" in
+    container) ssh_t "docker exec -i $(printf %q "$TARGET_CONTAINER") sqlite3 ${SQLITE_ARGS[*]} $(printf %q "$TARGET_DB_PATH")" ;;
+    host) ssh_t "sqlite3 ${SQLITE_ARGS[*]} $(printf %q "$TARGET_DB_PATH")" ;;
+    *) echo 'run_sqlite: no runner resolved' >&2; return 127 ;;
+  esac | tr -d '\r'
+}
+read_sqlite_retain_count() {
+  if [[ -z "${TARGET_DB_PATH:-}" ]]; then
+    echo '  ❌ retain-failed: TARGET_DB_PATH is required for the selected SQLite reader'
+    return 1
+  fi
+  if ! resolve_sqlite_runner; then
+    echo '  ❌ retain-failed: no SQLite client able to bind a parameter on the target'
+    cat "$TMP/sqlite-probe.err" >&2
+    return 1
+  fi
+  echo "  SQLite reader runner: $SQLITE_RUNNER"
+  if ! RETAIN_COUNT=$(transmission_count_sql "$TEST_PUBKEY" | run_sqlite 2>"$TMP/sqlite.err"); then
+    echo "  ❌ retain-failed: SQLite query failed via $SQLITE_RUNNER"
+    cat "$TMP/sqlite.err" >&2
+    RETAIN_COUNT=""
+    return 1
+  fi
+  if ! [[ "$RETAIN_COUNT" =~ ^[0-9]+$ ]]; then
+    echo '  ❌ retain-failed: SQLite query did not return one numeric count'
+    RETAIN_COUNT=""
+    return 1
+  fi
+}
 read_retain_count() {
   RETAIN_COUNT=""
   local code
@@ -270,6 +341,11 @@ read_retain_count() {
     if [[ "$RETAIN_COUNT" =~ ^[0-9]+$ ]]; then return 0; fi
     RETAIN_COUNT=""
   fi
+  case "$SQL_BACKEND" in
+    sqlite) read_sqlite_retain_count; return $? ;;
+    postgres) ;;
+    *) echo '  ❌ retain-failed: unsupported QA database backend'; return 1 ;;
+  esac
   if ! resolve_postgres_runner; then
     echo '  ❌ retain-failed: no ready, restricted PostgreSQL reader with native parameter binding'
     postgres_error_summary "$TMP/postgres-probe.err"
@@ -306,7 +382,9 @@ main() {
   TARGET_SSH_KEY="${TARGET_SSH_KEY:-/root/.ssh/id_ed25519}"
   TARGET_CONFIG_PATH="${TARGET_CONFIG_PATH:-}"
   TARGET_CONTAINER="${TARGET_CONTAINER:-}"
+  TARGET_DB_PATH="${TARGET_DB_PATH:-}"
   ADMIN_API_TOKEN="${ADMIN_API_TOKEN:-}"
+  case "$SQL_BACKEND" in sqlite|postgres) ;; *) echo 'error: CORESCOPE_DB_BACKEND must be sqlite or postgres' >&2; exit 2 ;; esac
 
   if [[ -z "$TEST_PUBKEY" || -z "$TARGET_SSH_HOST" || -z "$TARGET_CONFIG_PATH" || -z "$TARGET_CONTAINER" ]]; then
     echo "error: TEST_NODE_PUBKEY, TARGET_SSH_HOST, TARGET_CONFIG_PATH, TARGET_CONTAINER are required" >&2
@@ -332,8 +410,12 @@ main() {
     echo "error: TARGET_CONFIG_PATH must be a sane absolute path" >&2
     exit 2
   fi
-  if [[ -n "${TARGET_DB_PATH:-}" ]]; then
-    echo "error: TARGET_DB_PATH is obsolete; configure a private PostgreSQL reader connection" >&2
+  if [[ "$SQL_BACKEND" == postgres && -n "$TARGET_DB_PATH" ]]; then
+    echo 'error: TARGET_DB_PATH is a SQLite path; configure the selected PostgreSQL reader connection' >&2
+    exit 2
+  fi
+  if [[ -n "$TARGET_DB_PATH" && ! "$TARGET_DB_PATH" =~ ^/[A-Za-z0-9_./-]+$ ]]; then
+    echo 'error: TARGET_DB_PATH must be a sane absolute SQLite path' >&2
     exit 2
   fi
 
