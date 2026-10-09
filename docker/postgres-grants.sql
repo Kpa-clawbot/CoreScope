@@ -9,6 +9,7 @@ GRANT USAGE ON SCHEMA public TO corescope_reader, corescope_writer;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO corescope_reader;
 GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO corescope_reader;
 GRANT SELECT ON corescope_schema TO corescope_writer;
+GRANT SELECT ON packets_v TO corescope_writer;
 SELECT format('GRANT SELECT,INSERT,UPDATE,DELETE ON TABLE %I.%I TO corescope_writer',schemaname,tablename)
 FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE 'corescope\_%' ESCAPE '\' \gexec
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO corescope_writer;
