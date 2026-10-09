@@ -168,46 +168,41 @@ func (s *PacketStore) confirmResolvedPathContains(txID int, pubkey string) bool 
 	return count > 0
 }
 
-// resolvedPathBatchSize bounds the IN list of summarizeStoredResolvedPaths.
+// resolvedPathBatchSize bounds the IN list of loadCanonicalResolvedPaths.
 const resolvedPathBatchSize = 500
 
-// storedPathSummary is what /api/nodes/{pk}/paths needs from a
-// transmission's stored resolved paths.
-type storedPathSummary struct {
-	// mentions: some stored path names the pubkey, by the same rule as
-	// confirmResolvedPathContains (case-insensitive match on the quoted key,
-	// over every observation in the database).
-	mentions bool
-	// found and bestRaw: the stored path bestResolvedPath would pick, still
-	// as JSON. bestLen and bestIdx rank the candidates while rows stream in.
-	found   bool
-	bestRaw string
-	bestLen int
-	bestIdx int
-}
-
-// summarizeStoredResolvedPaths reads the stored resolved_path of every
-// observation of the transmissions in snapshots, one query per
-// resolvedPathBatchSize transmissions, and folds each row into that
-// transmission's summary as it arrives, so at most one path per transmission
-// is kept in memory. It replaces one confirmResolvedPathContains query per
-// index hit and one or two bestResolvedPath lookups per survivor (#2146).
-//
-// The best path follows bestResolvedPath: the observation with the longest
-// path_json in the snapshot that has a non-empty stored path, the earliest in
-// snapshot order on a tie. Must be called without s.mu held.
-func (s *PacketStore) summarizeStoredResolvedPaths(snapshots map[int][]rpObs, pubkey string) (map[int]*storedPathSummary, error) {
-	out := make(map[int]*storedPathSummary, len(snapshots))
-	ids := make([]int, 0, len(snapshots))
-	for id := range snapshots {
-		ids = append(ids, id)
-		out[id] = &storedPathSummary{bestLen: -1}
+// loadCanonicalResolvedPaths returns, per transmission in snapshots, the
+// resolved path bestResolvedPath returns, without bestResolvedPath's one or
+// two queries per transmission (#2146). It reads the stored path of each
+// transmission's longest observation in one query per resolvedPathBatchSize
+// transmissions. A transmission whose longest observation has no usable
+// stored path, or whose batch failed, goes through bestResolvedPath itself,
+// so the answer is the same. Transmissions with no stored path are absent.
+// Must be called without s.mu held.
+func (s *PacketStore) loadCanonicalResolvedPaths(snapshots map[int][]rpObs) map[int][]*string {
+	out := make(map[int][]*string, len(snapshots))
+	longestTx := make(map[int]int, len(snapshots)) // longest observation ID → transmission ID
+	var fallback []int
+	for txID, observations := range snapshots {
+		if len(observations) == 0 {
+			continue
+		}
+		longest, longestLen := observations[0].id, pathLen(observations[0].pathJSON)
+		for _, o := range observations[1:] {
+			if l := pathLen(o.pathJSON); l > longestLen {
+				longest, longestLen = o.id, l
+			}
+		}
+		longestTx[longest] = txID
 	}
-	if s.db == nil || s.db.conn == nil || len(ids) == 0 {
-		return out, nil
+	if s.db == nil || s.db.conn == nil {
+		return out
+	}
+	ids := make([]int, 0, len(longestTx))
+	for id := range longestTx {
+		ids = append(ids, id)
 	}
 	sort.Ints(ids)
-	needle := `"` + strings.ToLower(pubkey) + `"`
 	for start := 0; start < len(ids); start += resolvedPathBatchSize {
 		chunk := ids[start:min(start+resolvedPathBatchSize, len(ids))]
 		args := make([]interface{}, len(chunk))
@@ -215,45 +210,37 @@ func (s *PacketStore) summarizeStoredResolvedPaths(snapshots map[int][]rpObs, pu
 			args[i] = id
 		}
 		s.beforeCacheLoad("resolvedPathBatch")
-		rows, err := s.db.conn.Query(`SELECT transmission_id, id, resolved_path FROM observations
-			WHERE transmission_id IN (?`+strings.Repeat(",?", len(chunk)-1)+`) AND resolved_path IS NOT NULL`, args...)
+		rows, err := s.db.conn.Query(`SELECT id, resolved_path FROM observations WHERE id IN (?`+
+			strings.Repeat(",?", len(chunk)-1)+`)`, args...)
 		if err != nil {
-			return out, err
+			for _, id := range chunk {
+				fallback = append(fallback, longestTx[id])
+			}
+			continue
 		}
 		for rows.Next() {
-			var txID, obsID int
-			var raw string
-			if rows.Scan(&txID, &obsID, &raw) != nil {
+			var obsID int
+			var raw sql.NullString
+			if rows.Scan(&obsID, &raw) != nil || !raw.Valid {
 				continue
 			}
-			sum := out[txID]
-			if sum == nil {
-				continue
-			}
-			if !sum.mentions && strings.Contains(strings.ToLower(raw), needle) {
-				sum.mentions = true
-			}
-			if raw == "" {
-				continue
-			}
-			for idx, o := range snapshots[txID] {
-				if o.id != obsID {
-					continue
-				}
-				l := pathLen(o.pathJSON)
-				if l > sum.bestLen || (l == sum.bestLen && idx < sum.bestIdx) {
-					sum.found, sum.bestRaw, sum.bestLen, sum.bestIdx = true, raw, l, idx
-				}
-				break
+			if rp := unmarshalResolvedPath(raw.String); rp != nil {
+				out[longestTx[obsID]] = rp
 			}
 		}
-		err = rows.Err()
 		rows.Close()
-		if err != nil {
-			return out, err
+		for _, id := range chunk {
+			if _, ok := out[longestTx[id]]; !ok {
+				fallback = append(fallback, longestTx[id])
+			}
 		}
 	}
-	return out, nil
+	for _, txID := range fallback {
+		if rp := s.bestResolvedPath(txID, snapshots[txID]); rp != nil {
+			out[txID] = rp
+		}
+	}
+	return out
 }
 
 // fetchResolvedPathsForTx fetches resolved_path from SQLite for all observations

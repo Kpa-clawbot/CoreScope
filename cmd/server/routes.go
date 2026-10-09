@@ -1939,32 +1939,8 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	}
 	s.store.mu.RUnlock()
 
-	// One batched read of the stored resolved paths serves both the
-	// collision check and the canonical path below (#2146). It replaces one
-	// query per index hit plus one or two per survivor.
-	summaries, sumErr := s.store.summarizeStoredResolvedPaths(rpSnapshots, lowerPK)
-	if sumErr != nil {
-		log.Printf("[paths] stored resolved_path read failed: %v", sumErr)
-	}
-	confirmedBySQL := make(map[int]bool)
-	filtered := candidates[:0]
-	for _, cc := range checks {
-		if cc.inIndex {
-			filtered = append(filtered, cc.tx)
-		} else if cc.hasReverse {
-			// On a failed read keep the candidate, as the per-transmission
-			// check did.
-			if sumErr != nil || summaries[cc.tx.ID].mentions {
-				filtered = append(filtered, cc.tx)
-				confirmedBySQL[cc.tx.ID] = true
-			}
-		}
-		// else: not in index → exclude
-	}
-	candidates = filtered
-
-	// #1278: Use the CANONICAL persisted resolved_path for each surviving
-	// candidate, the one bestResolvedPath returns.
+	// #1278: the CANONICAL persisted resolved_path of each candidate, the one
+	// bestResolvedPath returns, read in batches (#2146).
 	//
 	// Option A from the issue: the packets page renders each tx via
 	// bestResolvedPath. For /api/nodes/{pk}/paths to stay
@@ -1976,22 +1952,28 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	// Falls back to biased re-resolve only when a tx has no persisted
 	// resolved_path (older data / async backfill incomplete); in that case
 	// there's no canonical answer to be consistent with.
-	canonicalRP := make(map[int][]*string, len(candidates))
-	for _, tx := range candidates {
-		sum := summaries[tx.ID]
-		if sum == nil || !sum.found {
-			continue
+	canonicalRP := s.store.loadCanonicalResolvedPaths(rpSnapshots)
+
+	// Collision check for index hits. A candidate with a canonical path needs
+	// none: the aggregation below keeps it only if that path names the node,
+	// and if no stored path names it the canonical one does not either. Only
+	// a hit without a canonical path is checked against SQL, as before.
+	confirmedBySQL := make(map[int]bool)
+	filtered := candidates[:0]
+	for _, cc := range checks {
+		if cc.inIndex {
+			filtered = append(filtered, cc.tx)
+		} else if cc.hasReverse {
+			if _, ok := canonicalRP[cc.tx.ID]; ok {
+				filtered = append(filtered, cc.tx)
+			} else if s.store.confirmResolvedPathContains(cc.tx.ID, lowerPK) {
+				filtered = append(filtered, cc.tx)
+				confirmedBySQL[cc.tx.ID] = true
+			}
 		}
-		rp := unmarshalResolvedPath(sum.bestRaw)
-		if rp == nil {
-			// Unparseable stored JSON: let bestResolvedPath fall back to the
-			// next candidate, as it always has.
-			rp = s.store.bestResolvedPath(tx.ID, rpSnapshots[tx.ID])
-		}
-		if rp != nil {
-			canonicalRP[tx.ID] = rp
-		}
+		// else: not in index → exclude
 	}
+	candidates = filtered
 
 	// Re-acquire read lock for the aggregation phase that reads store data.
 	s.store.mu.RLock()

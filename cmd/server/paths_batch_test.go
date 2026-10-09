@@ -6,11 +6,9 @@ import (
 	"testing"
 )
 
-// #2146: /api/nodes/{pk}/paths read the stored resolved paths with one INSTR
-// query per index hit plus one or two lookups per survivor. The batched
-// summary must give the same answers as those per-transmission functions.
-
-const pathsBatchTarget = "aa11aa11"
+// #2146: /api/nodes/{pk}/paths looked up each candidate's canonical resolved
+// path with bestResolvedPath, one or two queries per transmission. The batched
+// loader must return the same path for every transmission.
 
 func newPathsBatchStore(t *testing.T) (*PacketStore, map[int][]rpObs) {
 	t.Helper()
@@ -66,25 +64,16 @@ func newPathsBatchStore(t *testing.T) (*PacketStore, map[int][]rpObs) {
 	return &PacketStore{db: &DB{conn: conn}}, snapshots
 }
 
-func TestSummarizeStoredResolvedPathsMatchesPerTransmission(t *testing.T) {
+func TestLoadCanonicalResolvedPathsMatchesBestResolvedPath(t *testing.T) {
 	s, snapshots := newPathsBatchStore(t)
-	got, err := s.summarizeStoredResolvedPaths(snapshots, pathsBatchTarget)
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := s.loadCanonicalResolvedPaths(snapshots)
 	for txID, snap := range snapshots {
-		sum := got[txID]
-		wantMention := s.confirmResolvedPathContains(txID, pathsBatchTarget)
-		if sum.mentions != wantMention {
-			t.Errorf("tx %d: mentions = %v, confirmResolvedPathContains = %v", txID, sum.mentions, wantMention)
-		}
 		want := s.bestResolvedPath(txID, snap)
-		var gotRP []*string
-		if sum.found {
-			gotRP = unmarshalResolvedPath(sum.bestRaw)
+		if !reflect.DeepEqual(got[txID], want) {
+			t.Errorf("tx %d: batched %v, bestResolvedPath %v", txID, derefAll(got[txID]), derefAll(want))
 		}
-		if !reflect.DeepEqual(gotRP, want) {
-			t.Errorf("tx %d: best path %v, bestResolvedPath %v", txID, derefAll(gotRP), derefAll(want))
+		if _, present := got[txID]; present != (want != nil) {
+			t.Errorf("tx %d: present in result = %v, want %v", txID, present, want != nil)
 		}
 	}
 }
@@ -99,7 +88,7 @@ func derefAll(rp []*string) []string {
 	return out
 }
 
-func TestSummarizeStoredResolvedPathsBatchesQueries(t *testing.T) {
+func TestLoadCanonicalResolvedPathsBatchesQueries(t *testing.T) {
 	conn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -118,20 +107,51 @@ func TestSummarizeStoredResolvedPathsBatchesQueries(t *testing.T) {
 		snapshots[i] = []rpObs{{i, `["a"]`}}
 	}
 	s := &PacketStore{db: &DB{conn: conn}}
-	queries := 0
+	batched, single := 0, 0
 	s.cacheLoadHook = func(kind string) {
-		if kind == "resolvedPathBatch" {
+		switch kind {
+		case "resolvedPathBatch":
+			batched++
+		case "resolvedPath":
+			single++
+		}
+	}
+	got := s.loadCanonicalResolvedPaths(snapshots)
+	if batched != 3 || single != 0 {
+		t.Errorf("want 3 batched and 0 single queries for %d transmissions, got %d and %d", n, batched, single)
+	}
+	if len(got) != n {
+		t.Errorf("want %d canonical paths, got %d", n, len(got))
+	}
+}
+
+// #2146: an index hit with a canonical path no longer gets the per-
+// transmission SQL collision check; the aggregation decides from the
+// canonical path, which is what it did after that check anyway. Here the
+// longest observation (the canonical one) names A and a shorter one names B:
+// both A and B are index hits, only A is on the canonical path.
+func TestHandleNodePaths_CanonicalPathDecidesIndexHits(t *testing.T) {
+	sc := setupCollisionScenario(t, false)
+	mustExec(t, sc.db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (43, 'BEEF', 'hash_2146', ?)`, sc.recent)
+	mustExec(t, sc.db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)
+		VALUES (43, NULL, '["c0","aa"]', ?, ?)`, sc.recentEpoch, `["`+sc.nodeAPK+`","aaaa0000aaaa0000"]`)
+	mustExec(t, sc.db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)
+		VALUES (43, NULL, '["c0"]', ?, ?)`, sc.recentEpoch-10, `["`+sc.nodeBPK+`"]`)
+	sc.reloadStore(t)
+
+	queries := 0
+	sc.srv.store.cacheLoadHook = func(kind string) {
+		if kind == "resolvedPath" {
 			queries++
 		}
 	}
-	got, err := s.summarizeStoredResolvedPaths(snapshots, pathsBatchTarget)
-	if err != nil {
-		t.Fatal(err)
+	if got := sc.query(t, sc.nodeAPK).TotalTransmissions; got != 1 {
+		t.Errorf("A is on the canonical path: want 1 transmission, got %d", got)
 	}
-	if queries != 3 {
-		t.Errorf("want 3 batched queries for %d transmissions, got %d", n, queries)
+	if got := sc.query(t, sc.nodeBPK).TotalTransmissions; got != 0 {
+		t.Errorf("B is only on a non-canonical observation: want 0 transmissions, got %d", got)
 	}
-	if len(got) != n || !got[n].mentions || !got[n].found {
-		t.Errorf("want every transmission summarised, got %d", len(got))
+	if queries != 0 {
+		t.Errorf("want no per-transmission resolved_path queries, got %d", queries)
 	}
 }
