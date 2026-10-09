@@ -1,6 +1,8 @@
 # Choose, update and recover storage
 
-CoreScope uses **SQLite by default**. PostgreSQL18.6 is optional. Both keep telemetry and accounts separate; the ingestor writes telemetry and the server reads it. Accounts remain at their recorded target while user management is disabled. If a legacy installation never initialized accounts, enabling them is an explicit setup operation: stop writers and run `./manage.sh setup` after editing the account configuration. Restart alone does not invent a missing account database.
+CoreScope uses **SQLite by default**. PostgreSQL 18.6 is optional. Both keep telemetry and accounts separate; the ingestor writes telemetry and the server reads it. Accounts remain at their recorded target while user management is disabled. If a legacy installation never initialized accounts, enabling them is an explicit setup operation: stop writers and run `./manage.sh setup` after editing the account configuration. Restart alone does not invent a missing account database.
+
+Use the [measured backend comparison](performance/optional-backend-b5-2026-10-09.md) to compare latency, resource use and conversion overhead before choosing PostgreSQL.
 
 ## Install
 

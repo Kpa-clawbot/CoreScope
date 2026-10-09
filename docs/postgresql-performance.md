@@ -2,8 +2,8 @@
 
 > Historical measurement of candidate `ce023e0`, before optional backend selection
 > and upstream's #2147 concurrency fix. It does not measure the current dual-backend
-> implementation. Keep these results separate from the new comparison against
-> upstream `3e21b17`.
+> implementation. Keep these results separate from the
+> [optional-backend comparison against upstream `3e21b17`](performance/optional-backend-b5-2026-10-09.md).
 
 The PostgreSQL conversion reduced retention-related ingestion delays in this
 test. Median writes and several reads were slower, and CPU, memory and storage
