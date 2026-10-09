@@ -386,6 +386,21 @@ test('sessions list marks the current device without a logout button', () => {
   assert(h.indexOf('data-sess="2"') !== -1 && h.indexOf('Unknown device') !== -1);
 });
 
+test('device tokens render as CoreDrive RX with a marker and keep their logout button', () => {
+  const env = loadAccount('#/account', () => ({}));
+  const h = env.t.sessionsHtml([
+    { id: 1, kind: 'web', label: '', userAgent: 'Firefox', lastSeenAt: '2026-01-01T00:00:00Z', current: true },
+    { id: 2, kind: 'device', label: 'Pixel <8>', userAgent: 'CoreDriveRX/1.17', lastSeenAt: '2026-01-01T00:00:00Z', current: false },
+    { id: 3, kind: 'device', label: '', userAgent: '', lastSeenAt: '2026-01-01T00:00:00Z', current: false }]);
+  assert(h.indexOf('<li><span>Firefox') !== -1, 'web session changed: ' + h);
+  assert(h.indexOf('CoreDrive RX – Pixel &lt;8&gt;') !== -1, 'no labelled device row: ' + h);
+  assert(h.indexOf('<span>CoreDrive RX <span class="um-chip um-chip-device">') !== -1, 'no unlabelled device row: ' + h);
+  assert(h.indexOf('CoreDriveRX/1.17') === -1, 'a device row shows its user agent instead of its label');
+  assert.strictEqual((h.match(/data-kind="device"/g) || []).length, 2);
+  assert.strictEqual((h.match(/um-chip-device/g) || []).length, 2);
+  assert(h.indexOf('data-sess="2"') !== -1 && h.indexOf('data-sess="3"') !== -1, 'device rows lost their logout button');
+});
+
 test('activate posts token and password, logs in on success', async () => {
   const env = loadAccount('#/account/activate?token=T0K', () => ({ ok: true, status: 200, data: { id: 1, displayName: 'Ann' } }));
   env.t.views.activate({});

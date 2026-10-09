@@ -123,10 +123,16 @@
       submitBtn('Delete my account', true) + msgBox('delMsg') + '</form>');
   }
 
+  // A CoreDrive RX device token (kind "device") shows its label and a marker;
+  // a browser session its user agent. Both are revoked with the same button.
   function sessionsHtml(list) {
     var html = '';
     (list || []).forEach(function (s) {
-      html += '<li><span>' + escapeHtml(s.userAgent || 'Unknown device') + '<br><small>last seen ' + escapeHtml(fmtDate(s.lastSeenAt)) + '</small></span>' +
+      var device = s.kind === 'device';
+      var name = device ? 'CoreDrive RX' + (s.label ? ' – ' + s.label : '') : (s.userAgent || 'Unknown device');
+      html += '<li' + (device ? ' data-kind="device"' : '') + '><span>' + escapeHtml(name) +
+        (device ? ' <span class="um-chip um-chip-device">app</span>' : '') +
+        '<br><small>last seen ' + escapeHtml(fmtDate(s.lastSeenAt)) + '</small></span>' +
         (s.current ? '<span class="um-chip">this device</span>'
                    : '<button type="button" class="account-btn account-btn-secondary" data-sess="' + escapeHtml(String(s.id)) + '">Log out</button>') + '</li>';
     });
