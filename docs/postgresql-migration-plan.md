@@ -1,6 +1,6 @@
 # PostgreSQL conversion plan
 
-Status: approved for implementation; application conversion, migration and benchmark work in progress.
+Status: implemented and validated at `ce023e0d623116fe66987761d06016590f98fb11`. The [operator guide](postgresql-upgrade.md) covers cutover, interruption recovery and rollback. The [performance report](postgresql-performance.md) records the completed five-pair Linux comparison, including regressions and resource limits. Maintainer acceptance of the replacement remains a separate decision.
 
 ## Goal and baseline
 

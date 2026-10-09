@@ -4,6 +4,14 @@ CoreScope uses PostgreSQL for telemetry and optional accounts. The tested databa
 
 Existing SQLite instances need a planned outage. Stop **both** the ingestor and server: the account janitor, sessions, proposals and notification evaluator also write data. MQTT messages arriving during this window may be lost unless the broker and publishers provide a separately verified replay mechanism.
 
+For an existing instance, the upgrade path is:
+
+1. [Stop the old deployment and save its recovery bundle](#preflight-and-recovery).
+2. [Preserve configuration and select the correct source directories](#point-the-new-deployment-at-the-right-files).
+3. [Run the offline import](#import-with-the-application-stopped). On interruption, use the [resume procedure](#interruption-and-resume).
+4. Read the [rollback boundary](#acceptance-and-rollback), then [verify the sources, grant permissions and start](#check-the-retained-source-then-grant-and-start).
+5. Check live ingestion and account access, then [verify native backup recovery](#native-backups-and-restores).
+
 ## Databases and credentials
 
 The supplied deployment creates `corescope_telemetry` and `corescope_accounts` on one PostgreSQL service. They are separate logical databases, with `C` text collation. Runtime URLs must name one host and database; use the default `public` schema for native backups.
