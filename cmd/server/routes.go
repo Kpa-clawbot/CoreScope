@@ -68,6 +68,10 @@ type Server struct {
 	// queries against a 4-connection pool.
 	statsSF singleflight.Group
 
+	// Test-only hook fired each time handleNodes builds a response (not when
+	// one is served from cache). Nil in production. See nodes_response_cache_test.go.
+	nodesComputeHook func()
+
 	// Guards s.cfg.GeoFilter — read by ingest/handler goroutines, written by PUT handler
 	cfgMu sync.RWMutex
 
@@ -1420,6 +1424,9 @@ func (s *Server) handleDecode(w http.ResponseWriter, r *http.Request) {
 // --- Node Handlers ---
 
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
+	if s.nodesComputeHook != nil {
+		s.nodesComputeHook()
+	}
 	q := r.URL.Query()
 	limit := queryLimit(r, 50, s.cfg.ListLimits.NodesMax)
 	offset := queryInt(r, "offset", 0)
