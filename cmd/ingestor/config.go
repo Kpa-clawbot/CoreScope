@@ -164,6 +164,23 @@ func (f *ForeignAdvertConfig) IsDropMode() bool {
 // ClientRxCoverageConfig controls the opt-in mobile client-RX coverage feature.
 type ClientRxCoverageConfig struct {
 	Enabled bool `json:"enabled"`
+	// RequireLinkedCompanion drops every meshcore/client/<pubkey>/...
+	// message whose companion no user linked (linked_companions.go). In
+	// effect only with userManagement.enabled.
+	RequireLinkedCompanion bool `json:"requireLinkedCompanion,omitempty"`
+}
+
+// RequireLinkedCompanionSet reports whether
+// clientRxCoverage.requireLinkedCompanion is set, whatever userManagement
+// says (startup uses it to warn when the setting is ignored).
+func (c *Config) RequireLinkedCompanionSet() bool {
+	return c.ClientRxCoverage != nil && c.ClientRxCoverage.RequireLinkedCompanion
+}
+
+// RequireLinkedCompanion reports whether the linked-only filter is in
+// effect: the setting and userManagement.enabled both on.
+func (c *Config) RequireLinkedCompanion() bool {
+	return c.RequireLinkedCompanionSet() && c.UserManagement != nil && c.UserManagement.Enabled
 }
 
 // ClientRxCoverageEnabled reports whether the opt-in mobile client-RX coverage
