@@ -15,8 +15,10 @@
 #   TARGET_CONFIG_PATH    — absolute path to config.json on the target
 #   TARGET_CONTAINER      — docker container name on the target
 # Optional env:
-#   TARGET_DB_PATH        — sqlite db path on the target (for §10.2 sqlite probe)
-#   ADMIN_API_TOKEN       — if /api/admin/transmissions exists, use it instead of ssh+sqlite
+#   CORESCOPE_READER_DATABASE_URL — private local PostgreSQL reader URL for §10.2
+#   PGSERVICE / PGDATABASE — alternatively configure private native libpq settings
+#   CORESCOPE_QA_PYTHON   — Python 3 executable for URL parsing (default python3)
+#   ADMIN_API_TOKEN       — if /api/admin/transmissions exists, use it instead of the PostgreSQL probe
 #                            (read from env, not argv — never appears in ps)
 #   CURL_TIMEOUT          — per-request curl timeout, seconds (default 60)
 #   RESTART_WAIT_S        — max wait for /api/stats after restart (default 120)
@@ -27,9 +29,9 @@
 #   hide-failed    → blacklisted pubkey still surfaced via API (§10.1 fail)
 #   retain-failed  → no transmissions.from_pubkey rows (ADVERTs) for the
 #                    blacklisted pubkey in the DB (§10.2 fail), or the
-#                    §10.2 probe could not run at all — no sqlite3 on the target
-#                    able to bind a parameter. The message names what is needed;
-#                    there is no fallback to interpolated SQL.
+#                    §10.2 probe cannot verify a ready, restricted PostgreSQL
+#                    reader. Native parameter binding is mandatory; there is no
+#                    interpolated SQL or SQLite runtime fallback.
 #   teardown-failed→ post-test removal did not restore listing
 #
 # Exit code = number of failures (0 = pass).
@@ -158,125 +160,130 @@ node_visible() {
 # -----------------------------------------------------------------------------
 # §10.2 DB probe — bind the pubkey, do not interpolate it (issue #1977)
 # -----------------------------------------------------------------------------
-# Batch flags, all in service of "the count is parseable and errors are visible":
-#   -bail            stop at the first SQL error instead of running on
-#   -init /dev/null  ignore the operator's ~/.sqliterc — a stray .mode there
-#                    would make the count unparseable
-#   -noheader -list  stdout is exactly the number, nothing else
-SQLITE_ARGS=(-batch -bail -init /dev/null -noheader -list)
-# Round-trip probe token. The value is arbitrary; it only has to come back intact.
-SQLITE_PROBE_TOKEN="corescope-probe-ok"
-SQLITE_RUNNER=""   # "container" | "host", set by resolve_sqlite_runner
-RETAIN_COUNT=""    # set by read_retain_count
+# Native psql uses the extended query protocol (\bind), not text substitution.
+# Queries and hex-only parameter values travel on stdin; connection credentials
+# stay in private libpq environment/service settings, never process arguments.
+POSTGRES_RUNNER=""  # local | container | host
+POSTGRES_PROBE_TOKEN="corescope-probe-ok"
+RETAIN_COUNT=""
+POSTGRES_CONNECT_PY="$(cat "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/postgres-connect.py")"
 
-# Hex-encode a value for embedding in SQL as a blob literal.
-#
-# Why hex rather than quoting: the output alphabet is [0-9a-f], so no byte the
-# caller passes can terminate a string literal or add a dot-command argument.
-# That holds for arbitrary input, which is the point — the SQL layer stops
-# depending on main()'s hex gate in order to be safe.
-#
-# `od -v` is load-bearing: without it od collapses runs of identical lines to
-# '*' and long repetitive values encode wrongly.
+# A psql meta-command argument whose only variable bytes are [0-9a-f]. od -v
+# prevents repeated long values collapsing to '*'. Empty input binds as ''.
 sql_hex_literal() {
-  printf "x'%s'" "$(printf '%s' "$1" | od -An -v -tx1 | tr -d ' \n')"
+  printf "'%s'" "$(printf '%s' "$1" | od -An -v -tx1 | tr -d ' \n')"
 }
 
-# SQL for the §10.2 count, fed to sqlite3 on stdin. The SELECT text is a
-# constant; the pubkey arrives as a bound parameter.
-#
-# Note the nested cast rather than `.parameter set :pubkey '<value>'`:
-# dot-command arguments are split on whitespace, so a value containing a space
-# (e.g. "' OR 1=1 --") makes sqlite3 print the .parameter help to STDOUT, exit
-# 0, and leave :pubkey unbound. COUNT(*) then returns 0 — which reads exactly
-# like a passing security fix. -bail does not catch it either.
-#
-# The column is transmissions.from_pubkey (cmd/ingestor/db.go CREATE TABLE and
-# the from_pubkey_v1 migration; asserted by internal/dbschema). The ingestor
-# fills it only for ADVERTs, with hex.EncodeToString output — lowercase. The
-# script's hex gate and the server's nodeBlacklist both accept any case, so the
-# bound value is lowercased inside SQL; the parameter itself is still bound.
-# There is no from_node column: querying it errors on every real database.
+postgres_read_guard() {
+  cat <<'SQL'
+BEGIN READ ONLY;
+DO $qa$
+BEGIN
+ IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname=current_user AND
+             (rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls))
+    OR has_database_privilege(current_database(),'CREATE')
+    OR EXISTS (SELECT 1 FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname <> 'information_schema'
+               AND (has_schema_privilege(oid,'CREATE') OR pg_has_role(current_user,nspowner,'MEMBER')))
+    OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+               WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+                 AND CASE WHEN c.relkind IN ('r','p','v','m','f')
+                     THEN has_table_privilege(c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER')
+                          OR pg_has_role(current_user,c.relowner,'MEMBER') ELSE false END)
+    OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+               WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+                 AND CASE WHEN c.relkind='S' THEN has_sequence_privilege(c.oid,'USAGE,UPDATE') ELSE false END)
+ THEN RAISE EXCEPTION 'QA requires a restricted PostgreSQL reader role' USING ERRCODE='42501'; END IF;
+ IF (SELECT count(*) FROM corescope_schema WHERE kind='telemetry' AND version=1 AND ready) <> 1
+ THEN RAISE EXCEPTION 'telemetry schema is not ready' USING ERRCODE='55000'; END IF;
+END $qa$;
+SQL
+}
 transmission_count_sql() {
-  printf '.parameter init\n'
-  printf '.parameter set :pubkey "cast(%s as text)"\n' "$(sql_hex_literal "$1")"
-  printf 'SELECT COUNT(*) FROM transmissions WHERE from_pubkey = lower(:pubkey);\n'
+  postgres_read_guard
+  printf '%s\n' "SELECT COUNT(*) FROM transmissions WHERE from_pubkey = lower(convert_from(decode(\$1,'hex'),'UTF8'))"
+  printf '\\bind %s\n\\g\nCOMMIT;\n' "$(sql_hex_literal "$1")"
+}
+postgres_probe_sql() {
+  postgres_read_guard
+  printf '%s\n' "SELECT convert_from(decode(\$1,'hex'),'UTF8')"
+  printf '\\bind %s\n\\g\nCOMMIT;\n' "$(sql_hex_literal "$POSTGRES_PROBE_TOKEN")"
 }
 
-# Capability probe: bind a known value and read it back. A version number only
-# implies that .parameter works; binding something and getting it back proves it
-# on the binary actually in front of us, which is the operator's, not ours.
-sqlite_probe_sql() {
-  printf '.parameter init\n'
-  printf '.parameter set :probe "cast(%s as text)"\n' "$(sql_hex_literal "$SQLITE_PROBE_TOKEN")"
-  printf 'SELECT :probe;\n'
+# POSIX shell quoting also works inside the image's /bin/sh. These arguments
+# contain only public launcher code/container names, never a URL or password.
+postgres_shell_quote() {
+  local value="$1"
+  value=${value//\'/\'\\\'\'}
+  printf "'%s'" "$value"
 }
-
-# Find a sqlite3 that can bind a parameter — in the container first, then on the
-# host. Sets SQLITE_RUNNER; returns 1 if neither qualifies. There is deliberately
-# no interpolating fallback: that would leave the vulnerable path in place under
-# a nicer name.
-#
-# Probe stderr is collected rather than discarded, but only printed if BOTH
-# probes fail. The container miss is the known-normal case — the app image has
-# no sqlite3 (pure-Go driver, no CGO; Dockerfile:15) — so surfacing it on every
-# run would be noise.
-resolve_sqlite_runner() {
-  local probe out
-  probe=$(sqlite_probe_sql)
-  SQLITE_RUNNER=""
-  out=$(ssh_t "docker exec -i $(printf %q "$TARGET_CONTAINER") sqlite3 ${SQLITE_ARGS[*]} :memory:" \
-    <<<"$probe" 2>>"$TMP/sqlite-probe.err")
-  if [[ "$out" == "$SQLITE_PROBE_TOKEN" ]]; then SQLITE_RUNNER="container"; return 0; fi
-  out=$(ssh_t "sqlite3 ${SQLITE_ARGS[*]} :memory:" <<<"$probe" 2>>"$TMP/sqlite-probe.err")
-  if [[ "$out" == "$SQLITE_PROBE_TOKEN" ]]; then SQLITE_RUNNER="host"; return 0; fi
+postgres_command() {
+  local python
+  python=$(postgres_shell_quote "$POSTGRES_CONNECT_PY")
+  printf '%s' "set +x; if [ -n \"\${CORESCOPE_READER_DATABASE_URL:-}\" ]; then exec \"\${CORESCOPE_QA_PYTHON:-python3}\" -c $python; elif [ -n \"\${PGSERVICE:-}\" ] || [ -n \"\${PGDATABASE:-}\" ]; then case \"\${PGDATABASE:-}\" in *://*) echo 'put connection URLs in CORESCOPE_READER_DATABASE_URL' >&2; exit 2;; esac; export PGCONNECT_TIMEOUT=10 PGCLIENTENCODING=UTF8; exec psql -X -qAt -w -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate; else echo 'configure a private PostgreSQL reader connection' >&2; exit 2; fi"
+}
+run_postgres() {
+  local cmd
+  cmd=$(postgres_command)
+  case "$POSTGRES_RUNNER" in
+    local) sh -c "$cmd" ;;
+    container) ssh_t "docker exec -i $(printf %q "$TARGET_CONTAINER") sh -c $(postgres_shell_quote "$cmd")" ;;
+    host) ssh_t "sh -c $(postgres_shell_quote "$cmd")" ;;
+    *) echo 'run_postgres: no reader runner resolved' >&2; return 127 ;;
+  esac | tr -d '\r'
+}
+resolve_postgres_runner() {
+  local runner out
+  POSTGRES_RUNNER=""
+  # An explicit local connection is authoritative: never silently fall through
+  # to a different database after a bad URL, elevated role, or failed import.
+  if [[ -n "${CORESCOPE_READER_DATABASE_URL:-}${PGSERVICE:-}${PGDATABASE:-}" ]]; then
+    local candidates=(local)
+  else
+    local candidates=(container host)
+  fi
+  for runner in "${candidates[@]}"; do
+    POSTGRES_RUNNER="$runner"
+    if out=$(postgres_probe_sql | run_postgres 2>>"$TMP/postgres-probe.err") && [[ "$out" == "$POSTGRES_PROBE_TOKEN" ]]; then return 0; fi
+  done
+  POSTGRES_RUNNER=""
   return 1
 }
-
-# Run SQL from stdin against TARGET_DB_PATH via the resolved runner. Stderr is
-# left alone so the caller can capture it, and the exit status is sqlite3's.
-# The SQL crosses on stdin, so only the container name and db path still need
-# printf %q for the remote shell. docker exec needs -i to attach stdin.
-run_sqlite() {
-  case "$SQLITE_RUNNER" in
-    container) ssh_t "docker exec -i $(printf %q "$TARGET_CONTAINER") sqlite3 ${SQLITE_ARGS[*]} $(printf %q "$TARGET_DB_PATH")" ;;
-    host)      ssh_t "sqlite3 ${SQLITE_ARGS[*]} $(printf %q "$TARGET_DB_PATH")" ;;
-    *)         echo "run_sqlite: no runner resolved" >&2; return 127 ;;
-  esac
+postgres_error_summary() {
+  # libpq connection errors can contain caller-supplied strings. Publish only
+  # SQLSTATE classes, retaining the complete diagnostic in the private temp file.
+  local summary
+  summary=$(sed -nE 's/.*(ERROR|FATAL):[[:space:]]+([0-9A-Z]{5}).*/PostgreSQL error \2/p' "$1" | tail -3)
+  if [[ -n "$summary" ]]; then printf '%s\n' "$summary" >&2; else
+    echo 'Check PostgreSQL 18 client availability and private reader connection settings.' >&2
+  fi
 }
-
-# Read the retained-transmission count into RETAIN_COUNT. Prints a classified
-# "retain-failed" line and returns 1 on failure, so §10.2 has exactly one place
-# that increments $fails.
 read_retain_count() {
   RETAIN_COUNT=""
   local code
   if [[ -n "$ADMIN_API_TOKEN" ]]; then
-    # Read auth header from stdin so the token never enters argv (ps-safe).
     code=$(printf 'header = "Authorization: Bearer %s"\n' "$ADMIN_API_TOKEN" | \
       curl -s -m "$CURL_TIMEOUT" -K - -o "$TMP/admin.json" -w "%{http_code}" \
-        "$TARGET_URL/api/admin/transmissions?from_node=$TEST_PUBKEY&count=1" 2>/dev/null || echo "000")
-    if [[ "$code" == "200" ]]; then
-      RETAIN_COUNT=$(jq -r '.count // ((.transmissions // []) | length)' "$TMP/admin.json" 2>/dev/null || echo "")
+        "$TARGET_URL/api/admin/transmissions?from_node=$TEST_PUBKEY&count=1" 2>/dev/null || echo '000')
+    if [[ "$code" == 200 ]]; then
+      RETAIN_COUNT=$(jq -r '.count // ((.transmissions // []) | length)' "$TMP/admin.json" 2>/dev/null || echo '')
     fi
-    if [[ -n "$RETAIN_COUNT" ]]; then return 0; fi
+    if [[ "$RETAIN_COUNT" =~ ^[0-9]+$ ]]; then return 0; fi
+    RETAIN_COUNT=""
   fi
-
-  if [[ -z "$TARGET_DB_PATH" ]]; then
-    echo "  ❌ retain-failed: TARGET_DB_PATH unset and no ADMIN_API_TOKEN — cannot probe"
+  if ! resolve_postgres_runner; then
+    echo '  ❌ retain-failed: no ready, restricted PostgreSQL reader with native parameter binding'
+    postgres_error_summary "$TMP/postgres-probe.err"
     return 1
   fi
-  if ! resolve_sqlite_runner; then
-    echo "  ❌ retain-failed: no sqlite3 able to bind a parameter on the target"
-    echo "     tried: docker exec -i $TARGET_CONTAINER sqlite3, then sqlite3 on $TARGET_SSH_HOST"
-    echo "     need:  the sqlite3 CLI reachable over ssh, supporting '.parameter set'"
-    cat "$TMP/sqlite-probe.err" >&2
+  echo "  PostgreSQL reader runner: $POSTGRES_RUNNER"
+  if ! RETAIN_COUNT=$(transmission_count_sql "$TEST_PUBKEY" | run_postgres 2>"$TMP/postgres.err"); then
+    echo "  ❌ retain-failed: PostgreSQL query failed via $POSTGRES_RUNNER"
+    postgres_error_summary "$TMP/postgres.err"
+    RETAIN_COUNT=""
     return 1
   fi
-  echo "  sqlite3 runner: $SQLITE_RUNNER"
-  if ! RETAIN_COUNT=$(run_sqlite <<<"$(transmission_count_sql "$TEST_PUBKEY")" 2>"$TMP/sqlite.err"); then
-    echo "  ❌ retain-failed: sqlite3 query failed via $SQLITE_RUNNER"
-    cat "$TMP/sqlite.err" >&2
+  if ! [[ "$RETAIN_COUNT" =~ ^[0-9]+$ ]]; then
+    echo '  ❌ retain-failed: PostgreSQL query did not return one numeric count'
     RETAIN_COUNT=""
     return 1
   fi
@@ -299,7 +306,6 @@ main() {
   TARGET_SSH_KEY="${TARGET_SSH_KEY:-/root/.ssh/id_ed25519}"
   TARGET_CONFIG_PATH="${TARGET_CONFIG_PATH:-}"
   TARGET_CONTAINER="${TARGET_CONTAINER:-}"
-  TARGET_DB_PATH="${TARGET_DB_PATH:-}"
   ADMIN_API_TOKEN="${ADMIN_API_TOKEN:-}"
 
   if [[ -z "$TEST_PUBKEY" || -z "$TARGET_SSH_HOST" || -z "$TARGET_CONFIG_PATH" || -z "$TARGET_CONTAINER" ]]; then
@@ -326,8 +332,8 @@ main() {
     echo "error: TARGET_CONFIG_PATH must be a sane absolute path" >&2
     exit 2
   fi
-  if [[ -n "$TARGET_DB_PATH" ]] && ! [[ "$TARGET_DB_PATH" =~ ^/[A-Za-z0-9_./-]+$ ]]; then
-    echo "error: TARGET_DB_PATH must be a sane absolute path" >&2
+  if [[ -n "${TARGET_DB_PATH:-}" ]]; then
+    echo "error: TARGET_DB_PATH is obsolete; configure a private PostgreSQL reader connection" >&2
     exit 2
   fi
 
@@ -378,8 +384,7 @@ main() {
   echo "=== §10.2 verify packets retained in DB ==="
   if ! read_retain_count; then
     # read_retain_count already printed the classified reason. Counting here and
-    # nowhere else: the old code incremented $fails for the "TARGET_DB_PATH
-    # unset" case and then again for the empty count it left behind.
+    # nowhere else, so one failed reader probe remains one classified failure.
     fails=$((fails+1))
   elif [[ "$RETAIN_COUNT" =~ ^[0-9]+$ ]] && (( RETAIN_COUNT > 0 )); then
     echo "  ✅ DB retains $RETAIN_COUNT packets from $TEST_PUBKEY"
