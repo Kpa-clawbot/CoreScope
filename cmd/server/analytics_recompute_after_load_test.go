@@ -433,9 +433,18 @@ func TestAnalyticsRecomputers_FullDataRightAfterStartupLoad(t *testing.T) {
 		t.Fatalf("fixture precondition: %d packets in memory after load, want %d", inMemory, totalRows)
 	}
 
-	waitForTest(t, "rf gate opens after full load", func() bool { return get("/api/analytics/rf").Code == http.StatusOK })
+	// Post-load passes run sequentially: RF completing does not imply that
+	// topology or channels has published its full snapshot yet.
+	for _, name := range []string{"rf", "topology", "channels"} {
+		rc := all[name]
+		waitForTest(t, name+" first full pass finishes", func() bool { return !rc.FirstPassDoneAt_1659().IsZero() })
+	}
+	rfResponse := get("/api/analytics/rf")
+	if rfResponse.Code != http.StatusOK {
+		t.Fatalf("rf after full load: got %d, want 200", rfResponse.Code)
+	}
 	var rf map[string]interface{}
-	if err := json.Unmarshal(get("/api/analytics/rf").Body.Bytes(), &rf); err != nil {
+	if err := json.Unmarshal(rfResponse.Body.Bytes(), &rf); err != nil {
 		t.Fatalf("rf body: %v", err)
 	}
 	if got, _ := rf["totalTransmissions"].(float64); int(got) != totalRows {
