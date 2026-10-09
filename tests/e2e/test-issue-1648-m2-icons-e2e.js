@@ -94,7 +94,12 @@ async function checkConfiguredScope(page) {
         await page.goto('about:blank');
         const route = live ? '/live?lat=1&lon=1&zoom=10' : '/nodes/' + key;
         await page.goto(`${BASE}/#${route}`, { waitUntil: 'domcontentloaded' });
+        // The initial theme refresh redraws an open detail as Loading….
+        // Let it finish before opening Live details or asserting row absence.
+        await page.waitForFunction(() => window.__configuredScopeThemeReady, null, { timeout: 8000 });
         if (live) await page.locator('#liveMap .live-node-marker').click();
+        await page.locator(live ? '#nodeDetailContent code' : '#nodeFullBody .node-detail-key')
+          .filter({ hasText: key }).waitFor({ state: 'visible', timeout: 8000 });
         await page.locator(live ? '#nodeDetailContent table' : '#node-stats').waitFor({ state: 'visible', timeout: 8000 });
         const row = live
           ? page.locator('#nodeDetailContent tr').filter({ hasText: 'Configured scope' })
@@ -141,6 +146,9 @@ async function main() {
   }
 
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  await ctx.addInitScript(() => {
+    window.addEventListener('theme-refresh', () => { window.__configuredScopeThemeReady = true; }, { once: true });
+  });
   const page = await ctx.newPage();
 
   await checkConfiguredScope(page);
