@@ -1,6 +1,10 @@
 package main
 
-import "github.com/gorilla/mux"
+import (
+	"net/http"
+
+	"github.com/gorilla/mux"
+)
 
 // e2eRoutes is set only by the e2etest build (auth_e2e.go).
 var e2eRoutes func(s *Server, r *mux.Router)
@@ -10,6 +14,13 @@ var e2eRoutes func(s *Server, r *mux.Router)
 // paths are not registered and fall through to the SPA handler like any
 // unknown path.
 func (s *Server) registerAuthRoutes(r *mux.Router) {
+	// CORS preflight for the bearer routes. gorilla/mux does not run
+	// middleware on a method mismatch, so without this route an OPTIONS on
+	// a POST-only path would answer 405 before corsMiddleware could. A
+	// matcher, not a path: it is no API route of its own (not in the spec).
+	r.MatcherFunc(func(req *http.Request, _ *mux.RouteMatch) bool {
+		return req.Method == http.MethodOptions && bearerCORSPath(req.URL.Path)
+	}).HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	r.HandleFunc("/api/auth/register", s.requireOrigin(s.handleRegister)).Methods("POST")
 	r.HandleFunc("/api/auth/activate", s.requireOrigin(s.handleActivate)).Methods("POST")
 	r.HandleFunc("/api/auth/login", s.requireOrigin(s.handleLogin)).Methods("POST")
