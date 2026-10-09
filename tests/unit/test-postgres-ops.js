@@ -7,6 +7,17 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const root = path.resolve(__dirname, '../..');
+const workflow=fs.readFileSync(path.join(root,'.github/workflows/deploy.yml'),'utf8').replace(/\r/g,'');
+const e2eJob=workflow.split('\n  e2e-shard:\n')[1]?.split(/^  [a-z][a-z0-9-]*:\s*$/m)[0];
+const userStep=workflow.split('- name: Start user-management E2E server (fake mailer)')[1]?.split('\n      - name:')[0];
+const sqliteSetup=userStep?.split('if [ "$CORESCOPE_TEST_BACKEND" = sqlite ]; then')[1]?.split(/^\s*else\s*$/m)[0];
+const fixtureCommands=sqliteSetup?.replace(/\\\n\s*/g,' ').match(/\.\/corescope-migrate[^\n]+/g)||[];
+assert.deepStrictEqual({actions:fixtureCommands.map(command=>command.match(/-storage-action=(\w+)/)?.[1]),failFastDisabled:/strategy:\n\s+fail-fast: false\n/.test(e2eJob||'')},
+  {actions:['adopt','setup'],failFastDisabled:true},'UM fixture must adopt legacy telemetry then initialize accounts; all independent E2E shards must run');
+const fixtureArgs='-backend=sqlite -offline -config-dir /tmp/cs-um -selection-file /tmp/cs-um/storage-selection.json -sqlite-path "$E2E_SQLITE" -users-sqlite-path /tmp/cs-um/users.db';
+for(const command of fixtureCommands){
+  assert.strictEqual(command.replace(/^\.\/corescope-migrate -storage-action=\w+\s+/,'').replace(/\s+/g,' '),fixtureArgs,'account setup changed the adopted selection, SQLite paths or config directory');
+}
 const source = fs.readFileSync(path.join(root, 'manage.sh'), 'utf8').replace(/\r/g, '');
 const bash = require('../../scripts/bash-path')();
 const functions = ['pg_container_exec', 'pg_exec', 'pg_empty', 'pg_dump_file', 'pg_restore_file', 'sqlite_source_exists', 'sqlite_dump_file', 'backup_state', 'stage_backup_state', 'restore_sqlite_bundle', 'cmd_backup', 'cmd_restore', 'prepare_staging_db', 'prepare_staging_config', 'write_env_managed_values', 'is_true', 'cmd_start']

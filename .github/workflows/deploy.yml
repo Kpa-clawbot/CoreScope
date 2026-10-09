@@ -457,6 +457,7 @@ jobs:
     needs: [changes]
     runs-on: ubuntu-24.04
     strategy:
+      fail-fast: false
       matrix:
         shard: [1, 2, 3]
         backend: [sqlite, postgres]
@@ -705,6 +706,10 @@ jobs:
           }
           JSON
           if [ "$CORESCOPE_TEST_BACKEND" = sqlite ]; then
+            # Existing telemetry is adopted with no account target; initialize
+            # first accounts explicitly before starting the strict runtime.
+            ./corescope-migrate -storage-action=adopt -backend=sqlite -offline -config-dir /tmp/cs-um \
+              -selection-file /tmp/cs-um/storage-selection.json -sqlite-path "$E2E_SQLITE" -users-sqlite-path /tmp/cs-um/users.db
             ./corescope-migrate -storage-action=setup -backend=sqlite -offline -config-dir /tmp/cs-um \
               -selection-file /tmp/cs-um/storage-selection.json -sqlite-path "$E2E_SQLITE" -users-sqlite-path /tmp/cs-um/users.db
           else
