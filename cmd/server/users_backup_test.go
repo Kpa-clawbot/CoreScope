@@ -243,7 +243,7 @@ func TestInitUserManagementBacksUpAtStartup(t *testing.T) {
 var usersBackupFilenameRE = regexp.MustCompile(`^attachment; filename="corescope-users-\d{8}-\d{6}\.(?:db|dump)"$`)
 
 func TestAdminUsersBackupDownload(t *testing.T) {
-	f := newBackupAuthFixture(t, "boss@example.org")
+	f := newAuthFixtureWithURL(t, selectedBackupTestDSN(t), "boss@example.org")
 	boss := f.registerAndActivate(t, "boss@example.org", "Boss", pw)
 	uma := f.registerAndActivate(t, "uma@example.org", "Uma", pw)
 	tmp := t.TempDir()

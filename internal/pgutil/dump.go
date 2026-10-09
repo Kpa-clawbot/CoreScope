@@ -50,8 +50,12 @@ func Dump(ctx context.Context, dsn, path string) (err error) {
 		return err
 	}
 	u, _ := url.Parse(dsn)
-	if u.Query().Get("search_path") != "" {
-		return errors.New("postgres: native backup requires a database URL without search_path")
+	// Installed selections pin the default schema explicitly. pg_dump still
+	// exports the whole database; do not turn this into a schema-filtered dump.
+	switch strings.TrimSpace(u.Query().Get("search_path")) {
+	case "", "public", `"public"`:
+	default:
+		return errors.New("postgres: native backup requires the default public schema")
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {

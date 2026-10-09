@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,23 @@ import (
 
 // postgresMagic is the signature of a PostgreSQL custom-format archive.
 var postgresMagic = testNativeSQL("SQLite format 3\x00", "PGDMP")
+
+// Installed PostgreSQL selections pin even the default schema explicitly.
+func selectedBackupTestDSN(t *testing.T) string {
+	t.Helper()
+	dsn := testDatabaseDSN(t)
+	if testBackendValue() == "postgres" {
+		u, err := url.Parse(dsn)
+		if err != nil {
+			t.Fatal("invalid fixture URL")
+		}
+		q := u.Query()
+		q.Set("search_path", `"public"`)
+		u.RawQuery = q.Encode()
+		dsn = u.String()
+	}
+	return dsn
+}
 
 func TestBackupRequiresAPIKey(t *testing.T) {
 	_, router := setupTestServerWithAPIKey(t, "test-secret-key-strong-enough")
@@ -26,7 +44,7 @@ func TestBackupRequiresAPIKey(t *testing.T) {
 func TestBackupRestoresNativePostgresSnapshot(t *testing.T) {
 	const apiKey = "test-secret-key-strong-enough"
 	srv, router := setupTestServerWithAPIKey(t, apiKey)
-	srv.db = setupTestDBAtURL(t, testDatabaseDSN(t))
+	srv.db = setupTestDBAtURL(t, selectedBackupTestDSN(t))
 	seedTestData(t, srv.db)
 	writerURL := srv.db.path
 	reader, err := openFixtureReader(t, writerURL)
