@@ -3225,11 +3225,18 @@ func (db *DB) GetSignatureDropCount() int64 {
 
 // scopeStatsByRegionQuery counts named-region transport transmissions in the
 // window, per region.
+//
+// The unary + on every scope_name reference keeps SQLite off
+// idx_tx_scope_name: with it, the planner walked every scoped transmission in
+// the database (scope_name > '') and filtered by time afterwards, 2.5-2.9 s on
+// a production database whatever the window. The window is the selective
+// condition, so the query searches idx_transmissions_first_seen and groups in a
+// temp b-tree (same idiom as the advertsByRole query below).
 var scopeStatsByRegionQuery = `
 		SELECT scope_name, COUNT(*) AS cnt
 		FROM transmissions
-		WHERE ` + routeTypeTransportSQL + ` AND scope_name IS NOT NULL AND scope_name != '' AND first_seen >= ?
-		GROUP BY scope_name
+		WHERE ` + routeTypeTransportSQL + ` AND +scope_name IS NOT NULL AND +scope_name != '' AND first_seen >= ?
+		GROUP BY +scope_name
 		ORDER BY cnt DESC
 	`
 
