@@ -45,8 +45,24 @@ assert.strictEqual(t.authUser({ isEnabled: function () { return true; }, user: f
 assert.strictEqual(t.authUser({ isEnabled: function () { return true; }, user: function () { return u; } }), u);
 
 // Wiring: the signal layer builds its URL with the toggle, and the bar starts hidden.
-assert.ok(code.indexOf('coverageUrl(bbox, map.getZoom(), days, selectedRx, mine && !!authUser(window.CSAuth))') !== -1,
+assert.ok(code.indexOf('var mineSent = mine && !!authUser(window.CSAuth);') !== -1 &&
+  code.indexOf('coverageUrl(bbox, map.getZoom(), days, selectedRx, mineSent)') !== -1,
   'drawSignalLayer must build its URL with coverageUrl and the toggle');
 assert.ok(/id="rxMineBar"[^>]*hidden/.test(code), 'the toggle bar must start hidden');
+
+// A reply only counts when it answers the newest signal-layer request: an
+// older, unfiltered reply must not overwrite "My coverage" (or the reverse).
+assert.strictEqual(t.coverageReply(1, 2, 200, false), 'ignore');
+assert.strictEqual(t.coverageReply(2, 2, 200, true), 'draw');
+// mine=1 refused (session gone, or a proxy's bearer header): leave the
+// toggle instead of showing an empty map that reads as "heard nothing".
+assert.strictEqual(t.coverageReply(2, 2, 401, true), 'mine-refused');
+assert.strictEqual(t.coverageReply(2, 2, 403, true), 'mine-refused');
+assert.strictEqual(t.coverageReply(1, 2, 401, true), 'ignore');
+// Any other failure is an error, never parsed as a FeatureCollection.
+assert.strictEqual(t.coverageReply(2, 2, 401, false), 'error');
+assert.strictEqual(t.coverageReply(2, 2, 500, true), 'error');
+assert.ok(/coverageReply\(seq, signalSeq, r\.status, mineSent\)/.test(code),
+  'drawSignalLayer must judge each reply with coverageReply');
 
 console.log('rx-coverage My coverage OK');

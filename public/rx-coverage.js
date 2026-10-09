@@ -22,6 +22,8 @@
   // mine: "My coverage": the signal layer only shows coverage collected by
   // companions linked to the logged-in user (/api/rx-coverage?mine=1).
   var mine = false;
+  // signalSeq numbers signal-layer requests; only the newest reply is drawn.
+  var signalSeq = 0;
 
   function cssColor(varName) {
     try { return getComputedStyle(document.documentElement).getPropertyValue(varName).trim() || '#888'; }
@@ -53,6 +55,15 @@
   function coverageUrl(bbox, z, d, rx, mineOn) {
     return '/api/rx-coverage?bbox=' + bbox + '&z=' + z + '&days=' + d +
       (rx ? '&rx=' + encodeURIComponent(rx) : '') + (mineOn ? '&mine=1' : '');
+  }
+
+  // coverageReply judges a signal-layer reply. Only the newest request counts
+  // (an older, unfiltered reply must not overwrite "My coverage"); a 401/403
+  // to mine=1 means the session is gone, which is not "no coverage".
+  function coverageReply(seq, latest, status, mineSent) {
+    if (seq !== latest) return 'ignore';
+    if (mineSent && (status === 401 || status === 403)) return 'mine-refused';
+    return status >= 200 && status < 300 ? 'draw' : 'error';
   }
 
   // authUser is the logged-in user, or null (accounts off, logged out, or
@@ -233,8 +244,18 @@
     // Gaps need a single companion's track, so not with mine (the server omits them too).
     var wantGaps = gapsAvailable() && showGaps && !mineSent;
     var url = coverageUrl(bbox, map.getZoom(), days, selectedRx, mineSent) + (wantGaps ? '&gaps=1' : '');
-    fetch(url).then(function (r) { return r.json(); }).then(function (fc) {
-      if (destroyed || !covLayer || layer !== 'signal') return;
+    var seq = ++signalSeq;
+    fetch(url).then(function (r) {
+      var verdict = coverageReply(seq, signalSeq, r.status, mineSent);
+      if (verdict === 'ignore') return null;
+      if (verdict === 'mine-refused') {
+        if (!destroyed && map) { mine = false; renderMine(); drawCoverage(); syncHash(); }
+        return null;
+      }
+      if (verdict === 'error') throw new Error('HTTP ' + r.status);
+      return r.json();
+    }).then(function (fc) {
+      if (!fc || destroyed || !covLayer || layer !== 'signal') return;
       covLayer.clearLayers();
       setNoiseEmpty(false);
       if (wantGaps && showGaps) {
@@ -255,7 +276,7 @@
     }).catch(function (e) {
       console.warn('rx-coverage: coverage fetch failed', e);
       // #1: never leave stale hexes from a previous layer/view on screen.
-      if (!destroyed && covLayer && layer === 'signal') covLayer.clearLayers();
+      if (!destroyed && covLayer && layer === 'signal' && seq === signalSeq) covLayer.clearLayers();
     });
   }
 
@@ -593,6 +614,6 @@
   }
 
   if (window.addEventListener) window.addEventListener('cs-auth-changed', onAuthChanged);
-  window.CSRxCoverage = { _test: { coverageUrl: coverageUrl, mineBtnHtml: mineBtnHtml, authUser: authUser } };
+  window.CSRxCoverage = { _test: { coverageUrl: coverageUrl, mineBtnHtml: mineBtnHtml, authUser: authUser, coverageReply: coverageReply } };
   registerPage('rx-coverage', { init: init, destroy: destroy });
 })();
