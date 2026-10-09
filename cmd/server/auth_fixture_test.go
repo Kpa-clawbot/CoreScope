@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/meshcore-analyzer/mailer"
 	"github.com/meshcore-analyzer/pgutil/pgtest"
 	"github.com/meshcore-analyzer/users"
+	"modernc.org/sqlite"
 )
 
 const (
@@ -39,6 +42,43 @@ type client struct {
 	me     meResponse
 }
 
+// Account owners must use the same SQLite library as users.Store, not the
+// telemetry driver: https://sqlite.org/howtocorrupt.html#multiple_copies_of_sqlite_linked_into_the_same_application
+func openAccountFixtureSQL(target string) (*sql.DB, error) {
+	if strings.HasPrefix(target, "postgres://") || strings.HasPrefix(target, "postgresql://") {
+		return openFixtureSQL(target)
+	}
+	uri, err := dbconfig.SQLiteURI(target, url.Values{"mode": {"rw"}, "_pragma": {"busy_timeout(5000)"}})
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", uri)
+	if err == nil {
+		db.SetMaxOpenConns(1)
+	}
+	return db, err
+}
+
+// Account fixture owners share the live users.Store file. Mixing SQLite
+// implementations in one process bypasses their per-library lock bookkeeping.
+func TestAccountFixtureUsesAccountSQLiteDriver(t *testing.T) {
+	if testBackend(t) != dbconfig.SQLite {
+		t.Skip("SQLite account driver boundary")
+	}
+	f := newAuthFixture(t)
+	db, err := openAccountFixtureSQL(f.ownerURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, ok := db.Driver().(*sqlite.Driver); !ok {
+		t.Fatalf("account fixture uses %T; users.Store uses modernc.org/sqlite", db.Driver())
+	}
+	if err := db.Ping(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func newTestAuthService(t *testing.T, adminEmails ...string) (*authService, *mailer.Fake) {
 	a, fake, _ := newTestAuthServiceWithURL(t, postgresTestDSN(t), adminEmails...)
 	return a, fake
@@ -53,7 +93,7 @@ func newTestAuthServiceWithURL(t *testing.T, ownerURL string, adminEmails ...str
 	t.Helper()
 	runtimeURL := ownerURL
 	if testBackend(t) == dbconfig.Postgres {
-		owner, err := openFixtureSQL(ownerURL)
+		owner, err := openAccountFixtureSQL(ownerURL)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -222,7 +262,7 @@ func (f *authFixture) login(t *testing.T, email, password string) *client {
 // store call that touches it fails with a DB error (not ErrNotFound).
 func (f *authFixture) breakTable(t *testing.T, table string) {
 	t.Helper()
-	db, err := openFixtureSQL(f.ownerURL)
+	db, err := openAccountFixtureSQL(f.ownerURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +276,7 @@ func (f *authFixture) breakTable(t *testing.T, table string) {
 // from users.db (the raw tokens are not observable when no mail left).
 func (f *authFixture) unusedTokens(t *testing.T, uid int64, p users.Purpose) int {
 	t.Helper()
-	db, err := openFixtureSQL(f.ownerURL)
+	db, err := openAccountFixtureSQL(f.ownerURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +292,7 @@ func (f *authFixture) unusedTokens(t *testing.T, uid int64, p users.Purpose) int
 // simulate a concurrent writer or a failing statement).
 func (f *authFixture) execDB(t *testing.T, stmt string) {
 	t.Helper()
-	db, err := openFixtureSQL(f.ownerURL)
+	db, err := openAccountFixtureSQL(f.ownerURL)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -54,6 +54,7 @@ replace github.com/meshcore-analyzer/users => ../../internal/users
 require (
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/meshcore-analyzer/channel v0.0.0
+	modernc.org/sqlite v1.34.5
 )
 
 require (
@@ -69,7 +70,6 @@ require (
 	modernc.org/libc v1.55.3 // indirect
 	modernc.org/mathutil v1.6.0 // indirect
 	modernc.org/memory v1.8.0 // indirect
-	modernc.org/sqlite v1.34.5 // indirect
 )
 
 replace github.com/meshcore-analyzer/channel => ../../internal/channel

@@ -133,7 +133,7 @@ func TestLoginAnswersBeforeTheAuditWrite(t *testing.T) {
 	f := newAuthFixture(t)
 	dave := f.registerAndActivate(t, "dave@example.org", "Dave", pw)
 
-	db, err := openFixtureSQL(f.ownerURL)
+	db, err := openAccountFixtureSQL(f.ownerURL)
 	if err != nil {
 		t.Fatal(err)
 	}
