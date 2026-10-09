@@ -9,7 +9,7 @@ import (
 )
 
 func TestPostgresImportInitializationNeverReady(t *testing.T) {
-	db, err := pgutil.Open(pgtest.NewSchema(t), false)
+	db, err := pgutil.Open(postgresSchema(t), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ func TestPostgresImportInitializationNeverReady(t *testing.T) {
 }
 
 func TestPostgresConcurrentInitialization(t *testing.T) {
-	db, err := pgutil.Open(pgtest.NewSchema(t), false)
+	db, err := pgutil.Open(postgresSchema(t), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestPostgresConcurrentInitialization(t *testing.T) {
 }
 
 func TestPostgresIdentityRawValuesAndNullDedup(t *testing.T) {
-	db, err := pgutil.Open(pgtest.NewSchema(t), false)
+	db, err := pgutil.Open(postgresSchema(t), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestPostgresIdentityRawValuesAndNullDedup(t *testing.T) {
 }
 
 func TestPostgresWriterRejectsOwnerAndReader(t *testing.T) {
-	dsn := pgtest.NewSchema(t)
+	dsn := postgresSchema(t)
 	owner, err := pgutil.Open(dsn, false)
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +128,7 @@ func TestPostgresWriterRejectsOwnerAndReader(t *testing.T) {
 }
 
 func TestPostgresInitializationRejectsUnversionedData(t *testing.T) {
-	db, err := pgutil.Open(pgtest.NewSchema(t), false)
+	db, err := pgutil.Open(postgresSchema(t), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestPostgresInitializationRejectsUnversionedData(t *testing.T) {
 }
 
 func TestPostgresSchemaFreshRepeatedAndReadiness(t *testing.T) {
-	dsn := pgtest.NewSchema(t)
+	dsn := postgresSchema(t)
 	db, err := pgutil.Open(dsn, false)
 	if err != nil {
 		t.Fatal(err)

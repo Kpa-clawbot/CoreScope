@@ -1,5 +1,6 @@
-// Package dbschema owns the canonical PostgreSQL telemetry schema. Only the
-// offline migration command uses Apply; both runtime processes assert readiness.
+// Package dbschema owns telemetry schema entrypoints for SQLite and PostgreSQL.
+// SQLite's writer applies migrations; PostgreSQL uses offline bootstrap. Readers
+// only assert readiness. Apply and AssertReady retain PostgreSQL compatibility.
 package dbschema
 
 import (

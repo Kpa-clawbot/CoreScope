@@ -4,11 +4,10 @@ import (
 	"testing"
 
 	"github.com/meshcore-analyzer/pgutil"
-	"github.com/meshcore-analyzer/pgutil/pgtest"
 )
 
 func TestTelemetryTextUsesBinaryCollation(t *testing.T) {
-	db, err := pgutil.Open(pgtest.NewSchema(t), false)
+	db, err := pgutil.Open(postgresSchema(t), false)
 	if err != nil {
 		t.Fatal(err)
 	}

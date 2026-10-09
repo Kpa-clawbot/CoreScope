@@ -1,13 +1,14 @@
 // Package dbconfig provides the shared DBConfig struct used by both the server
-// and ingestor binaries for startup loading and legacy maintenance settings.
+// and ingestor binaries for storage selection, startup and maintenance settings.
 package dbconfig
 
-// DBConfig controls startup loading. The three former SQLite controls remain
-// decodable for old config files; PostgreSQL maintenance does not use them.
+// DBConfig controls storage and startup loading. SQLite maintenance options
+// remain active for SQLite and are ignored by PostgreSQL.
 type DBConfig struct {
-	VacuumOnStartup        bool `json:"vacuumOnStartup"`        // Deprecated: PostgreSQL autovacuum owns maintenance.
-	IncrementalVacuumPages int  `json:"incrementalVacuumPages"` // Deprecated: retained for legacy configuration decoding.
-	AnalysisLimit          int  `json:"analysisLimit"`          // Deprecated: PostgreSQL owns planner statistics.
+	Backend                Backend `json:"backend,omitempty"`
+	VacuumOnStartup        bool    `json:"vacuumOnStartup"`
+	IncrementalVacuumPages int     `json:"incrementalVacuumPages"`
+	AnalysisLimit          int     `json:"analysisLimit"`
 
 	// Load controls chunked startup loading (#1009).
 	Load *LoadConfig `json:"load,omitempty"`

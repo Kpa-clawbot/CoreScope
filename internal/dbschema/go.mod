@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/mattn/go-sqlite3 v1.14.52
+	github.com/meshcore-analyzer/dbconfig v0.0.0
 	github.com/meshcore-analyzer/pgutil v0.0.0
 )
 
@@ -18,3 +19,5 @@ require (
 )
 
 replace github.com/meshcore-analyzer/pgutil => ../pgutil
+
+replace github.com/meshcore-analyzer/dbconfig => ../dbconfig
