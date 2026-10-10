@@ -1,3 +1,23 @@
+.region-filter-container { margin: 0; padding: 0; display: inline-flex; align-items: center; }
+/* Region quick picks (config regionQuickPicks): one-tap groups inside the
+   region control. In the dropdown they are the menu's first section, pinned
+   while the region list scrolls under them; in the pill bar they lead, set
+   off from the single regions by a divider. The buttons are .region-pill, so
+   they share its colours, active state and 44px touch target. */
+.region-quick-picks {
+  position: sticky; top: -4px; z-index: 1; margin-top: -4px;
+  padding: 10px 12px 10px; background: var(--card-bg, #fff);
+  border-bottom: 1px solid var(--border); margin-bottom: 4px;
+}
+.region-quick-picks-label {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--text-muted); margin-bottom: 8px; user-select: none;
+}
+.region-quick-picks-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.region-dropdown-menu.has-quick-picks { max-height: min(420px, 70vh); max-width: min(340px, calc(100vw - 32px)); }
+.region-quick-picks-divider {
+  width: 1px; align-self: stretch; margin: 4px 2px; background: var(--border); flex-shrink: 0;
+}
 /* === CoreScope — style.css === */
 
 /* Phosphor icon sprite helper (#1648 M1).
@@ -4530,6 +4550,12 @@ button.region-pill-active:hover { opacity: 0.85; color: var(--text-on-accent); }
   .multi-select-trigger {
     height: 44px;
   }
+  /* The region menu sits inside .filter-bar on some pages, whose input rule
+     above would make each checkbox a 44px square. The row is the tap target. */
+  .filter-bar .region-dropdown-item input[type="checkbox"] {
+    width: 20px; height: 20px; min-width: 0; min-height: 0;
+  }
+  .region-dropdown-item { min-height: 44px; }
 }
 
 /* #630-3: Status text labels — visually hidden text for screen readers */

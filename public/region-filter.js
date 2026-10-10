@@ -91,18 +91,30 @@
     return null;
   }
 
-  function quickPicksHtml(picks) {
-    if (!picks.length) return '';
+  function pickButtonsHtml(picks) {
     var active = activePick(picks);
-    var html = '<div class="region-quick-picks" role="group" aria-label="Quick pick regions">' +
-      '<span class="region-quick-picks-label">Quick pick</span>';
+    var html = '';
     picks.forEach(function (p, i) {
       var on = p === active;
       var title = (p.description ? p.description + ' ' : '') + 'Selects ' + p.codes.join(', ') + '.';
       html += '<button type="button" class="region-pill region-quick-pick' + (on ? ' region-pill-active' : '') +
         '" data-pick="' + i + '" aria-pressed="' + on + '" title="' + esc(title) + '">' + esc(p.name) + '</button>';
     });
-    return html + '</div>';
+    return html;
+  }
+
+  /** Quick picks as the first section of the region dropdown menu. */
+  function menuPicksHtml(picks) {
+    if (!picks.length) return '';
+    return '<div class="region-quick-picks" role="group" aria-label="Quick picks">' +
+      '<div class="region-quick-picks-label">Quick picks</div>' +
+      '<div class="region-quick-picks-row">' + pickButtonsHtml(picks) + '</div></div>';
+  }
+
+  /** Quick picks inside the pill bar, ahead of the single regions. */
+  function barPicksHtml(picks) {
+    if (!picks.length) return '';
+    return pickButtonsHtml(picks) + '<span class="region-quick-picks-divider" aria-hidden="true"></span>';
   }
 
   /** Tapping a pick selects its codes; tapping the active pick goes back to all. */
@@ -170,8 +182,9 @@
   function renderPills(container, codes) {
     var allSelected = !_selected;
     var picks = presentPicks(codes);
-    var html = quickPicksHtml(picks) + '<div class="region-filter-bar" role="group" aria-label="Region filter">';
+    var html = '<div class="region-filter-bar" role="group" aria-label="Region filter">';
     html += '<span class="region-filter-label" id="region-filter-label">Region:</span>';
+    html += barPicksHtml(picks);
     html += '<button class="region-pill' + (allSelected ? ' region-pill-active' : '') +
       '" data-region="__all__" role="checkbox" aria-checked="' + allSelected + '">All</button>';
     codes.forEach(function (code) {
@@ -196,10 +209,12 @@
   function renderDropdown(container, codes) {
     var allSelected = !_selected;
     var picks = presentPicks(codes);
-    var html = quickPicksHtml(picks) + '<div class="region-dropdown-wrap" role="group" aria-label="Region filter">';
+    var html = '<div class="region-dropdown-wrap" role="group" aria-label="Region filter">';
     html += '<button class="region-dropdown-trigger" aria-haspopup="listbox" aria-expanded="false">' +
       dropdownLabel(codes) + ' ▾</button>';
-    html += '<div class="region-dropdown-menu" role="listbox" aria-label="Select regions" hidden>';
+    html += '<div class="region-dropdown-menu' + (picks.length ? ' has-quick-picks' : '') +
+      '" role="listbox" aria-label="Select regions" hidden>';
+    html += menuPicksHtml(picks);
     html += '<label class="region-dropdown-item"><input type="checkbox" data-region="__all__"' +
       (allSelected ? ' checked' : '') + '> <strong>All</strong></label>';
     codes.forEach(function (code) {
