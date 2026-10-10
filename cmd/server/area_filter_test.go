@@ -74,7 +74,7 @@ func TestGetNodePubkeysInArea_Polygon(t *testing.T) {
 }
 
 // newTestStoreWithDB builds a minimal PacketStore wired to the given DB and config.
-func newTestStoreWithDB(t *testing.T, db *DB, cfg *Config) *PacketStore {
+func newTestStoreWithDB(t testing.TB, db *DB, cfg *Config) *PacketStore {
 	t.Helper()
 	return &PacketStore{
 		db:                 db,

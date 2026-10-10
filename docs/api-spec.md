@@ -1890,9 +1890,11 @@ not being the same as "declared nothing"), which apply here identically.
 
 ### Query Parameters
 
-| Param    | Type   | Default | Description                    |
-|----------|--------|---------|---------------------------------|
-| `window` | string | `24h`   | Time window: `1h`, `24h`, `7d` |
+| Param    | Type   | Default    | Description                    |
+|----------|--------|------------|---------------------------------|
+| `window` | string | `24h`      | Time window: `1h`, `24h`, `7d` |
+| `mode`   | string | `declared` | `declared` (this section) or `transport` (see [Transport view](#transport-view-modetransport)) |
+| `scope`  | string | —          | `mode=transport` only: region scope to split the fleet by (`be`, `be-van`), with or without `#`, any case |
 
 ### Response `200`
 
@@ -1930,6 +1932,12 @@ not being the same as "declared nothing"), which apply here identically.
 
 ```json
 { "error": "window must be 1h, 24h, or 7d" }
+```
+
+or, for an unknown `mode`:
+
+```json
+{ "error": "mode must be declared or transport" }
 ```
 
 **Notes:**
@@ -2037,6 +2045,52 @@ not being the same as "declared nothing"), which apply here identically.
   excluded, same as other multi-node endpoints.
 
 ---
+
+
+### Transport view (`mode=transport`)
+
+Issue #2142. One row per repeater **seen forwarding** in the window, whether or not it has
+ever answered a declared-regions request. Built from the same single forwarding scan as the
+declared view, with the same attribution rules (FLOOD-family route types only, no 1-byte
+hops, a hop whose prefix matches several repeaters is credited to none of them), but with
+every repeater and room this instance knows as a target instead of only the declared ones.
+"Transported" means **seen carrying**, not configured for; the declared side is reported
+separately where it exists. Cached per window with the same TTLs as the declared view; the
+`scope` filter is applied to the cached result.
+
+```jsonc
+{
+  "mode": "transport",
+  "window": string,
+  "since": string (ISO),
+  "scope": string | undefined,         // normalised ?scope= filter ("#FR" -> "fr"); present only when given
+  "carrying": number | undefined,      // rows with carriesScope: true; only with scope
+  "notCarrying": number | undefined,   // rows with carriesScope: false; only with scope
+  "repeaters": [
+    {
+      "publicKey":        string,
+      "name":             string | null,  // null = no nodes row for this key
+      "role":             string | null,
+      "transported": [                    // named region scopes seen forwarded, most packets first
+        { "scope": string, "packets": number, "firstSeen": string (ISO), "lastSeen": string (ISO) }
+      ],
+      "unscopedPackets":  number,         // plain floods forwarded
+      "unmatchedPackets": number,         // scoped packets whose region this instance holds no key for
+      "ambiguousHops":    number,         // hops shared with another repeater's prefix, credited to neither
+      "asked":            boolean,        // a declared-regions answer exists
+      "declaredRegions":  [string] | null,// null when not asked; [] when it answered with no named region
+      "declaredWildcard": boolean,
+      "configState":      string | undefined, // as in the declared view; only when asked
+      "declaredAt":       string | undefined, // only when asked
+      "notObserved":      [string] | null,    // declared regions not seen carried; null when not asked
+      "carriesScope":     boolean | undefined // only with scope
+    }
+  ]
+}
+```
+
+A repeater with no attributed forwarding in the window (only ambiguous hops, or no traffic)
+is not listed. Rows are sorted by name, then public key.
 
 ## GET /api/scope-stats
 

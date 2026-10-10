@@ -101,6 +101,10 @@ type Server struct {
 	scopeAuditCache    map[string]*ScopeAuditResponse
 	scopeAuditCachedAt map[string]time.Time
 	scopeAuditSF       singleflight.Group
+	// #2142: the transport view (?mode=transport), cached per window with the
+	// same TTLs; computed under scopeAuditSF with a "transport|" key.
+	scopeTransportCache    map[string]*ScopeTransportResponse
+	scopeTransportCachedAt map[string]time.Time
 
 	// #1975: /api/scope-audit window cache and its single-flight guard, so a
 	// burst of viewers on a cold cache recomputes the network-wide scan once

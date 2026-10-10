@@ -849,6 +849,50 @@ type ScopeAuditResponse struct {
 	Repeaters []ScopeAuditRow `json:"repeaters"`
 }
 
+// ScopeTransportRow is one repeater seen forwarding in the window, in the
+// transport view of the scope audit (#2142, ?mode=transport). Unlike
+// ScopeAuditRow it does not require a declared-regions answer: "transported"
+// means seen carrying, not configured for, and the declared side is reported
+// where it exists (asked) and left null where it does not.
+type ScopeTransportRow struct {
+	PublicKey string  `json:"publicKey"`
+	Name      *string `json:"name"` // null = no nodes row held for this key
+	Role      *string `json:"role"`
+
+	// Transported lists the named region scopes this repeater was seen
+	// forwarding in the window, most packets first.
+	Transported      []ScopeObservation `json:"transported"`
+	UnscopedPackets  int64              `json:"unscopedPackets"`  // plain floods forwarded
+	UnmatchedPackets int64              `json:"unmatchedPackets"` // scoped, but no region key held here
+	AmbiguousHops    int64              `json:"ambiguousHops"`    // hops shared with another repeater's prefix, credited to neither
+
+	// Asked is whether a declared-regions answer exists for this repeater.
+	// DeclaredRegions is null when it does not, [] when it answered with no
+	// named region. NotObserved (declared, not seen carried) is null when not
+	// asked.
+	Asked            bool     `json:"asked"`
+	DeclaredRegions  []string `json:"declaredRegions"`
+	DeclaredWildcard bool     `json:"declaredWildcard"`
+	ConfigState      string   `json:"configState,omitempty"`
+	DeclaredAt       string   `json:"declaredAt,omitempty"`
+	NotObserved      []string `json:"notObserved"`
+
+	// CarriesScope is set only when the request named a scope (?scope=):
+	// whether this repeater was seen carrying it in the window.
+	CarriesScope *bool `json:"carriesScope,omitempty"`
+}
+
+// ScopeTransportResponse is GET /api/scope-audit?mode=transport.
+type ScopeTransportResponse struct {
+	Mode      string              `json:"mode"` // "transport"
+	Window    string              `json:"window"`
+	Since     string              `json:"since"`
+	Scope     string              `json:"scope,omitempty"` // normalised ?scope= filter, when given
+	Carrying  *int                `json:"carrying,omitempty"`
+	NotCarry  *int                `json:"notCarrying,omitempty"`
+	Repeaters []ScopeTransportRow `json:"repeaters"`
+}
+
 // NodeScopesResponse is the payload for GET /api/nodes/{pubkey}/scopes: the
 // observed-forwarding side (ScopeConformance, embedded BY VALUE so its three
 // scope states sit at the JSON top level — unmatched and unscoped are
@@ -997,6 +1041,16 @@ func (s *Server) handleScopeAudit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sinceISO := time.Now().Add(-lookback).UTC().Format(time.RFC3339)
+
+	switch r.URL.Query().Get("mode") {
+	case "", "declared":
+	case "transport":
+		s.serveScopeTransport(w, r, window, sinceISO)
+		return
+	default:
+		writeError(w, 400, "mode must be declared or transport")
+		return
+	}
 
 	if cached, ok := s.scopeAuditCached(window); ok {
 		writeJSON(w, cached)
@@ -1258,4 +1312,238 @@ func (s *Server) computeScopeAudit(window, sinceISO string) (*ScopeAuditResponse
 	})
 
 	return resp, nil
+}
+
+// serveScopeTransport answers GET /api/scope-audit?mode=transport (#2142):
+// the cached per-window transport view, with the optional region filter
+// applied to a copy so the cached response is never changed.
+func (s *Server) serveScopeTransport(w http.ResponseWriter, r *http.Request, window, sinceISO string) {
+	resp, ok := s.scopeTransportCached(window)
+	if !ok {
+		v, err, _ := s.scopeAuditSF.Do("transport|"+window, func() (interface{}, error) {
+			if cached, ok := s.scopeTransportCached(window); ok {
+				return cached, nil
+			}
+			fresh, cErr := s.computeScopeTransport(window, sinceISO)
+			if cErr != nil {
+				return nil, cErr
+			}
+			s.scopeTransportStore(window, fresh)
+			return fresh, nil
+		})
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		resp = v.(*ScopeTransportResponse)
+	}
+	// ?scope= names a region SCOPE (be, be-van). ?region= is kept for the
+	// observer IATA filter, as on every other endpoint.
+	if scope := strings.ToLower(normScope(strings.TrimSpace(r.URL.Query().Get("scope")))); scope != "" {
+		resp = withTransportScope(resp, scope)
+	}
+	writeJSON(w, resp)
+}
+
+func (s *Server) scopeTransportCached(window string) (*ScopeTransportResponse, bool) {
+	s.scopeAuditMu.Lock()
+	defer s.scopeAuditMu.Unlock()
+	cached, ok := s.scopeTransportCache[window]
+	if !ok || time.Since(s.scopeTransportCachedAt[window]) >= scopeAuditTTLFor(window) {
+		return nil, false
+	}
+	return cached, true
+}
+
+func (s *Server) scopeTransportStore(window string, resp *ScopeTransportResponse) {
+	s.scopeAuditMu.Lock()
+	defer s.scopeAuditMu.Unlock()
+	if s.scopeTransportCache == nil {
+		s.scopeTransportCache = make(map[string]*ScopeTransportResponse)
+		s.scopeTransportCachedAt = make(map[string]time.Time)
+	}
+	s.scopeTransportCache[window] = resp
+	s.scopeTransportCachedAt[window] = time.Now()
+}
+
+// withTransportScope returns a copy of resp in which every row says whether
+// it was seen carrying scope, with the two counts. scope is already
+// normalised (no '#', lower case).
+func withTransportScope(resp *ScopeTransportResponse, scope string) *ScopeTransportResponse {
+	out := *resp
+	out.Scope = scope
+	out.Repeaters = make([]ScopeTransportRow, len(resp.Repeaters))
+	carrying, notCarrying := 0, 0
+	for i, row := range resp.Repeaters {
+		carries := false
+		for _, so := range row.Transported {
+			if strings.ToLower(so.Scope) == scope {
+				carries = true
+				break
+			}
+		}
+		if carries {
+			carrying++
+		} else {
+			notCarrying++
+		}
+		c := carries
+		row.CarriesScope = &c
+		out.Repeaters[i] = row
+	}
+	out.Carrying, out.NotCarry = &carrying, &notCarrying
+	return &out
+}
+
+// repeaterPubkeys lists every repeater and room this instance holds a nodes
+// row for: the candidates the transport view attributes forwarding hops to.
+func (db *DB) repeaterPubkeys() ([]string, error) {
+	rows, err := db.conn.Query(`SELECT public_key FROM nodes WHERE role IN ('repeater', 'room')`)
+	if err != nil {
+		return nil, fmt.Errorf("scope transport repeaters: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var pk string
+		if rows.Scan(&pk) == nil {
+			out = append(out, strings.ToLower(pk))
+		}
+	}
+	return out, rows.Err()
+}
+
+// computeScopeTransport builds one window's transport view (#2142): the same
+// single forwarding scan as the declared view (ScopeAuditForwarding, same
+// FLOOD-family route types and minimum hop length, ambiguous hops credited to
+// nobody), with every known repeater as a target instead of only the ones that
+// answered a declared-regions request. A repeater is listed when the scan
+// attributed any forwarding to it in the window.
+func (s *Server) computeScopeTransport(window, sinceISO string) (*ScopeTransportResponse, error) {
+	declaredByPK, targets, err := s.scopeTransportTargets()
+	if err != nil {
+		return nil, err
+	}
+	forwarding := map[string]*scopeAuditTargetAgg{}
+	if s.store != nil {
+		forwarding, err = s.store.ScopeAuditForwarding(sinceISO, targets)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	seen := make([]string, 0, len(forwarding))
+	for pk, agg := range forwarding {
+		if len(agg.scopes) > 0 || agg.unscopedPackets > 0 || agg.unmatchedPackets > 0 {
+			seen = append(seen, pk)
+		}
+	}
+	identities := s.db.scopeAuditNodeIdentities(seen)
+
+	resp := &ScopeTransportResponse{Mode: "transport", Window: window, Since: sinceISO, Repeaters: []ScopeTransportRow{}}
+	for _, pk := range seen {
+		id := identities[pk]
+		if s.scopeTransportHidden(pk, id) {
+			continue
+		}
+		resp.Repeaters = append(resp.Repeaters, scopeTransportRow(pk, id, forwarding[pk], declaredByPK))
+	}
+	sortScopeTransportRows(resp.Repeaters)
+	return resp, nil
+}
+
+// scopeTransportTargets is every repeater the scan should attribute
+// forwarding to: those that answered a declared-regions request and every
+// known repeater, sorted, with the declared answers by key.
+func (s *Server) scopeTransportTargets() (map[string]DeclaredRegionsRow, []string, error) {
+	declared, err := s.db.AllCurrentDeclaredRegions()
+	if err != nil {
+		return nil, nil, err
+	}
+	declaredByPK := make(map[string]DeclaredRegionsRow, len(declared))
+	targetSet := make(map[string]bool, len(declared))
+	for _, d := range declared {
+		pk := strings.ToLower(d.Target)
+		declaredByPK[pk] = d
+		targetSet[pk] = true
+	}
+	repeaters, err := s.db.repeaterPubkeys()
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, pk := range repeaters {
+		targetSet[pk] = true
+	}
+	targets := make([]string, 0, len(targetSet))
+	for pk := range targetSet {
+		targets = append(targets, pk)
+	}
+	sort.Strings(targets)
+	return declaredByPK, targets, nil
+}
+
+// scopeTransportHidden applies the blacklist and hidden name prefixes.
+func (s *Server) scopeTransportHidden(pk string, id scopeAuditNodeIdentity) bool {
+	if s.cfg == nil {
+		return false
+	}
+	return s.cfg.IsBlacklisted(pk) || (id.Name != nil && s.cfg.IsNameHidden(*id.Name))
+}
+
+// scopeTransportRow is one repeater's row: the scopes it was seen carrying,
+// busiest first, and, when it answered a declared-regions request, what it
+// declares and which of those it was not seen carrying.
+func scopeTransportRow(pk string, id scopeAuditNodeIdentity, agg *scopeAuditTargetAgg, declaredByPK map[string]DeclaredRegionsRow) ScopeTransportRow {
+	transported := make([]ScopeObservation, 0, len(agg.scopes))
+	for _, so := range agg.scopes {
+		transported = append(transported, *so)
+	}
+	sort.Slice(transported, func(i, j int) bool {
+		if transported[i].Packets != transported[j].Packets {
+			return transported[i].Packets > transported[j].Packets
+		}
+		return transported[i].Scope < transported[j].Scope
+	})
+	row := ScopeTransportRow{
+		PublicKey:        pk,
+		Name:             id.Name,
+		Role:             id.Role,
+		Transported:      transported,
+		UnscopedPackets:  agg.unscopedPackets,
+		UnmatchedPackets: agg.unmatchedPackets,
+		AmbiguousHops:    agg.ambiguousHops,
+	}
+	d, ok := declaredByPK[pk]
+	if !ok {
+		return row
+	}
+	named, wildcard := splitDeclaredRegions(d.RegionsCSV)
+	row.Asked = true
+	row.DeclaredRegions = named
+	row.DeclaredWildcard = wildcard
+	row.ConfigState = scopeAuditConfigState(named, wildcard)
+	row.DeclaredAt = d.ObservedAt
+	row.NotObserved = []string{}
+	for _, rgn := range named {
+		if agg.scopes[rgn] == nil {
+			row.NotObserved = append(row.NotObserved, rgn)
+		}
+	}
+	return row
+}
+
+// sortScopeTransportRows orders rows by name, falling back to the key.
+func sortScopeTransportRows(rows []ScopeTransportRow) {
+	label := func(r ScopeTransportRow) string {
+		if r.Name != nil && *r.Name != "" {
+			return *r.Name
+		}
+		return r.PublicKey
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if an, bn := label(rows[i]), label(rows[j]); an != bn {
+			return an < bn
+		}
+		return rows[i].PublicKey < rows[j].PublicKey
+	})
 }
