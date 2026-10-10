@@ -14,8 +14,8 @@
 //     1. Run via Store.RunAsyncMigration(...) below (preferred for backfills
 //        and any work that may touch >1K rows). The migration is recorded as
 //        `pending_async` immediately, returns to the caller (boot proceeds),
-//        and completes in a goroutine. Status flips to `done` (or `failed`
-//        with an error message) when fn returns.
+//        and completes in a goroutine. Status flips to `done`, `cancelled`,
+//        or `failed` when fn returns; interruptions retain the error message.
 //     2. Carry the preflight annotation comment immediately above the
 //        migration block, e.g.
 //             // PREFLIGHT: async=true reason="<one-line justification>"
@@ -32,6 +32,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 )
@@ -42,7 +43,7 @@ func ensureAsyncMigrationsTable(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS _async_migrations (
 			name       TEXT PRIMARY KEY,
-			status     TEXT NOT NULL,             -- pending_async | done | failed
+			status     TEXT NOT NULL,             -- pending_async | done | cancelled | failed
 			started_at TEXT NOT NULL DEFAULT (datetime('now')),
 			ended_at   TEXT,
 			error      TEXT
@@ -57,10 +58,11 @@ func ensureAsyncMigrationsTable(db *sql.DB) error {
 //
 // Contract (pinned by async_migration_test.go):
 //   - status is `pending_async` IMMEDIATELY after this returns.
-//   - fn runs in a goroutine; on success status becomes `done`, on error or
-//     panic status becomes `failed` and the error is recorded.
+//   - fn runs in a goroutine; on success status becomes `done`. Errors matching
+//     context.Canceled become `cancelled`; other errors and panics become
+//     `failed`. Both interrupted states record the error and completion time.
 //   - Idempotent: if a row with the same name already exists in `done`
-//     state, fn is NOT re-run. If in `failed` or `pending_async` state,
+//     state, fn is NOT re-run. If in `failed`, `cancelled`, or `pending_async`,
 //     fn IS re-scheduled (a previous run may have crashed mid-flight).
 //   - The caller's WaitGroup tracks the goroutine so tests/shutdown can
 //     wait via Store.WaitForAsyncMigrations().
@@ -76,7 +78,7 @@ func (s *Store) RunAsyncMigration(ctx context.Context, name string, fn func(cont
 		if existing == "done" {
 			return nil // already complete, nothing to do
 		}
-		// pending_async or failed → reset and retry.
+		// pending_async, cancelled, or failed → reset and retry.
 		if _, err := s.db.Exec(`
 			UPDATE _async_migrations
 			SET status = 'pending_async', started_at = datetime('now'), ended_at = NULL, error = NULL
@@ -103,13 +105,17 @@ func (s *Store) RunAsyncMigration(ctx context.Context, name string, fn func(cont
 				log.Printf("[async-migration] %q panic recovered: %v", name, r)
 			}
 			if runErr != nil {
+				status, label := "failed", "FAILED"
+				if errors.Is(runErr, context.Canceled) {
+					status, label = "cancelled", "cancelled"
+				}
 				if _, err := s.db.Exec(`
 					UPDATE _async_migrations
-					SET status = 'failed', ended_at = datetime('now'), error = ?
-					WHERE name = ?`, runErr.Error(), name); err != nil {
-					log.Printf("[async-migration] failed to record failure for %q: %v", name, err)
+					SET status = ?, ended_at = datetime('now'), error = ?
+					WHERE name = ?`, status, runErr.Error(), name); err != nil {
+					log.Printf("[async-migration] failed to record %s for %q: %v", status, name, err)
 				}
-				log.Printf("[async-migration] %q FAILED: %v", name, runErr)
+				log.Printf("[async-migration] %q %s: %v", name, label, runErr)
 				return
 			}
 			if _, err := s.db.Exec(`
@@ -129,7 +135,7 @@ func (s *Store) RunAsyncMigration(ctx context.Context, name string, fn func(cont
 }
 
 // AsyncMigrationStatus returns the current status of an async migration
-// (one of "pending_async", "done", "failed") or sql.ErrNoRows if no such
+// (one of "pending_async", "done", "cancelled", "failed") or sql.ErrNoRows if no such
 // migration has been registered.
 func (s *Store) AsyncMigrationStatus(name string) (string, error) {
 	if err := ensureAsyncMigrationsTable(s.db); err != nil {

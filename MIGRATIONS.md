@@ -29,9 +29,12 @@ if err := s.RunAsyncMigration(ctx, "my_migration_v1",
   table **immediately** — the ingestor boots and starts ingesting.
 - `fn` runs in a goroutine; the WaitGroup is shared with the rest of the
   ingestor (`Store.WaitForAsyncMigrations()` waits for everything).
-- On success the row flips to `done`; on error/panic to `failed` with the
-  error message captured.
-- Idempotent: rows in `done` state short-circuit; `failed`/`pending_async`
+- On success the row flips to `done`. A returned error matching
+  `context.Canceled` (including a wrapped error) becomes `cancelled`, such
+  as when shutdown interrupts a backfill. Other errors, including deadline
+  expiry, and panics become `failed` even if the context was cancelled.
+  Both interrupted states retain the error message and completion time.
+- Idempotent: rows in `done` state short-circuit; `failed`/`cancelled`/`pending_async`
   rows are retried on the next boot.
 
 Reference implementations: `Store.BackfillPathJSONAsync` (path_json
@@ -91,7 +94,7 @@ What this means for async migrations:
   running against the same DB is not a supported deployment shape.
 - **Within a single process**, concurrent `RunAsyncMigration(name=X)`
   callers race the initial `SELECT status` → `UPDATE/INSERT` step. The
-  current implementation re-schedules `fn` on a pending/failed row so a
+  current implementation re-schedules `fn` on a pending/failed/cancelled row so a
   duplicate caller may legitimately re-run it; once status is `done` all
   further calls short-circuit. See
   `TestRunAsyncMigration_ConcurrentSameNameSerialized` for the contract.
