@@ -39,7 +39,8 @@ const routeTypeNonTransportSQL = "route_type IN (1, 2)"
 // DB wraps a read-only connection to the MeshCore SQLite database.
 type DB struct {
 	advertEvidenceTable     atomic.Bool
-	advertEvidenceReadHook  func() // test-only: immediately before a bulk mask query
+	txRewriteFeedTable      atomic.Bool // tx_rewrite_feed present (#2107); re-probed while absent
+	advertEvidenceReadHook  func()      // test-only: immediately before a bulk mask query
 	conn                    *sql.DB
 	path                    string // filesystem path to the database file
 	isV3                    bool   // v3 schema: observer_idx in observations (vs observer_id in v2)

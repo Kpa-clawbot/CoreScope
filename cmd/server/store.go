@@ -184,6 +184,10 @@ type PacketStore struct {
 	advertEvidenceCursor   int64
 	advertEvidenceRevision uint64 // cacheMu
 
+	// tx_rewrite_feed tail (#2107): in-place rewrites of loaded rows.
+	txRewriteMu     sync.Mutex
+	txRewriteCursor int64
+
 	mu            sync.RWMutex
 	db            *DB
 	packets       []*StoreTx                 // sorted by first_seen ASC (oldest first; newest at tail)
@@ -782,6 +786,11 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig, cacheTTLs ...map[string]inte
 	// remains above this watermark; each loaded tx also reads its full mask.
 	if db.advertEvidencePresent() {
 		_ = db.conn.QueryRow(`SELECT COALESCE(MAX(id),0) FROM advert_route_evidence`).Scan(&ps.advertEvidenceCursor)
+	}
+	// Same watermark rule for the rewrite feed: rows loaded below already
+	// carry every rewrite committed before this point.
+	if db.txRewriteFeedPresent() {
+		_ = db.conn.QueryRow(`SELECT COALESCE(MAX(id),0) FROM tx_rewrite_feed`).Scan(&ps.txRewriteCursor)
 	}
 	return ps
 }
@@ -3193,6 +3202,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]interface{} {
 	// Must run even when observation IDs/timestamps have not changed.
 	s.refreshAdvertEvidence()
+	s.refreshTxRewrites() // #2107: rewrites never move IDs, so poll them here too
 	if limit <= 0 {
 		limit = 500
 	}
