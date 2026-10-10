@@ -15,8 +15,10 @@ CoreDrive RX companions publish coverage under `meshcore/client/<pubkey>/packets
 with one shared broker account. CoreScope knows a companion only by that pubkey.
 With user management on, a logged-in user wants:
 
-1. **Ownership.** Every companion they drive with shows up under their "My nodes",
-   so the existing watch and notification features apply to it.
+1. **Ownership.** Every companion they drive with shows up under their account
+   (*Companions*). It is not added to "My nodes": a companion is not a node to
+   monitor (decided 2026-10-09, after the staging test showed it as a "Silent"
+   card named "Unknown").
 2. **Attribution.** The coverage their companions collected is theirs: a
    "My coverage" view, and their linked companions listed on the account page.
 
@@ -37,9 +39,9 @@ Two things block this today:
 | 2 | Token storage | A row in the existing `sessions` table with `kind = 'device'`, so it shows under **Devices** on the account page and is revoked the same way. |
 | 3 | Token scope | Narrow and server-enforced: `/api/auth/me`, `/api/auth/logout`, `/api/account/companions*`, `/api/account/settings`. Everything else answers 403 to a bearer token. |
 | 4 | Ownership proof | The companion signs a server challenge with its own Ed25519 identity key (MeshCore companion `CMD_SIGN_*`). No signature, no link. |
-| 5 | Conflicts | The newest valid proof wins. Whoever holds the key owns the companion (devices change hands). The previous owner gets an audit row, and a mail when notifications are enabled. |
+| 5 | Conflicts | The newest valid proof wins. Whoever holds the key owns the companion (devices change hands). The previous owner gets an audit row and a mail; the mail is a security notice, sent whatever the node notification settings are (not to an inactive account or a bouncing address). |
 | 6 | Attribution | A read-time join `client_receptions.rx_pubkey → companion_links`. All coverage of a linked companion counts for its current owner, including rows from before the link. The ingestor and the RX payload contract do not change. |
-| 7 | My nodes | Linking also adds the pubkey to the user's `meshcore-my-nodes`. Unlinking does **not** remove it: that list is the user's own choice. |
+| 7 | My nodes | Linking does **not** touch `meshcore-my-nodes`: that list is the user's own choice of nodes to monitor, and a companion is not one. (Changed 2026-10-09; the first version added it.) |
 | 8 | Linked-only ingest | Opt-in admin setting `clientRxCoverage.requireLinkedCompanion`. When it is on, the ingestor drops every `meshcore/client/<pubkey>/…` message whose pubkey is not in `companion_links`. It is a filter, not a security boundary (see *Linked-only ingest*). |
 | 9 | Per-user API keys | Out of scope. The token table gets a `kind` and `scopes` so a later `api_key` kind (named, shown once, own scopes, revoked separately) is a small addition. The RX device token is never reused for external access. |
 
@@ -97,7 +99,11 @@ the rest of A–E. Rate limits use the existing token buckets (per IP and per us
   it is capped at 64 characters.
 - Authentication: `Authorization: Bearer <token>`. `withUser` accepts either a
   cookie session (with the CSRF check for writes) or a bearer token (no CSRF,
-  scope check). A bearer token on a route outside its scope answers 403.
+  scope check). A bearer token on a route outside its scope answers 403. The
+  bearer header only counts on a request without the `cs_session` cookie: with
+  the cookie, the cookie decides, so an auth proxy that adds its own
+  `Authorization: Bearer` does not break browser logins. RX therefore sends its
+  API calls with `credentials: 'omit'`.
 - `POST /api/auth/logout` with a bearer token revokes that device row.
 - `GET /api/account/sessions` returns `kind` and `label`. The **Devices** list shows
   a device token as "CoreDrive RX – <label>" with its last use, and the existing
@@ -114,16 +120,12 @@ the rest of A–E. Rate limits use the existing token buckets (per IP and per us
      `"corescope-link:" + host + ":" + challenge`, where `host` is the host of
      `userManagement.publicBaseUrl`. This uses `internal/sigvalidate`. Invalid → 400.
   3. Upsert `companion_links`. If the pubkey belonged to another user, write an
-     audit row for both users, and mail the previous owner if notifications are
-     enabled for them.
-  4. Add `{pubkey, name, addedAt}` to the user's `meshcore-my-nodes`, unless it is
-     already there. This is a server-side read-modify-write of the settings document
-     that bumps its revision, so open web clients pick it up through the normal
-     B conflict flow. If the document is at the size cap, the link still succeeds
-     and the response says `myNodes: "full"`.
-  5. `200 {pubkey, name, linkedAt, myNodes: "added" | "present" | "full"}`.
+     audit row for both users, and mail the previous owner (a security notice:
+     node notification settings do not apply; no mail to an inactive account or
+     a bouncing address).
+  4. `200 {pubkey, name, linkedAt}`. The synced settings are not touched.
 - `GET /api/account/companions` → `[{pubkey, name, linkedAt, lastSeenAt}]`.
-- `DELETE /api/account/companions/{pubkey}` → 204. Leaves `meshcore-my-nodes` alone.
+- `DELETE /api/account/companions/{pubkey}` → 204.
 - Admin: `GET /api/admin/users/{id}` gains `companions`. The audit kinds are
   `companion_link`, `companion_unlink` and `companion_transfer`.
 
@@ -194,8 +196,7 @@ Tokens, challenges and signatures are never logged.
   - Linking with a real MeshCore key and signature fixture: success, wrong host in
     the message, reused challenge, a challenge bound to another pubkey.
   - Transfer between two users: the audit rows and the mail.
-  - The `meshcore-my-nodes` merge: keeps existing items, skips duplicates, reports
-    `full` at the cap.
+  - Linking leaves the synced settings (`meshcore-my-nodes`) alone.
   - `rx-coverage?mine=1`.
   - CORS headers only for allowlisted origins and only on scoped routes.
   - Everything answers 404 with the feature off.

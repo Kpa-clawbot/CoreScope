@@ -505,28 +505,29 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 	}
 	pathTrust := s.cfg.GetPathTrust()
 	writeJSON(w, ClientConfigResponse{
-		Roles:               s.cfg.Roles,
-		HealthThresholds:    s.cfg.GetHealthThresholds().ToClientMs(),
-		Map:                 s.cfg.Map,
-		SnrThresholds:       s.cfg.SnrThresholds,
-		DistThresholds:      s.cfg.DistThresholds,
-		MaxHopDist:          s.cfg.MaxHopDist,
-		Limits:              s.cfg.Limits,
-		PerfSlowMs:          s.cfg.PerfSlowMs,
-		WsReconnectMs:       s.cfg.WsReconnectMs,
-		CacheInvalidateMs:   s.cfg.CacheInvalidMs,
-		ExternalUrls:        s.cfg.ExternalUrls,
-		PropagationBufferMs: float64(s.cfg.PropagationBufferMs()),
-		LiveMapMaxNodes:     s.cfg.LiveMapMaxNodes(),
-		Timestamps:          s.cfg.GetTimestampConfig(),
-		DebugAffinity:       s.cfg.DebugAffinity,
-		MapDarkTileProvider: s.cfg.MapDarkTileProvider,
-		Tiles:               s.cfg.Tiles,
-		Customizer:          CustomizerClientConfig{DisabledTabs: disabledTabs},
-		ClientRxCoverage:    s.cfg.ClientRxCoverageEnabled(),
-		ClientRfSamples:     s.cfg.ClientRfSamplesEnabled(),
-		PathTrust:           &pathTrust,
-		UserManagement:      s.clientUserManagement(),
+		Roles:                          s.cfg.Roles,
+		HealthThresholds:               s.cfg.GetHealthThresholds().ToClientMs(),
+		Map:                            s.cfg.Map,
+		SnrThresholds:                  s.cfg.SnrThresholds,
+		DistThresholds:                 s.cfg.DistThresholds,
+		MaxHopDist:                     s.cfg.MaxHopDist,
+		Limits:                         s.cfg.Limits,
+		PerfSlowMs:                     s.cfg.PerfSlowMs,
+		WsReconnectMs:                  s.cfg.WsReconnectMs,
+		CacheInvalidateMs:              s.cfg.CacheInvalidMs,
+		ExternalUrls:                   s.cfg.ExternalUrls,
+		PropagationBufferMs:            float64(s.cfg.PropagationBufferMs()),
+		LiveMapMaxNodes:                s.cfg.LiveMapMaxNodes(),
+		Timestamps:                     s.cfg.GetTimestampConfig(),
+		DebugAffinity:                  s.cfg.DebugAffinity,
+		MapDarkTileProvider:            s.cfg.MapDarkTileProvider,
+		Tiles:                          s.cfg.Tiles,
+		Customizer:                     CustomizerClientConfig{DisabledTabs: disabledTabs},
+		ClientRxCoverage:               s.cfg.ClientRxCoverageEnabled(),
+		ClientRfSamples:                s.cfg.ClientRfSamplesEnabled(),
+		ClientRxRequireLinkedCompanion: s.auth != nil && s.cfg.ClientRxRequireLinkedCompanionSet(),
+		PathTrust:                      &pathTrust,
+		UserManagement:                 s.clientUserManagement(),
 	})
 }
 
@@ -534,7 +535,7 @@ func (s *Server) clientUserManagement() *ClientUserManagement {
 	if s.auth == nil {
 		return nil
 	}
-	return &ClientUserManagement{Enabled: true, ChannelProposals: s.auth.set.proposals.enabled, Notifications: s.auth.notify != nil}
+	return &ClientUserManagement{Enabled: true, ChannelProposals: s.auth.set.proposals.enabled, Notifications: s.auth.notify != nil, CompanionLinking: true}
 }
 
 func (s *Server) handleConfigAreas(w http.ResponseWriter, r *http.Request) {

@@ -284,12 +284,22 @@ func (c *Config) GZipEnabled() bool {
 // ClientRxCoverageConfig gates the opt-in mobile client-RX coverage feature.
 type ClientRxCoverageConfig struct {
 	Enabled bool `json:"enabled"`
+	// RequireLinkedCompanion (companion linking): the ingestor drops client
+	// messages from companions no user linked. Only with userManagement.enabled.
+	RequireLinkedCompanion bool `json:"requireLinkedCompanion,omitempty"`
 }
 
 // ClientRxCoverageEnabled reports whether the opt-in mobile client-RX coverage
 // feature is on. Nil config or absent/nil section ⇒ off (the safe default).
 func (c *Config) ClientRxCoverageEnabled() bool {
 	return c != nil && c.ClientRxCoverage != nil && c.ClientRxCoverage.Enabled
+}
+
+// ClientRxRequireLinkedCompanionSet reports whether the operator set
+// clientRxCoverage.requireLinkedCompanion (in effect only with user
+// management on).
+func (c *Config) ClientRxRequireLinkedCompanionSet() bool {
+	return c != nil && c.ClientRxCoverage != nil && c.ClientRxCoverage.RequireLinkedCompanion
 }
 
 // ClientRfSamplesConfig gates the opt-in RF environment sample stream.

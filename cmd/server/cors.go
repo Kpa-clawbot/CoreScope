@@ -41,6 +41,9 @@ func applyCORSEnv(cfg *Config) {
 // Methods so iframes / server-side fetchers cannot opt into POST/PUT/DELETE
 // via CORS. Same-origin writes (admin UI, API-key holders on the canonical
 // origin) are unaffected — they never go through the preflight path.
+// The exception is the bearer routes of companion linking (bearerCORSPath,
+// only with user management on), which also allow POST, PUT, DELETE and the
+// Authorization header.
 // Credentialed CORS is intentionally NOT enabled.
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -89,9 +92,17 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", reqOrigin)
 			w.Header().Set("Vary", "Origin")
 		}
-		// Read-only embed contract — see comment above.
-		w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
+		if s.auth != nil && bearerCORSPath(r.URL.Path) {
+			// Companion linking: CoreDrive RX on an allowlisted origin logs in
+			// and writes with a device token in Authorization. Still no
+			// credentials: nothing rides on cookies.
+			w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		} else {
+			// Read-only embed contract — see comment above.
+			w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
+		}
 
 		// Handle preflight
 		if r.Method == http.MethodOptions {
