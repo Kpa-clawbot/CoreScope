@@ -3593,6 +3593,13 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .area-dropdown-menu { min-width: 160px; }
 .area-dropdown-item.area-item-active { color: var(--accent); font-weight: 600; }
 .region-filter-container { margin: 0; padding: 0; display: inline-flex; align-items: center; }
+/* Region quick picks (config regionQuickPicks). In the dropdown they are
+   checkbox rows like All, between All and the single regions; in the pill
+   bar they lead, set off from the single regions by a divider. */
+.region-dropdown-sep { height: 1px; background: var(--border); margin: 4px 0; }
+.region-quick-picks-divider {
+  width: 1px; align-self: stretch; margin: 4px 2px; background: var(--border); flex-shrink: 0;
+}
 .region-pill {
   display: inline-flex; align-items: center; padding: 4px 12px; border-radius: 16px;
   font-size: 12px; font-weight: 500; cursor: pointer; border: 1.5px solid var(--border);
@@ -4514,6 +4521,12 @@ button.region-pill-active:hover { opacity: 0.85; color: var(--text-on-accent); }
   .multi-select-trigger {
     height: 44px;
   }
+  /* The region menu sits inside .filter-bar on some pages, whose input rule
+     above would make each checkbox a 44px square. The row is the tap target. */
+  .filter-bar .region-dropdown-item input[type="checkbox"] {
+    width: 20px; height: 20px; min-width: 0; min-height: 0;
+  }
+  .region-dropdown-item { min-height: 44px; }
 }
 
 /* #630-3: Status text labels — visually hidden text for screen readers */

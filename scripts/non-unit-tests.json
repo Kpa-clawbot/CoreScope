@@ -122,6 +122,7 @@
   "domIntegration": {
     "reason": "Requires jsdom. The JS unit gate runs with no node_modules at all (its job has no npm install), so a suite needing a third-party module cannot live in test-all.sh. It runs in the E2E job, which does npm ci, and is invoked by its own deploy.yml line.",
     "files": [
+      "tests/e2e/test-region-quick-picks.js",
       "tests/e2e/test-table-sort.js"
     ]
   },

@@ -50,6 +50,7 @@
 - [GET /api/traces/:hash](#get-apitraceshash)
 - [GET /api/config/theme](#get-apiconfigtheme)
 - [GET /api/config/regions](#get-apiconfigregions)
+- [GET /api/config/region-quick-picks](#get-apiconfigregion-quick-picks)
 - [GET /api/config/areas](#get-apiconfigareas)
 - [GET /api/config/areas/polygons](#get-apiconfigareaspolygons)
 - [GET /api/config/client](#get-apiconfigclient)
@@ -2301,6 +2302,31 @@ Available regions (IATA codes) merged from config + DB.
 ```
 
 Returns a flat key-value object.
+
+---
+
+## GET /api/config/region-quick-picks
+
+Named groups of region codes from `config.json` `regionQuickPicks`, offered as one-tap choices by
+the region filter. Names and codes are trimmed, codes upper-cased and de-duplicated in their
+configured order, groups without a name or any code dropped; at most 20 groups of 200 codes.
+
+### Response `200`
+
+```jsonc
+{
+  "quickPicks": [
+    {
+      "name":        string,           // button label
+      "description": string | undefined, // tooltip
+      "regions":     [string]          // IATA codes, as configured (may include codes with no observer yet)
+    }
+  ]
+}
+```
+
+`quickPicks` is `[]` when none are configured. The client offers a group only when at least one
+of its codes appears in `GET /api/config/regions`, and selects just those codes.
 
 ---
 

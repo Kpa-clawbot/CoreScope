@@ -104,6 +104,11 @@ type Config struct {
 
 	Regions map[string]string `json:"regions"`
 
+	// RegionQuickPicks are named groups of region (IATA) codes offered as
+	// one-tap choices in the region filter, e.g. a country's observers. See
+	// NormalizedRegionQuickPicks and config.example.json.
+	RegionQuickPicks []RegionQuickPick `json:"regionQuickPicks,omitempty"`
+
 	Roles            map[string]interface{} `json:"roles"`
 	HealthThresholds *HealthThresholds      `json:"healthThresholds"`
 	PathTrust        *PathTrustConfig       `json:"pathTrust,omitempty"`
@@ -874,6 +879,67 @@ func (c *Config) BlacklistGeneration() uint64 {
 		return 0
 	}
 	return c.blacklistGen.Load()
+}
+
+// RegionQuickPick is one named group of region codes for the region filter.
+type RegionQuickPick struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Regions     []string `json:"regions"`
+}
+
+// Limits on the configured quick picks, so a typo in config.json cannot put
+// thousands of buttons or codes into every page.
+const (
+	maxRegionQuickPicks       = 20
+	maxRegionQuickPickRegions = 200
+)
+
+// NormalizedRegionQuickPicks returns the configured quick picks, cleaned up:
+// names, descriptions and codes trimmed, codes upper-cased and de-duplicated
+// in their configured order, picks without a name or any code dropped, and at
+// most maxRegionQuickPicks picks of maxRegionQuickPickRegions codes each.
+// Never nil, so the API always answers with a list.
+func (c *Config) NormalizedRegionQuickPicks() []RegionQuickPick {
+	out := []RegionQuickPick{}
+	if c == nil {
+		return out
+	}
+	for _, p := range c.RegionQuickPicks {
+		if len(out) >= maxRegionQuickPicks {
+			break
+		}
+		name := strings.TrimSpace(p.Name)
+		if name == "" {
+			continue
+		}
+		codes := normalizeQuickPickCodes(p.Regions)
+		if len(codes) == 0 {
+			continue
+		}
+		out = append(out, RegionQuickPick{Name: name, Description: strings.TrimSpace(p.Description), Regions: codes})
+	}
+	return out
+}
+
+// normalizeQuickPickCodes trims and upper-cases a pick's codes, drops empty
+// and repeated ones in their configured order, and keeps at most
+// maxRegionQuickPickRegions.
+func normalizeQuickPickCodes(regions []string) []string {
+	seen := make(map[string]bool, len(regions))
+	codes := make([]string, 0, len(regions))
+	for _, r := range regions {
+		code := strings.ToUpper(strings.TrimSpace(r))
+		if code == "" || seen[code] {
+			continue
+		}
+		if len(codes) >= maxRegionQuickPickRegions {
+			break
+		}
+		seen[code] = true
+		codes = append(codes, code)
+	}
+	return codes
 }
 
 // IsBlacklisted returns true if the given public key is in the nodeBlacklist.
