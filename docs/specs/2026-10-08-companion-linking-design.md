@@ -1,7 +1,7 @@
 # Companion Linking (User Management, Sub-project F), Design Spec
 
 **Date:** 2026-10-08
-**Status:** Approved (design). Not implemented.
+**Status:** Implemented in three PRs: users store, server, ingestor + frontend.
 **Scope:** sub-project **F** of the optional user-management track. Builds on A
 (accounts, sessions), B (settings sync, `meshcore-my-nodes`) and E (notifications).
 The client side lives in CoreDrive RX (`efiten/coredrive-rx`,

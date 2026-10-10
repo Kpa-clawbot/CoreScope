@@ -16,7 +16,8 @@
  * Set CHROMIUM_PATH to a Chrome/Chromium binary if Playwright's own is not installed.
  */
 'use strict';
-const { chromium } = require('playwright');
+const crypto = require('crypto');
+const { chromium, request } = require('playwright');
 const { AxeBuilder } = require('@axe-core/playwright');
 const BASE = process.env.BASE_URL || 'http://localhost:13582';
 const BASE_OFF = process.env.BASE_URL_OFF || 'http://localhost:13581';
@@ -428,6 +429,47 @@ async function until(fn, label) {
     assert(body.formatVersion === 1, 'formatVersion ' + body.formatVersion);
     assert(body.profile && body.profile.email === 'proposer@e2e.test', 'export profile ' + JSON.stringify(body.profile));
   });
+
+  // Companion linking (docs/specs/2026-10-08-companion-linking-design.md).
+  const driver = await (await browser.newContext()).newPage();
+  driver.setDefaultTimeout(8000);
+  driver.on('pageerror', (e) => console.error('[pageerror driver]', e.message));
+  await step('companions: a device token shows under Devices, a linked companion under Companions, and unlinks', async () => {
+    await registerAndActivate(driver, 'driver@e2e.test', 'E2E Driver');
+    // RX calls the API without the browser's cookies (credentials: 'omit'):
+    // with the session cookie the bearer header would not count.
+    const api = await request.newContext();
+    let r = await api.post(BASE + '/api/auth/device-token', { data: { email: 'driver@e2e.test', password: PW, deviceName: 'E2E Pixel' } });
+    assert(r.ok(), 'device-token HTTP ' + r.status());
+    const auth = { Authorization: 'Bearer ' + (await r.json()).token };
+    const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+    const pk = publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('hex');
+    r = await api.post(BASE + '/api/account/companions/challenge', { headers: auth, data: { pubkey: pk } });
+    assert(r.ok(), 'challenge HTTP ' + r.status());
+    const { challenge } = await r.json();
+    const signed = Buffer.from('corescope-link:' + new URL(BASE).host + ':' + challenge, 'utf8');
+    const signature = crypto.sign(null, signed, privateKey).toString('hex');
+    r = await api.post(BASE + '/api/account/companions', { headers: auth, data: { pubkey: pk, challenge, signature, name: 'E2E Car' } });
+    assert(r.ok(), 'link HTTP ' + r.status() + ': ' + (await r.text()));
+
+    await driver.goto(BASE + '/#/account');
+    await driver.reload();
+    await driver.waitForSelector('#sessList li[data-kind="device"]');
+    assert((await driver.textContent('#sessList')).indexOf('CoreDrive RX – E2E Pixel') !== -1, 'device token not listed as CoreDrive RX');
+    const unlink = '#compList [data-unlink="' + pk + '"]';
+    await driver.waitForSelector(unlink);
+    assert((await driver.textContent('#compList')).indexOf('E2E Car') !== -1, 'companion name missing');
+    await axeClean(driver, '#compList');
+
+    driver.once('dialog', (d) => d.accept());
+    await driver.click(unlink);
+    await driver.waitForSelector('#compEmpty');
+    assert((await driver.textContent('#compMsg')).indexOf('Companion unlinked') !== -1, 'no unlink message');
+    r = await api.get(BASE + '/api/account/companions', { headers: auth });
+    assert(r.ok() && (await r.json()).length === 0, 'companion still linked after Unlink');
+    await api.dispose();
+  });
+  await driver.context().close();
 
   await step('feature off: no userManagement block, so no notifications flag, and no toggle on the node page', async () => {
     const body = await (await off.request.get(BASE_OFF + '/api/config/client')).json();

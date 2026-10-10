@@ -34,7 +34,7 @@ type testProposal struct {
 	decidedAt       int64
 }
 
-func execUsersDB(t *testing.T, path string, stmts ...string) {
+func execUsersDB(t testing.TB, path string, stmts ...string) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", path)
 	if err != nil {

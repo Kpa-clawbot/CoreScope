@@ -116,6 +116,13 @@ func main() {
 		}()
 	}
 
+	// Linked-only ingest (clientRxCoverage.requireLinkedCompanion): nil when
+	// off or ignored. Installed before any MQTT source connects.
+	if lc := newLinkedCompanionFilter(cfg); lc != nil {
+		store.linkedCompanions = lc
+		go lc.refreshLoop()
+	}
+
 	regionSet := newRegionKeySet(cfg)
 	if cfg.AutoRegionKeysEnabled() {
 		// Fill the derived tier before the first packet is matched, so a
@@ -855,6 +862,11 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		// every sub-topic.
 		if cfg.IsObserverBlacklisted(parts[2]) {
 			log.Printf("MQTT [%s] client %.8s blacklisted, dropping", tag, parts[2])
+			return
+		}
+		// Linked-only ingest (clientRxCoverage.requireLinkedCompanion): an
+		// unlinked companion is dropped before any client handler runs.
+		if !store.allowClientPubkey(parts[2]) {
 			return
 		}
 		switch parts[3] {
