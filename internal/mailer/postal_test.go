@@ -142,9 +142,9 @@ func TestPostalEvents(t *testing.T) {
 		b, _ := io.ReadAll(r.Body)
 		json.Unmarshal(b, &body)
 		w.Write([]byte(`{"status":"success","data":[
-			{"id":1,"status":"SoftFail","details":"Temporary failure","output":"451","timestamp":1791288005.25},
-			{"id":2,"status":"Sent","details":"Accepted","timestamp":1791288065.5},
-			{"id":3,"status":"Bounced","details":"Bounce received","timestamp":1791288125}]}`))
+			{"id":1,"status":"SoftFail","details":"Temporary failure","output":"451 4.7.1 Try again later","timestamp":1791288005.25},
+			{"id":2,"status":"HardFail","details":"Permanent SMTP delivery error when sending to mx.example.org","output":"550 5.1.1 User unknown","timestamp":1791288065.5},
+			{"id":3,"status":"HardFail","details":"Message is likely spam. Threshold is 5.0 and the message scored 7.2.","output":"","timestamp":1791288125}]}`))
 	}))
 	defer srv.Close()
 	p := NewPostal(srv.URL, "k", "noreply@example.org", "")
@@ -155,12 +155,15 @@ func TestPostalEvents(t *testing.T) {
 	if gotPath != "/api/v1/messages/deliveries" || gotKey != "k" || body["id"] != float64(1234) {
 		t.Fatalf("path=%q key=%q body=%v", gotPath, gotKey, body)
 	}
-	if evs[0].MessageID != "1234" || evs[0].Event != EventDeferred || evs[0].Reason != "Temporary failure" ||
+	if evs[0].MessageID != "1234" || evs[0].Event != EventDeferred || evs[0].Reason != "Temporary failure: 451 4.7.1 Try again later" ||
 		!evs[0].At.Equal(time.Unix(1791288005, 250e6).UTC()) {
 		t.Fatalf("first event = %+v", evs[0])
 	}
-	if evs[1].Event != EventDelivered || evs[2].Event != EventHardBounce {
-		t.Fatalf("events = %+v", evs)
+	if evs[1].Event != EventHardBounce || evs[1].Reason != "Permanent SMTP delivery error when sending to mx.example.org: 550 5.1.1 User unknown" {
+		t.Fatalf("5xx rejection = %+v", evs[1])
+	}
+	if evs[2].Event != EventError || evs[2].Reason != "Message is likely spam. Threshold is 5.0 and the message scored 7.2." {
+		t.Fatalf("spam hard fail = %+v", evs[2])
 	}
 }
 
@@ -179,15 +182,32 @@ func TestPostalEventsErrors(t *testing.T) {
 	}
 }
 
-func TestNormalizePostalStatus(t *testing.T) {
-	cases := map[string]string{
-		"Sent": EventDelivered, "SoftFail": EventDeferred, "HardFail": EventHardBounce,
-		"Bounced": EventHardBounce, "Held": EventBlocked, "Error": EventError,
-		"HoldCancelled": "holdcancelled",
+func TestNormalizePostalDelivery(t *testing.T) {
+	cases := []struct{ status, output, want string }{
+		{"Sent", "250 2.0.0 OK", EventDelivered},
+		{"SoftFail", "451 4.7.1 Greylisted", EventDeferred},
+		{"Held", "", EventBlocked},
+		{"Error", "", EventError},
+		{"HoldCancelled", "", "holdcancelled"},
+		// HardFail is a bounce only when the recipient's server rejected the
+		// mail with a permanent 5xx reply.
+		{"HardFail", "550 5.1.1 <a@example.org>: Recipient address rejected: User unknown", EventHardBounce},
+		{"HardFail", "554-5.7.1 Rejected by policy", EventHardBounce},
+		{"HardFail", " 552 5.2.2 Mailbox full", EventHardBounce},
+		{"HardFail", "550", EventHardBounce},
+		// Postal-side hard fails carry no SMTP reply: spam threshold, maximum
+		// attempts, raw message removed, domain deleted.
+		{"HardFail", "", EventError},
+		{"HardFail", "421 4.3.2 Service shutting down", EventError},
+		{"HardFail", "5000 not a reply code", EventError},
+		{"HardFail", "connection refused", EventError},
+		// A bounce message carries no SMTP reply either, and may be a delay
+		// notice or an auto-reply.
+		{"Bounced", "", EventError},
 	}
-	for in, want := range cases {
-		if got := NormalizePostalStatus(in); got != want {
-			t.Errorf("NormalizePostalStatus(%q) = %q; want %q", in, got, want)
+	for _, c := range cases {
+		if got := NormalizePostalDelivery(c.status, c.output); got != c.want {
+			t.Errorf("NormalizePostalDelivery(%q, %q) = %q; want %q", c.status, c.output, got, c.want)
 		}
 	}
 }

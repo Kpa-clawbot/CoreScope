@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"net/mail"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -60,6 +61,7 @@ type postalSendData struct {
 type postalDelivery struct {
 	Status    string      `json:"status"`
 	Details   string      `json:"details"`
+	Output    string      `json:"output"` // the remote server's SMTP reply, if any
 	Timestamp postalFloat `json:"timestamp"`
 }
 
@@ -107,8 +109,8 @@ func (p *Postal) Events(ctx context.Context, messageID string) ([]Event, error) 
 	}
 	out := make([]Event, 0, len(deliveries))
 	for _, d := range deliveries {
-		out = append(out, Event{MessageID: messageID, Event: NormalizePostalStatus(d.Status),
-			Reason: d.Details, At: d.Timestamp.timeOrNow()})
+		out = append(out, Event{MessageID: messageID, Event: NormalizePostalDelivery(d.Status, d.Output),
+			Reason: postalReason(d.Details, d.Output), At: d.Timestamp.timeOrNow()})
 	}
 	return out, nil
 }
@@ -193,18 +195,52 @@ func (f postalFloat) timeOrNow() time.Time {
 }
 
 // postalStatusEvents maps delivery statuses to canonical names. Postal's
-// "Sent" means the recipient's server accepted the message.
+// "Sent" means the recipient's server accepted the message. "hardfail" and
+// "bounced" are absent: see NormalizePostalDelivery.
 var postalStatusEvents = map[string]string{
-	"sent": EventDelivered, "softfail": EventDeferred, "hardfail": EventHardBounce,
-	"bounced": EventHardBounce, "held": EventBlocked, "error": EventError,
+	"sent": EventDelivered, "softfail": EventDeferred, "held": EventBlocked, "error": EventError,
 }
 
-// NormalizePostalStatus maps a Postal delivery status to CoreScope's
-// canonical event name. Unknown statuses pass through lower-cased.
-func NormalizePostalStatus(status string) string {
+// permanentSMTPReply matches a 5xx SMTP reply line, e.g. "550 5.1.1 ..." or
+// the first line of a multi-line reply, "554-5.7.1 ...".
+var permanentSMTPReply = regexp.MustCompile(`^5[0-9]{2}(?:[ -]|$)`)
+
+// NormalizePostalDelivery maps a Postal delivery status and its SMTP output
+// to CoreScope's canonical event name. Unknown statuses pass through
+// lower-cased.
+//
+// A hard bounce flags the address until the user changes it, so only a
+// permanent rejection by the recipient's server counts: a HardFail whose
+// output is a 5xx reply. Postal also hard-fails for reasons on its own side
+// (outbound spam threshold, maximum attempts after soft failures, raw message
+// removed, domain deleted), with no SMTP reply; those and bounce messages,
+// which can be delay notices or auto-replies, are reported as errors.
+func NormalizePostalDelivery(status, output string) string {
 	key := strings.ToLower(strings.TrimSpace(status))
+	switch key {
+	case "hardfail":
+		if permanentSMTPReply.MatchString(strings.TrimSpace(output)) {
+			return EventHardBounce
+		}
+		return EventError
+	case "bounced":
+		return EventError
+	}
 	if v, ok := postalStatusEvents[key]; ok {
 		return v
 	}
 	return key
+}
+
+// postalReason joins Postal's delivery details with the SMTP reply, which
+// carries the actual cause (e.g. "550 5.1.1 User unknown").
+func postalReason(details, output string) string {
+	details, output = strings.TrimSpace(details), strings.TrimSpace(output)
+	switch {
+	case output == "":
+		return details
+	case details == "":
+		return output
+	}
+	return details + ": " + output
 }

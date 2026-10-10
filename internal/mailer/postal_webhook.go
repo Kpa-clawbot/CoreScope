@@ -19,17 +19,25 @@ type postalWebhook struct {
 		Message         *postalWebhookMessage `json:"message"`
 		OriginalMessage *postalWebhookMessage `json:"original_message"` // MessageBounced
 		Details         string                `json:"details"`
+		Output          string                `json:"output"`
 		Timestamp       postalFloat           `json:"timestamp"`
 	} `json:"payload"`
 }
 
-// postalWebhookEvents maps the message webhook events to canonical names.
-// Server events (DomainDNSError, SendLimit*) are not about a message.
-var postalWebhookEvents = map[string]string{
-	"MessageSent": EventDelivered, "MessageDelayed": EventDeferred,
-	"MessageDeliveryFailed": EventHardBounce, "MessageHeld": EventBlocked,
-	"MessageBounced": EventHardBounce,
-	"MessageLoaded":  EventOpened, "MessageLinkClicked": EventClicked,
+// postalWebhookStatuses maps the delivery webhook events to the delivery
+// status they report (Postal's Delivery#webhook_event), so they share
+// NormalizePostalDelivery with the deliveries API. MessageBounced stands for
+// a "Bounced" delivery.
+var postalWebhookStatuses = map[string]string{
+	"MessageSent": "Sent", "MessageDelayed": "SoftFail",
+	"MessageDeliveryFailed": "HardFail", "MessageHeld": "Held",
+	"MessageBounced": "Bounced",
+}
+
+// postalTrackingEvents are the open and click events. Server events
+// (DomainDNSError, SendLimit*) are not about a message.
+var postalTrackingEvents = map[string]string{
+	"MessageLoaded": EventOpened, "MessageLinkClicked": EventClicked,
 }
 
 // ParsePostalWebhook parses one Postal webhook body. It returns an error for
@@ -39,7 +47,10 @@ func ParsePostalWebhook(body []byte) ([]Event, error) {
 	if err := json.Unmarshal(body, &w); err != nil {
 		return nil, err
 	}
-	event, ok := postalWebhookEvents[w.Event]
+	event, ok := postalTrackingEvents[w.Event]
+	if status, isDelivery := postalWebhookStatuses[w.Event]; isDelivery {
+		event, ok = NormalizePostalDelivery(status, w.Payload.Output), true
+	}
 	if !ok {
 		return nil, errors.New("postal webhook: not a message event")
 	}
@@ -55,5 +66,5 @@ func ParsePostalWebhook(body []byte) ([]Event, error) {
 		at = w.Timestamp.timeOrNow()
 	}
 	return []Event{{MessageID: strconv.FormatInt(msg.ID, 10), Email: msg.To, Event: event,
-		Reason: w.Payload.Details, At: at}}, nil
+		Reason: postalReason(w.Payload.Details, w.Payload.Output), At: at}}, nil
 }

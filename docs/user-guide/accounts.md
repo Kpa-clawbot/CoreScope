@@ -111,6 +111,13 @@ With Postal:
    events are accepted and ignored. Postal's "Sent" means the recipient's server
    accepted the mail and is shown as delivered.
 
+   A failed delivery marks the address as bouncing only when the recipient's server
+   rejected the mail permanently (a 5xx SMTP reply). Postal also fails mail for
+   reasons on its own side: its outbound spam threshold, too many attempts after
+   temporary failures, a removed message or a deleted domain. Those, and bounce
+   messages (which can be delay notices or auto-replies), are shown as *error* with
+   Postal's explanation, and the address is not flagged.
+
 If the provider cannot reach your instance, use **Refresh status** in a user's details
 instead: CoreScope then asks the provider directly. Mails sent before you switched
 provider cannot be refreshed. "Opened" is indicative only. Some mail apps load
