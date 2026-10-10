@@ -1420,30 +1420,10 @@ func (db *DB) repeaterPubkeys() ([]string, error) {
 // answered a declared-regions request. A repeater is listed when the scan
 // attributed any forwarding to it in the window.
 func (s *Server) computeScopeTransport(window, sinceISO string) (*ScopeTransportResponse, error) {
-	declared, err := s.db.AllCurrentDeclaredRegions()
+	declaredByPK, targets, err := s.scopeTransportTargets()
 	if err != nil {
 		return nil, err
 	}
-	declaredByPK := make(map[string]DeclaredRegionsRow, len(declared))
-	targetSet := make(map[string]bool, len(declared))
-	for _, d := range declared {
-		pk := strings.ToLower(d.Target)
-		declaredByPK[pk] = d
-		targetSet[pk] = true
-	}
-	repeaters, err := s.db.repeaterPubkeys()
-	if err != nil {
-		return nil, err
-	}
-	for _, pk := range repeaters {
-		targetSet[pk] = true
-	}
-	targets := make([]string, 0, len(targetSet))
-	for pk := range targetSet {
-		targets = append(targets, pk)
-	}
-	sort.Strings(targets)
-
 	forwarding := map[string]*scopeAuditTargetAgg{}
 	if s.store != nil {
 		forwarding, err = s.store.ScopeAuditForwarding(sinceISO, targets)
@@ -1462,62 +1442,108 @@ func (s *Server) computeScopeTransport(window, sinceISO string) (*ScopeTransport
 
 	resp := &ScopeTransportResponse{Mode: "transport", Window: window, Since: sinceISO, Repeaters: []ScopeTransportRow{}}
 	for _, pk := range seen {
-		if s.cfg != nil && s.cfg.IsBlacklisted(pk) {
-			continue
-		}
 		id := identities[pk]
-		if id.Name != nil && s.cfg != nil && s.cfg.IsNameHidden(*id.Name) {
+		if s.scopeTransportHidden(pk, id) {
 			continue
 		}
-		agg := forwarding[pk]
-		transported := make([]ScopeObservation, 0, len(agg.scopes))
-		for _, so := range agg.scopes {
-			transported = append(transported, *so)
-		}
-		sort.Slice(transported, func(i, j int) bool {
-			if transported[i].Packets != transported[j].Packets {
-				return transported[i].Packets > transported[j].Packets
-			}
-			return transported[i].Scope < transported[j].Scope
-		})
-		row := ScopeTransportRow{
-			PublicKey:        pk,
-			Name:             id.Name,
-			Role:             id.Role,
-			Transported:      transported,
-			UnscopedPackets:  agg.unscopedPackets,
-			UnmatchedPackets: agg.unmatchedPackets,
-			AmbiguousHops:    agg.ambiguousHops,
-		}
-		if d, ok := declaredByPK[pk]; ok {
-			named, wildcard := splitDeclaredRegions(d.RegionsCSV)
-			row.Asked = true
-			row.DeclaredRegions = named
-			row.DeclaredWildcard = wildcard
-			row.ConfigState = scopeAuditConfigState(named, wildcard)
-			row.DeclaredAt = d.ObservedAt
-			row.NotObserved = []string{}
-			for _, rgn := range named {
-				if agg.scopes[rgn] == nil {
-					row.NotObserved = append(row.NotObserved, rgn)
-				}
-			}
-		}
-		resp.Repeaters = append(resp.Repeaters, row)
+		resp.Repeaters = append(resp.Repeaters, scopeTransportRow(pk, id, forwarding[pk], declaredByPK))
 	}
-	sort.Slice(resp.Repeaters, func(i, j int) bool {
-		a, b := resp.Repeaters[i], resp.Repeaters[j]
-		an, bn := a.PublicKey, b.PublicKey
-		if a.Name != nil && *a.Name != "" {
-			an = *a.Name
+	sortScopeTransportRows(resp.Repeaters)
+	return resp, nil
+}
+
+// scopeTransportTargets is every repeater the scan should attribute
+// forwarding to: those that answered a declared-regions request and every
+// known repeater, sorted, with the declared answers by key.
+func (s *Server) scopeTransportTargets() (map[string]DeclaredRegionsRow, []string, error) {
+	declared, err := s.db.AllCurrentDeclaredRegions()
+	if err != nil {
+		return nil, nil, err
+	}
+	declaredByPK := make(map[string]DeclaredRegionsRow, len(declared))
+	targetSet := make(map[string]bool, len(declared))
+	for _, d := range declared {
+		pk := strings.ToLower(d.Target)
+		declaredByPK[pk] = d
+		targetSet[pk] = true
+	}
+	repeaters, err := s.db.repeaterPubkeys()
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, pk := range repeaters {
+		targetSet[pk] = true
+	}
+	targets := make([]string, 0, len(targetSet))
+	for pk := range targetSet {
+		targets = append(targets, pk)
+	}
+	sort.Strings(targets)
+	return declaredByPK, targets, nil
+}
+
+// scopeTransportHidden applies the blacklist and hidden name prefixes.
+func (s *Server) scopeTransportHidden(pk string, id scopeAuditNodeIdentity) bool {
+	if s.cfg == nil {
+		return false
+	}
+	return s.cfg.IsBlacklisted(pk) || (id.Name != nil && s.cfg.IsNameHidden(*id.Name))
+}
+
+// scopeTransportRow is one repeater's row: the scopes it was seen carrying,
+// busiest first, and, when it answered a declared-regions request, what it
+// declares and which of those it was not seen carrying.
+func scopeTransportRow(pk string, id scopeAuditNodeIdentity, agg *scopeAuditTargetAgg, declaredByPK map[string]DeclaredRegionsRow) ScopeTransportRow {
+	transported := make([]ScopeObservation, 0, len(agg.scopes))
+	for _, so := range agg.scopes {
+		transported = append(transported, *so)
+	}
+	sort.Slice(transported, func(i, j int) bool {
+		if transported[i].Packets != transported[j].Packets {
+			return transported[i].Packets > transported[j].Packets
 		}
-		if b.Name != nil && *b.Name != "" {
-			bn = *b.Name
+		return transported[i].Scope < transported[j].Scope
+	})
+	row := ScopeTransportRow{
+		PublicKey:        pk,
+		Name:             id.Name,
+		Role:             id.Role,
+		Transported:      transported,
+		UnscopedPackets:  agg.unscopedPackets,
+		UnmatchedPackets: agg.unmatchedPackets,
+		AmbiguousHops:    agg.ambiguousHops,
+	}
+	d, ok := declaredByPK[pk]
+	if !ok {
+		return row
+	}
+	named, wildcard := splitDeclaredRegions(d.RegionsCSV)
+	row.Asked = true
+	row.DeclaredRegions = named
+	row.DeclaredWildcard = wildcard
+	row.ConfigState = scopeAuditConfigState(named, wildcard)
+	row.DeclaredAt = d.ObservedAt
+	row.NotObserved = []string{}
+	for _, rgn := range named {
+		if agg.scopes[rgn] == nil {
+			row.NotObserved = append(row.NotObserved, rgn)
 		}
-		if an != bn {
+	}
+	return row
+}
+
+// sortScopeTransportRows orders rows by name, falling back to the key.
+func sortScopeTransportRows(rows []ScopeTransportRow) {
+	label := func(r ScopeTransportRow) string {
+		if r.Name != nil && *r.Name != "" {
+			return *r.Name
+		}
+		return r.PublicKey
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if an, bn := label(rows[i]), label(rows[j]); an != bn {
 			return an < bn
 		}
-		return a.PublicKey < b.PublicKey
+		return rows[i].PublicKey < rows[j].PublicKey
 	})
-	return resp, nil
 }
