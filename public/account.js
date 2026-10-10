@@ -148,7 +148,7 @@
     if (!list || !list.length) {
       return '<li class="account-empty" id="compEmpty"><span>No companions linked yet. ' +
         'To link one, log in to this site from the CoreDrive RX app while it is connected to your companion; ' +
-        'it then shows up here and in My nodes.</span></li>';
+        'it then shows up here.</span></li>';
     }
     var html = '';
     list.forEach(function (c) {
@@ -389,7 +389,7 @@
       document.getElementById('compList').addEventListener('click', function (e) {
         var pk = e.target && e.target.getAttribute && e.target.getAttribute('data-unlink');
         if (!pk) return;
-        if (!window.confirm('Unlink this companion? It stays in My nodes, but its coverage no longer counts as yours. ' +
+        if (!window.confirm('Unlink this companion? Its coverage no longer counts as yours. ' +
           'Link it again by logging in from CoreDrive RX.')) return;
         return CSAuth.request('DELETE', '/api/account/companions/' + encodeURIComponent(pk)).then(function (r) {
           CSAuth.say('compMsg', r.ok ? 'Companion unlinked.' : CSAuth.errText(r), r.ok);

@@ -420,6 +420,7 @@ test('companions empty state explains linking from CoreDrive RX', () => {
   [[], null].forEach((list) => {
     const h = env.t.companionsHtml(list);
     assert(h.indexOf('id="compEmpty"') !== -1 && h.indexOf('CoreDrive RX') !== -1 && h.indexOf('data-unlink') === -1, h);
+    assert(h.indexOf('My nodes') === -1, 'linking no longer adds to My nodes: ' + h);
   });
 });
 

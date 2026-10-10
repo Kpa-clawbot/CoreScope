@@ -200,8 +200,8 @@ The token is limited to the account routes RX needs (`/api/auth/me`, `/api/auth/
 RX then links the companion it is connected to: the companion signs a server challenge with its
 own key, so only whoever holds the device can link it. The newest proof wins: a companion that
 changes hands moves to the new owner, and the previous owner gets an audit entry and a mail (a
-security notice: it goes out whatever their notification settings are). A linked companion is added to the user's *My nodes*; its coverage counts
-as theirs (*My coverage* on the coverage page). Links are private to their owner and to admins
+security notice: it goes out whatever their notification settings are). A linked companion's
+coverage counts as the owner's (*My coverage* on the coverage page). Links are private to their owner and to admins
 (*Admin, user detail* lists them).
 
 - **RX on another origin** (for example a hosted RX build): add that origin to
@@ -334,10 +334,10 @@ version N is newer than this binary supports"): run that version or newer. Delet
   at most one mail per check, and every mail has a link that turns the mails off.
 - **Companions:** log in from the CoreDrive RX app while it is connected to your
   companion, and it is linked to your account: it shows under *My account, Companions*
-  (name, short key, linked since, last seen) and is added to My nodes. The app shows
+  (name, short key, linked since, last seen). It is not added to My nodes: a companion is
+  not a node to monitor. The app shows
   under *Devices* as "CoreDrive RX – <device name>"; *Log out* there signs the app out.
-  *Unlink* removes the link but leaves the companion in My nodes and its coverage on the
-  map. On the coverage page, *My coverage* shows only what your linked companions heard.
+  *Unlink* removes the link; the coverage it already collected stays on the map. On the coverage page, *My coverage* shows only what your linked companions heard.
 - **Never synced:** channel keys and decrypted messages, the API key, panel and column
   sizes, collapsed panels and map positions. They stay in the browser where you set them.
 - **Logging out** asks whether to keep your settings on this device (the default) or
