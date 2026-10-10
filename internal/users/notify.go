@@ -15,6 +15,7 @@ import (
 const (
 	NotifyNodeOffline     = "node.offline"
 	NotifyNodeBattery     = "node.battery"
+	NotifyNodeExternal    = "node.external"    // off by default; needs notifications.externalAlerts
 	NotifyForeignNew      = "foreign.new"      // admins only
 	NotifyObserverOffline = "observer.offline" // admins only
 )
@@ -33,6 +34,9 @@ const NotifyMailPurpose = "notify"
 var (
 	// NodeNotifyEvents are open to every user and chosen by default.
 	NodeNotifyEvents = []string{NotifyNodeOffline, NotifyNodeBattery}
+	// OptionalNodeNotifyEvents are open to every user (when the instance
+	// configures them) and off by default.
+	OptionalNodeNotifyEvents = []string{NotifyNodeExternal}
 	// AdminNotifyEvents are open to admins only and off by default.
 	AdminNotifyEvents = []string{NotifyForeignNew, NotifyObserverOffline}
 )
@@ -45,7 +49,7 @@ func IsAdminNotifyEvent(e string) bool { return e == NotifyForeignNew || e == No
 
 // ValidNotifyEvent reports whether e is a known event type.
 func ValidNotifyEvent(e string) bool {
-	return e == NotifyNodeOffline || e == NotifyNodeBattery || IsAdminNotifyEvent(e)
+	return e == NotifyNodeOffline || e == NotifyNodeBattery || e == NotifyNodeExternal || IsAdminNotifyEvent(e)
 }
 
 // NotifyPrefs is one user's notification preferences.
@@ -102,7 +106,7 @@ func canonicalEvents(list []string) []string {
 		want[e] = true
 	}
 	out := []string{}
-	for _, group := range [][]string{NodeNotifyEvents, AdminNotifyEvents} {
+	for _, group := range [][]string{NodeNotifyEvents, OptionalNodeNotifyEvents, AdminNotifyEvents} {
 		for _, e := range group {
 			if want[e] {
 				out = append(out, e)
@@ -313,8 +317,9 @@ func (s *Store) AddWatch(userID int64, pubkey string, max int) error {
 	return nil
 }
 
-// RemoveWatch stops watching a node and deletes its node.* state rows.
-// Removing a node that is not watched is a no-op.
+// RemoveWatch stops watching a node and deletes its node.* state rows
+// (node.external subjects are "<pubkey>/<key>"). Removing a node that is
+// not watched is a no-op.
 func (s *Store) RemoveWatch(userID int64, pubkey string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -326,6 +331,10 @@ func (s *Store) RemoveWatch(userID int64, pubkey string) error {
 	}
 	if _, err := tx.Exec(`DELETE FROM notification_state WHERE user_id = ? AND subject = ? AND event IN (?, ?)`,
 		userID, pubkey, NotifyNodeOffline, NotifyNodeBattery); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM notification_state WHERE user_id = ? AND event = ? AND substr(subject, 1, ?) = ?`,
+		userID, NotifyNodeExternal, len(pubkey)+1, pubkey+"/"); err != nil {
 		return err
 	}
 	return tx.Commit()

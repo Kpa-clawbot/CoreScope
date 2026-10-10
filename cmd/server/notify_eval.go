@@ -53,6 +53,10 @@ type notifyInput struct {
 	// older than this counts as heard at this time, so nothing goes offline
 	// until a full silent window has passed after the feed came back.
 	IngestResumedAt time.Time
+	// External is the fresh externalAlerts feed; nil when it is not
+	// configured, nobody chose node.external, or the feed is stale. nil
+	// leaves every node.external state unchanged.
+	External *externalFeed
 }
 
 // notifyChange is one transition for one user.
@@ -62,6 +66,8 @@ type notifyChange struct {
 	Name      string // display name at evaluation time
 	To        string // users.NotifyGood, users.NotifyBad or users.NotifyTold
 	BatteryMv *int   // node.battery only
+	Text      string // node.external only: the alert text ("" when resolved)
+	URL       string // node.external only: the alert's link, "" for the node page
 	At        time.Time
 }
 
@@ -85,7 +91,8 @@ const (
 )
 
 var notifyEventRank = map[string]int{
-	users.NotifyNodeOffline: 0, users.NotifyNodeBattery: 1, users.NotifyForeignNew: 2, users.NotifyObserverOffline: 3,
+	users.NotifyNodeOffline: 0, users.NotifyNodeBattery: 1, users.NotifyNodeExternal: 2,
+	users.NotifyForeignNew: 3, users.NotifyObserverOffline: 4,
 }
 
 // notifyInfra reports the roles whose relay activity counts as heard
@@ -173,6 +180,39 @@ func observerState(o notifyObserver, h HealthThresholds, now, resumed time.Time,
 	return users.NotifyGood
 }
 
+// evalExternal compares one watched node's current external alerts with the
+// stored node.external states of one user. The first fresh feed after the
+// node is watched (no baseline row) stores the current alerts silently;
+// afterwards a new or returning alert is a bad change and a stored bad alert
+// missing from the feed is a good (resolved) change.
+func evalExternal(res *notifyResult, prev map[users.NotifyKey]string, bad []string, current map[string]externalAlert,
+	uid int64, pk, name string, mailing bool, now time.Time) {
+	base := users.NotifyKey{UserID: uid, Event: users.NotifyNodeExternal, Subject: pk + "/" + externalBaselineKey}
+	_, baselined := prev[base]
+	if !baselined {
+		res.States = append(res.States, users.NotifyState{NotifyKey: base, State: users.NotifyGood, ChangedAt: now})
+	}
+	emit := func(key, state string, a externalAlert) {
+		k := users.NotifyKey{UserID: uid, Event: users.NotifyNodeExternal, Subject: pk + "/" + key}
+		res.States = append(res.States, users.NotifyState{NotifyKey: k, State: state, ChangedAt: now})
+		if baselined && mailing {
+			res.Changes[uid] = append(res.Changes[uid], notifyChange{Event: users.NotifyNodeExternal, Subject: k.Subject,
+				Name: name, To: state, Text: a.Text, URL: a.URL, At: now})
+		}
+	}
+	for _, key := range sortedExternalKeys(current) {
+		if prev[users.NotifyKey{UserID: uid, Event: users.NotifyNodeExternal, Subject: pk + "/" + key}] != users.NotifyBad {
+			emit(key, users.NotifyBad, current[key])
+		}
+	}
+	sort.Strings(bad)
+	for _, key := range bad {
+		if _, still := current[key]; !still {
+			emit(key, users.NotifyGood, externalAlert{})
+		}
+	}
+}
+
 // evaluateNotifications computes every chosen (user, event, subject) state
 // and compares it with the stored one. A subject without a stored state is
 // stored without a change (a restart or a new watch never mails); a stored
@@ -184,8 +224,18 @@ func observerState(o notifyObserver, h HealthThresholds, now, resumed time.Time,
 // rows are dropped, like opting out, so a re-promotion starts silently.
 func evaluateNotifications(in notifyInput) notifyResult {
 	prev := make(map[users.NotifyKey]string, len(in.States))
+	// extBad: per user and node, the node.external keys stored as bad.
+	extBad := map[int64]map[string][]string{}
 	for _, s := range in.States {
 		prev[s.NotifyKey] = s.State
+		if s.Event == users.NotifyNodeExternal && s.State == users.NotifyBad {
+			if pk, key, ok := strings.Cut(s.Subject, "/"); ok && key != externalBaselineKey {
+				if extBad[s.UserID] == nil {
+					extBad[s.UserID] = map[string][]string{}
+				}
+				extBad[s.UserID][pk] = append(extBad[s.UserID][pk], key)
+			}
+		}
 	}
 	watched := map[int64][]string{}
 	for _, w := range in.Watches {
@@ -253,6 +303,9 @@ func evaluateNotifications(in notifyInput) notifyResult {
 			if p.Has(users.NotifyNodeBattery) && known && n.BatteryMv != nil {
 				k := users.NotifyKey{UserID: p.UserID, Event: users.NotifyNodeBattery, Subject: pk}
 				compare(k, name, batteryState(*n.BatteryMv, in.LowMv, prev[k]), n.BatteryMv)
+			}
+			if p.Has(users.NotifyNodeExternal) && in.External != nil {
+				evalExternal(&res, prev, extBad[p.UserID][pk], in.External.Alerts[pk], p.UserID, pk, name, mailing, in.Now)
 			}
 		}
 		if u.Role != users.RoleAdmin {

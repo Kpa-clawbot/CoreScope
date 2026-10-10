@@ -26,6 +26,9 @@ type notifier struct {
 	// inside the grace loses it. Only the loop goroutine touches them.
 	ingestStale     bool
 	ingestResumedAt time.Time
+	// externalErr is the last tick's reason the externalAlerts feed was not
+	// used ("" when it was), so each new reason is logged once.
+	externalErr string
 }
 
 func newNotifier(a *authService, src notifySource, now func() time.Time) *notifier {
@@ -168,6 +171,12 @@ func (n *notifier) tick(ctx context.Context) {
 		log.Printf("[notify] read accounts: %v", err)
 		return
 	}
+	wantExternal := false
+	if n.a.set.notify.external.url != "" {
+		for _, p := range prefs {
+			wantExternal = wantExternal || p.Has(users.NotifyNodeExternal)
+		}
+	}
 	wantForeign, wantObservers := false, false
 	for _, p := range prefs {
 		if accounts[p.UserID].Role != users.RoleAdmin {
@@ -194,10 +203,14 @@ func (n *notifier) tick(ctx context.Context) {
 			return
 		}
 	}
+	var external *externalFeed
+	if wantExternal {
+		external = n.readExternal(now)
+	}
 	heard, lock := n.src.lastHeard(pubkeys)
 	res := evaluateNotifications(notifyInput{Now: now, Health: n.src.health(), LowMv: n.src.lowBatteryMv(),
 		Accounts: accounts, Prefs: prefs, Watches: watches, States: states, Nodes: nodes,
-		Heard: heard, Relayed: n.src.lastRelayed(infra), Observers: observers, IngestStale: stale, IngestResumedAt: n.ingestResumedAt})
+		Heard: heard, Relayed: n.src.lastRelayed(infra), Observers: observers, IngestStale: stale, IngestResumedAt: n.ingestResumedAt, External: external})
 	if err := st.DeleteNotifyStates(res.Drop); err != nil {
 		log.Printf("[notify] delete dropped states, nothing mailed this time: %v", err)
 		return
@@ -215,6 +228,33 @@ func (n *notifier) tick(ctx context.Context) {
 	}
 	log.Printf("[notify] tick: users=%d changes=%d mails=%d took=%.2fms lock=%.2fms",
 		len(accounts), changes, mails, msFloat(time.Since(started)), msFloat(lock))
+}
+
+// readExternal fetches and validates the externalAlerts feed. It returns
+// nil when the feed cannot be used (fetch failed, malformed, too old), so
+// no node.external state changes; a dead feed never mails "resolved". The
+// reason is logged when it changes, and once when the feed is usable again.
+func (n *notifier) readExternal(now time.Time) *externalFeed {
+	body, err := n.src.externalFeed()
+	var f *externalFeed
+	if err == nil {
+		f, err = parseExternalFeed(body, now, n.a.set.notify.external.maxAge)
+	}
+	why := ""
+	if err != nil {
+		why = err.Error()
+	}
+	switch {
+	case why != "" && why != n.externalErr:
+		log.Printf("[notify] external alerts feed not used, node.external unchanged: %s", why)
+	case why == "" && n.externalErr != "":
+		log.Printf("[notify] external alerts feed usable again")
+	}
+	n.externalErr = why
+	if f != nil && f.Skipped > 0 {
+		log.Printf("[notify] external alerts feed: %d malformed alert(s) skipped", f.Skipped)
+	}
+	return f
 }
 
 func msFloat(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
@@ -298,7 +338,7 @@ func (a *authService) notifyMail(u users.User, p users.NotifyPrefs, changes []no
 	base := a.set.baseURL.String()
 	lines := make([]mailLine, 0, len(changes))
 	for _, c := range changes {
-		lines = append(lines, mailLine{text: notifyChangeText(c), url: notifySubjectURL(base, c)})
+		lines = append(lines, mailLine{text: notifyChangeText(c, a.set.notify.external.label), url: notifySubjectURL(base, c)})
 	}
 	subject := fmt.Sprintf("%d changes on your watched nodes", len(changes))
 	if len(changes) == 1 {
@@ -320,7 +360,8 @@ func (a *authService) notifyMail(u users.User, p users.NotifyPrefs, changes []no
 }
 
 // notifyChangeText is one line of the mail: name, what happened, when (UTC).
-func notifyChangeText(c notifyChange) string {
+// label names the externalAlerts source.
+func notifyChangeText(c notifyChange, label string) string {
 	bad := c.To == users.NotifyBad
 	var what string
 	switch c.Event {
@@ -337,6 +378,12 @@ func notifyChangeText(c notifyChange) string {
 		if c.BatteryMv != nil {
 			what += fmt.Sprintf(" (%d mV)", *c.BatteryMv)
 		}
+	case users.NotifyNodeExternal:
+		_, key, _ := strings.Cut(c.Subject, "/")
+		what = label + " resolved (" + key + ")"
+		if bad {
+			what = label + ": " + c.Text
+		}
 	case users.NotifyForeignNew:
 		what = "new foreign node"
 	case users.NotifyObserverOffline:
@@ -348,10 +395,18 @@ func notifyChangeText(c notifyChange) string {
 	return c.Name + ": " + what + ", " + c.At.UTC().Format("2006-01-02 15:04 UTC")
 }
 
-// notifySubjectURL links a change to its node or observer page.
+// notifySubjectURL links a change to its node or observer page, or an
+// external alert to the link the feed gave it.
 func notifySubjectURL(base string, c notifyChange) string {
-	if c.Event == users.NotifyObserverOffline {
+	switch c.Event {
+	case users.NotifyObserverOffline:
 		return base + "/#/observers/" + url.PathEscape(c.Subject)
+	case users.NotifyNodeExternal:
+		if c.URL != "" {
+			return c.URL
+		}
+		pk, _, _ := strings.Cut(c.Subject, "/")
+		return base + "/#/nodes/" + url.PathEscape(pk)
 	}
 	return base + "/#/nodes/" + url.PathEscape(c.Subject)
 }

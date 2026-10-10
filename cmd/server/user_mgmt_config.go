@@ -86,6 +86,17 @@ type NotificationsConfig struct {
 	PerUserPerDay     int  `json:"perUserPerDay,omitempty"`
 	MaxMailsPerDay    int  `json:"maxMailsPerDay,omitempty"`
 	MaxWatchesPerUser int  `json:"maxWatchesPerUser,omitempty"`
+	// ExternalAlerts feeds the node.external event (#2177). Absent: the
+	// event is not offered.
+	ExternalAlerts *ExternalAlertsConfig `json:"externalAlerts,omitempty"`
+}
+
+// ExternalAlertsConfig is userManagement.notifications.externalAlerts: a
+// JSON feed of per-node alerts computed outside CoreScope.
+type ExternalAlertsConfig struct {
+	URL         string `json:"url"`
+	MaxAgeHours int    `json:"maxAgeHours,omitempty"`
+	Label       string `json:"label,omitempty"`
 }
 
 // notifySettings is the resolved form; the zero value means off.
@@ -95,6 +106,38 @@ type notifySettings struct {
 	perUserPerDay     int           // notification mails per user per 24 hours
 	maxMailsPerDay    int           // notification mails per instance per 24 hours
 	maxWatchesPerUser int
+	external          externalAlertSettings
+}
+
+// externalAlertSettings is the resolved externalAlerts block; url "" means
+// not configured.
+type externalAlertSettings struct {
+	url    string
+	maxAge time.Duration // a feed generated longer ago is stale
+	label  string        // names the source in mail lines and on the account page
+}
+
+const (
+	defaultExternalAlertsMaxAgeHours = 48
+	defaultExternalAlertsLabel       = "External alert"
+)
+
+// resolveExternalAlerts validates the externalAlerts block and fills the
+// defaults; nil gives the zero value (not configured).
+func resolveExternalAlerts(c *ExternalAlertsConfig) (externalAlertSettings, error) {
+	if c == nil {
+		return externalAlertSettings{}, nil
+	}
+	u, err := url.Parse(strings.TrimSpace(c.URL))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return externalAlertSettings{}, errors.New("userManagement.notifications.externalAlerts.url must be an absolute http(s) URL")
+	}
+	label := mailSafeText(c.Label)
+	if label == "" {
+		label = defaultExternalAlertsLabel
+	}
+	return externalAlertSettings{url: u.String(), label: label,
+		maxAge: time.Duration(positiveOr(c.MaxAgeHours, defaultExternalAlertsMaxAgeHours)) * time.Hour}, nil
 }
 
 const (
@@ -256,6 +299,11 @@ func resolveUserManagement(u *UserManagementConfig, measurementDBPath string, ge
 	}
 	set.proposals = resolveProposals(u.ChannelProposals)
 	set.notify = resolveNotifications(u.Notifications)
+	if set.notify.enabled {
+		if set.notify.external, err = resolveExternalAlerts(u.Notifications.ExternalAlerts); err != nil {
+			return nil, err
+		}
+	}
 	set.backup = resolveBackup(u.Backup, set.dbPath)
 	return set, nil
 }

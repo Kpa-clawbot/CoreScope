@@ -43,6 +43,7 @@ type notifyAccountJSON struct {
 	Enabled         bool              `json:"enabled"`
 	Events          []string          `json:"events"`
 	AvailableEvents []string          `json:"availableEvents"`
+	ExternalLabel   string            `json:"externalLabel,omitempty"` // names node.external when offered
 	Watches         []notifyWatchJSON `json:"watches"`
 	Limits          notifyLimitsJSON  `json:"limits"`
 }
@@ -74,8 +75,13 @@ func notifyPubkey(raw string) (string, bool) {
 	return pk, notifyPubkeyRE.MatchString(pk)
 }
 
-func availableNotifyEvents(u *users.User) []string {
+// availableNotifyEvents lists what u may choose; node.external only when
+// the instance configures externalAlerts.
+func availableNotifyEvents(u *users.User, external bool) []string {
 	out := append([]string{}, users.NodeNotifyEvents...)
+	if external {
+		out = append(out, users.OptionalNodeNotifyEvents...)
+	}
 	if u.Role == users.RoleAdmin {
 		out = append(out, users.AdminNotifyEvents...)
 	}
@@ -112,11 +118,15 @@ func (s *Server) notifyAccount(u *users.User) (notifyAccountJSON, error) {
 	if err != nil {
 		return notifyAccountJSON{}, err
 	}
-	out := notifyAccountJSON{Enabled: p.Enabled, Events: []string{}, AvailableEvents: availableNotifyEvents(u),
+	ext := ns.external.url != ""
+	out := notifyAccountJSON{Enabled: p.Enabled, Events: []string{}, AvailableEvents: availableNotifyEvents(u, ext),
 		Watches: make([]notifyWatchJSON, 0, len(ws)),
 		Limits:  notifyLimitsJSON{MaxWatches: ns.maxWatchesPerUser, PerUserPerDay: ns.perUserPerDay, MailsLast24h: perUser[u.ID]}}
+	if ext {
+		out.ExternalLabel = ns.external.label
+	}
 	for _, e := range p.Events {
-		if u.Role == users.RoleAdmin || !users.IsAdminNotifyEvent(e) {
+		if (u.Role == users.RoleAdmin || !users.IsAdminNotifyEvent(e)) && (ext || e != users.NotifyNodeExternal) {
 			out.Events = append(out.Events, e)
 		}
 	}
@@ -152,6 +162,10 @@ func (s *Server) handleNotifyPut(w http.ResponseWriter, r *http.Request, u *user
 		}
 		if users.IsAdminNotifyEvent(e) && u.Role != users.RoleAdmin {
 			writeError(w, http.StatusForbidden, "only admins can choose this event")
+			return
+		}
+		if e == users.NotifyNodeExternal && s.auth.set.notify.external.url == "" {
+			writeError(w, http.StatusBadRequest, "external alerts are not configured on this instance")
 			return
 		}
 	}

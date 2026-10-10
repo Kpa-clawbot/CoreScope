@@ -189,6 +189,38 @@ watched node changes state. Admins can also watch the instance.
   turns them back on.
 - Watch lists are private: admins see counts on the overview, not lists.
 
+#### External node alerts (optional)
+
+A job outside CoreScope can publish alerts about nodes, for example coverage sectors
+where a repeater is never heard by passing cars (#2177). With `externalAlerts` set,
+users can choose the event *A watched node gets a <label> alert or it clears*
+(`node.external`, off by default):
+
+```json
+"notifications": {
+  "enabled": true,
+  "externalAlerts": { "url": "http://coverage-job/alerts.json", "maxAgeHours": 48, "label": "Coverage" }
+}
+```
+
+The feed is JSON, at most 1 MB, fetched once per check while someone has the event on:
+
+```json
+{ "generatedAt": "2026-10-11T01:35:12Z",
+  "alerts": [ { "pubkey": "<64 hex>", "key": "SE", "text": "never heard to the south-east", "url": "https://example.org/coverage" } ] }
+```
+
+- `key` (at most 64 characters, not `*`) tells several alerts on one node apart; `text`
+  (cut at 200 characters) goes into the mail; `url` (optional, http or https) is the
+  mail line's link, otherwise the node page. Malformed alerts are skipped and logged.
+- A new alert on a watched node mails `<name>: <label>: <text>`; an alert that is gone
+  from a fresh feed mails `<name>: <label> resolved (<key>)`. The first check after a
+  node is watched stores its current alerts without a mail.
+- A feed that cannot be fetched, does not decode or whose `generatedAt` is older than
+  `maxAgeHours` (default 48) changes nothing: no alert is mailed and none is resolved.
+  The server log says when the feed stops and starts being usable.
+- The server only reads the feed; the states live in `users.db` like the other events.
+
 ### Companion linking (CoreDrive RX)
 
 With user management on, a user logs in from the CoreDrive RX app with their email and password.
