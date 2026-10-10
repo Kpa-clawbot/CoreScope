@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/meshcore-analyzer/mailer"
@@ -100,12 +99,7 @@ func (s *Server) handleCompanionLink(w http.ResponseWriter, r *http.Request, u *
 		return
 	}
 	a.companionLinked(u, link, prev, prevName)
-	myNodes, err := a.addToMyNodes(u.ID, link.Pubkey, link.Name, time.Now())
-	if err != nil {
-		log.Printf("[users] add linked companion to my nodes for user #%d: %v", u.ID, err)
-		myNodes = myNodesFailed
-	}
-	writeJSON(w, companionLinkResponse{Pubkey: link.Pubkey, Name: link.Name, LinkedAt: rfc3339(link.LinkedAt), MyNodes: myNodes})
+	writeJSON(w, companionLinkResponse{Pubkey: link.Pubkey, Name: link.Name, LinkedAt: rfc3339(link.LinkedAt)})
 }
 
 // companionTransferMailPurpose labels the transfer mail in mail_log.

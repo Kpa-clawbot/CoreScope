@@ -73,7 +73,6 @@ type companionLinkResponse struct {
 	Pubkey   string `json:"pubkey"`
 	Name     string `json:"name"`
 	LinkedAt string `json:"linkedAt"`
-	MyNodes  string `json:"myNodes"` // myNodesAdded, myNodesPresent, myNodesFull or myNodesFailed
 }
 
 type companionJSON struct {

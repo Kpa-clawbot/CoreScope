@@ -71,8 +71,11 @@ func TestCompanionLinkFlow(t *testing.T) {
 
 	w := f.linkCompanion(t, tok, companionKey, "Car")
 	expectStatus(t, w, http.StatusOK)
+	if strings.Contains(w.Body.String(), "myNodes") {
+		t.Fatalf("link response still reports myNodes: %s", w.Body.String())
+	}
 	got := decode[companionLinkResponse](t, w)
-	if got.Pubkey != pk || got.Name != "Car" || got.LinkedAt == "" || got.MyNodes != myNodesAdded {
+	if got.Pubkey != pk || got.Name != "Car" || got.LinkedAt == "" {
 		t.Fatalf("link response = %+v", got)
 	}
 	if l, err := f.st.GetCompanionLink(pk); err != nil || l.UserID != alice.me.ID {
@@ -92,13 +95,16 @@ func TestCompanionLinkFlow(t *testing.T) {
 		t.Fatalf("list = %+v", list)
 	}
 
-	// Unlink from the browser (cookie + CSRF); my nodes stay.
+	// A companion is not a node to monitor: linking leaves the synced
+	// settings (meshcore-my-nodes) alone.
+	if _, v, _ := f.st.GetSettings(alice.me.ID); v.Revision != 0 {
+		t.Fatalf("linking wrote the synced settings (revision %d)", v.Revision)
+	}
+
+	// Unlink from the browser (cookie + CSRF).
 	expectStatus(t, f.do("DELETE", "/api/account/companions/"+pk, nil, as(alice)), http.StatusNoContent)
 	if _, err := f.st.GetCompanionLink(pk); !errors.Is(err, users.ErrNotFound) {
 		t.Fatalf("link survived unlink: %v", err)
-	}
-	if raw, _, _ := f.st.GetSettings(alice.me.ID); !strings.Contains(raw, pk) {
-		t.Fatal("unlink removed the companion from my nodes")
 	}
 	if !hasCompanionAudit(t, f, alice.me.ID, "companion.unlink", pk) {
 		t.Fatal("no companion.unlink audit row")
@@ -177,24 +183,5 @@ func TestCompanionListLastSeen(t *testing.T) {
 	list := decode[[]companionJSON](t, w)
 	if len(list) != 1 || list[0].LastSeenAt == nil || *list[0].LastSeenAt != "2026-10-02T09:00:00Z" {
 		t.Fatalf("list = %s", w.Body.String())
-	}
-}
-
-// A merge error other than the size cap answers myNodes "failed", and the link stands.
-func TestCompanionLinkMyNodesFailed(t *testing.T) {
-	f := newAuthFixture(t)
-	alice := f.registerAndActivate(t, "alice@example.org", "Alice", pw)
-	doc, _ := encodeSettingsDoc(&settingsDoc{V: 1, Keys: map[string]string{myNodesKey: `"not a list"`}})
-	if _, err := f.st.PutSettings(alice.me.ID, users.SettingsVersion{}, doc); err != nil {
-		t.Fatal(err)
-	}
-	tok := f.deviceToken(t, "alice@example.org", pw, "Pixel").Token
-	w := f.linkCompanion(t, tok, companionKey, "Car")
-	expectStatus(t, w, http.StatusOK)
-	if got := decode[companionLinkResponse](t, w); got.MyNodes != myNodesFailed {
-		t.Fatalf("myNodes = %q, want %q", got.MyNodes, myNodesFailed)
-	}
-	if l, err := f.st.GetCompanionLink(pubHex(companionKey)); err != nil || l.UserID != alice.me.ID {
-		t.Fatalf("link did not stand: %+v, %v", l, err)
 	}
 }
