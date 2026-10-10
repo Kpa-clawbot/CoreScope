@@ -23,7 +23,6 @@
     "/api/perf/io",
     "/api/perf/sqlite",
     "/api/perf/write-sources",
-    "/api/rx-coverage",
     "/api/rx-leaderboard",
     "/api/scope-stats",
     "/api/spec"

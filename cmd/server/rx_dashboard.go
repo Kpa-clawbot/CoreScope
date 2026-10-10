@@ -217,12 +217,24 @@ func (s *Server) handleRxCoverage(w http.ResponseWriter, r *http.Request) {
 	}
 	days := clampDays(atoiDefault(r.URL.Query().Get("days"), 7))
 	z, _ := strconv.Atoi(r.URL.Query().Get("z"))
-	rows, err := s.queryCoverageFiltered(r.URL.Query().Get("node"), r.URL.Query().Get("rx"), days, b)
+	node, rx := r.URL.Query().Get("node"), r.URL.Query().Get("rx")
+	rows, err := s.queryCoverageFiltered(node, rx, days, b)
 	if err != nil {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
 	}
 	fc := aggregateCoverage(rows, zoomToHexRes(z), s.heardKeyResolverFor(rows))
+	// "Nothing received" cells need the track, so only with the RF sample
+	// stream on; with ?node= the question would be "this node not heard",
+	// which these cells do not answer.
+	if r.URL.Query().Get("gaps") == "1" && node == "" && s.cfg.ClientRfSamplesEnabled() {
+		track, err := s.queryTrackPoints(rx, days, b)
+		if err != nil {
+			http.Error(w, "query failed", http.StatusInternalServerError)
+			return
+		}
+		fc.Gaps, fc.GapsTruncated = aggregateGaps(track, rows, zoomToHexRes(z))
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(fc)
 }
