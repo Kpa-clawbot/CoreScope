@@ -51,6 +51,11 @@ function pick(el, name) {
   return b;
 }
 const trigger = (el) => el.querySelector('.region-dropdown-trigger');
+// A pick is "on" when its checkbox is ticked (dropdown) or it is pressed (pill bar).
+function isOn(b) {
+  const box = b.querySelector('input[type="checkbox"]');
+  return box ? box.checked : b.getAttribute('aria-pressed') === 'true';
+}
 
 (async () => {
   console.log('Region quick picks');
@@ -71,8 +76,8 @@ const trigger = (el) => el.querySelector('.region-dropdown-trigger');
     const { el } = await setup(SIX, PICKS);
     pick(el, 'California').click();
     assert.ok(trigger(el).textContent.indexOf('California') !== -1, 'trigger: ' + trigger(el).textContent);
-    assert.strictEqual(pick(el, 'California').getAttribute('aria-pressed'), 'true');
-    assert.strictEqual(pick(el, 'Belgium').getAttribute('aria-pressed'), 'false');
+    assert.strictEqual(isOn(pick(el, 'California')), true);
+    assert.strictEqual(isOn(pick(el, 'Belgium')), false);
   });
 
   await test('tapping the active pick again goes back to all regions', async () => {
@@ -85,7 +90,7 @@ const trigger = (el) => el.querySelector('.region-dropdown-trigger');
 
   await test('selecting the same codes by hand marks the pick as active', async () => {
     const { el } = await setup(SIX, PICKS, { stored: ['BRU', 'ANR'] });
-    assert.strictEqual(pick(el, 'Belgium').getAttribute('aria-pressed'), 'true');
+    assert.strictEqual(isOn(pick(el, 'Belgium')), true);
     assert.ok(trigger(el).textContent.indexOf('Belgium') !== -1);
   });
 
@@ -117,16 +122,33 @@ const trigger = (el) => el.querySelector('.region-dropdown-trigger');
     assert.strictEqual(pickButtons(el)[0].textContent.trim(), '<img src=x onerror=alert(1)>');
   });
 
-  await test('in the dropdown layout the picks live inside the region menu, not beside it', async () => {
+  await test('in the dropdown the picks are checkbox rows like All, between All and the single regions', async () => {
     const { el } = await setup(SIX, PICKS);
     const menu = el.querySelector('.region-dropdown-menu');
-    assert.ok(menu, 'dropdown menu expected');
-    assert.strictEqual(pickButtons(el).length, 2);
-    pickButtons(el).forEach((b) => assert.ok(menu.contains(b), 'pick outside the menu: ' + b.textContent));
-    const section = menu.querySelector('.region-quick-picks');
-    assert.ok(section, 'picks section inside the menu');
-    assert.ok(section.compareDocumentPosition(menu.querySelector('input[data-region]')) & 4,
-      'picks come before the region checkboxes');
+    const rows = Array.from(menu.querySelectorAll('.region-dropdown-item'));
+    const names = rows.map((r) => r.textContent.trim());
+    assert.deepStrictEqual(names.slice(0, 3), ['All', 'California', 'Belgium'], 'rows: ' + names.join(' / '));
+    rows.slice(1, 3).forEach((r) => {
+      assert.ok(r.querySelector('input[type="checkbox"]'), 'pick row has a checkbox: ' + r.textContent);
+      assert.ok(r.querySelector('strong'), 'pick name is bold like All: ' + r.textContent);
+    });
+    assert.ok(menu.querySelector('.region-dropdown-sep'), 'a divider separates picks from single regions');
+    assert.strictEqual(menu.querySelectorAll('.region-pill').length, 0, 'no pill chips inside the menu');
+  });
+
+  await test('ticking a pick row selects it, and unticking goes back to all', async () => {
+    const { el, rf, calls } = await setup(SIX, PICKS);
+    const box = () => {
+      const b = pick(el, 'Belgium').querySelector('input[type="checkbox"]');
+      assert.ok(b, 'expected the pick row to hold a checkbox');
+      return b;
+    };
+    box().click();
+    assert.deepStrictEqual(Array.from(rf.getSelected()).sort(), ['ANR', 'BRU']);
+    assert.strictEqual(box().checked, true);
+    box().click();
+    assert.strictEqual(rf.getSelected(), null);
+    assert.deepStrictEqual(calls, [['ANR', 'BRU'], null]);
   });
 
   await test('choosing a pick from the menu closes it', async () => {
