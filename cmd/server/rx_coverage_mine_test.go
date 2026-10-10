@@ -56,3 +56,25 @@ func TestRxCoverageMineWithoutUserManagement(t *testing.T) {
 		t.Fatalf("mine=1 with user management off = %d, want 404", w.Code)
 	}
 }
+
+// gaps=1 and mine=1 together: the track query cannot narrow to a set of
+// companions, so the reply carries no gaps member rather than everyone's track.
+func TestRxCoverageMineOmitsGaps(t *testing.T) {
+	f := newAuthFixture(t)
+	f.srv.db = seedGapsDB(t)
+	f.srv.cfg.ClientRxCoverage = &ClientRxCoverageConfig{Enabled: true}
+	f.srv.cfg.ClientRfSamples = &ClientRfSamplesConfig{Enabled: true}
+	f.router.HandleFunc("/api/rx-coverage", f.srv.handleRxCoverage).Methods("GET")
+	now := time.Now().UTC().Format(time.RFC3339)
+	insTrack(t, f.srv.db, pubHex(otherKey), now, 51.05, 3.72, 0)
+	alice := f.registerAndActivate(t, "alice@example.org", "Alice", pw)
+	const q = "/api/rx-coverage?bbox=50,3,52,4&z=12&days=7&gaps=1"
+	if w := f.do("GET", q, nil); !strings.Contains(w.Body.String(), `"gaps"`) {
+		t.Fatalf("without mine=1 the gap cell must be there: %s", w.Body.String())
+	}
+	w := f.do("GET", q+"&mine=1", nil, as(alice))
+	expectStatus(t, w, http.StatusOK)
+	if strings.Contains(w.Body.String(), `"gaps"`) {
+		t.Fatalf("mine=1 must not carry gaps: %s", w.Body.String())
+	}
+}
