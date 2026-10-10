@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -10,6 +11,9 @@ import (
 // API key and broker passwords, so the rewrite must keep whatever mode the
 // operator set rather than resetting it to 0644.
 func TestSaveGeoFilterPreservesFileMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not support POSIX file permission bits")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(path, []byte(`{"apiKey":"secret-key-that-is-long-enough"}`+"\n"), 0600); err != nil {
