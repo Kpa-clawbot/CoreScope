@@ -24,6 +24,33 @@ and no login or account control appears in the interface.
    Dedicated IPs*). Mail from an unverified sender is rejected or lands in spam.
 3. Create an API key (*SMTP & API, API Keys*).
 
+#### Or: use your own Postal server
+
+If you run [Postal](https://docs.postalserver.io), CoreScope can send through its HTTP
+API instead of Brevo:
+
+1. In Postal, add and verify the domain you will send from on your mail server.
+2. Create an **API** credential for that mail server (*Credentials, Add credential*,
+   type API).
+3. In `config.json`, set `mail.provider` to `"postal"` and `mail.postalBaseUrl` to the
+   address of your Postal web/API host, e.g. `https://postal.example.org`. It must be
+   https, unless Postal runs on the same machine (`http://localhost:5000`).
+4. Provide the credential's key as `mail.postalApiKey` or, better, the environment
+   variable `CORESCOPE_POSTAL_API_KEY`, which wins over the config value. CoreScope
+   sends it in the `X-Server-API-Key` header.
+
+```json
+"mail": {
+  "provider": "postal",
+  "postalBaseUrl": "https://postal.example.org",
+  "postalApiKey": "<key of the API credential, or leave out and use the env variable>",
+  "fromEmail": "noreply@example.org",
+  "fromName": "My CoreScope"
+}
+```
+
+Everything else below applies to both providers, except where it names one.
+
 ### 2. Configure
 
 Add to `config.json` (see `config.example.json` for every key):
@@ -48,7 +75,11 @@ incomplete, and the log says what is missing.
 | `dbPath` | Where accounts are stored. Default: `users.db` next to the analyzer database. |
 | `sessionDays` | Login lifetime, extended while in use. Default 30, maximum 365. |
 | `trustedProxies` | CIDRs of your reverse proxy, so the per-IP login limits see real client IPs. Without it, behind a proxy every client shares the proxy's IP for the per-IP limits (they are switched off when that IP is loopback or private). Per-address and per-account limits apply either way. |
-| `mail.webhookSecret` | Enables delivery status (below). At least 16 characters. |
+| `mail.provider` | `brevo` (default) or `postal`. |
+| `mail.brevoApiKey` | Brevo only: the API key. `CORESCOPE_BREVO_API_KEY` wins over it. Required with Brevo. |
+| `mail.postalBaseUrl` | Postal only: your Postal host, https (http only for localhost). Required with Postal. |
+| `mail.postalApiKey` | Postal only: the key of the server's API credential. `CORESCOPE_POSTAL_API_KEY` wins over it. Required with Postal. |
+| `mail.webhookSecret` | Enables delivery status (below). At least 16 characters. With Postal, only letters, digits, `.`, `_` and `-`. |
 
 ### 3. The first admin
 
@@ -67,8 +98,29 @@ To see per user whether mails were delivered, bounced, blocked or marked as spam
    opened, clicked, soft bounce, hard bounce, invalid email, deferred, spam, blocked,
    error. Use **bearer** authentication with the same secret.
 
-If Brevo cannot reach your instance, use **Refresh status** in a user's details instead:
-CoreScope then asks Brevo directly. "Opened" is indicative only. Some mail apps load
+With Postal:
+
+1. Set `mail.webhookSecret` (16+ random letters and digits), or
+   `CORESCOPE_POSTAL_WEBHOOK_SECRET`.
+2. In Postal, add a webhook (*Webhooks, Add webhook*) for your mail server. Postal
+   cannot send a custom header, so the secret goes into the URL as Basic auth:
+   `https://postal:<secret>@<host of publicBaseUrl>/api/mail/postal/webhook`. The user
+   name (`postal` here) is not checked. Choose these events: MessageSent,
+   MessageDelayed, MessageDeliveryFailed, MessageHeld, MessageBounced, and if you use
+   Postal's open and click tracking, MessageLoaded and MessageLinkClicked. Other
+   events are accepted and ignored. Postal's "Sent" means the recipient's server
+   accepted the mail and is shown as delivered.
+
+   A failed delivery marks the address as bouncing only when the recipient's server
+   rejected the mail permanently (a 5xx SMTP reply). Postal also fails mail for
+   reasons on its own side: its outbound spam threshold, too many attempts after
+   temporary failures, a removed message or a deleted domain. Those, and bounce
+   messages (which can be delay notices or auto-replies), are shown as *error* with
+   Postal's explanation, and the address is not flagged.
+
+If the provider cannot reach your instance, use **Refresh status** in a user's details
+instead: CoreScope then asks the provider directly. Mails sent before you switched
+provider cannot be refreshed. "Opened" is indicative only. Some mail apps load
 tracking pixels automatically, and others block them.
 
 ### When mail fails
@@ -182,8 +234,9 @@ watched node changes state. Admins can also watch the instance.
 - `maxMailsPerDay` counts notification mail only; activation, password-reset and
   address-change mail are not counted and are not limited by it. They share the mail
   provider's daily quota, though (Brevo's free tier allows 300 a day for the whole
-  account), so keep `maxMailsPerDay` well below that quota. The default 100 leaves 200
-  a day for account mail and for any other sender on the same provider account.
+  account; a Postal server has whatever send limit you set on it), so keep
+  `maxMailsPerDay` well below that quota. The default 100 leaves 200 a day for account
+  mail and for any other sender on the same provider account.
 - Every mail carries a one-click unsubscribe link and `List-Unsubscribe` headers; the
   link turns notification mails off for that account and nothing else. The account page
   turns them back on.

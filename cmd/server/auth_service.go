@@ -78,9 +78,12 @@ func (s *Server) initUserManagement(measurementDBPath string) error {
 		return err
 	}
 	var m mailer.Mailer
-	if set.provider == "fake" {
+	switch set.provider {
+	case "fake":
 		m = &mailer.Fake{}
-	} else {
+	case "postal":
+		m = mailer.NewPostal(set.postalBaseURL, set.postalAPIKey, set.fromEmail, set.fromName)
+	default:
 		m = mailer.NewBrevo(set.brevoAPIKey, set.fromEmail, set.fromName)
 	}
 	s.auth = newAuthService(set, st, m)

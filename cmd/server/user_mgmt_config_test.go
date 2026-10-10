@@ -71,6 +71,62 @@ func TestResolveUserManagementErrors(t *testing.T) {
 	}
 }
 
+func validPostalUM() *UserManagementConfig {
+	u := validUM()
+	u.Mail = UserMailConfig{Provider: "Postal", PostalBaseURL: "https://postal.example.org/",
+		PostalAPIKey: "postal-key", FromEmail: "noreply@example.org", WebhookSecret: "AbCd0123456789xyz"}
+	return u
+}
+
+func TestResolveUserManagementPostal(t *testing.T) {
+	set, err := resolveUserManagement(validPostalUM(), "meshcore.db", noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.provider != "postal" || set.postalBaseURL != "https://postal.example.org" ||
+		set.postalAPIKey != "postal-key" || set.webhookSecret != "AbCd0123456789xyz" {
+		t.Fatalf("postal settings = %q %q %q %q", set.provider, set.postalBaseURL, set.postalAPIKey, set.webhookSecret)
+	}
+
+	env := map[string]string{
+		"CORESCOPE_POSTAL_API_KEY": "env-key", "CORESCOPE_POSTAL_WEBHOOK_SECRET": "env-secret-0123456789",
+		"CORESCOPE_BREVO_API_KEY": "brevo-env", "CORESCOPE_BREVO_WEBHOOK_SECRET": "brevo-secret-0123456789",
+	}
+	set, err = resolveUserManagement(validPostalUM(), "meshcore.db", func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.postalAPIKey != "env-key" || set.webhookSecret != "env-secret-0123456789" {
+		t.Fatalf("postal env not applied: %q %q", set.postalAPIKey, set.webhookSecret)
+	}
+
+	u := validPostalUM()
+	u.Mail.PostalBaseURL = "http://127.0.0.1:5000"
+	if set, err := resolveUserManagement(u, "meshcore.db", noEnv); err != nil || set.postalBaseURL != "http://127.0.0.1:5000" {
+		t.Fatalf("loopback http: %v", err)
+	}
+}
+
+func TestResolveUserManagementPostalErrors(t *testing.T) {
+	cases := map[string]func(u *UserManagementConfig){
+		"Postal API key":          func(u *UserManagementConfig) { u.Mail.PostalAPIKey = "" },
+		"postalBaseUrl must be":   func(u *UserManagementConfig) { u.Mail.PostalBaseURL = "" },
+		"postalBaseUrl must use":  func(u *UserManagementConfig) { u.Mail.PostalBaseURL = "http://postal.example.org" },
+		"postalBaseUrl must not":  func(u *UserManagementConfig) { u.Mail.PostalBaseURL = "https://user:pw@postal.example.org" },
+		"postalBaseUrl must not ": func(u *UserManagementConfig) { u.Mail.PostalBaseURL = "https://postal.example.org/?x=1" },
+		"letters, digits":         func(u *UserManagementConfig) { u.Mail.WebhookSecret = "has:colon-0123456789" },
+		"webhookSecret":           func(u *UserManagementConfig) { u.Mail.WebhookSecret = "short" },
+	}
+	for want, mutate := range cases {
+		u := validPostalUM()
+		mutate(u)
+		_, err := resolveUserManagement(u, "meshcore.db", noEnv)
+		if err == nil || !strings.Contains(err.Error(), strings.TrimSpace(want)) {
+			t.Errorf("%s: err = %v", want, err)
+		}
+	}
+}
+
 func TestUserManagementEnabled(t *testing.T) {
 	var nilCfg *Config
 	if nilCfg.UserManagementEnabled() || (&Config{}).UserManagementEnabled() ||

@@ -62,9 +62,14 @@ func (s *Server) registerAuthRoutes(r *mux.Router) {
 	if s.auth.notify != nil {
 		s.registerNotifyRoutes(r)
 	}
-	// The webhook exists only when a secret is configured.
+	// The webhook exists only when a secret is configured, and only for the
+	// configured provider.
 	if s.auth.set.webhookSecret != "" {
-		r.HandleFunc("/api/mail/brevo/webhook", s.handleBrevoWebhook).Methods("POST")
+		if s.auth.set.provider == "postal" {
+			r.HandleFunc("/api/mail/postal/webhook", s.handlePostalWebhook).Methods("POST")
+		} else {
+			r.HandleFunc("/api/mail/brevo/webhook", s.handleBrevoWebhook).Methods("POST")
+		}
 	}
 	if e2eRoutes != nil {
 		e2eRoutes(s, r)
