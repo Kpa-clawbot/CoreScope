@@ -3228,7 +3228,7 @@ func (db *DB) GetSignatureDropCount() int64 {
 //
 // The unary + on every scope_name reference keeps SQLite off
 // idx_tx_scope_name: with it, the planner walked every scoped transmission in
-// the database (scope_name > '') and filtered by time afterwards, 2.5-2.9 s on
+// the database (every non-empty scope_name) and filtered by time afterwards, 2.5-2.9 s on
 // a production database whatever the window. The window is the selective
 // condition, so the query searches idx_transmissions_first_seen and groups in a
 // temp b-tree (same idiom as the advertsByRole query below).
