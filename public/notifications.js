@@ -101,12 +101,17 @@
     'observer.offline': 'An observer goes offline or comes back (admin)'
   };
 
+  function eventLabel(e, data) {
+    if (e === 'node.external') return 'A watched node gets a ' + (data.externalLabel || 'external') + ' alert or it clears';
+    return EVENT_LABELS[e] || e;
+  }
+
   function eventsHtml(data) {
     return (data.availableEvents || []).map(function (e) {
       var id = 'notifyEv-' + e.replace(/\./g, '-');
       return '<label class="account-check" for="' + escapeHtml(id) + '"><input type="checkbox" id="' + escapeHtml(id) +
         '" data-notify-event="' + escapeHtml(e) + '"' + ((data.events || []).indexOf(e) !== -1 ? ' checked' : '') + '> ' +
-        escapeHtml(EVENT_LABELS[e] || e) + '</label>';
+        escapeHtml(eventLabel(e, data)) + '</label>';
     }).join('');
   }
 

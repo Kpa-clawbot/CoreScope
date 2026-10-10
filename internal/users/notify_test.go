@@ -346,3 +346,47 @@ func TestDefaultNotifyPrefs(t *testing.T) {
 		t.Fatalf("NotifyPrefsFor created %+v; want the defaults %+v", got, want)
 	}
 }
+
+func TestNodeExternalIsOptionalAndCanonical(t *testing.T) {
+	if !ValidNotifyEvent(NotifyNodeExternal) || IsAdminNotifyEvent(NotifyNodeExternal) {
+		t.Fatal("node.external must be a valid, non-admin event")
+	}
+	if DefaultNotifyPrefs(1).Has(NotifyNodeExternal) {
+		t.Fatal("node.external must be off by default")
+	}
+	st, _ := newTestStore(t)
+	u := mustCreate(t, st, "a@example.org", "A")
+	p, err := st.SetNotifyPrefs(u.ID, true, []string{NotifyForeignNew, NotifyNodeExternal, NotifyNodeOffline})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(p.Events, []string{NotifyNodeOffline, NotifyNodeExternal, NotifyForeignNew}) {
+		t.Fatalf("events = %v; want node events, then optional, then admin", p.Events)
+	}
+}
+
+func TestRemoveWatchDeletesItsExternalSubjects(t *testing.T) {
+	st, clk := newTestStore(t)
+	u := mustCreate(t, st, "a@example.org", "A")
+	if _, _, _, err := st.AddWatches(u.ID, []string{nPkA, nPkB}, 0); err != nil {
+		t.Fatal(err)
+	}
+	now := clk.Now()
+	if err := st.WriteNotifyStates([]NotifyState{
+		nState(u.ID, NotifyNodeExternal, nPkA+"/*", NotifyGood, now),
+		nState(u.ID, NotifyNodeExternal, nPkA+"/SE", NotifyBad, now),
+		nState(u.ID, NotifyNodeExternal, nPkB+"/SE", NotifyBad, now),
+		nState(u.ID, NotifyNodeExternal, nPkA, NotifyBad, now), // no separator: not one of nPkA's subjects
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RemoveWatch(u.ID, nPkA); err != nil {
+		t.Fatal(err)
+	}
+	got := statesByKey(t, st)
+	_, keepB := got[NotifyKey{u.ID, NotifyNodeExternal, nPkB + "/SE"}]
+	_, keepBare := got[NotifyKey{u.ID, NotifyNodeExternal, nPkA}]
+	if len(got) != 2 || !keepB || !keepBare {
+		t.Fatalf("states after removing the watch = %+v", got)
+	}
+}

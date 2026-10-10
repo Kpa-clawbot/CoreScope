@@ -28,6 +28,9 @@ type fakeNotifySource struct {
 	heardAsked     []string
 	foreignAsked   int
 	observersAsked int
+	feed           []byte // externalFeed body; nil with feedErr nil means an empty 200
+	feedErr        error
+	feedAsked      int
 }
 
 func (f *fakeNotifySource) ready() bool              { return f.isReady }
@@ -64,6 +67,10 @@ func (f *fakeNotifySource) newestPacket() time.Time {
 		return time.Time{}
 	}
 	return f.newestAt()
+}
+func (f *fakeNotifySource) externalFeed() ([]byte, error) {
+	f.feedAsked++
+	return f.feed, f.feedErr
 }
 func (f *fakeNotifySource) observers() ([]notifyObserver, error) {
 	f.observersAsked++
@@ -460,7 +467,7 @@ func TestNotifyChangeText(t *testing.T) {
 		{notifyChange{Event: users.NotifyObserverOffline, Name: "O", To: users.NotifyGood, At: at}, "O: observer back online, 2026-10-07 09:05 UTC"},
 	}
 	for _, c := range cases {
-		if got := notifyChangeText(c.c); got != c.want {
+		if got := notifyChangeText(c.c, "Coverage"); got != c.want {
 			t.Errorf("%q; want %q", got, c.want)
 		}
 	}
