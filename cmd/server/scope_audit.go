@@ -877,9 +877,9 @@ type ScopeTransportRow struct {
 	DeclaredAt       string   `json:"declaredAt,omitempty"`
 	NotObserved      []string `json:"notObserved"`
 
-	// CarriesRegion is set only when the request named a region: whether
-	// this repeater was seen carrying it in the window.
-	CarriesRegion *bool `json:"carriesRegion,omitempty"`
+	// CarriesScope is set only when the request named a scope (?scope=):
+	// whether this repeater was seen carrying it in the window.
+	CarriesScope *bool `json:"carriesScope,omitempty"`
 }
 
 // ScopeTransportResponse is GET /api/scope-audit?mode=transport.
@@ -887,7 +887,7 @@ type ScopeTransportResponse struct {
 	Mode      string              `json:"mode"` // "transport"
 	Window    string              `json:"window"`
 	Since     string              `json:"since"`
-	Region    string              `json:"region,omitempty"` // normalised region filter, when given
+	Scope     string              `json:"scope,omitempty"` // normalised ?scope= filter, when given
 	Carrying  *int                `json:"carrying,omitempty"`
 	NotCarry  *int                `json:"notCarrying,omitempty"`
 	Repeaters []ScopeTransportRow `json:"repeaters"`
@@ -1337,8 +1337,10 @@ func (s *Server) serveScopeTransport(w http.ResponseWriter, r *http.Request, win
 		}
 		resp = v.(*ScopeTransportResponse)
 	}
-	if region := strings.ToLower(normScope(strings.TrimSpace(r.URL.Query().Get("region")))); region != "" {
-		resp = withTransportRegion(resp, region)
+	// ?scope= names a region SCOPE (be, be-van). ?region= is kept for the
+	// observer IATA filter, as on every other endpoint.
+	if scope := strings.ToLower(normScope(strings.TrimSpace(r.URL.Query().Get("scope")))); scope != "" {
+		resp = withTransportScope(resp, scope)
 	}
 	writeJSON(w, resp)
 }
@@ -1364,18 +1366,18 @@ func (s *Server) scopeTransportStore(window string, resp *ScopeTransportResponse
 	s.scopeTransportCachedAt[window] = time.Now()
 }
 
-// withTransportRegion returns a copy of resp in which every row says whether
-// it was seen carrying region, with the two counts. region is already
+// withTransportScope returns a copy of resp in which every row says whether
+// it was seen carrying scope, with the two counts. scope is already
 // normalised (no '#', lower case).
-func withTransportRegion(resp *ScopeTransportResponse, region string) *ScopeTransportResponse {
+func withTransportScope(resp *ScopeTransportResponse, scope string) *ScopeTransportResponse {
 	out := *resp
-	out.Region = region
+	out.Scope = scope
 	out.Repeaters = make([]ScopeTransportRow, len(resp.Repeaters))
 	carrying, notCarrying := 0, 0
 	for i, row := range resp.Repeaters {
 		carries := false
 		for _, so := range row.Transported {
-			if strings.ToLower(so.Scope) == region {
+			if strings.ToLower(so.Scope) == scope {
 				carries = true
 				break
 			}
@@ -1386,7 +1388,7 @@ func withTransportRegion(resp *ScopeTransportResponse, region string) *ScopeTran
 			notCarrying++
 		}
 		c := carries
-		row.CarriesRegion = &c
+		row.CarriesScope = &c
 		out.Repeaters[i] = row
 	}
 	out.Carrying, out.NotCarry = &carrying, &notCarrying

@@ -20,8 +20,8 @@ import (
 // #2142: the scope audit lists only repeaters that answered a declared-regions
 // request (17 of ~200 nodes on the instance that asked). The transport view
 // lists every repeater seen forwarding in the window, with the region scopes
-// it carried, its declared regions where known, and a region filter that
-// splits the fleet into carriers and non-carriers for rollout tracking.
+// it carried, its declared regions where known, and a scope filter (?scope=)
+// that splits the fleet into carriers and non-carriers for rollout tracking.
 
 var testFullPubkeyC = "cccc" + strings.Repeat("33", 30)
 
@@ -113,26 +113,26 @@ func TestScopeTransport_OmitsRepeatersNotSeenForwarding(t *testing.T) {
 	}
 }
 
-func TestScopeTransport_RegionFilterSplitsCarriers(t *testing.T) {
+func TestScopeTransport_ScopeFilterSplitsCarriers(t *testing.T) {
 	srv, router := setupScopeAuditServer(t)
 	seedTwoRepeaters(t, srv)
-	for _, q := range []string{"&region=fr", "&region=%23fr", "&region=FR"} {
+	for _, q := range []string{"&scope=fr", "&scope=%23fr", "&scope=FR"} {
 		got := getScopeTransport(t, router, q)
-		if got.Region != "fr" {
-			t.Errorf("%s: region = %q, want normalised \"fr\"", q, got.Region)
+		if got.Scope != "fr" {
+			t.Errorf("%s: scope = %q, want normalised \"fr\"", q, got.Scope)
 		}
 		a := transportRow(t, got.Repeaters, testFullPubkeyA)
 		b := transportRow(t, got.Repeaters, testFullPubkeyB)
-		if a.CarriesRegion == nil || *a.CarriesRegion || b.CarriesRegion == nil || !*b.CarriesRegion {
-			t.Errorf("%s: carriesRegion A=%v B=%v, want A false, B true", q, a.CarriesRegion, b.CarriesRegion)
+		if a.CarriesScope == nil || *a.CarriesScope || b.CarriesScope == nil || !*b.CarriesScope {
+			t.Errorf("%s: carriesScope A=%v B=%v, want A false, B true", q, a.CarriesScope, b.CarriesScope)
 		}
 		if got.Carrying == nil || *got.Carrying != 1 || got.NotCarry == nil || *got.NotCarry != 1 {
 			t.Errorf("%s: carrying=%v notCarrying=%v, want 1 and 1", q, got.Carrying, got.NotCarry)
 		}
 	}
 	plain := getScopeTransport(t, router, "")
-	if plain.Region != "" || plain.Carrying != nil || transportRow(t, plain.Repeaters, testFullPubkeyB).CarriesRegion != nil {
-		t.Error("without a region filter, no carriesRegion or counts may be reported")
+	if plain.Scope != "" || plain.Carrying != nil || transportRow(t, plain.Repeaters, testFullPubkeyB).CarriesScope != nil {
+		t.Error("without a scope filter, no carriesScope or counts may be reported")
 	}
 }
 

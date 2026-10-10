@@ -1894,7 +1894,7 @@ not being the same as "declared nothing"), which apply here identically.
 |----------|--------|------------|---------------------------------|
 | `window` | string | `24h`      | Time window: `1h`, `24h`, `7d` |
 | `mode`   | string | `declared` | `declared` (this section) or `transport` (see [Transport view](#transport-view-modetransport)) |
-| `region` | string | —          | `mode=transport` only: region to split the fleet by, with or without `#`, any case |
+| `scope`  | string | —          | `mode=transport` only: region scope to split the fleet by (`be`, `be-van`), with or without `#`, any case |
 
 ### Response `200`
 
@@ -2056,16 +2056,16 @@ hops, a hop whose prefix matches several repeaters is credited to none of them),
 every repeater and room this instance knows as a target instead of only the declared ones.
 "Transported" means **seen carrying**, not configured for; the declared side is reported
 separately where it exists. Cached per window with the same TTLs as the declared view; the
-`region` filter is applied to the cached result.
+`scope` filter is applied to the cached result.
 
 ```jsonc
 {
   "mode": "transport",
   "window": string,
   "since": string (ISO),
-  "region": string | undefined,        // normalised filter ("#FR" -> "fr"); present only when given
-  "carrying": number | undefined,      // rows with carriesRegion: true; only with region
-  "notCarrying": number | undefined,   // rows with carriesRegion: false; only with region
+  "scope": string | undefined,         // normalised ?scope= filter ("#FR" -> "fr"); present only when given
+  "carrying": number | undefined,      // rows with carriesScope: true; only with scope
+  "notCarrying": number | undefined,   // rows with carriesScope: false; only with scope
   "repeaters": [
     {
       "publicKey":        string,
@@ -2083,7 +2083,7 @@ separately where it exists. Cached per window with the same TTLs as the declared
       "configState":      string | undefined, // as in the declared view; only when asked
       "declaredAt":       string | undefined, // only when asked
       "notObserved":      [string] | null,    // declared regions not seen carried; null when not asked
-      "carriesRegion":    boolean | undefined // only with region
+      "carriesScope":     boolean | undefined // only with scope
     }
   ]
 }
