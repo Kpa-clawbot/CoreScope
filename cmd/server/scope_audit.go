@@ -431,7 +431,11 @@ func (db *DB) observerRegionClause(q interface {
 	if len(ids) == 0 {
 		return " AND 0", nil, nil
 	}
-	return " AND " + col + " IN (" + strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + ")", ids, nil
+	// The unary + keeps SQLite off the observer index. Driven from it, the
+	// scan reads every observation the region's observers ever made and checks
+	// the window per row (13.4s for one region over 24h on a live-shaped database);
+	// driven from the first_seen window like the unfiltered scan, 0.25s.
+	return " AND +" + col + " IN (" + strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + ")", ids, nil
 }
 
 // scopeAuditWindowMetaQuery reads the two per-TRANSMISSION facts the hop scan
