@@ -1896,6 +1896,7 @@ not being the same as "declared nothing"), which apply here identically.
 | `window` | string | `24h`      | Time window: `1h`, `24h`, `7d` |
 | `mode`   | string | `declared` | `declared` (this section) or `transport` (see [Transport view](#transport-view-modetransport)) |
 | `scope`  | string | —          | `mode=transport` only: region scope to split the fleet by (`be`, `be-van`), with or without `#`, any case |
+| `region` | string | —          | Observer IATA filter, comma-separated (`SFO,SJC`), both views: count only forwarding heard by observers in those regions. As on every other endpoint this means *heard by*, not *located in*; `All` means no filter, and codes with no observer match nothing. Each region set is cached separately |
 
 ### Response `200`
 
@@ -1903,6 +1904,7 @@ not being the same as "declared nothing"), which apply here identically.
 {
   "window": string,                    // echoed window ("1h", "24h", or "7d")
   "since":  string (ISO),              // start of the observed-forwarding window
+  "region": string | undefined,        // normalised ?region= codes ("sfo,sjc" -> "SFO,SJC"); present only when given
   "repeaters": [
     {
       "publicKey":        string,
@@ -2064,6 +2066,7 @@ separately where it exists. Cached per window with the same TTLs as the declared
   "mode": "transport",
   "window": string,
   "since": string (ISO),
+  "region": string | undefined,        // normalised ?region= codes; present only when given
   "scope": string | undefined,         // normalised ?scope= filter ("#FR" -> "fr"); present only when given
   "carrying": number | undefined,      // rows with carriesScope: true; only with scope
   "notCarrying": number | undefined,   // rows with carriesScope: false; only with scope
