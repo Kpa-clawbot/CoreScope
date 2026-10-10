@@ -181,3 +181,44 @@ func TestScopeTransport_RegionOnV2Schema(t *testing.T) {
 		t.Fatalf("v2 region=SFO should list only A, got %+v", got.Repeaters)
 	}
 }
+
+// With an index on observations(observer_idx), as every real database has,
+// SQLite drives "o.observer_idx IN (...)" from that index: every observation
+// the region's observers ever made, then the window check per row. On a
+// live-shaped database that was 13.4s for one region over 24h against 0.25s when
+// the scan starts from the first_seen window as the unfiltered scan does.
+func TestScopeAudit_RegionScanKeepsTheTimeIndex(t *testing.T) {
+	srv, _ := setupScopeRegionServer(t)
+	for _, ddl := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_transmissions_first_seen ON transmissions(first_seen)`,
+		`CREATE INDEX IF NOT EXISTS idx_observations_transmission_id ON observations(transmission_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_observations_observer_idx ON observations(observer_idx)`,
+	} {
+		if _, err := srv.db.conn.Exec(ddl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clause, args, err := srv.db.observerRegionClause(srv.db.conn, []string{"SFO"})
+	if err != nil || clause == "" {
+		t.Fatalf("clause=%q err=%v", clause, err)
+	}
+	rows, err := srv.db.conn.Query("EXPLAIN QUERY PLAN "+scopeAuditForwarderScanQuery+clause,
+		append([]interface{}{"2000-01-01T00:00:00Z"}, args...)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	joined := strings.Join(plan, " | ")
+	if strings.Contains(joined, "idx_observations_observer_idx") || !strings.Contains(joined, "idx_transmissions_first_seen") {
+		t.Fatalf("the region scan must start from the first_seen window, not the observer index: %s", joined)
+	}
+}
