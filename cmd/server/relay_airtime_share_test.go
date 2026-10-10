@@ -28,7 +28,6 @@ func newRelayAirtimeShareTestStore(packets []*StoreTx) *PacketStore {
 		chanCache:      make(map[string]*cachedResult),
 		distCache:      make(map[string]*cachedResult),
 		subpathCache:   make(map[string]*cachedResult),
-		spIndex:        make(map[string]int),
 		spTxIndex:      make(map[string][]*StoreTx),
 		advertPubkeys:  make(map[string]int),
 	}
