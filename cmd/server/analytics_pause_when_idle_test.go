@@ -112,3 +112,31 @@ func TestStartAnalyticsRecomputers_AppliesPauseWhenIdle(t *testing.T) {
 		}
 	}
 }
+
+// The node-health "Heard By" card reads the direct-heard snapshot through
+// loadDirectHeard, not through the recomputer's Load. With pauseWhenIdle on,
+// that read must still count, or direct-heard pauses after startup and never
+// recomputes again: nodes first heard later show "nobody hears this node".
+func TestDirectHeard_PausedRecomputerResumesWhenTheCardIsRead(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	store := NewPacketStore(db, nil)
+	stop := store.StartAnalyticsRecomputers(20*time.Millisecond, AnalyticsRecomputeIntervals{PauseWhenIdle: true})
+	defer stop()
+	store.analyticsRecomputerMu.Lock()
+	rc := store.recompDirectHeard
+	store.analyticsRecomputerMu.Unlock()
+	if rc == nil {
+		t.Fatal("no direct-heard recomputer")
+	}
+	time.Sleep(150 * time.Millisecond) // unread: pauses
+	before := rc.computeRuns.Load()
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		store.loadDirectHeard() // what the Heard By card calls
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := rc.computeRuns.Load() - before; got < 2 {
+		t.Errorf("direct-heard recomputed %d times in 300 ms of card reads at a 20 ms interval, want it to keep refreshing", got)
+	}
+}
