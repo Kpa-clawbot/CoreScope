@@ -28,6 +28,7 @@
   var searchQuery = ''; // free-text filter over name/pubkey/region, applied client-side
   var searchIndex = {}; // publicKey -> lowercased searchable haystack, rebuilt every renderBody
   var sortCtl = null; // tracked TableSort controller for destroy-before-reinit (mirrors observers.js)
+  var regionChangeHandler = null; // shared RegionFilter subscription, removed on destroy
 
   // introHtml describes the view being shown: the declared view covers only
   // repeaters that answered a declared-regions request, the transport view
@@ -35,7 +36,7 @@
   function introHtml(m) {
     if (m === 'transport') {
       return 'Every repeater seen forwarding in the window, with the region scopes it was seen carrying and, where it has answered, the regions it declares. ' +
-        'Type a region to see which repeaters carry it and which were active but did not. <a href="#/nodes">Per-node detail lives on each node\'s page</a>.';
+        'Type a region scope to see which repeaters carry it and which were active but did not. <a href="#/nodes">Per-node detail lives on each node\'s page</a>.';
     }
     return 'Network-wide comparison of declared vs. observed region-scope forwarding, across every repeater that has declared a region list over RF. ' +
       '<a href="#/nodes">Per-node detail lives on each node\'s page</a>.';
@@ -65,8 +66,11 @@
   function buildHash(w, m, rgn) {
     return '#/scope-audit?window=' + encodeURIComponent(w) + modeQuery(m, rgn);
   }
-  function apiPath(w, m, rgn) {
-    return '/scope-audit?window=' + encodeURIComponent(w) + modeQuery(m, rgn);
+  // obsRegion is the shared region filter's selection ("SFO,SJC"): count only
+  // forwarding heard by observers there, as region= means on every page.
+  function apiPath(w, m, rgn, obsRegion) {
+    return '/scope-audit?window=' + encodeURIComponent(w) + modeQuery(m, rgn) +
+      (obsRegion ? '&region=' + encodeURIComponent(obsRegion) : '');
   }
 
   function windowBtn(key, cur, label) {
@@ -97,12 +101,14 @@
       '</div>' +
       '<div class="analytics-time-range" id="saWindow">' +
       WINDOWS.map(function (w) { return windowBtn(w.key, win, w.label); }).join('') +
-      '</div></div></div>' +
+      '</div>' +
+      '<div id="saObsRegionFilter" class="region-filter-container" title="Count only forwarding heard by observers in these regions"></div>' +
+      '</div></div>' +
       '<div class="sa-region-bar" id="saRegionBar"' + (mode === 'transport' ? '' : ' hidden') + '>' +
-      '<label for="saRegion">Region</label> ' +
+      '<label for="saRegion">Scope</label> ' +
       '<input type="text" id="saRegion" class="nodes-search sa-region" list="saRegionList" placeholder="e.g. be" value="' + escapeHtml(region) + '" aria-describedby="saRegionHelp">' +
       '<datalist id="saRegionList"></datalist>' +
-      ' <span class="text-muted" id="saRegionHelp">Show which repeaters were seen carrying one region, and which were active but did not.</span>' +
+      ' <span class="text-muted" id="saRegionHelp">Show which repeaters were seen carrying one region scope, and which were active but did not.</span>' +
       '</div>' +
       '<div class="sa-intro" id="saIntro">' + introHtml(mode) + '</div>' +
       sourcesLineHtml() +
@@ -577,7 +583,8 @@
     if (body) body.innerHTML = '<div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading scope audit…</div>';
     var d;
     try {
-      d = await api(apiPath(w, mode, region), { ttl: 30000 });
+      var obsRegion = (typeof RegionFilter !== 'undefined') ? RegionFilter.getRegionParam() : '';
+      d = await api(apiPath(w, mode, region, obsRegion), { ttl: 30000 });
     } catch (e) {
       if (myGen !== loadGen) return;
       if (body) body.innerHTML = '<div class="ns-empty">Failed to load scope audit: ' + escapeHtml(e.message) + '</div>';
@@ -631,11 +638,18 @@
       searchQuery = e.target.value;
       applyFilter();
     }, 250));
+    var rf = document.getElementById('saObsRegionFilter');
+    if (rf && typeof RegionFilter !== 'undefined') {
+      RegionFilter.init(rf);
+      regionChangeHandler = RegionFilter.onChange(function () { load(win); });
+    }
     load(win);
   }
 
   function destroy() {
     loadGen++;
+    if (regionChangeHandler && typeof RegionFilter !== 'undefined') RegionFilter.offChange(regionChangeHandler);
+    regionChangeHandler = null;
     if (sortCtl && typeof sortCtl.destroy === 'function') {
       try { sortCtl.destroy(); } catch (e) { /* ignore */ }
     }

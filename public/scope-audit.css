@@ -106,6 +106,12 @@
 
 /* #2142 transport view: view toggle, region filter, carried-scope chips. */
 .sa-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+/* The region filter is the last control in the row, at the right edge: open
+   its menu leftwards so it stays on screen. On a phone the controls wrap and
+   the filter starts its own line at the left, where the default is right. */
+@media (min-width: 641px) {
+  .sa-controls .region-dropdown-menu { left: auto; right: 0; }
+}
 .sa-region-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 10px; font-size: 12px; }
 .sa-region-bar[hidden] { display: none; } /* display:flex above would otherwise override the hidden attribute */
 .sa-region-bar label { font-weight: 600; }
