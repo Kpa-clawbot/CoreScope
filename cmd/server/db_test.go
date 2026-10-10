@@ -2632,3 +2632,41 @@ func TestGetChannelsPreviewRespectsRegionFilter(t *testing.T) {
 		t.Errorf("unfiltered preview sender = %v, want Bob (the newest message)", got)
 	}
 }
+
+// #2146: /api/perf counted every row of transmissions, observations, nodes
+// and observers on each call (116 ms for the observations count on an
+// 18M-row database). The counts are cached for perfRowCountsTTL.
+func TestGetDBSizeStatsTypedCachesRowCounts(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	seedTestData(t, db)
+
+	first := db.GetDBSizeStatsTyped().Rows.Transmissions
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen) VALUES ('AA', 'perfcache0000001', '2026-01-01T00:00:00Z')`)
+	if got := db.GetDBSizeStatsTyped().Rows.Transmissions; got != first {
+		t.Fatalf("within the TTL the cached count must be served: got %d, want %d", got, first)
+	}
+
+	db.rowCountsMu.Lock()
+	db.rowCountsAt = time.Now().Add(-2 * perfRowCountsTTL)
+	db.rowCountsMu.Unlock()
+	if got := db.GetDBSizeStatsTyped().Rows.Transmissions; got != first+1 {
+		t.Fatalf("after the TTL the count must be refreshed: got %d, want %d", got, first+1)
+	}
+}
+
+// A failed count is not cached, so the next /api/perf counts again.
+func TestGetDBSizeStatsTypedDoesNotCacheFailedCounts(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	if _, err := db.conn.Exec(`DROP TABLE observers`); err != nil {
+		t.Fatal(err)
+	}
+	db.GetDBSizeStatsTyped()
+	db.rowCountsMu.Lock()
+	cached := db.rowCounts != nil
+	db.rowCountsMu.Unlock()
+	if cached {
+		t.Fatal("row counts with a failed COUNT(*) must not be cached")
+	}
+}

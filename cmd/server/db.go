@@ -102,6 +102,10 @@ type DB struct {
 	stmtCountNodesByRoleAll *sql.Stmt // WHERE role = ?
 	stmtMaxTxID             *sql.Stmt // COALESCE(MAX(id), 0) FROM transmissions
 	stmtMaxObsID            *sql.Stmt // COALESCE(MAX(id), 0) FROM observations
+	// rowCounts caches the /api/perf table row counts (cachedRowCounts).
+	rowCountsMu sync.Mutex
+	rowCounts   *SqliteRowCounts
+	rowCountsAt time.Time
 }
 
 // channelsCacheTTL is shared by the GetChannels and GetEncryptedChannels
@@ -626,10 +630,31 @@ func (db *DB) GetDBSizeStatsTyped() SqliteStats {
 		result.WalPages = &WalPages{}
 	}
 
+	result.Rows = db.cachedRowCounts()
+
+	return result
+}
+
+// perfRowCountsTTL is how long /api/perf serves its table row counts before
+// counting again.
+const perfRowCountsTTL = 60 * time.Second
+
+// cachedRowCounts returns the row counts of the four main tables, counted
+// at most once per perfRowCountsTTL: a COUNT(*) reads a whole index, 116 ms
+// for observations on an 18M-row database (#2146).
+func (db *DB) cachedRowCounts() *SqliteRowCounts {
+	db.rowCountsMu.Lock()
+	defer db.rowCountsMu.Unlock()
+	if db.rowCounts != nil && time.Since(db.rowCountsAt) < perfRowCountsTTL {
+		return db.rowCounts
+	}
 	rows := &SqliteRowCounts{}
+	failed := false
 	for _, table := range []string{"transmissions", "observations", "nodes", "observers"} {
 		var count int
-		db.conn.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count)
+		if err := db.conn.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
+			failed = true
+		}
 		switch table {
 		case "transmissions":
 			rows.Transmissions = count
@@ -641,9 +666,11 @@ func (db *DB) GetDBSizeStatsTyped() SqliteStats {
 			rows.Observers = count
 		}
 	}
-	result.Rows = rows
-
-	return result
+	// A failed count is served once, as before, but not cached.
+	if !failed {
+		db.rowCounts, db.rowCountsAt = rows, time.Now()
+	}
+	return rows
 }
 
 // GetRoleCounts returns count per role (7-day active, matching Node.js /api/stats).
