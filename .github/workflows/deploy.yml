@@ -688,6 +688,7 @@ jobs:
           suite 3 test-packets-scope-column.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-path-inspector-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-pr-1490-live-map-gpu-animations-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 1 test-region-quick-picks.js
           suite 3 test-table-sort.js
           suite 1 test-touch-targets.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-live-dedup.js BASE_URL=$B
