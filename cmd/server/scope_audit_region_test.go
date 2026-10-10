@@ -53,8 +53,13 @@ func seedHeard(t *testing.T, srv *Server, hop string, seed scopeSeed, observerRo
 		t.Fatal(err)
 	}
 	id, _ := res.LastInsertId()
-	if _, err := srv.db.conn.Exec(`INSERT INTO observations (transmission_id, path_json, timestamp, observer_idx) VALUES (?, ?, ?, ?)`,
-		id, fmt.Sprintf(`["%s"]`, strings.ToUpper(hop)), time.Now().Unix(), observerRowid); err != nil {
+	path := fmt.Sprintf(`["%s"]`, strings.ToUpper(hop))
+	if observerRowid == 0 { // v2 fixture: the caller attributes observer_id itself
+		_, err = srv.db.conn.Exec(`INSERT INTO observations (transmission_id, path_json, timestamp) VALUES (?, ?, ?)`, id, path, time.Now().Unix())
+	} else {
+		_, err = srv.db.conn.Exec(`INSERT INTO observations (transmission_id, path_json, timestamp, observer_idx) VALUES (?, ?, ?, ?)`, id, path, time.Now().Unix(), observerRowid)
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 }
@@ -141,5 +146,38 @@ func TestScopeAudit_RegionWithNoObserversMatchesNothing(t *testing.T) {
 	got := getScopeTransport(t, router, "&region=ZZZ")
 	if len(got.Repeaters) != 0 {
 		t.Fatalf("a region with no observers must match no forwarding, got %d rows", len(got.Repeaters))
+	}
+}
+
+// On the v2 schema an observation names its observer by observers.id in
+// observer_id rather than by rowid; the filter must follow it.
+func TestScopeTransport_RegionOnV2Schema(t *testing.T) {
+	srv, router := setupScopeAuditServer(t)
+	for _, ddl := range []string{
+		`CREATE TABLE observers (id TEXT, name TEXT, iata TEXT)`,
+		`ALTER TABLE observations ADD COLUMN observer_id TEXT`,
+		`INSERT INTO observers (id, name, iata) VALUES ('obs-sfo', 'San Francisco', 'SFO'), ('obs-bru', 'Brussels', 'BRU')`,
+	} {
+		if _, err := srv.db.conn.Exec(ddl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := srv.db.detectSchema(context.Background(), srv.db.conn); err != nil {
+		t.Fatal(err)
+	}
+	if srv.db.isV3 {
+		t.Fatal("fixture must be v2")
+	}
+	addRepeater(t, srv, testFullPubkeyA, "Alpha")
+	addRepeater(t, srv, testFullPubkeyB, "Bravo")
+	seedHeard(t, srv, testFullPubkeyA[:4], scopeMatched("#be"), 0)
+	seedHeard(t, srv, testFullPubkeyB[:4], scopeMatched("#fr"), 0)
+	if _, err := srv.db.conn.Exec(`UPDATE observations SET observer_id = CASE WHEN path_json LIKE ? THEN 'obs-sfo' ELSE 'obs-bru' END`,
+		`%`+strings.ToUpper(testFullPubkeyA[:4])+`%`); err != nil {
+		t.Fatal(err)
+	}
+	got := getScopeTransport(t, router, "&region=SFO")
+	if len(got.Repeaters) != 1 || got.Repeaters[0].PublicKey != testFullPubkeyA {
+		t.Fatalf("v2 region=SFO should list only A, got %+v", got.Repeaters)
 	}
 }

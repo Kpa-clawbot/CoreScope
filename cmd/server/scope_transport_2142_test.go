@@ -233,7 +233,7 @@ func BenchmarkComputeScopeTransport(b *testing.B) {
 	b.ResetTimer()
 	var resp *ScopeTransportResponse
 	for i := 0; i < b.N; i++ {
-		if resp, err = srv.computeScopeTransport("24h", since); err != nil {
+		if resp, err = srv.computeScopeTransport("24h", since, nil); err != nil {
 			b.Fatal(err)
 		}
 	}
