@@ -63,7 +63,7 @@ const trigger = (el) => el.querySelector('.region-dropdown-trigger');
   await test('a pick selects exactly its codes that have an observer, and the page re-queries once', async () => {
     const { el, rf, calls } = await setup(SIX, PICKS);
     pick(el, 'California').click();
-    assert.deepStrictEqual(rf.getSelected().slice().sort(), ['LAX', 'SFO', 'SJC']);
+    assert.deepStrictEqual(Array.from(rf.getSelected()).sort(), ['LAX', 'SFO', 'SJC']);
     assert.deepStrictEqual(calls, [['LAX', 'SFO', 'SJC']]);
   });
 
@@ -93,7 +93,7 @@ const trigger = (el) => el.querySelector('.region-dropdown-trigger');
     const { el, rf } = await setup({ SFO: 'San Francisco', SJC: 'San Jose', BRU: 'Brussels' }, PICKS);
     assert.ok(el.querySelector('.region-filter-bar'), 'pill layout expected');
     pick(el, 'California').click();
-    assert.deepStrictEqual(rf.getSelected().slice().sort(), ['SFO', 'SJC']);
+    assert.deepStrictEqual(Array.from(rf.getSelected()).sort(), ['SFO', 'SJC']);
   });
 
   await test('without configured picks the filter renders exactly as before', async () => {

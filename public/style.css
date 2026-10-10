@@ -3592,7 +3592,23 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .region-filter-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0; }
 .area-dropdown-menu { min-width: 160px; }
 .area-dropdown-item.area-item-active { color: var(--accent); font-weight: 600; }
-.region-filter-container { margin: 0; padding: 0; display: inline-flex; align-items: center; }
+.region-filter-container { margin: 0; padding: 0; display: inline-flex; align-items: center; align-content: flex-start; flex-wrap: wrap; gap: 6px; }
+/* Region quick picks (config regionQuickPicks): one-tap groups beside the
+   region selector. The buttons are .region-pill, so they share its colours,
+   its active state and the 44px touch target under (pointer: coarse). */
+.region-quick-picks { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.region-quick-picks-label {
+  font-size: 12px; font-weight: 600; color: var(--text-muted); white-space: nowrap; user-select: none;
+}
+@media (max-width: 640px) {
+  /* On a phone the selector takes the full width with the picks on their own
+     row above it, wrapping onto a second line rather than running off-screen. */
+  .region-filter-container:has(.region-quick-picks) { display: flex; flex: 1 1 100%; width: 100%; }
+  .region-quick-picks { flex: 1 1 100%; }
+  /* Filter rows are nowrap flex groups; let the one holding the picks wrap so
+     the selector can take its own line. */
+  .filter-group:has(> .region-filter-container .region-quick-picks) { flex-wrap: wrap; }
+}
 .region-pill {
   display: inline-flex; align-items: center; padding: 4px 12px; border-radius: 16px;
   font-size: 12px; font-weight: 500; cursor: pointer; border: 1.5px solid var(--border);

@@ -598,7 +598,7 @@ type RegionQuickPicksResponse struct {
 }
 
 func (s *Server) handleConfigRegionQuickPicks(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, RegionQuickPicksResponse{QuickPicks: []RegionQuickPick{}})
+	writeJSON(w, RegionQuickPicksResponse{QuickPicks: s.cfg.NormalizedRegionQuickPicks()})
 }
 
 func (s *Server) handleConfigTheme(w http.ResponseWriter, r *http.Request) {

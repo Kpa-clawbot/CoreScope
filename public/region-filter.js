@@ -8,6 +8,7 @@
   var _listeners = [];
   var _container = null;
   var _loaded = false;
+  var _picks = [];         // configured quick picks: [{ name, description, regions: [code] }]
 
   function loadFromStorage() {
     try {
@@ -27,9 +28,20 @@
 
   _selected = loadFromStorage();
 
-  /** Fetch regions from server */
+  /** Fetch the configured quick picks. A failure only means no quick picks. */
+  async function fetchQuickPicks() {
+    try {
+      var data = await fetch('/api/config/region-quick-picks').then(function (r) { return r.json(); });
+      _picks = (data && Array.isArray(data.quickPicks)) ? data.quickPicks : [];
+    } catch (e) {
+      _picks = [];
+    }
+  }
+
+  /** Fetch regions (and quick picks) from server */
   async function fetchRegions() {
     if (_loaded) return _regions;
+    var picksLoaded = fetchQuickPicks();
     try {
       var data = await fetch('/api/config/regions').then(function (r) { return r.json(); });
       _regions = data || {};
@@ -45,7 +57,64 @@
     } catch (e) {
       _regions = {};
     }
+    await picksLoaded;
     return _regions;
+  }
+
+  function esc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  /** Quick picks narrowed to the codes that have an observer today. A pick
+   *  with none would select nothing, so it is not offered. */
+  function presentPicks(codes) {
+    var known = Object.create(null);
+    codes.forEach(function (c) { known[c] = true; });
+    var out = [];
+    _picks.forEach(function (p) {
+      var here = (p.regions || []).filter(function (c) { return known[c]; });
+      if (here.length) out.push({ name: p.name, description: p.description || '', codes: here });
+    });
+    return out;
+  }
+
+  /** The pick whose codes are exactly the current selection, if any. */
+  function activePick(picks) {
+    if (!_selected || _selected.size === 0) return null;
+    for (var i = 0; i < picks.length; i++) {
+      var p = picks[i];
+      if (p.codes.length !== _selected.size) continue;
+      if (p.codes.every(function (c) { return _selected.has(c); })) return p;
+    }
+    return null;
+  }
+
+  function quickPicksHtml(picks) {
+    if (!picks.length) return '';
+    var active = activePick(picks);
+    var html = '<div class="region-quick-picks" role="group" aria-label="Quick pick regions">' +
+      '<span class="region-quick-picks-label">Quick pick</span>';
+    picks.forEach(function (p, i) {
+      var on = p === active;
+      var title = (p.description ? p.description + ' ' : '') + 'Selects ' + p.codes.join(', ') + '.';
+      html += '<button type="button" class="region-pill region-quick-pick' + (on ? ' region-pill-active' : '') +
+        '" data-pick="' + i + '" aria-pressed="' + on + '" title="' + esc(title) + '">' + esc(p.name) + '</button>';
+    });
+    return html + '</div>';
+  }
+
+  /** Tapping a pick selects its codes; tapping the active pick goes back to all. */
+  // Like a click in the control, a pick saves, redraws and tells the page,
+  // so the page re-queries straight away.
+  function applyPick(picks, index) {
+    var p = picks[index];
+    if (!p) return;
+    _selected = activePick(picks) === p ? null : new Set(p.codes);
+    saveToStorage();
+    if (_container) render(_container);
+    _listeners.forEach(function (fn) { fn(getSelected()); });
   }
 
   /** Get selected regions as array, or null if all */
@@ -89,6 +158,8 @@
   /** Build summary label for dropdown trigger */
   function dropdownLabel(codes) {
     if (!_selected) return 'All Regions';
+    var named = activePick(presentPicks(codes));
+    if (named) return esc(named.name);
     var sel = Array.from(_selected);
     if (sel.length === 0) return 'All Regions';
     if (sel.length <= 2) return sel.join(', ');
@@ -98,7 +169,8 @@
   /** Render pill bar mode (≤4 regions) */
   function renderPills(container, codes) {
     var allSelected = !_selected;
-    var html = '<div class="region-filter-bar" role="group" aria-label="Region filter">';
+    var picks = presentPicks(codes);
+    var html = quickPicksHtml(picks) + '<div class="region-filter-bar" role="group" aria-label="Region filter">';
     html += '<span class="region-filter-label" id="region-filter-label">Region:</span>';
     html += '<button class="region-pill' + (allSelected ? ' region-pill-active' : '') +
       '" data-region="__all__" role="checkbox" aria-checked="' + allSelected + '">All</button>';
@@ -112,6 +184,8 @@
     container.innerHTML = html;
 
     container.onclick = function (e) {
+      var pickBtn = e.target.closest('[data-pick]');
+      if (pickBtn) { applyPick(picks, Number(pickBtn.dataset.pick)); return; }
       var btn = e.target.closest('[data-region]');
       if (!btn) return;
       toggleRegion(btn.dataset.region, codes, container);
@@ -121,7 +195,8 @@
   /** Render dropdown mode (>4 regions) */
   function renderDropdown(container, codes) {
     var allSelected = !_selected;
-    var html = '<div class="region-dropdown-wrap" role="group" aria-label="Region filter">';
+    var picks = presentPicks(codes);
+    var html = quickPicksHtml(picks) + '<div class="region-dropdown-wrap" role="group" aria-label="Region filter">';
     html += '<button class="region-dropdown-trigger" aria-haspopup="listbox" aria-expanded="false">' +
       dropdownLabel(codes) + ' ▾</button>';
     html += '<div class="region-dropdown-menu" role="listbox" aria-label="Select regions" hidden>';
@@ -140,6 +215,10 @@
 
     var trigger = container.querySelector('.region-dropdown-trigger');
     var menu = container.querySelector('.region-dropdown-menu');
+    container.onclick = function (e) {
+      var pickBtn = e.target.closest('[data-pick]');
+      if (pickBtn) applyPick(picks, Number(pickBtn.dataset.pick));
+    };
 
     trigger.onclick = function () {
       var open = !menu.hidden;

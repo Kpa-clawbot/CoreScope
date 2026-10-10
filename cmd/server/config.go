@@ -885,9 +885,43 @@ const (
 	maxRegionQuickPickRegions = 200
 )
 
-// NormalizedRegionQuickPicks returns the configured quick picks, cleaned up.
+// NormalizedRegionQuickPicks returns the configured quick picks, cleaned up:
+// names, descriptions and codes trimmed, codes upper-cased and de-duplicated
+// in their configured order, picks without a name or any code dropped, and at
+// most maxRegionQuickPicks picks of maxRegionQuickPickRegions codes each.
+// Never nil, so the API always answers with a list.
 func (c *Config) NormalizedRegionQuickPicks() []RegionQuickPick {
-	return []RegionQuickPick{}
+	out := []RegionQuickPick{}
+	if c == nil {
+		return out
+	}
+	for _, p := range c.RegionQuickPicks {
+		if len(out) >= maxRegionQuickPicks {
+			break
+		}
+		name := strings.TrimSpace(p.Name)
+		if name == "" {
+			continue
+		}
+		seen := make(map[string]bool, len(p.Regions))
+		codes := make([]string, 0, len(p.Regions))
+		for _, r := range p.Regions {
+			code := strings.ToUpper(strings.TrimSpace(r))
+			if code == "" || seen[code] {
+				continue
+			}
+			if len(codes) >= maxRegionQuickPickRegions {
+				break
+			}
+			seen[code] = true
+			codes = append(codes, code)
+		}
+		if len(codes) == 0 {
+			continue
+		}
+		out = append(out, RegionQuickPick{Name: name, Description: strings.TrimSpace(p.Description), Regions: codes})
+	}
+	return out
 }
 
 // IsBlacklisted returns true if the given public key is in the nodeBlacklist.
