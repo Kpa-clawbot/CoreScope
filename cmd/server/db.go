@@ -3223,6 +3223,23 @@ func (db *DB) GetSignatureDropCount() int64 {
 	return count
 }
 
+// scopeStatsByRegionQuery counts named-region transport transmissions in the
+// window, per region.
+//
+// The unary + on every scope_name reference keeps SQLite off
+// idx_tx_scope_name: with it, the planner walked every scoped transmission in
+// the database (every non-empty scope_name) and filtered by time afterwards, 2.5-2.9 s on
+// a production database whatever the window. The window is the selective
+// condition, so the query searches idx_transmissions_first_seen and groups in a
+// temp b-tree (same idiom as the advertsByRole query below).
+var scopeStatsByRegionQuery = `
+		SELECT scope_name, COUNT(*) AS cnt
+		FROM transmissions
+		WHERE ` + routeTypeTransportSQL + ` AND +scope_name IS NOT NULL AND +scope_name != '' AND first_seen >= ?
+		GROUP BY +scope_name
+		ORDER BY cnt DESC
+	`
+
 func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 	if !db.hasScopeName {
 		return nil, fmt.Errorf("scope_name column not present — run ingestor to apply migrations")
@@ -3281,13 +3298,7 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 	resp.Summary.Unscoped += nonTransportUnscoped
 
 	// Per-region counts (named regions only)
-	rows, err := db.conn.Query(`
-		SELECT scope_name, COUNT(*) AS cnt
-		FROM transmissions
-		WHERE `+routeTypeTransportSQL+` AND scope_name IS NOT NULL AND scope_name != '' AND first_seen >= ?
-		GROUP BY scope_name
-		ORDER BY cnt DESC
-	`, since)
+	rows, err := db.conn.Query(scopeStatsByRegionQuery, since)
 	if err != nil {
 		return nil, fmt.Errorf("scope byRegion query: %w", err)
 	}
