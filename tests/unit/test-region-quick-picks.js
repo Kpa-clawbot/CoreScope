@@ -5,10 +5,12 @@
  * /api/config/regions and /api/config/region-quick-picks responses.
  */
 'use strict';
-const REPO_ROOT = require('path').resolve(__dirname, '..', '..');
-const fs = require('fs');
-const assert = require('assert');
+const REPO_ROOT = require('node:path').resolve(__dirname, '..', '..');
+const fs = require('node:fs');
+const assert = require('node:assert');
 const { JSDOM } = require('jsdom');
+// Region codes compare as plain strings.
+const byCode = (a, b) => a.localeCompare(b);
 
 const SRC = fs.readFileSync(REPO_ROOT + '/public/region-filter.js', 'utf8');
 let passed = 0, failed = 0;
@@ -30,7 +32,7 @@ async function setup(regions, picks, opts) {
   const w = dom.window;
   if (opts.stored) w.localStorage.setItem('meshcore-region-filter', JSON.stringify(opts.stored));
   w.fetch = async (url) => {
-    if (String(url).indexOf('region-quick-picks') !== -1) {
+    if (String(url).includes('region-quick-picks')) {
       if (opts.picksFail) throw new Error('offline');
       return { json: async () => ({ quickPicks: picks }) };
     }
@@ -39,7 +41,7 @@ async function setup(regions, picks, opts) {
   w.eval(SRC);
   const rf = w.RegionFilter;
   const calls = [];
-  rf.onChange((sel) => calls.push(sel === null ? null : Array.from(sel).sort()));
+  rf.onChange((sel) => calls.push(sel === null ? null : Array.from(sel).sort(byCode)));
   const el = w.document.getElementById('rf');
   await rf.init(el, opts.dropdown ? { dropdown: true } : undefined);
   return { w, rf, el, calls };
@@ -68,14 +70,14 @@ function isOn(b) {
   await test('a pick selects exactly its codes that have an observer, and the page re-queries once', async () => {
     const { el, rf, calls } = await setup(SIX, PICKS);
     pick(el, 'California').click();
-    assert.deepStrictEqual(Array.from(rf.getSelected()).sort(), ['LAX', 'SFO', 'SJC']);
+    assert.deepStrictEqual(Array.from(rf.getSelected()).sort(byCode), ['LAX', 'SFO', 'SJC']);
     assert.deepStrictEqual(calls, [['LAX', 'SFO', 'SJC']]);
   });
 
   await test('the selector names the active pick instead of counting regions', async () => {
     const { el } = await setup(SIX, PICKS);
     pick(el, 'California').click();
-    assert.ok(trigger(el).textContent.indexOf('California') !== -1, 'trigger: ' + trigger(el).textContent);
+    assert.ok(trigger(el).textContent.includes('California'), 'trigger: ' + trigger(el).textContent);
     assert.strictEqual(isOn(pick(el, 'California')), true);
     assert.strictEqual(isOn(pick(el, 'Belgium')), false);
   });
@@ -91,14 +93,14 @@ function isOn(b) {
   await test('selecting the same codes by hand marks the pick as active', async () => {
     const { el } = await setup(SIX, PICKS, { stored: ['BRU', 'ANR'] });
     assert.strictEqual(isOn(pick(el, 'Belgium')), true);
-    assert.ok(trigger(el).textContent.indexOf('Belgium') !== -1);
+    assert.ok(trigger(el).textContent.includes('Belgium'));
   });
 
   await test('picks are offered in the pill layout too (four regions or fewer)', async () => {
     const { el, rf } = await setup({ SFO: 'San Francisco', SJC: 'San Jose', BRU: 'Brussels' }, PICKS);
     assert.ok(el.querySelector('.region-filter-bar'), 'pill layout expected');
     pick(el, 'California').click();
-    assert.deepStrictEqual(Array.from(rf.getSelected()).sort(), ['SFO', 'SJC']);
+    assert.deepStrictEqual(Array.from(rf.getSelected()).sort(byCode), ['SFO', 'SJC']);
   });
 
   await test('without configured picks the filter renders exactly as before', async () => {
@@ -144,7 +146,7 @@ function isOn(b) {
       return b;
     };
     box().click();
-    assert.deepStrictEqual(Array.from(rf.getSelected()).sort(), ['ANR', 'BRU']);
+    assert.deepStrictEqual(Array.from(rf.getSelected()).sort(byCode), ['ANR', 'BRU']);
     assert.strictEqual(box().checked, true);
     box().click();
     assert.strictEqual(rf.getSelected(), null);

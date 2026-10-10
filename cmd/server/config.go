@@ -903,25 +903,33 @@ func (c *Config) NormalizedRegionQuickPicks() []RegionQuickPick {
 		if name == "" {
 			continue
 		}
-		seen := make(map[string]bool, len(p.Regions))
-		codes := make([]string, 0, len(p.Regions))
-		for _, r := range p.Regions {
-			code := strings.ToUpper(strings.TrimSpace(r))
-			if code == "" || seen[code] {
-				continue
-			}
-			if len(codes) >= maxRegionQuickPickRegions {
-				break
-			}
-			seen[code] = true
-			codes = append(codes, code)
-		}
+		codes := normalizeQuickPickCodes(p.Regions)
 		if len(codes) == 0 {
 			continue
 		}
 		out = append(out, RegionQuickPick{Name: name, Description: strings.TrimSpace(p.Description), Regions: codes})
 	}
 	return out
+}
+
+// normalizeQuickPickCodes trims and upper-cases a pick's codes, drops empty
+// and repeated ones in their configured order, and keeps at most
+// maxRegionQuickPickRegions.
+func normalizeQuickPickCodes(regions []string) []string {
+	seen := make(map[string]bool, len(regions))
+	codes := make([]string, 0, len(regions))
+	for _, r := range regions {
+		code := strings.ToUpper(strings.TrimSpace(r))
+		if code == "" || seen[code] {
+			continue
+		}
+		if len(codes) >= maxRegionQuickPickRegions {
+			break
+		}
+		seen[code] = true
+		codes = append(codes, code)
+	}
+	return codes
 }
 
 // IsBlacklisted returns true if the given public key is in the nodeBlacklist.

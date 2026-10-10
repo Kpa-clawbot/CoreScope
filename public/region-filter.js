@@ -34,6 +34,8 @@
       var data = await fetch('/api/config/region-quick-picks').then(function (r) { return r.json(); });
       _picks = (data && Array.isArray(data.quickPicks)) ? data.quickPicks : [];
     } catch (e) {
+      // Offline or an older server without the endpoint: the region filter
+      // works exactly as before, just without quick picks.
       _picks = [];
     }
   }
@@ -83,8 +85,7 @@
   /** The pick whose codes are exactly the current selection, if any. */
   function activePick(picks) {
     if (!_selected || _selected.size === 0) return null;
-    for (var i = 0; i < picks.length; i++) {
-      var p = picks[i];
+    for (var p of picks) {
       if (p.codes.length !== _selected.size) continue;
       if (p.codes.every(function (c) { return _selected.has(c); })) return p;
     }
