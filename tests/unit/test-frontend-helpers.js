@@ -7731,6 +7731,12 @@ console.log('\n=== scope-audit.js: transport view (#2142) ===');
     assert.strictEqual(sa.apiPath('1h', 'transport', 'be-van'), '/scope-audit?window=1h&mode=transport&scope=be-van');
   });
 
+  test('the observer region filter reaches the API in both views', () => {
+    assert.strictEqual(sa.apiPath('24h', 'declared', '', 'SFO,SJC'), '/scope-audit?window=24h&region=SFO%2CSJC');
+    assert.strictEqual(sa.apiPath('7d', 'transport', 'be', 'BRU'), '/scope-audit?window=7d&mode=transport&scope=be&region=BRU');
+    assert.strictEqual(sa.apiPath('1h', 'declared', '', ''), '/scope-audit?window=1h', 'no selection, no parameter');
+  });
+
   test('a region typed with # or capitals is normalised like the server does', () => {
     assert.strictEqual(sa.normRegion(' #BE '), 'be');
     assert.strictEqual(sa.normRegion(''), '');
