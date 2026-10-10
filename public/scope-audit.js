@@ -56,13 +56,17 @@
 
   // buildHash / apiPath carry the view state, so a transport view filtered to
   // one region is shareable as a link (AGENTS.md deep-linking rule).
+  function modeQuery(m, rgn) {
+    if (m !== 'transport') return '';
+    var q = '&mode=transport';
+    if (rgn) q += '&scope=' + encodeURIComponent(rgn);
+    return q;
+  }
   function buildHash(w, m, rgn) {
-    return '#/scope-audit?window=' + encodeURIComponent(w) +
-      (m === 'transport' ? '&mode=transport' + (rgn ? '&scope=' + encodeURIComponent(rgn) : '') : '');
+    return '#/scope-audit?window=' + encodeURIComponent(w) + modeQuery(m, rgn);
   }
   function apiPath(w, m, rgn) {
-    return '/scope-audit?window=' + encodeURIComponent(w) +
-      (m === 'transport' ? '&mode=transport' + (rgn ? '&scope=' + encodeURIComponent(rgn) : '') : '');
+    return '/scope-audit?window=' + encodeURIComponent(w) + modeQuery(m, rgn);
   }
 
   function windowBtn(key, cur, label) {
@@ -349,7 +353,7 @@
   // forwarding, most packets first (server order). The filtered region, if any,
   // is marked so it stands out in a long list.
   function transportScopeChips(row, rgn) {
-    if (!row.transported || !row.transported.length) return '<span class="text-muted">—</span>';
+    if (!row.transported?.length) return '<span class="text-muted">—</span>';
     return row.transported.map(function (so) {
       var hit = rgn && String(so.scope).toLowerCase() === rgn;
       var title = so.scope + ': seen carrying ' + so.packets + ' packet' + (so.packets === 1 ? '' : 's') +
@@ -381,12 +385,14 @@
   function transportRowHtml(row, rgn) {
     var nameSortValue = row.name != null ? row.name : row.publicKey;
     var counts = [];
+    var carriesValue = row.carriesScope ? 1 : 0;
+    var carriesCell = rgn ? '<td data-value="' + carriesValue + '">' + carriesHtml(row, rgn) + '</td>' : '';
     if (row.unscopedPackets) counts.push('<span title="Plain unscoped floods forwarded in this window.">' + escapeHtml(row.unscopedPackets) + ' unscoped</span>');
     if (row.unmatchedPackets) counts.push('<span title="Scoped packets forwarded whose region this CoreScope instance holds no key for.">' + escapeHtml(row.unmatchedPackets) + ' unmatched</span>');
     if (row.ambiguousHops) counts.push('<span title="Hops whose prefix matched more than one repeater; credited to none of them.">' + escapeHtml(row.ambiguousHops) + ' ambiguous</span>');
     return '<tr data-pubkey="' + escapeHtml(row.publicKey) + '">' +
       '<td class="sa-name" data-value="' + escapeHtml(nameSortValue) + '">' + nameHtml(row) + (row.role != null && row.role !== '' ? '<span class="text-muted sa-role"> ' + escapeHtml(row.role) + '</span>' : '') + '</td>' +
-      (rgn ? '<td data-value="' + (row.carriesScope ? 1 : 0) + '">' + carriesHtml(row, rgn) + '</td>' : '') +
+      carriesCell +
       '<td data-value="' + (row.transported ? row.transported.length : 0) + '">' + transportScopeChips(row, rgn) + '</td>' +
       '<td data-value="' + (row.asked ? 1 : 0) + '">' + declaredCellHtml(row) + '</td>' +
       '<td class="text-muted sa-counts">' + (counts.length ? counts.join(' · ') : '—') + '</td>' +
@@ -410,7 +416,7 @@
   function transportRegions(repeaters) {
     var seen = Object.create(null);
     repeaters.forEach(function (r) { (r.transported || []).forEach(function (so) { seen[String(so.scope).toLowerCase()] = true; }); });
-    return Object.keys(seen).sort();
+    return Object.keys(seen).sort(function (a, b) { return a.localeCompare(b); });
   }
 
   function renderTransport(d) {
@@ -547,10 +553,10 @@
     var bar = document.getElementById(id);
     if (!bar) return;
     var bs = bar.querySelectorAll('button[' + attr + ']');
-    for (var i = 0; i < bs.length; i++) {
-      var on = bs[i].getAttribute(attr) === cur;
-      bs[i].classList.toggle('active', on);
-      bs[i].setAttribute('aria-pressed', on ? 'true' : 'false');
+    for (var btn of bs) {
+      var on = btn.getAttribute(attr) === cur;
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     }
   }
 
@@ -595,7 +601,7 @@
       var p = (typeof getHashParams === 'function') ? getHashParams() : null;
       var qw = p ? p.get('window') : null;
       if (qw && WINDOWS.some(function (w) { return w.key === qw; })) win = qw;
-      if (p && p.get('mode') === 'transport') {
+      if (p?.get('mode') === 'transport') {
         mode = 'transport';
         region = normRegion(p.get('scope'));
       }
@@ -609,8 +615,8 @@
     var modeBar = document.getElementById('saMode');
     if (modeBar) modeBar.addEventListener('click', function (e) {
       var b = e.target.closest('button[data-mode]');
-      if (!b || b.getAttribute('data-mode') === mode) return;
-      mode = b.getAttribute('data-mode');
+      if (!b || b.dataset.mode === mode) return;
+      mode = b.dataset.mode;
       load(win);
     });
     var regionInput = document.getElementById('saRegion');

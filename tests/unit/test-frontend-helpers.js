@@ -7760,17 +7760,17 @@ console.log('\n=== scope-audit.js: transport view (#2142) ===');
 
   test('a row has a carries column only when a region is set', () => {
     const plain = sa.transportRowHtml(neverAsked, '');
-    const filtered = sa.transportRowHtml(Object.assign({}, neverAsked, { carriesScope: true }), 'fr');
+    const filtered = sa.transportRowHtml({ ...neverAsked, carriesScope: true }, 'fr');
     assert.strictEqual((plain.match(/<td/g) || []).length, 4);
     assert.strictEqual((filtered.match(/<td/g) || []).length, 5);
     assert.ok(filtered.includes('carries'));
-    const missing = sa.transportRowHtml(Object.assign({}, asked, { carriesScope: false }), 'be');
+    const missing = sa.transportRowHtml({ ...asked, carriesScope: false }, 'be');
     assert.ok(missing.includes('not seen'));
     assert.ok(plain.includes('3 unscoped'), 'other traffic is counted');
   });
 
   test('names are escaped', () => {
-    const h = sa.transportRowHtml(Object.assign({}, neverAsked, { name: '<img src=x>' }), '');
+    const h = sa.transportRowHtml({ ...neverAsked, name: '<img src=x>' }, '');
     assert.ok(!h.includes('<img src=x>') && h.includes('&lt;img'));
   });
 
@@ -7779,7 +7779,7 @@ console.log('\n=== scope-audit.js: transport view (#2142) ===');
     const h = sa.transportSummaryHtml(d);
     assert.ok(/<strong>2<\/strong> repeaters seen forwarding in the last 24h/.test(h));
     assert.ok(/<strong>1<\/strong> with a declared-regions answer/.test(h));
-    const r = sa.transportSummaryHtml(Object.assign({ scope: 'fr', carrying: 2, notCarrying: 0 }, d));
+    const r = sa.transportSummaryHtml({ scope: 'fr', carrying: 2, notCarrying: 0, ...d });
     assert.ok(r.includes('carried fr') && r.includes('active but not seen carrying it'));
   });
 
