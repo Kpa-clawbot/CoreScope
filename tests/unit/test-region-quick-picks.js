@@ -117,6 +117,33 @@ const trigger = (el) => el.querySelector('.region-dropdown-trigger');
     assert.strictEqual(pickButtons(el)[0].textContent.trim(), '<img src=x onerror=alert(1)>');
   });
 
+  await test('in the dropdown layout the picks live inside the region menu, not beside it', async () => {
+    const { el } = await setup(SIX, PICKS);
+    const menu = el.querySelector('.region-dropdown-menu');
+    assert.ok(menu, 'dropdown menu expected');
+    assert.strictEqual(pickButtons(el).length, 2);
+    pickButtons(el).forEach((b) => assert.ok(menu.contains(b), 'pick outside the menu: ' + b.textContent));
+    const section = menu.querySelector('.region-quick-picks');
+    assert.ok(section, 'picks section inside the menu');
+    assert.ok(section.compareDocumentPosition(menu.querySelector('input[data-region]')) & 4,
+      'picks come before the region checkboxes');
+  });
+
+  await test('choosing a pick from the menu closes it', async () => {
+    const { el } = await setup(SIX, PICKS);
+    trigger(el).click();
+    assert.strictEqual(el.querySelector('.region-dropdown-menu').hidden, false);
+    pick(el, 'California').click();
+    assert.strictEqual(el.querySelector('.region-dropdown-menu').hidden, true);
+    assert.strictEqual(trigger(el).getAttribute('aria-expanded'), 'false');
+  });
+
+  await test('in the pill layout the picks share the region bar', async () => {
+    const { el } = await setup({ SFO: 'San Francisco', SJC: 'San Jose', BRU: 'Brussels' }, PICKS);
+    const bar = el.querySelector('.region-filter-bar');
+    pickButtons(el).forEach((b) => assert.ok(bar.contains(b), 'pick outside the bar: ' + b.textContent));
+  });
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);
 })();
