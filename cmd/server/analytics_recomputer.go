@@ -212,21 +212,30 @@ func recomputeWhenLoaded(loaded, stop <-chan struct{}, rcs []*analyticsRecompute
 		len(rcs), time.Since(t0).Round(time.Millisecond), strings.Join(parts, " "))
 }
 
+// markRead counts a read for pauseWhenIdle: the next tick recomputes, and a
+// paused recomputer is kicked to refresh now. Readers that take the
+// snapshot some other way (direct-heard publishes its own) call it
+// directly. Never blocks; a no-op when pauseWhenIdle is off.
+func (r *analyticsRecomputer) markRead() {
+	if !r.pauseWhenIdle {
+		return
+	}
+	r.readSinceCompute.Store(true)
+	if r.paused.Load() {
+		select {
+		case r.kick <- struct{}{}:
+		default: // a refresh is already queued
+		}
+	}
+}
+
 // Load returns the most recently computed snapshot, or nil if Start
 // has not been called (or the very first compute returned nil).
 // Never blocks: beyond the atomic load, a paused recomputer (pauseWhenIdle)
 // gets a non-blocking send on kick, and the snapshot it already holds is
 // returned while the refresh runs.
 func (r *analyticsRecomputer) Load() interface{} {
-	if r.pauseWhenIdle {
-		r.readSinceCompute.Store(true)
-		if r.paused.Load() {
-			select {
-			case r.kick <- struct{}{}:
-			default: // a refresh is already queued
-			}
-		}
-	}
+	r.markRead()
 	v := r.cache.Load()
 	if v == nil {
 		return nil
