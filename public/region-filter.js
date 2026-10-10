@@ -103,12 +103,18 @@
     return html;
   }
 
-  /** Quick picks as the first section of the region dropdown menu. */
+  /** Quick picks as checkbox rows in the region dropdown, styled like All:
+   *  ticked while that pick is the selection. */
   function menuPicksHtml(picks) {
     if (!picks.length) return '';
-    return '<div class="region-quick-picks" role="group" aria-label="Quick picks">' +
-      '<div class="region-quick-picks-label">Quick picks</div>' +
-      '<div class="region-quick-picks-row">' + pickButtonsHtml(picks) + '</div></div>';
+    var active = activePick(picks);
+    var html = '';
+    picks.forEach(function (p, i) {
+      var title = (p.description ? p.description + ' ' : '') + 'Selects ' + p.codes.join(', ') + '.';
+      html += '<label class="region-dropdown-item region-quick-pick" title="' + esc(title) + '">' +
+        '<input type="checkbox" data-pick="' + i + '"' + (p === active ? ' checked' : '') + '> <strong>' + esc(p.name) + '</strong></label>';
+    });
+    return html + '<div class="region-dropdown-sep" role="separator"></div>';
   }
 
   /** Quick picks inside the pill bar, ahead of the single regions. */
@@ -212,11 +218,10 @@
     var html = '<div class="region-dropdown-wrap" role="group" aria-label="Region filter">';
     html += '<button class="region-dropdown-trigger" aria-haspopup="listbox" aria-expanded="false">' +
       dropdownLabel(codes) + ' ▾</button>';
-    html += '<div class="region-dropdown-menu' + (picks.length ? ' has-quick-picks' : '') +
-      '" role="listbox" aria-label="Select regions" hidden>';
-    html += menuPicksHtml(picks);
+    html += '<div class="region-dropdown-menu" role="listbox" aria-label="Select regions" hidden>';
     html += '<label class="region-dropdown-item"><input type="checkbox" data-region="__all__"' +
       (allSelected ? ' checked' : '') + '> <strong>All</strong></label>';
+    html += menuPicksHtml(picks);
     codes.forEach(function (code) {
       var configLabel = _regions[code];
       var cityName = configLabel || (window.IATA_CITIES && window.IATA_CITIES[code]);
@@ -230,10 +235,7 @@
 
     var trigger = container.querySelector('.region-dropdown-trigger');
     var menu = container.querySelector('.region-dropdown-menu');
-    container.onclick = function (e) {
-      var pickBtn = e.target.closest('[data-pick]');
-      if (pickBtn) applyPick(picks, Number(pickBtn.dataset.pick));
-    };
+    container.onclick = null;
 
     trigger.onclick = function () {
       var open = !menu.hidden;
@@ -243,6 +245,7 @@
 
     menu.onchange = function (e) {
       var input = e.target;
+      if (input.dataset.pick) { applyPick(picks, Number(input.dataset.pick)); return; }
       if (!input.dataset.region) return;
       toggleRegion(input.dataset.region, codes, container);
     };

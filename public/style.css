@@ -1,23 +1,3 @@
-.region-filter-container { margin: 0; padding: 0; display: inline-flex; align-items: center; }
-/* Region quick picks (config regionQuickPicks): one-tap groups inside the
-   region control. In the dropdown they are the menu's first section, pinned
-   while the region list scrolls under them; in the pill bar they lead, set
-   off from the single regions by a divider. The buttons are .region-pill, so
-   they share its colours, active state and 44px touch target. */
-.region-quick-picks {
-  position: sticky; top: -4px; z-index: 1; margin-top: -4px;
-  padding: 10px 12px 10px; background: var(--card-bg, #fff);
-  border-bottom: 1px solid var(--border); margin-bottom: 4px;
-}
-.region-quick-picks-label {
-  font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
-  color: var(--text-muted); margin-bottom: 8px; user-select: none;
-}
-.region-quick-picks-row { display: flex; flex-wrap: wrap; gap: 6px; }
-.region-dropdown-menu.has-quick-picks { max-height: min(420px, 70vh); max-width: min(340px, calc(100vw - 32px)); }
-.region-quick-picks-divider {
-  width: 1px; align-self: stretch; margin: 4px 2px; background: var(--border); flex-shrink: 0;
-}
 /* === CoreScope — style.css === */
 
 /* Phosphor icon sprite helper (#1648 M1).
@@ -3612,22 +3592,13 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .region-filter-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0; }
 .area-dropdown-menu { min-width: 160px; }
 .area-dropdown-item.area-item-active { color: var(--accent); font-weight: 600; }
-.region-filter-container { margin: 0; padding: 0; display: inline-flex; align-items: center; align-content: flex-start; flex-wrap: wrap; gap: 6px; }
-/* Region quick picks (config regionQuickPicks): one-tap groups beside the
-   region selector. The buttons are .region-pill, so they share its colours,
-   its active state and the 44px touch target under (pointer: coarse). */
-.region-quick-picks { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.region-quick-picks-label {
-  font-size: 12px; font-weight: 600; color: var(--text-muted); white-space: nowrap; user-select: none;
-}
-@media (max-width: 640px) {
-  /* On a phone the selector takes the full width with the picks on their own
-     row above it, wrapping onto a second line rather than running off-screen. */
-  .region-filter-container:has(.region-quick-picks) { display: flex; flex: 1 1 100%; width: 100%; }
-  .region-quick-picks { flex: 1 1 100%; }
-  /* Filter rows are nowrap flex groups; let the one holding the picks wrap so
-     the selector can take its own line. */
-  .filter-group:has(> .region-filter-container .region-quick-picks) { flex-wrap: wrap; }
+.region-filter-container { margin: 0; padding: 0; display: inline-flex; align-items: center; }
+/* Region quick picks (config regionQuickPicks). In the dropdown they are
+   checkbox rows like All, between All and the single regions; in the pill
+   bar they lead, set off from the single regions by a divider. */
+.region-dropdown-sep { height: 1px; background: var(--border); margin: 4px 0; }
+.region-quick-picks-divider {
+  width: 1px; align-self: stretch; margin: 4px 2px; background: var(--border); flex-shrink: 0;
 }
 .region-pill {
   display: inline-flex; align-items: center; padding: 4px 12px; border-radius: 16px;
