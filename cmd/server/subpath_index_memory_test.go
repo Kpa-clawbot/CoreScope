@@ -24,36 +24,12 @@ import (
 func subpathFixture(numTx int, seed int64) []*StoreTx {
 	rng := rand.New(rand.NewSource(seed))
 	const nodes = 400
-	prefixes := make([]string, nodes)
-	neighbours := make([][]int, nodes)
-	for i := range prefixes {
-		prefixes[i] = fmt.Sprintf("%06X", rng.Intn(1<<24))
-		for k := 0; k < 6; k++ {
-			neighbours[i] = append(neighbours[i], rng.Intn(nodes))
-		}
-	}
+	prefixes, neighbours := subpathGraph(rng, nodes)
 	// Hop-count histogram from production (lengths 2..19, then 20 = "20 or more").
 	weights := []int{2086, 1394, 1142, 1181, 1396, 2287, 3256, 2595, 2686, 2590, 2079, 2035, 1831, 1413, 1294, 1148, 978, 850, 9107}
-	total := 0
-	for _, w := range weights {
-		total += w
-	}
-	pickLen := func() int {
-		r := rng.Intn(total)
-		for i, w := range weights {
-			if r < w {
-				if i == len(weights)-1 {
-					return 20 + rng.Intn(25) // long floods: 20-44 hops
-				}
-				return i + 2
-			}
-			r -= w
-		}
-		return 2
-	}
 	txs := make([]*StoreTx, numTx)
 	for i := range txs {
-		n := pickLen()
+		n := weightedHopCount(rng, weights)
 		at := rng.Intn(nodes)
 		hops := make([]string, n)
 		for h := 0; h < n; h++ {
@@ -64,6 +40,40 @@ func subpathFixture(numTx int, seed int64) []*StoreTx {
 		txs[i] = &StoreTx{ID: i + 1, PathJSON: string(pj)}
 	}
 	return txs
+}
+
+// subpathGraph is a random graph of n nodes with 3-byte prefixes and six
+// neighbours each.
+func subpathGraph(rng *rand.Rand, n int) ([]string, [][]int) {
+	prefixes := make([]string, n)
+	neighbours := make([][]int, n)
+	for i := range prefixes {
+		prefixes[i] = fmt.Sprintf("%06X", rng.Intn(1<<24))
+		for k := 0; k < 6; k++ {
+			neighbours[i] = append(neighbours[i], rng.Intn(n))
+		}
+	}
+	return prefixes, neighbours
+}
+
+// weightedHopCount draws a path length from the histogram: weights[i] is the
+// weight of length i+2, and the last bucket stands for 20-44 hops.
+func weightedHopCount(rng *rand.Rand, weights []int) int {
+	total := 0
+	for _, w := range weights {
+		total += w
+	}
+	r := rng.Intn(total)
+	for i, w := range weights {
+		if r < w {
+			if i == len(weights)-1 {
+				return 20 + rng.Intn(25) // long floods: 20-44 hops
+			}
+			return i + 2
+		}
+		r -= w
+	}
+	return 2
 }
 
 // buildSubpathIndexForTest builds the index the way Load does and returns it.
