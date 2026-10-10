@@ -152,6 +152,15 @@ func routeDescriptions() map[string]routeMeta {
 				{Name: "z", Description: "Leaflet zoom level; sets the hex resolution", Type: "integer"},
 				{Name: "days", Description: "Look-back window in days (1-30, default 7)", Type: "integer"},
 			}},
+		"GET /api/rx-coverage": {Summary: "Mobile RX coverage hex grid", Description: "GeoJSON hex cells where mobile clients directly heard nodes (client_receptions): count, best SNR and the nodes heard per cell. With gaps=1 the payload also carries a `gaps` member: cells a companion drove through (moving client_rf_samples) with no reception in the same window, each with its sample count, plus `gaps_truncated` when capped. Gaps are only returned without a node filter and with clientRfSamples on; they mean nothing was received in this period, not that there is no coverage. Gated on clientRxCoverage.", Tag: "coverage",
+			QueryParams: []paramMeta{
+				{Name: "bbox", Description: "Bounding box as minLat,minLon,maxLat,maxLon", Type: "string", Required: true},
+				{Name: "z", Description: "Leaflet zoom level; sets the hex resolution", Type: "integer"},
+				{Name: "days", Description: "Look-back window in days (1-30, default 7)", Type: "integer"},
+				{Name: "node", Description: "Only receptions of this node (pubkey or 2-3 byte prefix); disables gaps", Type: "string"},
+				{Name: "rx", Description: "Only this companion's receptions (and, with gaps=1, its own track)", Type: "string"},
+				{Name: "gaps", Description: "1 = add cells driven through with nothing received", Type: "string"},
+			}},
 		"GET /api/scope-audit": {Summary: "Network-wide scope audit", Description: "For every repeater that has answered a declared-regions request: the regions it declares, which of those it has NOT been observed forwarding in the window, which scopes it forwards without declaring, and whether it forwards unscoped floods while omitting the '*' wildcard. '*' is never listed as a region — it governs unscoped floods, not a scope. Repeaters never successfully asked are absent rather than shown as declaring nothing. Rows with missing regions sort first; a short window is weak evidence, since a quiet region simply has no traffic.", Tag: "analytics",
 			QueryParams: []paramMeta{
 				{Name: "window", Description: "Time window: 1h, 24h, or 7d (default 24h)", Type: "string"},

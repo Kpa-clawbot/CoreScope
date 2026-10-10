@@ -41,6 +41,10 @@ type CoverageFeatureCollection struct {
 	// members, omitempty so the global endpoint's payload is unchanged (#3).
 	MobileReceptions int `json:"mobile_receptions,omitempty"`
 	MobileClients    int `json:"mobile_clients,omitempty"`
+	// Gaps: cells driven through with nothing received (rx_coverage_gaps.go).
+	// Only with ?gaps=1 on the global endpoint; omitted otherwise.
+	Gaps          []CoverageGap `json:"gaps,omitempty"`
+	GapsTruncated bool          `json:"gaps_truncated,omitempty"`
 }
 type CoverageFeature struct {
 	Type       string             `json:"type"` // "Feature"
