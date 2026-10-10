@@ -103,3 +103,18 @@
    region IS observed. The dotted underline says how that was established
    without introducing a third colour into a column that already carries two. */
 .sa-chip-verified { text-decoration: underline dotted; text-underline-offset: 2px; }
+
+/* #2142 transport view: view toggle, region filter, carried-scope chips. */
+.sa-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.sa-region-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 10px; font-size: 12px; }
+.sa-region-bar[hidden] { display: none; } /* display:flex above would otherwise override the hidden attribute */
+.sa-region-bar label { font-weight: 600; }
+/* .nodes-search sets width:100%; the region box only needs room for one code. */
+.sa-region-bar .sa-region { width: 160px; max-width: 100%; flex: none; }
+.sa-chip-transported { background: var(--section-bg, var(--card-bg)); color: var(--text); border: 1px solid var(--border); }
+.sa-chip-transported .sa-chip-count { color: var(--text-muted); }
+/* The region being filtered on: same chip, heavier outline in the link colour,
+   so it stands out without adding a third status colour. */
+.sa-chip-match { border-color: var(--link-color); box-shadow: inset 0 0 0 1px var(--link-color); }
+.sa-not-asked { color: var(--text-muted); font-style: italic; font-size: 12px; }
+.sa-counts { font-size: 11px; white-space: nowrap; }

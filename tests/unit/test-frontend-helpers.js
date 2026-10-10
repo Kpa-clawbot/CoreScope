@@ -7704,3 +7704,92 @@ console.log('\n=== live.js: one WebSocket per viewer ===');
     assert.doesNotThrow(() => handler(null));
   });
 }
+
+// ===== scope-audit.js: transport view (#2142) =====
+// One row per repeater seen forwarding, declared regions where known and "not
+// asked" where not, and a region filter for rollout tracking. These assert
+// rendered markup and the deep-link state, not the source.
+console.log('\n=== scope-audit.js: transport view (#2142) ===');
+{
+  const ctx = makeSandbox();
+  ctx.registerPage = () => {};
+  loadInCtx(ctx, 'public/app.js');
+  loadInCtx(ctx, 'public/scope-audit.js');
+  const sa = ctx.__meshcoreScopeAuditInternals;
+  const pk = 'ab'.repeat(32);
+  const so = (scope, packets) => ({ scope, packets, firstSeen: '2026-10-09T10:00:00Z', lastSeen: '2026-10-09T11:00:00Z' });
+  const neverAsked = { publicKey: pk, name: 'Bravo', role: 'repeater', transported: [so('fr', 2)], unscopedPackets: 3,
+    unmatchedPackets: 0, ambiguousHops: 0, asked: false, declaredRegions: null, notObserved: null, declaredWildcard: false };
+  const asked = { publicKey: 'cd'.repeat(32), name: 'Alpha', role: 'repeater', transported: [so('be', 5), so('fr', 1)],
+    unscopedPackets: 0, unmatchedPackets: 0, ambiguousHops: 0, asked: true, declaredRegions: ['be', 'nl'], notObserved: ['nl'],
+    declaredWildcard: true };
+
+  test('the transport view is deep-linked with its region; the declared view keeps the old link', () => {
+    assert.strictEqual(sa.buildHash('7d', 'transport', 'be'), '#/scope-audit?window=7d&mode=transport&scope=be');
+    assert.strictEqual(sa.buildHash('24h', 'transport', ''), '#/scope-audit?window=24h&mode=transport');
+    assert.strictEqual(sa.buildHash('24h', 'declared', 'be'), '#/scope-audit?window=24h', 'a region means nothing in the declared view');
+    assert.strictEqual(sa.apiPath('1h', 'transport', 'be-van'), '/scope-audit?window=1h&mode=transport&scope=be-van');
+  });
+
+  test('a region typed with # or capitals is normalised like the server does', () => {
+    assert.strictEqual(sa.normRegion(' #BE '), 'be');
+    assert.strictEqual(sa.normRegion(''), '');
+    assert.strictEqual(sa.normRegion(null), '');
+  });
+
+  test('a repeater that never answered says "not asked", not "declares nothing"', () => {
+    const h = sa.declaredCellHtml(neverAsked);
+    assert.ok(h.includes('not asked'));
+    assert.ok(!h.includes('sa-chip-unobserved'));
+  });
+
+  test('a repeater that answered shows its declared regions coloured by what it was seen carrying', () => {
+    const h = sa.declaredCellHtml(asked);
+    assert.ok(h.includes('sa-chip-observed') && h.includes('sa-chip-unobserved'), 'be seen, nl not');
+    assert.ok(h.includes('sa-chip-wildcard'), "the '*' wildcard is shown");
+    assert.ok(!h.includes('not asked'));
+  });
+
+  test('carried scopes show packet counts and mark the filtered region', () => {
+    const h = sa.transportScopeChips(asked, 'fr');
+    assert.strictEqual((h.match(/sa-chip-transported/g) || []).length, 2);
+    assert.strictEqual((h.match(/sa-chip-match/g) || []).length, 1, 'only fr is marked');
+    assert.ok(/>be <span class="sa-chip-count">5</.test(h));
+    assert.ok(!h.includes('#'), 'scope names are shown without #');
+  });
+
+  test('a row has a carries column only when a region is set', () => {
+    const plain = sa.transportRowHtml(neverAsked, '');
+    const filtered = sa.transportRowHtml({ ...neverAsked, carriesScope: true }, 'fr');
+    assert.strictEqual((plain.match(/<td/g) || []).length, 4);
+    assert.strictEqual((filtered.match(/<td/g) || []).length, 5);
+    assert.ok(filtered.includes('carries'));
+    const missing = sa.transportRowHtml({ ...asked, carriesScope: false }, 'be');
+    assert.ok(missing.includes('not seen'));
+    assert.ok(plain.includes('3 unscoped'), 'other traffic is counted');
+  });
+
+  test('names are escaped', () => {
+    const h = sa.transportRowHtml({ ...neverAsked, name: '<img src=x>' }, '');
+    assert.ok(!h.includes('<img src=x>') && h.includes('&lt;img'));
+  });
+
+  test('the summary counts repeaters, answers and, with a region, carriers and non-carriers', () => {
+    const d = { window: '24h', repeaters: [neverAsked, asked] };
+    const h = sa.transportSummaryHtml(d);
+    assert.ok(/<strong>2<\/strong> repeaters seen forwarding in the last 24h/.test(h));
+    assert.ok(/<strong>1<\/strong> with a declared-regions answer/.test(h));
+    const r = sa.transportSummaryHtml({ scope: 'fr', carrying: 2, notCarrying: 0, ...d });
+    assert.ok(r.includes('carried fr') && r.includes('active but not seen carrying it'));
+  });
+
+  test('the intro describes the view being shown', () => {
+    assert.ok(sa.introHtml('transport').includes('Every repeater seen forwarding'));
+    assert.ok(!sa.introHtml('transport').includes('has declared a region list'));
+    assert.ok(sa.introHtml('declared').includes('has declared a region list'));
+  });
+
+  test('region suggestions list every carried scope once, sorted', () => {
+    assert.deepStrictEqual(Array.from(sa.transportRegions([neverAsked, asked])), ['be', 'fr']);
+  });
+}
