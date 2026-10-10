@@ -1905,13 +1905,17 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	// We lean on resolved_path (from neighbor affinity graph) to disambiguate.
 	//
 	// Collect candidate IDs and index membership under the read lock, then release
-	// the lock before running SQL queries (confirmResolvedPathContains does disk I/O).
+	// the lock before reading the stored resolved paths (disk I/O).
 	type candidateCheck struct {
 		tx         *StoreTx
 		hasReverse bool
 		inIndex    bool
 	}
 	checks := make([]candidateCheck, len(candidates))
+	// The stored resolved paths are read after s.mu is released, so they get
+	// a snapshot of each candidate's observations instead of tx.Observations,
+	// which ingest appends to under the write lock.
+	rpSnapshots := make(map[int][]rpObs, len(candidates))
 	for i, tx := range candidates {
 		cc := candidateCheck{tx: tx}
 		if !s.store.useResolvedPathIndex {
@@ -1929,39 +1933,14 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 			// If not in index at all, it's a definite no
 		}
 		checks[i] = cc
-	}
-	s.store.mu.RUnlock()
-
-	// Now run SQL checks outside the lock for candidates that need confirmation.
-	confirmedBySQL := make(map[int]bool)
-	filtered := candidates[:0]
-	for _, cc := range checks {
-		if cc.inIndex {
-			filtered = append(filtered, cc.tx)
-		} else if cc.hasReverse {
-			if s.store.confirmResolvedPathContains(cc.tx.ID, lowerPK) {
-				filtered = append(filtered, cc.tx)
-				confirmedBySQL[cc.tx.ID] = true
-			}
+		if cc.inIndex || cc.hasReverse {
+			rpSnapshots[tx.ID] = snapshotRPObs(tx)
 		}
-		// else: not in index → exclude
-	}
-	candidates = filtered
-
-	// The canonical resolved_path lookup below runs without s.mu, so it reads
-	// a snapshot of each surviving candidate's observations instead of
-	// tx.Observations, which ingest appends to under the write lock. Taken in
-	// a short read lock of its own so only the survivors are copied.
-	s.store.mu.RLock()
-	rpSnapshots := make(map[int][]rpObs, len(candidates))
-	for _, tx := range candidates {
-		rpSnapshots[tx.ID] = snapshotRPObs(tx)
 	}
 	s.store.mu.RUnlock()
 
-	// #1278: Read the CANONICAL persisted resolved_path for each surviving
-	// candidate OUTSIDE s.mu (bestResolvedPath takes lruMu; the
-	// lock-ordering contract forbids acquiring lruMu under s.mu).
+	// #1278: the CANONICAL persisted resolved_path of each candidate, the one
+	// bestResolvedPath returns, read in batches (#2146).
 	//
 	// Option A from the issue: the packets page renders each tx via
 	// bestResolvedPath. For /api/nodes/{pk}/paths to stay
@@ -1973,12 +1952,29 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	// Falls back to biased re-resolve only when a tx has no persisted
 	// resolved_path (older data / async backfill incomplete); in that case
 	// there's no canonical answer to be consistent with.
-	canonicalRP := make(map[int][]*string, len(candidates))
-	for _, tx := range candidates {
-		if rp := s.store.bestResolvedPath(tx.ID, rpSnapshots[tx.ID]); rp != nil {
-			canonicalRP[tx.ID] = rp
+	canonicalRP := s.store.loadCanonicalResolvedPaths(rpSnapshots)
+
+	// Collision check for candidates found through the resolved-pubkey hash
+	// index (hasReverse). A candidate with a canonical path needs none: the
+	// aggregation below keeps it only if that path names the node, and if no
+	// stored path names it the canonical one does not either. Only one without
+	// a canonical path is checked against SQL, as before.
+	confirmedBySQL := make(map[int]bool)
+	filtered := candidates[:0]
+	for _, cc := range checks {
+		if cc.inIndex {
+			filtered = append(filtered, cc.tx)
+		} else if cc.hasReverse {
+			if _, ok := canonicalRP[cc.tx.ID]; ok {
+				filtered = append(filtered, cc.tx)
+			} else if s.store.confirmResolvedPathContains(cc.tx.ID, lowerPK) {
+				filtered = append(filtered, cc.tx)
+				confirmedBySQL[cc.tx.ID] = true
+			}
 		}
+		// else: not in index → exclude
 	}
+	candidates = filtered
 
 	// Re-acquire read lock for the aggregation phase that reads store data.
 	s.store.mu.RLock()
