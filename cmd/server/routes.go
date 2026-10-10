@@ -1460,6 +1460,9 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		if body, ok := s.cachedNodesResponse(key); ok {
 			return body, nil
 		}
+		if s.nodesComputeHook != nil {
+			s.nodesComputeHook()
+		}
 		resp, err := s.buildNodesResponse(r)
 		if err != nil {
 			return nil, err
@@ -1523,9 +1526,6 @@ func (s *Server) invalidateNodesCache() {
 
 // buildNodesResponse builds one /api/nodes page from the request's query.
 func (s *Server) buildNodesResponse(r *http.Request) (NodeListResponse, error) {
-	if s.nodesComputeHook != nil {
-		s.nodesComputeHook()
-	}
 	q := r.URL.Query()
 	limit := queryLimit(r, 50, s.cfg.ListLimits.NodesMax)
 	offset := queryInt(r, "offset", 0)
