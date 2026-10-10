@@ -58,11 +58,11 @@
   // one region is shareable as a link (AGENTS.md deep-linking rule).
   function buildHash(w, m, rgn) {
     return '#/scope-audit?window=' + encodeURIComponent(w) +
-      (m === 'transport' ? '&mode=transport' + (rgn ? '&region=' + encodeURIComponent(rgn) : '') : '');
+      (m === 'transport' ? '&mode=transport' + (rgn ? '&scope=' + encodeURIComponent(rgn) : '') : '');
   }
   function apiPath(w, m, rgn) {
     return '/scope-audit?window=' + encodeURIComponent(w) +
-      (m === 'transport' ? '&mode=transport' + (rgn ? '&region=' + encodeURIComponent(rgn) : '') : '');
+      (m === 'transport' ? '&mode=transport' + (rgn ? '&scope=' + encodeURIComponent(rgn) : '') : '');
   }
 
   function windowBtn(key, cur, label) {
@@ -372,7 +372,7 @@
   }
 
   function carriesHtml(row, rgn) {
-    if (row.carriesRegion) {
+    if (row.carriesScope) {
       return '<span class="ns-decl ns-decl-yes" title="Seen carrying ' + escapeHtml(rgn) + ' in this window.">carries</span>';
     }
     return '<span class="ns-decl ns-decl-quiet" title="Seen forwarding in this window, but not ' + escapeHtml(rgn) + '.">not seen</span>';
@@ -386,7 +386,7 @@
     if (row.ambiguousHops) counts.push('<span title="Hops whose prefix matched more than one repeater; credited to none of them.">' + escapeHtml(row.ambiguousHops) + ' ambiguous</span>');
     return '<tr data-pubkey="' + escapeHtml(row.publicKey) + '">' +
       '<td class="sa-name" data-value="' + escapeHtml(nameSortValue) + '">' + nameHtml(row) + (row.role != null && row.role !== '' ? '<span class="text-muted sa-role"> ' + escapeHtml(row.role) + '</span>' : '') + '</td>' +
-      (rgn ? '<td data-value="' + (row.carriesRegion ? 1 : 0) + '">' + carriesHtml(row, rgn) + '</td>' : '') +
+      (rgn ? '<td data-value="' + (row.carriesScope ? 1 : 0) + '">' + carriesHtml(row, rgn) + '</td>' : '') +
       '<td data-value="' + (row.transported ? row.transported.length : 0) + '">' + transportScopeChips(row, rgn) + '</td>' +
       '<td data-value="' + (row.asked ? 1 : 0) + '">' + declaredCellHtml(row) + '</td>' +
       '<td class="text-muted sa-counts">' + (counts.length ? counts.join(' · ') : '—') + '</td>' +
@@ -398,8 +398,8 @@
     var asked = d.repeaters.filter(function (r) { return r.asked; }).length;
     var s = '<div class="sa-summary"><span class="sa-summary-item"><strong>' + total + '</strong> repeater' + (total === 1 ? '' : 's') +
       ' seen forwarding in the last ' + escapeHtml(d.window) + '</span><span class="sa-summary-item"><strong>' + asked + '</strong> with a declared-regions answer</span>';
-    if (d.region) {
-      s += '<span class="sa-summary-item"><span class="ns-decl ns-decl-yes">' + (d.carrying || 0) + '</span> carried ' + escapeHtml(d.region) + '</span>' +
+    if (d.scope) {
+      s += '<span class="sa-summary-item"><span class="ns-decl ns-decl-yes">' + (d.carrying || 0) + '</span> carried ' + escapeHtml(d.scope) + '</span>' +
         '<span class="sa-summary-item"><span class="ns-decl ns-decl-quiet">' + (d.notCarrying || 0) + '</span> active but not seen carrying it</span>';
     }
     return s + '</div>';
@@ -424,9 +424,9 @@
       return;
     }
     var rows = d.repeaters.slice();
-    if (d.region) {
+    if (d.scope) {
       // Rollout report: the repeaters NOT yet carrying the region come first.
-      rows.sort(function (a, b) { return (a.carriesRegion ? 1 : 0) - (b.carriesRegion ? 1 : 0); });
+      rows.sort(function (a, b) { return (a.carriesScope ? 1 : 0) - (b.carriesScope ? 1 : 0); });
     }
     searchIndex = buildTransportSearchIndex(rows);
     el.innerHTML = transportSummaryHtml(d) +
@@ -434,12 +434,12 @@
       ', not how the repeater is configured. A repeater whose region sees no traffic in this window looks the same as one that does not carry it, so use a long window for rollout decisions.</div>' +
       '<div class="sa-table-wrap"><table class="ns-table sa-table" id="saTable"><thead><tr>' +
       '<th data-sort-key="name">Repeater</th>' +
-      (d.region ? '<th data-sort-key="carries" data-type="numeric">Carries ' + escapeHtml(d.region) + '</th>' : '') +
+      (d.scope ? '<th data-sort-key="carries" data-type="numeric">Carries ' + escapeHtml(d.scope) + '</th>' : '') +
       '<th data-sort-key="transported" data-type="numeric" title="Region scopes seen forwarded in this window, with packet counts.">Seen carrying</th>' +
       '<th data-sort-key="declared" data-type="numeric" title="The repeater\'s own declared regions where an answer exists; green = also seen carried.">Declared</th>' +
       '<th>Other traffic</th>' +
       '</tr></thead><tbody>' +
-      rows.map(function (r) { return transportRowHtml(r, d.region || ''); }).join('') +
+      rows.map(function (r) { return transportRowHtml(r, d.scope || ''); }).join('') +
       '</tbody></table></div>' +
       '<div class="sa-count text-muted" id="saCount"></div>';
     var saTbl = document.getElementById('saTable');
@@ -597,7 +597,7 @@
       if (qw && WINDOWS.some(function (w) { return w.key === qw; })) win = qw;
       if (p && p.get('mode') === 'transport') {
         mode = 'transport';
-        region = normRegion(p.get('region'));
+        region = normRegion(p.get('scope'));
       }
     } catch (e) {}
     container.innerHTML = pageHtml();
