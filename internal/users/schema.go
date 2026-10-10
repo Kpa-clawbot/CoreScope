@@ -124,6 +124,25 @@ var migrations = [][]string{
 			PRIMARY KEY (user_id, event, subject)
 		)`,
 	},
+	{ // v6: sub-project F, companion linking (device sessions, linked companions)
+		`ALTER TABLE sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'web'
+			CHECK (kind IN ('web','device'))`,
+		`ALTER TABLE sessions ADD COLUMN label TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN scopes TEXT NOT NULL DEFAULT ''`,
+		`CREATE TABLE companion_links (
+			pubkey TEXT PRIMARY KEY,
+			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			name TEXT NOT NULL DEFAULT '',
+			linked_at INTEGER NOT NULL
+		)`,
+		`CREATE INDEX companion_links_user ON companion_links(user_id)`,
+		`CREATE TABLE link_challenges (
+			challenge_hash TEXT PRIMARY KEY,
+			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			pubkey TEXT NOT NULL,
+			expires_at INTEGER NOT NULL
+		)`,
+	},
 }
 
 func (s *Store) migrate() error {

@@ -26,6 +26,15 @@ var (
 	// password hash the caller verified (a re-register or an admin got
 	// there first).
 	ErrAccountChanged = errors.New("users: account changed since it was read")
+	// ErrNoScopes: a device session must name what it may do; an empty
+	// scope list would mean full (web) access.
+	ErrNoScopes  = errors.New("users: a device session needs at least one scope")
+	ErrBadPubkey = errors.New("users: pubkey must be 64 hex characters")
+	// Link challenges (companion linking). A challenge is consumed by every
+	// lookup, whichever of these it returns.
+	ErrChallengeMissing  = errors.New("users: link challenge unknown or already used")
+	ErrChallengeExpired  = errors.New("users: link challenge expired")
+	ErrChallengeMismatch = errors.New("users: link challenge bound to another user or pubkey")
 )
 
 // noLimit is SQLite's LIMIT value for "every row" (the account export).
