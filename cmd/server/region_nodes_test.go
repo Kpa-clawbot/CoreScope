@@ -186,6 +186,7 @@ func TestHandleNodesRegionUsesStore(t *testing.T) {
 	srv.store.regionNodesMu.Lock()
 	srv.store.regionNodesCache = map[string]regionNodesEntry{}
 	srv.store.regionNodesMu.Unlock()
+	srv.invalidateNodesCache() // the 15 s /api/nodes response cache, likewise
 	if got := get(); fmt.Sprint(got) != "[aabbccdd11223344 eeff00112233aabb]" {
 		t.Errorf("region SJC must come from the store: got %v", got)
 	}
