@@ -11,10 +11,10 @@
  * selection does not trigger a reload).
  */
 'use strict';
-const REPO_ROOT = require('path').resolve(__dirname, '..', '..');
-const vm = require('vm');
-const fs = require('fs');
-const assert = require('assert');
+const REPO_ROOT = require('node:path').resolve(__dirname, '..', '..');
+const vm = require('node:vm');
+const fs = require('node:fs');
+const assert = require('node:assert');
 
 let passed = 0, failed = 0;
 function test(name, fn) {
