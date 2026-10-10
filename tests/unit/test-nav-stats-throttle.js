@@ -11,9 +11,9 @@
  * interval has passed. This test loads the real public/app.js in a vm context.
  */
 'use strict';
-const vm = require('vm');
-const fs = require('fs');
-const assert = require('assert');
+const vm = require('node:vm');
+const fs = require('node:fs');
+const assert = require('node:assert');
 
 function loadApp() {
   const ctx = {
