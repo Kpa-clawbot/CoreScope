@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"math"
 	"net/http"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -2618,8 +2620,8 @@ func (s *Server) handleAnalyticsSubpaths(w http.ResponseWriter, r *http.Request)
 		// Issue #1217: honor the Time window filter on Route Patterns.
 		window := ParseTimeWindow(r)
 		data := s.store.GetAnalyticsSubpathsWithWindow(region, minLen, maxLen, limit, window)
-		if s.cfg != nil && len(s.cfg.NodeBlacklist) > 0 {
-			data = s.filterBlacklistedFromSubpaths(data)
+		if s.subpathFilterActive() {
+			data, _ = s.dropHiddenPaths(data, "subpaths", "path", s.blacklistedNodeNames())
 		}
 		writeJSON(w, data)
 		return
@@ -2684,9 +2686,10 @@ func (s *Server) handleAnalyticsSubpathsBulk(w http.ResponseWriter, r *http.Requ
 	}
 
 	results := s.store.GetAnalyticsSubpathsBulkWithWindow(region, groups, ParseTimeWindow(r))
-	if s.cfg != nil && len(s.cfg.NodeBlacklist) > 0 {
+	if s.subpathFilterActive() {
+		names := s.blacklistedNodeNames()
 		for i, r := range results {
-			results[i] = s.filterBlacklistedFromSubpaths(r)
+			results[i], _ = s.dropHiddenPaths(r, "subpaths", "path", names)
 		}
 	}
 	writeJSON(w, map[string]interface{}{"results": results})
@@ -2722,7 +2725,18 @@ func (s *Server) handleAnalyticsSubpathDetail(w http.ResponseWriter, r *http.Req
 			writeIndexLoading503(w)
 			return
 		}
-		writeJSON(w, s.store.GetSubpathDetail(rawHops))
+		detail := s.store.GetSubpathDetail(rawHops)
+		// #2184: the raw hops are prefixes, so the check above only catches a
+		// full key. Check the nodes the store resolved them to instead.
+		if s.subpathFilterActive() {
+			names := s.blacklistedNodeNames()
+			if _, dropped := s.dropHiddenPaths(detail, "nodes", "name", names); dropped > 0 {
+				writeError(w, 404, "Not found")
+				return
+			}
+			detail, _ = s.dropHiddenPaths(detail, "parentPaths", "path", names)
+		}
+		writeJSON(w, detail)
 		return
 	}
 	writeJSON(w, SubpathDetailResponse{
@@ -3714,33 +3728,59 @@ func (s *Server) filterBlacklistedFromTopology(data map[string]interface{}) map[
 	return data
 }
 
-// filterBlacklistedFromSubpaths removes blacklisted node references from
-// the subpaths analytics response.
-func (s *Server) filterBlacklistedFromSubpaths(data map[string]interface{}) map[string]interface{} {
-	if subpaths, ok := data["subpaths"]; ok {
-		if arr, ok := subpaths.([]interface{}); ok {
-			var filtered []interface{}
-			for _, item := range arr {
-				if m, ok := item.(map[string]interface{}); ok {
-					if hops, ok := m["hops"].([]interface{}); ok {
-						skip := false
-						for _, h := range hops {
-							if hp, ok := h.(string); ok && (s.cfg.IsBlacklisted(hp) || s.isPubkeyHidden(hp)) {
-								skip = true
-								break
-							}
-						}
-						if skip {
-							continue
-						}
-					}
-				}
-				filtered = append(filtered, item)
-			}
-			data["subpaths"] = filtered
+// subpathFilterActive reports whether Route Patterns responses need the
+// nodeBlacklist / hiddenNamePrefixes filter.
+func (s *Server) subpathFilterActive() bool {
+	return s.cfg != nil && (len(s.cfg.NodeBlacklist) > 0 || len(s.cfg.HiddenNamePrefixes) > 0)
+}
+
+// blacklistedNodeNames returns the names of the blacklisted nodes the store
+// knows, for filtering responses that carry node names but no keys.
+func (s *Server) blacklistedNodeNames() map[string]bool {
+	if s.store == nil || s.cfg == nil || len(s.cfg.NodeBlacklist) == 0 {
+		return nil
+	}
+	nodes, _ := s.store.getCachedNodesAndPM()
+	names := make(map[string]bool)
+	for _, n := range nodes {
+		if n.Name != "" && s.cfg.IsBlacklisted(n.PublicKey) {
+			names[n.Name] = true
 		}
 	}
-	return data
+	return names
+}
+
+// subpathPathHidden reports whether a resolved " → " path shows a blacklisted
+// or hidden-prefix node. Issue #2184: a subpath carries the names the store
+// resolved its hops to, not keys, and a hop prefix alone cannot be pinned to
+// one node, so the filter matches what the reader would see.
+func (s *Server) subpathPathHidden(path string, blacklisted map[string]bool) bool {
+	for _, name := range strings.Split(path, " → ") {
+		if blacklisted[name] || s.cfg.IsNameHidden(name) {
+			return true
+		}
+	}
+	return false
+}
+
+// dropHiddenPaths removes the entries of data[listKey] whose field (a node
+// name, or a resolved " → " path) shows a blacklisted or hidden-prefix node,
+// and reports how many it removed. It returns a copy: data may be the store's
+// cached response, shared with other requests.
+func (s *Server) dropHiddenPaths(data map[string]interface{}, listKey, field string, blacklisted map[string]bool) (map[string]interface{}, int) {
+	entries, ok := data[listKey].([]map[string]interface{})
+	if !ok {
+		return data, 0
+	}
+	kept := slices.Clone(entries)[:0]
+	for _, e := range entries {
+		if path, _ := e[field].(string); !s.subpathPathHidden(path, blacklisted) {
+			kept = append(kept, e)
+		}
+	}
+	out := maps.Clone(data)
+	out[listKey] = kept
+	return out, len(entries) - len(kept)
 }
 
 // handleDroppedPackets returns recently dropped packets for investigation.
