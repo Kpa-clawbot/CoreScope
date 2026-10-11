@@ -146,6 +146,7 @@ node tests/unit/test-issue-2001-map-scope-state.js
 node tests/unit/test-issue-2012-clear-filters-selection.js
 node tests/unit/test-issue-2095-channels-client-state.js
 node tests/unit/test-issue-2097-hop-ambiguity-badge.js
+node tests/unit/test-issue-2098-last-hop-region.js
 node tests/unit/test-live-anims.js
 node tests/unit/test-live-dt-cap-1524.js
 node tests/unit/test-live-legend-helper.js
