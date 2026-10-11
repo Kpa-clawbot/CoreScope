@@ -3225,6 +3225,119 @@ var iataCoords = map[string]IataCoord{
 	"ICN": {Lat: 37.4602, Lon: 126.4407},
 	"SYD": {Lat: -33.9461, Lon: 151.1772},
 	"MEL": {Lat: -37.669, Lon: 144.841},
+	// #2098: Belgium, the Netherlands and Luxembourg (every IATA code), and
+	// Germany and France (airports with scheduled service), from OurAirports
+	// airports.csv (public domain). Observer IATA tags on Belgian deployments
+	// use these codes; none was here, so the last-hop region filter never ran.
+	// Belgium
+	"ANR": {Lat: 51.190667, Lon: 4.463153}, // Antwerp International Airport (Deurne)
+	"BRU": {Lat: 50.901402, Lon: 4.48444},  // Brussels Airport
+	"CRL": {Lat: 50.461963, Lon: 4.459562}, // Brussels South Charleroi Airport
+	"GNE": {Lat: 51.020551, Lon: 3.730341}, // Ghent/Industry Zone Heliport
+	"KJK": {Lat: 50.818878, Lon: 3.209551}, // Kortrijk-Wevelgem International Airport
+	"LGG": {Lat: 50.638574, Lon: 5.443897}, // Liège Airport
+	"OBL": {Lat: 51.269092, Lon: 4.762428}, // Oostmalle Airfield
+	"OST": {Lat: 51.1998, Lon: 2.874673},   // Ostend-Bruges International Airport
+	// Netherlands
+	"DHR": {Lat: 52.923401, Lon: 4.78062},                    // De Kooy Airfield / Den Helder Naval Air Station
+	"EIN": {Lat: 51.4500999451, Lon: 5.37452983856},          // Eindhoven Airport
+	"ENS": {Lat: 52.275833, Lon: 6.889167},                   // Twente Airport
+	"GLZ": {Lat: 51.567402, Lon: 4.93183},                    // Gilze Rijen Air Base
+	"GRQ": {Lat: 53.119107, Lon: 6.577652},                   // Groningen Airport Eelde
+	"LEY": {Lat: 52.453188, Lon: 5.514622},                   // Lelystad Airport
+	"LWR": {Lat: 53.228599548339844, Lon: 5.760560035705566}, // Leeuwarden Air Base
+	"MST": {Lat: 50.911087, Lon: 5.769401},                   // Maastricht Aachen Airport
+	"RTM": {Lat: 51.956902, Lon: 4.43722},                    // Rotterdam The Hague Airport
+	"UDE": {Lat: 51.657222, Lon: 5.707778},                   // Volkel Air Base
+	"WOE": {Lat: 51.4491, Lon: 4.34203},                      // Woensdrecht Air Base
+	// Luxembourg
+	"LUX": {Lat: 49.626845, Lon: 6.212134}, // Luxembourg-Findel International Airport
+	// Germany
+	"AGE": {Lat: 53.782544, Lon: 7.919584},  // Wangerooge Airport
+	"BER": {Lat: 52.361738, Lon: 13.502341}, // Berlin Brandenburg Airport
+	"BMK": {Lat: 53.59639, Lon: 6.709167},   // Borkum Airport
+	"BMR": {Lat: 53.72485, Lon: 7.373257},   // Baltrum Airport
+	"BRE": {Lat: 53.046786, Lon: 8.78932},   // Bremen Airport
+	"CGN": {Lat: 50.865898, Lon: 7.14274},   // Cologne Bonn Airport
+	"DRS": {Lat: 51.134123, Lon: 13.767831}, // Dresden Airport
+	"DTM": {Lat: 51.518299, Lon: 7.61224},   // Dortmund Airport
+	"DUS": {Lat: 51.289501, Lon: 6.76678},   // Düsseldorf Airport
+	"EME": {Lat: 53.391109, Lon: 7.2275},    // Emden Airport
+	"ERF": {Lat: 50.978281, Lon: 10.960713}, // Erfurt-Weimar Airport
+	"FCN": {Lat: 53.767689, Lon: 8.659201},  // Sea-Airport Cuxhaven/Nordholz / Nordholz Naval Airbase
+	"FDH": {Lat: 47.671299, Lon: 9.51149},   // Bodensee Airport Friedrichshafen
+	"FKB": {Lat: 48.7794, Lon: 8.0805},      // Karlsruhe Baden-Baden Airport
+	"FMM": {Lat: 47.988092, Lon: 10.238248}, // Memmingen Allgau Airport
+	"FMO": {Lat: 52.133816, Lon: 7.688482},  // Münster Osnabrück Airport
+	"GWT": {Lat: 54.9132, Lon: 8.34047},     // Westerland Sylt Airport
+	"HAJ": {Lat: 52.461102, Lon: 9.68508},   // Hannover Airport
+	"HAM": {Lat: 53.630402, Lon: 9.98823},   // Hamburg Helmut Schmidt Airport
+	"HDF": {Lat: 53.8787, Lon: 14.1523},     // Heringsdorf Airport
+	"HEI": {Lat: 54.153332, Lon: 8.901667},  // Heide-Büsum Airport
+	"HGL": {Lat: 54.18528, Lon: 7.915833},   // Helgoland-Düne Airport
+	"HHN": {Lat: 49.946353, Lon: 7.261734},  // Frankfurt-Hahn Airport
+	"JUI": {Lat: 53.681421, Lon: 7.056398},  // Juist Airport
+	"KSF": {Lat: 51.418395, Lon: 9.391638},  // Kassel Airport
+	"LBC": {Lat: 53.805401, Lon: 10.7192},   // Lübeck Blankensee Airport
+	"LEJ": {Lat: 51.420657, Lon: 12.232705}, // Leipzig/Halle Airport
+	"MHG": {Lat: 49.473057, Lon: 8.514167},  // Mannheim-City Airport
+	"NOD": {Lat: 53.633057, Lon: 7.190278},  // Norden-Norddeich Airport
+	"NRD": {Lat: 53.706944, Lon: 7.23},      // Norderney Airport
+	"NRN": {Lat: 51.601362, Lon: 6.141228},  // Weeze (Niederrhein) Airport
+	"NUE": {Lat: 49.498699, Lon: 11.078056}, // Nuremberg Airport
+	"PAD": {Lat: 51.612527, Lon: 8.617459},  // Paderborn Lippstadt Airport
+	"RLG": {Lat: 53.918201, Lon: 12.2783},   // Rostock-Laage Airport
+	"SCN": {Lat: 49.214545, Lon: 7.109735},  // Saarbrücken Airport
+	"STR": {Lat: 48.689899, Lon: 9.22196},   // Stuttgart Airport
+	// France
+	"AJA": {Lat: 41.923599, Lon: 8.80292},   // Ajaccio Napoléon Bonaparte airport
+	"AUR": {Lat: 44.891399, Lon: 2.42194},   // Aurillac airport
+	"AVN": {Lat: 43.907299, Lon: 4.90183},   // Avignon Caumont airport
+	"BES": {Lat: 48.447899, Lon: -4.41854},  // Brest Bretagne airport
+	"BIA": {Lat: 42.5527, Lon: 9.48373},     // Bastia-Poretta International airport
+	"BIQ": {Lat: 43.468372, Lon: -1.523223}, // Biarritz Pays Basque airport
+	"BOD": {Lat: 44.82865, Lon: -0.715356},  // Bordeaux–Mérignac Airport
+	"BSL": {Lat: 47.60068, Lon: 7.521117},   // EuroAirport Basel–Mulhouse–Freiburg
+	"BVA": {Lat: 49.454399, Lon: 2.11278},   // Beauvais-Tillé airport
+	"BVE": {Lat: 45.039722, Lon: 1.485556},  // Brive Souillac airport
+	"BZR": {Lat: 43.323502, Lon: 3.3539},    // Béziers Vias airport
+	"CCF": {Lat: 43.216, Lon: 2.30632},      // Carcassonne Salvaza Airport
+	"CFE": {Lat: 45.786701, Lon: 3.16917},   // Clermont-Ferrand Auvergne airport
+	"CFR": {Lat: 49.17678, Lon: -0.454883},  // Caen Carpiquet airport
+	"CLY": {Lat: 42.530422, Lon: 8.792984},  // Calvi Sainte Catherine Airport
+	"CMF": {Lat: 45.6381, Lon: 5.88023},     // Chambéry Aix les Bains airport
+	"DCM": {Lat: 43.556301, Lon: 2.28918},   // Castres Mazamet Airport
+	"DLE": {Lat: 47.038955, Lon: 5.427589},  // Dole Tavaux Airport
+	"DOL": {Lat: 49.365237, Lon: 0.154481},  // Deauville Normandie airport
+	"EGC": {Lat: 44.825298, Lon: 0.518611},  // Bergerac Dordogne-Périgord airport
+	"ETZ": {Lat: 48.982101, Lon: 6.25132},   // Metz-Nancy-Lorraine Airport
+	"FNI": {Lat: 43.757401, Lon: 4.41635},   // Nîmes-Arles-Camargue Airport
+	"FSC": {Lat: 41.50185, Lon: 9.097092},   // Figari Sud-Corse Airport
+	"GNB": {Lat: 45.3629, Lon: 5.32937},     // Grenoble Alpes Isère Airport
+	"LDE": {Lat: 43.178699, Lon: -0.006439}, // Tarbes-Lourdes-Pyrénées Airport
+	"LIG": {Lat: 45.862801, Lon: 1.17944},   // Limoges Airport
+	"LIL": {Lat: 50.566564, Lon: 3.102429},  // Lille Airport
+	"LPY": {Lat: 45.0807, Lon: 3.76289},     // Le Puy-Loudes Airfield
+	"LRH": {Lat: 46.179199, Lon: -1.19528},  // La Rochelle Île de Ré Airport
+	"LTT": {Lat: 43.205399, Lon: 6.482},     // La Môle Airport
+	"LYS": {Lat: 45.725996, Lon: 5.090139},  // Lyon Saint-Exupéry Airport
+	"MPL": {Lat: 43.576199, Lon: 3.96301},   // Montpellier-Méditerranée Airport
+	"MRS": {Lat: 43.438088, Lon: 5.2125},    // Marseille Provence Airport
+	"NCE": {Lat: 43.658401, Lon: 7.21587},   // Nice-Côte d'Azur Airport
+	"NCY": {Lat: 45.928947, Lon: 6.0987},    // Annecy Meythet airport
+	"NTE": {Lat: 47.153198, Lon: -1.61073},  // Nantes Atlantique Airport
+	"ORY": {Lat: 48.729499, Lon: 2.358963},  // Paris-Orly Airport
+	"OUI": {Lat: 48.4632, Lon: -5.06358},    // Ouessant Airport
+	"PGF": {Lat: 42.740398, Lon: 2.87067},   // Perpignan-Rivesaltes (Llabanère) Airport
+	"PIS": {Lat: 46.5877, Lon: 0.306666},    // Poitiers-Biard Airport
+	"PUF": {Lat: 43.380001, Lon: -0.418611}, // Pau Pyrénées Airport
+	"RDZ": {Lat: 44.407902, Lon: 2.48267},   // Rodez–Aveyron Airport
+	"RNS": {Lat: 48.0695, Lon: -1.73479},    // Rennes-Saint-Jacques Airport
+	"SXB": {Lat: 48.5383, Lon: 7.62823},     // Strasbourg Airport
+	"TLN": {Lat: 43.097301, Lon: 6.14603},   // Toulon-Hyères Airport
+	"TLS": {Lat: 43.629101, Lon: 1.36382},   // Toulouse-Blagnac Airport
+	"TUF": {Lat: 47.432201, Lon: 0.727606},  // Tours Val de Loire Airport
+	"XCR": {Lat: 48.77333, Lon: 4.20611},    // Chalons Vatry airport
 }
 
 func (s *Server) handleIATACoords(w http.ResponseWriter, r *http.Request) {
