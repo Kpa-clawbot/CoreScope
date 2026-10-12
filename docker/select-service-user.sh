@@ -10,8 +10,12 @@
 #
 # Which user the services run as:
 #
-#   1. RUN_AS_UID / RUN_AS_GID, when set
+#   1. RUN_AS_UID / RUN_AS_GID, when set in the container's environment
 #   2. root — what every earlier release did
+#
+# Both are read before /app/data/.env and never from it: the data directory is
+# writable by the service account, and a setting there could be removed by the
+# very process it restricts.
 #
 # There is deliberately no third rule inferring the uid from the mounted data
 # directory. Such a rule switches user on upgrade for any deployment whose
@@ -24,6 +28,8 @@
 SERVICE_ACCOUNT=corescope
 SERVICE_APP_DIR=/app
 SERVICE_DATA_DIR=/app/data
+SERVICE_ENV_FILE=/app/data/.env
+SERVICE_MOUNTINFO=/proc/self/mountinfo
 
 svc_log() {
   echo "[entrypoint] $*" >&2
@@ -71,10 +77,16 @@ resolve_service_account() {
   fi
 
   account=$(getent passwd "$run_as_uid" 2>/dev/null | cut -d: -f1)
+  # The baked-in account in another group is rebuilt below rather than used
+  # as it is, so RUN_AS_UID=1000 RUN_AS_GID=1001 means gid 1001. An account the
+  # image needs for something else (caddy, mosquitto) keeps its own group.
+  if [ "$account" = "$SERVICE_ACCOUNT" ] && [ "$(id -g "$account")" != "$run_as_gid" ]; then
+    account=""
+  fi
   if [ -z "$account" ]; then
-    # Nothing holds that uid. The baked-in account sits at 1000 and so is not
-    # what was asked for: free its name, but only now that it is known to be
-    # in the way.
+    # Nothing usable holds that uid. The baked-in account is not what was
+    # asked for: free its name, but only now that it is known to be in the
+    # way.
     if getent passwd "$SERVICE_ACCOUNT" >/dev/null 2>&1; then
       deluser "$SERVICE_ACCOUNT" >/dev/null 2>&1 || true
     fi
@@ -85,7 +97,9 @@ resolve_service_account() {
     if [ -z "$group" ] && addgroup -S -g "$run_as_gid" "$SERVICE_ACCOUNT" 2>/dev/null; then
       group="$SERVICE_ACCOUNT"
     fi
-    if [ -n "$group" ] && adduser -S -u "$run_as_uid" -G "$group" \
+    # -H as in the Dockerfile: without it busybox adduser gives the existing
+    # /app to the account, mode 2755.
+    if [ -n "$group" ] && adduser -S -u "$run_as_uid" -G "$group" -H \
          -h "$SERVICE_APP_DIR" -s /sbin/nologin "$SERVICE_ACCOUNT" 2>/dev/null; then
       account="$SERVICE_ACCOUNT"
     fi
@@ -106,26 +120,123 @@ resolve_service_account() {
   echo "$account"
 }
 
+# load_env_file <path> <account>
+#
+# Sources the data directory's .env with every variable exported, as the
+# entrypoint always has. When the services run unprivileged that directory is
+# theirs, so a .env they could have written or put there is not run as root: it
+# is read only when it is a regular file, not a symlink, owned by root and
+# writable by no one else. Running as root changes nothing — whoever could
+# write the file could already run code as root.
+#
+# Local names are underscored: the file is sourced into this function.
+load_env_file() {
+  local _env_file="$1" _env_account="$2"
+  local _uid_before="${RUN_AS_UID-}" _gid_before="${RUN_AS_GID-}"
+
+  [ -f "$_env_file" ] || return 0
+  if [ "$_env_account" != root ] && ! env_file_trusted "$_env_file"; then
+    svc_log "not reading $_env_file: the Go services run as $_env_account and can"
+    svc_log "write $SERVICE_DATA_DIR, and this file is run as root. Make it a regular"
+    svc_log "file owned by root and writable only by root to have it read."
+    return 0
+  fi
+
+  set -a
+  . "$_env_file"
+  set +a
+
+  if [ "${RUN_AS_UID-}" != "$_uid_before" ] || [ "${RUN_AS_GID-}" != "$_gid_before" ]; then
+    svc_log "ignoring RUN_AS_UID/RUN_AS_GID from $_env_file: set them on the container"
+    svc_log "(docker run -e, or environment: in compose), where the services cannot remove them."
+  fi
+}
+
+# env_file_trusted <path>
+#
+# True for a regular file, not a symlink, owned by root and writable by no one
+# else. stat without -L describes a symlink itself, so that test is belt and
+# braces.
+env_file_trusted() {
+  local _st
+  [ -L "$1" ] && return 1
+  _st=$(stat -c '%u %A' "$1" 2>/dev/null) || return 1
+  case "$_st" in
+    0\ -????w????|0\ -???????w?) return 1 ;;
+    0\ -*) return 0 ;;
+  esac
+  return 1
+}
+
+# service_data_mounts
+#
+# Mount points inside the data directory, not counting the data directory
+# itself, one per line. A config.json bind-mounted on its own shows up here.
+service_data_mounts() {
+  [ -r "$SERVICE_MOUNTINFO" ] || return 0
+  awk -v d="$SERVICE_DATA_DIR/" 'index($5, d) == 1 { print $5 }' "$SERVICE_MOUNTINFO" |
+    sed 's/\\040/ /g; s/\\134/\\/g'
+}
+
 # claim_service_paths <account>
 #
-# Gives the service account the paths it has to be able to write. Reached only
-# when RUN_AS_UID named an unprivileged account, and that is what makes the
-# hand-over of the data directory consented to rather than a surprise.
+# Gives the service account the data directory and what an earlier root-run
+# container left in it. Reached only when RUN_AS_UID named an unprivileged
+# account, and that is what makes the hand-over consented to rather than a
+# surprise. It runs on every start, so a file later created there as root, by
+# `docker exec` say, is handed over at the next one.
+#
+# Left alone, with what is below them:
+#   - anything mounted into the data directory on its own, such as a
+#     config.json bind-mounted as a single file: that is the operator's file on
+#     the host, and its owner is theirs to choose;
+#   - .env, which the entrypoint reads as root and so must stay root's.
+#
+# chown -h re-owns a symlink itself rather than what it points at. A path the
+# hand-over could not change — on NFS with root_squash, say — is logged: the
+# services would otherwise fail to write it with nothing in the log saying why.
 claim_service_paths() {
   local account="$1"
-  local uid gid
+  local uid gid excluded p left count
 
   uid=$(id -u "$account")
   gid=$(id -g "$account")
 
   # /app belongs to the image rather than to a mount: the server writes
   # config.json.tmp next to config.json when the geo filter is saved. Only the
-  # directory changes hands — the files in it, a bind-mounted config.json
-  # among them, keep the owner they have on the host.
+  # directory changes hands — the files in it keep their owner.
   chown "$uid:$gid" "$SERVICE_APP_DIR"
 
-  # Setting RUN_AS_UID is taken as permission to hand over what an earlier
-  # root-run container left in the data directory; without this the services
-  # could not write an existing meshcore.db.
-  find "$SERVICE_DATA_DIR" ! -user "$uid" -exec chown "$uid:$gid" {} + 2>/dev/null || true
+  excluded=$(service_data_mounts)
+  if [ -n "$excluded" ]; then
+    printf '%s\n' "$excluded" | while IFS= read -r p; do
+      svc_log "left alone: $p is mounted on its own, so it keeps the owner it has on the host"
+    done
+  fi
+  excluded="$SERVICE_ENV_FILE${excluded:+
+$excluded}"
+
+  # find's prune expression, built in the positional parameters so that
+  # paths with spaces survive.
+  set --
+  set -f
+  local IFS='
+'
+  for p in $excluded; do
+    [ $# -eq 0 ] || set -- "$@" -o
+    set -- "$@" -path "$p"
+  done
+  unset IFS
+  set +f
+
+  find "$SERVICE_DATA_DIR" \( "$@" \) -prune -o ! -user "$uid" \
+    -exec chown -h "$uid:$gid" {} + 2>/dev/null
+
+  left=$(find "$SERVICE_DATA_DIR" \( "$@" \) -prune -o ! -user "$uid" -print 2>/dev/null)
+  if [ -n "$left" ]; then
+    count=$(printf '%s\n' "$left" | wc -l)
+    svc_log "WARNING: $count path(s) in $SERVICE_DATA_DIR could not be given to uid $uid;"
+    svc_log "the Go services will fail to write them. First ones:"
+    printf '%s\n' "$left" | head -n 5 | while IFS= read -r p; do svc_log "  $p"; done
+  fi
 }

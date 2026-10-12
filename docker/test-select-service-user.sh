@@ -4,17 +4,18 @@
 #
 # Every branch is exercised without docker and without root: getent, adduser,
 # addgroup, deluser, delgroup, id, chown, find and stat are replaced by stubs
-# on PATH. The account stubs read and write a passwd/group pair of files seeded
+# on PATH, and the mount table is a fixture file. The account stubs read and write a passwd/group pair of files seeded
 # with the accounts the real image has — verified against alpine:3.20 with
 # mosquitto, supervisor and caddy installed, plus the Dockerfile's corescope —
 # so an account created mid-run is visible to the lookups that follow it. chown
 # and find record their arguments rather than touching the filesystem, which is
 # what lets the ownership hand-over be asserted exactly.
 #
-# The driver runs the same two steps in the same order as
-# docker/entrypoint-go.sh, so what gets tested is the contract the entrypoint
-# depends on: stdout carries only the account name, and a non-zero return must
-# never be read as root.
+# The driver runs the same three steps in the same order as
+# docker/entrypoint-go.sh — resolve the account, read .env, hand over the data
+# directory — so what gets tested is the contract the entrypoint depends on:
+# stdout carries only the account name, a non-zero return must never be read
+# as root, and .env cannot choose the account.
 #
 # Run: bash docker/test-select-service-user.sh
 # Exits non-zero if any case fails.
@@ -71,6 +72,15 @@ make_fixture() {
     printf '%s\n' "$IMAGE_GROUP" > "$FIX/group"
     : > "$FIX/calls"
     : > "$FIX/log"
+    printf '%s' "${FIX_MOUNTINFO-}" > "$FIX/mountinfo"
+    if [ -n "${FIX_ENV-}" ]; then
+        printf '%s\n' "$FIX_ENV" > "$FIX/env.real"
+        if [ "${FIX_ENV_SYMLINK:-0}" = 1 ]; then
+            ln -s "$FIX/env.real" "$FIX/env"
+        else
+            mv "$FIX/env.real" "$FIX/env"
+        fi
+    fi
     mkdir -p "$FIX/bin"
 
     cat > "$FIX/bin/getent" <<'STUB'
@@ -97,13 +107,13 @@ STUB
     cat > "$FIX/bin/adduser" <<'STUB'
 #!/bin/sh
 [ "${STUB_ADDUSER_FAIL:-0}" = 1 ] && exit 1
-uid=""; grp=""; name=""
+uid=""; grp=""; name=""; flags=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -u) uid="$2"; shift 2 ;;
     -G) grp="$2"; shift 2 ;;
     -h|-s) shift 2 ;;
-    -S|-D|-H) shift ;;
+    -S|-D|-H) flags="$flags $1"; shift ;;
     *) name="$1"; shift ;;
   esac
 done
@@ -113,7 +123,7 @@ awk -F: -v u="$uid" '$2==u{found=1} END{exit !found}' "$FIX/passwd" && exit 1
 gid=$(awk -F: -v g="$grp" '$1==g{print $2}' "$FIX/group")
 [ -n "$gid" ] || exit 1
 echo "$name:$uid:$gid" >> "$FIX/passwd"
-echo "adduser $name uid=$uid gid=$gid" >> "$FIX/calls"
+echo "adduser $name uid=$uid gid=$gid flags=$flags" >> "$FIX/calls"
 STUB
 
     cat > "$FIX/bin/addgroup" <<'STUB'
@@ -166,30 +176,43 @@ STUB
 echo "chown $*" >> "$FIX/calls"
 STUB
 
+    # The hand-over walk is recorded; the verification walk (-print) answers
+    # with STUB_LEFTOVER, the paths a failed chown would have left behind.
     cat > "$FIX/bin/find" <<'STUB'
 #!/bin/sh
 echo "find $*" >> "$FIX/calls"
+case " $* " in
+  *" -print "*) [ -n "${STUB_LEFTOVER-}" ] && printf '%s\n' "$STUB_LEFTOVER" ;;
+esac
+exit 0
 STUB
 
-    # Reporting a non-root owner for /app/data: the uid must still not be
-    # inferred from it. Any call is recorded so the test can prove none happens.
+    # Answers STUB_STAT ("uid mode"), by default a uid 1000 file: the uid
+    # must never be inferred from that, and the .env check must refuse it.
+    # Any call is recorded so the test can prove when none happens.
     cat > "$FIX/bin/stat" <<'STUB'
 #!/bin/sh
 echo "stat $*" >> "$FIX/calls"
-echo 1000
+echo "${STUB_STAT:-1000 -rw-r--r--}"
 STUB
 
     chmod +x "$FIX"/bin/*
 }
 
-# drive [VAR=VAL ...] — resolve the account and claim the paths, in the order
-# and with the error handling docker/entrypoint-go.sh uses. env -i keeps the
-# host environment (a RUN_AS_UID of its own, a real PATH) out of the case.
+# drive [VAR=VAL ...] — resolve the account, read .env and claim the paths, in
+# the order and with the error handling docker/entrypoint-go.sh uses. env -i
+# keeps the host environment (a RUN_AS_UID of its own, a real PATH) out of the
+# case. FIX_ENV (the .env contents), FIX_ENV_SYMLINK and FIX_MOUNTINFO shape
+# the fixture; a .env that sets CS_ENV_READ shows up as "env-read" in CALLS.
 drive() {
     make_fixture
     OUT=$(env -i PATH="$FIX/bin:/usr/bin:/bin" FIX="$FIX" SCRIPT="$SCRIPT" "$@" sh -c '
         . "$SCRIPT"
+        SERVICE_ENV_FILE="$FIX/env"
+        SERVICE_MOUNTINFO="$FIX/mountinfo"
         account=$(resolve_service_account) || exit 1
+        load_env_file "$SERVICE_ENV_FILE" "$account"
+        [ -z "${CS_ENV_READ-}" ] || echo "env-read" >> "$FIX/calls"
         [ "$account" = root ] || claim_service_paths "$account"
         echo "$account"
     ' 2>"$FIX/log")
@@ -223,8 +246,11 @@ drive RUN_AS_UID=1000 RUN_AS_GID=1000
 assert_eq "account" "corescope" "$OUT"
 assert_eq "exit status" 0 "$RC"
 assert_has "app dir handed over" "$CALLS" "chown 1000:1000 /app"
-assert_has "data dir handed over" "$CALLS" \
-    "find /app/data ! -user 1000 -exec chown 1000:1000 {} +"
+assert_has "data dir handed over, .env left out, symlinks not followed" "$CALLS" \
+    "find /app/data ( -path $FIX/env ) -prune -o ! -user 1000 -exec chown -h 1000:1000 {} +"
+assert_has "hand-over checked afterwards" "$CALLS" \
+    "find /app/data ( -path $FIX/env ) -prune -o ! -user 1000 -print"
+assert_lacks "nothing reported left over" "$LOG" "WARNING"
 assert_lacks "no account created" "$CALLS" "adduser"
 assert_lacks "baked-in account kept" "$CALLS" "deluser"
 
@@ -244,6 +270,7 @@ assert_has "baked-in account freed" "$CALLS" "deluser corescope"
 assert_has "baked-in group freed" "$CALLS" "delgroup corescope"
 assert_has "group created at the gid" "$CALLS" "addgroup corescope gid=5000"
 assert_has "account created at the uid" "$CALLS" "adduser corescope uid=5000 gid=5000"
+assert_has "home directory not created or re-owned" "$CALLS" "flags= -S -H"
 assert_has "app dir handed over" "$CALLS" "chown 5000:5000 /app"
 
 # ----- 6. a separate RUN_AS_GID ---------------------------------------------
@@ -298,6 +325,92 @@ drive RUN_AS_UID=5000 STUB_ADDGROUP_FAIL=1
 assert_eq "exit status" 1 "$RC"
 assert_eq "no account on stdout" "" "$OUT"
 assert_has "refusal is explicit" "$LOG" "refusing to fall back to root"
+
+# ----- 11. RUN_AS_GID is honoured for the baked-in account -----------------
+# uid 1000 is the image's own corescope account, gid 1000. Asked for gid 1001,
+# it is rebuilt in that group rather than used with the wrong one.
+CASE="RUN_AS_UID=1000, RUN_AS_GID=1001"
+drive RUN_AS_UID=1000 RUN_AS_GID=1001
+assert_eq "account" "corescope" "$OUT"
+assert_has "baked-in account rebuilt" "$CALLS" "deluser corescope"
+assert_has "group created at the gid" "$CALLS" "addgroup corescope gid=1001"
+assert_has "account recreated in it" "$CALLS" "adduser corescope uid=1000 gid=1001"
+assert_has "data dir handed to that gid" "$CALLS" "chown -h 1000:1001"
+assert_lacks "no group mismatch left to report" "$LOG" "note:"
+
+# ----- 12. .env as root: read as before, whoever owns it -------------------
+CASE=".env, RUN_AS_UID unset"
+FIX_ENV='CS_ENV_READ=1' drive
+assert_eq "account" "root" "$OUT"
+assert_has ".env read" "$CALLS" "env-read"
+assert_lacks "owner not checked as root" "$CALLS" "stat"
+
+# ----- 13. .env, unprivileged: only a root-owned, root-only-writable file ----
+CASE=".env root-owned 0644, RUN_AS_UID=1000"
+FIX_ENV='CS_ENV_READ=1' drive RUN_AS_UID=1000 STUB_STAT='0 -rw-r--r--'
+assert_eq "account" "corescope" "$OUT"
+assert_has ".env read" "$CALLS" "env-read"
+
+CASE=".env root-owned 0600, RUN_AS_UID=1000"
+FIX_ENV='CS_ENV_READ=1' drive RUN_AS_UID=1000 STUB_STAT='0 -rw-------'
+assert_has ".env read" "$CALLS" "env-read"
+
+CASE=".env owned by the service uid, RUN_AS_UID=1000"
+FIX_ENV='CS_ENV_READ=1' drive RUN_AS_UID=1000 STUB_STAT='1000 -rw-r--r--'
+assert_eq "account" "corescope" "$OUT"
+assert_lacks ".env not read" "$CALLS" "env-read"
+assert_has "refusal explained" "$LOG" "not reading $FIX/env"
+
+CASE=".env root-owned but group-writable, RUN_AS_UID=1000"
+FIX_ENV='CS_ENV_READ=1' drive RUN_AS_UID=1000 STUB_STAT='0 -rw-rw-r--'
+assert_lacks ".env not read" "$CALLS" "env-read"
+
+CASE=".env root-owned but world-writable, RUN_AS_UID=1000"
+FIX_ENV='CS_ENV_READ=1' drive RUN_AS_UID=1000 STUB_STAT='0 -rw-r--rw-'
+assert_lacks ".env not read" "$CALLS" "env-read"
+
+CASE=".env a symlink, RUN_AS_UID=1000"
+FIX_ENV='CS_ENV_READ=1' FIX_ENV_SYMLINK=1 drive RUN_AS_UID=1000 STUB_STAT='0 -rw-r--r--'
+assert_lacks ".env not read" "$CALLS" "env-read"
+assert_lacks "refused before its owner is asked" "$CALLS" "stat"
+
+# ----- 14. .env cannot choose the account -----------------------------------
+# A service that can delete .env could otherwise drop its own RUN_AS_UID, and
+# one that can write it could set RUN_AS_UID= and be root after a restart.
+CASE="RUN_AS_UID in .env, unset on the container"
+FIX_ENV='RUN_AS_UID=1000' drive
+assert_eq "account" "root" "$OUT"
+assert_eq "nothing was chowned" "" "$CALLS"
+assert_has "ignored, and said so" "$LOG" "ignoring RUN_AS_UID/RUN_AS_GID"
+
+CASE="RUN_AS_UID= in a trusted .env, 1000 on the container"
+FIX_ENV='RUN_AS_UID=' drive RUN_AS_UID=1000 STUB_STAT='0 -rw-r--r--'
+assert_eq "account" "corescope" "$OUT"
+assert_has "ignored, and said so" "$LOG" "ignoring RUN_AS_UID/RUN_AS_GID"
+
+# ----- 15. a file mounted into the data directory keeps its host owner -----
+# The documented single-file config mount, plus one with a space in its path,
+# as the kernel escapes it. The data directory's own mount is not excluded.
+CASE="single-file mounts in the data directory"
+FIX_MOUNTINFO='600 500 0:50 /srv/data /app/data rw,relatime - ext4 /dev/sda1 rw
+601 600 0:50 /srv/config.json /app/data/config.json ro,relatime - ext4 /dev/sda1 rw
+602 600 0:50 /srv/my\040keys /app/data/my\040keys rw,relatime - ext4 /dev/sda1 rw
+603 500 0:51 / /data/caddy rw,relatime - ext4 /dev/sda1 rw
+' drive RUN_AS_UID=1000
+assert_has "mounts pruned along with .env" "$CALLS" \
+    "find /app/data ( -path $FIX/env -o -path /app/data/config.json -o -path /app/data/my keys ) -prune -o ! -user 1000 -exec chown -h 1000:1000 {} +"
+assert_has "config.json reported as left alone" "$LOG" "left alone: /app/data/config.json"
+assert_lacks "data dir itself still handed over" "$CALLS" "-path /app/data )"
+assert_lacks "other mounts ignored" "$CALLS" "/data/caddy"
+
+# ----- 16. a hand-over that could not complete is logged -------------------
+CASE="chown refused (root_squash NFS)"
+drive RUN_AS_UID=1000 STUB_LEFTOVER='/app/data
+/app/data/meshcore.db'
+assert_eq "account" "corescope" "$OUT"
+assert_eq "startup continues" 0 "$RC"
+assert_has "warning names the count" "$LOG" "WARNING: 2 path(s) in /app/data could not be given to uid 1000"
+assert_has "and the paths" "$LOG" "  /app/data/meshcore.db"
 
 # ----- report ---------------------------------------------------------------
 echo "select-service-user: $PASS assertions passed, $FAIL failed"
