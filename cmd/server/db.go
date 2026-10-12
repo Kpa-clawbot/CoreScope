@@ -663,62 +663,7 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 		db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM transmissions t %s", w), args...).Scan(&total)
 	}
 
-	// Build grouped query using transmissions table with correlated subqueries.
-	// #1189 R2: distinct_iatas is a NEW column — comma-separated DISTINCT IATA
-	// codes across all observers of the transmission, with empty/NULL IATAs
-	// excluded. Frontend needs this on the DEFAULT COLLAPSED VIEW (where
-	// p._children is empty), so we compute it server-side.
-	//
-	// scope_name lives on the transmission row, so appending it as the last
-	// selected column is safe for both query shapes.
-	scopeNameCol := ""
-	if db.hasScopeName {
-		scopeNameCol = ", t.scope_name"
-	}
-	var querySQL string
-	if db.isV3 {
-		querySQL = fmt.Sprintf(db.nativeSQL(`SELECT t.hash, t.first_seen, t.raw_hex, t.decoded_json, t.payload_type, t.route_type,
-			COALESCE((SELECT COUNT(*) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS count,
-			COALESCE((SELECT COUNT(DISTINCT oi.observer_idx) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS observer_count,
-			COALESCE((SELECT MAX(strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', oi.timestamp, 'unixepoch')) FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen) AS latest,
-			obs.id AS observer_id, obs.name AS observer_name, COALESCE(obs.iata, '') AS observer_iata,
-			o.snr, o.rssi, o.path_json,
-			COALESCE((SELECT group_concat(DISTINCT obi.iata) FROM observations oi JOIN observers obi ON obi.rowid = oi.observer_idx WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas`, `SELECT t.hash, t.first_seen, t.raw_hex, t.decoded_json, t.payload_type, t.route_type,
-			COALESCE((SELECT COUNT(*) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS count,
-			COALESCE((SELECT COUNT(DISTINCT oi.observer_idx) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS observer_count,
-			COALESCE((SELECT MAX(to_char(to_timestamp(oi.timestamp) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')) FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen) AS latest,
-			obs.id AS observer_id, obs.name AS observer_name, COALESCE(obs.iata, '') AS observer_iata,
-			o.snr, o.rssi, o.path_json,
-			COALESCE((SELECT string_agg(DISTINCT obi.iata, ',') FROM observations oi JOIN observers obi ON obi.rowid = oi.observer_idx WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas`)+scopeNameCol+`
-		FROM transmissions t
-		LEFT JOIN observations o ON o.id = (
-			SELECT id FROM observations WHERE transmission_id = t.id
-			ORDER BY length(COALESCE(path_json,'')) DESC NULLS LAST LIMIT 1
-		)
-		LEFT JOIN observers obs ON obs.rowid = o.observer_idx
-		%s ORDER BY latest DESC NULLS LAST LIMIT %s OFFSET %s`, w, db.parameter(len(args)+1), db.parameter(len(args)+2))
-	} else {
-		querySQL = fmt.Sprintf(db.nativeSQL(`SELECT t.hash, t.first_seen, t.raw_hex, t.decoded_json, t.payload_type, t.route_type,
-			COALESCE((SELECT COUNT(*) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS count,
-			COALESCE((SELECT COUNT(DISTINCT oi.observer_id) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS observer_count,
-			COALESCE((SELECT CAST(MAX(oi.timestamp) AS TEXT) FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen) AS latest,
-			o.observer_id, o.observer_name, COALESCE(obs2.iata, '') AS observer_iata,
-			o.snr, o.rssi, o.path_json,
-			COALESCE((SELECT group_concat(DISTINCT obi.iata) FROM observations oi JOIN observers obi ON obi.id = oi.observer_id WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas`, `SELECT t.hash, t.first_seen, t.raw_hex, t.decoded_json, t.payload_type, t.route_type,
-			COALESCE((SELECT COUNT(*) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS count,
-			COALESCE((SELECT COUNT(DISTINCT oi.observer_id) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS observer_count,
-			COALESCE((SELECT MAX(oi.timestamp)::text FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen) AS latest,
-			o.observer_id, o.observer_name, COALESCE(obs2.iata, '') AS observer_iata,
-			o.snr, o.rssi, o.path_json,
-			COALESCE((SELECT string_agg(DISTINCT obi.iata, ',') FROM observations oi JOIN observers obi ON obi.id = oi.observer_id WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas`)+scopeNameCol+`
-		FROM transmissions t
-		LEFT JOIN observations o ON o.id = (
-			SELECT id FROM observations WHERE transmission_id = t.id
-			ORDER BY length(COALESCE(path_json,'')) DESC NULLS LAST LIMIT 1
-		)
-		LEFT JOIN observers obs2 ON obs2.id = o.observer_id
-		%s ORDER BY latest DESC NULLS LAST LIMIT %s OFFSET %s`, w, db.parameter(len(args)+1), db.parameter(len(args)+2))
-	}
+	querySQL := db.groupedPacketSelectSQL(w, len(args))
 
 	qArgs := make([]interface{}, len(args))
 	copy(qArgs, args)
@@ -771,6 +716,54 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 	}
 
 	return &PacketResult{Packets: packets, Total: total}, nil
+}
+
+// groupedPacketSelectSQL ranks and pages matching transmissions before loading
+// their observation details. The timestamp index can answer numeric MAX with
+// one backwards lookup; formatting every observation before MAX prevents that.
+func (db *DB) groupedPacketSelectSQL(w string, argumentCount int) string {
+	observerKey := "observer_id"
+	observerID, observerName := "o.observer_id", "o.observer_name"
+	observerJoin := "obs.id = o.observer_id"
+	iataJoin := "obi.id = oi.observer_id"
+	latest := `COALESCE((SELECT CAST(MAX(oi.timestamp) AS TEXT) FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen)`
+	if db.isV3 {
+		observerKey = "observer_idx"
+		observerID, observerName = "obs.id", "obs.name"
+		observerJoin = "obs.rowid = o.observer_idx"
+		iataJoin = "obi.rowid = oi.observer_idx"
+		latest = db.nativeSQL(
+			`COALESCE((SELECT strftime('%Y-%m-%dT%H:%M:%fZ', MAX(oi.timestamp), 'unixepoch') FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen)`,
+			`COALESCE((SELECT to_char(to_timestamp(MAX(oi.timestamp)) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen)`)
+	}
+	// Keep latest independent of the observation filters: those decide which
+	// transmissions match, while the returned group describes all observations.
+	// LIMIT inside the derived table prevents both engines from joining/sorting
+	// best-path observations for transmissions outside the requested page.
+	page := fmt.Sprintf(`SELECT t.id, %s AS latest FROM transmissions t %s
+		ORDER BY latest DESC NULLS LAST, t.id DESC LIMIT %s OFFSET %s`,
+		latest, w, db.parameter(argumentCount+1), db.parameter(argumentCount+2))
+	iatas := db.nativeSQL("group_concat(DISTINCT obi.iata)", "string_agg(DISTINCT obi.iata, ',')")
+	scopeNameCol := ""
+	if db.hasScopeName {
+		scopeNameCol = ", t.scope_name"
+	}
+	return fmt.Sprintf(`SELECT t.hash, t.first_seen, t.raw_hex, t.decoded_json, t.payload_type, t.route_type,
+		COALESCE((SELECT COUNT(*) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS count,
+		COALESCE((SELECT COUNT(DISTINCT oi.%s) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS observer_count,
+		page.latest, %s AS observer_id, %s AS observer_name, COALESCE(obs.iata, '') AS observer_iata,
+		o.snr, o.rssi, o.path_json,
+		COALESCE((SELECT %s FROM observations oi JOIN observers obi ON %s
+			WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas%s
+		FROM (%s) AS page
+		JOIN transmissions t ON t.id = page.id
+		LEFT JOIN observations o ON o.id = (
+			SELECT id FROM observations WHERE transmission_id = t.id
+			ORDER BY length(COALESCE(path_json,'')) DESC NULLS LAST LIMIT 1
+		)
+		LEFT JOIN observers obs ON %s
+		ORDER BY page.latest DESC NULLS LAST, t.id DESC`,
+		observerKey, observerID, observerName, iatas, iataJoin, scopeNameCol, page, observerJoin)
 }
 
 // parseDistinctIatasCSV turns PostgreSQL string_agg output ("SJC,SFO,OAK") into

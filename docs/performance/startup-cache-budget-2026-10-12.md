@@ -63,3 +63,47 @@ Regression tests also cover an oversized single transmission, tied timestamps,
 ID zero, a recently heard old ID, native PostgreSQL values, complete SQL history
 fallback, accurate byte accounting and a live poll interleaved with backfill.
 The same startup tests run against both native database backends.
+
+## Grouped SQL history after bounded startup
+
+The bounded cache exposes the grouped SQL history path more often. Its old
+query formatted every observation timestamp before taking `MAX`, and selected
+best-path observations before pagination. The follow-up takes numeric `MAX`
+first, then pages only transmission IDs and latest timestamps before joining
+payloads and computing observation details. No index or schema change is needed.
+The PostgreSQL plan regression checks one backwards indexed timestamp row per
+matching transmission and two best-path selections for a two-transmission page.
+Filtering, full group counts/IATAs, no-observation timestamp fallback and legacy
+v2 results have regression coverage; timestamp ties now use descending ID.
+
+`BenchmarkGroupedPacketHistory` compares baseline `5633088` with this follow-up
+using the same 6,000 transmissions and 390,000 observations, a 24-hour filter,
+and three one-iteration runs. Fixture creation is outside the timer. Both
+versions return the requested page and report a total of 6,000. The client is
+the same Windows amd64/i5-4690K/Go 1.25.1 host with `GOMAXPROCS=2`; SQLite runs
+locally, while native PostgreSQL 18 runs in an isolated ARM64 test container on
+a Raspberry Pi 5 through a local SSH forward, with normal durability enabled.
+
+| Backend | Returned page | Before median | After median |
+|---|---:|---:|---:|
+| SQLite | 1 | 1.654 s | 0.102 s |
+| SQLite | 5,000 | 2.693 s | 0.727 s |
+| PostgreSQL | 1 | 5.021 s | 0.553 s |
+| PostgreSQL | 5,000 | 4.858 s | 4.516 s |
+
+The PostgreSQL 5,000-row samples overlap substantially: 4.842–5.619 s before,
+3.894–6.685 s after. These shared-host measurements support the small-page
+improvement, not a robust large-page speedup. A one-row result still ranks all
+matching transmissions; the 5,000-row case returns only part of the fixture.
+Short synthetic metadata and empty IATA fields are not a live 50,000-row browser
+workload. These timings cover database calls and result construction, excluding
+HTTP encoding, transfer and browser rendering; they are not a cross-backend
+hardware comparison or a whole-process memory measurement.
+
+Run from `cmd/server`, using `CORESCOPE_TEST_BACKEND=sqlite` or `postgres` with
+`CORESCOPE_TEST_POSTGRES_URL` pointing at an isolated test database:
+
+```sh
+CGO_ENABLED=1 GOMAXPROCS=2 go test -run '^$' \
+  -bench '^BenchmarkGroupedPacketHistory$' -benchtime=1x -count=3 -benchmem .
+```
