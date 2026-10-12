@@ -245,7 +245,7 @@ CASE="RUN_AS_UID=1000"
 drive RUN_AS_UID=1000 RUN_AS_GID=1000
 assert_eq "account" "corescope" "$OUT"
 assert_eq "exit status" 0 "$RC"
-assert_has "app dir handed over" "$CALLS" "chown 1000:1000 /app"
+assert_lacks "/app stays root's" "$CALLS" "chown 1000:1000 /app"
 assert_has "data dir handed over, .env left out, symlinks not followed" "$CALLS" \
     "find /app/data ( -path $FIX/env ) -prune -o ! -user 1000 -exec chown -h 1000:1000 {} +"
 assert_has "hand-over checked afterwards" "$CALLS" \
@@ -258,7 +258,7 @@ assert_lacks "baked-in account kept" "$CALLS" "deluser"
 CASE="RUN_AS_UID=1000, RUN_AS_GID unset"
 drive RUN_AS_UID=1000
 assert_eq "account" "corescope" "$OUT"
-assert_has "gid defaulted to the uid" "$CALLS" "chown 1000:1000 /app"
+assert_has "gid defaulted to the uid" "$CALLS" "chown -h 1000:1000"
 assert_lacks "no group mismatch reported" "$LOG" "note:"
 
 # ----- 5. a uid nothing holds: the account is recreated at it ----------------
@@ -271,7 +271,7 @@ assert_has "baked-in group freed" "$CALLS" "delgroup corescope"
 assert_has "group created at the gid" "$CALLS" "addgroup corescope gid=5000"
 assert_has "account created at the uid" "$CALLS" "adduser corescope uid=5000 gid=5000"
 assert_has "home directory not created or re-owned" "$CALLS" "flags= -S -H"
-assert_has "app dir handed over" "$CALLS" "chown 5000:5000 /app"
+assert_has "data dir handed over" "$CALLS" "chown -h 5000:5000"
 
 # ----- 6. a separate RUN_AS_GID ---------------------------------------------
 CASE="RUN_AS_UID=5000, RUN_AS_GID=6000"
@@ -279,7 +279,7 @@ drive RUN_AS_UID=5000 RUN_AS_GID=6000
 assert_eq "account" "corescope" "$OUT"
 assert_has "group created at the gid" "$CALLS" "addgroup corescope gid=6000"
 assert_has "account created with that group" "$CALLS" "adduser corescope uid=5000 gid=6000"
-assert_has "app dir handed over" "$CALLS" "chown 5000:6000 /app"
+assert_has "data dir handed over" "$CALLS" "chown -h 5000:6000"
 
 # ----- 7. a uid an image account already holds ------------------------------
 # caddy is uid 100 but gid 101, so the requested gid cannot be honoured; the
@@ -290,7 +290,7 @@ assert_eq "account" "caddy" "$OUT"
 assert_eq "exit status" 0 "$RC"
 assert_lacks "existing account untouched" "$CALLS" "adduser"
 assert_has "mismatch reported" "$LOG" "primary group is 101 and not 100"
-assert_has "account's own gid used" "$CALLS" "chown 100:101 /app"
+assert_has "account's own gid used" "$CALLS" "chown -h 100:101"
 
 # ----- 8. RUN_AS_UID=0 is a request for the old behaviour -------------------
 CASE="RUN_AS_UID=0"

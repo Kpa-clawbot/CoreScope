@@ -181,7 +181,8 @@ service_data_mounts() {
 # claim_service_paths <account>
 #
 # Gives the service account the data directory and what an earlier root-run
-# container left in it. Reached only when RUN_AS_UID named an unprivileged
+# container left in it. /app stays root's: nothing the services write lives
+# there, and an operator may run its binaries as root with `docker exec`. Reached only when RUN_AS_UID named an unprivileged
 # account, and that is what makes the hand-over consented to rather than a
 # surprise. It runs on every start, so a file later created there as root, by
 # `docker exec` say, is handed over at the next one.
@@ -201,11 +202,6 @@ claim_service_paths() {
 
   uid=$(id -u "$account")
   gid=$(id -g "$account")
-
-  # /app belongs to the image rather than to a mount: the server writes
-  # config.json.tmp next to config.json when the geo filter is saved. Only the
-  # directory changes hands — the files in it keep their owner.
-  chown "$uid:$gid" "$SERVICE_APP_DIR"
 
   excluded=$(service_data_mounts)
   if [ -n "$excluded" ]; then
