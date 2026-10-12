@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"strconv"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -287,5 +288,54 @@ func TestScanReachRows_DecodesRows(t *testing.T) {
 	}
 	if !got.snrValid || got.snr != -7.0 {
 		t.Fatalf("snr not decoded: valid=%v val=%v", got.snrValid, got.snr)
+	}
+}
+
+// #2146: the reach scan must be driven from the observations time window.
+// With the default join order SQLite picked SCAN transmissions (every row)
+// and probed observations per transmission: 3.2-3.3 s on an 18M-observation
+// database against 1.8-2.0 s when it starts from idx_observations_timestamp.
+func TestReachScanStartsFromObservationsTimeIndex(t *testing.T) {
+	db := newReachScanTestDB(t)
+	// The planner's choice depends on sqlite_stat1. These are the statistics
+	// ANALYZE produced on that database (18.3M observations, 1.5M
+	// transmissions), loaded so the test plans like production does.
+	for _, s := range []string{
+		`CREATE INDEX idx_observations_timestamp ON observations(timestamp)`,
+		`CREATE INDEX idx_observations_tx_ts ON observations(transmission_id, timestamp)`,
+		`ANALYZE`,
+		`DELETE FROM sqlite_stat1`,
+		`INSERT INTO sqlite_stat1 (tbl, idx, stat) VALUES
+			('observations', 'idx_observations_timestamp', '18270402 4'),
+			('observations', 'idx_observations_tx_ts', '18270402 11 3'),
+			('observations', NULL, '18270402'),
+			('transmissions', NULL, '1517599'),
+			('observers', NULL, '88')`,
+		`ANALYZE sqlite_master`,
+	} {
+		if _, err := db.conn.Exec(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	args := []interface{}{int64(0), `%"01FA"%`, `%"01FA00"%`, 10}
+	rows, err := db.conn.Query("EXPLAIN QUERY PLAN "+reachScanSQL(2), args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var steps []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		steps = append(steps, detail)
+	}
+	if len(steps) == 0 {
+		t.Fatal("no query plan")
+	}
+	if !strings.Contains(steps[0], "o USING INDEX idx_observations_timestamp") {
+		t.Fatalf("reach scan must start from observations by timestamp; plan: %q", steps)
 	}
 }

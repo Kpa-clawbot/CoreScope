@@ -138,6 +138,14 @@ const CASES = [
   ['text-muted on surface (light)',    '--text-muted', '--surface-1', 'light', 4.5],
   ['text-muted on content-bg (light)', '--text-muted', '--surface-0', 'light', 4.5],
 
+  // Admin/user-management status words over the hovered row tint
+  // (public/account.css .um-table tr:hover td).
+  ['green status on row-hover (light)',  '--status-green-tint-text', '--row-hover', 'light', 4.5],
+  ['green status on row-hover (dark)',   '--status-green-tint-text', '--row-hover', 'dark',  4.5],
+  ['green status on content-bg (light)', '--status-green-tint-text', '--surface-0', 'light', 4.5],
+  ['yellow status on row-hover (light)', '--status-yellow-text',     '--row-hover', 'light', 4.5],
+  ['red status on row-hover (light)',    '--status-red-text',        '--row-hover', 'light', 4.5],
+
   // Body text on the canonical page background.
   ['text on content-bg (dark)',  '--text', '--surface-0', 'dark',  7.0],
   ['text on content-bg (light)', '--text', '--surface-0', 'light', 7.0],

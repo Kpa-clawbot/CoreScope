@@ -71,6 +71,62 @@ func TestResolveUserManagementErrors(t *testing.T) {
 	}
 }
 
+func validPostalUM() *UserManagementConfig {
+	u := validUM()
+	u.Mail = UserMailConfig{Provider: "Postal", PostalBaseURL: "https://postal.example.org/",
+		PostalAPIKey: "postal-key", FromEmail: "noreply@example.org", WebhookSecret: "AbCd0123456789xyz"}
+	return u
+}
+
+func TestResolveUserManagementPostal(t *testing.T) {
+	set, err := resolveUserManagement(validPostalUM(), "meshcore.db", noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.provider != "postal" || set.postalBaseURL != "https://postal.example.org" ||
+		set.postalAPIKey != "postal-key" || set.webhookSecret != "AbCd0123456789xyz" {
+		t.Fatalf("postal settings = %q %q %q %q", set.provider, set.postalBaseURL, set.postalAPIKey, set.webhookSecret)
+	}
+
+	env := map[string]string{
+		"CORESCOPE_POSTAL_API_KEY": "env-key", "CORESCOPE_POSTAL_WEBHOOK_SECRET": "env-secret-0123456789",
+		"CORESCOPE_BREVO_API_KEY": "brevo-env", "CORESCOPE_BREVO_WEBHOOK_SECRET": "brevo-secret-0123456789",
+	}
+	set, err = resolveUserManagement(validPostalUM(), "meshcore.db", func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.postalAPIKey != "env-key" || set.webhookSecret != "env-secret-0123456789" {
+		t.Fatalf("postal env not applied: %q %q", set.postalAPIKey, set.webhookSecret)
+	}
+
+	u := validPostalUM()
+	u.Mail.PostalBaseURL = "http://127.0.0.1:5000"
+	if set, err := resolveUserManagement(u, "meshcore.db", noEnv); err != nil || set.postalBaseURL != "http://127.0.0.1:5000" {
+		t.Fatalf("loopback http: %v", err)
+	}
+}
+
+func TestResolveUserManagementPostalErrors(t *testing.T) {
+	cases := map[string]func(u *UserManagementConfig){
+		"Postal API key":          func(u *UserManagementConfig) { u.Mail.PostalAPIKey = "" },
+		"postalBaseUrl must be":   func(u *UserManagementConfig) { u.Mail.PostalBaseURL = "" },
+		"postalBaseUrl must use":  func(u *UserManagementConfig) { u.Mail.PostalBaseURL = "http://postal.example.org" },
+		"postalBaseUrl must not":  func(u *UserManagementConfig) { u.Mail.PostalBaseURL = "https://user:pw@postal.example.org" },
+		"postalBaseUrl must not ": func(u *UserManagementConfig) { u.Mail.PostalBaseURL = "https://postal.example.org/?x=1" },
+		"letters, digits":         func(u *UserManagementConfig) { u.Mail.WebhookSecret = "has:colon-0123456789" },
+		"webhookSecret":           func(u *UserManagementConfig) { u.Mail.WebhookSecret = "short" },
+	}
+	for want, mutate := range cases {
+		u := validPostalUM()
+		mutate(u)
+		_, err := resolveUserManagement(u, "meshcore.db", noEnv)
+		if err == nil || !strings.Contains(err.Error(), strings.TrimSpace(want)) {
+			t.Errorf("%s: err = %v", want, err)
+		}
+	}
+}
+
 func TestUserManagementEnabled(t *testing.T) {
 	var nilCfg *Config
 	if nilCfg.UserManagementEnabled() || (&Config{}).UserManagementEnabled() ||
@@ -79,5 +135,99 @@ func TestUserManagementEnabled(t *testing.T) {
 	}
 	if !(&Config{UserManagement: &UserManagementConfig{Enabled: true}}).UserManagementEnabled() {
 		t.Fatal("enabled not reported")
+	}
+}
+
+func TestResolveChannelProposals(t *testing.T) {
+	u := validUM()
+	set, err := resolveUserManagement(u, "meshcore.db", noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.proposals != (proposalSettings{}) {
+		t.Fatalf("absent block = %+v; want off", set.proposals)
+	}
+	u.ChannelProposals = &ChannelProposalsConfig{Enabled: true}
+	set, _ = resolveUserManagement(u, "meshcore.db", noEnv)
+	if set.proposals != (proposalSettings{enabled: true, maxPending: 100, maxApproved: 128, perUserPerDay: 5}) {
+		t.Fatalf("defaults = %+v", set.proposals)
+	}
+	u.ChannelProposals = &ChannelProposalsConfig{Enabled: true, MaxPending: 3, MaxApproved: 7, PerUserPerDay: 1}
+	set, _ = resolveUserManagement(u, "meshcore.db", noEnv)
+	if set.proposals != (proposalSettings{enabled: true, maxPending: 3, maxApproved: 7, perUserPerDay: 1}) {
+		t.Fatalf("explicit = %+v", set.proposals)
+	}
+	u.ChannelProposals = &ChannelProposalsConfig{Enabled: true, MaxPending: -1, MaxApproved: -1, PerUserPerDay: -1}
+	set, _ = resolveUserManagement(u, "meshcore.db", noEnv)
+	if set.proposals != (proposalSettings{enabled: true, maxPending: 100, maxApproved: 128, perUserPerDay: 5}) {
+		t.Fatalf("negative values = %+v; want defaults", set.proposals)
+	}
+	u.ChannelProposals = &ChannelProposalsConfig{Enabled: false, MaxApproved: 7}
+	set, _ = resolveUserManagement(u, "meshcore.db", noEnv)
+	if set.proposals.enabled {
+		t.Fatal("enabled false resolved as on")
+	}
+}
+
+func TestResolveNotifications(t *testing.T) {
+	u := validUM()
+	set, err := resolveUserManagement(u, "meshcore.db", noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.notify != (notifySettings{}) {
+		t.Fatalf("absent block = %+v; want off", set.notify)
+	}
+	defaults := notifySettings{enabled: true, interval: 5 * time.Minute, perUserPerDay: 20, maxMailsPerDay: 100, maxWatchesPerUser: 50}
+	u.Notifications = &NotificationsConfig{Enabled: true}
+	if set, _ = resolveUserManagement(u, "meshcore.db", noEnv); set.notify != defaults {
+		t.Fatalf("defaults = %+v", set.notify)
+	}
+	u.Notifications = &NotificationsConfig{Enabled: true, IntervalMinutes: 1, PerUserPerDay: 3, MaxMailsPerDay: 9, MaxWatchesPerUser: 2}
+	if set, _ = resolveUserManagement(u, "meshcore.db", noEnv); set.notify != (notifySettings{enabled: true, interval: time.Minute, perUserPerDay: 3, maxMailsPerDay: 9, maxWatchesPerUser: 2}) {
+		t.Fatalf("explicit = %+v", set.notify)
+	}
+	u.Notifications = &NotificationsConfig{Enabled: true, IntervalMinutes: -5, PerUserPerDay: -1, MaxWatchesPerUser: -2}
+	if set, _ = resolveUserManagement(u, "meshcore.db", noEnv); set.notify != defaults {
+		t.Fatalf("zero and negative values = %+v; want defaults", set.notify)
+	}
+	u.Notifications = &NotificationsConfig{Enabled: false, PerUserPerDay: 3}
+	if set, _ = resolveUserManagement(u, "meshcore.db", noEnv); set.notify.enabled {
+		t.Fatal("enabled false resolved as on")
+	}
+}
+
+func TestResolveUsersBackup(t *testing.T) {
+	u := validUM()
+	meas := filepath.Join("data", "meshcore.db")
+	defaults := backupSettings{enabled: true, dir: filepath.Join("data", "backups"), keep: 7}
+	set, err := resolveUserManagement(u, meas, noEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.backup != defaults {
+		t.Fatalf("absent block = %+v; want %+v", set.backup, defaults)
+	}
+	u.DBPath = filepath.Join("accounts", "users.db")
+	if set, _ = resolveUserManagement(u, meas, noEnv); set.backup.dir != filepath.Join("accounts", "backups") {
+		t.Fatalf("dir follows dbPath: %q", set.backup.dir)
+	}
+	u.DBPath = ""
+	off, on := false, true
+	u.Backup = &UsersBackupConfig{Enabled: &off, Dir: "x", Keep: 3}
+	if set, _ = resolveUserManagement(u, meas, noEnv); set.backup != (backupSettings{}) {
+		t.Fatalf("enabled false = %+v; want off", set.backup)
+	}
+	u.Backup = &UsersBackupConfig{Dir: " bk ", Keep: 3}
+	if set, _ = resolveUserManagement(u, meas, noEnv); set.backup != (backupSettings{enabled: true, dir: "bk", keep: 3}) {
+		t.Fatalf("enabled omitted = %+v; want on with dir bk, keep 3", set.backup)
+	}
+	u.Backup = &UsersBackupConfig{Enabled: &on, Dir: "  ", Keep: -1}
+	if set, _ = resolveUserManagement(u, meas, noEnv); set.backup != defaults {
+		t.Fatalf("blank dir and negative keep = %+v; want defaults", set.backup)
+	}
+	u.Backup = &UsersBackupConfig{Keep: 0}
+	if set, _ = resolveUserManagement(u, meas, noEnv); set.backup.keep != 7 {
+		t.Fatalf("keep 0 = %d; want 7", set.backup.keep)
 	}
 }

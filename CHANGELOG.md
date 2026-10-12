@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [3.14.0] - 2026-10-08
+
+See [docs/release-notes/v3.14.0.md](docs/release-notes/v3.14.0.md) for the full notes. 23 commits since v3.13.1: 13 fix, 8 feat, 1 ci, 1 docs.
+
+### Highlights
+- **Optional user accounts, off by default** (#2129, #2130, #2138 to #2141) - accounts and roles, settings sync across devices, an admin area with an audit log, hashtag channel proposals with admin approval, mail notifications for watched nodes, data export and daily `users.db` backups. Setup: `docs/user-guide/accounts.md`.
+- **New limits on unauthenticated endpoints** (#2119, #2120, #2122, #2123, #2127) - requests above them now get 400 or 429 instead of an answer. **Operator awareness required** for API clients that send long `nodes=` lists.
+- **`traffic_share_score` drops after the upgrade and no longer drifts with uptime** (#2117).
+- **Regional `/api/nodes` queries no longer exhaust the database pool** (#2114, #2115) - 154.8 s to 37 ms for an uncached region set.
+
+No manual migration step. With user management off, no new file or table is created.
+
 ## [3.13.1] - 2026-10-04
 
 See [docs/release-notes/v3.13.1.md](docs/release-notes/v3.13.1.md) for the full notes. 1 commit since v3.13.0: 1 fix.

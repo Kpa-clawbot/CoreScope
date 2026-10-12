@@ -165,7 +165,7 @@ func TestObsRawHexNotRetainedOnLoad(t *testing.T) {
 
 	// The read path must still serve raw_hex via the parent-tx fallback.
 	store.mu.RLock()
-	m := store.enrichObs(obs)
+	m, _ := store.enrichObsRPJob(obs)
 	store.mu.RUnlock()
 	rh, _ := m["raw_hex"].(string)
 	if rh != txHex {

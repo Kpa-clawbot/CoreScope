@@ -1095,6 +1095,25 @@ function debounce(fn, ms) {
   return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
 }
 
+/* Visible-only throttle for background refreshes (nav stats).
+ * Returns trigger(); calling it runs fn() at most once per opts.minIntervalMs,
+ * and never while the tab is hidden. opts.now and opts.isHidden are injectable
+ * for tests. */
+function createVisibleThrottle(fn, opts) {
+  const minIntervalMs = opts.minIntervalMs;
+  const now = opts.now || Date.now;
+  const isHidden = opts.isHidden || function () { return typeof document !== 'undefined' && !!document.hidden; };
+  let last = -Infinity;
+  return function trigger() {
+    if (isHidden()) return false;
+    const t = now();
+    if (t - last < minIntervalMs) return false;
+    last = t;
+    fn();
+    return true;
+  };
+}
+
 /* Debounced WS helper — batches rapid messages, calls fn with array of msgs */
 function debouncedOnWS(fn, ms) {
   if (typeof ms === 'undefined') ms = 250;
@@ -1281,7 +1300,7 @@ function navigate() {
       else { app.setAttribute('tabindex', '-1'); app.focus({ preventScroll: true }); }
     });
   } else {
-    app.innerHTML = `<div style="padding:40px;text-align:center;color:#6b7280"><h2>${route}</h2><p>Page not yet implemented.</p></div>`;
+    app.innerHTML = `<div style="padding:40px;text-align:center;color:#6b7280"><h2>${escapeHtml(route)}</h2><p>Page not yet implemented.</p></div>`;
   }
 }
 
@@ -1734,7 +1753,7 @@ window.addEventListener('DOMContentLoaded', () => {
         const statusLabel = age === null ? 'unknown' : age < HEALTH_THRESHOLDS.nodeDegradedMs ? 'healthy' : age < HEALTH_THRESHOLDS.nodeSilentMs ? 'degraded' : 'silent';
         return '<a href="#/nodes/' + pk + '" class="fav-dd-item" data-key="' + pk + '">'
           + '<span class="fav-dd-status ' + statusCls + '" title="' + statusLabel + '" aria-label="' + statusLabel + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span>'
-          + '<span class="fav-dd-name">' + (h.node.name || truncate(pk, 12)) + '</span>'
+          + '<span class="fav-dd-name">' + escapeHtml(h.node.name || truncate(pk, 12)) + '</span>'
           + '<span class="fav-dd-meta">' + (h.stats.lastHeard ? timeAgo(h.stats.lastHeard) : 'never') + '</span>'
           + favStar(pk, 'fav-dd-star')
           + '</a>';
@@ -1885,9 +1904,15 @@ window.addEventListener('DOMContentLoaded', () => {
       }
     } catch {}
   }
-  updateNavStats();
-  setInterval(updateNavStats, 15000);
-  debouncedOnWS(function () { updateNavStats(); });
+  // One refresh per 15 s at most, none in hidden tabs: the timer, live packets
+  // and returning to the tab all go through the same throttle.
+  const refreshNavStats = createVisibleThrottle(updateNavStats, { minIntervalMs: 15000 });
+  refreshNavStats();
+  setInterval(refreshNavStats, 15000);
+  debouncedOnWS(function () { refreshNavStats(); });
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) refreshNavStats();
+  });
 
   // --- Theme Customization ---
   // Fetch theme config and apply via customizer v2 pipeline

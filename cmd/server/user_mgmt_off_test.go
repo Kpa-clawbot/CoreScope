@@ -15,7 +15,7 @@ func TestUserManagementOffIsUnchanged(t *testing.T) {
 	if srv.auth != nil {
 		t.Fatal("auth built without config")
 	}
-	for _, p := range []string{"/api/auth/me", "/api/admin/users", "/api/account/sessions", "/api/account/settings"} {
+	for _, p := range []string{"/api/auth/me", "/api/admin/users", "/api/admin/audit", "/api/admin/stats", "/api/account/sessions", "/api/account/settings", "/api/account/export", "/api/admin/users-backup"} {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, httptest.NewRequest("GET", p, nil))
 		if w.Code != 404 {
@@ -49,7 +49,7 @@ func TestClientConfigAdvertisesUserManagement(t *testing.T) {
 	srv.auth = a
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, httptest.NewRequest("GET", "/api/config/client", nil))
-	if !strings.Contains(w.Body.String(), `"userManagement":{"enabled":true}`) {
+	if !strings.Contains(w.Body.String(), `"userManagement":{"enabled":true,"companionLinking":true}`) {
 		t.Fatalf("client config = %s", w.Body.String())
 	}
 }

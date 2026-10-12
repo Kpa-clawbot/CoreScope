@@ -39,24 +39,29 @@ type NodeBatterySample struct {
 	BatteryMv int    `json:"battery_mv"`
 }
 
+// nodeBatteryHistorySQL matches the observer ID in lowercase and in
+// uppercase instead of LOWER(observer_id) = ?, so SQLite can use the
+// (observer_id, timestamp) primary-key index (#2146). Arguments: the pubkey
+// lowercased, uppercased, and the window start.
+const nodeBatteryHistorySQL = `
+		SELECT timestamp, battery_mv
+		FROM observer_metrics
+		WHERE observer_id IN (?, ?)
+		  AND battery_mv IS NOT NULL
+		  AND timestamp >= ?
+		ORDER BY timestamp ASC`
+
 // GetNodeBatteryHistory returns time-ordered battery_mv samples for a node,
 // pulled from observer_metrics by joining observers.id (uppercase pubkey)
 // against the node's public_key (lowercase). Rows with NULL battery are skipped.
 //
-// The match is case-insensitive on observer_id to tolerate historical
+// observer_id is matched in lowercase and in uppercase to tolerate historical
 // variation in pubkey casing.
 func (db *DB) GetNodeBatteryHistory(pubkey, since string) ([]NodeBatterySample, error) {
 	if pubkey == "" {
 		return nil, nil
 	}
-	pk := strings.ToLower(pubkey)
-	rows, err := db.conn.Query(`
-		SELECT timestamp, battery_mv
-		FROM observer_metrics
-		WHERE LOWER(observer_id) = ?
-		  AND battery_mv IS NOT NULL
-		  AND timestamp >= ?
-		ORDER BY timestamp ASC`, pk, since)
+	rows, err := db.conn.Query(nodeBatteryHistorySQL, strings.ToLower(pubkey), strings.ToUpper(pubkey), since)
 	if err != nil {
 		return nil, err
 	}

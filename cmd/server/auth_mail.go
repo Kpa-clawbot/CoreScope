@@ -8,17 +8,24 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/meshcore-analyzer/mailer"
 	"github.com/meshcore-analyzer/users"
 )
 
+// mailLine is one linked line of a mail: a list item in HTML, the text and
+// the URL on their own lines in plain text.
+type mailLine struct{ text, url string }
+
 type mailContent struct {
 	subject     string
 	greeting    string
 	paragraphs  []string
+	lines       []mailLine // after the paragraphs
 	actionLabel string
 	actionURL   string
+	footer      *mailLine // replaces the default footer when set
 }
 
 // link builds {publicBaseUrl}/#/account/{page}?token=… (never from the
@@ -27,9 +34,21 @@ func (a *authService) link(page, token string) string {
 	return a.set.baseURL.String() + "/#/account/" + page + "?token=" + url.QueryEscape(token)
 }
 
+// mailSafeText makes a name chosen by someone else safe for one line of a
+// mail: control characters (line breaks and tabs included) and bidi
+// overrides and isolates (U+202A-U+202E, U+2066-U+2069) become a space,
+// runs of spaces collapse and the ends are trimmed. The HTML part escapes
+// the result as usual.
+func mailSafeText(s string) string {
+	return strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || (r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069) {
+			return ' '
+		}
+		return r
+	}, s)), " ")
+}
+
 func (a *authService) render(to, toName, tag string, c mailContent) mailer.Message {
-	footer := "You received this because this address was used on " + a.set.baseURL.Host +
-		". If that was not you, you can ignore this mail."
 	var text, h strings.Builder
 	text.WriteString(c.greeting + "\n\n")
 	h.WriteString("<p>" + html.EscapeString(c.greeting) + "</p>")
@@ -37,12 +56,30 @@ func (a *authService) render(to, toName, tag string, c mailContent) mailer.Messa
 		text.WriteString(p + "\n\n")
 		h.WriteString("<p>" + html.EscapeString(p) + "</p>")
 	}
+	if len(c.lines) > 0 {
+		h.WriteString("<ul>")
+		for _, l := range c.lines {
+			l.text = mailSafeText(l.text)
+			text.WriteString("- " + l.text + "\n  " + l.url + "\n")
+			h.WriteString(`<li><a href="` + html.EscapeString(l.url) + `">` + html.EscapeString(l.text) + `</a></li>`)
+		}
+		h.WriteString("</ul>")
+		text.WriteString("\n")
+	}
 	if c.actionURL != "" {
 		text.WriteString(c.actionLabel + ":\n" + c.actionURL + "\n\n")
 		h.WriteString(`<p><a href="` + html.EscapeString(c.actionURL) + `">` + html.EscapeString(c.actionLabel) + `</a></p>`)
 	}
-	text.WriteString(footer + "\n")
-	h.WriteString(`<p style="color:#666;font-size:12px">` + html.EscapeString(footer) + `</p>`)
+	if c.footer != nil {
+		text.WriteString(c.footer.text + "\n" + c.footer.url + "\n")
+		h.WriteString(`<p style="color:#666;font-size:12px">` + html.EscapeString(c.footer.text) + ` <a href="` +
+			html.EscapeString(c.footer.url) + `">` + html.EscapeString(c.footer.url) + `</a></p>`)
+	} else {
+		footer := "You received this because this address was used on " + a.set.baseURL.Host +
+			". If that was not you, you can ignore this mail."
+		text.WriteString(footer + "\n")
+		h.WriteString(`<p style="color:#666;font-size:12px">` + html.EscapeString(footer) + `</p>`)
+	}
 	return mailer.Message{To: to, ToName: toName, Subject: "[" + a.set.fromName + "] " + c.subject,
 		HTML: h.String(), Text: text.String(), Tag: tag}
 }

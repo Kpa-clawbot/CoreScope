@@ -161,9 +161,24 @@ async function main() {
   if (analytics.pageSprites < 10) fail(`(d) /analytics: only ${analytics.pageSprites} sprite refs`);
   else pass(`(d) /analytics: ${analytics.pageSprites} sprite refs on page`);
 
-  // Also check distance tab if reachable
+  // Distance tab. The distance index is built lazily (#1011): the API answers
+  // 202 "building" until the first request's build finishes. Wait for it here
+  // rather than relying on an earlier suite to have requested it, then expect
+  // a map-jump button whenever the data has a hop with both endpoints.
+  let distData = null;
+  for (let i = 0; i < 60 && !distData; i++) {
+    const res = await fetch(`${BASE}/api/analytics/distance`);
+    if (res.status === 200) distData = await res.json();
+    else await new Promise(r => setTimeout(r, 1000));
+  }
+  if (!distData) fail('(d) /analytics distance: index still building after 60s');
+  const expectBtn = !!distData && (distData.topHops || []).some(h => h.fromPk && h.toPk);
   await gotoSpa(page, '/analytics?tab=distance');
-  await page.waitForTimeout(2000);
+  if (expectBtn) {
+    await page.waitForSelector('.dist-map-hop, .dist-map-path', { timeout: 15000 }).catch(() => {});
+  } else {
+    await page.waitForTimeout(2000);
+  }
   const dist = await page.evaluate(() => {
     const btn = document.querySelector('.dist-map-hop, .dist-map-path');
     return {
@@ -172,7 +187,8 @@ async function main() {
   });
   if (dist.mapBtnSprites === 0) fail('(d) /analytics distance: map-jump button missing sprite');
   else if (dist.mapBtnSprites > 0) pass('(d) /analytics distance: map-jump button has sprite');
-  else console.warn('  ⚠ (d) /analytics distance: no map-jump button rendered (empty dataset)');
+  else if (expectBtn) fail('(d) /analytics distance: API has hops with both endpoints but no map-jump button rendered');
+  else console.warn('  ⚠ (d) /analytics distance: no map-jump button rendered (no hop with both endpoints)');
 
   // (e) /area-map (standalone HTML)
   await page.goto(`${BASE}/area-map.html`, { waitUntil: 'domcontentloaded' });

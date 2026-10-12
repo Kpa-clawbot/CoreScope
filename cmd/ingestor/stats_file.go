@@ -29,17 +29,20 @@ type PerfIOSample = perfio.Sample
 // independent monotonically-increasing counter and look at deltas across
 // multiple samples instead.
 type IngestorStatsSnapshot struct {
-	SampledAt          string           `json:"sampledAt"`
-	TxInserted         int64            `json:"tx_inserted"`
-	ObsInserted        int64            `json:"obs_inserted"`
-	DuplicateTx        int64            `json:"tx_dupes"`
-	NodeUpserts        int64            `json:"node_upserts"`
-	ObserverUpserts    int64            `json:"observer_upserts"`
-	WriteErrors        int64            `json:"write_errors"`
-	SignatureDrops     int64            `json:"sig_drops"`
-	WALCommits         int64            `json:"walCommits"`
-	GroupCommitFlushes int64            `json:"groupCommitFlushes"` // always 0 — group commit reverted (refs #1129)
-	BackfillUpdates    map[string]int64 `json:"backfillUpdates"`
+	SampledAt       string `json:"sampledAt"`
+	TxInserted      int64  `json:"tx_inserted"`
+	ObsInserted     int64  `json:"obs_inserted"`
+	DuplicateTx     int64  `json:"tx_dupes"`
+	NodeUpserts     int64  `json:"node_upserts"`
+	ObserverUpserts int64  `json:"observer_upserts"`
+	WriteErrors     int64  `json:"write_errors"`
+	SignatureDrops  int64  `json:"sig_drops"`
+	// ClientUnlinkedDropped counts client-topic messages dropped by the
+	// linked-only filter (clientRxCoverage.requireLinkedCompanion).
+	ClientUnlinkedDropped int64            `json:"client_unlinked_dropped"`
+	WALCommits            int64            `json:"walCommits"`
+	GroupCommitFlushes    int64            `json:"groupCommitFlushes"` // always 0 — group commit reverted (refs #1129)
+	BackfillUpdates       map[string]int64 `json:"backfillUpdates"`
 	// ProcIO is the ingestor's own /proc/self/io rate snapshot. Surfaced via
 	// the server's /api/perf/io endpoint under .ingestor (#1120 — "Both
 	// ingestor and server"). Optional; absent on non-Linux hosts.
@@ -283,24 +286,25 @@ func StartStatsFileWriter(s *Store, interval time.Duration) (stop func()) {
 			ioRate := procIORate(prevIO, curIO, stamp)
 			prevIO = curIO
 			snap := IngestorStatsSnapshot{
-				SampledAt:            stamp,
-				TxInserted:           s.Stats.TransmissionsInserted.Load(),
-				ObsInserted:          s.Stats.ObservationsInserted.Load(),
-				DuplicateTx:          s.Stats.DuplicateTransmissions.Load(),
-				NodeUpserts:          s.Stats.NodeUpserts.Load(),
-				ObserverUpserts:      s.Stats.ObserverUpserts.Load(),
-				WriteErrors:          s.Stats.WriteErrors.Load(),
-				SignatureDrops:       s.Stats.SignatureDrops.Load(),
-				WALCommits:           s.Stats.WALCommits.Load(),
-				GroupCommitFlushes:   0, // group commit reverted (refs #1129)
-				BackfillUpdates:      s.Stats.SnapshotBackfills(),
-				ProcIO:               ioRate,
-				WriterPerf:           s.WriterStatsSnapshot(),
-				SourceLiveness:       SnapshotLivenessClocks(),
-				SourceStatuses:       SnapshotSourceStatuses(tickAt),
-				WatchdogLastTickUnix: WatchdogLastTickUnix(),
-				WatchdogPanicCount:   WatchdogPanicCount(),
-				WatchdogLogDropCount: WatchdogLogDropCount(),
+				SampledAt:             stamp,
+				TxInserted:            s.Stats.TransmissionsInserted.Load(),
+				ObsInserted:           s.Stats.ObservationsInserted.Load(),
+				DuplicateTx:           s.Stats.DuplicateTransmissions.Load(),
+				NodeUpserts:           s.Stats.NodeUpserts.Load(),
+				ObserverUpserts:       s.Stats.ObserverUpserts.Load(),
+				WriteErrors:           s.Stats.WriteErrors.Load(),
+				SignatureDrops:        s.Stats.SignatureDrops.Load(),
+				ClientUnlinkedDropped: s.Stats.ClientUnlinkedDropped.Load(),
+				WALCommits:            s.Stats.WALCommits.Load(),
+				GroupCommitFlushes:    0, // group commit reverted (refs #1129)
+				BackfillUpdates:       s.Stats.SnapshotBackfills(),
+				ProcIO:                ioRate,
+				WriterPerf:            s.WriterStatsSnapshot(),
+				SourceLiveness:        SnapshotLivenessClocks(),
+				SourceStatuses:        SnapshotSourceStatuses(tickAt),
+				WatchdogLastTickUnix:  WatchdogLastTickUnix(),
+				WatchdogPanicCount:    WatchdogPanicCount(),
+				WatchdogLogDropCount:  WatchdogLogDropCount(),
 			}
 			buf.Reset()
 			if err := enc.Encode(&snap); err != nil {

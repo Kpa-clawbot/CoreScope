@@ -49,6 +49,7 @@
     background: '--surface-0', text: '--text', textMuted: '--text-muted', border: '--border',
     statusGreen: '--status-green', statusYellow: '--status-yellow', statusRed: '--status-red',
     statusYellowText: '--status-yellow-text', statusRedText: '--status-red-text',
+    statusGreenTintText: '--status-green-tint-text',
     surface1: '--surface-1', surface2: '--surface-2', surface3: '--surface-3',
     sectionBg: '--section-bg',
     cardBg: '--card-bg', contentBg: '--content-bg', detailBg: '--detail-bg',
@@ -2068,7 +2069,7 @@
       }
       listEl.innerHTML = _gfPruneNodes.map(function (n) {
         var coords = n.lat != null ? (' · ' + n.lat.toFixed(4) + ', ' + n.lon.toFixed(4)) : '';
-        return '<div>' + (n.name || n.pubkey.slice(0, 12)) + coords + '</div>';
+        return '<div>' + esc(n.name || n.pubkey.slice(0, 12)) + coords + '</div>';
       }).join('');
       confirmBtn.textContent = 'Delete ' + count + ' node' + (count !== 1 ? 's' : '');
       resultEl.style.display = '';

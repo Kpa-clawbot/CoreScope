@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -149,43 +152,49 @@ func TestRunAsyncMigration_IdempotentSecondCallNoOps(t *testing.T) {
 	}
 }
 
-// TestRunAsyncMigration_RestartSafetyFailedIsRetried simulates a crashed
-// previous run: a row exists in `failed` state from a prior boot. The next
-// RunAsyncMigration call MUST re-schedule fn (reset to pending_async, then
-// run it), not leave the migration stuck in `failed` forever.
-func TestRunAsyncMigration_RestartSafetyFailedIsRetried(t *testing.T) {
-	s := newTestStore(t)
-	const name = "test_restart_failed_v1"
+// Failed and cancelled runs are retried, with stale completion details cleared.
+func TestRunAsyncMigration_RestartSafetyInterruptedIsRetried(t *testing.T) {
+	for _, previous := range []string{"failed", "cancelled"} {
+		t.Run(previous, func(t *testing.T) {
+			s := newTestStore(t)
+			const name = "test_restart_interrupted_v1"
+			if _, err := s.db.Exec(`INSERT INTO _async_migrations (name, status, ended_at, error) VALUES (?, ?, '2026-01-01 00:00:00', 'prior interruption')`, name, previous); err != nil {
+				t.Fatalf("seed interrupted row: %v", err)
+			}
 
-	if err := ensureAsyncMigrationsTable(s.db); err != nil {
-		t.Fatalf("ensure table: %v", err)
-	}
-	if _, err := s.db.Exec(`INSERT INTO _async_migrations (name, status, error) VALUES (?, 'failed', 'simulated prior crash')`, name); err != nil {
-		t.Fatalf("seed failed row: %v", err)
-	}
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(func() { cancel(); s.WaitForAsyncMigrations() })
+			release := make(chan struct{})
+			var calls int32
+			if err := s.RunAsyncMigration(ctx, name, func(ctx context.Context, db *sql.DB) error {
+				atomic.AddInt32(&calls, 1)
+				select {
+				case <-release:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}); err != nil {
+				t.Fatalf("RunAsyncMigration on %s row: %v", previous, err)
+			}
 
-	var calls int32
-	if err := s.RunAsyncMigration(context.Background(), name,
-		func(ctx context.Context, db *sql.DB) error {
-			atomic.AddInt32(&calls, 1)
-			return nil
-		}); err != nil {
-		t.Fatalf("RunAsyncMigration on failed row: %v", err)
-	}
-	s.WaitForAsyncMigrations()
-	waitForStatus(t, s, name, "done", 2*time.Second)
-
-	if got := atomic.LoadInt32(&calls); got != 1 {
-		t.Fatalf("fn invoked %d times, want 1 (failed-state row must be retried)", got)
-	}
-
-	// And the error column must be cleared on success.
-	var errCol sql.NullString
-	if err := s.db.QueryRow(`SELECT error FROM _async_migrations WHERE name = ?`, name).Scan(&errCol); err != nil {
-		t.Fatalf("error col: %v", err)
-	}
-	if errCol.Valid && errCol.String != "" {
-		t.Fatalf("error column not cleared on retry success: %q", errCol.String)
+			var status string
+			var endedAt, errCol sql.NullString
+			if err := s.db.QueryRow(`SELECT status, ended_at, error FROM _async_migrations WHERE name = ?`, name).Scan(&status, &endedAt, &errCol); err != nil {
+				t.Fatal(err)
+			}
+			if status != "pending_async" || endedAt.Valid || errCol.Valid {
+				t.Fatalf("retry not reset: status=%q ended_at=%v error=%v", status, endedAt, errCol)
+			}
+			close(release)
+			s.WaitForAsyncMigrations()
+			if err := s.db.QueryRow(`SELECT status, ended_at, error FROM _async_migrations WHERE name = ?`, name).Scan(&status, &endedAt, &errCol); err != nil {
+				t.Fatal(err)
+			}
+			if status != "done" || !endedAt.Valid || endedAt.String == "" || errCol.Valid || atomic.LoadInt32(&calls) != 1 {
+				t.Fatalf("retry did not complete once: status=%q ended_at=%v error=%v calls=%d", status, endedAt, errCol, calls)
+			}
+		})
 	}
 }
 
@@ -220,34 +229,63 @@ func TestRunAsyncMigration_RestartSafetyPendingIsRetried(t *testing.T) {
 	}
 }
 
-// TestRunAsyncMigration_FnErrorRecorded covers the non-panic failure path:
-// fn returns an error → status MUST be "failed" with the error captured.
-func TestRunAsyncMigration_FnErrorRecorded(t *testing.T) {
-	s := newTestStore(t)
-	const name = "test_fn_error_v1"
+// Classify the returned error, not ctx.Err(): shutdown must not hide failures.
+func TestRunAsyncMigration_CompletionStatus(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		result error
+		panic  bool
+		want   string
+	}{
+		{"cancelled", context.Canceled, false, "cancelled"},
+		{"wrapped cancellation", fmt.Errorf("backfill: %w", context.Canceled), false, "cancelled"},
+		{"ordinary error", fmt.Errorf("simulated migration error"), false, "failed"},
+		{"deadline exceeded", context.DeadlineExceeded, false, "failed"},
+		{"panic", context.Canceled, true, "failed"},
+		{"completed", nil, false, "done"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestStore(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			var logs bytes.Buffer
+			previousOutput := log.Writer()
+			log.SetOutput(&logs)
+			t.Cleanup(func() { cancel(); s.WaitForAsyncMigrations(); log.SetOutput(previousOutput) })
+			const name = "test_completion_v1"
+			if err := s.RunAsyncMigration(ctx, name, func(ctx context.Context, db *sql.DB) error {
+				<-ctx.Done()
+				if tt.panic {
+					panic(tt.result)
+				}
+				return tt.result
+			}); err != nil {
+				t.Fatal(err)
+			}
+			cancel()
+			s.WaitForAsyncMigrations()
 
-	if err := s.RunAsyncMigration(context.Background(), name,
-		func(ctx context.Context, db *sql.DB) error {
-			return fmt.Errorf("simulated migration error")
-		}); err != nil {
-		t.Fatalf("RunAsyncMigration: %v", err)
-	}
-	s.WaitForAsyncMigrations()
-
-	status, err := s.AsyncMigrationStatus(name)
-	if err != nil {
-		t.Fatalf("status: %v", err)
-	}
-	if status != "failed" {
-		t.Fatalf("status: got %q, want failed", status)
-	}
-
-	var errCol sql.NullString
-	if err := s.db.QueryRow(`SELECT error FROM _async_migrations WHERE name = ?`, name).Scan(&errCol); err != nil {
-		t.Fatalf("error col: %v", err)
-	}
-	if !errCol.Valid || errCol.String == "" {
-		t.Fatalf("error column empty after fn error")
+			var status string
+			var endedAt, errCol sql.NullString
+			if err := s.db.QueryRow(`SELECT status, ended_at, error FROM _async_migrations WHERE name = ?`, name).Scan(&status, &endedAt, &errCol); err != nil {
+				t.Fatal(err)
+			}
+			if status != tt.want || !endedAt.Valid || endedAt.String == "" {
+				t.Fatalf("completion: status=%q want=%q ended_at=%v", status, tt.want, endedAt)
+			}
+			wantErr := ""
+			if tt.result != nil {
+				wantErr = tt.result.Error()
+			}
+			if tt.panic {
+				wantErr = "panic: " + wantErr
+			}
+			if errCol.Valid != (tt.result != nil) || errCol.String != wantErr {
+				t.Fatalf("error=%v, want %q", errCol, wantErr)
+			}
+			if tt.want == "cancelled" && (strings.Contains(logs.String(), "FAILED") || !strings.Contains(logs.String(), "cancelled")) {
+				t.Fatalf("cancellation logged as failure: %s", logs.String())
+			}
+		})
 	}
 }
 

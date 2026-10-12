@@ -103,6 +103,26 @@ func main() {
 		log.Printf("No channel keys loaded — GRP_TXT packets will not be decrypted")
 	}
 
+	keySet := newChannelKeySet(channelKeys, cfg.UsersDBPath(), cfg.ApprovedChannelsMax())
+	if cfg.ApprovedChannelsEnabled() {
+		logApprovedChannelsSource(cfg.UsersDBPath())
+		keySet.refresh()
+		go func() {
+			t := time.NewTicker(approvedChannelsRefresh)
+			defer t.Stop()
+			for range t.C {
+				keySet.refresh()
+			}
+		}()
+	}
+
+	// Linked-only ingest (clientRxCoverage.requireLinkedCompanion): nil when
+	// off or ignored. Installed before any MQTT source connects.
+	if lc := newLinkedCompanionFilter(cfg); lc != nil {
+		store.linkedCompanions = lc
+		go lc.refreshLoop()
+	}
+
 	regionSet := newRegionKeySet(cfg)
 	if cfg.AutoRegionKeysEnabled() {
 		// Fill the derived tier before the first packet is matched, so a
@@ -190,7 +210,7 @@ func main() {
 			markReceiptForTag(tag, time.Now())
 			status.MarkPacket(time.Now())
 			ingestBuffer.Submit(func() {
-				handleMessage(store, tag, src, m, channelKeys, regionSet, cfg)
+				handleMessage(store, tag, src, m, keySet.Snapshot(), regionSet, cfg)
 			})
 		})
 
@@ -499,7 +519,8 @@ func main() {
 
 	// Daily planner statistics refresh (#2058), in two parts.
 	//
-	// The routine refresh is staggered 2 minutes past startup for the same reason
+	// The routine refresh runs 24 hours after the previous one, recorded next to
+	// the database (#2146), and is staggered at least 2 minutes past startup for the same reason
 	// as the checkpoint above: it takes the write lock, and by then the initial
 	// ingest burst has passed, so it also sees the rows that burst added.
 	//
@@ -516,17 +537,24 @@ func main() {
 		if analysisLimit < 0 {
 			log.Printf("[analyze] planner statistics refresh disabled (db.analysisLimit=%d)", analysisLimit)
 		} else {
-			analyzeTicker := time.NewTicker(24 * time.Hour)
 			go func() {
 				// Before the stagger, and only on a database that has never been
 				// analyzed: the stagger is a 2 minute window in which the first
 				// query would otherwise run on no statistics at all. A restart
 				// finds sqlite_stat1 already in the file and skips this.
 				store.EnsurePlannerStats(analysisLimit)
-				time.Sleep(2 * time.Minute)
-				store.RefreshPlannerStats(analysisLimit)
-				for range analyzeTicker.C {
-					store.RefreshPlannerStats(analysisLimit)
+				// Each refresh waits until the previous one is 24h old, also
+				// across restarts (#2146): a restart no longer pays a cold
+				// ANALYZE for statistics that are hours old at most.
+				for {
+					wait := nextPlannerStatsRefresh(store.lastPlannerStatsRefresh(), time.Now())
+					log.Printf("[analyze] next planner statistics refresh in %v", wait.Round(time.Minute))
+					time.Sleep(wait)
+					if !store.RefreshPlannerStats(analysisLimit) {
+						// Not recorded, so the next wait would be the 2 minute
+						// stagger; keep the daily rhythm instead of retrying.
+						time.Sleep(plannerStatsInterval)
+					}
 				}
 			}()
 			log.Printf("[analyze] planner statistics refresh scheduled every 24h (analysis_limit=%d)", analysisLimit)
@@ -850,6 +878,11 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 			log.Printf("MQTT [%s] client %.8s blacklisted, dropping", tag, parts[2])
 			return
 		}
+		// Linked-only ingest (clientRxCoverage.requireLinkedCompanion): an
+		// unlinked companion is dropped before any client handler runs.
+		if !store.allowClientPubkey(parts[2]) {
+			return
+		}
 		switch parts[3] {
 		case "packets":
 			if cfg.ClientRxCoverageEnabled() {
@@ -909,9 +942,10 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 	// is region-independent and should be accepted from all observers regardless of
 	// which IATA regions are configured for packet ingestion.
 	if len(parts) >= 4 && parts[3] == "status" {
-		observerID := parts[2]
+		observerID := clampObserverField(parts[2], maxObserverIDLen)
 		name, _ := msg["origin"].(string)
-		iata := parts[1]
+		name = clampObserverField(name, maxObserverTextLen)
+		iata := clampObserverField(parts[1], maxObserverIATALen)
 		meta := extractObserverMeta(msg)
 		// A replayed status message is the broker handing us the observer's
 		// last published snapshot — it is not evidence the observer is alive
@@ -1006,10 +1040,10 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		observerID := ""
 		region := ""
 		if len(parts) > 2 {
-			observerID = parts[2]
+			observerID = clampObserverField(parts[2], maxObserverIDLen)
 		}
 		if len(parts) > 1 {
-			region = parts[1]
+			region = clampObserverField(parts[1], maxObserverIATALen)
 		}
 		// Fallback to source-level region config when topic has no region (#788)
 		if region == "" && source.Region != "" {
@@ -1157,6 +1191,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		// Upsert observer
 		if observerID != "" {
 			origin, _ := msg["origin"].(string)
+			origin = clampObserverField(origin, maxObserverTextLen)
 			// Use effective region: payload > topic > source config (#788)
 			effectiveRegion := region
 			if mqttMsg.Region != "" {
@@ -1415,26 +1450,32 @@ func extractObserverMeta(msg map[string]interface{}) *ObserverMeta {
 	hasData := false
 
 	if v, ok := msg["model"].(string); ok && v != "" {
+		v = clampObserverField(v, maxObserverTextLen)
 		meta.Model = &v
 		hasData = true
 	}
 	if v, ok := msg["firmware"].(string); ok && v != "" {
+		v = clampObserverField(v, maxObserverTextLen)
 		meta.Firmware = &v
 		hasData = true
 	}
 	if v, ok := msg["firmware_version"].(string); ok && v != "" {
+		v = clampObserverField(v, maxObserverTextLen)
 		meta.Firmware = &v
 		hasData = true
 	}
 	if v, ok := msg["client_version"].(string); ok && v != "" {
+		v = clampObserverField(v, maxObserverTextLen)
 		meta.ClientVersion = &v
 		hasData = true
 	}
 	if v, ok := msg["clientVersion"].(string); ok && v != "" {
+		v = clampObserverField(v, maxObserverTextLen)
 		meta.ClientVersion = &v
 		hasData = true
 	}
 	if v, ok := msg["radio"].(string); ok && v != "" {
+		v = clampObserverField(v, maxObserverTextLen)
 		meta.Radio = &v
 		hasData = true
 	}
@@ -1871,6 +1912,12 @@ func handleNeighborsReport(store *Store, tag string, observerID string, msg map[
 		originID = observerID
 	}
 	originID = strings.ToLower(originID)
+	// The report is unauthenticated: any publisher can name any key. Only a
+	// 64-hex node key can match a nodes row, so drop anything else here
+	// instead of running UPDATEs that can never match.
+	if !targetPubkeyRe.MatchString(originID) {
+		originID = ""
+	}
 	if self, ok := msg["self"].(map[string]interface{}); ok && originID != "" {
 		if sc, ok := self["scopes"].(string); ok {
 			if err := store.UpdateNodeConfiguredScope(originID, sc, reportedAt); err != nil {
@@ -1891,7 +1938,7 @@ func handleNeighborsReport(store *Store, tag string, observerID string, msg map[
 		}
 		pubkey, _ := n["pubkey"].(string)
 		pubkey = strings.ToLower(pubkey)
-		if pubkey == "" {
+		if !targetPubkeyRe.MatchString(pubkey) {
 			continue
 		}
 		scopes, _ := n["scopes"].(string)

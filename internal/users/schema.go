@@ -83,6 +83,66 @@ var migrations = [][]string{
 			updated_at INTEGER NOT NULL
 		)`,
 	},
+	{ // v3: sub-project C, global audit list ordered and filtered by time
+		`CREATE INDEX audit_at ON audit_log(at)`,
+	},
+	{ // v4: sub-project D, proposals (one generic table; this version ships the kind 'hashtag_channel')
+		`CREATE TABLE proposals (
+			id INTEGER PRIMARY KEY,
+			kind TEXT NOT NULL,
+			subject TEXT NOT NULL,
+			status TEXT NOT NULL CHECK (status IN ('pending','approved','rejected','revoked')),
+			proposer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+			reviewer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+			note TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			decided_at INTEGER
+		)`,
+		`CREATE UNIQUE INDEX proposals_kind_subject ON proposals(kind, subject)`,
+		`CREATE INDEX proposals_status ON proposals(status)`,
+	},
+	{ // v5: sub-project E, node notifications
+		`CREATE TABLE notification_prefs (
+			user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			events TEXT NOT NULL DEFAULT '',
+			unsub_token TEXT NOT NULL UNIQUE,
+			updated_at INTEGER NOT NULL
+		)`,
+		`CREATE TABLE notification_watches (
+			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			pubkey TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY (user_id, pubkey)
+		)`,
+		`CREATE TABLE notification_state (
+			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			event TEXT NOT NULL,
+			subject TEXT NOT NULL,
+			state TEXT NOT NULL,
+			changed_at INTEGER NOT NULL,
+			PRIMARY KEY (user_id, event, subject)
+		)`,
+	},
+	{ // v6: sub-project F, companion linking (device sessions, linked companions)
+		`ALTER TABLE sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'web'
+			CHECK (kind IN ('web','device'))`,
+		`ALTER TABLE sessions ADD COLUMN label TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN scopes TEXT NOT NULL DEFAULT ''`,
+		`CREATE TABLE companion_links (
+			pubkey TEXT PRIMARY KEY,
+			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			name TEXT NOT NULL DEFAULT '',
+			linked_at INTEGER NOT NULL
+		)`,
+		`CREATE INDEX companion_links_user ON companion_links(user_id)`,
+		`CREATE TABLE link_challenges (
+			challenge_hash TEXT PRIMARY KEY,
+			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			pubkey TEXT NOT NULL,
+			expires_at INTEGER NOT NULL
+		)`,
+	},
 }
 
 func (s *Store) migrate() error {

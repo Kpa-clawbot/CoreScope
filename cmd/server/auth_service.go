@@ -3,7 +3,9 @@ package main
 import (
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/meshcore-analyzer/mailer"
@@ -22,23 +24,39 @@ type authService struct {
 	signup      *rateLimiter // register, forgot, self-service resend
 	hook        *rateLimiter
 	settingsPut *rateLimiter // PUT /api/account/settings, per user
+	companion   *rateLimiter // companion challenge + link, per IP and per user
+
+	// approved is the snapshot of approved hashtag channel names, filled at
+	// construction and reloaded from users.db after every proposal decision.
+	// approvedMu serialises the reloads so an older read never replaces a
+	// newer one.
+	approvedMu sync.Mutex
+	approved   atomic.Pointer[[]string]
+
+	// notify evaluates node notifications; nil unless
+	// userManagement.notifications.enabled.
+	notify *notifier
 
 	warnIndistinct sync.Once
 	stop           chan struct{}
 	stopOnce       sync.Once
-	wg             sync.WaitGroup // the janitor
+	wg             sync.WaitGroup // the janitor and the notifier
+	auditWG        sync.WaitGroup // in-flight auditAsync writes
 }
 
 func newAuthService(set *userMgmtSettings, st *users.Store, m mailer.Mailer) *authService {
-	return &authService{
+	a := &authService{
 		st: st, mail: m, set: set,
 		ipr:         &wsLimiter{trustedProxies: set.trustedProxies},
 		login:       newRateLimiter(10, 15*time.Minute),
 		signup:      newRateLimiter(5, time.Hour),
 		hook:        newRateLimiter(600, time.Minute),
 		settingsPut: newRateLimiter(60, time.Hour),
+		companion:   newRateLimiter(60, time.Hour),
 		stop:        make(chan struct{}),
 	}
+	a.refreshApproved()
+	return a
 }
 
 // initUserManagement builds s.auth when the feature is on. Call it after
@@ -46,6 +64,9 @@ func newAuthService(set *userMgmtSettings, st *users.Store, m mailer.Mailer) *au
 // users.Open as a forbidden path, so users.db can never be the analyzer DB.
 func (s *Server) initUserManagement(measurementDBPath string) error {
 	if !s.cfg.UserManagementEnabled() {
+		if s.cfg.ClientRxRequireLinkedCompanionSet() {
+			log.Printf("[users] clientRxCoverage.requireLinkedCompanion is set but userManagement is off: the setting is ignored")
+		}
 		return nil
 	}
 	set, err := resolveUserManagement(s.cfg.UserManagement, measurementDBPath, os.Getenv)
@@ -57,9 +78,12 @@ func (s *Server) initUserManagement(measurementDBPath string) error {
 		return err
 	}
 	var m mailer.Mailer
-	if set.provider == "fake" {
+	switch set.provider {
+	case "fake":
 		m = &mailer.Fake{}
-	} else {
+	case "postal":
+		m = mailer.NewPostal(set.postalBaseURL, set.postalAPIKey, set.fromEmail, set.fromName)
+	default:
 		m = mailer.NewBrevo(set.brevoAPIKey, set.fromEmail, set.fromName)
 	}
 	s.auth = newAuthService(set, st, m)
@@ -69,6 +93,16 @@ func (s *Server) initUserManagement(measurementDBPath string) error {
 		defer s.auth.wg.Done()
 		s.auth.janitor(time.Hour)
 	}()
+	if set.notify.enabled {
+		s.auth.notify = newNotifier(s.auth, serverNotifySource{s: s}, time.Now)
+		s.auth.wg.Add(1)
+		go func() {
+			defer s.auth.wg.Done()
+			s.auth.notify.loop(s.auth.stop, set.notify.interval)
+		}()
+		log.Printf("[notify] node notifications enabled: every %s, at most %d mails per user and %d in total per 24 hours",
+			set.notify.interval, set.notify.perUserPerDay, set.notify.maxMailsPerDay)
+	}
 	return nil
 }
 
@@ -80,6 +114,7 @@ func (s *Server) closeUserManagement() {
 	s.auth.stopOnce.Do(func() {
 		close(s.auth.stop)
 		s.auth.wg.Wait()
+		s.auth.waitAudits()
 		if err := s.auth.st.Close(); err != nil {
 			log.Printf("[users] close: %v", err)
 		}
@@ -88,7 +123,7 @@ func (s *Server) closeUserManagement() {
 
 func (a *authService) logStartup() {
 	log.Printf("[users] user management enabled: db=%s, %d config admin(s), webhook=%v",
-		a.set.dbPath, len(a.set.adminEmails), a.set.webhookSecret != "")
+		absForLog(a.set.dbPath), len(a.set.adminEmails), a.set.webhookSecret != "")
 	admins, err := a.st.List(users.ListFilter{Role: users.RoleAdmin})
 	if err != nil {
 		log.Printf("[users] list admins: %v", err)
@@ -106,6 +141,7 @@ func (a *authService) janitor(every time.Duration) {
 	defer t.Stop()
 	for {
 		a.prune()
+		a.maybeBackup(time.Now())
 		select {
 		case <-a.stop:
 			return
@@ -121,19 +157,57 @@ func (a *authService) prune() {
 	if _, err := a.st.PruneExpiredSessions(); err != nil {
 		log.Printf("[users] prune sessions: %v", err)
 	}
+	if _, err := a.st.PruneLinkChallenges(); err != nil {
+		log.Printf("[users] prune link challenges: %v", err)
+	}
 	if _, err := a.st.PruneTokens(7 * 24 * time.Hour); err != nil {
 		log.Printf("[users] prune tokens: %v", err)
 	}
 	if _, err := a.st.PruneMail(90 * 24 * time.Hour); err != nil {
 		log.Printf("[users] prune mail log: %v", err)
 	}
+	// Login rows only; every other audit action is kept (admin-dashboard spec).
+	if _, err := a.st.PruneAudit([]string{"user.login", "user.login.failed"}, 90*24*time.Hour); err != nil {
+		log.Printf("[users] prune login audit: %v", err)
+	}
+	if _, err := a.st.PruneProposals(proposalRetention); err != nil {
+		log.Printf("[users] prune proposals: %v", err)
+	}
 	a.login.gc()
 	a.signup.gc()
 	a.hook.gc()
 	a.settingsPut.gc()
+	a.companion.gc()
 }
 
 func (a *authService) isConfigAdmin(email string) bool { return a.set.adminEmails[email] }
+
+// refreshApproved reloads the approved hashtag channel names from users.db,
+// oldest approval first and capped at maxApproved like the ingestor. The
+// mutex spans the read and the store, so concurrent decisions cannot leave
+// an older read in place. A failure is logged and keeps the previous
+// snapshot. No-op with proposals off.
+func (a *authService) refreshApproved() {
+	if !a.set.proposals.enabled {
+		return
+	}
+	a.approvedMu.Lock()
+	defer a.approvedMu.Unlock()
+	list, err := a.st.ApprovedSubjects(users.KindHashtagChannel, a.set.proposals.maxApproved)
+	if err != nil {
+		log.Printf("[users] load approved channels: %v", err)
+		return
+	}
+	a.approved.Store(&list)
+}
+
+// approvedChannels returns the current snapshot; never nil.
+func (a *authService) approvedChannels() []string {
+	if p := a.approved.Load(); p != nil {
+		return *p
+	}
+	return []string{}
+}
 
 // roleFor is the role an address gets on activation.
 func (a *authService) roleFor(email string) users.Role {
@@ -149,6 +223,20 @@ func (a *authService) audit(actor *int64, action string, target *int64, detail m
 	}
 }
 
+// auditAsync writes an audit row in the background, so neither the write
+// nor a locked users.db delays the response. Best-effort: a failure is
+// logged by a.audit, and a row is lost if the process stops first.
+func (a *authService) auditAsync(actor *int64, action string, target *int64, detail map[string]string) {
+	a.auditWG.Add(1)
+	go func() {
+		defer a.auditWG.Done()
+		a.audit(actor, action, target, detail)
+	}()
+}
+
+// waitAudits blocks until every auditAsync write has finished.
+func (a *authService) waitAudits() { a.auditWG.Wait() }
+
 func idPtr(id int64) *int64 { return &id }
 
 // invalidateTokens burns uid's outstanding links of each purpose. A failure
@@ -161,4 +249,13 @@ func (a *authService) invalidateTokens(op string, uid int64, ps ...users.Purpose
 		}
 	}
 	return nil
+}
+
+// absForLog resolves path for a log line, so a relative users.db path shows
+// which file it means; the path as given when it cannot be resolved.
+func absForLog(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -188,6 +189,33 @@ func seedTestData(t *testing.T, db *DB) {
 		VALUES (2, 1, 15.0, -85, '[]', ?)`, yesterdayEpoch)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp, resolved_path)
 		VALUES (3, 1, 10.0, -92, '["cc"]', ?, '["1122334455667788"]')`, yesterdayEpoch)
+}
+
+// The topology endpoint takes uniqueNodes from CountActiveNodes, so it must
+// count what GetStats reports as totalNodes: nodes seen in the last 7 days.
+func TestCountActiveNodes(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	now := time.Now().UTC()
+	for i, seen := range []time.Time{now.Add(-time.Hour), now.Add(-6 * 24 * time.Hour), now.Add(-8 * 24 * time.Hour)} {
+		db.conn.Exec(`INSERT INTO nodes (public_key, name, last_seen) VALUES (?, ?, ?)`,
+			"pk"+strconv.Itoa(i), "n"+strconv.Itoa(i), seen.Format(time.RFC3339))
+	}
+
+	got, err := db.CountActiveNodes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 2 {
+		t.Errorf("CountActiveNodes = %d, want 2 (the node seen 8 days ago is not active)", got)
+	}
+	stats, err := db.GetStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != stats.TotalNodes {
+		t.Errorf("CountActiveNodes = %d, GetStats().TotalNodes = %d", got, stats.TotalNodes)
+	}
 }
 
 func TestGetStats(t *testing.T) {
@@ -2220,7 +2248,7 @@ func TestPerObservationRawHexEnrich(t *testing.T) {
 
 	// Check enriched observations
 	for _, obs := range tx.Observations {
-		m := store.enrichObs(obs)
+		m := store.enrichObsWithTx(obs, store.byTxID[obs.TransmissionID])
 		rh, _ := m["raw_hex"].(string)
 		if obs.RawHex != "" {
 			// Observer A: should get per-observation raw_hex
@@ -2602,5 +2630,43 @@ func TestGetChannelsPreviewRespectsRegionFilter(t *testing.T) {
 	}
 	if got := all[0]["lastSender"]; got != "Bob" {
 		t.Errorf("unfiltered preview sender = %v, want Bob (the newest message)", got)
+	}
+}
+
+// #2146: /api/perf counted every row of transmissions, observations, nodes
+// and observers on each call (116 ms for the observations count on an
+// 18M-row database). The counts are cached for perfRowCountsTTL.
+func TestGetDBSizeStatsTypedCachesRowCounts(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	seedTestData(t, db)
+
+	first := db.GetDBSizeStatsTyped().Rows.Transmissions
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen) VALUES ('AA', 'perfcache0000001', '2026-01-01T00:00:00Z')`)
+	if got := db.GetDBSizeStatsTyped().Rows.Transmissions; got != first {
+		t.Fatalf("within the TTL the cached count must be served: got %d, want %d", got, first)
+	}
+
+	db.rowCountsMu.Lock()
+	db.rowCountsAt = time.Now().Add(-2 * perfRowCountsTTL)
+	db.rowCountsMu.Unlock()
+	if got := db.GetDBSizeStatsTyped().Rows.Transmissions; got != first+1 {
+		t.Fatalf("after the TTL the count must be refreshed: got %d, want %d", got, first+1)
+	}
+}
+
+// A failed count is not cached, so the next /api/perf counts again.
+func TestGetDBSizeStatsTypedDoesNotCacheFailedCounts(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	if _, err := db.conn.Exec(`DROP TABLE observers`); err != nil {
+		t.Fatal(err)
+	}
+	db.GetDBSizeStatsTyped()
+	db.rowCountsMu.Lock()
+	cached := db.rowCounts != nil
+	db.rowCountsMu.Unlock()
+	if cached {
+		t.Fatal("row counts with a failed COUNT(*) must not be cached")
 	}
 }

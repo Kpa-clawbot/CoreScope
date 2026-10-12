@@ -15,3 +15,18 @@ func TestE2ELastMailReturnsNewestFakeMail(t *testing.T) {
 		t.Fatalf("unexpected mail: %+v", m)
 	}
 }
+
+func TestE2EUnsubscribeLink(t *testing.T) {
+	f := newAuthFixture(t)
+	expectStatus(t, f.do("GET", "/__e2e/unsubscribe-link?email=nobody@example.test", nil), 404)
+	c := f.registerAndActivate(t, "e2e@example.test", "E2E", "correct horse battery")
+	w := f.do("GET", "/__e2e/unsubscribe-link?email=e2e@example.test", nil)
+	expectStatus(t, w, 200)
+	p, err := f.st.NotifyPrefsFor(c.me.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l := decode[e2eLink](t, w); l.Link != testBase+"/#/account/unsubscribe?token="+p.UnsubToken {
+		t.Fatalf("link = %q", l.Link)
+	}
+}

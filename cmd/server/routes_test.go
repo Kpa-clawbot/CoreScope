@@ -1994,6 +1994,35 @@ func TestIataCoordsIncludesNapaAndSonoma(t *testing.T) {
 	}
 }
 
+func TestIataCoordsIncludesBelgianObserverCodes(t *testing.T) {
+	// Issue #2098: a Belgian deployment's observers use these codes and none
+	// was in the table, so the last-hop region filter never ran there.
+	// Coordinates from OurAirports airports.csv.
+	cases := []struct {
+		code     string
+		lat, lon float64
+	}{
+		{"ANR", 51.190667, 4.463153},
+		{"BRU", 50.901402, 4.48444},
+		{"GNE", 51.020551, 3.730341},
+		{"KJK", 50.818878, 3.209551},
+		{"LGG", 50.638574, 5.443897},
+		{"OBL", 51.269092, 4.762428},
+		{"OST", 51.1998, 2.874673},
+		{"MST", 50.911087, 5.769401},
+	}
+	for _, c := range cases {
+		coord, ok := iataCoords[c.code]
+		if !ok {
+			t.Errorf("iataCoords missing %q", c.code)
+			continue
+		}
+		if coord.Lat != c.lat || coord.Lon != c.lon {
+			t.Errorf("%s = {%v, %v}, want {%v, %v}", c.code, coord.Lat, coord.Lon, c.lat, c.lon)
+		}
+	}
+}
+
 func TestConfigMapWithCustomDefaults(t *testing.T) {
 	db := setupTestDB(t)
 	seedTestData(t, db)

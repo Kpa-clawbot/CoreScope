@@ -1004,9 +1004,8 @@
   // resolves differently depending on who heard it. renderHop() has always
   // looked for this key; nothing ever wrote it.
   // #2097 — the observer's own position, used as the anchor at the receiving
-  // end of the path. The IATA route is dead weight: measured on the live
-  // deployment, none of the 42 observers has its code in /api/iata-coords, so
-  // nodeInRegion() always returns null. lat/lon is reported directly and works.
+  // end of the path. It works for every observer that reports lat/lon; the
+  // IATA region (#2098) only narrows the hop the observer heard directly.
   function observerPosition(observerId) {
     const o = observerId && observerMap ? observerMap.get(observerId) : null;
     const lat = o && Number.isFinite(Number(o.lat)) ? Number(o.lat) : null;
@@ -1014,8 +1013,11 @@
     return (lat === null || lon === null) ? [null, null] : [lat, lon];
   }
 
-  function hopCacheKey(h, observerId) {
-    return observerId ? h + ':' + observerId : h;
+  // #2098 — the last hop of a path is resolved against the observer's region
+  // and an earlier hop is not, so the same prefix can resolve differently in
+  // the two positions. `direct` keeps them in separate entries.
+  function hopCacheKey(h, observerId, direct) {
+    return observerId ? h + ':' + observerId + (direct ? ':d' : '') : h;
   }
 
   // #2097 — resolve WITH the observer. Every 1-byte prefix on the network is
@@ -1024,34 +1026,41 @@
   // alone, it returns the first candidate with no signal that it guessed, which
   // is how a repeater 126 km outside the observer's region ended up displayed
   // as a certainty.
-  async function resolveHops(hops, observerId) {
-    const unknown = hops.filter(h => !(hopCacheKey(h, observerId) in hopNameCache));
+  async function resolveHops(hops, observerId, direct) {
+    const unknown = hops.filter(h => !(hopCacheKey(h, observerId, direct) in hopNameCache));
     if (!unknown.length) return;
     await ensureHopResolver();
     const [obsLat, obsLon] = observerPosition(observerId);
-    const resolved = HopResolver.resolve(unknown, null, null, obsLat, obsLon, observerId) || {};
+    const resolved = HopResolver.resolve(unknown, null, null, obsLat, obsLon, observerId,
+      { directHops: direct ? unknown : [] }) || {};
     for (const h of unknown) {
       const entry = resolved[h] || null;
-      hopNameCache[hopCacheKey(h, observerId)] = entry;
+      hopNameCache[hopCacheKey(h, observerId, direct)] = entry;
       // Bare key as a fallback for any render that has no observer in hand.
-      if (!(h in hopNameCache)) hopNameCache[h] = entry;
+      // Not from a direct resolve: that entry is narrowed to one observer's region.
+      if (!direct && !(h in hopNameCache)) hopNameCache[h] = entry;
     }
   }
 
-  // Resolve every hop of every packet, grouped by the observer that heard it,
-  // so each group gets its own regional filtering.
+  // Resolve every hop of every packet, grouped by the observer that heard it.
+  // #2098 — within a group, the last hop of each path (heard directly) and the
+  // earlier hops are resolved apart, because only the first get the region.
   async function resolveHopsForPackets(packets) {
     const groups = new Map();
     for (const p of packets || []) {
       const obs = (p && p.observer_id) ? String(p.observer_id) : '';
-      let set = groups.get(obs);
-      if (!set) { set = new Set(); groups.set(obs, set); }
-      try { getParsedPath(p).forEach(h => set.add(h)); } catch {}
+      let g = groups.get(obs);
+      if (!g) { g = { relayed: new Set(), direct: new Set() }; groups.set(obs, g); }
+      try {
+        const path = getParsedPath(p);
+        path.forEach((h, i) => (i === path.length - 1 ? g.direct : g.relayed).add(h));
+      } catch {}
     }
     // ensureHopResolver() is idempotent and awaited once inside resolveHops;
     // the resolve itself is local computation, so the loop costs no requests.
-    for (const [obs, set] of groups) {
-      if (set.size) await resolveHops([...set], obs || undefined);
+    for (const [obs, g] of groups) {
+      if (g.relayed.size) await resolveHops([...g.relayed], obs || undefined, false);
+      if (g.direct.size) await resolveHops([...g.direct], obs || undefined, true);
     }
   }
 
@@ -1078,10 +1087,14 @@
     }
   }
 
-  function renderHop(h, observerId, opts) {
+  function hopEntry(h, observerId, direct) {
+    return (direct && hopNameCache[hopCacheKey(h, observerId, true)]) ||
+      hopNameCache[hopCacheKey(h, observerId)] || hopNameCache[h];
+  }
+
+  function renderHop(h, observerId, opts, direct) {
     // Use per-packet cache key if observer context available (ambiguous hops differ by region)
-    const cacheKey = hopCacheKey(h, observerId);
-    const entry = hopNameCache[cacheKey] || hopNameCache[h];
+    const entry = hopEntry(h, observerId, direct);
     return HopDisplay.renderHop(h, entry, Object.assign({ hexMode: showHexHashes }, opts || {}));
   }
 
@@ -1099,16 +1112,18 @@
       : hops;
     if (!filtered.length) return '— <span class="text-muted" title="All path hops were 1-byte and are hidden by the customizer toggle">(1-byte filtered)</span>';
     const summary = !!(opts && opts.summary);
+    // #2098 — the path's last hop is the one the observer heard directly.
+    const isDirect = i => i === filtered.length - 1 && filtered[i] === hops[hops.length - 1];
     const body = filtered
-      .map(h => renderHop(h, observerId, summary ? { badge: false } : null))
+      .map((h, i) => renderHop(h, observerId, summary ? { badge: false } : null, isDirect(i)))
       .join('<span class="arrow">→</span>');
     if (!summary) return body;
 
     let uncertain = 0;
-    for (const h of filtered) {
-      const entry = hopNameCache[hopCacheKey(h, observerId)] || hopNameCache[h];
+    filtered.forEach((h, i) => {
+      const entry = hopEntry(h, observerId, isDirect(i));
       if (entry && entry.ambiguous) uncertain++;
-    }
+    });
     if (!uncertain) return body;
     const label = uncertain + ' of ' + filtered.length + ' hops have more than one candidate';
     // Leads the hops: .path-hops clips at its right edge, and a trailing
@@ -1230,6 +1245,27 @@
     window._packetsBuildChannelOptionsForTest = buildChannelOptions;
     window._packetsCollectLocalChannelsForTest = collectLocalChannels;
   }
+
+  /**
+   * Does a live (WebSocket) packet belong to the selected channel filter?
+   *
+   * /api/packets?channel=X matches `transmissions.channel_hash = X` server-side:
+   * the channel name when the server decrypted the GRP_TXT, otherwise the
+   * synthetic "enc_<HH>". That column is only set for payload_type 5. WS
+   * packets don't carry it, so derive the same value from decoded_json —
+   * without this, every new live packet leaks past an active channel filter.
+   */
+  function packetMatchesChannel(p, channel) {
+    if (!channel) return true;
+    if (!p || p.payload_type !== 5) return false;
+    if (p.channel_hash) return p.channel_hash === channel;
+    let d = p.decoded_json;
+    if (typeof d === 'string') { try { d = JSON.parse(d); } catch (e) { d = null; } }
+    d = d || {};
+    const ch = d.channel || (d.channelHashHex != null ? 'enc_' + String(d.channelHashHex).toUpperCase() : null);
+    return ch === channel;
+  }
+  if (typeof window !== 'undefined') window._packetsMatchesChannelForTest = packetMatchesChannel;
 
   function renderTimestampCell(isoString) {
     if (typeof formatTimestampWithTooltip !== 'function' || typeof getTimestampMode !== 'function') {
@@ -1452,6 +1488,7 @@
           if (!obs || !selectedRegions.includes(obs.iata)) return false;
         }
         if (filters.node && !(p.decoded_json || '').includes(filters.node)) return false;
+        if (filters.channel && !packetMatchesChannel(p, filters.channel)) return false;
         return true;
       });
       if (!filtered.length) return;
@@ -2546,7 +2583,7 @@
     const _grpStyle = _grpHashStripe + _grpChanStyle;
     let html = `<tr class="${isSingle ? '' : 'group-header'} ${isExpanded ? 'expanded' : ''}" data-hash="${p.hash}" data-action="${isSingle ? 'select-hash' : 'toggle-select'}" data-value="${p.hash}" data-entry-idx="${entryIdx}" tabindex="0" role="row"${_grpStyle ? ' style="' + _grpStyle + '"' : ''}>
           <td class="col-expand" style="text-align:center;cursor:pointer">${isSingle ? '' : (isExpanded ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-down"/></svg>' : '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-right"/></svg>')}</td>
-          <td class="col-region">${groupRegion ? `<span class="badge-region">${groupRegion}</span>` : '—'}</td>
+          <td class="col-region">${groupRegion ? `<span class="badge-region">${escapeHtml(groupRegion)}</span>` : '—'}</td>
           <td class="col-time">${renderTimestampCell(p.latest)}</td>
           <td class="mono col-hash" data-filter-field="hash" data-filter-value="${escapeHtml(p.hash || '')}">${truncate(p.hash || '—', 8)}</td>
           <td class="col-size" data-filter-field="size" data-filter-value="${groupSize || ''}">${groupSize ? groupSize + 'B' : '—'}</td>
@@ -2581,7 +2618,7 @@
         const childPathStr = renderPath(childPath, c.observer_id, { summary: true });
         const _childHashStripe = _hashStripeStyle(c.hash || p.hash);
         html += `<tr class="group-child" data-id="${c.id}" data-hash="${c.hash || ''}" data-action="select-observation" data-value="${c.id}" data-parent-hash="${p.hash}" data-entry-idx="${entryIdx}" tabindex="0" role="row"${_childHashStripe ? ' style="' + _childHashStripe + '"' : ''}>
-              <td class="col-expand"></td><td class="col-region">${childRegion ? `<span class="badge-region">${childRegion}</span>` : '—'}</td>
+              <td class="col-expand"></td><td class="col-region">${childRegion ? `<span class="badge-region">${escapeHtml(childRegion)}</span>` : '—'}</td>
               <td class="col-time">${renderTimestampCell(c.timestamp)}</td>
               <td class="mono col-hash" data-filter-field="hash" data-filter-value="${escapeHtml(c.hash || '')}">${truncate(c.hash || '', 8)}</td>
               <td class="col-size" data-filter-field="size" data-filter-value="${size || ''}">${size}B</td>
@@ -2618,7 +2655,7 @@
     const _flatHashStripe = _hashStripeStyle(p.hash);
     const _flatStyle = _flatHashStripe + _chanStyle;
     return `<tr data-id="${p.id}" data-hash="${p.hash || ''}" data-action="select-hash" data-value="${p.hash || p.id}" data-entry-idx="${entryIdx}" tabindex="0" role="row" class="${selectedId === p.id ? 'selected' : ''}"${_flatStyle ? ' style="' + _flatStyle + '"' : ''}>
-        <td class="col-expand"></td><td class="col-region">${region ? `<span class="badge-region">${region}</span>` : '—'}</td>
+        <td class="col-expand"></td><td class="col-region">${region ? `<span class="badge-region">${escapeHtml(region)}</span>` : '—'}</td>
         <td class="col-time">${renderTimestampCell(p.timestamp)}</td>
         <td class="mono col-hash" data-filter-field="hash" data-filter-value="${escapeHtml(p.hash || '')}">${truncate(p.hash || String(p.id), 8)}</td>
         <td class="col-size" data-filter-field="size" data-filter-value="${size || ''}">${size}B</td>
@@ -3601,13 +3638,19 @@
           // #2097 — with the observer: the cache write below stores this under
           // the per-observer key, so it has to have been resolved for that
           // observer or the key promises something the value is not.
-          const [dLat, dLon] = observerPosition(pkt.observer_id);
-          resolved = HopResolver.resolve(pathHops, null, null, dLat, dLon, pkt.observer_id);
+          // #2098 — the observer of the shown observation, which heard pathHops;
+          // the packet row's observer may have heard another path.
+          const [dLat, dLon] = observerPosition(effectivePkt.observer_id);
+          resolved = HopResolver.resolve(pathHops, null, null, dLat, dLon, effectivePkt.observer_id);
         }
         if (resolved) {
+          const obs = effectivePkt.observer_id;
+          const lastHop = pathHops[pathHops.length - 1];
           for (const [k, v] of Object.entries(resolved)) {
-            hopNameCache[k] = v;
-            if (pkt.observer_id) hopNameCache[k + ':' + pkt.observer_id] = v;
+            // #2098 — the last hop is narrowed to this observer's region, so it
+            // stays off the bare key, as in resolveHops().
+            if (!(obs && k === lastHop)) hopNameCache[k] = v;
+            if (obs) hopNameCache[hopCacheKey(k, obs, k === lastHop)] = v;
           }
         }
       } catch {}
@@ -3632,7 +3675,7 @@
       const meta = [chLabel, hopLabel, snrLabel].filter(Boolean).join(' · ');
       messageHtml = `<div class="detail-message" style="padding:12px;margin:8px 0;background:var(--card-bg);border-radius:8px;border-left:3px solid var(--accent)">
         <div style="font-size:1.1em">${escapeHtml(decoded.text)}</div>
-        ${meta ? `<div style="font-size:0.85em;color:var(--text-muted);margin-top:4px">${meta}</div>` : ''}
+        ${meta ? `<div style="font-size:0.85em;color:var(--text-muted);margin-top:4px">${escapeHtml(meta)}</div>` : ''}
       </div>`;
     } else if (decoded.type === 'GRP_TXT' && decoded.channelHash != null) {
       const hashHex = decoded.channelHashHex || decoded.channelHash.toString(16).padStart(2, '0').toUpperCase();
@@ -3906,7 +3949,7 @@
             let obsLat = null, obsLon = null;
             const obsId = obsName(pkt.observer_id);
             await ensureHopResolver();
-            const data = { resolved: HopResolver.resolve(pathHops, senderLat || null, senderLon || null, obsLat, obsLon, pkt.observer_id) };
+            const data = { resolved: HopResolver.resolve(pathHops, senderLat || null, senderLon || null, obsLat, obsLon, effectivePkt.observer_id) };
             resolvedKeys = pathHops.map(h => {
               const r = data.resolved?.[h];
               return r?.pubkey || h;
@@ -4464,6 +4507,7 @@
       _setPackets: function(p) { packets = p; },
       _setFilter: function(k, v) { filters[k] = v; },
       _setFullNames: function(v) { showFullNames = !!v; },
+      resolveHopsForPackets,
     };
   }
 

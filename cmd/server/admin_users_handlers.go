@@ -94,6 +94,14 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request, _ *use
 		writeError(w, http.StatusBadRequest, "invalid role filter")
 		return
 	}
+	switch q.Get("bouncing") {
+	case "":
+	case "1":
+		f.Bouncing = true
+	default:
+		writeError(w, http.StatusBadRequest, "invalid bouncing filter")
+		return
+	}
 	list, err := s.auth.st.List(f)
 	if err != nil {
 		log.Printf("[users] admin list: %v", err)
@@ -130,6 +138,12 @@ func (s *Server) handleAdminUserDetail(w http.ResponseWriter, r *http.Request, _
 	for _, x := range list {
 		d.Sessions = append(d.Sessions, sessionToJSON(x, 0))
 	}
+	links, err := a.st.ListCompanionLinks(u.ID)
+	if err != nil {
+		adminStoreFail(w, "list companions", u.ID, err)
+		return
+	}
+	d.Companions = s.companionsJSON(links)
 	mails, err := a.st.MailForUser(u.ID, 50)
 	if err != nil {
 		adminStoreFail(w, "list mail", u.ID, err)

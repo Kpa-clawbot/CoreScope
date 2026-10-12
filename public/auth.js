@@ -144,7 +144,7 @@
       icon('ph-user-circle') + '<span class="nav-account-label">' + escapeHtml(u.displayName) + '</span></button>' +
       '<div class="nav-account-menu" id="accountMenu" role="menu" hidden>' +
       '<a role="menuitem" href="#/account">My account</a>' +
-      (u.role === 'admin' ? '<a role="menuitem" href="#/admin/users">Users</a>' : '') +
+      (u.role === 'admin' ? '<a role="menuitem" href="#/admin">Admin</a>' : '') +
       '<button type="button" role="menuitem" id="accountLogout">Log out</button></div>';
     wrap.innerHTML = html;
     var btn = document.getElementById('accountToggle');

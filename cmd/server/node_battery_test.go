@@ -159,3 +159,57 @@ func TestBatteryThresholds_ConfigOverride(t *testing.T) {
 		t.Errorf("default CriticalBatteryMv expected 3000, got %d", empty.CriticalBatteryMv())
 	}
 }
+
+// #2146: LOWER(observer_id) = ? kept SQLite off the (observer_id, timestamp)
+// primary-key index, so it walked the timestamp index over every observer's
+// metrics in the window: 29 ms warm and 174 ms cold on 283k rows, against
+// 5.5 ms through the primary key.
+func TestNodeBatteryQueryUsesObserverIndex(t *testing.T) {
+	db := setupTestDB(t)
+	for _, s := range []string{
+		`ANALYZE`,
+		`DELETE FROM sqlite_stat1`,
+		`INSERT INTO sqlite_stat1 (tbl, idx, stat) VALUES
+			('observer_metrics', 'idx_observer_metrics_timestamp', '283070 32'),
+			('observer_metrics', 'sqlite_autoindex_observer_metrics_1', '283070 5001 1')`,
+		`ANALYZE sqlite_master`,
+	} {
+		if _, err := db.conn.Exec(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := db.conn.Query("EXPLAIN QUERY PLAN "+nodeBatteryHistorySQL, "ab", "AB", "2026-01-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	if len(plan) == 0 || !strings.Contains(plan[0], "sqlite_autoindex_observer_metrics_1") {
+		t.Fatalf("battery history must use the (observer_id, timestamp) index; plan: %q", plan)
+	}
+}
+
+// The pubkey is matched in lowercase and in uppercase, the two casings
+// observer IDs are stored in.
+func TestGetNodeBatteryHistory_LowercaseStoredID(t *testing.T) {
+	db := setupTestDB(t)
+	now := time.Now().UTC()
+	pk := "deadbeefcafef00d11223344"
+	db.conn.Exec(`INSERT INTO observer_metrics (observer_id, timestamp, battery_mv) VALUES (?, ?, ?)`,
+		pk, now.Add(-time.Hour).Format(time.RFC3339), 3600)
+	samples, err := db.GetNodeBatteryHistory(strings.ToUpper(pk), now.Add(-24*time.Hour).Format(time.RFC3339))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(samples) != 1 || samples[0].BatteryMv != 3600 {
+		t.Fatalf("want the lowercase-stored sample, got %+v", samples)
+	}
+}

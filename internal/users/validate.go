@@ -35,6 +35,7 @@ func NormalizeEmail(raw string) (string, error) {
 // ValidateDisplayName trims a display name and enforces 2–32 characters
 // without control, format (bidi, zero-width) or line/paragraph separator
 // characters. ZWJ (U+200D) is allowed so emoji sequences survive.
+// internal/channel/hashtag.go applies a stricter variant of this rule to channel names.
 func ValidateDisplayName(raw string) (string, error) {
 	n := strings.TrimSpace(raw)
 	if !utf8.ValidString(n) {

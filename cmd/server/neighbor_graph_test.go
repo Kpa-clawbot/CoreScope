@@ -35,7 +35,6 @@ func ngTestStore(nodes []nodeInfo, packets []*StoreTx) *PacketStore {
 		chanCache:      make(map[string]*cachedResult),
 		distCache:      make(map[string]*cachedResult),
 		subpathCache:   make(map[string]*cachedResult),
-		spIndex:        make(map[string]int),
 	}
 	ps.nodeCache = nodes
 	ps.nodePM = buildPrefixMap(nodes)

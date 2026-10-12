@@ -376,6 +376,11 @@
     return typeof hash === 'number' ? '0x' + hash.toString(16).toUpperCase().padStart(2, '0') : hash;
   }
   function getChannelColor(hash) { return CHANNEL_COLORS[hashCode(String(hash)) % CHANNEL_COLORS.length]; }
+  // attrSel makes a value safe inside a quoted CSS attribute selector:
+  // channel names may contain " and \ (approved hashtag channels).
+  function attrSel(v) {
+    return (window.CSS && CSS.escape) ? CSS.escape(String(v)) : String(v).replace(/["\\]/g, '\\$&');
+  }
   function getSenderColor(name) {
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
       (!document.documentElement.getAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -868,7 +873,10 @@
                      placeholder="meshcore"
                      aria-label="Hashtag channel name (without #)" spellcheck="false" autocomplete="off">
               <button type="button" id="chHashtagBtn" class="btn-primary">Monitor</button>
+              <button type="button" id="chHashtagProposeBtn" class="ch-modal-btn-secondary" hidden
+                      title="Ask an admin of this instance to decrypt this channel for every visitor">Propose for everyone</button>
             </div>
+            <div id="chHashtagProposeMsg" class="ch-propose-msg" role="status" aria-live="polite"></div>
             <div class="ch-modal-warn"><span class="status-warn"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span> Case-sensitive — <code>#meshcore</code> ≠ <code>#MeshCore</code></div>
           </section>
 
@@ -933,10 +941,13 @@
 
     // #1034 PR1: Add Channel modal wiring (replaces inline form)
     var modalEl = document.getElementById('chAddChannelModal');
+    // Channel proposals: the "Propose for everyone" control (channel-proposals.js).
+    var proposeUI = window.CSProposals ? window.CSProposals.bindPropose(document) : null;
     function openAddModal() {
       if (!modalEl) return;
       modalEl.classList.remove('hidden');
       modalEl.removeAttribute('hidden');
+      if (proposeUI) proposeUI.sync();
       var first = document.getElementById('chGenerateName');
       if (first) try { first.focus(); } catch (e) { /* noop */ }
     }
@@ -1699,10 +1710,10 @@
         var ch = channels[i];
         if (!ch.lastActivityMs) continue;
         var text = formatSecondsAgo(Math.floor((now - ch.lastActivityMs) / 1000));
-        var el = document.querySelector('.ch-item-time[data-channel-hash="' + ch.hash + '"]');
+        var el = document.querySelector('.ch-item-time[data-channel-hash="' + attrSel(ch.hash) + '"]');
         if (el) el.textContent = text;
         // #1367: mobile rows live in a flat list; update those too.
-        var rowEl = document.querySelector('.ch-row[data-hash="' + ch.hash + '"] .ch-row-time');
+        var rowEl = document.querySelector('.ch-row[data-hash="' + attrSel(ch.hash) + '"] .ch-row-time');
         if (rowEl) rowEl.textContent = text;
       }
     }, 1000);
@@ -1747,6 +1758,8 @@
       const prevChannels = channels;
       channels = mergeClientChannelState(fresh, prevChannels)
         .sort((a, b) => (b.lastActivityMs || 0) - (a.lastActivityMs || 0));
+      // Approved hashtag channels (proposals): listed also before they have traffic.
+      if (window.CSProposals) channels = window.CSProposals.mergeApproved(channels, data.approvedChannels);
       if (typeof ChannelDecrypt !== 'undefined' && ChannelDecrypt) mergeUserChannels(prevChannels);
       renderChannelList();
       reconcileSelectionAfterChannelRefresh();
@@ -1839,17 +1852,18 @@
                 'Share channel key (QR + URL)', 'Share', ' aria-haspopup="dialog"')
       : '';
     const userBadge = isUserAdded ? ' <span class="ch-user-badge" title="You added this key" aria-label="Your key"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-key"/></svg></span>' : '';
+    const approvedBadge = ch.approved ? ' <span class="ch-approved-badge" title="Approved by an admin of this instance: decrypted for every visitor">approved</span>' : '';
     const unreadBadge = (ch.unread && ch.unread > 0)
       ? ' <span class="ch-unread-badge" data-unread-channel="' + escapeHtml(ch.hash) + '" title="' + ch.unread + ' new" aria-label="' + ch.unread + ' unread">' + (ch.unread > 99 ? '99+' : ch.unread) + '</span>'
       : '';
 
-    return `<button class="ch-item${sel}${encClass}" data-hash="${ch.hash}"${borderStyle} type="button" role="option" aria-selected="${selectedHash === ch.hash ? 'true' : 'false'}" aria-label="${escapeHtml(name)}"${isEncrypted ? ' data-encrypted="true"' : ''}${isUserAdded ? ' data-user-added="true"' : ''}>
+    return `<button class="ch-item${sel}${encClass}" data-hash="${escapeHtml(ch.hash)}"${borderStyle} type="button" role="option" aria-selected="${selectedHash === ch.hash ? 'true' : 'false'}" aria-label="${escapeHtml(name)}"${isEncrypted ? ' data-encrypted="true"' : ''}${isUserAdded ? ' data-user-added="true"' : ''}>
       <div class="ch-badge" style="background:${color}" aria-hidden="true">${badgeIcon ? badgeIcon : escapeHtml(abbr)}</div>
       <div class="ch-item-body">
         <div class="ch-item-top">
-          <span class="ch-item-name">${escapeHtml(name)}</span>${userBadge}${unreadBadge}
+          <span class="ch-item-name">${escapeHtml(name)}</span>${userBadge}${approvedBadge}${unreadBadge}
           <span class="ch-color-dot" data-channel="${escapeHtml(ch.hash)}"${dotStyle} title="Change channel color" aria-label="Change color for ${escapeHtml(name)}"></span>${chColor ? '<span class="ch-color-clear" data-channel="' + escapeHtml(ch.hash) + '" title="Clear color" aria-label="Clear color for ' + escapeHtml(name) + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></span>' : ''}
-          <span class="ch-item-time" data-channel-hash="${ch.hash}">${time}</span>${shareBtn}${removeBtn}
+          <span class="ch-item-time" data-channel-hash="${escapeHtml(ch.hash)}">${time}</span>${shareBtn}${removeBtn}
         </div>
         <div class="ch-item-preview">${escapeHtml(preview)}</div>
       </div>
@@ -1904,6 +1918,7 @@
       '<div class="ch-row-body">' +
         '<div class="ch-row-line1">' +
           '<span class="ch-row-name">' + escapeHtml(name) + '</span>' +
+          (ch.approved ? '<span class="ch-approved-badge" title="Approved by an admin of this instance: decrypted for every visitor">approved</span>' : '') +
           '<span class="ch-row-time">' + escapeHtml(time) + '</span>' +
         '</div>' +
         '<div class="ch-row-preview">' + escapeHtml(preview) + '</div>' +
@@ -2410,5 +2425,8 @@
     return { channels: channels, messages: messages, selectedHash: selectedHash };
   };
   window._channelsShouldProcessWSMessageForRegion = shouldProcessWSMessageForRegion;
+  window._channelsRenderChannelRowForTest = renderChannelRow;
+  window._channelsRenderChannelRowMobileForTest = renderChannelRowMobile;
+  window._channelsAttrSelForTest = attrSel;
   registerPage('channels', { init, destroy });
 })();

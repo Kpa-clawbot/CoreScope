@@ -54,9 +54,13 @@ func newTestAuthService(t *testing.T, adminEmails ...string) (*authService, *mai
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { st.Close() })
 	fake := &mailer.Fake{}
-	return newAuthService(set, st, fake), fake
+	a := newAuthService(set, st, fake)
+	t.Cleanup(func() {
+		a.waitAudits()
+		st.Close()
+	})
+	return a, fake
 }
 
 // newAuthFixture builds a Server with auth on and only the auth routes.
@@ -85,7 +89,16 @@ func as(c *client) reqMod {
 func header(k, v string) reqMod { return func(r *http.Request) { r.Header.Set(k, v) } }
 func fromIP(ip string) reqMod   { return func(r *http.Request) { r.RemoteAddr = ip + ":5555" } }
 
+// do serves one request and then waits for its background audit writes,
+// so tests see audit rows in request order.
 func (f *authFixture) do(method, path string, body any, mods ...reqMod) *httptest.ResponseRecorder {
+	w := f.serve(method, path, body, mods...)
+	f.srv.auth.waitAudits()
+	return w
+}
+
+// serve serves one request and returns without waiting for audit writes.
+func (f *authFixture) serve(method, path string, body any, mods ...reqMod) *httptest.ResponseRecorder {
 	var rd io.Reader
 	if body != nil {
 		b, _ := json.Marshal(body)

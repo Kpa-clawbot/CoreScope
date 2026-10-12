@@ -86,6 +86,12 @@ async function checkConfiguredScope(page) {
   await page.route(nodeListUrl, route => route.fulfill({
     json: { nodes: [{ ...node, lat: 1, lon: 1 }], total: 1 },
   }));
+  // Every page load fires one 'theme-refresh' about 300ms after the theme
+  // loads, and live.js re-runs showNodeDetail on it, which briefly swaps the
+  // detail panel to "Loading…". Assert only after that re-render.
+  await page.addInitScript(() => {
+    window.addEventListener('theme-refresh', () => { window.__scopeThemeReady = true; }, { once: true });
+  });
   try {
     for (const live of [false, true]) {
       for (const scope of ['#fixture', '', null]) {
@@ -95,7 +101,10 @@ async function checkConfiguredScope(page) {
         const route = live ? '/live?lat=1&lon=1&zoom=10' : '/nodes/' + key;
         await page.goto(`${BASE}/#${route}`, { waitUntil: 'domcontentloaded' });
         if (live) await page.locator('#liveMap .live-node-marker').click();
-        await page.locator(live ? '#nodeDetailContent table' : '#node-stats').waitFor({ state: 'visible', timeout: 8000 });
+        const detail = page.locator(live ? '#nodeDetailContent table' : '#node-stats');
+        await detail.waitFor({ state: 'visible', timeout: 8000 });
+        await page.waitForFunction(() => window.__scopeThemeReady === true, null, { timeout: 8000 });
+        await detail.waitFor({ state: 'visible', timeout: 8000 });
         const row = live
           ? page.locator('#nodeDetailContent tr').filter({ hasText: 'Configured scope' })
           : page.locator('#row-configured-scope');

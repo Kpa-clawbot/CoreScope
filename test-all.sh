@@ -15,6 +15,7 @@ node tests/unit/test-a11y-1719-contrast-root-causes-e2e.js
 node tests/unit/test-a11y-1996-scope-audit-chips.js
 node tests/unit/test-a11y-axe-1668-selftest.js
 node tests/unit/test-a11y-axe-routes-coverage.js
+node tests/unit/test-admin-dashboard-ui.js
 node tests/unit/test-aging.js
 node tests/unit/test-analytics-channels-integration.js
 node tests/unit/test-anl1-tooltip-render.js
@@ -30,12 +31,14 @@ node tests/unit/test-channel-issue-1101.js
 node tests/unit/test-channel-live-decrypt-userprefix.js
 node tests/unit/test-channel-live-decrypt.js
 node tests/unit/test-channel-modal-ux.js
+node tests/unit/test-channel-proposals-ui.js
 node tests/unit/test-channel-psk-ux.js
 node tests/unit/test-channel-qr-wiring.js
 node tests/unit/test-channel-qr.js
 node tests/unit/test-channel-sidebar-layout.js
 node tests/unit/test-channel-ux-followup.js
 node tests/unit/test-channel-ux-round2.js
+node tests/unit/test-channels-approved-ui.js
 node tests/unit/test-channels-merge-1498-unit.js
 node tests/unit/test-clear-filters.js
 node tests/unit/test-color-picker-ux.js
@@ -132,6 +135,7 @@ node tests/unit/test-issue-1849-trace-hashbytes.js
 node tests/unit/test-issue-1851-channel-message-scope.js
 node tests/unit/test-issue-1862-map-region-filter.js
 node tests/unit/test-issue-1868-control-decode.js
+node tests/unit/test-packet-detail-channel-escape.js
 node tests/unit/test-packet-detail-hash-size.js
 node tests/unit/test-issue-1890-og-url.js
 node tests/unit/test-issue-1956-release-routing.js
@@ -142,6 +146,7 @@ node tests/unit/test-issue-2001-map-scope-state.js
 node tests/unit/test-issue-2012-clear-filters-selection.js
 node tests/unit/test-issue-2095-channels-client-state.js
 node tests/unit/test-issue-2097-hop-ambiguity-badge.js
+node tests/unit/test-issue-2098-last-hop-region.js
 node tests/unit/test-live-anims.js
 node tests/unit/test-live-dt-cap-1524.js
 node tests/unit/test-live-legend-helper.js
@@ -152,12 +157,14 @@ node tests/unit/test-map-clustering.js
 node tests/unit/test-mqtt-status-panel.js
 node tests/unit/test-my-repeaters-dashboard.js
 node tests/unit/test-naive-banner-tone.js
+node tests/unit/test-nav-stats-throttle.js
 node tests/unit/test-node-hop-analytics.js
 node tests/unit/test-node-reach-coverage-debounce.js
 node tests/unit/test-node-reach-coverage.js
 node tests/unit/test-nodes-export-wiring.js
 node tests/unit/test-nav-drawer-version-footer.js
 node tests/unit/test-nodes-export.js
+node tests/unit/test-notifications-ui.js
 node tests/unit/test-observer-iata-1188.js
 node tests/unit/test-observer-menu-interactions.js
 node tests/unit/test-observer-naive-clock-1478.js
@@ -167,6 +174,7 @@ node tests/unit/test-packet-filter-time.js
 node tests/unit/test-packet-filter-ux.js
 node tests/unit/test-packet-filter.js
 node tests/unit/test-packets-local-channels.js
+node tests/unit/test-packets-live-channel-filter.js
 node tests/unit/test-packets.js
 node tests/unit/test-panel-corner.js
 node tests/unit/test-path-inspector.js
@@ -179,8 +187,10 @@ node tests/unit/test-perf-render-1258.js
 node tests/unit/test-preflight-xss-gate.js
 node tests/unit/test-pull-to-reconnect-1091.js
 node tests/unit/test-pull-to-reconnect.js
+node tests/unit/test-region-filter-setselected.js
 node tests/unit/test-repeater-metric-scatter.js
 node tests/unit/test-rx-coverage-config-race.js
+node tests/unit/test-rx-coverage-mine.js
 node tests/unit/test-rx-coverage-escape.js
 node tests/unit/test-rx-coverage-noise.js
 node tests/unit/test-rx-coverage-viewport.js

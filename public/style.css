@@ -262,6 +262,9 @@
      step darker clears it with margin (6.23:1 on white, 5.74:1 on
      --surface-0) without thinning the tint that makes the chip legible. */
   --sa-chip-observed-fg: var(--palette-green-800, #166534);
+  /* Green status words in the admin/user tables: green-700 is 4.48:1 on the
+     row-hover tint #eef2ff, green-800 is 6.4:1 there. Dark keeps the bright hue. */
+  --status-green-tint-text: var(--palette-green-800, #166534);
   /* Text-only yellow/red for surfaces that print status words on light cards
      (user-management chips): yellow-800 #854d0e is 6.85:1 on #fff and 6.13:1 on the row-hover tint #eef2ff (yellow-700 #a16207 was 4.4:1 there); red-700 #b91c1c
      is 6.47:1 on #fff. Dark theme keeps the bright hues, like green-text. */
@@ -399,6 +402,7 @@
     --status-green-text: #22c55e;
     /* #1996: dark already passes at 6.48:1 — keep the bright hue. */
     --sa-chip-observed-fg: #22c55e;
+    --status-green-tint-text: #22c55e;
     /* #1719 — keep --skew-badge-no-clock-bg dark enough for #fff text. */
     --skew-badge-no-clock-bg: var(--palette-gray-600, #4b5563);
     --status-yellow-text: #eab308;
@@ -468,6 +472,7 @@
   --status-green-text: #22c55e;
   /* #1996: dark already passes at 6.48:1 — keep the bright hue. */
   --sa-chip-observed-fg: #22c55e;
+  --status-green-tint-text: #22c55e;
   --skew-badge-no-clock-bg: var(--palette-gray-600, #4b5563);
   --status-yellow-text: #eab308;
   --status-red-text: var(--palette-red-400, #f87171);
@@ -1076,6 +1081,17 @@ img.brand-logo {
   box-shadow: 0 4px 12px rgba(0,0,0,.3); pointer-events: none;
 }
 .sort-help:hover .sort-help-tip { display: block; }
+.node-packet-count-help {
+  border: 0; padding: 0; background: none; color: inherit; font: inherit;
+  text-align: left; text-transform: inherit; letter-spacing: inherit;
+}
+.node-packet-count-help .sort-help-tip {
+  top: auto; bottom: 100%; left: 0; transform: none; pointer-events: auto;
+  font-weight: normal; text-transform: none; letter-spacing: normal;
+}
+.node-packet-count-help.help-dismissed .sort-help-tip { display: none; }
+/* Avoid touch target expansion redirecting nearby table-cell taps into the help button. */
+.node-packet-count-help.help-touch .sort-help-tip { pointer-events: none; }
 .filter-bar .btn:hover { background: var(--row-hover); }
 .filter-bar .btn.active { background: var(--accent-strong); color: var(--text-on-accent); border-color: var(--accent-strong); }
 .filter-bar .col-toggle-btn { height: 34px; min-height: 34px; }
@@ -1897,6 +1913,7 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 .ch-remove-btn:hover, .ch-remove-btn:focus { background: #8b3838; color: white; }
 .ch-share-btn:hover,  .ch-share-btn:focus  { color: var(--link-color, #3b82f6); }
 .ch-user-badge { font-size: 12px; font-weight: var(--fw-medium); margin-left: 2px; opacity: 0.85; flex-shrink: 0; } /* #1668 M3 r1 — chip floor, mirror row chips (adv #2) */
+.ch-approved-badge { font-size: 11px; font-weight: var(--fw-medium); color: var(--text-muted); border: 1px solid var(--border); border-radius: 8px; padding: 0 6px; margin-left: 4px; flex-shrink: 0; }
 .ch-item-preview { font-size: 13px; font-weight: var(--fw-medium); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } /* #1668 M3 — was 12px/400 */
 
 .ch-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
@@ -3407,7 +3424,7 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .node-top-row .node-qr-wrap { flex: 1; align-self: flex-start; min-width: 120px; max-width: 160px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; }
 .node-top-row .node-qr-wrap .node-qr { margin-top: 0; }
 .node-qr-wrap--full { max-width: 240px; margin: 0 auto; }
-.node-stats-table { width: 100%; border-collapse: collapse; font-size: 13px; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 12px; }
+.node-stats-table { width: 100%; border-collapse: collapse; font-size: 13px; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; overflow: visible; margin-bottom: 12px; }
 .node-stats-table td { padding: 6px 12px; border-bottom: 1px solid var(--border); }
 .node-stats-table tr:last-child td { border-bottom: none; }
 .node-stats-table tr:nth-child(even) { background: var(--row-stripe); }
@@ -3576,6 +3593,13 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .area-dropdown-menu { min-width: 160px; }
 .area-dropdown-item.area-item-active { color: var(--accent); font-weight: 600; }
 .region-filter-container { margin: 0; padding: 0; display: inline-flex; align-items: center; }
+/* Region quick picks (config regionQuickPicks). In the dropdown they are
+   checkbox rows like All, between All and the single regions; in the pill
+   bar they lead, set off from the single regions by a divider. */
+.region-dropdown-sep { height: 1px; background: var(--border); margin: 4px 0; }
+.region-quick-picks-divider {
+  width: 1px; align-self: stretch; margin: 4px 2px; background: var(--border); flex-shrink: 0;
+}
 .region-pill {
   display: inline-flex; align-items: center; padding: 4px 12px; border-radius: 16px;
   font-size: 12px; font-weight: 500; cursor: pointer; border: 1.5px solid var(--border);
@@ -4497,6 +4521,12 @@ button.region-pill-active:hover { opacity: 0.85; color: var(--text-on-accent); }
   .multi-select-trigger {
     height: 44px;
   }
+  /* The region menu sits inside .filter-bar on some pages, whose input rule
+     above would make each checkbox a 44px square. The row is the tap target. */
+  .filter-bar .region-dropdown-item input[type="checkbox"] {
+    width: 20px; height: 20px; min-width: 0; min-height: 0;
+  }
+  .region-dropdown-item { min-height: 44px; }
 }
 
 /* #630-3: Status text labels — visually hidden text for screen readers */
@@ -4980,6 +5010,10 @@ body[data-cb-preset="achromat"] {
   border-radius: 6px; cursor: pointer; font-size: 13px;
 }
 .ch-modal-btn-secondary[disabled] { opacity: .5; cursor: not-allowed; }
+.ch-modal-btn-secondary[hidden] { display: none; } /* the base rule's inline-flex would override [hidden] */
+.ch-propose-msg { font-size: 12px; margin-top: 4px; }
+.ch-propose-msg.ok { color: var(--status-green-tint-text); }
+.ch-propose-msg.err { color: var(--status-red-text); }
 .ch-hashtag-row .ch-hashtag-prefix {
   font-family: var(--mono, monospace); font-size: 14px; color: var(--text-muted); padding: 0 2px;
 }

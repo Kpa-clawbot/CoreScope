@@ -172,13 +172,13 @@ test('display name is escaped in the header label', async () => {
   assert(html.indexOf('&lt;img src=x onerror=alert(1)&gt;') !== -1);
 });
 
-test('Users menu entry is shown to admins only', async () => {
+test('Admin menu entry is shown to admins only', async () => {
   const user = makeEnv((u) => u === '/api/auth/me' ? { status: 200, body: ME } : null);
   await user.win.CSAuth.ready();
-  assert(user.els.accountWrap.innerHTML.indexOf('#/admin/users') === -1);
+  assert(user.els.accountWrap.innerHTML.indexOf('#/admin') === -1);
   const admin = makeEnv((u) => u === '/api/auth/me' ? { status: 200, body: Object.assign({}, ME, { role: 'admin' }) } : null);
   await admin.win.CSAuth.ready();
-  assert(admin.els.accountWrap.innerHTML.indexOf('#/admin/users') !== -1);
+  assert(admin.els.accountWrap.innerHTML.indexOf('<a role="menuitem" href="#/admin">Admin</a>') !== -1, admin.els.accountWrap.innerHTML);
 });
 
 test('logged-out header is a login link', async () => {
@@ -386,6 +386,92 @@ test('sessions list marks the current device without a logout button', () => {
   assert(h.indexOf('data-sess="2"') !== -1 && h.indexOf('Unknown device') !== -1);
 });
 
+test('device tokens render as CoreDrive RX with a marker and keep their logout button', () => {
+  const env = loadAccount('#/account', () => ({}));
+  const h = env.t.sessionsHtml([
+    { id: 1, kind: 'web', label: '', userAgent: 'Firefox', lastSeenAt: '2026-01-01T00:00:00Z', current: true },
+    { id: 2, kind: 'device', label: 'Pixel <8>', userAgent: 'CoreDriveRX/1.17', lastSeenAt: '2026-01-01T00:00:00Z', current: false },
+    { id: 3, kind: 'device', label: '', userAgent: '', lastSeenAt: '2026-01-01T00:00:00Z', current: false }]);
+  assert(h.indexOf('<li><span>Firefox') !== -1, 'web session changed: ' + h);
+  assert(h.indexOf('CoreDrive RX – Pixel &lt;8&gt;') !== -1, 'no labelled device row: ' + h);
+  assert(h.indexOf('<span>CoreDrive RX <span class="um-chip um-chip-device">') !== -1, 'no unlabelled device row: ' + h);
+  assert(h.indexOf('CoreDriveRX/1.17') === -1, 'a device row shows its user agent instead of its label');
+  assert.strictEqual((h.match(/data-kind="device"/g) || []).length, 2);
+  assert.strictEqual((h.match(/um-chip-device/g) || []).length, 2);
+  assert(h.indexOf('data-sess="2"') !== -1 && h.indexOf('data-sess="3"') !== -1, 'device rows lost their logout button');
+});
+
+test('companions list escapes fields, shortens the pubkey and says never without a reception', () => {
+  const env = loadAccount('#/account', () => ({}));
+  const pk = 'ab'.repeat(32);
+  const h = env.t.companionsHtml([
+    { pubkey: pk, name: '<img src=x>', linkedAt: '2026-10-01T10:00:00Z', lastSeenAt: null },
+    { pubkey: '"><b>', name: '', linkedAt: 'x', lastSeenAt: '2026-10-02T09:00:00Z' }]);
+  assert(h.indexOf('<img') === -1 && h.indexOf('<b>') === -1, 'raw tag in companions HTML: ' + h);
+  assert(h.indexOf('&lt;img src=x&gt;') !== -1, 'name missing: ' + h);
+  assert(h.indexOf('<code>' + pk.slice(0, 12) + '…</code>') !== -1, 'no short pubkey: ' + h);
+  assert(h.indexOf('data-unlink="' + pk + '"') !== -1, 'Unlink does not carry the full pubkey');
+  assert(h.indexOf('last seen never') !== -1, 'no "never" for a null lastSeenAt');
+  assert.strictEqual((h.match(/data-unlink=/g) || []).length, 2);
+});
+
+test('companions empty state explains linking from CoreDrive RX', () => {
+  const env = loadAccount('#/account', () => ({}));
+  [[], null].forEach((list) => {
+    const h = env.t.companionsHtml(list);
+    assert(h.indexOf('id="compEmpty"') !== -1 && h.indexOf('CoreDrive RX') !== -1 && h.indexOf('data-unlink') === -1, h);
+    assert(h.indexOf('My nodes') === -1, 'linking no longer adds to My nodes: ' + h);
+  });
+});
+
+test('profile view has a Companions section below Devices', () => {
+  const env = loadAccount('#/account', () => ({}));
+  const html = env.t.profileHtml({ email: 'a@b.c', role: 'user', displayName: 'Ann' });
+  const dev = html.indexOf('<h3>Devices</h3>'), comp = html.indexOf('<h3>Companions</h3>');
+  assert(dev !== -1 && comp > dev, 'Companions heading missing or above Devices');
+  assert(html.indexOf('id="compList"') !== -1 && html.indexOf('id="compMsg"') !== -1);
+});
+
+test('profile view lists companions; Unlink confirms, sends DELETE and reloads the list', async () => {
+  const pk = 'cd'.repeat(32);
+  let linked = [{ pubkey: pk, name: 'Car', linkedAt: '2026-10-01T10:00:00Z', lastSeenAt: null }];
+  const env = loadAccount('#/account', (p) => {
+    if (p === '/api/account/companions') return { ok: true, status: 200, data: linked };
+    if (p === '/api/account/companions/' + pk) { linked = []; return { ok: true, status: 204, data: {} }; }
+    return { ok: true, status: 200, data: [] };
+  }, { confirm: () => true });
+  env.user.current = { id: 1, email: 'a@b.c', displayName: 'Ann', role: 'user' };
+  env.t.views.profile({ set innerHTML(v) {} });
+  await new Promise((r) => setTimeout(r, 5));
+  assert(env.els.compList.innerHTML.indexOf('data-unlink="' + pk + '"') !== -1, env.els.compList.innerHTML);
+  await env.els.compList.handlers.click({ target: { getAttribute: (a) => (a === 'data-unlink' ? pk : null) } });
+  await new Promise((r) => setTimeout(r, 5));
+  assert(env.calls.some((c) => c.method === 'DELETE' && c.p === '/api/account/companions/' + pk), 'no DELETE');
+  assert.strictEqual(env.els.compMsg.textContent, 'Companion unlinked.');
+  assert(env.els.compList.innerHTML.indexOf('id="compEmpty"') !== -1, 'list not reloaded');
+});
+
+test('a cancelled Unlink sends nothing', async () => {
+  const pk = 'cd'.repeat(32);
+  const env = loadAccount('#/account', (p) => (p === '/api/account/companions'
+    ? { ok: true, status: 200, data: [{ pubkey: pk, name: '', linkedAt: 'x', lastSeenAt: null }] }
+    : { ok: true, status: 200, data: [] }), { confirm: () => false });
+  env.user.current = { id: 1, email: 'a@b.c', displayName: 'Ann', role: 'user' };
+  env.t.views.profile({ set innerHTML(v) {} });
+  await new Promise((r) => setTimeout(r, 5));
+  await env.els.compList.handlers.click({ target: { getAttribute: () => pk } });
+  assert(!env.calls.some((c) => c.method === 'DELETE'), 'DELETE sent after cancel');
+});
+
+test('a rejected companions load shows the error in compMsg', async () => {
+  const env = loadAccount('#/account', () => ({}));
+  env.user.current = { id: 1, email: 'a@b.c', displayName: 'Ann', role: 'user' };
+  env.setRequest(() => Promise.reject(new Error('net')));
+  env.t.views.profile({ set innerHTML(v) {} });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.strictEqual(env.els.compMsg.textContent, 'Network error, try again.');
+});
+
 test('activate posts token and password, logs in on success', async () => {
   const env = loadAccount('#/account/activate?token=T0K', () => ({ ok: true, status: 200, data: { id: 1, displayName: 'Ann' } }));
   env.t.views.activate({});
@@ -574,13 +660,39 @@ test('profile view mounts the settings sync section only when the module is load
   assert.strictEqual(without.t.profileHtml({ email: 'a', role: 'user', displayName: 'A' }).indexOf('syncSection'), -1);
 });
 
-test('profile view: Log out button for everyone, Manage users link for admins only', () => {
+test('profile view shows My proposals only when channel proposals are on', () => {
+  const loaded = [];
+  const env = loadAccount('#/account', () => ({ ok: true, status: 200, data: [] }),
+    { CSProposals: { enabled: () => true, loadMine(el, msgId) { loaded.push([el, msgId]); } } });
+  env.user.current = { id: 1, email: 'a@b.c', displayName: 'Ann', role: 'user' };
+  const app = { innerHTML: '' };
+  env.t.views.profile(app);
+  assert(app.innerHTML.indexOf('<h3>My proposals</h3><div id="propList"></div>') !== -1, app.innerHTML);
+  assert.strictEqual(loaded.length, 1);
+  assert.strictEqual(loaded[0][0], env.els.propList);
+  assert.strictEqual(loaded[0][1], 'propMsg');
+  const off = loadAccount('#/account', () => ({}), { CSProposals: { enabled: () => false, loadMine() { throw new Error('loaded while off'); } } });
+  assert.strictEqual(off.t.profileHtml({ email: 'a', role: 'user', displayName: 'A' }).indexOf('propList'), -1);
+  const absent = loadAccount('#/account', () => ({}));
+  assert.strictEqual(absent.t.profileHtml({ email: 'a', role: 'user', displayName: 'A' }).indexOf('propList'), -1);
+});
+
+test('profile view: Log out button for everyone, Admin link for admins only', () => {
   const env = loadAccount('#/account', () => ({}));
   const user = env.t.profileHtml({ email: 'a', role: 'user', displayName: 'A' });
   const admin = env.t.profileHtml({ email: 'a', role: 'admin', displayName: 'A' });
   assert(user.indexOf('id="accountPageLogout"') !== -1 && admin.indexOf('id="accountPageLogout"') !== -1);
-  assert(user.indexOf('#/admin/users') === -1);
-  assert(admin.indexOf('href="#/admin/users"') !== -1 && admin.indexOf('Manage users') !== -1);
+  assert(user.indexOf('#/admin') === -1);
+  assert(admin.indexOf('href="#/admin">Admin</a>') !== -1, admin);
+});
+
+test('profile view: Download my data links to the export route, before Delete account', () => {
+  const env = loadAccount('#/account', () => ({}));
+  const html = env.t.profileHtml({ email: 'a', role: 'user', displayName: 'A' });
+  const link = '<a class="account-btn account-btn-secondary" id="accountExport" href="/api/account/export" download>Download my data</a>';
+  assert(html.indexOf(link) !== -1, html);
+  assert(html.indexOf('<h3>My data</h3>') !== -1, 'no My data heading');
+  assert(html.indexOf('id="accountExport"') < html.indexOf('id="delForm"'), 'export link after the delete form');
 });
 
 test('profile view follows auth changes: logout redirects, another user re-renders', () => {
@@ -651,10 +763,10 @@ test('activate 410 for an already active account offers no registration link', a
 
 console.log('admin-users.js');
 
-function loadAdmin(hash, routes) {
+function loadAdmin(hash, routes, opts) {
   const els = {};
   const mk = (id) => {
-    const el = { id, value: '', textContent: '', innerHTML: '', hidden: false, handlers: {}, cls: {}, focused: 0 };
+    const el = { id, value: '', checked: false, textContent: '', innerHTML: '', hidden: false, handlers: {}, cls: {}, focused: 0 };
     el.classList = { toggle(c, on) { el.cls[c] = !!on; } };
     el.addEventListener = (t, fn) => { el.handlers[t] = fn; };
     el.focus = () => { el.focused++; };
@@ -665,35 +777,33 @@ function loadAdmin(hash, routes) {
     getElementById(id) { return els[id] || (els[id] = mk(id)); },
     querySelector(sel) { return els[sel] || (els[sel] = mk(sel)); },
   };
-  const pages = {};
   const calls = [];
   const replaced = [];
   const loc = { hash };
   let me = { id: 1, role: 'admin' };
   let refreshed = 0;
-  const listeners = {};
   const CSAuth = {
-    ready() { return Promise.resolve(); }, isEnabled() { return true; }, isAdmin() { return !!me && me.role === 'admin'; },
+    isAdmin() { return !!me && me.role === 'admin'; },
     user() { return me; },
     request(method, p, body) { calls.push({ method, p, body }); return Promise.resolve(routes(method, p, body)); },
     refreshMe() { refreshed++; me = { id: 1, role: 'user' }; return Promise.resolve(); },
   };
-  const ctx = { window: { CSAuth, addEventListener(t, fn) { listeners[t] = fn; } }, document: doc, CSAuth, location: loc, URLSearchParams, Promise, String,
+  const ctx = { window: { CSAuth }, document: doc, CSAuth, location: loc, URLSearchParams, Promise, String,
     history: { replaceState(a, b, h) { replaced.push(h); loc.hash = h; } },
-    confirm() { return true; }, debounce(fn) { return fn; },
-    escapeHtml: loadEscapeHtml(), registerPage(n, m) { pages[n] = m; }, console };
+    confirm() { return true; }, debounce: (opts && opts.debounce) || function (fn) { return fn; },
+    escapeHtml: loadEscapeHtml(), console };
   vm.createContext(ctx);
   Object.assign(CSAuth, loadAuthHelpers(ctx));
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/admin-users.js'), 'utf8'), ctx);
   const app = { innerHTML: '', querySelector() { return els.umPage || (els.umPage = mk('umPage')); } };
-  return { t: ctx.window.CSAdminUsers._test, pages, els, calls, replaced, loc, app, refreshed: () => refreshed,
-    fire(detail) { me = detail; if (listeners['cs-auth-changed']) listeners['cs-auth-changed']({ detail }); } };
+  const um = ctx.window.CSAdminUsers;
+  return { t: um._test, um, els, doc, calls, replaced, loc, app, refreshed: () => refreshed };
 }
 const tick = () => new Promise((r) => setTimeout(r, 5));
 const U = (o) => Object.assign({ id: 2, email: 'u@x.y', displayName: 'U', role: 'user', status: 'active', configAdmin: false }, o);
 const OK = (data) => ({ ok: true, status: 200, data: data });
 const acts = (env, u, me) => (env.t.actionsFor(u, me).match(/data-act="(\w+)"/g) || []).map((x) => x.slice(10, -1));
-const adminEnv = () => loadAdmin('#/admin/users', () => OK([]));
+const adminEnv = () => loadAdmin('#/admin?tab=users', () => OK([]));
 
 test('actionsFor: pending offers activate/resend, no disable and no role buttons', () => {
   assert.deepStrictEqual(acts(adminEnv(), U({ status: 'pending' }), { id: 1 }), ['detail', 'activate', 'resend', 'delete']);
@@ -730,38 +840,64 @@ test('row and detail rendering escape every dynamic field', () => {
   assert(det.indexOf('&lt;img src=x onerror=alert(1)&gt;') !== -1);
 });
 
-test('deep link: filters and detail id round-trip through the hash', () => {
+test('deep link: filters, bouncing and detail id round-trip through the hash', () => {
   const env = adminEnv();
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(env.t.readHash('#/admin/users?status=pending&role=admin&q=a%20b&id=7'))),
-    { status: 'pending', role: 'admin', q: 'a b', id: '7' });
-  assert.strictEqual(env.t.hashFor({ status: 'pending', role: '', q: 'a b' }, '7'), '#/admin/users?status=pending&q=a+b&id=7');
-  assert.strictEqual(env.t.hashFor({ status: '', role: '', q: '' }, null), '#/admin/users');
+  const rh = (h) => JSON.parse(JSON.stringify(env.t.readHash(h)));
+  assert.deepStrictEqual(rh('#/admin?tab=users&status=pending&role=admin&q=a%20b&id=7'),
+    { status: 'pending', role: 'admin', q: 'a b', bouncing: false, id: '7' });
+  assert.strictEqual(rh('#/admin?tab=users&bouncing=1').bouncing, true);
+  assert.strictEqual(rh('#/admin?tab=users&bouncing=yes').bouncing, false);
+  assert.strictEqual(env.t.hashFor({ status: 'pending', role: '', q: 'a b', bouncing: false }, '7'), '#/admin?tab=users&status=pending&q=a+b&id=7');
+  assert.strictEqual(env.t.hashFor({ status: '', role: '', q: '', bouncing: true }, null), '#/admin?tab=users&bouncing=1');
+  assert.strictEqual(env.t.hashFor({ status: '', role: '', q: '', bouncing: false }, null), '#/admin?tab=users');
 });
 
-test('init reads the hash into the request and detail; filter changes use replaceState', async () => {
-  const env = loadAdmin('#/admin/users?status=pending&id=7', (m, p) =>
+test('mount reads the hash into the request and detail; filter changes use replaceState', async () => {
+  const env = loadAdmin('#/admin?tab=users&status=pending&id=7', (m, p) =>
     OK(p.indexOf('/api/admin/users/7') === 0 ? { user: U({ id: 7 }), sessions: [], mail: [], audit: [] } : []));
-  env.pages.admin.init(env.app, 'users');
+  env.um.mount(env.app);
   await tick();
   assert(env.calls.some((c) => c.p === '/api/admin/users?status=pending'), JSON.stringify(env.calls));
   assert(env.calls.some((c) => c.p === '/api/admin/users/7'));
   assert.strictEqual(env.els.umStatus.value, 'pending');
   env.els.umRole.handlers.change({ target: { value: 'admin' } });
-  assert.strictEqual(env.loc.hash, '#/admin/users?status=pending&role=admin&id=7');
+  assert.strictEqual(env.loc.hash, '#/admin?tab=users&status=pending&role=admin&id=7');
   assert(env.replaced.length >= 1);
 });
 
+test('bouncing filter is sent to the server as bouncing=1 and kept in the hash', async () => {
+  const env = loadAdmin('#/admin?tab=users&bouncing=1', (m, p) =>
+    OK(p.indexOf('bouncing=1') !== -1 ? [U({ id: 2, email: 'b@x.y', emailBouncing: true })] : [U({ id: 2, email: 'b@x.y', emailBouncing: true }), U({ id: 3, email: 'c@x.y' })]));
+  env.um.mount(env.app);
+  await tick();
+  assert(env.calls.some((c) => c.p === '/api/admin/users?bouncing=1'), JSON.stringify(env.calls));
+  assert.strictEqual(env.els.umBouncing.checked, true);
+  assert(env.els.umBody.innerHTML.indexOf('b@x.y') !== -1 && env.els.umBody.innerHTML.indexOf('c@x.y') === -1, env.els.umBody.innerHTML);
+  env.els.umBouncing.handlers.change({ target: { checked: false } });
+  await tick();
+  assert.strictEqual(env.loc.hash, '#/admin?tab=users');
+  assert.strictEqual(env.calls[env.calls.length - 1].p, '/api/admin/users?');
+  assert(env.els.umBody.innerHTML.indexOf('c@x.y') !== -1);
+});
+
+test('the browser does not drop rows the server returned for the bouncing filter', async () => {
+  const env = loadAdmin('#/admin?tab=users&bouncing=1', () => OK([U({ id: 4, email: 'd@x.y', emailBouncing: false })]));
+  env.um.mount(env.app);
+  await tick();
+  assert(env.els.umBody.innerHTML.indexOf('d@x.y') !== -1, 'the server is the filter: ' + env.els.umBody.innerHTML);
+});
+
 test('a rejected list fetch shows an error in umMsg', async () => {
-  const env = loadAdmin('#/admin/users', () => Promise.reject(new Error('net')));
-  env.pages.admin.init(env.app, 'users');
+  const env = loadAdmin('#/admin?tab=users', () => Promise.reject(new Error('net')));
+  env.um.mount(env.app);
   await tick();
   assert.strictEqual(env.els.umMsg.textContent, 'Network error, try again.');
 });
 
 test('a rejected action shows an error in umMsg', async () => {
   let n = 0;
-  const env = loadAdmin('#/admin/users', () => (++n === 1 ? OK([]) : Promise.reject(new Error('net'))));
-  env.pages.admin.init(env.app, 'users');
+  const env = loadAdmin('#/admin?tab=users', () => (++n === 1 ? OK([]) : Promise.reject(new Error('net'))));
+  env.um.mount(env.app);
   await tick();
   env.els.umPage.handlers.click({ target: { closest: () => ({ getAttribute: (a) => ({ 'data-act': 'disable', 'data-id': '2' })[a] }) } });
   await tick();
@@ -769,8 +905,8 @@ test('a rejected action shows an error in umMsg', async () => {
 });
 
 test('demoting yourself refreshes the session and leaves the page', async () => {
-  const env = loadAdmin('#/admin/users', () => OK([]));
-  env.pages.admin.init(env.app, 'users');
+  const env = loadAdmin('#/admin?tab=users', () => OK([]));
+  env.um.mount(env.app);
   await tick();
   env.els.umPage.handlers.click({ target: { closest: () => ({ getAttribute: (a) => ({ 'data-act': 'demote', 'data-id': '1' })[a] }) } });
   await tick();
@@ -780,59 +916,84 @@ test('demoting yourself refreshes the session and leaves the page', async () => 
 
 test('readHash accepts only numeric ids and known status and role values', () => {
   const env = adminEnv();
-  const h = (s) => JSON.parse(JSON.stringify(env.t.readHash('#/admin/users?' + s)));
-  assert.deepStrictEqual(h('status=bogus&role=root&id=7%3Bx&q=x'), { status: '', role: '', q: 'x', id: '' });
-  assert.deepStrictEqual(h('id=abc'), { status: '', role: '', q: '', id: '' });
-  assert.deepStrictEqual(h('status=disabled&role=user&id=12'), { status: 'disabled', role: 'user', q: '', id: '12' });
+  const h = (s) => JSON.parse(JSON.stringify(env.t.readHash('#/admin?tab=users&' + s)));
+  assert.deepStrictEqual(h('status=bogus&role=root&id=7%3Bx&q=x'), { status: '', role: '', q: 'x', bouncing: false, id: '' });
+  assert.deepStrictEqual(h('id=abc'), { status: '', role: '', q: '', bouncing: false, id: '' });
+  assert.deepStrictEqual(h('status=disabled&role=user&id=12'), { status: 'disabled', role: 'user', q: '', bouncing: false, id: '12' });
 });
 
 const clickAct = (env, act, id) => env.els.umPage.handlers.click({ target: { closest: () => ({ getAttribute: (a) => ({ 'data-act': act, 'data-id': id })[a] }) } });
 
 test('detail panel has a Close button; opening focuses the panel, closing returns focus', async () => {
-  const env = loadAdmin('#/admin/users', (m, p) =>
+  const env = loadAdmin('#/admin?tab=users', (m, p) =>
     OK(p.indexOf('/api/admin/users/7') === 0 ? { user: U({ id: 7 }), sessions: [], mail: [], audit: [] } : []));
   assert(env.t.detailHtml({ user: U({ id: 7 }), sessions: [], mail: [], audit: [] }).indexOf('data-act="close"') !== -1);
-  env.pages.admin.init(env.app, 'users');
+  env.um.mount(env.app);
   await tick();
   clickAct(env, 'detail', '7');
   await tick();
   assert.strictEqual(env.els.umDetail.hidden, false);
   assert.strictEqual(env.els['umDetail h3'].focused, 1);
-  assert.strictEqual(env.loc.hash, '#/admin/users?id=7');
+  assert.strictEqual(env.loc.hash, '#/admin?tab=users&id=7');
   clickAct(env, 'close', null);
   assert.strictEqual(env.els.umDetail.hidden, true);
-  assert.strictEqual(env.loc.hash, '#/admin/users');
+  assert.strictEqual(env.loc.hash, '#/admin?tab=users');
   assert.strictEqual(env.els['button[data-act="detail"][data-id="7"]'].focused, 1);
 });
 
 test('a deep-linked detail does not steal focus on load', async () => {
-  const env = loadAdmin('#/admin/users?id=7', (m, p) =>
+  const env = loadAdmin('#/admin?tab=users&id=7', (m, p) =>
     OK(p.indexOf('/api/admin/users/7') === 0 ? { user: U({ id: 7 }), sessions: [], mail: [], audit: [] } : []));
-  env.pages.admin.init(env.app, 'users');
+  env.um.mount(env.app);
   await tick();
   assert.strictEqual(env.els.umDetail.hidden, false);
   assert.strictEqual((env.els['umDetail h3'] || { focused: 0 }).focused, 0);
 });
 
-test('admin page follows auth changes: logout redirects to login, losing admin re-renders', async () => {
-  const env = adminEnv();
-  env.pages.admin.init(env.app, 'users');
+test('unmount drops a list response that arrives later', async () => {
+  let release;
+  const env = loadAdmin('#/admin?tab=users', () => new Promise((r) => { release = r; }));
+  env.um.mount(env.app);
+  env.um.unmount();
+  release(OK([U({ email: 'late@x.y' })]));
   await tick();
-  env.fire({ id: 1, role: 'user' });
-  await tick();
-  assert(env.app.innerHTML.indexOf('Admins only') !== -1, env.app.innerHTML);
-  env.fire(null);
-  assert.strictEqual(env.loc.hash, '#/account/login');
+  assert.strictEqual(env.els.umBody.innerHTML, '');
 });
 
-test('admin page ignores auth changes once left', async () => {
-  const env = adminEnv();
-  env.pages.admin.init(env.app, 'users');
+test('a search typed just before unmount does nothing when its debounce fires', async () => {
+  const timers = [];
+  const debounce = (fn) => function () { timers.push(fn); };
+  const env = loadAdmin('#/admin?tab=users', () => OK([]), { debounce });
+  env.um.mount(env.app);
   await tick();
-  env.pages.admin.destroy();
-  env.loc.hash = '#/home';
-  env.fire(null);
-  assert.strictEqual(env.loc.hash, '#/home');
+  const n = env.calls.length;
+  env.els.umQ.value = 'late';
+  env.els.umQ.handlers.input();
+  env.um.unmount();
+  const getEl = env.doc.getElementById;
+  env.doc.getElementById = (id) => (id === 'umQ' ? null : getEl(id));
+  assert.doesNotThrow(() => timers.forEach((fn) => fn()));
+  await tick();
+  assert.strictEqual(env.calls.length, n, 'no request after unmount');
+  assert.strictEqual(env.loc.hash, '#/admin?tab=users', 'hash untouched after unmount');
+});
+
+test('a search from a previous mount does nothing after a remount', async () => {
+  const timers = [];
+  const debounce = (fn) => function () { timers.push(fn); };
+  const env = loadAdmin('#/admin?tab=users', () => OK([]), { debounce });
+  env.um.mount(env.app);
+  await tick();
+  env.els.umQ.handlers.input();
+  const stale = timers.pop();
+  env.um.unmount();
+  env.um.mount(env.app);
+  await tick();
+  const n = env.calls.length;
+  env.els.umQ.value = 'old';
+  stale();
+  await tick();
+  assert.strictEqual(env.calls.length, n, 'stale debounce must not load');
 });
 
 console.log('perf.js reset');
@@ -878,6 +1039,37 @@ test('feature on: a refused reset alerts and keeps the stats', async () => {
   const ok = await ctx.resetPerfStats({ MC_USER_MGMT: { enabled: true }, CSAuth: { adminHeaders: () => ({}) } }, fakeFetch(403), (m) => alerts.push(m));
   assert.strictEqual(ok, false);
   assert.deepStrictEqual(alerts, ['Reset failed: HTTP 403']);
+});
+
+test('profile has the Notifications section only with notifications on', () => {
+  const u = { email: 'a@example.org', role: 'user', displayName: 'A' };
+  assert.strictEqual(loadAccount('#/account', () => ({})).t.profileHtml(u).indexOf('notifySection'), -1);
+  const on = loadAccount('#/account', () => ({}), { CSNotify: { enabled: () => true } });
+  assert(on.t.profileHtml(u).indexOf('<h3 id="notifications">Notifications</h3><div id="notifySection"></div>') !== -1);
+});
+
+test('unsubscribe view posts the token only after the confirm click', async () => {
+  const msg = 'Notifications are off. Turn them back on from your account page.';
+  const env = loadAccount('#/account/unsubscribe?token=T%2B1', () => ({ ok: true, status: 200, data: { ok: true, message: msg } }));
+  env.t.views.unsubscribe({});
+  assert.strictEqual(env.loc.hash, '#/account/unsubscribe', 'token left in the address bar');
+  assert.strictEqual(env.calls.length, 0, 'posted before the click');
+  await env.els.unsubBtn.handlers.click();
+  assert.strictEqual(env.calls[0].method, 'POST');
+  assert.strictEqual(env.calls[0].p, '/api/notifications/unsubscribe?token=T%2B1');
+  assert.strictEqual(env.els.accountMsg.textContent, msg);
+});
+
+test('unsubscribe view: no token, and a dead token', async () => {
+  const none = loadAccount('#/account/unsubscribe', () => ({}));
+  none.t.views.unsubscribe({});
+  assert.strictEqual(none.els.unsubBtn.disabled, true);
+  assert(none.els.accountMsg.textContent.indexOf('incomplete') !== -1);
+  const dead = loadAccount('#/account/unsubscribe?token=x', () => ({ ok: false, status: 410, data: { error: 'this link is invalid or was already used' } }));
+  dead.t.views.unsubscribe({});
+  await dead.els.unsubBtn.handlers.click();
+  assert.strictEqual(dead.els.accountMsg.textContent, 'this link is invalid or was already used');
+  assert.strictEqual(dead.els.unsubBtn.disabled, false);
 });
 
 Promise.all(pending).then(() => {

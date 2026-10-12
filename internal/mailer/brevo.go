@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -26,18 +25,7 @@ type Brevo struct {
 
 func NewBrevo(apiKey, fromEmail, fromName string) *Brevo {
 	return &Brevo{APIKey: apiKey, FromEmail: fromEmail, FromName: fromName,
-		BaseURL: brevoBaseURL, HTTP: newBrevoHTTPClient()}
-}
-
-// newBrevoHTTPClient never follows redirects, so the api-key header cannot be
-// forwarded to another host.
-func newBrevoHTTPClient() *http.Client {
-	return &http.Client{
-		Timeout: 10 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+		BaseURL: brevoBaseURL, HTTP: newNoRedirectHTTPClient()}
 }
 
 type brevoAddress struct {
@@ -46,12 +34,13 @@ type brevoAddress struct {
 }
 
 type brevoSendRequest struct {
-	Sender      brevoAddress   `json:"sender"`
-	To          []brevoAddress `json:"to"`
-	Subject     string         `json:"subject"`
-	HTMLContent string         `json:"htmlContent,omitempty"`
-	TextContent string         `json:"textContent,omitempty"`
-	Tags        []string       `json:"tags,omitempty"`
+	Sender      brevoAddress      `json:"sender"`
+	To          []brevoAddress    `json:"to"`
+	Subject     string            `json:"subject"`
+	HTMLContent string            `json:"htmlContent,omitempty"`
+	TextContent string            `json:"textContent,omitempty"`
+	Tags        []string          `json:"tags,omitempty"`
+	Headers     map[string]string `json:"headers,omitempty"`
 }
 
 type brevoError struct {
@@ -69,6 +58,7 @@ func (b *Brevo) Send(ctx context.Context, m Message) (string, error) {
 		Subject:     m.Subject,
 		HTMLContent: m.HTML,
 		TextContent: m.Text,
+		Headers:     m.Headers,
 	}
 	if m.Tag != "" {
 		req.Tags = []string{m.Tag}
@@ -139,17 +129,7 @@ func (b *Brevo) Events(ctx context.Context, messageID string) ([]Event, error) {
 func (b *Brevo) do(r *http.Request) ([]byte, int, error) {
 	r.Header.Set("api-key", b.APIKey)
 	r.Header.Set("Accept", "application/json")
-	client := b.HTTP
-	if client == nil {
-		client = newBrevoHTTPClient()
-	}
-	resp, err := client.Do(r)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
-	return data, resp.StatusCode, err
+	return doLimited(b.HTTP, r)
 }
 
 func brevoErr(op string, status int, body []byte) error {

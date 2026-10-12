@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"hash/fnv"
 	"log"
+	"sort"
 	"strings"
 )
 
@@ -167,12 +168,97 @@ func (s *PacketStore) confirmResolvedPathContains(txID int, pubkey string) bool 
 	return count > 0
 }
 
+// resolvedPathBatchSize bounds the IN list of loadCanonicalResolvedPaths.
+const resolvedPathBatchSize = 500
+
+// loadCanonicalResolvedPaths returns, per transmission in snapshots, the
+// resolved path bestResolvedPath returns, without bestResolvedPath's one or
+// two queries per transmission (#2146). It takes the path of each
+// transmission's longest observation from the resolved-path LRU, as
+// bestResolvedPath does, and reads the rest in one query per
+// resolvedPathBatchSize transmissions. A transmission whose longest observation has no usable
+// stored path, or whose batch failed, goes through bestResolvedPath itself,
+// so the answer is the same. Transmissions with no stored path are absent.
+// Must be called without s.mu held.
+func (s *PacketStore) loadCanonicalResolvedPaths(snapshots map[int][]rpObs) map[int][]*string {
+	out := make(map[int][]*string, len(snapshots))
+	longestTx := make(map[int]int, len(snapshots)) // longest observation ID → transmission ID
+	var fallback []int
+	for txID, observations := range snapshots {
+		if len(observations) == 0 {
+			continue
+		}
+		longest, longestLen := observations[0].id, pathLen(observations[0].pathJSON)
+		for _, o := range observations[1:] {
+			if l := pathLen(o.pathJSON); l > longestLen {
+				longest, longestLen = o.id, l
+			}
+		}
+		longestTx[longest] = txID
+	}
+	if s.db == nil || s.db.conn == nil {
+		return out
+	}
+	// The LRU first, as bestResolvedPath does, so /paths shows the same path
+	// as the packets page for an observation that page already cached.
+	ids := make([]int, 0, len(longestTx))
+	s.lruMu.RLock()
+	for id, txID := range longestTx {
+		if rp, ok := s.apiResolvedPathLRU[id]; ok && rp != nil {
+			out[txID] = rp
+			continue
+		}
+		ids = append(ids, id)
+	}
+	s.lruMu.RUnlock()
+	sort.Ints(ids)
+	for start := 0; start < len(ids); start += resolvedPathBatchSize {
+		chunk := ids[start:min(start+resolvedPathBatchSize, len(ids))]
+		args := make([]interface{}, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		s.beforeCacheLoad("resolvedPathBatch")
+		rows, err := s.db.conn.Query(`SELECT id, resolved_path FROM observations WHERE id IN (?`+
+			strings.Repeat(",?", len(chunk)-1)+`)`, args...)
+		if err != nil {
+			for _, id := range chunk {
+				fallback = append(fallback, longestTx[id])
+			}
+			continue
+		}
+		for rows.Next() {
+			var obsID int
+			var raw sql.NullString
+			if rows.Scan(&obsID, &raw) != nil || !raw.Valid {
+				continue
+			}
+			if rp := unmarshalResolvedPath(raw.String); rp != nil {
+				out[longestTx[obsID]] = rp
+			}
+		}
+		rows.Close()
+		for _, id := range chunk {
+			if _, ok := out[longestTx[id]]; !ok {
+				fallback = append(fallback, longestTx[id])
+			}
+		}
+	}
+	for _, txID := range fallback {
+		if rp := s.bestResolvedPath(txID, snapshots[txID]); rp != nil {
+			out[txID] = rp
+		}
+	}
+	return out
+}
+
 // fetchResolvedPathsForTx fetches resolved_path from SQLite for all observations
 // of a transmission. Used for on-demand API responses and eviction cleanup.
 func (s *PacketStore) fetchResolvedPathsForTx(txID int) map[int][]*string {
 	if s.db == nil || s.db.conn == nil {
 		return nil
 	}
+	s.beforeCacheLoad("resolvedPath")
 	rows, err := s.db.conn.Query(
 		`SELECT id, resolved_path FROM observations WHERE transmission_id = ? AND resolved_path IS NOT NULL`,
 		txID,
@@ -213,6 +299,7 @@ func (s *PacketStore) fetchResolvedPathForObs(obsID int) []*string {
 	}
 	s.lruMu.RUnlock()
 
+	s.beforeCacheLoad("resolvedPath")
 	var rpJSON sql.NullString
 	err := s.db.conn.QueryRow(
 		`SELECT resolved_path FROM observations WHERE id = ?`, obsID,
@@ -230,7 +317,26 @@ func (s *PacketStore) fetchResolvedPathForObs(obsID int) []*string {
 	return rp
 }
 
-// fetchResolvedPathForTxBest returns the best observation's resolved_path for a tx.
+// rpObs is the part of an observation that the best-resolved-path pick
+// needs, copied while s.mu is held. The path is kept as its JSON string and
+// parsed by bestResolvedPath, so the parse runs after s.mu is released.
+type rpObs struct {
+	id       int
+	pathJSON string
+}
+
+// snapshotRPObs copies what bestResolvedPath needs from tx. Caller holds s.mu.
+func snapshotRPObs(tx *StoreTx) []rpObs {
+	out := make([]rpObs, len(tx.Observations))
+	for i, o := range tx.Observations {
+		out[i] = rpObs{id: o.ID, pathJSON: o.PathJSON}
+	}
+	return out
+}
+
+// bestResolvedPath returns the best observation's resolved_path for a tx,
+// given a snapshot of its observations (snapshotRPObs), so it runs without
+// s.mu.
 //
 // "Best" = the longest path_json among observations that actually have a stored
 // resolved_path. Earlier versions picked the longest-path obs unconditionally
@@ -239,41 +345,43 @@ func (s *PacketStore) fetchResolvedPathForObs(obsID int) []*string {
 // callers (e.g. /api/nodes/{pk}/health.recentPackets) lost the field. Fixes
 // #810 by checking all observations and falling back to the longest sibling
 // that has a stored path.
-func (s *PacketStore) fetchResolvedPathForTxBest(tx *StoreTx) []*string {
-	if tx == nil || len(tx.Observations) == 0 {
+func (s *PacketStore) bestResolvedPath(txID int, observations []rpObs) []*string {
+	if len(observations) == 0 {
 		return nil
 	}
+	lens := make([]int, len(observations))
+	for i, obs := range observations {
+		lens[i] = pathLen(obs.pathJSON)
+	}
 	// Fast path: try the longest-path obs first via the LRU/SQL helper.
-	longest := tx.Observations[0]
-	longestLen := pathLen(longest.PathJSON)
-	for _, obs := range tx.Observations[1:] {
-		if l := pathLen(obs.PathJSON); l > longestLen {
-			longest = obs
-			longestLen = l
+	longest := 0
+	for i := 1; i < len(observations); i++ {
+		if lens[i] > lens[longest] {
+			longest = i
 		}
 	}
-	if rp := s.fetchResolvedPathForObs(longest.ID); rp != nil {
+	if rp := s.fetchResolvedPathForObs(observations[longest].id); rp != nil {
 		return rp
 	}
 	// Fallback: longest-path obs has no stored resolved_path. Query all
 	// observations for this tx and pick the one with the longest path_json
 	// that actually has a stored resolved_path.
-	rpMap := s.fetchResolvedPathsForTx(tx.ID)
+	rpMap := s.fetchResolvedPathsForTx(txID)
 	if len(rpMap) == 0 {
 		return nil
 	}
 	var bestRP []*string
 	bestObsID := 0
 	bestLen := -1
-	for _, obs := range tx.Observations {
-		rp, ok := rpMap[obs.ID]
+	for i, obs := range observations {
+		rp, ok := rpMap[obs.id]
 		if !ok || rp == nil {
 			continue
 		}
-		if l := pathLen(obs.PathJSON); l > bestLen {
-			bestLen = l
+		if lens[i] > bestLen {
+			bestLen = lens[i]
 			bestRP = rp
-			bestObsID = obs.ID
+			bestObsID = obs.id
 		}
 	}
 	// Populate LRU so repeat lookups for this tx don't re-issue the multi-row
@@ -284,6 +392,43 @@ func (s *PacketStore) fetchResolvedPathForTxBest(tx *StoreTx) []*string {
 		s.lruMu.Unlock()
 	}
 	return bestRP
+}
+
+// rpJob is one resolved_path lookup for a response map. Code holding s.mu
+// collects jobs; applyResolvedPaths runs them after s.mu is released, so the
+// SQL never waits for a pool connection while the store lock is held (#2146).
+type rpJob struct {
+	m map[string]interface{}
+	// forTx picks the best observation of transmission txID from txObs;
+	// otherwise the job looks up observation obsID.
+	forTx bool
+	txID  int
+	txObs []rpObs
+	obsID int
+}
+
+func txRPJob(m map[string]interface{}, tx *StoreTx) rpJob {
+	return rpJob{m: m, forTx: true, txID: tx.ID, txObs: snapshotRPObs(tx)}
+}
+
+func obsRPJob(m map[string]interface{}, obsID int) rpJob {
+	return rpJob{m: m, obsID: obsID}
+}
+
+// applyResolvedPaths sets "resolved_path" on each job's map. Must be called
+// without s.mu held.
+func (s *PacketStore) applyResolvedPaths(jobs []rpJob) {
+	for _, j := range jobs {
+		var rp []*string
+		if j.forTx {
+			rp = s.bestResolvedPath(j.txID, j.txObs)
+		} else {
+			rp = s.fetchResolvedPathForObs(j.obsID)
+		}
+		if rp != nil {
+			j.m["resolved_path"] = rp
+		}
+	}
 }
 
 // --- Simple LRU cache for resolved paths ---

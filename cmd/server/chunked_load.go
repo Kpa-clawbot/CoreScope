@@ -489,7 +489,6 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 	sort.SliceStable(s.packets, func(i, j int) bool {
 		return s.packets[i].FirstSeen < s.packets[j].FirstSeen
 	})
-	s.buildSubpathIndex()
 	s.buildPathHopIndex()
 	s.buildDistanceIndex()
 	if s.hotStartupHours > 0 {
@@ -583,8 +582,6 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 				PayloadType: nullIntPtr(payloadType),
 				DecodedJSON: nullStrVal(decodedJSON),
 				ScopeName:   nullStrPtr(scopeName),
-				obsKeys:     make(map[string]bool),
-				observerSet: make(map[string]bool),
 			}
 			s.byHash[hashStr] = tx
 			s.packets = append(s.packets, tx)
@@ -606,8 +603,7 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 			obsIDStr := nullStrVal(observerID)
 			obsPJ := nullStrVal(pathJSON)
 
-			dk := obsIDStr + "|" + obsPJ
-			if tx.obsKeys[dk] {
+			if tx.hasObservation(obsIDStr, obsPJ) {
 				continue
 			}
 
@@ -649,13 +645,7 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 				}
 			}
 
-			tx.Observations = append(tx.Observations, obs)
-			tx.obsKeys[dk] = true
-			if obs.ObserverID != "" && !tx.observerSet[obs.ObserverID] {
-				tx.observerSet[obs.ObserverID] = true
-				tx.UniqueObserverCount++
-			}
-			tx.ObservationCount++
+			tx.addObservation(obs)
 			if obs.Timestamp > tx.LatestSeen {
 				tx.LatestSeen = obs.Timestamp
 			}

@@ -41,6 +41,8 @@
 .account-mail .account-links { font-size: var(--fs-md); }
 .account-sessions { list-style: none; padding: 0; margin: 0; }
 .account-sessions li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: var(--fs-sm); }
+.um-chip-device { margin-left: 4px; font-size: var(--fs-xs, 11px); color: var(--text-muted); }
+.account-sessions li.account-empty { color: var(--text-muted); }
 
 .cs-auth-toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 2000; opacity: 0; pointer-events: none;
   background: var(--card-bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; transition: opacity .2s; }
@@ -56,10 +58,15 @@
 .um-actions { display: flex; flex-wrap: wrap; gap: 4px; }
 .um-actions button { min-height: 48px; padding: 4px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-1); color: var(--text); cursor: pointer; touch-action: manipulation; }
 .um-status, .um-chip { display: inline-block; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--border); white-space: nowrap; }
-.um-status-active, .um-chip-delivered, .um-chip-opened, .um-chip-clicked { color: var(--status-green-text); }
+.um-status-active, .um-chip-delivered, .um-chip-opened, .um-chip-clicked { color: var(--status-green-tint-text); }
 .um-status-pending, .um-chip-sent, .um-chip-deferred, .um-chip-soft_bounce { color: var(--status-yellow-text); }
 .um-status-disabled, .um-chip-hard_bounce, .um-chip-invalid_email, .um-chip-blocked, .um-chip-spam, .um-chip-error, .um-chip-bouncing { color: var(--status-red-text); }
 .um-chip-unsubscribed { color: var(--text-muted); }
+.um-status-approved { color: var(--status-green-tint-text); }
+.um-status-rejected, .um-status-revoked { color: var(--status-red-text); }
+.account-proposals { list-style: none; padding: 0; margin: 0; }
+.account-proposals li { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: var(--fs-sm); }
+.account-proposals li .account-hint { flex-basis: 100%; margin: 0; }
 .um-detail { margin-top: 16px; background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
 .um-detail ol { padding-left: 18px; }
 @media (max-width: 760px) { .um-col-optional { display: none; } }
@@ -81,3 +88,23 @@ a.account-btn { display: inline-flex; align-items: center; text-decoration: none
 .cs-dialog { display: flex; flex-direction: column; gap: 8px; color: var(--text); }
 .cs-dialog h3 { margin: 0; }
 .cs-dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+
+/* Node notifications toggle (notifications.js) on the node side pane and full page. */
+.node-notify-slot { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-left: 4px; }
+.node-notify-slot:empty { display: none; }
+.node-notify-btn { white-space: nowrap; }
+/* Sized like the neighbouring buttons, which carry inline sizes in nodes.js
+   (side pane: Details/Analytics/Reach; full page: Copy URL/Reach). */
+#nodeNotifySlot .node-notify-btn { font-size: 11px; padding: 2px 8px; }
+#nodeNotifySlotFull { margin-left: 0; } /* the full page row spaces its buttons with gap */
+#nodeNotifySlotFull .node-notify-btn { font-size: 12px; padding: 4px 10px; }
+.node-notify-btn[aria-pressed="true"] { box-shadow: inset 0 0 0 2px var(--status-green-text); }
+.node-notify-hint { color: var(--text-muted); font-size: var(--fs-sm); }
+.node-notify-hint:empty { display: none; }
+
+/* Notifications section (notifications.js) on the account page. */
+.account-check { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); }
+.account-fieldset { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; }
+#notifyForm + h4 { margin-top: var(--space-lg); }
+.account-watches { list-style: none; padding: 0; margin: 0 0 8px; }
+.account-watches li { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: var(--fs-sm); }

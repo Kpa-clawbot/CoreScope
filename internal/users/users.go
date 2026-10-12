@@ -163,9 +163,10 @@ func (s *Store) Delete(id int64) error {
 
 // ListFilter narrows List. Zero values mean "any".
 type ListFilter struct {
-	Status Status
-	Role   Role
-	Query  string // substring of email or display name, case-insensitive
+	Status   Status
+	Role     Role
+	Query    string // substring of email or display name, case-insensitive
+	Bouncing bool   // only addresses whose mail bounces
 }
 
 // List returns at most 1000 users, newest first. SQLite lower()/LIKE fold
@@ -180,6 +181,9 @@ func (s *Store) List(f ListFilter) ([]User, error) {
 	if f.Role != "" {
 		q += ` AND role = ?`
 		args = append(args, string(f.Role))
+	}
+	if f.Bouncing {
+		q += ` AND email_bouncing != 0`
 	}
 	if t := strings.TrimSpace(f.Query); t != "" {
 		like := "%" + escapeLike(strings.ToLower(t)) + "%"
@@ -212,6 +216,33 @@ func (s *Store) CountActiveAdmins() (int, error) {
 	var n int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM users WHERE role = 'admin' AND status = 'active'`).Scan(&n)
 	return n, err
+}
+
+// UsersByID loads the users with the given ids in one query. Ids that no
+// longer exist are absent from the map.
+func (s *Store) UsersByID(ids []int64) (map[int64]User, error) {
+	out := make(map[int64]User, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	ph := placeholders(len(ids))
+	rows, err := s.db.Query(`SELECT `+userCols+` FROM users WHERE id IN (`+ph+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[u.ID] = *u
+	}
+	return out, rows.Err()
 }
 
 // PruneStalePending deletes pending accounts older than maxAge that have no

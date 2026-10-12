@@ -41,12 +41,13 @@ type paramMeta struct {
 func routeDescriptions() map[string]routeMeta {
 	return map[string]routeMeta{
 		// Config
-		"GET /api/config/cache":      {Summary: "Get cache configuration", Tag: "config"},
-		"GET /api/config/client":     {Summary: "Get client configuration", Tag: "config"},
-		"GET /api/config/regions":    {Summary: "Get configured regions", Tag: "config"},
-		"GET /api/config/theme":      {Summary: "Get theme configuration", Description: "Returns color maps, CSS variables, and theme defaults.", Tag: "config"},
-		"GET /api/config/map":        {Summary: "Get map configuration", Tag: "config"},
-		"GET /api/config/geo-filter": {Summary: "Get geo-filter configuration", Tag: "config"},
+		"GET /api/config/cache":              {Summary: "Get cache configuration", Tag: "config"},
+		"GET /api/config/client":             {Summary: "Get client configuration", Tag: "config"},
+		"GET /api/config/regions":            {Summary: "Get configured regions", Tag: "config"},
+		"GET /api/config/region-quick-picks": {Summary: "Get region quick picks", Description: "Named groups of region (IATA) codes from config regionQuickPicks, offered as one-tap choices by the region filter. Always a list; empty when none are configured.", Tag: "config"},
+		"GET /api/config/theme":              {Summary: "Get theme configuration", Description: "Returns color maps, CSS variables, and theme defaults.", Tag: "config"},
+		"GET /api/config/map":                {Summary: "Get map configuration", Tag: "config"},
+		"GET /api/config/geo-filter":         {Summary: "Get geo-filter configuration", Tag: "config"},
 
 		// Admin / system
 		"GET /api/health":      {Summary: "Health check", Description: "Returns server health, uptime, and memory stats.", Tag: "admin"},
@@ -62,8 +63,9 @@ func routeDescriptions() map[string]routeMeta {
 		"POST /api/auth/register":                          {Summary: "Register an account", Description: "Creates a pending account and mails an activation link. The response is identical whether or not the address is already registered.", Tag: "users"},
 		"POST /api/auth/activate":                          {Summary: "Activate an account", Description: "Request body {token, password}: the mailed activation token and the account password chosen at (the newest) registration. A wrong password answers 401 and leaves the token usable; attempts are rate-limited per account. On success consumes the token, activates the account and starts a session.", Tag: "users"},
 		"POST /api/auth/login":                             {Summary: "Log in", Description: "Email + password. Sets the cs_session cookie. Rate-limited per IP and per address.", Tag: "users"},
-		"POST /api/auth/logout":                            {Summary: "Log out", Tag: "users"},
-		"GET /api/auth/me":                                 {Summary: "Current user", Description: "Returns the logged-in user and the CSRF token, or 401.", Tag: "users", Session: true},
+		"POST /api/auth/device-token":                      {Summary: "Issue a device token (CoreDrive RX)", Description: "Body {email, password, deviceName}. 200 {token, expiresAt, user: {id, displayName}}. The token is a bearer credential (Authorization: Bearer <token>), valid 90 days and extended on use, limited to /api/auth/me, /api/auth/logout, /api/account/settings and /api/account/companions*; other account routes answer 403 to it. deviceName is cleaned (control characters removed, trimmed, at most 64 characters) and shown under Devices. Same 401 answer, rate limits (shared with /api/auth/login) and user.login audit row (detail via=device) as /api/auth/login. No Origin check: nothing is stored in the browser.", Tag: "users"},
+		"POST /api/auth/logout":                            {Summary: "Log out", Description: "With the cs_session cookie (Origin must be publicBaseUrl): ends that browser session and clears the cookie. With Authorization: Bearer <device token>: revokes that device token.", Tag: "users"},
+		"GET /api/auth/me":                                 {Summary: "Current user", Description: "Returns the logged-in user and the CSRF token, or 401. Also accepts a device token (Authorization: Bearer); csrfToken is then empty.", Tag: "users", Session: true},
 		"POST /api/auth/forgot":                            {Summary: "Request a password reset", Tag: "users"},
 		"POST /api/auth/reset":                             {Summary: "Reset the password", Description: "Consumes the mailed reset token and ends all sessions of the user.", Tag: "users"},
 		"PATCH /api/account":                               {Summary: "Update profile", Tag: "users", Session: true},
@@ -71,13 +73,18 @@ func routeDescriptions() map[string]routeMeta {
 		"POST /api/account/password":                       {Summary: "Change password", Tag: "users", Session: true},
 		"POST /api/account/email":                          {Summary: "Request an address change", Tag: "users", Session: true},
 		"POST /api/account/confirm-email":                  {Summary: "Confirm an address change", Tag: "users"},
-		"GET /api/account/sessions":                        {Summary: "List own sessions", Tag: "users", Session: true},
+		"GET /api/account/sessions":                        {Summary: "List own sessions", Description: "[{id, kind, label, createdAt, lastSeenAt, expiresAt, userAgent, current}]. kind is web (a browser) or device (a CoreDrive RX device token); label is the device name, empty for web sessions. DELETE /api/account/sessions/{id} revokes either kind.", Tag: "users", Session: true},
 		"DELETE /api/account/sessions/{id}":                {Summary: "Revoke one own session", Tag: "users", Session: true},
 		"GET /api/account/settings":                        {Summary: "Get own synced settings", Description: "Returns {revision, generation, doc, allowlist}. doc is {v: 1, keys: {<localStorage key>: <raw string>}} or null at revision 0. generation is a random id of the stored document (empty at revision 0); revisions restart at 1 after a DELETE, the generation does not repeat. allowlist lists the keys the server accepts: {key, kind: set|scalar, id?}, where id names the field that identifies an item of a set (absent: the item itself).", Tag: "users", Session: true},
 		"PUT /api/account/settings":                        {Summary: "Replace own synced settings", Description: "Body {baseRevision, baseGeneration, doc}. 200 {revision, generation}. 409 {revision, generation, doc} when baseRevision is not the stored revision or, with a stored document, baseGeneration is not its generation. baseRevision 0 without a stored document starts a new generation. 400 when doc is not {v: 1, keys} or holds a key that is never synced or not allowlisted. 413 above 256 KiB. 429 above 60 PUT requests per hour per user.", Tag: "users", Session: true},
 		"DELETE /api/account/settings":                     {Summary: "Delete own synced settings", Description: "Removes the stored document; the next PUT (baseRevision 0) starts a new one in a new generation.", Tag: "users", Session: true},
-		"GET /api/admin/users":                             {Summary: "List users (admin)", Tag: "users", Session: true, QueryParams: []paramMeta{{Name: "status", Description: "pending | active | disabled", Type: "string"}, {Name: "role", Description: "user | admin", Type: "string"}, {Name: "q", Description: "Substring of email or display name", Type: "string"}}},
-		"GET /api/admin/users/{id}":                        {Summary: "User detail with sessions, mail log and audit (admin)", Tag: "users", Session: true},
+		"POST /api/account/companions/challenge":           {Summary: "Start linking a companion", Description: "Body {pubkey} (64 hex). 200 {challenge, expiresAt, host}: host is what to sign (the host of userManagement.publicBaseUrl); challenge is 32 random bytes as hex, single use, valid 5 minutes, bound to the caller and the pubkey. 400 malformed pubkey; 429 above 60 challenge + link requests per hour per user and per IP. Accepts a device token (Authorization: Bearer).", Tag: "users", Session: true},
+		"POST /api/account/companions":                     {Summary: "Link a companion", Description: "Body {pubkey, challenge, signature, name}. signature is the companion's Ed25519 signature (64 bytes, hex) over the UTF-8 string \"corescope-link:\" + host of userManagement.publicBaseUrl + \":\" + challenge. The challenge is consumed in every case. 200 {pubkey, name, linkedAt}. The synced settings (meshcore-my-nodes) are not touched: a companion is not a node to monitor. A companion linked to another account moves to the caller (the newest proof wins); both get a companion.transfer audit row and the previous owner a mail (a security notice, sent whatever the node notification settings are). 400 malformed pubkey or signature, or a signature that does not verify; 410 challenge missing, expired, used, or bound to another user or pubkey; 429 rate limited. Accepts a device token.", Tag: "users", Session: true},
+		"GET /api/account/companions":                      {Summary: "List own linked companions", Description: "[{pubkey, name, linkedAt, lastSeenAt}], newest link first. lastSeenAt is the newest client reception of that companion (rx_at as stored) or null. Accepts a device token.", Tag: "users", Session: true},
+		"DELETE /api/account/companions/{pubkey}":          {Summary: "Unlink an own companion", Description: "204. Stored coverage stays. 400 malformed pubkey, 404 not linked to the caller. Accepts a device token.", Tag: "users", Session: true},
+		"GET /api/account/export":                          {Summary: "Download own account data", Description: "One JSON file (Content-Disposition attachment corescope-account-<YYYY-MM-DD>.json): {formatVersion: 1, exportedAt, instance, profile, sessions (with kind web|device and the device label), companions (linked companions: pubkey, name, linkedAt), settings, proposals, notifications: {prefs, watches}, audit, mail}. Every row, no caps. Leaves out the password hash, every session, link and unsubscribe token, and companion link challenges. Audit rows name other accounts by id only. Includes activatedAt, activatedBy (id) and each mail row's to-address. Records a user.export audit row after the file is built.", Tag: "users", Session: true},
+		"GET /api/admin/users":                             {Summary: "List users (admin)", Tag: "users", Session: true, QueryParams: []paramMeta{{Name: "status", Description: "pending | active | disabled", Type: "string"}, {Name: "role", Description: "user | admin", Type: "string"}, {Name: "q", Description: "Substring of email or display name", Type: "string"}, {Name: "bouncing", Description: "1 = only addresses whose mail bounces", Type: "string"}}},
+		"GET /api/admin/users/{id}":                        {Summary: "User detail with sessions, companions, mail log and audit (admin)", Description: "{user, sessions, companions, mail, audit}. companions is [{pubkey, name, linkedAt, lastSeenAt}] like GET /api/account/companions.", Tag: "users", Session: true},
 		"DELETE /api/admin/users/{id}":                     {Summary: "Delete a user (admin)", Tag: "users", Session: true},
 		"POST /api/admin/users/{id}/disable":               {Summary: "Disable a user (admin)", Tag: "users", Session: true},
 		"POST /api/admin/users/{id}/enable":                {Summary: "Enable a user (admin)", Tag: "users", Session: true},
@@ -85,7 +92,26 @@ func routeDescriptions() map[string]routeMeta {
 		"POST /api/admin/users/{id}/resend-activation":     {Summary: "Resend the activation mail (admin)", Tag: "users", Session: true},
 		"POST /api/admin/users/{id}/activate":              {Summary: "Activate a pending user manually (admin)", Description: "For when mail keeps failing. The address stays unverified; recorded as activatedBy + audit row.", Tag: "users", Session: true},
 		"POST /api/admin/users/{id}/mail/{mailId}/refresh": {Summary: "Pull delivery events for one mail from the provider (admin)", Tag: "users", Session: true},
-		"POST /api/mail/brevo/webhook":                     {Summary: "Brevo delivery-event webhook", Description: "Authenticated with Authorization: Bearer <userManagement.mail.webhookSecret>. Registered only when the secret is set.", Tag: "users"},
+		"GET /api/admin/audit":                             {Summary: "Global audit log (admin)", Description: "Newest first, keyset-paginated: {entries, next}. Pass next as before for the following page; next is null on the last page. Entry: {id, at, action, actor, target, detail}; actor and target are {id, displayName, email}, {id, deleted: true} for a removed account, or null for the system. Login rows (user.login, user.login.failed) are kept 90 days. 400 on an invalid parameter.", Tag: "users", Session: true, QueryParams: []paramMeta{{Name: "action", Description: "One action, or a group ending in .* (user.login.* matches user.login and user.login.failed)", Type: "string"}, {Name: "user", Description: "User id, as actor or target", Type: "integer"}, {Name: "from", Description: "RFC 3339 time, inclusive", Type: "string"}, {Name: "to", Description: "RFC 3339 time, inclusive", Type: "string"}, {Name: "before", Description: "Only entries with a smaller id (next of the previous page)", Type: "integer"}, {Name: "limit", Description: "Page size, default 100, capped at 500", Type: "integer"}}},
+		"GET /api/admin/stats":                             {Summary: "User figures for the admin overview (admin)", Description: "Accounts by status, active admins, pending accounts older than 24 hours (stuckPending), bouncing addresses, registrations in 7 and 30 days and per UTC day for 30 days (newPerDay, oldest first), users active in 7 and 30 days, logins and failed logins in 24 hours, mail sent in 7 days by latest delivery status (mail7d), and accounts with 5 or more failed logins in 24 hours (guessing: [{userId, displayName, failed}]).", Tag: "users", Session: true},
+		"GET /api/admin/users-backup":                      {Summary: "Download a users.db snapshot (admin)", Description: "A fresh, consistent copy of users.db (VACUUM INTO) as application/octet-stream, attachment corescope-users-<YYYYMMDD-HHMMSS>.db (UTC). It holds every password hash and address: store it encrypted. Records a user.backup audit row. The analyzer database has its own route, GET /api/backup.", Tag: "users", Session: true},
+		"POST /api/proposals":                              {Summary: "Propose a hashtag channel", Description: "Body {kind: \"hashtag_channel\", subject}. subject is trimmed and gets a leading # when missing; at most 31 UTF-8 bytes including the #, no control or invisible characters (ZWJ allowed), not Public. 201 with the proposal {id, kind, subject, status, note, createdAt, decidedAt}. 400 invalid kind or name, 409 already pending, already approved or rejected, or already decrypted on this instance (a name in config.json hashChannels or channelKeys, case-sensitive), 429 when the caller created userManagement.channelProposals.perUserPerDay proposals in 24 hours or maxPending proposals wait for review. Registered only when userManagement.channelProposals.enabled.", Tag: "users", Session: true},
+		"GET /api/account/proposals":                       {Summary: "List own proposals", Description: "The caller's proposals, newest first: [{id, kind, subject, status, note, createdAt, decidedAt}]. note is the reviewer's reason.", Tag: "users", Session: true},
+		"GET /api/admin/proposals":                         {Summary: "List proposals (admin)", Description: "Newest first, at most 500: the proposal fields plus proposer and reviewer ({id, displayName, email}, or null once the account is deleted). 400 on an invalid filter.", Tag: "users", Session: true, QueryParams: []paramMeta{{Name: "status", Description: "pending | approved | rejected | revoked", Type: "string"}, {Name: "kind", Description: "hashtag_channel", Type: "string"}}},
+		"POST /api/admin/proposals/{id}/approve":           {Summary: "Approve a proposal (admin)", Description: "Body {note} (at most 500 characters). Pending only (409 otherwise). The ingestor decrypts the channel from its next refresh (at most a minute) and /api/channels lists it in approvedChannels. 409 when userManagement.channelProposals.maxApproved channels are approved.", Tag: "users", Session: true},
+		"POST /api/admin/proposals/{id}/reject":            {Summary: "Reject a proposal (admin)", Description: "Body {note}. Pending only (409 otherwise). The name cannot be proposed again until the row is pruned, 90 days after the decision.", Tag: "users", Session: true},
+		"POST /api/admin/proposals/{id}/revoke":            {Summary: "Revoke an approved proposal (admin)", Description: "Body {note}. Approved only (409 otherwise). The ingestor stops decrypting the channel from its next refresh unless the channel is configured; stored messages stay. The name can be proposed again.", Tag: "users", Session: true},
+		"POST /api/mail/brevo/webhook":                     {Summary: "Brevo delivery-event webhook", Description: "Authenticated with Authorization: Bearer <userManagement.mail.webhookSecret>. Registered only when mail.provider is brevo and the secret is set.", Tag: "users"},
+		"POST /api/mail/postal/webhook":                    {Summary: "Postal message-event webhook", Description: "Authenticated with HTTP Basic auth whose password is userManagement.mail.webhookSecret (put it in the webhook URL: https://postal:<secret>@host/api/mail/postal/webhook). Registered only when mail.provider is postal and the secret is set.", Tag: "users"},
+
+		// Node notifications (user management, part E)
+		"GET /api/account/notifications":                     {Summary: "Get own notification settings", Description: "Returns {enabled, events, availableEvents, externalLabel, watches: [{pubkey, name, known, createdAt}], limits: {maxWatches, perUserPerDay, mailsLast24h}}. node.external and externalLabel appear only when notifications.externalAlerts is configured. Creates the default settings (on, node.offline and node.battery) on first use. known is false once the node left the analyzer database. Registered only when userManagement.notifications.enabled.", Tag: "users", Session: true},
+		"PUT /api/account/notifications":                     {Summary: "Change own notification settings", Description: "Body {enabled, events}. events from node.offline, node.battery, node.external (when externalAlerts is configured) and, for admins, foreign.new and observer.offline. Answers the GET body. 400 unknown event type or node.external without externalAlerts, 403 an admin event chosen by a non-admin. Events left out lose their stored state, so choosing them again starts without a mail.", Tag: "users", Session: true},
+		"PUT /api/account/notifications/watches/{pubkey}":    {Summary: "Watch a node", Description: "Answers the GET body. 400 when pubkey is not 64 hex characters, 404 when the node is not in the analyzer database, 409 when userManagement.notifications.maxWatchesPerUser nodes are watched. Watching a watched node is 200.", Tag: "users", Session: true},
+		"DELETE /api/account/notifications/watches/{pubkey}": {Summary: "Stop watching a node", Description: "Answers the GET body; removing a node that is not watched is 200. 400 when pubkey is not 64 hex characters.", Tag: "users", Session: true},
+		"POST /api/account/notifications/watch-my-nodes":     {Summary: "Watch the synced My nodes", Description: "Copies the pubkeys of the caller's synced meshcore-my-nodes setting into the watch list, up to the limit. Answers {added, already, skipped, account}; skipped counts malformed keys, nodes not in the analyzer database and nodes over the limit; account is the GET body.", Tag: "users", Session: true},
+		"GET /api/notifications/unsubscribe":                 {Summary: "Unsubscribe link (redirect)", Description: "303 to <publicBaseUrl>/#/account/unsubscribe?token=, the confirm view. Changes nothing, so link scanners cannot unsubscribe anyone.", Tag: "users", QueryParams: []paramMeta{{Name: "token", Description: "The unsubscribe token from the mail", Type: "string"}}},
+		"POST /api/notifications/unsubscribe":                {Summary: "Turn notification mails off", Description: "No session and no Origin check: the confirm button and the mail provider's List-Unsubscribe-Post one-click both land here. 200 {ok, message}, also when already off; 410 for an unknown token. The token can do nothing else.", Tag: "users", QueryParams: []paramMeta{{Name: "token", Description: "The unsubscribe token from the mail", Type: "string"}}},
 
 		// Packets
 		"GET /api/packets": {Summary: "List packets", Description: "Returns decoded packets with filtering, sorting, and pagination.", Tag: "packets",
@@ -133,9 +159,21 @@ func routeDescriptions() map[string]routeMeta {
 				{Name: "z", Description: "Leaflet zoom level; sets the hex resolution", Type: "integer"},
 				{Name: "days", Description: "Look-back window in days (1-30, default 7)", Type: "integer"},
 			}},
+		"GET /api/rx-coverage": {Summary: "Mobile RX coverage hex grid", Description: "GeoJSON hex cells where mobile clients directly heard nodes (client_receptions): count, best SNR and the nodes heard per cell. With gaps=1 the payload also carries a `gaps` member: cells a companion drove through (moving client_rf_samples) with no reception in the same window, each with its sample count, plus `gaps_truncated` when capped. Gaps are only returned without a node filter and with clientRfSamples on; they mean nothing was received in this period, not that there is no coverage. Gated on clientRxCoverage.", Tag: "coverage",
+			QueryParams: []paramMeta{
+				{Name: "bbox", Description: "Bounding box as minLat,minLon,maxLat,maxLon", Type: "string", Required: true},
+				{Name: "z", Description: "Leaflet zoom level; sets the hex resolution", Type: "integer"},
+				{Name: "days", Description: "Look-back window in days (1-30, default 7)", Type: "integer"},
+				{Name: "node", Description: "Only receptions of this node (pubkey or 2-3 byte prefix); disables gaps", Type: "string"},
+				{Name: "rx", Description: "Only this companion's receptions (and, with gaps=1, its own track)", Type: "string"},
+				{Name: "gaps", Description: "1 = add cells driven through with nothing received", Type: "string"},
+			}},
 		"GET /api/scope-audit": {Summary: "Network-wide scope audit", Description: "For every repeater that has answered a declared-regions request: the regions it declares, which of those it has NOT been observed forwarding in the window, which scopes it forwards without declaring, and whether it forwards unscoped floods while omitting the '*' wildcard. '*' is never listed as a region — it governs unscoped floods, not a scope. Repeaters never successfully asked are absent rather than shown as declaring nothing. Rows with missing regions sort first; a short window is weak evidence, since a quiet region simply has no traffic.", Tag: "analytics",
 			QueryParams: []paramMeta{
 				{Name: "window", Description: "Time window: 1h, 24h, or 7d (default 24h)", Type: "string"},
+				{Name: "mode", Description: "declared (default) or transport", Type: "string"},
+				{Name: "scope", Description: "mode=transport only: region scope to split the fleet by", Type: "string"},
+				{Name: "region", Description: "Observer IATA codes, comma-separated: count only forwarding heard by observers there. All means no filter", Type: "string"},
 			}},
 
 		// Analytics
@@ -159,7 +197,7 @@ func routeDescriptions() map[string]routeMeta {
 			}},
 
 		// Channels
-		"GET /api/channels":                 {Summary: "List channels", Description: "Returns known mesh channels with message counts.", Tag: "channels"},
+		"GET /api/channels":                 {Summary: "List channels", Description: "Returns known mesh channels with message counts. With userManagement.channelProposals.enabled the response also carries approvedChannels: the approved hashtag channel names, oldest approval first, at most maxApproved, listed also before they have traffic.", Tag: "channels"},
 		"GET /api/channels/{hash}/messages": {Summary: "Get channel messages", Description: "Returns messages for a specific channel.", Tag: "channels"},
 
 		// Observers
@@ -551,7 +589,9 @@ const swaggerUIHTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <title>CoreScope API — Swagger UI</title>
-  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.33.1/swagger-ui.css"
+    integrity="sha384-Ov4/wv3j2bmct8cDc5X4ngJZohVPzEmc6uDPH8WeljUxO5vtoykvMEfbu9Vh6RaW"
+    crossorigin="anonymous">
   <style>
     html { box-sizing: border-box; overflow-y: scroll; }
     *, *:before, *:after { box-sizing: inherit; }
@@ -561,7 +601,9 @@ const swaggerUIHTML = `<!DOCTYPE html>
 </head>
 <body>
   <div id="swagger-ui"></div>
-  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script src="https://unpkg.com/swagger-ui-dist@5.33.1/swagger-ui-bundle.js"
+    integrity="sha384-ZPehFMQommnnuaZ4rpxgkgTT2DKFVp4hZC/7pLit+9Lek9T1YGSo23eHFbvNkXkw"
+    crossorigin="anonymous"></script>
   <script>
     SwaggerUIBundle({
       url: '/api/spec',

@@ -413,7 +413,7 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
           return `<tr style="cursor:pointer" tabindex="0" role="row" data-action="navigate" data-value="#/observers/${encodeURIComponent(o.id)}" data-observer-id="${escapeHtml(o.id)}" onclick="location.hash='#/observers/${encodeURIComponent(o.id)}'">
             <td data-value="${_healthRank}"><span class="health-dot ${h.cls}" title="${h.label}">${shapeIcon}</span> ${h.label}</td>
             <td data-testid="obs-cell-name" data-value="${escapeHtml(String(o.name || o.id))}" class="mono">${escapeHtml(o.name || o.id)}${window.ObserversNaiveChip.render(o)}${o.can_relay === false ? ' <span class="badge-listener" title="Firmware reported repeat:off — listener-only; excluded from path-hop disambiguator (issue #1290)">listener</span>' : (o.can_relay === true ? ' <span class="badge-repeater" title="Firmware reported repeat:on — eligible as a path hop">repeater</span>' : '')}</td>
-            <td data-value="${escapeHtml(o.iata || '')}">${o.iata ? `<span class="badge-region">${o.iata}</span>` : '—'}</td>
+            <td data-value="${escapeHtml(o.iata || '')}">${o.iata ? `<span class="badge-region">${escapeHtml(o.iata)}</span>` : '—'}</td>
             <td data-value="${_lastSeenMs}">${timeAgo(o.last_seen)}</td>
             <td data-testid="obs-cell-last-packet" data-value="${_lastPktMs}">${o.last_packet_at ? timeAgo(o.last_packet_at) : '<span class="text-muted">—</span>'}</td>
             <td data-value="${_healthRank}">${packetBadge(o)}</td>
@@ -526,7 +526,7 @@ window.preserveCompareSelection = function preserveCompareSelection(prevIds, tbo
       (naiveChipHTML ? '<div style="margin-bottom:10px">' + naiveChipHTML + ' <span class="text-muted">Clock is naive — per-packet timing clamped to ingest time. Clears itself 24h after the last skew event.</span></div>' : '') +
       '<dl class="slide-over-dl" style="margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:13px">' +
         '<dt>Status</dt><dd><span class="health-dot ' + h.cls + '"><svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"></use></svg></span> ' + h.label + '</dd>' +
-        '<dt>Region</dt><dd>' + (o.iata ? '<span class="badge-region">' + o.iata + '</span>' : '—') + '</dd>' +
+        '<dt>Region</dt><dd>' + (o.iata ? '<span class="badge-region">' + escapeHtml(o.iata) + '</span>' : '—') + '</dd>' +
         '<dt>Last status</dt><dd>' + timeAgo(o.last_seen) + '</dd>' +
         '<dt>Last packet</dt><dd>' + (o.last_packet_at ? timeAgo(o.last_packet_at) : '—') + '</dd>' +
         '<dt>Total packets</dt><dd>' + (o.packet_count || 0).toLocaleString() + '</dd>' +

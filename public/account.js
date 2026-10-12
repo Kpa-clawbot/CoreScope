@@ -1,6 +1,7 @@
 /* Account pages for optional user management.
  *   #/account/login | register | activate?token= | forgot | reset?token= | confirm-email?token= | check-mail
- *   #/account                   : profile, password, address, sessions, delete
+ *   #/account                   : profile, password, address, sessions, my proposals, notifications, delete
+ *   #/account/unsubscribe?token= : confirm turning notification mails off (link from a notification mail)
  * Every dynamic string goes through escapeHtml; messages use textContent. */
 (function () {
   'use strict';
@@ -96,7 +97,7 @@
       '<p class="account-hint">Signed in as ' + escapeHtml(u.email) + (u.role === 'admin' ? ' (admin)' : '') + '</p>' +
       '<div class="account-actions">' +
       '<button type="button" id="accountPageLogout" class="account-btn account-btn-secondary">Log out</button>' +
-      (u.role === 'admin' ? '<a class="account-btn account-btn-secondary" href="#/admin/users">Manage users</a>' : '') +
+      (u.role === 'admin' ? '<a class="account-btn account-btn-secondary" href="#/admin">Admin</a>' : '') +
       '</div>' + msgBox('logoutMsg') +
       '<h3>Profile</h3><form id="profileForm" class="account-form" novalidate>' +
       field('profName', 'Display name', 'text', 'nickname', ' minlength="2" maxlength="32"') +
@@ -110,19 +111,53 @@
       field('emailPw', 'Current password', 'password', 'current-password') +
       submitBtn('Change address') + msgBox('emailMsg') + '</form>' +
       '<h3>Devices</h3><ul class="account-sessions" id="sessList"></ul>' + msgBox('sessMsg') +
+      '<h3>Companions</h3><ul class="account-sessions" id="compList"></ul>' + msgBox('compMsg') +
+      (window.CSProposals && window.CSProposals.enabled() ? '<h3>My proposals</h3><div id="propList"></div>' + msgBox('propMsg') : '') +
+      (window.CSNotify && window.CSNotify.enabled() ? '<h3 id="notifications">Notifications</h3><div id="notifySection"></div>' + msgBox('notifyMsg') : '') +
       (window.CSSettingsSync ? '<h3>Settings sync</h3><div id="syncSection"></div>' : '') +
+      '<h3>My data</h3>' +
+      '<p class="account-hint">One JSON file with everything this instance stores about your account: profile, devices, synced settings, proposals, notifications, and your account and mail history. Passwords and login tokens are not included.</p>' +
+      '<div class="account-actions"><a class="account-btn account-btn-secondary" id="accountExport" href="/api/account/export" download>Download my data</a></div>' +
       '<h3>Delete account</h3><form id="delForm" class="account-form" novalidate>' +
-      '<p class="account-hint">This removes your account permanently.</p>' +
+      '<p class="account-hint">This removes your account permanently. Server backups can still hold a copy for a few days until they rotate out.</p>' +
       field('delPw', 'Current password', 'password', 'current-password') +
       submitBtn('Delete my account', true) + msgBox('delMsg') + '</form>');
   }
 
+  // A CoreDrive RX device token (kind "device") shows its label and a marker;
+  // a browser session its user agent. Both are revoked with the same button.
   function sessionsHtml(list) {
     var html = '';
     (list || []).forEach(function (s) {
-      html += '<li><span>' + escapeHtml(s.userAgent || 'Unknown device') + '<br><small>last seen ' + escapeHtml(fmtDate(s.lastSeenAt)) + '</small></span>' +
+      var device = s.kind === 'device';
+      var name = device ? 'CoreDrive RX' + (s.label ? ' – ' + s.label : '') : (s.userAgent || 'Unknown device');
+      html += '<li' + (device ? ' data-kind="device"' : '') + '><span>' + escapeHtml(name) +
+        (device ? ' <span class="um-chip um-chip-device">app</span>' : '') +
+        '<br><small>last seen ' + escapeHtml(fmtDate(s.lastSeenAt)) + '</small></span>' +
         (s.current ? '<span class="um-chip">this device</span>'
                    : '<button type="button" class="account-btn account-btn-secondary" data-sess="' + escapeHtml(String(s.id)) + '">Log out</button>') + '</li>';
+    });
+    return html;
+  }
+
+  function shortKey(pk) { return String(pk || '').slice(0, 12) + '…'; }
+
+  // Companions linked to this account (CoreDrive RX links them by signing a
+  // challenge with the companion's key). Private to the owner.
+  function companionsHtml(list) {
+    if (!list || !list.length) {
+      return '<li class="account-empty" id="compEmpty"><span>No companions linked yet. ' +
+        'To link one, log in to this site from the CoreDrive RX app while it is connected to your companion; ' +
+        'it then shows up here.</span></li>';
+    }
+    var html = '';
+    list.forEach(function (c) {
+      var name = c.name || shortKey(c.pubkey);
+      html += '<li><span>' + escapeHtml(name) + ' <small><code>' + escapeHtml(shortKey(c.pubkey)) + '</code></small>' +
+        '<br><small>linked ' + escapeHtml(fmtDate(c.linkedAt)) + ' · last seen ' +
+        escapeHtml(c.lastSeenAt ? fmtDate(c.lastSeenAt) : 'never') + '</small></span>' +
+        '<button type="button" class="account-btn account-btn-secondary" data-unlink="' + escapeHtml(c.pubkey) +
+        '" aria-label="Unlink ' + escapeHtml(name) + '">Unlink</button></li>';
     });
     return html;
   }
@@ -253,6 +288,27 @@
       if (p) p.then(function (r) { if (r && r.ok && CSAuth.user()) CSAuth.refreshMe(); });
     },
 
+    unsubscribe: function (app) {
+      var token = takeToken('unsubscribe');
+      app.innerHTML = shell('Stop notification mails',
+        '<p class="account-hint">This turns off all node notification mails for the account the link was sent to. You can turn them back on from your account page.</p>' +
+        '<button type="button" id="unsubBtn" class="account-btn account-btn-primary">Turn notifications off</button>' + msgBox() +
+        '<p class="account-links"><a href="#/account?section=notifications">Notification settings</a></p>');
+      var btn = document.getElementById('unsubBtn');
+      if (!token) {
+        btn.disabled = true;
+        CSAuth.say('accountMsg', 'This link is incomplete. Open the link from the mail again.', false);
+        return;
+      }
+      btn.addEventListener('click', function () {
+        btn.disabled = true;
+        return CSAuth.request('POST', '/api/notifications/unsubscribe?token=' + encodeURIComponent(token)).then(function (r) {
+          CSAuth.say('accountMsg', r.ok ? r.data.message : CSAuth.errText(r), r.ok);
+          if (!r.ok) btn.disabled = false;
+        }, function () { btn.disabled = false; CSAuth.say('accountMsg', 'Network error, try again.', false); });
+      });
+    },
+
     profile: function (app) {
       var u = CSAuth.user();
       if (!u) { location.hash = '#/account/login'; return; }
@@ -261,6 +317,13 @@
       app.innerHTML = profileHtml(u);
       document.getElementById('profName').value = u.displayName;
       if (window.CSSettingsSync) window.CSSettingsSync.mountSection(document.getElementById('syncSection'));
+      if (window.CSProposals && window.CSProposals.enabled()) window.CSProposals.loadMine(document.getElementById('propList'), 'propMsg');
+      if (window.CSNotify && window.CSNotify.enabled()) {
+        window.CSNotify.mountSection(document.getElementById('notifySection'), 'notifyMsg').then(function () {
+          var h = query().get('section') === 'notifications' && document.getElementById('notifications');
+          if (h && h.scrollIntoView) h.scrollIntoView();
+        });
+      }
 
       document.getElementById('accountPageLogout').addEventListener('click', function () {
         return CSAuth.logout('#/account/login').then(function (r) {
@@ -314,6 +377,26 @@
         }).catch(function () { CSAuth.say('sessMsg', 'Network error, try again.', false); });
       });
       loadSessions();
+
+      function loadCompanions() {
+        return CSAuth.request('GET', '/api/account/companions').then(function (r) {
+          var list = document.getElementById('compList');
+          if (!list) return;
+          if (!r.ok) { CSAuth.say('compMsg', CSAuth.errText(r), false); return; }
+          list.innerHTML = companionsHtml(r.data);
+        }).catch(function () { CSAuth.say('compMsg', 'Network error, try again.', false); });
+      }
+      document.getElementById('compList').addEventListener('click', function (e) {
+        var pk = e.target && e.target.getAttribute && e.target.getAttribute('data-unlink');
+        if (!pk) return;
+        if (!window.confirm('Unlink this companion? Its coverage no longer counts as yours. ' +
+          'Link it again by logging in from CoreDrive RX.')) return;
+        return CSAuth.request('DELETE', '/api/account/companions/' + encodeURIComponent(pk)).then(function (r) {
+          CSAuth.say('compMsg', r.ok ? 'Companion unlinked.' : CSAuth.errText(r), r.ok);
+          loadCompanions();
+        }).catch(function () { CSAuth.say('compMsg', 'Network error, try again.', false); });
+      });
+      loadCompanions();
     }
   };
 
@@ -337,5 +420,5 @@
   });
 
   registerPage('account', { init: init, destroy: function () {} });
-  window.CSAccount = { _test: { profileHtml: profileHtml, sessionsHtml: sessionsHtml, renewLinkHtml: renewLinkHtml, views: views, checkMailHtml: checkMailHtml } };
+  window.CSAccount = { _test: { profileHtml: profileHtml, sessionsHtml: sessionsHtml, companionsHtml: companionsHtml, renewLinkHtml: renewLinkHtml, views: views, checkMailHtml: checkMailHtml } };
 })();

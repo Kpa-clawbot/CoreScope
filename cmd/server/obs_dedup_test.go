@@ -5,129 +5,108 @@ import (
 	"testing"
 )
 
-// TestObsDedupCorrectness verifies that the map-based dedup produces correct
-// results: no duplicate observations (same observerID + pathJSON) on a single
-// transmission.
-func TestObsDedupCorrectness(t *testing.T) {
-	tx := &StoreTx{
-		ID:      1,
-		Hash:    "abc123",
-		obsKeys: make(map[string]bool),
+func addTestObs(tx *StoreTx, observerID, pathJSON string) bool {
+	if tx.hasObservation(observerID, pathJSON) {
+		return false
 	}
+	tx.addObservation(&StoreObs{ObserverID: observerID, PathJSON: pathJSON})
+	return true
+}
 
-	// Add 5 unique observations
+// TestObsDedupCorrectness: the same observer with the same path is a
+// duplicate; a new path or a new observer is not.
+func TestObsDedupCorrectness(t *testing.T) {
+	tx := &StoreTx{ID: 1, Hash: "abc123"}
 	for i := 0; i < 5; i++ {
-		obsID := fmt.Sprintf("obs-%d", i)
-		pathJSON := fmt.Sprintf(`["path-%d"]`, i)
-		dk := obsID + "|" + pathJSON
-		if tx.obsKeys[dk] {
+		if !addTestObs(tx, fmt.Sprintf("obs-%d", i), fmt.Sprintf(`["path-%d"]`, i)) {
 			t.Fatalf("observation %d should not be a duplicate", i)
 		}
-		tx.Observations = append(tx.Observations, &StoreObs{
-			ID:         i,
-			ObserverID: obsID,
-			PathJSON:   pathJSON,
-		})
-		tx.obsKeys[dk] = true
-		tx.ObservationCount++
 	}
-
-	if tx.ObservationCount != 5 {
-		t.Fatalf("expected 5 observations, got %d", tx.ObservationCount)
+	if tx.ObservationCount != 5 || len(tx.Observations) != 5 {
+		t.Fatalf("expected 5 observations, got count=%d len=%d", tx.ObservationCount, len(tx.Observations))
 	}
-
-	// Try to add duplicates of each — all should be rejected
 	for i := 0; i < 5; i++ {
-		obsID := fmt.Sprintf("obs-%d", i)
-		pathJSON := fmt.Sprintf(`["path-%d"]`, i)
-		dk := obsID + "|" + pathJSON
-		if !tx.obsKeys[dk] {
+		if !tx.hasObservation(fmt.Sprintf("obs-%d", i), fmt.Sprintf(`["path-%d"]`, i)) {
 			t.Fatalf("observation %d should be detected as duplicate", i)
 		}
 	}
-
-	// Same observer, different path — should NOT be a duplicate
-	dk := "obs-0" + "|" + `["different-path"]`
-	if tx.obsKeys[dk] {
+	if tx.hasObservation("obs-0", `["different-path"]`) {
 		t.Fatal("different path should not be a duplicate")
 	}
-
-	// Different observer, same path — should NOT be a duplicate
-	dk = "obs-new" + "|" + `["path-0"]`
-	if tx.obsKeys[dk] {
+	if tx.hasObservation("obs-new", `["path-0"]`) {
 		t.Fatal("different observer should not be a duplicate")
 	}
 }
 
-// TestObsDedupNilMapSafety ensures obsKeys lazy init works for pre-existing
-// transmissions that may not have the map initialized.
-func TestObsDedupNilMapSafety(t *testing.T) {
-	tx := &StoreTx{ID: 1, Hash: "abc"}
-	// obsKeys is nil — the lazy init pattern used in IngestNewFromDB/IngestNewObservations
-	if tx.obsKeys == nil {
-		tx.obsKeys = make(map[string]bool)
+// TestObsDedupSmallTxCarriesNoMaps: most transmissions have a handful of
+// observations, and two maps each cost them a few hundred bytes. Below the
+// threshold the checks scan tx.Observations instead.
+func TestObsDedupSmallTxCarriesNoMaps(t *testing.T) {
+	tx := &StoreTx{ID: 1}
+	for i := 0; i < obsIndexThreshold-1; i++ {
+		addTestObs(tx, fmt.Sprintf("obs-%d", i%4), fmt.Sprintf(`["p%d"]`, i))
 	}
-	dk := "obs1|path1"
-	if tx.obsKeys[dk] {
-		t.Fatal("should not be duplicate on empty map")
+	if len(tx.Observations) != obsIndexThreshold-1 {
+		t.Fatalf("len = %d, want %d", len(tx.Observations), obsIndexThreshold-1)
 	}
-	tx.obsKeys[dk] = true
-	if !tx.obsKeys[dk] {
-		t.Fatal("should be duplicate after insert")
+	if tx.obsKeys != nil || tx.observerSet != nil {
+		t.Fatal("a transmission under the threshold should not carry dedup maps")
 	}
-}
-
-// BenchmarkObsDedupMap benchmarks the map-based O(1) dedup approach.
-func BenchmarkObsDedupMap(b *testing.B) {
-	for _, obsCount := range []int{10, 50, 100, 500} {
-		b.Run(fmt.Sprintf("obs=%d", obsCount), func(b *testing.B) {
-			// Pre-populate a tx with obsCount observations
-			tx := &StoreTx{
-				ID:      1,
-				obsKeys: make(map[string]bool),
-			}
-			for i := 0; i < obsCount; i++ {
-				obsID := fmt.Sprintf("obs-%d", i)
-				pathJSON := fmt.Sprintf(`["hop-%d"]`, i)
-				dk := obsID + "|" + pathJSON
-				tx.Observations = append(tx.Observations, &StoreObs{
-					ObserverID: obsID,
-					PathJSON:   pathJSON,
-				})
-				tx.obsKeys[dk] = true
-			}
-
-			// Benchmark: check dedup for a new observation (not duplicate)
-			newDK := "new-obs|new-path"
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				_ = tx.obsKeys[newDK]
-			}
-		})
+	if tx.UniqueObserverCount != 4 {
+		t.Fatalf("UniqueObserverCount = %d, want 4", tx.UniqueObserverCount)
 	}
 }
 
-// BenchmarkObsDedupLinear benchmarks the old O(n) linear scan for comparison.
-func BenchmarkObsDedupLinear(b *testing.B) {
-	for _, obsCount := range []int{10, 50, 100, 500} {
+// TestObsDedupAcrossTheThreshold: past the threshold the maps take over and
+// give the same answers as the scan did.
+func TestObsDedupAcrossTheThreshold(t *testing.T) {
+	tx := &StoreTx{ID: 1}
+	n := obsIndexThreshold * 3
+	for i := 0; i < n; i++ {
+		if !addTestObs(tx, fmt.Sprintf("obs-%d", i%10), fmt.Sprintf(`["p%d"]`, i)) {
+			t.Fatalf("observation %d rejected", i)
+		}
+	}
+	if tx.obsKeys == nil || tx.observerSet == nil {
+		t.Fatal("a busy transmission should index its observations")
+	}
+	if tx.UniqueObserverCount != 10 || tx.ObservationCount != n {
+		t.Fatalf("unique=%d count=%d, want 10 and %d", tx.UniqueObserverCount, tx.ObservationCount, n)
+	}
+	for i := 0; i < n; i++ {
+		if addTestObs(tx, fmt.Sprintf("obs-%d", i%10), fmt.Sprintf(`["p%d"]`, i)) {
+			t.Fatalf("duplicate %d accepted after the threshold", i)
+		}
+	}
+	if !addTestObs(tx, "obs-new", `["p0"]`) || tx.UniqueObserverCount != 11 {
+		t.Fatalf("new observer: unique=%d, want 11", tx.UniqueObserverCount)
+	}
+}
+
+// TestObsDedupEmptyObserverNotCounted: an observation without an observer
+// ID is kept but does not count as a distinct observer.
+func TestObsDedupEmptyObserverNotCounted(t *testing.T) {
+	tx := &StoreTx{ID: 1}
+	addTestObs(tx, "", `["a"]`)
+	addTestObs(tx, "", `["b"]`)
+	if tx.UniqueObserverCount != 0 || tx.ObservationCount != 2 {
+		t.Fatalf("unique=%d count=%d, want 0 and 2", tx.UniqueObserverCount, tx.ObservationCount)
+	}
+}
+
+// BenchmarkObsDedup measures a miss (the common case on ingest) at sizes
+// either side of the threshold.
+func BenchmarkObsDedup(b *testing.B) {
+	for _, obsCount := range []int{4, 16, 40, 63, 64, 500} {
 		b.Run(fmt.Sprintf("obs=%d", obsCount), func(b *testing.B) {
 			tx := &StoreTx{ID: 1}
 			for i := 0; i < obsCount; i++ {
-				tx.Observations = append(tx.Observations, &StoreObs{
-					ObserverID: fmt.Sprintf("obs-%d", i),
-					PathJSON:   fmt.Sprintf(`["hop-%d"]`, i),
-				})
+				addTestObs(tx, fmt.Sprintf("%064d", i), fmt.Sprintf(`["hop-%d"]`, i))
 			}
-
-			newObsID := "new-obs"
-			newPath := "new-path"
+			newID := fmt.Sprintf("%064d", obsCount+1)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				for _, existing := range tx.Observations {
-					if existing.ObserverID == newObsID && existing.PathJSON == newPath {
-						break
-					}
-				}
+				_ = tx.hasObservation(newID, `["new-path"]`)
 			}
 		})
 	}

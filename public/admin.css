@@ -1,0 +1,23 @@
+/* Admin area (#/admin, optional user management): tab shell, overview
+   cards, figures and the registrations bar chart. Colors only via variables. */
+.admin-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 12px; }
+.admin-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 16px; }
+.admin-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 16px; min-width: 0; }
+.admin-card h3 { margin: 0 0 8px; font-size: 1rem; }
+.admin-card h4 { margin: 16px 0 6px; font-size: var(--fs-sm); color: var(--text-muted); }
+.admin-attention { margin-bottom: 16px; border-color: var(--status-yellow); }
+.admin-attention ul, .admin-list { margin: 0; padding-left: 18px; }
+.admin-attention a { color: var(--link-color); }
+.admin-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin: 0; }
+.admin-stat dt { font-size: var(--fs-sm); color: var(--text-muted); }
+.admin-stat dd { margin: 0; font-size: var(--fs-lg); font-weight: var(--fw-semibold); overflow-wrap: anywhere; }
+.admin-bars { display: flex; align-items: flex-end; gap: 2px; height: 48px; margin-top: 12px; }
+.admin-bar { flex: 1 1 0; min-height: 1px; background: var(--accent-strong); border-radius: 2px 2px 0 0; }
+.admin-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 16px; }
+.admin-tabs .tab-btn { display: inline-flex; align-items: center; min-height: 48px; text-decoration: none; box-sizing: border-box; }
+.um-filters input[type="checkbox"] { min-height: 0; }
+@media (pointer: fine) { .admin-tabs .tab-btn { min-height: 36px; } }
+.um-note { min-height: 36px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); color: var(--text); max-width: 16em; box-sizing: border-box; }
+.admin-proposals td .account-btn { margin: 2px 0; }
+/* Same breakpoint as .um-col-optional: the note input shrinks with its cell so Actions fits at 375 px. */
+@media (max-width: 760px) { .um-note { width: 100%; } }

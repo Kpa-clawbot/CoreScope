@@ -589,6 +589,113 @@ test('loadDetail catch block does NOT interpolate e.message into innerHTML', () 
 });
 
 // =========================================================================
+// E. URL-derived strings
+// =========================================================================
+console.log('\n=== E. URL-derived strings ===');
+
+test('app.js unknown-route page escapes the route taken from location.hash', () => {
+  const html = evalTemplate('public/app.js',
+    /(<div style="padding:40px;text-align:center;color:#6b7280"><h2>\$\{[^}]*route[^}]*\}<\/h2><p>Page not yet implemented\.<\/p><\/div>)/,
+    { route: TAG_PAYLOAD + ATTR_PAYLOAD });
+  assertNoXss(html, 'app.js unknown route');
+});
+
+// =========================================================================
+// H. Observer-controlled strings (iata / name / id) and node names
+//    These values come straight from the MQTT topic or JSON (observer iata,
+//    name, id) or from an ADVERT packet (node name). Anyone who can publish
+//    to a broker, or transmit on the mesh, controls them.
+// =========================================================================
+console.log('\n=== H. observer iata / name / id and node-name sinks ===');
+
+// Like evalTemplate, but for a string-concatenation expression rather than
+// a template literal. The captured group is evaluated as a JS expression.
+function evalConcat(srcFile, regex, bindings) {
+  const src = fs.readFileSync(srcFile, 'utf8');
+  const m = src.match(regex);
+  if (!m) throw new Error(`expression not found in ${srcFile} via ${regex}`);
+  const argNames = Object.keys(bindings);
+  const args = Object.values(bindings);
+  const truncate = (s, n) => (s == null ? '' : String(s).slice(0, n));
+  const fn = new Function(...argNames, 'escapeHtml', 'esc', 'truncate', 'return ' + m[1] + ';');
+  return fn(...args, escapeHtml, escapeHtml, truncate);
+}
+
+const PAYLOAD = TAG_PAYLOAD + ATTR_PAYLOAD;
+
+test('packets.js group row: Region badge escapes observer iata', () => {
+  const html = evalTemplate('public/packets.js',
+    /(<td class="col-region">\$\{groupRegion[\s\S]*?<\/td>)/, { groupRegion: PAYLOAD });
+  assertNoXss(html, 'packets.js groupRegion');
+});
+
+test('packets.js child row: Region badge escapes observer iata', () => {
+  const html = evalTemplate('public/packets.js',
+    /(<td class="col-region">\$\{childRegion[\s\S]*?<\/td>)/, { childRegion: PAYLOAD });
+  assertNoXss(html, 'packets.js childRegion');
+});
+
+test('packets.js single row: Region badge escapes observer iata', () => {
+  const html = evalTemplate('public/packets.js',
+    /(<td class="col-region">\$\{region \?[\s\S]*?<\/td>)/, { region: PAYLOAD });
+  assertNoXss(html, 'packets.js region');
+});
+
+test('observers.js table row: Region badge escapes o.iata', () => {
+  const html = evalTemplate('public/observers.js',
+    /(<td data-value="\$\{escapeHtml\(o\.iata \|\| ''\)\}">[\s\S]*?<\/td>)/, { o: { iata: PAYLOAD } });
+  assertNoXss(html, 'observers.js row iata');
+});
+
+test('observers.js slide-over: Region <dd> escapes o.iata', () => {
+  const html = evalConcat('public/observers.js',
+    /'<dt>Region<\/dt><dd>' \+ (\(o\.iata \? '<span class="badge-region">' \+ [^;]*?\+ '<\/span>' : '—'\))/,
+    { o: { iata: PAYLOAD } });
+  assertNoXss(html, 'observers.js slide-over iata');
+});
+
+test('live.js node detail: "Heard By — Regions" header escapes each iata', () => {
+  const html = evalTemplate('public/live.js',
+    /(<h4 style="[^"]*">Heard By\$\{regions\.length[\s\S]*?<\/h4>)/, { regions: [PAYLOAD] });
+  assertNoXss(html, 'live.js regions header');
+});
+
+test('nodes.js clock-skew evidence: observer name/id is escaped', () => {
+  const src = fs.readFileSync('public/nodes.js', 'utf8');
+  const m = src.match(/var name = ([^;]*o\.observerName \|\| o\.observerID[^;]*);/);
+  assert.ok(m, 'clock-skew observer name assignment not found');
+  const fn = new Function('o', 'escapeHtml', 'return ' + m[1] + ';');
+  const html = fn({ observerName: PAYLOAD }, escapeHtml);
+  assertNoXss(html, 'nodes.js clock-skew observer name');
+});
+
+test('analytics.js RF Health cell: observer_id is escaped inside attributes', () => {
+  const html = evalTemplate('public/analytics.js',
+    /(<div class="rf-cell\$\{isSelected[\s\S]*?id="rf-spark-\$\{[^}]*\}"><\/div>)/,
+    { isSelected: false, obs: { observer_id: '"' + PAYLOAD }, esc: escapeHtml,
+      name: 'obs', nf: '-100', nfClass: '', batt: '' });
+  assertNoXss(html, 'analytics.js rf-cell observer_id');
+  // A raw double quote in the id would end the attribute and start a new one.
+  assert.ok(!/data-observer="[^"]*"\s*'?\s*onfocus/i.test(html),
+    'raw " in observer_id broke out of data-observer attribute: ' + html);
+  assert.ok(html.includes('&quot;'), 'double quote in observer_id was not escaped: ' + html);
+});
+
+test('app.js favorites dropdown: node name is escaped', () => {
+  const html = evalConcat('public/app.js',
+    /'<span class="fav-dd-name">' \+ (\S+\(h\.node\.name \|\| truncate\(pk, 12\)\)|\(h\.node\.name \|\| truncate\(pk, 12\)\)) \+ '<\/span>'/,
+    { h: { node: { name: PAYLOAD } }, pk: 'abcdef' });
+  assertNoXss(html, 'app.js favorites node name');
+});
+
+test('customize-v2.js prune preview: node name is escaped', () => {
+  const html = evalConcat('public/customize-v2.js',
+    /return '<div>' \+ (\S*\(n\.name \|\| n\.pubkey\.slice\(0, 12\)\)) \+ coords \+ '<\/div>';/,
+    { n: { name: PAYLOAD, pubkey: 'abcdef0123456789' } });
+  assertNoXss(html, 'customize-v2.js prune preview node name');
+});
+
+// =========================================================================
 // SUMMARY
 // =========================================================================
 console.log('\n' + '═'.repeat(48));

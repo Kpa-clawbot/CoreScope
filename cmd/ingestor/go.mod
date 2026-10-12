@@ -44,3 +44,7 @@ require (
 )
 
 replace github.com/meshcore-analyzer/mbcapqueue => ../../internal/mbcapqueue
+
+require github.com/meshcore-analyzer/channel v0.0.0
+
+replace github.com/meshcore-analyzer/channel => ../../internal/channel

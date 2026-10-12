@@ -116,6 +116,16 @@ func TestListFiltersAndAdminCount(t *testing.T) {
 	if w, _ := st.List(ListFilter{Query: "_"}); len(w) != 1 || w[0].ID != b.ID {
 		t.Fatalf("query _ = %+v", w)
 	}
+	// Bouncing narrows on the server, combined with the other filters.
+	if err := st.SetEmailBouncing(b.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if bo, err := st.List(ListFilter{Bouncing: true}); err != nil || len(bo) != 1 || bo[0].ID != b.ID {
+		t.Fatalf("bouncing = %+v, %v", bo, err)
+	}
+	if bo, _ := st.List(ListFilter{Bouncing: true, Role: RoleAdmin}); len(bo) != 0 {
+		t.Fatalf("bouncing admins = %+v", bo)
+	}
 	n, err := st.CountActiveAdmins()
 	if err != nil || n != 1 {
 		t.Fatalf("CountActiveAdmins = %d, %v", n, err)

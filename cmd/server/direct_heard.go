@@ -216,7 +216,17 @@ func (s *PacketStore) publishDirectHeard(idx directHeardIndex) {
 // compute has published one. A nil index simply yields empty direct rows:
 // the card degrades to "nobody hears this node" until the first pass lands,
 // never to a wrong attribution.
+//
+// It counts as a read of the direct-heard recomputer, so with pauseWhenIdle
+// on the card keeps it refreshing (the snapshot is read here, not through
+// the recomputer's Load).
 func (s *PacketStore) loadDirectHeard() directHeardIndex {
+	s.analyticsRecomputerMu.RLock()
+	rc := s.recompDirectHeard
+	s.analyticsRecomputerMu.RUnlock()
+	if rc != nil {
+		rc.markRead()
+	}
 	idx, _ := s.directHeardSnap.Load().(directHeardIndex)
 	return idx
 }

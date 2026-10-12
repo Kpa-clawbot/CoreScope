@@ -10,14 +10,16 @@
 //   - subpathReady / pathHopReady are atomic.Bool flags written exactly
 //     once by the background builder (false → true) and never reset
 //     thereafter. Handlers read them via SubpathIndexReady() /
-//     PathHopIndexReady() before touching s.spIndex / s.spTxIndex /
+//     PathHopIndexReady() before counting subpaths / reading
 //     s.byPathHop. While a flag is false, the handler responds 503 +
-//     Retry-After: 5.
+//     Retry-After: 5. Subpaths are counted per request from s.packets,
+//     so subpathReady builds nothing: it holds subpath requests until the
+//     startup load has filled the store (the hot window, then again after
+//     the background fill), so an empty store is never counted and cached.
 //
-//   - The builder itself acquires s.mu.Lock() and calls the existing
-//     buildSubpathIndex() / buildPathHopIndex() methods. Those methods
-//     replace s.spIndex / s.spTxIndex / s.byPathHop with freshly-
-//     allocated maps under the write lock. Visibility of the populated
+//   - The path-hop builder acquires s.mu.Lock() and calls
+//     buildPathHopIndex(), which replaces s.byPathHop with a freshly
+//     allocated map under the write lock. Visibility of the populated
 //     maps to handlers that see Ready()==true is guaranteed by Go's
 //     sync/atomic acquire-release semantics (formalized in Go 1.19):
 //     the atomic.Store(true) happens-after the s.mu.Unlock() that
@@ -29,8 +31,8 @@
 //     ingest serialization).
 //
 //   - Ingest-side incremental updates in StoreNewTransmissions /
-//     pruning / hash-collision paths continue to write s.spIndex /
-//     s.spTxIndex / s.byPathHop directly under s.mu.Lock(). Because
+//     pruning / hash-collision paths continue to write
+//     s.byPathHop directly under s.mu.Lock(). Because
 //     the builder also runs under s.mu.Lock() and the builder
 //     overwrites whatever is there, the brief window between Load()
 //     returning and the goroutine acquiring s.mu means any
@@ -89,9 +91,10 @@ func writeIndexLoading503(w http.ResponseWriter) {
 	_, _ = w.Write([]byte(`{"error":"index loading","retryAfter":5}`))
 }
 
-// SubpathIndexReady reports whether the subpath index build kicked off
-// by Load() has completed (#1008). Until this returns true, callers
-// must NOT read s.spIndex / s.spTxIndex.
+// SubpathIndexReady reports whether the startup load has filled the store
+// far enough to count subpaths (#1008). Subpaths are counted per request,
+// so nothing is built; the gate keeps an empty store from being counted
+// and the result cached.
 func (s *PacketStore) SubpathIndexReady() bool {
 	return s.subpathReady.Load()
 }
@@ -148,38 +151,28 @@ func (s *PacketStore) maybeCloseIndexReadyCh() {
 }
 
 // startBackgroundIndexBuilds is called from Load() after s.loaded=true
-// to populate the subpath + path-hop indexes off the critical path
-// (#1008). It returns immediately; the work runs in two background
-// goroutines (one per index — see review m7) that each acquire
-// s.mu.Lock() independently, install their map, then set the
-// corresponding atomic ready flag.
+// to build the path-hop index off the critical path (#1008). It returns
+// immediately; a background goroutine acquires s.mu.Lock() (so it runs
+// once Load has released it), installs the map, then sets the ready
+// flags. Subpaths are counted per request and need no build of their own.
 //
-// At Cascadia scale (~5M observations) this previously blocked HTTP
-// readiness ~60s inside Load() under s.mu. Running the two builds in
-// parallel halves the pathHop-not-ready window since the two builders
-// are independent of each other.
+// At Cascadia scale (~5M observations) building under s.mu inside Load()
+// blocked HTTP readiness ~60s.
 func (s *PacketStore) startBackgroundIndexBuilds() {
 	go func() {
 		t0 := time.Now()
 		s.mu.Lock()
-		s.buildSubpathIndex()
-		s.mu.Unlock()
-		// Atomic.Store happens-after s.mu.Unlock; handlers that
-		// observe Ready()==true synchronize-with this store.
-		s.subpathReady.Store(true)
-		s.maybeCloseIndexReadyCh()
-		log.Printf("[startup] index build complete: subpath (%s)",
-			time.Since(t0).Round(time.Millisecond))
-	}()
-	go func() {
-		t1 := time.Now()
-		s.mu.Lock()
 		s.buildPathHopIndex()
 		s.mu.Unlock()
+		// Subpaths are counted per request, so they need no build: once
+		// this goroutine holds s.mu, Load has released it and the store is
+		// full. Atomic.Store happens-after s.mu.Unlock; handlers that
+		// observe Ready()==true synchronize-with these stores.
+		s.subpathReady.Store(true)
 		s.pathHopReady.Store(true)
 		s.maybeCloseIndexReadyCh()
-		log.Printf("[startup] index build complete: pathHop (%s)",
-			time.Since(t1).Round(time.Millisecond))
+		log.Printf("[startup] index build complete: pathHop (%s); subpaths ready",
+			time.Since(t0).Round(time.Millisecond))
 	}()
 }
 
@@ -197,7 +190,7 @@ func (s *PacketStore) markIndexesReadySync() {
 // WaitIndexesReady blocks until both background indexes built by
 // startBackgroundIndexBuilds() report ready, or the deadline expires.
 // Returns true if both flipped in time. Intended for tests that read
-// s.spIndex / s.spTxIndex / s.byPathHop directly after Load(); production
+// s.byPathHop directly after Load(); production
 // code paths gate via SubpathIndexReady() / PathHopIndexReady() and
 // respond 503 + Retry-After to clients instead of blocking.
 //
