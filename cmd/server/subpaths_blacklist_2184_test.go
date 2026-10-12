@@ -6,6 +6,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/gorilla/mux"
 )
 
 // Issue #2184: nodeBlacklist and hiddenNamePrefixes were not applied to Route
@@ -137,5 +140,55 @@ func TestSubpathsBlacklistLeavesCacheIntact2184(t *testing.T) {
 	srv.cfg.SetNodeBlacklist(nil)
 	if _, body := getSubpathBody2184(t, srv, "/api/analytics/subpaths?minLen=2&maxLen=8"); !anyContains(subpathPaths(t, body), "TestRepeater") {
 		t.Errorf("after clearing the blacklist the repeater is missing: the filter mutated the cached response (%s)", body)
+	}
+}
+
+// setupSubpathServer2184 is setupTestServer with a SQL statement run on the
+// seeded DB before the store loads, so the store sees the changed rows.
+func setupSubpathServer2184(t *testing.T, stmt string) *Server {
+	t.Helper()
+	db := setupTestDB(t)
+	seedTestData(t, db)
+	if _, err := db.conn.Exec(stmt); err != nil {
+		t.Fatalf("exec %q: %v", stmt, err)
+	}
+	srv := NewServer(db, &Config{Port: 3000}, NewHub())
+	store := NewPacketStore(db, nil)
+	if err := store.Load(); err != nil {
+		t.Fatalf("store.Load failed: %v", err)
+	}
+	if !store.WaitIndexesReady(5 * time.Second) {
+		t.Fatalf("background indexes never became ready")
+	}
+	srv.store = store
+	srv.router = mux.NewRouter()
+	srv.RegisterRoutes(srv.router)
+	return srv
+}
+
+// A blacklisted node without a name (the firmware allows one) has no name to
+// match, so the detail must check the resolved key.
+func TestSubpathDetailBlacklistUnnamedNode2184(t *testing.T) {
+	srv := setupSubpathServer2184(t, `UPDATE nodes SET name = '' WHERE public_key = '`+seededRepeaterKey+`'`)
+	srv.cfg.NodeBlacklist = []string{seededRepeaterKey}
+	srv.cfg.SetNodeBlacklist(srv.cfg.NodeBlacklist)
+
+	code, body := getSubpathBody2184(t, srv, "/api/analytics/subpath-detail?hops=aa,bb")
+	if code != http.StatusNotFound {
+		t.Errorf("subpath-detail status=%d, want 404 (%s)", code, body)
+	}
+}
+
+// Another node that only shares the blacklisted node's name does not hide the
+// detail of a path through the seeded repeater.
+func TestSubpathDetailBlacklistSameNameOtherNode2184(t *testing.T) {
+	const other = "ff99887766554433"
+	srv := setupSubpathServer2184(t, `INSERT INTO nodes (public_key, name, role) VALUES ('`+other+`', 'TestRepeater', 'repeater')`)
+	srv.cfg.NodeBlacklist = []string{other}
+	srv.cfg.SetNodeBlacklist(srv.cfg.NodeBlacklist)
+
+	code, body := getSubpathBody2184(t, srv, "/api/analytics/subpath-detail?hops=aa,bb")
+	if code != http.StatusOK {
+		t.Errorf("subpath-detail status=%d, want 200 (%s)", code, body)
 	}
 }
