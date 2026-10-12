@@ -107,13 +107,6 @@ func main() {
 	if cfg.ApprovedChannelsEnabled() {
 		logApprovedChannelsSource(cfg.UsersDBPath())
 		keySet.refresh()
-		go func() {
-			t := time.NewTicker(approvedChannelsRefresh)
-			defer t.Stop()
-			for range t.C {
-				keySet.refresh()
-			}
-		}()
 	}
 
 	// Linked-only ingest (clientRxCoverage.requireLinkedCompanion): nil when
@@ -133,6 +126,21 @@ func main() {
 	}
 	store.BackfillDefaultScopeAsync(regionSet)
 	store.BackfillTransportCodesAsync()
+
+	// #2107: re-decides unresolved GRP_TXT and scope rows whenever either key
+	// set grows. Built here so the approved-channels refresh can kick it;
+	// started below, once the write path is ready.
+	keyBackfill := newKeyBackfiller(store, keySet, regionSet)
+	if cfg.ApprovedChannelsEnabled() {
+		go func() {
+			t := time.NewTicker(approvedChannelsRefresh)
+			defer t.Stop()
+			for range t.C {
+				keySet.refresh()
+				keyBackfill.Kick() // two small SELECTs unless an approval brought a new key
+			}
+		}()
+	}
 
 	// Subscribe-early + buffer (#1608): the MQTT subscription is brought up
 	// before startup maintenance so no packets are missed while the single
@@ -375,7 +383,6 @@ func main() {
 	// above; it yields the writer between bounded batches.
 	keyBackfillCtx, stopKeyBackfill := context.WithCancel(context.Background())
 	defer stopKeyBackfill()
-	keyBackfill := newKeyBackfiller(store, channelKeys, regionSet)
 	keyBackfillDone := keyBackfill.Start(keyBackfillCtx)
 	if d := ingestBuffer.Dropped(); d > 0 {
 		log.Printf("[ingest-buffer] write path ready; draining backlog (dropped %d during startup — consider raising ingestBufferSize)", d)

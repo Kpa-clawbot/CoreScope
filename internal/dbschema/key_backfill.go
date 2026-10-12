@@ -10,7 +10,9 @@ import "database/sql"
 // read-only server tails it with its own cursor, exactly like
 // advert_route_evidence, so a rewritten row reaches the in-memory store without
 // a restart. AUTOINCREMENT keeps feed IDs monotonic after pruning; the
-// created_at index serves the age-based prune.
+// created_at index serves the age-based prune, and the tx_id index serves the
+// ON DELETE CASCADE, so retention deleting a transmission does not scan the
+// whole feed.
 //
 // key_backfill_state holds at most one in-flight run per kind. run_fp is the
 // fingerprint of the key set the run is working with: a run whose fingerprint
@@ -21,7 +23,7 @@ import "database/sql"
 // key_backfill_done records which keys have had a complete pass over history,
 // so a restart with an unchanged key set does no work at all.
 //
-// PREFLIGHT: async=true reason="creates three empty tables and one index; the backfill itself runs batched in the background after live ingest is ready"
+// PREFLIGHT: async=true reason="creates three empty tables and two indexes on the empty feed; the backfill itself runs batched in the background after live ingest is ready"
 func ensureKeyBackfill(rw *sql.DB) error {
 	_, err := rw.Exec(`
 		CREATE TABLE IF NOT EXISTS tx_rewrite_feed (
@@ -30,6 +32,7 @@ func ensureKeyBackfill(rw *sql.DB) error {
 			created_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER))
 		);
 		CREATE INDEX IF NOT EXISTS idx_tx_rewrite_feed_created ON tx_rewrite_feed(created_at);
+		CREATE INDEX IF NOT EXISTS idx_tx_rewrite_feed_tx ON tx_rewrite_feed(tx_id);
 		CREATE TABLE IF NOT EXISTS key_backfill_state (
 			kind TEXT PRIMARY KEY CHECK(kind IN ('channel','region')),
 			run_fp TEXT NOT NULL,

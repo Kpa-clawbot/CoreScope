@@ -51,6 +51,11 @@ func newChannelKeySet(configured map[string]string, usersDBPath string, max int)
 // Snapshot returns the key map to decode one message with.
 func (s *channelKeySet) Snapshot() map[string]string { return *s.cur.Load() }
 
+// current returns the snapshot pointer itself. refresh stores a new one on
+// every successful read, changed or not, so callers that compare pointers
+// must treat a new one as "maybe changed" (see keyBackfiller.keySetMoved).
+func (s *channelKeySet) current() *map[string]string { return s.cur.Load() }
+
 // refresh re-reads the approved names and swaps in configured + approved.
 // A failed read keeps the current snapshot: only a successful read changes
 // the set, so a locked or missing users.db never drops a key.

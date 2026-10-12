@@ -125,7 +125,7 @@ func regionSetOf(names ...string) *regionKeySet {
 }
 
 func newTestBackfiller(s *Store, channelKeys map[string]string, rs *regionKeySet) *keyBackfiller {
-	b := newKeyBackfiller(s, channelKeys, rs)
+	b := newKeyBackfiller(s, newChannelKeySet(channelKeys, "", 0), rs)
 	b.yield = 0
 	return b
 }
@@ -494,5 +494,138 @@ func TestKeyBackfillPrunesOldFeedRows(t *testing.T) {
 	newTestBackfiller(s, nil, nil).pass(context.Background())
 	if f := feedRows(t, s); len(f) != 1 {
 		t.Fatalf("feed after prune = %v, want only the recent row", f)
+	}
+}
+
+// --- runtime key-set changes (review on #2133) ---
+
+// A hashtag channel approved through user management at runtime is in the
+// set ingest decodes with; history encrypted under it must be backfilled too,
+// not only the hashChannels map loaded at startup.
+func TestKeyBackfillApprovedChannelIsBackfilled(t *testing.T) {
+	s := newTestStore(t)
+	key := deriveHashtagChannelKey("#foo")
+	hb, _ := channelKeyHashByte(key)
+	id := insertTx(t, s, grpTxtFrame(t, key, "Dave: before approval"), 5, fmt.Sprintf("enc_%02X", hb), `{"type":"GRP_TXT"}`, nil)
+
+	ks := newChannelKeySet(map[string]string{}, "", 0)
+	b := newKeyBackfiller(s, ks, regionSetOf())
+	b.yield = 0
+	if err := b.runKind(context.Background(), keyBackfillKindChannel); err != nil {
+		t.Fatal(err)
+	}
+	if got := colOf(t, s, "channel_hash", id); !strings.HasPrefix(got, "enc_") {
+		t.Fatalf("decrypted before #foo was approved: %q", got)
+	}
+
+	// What channelKeySet.refresh stores once an admin approves #foo.
+	next, added := mergeApprovedKeys(map[string]string{}, []string{"#foo"})
+	if added != 1 {
+		t.Fatalf("mergeApprovedKeys added %d, want 1", added)
+	}
+	ks.cur.Store(&next)
+	if err := b.runKind(context.Background(), keyBackfillKindChannel); err != nil {
+		t.Fatal(err)
+	}
+	if got := colOf(t, s, "channel_hash", id); got != "#foo" {
+		t.Fatalf("approved channel not backfilled: channel_hash = %q", got)
+	}
+	if f := feedRows(t, s); len(f) != 1 || f[0] != id {
+		t.Fatalf("feed = %v, want [%d]", f, id)
+	}
+}
+
+// Both key sets store a new snapshot on every refresh. A new snapshot with
+// the same keys must not abandon a run; one with a new key must.
+func TestKeyBackfillKeySetMovedComparesContentNotPointer(t *testing.T) {
+	s := newTestStore(t)
+
+	ks := newChannelKeySet(map[string]string{"#a": deriveHashtagChannelKey("#a")}, "", 0)
+	rs := regionSetOf("#r")
+	b := newKeyBackfiller(s, ks, rs)
+
+	for _, kind := range []string{keyBackfillKindChannel, keyBackfillKindRegion} {
+		p := b.plan(kind, map[string]bool{})
+		runFP := keySetFingerprint(p.all)
+
+		// Same content, new pointer: what an unchanged refresh does.
+		switch kind {
+		case keyBackfillKindChannel:
+			same := map[string]string{"#a": deriveHashtagChannelKey("#a")}
+			ks.cur.Store(&same)
+		case keyBackfillKindRegion:
+			rs.cur.Store(&regionKeySnapshot{all: map[string][]byte{"#r": regionKey("#r")}, explicit: map[string]bool{}})
+		}
+		if b.keySetMoved(kind, &p, runFP) {
+			t.Fatalf("%s: unchanged refresh counted as a key-set change", kind)
+		}
+		if kind == keyBackfillKindChannel && p.channelSnap != ks.current() {
+			t.Fatal("channel: run did not adopt the equal snapshot")
+		}
+		if kind == keyBackfillKindRegion && p.snapshot != rs.snapshot() {
+			t.Fatal("region: run did not adopt the equal snapshot")
+		}
+
+		// A key added: the run must restart.
+		switch kind {
+		case keyBackfillKindChannel:
+			grown, _ := mergeApprovedKeys(map[string]string{"#a": deriveHashtagChannelKey("#a")}, []string{"#b"})
+			ks.cur.Store(&grown)
+		case keyBackfillKindRegion:
+			rs.cur.Store(&regionKeySnapshot{all: map[string][]byte{"#r": regionKey("#r"), "#q": regionKey("#q")}, explicit: map[string]bool{}})
+		}
+		if !b.keySetMoved(kind, &p, runFP) {
+			t.Fatalf("%s: added key not detected mid-run", kind)
+		}
+	}
+}
+
+// The feed is pruned on its own ticker; with autoRegionKeys off a pass only
+// runs at startup, so pruning must not wait for one.
+func TestKeyBackfillPrunesFeedWithoutPass(t *testing.T) {
+	s := newTestStore(t)
+	b := newKeyBackfiller(s, newChannelKeySet(nil, "", 0), regionSetOf())
+	b.yield = 0
+	b.pruneEvery = 20 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := b.Start(ctx)
+	defer func() { cancel(); <-done }()
+
+	// Let the startup pass finish, then add a stale row no pass will see.
+	time.Sleep(50 * time.Millisecond)
+	id := insertTx(t, s, "1500aa", 5, "", "{}", nil)
+	if _, err := s.db.Exec(`INSERT INTO tx_rewrite_feed(tx_id, created_at) VALUES(?,?)`,
+		id, time.Now().Add(-48*time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for len(feedRows(t, s)) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("stale feed row not pruned without a pass")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// tx_rewrite_feed.tx_id carries ON DELETE CASCADE; without an index every
+// transmission retention deletes would scan the whole feed.
+func TestTxRewriteFeedTxIDIsIndexed(t *testing.T) {
+	s := newTestStore(t)
+	rows, err := s.db.Query(`EXPLAIN QUERY PLAN SELECT id FROM tx_rewrite_feed WHERE tx_id = ?`, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	if !strings.Contains(strings.Join(plan, " | "), "idx_tx_rewrite_feed_tx") {
+		t.Fatalf("lookup by tx_id does not use idx_tx_rewrite_feed_tx: %v", plan)
 	}
 }

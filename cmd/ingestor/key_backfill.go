@@ -18,8 +18,9 @@ import (
 // "enc_XX" forever, and a transport-scoped packet stored before its region key
 // was known keeps scope_name "" forever: ingest decides once, at insert time.
 // When the key set grows - a hashChannels entry is added and the ingestor
-// restarts, or the autoRegionKeys tier picks up a newly declared region - this
-// worker re-decides exactly those unresolved rows with the keys now in force.
+// restarts, a hashtag channel is approved through user management, or the
+// autoRegionKeys tier picks up a newly declared region - this worker
+// re-decides exactly those unresolved rows with the keys now in force.
 //
 // Rules, each pinned by a test in key_backfill_test.go:
 //
@@ -37,14 +38,18 @@ import (
 //     last commit; nothing is applied twice and nothing is skipped.
 //   - A run is tied to the fingerprint of the key set it started with. If the
 //     key set changes mid-run the run restarts from the beginning with the new
-//     set, so a key added halfway through still sees all of history.
+//     set, so a key added halfway through still sees all of history. Both key
+//     sets swap their snapshot on every refresh, changed or not, so a new
+//     snapshot only counts as a change when its fingerprint differs.
 //   - Each key gets one complete pass. Its fingerprint is recorded when a run
 //     finishes; a restart with an unchanged key set does no work. A key that
 //     leaves the set loses its record, so if it returns it is replayed over
 //     whatever arrived while it was absent.
 //   - Every rewritten transmission gets a tx_rewrite_feed row in the same
 //     transaction. The server tails that feed (cmd/server/tx_rewrite_feed.go)
-//     and refreshes the in-memory copy, so no restart is needed.
+//     and refreshes the in-memory copy, so no restart is needed. The feed is
+//     pruned on its own ticker, not only after a pass, so it stays bounded
+//     even when no key ever changes.
 
 const (
 	keyBackfillKindChannel = "channel"
@@ -64,28 +69,34 @@ const (
 	// has not tailed yet; a server that was down longer than this reloads the
 	// rewritten rows from the DB on startup anyway.
 	txRewriteFeedRetention = 24 * time.Hour
+	// txRewriteFeedPruneEvery is how often the feed is pruned between passes.
+	// A pass may never come (autoRegionKeys off, no approved channels), so
+	// pruning cannot depend on one.
+	txRewriteFeedPruneEvery = time.Hour
 )
 
 // keyBackfiller re-decides unresolved rows when the key set grows. One
 // goroutine runs every pass, so two passes never race each other; Kick only
 // asks that goroutine to look again.
 type keyBackfiller struct {
-	store       *Store
-	channelKeys map[string]string // loaded once at startup; immutable
-	regionSet   *regionKeySet
-	window      int64 // ids per batch; see keyBackfillWindow
-	yield       time.Duration
-	wake        chan struct{}
+	store      *Store
+	channels   *channelKeySet // configured + approved; the set ingest decodes with
+	regionSet  *regionKeySet
+	window     int64 // ids per batch; see keyBackfillWindow
+	yield      time.Duration
+	pruneEvery time.Duration // see txRewriteFeedPruneEvery
+	wake       chan struct{}
 }
 
-func newKeyBackfiller(store *Store, channelKeys map[string]string, regionSet *regionKeySet) *keyBackfiller {
+func newKeyBackfiller(store *Store, channels *channelKeySet, regionSet *regionKeySet) *keyBackfiller {
 	return &keyBackfiller{
-		store:       store,
-		channelKeys: channelKeys,
-		regionSet:   regionSet,
-		window:      keyBackfillWindow,
-		yield:       keyBackfillYield,
-		wake:        make(chan struct{}, 1),
+		store:      store,
+		channels:   channels,
+		regionSet:  regionSet,
+		window:     keyBackfillWindow,
+		yield:      keyBackfillYield,
+		pruneEvery: txRewriteFeedPruneEvery,
+		wake:       make(chan struct{}, 1),
 	}
 }
 
@@ -97,20 +108,30 @@ func (b *keyBackfiller) Kick() {
 	}
 }
 
-// Start runs a first pass and then one more per Kick, until ctx is cancelled.
-// The returned channel closes when the goroutine has exited.
+// Start runs a first pass and then one more per Kick, and prunes the feed
+// every pruneEvery, until ctx is cancelled. Passes and prunes share one
+// goroutine, so they never run concurrently. The returned channel closes when
+// the goroutine has exited.
 func (b *keyBackfiller) Start(ctx context.Context) <-chan struct{} {
 	done := make(chan struct{})
+	every := b.pruneEvery
+	if every <= 0 {
+		every = txRewriteFeedPruneEvery
+	}
 	b.Kick()
 	go func() {
 		defer close(done)
+		prune := time.NewTicker(every)
+		defer prune.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
+			case <-prune.C:
+				b.pruneFeed(ctx)
 			case <-b.wake:
+				b.pass(ctx)
 			}
-			b.pass(ctx)
 		}
 	}()
 	return done
@@ -133,6 +154,11 @@ func (b *keyBackfiller) pass(ctx context.Context) {
 			log.Printf("[key-backfill] %s pass failed, will retry on the next key change or restart: %v", kind, err)
 		}
 	}
+	b.pruneFeed(ctx)
+}
+
+// pruneFeed drops feed rows older than txRewriteFeedRetention.
+func (b *keyBackfiller) pruneFeed(ctx context.Context) {
 	if _, err := b.store.db.ExecContext(ctx, `DELETE FROM tx_rewrite_feed WHERE created_at < ?`,
 		time.Now().Add(-txRewriteFeedRetention).Unix()); err != nil && ctx.Err() == nil {
 		log.Printf("[key-backfill] pruning tx_rewrite_feed: %v", err)
@@ -177,16 +203,39 @@ func channelKeyHashByte(keyHex string) (byte, bool) {
 type keyBackfillPlan struct {
 	all         []string
 	pending     []string
-	channelHash []string // "enc_XX" values, channel kind only
-	snapshot    *regionKeySnapshot
+	channelHash []string           // "enc_XX" values, channel kind only
+	channels    map[string]string  // channel kind: the key map this run decodes with
+	channelSnap *map[string]string // channel kind: the snapshot channels came from
+	snapshot    *regionKeySnapshot // region kind
+}
+
+// channelKeyFingerprints returns one fingerprint per channel key.
+func channelKeyFingerprints(keys map[string]string) []string {
+	fps := make([]string, 0, len(keys))
+	for name, keyHex := range keys {
+		raw, _ := hex.DecodeString(keyHex)
+		fps = append(fps, keyFingerprint(keyBackfillKindChannel, name, raw))
+	}
+	return fps
+}
+
+// regionKeyFingerprints returns one fingerprint per region key.
+func regionKeyFingerprints(snap *regionKeySnapshot) []string {
+	fps := make([]string, 0, len(snap.all))
+	for name, key := range snap.all {
+		fps = append(fps, keyFingerprint(keyBackfillKindRegion, name, key))
+	}
+	return fps
 }
 
 func (b *keyBackfiller) plan(kind string, done map[string]bool) keyBackfillPlan {
 	var p keyBackfillPlan
 	switch kind {
 	case keyBackfillKindChannel:
+		p.channelSnap = b.channels.current()
+		p.channels = *p.channelSnap
 		seenHash := map[string]bool{}
-		for name, keyHex := range b.channelKeys {
+		for name, keyHex := range p.channels {
 			raw, _ := hex.DecodeString(keyHex)
 			fp := keyFingerprint(kind, name, raw)
 			p.all = append(p.all, fp)
@@ -254,10 +303,10 @@ func (b *keyBackfiller) runKind(ctx context.Context, kind string) error {
 			return err
 		}
 		// The key set moved under us: abandon this run, the next pass starts
-		// a fresh one over the new set. Region keys refresh at runtime;
-		// channel keys never change without a restart.
-		if kind == keyBackfillKindRegion && b.regionSet.snapshot() != p.snapshot {
-			log.Printf("[key-backfill] region key set changed mid-run; restarting from the beginning")
+		// a fresh one over the new set. Both kinds refresh at runtime
+		// (approved channels, autoRegionKeys).
+		if b.keySetMoved(kind, &p, runFP) {
+			log.Printf("[key-backfill] %s key set changed mid-run; restarting from the beginning", kind)
 			b.Kick()
 			return nil
 		}
@@ -282,6 +331,35 @@ func (b *keyBackfiller) runKind(ctx context.Context, kind string) error {
 	b.store.Stats.IncBackfill("key_" + kind)
 	log.Printf("[key-backfill] %s: pass complete, %d row(s) rewritten", kind, rewritten)
 	return nil
+}
+
+// keySetMoved reports whether the keys in force now differ from the ones the
+// run for runFP works with. Both key sets store a fresh snapshot on every
+// refresh even when nothing changed, so a new snapshot is only a hint: when
+// its fingerprint still equals runFP the run adopts it and carries on at its
+// cursor instead of being abandoned.
+func (b *keyBackfiller) keySetMoved(kind string, p *keyBackfillPlan, runFP string) bool {
+	switch kind {
+	case keyBackfillKindChannel:
+		cur := b.channels.current()
+		if cur == p.channelSnap {
+			return false
+		}
+		if keySetFingerprint(channelKeyFingerprints(*cur)) != runFP {
+			return true
+		}
+		p.channelSnap, p.channels = cur, *cur
+	case keyBackfillKindRegion:
+		cur := b.regionSet.snapshot()
+		if cur == p.snapshot {
+			return false
+		}
+		if keySetFingerprint(regionKeyFingerprints(cur)) != runFP {
+			return true
+		}
+		p.snapshot = cur
+	}
+	return false
 }
 
 func loadDoneKeys(ctx context.Context, db *sql.DB, kind string) (map[string]bool, error) {
@@ -461,7 +539,7 @@ func (b *keyBackfiller) decide(kind string, p keyBackfillPlan, id int64, raw, ol
 	}
 	switch kind {
 	case keyBackfillKindChannel:
-		decoded, err := DecodePacket(raw, b.channelKeys, false)
+		decoded, err := DecodePacket(raw, p.channels, false)
 		if err != nil || decoded.Payload.Type != "CHAN" || decoded.Payload.Channel == "" {
 			return keyRewrite{}, false
 		}
