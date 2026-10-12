@@ -94,6 +94,15 @@ MQTT_BROKER=mqtt://my-broker:1883
 
 The entrypoint sources this file before starting services. This works with any launch method (`docker run`, compose, or manage.sh).
 
+Two exceptions, both because the entrypoint runs this file as root from a
+directory the Go services can write once they run unprivileged:
+
+- `RUN_AS_UID` and `RUN_AS_GID` are never taken from `.env`. Set them with
+  `-e` or in compose's `environment:`.
+- With `RUN_AS_UID` set, `.env` is read only if it is owned by root and
+  writable by no one else (`sudo chown root:root .env && sudo chmod 644 .env`).
+  Otherwise the log says it was skipped, and why.
+
 ### Docker Compose (legacy alternative)
 
 Docker Compose files are maintained for backward compatibility but are no longer the recommended approach.
@@ -167,8 +176,10 @@ those files over leaves the services unable to write the database, so the switch
 has to be something you ask for.
 
 **To turn it on**, pick the uid you want and restart. Setting `RUN_AS_UID` is
-taken as permission for the one-time `chown` of what an earlier root-run
-container left in the data directory:
+taken as permission to `chown` the data directory, and what an earlier root-run
+container left in it, to that uid. This happens at every start, so a file
+created there later as root (with `docker exec`, say) is handed over at the
+next restart:
 
 ```bash
 docker run -d --name corescope \
@@ -186,7 +197,7 @@ docker logs corescope 2>&1 | grep '\[entrypoint\] Go services run as'
 ```
 
 If you would rather the container never `chown` anything, do the hand-over
-yourself first — then there is nothing left for it to change:
+yourself first. Then there is nothing left for it to change:
 
 ```bash
 docker stop corescope
@@ -200,18 +211,20 @@ Notes:
 
 - `RUN_AS_GID` defaults to `RUN_AS_UID` when omitted. `RUN_AS_UID=0` is the
   same as leaving it unset.
-- If the uid already belongs to an account inside the image (`caddy` is uid 100,
-  `mosquitto` 101), that account is used as it is, keeping its own group, and
-  the log says so.
+- If the uid already belongs to another account inside the image (`caddy` is
+  uid 100, `mosquitto` 101), that account is used as it is, keeping its own
+  group, and the log says so. Pick a different uid if you need `RUN_AS_GID`
+  honoured.
 - With `RUN_AS_UID` set to a uid the container cannot use, startup fails rather
   than quietly falling back to root.
-- `/app` itself changes hands too, because the server writes `config.json.tmp`
-  there when the geo filter is saved. Only the directory does: a bind-mounted
-  `config.json` or `theme.json` keeps the owner it has on your host. The
-  trade-off is that the service account can replace files in `/app`, including
-  the binaries — it cannot gain privilege that way, as supervisord starts them
-  under the same account, but it is the reason this is a reduction of blast
-  radius and not a sandbox.
+- What the hand-over leaves alone: anything mounted into the data directory on
+  its own, such as `-v ./config.json:/app/data/config.json:ro`, which keeps the
+  owner it has on your host (make sure the uid can read it), and `.env` (see
+  above). Each mount it skips is named in the log.
+- If the hand-over cannot change a file, for example on NFS with
+  `root_squash`, the log says how many and which. Fix their owner on the host.
+- `/app` stays root's. The services write only to the data directory and
+  `/tmp`.
 - A fresh install is root-owned and so starts as root, like any other. Set
   `RUN_AS_UID` from the first run to avoid a hand-over later.
 
