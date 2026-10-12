@@ -173,6 +173,7 @@ node tests/unit/test-packet-filter-time.js
 node tests/unit/test-packet-filter-ux.js
 node tests/unit/test-packet-filter.js
 node tests/unit/test-packets-local-channels.js
+node tests/unit/test-packets-live-channel-filter.js
 node tests/unit/test-packets.js
 node tests/unit/test-panel-corner.js
 node tests/unit/test-path-inspector.js

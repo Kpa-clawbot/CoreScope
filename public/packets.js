@@ -1231,6 +1231,27 @@
     window._packetsCollectLocalChannelsForTest = collectLocalChannels;
   }
 
+  /**
+   * Does a live (WebSocket) packet belong to the selected channel filter?
+   *
+   * /api/packets?channel=X matches `transmissions.channel_hash = X` server-side:
+   * the channel name when the server decrypted the GRP_TXT, otherwise the
+   * synthetic "enc_<HH>". That column is only set for payload_type 5. WS
+   * packets don't carry it, so derive the same value from decoded_json —
+   * without this, every new live packet leaks past an active channel filter.
+   */
+  function packetMatchesChannel(p, channel) {
+    if (!channel) return true;
+    if (!p || p.payload_type !== 5) return false;
+    if (p.channel_hash) return p.channel_hash === channel;
+    let d = p.decoded_json;
+    if (typeof d === 'string') { try { d = JSON.parse(d); } catch (e) { d = null; } }
+    d = d || {};
+    const ch = d.channel || (d.channelHashHex != null ? 'enc_' + String(d.channelHashHex).toUpperCase() : null);
+    return ch === channel;
+  }
+  if (typeof window !== 'undefined') window._packetsMatchesChannelForTest = packetMatchesChannel;
+
   function renderTimestampCell(isoString) {
     if (typeof formatTimestampWithTooltip !== 'function' || typeof getTimestampMode !== 'function') {
       return escapeHtml(typeof timeAgo === 'function' ? timeAgo(isoString) : '—');
@@ -1452,6 +1473,7 @@
           if (!obs || !selectedRegions.includes(obs.iata)) return false;
         }
         if (filters.node && !(p.decoded_json || '').includes(filters.node)) return false;
+        if (filters.channel && !packetMatchesChannel(p, filters.channel)) return false;
         return true;
       });
       if (!filtered.length) return;
