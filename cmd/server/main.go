@@ -471,6 +471,15 @@ func main() {
 	log.Printf("[bridge-recompute] background recompute enabled (interval=%s)",
 		cfg.AnalyticsDefaultRecomputeInterval())
 
+	// Zero-hop home regions for the /api/nodes region filter (#1879). Read
+	// by RegionNodePubkeys and handleNodes via a single atomic load.
+	stopNodeHomeRegionsRecomp := store.StartNodeHomeRegionsRecomputer(
+		cfg.AnalyticsDefaultRecomputeInterval(),
+	)
+	defer stopNodeHomeRegionsRecomp()
+	log.Printf("[node-home-regions-recompute] background recompute enabled (interval=%s)",
+		cfg.AnalyticsDefaultRecomputeInterval())
+
 	// Steady-state coverage + redundancy recomputer (issue #672 axes 3 & 4).
 	// Computes harmonic-reach coverage and articulation-point redundancy over
 	// the same neighbor graph as the bridge axis, storing both per-pubkey

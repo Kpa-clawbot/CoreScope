@@ -1617,11 +1617,14 @@ func (s *Server) buildNodesResponse(r *http.Request) (NodeListResponse, error) {
 		// traffic into the composite (the other three axes are already
 		// max-normalized; #1762 review).
 		maxUseful := maxFloat(usefulMap)
+		// #1879: which regions heard each node zero-hop. Atomic snapshot.
+		homeRegions := s.store.GetNodeHomeRegionSets()
 		for _, node := range nodes {
 			if pk, ok := node["public_key"].(string); ok {
 				EnrichNodeWithHashSize(node, hashInfo[pk])
 				mbEntry, _ := s.store.GetMultibyteCapFor(pk)
 				EnrichNodeWithMultiByte(node, mbEntry)
+				enrichNodeHomeRegions(node, homeRegions[pk])
 				if role, _ := node["role"].(string); role == "repeater" || role == "room" {
 					info, _ := lookupRelayInfo(relayMap, pk)
 					info.WindowHours = relayWindow
@@ -1828,6 +1831,7 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 		EnrichNodeWithHashSize(node, hashInfo[pubkey])
 		mbEntry, _ := s.store.GetMultibyteCapFor(pubkey)
 		EnrichNodeWithMultiByte(node, mbEntry)
+		enrichNodeHomeRegions(node, s.store.GetNodeHomeRegionSets()[pubkey])
 		if role, _ := node["role"].(string); role == "repeater" || role == "room" {
 			ht := s.cfg.GetHealthThresholds()
 			info := s.store.GetRepeaterRelayInfo(pubkey, ht.RelayActiveHours)
