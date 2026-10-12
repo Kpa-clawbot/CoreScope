@@ -2621,7 +2621,7 @@ func (s *Server) handleAnalyticsSubpaths(w http.ResponseWriter, r *http.Request)
 		window := ParseTimeWindow(r)
 		data := s.store.GetAnalyticsSubpathsWithWindow(region, minLen, maxLen, limit, window)
 		if s.subpathFilterActive() {
-			data, _ = s.dropHiddenPaths(data, "subpaths", "path", s.blacklistedNodeNames())
+			data, _ = s.dropHiddenPaths(data, "subpaths", "path", "", s.blacklistedNodeNames())
 		}
 		writeJSON(w, data)
 		return
@@ -2689,7 +2689,7 @@ func (s *Server) handleAnalyticsSubpathsBulk(w http.ResponseWriter, r *http.Requ
 	if s.subpathFilterActive() {
 		names := s.blacklistedNodeNames()
 		for i, r := range results {
-			results[i], _ = s.dropHiddenPaths(r, "subpaths", "path", names)
+			results[i], _ = s.dropHiddenPaths(r, "subpaths", "path", "", names)
 		}
 	}
 	writeJSON(w, map[string]interface{}{"results": results})
@@ -2729,12 +2729,13 @@ func (s *Server) handleAnalyticsSubpathDetail(w http.ResponseWriter, r *http.Req
 		// #2184: the raw hops are prefixes, so the check above only catches a
 		// full key. Check the nodes the store resolved them to instead.
 		if s.subpathFilterActive() {
-			names := s.blacklistedNodeNames()
-			if _, dropped := s.dropHiddenPaths(detail, "nodes", "name", names); dropped > 0 {
+			// Match each hop by its resolved key, so a blacklisted node without a
+			// name is caught and a node that only shares its name is not.
+			if _, dropped := s.dropHiddenPaths(detail, "nodes", "name", "pubkey", nil); dropped > 0 {
 				writeError(w, 404, "Not found")
 				return
 			}
-			detail, _ = s.dropHiddenPaths(detail, "parentPaths", "path", names)
+			detail, _ = s.dropHiddenPaths(detail, "parentPaths", "path", "", s.blacklistedNodeNames())
 		}
 		writeJSON(w, detail)
 		return
@@ -3765,16 +3766,19 @@ func (s *Server) subpathPathHidden(path string, blacklisted map[string]bool) boo
 
 // dropHiddenPaths removes the entries of data[listKey] whose field (a node
 // name, or a resolved " → " path) shows a blacklisted or hidden-prefix node,
-// and reports how many it removed. It returns a copy: data may be the store's
-// cached response, shared with other requests.
-func (s *Server) dropHiddenPaths(data map[string]interface{}, listKey, field string, blacklisted map[string]bool) (map[string]interface{}, int) {
+// or, when keyField is set, whose key there is blacklisted, and reports how
+// many it removed. It returns a copy: data may be the store's cached
+// response, shared with other requests.
+func (s *Server) dropHiddenPaths(data map[string]interface{}, listKey, field, keyField string, blacklisted map[string]bool) (map[string]interface{}, int) {
 	entries, ok := data[listKey].([]map[string]interface{})
 	if !ok {
 		return data, 0
 	}
 	kept := slices.Clone(entries)[:0]
 	for _, e := range entries {
-		if path, _ := e[field].(string); !s.subpathPathHidden(path, blacklisted) {
+		path, _ := e[field].(string)
+		key, _ := e[keyField].(string)
+		if !s.subpathPathHidden(path, blacklisted) && (key == "" || !s.cfg.IsBlacklisted(key)) {
 			kept = append(kept, e)
 		}
 	}
