@@ -14,7 +14,6 @@ package main
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 )
@@ -77,10 +76,8 @@ func Test1690_ColdLoad_TimeAxis(t *testing.T) {
 	}
 }
 
-// Test1690_BackgroundLoadHonesty seeds 1000 transmissions but caps the
-// store's memory budget so it can only fit a fraction. After
-// loadBackgroundChunks runs, backgroundLoadDone must be FALSE and
-// backgroundLoadFailed must be TRUE because actual coverage is < 90%.
+// A configured memory cap is successful bounded loading, not a failed startup.
+// Keep reporting actual database coverage rather than pretending it is 100%.
 func Test1690_BackgroundLoadHonesty(t *testing.T) {
 	dbPath := postgresTestDSN(t)
 
@@ -107,20 +104,14 @@ func Test1690_BackgroundLoadHonesty(t *testing.T) {
 	}
 	store.loadBackgroundChunks()
 
-	if store.backgroundLoadDone.Load() {
-		t.Errorf("backgroundLoadDone=true with only %d/5000 packets loaded; "+
-			"must be false until coverage ≥ 90%%", len(store.packets))
+	if !store.backgroundLoadDone.Load() {
+		t.Error("memory-bounded background load must reach a terminal state")
 	}
-	if !store.backgroundLoadFailed.Load() {
-		t.Errorf("backgroundLoadFailed=false despite under-coverage "+
-			"(%d/5000 packets loaded); must be true with a reason", len(store.packets))
+	if store.backgroundLoadFailed.Load() || store.BackgroundLoadError() != "" {
+		t.Errorf("configured memory budget treated as failure: %s", store.BackgroundLoadError())
 	}
-	// The error message must mention a percentage so operators can see
-	// the actual ratio surface in the perf endpoint.
-	errMsg := store.BackgroundLoadError()
-	if !strings.Contains(errMsg, "%") {
-		t.Errorf("backgroundLoadError=%q; expected human-readable ratio "+
-			"(e.g. 'loaded X%% of Y rows')", errMsg)
+	if got, want := store.LoadCoverageRatio(), float64(len(store.packets))/5000; got != want || got >= 0.9 {
+		t.Errorf("coverage = %g, want actual bounded fraction %g", got, want)
 	}
 }
 

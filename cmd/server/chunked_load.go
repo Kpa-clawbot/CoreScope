@@ -3,9 +3,10 @@ package main
 // Chunked startup load + early HTTP readiness for issue #1009.
 //
 // Design:
-//   * LoadChunked paginates transmissions in id-ordered chunks of
+//   * LoadChunked paginates transmissions in bounded chunks of
 //     `chunkSize` (default 10000 via Config.DBLoadChunkSize). After the
 //     first chunk is merged into the store, FirstChunkReady is closed.
+//     Memory-capped stores prioritize newest rows; unlimited stores use IDs.
 //     main.go binds the HTTP listener on that signal and serves
 //     partial data while remaining chunks stream in the background.
 //   * RunStartupLoad is the orchestrator: it runs LoadChunked
@@ -26,11 +27,9 @@ package main
 // HTTP handlers (which take s.mu.RLock) stay responsive.
 
 import (
-	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -187,8 +186,8 @@ func (s *PacketStore) fireChunkCallbacks(rowsThisChunk, totalRows int) {
 //     (no background work was needed). Coverage is computed against
 //     row count so /api/perf does not report ratio=0.0 (dij #2).
 //   - hotStartupHours > 0 success: terminal state is whatever
-//     loadBackgroundChunks set (done=true on full coverage,
-//     failed=true on partial / chunk errors — see #1690).
+//     loadBackgroundChunks set (done=true on full coverage or the configured
+//     memory limit; failed=true on unexpected partial coverage/chunk errors).
 //
 // Issue #1809 root cause: previously main.go spawned loadBackgroundChunks
 // at FirstChunkReady while LoadChunked was still merging the remainder
@@ -266,7 +265,7 @@ func (s *PacketStore) RunStartupLoad(chunkSize int) error {
 }
 
 // LoadChunked streams transmissions + observations from PostgreSQL into
-// the in-memory store in id-ordered chunks of `chunkSize` rows. Pass
+// the in-memory store in bounded chunks of `chunkSize` rows. Pass
 // 0 to use the default (10000).
 //
 // After the first chunk is merged, FirstChunkReady is closed and the
@@ -353,152 +352,47 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 		totalInDB = -1
 	}
 
-	// Memory cap honoured by clamping the maximum cursor walk.
-	var maxPackets int64
+	// Polling starts after the first chunk. Capture the complete database's
+	// high-water marks before loading a subset, so older omitted rows are not
+	// mistaken for new ingest and replayed into the cache immediately.
 	if s.maxMemoryMB > 0 {
-		avgBytes := int64(1000)
-		if sample := estimateStoreTxBytesTypical(10); sample > avgBytes {
-			avgBytes = sample
+		var maxTxID, maxObsID int
+		if err := s.db.conn.QueryRow(`SELECT
+			(SELECT COALESCE(MAX(id), 0) FROM transmissions),
+			(SELECT COALESCE(MAX(id), 0) FROM observations)`).Scan(&maxTxID, &maxObsID); err != nil {
+			return fmt.Errorf("load watermarks: %w", err)
 		}
-		maxPackets = (int64(s.maxMemoryMB) * 1048576) / avgBytes
-		if maxPackets < 1000 {
-			maxPackets = 1000
-		}
+		s.mu.Lock()
+		s.maxTxID, s.maxObsID = maxTxID, maxObsID
+		s.mu.Unlock()
 	}
-
+	var from time.Time
+	if hotCutoffStr != "" {
+		from, _ = time.Parse(time.RFC3339, hotCutoffStr)
+	}
 	chunkIdx := 0
-	totalLoaded := 0
-	// Start the id cursor below the legacy fixture's zero ID so the
-	// first chunk's `t2.id > cursorID` predicate includes id=0. The
-	// e2e fixture seed for issue #1486 inserts the grouped-packet row
-	// with id=0 (so it sorts LAST in the default packets view via
-	// `ORDER BY id DESC` / oldest first_seen). Seeding the cursor at
-	// 0 silently excluded that row, leaving the page with no
-	// tr[data-hash] and timing out the playwright wait. Legacy Load()
-	// had no id cursor and loaded id=0 unconditionally — we restore
-	// that semantic by starting at -1.
-	var cursorID int64 = -1
-
-	// Relay-hop fallback inputs, fetched ONCE before the chunk-query loop.
-	// getCachedNodesAndPM issues its own DB query, so calling it while a
-	// chunk cursor is open would deadlock on a single-connection database
-	// pool. resolved_path is never persisted post-#1287, so scanAndMergeChunk
-	// re-resolves relay hops from path_json using these snapshots.
-	// PR #1643 R1 munger #1: cold load uses unique_prefix-only gate, so
-	// the neighbor graph is no longer consulted here (affinity-tier
-	// resolution against ≤168h-old observations would silently mis-attribute).
-	s.mu.RLock()
-	_, relayPM := s.getCachedNodesAndPM()
-	s.mu.RUnlock()
-	var coldLoadAmbiguousHopsSkipped int
-
-	for {
-		conds := append([]string{}, loadConditions...)
-		conds = append(conds, fmt.Sprintf("t2.id > %d", cursorID))
-		whereClause := "WHERE " + strings.Join(conds, " AND ")
-
-		rpCol := ""
-		if s.db.hasResolvedPath {
-			rpCol = ", o.resolved_path"
-		}
-		obsRawHexCol := ""
-		if s.db.hasObsRawHex {
-			obsRawHexCol = ", o.raw_hex"
-		}
-		// #1751: scope_name is on the transmission row, so appending it as the
-		// last selected column is safe regardless of the observation fan-out.
-		scopeNameCol := ""
-		if s.db.hasScopeName {
-			scopeNameCol = ", t.scope_name"
-		}
-
-		var chunkSQL string
-		if s.db.isV3 {
-			chunkSQL = s.db.nativeSQL(`SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
-					t.payload_type, t.payload_version, t.decoded_json,
-					o.id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,
-					o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')`, `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
-					t.payload_type, t.payload_version, t.decoded_json,
-					o.id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,
-					o.snr, o.rssi, o.score, o.path_json, to_char(to_timestamp(o.timestamp) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`) + obsRawHexCol + rpCol + scopeNameCol + `
-				FROM (SELECT * FROM transmissions t2 ` + whereClause + ` ORDER BY t2.id ASC LIMIT ` + fmt.Sprintf("%d", chunkSize) + `) AS t
-				LEFT JOIN observations o ON o.transmission_id = t.id
-				LEFT JOIN observers obs ON obs.rowid = o.observer_idx
-				ORDER BY t.id ASC, o.timestamp DESC`
-		} else {
-			chunkSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
-					t.payload_type, t.payload_version, t.decoded_json,
-					o.id, o.observer_id, o.observer_name, COALESCE(obs.iata, ''), o.direction,
-					o.snr, o.rssi, o.score, o.path_json, o.timestamp` + obsRawHexCol + rpCol + scopeNameCol + `
-				FROM (SELECT * FROM transmissions t2 ` + whereClause + ` ORDER BY t2.id ASC LIMIT ` + fmt.Sprintf("%d", chunkSize) + `) AS t
-				LEFT JOIN observations o ON o.transmission_id = t.id
-				LEFT JOIN observers obs ON obs.id = o.observer_id
-				ORDER BY t.id ASC, o.timestamp DESC`
-		}
-
-		// Acquire before opening the cursor: a feed waiting for the same
-		// connection must never hold this gate while we hold its cursor.
-		s.advertEvidenceMu.Lock()
-		rows, err := s.db.conn.Query(chunkSQL)
-		if err != nil {
-			s.advertEvidenceMu.Unlock()
-			return fmt.Errorf("chunk %d: query: %w", chunkIdx, err)
-		}
-
-		chunkTxCount, lastID, err := s.scanAndMergeChunk(rows, relayPM, &coldLoadAmbiguousHopsSkipped)
-		rows.Close()
-		s.advertEvidenceMu.Unlock()
-		if err != nil {
-			return fmt.Errorf("chunk %d: scan: %w", chunkIdx, err)
-		}
-
-		if chunkTxCount == 0 {
-			break
-		}
-
-		cursorID = lastID
-		totalLoaded += chunkTxCount
+	totalLoaded, err := s.loadPacketRange(from, time.Time{}, chunkSize, func(count, total int) {
 		chunkIdx++
-		s.loadProgressRows.Store(int64(totalLoaded))
+		s.loadProgressRows.Store(int64(total))
 		s.signalFirstChunk()
-		s.fireChunkCallbacks(chunkTxCount, totalLoaded)
-
-		if maxPackets > 0 && int64(totalLoaded) >= maxPackets {
-			break
-		}
-		if chunkTxCount < chunkSize {
-			break
-		}
-	}
-
-	// Post-load: pick best observation, build indexes — same shape as
-	// legacy Load().
-	s.mu.Lock()
-	for _, tx := range s.packets {
-		pickBestObservation(tx)
-		s.trackedBytes += rechargeTx(tx)
-		s.indexByNode(tx)
-	}
-	// Restore the "s.packets sorted oldest-first by FirstSeen" invariant
-	// that legacy Load() got for free from "ORDER BY t.first_seen ASC".
-	// LoadChunked walks chunks in id-ASC order so the slice ends up
-	// id-ordered, which only equals first_seen-ordered when ids and
-	// timestamps are correlated. After tools/freshen-fixture.sh (or any
-	// real-world out-of-order ingest) they're not, leaving
-	// s.packets[0].FirstSeen pointing at the newest row — which then
-	// poisons oldestLoaded below and routes legitimate in-memory queries
-	// to the SQL fallback. GetTimestamps (store.go) and QueryPackets
-	// both rely on this invariant. See PR #1596 / mobile e2e regression.
-	sort.SliceStable(s.packets, func(i, j int) bool {
-		return s.packets[i].FirstSeen < s.packets[j].FirstSeen
+		s.fireChunkCallbacks(count, total)
 	})
+	if err != nil {
+		return fmt.Errorf("chunk %d: %w", chunkIdx, err)
+	}
+
+	// Each chunk publishes complete packets and indexes atomically in
+	// first_seen order. Build the derived analytics indexes once at the end.
+	s.mu.Lock()
 	s.buildSubpathIndex()
 	s.buildPathHopIndex()
 	s.buildDistanceIndex()
-	if s.hotStartupHours > 0 {
-		s.oldestLoaded = hotCutoffStr
-	} else if len(s.packets) > 0 {
-		s.oldestLoaded = s.packets[0].FirstSeen
+	if !s.startupMemoryLimited {
+		if s.hotStartupHours > 0 {
+			s.oldestLoaded = hotCutoffStr
+		} else if len(s.packets) > 0 {
+			s.oldestLoaded = s.packets[0].FirstSeen
+		}
 	}
 	s.loaded = true
 	s.mu.Unlock()
@@ -514,10 +408,6 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 	elapsed := time.Since(t0)
 	log.Printf("[store] LoadChunked: %d transmissions (%d observations) across %d chunk(s) in %v (chunkSize=%d, DB total=%d)",
 		totalLoaded, s.totalObs, chunkIdx, elapsed, chunkSize, totalInDB)
-	if coldLoadAmbiguousHopsSkipped > 0 {
-		log.Printf("[store] LoadChunked: skipped %d ambiguous-prefix relay hops (unique_prefix gate, PR #1643 R1)",
-			coldLoadAmbiguousHopsSkipped)
-	}
 	s.loadMultibyteCapFromDB()
 	// Mark complete on the success path only — see the function-level
 	// defer above for why this is NOT in a deferred call. Probes that
@@ -525,172 +415,6 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 	// see ready=true for a half-loaded store.
 	s.loadComplete.Store(true)
 	return nil
-}
-
-// scanAndMergeChunk consumes one chunk's rows under s.mu.Lock and
-// returns the number of distinct transmissions seen + the max
-// transmission id (cursor for the next chunk).
-func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, coldLoadAmbiguousHopsSkipped *int) (int, int64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	hopsSeen := make(map[string]bool)
-	seenTxIDs := make(map[int]bool)
-	var maxID int64
-
-	for rows.Next() {
-		var txID int
-		var rawHex, hash, firstSeen, decodedJSON sql.NullString
-		var routeType, payloadType, payloadVersion sql.NullInt64
-		var obsID sql.NullInt64
-		var observerID, observerName, observerIATA, direction, pathJSON, obsTimestamp sql.NullString
-		var snr, rssi sql.NullFloat64
-		var score sql.NullFloat64
-		var obsRawHex sql.NullString
-		var resolvedPathStr sql.NullString
-		var scopeName sql.NullString
-
-		scanArgs := []interface{}{&txID, &rawHex, &hash, &firstSeen, &routeType, &payloadType,
-			&payloadVersion, &decodedJSON,
-			&obsID, &observerID, &observerName, &observerIATA, &direction,
-			&snr, &rssi, &score, &pathJSON, &obsTimestamp}
-		if s.db.hasObsRawHex {
-			scanArgs = append(scanArgs, &obsRawHex)
-		}
-		if s.db.hasResolvedPath {
-			scanArgs = append(scanArgs, &resolvedPathStr)
-		}
-		if s.db.hasScopeName {
-			scanArgs = append(scanArgs, &scopeName)
-		}
-		if err := rows.Scan(scanArgs...); err != nil {
-			log.Printf("[store] LoadChunked scan error: %v", err)
-			continue
-		}
-
-		if int64(txID) > maxID {
-			maxID = int64(txID)
-		}
-		seenTxIDs[txID] = true
-
-		hashStr := nullStrVal(hash)
-		tx := s.byHash[hashStr]
-		if tx == nil {
-			tx = &StoreTx{
-				ID:          txID,
-				RawHex:      nullStrVal(rawHex),
-				Hash:        hashStr,
-				FirstSeen:   nullStrVal(firstSeen),
-				LatestSeen:  nullStrVal(firstSeen),
-				RouteType:   nullIntPtr(routeType),
-				PayloadType: nullIntPtr(payloadType),
-				DecodedJSON: nullStrVal(decodedJSON),
-				ScopeName:   nullStrPtr(scopeName),
-				obsKeys:     make(map[string]bool),
-				observerSet: make(map[string]bool),
-			}
-			s.byHash[hashStr] = tx
-			s.packets = append(s.packets, tx)
-			s.byTxID[txID] = tx
-			if txID > s.maxTxID {
-				s.maxTxID = txID
-			}
-			s.indexByNode(tx)
-			if tx.PayloadType != nil {
-				pt := *tx.PayloadType
-				s.byPayloadType[pt] = append(s.byPayloadType[pt], tx)
-			}
-			s.trackAdvertPubkey(tx)
-			s.trackedBytes += rechargeTx(tx)
-		}
-
-		if obsID.Valid {
-			oid := int(obsID.Int64)
-			obsIDStr := nullStrVal(observerID)
-			obsPJ := nullStrVal(pathJSON)
-
-			dk := obsIDStr + "|" + obsPJ
-			if tx.obsKeys[dk] {
-				continue
-			}
-
-			obs := &StoreObs{
-				ID:             oid,
-				TransmissionID: txID,
-				ObserverID:     obsIDStr,
-				ObserverName:   nullStrVal(observerName),
-				ObserverIATA:   nullStrVal(observerIATA),
-				Direction:      nullStrVal(direction),
-				SNR:            nullFloatPtr(snr),
-				RSSI:           nullFloatPtr(rssi),
-				Score:          nullFloatPtr(score),
-				PathJSON:       obsPJ,
-				// Raw frames stay in the database; hash equality does not imply route
-				// equality. Only compact advert evidence is retained per tx.
-				// Packet-detail queries can read the original observation raw.
-				Timestamp: normalizeTimestamp(nullStrVal(obsTimestamp)),
-			}
-
-			rpStr := nullStrVal(resolvedPathStr)
-			if rpStr != "" {
-				rp := unmarshalResolvedPath(rpStr)
-				pks := extractResolvedPubkeys(rp)
-				s.indexResolvedPathHops(tx, pks, hopsSeen)
-			} else if relayPM != nil && obsPJ != "" && obsPJ != "[]" {
-				// resolved_path is NULL on live (since #1287 relay data is
-				// persisted as neighbor_edges, not per-observation). Re-resolve
-				// relay-hop attribution from path_json so relay nodes keep their
-				// analytics history across a restart instead of rebuilding only
-				// from post-restart live traffic. relayPM is passed in from
-				// LoadChunked (fetched before any chunk cursor opened).
-				// byNode ONLY — see the Load() counterpart for why the
-				// resolved_path/path-hop indexes must NOT be populated here.
-				// PR #1643 R1 munger #1: unique_prefix-only gate.
-				rp := resolvePathForObsColdLoad(obsPJ, obsIDStr, tx, relayPM, coldLoadAmbiguousHopsSkipped)
-				for _, pk := range extractResolvedPubkeys(rp) {
-					s.addToByNode(tx, pk)
-				}
-			}
-
-			tx.Observations = append(tx.Observations, obs)
-			tx.obsKeys[dk] = true
-			if obs.ObserverID != "" && !tx.observerSet[obs.ObserverID] {
-				tx.observerSet[obs.ObserverID] = true
-				tx.UniqueObserverCount++
-			}
-			tx.ObservationCount++
-			if obs.Timestamp > tx.LatestSeen {
-				tx.LatestSeen = obs.Timestamp
-			}
-
-			s.byObsID[oid] = obs
-			if oid > s.maxObsID {
-				s.maxObsID = oid
-			}
-			if obsIDStr != "" {
-				s.byObserver[obsIDStr] = append(s.byObserver[obsIDStr], obs)
-			}
-			s.totalObs++
-			s.trackedBytes += estimateStoreObsBytes(obs)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return len(seenTxIDs), maxID, err
-	}
-	rows.Close()
-	txs := make([]*StoreTx, 0, len(seenTxIDs))
-	for id := range seenTxIDs {
-		txs = append(txs, s.byTxID[id])
-	}
-	ids := advertTxIDs(txs)
-	s.mu.Unlock()
-	masks, err := s.db.advertEvidenceForIDs(ids)
-	s.mu.Lock()
-	if err != nil {
-		return len(seenTxIDs), maxID, err
-	}
-	s.mergeAdvertEvidence(masks)
-	return len(seenTxIDs), maxID, nil
 }
 
 // loadStatusMiddleware sets X-CoreScope-Load-Status on every response.

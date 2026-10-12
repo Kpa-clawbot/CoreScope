@@ -40,8 +40,8 @@ func TestBoundedLoad_LimitedMemory(t *testing.T) {
 	if loaded >= 5000 {
 		t.Errorf("expected bounded load to limit packets, got %d/5000", loaded)
 	}
-	if loaded < 1000 {
-		t.Errorf("expected at least 1000 packets (minimum), got %d", loaded)
+	if loaded == 0 || store.trackedBytes > 1048576 {
+		t.Errorf("expected a nonempty cache within 1 MiB, got %d packets / %d bytes", loaded, store.trackedBytes)
 	}
 	t.Logf("Loaded %d/5000 packets with 1MB budget", loaded)
 }
@@ -84,8 +84,12 @@ func TestBoundedLoad_OldestLoadedSet(t *testing.T) {
 	if store.oldestLoaded == "" {
 		t.Fatal("oldestLoaded should be set after bounded load")
 	}
-	if len(store.packets) > 0 && store.oldestLoaded != store.packets[0].FirstSeen {
-		t.Errorf("oldestLoaded (%s) should match first packet (%s)", store.oldestLoaded, store.packets[0].FirstSeen)
+	if len(store.packets) > 0 && store.oldestLoaded > store.packets[0].FirstSeen {
+		t.Errorf("coverage floor (%s) should include first packet (%s)", store.oldestLoaded, store.packets[0].FirstSeen)
+	}
+	oldestOmitted := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(5000-len(store.packets)) * time.Minute).Format(time.RFC3339)
+	if store.oldestLoaded <= oldestOmitted {
+		t.Errorf("coverage floor %s claims omitted packet %s", store.oldestLoaded, oldestOmitted)
 	}
 	t.Logf("oldestLoaded = %s", store.oldestLoaded)
 }
