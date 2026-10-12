@@ -151,29 +151,24 @@ root, so that a code-execution bug in either one does not land as root in a
 container that has your data directory and `config.json` mounted. `supervisord`
 itself stays root, because mosquitto and caddy still need to bind their ports.
 
-Which user the two Go services run as is decided at start time:
+It is opt-in, with `RUN_AS_UID`:
 
-| `/app/data` owner on the host | `RUN_AS_UID` | Services run as |
-|-------------------------------|--------------|-----------------|
-| root (the default when Docker created the directory) | unset | root — as in earlier releases |
-| a normal user, e.g. uid 1000 | unset | that uid |
-| anything | set | `RUN_AS_UID` / `RUN_AS_GID` |
+| `RUN_AS_UID` | Services run as |
+|--------------|-----------------|
+| unset (the default) | root — as in earlier releases |
+| set | `RUN_AS_UID` / `RUN_AS_GID` |
 
-So an existing deployment keeps running exactly as before an upgrade, and the
-container never changes the owner of a file on your host unless you asked for it
-with `RUN_AS_UID`.
+Nothing about an upgrade changes until you set it: the container does not pick a
+uid for you, and does not change the owner of anything on your host. That is
+deliberate rather than cautious. Every release before this one ran as root, so
+the `meshcore.db` in your data directory — with its `-wal` and `-shm`, `users.db`
+and the backups beside them — is root-owned. Switching user without also handing
+those files over leaves the services unable to write the database, so the switch
+has to be something you ask for.
 
-**To switch an existing deployment over**, give the data directory to the user
-you want the services to run as, then restart:
-
-```bash
-docker stop corescope
-sudo chown -R 1000:1000 /your/data     # uid of your own account is usually 1000
-docker start corescope
-```
-
-Or let the container do the one-time hand-over for you — setting `RUN_AS_UID` is
-taken as permission to `chown` leftover root-owned files in the data directory:
+**To turn it on**, pick the uid you want and restart. Setting `RUN_AS_UID` is
+taken as permission for the one-time `chown` of what an earlier root-run
+container left in the data directory:
 
 ```bash
 docker run -d --name corescope \
@@ -190,16 +185,38 @@ docker logs corescope 2>&1 | grep '\[entrypoint\] Go services run as'
 # [entrypoint] Go services run as corescope (uid=1000 gid=1000)
 ```
 
+If you would rather the container never `chown` anything, do the hand-over
+yourself first — then there is nothing left for it to change:
+
+```bash
+docker stop corescope
+sudo chown -R 1000:1000 /your/data     # uid of your own account is usually 1000
+docker start corescope                 # with RUN_AS_UID=1000 set as above
+```
+
+To go back, unset `RUN_AS_UID` and `chown -R root:root /your/data`.
+
 Notes:
 
-- If the data directory is owned by a normal user but still holds root-owned
-  files from an earlier root run, the log says so and names the `chown` to run.
-  Nothing is changed for you in that case.
-- `RUN_AS_GID` defaults to `RUN_AS_UID` when omitted.
-- If the uid already belongs to an account inside the image (`caddy` is 100,
-  `mosquitto` 101), that account is used as-is and the log notes it.
+- `RUN_AS_GID` defaults to `RUN_AS_UID` when omitted. `RUN_AS_UID=0` is the
+  same as leaving it unset.
+- If the uid already belongs to an account inside the image (`caddy` is uid 100,
+  `mosquitto` 101), that account is used as it is, keeping its own group, and
+  the log says so.
 - With `RUN_AS_UID` set to a uid the container cannot use, startup fails rather
-  than silently falling back to root.
+  than quietly falling back to root.
+- `/app` itself changes hands too, because the server writes `config.json.tmp`
+  there when the geo filter is saved. Only the directory does: a bind-mounted
+  `config.json` or `theme.json` keeps the owner it has on your host. The
+  trade-off is that the service account can replace files in `/app`, including
+  the binaries — it cannot gain privilege that way, as supervisord starts them
+  under the same account, but it is the reason this is a reduction of blast
+  radius and not a sandbox.
+- A fresh install is root-owned and so starts as root, like any other. Set
+  `RUN_AS_UID` from the first run to avoid a hand-over later.
+
+The uid selection lives in `docker/select-service-user.sh`, with its branches
+covered by `docker/test-select-service-user.sh`.
 
 ---
 

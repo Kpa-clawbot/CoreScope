@@ -128,14 +128,21 @@ FROM alpine:3.20
 
 RUN apk add --no-cache mosquitto mosquitto-clients supervisor caddy wget
 
-# Unprivileged account for the Go services. Whether it is used is decided at
-# start time by the entrypoint — see "Running the Go services unprivileged"
-# in docs/deployment.md.
+# Account for the Go services when a deployment opts into running them
+# unprivileged with RUN_AS_UID=1000, the usual choice. Creating it costs
+# nothing when it goes unused, and saves the entrypoint creating one at start.
+#
+# Nothing in the image is given to it here. -H matters for that: without it
+# busybox adduser creates the home directory itself, and /app would be
+# corescope-owned mode 2755 — the setgid bit then giving gid 1000 to /app/data
+# and to every file written into it, which Docker copies into each new named
+# volume. The home field still points at /app; only the directory is left to
+# the WORKDIR below, root-owned as in earlier releases.
 RUN addgroup -S -g 1000 corescope && \
-    adduser -S -u 1000 -G corescope -h /app -s /sbin/nologin corescope
+    adduser -S -u 1000 -G corescope -H -h /app -s /sbin/nologin corescope
 
 # Default: the services run as root, exactly as in earlier releases. The
-# entrypoint overrides this when it switches to the unprivileged account.
+# entrypoint overrides this when RUN_AS_UID asks for an unprivileged account.
 ENV CORESCOPE_SERVICE_USER=root
 
 WORKDIR /app
@@ -161,11 +168,12 @@ COPY docker/Caddyfile /etc/caddy/Caddyfile
 
 # Data directory
 RUN mkdir -p /app/data /var/lib/mosquitto /data/caddy && \
-    chown -R mosquitto:mosquitto /var/lib/mosquitto && \
-    chown corescope:corescope /app /app/data
+    chown -R mosquitto:mosquitto /var/lib/mosquitto
 
 # Entrypoint
 COPY docker/entrypoint-go.sh /entrypoint.sh
+# Sourced by the entrypoint, so deliberately not executable.
+COPY docker/select-service-user.sh /select-service-user.sh
 RUN chmod +x /entrypoint.sh
 
 EXPOSE 80 443 1883
