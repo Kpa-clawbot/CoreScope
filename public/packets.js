@@ -4480,6 +4480,7 @@
       _setPackets: function(p) { packets = p; },
       _setFilter: function(k, v) { filters[k] = v; },
       _setFullNames: function(v) { showFullNames = !!v; },
+      resolveHopsForPackets,
     };
   }
 
