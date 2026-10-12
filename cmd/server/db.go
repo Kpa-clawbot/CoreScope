@@ -2371,6 +2371,7 @@ func (db *DB) GetNewTransmissionsSince(lastID int, limit int) ([]map[string]inte
 			"raw_hex":         nullStr(rawHex),
 			"hash":            nullStr(hash),
 			"first_seen":      nullStr(firstSeen),
+			"timestamp":       nullStr(firstSeen),
 			"route_type":      nullInt(routeType),
 			"payload_type":    nullInt(payloadType),
 			"payload_version": nullInt(payloadVersion),
