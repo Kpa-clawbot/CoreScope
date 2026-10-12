@@ -4,8 +4,10 @@ import (
 	"crypto/ed25519"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // buildAdvertHex constructs a full ADVERT packet hex string.
@@ -163,6 +165,115 @@ func TestSigValidation_TruncatedAppdataDropped(t *testing.T) {
 	store.db.QueryRow("SELECT COUNT(*) FROM transmissions").Scan(&txCount)
 	if txCount != 0 {
 		t.Fatalf("truncated advert should be dropped, got %d transmissions", txCount)
+	}
+}
+
+func TestSigValidation_DroppedPacketText(t *testing.T) {
+	cases := []struct {
+		name, nodeName, observerName, wantNode, wantObserver string
+	}{
+		{"valid multibyte", strings.Repeat("é", 16), "Observer", strings.Repeat("é", 16), "Observer"},
+		{"split two-byte rune", strings.Repeat("x", 31) + "é", "Observer", strings.Repeat("x", 31), "Observer"},
+		{"split replacement rune", strings.Repeat("x", 30) + "\xff", "Observer", strings.Repeat("x", 30), "Observer"},
+		{"split four-byte rune", strings.Repeat("x", 31) + "🌍", "Observer", strings.Repeat("x", 31), "Observer"},
+		{"malformed name", "No\xffde", "Observer", "No\ufffdde", "Observer"},
+		{"observer NUL", "Node", "Obs\x00erver", "Node", "Observer"},
+		{"long observer", "Node", strings.Repeat("é", 129), "Node", strings.Repeat("é", maxObserverTextLen)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestStore(t)
+			pub, priv, err := ed25519.GenerateKey(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rawHex := buildAdvertHex(pub, priv, 1700000000, makeAppdata(tc.nodeName))
+			raw, err := hex.DecodeString(rawHex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw[38] ^= 1 // Invalidate the signature without changing the name bytes.
+			rawHex = hex.EncodeToString(raw)
+			payload, err := json.Marshal(struct {
+				Raw    string `json:"raw"`
+				Origin string `json:"origin"`
+			}{rawHex, tc.observerName})
+			if err != nil {
+				t.Fatal(err)
+			}
+			handleMessage(store, "test", MQTTSource{Name: "test"}, newMockMsg("meshcore/US/obs1/packet", string(payload)), nil, nil, &Config{})
+
+			var hash, storedRaw, nodeName, observerName string
+			if err := store.db.QueryRow("SELECT hash, raw_hex, node_name, observer_name FROM dropped_packets").Scan(&hash, &storedRaw, &nodeName, &observerName); err != nil {
+				t.Fatalf("rejected packet audit missing: %v (write errors=%d)", err, store.Stats.WriteErrors.Load())
+			}
+			if storedRaw != rawHex || hash != ComputeContentHash(rawHex) {
+				t.Error("audit changed raw packet evidence or its hash")
+			}
+			if nodeName != tc.wantNode || !utf8.ValidString(nodeName) || len(nodeName) > 32 {
+				t.Errorf("node name=%q (%d bytes), want %q and valid UTF-8 within 32 bytes", nodeName, len(nodeName), tc.wantNode)
+			}
+			if observerName != tc.wantObserver || !utf8.ValidString(observerName) || utf8.RuneCountInString(observerName) > maxObserverTextLen {
+				t.Errorf("observer name=%q, want %q within observer text limit", observerName, tc.wantObserver)
+			}
+			if drops, errors := store.Stats.SignatureDrops.Load(), store.Stats.WriteErrors.Load(); drops != 1 || errors != 0 {
+				t.Errorf("signature drops=%d write errors=%d, want 1 and 0", drops, errors)
+			}
+			var transmissions int
+			if err := store.db.QueryRow("SELECT COUNT(*) FROM transmissions").Scan(&transmissions); err != nil || transmissions != 0 {
+				t.Fatalf("invalid signature stored as transmission: count=%d err=%v", transmissions, err)
+			}
+		})
+	}
+}
+
+func TestSigValidation_AcceptedNodeText(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name, nodeName, want string
+		update               bool
+	}{
+		{"insert split two-byte rune", strings.Repeat("x", 31) + "é", strings.Repeat("x", 31), false},
+		{"update split replacement rune", strings.Repeat("x", 30) + "\xff", strings.Repeat("x", 30), true},
+		{"update split four-byte rune", strings.Repeat("x", 31) + "🌍", strings.Repeat("x", 31), true},
+		{"insert valid multibyte", strings.Repeat("é", 16), strings.Repeat("é", 16), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestStore(t)
+			wantUpserts := int64(1)
+			if tc.update {
+				seedHex := buildAdvertHex(pub, priv, 1700000000, makeAppdata("Original"))
+				handleMessage(store, "test", MQTTSource{Name: "test"}, newMockMsg("meshcore/US/obs1/packet", `{"raw":"`+seedHex+`","origin":"Observer"}`), nil, nil, &Config{})
+				if store.Stats.NodeUpserts.Load() != 1 {
+					t.Fatal("seed node not inserted")
+				}
+				wantUpserts++
+			}
+			rawHex := buildAdvertHex(pub, priv, 1700000001, makeAppdata(tc.nodeName))
+			msg := newMockMsg("meshcore/US/obs1/packet", `{"raw":"`+rawHex+`","origin":"Observer"}`)
+			handleMessage(store, "test", MQTTSource{Name: "test"}, msg, nil, nil, &Config{})
+
+			var nodeName, storedRaw string
+			if err := store.db.QueryRow("SELECT name FROM nodes WHERE public_key = "+store.parameter(1), hex.EncodeToString(pub)).Scan(&nodeName); err != nil {
+				t.Fatalf("accepted node missing: %v (write errors=%d)", err, store.Stats.WriteErrors.Load())
+			}
+			if nodeName != tc.want || !utf8.ValidString(nodeName) || len(nodeName) > 32 {
+				t.Errorf("node name=%q (%d bytes), want %q and valid UTF-8 within 32 bytes", nodeName, len(nodeName), tc.want)
+			}
+			if err := store.db.QueryRow("SELECT raw_hex FROM transmissions WHERE hash = "+store.parameter(1), ComputeContentHash(rawHex)).Scan(&storedRaw); err != nil || storedRaw != rawHex {
+				t.Fatalf("accepted packet evidence changed: err=%v", err)
+			}
+			if upserts, errors := store.Stats.NodeUpserts.Load(), store.Stats.WriteErrors.Load(); upserts != wantUpserts || errors != 0 {
+				t.Errorf("node upserts=%d write errors=%d, want %d and 0", upserts, errors, wantUpserts)
+			}
+			if drops := store.Stats.SignatureDrops.Load(); drops != 0 {
+				t.Errorf("valid signature dropped: %d", drops)
+			}
+		})
 	}
 }
 

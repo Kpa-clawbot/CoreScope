@@ -580,6 +580,8 @@ func optionalWrite(tx *sql.Tx, fn func() error) error {
 
 // UpsertNode inserts or updates a node.
 func (s *Store) UpsertNode(pubKey, name, role string, lat, lon *float64, lastSeen string) error {
+	// Preserve the decoder's byte cap while making the name safe for SQL text.
+	name = strings.ToValidUTF8(name, "")
 	ingestNow := time.Now().UTC().Format(time.RFC3339)
 	now := lastSeen
 	if now == "" {
@@ -1324,9 +1326,13 @@ type DroppedPacket struct {
 
 // InsertDroppedPacket records a rejected packet in the dropped_packets table.
 func (s *Store) InsertDroppedPacket(dp *DroppedPacket) error {
+	// The decoder's byte cap can split a UTF-8 rune. Drop incomplete bytes
+	// without expanding the name past that cap; raw_hex retains the evidence.
+	nodeName := strings.ToValidUTF8(dp.NodeName, "")
+	observerName := clampObserverField(dp.ObserverName, maxObserverTextLen)
 	_, err := s.db.Exec(
 		`INSERT INTO dropped_packets (hash, raw_hex, reason, observer_id, observer_name, node_pubkey, node_name) VALUES (`+s.parameter(1)+`, `+s.parameter(2)+`, `+s.parameter(3)+`, `+s.parameter(4)+`, `+s.parameter(5)+`, `+s.parameter(6)+`, `+s.parameter(7)+`)`,
-		dp.Hash, dp.RawHex, dp.Reason, dp.ObserverID, dp.ObserverName, dp.NodePubKey, dp.NodeName,
+		dp.Hash, dp.RawHex, dp.Reason, dp.ObserverID, observerName, dp.NodePubKey, nodeName,
 	)
 	if err != nil {
 		s.Stats.WriteErrors.Add(1)
