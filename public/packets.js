@@ -3622,7 +3622,9 @@
         if (resolved) {
           const lastHop = pathHops[pathHops.length - 1];
           for (const [k, v] of Object.entries(resolved)) {
-            hopNameCache[k] = v;
+            // #2098 — the last hop is narrowed to this observer's region, so it
+            // stays off the bare key, as in resolveHops().
+            if (!(pkt.observer_id && k === lastHop)) hopNameCache[k] = v;
             if (pkt.observer_id) hopNameCache[hopCacheKey(k, pkt.observer_id, k === lastHop)] = v;
           }
         }

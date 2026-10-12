@@ -219,7 +219,11 @@ window.HopResolver = (function() {
         const regional = checked.filter(c => c.regional);
         regional.sort((a, b) => (a.distKm || 9999) - (b.distKm || 9999));
         const candidates = regional.length > 0 ? regional : checked;
-        const globalFallback = regional.length === 0 && checked.length > 0 && packetIata != null;
+        // A global fallback is a hop checked against the region with no candidate
+        // in it. An earlier hop was not checked at all (#2098): regionSkipped
+        // keeps its badge counting every candidate without the fallback label.
+        const globalFallback = regional.length === 0 && checked.length > 0 && packetIata != null && direct.has(h);
+        const regionSkipped = packetIata != null && !direct.has(h);
 
         const conflicts = candidates.map(c => ({
           name: c.name, pubkey: c.public_key, lat: c.lat, lon: c.lon,
@@ -228,10 +232,10 @@ window.HopResolver = (function() {
 
         if (candidates.length === 1) {
           resolved[hop] = { name: candidates[0].name, pubkey: candidates[0].public_key,
-            candidates: conflicts, conflicts, globalFallback };
+            candidates: conflicts, conflicts, globalFallback, regionSkipped };
         } else {
           resolved[hop] = { name: candidates[0].name, pubkey: candidates[0].public_key,
-            ambiguous: true, candidates: conflicts, conflicts, globalFallback,
+            ambiguous: true, candidates: conflicts, conflicts, globalFallback, regionSkipped,
             hopBytes: Math.ceil(hop.length / 2), totalGlobal: allCandidates.length, totalRegional: regional.length };
         }
       }
