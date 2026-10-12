@@ -3616,16 +3616,19 @@
           // #2097 — with the observer: the cache write below stores this under
           // the per-observer key, so it has to have been resolved for that
           // observer or the key promises something the value is not.
-          const [dLat, dLon] = observerPosition(pkt.observer_id);
-          resolved = HopResolver.resolve(pathHops, null, null, dLat, dLon, pkt.observer_id);
+          // #2098 — the observer of the shown observation, which heard pathHops;
+          // the packet row's observer may have heard another path.
+          const [dLat, dLon] = observerPosition(effectivePkt.observer_id);
+          resolved = HopResolver.resolve(pathHops, null, null, dLat, dLon, effectivePkt.observer_id);
         }
         if (resolved) {
+          const obs = effectivePkt.observer_id;
           const lastHop = pathHops[pathHops.length - 1];
           for (const [k, v] of Object.entries(resolved)) {
             // #2098 — the last hop is narrowed to this observer's region, so it
             // stays off the bare key, as in resolveHops().
-            if (!(pkt.observer_id && k === lastHop)) hopNameCache[k] = v;
-            if (pkt.observer_id) hopNameCache[hopCacheKey(k, pkt.observer_id, k === lastHop)] = v;
+            if (!(obs && k === lastHop)) hopNameCache[k] = v;
+            if (obs) hopNameCache[hopCacheKey(k, obs, k === lastHop)] = v;
           }
         }
       } catch {}
@@ -3924,7 +3927,7 @@
             let obsLat = null, obsLon = null;
             const obsId = obsName(pkt.observer_id);
             await ensureHopResolver();
-            const data = { resolved: HopResolver.resolve(pathHops, senderLat || null, senderLon || null, obsLat, obsLon, pkt.observer_id) };
+            const data = { resolved: HopResolver.resolve(pathHops, senderLat || null, senderLon || null, obsLat, obsLon, effectivePkt.observer_id) };
             resolvedKeys = pathHops.map(h => {
               const r = data.resolved?.[h];
               return r?.pubkey || h;
