@@ -207,6 +207,25 @@ const hasBadge = part => /hop-conflict-btn/.test(part);
     assert(!/AB-NEAR/.test(bare) || hasBadge(bare), 'without an observer, "ab" is not shown as narrowed to one region (' + bare.replace(/<[^>]+>/g, '') + ')');
   }
 
+  console.log('\n=== #2098: the detail pane resolves the shown observation for its own observer ===');
+  {
+    // The packet row comes from another observer (no region); the detail shows
+    // the first observation, heard by the OST observer, whose last hop is "ab".
+    const t = loadPackets()._packetsTestAPI;
+    const panel = { innerHTML: '', querySelectorAll: () => [], querySelector: () => null, addEventListener: () => {} };
+    await t.renderDetail(panel, {
+      packet: { id: 2, hash: 'h2', observer_id: 'OTHEROBSERVER', route_type: 1, payload_type: 5,
+        raw_hex: '1503EFABCD' + 'AA'.repeat(24), path_json: '["ef","ab","cd"]',
+        decoded_json: JSON.stringify({ type: 'CHAN', channel: '#test', sender: 'A', text: 'A: hi' }) },
+      observations: [{ id: 21, observer_id: OBSERVER_ID, path_json: '["ef","ab"]', raw_hex: '1502EFAB' + 'AA'.repeat(24) }],
+    });
+    const m = panel.innerHTML.match(/<dt>Path<\/dt><dd>([\s\S]*?)<\/dd>/);
+    const shown = m ? hopParts(m[1]) : [];
+    const last = shown[shown.length - 1] || '';
+    assert(shown.length === 2, 'the Path row shows the observation\'s 2 hops (' + shown.length + ')');
+    assert(/AB-NEAR/.test(last) && !hasBadge(last), 'its last hop is narrowed to the region of the observer that heard it (' + last.replace(/<[^>]+>/g, '').trim() + ')');
+  }
+
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 })();
