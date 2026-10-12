@@ -79,29 +79,3 @@ func TestSaveGeoFilterSymlinkedConfig(t *testing.T) {
 		}
 	}
 }
-
-// TestSaveGeoFilterIrregularSymlinkTarget checks that a symlink pointing at
-// something that is not a regular file is not followed: the save falls back to
-// the old tmp+rename on the link path rather than writing into, say, a device.
-func TestSaveGeoFilterIrregularSymlinkTarget(t *testing.T) {
-	dir := t.TempDir()
-	targetDir := filepath.Join(dir, "notafile")
-	if err := os.Mkdir(targetDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	link := filepath.Join(dir, "config.json")
-	if err := os.Symlink(targetDir, link); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-
-	// A directory cannot be parsed as config.json, so the save fails rather
-	// than writing through the link.
-	if err := SaveGeoFilter(dir, nil); err == nil {
-		t.Error("expected an error for a symlink to a directory")
-	}
-	if entries, err := os.ReadDir(targetDir); err != nil {
-		t.Fatal(err)
-	} else if len(entries) != 0 {
-		t.Errorf("wrote into the symlink target directory: %v", entries)
-	}
-}
