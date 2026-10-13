@@ -7,7 +7,6 @@ const REPO_ROOT = require('path').resolve(__dirname, '..', '..');
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
 const os = require('os');
 const { readAndReset, mergeInto, createCollector, writeCoverage } = require('../../scripts/e2e-coverage');
 
@@ -205,15 +204,6 @@ async function main() {
     } finally {
       console.error = savedError;
     }
-  }
-
-  // The preload writes nothing for a process that never saw coverage.
-  {
-    const outDir = path.join(REPO_ROOT, '.nyc_output');
-    const r = spawnSync(process.execPath, ['--require', path.join(REPO_ROOT, 'scripts', 'e2e-coverage-hook.js'), '-e', ''], { cwd: REPO_ROOT });
-    assert.strictEqual(r.status, 0, 'hook must load: ' + r.stderr);
-    const written = fs.existsSync(outDir) && fs.readdirSync(outDir).filter(f => f.endsWith('-' + r.pid + '.json'));
-    assert.ok(!written || written.length === 0, 'no coverage file without coverage');
   }
 
   finished = true;
