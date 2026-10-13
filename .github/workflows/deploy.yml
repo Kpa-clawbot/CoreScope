@@ -543,6 +543,10 @@ jobs:
           done
 
       - name: Run Playwright E2E tests (fail-fast)
+        env:
+          # On master pushes every suite records the frontend coverage of the
+          # pages it opens into .nyc_output/ (#2203). Off on PRs to keep them fast.
+          NODE_OPTIONS: ${{ github.event_name == 'push' && '--require ./scripts/e2e-coverage-hook.js' || '' }}
         run: |
           # suite <shard> <file> [VAR=value ...]: runs tests/e2e/<file> with
           # exactly those variables, but only on its own shard. The shard numbers
@@ -720,29 +724,26 @@ jobs:
           done
           echo "3 passed"
 
-      # Shard 2 runs test-e2e-playwright.js, the one suite that writes
-      # .nyc_output, so the coverage collection and its badge live there too.
+      # An extra coverage source on top of the suites: a tour of the main
+      # page groups. Its files land in .nyc_output/ beside the suites' files.
       - name: Collect frontend coverage (parallel)
         if: success() && github.event_name == 'push' && matrix.shard == 2
         run: |
           BASE_URL=http://localhost:13581 node scripts/collect-frontend-coverage.js 2>&1 | tee fe-coverage-output.txt || true
 
-      - name: Generate frontend coverage badge
-        if: success()
+      # One file per suite is about 6 MB, mostly the same maps, so the shard
+      # merges them before upload. e2e-test merges the three shards and makes
+      # the frontend coverage badge.
+      # Coverage never decides the outcome: a failure here must not skip the
+      # shard upload below (if: success()) and so fail the E2E gate.
+      - name: Merge this shard's frontend coverage
+        if: success() && github.event_name == 'push'
+        continue-on-error: true
         run: |
-          # .badges/ is tracked on master, so the checkout already holds the
-          # old badge files; the shard upload would ship them as if this run
-          # had produced them (#2136). Start empty.
-          rm -rf .badges && mkdir .badges
-          if [ -f .nyc_output/frontend-coverage.json ] || [ -f .nyc_output/e2e-coverage.json ]; then
-            npx nyc report --reporter=text-summary --reporter=text 2>&1 | tee fe-report.txt
-            FE_COVERAGE=$(grep 'Statements' fe-report.txt | head -1 | grep -oP '[\d.]+(?=%)' || echo "0")
-            FE_COVERAGE=${FE_COVERAGE:-0}
-            FE_COLOR="red"
-            [ "$(echo "$FE_COVERAGE > 50" | bc -l 2>/dev/null)" = "1" ] && FE_COLOR="yellow"
-            [ "$(echo "$FE_COVERAGE > 80" | bc -l 2>/dev/null)" = "1" ] && FE_COLOR="brightgreen"
-            echo "{\"schemaVersion\":1,\"label\":\"frontend coverage\",\"message\":\"${FE_COVERAGE}%\",\"color\":\"${FE_COLOR}\"}" > .badges/frontend-coverage.json
-            echo "## Frontend: ${FE_COVERAGE}% coverage" >> $GITHUB_STEP_SUMMARY
+          if ls .nyc_output/*.json >/dev/null 2>&1; then
+            npx nyc merge .nyc_output coverage-shard.json
+          else
+            echo "::warning::no frontend coverage was recorded on shard ${{ matrix.shard }}"
           fi
 
       - name: Stop test server
@@ -764,7 +765,7 @@ jobs:
           name: e2e-shard-${{ matrix.shard }}
           path: |
             e2e-output.txt
-            .badges/
+            coverage-shard.json
           retention-days: 1
           if-no-files-found: ignore
           include-hidden-files: true
@@ -803,10 +804,9 @@ jobs:
           ls shards
           [ "$(ls -d shards/e2e-shard-* | wc -l)" -eq 3 ] || { echo "::error::expected results from 3 shards"; exit 1; }
           cat shards/e2e-shard-*/e2e-output.txt > e2e-output.txt
-          # Start empty, as in the shards: the checkout holds master's old
-          # .badges/ files, which would otherwise go out in e2e-badges (#2136).
+          # Start empty: the checkout holds master's old .badges/ files,
+          # which would otherwise go out in e2e-badges (#2136).
           rm -rf .badges && mkdir .badges
-          cp shards/e2e-shard-*/.badges/*.json .badges/ 2>/dev/null || true
           # Aggregate per-suite PASS/FAIL across every test-*-e2e.js summary.
           # The previous regex (grep -oP '[0-9]+(?=/)' | tail -1) caught a
           # stray digits-before-slash like the '2' in '2/3 tests passed' from
@@ -823,6 +823,40 @@ jobs:
           fi
           echo "{\"schemaVersion\":1,\"label\":\"e2e tests\",\"message\":\"${E2E_MSG}\",\"color\":\"${E2E_COLOR}\"}" > .badges/e2e-tests.json
           echo "E2E: ${E2E_MSG} ($(grep -c '^=== E2E SUITE' e2e-output.txt) suite runs)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up Node.js 22
+        if: github.event_name == 'push'
+        continue-on-error: true
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      # Coverage from every suite on every shard (#2203), merged into one
+      # number. Only master pushes record it, and it never fails the gate.
+      - name: Generate frontend coverage badge
+        if: github.event_name == 'push'
+        continue-on-error: true
+        run: |
+          mkdir -p .nyc_output
+          for f in shards/e2e-shard-*/coverage-shard.json; do
+            [ -f "$f" ] && cp "$f" ".nyc_output/$(basename "$(dirname "$f")").json"
+          done
+          if ! ls .nyc_output/*.json >/dev/null 2>&1; then
+            echo "::warning::no shard recorded frontend coverage; the badge keeps its previous value"
+            exit 0
+          fi
+          echo "Frontend coverage from: $(ls .nyc_output | paste -sd ' ' -)"
+          npx --yes nyc@18.0.0 report --reporter=text-summary --reporter=text 2>&1 | tee fe-report.txt
+          FE_COVERAGE=$(grep 'Statements' fe-report.txt | head -1 | grep -oP '[\d.]+(?=%)' || true)
+          if [ -z "$FE_COVERAGE" ]; then
+            echo "::warning::nyc report gave no statement coverage; the badge keeps its previous value"
+            exit 0
+          fi
+          FE_COLOR="red"
+          [ "$(echo "$FE_COVERAGE > 50" | bc -l 2>/dev/null)" = "1" ] && FE_COLOR="yellow"
+          [ "$(echo "$FE_COVERAGE > 80" | bc -l 2>/dev/null)" = "1" ] && FE_COLOR="brightgreen"
+          echo "{\"schemaVersion\":1,\"label\":\"frontend coverage\",\"message\":\"${FE_COVERAGE}%\",\"color\":\"${FE_COLOR}\"}" > .badges/frontend-coverage.json
+          echo "## Frontend: ${FE_COVERAGE}% coverage" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload E2E badges
         uses: actions/upload-artifact@v6

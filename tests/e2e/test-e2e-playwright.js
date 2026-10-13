@@ -2603,19 +2603,6 @@ async function run() {
 
   // ─── End #1468 tests ──────────────────────────────────────────────────────
 
-  // Extract frontend coverage if instrumented server is running
-  try {
-    const coverage = await page.evaluate(() => window.__coverage__);
-    if (coverage) {
-      const fs = require('fs');
-      const path = require('path');
-      const outDir = path.join(REPO_ROOT, '.nyc_output');
-      if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
-      fs.writeFileSync(path.join(outDir, 'e2e-coverage.json'), JSON.stringify(coverage));
-      console.log(`Frontend coverage from E2E: ${Object.keys(coverage).length} files`);
-    }
-  } catch {}
-
   // --- Group: Deep linking (#536) ---
 
   // Test: nodes tab deep link
