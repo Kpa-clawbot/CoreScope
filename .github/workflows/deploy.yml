@@ -1225,54 +1225,78 @@ jobs:
     # jobs, so ordering is unchanged.
     needs: [build-and-publish]
     runs-on: ubuntu-latest
+    # The badges go to their own `badges` branch (#2136). master is protected,
+    # so writing there took a PAT (BADGE_PUSH_TOKEN), which stopped working.
+    # The badges branch is unprotected, so the job's own GITHUB_TOKEN can
+    # write it.
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          # The push below passes its own token; later steps need none.
+          persist-credentials: false
+
+      # go-badges second, so its files win if e2e-badges ever carries go
+      # badges again.
+      - name: Download E2E badges
+        continue-on-error: true
+        uses: actions/download-artifact@v6
+        with:
+          name: e2e-badges
+          path: badges-new/
 
       - name: Download Go coverage badges
         continue-on-error: true
         uses: actions/download-artifact@v6
         with:
           name: go-badges
-          path: .badges/
+          path: badges-new/
 
-      - name: Download E2E badges
-        continue-on-error: true
-        uses: actions/download-artifact@v6
-        with:
-          name: e2e-badges
-          path: .badges/
-
-      - name: Publish coverage badges to repo
+      - name: Publish coverage badges to the badges branch
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.BADGE_PUSH_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # GITHUB_TOKEN cannot push to protected branches (required status checks).
-          # Use admin PAT (BADGE_PUSH_TOKEN) via GitHub Contents API instead.
-          for badge in .badges/*.json; do
-            FILENAME=$(basename "$badge")
-            FILEPATH=".badges/$FILENAME"
-            CONTENT=$(base64 -w0 "$badge")
-            CURRENT_SHA=$(gh api "repos/${{ github.repository }}/contents/$FILEPATH" --jq '.sha' 2>/dev/null || echo "")
-            if [ -n "$CURRENT_SHA" ]; then
-              gh api "repos/${{ github.repository }}/contents/$FILEPATH" \
-                -X PUT \
-                -f message="ci: update $FILENAME [skip ci]" \
-                -f content="$CONTENT" \
-                -f sha="$CURRENT_SHA" \
-                -f branch="master" \
-                --silent 2>&1 || echo "Failed to update $FILENAME"
-            else
-              gh api "repos/${{ github.repository }}/contents/$FILEPATH" \
-                -X PUT \
-                -f message="ci: update $FILENAME [skip ci]" \
-                -f content="$CONTENT" \
-                -f branch="master" \
-                --silent 2>&1 || echo "Failed to create $FILENAME"
-            fi
-          done
-          echo "Badge publish complete"
+          # Start from what the badges branch holds now (master's .badges/ the
+          # first time) and overwrite only the badges this run produced, so a
+          # missing artifact never removes a badge. The branch is one orphan
+          # commit, force-pushed, so it never grows.
+          # Every step checks its own result: bash ignores set -e inside a
+          # function whose status is tested, as the `if` below does.
+          publish() {
+            ls badges-new/*.json >/dev/null 2>&1 || { echo "no badge artifacts were downloaded"; return 1; }
+            out=$(mktemp -d) || return 1
+            # Exit 2 means the branch does not exist yet; any other failure
+            # must not be taken for that, or the badges this run did not
+            # produce would be reset.
+            git ls-remote --exit-code --heads origin badges >/dev/null
+            case $? in
+              0)
+                git fetch -q --depth=1 origin badges || return 1
+                git archive FETCH_HEAD | tar -x -C "$out" || return 1
+                ;;
+              2)
+                if ls .badges/*.json >/dev/null 2>&1; then
+                  cp .badges/*.json "$out"/ || return 1
+                fi
+                ;;
+              *) return 1 ;;
+            esac
+            cp badges-new/*.json "$out"/ || return 1
+            cd "$out" || return 1
+            git init -q -b badges || return 1
+            git add -- *.json || return 1
+            git -c user.name="github-actions[bot]" \
+                -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+                commit -q -m "ci: badges for ${GITHUB_SHA::8}" || return 1
+            git push -q --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:badges || return 1
+            ls -- *.json
+          }
+          if ! (publish); then
+            echo "::warning title=Badges not published::Publishing to the badges branch failed (see the step log); the README badges keep their previous values."
+          fi
 
       - name: Post deployment summary
         run: |
