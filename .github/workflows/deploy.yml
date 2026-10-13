@@ -730,7 +730,10 @@ jobs:
       - name: Generate frontend coverage badge
         if: success()
         run: |
-          mkdir -p .badges
+          # .badges/ is tracked on master, so the checkout already holds the
+          # old badge files; the shard upload would ship them as if this run
+          # had produced them (#2136). Start empty.
+          rm -rf .badges && mkdir .badges
           if [ -f .nyc_output/frontend-coverage.json ] || [ -f .nyc_output/e2e-coverage.json ]; then
             npx nyc report --reporter=text-summary --reporter=text 2>&1 | tee fe-report.txt
             FE_COVERAGE=$(grep 'Statements' fe-report.txt | head -1 | grep -oP '[\d.]+(?=%)' || echo "0")
@@ -800,7 +803,9 @@ jobs:
           ls shards
           [ "$(ls -d shards/e2e-shard-* | wc -l)" -eq 3 ] || { echo "::error::expected results from 3 shards"; exit 1; }
           cat shards/e2e-shard-*/e2e-output.txt > e2e-output.txt
-          mkdir -p .badges
+          # Start empty, as in the shards: the checkout holds master's old
+          # .badges/ files, which would otherwise go out in e2e-badges (#2136).
+          rm -rf .badges && mkdir .badges
           cp shards/e2e-shard-*/.badges/*.json .badges/ 2>/dev/null || true
           # Aggregate per-suite PASS/FAIL across every test-*-e2e.js summary.
           # The previous regex (grep -oP '[0-9]+(?=/)' | tail -1) caught a
