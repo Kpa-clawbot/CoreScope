@@ -12,7 +12,7 @@ Self-hosted, open-source MeshCore packet analyzer. Collects MeshCore packets via
 
 ## ⚡ Performance
 
-The Go backend serves all 40+ API endpoints from an in-memory packet store with 5 indexes (hash, txID, obsID, observer, node). SQLite is for persistence only — reads never touch disk.
+The Go backend serves its packet and analytics API from an in-memory packet store with 7 indexes (hash, txID, obsID, observer, node, path hop, payload type). SQLite is for persistence only — reads never touch disk.
 
 | Metric | Value |
 |--------|-------|
@@ -28,7 +28,7 @@ See [PERFORMANCE.md](PERFORMANCE.md) for full benchmarks.
 ## ✨ Features
 
 ### 📡 Live Trace Map
-Real-time animated map with packet route visualization, VCR-style playback controls, and a retro LCD clock. Replay the last 24 hours of mesh activity, scrub through the timeline, or watch packets flow live at up to 4× speed.
+Real-time animated map with packet route visualization, VCR-style playback controls, and a retro LCD clock. Replay the last 24 hours of mesh activity, scrub through the timeline, or watch packets flow live at up to 8× speed.
 
 ![Live VCR playback — watch packets flow across the Bay Area mesh](docs/screenshots/MeshVCR.gif)
 
@@ -59,11 +59,12 @@ Full experience on your phone — proper touch controls, iOS safe area support, 
 
 ### And More
 
-- **11 Analytics Tabs** — RF, topology, channels, hash stats, distance, route patterns, and more
+- **17 Analytics Tabs** — RF, topology, channels, hash stats, distance, route patterns, scopes, and more
 - **Node Directory** — searchable list with role tabs, detail panel, QR codes, advert timeline
 - **Packet Tracing** — follow individual packets across observers with SNR/RSSI timeline
 - **Observer Status** — health monitoring, packet counts, uptime, per-observer analytics
 - **Hash Collision Matrix** — detect address collisions across the mesh
+- **Scope Audit**: per repeater, which declared regions show no forwarding and which scopes it forwards without declaring them
 - **Channel Key Auto-Derivation** — hashtag channels (`#channel`) keys derived via SHA256
 - **Multi-Broker MQTT** — connect to multiple brokers with per-source IATA filtering
 - **Dark / Light Mode** — auto-detects system preference, map tiles swap too
@@ -72,6 +73,13 @@ Full experience on your phone — proper touch controls, iOS safe area support, 
 - **Shareable URLs** — deep links to packets, channels, and observer detail pages
 - **Protobuf API Contract** — typed API definitions in `proto/`
 - **Accessible** — ARIA patterns, keyboard navigation, screen reader support
+
+### Optional Features
+
+Off by default, enabled in `config.json`:
+
+- **User Accounts**: registration with email activation, settings sync, an admin area, hashtag channel proposals, mail notifications for watched nodes, and a personal data export. The dashboard stays public. See [docs/user-guide/accounts.md](docs/user-guide/accounts.md)
+- **Mobile RX Coverage**: crowdsourced coverage from phones connected to a companion radio, drawn as hex bins on the RX Coverage page and on each node's Reach page. See [docs/client-rx-coverage.md](docs/client-rx-coverage.md)
 
 ## Quick Start
 
@@ -162,8 +170,10 @@ Copy `config.example.json` to `config.json` and edit:
 
 | Variable | Description |
 |----------|-------------|
-| `PORT` | Override config port |
 | `DB_PATH` | Override SQLite database path |
+| `GOMEMLIMIT` | Go soft memory limit, wins over `runtime.maxMemoryMB` |
+
+The HTTP port is set with `port` in `config.json` or the server's `-port` flag.
 
 ## Architecture
 
@@ -190,7 +200,7 @@ Observer → USB →           │  Mosquitto ──→ Go Ingestor ──→ SQ
 3. **Configure meshcoretomqtt** with your IATA region code and MQTT broker address
 4. **Packets appear** on topic `meshcore/{IATA}/{PUBKEY}/packets`
 
-Or POST raw hex packets to `POST /api/packets` for manual injection.
+To decode a single raw hex packet without storing it, use `POST /api/decode`.
 
 ## Project Structure
 
@@ -204,12 +214,12 @@ corescope/
 │   │   ├── db.go            # SQLite persistence layer
 │   │   ├── decoder.go       # MeshCore packet decoder
 │   │   ├── websocket.go     # WebSocket broadcast
-│   │   └── *_test.go        # 327 test functions
+│   │   └── *_test.go        # Server tests
 │   └── ingestor/            # Go MQTT ingestor
 │       ├── main.go          # MQTT subscription + packet processing
 │       ├── decoder.go       # Packet decoder (shared logic)
 │       ├── db.go            # SQLite write path
-│       └── *_test.go        # 53 test functions
+│       └── *_test.go        # Ingestor tests
 ├── proto/                   # Protobuf API definitions
 ├── public/                  # Vanilla JS frontend (no build step)
 │   ├── index.html           # SPA shell
@@ -219,7 +229,7 @@ corescope/
 │   ├── live.js              # Live trace + VCR playback
 │   ├── channels.js          # Channel chat
 │   ├── nodes.js             # Node directory + detail views
-│   ├── analytics.js         # 11-tab analytics dashboard
+│   ├── analytics.js         # Analytics dashboard
 │   └── style.css            # CSS variable theming (light/dark)
 ├── docker/
 │   ├── supervisord-go.conf  # Process manager (server + ingestor)
@@ -253,14 +263,14 @@ that runs on Alpine or scratch. The container build does the same thing — see
 
 ### Test Suite
 
-**380 Go tests** covering the backend, plus **150+ Node.js tests** for the frontend and legacy logic, plus **49 Playwright E2E tests** for browser validation.
+Go tests cover the backend, Node.js unit tests in `tests/unit/` cover the frontend logic, and Playwright tests in `tests/e2e/` validate the UI in a browser.
 
 ```bash
 # Go backend tests
 cd cmd/server && go test ./... -v
 cd cmd/ingestor && go test ./... -v
 
-# Or across all 14 modules at once
+# Or across all 16 modules at once
 make test
 
 # Node.js frontend + integration tests
@@ -284,9 +294,9 @@ If you're running an existing Node.js deployment, see [docs/go-migration.md](doc
 
 Contributions welcome. Please read [AGENTS.md](AGENTS.md) for coding conventions, testing requirements, and engineering principles before submitting a PR.
 
-**Live instance:** [analyzer.00id.net](https://analyzer.00id.net) — all API endpoints are public, no auth required.
+**Live instance:** [analyzer.on8ar.eu](https://analyzer.on8ar.eu): all read endpoints are public, no auth required.
 
-**API Documentation:** CoreScope auto-generates an OpenAPI 3.0 spec. Browse the interactive Swagger UI at [`/api/docs`](https://analyzer.00id.net/api/docs) or fetch the machine-readable spec at [`/api/spec`](https://analyzer.00id.net/api/spec).
+**API Documentation:** CoreScope auto-generates an OpenAPI 3.0 spec. Browse the interactive Swagger UI at [`/api/docs`](https://analyzer.on8ar.eu/api/docs) or fetch the machine-readable spec at [`/api/spec`](https://analyzer.on8ar.eu/api/spec).
 
 ## License
 

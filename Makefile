@@ -1,6 +1,6 @@
 # corescope build entry point.
 #
-# This repo is 14 Go modules wired with `replace ../../internal/*` and no
+# This repo is 16 Go modules wired with `replace ../../internal/*` and no
 # go.work, so every recipe changes into its module. The build flags live here
 # because the SQLite driver is cgo now (github.com/mattn/go-sqlite3) and the
 # flags stopped being something you can safely retype at each call site.
