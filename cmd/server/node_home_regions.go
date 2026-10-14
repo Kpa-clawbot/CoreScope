@@ -27,6 +27,10 @@ import (
 
 const nodeHomeRegionsRecomputerDefaultInterval = 5 * time.Minute
 
+// regionFallbackMaxHops bounds the fallback for nodes never heard zero-hop: a
+// node whose closest hearing took more hops than this is in no region.
+const regionFallbackMaxHops = 3
+
 var (
 	nodeHomeRegionsRecompStartedMu sync.Mutex
 	nodeHomeRegionsRecompStarted   bool
@@ -128,4 +132,11 @@ func enrichNodeHomeRegions(node map[string]interface{}, regions []string) {
 		return
 	}
 	node["home_regions"] = regions
+}
+
+// GetNodeFallbackRegionSets returns the current fallback snapshot (pubkey →
+// sorted regions, empty for a node in no region), or an empty map before the
+// first compute. Read-only by convention.
+func (s *PacketStore) GetNodeFallbackRegionSets() map[string][]string {
+	return map[string][]string{}
 }

@@ -135,3 +135,81 @@ func TestHandleNodesHomeRegions(t *testing.T) {
 		t.Fatalf("expected both seeded nodes in the response, saw %d", seen)
 	}
 }
+
+// mkPathAdvert is a relayed flood advert heard by each observer over the given
+// path (JSON array of hop hashes, "[]" for a direct hearing).
+func mkPathAdvert(id int, pubkey string, hearings map[string]string) *StoreTx {
+	tx := mkHomeRegionAdvert(id, pubkey, homeRelayedFlood)
+	i := 0
+	for oid, path := range hearings {
+		tx.Observations = append(tx.Observations, &StoreObs{
+			ID: id*10 + i, TransmissionID: id, ObserverID: oid, PathJSON: path,
+		})
+		i++
+	}
+	return tx
+}
+
+// A node never heard zero-hop used to be in every region that heard any of its
+// adverts. Adverts flood the whole mesh, so on a statewide deployment that put
+// most nodes in every region. It now goes in the regions that heard it in the
+// fewest hops, and in none when even that is over regionFallbackMaxHops.
+func TestRegionFallbackUsesFewestHops(t *testing.T) {
+	ps := newRegionTestStore(t, map[string]string{"o-aus": "AUS", "o-sat": "SAT", "o-hou": "HOU"})
+	addToStore(ps,
+		// One hop from SAT, relayed four hops to AUS: SAT only.
+		mkPathAdvert(1, "pk_near", map[string]string{"o-sat": `["aa"]`, "o-aus": `["aa","bb","cc","dd"]`}),
+		// Tied fewest hops: both.
+		mkPathAdvert(2, "pk_tie", map[string]string{"o-sat": `["aa","bb"]`, "o-hou": `["cc","dd"]`, "o-aus": `["aa","bb","cc"]`}),
+		// Exactly regionFallbackMaxHops is still placed.
+		mkPathAdvert(3, "pk_cap", map[string]string{"o-aus": `["aa","bb","cc"]`}),
+		// Closest hearing beyond the cap: no region.
+		mkPathAdvert(4, "pk_gulf", map[string]string{"o-aus": `["aa","bb","cc","dd"]`, "o-hou": `["aa","bb","cc","dd","ee","ff"]`}),
+		// A later advert heard closer counts.
+		mkPathAdvert(5, "pk_gulf2", map[string]string{"o-hou": `["aa","bb","cc","dd","ee"]`}),
+		mkPathAdvert(6, "pk_gulf2", map[string]string{"o-hou": `["aa"]`}),
+	)
+	ps.recomputeNodeHomeRegionSets()
+
+	cases := []struct {
+		region string
+		want   []string
+	}{
+		{"SAT", []string{"pk_near", "pk_tie"}},
+		{"AUS", []string{"pk_cap"}},
+		{"HOU", []string{"pk_gulf2", "pk_tie"}},
+	}
+	for _, c := range cases {
+		got, ok := ps.RegionNodePubkeys(c.region)
+		if !ok {
+			t.Fatalf("region %q: ok=false", c.region)
+		}
+		if g := sortedKeys(got); !reflect.DeepEqual(g, c.want) {
+			t.Errorf("region %q: got %v, want %v", c.region, g, c.want)
+		}
+	}
+
+	want := map[string][]string{
+		"pk_near":  {"SAT"},
+		"pk_tie":   {"HOU", "SAT"},
+		"pk_cap":   {"AUS"},
+		"pk_gulf":  {},
+		"pk_gulf2": {"HOU"},
+	}
+	if got := ps.GetNodeFallbackRegionSets(); !reflect.DeepEqual(got, want) {
+		t.Errorf("fallback region sets = %v, want %v", got, want)
+	}
+}
+
+// Zero-hop home regions still win: a node with any zero-hop hearing is not in
+// the fallback snapshot at all.
+func TestRegionFallbackSkipsZeroHopNodes(t *testing.T) {
+	ps := newHomeRegionStore(t)
+	fb := ps.GetNodeFallbackRegionSets()
+	if _, has := fb["pk_aus"]; has {
+		t.Errorf("pk_aus has zero-hop home regions but is in the fallback: %v", fb)
+	}
+	if !reflect.DeepEqual(fb["pk_far"], []string{"SAT"}) {
+		t.Errorf("pk_far fallback = %v, want [SAT]", fb["pk_far"])
+	}
+}
