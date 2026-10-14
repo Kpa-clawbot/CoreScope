@@ -41,6 +41,13 @@ func setupCoverageStore(t *testing.T, memHours int) *PacketStore {
 	return ps
 }
 
+func rate(p *float64) float64 {
+	if p == nil {
+		return -1
+	}
+	return *p
+}
+
 func addCoverageTx(ps *PacketStore, id int, firstSeen time.Time, front bool) {
 	pt := 4
 	tx := &StoreTx{ID: id, Hash: fmt.Sprintf("extra%d", id), PayloadType: &pt, FirstSeen: firstSeen.Format(time.RFC3339)}
@@ -66,11 +73,11 @@ func TestNodeAnalyticsCoverageWithinMemory(t *testing.T) {
 	if a.TimeRange.Partial || a.TimeRange.DataFrom != "" {
 		t.Errorf("7d inside a 10d window: partial=%v dataFrom=%q", a.TimeRange.Partial, a.TimeRange.DataFrom)
 	}
-	if a.ComputedStats.AvailabilityPct != 100 {
-		t.Errorf("availability = %v, want 100 (one packet every hour)", a.ComputedStats.AvailabilityPct)
+	if rate(a.ComputedStats.AvailabilityPct) != 100 {
+		t.Errorf("availability = %v, want 100 (one packet every hour)", rate(a.ComputedStats.AvailabilityPct))
 	}
-	if a.ComputedStats.AvgPacketsPerDay != 24 {
-		t.Errorf("packets/day = %v, want 24", a.ComputedStats.AvgPacketsPerDay)
+	if rate(a.ComputedStats.AvgPacketsPerDay) != 24 {
+		t.Errorf("packets/day = %v, want 24", rate(a.ComputedStats.AvgPacketsPerDay))
 	}
 }
 
@@ -95,10 +102,10 @@ func TestNodeAnalyticsCoverageBeyondMemory(t *testing.T) {
 	if a.TimeRange.Days != 30 {
 		t.Errorf("days = %d, want the requested 30", a.TimeRange.Days)
 	}
-	if got := a.ComputedStats.AvailabilityPct; got < 98 || got > 100 {
+	if got := rate(a.ComputedStats.AvailabilityPct); got < 98 || got > 100 {
 		t.Errorf("availability = %v, want ~100 over the covered 3 days", got)
 	}
-	if got := a.ComputedStats.AvgPacketsPerDay; got < 23.5 || got > 24.5 {
+	if got := rate(a.ComputedStats.AvgPacketsPerDay); got < 23.5 || got > 24.5 {
 		t.Errorf("packets/day = %v, want ~24 over the covered 3 days", got)
 	}
 }
@@ -110,8 +117,8 @@ func TestNodeAnalyticsCoverageEmptyStore(t *testing.T) {
 	if err != nil || a == nil {
 		t.Fatal(err)
 	}
-	if a.TimeRange.Partial || a.ComputedStats.AvailabilityPct != 0 {
-		t.Errorf("empty store: partial=%v availability=%v", a.TimeRange.Partial, a.ComputedStats.AvailabilityPct)
+	if a.TimeRange.Partial || rate(a.ComputedStats.AvailabilityPct) != 0 {
+		t.Errorf("empty store: partial=%v availability=%v", a.TimeRange.Partial, rate(a.ComputedStats.AvailabilityPct))
 	}
 }
 
@@ -227,5 +234,124 @@ func TestNodeAnalyticsCoverageRetentionEqualsRange(t *testing.T) {
 	}
 	if a, _ := ps.GetNodeAnalytics(coverageNodePK, 30); a == nil || !a.TimeRange.Partial {
 		t.Error("30d with 168h retention must be partial")
+	}
+}
+
+// The coverage notice names why the data starts late (#748 review): a store
+// holding everything from the oldest packet in the database is not a memory
+// limit.
+func TestNodeAnalyticsCoverageReason(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(ps *PacketStore)
+		want  string
+	}{
+		{"database younger than the range", func(ps *PacketStore) {}, "database"},
+		{"retention window", func(ps *PacketStore) { ps.retentionHours = 2 * 24 }, "memory"},
+		{"memory eviction", func(ps *PacketStore) {
+			ps.evictedThrough = time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339)
+		}, "memory"},
+		{"background load still running", func(ps *PacketStore) {
+			ps.hotStartupHours = 24
+			ps.oldestLoaded = time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339)
+		}, "loading"},
+	}
+	for _, c := range cases {
+		ps := setupCoverageStore(t, 3*24)
+		ps.mu.Lock()
+		c.setup(ps)
+		ps.mu.Unlock()
+		a, err := ps.GetNodeAnalytics(coverageNodePK, 30)
+		if err != nil || a == nil {
+			t.Fatal(err)
+		}
+		if !a.TimeRange.Partial || a.TimeRange.DataFromReason != c.want {
+			t.Errorf("%s: partial=%v reason=%q, want %q", c.name, a.TimeRange.Partial, a.TimeRange.DataFromReason, c.want)
+		}
+	}
+	ps := setupCoverageStore(t, 10*24)
+	if a, _ := ps.GetNodeAnalytics(coverageNodePK, 7); a == nil || a.TimeRange.DataFromReason != "" {
+		t.Errorf("full coverage must carry no reason, got %+v", a.TimeRange)
+	}
+}
+
+// Under minCoveredHours the rates are extrapolation (5 packets in 6 min read
+// as 1200/day), so they are left out rather than reported (#748 review).
+func TestNodeAnalyticsCoverageTooShortForRates(t *testing.T) {
+	ps := setupCoverageStore(t, 6)
+	a, err := ps.GetNodeAnalytics(coverageNodePK, 7)
+	if err != nil || a == nil {
+		t.Fatal(err)
+	}
+	if !a.TimeRange.Partial {
+		t.Fatal("6 h of data under a 7d range must be partial")
+	}
+	if a.ComputedStats.AvailabilityPct != nil || a.ComputedStats.AvgPacketsPerDay != nil {
+		t.Errorf("rates over 6 h: availability=%v packets/day=%v, want both null",
+			rate(a.ComputedStats.AvailabilityPct), rate(a.ComputedStats.AvgPacketsPerDay))
+	}
+	if a.ComputedStats.TotalPackets != 6 {
+		t.Errorf("totalPackets = %d, want 6 (counts stay)", a.ComputedStats.TotalPackets)
+	}
+
+	ps = setupCoverageStore(t, 25)
+	if a, _ := ps.GetNodeAnalytics(coverageNodePK, 7); a == nil || a.ComputedStats.AvailabilityPct == nil {
+		t.Error("25 h of data must yield rates")
+	}
+}
+
+// A load cut short by the memory cap leaves a gap between the last loaded
+// row and what the poller picks up, so the store is only complete from the
+// end of the load; packets[0] or the retention edge would overstate it.
+func TestLoadChunkedMemoryCapSetsCoverageEdge(t *testing.T) {
+	store := openReverseTimeStore(t, 1100)
+	defer store.db.conn.Close()
+	store.maxMemoryMB = 1 // floors to 1000 packets
+	store.retentionHours = 30 * 24
+	before := time.Now().UTC().Truncate(time.Second)
+	if err := store.LoadChunked(500); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.packets) >= 1100 {
+		t.Fatalf("cap did not apply: %d packets loaded", len(store.packets))
+	}
+	store.mu.RLock()
+	start, reason := store.coverageStart(time.Now().UTC())
+	store.mu.RUnlock()
+	if start.Before(before) || reason != "memory" {
+		t.Errorf("capped load: coverage start %v (%q), want at or after %v (\"memory\")", start, reason, before)
+	}
+}
+
+func TestLoadChunkedUncappedCoverageIsDatabase(t *testing.T) {
+	store := openReverseTimeStore(t, 50)
+	defer store.db.conn.Close()
+	if err := store.LoadChunked(20); err != nil {
+		t.Fatal(err)
+	}
+	store.mu.RLock()
+	start, reason := store.coverageStart(time.Now().UTC())
+	oldest := store.packets[0].FirstSeen
+	store.mu.RUnlock()
+	if start.Format(time.RFC3339) != oldest || reason != "database" {
+		t.Errorf("uncapped load: coverage start %v (%q), want %s (\"database\")", start, reason, oldest)
+	}
+}
+
+// Eviction removes a head prefix of s.packets; the edge is the newest
+// FirstSeen in it, not whatever sits last should the slice be out of order.
+func TestEvictionRecordsNewestEvicted(t *testing.T) {
+	ps := setupCoverageStore(t, 48)
+	ps.mu.Lock()
+	ps.retentionHours = 24
+	// Index 23 is the last packet past the 24 h retention (h=24); make it
+	// older than its neighbour so the slice is out of order there.
+	newest := ps.packets[22].FirstSeen
+	ps.packets[23].FirstSeen = time.Now().UTC().Add(-100 * time.Hour).Format(time.RFC3339)
+	ps.EvictStale()
+	edge := ps.evictedThrough
+	ps.mu.Unlock()
+	if edge != newest {
+		t.Errorf("evictedThrough = %q, want the newest evicted %q", edge, newest)
 	}
 }

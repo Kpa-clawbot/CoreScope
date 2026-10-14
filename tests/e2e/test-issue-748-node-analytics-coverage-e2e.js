@@ -2,8 +2,12 @@
  * E2E test (#748): the node analytics page says from when its data runs when
  * the requested range reaches past the server's in-memory window.
  *
- * The fixture's packets span a few months, so 7d is fully covered and
- * "All" (365d) reaches past the window on the real server response.
+ * The CI server runs without a retention window or memory cap and the
+ * fixture's packets span a few months: 7d is fully covered, and "All"
+ * (365d) reaches past the oldest packet in the database. That is the
+ * "database" case, so the notice must say the database holds no older
+ * packets, not that the server keeps them in memory. The memory and
+ * loading wordings are covered by the unit tests.
  *
  * Usage: BASE_URL=http://localhost:13581 node test-issue-748-node-analytics-coverage-e2e.js
  */
@@ -48,14 +52,16 @@ async function run() {
     assert(!(await page.$('[data-testid="analytics-coverage-notice"]')), 'notice shown for a fully covered range');
   });
 
-  await test('All reaches past the window: partial, notice names the real start date', async () => {
+  await test('All reaches past the oldest packet: partial, notice names the start date and the database', async () => {
     const r = await (await page.request.get(`${BASE}/api/nodes/${pk}/analytics?days=365`)).json();
     assert(r.timeRange.partial && r.timeRange.dataFrom, `365d timeRange: ${JSON.stringify(r.timeRange)}`);
+    assert(r.timeRange.dataFromReason === 'database', `365d reason: ${r.timeRange.dataFromReason}`);
     await page.click('#timeRangeBtns button[data-days="365"]');
     await page.waitForSelector('[data-testid="analytics-coverage-notice"]');
     const text = await page.$eval('[data-testid="analytics-coverage-notice"]', (el) => el.textContent);
     const day = r.timeRange.dataFrom.slice(0, 10);
-    assert(text.includes('Data from ' + day) && text.includes('not the full 365 days'), `notice: ${text}`);
+    assert(text.includes('Data from ' + day + ': the database holds no older packets'), `notice: ${text}`);
+    assert(!text.includes('in memory'), `notice claims a memory limit: ${text}`);
   });
 
   await browser.close();

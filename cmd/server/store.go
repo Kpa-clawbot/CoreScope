@@ -497,6 +497,12 @@ type PacketStore struct {
 	// eviction cuts further in; coverageStart needs that edge.
 	evictedThrough string
 
+	// loadCapEdge is when a startup load cut short by the memory cap
+	// finished (#748). The rows the cap left out are never loaded later
+	// (the poller starts from the DB's max id), so the store is only
+	// complete from here on.
+	loadCapEdge string
+
 	// Hot startup atomic gates — see contract below.
 	//
 	// Contract / ordering invariant (PR #1187):
@@ -1137,6 +1143,10 @@ func (s *PacketStore) Load() error {
 		s.oldestLoaded = hotCutoffStr
 	} else if len(s.packets) > 0 {
 		s.oldestLoaded = s.packets[0].FirstSeen
+	}
+
+	if maxPackets > 0 && totalInDB > len(s.packets) {
+		s.loadCapEdge = time.Now().UTC().Format(time.RFC3339)
 	}
 
 	s.loaded = true
@@ -5168,10 +5178,6 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 		cutoffIdx = len(s.packets)
 	}
 
-	if last := s.packets[cutoffIdx-1].FirstSeen; last > s.evictedThrough {
-		s.evictedThrough = last
-	}
-
 	evicting := s.packets[:cutoffIdx]
 	evictedObs := 0
 	var evictedBytes int64
@@ -5187,6 +5193,9 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 	// First pass: remove from primary indexes (byHash, byTxID, byObsID),
 	// collect IDs for batch secondary index cleanup, and handle non-index work
 	for _, tx := range evicting {
+		if tx.FirstSeen > s.evictedThrough {
+			s.evictedThrough = tx.FirstSeen
+		}
 		delete(s.byHash, tx.Hash)
 		delete(s.byTxID, tx.ID)
 		// Its record of indexed resolved keys goes with it (#2108), so the
@@ -10116,26 +10125,53 @@ func (s *PacketStore) nodeTxsSince(pubkey, fromISO string) []*StoreTx {
 // start before a range counts as partial.
 const coverageSlack = time.Minute
 
+// minCoveredHours is the shortest covered window that yields availability
+// and packets/day. Below it the rates are extrapolation (5 packets in 6 min
+// read as 1200/day) and a partial first hour bucket weighs heavily. A
+// repeater floods an advert every 12 h by default (firmware docs/faq.md), so
+// a day holds at least two of them.
+const minCoveredHours = 24.0
+
+// Why the covered window starts after the requested range (#748).
+const (
+	coverageDatabase = "database" // everything since the oldest packet is held
+	coverageLoading  = "loading"  // the background loader has not reached it yet
+	coverageMemory   = "memory"   // retention, memory eviction or the load cap
+)
+
 // coverageStart returns from when the in-memory store holds every
-// transmission, or the zero time when that is not limited (#748). It is the
-// latest of the background-load progress (oldestLoaded), the retention
-// window and what eviction has removed. s.packets[0] is not that edge: a
-// transmission heard again recently keeps its old FirstSeen and is loaded
-// with the recent chunk (see mergeChunkIntoPackets).
+// transmission and why, or the zero time when that is not limited (#748).
+// It is the latest of the background-load progress (oldestLoaded), the
+// retention window, what eviction has removed and where a capped startup
+// load ended. s.packets[0] alone is not that edge: a transmission heard
+// again recently keeps its old FirstSeen and is loaded with the recent chunk
+// (see mergeChunkIntoPackets); it only stands for the database start when
+// no other edge lies later.
 // Must be called with s.mu held.
-func (s *PacketStore) coverageStart(now time.Time) time.Time {
+func (s *PacketStore) coverageStart(now time.Time) (time.Time, string) {
 	var start time.Time
-	for _, v := range []string{s.oldestLoaded, s.evictedThrough} {
-		if t, ok := parseStoreTime(v); ok && t.After(start) {
-			start = t
+	reason := ""
+	consider := func(t time.Time, why string) {
+		if t.After(start) {
+			start, reason = t, why
 		}
+	}
+	if t, ok := parseStoreTime(s.oldestLoaded); ok {
+		why := coverageDatabase
+		if s.hotStartupHours > 0 && !s.backgroundLoadDone.Load() {
+			why = coverageLoading
+		}
+		consider(t, why)
 	}
 	if s.retentionHours > 0 {
-		if t := now.Add(-time.Duration(s.retentionHours * float64(time.Hour))); t.After(start) {
-			start = t
+		consider(now.Add(-time.Duration(s.retentionHours*float64(time.Hour))), coverageMemory)
+	}
+	for _, v := range []string{s.evictedThrough, s.loadCapEdge} {
+		if t, ok := parseStoreTime(v); ok {
+			consider(t, coverageMemory)
 		}
 	}
-	return start
+	return start, reason
 }
 
 // parseStoreTime parses a StoreTx FirstSeen, which is RFC3339 or, for rows
@@ -10172,13 +10208,13 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	// (re-heard, so loaded with a recent chunk) are left out too, or they
 	// show up as lone buckets weeks before the window.
 	coveredFrom := fromTime
-	dataFrom := ""
+	dataFrom, dataFromReason := "", ""
 	// One now for both edges, and a minute of slack: with retentionHours
 	// equal to the range the edges coincide, and a hair's difference must
 	// not mark a full range partial (it did on staging, 168h vs 7d).
-	if cs := s.coverageStart(now); cs.After(fromTime.Add(coverageSlack)) {
+	if cs, why := s.coverageStart(now); cs.After(fromTime.Add(coverageSlack)) {
 		coveredFrom = cs
-		dataFrom = cs.Format(time.RFC3339)
+		dataFrom, dataFromReason = cs.Format(time.RFC3339), why
 	}
 	packets := s.nodeTxsSince(pubkey, coveredFrom.Format(time.RFC3339))
 	coveredHours := now.Sub(coveredFrom).Hours()
@@ -10402,17 +10438,12 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	// Computed stats
 	totalPackets := len(packets)
 	distinctHours := len(activityTimeline)
-	availabilityPct := 0.0
-	if coveredHours > 0 {
-		availabilityPct = round(float64(distinctHours)*100.0/coveredHours, 1)
-		if availabilityPct > 100 {
-			availabilityPct = 100
-		}
-	}
-
-	var avgPacketsPerDay float64
-	if coveredHours > 0 {
-		avgPacketsPerDay = round(float64(totalPackets)*24/coveredHours, 1)
+	// Null under minCoveredHours: too short a window to extrapolate from.
+	var availabilityPct, avgPacketsPerDay *float64
+	if coveredHours >= minCoveredHours {
+		avail := math.Min(round(float64(distinctHours)*100.0/coveredHours, 1), 100)
+		perDay := round(float64(totalPackets)*24/coveredHours, 1)
+		availabilityPct, avgPacketsPerDay = &avail, &perDay
 	}
 
 	// Longest silence
@@ -10483,7 +10514,7 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 
 	return &NodeAnalyticsResponse{
 		Node:                node,
-		TimeRange:           TimeRangeResp{From: fromISO, To: toISO, Days: days, DataFrom: dataFrom, Partial: dataFrom != ""},
+		TimeRange:           TimeRangeResp{From: fromISO, To: toISO, Days: days, DataFrom: dataFrom, DataFromReason: dataFromReason, Partial: dataFrom != ""},
 		ActivityTimeline:    activityTimeline,
 		SnrTrend:            snrTrend,
 		PacketTypeBreakdown: packetTypeBreakdown,

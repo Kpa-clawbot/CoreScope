@@ -27,12 +27,39 @@ t('exposes NodeAnalyticsCoverage.notice', () => {
   assert.strictEqual(typeof notice, 'function');
 });
 
-t('partial range: names the start date, the window and the requested days', () => {
-  const html = notice({ from: '2025-10-14T12:00:00Z', to: '2026-10-14T12:00:00Z', days: 365, dataFrom: '2026-09-30T09:12:00Z', partial: true });
+t('memory limit: names the start date, the window and the requested days', () => {
+  const html = notice({ from: '2025-10-14T12:00:00Z', to: '2026-10-14T12:00:00Z', days: 365, dataFrom: '2026-09-30T09:12:00Z', dataFromReason: 'memory', partial: true });
   assert.ok(html.includes('data-testid="analytics-coverage-notice"'), html);
   assert.ok(html.includes('Data from 2026-09-30'), html);
   assert.ok(html.includes('about 14 days'), html);
   assert.ok(html.includes('not the full 365 days'), html);
+});
+
+t('database younger than the range: says so, no memory claim', () => {
+  const html = notice({ to: '2026-10-14T12:00:00Z', days: 365, dataFrom: '2026-07-01T00:00:00Z', dataFromReason: 'database', partial: true });
+  assert.ok(html.includes('Data from 2026-07-01: the database holds no older packets'), html);
+  assert.ok(!html.includes('in memory'), html);
+  assert.ok(html.includes('not the full 365 days'), html);
+});
+
+t('background load still running: says so', () => {
+  const html = notice({ to: '2026-10-14T12:00:00Z', days: 30, dataFrom: '2026-10-13T12:00:00Z', dataFromReason: 'loading', partial: true });
+  assert.ok(html.includes('the server is still loading older packets'), html);
+});
+
+t('window too short for rates: says so instead of the rates claim', () => {
+  const html = notice({ to: '2026-10-14T12:00:00Z', days: 7, dataFrom: '2026-10-14T06:00:00Z', dataFromReason: 'memory', partial: true },
+    { availabilityPct: null, avgPacketsPerDay: null });
+  assert.ok(html.includes('too short for availability and packets/day'), html);
+  assert.ok(!html.includes('not the full'), html);
+});
+
+t('rateText: null reads as a dash, numbers keep their suffix', () => {
+  const rateText = ctx.window.NodeAnalyticsCoverage.rateText;
+  assert.strictEqual(rateText(null, '%'), '—');
+  assert.strictEqual(rateText(undefined), '—');
+  assert.strictEqual(rateText(0, '%'), '0%');
+  assert.strictEqual(rateText(12.5), '12.5');
 });
 
 t('full coverage: no notice', () => {
