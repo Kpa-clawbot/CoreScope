@@ -1391,12 +1391,12 @@
       if (op) {
         const hasGps = op.lat != null && op.lon != null && !(op.lat === 0 && op.lon === 0);
         if (hasGps) {
-          raw.unshift({ lat: op.lat, lon: op.lon, name: origin.name || op.name || 'Sender', pubkey: op.public_key, role: op.role || 'companion', resolved: true, isOrigin: true, observerCount: totalObservers, observerTotal: totalObservers });
+          raw.unshift({ lat: op.lat, lon: op.lon, name: origin.name || op.name || 'Sender', pubkey: op.public_key, role: op.role || 'companion', resolved: true, isOrigin: true, _fromPayload: true, observerCount: totalObservers, observerTotal: totalObservers });
         } else {
-          raw.unshift({ name: origin.name || op.name || 'Sender', pubkey: op.public_key, role: op.role || 'companion', resolved: false, gpsless: true, isOrigin: true, observerCount: totalObservers, observerTotal: totalObservers });
+          raw.unshift({ name: origin.name || op.name || 'Sender', pubkey: op.public_key, role: op.role || 'companion', resolved: false, gpsless: true, isOrigin: true, _fromPayload: true, observerCount: totalObservers, observerTotal: totalObservers });
         }
       } else if (origin.name) {
-        raw.unshift({ name: origin.name, pubkey: origin.pubkey, role: 'companion', resolved: false, isOrigin: true, observerCount: totalObservers, observerTotal: totalObservers });
+        raw.unshift({ name: origin.name, pubkey: origin.pubkey, role: 'companion', resolved: false, isOrigin: true, _fromPayload: true, observerCount: totalObservers, observerTotal: totalObservers });
       }
     }
     // #1418 Phase D: append destination (recipient from decoded.destHash) so
@@ -1410,9 +1410,9 @@
       if (dp) {
         const hasGps = dp.lat != null && dp.lon != null && !(dp.lat === 0 && dp.lon === 0);
         if (hasGps) {
-          raw.push({ lat: dp.lat, lon: dp.lon, name: opts.destination.name || dp.name || 'Recipient', pubkey: dp.public_key, role: dp.role || 'companion', resolved: true, observerCount: totalObservers, observerTotal: totalObservers });
+          raw.push({ lat: dp.lat, lon: dp.lon, name: opts.destination.name || dp.name || 'Recipient', pubkey: dp.public_key, role: dp.role || 'companion', resolved: true, _fromPayload: true, observerCount: totalObservers, observerTotal: totalObservers });
         } else {
-          raw.push({ name: opts.destination.name || dp.name || 'Recipient', pubkey: dp.public_key, role: dp.role || 'companion', resolved: false, gpsless: true, observerCount: totalObservers, observerTotal: totalObservers });
+          raw.push({ name: opts.destination.name || dp.name || 'Recipient', pubkey: dp.public_key, role: dp.role || 'companion', resolved: false, gpsless: true, _fromPayload: true, observerCount: totalObservers, observerTotal: totalObservers });
         }
       }
     }

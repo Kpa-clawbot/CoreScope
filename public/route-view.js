@@ -819,12 +819,13 @@
           var pinned = idx === 0 ? 'origin' : (idx === iso.length - 1 ? 'dest' : '');
           var glyph = roleGlyph(p.role);
           var name = escapeHtml(p.name || (p.pubkey ? String(p.pubkey).slice(0,8) : '?'));
+          var payloadBadge = p._fromPayload ? ' <span class="mc-rt-status-chip mc-rt-status-payload" title="Sender/recipient decoded from packet payload (not from outer path bytes)">from payload</span>' : '';
           var stripeColor = iso.length > 1 ? rampColor(idx === 0 ? 0 : idx - 1, iso.length - 1) : 'transparent';
           return '<li class="mc-rt-row mc-rt-row-iso ' + pinned + '" tabindex="0" style="--mc-rt-row-color:' + stripeColor + '">' +
             '<span class="mc-rt-stripe" aria-hidden="true"></span>' +
             '<span class="mc-rt-seq">' + (idx + 1) + '</span>' +
             '<span class="mc-rt-glyph" title="' + (p.role || '?') + '">' + glyph + '</span>' +
-            '<span class="mc-rt-name">' + name + '</span>' +
+            '<span class="mc-rt-name">' + name + payloadBadge + '</span>' +
             '<span class="mc-rt-distlabel">' + distLabel + '</span>' +
             '<div class="mc-rt-distbar-wrap">' + distBar + '</div>' +
             '</li>';
