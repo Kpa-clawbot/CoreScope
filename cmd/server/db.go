@@ -3153,8 +3153,8 @@ func (db *DB) fillAirtime1h(rows []MetricsSummaryRow, now time.Time) error {
 		return err
 	}
 	for i := range rows {
-		rows[i].TxAirtimePct1h = rollingAirtimePct(tx[rows[i].ObserverID])
-		rows[i].RxAirtimePct1h = rollingAirtimePct(rx[rows[i].ObserverID])
+		rows[i].TxAirtimePct1h = rollingAirtimePct(tx[rows[i].ObserverID], now)
+		rows[i].RxAirtimePct1h = rollingAirtimePct(rx[rows[i].ObserverID], now)
 	}
 	return nil
 }

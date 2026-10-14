@@ -41,8 +41,14 @@ t('format: one decimal, tiny non-zero shares as <0.1%', () => {
 
 t('isOver: at or above the threshold warns, unknown never does', () => {
   assert.strictEqual(A.isOver(10, 10), true);
-  assert.strictEqual(A.isOver(9.99, 10), false);
+  assert.strictEqual(A.isOver(9.9, 10), false);
   assert.strictEqual(A.isOver(null, 10), false);
+});
+
+t('isOver: a share that displays as the threshold warns', () => {
+  assert.strictEqual(A.format(9.96), '10.0%');
+  assert.strictEqual(A.isOver(9.96, 10), true);
+  assert.strictEqual(A.isOver(9.94, 10), false);
 });
 
 t('isOver: a missing threshold falls back to 10%', () => {

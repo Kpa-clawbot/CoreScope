@@ -17,13 +17,14 @@ window.ObserverAirtime = (function () {
     return n.toFixed(1) + '%';
   }
 
+  // Compared at the one decimal format() shows, so "10.0%" is never unflagged.
   function isOver(pct, w) {
-    return pct != null && Number(pct) >= warnPct(w);
+    return pct != null && Math.round(Number(pct) * 10) / 10 >= warnPct(w);
   }
 
   function badge(pct, w) {
     if (pct == null) {
-      return '<span class="text-muted" title="Under 15 minutes of airtime samples in the last hour">—</span>';
+      return '<span class="text-muted" title="Under 30 minutes of airtime samples in the last hour, or none in the last 15 minutes">—</span>';
     }
     var over = isOver(pct, w);
     var title = 'TX airtime over the last hour. Duty-cycle warning at ' + warnPct(w) + '%';

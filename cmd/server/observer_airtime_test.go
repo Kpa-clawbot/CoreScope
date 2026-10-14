@@ -31,15 +31,18 @@ func TestRollingAirtimePct(t *testing.T) {
 			[]airtimePoint{airPt(now, 60, 0), airPt(now, 40, 100), airPt(now, 30, 5), airPt(now, 0, 185)}, 10.0},
 		{"single sample", []airtimePoint{airPt(now, 0, 50)}, nil},
 		{"no samples", nil, nil},
-		{"span below 15 minutes", []airtimePoint{airPt(now, 10, 0), airPt(now, 0, 60)}, nil},
-		{"reboot leaves less than 15 minutes", []airtimePoint{airPt(now, 60, 0), airPt(now, 10, 400), airPt(now, 5, 2), airPt(now, 0, 20)}, nil},
+		{"span below 30 minutes", []airtimePoint{airPt(now, 25, 0), airPt(now, 0, 150)}, nil},
+		{"span of exactly 30 minutes", []airtimePoint{airPt(now, 30, 0), airPt(now, 0, 180)}, 10.0},
+		{"reboot leaves less than 30 minutes", []airtimePoint{airPt(now, 60, 0), airPt(now, 30, 400), airPt(now, 25, 2), airPt(now, 0, 20)}, nil},
+		{"newest sample older than 15 minutes", []airtimePoint{airPt(now, 60, 0), airPt(now, 20, 240)}, nil},
+		{"newest sample exactly 15 minutes old", []airtimePoint{airPt(now, 60, 0), airPt(now, 15, 270)}, 10.0},
 		{"nil counters are skipped",
 			[]airtimePoint{airPt(now, 60, 0), {At: now.Add(-30 * time.Minute)}, airPt(now, 0, 36)}, 1.0},
-		{"clamped to 100", []airtimePoint{airPt(now, 20, 0), airPt(now, 0, 5000)}, 100.0},
+		{"clamped to 100", []airtimePoint{airPt(now, 30, 0), airPt(now, 0, 5000)}, 100.0},
 		{"rounded to 2 decimals", []airtimePoint{airPt(now, 60, 0), airPt(now, 0, 1)}, 0.03},
 	}
 	for _, c := range cases {
-		got := pctOrNil(rollingAirtimePct(c.pts))
+		got := pctOrNil(rollingAirtimePct(c.pts, now))
 		if got != c.want {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
@@ -65,6 +68,9 @@ func TestGetMetricsSummaryAirtime1h(t *testing.T) {
 	// obs2: only one sample inside the hour, so no rolling figure.
 	ins("obs2", 120, 0, 0)
 	ins("obs2", 5, 900, 900)
+	// obs3: a full hour at 10%, but silent for the last 40 minutes.
+	ins("obs3", 60, 0, 0)
+	ins("obs3", 40, 120, 120)
 
 	summary, err := db.GetMetricsSummary(now.Add(-24*time.Hour).Format(time.RFC3339), now)
 	if err != nil {
@@ -82,6 +88,12 @@ func TestGetMetricsSummaryAirtime1h(t *testing.T) {
 	}
 	if got := pctOrNil(byID["obs2"].TxAirtimePct1h); got != nil {
 		t.Errorf("obs2 tx 1h = %v, want nil", got)
+	}
+	if _, ok := byID["obs3"]; !ok {
+		t.Fatal("obs3 missing from the summary")
+	}
+	if got := pctOrNil(byID["obs3"].TxAirtimePct1h); got != nil {
+		t.Errorf("obs3 (stale) tx 1h = %v, want nil", got)
 	}
 }
 
