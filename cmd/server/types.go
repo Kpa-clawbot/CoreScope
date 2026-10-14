@@ -521,6 +521,11 @@ type TimeRangeResp struct {
 	From string `json:"from"`
 	To   string `json:"to"`
 	Days int    `json:"days"`
+	// Partial is set when the in-memory store does not reach back to From
+	// (#748): DataFrom is then its oldest packet, and the rates in the
+	// response cover DataFrom..To instead of the requested range.
+	DataFrom string `json:"dataFrom,omitempty"`
+	Partial  bool   `json:"partial,omitempty"`
 }
 
 type SnrTrendEntry struct {

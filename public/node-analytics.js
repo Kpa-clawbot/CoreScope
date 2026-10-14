@@ -30,6 +30,22 @@
     return m + 'm';
   }
 
+  // #748: the server only holds its in-memory window. When that starts
+  // after the requested range, say from when the data runs and that the
+  // rates cover that period; '' otherwise.
+  function coverageNotice(tr) {
+    if (!tr || !tr.partial || !tr.dataFrom || !tr.to) return '';
+    const from = Date.parse(tr.dataFrom);
+    const to = Date.parse(tr.to);
+    if (isNaN(from) || isNaN(to)) return '';
+    const spanDays = Math.max(1, Math.round((to - from) / 86400000));
+    return '<div class="analytics-coverage-notice" data-testid="analytics-coverage-notice" role="note">' +
+      'Data from ' + new Date(from).toISOString().slice(0, 10) + ': the server keeps about ' + spanDays +
+      ' day' + (spanDays === 1 ? '' : 's') + ' of packets in memory. Availability and packets/day cover that period, not the full ' +
+      tr.days + ' days.</div>';
+  }
+  window.NodeAnalyticsCoverage = { notice: coverageNotice };
+
   async function loadAnalytics(container, pubkey, days) {
     currentPubkey = pubkey;
     currentDays = days;
@@ -64,6 +80,7 @@
           <button data-days="30" ${days===30?'class="active"':''}>30d</button>
           <button data-days="365" ${days===365?'class="active"':''}>All</button>
         </div>
+        ${coverageNotice(data.timeRange)}
 
         <div class="analytics-stats">
           <div class="analytics-stat-card">

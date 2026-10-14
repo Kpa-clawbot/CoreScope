@@ -315,7 +315,8 @@ func (s *PacketStore) GetNodeHopAnalytics(pubkey string, days int) (*NodeHopAnal
 		return nil, err
 	}
 
-	now := time.Now()
+	// UTC, as in GetNodeAnalytics: fromISO is compared with UTC FirstSeen strings.
+	now := time.Now().UTC()
 	fromISO := now.Add(-time.Duration(days) * 24 * time.Hour).Format(time.RFC3339)
 
 	s.mu.RLock()

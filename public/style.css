@@ -3523,6 +3523,8 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .analytics-heatmap-cell { aspect-ratio: 1; border-radius: 2px; cursor: default; }
 .analytics-heatmap-label { font-size: 10px; color: var(--text-muted); display: flex; align-items: center; }
 .analytics-time-range { display: flex; gap: 8px; margin-bottom: 16px; }
+/* #748 — the requested range reaches past the in-memory window */
+.analytics-coverage-notice { margin: 0 0 12px; padding: 6px 10px; border-left: 3px solid var(--status-yellow); font-size: 12px; color: var(--text-muted); }
 .analytics-time-range button { padding: 4px 12px; border-radius: 4px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text); cursor: pointer; font-size: 12px; }
 /* .analytics-time-range button.active — #1719 round-1 polish: bg/color
    consolidated into the .btn-active-accent rule. */

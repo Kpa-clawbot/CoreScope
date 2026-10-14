@@ -10103,6 +10103,16 @@ func (s *PacketStore) nodeTxsSince(pubkey, fromISO string) []*StoreTx {
 	return packets
 }
 
+// parseStoreTime parses a StoreTx FirstSeen, which is RFC3339 or, for rows
+// written by older ingestors, "2006-01-02 15:04:05" (UTC).
+func parseStoreTime(s string) (time.Time, bool) {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t, err = time.Parse("2006-01-02 15:04:05", s)
+	}
+	return t, err == nil
+}
+
 // GetNodeAnalytics computes analytics for a single node using in-memory byNode index.
 func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsResponse, error) {
 	node, err := s.db.GetNodeByPubkey(pubkey)
@@ -10110,14 +10120,30 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 		return nil, err
 	}
 
-	fromTime := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+	// UTC: FirstSeen is stored as UTC and compared as a string, so a local
+	// offset (+02:00) would shift the window on a non-UTC host.
+	fromTime := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
 	fromISO := fromTime.Format(time.RFC3339)
-	toISO := time.Now().Format(time.RFC3339)
+	toISO := time.Now().UTC().Format(time.RFC3339)
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	packets := s.nodeTxsSince(pubkey, fromISO)
+
+	// #748: the store only holds its in-memory window (retentionHours,
+	// eviction). When that starts after the requested range, the rates
+	// below are taken over what is actually there; dividing by the full
+	// range turned an 89% available node into 3.5% under "All".
+	coveredFrom := fromTime
+	dataFrom := ""
+	if len(s.packets) > 0 {
+		if t, ok := parseStoreTime(s.packets[0].FirstSeen); ok && t.After(fromTime) {
+			coveredFrom = t
+			dataFrom = s.packets[0].FirstSeen
+		}
+	}
+	coveredHours := time.Since(coveredFrom).Hours()
 
 	// Activity timeline (hourly buckets)
 	timelineBuckets := map[string]int{}
@@ -10318,12 +10344,9 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	// Uptime heatmap
 	heatBuckets := map[string]*HeatmapCell{}
 	for _, p := range packets {
-		t, err := time.Parse(time.RFC3339, p.FirstSeen)
-		if err != nil {
-			t, err = time.Parse("2006-01-02 15:04:05", p.FirstSeen)
-			if err != nil {
-				continue
-			}
+		t, ok := parseStoreTime(p.FirstSeen)
+		if !ok {
+			continue
 		}
 		dow := int(t.UTC().Weekday())
 		hr := t.UTC().Hour()
@@ -10341,18 +10364,17 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	// Computed stats
 	totalPackets := len(packets)
 	distinctHours := len(activityTimeline)
-	totalHours := float64(days) * 24
 	availabilityPct := 0.0
-	if totalHours > 0 {
-		availabilityPct = round(float64(distinctHours)*100.0/totalHours, 1)
+	if coveredHours > 0 {
+		availabilityPct = round(float64(distinctHours)*100.0/coveredHours, 1)
 		if availabilityPct > 100 {
 			availabilityPct = 100
 		}
 	}
 
 	var avgPacketsPerDay float64
-	if days > 0 {
-		avgPacketsPerDay = round(float64(totalPackets)/float64(days), 1)
+	if coveredHours > 0 {
+		avgPacketsPerDay = round(float64(totalPackets)*24/coveredHours, 1)
 	}
 
 	// Longest silence
@@ -10423,7 +10445,7 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 
 	return &NodeAnalyticsResponse{
 		Node:                node,
-		TimeRange:           TimeRangeResp{From: fromISO, To: toISO, Days: days},
+		TimeRange:           TimeRangeResp{From: fromISO, To: toISO, Days: days, DataFrom: dataFrom, Partial: dataFrom != ""},
 		ActivityTimeline:    activityTimeline,
 		SnrTrend:            snrTrend,
 		PacketTypeBreakdown: packetTypeBreakdown,
