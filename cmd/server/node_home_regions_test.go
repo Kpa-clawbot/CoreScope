@@ -213,3 +213,40 @@ func TestRegionFallbackSkipsZeroHopNodes(t *testing.T) {
 		t.Errorf("pk_far fallback = %v, want [SAT]", fb["pk_far"])
 	}
 }
+
+// BenchmarkNodeFewestHopsByRegion measures the fallback's added recompute work
+// at BenchmarkRegionNodePubkeys' scale: 220k adverts from 4,000 nodes, each
+// heard by 8 observers across 10 regions over 0-7 hop paths.
+func BenchmarkNodeFewestHopsByRegion(b *testing.B) {
+	regions := []string{"ANR", "BRU", "GNE", "HEP", "KJK", "LGG", "MST", "NRW", "OBL", "OST"}
+	observers := make(map[string]string, len(regions))
+	for _, r := range regions {
+		observers["o-"+r] = r
+	}
+	ps := newRegionTestStore(b, observers)
+	paths := []string{`[]`, `["aa"]`, `["aa","bb"]`, `["aa","bb","cc"]`, `["aa","bb","cc","dd"]`,
+		`["aa","bb","cc","dd","ee"]`, `["aa","bb","cc","dd","ee","ff"]`, `["aa","bb","cc","dd","ee","ff","11"]`}
+	txs := make([]*StoreTx, 0, 220000)
+	for i := 0; i < 220000; i++ {
+		tx := mkRegionAdvert(i+1, fmt.Sprintf("pk%04d", i%4000))
+		for j := 0; j < 8; j++ {
+			tx.Observations = append(tx.Observations, &StoreObs{
+				ID: (i+1)*10 + j, TransmissionID: i + 1,
+				ObserverID: "o-" + regions[(i+j*3)%len(regions)], PathJSON: paths[(i+j)%len(paths)],
+			})
+		}
+		txs = append(txs, tx)
+	}
+	addToStore(ps, txs...)
+	obsIATA := ps.observerIATAs()
+	ps.recomputeNodeHomeRegionSets() // parse each advert's JSON once, as a running server has
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ps.mu.RLock()
+		hops := ps.nodeFewestHopsByRegion(obsIATA)
+		ps.mu.RUnlock()
+		if len(hops) == 0 {
+			b.Fatal("no nodes")
+		}
+	}
+}

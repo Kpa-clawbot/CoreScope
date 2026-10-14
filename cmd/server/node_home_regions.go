@@ -5,8 +5,14 @@
 // region its adverts were relayed into. A zero-hop DIRECT advert is not
 // relayed, so an observer that hears one is within RF range of the node (#804).
 // This recomputer turns those hearings into a set of home regions per node;
-// RegionNodePubkeys uses the set for nodes that have one, and keeps the
-// observer-based check only for nodes never heard zero-hop.
+// RegionNodePubkeys uses the set for nodes that have one.
+//
+// A node never heard zero-hop goes in the regions that heard it in the fewest
+// hops, and in no region when even that is over regionFallbackMaxHops (it still
+// shows unfiltered). Every region that heard it at all, the old fallback, put
+// most nodes in every region on a statewide deployment: adverts flood the mesh,
+// so observers in each metro hear far-off nodes many hops out. The observer-
+// based check now decides only for nodes newer than the last recompute.
 //
 // A set rather than #804's plurality winner: a node on a region boundary,
 // heard zero-hop in two regions, belongs to both, so per-region node counts
@@ -21,6 +27,7 @@ package main
 
 import (
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -89,13 +96,92 @@ func (s *PacketStore) recomputeNodeHomeRegionSets() {
 	defer func() { _ = recover() }()
 	// The observers table is read before s.mu, as for computeNodeHomeRegions (#2146).
 	obsIATA := s.observerIATAs()
-	counts := func() map[string]map[string]int {
+	var counts, hops map[string]map[string]int
+	func() {
 		s.mu.RLock()
 		defer s.mu.RUnlock()
-		return s.nodeZeroHopRegionCounts(obsIATA)
+		counts = s.nodeZeroHopRegionCounts(obsIATA)
+		hops = s.nodeFewestHopsByRegion(obsIATA)
 	}()
 	sets := homeRegionSets(counts)
+	fallback := fallbackRegionSets(hops, sets)
 	s.nodeHomeRegionSets.Store(&sets)
+	s.nodeFallbackRegionSets.Store(&fallback)
+}
+
+// nodeFewestHopsByRegion returns, per advert pubkey, the fewest hops any
+// observer in each region heard it over. Caller must hold s.mu (read).
+func (s *PacketStore) nodeFewestHopsByRegion(obsIATA map[string]string) map[string]map[string]int {
+	per := make(map[string]map[string]int, 256)
+	if len(obsIATA) == 0 {
+		return per
+	}
+	for _, tx := range s.byPayloadType[PayloadADVERT] {
+		pk := ""
+		for _, obs := range tx.Observations {
+			iata := obsIATA[obs.ObserverID]
+			if iata == "" {
+				continue
+			}
+			if pk == "" {
+				// Parsed only for adverts heard in some region, and cached on the tx.
+				if pk = advertPubkey(tx); pk == "" {
+					break
+				}
+			}
+			h := pathHopCount(obs.PathJSON)
+			m := per[pk]
+			if m == nil {
+				m = map[string]int{}
+				per[pk] = m
+			}
+			if cur, ok := m[iata]; !ok || h < cur {
+				m[iata] = h
+			}
+		}
+	}
+	return per
+}
+
+// pathHopCount counts the hops in an observation's path_json without decoding
+// it: the elements are hop-hash hex strings, so they hold no commas. Run over
+// every advert observation per recompute, under s.mu, where pathLen's
+// json.Unmarshal would allocate per observation.
+func pathHopCount(pathJSON string) int {
+	p := strings.TrimSpace(pathJSON)
+	if p == "" || p == "[]" || p == "null" {
+		return 0
+	}
+	return strings.Count(p, ",") + 1
+}
+
+// fallbackRegionSets places each node without home regions in the regions
+// that heard it in the fewest hops, or none (an empty set, so RegionNodePubkeys
+// knows not to fall back further) when that is over regionFallbackMaxHops.
+func fallbackRegionSets(hops map[string]map[string]int, homes map[string][]string) map[string][]string {
+	out := make(map[string][]string, len(hops))
+	for pk, perIATA := range hops {
+		if _, placed := homes[pk]; placed {
+			continue
+		}
+		fewest := -1
+		for _, h := range perIATA {
+			if fewest < 0 || h < fewest {
+				fewest = h
+			}
+		}
+		regions := []string{}
+		if fewest <= regionFallbackMaxHops {
+			for iata, h := range perIATA {
+				if h == fewest {
+					regions = append(regions, iata)
+				}
+			}
+			sort.Strings(regions)
+		}
+		out[pk] = regions
+	}
+	return out
 }
 
 // homeRegionSets turns per-region zero-hop counts into each node's sorted set
@@ -138,5 +224,9 @@ func enrichNodeHomeRegions(node map[string]interface{}, regions []string) {
 // sorted regions, empty for a node in no region), or an empty map before the
 // first compute. Read-only by convention.
 func (s *PacketStore) GetNodeFallbackRegionSets() map[string][]string {
-	return map[string][]string{}
+	snap := s.nodeFallbackRegionSets.Load()
+	if snap == nil {
+		return map[string][]string{}
+	}
+	return *snap
 }

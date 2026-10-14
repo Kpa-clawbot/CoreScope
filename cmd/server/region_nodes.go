@@ -39,8 +39,10 @@ func advertPubkey(tx *StoreTx) string {
 // RegionNodePubkeys returns the pubkeys of nodes in region (comma-separated
 // IATA codes, case- and space-insensitive), over the adverts the store holds.
 // A node heard zero-hop is in its home regions (#1879, see
-// node_home_regions.go); any other node is in a region when at least one of
-// its adverts was heard by an observer there. ok is false when the region
+// node_home_regions.go); any other node is in the regions that heard it in the
+// fewest hops, or none past regionFallbackMaxHops. Only nodes newer than the
+// last recompute fall back to the observer-based check: in a region when at
+// least one of its adverts was heard by an observer there. ok is false when the region
 // names no code, or there is no database to resolve observers from, so the
 // caller applies the SQL filter or none.
 //
@@ -72,10 +74,11 @@ func (s *PacketStore) RegionNodePubkeys(region string) (keys []string, ok bool) 
 
 	// Its own mutex and a 30s cache; taken before s.mu, never under it.
 	inRegion := s.resolveRegionObservers(cacheKey)
-	// #1879: nodes heard zero-hop are placed by their home regions; the
-	// observer-based scan below decides only for nodes never heard zero-hop.
-	// An atomic load, taken under no lock.
+	// #1879: nodes heard zero-hop are placed by their home regions, the rest
+	// by their fewest-hop regions; the observer-based scan below decides only
+	// for nodes newer than the last recompute. Atomic loads, under no lock.
 	homes := s.GetNodeHomeRegionSets()
+	fallback := s.GetNodeFallbackRegionSets()
 	seen := make(map[string]bool, 256)
 	keys = make([]string, 0, 256)
 
@@ -99,6 +102,9 @@ func (s *PacketStore) RegionNodePubkeys(region string) (keys []string, ok bool) 
 		if _, placed := homes[pk]; placed {
 			continue
 		}
+		if _, placed := fallback[pk]; placed {
+			continue
+		}
 		seen[pk] = true
 		keys = append(keys, pk)
 	}
@@ -108,12 +114,14 @@ func (s *PacketStore) RegionNodePubkeys(region string) (keys []string, ok bool) 
 	for _, c := range codes {
 		wanted[c] = true
 	}
-	for pk, regions := range homes {
-		for _, r := range regions {
-			if wanted[r] {
-				seen[pk] = true
-				keys = append(keys, pk)
-				break
+	for _, sets := range []map[string][]string{homes, fallback} {
+		for pk, regions := range sets {
+			for _, r := range regions {
+				if wanted[r] {
+					seen[pk] = true
+					keys = append(keys, pk)
+					break
+				}
 			}
 		}
 	}
