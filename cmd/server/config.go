@@ -209,6 +209,10 @@ type Config struct {
 	// BatteryThresholds: voltage cutoffs for low/critical alerts (#663).
 	BatteryThresholds *BatteryThresholdsConfig `json:"batteryThresholds,omitempty"`
 
+	// DutyCycleWarnPct: rolling 1 h TX airtime share (percent) at which the
+	// RF Health view and observer list warn. 0/missing => 10 (EU g3, #661).
+	DutyCycleWarnPct float64 `json:"dutyCycleWarnPct,omitempty"`
+
 	// Customizer controls operator-side knobs for the in-app customizer modal
 	// (theme/branding/etc.). See CustomizerConfig and issue #1508.
 	Customizer *CustomizerConfig `json:"customizer,omitempty"`

@@ -102,6 +102,7 @@ node tests/unit/test-issue-1509-nav-active-bg.js
 node tests/unit/test-issue-1518-home-url.js
 node tests/unit/test-issue-1532-live-fullscreen.js
 node tests/unit/test-issue-1562-observers-summary.js
+node tests/unit/test-issue-661-observer-airtime.js
 node tests/unit/test-issue-1563-aggregate-and-inflight.js
 node tests/unit/test-issue-1574-live-map-max-nodes.js
 node tests/unit/test-issue-1606-pagination.js

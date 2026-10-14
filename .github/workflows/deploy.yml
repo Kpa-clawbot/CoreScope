@@ -583,6 +583,7 @@ jobs:
           suite 2 test-map-nodes-pagination-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-observer-iata-1188-e2e.js BASE_URL=$B
           suite 2 test-issue-1639-observers-sort-e2e.js BASE_URL=$B
+          suite 2 test-issue-661-airtime-e2e.js BASE_URL=$B
           suite 2 test-issue-1758-ng-filter-rerenders-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-nav-fluid-1055-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-nav-priority-1102-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
