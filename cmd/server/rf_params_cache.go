@@ -40,6 +40,15 @@ const (
 	// rfStartupJitter spreads the first fetch of many instances that start
 	// together (a fleet redeploy) over a minute.
 	rfStartupJitter = time.Minute
+	// rfAdvertFutureSkew is how far ahead of now an advert may be dated.
+	// last_advert comes from the node's own clock: a few minutes fast is
+	// drift and stays, a wrong time zone (whole hours) or a wrong year
+	// (about 20% of the map in October 2026, some dated 2096) does not.
+	rfAdvertFutureSkew = 10 * time.Minute
+	// rfRetryBase and rfRetryMax bound the retry after a failed fetch while
+	// there is no data yet: 1, 2, 4, 8, 16 min, then every 30 min.
+	rfRetryBase = time.Minute
+	rfRetryMax  = 30 * time.Minute
 )
 
 // RfParamsConfig is the rfParams block in config.json.
@@ -106,6 +115,12 @@ var loraBandwidthsKHz = []float64{7.8, 10.4, 15.6, 20.8, 31.25, 41.7, 62.5, 125,
 
 var pubkeyHex = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
+// rfAdvertFresh reports whether an advert dated at is no older than maxAge
+// and not dated more than rfAdvertFutureSkew ahead of now.
+func rfAdvertFresh(at, now time.Time, maxAge time.Duration) bool {
+	return !at.After(now.Add(rfAdvertFutureSkew)) && now.Sub(at) <= maxAge
+}
+
 func validLoRa(freq float64, sf int, bw float64, cr int) bool {
 	if freq < 100 || freq > 1100 || sf < 5 || sf > 12 || cr < 5 || cr > 8 {
 		return false
@@ -163,9 +178,10 @@ type mapNode struct {
 	} `json:"params"`
 }
 
-// parseRfNodes stream-decodes the map's node array. Entries without params,
-// with a malformed key, out-of-range values or an advert older than maxAge
-// are skipped; a payload that is not a well-formed array is an error.
+// parseRfNodes stream-decodes the map's node array. Entries that do not
+// decode, lack params, have a malformed key, out-of-range values or an
+// advert that is not fresh (rfAdvertFresh) are skipped; a payload that is
+// not a well-formed array is an error.
 func parseRfNodes(r io.Reader, now time.Time, maxAge time.Duration) (map[string]RfParams, error) {
 	dec := json.NewDecoder(r)
 	tok, err := dec.Token()
@@ -177,11 +193,12 @@ func parseRfNodes(r io.Reader, now time.Time, maxAge time.Duration) (map[string]
 	}
 	out := make(map[string]RfParams)
 	for dec.More() {
-		var n mapNode
-		if err := dec.Decode(&n); err != nil {
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
 			return nil, fmt.Errorf("decode map node: %w", err)
 		}
-		if n.Params == nil {
+		var n mapNode
+		if err := json.Unmarshal(raw, &n); err != nil || n.Params == nil {
 			continue
 		}
 		pk := strings.ToLower(n.PublicKey)
@@ -193,7 +210,7 @@ func parseRfNodes(r io.Reader, now time.Time, maxAge time.Duration) (map[string]
 			continue
 		}
 		at, err := time.Parse(time.RFC3339, n.LastAdvert)
-		if err != nil || now.Sub(at) > maxAge {
+		if err != nil || !rfAdvertFresh(at, now, maxAge) {
 			continue
 		}
 		out[pk] = RfParams{Freq: p.Freq, SF: p.SF, BW: p.BW, CR: p.CR, LastAdvert: at.UTC().Format(time.RFC3339)}
@@ -327,7 +344,25 @@ func (c *rfParamsCache) fetchOnce(ctx context.Context) error {
 	return presetErr
 }
 
+// rfNextWait is the wait before the next fetch: the refresh interval once
+// there is data, otherwise a backoff after the failures-th failed attempt in
+// a row, from rfRetryBase doubling up to rfRetryMax and never past refresh.
+func rfNextWait(hasData bool, failures int, refresh time.Duration) time.Duration {
+	if hasData || failures < 1 {
+		return refresh
+	}
+	wait := rfRetryMax
+	if failures <= 5 {
+		wait = rfRetryBase << (failures - 1)
+	}
+	if wait > refresh {
+		wait = refresh
+	}
+	return wait
+}
+
 // run starts the background refresh loop after a random startup delay.
+// Until the first fetch succeeds it retries with a backoff (rfNextWait).
 // Never blocks the caller.
 func (c *rfParamsCache) run(ctx context.Context, logf func(string, ...interface{})) {
 	go func() {
@@ -336,19 +371,25 @@ func (c *rfParamsCache) run(ctx context.Context, logf func(string, ...interface{
 			return
 		case <-time.After(time.Duration(rand.Int63n(int64(rfStartupJitter)))):
 		}
-		t := time.NewTicker(c.cfg.refresh())
-		defer t.Stop()
+		failures := 0
 		for {
 			err := c.fetchOnce(ctx)
 			if err != nil {
 				logf("[rf-params] %v", err)
 			}
+			if c.load() == nil {
+				failures++
+			} else {
+				failures = 0
+			}
 			if s := c.load(); s != nil && !s.FetchedAt.Equal(c.lastLogged) {
 				c.lastLogged = s.FetchedAt
 				logf("[rf-params] %d nodes within max age, %d presets", len(s.Nodes), len(s.Presets))
 			}
+			t := time.NewTimer(rfNextWait(c.load() != nil, failures, c.cfg.refresh()))
 			select {
 			case <-ctx.Done():
+				t.Stop()
 				return
 			case <-t.C:
 			}
