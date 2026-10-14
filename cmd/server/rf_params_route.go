@@ -13,7 +13,7 @@ import (
 // presets and when the map was last fetched. Served straight from the
 // atomic snapshot; never waits on the upstream fetch.
 func (s *Server) handleRfParams(w http.ResponseWriter, r *http.Request) {
-	resp := RfParamsResponse{Presets: []RfPreset{}, Nodes: map[string]RfParams{}}
+	resp := RfParamsResponse{Presets: []RfPreset{}, Nodes: map[string]RfParams{}, Deviations: map[string]RfDeviation{}}
 	if s.rfParams == nil {
 		writeJSON(w, resp)
 		return
@@ -44,6 +44,9 @@ func (s *Server) handleRfParams(w http.ResponseWriter, r *http.Request) {
 		}
 		resp.Nodes[pk] = p
 	}
+	resp.Deviations = s.rfParams.deviations.get(snap, time.Now(), func() map[string]RfDeviation {
+		return computeRfDeviations(resp.Nodes, nodes, s.rfParams.cfg.compareRadiusKm(), rfMinPeers)
+	})
 	w.Header().Set("Cache-Control", "public, max-age=300")
 	writeJSON(w, resp)
 }

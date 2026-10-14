@@ -1449,6 +1449,10 @@ body.scroll-locked { overflow: hidden; }
   font-size: 10px; font-weight: 700; font-family: var(--mono);
   background: var(--nav-bg); color: var(--nav-text); letter-spacing: .5px;
 }
+/* #1268 M3 — LoRa settings differ from nearby same-band nodes */
+.badge-lora-diff { display: inline-block; margin-left: 4px; padding: 0 5px; border: 1px solid currentColor; border-radius: 4px; font-size: 10px; font-weight: 600; color: var(--status-yellow-text); cursor: help; }
+.lora-deviation { margin-top: 2px; font-size: 11px; color: var(--status-yellow-text); }
+
 /* Issue #1290: listener vs repeater badge on observers list + detail.
  * Driven by ObserverResp.can_relay (false = firmware reported repeat:off).
  * Server-side disambiguator excludes listener observers from path-hop

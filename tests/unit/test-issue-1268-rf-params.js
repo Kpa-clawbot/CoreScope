@@ -67,5 +67,39 @@ t('detailHtml: escapes a preset title', () => {
   assert.ok(!html.includes('<b>x</b>') && html.includes('&lt;b&gt;x&lt;/b&gt;'), html);
 });
 
+const sf7 = { freq: 869.618, sf: 7, bw: 62.5, cr: 8, last_advert: '2026-10-13T12:00:00Z' };
+const dev = { majority: { freq: 869.618, sf: 8, bw: 62.5 }, agree: 12, peers: 14, fields: ['sf'] };
+
+t('exposes deviationBadge', () => {
+  assert.ok(typeof R.deviationBadge === 'function');
+});
+
+t('deviationBadge: names the differing value and the majority in the title', () => {
+  const html = R.deviationBadge(sf7, dev);
+  assert.ok(/class="badge-lora-diff"/.test(html), html);
+  assert.ok(html.includes('>LoRa SF7<'), html);
+  assert.ok(html.includes('12 of 14 nearby nodes on this band') && html.includes('SF8'), html);
+});
+
+t('deviationBadge: several fields and frequency formatting', () => {
+  const html = R.deviationBadge({ freq: 869.432, sf: 7, bw: 125, cr: 8 }, { majority: dev.majority, agree: 5, peers: 6, fields: ['freq', 'sf', 'bw'] });
+  assert.ok(html.includes('>LoRa 869.432 SF7 BW125<'), html);
+});
+
+t('deviationBadge: nothing without a deviation or params', () => {
+  assert.strictEqual(R.deviationBadge(sf7, null), '');
+  assert.strictEqual(R.deviationBadge(null, dev), '');
+});
+
+t('detailHtml: a deviation adds the comparison line', () => {
+  const html = R.detailHtml(sf7, presets, Date.now(), dev);
+  assert.ok(html.includes('data-testid="lora-deviation"'), html);
+  assert.ok(html.includes('Differs from 12 of 14 nearby nodes on this band') && html.includes('869.618 MHz · SF8 · BW 62.5 kHz'), html);
+});
+
+t('detailHtml: no deviation, no comparison line', () => {
+  assert.ok(!R.detailHtml(euNarrow, presets, Date.now(), null).includes('lora-deviation'));
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
