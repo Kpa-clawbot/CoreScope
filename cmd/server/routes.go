@@ -3692,8 +3692,9 @@ func (s *Server) handleMetricsSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	since := time.Now().UTC().Add(-dur).Format(time.RFC3339)
-	summary, err := s.db.GetMetricsSummary(since)
+	now := time.Now().UTC()
+	since := now.Add(-dur).Format(time.RFC3339)
+	summary, err := s.db.GetMetricsSummary(since, now)
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -3713,8 +3714,9 @@ func (s *Server) handleMetricsSummary(w http.ResponseWriter, r *http.Request) {
 		summary = filtered
 	}
 
-	writeJSON(w, map[string]interface{}{
-		"observers": summary,
+	writeJSON(w, MetricsSummaryResponse{
+		Observers:        summary,
+		DutyCycleWarnPct: s.cfg.DutyCycleWarnPctOrDefault(),
 	})
 }
 

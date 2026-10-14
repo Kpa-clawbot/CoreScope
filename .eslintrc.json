@@ -38,6 +38,7 @@
     "MeshAudio": "readonly",
     "MeshConfigReady": "readonly",
     "NodeHopAnalytics": "readonly",
+    "ObserverAirtime": "readonly",
     "PAYLOAD_COLORS": "readonly",
     "PAYLOAD_TYPES": "readonly",
     "PERF_SLOW_MS": "readonly",

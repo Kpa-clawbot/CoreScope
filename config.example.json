@@ -369,6 +369,8 @@
     "criticalMv": 3000,
     "_comment": "Voltage cutoffs (millivolts) for the per-node battery trend chart on /node-analytics. Latest sample below lowMv shows the node as ⚠️ Low; below criticalMv shows 🪫 Critical. Both default to 3300 / 3000 if omitted. Source data: observer_metrics.battery_mv populated from observer status messages; only nodes that are themselves observers (matching pubkey ↔ observer id) yield a series. Issue #663."
   },
+  "dutyCycleWarnPct": 10,
+  "_comment_dutyCycleWarnPct": "TX airtime share (percent) over the last hour at which RF Health and the observer list flag an observer. Default 10, the EU 868 MHz g3 sub-band limit. Repeater firmware defaults to a 50% budget (airtime_factor 1.0), so the device does not enforce this itself. Issue #661.",
   "_comment_mqttSources": "Each source connects to an MQTT broker. Supported schemes: mqtt:// (plain TCP), mqtts:// (TLS), ws:// (WebSocket), wss:// (WebSocket TLS). topics: what to subscribe to. iataFilter: only ingest packets from these regions (optional). region: default IATA region for this source — used when packet/topic doesn't specify one (optional, priority: payload > topic > this field).",
   "compression": {
     "gzip": false,

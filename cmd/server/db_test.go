@@ -1918,7 +1918,7 @@ func TestGetMetricsSummary(t *testing.T) {
 		"obs2", t1, -115.0)
 
 	since := now.Add(-24 * time.Hour).Format(time.RFC3339)
-	summary, err := db.GetMetricsSummary(since)
+	summary, err := db.GetMetricsSummary(since, now)
 	if err != nil {
 		t.Fatal(err)
 	}
