@@ -9,7 +9,8 @@ import (
 const coverageNodePK = "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00"
 
 // setupCoverageStore holds one packet per hour for the node over the last
-// memHours hours: the in-memory window starts memHours ago (#748 M3a).
+// memHours hours, and records that window as loaded the way a bounded load
+// does (oldestLoaded): the in-memory window starts memHours ago (#748 M3a).
 func setupCoverageStore(t *testing.T, memHours int) *PacketStore {
 	t.Helper()
 	db := setupTestDB(t)
@@ -33,8 +34,26 @@ func setupCoverageStore(t *testing.T, memHours int) *PacketStore {
 		ps.byTxID[tx.ID] = tx
 		ps.byNode[coverageNodePK] = append(ps.byNode[coverageNodePK], tx)
 	}
+	if memHours > 0 {
+		ps.oldestLoaded = ps.packets[0].FirstSeen
+	}
 	ps.mu.Unlock()
 	return ps
+}
+
+func addCoverageTx(ps *PacketStore, id int, firstSeen time.Time, front bool) {
+	pt := 4
+	tx := &StoreTx{ID: id, Hash: fmt.Sprintf("extra%d", id), PayloadType: &pt, FirstSeen: firstSeen.Format(time.RFC3339)}
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	if front {
+		ps.packets = append([]*StoreTx{tx}, ps.packets...)
+	} else {
+		ps.packets = append(ps.packets, tx)
+	}
+	ps.byHash[tx.Hash] = tx
+	ps.byTxID[tx.ID] = tx
+	ps.byNode[coverageNodePK] = append([]*StoreTx{tx}, ps.byNode[coverageNodePK]...)
 }
 
 func TestNodeAnalyticsCoverageWithinMemory(t *testing.T) {
@@ -121,5 +140,68 @@ func TestNodeAnalyticsWindowIgnoresLocalZone(t *testing.T) {
 	}
 	if h.TimeRange.From[len(h.TimeRange.From)-1] != 'Z' {
 		t.Errorf("hop analytics from = %q, want a UTC timestamp", h.TimeRange.From)
+	}
+}
+
+// A transmission first heard long ago and heard again recently is loaded
+// with a recent chunk and sits at the head of s.packets. It must neither
+// move the window edge back nor show up as a lone bucket before the window.
+func TestNodeAnalyticsCoverageIgnoresReheardOldTx(t *testing.T) {
+	ps := setupCoverageStore(t, 3*24)
+	ps.mu.Lock()
+	ps.retentionHours = 3 * 24
+	ps.mu.Unlock()
+	addCoverageTx(ps, 9001, time.Now().UTC().Add(-85*24*time.Hour), true)
+
+	a, err := ps.GetNodeAnalytics(coverageNodePK, 365)
+	if err != nil || a == nil {
+		t.Fatal(err)
+	}
+	from, err := time.Parse(time.RFC3339, a.TimeRange.DataFrom)
+	if err != nil || time.Since(from) > 73*time.Hour {
+		t.Errorf("dataFrom = %q, want the 72h retention edge", a.TimeRange.DataFrom)
+	}
+	if a.ComputedStats.TotalPackets != 3*24 {
+		t.Errorf("totalPackets = %d, want %d (the re-heard old one left out)", a.ComputedStats.TotalPackets, 3*24)
+	}
+	for _, b := range a.ActivityTimeline {
+		if b.Bucket != nil && *b.Bucket < a.TimeRange.DataFrom[:13] {
+			t.Errorf("bucket %s lies before dataFrom %s", *b.Bucket, a.TimeRange.DataFrom)
+		}
+	}
+}
+
+// Memory-pressure eviction cuts into the retention window; the edge it left
+// is the start of the coverage.
+func TestNodeAnalyticsCoverageAfterMemoryEviction(t *testing.T) {
+	ps := setupCoverageStore(t, 3*24)
+	edge := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Second)
+	ps.mu.Lock()
+	ps.retentionHours = 3 * 24
+	ps.evictedThrough = edge.Format(time.RFC3339)
+	ps.mu.Unlock()
+
+	a, err := ps.GetNodeAnalytics(coverageNodePK, 7)
+	if err != nil || a == nil {
+		t.Fatal(err)
+	}
+	if a.TimeRange.DataFrom != edge.Format(time.RFC3339) {
+		t.Errorf("dataFrom = %q, want the eviction edge %q", a.TimeRange.DataFrom, edge.Format(time.RFC3339))
+	}
+}
+
+func TestEvictionRecordsEvictedThrough(t *testing.T) {
+	ps := setupCoverageStore(t, 48)
+	ps.mu.Lock()
+	ps.retentionHours = 24
+	n := ps.EvictStale()
+	edge := ps.evictedThrough
+	remaining := ps.packets[0].FirstSeen
+	ps.mu.Unlock()
+	if n == 0 {
+		t.Fatal("nothing evicted")
+	}
+	if edge == "" || edge >= remaining {
+		t.Errorf("evictedThrough = %q, want just before the oldest remaining %q", edge, remaining)
 	}
 }

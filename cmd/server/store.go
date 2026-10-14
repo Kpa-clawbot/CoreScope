@@ -492,6 +492,11 @@ type PacketStore struct {
 	// Empty string means all data is in memory (no limit applied).
 	oldestLoaded string
 
+	// evictedThrough is the newest FirstSeen eviction has removed (#748).
+	// Retention eviction stays behind now-retentionHours, but memory-pressure
+	// eviction cuts further in; coverageStart needs that edge.
+	evictedThrough string
+
 	// Hot startup atomic gates — see contract below.
 	//
 	// Contract / ordering invariant (PR #1187):
@@ -5161,6 +5166,10 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 	}
 	if cutoffIdx > len(s.packets) {
 		cutoffIdx = len(s.packets)
+	}
+
+	if last := s.packets[cutoffIdx-1].FirstSeen; last > s.evictedThrough {
+		s.evictedThrough = last
 	}
 
 	evicting := s.packets[:cutoffIdx]
@@ -10088,7 +10097,7 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 	}, nil
 }
 
-// nodeTxsSince returns the node's transmissions first seen after fromISO,
+// nodeTxsSince returns the node's transmissions first seen at or after fromISO,
 // from the byNode index (sender, recipient and resolved relay hops).
 // Raw JSON text search is intentionally avoided: a GRP_TXT packet whose message
 // text contains a node's pubkey is not a packet *for* that node.
@@ -10096,11 +10105,33 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 func (s *PacketStore) nodeTxsSince(pubkey, fromISO string) []*StoreTx {
 	var packets []*StoreTx
 	for _, p := range s.byNode[pubkey] {
-		if p.FirstSeen > fromISO {
+		if p.FirstSeen >= fromISO {
 			packets = append(packets, p)
 		}
 	}
 	return packets
+}
+
+// coverageStart returns from when the in-memory store holds every
+// transmission, or the zero time when that is not limited (#748). It is the
+// latest of the background-load progress (oldestLoaded), the retention
+// window and what eviction has removed. s.packets[0] is not that edge: a
+// transmission heard again recently keeps its old FirstSeen and is loaded
+// with the recent chunk (see mergeChunkIntoPackets).
+// Must be called with s.mu held.
+func (s *PacketStore) coverageStart(now time.Time) time.Time {
+	var start time.Time
+	for _, v := range []string{s.oldestLoaded, s.evictedThrough} {
+		if t, ok := parseStoreTime(v); ok && t.After(start) {
+			start = t
+		}
+	}
+	if s.retentionHours > 0 {
+		if t := now.Add(-time.Duration(s.retentionHours * float64(time.Hour))); t.After(start) {
+			start = t
+		}
+	}
+	return start
 }
 
 // parseStoreTime parses a StoreTx FirstSeen, which is RFC3339 or, for rows
@@ -10129,20 +10160,19 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	packets := s.nodeTxsSince(pubkey, fromISO)
-
-	// #748: the store only holds its in-memory window (retentionHours,
-	// eviction). When that starts after the requested range, the rates
-	// below are taken over what is actually there; dividing by the full
-	// range turned an 89% available node into 3.5% under "All".
+	// #748: the store only holds its in-memory window. When that starts
+	// after the requested range, count only what lies inside it and take
+	// the rates over it; dividing by the full range turned an 89% available
+	// node into 3.5% under "All". Older transmissions still in memory
+	// (re-heard, so loaded with a recent chunk) are left out too, or they
+	// show up as lone buckets weeks before the window.
 	coveredFrom := fromTime
 	dataFrom := ""
-	if len(s.packets) > 0 {
-		if t, ok := parseStoreTime(s.packets[0].FirstSeen); ok && t.After(fromTime) {
-			coveredFrom = t
-			dataFrom = s.packets[0].FirstSeen
-		}
+	if cs := s.coverageStart(time.Now().UTC()); cs.After(fromTime) {
+		coveredFrom = cs
+		dataFrom = cs.Format(time.RFC3339)
 	}
+	packets := s.nodeTxsSince(pubkey, coveredFrom.Format(time.RFC3339))
 	coveredHours := time.Since(coveredFrom).Hours()
 
 	// Activity timeline (hourly buckets)
