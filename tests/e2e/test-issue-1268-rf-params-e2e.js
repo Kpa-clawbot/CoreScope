@@ -1,10 +1,10 @@
 /**
- * E2E test (#1268): LoRa RF parameters on the Nodes page.
+ * E2E test (#1268): LoRa RF parameters in the node detail views.
  *
  * The fixture server runs without rfParams configured, so the first check
- * is the real disabled state (no LoRa column). The enabled checks serve
+ * is the real disabled state (no LoRa row). The enabled checks serve
  * /api/rf-params through page.route with values for the fixture's own
- * node keys.
+ * node keys. The Nodes table deliberately has no LoRa column.
  *
  * Usage: BASE_URL=http://localhost:13581 node test-issue-1268-rf-params-e2e.js
  */
@@ -43,17 +43,19 @@ async function run() {
 
   console.log(`\nRunning #1268 RF params E2E tests against ${BASE}\n`);
 
-  await test('feature off: /api/rf-params says disabled and there is no LoRa column', async () => {
+  await test('feature off: /api/rf-params says disabled and the detail has no LoRa row', async () => {
     const r = await page.request.get(`${BASE}/api/rf-params`);
     const body = await r.json();
     assert(body.enabled === false && Array.isArray(body.presets) && body.nodes && typeof body.nodes === 'object',
       `disabled body: ${JSON.stringify(body)}`);
     await gotoNodes(page);
-    const th = await page.$('#nodesTable th.col-lora');
-    assert(th && await th.isHidden(), 'LoRa header must exist but stay hidden');
-    assert(!(await page.$('#nodesBody td[data-testid="node-cell-lora"]')), 'no LoRa cells when disabled');
+    const k = await page.$eval('#nodesBody tr[data-key]', (tr) => tr.getAttribute('data-key'));
+    await page.goto(`${BASE}/#/nodes/${encodeURIComponent(k)}`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#node-stats');
+    assert(!(await page.$('[data-testid="node-detail-lora"]')), 'no LoRa row when disabled');
   });
 
+  await gotoNodes(page);
   const keys = await page.$$eval('#nodesBody tr[data-key]', (trs) => trs.map((tr) => tr.getAttribute('data-key')));
   assert(keys.length >= 3, `fixture needs >=3 nodes, got ${keys.length}`);
   const [presetKey, rawKey] = keys;
@@ -72,31 +74,33 @@ async function run() {
     }),
   }));
 
-  await test('feature on: LoRa column shows the preset title or the raw values', async () => {
+  await test('feature on: the Nodes table still has no LoRa column', async () => {
+    // Reload: api() cached the disabled response from the first check.
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('#nodesBody td[data-testid="node-cell-lora"]');
-    assert(await page.isVisible('#nodesTable th.col-lora'), 'LoRa header visible');
-    const cell = (k) => page.$eval(`#nodesBody tr[data-key="${k}"] td[data-testid="node-cell-lora"]`, (td) => td.textContent.trim());
-    assert(await cell(presetKey) === 'EU/UK (Narrow)', `preset cell: ${await cell(presetKey)}`);
-    assert(await cell(rawKey) === '869.618 SF7 BW62.5 CR5', `raw cell: ${await cell(rawKey)}`);
-    assert(await cell(keys[2]) === '', `unknown cell: ${await cell(keys[2])}`);
-    const tip = await page.$eval(`#nodesBody tr[data-key="${presetKey}"] td[data-testid="node-cell-lora"]`, (td) => td.title);
-    assert(tip === '869.618 SF8 BW62.5 CR8', `tooltip: ${tip}`);
+    await gotoNodes(page);
+    await page.waitForTimeout(500);
+    const headers = await page.$$eval('#nodesTable thead th', (ths) => ths.map((th) => th.textContent.trim()));
+    assert(!headers.includes('LoRa'), `headers: ${JSON.stringify(headers)}`);
   });
 
-  await test('sorting by LoRa keeps nodes without RF params last', async () => {
-    await page.click('#nodesTable th.col-lora');
-    const texts = await page.$$eval('#nodesBody td[data-testid="node-cell-lora"]', (tds) => tds.map((td) => td.textContent.trim()));
-    const firstEmpty = texts.indexOf('');
-    assert(firstEmpty === 2, `two filled cells first, got ${JSON.stringify(texts.slice(0, 4))}`);
-    assert(texts.slice(firstEmpty).every((t) => t === ''), 'no filled cell after an empty one');
-  });
-
-  await test('node detail shows the LoRa row', async () => {
+  await test('full detail page shows the values and the preset', async () => {
     await page.goto(`${BASE}/#/nodes/${encodeURIComponent(presetKey)}`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('[data-testid="node-detail-lora"]');
     const text = await page.$eval('[data-testid="node-detail-lora"]', (el) => el.textContent);
     assert(text.includes('869.618 MHz') && text.includes('SF8') && text.includes('EU/UK (Narrow)'), `detail: ${text}`);
+  });
+
+  await test('side panel shows raw values without a preset, and a hint for unknown nodes', async () => {
+    await gotoNodes(page);
+    await page.click(`#nodesBody tr[data-key="${rawKey}"]`);
+    await page.waitForSelector('#nodesRight [data-testid="node-detail-lora"]');
+    const raw = await page.$eval('#nodesRight [data-testid="node-detail-lora"]', (el) => el.textContent);
+    assert(raw.includes('SF7') && raw.includes('CR 4/5') && !raw.includes('EU/UK'), `raw: ${raw}`);
+    await page.click(`#nodesBody tr[data-key="${keys[2]}"]`);
+    await page.waitForFunction(() => {
+      const el = document.querySelector('#nodesRight [data-testid="node-detail-lora"]');
+      return el && el.textContent.includes('Not on the MeshCore map');
+    });
   });
 
   await browser.close();

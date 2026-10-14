@@ -1,6 +1,6 @@
 /**
- * #1268 — LoRa RF parameters per node: label resolution, sort key and the
- * detail value used by the Nodes table and the node detail views.
+ * #1268 — LoRa RF parameters per node: the value shown in the node detail
+ * views.
  * Loads the real public/rf-params.js in a vm sandbox.
  */
 'use strict';
@@ -31,34 +31,7 @@ const euCr5 = { freq: 869.618, sf: 8, bw: 62.5, cr: 5, last_advert: '2026-10-13T
 console.log('rf-params.js');
 
 t('exposes window.RfParams', () => {
-  assert.ok(R && typeof R.label === 'function' && typeof R.summary === 'function' && typeof R.sortKey === 'function' && typeof R.detailHtml === 'function');
-});
-
-t('summary: all four values, compact', () => {
-  assert.strictEqual(R.summary(euNarrow), '869.618 SF8 BW62.5 CR8');
-  assert.strictEqual(R.summary({ freq: 433.65, sf: 12, bw: 125, cr: 5 }), '433.650 SF12 BW125 CR5');
-});
-
-t('label: a matching preset gives its title', () => {
-  assert.strictEqual(R.label(euNarrow, presets), 'EU/UK (Narrow) / Switzerland');
-});
-
-t('label: no matching preset (CR differs) falls back to the summary', () => {
-  assert.strictEqual(R.label(euCr5, presets), '869.618 SF8 BW62.5 CR5');
-});
-
-t('label: frequency matches within 1 kHz', () => {
-  assert.strictEqual(R.label({ freq: 869.6185, sf: 8, bw: 62.5, cr: 8 }, presets), 'EU/UK (Narrow) / Switzerland');
-});
-
-t('label: null params and missing presets', () => {
-  assert.strictEqual(R.label(null, presets), '');
-  assert.strictEqual(R.label(euNarrow, null), '869.618 SF8 BW62.5 CR8');
-});
-
-t('sortKey: empty for unknown so it can sort last', () => {
-  assert.strictEqual(R.sortKey(null, presets), '');
-  assert.strictEqual(R.sortKey(euNarrow, presets), 'eu/uk (narrow) / switzerland');
+  assert.ok(R && typeof R.detailHtml === 'function');
 });
 
 t('detailHtml: values, preset and advert age', () => {
@@ -67,6 +40,21 @@ t('detailHtml: values, preset and advert age', () => {
   assert.ok(html.includes('SF8') && html.includes('BW 62.5 kHz') && html.includes('CR 4/8'), html);
   assert.ok(html.includes('EU/UK (Narrow) / Switzerland'), html);
   assert.ok(html.includes('1d ago'), html);
+});
+
+t('detailHtml: no preset badge when only the coding rate differs', () => {
+  const html = R.detailHtml(euCr5, presets, Date.now());
+  assert.ok(html.includes('CR 4/5') && !html.includes('badge-region'), html);
+});
+
+t('detailHtml: frequency matches a preset within 1 kHz', () => {
+  const html = R.detailHtml({ freq: 869.6185, sf: 8, bw: 62.5, cr: 8, last_advert: euNarrow.last_advert }, presets, Date.now());
+  assert.ok(html.includes('EU/UK (Narrow) / Switzerland'), html);
+});
+
+t('detailHtml: no presets still shows the values', () => {
+  const html = R.detailHtml(euNarrow, null, Date.now());
+  assert.ok(html.includes('869.618 MHz') && !html.includes('badge-region'), html);
 });
 
 t('detailHtml: unknown node says where the data comes from', () => {

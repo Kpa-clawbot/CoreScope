@@ -1,16 +1,11 @@
 /* #1268 — LoRa RF parameters per node, from /api/rf-params (the MeshCore
- * map's view of each node's radio settings). Shared by the Nodes table and
- * the node detail views in nodes.js. Pure helpers; no fetching here. */
+ * map's view of each node's radio settings), rendered in the node detail
+ * views of nodes.js. Pure helpers; no fetching here. */
 window.RfParams = (function () {
   'use strict';
 
   function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  }
-
-  function summary(p) {
-    if (!p) return '';
-    return Number(p.freq).toFixed(3) + ' SF' + p.sf + ' BW' + p.bw + ' CR' + p.cr;
   }
 
   function preset(p, presets) {
@@ -20,18 +15,6 @@ window.RfParams = (function () {
       if (Math.abs(q.freq - p.freq) < 0.001 && q.sf === p.sf && Math.abs(q.bw - p.bw) < 0.01 && q.cr === p.cr) return q;
     }
     return null;
-  }
-
-  // label is the preset title when all four values match one, otherwise the
-  // raw summary; '' when the node has no RF parameters.
-  function label(p, presets) {
-    if (!p) return '';
-    var q = preset(p, presets);
-    return q ? q.title : summary(p);
-  }
-
-  function sortKey(p, presets) {
-    return label(p, presets).toLowerCase();
   }
 
   function ago(ms) {
@@ -52,5 +35,5 @@ window.RfParams = (function () {
       (isNaN(when) ? '' : ' <span class="text-muted" title="Advert received by the MeshCore map">(map advert ' + ago(nowMs - when) + ')</span>');
   }
 
-  return { summary: summary, label: label, sortKey: sortKey, detailHtml: detailHtml };
+  return { detailHtml: detailHtml };
 })();
