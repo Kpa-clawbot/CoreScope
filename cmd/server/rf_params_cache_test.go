@@ -21,7 +21,11 @@ const (
 var rfNow = time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 
 func rfNode(pk string, daysAgo int, params string) string {
-	ts := rfNow.Add(-time.Duration(daysAgo) * 24 * time.Hour).Format("2006-01-02T15:04:05.000Z")
+	return rfNodeAt(pk, rfNow.Add(-time.Duration(daysAgo)*24*time.Hour), params)
+}
+
+func rfNodeAt(pk string, at time.Time, params string) string {
+	ts := at.Format("2006-01-02T15:04:05.000Z")
 	p := "null"
 	if params != "" {
 		p = params
@@ -42,14 +46,17 @@ func TestParseRfNodes(t *testing.T) {
 		rfNode(rfPK3[:63]+"6", 1, `{"freq":5000,"bw":62.5,"cr":8,"sf":8}`),     // frequency out of range
 		rfNode(rfPK3[:63]+"7", 1, `{"freq":869.618,"bw":62.5,"cr":4,"sf":8}`),  // CR out of range
 		rfNode(rfPK3[:63]+"8", 2, `{"freq":433.65,"bw":125,"cr":5,"sf":12}`),   // kept
+		rfNodeAt(rfPK3[:63]+"9", rfNow.Add(2*24*time.Hour), rfEUNarrow),        // dated in the future
+		rfNodeAt(rfPK3[:63]+"a", rfNow.AddDate(70, 0, 0), rfEUNarrow),          // dated 2096
+		rfNodeAt(rfPK3[:63]+"b", rfNow.Add(5*time.Minute), rfEUNarrow),         // kept, within clock skew
 	}, ",") + "]"
 
 	got, err := parseRfNodes(strings.NewReader(body), rfNow, 7*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("kept %d nodes, want 2: %v", len(got), got)
+	if len(got) != 3 {
+		t.Fatalf("kept %d nodes, want 3: %v", len(got), got)
 	}
 	p, ok := got[rfPK1]
 	if !ok || p.Freq != 869.618 || p.SF != 8 || p.BW != 62.5 || p.CR != 8 {
@@ -61,13 +68,75 @@ func TestParseRfNodes(t *testing.T) {
 	if _, ok := got[rfPK3[:63]+"8"]; !ok {
 		t.Error("433 MHz / BW125 / SF12 node should be kept")
 	}
+	if _, ok := got[rfPK3[:63]+"b"]; !ok {
+		t.Error("advert 5 min ahead (clock skew) should be kept")
+	}
+}
+
+func TestRfAdvertFresh(t *testing.T) {
+	maxAge := 7 * 24 * time.Hour
+	for _, c := range []struct {
+		name string
+		at   time.Time
+		want bool
+	}{
+		{"now", rfNow, true},
+		{"at max age", rfNow.Add(-maxAge), true},
+		{"past max age", rfNow.Add(-maxAge - time.Second), false},
+		{"at the skew tolerance", rfNow.Add(rfAdvertFutureSkew), true},
+		{"past the skew tolerance", rfNow.Add(rfAdvertFutureSkew + time.Second), false},
+		{"dated 2096", time.Date(2096, 1, 1, 0, 0, 0, 0, time.UTC), false},
+	} {
+		if got := rfAdvertFresh(c.at, rfNow, maxAge); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestParseRfNodesSkipsBadEntry(t *testing.T) {
+	body := "[" + strings.Join([]string{
+		rfNode(rfPK1, 1, `{"freq":869.618,"bw":62.5,"cr":8,"sf":"8"}`), // sf as a string
+		`{"public_key":42,"params":{}}`,                                // key as a number
+		rfNode(rfPK2, 1, rfEUNarrow),
+	}, ",") + "]"
+	got, err := parseRfNodes(strings.NewReader(body), rfNow, 7*24*time.Hour)
+	if err != nil {
+		t.Fatalf("one bad entry failed the whole decode: %v", err)
+	}
+	if _, ok := got[rfPK2]; !ok || len(got) != 1 {
+		t.Errorf("got %v, want only %s", got, rfPK2)
+	}
+}
+
+func TestRfNextWait(t *testing.T) {
+	refresh := 6 * time.Hour
+	for _, c := range []struct {
+		name     string
+		hasData  bool
+		failures int
+		want     time.Duration
+	}{
+		{"data: regular refresh", true, 0, refresh},
+		{"data after failures: still the regular refresh", true, 3, refresh},
+		{"no data, first failure", false, 1, time.Minute},
+		{"no data, second failure", false, 2, 2 * time.Minute},
+		{"no data, fifth failure", false, 5, 16 * time.Minute},
+		{"no data, capped", false, 6, rfRetryMax},
+		{"no data, many failures stay capped", false, 60, rfRetryMax},
+	} {
+		if got := rfNextWait(c.hasData, c.failures, refresh); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+	if got := rfNextWait(false, 10, 10*time.Minute); got != 10*time.Minute {
+		t.Errorf("retry wait must not exceed the refresh interval: got %v", got)
+	}
 }
 
 func TestParseRfNodesRejectsMalformed(t *testing.T) {
 	for name, body := range map[string]string{
 		"not an array":  `{"nodes":[]}`,
 		"truncated":     "[" + rfNode(rfPK1, 1, rfEUNarrow),
-		"wrong type":    `[{"public_key":"` + rfPK1 + `","params":{"freq":"869.618"}}]`,
 		"empty payload": ``,
 	} {
 		if _, err := parseRfNodes(strings.NewReader(body), rfNow, 7*24*time.Hour); err == nil {
@@ -242,5 +311,13 @@ func TestRfParamsRoute(t *testing.T) {
 	snap.Nodes[known] = old
 	if resp = get(); len(resp.Nodes) != 0 {
 		t.Errorf("aged entry still served: %v", resp.Nodes)
+	}
+
+	// An entry dated in the future is not served as a fresh advert.
+	future := snap.Nodes[known]
+	future.LastAdvert = time.Now().UTC().Add(48 * time.Hour).Format(time.RFC3339)
+	snap.Nodes[known] = future
+	if resp = get(); len(resp.Nodes) != 0 {
+		t.Errorf("future-dated entry served: %v", resp.Nodes)
 	}
 }

@@ -9,9 +9,10 @@ import (
 // handleRfParams — GET /api/rf-params (issue #1268).
 //
 // Returns the radio settings the MeshCore map holds for the nodes this
-// instance knows, limited to adverts within maxAgeDays, plus the named
-// presets and when the map was last fetched. Served straight from the
-// atomic snapshot; never waits on the upstream fetch.
+// instance knows, limited to adverts within maxAgeDays and not dated in the
+// future (rfAdvertFresh), plus the named presets and when the map was last
+// fetched. Served straight from the atomic snapshot; never waits on the
+// upstream fetch.
 func (s *Server) handleRfParams(w http.ResponseWriter, r *http.Request) {
 	resp := RfParamsResponse{Presets: []RfPreset{}, Nodes: map[string]RfParams{}, Deviations: map[string]RfDeviation{}}
 	if s.rfParams == nil {
@@ -31,7 +32,8 @@ func (s *Server) handleRfParams(w http.ResponseWriter, r *http.Request) {
 	if snap.Presets != nil {
 		resp.Presets = snap.Presets
 	}
-	cutoff := time.Now().UTC().Add(-s.rfParams.cfg.maxAge())
+	now := time.Now().UTC()
+	maxAge := s.rfParams.cfg.maxAge()
 	nodes, _ := s.store.getCachedNodesAndPM()
 	for _, n := range nodes {
 		pk := strings.ToLower(n.PublicKey)
@@ -39,7 +41,7 @@ func (s *Server) handleRfParams(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			continue
 		}
-		if at, err := time.Parse(time.RFC3339, p.LastAdvert); err != nil || at.Before(cutoff) {
+		if at, err := time.Parse(time.RFC3339, p.LastAdvert); err != nil || !rfAdvertFresh(at, now, maxAge) {
 			continue
 		}
 		resp.Nodes[pk] = p
