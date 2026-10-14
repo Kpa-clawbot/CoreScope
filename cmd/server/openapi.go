@@ -210,6 +210,7 @@ func routeDescriptions() map[string]routeMeta {
 		// Misc
 		"GET /api/resolve-hops":      {Summary: "Resolve hop path", Description: "Resolves hash prefixes in a hop path to node names. Returns affinity scores and best candidates.", Tag: "nodes", QueryParams: []paramMeta{{Name: "hops", Description: "Comma-separated hop hash prefixes", Type: "string", Required: true}}},
 		"GET /api/traces/{hash}":     {Summary: "Get packet traces", Description: "Returns all observer sightings for a packet hash.", Tag: "packets"},
+		"GET /api/rf-params":         {Summary: "LoRa RF parameters per node", Description: "Opt-in (config rfParams.nodesUrl, issue #1268). Frequency, SF, bandwidth and coding rate the MeshCore map holds for the nodes this instance knows, keyed by lower-case pubkey, limited to adverts within rfParams.maxAgeDays (default 7). Also returns the named presets and fetched_at, the time of the last successful map fetch (null before the first one). enabled is false when the feature is off.", Tag: "nodes"},
 		"GET /api/iata-coords":       {Summary: "Get IATA airport coordinates", Description: "Returns lat/lon for known airport codes (used for observer positioning).", Tag: "config"},
 		"GET /api/audio-lab/buckets": {Summary: "Audio lab frequency buckets", Description: "Returns frequency bucket data for audio analysis.", Tag: "analytics"},
 	}

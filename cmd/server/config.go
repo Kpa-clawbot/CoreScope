@@ -219,6 +219,10 @@ type Config struct {
 	KnownChannelsURL string `json:"knownChannelsUrl,omitempty"`
 	// Refresh interval in milliseconds. 0/missing => default 24h.
 	KnownChannelsRefreshMs int64 `json:"knownChannelsRefreshMs,omitempty"`
+
+	// LoRa RF parameters per node from the MeshCore map (issue #1268).
+	// OPT-IN: nil or an empty nodesUrl starts no fetch.
+	RfParams *RfParamsConfig `json:"rfParams,omitempty"`
 }
 
 // CustomizerConfig holds operator-side knobs for the in-app customizer modal.

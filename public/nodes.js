@@ -62,6 +62,12 @@
         va = a.last_heard ? new Date(a.last_heard).getTime() : a.last_seen ? new Date(a.last_seen).getTime() : 0;
         vb = b.last_heard ? new Date(b.last_heard).getTime() : b.last_seen ? new Date(b.last_seen).getTime() : 0;
         return (va - vb) * dir;
+      } else if (col === 'lora') {
+        // #1268: nodes without RF parameters always sort last.
+        var presets = _rfParams && _rfParams.presets;
+        va = RfParams.sortKey(rfFor(a), presets); vb = RfParams.sortKey(rfFor(b), presets);
+        if (!va !== !vb) return va ? -1 : 1;
+        return va < vb ? -dir : va > vb ? dir : 0;
       } else if (col === 'advert_count') {
         va = a.advert_count || 0; vb = b.advert_count || 0;
         return (va - vb) * dir;
@@ -630,7 +636,8 @@
   async function fetchNodeDetail(pubkey) {
     const [nodeData, healthData] = await Promise.all([
       api('/nodes/' + encodeURIComponent(pubkey), { ttl: CLIENT_TTL.nodeDetail }),
-      api('/nodes/' + encodeURIComponent(pubkey) + '/health', { ttl: CLIENT_TTL.nodeDetail }).catch(() => null)
+      api('/nodes/' + encodeURIComponent(pubkey) + '/health', { ttl: CLIENT_TTL.nodeDetail }).catch(() => null),
+      loadRfParams()
     ]);
     nodeData.healthData = healthData;
     return nodeData;
@@ -815,6 +822,7 @@
           ${stats.avgHops ? `<tr><td>Avg Hops</td><td>${stats.avgHops}</td></tr>` : ''}
           ${hasLoc ? `<tr><td>Location</td><td>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</td></tr>` : ''}
           <tr><td>Hash Prefix</td><td>${n.hash_size ? '<code style="font-family:var(--mono);font-weight:700">' + n.public_key.slice(0, n.hash_size * 2).toUpperCase() + '</code> (' + n.hash_size + '-byte)' : 'Unknown'}${n.hash_size_inconsistent ? ' <span style="color:var(--status-yellow);cursor:help" title="Seen: ' + (Array.isArray(n.hash_sizes_seen) ? n.hash_sizes_seen : []).join(', ') + '-byte"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> varies</span>' : ''}</td></tr>
+          ${rfOn() ? `<tr><td title="LoRa radio settings this node last advertised to the MeshCore map">LoRa</td><td data-testid="node-detail-lora">${RfParams.detailHtml(rfFor(n), _rfParams.presets, Date.now())}</td></tr>` : ''}
         </table>
 
         <div class="node-full-card" id="node-packets">
@@ -1160,6 +1168,23 @@
 
   let _allNodes = null; // cached full node list
   let _fleetSkew = null; // cached clock skew map: pubkey → {severity, recentMedianSkewSec, medianSkewSec, ...}
+  let _rfParams = null; // #1268 /api/rf-params body: {enabled, presets, nodes: pubkey → {freq, sf, bw, cr, last_advert}}
+  let _rfParamsPromise = null;
+
+  // #1268 — one bulk fetch of the MeshCore map's radio settings, shared by
+  // the table and the detail views; a failure leaves the feature off.
+  function loadRfParams() {
+    if (!_rfParamsPromise) {
+      _rfParamsPromise = api('/rf-params', { ttl: 300000 })
+        .catch(function () { return null; })
+        .then(function (d) { _rfParams = d; return d; });
+    }
+    return _rfParamsPromise;
+  }
+  function rfOn() { return !!(_rfParams && _rfParams.enabled); }
+  function rfFor(n) {
+    return (rfOn() && n && n.public_key && _rfParams.nodes[String(n.public_key).toLowerCase()]) || null;
+  }
 
   /**
    * Fetch per-node clock skew and render into the given container element.
@@ -1325,6 +1350,8 @@
         let firstTotal = null; // informational only (M1: not used as loop bound)
         // Kick off fleet skew in parallel with the first page only.
         const skewPromise = getFleetSkew();
+        _rfParamsPromise = null; // re-read with the node list (api() caches it 5 min)
+        const rfPromise = loadRfParams();
         const nodesBody = document.getElementById('nodesBody');
         while (offset < SAFETY_CAP) {
           baseParams.set('offset', String(offset));
@@ -1360,6 +1387,7 @@
         _allNodes = Array.from(seen.values());
         // m3: counts from first response only (subsequent pages may differ)
         await skewPromise;
+        await rfPromise;
       }
 
       // Client-side filtering
@@ -1491,6 +1519,7 @@
           <th scope="col" class="col-pubkey" data-sort-key="public_key" data-priority="3">Public Key</th>
           <th scope="col" data-sort-key="role" data-priority="2">Role</th>
           <th scope="col" data-sort-key="default_scope" data-priority="3">Scope</th>
+          <th scope="col" data-sort-key="lora" data-priority="3" class="col-lora" title="LoRa radio settings from the MeshCore map" hidden>LoRa</th>
           <th scope="col" data-sort-key="last_seen" data-sort-default="desc" data-priority="1">Last Seen</th>
           <th scope="col" data-sort-key="first_seen" data-sort-default="desc" data-priority="3">First Seen</th>
           <th scope="col" data-sort-key="advert_count" data-sort-default="desc" data-priority="2">Adverts</th>
@@ -1638,6 +1667,9 @@
       ? (document.activeElement.closest('tr[data-key]') || {}).getAttribute &&
         document.activeElement.closest('tr[data-key]').getAttribute('data-key')
       : null;
+    const loraOn = rfOn();
+    const loraTh = document.querySelector('#nodesTable th.col-lora');
+    if (loraTh) loraTh.hidden = !loraOn;
     tbody.innerHTML = sorted.map(n => {
       const roleColor = ROLE_COLORS[n.role] || '#6b7280';
       const isClaimed = myKeys.has(n.public_key);
@@ -1651,6 +1683,7 @@
         <td class="mono col-pubkey">${truncate(n.public_key, 16)}</td>
         <td><span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(roleColor)) || ('background:'+roleColor+';color:#fff')}">${n.role}</span></td>
         <td style="font-family:var(--mono);font-size:12px">${n.default_scope ? escapeHtml(n.default_scope) : ''}</td>
+        ${loraOn ? `<td class="col-lora" data-testid="node-cell-lora" style="font-size:12px" title="${escapeHtml(RfParams.summary(rfFor(n)))}">${escapeHtml(RfParams.label(rfFor(n), _rfParams.presets))}</td>` : ''}
         <td class="${lastSeenClass}">${renderNodeTimestampHtml(n.last_heard || n.last_seen)}</td>
         <td>${n.first_seen ? renderNodeTimestampHtml(n.first_seen) : '<span class="text-muted">—</span>'}</td>
         <td>${n.advert_count || 0}</td>
@@ -1808,6 +1841,7 @@
             <dt>Packets Today</dt><dd>${stats.packetsToday || 0}</dd>
             ${stats.avgHops ? `<dt>Avg Hops</dt><dd>${stats.avgHops}</dd>` : ''}
             ${hasLoc ? `<dt>Location</dt><dd>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</dd>` : ''}
+            ${rfOn() ? `<dt title="LoRa radio settings this node last advertised to the MeshCore map">LoRa</dt><dd data-testid="node-detail-lora">${RfParams.detailHtml(rfFor(n), _rfParams.presets, Date.now())}</dd>` : ''}
           </dl>
         </div>
 
