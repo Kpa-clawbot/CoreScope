@@ -4361,6 +4361,11 @@ button.region-pill-active:hover { opacity: 0.85; color: var(--text-on-accent); }
 
 .rf-cell-sparkline { height: 24px; margin: 2px 0; overflow: hidden; }
 .rf-cell-stats { display: flex; gap: 8px; font-size: 10px; color: var(--text-muted); }
+/* #661 — a fourth stat ("TX 1h") wraps between items, never inside one */
+.rf-cell-stats { flex-wrap: wrap; row-gap: 0; }
+.rf-cell-stats > span { white-space: nowrap; }
+/* #661 — rolling 1 h TX airtime at or over the duty-cycle threshold */
+.airtime-over { color: var(--status-red-text); font-weight: 600; }
 
 /* Side panel for observer detail */
 .rf-health-detail {

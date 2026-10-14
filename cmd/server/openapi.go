@@ -205,7 +205,7 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/observers/{id}":            {Summary: "Get observer detail", Tag: "observers"},
 		"GET /api/observers/{id}/metrics":    {Summary: "Get observer metrics", Description: "Packet rates, uptime, and performance metrics.", Tag: "observers"},
 		"GET /api/observers/{id}/analytics":  {Summary: "Get observer analytics", Tag: "observers"},
-		"GET /api/observers/metrics/summary": {Summary: "Observer metrics summary", Description: "Aggregate metrics across all observers.", Tag: "observers"},
+		"GET /api/observers/metrics/summary": {Summary: "Observer metrics summary", Description: "Aggregate metrics across all observers within window (noise floor, battery, sparkline). Each row also carries tx_airtime_pct_1h / rx_airtime_pct_1h: the airtime share over the last hour regardless of window, null with under 30 minutes of samples since the last reboot or no sample in the last 15 minutes. duty_cycle_warn_pct is the configured warning threshold (dutyCycleWarnPct, default 10).", Tag: "observers", QueryParams: []paramMeta{{Name: "window", Description: "Lookback such as 1h, 24h, 7d (default 24h)", Type: "string"}, {Name: "region", Description: "IATA code to filter observers", Type: "string"}}},
 
 		// Misc
 		"GET /api/resolve-hops":      {Summary: "Resolve hop path", Description: "Resolves hash prefixes in a hop path to node names. Returns affinity scores and best candidates.", Tag: "nodes", QueryParams: []paramMeta{{Name: "hops", Description: "Comma-separated hop hash prefixes", Type: "string", Required: true}}},

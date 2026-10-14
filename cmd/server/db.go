@@ -3038,12 +3038,16 @@ type MetricsSummaryRow struct {
 	CurrentBattMv *int       `json:"battery_mv"`
 	SampleCount   int        `json:"sample_count"`
 	Sparkline     []*float64 `json:"sparkline"`
+	// Airtime share over the hour before now, whatever the window (#661).
+	TxAirtimePct1h *float64 `json:"tx_airtime_pct_1h"`
+	RxAirtimePct1h *float64 `json:"rx_airtime_pct_1h"`
 }
 
 // GetMetricsSummary returns a fleet summary of observer metrics within a time window.
 // Uses a CTE with ROW_NUMBER to get latest values in a single pass (no correlated subqueries).
-// Also returns sparkline data (noise_floor time series) per observer.
-func (db *DB) GetMetricsSummary(since string) ([]MetricsSummaryRow, error) {
+// Also returns sparkline data (noise_floor time series) per observer, and the
+// TX/RX airtime share over the hour before now.
+func (db *DB) GetMetricsSummary(since string, now time.Time) ([]MetricsSummaryRow, error) {
 	query := `
 		WITH ranked AS (
 			SELECT observer_id, noise_floor, battery_mv,
@@ -3110,9 +3114,49 @@ func (db *DB) GetMetricsSummary(since string) ([]MetricsSummaryRow, error) {
 				result[i].Sparkline = s
 			}
 		}
+
+		if err := db.fillAirtime1h(result, now); err != nil {
+			return nil, err
+		}
 	}
 
 	return result, nil
+}
+
+// fillAirtime1h sets the rolling 1 h TX/RX airtime share on each row from
+// the cumulative counters sampled in the hour before now, in one query.
+func (db *DB) fillAirtime1h(rows []MetricsSummaryRow, now time.Time) error {
+	since := now.Add(-airtimeWindow).Format(time.RFC3339)
+	q, err := db.conn.Query(`SELECT observer_id, timestamp, tx_air_secs, rx_air_secs
+		FROM observer_metrics WHERE timestamp >= ? ORDER BY observer_id, timestamp ASC`, since)
+	if err != nil {
+		return err
+	}
+	defer q.Close()
+
+	tx := make(map[string][]airtimePoint)
+	rx := make(map[string][]airtimePoint)
+	for q.Next() {
+		var oid, ts string
+		var txSecs, rxSecs *int
+		if err := q.Scan(&oid, &ts, &txSecs, &rxSecs); err != nil {
+			return err
+		}
+		at, err := time.Parse(time.RFC3339, ts)
+		if err != nil {
+			continue
+		}
+		tx[oid] = append(tx[oid], airtimePoint{At: at, Secs: txSecs})
+		rx[oid] = append(rx[oid], airtimePoint{At: at, Secs: rxSecs})
+	}
+	if err := q.Err(); err != nil {
+		return err
+	}
+	for i := range rows {
+		rows[i].TxAirtimePct1h = rollingAirtimePct(tx[rows[i].ObserverID], now)
+		rows[i].RxAirtimePct1h = rollingAirtimePct(rx[rows[i].ObserverID], now)
+	}
+	return nil
 }
 
 // (PruneOldMetrics / RemoveStaleObservers removed in #1283 — see note

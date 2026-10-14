@@ -4330,6 +4330,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
             <span>avg: ${avgNf}</span>
             <span>max: ${maxNf}</span>
             <span>${obs.sample_count} samples</span>
+            <span data-testid="rf-cell-airtime">TX 1h: ${ObserverAirtime.badge(obs.tx_airtime_pct_1h, summaryData.duty_cycle_warn_pct)}</span>
           </div>
         </div>`;
       }).join('');
