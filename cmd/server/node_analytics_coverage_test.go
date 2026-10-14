@@ -205,3 +205,27 @@ func TestEvictionRecordsEvictedThrough(t *testing.T) {
 		t.Errorf("evictedThrough = %q, want just before the oldest remaining %q", edge, remaining)
 	}
 }
+
+// Retention equal to the requested range is full coverage, not partial
+// (staging: retentionHours 168 marked every 7d request partial). An edge a
+// few seconds after the start stays within coverageSlack.
+func TestNodeAnalyticsCoverageRetentionEqualsRange(t *testing.T) {
+	ps := setupCoverageStore(t, 10*24)
+	ps.mu.Lock()
+	// The retention edge lies 30 s after the 7d start: inside the slack.
+	ps.retentionHours = 7*24 - 30.0/3600
+	ps.oldestLoaded = time.Now().UTC().Add(-7*24*time.Hour - time.Minute).Format(time.RFC3339)
+	ps.mu.Unlock()
+	for i := 0; i < 3; i++ {
+		a, err := ps.GetNodeAnalytics(coverageNodePK, 7)
+		if err != nil || a == nil {
+			t.Fatal(err)
+		}
+		if a.TimeRange.Partial {
+			t.Fatalf("run %d: 7d with 168h retention marked partial (dataFrom %q, from %q)", i, a.TimeRange.DataFrom, a.TimeRange.From)
+		}
+	}
+	if a, _ := ps.GetNodeAnalytics(coverageNodePK, 30); a == nil || !a.TimeRange.Partial {
+		t.Error("30d with 168h retention must be partial")
+	}
+}

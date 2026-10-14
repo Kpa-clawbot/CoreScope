@@ -10112,6 +10112,10 @@ func (s *PacketStore) nodeTxsSince(pubkey, fromISO string) []*StoreTx {
 	return packets
 }
 
+// coverageSlack is how far the window edge may lie after the requested
+// start before a range counts as partial.
+const coverageSlack = time.Minute
+
 // coverageStart returns from when the in-memory store holds every
 // transmission, or the zero time when that is not limited (#748). It is the
 // latest of the background-load progress (oldestLoaded), the retention
@@ -10153,9 +10157,10 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 
 	// UTC: FirstSeen is stored as UTC and compared as a string, so a local
 	// offset (+02:00) would shift the window on a non-UTC host.
-	fromTime := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
+	now := time.Now().UTC()
+	fromTime := now.Add(-time.Duration(days) * 24 * time.Hour)
 	fromISO := fromTime.Format(time.RFC3339)
-	toISO := time.Now().UTC().Format(time.RFC3339)
+	toISO := now.Format(time.RFC3339)
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -10168,12 +10173,15 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	// show up as lone buckets weeks before the window.
 	coveredFrom := fromTime
 	dataFrom := ""
-	if cs := s.coverageStart(time.Now().UTC()); cs.After(fromTime) {
+	// One now for both edges, and a minute of slack: with retentionHours
+	// equal to the range the edges coincide, and a hair's difference must
+	// not mark a full range partial (it did on staging, 168h vs 7d).
+	if cs := s.coverageStart(now); cs.After(fromTime.Add(coverageSlack)) {
 		coveredFrom = cs
 		dataFrom = cs.Format(time.RFC3339)
 	}
 	packets := s.nodeTxsSince(pubkey, coveredFrom.Format(time.RFC3339))
-	coveredHours := time.Since(coveredFrom).Hours()
+	coveredHours := now.Sub(coveredFrom).Hours()
 
 	// Activity timeline (hourly buckets)
 	timelineBuckets := map[string]int{}
