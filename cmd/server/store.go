@@ -75,6 +75,11 @@ type StoreTx struct {
 	accountedBytes int64
 }
 
+// isOwnTransmission reports whether the observation is the observer's own
+// radio transmitting (direction "tx" from the MQTT bridge) rather than a
+// reception. Aggregates of who heard whom must skip it (#667).
+func (o *StoreObs) isOwnTransmission() bool { return o.Direction == "tx" }
+
 // StoreObs is a lean in-memory observation (no duplication of transmission fields).
 type StoreObs struct {
 	ID             int
