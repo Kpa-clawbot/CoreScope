@@ -133,6 +133,56 @@ async function checkConfiguredScope(page) {
   }
 }
 
+async function checkBatteryStatus(page) {
+  const key = 'b1'.repeat(32);
+  const cases = [
+    ['ok', 4000, 'OK', 'ph-battery-high'],
+    ['low', 3300, 'Low', 'ph-warning'],
+    ['critical', 3100, 'Critical', 'ph-battery-low'],
+    ['unknown', null, 'No data', null],
+    ['ok', '<img src=x onerror=alert(1)>', 'OK', 'ph-battery-high'],
+  ];
+  let battery;
+  const urls = [
+    '**/api/nodes/' + key + '/analytics*',
+    '**/api/nodes/' + key + '/battery*',
+    '**/api/nodes/' + key + '/hop_analytics*',
+  ];
+  await page.route(urls[0], route => route.fulfill({ json: {
+    node: { public_key: key, name: 'Battery fixture', role: 'repeater' },
+    computedStats: {}, peerInteractions: [], activityTimeline: [], snrTrend: [],
+    packetTypeBreakdown: [], observerCoverage: [], hopDistribution: [], uptimeHeatmap: [],
+  } }));
+  await page.route(urls[1], route => route.fulfill({ json: battery }));
+  await page.route(urls[2], route => route.fulfill({ json: { packets: [], ambiguous: 0 } }));
+  try {
+    for (const theme of ['light', 'dark']) {
+      for (const [status, mv, label, icon] of cases) {
+        battery = { status, latest_mv: mv, samples: [] };
+        await page.goto('about:blank');
+        await page.goto(`${BASE}/#/nodes/${key}/analytics`, { waitUntil: 'domcontentloaded' });
+        await page.waitForFunction(() => window.__scopeThemeReady, null, { timeout: 8000 });
+        if (await page.locator('html').getAttribute('data-theme') !== theme) await page.locator('#darkModeToggle').click();
+        assert.strictEqual(await page.locator('html').getAttribute('data-theme'), theme);
+        await page.waitForFunction(() => document.getElementById('batteryStatusBadge')?.textContent.trim());
+        const badge = page.locator('#batteryStatusBadge');
+        assert.strictEqual((await badge.textContent()).trim(), label + (mv ? ' · ' + mv + ' mV' : ''), 'battery status must contain readable text');
+        assert.strictEqual(await badge.locator('svg.ph-icon').count(), icon ? 1 : 0);
+        assert.strictEqual(await badge.locator('img').count(), 0, 'voltage text must never be parsed as HTML');
+        if (icon) {
+          assert.strictEqual(await badge.locator('use').getAttribute('href'), '/icons/phosphor-sprite.svg#' + icon);
+          assert.strictEqual(await badge.locator('svg').getAttribute('aria-hidden'), 'true');
+          const bounds = await badge.locator('svg').boundingBox();
+          assert.ok(bounds.width <= 24 && bounds.height <= 24, 'battery icon was stretched by chart media styles');
+        }
+        pass('battery status: ' + status + ' is readable and safe in ' + theme + ' theme');
+      }
+    }
+  } finally {
+    for (const url of urls) await page.unroute(url);
+  }
+}
+
 async function main() {
   const requireChromium = process.env.CHROMIUM_REQUIRE === '1';
   let browser;
@@ -158,6 +208,7 @@ async function main() {
   const page = await ctx.newPage();
 
   await checkConfiguredScope(page);
+  await checkBatteryStatus(page);
 
   // (a) /analytics
   await checkHeading(page, '/analytics', /Mesh Analytics/, '(a) /analytics');

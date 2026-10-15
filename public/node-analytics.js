@@ -327,13 +327,14 @@
     const thr = (data && data.thresholds) || { low_mv: 3300, critical_mv: 3000 };
 
     if (badge) {
-      const STATUS_COLOR = { ok: '#51cf66', low: '#fcc419', critical: '#ff6b6b', unknown: 'var(--text-muted)' };
-      const label = data && data.status === 'ok' ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-battery-high"/></svg> OK'
-        : data && data.status === 'low' ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> Low'
-        : data && data.status === 'critical' ? '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-battery-low"/></svg> Critical'
+      const STATUS_COLOR = { ok: 'var(--status-green-text)', low: 'var(--status-yellow-text)', critical: 'var(--status-red-text)', unknown: 'var(--text-muted)' };
+      const label = data && data.status === 'ok' ? '<svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-battery-high"/></svg> OK'
+        : data && data.status === 'low' ? '<svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> Low'
+        : data && data.status === 'critical' ? '<svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-battery-low"/></svg> Critical'
         : 'No data';
       const mv = data && data.latest_mv ? ' · ' + data.latest_mv + ' mV' : '';
-      badge.textContent = label + mv;
+      badge.innerHTML = label; // Only the fixed status markup is parsed as HTML.
+      badge.appendChild(document.createTextNode(mv));
       badge.style.color = STATUS_COLOR[(data && data.status) || 'unknown'];
     }
 

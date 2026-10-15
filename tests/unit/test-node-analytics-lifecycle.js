@@ -29,6 +29,7 @@ function harness() {
       id, innerHTML: '', textContent: '', style: {}, dataset: {}, listeners: {},
       get isConnected() { return container.isConnected && elements[id] === this; },
       addEventListener(name, fn) { this.listeners[name] = fn; },
+      appendChild(node) { this.textContent += node.textContent; },
     };
   }
   let html = '';
@@ -53,7 +54,8 @@ function harness() {
   Chart.defaults = {};
   const sandbox = {
     console, Chart, Date, CLIENT_TTL: { nodeAnalytics: 1000 },
-    document: { documentElement: {}, getElementById: id => elements[id] || null },
+    document: { documentElement: {}, getElementById: id => elements[id] || null,
+      createTextNode: text => ({ textContent: String(text) }) },
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
     escapeHtml: value => String(value), timeAgo: () => 'now',
     NodeHopAnalytics: { load: (...args) => hopLoads.push(args), destroy() {} },
