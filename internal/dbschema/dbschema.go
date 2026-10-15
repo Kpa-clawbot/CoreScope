@@ -114,6 +114,9 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensureKeyBackfill(rw); err != nil {
 		return fmt.Errorf("ensure key backfill: %w", err)
 	}
+	if err := EnsureObservationHopsSchema(rw, logf); err != nil {
+		return fmt.Errorf("ensure observation_hops: %w", err)
+	}
 	// Advert evidence is intentionally not required by AssertReady: a legacy
 	// read-only server reports unknown until this table/backfill is available,
 	// and re-probes absence instead of caching the startup race permanently.

@@ -74,6 +74,7 @@ func main() {
 
 	sources := cfg.ResolvedSources()
 
+	hopIndexDays = cfg.HopIndexDaysOrDefault()
 	store, err := OpenStoreWithInterval(cfg.DBPath, cfg.MetricsSampleInterval())
 	if err != nil {
 		log.Fatalf("db: %v", err)
@@ -315,6 +316,13 @@ func main() {
 		}
 	}
 
+	// Keep observation_hops bounded to its window (see hopIndexDays).
+	if n, err := store.TrimObservationHops(); err != nil {
+		log.Printf("[hop-index] trim error: %v", err)
+	} else if n > 0 {
+		log.Printf("[hop-index] startup trimmed %d hop rows", n)
+	}
+
 	// Client-RX coverage retention: bound the opt-in coverage tables (#1727).
 	// Independent of the feature flag, so data persists are reaped even after
 	// the feature is turned off. 0 = disabled.
@@ -384,6 +392,8 @@ func main() {
 	keyBackfillCtx, stopKeyBackfill := context.WithCancel(context.Background())
 	defer stopKeyBackfill()
 	keyBackfillDone := keyBackfill.Start(keyBackfillCtx)
+	// After the gate: ingest is live, the backfill yields to it between chunks.
+	store.ScheduleObservationHopsBackfill()
 	if d := ingestBuffer.Dropped(); d > 0 {
 		log.Printf("[ingest-buffer] write path ready; draining backlog (dropped %d during startup — consider raising ingestBufferSize)", d)
 	} else {
@@ -420,6 +430,17 @@ func main() {
 			store.PruneOldMetrics(metricsDays)
 			store.PruneDroppedPackets(metricsDays)
 			store.RunIncrementalVacuum(vacuumPages)
+		}
+	}()
+
+	// Daily trim of the reach hop index, independent of packet retention.
+	go func() {
+		for range time.Tick(24 * time.Hour) {
+			if n, err := store.TrimObservationHops(); err != nil {
+				log.Printf("[hop-index] trim error: %v", err)
+			} else if n > 0 {
+				log.Printf("[hop-index] trimmed %d hop rows", n)
+			}
 		}
 	}()
 
