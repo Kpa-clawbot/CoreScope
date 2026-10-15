@@ -386,6 +386,92 @@ test('sessions list marks the current device without a logout button', () => {
   assert(h.indexOf('data-sess="2"') !== -1 && h.indexOf('Unknown device') !== -1);
 });
 
+test('device tokens render as CoreDrive RX with a marker and keep their logout button', () => {
+  const env = loadAccount('#/account', () => ({}));
+  const h = env.t.sessionsHtml([
+    { id: 1, kind: 'web', label: '', userAgent: 'Firefox', lastSeenAt: '2026-01-01T00:00:00Z', current: true },
+    { id: 2, kind: 'device', label: 'Pixel <8>', userAgent: 'CoreDriveRX/1.17', lastSeenAt: '2026-01-01T00:00:00Z', current: false },
+    { id: 3, kind: 'device', label: '', userAgent: '', lastSeenAt: '2026-01-01T00:00:00Z', current: false }]);
+  assert(h.indexOf('<li><span>Firefox') !== -1, 'web session changed: ' + h);
+  assert(h.indexOf('CoreDrive RX – Pixel &lt;8&gt;') !== -1, 'no labelled device row: ' + h);
+  assert(h.indexOf('<span>CoreDrive RX <span class="um-chip um-chip-device">') !== -1, 'no unlabelled device row: ' + h);
+  assert(h.indexOf('CoreDriveRX/1.17') === -1, 'a device row shows its user agent instead of its label');
+  assert.strictEqual((h.match(/data-kind="device"/g) || []).length, 2);
+  assert.strictEqual((h.match(/um-chip-device/g) || []).length, 2);
+  assert(h.indexOf('data-sess="2"') !== -1 && h.indexOf('data-sess="3"') !== -1, 'device rows lost their logout button');
+});
+
+test('companions list escapes fields, shortens the pubkey and says never without a reception', () => {
+  const env = loadAccount('#/account', () => ({}));
+  const pk = 'ab'.repeat(32);
+  const h = env.t.companionsHtml([
+    { pubkey: pk, name: '<img src=x>', linkedAt: '2026-10-01T10:00:00Z', lastSeenAt: null },
+    { pubkey: '"><b>', name: '', linkedAt: 'x', lastSeenAt: '2026-10-02T09:00:00Z' }]);
+  assert(h.indexOf('<img') === -1 && h.indexOf('<b>') === -1, 'raw tag in companions HTML: ' + h);
+  assert(h.indexOf('&lt;img src=x&gt;') !== -1, 'name missing: ' + h);
+  assert(h.indexOf('<code>' + pk.slice(0, 12) + '…</code>') !== -1, 'no short pubkey: ' + h);
+  assert(h.indexOf('data-unlink="' + pk + '"') !== -1, 'Unlink does not carry the full pubkey');
+  assert(h.indexOf('last seen never') !== -1, 'no "never" for a null lastSeenAt');
+  assert.strictEqual((h.match(/data-unlink=/g) || []).length, 2);
+});
+
+test('companions empty state explains linking from CoreDrive RX', () => {
+  const env = loadAccount('#/account', () => ({}));
+  [[], null].forEach((list) => {
+    const h = env.t.companionsHtml(list);
+    assert(h.indexOf('id="compEmpty"') !== -1 && h.indexOf('CoreDrive RX') !== -1 && h.indexOf('data-unlink') === -1, h);
+    assert(h.indexOf('My nodes') === -1, 'linking no longer adds to My nodes: ' + h);
+  });
+});
+
+test('profile view has a Companions section below Devices', () => {
+  const env = loadAccount('#/account', () => ({}));
+  const html = env.t.profileHtml({ email: 'a@b.c', role: 'user', displayName: 'Ann' });
+  const dev = html.indexOf('<h3>Devices</h3>'), comp = html.indexOf('<h3>Companions</h3>');
+  assert(dev !== -1 && comp > dev, 'Companions heading missing or above Devices');
+  assert(html.indexOf('id="compList"') !== -1 && html.indexOf('id="compMsg"') !== -1);
+});
+
+test('profile view lists companions; Unlink confirms, sends DELETE and reloads the list', async () => {
+  const pk = 'cd'.repeat(32);
+  let linked = [{ pubkey: pk, name: 'Car', linkedAt: '2026-10-01T10:00:00Z', lastSeenAt: null }];
+  const env = loadAccount('#/account', (p) => {
+    if (p === '/api/account/companions') return { ok: true, status: 200, data: linked };
+    if (p === '/api/account/companions/' + pk) { linked = []; return { ok: true, status: 204, data: {} }; }
+    return { ok: true, status: 200, data: [] };
+  }, { confirm: () => true });
+  env.user.current = { id: 1, email: 'a@b.c', displayName: 'Ann', role: 'user' };
+  env.t.views.profile({ set innerHTML(v) {} });
+  await new Promise((r) => setTimeout(r, 5));
+  assert(env.els.compList.innerHTML.indexOf('data-unlink="' + pk + '"') !== -1, env.els.compList.innerHTML);
+  await env.els.compList.handlers.click({ target: { getAttribute: (a) => (a === 'data-unlink' ? pk : null) } });
+  await new Promise((r) => setTimeout(r, 5));
+  assert(env.calls.some((c) => c.method === 'DELETE' && c.p === '/api/account/companions/' + pk), 'no DELETE');
+  assert.strictEqual(env.els.compMsg.textContent, 'Companion unlinked.');
+  assert(env.els.compList.innerHTML.indexOf('id="compEmpty"') !== -1, 'list not reloaded');
+});
+
+test('a cancelled Unlink sends nothing', async () => {
+  const pk = 'cd'.repeat(32);
+  const env = loadAccount('#/account', (p) => (p === '/api/account/companions'
+    ? { ok: true, status: 200, data: [{ pubkey: pk, name: '', linkedAt: 'x', lastSeenAt: null }] }
+    : { ok: true, status: 200, data: [] }), { confirm: () => false });
+  env.user.current = { id: 1, email: 'a@b.c', displayName: 'Ann', role: 'user' };
+  env.t.views.profile({ set innerHTML(v) {} });
+  await new Promise((r) => setTimeout(r, 5));
+  await env.els.compList.handlers.click({ target: { getAttribute: () => pk } });
+  assert(!env.calls.some((c) => c.method === 'DELETE'), 'DELETE sent after cancel');
+});
+
+test('a rejected companions load shows the error in compMsg', async () => {
+  const env = loadAccount('#/account', () => ({}));
+  env.user.current = { id: 1, email: 'a@b.c', displayName: 'Ann', role: 'user' };
+  env.setRequest(() => Promise.reject(new Error('net')));
+  env.t.views.profile({ set innerHTML(v) {} });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.strictEqual(env.els.compMsg.textContent, 'Network error, try again.');
+});
+
 test('activate posts token and password, logs in on success', async () => {
   const env = loadAccount('#/account/activate?token=T0K', () => ({ ok: true, status: 200, data: { id: 1, displayName: 'Ann' } }));
   env.t.views.activate({});

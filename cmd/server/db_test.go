@@ -2094,7 +2094,7 @@ func TestGetMetricsSummary(t *testing.T) {
 		"obs2", t1, -115.0)
 
 	since := now.Add(-24 * time.Hour).Format(time.RFC3339)
-	summary, err := db.GetMetricsSummary(since)
+	summary, err := db.GetMetricsSummary(since, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2814,5 +2814,43 @@ func TestGetChannelsPreviewRespectsRegionFilter(t *testing.T) {
 	}
 	if got := all[0]["lastSender"]; got != "Bob" {
 		t.Errorf("unfiltered preview sender = %v, want Bob (the newest message)", got)
+	}
+}
+
+// #2146: /api/perf counted every row of transmissions, observations, nodes
+// and observers on each call (116 ms for the observations count on an
+// 18M-row database). The counts are cached for postgresStatsTTL.
+func TestGetDBSizeStatsTypedCachesRowCounts(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	seedTestData(t, db)
+
+	first := db.GetDBSizeStatsTyped().Rows.Transmissions
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen) VALUES ('AA', 'perfcache0000001', '2026-01-01T00:00:00Z')`)
+	if got := db.GetDBSizeStatsTyped().Rows.Transmissions; got != first {
+		t.Fatalf("within the TTL the cached count must be served: got %d, want %d", got, first)
+	}
+
+	db.pgStatsMu.Lock()
+	db.pgStatsExpires = time.Now().Add(-2 * postgresStatsTTL)
+	db.pgStatsMu.Unlock()
+	if got := db.GetDBSizeStatsTyped().Rows.Transmissions; got != first+1 {
+		t.Fatalf("after the TTL the count must be refreshed: got %d, want %d", got, first+1)
+	}
+}
+
+// A failed count is not cached, so the next /api/perf counts again.
+func TestGetDBSizeStatsTypedDoesNotCacheFailedCounts(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	if _, err := db.conn.Exec(`DROP TABLE observers`); err != nil {
+		t.Fatal(err)
+	}
+	db.GetDBSizeStatsTyped()
+	db.pgStatsMu.Lock()
+	cached := !db.pgStatsCache.SampledAt.IsZero()
+	db.pgStatsMu.Unlock()
+	if cached {
+		t.Fatal("row counts with a failed COUNT(*) must not be cached")
 	}
 }

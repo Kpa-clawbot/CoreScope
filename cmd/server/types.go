@@ -1086,18 +1086,25 @@ type ClientConfigResponse struct {
 	Customizer          CustomizerClientConfig `json:"customizer"`
 	ClientRxCoverage    bool                   `json:"clientRxCoverage"`
 	ClientRfSamples     bool                   `json:"clientRfSamples"`
-	PathTrust           *PathTrustConfig       `json:"pathTrust,omitempty"`
+	// Present (true) only when clientRxCoverage.requireLinkedCompanion is set
+	// and user management is on: CoreDrive RX then holds its queue until
+	// its companion is linked.
+	ClientRxRequireLinkedCompanion bool             `json:"clientRxRequireLinkedCompanion,omitempty"`
+	PathTrust                      *PathTrustConfig `json:"pathTrust,omitempty"`
 	// Present only when user management is on, so the payload is unchanged
 	// for every instance that leaves it off.
 	UserManagement *ClientUserManagement `json:"userManagement,omitempty"`
 }
 
 // ClientUserManagement tells the frontend that accounts exist, and whether
-// channel proposals and node notifications are on.
+// channel proposals and node notifications are on. CompanionLinking says the
+// device-token and companion routes exist: CoreDrive RX shows its login only
+// then, because an older CoreScope answers those paths with the SPA page.
 type ClientUserManagement struct {
 	Enabled          bool `json:"enabled"`
 	ChannelProposals bool `json:"channelProposals,omitempty"`
 	Notifications    bool `json:"notifications,omitempty"`
+	CompanionLinking bool `json:"companionLinking,omitempty"`
 }
 
 // CustomizerClientConfig is the operator-side customizer-modal knobs that

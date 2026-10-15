@@ -30,6 +30,7 @@ type DBStats struct {
 	ObserverUpserts        atomic.Int64
 	WriteErrors            atomic.Int64
 	SignatureDrops         atomic.Int64
+	ClientUnlinkedDropped  atomic.Int64
 	// RelayTouches counts nodes.last_seen refreshes driven by relay
 	// participation rather than an ADVERT (#1598).
 	RelayTouches atomic.Int64
@@ -69,11 +70,13 @@ func (s *DBStats) SnapshotBackfills() map[string]int64 {
 
 // Store wraps the selected native database for packet ingestion.
 type Store struct {
-	backend  dbconfig.Backend
-	db       *sql.DB
-	path     string // compatibility anchor for local file queues; never a database URL
-	stateDir string
-	Stats    DBStats
+	backend          dbconfig.Backend
+	db               *sql.DB
+	path             string // compatibility anchor for local file queues; never a database URL
+	stateDir         string
+	Stats            DBStats
+	plannerStatsAt   atomic.Int64
+	linkedCompanions *linkedCompanionSet
 
 	stmtGetTxByHash            *sql.Stmt
 	stmtInsertTransmission     *sql.Stmt

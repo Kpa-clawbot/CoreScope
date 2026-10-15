@@ -113,7 +113,7 @@ func TestClientConfigAdvertisesChannelProposals(t *testing.T) {
 	a, _ := newTestAuthService(t)
 	a.set.proposals = defaultProposalSettings()
 	srv.auth = a
-	if body := getBody(router, "/api/config/client"); !strings.Contains(body, `"userManagement":{"enabled":true,"channelProposals":true}`) {
+	if body := getBody(router, "/api/config/client"); !strings.Contains(body, `"userManagement":{"enabled":true,"channelProposals":true,"companionLinking":true}`) {
 		t.Fatalf("client config = %s", body)
 	}
 }

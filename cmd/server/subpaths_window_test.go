@@ -2,7 +2,7 @@ package main
 
 // Regression test for issue #1217 — Route Patterns analytics must honor the
 // `?window=` time-window filter (e.g. "1h", "24h", "7d"). Before the fix,
-// computeAnalyticsSubpaths read the full s.spIndex / s.packets regardless of
+// computeAnalyticsSubpaths read the full s.spTxIndex / s.packets regardless of
 // the window, so the chart counts were identical for every window selection.
 //
 // This test seeds two transmissions with distinct multi-hop paths at different
@@ -63,7 +63,7 @@ func TestSubpathsHonorsTimeWindow_StoreLevel(t *testing.T) {
 		t.Fatalf("store.Load failed: %v", err)
 	}
 	// #1008: indexes build in the background after Load(); tests that
-	// read s.spIndex / s.spTxIndex must wait for the ready flag.
+	// read s.spTxIndex must wait for the ready flag.
 	if !store.WaitIndexesReady(5 * time.Second) {
 		t.Fatalf("indexes not ready after 5s")
 	}

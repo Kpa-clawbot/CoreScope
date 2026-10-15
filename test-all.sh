@@ -48,6 +48,7 @@ node tests/unit/test-confidence-indicator.js
 node tests/unit/test-coverage-gate.js
 node tests/unit/test-customizer-v2.js
 node tests/unit/test-drag-manager.js
+node tests/unit/test-e2e-coverage.js
 node tests/unit/test-direct-rf-heard-by.js
 node tests/unit/test-embed-mode-1369.js
 node tests/unit/test-fetch-all-nodes-pagination.js
@@ -101,6 +102,7 @@ node tests/unit/test-issue-1509-nav-active-bg.js
 node tests/unit/test-issue-1518-home-url.js
 node tests/unit/test-issue-1532-live-fullscreen.js
 node tests/unit/test-issue-1562-observers-summary.js
+node tests/unit/test-issue-661-observer-airtime.js
 node tests/unit/test-issue-1563-aggregate-and-inflight.js
 node tests/unit/test-issue-1574-live-map-max-nodes.js
 node tests/unit/test-issue-1606-pagination.js
@@ -146,6 +148,7 @@ node tests/unit/test-issue-2001-map-scope-state.js
 node tests/unit/test-issue-2012-clear-filters-selection.js
 node tests/unit/test-issue-2095-channels-client-state.js
 node tests/unit/test-issue-2097-hop-ambiguity-badge.js
+node tests/unit/test-issue-2098-last-hop-region.js
 node tests/unit/test-live-anims.js
 node tests/unit/test-live-dt-cap-1524.js
 node tests/unit/test-live-legend-helper.js
@@ -156,6 +159,7 @@ node tests/unit/test-map-clustering.js
 node tests/unit/test-mqtt-status-panel.js
 node tests/unit/test-my-repeaters-dashboard.js
 node tests/unit/test-naive-banner-tone.js
+node tests/unit/test-nav-stats-throttle.js
 node tests/unit/test-node-hop-analytics.js
 node tests/unit/test-node-reach-coverage-debounce.js
 node tests/unit/test-node-reach-coverage.js
@@ -172,6 +176,7 @@ node tests/unit/test-packet-filter-time.js
 node tests/unit/test-packet-filter-ux.js
 node tests/unit/test-packet-filter.js
 node tests/unit/test-packets-local-channels.js
+node tests/unit/test-packets-live-channel-filter.js
 node tests/unit/test-packets.js
 node tests/unit/test-panel-corner.js
 node tests/unit/test-path-inspector.js
@@ -184,8 +189,10 @@ node tests/unit/test-perf-render-1258.js
 node tests/unit/test-preflight-xss-gate.js
 node tests/unit/test-pull-to-reconnect-1091.js
 node tests/unit/test-pull-to-reconnect.js
+node tests/unit/test-region-filter-setselected.js
 node tests/unit/test-repeater-metric-scatter.js
 node tests/unit/test-rx-coverage-config-race.js
+node tests/unit/test-rx-coverage-mine.js
 node tests/unit/test-rx-coverage-escape.js
 node tests/unit/test-rx-coverage-noise.js
 node tests/unit/test-rx-coverage-viewport.js

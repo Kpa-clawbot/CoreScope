@@ -32,7 +32,7 @@ window.HopDisplay = (function() {
     const regional = conflicts.filter(c => c.regional);
     const shown = regional.length > 0 ? regional : conflicts;
 
-    let html = `<div class="hop-conflict-header">${escapeHtml(h)} — ${shown.length} candidate${shown.length > 1 ? 's' : ''}${regional.length > 0 ? ' in region' : ' (global fallback)'}</div>`;
+    let html = `<div class="hop-conflict-header">${escapeHtml(h)} — ${shown.length} candidate${shown.length > 1 ? 's' : ''}${regional.length > 0 ? ' in region' : (globalFallback ? ' (global fallback)' : '')}</div>`;
     html += '<div class="hop-conflict-list">';
     for (const c of shown) {
       const name = escapeHtml(c.name || c.pubkey?.slice(0, 16) || '?');
@@ -79,7 +79,7 @@ window.HopDisplay = (function() {
 
     // Badge — only count regional conflicts
     const regionalConflicts = conflicts.filter(c => c.regional);
-    const badgeCount = regionalConflicts.length > 0 ? regionalConflicts.length : (globalFallback ? conflicts.length : 0);
+    const badgeCount = regionalConflicts.length > 0 ? regionalConflicts.length : ((globalFallback || entry.regionSkipped) ? conflicts.length : 0);
     const conflictData = escapeHtml(JSON.stringify({ h, conflicts, globalFallback }));
     const conflictBadge = badgeCount > 1
       ? ` <button class="hop-conflict-btn status-warn" data-conflict='${conflictData}' onclick="event.preventDefault();event.stopPropagation();HopDisplay._showFromBtn(this)" title="${badgeCount} candidates — click for details"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>${badgeCount}</button>`

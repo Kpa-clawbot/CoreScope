@@ -161,21 +161,21 @@ func (s *PacketStore) loadPacketChunk(from, to time.Time, cursor packetLoadCurso
 		cursor = currentCursor
 		current = nil
 	}
+	var id int
+	var raw, hash, first, decoded, recency sql.NullString
+	var route, payload, obsID sql.NullInt64
+	var observer, name, iata, direction, path, stamp, resolved, scope sql.NullString
+	var snr, rssi, score sql.NullFloat64
+	scan := []any{&id, &raw, &hash, &first, &route, &payload, &decoded,
+		&obsID, &observer, &name, &iata, &direction, &snr, &rssi, &score, &path, &stamp}
+	if s.db.hasResolvedPath {
+		scan = append(scan, &resolved)
+	}
+	if s.db.hasScopeName {
+		scan = append(scan, &scope)
+	}
+	scan = append(scan, &recency)
 	for rows.Next() {
-		var id int
-		var raw, hash, first, decoded, recency sql.NullString
-		var route, payload, obsID sql.NullInt64
-		var observer, name, iata, direction, path, stamp, resolved, scope sql.NullString
-		var snr, rssi, score sql.NullFloat64
-		scan := []any{&id, &raw, &hash, &first, &route, &payload, &decoded,
-			&obsID, &observer, &name, &iata, &direction, &snr, &rssi, &score, &path, &stamp}
-		if s.db.hasResolvedPath {
-			scan = append(scan, &resolved)
-		}
-		if s.db.hasScopeName {
-			scan = append(scan, &scope)
-		}
-		scan = append(scan, &recency)
 		if err := rows.Scan(scan...); err != nil {
 			return 0, cursor, err
 		}
@@ -186,27 +186,20 @@ func (s *PacketStore) loadPacketChunk(from, to time.Time, cursor packetLoadCurso
 			current = &loadedPacket{cursor: currentCursor, tx: &StoreTx{
 				ID: id, RawHex: raw.String, Hash: hash.String, FirstSeen: first.String, LatestSeen: first.String,
 				RouteType: nullIntPtr(route), PayloadType: nullIntPtr(payload), DecodedJSON: decoded.String,
-				ScopeName: nullStrPtr(scope), obsKeys: make(map[string]bool), observerSet: make(map[string]bool),
+				ScopeName: nullStrPtr(scope),
 			}, resolved: make(map[string]bool), nodes: make(map[string]bool)}
 			current.bytes = rechargeTx(current.tx)
 		}
 		tx := current.tx
 		if obsID.Valid {
-			key := observer.String + "|" + path.String
-			if tx.obsKeys[key] {
+			if tx.hasObservation(observer.String, path.String) {
 				continue
 			}
 			obs := &StoreObs{ID: int(obsID.Int64), TransmissionID: id,
-				ObserverID: observer.String, ObserverName: name.String, ObserverIATA: iata.String,
-				Direction: direction.String, SNR: nullFloatPtr(snr), RSSI: nullFloatPtr(rssi), Score: nullFloatPtr(score),
+				ObserverID: internStr(observer.String), ObserverName: internStr(name.String), ObserverIATA: internStr(iata.String),
+				Direction: internStr(direction.String), SNR: nullFloatPtr(snr), RSSI: nullFloatPtr(rssi), Score: nullFloatPtr(score),
 				PathJSON: path.String, Timestamp: normalizeTimestamp(stamp.String)}
-			tx.Observations = append(tx.Observations, obs)
-			tx.obsKeys[key] = true
-			if observer.String != "" && !tx.observerSet[observer.String] {
-				tx.observerSet[observer.String] = true
-				tx.UniqueObserverCount++
-			}
-			tx.ObservationCount++
+			tx.addObservation(obs)
 			if obs.Timestamp > tx.LatestSeen {
 				tx.LatestSeen = obs.Timestamp
 			}
@@ -264,7 +257,7 @@ func (s *PacketStore) loadPacketChunk(from, to time.Time, cursor packetLoadCurso
 			observations = make([]*StoreObs, 0, len(tx.Observations))
 			charge = 0
 			for _, obs := range tx.Observations {
-				if !existing.obsKeys[obs.ObserverID+"|"+obs.PathJSON] {
+				if !existing.hasObservation(obs.ObserverID, obs.PathJSON) {
 					observations = append(observations, obs)
 					charge += estimateStoreObsBytes(obs)
 				}
@@ -295,13 +288,7 @@ func (s *PacketStore) loadPacketChunk(from, to time.Time, cursor packetLoadCurso
 		} else {
 			tx = existing
 			for _, obs := range observations {
-				tx.Observations = append(tx.Observations, obs)
-				tx.obsKeys[obs.ObserverID+"|"+obs.PathJSON] = true
-				if obs.ObserverID != "" && !tx.observerSet[obs.ObserverID] {
-					tx.observerSet[obs.ObserverID] = true
-					tx.UniqueObserverCount++
-				}
-				tx.ObservationCount++
+				tx.addObservation(obs)
 				if obs.Timestamp > tx.LatestSeen {
 					tx.LatestSeen = obs.Timestamp
 				}

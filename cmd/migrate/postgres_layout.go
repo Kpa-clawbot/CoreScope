@@ -31,11 +31,14 @@ func postgresLayout(db *sql.DB, kind string, tables []importTable) ([]string, er
 		tableNames = append(tableNames, `'`+strings.ReplaceAll(table.Name, `'`, `''`)+`'`)
 		allowed[table.Name] = true
 	}
-	view := "packets_v"
+	views := []string{"packets_v"}
 	if kind == "accounts" {
-		view = "approved_channels"
+		views = []string{"approved_channels", "linked_companions"}
 	}
-	allowed[view] = true
+	for _, view := range views {
+		allowed[view] = true
+	}
+	viewNames := "'" + strings.Join(views, "','") + "'"
 	relationRows, err := db.Query(`SELECT c.relname,c.relkind::text FROM pg_class c WHERE c.relnamespace=current_schema()::regnamespace AND c.relkind IN ('r','p','v','m','S','f') ORDER BY c.relname`)
 	if err != nil {
 		return nil, err
@@ -79,7 +82,7 @@ func postgresLayout(db *sql.DB, kind string, tables []importTable) ([]string, er
 		`SELECT json_build_array('index',c.relname,pg_get_indexdef(i.indexrelid))::text FROM pg_index i JOIN pg_class c ON c.oid=i.indrelid WHERE c.relnamespace=current_schema()::regnamespace AND c.relname IN (` + names + `)`,
 		`SELECT json_build_array('trigger',c.relname,pg_get_triggerdef(t.oid))::text FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid WHERE NOT t.tgisinternal AND c.relnamespace=current_schema()::regnamespace AND c.relname IN (` + names + `)`,
 		`SELECT json_build_array('policy',c.relname,p.polname,pg_get_expr(p.polqual,p.polrelid),pg_get_expr(p.polwithcheck,p.polrelid))::text FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid WHERE c.relnamespace=current_schema()::regnamespace AND c.relname IN (` + names + `)`,
-		`SELECT json_build_array('view',c.relname,pg_get_viewdef(c.oid))::text FROM pg_class c WHERE c.relnamespace=current_schema()::regnamespace AND c.relkind='v' AND c.relname='` + view + `'`,
+		`SELECT json_build_array('view',c.relname,pg_get_viewdef(c.oid))::text FROM pg_class c WHERE c.relnamespace=current_schema()::regnamespace AND c.relkind='v' AND c.relname IN (` + viewNames + `)`,
 	}
 	var out []string
 	for _, query := range queries {

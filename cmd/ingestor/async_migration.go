@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/dbschema"
@@ -32,10 +33,11 @@ func ensureAsyncMigrationsTable(db *sql.DB, backend dbconfig.Backend) error {
 //
 // Contract (pinned by async_migration_test.go):
 //   - status is `pending_async` IMMEDIATELY after this returns.
-//   - fn runs in a goroutine; on success status becomes `done`, on error or
-//     panic status becomes `failed` and the error is recorded.
+//   - fn runs in a goroutine; on success status becomes `done`. Errors matching
+//     context.Canceled become `cancelled`; other errors and panics become
+//     `failed`. Both interrupted states record the error and completion time.
 //   - Idempotent: if a row with the same name already exists in `done`
-//     state, fn is NOT re-run. If in `failed` or `pending_async` state,
+//     state, fn is NOT re-run. If in `failed`, `cancelled`, or `pending_async`,
 //     fn IS re-scheduled (a previous run may have crashed mid-flight).
 //   - The caller's WaitGroup tracks the goroutine so tests/shutdown can
 //     wait via Store.WaitForAsyncMigrations().
@@ -51,7 +53,7 @@ func (s *Store) RunAsyncMigration(ctx context.Context, name string, fn func(cont
 		if existing == "done" {
 			return nil // already complete, nothing to do
 		}
-		// pending_async or failed → reset and retry.
+		// pending_async, cancelled, or failed → reset and retry.
 		if _, err := s.db.Exec(s.nativeSQL(`
 			UPDATE _async_migrations
 			SET status = 'pending_async', started_at = datetime('now'), ended_at = NULL, error = NULL
@@ -81,16 +83,16 @@ func (s *Store) RunAsyncMigration(ctx context.Context, name string, fn func(cont
 				log.Printf("[async-migration] %q panic recovered: %v", name, r)
 			}
 			if runErr != nil {
-				if _, err := s.db.Exec(s.nativeSQL(`
-					UPDATE _async_migrations
-					SET status = 'failed', ended_at = datetime('now'), error = ?1
-					WHERE name = ?2`, `
-					UPDATE _async_migrations
-					SET status = 'failed', ended_at = to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS'), error = `+s.parameter(1)+`
-					WHERE name = `+s.parameter(2)), runErr.Error(), name); err != nil {
-					log.Printf("[async-migration] failed to record failure for %q: %v", name, err)
+				status, label := "failed", "FAILED"
+				if errors.Is(runErr, context.Canceled) {
+					status, label = "cancelled", "cancelled"
 				}
-				log.Printf("[async-migration] %q FAILED: %v", name, runErr)
+				if _, err := s.db.Exec(s.nativeSQL(`
+					UPDATE _async_migrations SET status = ?1, ended_at = datetime('now'), error = ?2 WHERE name = ?3`, `
+					UPDATE _async_migrations SET status = $1, ended_at = to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS'), error = $2 WHERE name = $3`), status, runErr.Error(), name); err != nil {
+					log.Printf("[async-migration] failed to record %s for %q: %v", status, name, err)
+				}
+				log.Printf("[async-migration] %q %s: %v", name, label, runErr)
 				return
 			}
 			if _, err := s.db.Exec(s.nativeSQL(`
@@ -113,7 +115,7 @@ func (s *Store) RunAsyncMigration(ctx context.Context, name string, fn func(cont
 }
 
 // AsyncMigrationStatus returns the current status of an async migration
-// (one of "pending_async", "done", "failed") or sql.ErrNoRows if no such
+// (one of "pending_async", "done", "cancelled", "failed") or sql.ErrNoRows if no such
 // migration has been registered.
 func (s *Store) AsyncMigrationStatus(name string) (string, error) {
 	if err := ensureAsyncMigrationsTable(s.db, s.Backend()); err != nil {

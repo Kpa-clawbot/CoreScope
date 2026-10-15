@@ -12,9 +12,10 @@ import (
 	"github.com/meshcore-analyzer/dbconfig"
 )
 
-// Version 6 adds non-reusing physical identities. PostgreSQL retains its
-// existing version 5 layout; the five historical SQLite migrations are intact.
-const SQLiteSchemaVersion = 6
+// Version 7 combines upstream companion linking (upstream v6) with this
+// branch's non-reusing identities (its earlier v6). Exact layout validation
+// distinguishes those two historical versions before upgrading either one.
+const SQLiteSchemaVersion = 7
 
 var sqliteIdentities = []struct{ name, columns, body string }{
 	{"users", "id,email,display_name,password_hash,role,status,created_at,activated_at,activated_by,last_login_at,email_bouncing", `(
@@ -23,11 +24,12 @@ var sqliteIdentities = []struct{ name, columns, body string }{
 		status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','active','disabled')),
 		created_at INTEGER NOT NULL, activated_at INTEGER, activated_by INTEGER, last_login_at INTEGER,
 		email_bouncing INTEGER NOT NULL DEFAULT 0)`},
-	{"sessions", "id,token_hash,user_id,csrf_token,created_at,expires_at,last_seen_at,user_agent", `(
+	{"sessions", "id,token_hash,user_id,csrf_token,created_at,expires_at,last_seen_at,user_agent,kind,label,scopes", `(
 		id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT NOT NULL UNIQUE,
 		user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, csrf_token TEXT NOT NULL,
 		created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL,
-		user_agent TEXT NOT NULL DEFAULT '')`},
+		user_agent TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT 'web' CHECK (kind IN ('web','device')),
+		label TEXT NOT NULL DEFAULT '', scopes TEXT NOT NULL DEFAULT '')`},
 	{"audit_log", "id,at,actor_user_id,action,target_user_id,detail", `(
 		id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, actor_user_id INTEGER,
 		action TEXT NOT NULL, target_user_id INTEGER, detail TEXT NOT NULL DEFAULT '{}')`},
@@ -99,8 +101,24 @@ func sqliteObjects(q sqliteSchemaQueryer) (map[string]string, error) {
 
 // Legacy account schemas are defined by the original append-only migrations.
 // Refuse unsupported extensions rather than lose their columns or constraints
-// during a table rebuild. Current version 6 never repeats this migration.
+// during a table rebuild. Current versions never repeat the identity migration.
 func validateSQLiteLayout(q sqliteSchemaQueryer, version int) error {
+	if version == 6 {
+		// This fork shipped identity v6 before upstream shipped companion v6.
+		// Accept only either complete known layout, never a partial mixture.
+		if err := validateSQLiteLayoutVariant(q, 5, 6); err == nil {
+			return nil
+		}
+		return validateSQLiteLayoutVariant(q, 6, 0)
+	}
+	identities := 0
+	if version == SQLiteSchemaVersion {
+		identities = SQLiteSchemaVersion
+	}
+	return validateSQLiteLayoutVariant(q, version, identities)
+}
+
+func validateSQLiteLayoutVariant(q sqliteSchemaQueryer, version, identities int) error {
 	expected, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		return err
@@ -122,9 +140,13 @@ func validateSQLiteLayout(q sqliteSchemaQueryer, version int) error {
 	if err != nil {
 		return err
 	}
-	if version == SQLiteSchemaVersion {
+	if identities != 0 {
 		for _, table := range sqliteIdentities {
-			want["table:"+table.name] = normalizedSQLiteDDL(`CREATE TABLE ` + table.name + table.body)
+			body := table.body
+			if identities == 6 && table.name == "sessions" {
+				body = body[:strings.Index(body, ", kind TEXT")] + ")"
+			}
+			want["table:"+table.name] = normalizedSQLiteDDL(`CREATE TABLE ` + table.name + body)
 		}
 	}
 	got, err := sqliteObjects(q)
@@ -139,7 +161,7 @@ func validateSQLiteLayout(q sqliteSchemaQueryer, version int) error {
 		if !ok {
 			return errors.New("users: incomplete SQLite account schema")
 		}
-		if version == SQLiteSchemaVersion && strings.HasPrefix(name, "table:") {
+		if identities != 0 && strings.HasPrefix(name, "table:") {
 			tableName := strings.TrimPrefix(name, "table:")
 			quoted := strings.Replace(ddl, "CREATETABLE"+strings.ToUpper(tableName)+"(", "CREATETABLE"+sqliteQuote(tableName)+"(", 1)
 			if actual == quoted {
@@ -160,7 +182,7 @@ func validateSQLiteLayout(q sqliteSchemaQueryer, version int) error {
 	return nil
 }
 
-// ApplySQLite atomically upgrades known SQLite account layouts through version 6.
+// ApplySQLite atomically upgrades known SQLite account layouts through version 7.
 // A reserved connection keeps FK settings local; BEGIN IMMEDIATE serializes
 // competing migration/writer processes before any read-modify-write work.
 func ApplySQLite(db *sql.DB) (err error) {
@@ -237,6 +259,15 @@ func ApplySQLite(db *sql.DB) (err error) {
 	}
 	if err := validateSQLiteLayout(conn, v); err != nil {
 		return err
+	}
+	if v == 6 {
+		var linked int
+		if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='companion_links'`).Scan(&linked); err != nil {
+			return err
+		}
+		if linked == 0 {
+			v = 5 // exact native identity v6; it still needs upstream companion v6
+		}
 	}
 	for i := v; i < len(legacyMigrations); i++ {
 		for _, statement := range legacyMigrations[i] {
@@ -381,6 +412,7 @@ func sqliteAccountHighWater(q sqliteSchemaQueryer) (map[string]int64, error) {
 		{"users", "proposals", "proposer_id"}, {"users", "proposals", "reviewer_id"},
 		{"users", "user_settings", "user_id"}, {"users", "notification_prefs", "user_id"},
 		{"users", "notification_watches", "user_id"}, {"users", "notification_state", "user_id"}, {"mail_log", "mail_events", "mail_id"},
+		{"users", "companion_links", "user_id"}, {"users", "link_challenges", "user_id"},
 	} {
 		var n int64
 		if err := q.QueryRowContext(ctx, `SELECT COALESCE(MAX(`+sqliteQuote(ref.column)+`),0) FROM `+sqliteQuote(ref.table)).Scan(&n); err != nil {
@@ -407,4 +439,14 @@ func assertSQLiteReady(q sqliteSchemaQueryer) error {
 		return errors.New("users: SQLite account schema needs a supported upgrade")
 	}
 	return validateSQLiteLayout(q, SQLiteSchemaVersion)
+}
+
+// ValidateSQLiteSourceLayout checks complete historical layouts without changing
+// the source. The importer uses the same strict v6 disambiguation as runtime.
+func ValidateSQLiteSourceLayout(db *sql.DB) error {
+	var count, version int
+	if err := db.QueryRow(`SELECT count(*),COALESCE(MAX(version),0) FROM schema_version`).Scan(&count, &version); err != nil || count != 1 || version < 0 || version > SQLiteSchemaVersion {
+		return errors.New("users: invalid or unsupported SQLite account schema version")
+	}
+	return validateSQLiteLayout(db, version)
 }

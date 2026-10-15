@@ -300,7 +300,11 @@ func importSQLite(ctx context.Context, o importOptions) (importReport, error) {
 	if err := conn.QueryRow(ctx, `SELECT version,ready FROM corescope_schema WHERE kind=$1`, o.Kind).Scan(&version, &ready); err != nil {
 		return report, err
 	}
-	if version != 1 {
+	expectedVersion := users.PostgresSchemaVersion
+	if o.Kind == "telemetry" {
+		expectedVersion = dbschema.Version
+	}
+	if version != expectedVersion {
 		return report, errors.New("unsupported PostgreSQL schema version for import")
 	}
 	var recordedReport importReport
@@ -848,13 +852,17 @@ func finalizeImport(ctx context.Context, databaseURL, kind string) (bool, error)
 		}
 	}
 	var ready bool
-	if err := tx.QueryRow(ctx, `SELECT ready FROM corescope_schema WHERE kind=$1 AND version=1`, kind).Scan(&ready); err != nil {
+	version := users.PostgresSchemaVersion
+	if kind == "telemetry" {
+		version = dbschema.Version
+	}
+	if err := tx.QueryRow(ctx, `SELECT ready FROM corescope_schema WHERE kind=$1 AND version=$2`, kind, version).Scan(&ready); err != nil {
 		return false, errors.New("missing or unsupported readiness marker")
 	}
 	if ready {
 		return false, nil
 	}
-	result, err := tx.Exec(ctx, `UPDATE corescope_schema SET ready=true WHERE kind=$1 AND version=1`, kind)
+	result, err := tx.Exec(ctx, `UPDATE corescope_schema SET ready=true WHERE kind=$1 AND version=$2`, kind, version)
 	if err != nil {
 		return false, err
 	}

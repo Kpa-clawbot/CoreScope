@@ -111,6 +111,7 @@
       field('emailPw', 'Current password', 'password', 'current-password') +
       submitBtn('Change address') + msgBox('emailMsg') + '</form>' +
       '<h3>Devices</h3><ul class="account-sessions" id="sessList"></ul>' + msgBox('sessMsg') +
+      '<h3>Companions</h3><ul class="account-sessions" id="compList"></ul>' + msgBox('compMsg') +
       (window.CSProposals && window.CSProposals.enabled() ? '<h3>My proposals</h3><div id="propList"></div>' + msgBox('propMsg') : '') +
       (window.CSNotify && window.CSNotify.enabled() ? '<h3 id="notifications">Notifications</h3><div id="notifySection"></div>' + msgBox('notifyMsg') : '') +
       (window.CSSettingsSync ? '<h3>Settings sync</h3><div id="syncSection"></div>' : '') +
@@ -123,12 +124,40 @@
       submitBtn('Delete my account', true) + msgBox('delMsg') + '</form>');
   }
 
+  // A CoreDrive RX device token (kind "device") shows its label and a marker;
+  // a browser session its user agent. Both are revoked with the same button.
   function sessionsHtml(list) {
     var html = '';
     (list || []).forEach(function (s) {
-      html += '<li><span>' + escapeHtml(s.userAgent || 'Unknown device') + '<br><small>last seen ' + escapeHtml(fmtDate(s.lastSeenAt)) + '</small></span>' +
+      var device = s.kind === 'device';
+      var name = device ? 'CoreDrive RX' + (s.label ? ' – ' + s.label : '') : (s.userAgent || 'Unknown device');
+      html += '<li' + (device ? ' data-kind="device"' : '') + '><span>' + escapeHtml(name) +
+        (device ? ' <span class="um-chip um-chip-device">app</span>' : '') +
+        '<br><small>last seen ' + escapeHtml(fmtDate(s.lastSeenAt)) + '</small></span>' +
         (s.current ? '<span class="um-chip">this device</span>'
                    : '<button type="button" class="account-btn account-btn-secondary" data-sess="' + escapeHtml(String(s.id)) + '">Log out</button>') + '</li>';
+    });
+    return html;
+  }
+
+  function shortKey(pk) { return String(pk || '').slice(0, 12) + '…'; }
+
+  // Companions linked to this account (CoreDrive RX links them by signing a
+  // challenge with the companion's key). Private to the owner.
+  function companionsHtml(list) {
+    if (!list || !list.length) {
+      return '<li class="account-empty" id="compEmpty"><span>No companions linked yet. ' +
+        'To link one, log in to this site from the CoreDrive RX app while it is connected to your companion; ' +
+        'it then shows up here.</span></li>';
+    }
+    var html = '';
+    list.forEach(function (c) {
+      var name = c.name || shortKey(c.pubkey);
+      html += '<li><span>' + escapeHtml(name) + ' <small><code>' + escapeHtml(shortKey(c.pubkey)) + '</code></small>' +
+        '<br><small>linked ' + escapeHtml(fmtDate(c.linkedAt)) + ' · last seen ' +
+        escapeHtml(c.lastSeenAt ? fmtDate(c.lastSeenAt) : 'never') + '</small></span>' +
+        '<button type="button" class="account-btn account-btn-secondary" data-unlink="' + escapeHtml(c.pubkey) +
+        '" aria-label="Unlink ' + escapeHtml(name) + '">Unlink</button></li>';
     });
     return html;
   }
@@ -348,6 +377,26 @@
         }).catch(function () { CSAuth.say('sessMsg', 'Network error, try again.', false); });
       });
       loadSessions();
+
+      function loadCompanions() {
+        return CSAuth.request('GET', '/api/account/companions').then(function (r) {
+          var list = document.getElementById('compList');
+          if (!list) return;
+          if (!r.ok) { CSAuth.say('compMsg', CSAuth.errText(r), false); return; }
+          list.innerHTML = companionsHtml(r.data);
+        }).catch(function () { CSAuth.say('compMsg', 'Network error, try again.', false); });
+      }
+      document.getElementById('compList').addEventListener('click', function (e) {
+        var pk = e.target && e.target.getAttribute && e.target.getAttribute('data-unlink');
+        if (!pk) return;
+        if (!window.confirm('Unlink this companion? Its coverage no longer counts as yours. ' +
+          'Link it again by logging in from CoreDrive RX.')) return;
+        return CSAuth.request('DELETE', '/api/account/companions/' + encodeURIComponent(pk)).then(function (r) {
+          CSAuth.say('compMsg', r.ok ? 'Companion unlinked.' : CSAuth.errText(r), r.ok);
+          loadCompanions();
+        }).catch(function () { CSAuth.say('compMsg', 'Network error, try again.', false); });
+      });
+      loadCompanions();
     }
   };
 
@@ -371,5 +420,5 @@
   });
 
   registerPage('account', { init: init, destroy: function () {} });
-  window.CSAccount = { _test: { profileHtml: profileHtml, sessionsHtml: sessionsHtml, renewLinkHtml: renewLinkHtml, views: views, checkMailHtml: checkMailHtml } };
+  window.CSAccount = { _test: { profileHtml: profileHtml, sessionsHtml: sessionsHtml, companionsHtml: companionsHtml, renewLinkHtml: renewLinkHtml, views: views, checkMailHtml: checkMailHtml } };
 })();

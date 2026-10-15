@@ -175,36 +175,36 @@ func loginFailReason(passwordOK bool, st users.Status) string {
 	return "disabled"
 }
 
-func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	a := s.auth
-	var req loginRequest
-	if !decodeJSON(w, r, &req) {
-		return
-	}
-	email, emailErr := users.NormalizeEmail(req.Email)
+// verifyLogin is the credential check shared by /api/auth/login and
+// /api/auth/device-token: rate limits per IP and per address, the
+// constant-cost answer for unknown addresses, the failure audit row and
+// the config-admin promotion. It returns the user, or nil after writing
+// the answer.
+func (a *authService) verifyLogin(w http.ResponseWriter, r *http.Request, rawEmail, password string) *users.User {
+	email, emailErr := users.NormalizeEmail(rawEmail)
 	key := "email:" + email
 	if emailErr != nil {
 		key = "email:invalid"
 	}
 	if !a.allow(w, r, a.login, key) {
-		return
+		return nil
 	}
 	var u *users.User
 	if emailErr == nil {
 		u, _ = a.st.GetByEmail(email)
 	}
 	if u == nil {
-		users.BurnPasswordCheck(req.Password)
+		users.BurnPasswordCheck(password)
 		writeError(w, http.StatusUnauthorized, msgBadLogin)
-		return
+		return nil
 	}
-	ok, err := users.VerifyPassword(u.PasswordHash, req.Password)
+	ok, err := users.VerifyPassword(u.PasswordHash, password)
 	if err != nil || !ok || u.Status != users.StatusActive {
 		writeError(w, http.StatusUnauthorized, msgBadLogin)
 		// In the background after the answer is decided, so the write never
 		// changes response timing.
 		a.auditAsync(nil, "user.login.failed", idPtr(u.ID), map[string]string{"reason": loginFailReason(err == nil && ok, u.Status)})
-		return
+		return nil
 	}
 	// Config wins: an address in adminEmails is always admin.
 	if a.isConfigAdmin(u.Email) && u.Role != users.RoleAdmin {
@@ -213,26 +213,87 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			a.audit(nil, "user.role.config", idPtr(u.ID), map[string]string{"role": "admin"})
 		}
 	}
+	return u
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	a := s.auth
+	var req loginRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	u := a.verifyLogin(w, r, req.Email, req.Password)
+	if u == nil {
+		return
+	}
 	if a.startSession(w, r, u) {
 		a.auditAsync(nil, "user.login", idPtr(u.ID), nil)
 	}
 }
 
-func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(sessionCookieName); err == nil && c.Value != "" {
-		_ = s.auth.st.DeleteSessionByToken(c.Value)
+// handleDeviceToken issues a CoreDrive RX device token. No Origin check:
+// the token is returned in the body and nothing is stored in a browser,
+// so login CSRF does not apply, and RX may run on another origin.
+func (s *Server) handleDeviceToken(w http.ResponseWriter, r *http.Request) {
+	a := s.auth
+	var req deviceTokenRequest
+	if !decodeJSON(w, r, &req) {
+		return
 	}
-	s.auth.clearSessionCookie(w)
+	u := a.verifyLogin(w, r, req.Email, req.Password)
+	if u == nil {
+		return
+	}
+	raw, sess, err := a.st.CreateDeviceSession(u.ID, req.DeviceName, []string{deviceScopeRX}, r.UserAgent())
+	if err != nil {
+		log.Printf("[users] device token for user #%d: %v", u.ID, err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	_ = a.st.TouchLogin(u.ID)
+	writeJSON(w, deviceTokenResponse{Token: raw, ExpiresAt: rfc3339(sess.ExpiresAt),
+		User: deviceTokenUser{ID: u.ID, DisplayName: u.DisplayName}})
+	a.auditAsync(nil, "user.login", idPtr(u.ID), map[string]string{"via": "device", "device": sess.Label})
+}
+
+// handleLogout ends the caller's session: with a bearer header it revokes
+// that device token, otherwise it ends the cookie session (origin-checked,
+// as before).
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	a := s.auth
+	if tok, ok := bearerToken(r); ok {
+		_, sess, code := a.bearerUser(r, tok)
+		if code != 0 {
+			writeBearerFail(w, code)
+			return
+		}
+		if err := a.st.DeleteSession(sess.UserID, sess.ID); err != nil && !errors.Is(err, users.ErrNotFound) {
+			log.Printf("[users] revoke device session #%d: %v", sess.ID, err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		writeJSON(w, okResponse{OK: true})
+		return
+	}
+	if !a.originOK(r) {
+		writeError(w, http.StatusForbidden, "request origin not allowed")
+		return
+	}
+	if c, err := r.Cookie(sessionCookieName); err == nil && c.Value != "" {
+		_ = a.st.DeleteSessionByToken(c.Value)
+	}
+	a.clearSessionCookie(w)
 	writeJSON(w, okResponse{OK: true})
 }
 
-func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
-	u, sess := s.auth.currentUser(w, r)
-	if u == nil {
-		writeError(w, http.StatusUnauthorized, "not logged in")
-		return
+// handleMe answers the caller; a device token gets no CSRF token (it never
+// needs one).
+func (s *Server) handleMe(w http.ResponseWriter, _ *http.Request, u *users.User, sess *users.Session) {
+	me := meFrom(u, sess)
+	if sess.Kind == users.SessionKindDevice {
+		me.CSRFToken = ""
 	}
-	writeJSON(w, meFrom(u, sess))
+	writeJSON(w, me)
 }
 
 func (s *Server) handleForgot(w http.ResponseWriter, r *http.Request) {

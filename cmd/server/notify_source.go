@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -16,7 +17,8 @@ type notifySource interface {
 	lastHeard(pubkeys []string) (map[string]time.Time, time.Duration) // and how long the store lock was held
 	lastRelayed(pubkeys []string) map[string]time.Time
 	observers() ([]notifyObserver, error)
-	newestPacket() time.Time // zero when the store holds no packet
+	newestPacket() time.Time       // zero when the store holds no packet
+	externalFeed() ([]byte, error) // the externalAlerts feed body (#2177); only called when configured
 }
 
 type serverNotifySource struct{ s *Server }
@@ -65,6 +67,12 @@ func (src serverNotifySource) newestPacket() time.Time {
 		return time.Time{}
 	}
 	return src.s.store.NewestFirstSeen()
+}
+
+var externalFeedClient = &http.Client{Timeout: externalFeedTimeout}
+
+func (src serverNotifySource) externalFeed() ([]byte, error) {
+	return fetchExternalFeed(externalFeedClient, src.s.auth.set.notify.external.url)
 }
 
 func (src serverNotifySource) observers() ([]notifyObserver, error) {

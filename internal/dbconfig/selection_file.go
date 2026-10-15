@@ -127,7 +127,17 @@ func ReadSelection(path string) (Selection, error) {
 // OpenSelection returns a shared local lease held until service shutdown. On
 // any error, including an absent record, no lease remains to deadlock adoption.
 func OpenSelection(path string) (Selection, io.Closer, error) {
-	lease, err := acquireSelectionLease(path, false)
+	return openSelectionLease(path, false)
+}
+
+// OpenSelectionForMaintenance excludes running services and selection changes
+// during an offline schema upgrade. It never creates or rewrites the record.
+func OpenSelectionForMaintenance(path string) (Selection, io.Closer, error) {
+	return openSelectionLease(path, true)
+}
+
+func openSelectionLease(path string, exclusive bool) (Selection, io.Closer, error) {
+	lease, err := acquireSelectionLease(path, exclusive)
 	if err != nil {
 		return Selection{}, nil, err
 	}

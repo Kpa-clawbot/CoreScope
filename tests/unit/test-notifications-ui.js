@@ -196,6 +196,13 @@ test('section escapes names and shows events, watches and limits', () => {
   assert(N.sectionHtml(STATE()).indexOf('You watch no nodes yet') !== -1);
 });
 
+test('node.external is labelled with the instance label and escaped', () => {
+  const N = load().N;
+  const html = N.sectionHtml(STATE({ availableEvents: ['node.offline', 'node.external'], events: ['node.external'],
+    externalLabel: '<b>Coverage</b>' }));
+  assert(html.indexOf('data-notify-event="node.external" checked> A watched node gets a &lt;b&gt;Coverage&lt;/b&gt; alert or it clears') !== -1, html);
+});
+
 test('Save sends enabled and the checked events; the answer redraws', async () => {
   const env = load({ routes: (m) => ({ ok: true, status: 200, data: m === 'GET' ? STATE() : STATE({ enabled: false, events: ['node.battery'] }) }) });
   await env.N.mountSection(env.document.getElementById('notifySection'), 'notifyMsg');

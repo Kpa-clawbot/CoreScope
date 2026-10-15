@@ -65,7 +65,7 @@ func TestCoverageQueriesKeepValueSpecificPlans(t *testing.T) {
 		query         func(bbox) ([]coverageRow, error)
 	}{
 		{"node", "%WHERE heard_key IN%", func(b bbox) ([]coverageRow, error) { return srv.queryCoverageRows(keys[0], b) }},
-		{"dashboard", "%WHERE lat BETWEEN%", func(b bbox) ([]coverageRow, error) { return srv.queryCoverageFiltered(keys[0], "", 0, b) }},
+		{"dashboard", "%WHERE lat BETWEEN%", func(b bbox) ([]coverageRow, error) { return srv.queryCoverageFiltered(keys[0], "", nil, 0, b) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var first []coverageRow

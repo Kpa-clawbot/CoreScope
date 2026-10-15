@@ -116,9 +116,6 @@ func validateSource(db *sql.DB, kind string, tables []importTable) error {
 		for _, col := range table.Columns {
 			cols[col.Name] = true
 		}
-		if kind == "accounts" && table.Name == "mail_events" && accountVersion < users.SQLiteSchemaVersion {
-			delete(cols, "id")
-		}
 		allowed[table.Name] = cols
 	}
 	if kind == "accounts" {
@@ -152,7 +149,6 @@ func validateSource(db *sql.DB, kind string, tables []importTable) error {
 		return err
 	}
 	rows.Close()
-	actual := map[string]map[string]bool{}
 	for _, o := range objects {
 		if o.kind == "table" && !strings.HasPrefix(strings.ToUpper(strings.Join(strings.Fields(o.sql), " ")), "CREATE TABLE ") {
 			return fmt.Errorf("unsupported nonordinary source table %q", o.name)
@@ -168,9 +164,7 @@ func validateSource(db *sql.DB, kind string, tables []importTable) error {
 		if err != nil {
 			return err
 		}
-		actual[o.name] = map[string]bool{}
 		for _, col := range have {
-			actual[o.name][col.Name] = true
 			if !cols[col.Name] {
 				if kind == "telemetry" && o.name == "observations" && col.Name == "observer_id" {
 					return errors.New("legacy v2 observer_id layout requires an offline upgrade with the last SQLite release before importing")
@@ -182,41 +176,8 @@ func validateSource(db *sql.DB, kind string, tables []importTable) error {
 	if kind == "telemetry" {
 		return legacy.CheckLegacySource(db)
 	}
-	if accountVersion == users.SQLiteSchemaVersion {
-		return users.AssertSQLiteReady(db)
-	}
-	version := accountVersion
-	// A declared version must contain its complete historical shape. Otherwise
-	// treating an absent table as empty could conceal a damaged account source.
-	expected, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
+	if err := users.ValidateSQLiteSourceLayout(db); err != nil {
 		return err
-	}
-	defer expected.Close()
-	expected.SetMaxOpenConns(1)
-	for _, migration := range users.LegacyMigrations()[:version] {
-		for _, stmt := range migration {
-			if _, err := expected.Exec(stmt); err != nil {
-				return err
-			}
-		}
-	}
-	for _, table := range tables {
-		columns, err := sqliteColumns(expected, table.Name)
-		if err != nil {
-			return err
-		}
-		if len(columns) == 0 {
-			if _, exists := actual[table.Name]; exists {
-				return fmt.Errorf("account table %s is newer than its declared schema version", table.Name)
-			}
-			continue
-		}
-		for _, col := range columns {
-			if !actual[table.Name][col.Name] {
-				return fmt.Errorf("account schema version %d is missing %s.%s", version, table.Name, col.Name)
-			}
-		}
 	}
 	var integrity string
 	if err := db.QueryRow(`PRAGMA quick_check`).Scan(&integrity); err != nil {
@@ -233,34 +194,11 @@ func normalizeSource(db *sql.DB, kind, rawPath string, tables []importTable) err
 		return err
 	}
 	if kind == "accounts" {
-		var version int
-		if err := db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil {
-			return err
-		}
-		if version == users.SQLiteSchemaVersion {
-			return nil
-		}
-		for i, migration := range users.LegacyMigrations()[version:] {
-			tx, err := db.Begin()
-			if err != nil {
-				return err
-			}
-			for _, stmt := range migration {
-				if _, err := tx.Exec(stmt); err != nil {
-					tx.Rollback()
-					return err
-				}
-			}
-			if _, err := tx.Exec(`UPDATE schema_version SET version=?`, version+i+1); err != nil {
-				tx.Rollback()
-				return err
-			}
-			if err := tx.Commit(); err != nil {
-				return err
-			}
-		}
-		return nil
+		// Only the private snapshot is normalized; exact known old/native v6
+		// layouts upgrade through the same lossless writer migration as runtime.
+		return users.ApplySQLite(db)
 	}
+
 	if err := legacy.Normalize(db, nil); err != nil {
 		return err
 	}

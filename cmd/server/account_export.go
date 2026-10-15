@@ -13,14 +13,15 @@ import (
 // accountExport is GET /api/account/export: everything users.db holds about
 // the logged-in account (docs/specs/2026-10-08-account-export-and-users-backup-design.md).
 // Credentials are left out on purpose: the password hash, session, link and
-// unsubscribe tokens; of a pending email change only the new address is
-// exported. Other accounts appear as ids only (activatedBy, audit).
+// unsubscribe tokens and companion link challenges; of a pending email
+// change only the new address is exported. Other accounts appear as ids only (activatedBy, audit).
 type accountExport struct {
 	FormatVersion int                 `json:"formatVersion"`
 	ExportedAt    string              `json:"exportedAt"`
 	Instance      string              `json:"instance"`
 	Profile       exportProfile       `json:"profile"`
 	Sessions      []exportSession     `json:"sessions"`
+	Companions    []exportCompanion   `json:"companions"`
 	Settings      *exportSettings     `json:"settings"`
 	Proposals     []exportProposal    `json:"proposals"`
 	Notifications exportNotifications `json:"notifications"`
@@ -43,9 +44,17 @@ type exportProfile struct {
 }
 
 type exportSession struct {
+	Kind       string `json:"kind"`            // "web" or "device"
+	Label      string `json:"label,omitempty"` // device name
 	CreatedAt  string `json:"createdAt"`
 	LastSeenAt string `json:"lastSeenAt"`
 	UserAgent  string `json:"userAgent,omitempty"`
+}
+
+type exportCompanion struct {
+	Pubkey   string `json:"pubkey"`
+	Name     string `json:"name"`
+	LinkedAt string `json:"linkedAt"`
 }
 
 type exportSettings struct {
@@ -106,6 +115,7 @@ func (a *authService) buildAccountExport(u *users.User, now time.Time) (*account
 			CreatedAt: rfc3339(u.CreatedAt), LastLoginAt: rfc3339Ptr(u.LastLoginAt), EmailBouncing: u.EmailBouncing,
 			ActivatedAt: rfc3339Ptr(u.ActivatedAt), ActivatedBy: u.ActivatedBy},
 		Sessions:      []exportSession{},
+		Companions:    []exportCompanion{},
 		Proposals:     []exportProposal{},
 		Notifications: exportNotifications{Watches: []exportWatch{}},
 		Audit:         []exportAuditEntry{},
@@ -123,7 +133,14 @@ func (a *authService) buildAccountExport(u *users.User, now time.Time) (*account
 		return nil, fmt.Errorf("sessions: %w", err)
 	}
 	for _, s := range sessions {
-		x.Sessions = append(x.Sessions, exportSession{CreatedAt: rfc3339(s.CreatedAt), LastSeenAt: rfc3339(s.LastSeenAt), UserAgent: s.UserAgent})
+		x.Sessions = append(x.Sessions, exportSession{Kind: s.Kind, Label: s.Label, CreatedAt: rfc3339(s.CreatedAt), LastSeenAt: rfc3339(s.LastSeenAt), UserAgent: s.UserAgent})
+	}
+	links, err := a.st.ListCompanionLinks(u.ID)
+	if err != nil {
+		return nil, fmt.Errorf("companions: %w", err)
+	}
+	for _, l := range links {
+		x.Companions = append(x.Companions, exportCompanion{Pubkey: l.Pubkey, Name: l.Name, LinkedAt: rfc3339(l.LinkedAt)})
 	}
 	rec, err := a.st.SettingsRecordFor(u.ID)
 	if err != nil {

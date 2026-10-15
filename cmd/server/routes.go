@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"math"
 	"net/http"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -68,6 +70,17 @@ type Server struct {
 	// queries against a 4-connection pool.
 	statsSF singleflight.Group
 
+	// /api/nodes responses, encoded, keyed by the canonical query string and
+	// kept for nodesResponseTTL. Identical queries in that window share one
+	// build (nodesSF collapses concurrent misses). setGeoFilter drops them.
+	nodesCacheMu    sync.Mutex
+	nodesCache      map[string]nodesCacheEntry
+	nodesCacheBytes int // sum of len(body) over nodesCache; bounded by nodesCacheMaxBytes
+	nodesSF         singleflight.Group
+	// Test-only hook fired each time handleNodes builds a response (not when
+	// one is served from cache). Nil in production. See nodes_response_cache_test.go.
+	nodesComputeHook func()
+
 	// Guards s.cfg.GeoFilter — read by ingest/handler goroutines, written by PUT handler
 	cfgMu sync.RWMutex
 
@@ -90,6 +103,10 @@ type Server struct {
 	scopeAuditCache    map[string]*ScopeAuditResponse
 	scopeAuditCachedAt map[string]time.Time
 	scopeAuditSF       singleflight.Group
+	// #2142: the transport view (?mode=transport), cached per window with the
+	// same TTLs; computed under scopeAuditSF with a "transport|" key.
+	scopeTransportCache    map[string]*ScopeTransportResponse
+	scopeTransportCachedAt map[string]time.Time
 
 	// #1975: /api/scope-audit window cache and its single-flight guard, so a
 	// burst of viewers on a cold cache recomputes the network-wide scan once
@@ -218,8 +235,10 @@ func (s *Server) getGeoFilter() *GeoFilterConfig {
 // setGeoFilter atomically swaps the geo_filter config; used by PUT /api/config/geo-filter.
 func (s *Server) setGeoFilter(gf *GeoFilterConfig) {
 	s.cfgMu.Lock()
-	defer s.cfgMu.Unlock()
 	s.cfg.GeoFilter = gf
+	s.cfgMu.Unlock()
+	// Cached /api/nodes pages were filtered with the old polygon.
+	s.invalidateNodesCache()
 }
 
 // RegisterRoutes sets up all HTTP routes on the given router.
@@ -256,6 +275,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/config/cache", s.handleConfigCache).Methods("GET")
 	r.HandleFunc("/api/config/client", s.handleConfigClient).Methods("GET")
 	r.HandleFunc("/api/config/regions", s.handleConfigRegions).Methods("GET")
+	r.HandleFunc("/api/config/region-quick-picks", s.handleConfigRegionQuickPicks).Methods("GET")
 	r.HandleFunc("/api/config/theme", s.handleConfigTheme).Methods("GET")
 	r.HandleFunc("/api/config/map", s.handleConfigMap).Methods("GET")
 	r.HandleFunc("/api/config/geo-filter", s.handleConfigGeoFilter).Methods("GET")
@@ -507,28 +527,29 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 	}
 	pathTrust := s.cfg.GetPathTrust()
 	writeJSON(w, ClientConfigResponse{
-		Roles:               s.cfg.Roles,
-		HealthThresholds:    s.cfg.GetHealthThresholds().ToClientMs(),
-		Map:                 s.cfg.Map,
-		SnrThresholds:       s.cfg.SnrThresholds,
-		DistThresholds:      s.cfg.DistThresholds,
-		MaxHopDist:          s.cfg.MaxHopDist,
-		Limits:              s.cfg.Limits,
-		PerfSlowMs:          s.cfg.PerfSlowMs,
-		WsReconnectMs:       s.cfg.WsReconnectMs,
-		CacheInvalidateMs:   s.cfg.CacheInvalidMs,
-		ExternalUrls:        s.cfg.ExternalUrls,
-		PropagationBufferMs: float64(s.cfg.PropagationBufferMs()),
-		LiveMapMaxNodes:     s.cfg.LiveMapMaxNodes(),
-		Timestamps:          s.cfg.GetTimestampConfig(),
-		DebugAffinity:       s.cfg.DebugAffinity,
-		MapDarkTileProvider: s.cfg.MapDarkTileProvider,
-		Tiles:               s.cfg.Tiles,
-		Customizer:          CustomizerClientConfig{DisabledTabs: disabledTabs},
-		ClientRxCoverage:    s.cfg.ClientRxCoverageEnabled(),
-		ClientRfSamples:     s.cfg.ClientRfSamplesEnabled(),
-		PathTrust:           &pathTrust,
-		UserManagement:      s.clientUserManagement(),
+		Roles:                          s.cfg.Roles,
+		HealthThresholds:               s.cfg.GetHealthThresholds().ToClientMs(),
+		Map:                            s.cfg.Map,
+		SnrThresholds:                  s.cfg.SnrThresholds,
+		DistThresholds:                 s.cfg.DistThresholds,
+		MaxHopDist:                     s.cfg.MaxHopDist,
+		Limits:                         s.cfg.Limits,
+		PerfSlowMs:                     s.cfg.PerfSlowMs,
+		WsReconnectMs:                  s.cfg.WsReconnectMs,
+		CacheInvalidateMs:              s.cfg.CacheInvalidMs,
+		ExternalUrls:                   s.cfg.ExternalUrls,
+		PropagationBufferMs:            float64(s.cfg.PropagationBufferMs()),
+		LiveMapMaxNodes:                s.cfg.LiveMapMaxNodes(),
+		Timestamps:                     s.cfg.GetTimestampConfig(),
+		DebugAffinity:                  s.cfg.DebugAffinity,
+		MapDarkTileProvider:            s.cfg.MapDarkTileProvider,
+		Tiles:                          s.cfg.Tiles,
+		Customizer:                     CustomizerClientConfig{DisabledTabs: disabledTabs},
+		ClientRxCoverage:               s.cfg.ClientRxCoverageEnabled(),
+		ClientRfSamples:                s.cfg.ClientRfSamplesEnabled(),
+		ClientRxRequireLinkedCompanion: s.auth != nil && s.cfg.ClientRxRequireLinkedCompanionSet(),
+		PathTrust:                      &pathTrust,
+		UserManagement:                 s.clientUserManagement(),
 	})
 }
 
@@ -536,7 +557,7 @@ func (s *Server) clientUserManagement() *ClientUserManagement {
 	if s.auth == nil {
 		return nil
 	}
-	return &ClientUserManagement{Enabled: true, ChannelProposals: s.auth.set.proposals.enabled, Notifications: s.auth.notify != nil}
+	return &ClientUserManagement{Enabled: true, ChannelProposals: s.auth.set.proposals.enabled, Notifications: s.auth.notify != nil, CompanionLinking: true}
 }
 
 func (s *Server) handleConfigAreas(w http.ResponseWriter, r *http.Request) {
@@ -591,6 +612,15 @@ func (s *Server) handleConfigRegions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, regions)
+}
+
+// RegionQuickPicksResponse is GET /api/config/region-quick-picks.
+type RegionQuickPicksResponse struct {
+	QuickPicks []RegionQuickPick `json:"quickPicks"`
+}
+
+func (s *Server) handleConfigRegionQuickPicks(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, RegionQuickPicksResponse{QuickPicks: s.cfg.NormalizedRegionQuickPicks()})
 }
 
 func (s *Server) handleConfigTheme(w http.ResponseWriter, r *http.Request) {
@@ -1427,7 +1457,100 @@ func (s *Server) handleDecode(w http.ResponseWriter, r *http.Request) {
 
 // --- Node Handlers ---
 
+// nodesResponseTTL is how long an /api/nodes response is reused for an
+// identical query. Relay and usefulness data under it is already cached for
+// 15 s (#1257), and the client keeps its own node list for 90 s.
+const nodesResponseTTL = 15 * time.Second
+
+// nodesCacheMaxBytes bounds the encoded /api/nodes responses held at once. A
+// full-list response is a few MB, so an entry count alone would not bound the
+// heap if many distinct queries arrived inside one TTL.
+const nodesCacheMaxBytes = 32 << 20
+
+type nodesCacheEntry struct {
+	body []byte
+	exp  time.Time
+}
+
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
+	// Encode() sorts by key, so parameter order does not split the cache. The
+	// blacklist and hidden-prefix generations are part of the key so a change
+	// to either misses the cache at once (same pattern as #1629).
+	key := fmt.Sprintf("%d|%d|%s", s.cfg.BlacklistGeneration(), s.cfg.HiddenNamePrefixesGeneration(), r.URL.Query().Encode())
+	if body, ok := s.cachedNodesResponse(key); ok {
+		writeJSONBytes(w, body)
+		return
+	}
+	v, err, _ := s.nodesSF.Do(key, func() (interface{}, error) {
+		if body, ok := s.cachedNodesResponse(key); ok {
+			return body, nil
+		}
+		if s.nodesComputeHook != nil {
+			s.nodesComputeHook()
+		}
+		resp, err := s.buildNodesResponse(r)
+		if err != nil {
+			return nil, err
+		}
+		body, err := json.Marshal(resp)
+		if err != nil {
+			return nil, err
+		}
+		body = append(body, '\n') // byte-identical to json.Encoder output
+		s.storeNodesResponse(key, body)
+		return body, nil
+	})
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSONBytes(w, v.([]byte))
+}
+
+func (s *Server) cachedNodesResponse(key string) ([]byte, bool) {
+	s.nodesCacheMu.Lock()
+	defer s.nodesCacheMu.Unlock()
+	e, ok := s.nodesCache[key]
+	if !ok || time.Now().After(e.exp) {
+		return nil, false
+	}
+	return e.body, true
+}
+
+func (s *Server) storeNodesResponse(key string, body []byte) {
+	if len(body) > nodesCacheMaxBytes/4 {
+		return // one oversized response must not evict everything else
+	}
+	s.nodesCacheMu.Lock()
+	defer s.nodesCacheMu.Unlock()
+	now := time.Now()
+	for k, e := range s.nodesCache { // drop expired entries first
+		if now.After(e.exp) {
+			s.nodesCacheBytes -= len(e.body)
+			delete(s.nodesCache, k)
+		}
+	}
+	if old, ok := s.nodesCache[key]; ok {
+		s.nodesCacheBytes -= len(old.body)
+	}
+	if s.nodesCache == nil || len(s.nodesCache) >= maxCacheEntries || s.nodesCacheBytes+len(body) > nodesCacheMaxBytes {
+		s.nodesCache = make(map[string]nodesCacheEntry)
+		s.nodesCacheBytes = 0
+	}
+	s.nodesCache[key] = nodesCacheEntry{body: body, exp: now.Add(nodesResponseTTL)}
+	s.nodesCacheBytes += len(body)
+}
+
+// invalidateNodesCache drops every cached /api/nodes response.
+func (s *Server) invalidateNodesCache() {
+	s.nodesCacheMu.Lock()
+	s.nodesCache = nil
+	s.nodesCacheBytes = 0
+	s.nodesCacheMu.Unlock()
+}
+
+// buildNodesResponse builds one /api/nodes page from the request's query.
+func (s *Server) buildNodesResponse(r *http.Request) (NodeListResponse, error) {
 	q := r.URL.Query()
 	limit := queryLimit(r, 50, s.cfg.ListLimits.NodesMax)
 	offset := queryInt(r, "offset", 0)
@@ -1445,8 +1568,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	nodes, total, counts, err := s.db.GetNodes(nq)
 	if err != nil {
-		writeError(w, 500, err.Error())
-		return
+		return NodeListResponse{}, err
 	}
 	// Whether more rows exist is decided HERE, against the raw SQL page and the
 	// real COUNT(*), because both other candidate signals are destroyed further
@@ -1503,11 +1625,14 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		// traffic into the composite (the other three axes are already
 		// max-normalized; #1762 review).
 		maxUseful := maxFloat(usefulMap)
+		// #1879: which rule places each node for ?region=. Atomic snapshot.
+		placements := s.store.GetNodeRegionPlacements()
 		for _, node := range nodes {
 			if pk, ok := node["public_key"].(string); ok {
 				EnrichNodeWithHashSize(node, hashInfo[pk])
 				mbEntry, _ := s.store.GetMultibyteCapFor(pk)
 				EnrichNodeWithMultiByte(node, mbEntry)
+				node["region_placement"] = RegionPlacementFor(placements, pk)
 				if role, _ := node["role"].(string); role == "repeater" || role == "room" {
 					info, _ := lookupRelayInfo(relayMap, pk)
 					info.WindowHours = relayWindow
@@ -1625,7 +1750,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 			total = len(filtered)
 		}
 	}
-	writeJSON(w, NodeListResponse{Nodes: nodes, Total: total, Counts: counts, HasMore: hasMore})
+	return NodeListResponse{Nodes: nodes, Total: total, Counts: counts, HasMore: hasMore}, nil
 }
 
 func (s *Server) handleNodeSearch(w http.ResponseWriter, r *http.Request) {
@@ -1714,6 +1839,7 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 		EnrichNodeWithHashSize(node, hashInfo[pubkey])
 		mbEntry, _ := s.store.GetMultibyteCapFor(pubkey)
 		EnrichNodeWithMultiByte(node, mbEntry)
+		node["region_placement"] = RegionPlacementFor(s.store.GetNodeRegionPlacements(), pubkey)
 		if role, _ := node["role"].(string); role == "repeater" || role == "room" {
 			ht := s.cfg.GetHealthThresholds()
 			info := s.store.GetRepeaterRelayInfo(pubkey, ht.RelayActiveHours)
@@ -1913,13 +2039,17 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	// We lean on resolved_path (from neighbor affinity graph) to disambiguate.
 	//
 	// Collect candidate IDs and index membership under the read lock, then release
-	// the lock before running SQL queries (confirmResolvedPathContains does disk I/O).
+	// the lock before reading the stored resolved paths (disk I/O).
 	type candidateCheck struct {
 		tx         *StoreTx
 		hasReverse bool
 		inIndex    bool
 	}
 	checks := make([]candidateCheck, len(candidates))
+	// The stored resolved paths are read after s.mu is released, so they get
+	// a snapshot of each candidate's observations instead of tx.Observations,
+	// which ingest appends to under the write lock.
+	rpSnapshots := make(map[int][]rpObs, len(candidates))
 	for i, tx := range candidates {
 		cc := candidateCheck{tx: tx}
 		if !s.store.useResolvedPathIndex {
@@ -1937,39 +2067,14 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 			// If not in index at all, it's a definite no
 		}
 		checks[i] = cc
-	}
-	s.store.mu.RUnlock()
-
-	// Now run SQL checks outside the lock for candidates that need confirmation.
-	confirmedBySQL := make(map[int]bool)
-	filtered := candidates[:0]
-	for _, cc := range checks {
-		if cc.inIndex {
-			filtered = append(filtered, cc.tx)
-		} else if cc.hasReverse {
-			if s.store.confirmResolvedPathContains(cc.tx.ID, lowerPK) {
-				filtered = append(filtered, cc.tx)
-				confirmedBySQL[cc.tx.ID] = true
-			}
+		if cc.inIndex || cc.hasReverse {
+			rpSnapshots[tx.ID] = snapshotRPObs(tx)
 		}
-		// else: not in index → exclude
-	}
-	candidates = filtered
-
-	// The canonical resolved_path lookup below runs without s.mu, so it reads
-	// a snapshot of each surviving candidate's observations instead of
-	// tx.Observations, which ingest appends to under the write lock. Taken in
-	// a short read lock of its own so only the survivors are copied.
-	s.store.mu.RLock()
-	rpSnapshots := make(map[int][]rpObs, len(candidates))
-	for _, tx := range candidates {
-		rpSnapshots[tx.ID] = snapshotRPObs(tx)
 	}
 	s.store.mu.RUnlock()
 
-	// #1278: Read the CANONICAL persisted resolved_path for each surviving
-	// candidate OUTSIDE s.mu (bestResolvedPath takes lruMu; the
-	// lock-ordering contract forbids acquiring lruMu under s.mu).
+	// #1278: the CANONICAL persisted resolved_path of each candidate, the one
+	// bestResolvedPath returns, read in batches (#2146).
 	//
 	// Option A from the issue: the packets page renders each tx via
 	// bestResolvedPath. For /api/nodes/{pk}/paths to stay
@@ -1981,12 +2086,29 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	// Falls back to biased re-resolve only when a tx has no persisted
 	// resolved_path (older data / async backfill incomplete); in that case
 	// there's no canonical answer to be consistent with.
-	canonicalRP := make(map[int][]*string, len(candidates))
-	for _, tx := range candidates {
-		if rp := s.store.bestResolvedPath(tx.ID, rpSnapshots[tx.ID]); rp != nil {
-			canonicalRP[tx.ID] = rp
+	canonicalRP := s.store.loadCanonicalResolvedPaths(rpSnapshots)
+
+	// Collision check for candidates found through the resolved-pubkey hash
+	// index (hasReverse). A candidate with a canonical path needs none: the
+	// aggregation below keeps it only if that path names the node, and if no
+	// stored path names it the canonical one does not either. Only one without
+	// a canonical path is checked against SQL, as before.
+	confirmedBySQL := make(map[int]bool)
+	filtered := candidates[:0]
+	for _, cc := range checks {
+		if cc.inIndex {
+			filtered = append(filtered, cc.tx)
+		} else if cc.hasReverse {
+			if _, ok := canonicalRP[cc.tx.ID]; ok {
+				filtered = append(filtered, cc.tx)
+			} else if s.store.confirmResolvedPathContains(cc.tx.ID, lowerPK) {
+				filtered = append(filtered, cc.tx)
+				confirmedBySQL[cc.tx.ID] = true
+			}
 		}
+		// else: not in index → exclude
 	}
+	candidates = filtered
 
 	// Re-acquire read lock for the aggregation phase that reads store data.
 	s.store.mu.RLock()
@@ -2510,8 +2632,8 @@ func (s *Server) handleAnalyticsSubpaths(w http.ResponseWriter, r *http.Request)
 		// Issue #1217: honor the Time window filter on Route Patterns.
 		window := ParseTimeWindow(r)
 		data := s.store.GetAnalyticsSubpathsWithWindow(region, minLen, maxLen, limit, window)
-		if s.cfg != nil && len(s.cfg.NodeBlacklist) > 0 {
-			data = s.filterBlacklistedFromSubpaths(data)
+		if s.subpathFilterActive() {
+			data, _ = s.dropHiddenPaths(data, "subpaths", "path", "", s.blacklistedNodeNames())
 		}
 		writeJSON(w, data)
 		return
@@ -2576,9 +2698,10 @@ func (s *Server) handleAnalyticsSubpathsBulk(w http.ResponseWriter, r *http.Requ
 	}
 
 	results := s.store.GetAnalyticsSubpathsBulkWithWindow(region, groups, ParseTimeWindow(r))
-	if s.cfg != nil && len(s.cfg.NodeBlacklist) > 0 {
+	if s.subpathFilterActive() {
+		names := s.blacklistedNodeNames()
 		for i, r := range results {
-			results[i] = s.filterBlacklistedFromSubpaths(r)
+			results[i], _ = s.dropHiddenPaths(r, "subpaths", "path", "", names)
 		}
 	}
 	writeJSON(w, map[string]interface{}{"results": results})
@@ -2614,7 +2737,19 @@ func (s *Server) handleAnalyticsSubpathDetail(w http.ResponseWriter, r *http.Req
 			writeIndexLoading503(w)
 			return
 		}
-		writeJSON(w, s.store.GetSubpathDetail(rawHops))
+		detail := s.store.GetSubpathDetail(rawHops)
+		// #2184: the raw hops are prefixes, so the check above only catches a
+		// full key. Check the nodes the store resolved them to instead.
+		if s.subpathFilterActive() {
+			// Match each hop by its resolved key, so a blacklisted node without a
+			// name is caught and a node that only shares its name is not.
+			if _, dropped := s.dropHiddenPaths(detail, "nodes", "name", "pubkey", nil); dropped > 0 {
+				writeError(w, 404, "Not found")
+				return
+			}
+			detail, _ = s.dropHiddenPaths(detail, "parentPaths", "path", "", s.blacklistedNodeNames())
+		}
+		writeJSON(w, detail)
 		return
 	}
 	writeJSON(w, SubpathDetailResponse{
@@ -3117,6 +3252,119 @@ var iataCoords = map[string]IataCoord{
 	"ICN": {Lat: 37.4602, Lon: 126.4407},
 	"SYD": {Lat: -33.9461, Lon: 151.1772},
 	"MEL": {Lat: -37.669, Lon: 144.841},
+	// #2098: Belgium, the Netherlands and Luxembourg (every IATA code), and
+	// Germany and France (airports with scheduled service), from OurAirports
+	// airports.csv (public domain). Observer IATA tags on Belgian deployments
+	// use these codes; none was here, so the last-hop region filter never ran.
+	// Belgium
+	"ANR": {Lat: 51.190667, Lon: 4.463153}, // Antwerp International Airport (Deurne)
+	"BRU": {Lat: 50.901402, Lon: 4.48444},  // Brussels Airport
+	"CRL": {Lat: 50.461963, Lon: 4.459562}, // Brussels South Charleroi Airport
+	"GNE": {Lat: 51.020551, Lon: 3.730341}, // Ghent/Industry Zone Heliport
+	"KJK": {Lat: 50.818878, Lon: 3.209551}, // Kortrijk-Wevelgem International Airport
+	"LGG": {Lat: 50.638574, Lon: 5.443897}, // Liège Airport
+	"OBL": {Lat: 51.269092, Lon: 4.762428}, // Oostmalle Airfield
+	"OST": {Lat: 51.1998, Lon: 2.874673},   // Ostend-Bruges International Airport
+	// Netherlands
+	"DHR": {Lat: 52.923401, Lon: 4.78062},                    // De Kooy Airfield / Den Helder Naval Air Station
+	"EIN": {Lat: 51.4500999451, Lon: 5.37452983856},          // Eindhoven Airport
+	"ENS": {Lat: 52.275833, Lon: 6.889167},                   // Twente Airport
+	"GLZ": {Lat: 51.567402, Lon: 4.93183},                    // Gilze Rijen Air Base
+	"GRQ": {Lat: 53.119107, Lon: 6.577652},                   // Groningen Airport Eelde
+	"LEY": {Lat: 52.453188, Lon: 5.514622},                   // Lelystad Airport
+	"LWR": {Lat: 53.228599548339844, Lon: 5.760560035705566}, // Leeuwarden Air Base
+	"MST": {Lat: 50.911087, Lon: 5.769401},                   // Maastricht Aachen Airport
+	"RTM": {Lat: 51.956902, Lon: 4.43722},                    // Rotterdam The Hague Airport
+	"UDE": {Lat: 51.657222, Lon: 5.707778},                   // Volkel Air Base
+	"WOE": {Lat: 51.4491, Lon: 4.34203},                      // Woensdrecht Air Base
+	// Luxembourg
+	"LUX": {Lat: 49.626845, Lon: 6.212134}, // Luxembourg-Findel International Airport
+	// Germany
+	"AGE": {Lat: 53.782544, Lon: 7.919584},  // Wangerooge Airport
+	"BER": {Lat: 52.361738, Lon: 13.502341}, // Berlin Brandenburg Airport
+	"BMK": {Lat: 53.59639, Lon: 6.709167},   // Borkum Airport
+	"BMR": {Lat: 53.72485, Lon: 7.373257},   // Baltrum Airport
+	"BRE": {Lat: 53.046786, Lon: 8.78932},   // Bremen Airport
+	"CGN": {Lat: 50.865898, Lon: 7.14274},   // Cologne Bonn Airport
+	"DRS": {Lat: 51.134123, Lon: 13.767831}, // Dresden Airport
+	"DTM": {Lat: 51.518299, Lon: 7.61224},   // Dortmund Airport
+	"DUS": {Lat: 51.289501, Lon: 6.76678},   // Düsseldorf Airport
+	"EME": {Lat: 53.391109, Lon: 7.2275},    // Emden Airport
+	"ERF": {Lat: 50.978281, Lon: 10.960713}, // Erfurt-Weimar Airport
+	"FCN": {Lat: 53.767689, Lon: 8.659201},  // Sea-Airport Cuxhaven/Nordholz / Nordholz Naval Airbase
+	"FDH": {Lat: 47.671299, Lon: 9.51149},   // Bodensee Airport Friedrichshafen
+	"FKB": {Lat: 48.7794, Lon: 8.0805},      // Karlsruhe Baden-Baden Airport
+	"FMM": {Lat: 47.988092, Lon: 10.238248}, // Memmingen Allgau Airport
+	"FMO": {Lat: 52.133816, Lon: 7.688482},  // Münster Osnabrück Airport
+	"GWT": {Lat: 54.9132, Lon: 8.34047},     // Westerland Sylt Airport
+	"HAJ": {Lat: 52.461102, Lon: 9.68508},   // Hannover Airport
+	"HAM": {Lat: 53.630402, Lon: 9.98823},   // Hamburg Helmut Schmidt Airport
+	"HDF": {Lat: 53.8787, Lon: 14.1523},     // Heringsdorf Airport
+	"HEI": {Lat: 54.153332, Lon: 8.901667},  // Heide-Büsum Airport
+	"HGL": {Lat: 54.18528, Lon: 7.915833},   // Helgoland-Düne Airport
+	"HHN": {Lat: 49.946353, Lon: 7.261734},  // Frankfurt-Hahn Airport
+	"JUI": {Lat: 53.681421, Lon: 7.056398},  // Juist Airport
+	"KSF": {Lat: 51.418395, Lon: 9.391638},  // Kassel Airport
+	"LBC": {Lat: 53.805401, Lon: 10.7192},   // Lübeck Blankensee Airport
+	"LEJ": {Lat: 51.420657, Lon: 12.232705}, // Leipzig/Halle Airport
+	"MHG": {Lat: 49.473057, Lon: 8.514167},  // Mannheim-City Airport
+	"NOD": {Lat: 53.633057, Lon: 7.190278},  // Norden-Norddeich Airport
+	"NRD": {Lat: 53.706944, Lon: 7.23},      // Norderney Airport
+	"NRN": {Lat: 51.601362, Lon: 6.141228},  // Weeze (Niederrhein) Airport
+	"NUE": {Lat: 49.498699, Lon: 11.078056}, // Nuremberg Airport
+	"PAD": {Lat: 51.612527, Lon: 8.617459},  // Paderborn Lippstadt Airport
+	"RLG": {Lat: 53.918201, Lon: 12.2783},   // Rostock-Laage Airport
+	"SCN": {Lat: 49.214545, Lon: 7.109735},  // Saarbrücken Airport
+	"STR": {Lat: 48.689899, Lon: 9.22196},   // Stuttgart Airport
+	// France
+	"AJA": {Lat: 41.923599, Lon: 8.80292},   // Ajaccio Napoléon Bonaparte airport
+	"AUR": {Lat: 44.891399, Lon: 2.42194},   // Aurillac airport
+	"AVN": {Lat: 43.907299, Lon: 4.90183},   // Avignon Caumont airport
+	"BES": {Lat: 48.447899, Lon: -4.41854},  // Brest Bretagne airport
+	"BIA": {Lat: 42.5527, Lon: 9.48373},     // Bastia-Poretta International airport
+	"BIQ": {Lat: 43.468372, Lon: -1.523223}, // Biarritz Pays Basque airport
+	"BOD": {Lat: 44.82865, Lon: -0.715356},  // Bordeaux–Mérignac Airport
+	"BSL": {Lat: 47.60068, Lon: 7.521117},   // EuroAirport Basel–Mulhouse–Freiburg
+	"BVA": {Lat: 49.454399, Lon: 2.11278},   // Beauvais-Tillé airport
+	"BVE": {Lat: 45.039722, Lon: 1.485556},  // Brive Souillac airport
+	"BZR": {Lat: 43.323502, Lon: 3.3539},    // Béziers Vias airport
+	"CCF": {Lat: 43.216, Lon: 2.30632},      // Carcassonne Salvaza Airport
+	"CFE": {Lat: 45.786701, Lon: 3.16917},   // Clermont-Ferrand Auvergne airport
+	"CFR": {Lat: 49.17678, Lon: -0.454883},  // Caen Carpiquet airport
+	"CLY": {Lat: 42.530422, Lon: 8.792984},  // Calvi Sainte Catherine Airport
+	"CMF": {Lat: 45.6381, Lon: 5.88023},     // Chambéry Aix les Bains airport
+	"DCM": {Lat: 43.556301, Lon: 2.28918},   // Castres Mazamet Airport
+	"DLE": {Lat: 47.038955, Lon: 5.427589},  // Dole Tavaux Airport
+	"DOL": {Lat: 49.365237, Lon: 0.154481},  // Deauville Normandie airport
+	"EGC": {Lat: 44.825298, Lon: 0.518611},  // Bergerac Dordogne-Périgord airport
+	"ETZ": {Lat: 48.982101, Lon: 6.25132},   // Metz-Nancy-Lorraine Airport
+	"FNI": {Lat: 43.757401, Lon: 4.41635},   // Nîmes-Arles-Camargue Airport
+	"FSC": {Lat: 41.50185, Lon: 9.097092},   // Figari Sud-Corse Airport
+	"GNB": {Lat: 45.3629, Lon: 5.32937},     // Grenoble Alpes Isère Airport
+	"LDE": {Lat: 43.178699, Lon: -0.006439}, // Tarbes-Lourdes-Pyrénées Airport
+	"LIG": {Lat: 45.862801, Lon: 1.17944},   // Limoges Airport
+	"LIL": {Lat: 50.566564, Lon: 3.102429},  // Lille Airport
+	"LPY": {Lat: 45.0807, Lon: 3.76289},     // Le Puy-Loudes Airfield
+	"LRH": {Lat: 46.179199, Lon: -1.19528},  // La Rochelle Île de Ré Airport
+	"LTT": {Lat: 43.205399, Lon: 6.482},     // La Môle Airport
+	"LYS": {Lat: 45.725996, Lon: 5.090139},  // Lyon Saint-Exupéry Airport
+	"MPL": {Lat: 43.576199, Lon: 3.96301},   // Montpellier-Méditerranée Airport
+	"MRS": {Lat: 43.438088, Lon: 5.2125},    // Marseille Provence Airport
+	"NCE": {Lat: 43.658401, Lon: 7.21587},   // Nice-Côte d'Azur Airport
+	"NCY": {Lat: 45.928947, Lon: 6.0987},    // Annecy Meythet airport
+	"NTE": {Lat: 47.153198, Lon: -1.61073},  // Nantes Atlantique Airport
+	"ORY": {Lat: 48.729499, Lon: 2.358963},  // Paris-Orly Airport
+	"OUI": {Lat: 48.4632, Lon: -5.06358},    // Ouessant Airport
+	"PGF": {Lat: 42.740398, Lon: 2.87067},   // Perpignan-Rivesaltes (Llabanère) Airport
+	"PIS": {Lat: 46.5877, Lon: 0.306666},    // Poitiers-Biard Airport
+	"PUF": {Lat: 43.380001, Lon: -0.418611}, // Pau Pyrénées Airport
+	"RDZ": {Lat: 44.407902, Lon: 2.48267},   // Rodez–Aveyron Airport
+	"RNS": {Lat: 48.0695, Lon: -1.73479},    // Rennes-Saint-Jacques Airport
+	"SXB": {Lat: 48.5383, Lon: 7.62823},     // Strasbourg Airport
+	"TLN": {Lat: 43.097301, Lon: 6.14603},   // Toulon-Hyères Airport
+	"TLS": {Lat: 43.629101, Lon: 1.36382},   // Toulouse-Blagnac Airport
+	"TUF": {Lat: 47.432201, Lon: 0.727606},  // Tours Val de Loire Airport
+	"XCR": {Lat: 48.77333, Lon: 4.20611},    // Chalons Vatry airport
 }
 
 func (s *Server) handleIATACoords(w http.ResponseWriter, r *http.Request) {
@@ -3194,6 +3442,15 @@ func writeJSONStatus(w http.ResponseWriter, code int, v interface{}) {
 	w.WriteHeader(code)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		log.Printf("[routes] JSON encode error: %v", err)
+	}
+}
+
+// writeJSONBytes writes an already-encoded JSON body with status 200.
+func writeJSONBytes(w http.ResponseWriter, body []byte) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(body); err != nil {
+		log.Printf("[routes] JSON write error: %v", err)
 	}
 }
 
@@ -3447,8 +3704,9 @@ func (s *Server) handleMetricsSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	since := time.Now().UTC().Add(-dur).Format(time.RFC3339)
-	summary, err := s.db.GetMetricsSummary(since)
+	now := time.Now().UTC()
+	since := now.Add(-dur).Format(time.RFC3339)
+	summary, err := s.db.GetMetricsSummary(since, now)
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -3468,8 +3726,9 @@ func (s *Server) handleMetricsSummary(w http.ResponseWriter, r *http.Request) {
 		summary = filtered
 	}
 
-	writeJSON(w, map[string]interface{}{
-		"observers": summary,
+	writeJSON(w, MetricsSummaryResponse{
+		Observers:        summary,
+		DutyCycleWarnPct: s.cfg.DutyCycleWarnPctOrDefault(),
 	})
 }
 
@@ -3597,33 +3856,62 @@ func (s *Server) filterBlacklistedFromTopology(data map[string]interface{}) map[
 	return data
 }
 
-// filterBlacklistedFromSubpaths removes blacklisted node references from
-// the subpaths analytics response.
-func (s *Server) filterBlacklistedFromSubpaths(data map[string]interface{}) map[string]interface{} {
-	if subpaths, ok := data["subpaths"]; ok {
-		if arr, ok := subpaths.([]interface{}); ok {
-			var filtered []interface{}
-			for _, item := range arr {
-				if m, ok := item.(map[string]interface{}); ok {
-					if hops, ok := m["hops"].([]interface{}); ok {
-						skip := false
-						for _, h := range hops {
-							if hp, ok := h.(string); ok && (s.cfg.IsBlacklisted(hp) || s.isPubkeyHidden(hp)) {
-								skip = true
-								break
-							}
-						}
-						if skip {
-							continue
-						}
-					}
-				}
-				filtered = append(filtered, item)
-			}
-			data["subpaths"] = filtered
+// subpathFilterActive reports whether Route Patterns responses need the
+// nodeBlacklist / hiddenNamePrefixes filter.
+func (s *Server) subpathFilterActive() bool {
+	return s.cfg != nil && (len(s.cfg.NodeBlacklist) > 0 || len(s.cfg.HiddenNamePrefixes) > 0)
+}
+
+// blacklistedNodeNames returns the names of the blacklisted nodes the store
+// knows, for filtering responses that carry node names but no keys.
+func (s *Server) blacklistedNodeNames() map[string]bool {
+	if s.store == nil || s.cfg == nil || len(s.cfg.NodeBlacklist) == 0 {
+		return nil
+	}
+	nodes, _ := s.store.getCachedNodesAndPM()
+	names := make(map[string]bool)
+	for _, n := range nodes {
+		if n.Name != "" && s.cfg.IsBlacklisted(n.PublicKey) {
+			names[n.Name] = true
 		}
 	}
-	return data
+	return names
+}
+
+// subpathPathHidden reports whether a resolved " → " path shows a blacklisted
+// or hidden-prefix node. Issue #2184: a subpath carries the names the store
+// resolved its hops to, not keys, and a hop prefix alone cannot be pinned to
+// one node, so the filter matches what the reader would see.
+func (s *Server) subpathPathHidden(path string, blacklisted map[string]bool) bool {
+	for _, name := range strings.Split(path, " → ") {
+		if blacklisted[name] || s.cfg.IsNameHidden(name) {
+			return true
+		}
+	}
+	return false
+}
+
+// dropHiddenPaths removes the entries of data[listKey] whose field (a node
+// name, or a resolved " → " path) shows a blacklisted or hidden-prefix node,
+// or, when keyField is set, whose key there is blacklisted, and reports how
+// many it removed. It returns a copy: data may be the store's cached
+// response, shared with other requests.
+func (s *Server) dropHiddenPaths(data map[string]interface{}, listKey, field, keyField string, blacklisted map[string]bool) (map[string]interface{}, int) {
+	entries, ok := data[listKey].([]map[string]interface{})
+	if !ok {
+		return data, 0
+	}
+	kept := slices.Clone(entries)[:0]
+	for _, e := range entries {
+		path, _ := e[field].(string)
+		key, _ := e[keyField].(string)
+		if !s.subpathPathHidden(path, blacklisted) && (key == "" || !s.cfg.IsBlacklisted(key)) {
+			kept = append(kept, e)
+		}
+	}
+	out := maps.Clone(data)
+	out[listKey] = kept
+	return out, len(entries) - len(kept)
 }
 
 // handleDroppedPackets returns recently dropped packets for investigation.

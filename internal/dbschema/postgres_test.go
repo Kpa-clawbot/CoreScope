@@ -6,10 +6,10 @@ import (
 )
 
 func TestPostgresManifestPreservesTelemetry(t *testing.T) {
-	if len(Tables) != 18 {
-		t.Fatalf("telemetry manifest has %d tables, want 18", len(Tables))
+	if len(Tables) != 21 {
+		t.Fatalf("telemetry manifest has %d tables, want 21", len(Tables))
 	}
-	for _, name := range []string{"nodes", "inactive_nodes", "observers", "transmissions", "observations", "observer_metrics", "neighbor_edges", "dropped_packets", "client_receptions", "client_observers", "client_rx_observations", "client_rf_samples", "node_declared_regions", "scope_match_totals", "_migrations", "_async_migrations", "advert_route_evidence", "advert_evidence_backfill"} {
+	for _, name := range []string{"nodes", "inactive_nodes", "observers", "transmissions", "observations", "observer_metrics", "neighbor_edges", "dropped_packets", "client_receptions", "client_observers", "client_rx_observations", "client_rf_samples", "node_declared_regions", "scope_match_totals", "_migrations", "_async_migrations", "advert_route_evidence", "advert_evidence_backfill", "tx_rewrite_feed", "key_backfill_state", "key_backfill_done"} {
 		found := false
 		for _, table := range Tables {
 			if table.Name == name {

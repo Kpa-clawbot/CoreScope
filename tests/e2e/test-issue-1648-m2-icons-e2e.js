@@ -86,6 +86,12 @@ async function checkConfiguredScope(page) {
   await page.route(nodeListUrl, route => route.fulfill({
     json: { nodes: [{ ...node, lat: 1, lon: 1 }], total: 1 },
   }));
+  // Every page load fires one 'theme-refresh' about 300ms after the theme
+  // loads, and live.js re-runs showNodeDetail on it, which briefly swaps the
+  // detail panel to "Loading…". Assert only after that re-render.
+  await page.addInitScript(() => {
+    window.addEventListener('theme-refresh', () => { window.__scopeThemeReady = true; }, { once: true });
+  });
   try {
     for (const live of [false, true]) {
       for (const scope of ['#fixture', '', null]) {
@@ -96,7 +102,7 @@ async function checkConfiguredScope(page) {
         await page.goto(`${BASE}/#${route}`, { waitUntil: 'domcontentloaded' });
         // The initial theme refresh redraws an open detail as Loading….
         // Let it finish before opening Live details or asserting row absence.
-        await page.waitForFunction(() => window.__configuredScopeThemeReady, null, { timeout: 8000 });
+        await page.waitForFunction(() => window.__scopeThemeReady, null, { timeout: 8000 });
         if (live) await page.locator('#liveMap .live-node-marker').click();
         await page.locator(live ? '#nodeDetailContent code' : '#nodeFullBody .node-detail-key')
           .filter({ hasText: key }).waitFor({ state: 'visible', timeout: 8000 });
@@ -147,7 +153,7 @@ async function main() {
 
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   await ctx.addInitScript(() => {
-    window.addEventListener('theme-refresh', () => { window.__configuredScopeThemeReady = true; }, { once: true });
+    window.addEventListener('theme-refresh', () => { window.__scopeThemeReady = true; }, { once: true });
   });
   const page = await ctx.newPage();
 

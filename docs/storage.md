@@ -32,6 +32,29 @@ Success means setup exits successfully, `/api/healthz` reports ready, and actual
 
 Use the same state mount and Compose files on restart/update. `./manage.sh update` keeps the recorded backend. For a pre-built image, pull the matching image and run `up -d` with the same files, including the PostgreSQL override when selected. Removing an override does not perform a reverse conversion.
 
+Before a PostgreSQL schema-version upgrade, take native backups of all recorded
+stores, including disabled accounts, and preserve the matching state/configuration
+and previous image. Stop both application writers
+for the update. Managed bootstrap checks readiness and, when necessary, invokes
+the offline owner upgrade for the existing recorded targets before runtime
+starts. It cannot replace missing initialized databases or add an absent account
+store. Previously initialized accounts are upgraded even while their UI is
+disabled. Native deployments use the same operation with owner credentials in
+private environment configuration:
+
+```sh
+corescope-migrate -storage-action=upgrade -offline \
+  -selection-file /absolute/state/storage-selection.json -config-dir /absolute/config
+```
+
+Telemetry and accounts upgrade in separate database transactions; there is no
+cross-database atomicity guarantee. Keep both writers stopped until upgrade and
+readiness succeed. A failure keeps application startup blocked.
+Preserve both databases and retry the supported upgrade after correcting the
+reported problem. An older image may reject the newer schema, so reverting only
+the image is not a complete rollback: restore both stores from their matching pre-upgrade backups
+when required. Do not delete the selection or initialize replacement stores.
+
 Container state must stay at `/app/data` or a persistent subdirectory, selected with `CORESCOPE_STATE_DIR`. All supplied services share that value. The entrypoint refuses an ephemeral directory or a symlink escaping the data mount. Native relative SQLite paths resolve from the process working directory; container processes run in `/app`. A `config.json` that exists but cannot be read or parsed stops startup; it is not ignored in favour of defaults.
 
 Before the first upgrade from an older deployment, stop that old stack using its actual Compose project/service and checkout, before replacing configuration files. Preserve its checkout/Compose files, image identity, private `.env`, config/theme and a quiescent copy of the complete data directory including WAL/SHM siblings. Do not use a raw copy of a live SQLite main file as a backup.
@@ -93,7 +116,7 @@ Restoring accounts can revive deleted users, old passwords, revoked sessions and
 | Store | Supported current/upgrade boundary |
 |---|---|
 | SQLite telemetry | Known v3 layout and supported append-only migrations; older/unknown layouts require the prior version's explicit upgrade/repair |
-| SQLite accounts | Original versions1–5 upgrade to v6; v6 adds non-reusing identities and explicit mail-event IDs |
-| PostgreSQL telemetry/accounts | Readiness marker version1; account logical schema version5 |
+| SQLite accounts | Known versions0–6 and the exact fork identity-v6 layout upgrade to v7; includes companion links, non-reusing identities and explicit mail-event IDs |
+| PostgreSQL telemetry/accounts | Telemetry readiness version2, with explicit offline owner upgrade from version1; account readiness version1 and logical schema version6 |
 
 Unknown/future columns, hidden generated columns, unsupported objects or conflicting data refuse conversion. Preserve a raw recovery snapshot before an explicit repair/upgrade of a disposable working copy. Deleted legacy integer IDs without allocator or retained-reference evidence have no recoverable historical high-water mark. Do not infer one or discard references to make validation pass.

@@ -33,6 +33,55 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 
+type deviceTokenRequest struct {
+	Email      string `json:"email"`
+	Password   string `json:"password"`
+	DeviceName string `json:"deviceName"`
+}
+
+type deviceTokenUser struct {
+	ID          int64  `json:"id"`
+	DisplayName string `json:"displayName"`
+}
+
+type deviceTokenResponse struct {
+	Token     string          `json:"token"`
+	ExpiresAt string          `json:"expiresAt"`
+	User      deviceTokenUser `json:"user"`
+}
+
+type companionChallengeRequest struct {
+	Pubkey string `json:"pubkey"`
+}
+
+type companionChallengeResponse struct {
+	Challenge string `json:"challenge"`
+	ExpiresAt string `json:"expiresAt"`
+	// Host is what the client signs: the host of userManagement.publicBaseUrl,
+	// the same one linkMessage verifies against.
+	Host string `json:"host"`
+}
+
+type companionLinkRequest struct {
+	Pubkey    string `json:"pubkey"`
+	Challenge string `json:"challenge"`
+	Signature string `json:"signature"`
+	Name      string `json:"name"`
+}
+
+type companionLinkResponse struct {
+	Pubkey   string `json:"pubkey"`
+	Name     string `json:"name"`
+	LinkedAt string `json:"linkedAt"`
+}
+
+type companionJSON struct {
+	Pubkey     string  `json:"pubkey"`
+	Name       string  `json:"name"`
+	LinkedAt   string  `json:"linkedAt"`
+	LastSeenAt *string `json:"lastSeenAt"` // newest client_receptions.rx_at, or null
+}
+
 type emailRequest struct {
 	Email string `json:"email"`
 }
@@ -75,6 +124,8 @@ type roleRequest struct {
 
 type sessionJSON struct {
 	ID         int64  `json:"id"`
+	Kind       string `json:"kind"`  // "web" or "device"
+	Label      string `json:"label"` // device name; "" for web sessions
 	CreatedAt  string `json:"createdAt"`
 	LastSeenAt string `json:"lastSeenAt"`
 	ExpiresAt  string `json:"expiresAt"`
@@ -125,10 +176,11 @@ type auditJSON struct {
 }
 
 type adminUserDetailJSON struct {
-	User     adminUserJSON `json:"user"`
-	Sessions []sessionJSON `json:"sessions"`
-	Mail     []mailJSON    `json:"mail"`
-	Audit    []auditJSON   `json:"audit"`
+	User       adminUserJSON   `json:"user"`
+	Sessions   []sessionJSON   `json:"sessions"`
+	Companions []companionJSON `json:"companions"`
+	Mail       []mailJSON      `json:"mail"`
+	Audit      []auditJSON     `json:"audit"`
 }
 
 func rfc3339(t time.Time) string { return t.UTC().Format(time.RFC3339) }
@@ -146,7 +198,7 @@ func meFrom(u *users.User, sess *users.Session) meResponse {
 }
 
 func sessionToJSON(s users.Session, currentID int64) sessionJSON {
-	return sessionJSON{ID: s.ID, CreatedAt: rfc3339(s.CreatedAt), LastSeenAt: rfc3339(s.LastSeenAt),
+	return sessionJSON{ID: s.ID, Kind: s.Kind, Label: s.Label, CreatedAt: rfc3339(s.CreatedAt), LastSeenAt: rfc3339(s.LastSeenAt),
 		ExpiresAt: rfc3339(s.ExpiresAt), UserAgent: s.UserAgent, Current: s.ID == currentID}
 }
 

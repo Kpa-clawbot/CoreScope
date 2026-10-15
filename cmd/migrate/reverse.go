@@ -132,12 +132,12 @@ func identityReferences(kind string) map[string][][2]string {
 	if kind == "telemetry" {
 		return map[string][][2]string{
 			"observers":     {{"observations", "observer_idx"}},
-			"transmissions": {{"observations", "transmission_id"}, {"advert_route_evidence", "tx_id"}, {"advert_evidence_backfill", "tx_cursor"}},
+			"transmissions": {{"observations", "transmission_id"}, {"advert_route_evidence", "tx_id"}, {"advert_evidence_backfill", "tx_cursor"}, {"tx_rewrite_feed", "tx_id"}, {"key_backfill_state", "cursor"}, {"key_backfill_state", "upper"}},
 			"observations":  {{"advert_evidence_backfill", "obs_cursor"}},
 		}
 	}
 	return map[string][][2]string{
-		"users":    {{"audit_log", "actor_user_id"}, {"audit_log", "target_user_id"}, {"users", "activated_by"}, {"sessions", "user_id"}, {"tokens", "user_id"}, {"mail_log", "user_id"}, {"proposals", "proposer_id"}, {"proposals", "reviewer_id"}, {"user_settings", "user_id"}, {"notification_prefs", "user_id"}, {"notification_watches", "user_id"}, {"notification_state", "user_id"}},
+		"users":    {{"audit_log", "actor_user_id"}, {"audit_log", "target_user_id"}, {"users", "activated_by"}, {"sessions", "user_id"}, {"tokens", "user_id"}, {"mail_log", "user_id"}, {"proposals", "proposer_id"}, {"proposals", "reviewer_id"}, {"user_settings", "user_id"}, {"notification_prefs", "user_id"}, {"notification_watches", "user_id"}, {"notification_state", "user_id"}, {"companion_links", "user_id"}, {"link_challenges", "user_id"}},
 		"mail_log": {{"mail_events", "mail_id"}},
 	}
 }

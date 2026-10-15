@@ -86,7 +86,7 @@ func grantRuntimeTargets(ctx context.Context, selected dbconfig.Selection, owner
 				return errors.New("account writer and channel projection reader must use separate restricted roles")
 			}
 			entry.roles = append(entry.roles, channel)
-			entry.queries = append(entry.queries, `GRANT SELECT ON approved_channels,corescope_schema TO `+channel)
+			entry.queries = append(entry.queries, `GRANT SELECT ON approved_channels,linked_companions,corescope_schema TO `+channel)
 		}
 		stores = append(stores, entry)
 	}

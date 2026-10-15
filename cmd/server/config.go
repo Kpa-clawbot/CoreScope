@@ -106,6 +106,15 @@ type Config struct {
 
 	Regions map[string]string `json:"regions"`
 
+	// RegionQuickPicks are named groups of region (IATA) codes offered as
+	// one-tap choices in the region filter, e.g. a country's observers. See
+	// NormalizedRegionQuickPicks and config.example.json.
+	RegionQuickPicks []RegionQuickPick `json:"regionQuickPicks,omitempty"`
+
+	// RegionFallback tunes how the /api/nodes region filter places nodes
+	// never heard zero-hop (#1879). See RegionFallbackMaxHops.
+	RegionFallback *RegionFallbackConfig `json:"regionFallback,omitempty"`
+
 	Roles            map[string]interface{} `json:"roles"`
 	HealthThresholds *HealthThresholds      `json:"healthThresholds"`
 	PathTrust        *PathTrustConfig       `json:"pathTrust,omitempty"`
@@ -206,6 +215,10 @@ type Config struct {
 	// BatteryThresholds: voltage cutoffs for low/critical alerts (#663).
 	BatteryThresholds *BatteryThresholdsConfig `json:"batteryThresholds,omitempty"`
 
+	// DutyCycleWarnPct: rolling 1 h TX airtime share (percent) at which the
+	// RF Health view and observer list warn. 0/missing => 10 (EU g3, #661).
+	DutyCycleWarnPct float64 `json:"dutyCycleWarnPct,omitempty"`
+
 	// Customizer controls operator-side knobs for the in-app customizer modal
 	// (theme/branding/etc.). See CustomizerConfig and issue #1508.
 	Customizer *CustomizerConfig `json:"customizer,omitempty"`
@@ -286,12 +299,22 @@ func (c *Config) GZipEnabled() bool {
 // ClientRxCoverageConfig gates the opt-in mobile client-RX coverage feature.
 type ClientRxCoverageConfig struct {
 	Enabled bool `json:"enabled"`
+	// RequireLinkedCompanion (companion linking): the ingestor drops client
+	// messages from companions no user linked. Only with userManagement.enabled.
+	RequireLinkedCompanion bool `json:"requireLinkedCompanion,omitempty"`
 }
 
 // ClientRxCoverageEnabled reports whether the opt-in mobile client-RX coverage
 // feature is on. Nil config or absent/nil section ⇒ off (the safe default).
 func (c *Config) ClientRxCoverageEnabled() bool {
 	return c != nil && c.ClientRxCoverage != nil && c.ClientRxCoverage.Enabled
+}
+
+// ClientRxRequireLinkedCompanionSet reports whether the operator set
+// clientRxCoverage.requireLinkedCompanion (in effect only with user
+// management on).
+func (c *Config) ClientRxRequireLinkedCompanionSet() bool {
+	return c != nil && c.ClientRxCoverage != nil && c.ClientRxCoverage.RequireLinkedCompanion
 }
 
 // ClientRfSamplesConfig gates the opt-in RF environment sample stream.
@@ -884,6 +907,67 @@ func (c *Config) BlacklistGeneration() uint64 {
 	return c.blacklistGen.Load()
 }
 
+// RegionQuickPick is one named group of region codes for the region filter.
+type RegionQuickPick struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Regions     []string `json:"regions"`
+}
+
+// Limits on the configured quick picks, so a typo in config.json cannot put
+// thousands of buttons or codes into every page.
+const (
+	maxRegionQuickPicks       = 20
+	maxRegionQuickPickRegions = 200
+)
+
+// NormalizedRegionQuickPicks returns the configured quick picks, cleaned up:
+// names, descriptions and codes trimmed, codes upper-cased and de-duplicated
+// in their configured order, picks without a name or any code dropped, and at
+// most maxRegionQuickPicks picks of maxRegionQuickPickRegions codes each.
+// Never nil, so the API always answers with a list.
+func (c *Config) NormalizedRegionQuickPicks() []RegionQuickPick {
+	out := []RegionQuickPick{}
+	if c == nil {
+		return out
+	}
+	for _, p := range c.RegionQuickPicks {
+		if len(out) >= maxRegionQuickPicks {
+			break
+		}
+		name := strings.TrimSpace(p.Name)
+		if name == "" {
+			continue
+		}
+		codes := normalizeQuickPickCodes(p.Regions)
+		if len(codes) == 0 {
+			continue
+		}
+		out = append(out, RegionQuickPick{Name: name, Description: strings.TrimSpace(p.Description), Regions: codes})
+	}
+	return out
+}
+
+// normalizeQuickPickCodes trims and upper-cases a pick's codes, drops empty
+// and repeated ones in their configured order, and keeps at most
+// maxRegionQuickPickRegions.
+func normalizeQuickPickCodes(regions []string) []string {
+	seen := make(map[string]bool, len(regions))
+	codes := make([]string, 0, len(regions))
+	for _, r := range regions {
+		code := strings.ToUpper(strings.TrimSpace(r))
+		if code == "" || seen[code] {
+			continue
+		}
+		if len(codes) >= maxRegionQuickPickRegions {
+			break
+		}
+		seen[code] = true
+		codes = append(codes, code)
+	}
+	return codes
+}
+
 // IsBlacklisted returns true if the given public key is in the nodeBlacklist.
 // Hot read path: a single atomic pointer load + map lookup. No locks, no
 // sync.Once. The in-memory set is populated either via SetNodeBlacklist or
@@ -994,6 +1078,26 @@ func SaveGeoFilter(configDir string, gf *GeoFilterConfig) error {
 		return fmt.Errorf("config.json not found in %s", configDir)
 	}
 
+	// Follow a symlink at configPath to the file it points at before the
+	// tmp+rename below. In the Docker image /app/config.json is a symlink to
+	// the bind-mounted /app/data/config.json (docker/entrypoint-go.sh), and
+	// os.Rename onto the link path would replace the link with a regular
+	// file inside the container: the mounted file would keep the old
+	// geo_filter, the saved one would be invisible on the host and would go
+	// away with the container. Resolving first keeps the write atomic and
+	// the result where the operator (and the next container) will read it.
+	//
+	// Unlike the stats file (writeStatsAtomic, refs #1170), replacing a
+	// symlink at the destination is not wanted here: this path is not
+	// world-writable, and the link is one the image itself creates. Only a
+	// regular file is followed, so a link to a device or a fifo is left
+	// alone and handled as before.
+	if resolved, err := filepath.EvalSymlinks(configPath); err == nil && resolved != configPath {
+		if fi, err := os.Lstat(resolved); err == nil && fi.Mode().IsRegular() {
+			configPath = resolved
+		}
+	}
+
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
@@ -1025,12 +1129,21 @@ func SaveGeoFilter(configDir string, gf *GeoFilterConfig) error {
 	// config.json holds the API key and broker passwords, and an operator
 	// who made it 0600 should not find it 0644 after a geo-filter save.
 	mode := os.FileMode(0644)
-	if fi, err := os.Stat(configPath); err == nil {
-		mode = fi.Mode().Perm()
+	orig, origErr := os.Stat(configPath)
+	if origErr == nil {
+		mode = orig.Mode().Perm()
 	}
 	tmp := configPath + ".tmp"
 	if err := os.WriteFile(tmp, out, mode); err != nil {
 		return fmt.Errorf("write config: %w", err)
+	}
+	// Keep the owner as well. The image runs the server as root by default,
+	// and without this the rename would hand the operator's bind-mounted
+	// config.json to root:root, which at 0600 they could no longer edit
+	// without sudo. Best effort: a server that may not chown leaves the file
+	// as it was created.
+	if origErr == nil {
+		copyOwner(tmp, orig)
 	}
 	if err := os.Rename(tmp, configPath); err != nil {
 		os.Remove(tmp)
@@ -1080,6 +1193,11 @@ func (c *Config) IsObserverBlacklisted(id string) bool {
 type AnalyticsConfig struct {
 	DefaultIntervalSeconds   int            `json:"defaultIntervalSeconds,omitempty"`
 	RecomputeIntervalSeconds map[string]int `json:"recomputeIntervalSeconds,omitempty"`
+	// PauseWhenIdle skips a scheduled recompute when nothing has read that
+	// endpoint's snapshot since the previous recompute. The first read
+	// after a pause is served the existing snapshot at once and starts a
+	// refresh. Off by default (always recompute on the interval).
+	PauseWhenIdle bool `json:"pauseWhenIdle,omitempty"`
 	// LoRaPreset is the assumed PHY preset used by the relay-airtime-share
 	// metric to compute true Time-on-Air (issue #1768). Defaults to the
 	// EU MeshCore deployment: 869.6 MHz / BW 62.5 kHz / SF 8 / CR 4/5.
@@ -1106,11 +1224,16 @@ func (c *Config) AnalyticsDefaultRecomputeInterval() time.Duration {
 	return 5 * time.Minute
 }
 
+// AnalyticsPauseWhenIdle reports whether idle analytics recomputes are skipped.
+func (c *Config) AnalyticsPauseWhenIdle() bool {
+	return c != nil && c.Analytics != nil && c.Analytics.PauseWhenIdle
+}
+
 // AnalyticsRecomputeIntervals returns the per-endpoint override map.
 // Returns the zero value (all defaults) if the analytics block is
 // absent or empty.
 func (c *Config) AnalyticsRecomputeIntervals() AnalyticsRecomputeIntervals {
-	out := AnalyticsRecomputeIntervals{}
+	out := AnalyticsRecomputeIntervals{PauseWhenIdle: c.AnalyticsPauseWhenIdle()}
 	if c == nil || c.Analytics == nil || c.Analytics.RecomputeIntervalSeconds == nil {
 		return out
 	}
@@ -1182,4 +1305,21 @@ func (c *Config) configuredChannelNames() map[string]bool {
 		names[name] = true
 	}
 	return names
+}
+
+// RegionFallbackConfig is the regionFallback block (#1879).
+type RegionFallbackConfig struct {
+	// MaxHops caps the fallback for nodes never heard zero-hop: a node whose
+	// closest hearing took more hops than this is in no region. Default 3.
+	MaxHops *int `json:"maxHops,omitempty"`
+}
+
+// RegionFallbackMaxHops returns regionFallback.maxHops, or the default
+// (regionFallbackMaxHopsDefault, 3) when it is unset or negative. 0 is valid:
+// only nodes some observer heard over an empty path are placed.
+func (c *Config) RegionFallbackMaxHops() int {
+	if c != nil && c.RegionFallback != nil && c.RegionFallback.MaxHops != nil && *c.RegionFallback.MaxHops >= 0 {
+		return *c.RegionFallback.MaxHops
+	}
+	return regionFallbackMaxHopsDefault
 }

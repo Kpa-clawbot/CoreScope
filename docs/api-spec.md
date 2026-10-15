@@ -50,6 +50,7 @@
 - [GET /api/traces/:hash](#get-apitraceshash)
 - [GET /api/config/theme](#get-apiconfigtheme)
 - [GET /api/config/regions](#get-apiconfigregions)
+- [GET /api/config/region-quick-picks](#get-apiconfigregion-quick-picks)
 - [GET /api/config/areas](#get-apiconfigareas)
 - [GET /api/config/areas/polygons](#get-apiconfigareaspolygons)
 - [GET /api/config/client](#get-apiconfigclient)
@@ -103,7 +104,7 @@ They return `total` (the unfiltered/filtered count before pagination).
 
 ## User management (optional)
 
-These routes are registered only when `userManagement.enabled` is true. When it is off they do not exist, and requests to them fall through to the SPA page (HTTP 200, HTML). The webhook route exists only when `mail.webhookSecret` is also set. Sessions use the `cs_session` cookie (HttpOnly, SameSite=Lax). Every state-changing request that authenticates with the cookie needs an `Origin` (or `Referer`) equal to `publicBaseUrl` and the header `X-CS-CSRF: <csrfToken from GET /api/auth/me>`. Errors are `{"error": "<message>"}`. Rate-limited calls answer `429` with `Retry-After`. Request bodies are JSON. On every route except the webhook and `PUT /api/account/settings` they are limited to 16 KiB and unknown fields are rejected with `400`; the webhook takes up to 256 KiB of Brevo's payload as is.
+These routes are registered only when `userManagement.enabled` is true. When it is off they do not exist, and requests to them fall through to the SPA page (HTTP 200, HTML). The webhook route exists only when `mail.webhookSecret` is also set, and only for the configured `mail.provider`. Sessions use the `cs_session` cookie (HttpOnly, SameSite=Lax). Every state-changing request that authenticates with the cookie needs an `Origin` (or `Referer`) equal to `publicBaseUrl` and the header `X-CS-CSRF: <csrfToken from GET /api/auth/me>`. Errors are `{"error": "<message>"}`. Rate-limited calls answer `429` with `Retry-After`. Request bodies are JSON. On every route except the webhook and `PUT /api/account/settings` they are limited to 16 KiB and unknown fields are rejected with `400`; the webhooks take up to 256 KiB of the provider's payload as is.
 
 | Method and path | Auth | Body and response |
 |---|---|---|
@@ -123,7 +124,7 @@ These routes are registered only when `userManagement.enabled` is true. When it 
 | `GET /api/account/settings` | session | -> `{revision, generation, doc, allowlist}`. `doc` is `{v: 1, keys: {<localStorage key>: <raw string>}}`, or `null` at revision 0. `generation` is a random id of the stored document (`""` at revision 0): revisions restart at 1 after a `DELETE`, the generation does not repeat. `allowlist` is `[{key, kind, id?}]`: `kind` is `set` (JSON array merged per item; `id` names the field that identifies an item, absent means the item itself) or `scalar` |
 | `PUT /api/account/settings` | session | `{baseRevision, baseGeneration, doc}` -> `{revision, generation}`. `409` `{revision, generation, doc}` when `baseRevision` is not the stored revision or, with a stored document, `baseGeneration` is not its generation; `baseRevision` 0 without a stored document starts a new generation; `400` for another shape, a key that is never synced (`corescope_channel_*`, `live-channel-colors`, `meshcore-api-key`) or a key not in the allowlist; `413` when `doc` is over 256 KiB (body cap 264 KiB); `429` above 60 PUT requests per hour per user |
 | `DELETE /api/account/settings` | session | -> `{ok}`. The next `PUT` with `baseRevision` 0 starts a new document in a new generation |
-| `GET /api/account/export` | session | -> attachment `corescope-account-<YYYY-MM-DD>.json`: `{formatVersion: 1, exportedAt, instance, profile, sessions, settings, proposals, notifications, audit, mail}`. `profile` is `{id, email, displayName, role, status, createdAt, lastLoginAt, emailBouncing, activatedAt, activatedBy}` (`activatedBy` is the admin id, `null` for a link activation); `sessions` `[{createdAt, lastSeenAt, userAgent?}]`; `settings` `{revision, updatedAt, doc}` or `null`; `proposals` `[{kind, subject, status, note, createdAt, decidedAt}]`; `notifications` `{prefs: {enabled, events} or null, watches: [{pubkey, createdAt}]}`; `audit` `[{at, action, actorUserId, targetUserId, detail}]` (other accounts by id only); `mail` `[{to, purpose, sentAt, status, statusAt, reason?, events}]`. No row caps. No password hash and no session, link or unsubscribe token. Writes a `user.export` audit row afterwards |
+| `GET /api/account/export` | session | -> attachment `corescope-account-<YYYY-MM-DD>.json`: `{formatVersion: 1, exportedAt, instance, profile, sessions, companions, settings, proposals, notifications, audit, mail}`. `profile` is `{id, email, displayName, role, status, createdAt, lastLoginAt, emailBouncing, activatedAt, activatedBy}` (`activatedBy` is the admin id, `null` for a link activation); `sessions` `[{kind, label?, createdAt, lastSeenAt, userAgent?}]` (`kind` is `web` or `device`, `label` the device name); `companions` `[{pubkey, name, linkedAt}]`; `settings` `{revision, updatedAt, doc}` or `null`; `proposals` `[{kind, subject, status, note, createdAt, decidedAt}]`; `notifications` `{prefs: {enabled, events} or null, watches: [{pubkey, createdAt}]}`; `audit` `[{at, action, actorUserId, targetUserId, detail}]` (other accounts by id only); `mail` `[{to, purpose, sentAt, status, statusAt, reason?, events}]`. No row caps. No password hash, no session, link or unsubscribe token and no companion link challenge. Writes a `user.export` audit row afterwards |
 | `DELETE /api/account` | session | `{currentPassword}` -> `{ok, message}`. `409` you are the last admin |
 | `GET /api/admin/users?status=&role=&q=&bouncing=` | admin | -> `[adminUser]`, at most 1000, newest first. `status` is `pending`, `active` or `disabled`; `role` is `user` or `admin`; `bouncing=1` keeps only addresses whose mail bounces (any other value is `400`) |
 | `GET /api/admin/users/{id}` | admin | -> `{user, sessions, mail, audit}` |
@@ -138,6 +139,7 @@ These routes are registered only when `userManagement.enabled` is true. When it 
 | `GET /api/admin/stats` | admin | -> `{total, active, pending, disabled, admins, stuckPending, bouncing, new7d, new30d, newPerDay, active7d, active30d, logins24h, failedLogins24h, mail7d, guessing}`. `newPerDay` is `[{day, count}]` for 30 UTC days, oldest first; registrations count `user.register` audit rows. `stuckPending` counts pending accounts older than 24 hours. `mail7d` is `{delivered, bounced, blocked, spam, pending, other}` by latest delivery event. `guessing` is `[{userId, displayName, failed}]`: accounts with 5 or more failed logins in 24 hours |
 | `GET /api/admin/users-backup` | admin | -> `application/octet-stream`, attachment `corescope-users-<YYYYMMDD-HHMMSS>.db` (UTC): a fresh consistent copy of `users.db`. It holds every password hash and address, so store it encrypted. Writes a `user.backup` audit row. Restore: docs/user-guide/accounts.md, Backups |
 | `POST /api/mail/brevo/webhook` | `Authorization: Bearer <webhookSecret>` | Brevo transactional event payload -> `{ok}`. `401` on a wrong secret |
+| `POST /api/mail/postal/webhook` | HTTP Basic auth, password `<webhookSecret>` (any user name) | Postal webhook payload `{event, timestamp, payload, uuid}` -> `{ok}`, also for events that are not about a message. `401` on a wrong secret |
 
 `adminUser` = `{id, email, displayName, role, status, createdAt, activatedAt, activatedManually, activatedBy, lastLoginAt, emailBouncing, configAdmin, lastMail}`. `status` is `pending`, `active` or `disabled`.
 
@@ -155,7 +157,7 @@ Error codes you can get on the routes above:
 | `502` | `"mail provider unavailable"` (mail refresh) |
 | `503` | `"mail could not be sent, try again later"` |
 
-With user management on, every endpoint that needs `X-API-Key` also accepts an admin session (plus the CSRF header for unsafe methods). A request that sends `X-API-Key` is judged on the key alone. `GET /api/config/client` gains `"userManagement": {"enabled": true}` only when the feature is on.
+With user management on, every endpoint that needs `X-API-Key` also accepts an admin session (plus the CSRF header for unsafe methods). A request that sends `X-API-Key` is judged on the key alone. `GET /api/config/client` gains `"userManagement": {"enabled": true}` only when the feature is on; that block also carries `"companionLinking": true` on servers with the device-token and companion routes, which CoreDrive RX checks before it shows its login (an older server answers those paths with the SPA page).
 
 ---
 
@@ -1890,9 +1892,12 @@ not being the same as "declared nothing"), which apply here identically.
 
 ### Query Parameters
 
-| Param    | Type   | Default | Description                    |
-|----------|--------|---------|---------------------------------|
-| `window` | string | `24h`   | Time window: `1h`, `24h`, `7d` |
+| Param    | Type   | Default    | Description                    |
+|----------|--------|------------|---------------------------------|
+| `window` | string | `24h`      | Time window: `1h`, `24h`, `7d` |
+| `mode`   | string | `declared` | `declared` (this section) or `transport` (see [Transport view](#transport-view-modetransport)) |
+| `scope`  | string | —          | `mode=transport` only: region scope to split the fleet by (`be`, `be-van`), with or without `#`, any case |
+| `region` | string | —          | Observer IATA filter, comma-separated (`SFO,SJC`), both views: count only forwarding heard by observers in those regions. As on every other endpoint this means *heard by*, not *located in*; `All` means no filter, and codes with no observer match nothing. Each region set is cached separately |
 
 ### Response `200`
 
@@ -1900,6 +1905,7 @@ not being the same as "declared nothing"), which apply here identically.
 {
   "window": string,                    // echoed window ("1h", "24h", or "7d")
   "since":  string (ISO),              // start of the observed-forwarding window
+  "region": string | undefined,        // normalised ?region= codes ("sfo,sjc" -> "SFO,SJC"); present only when given
   "repeaters": [
     {
       "publicKey":        string,
@@ -1930,6 +1936,12 @@ not being the same as "declared nothing"), which apply here identically.
 
 ```json
 { "error": "window must be 1h, 24h, or 7d" }
+```
+
+or, for an unknown `mode`:
+
+```json
+{ "error": "mode must be declared or transport" }
 ```
 
 **Notes:**
@@ -2037,6 +2049,53 @@ not being the same as "declared nothing"), which apply here identically.
   excluded, same as other multi-node endpoints.
 
 ---
+
+
+### Transport view (`mode=transport`)
+
+Issue #2142. One row per repeater **seen forwarding** in the window, whether or not it has
+ever answered a declared-regions request. Built from the same single forwarding scan as the
+declared view, with the same attribution rules (FLOOD-family route types only, no 1-byte
+hops, a hop whose prefix matches several repeaters is credited to none of them), but with
+every repeater and room this instance knows as a target instead of only the declared ones.
+"Transported" means **seen carrying**, not configured for; the declared side is reported
+separately where it exists. Cached per window with the same TTLs as the declared view; the
+`scope` filter is applied to the cached result.
+
+```jsonc
+{
+  "mode": "transport",
+  "window": string,
+  "since": string (ISO),
+  "region": string | undefined,        // normalised ?region= codes; present only when given
+  "scope": string | undefined,         // normalised ?scope= filter ("#FR" -> "fr"); present only when given
+  "carrying": number | undefined,      // rows with carriesScope: true; only with scope
+  "notCarrying": number | undefined,   // rows with carriesScope: false; only with scope
+  "repeaters": [
+    {
+      "publicKey":        string,
+      "name":             string | null,  // null = no nodes row for this key
+      "role":             string | null,
+      "transported": [                    // named region scopes seen forwarded, most packets first
+        { "scope": string, "packets": number, "firstSeen": string (ISO), "lastSeen": string (ISO) }
+      ],
+      "unscopedPackets":  number,         // plain floods forwarded
+      "unmatchedPackets": number,         // scoped packets whose region this instance holds no key for
+      "ambiguousHops":    number,         // hops shared with another repeater's prefix, credited to neither
+      "asked":            boolean,        // a declared-regions answer exists
+      "declaredRegions":  [string] | null,// null when not asked; [] when it answered with no named region
+      "declaredWildcard": boolean,
+      "configState":      string | undefined, // as in the declared view; only when asked
+      "declaredAt":       string | undefined, // only when asked
+      "notObserved":      [string] | null,    // declared regions not seen carried; null when not asked
+      "carriesScope":     boolean | undefined // only with scope
+    }
+  ]
+}
+```
+
+A repeater with no attributed forwarding in the window (only ambiguous hops, or no traffic)
+is not listed. Rows are sorted by name, then public key.
 
 ## GET /api/scope-stats
 
@@ -2247,6 +2306,31 @@ Available regions (IATA codes) merged from config + DB.
 ```
 
 Returns a flat key-value object.
+
+---
+
+## GET /api/config/region-quick-picks
+
+Named groups of region codes from `config.json` `regionQuickPicks`, offered as one-tap choices by
+the region filter. Names and codes are trimmed, codes upper-cased and de-duplicated in their
+configured order, groups without a name or any code dropped; at most 20 groups of 200 codes.
+
+### Response `200`
+
+```jsonc
+{
+  "quickPicks": [
+    {
+      "name":        string,           // button label
+      "description": string | undefined, // tooltip
+      "regions":     [string]          // IATA codes, as configured (may include codes with no observer yet)
+    }
+  ]
+}
+```
+
+`quickPicks` is `[]` when none are configured. The client offers a group only when at least one
+of its codes appears in `GET /api/config/regions`, and selects just those codes.
 
 ---
 

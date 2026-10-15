@@ -24,6 +24,33 @@ and no login or account control appears in the interface.
    Dedicated IPs*). Mail from an unverified sender is rejected or lands in spam.
 3. Create an API key (*SMTP & API, API Keys*).
 
+#### Or: use your own Postal server
+
+If you run [Postal](https://docs.postalserver.io), CoreScope can send through its HTTP
+API instead of Brevo:
+
+1. In Postal, add and verify the domain you will send from on your mail server.
+2. Create an **API** credential for that mail server (*Credentials, Add credential*,
+   type API).
+3. In `config.json`, set `mail.provider` to `"postal"` and `mail.postalBaseUrl` to the
+   address of your Postal web/API host, e.g. `https://postal.example.org`. It must be
+   https, unless Postal runs on the same machine (`http://localhost:5000`).
+4. Provide the credential's key as `mail.postalApiKey` or, better, the environment
+   variable `CORESCOPE_POSTAL_API_KEY`, which wins over the config value. CoreScope
+   sends it in the `X-Server-API-Key` header.
+
+```json
+"mail": {
+  "provider": "postal",
+  "postalBaseUrl": "https://postal.example.org",
+  "postalApiKey": "<key of the API credential, or leave out and use the env variable>",
+  "fromEmail": "noreply@example.org",
+  "fromName": "My CoreScope"
+}
+```
+
+Everything else below applies to both providers, except where it names one.
+
 ### 2. Configure
 
 Add to `config.json` (see `config.example.json` for every key):
@@ -49,7 +76,11 @@ incomplete, and the log says what is missing.
 | `databaseURL` | When PostgreSQL is selected, use a separate account database and restricted writer via `CORESCOPE_USERS_DATABASE_URL`. |
 | `sessionDays` | Login lifetime, extended while in use. Default 30, maximum 365. |
 | `trustedProxies` | CIDRs of your reverse proxy, so the per-IP login limits see real client IPs. Without it, behind a proxy every client shares the proxy's IP for the per-IP limits (they are switched off when that IP is loopback or private). Per-address and per-account limits apply either way. |
-| `mail.webhookSecret` | Enables delivery status (below). At least 16 characters. |
+| `mail.provider` | `brevo` (default) or `postal`. |
+| `mail.brevoApiKey` | Brevo only: the API key. `CORESCOPE_BREVO_API_KEY` wins over it. Required with Brevo. |
+| `mail.postalBaseUrl` | Postal only: your Postal host, https (http only for localhost). Required with Postal. |
+| `mail.postalApiKey` | Postal only: the key of the server's API credential. `CORESCOPE_POSTAL_API_KEY` wins over it. Required with Postal. |
+| `mail.webhookSecret` | Enables delivery status (below). At least 16 characters. With Postal, only letters, digits, `.`, `_` and `-`. |
 
 ### 3. The first admin
 
@@ -68,8 +99,29 @@ To see per user whether mails were delivered, bounced, blocked or marked as spam
    opened, clicked, soft bounce, hard bounce, invalid email, deferred, spam, blocked,
    error. Use **bearer** authentication with the same secret.
 
-If Brevo cannot reach your instance, use **Refresh status** in a user's details instead:
-CoreScope then asks Brevo directly. "Opened" is indicative only. Some mail apps load
+With Postal:
+
+1. Set `mail.webhookSecret` (16+ random letters and digits), or
+   `CORESCOPE_POSTAL_WEBHOOK_SECRET`.
+2. In Postal, add a webhook (*Webhooks, Add webhook*) for your mail server. Postal
+   cannot send a custom header, so the secret goes into the URL as Basic auth:
+   `https://postal:<secret>@<host of publicBaseUrl>/api/mail/postal/webhook`. The user
+   name (`postal` here) is not checked. Choose these events: MessageSent,
+   MessageDelayed, MessageDeliveryFailed, MessageHeld, MessageBounced, and if you use
+   Postal's open and click tracking, MessageLoaded and MessageLinkClicked. Other
+   events are accepted and ignored. Postal's "Sent" means the recipient's server
+   accepted the mail and is shown as delivered.
+
+   A failed delivery marks the address as bouncing only when the recipient's server
+   rejected the mail permanently (a 5xx SMTP reply). Postal also fails mail for
+   reasons on its own side: its outbound spam threshold, too many attempts after
+   temporary failures, a removed message or a deleted domain. Those, and bounce
+   messages (which can be delay notices or auto-replies), are shown as *error* with
+   Postal's explanation, and the address is not flagged.
+
+If the provider cannot reach your instance, use **Refresh status** in a user's details
+instead: CoreScope then asks the provider directly. Mails sent before you switched
+provider cannot be refreshed. "Opened" is indicative only. Some mail apps load
 tracking pixels automatically, and others block them.
 
 ### When mail fails
@@ -179,12 +231,74 @@ watched node changes state. Admins can also watch the instance.
 - `maxMailsPerDay` counts notification mail only; activation, password-reset and
   address-change mail are not counted and are not limited by it. They share the mail
   provider's daily quota, though (Brevo's free tier allows 300 a day for the whole
-  account), so keep `maxMailsPerDay` well below that quota. The default 100 leaves 200
-  a day for account mail and for any other sender on the same provider account.
+  account; a Postal server has whatever send limit you set on it), so keep
+  `maxMailsPerDay` well below that quota. The default 100 leaves 200 a day for account
+  mail and for any other sender on the same provider account.
 - Every mail carries a one-click unsubscribe link and `List-Unsubscribe` headers; the
   link turns notification mails off for that account and nothing else. The account page
   turns them back on.
 - Watch lists are private: admins see counts on the overview, not lists.
+
+#### External node alerts (optional)
+
+A job outside CoreScope can publish alerts about nodes, for example coverage sectors
+where a repeater is never heard by passing cars (#2177). With `externalAlerts` set,
+users can choose the event *A watched node gets a <label> alert or it clears*
+(`node.external`, off by default):
+
+```json
+"notifications": {
+  "enabled": true,
+  "externalAlerts": { "url": "http://coverage-job/alerts.json", "maxAgeHours": 48, "label": "Coverage" }
+}
+```
+
+The feed is JSON, at most 1 MB, fetched once per check while someone has the event on:
+
+```json
+{ "generatedAt": "2026-10-11T01:35:12Z",
+  "alerts": [ { "pubkey": "<64 hex>", "key": "SE", "text": "never heard to the south-east", "url": "https://example.org/coverage" } ] }
+```
+
+- `key` (at most 64 characters, not `*`) tells several alerts on one node apart; `text`
+  (cut at 200 characters) goes into the mail; `url` (optional, http or https) is the
+  mail line's link, otherwise the node page. Malformed alerts are skipped and logged.
+- A new alert on a watched node mails `<name>: <label>: <text>`; an alert that is gone
+  from a fresh feed mails `<name>: <label> resolved (<key>)`. The first check after a
+  node is watched stores its current alerts without a mail.
+- A feed that cannot be fetched, does not decode or whose `generatedAt` is older than
+  `maxAgeHours` (default 48) changes nothing: no alert is mailed and none is resolved.
+  The server log says when the feed stops and starts being usable.
+- The server only reads the feed; the states live in `users.db` like the other events.
+
+### Companion linking (CoreDrive RX)
+
+With user management on, a user logs in from the CoreDrive RX app with their email and password.
+RX then holds a **device token** instead of a cookie: it shows under *My account, Devices* as
+"CoreDrive RX – <device name>", lasts 90 days from its last use, and *Log out* there revokes it.
+The token is limited to the account routes RX needs (`/api/auth/me`, `/api/auth/logout`,
+`/api/account/settings`, `/api/account/companions*`); anything else answers 403.
+
+RX then links the companion it is connected to: the companion signs a server challenge with its
+own key, so only whoever holds the device can link it. The newest proof wins: a companion that
+changes hands moves to the new owner, and the previous owner gets an audit entry and a mail (a
+security notice: it goes out whatever their notification settings are). A linked companion's
+coverage counts as the owner's (*My coverage* on the coverage page). Links are private to their owner and to admins
+(*Admin, user detail* lists them).
+
+- **RX on another origin** (for example a hosted RX build): add that origin to
+  `corsAllowedOrigins`. For listed origins, and only on the device-token routes above, the server
+  then also allows `POST, PUT, DELETE` and the `Authorization` and `Content-Type` headers.
+  `Access-Control-Allow-Credentials` stays off; RX sends the token as a bearer header, not a
+  cookie. Same-origin RX needs no CORS setting.
+- A bearer header only counts on a request without the session cookie: with the cookie, the
+  cookie decides. So an auth proxy in front of CoreScope that adds its own
+  `Authorization: Bearer` does not break browser logins, and RX sends its calls without cookies.
+- The signed message contains the host of `publicBaseUrl`, so RX must log in on that address.
+- **Linked companions only:** `clientRxCoverage.requireLinkedCompanion` makes the ingestor drop
+  client data from companions nobody linked. It is a filter, not a security boundary, and it drops
+  everything from RX builds without account support: upgrade the RX clients first. See
+  [Client RX Coverage, Linked companions only](../client-rx-coverage.md#linked-companions-only-optional).
 
 ### Backups
 
@@ -305,6 +419,12 @@ Keep notification delivery paused until its restored state has been reviewed; ol
   page watches it; *My account, Notifications* lists your watched nodes, turns mails on
   or off, chooses the events, and *Watch my nodes* copies your synced My nodes. You get
   at most one mail per check, and every mail has a link that turns the mails off.
+- **Companions:** log in from the CoreDrive RX app while it is connected to your
+  companion, and it is linked to your account: it shows under *My account, Companions*
+  (name, short key, linked since, last seen). It is not added to My nodes: a companion is
+  not a node to monitor. The app shows
+  under *Devices* as "CoreDrive RX – <device name>"; *Log out* there signs the app out.
+  *Unlink* removes the link; the coverage it already collected stays on the map. On the coverage page, *My coverage* shows only what your linked companions heard.
 - **Never synced:** channel keys and decrypted messages, the API key, panel and column
   sizes, collapsed panels and map positions. They stay in the browser where you set them.
 - **Logging out** asks whether to keep your settings on this device (the default) or

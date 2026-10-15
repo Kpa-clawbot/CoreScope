@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"github.com/meshcore-analyzer/dbconfig"
 	"log"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -84,6 +86,7 @@ func (s *Store) RefreshPlannerStats(analysisLimit int) bool {
 		return false
 	}
 	elapsed := time.Since(start).Round(time.Millisecond)
+	s.recordPlannerStatsRefresh(time.Now())
 	if first {
 		log.Printf("[analyze] planner statistics built in %v (analysis_limit=%d, first run against this database)", elapsed, analysisLimit)
 	} else {
@@ -138,4 +141,75 @@ func (s *Store) Checkpoint() int {
 		log.Printf("[db] WAL checkpoint: %d/%d frames checkpointed (blocked=%v)", checkpointed, walFrames, busy != 0)
 	}
 	return checkpointed
+}
+
+// plannerStatsInterval is how often the planner statistics are refreshed, and
+// plannerStatsStagger how long after startup the first refresh waits at least.
+const (
+	plannerStatsInterval = 24 * time.Hour
+	plannerStatsStagger  = 2 * time.Minute
+)
+
+// nextPlannerStatsRefresh returns how long to wait before the next refresh,
+// given when the previous one succeeded (zero if never): until it is
+// plannerStatsInterval old, but at least plannerStatsStagger and at most
+// plannerStatsInterval.
+//
+// Before #2146 the first refresh ran plannerStatsStagger after every start.
+// On a cold page cache that ANALYZE took 6 to 9 minutes on a 10-11 GB
+// database, holding the single write connection, so each restart stalled
+// ingest that long for statistics that were hours old at most.
+func nextPlannerStatsRefresh(last, now time.Time) time.Duration {
+	if last.IsZero() {
+		return plannerStatsStagger
+	}
+	d := last.Add(plannerStatsInterval).Sub(now)
+	if d < plannerStatsStagger {
+		return plannerStatsStagger
+	}
+	if d > plannerStatsInterval {
+		return plannerStatsInterval
+	}
+	return d
+}
+
+// plannerStatsStampPath is the file next to the database that records when
+// the planner statistics were last refreshed.
+func (s *Store) plannerStatsStampPath() string {
+	return s.path + ".planner-stats-refreshed"
+}
+
+// lastPlannerStatsRefresh returns when RefreshPlannerStats last succeeded on
+// this database, or the zero time when that is not known: the later of the
+// time this process remembers and the time recorded in the file.
+func (s *Store) lastPlannerStatsRefresh() time.Time {
+	var last time.Time
+	if ns := s.plannerStatsAt.Load(); ns != 0 {
+		last = time.Unix(0, ns)
+	}
+	b, err := os.ReadFile(s.plannerStatsStampPath())
+	if err != nil {
+		return last
+	}
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(string(b)))
+	if err != nil || t.Before(last) {
+		return last
+	}
+	return t
+}
+
+// recordPlannerStatsRefresh remembers when the statistics were refreshed and
+// writes it next to the database for the next start. If the write fails, this
+// process still waits the full interval; only the first refresh after the
+// next restart comes early.
+func (s *Store) recordPlannerStatsRefresh(at time.Time) {
+	s.plannerStatsAt.Store(at.UnixNano())
+	tmp := s.plannerStatsStampPath() + ".tmp"
+	if err := os.WriteFile(tmp, []byte(at.UTC().Format(time.RFC3339)), 0o644); err != nil {
+		log.Printf("[analyze] could not record the refresh time: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, s.plannerStatsStampPath()); err != nil {
+		log.Printf("[analyze] could not record the refresh time: %v", err)
+	}
 }

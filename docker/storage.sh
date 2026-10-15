@@ -82,6 +82,6 @@ case "$action" in
       *) blocked ;;
     esac
     ;;
-  setup|adopt|init|switch|resume|abort) mutate "$action" "$@" ;;
+  setup|adopt|init|upgrade|switch|resume|abort) mutate "$action" "$@" ;;
   *) echo 'Unsupported packaged storage action.' >&2; exit 1 ;;
 esac

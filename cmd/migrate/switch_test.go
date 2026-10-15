@@ -113,8 +113,15 @@ func TestVerifiedTwoStoreSwitchRoundTripAndRuntimeGrants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := channel.Exec(`SELECT password_hash FROM users`); err == nil {
-		t.Fatal("projection reader can access account secrets")
+	for _, view := range []string{"approved_channels", "linked_companions"} {
+		if _, err := channel.Exec(`SELECT * FROM ` + view + ` LIMIT 0`); err != nil {
+			t.Fatal("projection reader lacks its public view", view, err)
+		}
+	}
+	for _, table := range []string{"users", "sessions", "companion_links", "link_challenges"} {
+		if _, err := channel.Exec(`SELECT * FROM ` + table + ` LIMIT 0`); err == nil {
+			t.Fatal("projection reader can access private account table", table)
+		}
 	}
 	channel.Close()
 	o.Backend = "sqlite"

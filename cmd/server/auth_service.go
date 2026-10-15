@@ -26,6 +26,7 @@ type authService struct {
 	signup      *rateLimiter // register, forgot, self-service resend
 	hook        *rateLimiter
 	settingsPut *rateLimiter // PUT /api/account/settings, per user
+	companion   *rateLimiter // companion challenge + link, per IP and per user
 
 	// approved is the snapshot of approved hashtag channel names, filled at
 	// construction and reloaded from users.db after every proposal decision.
@@ -53,6 +54,7 @@ func newAuthService(set *userMgmtSettings, st *users.Store, m mailer.Mailer) *au
 		signup:      newRateLimiter(5, time.Hour),
 		hook:        newRateLimiter(600, time.Minute),
 		settingsPut: newRateLimiter(60, time.Hour),
+		companion:   newRateLimiter(60, time.Hour),
 		stop:        make(chan struct{}),
 	}
 	a.refreshApproved()
@@ -64,6 +66,9 @@ func newAuthService(set *userMgmtSettings, st *users.Store, m mailer.Mailer) *au
 // users.Open as a forbidden database, so accounts cannot share telemetry storage.
 func (s *Server) initUserManagement(measurementTarget string) error {
 	if !s.cfg.UserManagementEnabled() {
+		if s.cfg.ClientRxRequireLinkedCompanionSet() {
+			log.Printf("[users] clientRxCoverage.requireLinkedCompanion is set but userManagement is off: the setting is ignored")
+		}
 		return nil
 	}
 	set, err := resolveUserManagement(s.cfg.UserManagement, runtimeStateDir, os.Getenv)
@@ -89,9 +94,12 @@ func (s *Server) initUserManagementStorage(storage dbconfig.Storage) error {
 		return err
 	}
 	var m mailer.Mailer
-	if set.provider == "fake" {
+	switch set.provider {
+	case "fake":
 		m = &mailer.Fake{}
-	} else {
+	case "postal":
+		m = mailer.NewPostal(set.postalBaseURL, set.postalAPIKey, set.fromEmail, set.fromName)
+	default:
 		m = mailer.NewBrevo(set.brevoAPIKey, set.fromEmail, set.fromName)
 	}
 	s.auth = newAuthService(set, st, m)
@@ -165,6 +173,9 @@ func (a *authService) prune() {
 	if _, err := a.st.PruneExpiredSessions(); err != nil {
 		log.Printf("[users] prune sessions: %v", err)
 	}
+	if _, err := a.st.PruneLinkChallenges(); err != nil {
+		log.Printf("[users] prune link challenges: %v", err)
+	}
 	if _, err := a.st.PruneTokens(7 * 24 * time.Hour); err != nil {
 		log.Printf("[users] prune tokens: %v", err)
 	}
@@ -182,6 +193,7 @@ func (a *authService) prune() {
 	a.signup.gc()
 	a.hook.gc()
 	a.settingsPut.gc()
+	a.companion.gc()
 }
 
 func (a *authService) isConfigAdmin(email string) bool { return a.set.adminEmails[email] }

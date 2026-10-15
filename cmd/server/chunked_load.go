@@ -384,7 +384,6 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 	// Each chunk publishes complete packets and indexes atomically in
 	// first_seen order. Build the derived analytics indexes once at the end.
 	s.mu.Lock()
-	s.buildSubpathIndex()
 	s.buildPathHopIndex()
 	s.buildDistanceIndex()
 	if !s.startupMemoryLimited {

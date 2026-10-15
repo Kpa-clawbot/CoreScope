@@ -73,6 +73,11 @@ func newChannelKeySetStorage(configured map[string]string, storage dbconfig.Stor
 // Snapshot returns the key map to decode one message with.
 func (s *channelKeySet) Snapshot() map[string]string { return *s.cur.Load() }
 
+// current returns the snapshot pointer itself. refresh stores a new one on
+// every successful read, changed or not, so callers that compare pointers
+// must treat a new one as "maybe changed" (see keyBackfiller.keySetMoved).
+func (s *channelKeySet) current() *map[string]string { return s.cur.Load() }
+
 // refresh re-reads the approved names and swaps in configured + approved.
 // A failed read keeps the current snapshot: only a successful read changes
 // the set, so an unavailable or incomplete account store never drops a key.
@@ -97,9 +102,9 @@ func (s *channelKeySet) refresh() {
 	s.cur.Store(&next)
 }
 
-func (s *channelKeySet) readApproved() ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+// readAccountSnapshot opens only the selected restricted projection target.
+// Both approved channels and linked companions use this readiness/grants fence.
+func (s *channelKeySet) readAccountSnapshot(ctx context.Context) (*sql.Tx, error) {
 	if s.backend != dbconfig.SQLite && s.backend != dbconfig.Postgres {
 		return nil, errors.New("approved channel storage backend must be selected")
 	}
@@ -146,30 +151,45 @@ func (s *channelKeySet) readApproved() ([]string, error) {
 	// Check schema and rows within one native read-only snapshot. PostgreSQL's
 	// projection role can read only the readiness marker and approved view.
 	opts := &sql.TxOptions{ReadOnly: true}
-	query := approvedChannelsSQLiteQuery
 	if s.backend == dbconfig.Postgres {
 		opts.Isolation = sql.LevelRepeatableRead
-		query = approvedChannelsQuery
 	}
 	tx, err := s.db.BeginTx(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
 	var version int
 	if s.backend == dbconfig.Postgres {
 		var ready bool
 		if err := tx.QueryRowContext(ctx, `SELECT version,ready FROM corescope_schema WHERE kind='accounts'`).Scan(&version, &ready); err != nil {
+			tx.Rollback()
 			return nil, errors.New("approved-channel account schema is not initialized")
 		}
 		if version != 1 || !ready {
+			tx.Rollback()
 			return nil, errors.New("approved-channel account schema is incomplete or unsupported")
 		}
 	} else {
 		var count int
-		if err := tx.QueryRowContext(ctx, `SELECT count(*),COALESCE(MAX(version),0) FROM schema_version`).Scan(&count, &version); err != nil || count != 1 || version < 4 || version > 6 {
+		if err := tx.QueryRowContext(ctx, `SELECT count(*),COALESCE(MAX(version),0) FROM schema_version`).Scan(&count, &version); err != nil || count != 1 || version < 4 || version > 7 {
+			tx.Rollback()
 			return nil, errors.New("approved-channel SQLite account schema is incomplete or unsupported")
 		}
+	}
+	return tx, nil
+}
+
+func (s *channelKeySet) readApproved() ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tx, err := s.readAccountSnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	query := approvedChannelsSQLiteQuery
+	if s.backend == dbconfig.Postgres {
+		query = approvedChannelsQuery
 	}
 	rows, err := tx.QueryContext(ctx, query, s.max)
 	if err != nil {

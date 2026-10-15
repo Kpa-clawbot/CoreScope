@@ -180,13 +180,20 @@ window.HopResolver = (function() {
    * @param {number|null} originLon - Sender longitude (forward anchor)
    * @param {number|null} observerLat - Observer latitude (backward anchor)
    * @param {number|null} observerLon - Observer longitude (backward anchor)
+   * @param {string|null} observerId - Observer that heard the packet
+   * @param {Object} [opts] - { directHops: hop prefixes the observer heard directly }.
+   *   Without it, hops is one path and its last hop is the direct one.
    * @returns {Object} resolved map keyed by hop prefix
    */
-  function resolve(hops, originLat, originLon, observerLat, observerLon, observerId) {
+  function resolve(hops, originLat, originLon, observerLat, observerLon, observerId, opts) {
     if (!hops || !hops.length) return {};
 
     // Determine observer's IATA for regional filtering
     const packetIata = observerId ? observerIataMap[observerId] : null;
+    // #2098 — only a hop the observer heard directly has to be within its
+    // region. Earlier hops can be anywhere the mesh reaches, so the region
+    // says nothing about them.
+    const direct = new Set(((opts && opts.directHops) || [hops[hops.length - 1]]).map(h => String(h).toLowerCase()));
 
     const resolved = {};
     const hopPositions = {};
@@ -199,20 +206,24 @@ window.HopResolver = (function() {
         resolved[hop] = { name: null, candidates: [], conflicts: [] };
       } else if (allCandidates.length === 1) {
         const c = allCandidates[0];
-        const regionCheck = packetIata ? nodeInRegion(c, packetIata) : null;
+        const regionCheck = packetIata && direct.has(h) ? nodeInRegion(c, packetIata) : null;
         resolved[hop] = { name: c.name, pubkey: c.public_key,
           candidates: [{ name: c.name, pubkey: c.public_key, lat: c.lat, lon: c.lon, regional: regionCheck ? regionCheck.near : false, filterMethod: regionCheck ? regionCheck.method : 'none', distKm: regionCheck ? regionCheck.distKm : undefined }],
           conflicts: [] };
       } else {
         // Multiple candidates — apply geo regional filtering
         const checked = allCandidates.map(c => {
-          const r = packetIata ? nodeInRegion(c, packetIata) : null;
+          const r = packetIata && direct.has(h) ? nodeInRegion(c, packetIata) : null;
           return { ...c, regional: r ? r.near : false, filterMethod: r ? r.method : 'none', distKm: r ? r.distKm : undefined };
         });
         const regional = checked.filter(c => c.regional);
         regional.sort((a, b) => (a.distKm || 9999) - (b.distKm || 9999));
         const candidates = regional.length > 0 ? regional : checked;
-        const globalFallback = regional.length === 0 && checked.length > 0 && packetIata != null;
+        // A global fallback is a hop checked against the region with no candidate
+        // in it. An earlier hop was not checked at all (#2098): regionSkipped
+        // keeps its badge counting every candidate without the fallback label.
+        const globalFallback = regional.length === 0 && checked.length > 0 && packetIata != null && direct.has(h);
+        const regionSkipped = packetIata != null && !direct.has(h);
 
         const conflicts = candidates.map(c => ({
           name: c.name, pubkey: c.public_key, lat: c.lat, lon: c.lon,
@@ -221,10 +232,10 @@ window.HopResolver = (function() {
 
         if (candidates.length === 1) {
           resolved[hop] = { name: candidates[0].name, pubkey: candidates[0].public_key,
-            candidates: conflicts, conflicts, globalFallback };
+            candidates: conflicts, conflicts, globalFallback, regionSkipped };
         } else {
           resolved[hop] = { name: candidates[0].name, pubkey: candidates[0].public_key,
-            ambiguous: true, candidates: conflicts, conflicts, globalFallback,
+            ambiguous: true, candidates: conflicts, conflicts, globalFallback, regionSkipped,
             hopBytes: Math.ceil(hop.length / 2), totalGlobal: allCandidates.length, totalRegional: regional.length };
         }
       }

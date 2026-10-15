@@ -52,6 +52,8 @@ function runSteps(source, context, edge, mutateFails = false) {
   const log = path.join(dir, 'commands');
   fs.writeFileSync(log, '');
   for (const name of ['decrypt', 'migrate']) fs.mkdirSync(path.join(dir, 'cmd', name), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'docs/release-notes'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'docs/release-notes/v9.8.7.md'), 'Fixture release notes\n');
   // go() only logs, so nothing real is produced; the release job's own
   // static/runnable verification step still needs these to exist.
   for (const arch of ['amd64', 'arm64']) for (const name of ['decrypt', 'migrate']) {
@@ -300,6 +302,22 @@ assert.equal(value(dispatchInput, 'type', 8), 'boolean', 'dispatch flag must ret
 assert.equal(value(dispatchInput, 'default', 8), 'false', 'manual and fallback dispatches must build images by default');
 
 const release = block(deploy, 'release-artifacts', 2);
+const notesStep = steps(release).find(step => value(step, 'id', 8) === 'notes');
+const inheritedRefName = process.env.GITHUB_REF_NAME;
+try {
+  for (const hostRef of [undefined, 'unrelated-runner-branch']) {
+    if (hostRef === undefined) delete process.env.GITHUB_REF_NAME;
+    else process.env.GITHUB_REF_NAME = hostRef;
+    for (const [tag, expectedPath] of [['v9.8.7', 'docs/release-notes/v9.8.7.md'], ['v9.8.8', '']]) {
+      const ctx = context(`refs/tags/${tag}`);
+      runSteps(`steps:\n${notesStep}`, ctx, null);
+      assert.equal(ctx.steps.notes.outputs.path, expectedPath, 'release notes must use the simulated tag, independent of the host environment');
+    }
+  }
+} finally {
+  if (inheritedRefName === undefined) delete process.env.GITHUB_REF_NAME;
+  else process.env.GITHUB_REF_NAME = inheritedRefName;
+}
 const builds = runSteps(release, context(), null).commands.filter(command => command[0] === 'go');
 // Exercise the actual release shell: both tools support native SQLite and use
 // the same static musl cross-compiler for both architectures.

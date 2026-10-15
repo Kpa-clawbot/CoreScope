@@ -127,7 +127,7 @@ console.log('\n=== #2097: packets.js never resolves a hop without its observer =
     'multi-packet call sites group their hops by observer');
 
   // renderHop reads the per-observer key; something has to write it.
-  assert(/hopNameCache\[hopCacheKey\(h, observerId\)\] = entry/.test(src),
+  assert(/hopNameCache\[hopCacheKey\(h, observerId(, direct)?\)\] = entry/.test(src),
     'resolveHops writes the per-observer cache key that renderHop reads');
 }
 
@@ -220,7 +220,7 @@ console.log('\n=== #2097: the observer position anchors the pick ===');
 
 {
   const src = fs.readFileSync(REPO_ROOT + '/public/packets.js', 'utf8');
-  assert(/HopResolver\.resolve\(unknown, null, null, obsLat, obsLon, observerId\)/.test(src),
+  assert(/HopResolver\.resolve\(unknown, null, null, obsLat, obsLon, observerId[,)]/.test(src),
     'resolveHops passes the observer position as the anchor');
   const withId = src.match(/HopResolver\.resolve\([^)]*observer_id[^)]*\)/g) || [];
   assert(withId.every(c => !/null, null, null, null/.test(c)),

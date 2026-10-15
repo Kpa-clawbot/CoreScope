@@ -104,6 +104,11 @@ async function checkMapTeardown(browser, stage, revisit) {
     await page.evaluate(() => { location.hash = '#/map'; });
     await page.waitForSelector('#leaflet-map[data-loaded="true"]');
   }
+  // The router focuses the new page's heading one frame after it renders
+  // (app.js, #630-7), adding tabindex="-1". That frame is already queued by
+  // now, so two more let it land before the snapshot; otherwise the
+  // comparison below can catch the router's change, not the old response.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const before = await page.evaluate(() => ({ nodes: JSON.stringify(window.__mc_nodes), html: document.getElementById('app').innerHTML }));
   await page.evaluate(async () => {
     window.__pendingMapResponse();

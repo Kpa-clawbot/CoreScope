@@ -126,7 +126,7 @@ func runStorageAction(ctx context.Context, o storageOptions, out io.Writer) (err
 		o.StateDir = filepath.Join(filepath.Dir(o.SelectionFile), "migration")
 	}
 	switch o.Action {
-	case "setup", "adopt", "init", "switch", "resume", "abort":
+	case "setup", "upgrade", "adopt", "init", "switch", "resume", "abort":
 	default:
 		return errors.New("unsupported storage action; use -help")
 	}
@@ -155,6 +155,9 @@ func runStorageAction(ctx context.Context, o storageOptions, out io.Writer) (err
 }
 
 func setupStorage(ctx context.Context, o storageOptions, recorded bool) error {
+	if o.Action == "upgrade" && !recorded {
+		return errors.New("schema upgrade requires an existing ready PostgreSQL selection")
+	}
 	if recorded && o.Action == "init" {
 		return errors.New("installation already has a recorded backend; use a verified switch")
 	}
@@ -168,9 +171,23 @@ func setupStorage(ctx context.Context, o storageOptions, recorded bool) error {
 			return err
 		}
 		defer lease.Close()
+		if o.Action == "upgrade" && (selection.Backend != dbconfig.Postgres || o.OwnerURL == "") {
+			return errors.New("schema upgrade requires an existing PostgreSQL selection and its owner credentials")
+		}
+		upgraded := false
+		if selection.Backend == dbconfig.Postgres && o.OwnerURL != "" && (o.Action == "setup" || o.Action == "upgrade") {
+			lease.Close()
+			if err := upgradeRecordedPostgres(ctx, o, selection, raw); err != nil {
+				return err
+			}
+			upgraded = true
+		}
 		if selection.Accounts == nil && o.Action == "setup" && (selection.Backend == dbconfig.SQLite || o.UsersOwnerURL != "" || raw.UsersDatabaseURL != "" || raw.ApprovedChannelsDatabaseURL != "") {
 			lease.Close()
 			return initializeAccounts(ctx, o, selection, raw)
+		}
+		if upgraded {
+			return nil
 		}
 		if selection.Backend == dbconfig.Postgres && o.OwnerURL != "" {
 			owners, err := bindOwnerURLs(selection, o.OwnerURL, o.UsersOwnerURL)

@@ -41,6 +41,8 @@
 .account-mail .account-links { font-size: var(--fs-md); }
 .account-sessions { list-style: none; padding: 0; margin: 0; }
 .account-sessions li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: var(--fs-sm); }
+.um-chip-device { margin-left: 4px; font-size: var(--fs-xs, 11px); color: var(--text-muted); }
+.account-sessions li.account-empty { color: var(--text-muted); }
 
 .cs-auth-toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 2000; opacity: 0; pointer-events: none;
   background: var(--card-bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; transition: opacity .2s; }

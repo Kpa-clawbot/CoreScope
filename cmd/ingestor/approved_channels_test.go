@@ -38,7 +38,7 @@ type testProposal struct {
 	decidedAt       int64
 }
 
-func execUsersDB(t *testing.T, path string, stmts ...string) {
+func execUsersDB(t testing.TB, path string, stmts ...string) {
 	t.Helper()
 	db, err := openApprovedFixture(t, approvedFixture(t, path).owner)
 	if err != nil {
@@ -441,7 +441,7 @@ type approvedFixtureDB struct{ owner, reader, role string }
 
 var approvedFixtures sync.Map
 
-func approvedFixture(t *testing.T, key string) approvedFixtureDB {
+func approvedFixture(t testing.TB, key string) approvedFixtureDB {
 	t.Helper()
 	if approvedTestBackend(t) == dbconfig.SQLite {
 		return approvedFixtureDB{owner: key, reader: key}
@@ -474,11 +474,11 @@ func approvedFixture(t *testing.T, key string) approvedFixtureDB {
 	})
 	return f
 }
-func newApprovedTestKeySet(t *testing.T, configured map[string]string, key string, max int) *channelKeySet {
+func newApprovedTestKeySet(t testing.TB, configured map[string]string, key string, max int) *channelKeySet {
 	return newChannelKeySet(configured, approvedFixture(t, key).reader, max)
 }
 
-func approvedTestBackend(t *testing.T) dbconfig.Backend {
+func approvedTestBackend(t testing.TB) dbconfig.Backend {
 	t.Helper()
 	switch os.Getenv("CORESCOPE_TEST_BACKEND") {
 	case "", "sqlite":
@@ -490,7 +490,7 @@ func approvedTestBackend(t *testing.T) dbconfig.Backend {
 		return ""
 	}
 }
-func openApprovedFixture(t *testing.T, path string) (*sql.DB, error) {
+func openApprovedFixture(t testing.TB, path string) (*sql.DB, error) {
 	t.Helper()
 	if approvedTestBackend(t) == dbconfig.Postgres {
 		return pgutil.Open(path, false)
@@ -527,7 +527,7 @@ func TestApprovedChannelsSQLiteVersionsAndLiteralPath(t *testing.T) {
 	writeUsersDB(t, path, testProposal{"#local", "approved", 1})
 	s := newChannelKeySetStorage(configuredKeys(), dbconfig.Storage{Backend: dbconfig.SQLite, UsersDBPath: path, ApprovedChannelsDatabaseURL: "postgres://unused.invalid/accounts"}, 128)
 	defer s.Close()
-	for _, version := range []int{4, 5, 6} {
+	for _, version := range []int{4, 5, 6, 7} {
 		execUsersDB(t, path, fmt.Sprintf(`UPDATE schema_version SET version=%d`, version))
 		names, err := s.readApproved()
 		if err != nil || len(names) != 1 || names[0] != "#local" {
@@ -535,7 +535,7 @@ func TestApprovedChannelsSQLiteVersionsAndLiteralPath(t *testing.T) {
 		}
 	}
 	s.refresh()
-	for _, version := range []int{3, 7} {
+	for _, version := range []int{3, 8} {
 		execUsersDB(t, path, fmt.Sprintf(`UPDATE schema_version SET version=%d`, version))
 		if _, err := s.readApproved(); err == nil {
 			t.Fatalf("unsupported version%d accepted", version)

@@ -123,16 +123,35 @@ var migrations = [][]string{
 			PRIMARY KEY (user_id, event, subject)
 		)`,
 	},
+	{ // v6: sub-project F, companion linking (device sessions, linked companions)
+		`ALTER TABLE sessions ADD COLUMN kind TEXT COLLATE "C" NOT NULL DEFAULT 'web'
+			CHECK (kind IN ('web','device'))`,
+		`ALTER TABLE sessions ADD COLUMN label TEXT COLLATE "C" NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN scopes TEXT COLLATE "C" NOT NULL DEFAULT ''`,
+		`CREATE TABLE companion_links (
+			pubkey TEXT COLLATE "C" PRIMARY KEY,
+			user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			name TEXT COLLATE "C" NOT NULL DEFAULT '',
+			linked_at BIGINT NOT NULL
+		)`,
+		`CREATE INDEX companion_links_user ON companion_links(user_id)`,
+		`CREATE TABLE link_challenges (
+			challenge_hash TEXT COLLATE "C" PRIMARY KEY,
+			user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			pubkey TEXT COLLATE "C" NOT NULL,
+			expires_at BIGINT NOT NULL
+		)`,
+	},
 }
 
 // SchemaVersion is the account data layout version; PostgreSQL readiness is
 // recorded separately so the legacy importer can preserve its source history.
-const CurrentSchemaVersion = 5
+const CurrentSchemaVersion = 6
 const PostgresSchemaVersion = 1
 
 // Tables is the dependency-ordered account data manifest (metadata excluded).
 func Tables() []string {
-	return []string{"users", "sessions", "tokens", "audit_log", "mail_log", "mail_events", "user_settings", "proposals", "notification_prefs", "notification_watches", "notification_state"}
+	return []string{"users", "sessions", "tokens", "audit_log", "mail_log", "mail_events", "user_settings", "proposals", "notification_prefs", "notification_watches", "notification_state", "companion_links", "link_challenges"}
 }
 
 // Apply installs PostgreSQL accounts using the migration owner's connection.
@@ -215,6 +234,9 @@ func applyTx(tx *sql.Tx, markReady bool) error {
 		}
 	}
 	if _, err = tx.Exec(`CREATE OR REPLACE VIEW approved_channels AS SELECT kind,subject,decided_at,id FROM proposals WHERE status='approved'`); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`CREATE OR REPLACE VIEW linked_companions AS SELECT pubkey FROM companion_links`); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(`INSERT INTO corescope_schema(version,kind,ready) VALUES (1,'accounts',$1) ON CONFLICT(kind) DO NOTHING`, markReady); err != nil {

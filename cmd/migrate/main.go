@@ -39,7 +39,7 @@ func runCommand(ctx context.Context, args []string, out io.Writer) error {
 	resume := flags.Bool("resume", false, "resume the same source/state/destination import")
 	checkReady := flags.Bool("check-ready", false, "check readiness without changing any schema or data")
 	checkImportKind := flags.String("check-import-kind", "", "read-only completed-import guard: telemetry or accounts, with its SQLite source path")
-	action := flags.String("storage-action", "", "installation status, setup, adopt, init, switch, resume or abort")
+	action := flags.String("storage-action", "", "installation status, setup, upgrade, adopt, init, switch, resume or abort")
 	selectionFile := flags.String("selection-file", "", "absolute stable storage-selection.json path")
 	backend := flags.String("backend", "", "bootstrap backend, or explicit switch destination: sqlite or postgres")
 	sqlitePath := flags.String("sqlite-path", "", "bootstrap or new destination telemetry SQLite path")

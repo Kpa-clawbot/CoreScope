@@ -86,7 +86,7 @@ func seedSQLiteAccounts(t *testing.T, db *sql.DB) {
 func TestSQLiteIdentityUpgradePreservesAllAccountRows(t *testing.T) {
 	path, db := legacySQLiteFixture(t, 5, false)
 	seedSQLiteAccounts(t, db)
-	tables := Tables()
+	tables := []string{"users", "sessions", "tokens", "audit_log", "mail_log", "mail_events", "user_settings", "proposals", "notification_prefs", "notification_watches", "notification_state"}
 	before := make(map[string][][]any)
 	for _, table := range tables {
 		projection := "*"
@@ -100,7 +100,11 @@ func TestSQLiteIdentityUpgradePreservesAllAccountRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, table := range tables {
-		if got := sqliteRows(t, db, `SELECT * FROM `+sqliteQuote(table)+` ORDER BY 1`); !reflect.DeepEqual(got, before[table]) {
+		projection := "*"
+		if table == "sessions" {
+			projection = "id,token_hash,user_id,csrf_token,created_at,expires_at,last_seen_at,user_agent"
+		}
+		if got := sqliteRows(t, db, `SELECT `+projection+` FROM `+sqliteQuote(table)+` ORDER BY 1`); !reflect.DeepEqual(got, before[table]) {
 			t.Fatalf("%s rows changed: got=%v want=%v", table, got, before[table])
 		}
 	}

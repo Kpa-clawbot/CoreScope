@@ -1,9 +1,9 @@
 # CoreScope
 
-[![Go Server Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Kpa-clawbot/CoreScope/master/.badges/go-server-coverage.json)](https://github.com/Kpa-clawbot/CoreScope/actions/workflows/deploy.yml)
-[![Go Ingestor Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Kpa-clawbot/CoreScope/master/.badges/go-ingestor-coverage.json)](https://github.com/Kpa-clawbot/CoreScope/actions/workflows/deploy.yml)
-[![E2E Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Kpa-clawbot/CoreScope/master/.badges/e2e-tests.json)](https://github.com/Kpa-clawbot/CoreScope/actions/workflows/deploy.yml)
-[![Frontend Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Kpa-clawbot/CoreScope/master/.badges/frontend-coverage.json)](https://github.com/Kpa-clawbot/CoreScope/actions/workflows/deploy.yml)
+[![Go Server Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Kpa-clawbot/CoreScope/badges/go-server-coverage.json)](https://github.com/Kpa-clawbot/CoreScope/actions/workflows/deploy.yml)
+[![Go Ingestor Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Kpa-clawbot/CoreScope/badges/go-ingestor-coverage.json)](https://github.com/Kpa-clawbot/CoreScope/actions/workflows/deploy.yml)
+[![E2E Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Kpa-clawbot/CoreScope/badges/e2e-tests.json)](https://github.com/Kpa-clawbot/CoreScope/actions/workflows/deploy.yml)
+[![Frontend Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Kpa-clawbot/CoreScope/badges/frontend-coverage.json)](https://github.com/Kpa-clawbot/CoreScope/actions/workflows/deploy.yml)
 [![Deploy](https://github.com/Kpa-clawbot/CoreScope/actions/workflows/deploy.yml/badge.svg)](https://github.com/Kpa-clawbot/CoreScope/actions/workflows/deploy.yml)
 
 > MeshCore packet analysis with a Go backend, SQLite persistence by default, with optional PostgreSQL, real-time WebSocket updates and channel decryption.
@@ -19,7 +19,7 @@ Budget for the application and PostgreSQL together, including retained data, ind
 ## ✨ Features
 
 ### 📡 Live Trace Map
-Real-time animated map with packet route visualization, VCR-style playback controls, and a retro LCD clock. Replay the last 24 hours of mesh activity, scrub through the timeline, or watch packets flow live at up to 4× speed.
+Real-time animated map with packet route visualization, VCR-style playback controls, and a retro LCD clock. Replay the last 24 hours of mesh activity, scrub through the timeline, or watch packets flow live at up to 8× speed.
 
 ![Live VCR playback — watch packets flow across the Bay Area mesh](docs/screenshots/MeshVCR.gif)
 
@@ -50,11 +50,12 @@ Full experience on your phone — proper touch controls, iOS safe area support, 
 
 ### And More
 
-- **11 Analytics Tabs** — RF, topology, channels, hash stats, distance, route patterns, and more
+- **17 Analytics Tabs** — RF, topology, channels, hash stats, distance, route patterns, scopes, and more
 - **Node Directory** — searchable list with role tabs, detail panel, QR codes, advert timeline
 - **Packet Tracing** — follow individual packets across observers with SNR/RSSI timeline
 - **Observer Status** — health monitoring, packet counts, uptime, per-observer analytics
 - **Hash Collision Matrix** — detect address collisions across the mesh
+- **Scope Audit**: per repeater, which declared regions show no forwarding and which scopes it forwards without declaring them
 - **Channel Key Auto-Derivation** — hashtag channels (`#channel`) keys derived via SHA256
 - **Multi-Broker MQTT** — connect to multiple brokers with per-source IATA filtering
 - **Dark / Light Mode** — auto-detects system preference, map tiles swap too
@@ -63,6 +64,13 @@ Full experience on your phone — proper touch controls, iOS safe area support, 
 - **Shareable URLs** — deep links to packets, channels, and observer detail pages
 - **Protobuf API Contract** — typed API definitions in `proto/`
 - **Accessible** — ARIA patterns, keyboard navigation, screen reader support
+
+### Optional Features
+
+Off by default, enabled in `config.json`:
+
+- **User Accounts**: registration with email activation, settings sync, an admin area, hashtag channel proposals, mail notifications for watched nodes, and a personal data export. The dashboard stays public. See [docs/user-guide/accounts.md](docs/user-guide/accounts.md)
+- **Mobile RX Coverage**: crowdsourced coverage from phones connected to a companion radio, drawn as hex bins on the RX Coverage page and on each node's Reach page. See [docs/client-rx-coverage.md](docs/client-rx-coverage.md)
 
 ## Quick Start
 
@@ -138,13 +146,16 @@ Copy `config.example.json` to `config.json` and edit:
 
 | Variable | Description |
 |----------|-------------|
-| `PORT` | Override config port |
+| `DB_PATH` | Bootstrap SQLite telemetry path; recorded targets take precedence after setup |
+| `GOMEMLIMIT` | Go soft memory limit, wins over `runtime.maxMemoryMB` |
 | `CORESCOPE_DB_BACKEND` | Bootstrap choice only; use an offline switch to change an installed backend |
 | `CORESCOPE_READER_DATABASE_URL` | Server telemetry reader URL |
 | `CORESCOPE_WRITER_DATABASE_URL` | Ingestor telemetry writer URL |
 | `CORESCOPE_USERS_DATABASE_URL` | Optional account writer URL in a separate database |
-| `CORESCOPE_APPROVED_CHANNELS_DATABASE_URL` | Ingestor's restricted approved-channel reader URL |
+| `CORESCOPE_APPROVED_CHANNELS_DATABASE_URL` | Ingestor's restricted approved-channel and linked-companion projection reader URL |
 | `CORESCOPE_STATE_DIR` | Shared state-directory path; never a database URL |
+
+The HTTP port is set with `port` in `config.json` or the server's `-port` flag.
 
 ## Architecture
 
@@ -167,7 +178,7 @@ flowchart LR
 3. **Configure meshcoretomqtt** with your IATA region code and MQTT broker address
 4. **Packets appear** on topic `meshcore/{IATA}/{PUBKEY}/packets`
 
-Or POST raw hex packets to `POST /api/packets` for manual injection.
+To decode a single raw hex packet without storing it, use `POST /api/decode`.
 
 ## Project Structure
 
@@ -196,7 +207,7 @@ corescope/
 │   ├── live.js              # Live trace + VCR playback
 │   ├── channels.js          # Channel chat
 │   ├── nodes.js             # Node directory + detail views
-│   ├── analytics.js         # 11-tab analytics dashboard
+│   ├── analytics.js         # Analytics dashboard
 │   └── style.css            # CSS variable theming (light/dark)
 ├── docker/
 │   ├── supervisord-go.conf  # Process manager (server + ingestor)
@@ -266,9 +277,9 @@ Historical Node.js/SQLite deployments must first reach a supported SQLite layout
 
 Contributions welcome. Please read [AGENTS.md](AGENTS.md) for coding conventions, testing requirements, and engineering principles before submitting a PR.
 
-**Live instance:** [analyzer.00id.net](https://analyzer.00id.net) — all API endpoints are public, no auth required.
+**Live instance:** [analyzer.on8ar.eu](https://analyzer.on8ar.eu): all read endpoints are public, no auth required.
 
-**API Documentation:** CoreScope auto-generates an OpenAPI 3.0 spec. Browse the interactive Swagger UI at [`/api/docs`](https://analyzer.00id.net/api/docs) or fetch the machine-readable spec at [`/api/spec`](https://analyzer.00id.net/api/spec).
+**API Documentation:** CoreScope auto-generates an OpenAPI 3.0 spec. Browse the interactive Swagger UI at [`/api/docs`](https://analyzer.on8ar.eu/api/docs) or fetch the machine-readable spec at [`/api/spec`](https://analyzer.on8ar.eu/api/spec).
 
 ## License
 

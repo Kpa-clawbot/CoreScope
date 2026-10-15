@@ -25,7 +25,9 @@ if(name!=='jq')fs.appendFileSync(calls,JSON.stringify([name,...args])+'\\n');
 const field=flag=>args.find(v=>v.startsWith(flag+'='))?.slice(flag.length+1)||args[args.indexOf(flag)+1];
 if(name==='corescope-migrate'){
  if(args.includes('-check-ready')){
-  fs.appendFileSync(calls,JSON.stringify(['readiness-accounts',Boolean(process.env.CORESCOPE_USERS_DATABASE_URL)])+'\\n');process.exit(0);
+  fs.appendFileSync(calls,JSON.stringify(['readiness-accounts',Boolean(process.env.CORESCOPE_USERS_DATABASE_URL)])+'\\n');
+  if(process.env.SCENARIO==='unsupported-schema'||(process.env.SCENARIO==='old-schema'&&!fs.existsSync(calls+'.upgraded')))process.exit(1);
+  process.exit(0);
  }
  const selection=field('-selection-file');const action=field('-storage-action');
  if(action==='status'){
@@ -35,10 +37,24 @@ if(name==='corescope-migrate'){
   if(process.env.SCENARIO==='corrupt'){console.log(JSON.stringify({...report,state:'corrupt'}));process.exit(1)};
   console.log(JSON.stringify(report));
  }else if(action==='setup'){
+  fs.appendFileSync(calls,JSON.stringify(['setup-account',process.env.FIXTURE_RUN_AS||'root'])+'\\n');
   if(process.env.SCENARIO==='fail-setup')process.exit(1);
   const backend=field('-backend')||'sqlite';fs.mkdirSync(path.dirname(selection),{recursive:true});
   fs.writeFileSync(selection,JSON.stringify({version:1,state:'ready',backend,generation:'one',job_id:''}));console.log(JSON.stringify({verified:true}));
+ }else if(action==='upgrade'){
+  const report=JSON.parse(fs.readFileSync(selection,'utf8'));
+  if(report.state!=='ready'||report.backend!=='postgres'||process.env.SCENARIO==='unsupported-schema')process.exit(1);
+  fs.appendFileSync(calls,JSON.stringify(['upgraded-stores',report.accounts?['telemetry','accounts']:['telemetry']])+'\\n');
+  fs.writeFileSync(calls+'.upgraded','verified');
  }else{process.stderr.write('unexpected migration action');process.exit(2)}
+}else if(name==='su'){
+ if(process.env.SCENARIO==='fail-user-switch')process.exit(1);
+ const env={...process.env,FIXTURE_RUN_AS:args.at(-1)};
+ // MSYS converts path-shaped environment values for the native Node stub.
+ env.CORESCOPE_STATE_DIR=env.CORESCOPE_STATE_DIR.replace(/\\\\/g,'/').replace(/^([A-Za-z]):/,(_,drive)=>'/'+drive.toLowerCase());
+ const result=require('child_process').spawnSync(process.env.FIXTURE_BASH,['--noprofile','--norc','-c',args[args.indexOf('-c')+1]],
+  {env,stdio:'inherit'});
+ process.exit(result.status??1);
 }else if(name==='jq'){
  const value=JSON.parse(fs.readFileSync(0,'utf8'));const query=args.at(-1);
  if(query==='.accounts != null'){console.log(value.accounts!=null);process.exit(0)}
@@ -56,13 +72,18 @@ if(name==='corescope-migrate'){
  fs.appendFileSync(calls,JSON.stringify(['grant-database',process.env.PGDATABASE])+'\\n');
 }
 `);
-for (const name of ['corescope-migrate','jq','supervisord','psql']) {
+for (const name of ['corescope-migrate','jq','supervisord','psql','su']) {
   const file = path.join(name === 'corescope-migrate' ? app : path.join(temp, 'bin'), name);
   fs.writeFileSync(file, `#!/bin/sh\nexec node ${shellQuote(posix(tool))} ${name} "$@"\n`, { mode: 0o755 });
 }
+// Account resolution/.env trust has its own shell suite. Here the process
+// boundary supplies the resolved identity and records who runs setup.
+fs.writeFileSync(path.join(temp, 'select-service-user.sh'), 'prepare_service_user(){ CORESCOPE_SERVICE_USER=${TEST_SERVICE_USER:-root}; export CORESCOPE_SERVICE_USER; }\n');
+fs.writeFileSync(path.join(temp, 'bin/id'), '#!/bin/sh\nprintf "1000\\n"\n', { mode: 0o755 });
 function materialize() {
   let source = fs.readFileSync(path.join(root, 'docker/entrypoint-go.sh'), 'utf8');
-  source = source.replaceAll('/app', posix(app)).replace('/usr/bin/supervisord', posix(path.join(temp, 'bin/supervisord')));
+  source = source.replaceAll('/app', posix(app)).replace('/usr/bin/supervisord', posix(path.join(temp, 'bin/supervisord')))
+    .replaceAll('/select-service-user.sh', posix(path.join(temp, 'select-service-user.sh')));
   fs.writeFileSync(path.join(temp, 'entrypoint.sh'), source, { mode: 0o755 });
   const helper = path.join(root, 'docker/storage.sh');
   if (fs.existsSync(helper)) fs.writeFileSync(path.join(app, 'storage.sh'), fs.readFileSync(helper, 'utf8').replaceAll('/app', posix(app)).replace('/proc/self/mountinfo', posix(path.join(temp, 'mountinfo'))), { mode: 0o755 });
@@ -70,7 +91,8 @@ function materialize() {
 }
 function run(extra = {}, action = [], bootstrap = false) {
   fs.writeFileSync(calls, '');
-  const env = { ...process.env, CALLS: calls, CORESCOPE_STATE_DIR: posix(path.join(app, 'data/custom')), CORESCOPE_DB_BACKEND: 'sqlite', SCENARIO: '', ...extra };
+  fs.rmSync(calls + '.upgraded', { force: true });
+  const env = { ...process.env, CALLS: calls, FIXTURE_BASH: bash, TEST_SERVICE_USER: 'root', CORESCOPE_STATE_DIR: posix(path.join(app, 'data/custom')), CORESCOPE_DB_BACKEND: 'sqlite', SCENARIO: '', ...extra };
   const inherited = env.PATH || env.Path || '';
   delete env.Path;
   env.PATH = path.join(temp, 'bin') + path.delimiter + inherited;
@@ -87,6 +109,16 @@ try {
   const setup = fresh.calls.find(call => call.includes('setup') || call.includes('-storage-action=setup'));
   assert(setup.includes('-offline'), 'guarded setup must be offline, before child processes');
   assert(setup.some(arg => arg.includes('/data/custom/storage-selection.json')), 'custom persistent selection path was ignored');
+  assert.deepEqual(fresh.calls.find(call => call[0] === 'setup-account'), ['setup-account', 'root']);
+  assert(!fresh.calls.some(call => call[0] === 'su'), 'default root startup switched users');
+  const unprivileged = run({ TEST_SERVICE_USER: 'corescope', CORESCOPE_STATE_DIR: posix(path.join(app, 'data/unprivileged')) });
+  assert.equal(unprivileged.status, 0, unprivileged.stderr || unprivileged.error?.message);
+  assert.deepEqual(unprivileged.calls.find(call => call[0] === 'setup-account'), ['setup-account', 'corescope'],
+    'fresh SQLite files must be created by the service account after ownership hand-over');
+  assert.equal(unprivileged.calls.at(-1)?.[0], 'supervisord');
+  const switchFailure = run({ TEST_SERVICE_USER: 'corescope', SCENARIO: 'fail-user-switch' });
+  assert.notEqual(switchFailure.status, 0, 'failed service-account switch started the server');
+  assert(!switchFailure.calls.some(call => call[0] === 'supervisord' || call[0] === 'corescope-migrate'));
   const recreated = run({ CORESCOPE_DB_BACKEND: 'postgres' });
   assert.equal(recreated.status,0,recreated.stderr);
   assert(!recreated.calls.some(call => call.includes('setup') || call.includes('-storage-action=setup')), 'recreate interpreted a stale bootstrap backend as new setup');
@@ -120,6 +152,24 @@ try {
     assert.deepEqual(started.calls.filter(call=>call[0]==='grant-database').map(call=>call[1]),accounts?['corescope_telemetry','corescope_accounts']:['corescope_telemetry']);
     assert.deepEqual(started.calls.find(call=>call[0]==='readiness-accounts'),['readiness-accounts',accounts!==null]);
     assert(!started.calls.some(call=>call.includes('-storage-action=setup')),'ready PostgreSQL was implicitly initialized');
+    assert(!started.calls.some(call=>call.includes('-storage-action=upgrade')),'current schema was unnecessarily upgraded');
+    const originalSelection=fs.readFileSync(selectionFile,'utf8');
+    const upgraded=run({SCENARIO:'old-schema',CORESCOPE_OWNER_PASSWORD:'synthetic-owner',CORESCOPE_USERS_OWNER_DATABASE_URL:'synthetic-owner-url',CORESCOPE_USERS_DATABASE_URL:'runtime-account-url'},[],true);
+    assert.equal(upgraded.status,0,upgraded.stderr||upgraded.error?.message);
+    const upgrade=upgraded.calls.filter(call=>call.includes('-storage-action=upgrade'));
+    assert.equal(upgrade.length,1,'old recorded schema did not invoke exactly one owner upgrade');
+    assert(upgrade[0].includes('-offline'),'schema upgrade was not explicitly offline');
+    assert(upgrade[0].includes('-selection-file')&&upgrade[0].some(arg=>arg.endsWith('/data/custom/storage-selection.json')),'upgrade lost its recorded selection');
+    assert.deepEqual(upgraded.calls.find(call=>call[0]==='upgraded-stores'),['upgraded-stores',accounts?['telemetry','accounts']:['telemetry']]);
+    assert.deepEqual(upgraded.calls.filter(call=>call[0]==='readiness-accounts'),[['readiness-accounts',accounts!==null],['readiness-accounts',accounts!==null]],'upgrade must recheck precisely the selected stores');
+    const finalReady=upgraded.calls.map(call=>call[0]).lastIndexOf('readiness-accounts');
+    assert(upgraded.calls.findIndex(call=>call[0]==='psql')>finalReady,'runtime grants preceded upgrade verification');
+    assert(!upgraded.calls.some(call=>call.includes('-storage-action=setup')),'recorded upgrade could initialize a replacement or absent account target');
+    assert.equal(fs.readFileSync(selectionFile,'utf8'),originalSelection,'upgrade changed the selection');
+    const unsupported=run({SCENARIO:'unsupported-schema',CORESCOPE_OWNER_PASSWORD:'synthetic-owner',CORESCOPE_USERS_OWNER_DATABASE_URL:'synthetic-owner-url'},[],true);
+    assert.notEqual(unsupported.status,0,'unsupported schema passed bootstrap');
+    assert(!unsupported.calls.some(call=>call[0]==='psql'),'failed schema upgrade reached grants');
+    assert.equal(fs.readFileSync(selectionFile,'utf8'),originalSelection,'failed upgrade changed the selection');
   }
   for(const report of [{...pgReport,telemetry:target('unselected_telemetry')},{...pgReport,accounts:target('unselected_accounts')},{...pgReport,accounts:{sqlite_path:'/app/data/users.db'}}]){
     fs.writeFileSync(selectionFile,JSON.stringify(report));

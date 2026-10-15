@@ -152,7 +152,6 @@ func BenchmarkPathHopEviction1908(b *testing.B) {
 					store := &PacketStore{
 						packets:        make([]*StoreTx, count),
 						byPathHop:      make(map[string][]*StoreTx, len(pubkeys)+256),
-						spIndex:        make(map[string]int),
 						retentionHours: 1,
 					}
 					hopsSeen := make(map[string]bool, hops*2)

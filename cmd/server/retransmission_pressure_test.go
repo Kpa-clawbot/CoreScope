@@ -675,8 +675,7 @@ func BenchmarkComputeRetransmissionPressureColdTimestamps(b *testing.B) {
 		b.StopTimer()
 		for _, tx := range s.packets {
 			for _, o := range tx.Observations {
-				o.tsParseOnce = sync.Once{}
-				o.tsParsed, o.tsParsedOK = time.Time{}, false
+				o.tsUnixNano.Store(0)
 			}
 		}
 		b.StartTimer()

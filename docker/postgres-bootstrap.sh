@@ -17,7 +17,13 @@ case $(/app/storage.sh field has_accounts) in
   false) ;;
   *) echo 'Cannot read the recorded account target.' >&2; exit 1 ;;
 esac
-CORESCOPE_USERS_DATABASE_URL="$account_owner" /app/corescope-migrate -check-ready
+if ! CORESCOPE_USERS_DATABASE_URL="$account_owner" /app/corescope-migrate -check-ready; then
+  # Only a recorded, existing PostgreSQL target can be upgraded. Unlike setup,
+  # this action cannot create a missing database or add an absent account store.
+  # Its offline lease refuses active writers; failed upgrades block startup.
+  /app/storage.sh upgrade
+  CORESCOPE_USERS_DATABASE_URL="$account_owner" /app/corescope-migrate -check-ready
+fi
 
 export PGHOST=postgres PGPORT=5432 PGSSLMODE=disable
 export PGUSER=corescope_owner PGPASSWORD="${CORESCOPE_OWNER_PASSWORD:?set CORESCOPE_OWNER_PASSWORD}"

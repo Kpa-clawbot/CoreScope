@@ -25,6 +25,13 @@ func TestNewSQLiteIdentitySourceLayouts(t *testing.T) {
 				db.Close()
 				t.Fatal(err)
 			}
+			var sourceVersion int
+			if kind == "accounts" {
+				if err := db.QueryRow(`SELECT version FROM schema_version`).Scan(&sourceVersion); err != nil {
+					db.Close()
+					t.Fatal(err)
+				}
+			}
 			if kind == "accounts" {
 				for _, q := range []string{
 					`INSERT INTO users(id,email,display_name,password_hash,created_at) VALUES(5,'test@example.invalid','','hash',1)`,
@@ -67,7 +74,7 @@ func TestNewSQLiteIdentitySourceLayouts(t *testing.T) {
 				if err := copyDB.QueryRow(`SELECT seq FROM sqlite_sequence WHERE name='mail_events'`).Scan(&seq); err != nil || seq != 9000 {
 					t.Fatal("event sequence changed", seq, err)
 				}
-				if err := copyDB.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 6 {
+				if err := copyDB.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != sourceVersion {
 					t.Fatal("SQLite source version changed", version, err)
 				}
 			}
@@ -91,14 +98,14 @@ func TestForwardNewSQLiteAccountIDsAndSequence(t *testing.T) {
 	db.Close()
 	report, err := importSQLite(context.Background(), importOptions{Source: source, DatabaseURL: dsn, StateDir: t.TempDir(), Kind: "accounts"})
 	if err != nil || !report.Verified {
-		t.Fatal("forward v6", err)
+		t.Fatal("forward native SQLite accounts", err)
 	}
 	pg := openImportDB(t, dsn)
 	var id, version int
 	if err := pg.QueryRow(`SELECT id FROM mail_events WHERE mail_id=4`).Scan(&id); err != nil || id != 900 {
 		t.Fatal("mail event identity", id, err)
 	}
-	if err := pg.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != 5 {
+	if err := pg.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil || version != users.CurrentSchemaVersion {
 		t.Fatal("PG version", version, err)
 	}
 	if err := pg.QueryRow(`INSERT INTO mail_events(mail_id,event,at) VALUES(4,'later',44) RETURNING id`).Scan(&id); err != nil || id != 9001 {

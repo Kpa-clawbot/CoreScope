@@ -19,5 +19,5 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO corescope_accounts;
 SELECT format('GRANT SELECT,INSERT,UPDATE,DELETE ON TABLE %I.%I TO corescope_accounts',schemaname,tablename)
 FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE 'corescope\_%' ESCAPE '\' AND tablename <> 'schema_version' \gexec
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO corescope_accounts;
-GRANT SELECT ON approved_channels,corescope_schema TO corescope_channels;
+GRANT SELECT ON approved_channels,linked_companions,corescope_schema TO corescope_channels;
 \endif

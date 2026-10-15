@@ -15,14 +15,23 @@ if [ -f /app/data/theme.json ]; then
   ln -sf /app/data/theme.json /app/theme.json
 fi
 
-# Source .env from data volume if present (works with any launch method)
-if [ -f /app/data/.env ]; then
-  set -a
-  . /app/data/.env
-  set +a
-fi
+# Which user runs the two Go services, and what they are handed. supervisord
+# itself stays root so that mosquitto and caddy can still bind their ports.
+# Unprivileged operation is opt-in via RUN_AS_UID, taken from the container's
+# environment before .env is read; .env is then read (with the services
+# unprivileged, only if root owns it) and the data directory handed over. The
+# order matters and lives in one function: see docker/select-service-user.sh,
+# and "Running the Go services unprivileged" in docs/deployment.md.
+. /select-service-user.sh
+prepare_service_user || exit 1
 
-/app/storage.sh start
+# Setup may create SQLite databases and the private selection record. Create
+# them as the services' user, after the existing-data ownership hand-over.
+if [ "$CORESCOPE_SERVICE_USER" = root ]; then
+  /app/storage.sh start
+else
+  su -s /bin/sh -c '/app/storage.sh start' "$CORESCOPE_SERVICE_USER"
+fi
 
 SUPERVISORD_CONF="/etc/supervisor/conf.d/supervisord.conf"
 if [ "${DISABLE_MOSQUITTO:-false}" = "true" ] && [ "${DISABLE_CADDY:-false}" = "true" ]; then
@@ -36,5 +45,7 @@ elif [ "${DISABLE_CADDY:-false}" = "true" ]; then
   echo "[config] Caddy reverse proxy disabled (DISABLE_CADDY=true)"
   SUPERVISORD_CONF="/etc/supervisor/conf.d/supervisord-no-caddy.conf"
 fi
+
+echo "[entrypoint] Go services run as $CORESCOPE_SERVICE_USER (uid=$(id -u "$CORESCOPE_SERVICE_USER") gid=$(id -g "$CORESCOPE_SERVICE_USER"))"
 
 exec /usr/bin/supervisord -c "$SUPERVISORD_CONF"

@@ -18,7 +18,7 @@ type Logger func(string, ...interface{})
 //go:embed schema.sql
 var SchemaSQL string
 
-const Version = 1
+const Version = 2
 
 // WriterLockKey serializes ID allocation through commit, including backfills,
 // across ingestor processes. The server's ID cursor relies on this ordering.
@@ -72,7 +72,7 @@ func applyTx(tx *sql.Tx, initialReady bool) error {
 	var ready bool
 	err = tx.QueryRow(`SELECT version,ready FROM corescope_schema WHERE kind='telemetry'`).Scan(&version, &ready)
 	if err == nil {
-		if version != Version {
+		if version != 1 && version != Version {
 			return fmt.Errorf("unsupported telemetry schema version %d (binary supports %d)", version, Version)
 		}
 		if !ready {
@@ -80,6 +80,13 @@ func applyTx(tx *sql.Tx, initialReady bool) error {
 		}
 		if !initialReady {
 			return fmt.Errorf("import target is already initialized")
+		}
+		if version == 1 {
+			if _, err := tx.Exec(keyBackfillSchemaSQL); err != nil {
+				return fmt.Errorf("upgrade telemetry key backfill schema: %w", err)
+			}
+			_, err := tx.Exec(`UPDATE corescope_schema SET version=$1 WHERE kind='telemetry'`, Version)
+			return err
 		}
 		return nil
 	}
