@@ -3245,12 +3245,10 @@ console.log('\n=== packets.js: savedTimeWindowMin defaults ===');
     assert.ok(deltaMin > 10 && deltaMin < 25, `expected default ~15m window, got ${deltaMin.toFixed(2)}m`);
   });
 
-  test('savedTimeWindowMin defaults to 15 when localStorage returns "0"', async () => {
+  test('desktop preserves All time without adding a since filter', async () => {
     const r = await captureInitialPacketsRequest('0', 1366);
-    const since = r.params.get('since');
-    assert.ok(since, 'initial packets request should include since parameter');
-    const deltaMin = (Date.now() - Date.parse(since)) / 60000;
-    assert.ok(deltaMin > 10 && deltaMin < 25, `expected default ~15m window, got ${deltaMin.toFixed(2)}m`);
+    assert.strictEqual(r.params.get('since'), null, 'All time must not become a 15-minute request');
+    assert.strictEqual(r.params.get('limit'), '50000', 'All time retains the existing packet limit');
   });
 
   test('savedTimeWindowMin preserves valid value (60)', async () => {
@@ -5422,8 +5420,14 @@ console.log('\n=== packets.js: buildPacketsQuery ===');
     test('buildPacketsQuery: timeWindow + region', () => {
       assert.strictEqual(buildPacketsQuery(30, 'US-SFO,US-LAX'), '?timeWindow=30&region=US-SFO%2CUS-LAX');
     });
-    test('buildPacketsQuery: timeWindow=0 treated as default', () => {
-      assert.strictEqual(buildPacketsQuery(0, ''), '');
+    test('buildPacketsQuery: All time is explicitly shareable', () => {
+      assert.strictEqual(buildPacketsQuery(0, ''), '?timeWindow=0');
+    });
+    test('buildPacketsQuery: All time combines with region filters', () => {
+      assert.strictEqual(buildPacketsQuery(0, 'US-SFO'), '?timeWindow=0&region=US-SFO');
+    });
+    test('buildPacketsQuery: an omitted window remains omitted', () => {
+      assert.strictEqual(buildPacketsQuery(undefined, ''), '');
     });
   } else {
     console.log('  ⚠️ buildPacketsQuery not exposed — skipping');

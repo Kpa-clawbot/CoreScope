@@ -883,6 +883,46 @@ async function run() {
 
   // --- Group: Packets page (test 4) ---
 
+  await test('Packets All time survives reload and a fresh shared link', async () => {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const p = await ctx.newPage();
+    try {
+      await p.goto(BASE + '/#/packets', { waitUntil: 'domcontentloaded' });
+      await p.waitForSelector('#fTimeWindow');
+      assert(await p.locator('#fTimeWindow').inputValue() === '15', 'a fresh page must retain the default window');
+      await p.selectOption('#fTimeWindow', '0');
+      const saved = await p.evaluate(() => ({
+        query: new URLSearchParams(location.hash.split('?')[1] || '').get('timeWindow'),
+        stored: localStorage.getItem('meshcore-time-window'),
+      }));
+      assert(saved.query === '0' && saved.stored === '0', 'All time was not saved/shared: ' + JSON.stringify(saved));
+      await p.reload({ waitUntil: 'load' });
+      assert(await p.locator('#fTimeWindow').inputValue() === '0', 'All time reset after reload');
+    } finally { await ctx.close(); }
+
+    const shared = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const fresh = await shared.newPage();
+    try {
+      // The CI seed has three observations from May 15, outside the default window.
+      await fresh.goto(BASE + '/#/packets?hash=fae0c9e6d357a814&timeWindow=0', { waitUntil: 'domcontentloaded' });
+      await fresh.waitForSelector('#fTimeWindow');
+      assert(await fresh.locator('#fTimeWindow').inputValue() === '0', 'fresh shared link ignored All time');
+      await fresh.waitForSelector('#pktBody tr[data-hash="fae0c9e6d357a814"][data-action="toggle-select"]');
+    } finally { await shared.close(); }
+  });
+
+  await test('Packets mobile keeps its bounded time window for saved and shared All time', async () => {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 }, hasTouch: true });
+    const p = await ctx.newPage();
+    await p.addInitScript(() => localStorage.setItem('meshcore-time-window', '0'));
+    try {
+      await p.goto(BASE + '/#/packets?timeWindow=0', { waitUntil: 'domcontentloaded' });
+      await p.waitForSelector('#fTimeWindow', { state: 'attached' });
+      assert(await p.locator('#fTimeWindow').inputValue() === '15', 'mobile must retain its bounded default');
+      assert(await p.locator('#fTimeWindow option[value="0"]').count() === 0, 'mobile unexpectedly exposes All time');
+    } finally { await ctx.close(); }
+  });
+
   // Test 4: Packets page loads with filter
   await test('Packets page loads with filter', async () => {
     // Ensure desktop viewport and broad time window so fixture timestamps are included.
