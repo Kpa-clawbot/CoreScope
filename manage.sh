@@ -34,9 +34,12 @@ STAGING_DATA="${STAGING_DATA_DIR:-$HOME/meshcore-staging-data}"
 STAGING_COMPOSE_FILE="docker-compose.staging.yml"
 
 # Build metadata — exported so docker compose build picks them up via args
-export APP_VERSION=$(git describe --tags --match "v*" 2>/dev/null || echo "unknown")
-export GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-export BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+refresh_build_metadata() {
+  export APP_VERSION=$(git describe --tags --match "v*" 2>/dev/null || echo "unknown")
+  export GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  export BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+}
+refresh_build_metadata
 
 # Docker Compose — detect v2 plugin vs v1 standalone
 if docker compose version &>/dev/null 2>&1; then
@@ -1600,6 +1603,7 @@ cmd_update() {
     git checkout "$version" || { err "Failed to checkout '${version}'."; exit 1; }
   fi
 
+  refresh_build_metadata
   migrate_config auto
 
   info "Rebuilding image..."

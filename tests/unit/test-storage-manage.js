@@ -8,7 +8,7 @@ const bash=require('../../scripts/bash-path')();
 const temp=fs.mkdtempSync(path.join(os.tmpdir(),'corescope-storage-manage-'));
 const quote=value=>"'"+value.replace(/'/g,"'\\''")+"'";
 const posix=value=>value.replace(/\\/g,'/');
-const names=['is_true','dc_prod_base','dc_staging_base','dc_postgres','storage_at','storage_action','storage_field','selected_backend','require_managed_postgres','choose_storage','dc_prod','dc_staging','cmd_start','cmd_update','cmd_stop','cmd_storage'];
+const names=['refresh_build_metadata','is_true','dc_prod_base','dc_staging_base','dc_postgres','storage_at','storage_action','storage_field','selected_backend','require_managed_postgres','choose_storage','dc_prod','dc_staging','cmd_start','cmd_update','cmd_stop','cmd_storage'];
 const functions=names.map(name=>source.match(new RegExp(`^${name}\\(\\)\\s*\\{[\\s\\S]*?^}`,'m'))?.[0]||'').join('\n');
 function run(command,backend='sqlite',state='ready',input=''){
  const log=path.join(temp,'calls');fs.writeFileSync(log,'');
