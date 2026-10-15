@@ -2,7 +2,10 @@
 'use strict';
 
 (function () {
-  let _analyticsData = {};
+  let _analyticsData = null;
+  let _analyticsLoadId = 0;
+  let _analyticsLoadError = '';
+  const _coreAnalyticsTabs = new Set(['overview', 'rf', 'topology', 'channels', 'hashsizes', 'collisions']);
   const sf = (v, d) => (v != null ? v.toFixed(d) : '–'); // safe toFixed
   function esc(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;') : ''; }
 
@@ -270,9 +273,21 @@
   var _themeRefreshHandler = null;
   let _currentTab = 'overview';
 
+  function renderAnalyticsLoadState(el) {
+    el.innerHTML = _analyticsLoadError
+      ? `<div class="text-muted" role="alert" aria-live="polite" style="padding:40px">Failed to load: ${esc(_analyticsLoadError)}</div>`
+      : '<div class="text-center text-muted" style="padding:40px">Loading analytics…</div>';
+  }
+
   async function loadAnalytics() {
+    const el = document.getElementById('analyticsContent');
+    if (!el) return;
+    const loadId = ++_analyticsLoadId;
+    _analyticsData = null;
+    _analyticsLoadError = '';
+    if (_coreAnalyticsTabs.has(_currentTab)) renderAnalyticsLoadState(el);
+    else renderTab(_currentTab);
     try {
-      _analyticsData = {};
       const rqs = RegionFilter.regionQueryString(); // "&region=..." or ""
       const aqs = AreaFilter.areaQueryString();     // "&area=..." or ""
       // Time window picker (#842) — append &window=… when set.
@@ -299,16 +314,26 @@
         api('/analytics/hash-collisions' + sepBase, { ttl: CLIENT_TTL.analyticsRF }),
         api('/analytics/relay-airtime-share' + sepWin, { ttl: CLIENT_TTL.analyticsRF }).catch(() => ({ rows: [] })),
       ]);
+      // A filter change or page leave makes every earlier response obsolete.
+      if (loadId !== _analyticsLoadId || document.getElementById('analyticsContent') !== el) return;
       _analyticsData = { hashData, rfData, topoData, chanData, collisionData, airtimeData };
-      renderTab(_currentTab);
+      if (_coreAnalyticsTabs.has(_currentTab)) renderTab(_currentTab);
     } catch (e) {
-      document.getElementById('analyticsContent').innerHTML =
-        `<div class="text-muted" role="alert" aria-live="polite" style="padding:40px">Failed to load: ${e.message}</div>`;
+      if (loadId !== _analyticsLoadId || document.getElementById('analyticsContent') !== el) return;
+      _analyticsLoadError = String(e.message || e);
+      if (_coreAnalyticsTabs.has(_currentTab)) renderAnalyticsLoadState(el);
     }
   }
 
   async function renderTab(tab) {
     const el = document.getElementById('analyticsContent');
+    if (!el) return;
+    // Theme refreshes and tab clicks can arrive before the bulk load settles.
+    // Lazy tabs use their own data and remain available during that load.
+    if (!_analyticsData && _coreAnalyticsTabs.has(tab)) {
+      renderAnalyticsLoadState(el);
+      return;
+    }
     const d = _analyticsData;
     switch (tab) {
       case 'overview': renderOverview(el, d); break;
@@ -3164,7 +3189,7 @@
     }
   }
 
-function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRetry(); _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
+function destroy() { _analyticsLoadId++; _analyticsLoadError = ''; _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRetry(); _analyticsData = null; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
 
   // Expose for testing
   if (typeof window !== 'undefined') {
