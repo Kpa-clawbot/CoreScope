@@ -6,6 +6,8 @@ const path = require('path');
 const vm = require('vm');
 
 const source = fs.readFileSync(path.join(__dirname, '../../public/analytics.js'), 'utf8');
+const rolesSource = fs.readFileSync(path.join(__dirname, '../../public/roles.js'), 'utf8');
+const airtimeSource = fs.readFileSync(path.join(__dirname, '../../public/observer-airtime.js'), 'utf8');
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const unhandled = [];
 process.on('unhandledRejection', error => unhandled.push(error.message));
@@ -50,17 +52,22 @@ async function harness(initialTab = '') {
   }
   const elements = Object.fromEntries(['analyticsContent', 'analyticsTabs', 'analyticsTimeWindow', 'analyticsRegionFilter', 'analyticsAreaFilter'].map(id => [id, element()]));
   elements.analyticsTabs.querySelector = () => ({ classList: { add() {} } });
-  function filter() {
-    return { init() {}, onChange(fn) { this.change = fn; }, regionQueryString: () => '', areaQueryString: () => '' };
+  function filter(key) {
+    let query = '';
+    return {
+      init() {}, onChange(fn) { this.change = fn; },
+      setSelected(value) { query = value ? '&' + key + '=' + encodeURIComponent(value) : ''; this.change(); },
+      regionQueryString: () => query, areaQueryString: () => query,
+    };
   }
   const sandbox = {
     window: null, console, URLSearchParams,
-    document: { getElementById: id => elements[id] || null, querySelectorAll: () => [], documentElement: {} },
+    document: { getElementById: id => elements[id] || null, querySelectorAll: () => [], documentElement: {}, readyState: 'loading', addEventListener() {} },
     location: { hash: '#/analytics' + (initialTab ? '?tab=' + initialTab : '') },
     history: { replaceState() {} },
     localStorage: { getItem: () => null, setItem() {} },
     sessionStorage: { getItem: () => null, setItem() {} },
-    RegionFilter: filter(), AreaFilter: filter(),
+    RegionFilter: filter('region'), AreaFilter: filter('area'),
     CLIENT_TTL: { analyticsRF: 1000 },
     initTabBar() {},
     registerPage(name, handlers) { assert.strictEqual(name, 'analytics'); page = handlers; },
@@ -77,8 +84,11 @@ async function harness(initialTab = '') {
     },
   };
   sandbox.fetchAllNodes = query => sandbox.api('/nodes?' + query);
-  sandbox.fetch = url => sandbox.api(url).then(data => ({ ok: true, json: async () => data }));
+  sandbox.fetch = url => (url === '/api/config/client' ? Promise.resolve({}) : sandbox.api(url)).then(data => ({ ok: true, json: async () => data }));
   sandbox.window = sandbox;
+  vm.runInNewContext(rolesSource, sandbox, { filename: 'roles.js' });
+  vm.runInNewContext(airtimeSource, sandbox, { filename: 'observer-airtime.js' });
+  await sandbox.MeshConfigReady;
   vm.runInNewContext(source, sandbox, { filename: 'analytics.js' });
   async function init() {
     elements.analyticsContent = element();
@@ -102,6 +112,8 @@ async function harness(initialTab = '') {
       elements.analyticsTimeWindow.listeners.change();
     },
     refresh: () => sandbox.RegionFilter.change(),
+    region: value => sandbox.RegionFilter.setSelected(value),
+    area: value => sandbox.AreaFilter.setSelected(value),
     async resolve(batch, total) {
       requests.slice(batch * 6, batch * 6 + 6).forEach(r => r.resolve(fixture(r.url, total)));
       await settle();
@@ -293,6 +305,42 @@ async function test(name, fn) {
       await complete(old, reject, 111);
       assert.match(h.html(), />222</);
       assert.doesNotMatch(h.html(), /obsolete response|>111</);
+    }
+  });
+
+  await test('Nodes role counts follow region and area changes without extra requests', async () => {
+    const h = await harness();
+    const cases = [
+      { select: () => h.tab('nodes'), query: {}, roles: ['repeater', 'repeater', 'companion'], counts: { repeater: 2, companion: 1 }, requests: 2 },
+      { select: () => h.region('E2E-REGION'), query: { region: 'E2E-REGION' }, roles: ['room', 'sensor', 'observer'], counts: { room: 1, sensor: 1, observer: 1 }, requests: 8 },
+      { select: () => h.area('E2E-AREA'), query: { region: 'E2E-REGION', area: 'E2E-AREA' }, roles: ['sensor'], counts: { sensor: 1 }, requests: 8 },
+      { select: () => h.area('E2E-EMPTY'), query: { region: 'E2E-REGION', area: 'E2E-EMPTY' }, roles: [], counts: {}, requests: 8 },
+      { select: () => h.area(''), query: { region: 'E2E-REGION' }, roles: ['unknown', null, undefined, '', 'new-role', '__proto__', 'constructor', 'toString', '<img src=x onerror=alert(1)>'], counts: { unknown: 9 }, requests: 8 },
+      { select: () => h.region(''), query: {}, roles: ['repeater', 'companion'], counts: { repeater: 1, companion: 1 }, requests: 8 },
+    ];
+    for (const entry of cases) {
+      const start = h.requests.length;
+      entry.select();
+      const pending = h.requests.slice(start);
+      const nodes = entry.roles.map((role, index) => ({ public_key: String(index), role }));
+      const nodeRequests = pending.filter(r => r.url.startsWith('/nodes'));
+      assert.strictEqual(nodeRequests.length, 2, 'only the existing node-list and bulk-health requests');
+      nodeRequests.forEach(r => {
+        const params = new URLSearchParams(r.url.split('?')[1]);
+        for (const key of ['region', 'area']) assert.strictEqual(params.get(key), entry.query[key] || null);
+      });
+      pending.forEach(r => r.resolve(r.url.startsWith('/nodes?')
+        ? { nodes, total: nodes.length, counts: { repeater: 9000, companion: 8000, room: 7000 } }
+        : fixture(r.url, 1)));
+      await settle();
+      assert.doesNotMatch(h.html(), /Failed to load|<img/);
+      const breakdown = h.html().split('Role Breakdown</h3>')[1].split('</div>')[0];
+      const counts = Object.fromEntries([...breakdown.matchAll(/>([^<>]+): (\d+)<\/span>/g)].map(match => [match[1], Number(match[2])]));
+      assert.deepStrictEqual(counts, { repeater: 0, companion: 0, room: 0, sensor: 0, observer: 0, unknown: 0, ...entry.counts });
+      assert.strictEqual(Object.values(counts).reduce((sum, count) => sum + count, 0), nodes.length);
+      const cards = [...h.html().matchAll(/font-size:28px[^>]*>(\d+)<\/div>/g)].map(match => Number(match[1]));
+      assert.strictEqual(cards[3], nodes.length, 'role badges and Total Nodes use the same subset');
+      assert.strictEqual(h.requests.length, start + entry.requests, 'counting roles cannot trigger more fetches');
     }
   });
 

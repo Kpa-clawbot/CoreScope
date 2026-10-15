@@ -2524,11 +2524,14 @@
       const byObservers = [...enriched].sort((a, b) => (b.health.observers?.length || 0) - (a.health.observers?.length || 0));
       const byRecent = [...enriched].filter(n => n.health.stats.lastHeard).sort((a, b) => new Date(b.health.stats.lastHeard) - new Date(a.health.stats.lastHeard));
 
-      // Compute network status client-side from loaded nodes using shared getHealthThresholds()
+      // Status and roles must describe the same filtered nodes; API counts are global.
+      const roleColors = ROLE_COLORS;
+      const roleCounts = Object.fromEntries(Object.keys(roleColors).map(role => [role, 0]));
       const now = Date.now();
       let active = 0, degraded = 0, silent = 0;
       nodes.forEach(function(n) {
-        const role = n.role || 'unknown';
+        const role = Object.prototype.hasOwnProperty.call(roleCounts, n.role) ? n.role : 'unknown';
+        roleCounts[role]++;
         const th = getHealthThresholds(role);
         const lastMs = n.last_heard ? new Date(n.last_heard).getTime()
                      : n.last_seen ? new Date(n.last_seen).getTime()
@@ -2539,7 +2542,6 @@
         else silent++;
       });
       const totalNodes = nodesResp.total || nodes.length;
-      const roleCounts = nodesResp.counts || {};
 
       function nodeLink(n) {
         return `<a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link">${esc(n.name || n.public_key.slice(0, 12))}</a>`;
@@ -2575,8 +2577,8 @@
           <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Role Breakdown</h3>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:24px">
             ${Object.entries(roleCounts).sort((a,b) => b[1]-a[1]).map(([role, count]) => {
-              const c = ROLE_COLORS[role] || '#6b7280';
-              return `<span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(c)) || ('background:'+c+';color:#fff')};padding:6px 12px;font-size:13px">${role}: ${count}</span>`;
+              const c = roleColors[role];
+              return `<span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(c)) || ('background:'+c+';color:#fff')};padding:6px 12px;font-size:13px">${esc(role)}: ${count}</span>`;
             }).join('')}
           </div>
 

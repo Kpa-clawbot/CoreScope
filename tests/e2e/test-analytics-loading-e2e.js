@@ -69,7 +69,7 @@ const FIXTURES = {
       if (!gate || !['/api/nodes', '/api/nodes/bulk-health'].includes(url.pathname)) return route.continue();
       const publicKey = 'ab'.repeat(32);
       let status = 200;
-      let body = { nodes: [{ public_key: publicKey, name: region + ' synthetic node', role: 'repeater', last_seen: new Date().toISOString() }], has_more: false, counts: { repeater: 1 }, total: 1 };
+      let body = { nodes: [{ public_key: publicKey, name: region + ' synthetic node', role: 'repeater', last_seen: new Date().toISOString() }], has_more: false, counts: { repeater: 9000, companion: 8000, room: 7000 }, total: 1 };
       if (url.pathname.endsWith('/bulk-health')) {
         gate.arrived.resolve(url.pathname.slice('/api'.length) + url.search);
         status = await gate.response.promise;
@@ -164,7 +164,17 @@ const FIXTURES = {
     await releaseLazy('E2E-OLD');
     assert.match(await page.locator('#analyticsContent').innerText(), /E2E-NEW synthetic node/);
     assert.doesNotMatch(await page.locator('#analyticsContent').innerText(), /E2E-OLD synthetic node/);
-    console.log('  ✓ lazy Nodes keeps the newest filter when the old response arrives last');
+    const subset = await page.evaluate(() => {
+      const content = document.getElementById('analyticsContent');
+      const heading = Array.from(content.querySelectorAll('h3')).find(el => el.textContent.trim() === 'Role Breakdown');
+      return {
+        roles: Array.from(heading.nextElementSibling.querySelectorAll('.badge'), el => el.textContent.trim()),
+        total: content.querySelectorAll('.analytics-stat-card')[3].firstElementChild.textContent.trim(),
+      };
+    });
+    assert.deepStrictEqual(subset.roles, ['repeater: 1', 'companion: 0', 'room: 0', 'sensor: 0', 'observer: 0', 'unknown: 0']);
+    assert.strictEqual(subset.total, '1', 'role counts must agree with the selected subset total');
+    console.log('  ✓ lazy Nodes keeps the newest filter and its role totals when the old response arrives last');
 
     for (const [region, status] of [['E2E-LATE', 200], ['E2E-ERROR', 500]]) {
       await page.evaluate(region => RegionFilter.setSelected([region]), region);
