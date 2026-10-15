@@ -71,15 +71,15 @@ func TestPacketDetailExposesScopeName(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	// route_type 1 = FLOOD (never transport-scoped → NULL); 0 = TRANSPORT_FLOOD.
 	if _, err := db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
-		VALUES ('AABB', 'aaaaaaaaaaaaaaa1', ?, 1, 4)`, now); err != nil {
+		VALUES ('AABB', 'aaaaaaaaaaaaaaa1', $1, 1, 4)`, now); err != nil {
 		t.Fatalf("insert unscoped: %v", err)
 	}
 	if _, err := db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, scope_name)
-		VALUES ('AABB', 'aaaaaaaaaaaaaaa2', ?, 0, 4, '')`, now); err != nil {
+		VALUES ('AABB', 'aaaaaaaaaaaaaaa2', $1, 0, 4, '')`, now); err != nil {
 		t.Fatalf("insert unknown-scope: %v", err)
 	}
 	if _, err := db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, scope_name)
-		VALUES ('AABB', 'aaaaaaaaaaaaaaa3', ?, 0, 4, '#belgium')`, now); err != nil {
+		VALUES ('AABB', 'aaaaaaaaaaaaaaa3', $1, 0, 4, '#belgium')`, now); err != nil {
 		t.Fatalf("insert matched-scope: %v", err)
 	}
 
@@ -165,15 +165,15 @@ func TestGroupedPacketsEndpointExposesScopeName(t *testing.T) {
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type)
-		VALUES ('AABB', 'bbbbbbbbbbbbbbb1', ?, 1, 4)`, now); err != nil {
+		VALUES ('AABB', 'bbbbbbbbbbbbbbb1', $1, 1, 4)`, now); err != nil {
 		t.Fatalf("insert unscoped: %v", err)
 	}
 	if _, err := db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, scope_name)
-		VALUES ('AABB', 'bbbbbbbbbbbbbbb2', ?, 0, 4, '')`, now); err != nil {
+		VALUES ('AABB', 'bbbbbbbbbbbbbbb2', $1, 0, 4, '')`, now); err != nil {
 		t.Fatalf("insert unknown-scope: %v", err)
 	}
 	if _, err := db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, scope_name)
-		VALUES ('AABB', 'bbbbbbbbbbbbbbb3', ?, 0, 4, '#belgium')`, now); err != nil {
+		VALUES ('AABB', 'bbbbbbbbbbbbbbb3', $1, 0, 4, '#belgium')`, now); err != nil {
 		t.Fatalf("insert matched-scope: %v", err)
 	}
 

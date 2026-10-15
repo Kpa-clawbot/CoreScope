@@ -30,9 +30,9 @@ func TestMultiByteCapability_RegionFiltered_PreservesConfirmedStatus(t *testing.
 
 	// Two observers in different regions.
 	db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
-		VALUES ('obs-sjc', 'Obs SJC', 'SJC', ?, '2026-01-01T00:00:00Z', 100)`, recent)
+		VALUES ('obs-sjc', 'Obs SJC', 'SJC', $1, '2026-01-01T00:00:00Z', 100)`, recent)
 	db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
-		VALUES ('obs-jkg', 'Obs JKG', 'JKG', ?, '2026-01-01T00:00:00Z', 100)`, recent)
+		VALUES ('obs-jkg', 'Obs JKG', 'JKG', $1, '2026-01-01T00:00:00Z', 100)`, recent)
 
 	// Node A: a JKG-region repeater that advertises multi-byte (hash_size=2).
 	// Its zero-hop direct advert is only heard by obs-SJC (e.g. an out-of-region
@@ -42,7 +42,7 @@ func TestMultiByteCapability_RegionFiltered_PreservesConfirmedStatus(t *testing.
 	// to "confirmed" via the global advert evidence.
 	pkA := "aaa0000000000001"
 	db.conn.Exec(`INSERT INTO nodes (public_key, name, role)
-		VALUES (?, 'Node-A', 'repeater')`, pkA)
+		VALUES ($1, 'Node-A', 'repeater')`, pkA)
 
 	decodedA := `{"pubKey":"` + pkA + `","name":"Node-A","type":"ADVERT","flags":{"isRepeater":true}}`
 
@@ -50,17 +50,17 @@ func TestMultiByteCapability_RegionFiltered_PreservesConfirmedStatus(t *testing.
 	// pathByte 0x40 → hash_size bits 01 → 2 bytes.
 	// Heard by obs-SJC ONLY.
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('1240aabbccdd', 'a_zh_direct', ?, 2, 4, ?)`, recent, decodedA)
+		VALUES ('1240aabbccdd', 'a_zh_direct', $1, 2, 4, $2)`, recent, decodedA)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (1, 1, 12.0, -85, '[]', ?)`, recentEpoch)
+		VALUES (1, 1, 12.0, -85, '[]', $1)`, recentEpoch)
 
 	// Node A also appears as a path hop in a JKG-observed packet, so it
 	// shows up in the JKG region's node list.
 	// route_type=1 (flood), payload_type=4, pathByte 0x41 (hs=2, hops=1)
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('1141aabbccdd', 'a_jkg_relay', ?, 1, 4, ?)`, recent, decodedA)
+		VALUES ('1141aabbccdd', 'a_jkg_relay', $1, 1, 4, $2)`, recent, decodedA)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (2, 2, 8.0, -95, '["aa"]', ?)`, recentEpoch)
+		VALUES (2, 2, 8.0, -95, '["aa"]', $1)`, recentEpoch)
 
 	store := NewPacketStore(db, nil)
 	store.Load()

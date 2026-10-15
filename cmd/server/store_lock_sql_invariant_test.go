@@ -24,9 +24,7 @@ import (
 // cache; past their TTL they serve the cached value and refresh in the
 // background (cache_refresh.go).
 var sqlUnderLockAllowedCallees = map[string]bool{
-	"PacketStore.getCachedNodesAndPM":    true,
-	"PacketStore.resolveRegionObservers": true,
-	"PacketStore.resolveAreaNodes":       true,
+	"PacketStore.getCachedNodesAndPM": true,
 }
 
 // sqlUnderLockAllowedHolders run at startup, before or while the store is

@@ -155,6 +155,8 @@ node tests/unit/test-live-legend-helper.js
 node tests/unit/test-live-multibyte-filter.js
 node tests/unit/test-live-region-filter.js
 node tests/unit/test-live.js
+node tests/unit/test-manage-bootstrap.js
+node tests/unit/test-manage-update-metadata.js
 node tests/unit/test-map-clustering.js
 node tests/unit/test-mqtt-status-panel.js
 node tests/unit/test-my-repeaters-dashboard.js
@@ -206,5 +208,16 @@ node tests/unit/test-user-management-ui.js
 node tests/unit/test-warmup-banner.js
 node tests/unit/test-ws-stale-watchdog-1074.js
 node tests/unit/test-xss-escape-sinks.js
+
+node tests/unit/test-postgres-ops.js
+node tests/unit/test-deployment-readiness.js
+node tests/unit/test-storage-entrypoint.js
+node tests/unit/test-storage-manage.js
+
+node tests/unit/test-analytics-loading.js
+
+node tests/unit/test-api-inflight-cleanup.js
+
+node tests/unit/test-node-analytics-lifecycle.js
 
 echo "All standalone frontend suites passed"

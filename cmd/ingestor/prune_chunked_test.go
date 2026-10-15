@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 // seedAgedTransmissions inserts n transmissions stamped `age` days in the
@@ -18,22 +16,22 @@ func seedAgedTransmissions(t *testing.T, store *Store, n, obsPerTx, ageDays int)
 	t.Helper()
 	ts := time.Now().UTC().AddDate(0, 0, -ageDays).Format(time.RFC3339)
 	for i := 0; i < n; i++ {
-		res, err := store.db.Exec(
+		var txID int64
+		err := store.db.QueryRow(
 			`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json)
-			 VALUES (?, ?, ?, 0, 1, 1, '{}')`,
+			 VALUES ($1, $2, $3, 0, 1, 1, '{}') RETURNING id`,
 			"AA", fmt.Sprintf("h%d-%d", ageDays, i), ts,
-		)
+		).Scan(&txID)
 		if err != nil {
 			t.Fatalf("seed tx %d: %v", i, err)
 		}
-		txID, err := res.LastInsertId()
 		if err != nil {
 			t.Fatalf("seed tx %d LastInsertId: %v", i, err)
 		}
 		for j := 0; j < obsPerTx; j++ {
 			if _, err := store.db.Exec(
 				`INSERT INTO observations (transmission_id, observer_idx, direction, snr, rssi, score, path_json, timestamp)
-				 VALUES (?, ?, 'rx', 1.0, -100, 0, '[]', ?)`,
+				 VALUES ($1, $2, 'rx', 1.0, -100, 0, '[]', $3)`,
 				txID, j, time.Now().Unix(),
 			); err != nil {
 				t.Fatalf("seed obs %d/%d: %v", i, j, err)
@@ -53,7 +51,7 @@ func countRows(t *testing.T, store *Store, table string) int {
 
 func openPruneStore(t *testing.T, name string) *Store {
 	t.Helper()
-	store, err := OpenStore(filepath.Join(t.TempDir(), name))
+	store, err := openPostgresTestStore(t, filepath.Join(t.TempDir(), name))
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -212,7 +210,7 @@ func TestPruneOldPacketsDisabledTakesNoWriterLock(t *testing.T) {
 // steady-state cost when nothing has aged out yet: a single empty batch, then
 // the loop exits. That batch is only cheap because the subquery is walked off
 // idx_transmissions_first_seen — see
-// TestPruneAgedTransmissionIDsUsesFirstSeenIndex.
+// TestPruneAgedTransmissionIDsHasOrderedIndex.
 func TestPruneOldPacketsNothingToDeleteRunsOneEmptyBatch(t *testing.T) {
 	store := openPruneStore(t, "prune-noop.db")
 	seedAgedTransmissions(t, store, 9, 2, 0)
@@ -234,7 +232,7 @@ func TestPruneOldPacketsNothingToDeleteRunsOneEmptyBatch(t *testing.T) {
 	}
 }
 
-// TestPruneAgedTransmissionIDsUsesFirstSeenIndex pins the query plan of the
+// TestPruneAgedTransmissionIDsHasOrderedIndex pins the query plan of the
 // batch subquery and of both statements that embed it.
 //
 // Ordering the batch by id instead of first_seen makes SQLite drop
@@ -242,7 +240,7 @@ func TestPruneOldPacketsNothingToDeleteRunsOneEmptyBatch(t *testing.T) {
 // the terminating, nothing-left batch from ~10µs to ~73ms — once per statement,
 // under writerMu, in the state an instance is in whenever nothing has aged out.
 // Transaction counts cannot see that regression, so the plan is the assertion.
-func TestPruneAgedTransmissionIDsUsesFirstSeenIndex(t *testing.T) {
+func TestPruneAgedTransmissionIDsHasOrderedIndex(t *testing.T) {
 	store := openPruneStore(t, "prune-plan.db")
 	seedAgedTransmissions(t, store, 20, 2, 10)
 
@@ -252,15 +250,19 @@ func TestPruneAgedTransmissionIDsUsesFirstSeenIndex(t *testing.T) {
 		"observations delete":  pruneObservationsBatch,
 		"transmissions delete": pruneTransmissionsBatch,
 	} {
-		rows, err := store.db.Query("EXPLAIN QUERY PLAN "+q, cutoff, pruneBatchTransmissions)
+		if testBackendValue() == "postgres" {
+			if _, err := store.db.Exec(`SET enable_seqscan=off; SET enable_bitmapscan=off`); err != nil {
+				t.Fatal(err)
+			}
+		}
+		rows, err := store.db.Query(testNativeSQL(`EXPLAIN QUERY PLAN `, "EXPLAIN (COSTS OFF) ")+q, cutoff, pruneBatchTransmissions)
 		if err != nil {
-			t.Fatalf("%s: EXPLAIN QUERY PLAN: %v", name, err)
+			t.Fatalf(testNativeSQL(`%s: EXPLAIN QUERY PLAN: %v`, "%s: EXPLAIN (COSTS OFF): %v"), name, err)
 		}
 		var steps []string
 		for rows.Next() {
-			var id, parent, notused int
 			var detail string
-			if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			if err := scanTestPlan(rows, &detail); err != nil {
 				rows.Close()
 				t.Fatalf("%s: scan plan row: %v", name, err)
 			}
@@ -276,11 +278,11 @@ func TestPruneAgedTransmissionIDsUsesFirstSeenIndex(t *testing.T) {
 		if !strings.Contains(plan, "idx_transmissions_first_seen") {
 			t.Errorf("%s: plan does not use idx_transmissions_first_seen: %s", name, plan)
 		}
-		if strings.Contains(plan, "SCAN transmissions") {
+		if strings.Contains(plan, "Seq Scan on transmissions") {
 			t.Errorf("%s: plan scans transmissions, so the empty terminating batch walks the whole table under writerMu: %s", name, plan)
 		}
-		if strings.Contains(plan, "TEMP B-TREE") {
-			t.Errorf("%s: plan sorts in a temp b-tree instead of walking the index in order: %s", name, plan)
+		if strings.Contains(plan, "Sort Key:") {
+			t.Errorf("%s: ordered-index eligibility query unexpectedly requires a sort: %s", name, plan)
 		}
 	}
 }

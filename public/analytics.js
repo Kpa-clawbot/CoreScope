@@ -2,9 +2,27 @@
 'use strict';
 
 (function () {
-  let _analyticsData = {};
+  let _analyticsData = null;
+  let _analyticsLoadId = 0;
+  let _analyticsRenderId = 0;
+  const _analyticsRequests = new WeakMap();
+  let _analyticsLoadError = '';
+  const _coreAnalyticsTabs = new Set(['overview', 'rf', 'topology', 'channels', 'hashsizes', 'collisions']);
   const sf = (v, d) => (v != null ? v.toFixed(d) : '–'); // safe toFixed
   function esc(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;') : ''; }
+
+  // Capture the current page/filter/tab render. A target also makes requests
+  // within that view latest-wins (detail panels, range picks, auto-refresh).
+  // Weak keys let replaced DOM nodes and their request tokens be collected.
+  function analyticsGuard(target) {
+    const el = document.getElementById('analyticsContent');
+    const loadId = _analyticsLoadId, renderId = _analyticsRenderId;
+    const request = {};
+    if (target) _analyticsRequests.set(target, request);
+    return () => loadId === _analyticsLoadId && renderId === _analyticsRenderId &&
+      document.getElementById('analyticsContent') === el &&
+      (!target || _analyticsRequests.get(target) === request);
+  }
 
   // #1085 — Roles tab helpers (hoisted from renderRolesTab so they're not
   // re-allocated per render).
@@ -259,7 +277,10 @@
       // still picks up the new theme: node colors are read live per frame
       // from window.ROLE_COLORS, role swatches use CSS tokens, and the one
       // cached value (_labelColor) is re-read on restart.
-      if (_currentTab === 'neighbor-graph' && _ngState) { startGraphRenderer(); return; }
+      if (_currentTab === 'neighbor-graph') {
+        if (_ngState) startGraphRenderer();
+        return;
+      }
       renderTab(_currentTab);
     };
     window.addEventListener('theme-refresh', _themeRefreshHandler);
@@ -270,9 +291,21 @@
   var _themeRefreshHandler = null;
   let _currentTab = 'overview';
 
+  function renderAnalyticsLoadState(el) {
+    el.innerHTML = _analyticsLoadError
+      ? `<div class="text-muted" role="alert" aria-live="polite" style="padding:40px">Failed to load: ${esc(_analyticsLoadError)}</div>`
+      : '<div class="text-center text-muted" style="padding:40px">Loading analytics…</div>';
+  }
+
   async function loadAnalytics() {
+    const el = document.getElementById('analyticsContent');
+    if (!el) return;
+    const loadId = ++_analyticsLoadId;
+    _analyticsData = null;
+    _analyticsLoadError = '';
+    if (_coreAnalyticsTabs.has(_currentTab)) renderAnalyticsLoadState(el);
+    else renderTab(_currentTab);
     try {
-      _analyticsData = {};
       const rqs = RegionFilter.regionQueryString(); // "&region=..." or ""
       const aqs = AreaFilter.areaQueryString();     // "&area=..." or ""
       // Time window picker (#842) — append &window=… when set.
@@ -299,16 +332,34 @@
         api('/analytics/hash-collisions' + sepBase, { ttl: CLIENT_TTL.analyticsRF }),
         api('/analytics/relay-airtime-share' + sepWin, { ttl: CLIENT_TTL.analyticsRF }).catch(() => ({ rows: [] })),
       ]);
+      // A filter change or page leave makes every earlier response obsolete.
+      if (loadId !== _analyticsLoadId || document.getElementById('analyticsContent') !== el) return;
       _analyticsData = { hashData, rfData, topoData, chanData, collisionData, airtimeData };
-      renderTab(_currentTab);
+      if (_coreAnalyticsTabs.has(_currentTab)) renderTab(_currentTab);
     } catch (e) {
-      document.getElementById('analyticsContent').innerHTML =
-        `<div class="text-muted" role="alert" aria-live="polite" style="padding:40px">Failed to load: ${e.message}</div>`;
+      if (loadId !== _analyticsLoadId || document.getElementById('analyticsContent') !== el) return;
+      _analyticsLoadError = String(e.message || e);
+      if (_coreAnalyticsTabs.has(_currentTab)) renderAnalyticsLoadState(el);
     }
   }
 
   async function renderTab(tab) {
     const el = document.getElementById('analyticsContent');
+    if (!el) return;
+    _analyticsRenderId++;
+    const isCurrent = analyticsGuard();
+    _stopRolesRefresh();
+    _stopScopesRefresh();
+    _stopDistanceRetry();
+    el.onclick = null;
+    if (_ngState && _ngState.animId) cancelAnimationFrame(_ngState.animId);
+    _ngState = null;
+    // Theme refreshes and tab clicks can arrive before the bulk load settles.
+    // Lazy tabs use their own data and remain available during that load.
+    if (!_analyticsData && _coreAnalyticsTabs.has(tab)) {
+      renderAnalyticsLoadState(el);
+      return;
+    }
     const d = _analyticsData;
     switch (tab) {
       case 'overview': renderOverview(el, d); break;
@@ -329,8 +380,10 @@
       case 'prefix-tool': await renderPrefixTool(el); break;
       case 'scopes': await renderScopesTab(el); break;
     }
+    if (!isCurrent()) return;
     // Auto-apply column resizing to all analytics tables
     requestAnimationFrame(() => {
+      if (!isCurrent()) return;
       el.querySelectorAll('.analytics-table').forEach((tbl, i) => {
         tbl.id = tbl.id || `analytics-tbl-${tab}-${i}`;
         if (typeof makeColumnsResizable === 'function') makeColumnsResizable('#' + tbl.id, `meshcore-analytics-${tab}-${i}-col-widths`);
@@ -349,6 +402,7 @@
     const sectionId = new URLSearchParams((location.hash.split('?')[1] || '')).get('section');
     if (sectionId) {
       setTimeout(() => {
+        if (!isCurrent()) return;
         const target = document.getElementById(sectionId);
         if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }, 400);
@@ -357,6 +411,7 @@
 
   // ===================== OVERVIEW =====================
   function renderOverview(el, d) {
+    const isCurrent = analyticsGuard();
     const rf = d.rfData, topo = d.topoData, ch = d.chanData, hs = d.hashData;
     el.innerHTML = `
       <div class="stats-grid">
@@ -456,6 +511,7 @@
       fetch('/api/debug/affinity', { headers: { 'X-API-Key': apiKey } })
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (data) {
+          if (!isCurrent()) return;
           if (!data || !data.stats) return;
           var s = data.stats;
           var total = s.resolvedCount + s.ambiguousCount + s.unresolvedCount;
@@ -857,6 +913,7 @@
   var _rtxRequestSeq = 0;
   async function loadRetransmissionPressure() {
     if (!document.getElementById('rtxPressureChart')) return;
+    const isCurrent = analyticsGuard();
     var seq = ++_rtxRequestSeq;
     var twEl = document.getElementById('analyticsTimeWindow');
     var tw = twEl ? twEl.value : '';
@@ -866,13 +923,14 @@
     var html;
     try {
       var data = await api('/analytics/retransmissions?' + qs.slice(1), { ttl: CLIENT_TTL.analyticsRF });
+      if (!isCurrent()) return;
       html = renderRetransmissionChart(data);
     } catch (e) {
       html = '<div class="text-muted" role="alert" style="padding:20px">Failed to load retransmission pressure: ' + esc(e.message) + '</div>';
     }
     // A newer request (window/region change) or a tab switch wins.
     var host = document.getElementById('rtxPressureChart');
-    if (seq !== _rtxRequestSeq || !host) return;
+    if (!isCurrent() || seq !== _rtxRequestSeq || !host) return;
     host.innerHTML = html;
   }
 
@@ -1315,6 +1373,7 @@
   }
 
   function renderChannels(el, ch) {
+    const isCurrent = analyticsGuard();
     // Decorate first so grouping/display name reflect locally-stored PSK keys.
     // buildHashKeyMap is async; render once with a sync best-effort empty map,
     // then upgrade once keys resolve. That keeps first paint fast and avoids
@@ -1334,7 +1393,7 @@
     // newer rawChannels / decoration with stale-key data.
     var myGen = ++_channelRenderGen;
     function applyDecorate(map) {
-      if (myGen !== _channelRenderGen) return; // superseded
+      if (!isCurrent() || myGen !== _channelRenderGen) return; // superseded
       var labels = (typeof ChannelDecrypt !== 'undefined' && ChannelDecrypt.getLabels)
         ? ChannelDecrypt.getLabels() : {};
       _channelData = decorateAnalyticsChannels(rawChannels, map, labels);
@@ -1544,6 +1603,7 @@
   }
 
   function renderMultiByteAdopters(nodes, caps) {
+    const isCurrent = analyticsGuard();
     // Merge capability status into adopter nodes
     var capByPubkey = {};
     (caps || []).forEach(function(c) { capByPubkey[c.pubkey] = c; });
@@ -1619,6 +1679,7 @@
 
     // Use setTimeout for event delegation on the stable section container
     setTimeout(function() {
+      if (!isCurrent()) return;
       var section = document.getElementById('mbAdoptersSection');
       if (!section) return;
       var currentFilter = 'all';
@@ -2191,7 +2252,8 @@
       <strong><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-globe"/></svg> Distant</strong> &gt;${t200}: beyond 915MHz range — internet bridge, MQTT gateway, or separate networks
     </div>`;
   }
-    async function renderSubpaths(el) {
+  async function renderSubpaths(el) {
+    const isCurrent = analyticsGuard(el);
     el.innerHTML = '<div class="text-center text-muted" style="padding:40px">Analyzing route patterns…</div>';
     try {
       const rq = RegionFilter.regionQueryString();
@@ -2201,6 +2263,7 @@
       const twVal = twEl ? twEl.value : '';
       const tws = twVal ? '&window=' + encodeURIComponent(twVal) : '';
       const bulk = await api('/analytics/subpaths-bulk?groups=2-2:50,3-3:30,4-4:20,5-8:15' + rq + tws, { ttl: CLIENT_TTL.analyticsRF });
+      if (!isCurrent()) return;
       const [d2, d3, d4, d5] = bulk.results;
 
       function renderTable(data, title) {
@@ -2289,13 +2352,14 @@
         </div>`;
 
       // Click handler for rows
-      el.addEventListener('click', e => {
+      el.onclick = e => {
+        if (!isCurrent()) return;
         const tr = e.target.closest('tr[data-hops]');
         if (!tr) return;
         el.querySelectorAll('tr.subpath-selected').forEach(r => r.classList.remove('subpath-selected'));
         tr.classList.add('subpath-selected');
         loadSubpathDetail(tr.dataset.hops);
-      });
+      };
 
       // Jump nav — scroll within list panel
       el.querySelectorAll('.subpath-jump-nav a').forEach(a => {
@@ -2316,18 +2380,23 @@
       toggle.addEventListener('change', applyCollisionFilter);
       applyCollisionFilter();
     } catch (e) {
+      if (!isCurrent()) return;
       el.innerHTML = `<div class="text-muted">Error loading subpath data: ${e.message}</div>`;
     }
   }
 
   async function loadSubpathDetail(hopsStr) {
     const panel = document.getElementById('subpathDetail');
+    if (!panel) return;
+    const isCurrent = analyticsGuard(panel);
     panel.classList.remove('collapsed');
     panel.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
     try {
       const data = await api('/analytics/subpath-detail?hops=' + encodeURIComponent(hopsStr), { ttl: CLIENT_TTL.analyticsRF });
+      if (!isCurrent()) return;
       renderSubpathDetail(panel, data);
     } catch (e) {
+      if (!isCurrent()) return;
       panel.innerHTML = `<div class="text-muted">Error: ${e.message}</div>`;
     }
   }
@@ -2431,6 +2500,7 @@
   }
 
   async function renderNodesTab(el) {
+    const isCurrent = analyticsGuard(el);
     el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Loading node analytics…</div>';
     try {
       const rq = RegionFilter.regionQueryString() + AreaFilter.areaQueryString();
@@ -2438,6 +2508,7 @@
         fetchAllNodes('&sortBy=lastSeen' + rq, { ttl: CLIENT_TTL.nodeList }),
         api('/nodes/bulk-health?limit=50' + rq, { ttl: CLIENT_TTL.analyticsRF })
       ]);
+      if (!isCurrent()) return;
       const nodes = nodesResp.nodes || nodesResp;
       const myNodes = JSON.parse(localStorage.getItem('meshcore-my-nodes') || '[]');
       const myKeys = new Set(myNodes.map(n => n.pubkey));
@@ -2453,11 +2524,14 @@
       const byObservers = [...enriched].sort((a, b) => (b.health.observers?.length || 0) - (a.health.observers?.length || 0));
       const byRecent = [...enriched].filter(n => n.health.stats.lastHeard).sort((a, b) => new Date(b.health.stats.lastHeard) - new Date(a.health.stats.lastHeard));
 
-      // Compute network status client-side from loaded nodes using shared getHealthThresholds()
+      // Status and roles must describe the same filtered nodes; API counts are global.
+      const roleColors = ROLE_COLORS;
+      const roleCounts = Object.fromEntries(Object.keys(roleColors).map(role => [role, 0]));
       const now = Date.now();
       let active = 0, degraded = 0, silent = 0;
       nodes.forEach(function(n) {
-        const role = n.role || 'unknown';
+        const role = Object.prototype.hasOwnProperty.call(roleCounts, n.role) ? n.role : 'unknown';
+        roleCounts[role]++;
         const th = getHealthThresholds(role);
         const lastMs = n.last_heard ? new Date(n.last_heard).getTime()
                      : n.last_seen ? new Date(n.last_seen).getTime()
@@ -2468,7 +2542,6 @@
         else silent++;
       });
       const totalNodes = nodesResp.total || nodes.length;
-      const roleCounts = nodesResp.counts || {};
 
       function nodeLink(n) {
         return `<a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link">${esc(n.name || n.public_key.slice(0, 12))}</a>`;
@@ -2504,8 +2577,8 @@
           <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-chart-bar"/></svg> Role Breakdown</h3>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:24px">
             ${Object.entries(roleCounts).sort((a,b) => b[1]-a[1]).map(([role, count]) => {
-              const c = ROLE_COLORS[role] || '#6b7280';
-              return `<span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(c)) || ('background:'+c+';color:#fff')};padding:6px 12px;font-size:13px">${role}: ${count}</span>`;
+              const c = roleColors[role];
+              return `<span class="badge" style="${(window.aaBadgeStyle && window.aaBadgeStyle(c)) || ('background:'+c+';color:#fff')};padding:6px 12px;font-size:13px">${esc(role)}: ${count}</span>`;
             }).join('')}
           </div>
 
@@ -2587,6 +2660,7 @@
           </table>
         </div>`;
     } catch (e) {
+      if (!isCurrent()) return;
       el.innerHTML = `<div style="padding:40px;text-align:center;color:#ff6b6b">Failed to load node analytics: ${esc(e.message)}</div>`;
     }
   }
@@ -2630,6 +2704,7 @@
   }
 
   async function renderMyRepeatersTab(el) {
+    const isCurrent = analyticsGuard(el);
     const haveFavs = () => (typeof getFavorites === 'function' ? getFavorites() : []);
     if (!haveFavs().length) { el.innerHTML = _mrEmptyState(); return; }
     el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Loading your repeaters…</div>';
@@ -2650,6 +2725,7 @@
         api('/nodes/clock-skew', { ttl: CLIENT_TTL.analyticsRF }).catch(() => []),
         api('/analytics/neighbor-graph?min_count=1&min_score=0', { ttl: CLIENT_TTL.analyticsRF }).catch(() => ({ nodes: [], edges: [] })),
       ]);
+      if (!isCurrent()) return;
       const allNodes = nodesResp.nodes || nodesResp;
       const clockByPk = {};
       (Array.isArray(clockData) ? clockData : []).forEach(c => { if (c && c.pubkey) clockByPk[c.pubkey] = c; });
@@ -2687,6 +2763,7 @@
       // un-star drops the row with no refetch. Re-binds its stars after each
       // paint (the innerHTML reset clears listeners).
       function paint() {
+        if (!isCurrent()) return;
         const favs = new Set(haveFavs());
         if (!favs.size) { el.innerHTML = _mrEmptyState(); return; }
         const myNodes = allNodes.filter(n => favs.has(n.public_key) && (n.role === 'repeater' || n.role === 'room'));
@@ -2807,6 +2884,7 @@
       }
       paint();
     } catch (e) {
+      if (!isCurrent()) return;
       el.innerHTML = `<div style="padding:40px;text-align:center;color:var(--status-red)">Failed to load your repeaters: ${esc(e.message)}</div>`;
     }
   }
@@ -2966,10 +3044,12 @@
   }
 
   async function renderRepeaterMetricsTab(el) {
+    const isCurrent = analyticsGuard(el);
     el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Loading repeater metrics…</div>';
     try {
       const rq = RegionFilter.regionQueryString() + AreaFilter.areaQueryString();
       const resp = await fetchAllNodes('&sortBy=lastSeen' + rq, { ttl: CLIENT_TTL.nodeList });
+      if (!isCurrent()) return;
       const nodes = resp.nodes || resp;
       const favs = new Set(typeof getFavorites === 'function' ? getFavorites() : []);
       const points = _toScatterPoints(nodes, favs);
@@ -3047,11 +3127,13 @@
       wireAxis(ySel, 'meshcore-repeater-scatter-y');
       draw();
     } catch (e) {
+      if (!isCurrent()) return;
       el.innerHTML = `<div style="padding:40px;text-align:center;color:#ff6b6b">Failed to load repeater metrics: ${esc(e.message)}</div>`;
     }
   }
 
   async function renderDistanceTab(el) {
+    const isCurrent = analyticsGuard(el);
     // A new render supersedes any retry still pending from an earlier one,
     // so the two can never both write into the tab.
     _stopDistanceRetry();
@@ -3059,6 +3141,7 @@
       const rqs = RegionFilter.regionQueryString();
       const sep = rqs ? '?' + rqs.slice(1) : '';
       const data = await api('/analytics/distance' + sep, { ttl: CLIENT_TTL.analyticsRF });
+      if (!isCurrent()) return;
 
       // #1997: the lazy index (#1011) answers 202 {status:"building"} with no
       // summary until it has been built. Rendering that as data is what threw
@@ -3069,12 +3152,9 @@
           'Building the distance index…' +
           '<div style="font-size:12px;margin-top:8px">This runs once per instance. Retrying in ' + secs + 's.</div></div>';
         _distanceRetryTimer = setTimeout(function () {
+          if (!isCurrent()) return;
           _distanceRetryTimer = null;
-          // The user may have switched tabs or left while this was pending.
-          if (_currentTab !== 'distance') return;
-          const cur = document.getElementById('analyticsContent');
-          if (!cur) return;
-          renderDistanceTab(cur);
+          renderDistanceTab(el);
         }, _distanceRetryDelayMs(data));
         return;
       }
@@ -3160,11 +3240,12 @@
         });
       });
     } catch (e) {
+      if (!isCurrent()) return;
       el.innerHTML = `<div style="padding:40px;text-align:center;color:#ff6b6b">Failed to load distance analytics: ${esc(e.message)}</div>`;
     }
   }
 
-function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRetry(); _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
+function destroy() { _analyticsLoadId++; _analyticsLoadError = ''; _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRetry(); _analyticsData = null; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
 
   // Expose for testing
   if (typeof window !== 'undefined') {
@@ -3191,6 +3272,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
   let _ngState = null; // neighbor graph state
 
   async function renderNeighborGraphTab(el) {
+    const isCurrent = analyticsGuard(el);
     el.innerHTML = `
       <div class="analytics-card" id="ngCard">
         <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-graph"/></svg> Neighbor Graph</h3>
@@ -3243,10 +3325,12 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     try {
       graphData = await api('/analytics/neighbor-graph' + sep + (sep ? '&' : '?') + 'min_count=1&min_score=0', { ttl: CLIENT_TTL.analyticsRF });
     } catch (e) {
+      if (!isCurrent()) return;
       el.innerHTML = `<div class="analytics-card"><p class="text-muted">Failed to load neighbor graph: ${esc(e.message)}</p></div>`;
       return;
     }
 
+    if (!isCurrent()) return;
     _ngState = createGraphState(graphData);
     // Render through the filter path so the first paint already respects the
     // default filters (observers unchecked, saved min-score) and the
@@ -3270,7 +3354,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
       // Debounce the O(N+E) refilter so dragging the slider doesn't rebuild the
       // node set on every pixel (review of #1758).
       clearTimeout(ngScoreDebounce);
-      ngScoreDebounce = setTimeout(applyNGFilters, 50);
+      ngScoreDebounce = setTimeout(() => { if (isCurrent()) applyNGFilters(); }, 50);
     });
     document.getElementById('ngConfidence').addEventListener('change', applyNGFilters);
     rcEl.addEventListener('change', applyNGFilters);
@@ -3522,6 +3606,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
 
   function startGraphRenderer() {
     if (!_ngState) return;
+    const state = _ngState;
 
     // Re-entrant: the filter path calls this to restart against the new node
     // set, so cancel any loop already running before deciding what to do.
@@ -3591,8 +3676,8 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     // Performance: 500 nodes brute-force repulsion: avg ~4ms/frame = 250fps headroom (measured Chrome 120, M1)
     var _perfFrameTimes = [], _perfLastTime = 0;
     function tick() {
-      if (_ngState._runEpoch !== myEpoch) { return; } // a newer startGraphRenderer run superseded this loop
-      if (!document.getElementById('ngCanvas')) { _ngState.animId = null; return; }
+      if (_ngState !== state || state._runEpoch !== myEpoch) return;
+      if (document.getElementById('ngCanvas') !== canvas) { state.animId = null; return; }
       var now = performance.now();
       if (_perfLastTime) _perfFrameTimes.push(now - _perfLastTime);
       _perfLastTime = now;
@@ -3708,6 +3793,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
 
   // --- Prefix Tool ---
   async function renderPrefixTool(el) {
+    const isCurrent = analyticsGuard(el);
     el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Loading prefix data…</div>';
 
     const rq = RegionFilter.regionQueryString() + AreaFilter.areaQueryString();
@@ -3723,10 +3809,12 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
         api('/analytics/hash-sizes' + rq, { ttl: CLIENT_TTL.analyticsRF }).catch(() => null),
       ]);
     } catch (e) {
+      if (!isCurrent()) return;
       el.innerHTML = `<div class="text-muted" role="alert" style="padding:40px">Failed to load: ${esc(e.message)}</div>`;
       return;
     }
 
+    if (!isCurrent()) return;
     // Deduplicate by public_key, require at least 6 hex chars to build all 3 tiers
     const nodeMap = new Map();
     (nodesResp.nodes || nodesResp).forEach(n => {
@@ -4179,10 +4267,10 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     // Auto-run from URL params
     if (initPrefix) {
       doCheck(initPrefix);
-      setTimeout(() => { document.getElementById('ptChecker')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 150);
+      setTimeout(() => { if (isCurrent()) document.getElementById('ptChecker')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 150);
     } else if (initGenerate) {
       doGenerate();
-      setTimeout(() => { document.getElementById('ptGenerator')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 150);
+      setTimeout(() => { if (isCurrent()) document.getElementById('ptGenerator')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 150);
     }
   }
 
@@ -4218,6 +4306,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
   }
 
   async function renderRFHealthTab(el) {
+    const isCurrent = analyticsGuard();
     // Restore state from URL
     const hashParams = new URLSearchParams((location.hash.split('?')[1] || ''));
     if (hashParams.get('range')) _rfHealthState.range = hashParams.get('range');
@@ -4255,8 +4344,11 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     // Range button handlers
     el.querySelectorAll('.rf-range-btn[data-range]').forEach(btn => {
       btn.addEventListener('click', () => {
+        if (!isCurrent()) return;
         const range = btn.dataset.range;
         _rfHealthState.range = range;
+        _analyticsRequests.delete(document.getElementById('rfHealthGrid'));
+        _analyticsRequests.delete(document.getElementById('rfHealthDetail'));
         el.querySelectorAll('.rf-range-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         const customInputs = el.querySelector('.rf-custom-inputs');
@@ -4271,6 +4363,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     const applyBtn = document.getElementById('rfCustomApply');
     if (applyBtn) {
       applyBtn.addEventListener('click', () => {
+        if (!isCurrent()) return;
         _rfHealthState.customFrom = document.getElementById('rfFrom').value;
         _rfHealthState.customTo = document.getElementById('rfTo').value;
         rfHealthUpdateHash();
@@ -4284,12 +4377,17 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
   async function loadRFHealthData(el) {
     const grid = document.getElementById('rfHealthGrid');
     const detail = document.getElementById('rfHealthDetail');
+    const isCurrent = analyticsGuard(grid);
+    // A range change invalidates any detail already in flight, even while
+    // its new summary is still loading or no longer contains that observer.
+    if (detail) _analyticsRequests.delete(detail);
 
     try {
       // Compute window string for summary endpoint
       const windowMap = { '1h':'1h', '3h':'3h', '6h':'6h', '12h':'12h', '24h':'24h', '3d':'3d', '7d':'7d', '30d':'30d' };
       const window = windowMap[_rfHealthState.range] || '24h';
       const summaryData = await api('/observers/metrics/summary?window=' + window + (RegionFilter.regionQueryString() || ''));
+      if (!isCurrent()) return;
       const observers = summaryData.observers || [];
 
       // Filter to observers with sufficient sparkline data (≥2 non-null noise_floor values)
@@ -4338,6 +4436,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
       // Click handler for cells
       grid.querySelectorAll('.rf-cell').forEach(cell => {
         cell.addEventListener('click', () => {
+          if (!isCurrent()) return;
           const obsId = cell.dataset.observer;
           grid.querySelectorAll('.rf-cell').forEach(c => c.classList.remove('rf-cell-selected'));
           cell.classList.add('rf-cell-selected');
@@ -4368,17 +4467,21 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
         }
       }
     } catch (e) {
+      if (!isCurrent()) return;
       grid.innerHTML = `<div class="text-muted" style="padding:20px">Failed to load RF health data: ${esc(e.message)}</div>`;
     }
   }
 
   async function loadRFSparkline(observerId) {
+    const container = document.getElementById(`rf-spark-${observerId}`);
+    if (!container) return;
+    const isCurrent = analyticsGuard(container);
     const { since, until } = rfHealthTimeRangeToParams(_rfHealthState.range, _rfHealthState.customFrom, _rfHealthState.customTo);
     try {
       const data = await api(`/observers/${observerId}/metrics?since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}`);
+      if (!isCurrent()) return;
       const metrics = data.metrics || [];
       const nfValues = metrics.map(m => m.noise_floor).filter(v => v != null);
-      const container = document.getElementById(`rf-spark-${observerId}`);
       if (container && nfValues.length > 1) {
         container.innerHTML = rfNFSparkline(nfValues, 140, 24);
       } else if (container) {
@@ -4413,6 +4516,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
   }
 
   async function loadRFHealthDetail(observerId, container) {
+    const isCurrent = analyticsGuard(container);
     container.classList.remove('rf-panel-empty');
     container.innerHTML = '<div class="text-muted" style="padding:10px">Loading detail…</div>';
 
@@ -4424,6 +4528,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
 
     try {
       const data = await api(`/observers/${observerId}/metrics?since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}&resolution=${resolution}`);
+      if (!isCurrent()) return;
       const metrics = data.metrics || [];
       const reboots = (data.reboots || []).map(r => new Date(r).getTime());
       const name = data.observer_name || observerId.substring(0, 8);
@@ -4473,6 +4578,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
 
       // Close button
       container.querySelector('.rf-detail-close').addEventListener('click', () => {
+        _analyticsRequests.delete(container);
         container.classList.add('rf-panel-empty');
         container.innerHTML = '<span>Select an observer to view details</span>';
         _rfHealthState.selectedObserver = null;
@@ -4517,6 +4623,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
         }
       }
     } catch (e) {
+      if (!isCurrent()) return;
       container.innerHTML = `<div class="text-muted" style="padding:10px">Failed to load detail: ${esc(e.message)}</div>`;
     }
   }
@@ -4846,10 +4953,12 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
 
   // #690 — Clock Health fleet view (M3)
   async function renderClockHealthTab(el) {
+    const isCurrent = analyticsGuard(el);
     el.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading clock health data…</div>';
     try {
       const aqs = AreaFilter.areaQueryString();
       var data = await (await fetch('/api/nodes/clock-skew' + (aqs ? '?' + aqs.slice(1) : ''))).json();
+      if (!isCurrent()) return;
       if (!Array.isArray(data) || !data.length) {
         el.innerHTML = '<div class="text-center text-muted" style="padding:40px">No clock skew data available. Nodes need recent adverts for clock analysis.</div>';
         return;
@@ -4948,6 +5057,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
 
       render();
     } catch (err) {
+      if (!isCurrent()) return;
       el.innerHTML = '<div class="text-center" style="color:var(--status-red);padding:40px">Failed to load clock health data: ' + esc(String(err)) + '</div>';
     }
   }
@@ -4981,6 +5091,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
   }
 
   async function renderScopesTab(el) {
+    const isCurrent = analyticsGuard();
     var winKey = 'scopes_window';
     var selectedWindow = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(winKey)) || '24h';
 
@@ -5005,16 +5116,19 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
         '<div id="scopes-chart"></div>' +
         '<div id="scopes-adverts-by-role"></div>';
 
-      // Attach window-button click listeners (once)
-      el.querySelectorAll('[data-win]').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-          selectedWindow = btn.dataset.win;
-          if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(winKey, selectedWindow);
-          el.querySelectorAll('[data-win]').forEach(function(b) { b.classList.toggle('active', b.dataset.win === selectedWindow); });
-          load(selectedWindow);
-        });
-      });
     }
+
+    // The frame survives theme/filter refreshes; replace its handlers so
+    // window picks and the refresh timer share the current render's state.
+    el.querySelectorAll('[data-win]').forEach(function(btn) {
+      btn.onclick = function() {
+        if (!isCurrent()) return;
+        selectedWindow = btn.dataset.win;
+        if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(winKey, selectedWindow);
+        el.querySelectorAll('[data-win]').forEach(function(b) { b.classList.toggle('active', b.dataset.win === selectedWindow); });
+        load(selectedWindow);
+      };
+    });
 
     function pct(n, total) {
       if (!total) return '—';
@@ -5022,11 +5136,14 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     }
 
     async function load(w) {
+      if (!isCurrent()) return;
+      const requestCurrent = analyticsGuard(document.getElementById('scopes-cards'));
       var loadingEl = document.getElementById('scopes-loading');
       if (loadingEl) loadingEl.style.display = '';
       try {
         // Fix 4: use api() instead of raw fetch()
         var data = await api('/scope-stats?window=' + encodeURIComponent(w), { ttl: 30000 });
+        if (!requestCurrent()) return;
         if (loadingEl) loadingEl.style.display = 'none';
         if (data.error) {
           var cardsEl2 = document.getElementById('scopes-cards');
@@ -5035,6 +5152,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
         }
         updateData(data, w);
       } catch (err) {
+        if (!requestCurrent()) return;
         if (loadingEl) loadingEl.style.display = 'none';
         var cardsEl3 = document.getElementById('scopes-cards');
         if (cardsEl3) cardsEl3.innerHTML = '<div class="text-center" style="color:var(--status-red);padding:20px">Failed to load scope stats: ' + esc(String(err)) + '</div>';
@@ -5142,9 +5260,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
     // Fix 6: auto-refresh every 60s
     _stopScopesRefresh();
     _scopesRefreshTimer = setInterval(function() {
-      if (_currentTab !== 'scopes') { _stopScopesRefresh(); return; }
-      var cur = document.getElementById('analyticsContent');
-      if (!cur) { _stopScopesRefresh(); return; }
+      if (!isCurrent()) return;
       load(selectedWindow);
     }, 60000);
   }
@@ -5154,22 +5270,23 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
   // Auto-refreshes every 60s while the Roles tab is active (matches the
   // behavior of the former standalone roles-page.js).
   async function renderRolesTab(el) {
+    const isCurrent = analyticsGuard();
     el.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading roles…</div>';
     await _renderRolesTabBody(el);
+    if (!isCurrent()) return;
     // (Re)start the 60s auto-refresh.
     _stopRolesRefresh();
     _rolesRefreshTimer = setInterval(function () {
-      // Bail if the user navigated away from the Roles tab.
-      if (_currentTab !== 'roles') { _stopRolesRefresh(); return; }
-      var cur = document.getElementById('analyticsContent');
-      if (!cur) { _stopRolesRefresh(); return; }
-      _renderRolesTabBody(cur);
+      if (!isCurrent()) return;
+      _renderRolesTabBody(el);
     }, 60000);
   }
 
   async function _renderRolesTabBody(el) {
+    const isCurrent = analyticsGuard(el);
     try {
       var data = await api('/analytics/roles', { ttl: CLIENT_TTL.analyticsRF });
+      if (!isCurrent()) return;
       var roles = (data && data.roles) || [];
       var total = (data && data.totalNodes) || 0;
       if (!roles.length) {
@@ -5221,6 +5338,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRet
           '<tbody>' + rows + '</tbody>' +
         '</table>';
     } catch (err) {
+      if (!isCurrent()) return;
       el.innerHTML = '<div class="text-center" style="color:var(--status-red);padding:40px">Failed to load roles: ' + esc(String(err.message || err)) + '</div>';
     }
   }

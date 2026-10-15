@@ -31,7 +31,7 @@ func TestStatusMessage_ObserverLastSeen_AlwaysIngestTime_PastEnvelope_1465(t *te
 	after := time.Now().Unix()
 
 	var lastSeen string
-	if err := store.db.QueryRow(`SELECT last_seen FROM observers WHERE id = ?`, "obs-past").Scan(&lastSeen); err != nil {
+	if err := store.db.QueryRow(`SELECT last_seen FROM observers WHERE id = $1`, "obs-past").Scan(&lastSeen); err != nil {
 		t.Fatalf("scan last_seen: %v", err)
 	}
 	ls, err := time.Parse(time.RFC3339, lastSeen)
@@ -61,7 +61,7 @@ func TestStatusMessage_ObserverLastSeen_AlwaysIngestTime_FutureEnvelope_1465(t *
 	after := time.Now().Unix()
 
 	var lastSeen string
-	if err := store.db.QueryRow(`SELECT last_seen FROM observers WHERE id = ?`, "obs-future").Scan(&lastSeen); err != nil {
+	if err := store.db.QueryRow(`SELECT last_seen FROM observers WHERE id = $1`, "obs-future").Scan(&lastSeen); err != nil {
 		t.Fatalf("scan last_seen: %v", err)
 	}
 	ls, err := time.Parse(time.RFC3339, lastSeen)
@@ -94,7 +94,7 @@ func TestPacketMessage_ObserverLastSeen_AlwaysIngestTime_PastEnvelope_1465(t *te
 	after := time.Now().Unix()
 
 	var lastSeen string
-	if err := store.db.QueryRow(`SELECT last_seen FROM observers WHERE id = ?`, "obs-pkt").Scan(&lastSeen); err != nil {
+	if err := store.db.QueryRow(`SELECT last_seen FROM observers WHERE id = $1`, "obs-pkt").Scan(&lastSeen); err != nil {
 		t.Fatalf("scan last_seen: %v", err)
 	}
 	ls, err := time.Parse(time.RFC3339, lastSeen)

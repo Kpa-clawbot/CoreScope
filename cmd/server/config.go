@@ -37,10 +37,12 @@ type ListLimitsConfig struct {
 
 // Config mirrors the Node.js config.json structure (read-only fields).
 type Config struct {
-	Port       int               `json:"port"`
-	APIKey     string            `json:"apiKey"`
-	DBPath     string            `json:"dbPath"`
-	ListLimits *ListLimitsConfig `json:"listLimits"`
+	Port        int               `json:"port"`
+	APIKey      string            `json:"apiKey"`
+	DBPath      string            `json:"dbPath,omitempty"` // legacy SQLite path; an installed selection is authoritative
+	DatabaseURL string            `json:"databaseURL"`
+	StateDir    string            `json:"stateDir"`
+	ListLimits  *ListLimitsConfig `json:"listLimits"`
 
 	// NodeBlacklist is a list of public keys to exclude from all API responses.
 	// Blacklisted nodes are hidden from node lists, search, detail, map, and stats.
@@ -348,6 +350,7 @@ type NeighborGraphConfig struct {
 	// recomputer that rebuilds the default-shape neighbor-graph
 	// response (#1481 P0-1). 0/missing = default 300 (5 min).
 	// Lower = fresher data, more CPU per minute. #1483.
+	// The underlying topology refresh cadence remains capped at 5 minutes.
 	CacheRecomputeIntervalSeconds int `json:"cacheRecomputeIntervalSeconds,omitempty"`
 }
 
@@ -392,7 +395,7 @@ type RetentionConfig struct {
 	MetricsDays  int `json:"metricsDays"`
 }
 
-// DBConfig is the shared SQLite vacuum/maintenance config (#919, #921).
+// DBConfig shares startup-load settings and accepts obsolete SQLite config keys.
 type DBConfig = dbconfig.DBConfig
 
 // IncrementalVacuumPages returns the configured pages per vacuum or 1024 default.
@@ -516,10 +519,13 @@ func LoadConfig(baseDirs ...string) (*Config, error) {
 	for _, p := range paths {
 		data, err := os.ReadFile(p)
 		if err != nil {
-			continue
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("cannot read %s; refusing configuration fallback", filepath.Base(p))
 		}
 		if err := json.Unmarshal(data, cfg); err != nil {
-			continue
+			return nil, fmt.Errorf("%s is malformed or has invalid field types; refusing configuration fallback", filepath.Base(p))
 		}
 		cfg.NormalizeTimestampConfig()
 		cfg.migrateDeprecatedConfig()
@@ -758,14 +764,27 @@ func (h HealthThresholds) ToClientMs() map[string]int {
 	}
 }
 
-func (c *Config) ResolveDBPath(baseDir string) string {
-	if c.DBPath != "" {
-		return c.DBPath
+// ResolveDatabaseURL refuses legacy paths rather than interpreting them as DSNs.
+func (c *Config) ResolveDatabaseURL() (string, error) {
+	if c.DBPath != "" || os.Getenv("DB_PATH") != "" {
+		return "", fmt.Errorf("dbPath and DB_PATH are no longer supported; import the SQLite database and configure databaseURL or CORESCOPE_DATABASE_URL")
 	}
-	if v := os.Getenv("DB_PATH"); v != "" {
+	v := envOrValue(os.Getenv, "CORESCOPE_READER_DATABASE_URL", envOrValue(os.Getenv, "CORESCOPE_DATABASE_URL", c.DatabaseURL))
+	if v == "" {
+		return "", fmt.Errorf("configure databaseURL or CORESCOPE_DATABASE_URL for the PostgreSQL telemetry reader")
+	}
+	return v, nil
+}
+
+func (c *Config) ResolveStateDir(baseDir string) string {
+	v := envOrValue(os.Getenv, "CORESCOPE_STATE_DIR", c.StateDir)
+	if v == "" {
+		v = "data"
+	}
+	if filepath.IsAbs(v) {
 		return v
 	}
-	return filepath.Join(baseDir, "data", "meshcore.db")
+	return filepath.Join(baseDir, v)
 }
 
 func (c *Config) NormalizeTimestampConfig() {

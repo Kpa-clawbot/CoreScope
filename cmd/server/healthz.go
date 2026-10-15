@@ -7,15 +7,24 @@ import (
 )
 
 // readiness tracks whether background init goroutines have completed.
-// Set to 1 once store.Load, pickBestObservation, and neighbor graph build are done.
+// Startup loading is gated separately by StartupLoadDone in handleHealthz.
 var readiness atomic.Int32
 
 // handleHealthz returns 200 when the server is ready to serve queries,
-// or 503 while background initialization is still running.
+// or 503 while startup is incomplete or the startup load has failed.
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	if readiness.Load() == 0 {
+	ready := readiness.Load() != 0
+	if ready && s.store != nil {
+		select {
+		case <-s.store.StartupLoadDone():
+			ready = !s.store.backgroundLoadFailed.Load()
+		default:
+			ready = false
+		}
+	}
+	if !ready {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"ready":  false,

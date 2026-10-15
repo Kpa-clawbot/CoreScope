@@ -12,7 +12,7 @@ func TestRunPendingPruneRequests(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 
-	store, err := OpenStore(dbPath)
+	store, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestRunPendingPruneRequests(t *testing.T) {
 func TestRunPendingPruneRequests_EmptyQueueIsNoop(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
-	store, err := OpenStore(dbPath)
+	store, err := openPostgresTestStore(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}

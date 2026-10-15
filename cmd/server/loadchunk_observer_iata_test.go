@@ -1,9 +1,6 @@
 package main
 
 import (
-	"database/sql"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -13,11 +10,9 @@ import (
 // IATA code, so packets older than the hot window lost observer_iata in the
 // packets API and the iata filter (#1188), while Load and ingest kept it.
 func TestLoadChunkKeepsObserverIATA(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "iata.db")
+	dbPath := postgresTestDSN(t)
 	createTestDBAt(t, dbPath, 20)
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	conn, err := sql.Open("sqlite3", dbPath)
+	conn, err := openFixtureSQL(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +21,7 @@ func TestLoadChunkKeepsObserverIATA(t *testing.T) {
 	}
 	conn.Close()
 
-	db, err := OpenDB(dbPath)
+	db, err := openFixtureReader(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}

@@ -10,7 +10,7 @@ import (
 // IngestBuffer decouples MQTT message receipt from DB writes (#1608).
 //
 // On boot the ingestor must subscribe to MQTT immediately, but the single
-// SQLite writer (#1283) can be held for minutes by a startup migration
+// serialized writer (#1283) can be held for minutes by a startup migration
 // (e.g. a large CREATE INDEX) or prune. Without buffering, every QoS-0 packet
 // received in that window is lost. IngestBuffer holds received work in a
 // bounded FIFO and a single consumer goroutine drains it once Ready() is

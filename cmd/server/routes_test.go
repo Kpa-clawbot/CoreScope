@@ -552,9 +552,9 @@ func TestPerfEndpoint(t *testing.T) {
 	}
 
 	// Verify sqlite stats
-	sqliteStats, ok := body["sqlite"].(map[string]interface{})
+	sqliteStats, ok := body[testNativeSQL("sqlite", "postgres")].(map[string]interface{})
 	if !ok {
-		t.Fatal("expected sqlite object in perf response")
+		t.Fatal("expected postgres object in perf response")
 	}
 	if _, ok := sqliteStats["dbSizeMB"]; !ok {
 		t.Error("expected dbSizeMB in sqlite")
@@ -1174,10 +1174,10 @@ func TestChannelMessagesWithRegion(t *testing.T) {
 	db := setupTestDB(t)
 	seedTestData(t, db)
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('EEFF', 'chanextra000001', ?, 1, 5, '{"type":"CHAN","channel":"#test","text":"OtherUser: Cross region","sender":"OtherUser"}')`,
+		VALUES ('EEFF', 'chanextra000001', $1, 1, 5, '{"type":"CHAN","channel":"#test","text":"OtherUser: Cross region","sender":"OtherUser"}')`,
 		time.Now().UTC().Add(-30*time.Minute).Format(time.RFC3339))
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (4, 2, 11.0, -89, '[]', ?)`, time.Now().UTC().Add(-30*time.Minute).Unix())
+		VALUES (4, 2, 11.0, -89, '[]', $1)`, time.Now().UTC().Add(-30*time.Minute).Unix())
 
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
@@ -2059,7 +2059,9 @@ func TestHandlerErrorPaths(t *testing.T) {
 	srv.RegisterRoutes(router)
 
 	t.Run("stats error", func(t *testing.T) {
-		db.conn.Exec("DROP TABLE IF EXISTS transmissions")
+		if _, err := db.conn.Exec(testNativeSQL("DROP TABLE IF EXISTS transmissions", "DROP TABLE IF EXISTS transmissions CASCADE")); err != nil {
+			t.Fatal(err)
+		}
 		req := httptest.NewRequest("GET", "/api/stats", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -2078,7 +2080,9 @@ func TestHandlerErrorChannels(t *testing.T) {
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
 
-	db.conn.Exec("DROP TABLE IF EXISTS transmissions")
+	if _, err := db.conn.Exec(testNativeSQL("DROP TABLE IF EXISTS transmissions", "DROP TABLE IF EXISTS transmissions CASCADE")); err != nil {
+		t.Fatal(err)
+	}
 
 	req := httptest.NewRequest("GET", "/api/channels", nil)
 	w := httptest.NewRecorder()
@@ -2174,7 +2178,9 @@ func TestHandlerErrorPackets(t *testing.T) {
 	srv.RegisterRoutes(router)
 
 	// Drop transmissions table to trigger error in transmission-centric query
-	db.conn.Exec("DROP TABLE IF EXISTS transmissions")
+	if _, err := db.conn.Exec(testNativeSQL("DROP TABLE IF EXISTS transmissions", "DROP TABLE IF EXISTS transmissions CASCADE")); err != nil {
+		t.Fatal(err)
+	}
 
 	req := httptest.NewRequest("GET", "/api/packets?limit=10", nil)
 	w := httptest.NewRecorder()
@@ -2414,7 +2420,7 @@ func TestGetNodeHashSizeInfoFlipFlop(t *testing.T) {
 	store.WaitIndexesReady(5 * time.Second)
 
 	pk := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
-	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'TestNode', 'repeater')", pk)
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role) VALUES ($1, 'TestNode', 'repeater') ON CONFLICT DO NOTHING", pk)
 
 	decoded := `{"name":"TestNode","pubKey":"` + pk + `"}`
 	raw1 := "11" + "01" + "aabb"
@@ -2463,7 +2469,7 @@ func TestGetNodeHashSizeInfoDominant(t *testing.T) {
 	store.WaitIndexesReady(5 * time.Second)
 
 	pk := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'Repeater2B', 'repeater')", pk)
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role) VALUES ($1, 'Repeater2B', 'repeater') ON CONFLICT DO NOTHING", pk)
 
 	decoded := `{"name":"Repeater2B","pubKey":"` + pk + `"}`
 	raw1byte := "11" + "01" + "aabb" // FLOOD, pathByte=0x01 → hashSize=1
@@ -2507,7 +2513,7 @@ func TestGetNodeHashSizeInfoLatestWins(t *testing.T) {
 	store.WaitIndexesReady(5 * time.Second)
 
 	pk := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'LatestWins', 'repeater')", pk)
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role) VALUES ($1, 'LatestWins', 'repeater') ON CONFLICT DO NOTHING", pk)
 
 	decoded := `{"name":"LatestWins","pubKey":"` + pk + `"}`
 	raw1byte := "11" + "01" + "aabb" // FLOOD, pathByte=0x01 → hashSize=1
@@ -2557,7 +2563,7 @@ func TestGetNodeHashSizeInfoIgnoreDirectZeroHop(t *testing.T) {
 	store.WaitIndexesReady(5 * time.Second)
 
 	pk := "dddd111122223333444455556666777788889999aaaabbbbccccddddeeee3333"
-	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'DirIgnore', 'repeater')", pk)
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role) VALUES ($1, 'DirIgnore', 'repeater') ON CONFLICT DO NOTHING", pk)
 
 	decoded := `{"name":"DirIgnore","pubKey":"` + pk + `"}`
 	rawFlood2B := "11" + "40" + "aabb" // FLOOD advert, hashSize=2
@@ -2605,7 +2611,7 @@ func TestGetNodeHashSizeInfoOnlyDirectZeroHopIgnored(t *testing.T) {
 	store.WaitIndexesReady(5 * time.Second)
 
 	pk := "eeee111122223333444455556666777788889999aaaabbbbccccddddeeee4444"
-	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'OnlyDirect', 'repeater')", pk)
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role) VALUES ($1, 'OnlyDirect', 'repeater') ON CONFLICT DO NOTHING", pk)
 
 	decoded := `{"name":"OnlyDirect","pubKey":"` + pk + `"}`
 	rawDirect0 := "12" + "00" + "aabb"
@@ -2640,7 +2646,7 @@ func TestGetNodeHashSizeInfoDirectNonZeroHopCounted(t *testing.T) {
 	store.WaitIndexesReady(5 * time.Second)
 
 	pk := "ffff111122223333444455556666777788889999aaaabbbbccccddddeeee5555"
-	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'DirNonZero', 'repeater')", pk)
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role) VALUES ($1, 'DirNonZero', 'repeater') ON CONFLICT DO NOTHING", pk)
 
 	decoded := `{"name":"DirNonZero","pubKey":"` + pk + `"}`
 	// DIRECT advert (route type 2 = 0x02 in bits 0-1), path byte 0x41:
@@ -2680,7 +2686,7 @@ func TestGetNodeHashSizeInfoNoAdverts(t *testing.T) {
 	store.WaitIndexesReady(5 * time.Second)
 
 	pk := "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'NoAdverts', 'repeater')", pk)
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role) VALUES ($1, 'NoAdverts', 'repeater') ON CONFLICT DO NOTHING", pk)
 
 	// Add a non-advert packet (payload_type=2 = TXT_MSG)
 	payloadType := 2
@@ -2720,7 +2726,7 @@ func TestHashAnalyticsZeroHopAdvert(t *testing.T) {
 	baseDist1 := baseDist["1"]
 
 	pk := "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'ZeroHop', 'repeater')", pk)
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role) VALUES ($1, 'ZeroHop', 'repeater') ON CONFLICT DO NOTHING", pk)
 	store.InvalidateNodeCache()
 
 	decoded := `{"name":"ZeroHop","pubKey":"` + pk + `"}`
@@ -2777,8 +2783,8 @@ func TestAnalyticsHashSizeSameNameDifferentPubkey(t *testing.T) {
 	pk2 := "aaaa111122223333444455556666777788889999aaaabbbbccccddddeeee2222"
 
 	// Insert both nodes as repeaters so they appear in distributionByRepeaters.
-	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'SameName', 'repeater')", pk1)
-	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'SameName', 'repeater')", pk2)
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role) VALUES ($1, 'SameName', 'repeater') ON CONFLICT DO NOTHING", pk1)
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role) VALUES ($1, 'SameName', 'repeater') ON CONFLICT DO NOTHING", pk2)
 	store.InvalidateNodeCache()
 
 	decoded1 := `{"name":"SameName","pubKey":"` + pk1 + `"}`
@@ -2856,7 +2862,7 @@ func TestInconsistentNodesExcludesCompanions(t *testing.T) {
 	}
 
 	for ni, n := range nodes {
-		db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, ?, ?)", n.pk, "Node-"+n.role, n.role)
+		db.conn.Exec("INSERT INTO nodes (public_key, name, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING", n.pk, "Node-"+n.role, n.role)
 		decoded := `{"name":"Node-` + n.role + `","pubKey":"` + n.pk + `"}`
 		// Create flip-flop pattern: 1-byte, 2-byte, 1-byte (transitions=2 → inconsistent)
 		// Use header 0x11 (routeType=FLOOD, payloadType=4) and pathByte 0x41/0x81
@@ -2927,7 +2933,7 @@ func TestHashSizeInfoTimeWindow(t *testing.T) {
 	store.WaitIndexesReady(5 * time.Second)
 
 	pk := "dd44444444444444444444444444444444444444444444444444444444444444"
-	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'OldNode', 'repeater')", pk)
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role) VALUES ($1, 'OldNode', 'repeater') ON CONFLICT DO NOTHING", pk)
 
 	decoded := `{"name":"OldNode","pubKey":"` + pk + `"}`
 	payloadType := 4
@@ -2958,7 +2964,7 @@ func TestHashSizeInfoTimeWindow(t *testing.T) {
 
 	// Now add recent adverts with consistent hash size — should appear in info
 	pk2 := "ee55555555555555555555555555555555555555555555555555555555555555"
-	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'NewNode', 'repeater')", pk2)
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role) VALUES ($1, 'NewNode', 'repeater') ON CONFLICT DO NOTHING", pk2)
 	decoded2 := `{"name":"NewNode","pubKey":"` + pk2 + `"}`
 	recentTime := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	for i := 0; i < 3; i++ {
@@ -3139,23 +3145,23 @@ func TestQueryGroupedPacketsSortedByLatest(t *testing.T) {
 	oldEpoch := now.Add(-72 * time.Hour).Unix()
 
 	db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
-		VALUES ('sortobs', 'Sort Observer', 'TST', ?, '2026-01-01T00:00:00Z', 1)`, now.Format(time.RFC3339))
+		VALUES ('sortobs', 'Sort Observer', 'TST', $1, '2026-01-01T00:00:00Z', 1)`, now.Format(time.RFC3339))
 
 	// Packet A: old first_seen, but a very recent observation — should sort first.
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('AA01', 'sort_old_first_recent_obs', ?, 1, 2, '{"type":"TXT_MSG","text":"old first"}')`, oldFirst)
+		VALUES ('AA01', 'sort_old_first_recent_obs', $1, 1, 2, '{"type":"TXT_MSG","text":"old first"}')`, oldFirst)
 	var idA int64
 	db.conn.QueryRow(`SELECT id FROM transmissions WHERE hash='sort_old_first_recent_obs'`).Scan(&idA)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (?, 1, 10.0, -90, '[]', ?)`, idA, recentEpoch)
+		VALUES ($1, 1, 10.0, -90, '[]', $2)`, idA, recentEpoch)
 
 	// Packet B: newer first_seen, but an old observation — should sort second.
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('BB02', 'sort_new_first_old_obs', ?, 1, 2, '{"type":"TXT_MSG","text":"new first"}')`, newFirst)
+		VALUES ('BB02', 'sort_new_first_old_obs', $1, 1, 2, '{"type":"TXT_MSG","text":"new first"}')`, newFirst)
 	var idB int64
 	db.conn.QueryRow(`SELECT id FROM transmissions WHERE hash='sort_new_first_old_obs'`).Scan(&idB)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (?, 1, 10.0, -90, '[]', ?)`, idB, oldEpoch)
+		VALUES ($1, 1, 10.0, -90, '[]', $2)`, idB, oldEpoch)
 
 	store := NewPacketStore(db, nil)
 	if err := store.Load(); err != nil {
@@ -3592,9 +3598,9 @@ func TestHashCollisionsWithCollision(t *testing.T) {
 
 	// Two repeater nodes with same first byte 'CC' and hash_size=1
 	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES ('CC11223344556677', 'Node1', 'repeater', 37.5, -122.0, ?, '2026-01-01T00:00:00Z', 5)`, recent)
+		VALUES ('CC11223344556677', 'Node1', 'repeater', 37.5, -122.0, $1, '2026-01-01T00:00:00Z', 5)`, recent)
 	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES ('CC99887766554433', 'Node2', 'repeater', 37.51, -122.01, ?, '2026-01-01T00:00:00Z', 5)`, recent)
+		VALUES ('CC99887766554433', 'Node2', 'repeater', 37.51, -122.01, $1, '2026-01-01T00:00:00Z', 5)`, recent)
 
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
@@ -3661,7 +3667,7 @@ func TestHashCollisionsShortPublicKey(t *testing.T) {
 	recent := now.Add(-1 * time.Hour).Format(time.RFC3339)
 
 	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES ('A', 'ShortKey', 'repeater', 0, 0, ?, '2026-01-01T00:00:00Z', 1)`, recent)
+		VALUES ('A', 'ShortKey', 'repeater', 0, 0, $1, '2026-01-01T00:00:00Z', 1)`, recent)
 
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
@@ -3692,9 +3698,9 @@ func TestHashCollisionsMissingCoordinates(t *testing.T) {
 
 	// Two nodes same prefix, no coordinates
 	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES ('BB11223344556677', 'NoCoords1', 'repeater', 0, 0, ?, '2026-01-01T00:00:00Z', 1)`, recent)
+		VALUES ('BB11223344556677', 'NoCoords1', 'repeater', 0, 0, $1, '2026-01-01T00:00:00Z', 1)`, recent)
 	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
-		VALUES ('BB99887766554433', 'NoCoords2', 'repeater', 0, 0, ?, '2026-01-01T00:00:00Z', 1)`, recent)
+		VALUES ('BB99887766554433', 'NoCoords2', 'repeater', 0, 0, $1, '2026-01-01T00:00:00Z', 1)`, recent)
 
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
@@ -3744,16 +3750,16 @@ func TestHashCollisionsOnlyRepeaters(t *testing.T) {
 	//   5. sensor with hash_size=1 → should be excluded
 	now := time.Now().Format("2006-01-02 15:04:05")
 	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen) VALUES
-		('aa11223344556677', 'Repeater1', 'repeater', ?),
-		('aa99887766554433', 'UnknownNode', 'repeater', ?),
-		('aadeadbeefcafe01', 'Companion1', 'companion', ?),
-		('aabbcc1122334455', 'Room1', 'room', ?),
-		('aabbcc9988776655', 'Sensor1', 'sensor', ?)`, now, now, now, now, now)
+		('aa11223344556677', 'Repeater1', 'repeater', $1),
+		('aa99887766554433', 'UnknownNode', 'repeater', $2),
+		('aadeadbeefcafe01', 'Companion1', 'companion', $3),
+		('aabbcc1122334455', 'Room1', 'room', $4),
+		('aabbcc9988776655', 'Sensor1', 'sensor', $5)`, now, now, now, now, now)
 
 	// We also need a second repeater with hash_size=1 and same prefix to
 	// confirm that genuine collisions ARE still detected.
 	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen) VALUES
-		('aa00112233445566', 'Repeater2', 'repeater', ?)`, now)
+		('aa00112233445566', 'Repeater2', 'repeater', $1)`, now)
 
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
@@ -3828,10 +3834,10 @@ func TestHashCollisionsOneByteIncludesMultiBytePrefixRepeaters(t *testing.T) {
 	// One unrelated repeater with first byte "DD" must NOT appear in CC cell.
 	now := time.Now().Format("2006-01-02 15:04:05")
 	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen) VALUES
-		('cc11223344556677', 'Rep1B',  'repeater', ?),
-		('cc22aabbccddeeff', 'Rep2B',  'repeater', ?),
-		('cc33bbddeeff0011', 'Rep3B',  'repeater', ?),
-		('dd44556677889900', 'RepDD',  'repeater', ?)`, now, now, now, now)
+		('cc11223344556677', 'Rep1B',  'repeater', $1),
+		('cc22aabbccddeeff', 'Rep2B',  'repeater', $2),
+		('cc33bbddeeff0011', 'Rep3B',  'repeater', $3),
+		('dd44556677889900', 'RepDD',  'repeater', $4)`, now, now, now, now)
 
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
@@ -3937,18 +3943,18 @@ func TestNodePathsPrefixCollisionFilter(t *testing.T) {
 	recentEpoch := now.Add(-30 * time.Minute).Unix()
 
 	// Insert a second node with the same 2-char prefix
-	srv.db.conn.Exec(`INSERT OR IGNORE INTO nodes (public_key, name, role, last_seen, first_seen, advert_count)
-		VALUES ('aacafe0000000000', 'CollisionNode', 'repeater', ?, '2026-01-01T00:00:00Z', 5)`, recent)
+	srv.db.conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen, first_seen, advert_count)
+		VALUES ('aacafe0000000000', 'CollisionNode', 'repeater', $1, '2026-01-01T00:00:00Z', 5) ON CONFLICT DO NOTHING`, recent)
 
 	// Insert a transmission with path hop "aa" that resolves to the OTHER node
 	srv.db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('FF01', 'collision_test_hash', ?, 1, 4, '{}')`, recent)
+		VALUES ('FF01', 'collision_test_hash', $1, 1, 4, '{}')`, recent)
 	// Get its ID
 	var collisionTxID int
 	srv.db.conn.QueryRow(`SELECT id FROM transmissions WHERE hash='collision_test_hash'`).Scan(&collisionTxID)
 
 	srv.db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp, resolved_path)
-		VALUES (?, 1, 10.0, -90, '["aa","bb"]', ?, '["aacafe0000000000","eeff00112233aabb"]')`,
+		VALUES ($1, 1, 10.0, -90, '["aa","bb"]', $2, '["aacafe0000000000","eeff00112233aabb"]')`,
 		collisionTxID, recentEpoch)
 
 	// Reload store to pick up new data
@@ -4088,7 +4094,7 @@ func TestMetricsAPIEndpoints(t *testing.T) {
 	now := time.Now().UTC()
 	t1 := now.Add(-1 * time.Hour).Format(time.RFC3339)
 
-	srv.db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor) VALUES (?, ?, ?)",
+	srv.db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor) VALUES ($1, $2, $3)",
 		"obs1", t1, -112.0)
 
 	// Test /api/observers/obs1/metrics
@@ -4217,16 +4223,16 @@ func TestPacketDetailFallsBackToDBWhenStoreMisses(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := srv.db.conn.Exec(`INSERT INTO transmissions
 		(raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('FFEE', ?, ?, 1, 4, '{"type":"ADVERT"}')`, dbOnlyHash, now); err != nil {
+		VALUES ('FFEE', $1, $2, 1, 4, '{"type":"ADVERT"}')`, dbOnlyHash, now); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 	var txID int
-	if err := srv.db.conn.QueryRow("SELECT id FROM transmissions WHERE hash = ?", dbOnlyHash).Scan(&txID); err != nil {
+	if err := srv.db.conn.QueryRow("SELECT id FROM transmissions WHERE hash = $1", dbOnlyHash).Scan(&txID); err != nil {
 		t.Fatalf("lookup tx id: %v", err)
 	}
 	if _, err := srv.db.conn.Exec(`INSERT INTO observations
 		(transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (?, 1, 7.5, -99, '[]', ?)`, txID, time.Now().Unix()); err != nil {
+		VALUES ($1, 1, 7.5, -99, '[]', $2)`, txID, time.Now().Unix()); err != nil {
 		t.Fatalf("insert obs: %v", err)
 	}
 
@@ -4307,7 +4313,7 @@ func TestHandleScopeStats(t *testing.T) {
 	srv.db.hasScopeName = true
 
 	// Clear seed transmissions so this test isolates scope-stats math.
-	if _, err := srv.db.conn.Exec(`DELETE FROM transmissions`); err != nil {
+	if _, err := srv.db.conn.Exec(`DELETE FROM observations; DELETE FROM transmissions`); err != nil {
 		t.Fatalf("clear transmissions: %v", err)
 	}
 
@@ -4331,7 +4337,7 @@ func TestHandleScopeStats(t *testing.T) {
 			scopeArg = nil // unscoped (NULL)
 		}
 		if _, err := srv.db.conn.Exec(
-			`INSERT INTO transmissions (raw_hex,hash,first_seen,route_type,payload_type,scope_name) VALUES (?,?,?,?,5,?)`,
+			`INSERT INTO transmissions (raw_hex,hash,first_seen,route_type,payload_type,scope_name) VALUES ($1,$2,$3,$4,5,$5)`,
 			"aa", r.hash, now, r.route, scopeArg,
 		); err != nil {
 			t.Fatalf("seed row %d: %v", i, err)
@@ -4697,7 +4703,7 @@ func TestPruneGeoFilterEndpoint(t *testing.T) {
 		}
 
 		// And the marker file must exist on disk.
-		pending, err := prunequeue.RequestExists(srv.db.path, id)
+		pending, err := prunequeue.RequestExists(srv.db.statePath(), id)
 		if err != nil {
 			t.Fatalf("RequestExists: %v", err)
 		}
@@ -4735,7 +4741,7 @@ func TestPruneGeoFilterEndpoint(t *testing.T) {
 		}
 
 		// Simulate the ingestor completing the request.
-		if err := prunequeue.WriteResult(srv.db.path, prunequeue.Result{
+		if err := prunequeue.WriteResult(srv.db.statePath(), prunequeue.Result{
 			ID:          id,
 			RequestedAt: time.Now().Add(-1 * time.Second).UTC(),
 			CompletedAt: time.Now().UTC(),

@@ -27,7 +27,7 @@ func (db *DB) txRewriteFeedPresent() bool {
 		return true
 	}
 	var exists int
-	if err := db.conn.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='tx_rewrite_feed'`).Scan(&exists); err != nil {
+	if err := db.conn.QueryRow(db.nativeSQL(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='tx_rewrite_feed'`, `SELECT 1 FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='tx_rewrite_feed'`)).Scan(&exists); err != nil {
 		return false
 	}
 	db.txRewriteFeedTable.Store(true)
@@ -54,7 +54,7 @@ func (s *PacketStore) pollTxRewrites(limit int) error {
 	rows, err := s.db.conn.Query(`
 		SELECT f.id, f.tx_id, t.decoded_json, `+scopeCol+`
 		FROM tx_rewrite_feed f LEFT JOIN transmissions t ON t.id = f.tx_id
-		WHERE f.id > ? ORDER BY f.id LIMIT ?`, s.txRewriteCursor, limit)
+		WHERE f.id > `+s.db.parameter(1)+` ORDER BY f.id LIMIT `+s.db.parameter(2), s.txRewriteCursor, limit)
 	if err != nil {
 		return err
 	}

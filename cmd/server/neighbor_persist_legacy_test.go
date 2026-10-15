@@ -1,12 +1,8 @@
 package main
 
 import (
-	"database/sql"
-	"path/filepath"
 	"testing"
 	"time"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 // TestNeighborPersist_LegacyEdgeInvariant (#1638 adv-#1): edges loaded from
@@ -16,9 +12,8 @@ import (
 // pre-existing observations land in bucket 0 (legacy/unknown, conservative
 // weight in the JS confidence indicator).
 func TestNeighborPersist_LegacyEdgeInvariant(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "neighbor_legacy.db")
-	rw, err := sql.Open("sqlite3", "file:"+dbPath+"?_journal_mode=WAL")
+	dbPath := postgresTestDSN(t)
+	rw, err := openFixtureSQL(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +29,7 @@ func TestNeighborPersist_LegacyEdgeInvariant(t *testing.T) {
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := rw.Exec(
-		`INSERT INTO neighbor_edges (node_a, node_b, count, last_seen) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO neighbor_edges (node_a, node_b, count, last_seen) VALUES ($1, $2, $3, $4)`,
 		"aaaa", "bbbb", 7, now,
 	); err != nil {
 		t.Fatal(err)
@@ -77,9 +72,8 @@ func TestNeighborPersist_LegacyEdgeInvariant(t *testing.T) {
 // in the snapshot" path (loader's else-branch): subsequent counts must
 // accumulate into bucket 0 too, preserving the invariant.
 func TestNeighborPersist_LegacyEdgeMergeOnReload(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "neighbor_legacy_merge.db")
-	rw, err := sql.Open("sqlite3", "file:"+dbPath+"?_journal_mode=WAL")
+	dbPath := postgresTestDSN(t)
+	rw, err := openFixtureSQL(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +91,7 @@ func TestNeighborPersist_LegacyEdgeMergeOnReload(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	for _, cnt := range []int{3, 4} {
 		if _, err := rw.Exec(
-			`INSERT INTO neighbor_edges (node_a, node_b, count, last_seen) VALUES (?, ?, ?, ?)`,
+			`INSERT INTO neighbor_edges (node_a, node_b, count, last_seen) VALUES ($1, $2, $3, $4)`,
 			"aaaa", "bbbb", cnt, now,
 		); err != nil {
 			t.Fatal(err)

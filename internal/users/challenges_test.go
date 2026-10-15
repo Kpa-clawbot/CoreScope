@@ -33,7 +33,7 @@ func TestLinkChallengeLifecycle(t *testing.T) {
 		t.Fatalf("CreateLinkChallenge = %q, %v, %v", ch, exp, err)
 	}
 	var n int
-	if err := st.db.QueryRow(`SELECT COUNT(*) FROM link_challenges WHERE challenge_hash = ? AND pubkey = ? AND user_id = ?`,
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM link_challenges WHERE challenge_hash = $1 AND pubkey = $2 AND user_id = $3`,
 		challengeHash(raw), pk, a.ID).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("stored challenge rows = %d, %v (want SHA-256 of the raw bytes)", n, err)
 	}

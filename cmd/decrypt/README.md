@@ -1,6 +1,6 @@
 # corescope-decrypt
 
-Standalone CLI tool to decrypt and export MeshCore hashtag channel messages from a CoreScope SQLite database.
+Standalone CLI tool to decrypt and export MeshCore hashtag channel messages from CoreScope storage. SQLite is the default; PostgreSQL is optional. Both are opened read-only.
 
 ## Why
 
@@ -24,7 +24,7 @@ docker exec corescope-prod /app/corescope-decrypt --channel "#wardriving" --db /
 
 ### From GitHub release
 
-Download the static binary from the [Releases](https://github.com/Kpa-clawbot/CoreScope/releases) page:
+Download the binary for your platform from the [Releases](https://github.com/Kpa-clawbot/CoreScope/releases) page:
 
 ```bash
 # Linux amd64
@@ -40,15 +40,27 @@ cd cmd/decrypt
 go build -ldflags="-s -w" -o corescope-decrypt .   # cgo: the SQLite driver needs it
 ```
 
-The binary is statically linked — no dependencies, runs on any Linux.
+Building SQLite support requires a C compiler and CGO enabled. Use the packaged image or a release binary matching your platform.
 
 ## Usage
 
 ```
-corescope-decrypt --channel NAME --db PATH [--format FORMAT] [--output FILE]
+corescope-decrypt --channel NAME [--db PATH] [--format FORMAT] [--output FILE]
 ```
 
 Run `corescope-decrypt --help` for full flag documentation.
+
+### Storage selection
+
+The tool reads storage fields from `config.json`, then `data/config.json` if the first file is absent. `--config FILE` selects an explicit file. An unreadable or malformed selected config is an error. Relative paths use the working directory.
+
+For an installed instance, `storage-selection.json` is authoritative: stale `--db` paths or bootstrap backend settings do not override a completed backend switch. The tool finds that record using `--state-dir`, `CORESCOPE_STATE_DIR`, or configured `stateDir`; otherwise it uses the legacy SQLite database directory (default `data`). Keep the installation's stable state directory when exporting after a switch. A shared lease blocks a switch until the export exits.
+
+Without a recorded installation, `--db PATH` reads an existing SQLite file; the default is `data/meshcore.db`. It never creates, adopts, or migrates a database. Incomplete conversions, missing files, and incompatible schemas fail. Offline legacy files remain readable when they contain the columns needed for export.
+
+For PostgreSQL, supply a restricted reader URL through `CORESCOPE_READER_DATABASE_URL`, or the generic `CORESCOPE_DATABASE_URL`. `--database-url` is available but environment settings keep credentials out of command history. PostgreSQL role and schema-readiness checks remain enforced; a failed connection never falls back to SQLite.
+
+Before a selection has been recorded, `db.backend`, `CORESCOPE_DB_BACKEND`, or `--backend sqlite|postgres` makes the choice explicit; conflicting config/environment selectors fail. Otherwise unambiguous native settings determine the engine. CLI paths/URLs override their environment/config values; environment values override config. `DB_PATH` is the legacy SQLite path variable. Mixed unrecorded file and URL settings require an explicit backend choice.
 
 ### JSON output (default)
 
@@ -122,6 +134,9 @@ See the firmware source at `firmware/src/helpers/BaseChatMesh.cpp` for the canon
 ```bash
 cd cmd/decrypt
 go test ./...
+
+# Explicit PostgreSQL matrix: requires a disposable administrator URL.
+CORESCOPE_TEST_BACKEND=postgres go test ./...
 
 # Manual test with the real fixture:
 go run . --channel "#wardriving" --db ../../test-fixtures/e2e-fixture.db --format irc

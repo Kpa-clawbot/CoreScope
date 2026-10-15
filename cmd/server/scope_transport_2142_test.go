@@ -53,7 +53,7 @@ func transportRow(t *testing.T, rows []ScopeTransportRow, pk string) ScopeTransp
 
 func addRepeater(t *testing.T, srv *Server, pk, name string) {
 	t.Helper()
-	if _, err := srv.db.conn.Exec(`INSERT INTO nodes (public_key, name, role) VALUES (?, ?, 'repeater')
+	if _, err := srv.db.conn.Exec(`INSERT INTO nodes (public_key, name, role) VALUES ($1, $2, 'repeater')
 		ON CONFLICT(public_key) DO UPDATE SET name = excluded.name, role = 'repeater'`, pk, name); err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func BenchmarkComputeScopeTransport(b *testing.B) {
 		if i%7 == 0 {
 			scope = sql.NullString{String: "be,be-van,*", Valid: true}
 		}
-		conn.Exec(`INSERT INTO nodes (public_key, name, role, configured_scope, configured_scope_at) VALUES (?, ?, 'repeater', ?, ?)`,
+		conn.Exec(`INSERT INTO nodes (public_key, name, role, configured_scope, configured_scope_at) VALUES ($1, $2, 'repeater', $3, $4)`,
 			pks[i], fmt.Sprintf("Repeater %d", i), scope, time.Now().UTC().Format(time.RFC3339))
 	}
 	regions := []string{"#be", "#be-van", "#be-ant", "#be-gnt", "#be-lge", "#nl", "#nl-ams", "#de"}
@@ -219,11 +219,11 @@ func BenchmarkComputeScopeTransport(b *testing.B) {
 			route, scope = 0, regions[i%len(regions)]
 		}
 		res, _ := conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, code1, code2, scope_name)
-			VALUES ('AA', ?, ?, ?, 1, '1234', '00', ?)`, fmt.Sprintf("bench%d", i), now.Add(-time.Duration(i)*2*time.Second).Format(time.RFC3339), route, scope)
+			VALUES ('AA', $1, $2, $3, 1, '1234', '00', $4)`, fmt.Sprintf("bench%d", i), now.Add(-time.Duration(i)*2*time.Second).Format(time.RFC3339), route, scope)
 		id, _ := res.LastInsertId()
 		path := fmt.Sprintf(`["%s","%s","%s","%s"]`, strings.ToUpper(pks[i%fleet][:6]), strings.ToUpper(pks[(i*7)%fleet][:6]),
 			strings.ToUpper(pks[(i*11)%fleet][:6]), strings.ToUpper(pks[(i*17)%fleet][:6]))
-		conn.Exec(`INSERT INTO observations (transmission_id, path_json, timestamp) VALUES (?, ?, ?)`, id, path, now.Unix())
+		conn.Exec(`INSERT INTO observations (transmission_id, path_json, timestamp) VALUES ($1, $2, $3)`, id, path, now.Unix())
 	}
 	conn.Exec("COMMIT")
 	cfg := &Config{Port: 3000}

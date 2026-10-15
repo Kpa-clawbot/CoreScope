@@ -22,7 +22,7 @@
     ['user.email.*', 'Address changes'],
     ['user.mail.refresh', 'Mail status refreshed'],
     ['user.export', 'Data exports'],
-    ['user.backup', 'users.db downloads'],
+    ['user.backup', 'Account backup downloads'],
     ['proposal.*', 'Channel proposals'],
     ['notify.*', 'Notification settings']
   ];

@@ -25,7 +25,7 @@ func insertAdvert(t *testing.T, db *DB, id int, rawHex, hash, pubKey, name strin
 	t.Helper()
 	if _, err := db.conn.Exec(
 		`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		 VALUES (?, ?, ?, ?, 4, ?)`,
+		 VALUES ($1, $2, $3, $4, 4, $5)`,
 		rawHex, hash, seen, routeType,
 		fmt.Sprintf(`{"pubKey":"%s","name":"%s","type":"ADVERT"}`, pubKey, name),
 	); err != nil {
@@ -33,7 +33,7 @@ func insertAdvert(t *testing.T, db *DB, id int, rawHex, hash, pubKey, name strin
 	}
 	if _, err := db.conn.Exec(
 		`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		 VALUES (?, 1, 10.0, -90, '[]', ?)`, id, seenEpoch,
+		 VALUES ($1, 1, 10.0, -90, '[]', $2)`, id, seenEpoch,
 	); err != nil {
 		t.Fatalf("insert observation %s: %v", hash, err)
 	}
@@ -45,7 +45,7 @@ func zeroHopStore(t *testing.T) (*DB, string, int64) {
 	now := time.Now().UTC().Add(-1 * time.Hour)
 	recent := now.Format(time.RFC3339)
 	db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
-		VALUES ('obs1', 'Obs', 'PRG', ?, '2026-01-01T00:00:00Z', 10)`, recent)
+		VALUES ('obs1', 'Obs', 'PRG', $1, '2026-01-01T00:00:00Z', 10)`, recent)
 	return db, recent, now.Unix()
 }
 
@@ -161,7 +161,7 @@ func TestZeroHopDeclaredSizeReachesMultiByteCapability(t *testing.T) {
 
 	const pk = "5361aa08929b6248bb61cb1fab0fdb97d6dba8ae44f53a44427f63e7798a6b6b"
 	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen, first_seen, advert_count)
-		VALUES (?, 'tth-hrebecna', 'repeater', ?, ?, 1)`, pk, recent, recent)
+		VALUES ($1, 'tth-hrebecna', 'repeater', $2, $3, 1)`, pk, recent, recent)
 	insertAdvert(t, db, 1, "1240"+pk+"cafe", "zh_cap", pk, "tth-hrebecna", 2, recent, epoch)
 
 	store := NewPacketStore(db, nil)

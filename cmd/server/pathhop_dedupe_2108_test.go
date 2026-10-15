@@ -62,11 +62,11 @@ func phdSeed(t testing.TB, db *DB, observers int) {
 	t.Helper()
 	ts := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)
 	for i, pk := range phdRelays {
-		phdExec(t, db, `INSERT INTO nodes (public_key, name, role, last_seen, first_seen, advert_count) VALUES (?, ?, 'repeater', ?, '2026-01-01', 1)`,
+		phdExec(t, db, `INSERT INTO nodes (public_key, name, role, last_seen, first_seen, advert_count) VALUES ($1, $2, 'repeater', $3, '2026-01-01', 1)`,
 			pk, fmt.Sprintf("phdRelay-%d", i), ts)
 	}
 	for i := 1; i <= observers; i++ {
-		phdExec(t, db, `INSERT INTO observers (rowid, id, name, iata) VALUES (?, ?, ?, 'TST')`,
+		phdExec(t, db, `INSERT INTO observers (rowid, id, name, iata) VALUES ($1, $2, $3, 'TST')`,
 			i, fmt.Sprintf("phdObs-%02d", i), fmt.Sprintf("Observer %d", i))
 	}
 }
@@ -82,7 +82,7 @@ func phdExec(t testing.TB, db *DB, q string, args ...any) {
 func phdInsertTx(t testing.TB, db *DB, i int, firstSeen time.Time) {
 	t.Helper()
 	phdExec(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES (?, 'CAFE', ?, ?, 1, 2, '{"type":"TXT_MSG"}')`, i+1, fmt.Sprintf("phdTx-%03d", i), firstSeen.Format(time.RFC3339))
+		VALUES ($1, 'CAFE', $2, $3, 1, 2, '{"type":"TXT_MSG"}')`, i+1, fmt.Sprintf("phdTx-%03d", i), firstSeen.Format(time.RFC3339))
 }
 
 // phdInsertObs inserts one observation of transmission i through its path,
@@ -102,7 +102,7 @@ func phdInsertObsVia(t testing.TB, db *DB, i int, path []int, obsIdx int, ts tim
 		rp = phdResolvedJSON(path)
 	}
 	phdExec(t, db, `INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp, resolved_path)
-		VALUES (?, ?, 5, -90, ?, ?, ?)`, i+1, obsIdx, phdRawHopsJSON(path), ts.Unix(), rp)
+		VALUES ($1, $2, 5, -90, $3, $4, $5)`, i+1, obsIdx, phdRawHopsJSON(path), ts.Unix(), rp)
 }
 
 func phdMaxObsID(t testing.TB, db *DB) int {
@@ -580,7 +580,7 @@ func TestPathHopConsumersIgnoreDuplicateEntries_2108(t *testing.T) {
 func TestMultiByteCapabilityIgnoresDuplicateEntries_2108(t *testing.T) {
 	db := setupCapabilityTestDB(t)
 	defer db.conn.Close()
-	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES ($1, $2, $3, $4)",
 		"aabbccdd11223344", "RepB", "repeater", recentTS(48))
 	store := NewPacketStore(db, nil)
 	pt := 1

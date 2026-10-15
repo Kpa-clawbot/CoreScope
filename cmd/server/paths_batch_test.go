@@ -47,7 +47,7 @@ func newPathsBatchStore(t *testing.T) (*PacketStore, map[int][]rpObs) {
 		{11, 7, `["a","b","c"]`, `["cc33cc33","aa11aa11","dd44dd44"]`},
 	}
 	for _, r := range rows {
-		if _, err := conn.Exec(`INSERT INTO observations (id, transmission_id, path_json, resolved_path) VALUES (?,?,?,?)`,
+		if _, err := conn.Exec(`INSERT INTO observations (id, transmission_id, path_json, resolved_path) VALUES ($1,$2,$3,$4)`,
 			r.id, r.tx, r.path, r.rp); err != nil {
 			t.Fatal(err)
 		}
@@ -102,7 +102,7 @@ func TestLoadCanonicalResolvedPathsBatchesQueries(t *testing.T) {
 	const n = 2*resolvedPathBatchSize + 1
 	snapshots := make(map[int][]rpObs, n)
 	for i := 1; i <= n; i++ {
-		conn.Exec(`INSERT INTO observations (id, transmission_id, path_json, resolved_path) VALUES (?,?,?,?)`,
+		conn.Exec(`INSERT INTO observations (id, transmission_id, path_json, resolved_path) VALUES ($1,$2,$3,$4)`,
 			i, i, `["a"]`, `["aa11aa11"]`)
 		snapshots[i] = []rpObs{{i, `["a"]`}}
 	}
@@ -132,11 +132,11 @@ func TestLoadCanonicalResolvedPathsBatchesQueries(t *testing.T) {
 // both A and B are index hits, only A is on the canonical path.
 func TestHandleNodePaths_CanonicalPathDecidesIndexHits(t *testing.T) {
 	sc := setupCollisionScenario(t, false)
-	mustExec(t, sc.db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (43, 'BEEF', 'hash_2146', ?)`, sc.recent)
+	mustExec(t, sc.db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (43, 'BEEF', 'hash_2146', $1)`, sc.recent)
 	mustExec(t, sc.db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)
-		VALUES (43, NULL, '["c0","aa"]', ?, ?)`, sc.recentEpoch, `["`+sc.nodeAPK+`","aaaa0000aaaa0000"]`)
+		VALUES (43, NULL, '["c0","aa"]', $1, $2)`, sc.recentEpoch, `["`+sc.nodeAPK+`","aaaa0000aaaa0000"]`)
 	mustExec(t, sc.db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)
-		VALUES (43, NULL, '["c0"]', ?, ?)`, sc.recentEpoch-10, `["`+sc.nodeBPK+`"]`)
+		VALUES (43, NULL, '["c0"]', $1, $2)`, sc.recentEpoch-10, `["`+sc.nodeBPK+`"]`)
 	sc.reloadStore(t)
 
 	queries := 0

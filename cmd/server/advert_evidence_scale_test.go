@@ -18,7 +18,7 @@ func TestAdvertEvidenceCatchupScale(t *testing.T) {
 	if path == "" {
 		t.Fatal("ADVERT_SCALE_DB must name the completed ingestor scale fixture")
 	}
-	db, err := OpenDB(path)
+	db, err := openFixtureReader(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}

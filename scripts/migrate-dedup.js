@@ -1,20 +1,26 @@
 #!/usr/bin/env node
 /**
- * Milestone 1: Packet Dedup Schema Migration
+ * Offline legacy SQLite tooling. Not part of PostgreSQL upgrades.
  * 
  * Creates `transmissions` and `observations` tables from the existing `packets` table.
  * Idempotent — drops and recreates new tables on each run.
  * Does NOT touch the original `packets` table.
  * 
- * Usage: node scripts/migrate-dedup.js <path-to-meshcore.db>
+ * Usage: node scripts/migrate-dedup.js --legacy-sqlite-offline <recovery-copy.db>
  */
+
+if (process.argv[2] !== '--legacy-sqlite-offline') {
+  console.error('Offline legacy SQLite tooling only. Use docs/postgresql-upgrade.md for current upgrades. To operate on a stopped, disposable recovery copy, pass --legacy-sqlite-offline explicitly.');
+  process.exit(1);
+}
+process.argv.splice(2, 1);
 
 const Database = require('better-sqlite3');
 const path = require('path');
 
 const dbPath = process.argv[2];
 if (!dbPath) {
-  console.error('Usage: node scripts/migrate-dedup.js <path-to-meshcore.db>');
+  console.error('Usage: node scripts/migrate-dedup.js --legacy-sqlite-offline <recovery-copy.db>');
   process.exit(1);
 }
 

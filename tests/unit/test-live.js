@@ -1155,6 +1155,43 @@ console.log('\n=== live.js: clickable paths ===');
   });
 }
 
+// The detail pane must agree with the shared relay-aware freshness rules.
+{
+  const source = fs.readFileSync('public/live.js', 'utf8');
+  const start = source.indexOf('  async function showNodeDetail(pubkey)');
+  const end = source.indexOf('  async function loadNodes(beforeTs)', start);
+  assert.ok(start >= 0 && end > start, 'Live detail function markers moved');
+  const recent = new Date(Date.now() - 60000).toISOString();
+  const old = new Date(Date.now() - 100 * 3600000).toISOString();
+  const cases = [
+    ['active repeater relay', { role: 'repeater', last_seen: old, last_relayed: recent }, {}, 'Online'],
+    ['active room relay', { role: 'room', last_seen: old, last_relayed: recent }, {}, 'Online'],
+    ['recently heard companion', { role: 'companion', last_seen: old, last_heard: recent }, {}, 'Online'],
+    ['recent health evidence', { role: 'companion', last_seen: old }, { lastHeard: recent }, 'Online'],
+    ['silent repeater', { role: 'repeater', last_seen: old }, {}, 'Offline'],
+    ['degraded companion', { role: 'companion', last_seen: new Date(Date.now() - 2 * 3600000).toISOString() }, {}, 'Degraded'],
+    ['unknown recency', { role: 'companion', last_seen: 'invalid' }, {}, 'Offline'],
+  ];
+  for (const [name, node, stats, expected] of cases) {
+    test('Live detail freshness: ' + name, async () => {
+      const ctx = makeLiveSandbox({ withAppJs: true });
+      const els = Object.fromEntries(['liveNodeDetail', 'nodeDetailContent', 'nodeDetailBackdrop', 'liveNodePaths']
+        .map(id => [id, ctx.document.createElement('div')]));
+      ctx.document.getElementById = id => els[id] || null;
+      ctx.formatLiveTimestampHtml = value => value || 'unknown';
+      ctx.activeNodeDetailKey = null;
+      ctx.api = async url => url.endsWith('/health') ? { stats }
+        : url.endsWith('/paths') ? { paths: [] }
+        : { node: { public_key: 'ab'.repeat(32), name, ...node } };
+      vm.runInContext(source.slice(start, end), ctx);
+      await ctx.showNodeDetail('ab'.repeat(32));
+      assert.match(els.nodeDetailContent.innerHTML, new RegExp('>' + expected + '</span>'));
+      assert.match(els.nodeDetailContent.innerHTML, /Last Activity/);
+      if (expected === 'Online') assert.ok(els.nodeDetailContent.innerHTML.includes(recent));
+    });
+  }
+}
+
 // ===== SUMMARY =====
 Promise.allSettled(pendingTests).then(() => {
   console.log(`\n${'═'.repeat(40)}`);

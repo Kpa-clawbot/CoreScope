@@ -753,9 +753,14 @@
   function typeName(t) { return TYPE_NAMES[t] ?? `Type ${t}`; }
   const isMobile = window.innerWidth <= 1024;
   const PACKET_LIMIT = isMobile ? 1000 : 50000;
-  let savedTimeWindowMin = Number(localStorage.getItem('meshcore-time-window'));
-  if (!Number.isFinite(savedTimeWindowMin) || savedTimeWindowMin <= 0) savedTimeWindowMin = 15;
-  if (isMobile && savedTimeWindowMin > 180) savedTimeWindowMin = 15;
+  var DEFAULT_TIME_WINDOW = 15;
+  function normalizePacketTimeWindow(value) {
+    const minutes = value == null || String(value).trim() === '' ? NaN : Number(value);
+    if (!Number.isFinite(minutes) || minutes < 0 ||
+        (isMobile && (minutes === 0 || minutes > 180))) return DEFAULT_TIME_WINDOW;
+    return minutes;
+  }
+  let savedTimeWindowMin = normalizePacketTimeWindow(localStorage.getItem('meshcore-time-window'));
   let totalCount = 0;
   let expandedHashes = new Set();
   let hopNameCache = {};
@@ -769,11 +774,9 @@
   let _colFit = null; // fitColumnsToContent controller for #pktTable
   var _pendingUrlRegion = null;
 
-  var DEFAULT_TIME_WINDOW = 15;
-
   function buildPacketsQuery(timeWindowMin, regionParam, skipHash) {
     var parts = [];
-    if (timeWindowMin && timeWindowMin !== DEFAULT_TIME_WINDOW) parts.push('timeWindow=' + timeWindowMin);
+    if (timeWindowMin === 0 || (timeWindowMin && timeWindowMin !== DEFAULT_TIME_WINDOW)) parts.push('timeWindow=' + timeWindowMin);
     if (regionParam) parts.push('region=' + encodeURIComponent(regionParam));
     if (!skipHash && filters.hash) parts.push('hash=' + encodeURIComponent(filters.hash));
     if (filters.node) parts.push('node=' + encodeURIComponent(filters.node));
@@ -1323,10 +1326,10 @@
     } else {
       showFullNames = localStorage.getItem('meshcore-full-names') === 'true';
     }
-    var _urlTimeWindow = Number(_initUrlParams.get('timeWindow'));
-    if (Number.isFinite(_urlTimeWindow) && _urlTimeWindow > 0) {
-      savedTimeWindowMin = _urlTimeWindow;
-      localStorage.setItem('meshcore-time-window', String(_urlTimeWindow));
+    var _urlTimeWindow = _initUrlParams.get('timeWindow');
+    if (_urlTimeWindow !== null) {
+      savedTimeWindowMin = normalizePacketTimeWindow(_urlTimeWindow);
+      localStorage.setItem('meshcore-time-window', String(savedTimeWindowMin));
     }
     var _urlRegion = _initUrlParams.get('region');
     if (_urlRegion) _pendingUrlRegion = _urlRegion;
@@ -2223,9 +2226,9 @@
     const fTimeWindow = document.getElementById('fTimeWindow');
     fTimeWindow.value = String(savedTimeWindowMin);
     fTimeWindow.addEventListener('change', () => {
-      savedTimeWindowMin = Number(fTimeWindow.value);
-      if (!Number.isFinite(savedTimeWindowMin) || savedTimeWindowMin <= 0) savedTimeWindowMin = 15;
-      localStorage.setItem('meshcore-time-window', fTimeWindow.value);
+      savedTimeWindowMin = normalizePacketTimeWindow(fTimeWindow.value);
+      fTimeWindow.value = String(savedTimeWindowMin);
+      localStorage.setItem('meshcore-time-window', String(savedTimeWindowMin));
       updatePacketsUrl();
       loadPackets();
     });

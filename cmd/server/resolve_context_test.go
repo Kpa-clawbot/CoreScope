@@ -164,7 +164,7 @@ func TestResolveHopsAPI_UniquePrefix(t *testing.T) {
 	_ = srv
 
 	// Insert a unique node
-	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon, role) VALUES (?, ?, ?, ?, ?)",
+	srv.db.conn.Exec("INSERT INTO nodes (public_key, name, lat, lon, role) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
 		"ff11223344", "UniqueNode", 37.0, -122.0, "repeater")
 	srv.store.InvalidateNodeCache()
 
@@ -189,9 +189,9 @@ func TestResolveHopsAPI_UniquePrefix(t *testing.T) {
 func TestResolveHopsAPI_AmbiguousNoContext(t *testing.T) {
 	srv, router := setupTestServer(t)
 
-	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon, role) VALUES (?, ?, ?, ?, ?)",
+	srv.db.conn.Exec("INSERT INTO nodes (public_key, name, lat, lon, role) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
 		"ee1aaaaaaa", "Node-E1", 37.0, -122.0, "repeater")
-	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon, role) VALUES (?, ?, ?, ?, ?)",
+	srv.db.conn.Exec("INSERT INTO nodes (public_key, name, lat, lon, role) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
 		"ee1bbbbbbb", "Node-E2", 38.0, -121.0, "repeater")
 	srv.store.InvalidateNodeCache()
 
@@ -224,11 +224,11 @@ func TestResolveHopsAPI_AmbiguousNoContext(t *testing.T) {
 func TestResolveHopsAPI_WithAffinityContext(t *testing.T) {
 	srv, router := setupTestServer(t)
 
-	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon, role) VALUES (?, ?, ?, ?, ?)",
+	srv.db.conn.Exec("INSERT INTO nodes (public_key, name, lat, lon, role) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
 		"dd1aaaaaaa", "Node-D1", 37.0, -122.0, "repeater")
-	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon, role) VALUES (?, ?, ?, ?, ?)",
+	srv.db.conn.Exec("INSERT INTO nodes (public_key, name, lat, lon, role) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
 		"dd1bbbbbbb", "Node-D2", 38.0, -121.0, "repeater")
-	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon, role) VALUES (?, ?, ?, ?, ?)",
+	srv.db.conn.Exec("INSERT INTO nodes (public_key, name, lat, lon, role) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
 		"c0c0c0c0c0", "Context", 37.1, -122.1, "repeater")
 
 	// Invalidate node cache so the PM includes newly inserted nodes.
@@ -279,7 +279,7 @@ func TestResolveHopsAPI_WithAffinityContext(t *testing.T) {
 func TestResolveHopsAPI_ResponseShape(t *testing.T) {
 	srv, router := setupTestServer(t)
 
-	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon, role) VALUES (?, ?, ?, ?, ?)",
+	srv.db.conn.Exec("INSERT INTO nodes (public_key, name, lat, lon, role) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
 		"bb1aaaaaaa", "Node-B1", 37.0, -122.0, "repeater")
 
 	req := httptest.NewRequest("GET", "/api/resolve-hops?hops=bb1a", nil)

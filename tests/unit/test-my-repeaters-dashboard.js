@@ -67,10 +67,10 @@ const window = { ROLE_COLORS: { repeater: '#3b82f6', room: '#a855f7' }, aaBadgeS
 
 const M = new Function(
   'esc', 'getFavorites', 'RegionFilter', 'AreaFilter', 'fetchAllNodes', 'api', 'CLIENT_TTL',
-  'getHealthThresholds', 'renderSkewBadge', 'currentSkewValue', 'favStar', 'timeAgo', 'bindFavStars', 'window',
+  'getHealthThresholds', 'renderSkewBadge', 'currentSkewValue', 'favStar', 'timeAgo', 'bindFavStars', 'window', 'analyticsGuard',
   block + '\nreturn { renderMyRepeatersTab, _mrStatusCell, _mrSummaryCard };')(
   esc, getFavorites, RegionFilter, AreaFilter, fetchAllNodes, api, CLIENT_TTL,
-  getHealthThresholds, renderSkewBadge, currentSkewValue, favStar, timeAgo, bindFavStars, window);
+  getHealthThresholds, renderSkewBadge, currentSkewValue, favStar, timeAgo, bindFavStars, window, () => () => true);
 
 function makeEl() { return { _h: '', set innerHTML(v) { this._h = v; }, get innerHTML() { return this._h; } }; }
 const tick = () => new Promise(r => setTimeout(r, 0));

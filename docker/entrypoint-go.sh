@@ -1,4 +1,5 @@
 #!/bin/sh
+set -eu
 
 # Config lives in the data directory (bind-mounted from host)
 # The Go server already searches /app/data/config.json via LoadConfig
@@ -23,6 +24,14 @@ fi
 # and "Running the Go services unprivileged" in docs/deployment.md.
 . /select-service-user.sh
 prepare_service_user || exit 1
+
+# Setup may create SQLite databases and the private selection record. Create
+# them as the services' user, after the existing-data ownership hand-over.
+if [ "$CORESCOPE_SERVICE_USER" = root ]; then
+  /app/storage.sh start
+else
+  su -s /bin/sh -c '/app/storage.sh start' "$CORESCOPE_SERVICE_USER"
+fi
 
 SUPERVISORD_CONF="/etc/supervisor/conf.d/supervisord.conf"
 if [ "${DISABLE_MOSQUITTO:-false}" = "true" ] && [ "${DISABLE_CADDY:-false}" = "true" ]; then

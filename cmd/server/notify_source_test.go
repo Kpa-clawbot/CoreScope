@@ -45,7 +45,7 @@ func TestDBNotifyNodesChunksLongLists(t *testing.T) {
 		keys = append(keys, fmt.Sprintf("%064x", i))
 	}
 	for _, i := range []int{3, 600, 1199} {
-		if _, err := db.conn.Exec(`INSERT INTO nodes (public_key, role) VALUES (?, 'companion')`, keys[i]); err != nil {
+		if _, err := db.conn.Exec(`INSERT INTO nodes (public_key, role) VALUES ($1, 'companion')`, keys[i]); err != nil {
 			t.Fatal(err)
 		}
 	}

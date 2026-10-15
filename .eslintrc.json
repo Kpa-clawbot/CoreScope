@@ -227,6 +227,7 @@
     "formatTimestampCustom": "readonly",
     "formatTimestampWithTooltip": "readonly",
     "getDistanceUnit": "readonly",
+    "getEffectiveHeardMs": "readonly",
     "getFavorites": "readonly",
     "getHashParams": "readonly",
     "getHealthThresholds": "readonly",

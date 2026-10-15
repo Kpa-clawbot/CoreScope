@@ -19,20 +19,16 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
 
 func openChunkedTestStore(t *testing.T, numTx int) *PacketStore {
 	t.Helper()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "chunked.db")
+	dbPath := postgresTestDSN(t)
 	createTestDBAt(t, dbPath, numTx)
-	t.Cleanup(func() { os.RemoveAll(dir) })
 
-	db, err := OpenDB(dbPath)
+	db, err := openFixtureReader(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}

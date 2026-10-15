@@ -26,7 +26,7 @@ func TestHotStartup_loadChunk_IndexSliceConsistency(t *testing.T) {
 	// spans 3 batches, widening the inconsistency window for the reader.
 	dbPath := createTestDBWithAgedPackets(t, 10, 1200)
 
-	db, err := OpenDB(dbPath)
+	db, err := openFixtureReader(t, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}

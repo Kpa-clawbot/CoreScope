@@ -1,10 +1,7 @@
 package main
 
 import (
-	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -57,13 +54,11 @@ func assertObserverStringsShared(t *testing.T, store *PacketStore, wantObs int) 
 
 func openInternTestStore(t *testing.T, numTx int) *PacketStore {
 	t.Helper()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "intern.db")
+	dbPath := postgresTestDSN(t)
 	createTestDBAt(t, dbPath, numTx)
-	t.Cleanup(func() { os.RemoveAll(dir) })
 	// The shared fixture leaves observers empty; give each an IATA code so
 	// the loaders read one for every observation.
-	conn, err := sql.Open("sqlite3", dbPath)
+	conn, err := openFixtureSQL(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +66,7 @@ func openInternTestStore(t *testing.T, numTx int) *PacketStore {
 		t.Fatalf("fixture observers: %v", err)
 	}
 	conn.Close()
-	db, err := OpenDB(dbPath)
+	db, err := openFixtureReader(t, dbPath)
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}

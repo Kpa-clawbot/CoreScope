@@ -20,6 +20,8 @@
 #
 # Override defaults via .env or environment variables.
 
+name: corescope-staging
+
 services:
   staging-go:
     build:
@@ -55,6 +57,8 @@ services:
       - ${STAGING_DATA_DIR:-~/meshcore-staging-data}:/app/data
       - caddy-data-staging-go:/data/caddy
     environment:
+      - CORESCOPE_DB_BACKEND=sqlite
+      - CORESCOPE_STATE_DIR=${CORESCOPE_STATE_DIR:-/app/data}
       - NODE_ENV=staging
       - ENABLE_PPROF=true
       # Default TRUE: the standalone mqtt-broker container owns MQTT on
@@ -72,7 +76,7 @@ services:
       # via docker DNS without going through the host.
       meshcore-net: {}
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/stats"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/healthz"]
       interval: 30s
       timeout: 10s
       retries: 5
