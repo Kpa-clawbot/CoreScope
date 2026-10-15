@@ -295,8 +295,9 @@
         const stats = h.stats || {};
         const obs = h.observers || [];
 
+        const th = getHealthThresholds(node.role);
         const age = stats.lastHeard ? Date.now() - new Date(stats.lastHeard).getTime() : null;
-        const status = age === null ? 'silent' : age < HEALTH_THRESHOLDS.nodeDegradedMs ? 'healthy' : age < HEALTH_THRESHOLDS.nodeSilentMs ? 'degraded' : 'silent';
+        const status = age === null ? 'silent' : age < th.degradedMs ? 'healthy' : age < th.silentMs ? 'degraded' : 'silent';
         const statusCls = status === 'healthy' ? 'status-ok' : status === 'degraded' ? 'status-warn' : 'status-err';
         const statusDot = '<span class="' + statusCls + '" aria-label="' + status + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span>';
         const statusText = status === 'healthy' ? 'Active' : status === 'degraded' ? 'Degraded' : 'Silent';
@@ -453,12 +454,13 @@
       const observers = h.observers || [];
       const claimed = isMyNode(pubkey);
 
-      let status = 'silent', color = 'red', statusMsg = 'Not heard in 24+ hours';
+      const th = getHealthThresholds(node.role);
+      let status = 'silent', color = 'red', statusMsg = 'Not heard recently';
       if (stats.lastHeard) {
         const ageMs = Date.now() - new Date(stats.lastHeard).getTime();
         const ago = timeAgo(stats.lastHeard);
-        if (ageMs < HEALTH_THRESHOLDS.nodeDegradedMs) { status = 'healthy'; color = 'green'; statusMsg = `Last heard ${ago}`; }
-        else if (ageMs < HEALTH_THRESHOLDS.nodeSilentMs) { status = 'degraded'; color = 'yellow'; statusMsg = `Last heard ${ago}`; }
+        if (ageMs < th.degradedMs) { status = 'healthy'; color = 'green'; statusMsg = `Last heard ${ago}`; }
+        else if (ageMs < th.silentMs) { status = 'degraded'; color = 'yellow'; statusMsg = `Last heard ${ago}`; }
         else { statusMsg = `Last heard ${ago}`; }
       }
 

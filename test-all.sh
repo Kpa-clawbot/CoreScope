@@ -56,6 +56,7 @@ node tests/unit/test-fluid-scaffolding.js
 node tests/unit/test-frontend-helpers.js
 node tests/unit/test-geofilter-draft.js
 node tests/unit/test-hash-color.js
+node tests/unit/test-health-card-role-thresholds.js
 node tests/unit/test-hop-resolver-affinity.js
 node tests/unit/test-issue-1065-gesture-hints-gates.js
 node tests/unit/test-issue-1107-live-layout.js
