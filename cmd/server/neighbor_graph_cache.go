@@ -73,6 +73,7 @@ func (s *Server) recomputeNeighborGraphCache() {
 		}
 	}()
 	start := time.Now()
+	s.rebuildNeighborGraph(true)
 	resp := s.buildDefaultNeighborGraphResponse()
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(resp); err != nil {

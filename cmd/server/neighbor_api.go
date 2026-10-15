@@ -80,25 +80,49 @@ type GraphStats struct {
 
 // ─── Graph accessor on Server ──────────────────────────────────────────────────
 
-// getNeighborGraph returns the current neighbor graph, rebuilding if stale.
+// getNeighborGraph serves the last complete snapshot regardless of age. Only
+// the first request with no snapshot builds synchronously; the recomputer owns
+// later refreshes (#2221).
 func (s *Server) getNeighborGraph() *NeighborGraph {
 	s.neighborMu.Lock()
-	defer s.neighborMu.Unlock()
+	graph := s.neighborGraph
+	s.neighborMu.Unlock()
+	if graph != nil {
+		return graph
+	}
+	return s.rebuildNeighborGraph(false)
+}
 
-	if s.neighborGraph == nil || s.neighborGraph.IsStale() {
-		if s.store != nil {
-			opts := BuildOptions{MaxEdgeKm: DefaultMaxEdgeKm}
-			if s.cfg != nil {
-				opts.EnableLog = s.cfg.DebugAffinity
-				opts.MaxEdgeKm = s.cfg.NeighborMaxEdgeKm()
-				opts.PathTrust = s.cfg.PathTrust
-			}
-			s.neighborGraph = BuildFromStoreWithOptions(s.store, opts)
-		} else {
-			s.neighborGraph = NewNeighborGraph()
+// rebuildNeighborGraph serializes builders without blocking snapshot readers.
+// Cold callers recheck after waiting; background refreshes always force a build
+// so a tick just before the old TTL expires cannot skip the refresh.
+func (s *Server) rebuildNeighborGraph(force bool) *NeighborGraph {
+	s.neighborBuildMu.Lock()
+	defer s.neighborBuildMu.Unlock()
+	if !force {
+		s.neighborMu.Lock()
+		graph := s.neighborGraph
+		s.neighborMu.Unlock()
+		if graph != nil {
+			return graph
 		}
 	}
-	return s.neighborGraph
+	var graph *NeighborGraph
+	if s.store != nil {
+		opts := BuildOptions{MaxEdgeKm: DefaultMaxEdgeKm}
+		if s.cfg != nil {
+			opts.EnableLog = s.cfg.DebugAffinity
+			opts.MaxEdgeKm = s.cfg.NeighborMaxEdgeKm()
+			opts.PathTrust = s.cfg.PathTrust
+		}
+		graph = BuildFromStoreWithOptions(s.store, opts)
+	} else {
+		graph = NewNeighborGraph()
+	}
+	s.neighborMu.Lock()
+	s.neighborGraph = graph
+	s.neighborMu.Unlock()
+	return graph
 }
 
 // ─── Handlers ──────────────────────────────────────────────────────────────────
