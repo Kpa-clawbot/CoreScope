@@ -821,6 +821,7 @@ jobs:
           suite 3 test-live-fullscreen-1572-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-issue-1599-replay-freeze-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-issue-1648-m1-icons-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 3 test-analytics-loading-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-issue-1648-m2-icons-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-issue-1648-m3-icons-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 1 test-issue-1648-m4-icons-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B

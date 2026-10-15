@@ -214,4 +214,10 @@ node tests/unit/test-deployment-readiness.js
 node tests/unit/test-storage-entrypoint.js
 node tests/unit/test-storage-manage.js
 
+node tests/unit/test-analytics-loading.js
+
+node tests/unit/test-api-inflight-cleanup.js
+
+node tests/unit/test-node-analytics-lifecycle.js
+
 echo "All standalone frontend suites passed"
