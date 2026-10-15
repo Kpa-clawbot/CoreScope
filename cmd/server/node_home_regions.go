@@ -117,24 +117,24 @@ func (s *PacketStore) nodeFewestHopsByRegion(obsIATA map[string]string) map[stri
 		return per
 	}
 	for _, tx := range s.byPayloadType[PayloadADVERT] {
-		pk := ""
+		var m map[string]int
 		for _, obs := range tx.Observations {
 			iata := obsIATA[obs.ObserverID]
 			if iata == "" {
 				continue
 			}
-			if pk == "" {
+			if m == nil {
 				// Parsed only for adverts heard in some region, and cached on the tx.
-				if pk = advertPubkey(tx); pk == "" {
+				pk := advertPubkey(tx)
+				if pk == "" {
 					break
+				}
+				if m = per[pk]; m == nil {
+					m = map[string]int{}
+					per[pk] = m
 				}
 			}
 			h := pathHopCount(obs.PathJSON)
-			m := per[pk]
-			if m == nil {
-				m = map[string]int{}
-				per[pk] = m
-			}
 			if cur, ok := m[iata]; !ok || h < cur {
 				m[iata] = h
 			}

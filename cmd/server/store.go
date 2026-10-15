@@ -4057,11 +4057,9 @@ func (s *PacketStore) nodeZeroHopRegionCounts(obsIATA map[string]string) map[str
 	if len(obsIATA) == 0 {
 		return per
 	}
-	for _, tx := range s.packets {
+	// Adverts only: the full packet list is mostly other traffic.
+	for _, tx := range s.byPayloadType[PayloadADVERT] {
 		if tx.RawHex == "" || len(tx.RawHex) < 4 {
-			continue
-		}
-		if tx.PayloadType == nil || *tx.PayloadType != PayloadADVERT {
 			continue
 		}
 		if tx.DecodedJSON == "" {
