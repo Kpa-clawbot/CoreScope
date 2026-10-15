@@ -22,10 +22,11 @@
 // no longer sum to the node total.
 //
 // Same shape as bridge_recomputer.go: background ticker, atomic snapshot,
-// synchronous prewarm at start. The cost is the computeNodeHomeRegions scan
-// (one pass over the in-memory packets, decoded JSON cached on the tx) once
-// per interval, off the request path; RegionNodePubkeys and handleNodes read
-// the snapshot with a single atomic load.
+// synchronous prewarm at start, plus one recompute when the startup load is
+// done. Each recompute makes two passes over the in-memory adverts (zero-hop
+// counts, then fewest hops; decoded JSON cached on the tx) under s.mu read,
+// off the request path: BenchmarkRecomputeNodeHomeRegionSets. RegionNodePubkeys
+// and handleNodes read the snapshot with a single atomic load.
 package main
 
 import (
@@ -47,8 +48,8 @@ var (
 	nodeHomeRegionsRecompStarted   bool
 )
 
-// StartNodeHomeRegionsRecomputer computes the home region sets once, then
-// every interval (default 5min if <= 0). Idempotent: later calls are no-ops
+// StartNodeHomeRegionsRecomputer computes the region placements once, again
+// when the startup load is done, then every interval (default 5min if <= 0). Idempotent: later calls are no-ops
 // and return a no-op stop closure.
 func (s *PacketStore) StartNodeHomeRegionsRecomputer(interval time.Duration) func() {
 	if interval <= 0 {
@@ -67,6 +68,11 @@ func (s *PacketStore) StartNodeHomeRegionsRecomputer(interval time.Duration) fun
 
 	s.recomputeNodeHomeRegionSets()
 
+	// main.go starts this at the first load chunk, so the prewarm saw only
+	// part of the store. Recompute once the whole startup load (hot window
+	// and background fill) is done, as the analytics recomputers do.
+	loaded := s.StartupLoadDone()
+
 	var stopOnce sync.Once
 	go func() {
 		defer close(done)
@@ -74,6 +80,9 @@ func (s *PacketStore) StartNodeHomeRegionsRecomputer(interval time.Duration) fun
 		defer t.Stop()
 		for {
 			select {
+			case <-loaded:
+				loaded = nil // once
+				s.recomputeNodeHomeRegionSets()
 			case <-t.C:
 				s.recomputeNodeHomeRegionSets()
 			case <-stop:
