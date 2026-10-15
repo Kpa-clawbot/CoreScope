@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sort"
 	"testing"
 )
 
@@ -13,7 +14,7 @@ import (
 // any of its adverts, relayed ones included, so a node leaked into each region
 // its flood adverts were relayed into. A node now belongs to the regions whose
 // observers heard it zero-hop (#804's rule, as a set); a node never heard
-// zero-hop falls back to the observer-based check.
+// zero-hop goes by its fewest hops (TestRegionFallbackUsesFewestHops).
 
 const (
 	homeZeroHopDirect = "1240aabbccdd" // route direct, path byte 0x40: 2-byte hashes, 0 hops
@@ -36,7 +37,7 @@ func newHomeRegionStore(t *testing.T) *PacketStore {
 		// On the boundary: heard zero-hop in both regions.
 		mkHomeRegionAdvert(3, "pk_edge", homeZeroHopDirect, "o-aus", "o-sat"),
 		// Never heard zero-hop: only the fallback can place it.
-		mkHomeRegionAdvert(4, "pk_far", homeRelayedFlood, "o-sat"),
+		mkPathAdvert(4, "pk_far", map[string]string{"o-sat": `["aa"]`}),
 	)
 	ps.recomputeNodeHomeRegionSets()
 	return ps
@@ -83,23 +84,30 @@ func TestBoundaryNodeStaysInEachHomeRegion(t *testing.T) {
 	}
 }
 
-func TestNodeHomeRegionSets(t *testing.T) {
+func TestNodeRegionPlacementsZeroHop(t *testing.T) {
 	ps := newHomeRegionStore(t)
-	want := map[string][]string{
-		"pk_aus":  {"AUS"},
-		"pk_edge": {"AUS", "SAT"},
+	got := ps.GetNodeRegionPlacements()
+	want := map[string]NodeRegionPlacement{
+		"pk_aus":  {Basis: RegionBasisZeroHop, Regions: []string{"AUS"}},
+		"pk_edge": {Basis: RegionBasisZeroHop, Regions: []string{"AUS", "SAT"}},
+		"pk_far":  {Basis: RegionBasisFewestHops, Regions: []string{"SAT"}, Hops: intPtr(1)},
 	}
-	if got := ps.GetNodeHomeRegionSets(); !reflect.DeepEqual(got, want) {
-		t.Errorf("home region sets = %v, want %v", got, want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("placements = %s, want %s", placementsString(got), placementsString(want))
 	}
 }
 
-// /api/nodes says which rule placed a node: home_regions is present exactly
-// when zero-hop data answered for it.
-func TestHandleNodesHomeRegions(t *testing.T) {
+// /api/nodes says which rule placed each node, for every rule (#2190 review):
+// zero-hop home regions, fewest hops, no region past the cap, and the
+// observer scan for a node the last recompute did not cover.
+func TestHandleNodesRegionPlacement(t *testing.T) {
 	srv, router := setupTestServer(t)
-	// obs1 is SJC in seedTestData; only the repeater gets a zero-hop advert.
-	addToStore(srv.store, mkHomeRegionAdvert(7101, "aabbccdd11223344", homeZeroHopDirect, "obs1"))
+	// obs1 is SJC in seedTestData. The repeater gets a zero-hop advert, the
+	// room is heard only five hops out, and the companion has no advert.
+	addToStore(srv.store,
+		mkHomeRegionAdvert(7101, "aabbccdd11223344", homeZeroHopDirect, "obs1"),
+		mkPathAdvert(7102, "1122334455667788", map[string]string{"obs1": `["aa","bb","cc","dd","ee"]`}),
+	)
 	srv.store.recomputeNodeHomeRegionSets()
 	srv.invalidateNodesCache()
 
@@ -110,30 +118,59 @@ func TestHandleNodesHomeRegions(t *testing.T) {
 		t.Fatalf("status %d: %s", rr.Code, rr.Body.String())
 	}
 	var body struct {
-		Nodes []map[string]interface{} `json:"nodes"`
+		Nodes []struct {
+			PublicKey       string               `json:"public_key"`
+			RegionPlacement *NodeRegionPlacement `json:"region_placement"`
+		} `json:"nodes"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
+	want := map[string]NodeRegionPlacement{
+		"aabbccdd11223344": {Basis: RegionBasisZeroHop, Regions: []string{"SJC"}},
+		"1122334455667788": {Basis: RegionBasisNone, Hops: intPtr(5)},
+		"eeff00112233aabb": {Basis: RegionBasisObserverScan},
+	}
 	seen := 0
 	for _, n := range body.Nodes {
-		hr, has := n["home_regions"]
-		switch n["public_key"] {
-		case "aabbccdd11223344":
-			seen++
-			if fmt.Sprint(hr) != "[SJC]" {
-				t.Errorf("repeater home_regions = %v, want [SJC]", hr)
-			}
-		case "eeff00112233aabb":
-			seen++
-			if has {
-				t.Errorf("companion without zero-hop data has home_regions %v", hr)
-			}
+		w, ok := want[n.PublicKey]
+		if !ok {
+			continue
+		}
+		seen++
+		if n.RegionPlacement == nil {
+			t.Errorf("%s: region_placement missing", n.PublicKey)
+			continue
+		}
+		if !reflect.DeepEqual(*n.RegionPlacement, w) {
+			t.Errorf("%s: region_placement = %s, want %s", n.PublicKey,
+				placementString(*n.RegionPlacement), placementString(w))
 		}
 	}
-	if seen != 2 {
-		t.Fatalf("expected both seeded nodes in the response, saw %d", seen)
+	if seen != len(want) {
+		t.Fatalf("expected all %d seeded nodes in the response, saw %d", len(want), seen)
 	}
+}
+
+func placementString(p NodeRegionPlacement) string {
+	hops := "-"
+	if p.Hops != nil {
+		hops = fmt.Sprint(*p.Hops)
+	}
+	return fmt.Sprintf("{%s %v hops=%s}", p.Basis, p.Regions, hops)
+}
+
+func placementsString(m map[string]NodeRegionPlacement) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := ""
+	for _, k := range keys {
+		out += k + ":" + placementString(m[k]) + " "
+	}
+	return out
 }
 
 // mkPathAdvert is a relayed flood advert heard by each observer over the given
@@ -189,28 +226,48 @@ func TestRegionFallbackUsesFewestHops(t *testing.T) {
 		}
 	}
 
-	want := map[string][]string{
-		"pk_near":  {"SAT"},
-		"pk_tie":   {"HOU", "SAT"},
-		"pk_cap":   {"AUS"},
-		"pk_gulf":  {},
-		"pk_gulf2": {"HOU"},
+	want := map[string]NodeRegionPlacement{
+		"pk_near":  {Basis: RegionBasisFewestHops, Regions: []string{"SAT"}, Hops: intPtr(1)},
+		"pk_tie":   {Basis: RegionBasisFewestHops, Regions: []string{"HOU", "SAT"}, Hops: intPtr(2)},
+		"pk_cap":   {Basis: RegionBasisFewestHops, Regions: []string{"AUS"}, Hops: intPtr(3)},
+		"pk_gulf":  {Basis: RegionBasisNone, Hops: intPtr(4)},
+		"pk_gulf2": {Basis: RegionBasisFewestHops, Regions: []string{"HOU"}, Hops: intPtr(1)},
 	}
-	if got := ps.GetNodeFallbackRegionSets(); !reflect.DeepEqual(got, want) {
-		t.Errorf("fallback region sets = %v, want %v", got, want)
+	if got := ps.GetNodeRegionPlacements(); !reflect.DeepEqual(got, want) {
+		t.Errorf("placements = %s, want %s", placementsString(got), placementsString(want))
 	}
 }
 
-// Zero-hop home regions still win: a node with any zero-hop hearing is not in
-// the fallback snapshot at all.
-func TestRegionFallbackSkipsZeroHopNodes(t *testing.T) {
+// A node with no placement yet (its first advert arrived after the last
+// recompute) is decided by the observer scan: in each region whose observers
+// heard any of its adverts, however many hops out.
+func TestRegionFilterObserverScanForNodesNewerThanRecompute(t *testing.T) {
 	ps := newHomeRegionStore(t)
-	fb := ps.GetNodeFallbackRegionSets()
-	if _, has := fb["pk_aus"]; has {
-		t.Errorf("pk_aus has zero-hop home regions but is in the fallback: %v", fb)
+	addToStore(ps, mkPathAdvert(9, "pk_new", map[string]string{"o-aus": `["aa","bb","cc","dd","ee"]`}))
+	if _, placed := ps.GetNodeRegionPlacements()["pk_new"]; placed {
+		t.Fatal("pk_new placed before any recompute")
 	}
-	if !reflect.DeepEqual(fb["pk_far"], []string{"SAT"}) {
-		t.Errorf("pk_far fallback = %v, want [SAT]", fb["pk_far"])
+	got, _ := ps.RegionNodePubkeys("AUS")
+	if want := []string{"pk_aus", "pk_edge", "pk_new"}; !reflect.DeepEqual(sortedKeys(got), want) {
+		t.Errorf("AUS before recompute: got %v, want %v", sortedKeys(got), want)
+	}
+}
+
+// Naming every region explicitly is still a region filter: a node in no
+// region drops out, unlike "All regions", which sends no ?region= at all.
+func TestRegionFilterListingEveryRegionOmitsUnplacedNodes(t *testing.T) {
+	ps := newRegionTestStore(t, map[string]string{"o-aus": "AUS", "o-sat": "SAT"})
+	addToStore(ps,
+		mkPathAdvert(1, "pk_near", map[string]string{"o-sat": `["aa"]`}),
+		mkPathAdvert(2, "pk_gulf", map[string]string{"o-aus": `["aa","bb","cc","dd"]`, "o-sat": `["aa","bb","cc","dd","ee"]`}),
+	)
+	ps.recomputeNodeHomeRegionSets()
+	got, ok := ps.RegionNodePubkeys("AUS,SAT")
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	if want := []string{"pk_near"}; !reflect.DeepEqual(sortedKeys(got), want) {
+		t.Errorf("AUS,SAT: got %v, want %v", sortedKeys(got), want)
 	}
 }
 
@@ -278,7 +335,7 @@ func BenchmarkRecomputeNodeHomeRegionSets(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		ps.recomputeNodeHomeRegionSets()
 	}
-	if len(ps.GetNodeHomeRegionSets()) == 0 {
-		b.Fatal("no home regions")
+	if len(ps.GetNodeRegionPlacements()) == 0 {
+		b.Fatal("no placements")
 	}
 }

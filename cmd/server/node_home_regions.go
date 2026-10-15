@@ -230,3 +230,25 @@ func (s *PacketStore) GetNodeFallbackRegionSets() map[string][]string {
 	}
 	return *snap
 }
+
+// RegionBasis names the rule that decided a node's regions for ?region=.
+type RegionBasis string
+
+const (
+	RegionBasisZeroHop      RegionBasis = "zero_hop"
+	RegionBasisFewestHops   RegionBasis = "fewest_hops"
+	RegionBasisNone         RegionBasis = "none"
+	RegionBasisObserverScan RegionBasis = "observer_scan"
+)
+
+// NodeRegionPlacement is a node's region_placement on /api/nodes.
+type NodeRegionPlacement struct {
+	Basis   RegionBasis `json:"basis"`
+	Regions []string    `json:"regions,omitempty"`
+	Hops    *int        `json:"hops,omitempty"`
+}
+
+// GetNodeRegionPlacements is a stub.
+func (s *PacketStore) GetNodeRegionPlacements() map[string]NodeRegionPlacement {
+	return map[string]NodeRegionPlacement{}
+}
