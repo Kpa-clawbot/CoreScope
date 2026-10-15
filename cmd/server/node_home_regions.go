@@ -125,6 +125,10 @@ func (s *PacketStore) nodeFewestHopsByRegion(obsIATA map[string]string) map[stri
 			if iata == "" {
 				continue
 			}
+			h, known := pathHopCount(obs.PathJSON)
+			if !known {
+				continue
+			}
 			if m == nil {
 				// Parsed only for adverts heard in some region, and cached on the tx.
 				pk := advertPubkey(tx)
@@ -136,7 +140,6 @@ func (s *PacketStore) nodeFewestHopsByRegion(obsIATA map[string]string) map[stri
 					per[pk] = m
 				}
 			}
-			h := pathHopCount(obs.PathJSON)
 			if cur, ok := m[iata]; !ok || h < cur {
 				m[iata] = h
 			}
@@ -148,13 +151,17 @@ func (s *PacketStore) nodeFewestHopsByRegion(obsIATA map[string]string) map[stri
 // pathHopCount counts the hops in an observation's path_json without decoding
 // it: the elements are hop-hash hex strings, so they hold no commas. Run over
 // every advert observation per recompute, under s.mu, where pathLen's
-// json.Unmarshal would allocate per observation.
-func pathHopCount(pathJSON string) int {
+// json.Unmarshal would allocate per observation. known is false for a missing
+// path (legacy rows with NULL path_json): "[]" is a direct hearing, "" is not.
+func pathHopCount(pathJSON string) (hops int, known bool) {
 	p := strings.TrimSpace(pathJSON)
-	if p == "" || p == "[]" || p == "null" {
-		return 0
+	switch p {
+	case "", "null":
+		return 0, false
+	case "[]":
+		return 0, true
 	}
-	return strings.Count(p, ",") + 1
+	return strings.Count(p, ",") + 1, true
 }
 
 // RegionBasis names the rule that decided a node's regions for ?region=.
@@ -171,8 +178,8 @@ const (
 	// is over regionFallback.maxHops, so it is in no region.
 	RegionBasisNone RegionBasis = "none"
 	// RegionBasisObserverScan: not in the last recompute (its first advert
-	// is newer, or the store holds none); the filter puts it in each region
-	// whose observers heard any of its adverts.
+	// is newer, the store holds none, or every hearing lacks a path); the
+	// filter puts it in each region whose observers heard any of its adverts.
 	RegionBasisObserverScan RegionBasis = "observer_scan"
 )
 
