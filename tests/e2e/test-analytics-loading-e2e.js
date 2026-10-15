@@ -18,6 +18,7 @@ const FIXTURES = {
   channels: { activeChannels: 0, decryptable: 0 },
   'hash-collisions': {},
   'relay-airtime-share': { rows: [] },
+  'subpaths-bulk': { results: Array.from({ length: 4 }, () => ({ subpaths: [] })) },
   'neighbor-graph': {
     nodes: [
       { pubkey: 'aa'.repeat(32), role: 'companion', neighbor_count: 1 },
@@ -41,6 +42,7 @@ const FIXTURES = {
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     const gates = new Map(['', '1h', '24h', '7d'].map(window => [window, { response: deferred(), arrived: deferred() }]));
+    const lazyGates = new Map(['E2E-OLD', 'E2E-NEW', 'E2E-LATE', 'E2E-ERROR', 'E2E-FAIL', 'E2E-LEFT'].map(region => [region, { response: deferred(), arrived: deferred() }]));
     await page.route('**/api/analytics/*', async route => {
       const url = new URL(route.request().url());
       const endpoint = url.pathname.split('/').pop();
@@ -57,6 +59,23 @@ const FIXTURES = {
       }
       if (body === undefined) return route.continue();
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+    });
+    // Use synthetic nodes and bulk health; hold the lazy response independently
+    // of the six core requests so these exercise the actual renderer race.
+    await page.route('**/api/nodes**', async route => {
+      const url = new URL(route.request().url());
+      const region = url.searchParams.get('region');
+      const gate = lazyGates.get(region);
+      if (!gate || !['/api/nodes', '/api/nodes/bulk-health'].includes(url.pathname)) return route.continue();
+      const publicKey = 'ab'.repeat(32);
+      let status = 200;
+      let body = { nodes: [{ public_key: publicKey, name: region + ' synthetic node', role: 'repeater', last_seen: new Date().toISOString() }], has_more: false, counts: { repeater: 1 }, total: 1 };
+      if (url.pathname.endsWith('/bulk-health')) {
+        gate.arrived.resolve(url.pathname.slice('/api'.length) + url.search);
+        status = await gate.response.promise;
+        body = [{ public_key: publicKey, stats: { totalPackets: 22, packetsToday: 2, avgSnr: 3 }, observers: [] }];
+      }
+      await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
     });
 
     async function release(window, total) {
@@ -77,6 +96,18 @@ const FIXTURES = {
       });
       await page.locator('#analyticsTimeWindow').selectOption(window);
       await request;
+    }
+    async function selectRegion(region, window) {
+      await page.evaluate(region => RegionFilter.setSelected([region]), region);
+      await selectWindow(window);
+    }
+    async function releaseLazy(region, status = 200) {
+      const gate = lazyGates.get(region);
+      const requestPath = await gate.arrived.promise;
+      gate.response.resolve(status);
+      // Errors do not enter _apiPerf.log. Wait for the real api() cleanup for
+      // both success and rejection, then inspect the renderer's settled view.
+      await page.waitForFunction(path => !_inflight.has(path), requestPath);
     }
 
     await page.goto(BASE + '/#/analytics', { waitUntil: 'domcontentloaded' });
@@ -120,7 +151,53 @@ const FIXTURES = {
     assert.strictEqual(await page.locator('#analyticsContent').count(), 0);
     assert.deepStrictEqual(errors, [], 'analytics must not throw during loading, refresh or page leave');
     console.log('  ✓ late completion after page leave is harmless');
-    console.log('Analytics loading browser regression: 4 passed');
+
+    await page.evaluate(() => {
+      RegionFilter.setSelected(['E2E-OLD']);
+      location.hash = '#/analytics?tab=nodes';
+    });
+    await lazyGates.get('E2E-OLD').arrived.promise;
+    assert.match(await page.locator('#analyticsContent').innerText(), /Loading node analytics/);
+    await selectRegion('E2E-NEW', '24h');
+    await releaseLazy('E2E-NEW');
+    await page.getByRole('link', { name: 'E2E-NEW synthetic node', exact: true }).first().waitFor();
+    await releaseLazy('E2E-OLD');
+    assert.match(await page.locator('#analyticsContent').innerText(), /E2E-NEW synthetic node/);
+    assert.doesNotMatch(await page.locator('#analyticsContent').innerText(), /E2E-OLD synthetic node/);
+    console.log('  ✓ lazy Nodes keeps the newest filter when the old response arrives last');
+
+    for (const [region, status] of [['E2E-LATE', 200], ['E2E-ERROR', 500]]) {
+      await page.evaluate(region => RegionFilter.setSelected([region]), region);
+      await page.locator('#analyticsTabs [data-tab="nodes"]').click();
+      await lazyGates.get(region).arrived.promise;
+      await page.locator('#analyticsTabs [data-tab="subpaths"]').click();
+      await page.getByRole('heading', { name: 'Route Pattern Analysis' }).waitFor();
+      await releaseLazy(region, status);
+      assert.match(await page.locator('#analyticsContent').innerText(), /Route Pattern Analysis/);
+      assert.doesNotMatch(await page.locator('#analyticsContent').innerText(), /Failed to load node|synthetic node/);
+    }
+    console.log('  ✓ late lazy success and HTTP 500 failure preserve the newly selected tab');
+
+    await page.evaluate(() => RegionFilter.setSelected(['E2E-FAIL']));
+    await page.locator('#analyticsTabs [data-tab="nodes"]').click();
+    await releaseLazy('E2E-FAIL', 500);
+    await page.getByText(/Failed to load node analytics: API 500/).waitFor();
+    assert.deepStrictEqual(errors, [], 'handled lazy HTTP failures must not become unhandled rejections');
+    lazyGates.set('E2E-FAIL', { response: deferred(), arrived: deferred() });
+    await theme();
+    await releaseLazy('E2E-FAIL');
+    await page.getByRole('link', { name: 'E2E-FAIL synthetic node', exact: true }).first().waitFor();
+    console.log('  ✓ a current lazy failure is visible and a subsequent refresh recovers');
+
+    await selectRegion('E2E-LEFT', '1h');
+    await lazyGates.get('E2E-LEFT').arrived.promise;
+    await page.evaluate(() => { location.hash = '#/home'; });
+    await page.locator('#analyticsContent').waitFor({ state: 'detached' });
+    await releaseLazy('E2E-LEFT');
+    assert.strictEqual(await page.locator('#analyticsContent').count(), 0);
+    assert.deepStrictEqual(errors, [], 'lazy completion after destroy must not throw or restart rendering');
+    console.log('  ✓ a delayed lazy response after page leave is harmless');
+    console.log('Analytics loading browser regression: 8 passed');
   } finally {
     await browser.close();
   }
