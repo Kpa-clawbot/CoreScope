@@ -101,7 +101,11 @@ directory the Go services can write once they run unprivileged:
   `-e` or in compose's `environment:`.
 - With `RUN_AS_UID` set, `.env` is read only if it is owned by root and
   writable by no one else (`sudo chown root:root .env && sudo chmod 644 .env`).
-  Otherwise the log says it was skipped, and why.
+  Otherwise the log says it was skipped, and why. "Owned by root" means uid 0
+  inside the container. With rootless Docker or a user-namespace remap
+  (`userns-remap`), host root is not that uid: look at the owner the container
+  reports (`docker exec <container> stat -c '%u' /app/data/.env`) and give the host
+  file whichever owner id maps to container uid 0.
 
 ### Docker Compose (legacy alternative)
 

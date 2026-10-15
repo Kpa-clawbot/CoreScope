@@ -4,18 +4,18 @@
 #
 # Every branch is exercised without docker and without root: getent, adduser,
 # addgroup, deluser, delgroup, id, chown, find and stat are replaced by stubs
-# on PATH, and the mount table is a fixture file. The account stubs read and write a passwd/group pair of files seeded
-# with the accounts the real image has — verified against alpine:3.20 with
+# on PATH, and the mount table is a fixture file. The account stubs read and
+# write a passwd/group pair of files seeded with the accounts the real image has — verified against alpine:3.20 with
 # mosquitto, supervisor and caddy installed, plus the Dockerfile's corescope —
 # so an account created mid-run is visible to the lookups that follow it. chown
 # and find record their arguments rather than touching the filesystem, which is
 # what lets the ownership hand-over be asserted exactly.
 #
-# The driver runs the same three steps in the same order as
-# docker/entrypoint-go.sh — resolve the account, read .env, hand over the data
-# directory — so what gets tested is the contract the entrypoint depends on:
-# stdout carries only the account name, a non-zero return must never be read
-# as root, and .env cannot choose the account.
+# The driver calls prepare_service_user, the one function docker/entrypoint-go.sh
+# calls: resolve the account, read .env, hand over the data directory. A static
+# check at the end pins that the entrypoint calls it and nothing else from the
+# script, so what gets tested is the sequence the container runs: a non-zero
+# return must never be read as root, and .env cannot choose the account.
 #
 # Run: bash docker/test-select-service-user.sh
 # Exits non-zero if any case fails.
@@ -77,6 +77,7 @@ make_fixture() {
         printf '%s\n' "$FIX_ENV" > "$FIX/env.real"
         if [ "${FIX_ENV_SYMLINK:-0}" = 1 ]; then
             ln -s "$FIX/env.real" "$FIX/env"
+            [ -L "$FIX/env" ] || { echo "FAIL: fixture could not create the .env symlink" >&2; exit 1; }
         else
             mv "$FIX/env.real" "$FIX/env"
         fi
@@ -199,26 +200,28 @@ STUB
     chmod +x "$FIX"/bin/*
 }
 
-# drive [VAR=VAL ...] — resolve the account, read .env and claim the paths, in
-# the order and with the error handling docker/entrypoint-go.sh uses. env -i
-# keeps the host environment (a RUN_AS_UID of its own, a real PATH) out of the
-# case. FIX_ENV (the .env contents), FIX_ENV_SYMLINK and FIX_MOUNTINFO shape
-# the fixture; a .env that sets CS_ENV_READ shows up as "env-read" in CALLS.
+# drive [VAR=VAL ...] — run prepare_service_user as docker/entrypoint-go.sh
+# does and exit non-zero if it fails. env -i keeps the host environment (a
+# RUN_AS_UID of its own, a real PATH) out of the case. FIX_ENV (the .env
+# contents), FIX_ENV_SYMLINK and FIX_MOUNTINFO shape the fixture; a .env that
+# sets CS_ENV_READ shows up as "env-read" in CALLS. OUT is the account the
+# services will run as (CORESCOPE_SERVICE_USER); FINAL_ENV is RUN_AS_UID/GID as
+# the services would see them.
 drive() {
     make_fixture
     OUT=$(env -i PATH="$FIX/bin:/usr/bin:/bin" FIX="$FIX" SCRIPT="$SCRIPT" "$@" sh -c '
         . "$SCRIPT"
         SERVICE_ENV_FILE="$FIX/env"
         SERVICE_MOUNTINFO="$FIX/mountinfo"
-        account=$(resolve_service_account) || exit 1
-        load_env_file "$SERVICE_ENV_FILE" "$account"
+        prepare_service_user || exit 1
         [ -z "${CS_ENV_READ-}" ] || echo "env-read" >> "$FIX/calls"
-        [ "$account" = root ] || claim_service_paths "$account"
-        echo "$account"
+        echo "RUN_AS_UID=${RUN_AS_UID-<unset>} RUN_AS_GID=${RUN_AS_GID-<unset>}" > "$FIX/final-env"
+        echo "$CORESCOPE_SERVICE_USER"
     ' 2>"$FIX/log")
     RC=$?
     LOG=$(cat "$FIX/log")
     CALLS=$(cat "$FIX/calls")
+    FINAL_ENV=$(cat "$FIX/final-env" 2>/dev/null)
 }
 
 # ----- 1. RUN_AS_UID unset: root, exactly as earlier releases ----------------
@@ -382,11 +385,39 @@ FIX_ENV='RUN_AS_UID=1000' drive
 assert_eq "account" "root" "$OUT"
 assert_eq "nothing was chowned" "" "$CALLS"
 assert_has "ignored, and said so" "$LOG" "ignoring RUN_AS_UID/RUN_AS_GID"
+assert_eq "and not left exported to the services" "RUN_AS_UID=<unset> RUN_AS_GID=<unset>" "$FINAL_ENV"
 
 CASE="RUN_AS_UID= in a trusted .env, 1000 on the container"
 FIX_ENV='RUN_AS_UID=' drive RUN_AS_UID=1000 STUB_STAT='0 -rw-r--r--'
 assert_eq "account" "corescope" "$OUT"
 assert_has "ignored, and said so" "$LOG" "ignoring RUN_AS_UID/RUN_AS_GID"
+assert_eq "the container's value is put back" "RUN_AS_UID=1000 RUN_AS_GID=<unset>" "$FINAL_ENV"
+
+CASE="RUN_AS_UID=0 and RUN_AS_GID in a trusted .env, 1000 on the container"
+FIX_ENV='RUN_AS_UID=0
+RUN_AS_GID=0' drive RUN_AS_UID=1000 RUN_AS_GID=1000 STUB_STAT='0 -rw-r--r--'
+assert_eq "account" "corescope" "$OUT"
+assert_eq "both put back" "RUN_AS_UID=1000 RUN_AS_GID=1000" "$FINAL_ENV"
+
+# The account is resolved before .env is read. If it were read first, a
+# RUN_AS_UID there would make the resolver create an account at that uid.
+CASE="order: .env read after the account is resolved"
+FIX_ENV='RUN_AS_UID=5000' drive RUN_AS_UID=1000 STUB_STAT='0 -rw-r--r--'
+assert_eq "account" "corescope" "$OUT"
+assert_lacks "no account was created at the uid from .env" "$CALLS" "adduser"
+assert_lacks "none was freed for it either" "$CALLS" "deluser"
+assert_has "the data dir went to the container's uid" "$CALLS" "chown -h 1000:1000"
+
+# A trusted .env that assigns the names the entrypoint and these functions use
+# for the account must not change who the services run as, or who is handed
+# the data directory.
+CASE=".env assigns the account's variable names"
+FIX_ENV='account=root
+service_account=root
+_account=root
+CORESCOPE_SERVICE_USER=root' drive RUN_AS_UID=1000 STUB_STAT='0 -rw-r--r--'
+assert_eq "account" "corescope" "$OUT"
+assert_has "the data dir was still handed over to it" "$CALLS" "chown -h 1000:1000"
 
 # ----- 15. a file mounted into the data directory keeps its host owner -----
 # The documented single-file config mount, plus one with a space in its path,
@@ -403,6 +434,26 @@ assert_has "config.json reported as left alone" "$LOG" "left alone: /app/data/co
 assert_lacks "data dir itself still handed over" "$CALLS" "-path /app/data )"
 assert_lacks "other mounts ignored" "$CALLS" "/data/caddy"
 
+# Names the kernel escapes (tab) or that find would read as patterns ([ * ?)
+# must exclude exactly that path.
+CASE="mount points with a tab and glob characters"
+FIX_MOUNTINFO='601 600 0:50 /srv/a /app/data/tab\011name rw,relatime - ext4 /dev/sda1 rw
+602 600 0:50 /srv/b /app/data/b[1]*? rw,relatime - ext4 /dev/sda1 rw
+' drive RUN_AS_UID=1000
+TAB=$(printf '\t')
+assert_has "tab decoded" "$CALLS" "-path /app/data/tab${TAB}name"
+assert_has "glob characters escaped" "$CALLS" '-path /app/data/b\[1\]\*\?'
+
+# A newline in a mount point cannot be listed one per line. Failing closed
+# means nothing is handed over, not that the file is handed over by mistake.
+CASE="mount point with a newline"
+FIX_MOUNTINFO='601 600 0:50 /srv/c /app/data/x\012y rw,relatime - ext4 /dev/sda1 rw
+' drive RUN_AS_UID=1000
+assert_eq "account" "corescope" "$OUT"
+assert_eq "startup continues" 0 "$RC"
+assert_lacks "nothing handed over" "$CALLS" "chown"
+assert_has "and said why" "$LOG" "has a newline in its name"
+
 # ----- 16. a hand-over that could not complete is logged -------------------
 CASE="chown refused (root_squash NFS)"
 drive RUN_AS_UID=1000 STUB_LEFTOVER='/app/data
@@ -411,6 +462,17 @@ assert_eq "account" "corescope" "$OUT"
 assert_eq "startup continues" 0 "$RC"
 assert_has "warning names the count" "$LOG" "WARNING: 2 path(s) in /app/data could not be given to uid 1000"
 assert_has "and the paths" "$LOG" "  /app/data/meshcore.db"
+
+# ----- 17. the entrypoint runs the sequence through prepare_service_user ----
+# The driver above tests the function; this pins that the entrypoint uses it
+# and does not rebuild the sequence from the steps, in an order of its own.
+CASE="entrypoint-go.sh"
+ENTRYPOINT="$(dirname "$SCRIPT")/entrypoint-go.sh"
+EP=$(cat "$ENTRYPOINT")
+assert_has "calls prepare_service_user" "$EP" "prepare_service_user || exit 1"
+assert_lacks "does not resolve the account itself" "$EP" "resolve_service_account"
+assert_lacks "does not read .env itself" "$EP" "load_env_file"
+assert_lacks "does not hand over paths itself" "$EP" "claim_service_paths"
 
 # ----- report ---------------------------------------------------------------
 echo "select-service-user: $PASS assertions passed, $FAIL failed"

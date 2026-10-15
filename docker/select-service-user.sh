@@ -2,9 +2,12 @@
 # select-service-user.sh — decides which user the two Go services run as, and
 # hands over the paths they have to write.
 #
-# Sourced by docker/entrypoint-go.sh. The same functions are sourced by
-# docker/test-select-service-user.sh, which replaces getent/adduser/addgroup/
-# deluser/delgroup/id/chown/find with stubs: keep every external command here
+# Sourced by docker/entrypoint-go.sh, which calls prepare_service_user and
+# nothing else from here: the order of the steps (resolve the account, read
+# .env, hand over the data directory) is part of what keeps .env from choosing
+# the account, so it lives in one function and the test drives that function.
+# docker/test-select-service-user.sh replaces getent/adduser/addgroup/deluser/
+# delgroup/id/chown/find/stat with stubs: keep every external command here
 # stubbable, keep account resolution free of filesystem writes, and send
 # human-readable output to stderr so stdout carries only the account name.
 #
@@ -33,6 +36,36 @@ SERVICE_MOUNTINFO=/proc/self/mountinfo
 
 svc_log() {
   echo "[entrypoint] $*" >&2
+}
+
+# prepare_service_user
+#
+# The start-up sequence, in the only order that is safe:
+#
+#   1. resolve the account, from RUN_AS_UID/RUN_AS_GID in the container's
+#      environment;
+#   2. read /app/data/.env (see load_env_file for when it is trusted);
+#   3. hand the data directory to the account, when it is not root.
+#
+# Returns non-zero, with the reason on stderr, when RUN_AS_UID was set and no
+# account could be provided. On success exports CORESCOPE_SERVICE_USER.
+#
+# The resolved account is kept in the positional parameter, not a variable: the
+# sourced .env runs in this shell, and a line in it such as `account=root` would
+# otherwise change which account is handed the data directory and exported to
+# supervisord.
+prepare_service_user() {
+  local _account
+  _account=$(resolve_service_account) || return 1
+  set -- "$_account"
+  unset _account
+
+  load_env_file "$SERVICE_ENV_FILE" "$1"
+  if [ "$1" != root ]; then
+    claim_service_paths "$1"
+  fi
+  CORESCOPE_SERVICE_USER=$1
+  export CORESCOPE_SERVICE_USER
 }
 
 # resolve_service_account
@@ -133,6 +166,7 @@ resolve_service_account() {
 load_env_file() {
   local _env_file="$1" _env_account="$2"
   local _uid_before="${RUN_AS_UID-}" _gid_before="${RUN_AS_GID-}"
+  local _uid_was="${RUN_AS_UID+set}" _gid_was="${RUN_AS_GID+set}"
 
   [ -f "$_env_file" ] || return 0
   if [ "$_env_account" != root ] && ! env_file_trusted "$_env_file"; then
@@ -146,9 +180,15 @@ load_env_file() {
   . "$_env_file"
   set +a
 
-  if [ "${RUN_AS_UID-}" != "$_uid_before" ] || [ "${RUN_AS_GID-}" != "$_gid_before" ]; then
+  # The account was resolved before this file was read, so a RUN_AS_UID or
+  # RUN_AS_GID in it must not reach supervisord and the services either: put
+  # back what the container had, set or unset.
+  if [ "${RUN_AS_UID+set}" != "$_uid_was" ] || [ "${RUN_AS_UID-}" != "$_uid_before" ] ||
+     [ "${RUN_AS_GID+set}" != "$_gid_was" ] || [ "${RUN_AS_GID-}" != "$_gid_before" ]; then
     svc_log "ignoring RUN_AS_UID/RUN_AS_GID from $_env_file: set them on the container"
     svc_log "(docker run -e, or environment: in compose), where the services cannot remove them."
+    if [ -n "$_uid_was" ]; then RUN_AS_UID=$_uid_before; export RUN_AS_UID; else unset RUN_AS_UID; fi
+    if [ -n "$_gid_was" ]; then RUN_AS_GID=$_gid_before; export RUN_AS_GID; else unset RUN_AS_GID; fi
   fi
 }
 
@@ -171,21 +211,41 @@ env_file_trusted() {
 # service_data_mounts
 #
 # Mount points inside the data directory, not counting the data directory
-# itself, one per line. A config.json bind-mounted on its own shows up here.
+# itself, one per line, with the kernel's escapes undone (space, tab, backslash;
+# \134 last, so that an escaped backslash followed by digits stays literal). A
+# config.json bind-mounted on its own shows up here.
+#
+# Returns non-zero when a mount point contains a newline: it cannot be listed
+# one per line, and the caller must then not hand anything over.
 service_data_mounts() {
+  local _paths _tab
+  _tab=$(printf '\t')
   [ -r "$SERVICE_MOUNTINFO" ] || return 0
-  awk -v d="$SERVICE_DATA_DIR/" 'index($5, d) == 1 { print $5 }' "$SERVICE_MOUNTINFO" |
-    sed 's/\\040/ /g; s/\\134/\\/g'
+  _paths=$(awk -v d="$SERVICE_DATA_DIR/" 'index($5, d) == 1 { print $5 }' "$SERVICE_MOUNTINFO")
+  case "$_paths" in
+    *'\012'*) return 1 ;;
+  esac
+  printf '%s\n' "$_paths" | sed "s/\\\\040/ /g; s/\\\\011/$_tab/g; s/\\\\134/\\\\/g"
+}
+
+# glob_escape <path>
+#
+# find -path treats [ ] * ? and \ in its argument as pattern characters; a mount
+# point named with one of them must match itself and nothing else.
+glob_escape() {
+  printf '%s\n' "$1" | sed 's/[][*?\\]/\\&/g'
 }
 
 # claim_service_paths <account>
 #
 # Gives the service account the data directory and what an earlier root-run
 # container left in it. /app stays root's: nothing the services write lives
-# there, and an operator may run its binaries as root with `docker exec`. Reached only when RUN_AS_UID named an unprivileged
-# account, and that is what makes the hand-over consented to rather than a
-# surprise. It runs on every start, so a file later created there as root, by
-# `docker exec` say, is handed over at the next one.
+# there, and an operator may run its binaries as root with `docker exec`.
+#
+# Reached only when RUN_AS_UID named an unprivileged account, and that is what
+# makes the hand-over consented to rather than a surprise. It runs on every
+# start, so a file later created there as root, by `docker exec` say, is handed
+# over at the next one.
 #
 # Left alone, with what is below them:
 #   - anything mounted into the data directory on its own, such as a
@@ -203,7 +263,11 @@ claim_service_paths() {
   uid=$(id -u "$account")
   gid=$(id -g "$account")
 
-  excluded=$(service_data_mounts)
+  if ! excluded=$(service_data_mounts); then
+    svc_log "WARNING: a mount point in $SERVICE_DATA_DIR has a newline in its name, so which"
+    svc_log "files are the operator's cannot be told; not handing $SERVICE_DATA_DIR over."
+    return 0
+  fi
   if [ -n "$excluded" ]; then
     printf '%s\n' "$excluded" | while IFS= read -r p; do
       svc_log "left alone: $p is mounted on its own, so it keeps the owner it has on the host"
@@ -220,7 +284,7 @@ $excluded}"
 '
   for p in $excluded; do
     [ $# -eq 0 ] || set -- "$@" -o
-    set -- "$@" -path "$p"
+    set -- "$@" -path "$(glob_escape "$p")"
   done
   unset IFS
   set +f

@@ -14,18 +14,15 @@ if [ -f /app/data/theme.json ]; then
   ln -sf /app/data/theme.json /app/theme.json
 fi
 
-# Which user runs the two Go services. supervisord itself stays root so that
-# mosquitto and caddy can still bind their ports. Unprivileged operation is
-# opt-in via RUN_AS_UID, taken from the container's environment before .env is
-# read below; see docker/select-service-user.sh for why, and "Running the Go
-# services unprivileged" in docs/deployment.md for how to turn it on.
+# Which user runs the two Go services, and what they are handed. supervisord
+# itself stays root so that mosquitto and caddy can still bind their ports.
+# Unprivileged operation is opt-in via RUN_AS_UID, taken from the container's
+# environment before .env is read; .env is then read (with the services
+# unprivileged, only if root owns it) and the data directory handed over. The
+# order matters and lives in one function: see docker/select-service-user.sh,
+# and "Running the Go services unprivileged" in docs/deployment.md.
 . /select-service-user.sh
-service_account=$(resolve_service_account) || exit 1
-
-# Source .env from data volume if present (works with any launch method).
-# With the services unprivileged, only a root-owned .env is read: see
-# load_env_file in docker/select-service-user.sh.
-load_env_file "$SERVICE_ENV_FILE" "$service_account"
+prepare_service_user || exit 1
 
 SUPERVISORD_CONF="/etc/supervisor/conf.d/supervisord.conf"
 if [ "${DISABLE_MOSQUITTO:-false}" = "true" ] && [ "${DISABLE_CADDY:-false}" = "true" ]; then
@@ -40,12 +37,6 @@ elif [ "${DISABLE_CADDY:-false}" = "true" ]; then
   SUPERVISORD_CONF="/etc/supervisor/conf.d/supervisord-no-caddy.conf"
 fi
 
-if [ "$service_account" != root ]; then
-  claim_service_paths "$service_account"
-fi
-# Assigned after .env, so that the file cannot pick the account either.
-CORESCOPE_SERVICE_USER=$service_account
-export CORESCOPE_SERVICE_USER
 echo "[entrypoint] Go services run as $CORESCOPE_SERVICE_USER (uid=$(id -u "$CORESCOPE_SERVICE_USER") gid=$(id -g "$CORESCOPE_SERVICE_USER"))"
 
 exec /usr/bin/supervisord -c "$SUPERVISORD_CONF"
