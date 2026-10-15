@@ -66,6 +66,127 @@ async function run() {
 
   console.log(`\nRunning E2E tests against ${BASE}\n`);
 
+  // #2218 Node Analytics lifecycle: delayed responses retain their own page/range.
+  const analyticsKey = 'aa'.repeat(32);
+  const otherAnalyticsKey = 'bb'.repeat(32);
+  function nodeAnalyticsFixture(key) {
+    return {
+      node: { public_key: key, name: key === analyticsKey ? 'Delayed node' : 'Current node', role: 'repeater' },
+      computedStats: { totalPackets: 1, availabilityPct: 100, signalGrade: 'A', avgPacketsPerDay: 1, uniqueObservers: 1, relayPct: 0 },
+      activityTimeline: [{ bucket: '2026-01-01T00:00:00Z', count: 1 }],
+      snrTrend: [], packetTypeBreakdown: [], observerCoverage: [], hopDistribution: [], uptimeHeatmap: [], peerInteractions: [],
+    };
+  }
+  function nodeBatteryFixture(mv) {
+    return { status: 'ok', latest_mv: mv, samples: [{ timestamp: '2026-01-01T00:00:00Z', battery_mv: mv }] };
+  }
+  async function nodeAnalyticsHarness(heldPath, failure) {
+    const ctx = await browser.newContext();
+    const p = await ctx.newPage();
+    const errors = [];
+    p.on('pageerror', error => errors.push(error.message));
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    const started = p.waitForRequest(request => {
+      const url = new URL(request.url());
+      return url.pathname + url.search === heldPath;
+    }, { timeout: 10000 });
+    started.catch(() => {}); // The awaited promise still reports a missing request.
+    await p.route('**/api/nodes/**', async route => {
+      const url = new URL(route.request().url());
+      const path = url.pathname + url.search;
+      if (path === heldPath) {
+        await held;
+        if (failure) return route.fulfill({ status: 500, json: { error: 'Delayed request failed' } });
+      }
+      if (url.pathname.endsWith('/analytics')) {
+        return route.fulfill({ json: nodeAnalyticsFixture(url.pathname.split('/')[3]) });
+      }
+      if (url.pathname.endsWith('/battery')) {
+        return route.fulfill({ json: nodeBatteryFixture(path === heldPath ? 3200 : 4000) });
+      }
+      if (url.pathname.endsWith('/hop_analytics')) return route.fulfill({ json: { packets: [], ambiguous: 0 } });
+      return route.continue();
+    });
+    return {
+      page: p, started, errors,
+      async release() {
+        const response = p.waitForResponse(r => new URL(r.url()).pathname + new URL(r.url()).search === heldPath);
+        release();
+        await (await response).finished();
+        await p.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      },
+      async close() { release(); await ctx.close(); },
+    };
+  }
+  for (const failure of [false, true]) {
+    await test('Node Analytics late ' + (failure ? 'failure' : 'success') + ' cannot replace Nodes after leaving', async () => {
+      const h = await nodeAnalyticsHarness('/api/nodes/' + analyticsKey + '/analytics?days=7', failure);
+      try {
+        await h.page.goto(BASE + '/#/nodes/' + analyticsKey + '/analytics', { waitUntil: 'domcontentloaded' });
+        await h.started;
+        await h.page.goto(BASE + '/#/nodes', { waitUntil: 'domcontentloaded' });
+        await h.page.waitForSelector('#nodesLeft[data-loaded="true"]');
+        await h.release();
+        assert(await h.page.locator('#nodesLeft[data-loaded="true"]').isVisible(), 'old analytics response replaced the Nodes list');
+        assert(await h.page.locator('#nodesBody tr[data-action="select"]').count() > 0, 'Nodes list lost its rows');
+        assert(h.errors.length === 0, h.errors.join('\n'));
+      } finally { await h.close(); }
+    });
+    await test('Node Analytics late battery ' + (failure ? 'failure' : 'success') + ' cannot replace the new range', async () => {
+      const h = await nodeAnalyticsHarness('/api/nodes/' + analyticsKey + '/battery?days=7', failure);
+      try {
+        await h.page.goto(BASE + '/#/nodes/' + analyticsKey + '/analytics', { waitUntil: 'domcontentloaded' });
+        await h.started;
+        await h.page.click('#timeRangeBtns button[data-days="1"]');
+        await h.page.waitForFunction(() => {
+          const chart = Chart.getChart(document.getElementById('batteryChart'));
+          return chart && chart.data.datasets[0].data[0] === 4000;
+        });
+        await h.release();
+        const current = await h.page.evaluate(() => ({
+          days: document.querySelector('#timeRangeBtns .active').dataset.days,
+          battery: Chart.getChart(document.getElementById('batteryChart')).data.datasets[0].data[0],
+          emptyHidden: getComputedStyle(document.getElementById('batteryEmpty')).display === 'none',
+        }));
+        assert(current.days === '1' && current.battery === 4000 && current.emptyHidden,
+          'stale battery response changed the new range: ' + JSON.stringify(current));
+        assert(h.errors.length === 0, h.errors.join('\n'));
+      } finally { await h.close(); }
+    });
+  }
+  await test('Node Analytics late response cannot replace a different node', async () => {
+    const h = await nodeAnalyticsHarness('/api/nodes/' + analyticsKey + '/analytics?days=7', false);
+    try {
+      await h.page.goto(BASE + '/#/nodes/' + analyticsKey + '/analytics', { waitUntil: 'domcontentloaded' });
+      await h.started;
+      await h.page.goto(BASE + '/#/nodes/' + otherAnalyticsKey + '/analytics', { waitUntil: 'domcontentloaded' });
+      await h.page.waitForFunction(() => document.querySelector('#app h2')?.textContent.includes('Current node'));
+      await h.release();
+      assert((await h.page.locator('#app h2').textContent()).includes('Current node'), 'old response replaced the current node');
+      assert(h.errors.length === 0, h.errors.join('\n'));
+    } finally { await h.close(); }
+  });
+  await test('Node Analytics reentry renders only the current charts from a shared pending request', async () => {
+    const h = await nodeAnalyticsHarness('/api/nodes/' + analyticsKey + '/analytics?days=7', false);
+    try {
+      const url = BASE + '/#/nodes/' + analyticsKey + '/analytics';
+      await h.page.goto(url, { waitUntil: 'domcontentloaded' });
+      await h.started;
+      await h.page.goto(BASE + '/#/nodes', { waitUntil: 'domcontentloaded' });
+      await h.page.waitForSelector('#nodesLeft[data-loaded="true"]');
+      await h.page.goto(url, { waitUntil: 'domcontentloaded' });
+      await h.release();
+      await h.page.waitForFunction(() => Chart.getChart(document.getElementById('batteryChart')));
+      const charts = await h.page.evaluate(() => ({
+        count: Object.values(Chart.instances).length,
+        detached: Object.values(Chart.instances).filter(chart => !chart.canvas.isConnected).length,
+      }));
+      assert(charts.count === 6 && charts.detached === 0, 'reentry left stale charts: ' + JSON.stringify(charts));
+      assert(h.errors.length === 0, h.errors.join('\n'));
+    } finally { await h.close(); }
+  });
+
   for (const [view, width, full, interaction] of [
     ['desktop side pane', 1280, false],
     ['desktop full view', 1280, true],
@@ -565,12 +686,13 @@ async function run() {
     // Use page.click() to avoid detached-element race with WebSocket auto-refresh.
     await page.click('table tbody tr:not([id^=vscroll])');
     await page.waitForSelector('.node-detail');
-    // Find the Details link in the side panel
-    await page.waitForSelector('#nodesRight a.btn-primary[href^="#/nodes/"]');
-    const href = await page.$eval('#nodesRight a.btn-primary[href^="#/nodes/"]', el => el.getAttribute('href'));
-    assert(href, 'Details link not found in side panel');
-    // Click the Details link — this should navigate to the full detail page
-    await page.click('#nodesRight a.btn-primary[href^="#/nodes/"]');
+    // Details is a button; the first anchor now opens Analytics.
+    await page.waitForSelector('#nodesRight .node-detail-btn');
+    const key = await page.locator('#nodesRight .node-detail-btn').getAttribute('data-pubkey');
+    assert(key, 'Details button has no node key');
+    const href = '#/nodes/' + key;
+    await page.click('#nodesRight .node-detail-btn');
+    await page.waitForSelector('#nodeFullBody');
     // Wait for navigation — the full detail page has sections like neighbors/packets
     await page.waitForFunction((expectedHash) => {
       return location.hash === expectedHash;

@@ -9,6 +9,7 @@
   let charts = [];
   let currentDays = 7;
   let currentPubkey = null;
+  let loadGeneration = 0;
 
   function destroyCharts() {
     charts.forEach(c => { try { c.destroy(); } catch {} });
@@ -31,6 +32,8 @@
   }
 
   async function loadAnalytics(container, pubkey, days) {
+    const generation = ++loadGeneration;
+    const isCurrent = () => generation === loadGeneration && container.isConnected && currentPubkey === pubkey;
     currentPubkey = pubkey;
     currentDays = days;
     destroyCharts();
@@ -42,9 +45,11 @@
     try {
       data = await api('/nodes/' + encodeURIComponent(pubkey) + '/analytics?days=' + days, { ttl: CLIENT_TTL.nodeAnalytics });
     } catch (e) {
+      if (!isCurrent()) return;
       container.innerHTML = '<div style="padding:40px;text-align:center;color:#ff6b6b">Failed to load analytics: ' + escapeHtml(e.message) + '</div>';
       return;
     }
+    if (!isCurrent()) return;
 
     const n = data.node;
     const s = data.computedStats;
@@ -158,6 +163,7 @@
     // Time range buttons
     container.querySelectorAll('#timeRangeBtns button').forEach(btn => {
       btn.addEventListener('click', () => {
+        if (!isCurrent()) return;
         const d = Number(btn.dataset.days);
         loadAnalytics(container, pubkey, d);
       });
@@ -170,7 +176,7 @@
     buildObserverChart(data);
     buildHopChart(data);
     buildHeatmap(data);
-    loadBatteryChart(pubkey, currentDays);
+    loadBatteryChart(pubkey, currentDays, isCurrent);
     NodeHopAnalytics.load(document.getElementById('hopCountSection'), pubkey, currentDays);
   }
 
@@ -302,18 +308,21 @@
     }
   }
 
-  async function loadBatteryChart(pubkey, days) {
+  async function loadBatteryChart(pubkey, days, isCurrent) {
+    // Keep this render's elements; matching IDs may belong to another node/range
+    // by the time the request finishes.
+    const ctx = document.getElementById('batteryChart');
+    const empty = document.getElementById('batteryEmpty');
+    const badge = document.getElementById('batteryStatusBadge');
     let data;
     try {
       data = await api('/nodes/' + encodeURIComponent(pubkey) + '/battery?days=' + days);
     } catch (e) {
-      const empty = document.getElementById('batteryEmpty');
+      if (!isCurrent() || (empty && !empty.isConnected)) return;
       if (empty) { empty.style.display = 'block'; empty.textContent = 'Battery data unavailable: ' + e.message; }
       return;
     }
-    const ctx = document.getElementById('batteryChart');
-    const empty = document.getElementById('batteryEmpty');
-    const badge = document.getElementById('batteryStatusBadge');
+    if (!isCurrent() || (ctx && !ctx.isConnected)) return;
     const samples = (data && data.samples) || [];
     const thr = (data && data.thresholds) || { low_mv: 3300, critical_mv: 3000 };
 
@@ -375,6 +384,7 @@
   }
 
   function destroy() {
+    loadGeneration++;
     destroyCharts();
     NodeHopAnalytics.destroy();
     currentPubkey = null;
