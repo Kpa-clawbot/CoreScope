@@ -203,7 +203,9 @@ async function api(path, { ttl = 0, bust = false } = {}) {
     }
   })();
   _inflight.set(path, promise);
-  promise.finally(() => _inflight.delete(path));
+  // Handle both outcomes so cleanup does not create an unobserved rejection.
+  const cleanup = () => _inflight.delete(path);
+  promise.then(cleanup, cleanup);
   return promise;
 }
 
