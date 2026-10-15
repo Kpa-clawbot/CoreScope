@@ -238,6 +238,47 @@ func TestRegionFallbackUsesFewestHops(t *testing.T) {
 	}
 }
 
+// regionFallback.maxHops sets the cap (#2190 review); unset or negative
+// keeps the default of 3, and 0 places only nodes heard over an empty path.
+func TestRegionFallbackMaxHopsConfig(t *testing.T) {
+	var parsed Config
+	if err := json.Unmarshal([]byte(`{"regionFallback":{"maxHops":4}}`), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		cfg  *Config
+		want int
+	}{
+		{"nil config", nil, 3},
+		{"unset", &Config{}, 3},
+		{"empty block", &Config{RegionFallback: &RegionFallbackConfig{}}, 3},
+		{"negative", &Config{RegionFallback: &RegionFallbackConfig{MaxHops: intPtr(-1)}}, 3},
+		{"zero", &Config{RegionFallback: &RegionFallbackConfig{MaxHops: intPtr(0)}}, 0},
+		{"from JSON", &parsed, 4},
+	}
+	for _, c := range cases {
+		if got := c.cfg.RegionFallbackMaxHops(); got != c.want {
+			t.Errorf("%s: RegionFallbackMaxHops() = %d, want %d", c.name, got, c.want)
+		}
+	}
+
+	ps := newRegionTestStore(t, map[string]string{"o-aus": "AUS"})
+	ps.config = &Config{RegionFallback: &RegionFallbackConfig{MaxHops: intPtr(4)}}
+	addToStore(ps,
+		mkPathAdvert(1, "pk_four", map[string]string{"o-aus": `["aa","bb","cc","dd"]`}),
+		mkPathAdvert(2, "pk_five", map[string]string{"o-aus": `["aa","bb","cc","dd","ee"]`}),
+	)
+	ps.recomputeNodeHomeRegionSets()
+	want := map[string]NodeRegionPlacement{
+		"pk_four": {Basis: RegionBasisFewestHops, Regions: []string{"AUS"}, Hops: intPtr(4)},
+		"pk_five": {Basis: RegionBasisNone, Hops: intPtr(5)},
+	}
+	if got := ps.GetNodeRegionPlacements(); !reflect.DeepEqual(got, want) {
+		t.Errorf("maxHops 4: placements = %s, want %s", placementsString(got), placementsString(want))
+	}
+}
+
 // A node with no placement yet (its first advert arrived after the last
 // recompute) is decided by the observer scan: in each region whose observers
 // heard any of its adverts, however many hops out.

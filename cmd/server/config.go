@@ -109,6 +109,10 @@ type Config struct {
 	// NormalizedRegionQuickPicks and config.example.json.
 	RegionQuickPicks []RegionQuickPick `json:"regionQuickPicks,omitempty"`
 
+	// RegionFallback tunes how the /api/nodes region filter places nodes
+	// never heard zero-hop (#1879). See RegionFallbackMaxHops.
+	RegionFallback *RegionFallbackConfig `json:"regionFallback,omitempty"`
+
 	Roles            map[string]interface{} `json:"roles"`
 	HealthThresholds *HealthThresholds      `json:"healthThresholds"`
 	PathTrust        *PathTrustConfig       `json:"pathTrust,omitempty"`
@@ -1283,4 +1287,14 @@ func (c *Config) configuredChannelNames() map[string]bool {
 		names[name] = true
 	}
 	return names
+}
+
+// RegionFallbackConfig is the regionFallback block (#1879).
+type RegionFallbackConfig struct {
+	MaxHops *int `json:"maxHops,omitempty"`
+}
+
+// RegionFallbackMaxHops is a stub.
+func (c *Config) RegionFallbackMaxHops() int {
+	return 3
 }
