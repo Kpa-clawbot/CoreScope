@@ -43,7 +43,7 @@ services:
       - NODE_ENV=production
       - DISABLE_MOSQUITTO=true
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/stats"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3

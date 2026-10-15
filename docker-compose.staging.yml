@@ -76,7 +76,7 @@ services:
       # via docker DNS without going through the host.
       meshcore-net: {}
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/stats"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/healthz"]
       interval: 30s
       timeout: 10s
       retries: 5

@@ -649,11 +649,11 @@ verify_health() {
     fi
   fi
 
-  # Wait for /api/stats response (Go backend loads packets into memory — may take 60s+)
-  info "Waiting for server to respond..."
+  # Wait for initialization, not just the HTTP listener (loading can take 60s+).
+  info "Waiting for server initialization..."
   local healthy=false
   for i in $(seq 1 45); do
-    if docker exec "$container" wget -qO- http://localhost:3000/api/stats &>/dev/null; then
+    if docker exec "$container" wget -qO- http://localhost:3000/api/healthz &>/dev/null; then
       healthy=true
       break
     fi
@@ -661,11 +661,11 @@ verify_health() {
   done
 
   if ! $healthy; then
-    err "Server did not respond after 90 seconds."
+    err "Server did not become ready after 90 seconds."
     warn "Check logs: ./manage.sh logs"
     return 1
   fi
-  log "Server is responding."
+  log "Server is ready."
 
   # Check for MQTT errors in recent logs
   local mqtt_errors
@@ -679,7 +679,7 @@ verify_health() {
   if $use_https; then
     info "Checking HTTPS for ${caddyfile_domain}..."
     if command -v curl &>/dev/null; then
-      if curl -sf --connect-timeout 5 "https://${caddyfile_domain}/api/stats" &>/dev/null; then
+      if curl -sf --connect-timeout 5 "https://${caddyfile_domain}/api/healthz" &>/dev/null; then
         log "HTTPS is working: https://${caddyfile_domain}"
       else
         warn "HTTPS not reachable yet for ${caddyfile_domain}"
