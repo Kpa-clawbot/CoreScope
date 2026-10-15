@@ -69,57 +69,46 @@ const bridgeMinWeightEpsilon = 1e-9
 func ComputeBridgeScores(edges []BridgeEdge) map[string]float64 {
 	// 1. Build the distance adjacency (cost = 1/weight) — shared with the
 	//    Coverage axis (graph_weighted.go) so both see identical structure.
-	adj := weightedDistanceAdjacency(edges)
-	if len(adj) == 0 {
+	graph := weightedDistanceAdjacency(edges)
+	if len(graph.nodes) == 0 {
 		return map[string]float64{}
 	}
 
-	nodes := make([]string, 0, len(adj))
-	for n := range adj {
-		nodes = append(nodes, n)
-	}
-
-	bc := make(map[string]float64, len(nodes))
-	for _, n := range nodes {
-		bc[n] = 0
-	}
+	size := len(graph.nodes)
+	bc := make([]float64, size)
+	stack := make([]int, 0, size)
+	pred := make([][]int, size)
+	sigma, delta := make([]float64, size), make([]float64, size)
+	work := newDistanceWorkspace(size)
 
 	// 2. Brandes outer loop: one Dijkstra-based single-source shortest
 	//    path computation per source vertex.
-	for _, s := range nodes {
-		stack := make([]string, 0, len(nodes))
-		pred := make(map[string][]string, len(nodes))
-		sigma := make(map[string]float64, len(nodes))
-		dist := make(map[string]float64, len(nodes))
-		for _, n := range nodes {
-			sigma[n] = 0
-			dist[n] = math.Inf(1)
+	for s := range graph.nodes {
+		for _, node := range work.reached {
+			pred[node] = pred[node][:0]
+			sigma[node], delta[node] = 0, 0
 		}
+		stack = stack[:0]
+		work.reset(s)
 		sigma[s] = 1
-		dist[s] = 0
 
-		pq := &bridgePQ{}
-		heap.Init(pq)
-		heap.Push(pq, bridgePQItem{node: s, dist: 0})
-
-		visited := make(map[string]bool, len(nodes))
-		for pq.Len() > 0 {
-			top := heap.Pop(pq).(bridgePQItem)
+		for work.queue.Len() > 0 {
+			top := heap.Pop(&work.queue).(*bridgePQItem)
 			v := top.node
-			if visited[v] {
+			if work.visited[v] {
 				continue
 			}
-			visited[v] = true
+			work.visited[v] = true
 			stack = append(stack, v)
 
-			for w, edgeDist := range adj[v] {
-				alt := dist[v] + edgeDist
-				if alt < dist[w]-1e-12 {
-					dist[w] = alt
+			for _, edge := range graph.adj[v] {
+				w := edge.node
+				alt := work.dist[v] + edge.dist
+				if alt < work.dist[w]-1e-12 {
+					work.improve(w, alt)
 					sigma[w] = sigma[v]
 					pred[w] = append(pred[w][:0], v)
-					heap.Push(pq, bridgePQItem{node: w, dist: alt})
-				} else if math.Abs(alt-dist[w]) <= 1e-12 {
+				} else if math.Abs(alt-work.dist[w]) <= 1e-12 {
 					sigma[w] += sigma[v]
 					pred[w] = append(pred[w], v)
 				}
@@ -127,7 +116,6 @@ func ComputeBridgeScores(edges []BridgeEdge) map[string]float64 {
 		}
 
 		// 3. Back-propagation: walk the stack in reverse order.
-		delta := make(map[string]float64, len(nodes))
 		for i := len(stack) - 1; i >= 0; i-- {
 			w := stack[i]
 			for _, v := range pred[w] {
@@ -143,8 +131,8 @@ func ComputeBridgeScores(edges []BridgeEdge) map[string]float64 {
 	}
 
 	// 4. Undirected graphs double-count each (s,t) pair, so halve.
-	for k := range bc {
-		bc[k] /= 2.0
+	for i := range bc {
+		bc[i] /= 2.0
 	}
 
 	// 5. Normalize by max so scores live in [0, 1]. If max is 0
@@ -155,31 +143,43 @@ func ComputeBridgeScores(edges []BridgeEdge) map[string]float64 {
 			maxBC = v
 		}
 	}
-	if maxBC > 0 {
-		for k, v := range bc {
-			bc[k] = v / maxBC
+	out := make(map[string]float64, size)
+	for i, key := range graph.nodes {
+		out[key] = bc[i]
+		if maxBC > 0 {
+			out[key] /= maxBC
 		}
 	}
-	return bc
+	return out
 }
 
 // ─── min-heap for Dijkstra ─────────────────────────────────────────────────────
 
 type bridgePQItem struct {
-	node string
-	dist float64
+	node  int
+	dist  float64
+	index int
 }
 
-type bridgePQ []bridgePQItem
+type bridgePQ []*bridgePQItem
 
-func (h bridgePQ) Len() int            { return len(h) }
-func (h bridgePQ) Less(i, j int) bool  { return h[i].dist < h[j].dist }
-func (h bridgePQ) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
-func (h *bridgePQ) Push(x interface{}) { *h = append(*h, x.(bridgePQItem)) }
+func (h bridgePQ) Len() int           { return len(h) }
+func (h bridgePQ) Less(i, j int) bool { return h[i].dist < h[j].dist }
+func (h bridgePQ) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].index, h[j].index = i, j
+}
+func (h *bridgePQ) Push(x interface{}) {
+	item := x.(*bridgePQItem)
+	item.index = len(*h)
+	*h = append(*h, item)
+}
 func (h *bridgePQ) Pop() interface{} {
 	old := *h
 	n := len(old)
 	it := old[n-1]
+	old[n-1] = nil
 	*h = old[:n-1]
+	it.index = -1
 	return it
 }
