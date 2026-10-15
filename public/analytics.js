@@ -2453,18 +2453,13 @@
       const byObservers = [...enriched].sort((a, b) => (b.health.observers?.length || 0) - (a.health.observers?.length || 0));
       const byRecent = [...enriched].filter(n => n.health.stats.lastHeard).sort((a, b) => new Date(b.health.stats.lastHeard) - new Date(a.health.stats.lastHeard));
 
-      // Compute network status client-side from loaded nodes using shared getHealthThresholds()
+      // Compute network status client-side from loaded nodes using shared getHealthStatus()
       const now = Date.now();
       let active = 0, degraded = 0, silent = 0;
       nodes.forEach(function(n) {
-        const role = n.role || 'unknown';
-        const th = getHealthThresholds(role);
-        const lastMs = n.last_heard ? new Date(n.last_heard).getTime()
-                     : n.last_seen ? new Date(n.last_seen).getTime()
-                     : 0;
-        const age = lastMs ? (now - lastMs) : Infinity;
-        if (age < th.degradedMs) active++;
-        else if (age < th.silentMs) degraded++;
+        const s = getHealthStatus(n.role, n.last_heard || n.last_seen, now);
+        if (s === 'healthy') active++;
+        else if (s === 'degraded') degraded++;
         else silent++;
       });
       const totalNodes = nodesResp.total || nodes.length;
@@ -2655,14 +2650,9 @@
       (Array.isArray(clockData) ? clockData : []).forEach(c => { if (c && c.pubkey) clockByPk[c.pubkey] = c; });
 
       const now = Date.now();
-      function ageOf(n) {
-        const ms = n.last_heard ? new Date(n.last_heard).getTime() : n.last_seen ? new Date(n.last_seen).getTime() : 0;
-        return ms ? now - ms : Infinity;
-      }
       function statusOf(n) {
-        const th = (typeof getHealthThresholds === 'function') ? getHealthThresholds(n.role) : { degradedMs: 3600000, silentMs: 86400000 };
-        const age = ageOf(n);
-        return age < th.degradedMs ? 'active' : age < th.silentMs ? 'degraded' : 'silent';
+        const s = getHealthStatus(n.role, n.last_heard || n.last_seen, now);
+        return s === 'healthy' ? 'active' : (s || 'silent');
       }
       const pct = v => (v != null ? (v * 100).toFixed(1) + '%' : '—');
       // #1927: no fallback to usefulness_score. They are different metrics:
