@@ -176,6 +176,7 @@
 
   // The profile view on screen, so an auth change can redirect or re-render.
   var shown = { app: null, userId: null };
+  var viewGeneration = 0;
 
   var views = {
     login: function (app) {
@@ -401,9 +402,11 @@
   };
 
   function init(app, routeParam) {
+    var generation = ++viewGeneration;
     if (!window.CSAuth) { app.innerHTML = shell('Accounts', '<p>Accounts are not available.</p>'); return; }
     app.innerHTML = shell('Accounts', '<p>Loading…</p>');
     CSAuth.ready().then(function () {
+      if (generation !== viewGeneration || !app.isConnected) return;
       if (!CSAuth.isEnabled()) { app.innerHTML = shell('Accounts', '<p>Accounts are not enabled on this instance.</p>'); return; }
       views[viewName(routeParam)](app);
     });
@@ -419,6 +422,10 @@
     if (u.id !== shown.userId) views.profile(shown.app);
   });
 
-  registerPage('account', { init: init, destroy: function () {} });
+  registerPage('account', { init: init, destroy: function () {
+    viewGeneration++;
+    shown.app = null;
+    shown.userId = null;
+  } });
   window.CSAccount = { _test: { profileHtml: profileHtml, sessionsHtml: sessionsHtml, companionsHtml: companionsHtml, renewLinkHtml: renewLinkHtml, views: views, checkMailHtml: checkMailHtml } };
 })();

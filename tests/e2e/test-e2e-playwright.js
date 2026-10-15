@@ -66,6 +66,41 @@ async function run() {
 
   console.log(`\nRunning E2E tests against ${BASE}\n`);
 
+  // Account readiness must not outlive the route that requested its view.
+  await test('Account readiness cannot replace Nodes after navigation', async () => {
+    const ctx = await browser.newContext();
+    const p = await ctx.newPage();
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    await p.route('**/api/config/client', async route => {
+      const response = await route.fetch();
+      const config = await response.json();
+      config.userManagement = { enabled: true };
+      await route.fulfill({ json: config });
+    });
+    await p.route('**/api/auth/me', async route => {
+      await held;
+      await route.fulfill({ status: 401, json: { error: 'Not logged in' } });
+    });
+    const started = p.waitForRequest('**/api/auth/me', { timeout: 15000 });
+    started.catch(() => {});
+    try {
+      await p.goto(BASE + '/#/account/login', { waitUntil: 'domcontentloaded' });
+      await started;
+      await p.goto(BASE + '/#/nodes', { waitUntil: 'domcontentloaded' });
+      await p.waitForSelector('#nodesLeft[data-loaded="true"]');
+      const response = p.waitForResponse('**/api/auth/me');
+      release();
+      await (await response).finished();
+      await p.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert(await p.locator('#nodesLeft[data-loaded="true"]').isVisible(), 'account readiness replaced the current Nodes page');
+      assert(await p.locator('#loginForm').count() === 0, 'login form appeared after leaving Accounts');
+    } finally {
+      release();
+      await ctx.close();
+    }
+  });
+
   // #2218 Node Analytics lifecycle: delayed responses retain their own page/range.
   const analyticsKey = 'aa'.repeat(32);
   const otherAnalyticsKey = 'bb'.repeat(32);

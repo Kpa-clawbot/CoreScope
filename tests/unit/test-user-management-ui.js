@@ -361,12 +361,54 @@ function loadAccount(hash, routes, extraWin) {
   Object.assign(CSAuth, loadAuthHelpers(ctx));
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/account.js'), 'utf8'), ctx);
   return { setRequest(f) { override = f; }, doc, t: ctx.window.CSAccount._test, els, calls, loc, user, pages, logouts, replaced,
+    setReady(promise) { CSAuth.ready = () => promise; },
     setLogout(r) { logoutResult = r; },
     fire(detail) { user.current = detail; if (listeners['cs-auth-changed']) listeners['cs-auth-changed']({ detail }); } };
 }
 const submitForm = async (env, formId) => {
   await env.els[formId].handlers.submit({ preventDefault() {} });
 };
+
+test('account readiness cannot render after leaving or detaching the page', async () => {
+  for (const detached of [false, true]) {
+    const env = loadAccount('#/account/login', () => ({}));
+    let ready;
+    env.setReady(new Promise(resolve => { ready = resolve; }));
+    const app = { isConnected: true, innerHTML: '' };
+    env.pages.account.init(app, 'login');
+    if (detached) app.isConnected = false;
+    else env.pages.account.destroy();
+    app.innerHTML = 'Another page';
+    env.loc.hash = '#/nodes';
+    ready();
+    await Promise.resolve();
+    assert.strictEqual(app.innerHTML, 'Another page');
+    assert.strictEqual(env.loc.hash, '#/nodes');
+  }
+});
+
+test('an old profile readiness callback cannot redirect a newer registration view', async () => {
+  const env = loadAccount('#/account', () => ({}));
+  let ready;
+  env.setReady(new Promise(resolve => { ready = resolve; }));
+  const app = { isConnected: true, innerHTML: '' };
+  env.pages.account.init(app);
+  env.pages.account.destroy();
+  env.loc.hash = '#/account/register';
+  env.pages.account.init(app, 'register');
+  ready();
+  await Promise.resolve();
+  assert.strictEqual(env.loc.hash, '#/account/register');
+  assert.match(app.innerHTML, /Create an account/);
+});
+
+test('current account readiness still renders the requested form', async () => {
+  const env = loadAccount('#/account/login', () => ({}));
+  const app = { isConnected: true, innerHTML: '' };
+  env.pages.account.init(app, 'login');
+  await Promise.resolve();
+  assert.match(app.innerHTML, /id="loginForm"/);
+});
 
 test('profile view escapes email and session fields', () => {
   const env = loadAccount('#/account', () => ({}));
@@ -721,7 +763,7 @@ test('auth changes on other views are ignored', () => {
 test('unknown and inherited view names fall back to the profile view', async () => {
   for (const name of ['constructor', '__proto__', 'toString', 'nope']) {
     const env = loadAccount('#/account/' + name, () => ({}));
-    env.pages.account.init({ set innerHTML(v) {} }, name);
+    env.pages.account.init({ isConnected: true, set innerHTML(v) {} }, name);
     await tick();
     assert.strictEqual(env.loc.hash, '#/account/login', name + ' did not reach the profile view');
   }
