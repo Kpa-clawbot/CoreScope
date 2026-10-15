@@ -305,7 +305,7 @@ func componentSchemas() map[string]interface{} {
 					Enum: []string{string(RegionBasisZeroHop), string(RegionBasisFewestHops), string(RegionBasisNone), string(RegionBasisObserverScan)},
 					Description: "zero_hop: observers heard the node zero-hop (a direct advert, not relayed); it is in their regions, and a node on a boundary can have several. " +
 						"fewest_hops: never heard zero-hop; it is in the regions that heard it in the fewest hops. " +
-						"none: never heard zero-hop, and even its closest hearing is more than 3 hops out, so no ?region= filter includes it, even one listing every region; it still shows unfiltered. " +
+						"none: never heard zero-hop, and even its closest hearing is more than regionFallback.maxHops (default 3) hops out, so no ?region= filter includes it, even one listing every region; it still shows unfiltered. " +
 						"observer_scan: not in the last placement recompute (its first advert is newer, or the packet store holds none), so the filter puts it in each region whose observers heard any of its adverts.",
 				},
 				"regions": {Type: "array", Items: &openAPISchema{Type: "string"}, Description: "IATA codes, sorted. Present for zero_hop and fewest_hops."},

@@ -40,7 +40,7 @@ func advertPubkey(tx *StoreTx) string {
 // IATA codes, case- and space-insensitive), over the adverts the store holds.
 // A node heard zero-hop is in its home regions (#1879, see
 // node_home_regions.go); any other node is in the regions that heard it in the
-// fewest hops, or none past regionFallbackMaxHops. Only nodes newer than the
+// fewest hops, or none past regionFallback.maxHops. Only nodes newer than the
 // last recompute fall back to the observer-based check: in a region when at
 // least one of its adverts was heard by an observer there. ok is false when the region
 // names no code, or there is no database to resolve observers from, so the

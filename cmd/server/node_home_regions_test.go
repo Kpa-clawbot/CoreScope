@@ -190,7 +190,7 @@ func mkPathAdvert(id int, pubkey string, hearings map[string]string) *StoreTx {
 // A node never heard zero-hop used to be in every region that heard any of its
 // adverts. Adverts flood the whole mesh, so on a statewide deployment that put
 // most nodes in every region. It now goes in the regions that heard it in the
-// fewest hops, and in none when even that is over regionFallbackMaxHops.
+// fewest hops, and in none when even that is over the cap (default 3).
 func TestRegionFallbackUsesFewestHops(t *testing.T) {
 	ps := newRegionTestStore(t, map[string]string{"o-aus": "AUS", "o-sat": "SAT", "o-hou": "HOU"})
 	addToStore(ps,
@@ -198,7 +198,7 @@ func TestRegionFallbackUsesFewestHops(t *testing.T) {
 		mkPathAdvert(1, "pk_near", map[string]string{"o-sat": `["aa"]`, "o-aus": `["aa","bb","cc","dd"]`}),
 		// Tied fewest hops: both.
 		mkPathAdvert(2, "pk_tie", map[string]string{"o-sat": `["aa","bb"]`, "o-hou": `["cc","dd"]`, "o-aus": `["aa","bb","cc"]`}),
-		// Exactly regionFallbackMaxHops is still placed.
+		// Exactly the cap is still placed.
 		mkPathAdvert(3, "pk_cap", map[string]string{"o-aus": `["aa","bb","cc"]`}),
 		// Closest hearing beyond the cap: no region.
 		mkPathAdvert(4, "pk_gulf", map[string]string{"o-aus": `["aa","bb","cc","dd"]`, "o-hou": `["aa","bb","cc","dd","ee","ff"]`}),

@@ -297,6 +297,10 @@
     "OAK": "Oakland, US",
     "MRY": "Monterey, US"
   },
+  "_comment_regionFallback": "#1879: how the /api/nodes ?region= filter places a node no observer has heard zero-hop (a direct, unrelayed advert). It goes in the regions that heard it in the fewest hops, or in no region when even that is more than maxHops (default 3; 0 places only nodes heard over an empty path). A node in no region still shows with All regions. Each node's region_placement says which rule placed it.",
+  "regionFallback": {
+    "maxHops": 3
+  },
   "cacheTTL": {
     "stats": 10,
     "nodeDetail": 300,

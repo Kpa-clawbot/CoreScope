@@ -7,7 +7,7 @@
 // This recomputer turns those hearings into a set of home regions per node.
 //
 // A node never heard zero-hop goes in the regions that heard it in the fewest
-// hops, and in no region when even that is over regionFallbackMaxHops (it still
+// hops, and in no region when even that is over regionFallback.maxHops (it still
 // shows unfiltered). Every region that heard it at all, the old fallback, put
 // most nodes in every region on a statewide deployment: adverts flood the mesh,
 // so observers in each metro hear far-off nodes many hops out. The observer-
@@ -37,9 +37,10 @@ import (
 
 const nodeHomeRegionsRecomputerDefaultInterval = 5 * time.Minute
 
-// regionFallbackMaxHops bounds the fallback for nodes never heard zero-hop: a
-// node whose closest hearing took more hops than this is in no region.
-const regionFallbackMaxHops = 3
+// regionFallbackMaxHopsDefault bounds the fallback for nodes never heard
+// zero-hop: a node whose closest hearing took more hops than this is in no
+// region. Config regionFallback.maxHops overrides it (Config.RegionFallbackMaxHops).
+const regionFallbackMaxHopsDefault = 3
 
 var (
 	nodeHomeRegionsRecompStartedMu sync.Mutex
@@ -106,7 +107,7 @@ func (s *PacketStore) recomputeNodeHomeRegionSets() {
 		counts = s.nodeZeroHopRegionCounts(obsIATA)
 		hops = s.nodeFewestHopsByRegion(obsIATA)
 	}()
-	placements := regionPlacements(counts, hops, regionFallbackMaxHops)
+	placements := regionPlacements(counts, hops, s.config.RegionFallbackMaxHops())
 	s.nodeRegionPlacements.Store(&placements)
 }
 
@@ -164,10 +165,10 @@ const (
 	// theirs.
 	RegionBasisZeroHop RegionBasis = "zero_hop"
 	// RegionBasisFewestHops: never heard zero-hop; Regions heard it in the
-	// fewest hops (Hops), at most regionFallbackMaxHops.
+	// fewest hops (Hops), at most regionFallback.maxHops.
 	RegionBasisFewestHops RegionBasis = "fewest_hops"
 	// RegionBasisNone: never heard zero-hop, and its closest hearing (Hops)
-	// is over regionFallbackMaxHops, so it is in no region.
+	// is over regionFallback.maxHops, so it is in no region.
 	RegionBasisNone RegionBasis = "none"
 	// RegionBasisObserverScan: not in the last recompute (its first advert
 	// is newer, or the store holds none); the filter puts it in each region
