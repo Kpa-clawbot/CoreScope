@@ -4,6 +4,14 @@ CoreScope uses **SQLite by default**. PostgreSQL 18.6 is optional. Both keep tel
 
 Use the [measured backend comparison](performance/optional-backend-b5-2026-10-09.md) to compare latency, resource use and conversion overhead before choosing PostgreSQL.
 
+Choose for the hardware and workload, not the age of the installation. SQLite
+keeps the deployment small; PostgreSQL separates database resources and can help
+with concurrent writes and maintenance, but adds a service and its own memory,
+storage and backup costs. Neither backend is universally faster. The hot packet
+cache now accounts for SQLite observation fan-out when admitting history: under
+the same memory budget it may retain a shorter hot window. Omitted history stays
+in SQL; a smaller cache does not change database retention.
+
 ## Install
 
 Keep a complete checkout pinned to the same release as the image. For the usual single-host installation, preserve an existing private `.env` or copy `.env.example`, set `DATA_DIR` to the intended persistent directory, then run:
@@ -63,6 +71,17 @@ Before the first upgrade from an older deployment, stop that old stack using its
 
 Plan a maintenance window and measure disk headroom on a representative copy. Keep source data, recovery snapshots and the new target together until validation is complete. Data/index/WAL and process memory costs differ between engines; one synthetic benchmark does not size every installation.
 
+The published B5 experiment observed a PostgreSQL DB/cluster plus WAL peak about
+**2.12 times** the SQLite database plus sidecars (about **112% more**). This is an
+observation, not a sizing multiplier or guarantee. Using that ratio only as an
+illustration, source + one recovery copy + PostgreSQL alone is `1 + 1 + 2.12 =
+4.12` times the source: a 16.8 GB source would total about **69.2 GB** before
+additional working space. The current forward importer also retains a normalized
+working snapshot. Allow separately for that copy, account data, index building,
+temporary work and additional WAL. The measured PostgreSQL peak already included
+1 GiB of WAL; it does not bound WAL on another installation. Rehearse the actual
+conversion and keep its observed free-space margin.
+
 For the managed production deployment:
 
 ```sh
@@ -120,3 +139,8 @@ Restoring accounts can revive deleted users, old passwords, revoked sessions and
 | PostgreSQL telemetry/accounts | Telemetry readiness version2, with explicit offline owner upgrade from version1; account readiness version1 and logical schema version6 |
 
 Unknown/future columns, hidden generated columns, unsupported objects or conflicting data refuse conversion. Preserve a raw recovery snapshot before an explicit repair/upgrade of a disposable working copy. Deleted legacy integer IDs without allocator or retained-reference evidence have no recoverable historical high-water mark. Do not infer one or discard references to make validation pass.
+
+The large-instance preparation work tracked by [#2214](https://github.com/Kpa-clawbot/CoreScope/issues/2214)
+is still pending. This update does not add a snapshot bypass or accept arbitrary
+triggers. An unsupported schema remains a stop condition; retain the original
+and recovery copies rather than deleting objects merely to pass validation.
