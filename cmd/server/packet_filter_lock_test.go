@@ -42,6 +42,8 @@ func packetFilterHashes(result *PacketResult) []string {
 
 func assertColdFilterAllowsStoreReaders(t *testing.T, s *PacketStore, kind string, query func()) {
 	t.Helper()
+	s.clockSkew = &ClockSkewEngine{}
+	s.signalStartupLoadDone()
 	hook, _, entered, release := blockingLoadHook(kind)
 	s.cacheLoadHook = hook
 	var workers sync.WaitGroup
