@@ -385,7 +385,8 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 	// first_seen order. Build the derived analytics indexes once at the end.
 	s.mu.Lock()
 	s.buildPathHopIndex()
-	s.buildDistanceIndex()
+	// Distance is built on its first request, matching Load() and the
+	// background loader. An eager build here is repeated by the lazy gate.
 	if !s.startupMemoryLimited {
 		if s.hotStartupHours > 0 {
 			s.oldestLoaded = hotCutoffStr
