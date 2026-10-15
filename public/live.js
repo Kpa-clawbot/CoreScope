@@ -2609,9 +2609,10 @@
       const roleColor = ROLE_COLORS[n.role] || '#6b7280';
       const roleLabel = (ROLE_LABELS[n.role] || n.role || 'unknown').replace(/s$/, '');
       const hasLoc = n.lat != null && n.lon != null;
-      const lastSeen = formatLiveTimestampHtml(n.last_seen);
+      const heardMs = getEffectiveHeardMs({ ...n, _lastHeard: stats.lastHeard || n.last_heard || n.last_seen });
+      const lastActivity = formatLiveTimestampHtml(Number.isFinite(heardMs) ? new Date(heardMs).toISOString() : null);
       const thresholds = window.getHealthThresholds ? getHealthThresholds(n.role) : { degradedMs: 3600000, silentMs: 86400000 };
-      const ageMs = n.last_seen ? Date.now() - new Date(n.last_seen).getTime() : Infinity;
+      const ageMs = Number.isFinite(heardMs) ? Date.now() - heardMs : Infinity;
       const statusDot = ageMs < thresholds.degradedMs ? 'health-green' : ageMs < thresholds.silentMs ? 'health-yellow' : 'health-red';
       const statusLabel = ageMs < thresholds.degradedMs ? 'Online' : ageMs < thresholds.silentMs ? 'Degraded' : 'Offline';
 
@@ -2629,7 +2630,7 @@
             <code style="font-size:10px;word-break:break-all;">${escapeHtml(n.public_key)}</code>
           </div>
           <table style="font-size:12px;width:100%;border-collapse:collapse;">
-            <tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Last Seen</td><td>${lastSeen}</td></tr>
+            <tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Last Activity</td><td>${lastActivity}</td></tr>
             <tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Adverts</td><td>${n.advert_count || 0}</td></tr>
             ${'configured_scope' in n && n.configured_scope !== null ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;" title="Region scopes this node has configured, confirmed via an observer /neighbors report (status=responded) — concrete evidence (#1865).${n.configured_scope_at ? ' Last confirmed ' + escapeHtml(String(n.configured_scope_at)) + '.' : ''}">Configured scope <span style="color:var(--status-green-text)" role="img" aria-label="confirmed"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check"/></svg></span></td><td>${n.configured_scope === '' ? '<span style="color:var(--text-muted)">none configured</span>' : `<code style="color:var(--link-color)">${escapeHtml(n.configured_scope)}</code>`}</td></tr>` : ''}
             ${'default_scope' in n ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Scope</td><td>${n.default_scope === null ? '<span style="color:var(--text-muted)">—</span>'
