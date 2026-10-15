@@ -74,11 +74,10 @@ func (s *PacketStore) RegionNodePubkeys(region string) (keys []string, ok bool) 
 
 	// Its own mutex and a 30s cache; taken before s.mu, never under it.
 	inRegion := s.resolveRegionObservers(cacheKey)
-	// #1879: nodes heard zero-hop are placed by their home regions, the rest
-	// by their fewest-hop regions; the observer-based scan below decides only
-	// for nodes newer than the last recompute. Atomic loads, under no lock.
-	homes := s.GetNodeHomeRegionSets()
-	fallback := s.GetNodeFallbackRegionSets()
+	// #1879: nodes in the last recompute are placed by its snapshot; the
+	// observer-based scan below decides only for nodes newer than that.
+	// Atomic load, under no lock.
+	placements := s.GetNodeRegionPlacements()
 	seen := make(map[string]bool, 256)
 	keys = make([]string, 0, 256)
 
@@ -99,10 +98,7 @@ func (s *PacketStore) RegionNodePubkeys(region string) (keys []string, ok bool) 
 		if pk == "" || seen[pk] {
 			continue
 		}
-		if _, placed := homes[pk]; placed {
-			continue
-		}
-		if _, placed := fallback[pk]; placed {
+		if _, placed := placements[pk]; placed {
 			continue
 		}
 		seen[pk] = true
@@ -114,14 +110,12 @@ func (s *PacketStore) RegionNodePubkeys(region string) (keys []string, ok bool) 
 	for _, c := range codes {
 		wanted[c] = true
 	}
-	for _, sets := range []map[string][]string{homes, fallback} {
-		for pk, regions := range sets {
-			for _, r := range regions {
-				if wanted[r] {
-					seen[pk] = true
-					keys = append(keys, pk)
-					break
-				}
+	for pk, p := range placements {
+		for _, r := range p.Regions {
+			if wanted[r] {
+				seen[pk] = true
+				keys = append(keys, pk)
+				break
 			}
 		}
 	}

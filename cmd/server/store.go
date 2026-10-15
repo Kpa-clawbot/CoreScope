@@ -445,12 +445,9 @@ type PacketStore struct {
 	// pointer load — no lock contention with the per-request enrichment
 	// path in handleNodes (same discipline as #1248).
 	bridgeScoreMap atomic.Pointer[map[string]float64]
-	// #1879: pubkey → regions whose observers heard it zero-hop, for the
-	// /api/nodes region filter. Written by the node-home-regions recomputer.
-	nodeHomeRegionSets atomic.Pointer[map[string][]string]
-	// #1879: pubkey → regions that heard it in the fewest hops, for nodes
-	// never heard zero-hop; empty when even that is over regionFallbackMaxHops.
-	nodeFallbackRegionSets atomic.Pointer[map[string][]string]
+	// #1879: pubkey → which rule places it for the /api/nodes region filter,
+	// and in which regions. Written by the node-home-regions recomputer.
+	nodeRegionPlacements atomic.Pointer[map[string]NodeRegionPlacement]
 
 	// Coverage + Redundancy axes (issue #672 axes 3 & 4 of 4): atomic
 	// snapshots of pubkey → 0..1 score over the current neighbor graph.

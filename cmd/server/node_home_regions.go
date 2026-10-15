@@ -4,8 +4,7 @@
 // heard any of its adverts. Adverts are flooded, so a node leaked into each
 // region its adverts were relayed into. A zero-hop DIRECT advert is not
 // relayed, so an observer that hears one is within RF range of the node (#804).
-// This recomputer turns those hearings into a set of home regions per node;
-// RegionNodePubkeys uses the set for nodes that have one.
+// This recomputer turns those hearings into a set of home regions per node.
 //
 // A node never heard zero-hop goes in the regions that heard it in the fewest
 // hops, and in no region when even that is over regionFallbackMaxHops (it still
@@ -13,6 +12,10 @@
 // most nodes in every region on a statewide deployment: adverts flood the mesh,
 // so observers in each metro hear far-off nodes many hops out. The observer-
 // based check now decides only for nodes newer than the last recompute.
+//
+// Each node's outcome is a NodeRegionPlacement, which RegionNodePubkeys reads
+// and /api/nodes returns as region_placement, so an operator can see which of
+// the four rules placed a node.
 //
 // A set rather than #804's plurality winner: a node on a region boundary,
 // heard zero-hop in two regions, belongs to both, so per-region node counts
@@ -103,10 +106,8 @@ func (s *PacketStore) recomputeNodeHomeRegionSets() {
 		counts = s.nodeZeroHopRegionCounts(obsIATA)
 		hops = s.nodeFewestHopsByRegion(obsIATA)
 	}()
-	sets := homeRegionSets(counts)
-	fallback := fallbackRegionSets(hops, sets)
-	s.nodeHomeRegionSets.Store(&sets)
-	s.nodeFallbackRegionSets.Store(&fallback)
+	placements := regionPlacements(counts, hops, regionFallbackMaxHops)
+	s.nodeRegionPlacements.Store(&placements)
 }
 
 // nodeFewestHopsByRegion returns, per advert pubkey, the fewest hops any
@@ -155,100 +156,91 @@ func pathHopCount(pathJSON string) int {
 	return strings.Count(p, ",") + 1
 }
 
-// fallbackRegionSets places each node without home regions in the regions
-// that heard it in the fewest hops, or none (an empty set, so RegionNodePubkeys
-// knows not to fall back further) when that is over regionFallbackMaxHops.
-func fallbackRegionSets(hops map[string]map[string]int, homes map[string][]string) map[string][]string {
-	out := make(map[string][]string, len(hops))
-	for pk, perIATA := range hops {
-		if _, placed := homes[pk]; placed {
-			continue
-		}
-		fewest := -1
-		for _, h := range perIATA {
-			if fewest < 0 || h < fewest {
-				fewest = h
-			}
-		}
-		regions := []string{}
-		if fewest <= regionFallbackMaxHops {
-			for iata, h := range perIATA {
-				if h == fewest {
-					regions = append(regions, iata)
-				}
-			}
-			sort.Strings(regions)
-		}
-		out[pk] = regions
-	}
-	return out
+// RegionBasis names the rule that decided a node's regions for ?region=.
+type RegionBasis string
+
+const (
+	// RegionBasisZeroHop: observers heard the node zero-hop; Regions are
+	// theirs.
+	RegionBasisZeroHop RegionBasis = "zero_hop"
+	// RegionBasisFewestHops: never heard zero-hop; Regions heard it in the
+	// fewest hops (Hops), at most regionFallbackMaxHops.
+	RegionBasisFewestHops RegionBasis = "fewest_hops"
+	// RegionBasisNone: never heard zero-hop, and its closest hearing (Hops)
+	// is over regionFallbackMaxHops, so it is in no region.
+	RegionBasisNone RegionBasis = "none"
+	// RegionBasisObserverScan: not in the last recompute (its first advert
+	// is newer, or the store holds none); the filter puts it in each region
+	// whose observers heard any of its adverts.
+	RegionBasisObserverScan RegionBasis = "observer_scan"
+)
+
+// NodeRegionPlacement is which rule placed a node for the /api/nodes region
+// filter, and where (#1879). Returned on each node as region_placement.
+type NodeRegionPlacement struct {
+	Basis RegionBasis `json:"basis"`
+	// Regions is sorted; absent for none and observer_scan.
+	Regions []string `json:"regions,omitempty"`
+	// Hops is the fewest hops any region heard the node over; set for
+	// fewest_hops and none.
+	Hops *int `json:"hops,omitempty"`
 }
 
-// homeRegionSets turns per-region zero-hop counts into each node's sorted set
-// of home regions.
-func homeRegionSets(counts map[string]map[string]int) map[string][]string {
-	out := make(map[string][]string, len(counts))
-	for pk, perIATA := range counts {
+// regionPlacements places every node in zeroHop (per-region zero-hop counts)
+// by those regions, and every other node in fewest (per-region fewest hops)
+// by its fewest-hop regions, or in none past maxHops.
+func regionPlacements(zeroHop, fewest map[string]map[string]int, maxHops int) map[string]NodeRegionPlacement {
+	out := make(map[string]NodeRegionPlacement, len(fewest))
+	for pk, perIATA := range zeroHop {
 		regions := make([]string, 0, len(perIATA))
 		for iata := range perIATA {
 			regions = append(regions, iata)
 		}
 		sort.Strings(regions)
-		out[pk] = regions
+		out[pk] = NodeRegionPlacement{Basis: RegionBasisZeroHop, Regions: regions}
+	}
+	for pk, perIATA := range fewest {
+		if _, placed := out[pk]; placed || len(perIATA) == 0 {
+			continue
+		}
+		hops := -1
+		for _, h := range perIATA {
+			if hops < 0 || h < hops {
+				hops = h
+			}
+		}
+		if hops > maxHops {
+			out[pk] = NodeRegionPlacement{Basis: RegionBasisNone, Hops: &hops}
+			continue
+		}
+		regions := []string{}
+		for iata, h := range perIATA {
+			if h == hops {
+				regions = append(regions, iata)
+			}
+		}
+		sort.Strings(regions)
+		out[pk] = NodeRegionPlacement{Basis: RegionBasisFewestHops, Regions: regions, Hops: &hops}
 	}
 	return out
 }
 
-// GetNodeHomeRegionSets returns the current snapshot (pubkey → sorted home
-// regions), or an empty map before the first compute. Read-only by convention:
-// the map is shared by all readers.
-func (s *PacketStore) GetNodeHomeRegionSets() map[string][]string {
-	snap := s.nodeHomeRegionSets.Load()
-	if snap == nil {
-		return map[string][]string{}
-	}
-	return *snap
-}
-
-// enrichNodeHomeRegions sets home_regions on a node row when zero-hop data
-// placed it, and leaves the field absent otherwise, so an operator can tell
-// which rule put a node in a region (#1879).
-func enrichNodeHomeRegions(node map[string]interface{}, regions []string) {
-	if node == nil || len(regions) == 0 {
-		return
-	}
-	node["home_regions"] = regions
-}
-
-// GetNodeFallbackRegionSets returns the current fallback snapshot (pubkey →
-// sorted regions, empty for a node in no region), or an empty map before the
-// first compute. Read-only by convention.
-func (s *PacketStore) GetNodeFallbackRegionSets() map[string][]string {
-	snap := s.nodeFallbackRegionSets.Load()
-	if snap == nil {
-		return map[string][]string{}
-	}
-	return *snap
-}
-
-// RegionBasis names the rule that decided a node's regions for ?region=.
-type RegionBasis string
-
-const (
-	RegionBasisZeroHop      RegionBasis = "zero_hop"
-	RegionBasisFewestHops   RegionBasis = "fewest_hops"
-	RegionBasisNone         RegionBasis = "none"
-	RegionBasisObserverScan RegionBasis = "observer_scan"
-)
-
-// NodeRegionPlacement is a node's region_placement on /api/nodes.
-type NodeRegionPlacement struct {
-	Basis   RegionBasis `json:"basis"`
-	Regions []string    `json:"regions,omitempty"`
-	Hops    *int        `json:"hops,omitempty"`
-}
-
-// GetNodeRegionPlacements is a stub.
+// GetNodeRegionPlacements returns the current snapshot (pubkey → placement),
+// or an empty map before the first compute. A node absent from it is placed by
+// the observer scan. Read-only by convention: the map is shared by all readers.
 func (s *PacketStore) GetNodeRegionPlacements() map[string]NodeRegionPlacement {
-	return map[string]NodeRegionPlacement{}
+	snap := s.nodeRegionPlacements.Load()
+	if snap == nil {
+		return map[string]NodeRegionPlacement{}
+	}
+	return *snap
+}
+
+// RegionPlacementFor returns a node's placement from a snapshot, observer_scan
+// when the snapshot does not cover it.
+func RegionPlacementFor(placements map[string]NodeRegionPlacement, pubkey string) NodeRegionPlacement {
+	if p, ok := placements[pubkey]; ok {
+		return p
+	}
+	return NodeRegionPlacement{Basis: RegionBasisObserverScan}
 }
