@@ -226,18 +226,29 @@ async function gatherRows(page) {
 
   await step('analytics resize handles stay on their headers without page overflow', async () => {
     const ctx = await browser.newContext({ viewport: { width: 1250, height: 900 } });
+    await ctx.addInitScript(() => {
+      window.addEventListener('theme-refresh', () => { window.__chartsThemeReady = true; }, { once: true });
+    });
     const page = await ctx.newPage();
     try {
       await page.goto(BASE + '/#/analytics?tab=nodes', { waitUntil: 'domcontentloaded' });
-      await page.waitForSelector('.analytics-table .col-resize-handle');
+      // Initial theme loading rebuilds this table. Exercise the settled table,
+      // rather than starting a drag that bootstrap replaces before mouseup.
+      await page.waitForFunction(() => window.__chartsThemeReady &&
+        document.querySelector('#analytics-tbl-nodes-0[data-resizable="1"] .col-resize-handle'));
+      const table = page.locator('#analytics-tbl-nodes-0');
+      await table.waitFor({ state: 'visible' });
+      const settledTable = await table.elementHandle();
       for (const width of [1250, 390]) {
         await page.setViewportSize({ width, height: 900 });
         const layout = await page.evaluate(() => ({
           pageWidth: document.documentElement.clientWidth,
           scrollWidth: document.documentElement.scrollWidth,
+          handleCount: document.querySelectorAll('.analytics-table .col-resize-handle').length,
           misplaced: Array.from(document.querySelectorAll('.analytics-table .col-resize-handle'))
             .filter(handle => handle.offsetParent !== handle.parentElement).length,
         }));
+        assert(layout.handleCount > 0, `${width}px: no resize handles were rendered`);
         assert(layout.misplaced === 0, `${width}px: ${layout.misplaced} resize handles are not anchored to their header`);
         assert(layout.scrollWidth <= layout.pageWidth + 1,
           `${width}px: page scrollWidth=${layout.scrollWidth} exceeds clientWidth=${layout.pageWidth}`);
@@ -249,11 +260,14 @@ async function gatherRows(page) {
       await handle.hover();
       const before = await header.boundingBox();
       const grip = await handle.boundingBox();
+      assert(before && grip, 'the settled column header and resize handle must be visible');
       await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
       await page.mouse.down();
       await page.mouse.move(grip.x + grip.width / 2 + 40, grip.y + grip.height / 2, { steps: 4 });
       await page.mouse.up();
+      assert(await settledTable.evaluate(el => el.isConnected), 'the table was replaced during the resize');
       const after = await header.boundingBox();
+      assert(after, 'the resized column header must remain visible');
       assert(after.width > before.width + 20, `drag did not resize the column: ${before.width} -> ${after.width}`);
       const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('meshcore-analytics-nodes-0-col-widths')));
       assert(Array.isArray(saved) && saved.length > 1, 'drag did not save column widths');
