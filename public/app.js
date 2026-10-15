@@ -2108,6 +2108,8 @@ function makeColumnsResizable(tableSelector, storageKey) {
   // Add resize handles
   ths.forEach((th, i) => {
     if (i === ths.length - 1) return;
+    // Anchor absolute handles to their column without replacing sticky headers.
+    if (getComputedStyle(th).position === 'static') th.style.position = 'relative';
     const handle = document.createElement('div');
     handle.className = 'col-resize-handle';
     handle.addEventListener('mousedown', (e) => {
