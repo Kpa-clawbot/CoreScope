@@ -120,46 +120,53 @@ func TestNeighborGraphRefreshPanicPreservesSnapshot(t *testing.T) {
 }
 
 func TestNeighborGraphBackgroundRefreshKeepsReadersAvailable(t *testing.T) {
-	graph := makeTestGraph()
-	store := ngTestStore(nil, nil)
-	s := &Server{store: store, neighborGraph: graph}
-	store.mu.Lock() // keep the actual graph builder in flight
-	done := make(chan struct{})
-	go func() {
-		s.recomputeNeighborGraphCache()
-		close(done)
-	}()
-	defer func() {
-		store.mu.Unlock()
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-			t.Error("background refresh did not finish after releasing the store")
-		}
-	}()
-	deadline := time.After(time.Second)
-	ticker := time.NewTicker(time.Millisecond)
-	defer ticker.Stop()
-	for s.neighborBuildMu.TryLock() {
-		s.neighborBuildMu.Unlock()
-		select {
-		case <-deadline:
-			t.Fatal("background refresh did not start its builder")
-		case <-ticker.C:
-		}
-	}
-	if !s.neighborMu.TryLock() {
-		t.Fatal("graph builder held the snapshot pointer mutex")
-	}
-	s.neighborMu.Unlock()
-	result := make(chan *NeighborGraph, 1)
-	go func() { result <- s.getNeighborGraph() }()
-	select {
-	case got := <-result:
-		if got != graph {
-			t.Fatal("request lost the last completed snapshot during refresh")
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("request waited for the background builder")
+	for _, tc := range []struct {
+		name      string
+		responses bool
+	}{{"graph-only", false}, {"response-cache", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			graph := makeTestGraph()
+			store := ngTestStore(nil, nil)
+			s := &Server{store: store, neighborGraph: graph}
+			store.mu.Lock() // keep the actual graph builder in flight
+			done := make(chan struct{})
+			go func() {
+				s.recomputeNeighborGraph(tc.responses)
+				close(done)
+			}()
+			defer func() {
+				store.mu.Unlock()
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+					t.Error("background refresh did not finish after releasing the store")
+				}
+			}()
+			deadline := time.After(time.Second)
+			ticker := time.NewTicker(time.Millisecond)
+			defer ticker.Stop()
+			for s.neighborBuildMu.TryLock() {
+				s.neighborBuildMu.Unlock()
+				select {
+				case <-deadline:
+					t.Fatal("background refresh did not start its builder")
+				case <-ticker.C:
+				}
+			}
+			if !s.neighborMu.TryLock() {
+				t.Fatal("graph builder held the snapshot pointer mutex")
+			}
+			s.neighborMu.Unlock()
+			result := make(chan *NeighborGraph, 1)
+			go func() { result <- s.getNeighborGraph() }()
+			select {
+			case got := <-result:
+				if got != graph {
+					t.Fatal("request lost the last completed snapshot during refresh")
+				}
+			case <-time.After(500 * time.Millisecond):
+				t.Fatal("request waited for the background builder")
+			}
+		})
 	}
 }

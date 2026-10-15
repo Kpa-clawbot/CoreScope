@@ -350,6 +350,7 @@ type NeighborGraphConfig struct {
 	// recomputer that rebuilds the default-shape neighbor-graph
 	// response (#1481 P0-1). 0/missing = default 300 (5 min).
 	// Lower = fresher data, more CPU per minute. #1483.
+	// The underlying topology refresh cadence remains capped at 5 minutes.
 	CacheRecomputeIntervalSeconds int `json:"cacheRecomputeIntervalSeconds,omitempty"`
 }
 
