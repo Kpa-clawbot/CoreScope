@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+	"time"
 )
 
 // #1879: the region filter put a node in every region where any observer heard
@@ -331,6 +332,35 @@ func TestRegionFilterListingEveryRegionOmitsUnplacedNodes(t *testing.T) {
 	if want := []string{"pk_near"}; !reflect.DeepEqual(sortedKeys(got), want) {
 		t.Errorf("AUS,SAT: got %v, want %v", sortedKeys(got), want)
 	}
+}
+
+// The recomputer starts at the first load chunk, so its prewarm misses
+// adverts in later chunks. It recomputes once the startup load is done
+// instead of up to one interval later (#2190 review).
+func TestNodeRegionsRecomputeWhenStartupLoadDone(t *testing.T) {
+	resetStarted := func() {
+		nodeHomeRegionsRecompStartedMu.Lock()
+		nodeHomeRegionsRecompStarted = false
+		nodeHomeRegionsRecompStartedMu.Unlock()
+	}
+	resetStarted()
+	t.Cleanup(resetStarted)
+
+	ps := newRegionTestStore(t, map[string]string{"o-aus": "AUS"})
+	stop := ps.StartNodeHomeRegionsRecomputer(time.Hour)
+	defer stop()
+	// A later chunk lands, then the background fill finishes.
+	addToStore(ps, mkHomeRegionAdvert(1, "pk_late", homeZeroHopDirect, "o-aus"))
+	ps.signalStartupLoadDone()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok := ps.GetNodeRegionPlacements()["pk_late"]; ok {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("pk_late not placed after the startup load finished")
 }
 
 // newRegionRecomputeBenchStore builds BenchmarkRegionNodePubkeys' scale: 220k
