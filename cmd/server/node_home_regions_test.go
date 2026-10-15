@@ -279,6 +279,27 @@ func TestRegionFallbackMaxHopsConfig(t *testing.T) {
 	}
 }
 
+// A legacy observation with no path_json says nothing about hops, so it must
+// not count as a direct hearing (#2190 review). "[]" is still zero hops.
+func TestRegionFallbackIgnoresUnknownPaths(t *testing.T) {
+	ps := newRegionTestStore(t, map[string]string{"o-aus": "AUS", "o-sat": "SAT"})
+	addToStore(ps,
+		// The empty AUS path would have been 0 hops and won.
+		mkPathAdvert(1, "pk_mixed", map[string]string{"o-aus": "", "o-sat": `["aa","bb"]`}),
+		// Only unknown paths: no placement, so the observer scan decides.
+		mkPathAdvert(2, "pk_legacy", map[string]string{"o-aus": ""}),
+		mkPathAdvert(3, "pk_direct", map[string]string{"o-aus": `[]`}),
+	)
+	ps.recomputeNodeHomeRegionSets()
+	want := map[string]NodeRegionPlacement{
+		"pk_mixed":  {Basis: RegionBasisFewestHops, Regions: []string{"SAT"}, Hops: intPtr(2)},
+		"pk_direct": {Basis: RegionBasisFewestHops, Regions: []string{"AUS"}, Hops: intPtr(0)},
+	}
+	if got := ps.GetNodeRegionPlacements(); !reflect.DeepEqual(got, want) {
+		t.Errorf("placements = %s, want %s", placementsString(got), placementsString(want))
+	}
+}
+
 // A node with no placement yet (its first advert arrived after the last
 // recompute) is decided by the observer scan: in each region whose observers
 // heard any of its adverts, however many hops out.
