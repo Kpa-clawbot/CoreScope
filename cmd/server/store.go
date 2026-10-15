@@ -4062,25 +4062,13 @@ func (s *PacketStore) nodeZeroHopRegionCounts(obsIATA map[string]string) map[str
 		if tx.DecodedJSON == "" {
 			continue
 		}
-		header, err := strconv.ParseUint(tx.RawHex[:2], 16, 8)
-		if err != nil {
+		// Transport-direct carries four transport-code bytes before the
+		// path byte; PathByte reads it at the right offset (#2225).
+		routeType, pathByte, ok := packetpath.PathByte(tx.RawHex)
+		if !ok || (routeType != RouteDirect && routeType != RouteTransportDirect) {
 			continue
 		}
-		routeType := header & 0x03
-		if routeType != uint64(RouteDirect) && routeType != uint64(RouteTransportDirect) {
-			continue
-		}
-		// Path byte index — for direct/transport-direct it's at offset 1
-		// (matches the analytics decoder's pathByteIdx logic).
-		if len(tx.RawHex) < 4 {
-			continue
-		}
-		pathByte, err := strconv.ParseUint(tx.RawHex[2:4], 16, 8)
-		if err != nil {
-			continue
-		}
-		hopCount := pathByte & 0x3F
-		if hopCount != 0 {
+		if pathByte&0x3F != 0 {
 			continue
 		}
 
@@ -8673,25 +8661,8 @@ func (s *PacketStore) computeAnalyticsHashSizes(region, area string) map[string]
 		}
 
 		// Parse header and path byte
-		if len(tx.RawHex) < 4 {
-			continue
-		}
-		header, err := strconv.ParseUint(tx.RawHex[:2], 16, 8)
-		if err != nil {
-			continue
-		}
-		routeType := header & 0x03
-		pathByteIdx := 1
-		if routeType == 0 || routeType == 3 {
-			pathByteIdx = 5
-		}
-		hexStart := pathByteIdx * 2
-		hexEnd := hexStart + 2
-		if hexEnd > len(tx.RawHex) {
-			continue
-		}
-		actualPathByte, err := strconv.ParseUint(tx.RawHex[hexStart:hexEnd], 16, 8)
-		if err != nil {
+		routeType, actualPathByte, ok := packetpath.PathByte(tx.RawHex)
+		if !ok {
 			continue
 		}
 
@@ -8767,7 +8738,7 @@ func (s *PacketStore) computeAnalyticsHashSizes(region, area string) map[string]
 			// deliberate size declaration; keep it. Same rule as
 			// computeNodeHashSizeInfo. Skipped packets still count and still
 			// update lastSeen.
-			isUndeclaredZeroHop := (routeType == uint64(RouteDirect) || routeType == uint64(RouteTransportDirect)) && actualPathByte == 0x00
+			isUndeclaredZeroHop := (routeType == RouteDirect || routeType == RouteTransportDirect) && actualPathByte == 0x00
 			if byNode[pk] == nil {
 				role := nodeRoleByPK[pk] // empty if unknown
 				initHS := hashSize
@@ -9357,25 +9328,10 @@ func (s *PacketStore) computeNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
 		if tx.RawHex == "" || tx.DecodedJSON == "" {
 			continue
 		}
-		if len(tx.RawHex) < 4 {
-			continue
-		}
-		header, err := strconv.ParseUint(tx.RawHex[:2], 16, 8)
-		if err != nil {
-			continue
-		}
-		routeType := int(header & 0x03)
 		// Transport routes (0, 3) have 4 transport code bytes before the path
 		// byte, so the path byte is at offset 5 instead of 1.
-		pbOffset := 1
-		if routeType == RouteTransportFlood || routeType == RouteTransportDirect {
-			pbOffset = 5
-		}
-		if len(tx.RawHex) < (pbOffset+1)*2 {
-			continue
-		}
-		pathByte, err := strconv.ParseUint(tx.RawHex[pbOffset*2:pbOffset*2+2], 16, 8)
-		if err != nil {
+		routeType, pathByte, ok := packetpath.PathByte(tx.RawHex)
+		if !ok {
 			continue
 		}
 		// Direct zero-hop adverts carry no path, so the hop count is 0. Whether
@@ -9701,22 +9657,8 @@ func (s *PacketStore) computeMultiByteCapability(adopterHashSizes map[string]int
 			if tx.PayloadType != nil && *tx.PayloadType == 8 {
 				continue
 			}
-			header, err := strconv.ParseUint(tx.RawHex[:2], 16, 8)
-			if err != nil {
-				continue
-			}
-			routeType := header & 0x03
-			pathByteIdx := 1
-			if routeType == 0 || routeType == 3 {
-				pathByteIdx = 5
-			}
-			hexStart := pathByteIdx * 2
-			hexEnd := hexStart + 2
-			if hexEnd > len(tx.RawHex) {
-				continue
-			}
-			actualPathByte, err := strconv.ParseUint(tx.RawHex[hexStart:hexEnd], 16, 8)
-			if err != nil {
+			_, actualPathByte, ok := packetpath.PathByte(tx.RawHex)
+			if !ok {
 				continue
 			}
 			hs := int((actualPathByte>>6)&0x3) + 1
