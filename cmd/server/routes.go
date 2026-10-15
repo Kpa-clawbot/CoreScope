@@ -88,9 +88,13 @@ type Server struct {
 	// can't race on the .tmp file or interleave disk/memory updates.
 	saveMu sync.Mutex
 
-	// Neighbor affinity graph (lazy-built, cached with TTL)
+	// Neighbor affinity graph: built on first use, then rebuilt on every
+	// neighbor-graph recompute tick (#2221)
 	neighborMu    sync.Mutex
 	neighborGraph *NeighborGraph
+	// neighborBuildMu serializes graph builds, so a startup request and the
+	// first recompute tick do not both build (#2221).
+	neighborBuildMu sync.Mutex
 
 	// Cached /api/scope-stats response — per-window, recomputed at most once every 30s
 	scopeStatsMu       sync.Mutex
