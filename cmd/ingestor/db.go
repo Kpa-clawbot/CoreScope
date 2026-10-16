@@ -88,6 +88,8 @@ type Store struct {
 	stmtInsertObservation      *sql.Stmt
 	stmtInsertAdvertEvidence   *sql.Stmt
 	hopBackfillCancel          context.CancelFunc // stops the observation_hops backfill on Close
+	hopIndexDays               int                // retention.hopIndexDays; 0 = no hop index (see ConfigureObservationHops)
+	hopMaintMu                 sync.Mutex         // serializes the hop index backfill and trim
 	stmtUpsertNode             *sql.Stmt
 	stmtIncrementAdvertCount   *sql.Stmt
 	stmtUpsertObserver         *sql.Stmt

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"testing"
 
@@ -23,15 +24,17 @@ func newHopIndexedTestDB(t *testing.T) *DB {
 	t.Helper()
 	db := newReachScanTestDB(t)
 	db.conn.SetMaxOpenConns(1)
-	// Extra rows: mixed hop widths, a path hitting two tokens, and one row
-	// outside the window. Inserted BEFORE the schema so the backfill path is
-	// what indexes them, as on an upgraded DB.
+	// Extra rows: mixed hop widths, a path hitting two tokens, one row outside
+	// the window, and one lower-case hop (LIKE ignores ASCII case, so the index
+	// must too). Inserted BEFORE the schema so the backfill path is what
+	// indexes them, as on an upgraded DB.
 	for _, s := range []string{
-		`INSERT INTO transmissions (id, from_pubkey, payload_type) VALUES (4,'',5),(5,'',5),(6,'',5)`,
+		`INSERT INTO transmissions (id, from_pubkey, payload_type) VALUES (4,'',5),(5,'',5),(6,'',5),(7,'',5)`,
 		`INSERT INTO observations (id, transmission_id, observer_idx, snr, path_json, timestamp) VALUES
 			(4,4,1,1.0,'["01FA","01FAB2"]',2000),
 			(5,5,1,2.0,'["01FAB2","DD"]',2000),
-			(6,6,1,3.0,'["01FA"]',10)`,
+			(6,6,1,3.0,'["01FA"]',10),
+			(7,7,1,4.0,'["01fab2"]',2000)`,
 	} {
 		if _, err := db.conn.Exec(s); err != nil {
 			t.Fatal(err)
@@ -40,14 +43,26 @@ func newHopIndexedTestDB(t *testing.T) *DB {
 	return db
 }
 
-// The indexed scan must return exactly what the LIKE scan returns.
+// The indexed scan must return exactly what the LIKE scan returns, for upper-
+// and lower-case tokens alike.
 func TestScanReachRows_IndexedMatchesLike(t *testing.T) {
+	for _, toks := range []map[string]bool{
+		{"01FA": true, "01FAB2": true},
+		{"01fa": true, "01fab2": true},
+	} {
+		t.Run(fmt.Sprint(toks), func(t *testing.T) { indexedMatchesLike(t, toks) })
+	}
+}
+
+func indexedMatchesLike(t *testing.T, toks map[string]bool) {
 	db := newHopIndexedTestDB(t)
 	defer db.conn.Close()
 	srv := &Server{db: db}
-	toks := map[string]bool{"01FA": true, "01FAB2": true}
 
-	like, err := srv.scanReachRows(context.Background(), toks, 500) // no hop schema yet → LIKE
+	if srv.reachHopIndexCovers(context.Background(), 500) {
+		t.Fatal("no hop schema (index off) must not count as coverage")
+	}
+	like, err := srv.scanReachRows(context.Background(), toks, 500) // no hop schema → LIKE
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,9 +70,8 @@ func TestScanReachRows_IndexedMatchesLike(t *testing.T) {
 	if err := dbschema.EnsureObservationHopsSchema(db.conn, nil); err != nil {
 		t.Fatal(err)
 	}
-	// Simulate the backfill: index existing rows, then claim full coverage.
-	if _, err := db.conn.Exec(`INSERT OR IGNORE INTO observation_hops
-		SELECT DISTINCT j.value, o.timestamp, o.id FROM observations o, json_each(o.path_json) j`); err != nil {
+	// The backfill's chunk function over all rows, then claim full coverage.
+	if _, err := dbschema.IndexObservationHops(db.conn, 0, math.MaxInt64); err != nil {
 		t.Fatal(err)
 	}
 	if srv.reachHopIndexCovers(context.Background(), 500) {
@@ -74,8 +88,8 @@ func TestScanReachRows_IndexedMatchesLike(t *testing.T) {
 		t.Fatal(err)
 	}
 	a, b := canon(like), canon(idx)
-	if len(a) != 4 { // obs 1,2,4,5 — not 3 (no token) and not 6 (before window)
-		t.Fatalf("LIKE scan returned %d rows, want 4: %v", len(a), a)
+	if len(a) != 5 { // obs 1,2,4,5,7 — not 3 (no token) and not 6 (before window)
+		t.Fatalf("LIKE scan returned %d rows, want 5: %v", len(a), a)
 	}
 	if fmt.Sprint(a) != fmt.Sprint(b) {
 		t.Fatalf("indexed scan differs from LIKE scan:\nlike    %v\nindexed %v", a, b)

@@ -861,8 +861,9 @@ func (s *Server) reachAcquireBuildSlot() (func(), bool) {
 
 // reachHopIndexCovers reports whether observation_hops can answer a window that
 // starts at sinceEpoch. The table is an optional accelerator maintained by the
-// ingestor (see internal/dbschema/observation_hops.go): a missing table or
-// coverage row (older DB, ingestor not yet migrated) just means "no".
+// ingestor when retention.hopIndexDays > 0 (see
+// internal/dbschema/observation_hops.go): a missing table or coverage row
+// (index off, older DB, ingestor not yet started) just means "no".
 func (s *Server) reachHopIndexCovers(ctx context.Context, sinceEpoch int64) bool {
 	var covered int64
 	err := s.db.conn.QueryRowContext(ctx,
@@ -872,8 +873,10 @@ func (s *Server) reachHopIndexCovers(ctx context.Context, sinceEpoch int64) bool
 
 // scanReachRowsIndexed is scanReachRows answered from observation_hops. It
 // returns the same rows as the LIKE scan: hop tokens are matched as whole path
-// elements (the LIKE pattern "%\"TOK\"%" is exactly that), and IN (subquery)
-// keeps an observation that matches several tokens to one row.
+// elements (the LIKE pattern "%\"TOK\"%" is exactly that), both sides are
+// upper-cased with SQLite's ASCII UPPER (LIKE ignores ASCII case; the index
+// stores UPPER(hop)), and IN (subquery) keeps an observation that matches
+// several tokens to one row.
 func (s *Server) scanReachRowsIndexed(ctx context.Context, tokens map[string]bool, sinceEpoch int64) ([]pathRow, error) {
 	toks := make([]string, 0, len(tokens))
 	for tok := range tokens {
@@ -883,7 +886,7 @@ func (s *Server) scanReachRowsIndexed(ctx context.Context, tokens map[string]boo
 	args := make([]interface{}, 0, len(toks)+2)
 	marks := make([]string, len(toks))
 	for i, tok := range toks {
-		marks[i] = "?"
+		marks[i] = "UPPER(?)"
 		args = append(args, tok)
 	}
 	args = append(args, sinceEpoch, reachScanRowLimit)
