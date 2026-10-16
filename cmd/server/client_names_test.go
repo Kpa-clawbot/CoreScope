@@ -17,6 +17,14 @@ func createClientNodeNames(t *testing.T, db *DB) {
 	mustExecDB(t, db, `CREATE INDEX idx_cnn_target ON client_node_names(target, observed_at)`)
 }
 
+// heardDirect records one discover reception of pk: a name only counts once the
+// repeater was heard directly (clientNameHeard).
+func heardDirect(t *testing.T, db *DB, pk string) {
+	t.Helper()
+	mustExecDB(t, db, `INSERT INTO client_receptions (rx_pubkey,heard_key,heard_keylen,snr,lat,lon,rx_at,ingested_at,src)
+		VALUES ('aa11','`+pk[:16]+`',8,-5,51.0,5.38,'2026-10-16T10:00:00Z','x','discover')`)
+}
+
 func insClientName(t *testing.T, db *DB, target, name, observedAt string) {
 	t.Helper()
 	mustExecDB(t, db, `INSERT INTO client_node_names (target, rx_pubkey, observed_at, ingested_at, name)
@@ -31,11 +39,12 @@ const (
 	cnnClashCli  = "e470220000000000000000000000000000000000000000000000000000000000" // client only, shares e470
 	cnnHiddenPK  = "c3c3440000000000000000000000000000000000000000000000000000000000"
 	cnnBlackPK   = "c4c4550000000000000000000000000000000000000000000000000000000000"
+	cnnUnheard   = "c2c2ff0000000000000000000000000000000000000000000000000000000000" // reported, never heard, shares c2c2
 )
 
 func seedClientNames(t *testing.T) *Server {
 	t.Helper()
-	db := setupTestDBv2(t)
+	db := seedCoverageDB(t)
 	createClientNodeNames(t, db)
 	mustExecDB(t, db, `INSERT INTO nodes (public_key, name, role) VALUES ('`+cnnNoNamePK+`','','repeater')`)
 	mustExecDB(t, db, `INSERT INTO nodes (public_key, name, role) VALUES ('`+cnnAdvertPK+`','FromAdvert','repeater')`)
@@ -47,6 +56,10 @@ func seedClientNames(t *testing.T) *Server {
 	insClientName(t, db, cnnClashCli, "Other", "2026-10-16T10:00:00.000Z")
 	insClientName(t, db, cnnHiddenPK, "🚫Secret", "2026-10-16T10:00:00.000Z")
 	insClientName(t, db, cnnBlackPK, "Blacklisted", "2026-10-16T10:00:00.000Z")
+	insClientName(t, db, cnnUnheard, "Invented", "2026-10-16T10:00:00.000Z")
+	for _, pk := range []string{cnnOnlyPK, cnnNoNamePK, cnnAdvertPK, cnnClashCli, cnnHiddenPK, cnnBlackPK} {
+		heardDirect(t, db, pk)
+	}
 	return &Server{db: db, cfg: &Config{
 		NodeBlacklist:      []string{cnnBlackPK},
 		HiddenNamePrefixes: []string{"🚫"},
@@ -59,7 +72,7 @@ func TestBatchResolveHeardKeysClientNames(t *testing.T) {
 	cases := map[string][2]string{
 		"c0cd":    {cnnOnlyPK, "Self Named"},   // only known from client_node_names, newest observation
 		"c1c122":  {cnnNoNamePK, "Filled In"},  // nodes row without a name: client name fills it
-		"c2c2":    {cnnAdvertPK, "FromAdvert"}, // the advert name wins over a client report
+		"c2c2":    {cnnAdvertPK, "FromAdvert"}, // the advert name wins; the never-heard c2c2ff report adds no candidate
 		"e470":    {"e470", ""},                // one candidate per source: still ambiguous
 		"c3c3":    {"c3c3", ""},                // hidden-prefix client name
 		"c4c4":    {"c4c4", ""},                // blacklisted pubkey
@@ -85,8 +98,11 @@ func TestResolvePrefixClientNames(t *testing.T) {
 	if r := resolve("c1c1"); r.Pubkey != cnnNoNamePK || r.Name != "Filled In" {
 		t.Errorf("nameless nodes row: %+v", r)
 	}
-	if r := resolve("c2c2"); r.Name != "FromAdvert" {
-		t.Errorf("advert name must win: %+v", r)
+	if r := resolve("c2c2"); r.Name != "FromAdvert" || r.Ambiguous {
+		t.Errorf("advert name must win, and a never-heard report must not make c2c2 ambiguous: %+v", r)
+	}
+	if r := resolve("c2c2ff"); r.Pubkey != "" || r.Ambiguous {
+		t.Errorf("a name for a repeater nobody heard directly must not resolve: %+v", r)
 	}
 	if r := resolve("e470"); !r.Ambiguous || r.Name != "" || r.Pubkey != "" {
 		t.Errorf("collision across sources must be ambiguous: %+v", r)
@@ -102,7 +118,7 @@ func TestResolvePrefixClientNames(t *testing.T) {
 // A database without the table (an older ingestor) resolves from nodes alone,
 // and picks the table up once the ingestor creates it, without a restart.
 func TestClientNodeNamesTableAbsentThenCreated(t *testing.T) {
-	db := setupTestDBv2(t)
+	db := seedCoverageDB(t)
 	mustExecDB(t, db, `INSERT INTO nodes (public_key, name, role) VALUES ('`+cnnAdvertPK+`','FromAdvert','repeater')`)
 	srv := &Server{db: db, cfg: &Config{}}
 
@@ -113,6 +129,7 @@ func TestClientNodeNamesTableAbsentThenCreated(t *testing.T) {
 
 	createClientNodeNames(t, db)
 	insClientName(t, db, cnnOnlyPK, "Self Named", "2026-10-16T10:00:00.000Z")
+	heardDirect(t, db, cnnOnlyPK)
 	if got := srv.batchResolveHeardKeys([]string{"c0cd"}); got["c0cd"] != [2]string{cnnOnlyPK, "Self Named"} {
 		t.Fatalf("after the ingestor created the table: %v", got)
 	}

@@ -153,11 +153,29 @@ type reportedNodesCache struct {
 	resp *ReportedNodesResponse
 }
 
+// handleReportedNodes is gated like the other endpoints built on
+// client_receptions: the counts and the estimate come from companion GPS fixes.
 func (s *Server) handleReportedNodes(w http.ResponseWriter, r *http.Request) {
+	if !s.requireClientRxCoverage(w, r) {
+		return
+	}
 	if s.db == nil || s.db.conn == nil {
 		writeError(w, http.StatusServiceUnavailable, "unavailable")
 		return
 	}
+	resp, err := s.reportedNodesResponse()
+	if err != nil {
+		log.Printf("[reported-nodes] compute failed: %v", err)
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	writeJSON(w, resp)
+}
+
+// reportedNodesResponse returns the cached list, recomputing it when stale.
+// The mutex makes concurrent misses wait for one computation; the response is
+// written after it is released, so a slow client never holds it.
+func (s *Server) reportedNodesResponse() (*ReportedNodesResponse, error) {
 	c := &s.reportedNodes
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -165,13 +183,12 @@ func (s *Server) handleReportedNodes(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		resp, err := s.computeReportedNodes()
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
+			return nil, err
 		}
 		log.Printf("[reported-nodes] %d repeaters, %d with an estimate, computed in %s", len(resp.Nodes), countEstimates(resp.Nodes), time.Since(start).Round(time.Millisecond))
 		c.resp, c.at = resp, time.Now()
 	}
-	writeJSON(w, c.resp)
+	return c.resp, nil
 }
 
 func countEstimates(nodes []ReportedNode) int {
@@ -192,28 +209,31 @@ func (db *DB) tablePresent(name string) bool {
 	return err == nil && n > 0
 }
 
-// computeReportedNodes builds the list: every client_node_names target with no
-// advert position in nodes (or inactive_nodes), with its direct receptions.
+// computeReportedNodes builds the list: every client_node_names target that
+// never sent an advert (no row in nodes or inactive_nodes) and was heard
+// directly at least once (clientNameHeard), with its direct receptions. A node
+// with an advert, with or without a position, is in /api/nodes under its
+// advert name, so listing it here as well would show it twice.
 func (s *Server) computeReportedNodes() (*ReportedNodesResponse, error) {
 	resp := &ReportedNodesResponse{Nodes: []ReportedNode{}}
 	resp.Method.SpotM = estimateSpotM
 	resp.Method.MinSpots = estimateMinSpots
 	resp.Method.MinSpreadM = estimateMinSpreadM
 	resp.Method.MinRadiusM = estimateMinRadiusM
-	if !s.db.clientNodeNamesPresent() {
+	if !s.db.clientNamesUsable() {
 		return resp, nil
 	}
 
-	positioned := `EXISTS (SELECT 1 FROM nodes n WHERE n.public_key = c.target AND n.lat IS NOT NULL AND n.lon IS NOT NULL AND NOT (n.lat = 0 AND n.lon = 0))`
+	advertised := `EXISTS (SELECT 1 FROM nodes n WHERE n.public_key = c.target)`
 	if s.db.tablePresent("inactive_nodes") {
-		positioned += ` OR EXISTS (SELECT 1 FROM inactive_nodes n WHERE n.public_key = c.target AND n.lat IS NOT NULL AND n.lon IS NOT NULL AND NOT (n.lat = 0 AND n.lon = 0))`
+		advertised += ` OR EXISTS (SELECT 1 FROM inactive_nodes n WHERE n.public_key = c.target)`
 	}
 	// The bare name beside MAX(observed_at) is SQLite's bare-column rule: the
 	// name of the newest observation (same as lookupPrefixes).
 	rows, err := s.db.conn.Query(`
 		SELECT target, name, MAX(observed_at), COUNT(DISTINCT rx_pubkey)
 		FROM client_node_names c
-		WHERE NOT (`+positioned+`)
+		WHERE NOT (`+advertised+`) AND `+clientNameHeard+`
 		GROUP BY target
 		ORDER BY MAX(observed_at) DESC
 		LIMIT ?`, reportedNodesMax)
@@ -240,7 +260,7 @@ func (s *Server) computeReportedNodes() (*ReportedNodesResponse, error) {
 		return nil, err
 	}
 
-	if len(order) > 0 && s.db.tablePresent("client_receptions") {
+	if len(order) > 0 {
 		pts, err := s.directReceptions(order)
 		if err != nil {
 			return nil, err

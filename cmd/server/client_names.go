@@ -28,6 +28,21 @@ func (db *DB) clientNodeNamesPresent() bool {
 	return true
 }
 
+// clientNameHeard is the SQL condition (alias c for client_node_names) that a
+// reported target was heard directly at least once: a discover or advert
+// reception keyed by its full pubkey or 8-byte prefix. Any companion the broker
+// accepts can report a name for any pubkey, so without this one message could
+// invent a repeater, or make a real node's short prefix ambiguous. The
+// condition needs client_receptions; see clientNamesUsable.
+const clientNameHeard = `EXISTS (SELECT 1 FROM client_receptions r
+	WHERE r.heard_key IN (c.target, substr(c.target, 1, 16)) AND r.src IN ('discover','advert'))`
+
+// clientNamesUsable reports whether client_node_names can contribute: the
+// table exists, and so does client_receptions, which clientNameHeard reads.
+func (db *DB) clientNamesUsable() bool {
+	return db.clientNodeNamesPresent() && db.tablePresent("client_receptions")
+}
+
 // prefixHit is what one prefix matched. matches counts distinct pubkeys across
 // both sources, capped at 2 by the per-source LIMIT 2: unique when it is 1.
 // pubkey and name are set only when unique. name is the nodes name when that
@@ -49,7 +64,7 @@ type prefixHit struct {
 // buffered offline from overwriting a fresher answer.
 func (s *Server) lookupPrefixes(keys []string) map[string]prefixHit {
 	res := make(map[string]prefixHit, len(keys))
-	withClient := s.db.clientNodeNamesPresent()
+	withClient := s.db.clientNamesUsable()
 	// SQLITE_MAX_COMPOUND_SELECT is 500 by default; two terms per key keeps a
 	// chunk of 200 at 400.
 	const chunk = 200
@@ -68,8 +83,13 @@ func (s *Server) lookupPrefixes(keys []string) map[string]prefixHit {
 			parts = append(parts, "SELECT * FROM (SELECT ? AS pfx, public_key AS pk, COALESCE(name,'') AS nm, 0 AS src FROM nodes WHERE public_key LIKE ? LIMIT 2)")
 			args = append(args, k, k+"%")
 			if withClient {
-				parts = append(parts, "SELECT pfx, pk, nm, src FROM (SELECT ? AS pfx, target AS pk, name AS nm, 1 AS src, MAX(observed_at) FROM client_node_names WHERE target LIKE ? GROUP BY target LIMIT 2)")
-				args = append(args, k, k+"%")
+				// A range, not LIKE: LIKE on a case-sensitive column cannot use
+				// idx_cnn_target and scans it per key. target is lowercase hex
+				// (the ingestor lowercases it), and "g" sorts after "f", so
+				// [k, k+"g") is exactly the keys starting with k.
+				lk := strings.ToLower(k)
+				parts = append(parts, "SELECT pfx, pk, nm, src FROM (SELECT ? AS pfx, target AS pk, name AS nm, 1 AS src, MAX(observed_at) FROM client_node_names c WHERE target >= ? AND target < ? AND "+clientNameHeard+" GROUP BY target LIMIT 2)")
+				args = append(args, k, lk, lk+"g")
 			}
 		}
 		rows, err := s.db.conn.Query(strings.Join(parts, " UNION ALL "), args...)

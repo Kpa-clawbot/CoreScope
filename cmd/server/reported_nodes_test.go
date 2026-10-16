@@ -106,6 +106,9 @@ const (
 	repB = "b1b1220000000000000000000000000000000000000000000000000000000000" // reported, one spot
 	repC = "c2c2330000000000000000000000000000000000000000000000000000000000" // reported, but has an advert position
 	repH = "c3c3440000000000000000000000000000000000000000000000000000000000" // hidden name
+	repD = "d4d4550000000000000000000000000000000000000000000000000000000000" // reported, has an advert without a position
+	repF = "f6f6770000000000000000000000000000000000000000000000000000000000" // reported, never heard directly
+	repR = "a7a7880000000000000000000000000000000000000000000000000000000000" // reported, heard only in rxlog paths
 )
 
 func insRec(t *testing.T, db *DB, hk, src string, dN, dE, snr float64, at string) {
@@ -123,7 +126,17 @@ func seedReported(t *testing.T) *Server {
 	insClientName(t, db, repB, "Lonely", "2026-10-16T09:00:00.000Z")
 	insClientName(t, db, repC, "Has Advert", "2026-10-16T08:00:00.000Z")
 	insClientName(t, db, repH, "🚫Secret", "2026-10-16T07:00:00.000Z")
+	insClientName(t, db, repD, "No GPS", "2026-10-16T06:00:00.000Z")
+	insClientName(t, db, repF, "Invented", "2026-10-16T05:00:00.000Z")
+	insClientName(t, db, repR, "Path Only", "2026-10-16T04:00:00.000Z")
 	mustExecDB(t, db, `INSERT INTO nodes (public_key, name, role, lat, lon) VALUES ('`+repC+`','Has Advert','repeater',51.0,5.38)`)
+	mustExecDB(t, db, `INSERT INTO nodes (public_key, name, role) VALUES ('`+repD+`','Advert Name','repeater')`)
+	// Heard directly, so only the advert (repC, repD) or the hidden name (repH)
+	// keeps them out.
+	for _, pk := range []string{repC, repD, repH} {
+		insRec(t, db, pk[:16], "discover", 0, 0, -5, "2026-10-07T10:00:00Z")
+	}
+	insRec(t, db, repR[:4], "rxlog", 0, 0, -5, "2026-10-07T10:00:00Z")
 
 	// repA: an 8-byte discover key at three spread spots, plus a 2-byte rxlog
 	// hash that resolves uniquely to it.
@@ -136,7 +149,7 @@ func seedReported(t *testing.T) *Server {
 	// repB: heard from one place only.
 	insRec(t, db, repB[:16], "discover", 0, 0, -4, "2026-10-06T10:00:00Z")
 	insRec(t, db, repB[:16], "discover", 20, 0, -6, "2026-10-06T10:01:00Z")
-	return &Server{db: db, cfg: &Config{HiddenNamePrefixes: []string{"🚫"}}}
+	return &Server{db: db, cfg: &Config{HiddenNamePrefixes: []string{"🚫"}, ClientRxCoverage: &ClientRxCoverageConfig{Enabled: true}}}
 }
 
 func getReported(t *testing.T, srv *Server) ReportedNodesResponse {
@@ -165,7 +178,7 @@ func TestReportedNodesEndpoint(t *testing.T) {
 		got[n.Pubkey] = n
 	}
 	if len(got) != 2 {
-		t.Fatalf("nodes = %v, want repA and repB only (repC has an advert position, repH is hidden)", resp.Nodes)
+		t.Fatalf("nodes = %v, want repA and repB only (repC and repD sent an advert, repH is hidden, repF was never heard, repR only in rxlog paths)", resp.Nodes)
 	}
 	a := got[repA]
 	if a.Name != "Self Named" || a.Receptions != 4 || a.Spots != 3 || a.Estimate == nil {
@@ -214,8 +227,22 @@ func TestReportedNodesBlacklisted(t *testing.T) {
 // Without client_node_names (an older ingestor) the endpoint answers an empty
 // list, not an error.
 func TestReportedNodesWithoutTable(t *testing.T) {
-	srv := &Server{db: setupTestDBv2(t), cfg: &Config{}}
+	srv := &Server{db: setupTestDBv2(t), cfg: &Config{ClientRxCoverage: &ClientRxCoverageConfig{Enabled: true}}}
 	if resp := getReported(t, srv); len(resp.Nodes) != 0 {
 		t.Fatalf("nodes = %v, want none", resp.Nodes)
+	}
+}
+
+// The list and its estimate come from companion GPS fixes, so the endpoint is
+// gated like the other client_receptions endpoints.
+func TestReportedNodesGatedByClientRxCoverage(t *testing.T) {
+	srv := seedReported(t)
+	srv.cfg.ClientRxCoverage = nil
+	router := mux.NewRouter()
+	router.HandleFunc("/api/nodes/reported", srv.handleReportedNodes).Methods("GET")
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, httptest.NewRequest("GET", "/api/nodes/reported", nil))
+	if rr.Code != 404 {
+		t.Fatalf("status %d with clientRxCoverage off, want 404", rr.Code)
 	}
 }
