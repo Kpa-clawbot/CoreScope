@@ -130,8 +130,11 @@ func TestCleanNodeName(t *testing.T) {
 // its queue) is stored once.
 func TestHandleClientNodeNamesIdempotent(t *testing.T) {
 	s := newTestStore(t)
-	handleClientNodeNames(s, "test", testCompanionPK, nodeNameMsg("Aegis"))
-	handleClientNodeNames(s, "test", testCompanionPK, nodeNameMsg("Aegis"))
+	// One message delivered twice: nodeNameMsg reads the clock, so building it
+	// twice would give two observations a millisecond apart on a slow runner.
+	msg := nodeNameMsg("Aegis")
+	handleClientNodeNames(s, "test", testCompanionPK, msg)
+	handleClientNodeNames(s, "test", testCompanionPK, msg)
 	if n := clientNodeNamesCount(t, s); n != 1 {
 		t.Fatalf("rows = %d, want 1", n)
 	}
