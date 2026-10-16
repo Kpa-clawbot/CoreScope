@@ -196,6 +196,12 @@ toggle under Display shows or hides them (on by default).
   `10^(snr/20)`). The radius is the distance to the farthest spot, never below 500 m.
 - **On the map:** a hollow dashed marker with "≈", a dashed circle with that radius, and a popup
   that says "Estimated position" and how it was made. It is never clustered with advert markers.
+- **Elsewhere in the UI:** every repeater from `/api/nodes/reported` is findable, with or without
+  an estimate. The Nodes page lists them in a "Self-reported repeaters" section under the table (All
+  and Repeaters tabs, filtered by the search box). `#/nodes/<pubkey>` shows a self-reported detail
+  view where it would otherwise say "Node not found". The header search returns them, tagged
+  "self-reported". `/api/nodes` and `/api/nodes/search` are unchanged: these repeaters have no
+  packets, and the packet filters and channel views that use those endpoints must not match them.
 - **Limitation:** this is a centroid of where companions drove, not trilateration. A repeater heard
   from one side only is placed towards that side. The ingestor stores the receptions; the server
   computes the estimate on request and caches it for 5 minutes.

@@ -1120,6 +1120,17 @@
           ? 'Node not found — ' + (pubkey || '').slice(0, 12) + '…'
           : 'Failed to load node';
       }
+      // A repeater known only from its reported name has no /api/nodes row.
+      if (is404 && window.ReportedNodes) {
+        const rep = await window.ReportedNodes.load();
+        const hit = window.ReportedNodes.find(rep.nodes, pubkey);
+        if (hit && document.getElementById('nodeFullBody') === body) {
+          if (titleEl) titleEl.textContent = (hit.name || hit.pubkey.slice(0, 12)) + ' (self-reported)';
+          removeDetailMap(body);
+          body.innerHTML = window.ReportedNodes.detailHtml(hit, rep.method);
+          return;
+        }
+      }
       const safePubkey = escapeHtml(pubkey || '');
       const headline = is404 ? 'Node not found' : 'Failed to load node';
       const detail = is404
@@ -1513,7 +1524,8 @@
           <th scope="col" data-sort-key="advert_count" data-sort-default="desc" data-priority="2">Adverts</th>
         </tr></thead>
         <tbody id="nodesBody"></tbody>
-      </table></div>`;
+      </table></div>
+      <div id="reportedSection"></div>`;
 
     // Tab clicks
     const nodeTabs = document.getElementById('nodeTabs');
@@ -1620,7 +1632,22 @@
     renderRows();
   }
 
+  // renderReported lists repeaters known only from their reported name
+  // (reported-nodes.js) under the table, on the All and Repeaters tabs, with
+  // the same search text applied.
+  function renderReported() {
+    const el = document.getElementById('reportedSection');
+    if (!el || !window.ReportedNodes) return;
+    if (activeTab !== 'all' && activeTab !== 'repeater') { el.innerHTML = ''; return; }
+    const q = search;
+    window.ReportedNodes.load().then(function (rep) {
+      const cur = document.getElementById('reportedSection');
+      if (cur && q === search) cur.innerHTML = window.ReportedNodes.sectionHtml(rep.nodes, rep.method, q);
+    });
+  }
+
   function renderRows() {
+    renderReported();
     const tbody = document.getElementById('nodesBody');
     if (!tbody) return;
 

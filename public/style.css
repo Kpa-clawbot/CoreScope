@@ -5870,3 +5870,24 @@ body.embed #app.app-fixed {
 .mc-est-facts { display: grid; grid-template-columns: auto 1fr; gap: 1px 8px; margin: 2px 0; font-size: 12px; }
 .mc-est-facts dt { color: var(--text-muted); }
 .mc-est-facts dd { margin: 0; }
+
+/* Self-reported repeaters (reported-nodes.js): no advert, name only. */
+.reported-section { margin-top: 16px; padding: 12px; border: 1px dashed var(--mc-role-repeater); border-radius: 6px; }
+.reported-section h3 { margin: 0 0 4px; font-size: 14px; }
+.reported-count { color: var(--text-muted); font-weight: 400; }
+.reported-intro { margin: 0 0 8px; font-size: 12px; color: var(--text-muted); max-width: 70ch; }
+.reported-pos-est { color: var(--text); }
+.reported-pos-none { color: var(--text-muted); }
+.reported-tag { font-size: 11px; color: var(--text-muted); border: 1px dashed var(--mc-role-repeater); border-radius: 3px; padding: 0 4px; }
+.reported-detail { padding: 16px; margin: 16px auto; max-width: 640px; display: grid; gap: 8px; }
+.reported-badge { justify-self: start; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 1px 6px; border-radius: 3px; border: 1px dashed var(--mc-role-repeater); color: var(--text); }
+.reported-detail .node-detail-name { font-size: 20px; font-weight: 700; }
+.reported-detail .node-detail-key { font-size: 11px; word-break: break-all; color: var(--text-muted); }
+.reported-detail p { margin: 0; }
+.reported-caveat { font-size: 12px; color: var(--text-muted); }
+.reported-facts { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0; }
+.reported-facts dt { color: var(--text-muted); }
+.reported-facts dd { margin: 0; }
+.reported-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.reported-links .btn-primary { text-decoration: none; padding: 4px 10px; font-size: 12px; }
+.reported-table td { white-space: normal; }

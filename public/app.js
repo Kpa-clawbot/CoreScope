@@ -1821,10 +1821,12 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!q) { searchResults.innerHTML = ''; return; }
     searchTimeout = setTimeout(async () => {
       try {
-        const [packets, nodes, channels] = await Promise.all([
+        const [packets, nodes, channels, reported] = await Promise.all([
           fetch('/api/packets?limit=5&hash=' + encodeURIComponent(q)).then(r => r.json()).catch(() => ({ packets: [] })),
           fetch('/api/nodes?search=' + encodeURIComponent(q)).then(r => r.json()).catch(() => []),
-          fetch('/api/channels').then(r => r.json()).catch(() => [])
+          fetch('/api/channels').then(r => r.json()).catch(() => []),
+          // Repeaters known only from their reported name are not in /api/nodes.
+          window.ReportedNodes ? window.ReportedNodes.load() : Promise.resolve({ nodes: [] })
         ]);
         let html = '';
         const pktList = packets.packets || packets;
@@ -1841,6 +1843,7 @@ window.addEventListener('DOMContentLoaded', () => {
               <span class="search-result-type">Node</span>${escapeHtml(n.name)} — ${truncate(n.public_key || '', 16)}</div>`;
           }
         }
+        if (window.ReportedNodes) html += window.ReportedNodes.searchItemsHtml(reported.nodes, q, 5);
         const chList = Array.isArray(channels) ? channels : [];
         for (const c of chList) {
           if (c.name && c.name.toLowerCase().includes(q.toLowerCase())) {
