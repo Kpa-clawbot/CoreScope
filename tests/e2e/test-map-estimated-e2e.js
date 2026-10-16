@@ -5,6 +5,7 @@
  * the server can estimate one, the map draws it as a hollow dashed "≈" marker
  * with a dashed uncertainty circle and a popup that says it is an estimate.
  * The "Estimated positions" toggle hides both, and the choice is remembered.
+ * The repeater role filter and route view hide them as well.
  * A reported repeater without an estimate draws nothing.
  *
  * Backend-independent: every /api/* call is mocked via page.route.
@@ -88,6 +89,21 @@ const reported = {
     const stored = await page.evaluate(() => localStorage.getItem('meshcore-map-estimated'));
     assert(stored === 'false', 'localStorage meshcore-map-estimated = ' + stored);
     await page.evaluate(() => document.getElementById('mcEstimated').click());
+    await page.waitForSelector('.mc-est-marker');
+  });
+
+  await step('the repeater role filter hides the estimates too', async () => {
+    await page.waitForSelector('input[data-role="repeater"]');
+    await page.click('input[data-role="repeater"]');
+    await page.waitForFunction(() => !document.querySelector('.mc-est-marker') && !document.querySelector('path.mc-est-area'));
+    await page.click('input[data-role="repeater"]');
+    await page.waitForSelector('.mc-est-marker');
+  });
+
+  await step('route view hides the estimates, closing it brings them back', async () => {
+    await page.evaluate(() => window.drawPacketRouteMulti([{ path: ['aa0000'] }], null, {}));
+    await page.waitForFunction(() => !document.querySelector('.mc-est-marker') && !document.querySelector('path.mc-est-area'));
+    await page.click('a[aria-label="Close route"]');
     await page.waitForSelector('.mc-est-marker');
   });
 

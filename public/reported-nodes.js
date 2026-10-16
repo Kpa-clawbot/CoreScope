@@ -7,12 +7,6 @@
 (function () {
   'use strict';
 
-  var esc = function (s) {
-    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-    });
-  };
-
   var TTL_MS = 5 * 60 * 1000; // the server caches the list for the same time
   var cache = null;           // { at, promise }
 
@@ -44,7 +38,9 @@
     return hits.length === 1 ? hits[0] : null;
   }
 
+  // formatRadius and coverageHref are shared with map-estimated.js.
   function formatRadius(m) {
+    if (!isFinite(m)) return '';
     return m >= 1000 ? (Math.round(m / 100) / 10) + ' km' : Math.round(m) + ' m';
   }
 
@@ -67,10 +63,10 @@
     var rows = shown.map(function (n) {
       var href = '#/nodes/' + encodeURIComponent(n.pubkey);
       return '<tr>' +
-        '<td><a href="' + href + '">' + esc(n.name || n.pubkey.slice(0, 8)) + '</a></td>' +
-        '<td class="mono">' + esc(n.pubkey.slice(0, 16)) + '…</td>' +
-        '<td>' + esc(day(n.last_heard)) + '</td>' +
-        '<td class="' + (n.estimate ? 'reported-pos-est' : 'reported-pos-none') + '">' + esc(positionText(n, method)) + '</td>' +
+        '<td><a href="' + href + '">' + escapeHtml(n.name || n.pubkey.slice(0, 8)) + '</a></td>' +
+        '<td class="mono">' + escapeHtml(n.pubkey.slice(0, 16)) + '…</td>' +
+        '<td>' + escapeHtml(day(n.last_heard)) + '</td>' +
+        '<td class="' + (n.estimate ? 'reported-pos-est' : 'reported-pos-none') + '">' + escapeHtml(positionText(n, method)) + '</td>' +
         '</tr>';
     }).join('');
     return '<section class="reported-section" aria-labelledby="reportedHeading">' +
@@ -84,19 +80,19 @@
   function detailHtml(n, method) {
     var e = n.estimate;
     var pos = e
-      ? '<dd>≈ ' + esc(e.lat.toFixed(5)) + ', ' + esc(e.lon.toFixed(5)) + ' (estimated, within about ' + esc(formatRadius(e.radius_m)) + ')</dd>'
-      : '<dd>Unknown. Heard at ' + esc(n.spots) + (n.spots === 1 ? ' spot' : ' spots') + '; an estimate needs ' + esc(method && method.min_spots ? method.min_spots : 3) + ' spots at least ' + esc(method && method.min_spread_m ? method.min_spread_m : 200) + ' m apart.</dd>';
+      ? '<dd>≈ ' + escapeHtml(e.lat.toFixed(5)) + ', ' + escapeHtml(e.lon.toFixed(5)) + ' (estimated, within about ' + escapeHtml(formatRadius(e.radius_m)) + ')</dd>'
+      : '<dd>Unknown. Heard at ' + escapeHtml(n.spots) + (n.spots === 1 ? ' spot' : ' spots') + '; an estimate needs ' + escapeHtml(method && method.min_spots ? method.min_spots : 3) + ' spots at least ' + escapeHtml(method && method.min_spread_m ? method.min_spread_m : 200) + ' m apart.</dd>';
     var links = e
       ? '<a class="btn-primary" href="#/map">Map</a> <a class="btn-primary" href="' + coverageHref(e.lat, e.lon) + '">Receptions on the coverage map</a>'
       : '<a class="btn-primary" href="#/rx-coverage">Coverage map</a>';
     return '<div class="node-full-card reported-detail">' +
       '<div class="reported-badge">Self-reported repeater</div>' +
-      '<div class="node-detail-name">' + esc(n.name || '(unnamed)') + '</div>' +
-      '<div class="node-detail-key mono">' + esc(n.pubkey) + '</div>' +
+      '<div class="node-detail-name">' + escapeHtml(n.name || '(unnamed)') + '</div>' +
+      '<div class="node-detail-key mono">' + escapeHtml(n.pubkey) + '</div>' +
       '<p>No advert from this repeater has been received, so this instance has no packets, role data or advert position for it. Its name comes from the repeater itself, asked by a CoreDrive companion.</p>' +
       '<dl class="reported-facts">' +
-      '<dt>Name reported</dt><dd>' + esc(day(n.name_reported_at)) + ' by ' + esc(n.reporters) + (n.reporters === 1 ? ' companion' : ' companions') + '</dd>' +
-      '<dt>Heard directly</dt><dd>' + esc(n.receptions) + ' times at ' + esc(n.spots) + (n.spots === 1 ? ' spot' : ' spots') + ', ' + esc(day(n.first_heard)) + ' to ' + esc(day(n.last_heard)) + '</dd>' +
+      '<dt>Name reported</dt><dd>' + escapeHtml(day(n.name_reported_at)) + ' by ' + escapeHtml(n.reporters) + (n.reporters === 1 ? ' companion' : ' companions') + '</dd>' +
+      '<dt>Heard directly</dt><dd>' + escapeHtml(n.receptions) + ' times at ' + escapeHtml(n.spots) + (n.spots === 1 ? ' spot' : ' spots') + ', ' + escapeHtml(day(n.first_heard)) + ' to ' + escapeHtml(day(n.last_heard)) + '</dd>' +
       '<dt>Position</dt>' + pos +
       '</dl>' +
       (e ? '<p class="reported-caveat">The estimate is a centroid of where companions drove, not a measured position: a repeater heard from one side only is placed towards that side.</p>' : '') +
@@ -108,14 +104,15 @@
   // node results there (app.js), tagged so they read as self-reported.
   function searchItemsHtml(nodes, q, limit) {
     return (nodes || []).filter(function (n) { return matches(n, q); }).slice(0, limit || 5).map(function (n) {
-      return '<div class="search-result-item" tabindex="0" role="option" data-href="#/nodes/' + esc(n.pubkey) + '">' +
-        '<span class="search-result-type">Node</span>' + esc(n.name || n.pubkey.slice(0, 8)) + ' — ' + esc(n.pubkey.slice(0, 16)) + '…' +
+      return '<div class="search-result-item" tabindex="0" role="option" data-href="#/nodes/' + escapeHtml(n.pubkey) + '">' +
+        '<span class="search-result-type">Node</span>' + escapeHtml(n.name || n.pubkey.slice(0, 8)) + ' — ' + escapeHtml(n.pubkey.slice(0, 16)) + '…' +
         ' <span class="reported-tag">self-reported' + (n.estimate ? ', ≈ position' : '') + '</span></div>';
     }).join('');
   }
 
   window.ReportedNodes = {
     load: load, matches: matches, find: find, positionText: positionText,
+    formatRadius: formatRadius, coverageHref: coverageHref,
     sectionHtml: sectionHtml, detailHtml: detailHtml, searchItemsHtml: searchItemsHtml,
     _reset: function () { cache = null; },
   };

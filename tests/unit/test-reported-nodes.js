@@ -8,9 +8,13 @@ const path = require('path');
 const vm = require('vm');
 
 const code = fs.readFileSync(path.join(REPO_ROOT, 'public', 'reported-nodes.js'), 'utf8');
+// The module escapes with app.js's global escapeHtml: load the real one.
+const escSrc = fs.readFileSync(path.join(REPO_ROOT, 'public', 'app.js'), 'utf8').match(/function escapeHtml\(s\) \{[\s\S]*?\n\}/);
+assert.ok(escSrc, 'escapeHtml not found in app.js');
 let fetched = 0;
 const sandbox = {
   window: {},
+  escapeHtml: vm.runInNewContext('(' + escSrc[0].replace(/^function escapeHtml/, 'function') + ')'),
   fetch: () => { fetched++; return Promise.resolve({ ok: true, json: () => Promise.resolve(fixture) }); },
   Date,
 };

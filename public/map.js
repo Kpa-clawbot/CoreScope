@@ -521,7 +521,7 @@
             <label for="mcHashLabels"><input type="checkbox" id="mcHashLabels"> Hash prefix labels</label>
             <label for="mcMultiByte"><input type="checkbox" id="mcMultiByte"> Multi-byte support</label>
             <label for="mcScopeOverlay" title="Colour repeater markers by their region-scope configuration"><input type="checkbox" id="mcScopeOverlay"> Scope config colours</label>
-            <label for="mcEstimated" title="Repeaters with no advert position, placed from where mobile companions heard them. Dashed circle = uncertainty."><input type="checkbox" id="mcEstimated"> Estimated positions <span class="mc-est-legend" aria-hidden="true">≈</span></label>
+            <label for="mcEstimated" title="Repeaters that never sent an advert, placed from where mobile companions heard them. Dashed circle = uncertainty. Follows the repeater role filter only, not the area, region or last-heard filters."><input type="checkbox" id="mcEstimated"> Estimated positions <span class="mc-est-legend" aria-hidden="true">≈</span></label>
             <label id="mcGeoFilterLabel" for="mcGeoFilter" style="display:none"><input type="checkbox" id="mcGeoFilter"> Mesh live area</label>
           </fieldset>
           <div id="mapAreaFilter"></div>
@@ -1747,20 +1747,21 @@
       if (map !== loadingMap) return;
       nodes = data.nodes || [];
       observers = obsData.observers || [];
-      // Optional: an instance without client_node_names answers an empty list,
-      // and an older server without the route must not break the map.
-      try {
-        const rep = await api('/nodes/reported', { ttl: CLIENT_TTL.nodeList });
-        if (map !== loadingMap) return;
-        reported = { nodes: (rep && rep.nodes) || [], method: rep && rep.method };
-      } catch (e) { reported = { nodes: [], method: null }; }
-
       buildRoleChecks(data.counts || {});
       buildRegionFilter();
       buildJumpButtons();
 
       renderMarkers();
-      renderEstimated();
+      // Optional and not awaited: the real markers never wait for it. The same
+      // cached list as the nodes page (reported-nodes.js); it answers an empty
+      // list when the route is missing or gated off.
+      if (window.ReportedNodes) {
+        window.ReportedNodes.load().then(function (rep) {
+          if (map !== loadingMap) return;
+          reported = rep;
+          renderEstimated();
+        });
+      }
 
       // Keep the Important Links overlay in sync on a full node reload: re-fetch
       // the neighbor-graph edges (not just re-render the stale cache) so the

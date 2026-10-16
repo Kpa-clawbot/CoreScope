@@ -9,10 +9,16 @@ const path = require('path');
 const vm = require('vm');
 
 const code = fs.readFileSync(path.join(REPO_ROOT, 'public', 'map-estimated.js'), 'utf8');
-const sandbox = { window: {} };
+// The module uses app.js's escapeHtml and the helpers in reported-nodes.js:
+// load the real ones.
+const escSrc = fs.readFileSync(path.join(REPO_ROOT, 'public', 'app.js'), 'utf8').match(/function escapeHtml\(s\) \{[\s\S]*?\n\}/);
+assert.ok(escSrc, 'escapeHtml not found in app.js');
+const sandbox = { window: {}, escapeHtml: vm.runInNewContext('(' + escSrc[0].replace(/^function escapeHtml/, 'function') + ')') };
 vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(path.join(REPO_ROOT, 'public', 'reported-nodes.js'), 'utf8'), sandbox);
 vm.runInContext(code, sandbox);
 const M = sandbox.window.MapEstimated;
+const R = sandbox.window.ReportedNodes;
 
 const placed = {
   pubkey: 'c0cdee59e0db981b00000000000000000000000000000000000000000000000a',
@@ -27,8 +33,8 @@ const method = { spot_m: 100, min_spots: 3, min_spread_m: 200, min_radius_m: 500
 assert.deepStrictEqual(M.withEstimate([placed, unplaced, null]).map(n => n.pubkey), [placed.pubkey]);
 assert.strictEqual(M.withEstimate([{ estimate: { lat: NaN, lon: 5 } }]).length, 0, 'a NaN estimate is not drawn');
 
-assert.strictEqual(M.formatRadius(500), '500 m');
-assert.strictEqual(M.formatRadius(2480), '2.5 km');
+assert.strictEqual(R.formatRadius(500), '500 m');
+assert.strictEqual(R.formatRadius(2480), '2.5 km');
 
 // The popup says what this is, escapes the name, and links to the coverage map there.
 const html = M.popupHtml(placed, method);

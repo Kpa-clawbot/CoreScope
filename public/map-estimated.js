@@ -9,11 +9,9 @@
 (function () {
   'use strict';
 
-  var esc = function (s) {
-    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-    });
-  };
+  // escapeHtml is app.js's; formatRadius and coverageHref are shared with the
+  // nodes page (reported-nodes.js). All are looked up at call time.
+  function formatRadius(m) { return window.ReportedNodes.formatRadius(m); }
 
   // withEstimate keeps only the nodes the server could place.
   function withEstimate(nodes) {
@@ -22,13 +20,8 @@
     });
   }
 
-  function formatRadius(m) {
-    if (!isFinite(m)) return '';
-    return m >= 1000 ? (Math.round(m / 100) / 10) + ' km' : Math.round(m) + ' m';
-  }
-
   function coverageHref(n) {
-    return '#/rx-coverage?days=30&lat=' + n.estimate.lat.toFixed(5) + '&lon=' + n.estimate.lon.toFixed(5) + '&zoom=14';
+    return window.ReportedNodes.coverageHref(n.estimate.lat, n.estimate.lon);
   }
 
   function iconHtml() {
@@ -39,19 +32,19 @@
 
   function popupHtml(n, method) {
     var e = n.estimate;
-    var name = n.name ? esc(n.name) : esc(n.pubkey.slice(0, 8));
+    var name = n.name ? escapeHtml(n.name) : escapeHtml(n.pubkey.slice(0, 8));
     var minSpots = method && method.min_spots ? method.min_spots : 3;
     return '<div class="mc-est-popup">' +
       '<div class="mc-est-badge">Estimated position</div>' +
       '<div class="mc-est-name">' + name + '</div>' +
-      '<div class="mc-est-pk mono">' + esc(n.pubkey.slice(0, 16)) + '…</div>' +
+      '<div class="mc-est-pk mono">' + escapeHtml(n.pubkey.slice(0, 16)) + '…</div>' +
       '<p class="mc-est-what">No advert position. This repeater only told a mobile companion its name, ' +
       'so its location is estimated from where companions heard it directly: within about <strong>' +
-      esc(formatRadius(e.radius_m)) + '</strong> of this point.</p>' +
+      escapeHtml(formatRadius(e.radius_m)) + '</strong> of this point.</p>' +
       '<dl class="mc-est-facts">' +
-      '<dt>Heard</dt><dd>' + esc(n.receptions) + ' times at ' + esc(n.spots) + ' spots (estimate needs ' + esc(minSpots) + ')</dd>' +
-      (n.first_heard ? '<dt>First / last</dt><dd>' + esc(String(n.first_heard).slice(0, 10)) + ' / ' + esc(String(n.last_heard).slice(0, 10)) + '</dd>' : '') +
-      '<dt>Name reported</dt><dd>' + esc(String(n.name_reported_at).slice(0, 10)) + ' by ' + esc(n.reporters) + (n.reporters === 1 ? ' companion' : ' companions') + '</dd>' +
+      '<dt>Heard</dt><dd>' + escapeHtml(n.receptions) + ' times at ' + escapeHtml(n.spots) + ' spots (estimate needs ' + escapeHtml(minSpots) + ')</dd>' +
+      (n.first_heard ? '<dt>First / last</dt><dd>' + escapeHtml(String(n.first_heard).slice(0, 10)) + ' / ' + escapeHtml(String(n.last_heard).slice(0, 10)) + '</dd>' : '') +
+      '<dt>Name reported</dt><dd>' + escapeHtml(String(n.name_reported_at).slice(0, 10)) + ' by ' + escapeHtml(n.reporters) + (n.reporters === 1 ? ' companion' : ' companions') + '</dd>' +
       '</dl>' +
       '<p class="mc-est-caveat">A centroid of where companions drove, not a measured position: a repeater heard from one side only is placed towards that side.</p>' +
       '<a href="' + coverageHref(n) + '">Show receptions on the coverage map</a>' +
@@ -77,5 +70,5 @@
     return shown.length;
   }
 
-  window.MapEstimated = { withEstimate: withEstimate, formatRadius: formatRadius, popupHtml: popupHtml, iconHtml: iconHtml, coverageHref: coverageHref, addTo: addTo };
+  window.MapEstimated = { withEstimate: withEstimate, popupHtml: popupHtml, iconHtml: iconHtml, coverageHref: coverageHref, addTo: addTo };
 })();
