@@ -39,37 +39,26 @@ func (s *Server) handleResolvePrefix(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	// LIMIT 2: we only need to know unique vs ambiguous. nodes.public_key is the
-	// PK and stored lowercase; pfx is validated hex so the LIKE pattern is safe.
-	rows, err := s.db.conn.Query(`SELECT public_key, COALESCE(name,'') FROM nodes WHERE public_key LIKE ? LIMIT 2`, pfx+"%")
-	if err != nil {
+	// lookupPrefixes counts candidates in nodes and in client_node_names (a
+	// repeater's own reported name), so a node known only from that table
+	// resolves too, and one that collides across the two stays ambiguous.
+	h, ok := s.lookupPrefixes([]string{pfx})[pfx]
+	if !ok {
 		http.Error(w, "query failed", http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
-	var pks, names []string
-	for rows.Next() {
-		var pk, nm string
-		if err := rows.Scan(&pk, &nm); err != nil {
-			http.Error(w, "scan failed", http.StatusInternalServerError)
-			return
-		}
-		pks = append(pks, pk)
-		names = append(names, nm)
-	}
-
 	resp := ResolvePrefixResp{Prefix: pfx}
-	switch len(pks) {
-	case 1:
+	switch {
+	case h.matches == 1:
 		// Parity with /api/nodes/search and /api/resolve-hops: never reveal the
 		// identity of a blacklisted or hidden-prefix node (#1181). Report it as
 		// not-found rather than leaking the name the rest of the API hides.
-		if !s.cfg.IsBlacklisted(pks[0]) && !s.cfg.IsNameHidden(names[0]) {
-			resp.Pubkey = pks[0]
-			resp.Name = names[0]
+		if s.visible(h) {
+			resp.Pubkey = h.pubkey
+			resp.Name = h.name
 		}
 	default:
-		resp.Ambiguous = len(pks) > 1 // 0 → not found (name empty), >1 → ambiguous
+		resp.Ambiguous = h.matches > 1 // 0 → not found (name empty), >1 → ambiguous
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
