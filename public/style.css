@@ -5853,3 +5853,20 @@ body.embed #app.app-fixed {
 .role-swatch--room      { color: var(--role-room); }
 .role-swatch--sensor    { color: var(--role-sensor); }
 .role-swatch--observer  { color: var(--role-observer); }
+
+/* Estimated positions (map-estimated.js): hollow, dashed, marked with "≈" so
+   they never read as a node's own advert position. */
+.mc-est-marker { background: none; border: none; }
+.mc-est-ring { fill: var(--surface-1); fill-opacity: .85; stroke: var(--mc-role-repeater); stroke-width: 2; stroke-dasharray: 3 3; }
+.mc-est-glyph { fill: var(--mc-role-repeater); font: 700 15px/1 var(--mono, ui-monospace, monospace); }
+.leaflet-interactive.mc-est-area, path.mc-est-area { stroke: var(--mc-role-repeater); stroke-width: 1.5; stroke-dasharray: 6 6; fill: var(--mc-role-repeater); fill-opacity: .07; }
+.mc-est-legend { color: var(--mc-role-repeater); font-weight: 700; }
+.mc-est-popup { display: grid; gap: 4px; max-width: 280px; }
+.mc-est-badge { justify-self: start; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 1px 6px; border-radius: 3px; border: 1px dashed var(--mc-role-repeater); color: var(--text); }
+.mc-est-name { font-weight: 700; font-size: 14px; }
+.mc-est-pk { color: var(--text-muted); font-size: 11px; }
+.mc-est-what, .mc-est-caveat { margin: 2px 0; font-size: 12px; }
+.mc-est-caveat { color: var(--text-muted); }
+.mc-est-facts { display: grid; grid-template-columns: auto 1fr; gap: 1px 8px; margin: 2px 0; font-size: 12px; }
+.mc-est-facts dt { color: var(--text-muted); }
+.mc-est-facts dd { margin: 0; }

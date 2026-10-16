@@ -179,6 +179,27 @@ set; it lands in `client_node_names`.
 - The broker ACL must allow `/names`. Explicit topic lists need `meshcore/client/+/names` (or
   `meshcore/client/#`).
 
+#### Estimated positions
+
+A repeater known only from `/names` has no advert, so no position of its own. `GET
+/api/nodes/reported` lists every such repeater (no advert position in `nodes` or `inactive_nodes`),
+and the map draws an estimated position for the ones it can place. The **Estimated positions**
+toggle under Display shows or hides them (on by default).
+
+- **Which receptions count:** rows in `client_receptions` that certainly heard this repeater
+  directly. Those are `discover` and `advert` rows keyed by its full pubkey or 8-byte prefix, and
+  `rxlog` rows whose 2-3 byte path hash resolves uniquely to it. `geo` rows are left out.
+- **Spots:** receptions within 100 m of each other count as one spot, with the best SNR of that
+  spot, so a parked companion counts once.
+- **Estimate:** only from 3 spots at least 200 m apart. Below that the list still shows the
+  repeater, without a position. The position is the SNR-weighted centroid of the spots (weight
+  `10^(snr/20)`). The radius is the distance to the farthest spot, never below 500 m.
+- **On the map:** a hollow dashed marker with "≈", a dashed circle with that radius, and a popup
+  that says "Estimated position" and how it was made. It is never clustered with advert markers.
+- **Limitation:** this is a centroid of where companions drove, not trilateration. A repeater heard
+  from one side only is placed towards that side. The ingestor stores the receptions; the server
+  computes the estimate on request and caches it for 5 minutes.
+
 ## Capture HARD RULE — only what was heard directly
 
 The app and ingestor record **only the node the companion physically received**, never upstream
