@@ -3,8 +3,8 @@
 # hands over the paths they have to write.
 #
 # Sourced by docker/entrypoint-go.sh, which calls prepare_service_user and
-# nothing else from here: the order of the steps (resolve the account, read
-# .env, hand over the data directory) is part of what keeps .env from choosing
+# nothing else from here: the order of the steps (resolve the account, hand
+# over the data directory, read .env) is part of what keeps .env from choosing
 # the account, so it lives in one function and the test drives that function.
 # docker/test-select-service-user.sh replaces getent/adduser/addgroup/deluser/
 # delgroup/id/chown/find/stat with stubs: keep every external command here
@@ -34,36 +34,63 @@ SERVICE_DATA_DIR=/app/data
 SERVICE_ENV_FILE=/app/data/.env
 SERVICE_MOUNTINFO=/proc/self/mountinfo
 
+# printf, not echo: dash's echo turns a \012 in a logged path into a newline.
 svc_log() {
-  echo "[entrypoint] $*" >&2
+  printf '%s\n' "[entrypoint] $*" >&2
 }
 
 # prepare_service_user
 #
-# The start-up sequence, in the only order that is safe:
+# The start-up sequence:
 #
 #   1. resolve the account, from RUN_AS_UID/RUN_AS_GID in the container's
 #      environment;
-#   2. read /app/data/.env (see load_env_file for when it is trusted);
-#   3. hand the data directory to the account, when it is not root.
+#   2. hand the data directory to the account, when it is not root;
+#   3. read /app/data/.env (see load_env_file for when it is trusted), then
+#      put RUN_AS_UID/RUN_AS_GID back to what the container had.
 #
 # Returns non-zero, with the reason on stderr, when RUN_AS_UID was set and no
 # account could be provided. On success exports CORESCOPE_SERVICE_USER.
 #
-# The resolved account is kept in the positional parameter, not a variable: the
-# sourced .env runs in this shell, and a line in it such as `account=root` would
-# otherwise change which account is handed the data directory and exported to
-# supervisord.
+# .env comes last, and what runs after it reads only this function's
+# positional parameters. A sourced file shares the shell's variables: every
+# global, the locals of load_env_file, which sources it, and, by dynamic
+# scoping, the locals of this function too, so `_account=root` or
+# `SERVICE_DATA_DIR=/` in .env would reach any step that still read them. It
+# also gets load_env_file's positional parameters, so `set -- root` there
+# lands in that function's $1 and not in this one's. Hence the account, the
+# container's RUN_AS_UID/RUN_AS_GID and the file's path are parked in $1..$6
+# before .env is read, the hand-over, which reads the SERVICE_* paths, is done
+# before it, and nothing else follows.
+#
+# A .env that passes the trust check is root's own code, and this does not
+# try to defend against it: it can redefine these functions or set PATH. What
+# it cannot do by assigning variables is change the account, where the
+# hand-over goes, or RUN_AS_UID/RUN_AS_GID as the services see them.
 prepare_service_user() {
   local _account
   _account=$(resolve_service_account) || return 1
-  set -- "$_account"
+  set -- "$_account" "${RUN_AS_UID+set}" "${RUN_AS_UID-}" \
+         "${RUN_AS_GID+set}" "${RUN_AS_GID-}" "$SERVICE_ENV_FILE"
   unset _account
 
-  load_env_file "$SERVICE_ENV_FILE" "$1"
   if [ "$1" != root ]; then
     claim_service_paths "$1"
   fi
+
+  load_env_file "$6" "$1"
+
+  # The account was resolved before .env was read, so a RUN_AS_UID or
+  # RUN_AS_GID in it must not reach supervisord and the services either: put
+  # back what the container had, set or unset.
+  if [ "${RUN_AS_UID+set}" != "$2" ] || [ "${RUN_AS_UID-}" != "$3" ] ||
+     [ "${RUN_AS_GID+set}" != "$4" ] || [ "${RUN_AS_GID-}" != "$5" ]; then
+    svc_log "ignoring RUN_AS_UID/RUN_AS_GID from $6: set them on the container"
+    svc_log "(docker run -e, or environment: in compose), where the services cannot remove them."
+    if [ -n "$2" ]; then RUN_AS_UID=$3; export RUN_AS_UID; else unset RUN_AS_UID; fi
+    if [ -n "$4" ]; then RUN_AS_GID=$5; export RUN_AS_GID; else unset RUN_AS_GID; fi
+  fi
+
   CORESCOPE_SERVICE_USER=$1
   export CORESCOPE_SERVICE_USER
 }
@@ -162,11 +189,11 @@ resolve_service_account() {
 # writable by no one else. Running as root changes nothing — whoever could
 # write the file could already run code as root.
 #
-# Local names are underscored: the file is sourced into this function.
+# Nothing runs here after the file: it shares this function's variables and
+# positional parameters, so anything read afterwards would be whatever it
+# chose to leave. prepare_service_user does the rest from its own parameters.
 load_env_file() {
   local _env_file="$1" _env_account="$2"
-  local _uid_before="${RUN_AS_UID-}" _gid_before="${RUN_AS_GID-}"
-  local _uid_was="${RUN_AS_UID+set}" _gid_was="${RUN_AS_GID+set}"
 
   [ -f "$_env_file" ] || return 0
   if [ "$_env_account" != root ] && ! env_file_trusted "$_env_file"; then
@@ -179,17 +206,6 @@ load_env_file() {
   set -a
   . "$_env_file"
   set +a
-
-  # The account was resolved before this file was read, so a RUN_AS_UID or
-  # RUN_AS_GID in it must not reach supervisord and the services either: put
-  # back what the container had, set or unset.
-  if [ "${RUN_AS_UID+set}" != "$_uid_was" ] || [ "${RUN_AS_UID-}" != "$_uid_before" ] ||
-     [ "${RUN_AS_GID+set}" != "$_gid_was" ] || [ "${RUN_AS_GID-}" != "$_gid_before" ]; then
-    svc_log "ignoring RUN_AS_UID/RUN_AS_GID from $_env_file: set them on the container"
-    svc_log "(docker run -e, or environment: in compose), where the services cannot remove them."
-    if [ -n "$_uid_was" ]; then RUN_AS_UID=$_uid_before; export RUN_AS_UID; else unset RUN_AS_UID; fi
-    if [ -n "$_gid_was" ]; then RUN_AS_GID=$_gid_before; export RUN_AS_GID; else unset RUN_AS_GID; fi
-  fi
 }
 
 # env_file_trusted <path>

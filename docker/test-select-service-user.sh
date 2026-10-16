@@ -5,19 +5,25 @@
 # Every branch is exercised without docker and without root: getent, adduser,
 # addgroup, deluser, delgroup, id, chown, find and stat are replaced by stubs
 # on PATH, and the mount table is a fixture file. The account stubs read and
-# write a passwd/group pair of files seeded with the accounts the real image has — verified against alpine:3.20 with
-# mosquitto, supervisor and caddy installed, plus the Dockerfile's corescope —
-# so an account created mid-run is visible to the lookups that follow it. chown
-# and find record their arguments rather than touching the filesystem, which is
-# what lets the ownership hand-over be asserted exactly.
+# write a passwd/group pair of files seeded with the accounts the real image
+# has (verified against alpine:3.20 with mosquitto, supervisor and caddy
+# installed, plus the Dockerfile's corescope), so an account created mid-run is
+# visible to the lookups that follow it. chown and find record their arguments
+# rather than touching the filesystem, which is what lets the ownership
+# hand-over be asserted exactly.
 #
-# The driver calls prepare_service_user, the one function docker/entrypoint-go.sh
-# calls: resolve the account, read .env, hand over the data directory. A static
-# check at the end pins that the entrypoint calls it and nothing else from the
-# script, so what gets tested is the sequence the container runs: a non-zero
-# return must never be read as root, and .env cannot choose the account.
+# The driver calls prepare_service_user, the one function the entrypoint
+# (docker/entrypoint-go.sh) calls: resolve the account, hand over the data
+# directory, read .env. A static check at the end pins that the entrypoint
+# calls it and nothing else from the script, so what gets tested is the
+# sequence the container runs: a non-zero return must never be read as root,
+# and .env cannot choose the account.
 #
 # Run: bash docker/test-select-service-user.sh
+# TEST_SHELL picks the shell the sequence runs in, default sh; the image runs
+# busybox ash, so TEST_SHELL=/path/to/busybox-sh is worth a run. A busybox
+# built to prefer its own applets over PATH (Ubuntu's package) bypasses the
+# stubs and fails most cases; Debian's and Alpine's look up PATH first.
 # Exits non-zero if any case fails.
 set -u
 
@@ -209,7 +215,7 @@ STUB
 # the services would see them.
 drive() {
     make_fixture
-    OUT=$(env -i PATH="$FIX/bin:/usr/bin:/bin" FIX="$FIX" SCRIPT="$SCRIPT" "$@" sh -c '
+    OUT=$(env -i PATH="$FIX/bin:/usr/bin:/bin" FIX="$FIX" SCRIPT="$SCRIPT" "$@" "${TEST_SHELL:-sh}" -c '
         . "$SCRIPT"
         SERVICE_ENV_FILE="$FIX/env"
         SERVICE_MOUNTINFO="$FIX/mountinfo"
@@ -419,6 +425,53 @@ CORESCOPE_SERVICE_USER=root' drive RUN_AS_UID=1000 STUB_STAT='0 -rw-r--r--'
 assert_eq "account" "corescope" "$OUT"
 assert_has "the data dir was still handed over to it" "$CALLS" "chown -h 1000:1000"
 
+# The file is sourced inside load_env_file, which has positional parameters of
+# its own, so a `set --` in it cannot reach the account prepare_service_user
+# keeps in $1. Sourcing it in prepare_service_user instead would make this fail.
+CASE=".env runs set -- root"
+FIX_ENV='set -- root' drive RUN_AS_UID=1000 STUB_STAT='0 -rw-r--r--'
+assert_eq "account" "corescope" "$OUT"
+assert_has "the data dir was still handed over to it" "$CALLS" "chown -h 1000:1000"
+
+# A sourced file shares every variable of the shell, the locals of the
+# functions on the call stack included. The container's RUN_AS_UID/RUN_AS_GID
+# are therefore put back from positional parameters, not from variables a line
+# in .env could pre-empt. The uid and gid differ so that a mixed-up parameter
+# shows.
+CASE=".env assigns the names the restore could have used"
+FIX_ENV='_uid_before=0
+_uid_was=set
+_gid_before=0
+_gid_was=set
+_env_file=/nowhere
+_env_account=root
+SERVICE_ENV_FILE=/nowhere
+RUN_AS_UID=0
+RUN_AS_GID=0' drive RUN_AS_UID=1000 RUN_AS_GID=1001 STUB_STAT='0 -rw-r--r--'
+assert_eq "account" "corescope" "$OUT"
+assert_eq "both put back" "RUN_AS_UID=1000 RUN_AS_GID=1001" "$FINAL_ENV"
+assert_has "ignored, and the log names the real file" "$LOG" "ignoring RUN_AS_UID/RUN_AS_GID from $FIX/env"
+
+# Each of the two is compared on its own: a .env that changes only the gid is
+# noticed too.
+CASE="RUN_AS_GID alone in a trusted .env, 1000:1000 on the container"
+FIX_ENV='RUN_AS_GID=0' drive RUN_AS_UID=1000 RUN_AS_GID=1000 STUB_STAT='0 -rw-r--r--'
+assert_eq "gid put back" "RUN_AS_UID=1000 RUN_AS_GID=1000" "$FINAL_ENV"
+assert_has "ignored, and said so" "$LOG" "ignoring RUN_AS_UID/RUN_AS_GID"
+
+# The hand-over reads the SERVICE_* paths, so it happens before .env is read:
+# a .env that points them elsewhere must find the data directory already dealt
+# with, and .env itself already left out of it.
+CASE=".env points the SERVICE_* paths elsewhere"
+FIX_ENV='SERVICE_DATA_DIR=/
+SERVICE_ENV_FILE=/nowhere
+SERVICE_MOUNTINFO=/dev/null' drive RUN_AS_UID=1000 STUB_STAT='0 -rw-r--r--'
+assert_eq "account" "corescope" "$OUT"
+assert_has "the data dir was handed over, .env left out" "$CALLS" \
+    "find /app/data ( -path $FIX/env ) -prune -o ! -user 1000 -exec chown -h 1000:1000 {} +"
+assert_lacks "nothing else was walked" "$CALLS" "find / ("
+assert_lacks "and the real .env was the one excluded" "$CALLS" "/nowhere"
+
 # ----- 15. a file mounted into the data directory keeps its host owner -----
 # The documented single-file config mount, plus one with a space in its path,
 # as the kernel escapes it. The data directory's own mount is not excluded.
@@ -463,6 +516,12 @@ assert_eq "startup continues" 0 "$RC"
 assert_has "warning names the count" "$LOG" "WARNING: 2 path(s) in /app/data could not be given to uid 1000"
 assert_has "and the paths" "$LOG" "  /app/data/meshcore.db"
 
+# A logged path is printed as it is: dash's echo would turn the \012 into a
+# newline and cut the path in two.
+CASE="chown refused on a path with a backslash escape"
+drive RUN_AS_UID=1000 STUB_LEFTOVER='/app/data/x\012y'
+assert_has "path logged intact" "$LOG" '  /app/data/x\012y'
+
 # ----- 17. the entrypoint runs the sequence through prepare_service_user ----
 # The driver above tests the function; this pins that the entrypoint uses it
 # and does not rebuild the sequence from the steps, in an order of its own.
@@ -473,6 +532,7 @@ assert_has "calls prepare_service_user" "$EP" "prepare_service_user || exit 1"
 assert_lacks "does not resolve the account itself" "$EP" "resolve_service_account"
 assert_lacks "does not read .env itself" "$EP" "load_env_file"
 assert_lacks "does not hand over paths itself" "$EP" "claim_service_paths"
+assert_lacks "does not set the account itself" "$EP" "CORESCOPE_SERVICE_USER="
 
 # ----- report ---------------------------------------------------------------
 echo "select-service-user: $PASS assertions passed, $FAIL failed"
