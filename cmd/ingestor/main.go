@@ -362,6 +362,17 @@ func main() {
 		}
 	}
 
+	// Node-name retention: bounds the opt-in client_node_names table.
+	// 0 = disabled.
+	clientNodeNamesDays := cfg.ClientNodeNamesDaysOrZero()
+	if clientNodeNamesDays > 0 {
+		if n, err := store.PruneOldClientNodeNames(clientNodeNamesDays); err != nil {
+			log.Printf("[prune] client_node_names: %v", err)
+		} else if n > 0 {
+			log.Printf("[prune] startup pruned %d client_node_names older than %d days", n, clientNodeNamesDays)
+		}
+	}
+
 	vacuumPages := cfg.IncrementalVacuumPages()
 	store.RunIncrementalVacuum(vacuumPages)
 
@@ -444,7 +455,7 @@ func main() {
 	// node_declared_regions retention (Task 6) rather than starting a second
 	// ticker — the four flags are independent (0 disables each separately),
 	// so the ticker itself must run when any is set.
-	if clientRxDays > 0 || clientRxObsDays > 0 || clientRfDays > 0 || clientRegionsDays > 0 {
+	if clientRxDays > 0 || clientRxObsDays > 0 || clientRfDays > 0 || clientRegionsDays > 0 || clientNodeNamesDays > 0 {
 		clientRxRetentionTicker := time.NewTicker(24 * time.Hour)
 		go func() {
 			for range clientRxRetentionTicker.C {
@@ -476,6 +487,13 @@ func main() {
 						store.RunIncrementalVacuum(vacuumPages)
 					}
 				}
+				if clientNodeNamesDays > 0 {
+					if n, err := store.PruneOldClientNodeNames(clientNodeNamesDays); err != nil {
+						log.Printf("[prune] client_node_names: %v", err)
+					} else if n > 0 {
+						store.RunIncrementalVacuum(vacuumPages)
+					}
+				}
 			}
 		}()
 		if clientRxDays > 0 {
@@ -489,6 +507,9 @@ func main() {
 		}
 		if clientRegionsDays > 0 {
 			log.Printf("[prune] auto-prune enabled: node_declared_regions older than %d days will be removed daily", clientRegionsDays)
+		}
+		if clientNodeNamesDays > 0 {
+			log.Printf("[prune] auto-prune enabled: client_node_names older than %d days will be removed daily", clientNodeNamesDays)
 		}
 	}
 
@@ -862,7 +883,8 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 
 	// Mobile client topics: meshcore/client/{PUBLIC_KEY}/packets (RX coverage),
 	// meshcore/client/{PUBLIC_KEY}/rf (RF environment samples), and
-	// meshcore/client/{PUBLIC_KEY}/regions (declared-region answers). A
+	// meshcore/client/{PUBLIC_KEY}/regions (declared-region answers), and
+	// meshcore/client/{PUBLIC_KEY}/names (a repeater's own name). A
 	// roaming companion reports where it directly heard a node, its own
 	// radio's counters, or a repeater's declared region list; all three are
 	// handled in isolation from the observer/observations path. EMQX ACL
@@ -902,6 +924,10 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		case "regions":
 			if cfg.ClientRegionsEnabled() {
 				handleClientRegions(store, cfg, tag, parts[2], msg)
+			}
+		case "names":
+			if cfg.ClientNodeNamesEnabled() {
+				handleClientNodeNames(store, tag, parts[2], msg)
 			}
 		}
 		return

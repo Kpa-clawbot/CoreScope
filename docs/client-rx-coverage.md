@@ -147,6 +147,38 @@ one.
 - The broker ACL must allow the client to publish to `/regions` as well as `/packets` and `/rf`.
   Explicit topic lists need `meshcore/client/+/regions` (or `meshcore/client/#`).
 
+### Node names: `meshcore/client/{PUBLIC_KEY}/names`
+
+When this instance has no name for a repeater the companion hears directly (`/api/nodes/resolve`
+answers without a `name`), CoreDrive RX v1.20.0 and later ask the repeater itself
+(`ANON_REQ_TYPE_OWNER`) and publish its answer here. Accepted only when `clientNodeNames.enabled` is
+set; it lands in `client_node_names`.
+
+```json
+{
+  "origin": "<companion name>",
+  "origin_id": "<companion pubkey hex>",
+  "timestamp": "2026-10-16T09:12:04.512Z",
+  "type": "NODE_NAME",
+  "target": "<repeater pubkey, 64 hex>",
+  "name": "<the repeater's node name>",
+  "repeater_clock": 1789000000,
+  "gps": { "lat": 51.05, "lon": 3.72, "acc_m": 8 }
+}
+```
+
+- `target` must be a full 64-hex pubkey. `name` is trimmed (spaces and NUL padding) and dropped when
+  it is empty, longer than 31 characters (the firmware's `node_name[32]`), not valid UTF-8, or holds
+  a control character. `gps` is optional. The owner info the repeater also sends is not published.
+- `/api/nodes/resolve` and the coverage tooltips use the newest name per repeater (by `timestamp`)
+  when `nodes` has no name for it, including a repeater with no `nodes` row at all. An advert name
+  always wins. A prefix that matches different pubkeys across `nodes` and `client_node_names` stays
+  ambiguous. The node blacklist and hidden name prefixes apply to these names too.
+- Any companion the broker lets publish can report a name for any repeater; the newest report wins.
+  `clientRxCoverage.requireLinkedCompanion` limits that to linked companions.
+- The broker ACL must allow `/names`. Explicit topic lists need `meshcore/client/+/names` (or
+  `meshcore/client/#`).
+
 ## Capture HARD RULE — only what was heard directly
 
 The app and ingestor record **only the node the companion physically received**, never upstream
