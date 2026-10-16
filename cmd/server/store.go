@@ -150,12 +150,36 @@ func parseObsTimestamp(s string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
+// decodedCacheDroppedKeys are payload fields no server code reads: the
+// ciphertext and MAC of encrypted payloads, advert signatures, the ISO copy
+// of a timestamp, raw path data and control-packet details.
+// TestDecodedCacheDroppedKeysAreUnread fails if code starts naming one.
+var decodedCacheDroppedKeys = []string{
+	"encryptedData", "mac", "signature", "signatureValid", "timestampISO", "pathData",
+	"ctrlPubKey", "ctrlSubtype", "ctrlTag", "ctrlFlags", "ctrlZeroHop", "ctrlLength",
+}
+
+// broadcastPayload returns the packet's whole decoded payload for the live
+// feed: the stored JSON as it is, since the feed only serialises it. Copying
+// the cache would lose the fields it drops, and decoding again would run
+// under the store's write lock; this does neither. nil if the JSON is not
+// valid, as before.
+func broadcastPayload(tx *StoreTx) json.RawMessage {
+	if tx.DecodedJSON == "" || !json.Valid([]byte(tx.DecodedJSON)) {
+		return nil
+	}
+	return json.RawMessage(tx.DecodedJSON)
+}
+
 // ParsedDecoded returns the parsed DecodedJSON map, caching the result.
 // Thread-safe via sync.Once — the first call parses, subsequent calls return cached.
 func (tx *StoreTx) ParsedDecoded() map[string]interface{} {
 	tx.decodedOnce.Do(func() {
 		if tx.DecodedJSON != "" {
 			json.Unmarshal([]byte(tx.DecodedJSON), &tx.parsedDecoded)
+			for _, k := range decodedCacheDroppedKeys {
+				delete(tx.parsedDecoded, k)
+			}
 		}
 	})
 	return tx.parsedDecoded
@@ -421,6 +445,9 @@ type PacketStore struct {
 	// pointer load — no lock contention with the per-request enrichment
 	// path in handleNodes (same discipline as #1248).
 	bridgeScoreMap atomic.Pointer[map[string]float64]
+	// #1879: pubkey → which rule places it for the /api/nodes region filter,
+	// and in which regions. Written by the node-home-regions recomputer.
+	nodeRegionPlacements atomic.Pointer[map[string]NodeRegionPlacement]
 
 	// Coverage + Redundancy axes (issue #672 axes 3 & 4 of 4): atomic
 	// snapshots of pubkey → 0..1 score over the current neighbor graph.
@@ -491,6 +518,17 @@ type PacketStore struct {
 	// Bounded cold load: oldest packet timestamp loaded into memory.
 	// Empty string means all data is in memory (no limit applied).
 	oldestLoaded string
+
+	// evictedThrough is the newest FirstSeen eviction has removed (#748).
+	// Retention eviction stays behind now-retentionHours, but memory-pressure
+	// eviction cuts further in; coverageStart needs that edge.
+	evictedThrough string
+
+	// loadCapEdge is when a startup load cut short by the memory cap
+	// finished (#748). The rows the cap left out are never loaded later
+	// (the poller starts from the DB's max id), so the store is only
+	// complete from here on.
+	loadCapEdge string
 
 	// Hot startup atomic gates — see contract below.
 	//
@@ -961,31 +999,34 @@ func (s *PacketStore) Load() error {
 
 	hopsSeen := make(map[string]bool) // reused across observations; cleared per use
 
-	for rows.Next() {
-		var txID int
-		var rawHex, hash, firstSeen, decodedJSON sql.NullString
-		var routeType, payloadType, payloadVersion sql.NullInt64
-		var obsID sql.NullInt64
-		var observerID, observerName, observerIATA, direction, pathJSON, obsTimestamp sql.NullString
-		var snr, rssi sql.NullFloat64
-		var score sql.NullInt64
-		var obsRawHex sql.NullString
-		var resolvedPathStr sql.NullString
-		var scopeName sql.NullString
+	// Scan overwrites every target on each row, so one set (and one
+	// argument slice) serves the whole loop instead of escaping per row.
+	var txID int
+	var rawHex, hash, firstSeen, decodedJSON sql.NullString
+	var routeType, payloadType, payloadVersion sql.NullInt64
+	var obsID sql.NullInt64
+	var observerID, observerName, observerIATA, direction, pathJSON, obsTimestamp sql.NullString
+	var snr, rssi sql.NullFloat64
+	var score sql.NullInt64
+	var obsRawHex sql.NullString
+	var resolvedPathStr sql.NullString
+	var scopeName sql.NullString
 
-		scanArgs := []interface{}{&txID, &rawHex, &hash, &firstSeen, &routeType, &payloadType,
-			&payloadVersion, &decodedJSON,
-			&obsID, &observerID, &observerName, &observerIATA, &direction,
-			&snr, &rssi, &score, &pathJSON, &obsTimestamp}
-		if s.db.hasObsRawHex {
-			scanArgs = append(scanArgs, &obsRawHex)
-		}
-		if s.db.hasResolvedPath {
-			scanArgs = append(scanArgs, &resolvedPathStr)
-		}
-		if s.db.hasScopeName {
-			scanArgs = append(scanArgs, &scopeName)
-		}
+	scanArgs := []interface{}{&txID, &rawHex, &hash, &firstSeen, &routeType, &payloadType,
+		&payloadVersion, &decodedJSON,
+		&obsID, &observerID, &observerName, &observerIATA, &direction,
+		&snr, &rssi, &score, &pathJSON, &obsTimestamp}
+	if s.db.hasObsRawHex {
+		scanArgs = append(scanArgs, &obsRawHex)
+	}
+	if s.db.hasResolvedPath {
+		scanArgs = append(scanArgs, &resolvedPathStr)
+	}
+	if s.db.hasScopeName {
+		scanArgs = append(scanArgs, &scopeName)
+	}
+
+	for rows.Next() {
 		if err := rows.Scan(scanArgs...); err != nil {
 			log.Printf("[store] scan error: %v", err)
 			continue
@@ -1132,6 +1173,10 @@ func (s *PacketStore) Load() error {
 		s.oldestLoaded = hotCutoffStr
 	} else if len(s.packets) > 0 {
 		s.oldestLoaded = s.packets[0].FirstSeen
+	}
+
+	if maxPackets > 0 && totalInDB > len(s.packets) {
+		s.loadCapEdge = time.Now().UTC().Format(time.RFC3339)
 	}
 
 	s.loaded = true
@@ -1290,31 +1335,34 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 	var localMaxTxID int
 	var localMaxObsID int
 
-	for rows.Next() {
-		var txID int
-		var rawHex, hash, firstSeen, decodedJSON sql.NullString
-		var routeType, payloadType, payloadVersion sql.NullInt64
-		var obsID sql.NullInt64
-		var observerID, observerName, observerIATA, direction, pathJSON, obsTimestamp sql.NullString
-		var snr, rssi sql.NullFloat64
-		var score sql.NullInt64
-		var obsRawHex sql.NullString
-		var resolvedPathStr sql.NullString
-		var scopeName sql.NullString
+	// Scan overwrites every target on each row, so one set (and one
+	// argument slice) serves the whole loop instead of escaping per row.
+	var txID int
+	var rawHex, hash, firstSeen, decodedJSON sql.NullString
+	var routeType, payloadType, payloadVersion sql.NullInt64
+	var obsID sql.NullInt64
+	var observerID, observerName, observerIATA, direction, pathJSON, obsTimestamp sql.NullString
+	var snr, rssi sql.NullFloat64
+	var score sql.NullInt64
+	var obsRawHex sql.NullString
+	var resolvedPathStr sql.NullString
+	var scopeName sql.NullString
 
-		scanArgs := []interface{}{&txID, &rawHex, &hash, &firstSeen, &routeType, &payloadType,
-			&payloadVersion, &decodedJSON,
-			&obsID, &observerID, &observerName, &observerIATA, &direction,
-			&snr, &rssi, &score, &pathJSON, &obsTimestamp}
-		if s.db.hasObsRawHex {
-			scanArgs = append(scanArgs, &obsRawHex)
-		}
-		if s.db.hasResolvedPath {
-			scanArgs = append(scanArgs, &resolvedPathStr)
-		}
-		if s.db.hasScopeName {
-			scanArgs = append(scanArgs, &scopeName)
-		}
+	scanArgs := []interface{}{&txID, &rawHex, &hash, &firstSeen, &routeType, &payloadType,
+		&payloadVersion, &decodedJSON,
+		&obsID, &observerID, &observerName, &observerIATA, &direction,
+		&snr, &rssi, &score, &pathJSON, &obsTimestamp}
+	if s.db.hasObsRawHex {
+		scanArgs = append(scanArgs, &obsRawHex)
+	}
+	if s.db.hasResolvedPath {
+		scanArgs = append(scanArgs, &resolvedPathStr)
+	}
+	if s.db.hasScopeName {
+		scanArgs = append(scanArgs, &scopeName)
+	}
+
+	for rows.Next() {
 		if err := rows.Scan(scanArgs...); err != nil {
 			log.Printf("[store] loadChunk scan error: %v", err)
 			continue
@@ -3157,14 +3205,8 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			},
 		}
 		if tx.DecodedJSON != "" {
-			if payload := tx.ParsedDecoded(); payload != nil {
-				// Copy the cached map so broadcast consumers cannot mutate
-				// the shared cache or cause a data race (#1871 review).
-				cp := make(map[string]interface{}, len(payload))
-				for k, v := range payload {
-					cp[k] = v
-				}
-				decoded["payload"] = cp
+			if payload := broadcastPayload(tx); payload != nil {
+				decoded["payload"] = payload
 			}
 		}
 		// For TRACE packets, decode the full packet to include path.hopsCompleted
@@ -3431,14 +3473,8 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 			},
 		}
 		if tx.DecodedJSON != "" {
-			if payload := tx.ParsedDecoded(); payload != nil {
-				// Copy the cached map so broadcast consumers cannot mutate
-				// the shared cache or cause a data race (#1871 review).
-				cp := make(map[string]interface{}, len(payload))
-				for k, v := range payload {
-					cp[k] = v
-				}
-				decoded["payload"] = cp
+			if payload := broadcastPayload(tx); payload != nil {
+				decoded["payload"] = payload
 			}
 		}
 		// For TRACE packets, decode the full packet to include path.hopsCompleted
@@ -4006,45 +4042,48 @@ func (s *PacketStore) observerIATAs() map[string]string {
 // #804: feeds analytics region-attribution so a multi-byte repeater whose
 // flood adverts get relayed across regions is still attributed to its home.
 func (s *PacketStore) computeNodeHomeRegions(obsIATA map[string]string) map[string]string {
-	if len(obsIATA) == 0 {
-		return map[string]string{}
-	}
-
-	// Tally zero-hop direct ADVERT region observations per pubkey.
-	type tally struct {
-		counts map[string]int
-	}
-	per := make(map[string]*tally, 256)
-
-	for _, tx := range s.packets {
-		if tx.RawHex == "" || len(tx.RawHex) < 4 {
-			continue
+	counts := s.nodeZeroHopRegionCounts(obsIATA)
+	out := make(map[string]string, len(counts))
+	for pk, perIATA := range counts {
+		var bestIATA string
+		bestCount := 0
+		for iata, n := range perIATA {
+			if n > bestCount || (n == bestCount && iata < bestIATA) {
+				bestCount = n
+				bestIATA = iata
+			}
 		}
-		if tx.PayloadType == nil || *tx.PayloadType != PayloadADVERT {
+		if bestIATA != "" {
+			out[pk] = bestIATA
+		}
+	}
+	return out
+}
+
+// nodeZeroHopRegionCounts tallies, per pubkey, how many observations of its
+// zero-hop DIRECT adverts each region's observers made (the #804 rule; see
+// computeNodeHomeRegions). Nodes without such an advert are absent. Caller
+// must hold s.mu (read or write); obsIATA is loaded before it, as above.
+func (s *PacketStore) nodeZeroHopRegionCounts(obsIATA map[string]string) map[string]map[string]int {
+	per := make(map[string]map[string]int, 256)
+	if len(obsIATA) == 0 {
+		return per
+	}
+	// Adverts only: the full packet list is mostly other traffic.
+	for _, tx := range s.byPayloadType[PayloadADVERT] {
+		if tx.RawHex == "" || len(tx.RawHex) < 4 {
 			continue
 		}
 		if tx.DecodedJSON == "" {
 			continue
 		}
-		header, err := strconv.ParseUint(tx.RawHex[:2], 16, 8)
-		if err != nil {
+		// Transport-direct carries four transport-code bytes before the
+		// path byte; PathByte reads it at the right offset (#2225).
+		routeType, pathByte, ok := packetpath.PathByte(tx.RawHex)
+		if !ok || (routeType != RouteDirect && routeType != RouteTransportDirect) {
 			continue
 		}
-		routeType := header & 0x03
-		if routeType != uint64(RouteDirect) && routeType != uint64(RouteTransportDirect) {
-			continue
-		}
-		// Path byte index — for direct/transport-direct it's at offset 1
-		// (matches the analytics decoder's pathByteIdx logic).
-		if len(tx.RawHex) < 4 {
-			continue
-		}
-		pathByte, err := strconv.ParseUint(tx.RawHex[2:4], 16, 8)
-		if err != nil {
-			continue
-		}
-		hopCount := pathByte & 0x3F
-		if hopCount != 0 {
+		if pathByte&0x3F != 0 {
 			continue
 		}
 
@@ -4058,30 +4097,14 @@ func (s *PacketStore) computeNodeHomeRegions(obsIATA map[string]string) map[stri
 			if iata == "" {
 				continue
 			}
-			t := per[pk]
-			if t == nil {
-				t = &tally{counts: map[string]int{}}
-				per[pk] = t
+			if per[pk] == nil {
+				per[pk] = map[string]int{}
 			}
-			t.counts[iata]++
+			per[pk][iata]++
 		}
 	}
 
-	out := make(map[string]string, len(per))
-	for pk, t := range per {
-		var bestIATA string
-		bestCount := 0
-		for iata, n := range t.counts {
-			if n > bestCount || (n == bestCount && iata < bestIATA) {
-				bestCount = n
-				bestIATA = iata
-			}
-		}
-		if bestIATA != "" {
-			out[pk] = bestIATA
-		}
-	}
-	return out
+	return per
 }
 
 // enrichObsRPJob returns a map with observation fields + transmission fields,
@@ -5178,6 +5201,9 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 	// First pass: remove from primary indexes (byHash, byTxID, byObsID),
 	// collect IDs for batch secondary index cleanup, and handle non-index work
 	for _, tx := range evicting {
+		if tx.FirstSeen > s.evictedThrough {
+			s.evictedThrough = tx.FirstSeen
+		}
 		delete(s.byHash, tx.Hash)
 		delete(s.byTxID, tx.ID)
 		// Its record of indexed resolved keys goes with it (#2108), so the
@@ -8653,25 +8679,8 @@ func (s *PacketStore) computeAnalyticsHashSizes(region, area string) map[string]
 		}
 
 		// Parse header and path byte
-		if len(tx.RawHex) < 4 {
-			continue
-		}
-		header, err := strconv.ParseUint(tx.RawHex[:2], 16, 8)
-		if err != nil {
-			continue
-		}
-		routeType := header & 0x03
-		pathByteIdx := 1
-		if routeType == 0 || routeType == 3 {
-			pathByteIdx = 5
-		}
-		hexStart := pathByteIdx * 2
-		hexEnd := hexStart + 2
-		if hexEnd > len(tx.RawHex) {
-			continue
-		}
-		actualPathByte, err := strconv.ParseUint(tx.RawHex[hexStart:hexEnd], 16, 8)
-		if err != nil {
+		routeType, actualPathByte, ok := packetpath.PathByte(tx.RawHex)
+		if !ok {
 			continue
 		}
 
@@ -8747,7 +8756,7 @@ func (s *PacketStore) computeAnalyticsHashSizes(region, area string) map[string]
 			// deliberate size declaration; keep it. Same rule as
 			// computeNodeHashSizeInfo. Skipped packets still count and still
 			// update lastSeen.
-			isUndeclaredZeroHop := (routeType == uint64(RouteDirect) || routeType == uint64(RouteTransportDirect)) && actualPathByte == 0x00
+			isUndeclaredZeroHop := (routeType == RouteDirect || routeType == RouteTransportDirect) && actualPathByte == 0x00
 			if byNode[pk] == nil {
 				role := nodeRoleByPK[pk] // empty if unknown
 				initHS := hashSize
@@ -9337,25 +9346,10 @@ func (s *PacketStore) computeNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
 		if tx.RawHex == "" || tx.DecodedJSON == "" {
 			continue
 		}
-		if len(tx.RawHex) < 4 {
-			continue
-		}
-		header, err := strconv.ParseUint(tx.RawHex[:2], 16, 8)
-		if err != nil {
-			continue
-		}
-		routeType := int(header & 0x03)
 		// Transport routes (0, 3) have 4 transport code bytes before the path
 		// byte, so the path byte is at offset 5 instead of 1.
-		pbOffset := 1
-		if routeType == RouteTransportFlood || routeType == RouteTransportDirect {
-			pbOffset = 5
-		}
-		if len(tx.RawHex) < (pbOffset+1)*2 {
-			continue
-		}
-		pathByte, err := strconv.ParseUint(tx.RawHex[pbOffset*2:pbOffset*2+2], 16, 8)
-		if err != nil {
+		routeType, pathByte, ok := packetpath.PathByte(tx.RawHex)
+		if !ok {
 			continue
 		}
 		// Direct zero-hop adverts carry no path, so the hop count is 0. Whether
@@ -9681,22 +9675,8 @@ func (s *PacketStore) computeMultiByteCapability(adopterHashSizes map[string]int
 			if tx.PayloadType != nil && *tx.PayloadType == 8 {
 				continue
 			}
-			header, err := strconv.ParseUint(tx.RawHex[:2], 16, 8)
-			if err != nil {
-				continue
-			}
-			routeType := header & 0x03
-			pathByteIdx := 1
-			if routeType == 0 || routeType == 3 {
-				pathByteIdx = 5
-			}
-			hexStart := pathByteIdx * 2
-			hexEnd := hexStart + 2
-			if hexEnd > len(tx.RawHex) {
-				continue
-			}
-			actualPathByte, err := strconv.ParseUint(tx.RawHex[hexStart:hexEnd], 16, 8)
-			if err != nil {
+			_, actualPathByte, ok := packetpath.PathByte(tx.RawHex)
+			if !ok {
 				continue
 			}
 			hs := int((actualPathByte>>6)&0x3) + 1
@@ -10088,7 +10068,7 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 	}, nil
 }
 
-// nodeTxsSince returns the node's transmissions first seen after fromISO,
+// nodeTxsSince returns the node's transmissions first seen at or after fromISO,
 // from the byNode index (sender, recipient and resolved relay hops).
 // Raw JSON text search is intentionally avoided: a GRP_TXT packet whose message
 // text contains a node's pubkey is not a packet *for* that node.
@@ -10096,11 +10076,74 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 func (s *PacketStore) nodeTxsSince(pubkey, fromISO string) []*StoreTx {
 	var packets []*StoreTx
 	for _, p := range s.byNode[pubkey] {
-		if p.FirstSeen > fromISO {
+		if p.FirstSeen >= fromISO {
 			packets = append(packets, p)
 		}
 	}
 	return packets
+}
+
+// coverageSlack is how far the window edge may lie after the requested
+// start before a range counts as partial.
+const coverageSlack = time.Minute
+
+// minCoveredHours is the shortest covered window that yields availability
+// and packets/day. Below it the rates are extrapolation (5 packets in 6 min
+// read as 1200/day) and a partial first hour bucket weighs heavily. A
+// repeater floods an advert every 12 h by default (firmware docs/faq.md), so
+// a day holds at least two of them.
+const minCoveredHours = 24.0
+
+// Why the covered window starts after the requested range (#748).
+const (
+	coverageDatabase = "database" // everything since the oldest packet is held
+	coverageLoading  = "loading"  // the background loader has not reached it yet
+	coverageMemory   = "memory"   // retention, memory eviction or the load cap
+)
+
+// coverageStart returns from when the in-memory store holds every
+// transmission and why, or the zero time when that is not limited (#748).
+// It is the latest of the background-load progress (oldestLoaded), the
+// retention window, what eviction has removed and where a capped startup
+// load ended. s.packets[0] alone is not that edge: a transmission heard
+// again recently keeps its old FirstSeen and is loaded with the recent chunk
+// (see mergeChunkIntoPackets); it only stands for the database start when
+// no other edge lies later.
+// Must be called with s.mu held.
+func (s *PacketStore) coverageStart(now time.Time) (time.Time, string) {
+	var start time.Time
+	reason := ""
+	consider := func(t time.Time, why string) {
+		if t.After(start) {
+			start, reason = t, why
+		}
+	}
+	if t, ok := parseStoreTime(s.oldestLoaded); ok {
+		why := coverageDatabase
+		if s.hotStartupHours > 0 && !s.backgroundLoadDone.Load() {
+			why = coverageLoading
+		}
+		consider(t, why)
+	}
+	if s.retentionHours > 0 {
+		consider(now.Add(-time.Duration(s.retentionHours*float64(time.Hour))), coverageMemory)
+	}
+	for _, v := range []string{s.evictedThrough, s.loadCapEdge} {
+		if t, ok := parseStoreTime(v); ok {
+			consider(t, coverageMemory)
+		}
+	}
+	return start, reason
+}
+
+// parseStoreTime parses a StoreTx FirstSeen, which is RFC3339 or, for rows
+// written by older ingestors, "2006-01-02 15:04:05" (UTC).
+func parseStoreTime(s string) (time.Time, bool) {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t, err = time.Parse("2006-01-02 15:04:05", s)
+	}
+	return t, err == nil
 }
 
 // GetNodeAnalytics computes analytics for a single node using in-memory byNode index.
@@ -10110,14 +10153,33 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 		return nil, err
 	}
 
-	fromTime := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+	// UTC: FirstSeen is stored as UTC and compared as a string, so a local
+	// offset (+02:00) would shift the window on a non-UTC host.
+	now := time.Now().UTC()
+	fromTime := now.Add(-time.Duration(days) * 24 * time.Hour)
 	fromISO := fromTime.Format(time.RFC3339)
-	toISO := time.Now().Format(time.RFC3339)
+	toISO := now.Format(time.RFC3339)
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	packets := s.nodeTxsSince(pubkey, fromISO)
+	// #748: the store only holds its in-memory window. When that starts
+	// after the requested range, count only what lies inside it and take
+	// the rates over it; dividing by the full range turned an 89% available
+	// node into 3.5% under "All". Older transmissions still in memory
+	// (re-heard, so loaded with a recent chunk) are left out too, or they
+	// show up as lone buckets weeks before the window.
+	coveredFrom := fromTime
+	dataFrom, dataFromReason := "", ""
+	// One now for both edges, and a minute of slack: with retentionHours
+	// equal to the range the edges coincide, and a hair's difference must
+	// not mark a full range partial (it did on staging, 168h vs 7d).
+	if cs, why := s.coverageStart(now); cs.After(fromTime.Add(coverageSlack)) {
+		coveredFrom = cs
+		dataFrom, dataFromReason = cs.Format(time.RFC3339), why
+	}
+	packets := s.nodeTxsSince(pubkey, coveredFrom.Format(time.RFC3339))
+	coveredHours := now.Sub(coveredFrom).Hours()
 
 	// Activity timeline (hourly buckets)
 	timelineBuckets := map[string]int{}
@@ -10318,12 +10380,9 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	// Uptime heatmap
 	heatBuckets := map[string]*HeatmapCell{}
 	for _, p := range packets {
-		t, err := time.Parse(time.RFC3339, p.FirstSeen)
-		if err != nil {
-			t, err = time.Parse("2006-01-02 15:04:05", p.FirstSeen)
-			if err != nil {
-				continue
-			}
+		t, ok := parseStoreTime(p.FirstSeen)
+		if !ok {
+			continue
 		}
 		dow := int(t.UTC().Weekday())
 		hr := t.UTC().Hour()
@@ -10341,18 +10400,12 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	// Computed stats
 	totalPackets := len(packets)
 	distinctHours := len(activityTimeline)
-	totalHours := float64(days) * 24
-	availabilityPct := 0.0
-	if totalHours > 0 {
-		availabilityPct = round(float64(distinctHours)*100.0/totalHours, 1)
-		if availabilityPct > 100 {
-			availabilityPct = 100
-		}
-	}
-
-	var avgPacketsPerDay float64
-	if days > 0 {
-		avgPacketsPerDay = round(float64(totalPackets)/float64(days), 1)
+	// Null under minCoveredHours: too short a window to extrapolate from.
+	var availabilityPct, avgPacketsPerDay *float64
+	if coveredHours >= minCoveredHours {
+		avail := math.Min(round(float64(distinctHours)*100.0/coveredHours, 1), 100)
+		perDay := round(float64(totalPackets)*24/coveredHours, 1)
+		availabilityPct, avgPacketsPerDay = &avail, &perDay
 	}
 
 	// Longest silence
@@ -10423,7 +10476,7 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 
 	return &NodeAnalyticsResponse{
 		Node:                node,
-		TimeRange:           TimeRangeResp{From: fromISO, To: toISO, Days: days},
+		TimeRange:           TimeRangeResp{From: fromISO, To: toISO, Days: days, DataFrom: dataFrom, DataFromReason: dataFromReason, Partial: dataFrom != ""},
 		ActivityTimeline:    activityTimeline,
 		SnrTrend:            snrTrend,
 		PacketTypeBreakdown: packetTypeBreakdown,

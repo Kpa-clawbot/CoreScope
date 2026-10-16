@@ -297,6 +297,10 @@
     "OAK": "Oakland, US",
     "MRY": "Monterey, US"
   },
+  "_comment_regionFallback": "#1879: how the /api/nodes ?region= filter places a node no observer has heard zero-hop (a direct, unrelayed advert). It goes in the regions that heard it in the fewest hops, or in no region when even that is more than maxHops (default 3; 0 places only nodes heard over an empty path). A node in no region still shows with All regions. Each node's region_placement says which rule placed it.",
+  "regionFallback": {
+    "maxHops": 3
+  },
   "cacheTTL": {
     "stats": 10,
     "nodeDetail": 300,
@@ -363,6 +367,13 @@
   },
   "knownChannelsUrl": "",
   "knownChannelsRefreshMs": 86400000,
+  "rfParams": {
+    "nodesUrl": "",
+    "presetsUrl": "",
+    "refreshHours": 6,
+    "maxAgeDays": 7,
+    "_comment": "Issue #1268. OPT-IN LoRa radio settings (frequency, SF, bandwidth, coding rate) per node, which never travel in packets. Empty nodesUrl (default) = DISABLED: nothing is fetched and /api/rf-params reports enabled=false. To enable set nodesUrl to \"https://map.meshcore.io/api/v1/nodes\" and presetsUrl to \"https://api.meshcore.nz/api/v1/config\" (named presets; optional). The map payload is about 50 MB of JSON (17 MB gzipped); it is fetched after a random 0-60 s startup delay and then every refreshHours, stream-decoded with a 128 MB cap, validated per field, and kept in memory only for adverts younger than maxAgeDays. A failed fetch keeps the previous data; until the first fetch succeeds it is retried after 1, 2, 4, 8 and 16 min, then every 30 min. Adverts dated more than 10 min in the future are dropped. Shown in the node detail panel and on the full node page."
+  },
   "_comment_knownChannels": "Issue #1323. OPT-IN community-maintained hashtag-channels catalogue. Empty string (default) = DISABLED: no background HTTP fetch is started and GET /api/known-channels returns an empty snapshot. To enable, set knownChannelsUrl to a pinned-SHA URL such as \"https://raw.githubusercontent.com/marcelverdult/meshcore-channels/072bc25b6fc983aa2aa7e9d399a97a5f4899ea71/channels-by-country.json\". The URL should point at the channels-by-country.json shape: {generated_at, license, countries:{cc:[{channel,description,key?}]}}. Always pin to a specific commit SHA (not the moving 'main' branch) so a hostile or compromised future upstream commit cannot be silently fetched by your deployment; periodically bump the pin after reviewing upstream diffs. Fetched in the background every knownChannelsRefreshMs (default 86400000 = 24h). Stored in-memory only — no DB, no disk cache. Surfaced over GET /api/known-channels?region=XX. Cache is fail-soft: a failed refresh keeps the last-known snapshot in place. No credentials are sent.",
   "batteryThresholds": {
     "lowMv": 3300,

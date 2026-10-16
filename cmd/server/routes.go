@@ -146,6 +146,10 @@ type Server struct {
 	// when nil the /api/known-channels endpoint returns an empty snapshot.
 	knownChannels *knownChannelsCache
 
+	// LoRa RF parameters from the MeshCore map (issue #1268). Nil unless
+	// rfParams.nodesUrl is configured.
+	rfParams *rfParamsCache
+
 	// Optional user management (docs/specs/2026-10-06-user-management-design.md).
 	// Nil unless userManagement.enabled; see initUserManagement.
 	auth *authService
@@ -370,6 +374,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/channels/{hash}/messages", s.handleChannelMessages).Methods("GET")
 	r.HandleFunc("/api/channels", s.handleChannels).Methods("GET")
 	r.HandleFunc("/api/known-channels", s.handleKnownChannels).Methods("GET")
+	r.HandleFunc("/api/rf-params", s.handleRfParams).Methods("GET")
 	r.HandleFunc("/api/observers/metrics/summary", s.handleMetricsSummary).Methods("GET")
 	r.HandleFunc("/api/observers/{id}/metrics", s.handleObserverMetrics).Methods("GET")
 	r.HandleFunc("/api/observers/{id}/analytics", s.handleObserverAnalytics).Methods("GET")
@@ -1617,11 +1622,14 @@ func (s *Server) buildNodesResponse(r *http.Request) (NodeListResponse, error) {
 		// traffic into the composite (the other three axes are already
 		// max-normalized; #1762 review).
 		maxUseful := maxFloat(usefulMap)
+		// #1879: which rule places each node for ?region=. Atomic snapshot.
+		placements := s.store.GetNodeRegionPlacements()
 		for _, node := range nodes {
 			if pk, ok := node["public_key"].(string); ok {
 				EnrichNodeWithHashSize(node, hashInfo[pk])
 				mbEntry, _ := s.store.GetMultibyteCapFor(pk)
 				EnrichNodeWithMultiByte(node, mbEntry)
+				node["region_placement"] = RegionPlacementFor(placements, pk)
 				if role, _ := node["role"].(string); role == "repeater" || role == "room" {
 					info, _ := lookupRelayInfo(relayMap, pk)
 					info.WindowHours = relayWindow
@@ -1828,6 +1836,7 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 		EnrichNodeWithHashSize(node, hashInfo[pubkey])
 		mbEntry, _ := s.store.GetMultibyteCapFor(pubkey)
 		EnrichNodeWithMultiByte(node, mbEntry)
+		node["region_placement"] = RegionPlacementFor(s.store.GetNodeRegionPlacements(), pubkey)
 		if role, _ := node["role"].(string); role == "repeater" || role == "room" {
 			ht := s.cfg.GetHealthThresholds()
 			info := s.store.GetRepeaterRelayInfo(pubkey, ht.RelayActiveHours)

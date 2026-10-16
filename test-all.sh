@@ -103,7 +103,9 @@ node tests/unit/test-issue-1509-nav-active-bg.js
 node tests/unit/test-issue-1518-home-url.js
 node tests/unit/test-issue-1532-live-fullscreen.js
 node tests/unit/test-issue-1562-observers-summary.js
+node tests/unit/test-issue-748-node-analytics-coverage.js
 node tests/unit/test-issue-661-observer-airtime.js
+node tests/unit/test-issue-1268-rf-params.js
 node tests/unit/test-issue-1563-aggregate-and-inflight.js
 node tests/unit/test-issue-1574-live-map-max-nodes.js
 node tests/unit/test-issue-1606-pagination.js
@@ -150,6 +152,7 @@ node tests/unit/test-issue-2012-clear-filters-selection.js
 node tests/unit/test-issue-2095-channels-client-state.js
 node tests/unit/test-issue-2097-hop-ambiguity-badge.js
 node tests/unit/test-issue-2098-last-hop-region.js
+node tests/unit/test-issue-2206-payload-badge.js
 node tests/unit/test-live-anims.js
 node tests/unit/test-live-dt-cap-1524.js
 node tests/unit/test-live-legend-helper.js

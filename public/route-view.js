@@ -227,6 +227,14 @@
     return '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#' + name + '"/></svg>';
   }
 
+  // #2206 — the "from payload" chip marks rows whose name was decoded from
+  // the packet payload (1-byte sender/recipient hashes), not from the outer
+  // path bytes. Shared by the canonical row builder and the isolated-path
+  // row builder so the markup can't drift apart.
+  function payloadChip(p) {
+    return p._fromPayload ? ' <span class="mc-rt-status-chip mc-rt-status-payload" title="Sender/recipient decoded from packet payload (not from outer path bytes)">from payload</span>' : '';
+  }
+
   function buildSidebar(positions, mapRef, layer, edges, markers, opts) {
     opts = opts || {};
     var total = positions.length;
@@ -286,11 +294,9 @@
       // encoded in decoded.srcHash/destHash) are visually distinct from hops
       // derived from path_json (the floodband repeaters). Operator confusion:
       // PATH packets show both, but packet-detail page only shows the inner
-      // path. Marking with a chip makes the layering explicit.
-      var payloadBadge = '';
-      if (p._fromPayload) {
-        payloadBadge = ' <span class="mc-rt-status-chip mc-rt-status-payload" title="Sender/recipient decoded from packet payload (not from outer path bytes)">from payload</span>';
-      }
+      // path. Marking with a chip makes the layering explicit — the chip
+      // markup lives in payloadChip() so both row builders share it.
+      var payloadBadge = payloadChip(p);
       var unresolved = p.resolved === false ? ' mc-rt-unresolved' : '';
       // Stripe color: incoming edge color (idx-1) for non-origin, outgoing for origin.
       var stripeIdx = idx === 0 ? 0 : (idx - 1);
@@ -819,12 +825,13 @@
           var pinned = idx === 0 ? 'origin' : (idx === iso.length - 1 ? 'dest' : '');
           var glyph = roleGlyph(p.role);
           var name = escapeHtml(p.name || (p.pubkey ? String(p.pubkey).slice(0,8) : '?'));
+          var payloadBadge = payloadChip(p);
           var stripeColor = iso.length > 1 ? rampColor(idx === 0 ? 0 : idx - 1, iso.length - 1) : 'transparent';
           return '<li class="mc-rt-row mc-rt-row-iso ' + pinned + '" tabindex="0" style="--mc-rt-row-color:' + stripeColor + '">' +
             '<span class="mc-rt-stripe" aria-hidden="true"></span>' +
             '<span class="mc-rt-seq">' + (idx + 1) + '</span>' +
             '<span class="mc-rt-glyph" title="' + (p.role || '?') + '">' + glyph + '</span>' +
-            '<span class="mc-rt-name">' + name + '</span>' +
+            '<span class="mc-rt-name">' + name + payloadBadge + '</span>' +
             '<span class="mc-rt-distlabel">' + distLabel + '</span>' +
             '<div class="mc-rt-distbar-wrap">' + distBar + '</div>' +
             '</li>';

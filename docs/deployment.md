@@ -78,6 +78,8 @@ docker run -d --name corescope \
 | `-e DISABLE_MOSQUITTO=true` | No | Skip the internal Mosquitto broker (use your own) |
 | `-e DISABLE_CADDY=true` | No | Skip the built-in Caddy reverse proxy |
 | `-e MQTT_BROKER=mqtt://host:1883` | No | Override MQTT broker URL |
+| `-e RUN_AS_UID=1000` | No | Run the Go services as this uid instead of root — see [Running the Go services unprivileged](#running-the-go-services-unprivileged) |
+| `-e RUN_AS_GID=1000` | No | Group for `RUN_AS_UID` (defaults to it) |
 
 #### `/app/data/.env` convenience file
 
@@ -91,6 +93,19 @@ MQTT_BROKER=mqtt://my-broker:1883
 ```
 
 The entrypoint sources this file before starting services. This works with any launch method (`docker run`, compose, or manage.sh).
+
+Two exceptions, both because the entrypoint runs this file as root from a
+directory the Go services can write once they run unprivileged:
+
+- `RUN_AS_UID` and `RUN_AS_GID` are never taken from `.env`. Set them with
+  `-e` or in compose's `environment:`.
+- With `RUN_AS_UID` set, `.env` is read only if it is owned by root and
+  writable by no one else (`sudo chown root:root .env && sudo chmod 644 .env`).
+  Otherwise the log says it was skipped, and why. "Owned by root" means uid 0
+  inside the container. With rootless Docker or a user-namespace remap
+  (`userns-remap`), host root is not that uid: look at the owner the container
+  reports (`docker exec <container> stat -c '%u' /app/data/.env`) and give the host
+  file whichever owner id maps to container uid 0.
 
 ### Docker Compose (legacy alternative)
 
@@ -141,6 +156,84 @@ docker run -d --name corescope ... # same flags as before
 ```
 
 Data is preserved in the volume — updates are non-destructive.
+
+### Running the Go services unprivileged
+
+`corescope-server` and `corescope-ingestor` can run as a normal user instead of
+root, so that a code-execution bug in either one does not land as root in a
+container that has your data directory and `config.json` mounted. `supervisord`
+itself stays root, because mosquitto and caddy still need to bind their ports.
+
+It is opt-in, with `RUN_AS_UID`:
+
+| `RUN_AS_UID` | Services run as |
+|--------------|-----------------|
+| unset (the default) | root — as in earlier releases |
+| set | `RUN_AS_UID` / `RUN_AS_GID` |
+
+Nothing about an upgrade changes until you set it: the container does not pick a
+uid for you, and does not change the owner of anything on your host. That is
+deliberate rather than cautious. Every release before this one ran as root, so
+the `meshcore.db` in your data directory — with its `-wal` and `-shm`, `users.db`
+and the backups beside them — is root-owned. Switching user without also handing
+those files over leaves the services unable to write the database, so the switch
+has to be something you ask for.
+
+**To turn it on**, pick the uid you want and restart. Setting `RUN_AS_UID` is
+taken as permission to `chown` the data directory, and what an earlier root-run
+container left in it, to that uid. This happens at every start, so a file
+created there later as root (with `docker exec`, say) is handed over at the
+next restart:
+
+```bash
+docker run -d --name corescope \
+  -e RUN_AS_UID=1000 -e RUN_AS_GID=1000 \
+  -v /your/data:/app/data \
+  ... # same flags as before
+  ghcr.io/kpa-clawbot/corescope:latest
+```
+
+Check which user it picked:
+
+```bash
+docker logs corescope 2>&1 | grep '\[entrypoint\] Go services run as'
+# [entrypoint] Go services run as corescope (uid=1000 gid=1000)
+```
+
+If you would rather the container never `chown` anything, do the hand-over
+yourself first. Then there is nothing left for it to change:
+
+```bash
+docker stop corescope
+sudo chown -R 1000:1000 /your/data     # uid of your own account is usually 1000
+docker start corescope                 # with RUN_AS_UID=1000 set as above
+```
+
+To go back, unset `RUN_AS_UID` and `chown -R root:root /your/data`.
+
+Notes:
+
+- `RUN_AS_GID` defaults to `RUN_AS_UID` when omitted. `RUN_AS_UID=0` is the
+  same as leaving it unset.
+- If the uid already belongs to another account inside the image (`caddy` is
+  uid 100, `mosquitto` 101), that account is used as it is, keeping its own
+  group, and the log says so. Pick a different uid if you need `RUN_AS_GID`
+  honoured.
+- With `RUN_AS_UID` set to a uid the container cannot use, startup fails rather
+  than quietly falling back to root.
+- What the hand-over leaves alone: anything mounted into the data directory on
+  its own, such as `-v ./config.json:/app/data/config.json:ro`, which keeps the
+  owner it has on your host (make sure the uid can read it), and `.env` (see
+  above). Each mount it skips is named in the log.
+- If the hand-over cannot change a file, for example on NFS with
+  `root_squash`, the log says how many and which. Fix their owner on the host.
+- `/app` stays root's. The services write only to the data directory and
+  `/tmp`.
+- A fresh install is root-owned and so starts as root, like any other. Set
+  `RUN_AS_UID` from the first run to avoid a hand-over later.
+
+The uid selection lives in `docker/select-service-user.sh`, with its branches
+covered by `docker/test-select-service-user.sh`.
 
 ---
 

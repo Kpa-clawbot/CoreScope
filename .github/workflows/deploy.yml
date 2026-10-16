@@ -242,6 +242,9 @@ jobs:
       - name: Staging disk-monitor unit tests (issue #1684)
         run: bash scripts/staging/test-disk-monitor.sh
 
+      - name: Container service-user selection unit tests
+        run: bash docker/test-select-service-user.sh
+
       - name: QA SQL parameter-binding unit tests (issue #1977)
         run: bash qa/scripts/test-blacklist-sql.sh
 
@@ -583,8 +586,10 @@ jobs:
           suite 2 test-map-nodes-pagination-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-observer-iata-1188-e2e.js BASE_URL=$B
           suite 2 test-issue-1639-observers-sort-e2e.js BASE_URL=$B
+          suite 2 test-issue-748-node-analytics-coverage-e2e.js BASE_URL=$B
           suite 2 test-issue-661-airtime-e2e.js BASE_URL=$B
           suite 2 test-health-status-e2e.js BASE_URL=$B
+          suite 2 test-issue-1268-rf-params-e2e.js BASE_URL=$B
           suite 2 test-issue-1758-ng-filter-rerenders-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-nav-fluid-1055-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-nav-priority-1102-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B

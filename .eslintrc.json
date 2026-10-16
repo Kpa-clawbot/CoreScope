@@ -39,6 +39,7 @@
     "MeshConfigReady": "readonly",
     "NodeHopAnalytics": "readonly",
     "ObserverAirtime": "readonly",
+    "RfParams": "readonly",
     "PAYLOAD_COLORS": "readonly",
     "PAYLOAD_TYPES": "readonly",
     "PERF_SLOW_MS": "readonly",
