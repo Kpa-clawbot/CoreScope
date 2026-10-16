@@ -235,9 +235,18 @@
     return p._fromPayload ? ' <span class="mc-rt-status-chip mc-rt-status-payload" title="Sender/recipient decoded from packet payload (not from outer path bytes)">from payload</span>' : '';
   }
 
+  // #2206 follow-up — the "N hops" figures count only true hops: the
+  // payload-decoded sender/recipient rows are endpoints, not hops, so a
+  // 6-relay DM reads "6 hops" instead of 8 rows. Shared by the desktop
+  // header and the mobile summary so they can't disagree.
+  function countHops(positions) {
+    return positions.filter(function (p) { return !p._fromPayload; }).length;
+  }
+
   function buildSidebar(positions, mapRef, layer, edges, markers, opts) {
     opts = opts || {};
     var total = positions.length;
+    var hopCount = countHops(positions);
     // Compute hop distances
     var dists = [], maxDist = 0;
     for (var i = 1; i < total; i++) {
@@ -439,7 +448,7 @@
           '<div class="mc-rt-title">Route</div>' +
           backLink +
         '</div>' +
-        '<div class="mc-rt-meta">' + total + ' hops · ' + totalKm + ' km' +
+        '<div class="mc-rt-meta">' + hopCount + ' hops · ' + totalKm + ' km' +
           (unresolvedCount ? ' · ' + unresolvedCount + ' unresolved' : '') +
         '</div>' +
         contextBlock +
@@ -495,7 +504,7 @@
       }
     } catch (e) { console.warn('[route-view]', e); }
     summaryLine = (typeTag ? '<b>' + escapeHtml(typeTag) + '</b> · ' : '') +
-                  total + ' hops · ' + totalKm + ' km' +
+                  hopCount + ' hops · ' + totalKm + ' km' +
                   (multiPath ? ' · ' + totalObservers + ' obs' : '') +
                   (hexRoute ? '<br><span class="mc-rt-mobile-hex">' + escapeHtml(hexRoute) + '</span>' : '');
     sidebar.innerHTML =
