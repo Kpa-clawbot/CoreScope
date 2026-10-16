@@ -230,6 +230,7 @@
     "getFavorites": "readonly",
     "getHashParams": "readonly",
     "getHealthThresholds": "readonly",
+    "getHealthStatus": "readonly",
     "getNodeStatus": "readonly",
     "getParsedDecoded": "readonly",
     "getParsedPath": "readonly",
