@@ -122,7 +122,7 @@ Payload — meshcoretomqtt-compatible packet, plus a `gps` object:
 ### Region answers — `meshcore/client/{PUBLIC_KEY}/regions`
 
 CoreDrive RX can also ask a repeater it hears directly which regions it is configured to flood, and
-publishes the answer here. It is accepted under the same `clientRxCoverage.enabled` switch and lands
+publishes the answer here. It is accepted only when `clientRegions.enabled` is set (`cmd/ingestor/main.go`) and lands
 in `node_declared_regions`, which the Scope Audit page and the `autoRegionKeys` tier read alongside
 the observer `/neighbors` source (`nodes.configured_scope`). Newest answer per repeater wins across
 both, by the answer's own `timestamp`, so a buffered upload arriving late cannot overwrite a fresher
