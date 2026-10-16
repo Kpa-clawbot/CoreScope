@@ -182,9 +182,11 @@ set; it lands in `client_node_names`.
 #### Estimated positions
 
 A repeater known only from `/names` has no advert, so no position of its own. `GET
-/api/nodes/reported` lists every such repeater (no advert position in `nodes` or `inactive_nodes`),
-and the map draws an estimated position for the ones it can place. The **Estimated positions**
-toggle under Display shows or hides them (on by default).
+/api/nodes/reported` lists every such repeater: no row in `nodes` or `inactive_nodes`, and at least
+one `discover` or `advert` reception keyed by its pubkey, so a name sent for a repeater nobody
+heard is not listed. The map draws an estimated position for the ones it can place. The **Estimated positions**
+toggle under Display shows or hides them (on by default). The endpoint answers 404 when
+`clientRxCoverage.enabled` is off.
 
 - **Which receptions count:** rows in `client_receptions` that certainly heard this repeater
   directly. Those are `discover` and `advert` rows keyed by its full pubkey or 8-byte prefix, and
