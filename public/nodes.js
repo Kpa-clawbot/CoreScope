@@ -1114,6 +1114,20 @@
       // stays "Loading…" forever and there's no link back to the Nodes list.
       const msg = (e && e.message) || '';
       const is404 = /\b404\b/.test(msg) || /not\s*found/i.test(msg);
+      // A repeater known only from its reported name has no /api/nodes row.
+      // Checked before the title changes, so it never flashes "not found".
+      if (is404 && window.ReportedNodes) {
+        const rep = await window.ReportedNodes.load();
+        const hit = window.ReportedNodes.find(rep.nodes, pubkey);
+        if (document.getElementById('nodeFullBody') !== body) return;
+        if (hit) {
+          const t = document.querySelector('.node-full-title');
+          if (t) t.textContent = (hit.name || hit.pubkey.slice(0, 12)) + ' (self-reported)';
+          removeDetailMap(body);
+          body.innerHTML = window.ReportedNodes.detailHtml(hit, rep.method);
+          return;
+        }
+      }
       const titleEl = document.querySelector('.node-full-title');
       if (titleEl) {
         titleEl.textContent = is404
@@ -1513,7 +1527,8 @@
           <th scope="col" data-sort-key="advert_count" data-sort-default="desc" data-priority="2">Adverts</th>
         </tr></thead>
         <tbody id="nodesBody"></tbody>
-      </table></div>`;
+      </table></div>
+      <div id="reportedSection"></div>`;
 
     // Tab clicks
     const nodeTabs = document.getElementById('nodeTabs');
@@ -1620,7 +1635,31 @@
     renderRows();
   }
 
+  // renderReported lists repeaters known only from their reported name
+  // (reported-nodes.js) under the table, on the All and Repeaters tabs, with
+  // the same search text applied.
+  // renderRows runs on every sort, select and refresh, so the section is only
+  // rebuilt when the element, the tab, the search text or the list changed.
+  let reportedShown = null; // { el, tab, q, nodes }
+  function reportedTab() { return activeTab === 'all' || activeTab === 'repeater'; }
+  function renderReported() {
+    const el = document.getElementById('reportedSection');
+    if (!el || !window.ReportedNodes) return;
+    if (!reportedTab()) { el.innerHTML = ''; reportedShown = null; return; }
+    const q = search, tab = activeTab;
+    window.ReportedNodes.load().then(function (rep) {
+      const cur = document.getElementById('reportedSection');
+      // The tab or the search may have changed while the list loaded.
+      if (!cur || q !== search || tab !== activeTab || !reportedTab()) return;
+      const s = reportedShown;
+      if (s && s.el === cur && s.tab === tab && s.q === q && s.nodes === rep.nodes) return;
+      cur.innerHTML = window.ReportedNodes.sectionHtml(rep.nodes, rep.method, q);
+      reportedShown = { el: cur, tab: tab, q: q, nodes: rep.nodes };
+    });
+  }
+
   function renderRows() {
+    renderReported();
     const tbody = document.getElementById('nodesBody');
     if (!tbody) return;
 

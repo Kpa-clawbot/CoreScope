@@ -64,11 +64,11 @@ func (s *Server) heardKeyResolverFor(rows []coverageRow) nodeResolver {
 }
 
 // batchResolveHeardKeys resolves many heard_keys (2-3 byte prefixes or full
-// pubkeys) to their canonical (pubkey, name) in a single round-trip per chunk: a
-// UNION ALL of one LIMIT-2 prefix lookup each, so per-key work stays bounded
-// (2 rows) and the whole set costs one query, not N. A unique match returns
-// [pubkey, name]; unknown / ambiguous / blacklisted / hidden-prefix keys (#15,
-// #1181) return [heardKey, ""].
+// pubkeys) to their canonical (pubkey, name) in a single round-trip per chunk
+// (lookupPrefixes), so the whole set costs one query, not N. A unique match
+// returns [pubkey, name], where name falls back to the repeater's own reported
+// name (client_node_names) when nodes has none; unknown / ambiguous /
+// blacklisted / hidden-prefix keys (#15, #1181) return [heardKey, ""].
 func (s *Server) batchResolveHeardKeys(keys []string) map[string][2]string {
 	res := make(map[string][2]string, len(keys))
 	valid := make([]string, 0, len(keys))
@@ -84,60 +84,12 @@ func (s *Server) batchResolveHeardKeys(keys []string) map[string][2]string {
 		}
 		valid = append(valid, k)
 	}
-	// SQLITE_MAX_COMPOUND_SELECT is 500 by default; chunk well under it.
-	const chunk = 200
-	for i := 0; i < len(valid); i += chunk {
-		end := i + chunk
-		if end > len(valid) {
-			end = len(valid)
-		}
-		batch := valid[i:end]
-		parts := make([]string, len(batch))
-		args := make([]interface{}, 0, len(batch)*2)
-		for j, k := range batch {
-			// Parameterized: the prefix flows in as bound args, never interpolated,
-			// so this stays injection-safe regardless of how hexPrefixRe later
-			// evolves. The per-prefix LIMIT 2 lives in a subquery because a bare
-			// LIMIT on a UNION ALL term is a SQLite syntax error.
-			parts[j] = "SELECT * FROM (SELECT ? AS pfx, public_key, COALESCE(name,'') AS nm FROM nodes WHERE public_key LIKE ? LIMIT 2)"
-			args = append(args, k, k+"%")
-		}
-		rows, err := s.db.conn.Query(strings.Join(parts, " UNION ALL "), args...)
-		if err != nil {
-			// Don't fail the request, but don't fail silently either: a swallowed
-			// error here presents as "every name is ambiguous" with no signal.
-			log.Printf("WARN batchResolveHeardKeys: %v", err)
-			for _, k := range batch {
-				res[k] = [2]string{k, ""}
-			}
-			continue
-		}
-		type agg struct {
-			pk, name string
-			cnt      int
-		}
-		acc := map[string]*agg{}
-		for rows.Next() {
-			var pfx, pk, nm string
-			if err := rows.Scan(&pfx, &pk, &nm); err != nil {
-				continue
-			}
-			a := acc[pfx]
-			if a == nil {
-				a = &agg{}
-				acc[pfx] = a
-			}
-			a.cnt++
-			a.pk, a.name = pk, nm
-		}
-		rows.Close()
-		for _, k := range batch {
-			a := acc[k]
-			if a != nil && a.cnt == 1 && !s.cfg.IsBlacklisted(a.pk) && !s.cfg.IsNameHidden(a.name) {
-				res[k] = [2]string{a.pk, a.name}
-			} else {
-				res[k] = [2]string{k, ""}
-			}
+	hits := s.lookupPrefixes(valid)
+	for _, k := range valid {
+		if h, ok := hits[k]; ok && s.visible(h) {
+			res[k] = [2]string{h.pubkey, h.name}
+		} else {
+			res[k] = [2]string{k, ""}
 		}
 	}
 	return res

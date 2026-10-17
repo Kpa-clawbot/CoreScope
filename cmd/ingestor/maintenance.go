@@ -408,3 +408,32 @@ func extractPubkeyFromAnonReqJSON(s string) string {
 	}
 	return ""
 }
+
+// PruneOldClientNodeNames deletes node-name observation rows
+// (client_node_names) older than `days` (by observed_at). 0 disables. Same
+// millisecond cutoff format as PruneOldClientDeclaredRegions.
+func (s *Store) PruneOldClientNodeNames(days int) (int64, error) {
+	if days <= 0 {
+		return 0, nil
+	}
+	n, err := s.pruneOldClientNodeNamesAt(time.Now().UTC().AddDate(0, 0, -days))
+	if err != nil {
+		return 0, err
+	}
+	if n > 0 {
+		log.Printf("[prune] deleted %d client_node_names older than %d days", n, days)
+	}
+	return n, nil
+}
+
+// pruneOldClientNodeNamesAt is the cutoff-instant seam behind
+// PruneOldClientNodeNames, so tests can pin the cutoff.
+func (s *Store) pruneOldClientNodeNamesAt(cutoffInstant time.Time) (int64, error) {
+	cutoff := cutoffInstant.Format(rxTimeMillisLayout)
+	res, err := s.db.Exec(`DELETE FROM client_node_names WHERE observed_at < ?`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("prune client_node_names: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}

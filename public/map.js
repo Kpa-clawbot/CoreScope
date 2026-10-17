@@ -5,11 +5,15 @@
   let map = null;
   let routeLayer = null;
   let markerLayer = null;
+  // Estimated positions of repeaters known only from their reported name
+  // (map-estimated.js). A layer of its own: never clustered with real markers.
+  let estimatedLayer = null;
+  let reported = { nodes: [], method: null };
   let clusterGroup = null;
   let nodes = [];
   let targetNodeKey = null;
   let observers = [];
-  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clustering: localStorage.getItem('meshcore-map-clustering') !== 'false', hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all', multiByteOverlay: localStorage.getItem('meshcore-map-multibyte-overlay') === 'true', scopeState: localStorage.getItem('meshcore-map-scope-filter') || 'all', scopeOverlay: localStorage.getItem('meshcore-map-scope-overlay') === 'true', regionScope: localStorage.getItem('meshcore-map-region-filter') || '' };
+  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clustering: localStorage.getItem('meshcore-map-clustering') !== 'false', hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all', multiByteOverlay: localStorage.getItem('meshcore-map-multibyte-overlay') === 'true', scopeState: localStorage.getItem('meshcore-map-scope-filter') || 'all', scopeOverlay: localStorage.getItem('meshcore-map-scope-overlay') === 'true', estimated: localStorage.getItem('meshcore-map-estimated') !== 'false', regionScope: localStorage.getItem('meshcore-map-region-filter') || '' };
   let selectedReferenceNode = null;  // pubkey of the reference node for neighbor filtering
   let neighborPubkeys = null;        // Set of pubkeys that are direct neighbors of selected node
   let wsHandler = null;
@@ -517,6 +521,7 @@
             <label for="mcHashLabels"><input type="checkbox" id="mcHashLabels"> Hash prefix labels</label>
             <label for="mcMultiByte"><input type="checkbox" id="mcMultiByte"> Multi-byte support</label>
             <label for="mcScopeOverlay" title="Colour repeater markers by their region-scope configuration"><input type="checkbox" id="mcScopeOverlay"> Scope config colours</label>
+            <label for="mcEstimated" title="Repeaters that never sent an advert, placed from where mobile companions heard them. Dashed circle = uncertainty. Follows the repeater role filter only, not the area, region or last-heard filters."><input type="checkbox" id="mcEstimated"> Estimated positions <span class="mc-est-legend" aria-hidden="true">≈</span></label>
             <label id="mcGeoFilterLabel" for="mcGeoFilter" style="display:none"><input type="checkbox" id="mcGeoFilter"> Mesh live area</label>
           </fieldset>
           <div id="mapAreaFilter"></div>
@@ -724,6 +729,7 @@
     });
 
     markerLayer = L.layerGroup().addTo(map);
+    estimatedLayer = L.layerGroup().addTo(map);
     clusterGroup = createClusterGroup();
     if (filters.clustering && clusterGroup) clusterGroup.addTo(map);
     routeLayer = L.layerGroup().addTo(map);
@@ -896,6 +902,11 @@
     if (scopeOverlayEl) {
       scopeOverlayEl.checked = filters.scopeOverlay;
       scopeOverlayEl.addEventListener('change', e => { filters.scopeOverlay = e.target.checked; localStorage.setItem('meshcore-map-scope-overlay', e.target.checked); renderMarkers(); });
+    }
+    const estimatedEl = document.getElementById('mcEstimated');
+    if (estimatedEl) {
+      estimatedEl.checked = filters.estimated;
+      estimatedEl.addEventListener('change', e => { filters.estimated = e.target.checked; localStorage.setItem('meshcore-map-estimated', e.target.checked); renderEstimated(); });
     }
     document.getElementById('mcLastHeard').addEventListener('change', e => { filters.lastHeard = e.target.value; loadNodes(); });
 
@@ -1087,6 +1098,7 @@
     }
     // Hide default markers so only the route is visible
     if (markerLayer) map.removeLayer(markerLayer);
+    if (estimatedLayer) map.removeLayer(estimatedLayer);
     if (clusterGroup) map.removeLayer(clusterGroup);
     if (heatLayer) map.removeLayer(heatLayer);
 
@@ -1101,6 +1113,7 @@
         L.DomEvent.preventDefault(e);
         routeLayer.clearLayers();
         if (markerLayer) map.addLayer(markerLayer);
+        if (estimatedLayer) map.addLayer(estimatedLayer);
         if (clusterGroup) map.addLayer(clusterGroup);
         map.removeControl(closeBtn);
         var container = map.getContainer();
@@ -1734,12 +1747,21 @@
       if (map !== loadingMap) return;
       nodes = data.nodes || [];
       observers = obsData.observers || [];
-
       buildRoleChecks(data.counts || {});
       buildRegionFilter();
       buildJumpButtons();
 
       renderMarkers();
+      // Optional and not awaited: the real markers never wait for it. The same
+      // cached list as the nodes page (reported-nodes.js); it answers an empty
+      // list when the route is missing or gated off.
+      if (window.ReportedNodes) {
+        window.ReportedNodes.load().then(function (rep) {
+          if (map !== loadingMap) return;
+          reported = rep;
+          renderEstimated();
+        });
+      }
 
       // Keep the Important Links overlay in sync on a full node reload: re-fetch
       // the neighbor-graph edges (not just re-render the stale cache) so the
@@ -1847,6 +1869,7 @@
       lbl.querySelector('input').addEventListener('change', e => {
         filters[e.target.dataset.role] = e.target.checked;
         renderMarkers();
+        renderEstimated();
       });
       el.appendChild(lbl);
     }
@@ -2046,6 +2069,14 @@
 
       _updateOffsetIndicator(m, markerLayer);
     }
+  }
+
+  // renderEstimated draws the estimated positions, hidden with the toggle or
+  // when repeaters are filtered out (they are all repeaters).
+  function renderEstimated() {
+    if (!estimatedLayer || !window.MapEstimated) return;
+    estimatedLayer.clearLayers();
+    if (filters.estimated && filters.repeater) window.MapEstimated.addTo(estimatedLayer, L, reported.nodes, reported.method);
   }
 
   function renderMarkers() {
@@ -2444,6 +2475,8 @@
       map = null;
     }
     markerLayer = null;
+    estimatedLayer = null;
+    reported = { nodes: [], method: null };
     clusterGroup = null;
     _currentMarkerData = [];
     routeLayer = null;

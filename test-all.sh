@@ -160,6 +160,7 @@ node tests/unit/test-live-multibyte-filter.js
 node tests/unit/test-live-region-filter.js
 node tests/unit/test-live.js
 node tests/unit/test-map-clustering.js
+node tests/unit/test-map-estimated.js
 node tests/unit/test-mqtt-status-panel.js
 node tests/unit/test-my-repeaters-dashboard.js
 node tests/unit/test-naive-banner-tone.js
@@ -195,6 +196,7 @@ node tests/unit/test-pull-to-reconnect-1091.js
 node tests/unit/test-pull-to-reconnect.js
 node tests/unit/test-region-filter-setselected.js
 node tests/unit/test-repeater-metric-scatter.js
+node tests/unit/test-reported-nodes.js
 node tests/unit/test-rx-coverage-config-race.js
 node tests/unit/test-rx-coverage-mine.js
 node tests/unit/test-rx-coverage-escape.js

@@ -42,6 +42,9 @@ type Server struct {
 	commit    string
 	buildTime string
 
+	// reportedNodes caches /api/nodes/reported (reported_nodes.go).
+	reportedNodes reportedNodesCache
+
 	// Cached runtime.MemStats to avoid stop-the-world pauses on every health check
 	memStatsMu       sync.Mutex
 	memStatsCache    runtime.MemStats
@@ -349,6 +352,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	// gated by requireClientRfSamples instead.
 	r.HandleFunc("/api/rf-noise", s.handleRfNoise).Methods("GET")
 	r.HandleFunc("/api/nodes/resolve", s.handleResolvePrefix).Methods("GET")
+	r.HandleFunc("/api/nodes/reported", s.handleReportedNodes).Methods("GET")
 	r.HandleFunc("/api/rx-coverage", s.handleRxCoverage).Methods("GET")
 	r.HandleFunc("/api/rx-leaderboard", s.handleRxLeaderboard).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}", s.handleNodeDetail).Methods("GET")
