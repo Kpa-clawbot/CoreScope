@@ -59,3 +59,53 @@ window.getParsedDecoded = function getParsedDecoded(p) {
   try { p._parsedDecoded = JSON.parse(raw) || {}; } catch (e) { p._parsedDecoded = {}; }
   return p._parsedDecoded;
 };
+
+/**
+ * One observation's hops, inferred as a whole path (HopResolver.inferPath).
+ * Shared by the packet detail pane and the map route view so both show the
+ * same nodes. The observation's own resolved_path is the server hint.
+ *
+ * @param {Object} obs - an observation (path_json, observer_id, resolved_path)
+ * @param {{lat,lon}|null} observer - where its observer is, when known
+ * @param {{lat,lon}|null} origin - where the sender is, when known
+ * @returns {Array} one inferPath entry per hop
+ */
+window.inferObservationPath = function inferObservationPath(obs, observer, origin) {
+  return window.HopResolver.inferPath(window.getParsedPath(obs), {
+    observer: observer,
+    observerId: obs.observer_id,
+    origin: origin,
+    resolvedPath: window.getResolvedPath(obs),
+  });
+};
+
+/**
+ * Load the neighbour graph into HopResolver, once per page life. Its links
+ * are evidence for inferPath(); a failed load is retried on the next call.
+ */
+var hopAffinityLoad = null;
+window.ensureHopAffinity = function ensureHopAffinity() {
+  if (!hopAffinityLoad) {
+    hopAffinityLoad = api('/analytics/neighbor-graph', { ttl: 300000 })
+      .then(function (graph) { window.HopResolver.setAffinity(graph); })
+      .catch(function () { hopAffinityLoad = null; });
+  }
+  return hopAffinityLoad;
+};
+
+/**
+ * A route-view hop for one inferPath entry. An unlisted hop becomes a
+ * placeholder rather than the nearest node that happens to share its prefix.
+ *
+ * @param {string} hop - the hop's prefix
+ * @param {Object} entry - its inferPath entry
+ * @param {string} [role] - the node's role, for its glyph
+ */
+window.routeHopFromInferred = function routeHopFromInferred(hop, entry, role) {
+  var e = entry || {};
+  if (e.located) {
+    return { lat: e.lat, lon: e.lon, name: e.name, pubkey: e.pubkey, role: role || null, resolved: true, confidence: e.confidence };
+  }
+  if (e.pubkey) return { name: e.name, pubkey: e.pubkey, role: role || null, resolved: false, gpsless: true };
+  return { name: String(hop).slice(0, 8), pubkey: hop, resolved: false, unlisted: true };
+};

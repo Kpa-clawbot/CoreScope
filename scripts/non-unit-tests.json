@@ -35,6 +35,7 @@
       "tests/e2e/test-gestures-1185-scroll-discriminator-e2e.js",
       "tests/e2e/test-health-status-e2e.js",
       "tests/e2e/test-home-coverage-e2e.js",
+      "tests/e2e/test-hop-path-inference-e2e.js",
       "tests/e2e/test-issue-1109-hamburger-dropdown-visible-e2e.js",
       "tests/e2e/test-issue-1122-packets-filter-ux-e2e.js",
       "tests/e2e/test-issue-1128-multi-viewport-e2e.js",

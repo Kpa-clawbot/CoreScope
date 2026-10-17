@@ -1029,6 +1029,14 @@
     });
   }
 
+  // Route hops for a path whose hops were inferred (inferObservationPath),
+  // aligned with hopKeys. opts.inferredHops on either renderer takes this
+  // path instead of /api/resolve-hops, which resolves each prefix alone.
+  function inferredRouteHops(hopKeys, inferred) {
+    const roles = new Map((nodes || []).map(n => [n.public_key, n.role]));
+    return hopKeys.map((hop, i) => routeHopFromInferred(inferred[i].hop, inferred[i], roles.get(inferred[i].pubkey)));
+  }
+
   async function drawPacketRoute(hopKeys, origin, opts) {
     // Defensive: origin must be an object with pubkey/lat/lon/name. A bare
     // string slips through both branches at lines below and silently no-ops
@@ -1070,20 +1078,23 @@
       window.__mc_routeTrustControl = _trustMsg;
       return;
     }
+    const inferred = opts.inferredHops && opts.inferredHops.length === hopKeys.length ? opts.inferredHops : null;
     // #1422: use the backend's /api/resolve-hops for proper disambiguation
     // (unique_prefix vs multi-byte vs gps_preference vs affinity scoring).
     // Falls back to naive nodes.filter() scan if the API is unreachable.
     let serverResolved = null;
-    try {
-      const hopList = (hopKeys || []).join(',');
-      const apiUrl = '/api/resolve-hops?hops=' + encodeURIComponent(hopList);
-      const resp = await fetch(apiUrl, { cache: 'no-cache' });
-      if (resp.ok) {
-        const json = await resp.json();
-        serverResolved = json && json.resolved ? json.resolved : null;
+    if (!inferred) {
+      try {
+        const hopList = (hopKeys || []).join(',');
+        const apiUrl = '/api/resolve-hops?hops=' + encodeURIComponent(hopList);
+        const resp = await fetch(apiUrl, { cache: 'no-cache' });
+        if (resp.ok) {
+          const json = await resp.json();
+          serverResolved = json && json.resolved ? json.resolved : null;
+        }
+      } catch (e) {
+        console.warn('resolve-hops API call failed, falling back to local nodes scan', e);
       }
-    } catch (e) {
-      console.warn('resolve-hops API call failed, falling back to local nodes scan', e);
     }
     // Hide default markers so only the route is visible
     if (markerLayer) map.removeLayer(markerLayer);
@@ -1127,7 +1138,9 @@
     // prefix/pubkey but has no GPS coords, we still want its name/role/pubkey
     // for the sidebar — flag it as {resolved:false, gpsless:true} so the
     // renderer can label it "no GPS" instead of "unresolved prefix".
-    const raw = hopKeys.map(hop => {
+    const raw = inferred
+      ? inferredRouteHops(hopKeys, inferred).map((h, i) => Object.assign(h, { _hopHex: String(hopKeys[i]) }))
+      : hopKeys.map(hop => {
       const hopLower = String(hop).toLowerCase();
       // #1633 — tag the original hex token so MC_isVisibleHop can filter
       // 1-byte hops out of the polyline/sidebar when the customizer toggle
@@ -1333,18 +1346,23 @@
       }
     });
 
-    // Resolve canonical hops via /api/resolve-hops + naive fallback.
+    // Resolve canonical hops: the inferred hops when given, else
+    // /api/resolve-hops + naive fallback.
+    const inferred = opts.inferredHops && opts.inferredHops.length === canonicalPath.length ? opts.inferredHops : null;
+    const inferredRaw = inferred ? inferredRouteHops(canonicalPath, inferred) : null;
     let serverResolved = null;
-    try {
-      const apiUrl = '/api/resolve-hops?hops=' + encodeURIComponent(canonicalPath.join(','));
-      const resp = await fetch(apiUrl, { cache: 'no-cache' });
-      if (resp.ok) {
-        const json = await resp.json();
-        serverResolved = json && json.resolved ? json.resolved : null;
-      }
-    } catch (e) {}
+    if (!inferred) {
+      try {
+        const apiUrl = '/api/resolve-hops?hops=' + encodeURIComponent(canonicalPath.join(','));
+        const resp = await fetch(apiUrl, { cache: 'no-cache' });
+        if (resp.ok) {
+          const json = await resp.json();
+          serverResolved = json && json.resolved ? json.resolved : null;
+        }
+      } catch (e) {}
+    }
 
-    const raw = canonicalPath.map(hop => {
+    const raw = canonicalPath.map((hop, i) => {
       const hopLower = String(hop).toLowerCase();
       const srv = serverResolved && (serverResolved[hop] || serverResolved[hopLower] || serverResolved[hop.toUpperCase()]);
       // hopCounts is keyed on the SHORT prefix from observation paths (e.g. "37"),
@@ -1354,13 +1372,15 @@
       // contains an entry that is either an exact match OR a prefix of the hop's
       // full pubkey.
       let coverage = 0;
-      const hopFullKey = (srv && srv.pubkey) ? srv.pubkey.toLowerCase() : hopLower;
+      const hopFullKey = inferred ? String(inferred[i].pubkey || hop).toLowerCase()
+        : (srv && srv.pubkey) ? srv.pubkey.toLowerCase() : hopLower;
       paths.forEach(pth => {
         const phops = (pth.path || []).map(h => String(h).toLowerCase());
         const matches = phops.some(ph => ph === hopFullKey || hopFullKey.startsWith(ph) || ph.startsWith(hopFullKey));
         if (matches) coverage++;
       });
       const obsInfo = { observerCount: coverage || (hopCounts[hop] || 1), observerTotal: totalObservers };
+      if (inferredRaw) return Object.assign(inferredRaw[i], obsInfo);
       if (srv && srv.pubkey) {
         const c = srv.candidates && srv.candidates[0];
         if (c && c.lat != null && c.lon != null && !(c.lat === 0 && c.lon === 0)) {
@@ -1488,53 +1508,35 @@
       else if (decoded.srcHash) origin.pubkey = decoded.srcHash;
       if (decoded.adName || decoded.name) origin.name = decoded.adName || decoded.name;
       const destination = decoded.destHash ? { pubkey: decoded.destHash } : null;
-      // Resolve the chosen observation's hops (canonical path).
-      // Priority: 1) server-side `resolved_path` (authoritative, eyeball-
-      // validated against packet detail), 2) client-side HopResolver (used
-      // by packets.js — does observer-IATA-aware geographic disambiguation),
-      // 3) raw prefixes (worst case, leaves naive lookup to drawPacketRoute).
-      let chosenPath = [];
+      // Infer the chosen observation's hops as one path, anchored on the
+      // observer that heard it — the same inference as the packet detail pane
+      // (inferObservationPath), with the observation's resolved_path as a
+      // hint. The renderers draw these hops; an unlisted hop stays a
+      // placeholder instead of the nearest node sharing its prefix. Without
+      // the resolver, the raw prefixes go to the renderers' own lookup.
       let rawHops = [];
       try { rawHops = JSON.parse(chosen.path_json || '[]'); } catch (_) {}
-      let resolvedHops = null;
-      try {
-        if (chosen.resolved_path) {
-          resolvedHops = typeof chosen.resolved_path === 'string' ? JSON.parse(chosen.resolved_path) : chosen.resolved_path;
-        }
-      } catch (_) {}
-      if (Array.isArray(resolvedHops) && resolvedHops.length === rawHops.length) {
-        chosenPath = rawHops.map((h, i) => resolvedHops[i] || h);
-      } else if (window.HopResolver && typeof window.HopResolver.resolve === 'function' && rawHops.length) {
-        // Use the SAME resolver the packets page uses, so route view and
-        // packet detail agree on hop identities.
+      let inferredHops = null;
+      if (rawHops.length && window.HopResolver && window.inferObservationPath) {
         try {
-          // Sender + observer hints help disambiguation
-          const senderLat = decoded.lat || decoded.latitude || null;
-          const senderLon = decoded.lon || decoded.longitude || null;
-          let obsLat = null, obsLon = null;
-          // Try to find observer's coords for geographic affinity scoring
-          if (chosen.observer_id && Array.isArray(nodes)) {
-            const obs = nodes.find(n => (n.public_key || '').toLowerCase() === String(chosen.observer_id).toLowerCase());
-            if (obs && obs.lat != null && obs.lon != null) { obsLat = obs.lat; obsLon = obs.lon; }
+          if (!window.HopResolver.ready()) {
+            const coords = await api('/iata-coords', { ttl: 300000 }).catch(() => ({ coords: {} }));
+            window.HopResolver.init(nodes || [], { observers: observers, iataCoords: coords.coords || {} });
           }
-          // HopResolver.init may already have been done by packets.js; if not,
-          // do a minimal init from window data we have.
-          if (!window.HopResolver.ready || !window.HopResolver.ready()) {
-            try {
-              window.HopResolver.init(nodes || [], { observers: [], iataCoords: {} });
-            } catch (_) {}
-          }
-          const resolveResult = window.HopResolver.resolve(rawHops, senderLat, senderLon, obsLat, obsLon, chosen.observer_id);
-          chosenPath = rawHops.map(h => {
-            const r = resolveResult ? resolveResult[h] : null;
-            return r && r.pubkey ? r.pubkey : h;
-          });
-        } catch (_) {
-          chosenPath = rawHops;
+          await window.ensureHopAffinity();
+          const obsKey = String(chosen.observer_id || '').toLowerCase();
+          const ob = observers.find(o => String(o.id).toLowerCase() === obsKey) ||
+            (nodes || []).find(n => (n.public_key || '').toLowerCase() === obsKey);
+          const obsPos = ob && ob.lat != null && ob.lon != null ? { lat: ob.lat, lon: ob.lon } : null;
+          const senderLat = decoded.lat != null ? decoded.lat : decoded.latitude;
+          const senderLon = decoded.lon != null ? decoded.lon : decoded.longitude;
+          const originPos = senderLat != null && senderLon != null ? { lat: senderLat, lon: senderLon } : null;
+          inferredHops = inferObservationPath(chosen, obsPos, originPos);
+        } catch (e) {
+          console.warn('[deep-link] path inference failed', e);
         }
-      } else {
-        chosenPath = rawHops;
       }
+      const chosenPath = inferredHops ? rawHops.map((h, i) => inferredHops[i].pubkey || h) : rawHops;
       // All observation paths for multi-path stroke weighting
       const allPaths = observations.map(o => {
         let p = [];
@@ -1697,12 +1699,13 @@
         return;
       }
       if (allPaths.length === 1) {
-        drawPacketRoute(chosenPath, origin, { destination: destination, packetHash: packetHash, observationId: obsId, packetContext: pktCtx });
+        drawPacketRoute(chosenPath, origin, { destination: destination, packetHash: packetHash, observationId: obsId, packetContext: pktCtx, inferredHops: inferredHops });
       } else {
         drawPacketRouteMulti(allPaths, origin, {
           packetHash: packetHash,
           observationId: obsId,
           canonicalPath: chosenPath,
+          inferredHops: inferredHops,
           destination: destination,
           packetContext: pktCtx
         });

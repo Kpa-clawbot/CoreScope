@@ -296,7 +296,12 @@
         if (p.gpsless) {
           statusBadge = ' <span class="mc-rt-status-chip mc-rt-status-nogps" title="Node identified but has no GPS coordinates"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-pin"/></svg> no GPS</span>';
         } else {
-          statusBadge = ' <span class="mc-rt-status-chip mc-rt-status-unknown" title="Could not resolve this hop prefix to a known node"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> unknown</span>';
+          // An unlisted hop was inferred as a node missing from the list (or
+          // without GPS): known nodes share its prefix, but none fits here.
+          var unknownTitle = p.unlisted
+            ? 'No listed node with this prefix fits this point in the path'
+            : 'Could not resolve this hop prefix to a known node';
+          statusBadge = ' <span class="mc-rt-status-chip mc-rt-status-unknown" title="' + unknownTitle + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> ' + (p.unlisted ? 'unlisted' : 'unknown') + '</span>';
         }
       }
       // hops derived from the packet's PAYLOAD (sender/recipient
