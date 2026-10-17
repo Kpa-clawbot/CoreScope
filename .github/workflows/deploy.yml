@@ -696,6 +696,7 @@ jobs:
           suite 2 test-marker-outline-weight.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-node-reach-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-packets-compact-columns-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 1 test-packets-node-filter-e2e.js BASE_URL=$B
           suite 3 test-packets-scope-column.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-path-inspector-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-pr-1490-live-map-gpu-animations-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B

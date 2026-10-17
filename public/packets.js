@@ -2373,8 +2373,12 @@
     const fNodeDrop = document.getElementById('fNodeDropdown');
     fNode.value = filters.nodeName || '';
     let nodeActiveIdx = -1;
+    // Bumped per search and on pick, so a slower response for an older query
+    // can't replace the list or reopen it after a selection.
+    let nodeSearchSeq = 0;
     fNode.addEventListener('input', debounce(async (e) => {
       const q = e.target.value.trim();
+      const seq = ++nodeSearchSeq;
       nodeActiveIdx = -1;
       fNode.setAttribute('aria-activedescendant', '');
       if (!q) {
@@ -2386,6 +2390,7 @@
       try {
         const resp = await fetch('/api/nodes/search?q=' + encodeURIComponent(q));
         const data = await resp.json();
+        if (seq !== nodeSearchSeq) return;
         const nodes = data.nodes || [];
         if (nodes.length === 0) { fNodeDrop.classList.add('hidden'); fNode.setAttribute('aria-expanded', 'false'); return; }
         fNodeDrop.innerHTML = nodes.map((n, i) =>
@@ -2394,7 +2399,10 @@
         fNodeDrop.classList.remove('hidden');
         fNode.setAttribute('aria-expanded', 'true');
         fNodeDrop.querySelectorAll('.node-filter-option').forEach(opt => {
-          opt.addEventListener('click', () => {
+          // mousedown, not click: keeps focus in the input so the blur timer
+          // can't hide the list during a slow click.
+          opt.addEventListener('mousedown', (ev) => {
+            ev.preventDefault();
             selectNodeOption(opt);
           });
         });
@@ -2402,6 +2410,7 @@
     }, 250));
 
     function selectNodeOption(opt) {
+      nodeSearchSeq++;
       filters.node = opt.dataset.key;
       filters.nodeName = opt.dataset.name;
       fNode.value = opt.dataset.name;
