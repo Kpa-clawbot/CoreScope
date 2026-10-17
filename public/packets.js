@@ -2026,7 +2026,8 @@
       buildObserverMenu();
       updateObsTrigger();
       updatePacketsUrl();
-      renderTableRows();
+      // Grouped rows are filtered by the server only (#1821), so re-fetch.
+      loadPackets();
     });
 
     // --- Type multi-select ---
