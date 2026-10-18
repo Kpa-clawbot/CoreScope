@@ -265,8 +265,8 @@ type RetentionConfig struct {
 	HopIndexDays int `json:"hopIndexDays"`
 }
 
-// HopIndexDaysOrZero returns retention.hopIndexDays, or 0 (off) when unset or
-// negative.
+// HopIndexDaysOrZero returns retention.hopIndexDays, or 0 (off) when unset.
+// LoadConfig rejects negative values, so none reach here from a config file.
 func (c *Config) HopIndexDaysOrZero() int {
 	if c.Retention != nil && c.Retention.HopIndexDays > 0 {
 		return c.Retention.HopIndexDays
@@ -556,6 +556,11 @@ func LoadConfig(path string) (*Config, error) {
 	} else {
 		if err := json.Unmarshal(data, &cfg); err != nil {
 			return nil, fmt.Errorf("parsing config %s: %w", path, err)
+		}
+		// observerDays reads -1 as "keep forever"; here a negative value would
+		// silently remove the index, so refuse it instead.
+		if cfg.Retention != nil && cfg.Retention.HopIndexDays < 0 {
+			return nil, fmt.Errorf("config %s: retention.hopIndexDays is %d; it must be 0 (off) or a number of days", path, cfg.Retention.HopIndexDays)
 		}
 	}
 

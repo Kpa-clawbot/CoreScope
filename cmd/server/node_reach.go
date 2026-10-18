@@ -774,7 +774,15 @@ func (s *Server) scanReachRows(ctx context.Context, tokens map[string]bool, sinc
 	// this window: a token seek instead of a substring scan of every
 	// observation in the window (which, cold, outlives the HTTP WriteTimeout).
 	if s.reachHopIndexCovers(ctx, sinceEpoch) {
-		return s.scanReachRowsIndexed(ctx, tokens, sinceEpoch)
+		rows, err := s.scanReachRowsIndexed(ctx, tokens, sinceEpoch)
+		if err == nil {
+			return rows, nil
+		}
+		// The coverage check and the scan are separate queries, and the ingestor
+		// drops the index when hopIndexDays is set to 0: a removal between the
+		// two fails the scan with "no such table". Answer from the substring scan
+		// instead; an error there still reaches the caller as a 500.
+		log.Printf("[reach] hop index scan failed, using the path_json scan: %v", err)
 	}
 	args := []interface{}{sinceEpoch}
 	// Sort tokens so the generated SQL text is byte-stable across requests

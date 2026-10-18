@@ -78,10 +78,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("db: %v", err)
 	}
-	// Opt-in reach hop index: installs it, or removes it when off (the default).
-	if err := store.ConfigureObservationHops(cfg.HopIndexDaysOrZero()); err != nil {
-		log.Fatalf("db: hop index: %v", err)
-	}
 	defer store.Close()
 	log.Printf("SQLite opened: %s", cfg.DBPath)
 
@@ -284,6 +280,14 @@ func main() {
 		log.Printf("Running — %d MQTT source(s) connected, %d retrying in background", connectedCount, len(clients)-connectedCount)
 	} else {
 		log.Printf("Running — %d MQTT source(s) connected", connectedCount)
+	}
+
+	// Opt-in reach hop index: installs it, or removes it when off (the default).
+	// Here, with the MQTT subscription up and the ingest gate still closed: a
+	// removal holds the single writer for about a minute on a large database,
+	// and the buffer keeps that minute's packets instead of losing them.
+	if err := store.ConfigureObservationHops(cfg.HopIndexDaysOrZero()); err != nil {
+		log.Fatalf("db: hop index: %v", err)
 	}
 
 	// Node retention: move stale nodes to inactive_nodes on startup

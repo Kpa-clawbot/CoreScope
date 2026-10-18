@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"testing"
@@ -184,9 +185,37 @@ func TestHopIndexDaysOrZero(t *testing.T) {
 	for _, c := range []struct {
 		r    *RetentionConfig
 		want int
-	}{{nil, 0}, {&RetentionConfig{}, 0}, {&RetentionConfig{HopIndexDays: -3}, 0}, {&RetentionConfig{HopIndexDays: 14}, 14}} {
+	}{{nil, 0}, {&RetentionConfig{}, 0}, {&RetentionConfig{HopIndexDays: 14}, 14}} {
 		if got := (&Config{Retention: c.r}).HopIndexDaysOrZero(); got != c.want {
 			t.Errorf("HopIndexDaysOrZero(%+v) = %d, want %d", c.r, got, c.want)
+		}
+	}
+}
+
+// Review #2214 round 2: observerDays reads -1 as "keep forever". The same value
+// here would remove the index without a word, so LoadConfig refuses it; 0 and
+// positive values load as before.
+func TestLoadConfig_RejectsNegativeHopIndexDays(t *testing.T) {
+	path := t.TempDir() + "/config.json"
+	for _, c := range []struct {
+		json    string
+		wantErr bool
+	}{
+		{`{"retention":{"hopIndexDays":-1}}`, true},
+		{`{"retention":{"hopIndexDays":-14}}`, true},
+		{`{"retention":{"hopIndexDays":0}}`, false},
+		{`{"retention":{"hopIndexDays":14}}`, false},
+		{`{"retention":{}}`, false},
+	} {
+		if err := os.WriteFile(path, []byte(c.json), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := LoadConfig(path)
+		switch {
+		case c.wantErr && (err == nil || !strings.Contains(err.Error(), "retention.hopIndexDays")):
+			t.Errorf("%s: LoadConfig error = %v, want one naming retention.hopIndexDays", c.json, err)
+		case !c.wantErr && err != nil:
+			t.Errorf("%s: LoadConfig error = %v, want nil", c.json, err)
 		}
 	}
 }
@@ -456,7 +485,9 @@ func TestOpenStoreDoesNotScheduleHopBackfill(t *testing.T) {
 
 // Both shipped defaults leave the index off: no config file (zero-config
 // startup) and config.example.json, which docker/entrypoint.sh copies to
-// config.json on a fresh install. A negative value is off too.
+// config.json on a fresh install. On the store side anything at or below 0 is
+// off; a negative value never gets this far from a config file
+// (TestLoadConfig_RejectsNegativeHopIndexDays).
 func TestHopIndex_ShippedDefaultsAreOff(t *testing.T) {
 	for _, path := range []string{"../../config.example.json", t.TempDir() + "/missing.json"} {
 		cfg, err := LoadConfig(path)
@@ -510,6 +541,91 @@ func TestTrimStoppedMidwayKeepsMarkHonest(t *testing.T) {
 	}
 	checkHopIndex(t, s)
 	assertNear(t, "coverage after retry", hopCoverage(s), now-3*day)
+}
+
+// Review #2214 round 2: the read that picks a chunk runs outside the chunk's
+// transaction. A row whose timestamp falls inside the range that transaction is
+// about to claim can arrive in between; the trigger skips it (the mark has not
+// moved yet), so the transaction itself must index it. Both the chunk around an
+// observation and the final step down to the floor get such a row.
+func TestBackfill_RowArrivingBeforeTheMarkMovesIsIndexed(t *testing.T) {
+	fastHopBackfill(t, 3600)
+	fixed := time.Now().Truncate(time.Second)
+	t.Cleanup(func() { hopNow = time.Now })
+	hopNow = func() time.Time { return fixed }
+	now := fixed.Unix()
+	floor := now - 14*day
+	s := legacyStore(t, 14, ob{`["AA"]`, now - day})
+	t.Cleanup(func() { hopMaintAfterRead = nil })
+	calls := 0
+	hopMaintAfterRead = func() {
+		calls++
+		switch calls {
+		case 1: // the chunk below AA is about to be claimed
+			insertObs(t, s, ob{`["LATE1"]`, now - day - 600})
+		case 2: // nothing is left; the claim goes down to the floor
+			insertObs(t, s, ob{`["LATE2"]`, floor + 100})
+		}
+	}
+	if err := s.backfillObservationHops(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("hook fired %d times, want 2 (one chunk, then the step to the floor)", calls)
+	}
+	if got := hopCoverage(s); got != floor {
+		t.Fatalf("coverage = %d, want the floor %d", got, floor)
+	}
+	checkHopIndex(t, s) // both late rows are above the mark, so both must be indexed
+	if hopRows(s) != 3 {
+		t.Fatalf("%d hop rows, want 3 (AA, LATE1, LATE2)", hopRows(s))
+	}
+}
+
+// Review #2214 round 2: the trim reads the oldest observation outside its first
+// transaction. A row with a timestamp between the mark and that observation can
+// arrive in between; the trigger indexes it (it is above the mark), and a trim
+// that deleted only from the observation it had found would leave those hop
+// rows under the raised mark for good. Each transaction deletes from the current
+// mark instead.
+func TestTrim_RowArrivingBeforeTheMarkMovesIsRemoved(t *testing.T) {
+	fastHopBackfill(t, 3600)
+	now := time.Now().Unix()
+	// BB sits a non-whole number of chunks below the new floor, so the last
+	// chunk has to be clamped to the floor or the mark overshoots it.
+	s := legacyStore(t, 10, ob{`["AA"]`, now - day}, ob{`["BB"]`, now - 6*day - 1234})
+	restart(t, s, 10)
+	if hopRows(s) != 2 {
+		t.Fatalf("setup: %d hop rows, want 2", hopRows(s))
+	}
+	s.hopIndexDays = 3 // the window shrinks: BB falls out
+	t.Cleanup(func() { hopMaintAfterRead = nil })
+	fired := false
+	hopMaintAfterRead = func() {
+		if fired {
+			return
+		}
+		fired = true
+		insertObs(t, s, ob{`["LATE"]`, now - 8*day}) // between the mark (10 d) and BB (6 d)
+		if n := hopRows(s); n != 3 {
+			t.Fatalf("the trigger did not index the late row: %d hop rows", n)
+		}
+	}
+	n, err := s.TrimObservationHops()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fired {
+		t.Fatal("hook never fired")
+	}
+	if n != 2 {
+		t.Fatalf("trim deleted %d hop rows, want 2 (BB and LATE)", n)
+	}
+	assertNear(t, "coverage", hopCoverage(s), now-3*day)
+	checkHopIndex(t, s) // LATE is below the mark now: no hop row may remain for it
+	if hopRows(s) != 1 {
+		t.Fatalf("%d hop rows, want 1 (AA)", hopRows(s))
+	}
 }
 
 // The backfill stops exactly at the floor: a row at the floor second is indexed

@@ -96,6 +96,47 @@ func indexedMatchesLike(t *testing.T, toks map[string]bool) {
 	}
 }
 
+// Review #2214 round 2: the coverage check and the indexed scan are separate
+// queries, and the ingestor removes the index (hopIndexDays set to 0) in one
+// transaction between them for a request that is in flight. That request must
+// still get its answer, from the substring scan; and a failure in both paths
+// still surfaces as an error (#1631), not as an empty reach.
+func TestScanReachRows_IndexRemovedMidRequestFallsBackToLike(t *testing.T) {
+	db := newHopIndexedTestDB(t)
+	defer db.conn.Close()
+	srv := &Server{db: db}
+	toks := map[string]bool{"01FA": true, "01FAB2": true}
+	like, err := srv.scanReachRows(context.Background(), toks, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dbschema.EnsureObservationHopsSchema(db.conn, nil); err != nil {
+		t.Fatal(err)
+	}
+	db.conn.Exec(`UPDATE observation_hops_coverage SET since = 0`)
+	// The state the in-flight request sees: the coverage row its check read,
+	// and no table left to scan.
+	if _, err := db.conn.Exec(`DROP TABLE observation_hops`); err != nil {
+		t.Fatal(err)
+	}
+	if !srv.reachHopIndexCovers(context.Background(), 500) {
+		t.Fatal("setup: the coverage check must still pass")
+	}
+	rows, err := srv.scanReachRows(context.Background(), toks, 500)
+	if err != nil {
+		t.Fatalf("scan with the hop table gone: %v, want the LIKE scan's answer", err)
+	}
+	if a, b := canon(like), canon(rows); fmt.Sprint(a) != fmt.Sprint(b) {
+		t.Fatalf("fallback differs from the LIKE scan:\nlike     %v\nfallback %v", a, b)
+	}
+	if _, err := db.conn.Exec(`DROP TABLE observations`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.scanReachRows(context.Background(), toks, 500); err == nil {
+		t.Fatal("both scans failed, but scanReachRows returned no error")
+	}
+}
+
 // A window that starts before the coverage mark must use the LIKE scan, so a
 // half-finished backfill can never silently drop old observations.
 func TestScanReachRows_PartialCoverageFallsBackToLike(t *testing.T) {

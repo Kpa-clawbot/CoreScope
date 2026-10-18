@@ -25,24 +25,30 @@ var (
 	// hopBackfillAfterChunk, when set, runs after each committed backfill
 	// chunk. Tests only.
 	hopBackfillAfterChunk func()
+	// hopMaintAfterRead, when set, runs after the backfill or the trim has read
+	// observations to pick its next chunk and before the transaction that moves
+	// the coverage mark. Tests only: a row inserted here is what those
+	// transactions must still account for.
+	hopMaintAfterRead func()
 	// hopNow is the clock the index window is measured from; tests pin it.
 	hopNow = time.Now
 )
 
 // ConfigureObservationHops applies retention.hopIndexDays. Called once from
-// main right after the store opens, before any backfill or trim.
+// main's startup block, after the MQTT subscription is up and before the ingest
+// gate opens: removing the index held the writer for 45 to 71 s on a copy of a
+// 10.5M-observation database, and run there that time is buffered ingest, not
+// lost packets. It precedes the startup trim and the backfill.
 //
-// days <= 0 (the default) removes the index if a previous run installed it, so
-// an upgrade that never sets the key changes nothing, and switching it off
-// leaves no table and no triggers behind. days > 0 installs the index (or
-// refreshes its triggers); ScheduleObservationHopsBackfill then fills whatever
-// part of the window is not yet covered.
+// days == 0 (the default; LoadConfig rejects negative values) removes the index
+// if a previous run installed it, so an upgrade that never sets the key changes
+// nothing, and switching it off leaves no table and no triggers behind.
+// days > 0 installs the index (or refreshes its triggers);
+// ScheduleObservationHopsBackfill then fills whatever part of the window is not
+// yet covered.
 func (s *Store) ConfigureObservationHops(days int) error {
-	if days < 0 {
-		days = 0
-	}
 	s.hopIndexDays = days
-	if days == 0 {
+	if days <= 0 {
 		start := time.Now()
 		removed, err := dbschema.DropObservationHopsSchema(s.db)
 		if err != nil {
@@ -119,6 +125,13 @@ func (s *Store) ScheduleObservationHopsBackfill() {
 // inserts are OR IGNORE (the insert trigger may already have indexed a row that
 // arrived late with an old timestamp).
 //
+// Each transaction indexes every second it moves the mark across, not only the
+// chunk around the observation it found: the read that picks the chunk runs
+// outside the transaction, and a row with a timestamp in that range can arrive
+// in between, too old for the trigger (the mark has not moved yet). Covering the
+// whole range makes the mark's claim true whatever arrived meanwhile. The same
+// rule applies to the last step, which claims down to the floor.
+//
 // It holds hopMaintMu for its whole run, so a trim cannot interleave with it.
 // Without that, a trim that raised the mark and deleted rows between two chunks
 // would be undone by the next chunk lowering the mark again, and readers would
@@ -147,15 +160,19 @@ func (s *Store) backfillObservationHops(ctx context.Context) error {
 		if err := s.db.QueryRow(`SELECT MAX(timestamp) FROM observations WHERE timestamp < ?`, since).Scan(&next); err != nil {
 			return fmt.Errorf("next observation below %d: %w", since, err)
 		}
-		if !next.Valid || next.Int64 < floor {
-			// Nothing left inside the window: claim exactly the floor.
-			break
+		// Cover [lower, since): the chunk below the newest observation found, or
+		// exactly down to the floor when nothing is left inside the window. The
+		// INSERT runs over that whole range, so the mark never claims a second
+		// the transaction did not index (see the function comment).
+		lower := floor
+		if next.Valid && next.Int64 >= floor {
+			lower = next.Int64 - hopBackfillChunkSeconds + 1
+			if lower < floor {
+				lower = floor
+			}
 		}
-		// Cover [lower, since). Nothing exists in [next+1, since), so lowering
-		// the mark across that gap claims nothing false.
-		lower := next.Int64 - hopBackfillChunkSeconds + 1
-		if lower < floor {
-			lower = floor
+		if hopMaintAfterRead != nil {
+			hopMaintAfterRead()
 		}
 		var n int64
 		err := s.WriterTx("observation_hops_backfill", func(tx *sql.Tx) error {
@@ -184,9 +201,6 @@ func (s *Store) backfillObservationHops(ctx context.Context) error {
 		case <-time.After(hopBackfillPause):
 		}
 	}
-	if err := s.setHopCoverageIf("since > ?", floor); err != nil {
-		return err
-	}
 	log.Printf("[hop-index] backfill complete: %d rows in %s", rows, time.Since(start).Round(time.Second))
 	return nil
 }
@@ -198,6 +212,13 @@ func (s *Store) backfillObservationHops(ctx context.Context) error {
 // midway leaves the mark exactly where its deletions end and the next trim
 // continues from there. It waits for a running backfill (hopMaintMu). Returns
 // hop rows deleted.
+//
+// Every transaction deletes from the current mark up to the new one, not only
+// from the oldest observation it found: that read runs outside the transaction,
+// and a row with a timestamp between the mark and that observation can arrive
+// in between, indexed by the trigger because it is above the mark. Deleting the
+// whole range the mark moves across removes it too, instead of leaving its hop
+// rows under the raised mark where nothing would ever delete them.
 func (s *Store) TrimObservationHops() (int64, error) {
 	if s.hopIndexDays <= 0 {
 		return 0, nil
@@ -214,21 +235,25 @@ func (s *Store) TrimObservationHops() (int64, error) {
 	if since >= floor {
 		return 0, nil
 	}
-	// Start at the oldest observation, not at a possibly tiny mark: stepping
-	// from timestamp 0 in 15-minute chunks would take hundreds of thousands of
-	// empty transactions.
+	// Size the chunks from the oldest observation at or above the mark, not
+	// from a possibly tiny mark: stepping from timestamp 0 in 15-minute chunks
+	// would take hundreds of thousands of empty transactions.
 	var minTS sql.NullInt64
-	if err := s.db.QueryRow(`SELECT MIN(timestamp) FROM observations`).Scan(&minTS); err != nil {
+	if err := s.db.QueryRow(`SELECT MIN(timestamp) FROM observations WHERE timestamp >= ?`, since).Scan(&minTS); err != nil {
 		return 0, fmt.Errorf("min observation timestamp: %w", err)
 	}
-	if !minTS.Valid {
-		return 0, nil // no observations, so no hop rows to delete
+	if hopMaintAfterRead != nil {
+		hopMaintAfterRead()
 	}
-	if minTS.Int64 > since {
-		since = minTS.Int64
+	// Nothing indexed below the window: one transaction moves the mark to the
+	// floor (and still deletes across the range, in case a row arrived).
+	a := floor
+	if minTS.Valid && minTS.Int64 < floor {
+		a = minTS.Int64
 	}
 	var total int64
-	for a := since; a < floor; a += hopBackfillChunkSeconds {
+	mark := since
+	for mark < floor {
 		b := a + hopBackfillChunkSeconds
 		if b > floor {
 			b = floor
@@ -239,22 +264,14 @@ func (s *Store) TrimObservationHops() (int64, error) {
 				return err
 			}
 			var err error
-			n, err = dbschema.UnindexObservationHops(tx, a, b)
+			n, err = dbschema.UnindexObservationHops(tx, mark, b)
 			return err
 		})
 		if err != nil {
-			return total, fmt.Errorf("trim chunk [%d,%d): %w", a, b, err)
+			return total, fmt.Errorf("trim chunk [%d,%d): %w", mark, b, err)
 		}
 		total += n
+		mark, a = b, b
 	}
 	return total, nil
-}
-
-// setHopCoverageIf sets the coverage mark to v when cond (with v as its one
-// argument) holds.
-func (s *Store) setHopCoverageIf(cond string, v int64) error {
-	return s.WriterTx("observation_hops_coverage", func(tx *sql.Tx) error {
-		_, err := tx.Exec(`UPDATE `+dbschema.ObservationHopsCoverageTable+` SET since = ? WHERE id = 1 AND `+cond, v, v)
-		return err
-	})
 }
