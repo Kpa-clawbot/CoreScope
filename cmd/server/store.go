@@ -2060,9 +2060,9 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 		}
 	}
 	atomic.AddInt64(&s.queryCount, 1)
-	nodePK := s.resolveQueryNode(q.Node)
+	f := s.resolvePacketFilterSets(q)
 	s.mu.RLock()
-	result, jobs := s.queryPacketsLocked(q, nodePK)
+	result, jobs := s.queryPacketsLocked(q, f)
 	s.mu.RUnlock()
 	s.applyResolvedPaths(jobs)
 	return result
@@ -2070,7 +2070,7 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 
 // queryPacketsLocked is the in-memory part of QueryPackets. Caller holds
 // s.mu and runs the returned resolved_path jobs after releasing it.
-func (s *PacketStore) queryPacketsLocked(q PacketQuery, nodePK string) (*PacketResult, []rpJob) {
+func (s *PacketStore) queryPacketsLocked(q PacketQuery, f packetFilterSets) (*PacketResult, []rpJob) {
 	if q.Limit <= 0 {
 		q.Limit = 50
 	}
@@ -2078,7 +2078,7 @@ func (s *PacketStore) queryPacketsLocked(q PacketQuery, nodePK string) (*PacketR
 		q.Order = "DESC"
 	}
 
-	results := s.filterPackets(q, nodePK)
+	results := s.filterPackets(q, f)
 	total := len(results)
 
 	// #1345: order by ingest id, not insertion-into-s.packets order. After
@@ -2172,9 +2172,9 @@ func (s *PacketStore) QueryGroupedPackets(q PacketQuery) *PacketResult {
 	s.groupedCacheMu.Unlock()
 
 	// Collect StoreTx pointers under read lock; sort outside it.
-	nodePK := s.resolveQueryNode(q.Node)
+	f := s.resolvePacketFilterSets(q)
 	s.mu.RLock()
-	results := s.filterPackets(q, nodePK)
+	results := s.filterPackets(q, f)
 	txs := make([]*StoreTx, len(results))
 	copy(txs, results)
 	s.mu.RUnlock()
@@ -3620,9 +3620,36 @@ func (s *PacketStore) resolveQueryNode(node string) string {
 	return s.db.resolveNodePubkey(node)
 }
 
+// packetFilterSets holds the parts of a PacketQuery that SQL resolves: the
+// node pubkey and the region observer and area node sets. Callers resolve
+// them before taking s.mu (#2146, #2219) and keep them for the scan, so a
+// cold or evicted cache never queries under the lock.
+type packetFilterSets struct {
+	nodePK    string
+	regionObs map[string]bool
+	areaNodes map[string]bool
+}
+
+// resolvePacketFilterSets resolves q's node, region and area filters. It runs
+// SQL on a cold cache, so call it before taking s.mu. A region that resolves
+// to no observers matches nothing, so the area is not looked up then.
+func (s *PacketStore) resolvePacketFilterSets(q PacketQuery) packetFilterSets {
+	f := packetFilterSets{nodePK: s.resolveQueryNode(q.Node)}
+	if q.Region != "" {
+		f.regionObs = s.resolveRegionObservers(q.Region)
+		if len(f.regionObs) == 0 {
+			return f
+		}
+	}
+	if q.Area != "" {
+		f.areaNodes = s.resolveAreaNodes(q.Area)
+	}
+	return f
+}
+
 // filterPackets applies PacketQuery filters to the in-memory packet list.
-// nodePK is q.Node resolved by resolveQueryNode. Caller holds s.mu.
-func (s *PacketStore) filterPackets(q PacketQuery, nodePK string) []*StoreTx {
+// f holds q's filters resolved by resolvePacketFilterSets. Caller holds s.mu.
+func (s *PacketStore) filterPackets(q PacketQuery, f packetFilterSets) []*StoreTx {
 	// Fast path: single-key index lookups
 	if q.Hash != "" && q.Type == nil && q.Route == nil && q.Observer == "" &&
 		q.Region == "" && q.Area == "" && q.Node == "" && q.Channel == "" && q.Since == "" && q.Until == "" {
@@ -3671,26 +3698,17 @@ func (s *PacketStore) filterPackets(q PacketQuery, nodePK string) []*StoreTx {
 		}
 	}
 
-	// Pre-compute region observer set.
-	var regionObservers map[string]bool
-	if q.Region != "" {
-		regionObservers = s.resolveRegionObservers(q.Region)
-		if len(regionObservers) == 0 {
-			return nil
-		}
+	regionObservers := f.regionObs
+	if q.Region != "" && len(regionObservers) == 0 {
+		return nil
 	}
-
-	// Pre-compute area node set.
-	var areaNodes map[string]bool
-	if q.Area != "" {
-		areaNodes = s.resolveAreaNodes(q.Area)
-	}
+	areaNodes := f.areaNodes
 
 	// Pre-compute node filter parameters.
 	var nodeHashSet map[string]bool
 	hasNode := q.Node != ""
 	if hasNode {
-		indexed := s.byNode[nodePK]
+		indexed := s.byNode[f.nodePK]
 		nodeHashSet = make(map[string]bool, len(indexed))
 		for _, tx := range indexed {
 			nodeHashSet[tx.Hash] = true
@@ -3702,7 +3720,7 @@ func (s *PacketStore) filterPackets(q PacketQuery, nodePK string) []*StoreTx {
 	source := s.packets
 	if hasNode && !hasType && !hasRoute && q.Observer == "" &&
 		filterHash == "" && !hasSince && !hasUntil && q.Region == "" && q.Area == "" && filterChannel == "" {
-		if indexed, ok := s.byNode[nodePK]; ok {
+		if indexed, ok := s.byNode[f.nodePK]; ok {
 			return indexed
 		}
 	}
@@ -3851,9 +3869,9 @@ func (s *PacketStore) transmissionsForObserver(observerIDs string, from []*Store
 const regionObsTTL = 30 * time.Second
 
 // resolveRegionObservers returns a set of observer IDs for a given IATA region.
-// Callers often hold s.mu, so a cache past its TTL is served as-is while one
-// background refresh re-queries it (#2146). A region seen for the first time
-// is queried inline, without holding regionObsMu.
+// A cache past its TTL is served as-is while one background refresh re-queries
+// it (#2146). A region seen for the first time is queried inline, without
+// holding regionObsMu, so callers resolve it before taking s.mu (#2219).
 func (s *PacketStore) resolveRegionObservers(region string) map[string]bool {
 	s.regionObsMu.Lock()
 	m, cached := s.regionObsCache[region]
@@ -3940,8 +3958,9 @@ const areaNodeTTL = 30 * time.Second
 
 // resolveAreaNodes returns a set of node pubkeys whose GPS coordinates fall
 // inside the named area polygon. Returns nil if the area key is not in config.
-// Results are cached per key. Callers often hold s.mu, so an entry past its
-// TTL is served as-is while one background refresh re-queries it (#2146).
+// Results are cached per key. An entry past its TTL is served as-is while one
+// background refresh re-queries it (#2146). A key seen for the first time is
+// queried inline, so callers resolve it before taking s.mu (#2219).
 // Uses its own RWMutex so callers holding s.mu won't deadlock.
 func (s *PacketStore) resolveAreaNodes(areaKey string) map[string]bool {
 	if s.config == nil || s.config.Areas == nil {
@@ -5768,12 +5787,13 @@ func (s *PacketStore) GetChannels(region string) []map[string]interface{} {
 		hasRegion   bool
 	}
 
-	// Copy only the fields needed — release the lock before JSON unmarshal.
-	s.mu.RLock()
 	var regionObs map[string]bool
 	if region != "" {
 		regionObs = s.resolveRegionObservers(region)
 	}
+
+	// Copy only the fields needed — release the lock before JSON unmarshal.
+	s.mu.RLock()
 	grpTxts := s.byPayloadType[5]
 	snapshots := make([]txSnapshot, 0, len(grpTxts))
 	for _, tx := range grpTxts {
@@ -5922,11 +5942,11 @@ func (s *PacketStore) GetChannels(region string) []map[string]interface{} {
 
 // GetEncryptedChannels returns undecryptable GRP_TXT channels from in-memory packets.
 func (s *PacketStore) GetEncryptedChannels(region string) []map[string]interface{} {
-	s.mu.RLock()
 	var regionObs map[string]bool
 	if region != "" {
 		regionObs = s.resolveRegionObservers(region)
 	}
+	s.mu.RLock()
 	grpTxts := s.byPayloadType[5]
 
 	type encInfo struct {
@@ -6000,6 +6020,12 @@ func (s *PacketStore) GetEncryptedChannels(region string) []map[string]interface
 
 // GetChannelMessages returns deduplicated messages for a channel from in-memory packets.
 func (s *PacketStore) GetChannelMessages(channelHash string, limit, offset int, region ...string) ([]map[string]interface{}, int) {
+	regionParam := ""
+	if len(region) > 0 {
+		regionParam = region[0]
+	}
+	regionObs := s.resolveRegionObservers(regionParam)
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -6014,11 +6040,6 @@ func (s *PacketStore) GetChannelMessages(channelHash string, limit, offset int, 
 	}
 	msgMap := map[string]*msgEntry{}
 	var msgOrder []string
-	regionParam := ""
-	if len(region) > 0 {
-		regionParam = region[0]
-	}
-	regionObs := s.resolveRegionObservers(regionParam)
 
 	// Iterate type-5 packets oldest-first (byPayloadType is ASC = oldest first)
 	type decodedMsg struct {
@@ -6272,14 +6293,13 @@ func (s *PacketStore) computeAnalyticsChannels(region, area string, window TimeW
 	if area != "" {
 		areaNodes = s.resolveAreaNodes(area)
 	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	var regionObs map[string]bool
 	if region != "" {
 		regionObs = s.resolveRegionObservers(region)
 	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	type decodedGrp struct {
 		Type             string      `json:"type"`
@@ -6531,16 +6551,15 @@ func (s *PacketStore) computeAnalyticsRF(region, area string, window TimeWindow)
 	if area != "" {
 		areaNodes = s.resolveAreaNodes(area)
 	}
+	var regionObs map[string]bool
+	if region != "" {
+		regionObs = s.resolveRegionObservers(region)
+	}
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	ptNames := payloadTypeNames
-
-	var regionObs map[string]bool
-	if region != "" {
-		regionObs = s.resolveRegionObservers(region)
-	}
 
 	// Collect all observations matching the region
 	estCap := s.totalObs
@@ -10546,6 +10565,11 @@ func (s *PacketStore) GetAnalyticsSubpathsWithWindow(region string, minLen, maxL
 // region-filters. Mirrors computeSubpathsSlow but with the window predicate
 // inlined and without requiring a non-empty region.
 func (s *PacketStore) computeAnalyticsSubpathsWindowed(region string, minLen, maxLen, limit int, window TimeWindow) map[string]interface{} {
+	var regionObs map[string]bool
+	if region != "" {
+		regionObs = s.resolveRegionObservers(region)
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -10566,11 +10590,6 @@ func (s *PacketStore) computeAnalyticsSubpathsWindowed(region string, minLen, ma
 			return r.Name
 		}
 		return hop
-	}
-
-	var regionObs map[string]bool
-	if region != "" {
-		regionObs = s.resolveRegionObservers(region)
 	}
 
 	subpathCounts := make(map[string]*subpathAccum)
@@ -10766,6 +10785,11 @@ type subpathAccum struct {
 }
 
 func (s *PacketStore) computeAnalyticsSubpaths(region string, minLen, maxLen, limit int) map[string]interface{} {
+	var regionObs map[string]bool
+	if region != "" {
+		regionObs = s.resolveRegionObservers(region)
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -10793,7 +10817,7 @@ func (s *PacketStore) computeAnalyticsSubpaths(region string, minLen, maxLen, li
 	// For region queries fall back to packet iteration (region filtering
 	// requires per-transmission observer checks).
 	if region != "" {
-		return s.computeSubpathsSlow(region, minLen, maxLen, limit, resolveHop)
+		return s.computeSubpathsSlow(regionObs, minLen, maxLen, limit, resolveHop)
 	}
 
 	top, totalPaths := s.topNamedSubpaths([]subpathGroup{{MinLen: minLen, MaxLen: maxLen, Limit: limit}}, resolveHop)
@@ -10802,9 +10826,8 @@ func (s *PacketStore) computeAnalyticsSubpaths(region string, minLen, maxLen, li
 
 // computeSubpathsSlow is the original O(N) packet-iteration path, used only
 // for region-filtered queries where we must check per-transmission observers.
-func (s *PacketStore) computeSubpathsSlow(region string, minLen, maxLen, limit int, resolveHop func(string) string) map[string]interface{} {
-	regionObs := s.resolveRegionObservers(region)
-
+// regionObs is the region's observer set, resolved before the caller took s.mu.
+func (s *PacketStore) computeSubpathsSlow(regionObs map[string]bool, minLen, maxLen, limit int, resolveHop func(string) string) map[string]interface{} {
 	subpathCounts := make(map[string]*subpathAccum)
 	totalPaths := 0
 
