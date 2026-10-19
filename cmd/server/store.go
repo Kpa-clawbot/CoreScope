@@ -4389,8 +4389,9 @@ func resolvePayloadTypeName(pt *int) string {
 }
 
 // txGetParsedPath returns cached parsed path hops, parsing on first call.
-// pickBestObservation fills the cache before a tx is shared, so the parse
-// here only runs for a tx that is not in the store (#2237).
+// Readers must not be the first caller (#2237): a tx's cache is filled under
+// the write lock where it is created (rechargeTx, via estimateStoreTxBytes)
+// and where its path changes (pickBestObservation, via setTxPath).
 func txGetParsedPath(tx *StoreTx) []string {
 	if tx.pathParsed {
 		return tx.parsedPath
