@@ -180,7 +180,14 @@ async function api(path, { ttl = 0, bust = false } = {}) {
           attempt++;
           continue;
         }
-        if (!res.ok) throw new Error(`API ${res.status}: ${path}`);
+        if (!res.ok) {
+          // status and Retry-After ride on the error so a caller can decide to
+          // retry; api() itself retries only the 503 warm-up above.
+          const err = new Error(`API ${res.status}: ${path}`);
+          err.status = res.status;
+          err.retryAfter = res.headers.get('Retry-After');
+          throw err;
+        }
         const data = await res.json();
         const ms = performance.now() - t0;
         _apiPerf.calls++;
@@ -203,7 +210,9 @@ async function api(path, { ttl = 0, bust = false } = {}) {
     }
   })();
   _inflight.set(path, promise);
-  promise.finally(() => _inflight.delete(path));
+  // The cleanup chain must not reject on its own: callers handle the error
+  // through `promise`, and an unhandled copy logs 'Uncaught (in promise)'.
+  promise.finally(() => _inflight.delete(path)).catch(() => {});
   return promise;
 }
 
