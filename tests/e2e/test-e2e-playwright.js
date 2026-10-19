@@ -565,12 +565,14 @@ async function run() {
     // Use page.click() to avoid detached-element race with WebSocket auto-refresh.
     await page.click('table tbody tr:not([id^=vscroll])');
     await page.waitForSelector('.node-detail');
-    // Find the Details link in the side panel
-    await page.waitForSelector('#nodesRight a.btn-primary[href^="#/nodes/"]');
-    const href = await page.$eval('#nodesRight a.btn-primary[href^="#/nodes/"]', el => el.getAttribute('href'));
-    assert(href, 'Details link not found in side panel');
-    // Click the Details link — this should navigate to the full detail page
-    await page.click('#nodesRight a.btn-primary[href^="#/nodes/"]');
+    // Find the Details button in the side panel. The a.btn-primary next to
+    // it is the Analytics link (#2218).
+    await page.waitForSelector('#nodesRight .node-detail-btn');
+    const pk = await page.$eval('#nodesRight .node-detail-btn', el => el.getAttribute('data-pubkey'));
+    assert(pk, 'Details button not found in side panel');
+    const href = '#/nodes/' + pk;
+    // Click the Details button — this should navigate to the full detail page
+    await page.click('#nodesRight .node-detail-btn');
     // Wait for navigation — the full detail page has sections like neighbors/packets
     await page.waitForFunction((expectedHash) => {
       return location.hash === expectedHash;

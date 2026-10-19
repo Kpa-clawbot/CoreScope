@@ -587,6 +587,7 @@ jobs:
           suite 3 test-observer-iata-1188-e2e.js BASE_URL=$B
           suite 2 test-issue-1639-observers-sort-e2e.js BASE_URL=$B
           suite 2 test-issue-748-node-analytics-coverage-e2e.js BASE_URL=$B
+          suite 2 test-issue-2218-node-analytics-stale-e2e.js BASE_URL=$B
           suite 2 test-issue-661-airtime-e2e.js BASE_URL=$B
           suite 2 test-health-status-e2e.js BASE_URL=$B
           suite 2 test-issue-1268-rf-params-e2e.js BASE_URL=$B
