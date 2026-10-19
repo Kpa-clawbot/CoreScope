@@ -895,6 +895,24 @@ Returned when the node is unknown or blacklisted.
 { "error": "Not found" }
 ```
 
+### Response `429`
+
+Returned when the report is not cached and the server is already computing
+2 other uncached reports. Such a request waits up to 3 s for one of them to
+finish and is answered 429 only if none does. Cached answers never wait, and
+concurrent requests for the same node and `days` share one computation; when
+the request that started a shared computation disconnects first, the others
+sharing it also get 429. Nothing is cached for a 429; retry after
+`Retry-After` seconds.
+
+```
+Retry-After: 2
+```
+
+```json
+{ "error": "reach is busy computing other reports", "retryAfter": 2 }
+```
+
 ---
 
 ## GET /api/packets
