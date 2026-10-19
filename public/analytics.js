@@ -258,13 +258,13 @@
     RegionFilter.init(document.getElementById('analyticsRegionFilter'));
     AreaFilter.init(document.getElementById('analyticsAreaFilter'));
     setAreaFilterVisibility(_currentTab);
-    _regionChangeHandler = RegionFilter.onChange(function () { loadAnalytics(); });
-    _areaChangeHandler = AreaFilter.onChange(function () { loadAnalytics(); });
+    _regionChangeHandler = RegionFilter.onChange(reloadForFilters);
+    _areaChangeHandler = AreaFilter.onChange(reloadForFilters);
 
     // Time-window picker (#842) — refresh analytics on change.
     const tw = document.getElementById('analyticsTimeWindow');
     if (tw) {
-      tw.addEventListener('change', function () { _updateAnalyticsUrl(); loadAnalytics(); });
+      tw.addEventListener('change', function () { _updateAnalyticsUrl(); reloadForFilters(); });
     }
 
     // Delegated click/keyboard handler for clickable table rows
@@ -301,7 +301,18 @@
     };
     window.addEventListener('theme-refresh', _themeRefreshHandler);
 
+    // A deep-linked tab that loads its own data does not wait for the bulk
+    // load, which only renders the bulk tabs (#2200).
+    if (!BULK_TABS.has(_currentTab)) renderTab(_currentTab);
     loadAnalytics();
+  }
+
+  // A filter change reloads the bulk data; a tab that loads its own data is
+  // re-rendered for the new filters right away, since the bulk load no
+  // longer renders it (#2200).
+  function reloadForFilters() {
+    loadAnalytics();
+    if (!BULK_TABS.has(_currentTab)) renderTab(_currentTab);
   }
 
   var _themeRefreshHandler = null;
@@ -355,11 +366,12 @@
       ]);
       if (!isCurrent()) return;
       _analyticsData = { hashData, rfData, topoData, chanData, collisionData, airtimeData, window: twVal };
-      renderTab(_currentTab);
+      // A tab that loads its own data is left alone (#2200).
+      if (BULK_TABS.has(_currentTab)) renderTab(_currentTab);
     } catch (e) {
       if (!isCurrent()) return;
       _loadError = e.message;
-      document.getElementById('analyticsContent').innerHTML = loadErrorHtml(e.message);
+      if (BULK_TABS.has(_currentTab)) document.getElementById('analyticsContent').innerHTML = loadErrorHtml(e.message);
     }
   }
 

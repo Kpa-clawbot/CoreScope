@@ -45,6 +45,7 @@ function load(hash) {
     initTabBar() {}, CLIENT_TTL: {},
     viewGeneration: () => nav.gen,
     api: (url) => new Promise((resolve, reject) => calls.push({ url, resolve, reject })),
+    fetchAllNodes: () => ctx.api('/nodes'),
     RegionFilter: { init() {}, onChange: (fn) => fn, offChange() {}, regionQueryString: () => '' },
     AreaFilter: { init() {}, onChange: (fn) => fn, offChange() {}, areaQueryString: () => '' },
   };
@@ -163,6 +164,56 @@ function load(hash) {
     t.answer(0, 666);
     await flush();
     assert(t.content().includes('666 packets'), 'the load renders the active tab once it lands');
+  }
+
+  // A tab that loads its own data (here the Prefix Tool) is not the bulk
+  // load's to render: it draws at once and stays when the bulk load lands.
+  const BULK = /^\/analytics\/(hash-sizes|rf|topology|channels|hash-collisions|relay-airtime-share)\b/;
+  const bulkCalls = (t) => t.calls.filter((c) => BULK.test(c.url));
+  const ownCalls = (t) => t.calls.filter((c) => !BULK.test(c.url));
+  const answerBulk = (t, total) => {
+    for (const c of bulkCalls(t)) {
+      c.resolve(c.url.startsWith('/analytics/hash-sizes')
+        ? { distribution: { 1: total }, total, hourly: [], topHops: [], multiByteNodes: [] } : {});
+    }
+  };
+
+  console.log('Analytics: a tab with its own data and the bulk load');
+  {
+    const t = load('#/analytics?tab=prefix-tool');
+    await t.page.init(el());
+    assert(t.content().includes('Loading prefix data'), 'a deep-linked own-data tab renders without waiting for the bulk load');
+    bulkCalls(t)[0].reject(new Error('bulk failed'));
+    await flush();
+    assert(!t.content().includes('Failed to load'), 'a failed bulk load does not replace it with an error');
+  }
+  {
+    const t = load('#/analytics?tab=prefix-tool');
+    await t.page.init(el());
+    const own = ownCalls(t).length;
+    answerBulk(t, 7);
+    await flush();
+    assert(ownCalls(t).length === own, 'a successful bulk load does not re-render it (no new fetch)');
+    assert(!t.content().includes('7 packets'), 'and does not draw a bulk tab over it');
+  }
+  {
+    const t = load('#/analytics?tab=prefix-tool');
+    await t.page.init(el());
+    // The Prefix Tool fetches /analytics/hash-sizes too, so count /analytics/rf.
+    const rfLoads = () => t.calls.filter((c) => c.url.startsWith('/analytics/rf')).length;
+    const own = ownCalls(t).length, rf = rfLoads();
+    t.changeWindow('7d');
+    assert(ownCalls(t).length > own, 'a filter change re-renders it for the new filters');
+    assert(rfLoads() === rf + 1, 'and reloads the bulk data');
+  }
+  {
+    const t = load('#/analytics');
+    await t.page.init(el());
+    t.clickTab('prefix-tool');
+    await flush();
+    answerBulk(t, 8);
+    await flush();
+    assert(!t.content().includes('8 packets'), 'switching to it while the bulk load is pending: the load does not draw Overview over it');
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);
