@@ -3961,7 +3961,7 @@ const areaNodeTTL = 30 * time.Second
 // Results are cached per key. An entry past its TTL is served as-is while one
 // background refresh re-queries it (#2146). A key seen for the first time is
 // queried inline, so callers resolve it before taking s.mu (#2219).
-// Uses its own RWMutex so callers holding s.mu won't deadlock.
+// Uses its own RWMutex, not s.mu.
 func (s *PacketStore) resolveAreaNodes(areaKey string) map[string]bool {
 	if s.config == nil || s.config.Areas == nil {
 		return nil
