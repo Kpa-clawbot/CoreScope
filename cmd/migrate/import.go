@@ -37,18 +37,20 @@ type tableReport struct {
 	SHA256 string `json:"sha256"`
 }
 type importReport struct {
-	Kind     string        `json:"kind"`
-	Verified bool          `json:"verified"`
-	Tables   []tableReport `json:"tables"`
+	Kind            string               `json:"kind"`
+	Verified        bool                 `json:"verified"`
+	Tables          []tableReport        `json:"tables"`
+	ExcludedDerived []derivedTableReport `json:"excluded_derived,omitempty"`
 }
 type sourceManifest struct {
-	Version          int    `json:"version"`
-	RunID            string `json:"run_id"`
-	Kind             string `json:"kind"`
-	SourceDigest     string `json:"source_digest"`
-	RawDigest        string `json:"raw_digest"`
-	NormalizedDigest string `json:"normalized_digest"`
-	TargetDigest     string `json:"target_digest"`
+	Version          int                  `json:"version"`
+	RunID            string               `json:"run_id"`
+	Kind             string               `json:"kind"`
+	SourceDigest     string               `json:"source_digest"`
+	RawDigest        string               `json:"raw_digest"`
+	NormalizedDigest string               `json:"normalized_digest"`
+	TargetDigest     string               `json:"target_digest"`
+	ExcludedDerived  []derivedTableReport `json:"excluded_derived,omitempty"`
 }
 
 const importerLock int64 = 7289041410
@@ -96,6 +98,13 @@ func prepareSource(ctx context.Context, o importOptions, tables []importTable, a
 				return manifest, "", errors.New("migration recovery or normalized snapshot changed; resume refused")
 			}
 		}
+		excluded, err := recoveryDerivedExclusions(raw, o.Kind)
+		if err != nil {
+			return manifest, "", err
+		}
+		if !slices.Equal(excluded, manifest.ExcludedDerived) {
+			return manifest, "", errors.New("migration derived-schema report differs from immutable recovery; resume refused")
+		}
 		return manifest, normalized, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
@@ -125,8 +134,11 @@ func prepareSource(ctx context.Context, o importOptions, tables []importTable, a
 		return manifest, "", err
 	}
 	db.SetMaxOpenConns(1)
+	var excluded []derivedTableReport
 	if _, err = db.ExecContext(ctx, `PRAGMA trusted_schema=OFF`); err == nil {
-		err = normalizeSource(db, o.Kind, raw, tables)
+		if excluded, err = sqliteDerivedExclusions(db, o.Kind); err == nil {
+			err = normalizeSource(db, o.Kind, raw, tables)
+		}
 	}
 	closeErr := db.Close()
 	if err != nil {
@@ -135,7 +147,7 @@ func prepareSource(ctx context.Context, o importOptions, tables []importTable, a
 	if closeErr != nil {
 		return manifest, "", closeErr
 	}
-	manifest = sourceManifest{Version: 1, Kind: o.Kind, SourceDigest: digest, TargetDigest: o.targetDigest}
+	manifest = sourceManifest{Version: 1, Kind: o.Kind, SourceDigest: digest, TargetDigest: o.targetDigest, ExcludedDerived: excluded}
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		return manifest, "", err
@@ -240,6 +252,7 @@ func importSQLite(ctx context.Context, o importOptions) (importReport, error) {
 	if err != nil {
 		return report, err
 	}
+	report.ExcludedDerived = manifest.ExcludedDerived
 	source, err := openSQLite(path, "ro")
 	if err != nil {
 		return report, err
@@ -369,7 +382,7 @@ func importSQLite(ctx context.Context, o importOptions) (importReport, error) {
 	}
 	report.Verified = true
 	if ready {
-		if !slices.Equal(report.Tables, recordedReport.Tables) {
+		if !slices.Equal(report.Tables, recordedReport.Tables) || !slices.Equal(report.ExcludedDerived, recordedReport.ExcludedDerived) {
 			return report, errors.New("ready destination differs from its verified import report; resume refused")
 		}
 		return report, nil

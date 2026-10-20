@@ -100,6 +100,16 @@ func sqliteColumns(db *sql.DB, table string) ([]importColumn, error) {
 }
 
 func validateSource(db *sql.DB, kind string, tables []importTable) error {
+	derived := map[string]bool{}
+	if kind == "telemetry" {
+		objects, err := knownSQLiteHopIndex(db)
+		if err != nil {
+			return err
+		}
+		for _, object := range objects {
+			derived[object.Name] = true
+		}
+	}
 	var accountVersion int
 	if kind == "accounts" {
 		var n int
@@ -137,6 +147,9 @@ func validateSource(db *sql.DB, kind string, tables []importTable) error {
 		ordinary := strings.HasPrefix(strings.ToUpper(strings.Join(strings.Fields(o.sql), " ")), "CREATE TABLE ")
 		if o.kind == "table" && internalTables[o.name] && ordinary {
 			continue
+		}
+		if derived[o.name] {
+			continue // Complete definitions were checked above, not names alone.
 		}
 		objects = append(objects, o)
 		if len(objects) > len(allowed)+1 {
@@ -199,6 +212,12 @@ func normalizeSource(db *sql.DB, kind, rawPath string, tables []importTable) err
 		return users.ApplySQLite(db)
 	}
 
+	// This is the private normalized snapshot. Keep every source/recovery
+	// object intact, but remove the validated derived cache before canonical
+	// normalization so its SQLite JSON triggers cannot execute during import.
+	if _, err := dbschema.DropObservationHopsSchema(db); err != nil {
+		return err
+	}
 	if err := legacy.Normalize(db, nil); err != nil {
 		return err
 	}
