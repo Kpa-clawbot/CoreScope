@@ -273,7 +273,7 @@ test('#2091: list query builder never inherits detail observation', () => {
 test('#2091: init restores obs from the hash after router strips the query', () => {
   const readInitialObservation = new Function('location', 'routeParam',
     'let directObsId = "stale", directPacketId = null, directPacketHash = null; ' +
-    'let savedTimeWindowMin = 15, _pendingUrlRegion = null; const filters = {}, window = {}; ' +
+    'let savedTimeWindowMin = 15; const filters = {}, window = {}; ' +
     'let showFullNames = false; const localStorage = { getItem: () => null, setItem() {} }; ' +
     hashParamsSrc + '\n' + initParamsSrc + '\nreturn directObsId;');
   for (const route of ['aabbccddeeff0011', 'id/42']) {

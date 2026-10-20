@@ -203,6 +203,7 @@ node tests/unit/test-preflight-xss-gate.js
 node tests/unit/test-pull-to-reconnect-1091.js
 node tests/unit/test-pull-to-reconnect.js
 node tests/unit/test-region-filter-setselected.js
+node tests/unit/test-region-filter-url-param.js
 node tests/unit/test-repeater-metric-scatter.js
 node tests/unit/test-rx-coverage-config-race.js
 node tests/unit/test-rx-coverage-mine.js
