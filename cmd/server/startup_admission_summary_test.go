@@ -52,15 +52,24 @@ func TestStartupAdmissionSummaryReheardOldHashKeepsCoverageFloor(t *testing.T) {
 	if !strings.Contains(logs, fmt.Sprintf("firstSeenRange=[%q,%q]", reheardFirst, reheardFirst)) {
 		t.Fatal("summary lost the actual retained first-seen range", logs)
 	}
+	floor := loggedStartupCoverage(t, logs)
+	if floor.Before(started.Add(-24*time.Hour).Truncate(time.Second)) || floor.After(finished.Add(-24*time.Hour)) {
+		t.Fatalf("summary claims coverageFrom=%q outside the complete 24-hour window; retained first_seen=%q", floor.Format(time.RFC3339), reheardFirst)
+	}
+}
+
+func loggedStartupCoverage(t *testing.T, logs string) time.Time {
+	t.Helper()
 	_, rest, found := strings.Cut(logs, `coverageFrom="`)
 	coverage, _, closed := strings.Cut(rest, `"`)
 	if !found || !closed {
 		t.Fatal("summary has no quoted coverage floor", logs)
 	}
 	floor, err := time.Parse(time.RFC3339, coverage)
-	if err != nil || floor.Before(started.Add(-24*time.Hour).Truncate(time.Second)) || floor.After(finished.Add(-24*time.Hour)) {
-		t.Fatalf("summary claims coverageFrom=%q outside the complete 24-hour window; retained first_seen=%q: %v", coverage, reheardFirst, err)
+	if err != nil {
+		t.Fatal("summary has an invalid coverage floor", coverage, err)
 	}
+	return floor
 }
 
 func TestStartupAdmissionSummary(t *testing.T) {
@@ -88,12 +97,14 @@ func TestStartupAdmissionSummary(t *testing.T) {
 			if tc.closeDB {
 				db.conn.Close()
 			}
+			started := time.Now().UTC()
 			logs := captureLog(func() {
 				err := s.RunStartupLoad(2)
 				if (err != nil) != tc.closeDB {
 					t.Fatalf("startup error=%v, want error=%v", err, tc.closeDB)
 				}
 			})
+			finished := time.Now().UTC()
 			var summaries []string
 			for _, line := range strings.Split(logs, "\n") {
 				if strings.Contains(line, "[store] startup admission:") {
@@ -111,7 +122,6 @@ func TestStartupAdmissionSummary(t *testing.T) {
 				fmt.Sprintf("budgetMB=%d", tc.budgetMB),
 				fmt.Sprintf("transmissions=%d observations=%d", len(s.packets), s.totalObs),
 				fmt.Sprintf("firstSeenRange=[%q,%q]", first, last),
-				fmt.Sprintf("coverageFrom=%q", s.oldestLoaded),
 				"stop=" + tc.reason,
 				"formerPolicyTransmissionEstimate=",
 			} {
@@ -121,6 +131,12 @@ func TestStartupAdmissionSummary(t *testing.T) {
 			}
 			if tc.name == "background" && len(s.packets) != tc.transmissions {
 				t.Fatalf("summary preceded background fill: %d/%d packets", len(s.packets), tc.transmissions)
+			}
+			floor := loggedStartupCoverage(t, summaries[0])
+			earliest, _ := s.coverageStart(started)
+			latest, _ := s.coverageStart(finished)
+			if floor.Before(earliest.Truncate(time.Second)) || floor.After(latest) {
+				t.Fatalf("summary coverage floor=%s, want complete coverage between %s and %s", floor, earliest, latest)
 			}
 		})
 	}

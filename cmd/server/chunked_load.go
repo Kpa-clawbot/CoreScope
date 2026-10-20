@@ -199,6 +199,7 @@ func (s *PacketStore) fireChunkCallbacks(rowsThisChunk, totalRows int) {
 // bg loader starts.
 func (s *PacketStore) RunStartupLoad(chunkSize int) error {
 	defer s.signalStartupLoadDone()
+	defer s.logStartupAdmission()
 	// Clear any stale error from a previous invocation (single-call
 	// invariant — see godoc above). Production never re-enters but
 	// test fixtures may construct fresh stores that share no state;
@@ -262,6 +263,41 @@ func (s *PacketStore) RunStartupLoad(chunkSize int) error {
 		s.oldestLoaded, s.retentionHours, s.hotStartupHours)
 	s.loadBackgroundChunks()
 	return nil
+}
+
+// logStartupAdmission reports the terminal cache state after both startup phases.
+// The first_seen endpoints describe retained rows, not complete time coverage:
+// a long-lived hash may be older than coverageFrom. All inputs are existing
+// counters or sorted-slice endpoints; this adds no database query or store scan.
+func (s *PacketStore) logStartupAdmission() {
+	s.mu.RLock()
+	txCount, obsCount, trackedBytes := len(s.packets), s.totalObs, s.trackedBytes
+	budgetMB, limited := s.maxMemoryMB, s.startupMemoryLimited
+	coverageFrom := ""
+	if floor, _ := s.coverageStart(time.Now().UTC()); !floor.IsZero() {
+		coverageFrom = floor.Format(time.RFC3339)
+	}
+	first, last := "", ""
+	if txCount > 0 {
+		first, last = s.packets[0].FirstSeen, s.packets[txCount-1].FirstSeen
+	}
+	s.mu.RUnlock()
+	reason := "window_complete"
+	if s.backgroundLoadFailed.Load() {
+		reason = "error"
+	} else if limited {
+		reason = "memory_budget"
+	}
+	// This is the former count-admission policy, not measured memory usage.
+	// It assumed ten observations per transmission and always admitted at
+	// least 1,000 transmissions, even when their real fanout exceeded budget.
+	formerEstimate := "unlimited"
+	if budgetMB > 0 {
+		typicalBytes := max(int64(1000), estimateStoreTxBytesTypical(10))
+		formerEstimate = fmt.Sprint(max(int64(1000), int64(budgetMB)*1048576/typicalBytes))
+	}
+	log.Printf("[store] startup admission: budgetMB=%d transmissions=%d observations=%d trackedMB=%.2f firstSeenRange=[%q,%q] coverageFrom=%q stop=%s formerPolicyTransmissionEstimate=%s (assumedObservations=10 minimumTransmissions=1000)",
+		budgetMB, txCount, obsCount, float64(trackedBytes)/1048576, first, last, coverageFrom, reason, formerEstimate)
 }
 
 // LoadChunked streams transmissions + observations from the selected backend into
