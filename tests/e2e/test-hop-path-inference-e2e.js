@@ -2,7 +2,7 @@
  * E2E: the packet detail pane infers an observation's hops by position, and
  * the map route view draws the same hops.
  *
- * Fixture: packet 57224a4a01c9c682, observation 147 — a 22-hop flood whose
+ * Fixture: transmission 147, observation 147 — a 22-hop flood whose
  * path carries the 1-byte prefix "10" three times and "D6" twice, so a
  * per-prefix resolution would give each repeat the same answer.
  *
@@ -12,7 +12,7 @@
 const { chromium } = require('playwright');
 
 const BASE = process.env.BASE_URL || 'http://localhost:13581';
-const HASH = '57224a4a01c9c682';
+const TRANSMISSION_ID = '147';
 const OBS_ID = '147';
 
 let passed = 0, failed = 0;
@@ -36,9 +36,22 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
 
   console.log(`\n=== Hop path inference E2E against ${BASE} ===`);
 
+  // Offline fixture preparation normalizes legacy hashes. Resolve the preserved
+  // transmission ID through the real API, then exercise its canonical hash links.
+  const fixtureResponse = await ctx.request.get(`${BASE}/api/packets/${TRANSMISSION_ID}`);
+  assert(fixtureResponse.ok(), `fixture transmission returned HTTP ${fixtureResponse.status()}`);
+  const fixture = await fixtureResponse.json();
+  const hash = fixture.packet.hash;
+  assert(/^[a-f0-9]{16}$/.test(hash), 'fixture has no canonical packet hash');
+  const observation = fixture.observations.find(o => String(o.id) === OBS_ID);
+  assert(observation, 'fixture observation is missing');
+  const path = JSON.parse(observation.path_json);
+  assert(path.length === 22 && path.filter(h => h === '10').length === 3 &&
+    path.filter(h => h === 'D6').length === 2, 'fixture no longer has the repeated-prefix route');
+
   let detailHops = [];
   await step('the detail pane renders the observation\'s 22 hops', async () => {
-    await page.goto(`${BASE}/#/packets/${HASH}?obs=${OBS_ID}`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`${BASE}/#/packets/${hash}?obs=${OBS_ID}`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => {
       const dt = [...document.querySelectorAll('.detail-meta dt')].find(d => d.textContent === 'Path');
       return dt && dt.nextElementSibling.querySelectorAll('.hop').length > 0;
@@ -53,6 +66,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   });
 
   await step('every hop is an inferred entry: a likelihood or an unlisted reason', async () => {
+    assert(detailHops.length === 22, 'expected the complete observation path');
     const bad = detailHops.filter(h => !/% likely|no listed node|no known node|no GPS/.test(h.title));
     assert(!bad.length, 'hops without an inferred title: ' + JSON.stringify(bad.slice(0, 3)));
   });
@@ -75,7 +89,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   });
 
   await step('the map route view draws the same hops, unlisted ones as placeholders', async () => {
-    await page.goto(`${BASE}/#/map?packet=${HASH}&obs=${OBS_ID}`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`${BASE}/#/map?packet=${hash}&obs=${OBS_ID}`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => document.querySelectorAll('.mc-rt-row').length >= 22, null, { timeout: 15000 });
     const rows = await page.evaluate(() => [...document.querySelectorAll('.mc-rt-row')].map(r => r.innerText));
     for (let i = 0; i < detailHops.length; i++) {
