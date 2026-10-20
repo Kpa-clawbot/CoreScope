@@ -258,13 +258,13 @@
     RegionFilter.init(document.getElementById('analyticsRegionFilter'));
     AreaFilter.init(document.getElementById('analyticsAreaFilter'));
     setAreaFilterVisibility(_currentTab);
-    RegionFilter.onChange(function () { loadAnalytics(); });
-    AreaFilter.onChange(function () { loadAnalytics(); });
+    _regionChangeHandler = RegionFilter.onChange(reloadForFilters);
+    _areaChangeHandler = AreaFilter.onChange(reloadForFilters);
 
     // Time-window picker (#842) — refresh analytics on change.
     const tw = document.getElementById('analyticsTimeWindow');
     if (tw) {
-      tw.addEventListener('change', function () { _updateAnalyticsUrl(); loadAnalytics(); });
+      tw.addEventListener('change', function () { _updateAnalyticsUrl(); reloadForFilters(); });
     }
 
     // Delegated click/keyboard handler for clickable table rows
@@ -301,15 +301,43 @@
     };
     window.addEventListener('theme-refresh', _themeRefreshHandler);
 
+    // A deep-linked tab that loads its own data does not wait for the bulk
+    // load, which only renders the bulk tabs (#2200).
+    if (!BULK_TABS.has(_currentTab)) renderTab(_currentTab);
     loadAnalytics();
   }
 
+  // A filter change reloads the bulk data; a tab that loads its own data is
+  // re-rendered for the new filters right away, since the bulk load no
+  // longer renders it (#2200).
+  function reloadForFilters() {
+    loadAnalytics();
+    if (!BULK_TABS.has(_currentTab)) renderTab(_currentTab);
+  }
+
   var _themeRefreshHandler = null;
+  var _regionChangeHandler = null;
+  var _areaChangeHandler = null;
   let _currentTab = 'overview';
 
+  // #2200: only the newest bulk load of the current visit may render. A
+  // window/region change starts a new load on the same visit, so the page
+  // keeps its own sequence next to the router's viewGeneration().
+  var _loadSeq = 0;
+  var _loadError = null;
+  // Tabs drawn from the bulk load; the other tabs fetch their own data.
+  var BULK_TABS = new Set(['overview', 'rf', 'topology', 'channels', 'hashsizes', 'collisions']);
+  function loadErrorHtml(msg) {
+    return `<div class="text-muted" role="alert" aria-live="polite" style="padding:40px">Failed to load: ${esc(msg)}</div>`;
+  }
+
   async function loadAnalytics() {
+    var gen = viewGeneration();
+    var seq = ++_loadSeq;
+    var isCurrent = function () { return gen === viewGeneration() && seq === _loadSeq; };
     try {
       _analyticsData = {};
+      _loadError = null;
       const rqs = RegionFilter.regionQueryString(); // "&region=..." or ""
       const aqs = AreaFilter.areaQueryString();     // "&area=..." or ""
       // Time window picker (#842) — append &window=… when set.
@@ -336,17 +364,27 @@
         api('/analytics/hash-collisions' + sepBase, { ttl: CLIENT_TTL.analyticsRF }),
         api('/analytics/relay-airtime-share' + sepWin, { ttl: CLIENT_TTL.analyticsRF }).catch(() => ({ rows: [] })),
       ]);
+      if (!isCurrent()) return;
       _analyticsData = { hashData, rfData, topoData, chanData, collisionData, airtimeData, window: twVal };
-      renderTab(_currentTab);
+      // A tab that loads its own data is left alone (#2200).
+      if (BULK_TABS.has(_currentTab)) renderTab(_currentTab);
     } catch (e) {
-      document.getElementById('analyticsContent').innerHTML =
-        `<div class="text-muted" role="alert" aria-live="polite" style="padding:40px">Failed to load: ${e.message}</div>`;
+      if (!isCurrent()) return;
+      _loadError = e.message;
+      if (BULK_TABS.has(_currentTab)) document.getElementById('analyticsContent').innerHTML = loadErrorHtml(e.message);
     }
   }
 
   async function renderTab(tab) {
     const el = document.getElementById('analyticsContent');
     const d = _analyticsData;
+    // A tab click or refresh before the bulk load lands keeps the loading
+    // (or error) state instead of drawing from missing data (#2200).
+    if (BULK_TABS.has(tab) && !d.rfData) {
+      el.innerHTML = _loadError ? loadErrorHtml(_loadError)
+        : '<div class="text-center text-muted" style="padding:40px">Loading analytics…</div>';
+      return;
+    }
     switch (tab) {
       case 'overview': renderOverview(el, d); break;
       case 'rf': renderRF(el, d.rfData); break;
@@ -3170,7 +3208,7 @@
     }
   }
 
-function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRetry(); _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
+function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _stopDistanceRetry(); _analyticsData = {}; _loadError = null; if (_regionChangeHandler) { RegionFilter.offChange(_regionChangeHandler); _regionChangeHandler = null; } if (_areaChangeHandler) { AreaFilter.offChange(_areaChangeHandler); _areaChangeHandler = null; } _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
 
   // Expose for testing
   if (typeof window !== 'undefined') {

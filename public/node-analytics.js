@@ -9,6 +9,9 @@
   let charts = [];
   let currentDays = 7;
   let currentPubkey = null;
+  // A time-range click is a new load on the same visit: only the newest may
+  // render (#2218).
+  let loadSeq = 0;
 
   function destroyCharts() {
     charts.forEach(c => { try { c.destroy(); } catch {} });
@@ -58,6 +61,9 @@
   window.NodeAnalyticsCoverage = { notice: coverageNotice, rateText: rateText };
 
   async function loadAnalytics(container, pubkey, days) {
+    const gen = viewGeneration();
+    const seq = ++loadSeq;
+    const isCurrent = () => gen === viewGeneration() && seq === loadSeq;
     currentPubkey = pubkey;
     currentDays = days;
     destroyCharts();
@@ -69,9 +75,11 @@
     try {
       data = await api('/nodes/' + encodeURIComponent(pubkey) + '/analytics?days=' + days, { ttl: CLIENT_TTL.nodeAnalytics });
     } catch (e) {
+      if (!isCurrent()) return;
       container.innerHTML = '<div style="padding:40px;text-align:center;color:#ff6b6b">Failed to load analytics: ' + escapeHtml(e.message) + '</div>';
       return;
     }
+    if (!isCurrent()) return;
 
     const n = data.node;
     const s = data.computedStats;
@@ -198,7 +206,7 @@
     buildObserverChart(data);
     buildHopChart(data);
     buildHeatmap(data);
-    loadBatteryChart(pubkey, currentDays);
+    loadBatteryChart(pubkey, currentDays, isCurrent);
     NodeHopAnalytics.load(document.getElementById('hopCountSection'), pubkey, currentDays);
   }
 
@@ -330,15 +338,17 @@
     }
   }
 
-  async function loadBatteryChart(pubkey, days) {
+  async function loadBatteryChart(pubkey, days, isCurrent) {
     let data;
     try {
       data = await api('/nodes/' + encodeURIComponent(pubkey) + '/battery?days=' + days);
     } catch (e) {
+      if (!isCurrent()) return;
       const empty = document.getElementById('batteryEmpty');
       if (empty) { empty.style.display = 'block'; empty.textContent = 'Battery data unavailable: ' + e.message; }
       return;
     }
+    if (!isCurrent()) return;
     const ctx = document.getElementById('batteryChart');
     const empty = document.getElementById('batteryEmpty');
     const badge = document.getElementById('batteryStatusBadge');

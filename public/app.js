@@ -1156,6 +1156,13 @@ registerPage('tools-landing', {
 
 let currentPage = null;
 
+// Bumped on every page init, so async page work can tell its visit is over:
+// capture viewGeneration() at init and drop the result when it has moved on
+// (#2218, #2230, #2200). A route change to another node of the same page
+// type is a new visit too.
+let _viewGeneration = 0;
+function viewGeneration() { return _viewGeneration; }
+
 function closeNav() {
   document.querySelector('.nav-links')?.classList.remove('open');
   document.body.classList.remove('nav-open');
@@ -1254,6 +1261,7 @@ function navigate() {
     moreBtn.classList.toggle('active', !!hasActiveMore);
   }
 
+  _viewGeneration++;
   if (currentPage && pages[currentPage]?.destroy) {
     pages[currentPage].destroy();
   }

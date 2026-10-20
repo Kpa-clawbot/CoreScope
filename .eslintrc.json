@@ -285,6 +285,7 @@
     "toggleFavorite": "readonly",
     "transportBadge": "readonly",
     "truncate": "readonly",
+    "viewGeneration": "readonly",
     "ws": "readonly",
     "wsListeners": "readonly"
   },

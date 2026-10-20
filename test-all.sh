@@ -158,6 +158,9 @@ node tests/unit/test-issue-2097-hop-ambiguity-badge.js
 node tests/unit/test-issue-2098-last-hop-region.js
 node tests/unit/test-issue-2206-hop-count.js
 node tests/unit/test-issue-2206-payload-badge.js
+node tests/unit/test-issue-2200-analytics-stale-load.js
+node tests/unit/test-issue-2218-node-analytics-stale-render.js
+node tests/unit/test-issue-2230-account-stale-render.js
 node tests/unit/test-live-anims.js
 node tests/unit/test-live-dt-cap-1524.js
 node tests/unit/test-live-legend-helper.js

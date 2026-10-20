@@ -307,7 +307,7 @@ type PacketStore struct {
 	groupedCacheMu    sync.Mutex
 	groupedCacheKey   string
 	groupedCacheExp   time.Time
-	groupedCacheTxs   []*StoreTx // sorted by LatestSeen DESC
+	groupedCacheTxs   []groupedEntry // sorted by LatestSeen DESC
 	groupedCacheTotal int
 	// Short-lived cache for GetChannels (avoids repeated full scan + JSON unmarshal)
 	channelsCacheMu  sync.Mutex
@@ -1823,6 +1823,7 @@ func (s *PacketStore) loadBackgroundChunks() {
 // and sets it as the transmission's display observation.
 func pickBestObservation(tx *StoreTx) {
 	if len(tx.Observations) == 0 {
+		setTxPath(tx, tx.PathJSON)
 		return
 	}
 	best := tx.Observations[0]
@@ -1839,9 +1840,21 @@ func pickBestObservation(tx *StoreTx) {
 	tx.ObserverIATA = best.ObserverIATA
 	tx.SNR = best.SNR
 	tx.RSSI = best.RSSI
-	tx.PathJSON = best.PathJSON
 	tx.Direction = best.Direction
-	tx.pathParsed = false // invalidate cached parsed path
+	setTxPath(tx, best.PathJSON)
+}
+
+// setTxPath sets tx's display path and fills its parsed-path cache. It runs
+// where tx is written (s.mu held for writing, or tx not yet in the store),
+// so readers calling txGetParsedPath under s.mu.RLock find the cache full
+// instead of filling it concurrently (#2237).
+func setTxPath(tx *StoreTx, pathJSON string) {
+	if tx.pathParsed && tx.PathJSON == pathJSON {
+		return
+	}
+	tx.PathJSON = pathJSON
+	tx.parsedPath = parsePathJSON(pathJSON)
+	tx.pathParsed = true
 }
 
 // rechargeTx re-estimates tx and returns the change since it was last charged,
@@ -2167,26 +2180,30 @@ func (s *PacketStore) QueryGroupedPackets(q PacketQuery) *PacketResult {
 		cachedTxs := s.groupedCacheTxs
 		cachedTotal := s.groupedCacheTotal
 		s.groupedCacheMu.Unlock()
-		return groupedTxsToPage(cachedTxs, cachedTotal, q.Offset, q.Limit)
+		return s.groupedPage(cachedTxs, cachedTotal, q.Offset, q.Limit)
 	}
 	s.groupedCacheMu.Unlock()
 
-	// Collect StoreTx pointers under read lock; sort outside it.
+	// Collect StoreTx pointers and their sort keys under read lock; sort
+	// outside it. Ingest rewrites LatestSeen under s.mu, so the key is
+	// copied rather than read during the sort (#2237).
 	f := s.resolvePacketFilterSets(q)
 	s.mu.RLock()
 	results := s.filterPackets(q, f)
-	txs := make([]*StoreTx, len(results))
-	copy(txs, results)
+	txs := make([]groupedEntry, len(results))
+	for i, tx := range results {
+		txs[i] = groupedEntry{tx: tx, latest: tx.LatestSeen}
+	}
 	s.mu.RUnlock()
 
 	total := len(txs)
 
 	// Full sort by LatestSeen DESC so the cached slice supports all page offsets.
-	sort.Slice(txs, func(i, j int) bool {
-		return txs[i].LatestSeen > txs[j].LatestSeen
+	slices.SortFunc(txs, func(a, b groupedEntry) int {
+		return strings.Compare(b.latest, a.latest)
 	})
 
-	// Cache the sorted StoreTx slice (not maps) — lightweight and reusable for any page.
+	// Cache the sorted entries (not maps) — lightweight and reusable for any page.
 	s.groupedCacheMu.Lock()
 	s.groupedCacheTxs = txs
 	s.groupedCacheTotal = total
@@ -2194,7 +2211,7 @@ func (s *PacketStore) QueryGroupedPackets(q PacketQuery) *PacketResult {
 	s.groupedCacheExp = time.Now().Add(3 * time.Second)
 	s.groupedCacheMu.Unlock()
 
-	return groupedTxsToPage(txs, total, q.Offset, q.Limit)
+	return s.groupedPage(txs, total, q.Offset, q.Limit)
 }
 
 // pagePacketResult returns a window of a PacketResult without re-allocating the slice.
@@ -2210,9 +2227,30 @@ func pagePacketResult(r *PacketResult, offset, limit int) *PacketResult {
 	return &PacketResult{Packets: r.Packets[offset:end], Total: total}
 }
 
-// groupedTxsToPage builds map representations only for the requested page of sorted StoreTx pointers.
-// This avoids allocating maps for all 30K+ transmissions when only 50 are needed.
-func groupedTxsToPage(txs []*StoreTx, total, offset, limit int) *PacketResult {
+// groupedEntry is one transmission of the sorted grouped list, with the
+// LatestSeen it was sorted by.
+type groupedEntry struct {
+	tx     *StoreTx
+	latest string
+}
+
+// groupedRow is a copy of the StoreTx fields one grouped-packets row shows.
+type groupedRow struct {
+	hash, firstSeen, latest                string
+	observerID, observerName, observerIATA string
+	pathJSON, rawHex, decodedJSON          string
+	observationCount, observerCount        int
+	payloadType, routeType                 *int
+	snr, rssi                              *float64
+	scopeName                              *string
+	observations                           []*StoreObs // slice header only, see snapshotGroupedRow
+}
+
+// groupedPage builds the requested page of txs (sorted by LatestSeen DESC).
+// txs may be the shared grouped cache, and ingest rewrites the header fields
+// and appends to tx.Observations under s.mu, so the page's rows are copied
+// under s.mu.RLock; the maps are built after it is released (#2237).
+func (s *PacketStore) groupedPage(txs []groupedEntry, total, offset, limit int) *PacketResult {
 	if offset >= len(txs) {
 		return &PacketResult{Packets: []map[string]interface{}{}, Total: total}
 	}
@@ -2221,33 +2259,69 @@ func groupedTxsToPage(txs []*StoreTx, total, offset, limit int) *PacketResult {
 		end = len(txs)
 	}
 	page := txs[offset:end]
+	rows := make([]groupedRow, len(page))
+	s.mu.RLock()
+	for i, e := range page {
+		rows[i] = snapshotGroupedRow(e.tx)
+	}
+	s.mu.RUnlock()
+	return groupedRowsToPage(rows, total)
+}
 
-	packets := make([]map[string]interface{}, len(page))
-	for i, tx := range page {
+// snapshotGroupedRow copies the row fields of tx. Caller holds s.mu, or
+// owns tx. Of tx.Observations only the slice header is copied: ingest
+// appends to it, which never changes the elements the header covers.
+func snapshotGroupedRow(tx *StoreTx) groupedRow {
+	return groupedRow{
+		hash:             tx.Hash,
+		firstSeen:        tx.FirstSeen,
+		latest:           tx.LatestSeen,
+		observerID:       tx.ObserverID,
+		observerName:     tx.ObserverName,
+		observerIATA:     tx.ObserverIATA,
+		pathJSON:         tx.PathJSON,
+		rawHex:           tx.RawHex,
+		decodedJSON:      tx.DecodedJSON,
+		observationCount: tx.ObservationCount,
+		observerCount:    tx.UniqueObserverCount,
+		payloadType:      tx.PayloadType,
+		routeType:        tx.RouteType,
+		snr:              tx.SNR,
+		rssi:             tx.RSSI,
+		scopeName:        tx.ScopeName,
+		observations:     tx.Observations,
+	}
+}
+
+// groupedRowsToPage builds map representations only for the requested page of rows.
+// This avoids allocating maps for all 30K+ transmissions when only 50 are needed.
+func groupedRowsToPage(rows []groupedRow, total int) *PacketResult {
+	packets := make([]map[string]interface{}, len(rows))
+	for i, r := range rows {
 		// #1189 R2: compute distinct IATA set across all observations.
 		// Frontend uses this in the default collapsed view to show CROSS-region
 		// reception at a glance — see groupedObserverIataBadgesHtml in
 		// public/packets.js.
-		distinctIatas := storeTxDistinctIatas(tx)
+		distinctIatas := distinctObserverIatas(r.observerIATA, r.observations)
 		m := map[string]interface{}{
-			"hash":              strOrNil(tx.Hash),
-			"first_seen":        strOrNil(tx.FirstSeen),
-			"count":             tx.ObservationCount,
-			"observer_count":    tx.UniqueObserverCount,
-			"observation_count": tx.ObservationCount,
-			"latest":            strOrNil(tx.LatestSeen),
-			"observer_id":       strOrNil(tx.ObserverID),
-			"observer_name":     strOrNil(tx.ObserverName),
-			"observer_iata":     strOrNil(tx.ObserverIATA),
+			"hash":              strOrNil(r.hash),
+			"first_seen":        strOrNil(r.firstSeen),
+			"count":             r.observationCount,
+			"observer_count":    r.observerCount,
+			"observation_count": r.observationCount,
+			"latest":            strOrNil(r.latest),
+			"observer_id":       strOrNil(r.observerID),
+			"observer_name":     strOrNil(r.observerName),
+			"observer_iata":     strOrNil(r.observerIATA),
 			"distinct_iatas":    distinctIatas,
-			"path_json":         strOrNil(tx.PathJSON),
-			"payload_type":      intPtrOrNil(tx.PayloadType),
-			"route_type":        intPtrOrNil(tx.RouteType),
-			"raw_hex":           strOrNil(tx.RawHex),
-			"decoded_json":      strOrNil(tx.DecodedJSON),
-			"snr":               floatPtrOrNil(tx.SNR),
-			"rssi":              floatPtrOrNil(tx.RSSI),
-			"scope_name":        strPtrOrNil(tx.ScopeName),
+			"path_json":         strOrNil(r.pathJSON),
+			"payload_type":      intPtrOrNil(r.payloadType),
+			"route_type":        intPtrOrNil(r.routeType),
+			"raw_hex":           strOrNil(r.rawHex),
+			"decoded_json":      strOrNil(r.decodedJSON),
+			"snr":               floatPtrOrNil(r.snr),
+			"rssi":              floatPtrOrNil(r.rssi),
+			"scope_name":        strPtrOrNil(r.scopeName),
 		}
 		// resolved_path omitted for grouped view (cold path, not worth SQL round-trip)
 		packets[i] = m
@@ -2256,22 +2330,20 @@ func groupedTxsToPage(txs []*StoreTx, total, offset, limit int) *PacketResult {
 	return &PacketResult{Packets: packets, Total: total}
 }
 
-// storeTxDistinctIatas (#1189 R2) returns a sorted, deduped list of observer
-// IATA codes for a StoreTx, excluding empty values. Returns an empty
-// (non-nil) []string when the tx has no IATA'd observations so JSON
-// serialization stays consistent across the in-memory store and SQL
-// fallback paths (db.go's parseDistinctIatasCSV does the same).
-func storeTxDistinctIatas(tx *StoreTx) []string {
-	if tx == nil {
-		return []string{}
-	}
+// distinctObserverIatas (#1189 R2) returns a sorted, deduped list of observer
+// IATA codes for a transmission, from its header observer and its
+// observations, excluding empty values. Returns an empty (non-nil) []string
+// when there are none so JSON serialization stays consistent across the
+// in-memory store and SQL fallback paths (db.go's parseDistinctIatasCSV does
+// the same).
+func distinctObserverIatas(headerIATA string, observations []*StoreObs) []string {
 	seen := make(map[string]bool)
 	// Include the header observer's IATA (some hot-path StoreTx records the
 	// chosen observer fields directly without re-populating Observations).
-	if tx.ObserverIATA != "" {
-		seen[tx.ObserverIATA] = true
+	if headerIATA != "" {
+		seen[headerIATA] = true
 	}
-	for _, o := range tx.Observations {
+	for _, o := range observations {
 		if o != nil && o.ObserverIATA != "" {
 			seen[o.ObserverIATA] = true
 		}
@@ -2422,10 +2494,10 @@ func (s *PacketStore) GetPerfStoreStats() map[string]interface{} {
 
 	// Distinct advert pubkey count — precomputed incrementally (see trackAdvertPubkey).
 	advertByObsCount := len(s.advertPubkeys)
+	trackedMB := math.Round(s.trackedMemoryMB()*10) / 10
 	s.mu.RUnlock()
 
 	estimatedMB := math.Round(s.estimatedMemoryMB()*10) / 10
-	trackedMB := math.Round(s.trackedMemoryMB()*10) / 10
 
 	evicted := atomic.LoadInt64(&s.evicted)
 
@@ -2609,6 +2681,11 @@ func (s *PacketStore) GetPerfStoreStatsTyped() PerfPacketStoreStats {
 	retentionHours := s.retentionHours
 
 	advertByObsCount := len(s.advertPubkeys)
+	trackedMB := math.Round(s.trackedMemoryMB()*10) / 10
+	var avgBytesPerPacket int64
+	if totalLoaded > 0 {
+		avgBytesPerPacket = s.trackedBytes / int64(totalLoaded)
+	}
 	s.mu.RUnlock()
 
 	s.bgErrMu.RLock()
@@ -2617,12 +2694,6 @@ func (s *PacketStore) GetPerfStoreStatsTyped() PerfPacketStoreStats {
 	s.bgErrMu.RUnlock()
 
 	estimatedMB := math.Round(s.estimatedMemoryMB()*10) / 10
-	trackedMB := math.Round(s.trackedMemoryMB()*10) / 10
-
-	var avgBytesPerPacket int64
-	if totalLoaded > 0 {
-		avgBytesPerPacket = s.trackedBytes / int64(totalLoaded)
-	}
 
 	return PerfPacketStoreStats{
 		TotalLoaded:       totalLoaded,
@@ -3549,8 +3620,8 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 				removeTxFromPathHopIndex(s.byPathHop, tx)
 				tx.parsedPath, tx.pathParsed = saved, savedFlag
 			}
-			// pickBestObservation already set pathParsed=false so
-			// addTxToPathHopIndex re-parses the new path.
+			// pickBestObservation already parsed the new path into
+			// tx.parsedPath for addTxToPathHopIndex.
 			addTxToPathHopIndex(s.byPathHop, tx)
 			// #1164: coalesce — one invalidate after the loop, not per-tx.
 			pathHopMutated = true
@@ -4337,6 +4408,9 @@ func resolvePayloadTypeName(pt *int) string {
 }
 
 // txGetParsedPath returns cached parsed path hops, parsing on first call.
+// Readers must not be the first caller (#2237): a tx's cache is filled under
+// the write lock where it is created (rechargeTx, via estimateStoreTxBytes)
+// and where its path changes (pickBestObservation, via setTxPath).
 func txGetParsedPath(tx *StoreTx) []string {
 	if tx.pathParsed {
 		return tx.parsedPath
@@ -5048,6 +5122,7 @@ func (s *PacketStore) estimatedMemoryMB() float64 {
 }
 
 // trackedMemoryMB returns the self-accounted packet store memory in MB.
+// Caller holds s.mu: ingest and eviction update trackedBytes under it.
 func (s *PacketStore) trackedMemoryMB() float64 {
 	return float64(s.trackedBytes) / 1048576.0
 }
