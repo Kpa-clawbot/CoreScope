@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"slices"
 
 	"github.com/meshcore-analyzer/dbconfig"
@@ -72,6 +73,8 @@ func upgradeRecordedPostgres(ctx context.Context, o storageOptions, expected dbc
 		if !plan.needed {
 			continue
 		}
+		previous, current := recordedPostgresVersions(plan.kind)
+		log.Printf("[storage] PostgreSQL %s schema upgrade required: %d -> %d", plan.kind, previous, current)
 		if plan.kind == "telemetry" {
 			err = dbschema.ApplyPostgres(plan.db, nil)
 		} else {
@@ -80,6 +83,7 @@ func upgradeRecordedPostgres(ctx context.Context, o storageOptions, expected dbc
 		if err != nil {
 			return err
 		}
+		log.Printf("[storage] upgraded recorded PostgreSQL %s schema %d -> %d", plan.kind, previous, current)
 	}
 	if err := grantRuntimeTargets(ctx, selected, owners, raw); err != nil {
 		return err
@@ -100,7 +104,7 @@ func validateRecordedPostgresUpgrade(ctx context.Context, db *sql.DB, kind strin
 	if err := db.QueryRowContext(ctx, `SELECT count(*),min(kind),min(version),bool_and(ready) FROM corescope_schema`).Scan(&count, &recordedKind, &version, &ready); err != nil || count != 1 || recordedKind != kind || !ready {
 		return false, errors.New("recorded PostgreSQL store is missing, unsupported or incomplete; it was not initialized")
 	}
-	previous, current := 1, dbschema.Version
+	previous, current := recordedPostgresVersions(kind)
 	if kind == "accounts" {
 		if version != users.PostgresSchemaVersion {
 			return false, errors.New("unsupported PostgreSQL account readiness version")
@@ -108,7 +112,6 @@ func validateRecordedPostgresUpgrade(ctx context.Context, db *sql.DB, kind strin
 		if err := db.QueryRowContext(ctx, `SELECT count(*),coalesce(max(version),0) FROM schema_version`).Scan(&count, &version); err != nil || count != 1 {
 			return false, errors.New("recorded PostgreSQL account schema is incomplete")
 		}
-		previous, current = 5, users.CurrentSchemaVersion
 	}
 	if version != previous && version != current {
 		return false, errors.New("unsupported PostgreSQL schema version; upgrade was not attempted")
@@ -171,6 +174,13 @@ func validateRecordedPostgresUpgrade(ctx context.Context, db *sql.DB, kind strin
 		return false, errors.New("unsupported PostgreSQL upgrade layout; source data and selection were not changed")
 	}
 	return true, nil
+}
+
+func recordedPostgresVersions(kind string) (previous, current int) {
+	if kind == "accounts" {
+		return 5, users.CurrentSchemaVersion
+	}
+	return 1, dbschema.Version
 }
 
 func upgradeAddedRelation(kind, name string) bool {

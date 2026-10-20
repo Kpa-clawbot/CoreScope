@@ -197,7 +197,9 @@ BEGIN
                WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
                  AND CASE WHEN c.relkind='S' THEN has_sequence_privilege(c.oid,'USAGE,UPDATE') ELSE false END)
  THEN RAISE EXCEPTION 'QA requires a restricted PostgreSQL reader role' USING ERRCODE='42501'; END IF;
- IF (SELECT count(*) FROM corescope_schema WHERE kind='telemetry' AND version=1 AND ready) <> 1
+ -- Keep the runtime QA reader at dbschema.Version; the native regression uses
+ -- the shipping migrator's schema and rejects old, future and unfinished markers.
+ IF (SELECT count(*) FROM corescope_schema WHERE kind='telemetry' AND version=2 AND ready) <> 1
  THEN RAISE EXCEPTION 'telemetry schema is not ready' USING ERRCODE='55000'; END IF;
 END $qa$;
 SQL
