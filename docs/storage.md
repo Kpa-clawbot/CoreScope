@@ -12,6 +12,18 @@ cache now accounts for SQLite observation fan-out when admitting history: under
 the same memory budget it may retain a shorter hot window. Omitted history stays
 in SQL; a smaller cache does not change database retention.
 
+After startup loading finishes, the server emits one `[store] startup admission`
+summary with the configured memory budget, admitted transmission and observation
+counts, tracked memory estimate and retained `firstSeenRange`. `coverageFrom` is
+the conservative complete-coverage boundary; an older first-seen timestamp can
+belong to a long-lived hash and does not establish complete history coverage.
+`stop=memory_budget` means the bounded cache is ready, `window_complete` means the
+requested window finished, and `error` leaves startup unready.
+`formerPolicyTransmissionEstimate` describes the previous admission formula
+(ten assumed observations per transmission and a 1,000-transmission minimum);
+it is not a measured previous memory footprint. Use `/api/healthz` for readiness
+and SQL-backed views to inspect history outside the admitted cache.
+
 ## Install
 
 Keep a complete checkout pinned to the same release as the image. For the usual single-host installation, preserve an existing private `.env` or copy `.env.example`, set `DATA_DIR` to the intended persistent directory, then run:
@@ -45,7 +57,12 @@ stores, including disabled accounts, and preserve the matching state/configurati
 and previous image. Stop both application writers
 for the update. Managed bootstrap checks readiness and, when necessary, invokes
 the offline owner upgrade for the existing recorded targets before runtime
-starts. It cannot replace missing initialized databases or add an absent account
+starts. A supported older schema is reported as `upgrade required` with its
+stored and target versions, followed by the verified upgrade result. The
+provisional readiness error is not printed after a successful upgrade.
+Missing, corrupt or future schemas still fail; their diagnostics remain visible
+and runtime services stay stopped. Bootstrap rechecks readiness before granting
+runtime access. It cannot replace missing initialized databases or add an absent account
 store. Previously initialized accounts are upgraded even while their UI is
 disabled. Native deployments use the same operation with owner credentials in
 private environment configuration:
@@ -93,6 +110,22 @@ For the managed production deployment:
 The switch asks for confirmation, stops the owned application processes, starts only the database service when needed, and invokes the verified converter. It does not bootstrap the destination schema before conversion. Existing accounts participate even when their UI is disabled. A PostgreSQL destination must be empty; preserve an old cluster and choose a new PostgreSQL directory instead of overwriting it. Switching to SQLite creates new destination paths under the existing persistent state directory, preserving the old source files.
 
 The converter snapshots/normalizes supported source data, copies bounded batches, verifies table counts, typed logical digests and reference/identity high-water marks, applies narrow destination grants, and checks runtime connections. Both requested stores must verify before the single selection replacement. The state directory itself does not move.
+
+The optional SQLite hop index is derived data, not a telemetry source. Conversion
+accepts only the known v1 layout: `observation_hops`,
+`observation_hops_coverage`, and all three `trg_observation_hops_ai`, `_ad`, `_au`
+triggers with their expected definitions. Partial layouts, changed definitions
+and extra indexes on these tables are refused. The converter removes these
+objects only from its private normalized snapshot; the original source and
+recovery copy retain them. Reports list both tables in `excluded_derived` with
+their schema version and rebuild reason, outside the canonical row/digest
+comparison.
+
+`retention.hopIndexDays` controls this cache on SQLite only. PostgreSQL uses its
+native reach query and logs that the SQLite cache option is inactive; no
+PostgreSQL hop-index schema is installed. After conversion back to SQLite,
+the cache is absent until the ingestor normally installs and rebuilds it when
+`hopIndexDays` is positive.
 
 On success, inspect the credential-free report and recorded targets. The management command leaves writers stopped:
 
