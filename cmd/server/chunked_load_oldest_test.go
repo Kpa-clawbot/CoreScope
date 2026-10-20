@@ -73,19 +73,28 @@ func createTestDBReverseTime(tb testing.TB, dbPath string, numTx int) {
 		}
 	}
 
-	txStmt, _ := conn.Prepare("INSERT INTO transmissions (id, raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)")
-	obsStmt, _ := conn.Prepare("INSERT INTO observations (id, transmission_id, observer_id, observer_name, direction, snr, rssi, score, path_json, timestamp) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)")
+	txStmt, err := conn.Prepare("INSERT INTO transmissions (id, raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)")
+	if err != nil {
+		tb.Fatal(err)
+	}
 	defer txStmt.Close()
+	obsStmt, err := conn.Prepare("INSERT INTO observations (id, transmission_id, observer_id, observer_name, direction, snr, rssi, score, path_json, timestamp) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)")
+	if err != nil {
+		tb.Fatal(err)
+	}
 	defer obsStmt.Close()
 
 	// id=1 is the NEWEST (now); id=numTx is the OLDEST (numTx minutes ago).
 	now := time.Now().UTC().Truncate(time.Second)
 	for i := 1; i <= numTx; i++ {
 		ts := now.Add(-time.Duration(i-1) * time.Minute).Format(time.RFC3339)
-		unixTs := now.Add(-time.Duration(i-1) * time.Minute).Unix()
 		hash := fmt.Sprintf("h%04d", i)
-		txStmt.Exec(i, "aabb", hash, ts, 0, 4, 1, fmt.Sprintf(`{"pubKey":"pk%04d"}`, i))
-		obsStmt.Exec(i, i, "obs1", "Obs1", "RX", -10.0, -80.0, 5, `["aa","bb"]`, unixTs)
+		if _, err := txStmt.Exec(i, "aabb", hash, ts, 0, 4, 1, fmt.Sprintf(`{"pubKey":"pk%04d"}`, i)); err != nil {
+			tb.Fatal(err)
+		}
+		if _, err := obsStmt.Exec(i, i, "obs1", "Obs1", "RX", -10.0, -80.0, 5, `["aa","bb"]`, ts); err != nil {
+			tb.Fatal(err)
+		}
 	}
 }
 

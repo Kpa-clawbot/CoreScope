@@ -51,13 +51,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			// password, so a squatter cannot plant credentials and the owner
 			// can recover a squatted address. Failures stay invisible to the
 			// client (same response as every other branch).
-			switch err := a.st.UpdatePendingRegistration(existing.ID, hash, name); {
-			case errors.Is(err, users.ErrAccountChanged):
-				// Activation or another account change won the race. Keep the
-				// generic response without changing credentials or issuing mail.
-			case err != nil:
+			if err := a.st.SetPassword(existing.ID, hash); err != nil {
 				log.Printf("[users] register: update pending user #%d: %v", existing.ID, err)
-			default:
+			} else if err := a.st.SetDisplayName(existing.ID, name); err != nil {
+				log.Printf("[users] register: update pending user #%d: %v", existing.ID, err)
+			} else {
 				existing.DisplayName = name
 				_ = a.mailToken(r.Context(), existing, users.PurposeActivate, 48*time.Hour, "", "activate",
 					func(tok string) mailer.Message { return a.activationMail(existing, tok) })

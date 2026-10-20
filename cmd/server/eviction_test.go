@@ -17,7 +17,7 @@ func makeTestStore(count int, startTime time.Time, intervalMin int) *PacketStore
 		byObsID:       make(map[int]*StoreObs, count*2),
 		byObserver:    make(map[string][]*StoreObs),
 		byNode:        make(map[string][]*StoreTx),
-		nodeHashes:    make(map[string]map[string]bool),
+		nodeHashes:    newNodeSets(),
 		byPayloadType: make(map[int][]*StoreTx),
 		distHops:      make([]distHopRecord, 0),
 		distPaths:     make([]distPathRecord, 0),
@@ -73,9 +73,9 @@ func makeTestStore(count int, startTime time.Time, intervalMin int) *PacketStore
 		// Index by node
 		pk := fmt.Sprintf("pk%04d", i)
 		if store.nodeHashes[pk] == nil {
-			store.nodeHashes[pk] = make(map[string]bool)
+			store.nodeHashes[pk] = make(map[int]struct{})
 		}
-		store.nodeHashes[pk][hash] = true
+		store.nodeHashes[pk][txID] = struct{}{}
 		store.byNode[pk] = append(store.byNode[pk], tx)
 
 		// Add to distance index
@@ -255,7 +255,7 @@ func TestEvictStale_CleansResolvedPathNodeIndexes(t *testing.T) {
 		byObsID:              make(map[int]*StoreObs),
 		byObserver:           make(map[string][]*StoreObs),
 		byNode:               make(map[string][]*StoreTx),
-		nodeHashes:           make(map[string]map[string]bool),
+		nodeHashes:           newNodeSets(),
 		byPayloadType:        make(map[int][]*StoreTx),
 		distHops:             make([]distHopRecord, 0),
 		distPaths:            make([]distPathRecord, 0),
@@ -309,7 +309,7 @@ func TestEvictStale_CleansResolvedPathNodeIndexes(t *testing.T) {
 	if len(store.byNode[relayPK]) != 1 {
 		t.Fatalf("expected 1 entry in byNode[%s], got %d", relayPK, len(store.byNode[relayPK]))
 	}
-	if !store.nodeHashes[relayPK][tx.Hash] {
+	if !store.nodeHasTx(relayPK, tx) {
 		t.Fatalf("expected nodeHashes[%s] to contain %s", relayPK, tx.Hash)
 	}
 

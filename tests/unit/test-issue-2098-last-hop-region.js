@@ -191,7 +191,7 @@ const hasBadge = part => /hop-conflict-btn/.test(part);
     assert(hasBadge(ef1), 'earlier hop "ef": a badge, every candidate kept');
   }
 
-  console.log('\n=== #2098: the detail pane keeps a region-narrowed entry off the bare key ===');
+  console.log('\n=== #2098: the detail pane keeps its region-anchored hops out of the list cache ===');
   {
     const t = loadPackets()._packetsTestAPI;
     const panel = { innerHTML: '', querySelectorAll: () => [], querySelector: () => null, addEventListener: () => {} };
@@ -201,7 +201,10 @@ const hasBadge = part => /hop-conflict-btn/.test(part);
         decoded_json: JSON.stringify({ type: 'CHAN', channel: '#test', sender: 'A', text: 'A: hi' }) },
       observations: [],
     });
-    assert(/AB-NEAR/.test(hopParts(t.renderPath(['ef', 'ab'], OBSERVER_ID))[1]), 'with the observer, the detail resolved the last hop in region');
+    // The detail infers its hops by position and renders them itself; the
+    // list's per-prefix cache is not written (it used to be, by prefix).
+    const row = (panel.innerHTML.match(/<dt>Path<\/dt><dd>([\s\S]*?)<\/dd>/) || [])[1] || '';
+    assert(/AB-NEAR/.test(hopParts(row)[1] || ''), 'with the observer, the detail resolved the last hop in region');
     // Without an observer (the bare key) it must not borrow that narrowed entry.
     const bare = t.renderPath(['ab'], undefined);
     assert(!/AB-NEAR/.test(bare) || hasBadge(bare), 'without an observer, "ab" is not shown as narrowed to one region (' + bare.replace(/<[^>]+>/g, '') + ')');

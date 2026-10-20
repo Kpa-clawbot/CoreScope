@@ -31,7 +31,7 @@ func TestStoreTx_ResolvedPathFieldAbsent(t *testing.T) {
 func TestResolvedPubkeyIndex_BuildFromLoad(t *testing.T) {
 	store := &PacketStore{
 		byNode:               make(map[string][]*StoreTx),
-		nodeHashes:           make(map[string]map[string]bool),
+		nodeHashes:           newNodeSets(),
 		useResolvedPathIndex: true,
 	}
 	store.initResolvedPathIndex()
@@ -73,7 +73,7 @@ func TestResolvedPubkeyIndex_HashCollision(t *testing.T) {
 	store := &PacketStore{
 		db:                   db,
 		byNode:               make(map[string][]*StoreTx),
-		nodeHashes:           make(map[string]map[string]bool),
+		nodeHashes:           newNodeSets(),
 		useResolvedPathIndex: true,
 	}
 	store.initResolvedPathIndex()
@@ -110,7 +110,7 @@ func TestResolvedPubkeyIndex_HashCollision(t *testing.T) {
 func TestResolvedPubkeyIndex_IngestUpdate(t *testing.T) {
 	store := &PacketStore{
 		byNode:               make(map[string][]*StoreTx),
-		nodeHashes:           make(map[string]map[string]bool),
+		nodeHashes:           newNodeSets(),
 		useResolvedPathIndex: true,
 	}
 	store.initResolvedPathIndex()
@@ -137,7 +137,7 @@ func TestResolvedPubkeyIndex_IngestUpdate(t *testing.T) {
 func TestResolvedPubkeyIndex_RemoveOnEvict(t *testing.T) {
 	store := &PacketStore{
 		byNode:               make(map[string][]*StoreTx),
-		nodeHashes:           make(map[string]map[string]bool),
+		nodeHashes:           newNodeSets(),
 		useResolvedPathIndex: true,
 	}
 	store.initResolvedPathIndex()
@@ -170,7 +170,7 @@ func TestResolvedPubkeyIndex_RemoveOnEvict(t *testing.T) {
 func TestResolvedPubkeyIndex_PerObsCoverage(t *testing.T) {
 	store := &PacketStore{
 		byNode:               make(map[string][]*StoreTx),
-		nodeHashes:           make(map[string]map[string]bool),
+		nodeHashes:           newNodeSets(),
 		useResolvedPathIndex: true,
 	}
 	store.initResolvedPathIndex()
@@ -201,7 +201,7 @@ func TestResolvedPubkeyIndex_PerObsCoverage(t *testing.T) {
 func TestAddToByNode_WithoutResolvedPathField(t *testing.T) {
 	store := &PacketStore{
 		byNode:     make(map[string][]*StoreTx),
-		nodeHashes: make(map[string]map[string]bool),
+		nodeHashes: newNodeSets(),
 	}
 
 	tx := &StoreTx{ID: 1, Hash: "h1"}
@@ -283,7 +283,7 @@ func TestEviction_ByNodeCleanup_OnDemandSQL(t *testing.T) {
 		byObsID:              make(map[int]*StoreObs),
 		byObserver:           make(map[string][]*StoreObs),
 		byNode:               make(map[string][]*StoreTx),
-		nodeHashes:           make(map[string]map[string]bool),
+		nodeHashes:           newNodeSets(),
 		byPayloadType:        make(map[int][]*StoreTx),
 		distHops:             make([]distHopRecord, 0),
 		distPaths:            make([]distPathRecord, 0),
@@ -356,7 +356,7 @@ func TestRunEviction_NoLockDuringSQLFetch(t *testing.T) {
 		byObsID:              make(map[int]*StoreObs),
 		byObserver:           make(map[string][]*StoreObs),
 		byNode:               make(map[string][]*StoreTx),
-		nodeHashes:           make(map[string]map[string]bool),
+		nodeHashes:           newNodeSets(),
 		byPayloadType:        make(map[int][]*StoreTx),
 		byPathHop:            make(map[string][]*StoreTx),
 		distHops:             make([]distHopRecord, 0),
@@ -434,7 +434,7 @@ func TestRunEviction_NoLockDuringSQLFetch(t *testing.T) {
 func TestPathsThroughNode_NilResolvedPathFallback(t *testing.T) {
 	store := &PacketStore{
 		byNode:               make(map[string][]*StoreTx),
-		nodeHashes:           make(map[string]map[string]bool),
+		nodeHashes:           newNodeSets(),
 		byPathHop:            make(map[string][]*StoreTx),
 		useResolvedPathIndex: true,
 	}
@@ -533,7 +533,7 @@ func TestPacketsAPI_OnDemandResolvedPath_LRUHit(t *testing.T) {
 func TestFeatureFlag_OffPath_PreservesOldBehavior(t *testing.T) {
 	store := &PacketStore{
 		byNode:               make(map[string][]*StoreTx),
-		nodeHashes:           make(map[string]map[string]bool),
+		nodeHashes:           newNodeSets(),
 		useResolvedPathIndex: false,
 	}
 	store.initResolvedPathIndex()
@@ -559,7 +559,7 @@ func TestFeatureFlag_Toggle_NoStateLeak(t *testing.T) {
 	// the off-path just stops reading/writing it.
 	store := &PacketStore{
 		byNode:               make(map[string][]*StoreTx),
-		nodeHashes:           make(map[string]map[string]bool),
+		nodeHashes:           newNodeSets(),
 		useResolvedPathIndex: true,
 	}
 	store.initResolvedPathIndex()
@@ -584,7 +584,7 @@ func TestFeatureFlag_Toggle_NoStateLeak(t *testing.T) {
 func TestReverseMap_NoLeakOnPartialFailure(t *testing.T) {
 	store := &PacketStore{
 		byNode:               make(map[string][]*StoreTx),
-		nodeHashes:           make(map[string]map[string]bool),
+		nodeHashes:           newNodeSets(),
 		useResolvedPathIndex: true,
 	}
 	store.initResolvedPathIndex()
@@ -609,7 +609,7 @@ func TestReverseMap_NoLeakOnPartialFailure(t *testing.T) {
 func TestDecodeWindow_LockHoldTimeBounded(t *testing.T) {
 	store := &PacketStore{
 		byNode:               make(map[string][]*StoreTx),
-		nodeHashes:           make(map[string]map[string]bool),
+		nodeHashes:           newNodeSets(),
 		byPathHop:            make(map[string][]*StoreTx),
 		useResolvedPathIndex: true,
 	}
@@ -644,7 +644,7 @@ func BenchmarkResolvedPubkeyIndex_Memory(b *testing.B) {
 			for n := 0; n < b.N; n++ {
 				store := &PacketStore{
 					byNode:               make(map[string][]*StoreTx),
-					nodeHashes:           make(map[string]map[string]bool),
+					nodeHashes:           newNodeSets(),
 					useResolvedPathIndex: true,
 				}
 				store.initResolvedPathIndex()
@@ -681,7 +681,7 @@ func BenchmarkLoad_BeforeAfter(b *testing.B) {
 			byTxID:               make(map[int]*StoreTx, numTx),
 			byObsID:              make(map[int]*StoreObs, numTx*numObsPerTx),
 			byNode:               make(map[string][]*StoreTx),
-			nodeHashes:           make(map[string]map[string]bool),
+			nodeHashes:           newNodeSets(),
 			byPathHop:            make(map[string][]*StoreTx),
 			useResolvedPathIndex: true,
 		}
@@ -836,7 +836,7 @@ func BenchmarkHopsSeen_Reuse(b *testing.B) {
 func BenchmarkPathsThroughNode_Latency(b *testing.B) {
 	store := &PacketStore{
 		byNode:               make(map[string][]*StoreTx),
-		nodeHashes:           make(map[string]map[string]bool),
+		nodeHashes:           newNodeSets(),
 		useResolvedPathIndex: true,
 	}
 	store.initResolvedPathIndex()
@@ -1148,7 +1148,7 @@ func TestResolvedPubkeyIndex_BoundedByEviction(t *testing.T) {
 		byObsID:              make(map[int]*StoreObs),
 		byObserver:           make(map[string][]*StoreObs),
 		byNode:               make(map[string][]*StoreTx),
-		nodeHashes:           make(map[string]map[string]bool),
+		nodeHashes:           newNodeSets(),
 		byPayloadType:        make(map[int][]*StoreTx),
 		byPathHop:            make(map[string][]*StoreTx),
 		distHops:             make([]distHopRecord, 0),
@@ -1272,7 +1272,7 @@ func TestRunEviction_TriggersCompaction(t *testing.T) {
 		byObsID:              make(map[int]*StoreObs),
 		byObserver:           make(map[string][]*StoreObs),
 		byNode:               make(map[string][]*StoreTx),
-		nodeHashes:           make(map[string]map[string]bool),
+		nodeHashes:           newNodeSets(),
 		byPayloadType:        make(map[int][]*StoreTx),
 		byPathHop:            make(map[string][]*StoreTx),
 		distHops:             make([]distHopRecord, 0),
@@ -1358,7 +1358,7 @@ func TestResolvedPubkeyIndex_MemoryStableThroughEvictionCycles(t *testing.T) {
 		byObsID:              make(map[int]*StoreObs),
 		byObserver:           make(map[string][]*StoreObs),
 		byNode:               make(map[string][]*StoreTx),
-		nodeHashes:           make(map[string]map[string]bool),
+		nodeHashes:           newNodeSets(),
 		byPayloadType:        make(map[int][]*StoreTx),
 		byPathHop:            make(map[string][]*StoreTx),
 		distHops:             make([]distHopRecord, 0),

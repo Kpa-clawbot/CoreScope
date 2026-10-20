@@ -16,7 +16,7 @@ with unmodified upstream
 [`9dbc287`](https://github.com/Kpa-clawbot/CoreScope/commit/9dbc287579a237ffa744dd0c91fa7227d09763ac).
 The [raw public artifact](https://github.com/Kpa-clawbot/CoreScope/actions/runs/37914893623/artifacts/11613951167),
 [complete tables](performance/postgresql-ce023e0-details.md) and
-[machine-readable results](performance/postgresql-ce023e0-details.json) retain
+[machine-readable results at commit d132e582](https://github.com/n30nex/CoreScope/blob/d132e582e6260897cde43c8041f104ba53bde0ff/docs/performance/postgresql-ce023e0-details.json) retain
 every measured class, regression, range, input hash and limitation.
 
 Both engines ran serially on the same Linux x86-64 runner, with Go 1.27.2,

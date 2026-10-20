@@ -83,6 +83,12 @@ func assertStartupBudget(t *testing.T, s *PacketStore, observations int) {
 	if len(s.byHash) != len(s.packets) || len(s.byTxID) != len(s.packets) || len(s.byObsID) != s.totalObs {
 		t.Fatal("partial transmission leaked into an index")
 	}
+	if s.startupMemoryLimited {
+		edge, reason := s.coverageStart(time.Now().UTC())
+		if edge.Format(time.RFC3339) != s.oldestLoaded || reason != coverageMemory {
+			t.Fatalf("memory-limited coverage edge=%s (%s), want conservative boundary %s", edge, reason, s.oldestLoaded)
+		}
+	}
 }
 
 func TestStartupMemoryBudget_HighFanout(t *testing.T) {

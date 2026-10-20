@@ -18,7 +18,7 @@ func newChannelTestStore(packets []*StoreTx) *PacketStore {
 		byObserver:     make(map[string][]*StoreObs),
 		byNode:         make(map[string][]*StoreTx),
 		byPathHop:      make(map[string][]*StoreTx),
-		nodeHashes:     make(map[string]map[string]bool),
+		nodeHashes:     newNodeSets(),
 		byPayloadType:  make(map[int][]*StoreTx),
 		rfCache:        make(map[string]*cachedResult),
 		topoCache:      make(map[string]*cachedResult),

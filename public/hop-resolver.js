@@ -323,6 +323,334 @@ window.HopResolver = (function() {
     return resolved;
   }
 
+  // ── Whole-path inference for one observation ──
+  //
+  // resolve() picks each hop greedily and keys its result by prefix, so a
+  // prefix seen twice in one path gets one node, and nothing checks that the
+  // chosen hops form a path a packet could have taken. inferPath() scores the
+  // path as a whole instead, using two firmware facts (Mesh::routeRecvPacket,
+  // wasSeen): a relayer appends its own hash, so the last hop is the one the
+  // observer heard directly; and a node forwards a packet once, so it appears
+  // at most once in a path.
+  //
+  // Each hop is either one of the located repeaters sharing its prefix, or
+  // "unlisted": a node missing from the list or without GPS. With 1-byte
+  // prefixes the second is common, and naming it beats drawing a 300 km hop.
+  // The cheapest sequence is found by dynamic programming over (hop, node),
+  // and each hop's confidence comes from comparing the best path through each
+  // of its alternatives.
+  //
+  // TODO(customizer): expose these once the detail view settles (AGENTS rule 8).
+  const PATH_MODEL = {
+    typicalHopKm: 50,  // a hop this long costs 1
+    maxHopKm: 100,     // per hop; past it the cost climbs 4× as fast
+    unlistedCost: 1.6, // a hop whose node is not located
+    linkFactor: 0.5,   // a neighbour-graph link makes a hop this much cheaper
+    temperature: 0.7,  // turns cost differences into confidence
+    regionSlackKm: 50, // an IATA centre stands in for the observer, loosely
+  };
+
+  function isLocated(n) {
+    return n != null && n.lat != null && n.lon != null &&
+      Number.isFinite(Number(n.lat)) && Number.isFinite(Number(n.lon)) &&
+      !(Number(n.lat) === 0 && Number(n.lon) === 0);
+  }
+
+  // A point on the path: a candidate node or an anchor, with its radians
+  // cached for the cost function.
+  function pathPoint(lat, lon, node, slackKm) {
+    const rlat = Number(lat) * Math.PI / 180;
+    return { rlat, rlon: Number(lon) * Math.PI / 180, cos: Math.cos(rlat),
+      node: node || null, pubkey: node ? node.public_key : null, slackKm: slackKm || 0 };
+  }
+
+  // Equirectangular distance — within a mesh's extent it agrees with
+  // haversine to well under a percent, at a fraction of the cost.
+  function pointKm(a, b) {
+    const x = (b.rlon - a.rlon) * (a.cos + b.cos) / 2;
+    const y = b.rlat - a.rlat;
+    return 6371 * Math.sqrt(x * x + y * y);
+  }
+
+  // Hops further apart than this are not compared directly. Past it the
+  // distance limit (MAX_GAP × maxHopKm) spans any regional mesh, so a longer
+  // run of unlisted hops costs a flat longBase() instead, which a running
+  // minimum handles. This keeps the work at O(hops × MAX_GAP × cands²).
+  const MAX_GAP = 8;
+
+  // Cost of the stretch from a (at one position) to b (gap positions later):
+  // the unlisted hops between them, plus the distance when both are located.
+  function spanCost(a, b, gap) {
+    const c = (gap - 1) * PATH_MODEL.unlistedCost;
+    if (!a || !b) return c;
+    if (gap > MAX_GAP) return c + longBase();
+    const d = Math.max(0, pointKm(a, b) - a.slackKm - b.slackKm);
+    const lim = gap * PATH_MODEL.maxHopKm;
+    let geo = d <= lim ? d / PATH_MODEL.typicalHopKm
+      : (lim + 4 * (d - lim)) / PATH_MODEL.typicalHopKm;
+    if (gap === 1 && a.pubkey && b.pubkey && getAffinity(a.pubkey, b.pubkey) > 0) geo *= PATH_MODEL.linkFactor;
+    return c + geo;
+  }
+
+  // The flat part of a span longer than MAX_GAP between two located points:
+  // span(p → q) = longBase() + (q - p - 1) × unlistedCost.
+  function longBase() {
+    return PATH_MODEL.maxHopKm / PATH_MODEL.typicalHopKm;
+  }
+
+  // steps[p][g][j * |C[p+g]| + l] = cost from candidate j at hop p to
+  // candidate l at hop p+g. Infinity for the same node twice. Computed once,
+  // shared by every solve and the confidence pass.
+  function buildSteps(C) {
+    const L = C.length;
+    const steps = [];
+    for (let p = 0; p < L; p++) {
+      steps.push([null]);
+      for (let g = 1; g <= MAX_GAP && p + g < L; g++) {
+        const A = C[p], Bq = C[p + g], row = new Float64Array(A.length * Bq.length);
+        for (let j = 0; j < A.length; j++) {
+          for (let l = 0; l < Bq.length; l++) {
+            row[j * Bq.length + l] = A[j].pubkey === Bq[l].pubkey ? Infinity : spanCost(A[j], Bq[l], g);
+          }
+        }
+        steps[p].push(row);
+      }
+    }
+    return steps;
+  }
+
+  // Best path cost forward (F) and backward (B) through every (hop, candidate).
+  // bans[i] holds pubkeys excluded at hop i, to keep a node to one position.
+  function solvePath(C, steps, start, end, bans) {
+    const L = C.length, U = PATH_MODEL.unlistedCost, LONG = longBase();
+    const F = C.map(c => new Float64Array(c.length).fill(Infinity));
+    const B = C.map(c => new Float64Array(c.length).fill(Infinity));
+    const backP = C.map(c => new Int32Array(c.length).fill(-1));
+    const backK = C.map(c => new Int32Array(c.length).fill(-1));
+    const isBanned = (i, k) => bans[i] !== null && bans[i].has(C[i][k].pubkey);
+
+    // Forward. longF tracks min(F[p][j] - p·U) over hops more than MAX_GAP back.
+    let longF = Infinity, longP = -1, longK = -1;
+    for (let i = 0; i < L; i++) {
+      const old = i - MAX_GAP - 1;
+      if (old >= 0) {
+        for (let j = 0; j < C[old].length; j++) {
+          const v = F[old][j] - old * U;
+          if (v < longF) { longF = v; longP = old; longK = j; }
+        }
+      }
+      const K = C[i].length;
+      for (let k = 0; k < K; k++) {
+        if (isBanned(i, k)) continue;
+        let best = spanCost(start, C[i][k], i + 1), bp = -1, bk = -1;
+        for (let g = 1; g <= MAX_GAP && g <= i; g++) {
+          const p = i - g, Fp = F[p], row = steps[p][g];
+          for (let j = 0; j < Fp.length; j++) {
+            const v = Fp[j] + row[j * K + k];
+            if (v < best) { best = v; bp = p; bk = j; }
+          }
+        }
+        const vLong = longF + (i - 1) * U + LONG;
+        if (vLong < best) { best = vLong; bp = longP; bk = longK; }
+        F[i][k] = best; backP[i][k] = bp; backK[i][k] = bk;
+      }
+    }
+
+    // Backward. longB tracks min(B[q][l] + q·U) over hops more than MAX_GAP on.
+    let longB = Infinity;
+    for (let i = L - 1; i >= 0; i--) {
+      const old = i + MAX_GAP + 1;
+      if (old < L) {
+        for (let l = 0; l < C[old].length; l++) longB = Math.min(longB, B[old][l] + old * U);
+      }
+      for (let k = 0; k < C[i].length; k++) {
+        if (isBanned(i, k)) continue;
+        let best = Math.min(spanCost(C[i][k], end, L - i), longB - (i + 1) * U + LONG);
+        for (let g = 1; g <= MAX_GAP && i + g < L; g++) {
+          const Bq = B[i + g], row = steps[i][g], base = k * Bq.length;
+          for (let l = 0; l < Bq.length; l++) {
+            const v = Bq[l] + row[base + l];
+            if (v < best) best = v;
+          }
+        }
+        B[i][k] = best;
+      }
+    }
+
+    let total = spanCost(start, end, L + 1), lastP = -1, lastK = -1;
+    for (let i = 0; i < L; i++) {
+      for (let k = 0; k < C[i].length; k++) {
+        const v = F[i][k] + spanCost(C[i][k], end, L - i);
+        if (v < total) { total = v; lastP = i; lastK = k; }
+      }
+    }
+    const assign = new Int32Array(L).fill(-1);
+    for (let p = lastP, k = lastK; p >= 0;) {
+      assign[p] = k;
+      const np = backP[p][k], nk = backK[p][k];
+      p = np; k = nk;
+    }
+    return { F, B, total, assign };
+  }
+
+  // Lowest total cost of any path leaving hop i unlisted: some span from a
+  // point before i (or the start) to a point after it (or the end), with
+  // every hop between unlisted.
+  function unlistedMarginals(C, steps, start, end, F, B) {
+    const L = C.length, U = PATH_MODEL.unlistedCost, LONG = longBase();
+    const mu = new Float64Array(L).fill(Infinity);
+    const cover = (p, q, v) => { for (let i = p + 1; i < q; i++) if (v < mu[i]) mu[i] = v; };
+    const minOf = arr => arr.reduce((m, v) => Math.min(m, v), Infinity);
+
+    for (let p = -1; p < L - 1; p++) {
+      for (let g = 2; g <= MAX_GAP && p + g <= L; g++) {
+        const q = p + g;
+        let best = Infinity;
+        if (p < 0 && q >= L) {
+          best = spanCost(start, end, g);
+        } else if (p < 0) {
+          for (let l = 0; l < C[q].length; l++) best = Math.min(best, spanCost(start, C[q][l], g) + B[q][l]);
+        } else if (q >= L) {
+          for (let j = 0; j < C[p].length; j++) best = Math.min(best, F[p][j] + spanCost(C[p][j], end, g));
+        } else {
+          const row = steps[p][g], K = C[q].length;
+          for (let j = 0; j < C[p].length; j++) {
+            for (let l = 0; l < K; l++) best = Math.min(best, F[p][j] + row[j * K + l] + B[q][l]);
+          }
+        }
+        cover(p, q, best);
+      }
+    }
+    // Spans longer than MAX_GAP cost the same whichever nodes bound them, as
+    // in spanCost(): the flat part only applies between two located points.
+    const Fmin = F.map(minOf), Bmin = B.map(minOf);
+    for (let p = -1; p < L; p++) {
+      for (let q = p + MAX_GAP + 1; q <= L; q++) {
+        const flat = (p < 0 && !start) || (q >= L && !end) ? 0 : LONG;
+        cover(p, q, (p < 0 ? 0 : Fmin[p]) + (q - p - 1) * U + flat + (q >= L ? 0 : Bmin[q]));
+      }
+    }
+    return mu;
+  }
+
+  /**
+   * Infer the most likely node behind every hop of one observation's path.
+   *
+   * @param {string[]} hops - hex prefixes, in path order (last = heard by observer)
+   * @param {Object} [opts]
+   * @param {{lat,lon}} [opts.observer] - the observer's position
+   * @param {string} [opts.observerId] - falls back to its IATA centre when the
+   *   observer reports no position (or 0,0)
+   * @param {{lat,lon}} [opts.origin] - the sender's position, when known
+   * @param {Array<string|null>} [opts.resolvedPath] - server-resolved pubkeys
+   *   aligned with hops; a non-null entry restricts that hop to that node
+   * @returns {Array} one entry per hop: { hop, name, pubkey, lat, lon,
+   *   located, unlisted, unreliable, ambiguous, confidence, candidates,
+   *   conflicts } — candidates sorted by confidence, located first; one the
+   *   path uses at another hop carries usedAt (that hop's index)
+   */
+  function inferPath(hops, opts) {
+    if (!hops || !hops.length) return [];
+    opts = opts || {};
+    const L = hops.length;
+    const rp = Array.isArray(opts.resolvedPath) && opts.resolvedPath.length === L ? opts.resolvedPath : null;
+
+    let end = null;
+    if (isLocated(opts.observer)) {
+      end = pathPoint(opts.observer.lat, opts.observer.lon);
+    } else if (opts.observerId) {
+      const center = iataCoords[observerIataMap[opts.observerId]];
+      if (isLocated(center)) end = pathPoint(center.lat, center.lon, null, PATH_MODEL.regionSlackKm);
+    }
+    const start = isLocated(opts.origin) ? pathPoint(opts.origin.lat, opts.origin.lon) : null;
+
+    const C = [], unplaced = [];
+    for (let i = 0; i < L; i++) {
+      const hinted = rp && rp[i] ? pubkeyIdx[String(rp[i]).toLowerCase()] : null;
+      const nodes = hinted ? [hinted] : (prefixIdx[String(hops[i]).toLowerCase()] || []);
+      C.push(nodes.filter(isLocated).map(n => pathPoint(n.lat, n.lon, n)));
+      unplaced.push(nodes.filter(n => !isLocated(n)));
+    }
+
+    // Keep each node to one position: when the best path uses a node twice,
+    // ban it from whichever of the two positions costs less to give up.
+    const bans = C.map(() => null);
+    const banned = (i, pubkey) => bans.map((s, j) => j === i ? new Set([...(s || []), pubkey]) : s);
+    const steps = buildSteps(C);
+    let sol = solvePath(C, steps, start, end, bans);
+    for (let guard = 0; guard < L; guard++) {
+      const seenAt = new Map();
+      let dup = null;
+      for (let i = 0; i < L && !dup; i++) {
+        if (sol.assign[i] < 0) continue;
+        const key = C[i][sol.assign[i]].pubkey;
+        if (seenAt.has(key)) dup = [seenAt.get(key), i, key];
+        else seenAt.set(key, i);
+      }
+      if (!dup) break;
+      const banFirst = banned(dup[0], dup[2]), banSecond = banned(dup[1], dup[2]);
+      const s1 = solvePath(C, steps, start, end, banFirst), s2 = solvePath(C, steps, start, end, banSecond);
+      const firstWins = s1.total <= s2.total;
+      bans.splice(0, L, ...(firstWins ? banFirst : banSecond));
+      sol = firstWins ? s1 : s2;
+    }
+
+    // For confidence, a node the path uses at one hop is no alternative at
+    // another. The best path stays feasible, so the assignment is unchanged.
+    const usedAt = new Map();
+    sol.assign.forEach((k, i) => { if (k >= 0) usedAt.set(C[i][k].pubkey, i); });
+    const confidenceBans = C.map((c, i) => {
+      const s = new Set(bans[i] || []);
+      for (const pt of c) {
+        const j = usedAt.get(pt.pubkey);
+        if (j !== undefined && j !== i) s.add(pt.pubkey);
+      }
+      return s.size ? s : null;
+    });
+    sol = solvePath(C, steps, start, end, confidenceBans);
+    const mu = unlistedMarginals(C, steps, start, end, sol.F, sol.B);
+    const T = PATH_MODEL.temperature;
+    return hops.map((hop, i) => {
+      const costs = Array.from(C[i], (_, k) => sol.F[i][k] + sol.B[i][k]);
+      const lowest = Math.min(mu[i], ...costs);
+      const weights = costs.map(c => c === Infinity ? 0 : Math.exp(-(c - lowest) / T));
+      const wUnlisted = mu[i] === Infinity ? 0 : Math.exp(-(mu[i] - lowest) / T);
+      const sum = weights.reduce((s, w) => s + w, wUnlisted) || 1;
+
+      const candidates = C[i].map((pt, k) => {
+        const c = { name: pt.node.name, pubkey: pt.pubkey, lat: pt.node.lat, lon: pt.node.lon,
+          located: true, confidence: weights[k] / sum };
+        const j = usedAt.get(pt.pubkey);
+        if (j !== undefined && j !== i) c.usedAt = j; // the path has it at hop j
+        return c;
+      }).sort((a, b) => b.confidence - a.confidence);
+      for (const n of unplaced[i]) {
+        candidates.push({ name: n.name, pubkey: n.public_key, lat: null, lon: null, located: false, confidence: null });
+      }
+
+      const k = sol.assign[i];
+      const entry = {
+        hop, name: null, pubkey: null, lat: null, lon: null,
+        located: false, unlisted: k < 0, unreliable: false,
+        ambiguous: C[i].length > 1,
+        confidence: k < 0 ? wUnlisted / sum : weights[k] / sum,
+        candidates, conflicts: candidates,
+      };
+      if (k >= 0) {
+        const n = C[i][k].node;
+        Object.assign(entry, { name: n.name, pubkey: n.public_key, lat: n.lat, lon: n.lon, located: true });
+      } else if (C[i].length) {
+        // Located nodes share this prefix, but none fits where the hop is.
+        entry.unreliable = true;
+      } else if (unplaced[i].length === 1) {
+        // The one known node with this prefix has no position to check.
+        entry.name = unplaced[i][0].name;
+        entry.pubkey = unplaced[i][0].public_key;
+      }
+      return entry;
+    });
+  }
+
   /**
    * Check if the resolver has been initialized with nodes.
    */
@@ -397,5 +725,5 @@ window.HopResolver = (function() {
     return result;
   }
 
-  return { init: init, resolve: resolve, resolveFromServer: resolveFromServer, ready: ready, haversineKm: haversineKm, setAffinity: setAffinity, getAffinity: getAffinity, nameForKey: nameForKey, nodeForKey: nodeForKey };
+  return { init: init, resolve: resolve, inferPath: inferPath, resolveFromServer: resolveFromServer, ready: ready, haversineKm: haversineKm, setAffinity: setAffinity, getAffinity: getAffinity, nameForKey: nameForKey, nodeForKey: nodeForKey };
 })();

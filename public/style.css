@@ -882,7 +882,7 @@ img.brand-logo {
   color: var(--nav-text-muted); text-decoration: none;
   padding: 14px clamp(8px, 0.6vw + 4px, 14px); font-size: var(--fs-sm);
   font-weight: var(--fw-medium); /* #1668 M3 — 12-14px fluid + 500 floor */
-  border-bottom: 2px solid transparent; transition: color .15s, background-color .15s, border-color .15s;
+  border-bottom: 2px solid transparent; transition: all .15s;
   background: none; border-top: none; border-left: none; border-right: none;
   cursor: pointer; font-family: var(--font);
   white-space: nowrap; /* #1046: never wrap labels — wrapping makes the nav bar grow taller */
@@ -986,16 +986,6 @@ img.brand-logo {
 }
 .nav-stats .stat-val { color: var(--nav-text); font-weight: 600; transition: color 0.3s ease; }
 .nav-stats .stat-val.updated { color: var(--link-color); }
-
-/* Priority+ keeps primary links and the active page inline. Compact only
-   when the measured desktop strip cannot fit; mobile keeps its own layout. */
-.nav-hide-stats .nav-stats { display: none; }
-.nav-compact .brand-text { display: none; }
-.nav-compact .brand-logo { max-width: 80px; height: auto; max-height: 36px; }
-.nav-compact .nav-left { gap: var(--space-xs); }
-.nav-compact .nav-links .nav-link { padding-inline: 4px; }
-.nav-compact .nav-more-btn { padding-inline: 6px; }
-.nav-compact .nav-account-label { max-width: 5ch; }
 
 /* === Layout === */
 /* Default: body-scroll mode — content pushes beyond viewport, iOS status-bar
@@ -2316,8 +2306,8 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 /* === Hamburger (hidden on desktop) === */
 .hamburger { display: none; }
 /* "More" button (hidden on desktop) */
-.nav-more-wrap { display: none; position: relative; flex-shrink: 0; }
-.nav-more-btn { display: inline-flex; transition-property: color, background-color, border-color; }
+.nav-more-wrap { display: none; position: relative; }
+.nav-more-btn { display: inline-flex; }
 /* #1406: position:fixed (not absolute) so the dropdown escapes .nav-more-wrap's
    layout box. When absolute, the dropdown's content extents inflated
    .nav-more-wrap.scrollHeight → bubbled into .nav-left flex line-height calc
@@ -3142,6 +3132,9 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 
 /* Ambiguous hop indicator */
 .hop-ambiguous { border-bottom: 1px dashed var(--status-yellow, #f59e0b); }
+/* Unlisted hop: no known node with its prefix fits that point in the path */
+.hop-unlisted { font-family: var(--mono); color: var(--text-muted); }
+.hop-nogps { font-size: 0.85em; color: var(--text-muted); }
 .hop-warn { font-size: 0.7em; margin-left: 2px; vertical-align: super; color: var(--status-yellow, #f59e0b); }
 .hop-conflict-btn { background: var(--status-yellow, #f59e0b); color: #000; border: none; border-radius: 4px; font-size: 11px;
   font-weight: 700; padding: 1px 5px; cursor: pointer; vertical-align: middle; margin-left: 3px; line-height: 1.2; }
@@ -3521,9 +3514,11 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 @container (max-width: 480px) {
   .dumbbell-row, .dumbbell-axis { --relay-airtime-columns: 70px minmax(20px, 1fr) 90px; }
 }
-/* Constrain chart media at any depth, preserving inline Phosphor icons.
-   Descendant selectors allow wrappers between the card and chart media. */
-.analytics-chart-card svg:not(.ph-icon),
+/* Constrain chart media inside the card (svg/canvas at any depth). The
+   `.analytics-chart-card svg, .analytics-chart-card canvas` descendant
+   selector is robust to wrapper elements (legends, tooltips, axis
+   groups) being added between the card and the chart media. */
+.analytics-chart-card svg,
 .analytics-chart-card canvas { max-width: 100%; height: auto; display: block; }
 .analytics-chart-card h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-muted); margin-bottom: 4px; }
 .analytics-chart-desc { font-size: 10px; color: var(--text-muted); margin-bottom: 8px; font-style: italic; }
@@ -3531,6 +3526,8 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .analytics-heatmap-cell { aspect-ratio: 1; border-radius: 2px; cursor: default; }
 .analytics-heatmap-label { font-size: 10px; color: var(--text-muted); display: flex; align-items: center; }
 .analytics-time-range { display: flex; gap: 8px; margin-bottom: 16px; }
+/* #748 — the requested range reaches past the in-memory window */
+.analytics-coverage-notice { margin: 0 0 12px; padding: 6px 10px; border-left: 3px solid var(--status-yellow); font-size: 12px; color: var(--text-muted); }
 .analytics-time-range button { padding: 4px 12px; border-radius: 4px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text); cursor: pointer; font-size: 12px; }
 /* .analytics-time-range button.active — #1719 round-1 polish: bg/color
    consolidated into the .btn-active-accent rule. */

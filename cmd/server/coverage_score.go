@@ -45,27 +45,25 @@ package main
 //
 // Pure (no global state, no locks); safe to call concurrently.
 func ComputeCoverageScores(edges []BridgeEdge) map[string]float64 {
-	graph := weightedDistanceAdjacency(edges)
-	if len(graph.nodes) == 0 {
+	adj := weightedDistanceAdjacency(edges)
+	if len(adj) == 0 {
 		return map[string]float64{}
 	}
 
-	harmonic := make(map[string]float64, len(graph.nodes))
-	work := newDistanceWorkspace(len(graph.nodes))
-	for s, key := range graph.nodes {
-		// dijkstraFrom records only reachable nodes, so every distance is
+	harmonic := make(map[string]float64, len(adj))
+	for s := range adj {
+		// dijkstraFrom returns only reachable nodes, so every distance is
 		// finite — unreachable peers simply contribute nothing (harmonic
 		// reach treats them as 1/∞ = 0).
-		dijkstraFrom(graph.adj, s, work)
+		dist := dijkstraFrom(adj, s)
 		var reach float64
-		for _, t := range work.reached {
-			d := work.dist[t]
+		for t, d := range dist {
 			if t == s || d <= 0 {
 				continue
 			}
 			reach += 1.0 / d
 		}
-		harmonic[key] = reach
+		harmonic[s] = reach
 	}
 
 	// Normalize by the max so the best-reaching repeater is 1.0. If max is

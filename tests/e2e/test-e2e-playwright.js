@@ -66,162 +66,6 @@ async function run() {
 
   console.log(`\nRunning E2E tests against ${BASE}\n`);
 
-  // Account readiness must not outlive the route that requested its view.
-  await test('Account readiness cannot replace Nodes after navigation', async () => {
-    const ctx = await browser.newContext();
-    const p = await ctx.newPage();
-    let release;
-    const held = new Promise(resolve => { release = resolve; });
-    await p.route('**/api/config/client', async route => {
-      const response = await route.fetch();
-      const config = await response.json();
-      config.userManagement = { enabled: true };
-      await route.fulfill({ json: config });
-    });
-    await p.route('**/api/auth/me', async route => {
-      await held;
-      await route.fulfill({ status: 401, json: { error: 'Not logged in' } });
-    });
-    const started = p.waitForRequest('**/api/auth/me', { timeout: 15000 });
-    started.catch(() => {});
-    try {
-      await p.goto(BASE + '/#/account/login', { waitUntil: 'domcontentloaded' });
-      await started;
-      await p.goto(BASE + '/#/nodes', { waitUntil: 'domcontentloaded' });
-      await p.waitForSelector('#nodesLeft[data-loaded="true"]');
-      const response = p.waitForResponse('**/api/auth/me');
-      release();
-      await (await response).finished();
-      await p.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-      assert(await p.locator('#nodesLeft[data-loaded="true"]').isVisible(), 'account readiness replaced the current Nodes page');
-      assert(await p.locator('#loginForm').count() === 0, 'login form appeared after leaving Accounts');
-    } finally {
-      release();
-      await ctx.close();
-    }
-  });
-
-  // #2218 Node Analytics lifecycle: delayed responses retain their own page/range.
-  const analyticsKey = 'aa'.repeat(32);
-  const otherAnalyticsKey = 'bb'.repeat(32);
-  function nodeAnalyticsFixture(key) {
-    return {
-      node: { public_key: key, name: key === analyticsKey ? 'Delayed node' : 'Current node', role: 'repeater' },
-      computedStats: { totalPackets: 1, availabilityPct: 100, signalGrade: 'A', avgPacketsPerDay: 1, uniqueObservers: 1, relayPct: 0 },
-      activityTimeline: [{ bucket: '2026-01-01T00:00:00Z', count: 1 }],
-      snrTrend: [], packetTypeBreakdown: [], observerCoverage: [], hopDistribution: [], uptimeHeatmap: [], peerInteractions: [],
-    };
-  }
-  function nodeBatteryFixture(mv) {
-    return { status: 'ok', latest_mv: mv, samples: [{ timestamp: '2026-01-01T00:00:00Z', battery_mv: mv }] };
-  }
-  async function nodeAnalyticsHarness(heldPath, failure) {
-    const ctx = await browser.newContext();
-    const p = await ctx.newPage();
-    const errors = [];
-    p.on('pageerror', error => errors.push(error.message));
-    let release;
-    const held = new Promise(resolve => { release = resolve; });
-    const started = p.waitForRequest(request => {
-      const url = new URL(request.url());
-      return url.pathname + url.search === heldPath;
-    }, { timeout: 10000 });
-    started.catch(() => {}); // The awaited promise still reports a missing request.
-    await p.route('**/api/nodes/**', async route => {
-      const url = new URL(route.request().url());
-      const path = url.pathname + url.search;
-      if (path === heldPath) {
-        await held;
-        if (failure) return route.fulfill({ status: 500, json: { error: 'Delayed request failed' } });
-      }
-      if (url.pathname.endsWith('/analytics')) {
-        return route.fulfill({ json: nodeAnalyticsFixture(url.pathname.split('/')[3]) });
-      }
-      if (url.pathname.endsWith('/battery')) {
-        return route.fulfill({ json: nodeBatteryFixture(path === heldPath ? 3200 : 4000) });
-      }
-      if (url.pathname.endsWith('/hop_analytics')) return route.fulfill({ json: { packets: [], ambiguous: 0 } });
-      return route.continue();
-    });
-    return {
-      page: p, started, errors,
-      async release() {
-        const response = p.waitForResponse(r => new URL(r.url()).pathname + new URL(r.url()).search === heldPath);
-        release();
-        await (await response).finished();
-        await p.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-      },
-      async close() { release(); await ctx.close(); },
-    };
-  }
-  for (const failure of [false, true]) {
-    await test('Node Analytics late ' + (failure ? 'failure' : 'success') + ' cannot replace Nodes after leaving', async () => {
-      const h = await nodeAnalyticsHarness('/api/nodes/' + analyticsKey + '/analytics?days=7', failure);
-      try {
-        await h.page.goto(BASE + '/#/nodes/' + analyticsKey + '/analytics', { waitUntil: 'domcontentloaded' });
-        await h.started;
-        await h.page.goto(BASE + '/#/nodes', { waitUntil: 'domcontentloaded' });
-        await h.page.waitForSelector('#nodesLeft[data-loaded="true"]');
-        await h.release();
-        assert(await h.page.locator('#nodesLeft[data-loaded="true"]').isVisible(), 'old analytics response replaced the Nodes list');
-        assert(await h.page.locator('#nodesBody tr[data-action="select"]').count() > 0, 'Nodes list lost its rows');
-        assert(h.errors.length === 0, h.errors.join('\n'));
-      } finally { await h.close(); }
-    });
-    await test('Node Analytics late battery ' + (failure ? 'failure' : 'success') + ' cannot replace the new range', async () => {
-      const h = await nodeAnalyticsHarness('/api/nodes/' + analyticsKey + '/battery?days=7', failure);
-      try {
-        await h.page.goto(BASE + '/#/nodes/' + analyticsKey + '/analytics', { waitUntil: 'domcontentloaded' });
-        await h.started;
-        await h.page.click('#timeRangeBtns button[data-days="1"]');
-        await h.page.waitForFunction(() => {
-          const chart = Chart.getChart(document.getElementById('batteryChart'));
-          return chart && chart.data.datasets[0].data[0] === 4000;
-        });
-        await h.release();
-        const current = await h.page.evaluate(() => ({
-          days: document.querySelector('#timeRangeBtns .active').dataset.days,
-          battery: Chart.getChart(document.getElementById('batteryChart')).data.datasets[0].data[0],
-          emptyHidden: getComputedStyle(document.getElementById('batteryEmpty')).display === 'none',
-        }));
-        assert(current.days === '1' && current.battery === 4000 && current.emptyHidden,
-          'stale battery response changed the new range: ' + JSON.stringify(current));
-        assert(h.errors.length === 0, h.errors.join('\n'));
-      } finally { await h.close(); }
-    });
-  }
-  await test('Node Analytics late response cannot replace a different node', async () => {
-    const h = await nodeAnalyticsHarness('/api/nodes/' + analyticsKey + '/analytics?days=7', false);
-    try {
-      await h.page.goto(BASE + '/#/nodes/' + analyticsKey + '/analytics', { waitUntil: 'domcontentloaded' });
-      await h.started;
-      await h.page.goto(BASE + '/#/nodes/' + otherAnalyticsKey + '/analytics', { waitUntil: 'domcontentloaded' });
-      await h.page.waitForFunction(() => document.querySelector('#app h2')?.textContent.includes('Current node'));
-      await h.release();
-      assert((await h.page.locator('#app h2').textContent()).includes('Current node'), 'old response replaced the current node');
-      assert(h.errors.length === 0, h.errors.join('\n'));
-    } finally { await h.close(); }
-  });
-  await test('Node Analytics reentry renders only the current charts from a shared pending request', async () => {
-    const h = await nodeAnalyticsHarness('/api/nodes/' + analyticsKey + '/analytics?days=7', false);
-    try {
-      const url = BASE + '/#/nodes/' + analyticsKey + '/analytics';
-      await h.page.goto(url, { waitUntil: 'domcontentloaded' });
-      await h.started;
-      await h.page.goto(BASE + '/#/nodes', { waitUntil: 'domcontentloaded' });
-      await h.page.waitForSelector('#nodesLeft[data-loaded="true"]');
-      await h.page.goto(url, { waitUntil: 'domcontentloaded' });
-      await h.release();
-      await h.page.waitForFunction(() => Chart.getChart(document.getElementById('batteryChart')));
-      const charts = await h.page.evaluate(() => ({
-        count: Object.values(Chart.instances).length,
-        detached: Object.values(Chart.instances).filter(chart => !chart.canvas.isConnected).length,
-      }));
-      assert(charts.count === 6 && charts.detached === 0, 'reentry left stale charts: ' + JSON.stringify(charts));
-      assert(h.errors.length === 0, h.errors.join('\n'));
-    } finally { await h.close(); }
-  });
-
   for (const [view, width, full, interaction] of [
     ['desktop side pane', 1280, false],
     ['desktop full view', 1280, true],
@@ -721,13 +565,14 @@ async function run() {
     // Use page.click() to avoid detached-element race with WebSocket auto-refresh.
     await page.click('table tbody tr:not([id^=vscroll])');
     await page.waitForSelector('.node-detail');
-    // Details is a button; the first anchor now opens Analytics.
+    // Find the Details button in the side panel. The a.btn-primary next to
+    // it is the Analytics link (#2218).
     await page.waitForSelector('#nodesRight .node-detail-btn');
-    const key = await page.locator('#nodesRight .node-detail-btn').getAttribute('data-pubkey');
-    assert(key, 'Details button has no node key');
-    const href = '#/nodes/' + key;
+    const pk = await page.$eval('#nodesRight .node-detail-btn', el => el.getAttribute('data-pubkey'));
+    assert(pk, 'Details button not found in side panel');
+    const href = '#/nodes/' + pk;
+    // Click the Details button — this should navigate to the full detail page
     await page.click('#nodesRight .node-detail-btn');
-    await page.waitForSelector('#nodeFullBody');
     // Wait for navigation — the full detail page has sections like neighbors/packets
     await page.waitForFunction((expectedHash) => {
       return location.hash === expectedHash;
@@ -882,46 +727,6 @@ async function run() {
   });
 
   // --- Group: Packets page (test 4) ---
-
-  await test('Packets All time survives reload and a fresh shared link', async () => {
-    const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-    const p = await ctx.newPage();
-    try {
-      await p.goto(BASE + '/#/packets', { waitUntil: 'domcontentloaded' });
-      await p.waitForSelector('#fTimeWindow');
-      assert(await p.locator('#fTimeWindow').inputValue() === '15', 'a fresh page must retain the default window');
-      await p.selectOption('#fTimeWindow', '0');
-      const saved = await p.evaluate(() => ({
-        query: new URLSearchParams(location.hash.split('?')[1] || '').get('timeWindow'),
-        stored: localStorage.getItem('meshcore-time-window'),
-      }));
-      assert(saved.query === '0' && saved.stored === '0', 'All time was not saved/shared: ' + JSON.stringify(saved));
-      await p.reload({ waitUntil: 'load' });
-      assert(await p.locator('#fTimeWindow').inputValue() === '0', 'All time reset after reload');
-    } finally { await ctx.close(); }
-
-    const shared = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-    const fresh = await shared.newPage();
-    try {
-      // The CI seed has three observations from May 15, outside the default window.
-      await fresh.goto(BASE + '/#/packets?hash=fae0c9e6d357a814&timeWindow=0', { waitUntil: 'domcontentloaded' });
-      await fresh.waitForSelector('#fTimeWindow');
-      assert(await fresh.locator('#fTimeWindow').inputValue() === '0', 'fresh shared link ignored All time');
-      await fresh.waitForSelector('#pktBody tr[data-hash="fae0c9e6d357a814"][data-action="toggle-select"]');
-    } finally { await shared.close(); }
-  });
-
-  await test('Packets mobile keeps its bounded time window for saved and shared All time', async () => {
-    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 }, hasTouch: true });
-    const p = await ctx.newPage();
-    await p.addInitScript(() => localStorage.setItem('meshcore-time-window', '0'));
-    try {
-      await p.goto(BASE + '/#/packets?timeWindow=0', { waitUntil: 'domcontentloaded' });
-      await p.waitForSelector('#fTimeWindow', { state: 'attached' });
-      assert(await p.locator('#fTimeWindow').inputValue() === '15', 'mobile must retain its bounded default');
-      assert(await p.locator('#fTimeWindow option[value="0"]').count() === 0, 'mobile unexpectedly exposes All time');
-    } finally { await ctx.close(); }
-  });
 
   // Test 4: Packets page loads with filter
   await test('Packets page loads with filter', async () => {

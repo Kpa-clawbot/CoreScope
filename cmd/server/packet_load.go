@@ -347,6 +347,10 @@ func (s *PacketStore) loadPacketChunk(from, to time.Time, cursor packetLoadCurso
 			}
 		}
 		s.oldestLoaded = omitted.Add(time.Second).UTC().Format(time.RFC3339)
+		// Newest-first admission stops at the first omitted group, including
+		// timestamp ties and concurrent live-data budget growth. The known
+		// boundary preserves useful history without claiming coverage of a hole.
+		s.loadCapEdge = s.oldestLoaded
 	}
 	return seen, cursor, nil
 }

@@ -100,13 +100,11 @@ async function checkConfiguredScope(page) {
         await page.goto('about:blank');
         const route = live ? '/live?lat=1&lon=1&zoom=10' : '/nodes/' + key;
         await page.goto(`${BASE}/#${route}`, { waitUntil: 'domcontentloaded' });
-        // The initial theme refresh redraws an open detail as Loading….
-        // Let it finish before opening Live details or asserting row absence.
-        await page.waitForFunction(() => window.__scopeThemeReady, null, { timeout: 8000 });
         if (live) await page.locator('#liveMap .live-node-marker').click();
-        await page.locator(live ? '#nodeDetailContent code' : '#nodeFullBody .node-detail-key')
-          .filter({ hasText: key }).waitFor({ state: 'visible', timeout: 8000 });
-        await page.locator(live ? '#nodeDetailContent table' : '#node-stats').waitFor({ state: 'visible', timeout: 8000 });
+        const detail = page.locator(live ? '#nodeDetailContent table' : '#node-stats');
+        await detail.waitFor({ state: 'visible', timeout: 8000 });
+        await page.waitForFunction(() => window.__scopeThemeReady === true, null, { timeout: 8000 });
+        await detail.waitFor({ state: 'visible', timeout: 8000 });
         const row = live
           ? page.locator('#nodeDetailContent tr').filter({ hasText: 'Configured scope' })
           : page.locator('#row-configured-scope');
@@ -133,90 +131,6 @@ async function checkConfiguredScope(page) {
   }
 }
 
-async function checkBatteryStatus(page) {
-  const key = 'b1'.repeat(32);
-  const cases = [
-    ['ok', 4000, 'OK', 'ph-battery-high'],
-    ['low', 3300, 'Low', 'ph-warning'],
-    ['critical', 3100, 'Critical', 'ph-battery-low'],
-    ['unknown', null, 'No data', null],
-    ['ok', '<img src=x onerror=alert(1)>', 'OK', 'ph-battery-high'],
-  ];
-  let battery;
-  const urls = [
-    '**/api/nodes/' + key + '/analytics*',
-    '**/api/nodes/' + key + '/battery*',
-    '**/api/nodes/' + key + '/hop_analytics*',
-  ];
-  await page.route(urls[0], route => route.fulfill({ json: {
-    node: { public_key: key, name: 'Battery fixture', role: 'repeater' },
-    computedStats: {}, peerInteractions: [], activityTimeline: [], snrTrend: [],
-    packetTypeBreakdown: [], observerCoverage: [], hopDistribution: [], uptimeHeatmap: [],
-  } }));
-  await page.route(urls[1], route => route.fulfill({ json: battery }));
-  await page.route(urls[2], route => route.fulfill({ json: { packets: [], ambiguous: 0 } }));
-  try {
-    for (const theme of ['light', 'dark']) {
-      for (const [status, mv, label, icon] of cases) {
-        battery = { status, latest_mv: mv, samples: [] };
-        await page.goto('about:blank');
-        await page.goto(`${BASE}/#/nodes/${key}/analytics`, { waitUntil: 'domcontentloaded' });
-        await page.waitForFunction(() => window.__scopeThemeReady, null, { timeout: 8000 });
-        if (await page.locator('html').getAttribute('data-theme') !== theme) await page.locator('#darkModeToggle').click();
-        assert.strictEqual(await page.locator('html').getAttribute('data-theme'), theme);
-        await page.waitForFunction(() => document.getElementById('batteryStatusBadge')?.textContent.trim());
-        const badge = page.locator('#batteryStatusBadge');
-        assert.strictEqual((await badge.textContent()).trim(), label + (mv ? ' · ' + mv + ' mV' : ''), 'battery status must contain readable text');
-        assert.strictEqual(await badge.locator('svg.ph-icon').count(), icon ? 1 : 0);
-        assert.strictEqual(await badge.locator('img').count(), 0, 'voltage text must never be parsed as HTML');
-        if (icon) {
-          assert.strictEqual(await badge.locator('use').getAttribute('href'), '/icons/phosphor-sprite.svg#' + icon);
-          assert.strictEqual(await badge.locator('svg').getAttribute('aria-hidden'), 'true');
-          const bounds = await badge.locator('svg').boundingBox();
-          assert.ok(bounds.width <= 24 && bounds.height <= 24, 'battery icon was stretched by chart media styles');
-        }
-        pass('battery status: ' + status + ' is readable and safe in ' + theme + ' theme');
-      }
-    }
-  } finally {
-    for (const url of urls) await page.unroute(url);
-  }
-}
-
-async function checkLiveActivityStatus(page) {
-  const key = 'c2'.repeat(32);
-  const recent = new Date(Date.now() - 60000).toISOString();
-  const old = new Date(Date.now() - 100 * 3600000).toISOString();
-  let node;
-  const listUrl = /\/api\/nodes(?:\?.*)?$/;
-  const urls = ['**/api/nodes/' + key, '**/api/nodes/' + key + '/health', '**/api/nodes/' + key + '/paths'];
-  await page.route(listUrl, route => route.fulfill({ json: { nodes: [{ ...node, lat: 1, lon: 1 }], total: 1 } }));
-  await page.route(urls[0], route => route.fulfill({ json: { node, recentAdverts: [] } }));
-  await page.route(urls[1], route => route.fulfill({ json: {} }));
-  await page.route(urls[2], route => route.fulfill({ json: { paths: [] } }));
-  try {
-    for (const evidence of [
-      { role: 'repeater', last_relayed: recent, relay_active: true },
-      { role: 'companion', last_heard: recent },
-    ]) {
-      node = { public_key: key, name: 'Recently active ' + evidence.role, last_seen: old, ...evidence };
-      await page.goto('about:blank');
-      await page.goto(`${BASE}/#/live?lat=1&lon=1&zoom=10`, { waitUntil: 'domcontentloaded' });
-      await page.waitForFunction(() => window.__scopeThemeReady, null, { timeout: 8000 });
-      await page.locator('#liveMap .live-node-marker').click();
-      await page.locator('#nodeDetailContent h3').filter({ hasText: node.name }).waitFor({ state: 'visible' });
-      const detail = await page.locator('#nodeDetailContent').textContent();
-      assert.match(detail, /\bOnline\b/, 'recent activity must keep the Live detail online');
-      assert.doesNotMatch(detail, /\bOffline\b/);
-      assert.strictEqual(await page.locator('#nodeDetailContent tr').filter({ hasText: 'Last Activity' }).count(), 1);
-      pass('Live detail recognizes recent ' + evidence.role + ' activity');
-    }
-  } finally {
-    await page.unroute(listUrl);
-    for (const url of urls) await page.unroute(url);
-  }
-}
-
 async function main() {
   const requireChromium = process.env.CHROMIUM_REQUIRE === '1';
   let browser;
@@ -236,14 +150,9 @@ async function main() {
   }
 
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  await ctx.addInitScript(() => {
-    window.addEventListener('theme-refresh', () => { window.__scopeThemeReady = true; }, { once: true });
-  });
   const page = await ctx.newPage();
 
   await checkConfiguredScope(page);
-  await checkBatteryStatus(page);
-  await checkLiveActivityStatus(page);
 
   // (a) /analytics
   await checkHeading(page, '/analytics', /Mesh Analytics/, '(a) /analytics');

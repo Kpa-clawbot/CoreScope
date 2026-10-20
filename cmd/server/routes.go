@@ -88,11 +88,9 @@ type Server struct {
 	// can't race on the .tmp file or interleave disk/memory updates.
 	saveMu sync.Mutex
 
-	// Neighbor affinity snapshot. Slow builders serialize separately so reads
-	// of the last complete graph only take the pointer mutex.
-	neighborMu      sync.Mutex
-	neighborBuildMu sync.Mutex
-	neighborGraph   *NeighborGraph
+	// Neighbor affinity graph (lazy-built, cached with TTL)
+	neighborMu    sync.Mutex
+	neighborGraph *NeighborGraph
 
 	// Cached /api/scope-stats response — per-window, recomputed at most once every 30s
 	scopeStatsMu       sync.Mutex
@@ -147,6 +145,10 @@ type Server struct {
 	// Known-channels catalogue cache (issue #1323). Nil until configured;
 	// when nil the /api/known-channels endpoint returns an empty snapshot.
 	knownChannels *knownChannelsCache
+
+	// LoRa RF parameters from the MeshCore map (issue #1268). Nil unless
+	// rfParams.nodesUrl is configured.
+	rfParams *rfParamsCache
 
 	// Optional user management (docs/specs/2026-10-06-user-management-design.md).
 	// Nil unless userManagement.enabled; see initUserManagement.
@@ -374,6 +376,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/channels/{hash}/messages", s.handleChannelMessages).Methods("GET")
 	r.HandleFunc("/api/channels", s.handleChannels).Methods("GET")
 	r.HandleFunc("/api/known-channels", s.handleKnownChannels).Methods("GET")
+	r.HandleFunc("/api/rf-params", s.handleRfParams).Methods("GET")
 	r.HandleFunc("/api/observers/metrics/summary", s.handleMetricsSummary).Methods("GET")
 	r.HandleFunc("/api/observers/{id}/metrics", s.handleObserverMetrics).Methods("GET")
 	r.HandleFunc("/api/observers/{id}/analytics", s.handleObserverAnalytics).Methods("GET")
@@ -428,7 +431,7 @@ func (s *Server) perfMiddleware(next http.Handler) http.Handler {
 		key := r.URL.Path
 		if route := mux.CurrentRoute(r); route != nil {
 			if tmpl, err := route.GetPathTemplate(); err == nil {
-				key = muxBraceParam.ReplaceAllString(tmpl, ":"+s.db.parameter(1))
+				key = muxBraceParam.ReplaceAllString(tmpl, ":$1")
 			}
 		}
 		if key == r.URL.Path {
@@ -926,7 +929,9 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		// share a single 1s-cached snapshot to amortize ReadMemStats cost.
 		var storeDataMB float64
 		if s.store != nil {
+			s.store.mu.RLock()
 			storeDataMB = s.store.trackedMemoryMB()
+			s.store.mu.RUnlock()
 		}
 		mem := s.getMemorySnapshot(storeDataMB)
 
@@ -3161,10 +3166,13 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 	// used to via s.store.byTxID[...] and enrichObs() — races with those
 	// writers. Keyed by TransmissionID (not by observation index) since
 	// multiple observations can share one transmission.
+	// #2237: the values are copies (txAnalyticsFields), since the
+	// content-hash migration and the rewrite feed change tx.Hash and
+	// tx.DecodedJSON under the lock while the helpers below run without it.
 	txByID := make(map[int]*StoreTx, len(obsSnapshot))
 	for _, obs := range obsSnapshot {
 		if _, ok := txByID[obs.TransmissionID]; !ok {
-			txByID[obs.TransmissionID] = s.store.byTxID[obs.TransmissionID]
+			txByID[obs.TransmissionID] = txAnalyticsFields(s.store.byTxID[obs.TransmissionID])
 		}
 	}
 	s.store.mu.RUnlock()
@@ -3401,15 +3409,26 @@ func (s *Server) handleAudioLabBuckets(w http.ResponseWriter, r *http.Request) {
 		}
 		s.store.mu.RUnlock()
 
+		// RawHex never changes once a tx is in the store, so the sort runs
+		// outside the lock.
 		for typeName, pkts := range byType {
 			sort.Slice(pkts, func(i, j int) bool {
 				return len(pkts[i].RawHex) < len(pkts[j].RawHex)
 			})
 			count := min(8, len(pkts))
-			picked := make([]AudioLabPacket, 0, count)
-			for i := 0; i < count; i++ {
-				idx := (i * len(pkts)) / count
-				tx := pkts[idx]
+			picks := make([]*StoreTx, count)
+			for i := range picks {
+				picks[i] = pkts[(i*len(pkts))/count]
+			}
+			byType[typeName] = picks
+		}
+
+		// Ingest and the rewrite feed change the picked packets' path,
+		// observer, count and decoded JSON under s.store.mu (#2237).
+		s.store.mu.RLock()
+		for typeName, picks := range byType {
+			picked := make([]AudioLabPacket, 0, len(picks))
+			for _, tx := range picks {
 				pt := 0
 				if tx.PayloadType != nil {
 					pt = *tx.PayloadType
@@ -3427,6 +3446,7 @@ func (s *Server) handleAudioLabBuckets(w http.ResponseWriter, r *http.Request) {
 			}
 			buckets[typeName] = picked
 		}
+		s.store.mu.RUnlock()
 	}
 
 	writeJSON(w, AudioLabBucketsResponse{Buckets: buckets})

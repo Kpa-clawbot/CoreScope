@@ -221,3 +221,102 @@ func unmarshalResolvedPath(s string) []*string {
 	}
 	return result
 }
+
+// resolvedPubkeysFromJSON returns the non-empty pubkeys of a resolved_path
+// JSON array, exactly extractResolvedPubkeys(unmarshalResolvedPath(s)). The
+// bulk loaders call it for most observations; the usual array of plain
+// strings and nulls is read in place, one string per pubkey, instead of
+// decoding a string and a pointer per hop. Anything else is decoded.
+//
+// Pubkeys go through internStr: relays repeat across nearly every
+// observation, so a pubkey seen before costs no allocation. Interned keys
+// live for the process, evicted nodes' keys included; the table is bounded
+// (internMax), and past it a pubkey is returned uninterned.
+func resolvedPubkeysFromJSON(s string) []string {
+	if s == "" {
+		return nil
+	}
+	if out, ok := scanResolvedPath(s); ok {
+		return out
+	}
+	return extractResolvedPubkeys(unmarshalResolvedPath(s))
+}
+
+// scanResolvedPath reads s as a JSON array of escape-free strings and nulls
+// with JSON whitespace between tokens. ok is false for anything else.
+func scanResolvedPath(s string) (out []string, ok bool) {
+	i := 0
+	ws := func() {
+		for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r') {
+			i++
+		}
+	}
+	ws()
+	if i >= len(s) {
+		return nil, false
+	}
+	if strings.HasPrefix(s[i:], "null") {
+		// unmarshalResolvedPath gives nil for a bare null.
+		i += 4
+		ws()
+		return nil, i == len(s)
+	}
+	if s[i] != '[' {
+		return nil, false
+	}
+	i++
+	ws()
+	if i < len(s) && s[i] == ']' {
+		i++
+		ws()
+		return nil, i == len(s)
+	}
+	for {
+		switch {
+		case i < len(s) && s[i] == '"':
+			i++
+			start := i
+			for i < len(s) && s[i] != '"' {
+				if s[i] == '\\' || s[i] < 0x20 || s[i] >= 0x80 {
+					return nil, false
+				}
+				i++
+			}
+			if i >= len(s) {
+				return nil, false
+			}
+			if i > start {
+				if out == nil {
+					out = make([]string, 0, 8)
+				}
+				out = append(out, internStr(s[start:i]))
+			}
+			i++
+		case strings.HasPrefix(s[i:], "null"):
+			i += 4
+		default:
+			return nil, false
+		}
+		ws()
+		if i >= len(s) {
+			return nil, false
+		}
+		switch s[i] {
+		case ',':
+			i++
+			ws()
+		case ']':
+			i++
+			ws()
+			if i != len(s) {
+				return nil, false
+			}
+			if out == nil {
+				out = []string{}
+			}
+			return out, true
+		default:
+			return nil, false
+		}
+	}
+}

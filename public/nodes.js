@@ -630,7 +630,8 @@
   async function fetchNodeDetail(pubkey) {
     const [nodeData, healthData] = await Promise.all([
       api('/nodes/' + encodeURIComponent(pubkey), { ttl: CLIENT_TTL.nodeDetail }),
-      api('/nodes/' + encodeURIComponent(pubkey) + '/health', { ttl: CLIENT_TTL.nodeDetail }).catch(() => null)
+      api('/nodes/' + encodeURIComponent(pubkey) + '/health', { ttl: CLIENT_TTL.nodeDetail }).catch(() => null),
+      loadRfParams()
     ]);
     nodeData.healthData = healthData;
     return nodeData;
@@ -815,6 +816,7 @@
           ${stats.avgHops ? `<tr><td>Avg Hops</td><td>${stats.avgHops}</td></tr>` : ''}
           ${hasLoc ? `<tr><td>Location</td><td>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</td></tr>` : ''}
           <tr><td>Hash Prefix</td><td>${n.hash_size ? '<code style="font-family:var(--mono);font-weight:700">' + n.public_key.slice(0, n.hash_size * 2).toUpperCase() + '</code> (' + n.hash_size + '-byte)' : 'Unknown'}${n.hash_size_inconsistent ? ' <span style="color:var(--status-yellow);cursor:help" title="Seen: ' + (Array.isArray(n.hash_sizes_seen) ? n.hash_sizes_seen : []).join(', ') + '-byte"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> varies</span>' : ''}</td></tr>
+          ${rfOn() ? `<tr><td title="LoRa radio settings this node last advertised to the MeshCore map">LoRa</td><td data-testid="node-detail-lora">${RfParams.detailHtml(rfFor(n), _rfParams.presets, Date.now())}</td></tr>` : ''}
         </table>
 
         <div class="node-full-card" id="node-packets">
@@ -1160,6 +1162,21 @@
 
   let _allNodes = null; // cached full node list
   let _fleetSkew = null; // cached clock skew map: pubkey → {severity, recentMedianSkewSec, medianSkewSec, ...}
+  let _rfParams = null; // #1268 /api/rf-params body: {enabled, presets, nodes: pubkey → {freq, sf, bw, cr, last_advert}}
+
+  // #1268 — one bulk fetch of the MeshCore map's radio settings for the
+  // detail views (api() caches it 5 min); a failure leaves the row off.
+  function loadRfParams() {
+    return api('/rf-params', { ttl: 300000 })
+      .catch(function () { return null; })
+      .then(function (d) { _rfParams = d; return d; });
+  }
+  // Off until the server has fetched the map once: before that every node
+  // would wrongly read as "not on the map".
+  function rfOn() { return !!(_rfParams && _rfParams.enabled && _rfParams.fetched_at); }
+  function rfFor(n) {
+    return (rfOn() && n && n.public_key && _rfParams.nodes[String(n.public_key).toLowerCase()]) || null;
+  }
 
   /**
    * Fetch per-node clock skew and render into the given container element.
@@ -1808,6 +1825,7 @@
             <dt>Packets Today</dt><dd>${stats.packetsToday || 0}</dd>
             ${stats.avgHops ? `<dt>Avg Hops</dt><dd>${stats.avgHops}</dd>` : ''}
             ${hasLoc ? `<dt>Location</dt><dd>${Number(n.lat).toFixed(5)}, ${Number(n.lon).toFixed(5)}</dd>` : ''}
+            ${rfOn() ? `<dt title="LoRa radio settings this node last advertised to the MeshCore map">LoRa</dt><dd data-testid="node-detail-lora">${RfParams.detailHtml(rfFor(n), _rfParams.presets, Date.now())}</dd>` : ''}
           </dl>
         </div>
 

@@ -264,7 +264,7 @@ func (s *PacketStore) RunStartupLoad(chunkSize int) error {
 	return nil
 }
 
-// LoadChunked streams transmissions + observations from PostgreSQL into
+// LoadChunked streams transmissions + observations from the selected backend into
 // the in-memory store in bounded chunks of `chunkSize` rows. Pass
 // 0 to use the default (10000).
 //
@@ -385,8 +385,7 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 	// first_seen order. Build the derived analytics indexes once at the end.
 	s.mu.Lock()
 	s.buildPathHopIndex()
-	// Distance is built on its first request, matching Load() and the
-	// background loader. An eager build here is repeated by the lazy gate.
+	s.buildDistanceIndex()
 	if !s.startupMemoryLimited {
 		if s.hotStartupHours > 0 {
 			s.oldestLoaded = hotCutoffStr
@@ -395,6 +394,7 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 		}
 	}
 	s.loaded = true
+	totalObs := s.totalObs
 	s.mu.Unlock()
 
 	// #1009 / PR #1596: flip the subpath + pathHop ready flags now that
@@ -407,7 +407,7 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 
 	elapsed := time.Since(t0)
 	log.Printf("[store] LoadChunked: %d transmissions (%d observations) across %d chunk(s) in %v (chunkSize=%d, DB total=%d)",
-		totalLoaded, s.totalObs, chunkIdx, elapsed, chunkSize, totalInDB)
+		totalLoaded, totalObs, chunkIdx, elapsed, chunkSize, totalInDB)
 	s.loadMultibyteCapFromDB()
 	// Mark complete on the success path only — see the function-level
 	// defer above for why this is NOT in a deferred call. Probes that

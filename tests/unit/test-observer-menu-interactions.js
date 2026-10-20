@@ -63,12 +63,13 @@ function stubEl(overrides) {
     const updateObsTrigger = () => calls.push('updateObsTrigger');
     const updatePacketsUrl = () => calls.push('updatePacketsUrl');
     const renderTableRows = () => calls.push('renderTableRows');
+    const loadPackets = () => calls.push('loadPackets');
     const fn = new Function(
       'e', 'selectedObservers', 'filters', 'localStorage',
-      'buildObserverMenu', 'updateObsTrigger', 'updatePacketsUrl', 'renderTableRows',
+      'buildObserverMenu', 'updateObsTrigger', 'updatePacketsUrl', 'renderTableRows', 'loadPackets',
       body
     );
-    fn(target, selectedObservers, filters, localStorage, buildObserverMenu, updateObsTrigger, updatePacketsUrl, renderTableRows);
+    fn(target, selectedObservers, filters, localStorage, buildObserverMenu, updateObsTrigger, updatePacketsUrl, renderTableRows, loadPackets);
   }
 
   test('change event with no data-obs-id (bubbled from search input) is a no-op', () => {
@@ -87,6 +88,24 @@ function stubEl(overrides) {
     assert.deepStrictEqual([...selectedObservers], ['7'], 'checking observer 7 should select it');
     assert(calls.includes('buildObserverMenu'), 'buildObserverMenu should run for a real toggle');
     assert(calls.includes('updatePacketsUrl'), 'updatePacketsUrl should run for a real toggle');
+  });
+
+  // Grouped mode leaves the observer filter to the server (#1821), so a
+  // re-render of the already loaded rows changes nothing until a reload.
+  test('toggling an observer re-fetches packets from the server', () => {
+    const calls = [];
+    const filters = {};
+    run({ target: { dataset: { obsId: '7' }, checked: true } }, { calls, selectedObservers: new Set(), filters });
+    assert.strictEqual(filters.observer, '7');
+    assert(calls.includes('loadPackets'), 'loadPackets must run so the server applies the observer filter');
+  });
+
+  test('selecting All Observers re-fetches packets from the server', () => {
+    const calls = [];
+    const filters = { observer: '7' };
+    run({ target: { dataset: { obsId: '__all__' }, checked: true } }, { calls, selectedObservers: new Set(['7']), filters });
+    assert.strictEqual(filters.observer, undefined);
+    assert(calls.includes('loadPackets'), 'loadPackets must run so the unfiltered set is fetched');
   });
 }
 

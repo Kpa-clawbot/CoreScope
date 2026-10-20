@@ -203,9 +203,7 @@ async function api(path, { ttl = 0, bust = false } = {}) {
     }
   })();
   _inflight.set(path, promise);
-  // Handle both outcomes so cleanup does not create an unobserved rejection.
-  const cleanup = () => _inflight.delete(path);
-  promise.then(cleanup, cleanup);
+  promise.finally(() => _inflight.delete(path));
   return promise;
 }
 
@@ -1158,6 +1156,13 @@ registerPage('tools-landing', {
 
 let currentPage = null;
 
+// Bumped on every page init, so async page work can tell its visit is over:
+// capture viewGeneration() at init and drop the result when it has moved on
+// (#2218, #2230, #2200). A route change to another node of the same page
+// type is a new visit too.
+let _viewGeneration = 0;
+function viewGeneration() { return _viewGeneration; }
+
 function closeNav() {
   document.querySelector('.nav-links')?.classList.remove('open');
   document.body.classList.remove('nav-open');
@@ -1256,6 +1261,7 @@ function navigate() {
     moreBtn.classList.toggle('active', !!hasActiveMore);
   }
 
+  _viewGeneration++;
   if (currentPage && pages[currentPage]?.destroy) {
     pages[currentPage].destroy();
   }
@@ -1327,10 +1333,14 @@ window.addEventListener('DOMContentLoaded', () => {
   const darkToggle = document.getElementById('darkModeToggle');
   const darkCheckbox = document.getElementById('darkModeCheckbox');
   const savedTheme = localStorage.getItem('meshcore-theme');
-  function applyTheme(theme) {
+  // #2236: ?theme= from the URL (parsed in index.html) holds for this page
+  // load and is never saved, so the stored choice and the account stay as
+  // they were. A click on the toggle is an explicit choice and ends it.
+  let themeOverride = window.__themeOverride || null;
+  function applyTheme(theme, persist) {
     document.documentElement.setAttribute('data-theme', theme);
     if (darkCheckbox) darkCheckbox.checked = theme === 'dark';
-    localStorage.setItem('meshcore-theme', theme);
+    if (persist !== false) localStorage.setItem('meshcore-theme', theme);
     // Re-apply user theme CSS vars for the correct mode (light/dark)
     reapplyUserThemeVars(theme === 'dark');
   }
@@ -1369,8 +1379,10 @@ window.addEventListener('DOMContentLoaded', () => {
       }
     } catch (e) { console.error('[theme] reapply error:', e); }
   }
-  // On load: respect saved pref, else OS pref, else light
-  if (savedTheme) {
+  // On load: URL override, else saved pref, else OS pref, else light
+  if (themeOverride) {
+    applyTheme(themeOverride, false);
+  } else if (savedTheme) {
     applyTheme(savedTheme);
   } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
     applyTheme('dark');
@@ -1379,12 +1391,14 @@ window.addEventListener('DOMContentLoaded', () => {
   }
   if (darkCheckbox) {
     darkCheckbox.addEventListener('change', () => {
+      themeOverride = null;
       applyTheme(darkCheckbox.checked ? 'dark' : 'light');
     });
   } else {
     // Fallback for button-style toggle (upstream compatibility)
     darkToggle.addEventListener('click', () => {
       const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      themeOverride = null;
       applyTheme(isDark ? 'light' : 'dark');
     });
   }
@@ -1394,6 +1408,7 @@ window.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('storage', function (ev) {
     if (!ev || ev.key !== 'meshcore-theme' || !ev.newValue) return;
     if (ev.newValue !== 'dark' && ev.newValue !== 'light') return;
+    if (themeOverride) return;
     document.documentElement.setAttribute('data-theme', ev.newValue);
     if (darkCheckbox) darkCheckbox.checked = ev.newValue === 'dark';
     try { reapplyUserThemeVars(ev.newValue === 'dark'); } catch (_) {}
@@ -1501,8 +1516,14 @@ window.addEventListener('DOMContentLoaded', () => {
       navMoreBtn.classList.toggle('active', !!hasActiveMore);
     }
 
+    // #1105 MINOR 1: cached intrinsic width of the More button. Captured
+    // the first time `fits()` sees navMoreWrap rendered (display:flex).
+    // Falls back to MORE_BTN_RESERVE_PX (a conservative initial guess
+    // sized for "More ▾" at default font/padding) until that happens.
+    var cachedMoreW = 0;
+    var MORE_BTN_RESERVE_PX = 70;
+
     function applyNavPriority() {
-      navTop.classList.remove('nav-hide-stats', 'nav-compact');
       // Skip on mobile (<768px) — hamburger CSS owns that layout.
       if (window.innerWidth < 768) {
         allLinks.forEach(a => a.classList.remove('is-overflow'));
@@ -1535,12 +1556,59 @@ window.addEventListener('DOMContentLoaded', () => {
             a.classList.add('is-overflow');
           }
         });
+        rebuildMoreMenu();
+        return;
       }
-      // Measure the strip's actual available space, including the current
-      // brand, account control, stats, gutters and More button. Its flex box
-      // can shrink below its children, which scrollWidth exposes directly.
+      // Iteratively hide low-priority links until the link strip fits.
+      // .top-nav has overflow:hidden and .nav-left has flex-shrink:1, so
+      // an overflowing strip silently clips rather than pushing
+      // nav-right out — bounding-rect math on .nav-left lies. Instead
+      // measure the *intrinsic* widths of the parts (independent of
+      // current clipping) and compare to the viewport. SAFETY absorbs
+      // the .top-nav side padding + nav-right inner gaps + sub-pixel
+      // rounding (the historic #1055 bug was a 6–20px overlap).
+      //
+      // #1105 MINOR 3: at the 1101px media-query flip `.nav-stats`
+      // toggles from display:none → flex (and vice-versa). The resize
+      // handler is rAF-debounced and runs *after* the layout flip, so
+      // navRightEl.scrollWidth measured here reflects the post-flip
+      // intrinsic width — not stale pre-flip width.
+      const navBrand   = document.querySelector('.nav-brand');
+      const SAFETY     = 32;
+      // #1105 MINOR 1+2: read both gap values from CSS rather than a
+      // shared `GUTTER = 24` constant. Today `.nav-left` (gap between
+      // brand/links/more/right cells) and `.nav-links` (gap between
+      // individual link items) both resolve to --space-lg = 24px, but
+      // they're conceptually distinct gaps. If --space-lg or .nav-left's
+      // gap diverges in the future, the fit math must follow.
+      const navLeftGap = parseFloat(getComputedStyle(navLeft).columnGap ||
+                                    getComputedStyle(navLeft).gap || '0') || 0;
+      // #1105 MINOR 1: compute the More-button reserve from its actual
+      // rendered width on first measure, instead of a hard-coded 70px
+      // fallback. Cached so we don't re-measure (offsetWidth is 0 when
+      // display:none; we capture the value the first time it's visible).
       function fits() {
-        return linksContainer.scrollWidth <= linksContainer.clientWidth;
+        const visibleLinks = allLinks.filter(a => !a.classList.contains('is-overflow'));
+        let linkW = 0;
+        visibleLinks.forEach(a => { linkW += a.getBoundingClientRect().width; });
+        const linkGapPx = parseFloat(getComputedStyle(linksContainer).columnGap ||
+                                     getComputedStyle(linksContainer).gap || '0') || 0;
+        const linksGap = Math.max(0, visibleLinks.length - 1) * linkGapPx;
+        const brandW = navBrand ? navBrand.getBoundingClientRect().width : 0;
+        // Always reserve space for the More button if anything could
+        // overflow. Measure the live width when visible and cache it
+        // for use when the button is currently hidden (display:none →
+        // getBoundingClientRect() returns 0). MORE_BTN_RESERVE_PX is
+        // the conservative initial fallback used until we get a real
+        // measurement.
+        const moreVis = !navMoreWrap.classList.contains('is-hidden');
+        const liveMoreW = moreVis ? navMoreWrap.getBoundingClientRect().width : 0;
+        if (liveMoreW > 0) cachedMoreW = liveMoreW;
+        const moreW = liveMoreW > 0 ? liveMoreW
+                    : (cachedMoreW > 0 ? cachedMoreW : MORE_BTN_RESERVE_PX);
+        const rightW  = navRightEl.scrollWidth; // intrinsic, ignores clipping
+        const needed  = brandW + navLeftGap + linkW + linksGap + navLeftGap + moreW + navLeftGap + rightW + SAFETY;
+        return needed <= window.innerWidth;
       }
       let i = 0;
       // #1391: rebuild queue here so it reflects the CURRENT active
@@ -1597,10 +1665,6 @@ window.addEventListener('DOMContentLoaded', () => {
           console.warn('[nav] More menu floor: overflowQueue exhausted with 1 item; cannot enforce >=2 floor');
         }
       }
-      // Keep the primary links and active route. Optional statistics give
-      // way first; only then compact the surrounding desktop chrome.
-      if (!fits()) navTop.classList.add('nav-hide-stats');
-      if (!fits()) navTop.classList.add('nav-compact');
       rebuildMoreMenu();
     }
 
@@ -1612,17 +1676,15 @@ window.addEventListener('DOMContentLoaded', () => {
       document.fonts.ready.then(applyNavPriority);
     }
     let rafId = 0;
-    function scheduleNavPriority() {
+    window.addEventListener('resize', function() {
       if (rafId) cancelAnimationFrame(rafId);
       rafId = requestAnimationFrame(applyNavPriority);
-    }
-    window.addEventListener('resize', scheduleNavPriority);
-    window.addEventListener('cs-auth-changed', scheduleNavPriority);
+    });
     // Re-apply on route change too: the active link gets bigger padding
     // (background pill), so which links fit can shift between pages.
     window.addEventListener('hashchange', function() {
       // Defer so the route handler's class toggles run first.
-      scheduleNavPriority();
+      requestAnimationFrame(applyNavPriority);
     });
 
     // #1406: position the fixed dropdown relative to the More button on each open.
@@ -1703,13 +1765,15 @@ window.addEventListener('DOMContentLoaded', () => {
     const items = await Promise.all(favs.map(async (pk) => {
       try {
         const h = await api('/nodes/' + pk + '/health', { ttl: CLIENT_TTL.nodeHealth });
-        const age = h.stats.lastHeard ? Date.now() - new Date(h.stats.lastHeard).getTime() : null;
-        const statusCls = age === null ? 'status-err' : age < HEALTH_THRESHOLDS.nodeDegradedMs ? 'status-ok' : age < HEALTH_THRESHOLDS.nodeSilentMs ? 'status-warn' : 'status-err';
-        const statusLabel = age === null ? 'unknown' : age < HEALTH_THRESHOLDS.nodeDegradedMs ? 'healthy' : age < HEALTH_THRESHOLDS.nodeSilentMs ? 'degraded' : 'silent';
+        // Packet-store time first, then the DB's last_seen, as My Repeaters does.
+        const heard = h.stats.lastHeard || (h.node && h.node.last_seen);
+        const status = getHealthStatus(h.node && h.node.role, heard);
+        const statusCls = status === 'healthy' ? 'status-ok' : status === 'degraded' ? 'status-warn' : 'status-err';
+        const statusLabel = status || 'unknown';
         return '<a href="#/nodes/' + pk + '" class="fav-dd-item" data-key="' + pk + '">'
           + '<span class="fav-dd-status ' + statusCls + '" title="' + statusLabel + '" aria-label="' + statusLabel + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span>'
           + '<span class="fav-dd-name">' + escapeHtml(h.node.name || truncate(pk, 12)) + '</span>'
-          + '<span class="fav-dd-meta">' + (h.stats.lastHeard ? timeAgo(h.stats.lastHeard) : 'never') + '</span>'
+          + '<span class="fav-dd-meta">' + (heard ? timeAgo(heard) : 'never') + '</span>'
           + favStar(pk, 'fav-dd-star')
           + '</a>';
       } catch {
@@ -2061,8 +2125,6 @@ function makeColumnsResizable(tableSelector, storageKey) {
   // Add resize handles
   ths.forEach((th, i) => {
     if (i === ths.length - 1) return;
-    // Anchor absolute handles to their column without replacing sticky headers.
-    if (getComputedStyle(th).position === 'static') th.style.position = 'relative';
     const handle = document.createElement('div');
     handle.className = 'col-resize-handle';
     handle.addEventListener('mousedown', (e) => {

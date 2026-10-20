@@ -28,18 +28,22 @@ if [ -f .env ]; then
   set +a
 fi
 
+# Auto-fix CRLF in .env if detected
+if [ -f .env ] && grep -qP '\r' .env 2>/dev/null; then
+  warn ".env has Windows line endings (CRLF) — fixing automatically..."
+  sed -i 's/\r$//' .env
+  log ".env converted to Unix line endings."
+fi
+
 # Resolved paths for prod/staging data (must match docker-compose.yml)
 PROD_DATA="${PROD_DATA_DIR:-$HOME/meshcore-data}"
 STAGING_DATA="${STAGING_DATA_DIR:-$HOME/meshcore-staging-data}"
 STAGING_COMPOSE_FILE="docker-compose.staging.yml"
 
 # Build metadata — exported so docker compose build picks them up via args
-refresh_build_metadata() {
-  export APP_VERSION=$(git describe --tags --match "v*" 2>/dev/null || echo "unknown")
-  export GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-  export BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-}
-refresh_build_metadata
+export APP_VERSION=$(git describe --tags --match "v*" 2>/dev/null || echo "unknown")
+export GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+export BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 # Docker Compose — detect v2 plugin vs v1 standalone
 if docker compose version &>/dev/null 2>&1; then
@@ -64,13 +68,6 @@ warn() { printf '%b\n' "${YELLOW}⚠${NC} $1"; }
 err()  { printf '%b\n' "${RED}✗${NC} $1" >&2; }
 info() { printf '%b\n' "${CYAN}→${NC} $1"; }
 step() { printf '%b\n' "\n${BOLD}[$1/$TOTAL_STEPS] $2${NC}"; }
-
-# Auto-fix CRLF only after the logging helpers are available.
-if [ -f .env ] && grep -qP '\r' .env 2>/dev/null; then
-  warn ".env has Windows line endings (CRLF) — fixing automatically..."
-  sed -i 's/\r$//' .env
-  log ".env converted to Unix line endings."
-fi
 
 is_true() {
   case "${1:-}" in
@@ -1603,7 +1600,6 @@ cmd_update() {
     git checkout "$version" || { err "Failed to checkout '${version}'."; exit 1; }
   fi
 
-  refresh_build_metadata
   migrate_config auto
 
   info "Rebuilding image..."

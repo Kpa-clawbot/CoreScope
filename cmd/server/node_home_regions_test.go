@@ -174,6 +174,41 @@ func placementsString(m map[string]NodeRegionPlacement) string {
 	return out
 }
 
+// #2225: transport routes carry 4 transport-code bytes between the header and
+// the path byte, so for TRANSPORT_DIRECT the path byte is at offset 5, not 1.
+const (
+	// route transport-direct, codes aa bb cc dd (0xaa's low 6 bits are not
+	// 0), path byte 0x40: 0 hops.
+	homeTransportZeroHop = "13aabbccdd40aabbccdd"
+	// route transport-direct, codes 00 bb cc dd (0x00 would read as 0 hops
+	// at the wrong offset), path byte 0x41: 1 hop.
+	homeTransportRelayed = "1300bbccdd41aabbccdd"
+)
+
+func TestZeroHopCountsReadTransportDirectPathByte(t *testing.T) {
+	ps := newRegionTestStore(t, map[string]string{"o-aus": "AUS", "o-sat": "SAT"})
+	addToStore(ps,
+		mkHomeRegionAdvert(1, "pk_transport", homeTransportZeroHop, "o-aus"),
+		mkHomeRegionAdvert(2, "pk_relayed", homeTransportRelayed, "o-sat"),
+	)
+	obsIATA := ps.observerIATAs()
+	ps.mu.RLock()
+	got := ps.nodeZeroHopRegionCounts(obsIATA)
+	ps.mu.RUnlock()
+	want := map[string]map[string]int{"pk_transport": {"AUS": 1}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("zero-hop counts = %v, want %v", got, want)
+	}
+
+	// #804 analytics reads the same tally.
+	ps.mu.RLock()
+	homes := ps.computeNodeHomeRegions(obsIATA)
+	ps.mu.RUnlock()
+	if want := map[string]string{"pk_transport": "AUS"}; !reflect.DeepEqual(homes, want) {
+		t.Errorf("computeNodeHomeRegions = %v, want %v", homes, want)
+	}
+}
+
 // mkPathAdvert is a relayed flood advert heard by each observer over the given
 // path (JSON array of hop hashes, "[]" for a direct hearing).
 func mkPathAdvert(id int, pubkey string, hearings map[string]string) *StoreTx {

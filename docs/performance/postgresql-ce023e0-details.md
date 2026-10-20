@@ -1,6 +1,6 @@
 # PostgreSQL ce023: complete paired results
 
-[Summary](../postgresql-performance.md) · [Complete JSON](postgresql-ce023e0-details.json) · [Run](https://github.com/Kpa-clawbot/CoreScope/actions/runs/37914893623) · [Raw public artifact](https://github.com/Kpa-clawbot/CoreScope/actions/runs/37914893623/artifacts/11613951167)
+[Summary](../postgresql-performance.md) · [Complete JSON at commit d132e582](https://github.com/n30nex/CoreScope/blob/d132e582e6260897cde43c8041f104ba53bde0ff/docs/performance/postgresql-ce023e0-details.json) · [Run](https://github.com/Kpa-clawbot/CoreScope/actions/runs/37914893623) · [Raw public artifact](https://github.com/Kpa-clawbot/CoreScope/actions/runs/37914893623/artifacts/11613951167)
 
 All generated tables below are preserved from the validated final analysis.
 The artifact-relative source directory is `corescope-bench-37914893623-1/public`.
