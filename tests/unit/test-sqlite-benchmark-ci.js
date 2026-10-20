@@ -56,7 +56,7 @@ assert(parser, 'missing executable Python request parser');
 assert(parser.includes('GITHUB_EVENT_PATH'), 'PR body must be parsed from the raw event, not inserted into shell source');
 assert(!parser.includes('${{'), 'request parser must not interpolate untrusted expressions');
 const A = 'a'.repeat(40), B = 'b'.repeat(40), H = 'c'.repeat(40);
-const baseline = '9dbc287579a237ffa744dd0c91fa7227d09763ac';
+const baseline = 'b9593f71745b856651cfd6d6c80bb1f3f091e13e';
 const checked = '- [x] Run SQLite benchmark (primary)';
 const body = `${checked}\nsqlite-baseline-sha: ${A}\nsqlite-candidate-sha: ${B}\nsqlite-harness-sha: ${H}`;
 function request(text = '', { action = 'synchronize', previous, changes, event = 'pull_request', inputs = {} } = {}) {
@@ -80,6 +80,12 @@ function request(text = '', { action = 'synchronize', previous, changes, event =
 const smoke = request();
 assert.equal(smoke.status, 0, smoke.error);
 assert.deepEqual(smoke.values, { profile: 'smoke', baseline_sha: baseline, candidate_sha: H, harness_sha: H, repository: 'contributor/project' });
+const unchecked = request(body.replace('[x]', '[ ]'));
+assert.equal(unchecked.status, 0, unchecked.error);
+assert.deepEqual(unchecked.values, smoke.values, 'inactive historical comparison markers changed the smoke qualification');
+const dispatchedSmoke = request('', { event: 'workflow_dispatch' });
+assert.equal(dispatchedSmoke.status, 0, dispatchedSmoke.error);
+assert.deepEqual(dispatchedSmoke.values, smoke.values, 'dispatch defaults differ from automatic smoke qualification');
 const primary = request(body);
 assert.equal(primary.status, 0, primary.error);
 assert.deepEqual(primary.values, { profile: 'primary', baseline_sha: A, candidate_sha: B, harness_sha: H, repository: 'contributor/project' });
