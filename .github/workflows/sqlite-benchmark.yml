@@ -1,0 +1,251 @@
+name: Native SQLite benchmark
+
+# Harness PRs run S smoke automatically. To request a larger run, add one line:
+# - [x] Run SQLite benchmark (primary)
+# Or select (diagnostic) for separate profiling. Optional exact ref markers:
+# sqlite-baseline-sha: <40 lowercase hex characters>
+# sqlite-candidate-sha: <40 lowercase hex characters>
+# sqlite-harness-sha: <40 lowercase hex characters>
+# Defaults are the reviewed baseline below and the PR head for candidate/harness.
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened, edited]
+    paths:
+      - 'scripts/sqlite-benchmark/**'
+      - '.github/workflows/sqlite-benchmark.yml'
+      - '.github/workflows/deploy.yml'
+      - 'tests/unit/test-sqlite-benchmark-ci.js'
+  # Use the already registered deploy.yml dispatcher before this workflow is
+  # on the default branch. Application and harness commits stay independent.
+  workflow_call:
+    inputs:
+      profile:
+        type: string
+        default: smoke
+      baseline_sha:
+        type: string
+        default: ''
+      candidate_sha:
+        type: string
+        default: ''
+      harness_sha:
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  request:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      profile: ${{ steps.request.outputs.profile }}
+      baseline_sha: ${{ steps.request.outputs.baseline_sha }}
+      candidate_sha: ${{ steps.request.outputs.candidate_sha }}
+      harness_sha: ${{ steps.request.outputs.harness_sha }}
+      repository: ${{ steps.request.outputs.repository }}
+    steps:
+      - name: Parse benchmark request
+        id: request
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          INPUT_PROFILE: ${{ inputs.profile }}
+          INPUT_BASELINE: ${{ inputs.baseline_sha }}
+          INPUT_CANDIDATE: ${{ inputs.candidate_sha }}
+          INPUT_HARNESS: ${{ inputs.harness_sha }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, sys
+
+          def body_request(body):
+              lines, fence = [], None
+              for line in (body or '').splitlines():
+                  line = line.strip()
+                  if fence:
+                      if re.fullmatch(re.escape(fence[0]) + '{' + str(len(fence)) + ',}', line):
+                          fence = None
+                      continue
+                  marker = re.match(r'(`{3,}|~{3,})', line)
+                  if marker:
+                      fence = marker[1]
+                  else:
+                      lines.append(line)
+              modes = [m[1] for line in lines if (m := re.fullmatch(r'- \[[xX]\] Run SQLite benchmark \(([^)]+)\)', line))]
+              if not modes:
+                  return None
+              if len(modes) != 1 or modes[0] not in ('primary', 'diagnostic'):
+                  raise ValueError('Select exactly one SQLite benchmark profile: primary or diagnostic')
+              refs = {}
+              for line in lines:
+                  for name in ('baseline', 'candidate', 'harness'):
+                      if line.startswith('sqlite-' + name + '-sha'):
+                          match = re.fullmatch('sqlite-' + name + r'-sha:\s*([0-9a-f]{40})', line)
+                          if not match or name in refs:
+                              raise ValueError('Each SQLite SHA marker must occur once and contain a full lowercase commit SHA')
+                          refs[name] = match[1]
+              return modes[0], refs
+
+          try:
+              with open(os.environ['GITHUB_EVENT_PATH'], encoding='utf-8') as source:
+                  event = json.load(source)
+              refs = {}
+              if os.environ['EVENT_NAME'] == 'pull_request':
+                  selected = body_request(event['pull_request'].get('body'))
+                  profile = selected[0] if selected else 'smoke'
+                  refs = selected[1] if selected else {}
+                  if event['action'] == 'edited':
+                      change = event.get('changes', {}).get('body')
+                      try:
+                          previous = body_request(change.get('from')) if change else None
+                      except ValueError:
+                          previous = None
+                      if not change or not selected or selected == previous:
+                          profile = 'off'
+              elif os.environ['EVENT_NAME'] == 'workflow_dispatch':
+                  profile = os.environ['INPUT_PROFILE'] or 'smoke'
+                  if profile not in ('smoke', 'primary', 'diagnostic'):
+                      raise ValueError('Unknown SQLite benchmark profile')
+                  refs = {name: os.environ['INPUT_' + name.upper()] for name in ('baseline', 'candidate', 'harness')}
+              else:
+                  raise ValueError('Unsupported benchmark event')
+              defaults = {'baseline': '9dbc287579a237ffa744dd0c91fa7227d09763ac',
+                          'candidate': os.environ['EVENT_SHA'], 'harness': os.environ['EVENT_SHA']}
+              values = {'profile': profile}
+              for name, default in defaults.items():
+                  sha = refs.get(name) or default
+                  if not re.fullmatch(r'[0-9a-f]{40}', sha):
+                      raise ValueError(name + '_sha must be a full lowercase commit SHA')
+                  values[name + '_sha'] = sha
+              repository = os.environ['SOURCE_REPOSITORY']
+              if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
+                  raise ValueError('Invalid source repository')
+              values['repository'] = repository
+              with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+                  for key, value in values.items():
+                      print(key + '=' + value, file=output)
+          except (ValueError, KeyError) as error:
+              sys.exit(str(error))
+          PY
+
+  benchmark:
+    needs: [request]
+    if: needs.request.outputs.profile != 'off' && needs.request.outputs.profile != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ needs.request.outputs.profile == 'smoke' && 30 || 180 }}
+    # Ignored body edits never enter this job or cancel an active measurement.
+    concurrency:
+      group: sqlite-benchmark-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: false
+    env:
+      BASELINE_SHA: ${{ needs.request.outputs.baseline_sha }}
+      CANDIDATE_SHA: ${{ needs.request.outputs.candidate_sha }}
+      HARNESS_SHA: ${{ needs.request.outputs.harness_sha }}
+      PROFILE: ${{ needs.request.outputs.profile }}
+      CGO_ENABLED: '1'
+      GOMAXPROCS: '3'
+    steps:
+      - name: Validate runner capacity
+        run: |
+          set -euo pipefail
+          [[ $(nproc) -ge 4 ]] || { echo 'At least four CPUs are required' >&2; exit 1; }
+          awk '/MemTotal:/ {exit !($2 >= 8*1024*1024)}' /proc/meminfo || { echo 'At least 8 GiB RAM is required' >&2; exit 1; }
+          test -f /sys/fs/cgroup/cgroup.controllers
+          echo "SMOKE_OUTPUT=$RUNNER_TEMP/corescope-bench-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-smoke" >> "$GITHUB_ENV"
+          echo "BENCH_OUTPUT=$RUNNER_TEMP/corescope-bench-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$PROFILE" >> "$GITHUB_ENV"
+
+      - name: Checkout the exact harness
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ needs.request.outputs.repository }}
+          ref: ${{ needs.request.outputs.harness_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact refs and workflow source
+        env:
+          EVENT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          for sha in "$BASELINE_SHA" "$CANDIDATE_SHA" "$HARNESS_SHA" "$EVENT_SHA" "$WORKFLOW_SHA"; do
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'All source refs must be full lowercase commit SHAs' >&2; exit 1; }
+          done
+          test "$(git rev-parse HEAD)" = "$HARNESS_SHA"
+          git fetch --no-tags origin "$BASELINE_SHA" "$CANDIDATE_SHA" "$HARNESS_SHA" "$EVENT_SHA"
+          git fetch --no-tags --depth=1 "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$WORKFLOW_SHA"
+          for sha in "$BASELINE_SHA" "$CANDIDATE_SHA" "$HARNESS_SHA" "$EVENT_SHA" "$WORKFLOW_SHA"; do
+            test "$(git rev-parse "$sha^{commit}")" = "$sha"
+          done
+          # A PR executes its merge workflow, but measures independent exact
+          # application/harness refs. Refuse workflow changes introduced by the merge.
+          git diff --quiet "$WORKFLOW_SHA" "$EVENT_SHA" -- \
+            .github/workflows/deploy.yml .github/workflows/sqlite-benchmark.yml \
+            || { echo 'Workflow source differs from the selected event commit; update the PR branch' >&2; exit 1; }
+
+      - name: Test portable benchmark controls
+        run: python3 -m unittest discover -s scripts/sqlite-benchmark -p 'test_*.py'
+
+      - name: Use the same native compiler for both revisions
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.2'
+          cache-dependency-path: '**/go.sum'
+
+      - name: Run bounded smoke and selected profile
+        run: |
+          set -euo pipefail
+          delegated="/sys/fs/cgroup/corescope-benchmark-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          test ! -e "$delegated"
+          sudo mkdir "$delegated"
+          for controller in cpu memory io; do
+            grep -qw "$controller" "$delegated/cgroup.controllers" || { echo "Required cgroup controller unavailable: $controller" >&2; exit 1; }
+          done
+          printf '+cpu +memory +io\n' | sudo tee "$delegated/cgroup.subtree_control" >/dev/null
+          sudo mkdir "$delegated/coordinator"
+          sudo chown "$(id -u):$(id -g)" "$delegated" "$delegated/cgroup.procs" "$delegated/cgroup.subtree_control" "$delegated/coordinator" "$delegated/coordinator/cgroup.procs"
+          printf '%s\n' "$$" | sudo tee "$delegated/coordinator/cgroup.procs" >/dev/null
+          # Each build runs the native overlay controls before corpus preparation.
+          common=(--repo . --baseline-sha "$BASELINE_SHA" --candidate-sha "$CANDIDATE_SHA" --harness-sha "$HARNESS_SHA" --cgroup "$delegated" --go-version 1.27.2 --ingest-rate 50 --http-rate 20)
+          python3 scripts/sqlite-benchmark/run.py "${common[@]}" \
+            --corpus S --profile smoke --pairs 1 --warmup 2 --seconds 10 --output "$SMOKE_OUTPUT"
+          case "$PROFILE" in
+            primary)
+              python3 scripts/sqlite-benchmark/run.py "${common[@]}" \
+                --corpus B --profile primary --pairs 5 --output "$BENCH_OUTPUT" ;;
+            diagnostic)
+              python3 scripts/sqlite-benchmark/run.py "${common[@]}" \
+                --corpus B --profile diagnostic --pairs 1 --warmup 10 --seconds 60 --output "$BENCH_OUTPUT" ;;
+            smoke) ;;
+            *) echo 'Unknown benchmark profile' >&2; exit 1 ;;
+          esac
+
+      - name: Upload only sanitized public evidence
+        if: always() && env.SMOKE_OUTPUT != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: sqlite-benchmark-${{ needs.request.outputs.profile }}-${{ needs.request.outputs.candidate_sha }}
+          path: |
+            ${{ env.SMOKE_OUTPUT }}/public/
+            ${{ env.BENCH_OUTPUT }}/public/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Remove only the owned cgroup
+        if: always()
+        run: |
+          set -euo pipefail
+          delegated="/sys/fs/cgroup/corescope-benchmark-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          if [ -d "$delegated" ]; then
+            test "$(realpath "$delegated")" = "$delegated"
+            if [ -f "$delegated/cgroup.kill" ]; then echo 1 | sudo tee "$delegated/cgroup.kill" >/dev/null; fi
+            for attempt in $(seq 1 10); do
+              sudo find "$delegated" -depth -type d -exec rmdir {} \; 2>/dev/null || true
+              test ! -d "$delegated" && break
+              sleep 1
+            done
+            test ! -d "$delegated"
+          fi
