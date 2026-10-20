@@ -129,10 +129,22 @@ handler control proves durable writes from the real callback.
 Both full and hot startup must load the complete retained S/B corpus, computed
 independently from SQLite. B expects 112,000 transmissions / 1,792,000 observations
 under the common seven-day retention, 2048 MiB store and 3072 MiB server limits.
-S/B coverage overrides are refused. All 18 tables undergo ordered logical
-digest checks before and after replay; the source and recorded input must remain
-unchanged. Operational receipt times alone are excluded from post-run parity.
+S/B coverage overrides are refused. Every application table undergoes ordered
+logical digest checks before and after replay, including the current
+`tx_rewrite_feed`, `key_backfill_state` and `key_backfill_done` tables. The original
+18 canonical tables remain required; additional tables are discovered from
+SQLite, and added, removed or changed column inventories fail validation.
+SQLite's internal bookkeeping tables are excluded. The source and recorded
+input must remain unchanged. Operational receipt times alone are excluded from post-run parity.
 The harness never rewrites production sources or issues its own schema migrations.
+
+The same manifest covers both restored copies and is checked again after replay.
+Index-only candidate changes are allowed; table/column drift within either leg
+or between candidates is unsupported and fails. Observer rowids are recorded
+once whether implicit or explicit, preserving the supported layout adoption
+below. Freshening applies the single pair offset to rewrite-feed `created_at`
+and backfill `started_at`/`done_at` as lifecycle times; their digests remain fully
+checked, and cursor, fingerprint and rewritten-count values are unchanged.
 
 Revisions whose archived server explicitly opens a persisted storage selection
 also build their native migrator once. Before either timed server startup, it

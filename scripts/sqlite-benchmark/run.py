@@ -43,7 +43,7 @@ TABLES = ["nodes", "inactive_nodes", "observers", "transmissions", "observations
 # These are operational receipt/creation times, not packet timestamps. Full
 # pre-run parity includes them; only post-replay logical parity excludes them.
 VOLATILE = {"transmissions": {"created_at"}, "observers": {"last_seen", "last_packet_at", "first_seen"}, "_async_migrations": {"started_at", "ended_at"}, "scope_match_totals": {"updated_unix", "since_unix"}}
-TEXT_TIMES = {"first_seen", "last_seen", "created_at", "last_packet_at", "clock_last_naive_at", "configured_scope_at", "timestamp", "dropped_at", "rx_at", "ingested_at", "sampled_at", "observed_at", "started_at", "ended_at"}
+TEXT_TIMES = {"first_seen", "last_seen", "created_at", "last_packet_at", "clock_last_naive_at", "configured_scope_at", "timestamp", "dropped_at", "rx_at", "ingested_at", "sampled_at", "observed_at", "started_at", "ended_at", "done_at"}
 
 
 def shift_timestamp(value, delta):
@@ -57,11 +57,13 @@ def shift_timestamp(value, delta):
 
 def freshen(path, delta):
     """One recorded receipt-time offset; signed wire bytes remain unchanged."""
+    tables = table_manifest(path)
     db = sqlite3.connect(path)
     try:
         db.create_function("bench_shift", 1, lambda value: shift_timestamp(value, delta))
-        for table in TABLES:
-            columns = list(db.execute(f'PRAGMA table_info("{table}")'))
+        for entry in tables:
+            table = entry["name"]
+            columns = list(db.execute(f"PRAGMA table_info({quote_identifier(table)})"))
             updates = []
             for _, name, kind, *_ in columns:
                 if name not in TEXT_TIMES and not (table == "scope_match_totals" and name in ("since_unix", "updated_unix")):
@@ -71,7 +73,7 @@ def freshen(path, delta):
                 elif kind.upper() in ("TEXT", "DATETIME"):
                     updates.append(f'"{name}"=bench_shift("{name}")')
             if updates:
-                db.execute(f'UPDATE "{table}" SET ' + ",".join(updates))
+                db.execute(f"UPDATE {quote_identifier(table)} SET " + ",".join(updates))
         db.commit()
         db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     finally:
@@ -475,28 +477,39 @@ def free_port():
 
 
 
-def table_manifest(source):
+def quote_identifier(name):
+    return '"' + name.replace('"', '""') + '"'
+
+
+def table_manifest(source, required=None):
     with closing(sqlite3.connect(f"file:{source}?mode=ro", uri=True)) as db:
+        tables = [row[0] for row in db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*' ORDER BY name")]
+        for table in TABLES if required is None else required:
+            if table not in tables:
+                raise ValueError("corpus lacks canonical table " + table)
         manifest = []
-        for table in TABLES:
-            columns = [row[1] for row in db.execute(f'PRAGMA table_info("{table}")')]
+        for table in tables:
+            columns = [row[1] for row in db.execute(f"PRAGMA table_info({quote_identifier(table)})")]
             if not columns:
                 raise ValueError("corpus lacks canonical table " + table)
-            if table == "observers":
+            if table == "observers" and "rowid" not in columns:
                 columns.insert(0, "rowid")
             manifest.append(dict(name=table, columns=columns))
         return manifest
 
 
 def validate(source, manifest, logical=False):
+    if table_manifest(source, required=()) != sorted(manifest, key=lambda table: table["name"]):
+        raise RuntimeError("application schema differs from the complete corpus manifest")
     result = {}
     with closing(sqlite3.connect(f"file:{source}?mode=ro", uri=True)) as db:
         for table in manifest:
             name = table["name"]
             columns = [c for c in table["columns"] if not logical or c not in VOLATILE.get(name, set())]
-            select = ",".join('"' + c + '"' for c in columns)
+            select = ",".join(quote_identifier(c) for c in columns)
             digest, count = hashlib.sha256(), 0
-            for row in db.execute(f'SELECT {select} FROM "{name}" ORDER BY {select}'):
+            for row in db.execute(f"SELECT {select} FROM {quote_identifier(name)} ORDER BY {select}"):
                 digest.update(canonical_row(row))
                 count += 1
             result[name] = dict(rows=count, sha256=digest.hexdigest())
