@@ -626,6 +626,7 @@ jobs:
           suite 1 test-logo-rebrand-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-logo-theme-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-logo-default-sage-teal-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-theme-url-param-2236-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-issue-1109-hamburger-dropdown-visible-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-live-layout-1178-1179-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-issue-1205-live-controls-anchor-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B

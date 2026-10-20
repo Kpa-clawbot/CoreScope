@@ -51,6 +51,7 @@ node tests/unit/test-drag-manager.js
 node tests/unit/test-e2e-coverage.js
 node tests/unit/test-direct-rf-heard-by.js
 node tests/unit/test-embed-mode-1369.js
+node tests/unit/test-theme-url-param-2236.js
 node tests/unit/test-fetch-all-nodes-pagination.js
 node tests/unit/test-fluid-scaffolding.js
 node tests/unit/test-frontend-helpers.js

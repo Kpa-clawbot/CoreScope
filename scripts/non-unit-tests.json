@@ -121,6 +121,7 @@
       "tests/e2e/test-slideover-1056-e2e.js",
       "tests/e2e/test-slideover-1168-munger-e2e.js",
       "tests/e2e/test-table-fluid-e2e.js",
+      "tests/e2e/test-theme-url-param-2236-e2e.js",
       "tests/e2e/test-touch-gestures-coverage-e2e.js",
       "tests/e2e/test-touch-targets.js",
       "tests/e2e/test-user-management-e2e.js"
