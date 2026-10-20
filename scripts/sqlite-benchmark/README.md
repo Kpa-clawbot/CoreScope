@@ -11,6 +11,13 @@ This first slice has portable control and native overlay checks. A reviewed,
 committed harness must pass the Linux A/A pilot before a candidate matrix.
 No new B performance result or L capacity result is claimed here.
 
+The automatic S smoke pins its baseline to upstream
+`b9593f71745b856651cfd6d6c80bb1f3f091e13e`, with the PR head as candidate and
+harness. Since this PR changes only benchmark tooling, that is a contemporary
+A/A qualification. Explicit baseline, candidate and harness selections remain
+independent for requested runs. Inactive historical request markers do not
+select a comparison or override the automatic smoke.
+
 ## Sources and prerequisites
 
 - Pass full lowercase 40-character commits with `--baseline-sha`,

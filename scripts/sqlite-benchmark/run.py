@@ -30,7 +30,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-UPSTREAM = "9dbc287579a237ffa744dd0c91fa7227d09763ac"
+UPSTREAM = "b9593f71745b856651cfd6d6c80bb1f3f091e13e"
 FIRMWARE = "a366955cb2f67b8e6842d4f00d2b6a554dddd88a"
 HERE = Path(__file__).resolve().parent
 PROCESSES = []

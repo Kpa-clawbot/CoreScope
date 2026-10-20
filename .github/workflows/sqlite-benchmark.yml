@@ -112,7 +112,7 @@ jobs:
                   refs = {name: os.environ['INPUT_' + name.upper()] for name in ('baseline', 'candidate', 'harness')}
               else:
                   raise ValueError('Unsupported benchmark event')
-              defaults = {'baseline': '9dbc287579a237ffa744dd0c91fa7227d09763ac',
+              defaults = {'baseline': 'b9593f71745b856651cfd6d6c80bb1f3f091e13e',
                           'candidate': os.environ['EVENT_SHA'], 'harness': os.environ['EVENT_SHA']}
               values = {'profile': profile}
               for name, default in defaults.items():
