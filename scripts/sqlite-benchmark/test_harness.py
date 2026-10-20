@@ -133,10 +133,56 @@ class HarnessTests(unittest.TestCase):
             db.executescript("CREATE TABLE _migrations(name TEXT PRIMARY KEY);"
                              "INSERT INTO _migrations VALUES('existing_a'),('existing_b');"
                              "CREATE TABLE observers(id TEXT PRIMARY KEY, last_seen TEXT);"
-                             "INSERT INTO observers(rowid,id,last_seen) VALUES(4,'one','2026-10-09'),(19,'two',NULL);")
+                             "INSERT INTO observers(rowid,id,last_seen) VALUES(4,'one','2026-10-09'),(19,'two',NULL);"
+                             "CREATE TABLE tx_rewrite_feed(id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER);"
+                             "INSERT INTO tx_rewrite_feed VALUES(1,100);"
+                             "CREATE TABLE key_backfill_state(kind TEXT, started_at INTEGER, cursor INTEGER);"
+                             "INSERT INTO key_backfill_state VALUES('channel',100,7);"
+                             "CREATE TABLE key_backfill_done(kind TEXT, done_at INTEGER);"
+                             "INSERT INTO key_backfill_done VALUES('channel',110);")
         db.close()
-        tables = [dict(name="_migrations", columns=["name"]), dict(name="observers", columns=["rowid", "id", "last_seen"])]
+        with mock.patch.object(bench, "TABLES", ["_migrations", "observers"]):
+            tables = bench.table_manifest(source)
         return config, source, tables, bench.validate(source, tables)
+
+    def test_native_observer_layout_preserves_complete_logical_manifest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            _, source, tables, before = self.selection_fixture(root)
+            with bench.sqlite3.connect(source) as db:
+                db.executescript("CREATE TABLE observers_new(rowid INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE, last_seen TEXT);"
+                                 "INSERT INTO observers_new SELECT rowid,id,last_seen FROM observers;"
+                                 "DROP TABLE observers; ALTER TABLE observers_new RENAME TO observers;"
+                                 "INSERT INTO _migrations VALUES('observers_identity_autoincrement_v1');"
+                                 "CREATE INDEX observers_last_seen ON observers(last_seen);")
+            db.close()
+            with mock.patch.object(bench, "TABLES", ["_migrations", "observers"]):
+                self.assertEqual(bench.table_manifest(source), tables,
+                                 "supported observer identity layout or an ordinary index changed the logical manifest")
+            proof = dict(required=True, before=before, migrations_before=["existing_a", "existing_b"])
+            self.assertEqual(bench.comparable_validation(source, bench.validate(source, tables), proof), before)
+
+    def test_setup_rejects_new_table_row_insert_delete_and_update(self):
+        for table in ("tx_rewrite_feed", "key_backfill_state", "key_backfill_done"):
+            changes = [f"DELETE FROM {table}", f"INSERT INTO {table} SELECT * FROM {table}"]
+            # The feed's integer primary key needs a distinct inserted identity.
+            if table == "tx_rewrite_feed":
+                changes[1] = "INSERT INTO tx_rewrite_feed VALUES(2,200)"
+            column = {"tx_rewrite_feed": "created_at", "key_backfill_state": "cursor", "key_backfill_done": "done_at"}[table]
+            changes.append(f"UPDATE {table} SET {column}={column}+1")
+            for change in changes:
+                with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                    root = pathlib.Path(directory)
+                    self.selection_source(root)
+                    config, source, tables, before = self.selection_fixture(root)
+                    def migrate(*args, **kwargs):
+                        with bench.sqlite3.connect(source) as db:
+                            db.execute("INSERT INTO _migrations VALUES('observers_identity_autoincrement_v1')")
+                            db.execute(change)
+                        db.close()
+                    with mock.patch.object(bench, "command", side_effect=migrate):
+                        with self.assertRaisesRegex(RuntimeError, "setup changed canonical application data"):
+                            bench.prepare_storage(root, root / "migrate", config, tables, before, {}, root / "setup.log")
 
     def test_selection_setup_preserves_all_rows_and_only_adds_known_marker(self):
         marker = "observers_identity_autoincrement_v1"

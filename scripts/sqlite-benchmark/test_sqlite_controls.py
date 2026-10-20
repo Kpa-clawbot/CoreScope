@@ -12,6 +12,20 @@ spec.loader.exec_module(bench)
 
 
 class SQLiteControls(unittest.TestCase):
+    def test_legacy_and_current_table_inventories_remain_complete(self):
+        for current in (False, True):
+            with self.subTest(current=current), tempfile.TemporaryDirectory() as directory:
+                source = Path(directory) / "corpus.sqlite"
+                names = bench.TABLES + (["tx_rewrite_feed", "key_backfill_state", "key_backfill_done"] if current else [])
+                with bench.sqlite3.connect(source) as db:
+                    for name in names:
+                        db.execute(f'CREATE TABLE "{name}"(value TEXT)')
+                        db.execute(f'INSERT INTO "{name}" VALUES(?)', ("synthetic",))
+                db.close()
+                tables = bench.table_manifest(source)
+                self.assertEqual(len(tables), 21 if current else 18)
+                self.assertEqual(set(bench.validate(source, tables)), set(names))
+
     def test_all_application_tables_are_freshened_and_digested(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "corpus.sqlite"
@@ -19,22 +33,48 @@ class SQLiteControls(unittest.TestCase):
                 db.executescript("CREATE TABLE observers(id TEXT); INSERT INTO observers VALUES('synthetic');"
                                  "CREATE TABLE key_backfill_state(started_at INTEGER, cursor INTEGER);"
                                  "INSERT INTO key_backfill_state VALUES(100, 7);"
+                                 "CREATE TABLE key_backfill_done(done_at INTEGER);"
+                                 "INSERT INTO key_backfill_done VALUES(110);"
                                  "CREATE TABLE tx_rewrite_feed(id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER);"
                                  "INSERT INTO tx_rewrite_feed(created_at) VALUES(100);")
             db.close()
             with mock.patch.object(bench, "TABLES", ["observers"]):
                 tables = bench.table_manifest(source)
                 self.assertEqual({table["name"] for table in tables},
-                                 {"observers", "key_backfill_state", "tx_rewrite_feed"})
+                                 {"observers", "key_backfill_state", "key_backfill_done", "tx_rewrite_feed"})
                 before = bench.validate(source, tables)
                 bench.freshen(source, 10)
                 after = bench.validate(source, tables)
             self.assertEqual(before["observers"], after["observers"])
             self.assertNotEqual(before["key_backfill_state"], after["key_backfill_state"])
             with bench.sqlite3.connect(source) as db:
-                self.assertEqual(db.execute("SELECT started_at, cursor FROM key_backfill_state").fetchone(), (110, 7))
-                self.assertEqual(db.execute("SELECT created_at FROM tx_rewrite_feed").fetchone(), (110,))
+                state = db.execute("SELECT started_at, cursor FROM key_backfill_state").fetchone()
+                feed = db.execute("SELECT created_at FROM tx_rewrite_feed").fetchone()
+                done = db.execute("SELECT done_at FROM key_backfill_done").fetchone()
             db.close()
+            self.assertEqual(state, (110, 7))
+            self.assertEqual(feed, (110,))
+            self.assertEqual(done, (120,))
+
+    def test_quoted_identifiers_are_freshened_and_digested(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "corpus.sqlite"
+            with bench.sqlite3.connect(source) as db:
+                db.executescript('CREATE TABLE observers(id TEXT);'
+                                 'CREATE TABLE "extra""table"("value""column" TEXT, started_at INTEGER);'
+                                 'INSERT INTO "extra""table" VALUES(\'synthetic\',100);')
+            db.close()
+            with mock.patch.object(bench, "TABLES", ["observers"]):
+                tables = bench.table_manifest(source)
+                before = bench.validate(source, tables)
+                self.assertIn('extra"table', before, "quoted application table was omitted from validation")
+                bench.freshen(source, 10)
+                after = bench.validate(source, tables)
+            self.assertNotEqual(before['extra"table'], after['extra"table'])
+            with bench.sqlite3.connect(source) as db:
+                values = db.execute('SELECT "value""column", started_at FROM "extra""table"').fetchone()
+            db.close()
+            self.assertEqual(values, ("synthetic", 110))
 
     def test_validation_rejects_unaccounted_application_schema_changes(self):
         for statement in ("CREATE TABLE extra(value TEXT)", "ALTER TABLE observers ADD COLUMN extra TEXT",
