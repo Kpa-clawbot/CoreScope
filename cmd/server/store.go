@@ -61,11 +61,11 @@ type StoreTx struct {
 	LatestSeen          string // max observation timestamp (or FirstSeen if no observations)
 	UniqueObserverCount int    // cached count of distinct observer IDs
 	// Cached parsed fields (set once, read many)
-	parsedPath          []string               // cached parsePathJSON result
-	pathParsed          bool                   // whether parsedPath has been set
-	AdvertRouteEvidence uint8                  // union of known flood/direct-empty-path evidence
-	decodedOnce         sync.Once              // guards parsedDecoded
-	parsedDecoded       map[string]interface{} // cached json.Unmarshal of DecodedJSON
+	parsedPath          []string // cached parsePathJSON result
+	pathParsed          bool     // whether parsedPath has been set
+	AdvertRouteEvidence uint8    // union of known flood/direct-empty-path evidence
+	decodedMu           sync.Mutex
+	decodedCache        atomic.Pointer[txDecodedCache]
 	// Dedup maps, built only once a transmission passes obsIndexThreshold
 	// observations (see obs_dedup.go); nil below it.
 	obsKeys     map[obsDedupKey]struct{}
@@ -171,18 +171,51 @@ func broadcastPayload(tx *StoreTx) json.RawMessage {
 	return json.RawMessage(tx.DecodedJSON)
 }
 
-// ParsedDecoded returns the parsed DecodedJSON map, caching the result.
-// Thread-safe via sync.Once — the first call parses, subsequent calls return cached.
+// Each decoded source generation owns its once and immutable parsed map.
+// A rewrite retires the whole generation; readers can finish using the old one.
+type txDecodedCache struct {
+	source string
+	once   sync.Once
+	parsed map[string]interface{}
+}
+
+// ParsedDecoded returns a cached, read-only map. Callers must not mutate it or
+// its nested values. The publication mutex never covers JSON parsing: a rewrite
+// holding store.mu can publish a new generation without waiting for old readers.
 func (tx *StoreTx) ParsedDecoded() map[string]interface{} {
-	tx.decodedOnce.Do(func() {
-		if tx.DecodedJSON != "" {
-			json.Unmarshal([]byte(tx.DecodedJSON), &tx.parsedDecoded)
+	cache := tx.decodedCache.Load()
+	if cache == nil {
+		tx.decodedMu.Lock()
+		cache = tx.decodedCache.Load()
+		if cache == nil {
+			cache = &txDecodedCache{source: tx.DecodedJSON}
+			tx.decodedCache.Store(cache)
+		}
+		tx.decodedMu.Unlock()
+	}
+	cache.once.Do(func() {
+		if cache.source != "" {
+			json.Unmarshal([]byte(cache.source), &cache.parsed)
 			for _, k := range decodedCacheDroppedKeys {
-				delete(tx.parsedDecoded, k)
+				delete(cache.parsed, k)
 			}
 		}
 	})
-	return tx.parsedDecoded
+	return cache.parsed
+}
+
+// setDecodedJSON is the only mutation of a published transmission's decoded
+// source. The caller holds store.mu to protect ordinary field readers; decodedMu
+// also protects cache initialization by analytics that already released store.mu.
+func (tx *StoreTx) setDecodedJSON(decoded string) bool {
+	tx.decodedMu.Lock()
+	defer tx.decodedMu.Unlock()
+	if tx.DecodedJSON == decoded {
+		return false
+	}
+	tx.DecodedJSON = decoded
+	tx.decodedCache.Store(nil)
+	return true
 }
 
 // PacketStore holds all transmissions in memory with indexes for fast queries.
@@ -4615,7 +4648,7 @@ func (s *PacketStore) buildDistanceIndex() {
 //
 // Note: ResolvedPath per-obs overhead eliminated by #800 refactor.
 const (
-	storeTxBaseBytes  = 384 // StoreTx struct fields + map headers + sync.Once + string headers
+	storeTxBaseBytes  = 384 // StoreTx struct fields + map headers + cache guards + string headers
 	storeObsBaseBytes = 192 // StoreObs struct fields + string headers
 	strHdr            = 16  // Go string header (ptr + len) on a 64-bit build; used by GetStoreMemoryBreakdown
 	indexEntryBytes   = 48  // average cost of one index map entry (key + pointer + bucket overhead)
@@ -4630,6 +4663,10 @@ const (
 	// production heap profile. Analytics touch every tx, so it is charged
 	// up front rather than when the cache fills.
 	decodedCacheFactor = 4
+	// One current txDecodedCache allocation (40 bytes, rounded to the 48-byte
+	// size class on 64-bit builds). Charge it before the first parse, like the
+	// decoded map. Retired generations live only while readers retain them.
+	decodedCacheGenerationBytes = 48
 )
 
 // estimateStoreTxBytes returns the estimated memory cost of a StoreTx (excluding observations).
@@ -4639,6 +4676,7 @@ func estimateStoreTxBytes(tx *StoreTx) int64 {
 	base += int64(len(tx.RawHex) + len(tx.Hash) + len(tx.DecodedJSON) + len(tx.PathJSON))
 	base += int64(numIndexesPerTx * indexEntryBytes)
 	base += int64(decodedCacheFactor * len(tx.DecodedJSON))
+	base += decodedCacheGenerationBytes
 
 	// Path-dependent costs
 	hops := int64(len(txGetParsedPath(tx)))
@@ -4647,9 +4685,9 @@ func estimateStoreTxBytes(tx *StoreTx) int64 {
 	return base
 }
 
-// estimateStoreTxBytesTypical returns the estimated memory cost of a typical
-// transmission with the given number of observations. Used for budget
-// calculation during bounded cold load (no actual StoreTx needed).
+// estimateStoreTxBytesTypical preserves the former admission policy's typical
+// transmission estimate for the startup diagnostic. Actual admission uses each
+// transmission's observation-aware charge, including the decoded cache generation.
 func estimateStoreTxBytesTypical(numObs int) int64 {
 	// Typical tx: ~64 byte hash, ~200 byte decoded JSON, ~40 byte path, 3 hops
 	base := int64(storeTxBaseBytes) + 64 + 200 + 40
@@ -5139,7 +5177,7 @@ func buildHopContextPubkeys(tx *StoreTx, pm *prefixMap) []string {
 	}
 
 	// Sender / originator pubkey from decoded payload. Use the cached
-	// ParsedDecoded() (sync.Once-gated) instead of re-unmarshaling — the
+	// ParsedDecoded() (once per source generation) instead of re-unmarshaling — the
 	// helper is hot (3 distance sites + analytics topology, all 30k+ tx
 	// loops). See #1197 (carmack/adversarial r1).
 	if dec := tx.ParsedDecoded(); dec != nil {

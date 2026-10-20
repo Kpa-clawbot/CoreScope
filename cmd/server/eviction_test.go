@@ -560,10 +560,11 @@ func TestEstimateStoreTxBytes(t *testing.T) {
 		PathJSON:    `["aa","bb"]`,
 	}
 	est := estimateStoreTxBytes(tx)
-	// Manual calculation: base + string lengths + index entries + perTxMaps + path hops
+	// Manual calculation: base + string lengths + index entries + decoded generation + path hops
 	// (subpaths are counted per request, so they cost the store nothing)
 	hops := int64(len(txGetParsedPath(tx)))
 	manualCalc := int64(storeTxBaseBytes) + int64(len(tx.RawHex)+len(tx.Hash)+len(tx.DecodedJSON)+len(tx.PathJSON)) + int64(numIndexesPerTx*indexEntryBytes)
+	manualCalc += decodedCacheGenerationBytes
 	manualCalc += int64(decodedCacheFactor * len(tx.DecodedJSON))
 	manualCalc += hops * perPathHopBytes
 	if est != manualCalc {

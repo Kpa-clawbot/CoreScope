@@ -1,9 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"runtime"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestTxRewriteFeedConcurrentDecodedReaders(t *testing.T) {
@@ -42,6 +45,7 @@ func TestTxRewriteFeedConcurrentDecodedReaders(t *testing.T) {
 						t.Error("rewrite exposed a partially parsed nested map")
 						return
 					}
+					runtime.Gosched()
 				}
 			}
 		}()
@@ -49,21 +53,99 @@ func TestTxRewriteFeedConcurrentDecodedReaders(t *testing.T) {
 	ready.Wait()
 	defer func() {
 		close(stop)
-		readers.Wait()
+		done := make(chan struct{})
+		go func() { readers.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("decoded readers blocked after rewrite")
+		}
 	}()
-	for revision := 0; revision < 24; revision++ {
-		decoded := fmt.Sprintf(`{"type":"CHAN","channel":"#revision-%d","flags":{"revision":"%d"}}`, revision, revision)
-		backfillRewrite(t, writer, decoded, "#updated")
-		if err := s.pollTxRewrites(500); err != nil {
-			t.Fatal(err)
+	rewritten := make(chan struct{})
+	go func() {
+		defer close(rewritten)
+		for revision := 0; revision < 24; revision++ {
+			decoded := fmt.Sprintf(`{"type":"CHAN","channel":"#revision-%d","flags":{"revision":"%d"}}`, revision, revision)
+			backfillRewrite(t, writer, decoded, "#updated")
+			if err := s.pollTxRewrites(500); err != nil {
+				t.Error(err)
+				return
+			}
+			want := fmt.Sprintf("#revision-%d", revision)
+			if got := tx.ParsedDecoded()["channel"]; got != want {
+				t.Errorf("rewrite cache stale: got %v, want %s", got, want)
+				return
+			}
+			if retained["channel"] != "#initial" || retained["flags"].(map[string]interface{})["revision"] != "initial" {
+				t.Error("rewrite mutated a map retained by an earlier reader")
+				return
+			}
 		}
-		want := fmt.Sprintf("#revision-%d", revision)
-		if got := tx.ParsedDecoded()["channel"]; got != want {
-			t.Fatalf("rewrite cache stale: got %v, want %s", got, want)
+	}()
+	select {
+	case <-rewritten:
+	case <-time.After(10 * time.Second):
+		t.Fatal("rewrite/cache reader did not finish")
+	}
+}
+
+// Model a reader already parsing an old generation. A writer holding store.mu
+// must not wait for it, and its eventual completion must not replace new data.
+func TestDecodedRewriteDoesNotWaitForOldParse(t *testing.T) {
+	const oldJSON = `{"type":"old"}`
+	tx := &StoreTx{DecodedJSON: oldJSON}
+	old := &txDecodedCache{source: oldJSON}
+	tx.decodedCache.Store(old)
+	entered, release, parsed := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(parsed)
+		old.once.Do(func() {
+			close(entered)
+			<-release
+			json.Unmarshal([]byte(old.source), &old.parsed)
+		})
+	}()
+	<-entered
+	var releaseOnce sync.Once
+	finishParse := func() { releaseOnce.Do(func() { close(release) }); <-parsed }
+	defer finishParse()
+	rewritten := make(chan struct{})
+	go func() {
+		tx.setDecodedJSON(`{"type":"new"}`)
+		close(rewritten)
+	}()
+	select {
+	case <-rewritten:
+	case <-time.After(time.Second):
+		t.Fatal("rewrite waited for an old generation's JSON parse")
+	}
+	current := tx.ParsedDecoded()
+	if current["type"] != "new" {
+		t.Fatal("new generation did not parse the rewritten source")
+	}
+	cache := tx.decodedCache.Load()
+	if tx.setDecodedJSON(`{"type":"new"}`) || tx.decodedCache.Load() != cache {
+		t.Fatal("unchanged JSON discarded its warm cache")
+	}
+	finishParse()
+	if old.parsed["type"] != "old" || tx.ParsedDecoded()["type"] != "new" {
+		t.Fatal("old parser completion replaced or mutated the new generation")
+	}
+}
+
+func TestDecodedGenerationIncludedInMemoryBudget(t *testing.T) {
+	tx := &StoreTx{}
+	before := estimateStoreTxBytes(tx)
+	if before < int64(storeTxBaseBytes+numIndexesPerTx*indexEntryBytes+decodedCacheGenerationBytes) {
+		t.Fatal("cache generation is not charged before parsing")
+	}
+	allocs := testing.AllocsPerRun(100, func() {
+		if tx.ParsedDecoded() != nil {
+			t.Fatal("empty source must stay empty")
 		}
-		if retained["channel"] != "#initial" || retained["flags"].(map[string]interface{})["revision"] != "initial" {
-			t.Fatal("rewrite mutated a map retained by an earlier reader")
-		}
+	})
+	if allocs != 0 {
+		t.Fatalf("warm decoded cache allocates: %v", allocs)
 	}
 }
 

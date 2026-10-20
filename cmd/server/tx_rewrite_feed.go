@@ -3,7 +3,6 @@ package main
 import (
 	"database/sql"
 	"log"
-	"sync"
 )
 
 // tx_rewrite_feed (#2107) is the ingestor's change feed for transmissions it
@@ -87,12 +86,7 @@ func (s *PacketStore) pollTxRewrites(limit int) error {
 		if tx == nil {
 			continue
 		}
-		if r.decoded.Valid && r.decoded.String != tx.DecodedJSON {
-			tx.DecodedJSON = r.decoded.String
-			// ParsedDecoded caches behind a sync.Once; reset both under the
-			// write lock so the next reader parses the new JSON.
-			tx.decodedOnce = sync.Once{}
-			tx.parsedDecoded = nil
+		if r.decoded.Valid && tx.setDecodedJSON(r.decoded.String) {
 			s.trackedBytes += rechargeTx(tx)
 			if tx.PayloadType != nil && *tx.PayloadType == PayloadGRP_TXT {
 				channelChanged = true
