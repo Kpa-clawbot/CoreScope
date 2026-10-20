@@ -3,16 +3,68 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/dbschema"
 	"github.com/meshcore-analyzer/users"
 )
+
+func TestRecordedPostgresUpgradeDiagnosticsKeepStatusJSON(t *testing.T) {
+	o, _ := recordedOldPostgres(t, true)
+	var diagnostic, status bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&diagnostic)
+	t.Cleanup(func() { log.SetOutput(old) })
+	if err := runStorageAction(context.Background(), o, &status); err != nil {
+		t.Fatal(err)
+	}
+	if !json.Valid(status.Bytes()) {
+		t.Fatal("upgrade messages contaminated machine-readable status", status.String())
+	}
+	for _, message := range []string{
+		"PostgreSQL telemetry schema upgrade required: 1 -> 2",
+		"PostgreSQL accounts schema upgrade required: 5 -> 6",
+		"upgraded recorded PostgreSQL telemetry schema 1 -> 2",
+		"upgraded recorded PostgreSQL accounts schema 5 -> 6",
+	} {
+		if !strings.Contains(diagnostic.String(), message) {
+			t.Errorf("missing supported upgrade diagnostic %q", message)
+		}
+	}
+	diagnostic.Reset()
+	status.Reset()
+	if err := runStorageAction(context.Background(), o, &status); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(diagnostic.String(), "upgrade required") || strings.Contains(diagnostic.String(), "upgraded recorded") {
+		t.Fatal("unchanged current schemas reported a new upgrade")
+	}
+}
+
+func TestRecordedPostgresUpgradeDoesNotAnnounceUnknownLayout(t *testing.T) {
+	o, _ := recordedOldPostgres(t, true)
+	if _, err := openImportDB(t, o.UsersOwnerURL).Exec(`ALTER TABLE sessions ADD COLUMN unknown_extension TEXT`); err != nil {
+		t.Fatal(err)
+	}
+	var diagnostic bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&diagnostic)
+	t.Cleanup(func() { log.SetOutput(old) })
+	if err := runStorageAction(context.Background(), o, &bytes.Buffer{}); err == nil {
+		t.Fatal("unknown account layout accepted")
+	}
+	if strings.Contains(diagnostic.String(), "upgrade required") || strings.Contains(diagnostic.String(), "upgraded recorded") {
+		t.Fatal("unknown layout was announced as a supported upgrade")
+	}
+}
 
 func recordedOldPostgres(t *testing.T, accounts bool) (storageOptions, dbconfig.Selection) {
 	t.Helper()

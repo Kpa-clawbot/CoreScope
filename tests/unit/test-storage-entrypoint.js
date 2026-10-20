@@ -26,7 +26,18 @@ const field=flag=>args.find(v=>v.startsWith(flag+'='))?.slice(flag.length+1)||ar
 if(name==='corescope-migrate'){
  if(args.includes('-check-ready')){
   fs.appendFileSync(calls,JSON.stringify(['readiness-accounts',Boolean(process.env.CORESCOPE_USERS_DATABASE_URL)])+'\\n');
-  if(process.env.SCENARIO==='unsupported-schema'||(process.env.SCENARIO==='old-schema'&&!fs.existsSync(calls+'.upgraded')))process.exit(1);
+  const scenario=process.env.SCENARIO;
+  const failure={
+   'unsupported-schema':'unsupported telemetry schema version 99 (binary supports 2)',
+   'missing-schema':'telemetry schema is not initialized',
+   'corrupt-schema':'invalid telemetry schema layout'
+  }[scenario];
+  if(failure){process.stderr.write(failure+'\\n');process.exit(1)}
+  if(['old-schema','failed-upgrade','failed-recheck'].includes(scenario)&&!fs.existsSync(calls+'.upgraded')){
+   process.stderr.write('unsupported telemetry schema version 1 (binary supports 2)\\n');process.exit(1);
+  }
+  if(scenario==='failed-recheck'){process.stderr.write('telemetry schema verification failed after upgrade\\n');process.exit(1)}
+  console.log('telemetry PostgreSQL schema is ready');
   process.exit(0);
  }
  const selection=field('-selection-file');const action=field('-storage-action');
@@ -43,9 +54,14 @@ if(name==='corescope-migrate'){
   fs.writeFileSync(selection,JSON.stringify({version:1,state:'ready',backend,generation:'one',job_id:''}));console.log(JSON.stringify({verified:true}));
  }else if(action==='upgrade'){
   const report=JSON.parse(fs.readFileSync(selection,'utf8'));
-  if(report.state!=='ready'||report.backend!=='postgres'||process.env.SCENARIO==='unsupported-schema')process.exit(1);
+  if(report.state!=='ready'||report.backend!=='postgres'||['unsupported-schema','missing-schema','corrupt-schema'].includes(process.env.SCENARIO)){
+   process.stderr.write('recorded target cannot be upgraded\\n');process.exit(1);
+  }
+  process.stderr.write('[storage] PostgreSQL telemetry schema upgrade required: 1 -> 2\\n');
+  if(process.env.SCENARIO==='failed-upgrade'){process.stderr.write('owner upgrade failed\\n');process.exit(1)}
   fs.appendFileSync(calls,JSON.stringify(['upgraded-stores',report.accounts?['telemetry','accounts']:['telemetry']])+'\\n');
   fs.writeFileSync(calls+'.upgraded','verified');
+  process.stderr.write('[storage] upgraded recorded PostgreSQL telemetry schema 1 -> 2\\n');
  }else{process.stderr.write('unexpected migration action');process.exit(2)}
 }else if(name==='su'){
  if(process.env.SCENARIO==='fail-user-switch')process.exit(1);
@@ -96,7 +112,9 @@ function run(extra = {}, action = [], bootstrap = false) {
   const inherited = env.PATH || env.Path || '';
   delete env.Path;
   env.PATH = path.join(temp, 'bin') + path.delimiter + inherited;
-  const result = spawnSync(bash, ['--noprofile','--norc',posix(bootstrap ? path.join(app,'postgres-bootstrap.sh') : action.length ? path.join(app,'storage.sh') : path.join(temp,'entrypoint.sh')), ...action], { cwd: app, env, encoding: 'utf8', timeout: 15000 });
+  // A run launches several native stub processes through the shell. Allow
+  // Windows process-start overhead without changing any product deadline.
+  const result = spawnSync(bash, ['--noprofile','--norc',posix(bootstrap ? path.join(app,'postgres-bootstrap.sh') : action.length ? path.join(app,'storage.sh') : path.join(temp,'entrypoint.sh')), ...action], { cwd: app, env, encoding: 'utf8', timeout: 30000 });
   result.calls = fs.readFileSync(calls,'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
   return result;
 }
@@ -153,9 +171,12 @@ try {
     assert.deepEqual(started.calls.find(call=>call[0]==='readiness-accounts'),['readiness-accounts',accounts!==null]);
     assert(!started.calls.some(call=>call.includes('-storage-action=setup')),'ready PostgreSQL was implicitly initialized');
     assert(!started.calls.some(call=>call.includes('-storage-action=upgrade')),'current schema was unnecessarily upgraded');
+    assert.match(started.stdout,/telemetry PostgreSQL schema is ready/,'current readiness output was hidden');
     const originalSelection=fs.readFileSync(selectionFile,'utf8');
     const upgraded=run({SCENARIO:'old-schema',CORESCOPE_OWNER_PASSWORD:'synthetic-owner',CORESCOPE_USERS_OWNER_DATABASE_URL:'synthetic-owner-url',CORESCOPE_USERS_DATABASE_URL:'runtime-account-url'},[],true);
     assert.equal(upgraded.status,0,upgraded.stderr||upgraded.error?.message);
+    assert.match(upgraded.stderr,/upgrade required: 1 -> 2/,'supported upgrade did not report stored and current versions');
+    assert(!upgraded.stderr.includes('unsupported telemetry'),'successful supported upgrade emitted a provisional failure');
     const upgrade=upgraded.calls.filter(call=>call.includes('-storage-action=upgrade'));
     assert.equal(upgrade.length,1,'old recorded schema did not invoke exactly one owner upgrade');
     assert(upgrade[0].includes('-offline'),'schema upgrade was not explicitly offline');
@@ -166,10 +187,19 @@ try {
     assert(upgraded.calls.findIndex(call=>call[0]==='psql')>finalReady,'runtime grants preceded upgrade verification');
     assert(!upgraded.calls.some(call=>call.includes('-storage-action=setup')),'recorded upgrade could initialize a replacement or absent account target');
     assert.equal(fs.readFileSync(selectionFile,'utf8'),originalSelection,'upgrade changed the selection');
-    const unsupported=run({SCENARIO:'unsupported-schema',CORESCOPE_OWNER_PASSWORD:'synthetic-owner',CORESCOPE_USERS_OWNER_DATABASE_URL:'synthetic-owner-url'},[],true);
-    assert.notEqual(unsupported.status,0,'unsupported schema passed bootstrap');
-    assert(!unsupported.calls.some(call=>call[0]==='psql'),'failed schema upgrade reached grants');
-    assert.equal(fs.readFileSync(selectionFile,'utf8'),originalSelection,'failed upgrade changed the selection');
+    for(const [scenario,diagnostic] of [
+      ['unsupported-schema','unsupported telemetry schema version 99'],
+      ['missing-schema','telemetry schema is not initialized'],
+      ['corrupt-schema','invalid telemetry schema layout'],
+      ['failed-upgrade','owner upgrade failed'],
+      ['failed-recheck','telemetry schema verification failed after upgrade']
+    ]){
+      const unsupported=run({SCENARIO:scenario,CORESCOPE_OWNER_PASSWORD:'synthetic-owner',CORESCOPE_USERS_OWNER_DATABASE_URL:'synthetic-owner-url'},[],true);
+      assert.notEqual(unsupported.status,0,scenario+' passed bootstrap');
+      assert(!unsupported.calls.some(call=>call[0]==='psql'),scenario+' reached grants');
+      assert.match(unsupported.stderr,new RegExp(diagnostic),scenario+' diagnostic was hidden');
+      assert.equal(fs.readFileSync(selectionFile,'utf8'),originalSelection,'failed upgrade changed the selection');
+    }
   }
   for(const report of [{...pgReport,telemetry:target('unselected_telemetry')},{...pgReport,accounts:target('unselected_accounts')},{...pgReport,accounts:{sqlite_path:'/app/data/users.db'}}]){
     fs.writeFileSync(selectionFile,JSON.stringify(report));

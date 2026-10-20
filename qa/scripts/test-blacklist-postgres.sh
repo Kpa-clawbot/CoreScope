@@ -129,6 +129,28 @@ out=$(count "$PK_A" "$READER_URL"); rc=$?
 assert_eq 'legitimate pubkey has three rows' 3 "$out"
 assert_eq 'legitimate pubkey returns success' 0 "$rc"
 assert_eq 'native parameter capability probe round-trips' "$POSTGRES_PROBE_TOKEN" "$(postgres_probe_sql | run_local "$READER_URL")"
+# Derive the expected version from the shipping migrator's fresh schema. This
+# catches a stale QA guard whenever the telemetry schema advances.
+current_version=$(run_local "$READER_URL" <<<"SELECT version FROM corescope_schema WHERE kind='telemetry' AND ready;")
+assert_true 'shipping schema has a current version' bash -c '[[ "$1" =~ ^[1-9][0-9]*$ ]]' _ "$current_version"
+for spec in "unfinished|$current_version|false" "old|1|true" "future|$((current_version+1))|true" "invalid|0|true"; do
+  IFS='|' read -r label version ready <<<"$spec"
+  admin_sql >/dev/null <<<"UPDATE $SCHEMA.corescope_schema SET version=$version,ready=$ready WHERE kind='telemetry';" || exit 1
+  out=$(count "$PK_A" "$READER_URL" 2>"$FIXTURE_DIR/ready.err"); rc=$?
+  assert_true "$label schema returns nonzero" test "$rc" -ne 0
+  assert_true "$label schema reports not-ready SQLSTATE" contains "$(cat "$FIXTURE_DIR/ready.err")" '55000'
+  assert_eq "$label schema produces no count" '' "$out"
+  out=$(postgres_probe_sql | run_local "$READER_URL" 2>"$FIXTURE_DIR/probe-ready.err"); rc=$?
+  assert_true "$label schema capability probe returns nonzero" test "$rc" -ne 0
+  assert_eq "$label schema capability probe produces no token" '' "$out"
+done
+admin_sql >/dev/null <<<"DELETE FROM $SCHEMA.corescope_schema WHERE kind='telemetry';" || exit 1
+out=$(count "$PK_A" "$READER_URL" 2>"$FIXTURE_DIR/missing-ready.err"); rc=$?
+assert_true 'missing readiness marker returns nonzero' test "$rc" -ne 0
+assert_true 'missing readiness marker reports not-ready SQLSTATE' contains "$(cat "$FIXTURE_DIR/missing-ready.err")" '55000'
+assert_eq 'missing readiness marker produces no count' '' "$out"
+admin_sql >/dev/null <<<"INSERT INTO $SCHEMA.corescope_schema(kind,version,ready) VALUES('telemetry',$current_version,true);" || exit 1
+assert_eq 'current ready schema is accepted after rejected states' 3 "$(count "$PK_A" "$READER_URL")"
 COUNT_SQL=$(transmission_count_sql "$PK_A")
 assert_true 'query uses the real attribution column' contains "$COUNT_SQL" 'WHERE from_pubkey = lower(convert_from(decode($1'
 assert_true 'query has no invented from_node column' lacks "$COUNT_SQL" from_node
