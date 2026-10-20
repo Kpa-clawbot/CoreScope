@@ -369,6 +369,9 @@ async function run() {
     // TODO: requires running server with full customize/home wiring
     await page.goto(BASE, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    // The initial theme response installs SITE_CONFIG asynchronously. Set the
+    // sentinel only after that completes, so this tests opening the customizer.
+    await page.waitForFunction(() => window._customizerV2 && window._customizerV2.initDone);
     await page.evaluate(() => {
       localStorage.removeItem('cs-theme-overrides');
       window.SITE_CONFIG = window.SITE_CONFIG || {};
