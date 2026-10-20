@@ -12,6 +12,60 @@ spec.loader.exec_module(bench)
 
 
 class SQLiteControls(unittest.TestCase):
+    def test_all_application_tables_are_freshened_and_digested(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "corpus.sqlite"
+            with bench.sqlite3.connect(source) as db:
+                db.executescript("CREATE TABLE observers(id TEXT); INSERT INTO observers VALUES('synthetic');"
+                                 "CREATE TABLE key_backfill_state(started_at INTEGER, cursor INTEGER);"
+                                 "INSERT INTO key_backfill_state VALUES(100, 7);"
+                                 "CREATE TABLE tx_rewrite_feed(id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER);"
+                                 "INSERT INTO tx_rewrite_feed(created_at) VALUES(100);")
+            db.close()
+            with mock.patch.object(bench, "TABLES", ["observers"]):
+                tables = bench.table_manifest(source)
+                self.assertEqual({table["name"] for table in tables},
+                                 {"observers", "key_backfill_state", "tx_rewrite_feed"})
+                before = bench.validate(source, tables)
+                bench.freshen(source, 10)
+                after = bench.validate(source, tables)
+            self.assertEqual(before["observers"], after["observers"])
+            self.assertNotEqual(before["key_backfill_state"], after["key_backfill_state"])
+            with bench.sqlite3.connect(source) as db:
+                self.assertEqual(db.execute("SELECT started_at, cursor FROM key_backfill_state").fetchone(), (110, 7))
+                self.assertEqual(db.execute("SELECT created_at FROM tx_rewrite_feed").fetchone(), (110,))
+            db.close()
+
+    def test_validation_rejects_unaccounted_application_schema_changes(self):
+        for statement in ("CREATE TABLE extra(value TEXT)", "ALTER TABLE observers ADD COLUMN extra TEXT",
+                          "DROP TABLE observers"):
+            with self.subTest(statement=statement), tempfile.TemporaryDirectory() as directory:
+                source = Path(directory) / "corpus.sqlite"
+                with bench.sqlite3.connect(source) as db:
+                    db.execute("CREATE TABLE observers(id TEXT)")
+                db.close()
+                with mock.patch.object(bench, "TABLES", ["observers"]):
+                    tables = bench.table_manifest(source)
+                with bench.sqlite3.connect(source) as db:
+                    db.execute(statement)
+                db.close()
+                try:
+                    bench.validate(source, tables)
+                except Exception as error:
+                    self.assertIsInstance(error, RuntimeError)
+                    self.assertRegex(str(error), "schema differs")
+                else:
+                    self.fail("validation accepted unaccounted application schema changes")
+
+    def test_manifest_still_requires_the_canonical_application_tables(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "corpus.sqlite"
+            with bench.sqlite3.connect(source) as db:
+                db.execute("CREATE TABLE unrelated(value TEXT)")
+            db.close()
+            with self.assertRaisesRegex(ValueError, "corpus lacks canonical table"):
+                bench.table_manifest(source)
+
     def test_completed_pair_requires_unchanged_input_and_equal_cache_coverage(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
