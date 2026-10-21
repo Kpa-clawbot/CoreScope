@@ -7127,6 +7127,90 @@ console.log('\n=== roles.js: recent advert groups (#2073) ===');
   });
 }
 
+// ===== node-reach.js: retry a busy (429) reach report =====
+// The reach endpoint answers 429 + Retry-After while the server computes other
+// uncached reports. The reach page retries that; api() must not, because
+// login, signup and other rate-limited endpoints answer 429 too.
+console.log('\n=== node-reach.js: reachRetryDelayMs + api() 429 errors ===');
+{
+  const ctx = makeSandbox();
+  ctx.registerPage = () => {};
+  loadInCtx(ctx, 'public/app.js');
+  loadInCtx(ctx, 'public/node-reach.js');
+  const delay = ctx.__meshcoreReachInternals.reachRetryDelayMs;
+  const busy = (ra) => Object.assign(new Error('API 429: /x'), { status: 429, retryAfter: ra });
+
+  test('429 waits the Retry-After seconds', () => {
+    assert.strictEqual(delay(busy('2'), 0), 2000);
+    assert.strictEqual(delay(busy('5'), 0), 5000);
+  });
+
+  test('missing, zero, negative or HTTP-date Retry-After falls back to 2 s', () => {
+    assert.strictEqual(delay(busy(null), 0), 2000);
+    assert.strictEqual(delay(busy('0'), 0), 2000);
+    assert.strictEqual(delay(busy('-3'), 0), 2000);
+    assert.strictEqual(delay(busy('Wed, 21 Oct 2026 07:28:00 GMT'), 0), 2000);
+  });
+
+  test('a huge Retry-After is capped at 30 s', () => {
+    assert.strictEqual(delay(busy('120'), 0), 30000);
+    assert.strictEqual(delay(busy('30'), 0), 30000);
+  });
+
+  test('gives up after 5 retries', () => {
+    assert.strictEqual(delay(busy('2'), 4), 2000);
+    assert.strictEqual(delay(busy('2'), 5), -1);
+  });
+
+  test('anything other than 429 is not retried', () => {
+    for (const st of [400, 404, 500, 503]) {
+      assert.strictEqual(delay(Object.assign(new Error('API ' + st), { status: st, retryAfter: '2' }), 0), -1, 'status ' + st);
+    }
+    assert.strictEqual(delay(new Error('network down'), 0), -1);
+    assert.strictEqual(delay(undefined, 0), -1);
+  });
+
+  const respond = (status, headers) => ({
+    status, ok: status >= 200 && status < 300,
+    headers: { get: (k) => (headers || {})[k] !== undefined ? headers[k] : null },
+    json: async () => ({}),
+  });
+
+  test('api() puts status and Retry-After on the error and does not retry 429', async () => {
+    let calls = 0;
+    ctx.fetch = async () => { calls++; return respond(429, { 'Retry-After': '2' }); };
+    let err;
+    try { await ctx.api('/nodes/x/reach?days=7'); } catch (e) { err = e; }
+    assert.ok(err, 'api() must reject on 429');
+    assert.strictEqual(err.message, 'API 429: /nodes/x/reach?days=7');
+    assert.strictEqual(err.status, 429);
+    assert.strictEqual(err.retryAfter, '2');
+    assert.strictEqual(calls, 1, 'api() must not retry 429 itself');
+  });
+
+  test('a failed api() call leaves no unhandled rejection behind', async () => {
+    let unhandled = 0;
+    const onUnhandled = () => { unhandled++; };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      ctx.fetch = async () => respond(429, { 'Retry-After': '2' });
+      try { await ctx.api('/nodes/y/reach?days=7'); } catch (e) { /* the caller's copy */ }
+      await new Promise((r) => setTimeout(r, 20)); // let the cleanup chain settle
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandled);
+    }
+    assert.strictEqual(unhandled, 0, 'the _inflight cleanup chain must not reject unhandled');
+  });
+
+  test('api() errors without Retry-After carry null', async () => {
+    ctx.fetch = async () => respond(500);
+    let err;
+    try { await ctx.api('/boom'); } catch (e) { err = e; }
+    assert.strictEqual(err.status, 500);
+    assert.strictEqual(err.retryAfter, null);
+  });
+}
+
 // ===== SUMMARY =====
 Promise.allSettled(pendingTests).then(() => {
   console.log(`\n${'═'.repeat(40)}`);

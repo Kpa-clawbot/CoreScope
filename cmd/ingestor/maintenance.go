@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"runtime"
 	"time"
 
 	"github.com/meshcore-analyzer/dbschema"
@@ -67,6 +68,12 @@ const (
 // returned alongside it — those rows are gone, so reporting 0 would be
 // wrong.
 func (s *Store) PruneOldPackets(days int) (int64, error) {
+	return s.pruneOldPackets(days, runtime.Gosched)
+}
+
+// The local scheduling action lets tests exercise ingestion at the committed
+// batch boundary without replacing a global scheduler or writer lock.
+func (s *Store) pruneOldPackets(days int, betweenBatches func()) (int64, error) {
 	if days <= 0 {
 		return 0, nil
 	}
@@ -97,6 +104,11 @@ func (s *Store) PruneOldPackets(days int) (int64, error) {
 		if batch < pruneBatchTransmissions {
 			break
 		}
+		// A serial ingest consumer needs CPU to finish handling one packet and
+		// submit its next write. Yield after the commit and writer-lock release,
+		// before competing for another batch. This does not bound dense fanout
+		// inside a single transaction.
+		betweenBatches()
 	}
 	if total > 0 {
 		log.Printf("[prune] deleted %d transmissions older than %d days", total, days)

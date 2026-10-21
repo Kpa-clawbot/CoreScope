@@ -634,8 +634,7 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 
 			rpStr := nullStrVal(resolvedPathStr)
 			if rpStr != "" {
-				rp := unmarshalResolvedPath(rpStr)
-				pks := extractResolvedPubkeys(rp)
+				pks := resolvedPubkeysFromJSON(rpStr)
 				s.indexResolvedPathHops(tx, pks, hopsSeen)
 			} else if relayPM != nil && obsPJ != "" && obsPJ != "[]" {
 				// resolved_path is NULL on live (since #1287 relay data is

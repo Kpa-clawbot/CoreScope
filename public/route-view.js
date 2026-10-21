@@ -235,9 +235,18 @@
     return p._fromPayload ? ' <span class="mc-rt-status-chip mc-rt-status-payload" title="Sender/recipient decoded from packet payload (not from outer path bytes)">from payload</span>' : '';
   }
 
+  // #2206 follow-up — the "N hops" figures count only true hops: the
+  // payload-decoded sender/recipient rows are endpoints, not hops, so a
+  // 6-relay DM reads "6 hops" instead of 8 rows. Shared by the desktop
+  // header and the mobile summary so they can't disagree.
+  function countHops(positions) {
+    return positions.filter(function (p) { return !p._fromPayload; }).length;
+  }
+
   function buildSidebar(positions, mapRef, layer, edges, markers, opts) {
     opts = opts || {};
     var total = positions.length;
+    var hopCount = countHops(positions);
     // Compute hop distances
     var dists = [], maxDist = 0;
     for (var i = 1; i < total; i++) {
@@ -287,7 +296,12 @@
         if (p.gpsless) {
           statusBadge = ' <span class="mc-rt-status-chip mc-rt-status-nogps" title="Node identified but has no GPS coordinates"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-pin"/></svg> no GPS</span>';
         } else {
-          statusBadge = ' <span class="mc-rt-status-chip mc-rt-status-unknown" title="Could not resolve this hop prefix to a known node"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> unknown</span>';
+          // An unlisted hop was inferred as a node missing from the list (or
+          // without GPS): known nodes share its prefix, but none fits here.
+          var unknownTitle = p.unlisted
+            ? 'No listed node with this prefix fits this point in the path'
+            : 'Could not resolve this hop prefix to a known node';
+          statusBadge = ' <span class="mc-rt-status-chip mc-rt-status-unknown" title="' + unknownTitle + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> ' + (p.unlisted ? 'unlisted' : 'unknown') + '</span>';
         }
       }
       // hops derived from the packet's PAYLOAD (sender/recipient
@@ -439,7 +453,7 @@
           '<div class="mc-rt-title">Route</div>' +
           backLink +
         '</div>' +
-        '<div class="mc-rt-meta">' + total + ' hops · ' + totalKm + ' km' +
+        '<div class="mc-rt-meta">' + hopCount + ' hops · ' + totalKm + ' km' +
           (unresolvedCount ? ' · ' + unresolvedCount + ' unresolved' : '') +
         '</div>' +
         contextBlock +
@@ -495,7 +509,7 @@
       }
     } catch (e) { console.warn('[route-view]', e); }
     summaryLine = (typeTag ? '<b>' + escapeHtml(typeTag) + '</b> · ' : '') +
-                  total + ' hops · ' + totalKm + ' km' +
+                  hopCount + ' hops · ' + totalKm + ' km' +
                   (multiPath ? ' · ' + totalObservers + ' obs' : '') +
                   (hexRoute ? '<br><span class="mc-rt-mobile-hex">' + escapeHtml(hexRoute) + '</span>' : '');
     sidebar.innerHTML =

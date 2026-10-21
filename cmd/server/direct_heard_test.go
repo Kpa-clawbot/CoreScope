@@ -308,3 +308,29 @@ func TestBuildDirectObserverRows_CanRelayTriState(t *testing.T) {
 		t.Fatalf("repeater must report can_relay true, got %v", got["repeater"])
 	}
 }
+
+// #667: a "tx" observation is the observer's own radio transmitting, not a
+// reception. When a repeater-observer forwards a flood it appends its own
+// hash first (firmware Mesh.cpp), so the tx copy ends on the observer itself,
+// and its own advert goes out with an empty path. Counted as receptions, both
+// made the observer the top entry of its own "Heard By" card.
+func TestBuildDirectHeardIndex_SkipsOwnTransmissions(t *testing.T) {
+	forwarded := dhTx(RouteFlood, PayloadTXT_MSG, "")
+	forwarded.Observations = []*StoreObs{
+		{ObserverID: dhUnique, ObserverName: "self", Direction: "tx", PathJSON: `["A433","BB11"]`},
+		{ObserverID: dhUnique, ObserverName: "self", Direction: "rx", PathJSON: `["A433"]`},
+	}
+	ownAdvert := dhTx(RouteFlood, PayloadADVERT, `{"type":"ADVERT","pubKey":"`+dhUnique+`"}`)
+	ownAdvert.Observations = []*StoreObs{
+		{ObserverID: dhUnique, ObserverName: "self", Direction: "tx", PathJSON: `[]`},
+	}
+
+	idx := buildDirectHeardIndex([]*StoreTx{forwarded, ownAdvert}, buildPrefixMap(directHeardNodes))
+
+	if got := idx[dhUnique]; len(got) != 0 {
+		t.Fatalf("own transmissions credited as receptions: %#v", got)
+	}
+	if a := idx[dhCollideA][dhUnique]; a == nil || a.Count != 1 {
+		t.Fatalf("rx copy of the forwarded packet = %#v, want Count 1", a)
+	}
+}

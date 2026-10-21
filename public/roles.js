@@ -444,6 +444,20 @@
     };
   };
 
+  // Three-state health from when a node was last heard: 'healthy', 'degraded'
+  // or 'silent' by its role's thresholds, or null when `heard` is missing or
+  // not a date. The caller picks the timestamp (ISO string or epoch ms); this
+  // only applies the cut-offs, so every view that shows the three states uses
+  // the same ones. `now` defaults to Date.now().
+  window.getHealthStatus = function (role, heard, now) {
+    if (heard == null || heard === '') return null;
+    var heardMs = typeof heard === 'number' ? heard : new Date(heard).getTime();
+    if (isNaN(heardMs)) return null;
+    var age = (now == null ? Date.now() : now) - heardMs;
+    var th = window.getHealthThresholds(role);
+    return age < th.degradedMs ? 'healthy' : age < th.silentMs ? 'degraded' : 'silent';
+  };
+
   // Simplified two-state helper: returns 'active' or 'stale'.
   // Accepts either a full node object (preferred) or legacy (role, lastSeenMs).
   //

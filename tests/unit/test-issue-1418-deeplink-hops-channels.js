@@ -1,13 +1,15 @@
 /**
  * #1418 — map.js loadRouteFromDeepLink:
- *   - Hop resolution priority (server resolved_path > HopResolver > raw).
+ *   - Hop choice: the chosen observation is inferred as one path
+ *     (inferObservationPath), resolved_path as a hint, raw prefixes as the
+ *     fallback.
  *   - GRP_TXT channel hash → name resolution (enc_ placeholder, SHA-256 byte
  *     match for keyed channels, fallback to "channel 0x<HEX>").
  *
  * The deep-link loader is a giant async function; we don't run it end-to-end.
  * Instead we verify:
- *   1. Source invariants: priority order is unambiguous in code.
- *   2. Replica of the chosen-path resolution logic, exercised on fixtures.
+ *   1. Source invariants: the deep link infers the chosen observation.
+ *   2. The real inference helper, with and without a resolved_path hint.
  *   3. Replica of the channel-match predicate (the same `find` callback).
  *   4. Live SubtleCrypto comparison: SHA-256(name)[0] === target byte
  *      reproduced via node's built-in crypto.
@@ -27,96 +29,40 @@ function assert(cond, msg) {
 
 const mapSrc = fs.readFileSync(path.join(REPO_ROOT, 'public', 'map.js'), 'utf8');
 
-console.log('\n=== #1418 hop-priority A: source invariants (3-tier priority) ===');
-// Priority comment is documented; assert the structural keywords are in order.
-const priorityBlock = mapSrc.match(/Priority:[\s\S]{0,800}rawHops/);
-assert(!!priorityBlock,
-  'priority block documented in map.js');
-if (priorityBlock) {
-  const blk = priorityBlock[0];
-  const iResolved = blk.indexOf('resolved_path');
-  const iHopRes = blk.indexOf('HopResolver');
-  const iRaw = blk.indexOf('raw');
-  assert(iResolved >= 0 && iHopRes >= 0 && iRaw >= 0,
-    'priority block mentions all three: resolved_path, HopResolver, raw');
-  assert(iResolved < iHopRes && iHopRes < iRaw,
-    'priority order in comment: resolved_path → HopResolver → raw');
-}
-// Structural code path: resolved_path branch checked first, then HopResolver,
-// then naked rawHops fallback.
-assert(/if\s*\(\s*Array\.isArray\(resolvedHops\)[^\)]*\)\s*\{[\s\S]{0,200}\}\s*else if\s*\(\s*window\.HopResolver/.test(mapSrc),
-  'code structure: if (resolvedHops valid) else if (window.HopResolver) else (rawHops)');
+console.log('\n=== #1418 hop choice A: the deep link infers the chosen observation ===');
+// The chosen observation's hops are inferred as one path (shared with the
+// packet detail pane); its resolved_path is a hint inside that inference, and
+// raw prefixes are the fallback when the resolver is unavailable.
+assert(/inferredHops = inferObservationPath\(chosen,/.test(mapSrc),
+  'the deep link infers the chosen observation with inferObservationPath');
+assert(/const chosenPath = inferredHops \? [^;]*: rawHops;/.test(mapSrc),
+  'chosenPath falls back to the raw prefixes without an inference');
+assert(/inferredHops: inferredHops/.test(mapSrc),
+  'the inferred hops are handed to the route renderer');
 
-console.log('\n=== #1418 hop-priority B: replica of chosen-path selection ===');
-
-// Replicate the chooseChosenPath logic exactly. window.HopResolver shim
-// returns a per-pubkey dict; resolveResult[h] is consulted per raw hop.
-function chooseChosenPath(rawHops, resolvedHopsRaw, hopResolver) {
-  let resolvedHops = null;
-  try {
-    if (resolvedHopsRaw) {
-      resolvedHops = typeof resolvedHopsRaw === 'string' ? JSON.parse(resolvedHopsRaw) : resolvedHopsRaw;
-    }
-  } catch (_) {}
-  if (Array.isArray(resolvedHops) && resolvedHops.length === rawHops.length) {
-    return rawHops.map((h, i) => resolvedHops[i] || h);
+console.log('\n=== #1418 hop choice B: resolved_path is a hint to the inference ===');
+{
+  const vm = require('vm');
+  const ctx = { window: {}, console };
+  vm.createContext(ctx);
+  for (const f of ['packet-helpers.js', 'hop-resolver.js']) {
+    vm.runInContext(fs.readFileSync(path.join(REPO_ROOT, 'public', f), 'utf8'), ctx);
   }
-  if (hopResolver && typeof hopResolver.resolve === 'function' && rawHops.length) {
-    try {
-      const result = hopResolver.resolve(rawHops);
-      return rawHops.map(h => {
-        const r = result ? result[h] : null;
-        return r && r.pubkey ? r.pubkey : h;
-      });
-    } catch (_) { return rawHops; }
-  }
-  return rawHops;
+  const W = ctx.window;
+  const pad = s => s + '0'.repeat(64 - s.length);
+  const near = { public_key: pad('aa01'), name: 'AA-NEAR', role: 'repeater', lat: 40.0, lon: -100 };
+  const hinted = { public_key: pad('aa02'), name: 'AA-HINTED', role: 'repeater', lat: 40.2, lon: -100 };
+  const bb = { public_key: pad('bb01'), name: 'BB', role: 'repeater', lat: 40.1, lon: -100 };
+  W.HopResolver.init([near, hinted, bb]);
+  const observer = { lat: 40.0, lon: -100 };
+  const infer = rp => W.inferObservationPath({ observer_id: 'O', path_json: '["bb","aa"]', resolved_path: rp }, observer, null)
+    .map(e => e.name).join(',');
+  assert(infer(null) === 'BB,AA-NEAR', 'no resolved_path: the hop nearest the observer (' + infer(null) + ')');
+  assert(infer(JSON.stringify([null, hinted.public_key])) === 'BB,AA-HINTED',
+    'a resolved_path entry names that hop; a null entry is inferred');
+  assert(infer(JSON.stringify([hinted.public_key])) === 'BB,AA-NEAR',
+    'a resolved_path of the wrong length is ignored');
 }
-
-const rawHops = ['AA', 'BB', 'CC'];
-
-// Tier 1: server resolved_path takes priority over HopResolver
-const serverResolved = ['AAFULL1', 'BBFULL2', 'CCFULL3'];
-const naiveResolver = { resolve: () => ({ AA: { pubkey: 'WRONG_A' }, BB: { pubkey: 'WRONG_B' }, CC: { pubkey: 'WRONG_C' }}) };
-let chosen = chooseChosenPath(rawHops, serverResolved, naiveResolver);
-assert(JSON.stringify(chosen) === JSON.stringify(serverResolved),
-  'server resolved_path wins over HopResolver (returns ' + JSON.stringify(chosen) + ')');
-
-// Tier 1 with JSON string input (server returns it stringified sometimes)
-chosen = chooseChosenPath(rawHops, JSON.stringify(serverResolved), naiveResolver);
-assert(JSON.stringify(chosen) === JSON.stringify(serverResolved),
-  'server resolved_path accepts JSON-string input (parses it)');
-
-// Tier 2: no resolved_path → use HopResolver
-const smartResolver = { resolve: () => ({ AA: { pubkey: 'AAFULL_DIFF' }, BB: { pubkey: 'BBFULL_DIFF' }, CC: { pubkey: 'CCFULL_DIFF' }}) };
-chosen = chooseChosenPath(rawHops, null, smartResolver);
-assert(JSON.stringify(chosen) === JSON.stringify(['AAFULL_DIFF', 'BBFULL_DIFF', 'CCFULL_DIFF']),
-  'no resolved_path → HopResolver result used (returns ' + JSON.stringify(chosen) + ')');
-
-// HopResolver returns different from naive prefix → values change
-chosen = chooseChosenPath(['AB'], null, { resolve: () => ({ AB: { pubkey: 'ABcorrect123' } }) });
-assert(chosen[0] === 'ABcorrect123',
-  'HopResolver overrides naive prefix when it returns a longer pubkey');
-
-// HopResolver throws → fallback to raw
-chosen = chooseChosenPath(rawHops, null, { resolve: () => { throw new Error('boom'); } });
-assert(JSON.stringify(chosen) === JSON.stringify(rawHops),
-  'HopResolver throw → fallback to rawHops');
-
-// Tier 3: no resolved_path, no HopResolver → raw prefixes
-chosen = chooseChosenPath(rawHops, null, null);
-assert(JSON.stringify(chosen) === JSON.stringify(rawHops),
-  'no resolved_path AND no HopResolver → raw prefixes returned as-is');
-
-// Length mismatch: resolved_path is wrong length → falls through to HopResolver
-chosen = chooseChosenPath(rawHops, ['only_one'], smartResolver);
-assert(JSON.stringify(chosen) === JSON.stringify(['AAFULL_DIFF', 'BBFULL_DIFF', 'CCFULL_DIFF']),
-  'resolved_path with mismatched length → falls through to HopResolver');
-
-// Per-element falsy in resolved_path → falls back to raw for THAT index
-chosen = chooseChosenPath(rawHops, ['AAFULL1', null, 'CCFULL3'], null);
-assert(JSON.stringify(chosen) === JSON.stringify(['AAFULL1', 'BB', 'CCFULL3']),
-  'per-index null in resolved_path → falls back to raw for that index only');
 
 console.log('\n=== #1418 channel A: GRP_TXT match predicate (sync part) ===');
 

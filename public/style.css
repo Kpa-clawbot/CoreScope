@@ -3132,6 +3132,9 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 
 /* Ambiguous hop indicator */
 .hop-ambiguous { border-bottom: 1px dashed var(--status-yellow, #f59e0b); }
+/* Unlisted hop: no known node with its prefix fits that point in the path */
+.hop-unlisted { font-family: var(--mono); color: var(--text-muted); }
+.hop-nogps { font-size: 0.85em; color: var(--text-muted); }
 .hop-warn { font-size: 0.7em; margin-left: 2px; vertical-align: super; color: var(--status-yellow, #f59e0b); }
 .hop-conflict-btn { background: var(--status-yellow, #f59e0b); color: #000; border: none; border-radius: 4px; font-size: 11px;
   font-weight: 700; padding: 1px 5px; cursor: pointer; vertical-align: middle; margin-left: 3px; line-height: 1.2; }

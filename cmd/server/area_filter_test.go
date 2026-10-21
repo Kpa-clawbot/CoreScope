@@ -85,7 +85,7 @@ func newTestStoreWithDB(t testing.TB, db *DB, cfg *Config) *PacketStore {
 		byObserver:         make(map[string][]*StoreObs),
 		byHash:             make(map[string]*StoreTx),
 		byPayloadType:      make(map[int][]*StoreTx),
-		nodeHashes:         make(map[string]map[string]bool),
+		nodeHashes:         newNodeSets(),
 		byPathHop:          make(map[string][]*StoreTx),
 		advertPubkeys:      make(map[string]int),
 		rfCache:            make(map[string]*cachedResult),

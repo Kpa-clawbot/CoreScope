@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -80,25 +81,64 @@ type GraphStats struct {
 
 // ─── Graph accessor on Server ──────────────────────────────────────────────────
 
-// getNeighborGraph returns the current neighbor graph, rebuilding if stale.
+// getNeighborGraph returns the current neighbor graph. It builds one only
+// when there is none yet: a rebuild takes ~11 s on a production store, and
+// doing it on the request path made whoever arrived after the TTL wait for
+// it (#2221). Keeping the graph fresh is the recomputer's job, see
+// rebuildNeighborGraph.
 func (s *Server) getNeighborGraph() *NeighborGraph {
 	s.neighborMu.Lock()
-	defer s.neighborMu.Unlock()
-
-	if s.neighborGraph == nil || s.neighborGraph.IsStale() {
-		if s.store != nil {
-			opts := BuildOptions{MaxEdgeKm: DefaultMaxEdgeKm}
-			if s.cfg != nil {
-				opts.EnableLog = s.cfg.DebugAffinity
-				opts.MaxEdgeKm = s.cfg.NeighborMaxEdgeKm()
-				opts.PathTrust = s.cfg.PathTrust
-			}
-			s.neighborGraph = BuildFromStoreWithOptions(s.store, opts)
-		} else {
-			s.neighborGraph = NewNeighborGraph()
-		}
+	g := s.neighborGraph
+	s.neighborMu.Unlock()
+	if g != nil {
+		return g
 	}
-	return s.neighborGraph
+
+	s.neighborBuildMu.Lock()
+	defer s.neighborBuildMu.Unlock()
+	s.neighborMu.Lock()
+	g = s.neighborGraph
+	s.neighborMu.Unlock()
+	if g != nil {
+		return g // built by whoever held neighborBuildMu before us
+	}
+	g = s.buildNeighborGraph()
+	s.neighborMu.Lock()
+	s.neighborGraph = g
+	s.neighborMu.Unlock()
+	return g
+}
+
+// rebuildNeighborGraph builds a new graph from the packet store and swaps it
+// in, whatever the age of the current one. Called on every recompute tick.
+// The build runs outside neighborMu, so readers keep the previous graph
+// meanwhile. Without a store there is nothing to build from, and the current
+// graph is kept.
+func (s *Server) rebuildNeighborGraph() {
+	if s.store == nil {
+		return
+	}
+	s.neighborBuildMu.Lock()
+	defer s.neighborBuildMu.Unlock()
+	start := time.Now()
+	g := s.buildNeighborGraph()
+	s.neighborMu.Lock()
+	s.neighborGraph = g
+	s.neighborMu.Unlock()
+	log.Printf("[neighbor-graph] rebuilt from the packet store in %v", time.Since(start))
+}
+
+func (s *Server) buildNeighborGraph() *NeighborGraph {
+	if s.store == nil {
+		return NewNeighborGraph()
+	}
+	opts := BuildOptions{MaxEdgeKm: DefaultMaxEdgeKm}
+	if s.cfg != nil {
+		opts.EnableLog = s.cfg.DebugAffinity
+		opts.MaxEdgeKm = s.cfg.NeighborMaxEdgeKm()
+		opts.PathTrust = s.cfg.PathTrust
+	}
+	return BuildFromStoreWithOptions(s.store, opts)
 }
 
 // ─── Handlers ──────────────────────────────────────────────────────────────────
