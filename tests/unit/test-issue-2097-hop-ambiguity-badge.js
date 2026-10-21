@@ -171,7 +171,8 @@ console.log('\n=== #2097: the list summarises, the detail pane does not ===');
     'renderPath takes an options object');
   assert(/summary: true/.test(src),
     'at least one call site asks for the summarised form');
-  assert(/renderPath\(pathHops, effectivePkt\.observer_id\)/.test(src),
+  const detailCall = (src.match(/renderPath\(pathHops, effectivePkt\.observer_id[^)]*\)/) || [''])[0];
+  assert(detailCall && !/summary/.test(detailCall),
     'the detail pane calls renderPath without summary, so it keeps per-hop badges');
   assert(/hop-path-warn/.test(src),
     'the summarised form emits a single per-path indicator');

@@ -4326,7 +4326,7 @@ func TestResolveRegionObserversCacheMissNewRegion(t *testing.T) {
 func TestIndexByNodePreCheck(t *testing.T) {
 	store := &PacketStore{
 		byNode:     make(map[string][]*StoreTx),
-		nodeHashes: make(map[string]map[string]bool),
+		nodeHashes: newNodeSets(),
 	}
 
 	t.Run("indexes ADVERT with pubKey", func(t *testing.T) {
@@ -4385,7 +4385,7 @@ func TestIndexByNodePreCheck(t *testing.T) {
 func TestIndexByNodeResolvedPath(t *testing.T) {
 	store := &PacketStore{
 		byNode:     make(map[string][]*StoreTx),
-		nodeHashes: make(map[string]map[string]bool),
+		nodeHashes: newNodeSets(),
 	}
 
 	t.Run("decoded JSON pubkeys still indexed", func(t *testing.T) {
@@ -4435,7 +4435,7 @@ func BenchmarkIndexByNode(b *testing.B) {
 	b.Run("no_pubkey_skip", func(b *testing.B) {
 		store := &PacketStore{
 			byNode:     make(map[string][]*StoreTx),
-			nodeHashes: make(map[string]map[string]bool),
+			nodeHashes: newNodeSets(),
 		}
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
@@ -4450,7 +4450,7 @@ func BenchmarkIndexByNode(b *testing.B) {
 	b.Run("with_pubkey_parse", func(b *testing.B) {
 		store := &PacketStore{
 			byNode:     make(map[string][]*StoreTx),
-			nodeHashes: make(map[string]map[string]bool),
+			nodeHashes: newNodeSets(),
 		}
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {

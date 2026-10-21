@@ -210,3 +210,22 @@ func buildRecentPackets(store *PacketStore, filtered []*StoreObs, limit int, txB
 	}
 	return out
 }
+
+// txAnalyticsFields returns a detached copy of the tx fields the helpers in
+// this file read (hash, raw hex, payload and route type, decoded JSON), or
+// nil for a nil tx. Caller holds store.mu: the content-hash migration and the
+// rewrite feed change tx.Hash and tx.DecodedJSON under it, and the helpers
+// run after the handler released it (#2237).
+func txAnalyticsFields(tx *StoreTx) *StoreTx {
+	if tx == nil {
+		return nil
+	}
+	return &StoreTx{
+		ID:          tx.ID,
+		Hash:        tx.Hash,
+		RawHex:      tx.RawHex,
+		PayloadType: tx.PayloadType,
+		RouteType:   tx.RouteType,
+		DecodedJSON: tx.DecodedJSON,
+	}
+}

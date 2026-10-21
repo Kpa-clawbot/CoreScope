@@ -36,11 +36,15 @@ func advertPubkey(tx *StoreTx) string {
 	return v
 }
 
-// RegionNodePubkeys returns the pubkeys of nodes with at least one advert heard
-// by an observer in region (comma-separated IATA codes, case- and
-// space-insensitive), over the adverts the store holds. ok is false when the
-// region names no code, or there is no database to resolve observers from, so
-// the caller applies the SQL filter or none.
+// RegionNodePubkeys returns the pubkeys of nodes in region (comma-separated
+// IATA codes, case- and space-insensitive), over the adverts the store holds.
+// A node heard zero-hop is in its home regions (#1879, see
+// node_home_regions.go); any other node is in the regions that heard it in the
+// fewest hops, or none past regionFallback.maxHops. Only nodes newer than the
+// last recompute fall back to the observer-based check: in a region when at
+// least one of its adverts was heard by an observer there. ok is false when the region
+// names no code, or there is no database to resolve observers from, so the
+// caller applies the SQL filter or none.
 //
 // Observers are matched by ID through resolveRegionObservers, i.e. against
 // the observers table as it is now, like every other store region filter.
@@ -70,6 +74,10 @@ func (s *PacketStore) RegionNodePubkeys(region string) (keys []string, ok bool) 
 
 	// Its own mutex and a 30s cache; taken before s.mu, never under it.
 	inRegion := s.resolveRegionObservers(cacheKey)
+	// #1879: nodes in the last recompute are placed by its snapshot; the
+	// observer-based scan below decides only for nodes newer than that.
+	// Atomic load, under no lock.
+	placements := s.GetNodeRegionPlacements()
 	seen := make(map[string]bool, 256)
 	keys = make([]string, 0, 256)
 
@@ -86,12 +94,31 @@ func (s *PacketStore) RegionNodePubkeys(region string) (keys []string, ok bool) 
 			continue
 		}
 		// Parsed only for adverts heard in the region, and cached on the tx.
-		if pk := advertPubkey(tx); pk != "" && !seen[pk] {
-			seen[pk] = true
-			keys = append(keys, pk)
+		pk := advertPubkey(tx)
+		if pk == "" || seen[pk] {
+			continue
 		}
+		if _, placed := placements[pk]; placed {
+			continue
+		}
+		seen[pk] = true
+		keys = append(keys, pk)
 	}
 	s.mu.RUnlock()
+
+	wanted := make(map[string]bool, len(codes))
+	for _, c := range codes {
+		wanted[c] = true
+	}
+	for pk, p := range placements {
+		for _, r := range p.Regions {
+			if wanted[r] {
+				seen[pk] = true
+				keys = append(keys, pk)
+				break
+			}
+		}
+	}
 
 	s.regionNodesMu.Lock()
 	if len(s.regionNodesCache) >= regionNodesCacheMax {

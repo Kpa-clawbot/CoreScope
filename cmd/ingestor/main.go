@@ -282,6 +282,14 @@ func main() {
 		log.Printf("Running — %d MQTT source(s) connected", connectedCount)
 	}
 
+	// Opt-in reach hop index: installs it, or removes it when off (the default).
+	// Here, with the MQTT subscription up and the ingest gate still closed: a
+	// removal holds the single writer for about a minute on a large database,
+	// and the buffer keeps that minute's packets instead of losing them.
+	if err := store.ConfigureObservationHops(cfg.HopIndexDaysOrZero()); err != nil {
+		log.Fatalf("db: hop index: %v", err)
+	}
+
 	// Node retention: move stale nodes to inactive_nodes on startup
 	nodeDays := cfg.NodeDaysOrDefault()
 	store.MoveStaleNodes(nodeDays)
@@ -313,6 +321,13 @@ func main() {
 		} else if n > 0 {
 			log.Printf("[prune] startup pruned %d transmissions older than %d days", n, packetDays)
 		}
+	}
+
+	// Keep observation_hops bounded to its window (no-op when the index is off).
+	if n, err := store.TrimObservationHops(); err != nil {
+		log.Printf("[hop-index] trim error: %v", err)
+	} else if n > 0 {
+		log.Printf("[hop-index] startup trimmed %d hop rows", n)
 	}
 
 	// Client-RX coverage retention: bound the opt-in coverage tables (#1727).
@@ -384,6 +399,9 @@ func main() {
 	keyBackfillCtx, stopKeyBackfill := context.WithCancel(context.Background())
 	defer stopKeyBackfill()
 	keyBackfillDone := keyBackfill.Start(keyBackfillCtx)
+	// After the gate: ingest is live, the backfill yields to it between chunks.
+	// No-op when the index is off or already covers its window.
+	store.ScheduleObservationHopsBackfill()
 	if d := ingestBuffer.Dropped(); d > 0 {
 		log.Printf("[ingest-buffer] write path ready; draining backlog (dropped %d during startup — consider raising ingestBufferSize)", d)
 	} else {
@@ -422,6 +440,19 @@ func main() {
 			store.RunIncrementalVacuum(vacuumPages)
 		}
 	}()
+
+	// Daily trim of the reach hop index, independent of packet retention.
+	if cfg.HopIndexDaysOrZero() > 0 {
+		go func() {
+			for range time.Tick(24 * time.Hour) {
+				if n, err := store.TrimObservationHops(); err != nil {
+					log.Printf("[hop-index] trim error: %v", err)
+				} else if n > 0 {
+					log.Printf("[hop-index] trimmed %d hop rows", n)
+				}
+			}
+		}()
+	}
 
 	// Daily ticker for transmission retention (#1283).
 	var packetRetentionTicker *time.Ticker

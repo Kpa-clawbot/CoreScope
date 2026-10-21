@@ -109,6 +109,10 @@ type Config struct {
 	// NormalizedRegionQuickPicks and config.example.json.
 	RegionQuickPicks []RegionQuickPick `json:"regionQuickPicks,omitempty"`
 
+	// RegionFallback tunes how the /api/nodes region filter places nodes
+	// never heard zero-hop (#1879). See RegionFallbackMaxHops.
+	RegionFallback *RegionFallbackConfig `json:"regionFallback,omitempty"`
+
 	Roles            map[string]interface{} `json:"roles"`
 	HealthThresholds *HealthThresholds      `json:"healthThresholds"`
 	PathTrust        *PathTrustConfig       `json:"pathTrust,omitempty"`
@@ -346,8 +350,10 @@ type NeighborGraphConfig struct {
 
 	// CacheRecomputeIntervalSeconds: cadence for the background
 	// recomputer that rebuilds the default-shape neighbor-graph
-	// response (#1481 P0-1). 0/missing = default 300 (5 min).
-	// Lower = fresher data, more CPU per minute. #1483.
+	// response (#1481 P0-1) and the neighbor graph itself, which
+	// /api/nodes/{pk}/neighbors serves until the next tick (#2221).
+	// 0/missing = default 300 (5 min). Lower = fresher data, and a
+	// full graph build on every tick. #1483.
 	CacheRecomputeIntervalSeconds int `json:"cacheRecomputeIntervalSeconds,omitempty"`
 }
 
@@ -1287,4 +1293,21 @@ func (c *Config) configuredChannelNames() map[string]bool {
 		names[name] = true
 	}
 	return names
+}
+
+// RegionFallbackConfig is the regionFallback block (#1879).
+type RegionFallbackConfig struct {
+	// MaxHops caps the fallback for nodes never heard zero-hop: a node whose
+	// closest hearing took more hops than this is in no region. Default 3.
+	MaxHops *int `json:"maxHops,omitempty"`
+}
+
+// RegionFallbackMaxHops returns regionFallback.maxHops, or the default
+// (regionFallbackMaxHopsDefault, 3) when it is unset or negative. 0 is valid:
+// only nodes some observer heard over an empty path are placed.
+func (c *Config) RegionFallbackMaxHops() int {
+	if c != nil && c.RegionFallback != nil && c.RegionFallback.MaxHops != nil && *c.RegionFallback.MaxHops >= 0 {
+		return *c.RegionFallback.MaxHops
+	}
+	return regionFallbackMaxHopsDefault
 }

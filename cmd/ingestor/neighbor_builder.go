@@ -198,6 +198,7 @@ func (s *Store) buildAndPersistNeighborEdges(trust *packetpath.TrustConfig) (int
 	JOIN transmissions t ON t.id = o.transmission_id
 	LEFT JOIN observers obs ON obs.rowid = o.observer_idx
 	WHERE o.timestamp > ?
+	AND o.direction IS NOT 'tx' -- the observer's own transmission, not a reception (#667)
 	ORDER BY o.timestamp
 	LIMIT ?`, watermarkEpoch, neighborBuilderMaxBatch)
 	if err != nil {

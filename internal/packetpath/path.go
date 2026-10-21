@@ -67,12 +67,7 @@ func HashSize(rawHex string) int {
 	if !ok || !PathBytesAreHops(header>>2&0x0F) {
 		return 0
 	}
-	routeType := int(header & 0x03)
-	offset := 1
-	if IsTransportRoute(routeType) {
-		offset += 4
-	}
-	pathByte, ok := hexByteAt(rawHex, offset)
+	routeType, pathByte, ok := PathByte(rawHex)
 	if !ok {
 		return 0
 	}
@@ -86,16 +81,50 @@ func HashSize(rawHex string) int {
 	return size
 }
 
-// hexByteAt decodes the byte at byte index i of a hex string.
+// PathByte returns a packet's route type and path byte (hash size in the top
+// two bits, hop count in the low six), read from raw_hex: the header is byte
+// 0, transport routes carry four transport-code bytes after it, then comes
+// the path byte (firmware docs/packet_format.md). ok is false when raw_hex is
+// too short or not hex there. Only those bytes are parsed, so this is cheap on
+// hot paths.
+func PathByte(rawHex string) (routeType int, pathByte byte, ok bool) {
+	header, ok := hexByteAt(rawHex, 0)
+	if !ok {
+		return 0, 0, false
+	}
+	routeType = int(header & 0x03)
+	offset := 1
+	if IsTransportRoute(routeType) {
+		offset += 4
+	}
+	pathByte, ok = hexByteAt(rawHex, offset)
+	return routeType, pathByte, ok
+}
+
+// hexByteAt decodes the byte at byte index i of a hex string, without
+// allocating: PathByte runs per advert on the server's recompute paths.
 func hexByteAt(s string, i int) (byte, bool) {
-	if len(s) < 2*i+2 {
+	if i < 0 || len(s) < 2*i+2 {
 		return 0, false
 	}
-	b, err := hex.DecodeString(s[2*i : 2*i+2])
-	if err != nil {
+	hi, ok1 := hexNibble(s[2*i])
+	lo, ok2 := hexNibble(s[2*i+1])
+	if !ok1 || !ok2 {
 		return 0, false
 	}
-	return b[0], true
+	return hi<<4 | lo, true
+}
+
+func hexNibble(c byte) (byte, bool) {
+	switch {
+	case '0' <= c && c <= '9':
+		return c - '0', true
+	case 'a' <= c && c <= 'f':
+		return c - 'a' + 10, true
+	case 'A' <= c && c <= 'F':
+		return c - 'A' + 10, true
+	}
+	return 0, false
 }
 
 // DecodeHopsForPayload returns the header path hops only when the payload type's
