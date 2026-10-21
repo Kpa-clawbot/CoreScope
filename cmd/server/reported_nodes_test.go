@@ -246,3 +246,54 @@ func TestReportedNodesGatedByClientRxCoverage(t *testing.T) {
 		t.Fatalf("status %d with clientRxCoverage off, want 404", rr.Code)
 	}
 }
+
+// A /names report for a made-up pubkey that shares the first 8 bytes of a
+// heard repeater must not count as heard: the 8-byte discover rows belong to
+// the repeater in nodes. Before the uniqueness check in clientNameHeard, one
+// such message made the repeater's short prefix ambiguous and listed the
+// made-up target with the repeater's receptions.
+func TestReportedNameSharingEightBytePrefixIsNotHeard(t *testing.T) {
+	const real = "c5c5660011223344000000000000000000000000000000000000000000000001"
+	const fake = "c5c5660011223344ffffffffffffffffffffffffffffffffffffffffffffffff"
+	srv := seedReported(t)
+	mustExecDB(t, srv.db, `INSERT INTO nodes (public_key, name, role) VALUES ('`+real+`','Real','repeater')`)
+	insRec(t, srv.db, real[:16], "discover", 0, 0, -5, "2026-10-08T10:00:00Z")
+	insRec(t, srv.db, real[:16], "discover", 0, 900, -5, "2026-10-08T11:00:00Z")
+	insRec(t, srv.db, real[:16], "discover", 900, 0, -5, "2026-10-08T12:00:00Z")
+	insClientName(t, srv.db, fake, "Spoof", "2026-10-17T10:00:00.000Z")
+
+	var r ResolvePrefixResp
+	json.Unmarshal(serveResolve(srv, "/api/nodes/resolve?prefix=c5c5").Body.Bytes(), &r)
+	if r.Ambiguous || r.Pubkey != real || r.Name != "Real" {
+		t.Errorf("resolve c5c5 = %+v, want the real repeater, not ambiguous", r)
+	}
+	for _, n := range getReported(t, srv).Nodes {
+		if n.Pubkey == fake {
+			t.Fatalf("made-up target listed with borrowed receptions: %+v", n)
+		}
+	}
+}
+
+// Two reported targets that share an 8-byte prefix: an 8-byte reception could
+// be either, so it counts for neither. A full-key reception still counts.
+func TestReportedTargetsSharingEightBytePrefix(t *testing.T) {
+	const t1 = "e5e5770011223344000000000000000000000000000000000000000000000001"
+	const t2 = "e5e5770011223344000000000000000000000000000000000000000000000002"
+	srv := seedReported(t)
+	insClientName(t, srv.db, t1, "First", "2026-10-17T10:00:00.000Z")
+	insClientName(t, srv.db, t2, "Second", "2026-10-17T10:00:00.000Z")
+	insRec(t, srv.db, t1, "discover", 0, 0, -5, "2026-10-08T10:00:00Z")
+	insRec(t, srv.db, t1[:16], "discover", 0, 900, -5, "2026-10-08T11:00:00Z")
+	insRec(t, srv.db, t1[:16], "discover", 900, 0, -5, "2026-10-08T12:00:00Z")
+
+	got := map[string]ReportedNode{}
+	for _, n := range getReported(t, srv).Nodes {
+		got[n.Pubkey] = n
+	}
+	if n, ok := got[t1]; !ok || n.Receptions != 1 {
+		t.Errorf("t1 = %+v (listed %v), want listed with only its full-key reception", n, ok)
+	}
+	if _, ok := got[t2]; ok {
+		t.Errorf("t2 listed, but it was only heard by a shared 8-byte prefix")
+	}
+}

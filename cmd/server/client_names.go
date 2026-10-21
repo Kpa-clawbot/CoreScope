@@ -30,12 +30,43 @@ func (db *DB) clientNodeNamesPresent() bool {
 
 // clientNameHeard is the SQL condition (alias c for client_node_names) that a
 // reported target was heard directly at least once: a discover or advert
-// reception keyed by its full pubkey or 8-byte prefix. Any companion the broker
-// accepts can report a name for any pubkey, so without this one message could
-// invent a repeater, or make a real node's short prefix ambiguous. The
-// condition needs client_receptions; see clientNamesUsable.
-const clientNameHeard = `EXISTS (SELECT 1 FROM client_receptions r
-	WHERE r.heard_key IN (c.target, substr(c.target, 1, 16)) AND r.src IN ('discover','advert'))`
+// reception keyed by its full pubkey, or by its 8-byte prefix when no other
+// known pubkey (nodes, inactive_nodes, client_node_names) starts with that
+// prefix. Any companion the broker accepts can report a name for any pubkey,
+// so without this one message could invent a repeater, or make a real node's
+// short prefix ambiguous. Without the uniqueness check, a made-up target that
+// shares a heard repeater's 8-byte prefix would borrow that repeater's
+// receptions and pass. The condition needs client_receptions; see
+// clientNamesUsable.
+//
+// The prefix ranges rely on lowercase hex keys, as in lookupPrefixes: "g"
+// sorts after "f", so [p, p+"g") is exactly the keys starting with p.
+func (db *DB) clientNameHeard() string {
+	sharedWith := func(table, col string) string {
+		return `EXISTS (SELECT 1 FROM ` + table + ` o WHERE o.` + col + ` >= substr(c.target, 1, 16)
+			AND o.` + col + ` < substr(c.target, 1, 16) || 'g' AND o.` + col + ` <> c.target)`
+	}
+	shared := sharedWith("nodes", "public_key") + ` OR ` + sharedWith("client_node_names", "target")
+	if db.inactiveNodesPresent() {
+		shared += ` OR ` + sharedWith("inactive_nodes", "public_key")
+	}
+	return `EXISTS (SELECT 1 FROM client_receptions r
+	WHERE r.src IN ('discover','advert') AND (r.heard_key = c.target
+		OR (r.heard_key = substr(c.target, 1, 16) AND NOT (` + shared + `))))`
+}
+
+// inactiveNodesPresent reports whether inactive_nodes exists; an older or
+// partial database may lack it. Re-probed while absent.
+func (db *DB) inactiveNodesPresent() bool {
+	if db.inactiveNodesTable.Load() {
+		return true
+	}
+	if !db.tablePresent("inactive_nodes") {
+		return false
+	}
+	db.inactiveNodesTable.Store(true)
+	return true
+}
 
 // clientNamesUsable reports whether client_node_names can contribute: the
 // table exists, and so does client_receptions, which clientNameHeard reads.
@@ -65,6 +96,10 @@ type prefixHit struct {
 func (s *Server) lookupPrefixes(keys []string) map[string]prefixHit {
 	res := make(map[string]prefixHit, len(keys))
 	withClient := s.db.clientNamesUsable()
+	var heard string
+	if withClient {
+		heard = s.db.clientNameHeard()
+	}
 	// SQLITE_MAX_COMPOUND_SELECT is 500 by default; two terms per key keeps a
 	// chunk of 200 at 400.
 	const chunk = 200
@@ -88,7 +123,7 @@ func (s *Server) lookupPrefixes(keys []string) map[string]prefixHit {
 				// (the ingestor lowercases it), and "g" sorts after "f", so
 				// [k, k+"g") is exactly the keys starting with k.
 				lk := strings.ToLower(k)
-				parts = append(parts, "SELECT pfx, pk, nm, src FROM (SELECT ? AS pfx, target AS pk, name AS nm, 1 AS src, MAX(observed_at) FROM client_node_names c WHERE target >= ? AND target < ? AND "+clientNameHeard+" GROUP BY target LIMIT 2)")
+				parts = append(parts, "SELECT pfx, pk, nm, src FROM (SELECT ? AS pfx, target AS pk, name AS nm, 1 AS src, MAX(observed_at) FROM client_node_names c WHERE target >= ? AND target < ? AND "+heard+" GROUP BY target LIMIT 2)")
 				args = append(args, k, lk, lk+"g")
 			}
 		}
