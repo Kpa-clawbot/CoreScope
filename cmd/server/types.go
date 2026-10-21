@@ -521,6 +521,15 @@ type TimeRangeResp struct {
 	From string `json:"from"`
 	To   string `json:"to"`
 	Days int    `json:"days"`
+	// Partial is set when the in-memory store does not reach back to From
+	// (#748): DataFrom is then where its complete data starts, and the
+	// rates in the response cover DataFrom..To instead of the requested
+	// range. DataFromReason says why: "database" (no older packets),
+	// "loading" (background load not there yet) or "memory" (retention,
+	// eviction or the memory cap).
+	DataFrom       string `json:"dataFrom,omitempty"`
+	DataFromReason string `json:"dataFromReason,omitempty"`
+	Partial        bool   `json:"partial,omitempty"`
 }
 
 type SnrTrendEntry struct {
@@ -555,7 +564,9 @@ type HeatmapCell struct {
 }
 
 type ComputedNodeStats struct {
-	AvailabilityPct     float64     `json:"availabilityPct"`
+	// AvailabilityPct and AvgPacketsPerDay are null when the covered
+	// window is shorter than minCoveredHours (#748).
+	AvailabilityPct     *float64    `json:"availabilityPct"`
 	LongestSilenceMs    int         `json:"longestSilenceMs"`
 	LongestSilenceStart interface{} `json:"longestSilenceStart"`
 	SignalGrade         string      `json:"signalGrade"`
@@ -565,7 +576,7 @@ type ComputedNodeStats struct {
 	TotalPackets        int         `json:"totalPackets"`
 	UniqueObservers     int         `json:"uniqueObservers"`
 	UniquePeers         int         `json:"uniquePeers"`
-	AvgPacketsPerDay    float64     `json:"avgPacketsPerDay"`
+	AvgPacketsPerDay    *float64    `json:"avgPacketsPerDay"`
 }
 
 type NodeAnalyticsResponse struct {

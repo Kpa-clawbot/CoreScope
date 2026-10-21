@@ -133,7 +133,7 @@ func TestPacketDetailExposesScopeName(t *testing.T) {
 // --- grouped view ---
 //
 // The Packets tab defaults to "Group by Hash", which is served by a separate
-// mapper (groupedTxsToPage in the store, a dedicated query in the DB fallback).
+// mapper (groupedRowsToPage in the store, a dedicated query in the DB fallback).
 // The Scope column reads scope_name off those rows, so both paths must carry it.
 
 func TestGroupedTxsToPageCarriesScopeName(t *testing.T) {
@@ -144,7 +144,11 @@ func TestGroupedTxsToPageCarriesScopeName(t *testing.T) {
 		{ID: 2, Hash: "bb", ScopeName: &unmatched},
 		{ID: 3, Hash: "cc", ScopeName: nil},
 	}
-	res := groupedTxsToPage(txs, len(txs), 0, len(txs))
+	rows := make([]groupedRow, len(txs))
+	for i, tx := range txs {
+		rows[i] = snapshotGroupedRow(tx)
+	}
+	res := groupedRowsToPage(rows, len(txs))
 	want := []interface{}{"#belgium", "", nil}
 	for i, w := range want {
 		if got := res.Packets[i]["scope_name"]; got != w {

@@ -356,7 +356,7 @@ function loadAccount(hash, routes, extraWin) {
   const win = Object.assign({ CSAuth, addEventListener(t, fn) { listeners[t] = fn; } }, extraWin || {});
   const ctx = { window: win, document: doc, CSAuth, location: loc, URLSearchParams, Promise, String, Object,
     history: { replaceState(a, b, h) { replaced.push(h); loc.hash = h; } },
-    escapeHtml: loadEscapeHtml(), registerPage(n, m) { pages[n] = m; }, console };
+    escapeHtml: loadEscapeHtml(), registerPage(n, m) { pages[n] = m; }, viewGeneration: () => 0, console };
   vm.createContext(ctx);
   Object.assign(CSAuth, loadAuthHelpers(ctx));
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/account.js'), 'utf8'), ctx);

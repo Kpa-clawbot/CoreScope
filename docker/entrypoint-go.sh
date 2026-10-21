@@ -17,8 +17,8 @@ fi
 # Which user runs the two Go services, and what they are handed. supervisord
 # itself stays root so that mosquitto and caddy can still bind their ports.
 # Unprivileged operation is opt-in via RUN_AS_UID, taken from the container's
-# environment before .env is read; .env is then read (with the services
-# unprivileged, only if root owns it) and the data directory handed over. The
+# environment before .env is read; the data directory is handed over, and .env
+# is read last (with the services unprivileged, only if root owns it). The
 # order matters and lives in one function: see docker/select-service-user.sh,
 # and "Running the Go services unprivileged" in docs/deployment.md.
 . /select-service-user.sh

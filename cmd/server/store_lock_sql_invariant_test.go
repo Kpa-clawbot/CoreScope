@@ -22,11 +22,11 @@ import (
 
 // sqlUnderLockAllowedCallees query SQLite only on a cold or invalidated
 // cache; past their TTL they serve the cached value and refresh in the
-// background (cache_refresh.go).
+// background (cache_refresh.go). The region and area caches are not listed:
+// a cold key queries inline, so callers resolve them before taking s.mu
+// (#2219).
 var sqlUnderLockAllowedCallees = map[string]bool{
-	"PacketStore.getCachedNodesAndPM":    true,
-	"PacketStore.resolveRegionObservers": true,
-	"PacketStore.resolveAreaNodes":       true,
+	"PacketStore.getCachedNodesAndPM": true,
 }
 
 // sqlUnderLockAllowedHolders run at startup, before or while the store is

@@ -56,7 +56,13 @@ const fetchAllNodes = async () => { fetchAllNodesCalls++; return { nodes: nodesD
 let clockData = [], graphData = { nodes: [], edges: [] };
 const api = async (p) => (p.indexOf('/nodes/clock-skew') === 0 ? clockData : graphData);
 const CLIENT_TTL = { nodeList: 0, analyticsRF: 0 };
-const getHealthThresholds = () => ({ degradedMs: 3600000, silentMs: 86400000 });
+// The real status helper from roles.js, so the dashboard is judged by the
+// same thresholds as the browser uses.
+const rolesCtx = { window: {}, console, Date, Infinity, document: { readyState: 'complete', createElement: () => ({ id: '' }), head: { appendChild: () => {} }, getElementById: () => null, addEventListener: () => {} }, fetch: () => Promise.resolve({ json: () => Promise.resolve({}) }) };
+require('vm').createContext(rolesCtx);
+require('vm').runInContext(fs.readFileSync(path.join(REPO_ROOT, 'public', 'roles.js'), 'utf8'), rolesCtx);
+for (const k of Object.keys(rolesCtx.window)) rolesCtx[k] = rolesCtx.window[k];
+const getHealthStatus = rolesCtx.window.getHealthStatus;
 const renderSkewBadge = (sev) => 'CLOCKBADGE:' + sev;
 const currentSkewValue = (cs) => (cs.recentMedianSkewSec != null ? cs.recentMedianSkewSec : cs.medianSkewSec);
 const favStar = (pk) => '<button class="fav-star" data-fav="' + pk + '"></button>';
@@ -67,10 +73,10 @@ const window = { ROLE_COLORS: { repeater: '#3b82f6', room: '#a855f7' }, aaBadgeS
 
 const M = new Function(
   'esc', 'getFavorites', 'RegionFilter', 'AreaFilter', 'fetchAllNodes', 'api', 'CLIENT_TTL',
-  'getHealthThresholds', 'renderSkewBadge', 'currentSkewValue', 'favStar', 'timeAgo', 'bindFavStars', 'window',
+  'getHealthStatus', 'renderSkewBadge', 'currentSkewValue', 'favStar', 'timeAgo', 'bindFavStars', 'window',
   block + '\nreturn { renderMyRepeatersTab, _mrStatusCell, _mrSummaryCard };')(
   esc, getFavorites, RegionFilter, AreaFilter, fetchAllNodes, api, CLIENT_TTL,
-  getHealthThresholds, renderSkewBadge, currentSkewValue, favStar, timeAgo, bindFavStars, window);
+  getHealthStatus, renderSkewBadge, currentSkewValue, favStar, timeAgo, bindFavStars, window);
 
 function makeEl() { return { _h: '', set innerHTML(v) { this._h = v; }, get innerHTML() { return this._h; } }; }
 const tick = () => new Promise(r => setTimeout(r, 0));
@@ -182,6 +188,22 @@ const tick = () => new Promise(r => setTimeout(r, 0));
   await M.renderMyRepeatersTab(el);
   assert(!/not shown with the active region/.test(el.innerHTML),
     'no filter active → no hidden-favorite notice');
+
+  console.log('\n=== status follows the repeater thresholds ===');
+  // A repeater last heard 30 h ago is Degraded (repeater limits 24 h / 72 h),
+  // not Silent as a companion would be (1 h / 24 h). DD has only last_seen,
+  // so this also covers the last_heard || last_seen fallback.
+  const ago30h = new Date(Date.now() - 30 * 3600000).toISOString();
+  favorites = ['AA', 'DD'];
+  nodesData = [
+    { public_key: 'AA', name: 'Active Rptr', role: 'repeater', last_seen: nowIso, last_heard: nowIso },
+    { public_key: 'DD', name: 'Quiet Rptr', role: 'repeater', last_seen: ago30h },
+  ];
+  el = makeEl();
+  await M.renderMyRepeatersTab(el);
+  const rowOf = (h, name) => { const i = h.indexOf(name); return h.slice(h.lastIndexOf('<tr', i), h.indexOf('</tr>', i)); };
+  assert(/>Degraded</.test(rowOf(el.innerHTML, 'Quiet Rptr')), 'repeater last heard 30 h ago is Degraded');
+  assert(/>Active</.test(rowOf(el.innerHTML, 'Active Rptr')), 'repeater heard just now is Active');
 
   console.log('\n────────────────────────────────────────');
   console.log(`  ${passed} passed, ${failed} failed`);

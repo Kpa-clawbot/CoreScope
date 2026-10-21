@@ -87,6 +87,9 @@ type Store struct {
 	stmtBumpTxLastSeen         *sql.Stmt
 	stmtInsertObservation      *sql.Stmt
 	stmtInsertAdvertEvidence   *sql.Stmt
+	hopBackfillCancel          context.CancelFunc // stops the observation_hops backfill on Close
+	hopIndexDays               int                // retention.hopIndexDays; 0 = no hop index (see ConfigureObservationHops)
+	hopMaintMu                 sync.Mutex         // serializes the hop index backfill and trim
 	stmtUpsertNode             *sql.Stmt
 	stmtIncrementAdvertCount   *sql.Stmt
 	stmtUpsertObserver         *sql.Stmt
@@ -233,6 +236,9 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 	var evidenceStatus string
 	_ = db.QueryRow(`SELECT status FROM _async_migrations WHERE name='advert_route_evidence_v1'`).Scan(&evidenceStatus)
 	s.advertEvidenceComplete.Store(evidenceStatus == "done")
+	// The observation_hops backfill is deliberately NOT scheduled here; see
+	// ScheduleObservationHopsBackfill (called from main once ingest is live).
+
 	return s, nil
 }
 
@@ -1422,6 +1428,11 @@ func observerMetaColumns(meta *ObserverMeta) (model, firmware, clientVersion, ra
 
 // Close checkpoints the WAL and closes the database.
 func (s *Store) Close() error {
+	// Long resumable backfills must not hold shutdown hostage; they pick up
+	// from their stored progress on the next boot.
+	if s.hopBackfillCancel != nil {
+		s.hopBackfillCancel()
+	}
 	s.backfillWg.Wait()
 	s.Checkpoint()
 	return s.db.Close()

@@ -368,6 +368,7 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 
 	chunkIdx := 0
 	totalLoaded := 0
+	capped := false // the memory cap stopped the walk with rows left (#748)
 	// Start the id cursor BELOW the minimum possible row id so the
 	// first chunk's `t2.id > cursorID` predicate includes id=0. The
 	// e2e fixture seed for issue #1486 inserts the grouped-packet row
@@ -461,6 +462,7 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 		s.fireChunkCallbacks(chunkTxCount, totalLoaded)
 
 		if maxPackets > 0 && int64(totalLoaded) >= maxPackets {
+			capped = totalInDB < 0 || totalLoaded < totalInDB
 			break
 		}
 		if chunkTxCount < chunkSize {
@@ -495,6 +497,9 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 		s.oldestLoaded = hotCutoffStr
 	} else if len(s.packets) > 0 {
 		s.oldestLoaded = s.packets[0].FirstSeen
+	}
+	if capped {
+		s.loadCapEdge = time.Now().UTC().Format(time.RFC3339)
 	}
 	s.loaded = true
 	s.mu.Unlock()
@@ -629,8 +634,7 @@ func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows, relayPM *prefixMap, cold
 
 			rpStr := nullStrVal(resolvedPathStr)
 			if rpStr != "" {
-				rp := unmarshalResolvedPath(rpStr)
-				pks := extractResolvedPubkeys(rp)
+				pks := resolvedPubkeysFromJSON(rpStr)
 				s.indexResolvedPathHops(tx, pks, hopsSeen)
 			} else if relayPM != nil && obsPJ != "" && obsPJ != "[]" {
 				// resolved_path is NULL on live (since #1287 relay data is

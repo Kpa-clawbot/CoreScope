@@ -295,8 +295,9 @@
         const stats = h.stats || {};
         const obs = h.observers || [];
 
-        const age = stats.lastHeard ? Date.now() - new Date(stats.lastHeard).getTime() : null;
-        const status = age === null ? 'silent' : age < HEALTH_THRESHOLDS.nodeDegradedMs ? 'healthy' : age < HEALTH_THRESHOLDS.nodeSilentMs ? 'degraded' : 'silent';
+        // Packet-store time first, then the DB's last_seen, as My Repeaters does.
+        const heard = stats.lastHeard || node.last_seen;
+        const status = getHealthStatus(node.role, heard) || 'silent';
         const statusCls = status === 'healthy' ? 'status-ok' : status === 'degraded' ? 'status-warn' : 'status-err';
         const statusDot = '<span class="' + statusCls + '" aria-label="' + status + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span>';
         const statusText = status === 'healthy' ? 'Active' : status === 'degraded' ? 'Degraded' : 'Silent';
@@ -317,7 +318,7 @@
             <div class="mnc-role">${node.role || '?'}</div>
             <button class="mnc-remove" data-key="${mn.pubkey}" title="Remove from My Mesh" aria-label="Remove ${escapeAttr(name)} from My Mesh"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>
           </div>
-          <div class="mnc-status-text">${statusText}${stats.lastHeard ? ' · ' + timeAgo(stats.lastHeard) : ''}</div>
+          <div class="mnc-status-text">${statusText}${heard ? ' · ' + timeAgo(heard) : ''}</div>
           <div class="mnc-metrics">
             <div class="mnc-metric">
               <div class="mnc-val">${stats.packetsToday ?? 0}</div>
@@ -453,14 +454,11 @@
       const observers = h.observers || [];
       const claimed = isMyNode(pubkey);
 
-      let status = 'silent', color = 'red', statusMsg = 'Not heard in 24+ hours';
-      if (stats.lastHeard) {
-        const ageMs = Date.now() - new Date(stats.lastHeard).getTime();
-        const ago = timeAgo(stats.lastHeard);
-        if (ageMs < HEALTH_THRESHOLDS.nodeDegradedMs) { status = 'healthy'; color = 'green'; statusMsg = `Last heard ${ago}`; }
-        else if (ageMs < HEALTH_THRESHOLDS.nodeSilentMs) { status = 'degraded'; color = 'yellow'; statusMsg = `Last heard ${ago}`; }
-        else { statusMsg = `Last heard ${ago}`; }
-      }
+      // Packet-store time first, then the DB's last_seen, as My Repeaters does.
+      const heard = stats.lastHeard || node.last_seen;
+      const status = getHealthStatus(node.role, heard) || 'silent';
+      const color = status === 'healthy' ? 'green' : status === 'degraded' ? 'yellow' : 'red';
+      const statusMsg = heard ? `Last heard ${timeAgo(heard)}` : 'No packets in the current window';
 
       const snrVal = stats.avgSnr;
       const snrLabel = snrVal != null ? (snrVal > 10 ? 'Excellent' : snrVal > 0 ? 'Good' : snrVal > -5 ? 'Marginal' : 'Poor') : '';
@@ -475,7 +473,7 @@
           <div class="health-metrics">
             <div class="health-metric"><div class="val">${stats.packetsToday ?? '—'}</div><div class="lbl">Packets Today</div></div>
             <div class="health-metric"><div class="val">${observers.length}</div><div class="lbl">Observers</div></div>
-            <div class="health-metric"><div class="val">${stats.lastHeard ? timeAgo(stats.lastHeard) : '—'}</div><div class="lbl">Last seen</div></div>
+            <div class="health-metric"><div class="val">${heard ? timeAgo(heard) : '—'}</div><div class="lbl">Last seen</div></div>
             <div class="health-metric"><div class="val">${snrVal != null ? Number(snrVal).toFixed(1) + ' dB' : '—'}</div><div class="lbl">Avg SNR${snrLabel ? ' · ' + snrLabel : ''}</div></div>
             <div class="health-metric"><div class="val">${stats.avgHops != null ? stats.avgHops.toFixed(1) : '—'}</div><div class="lbl">Avg Hops</div></div>
           </div>

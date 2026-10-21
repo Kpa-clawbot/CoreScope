@@ -586,7 +586,11 @@ jobs:
           suite 2 test-map-nodes-pagination-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-observer-iata-1188-e2e.js BASE_URL=$B
           suite 2 test-issue-1639-observers-sort-e2e.js BASE_URL=$B
+          suite 2 test-issue-748-node-analytics-coverage-e2e.js BASE_URL=$B
+          suite 2 test-issue-2218-node-analytics-stale-e2e.js BASE_URL=$B
           suite 2 test-issue-661-airtime-e2e.js BASE_URL=$B
+          suite 2 test-health-status-e2e.js BASE_URL=$B
+          suite 2 test-issue-1268-rf-params-e2e.js BASE_URL=$B
           suite 2 test-issue-1758-ng-filter-rerenders-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-nav-fluid-1055-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-nav-priority-1102-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
@@ -618,9 +622,11 @@ jobs:
           suite 2 test-issue-1147-section-order-e2e.js BASE_URL=$B
           suite 3 test-issue-1151-orphan-separators-e2e.js BASE_URL=$B
           suite 3 test-issue-1486-collapse-reopens-detail-e2e.js BASE_URL=$B
+          suite 1 test-hop-path-inference-e2e.js BASE_URL=$B
           suite 1 test-logo-rebrand-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-logo-theme-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-logo-default-sage-teal-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 2 test-theme-url-param-2236-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-issue-1109-hamburger-dropdown-visible-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-live-layout-1178-1179-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-issue-1205-live-controls-anchor-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
@@ -693,6 +699,7 @@ jobs:
           suite 2 test-marker-outline-weight.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 2 test-node-reach-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-packets-compact-columns-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
+          suite 1 test-packets-node-filter-e2e.js BASE_URL=$B
           suite 3 test-packets-scope-column.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-path-inspector-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B
           suite 3 test-pr-1490-live-map-gpu-animations-e2e.js CHROMIUM_REQUIRE=1 BASE_URL=$B

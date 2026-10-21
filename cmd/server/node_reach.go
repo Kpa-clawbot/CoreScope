@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/meshcore-analyzer/dbschema"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -769,6 +770,20 @@ func (s *Server) scanReachRows(ctx context.Context, tokens map[string]bool, sinc
 	if len(tokens) == 0 {
 		return nil, nil // defensive: an empty LIKE chain would render `AND ()` (SQL error)
 	}
+	// Prefer the inverted hop index when the ingestor's backfill has covered
+	// this window: a token seek instead of a substring scan of every
+	// observation in the window (which, cold, outlives the HTTP WriteTimeout).
+	if s.reachHopIndexCovers(ctx, sinceEpoch) {
+		rows, err := s.scanReachRowsIndexed(ctx, tokens, sinceEpoch)
+		if err == nil {
+			return rows, nil
+		}
+		// The coverage check and the scan are separate queries, and the ingestor
+		// drops the index when hopIndexDays is set to 0: a removal between the
+		// two fails the scan with "no such table". Answer from the substring scan
+		// instead; an error there still reaches the caller as a 500.
+		log.Printf("[reach] hop index scan failed, using the path_json scan: %v", err)
+	}
 	args := []interface{}{sinceEpoch}
 	// Sort tokens so the generated SQL text is byte-stable across requests
 	// with the same token set — preserves the driver's prepared-statement
@@ -782,7 +797,14 @@ func (s *Server) scanReachRows(ctx context.Context, tokens map[string]bool, sinc
 		args = append(args, "%\""+tok+"\"%")
 	}
 	args = append(args, reachScanRowLimit)
-	rows, err := s.db.conn.QueryContext(ctx, reachScanSQL(len(toks)), args...)
+	return s.readReachRows(ctx, reachScanSQL(len(toks)), args)
+}
+
+// readReachRows runs a reach scan query (column order fixed by the callers) and
+// folds the result into pathRows. Shared by the LIKE scan and the indexed scan
+// so both apply identical row handling and truncation accounting.
+func (s *Server) readReachRows(ctx context.Context, q string, args []interface{}) ([]pathRow, error) {
+	rows, err := s.db.conn.QueryContext(ctx, q, args...)
 	if err != nil {
 		log.Printf("[reach] scan query failed: %v", err)
 		return nil, err
@@ -843,4 +865,44 @@ func (s *Server) reachAcquireBuildSlot() (func(), bool) {
 	default:
 		return nil, false
 	}
+}
+
+// reachHopIndexCovers reports whether observation_hops can answer a window that
+// starts at sinceEpoch. The table is an optional accelerator maintained by the
+// ingestor when retention.hopIndexDays > 0 (see
+// internal/dbschema/observation_hops.go): a missing table or coverage row
+// (index off, older DB, ingestor not yet started) just means "no".
+func (s *Server) reachHopIndexCovers(ctx context.Context, sinceEpoch int64) bool {
+	var covered int64
+	err := s.db.conn.QueryRowContext(ctx,
+		`SELECT since FROM `+dbschema.ObservationHopsCoverageTable+` WHERE id = 1`).Scan(&covered)
+	return err == nil && covered <= sinceEpoch
+}
+
+// scanReachRowsIndexed is scanReachRows answered from observation_hops. It
+// returns the same rows as the LIKE scan: hop tokens are matched as whole path
+// elements (the LIKE pattern "%\"TOK\"%" is exactly that), both sides are
+// upper-cased with SQLite's ASCII UPPER (LIKE ignores ASCII case; the index
+// stores UPPER(hop)), and IN (subquery) keeps an observation that matches
+// several tokens to one row.
+func (s *Server) scanReachRowsIndexed(ctx context.Context, tokens map[string]bool, sinceEpoch int64) ([]pathRow, error) {
+	toks := make([]string, 0, len(tokens))
+	for tok := range tokens {
+		toks = append(toks, tok)
+	}
+	sort.Strings(toks)
+	args := make([]interface{}, 0, len(toks)+2)
+	marks := make([]string, len(toks))
+	for i, tok := range toks {
+		marks[i] = "UPPER(?)"
+		args = append(args, tok)
+	}
+	args = append(args, sinceEpoch, reachScanRowLimit)
+	q := `SELECT LOWER(COALESCE(obs.id,'')), LOWER(COALESCE(t.from_pubkey,'')), COALESCE(t.payload_type,0), o.path_json, o.snr
+	      FROM observations o
+	      JOIN transmissions t ON t.id = o.transmission_id
+	      LEFT JOIN observers obs ON obs.rowid = o.observer_idx
+	      WHERE o.id IN (SELECT observation_id FROM observation_hops WHERE hop IN (` + strings.Join(marks, ",") + `) AND timestamp >= ?)
+	      LIMIT ?`
+	return s.readReachRows(ctx, q, args)
 }

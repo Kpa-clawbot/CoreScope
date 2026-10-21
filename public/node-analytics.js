@@ -9,6 +9,9 @@
   let charts = [];
   let currentDays = 7;
   let currentPubkey = null;
+  // A time-range click is a new load on the same visit: only the newest may
+  // render (#2218).
+  let loadSeq = 0;
 
   function destroyCharts() {
     charts.forEach(c => { try { c.destroy(); } catch {} });
@@ -30,7 +33,37 @@
     return m + 'm';
   }
 
+  // #748: the server only holds its in-memory window. When that starts
+  // after the requested range, say from when the data runs, why, and what
+  // the rates cover; '' otherwise. stats.availabilityPct is null when the
+  // window is too short for rates.
+  function coverageNotice(tr, stats) {
+    if (!tr || !tr.partial || !tr.dataFrom || !tr.to) return '';
+    const from = Date.parse(tr.dataFrom);
+    const to = Date.parse(tr.to);
+    if (isNaN(from) || isNaN(to)) return '';
+    const spanDays = Math.max(1, Math.round((to - from) / 86400000));
+    let why;
+    if (tr.dataFromReason === 'database') why = 'the database holds no older packets';
+    else if (tr.dataFromReason === 'loading') why = 'the server is still loading older packets';
+    else why = 'the server keeps about ' + spanDays + ' day' + (spanDays === 1 ? '' : 's') + ' of packets in memory';
+    const rates = stats && stats.availabilityPct == null
+      ? 'That is under a day, too short for availability and packets/day.'
+      : 'Availability and packets/day cover that period, not the full ' + tr.days + ' days.';
+    return '<div class="analytics-coverage-notice" data-testid="analytics-coverage-notice" role="note">' +
+      'Data from ' + new Date(from).toISOString().slice(0, 10) + ': ' + why + '. ' + rates + '</div>';
+  }
+
+  // A rate the server left out (window too short, #748) reads as a dash.
+  function rateText(v, suffix) {
+    return v == null ? '—' : v + (suffix || '');
+  }
+  window.NodeAnalyticsCoverage = { notice: coverageNotice, rateText: rateText };
+
   async function loadAnalytics(container, pubkey, days) {
+    const gen = viewGeneration();
+    const seq = ++loadSeq;
+    const isCurrent = () => gen === viewGeneration() && seq === loadSeq;
     currentPubkey = pubkey;
     currentDays = days;
     destroyCharts();
@@ -42,9 +75,11 @@
     try {
       data = await api('/nodes/' + encodeURIComponent(pubkey) + '/analytics?days=' + days, { ttl: CLIENT_TTL.nodeAnalytics });
     } catch (e) {
+      if (!isCurrent()) return;
       container.innerHTML = '<div style="padding:40px;text-align:center;color:#ff6b6b">Failed to load analytics: ' + escapeHtml(e.message) + '</div>';
       return;
     }
+    if (!isCurrent()) return;
 
     const n = data.node;
     const s = data.computedStats;
@@ -64,11 +99,12 @@
           <button data-days="30" ${days===30?'class="active"':''}>30d</button>
           <button data-days="365" ${days===365?'class="active"':''}>All</button>
         </div>
+        ${coverageNotice(data.timeRange, s)}
 
         <div class="analytics-stats">
           <div class="analytics-stat-card">
             <div class="analytics-stat-label">Availability</div>
-            <div class="analytics-stat-value">${s.availabilityPct}%</div>
+            <div class="analytics-stat-value">${rateText(s.availabilityPct, '%')}</div>
             <div class="analytics-stat-desc">% of time windows with at least one packet</div>
           </div>
           <div class="analytics-stat-card">
@@ -78,7 +114,7 @@
           </div>
           <div class="analytics-stat-card">
             <div class="analytics-stat-label">Packets / Day</div>
-            <div class="analytics-stat-value">${s.avgPacketsPerDay}</div>
+            <div class="analytics-stat-value">${rateText(s.avgPacketsPerDay)}</div>
             <div class="analytics-stat-desc">Average daily packet volume in this window</div>
           </div>
           <div class="analytics-stat-card">
@@ -170,7 +206,7 @@
     buildObserverChart(data);
     buildHopChart(data);
     buildHeatmap(data);
-    loadBatteryChart(pubkey, currentDays);
+    loadBatteryChart(pubkey, currentDays, isCurrent);
     NodeHopAnalytics.load(document.getElementById('hopCountSection'), pubkey, currentDays);
   }
 
@@ -302,15 +338,17 @@
     }
   }
 
-  async function loadBatteryChart(pubkey, days) {
+  async function loadBatteryChart(pubkey, days, isCurrent) {
     let data;
     try {
       data = await api('/nodes/' + encodeURIComponent(pubkey) + '/battery?days=' + days);
     } catch (e) {
+      if (!isCurrent()) return;
       const empty = document.getElementById('batteryEmpty');
       if (empty) { empty.style.display = 'block'; empty.textContent = 'Battery data unavailable: ' + e.message; }
       return;
     }
+    if (!isCurrent()) return;
     const ctx = document.getElementById('batteryChart');
     const empty = document.getElementById('batteryEmpty');
     const badge = document.getElementById('batteryStatusBadge');
