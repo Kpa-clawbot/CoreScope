@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand"
 	"net/http/httptest"
 	"sort"
@@ -242,5 +243,100 @@ func TestRfDeviationCache(t *testing.T) {
 	c.get(s2, t0.Add(2*time.Minute+rfDeviationTTL), compute)
 	if calls != 3 {
 		t.Errorf("after TTL: %d computations, want 3", calls)
+	}
+}
+
+// An even split flags nobody. Before the node's own setting was counted, each
+// side saw the other as "at least half" of its peers and all ten were flagged.
+func TestRfDeviationsEvenSplitFlagsNobody(t *testing.T) {
+	var ns []rfTestNode
+	for i := 0; i < 5; i++ {
+		ns = append(ns,
+			rfTestNode{fmt.Sprintf("a%d", i), 50.85 + float64(i)*0.01, 4.35, rfp(869.618, 7, 62.5, 8)},
+			rfTestNode{fmt.Sprintf("b%d", i), 50.85 + float64(i)*0.01, 4.36, rfp(869.618, 8, 62.5, 8)})
+	}
+	params, nodes := rfDevInput(ns)
+	if got := computeRfDeviations(params, nodes, 50, 3); len(got) != 0 {
+		t.Errorf("5/5 split flagged %v, want none", devKeys(got))
+	}
+
+	// 2 of 4 is half, not more: x (SF9) with peers SF8, SF8, SF7 is not flagged.
+	ns = []rfTestNode{
+		{"x", 50.85, 4.35, rfp(869.618, 9, 62.5, 8)},
+		{"p1", 50.86, 4.35, rfp(869.618, 8, 62.5, 8)},
+		{"p2", 50.84, 4.35, rfp(869.618, 8, 62.5, 8)},
+		{"p3", 50.85, 4.36, rfp(869.618, 7, 62.5, 8)},
+	}
+	params, nodes = rfDevInput(ns)
+	if got := computeRfDeviations(params, nodes, 50, 3); len(got) != 0 {
+		t.Errorf("2 of 4 flagged %v, want none", devKeys(got))
+	}
+}
+
+// Frequencies within BW/4 are one channel: a 1 kHz offset is not a deviation,
+// and offset peers add up into one majority. 32 kHz at BW 62.5 (BW/4 =
+// 15.625 kHz) is a deviation.
+func TestRfDeviationsFrequencyTolerance(t *testing.T) {
+	ns := []rfTestNode{
+		{"near", 50.85, 4.35, rfp(869.617, 8, 62.5, 8)},
+		{"edge", 50.85, 4.355, rfp(869.633, 8, 62.5, 8)}, // 15 kHz off: still compatible
+		{"off", 50.85, 4.36, rfp(869.650, 8, 62.5, 8)},   // 32 kHz off
+		{"p1", 50.86, 4.35, rfp(869.618, 8, 62.5, 8)},
+		{"p2", 50.84, 4.35, rfp(869.618, 8, 62.5, 8)},
+		{"p3", 50.85, 4.34, rfp(869.619, 8, 62.5, 8)},
+	}
+	params, nodes := rfDevInput(ns)
+	got := computeRfDeviations(params, nodes, 50, 3)
+	if k := devKeys(got); fmt.Sprint(k) != "[off]" {
+		t.Fatalf("deviating nodes = %v, want [off]", k)
+	}
+	d := got["off"]
+	if fmt.Sprint(d.Fields) != "[freq]" || d.Agree != 5 || d.Peers != 5 || d.Majority.Freq != 869.618 {
+		t.Errorf("off = %+v, want freq differing from 869.618 with 5 of 5 compatible", d)
+	}
+	if !rfFreqCompatible(869.618, 869.618+0.015625, 62.5) || rfFreqCompatible(869.618, 869.618+0.0157, 62.5) {
+		t.Errorf("BW/4 boundary at 62.5 kHz is not 15.625 kHz")
+	}
+}
+
+// At 60°N a longitude degree is about 55.7 km, so the 50 km radius spans two
+// grid columns. A node near the east edge of its cell has peers two columns
+// over; a column search of ±1 would miss them.
+func TestRfDeviationsTwoColumnsAway(t *testing.T) {
+	cellDeg := 50 / 110.57
+	lon := (math.Floor(10/cellDeg) + 0.95) * cellDeg
+	peerLon := lon + 45/(111.32*math.Cos(60*math.Pi/180)) // 45 km east
+	if c0, c1 := math.Floor(lon/cellDeg), math.Floor(peerLon/cellDeg); c1-c0 != 2 {
+		t.Fatalf("setup: peers %v columns away, want 2", c1-c0)
+	}
+	ns := []rfTestNode{
+		{"x", 60.0, lon, rfp(869.618, 7, 62.5, 8)},
+		{"p1", 60.0, peerLon, rfp(869.618, 8, 62.5, 8)},
+		{"p2", 60.001, peerLon, rfp(869.618, 8, 62.5, 8)},
+		{"p3", 59.999, peerLon, rfp(869.618, 8, 62.5, 8)},
+	}
+	params, nodes := rfDevInput(ns)
+	if got := computeRfDeviations(params, nodes, 50, 3); fmt.Sprint(devKeys(got)) != "[x]" {
+		t.Errorf("flagged %v, want [x]", devKeys(got))
+	}
+}
+
+// A peer just inside the radius due north must be found by the ±1 row search.
+// With rows of radius/111 degrees (0.996 × radius), a node at the top of its
+// row had such a peer two rows up; rows are now radius/110.57 degrees, never
+// narrower than the radius. The node sits where the old grid failed.
+func TestRfDeviationsNorthEdgeOfRadius(t *testing.T) {
+	oldCellDeg := 50 / 111.0
+	lat := (math.Floor(50.5/oldCellDeg) + 0.999) * oldCellDeg
+	peerLat := lat + 49.9/110.57
+	ns := []rfTestNode{
+		{"x", lat, 4.35, rfp(869.618, 7, 62.5, 8)},
+		{"p1", peerLat, 4.35, rfp(869.618, 8, 62.5, 8)},
+		{"p2", peerLat, 4.3501, rfp(869.618, 8, 62.5, 8)},
+		{"p3", peerLat, 4.3499, rfp(869.618, 8, 62.5, 8)},
+	}
+	params, nodes := rfDevInput(ns)
+	if got := computeRfDeviations(params, nodes, 50, 3); fmt.Sprint(devKeys(got)) != "[x]" {
+		t.Errorf("flagged %v, want [x]", devKeys(got))
 	}
 }
