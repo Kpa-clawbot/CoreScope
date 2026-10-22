@@ -104,13 +104,16 @@ func uniqueHopPrefix(pk string, n int, pm *prefixMap) bool {
 }
 
 // markRetired loads the hop prefixes (1 to 3 bytes) of the path-capable
-// nodes in inactive_nodes into pm.retired. A database without the table
-// leaves it empty.
+// nodes in inactive_nodes into pm.retired. Rows of nodes also in nodes are
+// skipped: retention copies a node there and nothing removes it when the
+// node is heard again, and a node is no namesake of itself. A database
+// without the table leaves it empty.
 func (pm *prefixMap) markRetired(db *DB) error {
 	if db == nil || !db.inactiveNodesPresent() {
 		return nil
 	}
-	rows, err := db.conn.Query("SELECT public_key, COALESCE(role, '') FROM inactive_nodes")
+	rows, err := db.conn.Query(`SELECT public_key, COALESCE(role, '') FROM inactive_nodes
+		WHERE lower(public_key) NOT IN (SELECT lower(public_key) FROM nodes)`)
 	if err != nil {
 		return err
 	}

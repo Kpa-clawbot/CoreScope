@@ -354,6 +354,31 @@ func TestRetiredNamesakeKeepsHopUncertain(t *testing.T) {
 	}
 }
 
+// Review (#2261): retention copies a row into inactive_nodes and nothing
+// removes it when the node is heard again, so a node can be its own
+// "retired namesake". That row must not take its certain relays away.
+func TestReturnedNodeIsNotItsOwnRetiredNamesake(t *testing.T) {
+	db := setupTestDB(t)
+	if _, err := db.conn.Exec(`CREATE TABLE IF NOT EXISTS inactive_nodes (public_key TEXT PRIMARY KEY, name TEXT, role TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO nodes (public_key, role) VALUES ('` + chC + `', 'repeater')`,
+		`INSERT INTO inactive_nodes (public_key, role) VALUES ('` + strings.ToUpper(chC) + `', 'repeater')`,
+	} {
+		if _, err := db.conn.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pm := chPM()
+	if err := pm.markRetired(db); err != nil {
+		t.Fatal(err)
+	}
+	if !uniqueHopPrefix(chC, 4, pm) {
+		t.Error("2-byte hop 40aa is only chC; its own stale inactive_nodes row must not count")
+	}
+}
+
 // The owner of an "uncertain" repeater (#2260) gets the offline mail, worded
 // so it says why: nothing certain, only its shared prefix still in paths.
 func TestOfflineMailExplainsUncertain(t *testing.T) {
