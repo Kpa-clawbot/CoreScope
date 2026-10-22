@@ -10290,6 +10290,8 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	fromTime := now.Add(-time.Duration(days) * 24 * time.Hour)
 	fromISO := fromTime.Format(time.RFC3339)
 	toISO := now.Format(time.RFC3339)
+	// Before s.mu: its rare inline rebuild must not run under the read lock.
+	_, pm := s.getCachedNodesAndPM()
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -10312,12 +10314,18 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	packets := s.nodeTxsSince(pubkey, coveredFrom.Format(time.RFC3339))
 	coveredHours := now.Sub(coveredFrom).Hours()
 
-	// Activity timeline (hourly buckets)
+	// Activity timeline (hourly buckets). Certain counts the packets that
+	// can only be this node (#2260); the rest were attributed to it through
+	// a hop prefix it shares, and may be another node's.
 	timelineBuckets := map[string]int{}
+	certainBuckets := map[string]int{}
 	for _, p := range packets {
 		if len(p.FirstSeen) >= 13 {
 			bucket := p.FirstSeen[:13] + ":00:00Z"
 			timelineBuckets[bucket]++
+			if certainFor(p, pubkey, pm) {
+				certainBuckets[bucket]++
+			}
 		}
 	}
 	bucketKeys := make([]string, 0, len(timelineBuckets))
@@ -10326,9 +10334,14 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	}
 	sort.Strings(bucketKeys)
 	activityTimeline := make([]TimeBucket, 0, len(bucketKeys))
+	certainKeys := make([]string, 0, len(certainBuckets))
 	for _, k := range bucketKeys {
 		b := k
-		activityTimeline = append(activityTimeline, TimeBucket{Bucket: &b, Count: timelineBuckets[k]})
+		c := certainBuckets[k]
+		activityTimeline = append(activityTimeline, TimeBucket{Bucket: &b, Count: timelineBuckets[k], Certain: &c})
+		if c > 0 {
+			certainKeys = append(certainKeys, k)
+		}
 	}
 
 	// SNR trend
@@ -10528,9 +10541,11 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 		uptimeHeatmap = append(uptimeHeatmap, *cell)
 	}
 
-	// Computed stats
+	// Computed stats. Availability and the longest silence measure the node
+	// being heard, so only certain buckets count (#2260): a silent repeater
+	// must not look available through its namesake prefix.
 	totalPackets := len(packets)
-	distinctHours := len(activityTimeline)
+	distinctHours := len(certainKeys)
 	// Null under minCoveredHours: too short a window to extrapolate from.
 	var availabilityPct, avgPacketsPerDay *float64
 	if coveredHours >= minCoveredHours {
@@ -10539,29 +10554,7 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 		availabilityPct, avgPacketsPerDay = &avail, &perDay
 	}
 
-	// Longest silence
-	var longestSilenceMs int
-	var longestSilenceStart interface{}
-	if len(activityTimeline) >= 2 {
-		for i := 1; i < len(activityTimeline); i++ {
-			var t1Str, t2Str string
-			if activityTimeline[i-1].Bucket != nil {
-				t1Str = *activityTimeline[i-1].Bucket
-			}
-			if activityTimeline[i].Bucket != nil {
-				t2Str = *activityTimeline[i].Bucket
-			}
-			t1, e1 := time.Parse(time.RFC3339, t1Str)
-			t2, e2 := time.Parse(time.RFC3339, t2Str)
-			if e1 == nil && e2 == nil {
-				gap := int(t2.Sub(t1).Milliseconds())
-				if gap > longestSilenceMs {
-					longestSilenceMs = gap
-					longestSilenceStart = t1Str
-				}
-			}
-		}
-	}
+	longestSilenceMs, longestSilenceStart := longestSilence(certainKeys, coveredFrom, now)
 
 	// Signal grade & SNR stats
 	var snrMean, snrStdDev float64

@@ -92,6 +92,17 @@ type NotificationsConfig struct {
 	// ExternalAlerts feeds the node.external event (#2177). Absent: the
 	// event is not offered.
 	ExternalAlerts *ExternalAlertsConfig `json:"externalAlerts,omitempty"`
+	// AdaptiveOffline learns node.offline's threshold per node from its own
+	// certain traffic (#2260, adaptive_offline.go). Absent or not enabled:
+	// the fixed healthThresholds silent windows only.
+	AdaptiveOffline *AdaptiveOfflineConfig `json:"adaptiveOffline,omitempty"`
+}
+
+// AdaptiveOfflineConfig is userManagement.notifications.adaptiveOffline.
+type AdaptiveOfflineConfig struct {
+	Enabled      bool `json:"enabled"`
+	FloorMinutes int  `json:"floorMinutes,omitempty"` // shortest learned threshold, default 30
+	MinObservers int  `json:"minObservers,omitempty"` // fewer distinct observers keep the fixed window, default 3
 }
 
 // ExternalAlertsConfig is userManagement.notifications.externalAlerts: a
@@ -110,6 +121,30 @@ type notifySettings struct {
 	maxMailsPerDay    int           // notification mails per instance per 24 hours
 	maxWatchesPerUser int
 	external          externalAlertSettings
+	adaptive          adaptiveSettings
+}
+
+// adaptiveSettings is the resolved adaptiveOffline block; the zero value is
+// off.
+type adaptiveSettings struct {
+	enabled      bool
+	floor        time.Duration
+	minObservers int
+}
+
+const (
+	defaultAdaptiveFloorMinutes = 30
+	defaultAdaptiveMinObservers = 3
+)
+
+// resolveAdaptiveOffline fills the defaults; nil or not enabled is off.
+func resolveAdaptiveOffline(c *AdaptiveOfflineConfig) adaptiveSettings {
+	if c == nil || !c.Enabled {
+		return adaptiveSettings{}
+	}
+	return adaptiveSettings{enabled: true,
+		floor:        time.Duration(positiveOr(c.FloorMinutes, defaultAdaptiveFloorMinutes)) * time.Minute,
+		minObservers: positiveOr(c.MinObservers, defaultAdaptiveMinObservers)}
 }
 
 // externalAlertSettings is the resolved externalAlerts block; url "" means
@@ -165,6 +200,7 @@ func resolveNotifications(c *NotificationsConfig) notifySettings {
 		perUserPerDay:     positiveOr(c.PerUserPerDay, defaultNotifyPerUserPerDay),
 		maxMailsPerDay:    positiveOr(c.MaxMailsPerDay, defaultNotifyMaxMailsPerDay),
 		maxWatchesPerUser: positiveOr(c.MaxWatchesPerUser, defaultNotifyMaxWatches),
+		adaptive:          resolveAdaptiveOffline(c.AdaptiveOffline),
 	}
 }
 

@@ -29,6 +29,8 @@ type notifier struct {
 	// externalErr is the last tick's reason the externalAlerts feed was not
 	// used ("" when it was), so each new reason is logged once.
 	externalErr string
+	// adaptive caches the learned offline thresholds (offlineWindows).
+	adaptive map[string]adaptiveEntry
 }
 
 func newNotifier(a *authService, src notifySource, now func() time.Time) *notifier {
@@ -210,7 +212,7 @@ func (n *notifier) tick(ctx context.Context) {
 	}
 	res := evaluateNotifications(notifyInput{Now: now, Health: n.src.health(), LowMv: n.src.lowBatteryMv(),
 		Accounts: accounts, Prefs: prefs, Watches: watches, States: states, Nodes: nodes,
-		Heard: heard, SharedSeen: n.src.sharedPrefixSeen(infra), Observers: observers, IngestStale: stale, IngestResumedAt: n.ingestResumedAt, External: external})
+		Heard: heard, SharedSeen: n.src.sharedPrefixSeen(infra), OfflineAfter: n.offlineWindows(pubkeys, now), NewestPacket: n.src.newestPacket(), Observers: observers, IngestStale: stale, IngestResumedAt: n.ingestResumedAt, External: external})
 	if err := st.DeleteNotifyStates(res.Drop); err != nil {
 		log.Printf("[notify] delete dropped states, nothing mailed this time: %v", err)
 		return

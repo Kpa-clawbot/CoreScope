@@ -215,6 +215,26 @@ watched node changes state. Admins can also watch the instance.
   battery below `batteryThresholds.lowMv`, and recovers at `lowMv + 100` mV. Admins can
   add a new foreign node (once per node) and an observer going offline
   (`observerStaleMinutes`) or back (`observerOnlineMinutes`).
+- Adaptive offline threshold (optional, off by default): with
+  `"adaptiveOffline": { "enabled": true, "floorMinutes": 30, "minObservers": 3 }` in
+  `notifications`, a watched node's offline window is learned from its own traffic
+  instead of the fixed silent hours. The server counts the node's certain packets per
+  hour over the week before its last certain packet (so an outage does not lower the
+  rate), takes the 10th percentile as the rate λ so quiet nights do not alert, and
+  reports the node offline after 14/λ hours of silence: the point where silence at that
+  rate has less than a one-in-a-million chance. The result is at least `floorMinutes`
+  and at most the role's silent hours. A repeater heard about 35 times an hour is thus
+  reported after 30 minutes instead of 72 hours. Empty stretches are sorted first: one of
+  at most 6 hours that comes back on another day at the same hours is the node's normal
+  silence, and the window is never shorter than the longest such stretch plus an hour;
+  any other empty stretch is an outage and is left out of the learning, so one outage
+  neither stretches the window for a week nor stops the node from being learned. Nodes
+  with less than one certain packet an hour at the 10th percentile, under a day of
+  history in memory, or whose 10th-percentile hour was heard by fewer than
+  `minObservers` observers keep the fixed window: when one observer carries a node, that
+  observer's outage would look like the node's. Silence is measured up to the newest
+  packet in the store, so a stalling feed stops every node's clock instead of mailing
+  the nodes with short windows. The learned windows are recomputed every 10 minutes.
 - A check runs every `intervalMinutes` (the first one an interval after startup, and only
   after the startup load). All changes for one user in one check go into one
   mail. The first check of a newly watched node stores its state without a mail; states

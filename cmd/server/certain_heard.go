@@ -139,6 +139,27 @@ func (pm *prefixMap) markRetired(db *DB) error {
 	return nil
 }
 
+// certainFor reports whether tx, listed in byNode[pk], is certain evidence
+// for pk under the same rule as certainHeard: pk sent it, or it is a flood
+// relay whose hop prefix only pk has. Packet-level counterpart of
+// certainHeard for analytics and the adaptive offline threshold; it uses the
+// prefix map of now, certainHeard the one at ingest. Reads tx only.
+func certainFor(tx *StoreTx, pk string, pm *prefixMap) bool {
+	if tx == nil || pk == "" {
+		return false
+	}
+	if tx.DecodedJSON != "" && strings.Contains(tx.DecodedJSON, "ubKey") && !tx.signatureFailed() {
+		if d := tx.ParsedDecoded(); d != nil {
+			for _, f := range []string{"pubKey", "srcPubKey"} {
+				if v, _ := d[f].(string); v != "" && strings.EqualFold(v, pk) {
+					return true
+				}
+			}
+		}
+	}
+	return uniqueHopPrefix(pk, relayHopHexLen(tx), pm)
+}
+
 // lastHeardValue is a node's last_heard in /api/nodes and the node detail:
 // the newer of its DB last_seen (adverts; nil or unparsable counts as
 // never) and heard, its certain last heard from LastHeardMap (zero for
@@ -153,4 +174,45 @@ func lastHeardValue(lastSeen interface{}, heard time.Time) interface{} {
 		}
 	}
 	return heard.UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
+// longestSilence is the longest gap between consecutive hourly buckets
+// (sorted RFC3339 keys) and where it started, including the silence from
+// the start of the covered window (from) to the first bucket and the one
+// still running from the last bucket to now: an outage in progress is
+// exactly the silence worth seeing. No bucket at all is silence over the
+// whole window.
+func longestSilence(buckets []string, from, now time.Time) (int, interface{}) {
+	var longest int
+	var start interface{}
+	consider := func(begin string, to time.Time) {
+		t, err := time.Parse(time.RFC3339, begin)
+		if err != nil {
+			return
+		}
+		if gap := int(to.Sub(t).Milliseconds()); gap > longest {
+			longest, start = gap, begin
+		}
+	}
+	fromStr := from.UTC().Format(time.RFC3339)
+	if len(buckets) == 0 {
+		consider(fromStr, now)
+		return longest, start
+	}
+	if t, err := time.Parse(time.RFC3339, buckets[0]); err == nil && t.Sub(from) > time.Hour {
+		consider(fromStr, t)
+	}
+	for i := 1; i < len(buckets); i++ {
+		if t, err := time.Parse(time.RFC3339, buckets[i]); err == nil {
+			consider(buckets[i-1], t)
+		}
+	}
+	if len(buckets) > 0 {
+		// The last bucket covers its whole hour.
+		last := buckets[len(buckets)-1]
+		if t, err := time.Parse(time.RFC3339, last); err == nil && now.Sub(t) > time.Hour {
+			consider(last, now)
+		}
+	}
+	return longest, start
 }

@@ -21,6 +21,8 @@ type fakeNotifySource struct {
 	nodeMap        map[string]notifyNode
 	heard          map[string]time.Time
 	shared         map[string]time.Time
+	acts           map[string]certainActivity
+	actsAsked      [][]string
 	obs            []notifyObserver
 	newestAt       func() time.Time // newest packet in the store; nil means none
 	lock           time.Duration    // what lastHeard reports as its lock time
@@ -58,6 +60,10 @@ func (f *fakeNotifySource) nodes(pubkeys []string, withForeign bool) (map[string
 	return out, nil
 }
 func (f *fakeNotifySource) sharedPrefixSeen([]string) map[string]time.Time { return f.shared }
+func (f *fakeNotifySource) certainActivity(pks []string, _ time.Time) map[string]certainActivity {
+	f.actsAsked = append(f.actsAsked, append([]string(nil), pks...))
+	return f.acts
+}
 func (f *fakeNotifySource) lastHeard(pks []string) (map[string]time.Time, time.Duration) {
 	f.heardAsked = append([]string(nil), pks...)
 	return f.heard, f.lock

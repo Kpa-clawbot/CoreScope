@@ -46,7 +46,16 @@ type notifyInput struct {
 	// other repeaters, last_relayed) was last in a path. Not evidence: it
 	// only explains an offline mail for a node that is "uncertain" in the UI.
 	SharedSeen map[string]time.Time
-	Observers  []notifyObserver // nil unless an admin chose observer.offline
+	// OfflineAfter is the learned offline threshold per node (#2260,
+	// adaptiveOffline); a node without one, or with one beyond its role's
+	// silent window, uses that window.
+	OfflineAfter map[string]time.Duration
+	// NewestPacket is the newest packet in the store (zero: unknown). A
+	// node's silence is measured up to it, not up to Now: when the feed
+	// stalls, every node's clock stops with it, so a node with a short
+	// learned window is not mailed offline before IngestStale trips (#2260).
+	NewestPacket time.Time
+	Observers    []notifyObserver // nil unless an admin chose observer.offline
 	// IngestStale: the newest packet in the store is old, so a silent node
 	// and a silent feed look the same. node.offline and observer.offline
 	// are then not compared (states unchanged, no changes).
@@ -118,9 +127,15 @@ func nodeLabel(n notifyNode, known bool, pk string) string {
 // store's certain last heard (its own packets and relay hops that can only be
 // this node, #2260). last_relayed is not evidence: it also counts 1-byte
 // prefix matches shared with other repeaters, which kept a silent repeater
-// "online" for days. A node missing from the analyzer database is bad. While prev is good, the
+// "online" for days. The window is the role's silent window, or the node's
+// learned OfflineAfter when that is shorter (adaptiveOffline). A node
+// missing from the analyzer database is bad. While prev is good, the
 // latest evidence is never older than in.IngestResumedAt (the outage grace).
-func nodeOnlineState(pk string, n notifyNode, known bool, prev string, in *notifyInput) string {
+// While prev is bad (entered at prevAt), the node comes back only on
+// evidence from that moment on: a window that grows back (a learned
+// threshold lost to retention or a restart) must not read a still-silent
+// node as back online.
+func nodeOnlineState(pk string, n notifyNode, known bool, prev string, prevAt time.Time, in *notifyInput) string {
 	if !known {
 		return users.NotifyBad
 	}
@@ -131,8 +146,19 @@ func nodeOnlineState(pk string, n notifyNode, known bool, prev string, in *notif
 	if prev == users.NotifyGood && last.Before(in.IngestResumedAt) {
 		last = in.IngestResumedAt
 	}
+	if prev == users.NotifyBad && !prevAt.IsZero() && last.Before(prevAt) {
+		return users.NotifyBad
+	}
+	now := in.Now
+	if !in.NewestPacket.IsZero() && in.NewestPacket.Before(now) {
+		now = in.NewestPacket
+	}
 	_, silentMs := in.Health.GetHealthMs(strings.ToLower(n.Role))
-	if last.IsZero() || in.Now.Sub(last) >= time.Duration(silentMs)*time.Millisecond {
+	silent := time.Duration(silentMs) * time.Millisecond
+	if a, ok := in.OfflineAfter[pk]; ok && a > 0 && a < silent {
+		silent = a
+	}
+	if last.IsZero() || now.Sub(last) >= silent {
 		return users.NotifyBad
 	}
 	return users.NotifyGood
@@ -220,10 +246,12 @@ func evalExternal(res *notifyResult, prev map[users.NotifyKey]string, bad []stri
 // rows are dropped, like opting out, so a re-promotion starts silently.
 func evaluateNotifications(in notifyInput) notifyResult {
 	prev := make(map[users.NotifyKey]string, len(in.States))
+	prevAt := make(map[users.NotifyKey]time.Time, len(in.States)) // when each stored state was entered
 	// extBad: per user and node, the node.external keys stored as bad.
 	extBad := map[int64]map[string][]string{}
 	for _, s := range in.States {
 		prev[s.NotifyKey] = s.State
+		prevAt[s.NotifyKey] = s.ChangedAt
 		if s.Event == users.NotifyNodeExternal && s.State == users.NotifyBad {
 			if pk, key, ok := strings.Cut(s.Subject, "/"); ok && key != externalBaselineKey {
 				if extBad[s.UserID] == nil {
@@ -294,7 +322,7 @@ func evaluateNotifications(in notifyInput) notifyResult {
 			name := nodeLabel(n, known, pk)
 			if p.Has(users.NotifyNodeOffline) && !in.IngestStale {
 				k := users.NotifyKey{UserID: p.UserID, Event: users.NotifyNodeOffline, Subject: pk}
-				state := nodeOnlineState(pk, n, known, prev[k], &in)
+				state := nodeOnlineState(pk, n, known, prev[k], prevAt[k], &in)
 				before := len(res.Changes[p.UserID])
 				compare(k, name, state, nil)
 				if state == users.NotifyBad && len(res.Changes[p.UserID]) > before {

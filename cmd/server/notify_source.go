@@ -16,6 +16,7 @@ type notifySource interface {
 	nodes(pubkeys []string, withForeign bool) (map[string]notifyNode, error)
 	lastHeard(pubkeys []string) (map[string]time.Time, time.Duration) // and how long the store lock was held
 	sharedPrefixSeen(pubkeys []string) map[string]time.Time           // last_relayed, for the mail text only
+	certainActivity(pubkeys []string, now time.Time) map[string]certainActivity
 	observers() ([]notifyObserver, error)
 	newestPacket() time.Time       // zero when the store holds no packet
 	externalFeed() ([]byte, error) // the externalAlerts feed body (#2177); only called when configured
@@ -70,6 +71,13 @@ func (src serverNotifySource) sharedPrefixSeen(pubkeys []string) map[string]time
 		}
 	}
 	return out
+}
+
+func (src serverNotifySource) certainActivity(pubkeys []string, now time.Time) map[string]certainActivity {
+	if src.s.store == nil {
+		return map[string]certainActivity{}
+	}
+	return src.s.store.CertainActivity(pubkeys, now)
 }
 
 func (src serverNotifySource) newestPacket() time.Time {
