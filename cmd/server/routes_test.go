@@ -820,21 +820,15 @@ func TestNodeHealthNotFound(t *testing.T) {
 func TestNodeHealthPartialFromPackets(t *testing.T) {
 	srv, router := setupTestServer(t)
 
-	// Inject a packet into byNode for a pubkey that doesn't exist in the nodes table
+	// Index the companion's own packet (srcPubKey) for a pubkey that doesn't
+	// exist in the nodes table. Going through indexByNode also records it as
+	// certain evidence, which is what stats.lastHeard reports (#2260).
 	ghostPubkey := "ghost_companion_no_advert"
 	now := time.Now().UTC().Format(time.RFC3339)
 	snr := 5.0
 	srv.store.mu.Lock()
-	if srv.store.byNode == nil {
-		srv.store.byNode = make(map[string][]*StoreTx)
-	}
-	if srv.store.nodeHashes == nil {
-		srv.store.nodeHashes = newNodeSets()
-	}
-	srv.store.byNode[ghostPubkey] = []*StoreTx{
-		{Hash: "abc123", FirstSeen: now, SNR: &snr, ObservationCount: 1},
-	}
-	srv.store.nodeHashes[ghostPubkey] = map[int]struct{}{0: {}}
+	srv.store.indexByNode(&StoreTx{ID: 999999, Hash: "abc123", FirstSeen: now, SNR: &snr, ObservationCount: 1,
+		DecodedJSON: `{"srcPubKey":"` + ghostPubkey + `"}`})
 	srv.store.mu.Unlock()
 
 	req := httptest.NewRequest("GET", "/api/nodes/"+ghostPubkey+"/health", nil)

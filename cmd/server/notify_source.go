@@ -15,7 +15,7 @@ type notifySource interface {
 	lowBatteryMv() int
 	nodes(pubkeys []string, withForeign bool) (map[string]notifyNode, error)
 	lastHeard(pubkeys []string) (map[string]time.Time, time.Duration) // and how long the store lock was held
-	lastRelayed(pubkeys []string) map[string]time.Time
+	sharedPrefixSeen(pubkeys []string) map[string]time.Time           // last_relayed, for the mail text only
 	observers() ([]notifyObserver, error)
 	newestPacket() time.Time       // zero when the store holds no packet
 	externalFeed() ([]byte, error) // the externalAlerts feed body (#2177); only called when configured
@@ -53,13 +53,23 @@ func (src serverNotifySource) lastHeard(pubkeys []string) (map[string]time.Time,
 	return src.s.store.LastHeardMap(pubkeys)
 }
 
-// lastRelayed reads the cached relay metrics (the map /api/nodes uses; the
-// background recomputer refreshes it). Pass repeaters and rooms only.
-func (src serverNotifySource) lastRelayed(pubkeys []string) map[string]time.Time {
+// sharedPrefixSeen reads last_relayed from the cached relay metrics (the map
+// /api/nodes uses). It counts 1-byte prefixes shared with other repeaters,
+// so it only words the offline mail, never decides it (#2260).
+func (src serverNotifySource) sharedPrefixSeen(pubkeys []string) map[string]time.Time {
+	out := map[string]time.Time{}
 	if src.s.store == nil || len(pubkeys) == 0 {
-		return map[string]time.Time{}
+		return out
 	}
-	return relayTimes(src.s.store.GetRepeaterRelayInfoMap(src.s.cfg.GetHealthThresholds().RelayActiveHours), pubkeys)
+	m := src.s.store.GetRepeaterRelayInfoMap(src.s.cfg.GetHealthThresholds().RelayActiveHours)
+	for _, pk := range pubkeys {
+		if info, ok := lookupRelayInfo(m, pk); ok {
+			if t, ok := parseRelayTS(info.LastRelayed); ok {
+				out[pk] = t
+			}
+		}
+	}
+	return out
 }
 
 func (src serverNotifySource) newestPacket() time.Time {
@@ -81,22 +91,6 @@ func (src serverNotifySource) observers() ([]notifyObserver, error) {
 		return nil, err
 	}
 	return notifyObserversFrom(list), nil
-}
-
-// relayTimes parses LastRelayed for the given keys; keys without a relay
-// time are absent.
-func relayTimes(m map[string]RepeaterRelayInfo, pubkeys []string) map[string]time.Time {
-	out := make(map[string]time.Time, len(pubkeys))
-	for _, pk := range pubkeys {
-		info, ok := lookupRelayInfo(m, pk)
-		if !ok || info.LastRelayed == "" {
-			continue
-		}
-		if t, ok := parseRelayTS(info.LastRelayed); ok {
-			out[pk] = t
-		}
-	}
-	return out
 }
 
 func notifyObserversFrom(list []Observer) []notifyObserver {
@@ -171,20 +165,18 @@ func (db *DB) NotifyNodes(pubkeys []string, withForeign bool) (map[string]notify
 	return out, nil
 }
 
-// LastHeardMap returns, per pubkey with packets in the store, the newest
-// FirstSeen among them: the node page's "Last Heard" (GetNodeHealth) in
-// bulk, and how long the read lock was held (logged once per tick). One
-// read lock, O(packets of the given nodes), string compares only; parsing
+// LastHeardMap returns, per pubkey, the newest FirstSeen of a transmission
+// certainly from that node (certainHeard, #2260): the node page's "Last
+// Heard" (GetNodeHealth) in bulk, and how long the read lock was held
+// (logged once per tick). One read lock, one map lookup per pubkey; parsing
 // happens after the lock is released.
 func (s *PacketStore) LastHeardMap(pubkeys []string) (map[string]time.Time, time.Duration) {
 	latest := make(map[string]string, len(pubkeys))
 	s.mu.RLock()
 	locked := time.Now()
 	for _, pk := range pubkeys {
-		for _, tx := range s.byNode[pk] {
-			if tx != nil && tx.FirstSeen > latest[pk] {
-				latest[pk] = tx.FirstSeen
-			}
+		if ts := s.certainHeard[pk]; ts != "" {
+			latest[pk] = ts
 		}
 	}
 	held := time.Since(locked)

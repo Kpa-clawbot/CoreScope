@@ -20,7 +20,7 @@ type fakeNotifySource struct {
 	low            int
 	nodeMap        map[string]notifyNode
 	heard          map[string]time.Time
-	relayed        map[string]time.Time
+	shared         map[string]time.Time
 	obs            []notifyObserver
 	newestAt       func() time.Time // newest packet in the store; nil means none
 	lock           time.Duration    // what lastHeard reports as its lock time
@@ -57,11 +57,11 @@ func (f *fakeNotifySource) nodes(pubkeys []string, withForeign bool) (map[string
 	}
 	return out, nil
 }
+func (f *fakeNotifySource) sharedPrefixSeen([]string) map[string]time.Time { return f.shared }
 func (f *fakeNotifySource) lastHeard(pks []string) (map[string]time.Time, time.Duration) {
 	f.heardAsked = append([]string(nil), pks...)
 	return f.heard, f.lock
 }
-func (f *fakeNotifySource) lastRelayed([]string) map[string]time.Time { return f.relayed }
 func (f *fakeNotifySource) newestPacket() time.Time {
 	if f.newestAt == nil {
 		return time.Time{}
@@ -103,7 +103,7 @@ func newNotifyFixture(t *testing.T, ns notifySettings) *notifyFixture {
 	clk := &notifyClock{t: time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)}
 	a.st.SetClock(clk.Now)
 	src := &fakeNotifySource{isReady: true, hs: (&Config{}).GetHealthThresholds(), low: 3300,
-		nodeMap: map[string]notifyNode{}, heard: map[string]time.Time{}, relayed: map[string]time.Time{}, newestAt: clk.Now}
+		nodeMap: map[string]notifyNode{}, heard: map[string]time.Time{}, newestAt: clk.Now}
 	if ns.enabled {
 		a.notify = newNotifier(a, src, clk.Now)
 	}

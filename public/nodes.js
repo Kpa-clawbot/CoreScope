@@ -83,8 +83,9 @@
   let lastHeard = localStorage.getItem('meshcore-nodes-last-heard') || '';
   let statusFilter = localStorage.getItem('meshcore-nodes-status-filter') || 'all';
   // #1845: "silent longer than N", the inverse of the Last Heard filter. Empty
-  // means off. Ages are relay-aware (getEffectiveHeardMs), so a repeater that
-  // forwards traffic is never counted as silent just because its ADVERT is old.
+  // means off. Ages come from getEffectiveHeardMs, whose last_heard includes
+  // certain relays (#2260), so a repeater that forwards traffic is never
+  // counted as silent just because its ADVERT is old.
   let silentFor = localStorage.getItem('meshcore-nodes-silent-for') || '';
   const SILENT_MS = { '1d': 86400000, '3d': 259200000, '7d': 604800000, '14d': 1209600000, '30d': 2592000000 };
   // #1268 M3: '' or 'differs' (LoRa settings differ from nearby same-band nodes).
@@ -199,6 +200,9 @@
     if (status === 'active') {
       return 'Active \u2014 heard within the last ' + threshold + '.' + (isInfra ? ' Repeaters typically advertise every 12-24h.' : '');
     }
+    if (status === 'uncertain') {
+      return 'Uncertain \u2014 nothing that can only be this ' + role + ' for over ' + threshold + '. Its hop prefix, shared with other repeaters, still appears in paths: that may be this node or another one.';
+    }
     if (role === 'companion') {
       return 'Stale \u2014 not heard for over ' + threshold + '. Companions only advertise when the user initiates \u2014 this may be normal.';
     }
@@ -221,25 +225,27 @@
     // Single source of truth for all status-related info
     const role = (n.role || '').toLowerCase();
     const roleColor = ROLE_COLORS[n.role] || '#6b7280';
-    // Prefer last_heard (from in-memory packets) > _lastHeard (health API) > last_seen (DB)
-    const lastHeardTime = n._lastHeard || n.last_heard || n.last_seen;
-    const lastHeardMs = lastHeardTime ? new Date(lastHeardTime).getTime() : 0;
-    // #1598: pass the full node so infra staleness also considers last_relayed
+    // The newest of _lastHeard (health API), last_heard and last_seen, the
+    // same timestamp the status uses (getEffectiveHeardMs, #2260).
+    const effMs = window.getEffectiveHeardMs(n);
+    const lastHeardMs = isNaN(effMs) ? 0 : effMs;
+    const lastHeardTime = lastHeardMs ? new Date(lastHeardMs).toISOString() : null;
+    // #1598/#2260: certain relays are already in last_heard
     const status = getNodeStatus(n);
     const statusTooltip = getStatusTooltip(role, status);
-    const statusLabel = status === 'active' ? '<span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> Active' : '<span style="color:var(--text-muted)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> Stale';
+    const statusLabel = status === 'active' ? '<span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> Active'
+      : status === 'uncertain' ? '<span style="color:var(--text-muted)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle"/></svg></span> Uncertain'
+      : '<span style="color:var(--text-muted)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> Stale';
     const statusAge = lastHeardMs ? (Date.now() - lastHeardMs) : Infinity;
 
     let explanation = '';
     if (status === 'active') {
-      // #1598: an infra node can be active purely via relay participation —
-      // surface that instead of a misleading old "last heard".
-      const relayedMs = n.last_relayed ? new Date(n.last_relayed).getTime() : 0;
-      if (relayedMs > lastHeardMs) {
-        explanation = 'Last relayed ' + renderNodeTimestampText(n.last_relayed);
-      } else {
-        explanation = 'Last heard ' + (lastHeardTime ? renderNodeTimestampText(lastHeardTime) : 'unknown');
-      }
+      // #2260: no "Last relayed" here. last_relayed also counts 1-byte prefix
+      // matches of other repeaters; the certain relays are in last heard.
+      explanation = 'Last heard ' + (lastHeardTime ? renderNodeTimestampText(lastHeardTime) : 'unknown');
+    } else if (status === 'uncertain') {
+      explanation = 'Last certainly heard ' + (lastHeardTime ? renderNodeTimestampText(lastHeardTime) : 'never') +
+        ' \u2014 its shared hop prefix was last in a path ' + renderNodeTimestampText(n.last_relayed) + ', possibly another node';
     } else {
       const ageDays = Math.floor(statusAge / 86400000);
       const ageHours = Math.floor(statusAge / 3600000);
@@ -728,10 +734,12 @@
       const observers = h.observers || [];
       const relayObserverCount = Number(h.relayObserverCount) || 0;
       const recent = h.recentPackets || [];
-      const lastHeard = stats.lastHeard;
-
-      // Attach health lastHeard for shared helpers
-      n._lastHeard = lastHeard || n.last_seen;
+      // Attach health lastHeard for shared helpers. Displayed: the newest of
+      // it, the node's last_heard and last_seen (#2260); either fetch may be
+      // the fresher one.
+      n._lastHeard = stats.lastHeard || n.last_seen;
+      const effMs = window.getEffectiveHeardMs(n);
+      const lastHeard = isNaN(effMs) ? null : new Date(effMs).toISOString();
       const si = getStatusInfo(n);
       const roleColor = si.roleColor;
       const statusLabel = si.statusLabel;
@@ -771,7 +779,7 @@
         <table class="node-stats-table" id="node-stats">
           <tr><td>Status</td><td><span title="${si.statusTooltip}">${statusLabel}</span> <span style="font-size:11px;color:var(--text-muted);margin-left:4px">${statusExplanation}</span></td></tr>
           <tr><td>Last Heard</td><td>${renderNodeTimestampHtml(lastHeard || n.last_seen)}</td></tr>
-          ${(n.role === 'repeater' || n.role === 'room') ? `<tr><td title="Last time this repeater appeared as a relay hop in a non-advert packet observed by the network. Distinct from 'Last Heard' (which counts the repeater's own adverts). See issue #662.">Last Relayed</td><td>${n.last_relayed ? renderNodeTimestampHtml(n.last_relayed) + ' ' + (n.relay_active ? '<span style="color:var(--status-green-text);font-size:11px"><span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> actively relaying</span>' : '<span style="color:var(--status-yellow);font-size:11px"><span style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> alive (idle)</span>') : '<span style="color:var(--text-muted)">never observed as relay hop</span> <span style="color:var(--status-yellow);font-size:11px"><span style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> alive (idle)</span>'}${(n.relay_count_1h != null || n.relay_count_24h != null) ? ` <span style="color:var(--text-muted);font-size:11px;margin-left:4px">(${n.relay_count_1h || 0} relays/hr, ${n.relay_count_24h || 0} relays/24h)</span>` : ''}</td></tr>` : ''}
+          ${(n.role === 'repeater' || n.role === 'room') ? `<tr><td title="Last time this repeater appeared as a relay hop in a non-advert packet observed by the network (#662). This includes 1-byte hops shared with other repeaters, so it does not decide Active/Stale: 'Last Heard' counts only packets that can be this node alone (#2260).">Last Relayed</td><td>${n.last_relayed ? renderNodeTimestampHtml(n.last_relayed) + ' ' + (n.relay_active ? '<span style="color:var(--status-green-text);font-size:11px"><span style="color:var(--status-green-text)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> actively relaying</span>' : '<span style="color:var(--status-yellow);font-size:11px"><span style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> alive (idle)</span>') : '<span style="color:var(--text-muted)">never observed as relay hop</span> <span style="color:var(--status-yellow);font-size:11px"><span style="color:var(--status-yellow)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-circle-fill"/></svg></span> alive (idle)</span>'}${(n.relay_count_1h != null || n.relay_count_24h != null) ? ` <span style="color:var(--text-muted);font-size:11px;margin-left:4px">(${n.relay_count_1h || 0} relays/hr, ${n.relay_count_24h || 0} relays/24h)</span>` : ''}</td></tr>` : ''}
           ${(n.role === 'repeater' || n.role === 'room') && (n.traffic_share_score != null || n.usefulness_score != null) ? (() => {
             // #1456: prefer the new traffic_share_score field; fall back
             // to legacy usefulness_score for graceful degradation
@@ -1416,7 +1424,7 @@
         });
       }
       // Status filter (active/stale)
-      if (statusFilter === 'active' || statusFilter === 'stale') {
+      if (statusFilter === 'active' || statusFilter === 'stale' || statusFilter === 'uncertain') {
         filtered = filtered.filter(n => getNodeStatus(n) === statusFilter); // #1598
       }
       // #1845: counts are taken BEFORE the silence filter is applied, so the
@@ -1518,6 +1526,7 @@
           <div class="filter-group" id="nodeStatusFilter">
             <button class="btn ${statusFilter==='all'?'active':''}" data-status="all">All</button>
             <button class="btn ${statusFilter==='active'?'active':''}" data-status="active">Active</button>
+            <button class="btn ${statusFilter==='uncertain'?'active':''}" data-status="uncertain" title="No packet that can only be this repeater within its window; only its shared hop prefix still appears in paths (#2260)">Uncertain</button>
             <button class="btn ${statusFilter==='stale'?'active':''}" data-status="stale">Stale</button>
           </div>
           <select id="nodeLastHeard" aria-label="Filter by last heard time">
@@ -1863,9 +1872,11 @@
     const hasLoc = n.lat != null && n.lon != null;
     const nodeUrl = location.origin + '/#/nodes/' + encodeURIComponent(n.public_key);
 
-    // Status calculation via shared helper
-    const lastHeard = stats.lastHeard;
-    n._lastHeard = lastHeard || n.last_seen;
+    // Status calculation via shared helper. Displayed: the newest of the
+    // health lastHeard, the node's last_heard and last_seen (#2260).
+    n._lastHeard = stats.lastHeard || n.last_seen;
+    const effMs = window.getEffectiveHeardMs(n);
+    const lastHeard = isNaN(effMs) ? null : new Date(effMs).toISOString();
     const si = getStatusInfo(n);
     const roleColor = si.roleColor;
     const totalPackets = stats.totalTransmissions || stats.totalPackets || n.advert_count || 0;

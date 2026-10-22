@@ -33,17 +33,20 @@ type notifyObserver struct {
 
 // notifyInput is everything one evaluation reads.
 type notifyInput struct {
-	Now       time.Time
-	Health    HealthThresholds // resolved, as Config.GetHealthThresholds returns it
-	LowMv     int              // Config.LowBatteryMv
-	Accounts  map[int64]users.User
-	Prefs     []users.NotifyPrefs
-	Watches   []users.NotifyWatch
-	States    []users.NotifyState
-	Nodes     map[string]notifyNode // watched nodes, plus every foreign node when an admin chose foreign.new
-	Heard     map[string]time.Time  // newest packet involving the node in the packet store (node page "Last Heard")
-	Relayed   map[string]time.Time  // last relay hop, used for repeaters and rooms only (#1598)
-	Observers []notifyObserver      // nil unless an admin chose observer.offline
+	Now      time.Time
+	Health   HealthThresholds // resolved, as Config.GetHealthThresholds returns it
+	LowMv    int              // Config.LowBatteryMv
+	Accounts map[int64]users.User
+	Prefs    []users.NotifyPrefs
+	Watches  []users.NotifyWatch
+	States   []users.NotifyState
+	Nodes    map[string]notifyNode // watched nodes, plus every foreign node when an admin chose foreign.new
+	Heard    map[string]time.Time  // newest packet certainly from the node (node page "Last Heard", #2260)
+	// SharedSeen is, per repeater and room, when its hop prefix (shared with
+	// other repeaters, last_relayed) was last in a path. Not evidence: it
+	// only explains an offline mail for a node that is "uncertain" in the UI.
+	SharedSeen map[string]time.Time
+	Observers  []notifyObserver // nil unless an admin chose observer.offline
 	// IngestStale: the newest packet in the store is old, so a silent node
 	// and a silent feed look the same. node.offline and observer.offline
 	// are then not compared (states unchanged, no changes).
@@ -66,9 +69,12 @@ type notifyChange struct {
 	Name      string // display name at evaluation time
 	To        string // users.NotifyGood, users.NotifyBad or users.NotifyTold
 	BatteryMv *int   // node.battery only
-	Text      string // node.external only: the alert text ("" when resolved)
-	URL       string // node.external only: the alert's link, "" for the node page
-	At        time.Time
+	// SharedSeen: node.offline only, when the node's shared hop prefix was
+	// still in a path after its last certain packet (zero otherwise).
+	SharedSeen time.Time
+	Text       string // node.external only: the alert text ("" when resolved)
+	URL        string // node.external only: the alert's link, "" for the node page
+	At         time.Time
 }
 
 // notifyResult: Changes per user, ordered by event then name; States are
@@ -95,13 +101,6 @@ var notifyEventRank = map[string]int{
 	users.NotifyForeignNew: 3, users.NotifyObserverOffline: 4,
 }
 
-// notifyInfra reports the roles whose relay activity counts as heard
-// (GetHealthMs and roles.js use the same two).
-func notifyInfra(role string) bool {
-	r := strings.ToLower(role)
-	return r == "repeater" || r == "room"
-}
-
 // nodeLabel is the node's name made safe for a mail line (mailSafeText),
 // or the first 8 hex characters of its key.
 func nodeLabel(n notifyNode, known bool, pk string) string {
@@ -115,9 +114,11 @@ func nodeLabel(n notifyNode, known bool, pk string) string {
 }
 
 // nodeOnlineState is good when the node was heard within its role's silent
-// window, like roles.js getNodeStatus: the latest of last_seen, the packet
-// store's last heard and, for repeaters and rooms, the last relay hop. A
-// node missing from the analyzer database is bad. While prev is good, the
+// window, like roles.js getNodeStatus: the latest of last_seen and the packet
+// store's certain last heard (its own packets and relay hops that can only be
+// this node, #2260). last_relayed is not evidence: it also counts 1-byte
+// prefix matches shared with other repeaters, which kept a silent repeater
+// "online" for days. A node missing from the analyzer database is bad. While prev is good, the
 // latest evidence is never older than in.IngestResumedAt (the outage grace).
 func nodeOnlineState(pk string, n notifyNode, known bool, prev string, in *notifyInput) string {
 	if !known {
@@ -126,11 +127,6 @@ func nodeOnlineState(pk string, n notifyNode, known bool, prev string, in *notif
 	last, _ := parseRelayTS(n.LastSeen)
 	if t, ok := in.Heard[pk]; ok && t.After(last) {
 		last = t
-	}
-	if notifyInfra(n.Role) {
-		if t, ok := in.Relayed[pk]; ok && t.After(last) {
-			last = t
-		}
 	}
 	if prev == users.NotifyGood && last.Before(in.IngestResumedAt) {
 		last = in.IngestResumedAt
@@ -298,7 +294,14 @@ func evaluateNotifications(in notifyInput) notifyResult {
 			name := nodeLabel(n, known, pk)
 			if p.Has(users.NotifyNodeOffline) && !in.IngestStale {
 				k := users.NotifyKey{UserID: p.UserID, Event: users.NotifyNodeOffline, Subject: pk}
-				compare(k, name, nodeOnlineState(pk, n, known, prev[k], &in), nil)
+				state := nodeOnlineState(pk, n, known, prev[k], &in)
+				before := len(res.Changes[p.UserID])
+				compare(k, name, state, nil)
+				if state == users.NotifyBad && len(res.Changes[p.UserID]) > before {
+					if seen, ok := in.SharedSeen[pk]; ok && seen.After(in.Heard[pk]) {
+						res.Changes[p.UserID][before].SharedSeen = seen
+					}
+				}
 			}
 			if p.Has(users.NotifyNodeBattery) && known && n.BatteryMv != nil {
 				k := users.NotifyKey{UserID: p.UserID, Event: users.NotifyNodeBattery, Subject: pk}

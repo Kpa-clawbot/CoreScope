@@ -207,8 +207,11 @@ watched node changes state. Admins can also watch the instance.
 
 - Events: a watched node goes offline or comes back, using the node page's thresholds:
   offline once it has not been heard for the `healthThresholds` silent hours of its role
-  (heard is the latest of its last advert, the packet store's newest packet involving
-  it, and for repeaters and rooms its last relay hop). A watched node also reports a
+  (heard is the latest of its last advert and the newest packet that can only be this
+  node: its own packets, and relay hops whose prefix no other repeater shares. A 1-byte
+  hop shared with other repeaters is not counted, so a silent repeater is not kept
+  online by a namesake prefix; the node page shows such a repeater as *Uncertain*, and
+  its offline mail says that only its shared prefix was still seen). A watched node also reports a
   battery below `batteryThresholds.lowMv`, and recovers at `lowMv + 100` mV. Admins can
   add a new foreign node (once per node) and an observer going offline
   (`observerStaleMinutes`) or back (`observerOnlineMinutes`).

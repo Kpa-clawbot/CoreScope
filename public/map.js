@@ -530,6 +530,7 @@
             <div class="filter-group" id="mcStatusFilter">
               <button class="btn ${filters.statusFilter==='all'?'active':''}" data-status="all">All</button>
               <button class="btn ${filters.statusFilter==='active'?'active':''}" data-status="active">Active</button>
+              <button class="btn ${filters.statusFilter==='uncertain'?'active':''}" data-status="uncertain" title="Only a hop prefix shared with other repeaters still appears in paths (#2260)">Uncertain</button>
               <button class="btn ${filters.statusFilter==='stale'?'active':''}" data-status="stale">Stale</button>
             </div>
           </fieldset>
@@ -1843,11 +1844,11 @@
     // Count active/stale per role from loaded nodes
     const roleCounts = {};
     for (const role of roles) {
-      roleCounts[role] = { active: 0, stale: 0 };
+      roleCounts[role] = { active: 0, uncertain: 0, stale: 0 };
     }
     for (const n of nodes) {
       const role = (n.role || 'companion').toLowerCase();
-      if (!roleCounts[role]) roleCounts[role] = { active: 0, stale: 0 };
+      if (!roleCounts[role]) roleCounts[role] = { active: 0, uncertain: 0, stale: 0 };
       const status = getNodeStatus(n); // #1598: relay-aware for infra
       roleCounts[role][status]++;
     }
@@ -1861,12 +1862,15 @@
       if (role === 'observer') {
         countStr = `(${obsCount})`;
       } else {
-        const rc = roleCounts[role] || { active: 0, stale: 0 };
+        const rc = roleCounts[role] || { active: 0, uncertain: 0, stale: 0 };
         const isInfra = role === 'repeater' || role === 'room';
         const thresh = isInfra ? '72h' : '24h';
         const activeTip = 'Active \u2014 heard within the last ' + thresh;
         const staleTip = 'Stale \u2014 not heard for over ' + thresh;
-        countStr = `(<span title="${activeTip}">${rc.active} active</span>, <span title="${staleTip}">${rc.stale} stale</span>)`;
+        const uncertainTip = 'Uncertain \u2014 only a hop prefix shared with other repeaters still appears in paths';
+        countStr = `(<span title="${activeTip}">${rc.active} active</span>, ` +
+          (rc.uncertain ? `<span title="${uncertainTip}">${rc.uncertain} uncertain</span>, ` : '') +
+          `<span title="${staleTip}">${rc.stale} stale</span>)`;
       }
       lbl.innerHTML = `<input type="checkbox" id="${cbId}" data-role="${role}" ${filters[role] ? 'checked' : ''}> <span style="color:${ROLE_COLORS[role]};font-weight:600;" aria-hidden="true">${shape}</span> ${ROLE_LABELS[role]} <span style="color:var(--text-muted)">${countStr}</span>`;
       lbl.querySelector('input').addEventListener('change', e => {
@@ -2109,7 +2113,8 @@
 
     for (const node of filtered) {
       const lastSeenTime = node.last_heard || node.last_seen;
-      const isStale = getNodeStatus(node) === 'stale'; // #1598: relay-aware for infra
+      // #2260: uncertain is not proof of life either, so it dims like stale.
+      const isStale = getNodeStatus(node) !== 'active';
       const pk = (node.public_key || '').toLowerCase();
       const isAlsoObserver = _observerByPubkey.has(pk);
       const useLabel = node.role === 'repeater' && filters.hashLabels;
