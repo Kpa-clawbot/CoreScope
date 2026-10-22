@@ -121,6 +121,28 @@ function container() {
     assert.deepStrictEqual(Array.from(rf.getSelected()), ['SJC']);
   });
 
+  // fetchRegions() only cleans the selection on its first call, so on in-app
+  // navigation applyUrlRegion() must drop unknown codes itself.
+  await test('in-app navigation: unknown codes are dropped', async () => {
+    const { rf, location, storage } = buildCtx('#/packets');
+    await rf.init(container());
+    location.hash = '#/nodes?region=SJC,XXX';
+    await rf.init(container());
+    assert.deepStrictEqual(Array.from(rf.getSelected()), ['SJC']);
+    assert.strictEqual(rf.regionQueryString(), '&region=SJC');
+    assert.strictEqual(storage['meshcore-region-filter'], '["SJC"]');
+  });
+
+  await test('in-app navigation: only unknown codes means all regions', async () => {
+    const { rf, location, storage } = buildCtx('#/packets', { 'meshcore-region-filter': '["SFO"]' });
+    await rf.init(container());
+    location.hash = '#/nodes?region=XXX';
+    await rf.init(container());
+    assert.strictEqual(rf.getSelected(), null);
+    assert.strictEqual(rf.regionQueryString(), '');
+    assert.ok(!('meshcore-region-filter' in storage));
+  });
+
   await test('no region param keeps the saved selection', async () => {
     const { rf } = buildCtx('#/live?node=abc', { 'meshcore-region-filter': '["SFO"]' });
     await rf.init(container());

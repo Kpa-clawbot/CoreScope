@@ -313,7 +313,11 @@
   function applyUrlRegion() {
     var codes = regionsFromUrl();
     if (!codes) return false;
-    var next = new Set(codes);
+    // Once regions have loaded, fetchRegions() no longer cleans the selection,
+    // so drop unknown codes here; with none left, that's all regions, the same
+    // as the cleanup does on a fresh load.
+    if (_loaded) codes = codes.filter(function (c) { return Object.prototype.hasOwnProperty.call(_regions, c); });
+    var next = codes.length > 0 ? new Set(codes) : null;
     var changed = !sameSelection(_selected, next);
     _selected = next;
     saveToStorage();
@@ -328,8 +332,8 @@
    *  it was already applied when this script ran. On in-app navigation it's
    *  applied here, before the await, so a page that loads after init() uses
    *  it; if it changed the selection, listeners are told once regions load,
-   *  which reloads a page that fetched before calling init(). fetchRegions()
-   *  drops unknown codes. */
+   *  which reloads a page that fetched before calling init(). Unknown codes
+   *  are dropped either way. */
   async function initFilter(container, opts) {
     _container = container;
     if (opts && opts.dropdown) container._forceDropdown = true;
