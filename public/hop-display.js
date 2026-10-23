@@ -1,6 +1,9 @@
 /* === CoreScope — hop-display.js === */
 /* Shared hop rendering with conflict info for all pages */
 'use strict';
+// i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
+var trn = globalThis.trn || function (n, one, other, p) { return tr(n === 1 ? one : other, Object.assign({ count: n }, p)); };
 
 window.HopDisplay = (function() {
   function escapeHtml(s) {
@@ -34,15 +37,15 @@ window.HopDisplay = (function() {
 
     // An inferred hop (pick) says what the path settled on; a resolve() hop
     // says how its candidates were narrowed by region.
-    const count = `${shown.length} candidate${shown.length > 1 ? 's' : ''}`;
+    const count = trn(shown.length, '{count} candidate', '{count} candidates');
     const header = pick
-      ? `${escapeHtml(h)} — ${pick.name ? 'likely ' + escapeHtml(pick.name) : 'unlisted node'} (${pct(pick.confidence)}) · ${count}`
-      : `${escapeHtml(h)} — ${count}${regional.length > 0 ? ' in region' : (globalFallback ? ' (global fallback)' : '')}`;
+      ? `${escapeHtml(h)} — ${pick.name ? tr('likely {name}', { name: escapeHtml(pick.name) }) : tr('unlisted node')} (${pct(pick.confidence)}) · ${count}`
+      : `${escapeHtml(h)} — ${count}${regional.length > 0 ? ' ' + tr('in region') : (globalFallback ? ' (' + tr('global fallback') + ')' : '')}`;
     let html = `<div class="hop-conflict-header">${header}</div>`;
     html += '<div class="hop-conflict-list">';
     for (const c of shown) {
       const name = escapeHtml(c.name || c.pubkey?.slice(0, 16) || '?');
-      const metric = pick ? (c.located === false ? 'no GPS' : c.usedAt != null ? 'hop ' + c.usedAt : pct(c.confidence))
+      const metric = pick ? (c.located === false ? tr('no GPS') : c.usedAt != null ? tr('hop {n}', { n: c.usedAt }) : pct(c.confidence))
         : (c.distKm != null ? c.distKm + 'km' : '');
       const dist = metric ? `<span class="hop-conflict-dist">${metric}</span>` : '';
       const pk = c.pubkey ? c.pubkey.slice(0, 12) + '…' : '';
@@ -78,7 +81,7 @@ window.HopDisplay = (function() {
 
   function conflictButton(h, conflicts, globalFallback, pick, count) {
     const conflictData = escapeHtml(JSON.stringify({ h, conflicts, globalFallback, pick }));
-    return ` <button class="hop-conflict-btn status-warn" data-conflict='${conflictData}' onclick="event.preventDefault();event.stopPropagation();HopDisplay._showFromBtn(this)" title="${count} candidates — click for details"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>${count}</button>`;
+    return ` <button class="hop-conflict-btn status-warn" data-conflict='${conflictData}' onclick="event.preventDefault();event.stopPropagation();HopDisplay._showFromBtn(this)" title="${trn(count, '{count} candidate — click for details', '{count} candidates — click for details')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>${count}</button>`;
   }
 
   // A hop from inferPath(): one position in one observation's path, with a
@@ -93,21 +96,21 @@ window.HopDisplay = (function() {
 
     let title;
     if (!entry.unlisted) {
-      title = `${h} — ${pct(entry.confidence)} likely` +
-        (candidates.length > 1 ? ` · ${candidates.length} nodes share this prefix` : '');
+      title = `${h} — ${tr('{percent} likely', { percent: pct(entry.confidence) })}` +
+        (candidates.length > 1 ? ' · ' + tr('{count} nodes share this prefix', { count: candidates.length }) : '');
     } else if (name) {
-      title = `${h} — the only known node with this prefix, no GPS to check its place in the path`;
+      title = `${h} — ${tr('the only known node with this prefix, no GPS to check its place in the path')}`;
     } else if (candidates.length) {
-      title = `${h} — no listed node with this prefix fits this point in the path`;
+      title = `${h} — ${tr('no listed node with this prefix fits this point in the path')}`;
     } else {
-      title = `${h} — no known node has this prefix`;
+      title = `${h} — ${tr('no known node has this prefix')}`;
     }
 
     const display = opts.hexMode || !name ? h
       : escapeHtml(opts.truncate ? name.slice(0, opts.truncate) : name);
     const cls = ['hop', name ? 'hop-named' : '', guess || unsure ? 'hop-ambiguous' : '', entry.unlisted ? 'hop-unlisted' : '']
       .filter(Boolean).join(' ');
-    const label = name && entry.unlisted ? `${display} <span class="hop-nogps">(no GPS)</span>` : display;
+    const label = name && entry.unlisted ? `${display} <span class="hop-nogps">(${tr('no GPS')})</span>` : display;
     const pill = opts.link !== false && entry.pubkey
       ? `<a class="${cls} hop-link" href="#/nodes/${encodeURIComponent(entry.pubkey)}" title="${escapeHtml(title)}" data-hop-link="true">${label}</a>`
       : `<span class="${cls}" title="${escapeHtml(title)}">${label}</span>`;
@@ -133,14 +136,14 @@ window.HopDisplay = (function() {
 
     // Simple title for the hop link itself
     let title = h;
-    if (unreliable) title += ' — unreliable';
+    if (unreliable) title += ' — ' + tr('unreliable');
 
     // Badge — only count regional conflicts
     const regionalConflicts = conflicts.filter(c => c.regional);
     const badgeCount = regionalConflicts.length > 0 ? regionalConflicts.length : ((globalFallback || entry.regionSkipped) ? conflicts.length : 0);
     const conflictBadge = badgeCount > 1 ? conflictButton(h, conflicts, globalFallback, null, badgeCount) : '';
     const unreliableBadge = unreliable
-      ? ' <button class="hop-unreliable-btn status-warn" aria-label="Unreliable name resolution" title="Unreliable name resolution — this hash\u2192name match is geographically inconsistent with the surrounding path hops. The repeater itself may be fine; this specific hop assignment is uncertain."><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></button>'
+      ? ' <button class="hop-unreliable-btn status-warn" aria-label="' + tr('Unreliable name resolution') + '" title="' + tr('Unreliable name resolution — this hash\u2192name match is geographically inconsistent with the surrounding path hops. The repeater itself may be fine; this specific hop assignment is uncertain.') + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></button>'
       : '';
     // #2097 — opts.badge === false renders the name without its badge, for the
     // packets list, which summarises per path instead of per hop.
@@ -205,9 +208,11 @@ window.HopDisplay = (function() {
   function renderPathSymbolsLegend() {
     const items = PATH_SYMBOLS_LEGEND.map(function(e) {
       // glyphHtml is trusted (constant strings above), description is escaped.
-      return '<li><span class="path-legend-glyph">' + e.glyphHtml + '</span> — ' + escapeHtml(e.description) + '</li>';
+      // Both go through tr() here, at render time: the list is built at load,
+      // before the dictionary arrives (glyph markup has no entry and passes through).
+      return '<li><span class="path-legend-glyph">' + tr(e.glyphHtml) + '</span> — ' + escapeHtml(tr(e.description)) + '</li>';
     }).join('');
-    return '<details class="path-symbols-legend"><summary>Path symbols</summary>' +
+    return '<details class="path-symbols-legend"><summary>' + tr('Path symbols') + '</summary>' +
            '<ul class="path-legend-list">' + items + '</ul></details>';
   }
 

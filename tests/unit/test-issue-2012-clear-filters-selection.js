@@ -102,18 +102,22 @@ function setup(hash = '#/packets', initialFilters = {}) {
   const location = { hash };
   const history = { replaceState(_state, _title, url) { location.hash = url; } };
   const noop = () => {};
+  // English pass-through for the i18n helpers (public/i18n.js) the slices call.
+  const tr = (s, p) => (p ? s.replace(/\{(\w+)\}/g, (m, k) => (k in p ? String(p[k]) : m)) : s);
+  const trn = (n, one, other, p) => tr(n === 1 ? one : other, Object.assign({ count: n }, p));
 
   const run = new Function(
     'filters', 'observers', 'observerMap', 'SHORT_BY_ID', 'escapeHtml', 'document', 'localStorage',
     'RegionFilter', 'renderTableRows', 'loadPackets',
     '_rebuildObserverMenu', '_observerFilterSet', 'savedTimeWindowMin', 'DEFAULT_TIME_WINDOW',
     'location', 'history', 'window', '_packetSortColumn', '_packetSortDirection', 'showFullNames',
+    'tr', 'trn',
     hashParamsSrc + '\n' + urlSrc + '\n' + multiSelectSrc + '\n' + clearSrc + '\n' +
     'updatePacketsUrl(); return { updatePacketsUrl, buildPacketsQuery };'
   );
   const actions = run(filters, observers, observerMap, SHORT_BY_ID, escapeHtml, document, localStorage,
     RegionFilter, noop, noop, null, null, 15, 15,
-    location, history, {}, null, null, false);
+    location, history, {}, null, null, false, tr, trn);
 
   // Observer rows live in #observerMenu today and in #observerList after
   // #1884; the change listener stays on #observerMenu in both layouts.

@@ -1,5 +1,8 @@
 /* === CoreScope — packets.js === */
 'use strict';
+// i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
+var trn = globalThis.trn || function (n, one, other, p) { return tr(n === 1 ? one : other, Object.assign({ count: n }, p)); };
 
 /* === #1056: TableResponsive — fluid columns + "+N hidden" pill ============
  * Tiny helper, defined once, used by packets/nodes/observers tables.
@@ -105,9 +108,9 @@
       const pill = document.createElement('button');
       pill.type = 'button';
       pill.className = PILL_CLASS;
-      pill.textContent = '+' + hidden + ' hidden';
-      pill.title = 'Click to reveal hidden columns';
-      pill.setAttribute('aria-label', hidden + ' columns hidden — click to reveal');
+      pill.textContent = tr('+{count} hidden', { count: hidden });
+      pill.title = tr('Click to reveal hidden columns');
+      pill.setAttribute('aria-label', trn(hidden, '{count} column hidden — click to reveal', '{count} columns hidden — click to reveal'));
       pill.addEventListener('click', function (ev) {
         ev.stopPropagation();
         ev.preventDefault();
@@ -118,9 +121,9 @@
         const rehide = document.createElement('button');
         rehide.type = 'button';
         rehide.className = PILL_CLASS + ' col-rehide-pill';
-        rehide.textContent = 'hide';
-        rehide.title = 'Re-hide collapsed columns';
-        rehide.setAttribute('aria-label', 'Re-hide previously collapsed columns');
+        rehide.textContent = tr('hide');
+        rehide.title = tr('Re-hide collapsed columns');
+        rehide.setAttribute('aria-label', tr('Re-hide previously collapsed columns'));
         rehide.addEventListener('click', function (ev2) {
           ev2.stopPropagation();
           ev2.preventDefault();
@@ -349,7 +352,7 @@
     panel.innerHTML =
       '<div class="slide-over-header">' +
         '<h3 class="slide-over-title" id="slideOverTitle"></h3>' +
-        '<button type="button" class="slide-over-close" aria-label="Close detail (Esc)" title="Close"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>' +
+        '<button type="button" class="slide-over-close" aria-label="' + tr('Close detail (Esc)') + '" title="' + tr('Close') + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>' +
       '</div>' +
       '<div class="slide-over-content"></div>';
     panel.querySelector('.slide-over-close').addEventListener('mousedown', function (e) {
@@ -456,7 +459,7 @@
       scrollLockToken = window.__scrollLock.acquire();
     }
     const title = panel.querySelector('.slide-over-title');
-    title.textContent = opts.title || 'Detail';
+    title.textContent = opts.title || tr('Detail');
     content = panel.querySelector('.slide-over-content');
     content.innerHTML = '';
     // #1616: ATTACH panel + backdrop now. They were removed (or never
@@ -842,7 +845,7 @@
     });
   }
   const PANEL_WIDTH_KEY = 'meshcore-panel-width';
-  const PANEL_CLOSE_HTML = '<button class="panel-close-btn" title="Close detail pane (Esc)"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>';
+  function panelCloseHtml() { return '<button class="panel-close-btn" title="' + tr('Close detail pane (Esc)') + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>'; }
 
   // getParsedPath / getParsedDecoded are in shared packet-helpers.js (loaded before this file)
   const getParsedPath = window.getParsedPath;
@@ -901,7 +904,7 @@
     var panel = document.getElementById('pktRight');
     if (panel) {
       panel.classList.add('empty');
-      panel.innerHTML = '<div class="panel-resize-handle" id="pktResizeHandle"></div>' + PANEL_CLOSE_HTML + '<span>Select a packet to view details</span>';
+      panel.innerHTML = '<div class="panel-resize-handle" id="pktResizeHandle"></div>' + panelCloseHtml() + '<span>' + tr('Select a packet to view details') + '</span>';
       var layout = panel.closest('.split-layout');
       if (layout) layout.classList.add('detail-collapsed');
       selectedId = null;
@@ -1119,7 +1122,7 @@
     const isVisible = (typeof window !== 'undefined' && window.MC_isVisibleHop) ? window.MC_isVisibleHop : () => true;
     const shown = [];
     hops.forEach((h, i) => { if (isVisible(h)) shown.push(i); });
-    if (!shown.length) return '— <span class="text-muted" title="All path hops were 1-byte and are hidden by the customizer toggle">(1-byte filtered)</span>';
+    if (!shown.length) return '— <span class="text-muted" title="' + tr('All path hops were 1-byte and are hidden by the customizer toggle') + '">(' + tr('1-byte filtered') + ')</span>';
     const summary = !!(opts && opts.summary);
     const entries = opts && opts.entries && opts.entries.length === hops.length ? opts.entries : null;
     // #2098 — the path's last hop is the one the observer heard directly.
@@ -1285,7 +1288,7 @@
     }
     const f = formatTimestampWithTooltip(isoString, getTimestampMode());
     const warn = f.isFuture
-      ? ' <span class="timestamp-future-icon" title="Timestamp is in the future — node clock may be skewed"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span>'
+      ? ' <span class="timestamp-future-icon" title="' + tr('Timestamp is in the future — node clock may be skewed') + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg></span>'
       : '';
     return `<span class="timestamp-text" title="${escapeHtml(f.tooltip)}">${escapeHtml(f.text)}</span>${warn}`;
   }
@@ -1366,8 +1369,8 @@
       <div class="panel-left" id="pktLeft" aria-live="polite" aria-relevant="additions removals"></div>
       <div class="panel-right empty" id="pktRight" aria-live="polite">
         <div class="panel-resize-handle" id="pktResizeHandle"></div>
-        ${PANEL_CLOSE_HTML}
-        <span>Select a packet to view details</span>
+        ${panelCloseHtml()}
+        <span>${tr('Select a packet to view details')}</span>
       </div>
     </div>`;
     initPanelResize();
@@ -1422,7 +1425,7 @@
           // #1648 M4: Phosphor sprite glyph for play/pause (was ▶/⏸). // EMOJI-OK: comment
           pauseBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#' +
             (packetsPaused ? 'ph-play' : 'ph-pause') + '"/></svg>';
-          pauseBtn.title = packetsPaused ? 'Resume live updates' : 'Pause live updates';
+          pauseBtn.title = packetsPaused ? tr('Resume live updates') : tr('Pause live updates');
           pauseBtn.classList.toggle('active', packetsPaused);
         }
         if (!packetsPaused && pauseBuffer.length) {
@@ -1453,7 +1456,7 @@
         const panel = document.getElementById('pktRight');
         if (panel) {
           panel.classList.remove('empty');
-          panel.innerHTML = '<div class="panel-resize-handle" id="pktResizeHandle"></div>' + PANEL_CLOSE_HTML;
+          panel.innerHTML = '<div class="panel-resize-handle" id="pktResizeHandle"></div>' + panelCloseHtml();
           const content = document.createElement('div');
           panel.appendChild(content);
           const pkt = data.packet;
@@ -1771,7 +1774,7 @@
     } catch (e) {
       console.error('Failed to load packets:', e);
       const tbody = document.getElementById('pktBody');
-      if (tbody) tbody.innerHTML = '<tr><td colspan="' + _getColCount() + '" class="text-center" style="padding:24px;color:var(--error,#ef4444)"><div role="alert" aria-live="polite">Failed to load packets. Please try again.</div></td></tr>';
+      if (tbody) tbody.innerHTML = '<tr><td colspan="' + _getColCount() + '" class="text-center" style="padding:24px;color:var(--error,#ef4444)"><div role="alert" aria-live="polite">' + tr('Failed to load packets. Please try again.') + '</div></td></tr>';
     } finally {
       // Always signal data-loaded — even on error — so E2E tests can proceed.
       var pktContainer = document.getElementById('pktLeft') || document.getElementById('pktBody');
@@ -1792,32 +1795,32 @@
 
     el.innerHTML = `
       <div class="page-header">
-        <h2>Latest Packets <span class="count">(${totalCount})</span></h2>
+        <h2>${tr('Latest Packets')} <span class="count">(${totalCount})</span></h2>
         <div>
-          <button class="btn-icon" data-action="pkt-refresh" title="Refresh" aria-label="Refresh"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-arrow-clockwise"/></svg></button>
-          <button class="btn-icon" id="pktPauseBtn" data-action="pkt-pause" title="Pause live updates" aria-label="Pause live updates"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-pause"/></svg></button>
-          <button class="btn-icon" data-action="pkt-byop" title="Bring Your Own Packet" aria-label="Bring Your Own Packet - paste raw packet hex for analysis" aria-haspopup="dialog"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg> BYOP</button>
+          <button class="btn-icon" data-action="pkt-refresh" title="${tr('Refresh')}" aria-label="${tr('Refresh')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-arrow-clockwise"/></svg></button>
+          <button class="btn-icon" id="pktPauseBtn" data-action="pkt-pause" title="${tr('Pause live updates')}" aria-label="${tr('Pause live updates')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-pause"/></svg></button>
+          <button class="btn-icon" data-action="pkt-byop" title="${tr('Bring Your Own Packet')}" aria-label="${tr('Bring Your Own Packet - paste raw packet hex for analysis')}" aria-haspopup="dialog"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg> BYOP</button>
         </div>
       </div>
       <div class="filter-group pkt-filter-expr" style="flex:1;margin-bottom:8px;position:relative">
         <input type="text" id="packetFilterInput" class="packet-filter-input"
-          placeholder='Filter: type == Advert && snr > 5 · payload.name contains "Gilroy"'
-          aria-label="Packet filter expression"
+          placeholder='${tr('Filter: {example}', { example: 'type == Advert && snr > 5 · payload.name contains "Gilroy"' })}'
+          aria-label="${tr('Packet filter expression')}"
           style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-family:var(--mono);font-size:13px;background:var(--input-bg);color:var(--text)">
         <div id="packetFilterError" style="color:var(--status-red);font-size:11px;margin-top:2px;display:none"></div>
         <div id="packetFilterCount" style="color:var(--text-muted);font-size:11px;margin-top:2px;display:none"></div>
       </div>
       <div class="filter-bar" id="pktFilters">
-        <button class="btn filter-toggle-btn" id="filterToggleBtn">Filters ▾</button>
+        <button class="btn filter-toggle-btn" id="filterToggleBtn">${tr('Filters')} ▾</button>
         <!-- #1124 (MAJOR-3) Group 1: Filter input + Clear -->
         <div class="filter-group filter-group-clear">
-          <button class="btn btn-clear-filters" id="clearFiltersBtn" title="Clear all filters" style="display:none;font-size:12px;padding:2px 8px;color:var(--text-muted);border:1px solid var(--border);border-radius:4px;background:transparent;cursor:pointer"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg> Clear</button>
+          <button class="btn btn-clear-filters" id="clearFiltersBtn" title="${tr('Clear all filters')}" style="display:none;font-size:12px;padding:2px 8px;color:var(--text-muted);border:1px solid var(--border);border-radius:4px;background:transparent;cursor:pointer"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg> ${tr('Clear')}</button>
         </div>
         <!-- Group 2: Quick filters (hash, node name) -->
         <div class="filter-group filter-group-quick">
-          <input type="text" placeholder="Packet hash…" id="fHash" aria-label="Filter by packet hash" title="Filter packets by hex hash prefix">
+          <input type="text" placeholder="${tr('Packet hash…')}" id="fHash" aria-label="${tr('Filter by packet hash')}" title="${tr('Filter packets by hex hash prefix')}">
           <div class="node-filter-wrap" style="position:relative">
-            <input type="text" placeholder="Node name…" id="fNode" autocomplete="off" role="combobox" aria-expanded="false" aria-owns="fNodeDropdown" aria-activedescendant="" aria-autocomplete="list" title="Filter packets involving this node (sender or path)">
+            <input type="text" placeholder="${tr('Node name…')}" id="fNode" autocomplete="off" role="combobox" aria-expanded="false" aria-owns="fNodeDropdown" aria-activedescendant="" aria-autocomplete="list" title="${tr('Filter packets involving this node (sender or path)')}">
             <div class="node-filter-dropdown hidden" id="fNodeDropdown" role="listbox"></div>
           </div>
         </div>
@@ -1826,26 +1829,26 @@
              dropdowns so the most-frequently-used controls sit next to
              the search input where the eye lands first. -->
         <div class="filter-group filter-group-toggles">
-          <button class="btn ${groupByHash ? 'active' : ''}" id="fGroup" title="Collapse duplicate observations of the same packet into expandable groups">Group by Hash</button>
-          <button class="btn" id="fMyNodes" title="Show only packets from your favorited/claimed nodes"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg> My Nodes</button>
-          <select id="fTimeWindow" class="filter-select" aria-label="Time window filter">
-            <option value="15">Last 15 min</option>
-            <option value="30">Last 30 min</option>
-            <option value="60">Last 1 hour</option>
-            <option value="180">Last 3 hours</option>
-            <option value="360"${isMobile ? ' disabled title="Disabled on mobile to prevent browser crashes"' : ''}>Last 6 hours</option>
-            <option value="720"${isMobile ? ' disabled title="Disabled on mobile to prevent browser crashes"' : ''}>Last 12 hours</option>
-            <option value="1440"${isMobile ? ' disabled title="Disabled on mobile to prevent browser crashes"' : ''}>Last 24 hours</option>
-            ${isMobile ? '' : '<option value="0">All time</option>'}
+          <button class="btn ${groupByHash ? 'active' : ''}" id="fGroup" title="${tr('Collapse duplicate observations of the same packet into expandable groups')}">${tr('Group by Hash')}</button>
+          <button class="btn" id="fMyNodes" title="${tr('Show only packets from your favorited/claimed nodes')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg> ${tr('My Nodes')}</button>
+          <select id="fTimeWindow" class="filter-select" aria-label="${tr('Time window filter')}">
+            <option value="15">${tr('Last 15 min')}</option>
+            <option value="30">${tr('Last 30 min')}</option>
+            <option value="60">${tr('Last 1 hour')}</option>
+            <option value="180">${tr('Last 3 hours')}</option>
+            <option value="360"${isMobile ? ' disabled title="Disabled on mobile to prevent browser crashes"' : ''}>${tr('Last 6 hours')}</option>
+            <option value="720"${isMobile ? ' disabled title="Disabled on mobile to prevent browser crashes"' : ''}>${tr('Last 12 hours')}</option>
+            <option value="1440"${isMobile ? ' disabled title="Disabled on mobile to prevent browser crashes"' : ''}>${tr('Last 24 hours')}</option>
+            ${isMobile ? '' : '<option value="0">' + tr('All time') + '</option>'}
           </select>
         </div>
         <!-- Group 4: Dropdowns (observers, regions, types, channels) -->
         <div class="filter-group filter-group-dropdowns">
           <div class="multi-select-wrap" id="observerFilterWrap">
-            <button class="multi-select-trigger" id="observerTrigger" title="Show only packets seen by selected observer stations">All Observers ▾</button>
+            <button class="multi-select-trigger" id="observerTrigger" title="${tr('Show only packets seen by selected observer stations')}">${tr('All Observers')} ▾</button>
             <div class="multi-select-menu" id="observerMenu">
               <div class="multi-select-search-wrap">
-                <input type="text" id="observerSearchInput" class="multi-select-search" placeholder="Search observers…" autocomplete="off" aria-label="Search observers" title="Matches anywhere in the name. Start with ^ to match only from the beginning, e.g. ^BE">
+                <input type="text" id="observerSearchInput" class="multi-select-search" placeholder="${tr('Search observers…')}" autocomplete="off" aria-label="${tr('Search observers')}" title="${tr('Matches anywhere in the name. Start with ^ to match only from the beginning, e.g. ^BE')}">
               </div>
               <div class="multi-select-list" id="observerList"></div>
             </div>
@@ -1853,37 +1856,37 @@
           <div id="packetsRegionFilter" class="region-filter-container" style="display:inline-block;vertical-align:middle"></div>
           <div id="packetsAreaFilter" style="display:none;vertical-align:middle"></div>
           <div class="multi-select-wrap" id="typeFilterWrap">
-            <button class="multi-select-trigger" id="typeTrigger" title="Filter by packet type">All Types ▾</button>
+            <button class="multi-select-trigger" id="typeTrigger" title="${tr('Filter by packet type')}">${tr('All Types')} ▾</button>
             <div class="multi-select-menu" id="typeMenu"></div>
           </div>
-          <select id="fChannel" class="filter-select" aria-label="Filter by channel" title="Filter Channel Messages (GRP_TXT) by channel">
-            <option value="">All Channels</option>
+          <select id="fChannel" class="filter-select" aria-label="${tr('Filter by channel')}" title="${tr('Filter Channel Messages (GRP_TXT) by channel')}">
+            <option value="">${tr('All Channels')}</option>
           </select>
         </div>
         <!-- Group 5: Sort + Columns -->
         <div class="filter-group filter-group-sort">
-          <select id="fObsSort" aria-label="Observation sort order" title="Controls how observations are ordered within packet groups and which observation appears in the header row. Observer: Groups by observer station, earliest first. Path: Orders by hop count. Time: Orders by observation timestamp.">
-            <option value="observer">Sort: Observer</option>
-            <option value="path-asc">Sort: Path ↑ (shortest)</option>
-            <option value="path-desc">Sort: Path ↓ (longest)</option>
-            <option value="chrono-asc">Sort: Time ↑ (earliest)</option>
-            <option value="chrono-desc">Sort: Time ↓ (latest)</option>
+          <select id="fObsSort" aria-label="${tr('Observation sort order')}" title="${tr('Controls how observations are ordered within packet groups and which observation appears in the header row. Observer: Groups by observer station, earliest first. Path: Orders by hop count. Time: Orders by observation timestamp.')}">
+            <option value="observer">${tr('Sort: Observer')}</option>
+            <option value="path-asc">${tr('Sort: Path ↑ (shortest)')}</option>
+            <option value="path-desc">${tr('Sort: Path ↓ (longest)')}</option>
+            <option value="chrono-asc">${tr('Sort: Time ↑ (earliest)')}</option>
+            <option value="chrono-desc">${tr('Sort: Time ↓ (latest)')}</option>
           </select>
-          <span class="sort-help" id="sortHelpIcon" tabindex="0" role="button" aria-label="Sort help">ⓘ</span>
+          <span class="sort-help" id="sortHelpIcon" tabindex="0" role="button" aria-label="${tr('Sort help')}">ⓘ</span>
           <div class="col-toggle-wrap">
-            <button class="col-toggle-btn" id="colToggleBtn" title="Show/hide table columns">Columns ▾</button>
+            <button class="col-toggle-btn" id="colToggleBtn" title="${tr('Show/hide table columns')}">${tr('Columns')} ▾</button>
             <div class="col-toggle-menu" id="colToggleMenu"></div>
           </div>
-          <button class="btn btn-icon${showHexHashes ? ' active' : ''}" id="hexHashToggle" title="Show raw hex hash prefixes instead of resolved node names in the path column">Hex Paths</button>
-          <button class="btn btn-icon${showFullNames ? ' active' : ''}" id="fullNamesToggle" title="Show node names in full in the Observer and Path columns instead of shortening them">Full Names</button>
+          <button class="btn btn-icon${showHexHashes ? ' active' : ''}" id="hexHashToggle" title="${tr('Show raw hex hash prefixes instead of resolved node names in the path column')}">${tr('Hex Paths')}</button>
+          <button class="btn btn-icon${showFullNames ? ' active' : ''}" id="fullNamesToggle" title="${tr('Show node names in full in the Observer and Path columns instead of shortening them')}">${tr('Full Names')}</button>
         </div>
       </div>
       <div class="path-symbols-legend-wrapper">${(window.HopDisplay && HopDisplay.renderPathSymbolsLegend) ? HopDisplay.renderPathSymbolsLegend() : ''}</div>
       <div class="table-fluid-wrap"><table class="data-table${showFullNames ? ' pkt-full-names' : ''}" id="pktTable">
         <thead><tr>
-          <th scope="col" class="col-expand" data-priority="1"></th><th scope="col" class="col-region" data-sort-key="region" data-priority="3">Region</th><th scope="col" class="col-time" data-sort-key="time" data-type="date" data-priority="1">Time</th><th scope="col" class="col-hash" data-sort-key="hash" data-priority="3">Hash</th><th scope="col" class="col-size" data-sort-key="size" data-type="numeric" data-priority="4">Size</th>
+          <th scope="col" class="col-expand" data-priority="1"></th><th scope="col" class="col-region" data-sort-key="region" data-priority="3">${tr('Region')}</th><th scope="col" class="col-time" data-sort-key="time" data-type="date" data-priority="1">${tr('Time')}</th><th scope="col" class="col-hash" data-sort-key="hash" data-priority="3">Hash</th><th scope="col" class="col-size" data-sort-key="size" data-type="numeric" data-priority="4">${tr('Size')}</th>
           <th scope="col" class="col-hashsize" data-sort-key="hb" data-type="numeric" data-priority="5">HB</th>
-          <th scope="col" class="col-type" data-sort-key="type" data-priority="1">Type</th><th scope="col" class="col-scope" data-sort-key="scope" data-priority="4">Scope</th><th scope="col" class="col-observer" data-sort-key="observer" data-priority="3">Observer</th><th scope="col" class="col-path" data-sort-key="path" data-priority="5">Path</th><th scope="col" class="col-rpt" data-sort-key="rpt" data-type="numeric" data-priority="3">Rpt</th><th scope="col" class="col-details" data-priority="1">Details</th>
+          <th scope="col" class="col-type" data-sort-key="type" data-priority="1">${tr('Type')}</th><th scope="col" class="col-scope" data-sort-key="scope" data-priority="4">${tr('Scope')}</th><th scope="col" class="col-observer" data-sort-key="observer" data-priority="3">${tr('Observer')}</th><th scope="col" class="col-path" data-sort-key="path" data-priority="5">${tr('Path')}</th><th scope="col" class="col-rpt" data-sort-key="rpt" data-type="numeric" data-priority="3">Rpt</th><th scope="col" class="col-details" data-priority="1">${tr('Details')}</th>
         </tr></thead>
         <tbody id="pktBody"></tbody>
       </table></div>
@@ -1975,12 +1978,12 @@
     }
     function buildObserverMenu() {
       const allChecked = selectedObservers.size === 0;
-      let html = `<label class="multi-select-item"><input type="checkbox" data-obs-id="__all__" ${allChecked ? 'checked' : ''}> All Observers</label>`;
+      let html = `<label class="multi-select-item"><input type="checkbox" data-obs-id="__all__" ${allChecked ? 'checked' : ''}> ${tr('All Observers')}</label>`;
       if (observers.length === 0) {
         // #1693 — observers fetch may still be in flight (decoupled from
         // packet row render). Show a disabled placeholder until loadObservers
         // resolves and calls _rebuildObserverMenu().
-        html += `<label class="multi-select-item" style="opacity:0.6"><input type="checkbox" disabled> Loading observers…</label>`;
+        html += `<label class="multi-select-item" style="opacity:0.6"><input type="checkbox" disabled> ${tr('Loading observers…')}</label>`;
       } else {
         for (const o of observers) {
           const checked = selectedObservers.has(String(o.id)) ? 'checked' : '';
@@ -1997,13 +2000,13 @@
     _rebuildObserverMenu = () => { buildObserverMenu(); updateObsTrigger(); };
     function updateObsTrigger() {
       if (selectedObservers.size === 0 || selectedObservers.size === observers.length) {
-        obsTrigger.textContent = 'All Observers ▾';
+        obsTrigger.textContent = tr('All Observers') + ' ▾';
       } else if (selectedObservers.size === 1) {
         const id = [...selectedObservers][0];
         const o = observerMap.get(id) || observerMap.get(Number(id));
         obsTrigger.textContent = (o ? (o.name || o.id) : id) + ' ▾';
       } else {
-        obsTrigger.textContent = selectedObservers.size + ' Observers ▾';
+        obsTrigger.textContent = trn(selectedObservers.size, '{count} Observer', '{count} Observers') + ' ▾';
       }
     }
     buildObserverMenu();
@@ -2045,7 +2048,7 @@
     const selectedTypes = new Set(filters.type ? String(filters.type).split(',') : []);
     function buildTypeMenu() {
       const allChecked = selectedTypes.size === 0;
-      let html = `<label class="multi-select-item"><input type="checkbox" data-type-id="__all__" ${allChecked ? 'checked' : ''}> All Types</label>`;
+      let html = `<label class="multi-select-item"><input type="checkbox" data-type-id="__all__" ${allChecked ? 'checked' : ''}> ${tr('All Types')}</label>`;
       for (const [k, v] of Object.entries(typeMap)) {
         const checked = selectedTypes.has(k) ? 'checked' : '';
         html += `<label class="multi-select-item"><input type="checkbox" data-type-id="${k}" ${checked}> ${v}</label>`;
@@ -2059,15 +2062,15 @@
       // as the `title` attribute so the user can recover it via tooltip.
       const fullList = [...selectedTypes].map(k => typeMap[k] || k).join(', ');
       if (selectedTypes.size === 0 || selectedTypes.size === total) {
-        typeTrigger.textContent = 'All Types ▾';
-        typeTrigger.title = 'Filter by packet type';
+        typeTrigger.textContent = tr('All Types') + ' ▾';
+        typeTrigger.title = tr('Filter by packet type');
       } else if (selectedTypes.size === 1) {
         const k = [...selectedTypes][0];
         typeTrigger.textContent = (typeMap[k] || k) + ' ▾';
-        typeTrigger.title = 'Selected: ' + fullList;
+        typeTrigger.title = tr('Selected: {list}', { list: fullList });
       } else {
-        typeTrigger.textContent = selectedTypes.size + ' Types ▾';
-        typeTrigger.title = 'Selected: ' + fullList;
+        typeTrigger.textContent = trn(selectedTypes.size, '{count} Type', '{count} Types') + ' ▾';
+        typeTrigger.title = tr('Selected: {list}', { list: fullList });
       }
     }
     buildTypeMenu();
@@ -2115,7 +2118,7 @@
         channelSel.textContent = '';
         const allOpt = document.createElement('option');
         allOpt.value = '';
-        allOpt.textContent = 'All Channels';
+        allOpt.textContent = tr('All Channels');
         channelSel.appendChild(allOpt);
         let matched = false;
         const addOption = (o, parent) => {
@@ -2130,7 +2133,7 @@
         // obvious they come from keys stored in this browser only.
         if (groups.local.length) {
           const grp = document.createElement('optgroup');
-          grp.label = 'My Channels (this browser)';
+          grp.label = tr('My Channels (this browser)');
           for (const o of groups.local) addOption(o, grp);
           channelSel.appendChild(grp);
         }
@@ -2163,7 +2166,7 @@
     document.getElementById('filterToggleBtn').addEventListener('click', function() {
       const bar = document.getElementById('pktFilters');
       bar.classList.toggle('filters-expanded');
-      this.textContent = bar.classList.contains('filters-expanded') ? 'Filters ▴' : 'Filters ▾';
+      this.textContent = bar.classList.contains('filters-expanded') ? tr('Filters') + ' ▴' : tr('Filters') + ' ▾';
     });
 
     // --- Clear filters button ---
@@ -2253,7 +2256,7 @@
     if (sortHelpEl) {
       const tip = document.createElement('span');
       tip.className = 'sort-help-tip';
-      tip.textContent = "Sort controls how observations are ordered within packet groups and which observation appears in the header row.\n\nObserver — Groups by observer station, earliest first.\nPath \u2191 — Shortest paths first.\nPath \u2193 — Longest paths first.\nTime \u2191 — Earliest observation first.\nTime \u2193 — Most recent first.";
+      tip.textContent = tr("Sort controls how observations are ordered within packet groups and which observation appears in the header row.\n\nObserver — Groups by observer station, earliest first.\nPath \u2191 — Shortest paths first.\nPath \u2193 — Longest paths first.\nTime \u2191 — Earliest observation first.\nTime \u2193 — Most recent first.");
       sortHelpEl.appendChild(tip);
     }
     obsSortSel.addEventListener('change', async function () {
@@ -2295,16 +2298,16 @@
 
     // Column visibility toggle (#71)
     const COL_DEFS = [
-      { key: 'region', label: 'Region' },
-      { key: 'time', label: 'Time' },
-      { key: 'hash', label: 'Hash' },
-      { key: 'size', label: 'Size' },
-      { key: 'type', label: 'Type' },
-      { key: 'scope', label: 'Scope' },
-      { key: 'observer', label: 'Observer' },
-      { key: 'path', label: 'Path' },
-      { key: 'rpt', label: 'Rpt' },
-      { key: 'details', label: 'Details' },
+      { key: 'region', label: tr('Region') },
+      { key: 'time', label: tr('Time') },
+      { key: 'hash', label: tr('Hash') },
+      { key: 'size', label: tr('Size') },
+      { key: 'type', label: tr('Type') },
+      { key: 'scope', label: tr('Scope') },
+      { key: 'observer', label: tr('Observer') },
+      { key: 'path', label: tr('Path') },
+      { key: 'rpt', label: tr('Rpt') },
+      { key: 'details', label: tr('Details') },
     ];
     const isNarrow = window.innerWidth <= 640;
     // #1249: observer column must stay visible at narrow widths so the IATA
@@ -2592,7 +2595,7 @@
     // The (>>6)+1 derivation is meaningless for TRACE — render — with a tooltip.
     const _grpIsTrace = p.payload_type === 9;
     const groupHashBytes = _grpIsTrace ? '—' : (((parseInt(p.raw_hex?.slice(_grpPlOff * 2, _grpPlOff * 2 + 2), 16) || 0) >> 6) + 1);
-    const _grpHashSizeTitle = _grpIsTrace ? ' title="TRACE path bytes are SNR readings, not hash prefixes — see sidebar decoder for actual hop count"' : '';
+    const _grpHashSizeTitle = _grpIsTrace ? ' title="' + tr('TRACE path bytes are SNR readings, not hash prefixes — see sidebar decoder for actual hop count') + '"' : '';
     const isSingle = p.count <= 1;
     // Channel color highlighting (#271)
     const _grpDecoded = getParsedDecoded(p) || {};
@@ -2610,7 +2613,7 @@
           <td class="col-scope" data-filter-field="scope" data-filter-value="${escapeHtml(p.scope_name || '')}">${scopeCellHtml(p.scope_name)}</td>
           <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(headerObserverId) || '')}">${isSingle ? obsCellName(headerObserverId, 16) + obsIataBadge(p) : obsCellName(headerObserverId, 10) + groupedObserverIataBadgesHtml(p)}</td>
           <td class="col-path"><span class="path-hops">${groupPathStr}</span></td>
-          <td class="col-rpt">${p.observation_count > 1 ? '<span class="badge badge-obs" title="Seen ' + p.observation_count + ' times"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> ' + p.observation_count + '</span>' : (isSingle ? '' : p.count)}</td>
+          <td class="col-rpt">${p.observation_count > 1 ? '<span class="badge badge-obs" title="' + trn(p.observation_count, 'Seen {count} time', 'Seen {count} times') + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-eye"/></svg> ' + p.observation_count + '</span>' : (isSingle ? '' : p.count)}</td>
           <td class="col-details"><span class="col-details-clip">${getDetailPreview(getParsedDecoded(p))}</span></td>
         </tr>`;
     if (isExpanded && p._children) {
@@ -2631,7 +2634,7 @@
           : (c.raw_hex
             ? (((parseInt(c.raw_hex.slice(_cPlOff * 2, _cPlOff * 2 + 2), 16) || 0) >> 6) + 1)
             : (childPath.length > 0 ? childPath[0].length / 2 : 0));
-        const _cHashSizeTitle = _cIsTrace ? ' title="TRACE path bytes are SNR readings, not hash prefixes — see sidebar decoder for actual hop count"' : '';
+        const _cHashSizeTitle = _cIsTrace ? ' title="' + tr('TRACE path bytes are SNR readings, not hash prefixes — see sidebar decoder for actual hop count') + '"' : '';
         const childRegion = c.observer_id ? (observerMap.get(c.observer_id)?.iata || '') : '';
         const childPathStr = renderPath(childPath, c.observer_id, { summary: true });
         const _childHashStripe = _hashStripeStyle(c.hash || p.hash);
@@ -2667,7 +2670,7 @@
     // #1849: TRACE path bytes = SNR readings, not hop hashes.
     const _flatIsTrace = p.payload_type === 9;
     const hashBytes = _flatIsTrace ? '—' : (((parseInt(p.raw_hex?.slice(_flatPlOff * 2, _flatPlOff * 2 + 2), 16) || 0) >> 6) + 1);
-    const _flatHashSizeTitle = _flatIsTrace ? ' title="TRACE path bytes are SNR readings, not hash prefixes — see sidebar decoder for actual hop count"' : '';
+    const _flatHashSizeTitle = _flatIsTrace ? ' title="' + tr('TRACE path bytes are SNR readings, not hash prefixes — see sidebar decoder for actual hop count') + '"' : '';
     const pathStr = renderPath(pathHops, p.observer_id, { summary: true });
     const detail = getDetailPreview(decoded);
     const _flatHashStripe = _hashStripeStyle(p.hash);
@@ -2985,7 +2988,7 @@
     pop.className = 'path-popover';
     pop.id = 'pathPopover';
     pop.setAttribute('role', 'tooltip');
-    var html = '<div class="path-popover-title">Full path · ' + segments.length + ' hop' + (segments.length === 1 ? '' : 's') + '</div><ol class="path-popover-list">';
+    var html = '<div class="path-popover-title">' + tr('Full path') + ' · ' + trn(segments.length, '{count} hop', '{count} hops') + '</div><ol class="path-popover-list">';
     for (var i = 0; i < segments.length; i++) {
       html += '<li><span class="path-popover-idx">' + (i + 1) + '</span><span class="path-hops">' + segments[i] + '</span></li>';
     }
@@ -3287,7 +3290,7 @@
       const beforeCount = displayPackets.length;
       displayPackets = displayPackets.filter(filters._packetFilter);
       if (pfCount) {
-        pfCount.textContent = 'Showing ' + displayPackets.length.toLocaleString() + ' of ' + beforeCount.toLocaleString() + ' packets';
+        pfCount.textContent = tr('Showing {shown} of {total} packets', { shown: displayPackets.length.toLocaleString(), total: beforeCount.toLocaleString() });
         pfCount.style.display = 'block';
       }
     } else if (pfCount) {
@@ -3306,7 +3309,7 @@
       _lastVisibleEnd = -1;
       detachVScrollListener();
       const colCount = _getColCount();
-      tbody.innerHTML = '<tr><td colspan="' + colCount + '" class="text-center text-muted" style="padding:24px">' + (filters.myNodes ? 'No packets from your claimed/favorited nodes' : 'No packets found') + '</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="' + colCount + '" class="text-center text-muted" style="padding:24px">' + (filters.myNodes ? tr('No packets from your claimed/favorited nodes') : tr('No packets found')) + '</td></tr>';
       // Restore scroll position after DOM rebuild (#431)
       if (scrollContainer) scrollContainer.scrollTop = savedScrollTop;
       return;
@@ -3335,12 +3338,12 @@
   // the ADVERT app-flags row and CONTROL DISCOVER node type / filter (#1868).
   const ADV_TYPE_LABELS = {1:'Companion',2:'Repeater',3:'Room Server',4:'Sensor'};
   function advTypeLabel(t) {
-    return ADV_TYPE_LABELS[t] || ('Unknown(' + t + ')');
+    return ADV_TYPE_LABELS[t] ? tr(ADV_TYPE_LABELS[t]) : tr('Unknown({type})', { type: t });
   }
   // DISCOVER_REQ type_filter holds one bit per ADV_TYPE_* (firmware
   // examples/simple_repeater/MyMesh.cpp:817 tests filter & (1 << ADV_TYPE_REPEATER)).
   function ctrlFilterLabels(filter) {
-    return Object.keys(ADV_TYPE_LABELS).filter(t => filter & (1 << t)).map(t => ADV_TYPE_LABELS[t]);
+    return Object.keys(ADV_TYPE_LABELS).filter(t => filter & (1 << t)).map(t => tr(ADV_TYPE_LABELS[t]));
   }
   // Filter bits with no label: ADV_TYPE_NONE (bit 0) and the FUTURE 5..15 range
   // (AdvertDataHelpers.h:7,12). Returned as '0x..' so they are not dropped.
@@ -3375,7 +3378,7 @@
     // Undecrypted channel messages — show channel hash and decryption status
     if (decoded.type === 'GRP_TXT' && decoded.channelHash != null) {
       const hashHex = decoded.channelHashHex || decoded.channelHash.toString(16).padStart(2, '0').toUpperCase();
-      const statusLabel = decoded.decryptionStatus === 'no_key' ? 'no key' : 'decryption failed';
+      const statusLabel = decoded.decryptionStatus === 'no_key' ? tr('no key') : tr('decryption failed');
       return `<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> Ch 0x${hashHex} <span class="muted">(${statusLabel})</span>`;
     }
     // Group data (binary datagrams over channels) — #1792.
@@ -3408,11 +3411,11 @@
       // Without this explicit branch we would either lie ('encrypted') or
       // render a misleading "type=0xNN len=N" header with an empty <code></code>.
       if (decoded.decryptionStatus === 'decrypted') {
-        return `${prefix} <span class="muted">(decrypted, malformed)</span>`;
+        return `${prefix} <span class="muted">(${tr('decrypted, malformed')})</span>`;
       }
-      const statusLabel = decoded.decryptionStatus === 'no_key' ? 'no key'
-        : decoded.decryptionStatus === 'decryption_failed' ? 'decryption failed'
-        : 'encrypted';
+      const statusLabel = decoded.decryptionStatus === 'no_key' ? tr('no key')
+        : decoded.decryptionStatus === 'decryption_failed' ? tr('decryption failed')
+        : tr('encrypted');
       return `${prefix} <span class="muted">(${statusLabel})</span>`;
     }
     // Direct messages
@@ -3511,7 +3514,7 @@
       // #1056 AC#4: narrow viewports (641–1023) — open detail in slide-over
       // overlay rather than the side panel.
       panel = window.SlideOver.open({
-        title: hash ? ('Packet ' + String(hash).slice(0, 12)) : 'Packet detail',
+        title: hash ? tr('Packet {hash}', { hash: String(hash).slice(0, 12) }) : tr('Packet detail'),
         // After close, the rows are re-rendered (see onClose). Use a resolver
         // to look up the originating row in the post-render DOM by data-hash
         // / data-id, so keyboard focus restores to the actual table row.
@@ -3529,7 +3532,7 @@
           renderTableRows();
         }
       });
-      panel.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
+      panel.innerHTML = '<div class="text-center text-muted" style="padding:40px">' + tr('Loading…') + '</div>';
     } else if (isMobileNow) {
       // Use mobile bottom sheet
       let sheet = document.getElementById('mobileDetailSheet');
@@ -3537,7 +3540,7 @@
         sheet = document.createElement('div');
         sheet.id = 'mobileDetailSheet';
         sheet.className = 'mobile-detail-sheet';
-        sheet.innerHTML = '<div class="mobile-sheet-handle"></div><button class="mobile-sheet-close" id="mobileSheetClose" aria-label="Close"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button><div class="mobile-sheet-content"></div>';
+        sheet.innerHTML = '<div class="mobile-sheet-handle"></div><button class="mobile-sheet-close" id="mobileSheetClose" aria-label="' + tr('Close') + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button><div class="mobile-sheet-content"></div>';
         document.body.appendChild(sheet);
         sheet.querySelector('#mobileSheetClose').addEventListener('click', () => {
           sheet.classList.remove('open');
@@ -3547,14 +3550,14 @@
         });
       }
       panel = sheet.querySelector('.mobile-sheet-content');
-      panel.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
+      panel.innerHTML = '<div class="text-center text-muted" style="padding:40px">' + tr('Loading…') + '</div>';
       sheet.classList.add('open');
     } else {
       panel = document.getElementById('pktRight');
       panel.classList.remove('empty');
       var layout = panel.closest('.split-layout');
       if (layout) layout.classList.remove('detail-collapsed');
-      panel.innerHTML = '<div class="panel-resize-handle" id="pktResizeHandle"></div>' + PANEL_CLOSE_HTML + '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
+      panel.innerHTML = '<div class="panel-resize-handle" id="pktResizeHandle"></div>' + panelCloseHtml() + '<div class="text-center text-muted" style="padding:40px">' + tr('Loading…') + '</div>';
       initPanelResize();
     }
 
@@ -3565,13 +3568,13 @@
       try {
         await resolveHopsForPackets([pkt]);
       } catch {}
-      panel.innerHTML = isMobileNow ? '' : (useSlideOver ? '' : ('<div class="panel-resize-handle" id="pktResizeHandle"></div>' + PANEL_CLOSE_HTML));
+      panel.innerHTML = isMobileNow ? '' : (useSlideOver ? '' : ('<div class="panel-resize-handle" id="pktResizeHandle"></div>' + panelCloseHtml()));
       const content = document.createElement('div');
       panel.appendChild(content);
       await renderDetail(content, data, selectedObservationId);
       if (!isMobileNow && !useSlideOver) initPanelResize();
     } catch (e) {
-      panel.innerHTML = `<div class="text-muted">Error: ${e.message}</div>`;
+      panel.innerHTML = `<div class="text-muted">${tr('Error: {message}', { message: escapeHtml(e.message) })}</div>`;
     }
   }
 
@@ -3684,7 +3687,7 @@
     let messageHtml = '';
     if (decoded.text) {
       const chLabel = decoded.channel || (decoded.channel_idx != null ? `Ch ${decoded.channel_idx}` : null) || (decoded.channelHash != null ? `Ch 0x${decoded.channelHash.toString(16)}` : '');
-      const hopLabel = decoded.path_len != null ? `${decoded.path_len} hops` : '';
+      const hopLabel = decoded.path_len != null ? trn(decoded.path_len, '{count} hop', '{count} hops') : '';
       const snrLabel = snr != null ? `SNR ${snr} dB` : '';
       const meta = [chLabel, hopLabel, snrLabel].filter(Boolean).join(' · ');
       messageHtml = `<div class="detail-message" style="padding:12px;margin:8px 0;background:var(--card-bg);border-radius:8px;border-left:3px solid var(--accent)">
@@ -3693,9 +3696,9 @@
       </div>`;
     } else if (decoded.type === 'GRP_TXT' && decoded.channelHash != null) {
       const hashHex = decoded.channelHashHex || decoded.channelHash.toString(16).padStart(2, '0').toUpperCase();
-      const statusLabel = decoded.decryptionStatus === 'no_key' ? 'no key' : 'decryption failed';
+      const statusLabel = decoded.decryptionStatus === 'no_key' ? tr('no key') : tr('decryption failed');
       messageHtml = `<div class="detail-message" style="padding:12px;margin:8px 0;background:var(--card-bg);border-radius:8px;border-left:3px solid var(--warning, #f0ad4e)">
-        <div style="font-size:1.1em"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> Channel Hash: 0x${hashHex} <span style="color:var(--text-muted)">(${statusLabel})</span></div>
+        <div style="font-size:1.1em"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-lock"/></svg> ${tr('Channel Hash:')} 0x${hashHex} <span style="color:var(--text-muted)">(${statusLabel})</span></div>
       </div>`;
     }
 
@@ -3717,7 +3720,7 @@
         } else {
           propagationHtml = `${(spread / 60000).toFixed(1)}m`;
         }
-        propagationHtml += ` <span style="color:var(--text-muted);font-size:0.85em">(${obsCount} obs × ${uniqueObservers} observers)</span>`;
+        propagationHtml += ` <span style="color:var(--text-muted);font-size:0.85em">(${tr('{obs} obs × {observers} observers', { obs: obsCount, observers: uniqueObservers })})</span>`;
       }
     }
 
@@ -3732,7 +3735,7 @@
       const nodeName = decoded.name || '';
       locationHtml = `${decoded.lat.toFixed(5)}, ${decoded.lon.toFixed(5)}`;
       if (nodeName) locationHtml = `${escapeHtml(nodeName)} — ${locationHtml}`;
-      if (locationNodeKey) locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" class="loc-map-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-pin"/></svg>map</a>`;
+      if (locationNodeKey) locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" class="loc-map-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-pin"/></svg>${tr('map')}</a>`;
     } else {
       // Try to resolve sender node location from nodes list
       const senderKey = decoded.pubKey || decoded.srcPubKey;
@@ -3744,7 +3747,7 @@
             locationNodeKey = nodeData.node.public_key;
             locationHtml = `${nodeData.node.lat.toFixed(5)}, ${nodeData.node.lon.toFixed(5)}`;
             if (nodeData.node.name) locationHtml = `${escapeHtml(nodeData.node.name)} — ${locationHtml}`;
-            locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" class="loc-map-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-pin"/></svg>map</a>`;
+            locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" class="loc-map-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-pin"/></svg>${tr('map')}</a>`;
           } else if (senderName && !senderKey) {
             // Search by name
             const searchData = await api(`/nodes/search?q=${encodeURIComponent(senderName)}`, { ttl: 30000 }).catch(() => null);
@@ -3753,7 +3756,7 @@
               locationNodeKey = match.public_key;
               locationHtml = `${match.lat.toFixed(5)}, ${match.lon.toFixed(5)}`;
               locationHtml = `${escapeHtml(match.name)} — ${locationHtml}`;
-              locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" class="loc-map-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-pin"/></svg>map</a>`;
+              locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" class="loc-map-link"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-pin"/></svg>${tr('map')}</a>`;
             }
           }
         } catch {}
@@ -3761,7 +3764,7 @@
     }
 
     const anomalyBanner = decoded.anomaly
-      ? `<div class="anomaly-banner" style="background:var(--warning, #f0ad4e); color:#000; padding:8px 12px; border-radius:4px; margin-bottom:8px; font-weight:600;"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> Anomaly: ${escapeHtml(decoded.anomaly)}</div>`
+      ? `<div class="anomaly-banner" style="background:var(--warning, #f0ad4e); color:#000; padding:8px 12px; border-radius:4px; margin-bottom:8px; font-weight:600;"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ${tr('Anomaly: {detail}', { detail: escapeHtml(decoded.anomaly) })}</div>`
       : '';
 
     // Hop count display: use pathHops length (= effective observation's path_json).
@@ -3769,7 +3772,7 @@
     // must stay self-consistent — top pill names and byte breakdown rows must agree.
     const displayHopCount = pathHops.length;
     const obsIndicator = currentObs && observations.length > 1
-      ? `<span style="font-size:0.8em;color:var(--text-muted);margin-left:6px">(observation ${observations.indexOf(currentObs) + 1} of ${observations.length})</span>`
+      ? `<span style="font-size:0.8em;color:var(--text-muted);margin-left:6px">(${tr('observation {n} of {total}', { n: observations.indexOf(currentObs) + 1, total: observations.length })})</span>`
       : '';
 
     // #1279 P2 #3 — Transport codes detail row (firmware/src/Packet.h:46,
@@ -3782,15 +3785,15 @@
       if (decoded.transportCodes.code2) tcCode2 = String(decoded.transportCodes.code2).toUpperCase();
     }
     var transportCodesRow = tcShow
-      ? `<dt>Transport Codes</dt><dd class="transport-codes">Code1: <code>${escapeHtml(tcCode1)}</code> · Code2: <code>${escapeHtml(tcCode2)}</code></dd>`
+      ? `<dt>${tr('Transport Codes')}</dt><dd class="transport-codes">Code1: <code>${escapeHtml(tcCode1)}</code> · Code2: <code>${escapeHtml(tcCode2)}</code></dd>`
       : '';
 
     // #1279 P2 #5 — RAW_CUSTOM detail row (firmware/src/Mesh.cpp:577).
     var rawCustomRow = '';
     if (pkt.payload_type === 15 && decoded.type === 'RAW_CUSTOM') {
-      var rl = decoded.rawLength != null ? decoded.rawLength + ' byte' + (decoded.rawLength === 1 ? '' : 's') : '—';
+      var rl = decoded.rawLength != null ? trn(decoded.rawLength, '{count} byte', '{count} bytes') : '—';
       var ft = decoded.firstByteTag ? String(decoded.firstByteTag).toUpperCase() : '—';
-      rawCustomRow = `<dt>Raw Custom</dt><dd class="raw-custom-detail">Length: <code>${escapeHtml(rl)}</code> · First byte tag: <code>${escapeHtml(ft)}</code></dd>`;
+      rawCustomRow = `<dt>Raw Custom</dt><dd class="raw-custom-detail">${tr('Length:')} <code>${escapeHtml(rl)}</code> · ${tr('First byte tag:')} <code>${escapeHtml(ft)}</code></dd>`;
     }
 
     // #1458 P0-A — semantic identity header (type badge + decoded summary +
@@ -3811,35 +3814,35 @@
       <div class="detail-title">
         <span class="badge badge-${payloadTypeColor(pkt.payload_type)}">${typeName}</span>
         ${semanticSummary ? `<span class="detail-summary">${semanticSummary}</span>` : ''}
-        ${displayHopCount > 0 ? `<span class="badge badge-info">${displayHopCount} hop${displayHopCount !== 1 ? 's' : ''}</span>` : ''}
+        ${displayHopCount > 0 ? `<span class="badge badge-info">${trn(displayHopCount, '{count} hop', '{count} hops')}</span>` : ''}
       </div>
       ${srcDstHtml}
-      <div class="detail-hash">${pkt.hash || 'Packet #' + pkt.id}${obsIndicator}</div>
+      <div class="detail-hash">${pkt.hash || tr('Packet #{id}', { id: pkt.id })}${obsIndicator}</div>
       ${messageHtml}
       <dl class="detail-meta">
-        <dt>Payload Type</dt><dd><span class="badge badge-${payloadTypeColor(pkt.payload_type)}">${typeName}</span></dd>
-        <dt>Path</dt><dd>${displayHopCount > 0 ? `<span class="badge badge-info">${displayHopCount} hop${displayHopCount !== 1 ? 's' : ''}</span> ` + '<span class="detail-path-hops">' + renderPath(pathHops, effectivePkt.observer_id, { entries: pathEntries }) + '</span>' : '— (direct)'}</dd>
-        <dt>Timestamp</dt><dd>${renderTimestampCell(effectivePkt.timestamp)}</dd>
-        <dt>Observer</dt><dd>${escapeHtml(obsNameOnly(effectivePkt.observer_id))}${obsIataBadge(effectivePkt)}</dd>
-        ${locationHtml ? `<dt>Location</dt><dd>${locationHtml}</dd>` : ''}
+        <dt>${tr('Payload Type')}</dt><dd><span class="badge badge-${payloadTypeColor(pkt.payload_type)}">${typeName}</span></dd>
+        <dt>${tr('Path')}</dt><dd>${displayHopCount > 0 ? `<span class="badge badge-info">${trn(displayHopCount, '{count} hop', '{count} hops')}</span> ` + '<span class="detail-path-hops">' + renderPath(pathHops, effectivePkt.observer_id, { entries: pathEntries }) + '</span>' : '— (' + tr('direct') + ')'}</dd>
+        <dt>${tr('Timestamp')}</dt><dd>${renderTimestampCell(effectivePkt.timestamp)}</dd>
+        <dt>${tr('Observer')}</dt><dd>${escapeHtml(obsNameOnly(effectivePkt.observer_id))}${obsIataBadge(effectivePkt)}</dd>
+        ${locationHtml ? `<dt>${tr('Location')}</dt><dd>${locationHtml}</dd>` : ''}
         <dt>SNR / RSSI</dt><dd>${snr != null ? snr + ' dB' : '—'} / ${rssi != null ? rssi + ' dBm' : '—'}</dd>
-        <dt>Route Type</dt><dd>${routeTypeName(pkt.route_type)}</dd>
-        ${pkt.scope_name != null ? `<dt>Scope</dt><dd>${pkt.scope_name !== '' ? escapeHtml(pkt.scope_name) : '<span style="color:var(--text-muted)">unknown scope</span>'}</dd>` : ''}
-        ${hashSize ? `<dt>Hash Size</dt><dd>${hashSize} byte${hashSize !== 1 ? 's' : ''}</dd>` : ''}
-        <dt>Propagation</dt><dd>${propagationHtml}</dd>
+        <dt>${tr('Route Type')}</dt><dd>${routeTypeName(pkt.route_type)}</dd>
+        ${pkt.scope_name != null ? `<dt>${tr('Scope')}</dt><dd>${pkt.scope_name !== '' ? escapeHtml(pkt.scope_name) : '<span style="color:var(--text-muted)">' + tr('unknown scope') + '</span>'}</dd>` : ''}
+        ${hashSize ? `<dt>${tr('Hash Size')}</dt><dd>${trn(hashSize, '{count} byte', '{count} bytes')}</dd>` : ''}
+        <dt>${tr('Propagation')}</dt><dd>${propagationHtml}</dd>
         ${transportCodesRow}
         ${rawCustomRow}
-        ${effectivePkt.direction ? `<dt>Direction</dt><dd>${escapeHtml(effectivePkt.direction)}</dd>` : ''}
+        ${effectivePkt.direction ? `<dt>${tr('Direction')}</dt><dd>${escapeHtml(effectivePkt.direction)}</dd>` : ''}
       </dl>
       <div class="detail-actions">
-        <button class="copy-link-btn" data-packet-hash="${pkt.hash || ''}" data-packet-id="${pkt.id}" title="Copy link to this packet"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-link"/></svg> Copy Link</button>
-        ${pathHops.length ? `<button class="detail-map-link" id="viewRouteBtn"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> View route on map</button>` : ''}
-        ${pkt.hash ? `<a href="#/traces/${pkt.hash}" class="detail-map-link" style="text-decoration:none"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Trace</a>` : ''}
-        <button class="replay-live-btn" title="Replay this packet on the live map"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-play"/></svg> Replay</button>
+        <button class="copy-link-btn" data-packet-hash="${pkt.hash || ''}" data-packet-id="${pkt.id}" title="${tr('Copy link to this packet')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-link"/></svg> ${tr('Copy Link')}</button>
+        ${pathHops.length ? `<button class="detail-map-link" id="viewRouteBtn"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> ${tr('View route on map')}</button>` : ''}
+        ${pkt.hash ? `<a href="#/traces/${pkt.hash}" class="detail-map-link" style="text-decoration:none"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> ${tr('Trace')}</a>` : ''}
+        <button class="replay-live-btn" title="${tr('Replay this packet on the live map')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-play"/></svg> ${tr('Replay')}</button>
       </div>
 
       ${(hasRawHex || Object.keys(decoded).length) ? `<details class="detail-technical"${(typeof window !== 'undefined' && window.innerWidth > 480) ? ' open' : ''}>
-        <summary>Show raw bytes</summary>
+        <summary>${tr('Show raw bytes')}</summary>
         ${hasRawHex ? `<div class="hex-legend">${buildHexLegend(ranges)}</div>
         <div class="hex-dump">${createColoredHexDump(effectivePkt.raw_hex || pkt.raw_hex, ranges)}</div>` : ''}
 
@@ -3848,19 +3851,19 @@
 
       ${observations.length > 1 ? `
       <div class="detail-observations" style="margin-top:16px">
-        <div style="font-weight:600;margin-bottom:6px">Observations (${observations.length})</div>
+        <div style="font-weight:600;margin-bottom:6px">${tr('Observations ({count})', { count: observations.length })}</div>
         <table class="detail-obs-table" style="width:100%;border-collapse:collapse;font-size:0.9em">
           <thead><tr style="border-bottom:1px solid var(--border)">
-            <th style="padding:4px 6px;text-align:left">Observer</th>
-            <th style="padding:4px 6px;text-align:left">Hops</th>
+            <th style="padding:4px 6px;text-align:left">${tr('Observer')}</th>
+            <th style="padding:4px 6px;text-align:left">${tr('Hops')}</th>
             <th style="padding:4px 6px;text-align:left">SNR</th>
             <th style="padding:4px 6px;text-align:left">RSSI</th>
-            <th style="padding:4px 6px;text-align:left">Time</th>
+            <th style="padding:4px 6px;text-align:left">${tr('Time')}</th>
           </tr></thead>
           <tbody>${observations.map(o => {
             const oPath = getParsedPath(o);
             const isCurrent = currentObs && String(o.id) === String(currentObs.id);
-            return `<tr class="detail-obs-row${isCurrent ? ' observation-current' : ''}" data-obs-id="${o.id}" style="cursor:pointer;${isCurrent ? 'background:var(--accent-bg, rgba(0,122,255,0.1))' : ''}" title="Click to view this observation">
+            return `<tr class="detail-obs-row${isCurrent ? ' observation-current' : ''}" data-obs-id="${o.id}" style="cursor:pointer;${isCurrent ? 'background:var(--accent-bg, rgba(0,122,255,0.1))' : ''}" title="${tr('Click to view this observation')}">
               <td style="padding:4px 6px">${escapeHtml(obsNameOnly(o.observer_id))}${obsIataBadge(o)}</td>
               <td style="padding:4px 6px">${oPath.length}</td>
               <td style="padding:4px 6px">${o.snr != null ? o.snr + ' dB' : '—'}</td>
@@ -3875,9 +3878,9 @@
         // Cross-observer aggregate (Option B): show longest observed path across all observers
         const aggregatePath = getParsedPath(pkt) || [];
         return `<div class="detail-aggregate" style="margin-top:12px;padding:10px;background:var(--card-bg);border-radius:6px;border:1px solid var(--border);font-size:0.9em">
-          <div style="font-weight:600;margin-bottom:4px;color:var(--text-muted)">Cross-observer aggregate</div>
-          <div>Longest observed path: ${aggregatePath.length ? `${aggregatePath.length} hops — <span class="detail-aggregate-hops">${renderPath(aggregatePath, pkt.observer_id, { entries: aggregateEntries })}</span>` : '— (direct)'}</div>
-          <div style="font-size:0.8em;color:var(--text-muted);margin-top:2px">Longest path seen across all ${uniqueObservers} observer${uniqueObservers !== 1 ? 's' : ''}</div>
+          <div style="font-weight:600;margin-bottom:4px;color:var(--text-muted)">${tr('Cross-observer aggregate')}</div>
+          <div>${tr('Longest observed path:')} ${aggregatePath.length ? `${trn(aggregatePath.length, '{count} hop', '{count} hops')} — <span class="detail-aggregate-hops">${renderPath(aggregatePath, pkt.observer_id, { entries: aggregateEntries })}</span>` : '— (' + tr('direct') + ')'}</div>
+          <div style="font-size:0.8em;color:var(--text-muted);margin-top:2px">${trn(uniqueObservers, 'Longest path seen across all {count} observer', 'Longest path seen across all {count} observers')}</div>
         </div>`;
       })() : ''}
     `;
@@ -3903,8 +3906,8 @@
         const obsParam = selectedObservationId ? `?obs=${selectedObservationId}` : '';
         const url = pktHash ? `${location.origin}/#/packets/${pktHash}${obsParam}` : `${location.origin}/#/packets/${copyLinkBtn.dataset.packetId}${obsParam}`;
         window.copyToClipboard(url, () => {
-          copyLinkBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> Copied!';
-          setTimeout(() => { copyLinkBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-link"/></svg> Copy Link'; }, 1500);
+          copyLinkBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> ' + tr('Copied!');
+          setTimeout(() => { copyLinkBtn.innerHTML = '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-link"/></svg> ' + tr('Copy Link'); }, 1500);
         });
       });
     }
@@ -4025,7 +4028,7 @@
 
     // Header section
     rows += sectionRow('Header', 'section-header');
-    rows += fieldRow(0, 'Header Byte', '0x' + (buf.slice(0, 2) || '??'), `Route: ${routeTypeName(pkt.route_type)}, Payload: ${payloadTypeName(pkt.payload_type)}`);
+    rows += fieldRow(0, 'Header Byte', '0x' + (buf.slice(0, 2) || '??'), tr('Route: {route}, Payload: {payload}', { route: routeTypeName(pkt.route_type), payload: payloadTypeName(pkt.payload_type) }));
 
     // Transport codes come BEFORE path length for transport routes (bytes 1-4)
     let off = 1;
@@ -4048,7 +4051,7 @@
       ? `hash_size=${hashSizeVal} byte${hashSizeVal !== 1 ? 's' : ''}, hash_count=${hashCountVal}`
       : (encodedHashSize
         ? `hash_size=${encodedHashSize} byte${encodedHashSize !== 1 ? 's' : ''}, hash_count=0`
-        : 'hash_count=0 (no hash size encoded)');
+        : 'hash_count=0 (' + tr('no hash size encoded') + ')');
     rows += fieldRow(off, 'Path Length', '0x' + (buf.slice(off * 2, off * 2 + 2) || '??'), pathLenDesc);
     off += 1;
 
@@ -4056,13 +4059,13 @@
     // Byte offsets advance by hashSize * pathHops.length to match.
     const hashSize = isNaN(pathByte0) ? 1 : ((pathByte0 >> 6) + 1);
     if (pathHops.length > 0) {
-      rows += sectionRow('Path (' + pathHops.length + ' hops)', 'section-path');
+      rows += sectionRow(trn(pathHops.length, 'Path ({count} hop)', 'Path ({count} hops)'), 'section-path');
       for (let i = 0; i < pathHops.length; i++) {
         const hopOff = off + i * hashSize;
         const hex = String(pathHops[i] || '').toUpperCase();
         const entry = hopEntries && hopEntries.length === pathHops.length ? hopEntries[i] : hopNameCache[hex];
         const hopHtml = HopDisplay.renderHop(hex, entry);
-        const label = `Hop ${i} — <span class="detail-hop-name" data-hop-idx="${i}">${hopHtml}</span>`;
+        const label = `${tr('Hop {n}', { n: i })} — <span class="detail-hop-name" data-hop-idx="${i}">${hopHtml}</span>`;
         rows += fieldRow(hopOff, label, hex, '');
       }
       off += hashSize * pathHops.length;
@@ -4070,25 +4073,25 @@
 
     // TRACE SNR values (from header path bytes, decoded by backend)
     if (decoded.type === 'TRACE' && decoded.snrValues && decoded.snrValues.length > 0) {
-      rows += sectionRow('SNR Path (' + decoded.snrValues.length + ' hops completed)', 'section-path');
+      rows += sectionRow(trn(decoded.snrValues.length, 'SNR Path ({count} hop completed)', 'SNR Path ({count} hops completed)'), 'section-path');
       for (let i = 0; i < decoded.snrValues.length; i++) {
         const snr = decoded.snrValues[i];
         const snrStr = (snr >= 0 ? '+' : '') + snr.toFixed(2) + ' dB';
-        rows += fieldRow('', 'SNR (hop ' + i + ')', snrStr, '');
+        rows += fieldRow('', tr('SNR (hop {n})', { n: i }), snrStr, '');
       }
     }
 
     // Payload
-    rows += sectionRow('Payload — ' + payloadTypeName(pkt.payload_type), 'section-payload');
+    rows += sectionRow(tr('Payload') + ' — ' + payloadTypeName(pkt.payload_type), 'section-payload');
 
     if (decoded.type === 'ADVERT') {
-      if (encodedHashSize) rows += fieldRow(pathLenOffset, 'Advertised Hash Size', encodedHashSize + ' byte' + (encodedHashSize !== 1 ? 's' : ''), 'From path byte 0x' + (buf.slice(pathLenOffset * 2, pathLenOffset * 2 + 2) || '??') + ' — bits 7-6 = ' + (encodedHashSize - 1));
+      if (encodedHashSize) rows += fieldRow(pathLenOffset, 'Advertised Hash Size', trn(encodedHashSize, '{count} byte', '{count} bytes'), tr('From path byte {byte} — bits 7-6 = {bits}', { byte: '0x' + (buf.slice(pathLenOffset * 2, pathLenOffset * 2 + 2) || '??'), bits: encodedHashSize - 1 }));
       rows += fieldRow(off, 'Public Key (32B)', truncate(decoded.pubKey || '', 24), '');
       rows += fieldRow(off + 32, 'Timestamp (4B)', decoded.timestampISO || '', 'Unix: ' + (decoded.timestamp || ''));
       rows += fieldRow(off + 36, 'Signature (64B)', truncate(decoded.signature || '', 24), '');
       if (decoded.flags) {
         const _typeName = advTypeLabel(decoded.flags.type);
-        const _boolFlags = [decoded.flags.hasLocation && 'location', decoded.flags.hasName && 'name'].filter(Boolean);
+        const _boolFlags = [decoded.flags.hasLocation && tr('location'), decoded.flags.hasName && tr('name')].filter(Boolean);
         const _flagDesc = _typeName + (_boolFlags.length ? ' + ' + _boolFlags.join(', ') : '');
         rows += fieldRow(off + 100, 'App Flags', '0x' + (decoded.flags.raw?.toString(16).padStart(2,'0') || '??'), _flagDesc);
         let fOff = off + 101;
@@ -4103,7 +4106,7 @@
       }
     } else if (decoded.type === 'GRP_TXT') {
       const hashHex = decoded.channelHashHex || (decoded.channelHash != null ? decoded.channelHash.toString(16).padStart(2, '0').toUpperCase() : '??');
-      const statusLabel = decoded.decryptionStatus === 'no_key' ? '(no key)' : decoded.decryptionStatus === 'decryption_failed' ? '(decryption failed)' : '';
+      const statusLabel = decoded.decryptionStatus === 'no_key' ? '(' + tr('no key') + ')' : decoded.decryptionStatus === 'decryption_failed' ? '(' + tr('decryption failed') + ')' : '';
       rows += fieldRow(off, 'Channel Hash', `0x${hashHex} ${statusLabel}`, '');
       rows += fieldRow(off + 1, 'MAC (2B)', decoded.mac || '', '');
       rows += fieldRow(off + 3, 'Encrypted Data', truncate(decoded.encryptedData || '', 30), '');
@@ -4118,7 +4121,7 @@
       rows += fieldRow(off + 4, 'Auth Code (4B)', decoded.authCode ? '0x' + decoded.authCode.toString(16).toUpperCase().padStart(8, '0') : '—', '');
       rows += fieldRow(off + 8, 'Flags', decoded.traceFlags != null ? '0x' + decoded.traceFlags.toString(16).padStart(2, '0') : '—', decoded.traceFlags != null ? 'hash_size=' + (1 << (decoded.traceFlags & 0x03)) + ' byte(s)' : '');
       if (decoded.pathData) {
-        rows += fieldRow(off + 9, 'Route Hops', decoded.pathData.toUpperCase(), pathHops.length + ' hop(s)');
+        rows += fieldRow(off + 9, 'Route Hops', decoded.pathData.toUpperCase(), trn(pathHops.length, '{count} hop', '{count} hops'));
       }
     } else if (decoded.type === 'ANON_REQ') {
       // #1864: ANON_REQ layout differs from REQ — the source is a FULL 32-byte
@@ -4130,7 +4133,7 @@
       const anonKeyCell = anonKey
         ? `<a href="#/nodes/${encodeURIComponent(anonKey)}" class="hop-link ${anonName ? 'hop-named' : ''}" data-hop-link="true">${anonName ? escapeHtml(anonName) : truncate(anonKey, 24)}</a>`
         : '—';
-      rows += fieldRow(off + 1, 'Src Public Key (32B)', anonKeyCell, anonName ? '' : 'sender pubkey (unresolved)');
+      rows += fieldRow(off + 1, 'Src Public Key (32B)', anonKeyCell, anonName ? '' : tr('sender pubkey (unresolved)'));
       rows += fieldRow(off + 33, 'MAC (2B)', decoded.mac || '', '');
       rows += fieldRow(off + 35, 'Encrypted Data', truncate(decoded.encryptedData || '', 30), '');
     } else if (decoded.type === 'CONTROL') {
@@ -4149,7 +4152,7 @@
           const filter = Number(decoded.ctrlFilter);
           const labels = ctrlFilterLabels(filter);
           const unknownBits = ctrlFilterUnknownHex(filter);
-          rows += fieldRow(off + 1, 'Type Filter (1B)', '0x' + filter.toString(16).padStart(2, '0'), (labels.length ? 'Requesting: ' + labels.join(', ') : 'No known types requested') + (unknownBits ? ' +' + unknownBits : ''));
+          rows += fieldRow(off + 1, 'Type Filter (1B)', '0x' + filter.toString(16).padStart(2, '0'), (labels.length ? tr('Requesting: {list}', { list: labels.join(', ') }) : tr('No known types requested')) + (unknownBits ? ' +' + unknownBits : ''));
           ctrlEnd = off + 2;
         }
         if (decoded.ctrlTag != null) {
@@ -4159,15 +4162,15 @@
         if (decoded.ctrlSince != null) {
           // since=0 is the firmware default (MyMesh.cpp:814) and matches every responder (:817).
           const since = Number(decoded.ctrlSince) >>> 0;
-          rows += fieldRow(off + 6, 'Since (4B)', since === 0 ? '0 (no filter)' : String(since), 'Unix epoch');
+          rows += fieldRow(off + 6, 'Since (4B)', since === 0 ? '0 (' + tr('no filter') + ')' : String(since), 'Unix epoch');
           ctrlEnd = off + 10;
         }
       } else if (subtype === 'DISCOVER_RESP') {
         if (decoded.ctrlNodeType != null) {
-          rows += fieldRow(off, 'Node Type', escapeHtml(advTypeLabel(Number(decoded.ctrlNodeType))), 'lower 4 bits of flags');
+          rows += fieldRow(off, 'Node Type', escapeHtml(advTypeLabel(Number(decoded.ctrlNodeType))), tr('lower 4 bits of flags'));
         }
         if (decoded.ctrlSNR != null) {
-          rows += fieldRow(off + 1, 'SNR (1B)', ctrlSnrDb(decoded.ctrlSNR) + ' dB', 'request SNR as heard by the responder, wire value ' + Number(decoded.ctrlSNR) + ' / 4');
+          rows += fieldRow(off + 1, 'SNR (1B)', ctrlSnrDb(decoded.ctrlSNR) + ' dB', tr('request SNR as heard by the responder, wire value {value} / 4', { value: Number(decoded.ctrlSNR) }));
           ctrlEnd = off + 2;
         }
         if (decoded.ctrlTag != null) {
@@ -4176,12 +4179,12 @@
         }
         if (decoded.ctrlPubKey) {
           const node = ctrlPubKeyNode(decoded.ctrlPubKey);
-          const pkLen = decoded.ctrlPubKey.length === 64 ? '32B' : '8B prefix';
+          const pkLen = decoded.ctrlPubKey.length === 64 ? '32B' : tr('8B prefix');
           // Unknown key: full hex here (the row preview keeps 8 chars), wrappable.
           const pkCell = node
             ? `<a href="#/nodes/${encodeURIComponent(node.public_key)}" class="hop-link hop-named" data-hop-link="true">${escapeHtml(node.name || node.public_key.slice(0, 8))}</a>`
             : `<span style="word-break:break-all">${escapeHtml(decoded.ctrlPubKey)}</span>`;
-          rows += fieldRow(off + 6, 'Public Key (' + pkLen + ')', pkCell, node ? '' : 'Unknown node');
+          rows += fieldRow(off + 6, tr('Public Key ({len})', { len: pkLen }), pkCell, node ? '' : tr('Unknown node'));
           ctrlEnd = off + 6 + Math.floor(decoded.ctrlPubKey.length / 2);
         }
       }
@@ -4198,20 +4201,22 @@
     }
 
     if (decoded.anomaly) {
-      rows += `<tr class="anomaly-row" style="background:var(--warning, #f0ad4e); color:#000; font-weight:600;"><td colspan="2"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> Anomaly</td><td colspan="2">${escapeHtml(decoded.anomaly)}</td></tr>`;
+      rows += `<tr class="anomaly-row" style="background:var(--warning, #f0ad4e); color:#000; font-weight:600;"><td colspan="2"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ${tr('Anomaly')}</td><td colspan="2">${escapeHtml(decoded.anomaly)}</td></tr>`;
     }
 
     return `<table class="field-table">
-      <thead><tr><th scope="col">Offset</th><th scope="col">Field</th><th scope="col">Value</th><th scope="col">Description</th></tr></thead>
+      <thead><tr><th scope="col">${tr('Offset')}</th><th scope="col">${tr('Field')}</th><th scope="col">${tr('Value')}</th><th scope="col">${tr('Description')}</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
   }
 
+  // Section and field names arrive in English and are translated here
+  // (tr() passes through names that are already translated or dynamic).
   function sectionRow(label, cls) {
-    return `<tr class="section-row${cls ? ' ' + cls : ''}"><td colspan="4">${label}</td></tr>`;
+    return `<tr class="section-row${cls ? ' ' + cls : ''}"><td colspan="4">${tr(label)}</td></tr>`;
   }
   function fieldRow(offset, name, value, desc) {
-    return `<tr><td class="mono">${offset}</td><td>${name}</td><td class="mono">${value}</td><td class="text-muted">${desc || ''}</td></tr>`;
+    return `<tr><td class="mono">${offset}</td><td>${tr(name)}</td><td class="mono">${value}</td><td class="text-muted">${desc || ''}</td></tr>`;
   }
 
   // BYOP modal — decode only, no DB injection
@@ -4220,11 +4225,11 @@
     const triggerBtn = document.querySelector('[data-action="pkt-byop"]');
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay byop-overlay';
-    overlay.innerHTML = '<div class="modal byop-modal" role="dialog" aria-label="Decode a Packet" aria-modal="true">'
-      + '<div class="byop-header"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg> Decode a Packet</h3><button class="btn-icon byop-x" title="Close" aria-label="Close dialog"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button></div>'
-      + '<p class="text-muted" style="margin:0 0 12px;font-size:.85rem">Paste raw hex bytes from your radio or MQTT feed:</p>'
-      + '<textarea id="byopHex" class="byop-input" aria-label="Packet hex data" placeholder="e.g. 15C31A8D4674FEAE37..." spellcheck="false"></textarea>'
-      + '<button class="btn-primary byop-go" id="byopDecode" style="width:100%;margin:8px 0">Decode</button>'
+    overlay.innerHTML = '<div class="modal byop-modal" role="dialog" aria-label="' + tr('Decode a Packet') + '" aria-modal="true">'
+      + '<div class="byop-header"><h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-package"/></svg> ' + tr('Decode a Packet') + '</h3><button class="btn-icon byop-x" title="' + tr('Close') + '" aria-label="' + tr('Close dialog') + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button></div>'
+      + '<p class="text-muted" style="margin:0 0 12px;font-size:.85rem">' + tr('Paste raw hex bytes from your radio or MQTT feed:') + '</p>'
+      + '<textarea id="byopHex" class="byop-input" aria-label="' + tr('Packet hex data') + '" placeholder="' + tr('e.g. {example}', { example: '15C31A8D4674FEAE37...' }) + '" spellcheck="false"></textarea>'
+      + '<button class="btn-primary byop-go" id="byopDecode" style="width:100%;margin:8px 0">' + tr('Decode') + '</button>'
       + '<div id="byopResult" role="status" aria-live="polite"></div>'
       + '</div>';
     document.body.appendChild(overlay);
@@ -4267,9 +4272,9 @@
     async function doDecode() {
       const hex = textarea.value.trim().replace(/[\s\n]/g, '');
       const result = overlay.querySelector('#byopResult');
-      if (!hex) { result.innerHTML = '<p class="text-muted">Enter hex data</p>'; return; }
-      if (!/^[0-9a-fA-F]+$/.test(hex)) { result.innerHTML = '<p class="byop-err" role="alert">Invalid hex — only 0-9 and A-F allowed</p>'; return; }
-      result.innerHTML = '<p class="text-muted">Decoding...</p>';
+      if (!hex) { result.innerHTML = '<p class="text-muted">' + tr('Enter hex data') + '</p>'; return; }
+      if (!/^[0-9a-fA-F]+$/.test(hex)) { result.innerHTML = '<p class="byop-err" role="alert">' + tr('Invalid hex — only 0-9 and A-F allowed') + '</p>'; return; }
+      result.innerHTML = '<p class="text-muted">' + tr('Decoding...') + '</p>';
       try {
         const res = await fetch('/api/decode', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -4294,30 +4299,30 @@
 
     // Anomaly banner
     if (d.anomaly) {
-      html += '<div class="anomaly-banner" style="background:var(--warning, #f0ad4e); color:#000; padding:8px 12px; border-radius:4px; margin-bottom:8px; font-weight:600;"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> Anomaly: ' + escapeHtml(d.anomaly) + '</div>';
+      html += '<div class="anomaly-banner" style="background:var(--warning, #f0ad4e); color:#000; padding:8px 12px; border-radius:4px; margin-bottom:8px; font-weight:600;"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ' + tr('Anomaly: {detail}', { detail: escapeHtml(d.anomaly) }) + '</div>';
     }
 
     // Header section
     html += '<div class="byop-section">'
-      + '<div class="byop-section-title">Header</div>'
+      + '<div class="byop-section-title">' + tr('Header') + '</div>'
       + '<div class="byop-kv">'
-      + kv('Route Type', routeTypeName(h.routeType))
-      + kv('Payload Type', payloadTypeName(h.payloadType))
-      + kv('Version', h.payloadVersion)
-      + kv('Size', size + ' bytes')
+      + kv(tr('Route Type'), routeTypeName(h.routeType))
+      + kv(tr('Payload Type'), payloadTypeName(h.payloadType))
+      + kv(tr('Version'), h.payloadVersion)
+      + kv(tr('Size'), trn(size, '{count} byte', '{count} bytes'))
       + '</div></div>';
 
     // Path section
     if (path.hops && path.hops.length) {
       html += '<div class="byop-section">'
-        + '<div class="byop-section-title">Path (' + path.hops.length + ' hops)</div>'
+        + '<div class="byop-section-title">' + trn(path.hops.length, 'Path ({count} hop)', 'Path ({count} hops)') + '</div>'
         + '<div class="byop-path">' + path.hops.map(function(hop) { return '<span class="hop">' + hop + '</span>'; }).join('<span class="arrow">→</span>') + '</div>'
         + '</div>';
     }
 
     // Payload section
     html += '<div class="byop-section">'
-      + '<div class="byop-section-title">Payload — ' + payloadTypeName(h.payloadType) + '</div>'
+      + '<div class="byop-section-title">' + tr('Payload') + ' — ' + payloadTypeName(h.payloadType) + '</div>'
       + '<div class="byop-kv">';
     for (const [k, v] of Object.entries(p)) {
       if (v === null || v === undefined) continue;
@@ -4329,15 +4334,15 @@
     }
     // Special handling for advert signature validation
     if (h.payloadType === 4 && p.signatureValid !== undefined) {
-      const status = p.signatureValid ? 'Valid' : 'Invalid';
+      const status = p.signatureValid ? tr('Valid') : tr('Invalid');
       const badgeClass = p.signatureValid ? 'badge-success' : 'badge-danger';
-      html += kv('Signature', `<span class="badge ${badgeClass}">${status}</span>`);
+      html += kv(tr('Signature'), `<span class="badge ${badgeClass}">${status}</span>`);
     }
     html += '</div></div>';
 
     // Raw hex
     html += '<div class="byop-section">'
-      + '<div class="byop-section-title">Raw Hex</div>'
+      + '<div class="byop-section-title">' + tr('Raw Hex') + '</div>'
       + '<div class="byop-hex mono">' + hex.toUpperCase().match(/.{1,2}/g).join(' ') + '</div>'
       + '</div>';
 
@@ -4518,22 +4523,22 @@
   registerPage('packet-detail', {
     init: async (app, routeParam) => {
       const param = routeParam;
-      app.innerHTML = `<div style="max-width:800px;margin:0 auto;padding:20px"><div class="text-center text-muted" style="padding:40px">Loading packet…</div></div>`;
+      app.innerHTML = `<div style="max-width:800px;margin:0 auto;padding:20px"><div class="text-center text-muted" style="padding:40px">${tr('Loading packet…')}</div></div>`;
       try {
         await loadObservers();
         const data = await api(`/packets/${param}`);
-        if (!data?.packet) { app.innerHTML = `<div style="max-width:800px;margin:0 auto;padding:40px;text-align:center"><h2>Packet not found</h2><p>Packet ${param} doesn't exist.</p><a href="#/packets">← Back to packets</a></div>`; return; }
+        if (!data?.packet) { app.innerHTML = `<div style="max-width:800px;margin:0 auto;padding:40px;text-align:center"><h2>${tr('Packet not found')}</h2><p>${tr('Packet {id} doesn\'t exist.', { id: escapeHtml(param) })}</p><a href="#/packets">← ${tr('Back to packets')}</a></div>`; return; }
         await resolveHopsForPackets([data.packet]);
         const container = document.createElement('div');
         container.style.cssText = 'max-width:800px;margin:0 auto;padding:20px';
-        container.innerHTML = `<div style="margin-bottom:16px"><a href="#/packets" style="color:var(--link-color);text-decoration:none">← Back to packets</a></div>`;
+        container.innerHTML = `<div style="margin-bottom:16px"><a href="#/packets" style="color:var(--link-color);text-decoration:none">← ${tr('Back to packets')}</a></div>`;
         const detail = document.createElement('div');
         container.appendChild(detail);
         await renderDetail(detail, data);
         app.innerHTML = '';
         app.appendChild(container);
       } catch (e) {
-        app.innerHTML = `<div style="max-width:800px;margin:0 auto;padding:40px;text-align:center"><h2>Error</h2><p>${e.message}</p><a href="#/packets">← Back to packets</a></div>`;
+        app.innerHTML = `<div style="max-width:800px;margin:0 auto;padding:40px;text-align:center"><h2>${tr('Error')}</h2><p>${escapeHtml(e.message)}</p><a href="#/packets">← ${tr('Back to packets')}</a></div>`;
       }
     },
     destroy: () => {}

@@ -15,6 +15,12 @@
 
   var LS_KEY = 'corescope_saved_filters_v1';
 
+  // tr() comes from i18n.js; Node tests load this file without it.
+  function _t(s, p) {
+    if (typeof tr === 'function') return tr(s, p);
+    return p ? s.replace(/\{(\w+)\}/g, function(m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s;
+  }
+
   // ── Saved filters store ────────────────────────────────────────────────
   var DEFAULT_FILTERS = [
     { name: 'Adverts only',                expr: 'type == ADVERT',        builtin: true },
@@ -118,10 +124,10 @@
   function _buildHelpHtml() {
     var PF = window.PacketFilter;
     var rows = (PF.FIELDS || []).map(function(f) {
-      return '<tr><td class="fux-mono">' + _esc(f.name) + '</td><td>' + _esc(f.desc) + '</td></tr>';
+      return '<tr><td class="fux-mono">' + _esc(f.name) + '</td><td>' + _esc(_t(f.desc)) + '</td></tr>';
     }).join('');
     var ops = (PF.OPERATORS || []).map(function(o) {
-      return '<tr><td class="fux-mono">' + _esc(o.op) + '</td><td>' + _esc(o.desc) +
+      return '<tr><td class="fux-mono">' + _esc(o.op) + '</td><td>' + _esc(_t(o.desc)) +
              '</td><td class="fux-mono">' + _esc(o.example) + '</td></tr>';
     }).join('');
     var examples = [
@@ -139,18 +145,18 @@
     return [
       // NOTE(#1122): "Filter syntax" heading is provided by the popover header;
       // do NOT repeat it here or the panel renders the label twice.
-      '<p>Wireshark-style boolean expressions over packet fields. Combine with <code>&amp;&amp;</code>, <code>||</code>, <code>!</code>, and parentheses. Strings are case-insensitive. Tip: append <code>?filter=…</code> to the URL to share a filter.</p>',
-      '<h4>Fields</h4>',
-      '<table class="fux-table"><thead><tr><th>Name</th><th>Description</th></tr></thead><tbody>' + rows + '</tbody></table>',
-      '<h4>Operators</h4>',
-      '<table class="fux-table"><thead><tr><th>Op</th><th>Meaning</th><th>Example</th></tr></thead><tbody>' + ops + '</tbody></table>',
-      '<h4>Examples</h4>',
+      '<p>' + _t('Wireshark-style boolean expressions over packet fields. Combine with {and}, {or}, {not}, and parentheses. Strings are case-insensitive. Tip: append {param} to the URL to share a filter.', { and: '<code>&amp;&amp;</code>', or: '<code>||</code>', not: '<code>!</code>', param: '<code>?filter=…</code>' }) + '</p>',
+      '<h4>' + _t('Fields') + '</h4>',
+      '<table class="fux-table"><thead><tr><th>' + _t('Name') + '</th><th>' + _t('Description') + '</th></tr></thead><tbody>' + rows + '</tbody></table>',
+      '<h4>' + _t('Operators') + '</h4>',
+      '<table class="fux-table"><thead><tr><th>Op</th><th>' + _t('Meaning') + '</th><th>' + _t('Example') + '</th></tr></thead><tbody>' + ops + '</tbody></table>',
+      '<h4>' + _t('Examples') + '</h4>',
       '<ul class="fux-examples">' + examples + '</ul>',
-      '<h4>Tips</h4>',
+      '<h4>' + _t('Tips') + '</h4>',
       '<ul>',
-      '<li>Right-click any cell in the packet table to add a clause for that value.</li>',
-      '<li>Type a partial field name to autocomplete; Tab/Enter accepts, Esc dismisses.</li>',
-      '<li>Save commonly-used expressions via the <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star"/></svg> Save button — they appear in the Saved dropdown.</li>',
+      '<li>' + _t('Right-click any cell in the packet table to add a clause for that value.') + '</li>',
+      '<li>' + _t('Type a partial field name to autocomplete; Tab/Enter accepts, Esc dismisses.') + '</li>',
+      '<li>' + _t('Save commonly-used expressions via the {button} button — they appear in the Saved dropdown.', { button: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star"/></svg> ' + _t('Save') }) + '</li>',
       '</ul>',
     ].join('');
   }
@@ -166,10 +172,10 @@
     // #1122: Render as a real centered modal inside .modal-overlay so the
     // help panel never floats over the packet table rows.
     var overlay = _h('div', { class: 'modal-overlay fux-help-overlay', role: 'presentation' });
-    var pop = _h('div', { id: 'filterHelpPopover', class: 'modal fux-popover', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Filter syntax help' });
+    var pop = _h('div', { id: 'filterHelpPopover', class: 'modal fux-popover', role: 'dialog', 'aria-modal': 'true', 'aria-label': _t('Filter syntax help') });
     pop.innerHTML =
-      '<div class="fux-popover-header"><strong>Filter syntax</strong>' +
-      '<button type="button" class="fux-popover-close" aria-label="Close"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button></div>' +
+      '<div class="fux-popover-header"><strong>' + _t('Filter syntax') + '</strong>' +
+      '<button type="button" class="fux-popover-close" aria-label="' + _t('Close') + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button></div>' +
       '<div class="fux-popover-body">' + _buildHelpHtml() + '</div>';
     overlay.appendChild(pop);
     document.body.appendChild(overlay);
@@ -243,7 +249,7 @@
         return '<div class="fux-ac-item' + (i === sel ? ' active' : '') + '" id="fux-ac-' + i +
           '" role="option" data-idx="' + i + '">' +
           '<span class="fux-ac-val">' + _esc(it.value) + '</span>' +
-          (it.desc ? '<span class="fux-ac-desc">' + _esc(it.desc) + '</span>' : '') +
+          (it.desc ? '<span class="fux-ac-desc">' + _esc(_t(it.desc)) + '</span>' : '') +
           '</div>';
       }).join('');
       dd.style.display = 'block';
@@ -301,9 +307,9 @@
     if (!input) return;
     var menu = _h('div', { id: 'filterContextMenu', class: 'fux-ctx-menu', role: 'menu' });
     var ops = [
-      { label: 'Filter ' + field + ' == "' + value + '"',  op: '==' },
-      { label: 'Filter ' + field + ' != "' + value + '"',  op: '!=' },
-      { label: 'Filter ' + field + ' contains "' + value + '"', op: 'contains' },
+      { label: _t('Filter {clause}', { clause: field + ' == "' + value + '"' }),  op: '==' },
+      { label: _t('Filter {clause}', { clause: field + ' != "' + value + '"' }),  op: '!=' },
+      { label: _t('Filter {clause}', { clause: field + ' contains "' + value + '"' }), op: 'contains' },
     ];
     menu.innerHTML = ops.map(function(o, i) {
       return '<button type="button" class="fux-ctx-item" data-idx="' + i + '" role="menuitem">' + _esc(o.label) + '</button>';
@@ -353,7 +359,7 @@
   function _renderSavedDropdown(container, input) {
     var savedIconHtml = '<svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg>';
     var caretIconHtml = '<svg class="ph-icon" aria-hidden="true" focusable="false"><use href="/icons/phosphor-sprite.svg#ph-caret-down"/></svg>';
-    var btn = _h('button', { type: 'button', class: 'fux-saved-trigger', id: 'filterSavedTrigger', title: 'Saved filters' }, savedIconHtml + ' Saved ' + caretIconHtml);
+    var btn = _h('button', { type: 'button', class: 'fux-saved-trigger', id: 'filterSavedTrigger', title: _t('Saved filters') }, savedIconHtml + ' ' + _t('Saved') + ' ' + caretIconHtml);
     var menu = _h('div', { class: 'fux-saved-menu hidden', id: 'filterSavedMenu', role: 'menu' });
     container.appendChild(btn);
     container.appendChild(menu);
@@ -362,17 +368,17 @@
       var list = SavedFilters.list();
       var rows = list.map(function(f, i) {
         var del = f.builtin ? '' :
-          '<button type="button" class="fux-saved-del" data-name="' + _esc(f.name) + '" title="Delete"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>';
+          '<button type="button" class="fux-saved-del" data-name="' + _esc(f.name) + '" title="' + _t('Delete') + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></button>';
         return '<div class="fux-saved-item" data-idx="' + i + '">' +
-          '<span class="fux-saved-name">' + _esc(f.name) + '</span>' +
+          '<span class="fux-saved-name">' + _esc(f.builtin ? _t(f.name) : f.name) + '</span>' +
           '<span class="fux-saved-expr fux-mono">' + _esc(f.expr) + '</span>' +
           del + '</div>';
       }).join('');
       menu.innerHTML =
-        '<div class="fux-saved-header">Saved filters</div>' +
+        '<div class="fux-saved-header">' + _t('Saved filters') + '</div>' +
         rows +
         '<div class="fux-saved-footer">' +
-        '<button type="button" id="filterSaveCurrent" class="fux-saved-save">＋ Save current expression</button>' +
+        '<button type="button" id="filterSaveCurrent" class="fux-saved-save">＋ ' + _t('Save current expression') + '</button>' +
         '</div>';
     }
 
@@ -394,8 +400,8 @@
       }
       if (ev.target.id === 'filterSaveCurrent') {
         var expr = (input.value || '').trim();
-        if (!expr) { alert('Type a filter expression first.'); return; }
-        var name = prompt('Name this filter:', '');
+        if (!expr) { alert(_t('Type a filter expression first.')); return; }
+        var name = prompt(_t('Name this filter:'), '');
         if (name && name.trim()) {
           SavedFilters.save(name.trim(), expr);
           build();
@@ -428,7 +434,7 @@
       if (!bar) {
         bar = _h('div', { id: 'filterUxBar', class: 'fux-bar' });
         var helpBtn = _h('button', { type: 'button', class: 'fux-help-btn', id: 'filterHelpBtn',
-          'aria-label': 'Filter syntax help', title: 'Filter syntax help' }, 'ⓘ Help');
+          'aria-label': _t('Filter syntax help'), title: _t('Filter syntax help') }, 'ⓘ ' + _t('Help'));
         helpBtn.addEventListener('click', _showHelp);
         bar.appendChild(helpBtn);
         _renderSavedDropdown(bar, input);
