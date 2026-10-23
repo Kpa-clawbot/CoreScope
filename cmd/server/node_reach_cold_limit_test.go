@@ -60,36 +60,38 @@ func clearReachCache(t *testing.T, srv *Server) {
 
 // --- limiter unit semantics ---
 
-// Many distinct holders: the limiter must never let more than `limit` run at
-// once, yet must let every holder through eventually. The test tracks peak
-// occupancy itself so the limiter's own counters are verified, not trusted.
+// Many distinct holders in bursts within the queue capacity: the limiter must
+// never let more than `limit` run at once, yet serve every admitted holder.
+// The test tracks peak occupancy itself, independently of the limiter counters.
 func TestReachColdLimiter_BoundsManyDistinctHolders(t *testing.T) {
 	var l reachColdLimiter
 	l.configure(2, 5*time.Second, nil)
 
 	var live, peak atomic.Int64
 	var wg sync.WaitGroup
-	for i := 0; i < 32; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := l.acquire(context.Background()); err != nil {
-				t.Errorf("acquire: %v", err)
-				return
-			}
-			n := live.Add(1)
-			for {
-				p := peak.Load()
-				if n <= p || peak.CompareAndSwap(p, n) {
-					break
+	for batch := 0; batch < 4; batch++ {
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := l.acquire(context.Background()); err != nil {
+					t.Errorf("acquire: %v", err)
+					return
 				}
-			}
-			time.Sleep(2 * time.Millisecond)
-			live.Add(-1)
-			l.release()
-		}()
+				n := live.Add(1)
+				for {
+					p := peak.Load()
+					if n <= p || peak.CompareAndSwap(p, n) {
+						break
+					}
+				}
+				time.Sleep(2 * time.Millisecond)
+				live.Add(-1)
+				l.release()
+			}()
+		}
+		wg.Wait()
 	}
-	wg.Wait()
 
 	if got := peak.Load(); got != 2 {
 		t.Fatalf("observed peak concurrency = %d, want exactly 2 (bound honoured and reached)", got)
@@ -115,8 +117,8 @@ func TestReachColdLimiter_DefaultsBoundToTwoWithBoundedWait(t *testing.T) {
 	if reachColdBuildLimit != 2 {
 		t.Fatalf("reachColdBuildLimit = %d, want 2 (half of the 4-connection read pool)", reachColdBuildLimit)
 	}
-	if reachColdBuildWait <= 0 || reachColdBuildWait > 5*time.Second {
-		t.Fatalf("reachColdBuildWait = %v, want a bounded positive wait", reachColdBuildWait)
+	if reachColdBuildWait != 3*time.Second {
+		t.Fatalf("reachColdBuildWait = %v, want the documented 3-second wait", reachColdBuildWait)
 	}
 	// Zero value must come up on the defaults, with no constructor.
 	var l reachColdLimiter
@@ -229,8 +231,8 @@ func TestReachColdLimiter_SaturationRejectsThenRecovers(t *testing.T) {
 
 // --- handler integration ---
 
-// Many distinct cold keys (3 nodes x 8 windows) must all be served, but never
-// more than `limit` of them may scan at the same time.
+// Many distinct cold keys (3 bursts of 8 windows, within the queue capacity)
+// must all be served, but never more than `limit` may scan at the same time.
 func TestNodeReach_ColdScansBoundedAcrossDistinctKeys(t *testing.T) {
 	hold := func() { time.Sleep(10 * time.Millisecond) }
 	srv, _, n := newColdLimitServer(t, 2, 10*time.Second, hold)
@@ -248,8 +250,8 @@ func TestNodeReach_ColdScansBoundedAcrossDistinctKeys(t *testing.T) {
 				}
 			}(pk, days)
 		}
+		wg.Wait()
 	}
-	wg.Wait()
 
 	if got := srv.reach.cold.peakInflight(); got > 2 {
 		t.Fatalf("peak concurrent cold scans = %d, want <= 2", got)
