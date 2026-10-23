@@ -315,10 +315,12 @@ func (s *PacketStore) loadPacketChunk(from, to time.Time, cursor packetLoadCurso
 		for pk := range packet.resolved {
 			pks = append(pks, pk)
 		}
-		s.indexResolvedPathHops(tx, pks, hopsSeen, nil)
+		s.indexResolvedPathHops(tx, pks, hopsSeen, relayPM)
+		pks = pks[:0]
 		for pk := range packet.nodes {
-			s.addToByNode(tx, pk)
+			pks = append(pks, pk)
 		}
+		s.indexColdLoadRelayHops(tx, pks, relayPM)
 		s.totalObs += len(observations)
 		s.trackedBytes += charge
 	}

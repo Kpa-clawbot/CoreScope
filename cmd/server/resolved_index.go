@@ -268,7 +268,7 @@ func (s *PacketStore) loadFallbackResolvedPaths(txIDs []int, snapshots map[int][
 		}
 		s.beforeCacheLoad("resolvedPathBatch")
 		rows, err := s.db.conn.Query(`SELECT id, transmission_id, resolved_path FROM observations
-			WHERE resolved_path IS NOT NULL AND transmission_id IN (?`+strings.Repeat(",?", len(chunk)-1)+`)`, args...)
+			WHERE resolved_path IS NOT NULL AND transmission_id IN (`+s.db.sqlPlaceholders(len(chunk))+`)`, args...)
 		if err != nil {
 			for _, txID := range chunk {
 				if rp := s.bestResolvedPath(txID, snapshots[txID]); rp != nil {

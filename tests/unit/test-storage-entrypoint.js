@@ -28,13 +28,13 @@ if(name==='corescope-migrate'){
   fs.appendFileSync(calls,JSON.stringify(['readiness-accounts',Boolean(process.env.CORESCOPE_USERS_DATABASE_URL)])+'\\n');
   const scenario=process.env.SCENARIO;
   const failure={
-   'unsupported-schema':'unsupported telemetry schema version 99 (binary supports 2)',
+   'unsupported-schema':'unsupported telemetry schema version 99 (binary supports 3)',
    'missing-schema':'telemetry schema is not initialized',
    'corrupt-schema':'invalid telemetry schema layout'
   }[scenario];
   if(failure){process.stderr.write(failure+'\\n');process.exit(1)}
   if(['old-schema','failed-upgrade','failed-recheck'].includes(scenario)&&!fs.existsSync(calls+'.upgraded')){
-   process.stderr.write('unsupported telemetry schema version 1 (binary supports 2)\\n');process.exit(1);
+   process.stderr.write('unsupported telemetry schema version 1 (binary supports 3)\\n');process.exit(1);
   }
   if(scenario==='failed-recheck'){process.stderr.write('telemetry schema verification failed after upgrade\\n');process.exit(1)}
   console.log('telemetry PostgreSQL schema is ready');

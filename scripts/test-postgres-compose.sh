@@ -207,7 +207,7 @@ owner_sql() {
   ' sh "$1" 2>> "$work/actions.raw.log"
 }
 [[ $(owner_sql corescope_telemetry <<'SQL'
-SELECT version=2 AND ready AND current_setting('server_version_num')='180006' FROM corescope_schema WHERE kind='telemetry';
+SELECT version=3 AND ready AND current_setting('server_version_num')='180006' FROM corescope_schema WHERE kind='telemetry';
 SQL
 ) == t ]]
 [[ $(timeout 10s "${dc[@]}" exec -T corescope /app/storage.sh field has_accounts) == false ]]
@@ -264,7 +264,7 @@ if [ "$backend" = postgres ]; then
   previous_telemetry_layout() {
     owner_sql corescope_telemetry <<'SQL' >> "$work/actions.raw.log"
 BEGIN;
-DROP TABLE tx_rewrite_feed,key_backfill_state,key_backfill_done;
+DROP TABLE tx_rewrite_feed,key_backfill_state,key_backfill_done,client_node_names;
 UPDATE corescope_schema SET version=1 WHERE kind='telemetry';
 COMMIT;
 SQL
@@ -281,7 +281,7 @@ SQL
   [[ $(selection_digest) == "$before" ]]
   [[ $(timeout 10s "${dc[@]}" exec -T corescope /app/storage.sh field has_accounts) == false ]]
   [[ $(owner_sql corescope_telemetry <<'SQL'
-SELECT version=2 AND ready AND (SELECT count(*)=1 FROM transmissions) FROM corescope_schema WHERE kind='telemetry';
+SELECT version=3 AND ready AND (SELECT count(*)=1 FROM transmissions) FROM corescope_schema WHERE kind='telemetry';
 SQL
 ) == t ]]
   [[ $(owner_sql corescope_accounts <<'SQL'
@@ -334,7 +334,7 @@ SQL
   timeout 210s "${dc[@]}" up -d --force-recreate --wait --wait-timeout 180 >> "$work/actions.raw.log" 2>&1
   [[ $(selection_digest) == "$before" ]]
   [[ $(owner_sql corescope_telemetry <<'SQL'
-SELECT version=2 AND ready AND (SELECT count(*)=1 FROM transmissions) FROM corescope_schema WHERE kind='telemetry';
+SELECT version=3 AND ready AND (SELECT count(*)=1 FROM transmissions) FROM corescope_schema WHERE kind='telemetry';
 SQL
 ) == t ]]
   [[ $(owner_sql corescope_accounts <<'SQL'

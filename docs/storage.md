@@ -169,7 +169,7 @@ Restoring accounts can revive deleted users, old passwords, revoked sessions and
 |---|---|
 | SQLite telemetry | Known v3 layout and supported append-only migrations; older/unknown layouts require the prior version's explicit upgrade/repair |
 | SQLite accounts | Known versions0–6 and the exact fork identity-v6 layout upgrade to v7; includes companion links, non-reusing identities and explicit mail-event IDs |
-| PostgreSQL telemetry/accounts | Telemetry readiness version2, with explicit offline owner upgrade from version1; account readiness version1 and logical schema version6 |
+| PostgreSQL telemetry/accounts | Telemetry readiness version 3, with explicit offline owner upgrade from versions 1 and 2 (adds reported-node names); account readiness version1 and logical schema version6 |
 
 Unknown/future columns, hidden generated columns, unsupported objects or conflicting data refuse conversion. Preserve a raw recovery snapshot before an explicit repair/upgrade of a disposable working copy. Deleted legacy integer IDs without allocator or retained-reference evidence have no recoverable historical high-water mark. Do not infer one or discard references to make validation pass.
 

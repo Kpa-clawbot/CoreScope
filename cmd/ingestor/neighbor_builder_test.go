@@ -337,37 +337,37 @@ func TestNeighborEdgesBuilderPathTrustAllowsTwoByte(t *testing.T) {
 // with direction 'tx' is the observer's own radio transmitting, not a
 // reception, so it must not produce an edge.
 func TestNeighborEdgesBuilderSkipsOwnTransmissions(t *testing.T) {
-	store, err := OpenStore(filepath.Join(t.TempDir(), "tx.db"))
+	store, err := openPostgresTestStore(t, filepath.Join(t.TempDir(), "tx.db"))
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
 	}
 	defer store.Close()
 
 	if _, err := store.db.Exec(
-		`INSERT INTO nodes (public_key, name) VALUES (?, ?), (?, ?)`,
+		`INSERT INTO nodes (public_key, name) VALUES ($1, $2), ($3, $4)`,
 		"aaaaaaaaaa", "from-node",
 		"bbbbbbbbbb", "first-hop",
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec(`INSERT INTO observers (id, name) VALUES (?, ?)`, "obs-1", "observer-1"); err != nil {
+	if _, err := store.db.Exec(`INSERT INTO observers (id, name) VALUES ($1, $2)`, "obs-1", "observer-1"); err != nil {
 		t.Fatal(err)
 	}
 	var obsRowid int64
-	if err := store.db.QueryRow(`SELECT rowid FROM observers WHERE id = ?`, "obs-1").Scan(&obsRowid); err != nil {
+	if err := store.db.QueryRow(`SELECT rowid FROM observers WHERE id = $1`, "obs-1").Scan(&obsRowid); err != nil {
 		t.Fatal(err)
 	}
-	res, err := store.db.Exec(
+	var txID int64
+	err = store.db.QueryRow(
 		`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, from_pubkey)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
 		"", "h-tx", "2026-01-01T00:00:00Z", 0, payloadADVERT, 0, "{}", "aaaaaaaaaa",
-	)
+	).Scan(&txID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	txID, _ := res.LastInsertId()
 	if _, err := store.db.Exec(
-		`INSERT INTO observations (transmission_id, observer_idx, direction, path_json, timestamp) VALUES (?, ?, 'tx', ?, ?)`,
+		`INSERT INTO observations (transmission_id, observer_idx, direction, path_json, timestamp) VALUES ($1, $2, 'tx', $3, $4)`,
 		txID, obsRowid, `["bb"]`, int64(1735689600),
 	); err != nil {
 		t.Fatal(err)

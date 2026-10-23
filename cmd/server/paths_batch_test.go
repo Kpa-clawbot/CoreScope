@@ -192,10 +192,14 @@ func TestLoadCanonicalResolvedPathsBatchesFallback(t *testing.T) {
 	snapshots := make(map[int][]rpObs, n)
 	for tx := 1; tx <= n; tx++ {
 		longest, shorter := 2*tx-1, 2*tx
-		conn.Exec(`INSERT INTO observations (id, transmission_id, path_json, resolved_path) VALUES (?,?,?,NULL)`,
-			longest, tx, `["a","b"]`)
-		conn.Exec(`INSERT INTO observations (id, transmission_id, path_json, resolved_path) VALUES (?,?,?,?)`,
-			shorter, tx, `["a"]`, `["aa11aa11"]`)
+		if _, err := conn.Exec(`INSERT INTO observations (id, transmission_id, path_json, resolved_path) VALUES ($1,$2,$3,NULL)`,
+			longest, tx, `["a","b"]`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.Exec(`INSERT INTO observations (id, transmission_id, path_json, resolved_path) VALUES ($1,$2,$3,$4)`,
+			shorter, tx, `["a"]`, `["aa11aa11"]`); err != nil {
+			t.Fatal(err)
+		}
 		snapshots[tx] = []rpObs{{longest, `["a","b"]`}, {shorter, `["a"]`}}
 	}
 	s := &PacketStore{db: &DB{conn: conn, backend: testBackendValue()}}

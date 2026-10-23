@@ -40,9 +40,9 @@ func upgradeRecordedPostgres(ctx context.Context, o storageOptions, expected dbc
 		return err
 	}
 	type storeUpgrade struct {
-		kind   string
-		db     *sql.DB
-		needed bool
+		kind     string
+		db       *sql.DB
+		previous int
 	}
 	var plans []storeUpgrade
 	defer func() {
@@ -63,18 +63,18 @@ func upgradeRecordedPostgres(ctx context.Context, o storageOptions, expected dbc
 		}
 		plan := storeUpgrade{kind: store.kind, db: db}
 		plans = append(plans, plan)
-		needed, err := validateRecordedPostgresUpgrade(ctx, db, store.kind)
+		previous, err := validateRecordedPostgresUpgrade(ctx, db, store.kind)
 		if err != nil {
 			return err
 		}
-		plans[len(plans)-1].needed = needed
+		plans[len(plans)-1].previous = previous
 	}
 	for _, plan := range plans {
-		if !plan.needed {
+		if plan.previous == 0 {
 			continue
 		}
-		previous, current := recordedPostgresVersions(plan.kind)
-		log.Printf("[storage] PostgreSQL %s schema upgrade required: %d -> %d", plan.kind, previous, current)
+		_, current := recordedPostgresVersions(plan.kind)
+		log.Printf("[storage] PostgreSQL %s schema upgrade required: %d -> %d", plan.kind, plan.previous, current)
 		if plan.kind == "telemetry" {
 			err = dbschema.ApplyPostgres(plan.db, nil)
 		} else {
@@ -83,7 +83,7 @@ func upgradeRecordedPostgres(ctx context.Context, o storageOptions, expected dbc
 		if err != nil {
 			return err
 		}
-		log.Printf("[storage] upgraded recorded PostgreSQL %s schema %d -> %d", plan.kind, previous, current)
+		log.Printf("[storage] upgraded recorded PostgreSQL %s schema %d -> %d", plan.kind, plan.previous, current)
 	}
 	if err := grantRuntimeTargets(ctx, selected, owners, raw); err != nil {
 		return err
@@ -91,70 +91,71 @@ func upgradeRecordedPostgres(ctx context.Context, o storageOptions, expected dbc
 	return validateRuntimeSelection(ctx, selected, raw)
 }
 
-func validateRecordedPostgresUpgrade(ctx context.Context, db *sql.DB, kind string) (bool, error) {
+// Returns the stored version when an upgrade is needed, or zero when current.
+func validateRecordedPostgresUpgrade(ctx context.Context, db *sql.DB, kind string) (int, error) {
 	var owner bool
 	if err := db.QueryRowContext(ctx, `SELECT pg_has_role(current_user,n.nspowner,'MEMBER')
 		AND NOT EXISTS(SELECT 1 FROM pg_class c WHERE c.relnamespace=n.oid AND c.relkind IN ('r','p','v','m','S','f') AND NOT pg_has_role(current_user,c.relowner,'MEMBER'))
 		FROM pg_namespace n WHERE n.nspname=current_schema()`).Scan(&owner); err != nil || !owner {
-		return false, errors.New("recorded PostgreSQL upgrade requires the selected schema and object owner credentials")
+		return 0, errors.New("recorded PostgreSQL upgrade requires the selected schema and object owner credentials")
 	}
 	var count, version int
 	var recordedKind string
 	var ready bool
 	if err := db.QueryRowContext(ctx, `SELECT count(*),min(kind),min(version),bool_and(ready) FROM corescope_schema`).Scan(&count, &recordedKind, &version, &ready); err != nil || count != 1 || recordedKind != kind || !ready {
-		return false, errors.New("recorded PostgreSQL store is missing, unsupported or incomplete; it was not initialized")
+		return 0, errors.New("recorded PostgreSQL store is missing, unsupported or incomplete; it was not initialized")
 	}
 	previous, current := recordedPostgresVersions(kind)
 	if kind == "accounts" {
 		if version != users.PostgresSchemaVersion {
-			return false, errors.New("unsupported PostgreSQL account readiness version")
+			return 0, errors.New("unsupported PostgreSQL account readiness version")
 		}
 		if err := db.QueryRowContext(ctx, `SELECT count(*),coalesce(max(version),0) FROM schema_version`).Scan(&count, &version); err != nil || count != 1 {
-			return false, errors.New("recorded PostgreSQL account schema is incomplete")
+			return 0, errors.New("recorded PostgreSQL account schema is incomplete")
 		}
 	}
-	if version != previous && version != current {
-		return false, errors.New("unsupported PostgreSQL schema version; upgrade was not attempted")
+	if version < previous || version > current {
+		return 0, errors.New("unsupported PostgreSQL schema version; upgrade was not attempted")
 	}
 	var dropped bool
 	if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid WHERE c.relnamespace=current_schema()::regnamespace AND a.attisdropped)`).Scan(&dropped); err != nil || dropped {
-		return false, errors.New("unsupported PostgreSQL dropped-column layout; upgrade was not attempted")
+		return 0, errors.New("unsupported PostgreSQL dropped-column layout; upgrade was not attempted")
 	}
 	tables, err := layouts(kind)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 	if version == current {
-		return false, validatePostgresLayout(db, kind, tables)
+		return 0, validatePostgresLayout(db, kind, tables)
 	}
 	// The historical layouts differ only by these exact additive objects.
 	// All other columns, constraints, indexes, views and policies must match
 	// the canonical manifest, including user extensions that would be unsafe.
 	oldTables := make([]importTable, 0, len(tables))
 	for _, table := range tables {
-		if !upgradeAddedRelation(kind, table.Name) {
+		if !upgradeAddedRelation(kind, table.Name, version) {
 			oldTables = append(oldTables, table)
 		}
 	}
 	got, err := postgresLayout(db, kind, oldTables)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 	var canonical map[string][]string
 	if err := json.Unmarshal(postgresLayoutJSON, &canonical); err != nil {
-		return false, err
+		return 0, err
 	}
 	var want []string
 	for _, entry := range canonical[kind] {
 		var parts []any
 		if err := json.Unmarshal([]byte(entry), &parts); err != nil {
-			return false, err
+			return 0, err
 		}
 		if len(parts) < 2 {
-			return false, errors.New("invalid canonical PostgreSQL layout")
+			return 0, errors.New("invalid canonical PostgreSQL layout")
 		}
 		relation, _ := parts[1].(string)
-		if upgradeAddedRelation(kind, relation) {
+		if upgradeAddedRelation(kind, relation, version) {
 			continue
 		}
 		if kind == "accounts" && relation == "sessions" {
@@ -171,9 +172,9 @@ func validateRecordedPostgresUpgrade(ctx context.Context, db *sql.DB, kind strin
 		want = append(want, entry)
 	}
 	if !slices.Equal(got, want) {
-		return false, errors.New("unsupported PostgreSQL upgrade layout; source data and selection were not changed")
+		return 0, errors.New("unsupported PostgreSQL upgrade layout; source data and selection were not changed")
 	}
-	return true, nil
+	return version, nil
 }
 
 func recordedPostgresVersions(kind string) (previous, current int) {
@@ -183,9 +184,10 @@ func recordedPostgresVersions(kind string) (previous, current int) {
 	return 1, dbschema.Version
 }
 
-func upgradeAddedRelation(kind, name string) bool {
+func upgradeAddedRelation(kind, name string, version int) bool {
 	if kind == "telemetry" {
-		return name == "tx_rewrite_feed" || name == "key_backfill_state" || name == "key_backfill_done"
+		return (version < 2 && (name == "tx_rewrite_feed" || name == "key_backfill_state" || name == "key_backfill_done")) ||
+			(version < 3 && name == "client_node_names")
 	}
 	return name == "companion_links" || name == "link_challenges" || name == "linked_companions"
 }

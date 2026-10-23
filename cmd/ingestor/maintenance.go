@@ -439,7 +439,7 @@ func (s *Store) PruneOldClientNodeNames(days int) (int64, error) {
 // PruneOldClientNodeNames, so tests can pin the cutoff.
 func (s *Store) pruneOldClientNodeNamesAt(cutoffInstant time.Time) (int64, error) {
 	cutoff := cutoffInstant.Format(rxTimeMillisLayout)
-	res, err := s.db.Exec(`DELETE FROM client_node_names WHERE observed_at < ?`, cutoff)
+	res, err := s.db.Exec(`DELETE FROM client_node_names WHERE observed_at < `+s.parameter(1), cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("prune client_node_names: %w", err)
 	}

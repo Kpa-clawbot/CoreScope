@@ -5,9 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/meshcore-analyzer/dbconfig"
@@ -132,8 +132,15 @@ func TestRecordedPostgresClientNodeNamesUpgradeVersions(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			var diagnostic bytes.Buffer
+			oldLog := log.Writer()
+			log.SetOutput(&diagnostic)
+			t.Cleanup(func() { log.SetOutput(oldLog) })
 			if err := runStorageAction(context.Background(), o, &bytes.Buffer{}); err != nil {
 				t.Fatal("recorded schema upgrade", err)
+			}
+			if !bytes.Contains(diagnostic.Bytes(), []byte(fmt.Sprintf("telemetry schema upgrade required: %d -> 3", version))) {
+				t.Fatal("upgrade diagnostic did not report the stored telemetry version")
 			}
 			var got int
 			if err := db.QueryRow(`SELECT version FROM corescope_schema WHERE kind='telemetry'`).Scan(&got); err != nil || got != 3 {
@@ -147,7 +154,7 @@ func TestRecordedPostgresClientNodeNamesUpgradeVersions(t *testing.T) {
 				t.Fatal("upgraded runtime writer lacks name grant", err)
 			}
 			var token string
-			if err := openImportDB(t, o.UsersOwnerURL).QueryRow(`SELECT token_hash FROM sessions WHERE id=2`).Scan(&token); err != nil || !strings.EqualFold(token, "opaque session") {
+			if err := openImportDB(t, o.UsersOwnerURL).QueryRow(`SELECT token_hash FROM sessions WHERE id=2`).Scan(&token); err != nil || token != "opaque session" {
 				t.Fatal("upgrade changed initialized accounts", err)
 			}
 		})

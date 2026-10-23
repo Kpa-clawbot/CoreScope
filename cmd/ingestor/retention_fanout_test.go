@@ -82,7 +82,7 @@ func TestPruneDoesNotYieldForDisabledEmptyOrFailedWork(t *testing.T) {
 	t.Run("failed batch", func(t *testing.T) {
 		s := openPruneStore(t, "failed.db")
 		seedRetentionFanout(t, s, 1, 1)
-		if _, err := s.db.Exec(`CREATE TRIGGER fail_prune BEFORE DELETE ON observations BEGIN SELECT RAISE(ABORT,'blocked prune'); END`); err != nil {
+		if _, err := testAdmin(t, s).Exec(testNativeSQL(`CREATE TRIGGER fail_prune BEFORE DELETE ON observations BEGIN SELECT RAISE(ABORT,'blocked prune'); END`, `CREATE FUNCTION fail_prune_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'blocked prune'; END $$; CREATE TRIGGER fail_prune BEFORE DELETE ON observations FOR EACH ROW EXECUTE FUNCTION fail_prune_fn()`)); err != nil {
 			t.Fatal(err)
 		}
 		yields := 0
@@ -116,7 +116,7 @@ func TestPrunePreservesLateFreshArrivalsBetweenBatches(t *testing.T) {
 		t.Fatal("late reception reused an expired identity or was lost", id, err)
 	}
 	var linked int
-	if err := s.db.QueryRow(`SELECT count(*) FROM observations WHERE transmission_id=?`, id).Scan(&linked); err != nil || linked != 1 {
+	if err := s.db.QueryRow(`SELECT count(*) FROM observations WHERE transmission_id=$1`, id).Scan(&linked); err != nil || linked != 1 {
 		t.Fatal("late observation lost/orphaned", linked, err)
 	}
 }
@@ -129,7 +129,7 @@ func TestPruneSkewedChildrenAndEmptyParentsPreservesFreshEvidence(t *testing.T) 
 		t.Fatal(err)
 	}
 	for id := 2; id <= 601; id++ {
-		if _, err := tx.Exec(`INSERT INTO transmissions(id,raw_hex,hash,first_seen) VALUES(?,'00',?,'2020-01-01T00:00:00Z')`, id, fmt.Sprint("empty-", id)); err != nil {
+		if _, err := tx.Exec(`INSERT INTO transmissions(id,raw_hex,hash,first_seen) VALUES($1,'00',$2,'2020-01-01T00:00:00Z')`, id, fmt.Sprint("empty-", id)); err != nil {
 			tx.Rollback()
 			t.Fatal(err)
 		}
@@ -162,7 +162,7 @@ func TestPruneSkewedChildrenAndEmptyParentsPreservesFreshEvidence(t *testing.T) 
 func TestPruneFailureRollsBackOnlyCurrentBatch(t *testing.T) {
 	s := openPruneStore(t, "rollback.db")
 	seedRetentionFanout(t, s, 500, 1000)
-	if _, err := s.db.Exec(`CREATE TRIGGER fail_prune BEFORE DELETE ON observations WHEN OLD.transmission_id=251 BEGIN SELECT RAISE(ABORT,'retention test failure'); END`); err != nil {
+	if _, err := testAdmin(t, s).Exec(testNativeSQL(`CREATE TRIGGER fail_prune BEFORE DELETE ON observations WHEN OLD.transmission_id=251 BEGIN SELECT RAISE(ABORT,'retention test failure'); END`, `CREATE FUNCTION fail_prune_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF OLD.transmission_id=251 THEN RAISE EXCEPTION 'retention test failure'; END IF; RETURN OLD; END $$; CREATE TRIGGER fail_prune BEFORE DELETE ON observations FOR EACH ROW EXECUTE FUNCTION fail_prune_fn()`)); err != nil {
 		t.Fatal(err)
 	}
 	removed, err := s.PruneOldPackets(5)
@@ -172,7 +172,7 @@ func TestPruneFailureRollsBackOnlyCurrentBatch(t *testing.T) {
 	if countRows(t, s, "transmissions") != 250 || countRows(t, s, "observations") != 500 {
 		t.Fatal("failed batch was only partly rolled back or earlier progress lost")
 	}
-	if _, err := s.db.Exec(`DROP TRIGGER fail_prune`); err != nil {
+	if _, err := testAdmin(t, s).Exec(testNativeSQL(`DROP TRIGGER fail_prune`, `DROP TRIGGER fail_prune ON observations`)); err != nil {
 		t.Fatal(err)
 	}
 	if removed, err := s.PruneOldPackets(5); err != nil || removed != 250 {

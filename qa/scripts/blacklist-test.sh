@@ -199,7 +199,7 @@ BEGIN
  THEN RAISE EXCEPTION 'QA requires a restricted PostgreSQL reader role' USING ERRCODE='42501'; END IF;
  -- Keep the runtime QA reader at dbschema.Version; the native regression uses
  -- the shipping migrator's schema and rejects old, future and unfinished markers.
- IF (SELECT count(*) FROM corescope_schema WHERE kind='telemetry' AND version=2 AND ready) <> 1
+ IF (SELECT count(*) FROM corescope_schema WHERE kind='telemetry' AND version=3 AND ready) <> 1
  THEN RAISE EXCEPTION 'telemetry schema is not ready' USING ERRCODE='55000'; END IF;
 END $qa$;
 SQL

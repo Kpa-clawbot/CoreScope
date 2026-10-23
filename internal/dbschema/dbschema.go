@@ -13,12 +13,19 @@ import (
 
 type Logger func(string, ...interface{})
 
-// SchemaSQL is inspectable native PostgreSQL DDL, shared with the importer.
-//
 //go:embed schema.sql
-var SchemaSQL string
+var baseSchemaSQL string
 
-const Version = 2
+// Version 3 adds reported names. Fresh creation and owner-only upgrades use
+// the same DDL; a conflicting existing relation fails the whole transaction.
+//
+//go:embed client_names.sql
+var clientNodeNamesSchemaSQL string
+
+// SchemaSQL is inspectable native PostgreSQL DDL, shared with the importer.
+var SchemaSQL = baseSchemaSQL + clientNodeNamesSchemaSQL
+
+const Version = 3
 
 // WriterLockKey serializes ID allocation through commit, including backfills,
 // across ingestor processes. The server's ID cursor relies on this ordering.
@@ -72,7 +79,7 @@ func applyTx(tx *sql.Tx, initialReady bool) error {
 	var ready bool
 	err = tx.QueryRow(`SELECT version,ready FROM corescope_schema WHERE kind='telemetry'`).Scan(&version, &ready)
 	if err == nil {
-		if version != 1 && version != Version {
+		if version < 1 || version > Version {
 			return fmt.Errorf("unsupported telemetry schema version %d (binary supports %d)", version, Version)
 		}
 		if !ready {
@@ -81,9 +88,14 @@ func applyTx(tx *sql.Tx, initialReady bool) error {
 		if !initialReady {
 			return fmt.Errorf("import target is already initialized")
 		}
-		if version == 1 {
+		if version < 2 {
 			if _, err := tx.Exec(keyBackfillSchemaSQL); err != nil {
 				return fmt.Errorf("upgrade telemetry key backfill schema: %w", err)
+			}
+		}
+		if version < 3 {
+			if _, err := tx.Exec(clientNodeNamesSchemaSQL); err != nil {
+				return fmt.Errorf("upgrade telemetry reported-name schema: %w", err)
 			}
 			_, err := tx.Exec(`UPDATE corescope_schema SET version=$1 WHERE kind='telemetry'`, Version)
 			return err

@@ -39,6 +39,12 @@ if (supervisor.includes('[program:caddy]')) {
 const publishedPort = Number(example.match(/HTTP_PORT:-\d+\}:(\d+)/)?.[1]);
 assert(listeners.has(publishedPort), 'default example publishes HTTP to a port with no running listener');
 const smoke = fs.readFileSync(path.join(root, 'scripts/test-postgres-compose.sh'), 'utf8');
+const telemetryVersion = Number(fs.readFileSync(path.join(root, 'internal/dbschema/dbschema.go'), 'utf8').match(/const Version = (\d+)/)?.[1]);
+assert(telemetryVersion > 0, 'shipping telemetry version is missing');
+const readinessVersions = [...smoke.matchAll(/SELECT version=(\d+) AND ready[^\n]*kind='telemetry'/g)].map(match => Number(match[1]));
+assert(readinessVersions.length >= 3 && readinessVersions.every(version => version === telemetryVersion), 'packaged readiness checks lag the shipping telemetry schema');
+const blacklist = fs.readFileSync(path.join(root, 'qa/scripts/blacklist-test.sh'), 'utf8');
+assert.strictEqual(Number(blacklist.match(/kind='telemetry' AND version=(\d+) AND ready/)?.[1]), telemetryVersion, 'SQL QA readiness gate lags the shipping telemetry schema');
 assert(!/\bDISABLE_CADDY=true\b/.test(smoke), 'packaged smoke bypasses the example default HTTP listener');
 for (const endpoint of ['http://127.0.0.1:3000/api/healthz', 'http://127.0.0.1:80/api/healthz', 'http://127.0.0.1:80/api/stats']) {
   assert(smoke.includes(endpoint), `packaged smoke does not exercise ${endpoint}`);
