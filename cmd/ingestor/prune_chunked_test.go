@@ -284,5 +284,16 @@ func TestPruneAgedTransmissionIDsHasOrderedIndex(t *testing.T) {
 		if strings.Contains(plan, "Sort Key:") {
 			t.Errorf("%s: ordered-index eligibility query unexpectedly requires a sort: %s", name, plan)
 		}
+		if testBackendValue() == "sqlite" {
+			if strings.Contains(plan, "SCAN observations") {
+				t.Errorf("%s: child work must seek by transmission or row ID, not scan observations: %s", name, plan)
+			}
+			if q != pruneAgedTransmissionIDs && !strings.Contains(plan, "transmission_id=?") {
+				t.Errorf("%s: child lookup does not use a transmission-key index: %s", name, plan)
+			}
+			if strings.Contains(plan, "TEMP B-TREE") {
+				t.Errorf("%s: plan sorts in a temp b-tree instead of walking the index in order: %s", name, plan)
+			}
+		}
 	}
 }

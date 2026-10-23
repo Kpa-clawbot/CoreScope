@@ -332,3 +332,55 @@ func TestNeighborEdgesBuilderPathTrustAllowsTwoByte(t *testing.T) {
 		t.Fatalf("2-byte hop must still produce the edge, got %d", got)
 	}
 }
+
+// TestNeighborEdgesBuilderSkipsOwnTransmissions pins #667: an observation
+// with direction 'tx' is the observer's own radio transmitting, not a
+// reception, so it must not produce an edge.
+func TestNeighborEdgesBuilderSkipsOwnTransmissions(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "tx.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := store.db.Exec(
+		`INSERT INTO nodes (public_key, name) VALUES (?, ?), (?, ?)`,
+		"aaaaaaaaaa", "from-node",
+		"bbbbbbbbbb", "first-hop",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO observers (id, name) VALUES (?, ?)`, "obs-1", "observer-1"); err != nil {
+		t.Fatal(err)
+	}
+	var obsRowid int64
+	if err := store.db.QueryRow(`SELECT rowid FROM observers WHERE id = ?`, "obs-1").Scan(&obsRowid); err != nil {
+		t.Fatal(err)
+	}
+	res, err := store.db.Exec(
+		`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, from_pubkey)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"", "h-tx", "2026-01-01T00:00:00Z", 0, payloadADVERT, 0, "{}", "aaaaaaaaaa",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txID, _ := res.LastInsertId()
+	if _, err := store.db.Exec(
+		`INSERT INTO observations (transmission_id, observer_idx, direction, path_json, timestamp) VALUES (?, ?, 'tx', ?, ?)`,
+		txID, obsRowid, `["bb"]`, int64(1735689600),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.buildAndPersistNeighborEdges(trustAllPrefixes()); err != nil {
+		t.Fatalf("buildAndPersistNeighborEdges: %v", err)
+	}
+	var got int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM neighbor_edges`).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != 0 {
+		t.Fatalf("a tx observation produced %d neighbor_edges rows, want 0", got)
+	}
+}

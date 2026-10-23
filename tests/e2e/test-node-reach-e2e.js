@@ -79,6 +79,76 @@ async function getJson(page, url) {
     }
   }
 
+  // 4. A busy server (429 + Retry-After) is retried by the reach page itself:
+  // a "retrying" hint, then the report, with no error. The reach requests are
+  // answered by a route so the server does not have to be made busy.
+  const reachPath = '/api/nodes/' + pk + '/reach';
+  async function withReachRoute(answer, fn) {
+    const p = await browser.newPage();
+    const seen = { n: 0, at: [] };
+    await p.route((url) => new URL(url).pathname === reachPath, async (route) => {
+      seen.n++;
+      seen.at.push(Date.now());
+      const a = await answer(seen.n);
+      if (a === 'pass') return route.continue();
+      return route.fulfill(a);
+    });
+    try { await fn(p, seen); } finally { await p.close(); }
+  }
+  const busy = { status: 429, headers: { 'Retry-After': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ error: 'reach is busy computing other reports', retryAfter: 1 }) };
+
+  await withReachRoute((n) => (n <= 2 ? busy : 'pass'), async (p, seen) => {
+    await p.goto(BASE + '/#/nodes/' + pk + '/reach');
+    await p.waitForSelector('.nq-busy', { timeout: 10000 });
+    const hint = await p.locator('.nq-busy').textContent();
+    if (!hint.includes('retrying in 1 s')) throw new Error('busy hint text: ' + hint);
+    await p.waitForSelector('.nq-head', { timeout: 20000 });
+    if (await p.locator('.nq-error').count()) throw new Error('error shown after a successful retry');
+    if (seen.n !== 3) throw new Error('reach requests ' + seen.n + ' != 3 (2 busy + 1 served)');
+    // Two waits of Retry-After: 1 s each between the first and third request.
+    const gap = seen.at[2] - seen.at[0];
+    if (gap < 1800) throw new Error('retries did not wait for Retry-After: ' + gap + ' ms for two retries');
+  });
+
+  // 5. A server that stays busy: 5 retries, then the error.
+  await withReachRoute(() => busy, async (p, seen) => {
+    await p.goto(BASE + '/#/nodes/' + pk + '/reach');
+    await p.waitForSelector('.nq-error', { timeout: 20000 });
+    const msg = await p.locator('.nq-error').textContent();
+    if (!msg.includes('API 429')) throw new Error('give-up error text: ' + msg);
+    if (seen.n !== 6) throw new Error('reach requests ' + seen.n + ' != 6 (1 + 5 retries)');
+  });
+
+  // 6. Leaving the page while it waits stops the retries.
+  await withReachRoute(() => busy, async (p, seen) => {
+    await p.goto(BASE + '/#/nodes/' + pk + '/reach');
+    await p.waitForSelector('.nq-busy', { timeout: 10000 });
+    const atLeave = seen.n;
+    await p.evaluate(() => { location.hash = '#/nodes'; });
+    await p.waitForTimeout(2500);
+    if (seen.n !== atLeave) throw new Error('reach retried after leaving the page: ' + atLeave + ' → ' + seen.n);
+  });
+
+  // 6b. Leaving while the request is still in flight: the late 429 must not
+  // start a retry or write the hint into the page that replaced this one.
+  await withReachRoute(async () => { await new Promise((r) => setTimeout(r, 1000)); return busy; }, async (p, seen) => {
+    await p.goto(BASE + '/#/nodes/' + pk + '/reach');
+    await p.waitForFunction(() => document.querySelector('.nq-load') !== null, null, { timeout: 10000 });
+    await p.evaluate(() => { location.hash = '#/nodes'; });
+    await p.waitForTimeout(2500);
+    if (await p.locator('.nq-busy').count()) throw new Error('busy hint written after leaving the page');
+    if (seen.n !== 1) throw new Error('reach retried after leaving mid-request: ' + seen.n + ' requests');
+  });
+
+  // 7. Other errors are not retried.
+  await withReachRoute(() => ({ status: 500, body: '{"error":"reach computation failed"}', headers: { 'Retry-After': '1' } }), async (p, seen) => {
+    await p.goto(BASE + '/#/nodes/' + pk + '/reach');
+    await p.waitForSelector('.nq-error', { timeout: 10000 });
+    await p.waitForTimeout(1500);
+    if (seen.n !== 1) throw new Error('a 500 was retried: ' + seen.n + ' requests');
+  });
+
   console.log('node-reach E2E OK');
   await browser.close();
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -1019,3 +1019,37 @@ func TestBuildNeighborGraph_CountsByMode(t *testing.T) {
 		t.Errorf("CountsByMode[3] = %d, want 1", got)
 	}
 }
+
+// #667: the tx copy of a packet the observer forwarded carries the same
+// originator↔path[0] evidence as its rx copy, so counting it doubles the edge.
+// A tx row with an empty path is not a zero-hop hearing either.
+func TestBuildNeighborGraph_SkipsOwnTransmissions(t *testing.T) {
+	nodes := []nodeInfo{
+		{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeX"},
+		{Role: "repeater", PublicKey: "r1aabbcc", Name: "R1"},
+		{Role: "repeater", PublicKey: "obs00001", Name: "Observer"},
+	}
+	rx := ngMakeObs("obs00001", `["r1aa"]`, nowStr, nil)
+	rx.Direction = "rx"
+	tx := ngMakeObs("obs00001", `["r1aa","obs0"]`, nowStr, nil)
+	tx.Direction = "tx"
+	emptyTx := ngMakeObs("obs00001", `[]`, nowStr, nil)
+	emptyTx.Direction = "tx"
+
+	store := ngTestStore(nodes, []*StoreTx{
+		ngMakeTx(1, 4, ngFromNodeJSON("aaaa1111"), []*StoreObs{rx, tx}),
+		ngMakeTx(2, 4, ngFromNodeJSON("aaaa1111"), []*StoreObs{emptyTx}),
+	})
+	g := BuildFromStore(store)
+
+	for _, e := range g.AllEdges() {
+		if (e.NodeA == "aaaa1111" && e.NodeB == "r1aabbcc") || (e.NodeA == "r1aabbcc" && e.NodeB == "aaaa1111") {
+			if e.Count != 1 {
+				t.Errorf("X↔R1 count = %d, want 1 (the tx copy must not count)", e.Count)
+			}
+		}
+		if e.NodeA == "aaaa1111" && e.NodeB == "obs00001" || e.NodeA == "obs00001" && e.NodeB == "aaaa1111" {
+			t.Errorf("empty-path tx row produced a zero-hop edge X↔Observer")
+		}
+	}
+}

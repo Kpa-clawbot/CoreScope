@@ -20,7 +20,8 @@ const (
 	affinitySaturationCount = 100
 	// Time-decay half-life: 7 days.
 	affinityHalfLifeHours = 168.0
-	// Cache TTL for the built graph.
+	// Cache TTL for store.graph (path_inspect.go). Server.neighborGraph is
+	// rebuilt by the recompute tick instead and does not use it (#2221).
 	neighborGraphTTL = 5 * time.Minute
 	// Auto-resolve confidence: best must be >= this factor × second-best.
 	affinityConfidenceRatio = 3.0
@@ -328,6 +329,9 @@ func BuildFromStoreWithOptions(store *PacketStore, opts BuildOptions) *NeighborG
 		}
 
 		for _, obs := range p.observations {
+			if obs.isOwnTransmission() {
+				continue
+			}
 			path := parsePathJSON(obs.PathJSON)
 			observerPK := cachedToLower(lowerCache, obs.ObserverID)
 

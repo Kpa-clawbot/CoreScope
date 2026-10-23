@@ -29,6 +29,8 @@ type notifier struct {
 	// externalErr is the last tick's reason the externalAlerts feed was not
 	// used ("" when it was), so each new reason is logged once.
 	externalErr string
+	// adaptive caches the learned offline thresholds (offlineWindows).
+	adaptive map[string]adaptiveEntry
 }
 
 func newNotifier(a *authService, src notifySource, now func() time.Time) *notifier {
@@ -190,12 +192,6 @@ func (n *notifier) tick(ctx context.Context) {
 		log.Printf("[notify] read nodes: %v", err)
 		return
 	}
-	var infra []string
-	for _, pk := range pubkeys {
-		if nd, ok := nodes[pk]; ok && notifyInfra(nd.Role) {
-			infra = append(infra, pk)
-		}
-	}
 	var observers []notifyObserver
 	if wantObservers {
 		if observers, err = n.src.observers(); err != nil {
@@ -208,9 +204,15 @@ func (n *notifier) tick(ctx context.Context) {
 		external = n.readExternal(now)
 	}
 	heard, lock := n.src.lastHeard(pubkeys)
+	var infra []string
+	for _, pk := range pubkeys {
+		if r := strings.ToLower(nodes[pk].Role); r == "repeater" || r == "room" {
+			infra = append(infra, pk)
+		}
+	}
 	res := evaluateNotifications(notifyInput{Now: now, Health: n.src.health(), LowMv: n.src.lowBatteryMv(),
 		Accounts: accounts, Prefs: prefs, Watches: watches, States: states, Nodes: nodes,
-		Heard: heard, Relayed: n.src.lastRelayed(infra), Observers: observers, IngestStale: stale, IngestResumedAt: n.ingestResumedAt, External: external})
+		Heard: heard, SharedSeen: n.src.sharedPrefixSeen(infra), OfflineAfter: n.offlineWindows(pubkeys, now), NewestPacket: n.src.newestPacket(), Observers: observers, IngestStale: stale, IngestResumedAt: n.ingestResumedAt, External: external})
 	if err := st.DeleteNotifyStates(res.Drop); err != nil {
 		log.Printf("[notify] delete dropped states, nothing mailed this time: %v", err)
 		return
@@ -369,6 +371,11 @@ func notifyChangeText(c notifyChange, label string) string {
 		what = "back online"
 		if bad {
 			what = "offline"
+			if !c.SharedSeen.IsZero() {
+				// #2260: the UI shows such a node as "uncertain".
+				what += " (nothing that can only be this node; its hop prefix, shared with other repeaters, was last in a path " +
+					c.SharedSeen.UTC().Format("2006-01-02 15:04 UTC") + ", possibly another node)"
+			}
 		}
 	case users.NotifyNodeBattery:
 		what = "battery recovered"

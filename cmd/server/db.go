@@ -39,6 +39,8 @@ type DB struct {
 	backend                 dbconfig.Backend
 	advertEvidenceTable     atomic.Bool
 	txRewriteFeedTable      atomic.Bool // tx_rewrite_feed present (#2107); re-probed while absent
+	clientNodeNamesTable    atomic.Bool // client_node_names present; re-probed while absent (clientNodeNamesPresent)
+	inactiveNodesTable      atomic.Bool // inactive_nodes present; re-probed while absent (clientNameHeard)
 	advertEvidenceReadHook  func()      // test-only: immediately before a bulk mask query
 	conn                    *sql.DB
 	path                    string // PostgreSQL URL; never log or use as a filesystem path

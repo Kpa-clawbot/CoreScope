@@ -171,3 +171,57 @@ func TestLoadCanonicalResolvedPathsUsesLRU(t *testing.T) {
 		t.Fatalf("batched %v, bestResolvedPath %v, want the LRU entry", derefAll(got[7]), derefAll(want))
 	}
 }
+
+// A transmission whose longest observation has no stored resolved_path went
+// through bestResolvedPath on its own: one query for that same observation,
+// which the batch had just read, and one for all of the transmission's
+// observations. 24% of the observations with a path had no resolved_path on a
+// production database, so most /paths requests paid this per transmission.
+// The fallback is batched too.
+func TestLoadCanonicalResolvedPathsBatchesFallback(t *testing.T) {
+	conn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.SetMaxOpenConns(1)
+	defer conn.Close()
+	if _, err := conn.Exec(`CREATE TABLE observations (
+		id INTEGER PRIMARY KEY, transmission_id INTEGER, path_json TEXT, resolved_path TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	const n = 2*resolvedPathBatchSize + 1
+	snapshots := make(map[int][]rpObs, n)
+	for tx := 1; tx <= n; tx++ {
+		longest, shorter := 2*tx-1, 2*tx
+		conn.Exec(`INSERT INTO observations (id, transmission_id, path_json, resolved_path) VALUES (?,?,?,NULL)`,
+			longest, tx, `["a","b"]`)
+		conn.Exec(`INSERT INTO observations (id, transmission_id, path_json, resolved_path) VALUES (?,?,?,?)`,
+			shorter, tx, `["a"]`, `["aa11aa11"]`)
+		snapshots[tx] = []rpObs{{longest, `["a","b"]`}, {shorter, `["a"]`}}
+	}
+	s := &PacketStore{db: &DB{conn: conn}}
+	batched, single := 0, 0
+	s.cacheLoadHook = func(kind string) {
+		switch kind {
+		case "resolvedPathBatch":
+			batched++
+		case "resolvedPath":
+			single++
+		}
+	}
+	got := s.loadCanonicalResolvedPaths(snapshots)
+	if single != 0 {
+		t.Errorf("want no per-transmission queries for %d fallback transmissions, got %d", n, single)
+	}
+	if batched != 6 {
+		t.Errorf("want 3 batched queries for the longest observations and 3 for the fallback, got %d", batched)
+	}
+	if len(got) != n {
+		t.Fatalf("want %d canonical paths, got %d", n, len(got))
+	}
+	for tx, rp := range got {
+		if len(rp) != 1 || rp[0] == nil || *rp[0] != "aa11aa11" {
+			t.Fatalf("tx %d: got %v, want the shorter observation's path", tx, derefAll(rp))
+		}
+	}
+}

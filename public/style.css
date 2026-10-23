@@ -1449,6 +1449,10 @@ body.scroll-locked { overflow: hidden; }
   font-size: 10px; font-weight: 700; font-family: var(--mono);
   background: var(--nav-bg); color: var(--nav-text); letter-spacing: .5px;
 }
+/* #1268 M3 — LoRa settings differ from nearby same-band nodes */
+.badge-lora-diff { display: inline-block; margin-left: 4px; padding: 0 5px; border: 1px solid currentColor; border-radius: 4px; font-size: 10px; font-weight: 600; color: var(--status-yellow-text); cursor: help; }
+.lora-deviation { margin-top: 2px; font-size: 11px; color: var(--status-yellow-text); }
+
 /* Issue #1290: listener vs repeater badge on observers list + detail.
  * Driven by ObserverResp.can_relay (false = firmware reported repeat:off).
  * Server-side disambiguator excludes listener observers from path-hop
@@ -5856,3 +5860,41 @@ body.embed #app.app-fixed {
 .role-swatch--room      { color: var(--role-room); }
 .role-swatch--sensor    { color: var(--role-sensor); }
 .role-swatch--observer  { color: var(--role-observer); }
+
+/* Estimated positions (map-estimated.js): hollow, dashed, marked with "≈" so
+   they never read as a node's own advert position. */
+.mc-est-marker { background: none; border: none; }
+.mc-est-ring { fill: var(--surface-1); fill-opacity: .85; stroke: var(--mc-role-repeater); stroke-width: 2; stroke-dasharray: 3 3; }
+.mc-est-glyph { fill: var(--mc-role-repeater); font: 700 15px/1 var(--mono, ui-monospace, monospace); }
+.leaflet-interactive.mc-est-area, path.mc-est-area { stroke: var(--mc-role-repeater); stroke-width: 1.5; stroke-dasharray: 6 6; fill: var(--mc-role-repeater); fill-opacity: .07; }
+.mc-est-legend { color: var(--mc-role-repeater); font-weight: 700; }
+.mc-est-popup { display: grid; gap: 4px; max-width: 280px; }
+.mc-est-badge { justify-self: start; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 1px 6px; border-radius: 3px; border: 1px dashed var(--mc-role-repeater); color: var(--text); }
+.mc-est-name { font-weight: 700; font-size: 14px; }
+.mc-est-pk { color: var(--text-muted); font-size: 11px; }
+.mc-est-what, .mc-est-caveat { margin: 2px 0; font-size: 12px; }
+.mc-est-caveat { color: var(--text-muted); }
+.mc-est-facts { display: grid; grid-template-columns: auto 1fr; gap: 1px 8px; margin: 2px 0; font-size: 12px; }
+.mc-est-facts dt { color: var(--text-muted); }
+.mc-est-facts dd { margin: 0; }
+
+/* Self-reported repeaters (reported-nodes.js): no advert, name only. */
+.reported-section { margin-top: 16px; padding: 12px; border: 1px dashed var(--mc-role-repeater); border-radius: 6px; }
+.reported-section h3 { margin: 0 0 4px; font-size: 14px; }
+.reported-count { color: var(--text-muted); font-weight: 400; }
+.reported-intro { margin: 0 0 8px; font-size: 12px; color: var(--text-muted); max-width: 70ch; }
+.reported-pos-est { color: var(--text); }
+.reported-pos-none { color: var(--text-muted); }
+.reported-tag { font-size: 11px; color: var(--text-muted); border: 1px dashed var(--mc-role-repeater); border-radius: 3px; padding: 0 4px; }
+.reported-detail { padding: 16px; margin: 16px auto; max-width: 640px; display: grid; gap: 8px; }
+.reported-badge { justify-self: start; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 1px 6px; border-radius: 3px; border: 1px dashed var(--mc-role-repeater); color: var(--text); }
+.reported-detail .node-detail-name { font-size: 20px; font-weight: 700; }
+.reported-detail .node-detail-key { font-size: 11px; word-break: break-all; color: var(--text-muted); }
+.reported-detail p { margin: 0; }
+.reported-caveat { font-size: 12px; color: var(--text-muted); }
+.reported-facts { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0; }
+.reported-facts dt { color: var(--text-muted); }
+.reported-facts dd { margin: 0; }
+.reported-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.reported-links .btn-primary { text-decoration: none; padding: 4px 10px; font-size: 12px; }
+.reported-table td { white-space: normal; }

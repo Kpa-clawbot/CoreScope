@@ -50,6 +50,9 @@ type TimeBucket struct {
 	Label  *string `json:"label,omitempty"`
 	Count  int     `json:"count"`
 	Bucket *string `json:"bucket,omitempty"`
+	// Certain is the part of Count that can only be the node (#2260), on
+	// the node analytics timeline; absent elsewhere.
+	Certain *int `json:"certain,omitempty"`
 }
 
 // ─── Stats ─────────────────────────────────────────────────────────────────────

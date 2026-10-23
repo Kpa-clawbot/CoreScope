@@ -72,6 +72,7 @@ func (s *Server) recomputeNeighborGraphCache() {
 			atomic.AddUint64(&s.neighborGraphCacheRebuildFailures, 1)
 		}
 	}()
+	s.rebuildNeighborGraph()
 	start := time.Now()
 	resp := s.buildDefaultNeighborGraphResponse()
 	var buf bytes.Buffer

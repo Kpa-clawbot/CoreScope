@@ -416,6 +416,24 @@ console.log('\n=== nodes.js: getStatusTooltip / getStatusInfo (extracted) ===');
       const info = gsi({ role: 'repeater', last_heard: d });
       assert.strictEqual(info.status, 'active');
     });
+    // #2260 review: the newest timestamp is shown, not the first present. An
+    // older _lastHeard (a cached fetch) must not hide a fresher last_heard.
+    test('getStatusInfo: uncertain repeater says so and why (#2260)', () => {
+      const old = new Date(Date.now() - 84 * 3600000).toISOString();
+      const info = gsi({ role: 'repeater', last_seen: old, last_heard: old, last_relayed: new Date(Date.now() - 240000).toISOString() });
+      assert.strictEqual(info.status, 'uncertain');
+      assert.ok(info.statusLabel.includes('Uncertain'), info.statusLabel);
+      assert.ok(info.explanation.includes('shared hop prefix'), info.explanation);
+      assert.ok(info.statusTooltip.includes('another one'), info.statusTooltip);
+    });
+    test('getStatusInfo shows the newest of _lastHeard and last_heard', () => {
+      const fresh = new Date(Date.now() - 60000).toISOString();
+      const old = new Date(Date.now() - 96 * 3600000).toISOString();
+      const info = gsi({ role: 'repeater', _lastHeard: old, last_heard: fresh, last_seen: old });
+      assert.strictEqual(info.status, 'active');
+      assert.strictEqual(info.lastHeardMs, new Date(fresh).getTime());
+      assert.ok(!info.explanation.includes('Not heard'), info.explanation);
+    });
   }
 
   if (ex.renderNodeBadges) {
@@ -919,31 +937,51 @@ console.log('\n=== roles.js: getNodeStatus (#1598) ===');
     assert.strictEqual(getNodeStatus('repeater', undefined), 'stale'));
 
   // Node-object signature
-  test('node: backbone-repeater fixture — last_seen 25h, last_relayed 5min → active', () =>
+  // #1598: a relaying repeater with an old advert stays active. The server
+  // folds the relays that can only be this node into last_heard (#2260).
+  test('node: backbone-repeater fixture — last_seen 25h, certain relay 5min → active', () =>
     assert.strictEqual(getNodeStatus({
-      role: 'repeater', last_seen: iso(25 * H), last_relayed: iso(5 * 60000)
+      role: 'repeater', last_seen: iso(25 * H), last_heard: iso(5 * 60000)
     }), 'active'));
-  test('node: repeater advert-silent 151h but relayed 2min ago → active', () =>
+  test('node: repeater advert-silent 151h but certainly relayed 2min ago → active', () =>
     assert.strictEqual(getNodeStatus({
-      role: 'repeater', last_seen: iso(151 * H), last_relayed: iso(2 * 60000)
+      role: 'repeater', last_seen: iso(151 * H), last_heard: iso(2 * 60000)
     }), 'active'));
-  test('node: repeater with BOTH last_seen and last_relayed past 72h → stale', () =>
+  test('node: repeater with BOTH last_seen and last_heard past 72h → stale', () =>
     assert.strictEqual(getNodeStatus({
-      role: 'repeater', last_seen: iso(100 * H), last_relayed: iso(80 * H)
+      role: 'repeater', last_seen: iso(100 * H), last_heard: iso(80 * H)
     }), 'stale'));
-  test('node: room honors last_relayed like repeater', () =>
+  // #2260: last_relayed also counts 1-byte prefix matches of other repeaters.
+  // A repeater silent for days kept showing "Active, last relayed 4m ago".
+  // Without certain evidence but with its shared prefix still in paths it is
+  // 'uncertain': neither proof of life nor of an outage.
+  test('node: last_relayed alone makes a silent repeater uncertain, not active (#2260)', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'repeater', last_seen: iso(84 * H), last_heard: iso(84 * H), last_relayed: iso(4 * 60000)
+    }), 'uncertain'));
+  test('node: last_relayed alone makes a silent room uncertain (#2260)', () =>
     assert.strictEqual(getNodeStatus({
       role: 'room', last_seen: iso(90 * H), last_relayed: iso(10 * 60000)
-    }), 'active'));
-  test('node: companion does NOT get relay-based freshness', () =>
+    }), 'uncertain'));
+  test('node: an old last_relayed leaves a silent repeater stale (#2260)', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'repeater', last_seen: iso(90 * H), last_relayed: iso(80 * H)
+    }), 'stale'));
+  test('node: a companion is never uncertain, last_relayed means nothing for it', () =>
     assert.strictEqual(getNodeStatus({
       role: 'companion', last_seen: iso(30 * H), last_relayed: iso(5 * 60000)
     }), 'stale'));
-  test('node: repeater with no last_relayed falls back to advert freshness (stale at 80h)', () =>
+  test('node: certain evidence wins over uncertain', () =>
+    assert.strictEqual(getNodeStatus({
+      role: 'repeater', last_seen: iso(90 * H), last_heard: iso(60000), last_relayed: iso(30000)
+    }), 'active'));
+  test('legacy (role, ms) form never returns uncertain', () =>
+    assert.strictEqual(getNodeStatus('repeater', Date.now() - 80 * H), 'stale'));
+  test('node: repeater with only an advert falls back to advert freshness (stale at 80h)', () =>
     assert.strictEqual(getNodeStatus({
       role: 'repeater', last_seen: iso(80 * H)
     }), 'stale'));
-  test('node: repeater with fresh advert and no last_relayed → active', () =>
+  test('node: repeater with fresh advert → active', () =>
     assert.strictEqual(getNodeStatus({
       role: 'repeater', last_seen: iso(1 * H)
     }), 'active'));
@@ -1201,7 +1239,7 @@ console.log('\n=== live.js: pruneStaleNodes ===');
     assert.ok(markers['rpt2']._staleDimmed === true, 'repeater at 96h should be dimmed');
   });
 
-  test('pruneStaleNodes: relay-aware — advert-silent repeater with fresh last_relayed stays active (#1598)', () => {
+  test('pruneStaleNodes: advert-silent repeater with a fresh certain relay stays active (#1598, #2260)', () => {
     const { ctx } = makeLiveSandbox();
     const prune = ctx.window._livePruneStaleNodes;
     const markers = ctx.window._liveNodeMarkers();
@@ -1212,7 +1250,7 @@ console.log('\n=== live.js: pruneStaleNodes ===');
     data['bb1'] = {
       public_key: 'bb1', role: 'repeater',
       _liveSeen: Date.now() - 96 * 3600000,
-      last_relayed: new Date(Date.now() - 5 * 60000).toISOString()
+      last_heard: new Date(Date.now() - 5 * 60000).toISOString()
     };
 
     prune();
@@ -7127,6 +7165,90 @@ console.log('\n=== roles.js: recent advert groups (#2073) ===');
   });
 }
 
+// ===== node-reach.js: retry a busy (429) reach report =====
+// The reach endpoint answers 429 + Retry-After while the server computes other
+// uncached reports. The reach page retries that; api() must not, because
+// login, signup and other rate-limited endpoints answer 429 too.
+console.log('\n=== node-reach.js: reachRetryDelayMs + api() 429 errors ===');
+{
+  const ctx = makeSandbox();
+  ctx.registerPage = () => {};
+  loadInCtx(ctx, 'public/app.js');
+  loadInCtx(ctx, 'public/node-reach.js');
+  const delay = ctx.__meshcoreReachInternals.reachRetryDelayMs;
+  const busy = (ra) => Object.assign(new Error('API 429: /x'), { status: 429, retryAfter: ra });
+
+  test('429 waits the Retry-After seconds', () => {
+    assert.strictEqual(delay(busy('2'), 0), 2000);
+    assert.strictEqual(delay(busy('5'), 0), 5000);
+  });
+
+  test('missing, zero, negative or HTTP-date Retry-After falls back to 2 s', () => {
+    assert.strictEqual(delay(busy(null), 0), 2000);
+    assert.strictEqual(delay(busy('0'), 0), 2000);
+    assert.strictEqual(delay(busy('-3'), 0), 2000);
+    assert.strictEqual(delay(busy('Wed, 21 Oct 2026 07:28:00 GMT'), 0), 2000);
+  });
+
+  test('a huge Retry-After is capped at 30 s', () => {
+    assert.strictEqual(delay(busy('120'), 0), 30000);
+    assert.strictEqual(delay(busy('30'), 0), 30000);
+  });
+
+  test('gives up after 5 retries', () => {
+    assert.strictEqual(delay(busy('2'), 4), 2000);
+    assert.strictEqual(delay(busy('2'), 5), -1);
+  });
+
+  test('anything other than 429 is not retried', () => {
+    for (const st of [400, 404, 500, 503]) {
+      assert.strictEqual(delay(Object.assign(new Error('API ' + st), { status: st, retryAfter: '2' }), 0), -1, 'status ' + st);
+    }
+    assert.strictEqual(delay(new Error('network down'), 0), -1);
+    assert.strictEqual(delay(undefined, 0), -1);
+  });
+
+  const respond = (status, headers) => ({
+    status, ok: status >= 200 && status < 300,
+    headers: { get: (k) => (headers || {})[k] !== undefined ? headers[k] : null },
+    json: async () => ({}),
+  });
+
+  test('api() puts status and Retry-After on the error and does not retry 429', async () => {
+    let calls = 0;
+    ctx.fetch = async () => { calls++; return respond(429, { 'Retry-After': '2' }); };
+    let err;
+    try { await ctx.api('/nodes/x/reach?days=7'); } catch (e) { err = e; }
+    assert.ok(err, 'api() must reject on 429');
+    assert.strictEqual(err.message, 'API 429: /nodes/x/reach?days=7');
+    assert.strictEqual(err.status, 429);
+    assert.strictEqual(err.retryAfter, '2');
+    assert.strictEqual(calls, 1, 'api() must not retry 429 itself');
+  });
+
+  test('a failed api() call leaves no unhandled rejection behind', async () => {
+    let unhandled = 0;
+    const onUnhandled = () => { unhandled++; };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      ctx.fetch = async () => respond(429, { 'Retry-After': '2' });
+      try { await ctx.api('/nodes/y/reach?days=7'); } catch (e) { /* the caller's copy */ }
+      await new Promise((r) => setTimeout(r, 20)); // let the cleanup chain settle
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandled);
+    }
+    assert.strictEqual(unhandled, 0, 'the _inflight cleanup chain must not reject unhandled');
+  });
+
+  test('api() errors without Retry-After carry null', async () => {
+    ctx.fetch = async () => respond(500);
+    let err;
+    try { await ctx.api('/boom'); } catch (e) { err = e; }
+    assert.strictEqual(err.status, 500);
+    assert.strictEqual(err.retryAfter, null);
+  });
+}
+
 // ===== SUMMARY =====
 Promise.allSettled(pendingTests).then(() => {
   console.log(`\n${'═'.repeat(40)}`);
@@ -7293,33 +7415,29 @@ console.log('\n=== roles.js: getEffectiveHeardMs (#1845) ===');
     assert.strictEqual(r, new Date(iso(NOW - 1000)).getTime());
   });
 
-  test('infra: a recent relay beats a stale advert', () => {
-    const r = eff({ role: 'repeater', last_seen: iso(NOW - 9e7), last_relayed: iso(NOW - 1000) });
+  test('the newest timestamp wins, not the first present', () => {
+    // An old _liveSeen must not hide a fresh certain relay in last_heard.
+    const r = eff({ role: 'repeater', _liveSeen: NOW - 9e7, last_heard: iso(NOW - 1000), last_seen: iso(NOW - 9e8) });
     assert.strictEqual(r, new Date(iso(NOW - 1000)).getTime());
   });
 
-  test('infra: a stale relay does NOT drag a fresh advert backwards', () => {
+  test('a fresh certain relay (last_heard) beats a stale advert', () => {
+    const r = eff({ role: 'repeater', last_seen: iso(NOW - 9e7), last_heard: iso(NOW - 1000) });
+    assert.strictEqual(r, new Date(iso(NOW - 1000)).getTime());
+  });
+
+  test('an older last_heard does NOT drag a fresh advert backwards', () => {
     const fresh = iso(NOW - 1000);
-    const r = eff({ role: 'repeater', last_seen: fresh, last_relayed: iso(NOW - 9e7) });
+    const r = eff({ role: 'repeater', last_seen: fresh, last_heard: iso(NOW - 9e7) });
     assert.strictEqual(r, new Date(fresh).getTime());
   });
 
-  test('infra: relay alone is enough when nothing else is known', () => {
-    const r = eff({ role: 'repeater', last_relayed: iso(NOW - 1000) });
-    assert.strictEqual(r, new Date(iso(NOW - 1000)).getTime());
-  });
-
-  test('room counts as infra, companion does not', () => {
+  test('last_relayed is ignored for every role (#2260)', () => {
     const relayed = iso(NOW - 1000), old = iso(NOW - 9e7);
-    assert.strictEqual(eff({ role: 'room', last_seen: old, last_relayed: relayed }), new Date(relayed).getTime());
-    // A companion is not a relay, so last_relayed on one is meaningless and
-    // must not silently rescue it.
-    assert.strictEqual(eff({ role: 'companion', last_seen: old, last_relayed: relayed }), new Date(old).getTime());
-  });
-
-  test('role matching is case-insensitive', () => {
-    const relayed = iso(NOW - 1000);
-    assert.strictEqual(eff({ role: 'Repeater', last_seen: iso(NOW - 9e7), last_relayed: relayed }), new Date(relayed).getTime());
+    for (const role of ['repeater', 'Repeater', 'room', 'companion']) {
+      assert.strictEqual(eff({ role, last_seen: old, last_relayed: relayed }), new Date(old).getTime(), role);
+    }
+    assert.ok(Number.isNaN(eff({ role: 'repeater', last_relayed: relayed })), 'relay alone is no evidence');
   });
 
   // Regression: getNodeStatus was rewritten to call this helper. Its contract
@@ -7329,8 +7447,8 @@ console.log('\n=== roles.js: getEffectiveHeardMs (#1845) ===');
     assert.strictEqual(status('repeater', NOW - 4 * 86400000), 'stale');
   });
 
-  test('getNodeStatus is still relay-aware for infra', () => {
-    assert.strictEqual(status({ role: 'repeater', last_seen: iso(NOW - 9e7), last_relayed: iso(NOW - 1000) }), 'active');
+  test('getNodeStatus keeps a certainly-relaying repeater active', () => {
+    assert.strictEqual(status({ role: 'repeater', last_seen: iso(NOW - 4 * 86400000), last_heard: iso(NOW - 1000) }), 'active');
   });
 
   test('getNodeStatus still marks a truly silent repeater stale', () => {

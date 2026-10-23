@@ -315,7 +315,7 @@ func (s *PacketStore) loadPacketChunk(from, to time.Time, cursor packetLoadCurso
 		for pk := range packet.resolved {
 			pks = append(pks, pk)
 		}
-		s.indexResolvedPathHops(tx, pks, hopsSeen)
+		s.indexResolvedPathHops(tx, pks, hopsSeen, nil)
 		for pk := range packet.nodes {
 			s.addToByNode(tx, pk)
 		}

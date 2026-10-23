@@ -8,6 +8,10 @@ import (
 
 const coverageNodePK = "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00"
 
+// coverageAdvert is the node's own advert: certain evidence (#2260), so it
+// counts toward availability.
+const coverageAdvert = `{"pubKey":"` + coverageNodePK + `"}`
+
 // setupCoverageStore holds one packet per hour for the node over the last
 // memHours hours, and records that window as loaded the way a bounded load
 // does (oldestLoaded): the in-memory window starts memHours ago (#748 M3a).
@@ -27,6 +31,7 @@ func setupCoverageStore(t *testing.T, memHours int) *PacketStore {
 			ID:          memHours - h,
 			Hash:        fmt.Sprintf("cov%03d", h),
 			PayloadType: &pt,
+			DecodedJSON: coverageAdvert,
 			FirstSeen:   now.Add(-time.Duration(h)*time.Hour - time.Minute).Format(time.RFC3339),
 		}
 		ps.packets = append(ps.packets, tx)
@@ -50,7 +55,7 @@ func rate(p *float64) float64 {
 
 func addCoverageTx(ps *PacketStore, id int, firstSeen time.Time, front bool) {
 	pt := 4
-	tx := &StoreTx{ID: id, Hash: fmt.Sprintf("extra%d", id), PayloadType: &pt, FirstSeen: firstSeen.Format(time.RFC3339)}
+	tx := &StoreTx{ID: id, Hash: fmt.Sprintf("extra%d", id), PayloadType: &pt, DecodedJSON: coverageAdvert, FirstSeen: firstSeen.Format(time.RFC3339)}
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	if front {
