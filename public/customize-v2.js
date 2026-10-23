@@ -1565,6 +1565,7 @@
     return '<div class="cust-panel' + (_activeTab === 'display' ? ' active' : '') + '" data-panel="display">' +
       '<p class="cust-section-title">Display Settings</p>' +
       '<p style="font-size:12px;color:var(--text-muted);margin-bottom:12px">UI preferences that affect how data is shown across pages.</p>' +
+      _renderLanguageSelector() +
       '<p class="cust-section-title" style="font-size:14px;margin-bottom:8px">Timestamps</p>' +
       '<div class="cust-field"><label>Timestamp Display' + _overrideDot('timestamps', 'defaultMode') + '</label>' +
         '<select data-cv2-select="timestamps.defaultMode" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text)">' +
@@ -1595,6 +1596,28 @@
       _renderHide1ByteHopsToggle() +
       _renderTileProviderSelector() +
     '</div>';
+  }
+
+  // ── UI language (i18n.js) ──
+  // A per-browser choice in localStorage["meshcore-lang"], not a server
+  // override: "auto" (browser language) or a code from I18n.LANGUAGES.
+  // Changing it reloads the page (I18n.setPreference). The label keeps the
+  // English word next to the translation so a visitor stuck in a language
+  // they cannot read still finds the picker.
+  function _renderLanguageSelector() {
+    var I18n = window.I18n;
+    if (!I18n || !I18n.LANGUAGES) return '';
+    var pref = I18n.getPreference();
+    var label = tr('Language');
+    if (label !== 'Language') label += ' (Language)';
+    var opts = '<option value="auto"' + (pref === 'auto' ? ' selected' : '') + '>' + escAttr(tr('Automatic (browser language)')) + '</option>' +
+      I18n.LANGUAGES.map(function (l) {
+        return '<option value="' + escAttr(l.code) + '"' + (pref === l.code ? ' selected' : '') + '>' + escAttr(l.name) + '</option>';
+      }).join('');
+    return '<p class="cust-section-title" style="font-size:14px;margin-bottom:8px">' + escAttr(label) + '</p>' +
+      '<div class="cust-field"><label for="cv2-lang">' + escAttr(tr('Interface language')) + '</label>' +
+        '<select id="cv2-lang" data-cv2-lang style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text)">' + opts + '</select>' +
+        '<div class="cust-hint">' + escAttr(tr('Changing the language reloads the page.')) + '</div></div>';
   }
 
   // ── #1633 Hide 1-byte path hops toggle ──
@@ -2356,6 +2379,13 @@
         window.dispatchEvent(new CustomEvent('mc-channels-show-encrypted-changed', {
           detail: { value: on }
         }));
+      });
+    });
+
+    // UI language picker — saves the choice and reloads (i18n.js).
+    container.querySelectorAll('[data-cv2-lang]').forEach(function (sel) {
+      sel.addEventListener('change', function () {
+        if (window.I18n) window.I18n.setPreference(sel.value);
       });
     });
 

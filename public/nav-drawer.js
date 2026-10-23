@@ -98,7 +98,7 @@
     var r = accountRoute();
     a.setAttribute('href', escapeHtml(r.hash));
     var lb = a.querySelector('.nav-drawer-label');
-    if (lb) lb.textContent = r.label;
+    if (lb) { lb.textContent = tr(r.label); lb.setAttribute('data-i18n', r.label); }
   });
 
   function phIconHTML(name) {
@@ -162,7 +162,10 @@
     drawerEl.className = 'nav-drawer';
     drawerEl.setAttribute('data-nav-drawer', '');
     drawerEl.setAttribute('role', 'navigation');
-    drawerEl.setAttribute('aria-label', 'Edge-swipe navigation drawer');
+    // buildDom runs on page load, possibly before the dictionary lands:
+    // data-i18n-* lets i18n.js re-apply these labels when it does.
+    drawerEl.setAttribute('aria-label', tr('Edge-swipe navigation drawer'));
+    drawerEl.setAttribute('data-i18n-aria-label', 'Edge-swipe navigation drawer');
     drawerEl.setAttribute('aria-hidden', 'true');
     drawerEl.setAttribute('inert', '');
     drawerEl.tabIndex = -1;
@@ -171,11 +174,13 @@
     header.className = 'nav-drawer-header';
     var title = document.createElement('span');
     title.className = 'nav-drawer-title';
-    title.textContent = 'Navigate';
+    title.textContent = tr('Navigate');
+    title.setAttribute('data-i18n', 'Navigate');
     var closeBtn = document.createElement('button');
     closeBtn.type = 'button';
     closeBtn.className = 'nav-drawer-close';
-    closeBtn.setAttribute('aria-label', 'Close navigation drawer');
+    closeBtn.setAttribute('aria-label', tr('Close navigation drawer'));
+    closeBtn.setAttribute('data-i18n-aria-label', 'Close navigation drawer');
     closeBtn.textContent = '×';
     closeBtn.addEventListener('click', function () { close(); });
     header.appendChild(title);
@@ -198,7 +203,8 @@
 
       var lb = document.createElement('span');
       lb.className = 'nav-drawer-label';
-      lb.textContent = r.label;
+      lb.textContent = tr(r.label);
+      lb.setAttribute('data-i18n', r.label);
 
       a.appendChild(ic);
       a.appendChild(lb);
