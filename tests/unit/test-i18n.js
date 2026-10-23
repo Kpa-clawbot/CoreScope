@@ -265,6 +265,8 @@ test('a saved choice selects the dictionary to load', () => {
 console.log('locales/*.json — dictionary rules');
 const placeholders = (s) => (s.match(/\{\w+\}/g) || []).slice().sort().join(',');
 const tags = (s) => (s.match(/<\/?[a-z][^>]*>/gi) || []).length;
+// Links in markdown defaults ([text](url)) must point where the English does.
+const urls = (s) => (s.match(/https?:\/\/[^\s)]+/g) || []).slice().sort().join(' ');
 const files = fs.readdirSync(LOCALES_DIR).filter(f => f.endsWith('.json'));
 // Copied out of the sandbox realm so deepStrictEqual compares plain arrays.
 const codes = Array.from(load().I18n.LANGUAGES, l => String(l.code));
@@ -274,7 +276,7 @@ test('every listed language except English has a dictionary, and vice versa', ()
 });
 files.forEach((file) => {
   const dict = JSON.parse(fs.readFileSync(path.join(LOCALES_DIR, file), 'utf8'));
-  test(file + ': every entry keeps the key\'s placeholders and adds no markup', () => {
+  test(file + ': every entry keeps the key\'s placeholders and links, and adds no markup', () => {
     const problems = [];
     Object.entries(dict).forEach(([key, value]) => {
       const forms = typeof value === 'string' ? [value] : Object.values(value || {});
@@ -286,6 +288,7 @@ files.forEach((file) => {
         if (!form) return; // empty = untranslated, falls back to English
         if (placeholders(form) !== placeholders(key)) problems.push(key + ': placeholders differ');
         if (tags(form) > tags(key)) problems.push(key + ': adds markup');
+        if (urls(form) !== urls(key)) problems.push(key + ': links differ');
       });
     });
     assert.deepStrictEqual(problems, []);

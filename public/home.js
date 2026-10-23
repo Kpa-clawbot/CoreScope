@@ -11,6 +11,10 @@
   // token (new defaults) or a legacy emoji/text string (operator config).
   // Return safe HTML — sprite for ph tokens, escaped text for everything
   // else. EMOJI-OK-LEGACY-RENDER below preserves operator-stored emoji.
+  //
+  // Operator text (hero, steps, FAQ, footer labels) goes through tr(): the
+  // built-in and config.example.json defaults are in the dictionaries, text
+  // an operator wrote has no entry and renders exactly as written.
   function _renderHomeGlyph(value) {
     if (value == null) return '';
     const s = String(value);
@@ -22,8 +26,11 @@
     if (label == null) return '';
     const s = String(label);
     const m = s.match(/^(ph:[a-z][a-z0-9-]+)\s+(.*)$/);
-    if (m) return _renderHomeGlyph(m[1]) + ' ' + _escHtml(m[2]);
-    return _escHtml(s); // EMOJI-OK-LEGACY-RENDER
+    if (m) return _renderHomeGlyph(m[1]) + ' ' + _escHtml(tr(m[2]));
+    // Legacy "<emoji> Packets": translate the words, keep the leading emoji.
+    const e = s.match(/^([^\p{L}\p{N}\s]+)\s+(.*)$/u);
+    if (e) return _escHtml(e[1]) + ' ' + _escHtml(tr(e[2])); // EMOJI-OK-LEGACY-RENDER
+    return _escHtml(tr(s)); // EMOJI-OK-LEGACY-RENDER
   }
   function _escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
@@ -106,8 +113,8 @@
 <circle cx="540" cy="130" r="13" fill="var(--logo-accent)"/>
 <circle cx="660" cy="130" r="13" fill="var(--logo-accent-hi)"/>
 <text x="426.20" y="161.68" font-family="Aldrich, monospace" font-size="88" text-anchor="end" dominant-baseline="alphabetic" font-weight="700" letter-spacing="4.4" fill="var(--logo-accent)">CORE</text><text x="773.80" y="161.68" font-family="Aldrich, monospace" font-size="88" text-anchor="start" dominant-baseline="alphabetic" font-weight="700" letter-spacing="4.4" fill="var(--logo-accent-hi)">SCOPE</text><text x="604.00" y="279.20" font-family="Aldrich, monospace" font-size="20" text-anchor="middle" dominant-baseline="alphabetic" font-weight="500" letter-spacing="8" fill="var(--logo-muted)">MESH ANALYZER</text></svg>
-        <h1>${hasNodes ? tr('My Mesh') : escapeHtml(homeCfg?.heroTitle || siteName)}</h1>
-        <p>${hasNodes ? tr('Your nodes at a glance. Add more by searching below.') : escapeHtml(homeCfg?.heroSubtitle || tr('Find your nodes to start monitoring them.'))}</p>
+        <h1>${hasNodes ? tr('My Mesh') : escapeHtml(tr(homeCfg?.heroTitle || siteName))}</h1>
+        <p>${hasNodes ? tr('Your nodes at a glance. Add more by searching below.') : escapeHtml(tr(homeCfg?.heroSubtitle || 'Find your nodes to start monitoring them.'))}</p>
         <div class="home-search-wrap">
           <input type="text" id="homeSearch" placeholder="${tr('Search by node name or public key…')}" autocomplete="off" aria-label="${tr('Search nodes')}" role="combobox" aria-expanded="false" aria-owns="homeSuggest" aria-autocomplete="list" aria-activedescendant="">
           <div class="home-suggest" id="homeSuggest" role="listbox"></div>
@@ -569,12 +576,12 @@
     var html = '';
     // Render steps (getting started guide)
     if (homeCfg?.steps?.length) {
-      html += homeCfg.steps.map(s => `<div class="checklist-item"><div class="checklist-q" role="button" tabindex="0" aria-expanded="false">${_renderHomeGlyph(s.emoji || '')} ${escapeHtml(s.title)}</div><div class="checklist-a">${window.miniMarkdown ? miniMarkdown(s.description) : escapeHtml(s.description)}</div></div>`).join('');
+      html += homeCfg.steps.map(s => `<div class="checklist-item"><div class="checklist-q" role="button" tabindex="0" aria-expanded="false">${_renderHomeGlyph(s.emoji || '')} ${escapeHtml(tr(s.title))}</div><div class="checklist-a">${window.miniMarkdown ? miniMarkdown(tr(s.description)) : escapeHtml(tr(s.description))}</div></div>`).join('');
     }
     // Render FAQ/checklist (additional Q&A)
     if (homeCfg?.checklist?.length) {
       if (html) html += '<h3 style="margin:24px 0 12px;font-size:16px"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg> ' + tr('FAQ') + '</h3>';
-      html += homeCfg.checklist.map(i => `<div class="checklist-item"><div class="checklist-q" role="button" tabindex="0" aria-expanded="false">${escapeHtml(i.question)}</div><div class="checklist-a">${window.miniMarkdown ? miniMarkdown(i.answer) : escapeHtml(i.answer)}</div></div>`).join('');
+      html += homeCfg.checklist.map(i => `<div class="checklist-item"><div class="checklist-q" role="button" tabindex="0" aria-expanded="false">${escapeHtml(tr(i.question))}</div><div class="checklist-a">${window.miniMarkdown ? miniMarkdown(tr(i.answer)) : escapeHtml(tr(i.answer))}</div></div>`).join('');
     }
     // Fallback: Bay Area defaults when no config at all.
     // Markup stays in code and enters the sentences as {placeholders}, so
