@@ -1,5 +1,8 @@
 /* === CoreScope — map.js === */
 'use strict';
+// i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
+var trn = globalThis.trn || function (n, one, other, p) { return tr(n === 1 ? one : other, Object.assign({ count: n }, p)); };
 
 (function () {
   let map = null;
@@ -98,6 +101,8 @@
     { key: 'none', label: 'No data',
       title: 'Never answered a declared-regions request and nothing scoped has been observed through it. That is missing information, not a finding: a repeater with no region config and one nobody sends scoped traffic past look the same from here.' },
   ];
+  // Labels and titles are English; translate them where they are shown
+  // (tr() at use): this list is built at load, before the dictionary arrives.
   var SCOPE_STATE_KEYS = {};
   SCOPE_STATES.forEach(function (s) { SCOPE_STATE_KEYS[s.key] = true; });
 
@@ -118,7 +123,7 @@
   // which on the achromat preset is six greys within about 1.3:1 of each other.
   function scopeStateLabel(state) {
     for (var i = 0; i < SCOPE_STATES.length; i++) {
-      if (SCOPE_STATES[i].key === state) return SCOPE_STATES[i].label;
+      if (SCOPE_STATES[i].key === state) return tr(SCOPE_STATES[i].label);
     }
     return '';
   }
@@ -152,10 +157,10 @@
     var btn = function (key, label, title, swatch) {
       var dot = swatch ? '<span class="legend-swatch scope-swatch" style="background:var(--mc-scope-' + key + ')" aria-hidden="true"></span> ' : '';
       return '<button class="btn' + (cur === key ? ' active' : '') + '" data-scope="' + key + '"' +
-        (title ? ' title="' + title.replace(/"/g, '&quot;') + '"' : '') + '>' + dot + label + '</button>';
+        (title ? ' title="' + tr(title).replace(/"/g, '&quot;') + '"' : '') + '>' + dot + tr(label) + '</button>';
     };
     return '<fieldset class="mc-section">' +
-      '<legend class="mc-label">Scope Config</legend>' +
+      '<legend class="mc-label">' + tr('Scope Config') + '</legend>' +
       '<div class="filter-group" id="mcScopeFilter">' +
       btn('all', 'All', 'Every node, whatever its scope state') +
       SCOPE_STATES.map(function (s) { return btn(s.key, s.label, s.title, true); }).join('') +
@@ -296,7 +301,7 @@
     var cur = normRegion(current);
     var list = (counts || []).slice();
     if (cur && !list.some(function (c) { return c.region === cur; })) list.push({ region: cur, total: 0 });
-    return '<option value=""' + (cur ? '' : ' selected') + '>All regions</option>' +
+    return '<option value=""' + (cur ? '' : ' selected') + '>' + tr('All regions') + '</option>' +
       list.map(function (c) {
         return '<option value="' + safeEsc(c.region) + '"' + (c.region === cur ? ' selected' : '') + '>#' +
           safeEsc(c.region) + ' (' + c.total + ')</option>';
@@ -310,11 +315,11 @@
     for (var i = 0; i < (counts || []).length; i++) { if (counts[i].region === cur) { c = counts[i]; break; } }
     var name = '#' + safeEsc(cur);
     var found = c
-      ? c.total + ' node' + (c.total === 1 ? ' with a map position has' : 's with a map position have') + ' evidence for ' + name + ': ' +
-        c.declared + ' declare it, ' + c.observed + ' seen carrying its traffic.'
-      : 'No loaded node with a map position has evidence for ' + name + '.';
-    return found + ' Absence here is not proof: most repeaters were never asked for their region list, ' +
-      'and a repeater only shows traffic for a region once some passes its way.';
+      ? trn(c.total, '{count} node with a map position has evidence for {region}: {declared} declare it, {observed} seen carrying its traffic.',
+        '{count} nodes with a map position have evidence for {region}: {declared} declare it, {observed} seen carrying its traffic.',
+        { region: name, declared: c.declared, observed: c.observed })
+      : tr('No loaded node with a map position has evidence for {region}.', { region: name });
+    return found + ' ' + tr('Absence here is not proof: most repeaters were never asked for their region list, and a repeater only shows traffic for a region once some passes its way.');
   }
 
   // regionsPopupRowsHtml is the popup's answer to "why is this node on the
@@ -322,7 +327,7 @@
   // because they are different kinds of evidence.
   function regionsPopupRowsHtml(n) {
     var dt = function (label, title) {
-      return '<dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;" title="' + safeEsc(title) + '">' + label + '</dt>';
+      return '<dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;" title="' + safeEsc(tr(title)) + '">' + tr(label) + '</dt>';
     };
     var names = function (list) {
       return list.map(function (r) { return '#' + safeEsc(normRegion(r)); }).join(', ');
@@ -332,11 +337,11 @@
       // Same badge and wording as the Scope Audit's truncated flag
       // (scope-audit.js), so a partial list is not shown as the whole answer.
       var truncated = n.declared_regions_truncated === true
-        ? ' <span class="ns-truncated" title="Declared list was truncated by the repeater, so a region missing here is not necessarily a real absence.">truncated</span>'
+        ? ' <span class="ns-truncated" title="' + tr('Declared list was truncated by the repeater, so a region missing here is not necessarily a real absence.') + '">' + tr('truncated') + '</span>'
         : '';
       out += dt('Declared', 'Named regions from this repeater’s own declared-regions answer, the same list the Scope Audit shows.') +
         '<dd style="margin-left:88px;padding:2px 0;font-size:12px;">' +
-        (n.declared_regions.length ? names(n.declared_regions) : '<span style="color:var(--text-muted);">no named region</span>') + truncated + '</dd>';
+        (n.declared_regions.length ? names(n.declared_regions) : '<span style="color:var(--text-muted);">' + tr('no named region') + '</span>') + truncated + '</dd>';
     }
     if (Array.isArray(n.transported_scopes) && n.transported_scopes.length) {
       out += dt('Observed', 'Region scopes of traffic whose path names this repeater by its full pubkey, over the server’s in-memory packet window.') +
@@ -441,7 +446,7 @@
     var glyph = status ? (MB_GLYPHS[status] || MB_GLYPHS.unknown) : '';
     var shortHash = hashInfo.prefix;
     var statusClass = status ? (' ' + (MB_STATUS_CLASS[status] || MB_STATUS_CLASS.unknown)) : '';
-    var ariaWidth = hashInfo.known ? '' : ', hash size unknown';
+    var ariaWidth = hashInfo.known ? '' : ', ' + tr('hash size unknown');
     // #2001: the scope-config overlay colours this label's left border, and a
     // colour alone says nothing to a screen reader or to an operator who
     // cannot separate the hues. The state goes into the aria-label and into a
@@ -453,13 +458,13 @@
       }
     }
     var scopeClass = scopeMeta ? (' scope-' + scopeMeta.key) : '';
-    var scopeAria = scopeMeta ? (', scope config ' + scopeMeta.label) : '';
-    var scopeTitle = scopeMeta ? (' title="' + scopeMeta.label + ' — ' + scopeMeta.title.replace(/"/g, '&quot;') + '"') : '';
-    var ariaStatus = status ? ('multi-byte ' + status + ', hash ' + shortHash + ariaWidth + scopeAria)
-                            : ('repeater hash ' + shortHash + ariaWidth + scopeAria);
+    var scopeAria = scopeMeta ? (', ' + tr('scope config {state}', { state: tr(scopeMeta.label) })) : '';
+    var scopeTitle = scopeMeta ? (' title="' + tr(scopeMeta.label) + ' — ' + tr(scopeMeta.title).replace(/"/g, '&quot;') + '"') : '';
+    var ariaStatus = status ? (tr('multi-byte {status}, hash {hash}', { status: tr(status), hash: shortHash }) + ariaWidth + scopeAria)
+                            : (tr('repeater hash {hash}', { hash: shortHash }) + ariaWidth + scopeAria);
     // Observer indicator stays a star — it is an orthogonal signal, not a status color.
     var obsIndicator = isAlsoObserver
-      ? ' <span aria-hidden="true" style="color:' + (ROLE_COLORS.observer || '#f1c40f') + ';font-size:13px;line-height:1;" title="Also an observer"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg></span>'
+      ? ' <span aria-hidden="true" style="color:' + (ROLE_COLORS.observer || '#f1c40f') + ';font-size:13px;line-height:1;" title="' + tr('Also an observer') + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-star-fill"/></svg></span>'
       : '';
     // Glyph + thin-space (U+2009) + hash. Visible content is aria-hidden so AT
     // reads the aria-label only (avoids "check mark 3 E" literal announcements).
@@ -480,13 +485,13 @@
       <div id="map-wrap" style="position:relative;width:100%;height:100%;display:flex;">
         <div id="leaflet-map" style="flex:1 1 0%;height:100%;"></div>
         <div class="map-side-pane" id="mapSidePane">
-          <div class="pane-toggle" id="mapPaneToggle" title="Path Inspector"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-left"/></svg></div>
+          <div class="pane-toggle" id="mapPaneToggle" title="${tr('Path Inspector')}"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-caret-left"/></svg></div>
           <div class="pane-content">
-            <h3 style="margin:0 0 8px 0;font-size:14px;">Path Inspector</h3>
-            <p style="font-size:11px;color:var(--text-muted);margin:0 0 8px 0;">Hex prefixes (1-3 bytes), comma or space separated.</p>
+            <h3 style="margin:0 0 8px 0;font-size:14px;">${tr('Path Inspector')}</h3>
+            <p style="font-size:11px;color:var(--text-muted);margin:0 0 8px 0;">${tr('Hex prefixes (1-3 bytes), comma or space separated.')}</p>
             <div style="display:flex;gap:4px;margin-bottom:8px;">
               <input type="text" id="mapPiInput" class="input" placeholder="2C,A1,F4" style="flex:1;">
-              <button id="mapPiSubmit" class="btn btn-primary btn-sm">Go</button>
+              <button id="mapPiSubmit" class="btn btn-primary btn-sm">${tr('Go')}</button>
             </div>
             <div id="mapPiError" class="path-inspector-error"></div>
             <div id="mapPiResults"></div>
@@ -495,90 +500,90 @@
         <div class="mc-region-chip" id="mcRegionChip" role="status" hidden>
           <span class="mc-region-chip-text" id="mcRegionChipText"></span>
           <span aria-hidden="true">·</span>
-          <button type="button" class="mc-region-chip-reset" id="mcRegionChipReset" aria-label="Clear the region filter">reset</button>
+          <button type="button" class="mc-region-chip-reset" id="mcRegionChipReset" aria-label="${tr('Clear the region filter')}">${tr('reset')}</button>
         </div>
-        <button class="map-controls-toggle" id="mapControlsToggle" aria-label="Toggle map controls" aria-expanded="true"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-gear"/></svg></button>
-        <div class="map-controls" id="mapControls" role="region" aria-label="Map controls">
-          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> Map Controls</h3>
+        <button class="map-controls-toggle" id="mapControlsToggle" aria-label="${tr('Toggle map controls')}" aria-expanded="true"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-gear"/></svg></button>
+        <div class="map-controls" id="mapControls" role="region" aria-label="${tr('Map controls')}">
+          <h3><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-trifold"/></svg> ${tr('Map Controls')}</h3>
           <fieldset class="mc-section">
-            <legend class="mc-label">Node Types</legend>
+            <legend class="mc-label">${tr('Node Types')}</legend>
             <div id="mcRoleChecks"></div>
           </fieldset>
           <fieldset class="mc-section">
-            <legend class="mc-label">Byte Size</legend>
+            <legend class="mc-label">${tr('Byte Size')}</legend>
             <div class="filter-group" id="mcByteFilter">
-              <button class="btn ${filters.byteSize==='all'?'active':''}" data-byte="all">All</button>
-              <button class="btn ${filters.byteSize==='1'?'active':''}" data-byte="1">1-byte</button>
-              <button class="btn ${filters.byteSize==='2'?'active':''}" data-byte="2">2-byte</button>
-              <button class="btn ${filters.byteSize==='3'?'active':''}" data-byte="3">3-byte</button>
-              <button class="btn ${filters.byteSize==='unknown'?'active':''}" data-byte="unknown" title="No advert-derived hash size in the retention window">Unknown</button>
+              <button class="btn ${filters.byteSize==='all'?'active':''}" data-byte="all">${tr('All')}</button>
+              <button class="btn ${filters.byteSize==='1'?'active':''}" data-byte="1">${tr('1-byte')}</button>
+              <button class="btn ${filters.byteSize==='2'?'active':''}" data-byte="2">${tr('2-byte')}</button>
+              <button class="btn ${filters.byteSize==='3'?'active':''}" data-byte="3">${tr('3-byte')}</button>
+              <button class="btn ${filters.byteSize==='unknown'?'active':''}" data-byte="unknown" title="${tr('No advert-derived hash size in the retention window')}">${tr('Unknown')}</button>
             </div>
           </fieldset>
           <fieldset class="mc-section">
-            <legend class="mc-label">Display</legend>
-            <label for="mcClusters"><input type="checkbox" id="mcClusters"> Cluster markers</label>
-            <label for="mcHeatmap"><input type="checkbox" id="mcHeatmap"> Heat map</label>
-            <label for="mcHashLabels"><input type="checkbox" id="mcHashLabels"> Hash prefix labels</label>
-            <label for="mcMultiByte"><input type="checkbox" id="mcMultiByte"> Multi-byte support</label>
-            <label for="mcScopeOverlay" title="Colour repeater markers by their region-scope configuration"><input type="checkbox" id="mcScopeOverlay"> Scope config colours</label>
-            <label for="mcEstimated" title="Repeaters that never sent an advert, placed from where mobile companions heard them. Dashed circle = uncertainty. Follows the repeater role filter only, not the area, region or last-heard filters."><input type="checkbox" id="mcEstimated"> Estimated positions <span class="mc-est-legend" aria-hidden="true">≈</span></label>
-            <label id="mcGeoFilterLabel" for="mcGeoFilter" style="display:none"><input type="checkbox" id="mcGeoFilter"> Mesh live area</label>
+            <legend class="mc-label">${tr('Display')}</legend>
+            <label for="mcClusters"><input type="checkbox" id="mcClusters"> ${tr('Cluster markers')}</label>
+            <label for="mcHeatmap"><input type="checkbox" id="mcHeatmap"> ${tr('Heat map')}</label>
+            <label for="mcHashLabels"><input type="checkbox" id="mcHashLabels"> ${tr('Hash prefix labels')}</label>
+            <label for="mcMultiByte"><input type="checkbox" id="mcMultiByte"> ${tr('Multi-byte support')}</label>
+            <label for="mcScopeOverlay" title="${tr('Colour repeater markers by their region-scope configuration')}"><input type="checkbox" id="mcScopeOverlay"> ${tr('Scope config colours')}</label>
+            <label for="mcEstimated" title="${tr('Repeaters that never sent an advert, placed from where mobile companions heard them. Dashed circle = uncertainty. Follows the repeater role filter only, not the area, region or last-heard filters.')}"><input type="checkbox" id="mcEstimated"> ${tr('Estimated positions')} <span class="mc-est-legend" aria-hidden="true">≈</span></label>
+            <label id="mcGeoFilterLabel" for="mcGeoFilter" style="display:none"><input type="checkbox" id="mcGeoFilter"> ${tr('Mesh live area')}</label>
           </fieldset>
           <div id="mapAreaFilter"></div>
           <fieldset class="mc-section">
-            <legend class="mc-label">Status</legend>
+            <legend class="mc-label">${tr('Status')}</legend>
             <div class="filter-group" id="mcStatusFilter">
-              <button class="btn ${filters.statusFilter==='all'?'active':''}" data-status="all">All</button>
-              <button class="btn ${filters.statusFilter==='active'?'active':''}" data-status="active">Active</button>
-              <button class="btn ${filters.statusFilter==='uncertain'?'active':''}" data-status="uncertain" title="Only a hop prefix shared with other repeaters still appears in paths (#2260)">Uncertain</button>
-              <button class="btn ${filters.statusFilter==='stale'?'active':''}" data-status="stale">Stale</button>
+              <button class="btn ${filters.statusFilter==='all'?'active':''}" data-status="all">${tr('All')}</button>
+              <button class="btn ${filters.statusFilter==='active'?'active':''}" data-status="active">${tr('Active')}</button>
+              <button class="btn ${filters.statusFilter==='uncertain'?'active':''}" data-status="uncertain" title="${tr('Only a hop prefix shared with other repeaters still appears in paths (#2260)')}">${tr('Uncertain')}</button>
+              <button class="btn ${filters.statusFilter==='stale'?'active':''}" data-status="stale">${tr('Stale')}</button>
             </div>
           </fieldset>
           ${scopeFilterHtml(filters.scopeState)}
           <fieldset class="mc-section">
-            <legend class="mc-label">Region Scope</legend>
-            <label for="mcRegionFilter" class="sr-only">Show nodes with evidence for a region scope</label>
-            <select id="mcRegionFilter" title="Show nodes that declare a region scope or were seen carrying its traffic">${regionFilterOptionsHtml([], filters.regionScope)}</select>
+            <legend class="mc-label">${tr('Region Scope')}</legend>
+            <label for="mcRegionFilter" class="sr-only">${tr('Show nodes with evidence for a region scope')}</label>
+            <select id="mcRegionFilter" title="${tr('Show nodes that declare a region scope or were seen carrying its traffic')}">${regionFilterOptionsHtml([], filters.regionScope)}</select>
             <div id="mcRegionHint" style="font-size:11px;color:var(--text-muted);margin-top:4px;"></div>
           </fieldset>
           <fieldset class="mc-section">
-            <legend class="mc-label">Filters</legend>
-            <label for="mcNeighbors"><input type="checkbox" id="mcNeighbors"> Show direct neighbors</label>
-            <div id="mcNeighborRef" style="display:none;font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:20px;">Ref: <span id="mcNeighborRefName">—</span></div>
-            <div id="mcNeighborHint" style="display:none;font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:20px;">Click a node marker to set the reference node</div>
-            <label id="mcAffinityDebugLabel" for="mcAffinityDebug" style="display:none"><input type="checkbox" id="mcAffinityDebug"> <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> Affinity Debug</label>
+            <legend class="mc-label">${tr('Filters')}</legend>
+            <label for="mcNeighbors"><input type="checkbox" id="mcNeighbors"> ${tr('Show direct neighbors')}</label>
+            <div id="mcNeighborRef" style="display:none;font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:20px;">${tr('Ref:')} <span id="mcNeighborRefName">—</span></div>
+            <div id="mcNeighborHint" style="display:none;font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:20px;">${tr('Click a node marker to set the reference node')}</div>
+            <label id="mcAffinityDebugLabel" for="mcAffinityDebug" style="display:none"><input type="checkbox" id="mcAffinityDebug"> <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-magnifying-glass"/></svg> ${tr('Affinity Debug')}</label>
           </fieldset>
           <fieldset class="mc-section">
-            <legend class="mc-label">Important Links</legend>
-            <label for="mcTopRoutes"><input type="checkbox" id="mcTopRoutes"> <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-graph"/></svg> Show important links</label>
+            <legend class="mc-label">${tr('Important Links')}</legend>
+            <label for="mcTopRoutes"><input type="checkbox" id="mcTopRoutes"> <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-graph"/></svg> ${tr('Show important links')}</label>
             <div id="mcTopRoutesOpts" style="display:none;padding-left:20px;margin-top:4px">
-              <label for="mcTopRoutesRankBy" style="font-size:11px;color:var(--text-muted)">Rank by</label>
+              <label for="mcTopRoutesRankBy" style="font-size:11px;color:var(--text-muted)">${tr('Rank by')}</label>
               <select id="mcTopRoutesRankBy" style="width:100%;margin:2px 0 6px">
-                <option value="usefulness">Usefulness (composite)</option>
-                <option value="bridge">Bridge</option>
-                <option value="redundancy">Redundancy</option>
-                <option value="traffic">Traffic share</option>
-                <option value="affinity">Affinity only</option>
+                <option value="usefulness">${tr('Usefulness (composite)')}</option>
+                <option value="bridge">${tr('Bridge')}</option>
+                <option value="redundancy">${tr('Redundancy')}</option>
+                <option value="traffic">${tr('Traffic share')}</option>
+                <option value="affinity">${tr('Affinity only')}</option>
               </select>
-              <label for="mcTopRoutesN" style="font-size:11px;color:var(--text-muted)">Top <span id="mcTopRoutesNVal">50</span> links</label>
+              <label for="mcTopRoutesN" style="font-size:11px;color:var(--text-muted)">${tr('Top {count} links', { count: '<span id="mcTopRoutesNVal">50</span>' })}</label>
               <input type="range" id="mcTopRoutesN" min="10" max="200" step="10" value="50" style="width:100%">
-              <div id="mcTopRoutesHint" style="display:none;font-size:11px;color:var(--text-muted);margin-top:4px">No links to show — endpoints may lack GPS, or the chosen axis has no scores yet (the #672 scores need a server that ships them).</div>
+              <div id="mcTopRoutesHint" style="display:none;font-size:11px;color:var(--text-muted);margin-top:4px">${tr('No links to show — endpoints may lack GPS, or the chosen axis has no scores yet (the #672 scores need a server that ships them).')}</div>
             </div>
           </fieldset>
           <fieldset class="mc-section">
-            <legend class="mc-label">Last Heard</legend>
-            <label for="mcLastHeard" class="sr-only">Filter by last heard time</label>
-            <select id="mcLastHeard" aria-label="Filter by last heard time">
-              <option value="1h">1 hour</option>
-              <option value="6h">6 hours</option>
-              <option value="24h">24 hours</option>
-              <option value="7d">7 days</option>
-              <option value="30d" selected>30 days</option>
+            <legend class="mc-label">${tr('Last Heard')}</legend>
+            <label for="mcLastHeard" class="sr-only">${tr('Filter by last heard time')}</label>
+            <select id="mcLastHeard" aria-label="${tr('Filter by last heard time')}">
+              <option value="1h">${tr('1 hour')}</option>
+              <option value="6h">${tr('6 hours')}</option>
+              <option value="24h">${tr('24 hours')}</option>
+              <option value="7d">${tr('7 days')}</option>
+              <option value="30d" selected>${tr('30 days')}</option>
             </select>
           </fieldset>
           <fieldset class="mc-section">
-            <legend class="mc-label">Quick Jump</legend>
-            <div class="mc-jumps" id="mcJumps" role="group" aria-label="Jump to region"></div>
+            <legend class="mc-label">${tr('Quick Jump')}</legend>
+            <div class="mc-jumps" id="mcJumps" role="group" aria-label="${tr('Jump to region')}"></div>
           </fieldset>
         </div>
       </div>`;
@@ -1083,7 +1088,9 @@
       var _trustMsg = L.control({ position: 'topright' });
       _trustMsg.onAdd = function () {
         var d = L.DomUtil.create('div', 'leaflet-bar mc-route-trust-message');
-        d.innerHTML = '<strong>Route not displayed</strong><br><span class="mc-route-trust-message-detail">Packet uses ' + _hb + '-byte path hashes, below configured trust threshold (' + _t + '-byte minimum). Raw hops remain visible in packet detail views. Set <code>pathTrust.minHashBytesForMapping</code> in config.json to trust shorter prefixes.</span>';
+        d.innerHTML = '<strong>' + tr('Route not displayed') + '</strong><br><span class="mc-route-trust-message-detail">' +
+          tr('Packet uses {bytes}-byte path hashes, below configured trust threshold ({min}-byte minimum). Raw hops remain visible in packet detail views. Set {setting} in config.json to trust shorter prefixes.',
+            { bytes: _hb, min: _t, setting: '<code>pathTrust.minHashBytesForMapping</code>' }) + '</span>';
         return d;
       };
       _trustMsg.addTo(map);
@@ -1120,7 +1127,7 @@
     const closeBtn = L.control({ position: 'topright' });
     closeBtn.onAdd = function () {
       const div = L.DomUtil.create('div', 'leaflet-bar');
-      div.innerHTML = '<a href="#" title="Close route" style="font-size:18px;font-weight:bold;text-decoration:none;display:block;width:36px;height:36px;line-height:36px;text-align:center;background:var(--input-bg,#1e293b);color:var(--text,#e2e8f0);border-radius:4px" aria-label="Close route"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></a>';
+      div.innerHTML = '<a href="#" title="' + tr('Close route') + '" style="font-size:18px;font-weight:bold;text-decoration:none;display:block;width:36px;height:36px;line-height:36px;text-align:center;background:var(--input-bg,#1e293b);color:var(--text,#e2e8f0);border-radius:4px" aria-label="' + tr('Close route') + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x"/></svg></a>';
       L.DomEvent.on(div, 'click', function (e) {
         L.DomEvent.preventDefault(e);
         routeLayer.clearLayers();
@@ -1706,7 +1713,7 @@
             'background:var(--mc-bg-secondary,#1a1a1a);color:var(--mc-text-primary,#e5e5e5);' +
             'padding:10px 16px;border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,0.4);' +
             'z-index:10000;font:13px/1.4 system-ui,sans-serif;max-width:80vw;text-align:center;';
-          toast.textContent = 'Packet has no observed route data.';
+          toast.textContent = tr('Packet has no observed route data.');
           document.body.appendChild(toast);
           setTimeout(function () { try { toast.remove(); } catch (_) {} }, 4000);
         } catch (e) { console.warn('[deep-link] toast failed:', e); }
@@ -1865,14 +1872,14 @@
         const rc = roleCounts[role] || { active: 0, uncertain: 0, stale: 0 };
         const isInfra = role === 'repeater' || role === 'room';
         const thresh = isInfra ? '72h' : '24h';
-        const activeTip = 'Active \u2014 heard within the last ' + thresh;
-        const staleTip = 'Stale \u2014 not heard for over ' + thresh;
-        const uncertainTip = 'Uncertain \u2014 only a hop prefix shared with other repeaters still appears in paths';
-        countStr = `(<span title="${activeTip}">${rc.active} active</span>, ` +
-          (rc.uncertain ? `<span title="${uncertainTip}">${rc.uncertain} uncertain</span>, ` : '') +
-          `<span title="${staleTip}">${rc.stale} stale</span>)`;
+        const activeTip = tr('Active — heard within the last {window}', { window: thresh });
+        const staleTip = tr('Stale — not heard for over {window}', { window: thresh });
+        const uncertainTip = tr('Uncertain — only a hop prefix shared with other repeaters still appears in paths');
+        countStr = `(<span title="${activeTip}">${tr('{count} active', { count: rc.active })}</span>, ` +
+          (rc.uncertain ? `<span title="${uncertainTip}">${tr('{count} uncertain', { count: rc.uncertain })}</span>, ` : '') +
+          `<span title="${staleTip}">${tr('{count} stale', { count: rc.stale })}</span>)`;
       }
-      lbl.innerHTML = `<input type="checkbox" id="${cbId}" data-role="${role}" ${filters[role] ? 'checked' : ''}> <span style="color:${ROLE_COLORS[role]};font-weight:600;" aria-hidden="true">${shape}</span> ${ROLE_LABELS[role]} <span style="color:var(--text-muted)">${countStr}</span>`;
+      lbl.innerHTML = `<input type="checkbox" id="${cbId}" data-role="${role}" ${filters[role] ? 'checked' : ''}> <span style="color:${ROLE_COLORS[role]};font-weight:600;" aria-hidden="true">${shape}</span> ${tr(ROLE_LABELS[role])} <span style="color:var(--text-muted)">${countStr}</span>`;
       lbl.querySelector('input').addEventListener('change', e => {
         filters[e.target.dataset.role] = e.target.checked;
         renderMarkers();
@@ -1914,7 +1921,7 @@
     const chip = document.getElementById('mcRegionChip');
     const chipText = document.getElementById('mcRegionChipText');
     const cur = normRegion(filters.regionScope);
-    if (chipText) chipText.textContent = cur ? 'Region: #' + cur : '';
+    if (chipText) chipText.textContent = cur ? tr('Region: {region}', { region: '#' + cur }) : '';
     if (chip) chip.hidden = !cur;
   }
 
@@ -1930,14 +1937,14 @@
     // Also extract regions from node locations if we have them
     el.innerHTML = '';
     if (regions.size === 0) {
-      el.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">No regions yet</span>';
+      el.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">' + tr('No regions yet') + '</span>';
       return;
     }
     for (const r of [...regions].sort()) {
       const btn = document.createElement('button');
       btn.className = 'mc-jump-btn';
       btn.textContent = r;
-      btn.setAttribute('aria-label', `Jump to ${REGION_NAMES[r] || r}`);
+      btn.setAttribute('aria-label', tr('Jump to {region}', { region: REGION_NAMES[r] || r }));
       btn.addEventListener('click', () => jumpToRegion(r));
       el.appendChild(btn);
     }
@@ -2144,8 +2151,8 @@
       // never lands. options.title is applied to whatever element the icon
       // produced. The popup carries it too, for the pointerless case.
       var scopeLabel = scopeState ? scopeStateLabel(scopeState) : '';
-      var markerAlt = (node.name || 'Unknown') + ' (' + (node.role || 'node') + (isAlsoObserver ? ' + observer' : '') + ')' +
-        (scopeLabel ? ', scope config ' + scopeLabel : '');
+      var markerAlt = (node.name || tr('Unknown')) + ' (' + tr(node.role || 'node') + (isAlsoObserver ? ' + ' + tr('observer') : '') + ')' +
+        (scopeLabel ? ', ' + tr('scope config {state}', { state: scopeLabel }) : '');
       allMarkers.push({ latLng, node, icon, isLabel: useLabel, popupFn: function() { return buildPopup(node); }, alt: markerAlt, title: scopeLabel ? markerAlt : '' });
     }
 
@@ -2204,26 +2211,26 @@
   }
 
   function buildObserverPopup(obs) {
-    const name = safeEsc(obs.name || obs.id || 'Unknown');
+    const name = safeEsc(obs.name || obs.id || tr('Unknown'));
     const iata = obs.iata ? `<span class="badge-region">${safeEsc(obs.iata)}</span>` : '';
     const lastSeen = obs.last_seen ? timeAgo(obs.last_seen) : '—';
     const packets = (obs.packet_count || 0).toLocaleString();
     const loc = `${obs.lat.toFixed(5)}, ${obs.lon.toFixed(5)}`;
-    const roleBadge = `<span style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;background:${ROLE_COLORS.observer};color:#fff;">OBSERVER</span>`;
+    const roleBadge = `<span style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;background:${ROLE_COLORS.observer};color:#fff;">${tr('OBSERVER')}</span>`;
 
     return `
       <div class="map-popup" style="font-family:var(--font);min-width:180px;">
         <h3 style="font-weight:700;font-size:14px;margin:0 0 4px;">${name}</h3>
         ${roleBadge} ${iata}
         <dl style="margin-top:8px;font-size:12px;">
-          <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Location</dt>
+          <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">${tr('Location')}</dt>
           <dd style="margin-left:88px;padding:2px 0;">${loc}</dd>
-          <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Last Seen</dt>
+          <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">${tr('Last Seen')}</dt>
           <dd style="margin-left:88px;padding:2px 0;">${lastSeen}</dd>
-          <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Packets</dt>
+          <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">${tr('Packets')}</dt>
           <dd style="margin-left:88px;padding:2px 0;">${packets}</dd>
         </dl>
-        <a href="#/observers/${encodeURIComponent(obs.id || obs.observer_id)}" style="display:block;margin-top:8px;font-size:12px;color:var(--link-color);">View Detail →</a>
+        <a href="#/observers/${encodeURIComponent(obs.id || obs.observer_id)}" style="display:block;margin-top:8px;font-size:12px;color:var(--link-color);">${tr('View Detail')} →</a>
       </div>`;
   }
 
@@ -2286,17 +2293,17 @@
     const key = node.public_key ? truncate(node.public_key, 16) : '—';
     const loc = (node.lat && node.lon) ? `${node.lat.toFixed(5)}, ${node.lon.toFixed(5)}` : '—';
     const lastAdvert = node.last_seen ? timeAgo(node.last_seen) : '—';
-    const roleBadge = `<span style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;background:${ROLE_COLORS[node.role] || '#4b5563'};color:#fff;">${(node.role || 'unknown').toUpperCase()}</span>`;
+    const roleBadge = `<span style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;background:${ROLE_COLORS[node.role] || '#4b5563'};color:#fff;">${tr((node.role || 'unknown').toUpperCase())}</span>`;
     // Check if this node is also an observer (combined repeater+observer)
     const matchingObs = node.public_key ? _observerByPubkey.get(node.public_key.toLowerCase()) : null;
-    const obsBadge = matchingObs ? ` <span style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;background:${ROLE_COLORS.observer || '#f1c40f'};color:#fff;">OBSERVER</span>` : '';
+    const obsBadge = matchingObs ? ` <span style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;background:${ROLE_COLORS.observer || '#f1c40f'};color:#fff;">${tr('OBSERVER')}</span>` : '';
     // Unknown width is reported as unknown, not as 1 — same wording the node
     // detail page uses (nodes.js), so the two views can't disagree.
     const hashInfo = hashPrefixInfo(node);
     const hashPrefixValue = hashInfo.known
       ? `${safeEsc(hashInfo.prefix)} <span style="font-weight:400;color:var(--text-muted);">(${hashInfo.bytes}B)</span>`
-      : `<span style="font-weight:400;color:var(--text-muted);">Unknown</span>`;
-    const hashPrefixRow = `<dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Hash Prefix</dt>
+      : `<span style="font-weight:400;color:var(--text-muted);">${tr('Unknown')}</span>`;
+    const hashPrefixRow = `<dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">${tr('Hash Prefix')}</dt>
           <dd style="font-family:var(--mono);font-size:11px;font-weight:700;margin-left:88px;padding:2px 0;">${hashPrefixValue}</dd>`;
     // #2001 — scope config, whenever the server classified this node. Stated
     // here as well as in the marker title because a popup is the one surface
@@ -2307,41 +2314,41 @@
       if (SCOPE_STATES[sgi].key === node.scope_config_state) { scopeMeta = SCOPE_STATES[sgi]; break; }
     }
     if (scopeMeta) {
-      scopeRow = '<dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Scope</dt>' +
-        '<dd style="margin-left:88px;padding:2px 0;font-size:12px;" title="' + safeEsc(scopeMeta.title) + '">' +
+      scopeRow = '<dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">' + tr('Scope') + '</dt>' +
+        '<dd style="margin-left:88px;padding:2px 0;font-size:12px;" title="' + safeEsc(tr(scopeMeta.title)) + '">' +
         '<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--mc-scope-' + scopeMeta.key + ');margin-right:5px;"></span>' +
-        safeEsc(scopeMeta.label) + '</dd>';
+        safeEsc(tr(scopeMeta.label)) + '</dd>';
     }
     // Multi-byte support indicator for repeaters
     var mbRow = '';
     if (node.role === 'repeater' && node.multi_byte_status) {
-      var mbLabel = { confirmed: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> Confirmed', suspected: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> Suspected', unknown: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x-circle"/></svg> Unknown' }[node.multi_byte_status] || node.multi_byte_status;
+      var mbLabel = { confirmed: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-check-circle"/></svg> ' + tr('Confirmed'), suspected: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg> ' + tr('Suspected'), unknown: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-x-circle"/></svg> ' + tr('Unknown') }[node.multi_byte_status] || node.multi_byte_status;
       var mbEvidence = node.multi_byte_evidence ? ' (' + node.multi_byte_evidence + ')' : '';
-      mbRow = '<dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Multi-byte</dt>' +
+      mbRow = '<dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">' + tr('Multi-byte') + '</dt>' +
         '<dd style="margin-left:88px;padding:2px 0;font-size:12px;">' + mbLabel + mbEvidence + '</dd>';
     }
 
     return `
       <div class="map-popup" style="font-family:var(--font);min-width:180px;">
-        <h3 style="font-weight:700;font-size:14px;margin:0 0 4px;">${safeEsc(node.name || 'Unknown')}</h3>
+        <h3 style="font-weight:700;font-size:14px;margin:0 0 4px;">${safeEsc(node.name || tr('Unknown'))}</h3>
         ${roleBadge}${obsBadge}
         <dl style="margin-top:8px;font-size:12px;">
           ${hashPrefixRow}
           ${mbRow}
           ${scopeRow}
           ${regionsPopupRowsHtml(node)}
-          <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Key</dt>
+          <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">${tr('Key')}</dt>
           <dd style="font-family:var(--mono);font-size:11px;margin-left:88px;padding:2px 0;">${safeEsc(key)}</dd>
-          <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Location</dt>
+          <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">${tr('Location')}</dt>
           <dd style="margin-left:88px;padding:2px 0;">${loc}</dd>
-          <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Last Advert</dt>
+          <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">${tr('Last Advert')}</dt>
           <dd style="margin-left:88px;padding:2px 0;">${lastAdvert}</dd>
-          <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Adverts</dt>
+          <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">${tr('Adverts')}</dt>
           <dd style="margin-left:88px;padding:2px 0;">${node.advert_count || 0}</dd>
         </dl>
         <div style="margin-top:8px;clear:both;">
-          <a href="#/nodes/${node.public_key}" style="color:var(--link-color);font-size:12px;">View Node →</a>
-          ${node.public_key ? ` · <a href="javascript:void(0)" role="button" data-show-neighbors data-pubkey="${escapeHtml(node.public_key)}" data-name="${escapeHtml(node.name || 'Unknown')}" style="color:var(--link-color);font-size:12px;cursor:pointer;">Show Neighbors</a>` : ''}
+          <a href="#/nodes/${node.public_key}" style="color:var(--link-color);font-size:12px;">${tr('View Node')} →</a>
+          ${node.public_key ? ` · <a href="javascript:void(0)" role="button" data-show-neighbors data-pubkey="${escapeHtml(node.public_key)}" data-name="${escapeHtml(node.name || 'Unknown')}" style="color:var(--link-color);font-size:12px;cursor:pointer;">${tr('Show Neighbors')}</a>` : ''}
         </div>
       </div>`;
   }
@@ -2403,18 +2410,18 @@
     // Reuse PathInspector validation if available.
     var prefixes = raw.trim().split(/[\s,]+/).filter(function (s) { return s.length > 0; }).map(function (s) { return s.toLowerCase(); });
     var err = (window.PathInspector && window.PathInspector.validatePrefixes) ? window.PathInspector.validatePrefixes(prefixes) : null;
-    if (!err && prefixes.length === 0) err = 'Enter at least one prefix.';
-    if (err) { errDiv.textContent = err; return; }
+    if (!err && prefixes.length === 0) err = tr('Enter at least one prefix.');
+    if (err) { errDiv.textContent = tr(err); return; }
 
-    resultsDiv.innerHTML = '<p style="font-size:12px;">Loading...</p>';
+    resultsDiv.innerHTML = '<p style="font-size:12px;">' + tr('Loading...') + '</p>';
     fetch('/api/paths/inspect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prefixes: prefixes })
     })
       .then(function (r) {
-        if (r.status === 503) return r.json().then(function () { throw new Error('Service warming up, retry shortly.'); });
-        if (!r.ok) return r.json().then(function (d) { throw new Error(d.error || 'Request failed'); });
+        if (r.status === 503) return r.json().then(function () { throw new Error(tr('Service warming up, retry shortly.')); });
+        if (!r.ok) return r.json().then(function (d) { throw new Error(d.error || tr('Request failed')); });
         return r.json();
       })
       .then(function (data) { renderMapPiResults(data, resultsDiv); })
@@ -2423,10 +2430,10 @@
 
   function renderMapPiResults(data, div) {
     if (!data.candidates || data.candidates.length === 0) {
-      div.innerHTML = '<p style="font-size:12px;color:var(--text-muted);">No candidates found.</p>';
+      div.innerHTML = '<p style="font-size:12px;color:var(--text-muted);">' + tr('No candidates found.') + '</p>';
       return;
     }
-    var html = '<table class="path-inspector-table" style="font-size:11px;width:100%;"><thead><tr><th>#</th><th>Score</th><th>Path</th><th></th></tr></thead><tbody>';
+    var html = '<table class="path-inspector-table" style="font-size:11px;width:100%;"><thead><tr><th>#</th><th>' + tr('Score') + '</th><th>' + tr('Path') + '</th><th></th></tr></thead><tbody>';
     for (var i = 0; i < data.candidates.length; i++) {
       var c = data.candidates[i];
       var rowClass = c.speculative ? 'speculative-row' : '';
@@ -2434,14 +2441,14 @@
       html += '<td>' + (i + 1) + '</td>';
       html += '<td class="' + (c.speculative ? 'speculative-warning' : '') + '">' + c.score.toFixed(2) + (c.speculative ? ' <svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-warning"/></svg>' : '') + '</td>';
       html += '<td title="' + safeEsc(c.names.join(' → ')) + '">' + safeEsc(c.names.slice(0, 3).join('→')) + (c.names.length > 3 ? '…' : '') + '</td>';
-      html += '<td><button class="btn btn-sm" data-idx="' + i + '" title="Show on Map" aria-label="Show on Map"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-pin"/></svg></button></td>';
+      html += '<td><button class="btn btn-sm" data-idx="' + i + '" title="' + tr('Show on Map') + '" aria-label="' + tr('Show on Map') + '"><svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-map-pin"/></svg></button></td>';
       html += '</tr>';
       // Per-hop evidence (collapsed).
       html += '<tr class="evidence-row collapsed" data-evidence="' + i + '"><td colspan="4"><div class="evidence-detail" style="font-size:10px;">';
       if (c.evidence && c.evidence.perHop) {
         for (var j = 0; j < c.evidence.perHop.length; j++) {
           var h = c.evidence.perHop[j];
-          html += '<div>Hop ' + (j+1) + ': ' + h.prefix + ' (×' + h.candidatesConsidered + ') w=' + h.edgeWeight.toFixed(2);
+          html += '<div>' + tr('Hop {n}', { n: j + 1 }) + ': ' + h.prefix + ' (×' + h.candidatesConsidered + ') w=' + h.edgeWeight.toFixed(2);
           if (h.alternatives && h.alternatives.length > 0) {
             html += ' <span style="color:var(--text-muted);">[+' + h.alternatives.length + ' alt]</span>';
           }
@@ -2579,7 +2586,7 @@
           var marker = L.marker([posA[0] + 0.001, posA[1] + 0.001], {
             icon: L.divIcon({ html: '<svg class="ph-icon" aria-hidden="true"><use href="/icons/phosphor-sprite.svg#ph-question"/></svg>', className: 'affinity-unresolved', iconSize: [20, 20] })
           });
-          marker.bindPopup('<b>Unresolved prefix:</b> ' + escapeHtml(e.prefix) + '<br>Observations: ' + e.weight);
+          marker.bindPopup('<b>' + tr('Unresolved prefix:') + '</b> ' + escapeHtml(e.prefix) + '<br>' + tr('Observations: {count}', { count: e.weight }));
           affinityLayer.addLayer(marker);
         }
         return;
@@ -2603,13 +2610,13 @@
         dashArray: e.ambiguous ? '5,5' : null
       });
 
-      var popup = '<b>Affinity Edge</b><br>' +
+      var popup = '<b>' + tr('Affinity Edge') + '</b><br>' +
         escapeHtml(e.nodeAName || e.nodeA.substring(0, 8)) + ' ↔ ' + escapeHtml(e.nodeBName || e.nodeB.substring(0, 8)) + '<br>' +
-        'Observations: ' + e.observationCount + '<br>' +
-        'Score: ' + (e.score || 0).toFixed(3) + '<br>' +
-        'Last seen: ' + escapeHtml(e.lastSeen) + '<br>' +
-        'Observers: ' + escapeHtml((e.observers || []).join(', '));
-      if (e.avgSnr != null) popup += '<br>Avg SNR: ' + e.avgSnr.toFixed(1) + ' dB';
+        tr('Observations: {count}', { count: e.observationCount }) + '<br>' +
+        tr('Score: {score}', { score: (e.score || 0).toFixed(3) }) + '<br>' +
+        tr('Last seen: {time}', { time: escapeHtml(e.lastSeen) }) + '<br>' +
+        tr('Observers: {list}', { list: escapeHtml((e.observers || []).join(', ')) });
+      if (e.avgSnr != null) popup += '<br>' + tr('Avg SNR: {snr} dB', { snr: e.avgSnr.toFixed(1) });
 
       line.bindPopup(popup);
       affinityLayer.addLayer(line);
@@ -2716,11 +2723,11 @@
           opacity: 0.25 + rel * 0.55 // 0.25–0.8 ∝ importance
         });
         const e = t.edge;
-        line.bindPopup('<b>Important link</b><br>' +
+        line.bindPopup('<b>' + tr('Important link') + '</b><br>' +
           escapeHtml(nameByPk[t.a] || t.a.slice(0, 8)) + ' ↔ ' + escapeHtml(nameByPk[t.b] || t.b.slice(0, 8)) + '<br>' +
-          'Importance (' + escapeHtml(axis) + '): ' + t.importance.toFixed(3) + '<br>' +
-          'Affinity: ' + (e.score != null ? e.score.toFixed(3) : '—') +
-          (e.avg_snr != null ? '<br>Avg SNR: ' + e.avg_snr.toFixed(1) + ' dB' : ''));
+          tr('Importance ({axis}): {value}', { axis: escapeHtml(axis), value: t.importance.toFixed(3) }) + '<br>' +
+          tr('Affinity: {value}', { value: e.score != null ? e.score.toFixed(3) : '—' }) +
+          (e.avg_snr != null ? '<br>' + tr('Avg SNR: {snr} dB', { snr: e.avg_snr.toFixed(1) }) : ''));
         topRoutesLayer.addLayer(line);
       });
     }
@@ -2812,8 +2819,9 @@
       var role = roleOrder[j];
       var n = counts[role] || 0;
       if (n <= 0) continue;
-      tooltipParts.push(n + ' ' + role + (n === 1 ? '' : 's'));
+      tooltipParts.push(trn(n, '{count} ' + role, '{count} ' + role + 's'));
       if (pillsShown < 4) {
+        var pillLabel = trn(n, '{count} ' + role, '{count} ' + role + 's');
         var bg = ROLE_BG_VAR[role] || 'var(--mc-role-companion)';
         var fg = ROLE_TEXT_VAR[role] || 'var(--mc-role-companion-text, #1a1a1a)';
         var letter = ROLE_LETTERS[role] || '?';
@@ -2821,16 +2829,16 @@
         // Defense-in-depth: .mc-pill CSS also enforces max-width + ellipsis.
         if (n > 999) n = '999+';
         pillsHtml += '<span class="mc-pill role-' + role + '" ' +
-                     'role="img" aria-label="' + n + ' ' + role + (n === 1 ? '' : 's') + '" ' +
+                     'role="img" aria-label="' + pillLabel + '" ' +
                      'style="background:' + bg + ';color:' + fg + '" ' +
-                     'title="' + n + ' ' + role + (n === 1 ? '' : 's') + '">' +
+                     'title="' + pillLabel + '">' +
                      letter + n + '</span>';
         pillsShown += 1;
       }
     }
     // #1356 V1: cluster gets role="img" + an aria-label summarising the
     // count and per-role breakdown so screen readers announce the data.
-    var ariaLabel = total + ' nodes — ' + tooltipParts.join(', ');
+    var ariaLabel = trn(total, '{count} node', '{count} nodes') + ' — ' + tooltipParts.join(', ');
     var html = '<div class="mc-cluster mc-' + bucket + '" ' +
                  'role="img" aria-label="' + ariaLabel + '">' +
                  '<b class="mc-count" aria-hidden="true">' + total + '</b>' +

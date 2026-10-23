@@ -8,6 +8,9 @@
    and a popup that says what the position is and is not. */
 (function () {
   'use strict';
+  // i18n.js defines tr()/trn(); sandboxes that load this file alone get English.
+  var tr = globalThis.tr || function (s, p) { return p ? s.replace(/\{(\w+)\}/g, function (m, k) { return Object.prototype.hasOwnProperty.call(p, k) ? String(p[k]) : m; }) : s; };
+  var trn = globalThis.trn || function (n, one, other, p) { return tr(n === 1 ? one : other, Object.assign({ count: n }, p)); };
 
   // escapeHtml is app.js's; formatRadius and coverageHref are shared with the
   // nodes page (reported-nodes.js). All are looked up at call time.
@@ -35,19 +38,18 @@
     var name = n.name ? escapeHtml(n.name) : escapeHtml(n.pubkey.slice(0, 8));
     var minSpots = method && method.min_spots ? method.min_spots : 3;
     return '<div class="mc-est-popup">' +
-      '<div class="mc-est-badge">Estimated position</div>' +
+      '<div class="mc-est-badge">' + tr('Estimated position') + '</div>' +
       '<div class="mc-est-name">' + name + '</div>' +
       '<div class="mc-est-pk mono">' + escapeHtml(n.pubkey.slice(0, 16)) + '…</div>' +
-      '<p class="mc-est-what">No advert position. This repeater only told a mobile companion its name, ' +
-      'so its location is estimated from where companions heard it directly: within about <strong>' +
-      escapeHtml(formatRadius(e.radius_m)) + '</strong> of this point.</p>' +
+      '<p class="mc-est-what">' + tr('No advert position. This repeater only told a mobile companion its name, so its location is estimated from where companions heard it directly: within about {radius} of this point.',
+        { radius: '<strong>' + escapeHtml(formatRadius(e.radius_m)) + '</strong>' }) + '</p>' +
       '<dl class="mc-est-facts">' +
-      '<dt>Heard</dt><dd>' + escapeHtml(n.receptions) + ' times at ' + escapeHtml(n.spots) + ' spots (estimate needs ' + escapeHtml(minSpots) + ')</dd>' +
-      (n.first_heard ? '<dt>First / last</dt><dd>' + escapeHtml(String(n.first_heard).slice(0, 10)) + ' / ' + escapeHtml(String(n.last_heard).slice(0, 10)) + '</dd>' : '') +
-      '<dt>Name reported</dt><dd>' + escapeHtml(String(n.name_reported_at).slice(0, 10)) + ' by ' + escapeHtml(n.reporters) + (n.reporters === 1 ? ' companion' : ' companions') + '</dd>' +
+      '<dt>' + tr('Heard') + '</dt><dd>' + tr('{receptions} times at {spots} spots (estimate needs {min})', { receptions: escapeHtml(n.receptions), spots: escapeHtml(n.spots), min: escapeHtml(minSpots) }) + '</dd>' +
+      (n.first_heard ? '<dt>' + tr('First / last') + '</dt><dd>' + escapeHtml(String(n.first_heard).slice(0, 10)) + ' / ' + escapeHtml(String(n.last_heard).slice(0, 10)) + '</dd>' : '') +
+      '<dt>' + tr('Name reported') + '</dt><dd>' + trn(n.reporters, '{date} by {count} companion', '{date} by {count} companions', { date: escapeHtml(String(n.name_reported_at).slice(0, 10)), count: escapeHtml(n.reporters) }) + '</dd>' +
       '</dl>' +
-      '<p class="mc-est-caveat">A centroid of where companions drove, not a measured position: a repeater heard from one side only is placed towards that side.</p>' +
-      '<a href="' + coverageHref(n) + '">Show receptions on the coverage map</a>' +
+      '<p class="mc-est-caveat">' + tr('A centroid of where companions drove, not a measured position: a repeater heard from one side only is placed towards that side.') + '</p>' +
+      '<a href="' + coverageHref(n) + '">' + tr('Show receptions on the coverage map') + '</a>' +
       '</div>';
   }
 
@@ -60,8 +62,8 @@
       L.circle(ll, { radius: n.estimate.radius_m, className: 'mc-est-area', interactive: false }).addTo(layer);
       var marker = L.marker(ll, {
         icon: L.divIcon({ html: iconHtml(), className: 'mc-est-marker', iconSize: [32, 32], iconAnchor: [16, 16], popupAnchor: [0, -15] }),
-        title: (n.name || n.pubkey.slice(0, 8)) + ' (estimated position)',
-        alt: 'Estimated position of ' + (n.name || n.pubkey.slice(0, 8)),
+        title: (n.name || n.pubkey.slice(0, 8)) + ' (' + tr('estimated position') + ')',
+        alt: tr('Estimated position of {name}', { name: n.name || n.pubkey.slice(0, 8) }),
         keyboard: true,
       });
       marker.bindPopup(popupHtml(n, method), { maxWidth: 300 });
