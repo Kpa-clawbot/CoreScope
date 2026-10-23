@@ -897,13 +897,17 @@ Returned when the node is unknown or blacklisted.
 
 ### Response `429`
 
-Returned when the report is not cached and the server is already computing
-2 other uncached reports. Such a request waits up to 3 s for one of them to
-finish and is answered 429 only if none does. Cached answers never wait, and
-concurrent requests for the same node and `days` share one computation; when
-the request that started a shared computation disconnects first, the others
-sharing it also get 429. Nothing is cached for a 429; retry after
-`Retry-After` seconds.
+At most 2 uncached reports compute at once, with up to 8 distinct cold build
+leaders waiting for a slot for up to 3 s. A further distinct cold leader gets
+429 immediately when the queue is full; an admitted leader gets 429 if no
+slot frees before its wait expires. Waiting holds no database connection.
+These are fixed internal defaults, with no operator or customizer setting.
+
+Cached answers never wait. Concurrent requests for the same node and `days`
+share one computation and one queue admission, so the eight-leader cap does
+not bound all existing singleflight followers. When the request that started
+a shared computation disconnects first, the others sharing it also get 429.
+Nothing is cached for a 429; retry after `Retry-After` seconds.
 
 ```
 Retry-After: 2
