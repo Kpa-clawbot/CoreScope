@@ -63,6 +63,10 @@ function loadEscapeHtml() {
   return ctx.escapeHtml;
 }
 const escapeHtml = loadEscapeHtml();
+// English pass-through for the i18n helpers (public/i18n.js) that extracted
+// templates call. Placeholder values are inserted as given, like the real tr().
+const tr = (s, p) => (p ? s.replace(/\{(\w+)\}/g, (m, k) => (k in p ? String(p[k]) : m)) : s);
+const trn = (n, one, other, p) => tr(n === 1 ? one : other, Object.assign({ count: n }, p));
 
 // --- Template extraction + eval ------------------------------------------
 // Captures a template literal from a source file, given a regex with ONE
@@ -81,10 +85,10 @@ function evalTemplate(srcFile, regex, bindings) {
   const safeEsc = escapeHtml; // map.js fallback path → real escaper
   const fn = new Function(
     ...argNames,
-    'escapeHtml', 'truncate', 'encodeURIComponent', 'safeEsc',
+    'escapeHtml', 'truncate', 'encodeURIComponent', 'safeEsc', 'tr', 'trn',
     'return `' + tpl + '`;'
   );
-  return fn(...args, escapeHtml, truncate, encodeURIComponent, safeEsc);
+  return fn(...args, escapeHtml, truncate, encodeURIComponent, safeEsc, tr, trn);
 }
 
 // =========================================================================
@@ -298,13 +302,13 @@ test('live.js buildClickablePathPopupHtml: hopNames join escapes each hop', () =
   assert.ok(m, 'buildClickablePathPopupHtml not found');
   const body = m[1];
   const html = new Function(
-    'typeName','color','hopNames','tsMs','hash','escapeHtml',
+    'typeName','color','hopNames','tsMs','hash','escapeHtml','tr',
     body + '\n;' // body returns
   )(
     'CHAN', '#fff',
     [TAG_PAYLOAD, ATTR_PAYLOAD],
     Date.now(), 'abc123',
-    escapeHtml
+    escapeHtml, tr
   );
   assertNoXss(html, 'live.js hop popup');
 });
@@ -656,7 +660,7 @@ test('observers.js slide-over: Region <dd> escapes o.iata', () => {
 
 test('live.js node detail: "Heard By — Regions" header escapes each iata', () => {
   const html = evalTemplate('public/live.js',
-    /(<h4 style="[^"]*">Heard By\$\{regions\.length[\s\S]*?<\/h4>)/, { regions: [PAYLOAD] });
+    /(<h4 style="[^"]*">(?:Heard By|\$\{tr\('Heard By'\)\})\$\{regions\.length[\s\S]*?<\/h4>)/, { regions: [PAYLOAD] });
   assertNoXss(html, 'live.js regions header');
 });
 
